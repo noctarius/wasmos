@@ -49,6 +49,16 @@ static void stub_set_args(const char* args) {
     hdr.args_off = (uint32_t)sizeof(hdr);
     hdr.args_len = (uint32_t)args_len;
 
+    /* The blob is header + args + NUL. A case that outgrows the buffer must stop
+     * here rather than scribble past it: an overflow inside the stub would corrupt
+     * whatever the harness put next in BSS and surface as a failure in an unrelated
+     * case, which is a far worse thing to debug than a loud stop. */
+    if (sizeof(hdr) + args_len + 1u > sizeof(g_stub_buf)) {
+        static const char msg[] = "stub_set_args: args too long for STUB_BUF_CAP\n";
+        (void)write(2, msg, sizeof(msg) - 1u);
+        _exit(1);
+    }
+
     memset(g_stub_buf, 0, sizeof(g_stub_buf));
     memcpy(g_stub_buf, &hdr, sizeof(hdr));
     memcpy(g_stub_buf + sizeof(hdr), args, args_len + 1u);

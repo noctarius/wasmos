@@ -70,6 +70,8 @@ for arg in "$@"; do
         exec "$WASMOS_SDK_ZIG" version
         ;;
     -o) output=PENDING ;;
+    # -o joined to its argument, as clang and rustc both accept it.
+    -o?*) output=${arg#-o} ;;
     *.zig)
         if [ "$output" = PENDING ]; then
             output=$arg

@@ -79,6 +79,12 @@ for arg in "$@"; do
         exec "$WASMOS_SDK_CLANG" --version
         ;;
     -o) output=PENDING ;;
+    # clang accepts -o joined to its argument, so a developer writing -ohello has
+    # to get the file they asked for rather than silently getting the driver's
+    # default. Options that merely BEGIN with -o are matched first and passed
+    # through: -o<file> is greedy and would otherwise eat them.
+    -object-file-name=* | -objcmt-*) args="$args $arg" ;;
+    -o?*) output=${arg#-o} ;;
     *)
         if [ "$output" = PENDING ]; then
             output=$arg

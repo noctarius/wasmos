@@ -1162,12 +1162,14 @@ Source: `architecture/25-diagnostics-status.md`,
   `mm_context_bind_wasm_linear_scattered` resize that region to the guest's real
   linear memory. Measured 2026-08-21: a Zig module built `--stack 1048576` (data at
   `0x100000`, failing the check) ran `console_write` and `xfer_buffer_read` with
-  pointers above 1 MB under **both** WARP and wasm3, and `examples/rust/hello` has
-  had data at `0x100000` all along. The check is kept as a *size* guard — it
-  catches a module that reverted to its toolchain's 1 MB default and so needs 2 MiB
-  of declared memory instead of one page — and the comments now say so. What is
-  left is a judgement call: keep it as a size guard, raise the number, or drop it
-  and let each app declare the memory it wants.
+  pointers above 1 MB under **both** WARP and wasm3. The check is kept as a *size*
+  guard — it catches a module that reverted to its toolchain's 1 MB default and so
+  needs 2 MiB of declared memory instead of one page — and the comments now say so.
+  What is left is a judgement call: keep it as a size guard, raise the number, or
+  drop it and let each app declare the memory it wants. (The divergence that
+  prompted this is gone: `examples/rust/hello` builds through `wasmos-rustc` now, so
+  it takes the same small-stack layout as an SDK-built module and passes the check
+  where it used to fail it.)
 - [ ] [TEST][P3] Run the SDK's *compilers* on Linux. The wrappers themselves are
   covered: all eight parse and run their argument handling, manifest reading and
   path resolution under busybox `ash`/`awk` on Linux (harsher than CI's `dash`),

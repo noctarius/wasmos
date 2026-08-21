@@ -6,9 +6,14 @@
 #
 # What it hides is mostly a consequence of how asc resolves imports: it has no
 # include path and resolves every import relative to the entry file, so the whole
-# AS runtime is staged FLAT into one directory beside a copy of the app. The entry
-# is the runtime's own runtime.ts, which imports "./app" -- so the app is staged
-# under that name, and a developer's file may be called anything.
+# AS runtime is staged FLAT into one directory beside a copy of the app.
+#
+# WHICH file asc is pointed at depends on what the package is, and the manifest
+# already says which: an app (entry wasmos_main) is entered through the runtime's
+# own runtime.ts, which imports "./app" -- so the app is staged under that name and
+# a developer's file may be called anything. A driver or service (entry
+# initialize) exports its own entry and IS the entry, so it is staged under its own
+# name and compiled directly.
 #
 # Every module is compiled through as_coroutine_transform.mjs, which lowers
 # @coroutine functions into their state machines. It is inert for a module that
@@ -100,6 +105,8 @@ if [ ! -f "$manifest" ]; then
     exit 1
 fi
 
+entry=$(manifest_get package entry "$manifest")
+[ -n "$entry" ] || entry=wasmos_main
 initmem=$(manifest_get link initial_memory "$manifest")
 initmem_flag=
 if [ -n "$initmem" ]; then
@@ -127,11 +134,16 @@ esac
 stage=${wasm%.wasm}.asstage
 rm -rf "$stage"
 mkdir -p "$stage"
-# runtime.ts imports "./app"; the developer's file becomes that regardless of name.
-cp "$source" "$stage/app.ts"
 for f in "$asdir"/*.ts; do
     cp "$f" "$stage/"
 done
+if [ "$entry" = wasmos_main ]; then
+    cp "$source" "$stage/app.ts"
+    asc_entry=$stage/runtime.ts
+else
+    cp "$source" "$stage/$(basename "$source")"
+    asc_entry=$stage/$(basename "$source")
+fi
 for f in $extra; do
     case $f in
     *.ts) cp "$f" "$stage/" ;;
@@ -140,7 +152,7 @@ done
 
 # shellcheck disable=SC2086
 "$WASMOS_SDK_ASC" \
-    "$stage/runtime.ts" \
+    "$asc_entry" \
     --transform "$sdkroot/libexec/wasmos/as_coroutine_transform.mjs" \
     --target release \
     -Osize \

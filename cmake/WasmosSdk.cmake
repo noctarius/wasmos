@@ -207,6 +207,8 @@ add_custom_command(
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-zig
           ${LIBC_DIR}/zig/wasmos.zig
           ${LIBC_DIR}/zig/coroutine.zig
+          ${LIBC_DIR}/zig/compat/stdlib.h
+          ${LIBC_DIR}/zig/compat/string.h
           ${CMAKE_SOURCE_DIR}/scripts/wasm_stack_check.py
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-asc
           ${LIBC_DIR}/assemblyscript/runtime.ts

@@ -22,10 +22,12 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-/// The binding's `wasmos_main` export calls this. `args` is empty: the Rust shim
-/// does not tokenize the spawn-info argument string yet (see docs/TASKS.md).
-#[no_mangle]
-pub extern "C" fn main(_args: &[&str]) -> i32 {
+/// The binding's `wasmos_main` export calls this as `crate::main`. That is a plain
+/// Rust call, not an FFI boundary, so the signature carries no `extern "C"` and no
+/// `#[no_mangle]`: `&[&str]` has no C representation, and claiming the C ABI for it
+/// is what `improper_ctypes_definitions` rejects. `args` is empty because the Rust
+/// shim does not tokenize the spawn-info argument string yet (see docs/TASKS.md).
+fn main(_args: &[&str]) -> i32 {
     let _ = wasmos::std::puts(b"Hello WASMOS from Rust via the SDK!\n");
     0
 }

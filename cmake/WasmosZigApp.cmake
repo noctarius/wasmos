@@ -60,10 +60,22 @@ function(wasmos_add_zig_wasm_app)
   cmake_parse_arguments(ARG "" "NAME;TARGET;SRC;LIBC_SRC;OUTPUT_WASM;OUTPUT_APP;MANIFEST;INITIAL_MEMORY"
                         "EXTRA_SRCS;INCLUDE_DIRS" ${ARGN})
 
-  if (NOT ARG_NAME OR NOT ARG_TARGET OR NOT ARG_SRC OR NOT ARG_LIBC_SRC OR
+  if (NOT ARG_NAME OR NOT ARG_TARGET OR NOT ARG_SRC OR
       NOT ARG_OUTPUT_WASM OR NOT ARG_OUTPUT_APP OR NOT ARG_MANIFEST)
     message(FATAL_ERROR "wasmos_add_zig_wasm_app: missing required argument")
   endif ()
+  if (ARG_LIBC_SRC)
+    message(FATAL_ERROR
+      "${ARG_NAME}: LIBC_SRC is staged by the driver now (share/wasmos/zig). Remove it.")
+  endif ()
+  if (ARG_INCLUDE_DIRS)
+    message(FATAL_ERROR
+      "${ARG_NAME}: INCLUDE_DIRS is the sysroot now. Remove it.")
+  endif ()
+  # coroutine.zig is one of the shims the driver stages, so an EXTRA_SRCS entry for
+  # it would be staged twice; drop it rather than making every caller remember.
+  set(_zig_extra_srcs ${ARG_EXTRA_SRCS})
+  list(REMOVE_ITEM _zig_extra_srcs ${LIBC_DIR}/zig/coroutine.zig)
 
   if (NOT ZIG_ENABLE)
     return()
@@ -143,38 +155,23 @@ function(wasmos_add_zig_wasm_app)
     list(APPEND _c_compile_flags --)
   endif ()
 
+  # Compiles through the SDK's wasmos-zig driver, which owns the staging (Zig
+  # resolves @import beside the importing file), the mandatory small shadow stack,
+  # the layout check and the [link] memory. LIBC_SRC and INCLUDE_DIRS are gone with
+  # it: the driver stages its own runtime shims and compiles extra C against the
+  # sysroot.
   add_custom_command(
     OUTPUT ${ARG_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${_stage}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${_cache}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${_gcache}
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_SRC}      ${_stage}/${ARG_NAME}.zig
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_LIBC_SRC} ${_stage}/wasmos.zig
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_coroutine_zig} ${_stage}/coroutine.zig
-    ${_stage_cmds}
-    COMMAND ${ZIG_EXECUTABLE}
-            build-exe
-            -target wasm32-freestanding
-            -O ReleaseSmall
-            -fno-entry
-            -fstrip
-            --export=wasmos_main
-            --stack ${WASMOS_ZIG_STACK_SIZE}
-            --cache-dir        ${_cache}
-            --global-cache-dir ${_gcache}
-            -femit-bin=${ARG_OUTPUT_WASM}
-            ${_initial_mem_flags}
-            ${_include_flags}
-            ${_stage}/${ARG_NAME}.zig
-            ${_c_compile_flags}
-            ${_extra_c}
-    COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_SOURCE_DIR}/scripts/wasm_stack_check.py
-            ${ARG_OUTPUT_WASM}
-            --stack-size ${WASMOS_ZIG_STACK_SIZE}
-            --max-addr   ${WASMOS_ZIG_USER_VA_LIMIT}
-    DEPENDS ${ARG_SRC} ${ARG_LIBC_SRC} ${_coroutine_zig} ${ARG_EXTRA_SRCS}
+    COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-zig
+            --emit-wasm
+            --wasmos-manifest=${ARG_MANIFEST}
+            ${ARG_SRC}
+            ${_zig_extra_srcs}
+            -o ${ARG_OUTPUT_WASM}
+    DEPENDS ${ARG_SRC} ${ARG_EXTRA_SRCS} ${ARG_MANIFEST}
+            ${LIBC_DIR}/zig/wasmos.zig ${LIBC_DIR}/zig/coroutine.zig
+            ${WASMOS_SDK_STAMP}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building and validating Zig WASM app: ${ARG_NAME}"
     VERBATIM

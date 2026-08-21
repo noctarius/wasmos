@@ -25,7 +25,6 @@
 #![no_main]
 
 use core::panic::PanicInfo;
-#[path = "../../../src/libc/rust/wasmos.rs"]
 mod wasmos;
 
 use wasmos::coroutine::{self, AsyncFsOp, Future};

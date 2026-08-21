@@ -141,6 +141,16 @@ file(MAKE_DIRECTORY ${SDK_DIR}/share/wasmos/zig)
 foreach (_zig IN ITEMS wasmos.zig coroutine.zig)
   file(COPY ${LIBC_DIR}/zig/${_zig} DESTINATION ${SDK_DIR}/share/wasmos/zig)
 endforeach ()
+# The C-compat headers a Zig app needs when it compiles WASMOS C alongside Zig.
+# They deliberately SHADOW the sysroot's <stdlib.h> and <string.h>: for a Zig app
+# the definitions come from its own shim (an arena over a static buffer), not from
+# libc, so this directory has to precede the sysroot on the include path. That
+# ordering is a property of the Zig toolchain path, not of any one app, so the
+# driver owns it -- see scripts/sdk/wasmos-zig.
+file(GLOB _zig_compat ${LIBC_DIR}/zig/compat/*.h)
+foreach (_h IN LISTS _zig_compat)
+  file(COPY ${_h} DESTINATION ${SDK_DIR}/share/wasmos/zig/compat)
+endforeach ()
 
 # AssemblyScript is staged the same way and for a sharper reason: asc has no
 # include path and resolves every import relative to the entry file, so the

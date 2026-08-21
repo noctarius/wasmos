@@ -144,9 +144,24 @@ cp "$source" "$stage/$name.rs"
 cp "$rustdir/wasmos.rs" "$stage/"
 mkdir -p "$stage/wasmos"
 cp "$rustdir/coroutine.rs" "$stage/wasmos/"
+# Extra .rs files are staged beside the app; extra .c files are compiled to objects
+# with the SDK's own clang and handed to the linker through -C link-arg, which is
+# the only way to get an object onto rustc's link line.
+extra_objs=
 for f in $extra; do
     case $f in
     *.rs) cp "$f" "$stage/" ;;
+    *.c)
+        obj=$stage/$(basename "${f%.c}").o
+        "$WASMOS_SDK_CLANG" \
+            --target="$WASMOS_SDK_TARGET_LLVM" \
+            --sysroot="$sdkroot/sysroot" \
+            -Oz -nostdlib -ffreestanding -fno-builtin \
+            -D__wasmos__=1 \
+            -include "$sdkroot/sysroot/include/wasmos_cast.h" \
+            -c "$f" -o "$obj"
+        extra_objs="$extra_objs -C link-arg=$obj"
+        ;;
     esac
 done
 
@@ -166,6 +181,7 @@ done
     -C link-arg=--max-memory="$maxmem" \
     -C link-arg=-L"$libdir" \
     -C link-arg=-lsys \
+    $extra_objs \
     --crate-type=cdylib \
     "$stage/$name.rs" \
     -o "$wasm"

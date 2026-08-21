@@ -471,29 +471,58 @@ app is staged as `sdkhello.wap`.
 
 ## One toolchain, not two
 
-**The in-tree build compiles through the SDK drivers.**
-`wasmos_add_wasm_c_app_target` invokes `wasmos-clang --emit-wasm`, so all ~48 C
-targets in this repository are built by the same program an outside developer runs.
-The helper supplies only what is genuinely its own — the sources, the output path
-and the manifest — and the driver owns the triple, the sysroot, the freestanding and
-`nostdlib` flags, the wasm linker defaults, `crt1.o` and the runtime libraries.
+**The in-tree build compiles through the SDK drivers — in every language.** No
+WASM target in this repository invokes a compiler directly: the C helper calls
+`wasmos-clang`, the Zig helper `wasmos-zig`, the AssemblyScript helper `wasmos-asc`,
+and the Rust and Go examples `wasmos-rustc` and `wasmos-tinygo`. Each helper
+supplies only what is genuinely its own — the sources, the output path and the
+manifest — and the driver owns the triple, the sysroot, the flags, the staging, the
+crt or runtime shims and the link line.
 
 That is what makes the SDK the toolchain rather than a parallel copy of it. Before,
-the helper spelled out its own `-Wl,--no-entry -Wl,--strip-all -Wl,-z,stack-size=…`
-list and the driver spelled out another: two link lines describing one toolchain,
-and only one of them exercised by the tree. Sharing the archives (below) removed the
-duplicated *libc*; this removes the duplicated *flags*.
+each helper spelled out its own flag set and each driver spelled out another: five
+pairs of them, and in every pair the copy the tree exercised was the helper's.
+Sharing the archives (below) removed the duplicated *libc*; this removes the
+duplicated *flags*, per language:
 
-Three parameters disappeared from every call site as a result, because the manifest
+| Was duplicated | Now owned by |
+|---|---|
+| the wasm linker flags, sysroot, `crt1.o` | `wasmos-clang` |
+| `--stack 8192`, the layout check, shim staging, the C-compat include order | `wasmos-zig` |
+| the coroutine transform, `--runtime stub`, flat staging, the entry convention | `wasmos-asc` |
+| the `-C link-arg` set and the libsys shims | `wasmos-rustc` |
+| the TinyGo target file and its `TINYGOROOT`-relative `extra-files` | `wasmos-tinygo` |
+
+Two whole mechanisms went with them: `src/libc/go/wasmos-tinygo.json.in`, the target
+template the in-tree Go build filled in (the driver generates it per invocation, and
+the two were verified field-for-field identical before the template was deleted),
+and the three shim-object rules the Rust build compiled by hand (the driver links
+`libsys.a`, which already contains them).
+
+The switch was verified by comparing artifacts against a tree built before it:
+**all six AssemblyScript modules and all five Zig modules came out byte-for-byte
+identical**, including the four AS drivers that use the `initialize` convention and
+the Zig calculator with its C shims. The Go module moved by 4 bytes and the two Rust
+modules by ~20, the latter because they now take the driver's small shadow stack —
+`examples/rust/hello` had its data at 1 MB and now has it at `0x2000`, which is the
+same layout an SDK-built module gets.
+
+Parameters disappeared from every call site as a result, because the manifest
 already carried each of them and a second spelling could only drift:
 
-| Was | Now |
-|---|---|
-| `EXPORT wasmos_main` | `[package] entry` in the manifest |
-| `STARTUP_SHIM` | implied: `crt1.o` is linked exactly when the entry is `wasmos_main` |
-| `NO_BUILTIN` | unconditional — libc owns the `mem*` family |
+| Was | Now | Helper |
+|---|---|---|
+| `EXPORT wasmos_main` | `[package] entry` | C |
+| `STARTUP_SHIM` | implied: `crt1.o` is linked exactly when the entry is `wasmos_main` | C |
+| `NO_BUILTIN` | unconditional — libc owns the `mem*` family | C |
+| `LIBC_SRC`, `INCLUDE_DIRS` | the driver stages its own shims and compiles C against the sysroot | Zig |
+| `ENTRY_NAME` | the entry convention follows from `[package] entry` | AssemblyScript |
+| `INITIAL_MEMORY_PAGES` | `[link] initial_memory`, in bytes | AssemblyScript |
 
-Passing any of them is a configure error naming the manifest. All three were
+Passing any of them is a configure error naming the manifest. The same rule decides
+three different things from one field: an entry of `wasmos_main` means C links
+`crt1.o` and AssemblyScript stages the app behind `runtime.ts`; an entry of
+`initialize` means neither. All three were
 verified redundant before removal: across 38 targets, `EXPORT` matched the
 manifest's `entry` every time and `STARTUP_SHIM` was present exactly when that entry
 was `wasmos_main`. Routing every target through the driver left 60 of 62 modules

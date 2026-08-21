@@ -133,9 +133,7 @@ class SdkHelloTest(unittest.TestCase):
         that staging produced a module the runtime can instantiate is only
         answerable by running it."""
         self._cmd_expect("cd apps", [b"/apps wamos>"])
-        self._cmd_expect(
-            "sdkas", [b"Hello WASMOS from AssemblyScript via the SDK!"]
-        )
+        self._cmd_expect("sdkas", [b"Hello WASMOS from AssemblyScript via the SDK!"])
 
     @unittest.skipUnless(
         os.path.isfile(SDK_RUST_WAP),

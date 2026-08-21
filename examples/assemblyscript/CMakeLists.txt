@@ -12,12 +12,15 @@ if (AS_ENABLE)
       message(FATAL_ERROR "wasmos_add_assemblyscript_app: missing required argument")
     endif ()
 
+    # The app's own source is the ENTRY now: the driver stages it as app.ts behind
+    # the runtime's runtime.ts, because the manifest says this is a wasmos_main
+    # package. Naming runtime.ts here was this file knowing the convention.
     wasmos_assemblyscript_compile(
       NAME ${ARG_NAME}
-      ENTRY ${LIBC_DIR}/assemblyscript/runtime.ts
+      ENTRY ${ARG_SRC}
       OUTPUT_WASM ${ARG_OUTPUT_WASM}
       MANIFEST ${ARG_MANIFEST}
-      EXTRA_SOURCES ${ARG_SRC} ${ARG_EXTRA_STAGE_FILES}
+      EXTRA_SOURCES ${ARG_EXTRA_STAGE_FILES}
     )
 
     add_custom_command(

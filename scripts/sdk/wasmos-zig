@@ -124,11 +124,25 @@ rm -rf "$stage"
 mkdir -p "$stage"
 cp "$source" "$stage/$name.zig"
 cp "$zigdir/wasmos.zig" "$zigdir/coroutine.zig" "$stage/"
+# Extra .zig files are staged flat like the shims; extra .c files are handed to
+# zig build-exe after a -cflags block, which is how Zig compiles C alongside Zig.
+# The include path is the sysroot: a Zig app that links the coroutine or libui shims
+# is compiling WASMOS C, and those headers are where every other language finds
+# them.
+extra_c=
 for f in $extra; do
     case $f in
     *.zig) cp "$f" "$stage/" ;;
+    *.c) extra_c="$extra_c $f" ;;
     esac
 done
+cflags=
+if [ -n "$extra_c" ]; then
+    # compat BEFORE the sysroot, deliberately: those headers shadow <stdlib.h> and
+    # <string.h> because a Zig app's malloc/memcpy come from its own shim rather
+    # than from libc, and the sysroot's copies would declare libc's instead.
+    cflags="-cflags -I$zigdir/compat -I$sdkroot/sysroot/include --"
+fi
 
 initmem_flag=
 [ -n "$initmem" ] && initmem_flag="--initial-memory=$initmem"
@@ -143,7 +157,9 @@ initmem_flag=
     --stack "$WASMOS_SDK_ZIG_STACK_SIZE" \
     -femit-bin="$wasm" \
     $initmem_flag \
-    "$stage/$name.zig"
+    "$stage/$name.zig" \
+    $cflags \
+    $extra_c
 
 python3 "$sdkroot/libexec/wasmos/wasm_stack_check.py" "$wasm" \
     --stack-size "$WASMOS_SDK_ZIG_STACK_SIZE" \

@@ -21,7 +21,6 @@ wasmos_add_zig_wasm_app(
   NAME        hello_zig
   TARGET      zig_examples
   SRC         ${WASM_HELLO_ZIG_SRC}
-  LIBC_SRC    ${LIBC_DIR}/zig/wasmos.zig
   OUTPUT_WASM ${WASM_HELLO_ZIG_WASM}
   OUTPUT_APP  ${WASM_HELLO_ZIG_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
@@ -30,17 +29,12 @@ wasmos_add_zig_wasm_app(
     ${LIBSYS_WASM_DIR}/coroutine_wasm.c
     ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
     ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
-  INCLUDE_DIRS
-    ${LIBSYS_WASM_DIR}/include
-    ${LIBC_DIR}/include
-    ${DRIVER_WASM_DIR}/include
 )
 
 wasmos_add_zig_wasm_app(
   NAME           calculator
   TARGET         zig_calculator
   SRC            ${WASM_CALCULATOR_SRC}
-  LIBC_SRC       ${LIBC_DIR}/zig/wasmos.zig
   OUTPUT_WASM    ${WASM_CALCULATOR_WASM}
   OUTPUT_APP     ${WASM_CALCULATOR_APP}
   MANIFEST       ${CMAKE_CURRENT_SOURCE_DIR}/calculator/linker.metadata
@@ -50,10 +44,4 @@ wasmos_add_zig_wasm_app(
     ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
     ${CMAKE_SOURCE_DIR}/src/libui/zig/libui.zig
     ${CMAKE_SOURCE_DIR}/src/libui/zig/libui_shim.c
-  INCLUDE_DIRS
-    ${LIBSYS_WASM_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/libc/zig/compat
-    ${CMAKE_SOURCE_DIR}/src/libui/include
-    ${CMAKE_SOURCE_DIR}/src/libc/include
-    ${CMAKE_SOURCE_DIR}/src/drivers/include
 )

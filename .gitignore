@@ -6,6 +6,8 @@ __pycache__/
 .zig-cache/
 .zig-cache-global/
 .codex/local-paths.md
+.claude/settings.json
+.claude/settings.local.json
 .claude/worktrees
 .config
 .config.old

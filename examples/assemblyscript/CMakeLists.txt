@@ -5,19 +5,22 @@ if (AS_ENABLE)
   # "./app" -- so the entry staged into the build is runtime.ts and the app
   # source is staged beside it under that name.
   function(wasmos_add_assemblyscript_app)
-    cmake_parse_arguments(ARG "" "NAME;SRC;OUTPUT_WASM;OUTPUT_APP;MANIFEST;INITIAL_MEMORY_PAGES"
+    cmake_parse_arguments(ARG "" "NAME;SRC;OUTPUT_WASM;OUTPUT_APP;MANIFEST"
                           "EXTRA_STAGE_FILES" ${ARGN})
 
     if (NOT ARG_NAME OR NOT ARG_SRC OR NOT ARG_OUTPUT_WASM OR NOT ARG_OUTPUT_APP OR NOT ARG_MANIFEST)
       message(FATAL_ERROR "wasmos_add_assemblyscript_app: missing required argument")
     endif ()
 
+    # The app's own source is the ENTRY now: the driver stages it as app.ts behind
+    # the runtime's runtime.ts, because the manifest says this is a wasmos_main
+    # package. Naming runtime.ts here was this file knowing the convention.
     wasmos_assemblyscript_compile(
       NAME ${ARG_NAME}
-      ENTRY ${LIBC_DIR}/assemblyscript/runtime.ts
+      ENTRY ${ARG_SRC}
       OUTPUT_WASM ${ARG_OUTPUT_WASM}
-      INITIAL_MEMORY_PAGES "${ARG_INITIAL_MEMORY_PAGES}"
-      EXTRA_SOURCES ${ARG_SRC} ${ARG_EXTRA_STAGE_FILES}
+      MANIFEST ${ARG_MANIFEST}
+      EXTRA_SOURCES ${ARG_EXTRA_STAGE_FILES}
     )
 
     add_custom_command(
@@ -47,7 +50,6 @@ if (AS_ENABLE)
     OUTPUT_WASM ${AS_MINESWEEPER_WASM}
     OUTPUT_APP ${AS_MINESWEEPER_APP}
     MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/minesweeper/linker.metadata
-    INITIAL_MEMORY_PAGES 64
     EXTRA_STAGE_FILES
       ${CMAKE_SOURCE_DIR}/src/libui/assemblyscript/libui.ts
   )

@@ -11,6 +11,11 @@ native = false
 stack_pages = 64
 heap_pages = 64
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# Enumeration recurses through bridges on the stack.
+[link]
+stack_size = 16384
+
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 1

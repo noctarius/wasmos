@@ -508,6 +508,26 @@ Source: `architecture/13-runtime-and-packaging.md`,
 `architecture/14-libsys-and-service-runtime.md`, and
 `architecture/15-drivers-and-services.md`.
 
+- [ ] [FEATURE][P2] Give the non-C entry shims a real `argv`. The C `crt1`
+  (`src/libc/src/startup.c`) now calls `main(argc, argv)` from
+  `wasmos_startup_argv()`, but the Rust, Go, Zig and AssemblyScript shims
+  (`src/libc/{rust,go,zig,assemblyscript}`) still call their `main` with an empty
+  argument list, so a guest in those languages must read `wasmos_startup_args`
+  and tokenize it. Port the same split per language, with a guest test per
+  language that passes an argument and asserts it lands at index 1.
+- [ ] [FEATURE][P3] Carry the program name in the startup contract so `argv[0]` can
+  be one. `wasmos_spawn_info_t` (`src/drivers/include/wasmos_spawn_info.h`) has no
+  name field, so `wasmos_startup_argv` fills `argv[0]` with an empty string
+  (`TODO` at `src/libc/src/spawn_info.c`). The header is versioned and
+  append-only, and PM already parses the `.wap` package name; adding it means the
+  header field, a `version` bump, the native `api->spawn_info` path, and the
+  accessor in every language.
+- [ ] [CLEANUP][P3] Retire the hand-rolled argument tokenizers now that
+  `wasmos_startup_argv` exists: `src/utils/host/host.c:48` (`first_token`),
+  `src/utils/curl/curl.c`, `src/utils/ip/ip.c`, and
+  `src/services/wasmos_script/wamos_script.c` each split the argument string
+  themselves. Each conversion is a behaviour-preserving switch to `main(argc,
+  argv)` and needs its own guest check.
 - [ ] [ENHANCEMENT][P2] Close the remaining WARP refinement TODOs (host-call coverage itself is
   broad): synchronise symbol lookups/alloc under SMP (`src/kernel/warp/link.cpp:90`
   `TODO(smp-warp)`, `src/kernel/warp/shim.cpp:579` `FIXME(smp-warp)`); reserve
@@ -1123,6 +1143,41 @@ Source: `architecture/25-diagnostics-status.md`,
 
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
+- [ ] [FEATURE][P2] Finish the toolchain SDK's remaining Stage 1 milestones
+  (`docs/toolchain.md`): build `compiler-rt` builtins for wasm32 if a guest ever
+  needs `__int128` — measured to be the ONLY shape that needs them, reaching eight
+  symbols (`__multi3`, `__udivti3`, `__divti3`, `__umodti3`, `__modti3`,
+  `__fixdfti`, `__fixunsdfti`, `__floatuntidf`); 64-bit arithmetic and float
+  conversions are native wasm instructions and need nothing, nothing in tree uses
+  `__int128`, and `tests/test_sdk_arithmetic.py` pins that boundary, so this is a
+  gap to close on demand rather than a missing piece; and ship a standalone SDK
+  build that does not borrow the host LLVM. Stage 2 (a native
+  `wasm32-unknown-wasmos` LLVM triple) follows those.
+- [ ] [ENHANCEMENT][P3] Decide whether the 32 KiB layout budget
+  (`WASMOS_ZIG_USER_VA_LIMIT`, enforced by `scripts/wasm_stack_check.py`) should be
+  relaxed or dropped. The reason it existed is gone: it was documented as a
+  pointer-validity rule — a fixed 16-page `MEM_REGION_WASM_LINEAR` mirror bounding
+  every host-call pointer, so globals above it fail silently — and reserved-VA
+  linmem made that false, because `mm_context_rebind_wasm_linear` and
+  `mm_context_bind_wasm_linear_scattered` resize that region to the guest's real
+  linear memory. Measured 2026-08-21: a Zig module built `--stack 1048576` (data at
+  `0x100000`, failing the check) ran `console_write` and `xfer_buffer_read` with
+  pointers above 1 MB under **both** WARP and wasm3. The check is kept as a *size*
+  guard — it catches a module that reverted to its toolchain's 1 MB default and so
+  needs 2 MiB of declared memory instead of one page — and the comments now say so.
+  What is left is a judgement call: keep it as a size guard, raise the number, or
+  drop it and let each app declare the memory it wants. (The divergence that
+  prompted this is gone: `examples/rust/hello` builds through `wasmos-rustc` now, so
+  it takes the same small-stack layout as an SDK-built module and passes the check
+  where it used to fail it.)
+- [ ] [TEST][P3] Run the SDK's *compilers* on Linux. The wrappers themselves are
+  covered: all eight parse and run their argument handling, manifest reading and
+  path resolution under busybox `ash`/`awk` on Linux (harsher than CI's `dash`),
+  relocation and symlinked invocation included. What has only ever run on macOS is
+  the compilation itself. CI's `defconfig` job installs every language toolchain and
+  builds `run-qemu-test`, and each SDK smoke app is a dependency of the kernel
+  target, so the first CI run of this branch is that check — it just has not run
+  yet.
 - [ ] [TEST][P2] Give the host suite a way to test wasm32-only libc behaviour.
   Some defects are invisible on the host by construction: `%lld`/`%llx` truncated
   to 32 bits because `vsnprintf` cast `long long` through `long`, which is 64-bit

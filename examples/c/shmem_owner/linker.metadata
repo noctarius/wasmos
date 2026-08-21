@@ -13,6 +13,14 @@ stack_pages = 16
 # 2 MiB, matching the other shmem/DMA-capable apps (menu_bar, calculator).
 heap_pages = 512
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# shmem_map_auto places its window above the app's live data, so the full
+# 4 MiB is live from the start: a window at ~2 MiB in a one-page module would
+# require a grow-on-access and trap.
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
 [ipc]
 required_endpoint_name = "-"
 required_endpoint_rights = 0

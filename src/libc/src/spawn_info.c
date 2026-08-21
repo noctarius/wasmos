@@ -105,3 +105,95 @@ uint32_t wasmos_startup_args(char* dst, uint32_t cap) {
     dst[i] = '\0';
     return i;
 }
+
+/* True for the two bytes the startup contract treats as argument separators.
+ * Deliberately not isspace(): a newline or a form feed inside an argument string
+ * is a byte of that argument, not a break between two. */
+static int wasmos_startup_is_sep(char c) {
+    return c == ' ' || c == '\t';
+}
+
+/* Build an argv array from this process's argument string.
+ *
+ * The startup contract supplies ONE NUL-terminated string holding what followed
+ * the command name, never the name itself (see wasmos_spawn_info.h), so argv[0]
+ * is an empty program-name slot and argv[1] is the first argument. The slot
+ * exists because every C program expects it: without it each argument would
+ * appear one index lower than the language says.
+ * TODO: wasmos_spawn_info_t carries no program name, so argv[0] cannot be one.
+ * Appending a name field (the .wap package name PM already parsed) is the fix,
+ * and until then a program that prints argv[0] prints nothing.
+ *
+ * `buf` receives the tokens, NUL-separated in place, and must stay live for as
+ * long as argv is used; `buf_cap` and `argv_max` both bound the result, and
+ * argv_max counts the program slot and the NULL terminator. An argument the
+ * buffer cannot hold WHOLE is dropped rather than truncated: a silently
+ * shortened path or number is a failure nothing downstream can detect, while one
+ * fewer argument is visible in argc.
+ *
+ * Returns argc (>= 1 on success), and 0 without touching anything when buf or
+ * argv is NULL, buf_cap is 0, or argv_max leaves no room for the slot and the
+ * terminator. argv[argc] is always set to NULL. wasmos_startup_args() is
+ * unaffected: the blob is copied, not consumed. */
+int wasmos_startup_argv(char* buf, uint32_t buf_cap, char** argv, uint32_t argv_max) {
+    uint32_t written;
+    uint32_t src_len = 0;
+    uint32_t i = 0;
+    int cut_last;
+    int argc;
+
+    if (!buf || !argv || buf_cap == 0u || argv_max < 2u) {
+        return 0;
+    }
+
+    written = wasmos_startup_args(buf, buf_cap);
+    while (g_spawn_args[src_len] != '\0') {
+        ++src_len;
+    }
+    /* Decide whether the last token in buf is a fragment.  There are TWO places
+     * the argument string can be cut -- the load's WASMOS_STARTUP_ARGS_MAX cap
+     * into g_spawn_args, and this copy's buf_cap -- and either leaves a partial
+     * token at the end.  A cut is harmless when the byte at the cut is itself a
+     * separator, because the token ended exactly there.  g_spawn_args and
+     * g_spawn_info are readable here because this is the translation unit that
+     * owns them. */
+    if (src_len > written) {
+        cut_last = !wasmos_startup_is_sep(g_spawn_args[written]);
+    } else if (g_spawn_info.args_len > src_len) {
+        cut_last = src_len > 0u && !wasmos_startup_is_sep(g_spawn_args[src_len - 1u]);
+    } else {
+        cut_last = 0;
+    }
+
+    argv[0] = &buf[written]; /* the NUL terminator: an empty program-name slot */
+    argc = 1;
+    while (buf[i] != '\0') {
+        while (wasmos_startup_is_sep(buf[i])) {
+            ++i;
+        }
+        if (buf[i] == '\0') {
+            break;
+        }
+        if ((uint32_t)argc + 1u >= argv_max) {
+            break;
+        }
+        argv[argc++] = &buf[i];
+        while (buf[i] != '\0' && !wasmos_startup_is_sep(buf[i])) {
+            ++i;
+        }
+        if (buf[i] != '\0') {
+            buf[i++] = '\0';
+        } else if (cut_last) {
+            --argc;
+        }
+    }
+    argv[argc] = 0;
+    return argc;
+}
+
+/* Drop the one-shot cache so a host unit test can serve a second spawn-info blob
+ * through the stubbed hostcalls. Not part of the guest API: nothing in a running
+ * process may re-read its startup contract, which is fixed at spawn. */
+void wasmos_startup_reset_for_test(void) {
+    g_spawn_loaded = 0;
+}

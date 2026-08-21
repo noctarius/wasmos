@@ -1,25 +1,38 @@
 # WasmosZigApp.cmake
 # Shared helper for building any Zig WASM app (utilities, examples, services).
 #
-# Why --stack 8192 is mandatory
-# ==============================
-# The kernel's mm_context_alloc_region allocates 8 × 4 KB pages (32 KB) for
-# MEM_REGION_WASM_LINEAR per process context.  Every hostcall that writes to
-# WASM memory — proc_info_stats, fs_buffer_write, fs_buffer_copy, etc. —
-# calls mm_user_range_permitted, which walks only that 32 KB window.
-# Zig's default shadow stack is 1 MB, which places globals at ~1 MB: every
-# such hostcall rejects the pointer and fails silently.  Building with
-# --stack 8192 mirrors the layout of C WASM modules (stack_ptr = 0x2000) and
-# keeps all globals well within 32 KB.
+# Why --stack 8192
+# ================
+# Zig's default shadow stack is 1 MB and is placed FIRST, so a module's globals
+# land above 1 MB and its declared linear memory must be at least 2 MiB.  8192
+# gives the layout a C module has (stack_ptr = 0x2000, globals just above it),
+# which is what lets a Zig app declare a single 64 KiB page like every C app.
+# That is the reason the flag is passed: module size, not correctness.
 #
-# The wasm_stack_check.py script verifies this after every compilation and
-# fails the build immediately if the constraint is violated.
+# It is NOT a pointer-validity constraint, though it was documented as one here
+# for a long time.  The claim was that MEM_REGION_WASM_LINEAR is a fixed 16-page
+# (64 KiB) user-VA mirror, so a host call handed a pointer above it fails
+# silently.  That stopped being true when reserved-VA linmem landed:
+# mm_context_rebind_wasm_linear and mm_context_bind_wasm_linear_scattered
+# (src/kernel/memory.c) REPOINT AND RESIZE that region to the guest's actual
+# linear memory, so the 16 pages allocated at context creation are a bootstrap
+# default, not the bound a running guest is checked against.
+#
+# Measured rather than reasoned, on 2026-08-21: a Zig module built with
+# --stack 1048576 (data at 0x100000, failing the check below outright) executes
+# console_write AND reads its spawn-info buffer through xfer_buffer_read, with
+# pointers above 1 MB, under BOTH runtimes -- WARP and wasm3.  In tree,
+# examples/rust/hello has had data at 0x100000 all along for the same reason and
+# passes its guest test.  See docs/TASKS.md before treating the budget below as a
+# safety property.
 
-# Kernel user-VA region limit: 8 pages × 4 KB.  Must stay in sync with
-# mm_context_alloc_region(ctx, 8, ..., MEM_REGION_WASM_LINEAR) in
-# src/kernel/memory.c.
+# Budget wasm_stack_check.py enforces on stack pointer + data end.  With the
+# constraint above corrected, this is a check that the small stack was actually
+# applied -- a module that quietly reverted to Zig's 1 MB default trips it -- not
+# a bound the kernel imposes.  Kept because a module accidentally declaring 2 MiB
+# of linear memory is worth catching at build time.
 set(WASMOS_ZIG_USER_VA_LIMIT 32768 CACHE INTERNAL
-    "Kernel user-VA region size (bytes) validated by wasm_stack_check.py")
+    "Layout budget (bytes) validated by wasm_stack_check.py; see note above")
 
 # Shadow-stack size passed to zig build-exe for every Zig WASM app.
 set(WASMOS_ZIG_STACK_SIZE 8192 CACHE INTERNAL
@@ -47,10 +60,22 @@ function(wasmos_add_zig_wasm_app)
   cmake_parse_arguments(ARG "" "NAME;TARGET;SRC;LIBC_SRC;OUTPUT_WASM;OUTPUT_APP;MANIFEST;INITIAL_MEMORY"
                         "EXTRA_SRCS;INCLUDE_DIRS" ${ARGN})
 
-  if (NOT ARG_NAME OR NOT ARG_TARGET OR NOT ARG_SRC OR NOT ARG_LIBC_SRC OR
+  if (NOT ARG_NAME OR NOT ARG_TARGET OR NOT ARG_SRC OR
       NOT ARG_OUTPUT_WASM OR NOT ARG_OUTPUT_APP OR NOT ARG_MANIFEST)
     message(FATAL_ERROR "wasmos_add_zig_wasm_app: missing required argument")
   endif ()
+  if (ARG_LIBC_SRC)
+    message(FATAL_ERROR
+      "${ARG_NAME}: LIBC_SRC is staged by the driver now (share/wasmos/zig). Remove it.")
+  endif ()
+  if (ARG_INCLUDE_DIRS)
+    message(FATAL_ERROR
+      "${ARG_NAME}: INCLUDE_DIRS is the sysroot now. Remove it.")
+  endif ()
+  # coroutine.zig is one of the shims the driver stages, so an EXTRA_SRCS entry for
+  # it would be staged twice; drop it rather than making every caller remember.
+  set(_zig_extra_srcs ${ARG_EXTRA_SRCS})
+  list(REMOVE_ITEM _zig_extra_srcs ${LIBC_DIR}/zig/coroutine.zig)
 
   if (NOT ZIG_ENABLE)
     return()
@@ -98,13 +123,27 @@ function(wasmos_add_zig_wasm_app)
     endif()
   endforeach()
 
-  # Optional -Xlinker --initial-memory=N: sets the WASM binary's declared
-  # initial memory pages.  WARP's ActiveMemoryManager uses this to set
-  # allowedLinMemPages_; without it, Zig freestanding binaries declare only
-  # 1 page (64 KB) and shmem probes beyond that throw OutOfBounds at runtime.
-  set(_initial_mem_flags "")
+  # -Xlinker --initial-memory=N sets the WASM binary's declared initial memory
+  # pages.  WARP's ActiveMemoryManager derives allowedLinMemPages_ from it;
+  # without it a Zig freestanding binary declares one page (64 KiB) and a shmem
+  # probe beyond that throws OutOfBounds at runtime -- which reaches C++ code with
+  # no handler and panics the kernel, so this is not a tuning knob.
+  #
+  # The value comes from the manifest's [link] section, the same place the C helper
+  # reads it, so an app is sized in one file whatever language it is written in.
+  # ARG_INITIAL_MEMORY is rejected rather than honoured: two sources for one number
+  # is how it goes stale.
   if (ARG_INITIAL_MEMORY)
-    set(_initial_mem_flags --initial-memory=${ARG_INITIAL_MEMORY})
+    message(FATAL_ERROR
+      "${ARG_NAME}: INITIAL_MEMORY is read from the manifest's [link] section now. "
+      "Move it to ${ARG_MANIFEST} as initial_memory.")
+  endif ()
+  set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND
+               PROPERTY CMAKE_CONFIGURE_DEPENDS ${ARG_MANIFEST})
+  wasmos_manifest_link_value(_zig_initial_memory "${ARG_MANIFEST}" initial_memory 0)
+  set(_initial_mem_flags "")
+  if (_zig_initial_memory GREATER 0)
+    set(_initial_mem_flags --initial-memory=${_zig_initial_memory})
   endif ()
 
   set(_c_compile_flags "")
@@ -116,38 +155,22 @@ function(wasmos_add_zig_wasm_app)
     list(APPEND _c_compile_flags --)
   endif ()
 
+  # Compiles through the SDK's wasmos-zig driver, which owns the staging (Zig
+  # resolves @import beside the importing file), the mandatory small shadow stack,
+  # the layout check and the [link] memory. LIBC_SRC and INCLUDE_DIRS are gone with
+  # it: the driver stages its own runtime shims and compiles extra C against the
+  # sysroot.
   add_custom_command(
     OUTPUT ${ARG_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${_stage}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${_cache}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${_gcache}
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_SRC}      ${_stage}/${ARG_NAME}.zig
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_LIBC_SRC} ${_stage}/wasmos.zig
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_coroutine_zig} ${_stage}/coroutine.zig
-    ${_stage_cmds}
-    COMMAND ${ZIG_EXECUTABLE}
-            build-exe
-            -target wasm32-freestanding
-            -O ReleaseSmall
-            -fno-entry
-            -fstrip
-            --export=wasmos_main
-            --stack ${WASMOS_ZIG_STACK_SIZE}
-            --cache-dir        ${_cache}
-            --global-cache-dir ${_gcache}
-            -femit-bin=${ARG_OUTPUT_WASM}
-            ${_initial_mem_flags}
-            ${_include_flags}
-            ${_stage}/${ARG_NAME}.zig
-            ${_c_compile_flags}
-            ${_extra_c}
-    COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_SOURCE_DIR}/scripts/wasm_stack_check.py
-            ${ARG_OUTPUT_WASM}
-            --stack-size ${WASMOS_ZIG_STACK_SIZE}
-            --max-addr   ${WASMOS_ZIG_USER_VA_LIMIT}
-    DEPENDS ${ARG_SRC} ${ARG_LIBC_SRC} ${_coroutine_zig} ${ARG_EXTRA_SRCS}
+    COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-zig
+            --emit-wasm
+            --wasmos-manifest=${ARG_MANIFEST}
+            ${ARG_SRC}
+            ${_zig_extra_srcs}
+            -o ${ARG_OUTPUT_WASM}
+    DEPENDS ${ARG_SRC} ${ARG_EXTRA_SRCS} ${ARG_MANIFEST}
+            ${LIBC_DIR}/zig/wasmos.zig ${LIBC_DIR}/zig/coroutine.zig
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building and validating Zig WASM app: ${ARG_NAME}"
     VERBATIM

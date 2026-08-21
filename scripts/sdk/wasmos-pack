@@ -1,0 +1,16 @@
+#!/bin/sh
+# wasmos-pack - wrap a WebAssembly module (or native ELF) in a .wap container.
+# A thin front for make_wasmos_app, which stays the single implementation of the
+# container format; every argument is forwarded verbatim.
+set -e
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+    esac
+done
+bindir=$(cd "$(dirname "$self")" && pwd)
+sdkroot=$(cd "$bindir/.." && pwd)
+exec "$sdkroot/libexec/wasmos/make_wasmos_app" "$@"

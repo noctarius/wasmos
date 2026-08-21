@@ -153,7 +153,6 @@ set(WASM_FRAMEBUFFER_PCI_APP ${BUILD_DIR}/framebuffer_pci.wap)
 set(NATIVE_FRAMEBUFFER_PCI_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer_pci/framebuffer_pci_native.c)
 set(NATIVE_FRAMEBUFFER_PCI_DRIVER_ELF ${BUILD_DIR}/framebuffer_pci_native.elf)
 set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
-set(WASMOS_SCRIPT_ENGINE_SRC ${LIBC_DIR}/src/script.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
 set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wap)
 set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c ${SERVICES_DIR}/cli/cli_ls_order.c)
@@ -463,17 +462,14 @@ project(wasmos C CXX ASM)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 include(CMakeParseArguments)
 
-set(WASMOS_LIBC_C_SOURCES
-  ${LIBC_DIR}/src/ctype.c
-  ${LIBC_DIR}/src/ipc_managed.c
-  ${LIBC_DIR}/src/math.c
-  ${LIBC_DIR}/src/stdlib.c
-  ${LIBC_DIR}/src/string.c
-  ${LIBC_DIR}/src/stdio.c
-  ${LIBC_DIR}/src/unistd.c
-  ${LIBC_DIR}/src/spawn_info.c
-  ${LIBSYS_WASM_DIR}/coroutine_wasm.c
-)
+# Sources every WASM C target compiles for itself, on top of the sysroot
+# archives. Only ENTRY shims belong here: an entry symbol must be present
+# unconditionally, and an archive member is pulled only when something already
+# references it. Everything else -- libc and libsys -- comes from
+# ${WASMOS_SDK_LIBDIR}/lib{c,sys}.a, built once by cmake/WasmosSdk.cmake with the
+# same flags this helper passes, so there is one libc build rather than one per
+# module and one link line rather than two to keep in step.
+set(WASMOS_LIBC_C_SOURCES)
 
 set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBC_DIR}/include/ctype.h
@@ -507,9 +503,72 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_menu_item.h
 )
 
+# wasmos_manifest_link_value(<out_var> <manifest> <key> <default>)
+#
+# Reads one key from a manifest's [link] section -- the link-time memory sizes,
+# in bytes -- and falls back to <default> when the section or the key is absent.
+#
+# Section-aware rather than a bare regex over the file: [resources] holds
+# stack_pages next to [link]'s stack_size, and a manifest is the one place a
+# reader looks to learn how an app is sized, so a key silently read from the wrong
+# section would be worse than no key at all. The grammar is the subset
+# scripts/make_wasmos_app.c accepts (see parse_linker_manifest); [link] is the one
+# section the packer ignores, because these values reach the linker, not the
+# container.
+function(wasmos_manifest_link_value out_var manifest key default)
+  set(_result ${default})
+  if (EXISTS "${manifest}")
+    file(STRINGS "${manifest}" _lines)
+    set(_section "")
+    foreach (_line IN LISTS _lines)
+      string(REGEX REPLACE "#.*$" "" _line "${_line}")
+      string(STRIP "${_line}" _line)
+      if (_line STREQUAL "")
+        continue()
+      endif ()
+      if (_line MATCHES "^\\[")
+        set(_section "${_line}")
+        continue()
+      endif ()
+      if (_section STREQUAL "[link]" AND _line MATCHES "^${key}[ \t]*=[ \t]*(.+)$")
+        string(STRIP "${CMAKE_MATCH_1}" _value)
+        string(REGEX REPLACE "^\"(.*)\"$" "\\1" _value "${_value}")
+        set(_result "${_value}")
+      endif ()
+    endforeach ()
+  endif ()
+  set(${out_var} ${_result} PARENT_SCOPE)
+endfunction()
+
+# wasmos_manifest_link_pages(<out_var> <manifest> <key> <default_pages>)
+#
+# The same [link] value as wasmos_manifest_link_value, converted to WASM pages for
+# the toolchains that take a page count (asc's --initialMemory). The manifest is in
+# bytes whatever the language, so an app reads the same way in every one of them;
+# a value that is not a whole number of 64 KiB pages is an error rather than a
+# silent round, because rounding down would hand the app less memory than it asked
+# for and rounding up would hide a typo.
+function(wasmos_manifest_link_pages out_var manifest key default_pages)
+  wasmos_manifest_link_value(_bytes "${manifest}" ${key} 0)
+  if (_bytes EQUAL 0)
+    set(${out_var} ${default_pages} PARENT_SCOPE)
+    return()
+  endif ()
+  math(EXPR _pages "${_bytes} / 65536")
+  math(EXPR _remainder "${_bytes} % 65536")
+  if (NOT _remainder EQUAL 0)
+    message(FATAL_ERROR
+      "${manifest}: [link] ${key} = ${_bytes} is not a whole number of 64 KiB WASM "
+      "pages. Round it to a multiple of 65536.")
+  endif ()
+  set(${out_var} ${_pages} PARENT_SCOPE)
+endfunction()
+
 function(wasmos_add_wasm_c_app_target target_name)
   set(options NO_BUILTIN STARTUP_SHIM CXX ASYNC_SERVICE ASYNC_APP)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
+  # EXPORT, STARTUP_SHIM and NO_BUILTIN are still parsed so that passing one is a
+  # loud error rather than a silent no-op; see the checks below.
   set(multiValueArgs SOURCES)
   cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
@@ -519,18 +578,37 @@ function(wasmos_add_wasm_c_app_target target_name)
   endif ()
 
   if (NOT _wasmos_sources OR NOT WASMOS_APP_OUTPUT_WASM OR NOT WASMOS_APP_OUTPUT_APP OR
-      NOT WASMOS_APP_MANIFEST OR NOT WASMOS_APP_EXPORT)
-    message(FATAL_ERROR "wasmos_add_wasm_c_app_target(${target_name}) requires SOURCE or SOURCES, OUTPUT_WASM, OUTPUT_APP, MANIFEST, EXPORT")
+      NOT WASMOS_APP_MANIFEST)
+    message(FATAL_ERROR "wasmos_add_wasm_c_app_target(${target_name}) requires SOURCE or SOURCES, OUTPUT_WASM, OUTPUT_APP, MANIFEST")
   endif ()
-
-  set(_wasmos_compiler ${CLANG})
-  set(_wasmos_extra_flags)
-  if (WASMOS_APP_CXX)
-    set(_wasmos_compiler ${CMAKE_CXX_COMPILER})
-    list(PREPEND _wasmos_extra_flags ${WASMOS_WASM_CXX_FLAGS})
+  # The entry export, whether a crt is linked, and -fno-builtin are all decided by
+  # the manifest and the driver now, so naming them here would be a second source
+  # for a value that already has one.
+  if (WASMOS_APP_EXPORT)
+    message(FATAL_ERROR
+      "${target_name}: EXPORT is read from the manifest's [package] entry now. "
+      "Remove it; ${WASMOS_APP_MANIFEST} already carries it.")
+  endif ()
+  if (WASMOS_APP_STARTUP_SHIM)
+    message(FATAL_ERROR
+      "${target_name}: STARTUP_SHIM is implied by the manifest's entry -- crt1.o is "
+      "linked exactly when that entry is wasmos_main. Remove it.")
   endif ()
   if (WASMOS_APP_NO_BUILTIN)
-    list(APPEND _wasmos_extra_flags -fno-builtin)
+    message(FATAL_ERROR
+      "${target_name}: NO_BUILTIN is unconditional now (the driver always passes "
+      "-fno-builtin, since libc owns the mem* family). Remove it.")
+  endif ()
+
+  # The SDK driver is the compiler: it owns the triple, the sysroot, the
+  # freestanding/nostdlib flags, the wasm linker defaults, crt1 and the runtime
+  # libraries. Every one of those used to be spelled out here as well, which meant
+  # two link lines describing one toolchain -- and only one of them was exercised by
+  # the tree. wasmos-clang++ is the same driver with the C++ flag set.
+  set(_wasmos_driver ${WASMOS_SDK_DIR}/bin/wasmos-clang)
+  set(_wasmos_driver_flags)
+  if (WASMOS_APP_CXX)
+    list(APPEND _wasmos_driver_flags --wasmos-cxx)
   endif ()
 
   set(_wasmos_libc_sources ${WASMOS_LIBC_C_SOURCES})
@@ -538,27 +616,29 @@ function(wasmos_add_wasm_c_app_target target_name)
     message(FATAL_ERROR "async WASM target may be a service/driver or an app, not both")
   endif ()
   if (WASMOS_APP_ASYNC_SERVICE)
-    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
-         ${LIBSYS_WASM_DIR}/service_async_entry_wasm.c)
+    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/service_async_entry_wasm.c)
   elseif (WASMOS_APP_ASYNC_APP)
-    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
-         ${LIBSYS_WASM_DIR}/app_async_entry_wasm.c)
-  endif ()
-  if (WASMOS_APP_STARTUP_SHIM)
-    list(APPEND _wasmos_libc_sources ${LIBC_DIR}/src/startup.c)
+    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/app_async_entry_wasm.c)
   endif ()
 
-  set(_stack_size 4096)
-  if (WASMOS_APP_STACK_SIZE)
-    set(_stack_size ${WASMOS_APP_STACK_SIZE})
-  endif ()
-  set(_initial_memory 65536)
-  if (WASMOS_APP_INITIAL_MEMORY)
-    set(_initial_memory ${WASMOS_APP_INITIAL_MEMORY})
-  endif ()
-  set(_max_memory 65536)
-  if (WASMOS_APP_MAX_MEMORY)
-    set(_max_memory ${WASMOS_APP_MAX_MEMORY})
+  # Depended on, not named: the driver links these out of the sysroot itself.
+  # These are the archives' SOURCES rather than the archives, because this
+  # function is called from subdirectories and a subdirectory cannot depend on
+  # another directory's custom-command output (see WASMOS_SDK_ARCHIVE_SOURCES in
+  # cmake/WasmosSdk.cmake). Ordering comes from the wasmos-sdk target dependency
+  # added with the target below.
+  set(_wasmos_runtime_deps ${WASMOS_SDK_ARCHIVE_SOURCES})
+
+  # Link-time memory lives in the manifest's [link] section and is read by the
+  # driver at build time, not here. These values are load-bearing rather than
+  # stylistic -- an app that maps shared memory, a framebuffer or socket rings has
+  # to reserve linear memory up front, because those windows are placed above a
+  # 2 MiB floor and above live data -- so they belong with the app.
+  if (WASMOS_APP_STACK_SIZE OR WASMOS_APP_INITIAL_MEMORY OR WASMOS_APP_MAX_MEMORY)
+    message(FATAL_ERROR
+      "${target_name}: STACK_SIZE/INITIAL_MEMORY/MAX_MEMORY are read from the "
+      "manifest's [link] section now. Move them to "
+      "${WASMOS_APP_MANIFEST} as stack_size/initial_memory/max_memory.")
   endif ()
 
   set(_build_comment "Building wasm module")
@@ -573,24 +653,16 @@ function(wasmos_add_wasm_c_app_target target_name)
   add_custom_command(
     OUTPUT ${WASMOS_APP_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${_wasmos_compiler} --target=wasm32 -Oz -nostdlib -ffreestanding
-            -include ${LIBC_DIR}/include/wasmos_cast.h
-            ${_wasmos_extra_flags}
+    COMMAND ${_wasmos_driver}
+            --emit-wasm
+            --wasmos-manifest=${WASMOS_APP_MANIFEST}
+            ${_wasmos_driver_flags}
             ${WASMOS_TRACE_DEFINE}
-            -Wl,--no-entry -Wl,--strip-all
-            -Wl,-z,stack-size=${_stack_size}
-            -Wl,--initial-memory=${_initial_memory}
-            -Wl,--max-memory=${_max_memory}
-            -Wl,--allow-undefined
-            -Wl,--export=${WASMOS_APP_EXPORT}
-            -I${CMAKE_SOURCE_DIR}/src/libui/include
-            -I${LIBC_DIR}/include
-            -I${LIBSYS_WASM_DIR}/include
-            -I${DRIVER_WASM_DIR}/include
             ${_wasmos_libc_sources}
             ${_wasmos_sources}
             -o ${WASMOS_APP_OUTPUT_WASM}
     DEPENDS ${_wasmos_sources} ${_wasmos_libc_sources} ${WASMOS_LIBC_INCLUDE_DEPS}
+            ${WASMOS_APP_MANIFEST} ${_wasmos_runtime_deps}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT ${_build_comment}
     VERBATIM
@@ -606,7 +678,6 @@ function(wasmos_add_wasm_c_app_target target_name)
     DEPENDS ${WASMOS_APP_OUTPUT_APP}
     SOURCES ${_wasmos_sources} ${WASMOS_APP_MANIFEST}
   )
-
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASMOS_APP_OUTPUT_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ${target_name})
 
@@ -1179,10 +1250,10 @@ if (WASMOS_WASM_RUNTIME_WARP)
       # -nostdlib is not a promise that the compiler emits no libc calls: it may
       # still lower an aggregate initialiser to memset (clang 18 does for this
       # fixture's `= {0}` structs, clang 20+ inlines it). Every other wasm target
-      # here links ${WASMOS_LIBC_C_SOURCES} and so already satisfies that; this
-      # one linked nothing, and only ever built on an x86_64 host with WARP
-      # enabled -- a combination that did not occur until WARP became the default
-      # runtime. Link the real libc string/ctype implementations rather than
+      # here links the sysroot's libc.a and so already satisfies that; this one
+      # linked nothing, and only ever built on an x86_64 host with WARP enabled --
+      # a combination that did not occur until WARP became the default runtime.
+      # Link the real libc string/ctype implementations rather than
       COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding
               -Wl,--no-entry -Wl,--strip-all -Wl,--export=wasmos_coroutine_wasm_test
               -I${LIBSYS_WASM_DIR}/include
@@ -1313,6 +1384,10 @@ endfunction()
 
 set(WASMOS_APP_PACKER $<TARGET_FILE:make_wasmos_app>)
 
+# The staged SDK (target `wasmos-sdk`) repackages this toolchain for use outside
+# the repository.  Included here because it needs WASMOS_APP_PACKER.
+include(${CMAKE_SOURCE_DIR}/cmake/WasmosSdk.cmake)
+
 # The initfs payloads are whatever `scripts/initfs.toml` lists, so derive the
 # rule's dependencies from that manifest instead of restating them here.  A
 # hand-written list silently goes stale: framebuffer_pci.wap was embedded in
@@ -1371,9 +1446,26 @@ add_subdirectory(src/kernel)
 
 get_property(WASMOS_WASM_APP_TARGETS GLOBAL PROPERTY WASMOS_WASM_APP_TARGETS)
 get_property(WASMOS_KERNEL_BLOB_TARGETS GLOBAL PROPERTY WASMOS_KERNEL_BLOB_TARGETS)
-if (WASMOS_WASM_APP_TARGETS)
-  add_dependencies(${WASMOS_WASM_APP_TARGETS} make_wasmos_app)
-endif ()
+# Prerequisites shared by every target that can build a wasm module.
+#
+# `make_wasmos_app` packs the .wap. `wasmos-sdk` stages the sysroot: each language's
+# driver resolves headers, archives and crt1 out of it, so it has to exist before any
+# app compiles. That one is a TARGET-level dependency by necessity -- the stage's
+# outputs are custom commands in THIS directory, and a subdirectory cannot name
+# another directory's custom-command output as a file dependency (a clean tree
+# reports "No rule to make target 'sdk-obj/sysroot.stamp'"). Per-app freshness comes
+# from WASMOS_SDK_ARCHIVE_SOURCES, which are ordinary source files.
+#
+# The loop is not cosmetic: `add_dependencies(<list> dep)` reads the FIRST element as
+# the target and every remaining one as a dependency, so passing a list gives the
+# dependency to one target and silently skips the rest.
+#
+# Blob targets need it too. CMake copies a custom command into each target that
+# consumes its output, so a blob target depending on a module file carries its own
+# copy of the rule and would otherwise run a driver before the sysroot exists.
+foreach (_wasm_target IN LISTS WASMOS_WASM_APP_TARGETS WASMOS_KERNEL_BLOB_TARGETS)
+  add_dependencies(${_wasm_target} make_wasmos_app wasmos-sdk)
+endforeach ()
 set(WASM_DRIVER_BLOB_DEPS "")
 list(APPEND WASM_DRIVER_BLOB_DEPS make_wasmos_app)
 if (WASMOS_WASM_APP_TARGETS)
@@ -1700,6 +1792,11 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}
+  ${SDK_HELLO_COPY_CMD}
+  ${SDK_ZIG_HELLO_COPY_CMD}
+  ${SDK_AS_HELLO_COPY_CMD}
+  ${SDK_RUST_HELLO_COPY_CMD}
+  ${SDK_GO_HELLO_COPY_CMD}
   ${CHARDEV_PREEMPT_COPY_CMD}
   ${INIT_SMOKE_COPY_CMD}
   ${FS_OPEN_SMOKE_COPY_CMD}
@@ -2634,6 +2731,11 @@ if (WASMOS_UNIT_TINYGO)
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.go
           ${BUILD_DIR}/go_coroutine_test_src/test_wasm_coroutine.go
+  # The target JSON comes from wasmos-tinygo, which is the single definition of
+  # what a WASMOS Go build is -- its `extra-files` are relative to TINYGOROOT, so
+  # it cannot be a checked-in template and has to be generated per invocation.
+  COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-tinygo
+          --emit-target-json=${BUILD_DIR}/wasmos-tinygo.json
   # tinygo refuses an absolute package path, and this target's working directory
   # is the source root, so run it from the build directory.
   COMMAND ${CMAKE_COMMAND} -E chdir ${BUILD_DIR}
@@ -2645,6 +2747,9 @@ if (WASMOS_UNIT_TINYGO)
   COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/go/run_go_test.mjs
           ${BUILD_DIR}/test_wasm_coroutine_go.wasm test_wasm_coroutine_go
   VERBATIM)
+  # The target JSON names the sysroot's include directory, and the build reads
+  # headers from it, so the sysroot has to be staged first.
+  add_dependencies(run-kernel-unit-tests wasmos-sdk)
 endif ()
 
 add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
@@ -2854,6 +2959,19 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_libc_string
   COMMAND ${BUILD_DIR}/test_libc_string
+  # argv construction from the spawn-info argument string. spawn_info.c reaches
+  # the contract through two hostcalls, which the suite defines itself, so it
+  # links against the real accessors with a synthetic spawn-info blob behind them.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${LIBC_DIR}/include
+          -I${LIBC_DIR}/src
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_startup_argv.c
+          ${LIBC_DIR}/src/spawn_info.c
+          -o ${BUILD_DIR}/test_libc_startup_argv
+  COMMAND ${BUILD_DIR}/test_libc_startup_argv
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -Wno-error=implicit-function-declaration -Wno-sign-compare
           "-D__builtin_wasm_memory_size(x)=((int)(0))"
@@ -3267,6 +3385,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wasm_stdlib.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_math.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdio.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_startup_argv.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdlib.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_string.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c

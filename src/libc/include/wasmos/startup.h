@@ -26,6 +26,17 @@ uint32_t wasmos_startup_module_index(void);
  * spawn_info.c), so a longer command line is cut short for every caller. */
 uint32_t wasmos_startup_args(char* dst, uint32_t cap);
 
+/* Split the argument string into an argv array and return argc (>= 1), or 0 when
+ * the arguments are unusable (NULL buf/argv, buf_cap 0, or argv_max below 2).
+ * `buf` receives the tokens NUL-separated in place and must outlive argv;
+ * argv_max counts argv[0] and the NULL terminator.
+ *
+ * argv[0] is an EMPTY program-name slot -- the contract carries no name -- so
+ * argv[1] is the first argument, as in any C program. An argument that does not
+ * fit `buf` whole is dropped rather than truncated. crt1 calls this to build
+ * main()'s argc/argv; see src/libc/src/spawn_info.c for the full contract. */
+int wasmos_startup_argv(char* buf, uint32_t buf_cap, char** argv, uint32_t argv_max);
+
 #ifdef __cplusplus
 }
 #endif

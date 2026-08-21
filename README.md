@@ -276,6 +276,7 @@ Key policy/runtime notes:
 ## Documentation Index
 - `docs/ARCHITECTURE.md`: architecture index
 - `docs/BUILD_SYSTEM.md`: CMake build system — target types, helper functions, app types, QEMU targets, and how to add new components
+- `docs/toolchain.md`: the `wasmos-clang` SDK — building a WASMOS application from plain C/C++ with no target triple, sysroot, linker flag or packaging step to state
 - `docs/architecture/`: feature-level architecture docs
 - `docs/architecture/11-ring3-isolation-and-separation.md`: ring-3 isolation and kernel/user-space separation design
 - `docs/architecture/08-threading-and-lifecycle.md`: threading design and rollout

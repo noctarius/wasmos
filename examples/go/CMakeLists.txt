@@ -17,50 +17,23 @@ if (GO_ENABLE)
 endif ()
 
 if (GO_AVAILABLE)
-  execute_process(
-    COMMAND ${TINYGO_EXECUTABLE} env TINYGOROOT
-    OUTPUT_VARIABLE TINYGO_ROOT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-  if (NOT TINYGO_ROOT)
-    message(FATAL_ERROR "TinyGo did not report TINYGOROOT")
-  endif ()
-  file(RELATIVE_PATH TINYGO_COROUTINE_C
-    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/coroutine_wasm.c")
-  file(RELATIVE_PATH TINYGO_IPC_FUTURE_C
-    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/ipc_future_wasm.c")
-  file(RELATIVE_PATH TINYGO_GO_COROUTINE_TRAMPOLINE_C
-    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/go_coroutine_trampoline.c")
-  file(RELATIVE_PATH TINYGO_SERVICE_RUNTIME_C
-    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/service_runtime_wasm.c")
-  file(RELATIVE_PATH TINYGO_GO_ASYNC_APP_C
-    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/go_async_app_wasm.c")
-  configure_file(${LIBC_DIR}/go/wasmos-tinygo.json.in ${BUILD_DIR}/wasmos-tinygo.json @ONLY)
   set(WASM_HELLO_GO_STAGE_DIR ${BUILD_DIR}/go_hello_src)
   set(WASM_HELLO_GO_LIBC_SRC ${LIBC_DIR}/go/wasmos.go)
+  # The Go driver owns the TinyGo target file, the staging and the flags: it asks
+  # tinygo for its root and generates the target per invocation, because a target's
+  # extra-files are resolved relative to TINYGOROOT. All of that used to be spelled
+  # out here, against a target template that has been removed with it -- a second
+  # copy of one toolchain, and the copy the tree exercised.
   add_custom_command(
     OUTPUT ${WASM_HELLO_GO_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_HELLO_GO_STAGE_DIR}
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_STAGE_DIR}/hello_go.go
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_GO_LIBC_SRC} ${WASM_HELLO_GO_STAGE_DIR}/wasmos.go
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/go/coroutine.go ${WASM_HELLO_GO_STAGE_DIR}/coroutine.go
-    COMMAND ${CMAKE_COMMAND} -E env GO111MODULE=off WASMOPT=${WASMOPT_EXECUTABLE}
-            ${TINYGO_EXECUTABLE}
-            build
-            -target=${BUILD_DIR}/wasmos-tinygo.json
-            -opt=z
-            -no-debug
-            -panic=trap
-            -scheduler=none
-            -gc=leaking
+    COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-tinygo
+            --emit-wasm
+            --wasmos-manifest=${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
+            ${WASM_HELLO_GO_SRC}
             -o ${WASM_HELLO_GO_WASM}
-            ./go_hello_src
-    DEPENDS ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_LIBC_SRC} ${LIBC_DIR}/go/coroutine.go
-            ${LIBC_DIR}/go/wasmos-tinygo.json.in ${LIBSYS_WASM_DIR}/coroutine_wasm.c
-            ${LIBSYS_WASM_DIR}/ipc_future_wasm.c ${LIBSYS_WASM_DIR}/go_coroutine_trampoline.c
-            ${LIBSYS_WASM_DIR}/service_runtime_wasm.c ${LIBSYS_WASM_DIR}/go_async_app_wasm.c
-            ${LIBSYS_WASM_DIR}/include/wasmos/service_runtime_wasm.h
+    DEPENDS ${WASM_HELLO_GO_SRC} ${LIBC_DIR}/go/wasmos.go ${LIBC_DIR}/go/coroutine.go
+            ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata ${WASMOS_SDK_STAMP}
     WORKING_DIRECTORY ${BUILD_DIR}
     COMMENT "Building wasm hello-go module"
     VERBATIM

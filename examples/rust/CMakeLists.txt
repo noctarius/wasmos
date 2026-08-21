@@ -9,63 +9,23 @@ if (RUST_ENABLE)
   if (NOT RUSTC_EXECUTABLE)
     message(FATAL_ERROR "Rust compiler 'rustc' not found. Install Rust and add the wasm32-unknown-unknown target (rustup target add wasm32-unknown-unknown).")
   endif ()
-  add_custom_command(
-    OUTPUT ${WASM_HELLO_RUST_COROUTINE_OBJ}
-    COMMAND ${CLANG} --target=wasm32 -Oz -ffreestanding
-            -I${LIBSYS_WASM_DIR}/include
-            -c ${LIBSYS_WASM_DIR}/coroutine_wasm.c
-            -o ${WASM_HELLO_RUST_COROUTINE_OBJ}
-    DEPENDS ${LIBSYS_WASM_DIR}/coroutine_wasm.c
-            ${LIBSYS_WASM_DIR}/include/wasmos/coroutine_wasm.h
-    COMMENT "Building WASM coroutine core for Rust"
-    VERBATIM
-  )
-  add_custom_command(
-    OUTPUT ${WASM_HELLO_RUST_IPC_FUTURE_OBJ}
-    COMMAND ${CLANG} --target=wasm32 -Oz -ffreestanding
-            -I${LIBSYS_WASM_DIR}/include -I${LIBC_DIR}/include -I${DRIVER_WASM_DIR}/include
-            -c ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
-            -o ${WASM_HELLO_RUST_IPC_FUTURE_OBJ}
-    DEPENDS ${LIBSYS_WASM_DIR}/ipc_future_wasm.c ${LIBSYS_WASM_DIR}/include/wasmos/libsys.h
-    COMMENT "Building WASM IPC future adapter for Rust"
-    VERBATIM
-  )
-  add_custom_command(
-    OUTPUT ${WASM_HELLO_RUST_SERVICE_RUNTIME_OBJ}
-    COMMAND ${CLANG} --target=wasm32 -Oz -ffreestanding
-            -I${LIBSYS_WASM_DIR}/include -I${LIBC_DIR}/include -I${DRIVER_WASM_DIR}/include
-            -c ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
-            -o ${WASM_HELLO_RUST_SERVICE_RUNTIME_OBJ}
-    DEPENDS ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
-            ${LIBSYS_WASM_DIR}/include/wasmos/service_runtime_wasm.h
-            ${LIBSYS_WASM_DIR}/include/wasmos/libsys.h
-    COMMENT "Building WASM service runtime wrapper for Rust"
-    VERBATIM
-  )
+  # Compiles through the SDK's wasmos-rustc driver, which owns the staging (the
+  # binding is a sibling module), the small shadow stack, the wasm link flags and
+  # libsys.a -- where the coroutine, event-loop and async-filesystem entry points
+  # the binding declares as extern "C" live. Building those three shims as objects
+  # here and spelling out the link line was the in-tree copy of all of that.
   add_custom_command(
     OUTPUT ${WASM_HELLO_RUST_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${RUSTC_EXECUTABLE}
-            --target=wasm32-unknown-unknown
-            -O
-            -C opt-level=z
-            -C panic=abort
-            -C codegen-units=1
-            -C link-arg=--no-entry
-            -C link-arg=--export=wasmos_main
-            -C link-arg=--strip-all
-            -C link-arg=--initial-memory=2097152
-            -C link-arg=--max-memory=2097152
-            -C link-arg=${WASM_HELLO_RUST_COROUTINE_OBJ}
-            -C link-arg=${WASM_HELLO_RUST_IPC_FUTURE_OBJ}
-            -C link-arg=${WASM_HELLO_RUST_SERVICE_RUNTIME_OBJ}
-            --crate-type=cdylib
+    COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-rustc
+            --emit-wasm
+            --wasmos-manifest=${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
             ${WASM_HELLO_RUST_SRC}
             -o ${WASM_HELLO_RUST_WASM}
-    DEPENDS ${WASM_HELLO_RUST_SRC} ${WASM_HELLO_RUST_LIBC_SRC}
-            ${WASM_HELLO_RUST_COROUTINE_SRC} ${WASM_HELLO_RUST_COROUTINE_OBJ}
-            ${WASM_HELLO_RUST_IPC_FUTURE_OBJ} ${WASM_HELLO_RUST_SERVICE_RUNTIME_OBJ}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    DEPENDS ${WASM_HELLO_RUST_SRC} ${LIBC_DIR}/rust/wasmos.rs
+            ${LIBC_DIR}/rust/coroutine.rs
+            ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata ${WASMOS_SDK_STAMP}
+    WORKING_DIRECTORY ${BUILD_DIR}
     COMMENT "Building wasm hello-rust module"
     VERBATIM
   )
@@ -82,40 +42,19 @@ if (RUST_ENABLE)
     VERBATIM
   )
   # --- Tetris: two-player networked graphical Rust app ---------------------
-  set(WASM_TETRIS_SHIM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tetris/net_shim.c)
-  set(WASM_TETRIS_SHIM_OBJ ${BUILD_DIR}/tetris_net_shim.o)
-  add_custom_command(
-    OUTPUT ${WASM_TETRIS_SHIM_OBJ}
-    COMMAND ${CLANG} --target=wasm32 -Oz -ffreestanding
-            -I${LIBC_DIR}/include -I${LIBSYS_WASM_DIR}/include -I${DRIVER_WASM_DIR}/include
-            -c ${WASM_TETRIS_SHIM_SRC}
-            -o ${WASM_TETRIS_SHIM_OBJ}
-    DEPENDS ${WASM_TETRIS_SHIM_SRC}
-            ${LIBC_DIR}/include/wasmos/net.h
-            ${DRIVER_WASM_DIR}/include/wasmos/ringbuf.h
-    COMMENT "Building WASM net transport shim for Rust tetris"
-    VERBATIM
-  )
   add_custom_command(
     OUTPUT ${WASM_TETRIS_RUST_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${RUSTC_EXECUTABLE}
-            --target=wasm32-unknown-unknown
-            -O
-            -C opt-level=z
-            -C panic=abort
-            -C codegen-units=1
-            -C link-arg=--no-entry
-            -C link-arg=--export=wasmos_main
-            -C link-arg=--strip-all
-            -C link-arg=--initial-memory=16777216
-            -C link-arg=--max-memory=16777216
-            -C link-arg=${WASM_TETRIS_SHIM_OBJ}
-            --crate-type=cdylib
+    COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-rustc
+            --emit-wasm
+            --wasmos-manifest=${CMAKE_CURRENT_SOURCE_DIR}/tetris/linker.metadata
             ${WASM_TETRIS_RUST_SRC}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tetris/net_shim.c
             -o ${WASM_TETRIS_RUST_WASM}
-    DEPENDS ${WASM_TETRIS_RUST_SRC} ${WASM_TETRIS_SHIM_OBJ}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    DEPENDS ${WASM_TETRIS_RUST_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/tetris/net_shim.c
+            ${LIBC_DIR}/rust/wasmos.rs ${LIBC_DIR}/rust/coroutine.rs
+            ${CMAKE_CURRENT_SOURCE_DIR}/tetris/linker.metadata ${WASMOS_SDK_STAMP}
+    WORKING_DIRECTORY ${BUILD_DIR}
     COMMENT "Building wasm tetris module"
     VERBATIM
   )

@@ -11,6 +11,13 @@ native = false
 stack_pages = 16
 heap_pages = 16
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# FAT directory and cluster-chain scratch on top of the 8 KiB block buffer.
+[link]
+stack_size = 8192
+initial_memory = 262144
+max_memory = 262144
+
 [ipc]
 required_endpoint_name = "block"
 required_endpoint_rights = 1

@@ -17,6 +17,14 @@ stack_pages = 16
 # the CLI handshake.  Must exceed the cell grids + the window + scan guards.
 heap_pages = 256
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# The only app that grows: the terminal's cell grids are allocated as
+# sessions open, so initial_memory covers the common case and max_memory the
+# ceiling.
+[link]
+initial_memory = 1572864
+max_memory = 4194304
+
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 1

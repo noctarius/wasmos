@@ -769,6 +769,79 @@ linked feature documents for rationale and rollout plans.
 - `.wap` packages cover WASM and native apps, services, and drivers. C, C++,
   Zig, Go, Rust, and AssemblyScript examples are supported through shared libc
   and runtime-specific libsys wrappers.
+- An app's link-time memory lives in its manifest's `[link]` section
+  (`stack_size`/`initial_memory`/`max_memory`, bytes), read at configure time by
+  `wasmos_add_wasm_c_app_target`; passing the old
+  `STACK_SIZE`/`INITIAL_MEMORY`/`MAX_MEMORY` arguments is a configure error naming
+  the manifest. So one file describes an app: what it needs from the kernel
+  (`[resources]`) and how its own linear memory is laid out (`[link]`), each number
+  next to the reason for it. All 59 modules were byte-identical in size across the
+  migration, and `tests/test_link_memory_manifest.py` checks every manifest that
+  declares `[link]` against what its module actually declares — 21 modules across
+  C, Zig, AssemblyScript and Rust, all four of which read the section, so it is the
+  single check that the four toolchains agree about what a manifest means. The
+  section is in bytes in every language; `asc` takes pages, and the conversion is in
+  one place where a non-page-multiple is an error rather than a silent round.
+- The in-tree build compiles through the SDK drivers in **every** language: no WASM
+  target invokes a compiler directly any more. The C helper calls `wasmos-clang`,
+  the Zig helper `wasmos-zig`, the AssemblyScript helper `wasmos-asc`, and the Rust
+  and Go examples `wasmos-rustc` and `wasmos-tinygo`; each helper passes only its
+  sources, output and manifest. So the flags live in one place per language instead
+  of two, and the copy the tree exercises is the one an outside developer gets.
+  Parameters that duplicated the manifest are gone and are now configure errors:
+  `EXPORT`, `STARTUP_SHIM`, `NO_BUILTIN` (C), `LIBC_SRC`/`INCLUDE_DIRS` (Zig),
+  `ENTRY_NAME`/`INITIAL_MEMORY_PAGES` (AssemblyScript). Two mechanisms went with
+  them: the `wasmos-tinygo.json.in` target template and the Rust shim-object rules.
+  Verified against a pre-switch tree: 60 of 62 C modules, all 6 AssemblyScript
+  modules and all 5 Zig modules byte-identical; Go moved 4 bytes and the two Rust
+  modules ~20, the latter because they now take the driver's small shadow stack
+  (`examples/rust/hello` moved its data from 1 MB to `0x2000`).
+- It also links `crt1.o`, `libc.a` and `libsys.a` from the staged sysroot instead of
+  recompiling libc into each of the ~59 modules, so there is one libc build and
+  one link line rather than two that can drift. `llvm-ar` is therefore required to
+  build anything. Only entry shims are still compiled per target (an entry symbol
+  must be present whether or not anything references it, which an archive will not
+  guarantee). One behavioural consequence: a symbol defined by both an application
+  and libc is no longer a duplicate-symbol error — the application's definition
+  silently wins.
+- A staged SDK (`cmake --build build --target wasmos-sdk`) repackages the C
+  toolchain for use outside the repository: a relocatable sysroot with `crt1.o`,
+  `libc.a` and `libsys.a`, and a `wasmos-clang` driver that supplies the triple,
+  sysroot, wasm linker defaults and the `.wap` packaging step, so
+  `wasmos-clang hello.c -o hello` produces a runnable package with no other flags.
+  `wasmos-zig` does the same for Zig — staging the runtime shims flat so
+  `@import("wasmos.zig")` resolves, always passing the mandatory 8 KiB shadow
+  stack, and refusing to emit a module that fails the user-VA layout check — and
+  `wasmos-asc` for AssemblyScript, staging the whole AS runtime flat beside the app
+  because `asc` has no include path, with the coroutine transform and
+  `--runtime stub` applied unconditionally; and `wasmos-rustc` for Rust, staging
+  the binding as a sibling module and overriding rustc's 1 MB default shadow stack
+  for the same layout reason as Zig. `examples/{c,zig,assemblyscript,rust}/sdk_hello`
+  are built that way by every build and run in the guest by
+  `tests/test_sdk_hello.py`, which checks console output, a real `argv[1]`, and an
+  `open`/`read` that reaches the filesystem service over IPC; `tests/test_sdk_abi.py` asserts the module's import
+  and export shape without booting. Stage 1 keeps LLVM's own
+  `wasm32-unknown-unknown` target and puts the WASMOS knowledge in the driver,
+  which reports `wasm32-unknown-wasmos`. The CMake integration
+  (`share/cmake/WASMOS/WASMOSToolchain.cmake` plus a `Platform/WASMOS.cmake`)
+  builds an out-of-tree project to a running `.wap`, and `wasmos-clang++` builds
+  freestanding C++ (verified in the guest by hand, not yet in a battery). Not yet
+  present: a wasm32 `libc++` (so no `<vector>`) and a native
+  `wasm32-unknown-wasmos` LLVM triple. compiler-rt builtins are absent but measured
+  to be needed only for `__int128` (eight symbols) — 64-bit arithmetic and float
+  conversions are native wasm instructions — and `tests/test_sdk_arithmetic.py`
+  pins that boundary in both directions. See `docs/toolchain.md`.
+- `crt1` builds a real `argc`/`argv` for `wasmos_main` apps:
+  `wasmos_startup_argv()` (`src/libc/src/spawn_info.c`) tokenizes the spawn-info
+  argument string, `argv[0]` is an empty program-name slot so `argv[1]` is the
+  first argument, and an argument that does not fit the buffer whole is dropped
+  rather than truncated (`tests/unit/test_libc_startup_argv.c`). C only so far —
+  the Rust, Go, Zig and AssemblyScript entry shims still pass an empty argument
+  list.
+- The C wasm link no longer passes `--allow-undefined`. It was never needed — no
+  module in the tree carries an undeclared import — and it turned a missing source
+  file into a module that loads and traps at the call site instead of a link
+  error.
 - CLI path spawns retain transfer buffers until the matching PM response;
   foreground/background launches and broker handoff use the same ownership
   contract.

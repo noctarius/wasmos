@@ -275,10 +275,12 @@ static void strip_quotes(char* s) {
 
 /* Read a TOML-ish linker manifest into *out. The accepted grammar is a small
  * subset: '#' starts a comment to end of line, blank lines are skipped, section
- * headers are [package], [resources], [ipc] and the repeatable [[capabilities]]
- * and [[regions]], and everything else must be a key = value line whose
- * value may be double-quoted. Keys outside a known section, and unknown keys
- * inside one, are ignored silently.
+ * headers are [package], [resources], [ipc], [link] and the repeatable
+ * [[capabilities]] and [[regions]], and everything else must be a key = value
+ * line whose value may be double-quoted. Keys outside a known section, and
+ * unknown keys inside one, are ignored silently. [link] is recognized and wholly
+ * ignored: it holds link-time memory sizes the toolchain driver reads, and
+ * recognizing it keeps its keys from being read as keys of the section above.
  *
  * Defaults applied before parsing: kind "app" and required_endpoint_name "-"
  * (meaning none). Each [[regions]] block starts as an I/O region with an empty
@@ -301,7 +303,15 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
     if (!f) {
         return -1;
     }
-    enum { SEC_NONE, SEC_PACKAGE, SEC_RESOURCES, SEC_IPC, SEC_CAP, SEC_REGION } sec = SEC_NONE;
+    enum {
+        SEC_NONE,
+        SEC_PACKAGE,
+        SEC_RESOURCES,
+        SEC_IPC,
+        SEC_LINK,
+        SEC_CAP,
+        SEC_REGION
+    } sec = SEC_NONE;
     int region_idx = -1;
     int cap_idx = -1;
     char line[512];
@@ -328,6 +338,14 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
         }
         if (strcmp(s, "[ipc]") == 0) {
             sec = SEC_IPC;
+            continue;
+        }
+        /* [link] carries link-time memory sizes for the toolchain driver
+         * (wasmos-clang) and nothing the container needs.  It is recognized so
+         * that its keys are dropped here rather than read as keys of whichever
+         * section preceded it. */
+        if (strcmp(s, "[link]") == 0) {
+            sec = SEC_LINK;
             continue;
         }
         if (strcmp(s, "[[capabilities]]") == 0) {

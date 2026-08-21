@@ -1,0 +1,253 @@
+#!/bin/sh
+# wasmos-tinygo - the WASMOS Go compiler driver (TinyGo).
+#
+#   wasmos-tinygo app.go -o app          # -> app.wap
+#   wasmos-tinygo --emit-wasm app.go -o app.wasm
+#
+# The most involved of the drivers, because TinyGo is configured by a TARGET FILE
+# rather than by flags, and that file cannot be shipped ready-made:
+#
+#   - Its `extra-files` (the C shims a Go guest links: the coroutine runtime, the
+#     IPC-future bridge, the Go coroutine trampoline, the service runtime and the
+#     async app entry) are resolved RELATIVE TO TINYGOROOT, which is wherever
+#     TinyGo happens to be installed on this machine. So the target file is
+#     generated per invocation, after asking `tinygo env TINYGOROOT`, with those
+#     paths computed relative to it.
+#   - Its `cflags` carry the include paths those C files need, which are the
+#     SDK's sysroot rather than a source tree.
+#
+# The rest is staging, as with the other non-C languages: TinyGo compiles a
+# PACKAGE, so the app and the two Go runtime files are copied into one directory
+# and that directory is what gets built. A Go guest's entry is
+# `func Main(args []string) int32` in `package main` -- capital M; the binding's
+# wasmos_main export calls it.
+#
+# TinyGo drives Binaryen itself, so wasm-opt has to be resolvable; it is passed
+# explicitly rather than left to the child's PATH.
+set -e
+
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+    esac
+done
+bindir=$(cd "$(dirname "$self")" && pwd)
+sdkroot=$(cd "$bindir/.." && pwd)
+
+. "$sdkroot/wasmos-sdk.conf"
+
+godir=$sdkroot/share/wasmos/go
+manifest=$sdkroot/share/wasmos/default-manifest.toml
+
+manifest_get() {
+    awk -v want_sec="[$1]" -v want_key="$2" '
+        { sub(/#.*/, ""); gsub(/^[ \t]+|[ \t]+$/, "") }
+        /^\[/ { sec = $0; next }
+        sec == want_sec {
+            eq = index($0, "=")
+            if (eq == 0) next
+            key = substr($0, 1, eq - 1); val = substr($0, eq + 1)
+            gsub(/^[ \t]+|[ \t]+$/, "", key); gsub(/^[ \t]+|[ \t]+$/, "", val)
+            gsub(/^"|"$/, "", val)
+            if (key == want_key) { print val; exit }
+        }
+    ' "$3"
+}
+
+emit_wasm=0
+emit_target_json=
+output=
+source=
+extra=
+
+for arg in "$@"; do
+    case $arg in
+    --emit-wasm) emit_wasm=1 ;;
+    --emit-target-json=*) emit_target_json=${arg#--emit-target-json=} ;;
+    --wasmos-manifest=*) manifest=${arg#--wasmos-manifest=} ;;
+    --print-sysroot) echo "$sdkroot/sysroot"; exit 0 ;;
+    --print-target-triple) echo "$WASMOS_SDK_TARGET"; exit 0 ;;
+    --print-manifest) echo "$manifest"; exit 0 ;;
+    --version)
+        echo "WASMOS SDK $WASMOS_SDK_VERSION (target $WASMOS_SDK_TARGET)"
+        exec "$WASMOS_SDK_TINYGO" version
+        ;;
+    -o) output=PENDING ;;
+    # -o joined to its argument, as clang and rustc both accept it.
+    -o?*) output=${arg#-o} ;;
+    *.go)
+        if [ "$output" = PENDING ]; then
+            output=$arg
+        elif [ -z "$source" ]; then
+            source=$arg
+        else
+            extra="$extra $arg"
+        fi
+        ;;
+    *)
+        if [ "$output" = PENDING ]; then
+            output=$arg
+        else
+            extra="$extra $arg"
+        fi
+        ;;
+    esac
+done
+
+# write_target_json <outpath>
+#
+# TinyGo takes the WASMOS target as a JSON file rather than flags, and its
+# `extra-files` are resolved RELATIVE TO TINYGOROOT, which is wherever tinygo is
+# installed. The file therefore cannot be a checked-in template; it is generated per
+# invocation after asking tinygo where its root is. python3 computes the relative
+# paths because POSIX sh has no relpath and the two trees share no prefix to strip.
+#
+# This is the single definition of what a WASMOS Go build is. `--emit-target-json`
+# exposes it so the Go binding's unit test can build against the same target without
+# restating it -- that duplicate is what used to live in wasmos-tinygo.json.in.
+write_target_json() {
+    _tj_out=$1
+    tinygoroot=$("$WASMOS_SDK_TINYGO" env TINYGOROOT)
+    if [ -z "$tinygoroot" ]; then
+        echo "wasmos-tinygo: tinygo did not report TINYGOROOT" >&2
+        exit 1
+    fi
+    python3 - "$tinygoroot" "$godir/c" "$sdkroot/sysroot/include" "$_tj_out" <<'PY'
+import json, os, sys
+
+tinygoroot, cdir, include, out = sys.argv[1:5]
+shims = [
+    "coroutine_wasm.c",
+    "ipc_future_wasm.c",
+    "go_coroutine_trampoline.c",
+    "service_runtime_wasm.c",
+    "go_async_app_wasm.c",
+]
+extra = ["src/runtime/asm_tinygowasm.S"]
+extra += [os.path.relpath(os.path.join(cdir, s), tinygoroot) for s in shims]
+
+target = {
+    "llvm-target": "wasm32-unknown-unknown",
+    "cpu": "mvp",
+    "features": "+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types",
+    "build-tags": ["tinygo.wasm", "wasm_unknown"],
+    "buildmode": "c-shared",
+    "goos": "linux",
+    "goarch": "arm",
+    "linker": "wasm-ld",
+    "rtlib": "compiler-rt",
+    "libc": "wasmbuiltins",
+    "scheduler": "none",
+    "gc": "leaking",
+    "default-stack-size": 4096,
+    "cflags": [
+        "-mnontrapping-fptoint",
+        "-mno-multivalue",
+        "-mno-reference-types",
+        "-msign-ext",
+        "-I" + include,
+    ],
+    "ldflags": ["--stack-first", "--no-demangle", "--no-entry"],
+    "extra-files": extra,
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(target, handle, indent=2)
+PY
+}
+
+if [ -z "$WASMOS_SDK_TINYGO" ] || ! command -v "$WASMOS_SDK_TINYGO" >/dev/null 2>&1; then
+    echo "wasmos-tinygo: tinygo not found (WASMOS_SDK_TINYGO=$WASMOS_SDK_TINYGO)" >&2
+    exit 1
+fi
+if [ -n "$emit_target_json" ]; then
+    write_target_json "$emit_target_json"
+    exit 0
+fi
+if [ -z "$source" ]; then
+    echo "wasmos-tinygo: no .go input file" >&2
+    exit 1
+fi
+if [ -z "$WASMOS_SDK_TINYGO" ] || ! command -v "$WASMOS_SDK_TINYGO" >/dev/null 2>&1; then
+    echo "wasmos-tinygo: tinygo not found (WASMOS_SDK_TINYGO=$WASMOS_SDK_TINYGO)" >&2
+    exit 1
+fi
+if [ -z "$WASMOS_SDK_WASMOPT" ] || ! command -v "$WASMOS_SDK_WASMOPT" >/dev/null 2>&1; then
+    echo "wasmos-tinygo: wasm-opt not found (WASMOS_SDK_WASMOPT=$WASMOS_SDK_WASMOPT)" >&2
+    exit 1
+fi
+if [ ! -f "$manifest" ]; then
+    echo "wasmos-tinygo: manifest not found: $manifest" >&2
+    exit 1
+fi
+
+entry=$(manifest_get package entry "$manifest")
+[ -n "$entry" ] || entry=wasmos_main
+
+if [ -z "$output" ] || [ "$output" = PENDING ]; then
+    output=a.out
+fi
+case $output in
+*.wasm) emit_wasm=1; wasm=$output ;;
+*.wap) wasm=${output%.wap}.wasm ;;
+*)
+    wasm=$output.wasm
+    [ "$emit_wasm" = 1 ] || output=$output.wap
+    ;;
+esac
+
+target=${wasm%.wasm}.tinygo-target.json
+write_target_json "$target"
+
+stage=${wasm%.wasm}.gostage
+rm -rf "$stage"
+mkdir -p "$stage"
+cp "$source" "$stage/$(basename "$source")"
+cp "$godir"/*.go "$stage/"
+for f in $extra; do
+    case $f in
+    *.go) cp "$f" "$stage/" ;;
+    esac
+done
+
+
+# TinyGo builds a PACKAGE, and in GOPATH mode (GO111MODULE=off) a bare directory
+# name is read as an import path to look up under GOROOT/GOPATH. The package has to
+# be named as "./dir" from its parent, so the build runs there -- which means the
+# output and target paths must be absolute first.
+abspath() {
+    case $1 in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd)" "$(basename "$1")" ;;
+    esac
+}
+wasm_abs=$(abspath "$wasm")
+target_abs=$(abspath "$target")
+stage_parent=$(cd "$(dirname "$stage")" && pwd)
+stage_name=$(basename "$stage")
+
+(
+    cd "$stage_parent"
+    GO111MODULE=off WASMOPT="$WASMOS_SDK_WASMOPT" "$WASMOS_SDK_TINYGO" build \
+        -target="$target_abs" \
+        -opt=z \
+        -no-debug \
+        -panic=trap \
+        -scheduler=none \
+        -gc=leaking \
+        -o "$wasm_abs" \
+        "./$stage_name"
+)
+
+[ "$emit_wasm" = 1 ] && exit 0
+
+if grep -q '@NAME@' "$manifest" 2>/dev/null; then
+    packname=$(basename "$output" .wap)
+    packed_manifest=${wasm%.wasm}.manifest.toml
+    sed "s/@NAME@/$packname/" "$manifest" > "$packed_manifest"
+    manifest=$packed_manifest
+fi
+
+exec "$bindir/wasmos-pack" --manifest "$manifest" --in "$wasm" --out "$output"

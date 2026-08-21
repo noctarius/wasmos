@@ -1,0 +1,204 @@
+#!/bin/sh
+# wasmos-rustc - the WASMOS Rust compiler driver.
+#
+#   wasmos-rustc app.rs -o app           # -> app.wap
+#   wasmos-rustc --emit-wasm app.rs -o app.wasm
+#
+# An app declares the runtime binding as a sibling module:
+#
+#     #![no_std]
+#     #![no_main]
+#     mod wasmos;
+#
+# and this driver stages wasmos.rs and coroutine.rs beside a copy of the app so
+# that resolves. In tree those modules are reached with an #[path] escape up to
+# src/libc/rust; an out-of-tree app cannot know that path, which is the point.
+#
+# The rest is the link line: rustc drives wasm-ld through -C link-arg, so the WASM
+# linker flags, the sysroot library path and libsys.a all arrive that way. libsys
+# is where the coroutine, event-loop and async-filesystem entry points the Rust
+# binding declares as extern "C" live, and archive semantics pull in only the
+# objects an app actually references.
+#
+# The shadow stack is overridden to the same small size the Zig driver uses, and
+# for the same reason: rustc defaults to 1 MB with --stack-first, so the app's data
+# lands above 1 MB and the module must declare at least 2 MiB of linear memory.
+# Without the override a one-page manifest cannot link at all -- 1 MB of stack does
+# not fit in 64 KiB. With it, a Rust module has the same low layout as a C one and
+# fits the default manifest.
+#
+# Link-time memory comes from the manifest's [link] section, as in every other
+# WASMOS language.
+set -e
+
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+    esac
+done
+bindir=$(cd "$(dirname "$self")" && pwd)
+sdkroot=$(cd "$bindir/.." && pwd)
+
+. "$sdkroot/wasmos-sdk.conf"
+
+rustdir=$sdkroot/share/wasmos/rust
+libdir=$sdkroot/sysroot/lib/$WASMOS_SDK_TARGET
+manifest=$sdkroot/share/wasmos/default-manifest.toml
+
+manifest_get() {
+    awk -v want_sec="[$1]" -v want_key="$2" '
+        { sub(/#.*/, ""); gsub(/^[ \t]+|[ \t]+$/, "") }
+        /^\[/ { sec = $0; next }
+        sec == want_sec {
+            eq = index($0, "=")
+            if (eq == 0) next
+            key = substr($0, 1, eq - 1); val = substr($0, eq + 1)
+            gsub(/^[ \t]+|[ \t]+$/, "", key); gsub(/^[ \t]+|[ \t]+$/, "", val)
+            gsub(/^"|"$/, "", val)
+            if (key == want_key) { print val; exit }
+        }
+    ' "$3"
+}
+
+emit_wasm=0
+output=
+source=
+extra=
+
+for arg in "$@"; do
+    case $arg in
+    --emit-wasm) emit_wasm=1 ;;
+    --wasmos-manifest=*) manifest=${arg#--wasmos-manifest=} ;;
+    --print-sysroot) echo "$sdkroot/sysroot"; exit 0 ;;
+    --print-target-triple) echo "$WASMOS_SDK_TARGET"; exit 0 ;;
+    --print-manifest) echo "$manifest"; exit 0 ;;
+    --version)
+        echo "WASMOS SDK $WASMOS_SDK_VERSION (target $WASMOS_SDK_TARGET)"
+        exec "$WASMOS_SDK_RUSTC" --version
+        ;;
+    -o) output=PENDING ;;
+    # -o joined to its argument, as clang and rustc both accept it.
+    -o?*) output=${arg#-o} ;;
+    *.rs)
+        if [ "$output" = PENDING ]; then
+            output=$arg
+        elif [ -z "$source" ]; then
+            source=$arg
+        else
+            extra="$extra $arg"
+        fi
+        ;;
+    *)
+        if [ "$output" = PENDING ]; then
+            output=$arg
+        else
+            extra="$extra $arg"
+        fi
+        ;;
+    esac
+done
+
+if [ -z "$source" ]; then
+    echo "wasmos-rustc: no .rs input file" >&2
+    exit 1
+fi
+if [ -z "$WASMOS_SDK_RUSTC" ] || ! command -v "$WASMOS_SDK_RUSTC" >/dev/null 2>&1; then
+    echo "wasmos-rustc: rustc not found (WASMOS_SDK_RUSTC=$WASMOS_SDK_RUSTC)" >&2
+    exit 1
+fi
+if [ ! -f "$manifest" ]; then
+    echo "wasmos-rustc: manifest not found: $manifest" >&2
+    exit 1
+fi
+
+entry=$(manifest_get package entry "$manifest")
+[ -n "$entry" ] || entry=wasmos_main
+initmem=$(manifest_get link initial_memory "$manifest")
+[ -n "$initmem" ] || initmem=65536
+maxmem=$(manifest_get link max_memory "$manifest")
+[ -n "$maxmem" ] || maxmem=65536
+
+if [ -z "$output" ] || [ "$output" = PENDING ]; then
+    output=a.out
+fi
+case $output in
+*.wasm) emit_wasm=1; wasm=$output ;;
+*.wap) wasm=${output%.wap}.wasm ;;
+*)
+    wasm=$output.wasm
+    [ "$emit_wasm" = 1 ] || output=$output.wap
+    ;;
+esac
+
+name=$(basename "$source" .rs)
+stage=${wasm%.wasm}.rsstage
+rm -rf "$stage"
+mkdir -p "$stage"
+cp "$source" "$stage/$name.rs"
+# wasmos.rs is a sibling module of the crate root, and its own `pub mod coroutine;`
+# resolves as a CHILD of it -- so coroutine.rs goes in a wasmos/ directory, not
+# flat beside it. (In tree the app reaches the binding with an #[path] escape,
+# which makes the file's own directory the module directory and lets both sit
+# flat; a plain `mod wasmos;` does not work that way.)
+cp "$rustdir/wasmos.rs" "$stage/"
+mkdir -p "$stage/wasmos"
+cp "$rustdir/coroutine.rs" "$stage/wasmos/"
+# Extra .rs files are staged beside the app; extra .c files are compiled to objects
+# with the SDK's own clang and handed to the linker through -C link-arg, which is
+# the only way to get an object onto rustc's link line.
+extra_objs=
+for f in $extra; do
+    case $f in
+    *.rs) cp "$f" "$stage/" ;;
+    *.c)
+        obj=$stage/$(basename "${f%.c}").o
+        "$WASMOS_SDK_CLANG" \
+            --target="$WASMOS_SDK_TARGET_LLVM" \
+            --sysroot="$sdkroot/sysroot" \
+            -Oz -nostdlib -ffreestanding -fno-builtin \
+            -D__wasmos__=1 \
+            -include "$sdkroot/sysroot/include/wasmos_cast.h" \
+            -c "$f" -o "$obj"
+        extra_objs="$extra_objs -C link-arg=$obj"
+        ;;
+    esac
+done
+
+# shellcheck disable=SC2086
+"$WASMOS_SDK_RUSTC" \
+    --target=wasm32-unknown-unknown \
+    -O \
+    -C opt-level=z \
+    -C panic=abort \
+    -C codegen-units=1 \
+    -C link-arg=--no-entry \
+    -C link-arg=--export="$entry" \
+    -C link-arg=--strip-all \
+    -C link-arg=-z \
+    -C link-arg=stack-size="$WASMOS_SDK_ZIG_STACK_SIZE" \
+    -C link-arg=--initial-memory="$initmem" \
+    -C link-arg=--max-memory="$maxmem" \
+    -C link-arg=-L"$libdir" \
+    -C link-arg=-lsys \
+    $extra_objs \
+    --crate-type=cdylib \
+    "$stage/$name.rs" \
+    -o "$wasm"
+
+python3 "$sdkroot/libexec/wasmos/wasm_stack_check.py" "$wasm" \
+    --stack-size "$WASMOS_SDK_ZIG_STACK_SIZE" \
+    --max-addr "$WASMOS_SDK_ZIG_VA_LIMIT"
+
+[ "$emit_wasm" = 1 ] && exit 0
+
+if grep -q '@NAME@' "$manifest" 2>/dev/null; then
+    packname=$(basename "$output" .wap)
+    packed_manifest=${wasm%.wasm}.manifest.toml
+    sed "s/@NAME@/$packname/" "$manifest" > "$packed_manifest"
+    manifest=$packed_manifest
+fi
+
+exec "$bindir/wasmos-pack" --manifest "$manifest" --in "$wasm" --out "$output"

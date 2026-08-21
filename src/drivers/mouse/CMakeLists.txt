@@ -5,6 +5,7 @@ if (AS_ENABLE)
     NAME mouse
     ENTRY ${WASM_MOUSE_DRIVER_SRC}
     OUTPUT_WASM ${WASM_MOUSE_DRIVER_WASM}
+    MANIFEST ${DRIVER_WASM_DIR}/mouse/linker.metadata
   )
 
   wasmos_maybe_aot_pack(

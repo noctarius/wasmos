@@ -10,6 +10,14 @@ native = false
 stack_pages = 16
 heap_pages = 4096
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# An app-owned BGRA32 back buffer plus the shared window the compositor presents
+# from. The back buffer has to be committed BEFORE shmem_map_auto, which places
+# its window just above currently-committed memory, so both live inside this.
+[link]
+initial_memory = 16777216
+max_memory = 16777216
+
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 0

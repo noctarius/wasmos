@@ -384,12 +384,20 @@ run_rustfmt() {
     local rustfmt
     rustfmt="$(require_tool RUSTFMT "rustfmt is required. Set RUSTFMT or install Rustfmt." rustfmt)"
 
+    # skip_children stops rustfmt descending into `mod` declarations. An app
+    # declares the WASMOS binding as a plain sibling module (`mod wasmos;`), which
+    # resolves only in the layout wasmos-rustc stages, so descending would fail on
+    # a module that is not there. Nothing is lost: every .rs file in the tree is
+    # collected here as its own entry, the binding included, and a diff inside the
+    # file being checked is still reported.
     if [[ "$check_mode" -eq 1 ]]; then
         step "Checking Rust formatting (rustfmt)..."
-        "$rustfmt" --edition 2021 --check "${rust_format_files[@]}"
+        "$rustfmt" --edition 2021 --config skip_children=true --check \
+            "${rust_format_files[@]}"
     else
         step "Formatting Rust sources (rustfmt)..."
-        "$rustfmt" --edition 2021 "${rust_format_files[@]}"
+        "$rustfmt" --edition 2021 --config skip_children=true \
+            "${rust_format_files[@]}"
     fi
 }
 
@@ -624,19 +632,47 @@ run_rust_lint() {
     rustc="$(require_tool RUSTC "rustc is required. Set RUSTC or install Rust." rustc)"
 
     step "Linting Rust sources (rustc -Dwarnings)..."
+
+    # An app declares the WASMOS binding as a plain sibling module (`mod wasmos;`),
+    # which is what an out-of-tree app can write, so the module does not resolve
+    # where the source sits. wasmos-rustc builds the layout that makes it resolve;
+    # this stage reproduces it, so a file is linted in the same shape it is
+    # compiled in. coroutine.rs goes under wasmos/ because wasmos.rs declares it
+    # as a child module (`pub mod coroutine;`).
+    local stage
+    stage="$(mktemp -d "${TMPDIR:-/tmp}/wasmos-rust-lint.XXXXXX")"
+    trap 'rm -rf "$stage"' RETURN
+    cp "$repo_root/src/libc/rust/wasmos.rs" "$stage/"
+    mkdir -p "$stage/wasmos"
+    cp "$repo_root/src/libc/rust/coroutine.rs" "$stage/wasmos/"
+
     local file
     for file in "${rust_lint_files[@]}"; do
-        local out_file
-        out_file="$(mktemp "${TMPDIR:-/tmp}/wasmos-rust-lint.XXXXXX.rmeta")"
+        local out_file rc staged
+        # The Xs must be the LAST characters of the template: BSD/macOS mktemp
+        # substitutes only a trailing run of them, so a template ending in an
+        # extension is taken literally and every run gets the SAME path. Combined
+        # with `set -e` skipping a cleanup line after a failing rustc, that turned
+        # one legitimate lint failure into a gate that stayed red on every later
+        # run with "mkstemp failed: File exists" -- a message about nothing in the
+        # code. The file is removed whether rustc succeeds or not, and rustc does
+        # not care that the name has no .rmeta suffix.
+        out_file="$(mktemp "${TMPDIR:-/tmp}/wasmos-rust-lint-out.XXXXXX")"
+        staged="$stage/$(basename "$file")"
+        cp "$file" "$staged"
+        rc=0
         "$rustc" \
             --edition=2021 \
             --emit metadata \
             --crate-type cdylib \
             --target wasm32-unknown-unknown \
             -Dwarnings \
-            "$file" \
-            -o "$out_file"
-        rm -f "$out_file"
+            "$staged" \
+            -o "$out_file" || rc=$?
+        rm -f "$out_file" "$staged"
+        if [[ $rc -ne 0 ]]; then
+            return "$rc"
+        fi
     done
 }
 

@@ -3,9 +3,6 @@ wasmos_add_wasm_c_app_target(hello_c
   OUTPUT_WASM ${WASM_HELLO_C_WASM}
   OUTPUT_APP  ${WASM_HELLO_C_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/hello/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm hello-c module"
   PACK_COMMENT  "Packing wasm hello-c as WASMOS-APP"
 )
@@ -15,9 +12,6 @@ wasmos_add_wasm_c_app_target(chardev_client
   OUTPUT_WASM ${WASM_CHARDEV_CLIENT_WASM}
   OUTPUT_APP  ${WASM_CHARDEV_CLIENT_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/chardev_client/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm chardev client module"
   PACK_COMMENT  "Packing wasm chardev client as WASMOS-APP"
 )
@@ -39,9 +33,6 @@ wasmos_add_wasm_c_app_target(chardev_preempt
   OUTPUT_WASM ${WASM_CHARDEV_PREEMPT_WASM}
   OUTPUT_APP  ${WASM_CHARDEV_PREEMPT_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/chardev_preempt/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm chardev preempt module"
   PACK_COMMENT  "Packing wasm chardev preempt as WASMOS-APP"
 )
@@ -51,9 +42,6 @@ wasmos_add_wasm_c_app_target(init_smoke
   OUTPUT_WASM ${WASM_INIT_SMOKE_WASM}
   OUTPUT_APP  ${WASM_INIT_SMOKE_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/init_smoke/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm init smoke module"
   PACK_COMMENT  "Packing wasm init smoke as WASMOS-APP"
 )
@@ -63,9 +51,6 @@ wasmos_add_wasm_c_app_target(native_call_smoke
   OUTPUT_WASM ${WASM_NATIVE_CALL_SMOKE_WASM}
   OUTPUT_APP  ${WASM_NATIVE_CALL_SMOKE_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/native_call_smoke/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm native call smoke module"
   PACK_COMMENT  "Packing wasm native call smoke as WASMOS-APP"
 )
@@ -75,11 +60,6 @@ wasmos_add_wasm_c_app_target(gfx_smoke
   OUTPUT_WASM    ${WASM_GFX_SMOKE_WASM}
   OUTPUT_APP     ${WASM_GFX_SMOKE_APP}
   MANIFEST       ${CMAKE_CURRENT_SOURCE_DIR}/gfx_smoke/linker.metadata
-  EXPORT         wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
-  INITIAL_MEMORY 8388608
-  MAX_MEMORY     8388608
   BUILD_COMMENT  "Building wasm gfx smoke module"
   PACK_COMMENT   "Packing wasm gfx smoke as WASMOS-APP"
 )
@@ -89,9 +69,6 @@ wasmos_add_wasm_c_app_target(fs_open_smoke
   OUTPUT_WASM ${WASM_FS_OPEN_SMOKE_WASM}
   OUTPUT_APP  ${WASM_FS_OPEN_SMOKE_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/fs_open_smoke/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm fs open smoke module"
   PACK_COMMENT  "Packing wasm fs open smoke as WASMOS-APP"
 )
@@ -101,9 +78,6 @@ wasmos_add_wasm_c_app_target(fs_write_smoke
   OUTPUT_WASM ${WASM_FS_WRITE_SMOKE_WASM}
   OUTPUT_APP  ${WASM_FS_WRITE_SMOKE_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/fs_write_smoke/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm fs write smoke module"
   PACK_COMMENT  "Packing wasm fs write smoke as WASMOS-APP"
 )
@@ -113,9 +87,6 @@ wasmos_add_wasm_c_app_target(native_call_min
   OUTPUT_WASM ${WASM_NATIVE_CALL_MIN_WASM}
   OUTPUT_APP  ${WASM_NATIVE_CALL_MIN_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/native_call_min/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm native call min module"
   PACK_COMMENT  "Packing wasm native call min as WASMOS-APP"
 )
@@ -125,9 +96,6 @@ wasmos_add_wasm_c_app_target(irq_route_deny
   OUTPUT_WASM ${WASM_IRQ_ROUTE_DENY_WASM}
   OUTPUT_APP  ${WASM_IRQ_ROUTE_DENY_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/irq_route_deny/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm irq-route-deny module"
   PACK_COMMENT  "Packing wasm irq-route-deny as WASMOS-APP"
 )
@@ -137,9 +105,6 @@ wasmos_add_wasm_c_app_target(irq_route_allow
   OUTPUT_WASM ${WASM_IRQ_ROUTE_ALLOW_WASM}
   OUTPUT_APP  ${WASM_IRQ_ROUTE_ALLOW_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/irq_route_allow/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm irq-route-allow module"
   PACK_COMMENT  "Packing wasm irq-route-allow as WASMOS-APP"
 )
@@ -149,15 +114,6 @@ wasmos_add_wasm_c_app_target(shmem_owner
   OUTPUT_WASM ${WASM_SHMEM_OWNER_WASM}
   OUTPUT_APP  ${WASM_SHMEM_OWNER_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/shmem_owner/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
-  # shmem_map_auto places its window above the app's live data. Start with the
-  # full 4 MiB of linear memory (like menu_bar) so the window lands inside
-  # already-live logical memory rather than requiring a grow-on-access, which
-  # a shmem window at ~2 MiB in a 1-page module would trap on.
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm shmem-owner module"
   PACK_COMMENT  "Packing wasm shmownr as WASMOS-APP"
 )
@@ -167,13 +123,6 @@ wasmos_add_wasm_c_app_target(shmem_target
   OUTPUT_WASM ${WASM_SHMEM_TARGET_WASM}
   OUTPUT_APP  ${WASM_SHMEM_TARGET_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/shmem_target/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
-  # See shmem_owner: full 4 MiB initial memory so the map_auto window lands in
-  # already-live logical memory (no grow-on-access trap).
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm shmem-target module"
   PACK_COMMENT  "Packing wasm shmtgt as WASMOS-APP"
 )
@@ -183,13 +132,6 @@ wasmos_add_wasm_c_app_target(net_smoke
   OUTPUT_WASM ${WASM_NET_SMOKE_WASM}
   OUTPUT_APP  ${WASM_NET_SMOKE_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/net_smoke/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
-  # Room for the packet socket's rings overlaid into linear memory (scanned in
-  # above the 2 MiB floor, clear of the heap) via wasmos_xfer_buffer_map.
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm net-smoke module"
   PACK_COMMENT  "Packing wasm net-smoke as WASMOS-APP"
 )
@@ -199,9 +141,6 @@ wasmos_add_wasm_c_app_target(net_udp_echo
   OUTPUT_WASM ${WASM_NET_UDP_ECHO_WASM}
   OUTPUT_APP  ${WASM_NET_UDP_ECHO_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/net_udp_echo/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm UDP echo client"
   PACK_COMMENT  "Packing wasm UDP echo client as WASMOS-APP"
 )
@@ -212,13 +151,6 @@ wasmos_add_wasm_c_app_target(net_tcp_echo
   OUTPUT_WASM ${WASM_NET_TCP_ECHO_WASM}
   OUTPUT_APP  ${WASM_NET_TCP_ECHO_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/net_tcp_echo/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
-  # Room for the socket rings overlaid into linear memory (scanned in above the
-  # 2 MiB floor, clear of the heap) via wasmos_xfer_buffer_map.
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm TCP echo client"
   PACK_COMMENT  "Packing wasm TCP echo client as WASMOS-APP"
 )
@@ -228,9 +160,6 @@ wasmos_add_wasm_c_app_target(net_tcp_server
   OUTPUT_WASM ${WASM_NET_TCP_SERVER_WASM}
   OUTPUT_APP  ${WASM_NET_TCP_SERVER_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/net_tcp_server/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT "Building wasm TCP echo server"
   PACK_COMMENT  "Packing wasm TCP echo server as WASMOS-APP"
 )
@@ -240,11 +169,6 @@ wasmos_add_wasm_c_app_target(menu_bar
   OUTPUT_WASM    ${WASM_MENU_BAR_WASM}
   OUTPUT_APP     ${WASM_MENU_BAR_APP}
   MANIFEST       ${CMAKE_CURRENT_SOURCE_DIR}/menu_bar/linker.metadata
-  EXPORT         wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT  "Building wasm menu-bar module"
   PACK_COMMENT   "Packing wasm menu-bar as WASMOS-APP"
 )

@@ -1,0 +1,175 @@
+#!/bin/sh
+# wasmos-asc - the WASMOS AssemblyScript compiler driver.
+#
+#   wasmos-asc app.ts -o app            # -> app.wap
+#   wasmos-asc --emit-wasm app.ts -o app.wasm
+#
+# What it hides is mostly a consequence of how asc resolves imports: it has no
+# include path and resolves every import relative to the entry file, so the whole
+# AS runtime is staged FLAT into one directory beside a copy of the app.
+#
+# WHICH file asc is pointed at depends on what the package is, and the manifest
+# already says which: an app (entry wasmos_main) is entered through the runtime's
+# own runtime.ts, which imports "./app" -- so the app is staged under that name and
+# a developer's file may be called anything. A driver or service (entry
+# initialize) exports its own entry and IS the entry, so it is staged under its own
+# name and compiled directly.
+#
+# Every module is compiled through as_coroutine_transform.mjs, which lowers
+# @coroutine functions into their state machines. It is inert for a module that
+# uses none, so it applies unconditionally rather than being an opt-in to
+# remember. --runtime stub is the WASMOS choice: AS's incremental GC is not usable
+# here, and a module that allocates does so from its own linear memory.
+#
+# Link-time memory comes from the manifest's [link] section, as in every other
+# WASMOS language. asc takes PAGES, so the byte value is converted here.
+set -e
+
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+    esac
+done
+bindir=$(cd "$(dirname "$self")" && pwd)
+sdkroot=$(cd "$bindir/.." && pwd)
+
+. "$sdkroot/wasmos-sdk.conf"
+
+asdir=$sdkroot/share/wasmos/assemblyscript
+manifest=$sdkroot/share/wasmos/default-manifest.toml
+
+manifest_get() {
+    awk -v want_sec="[$1]" -v want_key="$2" '
+        { sub(/#.*/, ""); gsub(/^[ \t]+|[ \t]+$/, "") }
+        /^\[/ { sec = $0; next }
+        sec == want_sec {
+            eq = index($0, "=")
+            if (eq == 0) next
+            key = substr($0, 1, eq - 1); val = substr($0, eq + 1)
+            gsub(/^[ \t]+|[ \t]+$/, "", key); gsub(/^[ \t]+|[ \t]+$/, "", val)
+            gsub(/^"|"$/, "", val)
+            if (key == want_key) { print val; exit }
+        }
+    ' "$3"
+}
+
+emit_wasm=0
+output=
+source=
+extra=
+
+for arg in "$@"; do
+    case $arg in
+    --emit-wasm) emit_wasm=1 ;;
+    --wasmos-manifest=*) manifest=${arg#--wasmos-manifest=} ;;
+    --print-sysroot) echo "$sdkroot/sysroot"; exit 0 ;;
+    --print-target-triple) echo "$WASMOS_SDK_TARGET"; exit 0 ;;
+    --print-manifest) echo "$manifest"; exit 0 ;;
+    --version)
+        echo "WASMOS SDK $WASMOS_SDK_VERSION (target $WASMOS_SDK_TARGET)"
+        exec "$WASMOS_SDK_ASC" --version
+        ;;
+    -o) output=PENDING ;;
+    # -o joined to its argument, as clang and rustc both accept it.
+    -o?*) output=${arg#-o} ;;
+    *.ts)
+        if [ "$output" = PENDING ]; then
+            output=$arg
+        elif [ -z "$source" ]; then
+            source=$arg
+        else
+            extra="$extra $arg"
+        fi
+        ;;
+    *)
+        if [ "$output" = PENDING ]; then
+            output=$arg
+        else
+            extra="$extra $arg"
+        fi
+        ;;
+    esac
+done
+
+if [ -z "$source" ]; then
+    echo "wasmos-asc: no .ts input file" >&2
+    exit 1
+fi
+if [ -z "$WASMOS_SDK_ASC" ] || ! command -v "$WASMOS_SDK_ASC" >/dev/null 2>&1; then
+    echo "wasmos-asc: asc not found (WASMOS_SDK_ASC=$WASMOS_SDK_ASC)" >&2
+    exit 1
+fi
+if [ ! -f "$manifest" ]; then
+    echo "wasmos-asc: manifest not found: $manifest" >&2
+    exit 1
+fi
+
+entry=$(manifest_get package entry "$manifest")
+[ -n "$entry" ] || entry=wasmos_main
+initmem=$(manifest_get link initial_memory "$manifest")
+initmem_flag=
+if [ -n "$initmem" ]; then
+    pages=$((initmem / 65536))
+    if [ $((pages * 65536)) -ne "$initmem" ]; then
+        echo "wasmos-asc: [link] initial_memory = $initmem is not a whole number of" \
+             "64 KiB WASM pages" >&2
+        exit 1
+    fi
+    initmem_flag="--initialMemory $pages"
+fi
+
+if [ -z "$output" ] || [ "$output" = PENDING ]; then
+    output=a.out
+fi
+case $output in
+*.wasm) emit_wasm=1; wasm=$output ;;
+*.wap) wasm=${output%.wap}.wasm ;;
+*)
+    wasm=$output.wasm
+    [ "$emit_wasm" = 1 ] || output=$output.wap
+    ;;
+esac
+
+stage=${wasm%.wasm}.asstage
+rm -rf "$stage"
+mkdir -p "$stage"
+for f in "$asdir"/*.ts; do
+    cp "$f" "$stage/"
+done
+if [ "$entry" = wasmos_main ]; then
+    cp "$source" "$stage/app.ts"
+    asc_entry=$stage/runtime.ts
+else
+    cp "$source" "$stage/$(basename "$source")"
+    asc_entry=$stage/$(basename "$source")
+fi
+for f in $extra; do
+    case $f in
+    *.ts) cp "$f" "$stage/" ;;
+    esac
+done
+
+# shellcheck disable=SC2086
+"$WASMOS_SDK_ASC" \
+    "$asc_entry" \
+    --transform "$sdkroot/libexec/wasmos/as_coroutine_transform.mjs" \
+    --target release \
+    -Osize \
+    --runtime stub \
+    --noAssert \
+    $initmem_flag \
+    --outFile "$wasm"
+
+[ "$emit_wasm" = 1 ] && exit 0
+
+if grep -q '@NAME@' "$manifest" 2>/dev/null; then
+    packname=$(basename "$output" .wap)
+    packed_manifest=${wasm%.wasm}.manifest.toml
+    sed "s/@NAME@/$packname/" "$manifest" > "$packed_manifest"
+    manifest=$packed_manifest
+fi
+
+exec "$bindir/wasmos-pack" --manifest "$manifest" --in "$wasm" --out "$output"

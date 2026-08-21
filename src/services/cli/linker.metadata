@@ -12,6 +12,14 @@ wants_tty = true
 stack_pages = 16
 heap_pages = 16
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# Room for the script engine's line and variable buffers on top of the shell
+# itself.
+[link]
+stack_size = 8192
+initial_memory = 131072
+max_memory = 131072
+
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 1

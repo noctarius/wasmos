@@ -11,6 +11,13 @@ aot = true
 stack_pages = 16
 heap_pages = 16
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# TLS: mbedTLS record buffers and the certificate chain during a handshake.
+[link]
+stack_size = 16384
+initial_memory = 4194304
+max_memory = 4194304
+
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 0

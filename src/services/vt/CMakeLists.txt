@@ -3,7 +3,6 @@ wasmos_add_wasm_c_app_target(vt_app
   OUTPUT_WASM ${WASM_VT_APP_WASM}
   OUTPUT_APP ${WASM_VT_APP}
   MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
-  EXPORT initialize
   # Initial memory sized to hold the VT's active memory (cell grids) plus the
   # phase-4 klog ring and the phase-5 cell-grid blit buffer (~80 KiB), all
   # overlaid via xfer_buffer_map.  Kept below the 2 MiB low-guard (with

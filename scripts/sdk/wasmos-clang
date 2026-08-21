@@ -173,6 +173,15 @@ case $output in
     ;;
 esac
 
+# crt1.o supplies the wasmos_main export and calls main(). It is linked only for a
+# package whose entry IS wasmos_main: a driver or service exports `initialize` and
+# defines no main, so linking the crt there would leave `main` undefined. The
+# manifest's entry is what decides, so there is nothing else to keep in step.
+crt=
+if [ "$entry" = wasmos_main ]; then
+    crt=$libdir/crt1.o
+fi
+
 # shellcheck disable=SC2086
 "$cc" $common \
     -fuse-ld=lld \
@@ -181,7 +190,7 @@ esac
     -Wl,--initial-memory="$initmem" \
     -Wl,--max-memory="$maxmem" \
     -Wl,--export="$entry" \
-    "$libdir/crt1.o" \
+    $crt \
     $args \
     -L"$libdir" -lc -lsys \
     -o "$wasm"

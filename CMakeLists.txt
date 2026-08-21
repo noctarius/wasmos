@@ -567,6 +567,8 @@ endfunction()
 function(wasmos_add_wasm_c_app_target target_name)
   set(options NO_BUILTIN STARTUP_SHIM CXX ASYNC_SERVICE ASYNC_APP)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
+  # EXPORT, STARTUP_SHIM and NO_BUILTIN are still parsed so that passing one is a
+  # loud error rather than a silent no-op; see the checks below.
   set(multiValueArgs SOURCES)
   cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
@@ -576,18 +578,37 @@ function(wasmos_add_wasm_c_app_target target_name)
   endif ()
 
   if (NOT _wasmos_sources OR NOT WASMOS_APP_OUTPUT_WASM OR NOT WASMOS_APP_OUTPUT_APP OR
-      NOT WASMOS_APP_MANIFEST OR NOT WASMOS_APP_EXPORT)
-    message(FATAL_ERROR "wasmos_add_wasm_c_app_target(${target_name}) requires SOURCE or SOURCES, OUTPUT_WASM, OUTPUT_APP, MANIFEST, EXPORT")
+      NOT WASMOS_APP_MANIFEST)
+    message(FATAL_ERROR "wasmos_add_wasm_c_app_target(${target_name}) requires SOURCE or SOURCES, OUTPUT_WASM, OUTPUT_APP, MANIFEST")
   endif ()
-
-  set(_wasmos_compiler ${CLANG})
-  set(_wasmos_extra_flags)
-  if (WASMOS_APP_CXX)
-    set(_wasmos_compiler ${CMAKE_CXX_COMPILER})
-    list(PREPEND _wasmos_extra_flags ${WASMOS_WASM_CXX_FLAGS})
+  # The entry export, whether a crt is linked, and -fno-builtin are all decided by
+  # the manifest and the driver now, so naming them here would be a second source
+  # for a value that already has one.
+  if (WASMOS_APP_EXPORT)
+    message(FATAL_ERROR
+      "${target_name}: EXPORT is read from the manifest's [package] entry now. "
+      "Remove it; ${WASMOS_APP_MANIFEST} already carries it.")
+  endif ()
+  if (WASMOS_APP_STARTUP_SHIM)
+    message(FATAL_ERROR
+      "${target_name}: STARTUP_SHIM is implied by the manifest's entry -- crt1.o is "
+      "linked exactly when that entry is wasmos_main. Remove it.")
   endif ()
   if (WASMOS_APP_NO_BUILTIN)
-    list(APPEND _wasmos_extra_flags -fno-builtin)
+    message(FATAL_ERROR
+      "${target_name}: NO_BUILTIN is unconditional now (the driver always passes "
+      "-fno-builtin, since libc owns the mem* family). Remove it.")
+  endif ()
+
+  # The SDK driver is the compiler: it owns the triple, the sysroot, the
+  # freestanding/nostdlib flags, the wasm linker defaults, crt1 and the runtime
+  # libraries. Every one of those used to be spelled out here as well, which meant
+  # two link lines describing one toolchain -- and only one of them was exercised by
+  # the tree. wasmos-clang++ is the same driver with the C++ flag set.
+  set(_wasmos_driver ${WASMOS_SDK_DIR}/bin/wasmos-clang)
+  set(_wasmos_driver_flags)
+  if (WASMOS_APP_CXX)
+    list(APPEND _wasmos_driver_flags --wasmos-cxx)
   endif ()
 
   set(_wasmos_libc_sources ${WASMOS_LIBC_C_SOURCES})
@@ -600,39 +621,25 @@ function(wasmos_add_wasm_c_app_target target_name)
     list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/app_async_entry_wasm.c)
   endif ()
 
-  # crt1.o supplies the wasmos_main export and the bridge to main(); it is named
-  # on the link line rather than pulled from an archive because nothing in the
-  # application references it -- the kernel calls it by name.
-  set(_wasmos_crt)
-  if (WASMOS_APP_STARTUP_SHIM)
-    set(_wasmos_crt ${WASMOS_SDK_LIBDIR}/crt1.o)
-  endif ()
-  set(_wasmos_runtime_libs -L${WASMOS_SDK_LIBDIR} -lc -lsys)
-  set(_wasmos_runtime_deps ${WASMOS_SDK_LIBDIR}/libc.a ${WASMOS_SDK_LIBDIR}/libsys.a)
-  if (_wasmos_crt)
-    list(APPEND _wasmos_runtime_deps ${_wasmos_crt})
-  endif ()
+  # Depended on, not named: the driver links these out of the sysroot itself.
+  set(_wasmos_runtime_deps
+    ${WASMOS_SDK_LIBDIR}/libc.a
+    ${WASMOS_SDK_LIBDIR}/libsys.a
+    ${WASMOS_SDK_LIBDIR}/crt1.o
+    ${WASMOS_SDK_STAMP}
+  )
 
-  # Link-time memory sizes come from the manifest's [link] section, so one file
-  # describes an app: what it needs from the kernel ([resources]) and how its own
-  # linear memory is laid out ([link]). These values are load-bearing rather than
+  # Link-time memory lives in the manifest's [link] section and is read by the
+  # driver at build time, not here. These values are load-bearing rather than
   # stylistic -- an app that maps shared memory, a framebuffer or socket rings has
   # to reserve linear memory up front, because those windows are placed above a
-  # 2 MiB floor and above live data -- so they belong with the app, not in the
-  # build file that happens to compile it.
+  # 2 MiB floor and above live data -- so they belong with the app.
   if (WASMOS_APP_STACK_SIZE OR WASMOS_APP_INITIAL_MEMORY OR WASMOS_APP_MAX_MEMORY)
     message(FATAL_ERROR
       "${target_name}: STACK_SIZE/INITIAL_MEMORY/MAX_MEMORY are read from the "
       "manifest's [link] section now. Move them to "
       "${WASMOS_APP_MANIFEST} as stack_size/initial_memory/max_memory.")
   endif ()
-  # Re-configure when a manifest changes: these values are read at configure time,
-  # so an edit that is not noticed here silently builds with the old sizes.
-  set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND
-               PROPERTY CMAKE_CONFIGURE_DEPENDS ${WASMOS_APP_MANIFEST})
-  wasmos_manifest_link_value(_stack_size "${WASMOS_APP_MANIFEST}" stack_size 4096)
-  wasmos_manifest_link_value(_initial_memory "${WASMOS_APP_MANIFEST}" initial_memory 65536)
-  wasmos_manifest_link_value(_max_memory "${WASMOS_APP_MANIFEST}" max_memory 65536)
 
   set(_build_comment "Building wasm module")
   if (WASMOS_APP_BUILD_COMMENT)
@@ -646,31 +653,16 @@ function(wasmos_add_wasm_c_app_target target_name)
   add_custom_command(
     OUTPUT ${WASMOS_APP_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${_wasmos_compiler} --target=wasm32 -Oz -nostdlib -ffreestanding
-            -include ${LIBC_DIR}/include/wasmos_cast.h
-            ${_wasmos_extra_flags}
+    COMMAND ${_wasmos_driver}
+            --emit-wasm
+            --wasmos-manifest=${WASMOS_APP_MANIFEST}
+            ${_wasmos_driver_flags}
             ${WASMOS_TRACE_DEFINE}
-            # No --allow-undefined: every host call is a declared import
-            # (WASMOS_WASM_IMPORT in wasmos/api.h, generated from
-            # abi/hostcalls.yaml), so an unresolved symbol is a missing source
-            # file rather than an import, and belongs at the link step instead of
-            # as a trap at the call site.
-            -Wl,--no-entry -Wl,--strip-all
-            -Wl,-z,stack-size=${_stack_size}
-            -Wl,--initial-memory=${_initial_memory}
-            -Wl,--max-memory=${_max_memory}
-            -Wl,--export=${WASMOS_APP_EXPORT}
-            -I${CMAKE_SOURCE_DIR}/src/libui/include
-            -I${LIBC_DIR}/include
-            -I${LIBSYS_WASM_DIR}/include
-            -I${DRIVER_WASM_DIR}/include
-            ${_wasmos_crt}
             ${_wasmos_libc_sources}
             ${_wasmos_sources}
-            ${_wasmos_runtime_libs}
             -o ${WASMOS_APP_OUTPUT_WASM}
     DEPENDS ${_wasmos_sources} ${_wasmos_libc_sources} ${WASMOS_LIBC_INCLUDE_DEPS}
-            ${_wasmos_runtime_deps}
+            ${WASMOS_APP_MANIFEST} ${_wasmos_runtime_deps}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT ${_build_comment}
     VERBATIM

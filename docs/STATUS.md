@@ -782,8 +782,15 @@ linked feature documents for rationale and rollout plans.
   single check that the four toolchains agree about what a manifest means. The
   section is in bytes in every language; `asc` takes pages, and the conversion is in
   one place where a non-page-multiple is an error rather than a silent round.
-- The in-tree build and the SDK are one toolchain: `wasmos_add_wasm_c_app_target`
-  links `crt1.o`, `libc.a` and `libsys.a` from the staged sysroot instead of
+- The in-tree build compiles through the SDK drivers:
+  `wasmos_add_wasm_c_app_target` invokes `wasmos-clang --emit-wasm`, so every C
+  target in the tree is built by the program an outside developer runs, and the
+  linker flags live in one place instead of two. `EXPORT`, `STARTUP_SHIM` and
+  `NO_BUILTIN` are gone from all 38 call sites — the manifest's `entry` decides the
+  export and whether `crt1.o` is linked, and `-fno-builtin` is unconditional;
+  passing any of them is a configure error. 60 of 62 modules came out
+  byte-identical in size across the switch.
+- It also links `crt1.o`, `libc.a` and `libsys.a` from the staged sysroot instead of
   recompiling libc into each of the ~59 modules, so there is one libc build and
   one link line rather than two that can drift. `llvm-ar` is therefore required to
   build anything. Only entry shims are still compiled per target (an entry symbol

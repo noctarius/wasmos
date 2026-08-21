@@ -3,9 +3,6 @@ wasmos_add_wasm_c_app_target(curl_util
   OUTPUT_WASM ${WASM_CURL_WASM}
   OUTPUT_APP  ${WASM_CURL_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   # curl carries several KB of URL/request/receive buffers in main() and builds a
   # net_socket_open_descriptor (which now includes a 256-byte SNI field for TLS
   # hostname verification) on the stack in the net.h connect helper. The 4 KB

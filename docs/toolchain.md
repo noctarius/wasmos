@@ -471,11 +471,33 @@ app is staged as `sdkhello.wap`.
 
 ## One toolchain, not two
 
-The in-tree build and the SDK are the same toolchain: `wasmos_add_wasm_c_app_target`
-links `crt1.o`, `libc.a` and `libsys.a` out of the staged sysroot rather than
-recompiling libc into each module. So there is one libc build instead of one per
-module, and one link line to keep correct instead of two that can drift — a change
-to a libc source or a linker default reaches every guest and the SDK at once.
+**The in-tree build compiles through the SDK drivers.**
+`wasmos_add_wasm_c_app_target` invokes `wasmos-clang --emit-wasm`, so all ~48 C
+targets in this repository are built by the same program an outside developer runs.
+The helper supplies only what is genuinely its own — the sources, the output path
+and the manifest — and the driver owns the triple, the sysroot, the freestanding and
+`nostdlib` flags, the wasm linker defaults, `crt1.o` and the runtime libraries.
+
+That is what makes the SDK the toolchain rather than a parallel copy of it. Before,
+the helper spelled out its own `-Wl,--no-entry -Wl,--strip-all -Wl,-z,stack-size=…`
+list and the driver spelled out another: two link lines describing one toolchain,
+and only one of them exercised by the tree. Sharing the archives (below) removed the
+duplicated *libc*; this removes the duplicated *flags*.
+
+Three parameters disappeared from every call site as a result, because the manifest
+already carried each of them and a second spelling could only drift:
+
+| Was | Now |
+|---|---|
+| `EXPORT wasmos_main` | `[package] entry` in the manifest |
+| `STARTUP_SHIM` | implied: `crt1.o` is linked exactly when the entry is `wasmos_main` |
+| `NO_BUILTIN` | unconditional — libc owns the `mem*` family |
+
+Passing any of them is a configure error naming the manifest. All three were
+verified redundant before removal: across 38 targets, `EXPORT` matched the
+manifest's `entry` every time and `STARTUP_SHIM` was present exactly when that entry
+was `wasmos_main`. Routing every target through the driver left 60 of 62 modules
+byte-for-byte the same size, the two exceptions being modules no C helper builds.
 
 Two consequences worth knowing:
 

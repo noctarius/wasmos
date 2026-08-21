@@ -3,9 +3,6 @@ wasmos_add_wasm_c_app_target(explorer_util
   OUTPUT_WASM ${WASM_EXPLORER_WASM}
   OUTPUT_APP  ${WASM_EXPLORER_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
   BUILD_COMMENT  "Building wasm explorer utility"
   PACK_COMMENT   "Packing wasm explorer as WASMOS-APP"
 )

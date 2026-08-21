@@ -3,7 +3,6 @@ wasmos_add_wasm_c_app_target(device_manager_app
   OUTPUT_WASM ${WASM_DEVICE_MANAGER_WASM}
   OUTPUT_APP ${WASM_DEVICE_MANAGER_APP}
   MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
-  EXPORT initialize
   BUILD_COMMENT "Building wasm device-manager module"
   PACK_COMMENT "Packing wasm device-manager as WASMOS-APP"
 )

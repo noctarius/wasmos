@@ -76,7 +76,6 @@ function(wasmos_assemblyscript_compile)
             ${ARG_EXTRA_SOURCES}
             -o ${ARG_OUTPUT_WASM}
     DEPENDS ${ARG_ENTRY} ${WASMOS_AS_LIBC_SOURCES} ${ARG_EXTRA_SOURCES} ${ARG_MANIFEST}
-            ${WASMOS_SDK_STAMP}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building AssemblyScript ${ARG_NAME} module"
     VERBATIM

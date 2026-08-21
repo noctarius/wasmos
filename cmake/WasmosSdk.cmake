@@ -237,6 +237,26 @@ add_custom_target(wasmos-sdk
           ${WASMOS_SDK_STAMP}
 )
 
+# What an app in ANOTHER directory may depend on.
+#
+# The archives, crt1.o and the sysroot stamp are outputs of custom commands in
+# this file's scope, which is the top-level directory. A custom command in a
+# subdirectory cannot depend on them: the Makefile generator resolves
+# custom-command outputs per directory, so a subdirectory build reports "No rule
+# to make target 'sdk-obj/sysroot.stamp'" on a clean tree. It is invisible in a
+# reused build directory, where the files already exist on disk and make needs no
+# rule for them, which is why this survived local testing and failed in CI.
+#
+# Ordering therefore comes from `add_dependencies(<app target> wasmos-sdk)`, and
+# freshness from these SOURCES -- ordinary files in the source tree that any
+# directory may name. Editing libc or libsys rebuilds both the archive and every
+# app that links it.
+set(WASMOS_SDK_ARCHIVE_SOURCES
+  ${WASMOS_SDK_LIBC_SOURCES}
+  ${WASMOS_SDK_LIBSYS_SOURCES}
+  ${LIBC_DIR}/src/startup.c
+)
+
 # --- the SDK's own smoke app ----------------------------------------------
 # Built with the staged driver and nothing else -- no manifest, no flags but -o --
 # so the zero-configuration path is exercised by every build rather than only by

@@ -58,6 +58,7 @@ manifest_get() {
 }
 
 emit_wasm=0
+emit_target_json=
 output=
 source=
 extra=
@@ -65,6 +66,7 @@ extra=
 for arg in "$@"; do
     case $arg in
     --emit-wasm) emit_wasm=1 ;;
+    --emit-target-json=*) emit_target_json=${arg#--emit-target-json=} ;;
     --wasmos-manifest=*) manifest=${arg#--wasmos-manifest=} ;;
     --print-sysroot) echo "$sdkroot/sysroot"; exit 0 ;;
     --print-target-triple) echo "$WASMOS_SDK_TARGET"; exit 0 ;;
@@ -93,60 +95,25 @@ for arg in "$@"; do
     esac
 done
 
-if [ -z "$source" ]; then
-    echo "wasmos-tinygo: no .go input file" >&2
-    exit 1
-fi
-if [ -z "$WASMOS_SDK_TINYGO" ] || ! command -v "$WASMOS_SDK_TINYGO" >/dev/null 2>&1; then
-    echo "wasmos-tinygo: tinygo not found (WASMOS_SDK_TINYGO=$WASMOS_SDK_TINYGO)" >&2
-    exit 1
-fi
-if [ -z "$WASMOS_SDK_WASMOPT" ] || ! command -v "$WASMOS_SDK_WASMOPT" >/dev/null 2>&1; then
-    echo "wasmos-tinygo: wasm-opt not found (WASMOS_SDK_WASMOPT=$WASMOS_SDK_WASMOPT)" >&2
-    exit 1
-fi
-if [ ! -f "$manifest" ]; then
-    echo "wasmos-tinygo: manifest not found: $manifest" >&2
-    exit 1
-fi
-
-entry=$(manifest_get package entry "$manifest")
-[ -n "$entry" ] || entry=wasmos_main
-
-if [ -z "$output" ] || [ "$output" = PENDING ]; then
-    output=a.out
-fi
-case $output in
-*.wasm) emit_wasm=1; wasm=$output ;;
-*.wap) wasm=${output%.wap}.wasm ;;
-*)
-    wasm=$output.wasm
-    [ "$emit_wasm" = 1 ] || output=$output.wap
-    ;;
-esac
-
-stage=${wasm%.wasm}.gostage
-rm -rf "$stage"
-mkdir -p "$stage"
-cp "$source" "$stage/$(basename "$source")"
-cp "$godir"/*.go "$stage/"
-for f in $extra; do
-    case $f in
-    *.go) cp "$f" "$stage/" ;;
-    esac
-done
-
-tinygoroot=$("$WASMOS_SDK_TINYGO" env TINYGOROOT)
-if [ -z "$tinygoroot" ]; then
-    echo "wasmos-tinygo: tinygo did not report TINYGOROOT" >&2
-    exit 1
-fi
-
-# Generate the target file: extra-files relative to TINYGOROOT, include paths
-# pointing at the sysroot. python3 computes the relative paths because POSIX sh
-# has no relpath and the two trees have no common prefix to strip.
-target=${wasm%.wasm}.tinygo-target.json
-python3 - "$tinygoroot" "$godir/c" "$sdkroot/sysroot/include" "$target" <<'PY'
+# write_target_json <outpath>
+#
+# TinyGo takes the WASMOS target as a JSON file rather than flags, and its
+# `extra-files` are resolved RELATIVE TO TINYGOROOT, which is wherever tinygo is
+# installed. The file therefore cannot be a checked-in template; it is generated per
+# invocation after asking tinygo where its root is. python3 computes the relative
+# paths because POSIX sh has no relpath and the two trees share no prefix to strip.
+#
+# This is the single definition of what a WASMOS Go build is. `--emit-target-json`
+# exposes it so the Go binding's unit test can build against the same target without
+# restating it -- that duplicate is what used to live in wasmos-tinygo.json.in.
+write_target_json() {
+    _tj_out=$1
+    tinygoroot=$("$WASMOS_SDK_TINYGO" env TINYGOROOT)
+    if [ -z "$tinygoroot" ]; then
+        echo "wasmos-tinygo: tinygo did not report TINYGOROOT" >&2
+        exit 1
+    fi
+    python3 - "$tinygoroot" "$godir/c" "$sdkroot/sysroot/include" "$_tj_out" <<'PY'
 import json, os, sys
 
 tinygoroot, cdir, include, out = sys.argv[1:5]
@@ -187,6 +154,62 @@ target = {
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(target, handle, indent=2)
 PY
+}
+
+if [ -z "$WASMOS_SDK_TINYGO" ] || ! command -v "$WASMOS_SDK_TINYGO" >/dev/null 2>&1; then
+    echo "wasmos-tinygo: tinygo not found (WASMOS_SDK_TINYGO=$WASMOS_SDK_TINYGO)" >&2
+    exit 1
+fi
+if [ -n "$emit_target_json" ]; then
+    write_target_json "$emit_target_json"
+    exit 0
+fi
+if [ -z "$source" ]; then
+    echo "wasmos-tinygo: no .go input file" >&2
+    exit 1
+fi
+if [ -z "$WASMOS_SDK_TINYGO" ] || ! command -v "$WASMOS_SDK_TINYGO" >/dev/null 2>&1; then
+    echo "wasmos-tinygo: tinygo not found (WASMOS_SDK_TINYGO=$WASMOS_SDK_TINYGO)" >&2
+    exit 1
+fi
+if [ -z "$WASMOS_SDK_WASMOPT" ] || ! command -v "$WASMOS_SDK_WASMOPT" >/dev/null 2>&1; then
+    echo "wasmos-tinygo: wasm-opt not found (WASMOS_SDK_WASMOPT=$WASMOS_SDK_WASMOPT)" >&2
+    exit 1
+fi
+if [ ! -f "$manifest" ]; then
+    echo "wasmos-tinygo: manifest not found: $manifest" >&2
+    exit 1
+fi
+
+entry=$(manifest_get package entry "$manifest")
+[ -n "$entry" ] || entry=wasmos_main
+
+if [ -z "$output" ] || [ "$output" = PENDING ]; then
+    output=a.out
+fi
+case $output in
+*.wasm) emit_wasm=1; wasm=$output ;;
+*.wap) wasm=${output%.wap}.wasm ;;
+*)
+    wasm=$output.wasm
+    [ "$emit_wasm" = 1 ] || output=$output.wap
+    ;;
+esac
+
+target=${wasm%.wasm}.tinygo-target.json
+write_target_json "$target"
+
+stage=${wasm%.wasm}.gostage
+rm -rf "$stage"
+mkdir -p "$stage"
+cp "$source" "$stage/$(basename "$source")"
+cp "$godir"/*.go "$stage/"
+for f in $extra; do
+    case $f in
+    *.go) cp "$f" "$stage/" ;;
+    esac
+done
+
 
 # TinyGo builds a PACKAGE, and in GOPATH mode (GO111MODULE=off) a bare directory
 # name is read as an import path to look up under GOROOT/GOPATH. The package has to

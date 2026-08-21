@@ -171,7 +171,6 @@ function(wasmos_add_zig_wasm_app)
             -o ${ARG_OUTPUT_WASM}
     DEPENDS ${ARG_SRC} ${ARG_EXTRA_SRCS} ${ARG_MANIFEST}
             ${LIBC_DIR}/zig/wasmos.zig ${LIBC_DIR}/zig/coroutine.zig
-            ${WASMOS_SDK_STAMP}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building and validating Zig WASM app: ${ARG_NAME}"
     VERBATIM

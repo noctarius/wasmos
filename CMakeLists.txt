@@ -622,12 +622,12 @@ function(wasmos_add_wasm_c_app_target target_name)
   endif ()
 
   # Depended on, not named: the driver links these out of the sysroot itself.
-  set(_wasmos_runtime_deps
-    ${WASMOS_SDK_LIBDIR}/libc.a
-    ${WASMOS_SDK_LIBDIR}/libsys.a
-    ${WASMOS_SDK_LIBDIR}/crt1.o
-    ${WASMOS_SDK_STAMP}
-  )
+  # These are the archives' SOURCES rather than the archives, because this
+  # function is called from subdirectories and a subdirectory cannot depend on
+  # another directory's custom-command output (see WASMOS_SDK_ARCHIVE_SOURCES in
+  # cmake/WasmosSdk.cmake). Ordering comes from the wasmos-sdk target dependency
+  # added with the target below.
+  set(_wasmos_runtime_deps ${WASMOS_SDK_ARCHIVE_SOURCES})
 
   # Link-time memory lives in the manifest's [link] section and is read by the
   # driver at build time, not here. These values are load-bearing rather than
@@ -678,7 +678,6 @@ function(wasmos_add_wasm_c_app_target target_name)
     DEPENDS ${WASMOS_APP_OUTPUT_APP}
     SOURCES ${_wasmos_sources} ${WASMOS_APP_MANIFEST}
   )
-
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASMOS_APP_OUTPUT_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ${target_name})
 
@@ -1447,9 +1446,26 @@ add_subdirectory(src/kernel)
 
 get_property(WASMOS_WASM_APP_TARGETS GLOBAL PROPERTY WASMOS_WASM_APP_TARGETS)
 get_property(WASMOS_KERNEL_BLOB_TARGETS GLOBAL PROPERTY WASMOS_KERNEL_BLOB_TARGETS)
-if (WASMOS_WASM_APP_TARGETS)
-  add_dependencies(${WASMOS_WASM_APP_TARGETS} make_wasmos_app)
-endif ()
+# Prerequisites shared by every target that can build a wasm module.
+#
+# `make_wasmos_app` packs the .wap. `wasmos-sdk` stages the sysroot: each language's
+# driver resolves headers, archives and crt1 out of it, so it has to exist before any
+# app compiles. That one is a TARGET-level dependency by necessity -- the stage's
+# outputs are custom commands in THIS directory, and a subdirectory cannot name
+# another directory's custom-command output as a file dependency (a clean tree
+# reports "No rule to make target 'sdk-obj/sysroot.stamp'"). Per-app freshness comes
+# from WASMOS_SDK_ARCHIVE_SOURCES, which are ordinary source files.
+#
+# The loop is not cosmetic: `add_dependencies(<list> dep)` reads the FIRST element as
+# the target and every remaining one as a dependency, so passing a list gives the
+# dependency to one target and silently skips the rest.
+#
+# Blob targets need it too. CMake copies a custom command into each target that
+# consumes its output, so a blob target depending on a module file carries its own
+# copy of the rule and would otherwise run a driver before the sysroot exists.
+foreach (_wasm_target IN LISTS WASMOS_WASM_APP_TARGETS WASMOS_KERNEL_BLOB_TARGETS)
+  add_dependencies(${_wasm_target} make_wasmos_app wasmos-sdk)
+endforeach ()
 set(WASM_DRIVER_BLOB_DEPS "")
 list(APPEND WASM_DRIVER_BLOB_DEPS make_wasmos_app)
 if (WASMOS_WASM_APP_TARGETS)
@@ -2715,6 +2731,11 @@ if (WASMOS_UNIT_TINYGO)
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.go
           ${BUILD_DIR}/go_coroutine_test_src/test_wasm_coroutine.go
+  # The target JSON comes from wasmos-tinygo, which is the single definition of
+  # what a WASMOS Go build is -- its `extra-files` are relative to TINYGOROOT, so
+  # it cannot be a checked-in template and has to be generated per invocation.
+  COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-tinygo
+          --emit-target-json=${BUILD_DIR}/wasmos-tinygo.json
   # tinygo refuses an absolute package path, and this target's working directory
   # is the source root, so run it from the build directory.
   COMMAND ${CMAKE_COMMAND} -E chdir ${BUILD_DIR}
@@ -2726,6 +2747,9 @@ if (WASMOS_UNIT_TINYGO)
   COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/go/run_go_test.mjs
           ${BUILD_DIR}/test_wasm_coroutine_go.wasm test_wasm_coroutine_go
   VERBATIM)
+  # The target JSON names the sysroot's include directory, and the build reads
+  # headers from it, so the sysroot has to be staged first.
+  add_dependencies(run-kernel-unit-tests wasmos-sdk)
 endif ()
 
 add_custom_command(TARGET run-kernel-unit-tests POST_BUILD

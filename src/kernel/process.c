@@ -899,8 +899,17 @@ static void process_wake_waiters(uint32_t target_pid) {
             waiter->wait_target_pid = 0;
             woke_any = 1;
             int runnable = 1;
+            /* The fast path marks the waiter READY directly, without a process
+             * transition, because the owner is already the RUNNING process on this
+             * CPU.  `exiting` still has to be tested: process.h documents it as
+             * "1 slightly ahead of ->state", so RUNNING and exiting are
+             * simultaneously true for the whole head of a teardown, and taking
+             * this branch there would enqueue a waiter under an owner on its way
+             * out.  Falling through to process_set_ready is what refuses it, and
+             * counts the refusal like every other one. */
             if (proc == cpu_local()->current_process && proc->state == PROCESS_STATE_RUNNING &&
-                cpu_local()->current_thread && cpu_local()->current_thread->tid != waiter->tid) {
+                !proc->exiting && cpu_local()->current_thread &&
+                cpu_local()->current_thread->tid != waiter->tid) {
                 thread_set_state(waiter->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
             } else {
                 runnable = process_set_ready(proc, waiter);

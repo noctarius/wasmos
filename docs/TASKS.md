@@ -858,10 +858,20 @@ tail.
 - [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
   preserve the transfer-buffer ownership contract through all VFS relay paths.
-- [ ] [ENHANCEMENT][P2] Re-enable ATA bus-master DMA under the owner-push ABI: `ata_dma_prepare`
-  is stubbed to `WASMOS_DMA_STATUS_DENY` so every op is PIO
-  (`src/drivers/ata/ata.c:248-264`). Carry the client `borrow_id` in the block
-  IPC and map via `dma_map_borrow`, then drive the PRDT/descriptor path.
+- [ ] [ENHANCEMENT][P2] Re-enable ATA bus-master DMA on the GENERIC transfer path.
+  `ata_dma_prepare` returns `WASMOS_ERR_DMA_DENY` unconditionally to force PIO,
+  and `ata_dma_finish` is unreachable behind it
+  (`src/drivers/ata/ata.c:655-673`). Carry the client `borrow_id` in the block IPC
+  for that path and map via `dma_map_borrow`.
+
+  Not "every op is PIO", which this entry used to claim: the zero-copy READ path
+  already does real bus-master DMA. `BLOCK_IPC_READ_ZC_REQ` carries the client's
+  borrow, `ata_read_zc_dma` maps it with `dma_map_borrow`
+  (`WASMOS_DMA_DIR_FROM_DEVICE`), programs `ATA_BM_CMD_START` over a PRDT, then
+  syncs and unmaps — the driver logs "bus-master DMA active" and "zero-copy reads:
+  direct DMA into client buffer" on a normal boot. What is missing is that path
+  for writes (`TODO(zero-copy writes)` in the same file) and for the generic
+  prepare/finish hook above.
 - [ ] [FEATURE][P2] Complete initfs zero-copy mapping with an explicit entry-offset ABI and
   correct revoke/lifetime behavior (still copy-based today).
 - [ ] [ENHANCEMENT][P2] Refetch fs-manager boot metadata out-of-band (push/idle-step) to remove

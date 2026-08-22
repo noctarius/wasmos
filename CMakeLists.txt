@@ -2672,10 +2672,10 @@ add_custom_target(run-kernel-unit-tests
   #
   # Run at several widths for the same reasons as test_sched_concurrency: every
   # CPU but one runs a scheduler loop, so the width changes how many dispatchers
-  # can retire threads of one process at once. NCPU=16 is deliberately NOT in the
-  # sweep -- at that width the soak trips the dispatch-vs-slot-recycle race
-  # tracked in docs/TASKS.md, which is still open; a case that dies on an
-  # unrelated panic proves nothing about this one.
+  # can retire threads of one process at once. 16 is included and is more than a
+  # round number -- it oversubscribes a typical host, so the OS preempts inside
+  # the dispatch windows and stretches them, which is what made the
+  # slot-recycle race reproducible at all.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
           -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_PROCESS_TEST_SEAMS=1 -DWASMOS_TEST_NCPU=2
           -include ${LIBC_DIR}/include/wasmos_cast.h
@@ -2733,6 +2733,280 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
           -o ${BUILD_DIR}/test_process_lifecycle_smp8
   COMMAND ${BUILD_DIR}/test_process_lifecycle_smp8
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=16
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_smp16
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_smp16
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=16
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_smp16
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_smp16
+  # Sanitizer arms. TSan is the only thing that can see a mixed-atomicity access
+  # to the cross-CPU fields; it found four in sched_thread.c the first time it
+  # ran. ASan/UBSan cover the out-of-bounds and UB classes the plain build and
+  # the arm64 host both miss.
+  COMMAND ${WASMOS_HOST_SANITIZER_CC} -std=c11 -Wall -pthread -fsanitize=thread -g -O1
+          ${WASMOS_HOST_SANITIZER_SYSROOT}
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=4
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_tsan
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_tsan
+  COMMAND ${WASMOS_HOST_SANITIZER_CC} -std=c11 -Wall -pthread -fsanitize=address,undefined
+          -fno-sanitize-recover=all -g -O1
+          ${WASMOS_HOST_SANITIZER_SYSROOT}
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=16
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_asan
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_asan
+  # The IPC transport against the REAL ipc.c, linked with the real poll.c and
+  # the real sched_event.c so the block/wake handoff is the kernel's own; only
+  # the timer, the thread table and the two scheduler entry points are stubbed.
+  # WASMOS_IPC_TEST_SEAMS compiles in two setters the kernel does not carry:
+  # without them the endpoint-id wrap and the saturating notification counter
+  # need ~2^32 operations to reach.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_IPC_TEST_SEAMS=1 -DWASMOS_IDTABLE_TEST_SEAMS=1 -DWASMOS_POLL_TEST_SEAMS=1
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc.c
+          ${KERNEL_DIR}/ipc.c
+          ${KERNEL_DIR}/idtable.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${KERNEL_DIR}/poll.c
+          ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_ipc
+  COMMAND ${BUILD_DIR}/test_ipc
+  # The id-addressed object table, the pattern ipc.c had written out longhand
+  # twice. Its id allocation, per-owner quota and release-by-owner are each
+  # something a bug has already come from, so they are tested on the component
+  # rather than only through its users.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_IDTABLE_TEST_SEAMS=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_idtable.c
+          ${KERNEL_DIR}/idtable.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_idtable
+  COMMAND ${BUILD_DIR}/test_idtable
+  # The IPC syscalls, driving x86_syscall_handler with a real syscall_frame_t
+  # against the real ipc.c. Reply authenticity and the 32-bit-clean argument
+  # rule are enforced only here, and were previously covered only by klog string
+  # probes fired from the ring3-smoke image.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SYSCALL_TEST_SEAMS=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_syscall_ipc.c
+          ${KERNEL_DIR}/syscall.c
+          ${KERNEL_DIR}/ipc.c
+          ${KERNEL_DIR}/idtable.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${KERNEL_DIR}/poll.c
+          ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_syscall_ipc
+  COMMAND ${BUILD_DIR}/test_syscall_ipc
+  # The libsys service event loop. Header-only static inline over the WASM
+  # hostcall imports, and off wasm the import attribute is a no-op, so the test
+  # supplies its own imports and the dispatch logic runs unmodified.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${LIBSYS_WASM_DIR}/include
+          -iquote ${LIBC_DIR}/include
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_event_loop.c
+          -o ${BUILD_DIR}/test_libsys_event_loop
+  COMMAND ${BUILD_DIR}/test_libsys_event_loop
+  # The IPC host-call shims, BOTH runtimes in one binary so every scenario runs
+  # through each and the results are compared. wasm3's raw-call ABI is stack
+  # marshalling and WARP's takes an unused context pointer, so neither needs a
+  # live engine; the kernel side is the real ipc.c. Both shim TUs are built here
+  # regardless of which runtime this tree is configured for -- comparing them is
+  # the entire point, and since the extraction they are standalone.
+  COMMAND ${CMAKE_CXX_COMPILER} -std=c++17 -Wall -Wno-unused-parameter
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -c ${KERNEL_DIR}/warp/link_ipc.cpp -o ${BUILD_DIR}/test_warp_link_ipc.o
+  # -Wno-unused-parameter: m3ApiRawFunction's signature carries runtime/_ctx/_mem
+  # for every host call whether or not one uses them; that is wasm3's ABI, not
+  # our style, and the kernel build does not apply -Wextra here either.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -Wno-unused-parameter
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -c ${KERNEL_DIR}/wasm3/link_ipc.c -o ${BUILD_DIR}/test_wasm3_link_ipc.o
+  # No explicit -std on this step: it mixes C++ and C sources in one invocation
+  # and -std=c++17 is rejected for the C ones. The compiler defaults (gnu++17 /
+  # gnu17) cover both.
+  COMMAND ${CMAKE_CXX_COMPILER} -Wall -Wno-unused-parameter
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -x c++ ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
+          -x none ${BUILD_DIR}/test_warp_link_ipc.o ${BUILD_DIR}/test_wasm3_link_ipc.o
+          -x c ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -x none
+          -o ${BUILD_DIR}/test_hostcall_ipc
+  COMMAND ${BUILD_DIR}/test_hostcall_ipc
+  # The DMA host-call shims, BOTH runtimes in one binary, same reason as the IPC
+  # pair above: the guest-visible decision must not depend on which engine runs
+  # it. capability.c and policy.c are the real ones, so a denial comes out of the
+  # same table a driver spawn writes into; the transfer-buffer layer is stubbed
+  # inside the test, which is what lets a scenario report a device address
+  # outside the granted window.
+  # No explicit -std: this step mixes C++ and C sources in one invocation and
+  # -std=c++17 is rejected for the C ones. The compiler defaults (gnu++17 /
+  # gnu17) cover both, same as the IPC step above.
+  COMMAND ${CMAKE_CXX_COMPILER} -Wall -Wno-unused-parameter
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          -x c++ ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_dma.cpp
+                 ${KERNEL_DIR}/warp/link_dma.cpp
+          -x c ${KERNEL_DIR}/wasm3/link_dma.c
+               ${KERNEL_DIR}/capability.c ${KERNEL_DIR}/policy.c
+               ${KERNEL_DIR}/hostcall_dma.c ${KERNEL_DIR}/hostcall_value.c
+               ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c
+               ${KERNEL_DIR}/list_array_chunk.c ${KERNEL_DIR}/kmem.c
+               ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+               ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+               ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_hostcall_dma
+  COMMAND ${BUILD_DIR}/test_hostcall_dma
+  # process.c's LIFECYCLE state machine, driven from real pthreads. This is the
+  # only suite that links process.c: WASMOS_PROCESS_TEST_SEAMS replaces its six
+  # inline-asm sites (two stack switches, sti, the higher-half self-relocation
+  # probe, the scheduler-context register capture), the KERNEL_HIGHER_HALF_BASE
+  # alias helper and the saved-context rip/rsp validator -- none of which a
+  # lifecycle question depends on -- and stubs_process_platform.c supplies the
+  # paging/mm/pfa surface a spawn needs. test_sched_concurrency.c has the same
+  # pthread-as-CPU harness but STUBS this layer out, which is why the
+  # kill-vs-retire panic it could never have caught went unnoticed.
+  #
+  # Run at several widths for the same reasons as test_sched_concurrency: every
+  # CPU but one runs a scheduler loop, so the width changes how many dispatchers
+  # can retire threads of one process at once. 16 is included and is more than a
+  # round number -- it oversubscribes a typical host, so the OS preempts inside
+  # the dispatch windows and stretches them, which is what made the
+  # slot-recycle race reproducible at all.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_PROCESS_TEST_SEAMS=1 -DWASMOS_TEST_NCPU=2
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
+          ${KERNEL_DIR}/process.c ${KERNEL_DIR}/thread.c ${KERNEL_DIR}/sched_thread.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/futex.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          -o ${BUILD_DIR}/test_process_lifecycle_smp2
+  COMMAND ${BUILD_DIR}/test_process_lifecycle_smp2
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_PROCESS_TEST_SEAMS=1 -DWASMOS_TEST_NCPU=4
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
+          ${KERNEL_DIR}/process.c ${KERNEL_DIR}/thread.c ${KERNEL_DIR}/sched_thread.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/futex.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          -o ${BUILD_DIR}/test_process_lifecycle_smp4
+  COMMAND ${BUILD_DIR}/test_process_lifecycle_smp4
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_PROCESS_TEST_SEAMS=1 -DWASMOS_TEST_NCPU=16
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
+          ${KERNEL_DIR}/process.c ${KERNEL_DIR}/thread.c ${KERNEL_DIR}/sched_thread.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/futex.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          -o ${BUILD_DIR}/test_process_lifecycle_smp16
+  COMMAND ${BUILD_DIR}/test_process_lifecycle_smp16
   # The wasm32 struct sizes src/libc/go/coroutine.go hardcodes as opaque
   # [N]uint32 blobs. Go cannot express the C layout, so nothing checks these at
   # the language level and an undersized blob is heap corruption rather than a

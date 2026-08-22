@@ -71,7 +71,6 @@ static int g_checks;
 #define NARROW_MAX_BYTES 256u
 
 static process_t g_proc;
-static uint32_t g_current_ctx = CTX_CAPABLE;
 static int g_have_process = 1;
 
 /* What the stubbed transfer-buffer layer reports and what it recorded. */
@@ -218,7 +217,6 @@ static void reset(void) {
     g_proc.pid = CALLER_PID;
     g_proc.context_id = CTX_CAPABLE;
     g_proc.name = "dma-hostcall-test";
-    g_current_ctx = CTX_CAPABLE;
     g_have_process = 1;
 
     g_stub_device_addr = DEVICE_ADDR;
@@ -252,9 +250,10 @@ static void reset(void) {
      * default case, and capability_context_configured must stay false for it. */
 }
 
-/* Points the caller at `ctx` for the rest of the scenario. */
+/* Points the caller at `ctx` for the rest of the scenario. The shims resolve the
+ * caller's context through process_get()->context_id, so this is the only place
+ * that has to change -- there is no second copy to keep in step. */
 static void use_context(uint32_t ctx) {
-    g_current_ctx = ctx;
     g_proc.context_id = ctx;
 }
 
@@ -539,11 +538,12 @@ static const Scenario k_scenarios[] = {
      s_map_outside_window_undoes_mapping,
      "a refused call must not leave a live DMA window behind"},
     {"map(device address past i32)",
-     WASMOS_ERR_DMA_UNAVAILABLE,
-     WASMOS_ERR_DMA_UNAVAILABLE,
+     WASMOS_ERR_DMA_ADDR_TOO_LARGE,
+     WASMOS_ERR_DMA_ADDR_TOO_LARGE,
      false,
      s_map_address_over_i32,
-     "an address the i32 return cannot carry is not silently truncated"},
+     "an address the i32 return cannot carry is neither truncated nor reported as "
+     "UNAVAILABLE, which means 'no slot or backing'"},
     {"map(granted)", 1, 1, false, s_map_granted, "returns the device address"},
     {"map(granted keeps the mapping)", 0, 0, false, s_map_granted_keeps_mapping, nullptr},
     {"map(stale borrow)",

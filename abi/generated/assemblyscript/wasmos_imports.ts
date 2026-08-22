@@ -401,9 +401,10 @@ export declare function initfs_entry_copy(a0: i32, a1: i32, a2: i32, a3: i32): i
 // returns a negative WASMOS_ERR_DMA_* code: INVALID for bad args, DENY for a
 // missing dma.buffer capability or a context/borrow/direction/mapping denial,
 // RANGE when `length` exceeds the capability's per-mapping byte budget or the
-// resulting device address falls outside every granted DMA window, UNAVAILABLE
-// when the address exceeds the signed-32-bit device window. The RANGE and
-// UNAVAILABLE paths tear the mapping down before returning.
+// resulting device address falls outside every granted DMA window,
+// ADDR_TOO_LARGE when the mapping succeeded but its device address does not fit
+// the signed-32-bit return channel. The RANGE and ADDR_TOO_LARGE paths tear the
+// mapping down before returning.
 @external("wasmos", "dma_map_borrow")
 export declare function dma_map_borrow(a0: i32, a1: i32, a2: i32, a3: i32): i32;
 // Synchronizes the DMA mapping of borrowed buffer `borrow_id` over the

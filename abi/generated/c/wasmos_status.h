@@ -184,6 +184,7 @@ enum {
     WASMOS_ERR_DMA_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DMA, 2), /* invalid DMA arguments (direction, handle, or length) */
     WASMOS_ERR_DMA_RANGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DMA, 3), /* the requested subrange lies outside the mapped object */
     WASMOS_ERR_DMA_UNAVAILABLE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DMA, 4), /* no DMA mapping slot or backing is available */
+    WASMOS_ERR_DMA_ADDR_TOO_LARGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DMA, 5), /* the device address does not fit the signed 32-bit host-call return channel */
     WASMOS_ERR_IRQ_BAD_LINE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IRQ, 1), /* irq line is outside the supported range */
     WASMOS_ERR_IRQ_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IRQ, 2), /* caller lacks irq.route, or the line is not in its allowlist */
     WASMOS_ERR_IRQ_BAD_ENDPOINT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IRQ, 3), /* target endpoint is invalid or not owned by the caller */
@@ -453,6 +454,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_DMA_INVALID: return "dma.INVALID";
     case WASMOS_ERR_DMA_RANGE: return "dma.RANGE";
     case WASMOS_ERR_DMA_UNAVAILABLE: return "dma.UNAVAILABLE";
+    case WASMOS_ERR_DMA_ADDR_TOO_LARGE: return "dma.ADDR_TOO_LARGE";
     case WASMOS_ERR_IRQ_BAD_LINE: return "irq.BAD_LINE";
     case WASMOS_ERR_IRQ_NOT_AUTHORIZED: return "irq.NOT_AUTHORIZED";
     case WASMOS_ERR_IRQ_BAD_ENDPOINT: return "irq.BAD_ENDPOINT";
@@ -658,6 +660,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_DMA_INVALID: return "invalid DMA arguments (direction, handle, or length)";
     case WASMOS_ERR_DMA_RANGE: return "the requested subrange lies outside the mapped object";
     case WASMOS_ERR_DMA_UNAVAILABLE: return "no DMA mapping slot or backing is available";
+    case WASMOS_ERR_DMA_ADDR_TOO_LARGE: return "the device address does not fit the signed 32-bit host-call return channel";
     case WASMOS_ERR_IRQ_BAD_LINE: return "irq line is outside the supported range";
     case WASMOS_ERR_IRQ_NOT_AUTHORIZED: return "caller lacks irq.route, or the line is not in its allowlist";
     case WASMOS_ERR_IRQ_BAD_ENDPOINT: return "target endpoint is invalid or not owned by the caller";

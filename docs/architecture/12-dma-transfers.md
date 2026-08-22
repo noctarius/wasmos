@@ -176,8 +176,9 @@ WASMOS_ERR_NONE             =       0
 WASMOS_ERR_DMA_DENY         = -983041   // capability check failed
 WASMOS_ERR_DMA_INVALID      = -983042   // bad argument / wrong state
 WASMOS_ERR_DMA_RANGE        = -983043   // out-of-window or oversize
-WASMOS_ERR_DMA_UNAVAILABLE  = -983044   // no active borrow, not mapped, or a
-                                        // device address the i32 return cannot carry
+WASMOS_ERR_DMA_UNAVAILABLE  = -983044   // no mapping slot or backing available
+WASMOS_ERR_DMA_ADDR_TOO_LARGE = -983045 // mapped, but the device address does not
+                                        // fit the signed 32-bit return channel
 
 /* Sync operations */
 WASMOS_DMA_SYNC_TO_DEVICE   = 1
@@ -367,16 +368,20 @@ Validation sequence (in order):
    `WASMOS_ERR_DMA_INVALID` if any fail.
 2. Caller has `CAP_DMA_BUFFER` (`policy_authorize(ctx,
    POLICY_ACTION_DMA_BUFFER, 0)`) → `WASMOS_ERR_DMA_DENY` if absent.
-3. `xfer_buffer_get_borrowed(borrow_id, caller_ctx, &borrow, &mapping)` — the
-   caller must be the borrow's **borrower** (mapper) → `DENY` otherwise.
-4. `capability_dma_direction_allowed` (direction ⊆ the borrow's rights via
-   `dma_map_borrow`) → `WASMOS_ERR_DMA_DENY`.
+3. `xfer_buffer_get_borrowed(borrow_id, caller_ctx, &borrow, NULL)` — the caller
+   must be the borrow's **borrower** (mapper) → `DENY` otherwise. No mapping is
+   requested here: none exists yet, step 6 creates it.
+4. `capability_dma_direction_allowed(ctx, direction_flags)` → `DENY`. This is the
+   CONTEXT's granted directions, which is a separate question from the borrow's
+   rights: the lender does not know what the borrower's manifest declared. The
+   direction ⊆ borrow-rights half is enforced by `xfer_buffer_dma_map_borrow` in
+   step 6.
 5. `length <= dma_max_bytes` → `WASMOS_ERR_DMA_RANGE`.
 6. `xfer_buffer_dma_map_borrow` (range validation + phys computation) →
    `WASMOS_ERR_DMA_DENY` on failure.
 7. `capability_dma_range_allowed(ctx, device_addr, length)` → `WASMOS_ERR_DMA_RANGE`.
 8. `device_addr <= 0x7FFFFFFF` (must fit in positive signed 32-bit,
-   `hostcall_value_check`) → `WASMOS_ERR_DMA_UNAVAILABLE`.
+   `hostcall_value_check`) → `WASMOS_ERR_DMA_ADDR_TOO_LARGE`.
 
 Steps 7 and 8 tear the mapping down before returning: a refused call must not
 leave the device holding a live window.

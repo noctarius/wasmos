@@ -214,6 +214,7 @@ domains:
       - { name: INVALID,     description: "invalid DMA arguments (direction, handle, or length)" }
       - { name: RANGE,       description: "the requested subrange lies outside the mapped object" }
       - { name: UNAVAILABLE, description: "no DMA mapping slot or backing is available" }
+      - { name: ADDR_TOO_LARGE, description: "the device address does not fit the signed 32-bit host-call return channel" }
 
   irq:
     id: 16

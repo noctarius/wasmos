@@ -163,6 +163,7 @@ pub const WASMOS_ERR_DMA_DENY: i32 = -0x000F0001; // the DMA capability or polic
 pub const WASMOS_ERR_DMA_INVALID: i32 = -0x000F0002; // invalid DMA arguments (direction, handle, or length)
 pub const WASMOS_ERR_DMA_RANGE: i32 = -0x000F0003; // the requested subrange lies outside the mapped object
 pub const WASMOS_ERR_DMA_UNAVAILABLE: i32 = -0x000F0004; // no DMA mapping slot or backing is available
+pub const WASMOS_ERR_DMA_ADDR_TOO_LARGE: i32 = -0x000F0005; // the device address does not fit the signed 32-bit host-call return channel
 pub const WASMOS_ERR_IRQ_BAD_LINE: i32 = -0x00100001; // irq line is outside the supported range
 pub const WASMOS_ERR_IRQ_NOT_AUTHORIZED: i32 = -0x00100002; // caller lacks irq.route, or the line is not in its allowlist
 pub const WASMOS_ERR_IRQ_BAD_ENDPOINT: i32 = -0x00100003; // target endpoint is invalid or not owned by the caller
@@ -423,6 +424,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_DMA_INVALID => "invalid DMA arguments (direction, handle, or length)",
         WASMOS_ERR_DMA_RANGE => "the requested subrange lies outside the mapped object",
         WASMOS_ERR_DMA_UNAVAILABLE => "no DMA mapping slot or backing is available",
+        WASMOS_ERR_DMA_ADDR_TOO_LARGE => "the device address does not fit the signed 32-bit host-call return channel",
         WASMOS_ERR_IRQ_BAD_LINE => "irq line is outside the supported range",
         WASMOS_ERR_IRQ_NOT_AUTHORIZED => "caller lacks irq.route, or the line is not in its allowlist",
         WASMOS_ERR_IRQ_BAD_ENDPOINT => "target endpoint is invalid or not owned by the caller",

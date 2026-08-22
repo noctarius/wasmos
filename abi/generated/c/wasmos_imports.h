@@ -401,9 +401,10 @@ extern int32_t wasmos_initfs_entry_copy(int32_t index, int32_t out, int32_t len,
  * returns a negative WASMOS_ERR_DMA_* code: INVALID for bad args, DENY for a
  * missing dma.buffer capability or a context/borrow/direction/mapping denial,
  * RANGE when `length` exceeds the capability's per-mapping byte budget or the
- * resulting device address falls outside every granted DMA window, UNAVAILABLE
- * when the address exceeds the signed-32-bit device window. The RANGE and
- * UNAVAILABLE paths tear the mapping down before returning.
+ * resulting device address falls outside every granted DMA window,
+ * ADDR_TOO_LARGE when the mapping succeeded but its device address does not fit
+ * the signed-32-bit return channel. The RANGE and ADDR_TOO_LARGE paths tear the
+ * mapping down before returning.
  */
 extern int32_t wasmos_dma_map_borrow(int32_t borrow_id, int32_t offset, int32_t length, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "dma_map_borrow");
 /* Synchronizes the DMA mapping of borrowed buffer `borrow_id` over the

@@ -47,9 +47,10 @@
  *   WASMOS_ERR_DMA_RANGE        `length` exceeds the capability's per-mapping
  *                               byte budget, or the resulting device address
  *                               falls outside every granted window
- *   WASMOS_ERR_DMA_UNAVAILABLE  the device address does not fit the i32 return
+ *   WASMOS_ERR_DMA_ADDR_TOO_LARGE  the mapping succeeded but its device address
+ *                               does not fit the i32 return channel
  *
- * The RANGE and UNAVAILABLE paths tear the mapping down before returning: a
+ * The RANGE and ADDR_TOO_LARGE paths tear the mapping down before returning: a
  * refused call must not leave the device holding a live window.
  */
 int32_t hostcall_dma_map_borrow(int32_t borrow_id, int32_t offset, int32_t length,

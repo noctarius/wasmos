@@ -71,9 +71,15 @@ int32_t hostcall_dma_map_borrow(int32_t borrow_id, int32_t offset, int32_t lengt
         (void)xfer_buffer_dma_unmap(&mapping);
         return WASMOS_ERR_DMA_RANGE;
     }
+    /* Distinct from UNAVAILABLE on purpose. UNAVAILABLE means the platform had
+     * no mapping slot or no backing to give (region_alloc's pfa_alloc_pages_below
+     * and warp_linmem_place_phys return it); this is a mapping that succeeded and
+     * produced an address the i32 return channel cannot carry. Overloading one
+     * code with both reintroduces exactly the ambiguity the packed model exists
+     * to remove. */
     if (hostcall_value_check(mapping.device_addr) != WASMOS_OK) {
         (void)xfer_buffer_dma_unmap(&mapping);
-        return WASMOS_ERR_DMA_UNAVAILABLE;
+        return WASMOS_ERR_DMA_ADDR_TOO_LARGE;
     }
     return (int32_t)mapping.device_addr;
 }

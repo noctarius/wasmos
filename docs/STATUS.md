@@ -229,6 +229,33 @@ linked feature documents for rationale and rollout plans.
   be reclassified rather than left describing a fixed problem. No DMA row is
   currently divergent.
 
+### Process Lifecycle
+
+- `process_set_ready` and `process_set_running` refuse a transition whose owner
+  is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
+  (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`
+  on that status, and each refusal is counted
+  (`SCHED_DEBUG_SET_READY_EXITING`, `SCHED_DEBUG_SET_RUNNING_EXITING`) with a
+  power-of-two rate-limited report. Refusing is the contract, not a fallback:
+  no caller holds anything that excludes a concurrent kill or exit, so a
+  sibling-requeue racing its owner's teardown is reachable from every call site.
+- Two of those four enqueue sites — the `PROCESS_RUN_EXITED` and
+  `PROCESS_RUN_THREAD_EXITED` sibling-requeues in `process_schedule_once_impl` —
+  used to enqueue unconditionally. The panic was hiding that: the process died
+  before reaching the enqueue, so "enqueue a thread under a dying process" was
+  unreachable in practice and unguarded in code.
+- `process.c` is host-testable behind `WASMOS_PROCESS_TEST_SEAMS`, which replaces
+  its six inline-asm sites, the `KERNEL_HIGHER_HALF_BASE` alias helper and the
+  saved-context rip/rsp validator — the arch facts a lifecycle question does not
+  depend on. `tests/unit/test_process_lifecycle.c` drives it from real pthreads
+  (one scheduler loop per CPU, a killer on the last) at 2, 4 and 8 CPUs, and
+  asserts the refusal counters are non-zero so a run that never entered the
+  window fails instead of passing vacuously. With the guards restored it aborts
+  at every width.
+- That suite serialises spawn and reap against dispatch through a park barrier.
+  Not incidental: doing either concurrently trips two further races, both
+  recorded in `TASKS.md` and neither related to the transitions above.
+
 ### Build, Configuration, and Validation
 
 - Default configuration: **WARP** runtime, single CPU. WARP is the default

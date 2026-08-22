@@ -172,6 +172,19 @@ typedef enum {
      * outcome, not a defect, so its report is rate-limited and this counter is
      * the honest total. */
     SCHED_DEBUG_ENQUEUE_CURRENT,
+    /* Ready transitions refused because the owning process was already exiting
+     * or ZOMBIE.  Also a normal outcome: no caller holds anything that excludes
+     * a concurrent kill/exit, so a sibling-requeue can always find the owner
+     * gone.  It was a kpanic ("set_ready zombie") until the counter replaced it;
+     * a fatal report of a race the scheduler is built to absorb turned a
+     * survivable interleaving into a dead machine. */
+    SCHED_DEBUG_SET_READY_EXITING,
+    /* Dispatches refused for the same reason, at the other half of the same
+     * transition pair.  process_set_running already reported this by returning
+     * 0 -- "it raced to a terminal state and must NOT be dispatched" -- and its
+     * callers already honoured that, so the kpanic one line above the return was
+     * fatal about a case the code otherwise handled. */
+    SCHED_DEBUG_SET_RUNNING_EXITING,
     SCHED_DEBUG_EVENT_COUNT
 } sched_debug_event_t;
 

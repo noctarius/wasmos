@@ -2660,6 +2660,80 @@ add_custom_target(run-kernel-unit-tests
                ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_hostcall_dma
   COMMAND ${BUILD_DIR}/test_hostcall_dma
+  # process.c's LIFECYCLE state machine, driven from real pthreads. This is the
+  # only suite that links process.c: WASMOS_PROCESS_TEST_SEAMS replaces its six
+  # inline-asm sites (two stack switches, sti, the higher-half self-relocation
+  # probe, the scheduler-context register capture), the KERNEL_HIGHER_HALF_BASE
+  # alias helper and the saved-context rip/rsp validator -- none of which a
+  # lifecycle question depends on -- and stubs_process_platform.c supplies the
+  # paging/mm/pfa surface a spawn needs. test_sched_concurrency.c has the same
+  # pthread-as-CPU harness but STUBS this layer out, which is why the
+  # kill-vs-retire panic it could never have caught went unnoticed.
+  #
+  # Run at several widths for the same reasons as test_sched_concurrency: every
+  # CPU but one runs a scheduler loop, so the width changes how many dispatchers
+  # can retire threads of one process at once. NCPU=16 is deliberately NOT in the
+  # sweep -- at that width the soak's spawn/reap churn trips a separate and much
+  # deeper race ("spawn publish NEW->LIVE failed" with the slot already RUNNING),
+  # tracked in docs/TASKS.md; a case that dies on an unrelated panic proves
+  # nothing about this one.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_PROCESS_TEST_SEAMS=1 -DWASMOS_TEST_NCPU=2
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
+          ${KERNEL_DIR}/process.c ${KERNEL_DIR}/thread.c ${KERNEL_DIR}/sched_thread.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/futex.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          -o ${BUILD_DIR}/test_process_lifecycle_smp2
+  COMMAND ${BUILD_DIR}/test_process_lifecycle_smp2
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_PROCESS_TEST_SEAMS=1 -DWASMOS_TEST_NCPU=4
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
+          ${KERNEL_DIR}/process.c ${KERNEL_DIR}/thread.c ${KERNEL_DIR}/sched_thread.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/futex.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          -o ${BUILD_DIR}/test_process_lifecycle_smp4
+  COMMAND ${BUILD_DIR}/test_process_lifecycle_smp4
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_PROCESS_TEST_SEAMS=1 -DWASMOS_TEST_NCPU=8
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
+          ${KERNEL_DIR}/process.c ${KERNEL_DIR}/thread.c ${KERNEL_DIR}/sched_thread.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/futex.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          -o ${BUILD_DIR}/test_process_lifecycle_smp8
+  COMMAND ${BUILD_DIR}/test_process_lifecycle_smp8
   # The wasm32 struct sizes src/libc/go/coroutine.go hardcodes as opaque
   # [N]uint32 blobs. Go cannot express the C layout, so nothing checks these at
   # the language level and an undersized blob is heap corruption rather than a
@@ -3482,6 +3556,18 @@ wasmos_ide_index(wasmos_ide_unit_hostcall_dma
          ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
          ${CMAKE_SOURCE_DIR}/tests/unit)
 
+# test_process_lifecycle.c and its platform stubs link the real process.c, so
+# they take the real kernel headers and the WASMOS_PROCESS_TEST_SEAMS define its
+# compile line passes -- indexing them without it selects a different process.c
+# than the one that is built.
+wasmos_ide_index(wasmos_ide_unit_process_lifecycle
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
+  IQUOTE ${KERNEL_DIR} ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
+         ${CMAKE_SOURCE_DIR}/tests/unit
+  DEFINES WASMOS_HOST_TEST_SMP=1 WASMOS_PROCESS_TEST_SEAMS=1 WASMOS_TEST_NCPU=4)
+
 # test_warp_wasm_coroutine.cpp links nothing of WASMOS: it drives the vendored
 # WARP JIT directly and resolves its headers relative to WARP_DIR
 # ("src/WasmModule/WasmModule.hpp"). The defines are the subset of
@@ -3520,6 +3606,8 @@ wasmos_ide_index(wasmos_ide_unit
   EXCLUDE ${WASMOS_UNIT_LIBC_TESTS} ${WASMOS_UNIT_SCHED_TESTS}
           ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_dma.cpp
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include

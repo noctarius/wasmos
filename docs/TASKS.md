@@ -1278,6 +1278,34 @@ Source: `architecture/25-diagnostics-status.md`,
   measure across configs and repeated boots first
   (`src/kernel/kernel_sched_smp_stress_runtime.c:140`).
 
+- [ ] [BUG][P1] Fix the spawn-publish race: a process can be DISPATCHED between
+  `process_find_slot` claiming its slot and `process_transit` publishing it.
+  `process_sched_invariant_fail("spawn publish NEW->LIVE failed", pid, state)`
+  fires with `state == PROCESS_STATE_RUNNING` (2), so something ran
+  `process_set_running` on a slot that was still `PROCESS_STATE_NEW` --
+  `src/kernel/process.c:1294` asserts exactly this cannot happen ("the slot is
+  still NEW (never published, so no scheduler/kill path can reach it)"). The
+  exposure window is real: `slot->pid` is stamped at `:1207`, roughly 90 lines
+  before the publish, so the slot is findable by pid while unpublished. The main
+  thread's enqueue is correctly ordered AFTER the publish, so the reachable
+  route is something else -- a recycled `thread_t` a stealer still holds is the
+  first thing to check (`sched_thread.c`'s steal path already documents that
+  `thread_reap_owner` can reset a thread a stealer is holding).
+
+  Reproduce: `tests/unit/test_process_lifecycle.c` with its spawn gate removed
+  (`park_dispatchers()`/`resume_dispatchers()` around `spawn_race_target`), at
+  `WASMOS_TEST_NCPU=4` or `8`. 1-2 runs in 12 abort; at `NCPU=16` it is close to
+  every run. That suite gates spawning against dispatch precisely so it measures
+  its own subject instead of dying on this.
+- [ ] [BUG][P1] Fix the reap-recycle race: a zeroed or recycled thread slot reaches
+  the dispatcher, which reports it as
+  `process_sched_invariant_fail("zero time slice", tid, 0)` with `tid == 0` --
+  `time_slice_ticks` is assigned at every spawn site, so a zero means the slot
+  was reset underneath a CPU that had already selected it. Same reproduction as
+  above with the gate removed from around `process_reap_zombie_pid` instead, at
+  `WASMOS_TEST_NCPU=8`. Also seen once as
+  `process_sched_invariant_fail("current owner mismatch", 0, tid)`, which is
+  likely the same cause observed one step earlier.
 - [ ] [BUG][P1] Confirm the SMP scheduler stress panic stays fixed. One cause is
   found and fixed: dispatch took no exclusive claim on the thread it was about
   to run, so two CPUs could resume one `process_context_t` on one kernel stack

@@ -70,11 +70,18 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
                                      uint8_t enqueue_initial);
 
 static inline uintptr_t process_kernel_alias_addr(uintptr_t addr) {
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    /* A host process has one address space and no higher-half alias, so the
+     * alias of an address is the address. Rebasing by KERNEL_HIGHER_HALF_BASE
+     * here would turn every host pointer into an unmapped one. */
+    return addr;
+#else
     uint64_t base = KERNEL_HIGHER_HALF_BASE;
     if ((uint64_t)addr < base) {
         return (uintptr_t)((uint64_t)addr + base);
     }
     return addr;
+#endif
 }
 
 static inline process_t* process_table(void) {
@@ -268,6 +275,12 @@ static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_
     uintptr_t stack_top = thread->kstack_top - 16u;
     stack_top &= ~(uintptr_t)0xFULL;
     process_run_result_t rc = PROCESS_RUN_EXITED;
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    /* A host test has no per-thread kernel stack to switch to, and the switch is
+     * not what any lifecycle test is asserting. Call on the current stack. */
+    (void)stack_top;
+    rc = entry(proc, thread->tid, thread->worker_arg);
+#else
     __asm__ volatile("mov %%rsp, %%r15\n"
                      "mov %[stack_top], %%rsp\n"
                      "call *%[entry]\n"
@@ -279,6 +292,7 @@ static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_
                        "S"(thread->tid),
                        "d"(thread->worker_arg)
                      : "r15", "rcx", "r8", "r9", "r10", "r11", "memory", "cc");
+#endif
     return rc;
 }
 
@@ -296,7 +310,7 @@ static void process_reap(process_t* proc);
 static void process_sched_invariant_fail(const char* msg, uint64_t a, uint64_t b);
 static void process_set_blocked(process_t* proc, thread_t* thread, process_block_reason_t reason,
                                 thread_block_reason_t thread_reason);
-static void process_set_ready(process_t* proc, thread_t* thread);
+static int process_set_ready(process_t* proc, thread_t* thread);
 static int process_set_running(process_t* proc, thread_t* thread);
 static uint8_t process_has_waiters(uint32_t target_pid);
 static void process_try_auto_reap(process_t* proc);
@@ -332,6 +346,10 @@ static int process_run_on_sched_stack(int (*fn)(void)) {
         (uintptr_t)&g_sched_trampoline_stacks[cpu_id][SCHED_TRAMPOLINE_STACK_BYTES]);
     stack_top &= ~(uintptr_t)0xFULL;
     int rc = -1;
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    (void)stack_top;
+    rc = fn();
+#else
     __asm__ volatile("mov %%rsp, %%r15\n"
                      "mov %[stack_top], %%rsp\n"
                      "call *%[fn]\n"
@@ -339,6 +357,7 @@ static int process_run_on_sched_stack(int (*fn)(void)) {
                      : "=a"(rc)
                      : [stack_top] "r"(stack_top), [fn] "r"(fn)
                      : "r15", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory", "cc");
+#endif
     return rc;
 }
 
@@ -424,6 +443,16 @@ static void process_validate_thread_context(process_t* proc, thread_t* thread,
                (uintptr_t)thread->ctx_canary_pre,
                (uintptr_t)thread->ctx_canary_post);
     }
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    /* The canary check above still applies -- it is plain memory. The rip/rsp
+     * range checks below do not: they bound a saved context against the kernel
+     * image and the higher-half alias, and on the host there is no image range
+     * to bound against and no saved context to bound. The seam in
+     * process_run_worker_on_stack calls a worker entry directly rather than
+     * switching to a context, so nothing a test drives ever populates one. */
+    (void)where;
+    return;
+#else
     uint64_t rip = ctx->rip;
     uint8_t is_user_ctx = (uint8_t)((ctx->cs & 0x3u) == 0x3u);
     uint64_t start = addr_cast(uint64_t, &__kernel_start);
@@ -471,6 +500,7 @@ static void process_validate_thread_context(process_t* proc, thread_t* thread,
     process_log_ctxsw_state();
     process_log_ctx_watch("invalid-rip");
     kpanic("invalid_rip", (uintptr_t)rip, (uintptr_t)ctx->rsp);
+#endif
 }
 
 static thread_t* process_main_thread(process_t* proc) {
@@ -566,7 +596,9 @@ static void process_trampoline(void) {
          * run through this trampoline and may voluntarily yield/re-enter it;
          * restore normal interrupt delivery before calling their entry point so
          * timer ticks keep advancing while ring-0 process code runs. */
+#ifndef WASMOS_PROCESS_TEST_SEAMS
         __asm__ volatile("sti" ::: "memory");
+#endif
         if (!cpu_local()->current_process || !cpu_local()->current_process->entry) {
             cpu_local()->last_run_result = PROCESS_RUN_IDLE;
         } else {
@@ -856,15 +888,19 @@ static void process_wake_waiters(uint32_t target_pid) {
             }
             waiter->wait_target_pid = 0;
             woke_any = 1;
+            int runnable = 1;
             if (proc == cpu_local()->current_process && proc->state == PROCESS_STATE_RUNNING &&
                 cpu_local()->current_thread && cpu_local()->current_thread->tid != waiter->tid) {
                 thread_set_state(waiter->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
             } else {
-                process_set_ready(proc, waiter);
+                runnable = process_set_ready(proc, waiter);
             }
             /* Enqueue only on winning the wake/block handshake; otherwise the
-             * owning CPU's PROCESS_RUN_BLOCKED handler does it. */
-            if (sched_wake_claim_enqueue(waiter)) {
+             * owning CPU's PROCESS_RUN_BLOCKED handler does it.  A waiter whose
+             * own owner is going away is not woken at all, so it must not take
+             * the claim either -- leaving no token is what keeps the completion
+             * path from enqueuing on its behalf. */
+            if (runnable && sched_wake_claim_enqueue(waiter)) {
                 sched_enqueue_thread(waiter);
             }
         }
@@ -2049,8 +2085,15 @@ int process_schedule_once(void) {
     uint64_t higher_half_base = paging_get_higher_half_base();
     uintptr_t here = 0;
     uintptr_t rsp_cur = 0;
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    /* No higher-half alias on the host: report addresses that make the
+     * relocation checks below no-ops rather than fabricating a mapping. */
+    here = (uintptr_t)higher_half_base;
+    rsp_cur = (uintptr_t)higher_half_base;
+#else
     __asm__ volatile("leaq 0f(%%rip), %0\n0:" : "=r"(here));
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp_cur));
+#endif
     if ((uint64_t)here < higher_half_base) {
         uintptr_t high_fn = (uintptr_t)&process_schedule_once;
         high_fn += (uintptr_t)higher_half_base;
@@ -2259,6 +2302,13 @@ static int process_schedule_once_impl(void) {
 
         process_context_t* _sctx = &cpu_local()->sched_ctx;
         uintptr_t _rsp;
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+        /* Nothing resumes this scheduler context on the host -- the seam above
+         * calls the worker entry directly instead of switching stacks -- so the
+         * snapshot has no consumer and the host's own registers must not be
+         * written into a kernel context. */
+        _rsp = 0;
+#else
         __asm__ volatile("mov %%rsp, %[rsp]\n"
                          "mov %%r15, %[r15]\n"
                          "mov %%r14, %[r14]\n"
@@ -2277,6 +2327,7 @@ static int process_schedule_once_impl(void) {
                            [rf] "=m"(_sctx->rflags)
                          :
                          : "memory");
+#endif
         _sctx->rax = (uint64_t)PROCESS_RUN_BLOCKED;
         _sctx->rsp = _rsp - 8u;
 
@@ -2343,8 +2394,7 @@ static int process_schedule_once_impl(void) {
             }
             if (proc->live_thread_count > 0) {
                 thread_t* next = process_first_owner_ready_thread(proc);
-                if (next && next->state != THREAD_STATE_ZOMBIE) {
-                    process_set_ready(proc, next);
+                if (next && next->state != THREAD_STATE_ZOMBIE && process_set_ready(proc, next)) {
                     /* Duplicate enqueues are dropped by the on_rq claim. */
                     sched_enqueue_thread(next);
                 }
@@ -2374,8 +2424,12 @@ static int process_schedule_once_impl(void) {
         } else {
             next = process_first_owner_ready_thread(proc);
             if (next) {
-                process_set_ready(proc, next);
-                sched_enqueue_thread(next);
+                /* A refusal means the owner is already going away; leave the
+                 * sibling where it is rather than enqueue it under a dying
+                 * process, and let the exit path tear it down. */
+                if (process_set_ready(proc, next)) {
+                    sched_enqueue_thread(next);
+                }
             } else {
                 /* No runnable sibling left: park the process.  Best-effort —
                  * a 0 return means it raced to a terminal state, in which case
@@ -3110,21 +3164,44 @@ static void process_set_blocked(process_t* proc, thread_t* thread, process_block
     thread_set_state(thread->tid, THREAD_STATE_BLOCKED, thread_reason);
 }
 
-static void process_set_ready(process_t* proc, thread_t* thread) {
+/* Returns 1 if `thread` is now READY and its caller must enqueue it, 0 if the
+ * owner raced to a terminal state and it must NOT be enqueued.  Same convention
+ * as process_set_running.
+ *
+ * A NULL argument is a caller bug and still panics.  An owner that is `exiting`
+ * or ZOMBIE is not: no caller holds anything that excludes a concurrent
+ * kill/exit, so a sibling-requeue racing the owner's teardown is reachable from
+ * every call site and is the interleaving this function exists to absorb.  It is
+ * counted and rate-limited rather than fatal — as a kpanic it turned a
+ * survivable race into a dead machine.
+ *
+ * ZOMBIE is refused a second time by process_force_transit below, which has no
+ * legal ZOMBIE->READY edge.  `exiting` has to be tested here because the state
+ * can still be READY/RUNNING/BLOCKED while the exit is in flight. */
+static int process_set_ready(process_t* proc, thread_t* thread) {
     if (!proc || !thread) {
         process_sched_invariant_fail(
             "set_ready null", addr_cast(uint64_t, proc), addr_cast(uint64_t, thread));
     }
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
-        process_sched_invariant_fail("set_ready zombie", proc->pid, thread->tid);
+        uint32_t n = sched_debug_note(SCHED_DEBUG_SET_READY_EXITING);
+        if ((n & (n - 1u)) == 0u) {
+            serial_printf_unlocked("[sched] set_ready on exiting owner pid=%u tid=%u state=%u"
+                                   " exiting=%u (n=%u, refused)\n",
+                                   (unsigned)proc->pid,
+                                   (unsigned)thread->tid,
+                                   (unsigned)proc->state,
+                                   (unsigned)proc->exiting,
+                                   (unsigned)(n + 1u));
+        }
+        return 0;
     }
-    /* If the process raced to ZOMBIE after the guard above, do NOT make its
-     * thread runnable — that would enqueue a thread under a dead process. */
     if (!process_force_transit(proc, PROCESS_STATE_READY)) {
-        return;
+        return 0;
     }
     proc->block_reason = PROCESS_BLOCK_NONE;
     thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+    return 1;
 }
 
 /* Returns 1 if proc is now RUNNING, 0 if it raced to a terminal state and must
@@ -3134,8 +3211,21 @@ static int process_set_running(process_t* proc, thread_t* thread) {
         process_sched_invariant_fail(
             "set_running null", addr_cast(uint64_t, proc), addr_cast(uint64_t, thread));
     }
+    /* Same race, same treatment as process_set_ready: the 0 return below already
+     * means "raced to a terminal state, do not dispatch", and every caller
+     * honours it, so this case is counted rather than fatal. */
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
-        process_sched_invariant_fail("set_running zombie", proc->pid, thread->tid);
+        uint32_t n = sched_debug_note(SCHED_DEBUG_SET_RUNNING_EXITING);
+        if ((n & (n - 1u)) == 0u) {
+            serial_printf_unlocked("[sched] set_running on exiting owner pid=%u tid=%u state=%u"
+                                   " exiting=%u (n=%u, refused)\n",
+                                   (unsigned)proc->pid,
+                                   (unsigned)thread->tid,
+                                   (unsigned)proc->state,
+                                   (unsigned)proc->exiting,
+                                   (unsigned)(n + 1u));
+        }
+        return 0;
     }
     if (!process_force_transit(proc, PROCESS_STATE_RUNNING)) {
         return 0;
@@ -3165,8 +3255,7 @@ static void process_wake_thread_joiner(process_t* owner, thread_t* exited) {
     if (waiter->state != THREAD_STATE_BLOCKED) {
         return;
     }
-    process_set_ready(owner, waiter);
-    if (sched_wake_claim_enqueue(waiter)) {
+    if (process_set_ready(owner, waiter) && sched_wake_claim_enqueue(waiter)) {
         sched_enqueue_thread(waiter);
     }
 }

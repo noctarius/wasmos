@@ -910,16 +910,13 @@ static void process_wake_waiters(uint32_t target_pid) {
             if (proc == cpu_local()->current_process && proc->state == PROCESS_STATE_RUNNING &&
                 !__atomic_load_n(&proc->exiting, __ATOMIC_ACQUIRE) && cpu_local()->current_thread &&
                 cpu_local()->current_thread->tid != waiter->tid) {
-                /* Conditional, for the same reason as process_set_ready: the waiter was
-                 * BLOCKED when tested a few lines up, and another CPU can have woken and
-                 * dispatched it since, so writing READY unconditionally would demote a
-                 * RUNNING waiter. Via thread_wake_if_blocked so block_reason is cleared
-                 * with the state -- a READY thread still carrying its old reason is put
-                 * straight back to sleep by the wait paths, which is a lost wakeup that
-                 * wedges the boot. An already-READY waiter still needs the enqueue. */
-                runnable = thread_wake_if_blocked(waiter->tid) ||
-                           __atomic_load_n((uint32_t*)&waiter->state, __ATOMIC_ACQUIRE) ==
-                               THREAD_STATE_READY;
+                /* The owner was just verified as this CPU's RUNNING, non-exiting
+                 * process, so the wake is permitted and `runnable` stays 1. Only
+                 * the DEMOTION is avoided: the waiter was BLOCKED when tested a
+                 * few lines up and may have been woken since, and writing READY
+                 * over RUNNING would lose that dispatch. The handshake below runs
+                 * either way -- it is what covers a target that is executing. */
+                (void)thread_wake_if_blocked(waiter->tid);
             } else {
                 runnable = process_set_ready(proc, waiter);
             }
@@ -3381,18 +3378,23 @@ static int process_set_ready(process_t* proc, thread_t* thread) {
         return 0;
     }
     proc->block_reason = PROCESS_BLOCK_NONE;
-    /* Promote with a CAS, and report only what the CAS won. An unconditional
-     * thread_set_state here could DEMOTE the thread: the sibling this was called
-     * with was READY when the caller picked it, and another CPU can have claimed
-     * and dispatched it since, so writing READY over RUNNING both loses that
-     * dispatch and hands this caller a second enqueue of a thread that is already
-     * executing. BLOCKED is the waiter case, READY the requeue case; anything
-     * else (RUNNING, ZOMBIE) means somebody else owns the thread now. */
-    if (thread_transit(thread, THREAD_STATE_BLOCKED, THREAD_STATE_READY)) {
-        return 1;
-    }
-    return __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_READY ? 1
-                                                                                              : 0;
+    /* Promote only a BLOCKED thread, and via thread_wake_if_blocked so that
+     * block_reason is cleared with the state -- a READY thread still carrying the
+     * reason it blocked for is put straight back to sleep by the wait paths.
+     *
+     * The result is deliberately IGNORED. This function's return value answers
+     * "may this owner's thread be made runnable", NOT "did this call change the
+     * thread's state", and conflating them drops wakes: a thread already READY
+     * (the requeue case) or RUNNING on another CPU (woken between the caller's
+     * test and here) still obliges the caller to complete the wake/block
+     * handshake. sched_wake_claim_enqueue is precisely what covers a target that
+     * is executing right now -- it hands the enqueue to that thread's completion
+     * path -- so reporting 0 for those suppressed the handshake and lost the wake.
+     *
+     * What the conditional promotion does buy is the demotion fix: writing READY
+     * over RUNNING would lose that dispatch, so it is no longer done. */
+    (void)thread_wake_if_blocked(thread->tid);
+    return 1;
 }
 
 /* Returns 1 if proc is now RUNNING, 0 if it raced to a terminal state and must

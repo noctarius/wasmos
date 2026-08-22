@@ -229,6 +229,55 @@ linked feature documents for rationale and rollout plans.
   be reclassified rather than left describing a fixed problem. No DMA row is
   currently divergent.
 
+### Process Lifecycle
+
+- `process_set_ready` and `process_set_running` refuse a transition whose owner
+  is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
+  (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`
+  on that status, and each refusal is counted
+  (`SCHED_DEBUG_SET_READY_EXITING`, `SCHED_DEBUG_SET_RUNNING_EXITING`) with a
+  power-of-two rate-limited report. Refusing is the contract, not a fallback:
+  no caller holds anything that excludes a concurrent kill or exit, so a
+  sibling-requeue racing its owner's teardown is reachable from every call site.
+- Two of those four enqueue sites — the `PROCESS_RUN_EXITED` and
+  `PROCESS_RUN_THREAD_EXITED` sibling-requeues in `process_schedule_once_impl` —
+  used to enqueue unconditionally. The panic was hiding that: the process died
+  before reaching the enqueue, so "enqueue a thread under a dying process" was
+  unreachable in practice and unguarded in code.
+- `process.c` is host-testable behind `WASMOS_PROCESS_TEST_SEAMS`, which replaces
+  its six inline-asm sites, the `KERNEL_HIGHER_HALF_BASE` alias helper and the
+  saved-context rip/rsp validator — the arch facts a lifecycle question does not
+  depend on. `tests/unit/test_process_lifecycle.c` drives it from real pthreads
+  (one scheduler loop per CPU, a killer on the last) at 2, 4 and 8 CPUs, and
+  asserts the refusal counters are non-zero so a run that never entered the
+  window fails instead of passing vacuously. With the guards restored it aborts
+  at every width.
+- A dispatch holds raw pointers to a thread SLOT and a process SLOT across
+  `process_schedule_once_impl` — through the switch AND through the result
+  handling that follows — and reads `time_slice_ticks`, `kstack_top` and
+  `worker_entry` only after dropping the queue lock. `thread_t::dispatch_ref` is
+  what makes those slots un-recyclable for that whole window:
+  `process_schedule_once_impl` takes it once its pick is final and releases it at
+  a single exit, and both `thread_reset_slot` and `process_reap_claim` refuse
+  while it is held.
+- It is a REFERENCE, not a state test, and that is the load-bearing part. The
+  thread's state legitimately changes several times inside the window
+  (READY → RUNNING → ZOMBIE for a thread that exits), so every state-based guard
+  covers only a piece of it and the recycle lands in the rest. Four such guards
+  were tried first and each left a residue; they remain as cheap early rejects
+  (`NEW->RUNNING` is not a legal process transition, the dispatcher re-validates
+  `(tid, owner_pid)` after its claim, and both frees still test
+  `THREAD_STATE_RUNNING`) but the reference is what closes the window.
+- A refused reap is deferred, never dropped: `process_reap_claim` records
+  `reap_requested`, and the dispatch that caused the refusal retries it after
+  releasing the reference, re-resolving the process by pid. Without that the
+  refusal stranded slots — the requester is often a one-shot
+  (`process_reap_zombie_pid` from the PM) and never asks again.
+- `test_process_lifecycle` therefore serialises nothing: spawn, kill and reap all
+  run concurrently with every dispatcher. 0/20 runs abort per width at 2, 4 and 8
+  CPUs and 0/10 at 16, with `spawn_retries=0`; neutralising `dispatch_ref` returns
+  it to 4/15 aborts with the original three signatures.
+
 ### Build, Configuration, and Validation
 
 - Default configuration: **WARP** runtime, single CPU. WARP is the default

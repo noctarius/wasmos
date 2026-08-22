@@ -143,6 +143,19 @@ typedef struct thread {
      * that had already run its check never saw it, and the thread stayed
      * runnable on no run queue forever. */
     uint8_t enqueue_owed;
+    /* Non-zero while a CPU is dispatching this thread: taken by
+     * process_schedule_once_impl once its pick is final and released only after
+     * that dispatch's RESULT has been handled.
+     *
+     * This is a reference, not a state, and that distinction is the point. A
+     * dispatch holds raw pointers to this slot and to its process across a
+     * window in which the thread's STATE legitimately changes several times
+     * (READY -> RUNNING -> ZOMBIE for a thread that exits), so no state test
+     * spans the window: each one closes a piece of it and a slot recycled
+     * elsewhere in the window still reaches the dispatcher as a different
+     * thread. thread_reset_slot and process_reap_claim both refuse while this is
+     * held, which is what makes the slot un-recyclable for the whole dispatch. */
+    uint32_t dispatch_ref;
     struct cpu_sched_s* rq;
     /* The band this thread was actually LINKED into, recorded at enqueue under
      * the queue lock.  Unlink accounting must use this rather than sched_prio:

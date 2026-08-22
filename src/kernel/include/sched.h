@@ -153,6 +153,11 @@ void sched_settle_deferred_enqueue(struct thread* t);
  * runnable thread sits on no run queue. */
 void sched_sweep_owed_enqueues(void);
 
+/* Drop any outstanding owed-enqueue claim on `t` WITHOUT enqueuing it, and
+ * subtract its debt.  For a slot being released to the allocator
+ * (thread_reset_slot); every other consumer of a claim wants to act on it. */
+void sched_drop_owed_enqueue(struct thread* t);
+
 /* Scheduler tripwires, as counters rather than only log lines.  Each tripwire
  * rate-limits its own logging to powers of two, so past the first few hits the
  * log cannot distinguish "fired" from "fired but suppressed"; the counters
@@ -172,6 +177,19 @@ typedef enum {
      * outcome, not a defect, so its report is rate-limited and this counter is
      * the honest total. */
     SCHED_DEBUG_ENQUEUE_CURRENT,
+    /* Ready transitions refused because the owning process was already exiting
+     * or ZOMBIE.  Also a normal outcome: no caller holds anything that excludes
+     * a concurrent kill/exit, so a sibling-requeue can always find the owner
+     * gone.  It was a kpanic ("set_ready zombie") until the counter replaced it;
+     * a fatal report of a race the scheduler is built to absorb turned a
+     * survivable interleaving into a dead machine. */
+    SCHED_DEBUG_SET_READY_EXITING,
+    /* Dispatches refused for the same reason, at the other half of the same
+     * transition pair.  process_set_running already reported this by returning
+     * 0 -- "it raced to a terminal state and must NOT be dispatched" -- and its
+     * callers already honoured that, so the kpanic one line above the return was
+     * fatal about a case the code otherwise handled. */
+    SCHED_DEBUG_SET_RUNNING_EXITING,
     SCHED_DEBUG_EVENT_COUNT
 } sched_debug_event_t;
 

@@ -256,27 +256,48 @@ linked feature documents for rationale and rollout plans.
   `process_schedule_once_impl` — through the switch AND through the result
   handling that follows — and reads `time_slice_ticks`, `kstack_top` and
   `worker_entry` only after dropping the queue lock. `thread_t::dispatch_ref` is
-  what makes those slots un-recyclable for that whole window:
-  `process_schedule_once_impl` takes it once its pick is final and releases it at
-  a single exit, and both `thread_reset_slot` and `process_reap_claim` refuse
-  while it is held.
-- It is a REFERENCE, not a state test, and that is the load-bearing part. The
-  thread's state legitimately changes several times inside the window
-  (READY → RUNNING → ZOMBIE for a thread that exits), so every state-based guard
-  covers only a piece of it and the recycle lands in the rest. Four such guards
-  were tried first and each left a residue; they remain as cheap early rejects
-  (`NEW->RUNNING` is not a legal process transition, the dispatcher re-validates
-  `(tid, owner_pid)` after its claim, and both frees still test
-  `THREAD_STATE_RUNNING`) but the reference is what closes the window.
-- A refused reap is deferred, never dropped: `process_reap_claim` records
-  `reap_requested`, and the dispatch that caused the refusal retries it after
-  releasing the reference, re-resolving the process by pid. Without that the
-  refusal stranded slots — the requester is often a one-shot
-  (`process_reap_zombie_pid` from the PM) and never asks again.
+  what makes those slots un-recyclable for that whole window: a tri-state
+  single-owner claim (`THREAD_SLOT_FREE`/`DISPATCH`/`FROZEN`) that the dispatcher,
+  `thread_reset_slot` and `sched_sweep_owed_enqueues` all contest by CAS from
+  FREE, so exactly one owns the slot and the losers back off.
+- A CAS, not a test-then-act, because the two sides share no lock: the dispatcher
+  claims after `cpu_sched_pick_next` has dropped the queue lock, and the reaper
+  holds only the thread table lock. `process_reap_claim` additionally refuses while
+  any thread of the process is claimed, via one locked pass
+  (`thread_owner_has_active_dispatch`) — the ordinal accessors drop the table lock
+  between calls, so an index walk can have entries shift under it and miss the very
+  thread it is checking for.
+- A CLAIM, not a state test, and that is the load-bearing part. The thread's state
+  legitimately changes several times inside the window (READY → RUNNING → ZOMBIE
+  for a thread that exits), so every state-based guard covers only a piece of it
+  and the recycle lands in the rest. Four such guards were tried first and each
+  left a residue; they remain as cheap early rejects (`NEW->RUNNING` is not a legal
+  process transition, and the dispatcher re-validates `(tid, owner_pid)` after its
+  claim) but the claim is what closes the window.
+- Promotions to READY go through `thread_transit` and report what the CAS won.
+  Writing READY unconditionally could DEMOTE a thread another CPU had already
+  claimed and dispatched, and hand the caller a second enqueue of a thread that is
+  already executing.
+- `proc->exiting`, `proc->thread_count`, `proc->live_thread_count` and the
+  scheduler's progress diagnostics are read and written cross-CPU, so each has one
+  atomic protocol rather than a mix. `live_thread_count` reaching zero gates
+  `process_mark_exited`, so a lost update marks a process exited early or never;
+  the `if (c > 0) c--` those sites used was both non-atomic and a check-then-act,
+  and is now a saturating CAS loop.
+- A refused free is reported, not discarded. `thread_reap` returns whether the slot
+  was released and `thread_reap_owner` returns how many it could not, retrying the
+  short window where a CPU claims a thread of an already-ZOMBIE owner and then
+  loses at `process_set_running`. The detached-thread reap in the result handler is
+  deferred past the claim release, because it targets the very thread that dispatch
+  holds. A refused process reap records `reap_requested`, and the dispatch that
+  caused it retries after releasing — armed as soon as `proc` is known, so early
+  exits do not skip it.
 - `test_process_lifecycle` therefore serialises nothing: spawn, kill and reap all
-  run concurrently with every dispatcher. 0/20 runs abort per width at 2, 4 and 8
-  CPUs and 0/10 at 16, with `spawn_retries=0`; neutralising `dispatch_ref` returns
-  it to 4/15 aborts with the original three signatures.
+  run concurrently with every dispatcher. 0/15 runs abort per width at 8 and 16
+  CPUs and 0/20 at 2, 4 and 8, with `spawn_retries=0`, including five concurrent
+  instances on a 10-core host. Disabling both lifetime guards returns 2/12 aborts
+  at 16 CPUs — they are load-bearing, but now as defence in depth over exposure the
+  CAS claim and the promotion fixes independently closed.
 
 ### Build, Configuration, and Validation
 

@@ -748,13 +748,31 @@ void sched_sweep_owed_enqueues(void) {
         if (sched_thread_is_current_somewhere(t)) {
             continue;
         }
+        /* Take the slot claim before consuming anything. Without it this walk has
+         * the same lifetime hole a dispatch had: thread_reset_slot could release
+         * the slot between the claim being consumed and the enqueue below, so the
+         * enqueue would link a node the next spawn has already re-initialised --
+         * two owners for one node, which is the corruption thread_reset_slot's own
+         * comment describes. Contesting the same word makes the sweep and the free
+         * mutually exclusive. */
+        uint32_t sweep_claim = THREAD_SLOT_FREE;
+        if (!__atomic_compare_exchange_n(&t->dispatch_ref,
+                                         &sweep_claim,
+                                         THREAD_SLOT_DISPATCH,
+                                         0,
+                                         __ATOMIC_ACQ_REL,
+                                         __ATOMIC_ACQUIRE)) {
+            continue; /* dispatching or being freed; its owner settles the debt */
+        }
         if (!sched_take_owed_enqueue(t)) {
+            __atomic_store_n(&t->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
             continue;
         }
         if (__atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE) == THREAD_STATE_READY &&
             !__atomic_load_n(&t->on_rq, __ATOMIC_ACQUIRE)) {
             cpu_sched_enqueue(cpu_sched(), t);
         }
+        __atomic_store_n(&t->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
     }
 }
 

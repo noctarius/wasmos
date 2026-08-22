@@ -10,6 +10,11 @@
 /* Slots in the fixed global thread table, shared by ALL processes: this is a
  * system-wide ceiling, not a per-process one, and a spawn past it fails. */
 #define THREAD_MAX_COUNT 128
+
+/* States of thread_t::dispatch_ref; see its declaration for the protocol. */
+#define THREAD_SLOT_FREE 0u
+#define THREAD_SLOT_DISPATCH 1u
+#define THREAD_SLOT_FROZEN 2u
 /* Bytes of thread_t::name_storage, NUL included. A longer name is refused
  * (the spawn fails) rather than truncated. */
 #define THREAD_NAME_MAX 64
@@ -143,18 +148,26 @@ typedef struct thread {
      * that had already run its check never saw it, and the thread stayed
      * runnable on no run queue forever. */
     uint8_t enqueue_owed;
-    /* Non-zero while a CPU is dispatching this thread: taken by
-     * process_schedule_once_impl once its pick is final and released only after
-     * that dispatch's RESULT has been handled.
+    /* Single-owner claim on the SLOT, contested by CAS between the dispatcher and
+     * whoever frees it. Three states:
      *
-     * This is a reference, not a state, and that distinction is the point. A
-     * dispatch holds raw pointers to this slot and to its process across a
-     * window in which the thread's STATE legitimately changes several times
-     * (READY -> RUNNING -> ZOMBIE for a thread that exits), so no state test
-     * spans the window: each one closes a piece of it and a slot recycled
-     * elsewhere in the window still reaches the dispatcher as a different
-     * thread. thread_reset_slot and process_reap_claim both refuse while this is
-     * held, which is what makes the slot un-recyclable for the whole dispatch. */
+     *   THREAD_SLOT_FREE       (0) nobody owns the slot
+     *   THREAD_SLOT_DISPATCH   (1) a CPU is dispatching this thread
+     *   THREAD_SLOT_FROZEN     (2) thread_reset_slot is tearing it down
+     *
+     * Both sides CAS from FREE, so exactly one wins and the loser backs off:
+     * process_schedule_once_impl gives up the dispatch (SCHED_R_STALE) and
+     * thread_reset_slot refuses the free. A plain "test then act" cannot do this
+     * -- the dispatcher takes its claim after cpu_sched_pick_next has dropped the
+     * queue lock, and the reaper holds only the thread-table lock, so the two
+     * share no mutual exclusion and only a CAS on one word orders them.
+     *
+     * This is a claim on the SLOT, not a thread state, and that distinction is
+     * the point: a dispatch reads kstack_top, time_slice_ticks and worker_entry
+     * after dropping the queue lock, and holds `proc` across the result handling
+     * too, while the thread's STATE legitimately changes several times in that
+     * window (READY -> RUNNING -> ZOMBIE for a thread that exits). No state is
+     * true across it; the claim is. */
     uint32_t dispatch_ref;
     struct cpu_sched_s* rq;
     /* The band this thread was actually LINKED into, recorded at enqueue under
@@ -258,7 +271,17 @@ void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);
  * process slot exclusively. Lock order: takes the thread-table lock and, inside
  * it, the owning run queue's lock (via cpu_sched_remove_thread) -- so never
  * call it while holding a cpu_sched_t lock. */
-void thread_reap_owner(uint32_t owner_pid);
+/* Releases every slot owned by `owner_pid`. Returns the number it could NOT
+ * release because a CPU still held that slot's dispatch claim; 0 is the normal
+ * answer. Retries internally -- a refusal is short-lived by construction -- so a
+ * non-zero return means something is holding a claim far longer than a dispatch
+ * does, which is worth reporting rather than looping on. */
+uint32_t thread_reap_owner(uint32_t owner_pid);
+/* Non-zero if any slot owned by `owner_pid` is claimed for dispatch or RUNNING.
+ * One locked pass: the ordinal accessors drop the table lock between calls, so a
+ * caller walking by index can have entries shift under it and miss the very
+ * thread it is checking for. */
+uint8_t thread_owner_has_active_dispatch(uint32_t owner_pid);
 /* Set state and block_reason under the thread-table lock. Illegal edges per the
  * thread state machine -- notably any attempt to leave ZOMBIE, which would
  * resurrect a thread the reaper is tearing down -- are silently dropped, as is
@@ -285,7 +308,10 @@ void thread_set_exit_status(uint32_t tid, int32_t exit_status);
  * must already know the thread is finished (a zombie, or a spawn being aborted
  * before publication). Silently ignores an unknown tid. Same lock order as
  * thread_reap_owner: table lock, then the run queue's. */
-void thread_reap(uint32_t tid);
+/* Releases one slot. Returns 1 when the slot is free (including when it was
+ * already gone), 0 when a CPU holds its dispatch claim and the caller must retry
+ * rather than account it as reaped. */
+int thread_reap(uint32_t tid);
 /* Publish the calling CPU's current thread (tid 0 clears it). Resolves the tid
  * through the table, so an unknown tid leaves current_thread NULL. */
 void thread_set_current(uint32_t tid);

@@ -190,6 +190,12 @@ typedef enum {
      * callers already honoured that, so the kpanic one line above the return was
      * fatal about a case the code otherwise handled. */
     SCHED_DEBUG_SET_RUNNING_EXITING,
+    /* A detached thread could not be released after its own dispatch ended, and
+     * slots left behind by a process reap.  Both should be unreachable; they are
+     * counted rather than asserted because the cost of being wrong is a leaked
+     * slot, not corruption. */
+    SCHED_DEBUG_THREAD_REAP_REFUSED,
+    SCHED_DEBUG_OWNER_REAP_LEFTOVER,
     SCHED_DEBUG_EVENT_COUNT
 } sched_debug_event_t;
 

@@ -216,6 +216,11 @@ typedef struct process {
     /* Latched by process_mark_exited before the ZOMBIE transition, so it reads
      * 1 slightly ahead of ->state; the scheduler treats either as "do not
      * requeue". */
+    /* Read cross-CPU by the scheduler's refusal guards while the exiting CPU
+     * writes it, so EVERY access goes through __atomic_load_n/__atomic_store_n.
+     * Mixing a plain write with an atomic read is a data race whether or not the
+     * generated code happens to look right, and the compiler is entitled to
+     * elide exactly the refusal those guards exist to make. */
     uint8_t exiting;
     process_state_t state;               /* written only via process.c's CAS */
     process_block_reason_t block_reason; /* meaningful in PROCESS_STATE_BLOCKED */

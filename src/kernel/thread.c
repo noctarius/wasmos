@@ -81,12 +81,19 @@ static int thread_reset_slot(thread_t* thread) {
      * allocator cannot take the slot (this runs under the table lock, and so does
      * thread_find_slot), and the lock-free readers that walk the table all skip a
      * slot whose state is UNUSED. */
-    /* A dispatch in flight owns this slot even when its state has already moved
-     * on: a thread that exits is ZOMBIE for the whole tail of its own result
-     * handling, which is exactly where that handler still reads the slot. The
-     * reference spans the window; no state test does. */
-    if (__atomic_load_n(&thread->dispatch_ref, __ATOMIC_ACQUIRE) != 0u) {
-        return 0;
+    /* Win the slot claim, or refuse. A load-then-teardown would be a TOCTOU
+     * against the dispatcher, which takes its own claim after the queue lock is
+     * dropped: the load could read FREE, the dispatcher could then claim and
+     * start reading kstack_top/worker_entry, and this teardown would proceed
+     * underneath it. Both sides CAS from FREE so exactly one wins. */
+    uint32_t claim = THREAD_SLOT_FREE;
+    if (!__atomic_compare_exchange_n(&thread->dispatch_ref,
+                                     &claim,
+                                     THREAD_SLOT_FROZEN,
+                                     0,
+                                     __ATOMIC_ACQ_REL,
+                                     __ATOMIC_ACQUIRE)) {
+        return 0; /* a dispatch owns it (or another reset is already tearing down) */
     }
     uint32_t expected = __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE);
     if (expected == THREAD_STATE_RUNNING) {
@@ -135,7 +142,6 @@ static int thread_reset_slot(thread_t* thread) {
     list_head_init(&thread->sched_node);
     thread->on_rq = 0;
     thread->rq = 0;
-    thread->dispatch_ref = 0;
     thread->tid = 0;
     thread->owner_pid = 0;
     thread->state = THREAD_STATE_UNUSED;
@@ -164,6 +170,10 @@ static int thread_reset_slot(thread_t* thread) {
         thread->name_storage[i] = '\0';
     }
     thread->name = 0;
+    /* Publish the slot as claimable only now that every field is reset. Until
+     * this store it reads as FROZEN, so neither a dispatcher nor another reset
+     * can take it mid-teardown. */
+    __atomic_store_n(&thread->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
     return 1;
 }
 
@@ -398,6 +408,40 @@ void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status) {
     ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
+/* Non-zero if any slot owned by `owner_pid` is claimed for dispatch or is
+ * currently RUNNING.
+ *
+ * One pass under g_thread_table_lock, on purpose. The ordinal accessors
+ * (thread_owner_tid_at) drop the lock between calls, so a caller walking by index
+ * can have entries shift under it as slots are reaped and skip the one thread it
+ * was looking for -- which for a lifetime check means answering "nobody is
+ * dispatching" while somebody is. The answer is only ever a snapshot, but it has
+ * to be a snapshot of one consistent table.
+ *
+ * Both conditions matter: the claim covers a dispatch whose thread state has
+ * already moved on (a thread that exits is ZOMBIE for the tail of its own result
+ * handling), and RUNNING covers a thread whose claim this caller does not own. */
+uint8_t thread_owner_has_active_dispatch(uint32_t owner_pid) {
+    uint8_t active = 0;
+    if (owner_pid == 0) {
+        return 0;
+    }
+    ksync_spinlock_lock(&g_thread_table_lock);
+    for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
+        thread_t* thread = &g_threads[i];
+        if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
+            continue;
+        }
+        if (__atomic_load_n(&thread->dispatch_ref, __ATOMIC_ACQUIRE) != THREAD_SLOT_FREE ||
+            __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_RUNNING) {
+            active = 1;
+            break;
+        }
+    }
+    ksync_spinlock_unlock(&g_thread_table_lock);
+    return active;
+}
+
 /* Releases every slot belonging to `owner_pid`, whatever its state.  Only safe
  * from the process reap path, which has already won the ZOMBIE -> REAPING claim
  * and therefore owns the process exclusively; called against a live process it
@@ -407,19 +451,47 @@ void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status) {
  * cpu_sched_remove_thread and takes a run-queue lock inside it.  Nothing in the
  * scheduler takes the thread table lock while holding a queue lock, so this
  * direction is the only one and it does not invert. */
-void thread_reap_owner(uint32_t owner_pid) {
+/* Passes thread_reap_owner will make before giving up and reporting leftovers.
+ * A few is plenty: each refusal is a dispatch claim that releases within a
+ * handful of instructions. */
+#define THREAD_REAP_OWNER_PASSES 64u
+
+static uint32_t thread_reap_owner_pass(uint32_t owner_pid);
+
+uint32_t thread_reap_owner(uint32_t owner_pid) {
+    uint32_t refused = 0;
     if (owner_pid == 0) {
-        return;
+        return 0;
     }
+    /* Bounded retry, not a lock. A slot is refused only while some CPU holds its
+     * dispatch claim, and a CPU that claimed a thread of a process this far into
+     * teardown loses at process_set_running (which refuses a ZOMBIE or REAPING
+     * owner) and releases within a handful of instructions. The window provably
+     * closes, so retrying is finite; the bound is there so a bug elsewhere shows
+     * up as a reported leftover rather than a hung reaper. */
+    for (uint32_t pass = 0; pass < THREAD_REAP_OWNER_PASSES; ++pass) {
+        refused = thread_reap_owner_pass(owner_pid);
+        if (refused == 0) {
+            break;
+        }
+    }
+    return refused;
+}
+
+static uint32_t thread_reap_owner_pass(uint32_t owner_pid) {
+    uint32_t refused = 0;
     ksync_spinlock_lock(&g_thread_table_lock);
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t* thread = &g_threads[i];
         if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
             continue;
         }
-        (void)thread_reset_slot(thread);
+        if (!thread_reset_slot(thread)) {
+            refused++;
+        }
     }
     ksync_spinlock_unlock(&g_thread_table_lock);
+    return refused;
 }
 
 /* Legal thread state-machine edges, as enforced below:
@@ -555,15 +627,16 @@ void thread_set_exit_status(uint32_t tid, int32_t exit_status) {
  * must have established that nothing will dispatch it — the join/detach paths
  * reap only a ZOMBIE, the spawn-abort paths reap a thread never published.
  * An unknown tid is a no-op. */
-void thread_reap(uint32_t tid) {
+int thread_reap(uint32_t tid) {
     ksync_spinlock_lock(&g_thread_table_lock);
     thread_t* thread = thread_get_nolock(tid);
     if (!thread) {
         ksync_spinlock_unlock(&g_thread_table_lock);
-        return;
+        return 1; /* already gone: the caller's intent is satisfied */
     }
-    (void)thread_reset_slot(thread);
+    int reaped = thread_reset_slot(thread);
     ksync_spinlock_unlock(&g_thread_table_lock);
+    return reaped;
 }
 
 /* Points the CALLING CPU's current_thread at `tid`, or clears it for tid 0.  An

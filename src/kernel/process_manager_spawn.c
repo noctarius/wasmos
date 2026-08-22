@@ -1439,7 +1439,8 @@ static void pm_poll_sync_spawn(uint32_t pm_context_id) {
     }
 
     process_t* child = process_get(g_pm.spawn.sync_child_pid);
-    if (!child || child->state == PROCESS_STATE_ZOMBIE || child->exiting) {
+    if (!child || child->state == PROCESS_STATE_ZOMBIE ||
+        __atomic_load_n(&child->exiting, __ATOMIC_ACQUIRE)) {
         klog_write("[pm] spawn child-dead pid=");
         serial_write_hex64((uint64_t)g_pm.spawn.sync_child_pid);
         klog_write(" state=");

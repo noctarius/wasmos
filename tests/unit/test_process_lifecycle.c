@@ -99,15 +99,11 @@ _Thread_local cpu_local_t* g_host_cpu_local;
  * not load-bearing -- the refusal assertion is -- but it has to be large enough
  * to land inside a window a few instructions wide.
  *
- * The ceiling is not arbitrary. Past roughly 500 rounds this soak trips a
- * SEPARATE and much deeper race, unrelated to the transitions under test:
- * "spawn publish NEW->LIVE failed" with the slot already in PROCESS_STATE_RUNNING
- * (2), i.e. something dispatched a process between process_find_slot claiming its
- * slot and process_transit publishing it -- a window process.c:1294 asserts
- * cannot be reached. It needs its own investigation and is recorded in
- * docs/TASKS.md; this suite stays below it rather than pretending it is not
- * there, because a case that dies on an unrelated panic proves nothing about
- * this one. */
+ * The ceiling is not arbitrary, but it is no longer about a bug. It used to bound
+ * the soak below the slot-recycle race, which is now fixed (thread_t::
+ * dispatch_ref). It stays because round throughput tracks the host's spare cores
+ * rather than the kernel -- see the assertion notes further down -- so a larger
+ * number would buy variance, not coverage. */
 #define KILL_ROUNDS 300
 
 /* Dispatch attempts, as a BOUND rather than a count. sched_spawn_thread

@@ -1278,34 +1278,42 @@ Source: `architecture/25-diagnostics-status.md`,
   measure across configs and repeated boots first
   (`src/kernel/kernel_sched_smp_stress_runtime.c:140`).
 
-- [ ] [BUG][P1] Fix the spawn-publish race: a process can be DISPATCHED between
-  `process_find_slot` claiming its slot and `process_transit` publishing it.
-  `process_sched_invariant_fail("spawn publish NEW->LIVE failed", pid, state)`
-  fires with `state == PROCESS_STATE_RUNNING` (2), so something ran
-  `process_set_running` on a slot that was still `PROCESS_STATE_NEW` --
-  `src/kernel/process.c:1294` asserts exactly this cannot happen ("the slot is
-  still NEW (never published, so no scheduler/kill path can reach it)"). The
-  exposure window is real: `slot->pid` is stamped at `:1207`, roughly 90 lines
-  before the publish, so the slot is findable by pid while unpublished. The main
-  thread's enqueue is correctly ordered AFTER the publish, so the reachable
-  route is something else -- a recycled `thread_t` a stealer still holds is the
-  first thing to check (`sched_thread.c`'s steal path already documents that
-  `thread_reap_owner` can reset a thread a stealer is holding).
+- [ ] [BUG][P1] Close the dispatch-vs-slot-recycle race. A CPU dispatches through a
+  raw `thread_t*`: `process_schedule_once_impl` picks a thread, drops the queue
+  lock, validates it, and only then reads `time_slice_ticks`, `kstack_top` and
+  `worker_entry`. If the slot is reaped and re-claimed by a new spawn anywhere in
+  that sequence, those reads come from a DIFFERENT, half-initialised thread. Three
+  panics are the same cause seen at different instants:
 
-  Reproduce: `tests/unit/test_process_lifecycle.c` with its spawn gate removed
-  (`park_dispatchers()`/`resume_dispatchers()` around `spawn_race_target`), at
-  `WASMOS_TEST_NCPU=4` or `8`. 1-2 runs in 12 abort; at `NCPU=16` it is close to
-  every run. That suite gates spawning against dispatch precisely so it measures
-  its own subject instead of dying on this.
-- [ ] [BUG][P1] Fix the reap-recycle race: a zeroed or recycled thread slot reaches
-  the dispatcher, which reports it as
-  `process_sched_invariant_fail("zero time slice", tid, 0)` with `tid == 0` --
-  `time_slice_ticks` is assigned at every spawn site, so a zero means the slot
-  was reset underneath a CPU that had already selected it. Same reproduction as
-  above with the gate removed from around `process_reap_zombie_pid` instead, at
-  `WASMOS_TEST_NCPU=8`. Also seen once as
-  `process_sched_invariant_fail("current owner mismatch", 0, tid)`, which is
-  likely the same cause observed one step earlier.
+    - `zero time slice` — the slot was re-stamped (name and tid already set by
+      `thread_spawn_in_owner`) but `is_kernel_worker` and `time_slice_ticks` not
+      yet, which `process_thread_spawn_worker_internal` assigns afterwards.
+      Captured: `name=race-sibling tid=146 picked=138 owner=18 state=3 kw=0
+      slice=0`.
+    - `spawn publish NEW->LIVE failed` — the same recycle when the new owner is
+      still `PROCESS_STATE_NEW`, so the dispatch transits it to RUNNING and the
+      spawner's own `NEW->READY` CAS loses.
+    - `current owner mismatch` — the same recycle observed one step later.
+
+  Partially mitigated, NOT closed. `process_transition_legal` no longer permits
+  `NEW->RUNNING`, and the dispatcher re-validates `(tid, owner_pid)` against a
+  snapshot taken after the steal swap; that took the ungated reproduction from
+  12/12 aborts to single digits. What remains is structural: the recycle can land
+  in any window between the last check and the use, and re-checking cannot close
+  it. Two attempts that did NOT measurably help and were reverted rather than
+  landed — refusing to reap a process with a thread claimed for dispatch
+  (`process_reap_claim`), and refusing/CAS-guarding the slot free against
+  `THREAD_STATE_RUNNING` in `thread_reset_slot`. A real fix likely has to make the
+  slot itself un-recyclable for the duration of a dispatch (a reference the
+  allocator honours), rather than testing state.
+
+  Reproduce: `tests/unit/test_process_lifecycle.c` with `park_dispatchers()`
+  turned into a no-op, at `WASMOS_TEST_NCPU=8` or `16`. 3-7 runs in 12 abort;
+  before the two mitigations above it was 10-12 in 12. That suite gates spawn and
+  reap against dispatch precisely so it measures its own subject; the gates must
+  stay until this is closed. Note the 12-run sample cannot separate the remaining
+  configurations — differences of 2-3 runs are noise at that size.
+
 - [ ] [BUG][P1] Confirm the SMP scheduler stress panic stays fixed. One cause is
   found and fixed: dispatch took no exclusive claim on the thread it was about
   to run, so two CPUs could resume one `process_context_t` on one kernel stack

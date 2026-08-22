@@ -2673,10 +2673,9 @@ add_custom_target(run-kernel-unit-tests
   # Run at several widths for the same reasons as test_sched_concurrency: every
   # CPU but one runs a scheduler loop, so the width changes how many dispatchers
   # can retire threads of one process at once. NCPU=16 is deliberately NOT in the
-  # sweep -- at that width the soak's spawn/reap churn trips a separate and much
-  # deeper race ("spawn publish NEW->LIVE failed" with the slot already RUNNING),
-  # tracked in docs/TASKS.md; a case that dies on an unrelated panic proves
-  # nothing about this one.
+  # sweep -- at that width the soak trips the dispatch-vs-slot-recycle race
+  # tracked in docs/TASKS.md, which is still open; a case that dies on an
+  # unrelated panic proves nothing about this one.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
           -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_PROCESS_TEST_SEAMS=1 -DWASMOS_TEST_NCPU=2
           -include ${LIBC_DIR}/include/wasmos_cast.h

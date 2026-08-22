@@ -253,8 +253,13 @@ linked feature documents for rationale and rollout plans.
   window fails instead of passing vacuously. With the guards restored it aborts
   at every width.
 - That suite serialises spawn and reap against dispatch through a park barrier.
-  Not incidental: doing either concurrently trips two further races, both
-  recorded in `TASKS.md` and neither related to the transitions above.
+  Not incidental: doing either concurrently trips the dispatch-vs-slot-recycle
+  race recorded in `TASKS.md`, which is unrelated to the transitions above and
+  still open. `NEW->RUNNING` is no longer a legal process transition and the
+  dispatcher re-validates a thread's `(tid, owner_pid)` against a snapshot taken
+  after the steal swap, which took that reproduction from 12/12 aborts to single
+  digits — but it is mitigation, not a fix, and the barrier stays until the slot
+  itself cannot be recycled under a dispatch.
 
 ### Build, Configuration, and Validation
 

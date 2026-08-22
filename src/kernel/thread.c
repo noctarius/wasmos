@@ -61,6 +61,25 @@ static void thread_reset_slot(thread_t* thread) {
      * returns that one node on every dispatch forever ("[sched] dequeued
      * non-ready" at scheduler speed, livelocking the CPU). */
     cpu_sched_remove_thread(thread);
+    /* Drop any owed-enqueue claim, for the same reason the node above is
+     * unlinked: it is scheduler state the allocator must not hand to the next
+     * spawn.  Two distinct defects, both by inspection -- this field is simply
+     * absent from the reset below, which clears every other scheduler field:
+     *
+     *   - g_enqueue_owed_count is never decremented for the reaped thread, so it
+     *     ratchets upward and sched_sweep_owed_enqueues never returns to its
+     *     cheap no-debt path again.
+     *   - the claim itself outlives the thread, and the sweep's only guard is
+     *     `tid == 0` -- which a slot the next spawn has already re-stamped does
+     *     not satisfy.  The claim is then honoured against that new thread,
+     *     enqueuing it before its spawner has assigned time_slice_ticks or
+     *     published its process.
+     *
+     * The second is a plausible contributor to the "zero time slice" and "spawn
+     * publish NEW->LIVE failed" panics tracked in docs/TASKS.md, but clearing it
+     * did not measurably reduce either on its own; it is fixed here because it is
+     * wrong, not because it closes those. */
+    sched_drop_owed_enqueue(thread);
     /* Leave the node in the canonical detached form.  A zero-filled node (BSS at
      * boot, before any sched_thread_init) has next == NULL, which list_head_empty
      * reports as LINKED -- so "is this thread queued?" answers wrongly for every

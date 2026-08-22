@@ -679,8 +679,17 @@ static int process_transition_legal(process_state_t from, process_state_t to) {
         return 0; /* only the guarded edges above reach these */
     }
     if (from == PROCESS_STATE_NEW) {
-        return to == PROCESS_STATE_READY || to == PROCESS_STATE_RUNNING ||
-               to == PROCESS_STATE_BLOCKED || to == PROCESS_STATE_ZOMBIE;
+        /* NEW means "slot claimed, not yet published".  The publish itself is
+         * NEW->READY (a normal spawn) or NEW->BLOCKED (a parked one), and a spawn
+         * that fails part-way goes NEW->ZOMBIE.  RUNNING is deliberately NOT in
+         * that set: it would mean some CPU dispatched a process whose spawner has
+         * not finished building it, and it is what turned a stale-thread-pointer
+         * dispatch into a corrupted publish -- process_set_running would transit
+         * NEW->RUNNING, and the spawner's own NEW->READY CAS then failed with
+         * "spawn publish NEW->LIVE failed".  Refusing the edge means the publish
+         * cannot lose that race no matter what reaches process_set_running. */
+        return to == PROCESS_STATE_READY || to == PROCESS_STATE_BLOCKED ||
+               to == PROCESS_STATE_ZOMBIE;
     }
     /* from is READY/RUNNING/BLOCKED; to is READY/RUNNING/BLOCKED/ZOMBIE. */
     return 1;
@@ -2161,6 +2170,17 @@ static int process_schedule_once_impl(void) {
             }
         }
     }
+    /* The identity this dispatch is about, captured once `thread` is final -- the
+     * steal branch above can replace it, so snapshotting before that compares the
+     * idle thread's tid against the stolen thread's and rejects every steal.
+     *
+     * A thread_t is a SLOT: thread_reset_slot zeroes tid/owner_pid and hands it
+     * back to the allocator, and the next spawn re-stamps both.  Every check below
+     * reads through the pointer, so without a snapshot to compare against, a slot
+     * reaped and re-claimed between here and the dispatch passes each check
+     * individually -- as a different thread, of a different process.  See the
+     * re-validation after the dispatch claim. */
+    uint32_t picked_tid = thread->tid;
     process_t* proc = process_owner_for_thread(thread);
     if (!proc || !proc->entry) {
         /* Idle losing its owner really is the panic case; any other thread
@@ -2212,6 +2232,24 @@ static int process_schedule_once_impl(void) {
                           (unsigned)(cn + 1u));
         }
         return SCHED_R_CLAIMED;
+    }
+
+    /* Re-validate the identity now that the claim is held.  The steal path above
+     * asks only "does this thread still have an owner", which a slot that has
+     * been reaped AND re-claimed by a new spawn answers yes to -- with the new
+     * owner.  Comparing against the snapshot is what distinguishes "still the
+     * thread we picked" from "same slot, different thread": a mismatch means the
+     * slot was recycled mid-flight, which is the reap race the file already
+     * treats as normal (SCHED_R_STALE), not a defect.
+     *
+     * Releasing the claim mirrors the terminal-state path below.  If the slot was
+     * reset rather than re-claimed its state is UNUSED, so the transit simply
+     * fails and leaves it alone; if it was re-claimed, handing it back to READY
+     * is the repair -- this CPU marked a brand-new thread RUNNING that it has no
+     * business running. */
+    if (thread->tid != picked_tid || thread->owner_pid != proc->pid) {
+        (void)thread_transit(thread, THREAD_STATE_RUNNING, THREAD_STATE_READY);
+        return SCHED_R_STALE;
     }
 
     if (!process_set_running(proc, thread)) {

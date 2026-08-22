@@ -153,6 +153,11 @@ void sched_settle_deferred_enqueue(struct thread* t);
  * runnable thread sits on no run queue. */
 void sched_sweep_owed_enqueues(void);
 
+/* Drop any outstanding owed-enqueue claim on `t` WITHOUT enqueuing it, and
+ * subtract its debt.  For a slot being released to the allocator
+ * (thread_reset_slot); every other consumer of a claim wants to act on it. */
+void sched_drop_owed_enqueue(struct thread* t);
+
 /* Scheduler tripwires, as counters rather than only log lines.  Each tripwire
  * rate-limits its own logging to powers of two, so past the first few hits the
  * log cannot distinguish "fired" from "fired but suppressed"; the counters

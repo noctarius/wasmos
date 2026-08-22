@@ -252,14 +252,20 @@ linked feature documents for rationale and rollout plans.
   asserts the refusal counters are non-zero so a run that never entered the
   window fails instead of passing vacuously. With the guards restored it aborts
   at every width.
-- That suite serialises spawn and reap against dispatch through a park barrier.
-  Not incidental: doing either concurrently trips the dispatch-vs-slot-recycle
-  race recorded in `TASKS.md`, which is unrelated to the transitions above and
-  still open. `NEW->RUNNING` is no longer a legal process transition and the
-  dispatcher re-validates a thread's `(tid, owner_pid)` against a snapshot taken
-  after the steal swap, which took that reproduction from 12/12 aborts to single
-  digits — but it is mitigation, not a fix, and the barrier stays until the slot
-  itself cannot be recycled under a dispatch.
+- A dispatch holds a raw pointer to a thread SLOT and reads `time_slice_ticks`,
+  `kstack_top` and `worker_entry` only after dropping the queue lock, so a slot
+  recycled in that window hands the dispatching CPU a different thread. The spawn
+  side of that is closed: `NEW->RUNNING` is not a legal process transition, and
+  the dispatcher re-validates `(tid, owner_pid)` against a snapshot taken after
+  the steal swap. The reap side is guarded but not closed:
+  `thread_reset_slot` refuses a slot in `THREAD_STATE_RUNNING` and claims the
+  free with a CAS on that word, so it serialises against
+  `cpu_sched_claim_for_dispatch`, which takes no table lock.
+- `test_process_lifecycle` therefore still serialises REAP against dispatch
+  through a park barrier, and no longer serialises spawn. Each path is clean
+  individually (0/20 per width with one ungated); ungating both is 10/20 at 8
+  CPUs, which is the interaction `TASKS.md` still tracks. The kill is never
+  gated — that overlap is the suite's subject.
 
 ### Build, Configuration, and Validation
 

@@ -48,9 +48,50 @@ static void thread_clear_ctx(process_context_t* ctx) {
  * Every caller except thread_init() holds g_thread_table_lock; thread_init runs
  * once on the BSP before any other thread exists, so there is nothing to
  * exclude. */
-static void thread_reset_slot(thread_t* thread) {
+/* Returns 1 when the slot was released to the allocator, 0 when it was left
+ * alone because a CPU has it claimed for dispatch.
+ *
+ * A dispatch works through a raw pointer to a SLOT: process_schedule_once_impl
+ * picks a thread, drops the queue lock, validates it, and only then reads
+ * kstack_top, time_slice_ticks and worker_entry. Releasing the slot anywhere in
+ * that sequence leaves the dispatching CPU reading a zeroed thread -- observed as
+ * process_sched_invariant_fail("zero time slice") with tid 0 -- and, once the
+ * allocator hands it on, running on a stack that belongs to somebody else.
+ * Re-validating in the dispatcher cannot close it: the reset can land in any
+ * window between the last check and the use.
+ *
+ * THREAD_STATE_RUNNING is the marker because cpu_sched_claim_for_dispatch sets it
+ * BEFORE the dispatcher touches anything fragile, so it covers the whole
+ * sequence. Refusing defers the teardown rather than dropping it: the claiming
+ * CPU's dispatch ends in process_schedule_once_impl and the reap is retried from
+ * there (process_try_auto_reap) and from the wait/PM paths. */
+static int thread_reset_slot(thread_t* thread) {
     if (!thread) {
-        return;
+        return 0;
+    }
+    /* Claim the free with a CAS on the same word cpu_sched_claim_for_dispatch
+     * writes. A plain test-then-teardown is a TOCTOU against it: this function
+     * runs under g_thread_table_lock, which serialises free against ALLOCATE, but
+     * a dispatch claim takes no table lock, so the two only serialise if both go
+     * through the state word. Reading a non-RUNNING state here and tearing down
+     * afterwards lets a claim land in between and hand the claiming CPU a zeroed
+     * slot.
+     *
+     * Publishing UNUSED before the unlink below is safe and deliberate: the
+     * allocator cannot take the slot (this runs under the table lock, and so does
+     * thread_find_slot), and the lock-free readers that walk the table all skip a
+     * slot whose state is UNUSED. */
+    uint32_t expected = __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE);
+    if (expected == THREAD_STATE_RUNNING) {
+        return 0;
+    }
+    if (!__atomic_compare_exchange_n((uint32_t*)&thread->state,
+                                     &expected,
+                                     (uint32_t)THREAD_STATE_UNUSED,
+                                     0,
+                                     __ATOMIC_ACQ_REL,
+                                     __ATOMIC_ACQUIRE)) {
+        return 0; /* a dispatch claim (or another transition) won; retry later */
     }
     /* Unlink from whatever run queue still holds this thread BEFORE the slot is
      * released to the allocator.  A slot freed while its sched_node is linked is
@@ -115,6 +156,7 @@ static void thread_reset_slot(thread_t* thread) {
         thread->name_storage[i] = '\0';
     }
     thread->name = 0;
+    return 1;
 }
 
 static thread_t* thread_find_slot(void) {
@@ -148,7 +190,7 @@ void thread_init(void) {
     ksync_spinlock_init(&g_thread_table_lock);
     g_next_tid = 1;
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
-        thread_reset_slot(&g_threads[i]);
+        (void)thread_reset_slot(&g_threads[i]);
     }
 }
 
@@ -209,13 +251,13 @@ int thread_spawn_in_owner(uint32_t owner_pid, const char* name, thread_state_t i
     slot->detached = 0;
     slot->exit_status = 0;
     if (thread_copy_name(slot, name ? name : "") != 0) {
-        thread_reset_slot(slot);
+        (void)thread_reset_slot(slot);
         ksync_spinlock_unlock(&g_thread_table_lock);
         return -1;
     }
     /* Publish: NEW -> READY|BLOCKED once the slot is fully built. */
     if (!thread_transit(slot, THREAD_STATE_NEW, initial_state)) {
-        thread_reset_slot(slot);
+        (void)thread_reset_slot(slot);
         ksync_spinlock_unlock(&g_thread_table_lock);
         return -1;
     }
@@ -367,7 +409,7 @@ void thread_reap_owner(uint32_t owner_pid) {
         if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
             continue;
         }
-        thread_reset_slot(thread);
+        (void)thread_reset_slot(thread);
     }
     ksync_spinlock_unlock(&g_thread_table_lock);
 }
@@ -512,7 +554,7 @@ void thread_reap(uint32_t tid) {
         ksync_spinlock_unlock(&g_thread_table_lock);
         return;
     }
-    thread_reset_slot(thread);
+    (void)thread_reset_slot(thread);
     ksync_spinlock_unlock(&g_thread_table_lock);
 }
 

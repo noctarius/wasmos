@@ -1278,41 +1278,45 @@ Source: `architecture/25-diagnostics-status.md`,
   measure across configs and repeated boots first
   (`src/kernel/kernel_sched_smp_stress_runtime.c:140`).
 
-- [ ] [BUG][P1] Close the dispatch-vs-slot-recycle race. A CPU dispatches through a
-  raw `thread_t*`: `process_schedule_once_impl` picks a thread, drops the queue
-  lock, validates it, and only then reads `time_slice_ticks`, `kstack_top` and
-  `worker_entry`. If the slot is reaped and re-claimed by a new spawn anywhere in
-  that sequence, those reads come from a DIFFERENT, half-initialised thread. Three
-  panics are the same cause seen at different instants:
+- [ ] [BUG][P1] Close the remaining dispatch-vs-reap window. A dispatch works
+  through a raw `thread_t*` to a SLOT: `process_schedule_once_impl` picks a
+  thread, drops the queue lock, validates it, and only then reads
+  `time_slice_ticks`, `kstack_top` and `worker_entry`. A slot torn down in that
+  sequence leaves the dispatching CPU reading a zeroed thread
+  (`process_sched_invariant_fail("zero time slice")` with tid 0) and, once the
+  allocator hands the slot on, running on somebody else's stack.
 
-    - `zero time slice` — the slot was re-stamped (name and tid already set by
-      `thread_spawn_in_owner`) but `is_kernel_worker` and `time_slice_ticks` not
-      yet, which `process_thread_spawn_worker_internal` assigns afterwards.
-      Captured: `name=race-sibling tid=146 picked=138 owner=18 state=3 kw=0
-      slice=0`.
-    - `spawn publish NEW->LIVE failed` — the same recycle when the new owner is
-      still `PROCESS_STATE_NEW`, so the dispatch transits it to RUNNING and the
-      spawner's own `NEW->READY` CAS loses.
-    - `current owner mismatch` — the same recycle observed one step later.
+  Two paths could recycle a slot under a dispatch. The SPAWN path is closed:
+  `process_transition_legal` no longer permits `NEW->RUNNING`, and the dispatcher
+  re-validates `(tid, owner_pid)` against a snapshot taken after the steal swap.
+  The REAP path is not: `thread_reset_slot` now refuses a slot whose state is
+  `THREAD_STATE_RUNNING` and claims the free with a CAS on that same word (so it
+  serialises against `cpu_sched_claim_for_dispatch`, which takes no table lock),
+  which is enough at the widths the gate runs but not in general.
 
-  Partially mitigated, NOT closed. `process_transition_legal` no longer permits
-  `NEW->RUNNING`, and the dispatcher re-validates `(tid, owner_pid)` against a
-  snapshot taken after the steal swap; that took the ungated reproduction from
-  12/12 aborts to single digits. What remains is structural: the recycle can land
-  in any window between the last check and the use, and re-checking cannot close
-  it. Two attempts that did NOT measurably help and were reverted rather than
-  landed — refusing to reap a process with a thread claimed for dispatch
-  (`process_reap_claim`), and refusing/CAS-guarding the slot free against
-  `THREAD_STATE_RUNNING` in `thread_reset_slot`. A real fix likely has to make the
-  slot itself un-recyclable for the duration of a dispatch (a reference the
-  allocator honours), rather than testing state.
+  Measured with `tests/unit/test_process_lifecycle.c`, 15-20 runs per width, by
+  turning individual `park_dispatchers()` calls into no-ops:
 
-  Reproduce: `tests/unit/test_process_lifecycle.c` with `park_dispatchers()`
-  turned into a no-op, at `WASMOS_TEST_NCPU=8` or `16`. 3-7 runs in 12 abort;
-  before the two mitigations above it was 10-12 in 12. That suite gates spawn and
-  reap against dispatch precisely so it measures its own subject; the gates must
-  stay until this is closed. Note the 12-run sample cannot separate the remaining
-  configurations — differences of 2-3 runs are noise at that size.
+  | ungated       | 2 CPUs | 4 CPUs | 8 CPUs | 16 CPUs |
+  | ------------- | ------ | ------ | ------ | ------- |
+  | spawn only    | 0/20   | 0/20   | 0/20   | -       |
+  | reap only     | 0/15   | 0/15   | 0/15   | 14/15   |
+  | both          | 0/20   | 1/20   | 10/20  | -       |
+
+  The last row is the point: each path is individually clean and together they
+  are not, so the remaining defect is the interaction -- concurrent reap
+  supplying free slots while concurrent spawn re-stamps them. 16 CPUs on a
+  ~10-core host is extreme oversubscription and widens every window; it is not in
+  the gate sweep, and it is the configuration to reproduce against.
+
+  A real fix probably has to make a slot un-recyclable for the duration of a
+  dispatch -- a reference the allocator honours -- rather than testing or CAS-ing
+  state. Note that a 12-15 run sample cannot separate configurations differing by
+  2-3 runs; an earlier pass drew the wrong conclusion from exactly that, and from
+  measuring the reap path while the spawn path was still open.
+
+  The suite's remaining reap barrier stays until this is closed. Its spawn
+  barrier has been removed.
 
 - [ ] [BUG][P1] Confirm the SMP scheduler stress panic stays fixed. One cause is
   found and fixed: dispatch took no exclusive claim on the thread it was about

@@ -314,18 +314,20 @@ static int spawn_race_target(uint32_t* out_pid) {
 
 /* ------------------------------------------------------- the kill race soak */
 
-/* Spawn gate. Raising it parks every dispatcher OUTSIDE process_schedule_once,
- * and the spawner waits for all of them to acknowledge before it spawns.
+/* Reap gate. Raising it parks every dispatcher OUTSIDE process_schedule_once and
+ * waits for all of them to acknowledge, so a slot teardown cannot overlap a
+ * dispatch.
  *
- * This exists because spawning concurrently with dispatch trips a different and
- * much deeper bug: "spawn publish NEW->LIVE failed" with the slot already in
- * PROCESS_STATE_RUNNING, i.e. something dispatched a process between
- * process_find_slot claiming its slot and process_transit publishing it -- a
- * window process.c:1294 asserts cannot be reached. It reproduces here at 1-2
- * runs in 12 at 4 and 8 CPUs and is recorded in docs/TASKS.md. Serialising
- * spawn against dispatch keeps THIS suite measuring the transition race it is
- * about; a gate test that fails one run in six on an unrelated panic is worse
- * than no gate test. */
+ * SPAWN no longer needs it: process_transition_legal refusing NEW->RUNNING plus
+ * the dispatcher's post-claim identity re-validation closed that path, measured
+ * at 0/20 aborts per width with spawn ungated. REAP still does -- ungate it and
+ * the suite aborts 8 runs in 15 at 8 CPUs on the dispatch-vs-slot-recycle race
+ * tracked in docs/TASKS.md. The two also interact: each path is individually
+ * clean, and ungating BOTH is 10/20 at 8 CPUs.
+ *
+ * The KILL is deliberately never gated -- that overlap is this suite's subject.
+ * A gate test that fails one run in six on an unrelated panic is worse than no
+ * gate test, which is the whole reason the remaining barrier stays. */
 static uint32_t g_park_request;
 static uint32_t g_parked[WASMOS_MAX_CPUS];
 
@@ -443,10 +445,7 @@ static void s_kill_races_the_lifecycle_transitions(void) {
     for (uint32_t round = 0; round < KILL_ROUNDS; ++round) {
         uint32_t pid = 0;
 
-        park_dispatchers();
-        int spawn_rc = spawn_race_target(&pid);
-        resume_dispatchers();
-        if (spawn_rc != 0) {
+        if (spawn_race_target(&pid) != 0) {
             /* Slots are recycled only by the reap below, and a killed process
              * is not instantly reapable; a transient shortage is expected under
              * NCPU dispatchers. Give the dispatchers a turn and retry. */
@@ -530,10 +529,7 @@ static void s_healthy_owner_still_runs_and_requeues(void) {
     be_cpu(0);
     start_dispatchers(NCPU); /* no killer in this case: every other CPU dispatches */
 
-    park_dispatchers();
-    int spawn_rc = spawn_race_target(&pid);
-    resume_dispatchers();
-    CHECK(spawn_rc == 0, "spawned a target with a sibling and a retiring worker");
+    CHECK(spawn_race_target(&pid) == 0, "spawned a target with a sibling and a retiring worker");
 
     uint32_t retired_before = __atomic_load_n(&g_workers_retired, __ATOMIC_ACQUIRE);
     for (uint32_t i = 0; i < DISPATCH_BOUND; ++i) {

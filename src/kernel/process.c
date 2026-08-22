@@ -974,8 +974,47 @@ static uint8_t process_has_waiters(uint32_t target_pid) {
  * freeing the same process's stacks/memory when work-stealing causes concurrent
  * exits/waits to arrive on different CPUs.  All reap paths (auto-reap, wait,
  * PM wait-reply) funnel through here so the CAS is the single gate. */
+/* Non-zero while any thread of `proc` is claimed for dispatch.
+ * THREAD_STATE_RUNNING is set by cpu_sched_claim_for_dispatch, which a CPU wins
+ * BEFORE process_set_running and holds until its result has been handled, so it
+ * spans the whole dispatch.  (sched_thread.c's own
+ * sched_thread_is_current_somewhere reads current_thread, which is cleared before
+ * the result handling and therefore cannot see the tail of the window.) */
+static uint8_t process_has_dispatched_thread(const process_t* proc) {
+    if (!proc) {
+        return 0;
+    }
+    for (uint32_t i = 0;; ++i) {
+        uint32_t tid = 0;
+        thread_t* thread = 0;
+        if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
+            break;
+        }
+        thread = thread_get(tid);
+        if (thread &&
+            __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_RUNNING) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void process_reap_claim(process_t* proc) {
     if (!proc) {
+        return;
+    }
+    /* Never free a process slot out from under a CPU that is dispatching one of
+     * its threads.  process_schedule_once_impl holds `proc` as a raw pointer
+     * across the dispatch AND across the result handling that follows, so a slot
+     * freed and re-allocated in that window makes the handler act on whatever
+     * process now owns the slot: observed as process_mark_exited landing on a
+     * freshly spawned, still-NEW process, whose own publish then failed with
+     * "spawn publish NEW->LIVE failed (state=ZOMBIE)".
+     *
+     * Refusing defers the reap rather than dropping it: the dispatch ends in
+     * process_schedule_once_impl, which retries via process_try_auto_reap, and
+     * the wait/PM paths retry independently. */
+    if (process_has_dispatched_thread(proc)) {
         return;
     }
     /* The single ZOMBIE -> REAPING claim: only the CPU whose CAS wins proceeds

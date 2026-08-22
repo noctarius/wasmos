@@ -260,7 +260,10 @@ linked feature documents for rationale and rollout plans.
   the steal swap. The reap side is guarded but not closed:
   `thread_reset_slot` refuses a slot in `THREAD_STATE_RUNNING` and claims the
   free with a CAS on that word, so it serialises against
-  `cpu_sched_claim_for_dispatch`, which takes no table lock.
+  `cpu_sched_claim_for_dispatch`, which takes no table lock. `process_reap_claim`
+  refuses on the same condition, because a dispatch holds its process pointer
+  across the result handling too — a slot freed there let `process_mark_exited`
+  land on a freshly spawned, still-`NEW` process.
 - `test_process_lifecycle` therefore still serialises REAP against dispatch
   through a park barrier, and no longer serialises spawn. Each path is clean
   individually (0/20 per width with one ungated); ungating both is 10/20 at 8

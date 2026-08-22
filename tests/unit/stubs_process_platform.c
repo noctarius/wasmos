@@ -84,12 +84,17 @@ int paging_verify_user_root_no_low_slot(uint64_t root_table, int log_failures) {
  * which free() cannot express. A lifecycle test leaks its stacks by design;
  * the alternative is a real allocator, which is a different test's subject. */
 uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
-    void* p = 0;
     (void)max_addr;
     if (pages == 0) {
         return 0;
     }
-    if (posix_memalign(&p, STUB_PAGE_SIZE, (size_t)(pages * STUB_PAGE_SIZE)) != 0 || !p) {
+    /* aligned_alloc, not posix_memalign: the latter is POSIX and glibc hides it
+     * behind _POSIX_C_SOURCE, which -std=c11 does not set, so it compiles on
+     * macOS (where stdlib.h declares it unconditionally) and fails on Linux.
+     * aligned_alloc is C11 itself, and its requirement that the size be a
+     * multiple of the alignment is satisfied by construction here. */
+    void* p = aligned_alloc(STUB_PAGE_SIZE, (size_t)(pages * STUB_PAGE_SIZE));
+    if (!p) {
         return 0;
     }
     return (uint64_t)(uintptr_t)p;

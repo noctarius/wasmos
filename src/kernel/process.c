@@ -910,12 +910,16 @@ static void process_wake_waiters(uint32_t target_pid) {
             if (proc == cpu_local()->current_process && proc->state == PROCESS_STATE_RUNNING &&
                 !__atomic_load_n(&proc->exiting, __ATOMIC_ACQUIRE) && cpu_local()->current_thread &&
                 cpu_local()->current_thread->tid != waiter->tid) {
-                /* CAS, for the same reason as process_set_ready: the waiter was
-                 * BLOCKED when tested a few lines up, and another CPU can have
-                 * woken and dispatched it since. Writing READY unconditionally
-                 * would demote a RUNNING waiter, and the enqueue below has to
-                 * follow what the transition actually won. */
-                runnable = thread_transit(waiter, THREAD_STATE_BLOCKED, THREAD_STATE_READY);
+                /* Conditional, for the same reason as process_set_ready: the waiter was
+                 * BLOCKED when tested a few lines up, and another CPU can have woken and
+                 * dispatched it since, so writing READY unconditionally would demote a
+                 * RUNNING waiter. Via thread_wake_if_blocked so block_reason is cleared
+                 * with the state -- a READY thread still carrying its old reason is put
+                 * straight back to sleep by the wait paths, which is a lost wakeup that
+                 * wedges the boot. An already-READY waiter still needs the enqueue. */
+                runnable = thread_wake_if_blocked(waiter->tid) ||
+                           __atomic_load_n((uint32_t*)&waiter->state, __ATOMIC_ACQUIRE) ==
+                               THREAD_STATE_READY;
             } else {
                 runnable = process_set_ready(proc, waiter);
             }

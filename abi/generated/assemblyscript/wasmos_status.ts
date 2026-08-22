@@ -163,6 +163,7 @@ export const WASMOS_ERR_DMA_DENY: i32 = -0x000F0001; // the DMA capability or po
 export const WASMOS_ERR_DMA_INVALID: i32 = -0x000F0002; // invalid DMA arguments (direction, handle, or length)
 export const WASMOS_ERR_DMA_RANGE: i32 = -0x000F0003; // the requested subrange lies outside the mapped object
 export const WASMOS_ERR_DMA_UNAVAILABLE: i32 = -0x000F0004; // no DMA mapping slot or backing is available
+export const WASMOS_ERR_DMA_ADDR_TOO_LARGE: i32 = -0x000F0005; // the device address does not fit the signed 32-bit host-call return channel
 export const WASMOS_ERR_IRQ_BAD_LINE: i32 = -0x00100001; // irq line is outside the supported range
 export const WASMOS_ERR_IRQ_NOT_AUTHORIZED: i32 = -0x00100002; // caller lacks irq.route, or the line is not in its allowlist
 export const WASMOS_ERR_IRQ_BAD_ENDPOINT: i32 = -0x00100003; // target endpoint is invalid or not owned by the caller
@@ -416,6 +417,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_DMA_INVALID: return "invalid DMA arguments (direction, handle, or length)";
     case WASMOS_ERR_DMA_RANGE: return "the requested subrange lies outside the mapped object";
     case WASMOS_ERR_DMA_UNAVAILABLE: return "no DMA mapping slot or backing is available";
+    case WASMOS_ERR_DMA_ADDR_TOO_LARGE: return "the device address does not fit the signed 32-bit host-call return channel";
     case WASMOS_ERR_IRQ_BAD_LINE: return "irq line is outside the supported range";
     case WASMOS_ERR_IRQ_NOT_AUTHORIZED: return "caller lacks irq.route, or the line is not in its allowlist";
     case WASMOS_ERR_IRQ_BAD_ENDPOINT: return "target endpoint is invalid or not owned by the caller";

@@ -171,6 +171,7 @@ const (
 	WASMOS_ERR_DMA_INVALID int32 = -0x000F0002 // invalid DMA arguments (direction, handle, or length)
 	WASMOS_ERR_DMA_RANGE int32 = -0x000F0003 // the requested subrange lies outside the mapped object
 	WASMOS_ERR_DMA_UNAVAILABLE int32 = -0x000F0004 // no DMA mapping slot or backing is available
+	WASMOS_ERR_DMA_ADDR_TOO_LARGE int32 = -0x000F0005 // the device address does not fit the signed 32-bit host-call return channel
 	WASMOS_ERR_IRQ_BAD_LINE int32 = -0x00100001 // irq line is outside the supported range
 	WASMOS_ERR_IRQ_NOT_AUTHORIZED int32 = -0x00100002 // caller lacks irq.route, or the line is not in its allowlist
 	WASMOS_ERR_IRQ_BAD_ENDPOINT int32 = -0x00100003 // target endpoint is invalid or not owned by the caller
@@ -587,6 +588,8 @@ func WasmosStrerror(c int32) string {
 		return "the requested subrange lies outside the mapped object"
 	case WASMOS_ERR_DMA_UNAVAILABLE:
 		return "no DMA mapping slot or backing is available"
+	case WASMOS_ERR_DMA_ADDR_TOO_LARGE:
+		return "the device address does not fit the signed 32-bit host-call return channel"
 	case WASMOS_ERR_IRQ_BAD_LINE:
 		return "irq line is outside the supported range"
 	case WASMOS_ERR_IRQ_NOT_AUTHORIZED:

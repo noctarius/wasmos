@@ -340,22 +340,30 @@ unsafe extern "C" {
     pub fn initfs_entry_copy(a0: i32, a1: i32, a2: i32, a3: i32) -> i32;
     /// Maps a `length`-byte, `offset`-based range of the caller's borrowed buffer
     /// `borrow_id` for device DMA in direction `flags` (which must be non-zero and a
-    /// subset of the borrow's rights); returns the device DMA address
-    /// (0..0x7FFFFFFF). On failure returns a negative WASMOS_DMA_STATUS_* code
-    /// (INVALID for bad args, DENY for context/borrow/mapping denial, UNAVAILABLE
-    /// when the address exceeds the signed-32-bit device window).
+    /// subset of both the borrow's rights and the directions the caller's dma.buffer
+    /// capability grants); returns the device DMA address (0..0x7FFFFFFF). On failure
+    /// returns a negative WASMOS_ERR_DMA_* code: INVALID for bad args, DENY for a
+    /// missing dma.buffer capability or a context/borrow/direction/mapping denial,
+    /// RANGE when `length` exceeds the capability's per-mapping byte budget or the
+    /// resulting device address falls outside every granted DMA window,
+    /// ADDR_TOO_LARGE when the mapping succeeded but its device address does not fit
+    /// the signed-32-bit return channel. The RANGE and ADDR_TOO_LARGE paths tear the
+    /// mapping down before returning.
     pub fn dma_map_borrow(a0: i32, a1: i32, a2: i32, a3: i32) -> i32;
     /// Synchronizes the DMA mapping of borrowed buffer `borrow_id` over the
-    /// `offset`/`length` range (cache coherency for the transfer; `op` direction is
-    /// accepted but not distinguished). Returns WASMOS_DMA_STATUS_OK (0) on success,
-    /// otherwise a negative WASMOS_DMA_STATUS_* code (INVALID for a bad borrow_id,
-    /// DENY when the borrow/mapping cannot be resolved or the sync fails).
+    /// `offset`/`length` range (cache coherency for the transfer). `op` must be one
+    /// of WASMOS_DMA_SYNC_TO_DEVICE / _FROM_DEVICE / _BIDIR; it is validated but not
+    /// forwarded, so the three directions behave identically on this coherent
+    /// architecture. Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
+    /// WASMOS_ERR_DMA_* code (INVALID for a bad borrow_id, offset, length or op,
+    /// DENY for a missing dma.buffer capability or when the borrow/mapping cannot be
+    /// resolved or the sync fails).
     pub fn dma_sync_borrow(a0: i32, a1: i32, a2: i32, a3: i32) -> i32;
     /// Unmaps the DMA mapping of borrowed buffer `borrow_id`, tearing down the device
-    /// mapping established by dma_map_borrow. Returns WASMOS_DMA_STATUS_OK (0) on
-    /// success, otherwise a negative WASMOS_DMA_STATUS_* code (INVALID for a bad
-    /// borrow_id, DENY when the borrow/mapping cannot be resolved or the unmap
-    /// fails).
+    /// mapping established by dma_map_borrow. Returns WASMOS_ERR_NONE (0) on
+    /// success, otherwise a negative WASMOS_ERR_DMA_* code (INVALID for a bad
+    /// borrow_id, DENY for a missing dma.buffer capability or when the
+    /// borrow/mapping cannot be resolved or the unmap fails).
     pub fn dma_unmap_borrow(a0: i32) -> i32;
     /// Map a physical address range into WASM linear memory at wasm_offset.
     /// phys_lo/phys_hi form a 64-bit physical address; size and wasm_offset must
@@ -600,7 +608,7 @@ unsafe extern "C" {
     /// into the caller's WASM linear memory (a real page remap, so writes reach the
     /// exact physical pages the device DMAs).  cache_policy is WASMOS_REGION_CACHE_*.
     /// Returns the wasm linmem offset of the mapped region (>= 0) and writes the u64
-    /// physical base to *out_phys, or a negative WASMOS_DMA_STATUS_* on failure.
+    /// physical base to *out_phys, or a negative WASMOS_ERR_DMA_* on failure.
     /// Requires CAP_DMA_BUFFER and an approved DMA window covering the allocation.
     /// out_phys must point into the caller's linear memory.
     pub fn region_alloc(a0: i32, a1: i32, a2: i32) -> i32;

@@ -9,7 +9,9 @@ the object/owner/borrow capability model, the roles (grantor, borrower/grantee,
 mapper), the stateless id-based ABI, the lifecycle rules, and the DMA transfer
 model layered on top. The kernel core lives in
 `src/kernel/xfer_buffer/xfer_buffer.c` (`src/kernel/include/xfer_buffer.h`); the
-wasm ABI is wired in `src/kernel/wasm3/link.c` and `src/kernel/warp/link.cpp`.
+wasm ABI is wired in `src/kernel/wasm3/link.c` and `src/kernel/warp/link.cpp`,
+except for the three `dma_*` calls, whose policy decision is shared by both
+runtimes in `src/kernel/hostcall_dma.c`.
 
 ---
 
@@ -167,12 +169,16 @@ WASMOS_DMA_DIR_TO_DEVICE   = 1 << 0   // driver → device
 WASMOS_DMA_DIR_FROM_DEVICE = 1 << 1   // device → driver
 WASMOS_DMA_DIR_BIDIR       = 3        // both directions
 
-/* Status codes returned by DMA hostcalls */
-WASMOS_DMA_STATUS_OK          =  0
-WASMOS_DMA_STATUS_DENY        = -1   // capability check failed
-WASMOS_DMA_STATUS_INVALID     = -2   // bad argument / wrong state
-WASMOS_DMA_STATUS_RANGE       = -3   // out-of-window or oversize
-WASMOS_DMA_STATUS_UNAVAILABLE = -4   // no active borrow or not mapped
+/* Status codes returned by DMA hostcalls. Packed (domain, code) values from
+ * abi/errors.yaml, generated into abi/generated/c/wasmos_status.h; the DMA
+ * domain is 15, so the codes are large negatives, not -1..-4. */
+WASMOS_ERR_NONE             =       0
+WASMOS_ERR_DMA_DENY         = -983041   // capability check failed
+WASMOS_ERR_DMA_INVALID      = -983042   // bad argument / wrong state
+WASMOS_ERR_DMA_RANGE        = -983043   // out-of-window or oversize
+WASMOS_ERR_DMA_UNAVAILABLE  = -983044   // no mapping slot or backing available
+WASMOS_ERR_DMA_ADDR_TOO_LARGE = -983045 // mapped, but the device address does not
+                                        // fit the signed 32-bit return channel
 
 /* Sync operations */
 WASMOS_DMA_SYNC_TO_DEVICE   = 1
@@ -317,15 +323,29 @@ Three capability checks are performed at every DMA map call:
 
 The capability kind `CAP_DMA_BUFFER = 3` must be present in the calling
 context's capability flags (`capability_has`). Any missing capability
-returns `WASMOS_DMA_STATUS_DENY`.
+returns `WASMOS_ERR_DMA_DENY`.
 
 ---
 
 ### Hostcall API
 
-Declared in `src/libc/include/wasmos/api.h`; implemented in
-`src/kernel/wasm3/link.c`. All three functions are Wasm imports under
-the `"wasmos"` module namespace.
+Declared in `src/libc/include/wasmos/api.h`. All three functions are Wasm
+imports under the `"wasmos"` module namespace.
+
+The decision is implemented once, in `src/kernel/hostcall_dma.c`
+(`src/kernel/include/hostcall_dma.h`), and each runtime's shim only marshals
+into it: `src/kernel/wasm3/link_dma.c` unpacks m3ApiRawFunction stack slots,
+`src/kernel/warp/link_dma.cpp` narrows WARP's widened i32 arguments. Both are
+translation units separate from the monolithic `link.c`/`link.cpp` so
+`tests/unit/test_hostcall_dma.cpp` can drive them; that suite runs every
+scenario through both shims and asserts the results against each other, because
+a guest's DMA rights must not depend on which engine executes it.
+
+Arguments are validated as signed. WARP widens each wasm i32 to `uint32_t`
+before the call, so a negative handle arrives above `INT32_MAX`; the shared
+entry points take `int32_t` and re-check the sign, making a malformed handle
+`WASMOS_ERR_DMA_INVALID` under both runtimes. The caller's context is resolved
+from the current process and never accepted as an argument.
 
 #### `wasmos_dma_map_borrow`
 
@@ -340,24 +360,31 @@ extern int32_t wasmos_dma_map_borrow(
 ```
 
 Returns the physical device address (a non-negative `int32_t`) on
-success, or a `WASMOS_DMA_STATUS_*` error on failure.
+success, or a `WASMOS_ERR_DMA_*` error on failure.
 
 Validation sequence (in order):
 
 1. `borrow_id > 0`, `offset >= 0`, `length > 0`, `direction_flags > 0` →
-   `WASMOS_DMA_STATUS_INVALID` if any fail.
-2. Caller has `CAP_DMA_BUFFER` capability (`require_dma_capability`) →
-   `WASMOS_DMA_STATUS_DENY` if absent.
-3. `xfer_buffer_get_borrowed(borrow_id, caller_ctx, &borrow, &mapping)` — the
-   caller must be the borrow's **borrower** (mapper) → `DENY` otherwise.
-4. `capability_dma_direction_allowed` (direction ⊆ the borrow's rights via
-   `dma_map_borrow`) → `WASMOS_DMA_STATUS_DENY`.
-5. `length <= dma_max_bytes` → `WASMOS_DMA_STATUS_RANGE`.
+   `WASMOS_ERR_DMA_INVALID` if any fail.
+2. Caller has `CAP_DMA_BUFFER` (`policy_authorize(ctx,
+   POLICY_ACTION_DMA_BUFFER, 0)`) → `WASMOS_ERR_DMA_DENY` if absent.
+3. `xfer_buffer_get_borrowed(borrow_id, caller_ctx, &borrow, NULL)` — the caller
+   must be the borrow's **borrower** (mapper) → `DENY` otherwise. No mapping is
+   requested here: none exists yet, step 6 creates it.
+4. `capability_dma_direction_allowed(ctx, direction_flags)` → `DENY`. This is the
+   CONTEXT's granted directions, which is a separate question from the borrow's
+   rights: the lender does not know what the borrower's manifest declared. The
+   direction ⊆ borrow-rights half is enforced by `xfer_buffer_dma_map_borrow` in
+   step 6.
+5. `length <= dma_max_bytes` → `WASMOS_ERR_DMA_RANGE`.
 6. `xfer_buffer_dma_map_borrow` (range validation + phys computation) →
-   `WASMOS_DMA_STATUS_DENY` on failure.
-7. `capability_dma_range_allowed(ctx, device_addr, length)` → `WASMOS_DMA_STATUS_RANGE`.
-8. `device_addr <= 0x7FFFFFFF` (must fit in positive signed 32-bit) →
-   `WASMOS_DMA_STATUS_RANGE`.
+   `WASMOS_ERR_DMA_DENY` on failure.
+7. `capability_dma_range_allowed(ctx, device_addr, length)` → `WASMOS_ERR_DMA_RANGE`.
+8. `device_addr <= 0x7FFFFFFF` (must fit in positive signed 32-bit,
+   `hostcall_value_check`) → `WASMOS_ERR_DMA_ADDR_TOO_LARGE`.
+
+Steps 7 and 8 tear the mapping down before returning: a refused call must not
+leave the device holding a live window.
 
 #### `wasmos_dma_sync_borrow`
 
@@ -371,7 +398,7 @@ extern int32_t wasmos_dma_sync_borrow(
 ```
 
 Valid `sync_op` values: `WASMOS_DMA_SYNC_TO_DEVICE`, `FROM_DEVICE`,
-`BIDIR`. Returns `WASMOS_DMA_STATUS_OK` or an error code.
+`BIDIR`. Returns `WASMOS_ERR_NONE` or an error code.
 
 The kernel calls `xfer_buffer_dma_sync`. On x86, cache
 maintenance is a no-op; the call still enforces that a mapping is
@@ -384,7 +411,7 @@ extern int32_t wasmos_dma_unmap_borrow(int32_t borrow_id)
     WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");  // wasm3 sig: "i(i)"
 ```
 
-Returns `WASMOS_DMA_STATUS_OK` or an error code. Clears all DMA metadata on the
+Returns `WASMOS_ERR_NONE` or an error code. Clears all DMA metadata on the
 borrow's mapping without releasing the borrow itself.
 
 ---
@@ -493,7 +520,7 @@ a stable physical address:
 
 ```c
 /* returns the wasm linmem offset of the mapped region (>= 0), or a negative
- * WASMOS_DMA_STATUS_* ; writes the u64 physical base to *out_phys. */
+ * WASMOS_ERR_DMA_* ; writes the u64 physical base to *out_phys. */
 int32_t wasmos_region_alloc(int32_t pages, int32_t cache_policy, uint64_t *out_phys);
 ```
 
@@ -535,7 +562,7 @@ Design notes:
 
 > **Currently deferred/aspirational.** The borrow-based DMA fast-path below is
 > disabled pending the owner-push migration: `ata_dma_prepare()` returns
-> `WASMOS_DMA_STATUS_DENY` unconditionally (`src/drivers/ata/ata.c`), so every
+> `WASMOS_ERR_DMA_DENY` unconditionally (`src/drivers/ata/ata.c`), so every
 > ATA read and write is presently PIO (matching invariant 5, "PIO fallback is
 > unconditional"). The lifecycle described here is the intended shape once the
 > block IPC protocol carries the buffer grant.
@@ -556,7 +583,7 @@ wasmos_buffer_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint,
     offset, length, WASMOS_DMA_SYNC_TO_DEVICE)
 ```
 
-Returns `WASMOS_DMA_STATUS_OK` on success. On any failure, releases
+Returns `WASMOS_ERR_NONE` on success. On any failure, releases
 the buffer borrow before returning the error code.
 
 **`ata_dma_finish(source_endpoint, offset, length, direction_flags)`**
@@ -598,7 +625,7 @@ One-shot markers are logged at most once per direction per process lifetime:
 | `[ata] dma write fallback rc=<n>` | First failed DMA prep on a write; PIO proceeds |
 
 The one-shot flags (`g_dma_read_ok_logged`, etc.) prevent log storms on
-repeated operations. The `rc` value is the `WASMOS_DMA_STATUS_*` code
+repeated operations. The `rc` value is the `WASMOS_ERR_DMA_*` code
 from `ata_dma_prepare`.
 
 ---
@@ -607,7 +634,7 @@ from `ata_dma_prepare`.
 
 1. **CAP_DMA_BUFFER is the gate.** `wasmos_dma_map_borrow` checks this
    capability before any other state. A driver spawned without it always
-   gets `WASMOS_DMA_STATUS_DENY` regardless of borrow state.
+   gets `WASMOS_ERR_DMA_DENY` regardless of borrow state.
 
 2. **One mapping per slot at a time.** `xfer_buffer_dma_map`
    rejects a second map call while `dma_mapped` is set. The driver must

@@ -197,6 +197,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_DMA_INVALID` | -0x000F0002 | invalid DMA arguments (direction, handle, or length) |
 | `WASMOS_ERR_DMA_RANGE` | -0x000F0003 | the requested subrange lies outside the mapped object |
 | `WASMOS_ERR_DMA_UNAVAILABLE` | -0x000F0004 | no DMA mapping slot or backing is available |
+| `WASMOS_ERR_DMA_ADDR_TOO_LARGE` | -0x000F0005 | the device address does not fit the signed 32-bit host-call return channel |
 
 ### `irq` (domain 16) — hardware IRQ routing failures
 

@@ -110,13 +110,19 @@ _Thread_local cpu_local_t* g_host_cpu_local;
  * this one. */
 #define KILL_ROUNDS 300
 
-/* Dispatch attempts per round, as a BOUND rather than a count. sched_spawn_thread
+/* Dispatch attempts, as a BOUND rather than a count. sched_spawn_thread
  * places a new worker on a CPU of its own choosing, so a worker is usually on
  * some other CPU's queue and only reaches this one by work-stealing, which
  * cpu_sched_try_steal does from inside the scheduler loop. A fixed handful of
  * dispatches therefore misses the worker most of the time; the loops below spin
  * up to this bound and stop as soon as the worker has retired. */
 #define DISPATCH_BOUND 2000u
+
+/* The healthy case waits for ONE retirement and has no later round to make up
+ * for a miss, so it gets a far larger bound than a soak round does. It is a
+ * ceiling, not a cost: the loop stops the moment the worker retires, and only a
+ * core-starved host ever walks far into it. */
+#define HEALTHY_DISPATCH_BOUND 200000u
 
 static int g_failures;
 static int g_checks;
@@ -406,13 +412,23 @@ static void s_kill_races_the_lifecycle_transitions(void) {
     start_dispatchers(KILLER_CPU); /* the last CPU is the killer's */
     pthread_create(&killer, 0, killer_thread, 0);
 
-    for (uint32_t round = 0; round < KILL_ROUNDS; ++round) {
+    /* Bounded by COMPLETED rounds, not by loop iterations. A spawn can fail for
+     * want of a recycled slot -- a reap is refused while any thread of that
+     * process is still being dispatched, and under heavy oversubscription (more
+     * NCPU than host cores, which is the interesting regime) a dispatch holds its
+     * reference for a long wall-clock time, so the table runs short in bursts.
+     * Counting attempts instead would make the soak's strength depend on the host
+     * core count: a 4-core CI runner at NCPU=16 spent 182 of 300 iterations on
+     * failed spawns and did only 118 rounds, while an 10-core dev box did 300.
+     * The attempt cap is the liveness guard -- if slots never come back this ends
+     * rather than spins -- and `spawn_failures` is reported so the throttling
+     * stays visible. */
+    uint32_t attempts = 0;
+    while (rounds_run < KILL_ROUNDS && attempts < KILL_ROUNDS * 16u) {
         uint32_t pid = 0;
 
+        attempts++;
         if (spawn_race_target(&pid) != 0) {
-            /* Slots are recycled only by the reap below, and a killed process
-             * is not instantly reapable; a transient shortage is expected under
-             * NCPU dispatchers. Give the dispatchers a turn and retry. */
             spawn_failures++;
             (void)process_schedule_once();
             continue;
@@ -461,10 +477,25 @@ static void s_kill_races_the_lifecycle_transitions(void) {
            refused_running);
 
     /* The soak has to have actually run, or every assertion below is trivially
-     * satisfiable. */
-    CHECK(rounds_run > KILL_ROUNDS / 2, "the soak completed most of its rounds");
-    CHECK(__atomic_load_n(&g_workers_retired, __ATOMIC_ACQUIRE) > 0, "workers retired");
-    CHECK(__atomic_load_n(&g_kills_landed, __ATOMIC_ACQUIRE) > 0, "the killer landed kills");
+     * satisfiable. The EVENT counts are the real floor -- retirements and kills are
+     * the work this suite is about -- and the round count is only a coarse "the
+     * loop made progress" check. Both are set far below what any host produces and
+     * exist to catch a soak that silently stopped doing anything.
+     *
+     * Deliberately not "every round": how many rounds fit depends on the host's
+     * core count, not on the kernel. A reap is refused while any thread of that
+     * process is still being dispatched, and the fewer real cores back the NCPU
+     * pthreads, the longer each dispatch holds its reference in wall-clock terms,
+     * so the process table runs short in bursts. Measured on a 10-core host under
+     * 5 concurrent instances (~8x oversubscription): 148-300 rounds against
+     * 732-1501 retirements. The events stay plentiful; the round count does
+     * not. Asserting the round count would make this suite report the runner's
+     * spare capacity rather than the kernel's behaviour. */
+    CHECK(rounds_run >= KILL_ROUNDS / 4u, "the soak completed a quarter of its rounds");
+    CHECK(__atomic_load_n(&g_workers_retired, __ATOMIC_ACQUIRE) >= 100u,
+          "workers retired in quantity");
+    CHECK(__atomic_load_n(&g_kills_landed, __ATOMIC_ACQUIRE) >= 20u,
+          "the killer landed kills in quantity");
 
     /* The decisive assertion. Reaching either transition with an owner that is
      * already exiting is the interleaving that used to panic; a non-zero count
@@ -489,7 +520,7 @@ static void s_healthy_owner_still_runs_and_requeues(void) {
     CHECK(spawn_race_target(&pid) == 0, "spawned a target with a sibling and a retiring worker");
 
     uint32_t retired_before = __atomic_load_n(&g_workers_retired, __ATOMIC_ACQUIRE);
-    for (uint32_t i = 0; i < DISPATCH_BOUND; ++i) {
+    for (uint32_t i = 0; i < HEALTHY_DISPATCH_BOUND; ++i) {
         (void)process_schedule_once();
         if (__atomic_load_n(&g_workers_retired, __ATOMIC_ACQUIRE) != retired_before) {
             break;

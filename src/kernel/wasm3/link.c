@@ -28,6 +28,7 @@
 #include "thread.h"
 #include "wasm_driver.h"
 #include "wasm3/shim.h"
+#include "wasm3/link_dma.h"
 #include "wasm3/link_ipc.h"
 #include "sync/spinlock.h"
 
@@ -777,111 +778,6 @@ static int32_t wasm_buffer_unborrow_impl(int32_t borrow_id) {
         return rc;
     }
     return xfer_buffer_unborrow(&borrow);
-}
-
-/* Map [offset, offset+length) of the caller's borrow `borrow_id` for device DMA in
- * `direction_flags`.  Requires POLICY_ACTION_DMA_BUFFER, that the caller is the borrower, and
- * that the direction is within both the borrow's rights and the context's DMA capability.
- * Returns the device DMA address as a positive i32; failures are negative WASMOS_ERR_DMA_*:
- * INVALID for a non-positive argument, DENY for a missing capability/borrow/direction or a
- * failed mapping, RANGE when `length` exceeds the capability's byte budget or the resulting
- * device address falls outside an approved window, UNAVAILABLE when the device address does
- * not fit the signed i32 return.  The RANGE and UNAVAILABLE paths undo the mapping first. */
-m3ApiRawFunction(wasmos_dma_map_borrow) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, borrow_id) m3ApiGetArg(int32_t, offset)
-        m3ApiGetArg(int32_t, length) m3ApiGetArg(int32_t, direction_flags) uint32_t context_id = 0;
-    uint32_t max_bytes = 0;
-    xfer_buffer_borrow_t borrow;
-    xfer_buffer_dma_mapping_t mapping;
-
-    if (borrow_id <= 0 || offset < 0 || length <= 0 || direction_flags <= 0) {
-        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
-    }
-    if (current_process_context(&context_id) != 0 || require_dma_capability(context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    /* Resolve the caller's borrow handle; get_borrowed enforces the caller is
-     * the borrower, and dma_map_borrow enforces direction ⊆ borrow rights. */
-    if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, 0) != WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    if (!capability_dma_direction_allowed(context_id, (uint32_t)direction_flags)) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    max_bytes = capability_dma_max_bytes(context_id);
-    if (max_bytes == 0 || (uint32_t)length > max_bytes) {
-        m3ApiReturn(WASMOS_ERR_DMA_RANGE);
-    }
-    if (xfer_buffer_dma_map_borrow(
-            &borrow, (uint32_t)offset, (uint32_t)length, (uint32_t)direction_flags, &mapping) !=
-        WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    if (!capability_dma_range_allowed(
-            context_id, mapping.device_addr, (uint64_t)(uint32_t)length)) {
-        (void)xfer_buffer_dma_unmap(&mapping);
-        m3ApiReturn(WASMOS_ERR_DMA_RANGE);
-    }
-    if (hostcall_value_check(mapping.device_addr) != WASMOS_OK) {
-        (void)xfer_buffer_dma_unmap(&mapping);
-        m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
-    }
-    m3ApiReturn((int32_t)mapping.device_addr);
-}
-
-/* Synchronise [offset, offset+length) of the DMA mapping behind borrow `borrow_id` for cache
- * coherency.  `sync_op` must be one of WASMOS_DMA_SYNC_TO_DEVICE / _FROM_DEVICE / _BIDIR; it
- * is validated but not forwarded -- xfer_buffer_dma_sync receives only the range, so the three
- * directions behave identically.  Requires the DMA capability and that the caller is the
- * borrower.  Returns WASMOS_ERR_NONE (0), else WASMOS_ERR_DMA_INVALID (bad argument) or
- * WASMOS_ERR_DMA_DENY (capability, borrow lookup, or sync failure). */
-m3ApiRawFunction(wasmos_dma_sync_borrow) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, borrow_id) m3ApiGetArg(int32_t, offset)
-        m3ApiGetArg(int32_t, length) m3ApiGetArg(int32_t, sync_op) uint32_t context_id = 0;
-    xfer_buffer_borrow_t borrow;
-    xfer_buffer_dma_mapping_t mapping;
-
-    if (borrow_id <= 0 || offset < 0 || length <= 0 ||
-        (sync_op != WASMOS_DMA_SYNC_TO_DEVICE && sync_op != WASMOS_DMA_SYNC_FROM_DEVICE &&
-         sync_op != WASMOS_DMA_SYNC_BIDIR)) {
-        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
-    }
-    if (current_process_context(&context_id) != 0 || require_dma_capability(context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, &mapping) !=
-        WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    if (xfer_buffer_dma_sync(&mapping, (uint32_t)offset, (uint32_t)length) != WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    m3ApiReturn(WASMOS_ERR_NONE);
-}
-
-/* Tear down the DMA mapping established by wasmos_dma_map_borrow for borrow `borrow_id`.
- * Requires the DMA capability and that the caller is the borrower.  Returns WASMOS_ERR_NONE
- * (0), WASMOS_ERR_DMA_INVALID for a non-positive borrow_id, or WASMOS_ERR_DMA_DENY when the
- * borrow/mapping cannot be resolved or the unmap fails. */
-m3ApiRawFunction(wasmos_dma_unmap_borrow) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, borrow_id) uint32_t context_id = 0;
-    xfer_buffer_borrow_t borrow;
-    xfer_buffer_dma_mapping_t mapping;
-
-    if (borrow_id <= 0) {
-        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
-    }
-    if (current_process_context(&context_id) != 0 || require_dma_capability(context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, &mapping) !=
-        WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    if (xfer_buffer_dma_unmap(&mapping) != WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_ERR_DMA_DENY);
-    }
-    m3ApiReturn(WASMOS_ERR_NONE);
 }
 
 /* BUFFER_KIND_TRANSFER-only form of buffer_acquire; contract at wasm_buffer_acquire_impl. */

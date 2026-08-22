@@ -183,17 +183,51 @@ linked feature documents for rationale and rollout plans.
 - `ata` completion is interrupt-driven (IRQ 14 + `nIEN` cleared in Device
   Control, which nothing had ever written, so device interrupts had been masked
   at the drive all along). The sector waits no longer spin on the status
-  register. Transfers are still PIO — there is no bus-master IDE programming in
-  the driver — and the disabled `dma_map_borrow` fast path is now reported once
-  at startup instead of as a per-request "dma fallback", which read like an
-  intermittent failure but is a hardwired `TODO(xfer-buffer owner-push)`.
-  Interrupt use is an optimisation, never a dependency: a routed-but-silent line
-  is abandoned after a bounded number of empty sleeps and the driver reverts to
-  polling.
+  register. Interrupt use is an optimisation, never a dependency: a
+  routed-but-silent line is abandoned after a bounded number of empty sleeps and
+  the driver reverts to polling.
+- `ata` reads use bus-master IDE DMA when a PRD table can be backed
+  (`wasmos_block_buffer_phys`), and PIO otherwise; the choice is reported once at
+  startup rather than per request, because a per-request "dma fallback" line read
+  like an intermittent failure when the fallback is neither intermittent nor a
+  failure. The read direction is zero-copy: `BLOCK_IPC_READ_ZC_REQ` carries the
+  client's `borrow_id`, the driver maps it with `dma_map_borrow`
+  (`WASMOS_DMA_DIR_FROM_DEVICE`), lets the controller write those pages, then
+  syncs and unmaps — on the failure path too, since the controller may have
+  written part of the range before erroring out. A borrow that cannot be mapped
+  degrades to a staged copy through the driver's own block buffer, and the two
+  outcomes log distinguishably ("direct DMA into client buffer" vs "staged copy
+  into client buffer") because only one of them is actually copy-free. Writes
+  have no zero-copy path: `BLOCK_IPC_WRITE_REQ` names the driver's own buffer, so
+  there is no client borrow to map (`TODO(zero-copy writes)` in
+  `src/drivers/ata/ata.c`).
 - Validated on `wasmos_defconfig` (WARP+SMP, 9/11 runs), `wasm3_smp_defconfig`,
   and `wasm3_single_defconfig` (3/3). The two failures were a
   `scheduler: no runnable thread` panic during early kernel self-tests, before
   pci-bus or either driver starts — see the scheduler race, not this path.
+
+### Host Calls and Capabilities
+
+- The three `dma_*` host calls decide nothing per runtime. `hostcall_dma.c`
+  holds the whole policy decision — argument signs, `POLICY_ACTION_DMA_BUFFER`,
+  the granted direction, the per-mapping byte budget, and the window the
+  resulting physical address must fall inside — and both shims
+  (`wasm3/link_dma.c`, `warp/link_dma.cpp`) only marshal into it. They are
+  separate translation units from the monolithic `link.c`/`link.cpp` for the
+  same reason `link_ipc.*` is: neither monolith compiles for a host test.
+- That split is what closed a real divergence. The checks used to be written
+  once per runtime and WARP's copy had none of them, so a WARP guest holding any
+  transfer-buffer borrow could DMA in an ungranted direction, over an unbounded
+  length, to a physical address outside every window its manifest declared;
+  `dma_sync_borrow` and `dma_unmap_borrow` skipped the `dma.buffer` gate
+  outright. `test_hostcall_dma` runs 28 scenarios through both shims and asserts
+  each value AND the two against each other, so a future check added to one side
+  only fails the parity assertion.
+- Guest-visible capability behaviour must not depend on the engine. Where a
+  difference is unavoidable, the scenario table carries an explicit `divergent`
+  flag that asserts the two still differ, so converging them forces the row to
+  be reclassified rather than left describing a fixed problem. No DMA row is
+  currently divergent.
 
 ### Build, Configuration, and Validation
 

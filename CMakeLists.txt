@@ -2632,6 +2632,34 @@ add_custom_target(run-kernel-unit-tests
           -x none
           -o ${BUILD_DIR}/test_hostcall_ipc
   COMMAND ${BUILD_DIR}/test_hostcall_ipc
+  # The DMA host-call shims, BOTH runtimes in one binary, same reason as the IPC
+  # pair above: the guest-visible decision must not depend on which engine runs
+  # it. capability.c and policy.c are the real ones, so a denial comes out of the
+  # same table a driver spawn writes into; the transfer-buffer layer is stubbed
+  # inside the test, which is what lets a scenario report a device address
+  # outside the granted window.
+  # No explicit -std: this step mixes C++ and C sources in one invocation and
+  # -std=c++17 is rejected for the C ones. The compiler defaults (gnu++17 /
+  # gnu17) cover both, same as the IPC step above.
+  COMMAND ${CMAKE_CXX_COMPILER} -Wall -Wno-unused-parameter
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          -x c++ ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_dma.cpp
+                 ${KERNEL_DIR}/warp/link_dma.cpp
+          -x c ${KERNEL_DIR}/wasm3/link_dma.c
+               ${KERNEL_DIR}/capability.c ${KERNEL_DIR}/policy.c
+               ${KERNEL_DIR}/hostcall_dma.c ${KERNEL_DIR}/hostcall_value.c
+               ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c
+               ${KERNEL_DIR}/list_array_chunk.c ${KERNEL_DIR}/kmem.c
+               ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+               ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+               ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_hostcall_dma
+  COMMAND ${BUILD_DIR}/test_hostcall_dma
   # The wasm32 struct sizes src/libc/go/coroutine.go hardcodes as opaque
   # [N]uint32 blobs. Go cannot express the C layout, so nothing checks these at
   # the language level and an undersized blob is heap corruption rather than a
@@ -3443,6 +3471,17 @@ wasmos_ide_index(wasmos_ide_unit_hostcall_ipc
          ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
   DEFINES WASMOS_HOST_TEST_SMP=1)
 
+# test_hostcall_dma.cpp is the same shape as the IPC target above and needs the
+# same -iquote set, but it is separate because it passes NO defines: its real
+# compile line does not set WASMOS_HOST_TEST_SMP, and indexing it with a define
+# the build never uses would lint it against different kernel headers than the
+# ones it is compiled with.
+wasmos_ide_index(wasmos_ide_unit_hostcall_dma
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_dma.cpp
+  IQUOTE ${KERNEL_DIR} ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
+         ${CMAKE_SOURCE_DIR}/tests/unit)
+
 # test_warp_wasm_coroutine.cpp links nothing of WASMOS: it drives the vendored
 # WARP JIT directly and resolves its headers relative to WARP_DIR
 # ("src/WasmModule/WasmModule.hpp"). The defines are the subset of
@@ -3480,6 +3519,7 @@ wasmos_ide_index(wasmos_ide_unit
   DIRS ${CMAKE_SOURCE_DIR}/tests/unit
   EXCLUDE ${WASMOS_UNIT_LIBC_TESTS} ${WASMOS_UNIT_SCHED_TESTS}
           ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_dma.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include

@@ -27,6 +27,7 @@
 #include <array>
 
 #include "../include/xfer_buffer.h"
+#include "link_dma.h"
 #include "link_ipc.h"
 
 extern "C" {
@@ -1231,77 +1232,6 @@ static uint32_t warp_initfs_entry_copy(uint32_t index, uint32_t out_off, uint32_
     const uint8_t* src = static_cast<const uint8_t*>(g_warp_boot_info->initfs) + e.offset + offset;
     __builtin_memcpy(out, src, copy_len);
     return copy_len; /* bytes copied, matches wasm3 which returns (int32_t)copy_len */
-}
-
-// ---------------------------------------------------------------------------
-// DMA buffer operations
-// ---------------------------------------------------------------------------
-
-static uint32_t warp_dma_map_borrow(uint32_t borrow_id, uint32_t offset, uint32_t length,
-                                    uint32_t flags, void* ctx_) {
-    (void)ctx_;
-    uint32_t context_id = 0;
-    if ((int32_t)borrow_id <= 0 || (int32_t)length <= 0 || flags == 0)
-        return (uint32_t)WASMOS_ERR_DMA_INVALID;
-    if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)WASMOS_ERR_DMA_DENY;
-    /* Resolve the caller's borrow handle; dma_map_borrow enforces
-     * direction ⊆ borrow rights and the range check. */
-    xfer_buffer_borrow_t borrow;
-    if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, nullptr) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_ERR_DMA_DENY;
-    xfer_buffer_dma_mapping_t mapping;
-    if (xfer_buffer_dma_map_borrow(&borrow, offset, length, flags, &mapping) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_ERR_DMA_DENY;
-    if (hostcall_value_check(mapping.device_addr) != WASMOS_OK) {
-        (void)xfer_buffer_dma_unmap(&mapping);
-        return (uint32_t)WASMOS_ERR_DMA_UNAVAILABLE;
-    }
-    return (uint32_t)mapping.device_addr;
-}
-
-/* hostcalls.yaml `dma_sync_borrow`: make the CPU's and the device's view of
- * [offset, offset+length) within the borrow's mapping coherent.  `op` (the direction)
- * is accepted and ignored — this architecture is DMA-coherent, so both directions are
- * the same no-op-plus-validation.  Returns 0 on success, WASMOS_ERR_DMA_INVALID for a
- * non-positive borrow, or WASMOS_ERR_DMA_DENY when the borrow, its mapping or the range
- * does not check out. */
-static uint32_t warp_dma_sync_borrow(uint32_t borrow_id, uint32_t offset, uint32_t length,
-                                     uint32_t op, void* ctx_) {
-    (void)ctx_;
-    (void)op;
-    uint32_t context_id = 0;
-    if ((int32_t)borrow_id <= 0)
-        return (uint32_t)WASMOS_ERR_DMA_INVALID;
-    if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)WASMOS_ERR_DMA_DENY;
-    xfer_buffer_borrow_t borrow;
-    xfer_buffer_dma_mapping_t mapping;
-    if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, &mapping) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_ERR_DMA_DENY;
-    if (xfer_buffer_dma_sync(&mapping, offset, length) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_ERR_DMA_DENY;
-    return (uint32_t)WASMOS_ERR_NONE;
-}
-
-/* hostcalls.yaml `dma_unmap_borrow`: tear down the DMA mapping of `borrow_id`, after
- * which the device address returned by dma_map_borrow is no longer valid.  Returns 0 on
- * success, WASMOS_ERR_DMA_INVALID for a non-positive borrow, WASMOS_ERR_DMA_DENY when
- * the caller does not hold that borrow or it has no mapping. */
-static uint32_t warp_dma_unmap_borrow(uint32_t borrow_id, void* ctx_) {
-    (void)ctx_;
-    uint32_t context_id = 0;
-    if ((int32_t)borrow_id <= 0)
-        return (uint32_t)WASMOS_ERR_DMA_INVALID;
-    if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)WASMOS_ERR_DMA_DENY;
-    xfer_buffer_borrow_t borrow;
-    xfer_buffer_dma_mapping_t mapping;
-    if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, &mapping) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_ERR_DMA_DENY;
-    if (xfer_buffer_dma_unmap(&mapping) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_ERR_DMA_DENY;
-    return (uint32_t)WASMOS_ERR_NONE;
 }
 
 // ---------------------------------------------------------------------------

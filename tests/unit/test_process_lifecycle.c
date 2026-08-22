@@ -314,35 +314,18 @@ static int spawn_race_target(uint32_t* out_pid) {
 
 /* ------------------------------------------------------- the kill race soak */
 
-/* Reap gate. Raising it parks every dispatcher OUTSIDE process_schedule_once and
- * waits for all of them to acknowledge, so a slot teardown cannot overlap a
- * dispatch.
- *
- * SPAWN no longer needs it: process_transition_legal refusing NEW->RUNNING plus
- * the dispatcher's post-claim identity re-validation closed that path, measured
- * at 0/20 aborts per width with spawn ungated. REAP still does -- ungate it and
- * the suite aborts 8 runs in 15 at 8 CPUs on the dispatch-vs-slot-recycle race
- * tracked in docs/TASKS.md. The two also interact: each path is individually
- * clean, and ungating BOTH is 10/20 at 8 CPUs.
- *
- * The KILL is deliberately never gated -- that overlap is this suite's subject.
- * A gate test that fails one run in six on an unrelated panic is worse than no
- * gate test, which is the whole reason the remaining barrier stays. */
-static uint32_t g_park_request;
-static uint32_t g_parked[WASMOS_MAX_CPUS];
+/* Nothing here is serialised against dispatch. Spawn, kill and reap all run
+ * concurrently with every dispatcher, which is the point: this suite used to need
+ * a park barrier around spawn and reap because a slot could be recycled under a
+ * CPU mid-dispatch, and thread_t::dispatch_ref closed that. Re-adding a barrier
+ * would hide a regression in it. */
 
 static void* dispatcher_thread(void* arg) {
     uint32_t cpu = (uint32_t)(uintptr_t)arg;
     be_cpu(cpu);
     while (!__atomic_load_n(&g_soak_done, __ATOMIC_ACQUIRE)) {
-        if (__atomic_load_n(&g_park_request, __ATOMIC_ACQUIRE)) {
-            __atomic_store_n(&g_parked[cpu], 1u, __ATOMIC_RELEASE);
-            continue;
-        }
-        __atomic_store_n(&g_parked[cpu], 0u, __ATOMIC_RELEASE);
         (void)process_schedule_once();
     }
-    __atomic_store_n(&g_parked[cpu], 1u, __ATOMIC_RELEASE);
     return 0;
 }
 
@@ -361,29 +344,10 @@ static uint32_t g_dispatchers_upto;
 
 static void start_dispatchers(uint32_t upto) {
     __atomic_store_n(&g_soak_done, 0u, __ATOMIC_RELEASE);
-    __atomic_store_n(&g_park_request, 0u, __ATOMIC_RELEASE);
     g_dispatchers_upto = upto;
     for (uint32_t cpu = 1; cpu < upto; ++cpu) {
-        __atomic_store_n(&g_parked[cpu], 0u, __ATOMIC_RELEASE);
         pthread_create(&g_dispatchers[cpu], 0, dispatcher_thread, (void*)(uintptr_t)cpu);
     }
-}
-
-/* Park every dispatcher and wait for it to acknowledge. Returns with no CPU but
- * this one inside the scheduler. */
-static void park_dispatchers(void) {
-    __atomic_store_n(&g_park_request, 1u, __ATOMIC_RELEASE);
-    for (uint32_t cpu = 1; cpu < g_dispatchers_upto; ++cpu) {
-        while (!__atomic_load_n(&g_parked[cpu], __ATOMIC_ACQUIRE)) {
-            if (__atomic_load_n(&g_soak_done, __ATOMIC_ACQUIRE)) {
-                break;
-            }
-        }
-    }
-}
-
-static void resume_dispatchers(void) {
-    __atomic_store_n(&g_park_request, 0u, __ATOMIC_RELEASE);
 }
 
 static void stop_dispatchers(void) {
@@ -476,14 +440,7 @@ static void s_kill_races_the_lifecycle_transitions(void) {
         for (uint32_t i = 0; i < 16u; ++i) {
             (void)process_schedule_once();
         }
-        /* Reap behind the gate for the same reason as spawn: recycling a slot
-         * while other CPUs dispatch is its own race (a zeroed thread reaching
-         * the dispatcher shows up as "zero time slice" with tid 0), and it is
-         * not the one under test. The KILL above is deliberately NOT gated --
-         * that overlap IS the subject. */
-        park_dispatchers();
         process_reap_zombie_pid(pid);
-        resume_dispatchers();
         rounds_run++;
     }
 
@@ -556,9 +513,7 @@ static void s_healthy_owner_still_runs_and_requeues(void) {
     for (uint32_t i = 0; i < 16u; ++i) {
         (void)process_schedule_once();
     }
-    park_dispatchers();
     process_reap_zombie_pid(pid);
-    resume_dispatchers();
     stop_dispatchers();
 }
 

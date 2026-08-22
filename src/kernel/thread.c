@@ -81,6 +81,13 @@ static int thread_reset_slot(thread_t* thread) {
      * allocator cannot take the slot (this runs under the table lock, and so does
      * thread_find_slot), and the lock-free readers that walk the table all skip a
      * slot whose state is UNUSED. */
+    /* A dispatch in flight owns this slot even when its state has already moved
+     * on: a thread that exits is ZOMBIE for the whole tail of its own result
+     * handling, which is exactly where that handler still reads the slot. The
+     * reference spans the window; no state test does. */
+    if (__atomic_load_n(&thread->dispatch_ref, __ATOMIC_ACQUIRE) != 0u) {
+        return 0;
+    }
     uint32_t expected = __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE);
     if (expected == THREAD_STATE_RUNNING) {
         return 0;
@@ -128,6 +135,7 @@ static int thread_reset_slot(thread_t* thread) {
     list_head_init(&thread->sched_node);
     thread->on_rq = 0;
     thread->rq = 0;
+    thread->dispatch_ref = 0;
     thread->tid = 0;
     thread->owner_pid = 0;
     thread->state = THREAD_STATE_UNUSED;

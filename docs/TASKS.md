@@ -1278,49 +1278,6 @@ Source: `architecture/25-diagnostics-status.md`,
   measure across configs and repeated boots first
   (`src/kernel/kernel_sched_smp_stress_runtime.c:140`).
 
-- [ ] [BUG][P1] Close the remaining dispatch-vs-recycle window. A dispatch holds raw
-  pointers to a thread SLOT and a process SLOT across `process_schedule_once_impl`
-  — through the dispatch AND through the result handling that follows — and reads
-  `time_slice_ticks`, `kstack_top` and `worker_entry` only after dropping the
-  queue lock. A slot recycled in that window makes the CPU act on a different
-  thread, or a different process.
-
-  Three of the four sub-hazards are now guarded:
-
-  - the process publish cannot lose to a dispatch (`NEW->RUNNING` is not a legal
-    transition);
-  - the dispatcher re-validates `(tid, owner_pid)` against a snapshot taken after
-    the steal swap;
-  - `thread_reset_slot` refuses a slot in `THREAD_STATE_RUNNING` and claims the
-    free with a CAS on that word, so it serialises against
-    `cpu_sched_claim_for_dispatch`, which takes no table lock;
-  - `process_reap_claim` refuses while any thread of the process is claimed for
-    dispatch. Direct evidence for this one: `process_mark_exited` was observed
-    landing on pid 95 while pid 95 was still `NEW`, because the slot the
-    dispatcher had been running was freed and re-allocated mid-dispatch. The
-    spawner's own publish then failed with
-    `spawn publish NEW->LIVE failed (state=ZOMBIE)`.
-
-  Still open: with `tests/unit/test_process_lifecycle.c`'s reap barrier removed,
-  8 runs in 20 abort at 8 CPUs and 2 in 20 at 4. The barrier therefore stays. A
-  real fix likely needs a slot to be un-recyclable for a dispatch's duration — a
-  reference the allocator honours — rather than a set of state tests, since each
-  test closes one window and the recycle simply lands in another.
-
-  **Measurement trap, read this before trying anything.** Two wrong conclusions
-  were drawn on this bug and both came from the harness, not the kernel:
-
-  1. Measuring one path while another was ungated. The spawn path dominated the
-     failures and completely hid the reap path's signal, which made a guard that
-     does work look useless. Ungate exactly one thing at a time.
-  2. Deleting the park machinery to measure "no barriers" also removed two atomic
-     ops from the dispatcher's inner loop, which changed the timing enough to
-     take a genuinely failing configuration to 0/20. Neutralise a barrier by
-     making `park_dispatchers()` return early — do NOT delete the loop's
-     `g_park_request` check.
-
-  A 20-run sample cannot separate configurations differing by 2-3 runs.
-
 - [ ] [BUG][P1] Confirm the SMP scheduler stress panic stays fixed. One cause is
   found and fixed: dispatch took no exclusive claim on the thread it was about
   to run, so two CPUs could resume one `process_context_t` on one kernel stack

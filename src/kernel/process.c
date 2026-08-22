@@ -765,6 +765,7 @@ static void process_reset_slot(process_t* proc) {
     proc->is_idle = 0;
     proc->in_hostcall = 0;
     proc->auto_reap = 0;
+    proc->reap_requested = 0;
     proc->needs_runtime_lock = 0;
     proc->ready = 0;
     process_clear_runtime_tag(proc);
@@ -991,8 +992,17 @@ static uint8_t process_has_dispatched_thread(const process_t* proc) {
             break;
         }
         thread = thread_get(tid);
-        if (thread &&
-            __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_RUNNING) {
+        if (!thread) {
+            continue;
+        }
+        /* The reference spans the whole dispatch INCLUDING its result handling;
+         * the RUNNING test alone stops covering the tail, because a thread that
+         * exits is transitioned to ZOMBIE early in that handler while `proc` is
+         * still being read. */
+        if (__atomic_load_n(&thread->dispatch_ref, __ATOMIC_ACQUIRE) != 0u) {
+            return 1;
+        }
+        if (__atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_RUNNING) {
             return 1;
         }
     }
@@ -1015,6 +1025,9 @@ static void process_reap_claim(process_t* proc) {
      * process_schedule_once_impl, which retries via process_try_auto_reap, and
      * the wait/PM paths retry independently. */
     if (process_has_dispatched_thread(proc)) {
+        /* Hand the retry to the dispatch that caused this: the requester may be a
+         * one-shot (process_reap_zombie_pid from the PM) and never ask again. */
+        __atomic_store_n(&proc->reap_requested, 1u, __ATOMIC_RELEASE);
         return;
     }
     /* The single ZOMBIE -> REAPING claim: only the CPU whose CAS wins proceeds
@@ -2157,6 +2170,12 @@ int process_schedule_once(void) {
 }
 
 static int process_schedule_once_impl(void) {
+    /* Single-exit state. Every path after the dispatch reference is taken below
+     * leaves through `dispatch_done`, which is the only place that releases it --
+     * a leaked reference would make the thread's slot permanently unreapable, so
+     * the release must not depend on remembering it at nine separate returns. */
+    int sched_rc = SCHED_OK;
+    uint32_t reap_pid = 0;
     if (PROCESS_MAX_COUNT == 0) {
         return SCHED_R_MAXCOUNT;
     }
@@ -2220,11 +2239,17 @@ static int process_schedule_once_impl(void) {
      * individually -- as a different thread, of a different process.  See the
      * re-validation after the dispatch claim. */
     uint32_t picked_tid = thread->tid;
+    /* Own the slot for the rest of this dispatch, INCLUDING the result handling.
+     * thread_reset_slot and process_reap_claim both refuse while this is held, so
+     * neither the thread slot nor its process slot can be recycled underneath the
+     * raw pointers this function carries across the switch. */
+    __atomic_fetch_add(&thread->dispatch_ref, 1u, __ATOMIC_ACQ_REL);
     process_t* proc = process_owner_for_thread(thread);
     if (!proc || !proc->entry) {
         /* Idle losing its owner really is the panic case; any other thread
          * losing one is the reap race above, seen a few instructions later. */
-        return picked_idle ? SCHED_R_PICK : SCHED_R_STALE;
+        sched_rc = picked_idle ? SCHED_R_PICK : SCHED_R_STALE;
+        goto dispatch_done;
     }
     /* Thread state alone determines runnability. */
     if (thread->state != THREAD_STATE_READY) {
@@ -2254,7 +2279,8 @@ static int process_schedule_once_impl(void) {
                           (unsigned)thread->block_reason,
                           (unsigned)(n + 1u));
         }
-        return SCHED_R_NOTREADY;
+        sched_rc = SCHED_R_NOTREADY;
+        goto dispatch_done;
     }
     /* The READY test above is the cheap reject; this claim is what makes the
      * dispatch exclusive (see cpu_sched_claim_for_dispatch).  The loser drops the
@@ -2270,7 +2296,8 @@ static int process_schedule_once_impl(void) {
                           (unsigned)__atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE),
                           (unsigned)(cn + 1u));
         }
-        return SCHED_R_CLAIMED;
+        sched_rc = SCHED_R_CLAIMED;
+        goto dispatch_done;
     }
 
     /* Re-validate the identity now that the claim is held.  The steal path above
@@ -2288,7 +2315,8 @@ static int process_schedule_once_impl(void) {
      * business running. */
     if (thread->tid != picked_tid || thread->owner_pid != proc->pid) {
         (void)thread_transit(thread, THREAD_STATE_RUNNING, THREAD_STATE_READY);
-        return SCHED_R_STALE;
+        sched_rc = SCHED_R_STALE;
+        goto dispatch_done;
     }
 
     if (!process_set_running(proc, thread)) {
@@ -2296,7 +2324,8 @@ static int process_schedule_once_impl(void) {
          * do not dispatch it.  Its thread will be reaped via the zombie path.
          * Release the claim so the state matches the pre-claim disposition. */
         (void)thread_transit(thread, THREAD_STATE_RUNNING, THREAD_STATE_READY);
-        return SCHED_R_ZOMBIE;
+        sched_rc = SCHED_R_ZOMBIE;
+        goto dispatch_done;
     }
     if (thread->ticks_remaining == 0) {
         thread->ticks_remaining = thread->time_slice_ticks;
@@ -2337,7 +2366,8 @@ static int process_schedule_once_impl(void) {
         cpu_local()->current_thread = 0;
         thread_set_current(0);
         critical_section_leave();
-        return SCHED_R_CTX;
+        sched_rc = SCHED_R_CTX;
+        goto dispatch_done;
     }
     if (run_ctx->root_table == 0) {
         run_ctx->root_table = mm_context_root_table(proc->context_id);
@@ -2367,7 +2397,8 @@ static int process_schedule_once_impl(void) {
         cpu_local()->current_thread = 0;
         thread_set_current(0);
         critical_section_leave();
-        return SCHED_R_ROOT;
+        sched_rc = SCHED_R_ROOT;
+        goto dispatch_done;
     }
     if (thread->is_kernel_worker) {
         /* Snapshot all callee-saved registers into g_sched_ctx so that when
@@ -2452,10 +2483,11 @@ static int process_schedule_once_impl(void) {
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         /* A concurrent kill/exit can mark the owner zombie while this thread
          * is still returning from its timeslice. Never requeue it afterwards. */
-        process_try_auto_reap(proc);
+        reap_pid = proc->pid; /* reaped at dispatch_done, once the ref is gone */
         cpu_local()->last_index = proc->pid;
         cpu_local()->need_resched = 0;
-        return SCHED_R_ZOMBIE;
+        sched_rc = SCHED_R_ZOMBIE;
+        goto dispatch_done;
     }
 
     if (result == PROCESS_RUN_EXITED) {
@@ -2584,9 +2616,31 @@ static int process_schedule_once_impl(void) {
     }
 
     cpu_local()->last_index = proc->pid;
-    process_try_auto_reap(proc);
+    reap_pid = proc->pid; /* reaped at dispatch_done, once the ref is gone */
     cpu_local()->need_resched = 0;
-    return (result == PROCESS_RUN_YIELDED) ? SCHED_OK : SCHED_R_RANDONE;
+    sched_rc = (result == PROCESS_RUN_YIELDED) ? SCHED_OK : SCHED_R_RANDONE;
+
+dispatch_done:
+    __atomic_fetch_sub(&thread->dispatch_ref, 1u, __ATOMIC_ACQ_REL);
+    /* Now that the slot is releasable, retry the reap this dispatch deferred.
+     * Re-resolved by pid rather than reused as a pointer: the reference is gone,
+     * so `proc` is no longer guaranteed to describe that process, and
+     * process_find_by_pid answers 0 if it has already been reaped elsewhere. */
+    if (reap_pid != 0) {
+        process_t* done = process_find_by_pid(reap_pid);
+        if (done) {
+            /* An explicit reap this dispatch refused is retried unconditionally:
+             * its requester already decided, and re-checking waiters here would
+             * second-guess a decision made with more context. Otherwise fall back
+             * to the ordinary auto-reap policy. */
+            if (__atomic_exchange_n(&done->reap_requested, 0u, __ATOMIC_ACQ_REL)) {
+                process_reap_claim(done);
+            } else {
+                process_try_auto_reap(done);
+            }
+        }
+    }
+    return sched_rc;
 }
 
 /* One timer tick's worth of accounting on the CALLING CPU, called from the timer

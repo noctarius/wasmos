@@ -252,23 +252,31 @@ linked feature documents for rationale and rollout plans.
   asserts the refusal counters are non-zero so a run that never entered the
   window fails instead of passing vacuously. With the guards restored it aborts
   at every width.
-- A dispatch holds a raw pointer to a thread SLOT and reads `time_slice_ticks`,
-  `kstack_top` and `worker_entry` only after dropping the queue lock, so a slot
-  recycled in that window hands the dispatching CPU a different thread. The spawn
-  side of that is closed: `NEW->RUNNING` is not a legal process transition, and
-  the dispatcher re-validates `(tid, owner_pid)` against a snapshot taken after
-  the steal swap. The reap side is guarded but not closed:
-  `thread_reset_slot` refuses a slot in `THREAD_STATE_RUNNING` and claims the
-  free with a CAS on that word, so it serialises against
-  `cpu_sched_claim_for_dispatch`, which takes no table lock. `process_reap_claim`
-  refuses on the same condition, because a dispatch holds its process pointer
-  across the result handling too — a slot freed there let `process_mark_exited`
-  land on a freshly spawned, still-`NEW` process.
-- `test_process_lifecycle` therefore still serialises REAP against dispatch
-  through a park barrier, and no longer serialises spawn. Each path is clean
-  individually (0/20 per width with one ungated); ungating both is 10/20 at 8
-  CPUs, which is the interaction `TASKS.md` still tracks. The kill is never
-  gated — that overlap is the suite's subject.
+- A dispatch holds raw pointers to a thread SLOT and a process SLOT across
+  `process_schedule_once_impl` — through the switch AND through the result
+  handling that follows — and reads `time_slice_ticks`, `kstack_top` and
+  `worker_entry` only after dropping the queue lock. `thread_t::dispatch_ref` is
+  what makes those slots un-recyclable for that whole window:
+  `process_schedule_once_impl` takes it once its pick is final and releases it at
+  a single exit, and both `thread_reset_slot` and `process_reap_claim` refuse
+  while it is held.
+- It is a REFERENCE, not a state test, and that is the load-bearing part. The
+  thread's state legitimately changes several times inside the window
+  (READY → RUNNING → ZOMBIE for a thread that exits), so every state-based guard
+  covers only a piece of it and the recycle lands in the rest. Four such guards
+  were tried first and each left a residue; they remain as cheap early rejects
+  (`NEW->RUNNING` is not a legal process transition, the dispatcher re-validates
+  `(tid, owner_pid)` after its claim, and both frees still test
+  `THREAD_STATE_RUNNING`) but the reference is what closes the window.
+- A refused reap is deferred, never dropped: `process_reap_claim` records
+  `reap_requested`, and the dispatch that caused the refusal retries it after
+  releasing the reference, re-resolving the process by pid. Without that the
+  refusal stranded slots — the requester is often a one-shot
+  (`process_reap_zombie_pid` from the PM) and never asks again.
+- `test_process_lifecycle` therefore serialises nothing: spawn, kill and reap all
+  run concurrently with every dispatcher. 0/20 runs abort per width at 2, 4 and 8
+  CPUs and 0/10 at 16, with `spawn_retries=0`; neutralising `dispatch_ref` returns
+  it to 4/15 aborts with the original three signatures.
 
 ### Build, Configuration, and Validation
 

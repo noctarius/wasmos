@@ -235,6 +235,12 @@ typedef struct process {
     /* Reap the zombie automatically once nothing is waiting on it, instead of
      * holding the slot for a process_wait / PROC_IPC_WAIT that will never come. */
     uint8_t auto_reap;
+    /* A reap was requested and refused because a CPU was mid-dispatch of one of
+     * this process's threads. The refusal is short-lived but its requester does
+     * not necessarily come back -- process_reap_zombie_pid is a one-shot from the
+     * PM -- so the flag makes the dispatch that caused the refusal responsible
+     * for retrying it. Without it a refused reap strands the slot forever. */
+    uint8_t reap_requested;
     uint8_t needs_runtime_lock;     /* take runtime_lock around every entry call */
     uint8_t ready;                  /* the child has announced readiness (notify_ready) */
     uint8_t require_explicit_ready; /* PM must not treat spawn alone as ready */

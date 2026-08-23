@@ -1501,11 +1501,15 @@ Source: `architecture/25-diagnostics-status.md`,
   have been proposed; neither survived.
 
   1. The claim consumers (`sched_settle_deferred_enqueue`,
-     `sched_sweep_owed_enqueues`) do take the claim before validating and destroy
-     it when the validation fails -- but everything downstream enqueues
-     unconditionally. The `PROCESS_RUN_BLOCKED` branch enqueues on READY and even
-     repairs a still-RUNNING legacy yielder; the ordinary yield branch marks READY
-     and enqueues with only an `is_idle` guard. Consume-and-drop there is covered.
+     `sched_sweep_owed_enqueues`) take the claim before validating and destroy it
+     when the validation fails. THIS WAS REFUTED IN ERROR AND IS THE LIVE
+     SUSPECT -- see the correction below. The refutation argued that everything
+     downstream enqueues unconditionally, which is true of the DISPATCH exits (the
+     `PROCESS_RUN_BLOCKED` branch enqueues on READY and even repairs a
+     still-RUNNING legacy yielder; the yield branch enqueues with only an
+     `is_idle` guard) and false of the consumers themselves, which is where the
+     debt is destroyed. Refuting a mechanism by checking the wrong code path is
+     the single most expensive mistake made in this investigation.
   2. An aborted dispatch. `dispatch_done` never re-enqueues, and every path
      reaching it has already had the thread unlinked, so an abort does leave
      exactly the captured state -- demonstrated on the host by
@@ -1547,7 +1551,44 @@ Source: `architecture/25-diagnostics-status.md`,
   claim that the strand "fires several times per boot" came from reading the
   counts as strands and is withdrawn.
 
-  CAUSE 4 IS FIXED AND A FIFTH IS EXPOSED, which is this item's usual pattern.
+  CORRECTION, 2026-08-23, and it reinstates suspect 1. The strand that survives
+  the boundary repair names a third promoter:
+
+      [diag]! tid=31 pid=22 ata st=ready rq=0 owed=0 wake=0   (four samples)
+      ready_by=ffffffff80226d91 (sched_mark_ready_if_live)
+
+  All THREE callers of `sched_mark_ready_if_live` pair it with
+  `sched_owe_enqueue` -- the two enqueue-current arms in `cpu_sched_enqueue` and,
+  since 1e46fac0aa, `sched_wake_thread`'s deferral arm. A thread promoted by that
+  function therefore always has a debt published. Observing it with `owed=0`
+  means the debt was published and then DESTROYED by a consumer that did not act
+  on it, which is suspect 1 above.
+
+  The mechanism, end to end: a waker marks the thread READY and owes the enqueue
+  (correct); a consumer takes the debt -- `sched_take_owed_enqueue` exchanges it
+  to 0 and decrements `g_enqueue_owed_count` -- and then finds the thread
+  momentarily not enqueueable (RUNNING on another CPU, or already queued) and
+  returns; the thread later settles as READY with no debt, no token and no queue.
+  Nothing can recover it, because the sweep's own gate is the counter the
+  consumer just decremented.
+
+  The fix belongs in the consumers, not at the dispatch boundary: either validate
+  BEFORE taking the claim, or re-publish it when the validation fails. Both have
+  a cost worth thinking about -- validate-first can take a claim for a thread
+  that changed state in between (harmless: `cpu_sched_enqueue` re-checks and
+  skips), while re-publishing keeps a debt alive for a thread that is legitimately
+  not runnable, which leaves `g_enqueue_owed_count` non-zero and makes the sweep
+  run on every idle pass.
+
+  What the boundary repair added in a83b9d4d35 does and does not do: it recovers a
+  thread stranded at the END OF ITS OWN DISPATCH, and it cannot see this case at
+  all, because the final promotion happens outside any dispatch. It also
+  over-triggers -- seven firings in one clean boot, all `rc=7` -- because a
+  synchronous check cannot separate "stranded" from "in flight", the only
+  difference being elapsed time. Consider reverting it to report-only once the
+  consumers are fixed.
+
+  CAUSE 4 IS FIXED AND A FIFTH WAS SUSPECTED, which is this item's usual pattern.
   The first post-fix capture (`graphics-and-vt`, on 1e46fac0aa, failing
   `test_tty_switch_stress_with_output_spam`) still shows a persistent strand --
   `stranded(ready,no-rq)=1` across five samples, tid=31 `ata`, READY, unqueued,
@@ -1556,7 +1597,10 @@ Source: `architecture/25-diagnostics-status.md`,
       ready_by=ffffffff80222ada (process_schedule_once_impl)
 
   It is no longer `sched_wake_thread`, so that path is closed. The new promoter is
-  the dispatcher itself, and the prime suspect is the `SCHED_R_STALE` repair:
+  the dispatcher itself. `SCHED_R_STALE` was suspected and is now RULED OUT: with
+  the tripwire's owner resolution fixed it reports this case, and every one of the
+  seven reports in a clean boot carries `rc=7`, the normal exit, not `rc=8`. The
+  suspect text below is retained only to show what was checked:
   `thread->tid != picked_tid || thread->owner_pid != proc->pid` transits
   RUNNING -> READY and jumps to `dispatch_done`, which never enqueues. That is the
   aborted-dispatch mechanism demonstrated on the host by

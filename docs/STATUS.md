@@ -315,6 +315,16 @@ linked feature documents for rationale and rollout plans.
   `sched_sweep_owed_enqueues` is gated on the global debt counter that a thread
   with no debt never enters. The enqueue-current path in `cpu_sched_enqueue` has
   always published a claim for the same reason.
+- A claim consumer validates BEFORE taking the claim, never after.
+  `sched_take_owed_enqueue` is documented as consuming the claim "returning 1 to
+  the single caller that owns the enqueue", so a caller that takes ownership and
+  then declines has absorbed a wake: the debt is gone, `g_enqueue_owed_count` has
+  been decremented, and `sched_sweep_owed_enqueues` -- gated on that counter -- can
+  no longer find the thread. `sched_settle_deferred_enqueue` therefore reads the
+  state first; it runs the instant a dispatch ends, where transient states are
+  most likely. The sweep keeps take-then-validate on purpose, as the definitive
+  resolver: it runs only when a CPU has nothing else to do, and something must be
+  able to retire a debt whose thread is never coming back.
 - The stall dump carries the two fields that diagnosed that: `owed=` on every
   thread line, and `ready_by=` (resolved to a symbol) for a stranded thread, which
   names whoever last promoted it. `SCHED_DEBUG_DISPATCH_LEFT_STRANDED` reports a

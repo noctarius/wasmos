@@ -735,6 +735,67 @@ static void s_a_wake_that_defers_leaves_something_actionable(void) {
     drop_transition_target(pid);
 }
 
+/* Regression: 2026-08-23-settle-destroys-a-claim-it-declines -- a claim consumer
+ * that declines to enqueue destroys the claim anyway, so the hand-off it was
+ * carrying is lost and no later mechanism can recover it.
+ *
+ * sched_take_owed_enqueue's own comment states the contract it breaks:
+ * "Consume the claim, returning 1 to the single caller that owns the enqueue."
+ * Owning the enqueue and then not performing it is the contradiction --
+ * sched_settle_deferred_enqueue takes the claim first and only then reads the
+ * state, so a thread that is momentarily not enqueueable leaves the consumer
+ * holding a debt it discards. Nothing recovers it: sched_sweep_owed_enqueues is
+ * gated on g_enqueue_owed_count, which sched_take_owed_enqueue has already
+ * decremented.
+ *
+ * This is the mechanism six CI captures point at, and it is also the hypothesis
+ * this investigation refuted IN ERROR (by checking the dispatch exits, which do
+ * enqueue unconditionally, rather than the consumers, which do not -- see
+ * docs/TASKS.md). What this case pins is the consumer contract itself, which is
+ * provable here regardless of how the CI strand is finally shown to arise.
+ *
+ * The claim is published the way the kernel publishes it -- an enqueue refused
+ * because another CPU still names the thread as current -- rather than by poking
+ * the field, so the test exercises the real protocol end to end. */
+static void s_a_consumer_that_declines_keeps_the_claim(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    /* Publish a claim through the real path: CPU 1 names the thread as current, so
+     * cpu_sched_enqueue refuses to link it and records the debt instead. */
+    g_cpus[1].current_thread = t;
+    sched_enqueue_thread(t);
+    CHECK(t->enqueue_owed == 1, "an enqueue refused for a running thread left a claim");
+    CHECK(t->on_rq == 0, "and did not link it");
+
+    /* The thread is no longer enqueueable -- it blocked again, which is the whole
+     * reason the consumer has a state test at all. */
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_IPC);
+    g_cpus[1].current_thread = 0;
+
+    sched_settle_deferred_enqueue(t);
+
+    /* The consumer declined, correctly -- a BLOCKED thread must not be linked into
+     * a ready queue. What it must NOT do is take the claim with it. Either the
+     * thread is queued, or the debt is still outstanding for whoever can honour
+     * it; a consumer that leaves neither has silently absorbed a wake. */
+    printf("  ... after a declining settle: state=%u on_rq=%u owed=%u\n",
+           (unsigned)t->state,
+           (unsigned)t->on_rq,
+           (unsigned)t->enqueue_owed);
+    CHECK(t->on_rq || t->enqueue_owed,
+          "a consumer that declined to enqueue left the claim outstanding");
+
+    drop_transition_target(pid);
+}
+
 /* ------------------------------------------------------- the kill race soak */
 
 /* Nothing here is serialised against dispatch. Spawn, kill and reap all run
@@ -1007,6 +1068,7 @@ int main(void) {
     s_exiting_owner_refuses_both_transitions();
     s_aborted_dispatch_leaves_its_thread_reachable();
     s_a_wake_that_defers_leaves_something_actionable();
+    s_a_consumer_that_declines_keeps_the_claim();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

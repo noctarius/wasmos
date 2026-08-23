@@ -787,10 +787,29 @@ void sched_settle_deferred_enqueue(thread_t* t) {
     if (!t) {
         return;
     }
-    if (!sched_take_owed_enqueue(t)) {
+    /* Validate BEFORE taking the claim, never after.  sched_take_owed_enqueue is
+     * documented as consuming the claim "returning 1 to the single caller that
+     * owns the enqueue", and a caller that takes ownership and then declines has
+     * absorbed a wake: the debt is gone, g_enqueue_owed_count has been
+     * decremented, and sched_sweep_owed_enqueues -- gated on that counter -- can
+     * no longer find the thread.  Reading the state first leaves the debt
+     * outstanding for whoever can honour it.
+     *
+     * This runs the instant a dispatch ends, which is when transient states are
+     * most likely: the thread may be mid-wake on another CPU, or briefly RUNNING.
+     * Declining is correct in those cases; discarding the claim while declining is
+     * not.  The definitive resolution belongs to the sweep, which runs only when a
+     * CPU has nothing else to do and therefore sees settled state.
+     *
+     * The reverse order costs one thing, stated so it is not mistaken for an
+     * oversight: the state can change between this read and the exchange, so a
+     * claim may be taken for a thread that has just stopped being READY.
+     * cpu_sched_enqueue re-checks and skips, which is a logged no-op rather than a
+     * lost wake -- the failure this ordering removes. */
+    if (__atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE) != THREAD_STATE_READY) {
         return;
     }
-    if (__atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE) != THREAD_STATE_READY) {
+    if (!sched_take_owed_enqueue(t)) {
         return;
     }
     cpu_sched_enqueue(cpu_sched(), t);

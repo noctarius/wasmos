@@ -2699,30 +2699,28 @@ dispatch_done:
         uint32_t sn = sched_debug_note(SCHED_DEBUG_DISPATCH_LEFT_STRANDED);
         if ((sn & (sn - 1u)) == 0u) {
             serial_printf_unlocked(
-                "[sched] dispatch left stranded tid=%u pid=%u rc=%d cpu=%u (n=%u, repaired)\n",
+                "[sched] dispatch left stranded tid=%u pid=%u rc=%d cpu=%u (n=%u)\n",
                 (unsigned)thread->tid,
                 (unsigned)stranded_owner_pid,
                 (int)sched_rc,
                 (unsigned)cpu_local()->cpu_id,
                 (unsigned)(sn + 1u));
         }
-        /* Repair, and strictly AFTER the report: the repair publishes a claim and
-         * the condition above tests for the absence of one, so repairing first
-         * would silence the diagnostic that found this.
+        /* REPORT ONLY, deliberately.  This check once repaired the state here by
+         * calling sched_enqueue_thread, and the measurement said not to: it fired
+         * 28 times in a single clean boot, because a synchronous test at this point
+         * cannot separate "stranded" from "in flight" -- the only difference is
+         * elapsed time, and a waker that promotes then enqueues a statement later,
+         * or a stealer that has unlinked but not yet claimed, both present exactly
+         * this state.  Repairing them enqueued threads that needed nothing and
+         * could leave a brief ghost entry for one another CPU was about to
+         * dispatch.
          *
-         * Justified by the INVARIANT rather than by knowing which exit produced it:
-         * a READY thread whose owner is live is runnable by definition, so leaving
-         * it on no run queue with nothing owing it is wrong however it got here.
-         * Same rule sched_wake_thread's deferral arm follows -- publish something
-         * actionable, never a bare mark.
-         *
-         * Safe at this point specifically: this CPU cleared current_thread above,
-         * so it is no longer the holder, which is what makes linking from here
-         * legal (sched_settle_deferred_enqueue relies on the same fact).
-         * sched_enqueue_thread re-checks the holder scan, the state and the on_rq
-         * claim, so it links, defers with a claim, or declines -- it cannot
-         * double-link. */
-        sched_enqueue_thread(thread);
+         * Recovery belongs where the state has settled: the claim protocol, whose
+         * consumers no longer discard a debt they decline to act on, and
+         * sched_sweep_owed_enqueues, which runs only when a CPU has nothing else to
+         * do.  What remains here is the tripwire that found all of this, and `rc`
+         * is the field that says which exit. */
     }
     /* Now that the claim is gone, a detached thread this dispatch retired can be
      * released. Its refusal path is not expected to trigger here -- nothing else

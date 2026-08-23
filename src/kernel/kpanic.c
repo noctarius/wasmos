@@ -311,6 +311,16 @@ void diag_dump_threads(const char* reason) {
             diag_print_backtrace(t->ctx.rbp, 10);
         }
         serial_printf_unlocked("\n");
+        /* For a strand, WHO made it runnable.  A READY thread on no run queue was
+         * promoted by someone who then did not enqueue it, and that promotion site
+         * is the defect; every other field in this dump describes the aftermath.
+         * Printed only for the anomaly, so a healthy dump does not grow. */
+        if (anomaly && t->state == THREAD_STATE_READY) {
+            uint64_t by = __atomic_load_n(&t->ready_by, __ATOMIC_RELAXED);
+            serial_printf_unlocked("[diag]   ready_by=%016llx", (unsigned long long)by);
+            panic_print_symbol(by);
+            serial_printf_unlocked("\n");
+        }
         /* What the thread is waiting ON, and whether anything is already there
          * for it.  A blocked owner whose endpoint holds a queued message is a
          * lost wake: the send happened and the receiver was never made

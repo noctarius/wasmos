@@ -471,6 +471,12 @@ static void s_promotion_wakes_a_blocked_target_and_clears_its_reason(void) {
     CHECK(process_test_set_ready(process_get(pid), t) == 1, "the owner permits the wake");
     CHECK(t->state == THREAD_STATE_READY, "a blocked target is promoted to READY");
     CHECK(t->block_reason == THREAD_BLOCK_NONE, "and its block reason is cleared with the state");
+    /* The promotion recorded WHO performed it. Asserted as non-zero rather than
+     * against an address, which would pin the linker's layout: the failure mode
+     * worth catching is a breadcrumb that is never written at all, since the stall
+     * dump would then print a plausible-looking zero forever and the next reader
+     * would conclude nothing promoted the thread. */
+    CHECK(t->ready_by != 0, "and the promotion recorded its call site");
 
     drop_transition_target(pid);
 }

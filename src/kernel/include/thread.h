@@ -138,6 +138,18 @@ typedef struct thread {
      * rq names the owning queue so the reap path can unlink without knowing
      * which CPU last enqueued the thread.  Valid only while on_rq is 1. */
     uint8_t on_rq;
+    /* Diagnostic breadcrumb: the return address of whoever last moved this thread
+     * to READY, recorded by the three primitives that write the state
+     * (thread_set_state, thread_transit, thread_wake_if_blocked) and scrubbed when
+     * the slot is recycled.
+     *
+     * It answers the one question a stranded-READY thread cannot otherwise answer:
+     * who made it runnable and then did not enqueue it. Every other field in a
+     * stall dump describes the aftermath.
+     *
+     * Written cross-CPU with a relaxed atomic and read only by the dump; not
+     * load-bearing, nothing schedules on it. */
+    uint64_t ready_by;
     /* An enqueue this thread is OWED.  cpu_sched_enqueue refuses to link a
      * thread that some CPU still names as current -- it is executing, and
      * linking it would let a second CPU dispatch it -- so it records the debt

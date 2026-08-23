@@ -274,10 +274,20 @@ linked feature documents for rationale and rollout plans.
   left a residue; they remain as cheap early rejects (`NEW->RUNNING` is not a legal
   process transition, and the dispatcher re-validates `(tid, owner_pid)` after its
   claim) but the claim is what closes the window.
-- Promotions to READY go through `thread_transit` and report what the CAS won.
-  Writing READY unconditionally could DEMOTE a thread another CPU had already
-  claimed and dispatched, and hand the caller a second enqueue of a thread that is
-  already executing.
+- Promotions to READY go through `thread_wake_if_blocked`, and its result is
+  deliberately IGNORED. Only the DEMOTION is avoided — writing READY over RUNNING
+  would lose a dispatch another CPU had already claimed — and `thread_set_state`
+  is not used because it clears `block_reason` as a side effect that a bare state
+  CAS does not, and a READY thread still carrying the reason it blocked for is put
+  straight back to sleep by the wait paths.
+- Reporting the promotion's result to the caller is WRONG and was reverted twice
+  for the same reason, so it is worth stating as a rule: `process_set_ready`
+  answers "may this owner's thread be made runnable" (an owner question, about
+  `exiting`/ZOMBIE), never "did this call change the thread's state". Gating
+  `sched_wake_claim_enqueue` on the latter drops wakes aimed at a thread that is
+  executing right now — that handshake exists precisely to hand such an enqueue to
+  the target's own completion path. Both regressions wedged the boot with the CLI
+  never seeing typed input, and both passed every local gate.
 - `proc->exiting`, `proc->thread_count`, `proc->live_thread_count` and the
   scheduler's progress diagnostics are read and written cross-CPU, so each has one
   atomic protocol rather than a mix. `live_thread_count` reaching zero gates

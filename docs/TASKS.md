@@ -1317,6 +1317,34 @@ Source: `architecture/25-diagnostics-status.md`,
 
   A `[sched] claim lost` line means the race fired and the claim resolved it.
 
+- [ ] [BUG][P1] The `warp_smp` boot arm stalls between `net-stack` coming up and
+  `sysinit` spawning the app tier, roughly every other CI run. It fails as
+  `FAIL: calculator did not fully initialise`, but the calculator is not
+  involved: the serial log's last line is `[net-stack] tls: no CA trust store`
+  and it never reaches `[warp-driver] start: gfx-smoke`, `Calculator` or `cli`,
+  so nothing after net-stack is spawned at all. Only the WARP + SMP
+  configuration is affected; `warp_single`, `wasm3_single` and `wasm3_smp` pass
+  in the same runs.
+
+  Captures, both with an identical log tail: run 32625904585 (`main` at
+  78018f8191, the merge of PR #18) and run 32634831416 (PR #19). Attribution is
+  settled: PR #18 was documentation only and `warp_smp` went from passing on PR
+  #17's merge to failing on #18's, so the trigger is runner timing, not any
+  code in either change.
+
+  Reproduces on the CI runner and probably not locally: this box runs QEMU
+  `thread=single`, which masks memory-ordering races (see
+  `architecture/28-smp.md` and the SMP notes). Validate on Linux x86 with
+  `-smp 4` over repeated boots rather than expecting one local failure.
+- [ ] [BUG][P1] `test_host_resolves_localhost`
+  (`tests/test_net_stack_dns_resolve_e2e.py:40`) times out waiting for the first
+  `wamos> ` prompt for 120 s, failing the `networking` battery. The assertion
+  that fails is the *initial prompt wait*, before any DNS work, so the boot did
+  not come up rather than the resolution failing -- the same class as the
+  `warp_smp` stall above, and not a DNS defect. Captured in run 32634831416
+  (PR #19); the same battery failed on `main` at 78018f8191 on a different case
+  (`test_link_down_up_preserves_netif`), so the battery has more than one
+  whole-session stall in it.
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and
   reaches `arp sent`, then no `notify rx=` arrives, so it fails as an assertion

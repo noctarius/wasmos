@@ -725,12 +725,35 @@ static void s_kill_races_the_lifecycle_transitions(void) {
     CHECK(__atomic_load_n(&g_kills_landed, __ATOMIC_ACQUIRE) >= 20u,
           "the killer landed kills in quantity");
 
-    /* The decisive assertion. Reaching either transition with an owner that is
+    /* The exploration assertion. Reaching either transition with an owner that is
      * already exiting is the interleaving that used to panic; a non-zero count
      * proves this run entered that window and refused instead of dying, and a
-     * zero count means the soak never got there and has demonstrated nothing. */
-    CHECK(refused_ready + refused_running > 0,
-          "a lifecycle transition raced an exit and was refused rather than fatal");
+     * zero count means this arm explored nothing and its soak has demonstrated
+     * only that the churn does not corrupt anything.
+     *
+     * Asserted from width 4 up, and REPORTED at width 2, because width 2 does not
+     * drive the race hard enough to promise a hit. start_dispatchers(KILLER_CPU)
+     * spawns no dispatcher threads at all there -- its loop is `for cpu = 1;
+     * cpu < 1` -- so the only dispatcher is this thread, which also owns every
+     * spawn, kill and reap and is therefore inside process_schedule_once for a
+     * fraction of the run, against a full-time killer. Measured across three CI
+     * runs: 0, 2 and 9 refusals at width 2, versus 76-110 at widths 4 and 8. A
+     * gate whose verdict is a coin flip reports the runner's scheduling, not the
+     * kernel's behaviour, and it already turned a docs-only commit red on main.
+     *
+     * Nothing is lost by not asserting it here. Widths 4 and 8 assert it on the
+     * same code, and the refusal behaviour itself is proved outright by the
+     * contract cases above, which cannot miss. What width 2 is really for is the
+     * concurrent kill/retire churn against a single dispatcher, and the work
+     * counters above are what establish that it ran. */
+    if (NCPU >= 4) {
+        CHECK(refused_ready + refused_running > 0,
+              "a lifecycle transition raced an exit and was refused rather than fatal");
+    } else if (refused_ready + refused_running == 0) {
+        printf("  ... note: width %u explored no exiting-owner transition this run;"
+               " the contract cases cover the branches\n",
+               (unsigned)NCPU);
+    }
 }
 
 /* The same target with no killer: a worker retiring under a healthy owner must

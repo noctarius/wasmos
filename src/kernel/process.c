@@ -2228,7 +2228,24 @@ static int process_schedule_once_impl(void) {
             } else {
                 /* Reaped mid-steal. It is already off every queue and its slot
                  * is being torn down, so it is dropped rather than re-queued --
-                 * the same disposition cpu_sched_pick_next gives stale nodes. */
+                 * the same disposition cpu_sched_pick_next gives stale nodes.
+                 *
+                 * Counted because "off every queue" is the part that needs
+                 * watching: cpu_sched_steal_pick unlinked this thread and
+                 * released its on_rq before handing it over, so the drop is
+                 * final. Correct while the owner really is gone, and a strand if
+                 * it is not -- and the two are indistinguishable after the fact,
+                 * which is why the count exists at all. */
+                uint32_t dn = sched_debug_note(SCHED_DEBUG_DISPATCH_DROPPED_STEAL_REAPED);
+                if ((dn & (dn - 1u)) == 0u) {
+                    serial_printf(
+                        "[sched] steal dropped tid=%u owner=%u state=%u cpu=%u (n=%u)\n",
+                        (unsigned)stolen->tid,
+                        (unsigned)stolen->owner_pid,
+                        (unsigned)__atomic_load_n((uint32_t*)&stolen->state, __ATOMIC_ACQUIRE),
+                        (unsigned)cpu_local()->cpu_id,
+                        (unsigned)(dn + 1u));
+                }
                 return SCHED_R_STALE;
             }
         }
@@ -2263,7 +2280,28 @@ static int process_schedule_once_impl(void) {
                                      __ATOMIC_ACQUIRE)) {
         /* Being torn down, or already claimed by another CPU that raced us to the
          * same pick. Either way it is the reap race this file already treats as
-         * normal, and nothing has been touched yet. */
+         * normal.
+         *
+         * What has ALREADY been touched, and what an earlier comment here denied:
+         * cpu_sched_pick_next (or cpu_sched_steal_pick) unlinked this thread
+         * under the queue lock and released its on_rq before returning it, so its
+         * place in the run queue is gone. Only the SLOT claim is untaken. This
+         * exit therefore drops a thread that is off every queue and does not
+         * re-enqueue it -- benign for a slot being torn down, and a permanent
+         * strand for a live thread whose dispatch_ref merely lost a race it could
+         * lose again. Counted so that reading "no strand came from here" means
+         * something. */
+        uint32_t dn = sched_debug_note(SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST);
+        if ((dn & (dn - 1u)) == 0u) {
+            serial_printf("[sched] slot claim lost tid=%u owner=%u state=%u ref=%u cpu=%u "
+                          "(n=%u)\n",
+                          (unsigned)picked_tid,
+                          (unsigned)thread->owner_pid,
+                          (unsigned)__atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE),
+                          (unsigned)slot_claim,
+                          (unsigned)cpu_local()->cpu_id,
+                          (unsigned)(dn + 1u));
+        }
         return SCHED_R_STALE;
     }
     process_t* proc = process_owner_for_thread(thread);

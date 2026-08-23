@@ -1616,8 +1616,9 @@ Source: `architecture/25-diagnostics-status.md`,
   and every capture shows `wake=0`, and its `ready_by` would name
   `process_wake_waiters`/`process_set_ready`, never observed.
 
-  TWO LIVE CANDIDATES, both of which produce the captured state exactly and
-  neither of which is instrumented:
+  TWO LIVE CANDIDATES, both of which produce the captured state exactly. Both are
+  now INSTRUMENTED, and candidate A is no longer a hypothesis -- see the two
+  entries after this list:
 
   A. An unlink-then-drop. `cpu_sched_pick_next` and `cpu_sched_steal_pick` unlink
      the thread and clear `on_rq` BEFORE the caller holds any claim; then
@@ -1631,11 +1632,73 @@ Source: `architecture/25-diagnostics-status.md`,
      bad prio, non-READY, `on_rq` already set, and the double-link bail, which
      releases `on_rq` and returns -- yielding READY, rq=0, owed=0 exactly.
 
-  What discriminates them, and it must come before any further fix: make those
-  counters PER-THREAD or print `sched_debug_count()` totals in the stall dump, so
-  a negative means something; and add a counter plus one-shot log to the two
-  currently blind exits in `process.c`. Until then every "ruled out" in this entry
-  should be read as "not observed, in a log that suppresses ~80% of observations".
+  THE DISCRIMINATOR NOW EXISTS, 2026-08-23, and reading it is the next step. Three
+  pieces, all in place:
+
+  1. Per-thread run-queue forensics on `thread_t`: `rq_enq_result` (the outcome of
+     the last enqueue attempt), `rq_link_count` (times this thread was actually
+     linked), `rq_unlink_site` (who last released `on_rq`) and `rq_enq_by` (the
+     call site of that attempt, carried in through the new
+     `cpu_sched_enqueue_from`). The stall dump prints them for a strand as
+     `enq= links= unlink= enq_by=`, beside `ready_by=`.
+  2. A counter and a one-shot log at each of the two formerly blind exits in
+     `process.c` -- `SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST` (the `dispatch_ref`
+     CAS failed) and `SCHED_DEBUG_DISPATCH_DROPPED_STEAL_REAPED` (the stolen
+     thread's owner was gone). The `slot claim lost` line carries the OBSERVED
+     `ref=` value, which separates "another CPU raced this pick" (1, DISPATCH) from
+     "a reaper is tearing the slot down" (2, FROZEN).
+  3. Every tripwire's running total on one line in the stall dump
+     (`[diag] sched counters: ...`), printed even when zero. This is what makes a
+     negative reading mean anything: the per-event logs suppress roughly four hits
+     in five, and four conclusions in this entry were drawn from absent log lines.
+
+  How to read a capture: `links>0` with `unlink=pick_next`/`steal` is candidate A
+  and points at the dispatch exits. `enq=skip:*` is candidate B and names which
+  guard in `cpu_sched_enqueue_from` declined -- `skip:double-link`,
+  `skip:already-queued`, `skip:non-ready`, `skip:bad-prio`, `skip:idle`.
+  `links=0` cannot be reached by candidate A at all. `enq=deferred` means a claim
+  was published, which `owed=` then says whether anything still holds.
+
+  Pinned by the X1-X7 cases in `tests/unit/test_sched_runqueue.c`: that the two
+  histories read differently, that each refusal outcome is distinct from every
+  other, that the record describes the last attempt rather than the last failure,
+  that each picker and remover stamps its own site, and that re-init clears the
+  record. All seven were mutation-checked against four deliberate breakages of the
+  recording and each one caught its mutant.
+
+  CANDIDATE A IS DEMONSTRATED, 2026-08-23, with a LIVE owner and no race. Pinned
+  by "a lost slot claim strands a live owner's thread" in
+  `tests/unit/test_process_lifecycle.c`, which holds `thread_t::dispatch_ref` at
+  `THREAD_SLOT_DISPATCH` before driving a real dispatch -- exactly what a second
+  CPU that won the same pick, or a reaper mid-teardown, presents. Measured:
+
+      state=1 on_rq=0 owed=0 wake=0 links=2 unlink=pick_next
+
+  which is the CI signature field for field, with the owner still live and
+  therefore never reaped. `cpu_sched_pick_next` had already unlinked the thread and
+  released `on_rq`; the exit returns `SCHED_R_STALE` without re-enqueueing; nothing
+  can recover it, because `sched_sweep_owed_enqueues` is gated on the global debt
+  counter and this thread carries no debt.
+
+  This SUPERSEDES, for this exit only, the note in
+  `s_aborted_dispatch_leaves_its_thread_reachable` that calls the live-owner abort
+  "not constructible from here". That note stands for the
+  `SCHED_DEBUG_SET_RUNNING_EXITING` route it was written about.
+
+  It also explains why `rc=7` on every `SCHED_DEBUG_DISPATCH_LEFT_STRANDED` report
+  never contradicted candidate A: this exit returns BEFORE `dispatch_done`, where
+  that tripwire lives, so it is structurally invisible to it. The test asserts that
+  silence so it is a documented property rather than another negative read as
+  evidence.
+
+  What that does NOT settle: whether this exit is the mechanism behind the CI
+  strands, only that it can produce them. The remaining work is one capture read
+  through the new fields. A naive repair -- re-enqueueing at the exit -- makes the
+  host case go green, and is NOT the fix to reach for: the same exit is taken for a
+  slot a reaper has FROZEN, and re-enqueueing a dying owner's thread is the
+  non-converging repair loop already measured at `dispatch_done` (the host suite
+  did not terminate at all with the live-owner exclusion forced off). Any fix here
+  needs the same owner-liveness condition.
 
   FIXED in the consumer, 2026-08-23, and it IS a real defect regardless of the
   above: `sched_settle_deferred_enqueue` now reads the

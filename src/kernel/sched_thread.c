@@ -76,6 +76,62 @@ uint32_t sched_debug_count(sched_debug_event_t ev) {
     return __atomic_load_n(&g_sched_debug[ev], __ATOMIC_RELAXED);
 }
 
+/* Record the outcome and call site of an enqueue attempt on `t`.  Every exit from
+ * cpu_sched_enqueue_from that has a thread to record against calls this exactly
+ * once, the successful link included, so the field describes the most recent
+ * ATTEMPT and not the most recent FAILURE: a stale skip code left standing behind
+ * a later success would report "never queued" for a thread that is queued, which
+ * is the false negative these fields exist to remove.  The NULL-thread return is
+ * the one exit with nowhere to write. */
+static inline void sched_note_enqueue(thread_t* t, sched_enq_result_t result, uintptr_t site) {
+    __atomic_store_n(&t->rq_enq_result, (uint8_t)result, __ATOMIC_RELAXED);
+    __atomic_store_n(&t->rq_enq_by, (uint64_t)site, __ATOMIC_RELAXED);
+    if (result == SCHED_ENQ_LINKED) {
+        /* fetch_add, not load-modify-store: this call is made AFTER cs->lock is
+         * released, so the linker that just published the node can still be here
+         * while a CPU that picked it and a third that re-enqueued it are too.
+         * Two of those overlapping is a genuine data race on this counter, not a
+         * torn diagnostic -- and the ThreadSanitizer arm of test_sched_concurrency
+         * reports it. */
+        (void)__atomic_fetch_add(&t->rq_link_count, 1u, __ATOMIC_RELAXED);
+    }
+}
+
+static const char* const g_sched_enq_result_names[] = {
+    "none",
+    "linked",
+    "deferred",
+    "skip:idle",
+    "skip:bad-prio",
+    "skip:non-ready",
+    "skip:already-queued",
+    "skip:double-link",
+};
+
+static const char* const g_sched_unlink_site_names[] = {
+    "none",
+    "pick_next",
+    "steal",
+    "stale-sweep",
+    "dequeue",
+    "remove",
+    "double-link-bail",
+};
+
+const char* sched_enq_result_name(uint8_t result) {
+    if (result >= (sizeof(g_sched_enq_result_names) / sizeof(g_sched_enq_result_names[0]))) {
+        return "?";
+    }
+    return g_sched_enq_result_names[result];
+}
+
+const char* sched_unlink_site_name(uint8_t site) {
+    if (site >= (sizeof(g_sched_unlink_site_names) / sizeof(g_sched_unlink_site_names[0]))) {
+        return "?";
+    }
+    return g_sched_unlink_site_names[site];
+}
+
 static inline int cpu_sched_highest_prio(const cpu_sched_t* cs) {
     uint8_t bm = cs->ready_bitmap & 0x7Fu;
     if (bm == 0) {
@@ -200,12 +256,17 @@ static int sched_mark_ready_if_live(thread_t* t) {
 /* Unlink a thread from the queue that owns it and release its run-queue claim.
  * Caller holds cs->lock and must have established that t is linked in cs.
  *
+ * `site` records WHO took the thread off the queue, in thread_t::rq_unlink_site.
+ * It is passed rather than derived from a return address because the two sites
+ * that matter -- a picker handing the thread to a dispatch, and a picker DROPPING
+ * it as terminal -- are two calls inside one function and share a return address.
+ *
  * The band's ready bit is derived from list emptiness rather than from the
  * counter reaching zero.  The counter is a statistic (used for load balancing);
  * the list is the truth.  Deriving the bit means a counter that has drifted --
  * historically by underflowing past zero, which wedged the picker on a band
  * whose bit could never clear again -- cannot stop the band from going idle. */
-static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
+static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t, sched_unlink_site_t site) {
     /* The band comes from the thread's recorded linkage, never from its current
      * sched_prio, so mutating the priority while queued cannot misdirect the
      * accounting.  Taking it as a parameter invited exactly that mistake. */
@@ -249,6 +310,7 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
      * re-validated under the lock -- but undefined by the memory model and a
      * genuine ThreadSanitizer report. */
     __atomic_store_n(&t->rq, (struct cpu_sched_s*)0, __ATOMIC_RELEASE);
+    __atomic_store_n(&t->rq_unlink_site, (uint8_t)site, __ATOMIC_RELAXED);
     /* Release the claim last: an enqueuer spinning on the exchange must not be
      * able to start linking this node until the unlink above has retired. */
     __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
@@ -257,6 +319,10 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
 static void sched_owe_enqueue(thread_t* t);
 
 void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
+    cpu_sched_enqueue_from(cs, t, (uintptr_t)__builtin_return_address(0));
+}
+
+void cpu_sched_enqueue_from(cpu_sched_t* cs, thread_t* t, uintptr_t caller) {
     /* A NULL thread must not reach the current_thread scan below: a CPU that
      * has not dispatched yet holds current_thread == NULL, so NULL == NULL
      * matches and the "still running elsewhere" path dereferences it. */
@@ -277,9 +343,10 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
             if ((n & (n - 1u)) == 0u) {
                 serial_printf("[sched] enqueue idle tid=%u caller=%016llx (n=%u, skipped)\n",
                               (unsigned)t->tid,
-                              (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                              (unsigned long long)caller,
                               (unsigned)(n + 1u));
             }
+            sched_note_enqueue(t, SCHED_ENQ_SKIP_IDLE, caller);
             return;
         }
         if (g_cpus[i].current_thread == t) {
@@ -294,6 +361,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
                     __atomic_store_n(
                         (uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
                 }
+                sched_note_enqueue(t, SCHED_ENQ_DEFERRED, caller);
                 return;
             }
             serial_printf(
@@ -321,6 +389,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
                 __atomic_store_n((uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
             }
             sched_owe_enqueue(t);
+            sched_note_enqueue(t, SCHED_ENQ_DEFERRED, caller);
             return;
         }
     }
@@ -359,9 +428,10 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
                 "[sched] enqueue bad prio tid=%u prio=%u caller=%016llx (n=%u, skipped)\n",
                 (unsigned)t->tid,
                 (unsigned)t->sched_prio,
-                (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                (unsigned long long)caller,
                 (unsigned)(n + 1u));
         }
+        sched_note_enqueue(t, SCHED_ENQ_SKIP_BAD_PRIO, caller);
         return;
     }
     /* Atomic load: state is published by thread_transit's CAS from other CPUs,
@@ -382,9 +452,10 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
                           (unsigned)t->owner_pid,
                           (unsigned)state,
                           (unsigned)reason,
-                          (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                          (unsigned long long)caller,
                           (unsigned)(n + 1u));
         }
+        sched_note_enqueue(t, SCHED_ENQ_SKIP_NON_READY, caller);
         return;
     }
     /* SMP wake/block races can reach enqueue from multiple CPUs for the same
@@ -419,6 +490,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     ksync_spinlock_lock(&cs->lock);
     if (__atomic_exchange_n(&t->on_rq, 1, __ATOMIC_ACQ_REL)) {
         ksync_spinlock_unlock(&cs->lock);
+        sched_note_enqueue(t, SCHED_ENQ_SKIP_ALREADY_QUEUED, caller);
         return; /* already queued somewhere */
     }
     uint8_t prio = t->sched_prio;
@@ -439,14 +511,21 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
                 (unsigned)prio,
                 (void*)t->rq,
                 (void*)cs,
-                (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                (unsigned long long)caller,
                 (unsigned)(dn + 1u));
         }
         /* Release the claim taken above before bailing.  Returning while still
          * holding it would strand the thread: no queue holds it, and every later
-         * enqueue would lose the exchange and drop the insert forever. */
+         * enqueue would lose the exchange and drop the insert forever.
+         *
+         * Stamped as an unlink site even though no list_head_del ran: this is the
+         * one other place on_rq goes from 1 to 0, and leaving the field naming
+         * whatever unlinked the thread LAST time would attribute the release to a
+         * picker that is not running. */
+        __atomic_store_n(&t->rq_unlink_site, (uint8_t)SCHED_UNLINK_DOUBLE_LINK, __ATOMIC_RELAXED);
         __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
         ksync_spinlock_unlock(&cs->lock);
+        sched_note_enqueue(t, SCHED_ENQ_SKIP_DOUBLE_LINK, caller);
         return;
     }
     t->rq_prio = prio;
@@ -456,6 +535,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     __atomic_store_n(
         &cs->ready_bitmap, (uint8_t)(cs->ready_bitmap | (1u << prio)), __ATOMIC_RELAXED);
     ksync_spinlock_unlock(&cs->lock);
+    sched_note_enqueue(t, SCHED_ENQ_LINKED, caller);
 }
 
 void cpu_sched_remove_thread(thread_t* t) {
@@ -486,7 +566,7 @@ void cpu_sched_remove_thread(thread_t* t) {
         }
         ksync_spinlock_lock(&cs->lock);
         if (__atomic_load_n(&t->rq, __ATOMIC_ACQUIRE) == cs) {
-            cpu_sched_unlink_locked(cs, t);
+            cpu_sched_unlink_locked(cs, t, SCHED_UNLINK_REMOVE);
             ksync_spinlock_unlock(&cs->lock);
             return;
         }
@@ -500,10 +580,11 @@ void cpu_sched_remove_thread(thread_t* t) {
 }
 
 /* cpu_sched_enqueue onto the CALLING CPU's queue, with `caller` carried through
- * purely so the diagnostics below can name the original call site (the
- * sched_enqueue_thread inline wrapper passes its own return address).  `caller`
- * has no
- * effect on placement or on whether the enqueue happens.
+ * purely so the diagnostics can name the original call site (the
+ * sched_enqueue_thread inline wrapper passes its own return address), both here
+ * and inside cpu_sched_enqueue_from, which takes it as a parameter for exactly
+ * this reason.  `caller` has no effect on placement or on whether the enqueue
+ * happens.
  *
  * Not a failure-reporting API: a thread still running on another CPU, or one
  * that is not READY, is handled or reported and the call returns normally. */
@@ -541,11 +622,10 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
             break;
         }
     }
-    /* DIAGNOSTIC: same check as cpu_sched_enqueue, done here because this path
-     * knows the ORIGINAL call site.  cpu_sched_enqueue can only report its
-     * immediate caller, which for everything routed through here is just this
-     * function -- useless for telling one sched_enqueue_thread() site from
-     * another. */
+    /* DIAGNOSTIC: same check as cpu_sched_enqueue_from, kept because the two
+     * report different things -- that one names the state at the on_rq claim,
+     * this one names the state the caller handed over, and a thread promoted
+     * between them fails only the first. */
     if (t->state != THREAD_STATE_READY) {
         uint32_t n = sched_debug_bump(SCHED_DEBUG_ENQUEUE_FROM_NON_READY);
         if ((n & (n - 1u)) == 0u) {
@@ -559,7 +639,7 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
                           (unsigned)(n + 1u));
         }
     }
-    cpu_sched_enqueue(cpu_sched(), t);
+    cpu_sched_enqueue_from(cpu_sched(), t, caller);
 }
 
 /* Unlink `t` from `cs`, which the caller must already know owns it.  No
@@ -568,7 +648,7 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
  * when the owning queue is not known for certain.  Caller holds cs->lock. */
 void cpu_sched_dequeue(cpu_sched_t* cs, thread_t* t) {
     /* Caller holds cs->lock. */
-    cpu_sched_unlink_locked(cs, t);
+    cpu_sched_unlink_locked(cs, t, SCHED_UNLINK_DEQUEUE);
 }
 
 thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
@@ -636,9 +716,15 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
         list_head_t *pos, *tmp;
         list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
             thread_t* t = list_entry(pos, thread_t, sched_node);
-            cpu_sched_unlink_locked(cs, t);
+            cpu_sched_unlink_locked(cs, t, SCHED_UNLINK_PICK_NEXT);
             uint32_t st = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
             if (t->tid == 0 || st == THREAD_STATE_UNUSED || st == THREAD_STATE_ZOMBIE) {
+                /* Re-stamped rather than passed to the unlink: the terminal test
+                 * runs after it, and a slot dropped here is NOT a thread handed
+                 * to a dispatch -- reading the two as one site would attribute
+                 * every reaped node to a pick that never happened. */
+                __atomic_store_n(
+                    &t->rq_unlink_site, (uint8_t)SCHED_UNLINK_STALE_SWEEP, __ATOMIC_RELAXED);
                 continue;
             }
             return t;
@@ -934,6 +1020,15 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
     t->on_rq = 0;
     t->rq = 0;
     t->rq_prio = 0;
+    /* Reset with the rest of the run-queue state: this thread has never been
+     * enqueued in its current band, and a forensic record carried over from the
+     * previous one would attribute the last unlink to a queue it is no longer
+     * in.  Only reachable for a re-banded thread; a fresh slot arrives already
+     * scrubbed by thread_reset_slot. */
+    t->rq_enq_result = SCHED_ENQ_NONE;
+    t->rq_unlink_site = SCHED_UNLINK_NONE;
+    t->rq_link_count = 0;
+    t->rq_enq_by = 0;
     list_head_init(&t->sched_node);
     list_head_init(&t->event_node);
     sched_event_init(&t->join_event, SCHED_EVENT_TYPE_JOIN);
@@ -1059,7 +1154,7 @@ static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs, uint32_t to_cpu) {
             /* Lazy sweep: drop reaped/tombstoned stale nodes (see pick_next). */
             uint32_t st = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
             if (t->tid == 0 || st == THREAD_STATE_UNUSED || st == THREAD_STATE_ZOMBIE) {
-                cpu_sched_unlink_locked(cs, t);
+                cpu_sched_unlink_locked(cs, t, SCHED_UNLINK_STALE_SWEEP);
                 continue;
             }
             if (t == cs->idle || t->sched_sticky) {
@@ -1071,7 +1166,7 @@ static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs, uint32_t to_cpu) {
             if (!cpu_sched_affinity_allows(t, to_cpu)) {
                 continue;
             }
-            cpu_sched_unlink_locked(cs, t);
+            cpu_sched_unlink_locked(cs, t, SCHED_UNLINK_STEAL);
             return t;
         }
     }

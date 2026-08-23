@@ -194,6 +194,14 @@ typedef enum {
      * slots left behind by a process reap.  Both should be unreachable; they are
      * counted rather than asserted because the cost of being wrong is a leaked
      * slot, not corruption. */
+    /* A dispatch ended with its thread READY, on no run queue, owed no enqueue
+     * and its owner still live -- so nothing will ever enqueue it and the
+     * owed-enqueue sweep cannot help either, because its gate is the global debt
+     * counter and this thread carries no debt.  Reached only through the aborting
+     * exits of process_schedule_once_impl, which hand back the thread's STATE but
+     * not its place in a queue; the report carries the abort's SCHED_R_* code,
+     * which is the field that says which one. */
+    SCHED_DEBUG_DISPATCH_LEFT_STRANDED,
     SCHED_DEBUG_THREAD_REAP_REFUSED,
     SCHED_DEBUG_OWNER_REAP_LEFTOVER,
     SCHED_DEBUG_EVENT_COUNT

@@ -546,6 +546,121 @@ static void s_exiting_owner_refuses_both_transitions(void) {
     drop_transition_target(pid);
 }
 
+/* Regression: 2026-08-23-aborted-dispatch-strands-its-thread -- a dispatch that
+ * aborts after its thread has been taken off a run queue leaves it on no queue,
+ * because `dispatch_done` releases the slot claim and handles reaps but never
+ * re-enqueues (`src/kernel/process.c`, the label body).
+ *
+ * By the time any of those aborts is reachable the thread is ALREADY unlinked:
+ * cpu_sched_pick_next unlinks under the queue lock and cpu_sched_try_steal
+ * unlinks from the remote queue, both before the dispatcher claims it. So the
+ * run queue is not a place the thread can be "left"; it has to be put back, and
+ * two of the aborts explicitly hand back only the STATE
+ * (`thread_transit(RUNNING, READY)`) before jumping to the label.
+ *
+ * The abort driven here is the one that needs no race: process_set_running
+ * refuses because the owner is `exiting`, which this case publishes directly.
+ * The refusal itself is correct and is asserted elsewhere in this file -- the
+ * question is what happens to the thread AFTER it.
+ *
+ * Why this is the shape to test now: six CI captures of a whole-session stall all
+ * report the same thread as READY, on no run queue, with no wake token and no owed
+ * enqueue (`stranded(ready,no-rq)=1`, gfx-compositor, `disp` frozen across every
+ * sample; see docs/TASKS.md). That is the state an aborted dispatch leaves behind,
+ * and no other mechanism in the tree has been shown to produce it.
+ *
+ * REACHABILITY is the open question this case does not settle, and it must not be
+ * read as settling it. `exiting` is set in exactly one place
+ * (`process_mark_exited`) and is followed by a forced transition to ZOMBIE, so a
+ * thread stranded by THIS abort belongs to a process that is being torn down and
+ * would be reaped anyway. What makes it worth pinning regardless: the strand is a
+ * property of the abort path, not of the reason for the abort, and the other two
+ * aborts (`SCHED_R_STALE`, and a claim lost to another CPU) reach the same label
+ * by the same route. */
+static void s_aborted_dispatch_leaves_its_thread_reachable(void) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* t = 0;
+    process_t* proc = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+
+    if (process_spawn("abort-target", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a target");
+        return;
+    }
+    if (process_thread_spawn_worker_internal(pid, "abort-worker", sibling_worker, 0, &tid) != 0) {
+        CHECK(0, "spawned a worker");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    t = thread_get(tid);
+    proc = process_get(pid);
+    if (!t || !proc) {
+        CHECK(0, "the worker and its owner are resident");
+        (void)process_kill(pid, 0);
+        return;
+    }
+
+    /* The worker is READY and queued: process_thread_spawn_worker_internal
+     * publishes it and calls sched_spawn_thread, which is the state a dispatcher
+     * finds it in. */
+    CHECK(t->state == THREAD_STATE_READY, "the worker is READY");
+    CHECK(t->on_rq == 1, "and queued, so a dispatch has something to unlink");
+
+    /* Publish the refusal condition without killing the process, so the abort is
+     * the only thing that touches the worker. */
+    __atomic_store_n(&proc->exiting, 1u, __ATOMIC_RELEASE);
+
+    /* Drive the REAL dispatch path rather than re-implementing its sequence.
+     * sched_spawn_thread may have placed the worker on another CPU's queue, so
+     * this CPU reaches it by stealing, which only happens when pick_next returns
+     * this CPU's idle thread -- hence a bounded loop rather than one call. Stops
+     * as soon as the worker is off every queue, which is the moment the abort has
+     * happened. */
+    for (uint32_t i = 0; i < 20000u && t->on_rq; ++i) {
+        (void)process_schedule_once();
+    }
+
+    CHECK(sched_debug_count(SCHED_DEBUG_SET_RUNNING_EXITING) > 0,
+          "a dispatch of the worker was refused, so the abort was reached");
+
+    /* What the abort actually does, recorded because it is the CI signature
+     * exactly: READY (1), on no run queue, owed nothing, no wake token. */
+    printf("  ... after the abort: state=%u on_rq=%u owed=%u wake=%u\n",
+           (unsigned)t->state,
+           (unsigned)t->on_rq,
+           (unsigned)t->enqueue_owed,
+           (unsigned)t->wake_pending);
+    CHECK(t->state == THREAD_STATE_READY && !t->on_rq && !t->enqueue_owed && !t->wake_pending,
+          "the abort left the thread runnable, unqueued and owed nothing");
+
+    /* The invariant, and the reason it is conditional rather than absolute. A
+     * runnable thread must be reachable -- queued, or owed an enqueue -- UNLESS
+     * its owner is going away, in which case leaving it unqueued is deliberate
+     * and the reaper collects it. Re-enqueueing it there would be re-picked and
+     * re-refused at process_set_running forever.
+     *
+     * Written as a disjunction including the owner's state so it pins the SAFETY
+     * ARGUMENT, not just today's behaviour: the day an abort strands a thread
+     * whose owner is alive, this fails. That is the case six CI captures show and
+     * that no test could previously express. */
+    uint8_t owner_going_away =
+        proc->state == PROCESS_STATE_ZOMBIE || __atomic_load_n(&proc->exiting, __ATOMIC_ACQUIRE);
+    CHECK(t->on_rq || t->enqueue_owed || t->state != THREAD_STATE_READY || owner_going_away,
+          "a thread left unqueued by an aborted dispatch belongs to a dying owner");
+
+    /* And the kernel's own tripwire for that case must agree: it excludes a dying
+     * owner, so this abort must NOT have reported one. A count here would mean
+     * the tripwire over-reports and would bury the real signal in CI. */
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_LEFT_STRANDED) == 0,
+          "the stranded-dispatch tripwire stayed silent for a dying owner");
+
+    __atomic_store_n(&proc->exiting, 0u, __ATOMIC_RELEASE);
+    drop_transition_target(pid);
+}
+
 /* ------------------------------------------------------- the kill race soak */
 
 /* Nothing here is serialised against dispatch. Spawn, kill and reap all run
@@ -808,6 +923,7 @@ int main(void) {
     s_promotion_wakes_a_blocked_target_and_clears_its_reason();
     s_promotion_of_a_ready_target_is_permitted_and_inert();
     s_exiting_owner_refuses_both_transitions();
+    s_aborted_dispatch_leaves_its_thread_reachable();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

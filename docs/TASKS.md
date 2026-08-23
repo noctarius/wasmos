@@ -1448,12 +1448,48 @@ Source: `architecture/25-diagnostics-status.md`,
   READY with `wake=0` and `enqueue_owed` clear is precisely the "a mark is not a
   message" failure those were written to close.
 
-  The dump now reports that field as `owed=` on every thread line, which the
-  capture above did not have and which splits the strand into its two causes:
-  `owed=1` means a waker published the debt and the holder's settle never
-  performed it (the hand-off exists and was dropped), `owed=0` with `wake=0` means
-  nothing ever took responsibility for the enqueue. They need different fixes, so
-  the next capture should be read for that field first.
+  The dump now reports that field as `owed=` on every thread line, and two further
+  captures have read it. Both say `owed=0`:
+
+      run 32637549686, scheduler-and-ipc (bystander: test_work_stealing)
+      [diag]! tid=46 pid=37 gfx-compositor st=ready rq=0 owed=0 wake=0 btrans=0
+              ev=0 cpu=0 ticks=3 disp=1223            -- identical in 4 samples
+
+      run 32637549686, language-runtimes (bystander: test_hello_as)
+      [diag]! tid=46 pid=37 gfx-compositor st=ready rq=0 owed=0 wake=0 btrans=0
+              ev=0 cpu=2 ticks=2 disp=679             -- identical in 5 samples
+
+  ESTABLISHED by those two plus the earlier one: the strand is always the SAME
+  thread -- gfx-compositor, tid=46, pid=37 -- across three captures in three
+  different batteries; it is READY, on no run queue, with no wake token AND no
+  owed enqueue; and `disp` never moves across a capture's samples, so it is not an
+  unsettled claim caught mid-flight. Nothing owes it an enqueue, so nothing will
+  ever perform one.
+
+  SUSPECTED, not yet demonstrated: both consumers of the claim take it BEFORE
+  validating, and destroy it when the validation fails.
+
+      sched_settle_deferred_enqueue: if (!sched_take_owed_enqueue(t)) return;
+                                     if (state != READY) return;   /* debt gone */
+      sched_sweep_owed_enqueues:     if (!sched_take_owed_enqueue(t)) { ... }
+                                     if (state == READY && !on_rq) enqueue;
+
+  `sched_take_owed_enqueue` exchanges `enqueue_owed` to 0 and decrements
+  `g_enqueue_owed_count`, so a consumer that then bails leaves the thread with no
+  debt -- and that counter is the gate the sweep safety net keys on, which is why
+  the net cannot recover a thread whose debt was consumed and dropped. A holder
+  settling while another CPU has the thread briefly non-READY is enough to destroy
+  the hand-off. That shape matches every field in the captures, but a matching
+  shape is not a demonstration, and this exact code has already wedged the boot
+  twice when changed on reasoning alone (PR #17).
+
+  What would settle it, and the order to do it in: a host unit test in
+  `test_sched_runqueue.c` or `test_sched_concurrency.c` (both link
+  `sched_thread.c`) that publishes a claim, makes the thread non-READY, settles,
+  restores READY and settles again, then asserts the thread is neither queued nor
+  owed -- red before any change to the settle path. Only then decide whether the
+  fix is to re-publish the claim on a failed validation or to validate before
+  taking it.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

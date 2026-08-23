@@ -1578,14 +1578,27 @@ Source: `architecture/25-diagnostics-status.md`,
   -- it was a SECOND cause, not a refuted one, and the note above that reads it as
   refuted should be read as "not the cause of the sched_wake_thread strand".
 
-  The tripwire has a blind spot in exactly that case and it must be fixed before
-  the next capture can confirm anything: no `[sched] dispatch left stranded` line
-  appears anywhere in that run. The exclusion consults `proc`, the process the
-  dispatch STARTED with, but a STALE exit means the slot was recycled -- `proc` is
-  the old process, typically already ZOMBIE, while the thread now belongs to a live
-  one. So the report is suppressed for the one exit that now matters. Resolve the
-  owner from `thread->owner_pid` at report time instead of trusting the `proc` the
-  dispatch began with.
+  The tripwire was blind to exactly that case -- no `[sched] dispatch left
+  stranded` line appears anywhere in that run despite the strand -- because its
+  exclusion consulted `proc`, the process the dispatch STARTED with. A STALE exit
+  means the slot was recycled: `proc` is the old process, typically already ZOMBIE,
+  while the thread belongs to a live one, so the report was suppressed for the one
+  exit that needed it. It now re-resolves the owner from `thread->owner_pid`.
+
+  And `dispatch_done` now REPAIRS the invariant rather than only reporting it: a
+  thread that is READY, unqueued, owed nothing and whose live owner wants it
+  runnable is handed to `sched_enqueue_thread`, which links it, defers it with a
+  claim, or declines -- it cannot double-link. Justified by the invariant, not by
+  knowing which exit produced it: a READY thread with a live owner is runnable by
+  definition, so leaving it on no run queue is wrong however it got there. The
+  report runs FIRST, because the repair publishes a claim and the tripwire tests
+  for the absence of one.
+
+  The live-owner exclusion on that repair is load-bearing, and verified rather
+  than assumed: with it forced off, the host suite does not terminate at all
+  (killed at 25 s against a normal 1.5 s), because a dying owner's thread is
+  re-enqueued, re-picked, refused at `process_set_running` and repaired again. A
+  repair that ignores the owner's state does not converge.
 
   What would confirm a fix, once that is done: several consecutive full-suite runs
   with no persistent `stranded(ready,no-rq)` in any dump. The strand is present in

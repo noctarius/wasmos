@@ -468,14 +468,18 @@ static void s_promotion_wakes_a_blocked_target_and_clears_its_reason(void) {
     }
 
     thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_WAIT_PROCESS);
+    /* Cleared before the transition under test, and that is the whole point of the
+     * assertion below. process_thread_spawn_worker_internal already promotes the
+     * worker via thread_transit(BLOCKED, READY), so this field was ALREADY set
+     * before this case ran: asserting it non-zero without clearing it passed even
+     * with the recorder in thread_wake_if_blocked deleted, which is exactly the dud
+     * it was meant to catch. */
+    t->ready_by = 0;
     CHECK(process_test_set_ready(process_get(pid), t) == 1, "the owner permits the wake");
     CHECK(t->state == THREAD_STATE_READY, "a blocked target is promoted to READY");
     CHECK(t->block_reason == THREAD_BLOCK_NONE, "and its block reason is cleared with the state");
-    /* The promotion recorded WHO performed it. Asserted as non-zero rather than
-     * against an address, which would pin the linker's layout: the failure mode
-     * worth catching is a breadcrumb that is never written at all, since the stall
-     * dump would then print a plausible-looking zero forever and the next reader
-     * would conclude nothing promoted the thread. */
+    /* Non-zero rather than a specific address, which would pin the linker's layout
+     * instead of the behaviour. */
     CHECK(t->ready_by != 0, "and the promotion recorded its call site");
 
     drop_transition_target(pid);
@@ -642,20 +646,20 @@ static void s_aborted_dispatch_leaves_its_thread_reachable(void) {
     CHECK(t->state == THREAD_STATE_READY && !t->on_rq && !t->enqueue_owed && !t->wake_pending,
           "the abort left the thread runnable, unqueued and owed nothing");
 
-    /* The invariant, and the reason it is conditional rather than absolute. A
-     * runnable thread must be reachable -- queued, or owed an enqueue -- UNLESS
-     * its owner is going away, in which case leaving it unqueued is deliberate
-     * and the reaper collects it. Re-enqueueing it there would be re-picked and
-     * re-refused at process_set_running forever.
+    /* DELIBERATELY NOT asserted here: "a runnable thread is reachable unless its
+     * owner is dying". That disjunction lived here and was VACUOUS -- this case
+     * sets proc->exiting itself a few lines above and does not clear it until after
+     * the assertion, so the "owner is dying" term was true by construction and the
+     * CHECK could not fail. It also asserted strictly less than the CHECK above,
+     * which already pins state/on_rq/owed/wake unconditionally.
      *
-     * Written as a disjunction including the owner's state so it pins the SAFETY
-     * ARGUMENT, not just today's behaviour: the day an abort strands a thread
-     * whose owner is alive, this fails. That is the case six CI captures show and
-     * that no test could previously express. */
-    uint8_t owner_going_away =
-        proc->state == PROCESS_STATE_ZOMBIE || __atomic_load_n(&proc->exiting, __ATOMIC_ACQUIRE);
-    CHECK(t->on_rq || t->enqueue_owed || t->state != THREAD_STATE_READY || owner_going_away,
-          "a thread left unqueued by an aborted dispatch belongs to a dying owner");
+     * The live-owner abort -- the case the CI captures show -- is not constructible
+     * from here: `exiting` is written in exactly one place (process_mark_exited),
+     * and every other abort with a live owner needs a race (a recycled slot, or a
+     * claim lost to another CPU). This case therefore documents what the
+     * dying-owner abort does, and the tripwire-silence assertion below carries the
+     * load. Do not re-add a disjunction over state this case controls; it reads
+     * like a safety argument and is a loophole. */
 
     /* And the kernel's own tripwire for that case must agree: it excludes a dying
      * owner, so this abort must NOT have reported one. A count here would mean

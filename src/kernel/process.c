@@ -2716,11 +2716,11 @@ dispatch_done:
          * could leave a brief ghost entry for one another CPU was about to
          * dispatch.
          *
-         * Recovery belongs where the state has settled: the claim protocol, whose
-         * consumers no longer discard a debt they decline to act on, and
-         * sched_sweep_owed_enqueues, which runs only when a CPU has nothing else to
-         * do.  What remains here is the tripwire that found all of this, and `rc`
-         * is the field that says which exit. */
+         * Recovery belongs where the state has settled, and NOT here.  What
+         * remains is the tripwire, whose `rc` names the exit -- but read its
+         * output knowing that sched_debug_note rate-limits to powers of two on a
+         * GLOBAL per-event counter, so with tens of hits per boot only about six
+         * print and the absence of a line for a given thread means nothing. */
     }
     /* Now that the claim is gone, a detached thread this dispatch retired can be
      * released. Its refusal path is not expected to trigger here -- nothing else

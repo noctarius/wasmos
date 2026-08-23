@@ -322,9 +322,11 @@ linked feature documents for rationale and rollout plans.
   been decremented, and `sched_sweep_owed_enqueues` -- gated on that counter -- can
   no longer find the thread. `sched_settle_deferred_enqueue` therefore reads the
   state first; it runs the instant a dispatch ends, where transient states are
-  most likely. The sweep keeps take-then-validate on purpose, as the definitive
-  resolver: it runs only when a CPU has nothing else to do, and something must be
-  able to retire a debt whose thread is never coming back.
+  most likely. The sweep still takes before validating, and it runs on EVERY
+  iteration of the scheduler loop rather than only on an idle CPU, so it retires a
+  merely-BLOCKED thread's debt on the next iteration of the same loop -- keeping
+  the claim in the settle path is correct but is not by itself a fix for a lost
+  hand-off.
 - The stall dump carries the two fields that diagnosed that: `owed=` on every
   thread line, and `ready_by=` (resolved to a symbol) for a stranded thread, which
   names whoever last promoted it. `SCHED_DEBUG_DISPATCH_LEFT_STRANDED` reports a

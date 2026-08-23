@@ -1348,6 +1348,18 @@ Source: `architecture/25-diagnostics-status.md`,
   The mechanism is the wedge item below, whose second cause now has a persistent
   signature again. Fix that; this item is the symptom's index.
 
+  Rate, on four CI runs whose kernels are identical in every respect that could
+  matter: `warp_smp` failed, failed, passed, failed. The battery that reports the
+  stall moves between runs; the stall itself is close to a coin flip.
+
+  Where to look for evidence, because the arms are not equivalent: only the
+  BATTERY tests produce a `[stall-dump]`, because the dump comes from the Python
+  framework's stall handling. The `warp_smp` build+boot arm runs the plain
+  `run-qemu-test` halt check, so it reports `FAIL: calculator did not fully
+  initialise` and nothing else -- three captures of it carry no thread state at
+  all. Chase this through `boot-and-init` or `networking` failures, not through
+  `warp_smp`, however tempting its name is.
+
   Reproduces on CI and probably not on an Apple Silicon box: QEMU there runs
   `thread=single`, which masks memory-ordering races. Validate on Linux x86 with
   `-smp 4` over repeated boots.
@@ -1435,6 +1447,13 @@ Source: `architecture/25-diagnostics-status.md`,
   `sched_wake_claim_enqueue` / `sched_settle_deferred_enqueue`: a thread that is
   READY with `wake=0` and `enqueue_owed` clear is precisely the "a mark is not a
   message" failure those were written to close.
+
+  The dump now reports that field as `owed=` on every thread line, which the
+  capture above did not have and which splits the strand into its two causes:
+  `owed=1` means a waker published the debt and the holder's settle never
+  performed it (the hand-off exists and was dropped), `owed=0` with `wake=0` means
+  nothing ever took responsibility for the enqueue. They need different fixes, so
+  the next capture should be read for that field first.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

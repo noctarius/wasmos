@@ -239,6 +239,14 @@ void diag_dump_threads(const char* reason) {
         if (t->state == THREAD_STATE_READY) {
             ready++;
             if (!t->on_rq && !is_idle) {
+                /* READY on no run queue. `owed` on the line below is what splits
+                 * this into its two causes, which have different fixes and are
+                 * otherwise indistinguishable in a dump: owed=1 means a waker
+                 * published the debt and the holder's settle never performed it,
+                 * so the hand-off exists and was dropped; owed=0 with wake=0
+                 * means nothing ever took responsibility for the enqueue -- a
+                 * site marked the thread READY and returned, which is the "a mark
+                 * is not a message" failure the claim protocol exists to prevent. */
                 stranded++;
                 anomaly = 1;
             }
@@ -267,8 +275,8 @@ void diag_dump_threads(const char* reason) {
             }
         }
         serial_printf_unlocked(
-            "[diag]%s tid=%u pid=%u %s st=%s rsn=%s rq=%u wake=%u btrans=%u ev=%u cpu=%u "
-            "ticks=%llu disp=%llu\n",
+            "[diag]%s tid=%u pid=%u %s st=%s rsn=%s rq=%u owed=%u wake=%u btrans=%u ev=%u "
+            "cpu=%u ticks=%llu disp=%llu\n",
             anomaly ? "!" : "",
             (unsigned)t->tid,
             (unsigned)t->owner_pid,
@@ -276,6 +284,7 @@ void diag_dump_threads(const char* reason) {
             diag_thread_state_name(t->state),
             diag_block_reason_name(t->block_reason),
             (unsigned)t->on_rq,
+            (unsigned)t->enqueue_owed,
             (unsigned)t->wake_pending,
             (unsigned)t->blocking_transition,
             (unsigned)(t->wait_event ? 1u : 0u),

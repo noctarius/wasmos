@@ -1547,11 +1547,38 @@ Source: `architecture/25-diagnostics-status.md`,
   claim that the strand "fires several times per boot" came from reading the
   counts as strands and is withdrawn.
 
-  What would confirm the fix: several consecutive full-suite runs with no
-  persistent `stranded(ready,no-rq)` in any dump. The strand was present in runs
-  that still booted (it is fatal only when it lands on the last wake a thread was
-  going to receive), so a green run proves less here than usual and the
-  confirmation has to be the absence of the marker, not the absence of failures.
+  CAUSE 4 IS FIXED AND A FIFTH IS EXPOSED, which is this item's usual pattern.
+  The first post-fix capture (`graphics-and-vt`, on 1e46fac0aa, failing
+  `test_tty_switch_stress_with_output_spam`) still shows a persistent strand --
+  `stranded(ready,no-rq)=1` across five samples, tid=31 `ata`, READY, unqueued,
+  owed nothing -- but the breadcrumb has MOVED:
+
+      ready_by=ffffffff80222ada (process_schedule_once_impl)
+
+  It is no longer `sched_wake_thread`, so that path is closed. The new promoter is
+  the dispatcher itself, and the prime suspect is the `SCHED_R_STALE` repair:
+  `thread->tid != picked_tid || thread->owner_pid != proc->pid` transits
+  RUNNING -> READY and jumps to `dispatch_done`, which never enqueues. That is the
+  aborted-dispatch mechanism demonstrated on the host by
+  `s_aborted_dispatch_leaves_its_thread_reachable`, previously set aside as benign
+  -- it was a SECOND cause, not a refuted one, and the note above that reads it as
+  refuted should be read as "not the cause of the sched_wake_thread strand".
+
+  The tripwire has a blind spot in exactly that case and it must be fixed before
+  the next capture can confirm anything: no `[sched] dispatch left stranded` line
+  appears anywhere in that run. The exclusion consults `proc`, the process the
+  dispatch STARTED with, but a STALE exit means the slot was recycled -- `proc` is
+  the old process, typically already ZOMBIE, while the thread now belongs to a live
+  one. So the report is suppressed for the one exit that now matters. Resolve the
+  owner from `thread->owner_pid` at report time instead of trusting the `proc` the
+  dispatch began with.
+
+  What would confirm a fix, once that is done: several consecutive full-suite runs
+  with no persistent `stranded(ready,no-rq)` in any dump. The strand is present in
+  runs that still boot (it is fatal only when it lands on the last wake a thread
+  was going to receive), so a green run proves less here than usual, and dumps are
+  only emitted on failure -- so the confirmation has to be the absence of the
+  marker in the captures that do appear, not the absence of failures.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

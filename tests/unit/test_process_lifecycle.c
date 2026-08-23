@@ -26,29 +26,49 @@
  * genuinely IS a CPU: it has its own cpu_local, its own run queue, and it
  * contends for the same locks and atomics the kernel does.
  *
- * What a passing run means: the window was ENTERED and refused, not merely
- * absent. Both halves of the transition pair are counted
- * (SCHED_DEBUG_SET_READY_EXITING, SCHED_DEBUG_SET_RUNNING_EXITING) and the soak
- * asserts their SUM is non-zero, so a run that never reached the window fails
- * rather than passing vacuously -- the failure mode a race test normally has.
+ * The suite is in two layers, and the division is deliberate.
  *
- * Be precise about which half this reliably drives. set_running (the dispatch
- * half) is hit hundreds of times per run at every width: once an owner is
- * exiting, every attempt to dispatch one of its threads lands there. set_ready
- * (the requeue half, the one the CI panic named) is hit only occasionally --
- * 0 or 1 per 300 rounds -- because process_kill marks the owner's threads
- * shortly after setting `exiting`, so the requeue finds no READY sibling and
- * parks instead. Reaching set_ready needs the sub-window where `exiting` is
- * visible but the threads are not yet marked, which process.h:217 describes as
- * "1 slightly ahead of ->state". The sum is therefore what is asserted; the
- * printout reports both so a reader can see which half a given run explored.
+ * The CONTRACT cases drive process.c's two lifecycle transitions directly, via
+ * the WASMOS_PROCESS_TEST_SEAMS entries in process.h, and cannot miss. They own
+ * the per-branch coverage: each transition's refusal under an exiting owner, the
+ * promotion of a BLOCKED target and the clearing of its block_reason, the
+ * inertness of a requeue aimed at a READY one, and the rule that a promotion
+ * never overwrites a live dispatch claim. They are single-threaded: the
+ * interleavings these transitions absorb are stated as a starting state rather
+ * than raced for, because every production caller filters its target's state
+ * first and the windows are a few instructions wide -- unreachable from outside
+ * process.c on a host, and NOT what makes the transitions safe.
+ *
+ * The SOAK proves the real interleaving is survived end to end. Both halves of
+ * the transition pair are counted (SCHED_DEBUG_SET_READY_EXITING,
+ * SCHED_DEBUG_SET_RUNNING_EXITING) and it asserts their SUM is non-zero, so a run
+ * that never reached the window fails rather than passing vacuously -- the
+ * failure mode a race test normally has.
+ *
+ * The sum, and not each half, because of how narrow one of them is. set_running
+ * (the dispatch half) is hit hundreds of times per run at every width: once an
+ * owner is exiting, every attempt to dispatch one of its threads lands there.
+ * set_ready (the requeue half, the one the CI panic named) is hit 0-7 times per
+ * 300 rounds, because process_mark_exited publishes `exiting` four statements
+ * before it marks the owner's threads (the store to ->exiting, then
+ * block_reason, wait_target_pid and the force-transit to ZOMBIE, then
+ * thread_mark_owner_exited), and a requeue arriving after that finds no READY
+ * sibling and parks instead. Landing in that sub-window -- what process.h
+ * describes as "1 slightly ahead of ->state" -- is luck, and structurally so: the
+ * retiring worker below observes `exiting` at the window's FIRST statement and
+ * then has to travel all the way back through the dispatch return before the
+ * killer reaches its fourth. Aiming the two more tightly cannot change that, and
+ * widening the window itself would mean a behavioural hook inside a hot path.
+ * The per-branch claim therefore rests on the contract case above; the soak's job
+ * is the race, and the printout reports both counters so a reader can see which
+ * half a given run explored.
  *
  * Either half was a kpanic before the fix, so the suite is red-to-green on the
  * family: with the guards restored it aborts with "set_running zombie" at every
  * width (verified at 2 and 4 CPUs, exit 134).
  *
- * The assertions themselves are deterministic: they must hold after ANY
- * interleaving. Only which interleavings get explored varies.
+ * The assertions themselves are deterministic throughout: they must hold after
+ * ANY interleaving. Only which interleavings get explored varies.
  */
 
 #include <pthread.h>
@@ -314,6 +334,218 @@ static int spawn_race_target(uint32_t* out_pid) {
     return 0;
 }
 
+/* --------------------------------------- the transitions, driven directly */
+
+/* Spawns a live process with one kernel-worker thread and hands back that
+ * thread, unlinked from every run queue.
+ *
+ * Unlinked because that is the disposition a dispatcher sees: cpu_sched_pick_next
+ * unlinks a thread before the dispatcher claims it, so "is it linked" afterwards
+ * is an observation about what the transition under test did, not a leftover from
+ * the spawn. Returns 0, or -1 when the process table is full.
+ *
+ * The worker never runs in these cases -- nothing dispatches -- so its entry is
+ * irrelevant; sibling_worker is reused for it. */
+static int spawn_transition_target(uint32_t* out_pid, thread_t** out_thread) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* thread = 0;
+
+    if (process_spawn("xition-target", idle_main, 0, &pid) != 0) {
+        return -1;
+    }
+    if (process_thread_spawn_worker_internal(pid, "xition-worker", sibling_worker, 0, &tid) != 0) {
+        (void)process_kill(pid, 0);
+        return -1;
+    }
+    thread = thread_get(tid);
+    if (!thread) {
+        (void)process_kill(pid, 0);
+        return -1;
+    }
+    cpu_sched_remove_thread(thread);
+    *out_pid = pid;
+    *out_thread = thread;
+    return 0;
+}
+
+/* Kill and reap, so a case cannot starve the next one of table slots. The
+ * dispatch loop is what lets the owner's threads retire; 16 rounds is ample with
+ * no other CPU competing for them. */
+static void drop_transition_target(uint32_t pid) {
+    (void)process_kill(pid, 0);
+    for (uint32_t i = 0; i < 16u; ++i) {
+        (void)process_schedule_once();
+    }
+    process_reap_zombie_pid(pid);
+}
+
+/* Regression: 2026-08-23-set-ready-demotes-a-running-thread -- process_set_ready
+ * promoted its target with an unconditional thread_set_state, so a sibling
+ * requeue aimed at a thread another CPU had just claimed for dispatch wrote
+ * READY over RUNNING.
+ *
+ * What that costs: RUNNING *is* the exclusive dispatch claim
+ * (cpu_sched_claim_for_dispatch is a READY->RUNNING CAS), so overwriting it
+ * re-arms the claim -- a second CPU then wins it on a thread that is already
+ * executing, and two CPUs resume one process_context_t on one kernel stack. That
+ * is the torn-rip cpu_exception the claim was introduced to stop. The enqueue
+ * side's last-resort guard is "state != READY, skip", so a demotion silences
+ * that too and the executing thread can be linked into a ready queue as well.
+ *
+ * Driven directly because every production call site filters its target's state
+ * first (a BLOCKED waiter, a READY sibling): the demotion is reachable only when
+ * the target moves between that filter and the transition, a window a few
+ * instructions wide that cannot be produced from outside process.c. The
+ * filtering is not what makes the transition safe, which is exactly the claim
+ * this case pins.
+ *
+ * The window modelled here is the one inside a dispatch: the claim is taken and
+ * cpu_local()->current_thread is NOT yet published (process_schedule_once_impl
+ * publishes it only after process_set_running). Inside it the RUNNING state is
+ * the only record anywhere that the thread is spoken for -- sched_enqueue_thread's
+ * holder scan cannot see it -- which is why losing that state is unrecoverable
+ * rather than merely untidy. */
+static void s_promotion_never_destroys_a_dispatch_claim(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    CHECK(cpu_sched_claim_for_dispatch(t) == 1, "a dispatcher took the thread's dispatch claim");
+    CHECK(t->state == THREAD_STATE_RUNNING, "the claim is recorded as RUNNING");
+
+    int runnable = process_test_set_ready(process_get(pid), t);
+
+    /* The owner is healthy, so the wake is permitted and its caller still owes
+     * the wake/block handshake. A 0 here is the OTHER half of this pair of
+     * regressions (fixed in d8d6bf3958): the return value answers "may this
+     * owner's thread be made runnable", not "did this call change the thread's
+     * state", and reporting the latter suppresses sched_wake_claim_enqueue and
+     * loses the wake for precisely the target that is executing. */
+    CHECK(runnable == 1, "the transition reported that the owner permits the wake");
+    CHECK(t->state == THREAD_STATE_RUNNING, "the dispatch claim survived the promotion");
+
+    /* And the enqueue a permitted wake performs must not link it either. Observed
+     * BEFORE the second claim attempt below, which would otherwise repair the
+     * state it is meant to catch: a claim that wrongly succeeds writes RUNNING
+     * back, and both assertions here would then pass on a demoted thread. */
+    if (sched_wake_claim_enqueue(t)) {
+        sched_enqueue_thread(t);
+    }
+    CHECK(t->on_rq == 0, "an executing thread was not linked into a ready queue");
+    CHECK(sched_debug_count(SCHED_DEBUG_ENQUEUE_FROM_NON_READY) > 0,
+          "the enqueue was refused because the thread was not READY");
+
+    CHECK(cpu_sched_claim_for_dispatch(t) == 0,
+          "no second CPU can claim a thread that is already executing");
+
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE);
+    drop_transition_target(pid);
+}
+
+/* The half the guard above must not break: a genuinely BLOCKED target is
+ * promoted, and its block_reason goes with the state.
+ *
+ * Regression: 2026-08-22-promote-leaves-stale-block-reason (fixed 06b77e3c43) --
+ * promoting with the state alone left the waiter READY still carrying the reason
+ * it had blocked for, and the wait paths read that reason and put it straight
+ * back to sleep. */
+static void s_promotion_wakes_a_blocked_target_and_clears_its_reason(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_WAIT_PROCESS);
+    CHECK(process_test_set_ready(process_get(pid), t) == 1, "the owner permits the wake");
+    CHECK(t->state == THREAD_STATE_READY, "a blocked target is promoted to READY");
+    CHECK(t->block_reason == THREAD_BLOCK_NONE, "and its block reason is cleared with the state");
+
+    drop_transition_target(pid);
+}
+
+/* An already-READY target -- the sibling-requeue case, where the scan that found
+ * the thread found it READY -- must be reported as permitted so the caller
+ * completes the handshake, and must not be touched. */
+static void s_promotion_of_a_ready_target_is_permitted_and_inert(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    CHECK(t->state == THREAD_STATE_READY, "the spawned worker is READY");
+    CHECK(process_test_set_ready(process_get(pid), t) == 1,
+          "requeueing a READY sibling is permitted");
+    CHECK(t->state == THREAD_STATE_READY, "and leaves it READY");
+
+    drop_transition_target(pid);
+}
+
+/* Regression: 2026-08-22-set-ready-on-exiting-owner -- the panic this suite was
+ * built for, driven as a contract rather than as a race.
+ *
+ * The soak below reproduces the real interleaving, but reaches the set_ready half
+ * of the pair only 0-7 times in 300 rounds: process_kill marks the owner's
+ * threads within a few instructions of setting `exiting`, so a requeue arriving
+ * afterwards finds no READY sibling and parks the process instead of transitioning
+ * it. Reaching it needs the sub-window process.h describes as "`exiting` 1
+ * slightly ahead of ->state", which the soak can only be lucky enough to land in
+ * -- which is why its assertion is on the SUM of the two counters and cannot
+ * speak for either half alone. Publishing the flag here reproduces that window
+ * exactly, so both halves are covered by a case that cannot miss.
+ *
+ * ZOMBIE is deliberately not poked in: it is refused twice over (the state test
+ * here, then process_force_transit, which has no ZOMBIE->READY edge), and the CI
+ * panic's cause was the `exiting` flag -- the process was still in a live state
+ * when the transition arrived. */
+static void s_exiting_owner_refuses_both_transitions(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+    process_t* proc = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+    proc = process_get(pid);
+    if (!proc) {
+        CHECK(0, "the target is resident");
+        return;
+    }
+
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE);
+    __atomic_store_n(&proc->exiting, 1u, __ATOMIC_RELEASE);
+
+    CHECK(process_test_set_ready(proc, t) == 0, "a requeue under an exiting owner is refused");
+    CHECK(sched_debug_count(SCHED_DEBUG_SET_READY_EXITING) == 1, "and counted, not fatal");
+    CHECK(t->state == THREAD_STATE_BLOCKED, "and left its target alone");
+
+    CHECK(process_test_set_running(proc, t) == 0, "a dispatch under an exiting owner is refused");
+    CHECK(sched_debug_count(SCHED_DEBUG_SET_RUNNING_EXITING) == 1, "and counted, not fatal");
+    CHECK(t->state == THREAD_STATE_BLOCKED, "and left its target alone");
+
+    __atomic_store_n(&proc->exiting, 0u, __ATOMIC_RELEASE);
+    drop_transition_target(pid);
+}
+
 /* ------------------------------------------------------- the kill race soak */
 
 /* Nothing here is serialised against dispatch. Spawn, kill and reap all run
@@ -546,6 +778,13 @@ static void s_healthy_owner_still_runs_and_requeues(void) {
 
 int main(void) {
     harness_init();
+
+    /* Deterministic contract cases first: they need no dispatchers, and a
+     * failure in one of them explains a soak failure below. */
+    s_promotion_never_destroys_a_dispatch_claim();
+    s_promotion_wakes_a_blocked_target_and_clears_its_reason();
+    s_promotion_of_a_ready_target_is_permitted_and_inert();
+    s_exiting_owner_refuses_both_transitions();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

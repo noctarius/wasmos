@@ -3391,8 +3391,17 @@ static int process_set_ready(process_t* proc, thread_t* thread) {
      * is executing right now -- it hands the enqueue to that thread's completion
      * path -- so reporting 0 for those suppressed the handshake and lost the wake.
      *
-     * What the conditional promotion does buy is the demotion fix: writing READY
-     * over RUNNING would lose that dispatch, so it is no longer done. */
+     * Restricting the promotion to a BLOCKED thread is what protects a live
+     * dispatch. THREAD_STATE_RUNNING *is* the exclusive dispatch claim --
+     * cpu_sched_claim_for_dispatch is a READY->RUNNING CAS -- so writing READY
+     * over it re-arms that claim, and a second CPU then wins it on a thread that
+     * is already executing: two CPUs resuming one context on one kernel stack.
+     * Nothing else guards that window. Between the claim and the publication of
+     * cpu_local()->current_thread the RUNNING state is the only record anywhere
+     * that the thread is spoken for, so sched_enqueue_thread's holder scan cannot
+     * see it and only its "state != READY, skip" test keeps an executing thread
+     * out of a ready queue. Pinned by "the dispatch claim survived the promotion"
+     * in tests/unit/test_process_lifecycle.c. */
     (void)thread_wake_if_blocked(thread->tid);
     return 1;
 }
@@ -3426,6 +3435,17 @@ static int process_set_running(process_t* proc, thread_t* thread) {
     thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
     return 1;
 }
+
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+/* Host-test entries; see process.h.  Forwarding only. */
+int process_test_set_ready(process_t* proc, thread_t* thread) {
+    return process_set_ready(proc, thread);
+}
+
+int process_test_set_running(process_t* proc, thread_t* thread) {
+    return process_set_running(proc, thread);
+}
+#endif
 
 static void process_wake_thread_joiner(process_t* owner, thread_t* exited) {
     thread_t* waiter = 0;

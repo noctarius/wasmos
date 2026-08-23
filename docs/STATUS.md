@@ -247,11 +247,16 @@ linked feature documents for rationale and rollout plans.
 - `process.c` is host-testable behind `WASMOS_PROCESS_TEST_SEAMS`, which replaces
   its six inline-asm sites, the `KERNEL_HIGHER_HALF_BASE` alias helper and the
   saved-context rip/rsp validator — the arch facts a lifecycle question does not
-  depend on. `tests/unit/test_process_lifecycle.c` drives it from real pthreads
-  (one scheduler loop per CPU, a killer on the last) at 2, 4 and 8 CPUs, and
-  asserts the refusal counters are non-zero so a run that never entered the
-  window fails instead of passing vacuously. With the guards restored it aborts
-  at every width.
+  depend on — and exposes the two lifecycle transitions as `process_test_set_ready`
+  / `process_test_set_running`. `tests/unit/test_process_lifecycle.c` has two
+  layers over that. Contract cases drive each transition directly and own the
+  per-branch coverage; they state the interleaving as a starting state because
+  every production caller filters its target's state first, so the window is
+  unreachable from outside `process.c`. A pthread soak (one scheduler loop per CPU,
+  a killer on the last) at 2, 4 and 8 CPUs then proves the real interleaving is
+  survived, asserting the refusal counters' SUM is non-zero so a run that never
+  entered the window fails instead of passing vacuously. With the guards restored
+  it aborts at every width.
 - A dispatch holds raw pointers to a thread SLOT and a process SLOT across
   `process_schedule_once_impl` — through the switch AND through the result
   handling that follows — and reads `time_slice_ticks`, `kstack_top` and
@@ -275,11 +280,20 @@ linked feature documents for rationale and rollout plans.
   process transition, and the dispatcher re-validates `(tid, owner_pid)` after its
   claim) but the claim is what closes the window.
 - Promotions to READY go through `thread_wake_if_blocked`, and its result is
-  deliberately IGNORED. Only the DEMOTION is avoided — writing READY over RUNNING
-  would lose a dispatch another CPU had already claimed — and `thread_set_state`
-  is not used because it clears `block_reason` as a side effect that a bare state
-  CAS does not, and a READY thread still carrying the reason it blocked for is put
-  straight back to sleep by the wait paths.
+  deliberately IGNORED. Only the DEMOTION is avoided, and what it costs is
+  specific: `THREAD_STATE_RUNNING` *is* the exclusive dispatch claim
+  (`cpu_sched_claim_for_dispatch` is a READY→RUNNING CAS), so writing READY over
+  it re-arms the claim and a second CPU can win it on a thread that is already
+  executing. Between that claim and the publication of
+  `cpu_local()->current_thread` the RUNNING state is the only record that the
+  thread is spoken for, so `sched_enqueue_thread`'s holder scan cannot see it and
+  only its `state != READY` skip keeps an executing thread out of a ready queue.
+  Pinned by "the dispatch claim survived the promotion" in
+  `tests/unit/test_process_lifecycle.c`, which fails four ways against an
+  unconditional promotion. `thread_set_state` is not used for the promotion
+  because a BLOCKED target must have `block_reason` cleared with the state, which
+  a bare state CAS does not do, and a READY thread still carrying the reason it
+  blocked for is put straight back to sleep by the wait paths.
 - Reporting the promotion's result to the caller is WRONG and was reverted twice
   for the same reason, so it is worth stating as a rule: `process_set_ready`
   answers "may this owner's thread be made runnable" (an owner question, about

@@ -1302,30 +1302,6 @@ Source: `architecture/25-diagnostics-status.md`,
   measure across configs and repeated boots first
   (`src/kernel/kernel_sched_smp_stress_runtime.c:140`).
 
-- [ ] [TEST][P2] Drive the `set_ready` half of the exiting-owner refusal properly.
-  `tests/unit/test_process_lifecycle.c` hits `process_set_running` hundreds of
-  times per run but `process_set_ready` only 0-7 times per 300 rounds, because
-  `process_kill` marks the owner's threads shortly after setting `exiting`, so the
-  requeue usually finds no READY sibling and parks instead. Reaching it needs the
-  sub-window `process.h` describes as "`exiting` 1 slightly ahead of ->state".
-  The suite therefore asserts the SUM of both counters. That is honest but thin
-  for the half the original panic actually named
-  (`set_ready zombie`, CI run 32561829781): a regression that broke only that
-  branch could pass. Widening it probably means driving the kill and the
-  retirement from a shared barrier rather than the current announce-and-spin.
-- [ ] [TEST][P2] Put a test behind the promotion demotion-guard, or drop it.
-  `process_set_ready` and the `process_wake_process_waiters` fast path promote
-  only a BLOCKED thread so they cannot write READY over a RUNNING one. That guard
-  came from a PR review hypothesis, not an observed failure, and nothing
-  demonstrates the previous unconditional `thread_set_state` ever demoted
-  anything. Two attempts at implementing it wedged the boot in CI (once by
-  dropping `block_reason`, once by gating `sched_wake_claim_enqueue` on the
-  result), and no local gate caught either — unit suite, both kernels and
-  `run-qemu-test` on both defconfigs pass with either bug in place, because
-  booting to a prompt does not route a wake through those sites. Either construct
-  the interleaving that proves the guard is needed, or revert it to the simpler
-  unconditional form. Leaving an untested guard whose motivation is a hypothesis
-  invites a later "cleanup" to reintroduce the regressions.
 - [ ] [BUG][P1] Confirm the SMP scheduler stress panic stays fixed. One cause is
   found and fixed: dispatch took no exclusive claim on the thread it was about
   to run, so two CPUs could resume one `process_context_t` on one kernel stack

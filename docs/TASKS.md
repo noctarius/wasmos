@@ -1480,30 +1480,61 @@ Source: `architecture/25-diagnostics-status.md`,
   unsettled claim caught mid-flight. Nothing owes it an enqueue, so nothing will
   ever perform one.
 
-  SUSPECTED, not yet demonstrated: both consumers of the claim take it BEFORE
-  validating, and destroy it when the validation fails.
+  CORRECTED, and the correction matters more than the original claim: the strand
+  does NOT by itself wedge a session. Run 32640235473 (`networking`, on
+  c62da74c64) reports the identical strand in two dumps -- `disp=31` and `disp=47`
+  -- with ZERO `setUpClass` errors and 85 `wamos>` prompts in the log. That session
+  booted and ran its suite with the compositor already stranded, failing only on
+  two ordinary assertion flakes (`test_lwip_arp_roundtrip`, the documented ~1-in-5
+  tx_slots framing case, and `test_link_down_up_preserves_netif`).
 
-      sched_settle_deferred_enqueue: if (!sched_take_owed_enqueue(t)) return;
-                                     if (state != READY) return;   /* debt gone */
-      sched_sweep_owed_enqueues:     if (!sched_take_owed_enqueue(t)) { ... }
-                                     if (state == READY && !on_rq) enqueue;
+  So the strand is necessary but not sufficient, and that resolves the shape of the
+  whole symptom: the compositor is stranded EARLY and fairly often (`disp` in the
+  30s-40s), and whether the session wedges depends on whether anything waits on the
+  compositor before the test's prompt. A battery that never touches graphics
+  finishes; one that does, stalls. That is why the failure moves between batteries
+  and why it looks like a coin flip.
 
-  `sched_take_owed_enqueue` exchanges `enqueue_owed` to 0 and decrements
-  `g_enqueue_owed_count`, so a consumer that then bails leaves the thread with no
-  debt -- and that counter is the gate the sweep safety net keys on, which is why
-  the net cannot recover a thread whose debt was consumed and dropped. A holder
-  settling while another CPU has the thread briefly non-READY is enough to destroy
-  the hand-off. That shape matches every field in the captures, but a matching
-  shape is not a demonstration, and this exact code has already wedged the boot
-  twice when changed on reasoning alone (PR #17).
+  Do not write "the strand causes the stall" again without a capture showing a
+  waiter on the compositor -- an earlier revision of this entry did, reasoning from
+  four correlated captures with no counter-example. Run 32640235473 is that
+  counter-example.
 
-  What would settle it, and the order to do it in: a host unit test in
-  `test_sched_runqueue.c` or `test_sched_concurrency.c` (both link
-  `sched_thread.c`) that publishes a claim, makes the thread non-READY, settles,
-  restores READY and settles again, then asserts the thread is neither queued nor
-  owed -- red before any change to the settle path. Only then decide whether the
-  fix is to re-publish the claim on a failed validation or to validate before
-  taking it.
+  REFUTED, and recorded because the refutation is the useful part. Two mechanisms
+  have been proposed; neither survived.
+
+  1. The claim consumers (`sched_settle_deferred_enqueue`,
+     `sched_sweep_owed_enqueues`) do take the claim before validating and destroy
+     it when the validation fails -- but everything downstream enqueues
+     unconditionally. The `PROCESS_RUN_BLOCKED` branch enqueues on READY and even
+     repairs a still-RUNNING legacy yielder; the ordinary yield branch marks READY
+     and enqueues with only an `is_idle` guard. Consume-and-drop there is covered.
+  2. An aborted dispatch. `dispatch_done` never re-enqueues, and every path
+     reaching it has already had the thread unlinked, so an abort does leave
+     exactly the captured state -- demonstrated on the host by
+     `s_aborted_dispatch_leaves_its_thread_reachable`, which measures
+     `state=1 on_rq=0 owed=0 wake=0`. But the `SCHED_DEBUG_DISPATCH_LEFT_STRANDED`
+     tripwire added for precisely this did NOT fire in run 32640235473, which
+     carries the strand. Reproducing a state is not the same as being its cause.
+
+  Where that leaves it: the strand is created OUTSIDE a dispatch, by something that
+  marks the thread READY without enqueueing it and without leaving a claim. The low
+  `disp` counts put it early in the compositor's life, which fits a wake arriving
+  while it is parked rather than anything in the dispatch loop.
+
+  The tripwire is retained anyway, and now covers EVERY dispatch exit rather than
+  only the aborts. The normal exits are not self-evidently safe either: they call
+  `sched_enqueue_thread`, which skips the insert for a bad priority band, a
+  non-READY state or an idle thread. Gating the check on the abort codes, as the
+  first version did, would have looked past exactly that.
+  `test_process_lifecycle` asserts it stays silent across the healthy case's
+  hundreds of dispatches, so a false positive fails a gate instead of flooding a
+  CI log.
+
+  Next diagnostic, if the widened tripwire is still silent on a capture: record WHO
+  last set the thread READY -- a per-thread return-address breadcrumb written
+  wherever the state becomes READY, printed in the dump for a stranded thread. That
+  names the site outright, and it is the same move `owed=` was.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

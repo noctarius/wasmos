@@ -1517,24 +1517,55 @@ Source: `architecture/25-diagnostics-status.md`,
      tripwire added for precisely this did NOT fire in run 32640235473, which
      carries the strand. Reproducing a state is not the same as being its cause.
 
-  Where that leaves it: the strand is created OUTSIDE a dispatch, by something that
-  marks the thread READY without enqueueing it and without leaving a claim. The low
-  `disp` counts put it early in the compositor's life, which fits a wake arriving
-  while it is parked rather than anything in the dispatch loop.
+  LOCATED, by the widened tripwire, in run 32642300000-era jobs on 053dc9713f. It
+  fired twice, in two different batteries, and the two reports are the most
+  informative evidence this investigation has produced:
 
-  The tripwire is retained anyway, and now covers EVERY dispatch exit rather than
-  only the aborts. The normal exits are not self-evidently safe either: they call
-  `sched_enqueue_thread`, which skips the insert for a bad priority band, a
-  non-READY state or an idle thread. Gating the check on the abort codes, as the
-  first version did, would have looked past exactly that.
-  `test_process_lifecycle` asserts it stays silent across the healthy case's
-  hundreds of dispatches, so a false positive fails a gate instead of flooding a
-  CI log.
+      [sched] dispatch left stranded tid=46 pid=37 rc=7 cpu=2   (warp_smp)
+      [sched] dispatch left stranded tid=51 pid=42 rc=7 cpu=2   (language-runtimes)
 
-  Next diagnostic, if the widened tripwire is still silent on a capture: record WHO
-  last set the thread READY -- a per-thread return-address breadcrumb written
-  wherever the state becomes READY, printed in the dump for a stranded thread. That
-  names the site outright, and it is the same move `owed=` was.
+  Three things follow, and the first invalidates an assumption every earlier
+  revision of this entry made.
+
+  1. It is NOT compositor-specific. The second capture strands `cli`
+     (tid=51, pid=42, `st=ready rq=0 owed=0 wake=0`, `disp=1013`, identical across
+     TEN samples). "Always gfx-compositor" was an artifact of which thread happened
+     to be doing blocking IPC in the first four captures. The defect strands
+     whichever thread hits the window, and that is what makes the symptom vary so
+     wildly: a stranded `cli` means no prompt at all (hence the `setUpClass` errors
+     and the `test_hello_rust` failures), a stranded compositor means only that
+     graphics waits stall.
+  2. `rc=7` is `SCHED_R_RANDONE` -- the NORMAL exit, not an abort. Since the
+     EXITED and THREAD_EXITED branches mark the thread ZOMBIE and cannot end
+     READY, the result was `PROCESS_RUN_BLOCKED`. That branch enqueues when it
+     reads READY and promotes-and-enqueues when it reads RUNNING, so both tests
+     failing means it read BLOCKED -- correct at the time, a genuinely blocked
+     thread with nothing to enqueue.
+  3. No enqueue was attempted for the stranded thread. Every skip reason logs on
+     its FIRST hit, and in the warp_smp capture the tripwire is the only `[sched]`
+     line in the entire run; in the language-runtimes capture the enqueue markers
+     name other threads (tid=10, tid=18). So this is not an enqueue that was
+     refused -- it is an enqueue that never happened.
+
+  Therefore: something promotes the thread to READY after the BLOCKED branch's
+  state test and before the dispatch returns, without enqueueing it and without
+  leaving a claim or a token. The promoter is another CPU; the window is the
+  handful of statements between that test and `dispatch_done`.
+
+  This is the same family as the wake/block handshake this file already documents:
+  `sched_wake_claim_enqueue` returning 0 makes its caller decline the enqueue and
+  hand it to a completion path -- and step 2 above is that completion path having
+  ALREADY run. Two constraints on any fix, both from the captures:
+  `wake=0` everywhere means the token was consumed, so "enqueue whenever the claim
+  returns 0" would double-enqueue the healthy case; and
+  `test_process_lifecycle`'s healthy case now asserts the tripwire stays silent
+  under a live owner, so a wrong fix fails a local gate rather than only CI.
+
+  Next diagnostic, and it should be decisive: record WHO set the thread READY --
+  a per-thread return-address breadcrumb written wherever the state becomes READY,
+  printed in the dump for a stranded thread. That names the promoting site outright.
+  It is the third use of this play; `owed=` and the tripwire itself each paid off
+  within one run.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

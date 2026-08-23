@@ -1586,21 +1586,37 @@ Source: `architecture/25-diagnostics-status.md`,
   Nothing can recover it, because the sweep's own gate is the counter the
   consumer just decremented.
 
-  The fix belongs in the consumers, not at the dispatch boundary: either validate
-  BEFORE taking the claim, or re-publish it when the validation fails. Both have
-  a cost worth thinking about -- validate-first can take a claim for a thread
-  that changed state in between (harmless: `cpu_sched_enqueue` re-checks and
-  skips), while re-publishing keeps a debt alive for a thread that is legitimately
-  not runnable, which leaves `g_enqueue_owed_count` non-zero and makes the sweep
-  run on every idle pass.
+  FIXED in the consumer, 2026-08-23. `sched_settle_deferred_enqueue` now reads the
+  state BEFORE taking the claim, so a thread that is momentarily not enqueueable
+  keeps its debt for whoever can honour it. Pinned by "a consumer that declined to
+  enqueue left the claim outstanding" in `tests/unit/test_process_lifecycle.c`,
+  which publishes the claim through the real protocol (an enqueue refused because
+  another CPU still names the thread) rather than by poking the field: red at
+  `owed=0`, green at `owed=1`.
 
-  What the boundary repair added in a83b9d4d35 does and does not do: it recovers a
-  thread stranded at the END OF ITS OWN DISPATCH, and it cannot see this case at
-  all, because the final promotion happens outside any dispatch. It also
-  over-triggers -- seven firings in one clean boot, all `rc=7` -- because a
-  synchronous check cannot separate "stranded" from "in flight", the only
-  difference being elapsed time. Consider reverting it to report-only once the
-  consumers are fixed.
+  Validate-first rather than re-publish-on-failure, deliberately. Re-publishing
+  keeps a debt alive for a thread that is legitimately blocked, which leaves
+  `g_enqueue_owed_count` non-zero and makes the sweep scan on every idle pass.
+  Validate-first costs one thing instead: the state can change between the read and
+  the exchange, so a claim may be taken for a thread that has just stopped being
+  READY -- `cpu_sched_enqueue` re-checks and skips, a logged no-op rather than a
+  lost wake.
+
+  `sched_sweep_owed_enqueues` deliberately keeps take-then-validate. It is the
+  DEFINITIVE resolver: it runs only when a CPU has nothing else to do, so it sees
+  settled state rather than the transients the settle path meets the instant a
+  dispatch ends, and something has to be able to retire a debt whose thread is
+  never coming back. If a capture ever shows a strand whose debt the sweep
+  discarded, that is the next thing to change.
+
+  The boundary repair added in a83b9d4d35 is REVERTED to report-only, and the
+  measurement is why: 28 firings in a single clean boot. A synchronous check at
+  `dispatch_done` cannot separate "stranded" from "in flight" -- the only
+  difference is elapsed time, and a waker that promotes then enqueues a statement
+  later, or a stealer that has unlinked but not yet claimed, both present exactly
+  that state. It also could not see the case above at all, since the final
+  promotion happens outside any dispatch. The tripwire stays; it is what found all
+  of this, and `rc` is the field that names the exit.
 
   CAUSE 4 IS FIXED AND A FIFTH WAS SUSPECTED, which is this item's usual pattern.
   The first post-fix capture (`graphics-and-vt`, on 1e46fac0aa, failing

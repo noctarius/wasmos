@@ -1572,34 +1572,70 @@ Source: `architecture/25-diagnostics-status.md`,
   Nothing can recover it, because the sweep's own gate is the counter the
   consumer just decremented.
 
-  THE CONSUMER FIX DID NOT CLOSE IT, and the next capture says where to look. On
-  a557122879 the strand survives -- tid=31 `ata`, READY, unqueued, owed nothing,
-  five samples, `ready_by=process_schedule_once_impl` -- and the decisive detail is
-  that the tripwire fired only for tid=46 in that run and NEVER for tid=31. A
-  thread the tripwire never sees at `dispatch_done` was not stranded at the end of
-  its own dispatch: it was promoted from ANOTHER thread's dispatch.
+  READ THIS BEFORE TRUSTING ANY NEGATIVE BELOW. Two independent reviews found that
+  the reasoning in this entry rested on inferences that are not sound, and the
+  errors matter more than the conclusions did:
 
-  That points at the two remaining sites with the same shape as the fixed one, both
-  reached from `process_schedule_once_impl`:
+  1. EVERY "the tripwire never fired for X" and "no skip line ever names X" claim
+     is void. `sched_debug_note` rate-limits on a GLOBAL per-event counter and logs
+     only at powers of two (`sched_thread.c`, `sched.h`), so with 13-28 hits per
+     boot roughly six print. "Never printed" was never "never happened", and a
+     victim-specific hit is unlikely to be among the six. `SCHED_R_STALE` was
+     "ruled out" on exactly this basis and is NOT ruled out.
+  2. The kernel is built with NO `-O` flag, i.e. -O0 (`CMakeLists.txt`,
+     `CFLAGS_COMMON`), so nothing is inlined and every static function has its own
+     out-of-line symbol. The hedge that a promoter was "consistent with either
+     after inlining" was false. Worse, FIVE distinct READY-promotion sites live
+     inside `process_schedule_once_impl` and symbolize to that one name; the
+     recorded OFFSET discriminates them and was ignored in favour of the symbol.
+     `0x...80222ada` resolves locally to the `thread_set_state(READY)` call in the
+     PROCESS_RUN_BLOCKED completion path -- a site whose next instructions DO call
+     `sched_enqueue_thread`. Re-resolve against the CI `kernel.elf` before acting,
+     since the layouts differ.
+  3. `ready_by` structurally cannot name a stranding site of the "already READY,
+     then nobody enqueued" shape: `thread_note_ready_by` is only called when the
+     state actually CHANGES, and `sched_mark_ready_if_live` returns 1 without
+     touching it for a thread already READY. So it names the earlier, innocent
+     promoter. The "decisive experiment" of watching `ready_by` move after
+     changing `process.c:928`/`:3537` was therefore invalid -- neither site writes
+     READY, so it could not move even if those were the bug.
+  4. `kpanic_symbolize` has no upper bound on a match, so any higher-half garbage
+     resolves to a confident function name. At least one quoted value
+     (`0x...80227a12`) is mid-prologue and cannot be a return address. Validate a
+     `ready_by` as a post-call address before using it as evidence.
+  5. "Persistent across all samples with `disp` frozen" does NOT distinguish a
+     permanent strand from a pick -> abort -> re-enqueue loop: `dispatch_count` is
+     incremented only after `context_switch_high` returns, so an aborting loop
+     leaves `disp` frozen too. A livelock and a strand need different fixes.
 
-      process.c:928   if (runnable && sched_wake_claim_enqueue(waiter))
-                          sched_enqueue_thread(waiter);          /* process_wake_waiters */
-      process.c:3537  if (process_set_ready(owner, waiter) && sched_wake_claim_enqueue(waiter))
-                          sched_enqueue_thread(waiter);          /* process_wake_thread_joiner */
+  The two-site hypothesis (`process.c:928`, `:3537`) is REFUTED, by the seq-cst
+  total order: both mark READY BEFORE calling `sched_wake_claim_enqueue`, so a
+  claim that returns 0 guarantees the completion path observes both the token and
+  READY, and `process.c:2601` tests `state == READY` OUTSIDE the token branch and
+  enqueues. It is rescued. Corroborating: that family would leave `wake_pending=1`
+  and every capture shows `wake=0`, and its `ready_by` would name
+  `process_wake_waiters`/`process_set_ready`, never observed.
 
-  In both, the waiter has already been promoted to READY by that point -- by
-  `thread_wake_if_blocked` in the fast path, or inside `process_set_ready` -- and a
-  `sched_wake_claim_enqueue` that returns 0 means neither an enqueue NOR a claim is
-  left behind. It is the identical "mark without a claim" defect fixed in
-  `sched_wake_thread` (cause 4), in two more places, and the promoter recorded in
-  the capture is consistent with either after inlining.
+  TWO LIVE CANDIDATES, both of which produce the captured state exactly and
+  neither of which is instrumented:
 
-  Treat this as the leading hypothesis and NOT as established. Elimination has been
-  wrong three times in this investigation -- the consumers, the aborted dispatch,
-  and then the consumers again in the other direction -- so what settles it is a
-  capture whose `ready_by` moves off `process_schedule_once_impl` after these two
-  sites are changed, exactly as it moved off `sched_wake_thread` when cause 4 was
-  fixed. That displacement is the only evidence that has been reliable here.
+  A. An unlink-then-drop. `cpu_sched_pick_next` and `cpu_sched_steal_pick` unlink
+     the thread and clear `on_rq` BEFORE the caller holds any claim; then
+     `process.c` returns `SCHED_R_STALE` on a failed `dispatch_ref` CAS without
+     re-enqueueing, and the neighbouring comment claiming "nothing has been touched
+     yet" is false. Same shape on the steal/owner-gone exit. Neither path counts or
+     logs anything.
+  B. An enqueue attempted and skipped. If the promoter really is the
+     PROCESS_RUN_BLOCKED completion path, the enqueue two instructions later must
+     have declined, and the candidates are enumerable in `cpu_sched_enqueue`: idle,
+     bad prio, non-READY, `on_rq` already set, and the double-link bail, which
+     releases `on_rq` and returns -- yielding READY, rq=0, owed=0 exactly.
+
+  What discriminates them, and it must come before any further fix: make those
+  counters PER-THREAD or print `sched_debug_count()` totals in the stall dump, so
+  a negative means something; and add a counter plus one-shot log to the two
+  currently blind exits in `process.c`. Until then every "ruled out" in this entry
+  should be read as "not observed, in a log that suppresses ~80% of observations".
 
   FIXED in the consumer, 2026-08-23, and it IS a real defect regardless of the
   above: `sched_settle_deferred_enqueue` now reads the

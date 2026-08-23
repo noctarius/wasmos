@@ -798,8 +798,17 @@ void sched_settle_deferred_enqueue(thread_t* t) {
      * This runs the instant a dispatch ends, which is when transient states are
      * most likely: the thread may be mid-wake on another CPU, or briefly RUNNING.
      * Declining is correct in those cases; discarding the claim while declining is
-     * not.  The definitive resolution belongs to the sweep, which runs only when a
-     * CPU has nothing else to do and therefore sees settled state.
+     * not.
+     *
+     * What this does NOT buy, stated because an earlier version of this comment
+     * claimed it did: the debt is not preserved for long. sched_sweep_owed_enqueues
+     * runs on EVERY iteration of the scheduler loop
+     * (kernel_boot_runtime.c, after timer_poll), not only on an idle CPU, and it
+     * still takes the claim before validating -- so for a thread that is merely
+     * BLOCKED the sweep retires the debt on the very next iteration of the same
+     * CPU's loop.  Keeping the claim here is correct in itself, and it does rescue
+     * a thread that some CPU still names as current (the sweep skips those without
+     * consuming), but it is not by itself a fix for a lost hand-off.
      *
      * The reverse order costs one thing, stated so it is not mistaken for an
      * oversight: the state can change between this read and the exchange, so a

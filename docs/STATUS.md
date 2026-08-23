@@ -229,6 +229,76 @@ linked feature documents for rationale and rollout plans.
   be reclassified rather than left describing a fixed problem. No DMA row is
   currently divergent.
 
+### Process Lifecycle
+
+- `process_set_ready` and `process_set_running` refuse a transition whose owner
+  is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
+  (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`
+  on that status, and each refusal is counted
+  (`SCHED_DEBUG_SET_READY_EXITING`, `SCHED_DEBUG_SET_RUNNING_EXITING`) with a
+  power-of-two rate-limited report. Refusing is the contract, not a fallback:
+  no caller holds anything that excludes a concurrent kill or exit, so a
+  sibling-requeue racing its owner's teardown is reachable from every call site.
+- Two of those four enqueue sites — the `PROCESS_RUN_EXITED` and
+  `PROCESS_RUN_THREAD_EXITED` sibling-requeues in `process_schedule_once_impl` —
+  used to enqueue unconditionally. The panic was hiding that: the process died
+  before reaching the enqueue, so "enqueue a thread under a dying process" was
+  unreachable in practice and unguarded in code.
+- `process.c` is host-testable behind `WASMOS_PROCESS_TEST_SEAMS`, which replaces
+  its six inline-asm sites, the `KERNEL_HIGHER_HALF_BASE` alias helper and the
+  saved-context rip/rsp validator — the arch facts a lifecycle question does not
+  depend on. `tests/unit/test_process_lifecycle.c` drives it from real pthreads
+  (one scheduler loop per CPU, a killer on the last) at 2, 4 and 8 CPUs, and
+  asserts the refusal counters are non-zero so a run that never entered the
+  window fails instead of passing vacuously. With the guards restored it aborts
+  at every width.
+- A dispatch holds raw pointers to a thread SLOT and a process SLOT across
+  `process_schedule_once_impl` — through the switch AND through the result
+  handling that follows — and reads `time_slice_ticks`, `kstack_top` and
+  `worker_entry` only after dropping the queue lock. `thread_t::dispatch_ref` is
+  what makes those slots un-recyclable for that whole window: a tri-state
+  single-owner claim (`THREAD_SLOT_FREE`/`DISPATCH`/`FROZEN`) that the dispatcher,
+  `thread_reset_slot` and `sched_sweep_owed_enqueues` all contest by CAS from
+  FREE, so exactly one owns the slot and the losers back off.
+- A CAS, not a test-then-act, because the two sides share no lock: the dispatcher
+  claims after `cpu_sched_pick_next` has dropped the queue lock, and the reaper
+  holds only the thread table lock. `process_reap_claim` additionally refuses while
+  any thread of the process is claimed, via one locked pass
+  (`thread_owner_has_active_dispatch`) — the ordinal accessors drop the table lock
+  between calls, so an index walk can have entries shift under it and miss the very
+  thread it is checking for.
+- A CLAIM, not a state test, and that is the load-bearing part. The thread's state
+  legitimately changes several times inside the window (READY → RUNNING → ZOMBIE
+  for a thread that exits), so every state-based guard covers only a piece of it
+  and the recycle lands in the rest. Four such guards were tried first and each
+  left a residue; they remain as cheap early rejects (`NEW->RUNNING` is not a legal
+  process transition, and the dispatcher re-validates `(tid, owner_pid)` after its
+  claim) but the claim is what closes the window.
+- Promotions to READY go through `thread_transit` and report what the CAS won.
+  Writing READY unconditionally could DEMOTE a thread another CPU had already
+  claimed and dispatched, and hand the caller a second enqueue of a thread that is
+  already executing.
+- `proc->exiting`, `proc->thread_count`, `proc->live_thread_count` and the
+  scheduler's progress diagnostics are read and written cross-CPU, so each has one
+  atomic protocol rather than a mix. `live_thread_count` reaching zero gates
+  `process_mark_exited`, so a lost update marks a process exited early or never;
+  the `if (c > 0) c--` those sites used was both non-atomic and a check-then-act,
+  and is now a saturating CAS loop.
+- A refused free is reported, not discarded. `thread_reap` returns whether the slot
+  was released and `thread_reap_owner` returns how many it could not, retrying the
+  short window where a CPU claims a thread of an already-ZOMBIE owner and then
+  loses at `process_set_running`. The detached-thread reap in the result handler is
+  deferred past the claim release, because it targets the very thread that dispatch
+  holds. A refused process reap records `reap_requested`, and the dispatch that
+  caused it retries after releasing — armed as soon as `proc` is known, so early
+  exits do not skip it.
+- `test_process_lifecycle` therefore serialises nothing: spawn, kill and reap all
+  run concurrently with every dispatcher. 0/15 runs abort per width at 8 and 16
+  CPUs and 0/20 at 2, 4 and 8, with `spawn_retries=0`, including five concurrent
+  instances on a 10-core host. Disabling both lifetime guards returns 2/12 aborts
+  at 16 CPUs — they are load-bearing, but now as defence in depth over exposure the
+  CAS claim and the promotion fixes independently closed.
+
 ### Build, Configuration, and Validation
 
 - Default configuration: **WARP** runtime, single CPU. WARP is the default

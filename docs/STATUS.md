@@ -255,8 +255,11 @@ linked feature documents for rationale and rollout plans.
   unreachable from outside `process.c`. A pthread soak (one scheduler loop per CPU,
   a killer on the last) at 2, 4 and 8 CPUs then proves the real interleaving is
   survived, asserting the refusal counters' SUM is non-zero so a run that never
-  entered the window fails instead of passing vacuously. With the guards restored
-  it aborts at every width.
+  entered the window fails instead of passing vacuously. That assertion runs from
+  width 4 up and is reported rather than asserted at width 2, which spawns no
+  dispatcher thread of its own (the soak thread is the only dispatcher and also
+  owns every spawn, kill and reap) and produced 0-9 refusals against 76-110 at the
+  wider arms. With the guards restored the suite aborts at every width.
 - A dispatch holds raw pointers to a thread SLOT and a process SLOT across
   `process_schedule_once_impl` — through the switch AND through the result
   handling that follows — and reads `time_slice_ticks`, `kstack_top` and

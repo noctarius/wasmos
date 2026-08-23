@@ -905,6 +905,14 @@ static void s_healthy_owner_still_runs_and_requeues(void) {
           "no ready transition was refused with no kill in flight");
     CHECK(sched_debug_count(SCHED_DEBUG_SET_RUNNING_EXITING) == 0,
           "no dispatch was refused with no kill in flight");
+    /* Every dispatch here ends under a healthy owner, so every one of them must
+     * leave its thread reachable -- queued, owed an enqueue, or not runnable. This
+     * is the invariant a stranded compositor violates in CI, asserted over the
+     * hundreds of dispatches this case performs, and it doubles as the guard that
+     * the tripwire does not over-report: a false positive on an ordinary dispatch
+     * would fail here rather than flooding a CI log. */
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_LEFT_STRANDED) == 0,
+          "no dispatch left a runnable thread unreachable under a healthy owner");
 
     (void)process_kill(pid, 0);
     for (uint32_t i = 0; i < 16u; ++i) {

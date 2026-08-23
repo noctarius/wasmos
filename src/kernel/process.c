@@ -2671,10 +2671,17 @@ dispatch_done:
      * reaper collects it, and re-enqueueing it would be re-picked and re-refused
      * at process_set_running on every scheduling attempt.
      *
-     * Diagnostic, not a repair: which abort strands a LIVE owner's thread is not
-     * yet known, and the correct fix differs per abort, so this names the case
+     * EVERY exit is checked, not just the aborts, because the normal exits are not
+     * self-evidently safe either: they mark the thread READY and call
+     * sched_enqueue_thread, which SKIPS the insert for a bad priority band, for a
+     * state that is not READY, or for an idle thread, and defers with a claim when
+     * another CPU still names the thread.  A skip leaves exactly this state, and
+     * gating the check on the abort codes would have looked past it.
+     *
+     * Diagnostic, not a repair: which exit strands a LIVE owner's thread is not
+     * yet known, and the correct fix differs per exit, so this names the case
      * instead of guessing at it.  `rc` is that name. */
-    if (proc && !proc->is_idle && sched_rc != SCHED_OK && sched_rc != SCHED_R_RANDONE &&
+    if (proc && !proc->is_idle &&
         __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_READY &&
         !__atomic_load_n(&thread->on_rq, __ATOMIC_ACQUIRE) &&
         !__atomic_load_n(&thread->enqueue_owed, __ATOMIC_ACQUIRE) &&

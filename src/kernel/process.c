@@ -2681,21 +2681,48 @@ dispatch_done:
      * Diagnostic, not a repair: which exit strands a LIVE owner's thread is not
      * yet known, and the correct fix differs per exit, so this names the case
      * instead of guessing at it.  `rc` is that name. */
-    if (proc && !proc->is_idle &&
+    /* The owner is re-resolved from thread->owner_pid rather than taken from
+     * `proc`, and that is not defensive coding -- it is the difference between
+     * seeing this case and not.  `proc` is the process the dispatch STARTED with,
+     * and the SCHED_R_STALE exit means the slot was recycled mid-flight: `proc` is
+     * then the old process, typically already ZOMBIE, while the thread belongs to
+     * a live one.  Testing `proc` suppressed the report for exactly the exit that
+     * needed it -- a capture carrying a persistent strand showed no report at all. */
+    uint32_t stranded_owner_pid = __atomic_load_n(&thread->owner_pid, __ATOMIC_ACQUIRE);
+    process_t* stranded_owner = stranded_owner_pid ? process_find_by_pid(stranded_owner_pid) : 0;
+    if (stranded_owner && !stranded_owner->is_idle &&
         __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_READY &&
         !__atomic_load_n(&thread->on_rq, __ATOMIC_ACQUIRE) &&
         !__atomic_load_n(&thread->enqueue_owed, __ATOMIC_ACQUIRE) &&
-        proc->state != PROCESS_STATE_ZOMBIE && !__atomic_load_n(&proc->exiting, __ATOMIC_ACQUIRE)) {
+        stranded_owner->state != PROCESS_STATE_ZOMBIE &&
+        !__atomic_load_n(&stranded_owner->exiting, __ATOMIC_ACQUIRE)) {
         uint32_t sn = sched_debug_note(SCHED_DEBUG_DISPATCH_LEFT_STRANDED);
         if ((sn & (sn - 1u)) == 0u) {
             serial_printf_unlocked(
-                "[sched] dispatch left stranded tid=%u pid=%u rc=%d cpu=%u (n=%u)\n",
+                "[sched] dispatch left stranded tid=%u pid=%u rc=%d cpu=%u (n=%u, repaired)\n",
                 (unsigned)thread->tid,
-                (unsigned)proc->pid,
+                (unsigned)stranded_owner_pid,
                 (int)sched_rc,
                 (unsigned)cpu_local()->cpu_id,
                 (unsigned)(sn + 1u));
         }
+        /* Repair, and strictly AFTER the report: the repair publishes a claim and
+         * the condition above tests for the absence of one, so repairing first
+         * would silence the diagnostic that found this.
+         *
+         * Justified by the INVARIANT rather than by knowing which exit produced it:
+         * a READY thread whose owner is live is runnable by definition, so leaving
+         * it on no run queue with nothing owing it is wrong however it got here.
+         * Same rule sched_wake_thread's deferral arm follows -- publish something
+         * actionable, never a bare mark.
+         *
+         * Safe at this point specifically: this CPU cleared current_thread above,
+         * so it is no longer the holder, which is what makes linking from here
+         * legal (sched_settle_deferred_enqueue relies on the same fact).
+         * sched_enqueue_thread re-checks the holder scan, the state and the on_rq
+         * claim, so it links, defers with a claim, or declines -- it cannot
+         * double-link. */
+        sched_enqueue_thread(thread);
     }
     /* Now that the claim is gone, a detached thread this dispatch retired can be
      * released. Its refusal path is not expected to trigger here -- nothing else

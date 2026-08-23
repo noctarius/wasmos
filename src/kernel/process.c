@@ -2656,6 +2656,40 @@ static int process_schedule_once_impl(void) {
 
 dispatch_done:
     __atomic_store_n(&thread->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
+    /* A runnable thread must leave this function reachable: linked in a ready
+     * queue, or owed an enqueue by a CPU that will perform it.  READY with
+     * neither is terminal -- nothing enqueues it again, and sched_sweep_owed_
+     * enqueues cannot recover it because that sweep is gated on the global debt
+     * counter, which a thread carrying no debt never appears in.
+     *
+     * The aborting exits above are the ones that can produce it: by the time any
+     * of them is reachable the thread has already been unlinked (cpu_sched_pick_
+     * next unlinks under the queue lock, cpu_sched_try_steal from the remote
+     * queue), and two of them hand back only the state via
+     * thread_transit(RUNNING, READY).  An exiting or ZOMBIE owner is EXCLUDED
+     * rather than reported: leaving that thread unqueued is deliberate, the
+     * reaper collects it, and re-enqueueing it would be re-picked and re-refused
+     * at process_set_running on every scheduling attempt.
+     *
+     * Diagnostic, not a repair: which abort strands a LIVE owner's thread is not
+     * yet known, and the correct fix differs per abort, so this names the case
+     * instead of guessing at it.  `rc` is that name. */
+    if (proc && !proc->is_idle && sched_rc != SCHED_OK && sched_rc != SCHED_R_RANDONE &&
+        __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_READY &&
+        !__atomic_load_n(&thread->on_rq, __ATOMIC_ACQUIRE) &&
+        !__atomic_load_n(&thread->enqueue_owed, __ATOMIC_ACQUIRE) &&
+        proc->state != PROCESS_STATE_ZOMBIE && !__atomic_load_n(&proc->exiting, __ATOMIC_ACQUIRE)) {
+        uint32_t sn = sched_debug_note(SCHED_DEBUG_DISPATCH_LEFT_STRANDED);
+        if ((sn & (sn - 1u)) == 0u) {
+            serial_printf_unlocked(
+                "[sched] dispatch left stranded tid=%u pid=%u rc=%d cpu=%u (n=%u)\n",
+                (unsigned)thread->tid,
+                (unsigned)proc->pid,
+                (int)sched_rc,
+                (unsigned)cpu_local()->cpu_id,
+                (unsigned)(sn + 1u));
+        }
+    }
     /* Now that the claim is gone, a detached thread this dispatch retired can be
      * released. Its refusal path is not expected to trigger here -- nothing else
      * holds this slot -- so a refusal is reported rather than retried. */

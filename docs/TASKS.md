@@ -1317,34 +1317,40 @@ Source: `architecture/25-diagnostics-status.md`,
 
   A `[sched] claim lost` line means the race fired and the claim resolved it.
 
-- [ ] [BUG][P1] The `warp_smp` boot arm stalls between `net-stack` coming up and
-  `sysinit` spawning the app tier, roughly every other CI run. It fails as
-  `FAIL: calculator did not fully initialise`, but the calculator is not
-  involved: the serial log's last line is `[net-stack] tls: no CA trust store`
-  and it never reaches `[warp-driver] start: gfx-smoke`, `Calculator` or `cli`,
-  so nothing after net-stack is spawned at all. Only the WARP + SMP
-  configuration is affected; `warp_single`, `wasm3_single` and `wasm3_smp` pass
-  in the same runs.
+- [ ] [BUG][P0] The guest reaches no CLI prompt on roughly one CI run in two, and
+  it is ONE defect with several faces, not several flakes. Every capture is a
+  whole-session stall: the tests that report it differ only by which one happened
+  to open the session first, so the battery that goes red is arbitrary.
 
-  Captures, both with an identical log tail: run 32625904585 (`main` at
-  78018f8191, the merge of PR #18) and run 32634831416 (PR #19). Attribution is
-  settled: PR #18 was documentation only and `warp_smp` went from passing on PR
-  #17's merge to failing on #18's, so the trigger is runner timing, not any
-  code in either change.
+  Faces seen so far, all on the same code:
+  - `warp_smp`: `FAIL: calculator did not fully initialise`. The calculator is not
+    involved -- the log's last line is `[net-stack] tls: no CA trust store` and
+    nothing after net-stack is ever spawned (no `gfx-smoke`, no `Calculator`, no
+    `cli`). Runs 32625904585 (`main` at 78018f8191) and 32634831416.
+  - `boot-and-init`: `ERROR: setUpClass ... RuntimeError: CLI prompt not detected`
+    (`tests/test_init_smoke.py:24`). Run 32636373451. This is the capture that
+    carries a `[stall-dump]`; see the wedge item below.
+  - `networking`: `ERROR: setUpClass ... RuntimeError: CLI prompt not reached`
+    (`tests/test_net_stack_udp_echo_e2e.py:43`, run 32636373451) and
+    `test_host_resolves_localhost` timing out for 120 s on its FIRST prompt wait
+    (`tests/test_net_stack_dns_resolve_e2e.py:40`, run 32634831416). Neither is a
+    DNS or UDP defect: both fail before their subject matter runs.
 
-  Reproduces on the CI runner and probably not locally: this box runs QEMU
-  `thread=single`, which masks memory-ordering races (see
-  `architecture/28-smp.md` and the SMP notes). Validate on Linux x86 with
-  `-smp 4` over repeated boots rather than expecting one local failure.
-- [ ] [BUG][P1] `test_host_resolves_localhost`
-  (`tests/test_net_stack_dns_resolve_e2e.py:40`) times out waiting for the first
-  `wamos> ` prompt for 120 s, failing the `networking` battery. The assertion
-  that fails is the *initial prompt wait*, before any DNS work, so the boot did
-  not come up rather than the resolution failing -- the same class as the
-  `warp_smp` stall above, and not a DNS defect. Captured in run 32634831416
-  (PR #19); the same battery failed on `main` at 78018f8191 on a different case
-  (`test_link_down_up_preserves_netif`), so the battery has more than one
-  whole-session stall in it.
+  An ERROR in `setUpClass` and an assertion failure are different animals, and
+  the distinction is the fastest triage available: `setUpClass` failing means the
+  session never came up, so the named test is a bystander. Read the battery name
+  as "which suite drew the short straw", never as the subsystem at fault.
+
+  Attribution is settled and is worth stating because it looks like a regression
+  from the scheduler work: PR #18 was DOCUMENTATION ONLY, and `warp_smp` went from
+  passing on PR #17's merge to failing on #18's. The trigger is runner timing.
+
+  The mechanism is the wedge item below, whose second cause now has a persistent
+  signature again. Fix that; this item is the symptom's index.
+
+  Reproduces on CI and probably not on an Apple Silicon box: QEMU there runs
+  `thread=single`, which masks memory-ordering races. Validate on Linux x86 with
+  `-smp 4` over repeated boots.
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and
   reaches `arp sent`, then no `notify rx=` arrives, so it fails as an assertion
@@ -1361,9 +1367,10 @@ Source: `architecture/25-diagnostics-status.md`,
   stash`.** A previous attempt was unsound because a stash silently did not
   take, so both arms ran identical code and the result meant nothing.
 
-- [ ] [BUG][P2] Confirm the whole-session wedge stays fixed. It had THREE causes,
-  all fixed, and finding each only because the previous one was gone is the
-  reason this item stays open rather than closed on one green run.
+- [ ] [BUG][P0] The whole-session wedge is BACK, by this item's own test. It had
+  THREE causes, each fixed, and finding each only because the previous one was
+  gone is why the item was kept open instead of closed on a green run. The second
+  cause's marker now persists again -- see the capture below the three causes.
 
   1. `46bd8b5d26` -- a READDIR's terminating `FS_IPC_RESP` was refused for a full
      relay queue and dropped, stranding fs-manager and, behind it, the client and
@@ -1398,6 +1405,36 @@ Source: `architecture/25-diagnostics-status.md`,
   samples ~1 s apart. Run 32009665809 shows exactly that -- `stranded=1` then
   `stranded=0` on a healthy guest. The real one held across all three samples
   while the thread's `disp` never moved.
+
+  That test is now MET, in run 32636373451 (`boot-and-init`, WARP SMP):
+
+      live=28 ready=3 blocked=21 stranded(ready,no-rq)=1 running-unclaimed=2
+      [diag]! tid=46 pid=37 gfx-compositor st=ready rsn=- rq=0 wake=0 btrans=0
+              ev=0 cpu=2 ticks=4 disp=1241
+
+  Both lines are IDENTICAL in all FIVE samples: the strand persists and
+  gfx-compositor's `disp` never leaves 1241, so it is not an unsettled claim. The
+  thread is READY, on no run queue, with no wake token (`wake=0`) and no blocking
+  transition (`btrans=0`) -- nothing owes it an enqueue, so nothing will ever
+  perform one. Behind it sysinit parks on `endpoint:84` for a reply to its
+  `type=0x209 req=4` sent to `ep:5`, and the boot never reaches the CLI.
+
+  The other two causes read CLEAN in that capture, which is what points at the
+  second: no `[diag]!    refused` line anywhere, and no parked select waiter
+  watching a `q>0` endpoint (every `wait=select:` line shows `q=0`).
+
+  What is NOT established: which site left the strand. The capture does carry an
+  `[sched] enqueue current ... caller=ffffffff802229ef` line, which is the field
+  that distinguishes the two copies of the running-elsewhere guard -- but it names
+  `tid=18`, not the stranded `tid=46`, so it does not attribute this strand and
+  must not be read as if it did. Resolving that caller address needs the `nm`
+  output of the CI build's `kernel.elf`, which the run does not retain; a local
+  `-smp 4` reproduction on Linux x86 is the way in.
+
+  Start from `thread_t::enqueue_owed` and the claim protocol in
+  `sched_wake_claim_enqueue` / `sched_settle_deferred_enqueue`: a thread that is
+  READY with `wake=0` and `enqueue_owed` clear is precisely the "a mark is not a
+  message" failure those were written to close.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

@@ -305,6 +305,24 @@ linked feature documents for rationale and rollout plans.
   executing right now — that handshake exists precisely to hand such an enqueue to
   the target's own completion path. Both regressions wedged the boot with the CLI
   never seeing typed input, and both passed every local gate.
+- A wake that defers its enqueue leaves a CLAIM, never only a READY mark.
+  `sched_wake_thread`'s arm for "the completion path owns the enqueue" publishes
+  `sched_owe_enqueue` alongside the mark, because that ownership holds only until
+  the completion path makes its decision: it clears `blocking_transition`, takes
+  the token, reads the state, sees BLOCKED and correctly declines to enqueue a
+  blocked thread. A mark landing after that read is seen by nobody, and the thread
+  is then READY on no run queue with no token and no debt -- unrecoverable, since
+  `sched_sweep_owed_enqueues` is gated on the global debt counter that a thread
+  with no debt never enters. The enqueue-current path in `cpu_sched_enqueue` has
+  always published a claim for the same reason.
+- The stall dump carries the two fields that diagnosed that: `owed=` on every
+  thread line, and `ready_by=` (resolved to a symbol) for a stranded thread, which
+  names whoever last promoted it. `SCHED_DEBUG_DISPATCH_LEFT_STRANDED` reports a
+  dispatch ending with its thread READY, unqueued, owed nothing and its owner
+  live, on EVERY exit rather than only the aborting ones. It samples at
+  `dispatch_done` and so over-reports a promote-then-enqueue crossing CPUs; the
+  authoritative signal is a `[diag]!` strand persisting across all dump samples
+  with `disp` frozen.
 - `proc->exiting`, `proc->thread_count`, `proc->live_thread_count` and the
   scheduler's progress diagnostics are read and written cross-CPU, so each has one
   atomic protocol rather than a mix. `live_thread_count` reaching zero gates

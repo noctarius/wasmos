@@ -805,10 +805,32 @@ void sched_wake_thread(thread_t* t) {
      * wake half of the Dekker handshake before reading the completion path's, so
      * exactly one of the two sides ends up owning the enqueue. */
     if (!sched_wake_claim_enqueue(t)) {
-        /* Completion path owns the enqueue; leave it something to enqueue. */
+        /* Completion path owns the enqueue.  Leave it a CLAIM, not just a mark.
+         *
+         * A mark is not a message: the completion path clears blocking_transition,
+         * takes the token and then reads the state, and a mark that lands after
+         * that read is seen by nobody -- it read BLOCKED, correctly declined to
+         * enqueue a blocked thread, and will not look again.  The thread is then
+         * READY on no run queue with no token and no debt, which nothing recovers:
+         * sched_sweep_owed_enqueues is gated on the global debt counter, and a
+         * thread carrying no debt never appears in it.
+         *
+         * Identical to the defect the enqueue-current path in cpu_sched_enqueue
+         * already carries a comment about, and fixed the same way.  The claim is
+         * single-consumer and both consumers re-validate before linking, so a
+         * completion path that DID act on the mark cannot double-enqueue: the
+         * settle finds the thread queued and cpu_sched_enqueue's on_rq exchange
+         * refuses the second link, and the sweep tests !on_rq itself.
+         *
+         * Diagnosed from CI by thread_t::ready_by naming this function as the last
+         * promoter of a thread stranded READY on no run queue
+         * (`ready_by=... (sched_wake_thread)`, the ata driver's thread at disp=85).
+         * Pinned by "a wake that declines to enqueue left a claim rather than only
+         * a mark" in tests/unit/test_process_lifecycle.c. */
         if (sched_mark_ready_if_live(t)) {
             __atomic_store_n((uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
         }
+        sched_owe_enqueue(t);
         return;
     }
 

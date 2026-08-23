@@ -1379,10 +1379,10 @@ Source: `architecture/25-diagnostics-status.md`,
   stash`.** A previous attempt was unsound because a stash silently did not
   take, so both arms ran identical code and the result meant nothing.
 
-- [ ] [BUG][P0] The whole-session wedge is BACK, by this item's own test. It had
-  THREE causes, each fixed, and finding each only because the previous one was
-  gone is why the item was kept open instead of closed on a green run. The second
-  cause's marker now persists again -- see the capture below the three causes.
+- [ ] [BUG][P0] Confirm the whole-session wedge stays fixed. It has had FOUR
+  causes, each fixed, and finding each only because the previous one was gone is
+  why this item is never closed on a green run. The fourth was diagnosed and fixed
+  on 2026-08-23 and needs the confirmation runs described at the end.
 
   1. `46bd8b5d26` -- a READDIR's terminating `FS_IPC_RESP` was refused for a full
      relay queue and dropped, stranding fs-manager and, behind it, the client and
@@ -1404,6 +1404,17 @@ Source: `architecture/25-diagnostics-status.md`,
      blocked thread whose `wait=select:` line shows a watched endpoint with
      `q>0` (CI run 32009665809: fs-fat parked on `ep:54(q=1)` holding
      fs-manager's `type=0x420`, wedging the boot before the CLI).
+  4. `sched_wake_thread`'s claim-lost arm marked the target READY and returned
+     without leaving a CLAIM. When `sched_wake_claim_enqueue` reports that the
+     completion path owns the enqueue, that only holds while the completion path
+     has not yet made its decision; once it has -- it clears
+     `blocking_transition`, takes the token, reads the state, sees BLOCKED and
+     correctly declines to enqueue a blocked thread -- the mark lands after the
+     last thing that would have acted on it. A mark is not a message, which is
+     the identical defect the enqueue-current path in `cpu_sched_enqueue` already
+     carried a comment about, fixed the same way: publish `sched_owe_enqueue`
+     alongside the mark. Its signature is a persistent `stranded(ready,no-rq)`
+     whose `[diag]   ready_by=` line names `sched_wake_thread`.
 
   What would settle this: several consecutive green full-suite runs with no
   `[diag]!    refused` line, no `stranded(ready,no-rq)` that PERSISTS across the
@@ -1503,75 +1514,44 @@ Source: `architecture/25-diagnostics-status.md`,
      tripwire added for precisely this did NOT fire in run 32640235473, which
      carries the strand. Reproducing a state is not the same as being its cause.
 
-  LOCATED, by the widened tripwire, in run 32642300000-era jobs on 053dc9713f. It
-  fired twice, in two different batteries, and the two reports are the most
-  informative evidence this investigation has produced:
+  DIAGNOSED AND FIXED, 2026-08-23, in three steps each of which needed the
+  previous one's instrumentation. The chain is recorded because two hypotheses
+  were refuted along the way and the refutations cost less than the guesses would
+  have:
 
-      [sched] dispatch left stranded tid=46 pid=37 rc=7 cpu=2   (warp_smp)
-      [sched] dispatch left stranded tid=51 pid=42 rc=7 cpu=2   (language-runtimes)
+  1. `owed=` on every thread line said the strand was owed nothing, ruling out a
+     dropped hand-off.
+  2. `SCHED_DEBUG_DISPATCH_LEFT_STRANDED` said `rc=7` -- the NORMAL dispatch exit,
+     via `PROCESS_RUN_BLOCKED` -- with no enqueue ever attempted (every skip
+     reason logs on its first hit, and none did). So the promotion happened
+     outside the dispatch, after that branch had read BLOCKED and correctly
+     declined.
+  3. `thread_t::ready_by` named the promoter outright:
+     `ready_by=ffffffff80227a12 (sched_wake_thread)`, on the ata driver's thread
+     at `disp=85`, identical across four samples.
 
-  Three things follow, and the first invalidates an assumption every earlier
-  revision of this entry made.
+  That is cause 4 in the wedge item above, and the fix is one line:
+  `sched_wake_thread`'s claim-lost arm now publishes `sched_owe_enqueue` alongside
+  its READY mark, which is what the enqueue-current path in `cpu_sched_enqueue`
+  has always done for the same reason. Pinned by "a wake that declines to enqueue
+  left a claim rather than only a mark" in `tests/unit/test_process_lifecycle.c`,
+  red before the fix and green after.
 
-  1. It is NOT compositor-specific. The second capture strands `cli`
-     (tid=51, pid=42, `st=ready rq=0 owed=0 wake=0`, `disp=1013`, identical across
-     TEN samples). "Always gfx-compositor" was an artifact of which thread happened
-     to be doing blocking IPC in the first four captures. The defect strands
-     whichever thread hits the window, and that is what makes the symptom vary so
-     wildly: a stranded `cli` means no prompt at all (hence the `setUpClass` errors
-     and the `test_hello_rust` failures), a stranded compositor means only that
-     graphics waits stall.
-  2. `rc=7` is `SCHED_R_RANDONE` -- the NORMAL exit, not an abort. Since the
-     EXITED and THREAD_EXITED branches mark the thread ZOMBIE and cannot end
-     READY, the result was `PROCESS_RUN_BLOCKED`. That branch enqueues when it
-     reads READY and promotes-and-enqueues when it reads RUNNING, so both tests
-     failing means it read BLOCKED -- correct at the time, a genuinely blocked
-     thread with nothing to enqueue.
-  3. No enqueue was attempted for the stranded thread. Every skip reason logs on
-     its FIRST hit, and in the warp_smp capture the tripwire is the only `[sched]`
-     line in the entire run; in the language-runtimes capture the enqueue markers
-     name other threads (tid=10, tid=18). So this is not an enqueue that was
-     refused -- it is an enqueue that never happened.
+  READ THE TRIPWIRE CAREFULLY, because it has a known false positive and an
+  earlier revision of this entry over-read it. It samples at `dispatch_done`, so a
+  waker on another CPU that promotes a thread and enqueues it a moment later is
+  seen as READY-and-unqueued in between and reported. Counts therefore OVERSTATE
+  strands: one capture reported three hits of which only one matched the dump's
+  persistent strand. The real signal is the dump's `[diag]!` line holding across
+  every sample with `disp` frozen -- a tripwire hit alone proves nothing. The
+  claim that the strand "fires several times per boot" came from reading the
+  counts as strands and is withdrawn.
 
-  Therefore: something promotes the thread to READY after the BLOCKED branch's
-  state test and before the dispatch returns, without enqueueing it and without
-  leaving a claim or a token. The promoter is another CPU; the window is the
-  handful of statements between that test and `dispatch_done`.
-
-  This is the same family as the wake/block handshake this file already documents:
-  `sched_wake_claim_enqueue` returning 0 makes its caller decline the enqueue and
-  hand it to a completion path -- and step 2 above is that completion path having
-  ALREADY run. Two constraints on any fix, both from the captures:
-  `wake=0` everywhere means the token was consumed, so "enqueue whenever the claim
-  returns 0" would double-enqueue the healthy case; and
-  `test_process_lifecycle`'s healthy case now asserts the tripwire stays silent
-  under a live owner, so a wrong fix fails a local gate rather than only CI.
-
-  FREQUENCY, and it changes the character of the bug. One `networking` capture on
-  e51caaaa36 reports THREE hits in a single boot, on two threads and three CPUs:
-
-      left stranded tid=31 pid=22 rc=7 cpu=1 (n=1)
-      left stranded tid=46 pid=37 rc=7 cpu=0 (n=1)
-      left stranded tid=46 pid=37 rc=7 cpu=1 (n=2)
-
-  tid=46 appears twice, on different CPUs, with the counter advancing -- so it was
-  stranded, RECOVERED, and stranded again. The strand is therefore usually
-  transient: a later wake finds the thread and enqueues it, and nobody notices.
-  It is fatal only when it lands on the last wake that thread was ever going to
-  receive, which is why a defect that fires several times per boot presents as a
-  coin flip. Do not treat a single tripwire hit as the fatal one; the dump's
-  `[diag]!` line names the strand that never recovered (here tid=46 at disp=1364,
-  four samples).
-
-  This also raises the stakes on the fix: it is not a rare interleaving to be
-  tolerated, it is routine, and the run queue is silently losing threads on every
-  boot.
-
-  Next diagnostic, and it should be decisive: record WHO set the thread READY --
-  a per-thread return-address breadcrumb written wherever the state becomes READY,
-  printed in the dump for a stranded thread. That names the promoting site outright.
-  It is the third use of this play; `owed=` and the tripwire itself each paid off
-  within one run.
+  What would confirm the fix: several consecutive full-suite runs with no
+  persistent `stranded(ready,no-rq)` in any dump. The strand was present in runs
+  that still booted (it is fatal only when it lands on the last wake a thread was
+  going to receive), so a green run proves less here than usual and the
+  confirmation has to be the absence of the marker, not the absence of failures.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

@@ -667,6 +667,74 @@ static void s_aborted_dispatch_leaves_its_thread_reachable(void) {
     drop_transition_target(pid);
 }
 
+/* Regression: 2026-08-23-wake-marks-without-claiming -- sched_wake_thread's
+ * claim-lost arm marks the target READY and returns without leaving a claim, so
+ * a wake that arrives while the target's blocking transition is in flight can be
+ * lost entirely and the thread never runs again.
+ *
+ * The arm reads: if sched_wake_claim_enqueue returns 0, the completion path is
+ * said to own the enqueue, so this side calls sched_mark_ready_if_live and
+ * returns. That holds only while the completion path has not YET made its
+ * decision. Once it has -- it clears blocking_transition, takes the token, reads
+ * the state, sees BLOCKED and correctly declines to enqueue a blocked thread --
+ * the mark lands after the last thing that would have acted on it. The thread is
+ * then READY, on no run queue, with no wake token and no owed enqueue, and the
+ * owed-enqueue sweep cannot recover it either because its gate is the global debt
+ * counter and this thread carries no debt.
+ *
+ * This is the same defect the enqueue-current path already had and fixed with
+ * sched_owe_enqueue, whose comment states the rule outright: a mark is not a
+ * message, because a holder that has already run its check never sees it. The
+ * fix there was to publish a CLAIM alongside the mark. This arm still publishes
+ * only the mark.
+ *
+ * Found by the breadcrumb, not by reading: six CI captures showed a thread READY
+ * on no run queue with nothing owing it, the tripwire narrowed it to the normal
+ * dispatch exit with no enqueue ever attempted, and thread_t::ready_by then named
+ * the promoter -- `ready_by=ffffffff80227a12 (sched_wake_thread)`, stranding the
+ * ata driver's thread at disp=85. Two earlier hypotheses (the claim consumers,
+ * an aborted dispatch) were refuted the same way.
+ *
+ * The interleaving is stated as a starting state rather than raced for: the
+ * blocking transition is published, which is what sched_event_wait does before
+ * yielding, and the completion path's decision is then simply not run -- exactly
+ * the ordering where it has already declined. */
+static void s_a_wake_that_defers_leaves_something_actionable(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    /* The target is blocked with its transition published -- the state a thread is
+     * in between sched_event_wait and its holder's completion handling. */
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_IPC);
+    __atomic_store_n(&t->blocking_transition, 1u, __ATOMIC_SEQ_CST);
+    CHECK(t->on_rq == 0, "and not queued");
+
+    sched_wake_thread(t);
+
+    /* The wake must leave the thread ACTIONABLE, by one of the two mechanisms the
+     * scheduler has: linked in a ready queue, or carrying an owed-enqueue claim
+     * that a settle or the sweep will honour. A bare READY mark is neither -- it
+     * is a note left for a reader who may already have gone. */
+    printf("  ... after the deferred wake: state=%u on_rq=%u owed=%u wake=%u\n",
+           (unsigned)t->state,
+           (unsigned)t->on_rq,
+           (unsigned)t->enqueue_owed,
+           (unsigned)t->wake_pending);
+    CHECK(t->on_rq || t->enqueue_owed,
+          "a wake that declines to enqueue left a claim rather than only a mark");
+
+    __atomic_store_n(&t->blocking_transition, 0u, __ATOMIC_SEQ_CST);
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE);
+    drop_transition_target(pid);
+}
+
 /* ------------------------------------------------------- the kill race soak */
 
 /* Nothing here is serialised against dispatch. Spawn, kill and reap all run
@@ -938,6 +1006,7 @@ int main(void) {
     s_promotion_of_a_ready_target_is_permitted_and_inert();
     s_exiting_owner_refuses_both_transitions();
     s_aborted_dispatch_leaves_its_thread_reachable();
+    s_a_wake_that_defers_leaves_something_actionable();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

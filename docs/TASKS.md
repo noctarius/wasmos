@@ -1561,6 +1561,26 @@ Source: `architecture/25-diagnostics-status.md`,
   `test_process_lifecycle`'s healthy case now asserts the tripwire stays silent
   under a live owner, so a wrong fix fails a local gate rather than only CI.
 
+  FREQUENCY, and it changes the character of the bug. One `networking` capture on
+  e51caaaa36 reports THREE hits in a single boot, on two threads and three CPUs:
+
+      left stranded tid=31 pid=22 rc=7 cpu=1 (n=1)
+      left stranded tid=46 pid=37 rc=7 cpu=0 (n=1)
+      left stranded tid=46 pid=37 rc=7 cpu=1 (n=2)
+
+  tid=46 appears twice, on different CPUs, with the counter advancing -- so it was
+  stranded, RECOVERED, and stranded again. The strand is therefore usually
+  transient: a later wake finds the thread and enqueues it, and nobody notices.
+  It is fatal only when it lands on the last wake that thread was ever going to
+  receive, which is why a defect that fires several times per boot presents as a
+  coin flip. Do not treat a single tripwire hit as the fatal one; the dump's
+  `[diag]!` line names the strand that never recovered (here tid=46 at disp=1364,
+  four samples).
+
+  This also raises the stakes on the fix: it is not a rare interleaving to be
+  tolerated, it is routine, and the run queue is silently losing threads on every
+  boot.
+
   Next diagnostic, and it should be decisive: record WHO set the thread READY --
   a per-thread return-address breadcrumb written wherever the state becomes READY,
   printed in the dump for a stranded thread. That names the promoting site outright.

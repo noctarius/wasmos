@@ -95,8 +95,18 @@ static int thread_reset_slot(thread_t* thread) {
                                      __ATOMIC_ACQUIRE)) {
         return 0; /* a dispatch owns it (or another reset is already tearing down) */
     }
+    /* Both refusals below hand the claim back before returning, and that is
+     * required, not tidiness.  Every contender for this word CASes from FREE, so a
+     * slot left FROZEN is unrecoverable in two directions at once: a later reap
+     * fails the claim instead of reaching the state check, so the deferred
+     * teardown can never be retried and thread_reap_owner burns all its passes
+     * before reporting a leftover; and the dispatcher's claim fails too, so the
+     * thread this call declined to free can never be dispatched again -- it is
+     * picked, unlinked, dropped without a re-enqueue, and stranded.  One refused
+     * reset would cost a slot out of a fixed-size table permanently. */
     uint32_t expected = __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE);
     if (expected == THREAD_STATE_RUNNING) {
+        __atomic_store_n(&thread->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
         return 0;
     }
     if (!__atomic_compare_exchange_n((uint32_t*)&thread->state,
@@ -105,6 +115,7 @@ static int thread_reset_slot(thread_t* thread) {
                                      0,
                                      __ATOMIC_ACQ_REL,
                                      __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&thread->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
         return 0; /* a dispatch claim (or another transition) won; retry later */
     }
     /* Unlink from whatever run queue still holds this thread BEFORE the slot is
@@ -152,6 +163,10 @@ static int thread_reset_slot(thread_t* thread) {
     /* Scrubbed with the rest: a breadcrumb that outlived its thread would name a
      * promotion of the PREVIOUS occupant of this slot. */
     thread->ready_by = 0;
+    thread->rq_enq_result = SCHED_ENQ_NONE;
+    thread->rq_unlink_site = SCHED_UNLINK_NONE;
+    thread->rq_link_count = 0;
+    thread->rq_enq_by = 0;
     thread->kstack_base = 0;
     thread->kstack_top = 0;
     thread->kstack_alloc_base_phys = 0;

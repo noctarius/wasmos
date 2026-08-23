@@ -268,6 +268,23 @@ linked feature documents for rationale and rollout plans.
   single-owner claim (`THREAD_SLOT_FREE`/`DISPATCH`/`FROZEN`) that the dispatcher,
   `thread_reset_slot` and `sched_sweep_owed_enqueues` all contest by CAS from
   FREE, so exactly one owns the slot and the losers back off.
+- Every path that takes that claim hands it back, including the ones that refuse
+  to act. `thread_reset_slot` CASes FREE -> FROZEN and then re-reads the thread's
+  state, refusing to tear down a RUNNING thread and refusing again if the state CAS
+  loses; both restore FREE before returning. FROZEN is unrecoverable if leaked --
+  every contender CASes from FREE, so a leaked FROZEN makes both the retry the
+  refusal promises and every later dispatch of that thread fail the claim rather
+  than the check, costing a slot out of a fixed-size table and stranding the thread
+  it declined to free. Reachable from `thread_reap_owner_pass`, which resets every
+  slot of the owner whatever its state.
+- The dispatch's own claim failure is the mirror case and is COUNTED, not silent:
+  `SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST` when the CAS loses and
+  `SCHED_DEBUG_DISPATCH_DROPPED_STEAL_REAPED` when a stolen thread's owner is gone.
+  Both exits run after a picker has already unlinked the thread and released
+  `on_rq`, so they drop a thread that is off every run queue -- correct for a slot
+  being torn down, a strand for a live owner's thread, and indistinguishable after
+  the fact without the count. The `slot claim lost` report carries the OBSERVED
+  claim value, which separates a racing dispatch (DISPATCH) from a reaper (FROZEN).
 - A CAS, not a test-then-act, because the two sides share no lock: the dispatcher
   claims after `cpu_sched_pick_next` has dropped the queue lock, and the reaper
   holds only the thread table lock. `process_reap_claim` additionally refuses while
@@ -335,6 +352,21 @@ linked feature documents for rationale and rollout plans.
   `dispatch_done` and so over-reports a promote-then-enqueue crossing CPUs; the
   authoritative signal is a `[diag]!` strand persisting across all dump samples
   with `disp` frozen.
+- `ready_by=` names the promoter but structurally cannot say why the thread is on
+  no run queue, so the dump also carries per-thread run-queue forensics for a
+  strand: `enq=` (the outcome of the last enqueue attempt), `links=` (times the
+  thread was actually linked), `unlink=` (who last released `on_rq`) and `enq_by=`
+  (the call site of that attempt, carried in through `cpu_sched_enqueue_from`).
+  They separate the only two histories that reach a stranded thread: it was linked
+  and a picker's caller dropped it (`links>0`, `unlink=pick_next`/`steal`), or it
+  was never linked because a guard declined (`enq=skip:*`, naming which guard;
+  `links=0`, which the first history cannot reach). Diagnostic only -- relaxed
+  atomics, read only by the dump, scrubbed with the slot.
+- Every scheduler tripwire's running total is printed on one line
+  (`[diag] sched counters:`), including the zeros. The per-event reports rate-limit
+  to powers of two, so an absent log line is not evidence the event did not fire;
+  the counters are the only honest negative and several wrong conclusions have been
+  drawn from the log's silence.
 - `proc->exiting`, `proc->thread_count`, `proc->live_thread_count` and the
   scheduler's progress diagnostics are read and written cross-CPU, so each has one
   atomic protocol rather than a mix. `live_thread_count` reaching zero gates

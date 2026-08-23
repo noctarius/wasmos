@@ -671,6 +671,206 @@ static void s_aborted_dispatch_leaves_its_thread_reachable(void) {
     drop_transition_target(pid);
 }
 
+/* Regression: 2026-08-23-lost-slot-claim-strands-a-live-thread
+ *
+ * The live-owner abort that s_aborted_dispatch_leaves_its_thread_reachable says
+ * is "not constructible from here". It is: that case names "a claim lost to
+ * another CPU" as one of the races needed, and a lost claim is a value in one
+ * word. Holding thread_t::dispatch_ref before the dispatch runs reproduces
+ * exactly what a second CPU that won the same pick, or a reaper mid-teardown,
+ * presents -- with no race and no second thread.
+ *
+ * What it establishes, and why it matters more than the dying-owner case: this
+ * exit strands a thread whose owner is LIVE. The dispatch has already had the
+ * thread unlinked by cpu_sched_pick_next -- which releases on_rq before
+ * returning -- and then returns SCHED_R_STALE without re-enqueueing it, so the
+ * thread ends READY, on no run queue, owed no enqueue and with no wake token.
+ * Nothing will enqueue it again: sched_sweep_owed_enqueues is gated on the global
+ * debt counter and this thread carries no debt. That is candidate A of the two
+ * histories in docs/TASKS.md's wedge entry, demonstrated rather than argued, and
+ * it is the CI signature field for field.
+ *
+ * This case therefore asserts a state the scheduler should NOT be able to reach.
+ * It is here to pin the mechanism while the fix is chosen -- the correct repair
+ * differs per exit and guessing at it is what cost this investigation four
+ * refuted conclusions. Anyone fixing the exit must rewrite this case to assert
+ * the repair, NOT relax it until it passes.
+ *
+ * The comment in s_aborted_dispatch_leaves_its_thread_reachable that calls the
+ * live-owner abort unconstructible describes the SET_RUNNING_EXITING route only.
+ * It stands for that route and is superseded for this one. */
+static void s_a_lost_slot_claim_strands_a_live_owners_thread(void) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* t = 0;
+    process_t* proc = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+
+    if (process_spawn("claim-target", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a target");
+        return;
+    }
+    if (process_thread_spawn_worker_internal(pid, "claim-worker", sibling_worker, 0, &tid) != 0) {
+        CHECK(0, "spawned a worker");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    t = thread_get(tid);
+    proc = process_get(pid);
+    if (!t || !proc) {
+        CHECK(0, "the worker and its owner are resident");
+        (void)process_kill(pid, 0);
+        return;
+    }
+
+    /* Re-place the worker on THIS CPU's queue. sched_spawn_thread put it on the
+     * least-loaded CPU, and this CPU can only reach another CPU's queue by
+     * stealing -- which happens only when pick_next returns its idle thread,
+     * and CPU 0's queue holds the target's forever-yielding main thread, so it
+     * never idles. Without this the worker is simply never picked and the case
+     * asserts nothing. Which queue the thread came from is not part of what the
+     * exit under test does. */
+    cpu_sched_remove_thread(t);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+
+    CHECK(t->state == THREAD_STATE_READY, "the worker is READY");
+    CHECK(t->on_rq == 1, "and queued on this CPU, so a dispatch will pick it");
+    CHECK(t->rq_link_count > 0u, "and its record says it was linked");
+    CHECK(proc->state != PROCESS_STATE_ZOMBIE && !proc->exiting,
+          "and its owner is LIVE -- the whole point of this case");
+
+    /* The lost claim. THREAD_SLOT_DISPATCH is what a second CPU that raced this
+     * one to the same pick leaves in the word; THREAD_SLOT_FROZEN (a reaper
+     * mid-teardown) fails the dispatcher's CAS-from-FREE identically. */
+    __atomic_store_n(&t->dispatch_ref, THREAD_SLOT_DISPATCH, __ATOMIC_RELEASE);
+
+    /* Drive the REAL dispatch path rather than re-implementing its sequence.
+     * Bounded and stopping the moment the worker is off every queue, which is the
+     * moment the exit under test has run: the target's main thread shares the
+     * queue and may be picked first. */
+    for (uint32_t i = 0; i < 20000u && t->on_rq; ++i) {
+        (void)process_schedule_once();
+    }
+
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST) > 0,
+          "the lost-claim exit counted its drop");
+
+    printf("  ... after the lost claim: state=%u on_rq=%u owed=%u wake=%u links=%u unlink=%s\n",
+           (unsigned)t->state,
+           (unsigned)t->on_rq,
+           (unsigned)t->enqueue_owed,
+           (unsigned)t->wake_pending,
+           (unsigned)t->rq_link_count,
+           sched_unlink_site_name(t->rq_unlink_site));
+
+    CHECK(t->state == THREAD_STATE_READY && !t->on_rq && !t->enqueue_owed && !t->wake_pending,
+          "a live owner's thread is left runnable, unqueued and owed nothing");
+    CHECK(proc->state != PROCESS_STATE_ZOMBIE && !proc->exiting,
+          "with its owner still live, so nothing will reap it either");
+
+    /* Which of the two histories the forensics report. A capture reading these
+     * values sends the reader to the dispatch exits; reading skip:* instead would
+     * send them to the enqueue guards. Getting this backwards is the failure mode
+     * the fields exist to prevent, so it is asserted where the state is known.
+     *
+     * A real capture may show enq=skip:already-queued rather than linked, since a
+     * redundant enqueue records itself; `links` and `unlink` are the fields that
+     * discriminate, and only this construction's clean path guarantees `linked`. */
+    CHECK(t->rq_unlink_site == SCHED_UNLINK_PICK_NEXT || t->rq_unlink_site == SCHED_UNLINK_STEAL,
+          "the forensics name a picker, not an enqueue skip");
+    CHECK(t->rq_enq_result == SCHED_ENQ_LINKED, "and the last enqueue attempt was a link");
+
+    /* And the tripwire that exists for this state cannot see it: the exit returns
+     * before dispatch_done, where the check lives. Asserted so the silence is a
+     * documented property rather than a reading someone takes as a negative --
+     * every "the tripwire never fired for X" conclusion in this investigation so
+     * far has been void. */
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_LEFT_STRANDED) == 0,
+          "and the dispatch_done tripwire is structurally blind to this exit");
+
+    /* Release the claim so the teardown below can reap the slot. */
+    __atomic_store_n(&t->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
+    drop_transition_target(pid);
+}
+
+/* Regression: 2026-08-23-refused-reset-leaks-a-frozen-slot
+ *
+ * thread_reset_slot wins the slot claim by CAS'ing dispatch_ref from FREE to
+ * FROZEN, then re-reads the thread's state and refuses to tear down a RUNNING
+ * thread. It returned without restoring the word, so a refused reset left the
+ * slot FROZEN forever -- and FROZEN is a value nothing recovers from:
+ *
+ *   - thread_reset_slot's own CAS is from FREE, so every later reap of that slot
+ *     fails the claim instead of the state check. The comment promising the
+ *     teardown is "deferred rather than dropped" and "retried from there" is
+ *     then false: the retry cannot succeed, and thread_reap_owner burns all 64
+ *     passes before reporting a leftover.
+ *   - process_schedule_once_impl's claim is also a CAS from FREE, so the thread
+ *     can never be dispatched again either. It is picked, unlinked, refused, and
+ *     dropped without a re-enqueue on every attempt.
+ *
+ * So one refused reset costs a thread slot permanently AND strands the thread it
+ * refused to free. The slot table is fixed-size.
+ *
+ * Driven as a contract, not a race: the refusal only needs the thread to read
+ * RUNNING while dispatch_ref reads FREE, which is a state a test can simply
+ * publish. The second early exit in the same function -- a lost race on the
+ * state CAS -- has the identical defect and the identical fix, but needs a
+ * concurrent transition between the load and the CAS and is not constructible
+ * from one host thread; it is fixed by inspection alongside this one. */
+static void s_a_refused_reset_does_not_leak_a_frozen_slot(void) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+
+    if (process_spawn("frozen-target", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a target");
+        return;
+    }
+    if (process_thread_spawn_worker_internal(pid, "frozen-worker", sibling_worker, 0, &tid) != 0) {
+        CHECK(0, "spawned a worker");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    t = thread_get(tid);
+    if (!t) {
+        CHECK(0, "the worker is resident");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    cpu_sched_remove_thread(t);
+
+    /* The refusal condition: RUNNING, with the slot claim free. That is what a
+     * reaper meets when a dispatch has published RUNNING and released its claim
+     * -- and what thread_reap_owner meets for every RUNNING thread of a process
+     * it is tearing down, since it resets every slot of the owner whatever its
+     * state. */
+    __atomic_store_n((uint32_t*)&t->state, (uint32_t)THREAD_STATE_RUNNING, __ATOMIC_RELEASE);
+    __atomic_store_n(&t->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
+
+    CHECK(thread_reap(tid) == 0, "a RUNNING thread's slot is refused, which is correct");
+    CHECK(__atomic_load_n(&t->dispatch_ref, __ATOMIC_ACQUIRE) == THREAD_SLOT_FREE,
+          "and the refusal leaves the slot claimable, not FROZEN");
+
+    /* The consequence, and the assertion that would still catch this if the one
+     * above were ever relaxed: the retry the refusal promises must be able to
+     * succeed once the thread is terminal. */
+    __atomic_store_n((uint32_t*)&t->state, (uint32_t)THREAD_STATE_ZOMBIE, __ATOMIC_RELEASE);
+    CHECK(thread_reap(tid) == 1, "so the deferred teardown can actually be retried");
+    CHECK(t->tid == 0u, "and the slot really was released to the allocator");
+
+    (void)process_kill(pid, 0);
+    for (uint32_t i = 0; i < 16u; ++i) {
+        (void)process_schedule_once();
+    }
+    process_reap_zombie_pid(pid);
+}
+
 /* Regression: 2026-08-23-wake-marks-without-claiming -- sched_wake_thread's
  * claim-lost arm marks the target READY and returns without leaving a claim, so
  * a wake that arrives while the target's blocking transition is in flight can be
@@ -1071,6 +1271,8 @@ int main(void) {
     s_promotion_of_a_ready_target_is_permitted_and_inert();
     s_exiting_owner_refuses_both_transitions();
     s_aborted_dispatch_leaves_its_thread_reachable();
+    s_a_lost_slot_claim_strands_a_live_owners_thread();
+    s_a_refused_reset_does_not_leak_a_frozen_slot();
     s_a_wake_that_defers_leaves_something_actionable();
     s_a_consumer_that_declines_keeps_the_claim();
 

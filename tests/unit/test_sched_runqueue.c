@@ -2571,6 +2571,195 @@ static void test_default_prio_precedence_when_flags_overlap(void) {
 
 /* -------------------------------------------------------------------- main */
 
+/* ------------------------------------------------ run-queue forensics (X) */
+
+/* thread_t::rq_enq_result / rq_unlink_site / rq_link_count exist to separate the
+ * two histories that produce an identical stranded thread -- READY, on no run
+ * queue, owed no enqueue:
+ *
+ *   A. it was LINKED, a picker took it off the queue, and its caller dropped it;
+ *   B. it was never linked, because an enqueue attempt was skipped.
+ *
+ * Those need different fixes, and the four investigations that preceded these
+ * fields all went wrong on the same class of reasoning -- concluding from an
+ * absent log line that an event had not happened, when the tripwires suppress
+ * roughly four hits in five. These cases pin the discrimination itself: that the
+ * two histories read DIFFERENTLY (X1/X2), that each skip reason is distinguishable
+ * from the others (X3), and that the record describes the last attempt rather than
+ * the last failure (X4). If any of those breaks, a capture reads plausibly and
+ * says the wrong thing, which is worse than saying nothing.
+ *
+ * Regression: 2026-08-23-stranded-ready-discriminator
+ */
+
+/* History A: linked, then picked. The pick is what makes it unqueued, and the
+ * fields say so -- which is the reading that sends the next investigator to the
+ * dispatch exits rather than to the enqueue guards. */
+static void test_forensics_link_then_pick_reads_as_a_pick(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->rq_enq_result == SCHED_ENQ_LINKED, "the enqueue records a link");
+    CHECK(t->rq_link_count == 1u, "and counts it");
+    CHECK(t->rq_enq_by != 0u, "and names its call site");
+
+    CHECK(pick_on(0) == t, "the picker takes it");
+    CHECK(t->on_rq == 0u, "so it is on no run queue");
+    CHECK(t->rq_unlink_site == SCHED_UNLINK_PICK_NEXT, "and the pick is named as the unlink");
+    CHECK(t->rq_link_count == 1u, "the link count still proves it was queued");
+}
+
+/* History B: an enqueue attempted and skipped, on a thread that has never been
+ * linked. link_count == 0 is the whole discriminator -- it is the one field that
+ * cannot be reached by history A. */
+static void test_forensics_skipped_enqueue_never_counts_a_link(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    /* Claim clear but node linked: the state the double-link bail refuses. Built
+     * with force_link so the thread reaches the bail without ever having been
+     * accepted by cpu_sched_enqueue -- an enqueue-then-corrupt setup would leave
+     * a link on the record and defeat the point of the case. */
+    force_link(0, t, SCHED_PRIO_WASM);
+    __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
+
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(sched_debug_count(SCHED_DEBUG_DOUBLE_LINK) == 1, "the bail is taken");
+    CHECK(t->rq_enq_result == SCHED_ENQ_SKIP_DOUBLE_LINK, "and names itself as the skip");
+    CHECK(t->rq_link_count == 0u, "no link is counted for a refused enqueue");
+    CHECK(t->rq_unlink_site == SCHED_UNLINK_DOUBLE_LINK,
+          "and the claim release is attributed to the bail, not to a picker");
+}
+
+/* Every skip must be tellable from every other skip: the code is what names the
+ * mechanism to fix, so two reasons sharing one code would send a capture to the
+ * wrong guard. Checked as a set rather than one case per reason, because the
+ * property is distinctness and that is not visible from any single reading. */
+static void test_forensics_each_skip_reason_is_distinct(void) {
+    uint8_t seen[8];
+    uint32_t n = 0;
+
+    harness_reset();
+    cpu_sched_enqueue(&g_cpus[0].sched, g_cpus[0].idle_thread);
+    seen[n++] = g_cpus[0].idle_thread->rq_enq_result;
+    CHECK(seen[0] == SCHED_ENQ_SKIP_IDLE, "an idle thread records skip:idle");
+
+    harness_reset();
+    thread_t* bad = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    bad->sched_prio = SCHED_PRIO_MAX;
+    cpu_sched_enqueue(&g_cpus[0].sched, bad);
+    seen[n++] = bad->rq_enq_result;
+    CHECK(bad->rq_enq_result == SCHED_ENQ_SKIP_BAD_PRIO, "a bad band records skip:bad-prio");
+
+    harness_reset();
+    thread_t* blocked = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    cpu_sched_enqueue(&g_cpus[0].sched, blocked);
+    seen[n++] = blocked->rq_enq_result;
+    CHECK(blocked->rq_enq_result == SCHED_ENQ_SKIP_NON_READY,
+          "a non-READY thread records skip:non-ready");
+
+    harness_reset();
+    thread_t* queued = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, queued);
+    cpu_sched_enqueue(&g_cpus[1].sched, queued);
+    seen[n++] = queued->rq_enq_result;
+    CHECK(queued->rq_enq_result == SCHED_ENQ_SKIP_ALREADY_QUEUED,
+          "a second enqueue records skip:already-queued");
+
+    harness_reset();
+    thread_t* running = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    g_cpus[2].current_thread = running;
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, running);
+    seen[n++] = running->rq_enq_result;
+    CHECK(running->rq_enq_result == SCHED_ENQ_DEFERRED,
+          "a thread running elsewhere records a deferral, not a skip");
+
+    int distinct = 1;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (seen[i] == SCHED_ENQ_NONE || seen[i] == SCHED_ENQ_LINKED) {
+            distinct = 0; /* a real outcome must never read as "nothing happened" */
+        }
+        for (uint32_t j = i + 1; j < n; ++j) {
+            if (seen[i] == seen[j]) {
+                distinct = 0;
+            }
+        }
+    }
+    CHECK(distinct, "all five refusal outcomes are distinct and none reads as none/linked");
+}
+
+/* The record must describe the MOST RECENT attempt, not the most recent failed
+ * one. A stale skip left standing behind a later success would report "never
+ * queued" for a thread that is queued -- the exact false negative these fields
+ * were added to remove. */
+static void test_forensics_record_is_the_last_attempt(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->rq_enq_result == SCHED_ENQ_SKIP_NON_READY, "the refusal is recorded first");
+
+    t->state = THREAD_STATE_READY;
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->rq_enq_result == SCHED_ENQ_LINKED, "and the later success replaces it");
+    CHECK(t->rq_link_count == 1u, "counting exactly the one link that happened");
+}
+
+/* Which picker or remover took the thread off its queue, since "a dispatch
+ * dropped it" and "a reap unlinked it" are different bugs with the same
+ * aftermath. */
+static void test_forensics_each_unlink_site_is_named(void) {
+    harness_reset();
+    thread_t* stolen = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[1].sched, stolen);
+    act_as(0);
+    CHECK(cpu_sched_try_steal(0) == stolen, "the steal takes it");
+    CHECK(stolen->rq_unlink_site == SCHED_UNLINK_STEAL, "and is named as the unlink");
+
+    harness_reset();
+    thread_t* reaped = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, reaped);
+    cpu_sched_remove_thread(reaped);
+    CHECK(reaped->rq_unlink_site == SCHED_UNLINK_REMOVE, "a reap-path removal names itself");
+
+    harness_reset();
+    thread_t* dead = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* live = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, dead);
+    cpu_sched_enqueue(&g_cpus[0].sched, live);
+    dead->state = THREAD_STATE_ZOMBIE;
+    CHECK(pick_on(0) == live, "the sweep skips the tombstone");
+    CHECK(dead->rq_unlink_site == SCHED_UNLINK_STALE_SWEEP,
+          "a node dropped as terminal is not recorded as a pick");
+    CHECK(live->rq_unlink_site == SCHED_UNLINK_PICK_NEXT, "and the returned thread is");
+}
+
+/* A recycled slot must not carry the previous occupant's history: the dump draws
+ * "never queued" from link_count == 0, and an inherited non-zero count would
+ * silently rule out the one candidate it is there to detect. */
+static void test_forensics_reinit_clears_the_record(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(pick_on(0) == t, "queued and picked once");
+    CHECK(t->rq_link_count == 1u, "so it carries a history");
+
+    sched_thread_init(t, SCHED_PRIO_DRIVER);
+    CHECK(t->rq_link_count == 0u, "re-init clears the link count");
+    CHECK(t->rq_enq_result == SCHED_ENQ_NONE, "and the enqueue outcome");
+    CHECK(t->rq_unlink_site == SCHED_UNLINK_NONE, "and the unlink site");
+    CHECK(t->rq_enq_by == 0u, "and the call site");
+}
+
+/* The names back the codes in the stall dump, so an out-of-range value must
+ * answer "?" rather than index past its table -- the dump runs from the NMI path
+ * on a wedged machine and reads every field racily. */
+static void test_forensics_names_reject_out_of_range(void) {
+    CHECK(sched_enq_result_name(SCHED_ENQ_LINKED)[0] == 'l', "a known outcome names itself");
+    CHECK(sched_unlink_site_name(SCHED_UNLINK_STEAL)[0] == 's', "a known site names itself");
+    CHECK(sched_enq_result_name(200)[0] == '?', "an out-of-range outcome answers ?");
+    CHECK(sched_unlink_site_name(200)[0] == '?', "an out-of-range site answers ?");
+}
+
 int main(void) {
     struct {
         const char* name;
@@ -2675,6 +2864,13 @@ int main(void) {
         {"I3 init discards an existing pinning", test_init_discards_an_existing_pinning},
         {"I4 re-init across every band pair", test_reinit_across_every_band_pair},
         {"I5 re-init of a remotely queued thread", test_reinit_of_a_remotely_queued_thread},
+        {"X1 link then pick reads as a pick", test_forensics_link_then_pick_reads_as_a_pick},
+        {"X2 skipped enqueue counts no link", test_forensics_skipped_enqueue_never_counts_a_link},
+        {"X3 each skip reason is distinct", test_forensics_each_skip_reason_is_distinct},
+        {"X4 record is the last attempt", test_forensics_record_is_the_last_attempt},
+        {"X5 each unlink site is named", test_forensics_each_unlink_site_is_named},
+        {"X6 re-init clears the record", test_forensics_reinit_clears_the_record},
+        {"X7 names reject out of range", test_forensics_names_reject_out_of_range},
         {"T1 load sums every band", test_load_sums_every_band},
         {"T2 running non-idle counts as load", test_running_non_idle_thread_counts_as_load},
         {"T3 running idle does not count", test_running_idle_thread_does_not_count},

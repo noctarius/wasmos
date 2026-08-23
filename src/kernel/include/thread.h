@@ -150,6 +150,31 @@ typedef struct thread {
      * Written cross-CPU with a relaxed atomic and read only by the dump; not
      * load-bearing, nothing schedules on it. */
     uint64_t ready_by;
+    /* Run-queue forensics for a strand, and the only fields that separate its
+     * two possible histories.  A thread found READY, on no run queue and owed
+     * nothing was either LINKED and then unlinked by a picker whose caller
+     * dropped it, or never linked because an enqueue attempt was skipped;
+     * rq_enq_result says which, rq_unlink_site says who took it off a queue, and
+     * rq_link_count says whether it was ever on one at all.  Values are
+     * sched_enq_result_t / sched_unlink_site_t.
+     *
+     * rq_enq_by is the call site of that last enqueue attempt, carried in through
+     * cpu_sched_enqueue_from, so for anything routed through
+     * sched_enqueue_thread_from it names the caller that wanted the enqueue
+     * rather than the funnel it passed through.
+     *
+     * rq_link_count is 32 bits and wraps only past four billion links, which no
+     * boot approaches -- width chosen for that reason, because 0 is the one value
+     * the dump draws a conclusion from and a wrapped counter would report it for a
+     * thread that has been linked all along.
+     *
+     * Diagnostic only, like ready_by: written with relaxed atomics from whichever
+     * CPU acts, read only by the stall dump, and scrubbed when the slot is
+     * recycled.  Nothing schedules on them. */
+    uint8_t rq_enq_result;
+    uint8_t rq_unlink_site;
+    uint32_t rq_link_count;
+    uint64_t rq_enq_by;
     /* An enqueue this thread is OWED.  cpu_sched_enqueue refuses to link a
      * thread that some CPU still names as current -- it is executing, and
      * linking it would let a second CPU dispatch it -- so it records the debt

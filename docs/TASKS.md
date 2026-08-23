@@ -1572,7 +1572,37 @@ Source: `architecture/25-diagnostics-status.md`,
   Nothing can recover it, because the sweep's own gate is the counter the
   consumer just decremented.
 
-  FIXED in the consumer, 2026-08-23. `sched_settle_deferred_enqueue` now reads the
+  THE CONSUMER FIX DID NOT CLOSE IT, and the next capture says where to look. On
+  a557122879 the strand survives -- tid=31 `ata`, READY, unqueued, owed nothing,
+  five samples, `ready_by=process_schedule_once_impl` -- and the decisive detail is
+  that the tripwire fired only for tid=46 in that run and NEVER for tid=31. A
+  thread the tripwire never sees at `dispatch_done` was not stranded at the end of
+  its own dispatch: it was promoted from ANOTHER thread's dispatch.
+
+  That points at the two remaining sites with the same shape as the fixed one, both
+  reached from `process_schedule_once_impl`:
+
+      process.c:928   if (runnable && sched_wake_claim_enqueue(waiter))
+                          sched_enqueue_thread(waiter);          /* process_wake_waiters */
+      process.c:3537  if (process_set_ready(owner, waiter) && sched_wake_claim_enqueue(waiter))
+                          sched_enqueue_thread(waiter);          /* process_wake_thread_joiner */
+
+  In both, the waiter has already been promoted to READY by that point -- by
+  `thread_wake_if_blocked` in the fast path, or inside `process_set_ready` -- and a
+  `sched_wake_claim_enqueue` that returns 0 means neither an enqueue NOR a claim is
+  left behind. It is the identical "mark without a claim" defect fixed in
+  `sched_wake_thread` (cause 4), in two more places, and the promoter recorded in
+  the capture is consistent with either after inlining.
+
+  Treat this as the leading hypothesis and NOT as established. Elimination has been
+  wrong three times in this investigation -- the consumers, the aborted dispatch,
+  and then the consumers again in the other direction -- so what settles it is a
+  capture whose `ready_by` moves off `process_schedule_once_impl` after these two
+  sites are changed, exactly as it moved off `sched_wake_thread` when cause 4 was
+  fixed. That displacement is the only evidence that has been reliable here.
+
+  FIXED in the consumer, 2026-08-23, and it IS a real defect regardless of the
+  above: `sched_settle_deferred_enqueue` now reads the
   state BEFORE taking the claim, so a thread that is momentarily not enqueueable
   keeps its debt for whoever can honour it. Pinned by "a consumer that declined to
   enqueue left the claim outstanding" in `tests/unit/test_process_lifecycle.c`,

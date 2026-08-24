@@ -626,15 +626,24 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
      * report different things -- that one names the state at the on_rq claim,
      * this one names the state the caller handed over, and a thread promoted
      * between them fails only the first. */
-    if (t->state != THREAD_STATE_READY) {
+    /* Loaded ONCE and reported from the loaded value, never re-read.  Re-reading
+     * in the report lets it print a state that never failed the test above: CI run
+     * 32658182859 carried `enqueue_from non-ready tid=20 owner=10 state=1`, and
+     * state 1 IS READY.  A diagnostic that contradicts its own trigger is worse
+     * than no diagnostic -- it invites the reader to conclude the check is wrong
+     * rather than that the thread was promoted in between.  Its counterpart in
+     * cpu_sched_enqueue_from has always done this. */
+    uint32_t from_state = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
+    if (from_state != THREAD_STATE_READY) {
         uint32_t n = sched_debug_bump(SCHED_DEBUG_ENQUEUE_FROM_NON_READY);
         if ((n & (n - 1u)) == 0u) {
+            uint32_t from_reason = __atomic_load_n((uint32_t*)&t->block_reason, __ATOMIC_RELAXED);
             serial_printf("[sched] enqueue_from non-ready tid=%u owner=%u state=%u "
                           "block=%u caller=%016llx (n=%u)\n",
                           (unsigned)t->tid,
                           (unsigned)t->owner_pid,
-                          (unsigned)t->state,
-                          (unsigned)t->block_reason,
+                          (unsigned)from_state,
+                          (unsigned)from_reason,
                           (unsigned long long)caller,
                           (unsigned)(n + 1u));
         }

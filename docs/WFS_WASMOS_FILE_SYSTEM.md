@@ -532,8 +532,32 @@ built at higher optimization levels than the driver.
 Bytes between the end of `name` and the end of the record are zero.
 
 No record straddles a block boundary. The last record in a block has its
-`record_length` extended to the end of the block, so a scan of a directory
-block ends exactly at the block end.
+`record_length` extended to the start of the block's tail, so a scan of a
+directory block ends exactly where the tail begins.
+
+## The Tail
+
+The last 16 bytes of every directory block are a tail record carrying the
+block's checksum. A directory block holds entries, not one structure, so there
+is no other field the checksum §13 requires could live in.
+
+```c
+struct wfs_dir_tail {
+    uint64_t object_id;     /* 0 */
+    uint16_t record_length; /* 16 */
+    uint8_t name_length;    /* 0 */
+    uint8_t type;           /* WFS_DIR_TAIL_TYPE */
+    uint32_t checksum;
+};
+```
+
+The tail is laid out as a directory record whose `object_id` is 0, so a scan
+that knows nothing about it reads free space and skips it — the same rule that
+already governs a removed entry. `name_length` is 0 and the four bytes a name
+would occupy hold the checksum.
+
+The checksum covers the whole block with these four bytes zeroed, seeded with
+the block's own number (§13).
 
 A record with `object_id == 0` is free space: this is how an entry is removed
 without rewriting the block. A scan skips it and an insertion may claim it.
@@ -629,9 +653,22 @@ seed  = crc32c(seed, &location, 8)      /* little-endian uint64 */
 value = crc32c(seed, structure_image)
 ```
 
-`location` is the block number for a block-addressed structure and the
-`object_id` for an object record. The primary superblock uses 0; a backup uses
-its own block number.
+`location` is the identifier that addresses the structure:
+
+| Structure | `location` |
+|---|---|
+| Primary superblock | 0 |
+| Backup superblock | its own block number |
+| Group descriptor | its group index |
+| Object record | its `object_id` |
+| Directory block | its block number |
+| Extent tree node | its block number |
+| Journal block | its block number |
+
+A group descriptor and an object record are records inside a shared block, so
+neither has a block number of its own to be bound to; the index that addresses
+the record serves instead, and a descriptor or record moved to the wrong slot
+fails to verify.
 
 Seeding is what turns a checksum into a detector of misdirected and misplaced
 writes. Unseeded, a block written to the wrong address still validates

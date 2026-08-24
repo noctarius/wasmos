@@ -1097,6 +1097,24 @@ set_target_properties(make_wasmos_app PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${BUILD_DIR}
 )
 
+# mkfs_wfs: the reference writer for the WFS format. Host-native, and built from
+# the SAME sources the wasm driver reads through (wfs_format.h, wfs_crc32c.c,
+# wfs_super.c) — a formatter with a private copy of the layout would agree with
+# the driver only by review.
+add_executable(mkfs_wfs
+  ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/main.c
+  ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c)
+target_include_directories(mkfs_wfs PRIVATE
+  ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+  ${DRIVER_WASM_DIR}/fs_wfs
+  ${CMAKE_SOURCE_DIR}/abi/generated/c)
+target_compile_options(mkfs_wfs PRIVATE -O2 -Wall -Wextra -Werror)
+set_target_properties(mkfs_wfs PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${BUILD_DIR}
+)
+
 # ---------------------------------------------------------------------------
 # Host-native WARP AOT pre-compiler tool (warp_aot)
 # Built as a custom command because the main project uses a freestanding
@@ -2360,6 +2378,22 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
           -o ${BUILD_DIR}/test_wfs_format
   COMMAND ${BUILD_DIR}/test_wfs_format
+  # The WFS formatter, validated by the reader above: the same wfs_super_parse
+  # and wfs_checksum_struct the driver will use, turned on a volume the writer
+  # produced. A disagreement between the two fails here rather than waiting for
+  # a driver that cannot mount its own filesystem.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mkfs.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          -o ${BUILD_DIR}/test_wfs_mkfs
+  COMMAND ${BUILD_DIR}/test_wfs_mkfs
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3634,6 +3668,7 @@ wasmos_ide_index(wasmos_ide_unit
          ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
          ${SERVICES_DIR}/net_stack ${SERVICES_DIR}/cli
          ${DRIVER_WASM_DIR}/fs_fat ${DRIVER_WASM_DIR}/fs_wfs
+         ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
          ${WASM3_DIR} ${WASM3_DIR}/source)
 
 # The WFS format layer. fs_fat is indexed by the `<name>_ide` target its
@@ -3647,4 +3682,5 @@ wasmos_ide_index(wasmos_ide_fs_wfs
 wasmos_ide_index(wasmos_ide_tools
   DIRS ${CMAKE_SOURCE_DIR}/src/tools
   INCLUDES ${WARP_DIR} ${WARP_DIR}/src ${DRIVER_WASM_DIR}/include
-           ${KERNEL_DIR}/include ${CMAKE_SOURCE_DIR}/abi/generated/c)
+           ${KERNEL_DIR}/include ${CMAKE_SOURCE_DIR}/abi/generated/c
+           ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs ${DRIVER_WASM_DIR}/fs_wfs)

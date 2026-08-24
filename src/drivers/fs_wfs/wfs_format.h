@@ -290,6 +290,38 @@ struct wfs_dir_entry {
 
 #define WFS_DIR_ENTRY_HEADER 12u
 
+/* §10. The last 16 bytes of every directory block. A directory block holds
+ * entries rather than one structure, so there is no other field the checksum of
+ * §13 could live in.
+ *
+ * Laid out as a directory record whose object_id is 0, so a scan that knows
+ * nothing about it reads free space and skips it — the same rule that already
+ * governs a removed entry. The four bytes a name would occupy hold the
+ * checksum, which covers the whole block with those four zeroed, seeded with
+ * the block's own number. */
+struct wfs_dir_tail {
+    uint64_t object_id;     /* 0 */
+    uint16_t record_length; /* WFS_DIR_TAIL_SIZE */
+    uint8_t name_length;    /* 0 */
+    uint8_t type;           /* WFS_DIR_TAIL_TYPE */
+    uint32_t checksum;
+};
+
+#define WFS_DIR_TAIL_SIZE 16u
+#define WFS_DIR_TAIL_TYPE 0xFFu
+
+/* Round a record length up to the 8-byte stride every directory record keeps,
+ * so the next record's object_id lands on its natural alignment (§10). */
+static inline uint32_t wfs_dir_record_length(uint32_t name_length) {
+    return (WFS_DIR_ENTRY_HEADER + name_length + 7u) & ~7u;
+}
+
+/* Bytes of a directory block available to records, i.e. everything before the
+ * tail. */
+static inline uint32_t wfs_dir_usable_bytes(uint32_t block_size) {
+    return block_size - WFS_DIR_TAIL_SIZE;
+}
+
 /* §14. The log tail. Recovery starts at first_sequence/first_block and
  * checkpointing advances it. */
 struct wfs_journal_super {
@@ -407,6 +439,9 @@ _Static_assert(offsetof(struct wfs_extent_leaf, records) == 16, "leaf records fo
 _Static_assert(offsetof(struct wfs_extent_interior, records) == 16, "interior records");
 
 _Static_assert(offsetof(struct wfs_dir_entry, name) == WFS_DIR_ENTRY_HEADER, "dirent header is 12");
+_Static_assert(sizeof(struct wfs_dir_tail) == WFS_DIR_TAIL_SIZE, "the tail is one 16-byte record");
+_Static_assert(offsetof(struct wfs_dir_tail, checksum) == WFS_DIR_ENTRY_HEADER,
+               "the tail's checksum occupies the bytes a name would");
 
 _Static_assert(sizeof(struct wfs_journal_super) == 32, "journal super");
 _Static_assert(offsetof(struct wfs_journal_super, first_sequence) == 16, "js.first_sequence");

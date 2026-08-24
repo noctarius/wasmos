@@ -63,6 +63,15 @@ typedef struct {
     uint32_t block; /* must survive the await, for the same reason */
     wasmos_error_code_t err;
     struct wfs_object out;
+
+    /* An object carrying WFS_OBJ_INLINE_DATA stores its content in the bytes the
+     * extents array occupies (§7), so those bytes are kept VERBATIM here as well
+     * as decoded into `out.extents`. Decoding alone would destroy them: the
+     * decode reads them as little-endian block numbers and lengths, and there is
+     * no way back from that to the file's bytes.
+     *
+     * Valid for `out.size` bytes when the flag is set, and zero otherwise. */
+    uint8_t inline_data[WFS_INLINE_DATA_MAX];
 } wfs_object_ctx_t;
 
 /* Walking an object's extent map: logical block -> physical block. */

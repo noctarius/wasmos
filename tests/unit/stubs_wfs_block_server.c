@@ -187,7 +187,7 @@ int32_t wasmos_ipc_select_destroy(int32_t select_id) {
 
 /* ---- fixture ------------------------------------------------------------ */
 
-static int mkfs_sink(void* ctx, uint32_t block, const void* data, uint32_t len) {
+int wfs_stub_sink_write(void* ctx, uint32_t block, const void* data, uint32_t len) {
     (void)ctx;
     if (block >= wfs_stub_blocks) {
         return -1;
@@ -229,7 +229,7 @@ int wfs_stub_build_volume(uint64_t size_bytes, uint32_t block_size,
     wfs_stub_block_size = out_layout->block_size;
 
     sink.ctx = NULL;
-    sink.write_block = mkfs_sink;
+    sink.write_block = wfs_stub_sink_write;
     if (wfs_mkfs_format(&params, &sink, out_layout) != WASMOS_ERR_NONE) {
         return -1;
     }

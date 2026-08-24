@@ -173,6 +173,11 @@ int32_t wfs_object_task(void* user, uintptr_t* out_value) {
                 ctx->out.extent_tree_block != 0u) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
             }
+            /* Kept verbatim: the decode above read these same bytes as block
+             * numbers, which is not reversible. */
+            for (i = 0; i < WFS_INLINE_DATA_MAX; ++i) {
+                ctx->inline_data[i] = d[(uint32_t)offsetof(struct wfs_object, extents) + i];
+            }
         } else if (ctx->out.extent_count > WFS_INLINE_EXTENTS && ctx->out.extent_tree_block == 0u) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
         }

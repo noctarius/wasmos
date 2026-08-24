@@ -7,6 +7,7 @@
  *   --journal N     journal size in blocks; derived from the volume when absent
  *   --objects-ratio N  bytes of volume per object record (default 16384)
  *   --uuid HEX      32 hex digits; random when absent
+ *   --populate DIR  copy DIR's contents into the volume, recursively
  *   --quiet         print nothing on success
  *
  * The uuid is RANDOM by default. It is the volume's identity and it seeds every
@@ -25,6 +26,15 @@
 #if defined(__APPLE__) || defined(__linux__)
 #include <sys/random.h>
 #endif
+
+#include <dirent.h>
+#include <sys/stat.h>
+
+/* Bounds on a --populate tree. Static, because the formatter takes the entry and
+ * plan arrays from its caller and allocates nothing itself; raising these is a
+ * one-line change and a bigger binary rather than a design change. */
+#define MAX_ENTRIES 4096u
+#define MAX_PATH 4096u
 
 #include "wfs_mkfs.h"
 #include "wfs_super.h"
@@ -122,10 +132,141 @@ static void print_uuid(const uint8_t u[WFS_UUID_LEN]) {
     }
 }
 
+/* One host file behind an entry. Opened lazily on the first read and left open:
+ * the formatter reads a file's blocks in ascending order and never revisits one,
+ * so a single descriptor per entry is enough and the tree is walked once. */
+typedef struct {
+    char path[MAX_PATH];
+    FILE* fh;
+} source_t;
+
+static wfs_mkfs_entry_t g_entries[MAX_ENTRIES];
+static wfs_mkfs_node_t g_plan[MAX_ENTRIES + 1u];
+static source_t g_sources[MAX_ENTRIES];
+static char g_names[MAX_ENTRIES][256];
+static uint32_t g_count;
+static uint32_t g_skipped;
+
+/* Read one block's worth of a source file, zero-filling a short tail so the
+ * block a formatter emits is fully defined. */
+static int source_read(void* ctx, uint64_t offset, void* dst, uint32_t len) {
+    source_t* src = (source_t*)ctx;
+    size_t got;
+
+    if (!src->fh) {
+        src->fh = fopen(src->path, "rb");
+        if (!src->fh) {
+            fprintf(stderr, "mkfs_wfs: cannot read %s\n", src->path);
+            return -1;
+        }
+    }
+    if (fseek(src->fh, (long)offset, SEEK_SET) != 0) {
+        return -1;
+    }
+    got = fread(dst, 1u, len, src->fh);
+    if (got < (size_t)len) {
+        memset((uint8_t*)dst + got, 0, (size_t)len - got);
+    }
+    return 0;
+}
+
+/* Add `dir`'s children to the entry list, recursing into subdirectories.
+ *
+ * Entries are appended parent-before-child, which is the order the formatter
+ * requires: it assigns object ids in array order and sizes each directory from
+ * the children that name it.
+ *
+ * Anything that is not a regular file or a directory is SKIPPED and counted. A
+ * symlink is the notable one: the format has a place for it (section 20) but this
+ * tool has no way yet to record a target, and silently following one would put a
+ * second copy of a file in the image under a name that was meant to be a link.
+ */
+static int walk(const char* dir, uint32_t parent) {
+    DIR* d = opendir(dir);
+    struct dirent* de;
+
+    if (!d) {
+        fprintf(stderr, "mkfs_wfs: cannot open directory %s\n", dir);
+        return -1;
+    }
+    while ((de = readdir(d)) != NULL) {
+        char path[MAX_PATH];
+        struct stat st;
+        uint32_t idx;
+        size_t name_len = strlen(de->d_name);
+
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) {
+            continue;
+        }
+        if (g_count >= MAX_ENTRIES) {
+            fprintf(stderr, "mkfs_wfs: more than %u entries\n", MAX_ENTRIES);
+            closedir(d);
+            return -1;
+        }
+        if (name_len >= sizeof(g_names[0])) {
+            fprintf(stderr, "mkfs_wfs: name too long: %s\n", de->d_name);
+            closedir(d);
+            return -1;
+        }
+        if ((size_t)snprintf(path, sizeof(path), "%s/%s", dir, de->d_name) >= sizeof(path)) {
+            fprintf(stderr, "mkfs_wfs: path too long under %s\n", dir);
+            closedir(d);
+            return -1;
+        }
+        /* lstat, not stat: a symlink must be recognised as one rather than
+         * reported as whatever it points at. */
+        if (lstat(path, &st) != 0) {
+            fprintf(stderr, "mkfs_wfs: cannot stat %s\n", path);
+            closedir(d);
+            return -1;
+        }
+        if (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) {
+            fprintf(stderr, "mkfs_wfs: skipping %s (not a regular file or directory)\n", path);
+            g_skipped++;
+            continue;
+        }
+
+        idx = g_count++;
+        memcpy(g_names[idx], de->d_name, name_len + 1u);
+        memset(&g_entries[idx], 0, sizeof(g_entries[idx]));
+        g_entries[idx].name = g_names[idx];
+        g_entries[idx].name_len = (uint32_t)name_len;
+        g_entries[idx].parent = parent;
+        g_entries[idx].is_dir = S_ISDIR(st.st_mode) ? 1u : 0u;
+        g_entries[idx].mode = (uint32_t)(st.st_mode & 0777);
+
+        if (S_ISDIR(st.st_mode)) {
+            if (walk(path, idx) != 0) {
+                closedir(d);
+                return -1;
+            }
+        } else {
+            g_entries[idx].size = (uint64_t)st.st_size;
+            memcpy(g_sources[idx].path, path, strlen(path) + 1u);
+            g_sources[idx].fh = NULL;
+            g_entries[idx].read = source_read;
+            g_entries[idx].read_ctx = &g_sources[idx];
+        }
+    }
+    closedir(d);
+    return 0;
+}
+
+static void close_sources(void) {
+    uint32_t i;
+
+    for (i = 0; i < g_count; ++i) {
+        if (g_sources[i].fh) {
+            fclose(g_sources[i].fh);
+            g_sources[i].fh = NULL;
+        }
+    }
+}
+
 static void usage(void) {
     fprintf(stderr,
             "usage: mkfs_wfs [--block-size N] [--journal N] [--objects-ratio N]\n"
-            "                [--uuid HEX32] [--quiet] <image> <size>\n");
+            "                [--uuid HEX32] [--populate DIR] [--quiet] <image> <size>\n");
 }
 
 int main(int argc, char** argv) {
@@ -135,6 +276,7 @@ int main(int argc, char** argv) {
     wasmos_error_code_t rc;
     const char* path = NULL;
     uint64_t size = 0;
+    const char* populate = NULL;
     int quiet = 0;
     int have_uuid = 0;
     int i;
@@ -155,6 +297,8 @@ int main(int argc, char** argv) {
                 return 2;
             }
             have_uuid = 1;
+        } else if (strcmp(argv[i], "--populate") == 0 && i + 1 < argc) {
+            populate = argv[++i];
         } else if (strcmp(argv[i], "--quiet") == 0) {
             quiet = 1;
         } else if (argv[i][0] == '-') {
@@ -177,6 +321,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (populate && walk(populate, WFS_MKFS_ROOT) != 0) {
+        close_sources();
+        return 1;
+    }
+
     f = fopen(path, "wb");
     if (!f) {
         fprintf(stderr, "mkfs_wfs: cannot open %s\n", path);
@@ -187,7 +336,8 @@ int main(int argc, char** argv) {
     sink.ctx = f;
     sink.write_block = sink_write;
 
-    rc = wfs_mkfs_format(&params, &sink, &layout);
+    rc = wfs_mkfs_format_tree(&params, g_entries, g_count, g_plan, &sink, &layout);
+    close_sources();
     if (fclose(f) != 0 && rc == WASMOS_ERR_NONE) {
         rc = WASMOS_ERR_FS_IO;
     }
@@ -213,7 +363,18 @@ int main(int argc, char** argv) {
         printf("  data from    %u (root directory at %u)\n",
                layout.first_data_block,
                layout.root_data_block);
+        printf("  root dir     %u +%u\n", layout.root_data_block, layout.root_blocks);
+        if (layout.entry_count != 0u) {
+            printf("  entries      %u in %u block(s)\n", layout.entry_count, layout.used_blocks);
+        }
         printf("  free         %u blocks, %u objects\n", layout.free_blocks, layout.free_objects);
+    }
+
+    /* Non-zero when anything was skipped, so a build that expected the whole
+     * tree in the image notices rather than shipping a volume missing files. */
+    if (g_skipped != 0u) {
+        fprintf(stderr, "mkfs_wfs: %u entr%s skipped\n", g_skipped, g_skipped == 1u ? "y" : "ies");
+        return 3;
     }
     return 0;
 }

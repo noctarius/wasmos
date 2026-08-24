@@ -46,6 +46,11 @@ extern int wfs_stub_send_status;
 
 wfs_block_t* wfs_stub_block(void);
 
+/* The sink that writes into the fixture's image. Exposed so a test can re-format
+ * the volume in place — with a tree, say — after wfs_stub_build_volume has
+ * allocated it. */
+int wfs_stub_sink_write(void* ctx, uint32_t block, const void* data, uint32_t len);
+
 /* Format a volume with mkfs_wfs into a fresh in-memory image, then bind a
  * runtime, an event loop and a block client over it. Returns 0, or -1 when the
  * geometry is unusable or the allocation fails. */

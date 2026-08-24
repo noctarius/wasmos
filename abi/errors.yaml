@@ -132,6 +132,12 @@ domains:
       - { name: BACKEND_IPC,    description: "request could not be delivered to the backend, or no reply arrived" }
       - { name: BAD_FD,         description: "fd is not present in this client's fd table" }
       - { name: REPLY_SEND,     description: "the reply could not be delivered to the client" }
+      - { name: BAD_MAGIC,      description: "on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent" }
+      - { name: CHECKSUM,       description: "metadata checksum mismatch: the structure did not verify against the checksum it carries" }
+      - { name: FEATURE_INCOMPAT, description: "volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures" }
+      - { name: GEOMETRY,       description: "on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)" }
+      - { name: VOLUME_TOO_LARGE, description: "volume exceeds the address range the driver carries (e.g. a 64-bit on-disk block count above the driver's 32-bit block number)" }
+      - { name: VERSION,        description: "on-disk format version is not one this driver implements; distinct from an unknown feature flag, which names a capability rather than a structure generation" }
 
   net:
     id: 5

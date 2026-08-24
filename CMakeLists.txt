@@ -2347,6 +2347,19 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_fat/fat_util.c
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_fat_image
+  # WFS on-disk format: CRC32C, the seeded metadata checksum, and superblock
+  # validation. Pure functions over a byte image, so no block layer is linked
+  # and the suite needs no device; the driver's reactor is tested separately.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_format.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          -o ${BUILD_DIR}/test_wfs_format
+  COMMAND ${BUILD_DIR}/test_wfs_format
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3620,8 +3633,16 @@ wasmos_ide_index(wasmos_ide_unit
          ${CMAKE_SOURCE_DIR}/abi/generated/c
          ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
          ${SERVICES_DIR}/net_stack ${SERVICES_DIR}/cli
-         ${DRIVER_WASM_DIR}/fs_fat
+         ${DRIVER_WASM_DIR}/fs_fat ${DRIVER_WASM_DIR}/fs_wfs
          ${WASM3_DIR} ${WASM3_DIR}/source)
+
+# The WFS format layer. fs_fat is indexed by the `<name>_ide` target its
+# wasmos_add_wasm_c_app_target emits; fs_wfs has no app target yet, so this is
+# what keeps its sources out of "not in a project target" and inside the lint
+# gate. Retire it once the driver's app target exists.
+wasmos_ide_index(wasmos_ide_fs_wfs
+  DIRS ${DRIVER_WASM_DIR}/fs_wfs
+  INCLUDES ${DRIVER_WASM_DIR}/fs_wfs ${CMAKE_SOURCE_DIR}/abi/generated/c)
 
 wasmos_ide_index(wasmos_ide_tools
   DIRS ${CMAKE_SOURCE_DIR}/src/tools

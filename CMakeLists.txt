@@ -2394,15 +2394,27 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
           -o ${BUILD_DIR}/test_wfs_mkfs
   COMMAND ${BUILD_DIR}/test_wfs_mkfs
-  # The WFS reactor: mount, group-descriptor and object-record coroutines driven
-  # against a volume mkfs_wfs built. The suite supplies wfs_block_submit_read /
-  # _write — the block layer's only contact with IPC — so wfs_block.c is linked
-  # but no driver ABI is, and the yield-and-resume path is the real one.
-  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror
+  # The WFS driver operations, run as tasks on the SYSTEM coroutine runtime:
+  # coroutine_wasm.c and ipc_future_wasm.c are LINKED, not reimplemented, so
+  # what the suite exercises is the runtime's own parking and resumption. The
+  # test supplies the wasm IPC hostcalls as a fake BLOCK server over a RAM
+  # image, which puts the request encoding under test too.
+  #
+  # Our libc headers go on -I rather than -iquote, unlike the neighbouring
+  # suites: wasmos/libsys.h reaches src/libc/include/string.h through a quoted
+  # include, and with the host's <string.h> also in scope the SDK's strcpy
+  # fortification macro breaks our declaration. Taking our libc for the angle
+  # includes as well keeps one set of declarations, and libc/src/string.c is
+  # linked so those functions come from our implementation rather than by
+  # accident from the host's.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${CMAKE_SOURCE_DIR}/tests/unit
           -I${CMAKE_SOURCE_DIR}/tests/unit/include
           -I${DRIVER_WASM_DIR}/fs_wfs
           -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
           -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
@@ -2410,6 +2422,9 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
           ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_mount
   COMMAND ${BUILD_DIR}/test_wfs_mount
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
@@ -3562,7 +3577,12 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_shim_alloc.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
-    ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c)
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c
+    # Same reason as test_wasm_coroutine.c beside it: this suite includes
+    # wasmos/libsys.h, which reaches src/libc/include/string.h through a quoted
+    # include. With the host libc also serving the angle includes, the SDK's
+    # strcpy fortification macro collides with our declaration.
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c)
 
 # The scheduler host tests drive the REAL kernel sources, so they must see the
 # real kernel headers and nothing else. tests/unit/include holds deliberately
@@ -3656,6 +3676,8 @@ wasmos_ide_index(wasmos_ide_unit_libc
            ${CMAKE_SOURCE_DIR}/src/libui/include
            ${DRIVER_WASM_DIR}/include
            ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
+           ${DRIVER_WASM_DIR}/fs_wfs
+           ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
            ${CMAKE_SOURCE_DIR}/abi/generated/c)
 
 # Every other unit test takes the host libc for <angle> includes, matching those
@@ -3695,7 +3717,9 @@ wasmos_ide_index(wasmos_ide_unit
 # gate. Retire it once the driver's app target exists.
 wasmos_ide_index(wasmos_ide_fs_wfs
   DIRS ${DRIVER_WASM_DIR}/fs_wfs
-  INCLUDES ${DRIVER_WASM_DIR}/fs_wfs ${CMAKE_SOURCE_DIR}/abi/generated/c)
+  INCLUDES ${DRIVER_WASM_DIR}/fs_wfs ${CMAKE_SOURCE_DIR}/abi/generated/c
+           ${LIBSYS_WASM_DIR}/include ${LIBC_DIR}/include
+           ${DRIVER_WASM_DIR}/include)
 
 wasmos_ide_index(wasmos_ide_tools
   DIRS ${CMAKE_SOURCE_DIR}/src/tools

@@ -881,6 +881,20 @@ tail.
   for each added contract.
 - [ ] [FEATURE][P2] Evaluate additional filesystems and dynamic mount lifecycle only after the
   existing VFS/backends have clear mount, ownership, and recovery semantics.
+- [ ] [ENHANCEMENT][P3] Widen file offsets past 2 GiB across the FS ABI. `lseek`
+  refuses any offset outside `INT32_MIN..INT32_MAX`
+  (`src/libc/src/unistd.c:370-380`) and `stat` carries size as `int32_t`, so a
+  file above 2 GiB is unobservable to an application regardless of what the
+  backend holds. IPC carries four 32-bit arguments, so widening means either a
+  lo/hi split (as the RTC opcodes already do for time) or a request struct
+  staged in a transfer buffer. Blocks no current backend — FAT12/16 cannot reach
+  the ceiling — but it caps any format that can, including the WFS proposal
+  (`docs/WFS_WASMOS_FILE_SYSTEM.md`, section 22).
+- [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
+  `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
+  (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends
+  all four IPC arguments, so a 64-bit LBA needs a new opcode shape. At 512-byte
+  sectors the current ceiling is 2 TiB.
 
 
 - [ ] [TEST][P2] Mount a volume whose `bytes_per_sector` is not 512. The block

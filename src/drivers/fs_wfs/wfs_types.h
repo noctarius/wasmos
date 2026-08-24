@@ -92,6 +92,58 @@ typedef struct {
     uint32_t run;
 } wfs_extent_ctx_t;
 
+/* Scanning a directory: resolve a name, or walk entries one at a time.
+ *
+ * A directory is stored as regular file data (§10), so its blocks are reached
+ * through the extent map — which is why this runs the extent walk as a child
+ * task rather than addressing blocks itself. */
+typedef enum {
+    WFS_DIR_PC_START = 0,
+    WFS_DIR_PC_MAP,  /* start the extent walk for the cursor's logical block */
+    WFS_DIR_PC_JOIN, /* collect it */
+    WFS_DIR_PC_READ, /* read the block it named */
+    WFS_DIR_PC_SCAN, /* walk the records in that block */
+} wfs_dir_pc_t;
+
+typedef struct {
+    wfs_dir_pc_t pc;
+    const wfs_volume_t* vol;
+    /* The directory being scanned. Borrowed, so it must outlive the task. */
+    const struct wfs_object* dir;
+
+    /* The name to find. A zero `want_len` means "the next entry from the
+     * cursor" instead, which is what a readdir walks with. */
+    const char* want;
+    uint32_t want_len;
+
+    /* The cursor: where the next scan resumes. Left just past the entry that
+     * was reported, so repeated runs walk the directory. */
+    uint64_t logical;
+    uint32_t offset;
+
+    uint32_t physical; /* the cursor's block, once mapped; survives the await */
+    wasmos_error_code_t err;
+
+    /* The extent walk, run as a child. Both records live here because the
+     * runtime requires them to outlive the child, and a task cannot keep them
+     * on a stack that does not survive its own await. */
+    uint8_t extent_started;
+    wasmos_wasm_coroutine_t extent_task;
+    wfs_extent_ctx_t extent;
+
+    /* The entry found, if any.
+     *
+     * The name is COPIED rather than pointed at. A pointer into the staged block
+     * is valid only until the next await, and this task awaits again on its very
+     * next run — so a borrowed name would be read out of whatever block was
+     * staged by then. */
+    uint8_t found;
+    uint32_t object_id;
+    uint8_t type;
+    uint8_t name_length;
+    char name[WFS_NAME_MAX + 1u];
+} wfs_dir_ctx_t;
+
 /* Mounting a volume. */
 typedef enum {
     WFS_MOUNT_PC_START = 0,

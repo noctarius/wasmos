@@ -21,6 +21,16 @@ wfs_block_t* wfs_ops_block(void);
 /* The bound runtime, or NULL before wfs_ops_bind. */
 wasmos_wasm_runtime_t* wfs_ops_runtime(void);
 
+/* Put a task record back into the state wasmos_async_start accepts.
+ *
+ * It accepts only NEW or DEAD, and a caller-owned record is NEW exactly when it
+ * is ZERO — so an uninitialised record is refused whenever the memory it sits in
+ * does not happen to hold zero, and the refusal looks like a resource failure
+ * rather than a programming error. Every start in this driver goes through this
+ * first, so correctness does not depend on what a caller zeroed.
+ */
+void wfs_ops_task_reset(wasmos_wasm_coroutine_t* task);
+
 /* Await `future` from inside a task, resuming at `next_pc`.
  *
  * A wrapper over wasmos_future_await, not a scheduler: the parking, the waiter

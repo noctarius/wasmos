@@ -16,3 +16,14 @@ wfs_block_t* wfs_ops_block(void) {
 wasmos_wasm_runtime_t* wfs_ops_runtime(void) {
     return g_runtime;
 }
+
+void wfs_ops_task_reset(wasmos_wasm_coroutine_t* task) {
+    uint8_t* p = (uint8_t*)task;
+    uint32_t i;
+
+    /* Byte-wise rather than memset: this driver carries no libc dependency,
+     * which is what lets the host suites link it without the driver ABI. */
+    for (i = 0; i < (uint32_t)sizeof(*task); ++i) {
+        p[i] = 0u;
+    }
+}

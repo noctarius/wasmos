@@ -2454,6 +2454,32 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_extent
   COMMAND ${BUILD_DIR}/test_wfs_extent
+  # The directory scan. Directory blocks are laid out by the test, because
+  # mkfs_wfs builds only an empty root; the extent walk is linked in because a
+  # directory's blocks are reached through it like any other file's.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_dir
+  COMMAND ${BUILD_DIR}/test_wfs_dir
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3611,6 +3637,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     # strcpy fortification macro collides with our declaration.
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_extent.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dir.c
     ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c)
 
 # The scheduler host tests drive the REAL kernel sources, so they must see the

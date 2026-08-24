@@ -890,6 +890,16 @@ tail.
   staged in a transfer buffer. Blocks no current backend — FAT12/16 cannot reach
   the ceiling — but it caps any format that can, including the WFS proposal
   (`docs/WFS_WASMOS_FILE_SYSTEM.md`, section 22).
+- [ ] [BUG][P2] `run-qemu-test` flakes on `FAIL: calculator did not fully
+  initialise`, roughly 1 run in 3 on the WARP build. The guest prints
+  `[calculator] start` and the harness times out before `[calculator] ready`; a
+  passing run prints both. Everything before it — script broker, gfx smoke,
+  compositor handshake, CLI banner — is identical in passing and failing logs, so
+  it is the Zig calculator's own startup racing the harness's deadline rather
+  than anything earlier in the boot. Not attributed further: seen while landing
+  WFS work that reaches no boot artifact. Capture a failing run with the full log
+  (not `tail`) and compare the app's own trace, and check whether the deadline is
+  simply too tight under MTTCG before treating it as a guest bug.
 - [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
   `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
   (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends

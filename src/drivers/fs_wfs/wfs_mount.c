@@ -250,6 +250,7 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
             ctx->group.vol = ctx->vol;
             ctx->group.group = ctx->next_group;
             ctx->group.err = WASMOS_ERR_NONE;
+            wfs_ops_task_reset(&ctx->group_task);
             if (!wasmos_async_start(
                     wfs_ops_runtime(), &ctx->group_task, wfs_group_task, &ctx->group)) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);

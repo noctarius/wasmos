@@ -317,6 +317,14 @@ struct wfs_dir_tail {
 #define WFS_DIR_TAIL_SIZE 16u
 #define WFS_DIR_TAIL_TYPE 0xFFu
 
+/* Longest name a record can carry: `name_length` is one byte. */
+#define WFS_NAME_MAX 255u
+
+/* Shortest legal record stride. A record is 12 bytes of header plus its name,
+ * rounded up to 8, so nothing smaller can hold even a one-character name — and a
+ * stride of 0 would make a scan of a block never terminate. */
+#define WFS_DIR_RECORD_MIN 16u
+
 /* Round a record length up to the 8-byte stride every directory record keeps,
  * so the next record's object_id lands on its natural alignment (§10). */
 static inline uint32_t wfs_dir_record_length(uint32_t name_length) {

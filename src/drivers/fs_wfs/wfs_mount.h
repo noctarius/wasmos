@@ -9,24 +9,16 @@
  * WASMOS_ERR_FS_* code, which rejects its completion future — so a caller that
  * joins it observes the failure without a separate status channel.
  *
- * The block client these tasks share is reached through wfs_ops_bind: the
- * runtime hands a task only its `user` pointer, and every one of these needs
- * the same wfs_block_t.
+ * The block client and runtime these tasks share are bound through
+ * wfs_ops_bind (wfs_ops.h).
  */
 #ifndef FS_WFS_WFS_MOUNT_H
 #define FS_WFS_WFS_MOUNT_H
 
 #include "wasmos/coroutine_wasm.h"
 #include "wfs_block.h"
+#include "wfs_ops.h"
 #include "wfs_types.h"
-
-/* Bind the block client and runtime these tasks operate on. Called once, before
- * any task is started. */
-void wfs_ops_bind(wasmos_wasm_runtime_t* runtime, wfs_block_t* block);
-
-/* The bound block client, or NULL before wfs_ops_bind. Exposed so a caller can
- * read a failure's cause off the same client the tasks used. */
-wfs_block_t* wfs_ops_block(void);
 
 /* Read and verify group descriptor `ctx->group` into `ctx->out`.
  *

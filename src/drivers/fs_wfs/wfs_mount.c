@@ -5,49 +5,8 @@
 #include "wfs_mount.h"
 
 #include "wfs_crc32c.h"
+#include "wfs_ops.h"
 #include "wfs_super.h"
-
-/* Await `future` from inside a task, resuming at `next_pc`.
- *
- * A two-line wrapper over wasmos_future_await, not a scheduler: the parking,
- * the waiter list and the resumption are the runtime's. It exists only so a
- * step does not repeat the store-pc / test-PENDING / return-YIELDED sequence at
- * every await, and so the resume point is written down next to the await it
- * belongs to.
- *
- * A NULL future means there was nothing to wait for — a staged-block cache hit
- * — so execution falls straight through. */
-#define WFS_AWAIT(ctx, future, next_pc)                                                            \
-    do {                                                                                           \
-        wasmos_future_t* _f = (future);                                                            \
-        (ctx)->pc = (next_pc);                                                                     \
-        if (_f) {                                                                                  \
-            uintptr_t _v = 0;                                                                      \
-            if (wasmos_future_await(_f, &_v) == WASMOS_WASM_AWAIT_PENDING) {                       \
-                return WASMOS_WASM_TASK_YIELDED;                                                   \
-            }                                                                                      \
-        }                                                                                          \
-    } while (0)
-
-/* Fail the task with a packed code. Returned as a negative status, which the
- * runtime uses to reject the task's completion future. */
-#define WFS_FAIL(ctx, code)                                                                        \
-    do {                                                                                           \
-        (ctx)->err = (code);                                                                       \
-        return (int32_t)(code);                                                                    \
-    } while (0)
-
-static wasmos_wasm_runtime_t* g_runtime;
-static wfs_block_t* g_block;
-
-void wfs_ops_bind(wasmos_wasm_runtime_t* runtime, wfs_block_t* block) {
-    g_runtime = runtime;
-    g_block = block;
-}
-
-wfs_block_t* wfs_ops_block(void) {
-    return g_block;
-}
 
 /* Records are read out of the staged block field by field rather than by
  * casting it to a struct: the buffer holds a byte image whose alignment is the
@@ -68,6 +27,7 @@ static uint16_t rd16(const uint8_t* p, uint32_t off) {
 
 int32_t wfs_group_task(void* user, uintptr_t* out_value) {
     wfs_group_ctx_t* ctx = (wfs_group_ctx_t*)user;
+    wfs_block_t* b = wfs_ops_block();
     uint32_t per_block;
     uint32_t offset;
     const uint8_t* d;
@@ -86,18 +46,18 @@ int32_t wfs_group_task(void* user, uintptr_t* out_value) {
         if (ctx->block >= ctx->vol->super.group_table_start + ctx->vol->super.group_table_blocks) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
         }
-        WFS_AWAIT(ctx, wfs_block_read_begin(g_block, ctx->block), WFS_GROUP_PC_BLOCK_READY);
+        WFS_AWAIT(ctx, wfs_block_read_begin(b, ctx->block), WFS_GROUP_PC_BLOCK_READY);
         /* fall through when the block was already staged */
 
     case WFS_GROUP_PC_BLOCK_READY:
-        ctx->err = wfs_block_take(g_block);
+        ctx->err = wfs_block_take(b);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
 
         per_block = wfs_group_descs_per_block(ctx->vol->super.block_size);
         offset = (ctx->group % per_block) * WFS_GROUP_DESC_SIZE;
-        d = wfs_block_data(g_block) + offset;
+        d = wfs_block_data(b) + offset;
 
         if (rd32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum)) !=
             wfs_checksum_struct(ctx->vol->super.uuid,
@@ -131,6 +91,7 @@ int32_t wfs_group_task(void* user, uintptr_t* out_value) {
 
 int32_t wfs_object_task(void* user, uintptr_t* out_value) {
     wfs_object_ctx_t* ctx = (wfs_object_ctx_t*)user;
+    wfs_block_t* b = wfs_ops_block();
     uint32_t per_block;
     uint32_t offset;
     const uint8_t* d;
@@ -150,18 +111,18 @@ int32_t wfs_object_task(void* user, uintptr_t* out_value) {
             ctx->vol->super.object_table_start + ctx->vol->super.object_table_blocks) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
         }
-        WFS_AWAIT(ctx, wfs_block_read_begin(g_block, ctx->block), WFS_OBJECT_PC_BLOCK_READY);
+        WFS_AWAIT(ctx, wfs_block_read_begin(b, ctx->block), WFS_OBJECT_PC_BLOCK_READY);
         /* fall through */
 
     case WFS_OBJECT_PC_BLOCK_READY:
-        ctx->err = wfs_block_take(g_block);
+        ctx->err = wfs_block_take(b);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
 
         per_block = wfs_objects_per_block(ctx->vol->super.block_size);
         offset = (ctx->object_id % per_block) * WFS_OBJECT_SIZE;
-        d = wfs_block_data(g_block) + offset;
+        d = wfs_block_data(b) + offset;
 
         if (rd32(d, (uint32_t)offsetof(struct wfs_object, checksum)) !=
             wfs_checksum_struct(ctx->vol->super.uuid,
@@ -224,6 +185,7 @@ int32_t wfs_object_task(void* user, uintptr_t* out_value) {
 
 int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
     wfs_mount_ctx_t* ctx = (wfs_mount_ctx_t*)user;
+    wfs_block_t* b = wfs_ops_block();
     int32_t joined = 0;
 
     (void)out_value;
@@ -235,16 +197,16 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
          * at the DEFAULT block size because the volume's own block_size is a
          * superblock field; block 0 begins at byte 0 and the superblock lies
          * wholly inside the first 4096 bytes at every permitted size (§4). */
-        WFS_AWAIT(ctx, wfs_block_read_begin(g_block, 0u), WFS_MOUNT_PC_SUPER_READY);
+        WFS_AWAIT(ctx, wfs_block_read_begin(b, 0u), WFS_MOUNT_PC_SUPER_READY);
         /* fall through */
 
     case WFS_MOUNT_PC_SUPER_READY:
-        ctx->err = wfs_block_take(g_block);
+        ctx->err = wfs_block_take(b);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
         ctx->err = wfs_super_parse(
-            wfs_block_data(g_block) + WFS_SUPER_OFFSET, WFS_SUPER_SIZE, 0u, &ctx->vol->super);
+            wfs_block_data(b) + WFS_SUPER_OFFSET, WFS_SUPER_SIZE, 0u, &ctx->vol->super);
         if (ctx->err != WASMOS_ERR_NONE) {
             /* TODO: fall back to the backup superblocks (§5) — enumerate the
              * three permitted block sizes, take the highest valid generation.
@@ -252,7 +214,7 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
              * would serve. */
             return (int32_t)ctx->err;
         }
-        ctx->err = wfs_block_set_block_size(g_block, ctx->vol->super.block_size);
+        ctx->err = wfs_block_set_block_size(b, ctx->vol->super.block_size);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
@@ -288,7 +250,8 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
             ctx->group.vol = ctx->vol;
             ctx->group.group = ctx->next_group;
             ctx->group.err = WASMOS_ERR_NONE;
-            if (!wasmos_async_start(g_runtime, &ctx->group_task, wfs_group_task, &ctx->group)) {
+            if (!wasmos_async_start(
+                    wfs_ops_runtime(), &ctx->group_task, wfs_group_task, &ctx->group)) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
             }
             ctx->group_started = 1u;

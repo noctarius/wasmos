@@ -482,6 +482,24 @@ Records are sorted by `logical_block` and cover disjoint ranges. Lookup
 descends from the root, at each interior node taking the last index whose
 `logical_block` does not exceed the target, until `depth` reaches 0.
 
+`extent_tree_block` selects which map an object has, and the two are exclusive:
+
+| `extent_tree_block` | The map is | `extent_count` |
+|---|---|---|
+| 0 | the first `extent_count` inline extents | at most 6 |
+| non-zero | the tree | total extents across its leaves |
+
+When a tree exists the inline array is **zero**. Two sources of truth for one
+logical range is a corruption nothing could detect: a reader would take whichever
+it consulted first and two readers could disagree about where a block lives.
+
+A logical block covered by no extent is a **hole**, and reads as zeroes. A hole
+is not an error: a file written sparsely has ranges no extent maps.
+
+`depth` is bounded. An interior node's children are one level shallower, so a
+descent that does not strictly decrease `depth` is a cycle, and a tree deeper
+than `WFS_EXTENT_MAX_DEPTH` cannot be reached by any legal write.
+
 `capacity` follows from the block size and is validated on read:
 
 | Block size | Leaf extents | Interior indices |

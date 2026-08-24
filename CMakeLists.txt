@@ -2394,19 +2394,19 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
           -o ${BUILD_DIR}/test_wfs_mkfs
   COMMAND ${BUILD_DIR}/test_wfs_mkfs
-  # The WFS driver operations, run as tasks on the SYSTEM coroutine runtime:
-  # coroutine_wasm.c and ipc_future_wasm.c are LINKED, not reimplemented, so
-  # what the suite exercises is the runtime's own parking and resumption. The
-  # test supplies the wasm IPC hostcalls as a fake BLOCK server over a RAM
-  # image, which puts the request encoding under test too.
+  # The WFS driver operations as tasks on the SYSTEM coroutine runtime:
+  # coroutine_wasm.c and ipc_future_wasm.c are LINKED, not reimplemented, so what
+  # these suites exercise is the runtime's own parking and resumption. The device
+  # under them is stubs_wfs_block_server.c, a RAM-backed BLOCK server sharing one
+  # request-encoding check between both suites.
   #
   # Our libc headers go on -I rather than -iquote, unlike the neighbouring
   # suites: wasmos/libsys.h reaches src/libc/include/string.h through a quoted
   # include, and with the host's <string.h> also in scope the SDK's strcpy
   # fortification macro breaks our declaration. Taking our libc for the angle
-  # includes as well keeps one set of declarations, and libc/src/string.c is
-  # linked so those functions come from our implementation rather than by
-  # accident from the host's.
+  # includes too keeps one set of declarations, and libc/src/string.c is linked
+  # so those functions come from our implementation rather than by accident from
+  # the host's.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${CMAKE_SOURCE_DIR}/tests/unit
           -I${CMAKE_SOURCE_DIR}/tests/unit/include
@@ -2417,8 +2417,10 @@ add_custom_target(run-kernel-unit-tests
           -I${DRIVER_WASM_DIR}/include
           -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c
-          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
           ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
@@ -2427,6 +2429,31 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_mount
   COMMAND ${BUILD_DIR}/test_wfs_mount
+  # The extent-map walk. Nodes are written into a formatted volume by the test,
+  # because mkfs_wfs builds no tree yet: every volume it makes has a root with a
+  # single inline extent.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_extent
+  COMMAND ${BUILD_DIR}/test_wfs_extent
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3582,7 +3609,9 @@ set(WASMOS_UNIT_LIBC_TESTS
     # wasmos/libsys.h, which reaches src/libc/include/string.h through a quoted
     # include. With the host libc also serving the angle includes, the SDK's
     # strcpy fortification macro collides with our declaration.
-    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c)
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_extent.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c)
 
 # The scheduler host tests drive the REAL kernel sources, so they must see the
 # real kernel headers and nothing else. tests/unit/include holds deliberately

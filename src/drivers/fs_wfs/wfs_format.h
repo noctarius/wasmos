@@ -111,6 +111,13 @@ enum {
 #define WFS_OBJECT_SIZE 256u
 #define WFS_INLINE_EXTENTS 6u
 
+/* Descent bound for an extent tree. An interior node's children are one level
+ * shallower, so a descent that does not strictly decrease `depth` is a cycle.
+ * Five is far past reach: at a 4096-byte block size an interior node holds 255
+ * indices and a leaf 170 extents, so depth 3 already maps more blocks than a
+ * uint32_t block number can address. */
+#define WFS_EXTENT_MAX_DEPTH 5u
+
 /* ---- group descriptors (§11) --------------------------------------------- */
 
 #define WFS_GROUP_DESC_SIZE 64u

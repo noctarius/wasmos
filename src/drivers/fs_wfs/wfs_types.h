@@ -65,6 +65,33 @@ typedef struct {
     struct wfs_object out;
 } wfs_object_ctx_t;
 
+/* Walking an object's extent map: logical block -> physical block. */
+typedef enum {
+    WFS_EXTENT_PC_START = 0,
+    WFS_EXTENT_PC_NODE_READY,
+} wfs_extent_pc_t;
+
+typedef struct {
+    wfs_extent_pc_t pc;
+    const wfs_volume_t* vol;
+    /* The object whose map is walked. Borrowed: it must outlive the task, which
+     * it does when it lives in the caller's own context. */
+    const struct wfs_object* obj;
+    uint64_t logical; /* the logical block wanted */
+
+    uint32_t block;       /* node block to read; must survive the await */
+    uint32_t depth_guard; /* remaining permitted descents */
+    wasmos_error_code_t err;
+
+    /* Result. `found` is 0 for a HOLE, which is not an error: a sparsely
+     * written file has logical ranges no extent maps, and they read as zeroes.
+     * `run` is how many contiguous blocks follow `physical`, so a caller can
+     * read a whole extent in one request instead of a block at a time. */
+    uint8_t found;
+    uint32_t physical;
+    uint32_t run;
+} wfs_extent_ctx_t;
+
 /* Mounting a volume. */
 typedef enum {
     WFS_MOUNT_PC_START = 0,

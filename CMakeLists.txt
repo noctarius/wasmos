@@ -2394,6 +2394,24 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
           -o ${BUILD_DIR}/test_wfs_mkfs
   COMMAND ${BUILD_DIR}/test_wfs_mkfs
+  # The WFS reactor: mount, group-descriptor and object-record coroutines driven
+  # against a volume mkfs_wfs built. The suite supplies wfs_block_submit_read /
+  # _write — the block layer's only contact with IPC — so wfs_block.c is linked
+  # but no driver ABI is, and the yield-and-resume path is the real one.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          -o ${BUILD_DIR}/test_wfs_mount
+  COMMAND ${BUILD_DIR}/test_wfs_mount
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

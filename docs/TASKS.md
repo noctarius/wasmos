@@ -1666,6 +1666,127 @@ Source: `architecture/25-diagnostics-status.md`,
   record. All seven were mutation-checked against four deliberate breakages of the
   recording and each one caught its mutant.
 
+  DO NOT ATTRIBUTE A REGRESSION FROM BATTERY COUNTS. Not because the counts are
+  noise -- they are not -- but because they are a weak, probabilistic OBSERVABLE of
+  a deterministic race, and reasoning from them the wrong way has already misled
+  once in this investigation.
+
+  The mechanism below either lands on a thread's last enqueue or it does not, and
+  that depends on interleaving. So a battery is red when the race lands somewhere
+  fatal and green when it lands somewhere survivable -- the same code, the same
+  bug, a different interleaving. Calling a green battery a "flake" or saying it
+  "flipped" describes the measurement and hides the cause.
+
+  What follows for attribution, and it is the important part: a change that alters
+  the PROBABILITY of hitting the window is a real regression, and comparing run
+  counts cannot detect one. The last eight runs on this branch were red at 1, 2, 3,
+  3, 2, 4, 3 and 4 jobs, several on documentation-only commits; run 32663402965
+  rerun on the IDENTICAL commit gave 4 then 3. Two runs cannot distinguish p=0.3
+  from p=0.4, so "the rerun gave fewer failures" is not evidence of no effect. It
+  is not evidence of anything.
+
+  Measure the RACE, not the outcome. That is what the counters are for:
+  `dispatch-dropped-slot-lost` and `dispatch-left-stranded` count the event itself,
+  per boot, and they are comparable across commits in a way battery counts are not.
+  Compare those (and the persistent red SET, and the failure SIGNATURE -- here
+  `setUpClass` errors with no panic, fault or invariant failure anywhere) rather
+  than how many jobs went red.
+
+  AND HERE IS THE SAME MISTAKE THIS ENTRY KEEPS MAKING, caught this time before it
+  was acted on. The change that added those counters has one behavioural edit,
+  `thread_reset_slot`'s claim restore, and the captures report
+  `thread-reap-refused=0` / `owner-reap-leftover=0`. Reading that as "the changed
+  path never ran, so it cannot have moved the race probability" is WRONG: those
+  zeros have two explanations, and the second is the fix working. Under the old
+  code a refused reset leaked FROZEN, and `thread_reap_owner` then burned all 64
+  passes and reported a leftover -- so `owner-reap-leftover=0` is exactly what a
+  working fix produces, and it does not distinguish that from a cold path.
+
+  What IS established: no reap is currently giving up, so no slot is being leaked.
+  What is NOT: whether returning those slots and threads to circulation changes how
+  often the dispatch race below is hit. The fix can only make reaps SUCCEED where
+  they previously gave up, which puts more live threads in front of the picker, and
+  that is a plausible way to move the probability. It is untested, and these
+  counters cannot test it -- the honest comparison needs
+  `dispatch-dropped-slot-lost` per boot measured across several runs on each side.
+
+  RESOLVED, 2026-08-23, by the first capture read through the new fields (CI run
+  32663402965, four QEMU batteries red). Candidate A is CONFIRMED and candidate B
+  is REFUTED, and for once both by positive evidence rather than by log silence.
+
+  Every strand in that run, paired with its own forensic line:
+
+      tid=46 pid=37 gfx-compositor || enq=linked links=818 unlink=steal
+      tid=46 pid=37 gfx-compositor || enq=linked links=517 unlink=steal
+      tid=46 pid=37 gfx-compositor || enq=linked links=491 unlink=steal
+      tid=31 pid=22 ata           || enq=skip:already-queued links=133 unlink=pick_next
+      tid=31 pid=22 ata           || enq=linked links=189 unlink=pick_next
+
+  `links` is 133-818 and never 0; `unlink` is always a picker, never an enqueue
+  guard. `links=0` is the candidate-B signature and appears nowhere. The counters
+  line settles the rest without relying on any absent log line: `double-link=0`
+  (B's prime suspect never fired at all), `bad-prio=0`, `enqueue-idle=0`,
+  `ghost-head=0`, `init-on-queued=0`.
+
+  And the exit is named. `dispatch-dropped-slot-lost` is non-zero in every boot
+  (1-2), `dispatch-dropped-steal-reaped` is 0, and its log line carries the
+  observed claim value:
+
+      slot claim lost tid=46 owner=37 state=1 ref=1 cpu=0
+      slot claim lost tid=31 owner=22 state=1 ref=1 cpu=1
+
+  `ref=1` is THREAD_SLOT_DISPATCH on every single line -- another CPU racing the
+  same pick, never a reaper (which would read 2, FROZEN). The victim set
+  {10, 20, 24, 31, 46} is a superset of the strand victims {31, 46}.
+
+  THE INTERLEAVING, and it is provable from the source rather than inferred. Every
+  re-enqueue in the result handling (`process.c:2640`, `:2653`, `:2687`) runs
+  BEFORE `dispatch_done` releases `dispatch_ref` (`:2695`, `:2696`). So for a
+  winner A and a second CPU B:
+
+    1. A finishes its dispatch and RE-ENQUEUES the thread (2640/2653/2687).
+    2. B picks it -- it is linked and READY -- so B's picker unlinks it and
+       releases `on_rq`.
+    3. B CASes `dispatch_ref` from FREE and LOSES, because A has not reached 2696
+       yet. B returns SCHED_R_STALE and drops the thread without re-enqueueing.
+    4. A stores FREE and returns. Its enqueue already happened, at step 1.
+
+  Nothing enqueues the thread again: READY, on no run queue, owed nothing, no wake
+  token. The window is exactly the instructions between A's enqueue and A's claim
+  release, which is why the strand is rare, why it lands on different victims, and
+  why `unlink` names both pickers (gfx-compositor via `steal`, ata via
+  `pick_next`).
+
+  CONFIRMED TWICE, independently. The rerun of the same commit reproduced the same
+  reading on different boots with different numbers -- `enq=linked links=2148
+  unlink=steal`, `links=1481 unlink=steal`, `links=356 unlink=steal`,
+  `enq=skip:already-queued links=66 unlink=pick_next`. Never `links=0`, never an
+  enqueue guard. Two independent captures agreeing on the discriminator is what
+  this entry has lacked at every previous stage.
+
+  Why the exit fires far more often than it strands: steps 1-3 are survivable
+  whenever the thread receives a later wake, which re-links it. tids 10, 20 and 24
+  took this exit and did NOT end stranded. It is fatal only when it lands on the
+  last enqueue a thread was going to get -- the same "necessary but not
+  sufficient" shape already recorded for the strand overall.
+
+  WHAT THE FIX MUST DO, and the trap in it. Dropping at that exit is sound only
+  when the CAS winner still has its own re-enqueue ahead of it, and the ordering
+  above shows it may not. So the exit must re-enqueue (or publish a claim) for a
+  thread whose owner is LIVE -- `sched_enqueue_thread` is the right call, being
+  idempotent through the `on_rq` claim, refusing a non-READY thread, and deferring
+  with a claim when the thread is still current somewhere. The live-owner condition
+  is NOT optional: `ref=2` (a reaper) reaches the same exit, and re-enqueueing a
+  dying owner's thread is the non-converging repair loop already measured at
+  `dispatch_done` (the host suite did not terminate at all with that exclusion
+  forced off). Owes its own red-first test; the existing "a lost slot claim strands
+  a live owner's thread" case asserts the CURRENT behaviour and must be rewritten
+  to assert the repair, not relaxed.
+
+  The alternative -- release `dispatch_ref` BEFORE the result handling's enqueue --
+  is worse and should not be reached for: the claim exists to keep the thread and
+  process slots un-recyclable across exactly that handling.
+
   CANDIDATE A IS DEMONSTRATED, 2026-08-23, with a LIVE owner and no race. Pinned
   by "a lost slot claim strands a live owner's thread" in
   `tests/unit/test_process_lifecycle.c`, which holds `thread_t::dispatch_ref` at

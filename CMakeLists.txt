@@ -2509,6 +2509,34 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_populate
   COMMAND ${BUILD_DIR}/test_wfs_populate
+  # The read path: name to bytes. Mostly there to pin the slicing — a read
+  # starting mid-block, ending mid-block, spanning several, or running off the
+  # end — since each of those is an offset arithmetic that looks right and is not.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_read.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_read
+  COMMAND ${BUILD_DIR}/test_wfs_read
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3668,6 +3696,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_extent.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dir.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_populate.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_read.c
     ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c)
 
 # The scheduler host tests drive the REAL kernel sources, so they must see the

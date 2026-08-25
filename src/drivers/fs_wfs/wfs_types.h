@@ -153,6 +153,47 @@ typedef struct {
     char name[WFS_NAME_MAX + 1u];
 } wfs_dir_ctx_t;
 
+/* Reading bytes out of an object.
+ *
+ * The destination is plain driver memory. Landing bytes in a client's transfer
+ * buffer is the dispatch layer's job, and keeping it out of here leaves room for
+ * the zero-copy path — where the block server writes the client's buffer
+ * directly — without this op changing shape. */
+typedef enum {
+    WFS_READ_PC_START = 0,
+    WFS_READ_PC_MAP,   /* start the extent walk for the byte the cursor is on */
+    WFS_READ_PC_JOIN,  /* collect it */
+    WFS_READ_PC_BLOCK, /* read the block it named */
+    WFS_READ_PC_COPY,  /* take the slice this iteration wants */
+} wfs_read_pc_t;
+
+typedef struct {
+    wfs_read_pc_t pc;
+    const wfs_volume_t* vol;
+    /* The object to read. Borrowed, so it must outlive the task. */
+    const struct wfs_object* obj;
+    /* The object's inline bytes, as wfs_object_ctx_t kept them. Required when
+     * the object carries WFS_OBJ_INLINE_DATA and unused otherwise: the decoded
+     * `obj` cannot supply them, because the decode read those same bytes as
+     * block numbers. */
+    const uint8_t* inline_data;
+
+    uint64_t offset; /* byte offset in the object */
+    uint8_t* dst;
+    uint32_t len; /* bytes requested */
+
+    /* Bytes delivered so far, and the block the cursor is in. Both survive the
+     * awaits, so neither can be a C local. */
+    uint32_t done;
+    uint64_t logical;
+    uint32_t physical;
+    wasmos_error_code_t err;
+
+    uint8_t extent_started;
+    wasmos_wasm_coroutine_t extent_task;
+    wfs_extent_ctx_t extent;
+} wfs_read_ctx_t;
+
 /* Mounting a volume. */
 typedef enum {
     WFS_MOUNT_PC_START = 0,

@@ -153,6 +153,42 @@ typedef struct {
     char name[WFS_NAME_MAX + 1u];
 } wfs_dir_ctx_t;
 
+/* Resolving a whole path to an object, one component at a time.
+ *
+ * Absolute paths only: the driver is handed a path already rooted by the caller,
+ * so there is no working directory here to resolve against. */
+typedef enum {
+    WFS_PATH_PC_START = 0,
+    WFS_PATH_PC_OBJECT, /* read the object the walk currently stands on */
+    WFS_PATH_PC_OBJECT_JOIN,
+    WFS_PATH_PC_LOOKUP, /* find the next component in it */
+    WFS_PATH_PC_LOOKUP_JOIN,
+} wfs_path_pc_t;
+
+#define WFS_PATH_MAX 512u
+
+typedef struct {
+    wfs_path_pc_t pc;
+    const wfs_volume_t* vol;
+
+    /* The path, copied in: the caller's buffer is a transfer buffer whose
+     * contents outlive nothing in particular, and this walk awaits repeatedly. */
+    char path[WFS_PATH_MAX];
+    uint32_t path_len;
+    uint32_t cursor; /* offset of the component being resolved */
+
+    uint32_t object_id; /* the object the walk stands on */
+    wasmos_error_code_t err;
+
+    uint8_t child_started;
+    wasmos_wasm_coroutine_t child;
+    wfs_object_ctx_t object;
+    wfs_dir_ctx_t dir;
+
+    /* The object the path named, once the walk completes. */
+    uint8_t found;
+} wfs_path_ctx_t;
+
 /* Reading bytes out of an object.
  *
  * The destination is plain driver memory. Landing bytes in a client's transfer

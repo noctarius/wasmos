@@ -1900,7 +1900,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
             -drive format=raw,file=fat:rw:${USERFS_DIR}
-            -drive format=raw,file=${WFS_IMAGE}
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
     DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
@@ -1915,7 +1915,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
             -drive format=raw,file=fat:rw:${USERFS_DIR}
-            -drive format=raw,file=${WFS_IMAGE}
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
     DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
@@ -1929,7 +1929,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
             -drive format=raw,file=fat:rw:${USERFS_DIR}
-            -drive format=raw,file=${WFS_IMAGE}
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
     DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (with display)"
@@ -2005,8 +2005,7 @@ else ()
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
-              -drive format=raw,file=${WFS_IMAGE}
-            -drive format=raw,file=${WFS_IMAGE}
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
       DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU"
@@ -2020,8 +2019,7 @@ else ()
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
-              -drive format=raw,file=${WFS_IMAGE}
-            -drive format=raw,file=${WFS_IMAGE}
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
       DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
@@ -2034,8 +2032,7 @@ else ()
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
-              -drive format=raw,file=${WFS_IMAGE}
-            -drive format=raw,file=${WFS_IMAGE}
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
       DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (with display)"

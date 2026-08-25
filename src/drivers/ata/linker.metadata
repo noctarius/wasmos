@@ -33,11 +33,22 @@ flags = 1
 # Region 0 is the task file at the fixed ISA ports (a legacy IDE controller
 # leaves BAR0 empty and decodes these instead); region 1 is wherever firmware put
 # the bus-master registers, which is BAR4 and cannot be known statically.
+# Declaration order IS the region index (see wfs/ata region constants).
+# 0: primary task file. The window spans [0x1F0, 0x3F7] so it covers the device
+#    control register at 0x3F6 as well.
 [[regions]]
 kind = "io"
 first = 0x01F0
 last = 0x03F7
 
+# 1: secondary task file, the same shape one channel lower: [0x170, 0x376].
+[[regions]]
+kind = "io"
+first = 0x0170
+last = 0x0376
+
+# 2: bus-master IDE. One window for both channels; the secondary's registers sit
+#    8 bytes above the primary's.
 [[regions]]
 kind = "bar"
 index = 4

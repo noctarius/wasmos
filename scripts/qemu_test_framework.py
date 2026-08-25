@@ -48,11 +48,17 @@ class QemuConfig:
     netdev: str = "user,id=net0"
 
     def __post_init__(self) -> None:
-        if self.userfs_dir:
-            return
-        env_userfs = os.environ.get("WASMOS_USERFS", "")
-        if env_userfs:
-            self.userfs_dir = env_userfs
+        # Fill the optional disks in from the environment when a caller built the
+        # config positionally. Several callers do — qemu_halt_test.py constructs
+        # QemuConfig(ovmf, vars, esp, userfs) directly — and a field they do not
+        # name would otherwise silently keep its dataclass default, which for a
+        # disk means the guest never sees it.
+        if not self.userfs_dir:
+            self.userfs_dir = os.environ.get("WASMOS_USERFS", "")
+        if not self.wfs_image:
+            self.wfs_image = os.environ.get(
+                "WASMOS_WFS_IMAGE", os.path.join("build", "wfs.img")
+            )
 
 
 def _read_cmake_cache(cache_path: str) -> dict:
@@ -276,7 +282,15 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.userfs_dir:
         cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.userfs_dir}"]
     if cfg.wfs_image and os.path.exists(cfg.wfs_image):
-        cmd += ["-drive", f"format=raw,file={cfg.wfs_image}"]
+        # if=ide,index=2 explicitly: index 2 is the secondary channel's master,
+        # which is the unit the device-manager rule for WFS matches. Relying on
+        # the implicit assignment leaves which channel it lands on up to QEMU.
+        #
+        # media=disk is load-bearing. Left out, QEMU makes the secondary master a
+        # CD-ROM, and the guest's IDENTIFY aborts with the ATAPI signature
+        # (status DRDY|ERR, error ABRT, LBA1/2 = 0x14/0xEB) — which reads exactly
+        # like an absent drive unless you look at the signature.
+        cmd += ["-drive", f"if=ide,index=2,media=disk,format=raw,file={cfg.wfs_image}"]
     if cfg.nic_model and cfg.nic_model != "none":
         # Give the NIC a stable device id so the monitor can target it with
         # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.

@@ -890,26 +890,6 @@ tail.
   staged in a transfer buffer. Blocks no current backend — FAT12/16 cannot reach
   the ceiling — but it caps any format that can, including the WFS proposal
   (`docs/WFS_WASMOS_FILE_SYSTEM.md`, section 22).
-- [ ] [BUG][P1] The ATA driver drives ONE IDE channel, so the guest can never see
-  more than two block units — and a third disk is invisible however it is
-  attached. `src/drivers/ata/ata.c` hardcodes `ATA_IO_REGION 0` at every port
-  access, `ATA_UNIT_COUNT` is 2 ("the two devices a single IDE channel
-  addresses"), and `linker.metadata` claims only `[0x01F0, 0x03F7]` plus IRQ 14.
-  The secondary channel is `[0x0170, 0x0376]` with IRQ 15 and bus-master
-  registers at BAR4 + 8.
-
-  Found by attaching a third drive for the WFS volume: QEMU is handed
-  `format=raw,file=build/wfs.img` (verified by building the command through
-  `scripts/qemu_test_framework.build_qemu_cmd`), and the guest still enumerates
-  only `ata0`/`ata1`, so the `unit=="2"` device-manager rule never fires and
-  fs_wfs is never spawned.
-
-  Extending it means a second io region and irq.route in the manifest, threading
-  a channel-derived region index through ~30 `wasmos_io_region_*` calls, and a
-  per-channel bus-master offset. It is the storage driver the whole system boots
-  from, so it wants its own change and its own review rather than riding along
-  with a filesystem.
-
 - [ ] [BUG][P2] `run-qemu-test` flakes roughly 1 run in 3 on the WARP build, in
   TWO distinct shapes. Both were seen while landing WFS work that reaches no boot
   artifact (no app target, no manifest, no device-manager rule, absent from

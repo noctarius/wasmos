@@ -2249,6 +2249,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                             } else if (wasmos_sys_streq(rule->mount, "/user")) {
                                 g_dm.user_mount_ready = 1;
                             }
+                            /* Re-drive the queue: only one spawn is pending at a
+                             * time, so a rule set with more than one matching
+                             * block_fs rule would otherwise leave every rule
+                             * after the first queued forever. This went unnoticed
+                             * while each rule set had exactly one. */
+                            queue_block_fs_rule_spawns();
                         }
                     } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH) {
                         if (g_dm.active_rule_spawn_index >= 0 &&

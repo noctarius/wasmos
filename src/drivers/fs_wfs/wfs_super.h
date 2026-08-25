@@ -18,7 +18,7 @@
 
 #include <stdint.h>
 
-#include "wasmos_status.h"
+#include "wfs_status.h"
 #include "wfs_format.h"
 
 /* A validated superblock, in the widths the driver carries. */

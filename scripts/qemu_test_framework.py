@@ -23,6 +23,10 @@ class QemuConfig:
     ovmf_vars: str
     esp_dir: str
     userfs_dir: str = ""
+    # A raw WFS volume, attached as a third disk (block unit 2). Unlike the two
+    # FAT disks this cannot be a synthetic FAT directory, so it is an image
+    # mkfs_wfs built; absent, the guest simply has no WFS unit to mount.
+    wfs_image: str = ""
     nographic: bool = True
     display: str = ""
     isolate_esp: bool = False
@@ -207,6 +211,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     source_dir = cache.get("CMAKE_HOME_DIRECTORY", os.getcwd())
     userfs_default = os.path.join(source_dir, "userfs")
     userfs_dir = os.environ.get("WASMOS_USERFS", userfs_default)
+    wfs_image = os.environ.get("WASMOS_WFS_IMAGE", os.path.join(build_dir, "wfs.img"))
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
     # On by default: the monitor is what makes dump_stall_state possible, and a
     # stall that produces no diagnosis is the failure mode this is here to end.
@@ -226,6 +231,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         ovmf_vars=ovmf_vars,
         esp_dir=esp_dir,
         userfs_dir=userfs_dir,
+        wfs_image=wfs_image,
         isolate_esp=isolate_esp,
         enable_monitor=enable_monitor,
         monitor_socket=monitor_socket,
@@ -269,6 +275,8 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.esp_dir}"]
     if cfg.userfs_dir:
         cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.userfs_dir}"]
+    if cfg.wfs_image and os.path.exists(cfg.wfs_image):
+        cmd += ["-drive", f"format=raw,file={cfg.wfs_image}"]
     if cfg.nic_model and cfg.nic_model != "none":
         # Give the NIC a stable device id so the monitor can target it with
         # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.

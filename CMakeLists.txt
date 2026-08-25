@@ -40,6 +40,13 @@ set(EXAMPLES_AS_DIR ${CMAKE_SOURCE_DIR}/examples/assemblyscript)
 set(EXAMPLES_ZIG_DIR ${CMAKE_SOURCE_DIR}/examples/zig)
 set(SERVICES_DIR ${CMAKE_SOURCE_DIR}/src/services)
 set(USERFS_DIR ${CMAKE_SOURCE_DIR}/userfs)
+# A WFS volume for the guest to mount. Unlike the two FAT disks it cannot be a
+# QEMU synthetic FAT directory, so it is a raw image mkfs_wfs builds from
+# scripts/wfs. --uuid is pinned so the image is byte-identical between builds and
+# a change to it shows up as a diff rather than as noise.
+set(WFS_IMAGE ${BUILD_DIR}/wfs.img)
+set(WFS_CONTENT_DIR ${CMAKE_SOURCE_DIR}/scripts/wfs)
+set(WFS_IMAGE_UUID 5746532d-7465-4573-742d-766f6c756d65)
 
 set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
 set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
@@ -118,6 +125,20 @@ set(WASM_FAT_DRIVER_SRC
   ${DRIVER_WASM_DIR}/fs_fat/fat_file.c)
 set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
 set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wap)
+set(WASM_WFS_DRIVER_SRC
+  ${DRIVER_WASM_DIR}/fs_wfs/fs_wfs.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_fd.c)
+set(WASM_WFS_DRIVER_WASM ${BUILD_DIR}/fs_wfs.wasm)
+set(WASM_WFS_APP ${BUILD_DIR}/fs_wfs.wap)
 set(WASM_INITFS_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_init/fs_init.c)
 set(WASM_INITFS_DRIVER_WASM ${BUILD_DIR}/fs_init.wasm)
 set(WASM_INITFS_APP ${BUILD_DIR}/fs_init.wap)
@@ -1781,6 +1802,20 @@ if (ZIG_AVAILABLE)
   )
 endif ()
 
+# Rebuilt whenever the content or the formatter changes: the guest mounts this
+# image, so a stale one is a test passing against last build's filesystem.
+file(GLOB_RECURSE WFS_CONTENT_FILES CONFIGURE_DEPENDS "${WFS_CONTENT_DIR}/*")
+add_custom_command(
+  OUTPUT ${WFS_IMAGE}
+  COMMAND ${BUILD_DIR}/mkfs_wfs --quiet
+          --uuid 5746532d74654573742d766f6c756d65
+          --populate ${WFS_CONTENT_DIR}
+          ${WFS_IMAGE} 16M
+  DEPENDS mkfs_wfs ${WFS_CONTENT_FILES}
+  COMMENT "Building the WFS test volume with mkfs_wfs"
+  VERBATIM)
+add_custom_target(wfs_image DEPENDS ${WFS_IMAGE})
+
 set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
@@ -1794,6 +1829,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_SERVER_APP} ${BUILD_DIR}/esp/system/drivers/chardev_server.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_WFS_APP} ${BUILD_DIR}/esp/system/drivers/fs_wfs.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
@@ -1864,7 +1900,8 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
             -drive format=raw,file=fat:rw:${USERFS_DIR}
-    DEPENDS bootloader kernel
+            -drive format=raw,file=${WFS_IMAGE}
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
     VERBATIM
@@ -1878,7 +1915,8 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
             -drive format=raw,file=fat:rw:${USERFS_DIR}
-    DEPENDS bootloader kernel
+            -drive format=raw,file=${WFS_IMAGE}
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
     VERBATIM
@@ -1891,7 +1929,8 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
             -drive format=raw,file=fat:rw:${USERFS_DIR}
-    DEPENDS bootloader kernel
+            -drive format=raw,file=${WFS_IMAGE}
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (with display)"
     VERBATIM
@@ -1904,7 +1943,7 @@ if (OVMF_VARS)
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
             --timeout ${WASMOS_QEMU_TEST_TIMEOUT}
-    DEPENDS bootloader kernel
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU halt test"
     VERBATIM
@@ -1921,7 +1960,7 @@ if (OVMF_VARS)
             --ovmf-vars ${OVMF_VARS}
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
-    DEPENDS bootloader kernel
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running SMP scheduler stress test"
     VERBATIM
@@ -1934,11 +1973,12 @@ if (OVMF_VARS)
             WASMOS_ESP=${BUILD_DIR}/esp
             WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
             WASMOS_USERFS=${USERFS_DIR}
+            WASMOS_WFS_IMAGE=${WFS_IMAGE}
             WASMOS_QEMU_ISOLATE_ESP=1
             WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
             PYTHONDONTWRITEBYTECODE=1
             ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
-    DEPENDS bootloader kernel
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU CLI integration tests"
     VERBATIM
@@ -1951,7 +1991,7 @@ if (OVMF_VARS)
             ${QEMU_UI_OVMF_VARS_ARG}
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
-    DEPENDS bootloader kernel
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU UI test"
     VERBATIM
@@ -1965,7 +2005,9 @@ else ()
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
-      DEPENDS bootloader kernel
+              -drive format=raw,file=${WFS_IMAGE}
+            -drive format=raw,file=${WFS_IMAGE}
+      DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU"
       VERBATIM
@@ -1978,7 +2020,9 @@ else ()
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
-      DEPENDS bootloader kernel
+              -drive format=raw,file=${WFS_IMAGE}
+            -drive format=raw,file=${WFS_IMAGE}
+      DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
       VERBATIM
@@ -1990,7 +2034,9 @@ else ()
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
-      DEPENDS bootloader kernel
+              -drive format=raw,file=${WFS_IMAGE}
+            -drive format=raw,file=${WFS_IMAGE}
+      DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (with display)"
       VERBATIM
@@ -2001,7 +2047,7 @@ else ()
               --ovmf-code ${OVMF_CODE}
               --esp ${BUILD_DIR}/esp
               --smp ${WASMOS_QEMU_SMP_COUNT}
-      DEPENDS bootloader kernel
+      DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU halt test"
       VERBATIM
@@ -2012,7 +2058,7 @@ else ()
               --ovmf-code ${OVMF_CODE}
               --esp ${BUILD_DIR}/esp
               --smp ${WASMOS_QEMU_SMP_COUNT}
-      DEPENDS bootloader kernel
+      DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running SMP scheduler stress test"
       VERBATIM
@@ -2024,11 +2070,13 @@ else ()
               WASMOS_ESP=${BUILD_DIR}/esp
             WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
               WASMOS_USERFS=${USERFS_DIR}
+              WASMOS_WFS_IMAGE=${WFS_IMAGE}
+            WASMOS_WFS_IMAGE=${WFS_IMAGE}
               WASMOS_QEMU_ISOLATE_ESP=1
               WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
               PYTHONDONTWRITEBYTECODE=1
               ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
-      DEPENDS bootloader kernel
+      DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU CLI integration tests"
       VERBATIM

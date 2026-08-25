@@ -1,0 +1,33 @@
+version = 1
+aot = true
+
+[package]
+name = "fs-wfs"
+entry = "initialize"
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+# Link-time memory in bytes (docs/toolchain.md). Larger than fs_fat's because a
+# WFS block is up to 16 KiB (against FAT's 512-byte sector) and the driver holds
+# one staged block plus a path-resolution context, a read staging buffer, and the
+# open-file table.
+[link]
+stack_size = 16384
+initial_memory = 524288
+max_memory = 524288
+
+[ipc]
+required_endpoint_name = "block"
+required_endpoint_rights = 1
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0
+
+[[capabilities]]
+name = "svc.class"
+flags = 0

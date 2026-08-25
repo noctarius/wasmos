@@ -17,7 +17,7 @@
 
 #include <stdint.h>
 
-#include "wasmos_status.h"
+#include "wfs_status.h"
 #include "wfs_format.h"
 
 typedef struct {

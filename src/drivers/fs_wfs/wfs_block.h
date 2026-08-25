@@ -22,7 +22,7 @@
 #include <stdint.h>
 
 #include "wasmos/libsys.h"
-#include "wasmos_status.h"
+#include "wfs_status.h"
 #include "wfs_format.h"
 
 #define WFS_BLOCK_NONE 0xFFFFFFFFu /* staged_block sentinel: nothing staged */

@@ -1,0 +1,2 @@
+This file lives on a WFS volume, on its own disk, mounted by fs_wfs.
+It exists so an integration test can read a real file off a real device.

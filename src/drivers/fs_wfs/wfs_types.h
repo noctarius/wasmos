@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #include "wasmos/coroutine_wasm.h"
-#include "wasmos_status.h"
+#include "wfs_status.h"
 #include "wfs_format.h"
 #include "wfs_super.h"
 

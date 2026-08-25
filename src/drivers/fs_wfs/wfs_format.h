@@ -249,8 +249,13 @@ struct wfs_object {
 };
 
 /* Bytes of an object record available to WFS_OBJ_INLINE_DATA: the extents array
- * holds the data directly, and `size` may not exceed this (§7, §20). */
-#define WFS_INLINE_DATA_MAX (WFS_INLINE_EXTENTS * sizeof(struct wfs_extent))
+ * holds the data directly, and `size` may not exceed this (§7, §20).
+ *
+ * A plain constant rather than a sizeof expression: sizeof yields size_t, and
+ * every comparison against a 64-bit `size` then widens a size_t multiplication.
+ * The assertion below ties it to the array it describes, so the two cannot
+ * drift. */
+#define WFS_INLINE_DATA_MAX 144u
 
 /* §9. Header common to both extent-tree node kinds. The checksum is a header
  * field because C places a flexible array member last, so no field may follow a
@@ -445,7 +450,8 @@ _Static_assert(offsetof(struct wfs_object, btime) == 56, "obj.btime");
 _Static_assert(offsetof(struct wfs_object, extents) == 72, "obj.extents");
 _Static_assert(offsetof(struct wfs_object, extent_tree_block) == 216, "obj.extent_tree_block");
 _Static_assert(offsetof(struct wfs_object, checksum) == 224, "obj.checksum");
-_Static_assert(WFS_INLINE_DATA_MAX == 144, "inline data spans the extents array");
+_Static_assert(WFS_INLINE_DATA_MAX == WFS_INLINE_EXTENTS * sizeof(struct wfs_extent),
+               "inline data spans exactly the extents array");
 
 _Static_assert(sizeof(struct wfs_extent_header) == 16, "extent header leaves records aligned");
 _Static_assert(offsetof(struct wfs_extent_header, checksum) == 8, "eh.checksum");

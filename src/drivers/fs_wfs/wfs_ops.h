@@ -8,7 +8,7 @@
 #define FS_WFS_WFS_OPS_H
 
 #include "wasmos/coroutine_wasm.h"
-#include "wasmos_status.h"
+#include "wfs_status.h"
 #include "wfs_block.h"
 
 /* Bind the runtime and block client the tasks operate on. Called once, before

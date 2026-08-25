@@ -2448,7 +2448,16 @@ static void cli_phase_wait_ipc_step(void) {
             console_write("exec failed\n");
         }
     } else if (resp_type == FS_IPC_ERROR || (resp_type == FS_IPC_RESP && resp_status != 0)) {
-        console_write("fs failed\n");
+        /* Say WHICH failure. The reply already carries a packed code from
+         * abi/errors.yaml and wasmos_strerror decodes every one of them, so a
+         * bare "fs failed" threw away the only thing that distinguishes "no such
+         * file" from "the backend does not implement this" from "the volume is
+         * corrupt" — and those send a reader to three different places. Unlike
+         * the exec path above, this needs no per-code switch to maintain: the
+         * decoder is generated from the same IDL as the codes. */
+        console_write("fs failed: ");
+        console_write(wasmos_strerror(resp_status));
+        console_write("\n");
     } else if (resp_type != FS_IPC_RESP && resp_type != PROC_IPC_RESP) {
         cli_fail_and_stall("[cli] ipc response invalid\n");
     } else if (g_pending_kind == PENDING_EXEC && resp_type == PROC_IPC_RESP) {

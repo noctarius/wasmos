@@ -890,6 +890,22 @@ tail.
   staged in a transfer buffer. Blocks no current backend — FAT12/16 cannot reach
   the ceiling — but it caps any format that can, including the WFS proposal
   (`docs/WFS_WASMOS_FILE_SYSTEM.md`, section 22).
+- [ ] [BUG][P2] `FS_IPC_CHDIR_REQ` packs its target into arg0..arg3, capping a
+  path component at 15 bytes plus a NUL (`wasmos_sys_ipc_unpack_name16`). Every
+  filesystem in the tree allows longer names — WFS allows 255
+  (`WFS_NAME_MAX`) — so `cd` into a directory whose name is longer cannot be
+  expressed: the request arrives TRUNCATED, the backend's lookup misses, and the
+  client is told the directory does not exist rather than that its name did not
+  fit. Worse than a plain refusal, because a truncated name can also match a
+  DIFFERENT directory that happens to share the first 15 bytes.
+
+  The limit is the opcode's and every backend inherits it (fs_fat included, where
+  8.3 short names hid it). The fix is to carry the name in a transfer buffer the
+  way FS_IPC_OPEN_REQ and FS_IPC_STAT_REQ already do, rather than in the argument
+  words; the CLI's `PENDING_CD_CHAIN` path splits long paths into components but
+  each component still goes through the same 16-byte packing. FIXME at
+  `src/drivers/fs_wfs/fs_wfs.c` (wfs_do_chdir).
+
 - [ ] [BUG][P2] `run-qemu-test` flakes roughly 1 run in 3 on the WARP build, in
   TWO distinct shapes. Both were seen while landing WFS work that reaches no boot
   artifact (no app target, no manifest, no device-manager rule, absent from

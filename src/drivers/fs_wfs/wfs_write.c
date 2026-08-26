@@ -1,0 +1,396 @@
+/* wfs_write.c - copy bytes into an object's data (§16). */
+#include "wfs_write.h"
+
+#include <stddef.h>
+
+#include "wfs_alloc.h"
+#include "wfs_bitmap.h"
+#include "wfs_block.h"
+#include "wfs_crc32c.h"
+#include "wfs_extent.h"
+#include "wfs_ops.h"
+#include "wfs_sync.h"
+
+static void wr16(uint8_t* p, uint32_t off, uint16_t v) {
+    p[off] = (uint8_t)(v & 0xFFu);
+    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
+}
+
+static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
+    p[off] = (uint8_t)(v & 0xFFu);
+    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
+    p[off + 2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[off + 3] = (uint8_t)((v >> 24) & 0xFFu);
+}
+
+static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
+    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
+    wr32(p, off + 4u, (uint32_t)((v >> 32) & 0xFFFFFFFFu));
+}
+
+void wfs_write_init(wfs_write_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_id,
+                    const struct wfs_object* obj, const uint8_t* inline_data, uint64_t offset,
+                    const uint8_t* src, uint32_t len, uint64_t now_ns) {
+    uint32_t i;
+
+    ctx->pc = WFS_WRITE_PC_START;
+    ctx->vol = vol;
+    ctx->object_id = object_id;
+    if (obj) {
+        ctx->obj = *obj;
+    }
+    for (i = 0; i < WFS_INLINE_DATA_MAX; ++i) {
+        ctx->inline_data[i] = inline_data ? inline_data[i] : 0u;
+    }
+    ctx->offset = offset;
+    ctx->src = src;
+    ctx->len = len;
+    ctx->now_ns = now_ns;
+    ctx->done = 0u;
+    ctx->logical = 0u;
+    ctx->physical = 0u;
+    ctx->fresh = 0u;
+    ctx->record_block = 0u;
+    ctx->extent_started = 0u;
+    ctx->alloc_started = 0u;
+    ctx->dirty_started = 0u;
+    ctx->err = WASMOS_ERR_NONE;
+}
+
+/* Record the run just allocated in the object's extent map.
+ *
+ * Extends the last extent when the new run continues it both logically and
+ * physically, which is what keeps an appended file to ONE extent instead of one
+ * per allocation. Otherwise appends a new extent.
+ *
+ * Returns WASMOS_ERR_FS_UNSUPPORTED when the map is full: growth beyond
+ * WFS_INLINE_EXTENTS needs the extent tree, whose reader exists (wfs_extent.c
+ * walks leaf and interior nodes) but whose writer does not. Refusing is what
+ * keeps a half-built map off the disk.
+ *
+ * TODO: build the extent tree, so an object may exceed WFS_INLINE_EXTENTS
+ * extents. Until then a sufficiently fragmented file stops growing. */
+static wasmos_error_code_t record_extent(wfs_write_ctx_t* ctx, uint64_t logical, uint32_t physical,
+                                         uint32_t length) {
+    struct wfs_extent* last;
+
+    if (ctx->obj.extent_count > 0u && ctx->obj.extent_count <= WFS_INLINE_EXTENTS) {
+        last = &ctx->obj.extents[ctx->obj.extent_count - 1u];
+        if (last->logical_block + last->length == logical &&
+            last->physical_block + last->length == (uint64_t)physical) {
+            last->length += length;
+            return WASMOS_ERR_NONE;
+        }
+    }
+    if (ctx->obj.extent_count >= WFS_INLINE_EXTENTS) {
+        return WASMOS_ERR_FS_UNSUPPORTED;
+    }
+    ctx->obj.extents[ctx->obj.extent_count].logical_block = logical;
+    ctx->obj.extents[ctx->obj.extent_count].physical_block = (uint64_t)physical;
+    ctx->obj.extents[ctx->obj.extent_count].length = length;
+    ctx->obj.extents[ctx->obj.extent_count].reserved = 0u;
+    ctx->obj.extent_count++;
+    return WASMOS_ERR_NONE;
+}
+
+/* Bytes of the current chunk: from the cursor to the end of its block, capped by
+ * what is left to write. Recomputed rather than carried, because it is derived
+ * from values that already survive the awaits. */
+static uint32_t chunk_len(const wfs_write_ctx_t* ctx) {
+    uint32_t block_size = ctx->vol->super.block_size;
+    uint32_t in_block = (uint32_t)((ctx->offset + ctx->done) % block_size);
+    uint32_t chunk = block_size - in_block;
+
+    if (chunk > ctx->len - ctx->done) {
+        chunk = ctx->len - ctx->done;
+    }
+    return chunk;
+}
+
+int32_t wfs_write_task(void* user, uintptr_t* out_value) {
+    wfs_write_ctx_t* ctx = (wfs_write_ctx_t*)user;
+    wfs_block_t* b = wfs_ops_block();
+    uint32_t block_size;
+    uint32_t in_block;
+    uint32_t chunk;
+    uint32_t i;
+    uint8_t* d;
+    int32_t joined;
+
+    (void)out_value;
+
+    for (;;) {
+        switch (ctx->pc) {
+        case WFS_WRITE_PC_START:
+            if (!ctx->vol || !ctx->vol->mounted || (!ctx->src && ctx->len != 0u)) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_BAD_ARGS);
+            }
+            /* A directory's bytes are records. Writing them as file content would
+             * let a caller corrupt the namespace through a file interface. */
+            if (ctx->obj.type == WFS_TYPE_DIR) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_IS_DIR);
+            }
+            if (ctx->vol->super.read_only) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_READ_ONLY);
+            }
+            if (ctx->len == 0u) {
+                return WASMOS_WASM_TASK_COMPLETE;
+            }
+            if (ctx->offset + (uint64_t)ctx->len < ctx->offset) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_RANGE);
+            }
+            /* Refused BEFORE anything is written: promotion has to read the
+             * inline bytes before an extent is written over them, and a partial
+             * attempt destroys the file's content. */
+            if ((ctx->obj.flags & WFS_OBJ_INLINE_DATA) &&
+                ctx->offset + (uint64_t)ctx->len > WFS_INLINE_DATA_MAX) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_UNSUPPORTED);
+            }
+            /* The volume says DIRTY on disk before any of this write lands, for
+             * the same reason an allocation does: a crash mid-write must leave a
+             * volume the next mount refuses to write. */
+            wfs_ops_task_reset(&ctx->dirty_task);
+            ctx->dirty.pc = WFS_DIRTY_PC_START;
+            ctx->dirty.vol = ctx->vol;
+            ctx->dirty.err = WASMOS_ERR_NONE;
+            if (!wasmos_async_start(
+                    wfs_ops_runtime(), &ctx->dirty_task, wfs_mark_dirty_task, &ctx->dirty)) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+            }
+            ctx->dirty_started = 1u;
+            ctx->pc = WFS_WRITE_PC_DIRTY_JOINED;
+            continue;
+
+        case WFS_WRITE_PC_DIRTY_JOINED:
+            joined = 0;
+            if (wasmos_wasm_coroutine_join(&ctx->dirty_task, &joined) ==
+                WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->dirty_started = 0u;
+            if (joined != 0) {
+                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            }
+            /* Inline content lives in the record, so no block is touched at all;
+             * the bytes are patched and the record is sealed. */
+            if (ctx->obj.flags & WFS_OBJ_INLINE_DATA) {
+                for (i = 0; i < ctx->len; ++i) {
+                    ctx->inline_data[ctx->offset + i] = ctx->src[i];
+                }
+                ctx->done = ctx->len;
+                ctx->pc = WFS_WRITE_PC_RECORD_READ;
+                continue;
+            }
+            ctx->pc = WFS_WRITE_PC_MAP;
+            continue;
+
+        case WFS_WRITE_PC_MAP:
+            if (ctx->done >= ctx->len) {
+                ctx->pc = WFS_WRITE_PC_RECORD_READ;
+                continue;
+            }
+            block_size = ctx->vol->super.block_size;
+            ctx->logical = (ctx->offset + ctx->done) / block_size;
+            ctx->extent.pc = WFS_EXTENT_PC_START;
+            ctx->extent.vol = ctx->vol;
+            ctx->extent.obj = &ctx->obj;
+            ctx->extent.logical = ctx->logical;
+            ctx->extent.err = WASMOS_ERR_NONE;
+            wfs_ops_task_reset(&ctx->extent_task);
+            if (!wasmos_async_start(
+                    wfs_ops_runtime(), &ctx->extent_task, wfs_extent_task, &ctx->extent)) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+            }
+            ctx->extent_started = 1u;
+            ctx->pc = WFS_WRITE_PC_MAP_JOINED;
+            continue;
+
+        case WFS_WRITE_PC_MAP_JOINED:
+            joined = 0;
+            if (wasmos_wasm_coroutine_join(&ctx->extent_task, &joined) ==
+                WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->extent_started = 0u;
+            if (ctx->extent.err != WASMOS_ERR_NONE) {
+                WFS_FAIL(ctx, ctx->extent.err);
+            }
+            if (ctx->extent.found) {
+                ctx->physical = ctx->extent.physical;
+                ctx->fresh = 0u;
+                ctx->pc = WFS_WRITE_PC_BLOCK_READ;
+                continue;
+            }
+            /* Nothing maps this block, so it must be allocated -- an append past
+             * the end, or a hole being filled. One block at a time: a longer run
+             * would have to be recorded before it is written, and a crash between
+             * would leave the record naming blocks holding old content. */
+            memset(&ctx->alloc, 0, sizeof(ctx->alloc));
+            ctx->alloc.vol = ctx->vol;
+            ctx->alloc.want = 1u;
+            /* Locality: the group the object's last extent already sits in (§12).
+             * Group 0 when the object has no extents yet. */
+            ctx->alloc.prefer_group =
+                ctx->obj.extent_count > 0u
+                    ? (uint32_t)(ctx->obj.extents[ctx->obj.extent_count - 1u].physical_block /
+                                 WFS_BLOCKS_PER_GROUP(ctx->vol->super.block_size))
+                    : 0u;
+            wfs_ops_task_reset(&ctx->alloc_task);
+            if (!wasmos_async_start(
+                    wfs_ops_runtime(), &ctx->alloc_task, wfs_alloc_blocks_task, &ctx->alloc)) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+            }
+            ctx->alloc_started = 1u;
+            ctx->pc = WFS_WRITE_PC_ALLOC_JOINED;
+            continue;
+
+        case WFS_WRITE_PC_ALLOC_JOINED:
+            joined = 0;
+            if (wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined) ==
+                WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->alloc_started = 0u;
+            if (joined != 0) {
+                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            }
+            if (ctx->alloc.length == 0u) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_NO_SPACE);
+            }
+            ctx->err = record_extent(ctx, ctx->logical, ctx->alloc.first_block, 1u);
+            if (ctx->err != WASMOS_ERR_NONE) {
+                return (int32_t)ctx->err;
+            }
+            ctx->physical = ctx->alloc.first_block;
+            ctx->fresh = 1u;
+            ctx->pc = WFS_WRITE_PC_BLOCK_READ;
+            continue;
+
+        case WFS_WRITE_PC_BLOCK_READ:
+            /* A freshly allocated block holds whatever it held before, so it is
+             * NOT read: the untouched bytes are zeroed instead, which is what the
+             * format promises for a range nothing has written.
+             *
+             * TODO: a full-block overwrite of an existing block also needs no
+             * read; reading it costs one request per block on a large sequential
+             * write. */
+            if (ctx->fresh) {
+                ctx->pc = WFS_WRITE_PC_BLOCK_PATCH;
+                continue;
+            }
+            WFS_AWAIT(ctx, wfs_block_read_begin(b, ctx->physical), WFS_WRITE_PC_BLOCK_PATCH);
+            /* fall through when the block was already staged */
+
+        case WFS_WRITE_PC_BLOCK_PATCH:
+            ctx->err = wfs_block_take(b);
+            if (ctx->err != WASMOS_ERR_NONE) {
+                return (int32_t)ctx->err;
+            }
+            block_size = ctx->vol->super.block_size;
+            in_block = (uint32_t)((ctx->offset + ctx->done) % block_size);
+            chunk = chunk_len(ctx);
+            d = wfs_block_data(b);
+            if (ctx->fresh) {
+                for (i = 0; i < block_size; ++i) {
+                    d[i] = 0u;
+                }
+            }
+            for (i = 0; i < chunk; ++i) {
+                d[in_block + i] = ctx->src[ctx->done + i];
+            }
+            WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->physical), WFS_WRITE_PC_BLOCK_WRITTEN);
+            /* fall through */
+
+        case WFS_WRITE_PC_BLOCK_WRITTEN:
+            ctx->err = wfs_block_take(b);
+            if (ctx->err != WASMOS_ERR_NONE) {
+                return (int32_t)ctx->err;
+            }
+            ctx->done += chunk_len(ctx);
+            ctx->fresh = 0u;
+            ctx->pc = WFS_WRITE_PC_MAP;
+            continue;
+
+        case WFS_WRITE_PC_RECORD_READ:
+            /* The record LAST. It is what names the data, so a crash before this
+             * leaves blocks allocated but unreferenced -- space fsck reclaims --
+             * whereas a record written first would name blocks still holding what
+             * they held before. */
+            if (ctx->object_id == WFS_OBJECT_INVALID ||
+                ctx->object_id >= ctx->vol->super.total_objects) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_NOT_FOUND);
+            }
+            ctx->record_block = ctx->vol->super.object_table_start +
+                                ctx->object_id / wfs_objects_per_block(ctx->vol->super.block_size);
+            WFS_AWAIT(ctx, wfs_block_read_begin(b, ctx->record_block), WFS_WRITE_PC_RECORD_PATCH);
+            /* fall through */
+
+        case WFS_WRITE_PC_RECORD_PATCH:
+            ctx->err = wfs_block_take(b);
+            if (ctx->err != WASMOS_ERR_NONE) {
+                return (int32_t)ctx->err;
+            }
+            if (ctx->offset + (uint64_t)ctx->len > ctx->obj.size) {
+                ctx->obj.size = ctx->offset + (uint64_t)ctx->len;
+            }
+            d = wfs_block_data(b) +
+                (ctx->object_id % wfs_objects_per_block(ctx->vol->super.block_size)) *
+                    WFS_OBJECT_SIZE;
+
+            wr64(d, (uint32_t)offsetof(struct wfs_object, size), ctx->obj.size);
+            wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), ctx->obj.extent_count);
+            wr16(d, (uint32_t)offsetof(struct wfs_object, flags), ctx->obj.flags);
+            if (ctx->now_ns != 0u) {
+                wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), ctx->now_ns);
+                wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), ctx->now_ns);
+            }
+            if (ctx->obj.flags & WFS_OBJ_INLINE_DATA) {
+                /* Inline content occupies the extents array's bytes (§7), so it is
+                 * written over that region rather than beside it. */
+                for (i = 0; i < WFS_INLINE_DATA_MAX; ++i) {
+                    d[(uint32_t)offsetof(struct wfs_object, extents) + i] = ctx->inline_data[i];
+                }
+            } else {
+                for (i = 0; i < WFS_INLINE_EXTENTS; ++i) {
+                    uint32_t e = (uint32_t)offsetof(struct wfs_object, extents) +
+                                 i * (uint32_t)sizeof(struct wfs_extent);
+
+                    if (i < ctx->obj.extent_count) {
+                        wr64(d, e + 0u, ctx->obj.extents[i].logical_block);
+                        wr64(d, e + 8u, ctx->obj.extents[i].physical_block);
+                        wr32(d, e + 16u, ctx->obj.extents[i].length);
+                        wr32(d, e + 20u, 0u);
+                    } else {
+                        wr64(d, e + 0u, 0u);
+                        wr64(d, e + 8u, 0u);
+                        wr32(d, e + 16u, 0u);
+                        wr32(d, e + 20u, 0u);
+                    }
+                }
+            }
+            /* Reseal: an object record is checksummed under its object_id (§13),
+             * and the reader validates it. */
+            wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
+            wr32(d,
+                 (uint32_t)offsetof(struct wfs_object, checksum),
+                 wfs_checksum_struct(ctx->vol->super.uuid,
+                                     ctx->object_id,
+                                     d,
+                                     WFS_OBJECT_SIZE,
+                                     (uint32_t)offsetof(struct wfs_object, checksum)));
+            WFS_AWAIT(
+                ctx, wfs_block_write_begin(b, ctx->record_block), WFS_WRITE_PC_RECORD_WRITTEN);
+            /* fall through */
+
+        case WFS_WRITE_PC_RECORD_WRITTEN:
+            ctx->err = wfs_block_take(b);
+            if (ctx->err != WASMOS_ERR_NONE) {
+                return (int32_t)ctx->err;
+            }
+            return WASMOS_WASM_TASK_COMPLETE;
+
+        default:
+            WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
+        }
+    }
+}

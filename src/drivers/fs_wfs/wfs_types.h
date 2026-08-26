@@ -292,6 +292,68 @@ typedef struct {
     wasmos_error_code_t err;
 } wfs_alloc_ctx_t;
 
+/* Writing bytes into an object's data (§16). */
+typedef enum {
+    WFS_WRITE_PC_START = 0,
+    WFS_WRITE_PC_DIRTY_JOINED,
+    WFS_WRITE_PC_MAP,
+    WFS_WRITE_PC_MAP_JOINED,
+    WFS_WRITE_PC_ALLOC_JOINED,
+    WFS_WRITE_PC_BLOCK_READ,
+    WFS_WRITE_PC_BLOCK_PATCH,
+    WFS_WRITE_PC_BLOCK_WRITTEN,
+    WFS_WRITE_PC_RECORD_READ,
+    WFS_WRITE_PC_RECORD_PATCH,
+    WFS_WRITE_PC_RECORD_WRITTEN,
+} wfs_write_pc_t;
+
+typedef struct {
+    wfs_write_pc_t pc;
+    wfs_volume_t* vol;
+    uint32_t object_id;
+
+    /* The object record, owned here rather than borrowed: the write updates size,
+     * mtime and the extent map as it goes, and seals all of it back once at the
+     * end. `inline_data` mirrors wfs_object_ctx_t's -- an object carrying
+     * WFS_OBJ_INLINE_DATA keeps its content in the bytes the extents array
+     * occupies, which the decode into `obj.extents` destroys. */
+    struct wfs_object obj;
+    uint8_t inline_data[WFS_INLINE_DATA_MAX];
+
+    uint64_t offset;
+    const uint8_t* src;
+    uint32_t len;
+    /* Timestamp for mtime/ctime. Passed in rather than read from a clock here:
+     * this driver has no time source of its own, and a write is not the place to
+     * acquire one. Zero leaves the timestamps alone.
+     * TODO: the RTC service is the eventual source; until a driver-side clock
+     * exists every caller must supply this. */
+    uint64_t now_ns;
+
+    /* Bytes delivered, and the block the cursor is in. All survive the awaits. */
+    uint32_t done;
+    uint64_t logical;
+    uint32_t physical;
+    /* The current block was just allocated, so it holds whatever was there
+     * before: a partial write must ZERO the rest rather than read it back. */
+    uint8_t fresh;
+    uint32_t record_block;
+
+    uint8_t extent_started;
+    wasmos_wasm_coroutine_t extent_task;
+    wfs_extent_ctx_t extent;
+
+    uint8_t alloc_started;
+    wasmos_wasm_coroutine_t alloc_task;
+    wfs_alloc_ctx_t alloc;
+
+    uint8_t dirty_started;
+    wasmos_wasm_coroutine_t dirty_task;
+    wfs_dirty_ctx_t dirty;
+
+    wasmos_error_code_t err;
+} wfs_write_ctx_t;
+
 /* Mounting a volume. */
 typedef enum {
     WFS_MOUNT_PC_START = 0,

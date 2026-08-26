@@ -139,7 +139,8 @@ set(WASM_WFS_DRIVER_SRC
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_fd.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c)
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_write.c)
 set(WASM_WFS_DRIVER_WASM ${BUILD_DIR}/fs_wfs.wasm)
 set(WASM_WFS_APP ${BUILD_DIR}/fs_wfs.wap)
 set(WASM_INITFS_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_init/fs_init.c)
@@ -2502,6 +2503,37 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_extent
   COMMAND ${BUILD_DIR}/test_wfs_extent
+  # File writes. Written bytes are verified by reading them back through the READ
+  # path, so the extent map and the blocks have to agree; inspecting blocks would
+  # pass for a write that landed correctly by accident.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_write
+  COMMAND ${BUILD_DIR}/test_wfs_write
   # Recording a volume's mount state. The assertion is a REMOUNT, not a byte:
   # what the flag is for is what the next mount does with it.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3838,6 +3870,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_bitmap.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_alloc.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_sync.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_write.c
     ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c)
 
 # The scheduler host tests drive the REAL kernel sources, so they must see the

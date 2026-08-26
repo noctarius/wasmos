@@ -835,11 +835,27 @@ linked feature documents for rationale and rollout plans.
   buffer held. A staging failure sends no request and is reported at the take, so
   a NULL future cannot pass for the cache-hit case and let a write that never
   happened read back as success.
-- Still deferred in WFS: file writes and truncation (the rest of phase 2); a sync
-  path that writes the superblock back, so on-disk `free_blocks` trails the
-  bitmaps until then; and journal replay, so a volume that was not unmounted
-  cleanly mounts read-only rather than serving metadata the log has superseded
-  (phase 3).
+- WFS FILE WRITES exist (`wfs_write.c`): overwrite inside allocated blocks,
+  writes straddling a block boundary, appends that allocate and extend the extent
+  map, and in-place patching of an object stored inline. Update order is data
+  blocks THEN the object record — the record names the data, so a crash before it
+  leaves blocks allocated but unreferenced (space fsck reclaims), whereas a record
+  written first would name blocks still holding what they held before. A freshly
+  allocated block is never read: it holds pre-allocation content, so a partial
+  write zeroes it and patches, which is what makes an unwritten range read as
+  zeroes. Blocks are allocated ONE at a time, because a longer run would have to
+  be recorded before it is written. A new run continuing the last one both
+  logically and physically extends that extent rather than adding one, so an
+  appended file stays at a single extent.
+  Two growth cases are refused rather than half-done, each with a TODO at the
+  site: an inline object outgrowing `WFS_INLINE_DATA_MAX` (promotion must read the
+  inline bytes before an extent is written over them), and an object needing more
+  than `WFS_INLINE_EXTENTS` extents (the tree reader exists, the writer does not).
+- Still deferred in WFS: truncation (the rest of phase 2); the extent-tree writer
+  and inline promotion named above; a sync path that writes the superblock back,
+  so on-disk `free_blocks` trails the bitmaps until then; and journal replay, so a
+  volume that was not unmounted cleanly mounts read-only rather than serving
+  metadata the log has superseded (phase 3).
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
   calls to the live block slot.

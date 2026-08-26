@@ -137,6 +137,7 @@ set(WASM_WFS_DRIVER_SRC
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_dirent.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_fd.c
   # plumbing: the device and the runtime
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
@@ -2632,6 +2633,18 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_alloc
   COMMAND ${BUILD_DIR}/test_wfs_alloc
+  # Directory record surgery. Pure: one block buffer. The assertions WALK the
+  # resulting chain the way the driver's scan does, because a chain only its
+  # writer can traverse is what §10's stride rules exist to prevent.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dirent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dirent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          -o ${BUILD_DIR}/test_wfs_dirent
+  COMMAND ${BUILD_DIR}/test_wfs_dirent
   # The allocation bitmaps. Pure: one bitmap block, no device and no runtime, so
   # the allocation policy is tested without an image under it.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3914,6 +3927,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_read.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_path.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_bitmap.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dirent.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_alloc.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_sync.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_write.c

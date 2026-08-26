@@ -31,6 +31,7 @@
  *     wfs_crc32c.c    CRC32C, and the uuid+location seeding (§13)
  *     wfs_super.c     superblock parse/validate, and where backups sit (§4, §5)
  *     wfs_bitmap.c    allocation bitmaps and the run search (§12)
+ *     wfs_dirent.c    directory record insert/remove inside one block (§10)
  *     wfs_fd.c        the per-client open-file table
  *
  *   PLUMBING — the device and the runtime

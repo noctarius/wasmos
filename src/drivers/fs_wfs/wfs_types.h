@@ -386,6 +386,82 @@ typedef struct {
     wasmos_error_code_t err;
 } wfs_write_ctx_t;
 
+/* Allocating and releasing object records (§12). */
+typedef enum {
+    WFS_OBJALLOC_PC_START = 0,
+    WFS_OBJALLOC_PC_DIRTY_JOINED,
+    WFS_OBJALLOC_PC_DESC_JOINED,
+    WFS_OBJALLOC_PC_BITMAP_READY,
+    WFS_OBJALLOC_PC_RECORD_READY,
+    WFS_OBJALLOC_PC_RECORD_WRITTEN,
+    WFS_OBJALLOC_PC_BITMAP_WRITTEN,
+    WFS_OBJALLOC_PC_DESC_READY,
+    WFS_OBJALLOC_PC_DESC_WRITTEN,
+} wfs_objalloc_pc_t;
+
+typedef struct {
+    wfs_objalloc_pc_t pc;
+    wfs_volume_t* vol;
+    uint32_t prefer_group;
+
+    /* What the new object is initialised as. A record has to be VALID the moment
+     * its bit is set, so the caller states the type and mode up front rather than
+     * filling them in afterwards. */
+    uint16_t type;
+    uint32_t mode;
+    uint32_t link_count;
+    uint64_t now_ns;
+    /* For a directory: the object its ".." names, written into the record's first
+     * extent slot by the caller's directory writer rather than here. */
+    uint32_t parent_id;
+
+    /* Result. */
+    uint32_t object_id;
+
+    uint32_t group;
+    uint32_t tried;
+    uint32_t slot; /* the free bit found in this group's object bitmap */
+    uint32_t bitmap_block;
+    uint32_t record_block;
+    uint32_t desc_block;
+
+    uint8_t desc_started;
+    wasmos_wasm_coroutine_t desc_task;
+    wfs_group_ctx_t desc;
+
+    uint8_t dirty_started;
+    wasmos_wasm_coroutine_t dirty_task;
+    wfs_dirty_ctx_t dirty;
+
+    wasmos_error_code_t err;
+} wfs_objalloc_ctx_t;
+
+typedef enum {
+    WFS_OBJFREE_PC_START = 0,
+    WFS_OBJFREE_PC_DESC_JOINED,
+    WFS_OBJFREE_PC_BITMAP_READY,
+    WFS_OBJFREE_PC_BITMAP_WRITTEN,
+    WFS_OBJFREE_PC_DESC_READY,
+    WFS_OBJFREE_PC_DESC_WRITTEN,
+} wfs_objfree_pc_t;
+
+typedef struct {
+    wfs_objfree_pc_t pc;
+    wfs_volume_t* vol;
+    uint32_t object_id;
+
+    uint32_t group;
+    uint32_t slot;
+    uint32_t bitmap_block;
+    uint32_t desc_block;
+
+    uint8_t desc_started;
+    wasmos_wasm_coroutine_t desc_task;
+    wfs_group_ctx_t desc;
+
+    wasmos_error_code_t err;
+} wfs_objfree_ctx_t;
+
 /* Truncating an object (§16). */
 typedef enum {
     WFS_TRUNC_PC_START = 0,

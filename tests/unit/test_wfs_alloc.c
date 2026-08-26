@@ -40,6 +40,17 @@ static void expect_u32(uint32_t got, uint32_t want, const char* what) {
     }
 }
 
+static void expect_u64(uint64_t got, uint64_t want, const char* what) {
+    g_checks++;
+    if (got != want) {
+        g_failures++;
+        printf("[fail] %s: got %llu, want %llu\n",
+               what,
+               (unsigned long long)got,
+               (unsigned long long)want);
+    }
+}
+
 static void expect_rc(wasmos_error_code_t got, wasmos_error_code_t want, const char* what) {
     g_checks++;
     if (got != want) {
@@ -297,6 +308,161 @@ static void test_an_allocation_marks_the_volume_dirty(void) {
     wfs_stub_teardown();
 }
 
+/* ---- object records ----------------------------------------------------- */
+
+static int32_t run_objalloc(wfs_objalloc_ctx_t* ctx, uint16_t type) {
+    wasmos_wasm_coroutine_t task;
+
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->vol = &g_vol;
+    ctx->type = type;
+    ctx->mode = 0644u;
+    ctx->link_count = 1u;
+    ctx->now_ns = TEST_NOW_NS;
+    return wfs_stub_run_task(&task, wfs_alloc_object_task, ctx);
+}
+
+static int32_t run_objfree(wfs_objfree_ctx_t* ctx, uint32_t id) {
+    wasmos_wasm_coroutine_t task;
+
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->vol = &g_vol;
+    ctx->object_id = id;
+    return wfs_stub_run_task(&task, wfs_free_object_task, ctx);
+}
+
+static int32_t load_object(wfs_object_ctx_t* o, uint32_t id) {
+    wasmos_wasm_coroutine_t task;
+
+    memset(o, 0, sizeof(*o));
+    o->vol = &g_vol;
+    o->object_id = id;
+    return wfs_stub_run_task(&task, wfs_object_task, o);
+}
+
+/* A record must VERIFY the moment its bit is set. An allocator that claimed the
+ * bit and left the record zeroed would produce an id the reader reports as
+ * CHECKSUM -- a corrupt filesystem rather than a new file. */
+static void test_a_new_object_reads_back_as_valid(void) {
+    wfs_objalloc_ctx_t a;
+    wfs_object_ctx_t o;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    expect(run_objalloc(&a, (uint16_t)WFS_TYPE_FILE) == 0, "the allocation completes");
+    expect(a.object_id >= WFS_OBJECT_FIRST, "the id is past the reserved range");
+    expect(a.object_id < g_vol.super.total_objects, "and inside the table");
+
+    expect(load_object(&o, a.object_id) == 0, "the new record reads and verifies");
+    expect_u32(o.out.type, (uint32_t)WFS_TYPE_FILE, "with the requested type");
+    expect_u64(o.out.size, 0u, "an empty size");
+    expect_u32(o.out.link_count, 1u, "the requested link count");
+    expect_u32(o.out.extent_count, 0u, "and no extent");
+    /* A new file starts inline, which is what lets a first small write stay in
+     * the record instead of allocating a block for a few bytes. */
+    expect(o.out.flags & WFS_OBJ_INLINE_DATA, "a new file is inline");
+
+    wfs_stub_teardown();
+}
+
+static void test_two_allocations_get_different_ids(void) {
+    wfs_objalloc_ctx_t a;
+    wfs_objalloc_ctx_t b;
+    wfs_object_ctx_t o;
+    uint32_t first;
+    uint32_t free_before;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    free_before = g_vol.super.free_objects;
+    expect(run_objalloc(&a, (uint16_t)WFS_TYPE_FILE) == 0, "the first allocation completes");
+    first = a.object_id;
+    expect(run_objalloc(&b, (uint16_t)WFS_TYPE_DIR) == 0, "the second allocation completes");
+    expect(b.object_id != first, "the second id differs from the first");
+    expect_u32(g_vol.super.free_objects, free_before - 2u, "and two records were taken");
+
+    /* The first record must still verify: a second allocation writing over the
+     * wrong slot would leave the first id reading as corrupt. */
+    expect(load_object(&o, first) == 0, "the first record still verifies");
+    expect_u32(o.out.type, (uint32_t)WFS_TYPE_FILE, "with its own type");
+    expect(load_object(&o, b.object_id) == 0, "the second record verifies");
+    expect_u32(o.out.type, (uint32_t)WFS_TYPE_DIR, "with its own type");
+
+    wfs_stub_teardown();
+}
+
+/* A freed id becomes allocatable again, and the counter follows. */
+static void test_a_freed_object_is_reusable(void) {
+    wfs_objalloc_ctx_t a;
+    wfs_objfree_ctx_t f;
+    wfs_objalloc_ctx_t again;
+    uint32_t id;
+    uint32_t free_before;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    free_before = g_vol.super.free_objects;
+    expect(run_objalloc(&a, (uint16_t)WFS_TYPE_FILE) == 0, "the allocation completes");
+    id = a.object_id;
+    expect_u32(g_vol.super.free_objects, free_before - 1u, "the counter dropped");
+
+    expect(run_objfree(&f, id) == 0, "the free completes");
+    expect_u32(g_vol.super.free_objects, free_before, "and the counter came back");
+
+    expect(run_objalloc(&again, (uint16_t)WFS_TYPE_FILE) == 0, "a second allocation completes");
+    expect_u32(again.object_id, id, "and reuses the freed id");
+
+    wfs_stub_teardown();
+}
+
+static void test_object_allocation_marks_the_volume_dirty(void) {
+    wfs_objalloc_ctx_t a;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    expect_u32(g_vol.dirty_marked, 0u, "a fresh mount is not marked");
+    expect(run_objalloc(&a, (uint16_t)WFS_TYPE_FILE) == 0, "the allocation completes");
+    expect_u32(g_vol.dirty_marked, 1u, "and the volume is marked");
+
+    wfs_stub_teardown();
+}
+
+static void test_object_refusals(void) {
+    wfs_objalloc_ctx_t a;
+    wfs_objfree_ctx_t f;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    g_vol.super.read_only = 1u;
+    expect_rc((wasmos_error_code_t)run_objalloc(&a, (uint16_t)WFS_TYPE_FILE),
+              WASMOS_ERR_FS_READ_ONLY,
+              "a read-only volume refuses to allocate an object");
+    expect_rc((wasmos_error_code_t)run_objfree(&f, WFS_OBJECT_FIRST),
+              WASMOS_ERR_FS_READ_ONLY,
+              "and refuses to free one");
+    g_vol.super.read_only = 0u;
+
+    /* A reserved id is not the caller's to release (§25). */
+    expect_rc((wasmos_error_code_t)run_objfree(&f, 1u),
+              WASMOS_ERR_FS_NOT_FOUND,
+              "a reserved id cannot be freed");
+    expect_rc((wasmos_error_code_t)run_objfree(&f, g_vol.super.total_objects),
+              WASMOS_ERR_FS_NOT_FOUND,
+              "nor one past the table");
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_an_allocation_marks_the_bitmap),
     WASMOS_TEST_CASE(test_two_allocations_do_not_overlap),
@@ -306,6 +472,11 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_read_only_volume_refuses_to_allocate),
     WASMOS_TEST_CASE(test_allocation_never_returns_a_metadata_block),
     WASMOS_TEST_CASE(test_an_allocation_marks_the_volume_dirty),
+    WASMOS_TEST_CASE(test_a_new_object_reads_back_as_valid),
+    WASMOS_TEST_CASE(test_two_allocations_get_different_ids),
+    WASMOS_TEST_CASE(test_a_freed_object_is_reusable),
+    WASMOS_TEST_CASE(test_object_allocation_marks_the_volume_dirty),
+    WASMOS_TEST_CASE(test_object_refusals),
 };
 
 int main(void) {

@@ -830,7 +830,11 @@ linked feature documents for rationale and rollout plans.
   request is a three-descriptor chain (header, data, status byte) whose data
   descriptor points straight at the CALLER's block buffer or mapped borrow, so
   no CPU copies the sectors. Requests are serialised one at a time and wait on
-  the completion interrupt. It registers the concrete name `virtio-blk` under
+  the completion interrupt. A chain the device has not reported still belongs to
+  it and virtio cannot withdraw one, so a timeout is terminal rather than
+  retryable: the driver resets the device and refuses every later request with
+  `WASMOS_ERR_VIRTIO_BLK_NOT_READY`, instead of recycling descriptors the device
+  could still complete into a client's block buffer. It registers the concrete name `virtio-blk` under
   the `block` service CLASS; the plain `block` name stays with the ATA driver,
   which holds the boot disk. Failures are reported as packed
   `WASMOS_ERR_VIRTIO_BLK_*` codes.

@@ -19,7 +19,9 @@
 # flat next to a copy of the app rather than passed by path.
 #
 # Link-time memory comes from the manifest's [link] section, as in every other
-# WASMOS language.
+# WASMOS language -- both halves of it. max_memory used to be read by wasmos-clang
+# and silently ignored here, so a Zig module quietly declared no maximum while its
+# manifest named one; tests/test_link_memory_manifest.py compares the two.
 set -e
 
 self=$0
@@ -107,6 +109,7 @@ fi
 entry=$(manifest_get package entry "$manifest")
 [ -n "$entry" ] || entry=wasmos_main
 initmem=$(manifest_get link initial_memory "$manifest")
+maxmem=$(manifest_get link max_memory "$manifest")
 
 if [ -z "$output" ] || [ "$output" = PENDING ]; then
     output=a.out
@@ -148,6 +151,8 @@ fi
 
 initmem_flag=
 [ -n "$initmem" ] && initmem_flag="--initial-memory=$initmem"
+maxmem_flag=
+[ -n "$maxmem" ] && maxmem_flag="--max-memory=$maxmem"
 
 # shellcheck disable=SC2086
 "$WASMOS_SDK_ZIG" build-exe \
@@ -159,6 +164,7 @@ initmem_flag=
     --stack "$WASMOS_SDK_ZIG_STACK_SIZE" \
     -femit-bin="$wasm" \
     $initmem_flag \
+    $maxmem_flag \
     "$stage/$name.zig" \
     $cflags \
     $extra_c

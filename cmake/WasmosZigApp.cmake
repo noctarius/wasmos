@@ -140,11 +140,10 @@ function(wasmos_add_zig_wasm_app)
   endif ()
   set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND
                PROPERTY CMAKE_CONFIGURE_DEPENDS ${ARG_MANIFEST})
+  # Read only to register the configure-time dependency above; the [link] values
+  # themselves are read by the wasmos-zig driver, which is the single place they
+  # are turned into linker flags.
   wasmos_manifest_link_value(_zig_initial_memory "${ARG_MANIFEST}" initial_memory 0)
-  set(_initial_mem_flags "")
-  if (_zig_initial_memory GREATER 0)
-    set(_initial_mem_flags --initial-memory=${_zig_initial_memory})
-  endif ()
 
   set(_c_compile_flags "")
   if (_extra_c)
@@ -169,7 +168,11 @@ function(wasmos_add_zig_wasm_app)
             ${ARG_SRC}
             ${_zig_extra_srcs}
             -o ${ARG_OUTPUT_WASM}
-    DEPENDS ${ARG_SRC} ${ARG_EXTRA_SRCS} ${ARG_MANIFEST}
+    # The SDK stamp covers the wasmos-zig driver and the staged runtime shims:
+    # without it, a change to how a module is COMPILED (an added linker flag, a
+    # shim edit) leaves every module built from the old rules and still marked
+    # up to date.
+    DEPENDS ${ARG_SRC} ${ARG_EXTRA_SRCS} ${ARG_MANIFEST} ${WASMOS_SDK_STAMP}
             ${LIBC_DIR}/zig/wasmos.zig ${LIBC_DIR}/zig/coroutine.zig
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building and validating Zig WASM app: ${ARG_NAME}"

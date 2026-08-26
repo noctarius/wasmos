@@ -32,6 +32,11 @@
 //! queue depth and is the obvious thing to lift later; it also means every
 //! completion the used ring reports belongs to the request being waited on.
 //!
+//! A chain the device has not reported still BELONGS to it, and virtio offers no
+//! way to withdraw one. A timeout is therefore terminal rather than retryable:
+//! the driver abandons the device (`quiesce`) instead of recycling descriptors
+//! the device may still complete into a client's buffer.
+//!
 //! Interrupts
 //! ----------
 //! Completion is message-signalled where the device and `pci-bus` allow it. That
@@ -492,13 +497,19 @@ fn submit(req_type: u32, sector: u64, data_phys: u64, data_len: u32) i32 {
     var waits: u32 = 0;
     while (waits <= IRQ_MAX_WAITS) : (waits += 1) {
         if (g_queue.getUsed(null)) |completed| {
-            g_queue.freeChain(completed);
             // Requests are serialised, so the only chain the device can be
-            // reporting is this one; anything else means the ring is out of
-            // step and the buffers this request named are no longer accounted
-            // for. Fail rather than read a status byte that may belong to a
-            // different request.
-            if (completed != head) return status.WASMOS_ERR_VIRTIO_BLK_IO_ERROR;
+            // reporting is this one. Anything else means the ring is out of
+            // step, and neither chain can be accounted for -- reading a status
+            // byte that may belong to a different request, or recycling
+            // descriptors the device still owns, both corrupt a client's
+            // buffer. Abandon the device instead.
+            if (completed != head) {
+                quiesce("used ring reported a chain that was not in flight");
+                return status.WASMOS_ERR_VIRTIO_BLK_IO_ERROR;
+            }
+            // Now the device has given the chain back, so its descriptors and
+            // the buffers they name are the driver's again.
+            g_queue.freeChain(head);
             return if (status_byte.* == REQ_STATUS_OK) 0 else status.WASMOS_ERR_VIRTIO_BLK_IO_ERROR;
         }
         if (waits == IRQ_MAX_WAITS) break;
@@ -515,11 +526,42 @@ fn submit(req_type: u32, sector: u64, data_phys: u64, data_len: u32) i32 {
         serviceIrq();
     }
 
-    g_queue.freeChain(head);
-    // Service the line before reporting the timeout: leaving it asserted turns
-    // a lost completion into an unbounded interrupt storm.
-    serviceIrq();
+    quiesce("a request went unreported past its deadline");
     return status.WASMOS_ERR_VIRTIO_BLK_TIMEOUT;
+}
+
+/// Abandon the device after its queue state can no longer be trusted, and
+/// refuse every later request with NOT_READY.
+///
+/// A published chain belongs to the DEVICE until it reports it on the used
+/// ring, and there is no way to withdraw one: a timeout means the driver has
+/// lost track of a chain the device may still be working on. Freeing that chain
+/// would hand its descriptors to the next request while the device can still
+/// complete the old one -- and because the data descriptor addresses the
+/// CALLER's block buffer, the late write would land in another client's memory.
+/// So the chain is deliberately NOT freed.
+///
+/// Resetting the device is what actually makes that impossible rather than
+/// merely unlikely: writing 0 to the status register is the one operation that
+/// revokes the queue, after which the device must not touch any of the memory
+/// it was configured with. FAILED is written first because that is what the bit
+/// is for -- it tells the device the driver gave up, and it is visible to
+/// anything inspecting the device afterwards.
+///
+/// Recovery would mean re-running bring-up from probe. That is deliberately not
+/// attempted: a virtio-blk request that misses a 2-second deadline means
+/// something is wrong that a silent retry would only hide.
+fn quiesce(why: []const u8) void {
+    g_dev.ready = false;
+    g_queue_ready = false;
+    setStatusBit(STATUS_FAILED);
+    setStatusBit(0);
+    // Service the line before returning: leaving it asserted turns a lost
+    // completion into an unbounded interrupt storm.
+    serviceIrq();
+    var line = driver.Line{};
+    _ = line.str("[virtio-blk] device abandoned: ").str(why);
+    line.end();
 }
 
 fn sendError(dest: i32, request_id: i32, code: i32) void {

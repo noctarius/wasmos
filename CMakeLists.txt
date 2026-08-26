@@ -667,8 +667,10 @@ function(wasmos_add_wasm_c_app_target target_name)
             ${_wasmos_libc_sources}
             ${_wasmos_sources}
             -o ${WASMOS_APP_OUTPUT_WASM}
+    # WASMOS_SDK_STAMP covers the wasmos-clang driver and the staged sysroot, so a
+    # change to how a module is COMPILED rebuilds the modules, not just the SDK.
     DEPENDS ${_wasmos_sources} ${_wasmos_libc_sources} ${WASMOS_LIBC_INCLUDE_DEPS}
-            ${WASMOS_APP_MANIFEST} ${_wasmos_runtime_deps}
+            ${WASMOS_APP_MANIFEST} ${_wasmos_runtime_deps} ${WASMOS_SDK_STAMP}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT ${_build_comment}
     VERBATIM

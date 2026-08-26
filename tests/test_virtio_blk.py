@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Zig virtio-blk driver brings a virtio disk up and serves block reads.
+"""The Zig virtio-blk driver brings a virtio disk up and serves block transfers.
 
 Boots with a virtio-blk disk attached whose first sector carries a known
 signature, then drives the whole path from the CLI: the device-manager rule
@@ -58,7 +58,7 @@ def _config_with_disk(disk_path: str, device_opts: str = ""):
 
 
 class VirtioBlkTest(unittest.TestCase):
-    """A virtio-blk disk is discovered, identified, and read end to end."""
+    """A virtio-blk disk is discovered, identified, read and written end to end."""
 
     session: QemuSession | None = None
     disk_dir: str | None = None

@@ -908,8 +908,11 @@ tail.
   What landed: `fs_client_state_t` carries the full path (`fsmgr_cwd_join`
   canonicalizes, host-unit-tested in `tests/unit/test_fs_manager_path.c`), every
   client path is joined onto it before routing, `FSMGR_IPC_CLONE_CWD` copies the
-  path rather than a `(mount, depth)` pair, and the fallback is gone — a client
-  with no backend now fails where it is wrong instead of being guessed at.
+  path rather than a `(mount, depth)` pair, and choosing a backend moved out of
+  "this client named no mount" and into routing an ABSOLUTE path
+  (`route_absolute_path`), where a first segment matching no mount means the boot
+  volume as the root filesystem — the spelling `/system/utils/ip` and
+  `/apps/calculator` rely on, and a rule rather than a guess.
   `FS_IPC_CHDIR` reports the resolved path back to the client, so the CLI's
   `g_cwd` is adopted rather than re-derived and a prompt cannot disagree with the
   FS layer. A path-less `READDIR` is preceded by a re-assertion of the requesting

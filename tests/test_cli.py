@@ -128,11 +128,11 @@ class CliIntegrationTests(unittest.TestCase):
     def test_cat_startup(self):
         """`cat` a boot-volume file by relative name, from inside /boot.
 
-        The `cd` is not incidental. This case used to name no directory at all
-        and passed because fs-manager answered a name it could not route by
-        guessing the first boot-kind backend -- which happened to be the right
-        one here. That guess is gone, so the directory the name is relative to is
-        now stated, as every other case in this file already does.
+        The `cd` is not incidental. This case named no directory at all, so what
+        it resolved against was whatever the previously-run test happened to
+        leave behind -- and a relative name now means the client's working
+        directory, exactly. Stating the directory makes the case independent of
+        test order, as every other case in this file already is.
         """
         self._cmd_expect("cd /boot", b"/boot wamos>")
         self._cmd_expect("cat startup.nsh", b"BOOTX64.EFI")

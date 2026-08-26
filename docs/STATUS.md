@@ -642,8 +642,10 @@ linked feature documents for rationale and rollout plans.
 - The working directory is a full canonical VFS path owned by `fs-manager`: every
   client path is joined onto it before routing, a spawned process inherits its
   spawner's path by copy, and `FS_IPC_CHDIR` reports the resolved path back so no
-  client keeps a second copy. There is no fallback backend for a client that
-  names none — such a request fails rather than being routed by guesswork.
+  client keeps a second copy. Routing then acts on an absolute path only — a path
+  whose first segment names no mount belongs to the boot volume as the ROOT
+  filesystem (`/system/utils/ip`, `/apps/calculator`), which is a routing rule
+  rather than a guess about a client that named no directory.
 - `FS_IPC_CHDIR` carries its target as a path in a transfer buffer, so `cd` takes
   one request at any depth and reaches directory names up to a backend's own
   maximum (255 bytes for WFS) instead of the 15 that fit in the argument words.

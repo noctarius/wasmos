@@ -556,12 +556,14 @@ static void send_fs_error(int32_t source, int32_t request_id, wasmos_error_code_
 
 /* The backend serving the client's working directory, or -1 at the VFS root.
  *
- * There is deliberately no fallback. This used to answer -1 with "the boot
+ * There is deliberately no fallback here. This used to answer -1 with "the boot
  * backend", which turned "this client is not in any mount" into a plausible
  * reply: a relative name typed in /wfs was handed to the FAT driver, which
  * answered NOT_FOUND, and the driver that actually held the file was never
- * asked. A caller that reaches here with no backend has a bug that a guess
- * hides, so -1 is returned and the request fails where it is wrong. */
+ * asked. Choosing a backend belongs to routing, which acts on an ABSOLUTE path
+ * (route_absolute_path, including its root-filesystem rule) -- not to "this
+ * client named no mount". So -1 is returned and a caller that needs a backend
+ * routes for one. */
 static int32_t resolve_backend_for_state(const fs_client_state_t* state) {
     return state ? state->backend_endpoint : -1;
 }
@@ -610,6 +612,66 @@ static int32_t route_path_to_backend(const uint8_t* path_bytes, int32_t path_len
     return 1;
 }
 
+/* Root filesystem: the backend serving paths that name no mount.
+ *
+ * The VFS root lists the mounts, but the boot volume is also the ROOT
+ * FILESYSTEM: "/system/utils/ip" and "/apps/calculator" are paths the shell and
+ * the spawn path use throughout, and they name directories on that volume, not
+ * mounts. A path whose first segment matches no mount is therefore served here
+ * rather than refused. Returns NULL before any boot-kind backend registers. */
+static fs_backend_t* backend_root_fs(void) {
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        if (g_backends[i].in_use && g_backends[i].kind == FSMGR_BACKEND_BOOT) {
+            return &g_backends[i];
+        }
+    }
+    return 0;
+}
+
+/* Route an absolute VFS path to the backend that serves it, and report the path
+ * that backend should see.
+ *
+ * A path under a mount has the mount name stripped; a path that names no mount
+ * belongs to the root filesystem and is passed through whole. Either way the
+ * caller ends up with a backend and a path that backend can resolve on its own,
+ * which is what keeps a client's working directory out of the backends.
+ *
+ * The distinction that matters is ABSOLUTE vs relative, not routed vs
+ * unrouted: this is only ever reached after a client path has been joined onto
+ * the client's working directory, so "no mount matched" means "the root
+ * filesystem", never "this client has no directory". Answering the latter with a
+ * backend is what hid broken working-directory inheritance for as long as there
+ * was only one non-root mount.
+ *
+ * Returns 1 with *out_backend and out_path set, 0 when no backend can serve it. */
+static int32_t route_absolute_path(const char* path, char* out_path, int32_t out_cap,
+                                   int32_t* out_path_len, int32_t* out_backend) {
+    int32_t path_len = (int32_t)strlen(path);
+    fs_backend_t* root_fs;
+    int32_t i;
+
+    if (path_len <= 0 || path[0] != '/' || !out_path || out_cap < 2 || !out_path_len ||
+        !out_backend) {
+        return 0;
+    }
+    if (route_path_to_backend(
+            (const uint8_t*)path, path_len, 0, out_path, out_cap, out_path_len, out_backend) &&
+        *out_backend >= 0) {
+        return 1;
+    }
+    root_fs = backend_root_fs();
+    if (!root_fs || path_len >= out_cap) {
+        return 0;
+    }
+    for (i = 0; i < path_len; ++i) {
+        out_path[i] = path[i];
+    }
+    out_path[path_len] = '\0';
+    *out_path_len = path_len;
+    *out_backend = root_fs->endpoint;
+    return 1;
+}
+
 /* Read the path from the source endpoint's xfer buffer, strip the mount prefix,
  * write the tail path back into the local xfer buffer, and set *out_backend.
  * *inout_arg0 is updated to the tail path length.
@@ -643,18 +705,12 @@ static int route_root_path_request(fs_client_state_t* state, int32_t buffer_id, 
     if (!fsmgr_cwd_join(state->cwd, (const char*)scratch, abs_path, (int32_t)sizeof(abs_path))) {
         return -1;
     }
-    path_len = (int32_t)strlen(abs_path);
-    open_path_len = path_len;
-    if (abs_path[0] == '/' && abs_path[1] != '\0') {
-        (void)route_path_to_backend((const uint8_t*)abs_path,
-                                    path_len,
-                                    0,
-                                    (char*)scratch,
-                                    (int32_t)sizeof(scratch),
-                                    &open_path_len,
-                                    &routed_backend);
-    } else {
-        /* The root itself names no file; no backend can serve it. */
+    /* The root itself names no file; no backend can serve it. */
+    if (abs_path[1] == '\0') {
+        return -1;
+    }
+    if (!route_absolute_path(
+            abs_path, (char*)scratch, (int32_t)sizeof(scratch), &open_path_len, &routed_backend)) {
         return -1;
     }
     if (open_path_len <= 0 || wasmos_xfer_buffer_write(buffer_id, scratch, open_path_len, 0) != 0) {
@@ -678,6 +734,8 @@ static int route_rename_request(fs_client_state_t* state, int32_t buffer_id, int
                                 int32_t* inout_arg1, int32_t* out_backend) {
     uint8_t old_buf[256];
     uint8_t new_buf[256];
+    char old_abs[FSMGR_CWD_MAX + 256];
+    char new_abs[FSMGR_CWD_MAX + 256];
     int32_t old_len = inout_arg0 ? *inout_arg0 : 0;
     int32_t new_len = inout_arg1 ? *inout_arg1 : 0;
     int32_t fs_buf_size = wasmos_xfer_buffer_size();
@@ -700,13 +758,20 @@ static int route_rename_request(fs_client_state_t* state, int32_t buffer_id, int
     old_buf[old_len] = '\0';
     new_buf[new_len] = '\0';
 
-    if (old_buf[0] == '/' && old_buf[1] != '\0') {
-        (void)route_path_to_backend(
-            old_buf, old_len, 0, (char*)old_buf, (int32_t)sizeof(old_buf), &out_old, &old_backend);
+    /* Both sides resolve against the client's working directory, then route the
+     * same way every other path does -- including onto the root filesystem when
+     * neither names a mount. */
+    if (!fsmgr_cwd_join(state->cwd, (const char*)old_buf, old_abs, (int32_t)sizeof(old_abs)) ||
+        !fsmgr_cwd_join(state->cwd, (const char*)new_buf, new_abs, (int32_t)sizeof(new_abs))) {
+        return -1;
     }
-    if (new_buf[0] == '/' && new_buf[1] != '\0') {
-        (void)route_path_to_backend(
-            new_buf, new_len, 0, (char*)new_buf, (int32_t)sizeof(new_buf), &out_new, &new_backend);
+    if (old_abs[1] != '\0') {
+        (void)route_absolute_path(
+            old_abs, (char*)old_buf, (int32_t)sizeof(old_buf), &out_old, &old_backend);
+    }
+    if (new_abs[1] != '\0') {
+        (void)route_absolute_path(
+            new_abs, (char*)new_buf, (int32_t)sizeof(new_buf), &out_new, &new_backend);
     }
     if (out_old <= 0 || out_new <= 0) {
         return -1;
@@ -898,16 +963,11 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
         send_fs_error(source, request_id, WASMOS_ERR_FS_PATH_TOO_LONG);
         return 1;
     }
-    path_len = (int32_t)strlen(abs_path);
-    open_path_len = path_len;
-    (void)route_path_to_backend((const uint8_t*)abs_path,
-                                path_len,
-                                0,
-                                (char*)path_scratch,
-                                (int32_t)sizeof(path_scratch),
-                                &open_path_len,
-                                &backend);
-    if (backend < 0) {
+    if (!route_absolute_path(abs_path,
+                             (char*)path_scratch,
+                             (int32_t)sizeof(path_scratch),
+                             &open_path_len,
+                             &backend)) {
         send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_FOUND);
         return 1;
     }
@@ -1161,14 +1221,7 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
             source, FS_IPC_RESP, request_id, 0, chdir_report_cwd(state, buffer_id), 0, 0);
         return 1;
     }
-    if (!route_path_to_backend((const uint8_t*)target,
-                               (int32_t)strlen(target),
-                               0,
-                               tail,
-                               (int32_t)sizeof(tail),
-                               &tail_len,
-                               &backend) ||
-        backend < 0) {
+    if (!route_absolute_path(target, tail, (int32_t)sizeof(tail), &tail_len, &backend)) {
         send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_FOUND);
         return 1;
     }
@@ -1304,14 +1357,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             char tail[FSMGR_CWD_MAX];
             int32_t tail_len = 0;
             int32_t dir_backend = -1;
-            if (!route_path_to_backend((const uint8_t*)state->cwd,
-                                       (int32_t)strlen(state->cwd),
-                                       0,
-                                       tail,
-                                       (int32_t)sizeof(tail),
-                                       &tail_len,
-                                       &dir_backend) ||
-                dir_backend < 0 || backend_sync_cwd(dir_backend, request_id, tail, source) != 0) {
+            if (!route_absolute_path(
+                    state->cwd, tail, (int32_t)sizeof(tail), &tail_len, &dir_backend) ||
+                backend_sync_cwd(dir_backend, request_id, tail, source) != 0) {
                 send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_FOUND);
                 continue;
             }
@@ -1386,21 +1434,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                             &r3) != 0) {
             if (backend_borrow >= 0) {
                 (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-            }
-            if (type == FS_IPC_CHDIR_REQ && state->mount != FS_MOUNT_ROOT) {
-                char path[32];
-                wasmos_sys_ipc_unpack_name16((uint32_t)arg0,
-                                             (uint32_t)arg1f,
-                                             (uint32_t)arg2f,
-                                             (uint32_t)arg3f,
-                                             path,
-                                             sizeof(path));
-                if (strcasecmp(path, "..") == 0) {
-                    state->mount = FS_MOUNT_ROOT;
-                    state->backend_endpoint = -1;
-                    (void)reply_to_client(source, FS_IPC_RESP, request_id, 0, 0, 0, 0);
-                    continue;
-                }
             }
             send_fs_error(source, request_id, WASMOS_ERR_FS_BACKEND_IPC);
             continue;

@@ -216,6 +216,18 @@ provided via a known physical address from the bootloader.
   (the backend sees a root-relative path).
 - Refuses rather than truncates when a result does not fit: a shortened path
   names a different file, which the caller would then open unknowingly.
+- Routes the resulting absolute path to a mount, or — when its first segment names
+  no mount — to the boot volume as the ROOT FILESYSTEM, passed through whole
+  (`route_absolute_path`). `/system/utils/ip` and `/apps/calculator` are paths on
+  that volume, not mounts, and the shell and the spawn path use them throughout.
+
+  The distinction that carries the weight is ABSOLUTE vs relative, not routed vs
+  unrouted. Routing is reached only after a name has been joined onto the client's
+  working directory, so "no mount matched" means "the root filesystem" and never
+  "this client has no directory". Answering the latter with a backend is what hid
+  broken working-directory inheritance for as long as there was a single non-root
+  mount: a relative name typed in `/wfs` was handed to the FAT driver, which
+  answered NOT_FOUND, and the driver holding the file was never asked.
 
 A path-less request (`READDIR`) is preceded by a `CHDIR` re-asserting the
 requesting client's directory, because a backend holds one current directory per

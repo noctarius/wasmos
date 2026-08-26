@@ -775,6 +775,36 @@ linked feature documents for rationale and rollout plans.
   data. An open source or destination is refused (`WASMOS_ERR_FS_BUSY`) because
   a descriptor records where its directory entry lives, and cross-mount renames
   are refused by fs-manager.
+- WFS, the repository's own on-disk filesystem
+  (`docs/WFS_WASMOS_FILE_SYSTEM.md`), is at the end of the spec's PHASE 1
+  (§23): superblock and byte-offset mount, block-group descriptors, the object
+  table, directories, extents and the extent tree, seeded checksums,
+  feature-flag validation, and a read-only mount. Inline data works too, ahead
+  of the order that defers it to phase 4. `src/drivers/fs_wfs` runs every
+  operation as a task on the SYSTEM coroutine runtime; `mkfs_wfs` is the host
+  formatter and `--populate` places a host tree into an image. A volume is
+  mounted in the guest at `/wfs` from ATA unit 2 by a device-manager rule, and
+  `tests/test_wfs_mount_read.py` exercises it end to end.
+- A damaged primary superblock no longer fails the WFS mount: the backup scan
+  (§5) reads the odd groups' first blocks and takes the valid copy with the
+  highest `generation`. `block_size` is exactly the field an unreadable primary
+  does not supply, so each candidate is tried at all three permitted sizes —
+  bounded, because `blocks_per_group` follows from `block_size` rather than
+  being stored freely. A wrong guess is self-rejecting: a backup is sealed under
+  its own block number in the volume's block units, so a wrong size implies a
+  wrong checksum seed. The scan reaches four backup-bearing groups; beyond that
+  is an fsck case, not a reason to read the whole device. When nothing
+  validates, the mount reports the PRIMARY's failure, since a scan-shaped error
+  would send a reader looking for a backup the geometry may never have had.
+- A volume mounted from a backup is READ-ONLY. The primary is still damaged and
+  the adopted copy's generation may trail it, so writing under it would compound
+  the damage; fsck (§24) is what rebuilds the primary. This is a policy the
+  format does not mandate, and it costs nothing while phase 1 is read-only
+  anyway — it exists so the phase-2 write path cannot silently trust a recovered
+  superblock.
+- Still deferred in WFS: journal replay, so a volume that was not unmounted
+  cleanly mounts read-only rather than serving metadata the log has superseded
+  (phase 3); and the whole write path with its allocation bitmaps (phase 2).
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
   calls to the live block slot.

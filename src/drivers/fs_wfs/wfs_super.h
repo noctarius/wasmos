@@ -82,6 +82,33 @@ typedef struct {
  * geometry. Reporting a checksum failure on a block that was never a superblock
  * would send a reader to fsck over what is merely an unformatted device.
  */
+/* Whether `candidate` should replace the copy the scan currently holds.
+ *
+ * Highest `generation` wins, which is what makes "choose the valid copy" (§5)
+ * decidable when more than one validates: generation increments on every
+ * superblock write, so the highest valid one is the most recent. An equal
+ * generation keeps what is already held, leaving scan order to decide.
+ *
+ * `have_current` is zero before any copy has been accepted, in which case the
+ * candidate is always taken. */
+int wfs_super_backup_prefer(const wfs_super_t* current, int have_current,
+                            const wfs_super_t* candidate);
+
+/* The permitted block sizes a backup scan must try, and how many backup-bearing
+ * groups it reaches before giving up. The scan is bounded on purpose: a volume
+ * whose primary AND first few backups are all unreadable is a case for fsck
+ * (§24), not for reading the whole device looking for a superblock. */
+#define WFS_SUPER_SCAN_SIZES 3u
+#define WFS_SUPER_SCAN_GROUPS 4u
+#define WFS_SUPER_SCAN_CANDIDATES (WFS_SUPER_SCAN_SIZES * WFS_SUPER_SCAN_GROUPS)
+
+/* Enumerate the scan's candidates as (block_size, group) pairs, in the order the
+ * scan should try them: all three sizes for the nearest backup group first, so a
+ * volume whose group 1 copy is intact is found without reading further out.
+ *
+ * Returns 1 while `index` names a candidate, 0 once the bound is reached. */
+int wfs_super_backup_candidate(uint32_t index, uint32_t* out_block_size, uint32_t* out_group);
+
 wasmos_error_code_t wfs_super_parse(const void* image, uint32_t len, uint64_t location,
                                     wfs_super_t* out);
 

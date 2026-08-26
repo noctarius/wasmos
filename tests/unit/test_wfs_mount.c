@@ -49,6 +49,25 @@ static const uint8_t k_uuid[WFS_UUID_LEN] = {
 #define TEST_NOW_NS 1750000000000000000ull
 #define VOL_16M (16ull * 1024ull * 1024ull)
 
+/* Reseal a superblock image in place for `location`, so a case can edit a
+ * checksummed field and still exercise the path it means to rather than the
+ * checksum path. */
+static void reseal_super(uint8_t* sb, uint64_t location) {
+    uint8_t* csum = sb + offsetof(struct wfs_superblock, checksum);
+    uint32_t c;
+
+    csum[0] = 0;
+    csum[1] = 0;
+    csum[2] = 0;
+    csum[3] = 0;
+    c = wfs_checksum_struct(
+        k_uuid, location, sb, WFS_SUPER_SIZE, (uint32_t)offsetof(struct wfs_superblock, checksum));
+    csum[0] = (uint8_t)(c & 0xFFu);
+    csum[1] = (uint8_t)((c >> 8) & 0xFFu);
+    csum[2] = (uint8_t)((c >> 16) & 0xFFu);
+    csum[3] = (uint8_t)((c >> 24) & 0xFFu);
+}
+
 static wfs_mkfs_layout_t g_layout;
 
 static int build_volume(uint64_t size, uint32_t block_size) {
@@ -358,8 +377,6 @@ static void test_a_dirty_volume_mounts_read_only(void) {
     wfs_mount_ctx_t ctx;
     wfs_volume_t vol;
     uint8_t* sb;
-    uint8_t* csum;
-    uint32_t c;
 
     if (build_volume(VOL_16M, 4096u) != 0) {
         expect(0, "build a volume");
@@ -367,20 +384,9 @@ static void test_a_dirty_volume_mounts_read_only(void) {
     }
     sb = wfs_stub_image + WFS_SUPER_OFFSET;
     sb[offsetof(struct wfs_superblock, state)] = (uint8_t)WFS_STATE_DIRTY;
-
-    /* Reseal: the state is inside the checksummed image, so without this the
-     * case would exercise the checksum path instead of the dirty-mount one. */
-    csum = sb + offsetof(struct wfs_superblock, checksum);
-    csum[0] = 0;
-    csum[1] = 0;
-    csum[2] = 0;
-    csum[3] = 0;
-    c = wfs_checksum_struct(
-        k_uuid, 0u, sb, WFS_SUPER_SIZE, (uint32_t)offsetof(struct wfs_superblock, checksum));
-    csum[0] = (uint8_t)(c & 0xFFu);
-    csum[1] = (uint8_t)((c >> 8) & 0xFFu);
-    csum[2] = (uint8_t)((c >> 16) & 0xFFu);
-    csum[3] = (uint8_t)((c >> 24) & 0xFFu);
+    /* The state is inside the checksummed image, so without resealing the case
+     * would exercise the checksum path instead of the dirty-mount one. */
+    reseal_super(sb, 0u);
 
     expect(run_mount(&ctx, &vol) == 0, "a dirty volume still mounts");
     expect(vol.super.needs_replay == 1u, "and reports that replay is owed");
@@ -414,6 +420,159 @@ static void test_every_block_size_mounts(void) {
 
 /* ---- runner -------------------------------------------------------------- */
 
+/* ---- backup superblocks -------------------------------------------------- */
+
+/* A volume with at least two groups, so group 1 carries a backup (§5). At the
+ * smallest block size a group spans 128 MiB, which is why this fixture is large;
+ * the two larger block sizes put group 1 at 512 MiB and 2 GiB, out of reach of a
+ * RAM-backed test, so the scan's block-size enumeration is covered by
+ * wfs_super_backup_offset in test_wfs_format.c rather than here. */
+#define VOL_132M (132ull * 1024ull * 1024ull)
+
+/* Destroy the primary superblock's identity, leaving the backups intact. */
+static void wreck_primary(void) {
+    memset(wfs_stub_image + WFS_SUPER_OFFSET, 0, WFS_SUPER_SIZE);
+}
+
+/* Regression: 2026-08-24-wfs-backup-superblock
+ *
+ * §5 makes the backup scan part of the mount procedure -- read the primary, and
+ * if it does not validate, scan for backups and take the valid copy with the
+ * highest generation. Mount used to stop at the first step, so a volume whose
+ * primary was damaged failed to mount even though mkfs had written an intact
+ * copy at the first block of group 1. */
+static void test_a_damaged_primary_mounts_from_a_backup(void) {
+    wfs_mount_ctx_t ctx;
+    wfs_volume_t vol;
+    uint32_t expect_blocks;
+    uint32_t expect_groups;
+
+    if (build_volume(VOL_132M, 4096u) != 0) {
+        expect(0, "build a volume with two groups");
+        return;
+    }
+    expect(g_layout.group_count >= 2u, "the fixture spans enough groups to carry a backup");
+    expect_blocks = g_layout.total_blocks;
+    expect_groups = g_layout.group_count;
+
+    wreck_primary();
+
+    expect(run_mount(&ctx, &vol) == 0, "the mount completes from a backup");
+    expect(vol.mounted == 1u, "the volume is mounted");
+    expect(vol.super.block_size == 4096u, "the backup reports the block size");
+    expect(vol.super.total_blocks == expect_blocks, "and the block count");
+    expect(vol.super.group_count == expect_groups, "and the group count");
+    expect(vol.super.root_object_id == WFS_OBJECT_ROOT, "and the root object id");
+    expect(memcmp(vol.super.uuid, k_uuid, WFS_UUID_LEN) == 0, "and the volume uuid");
+    /* Recovered, not repaired: the primary is still damaged and this copy's
+     * generation may trail it, so the volume serves reads until fsck rebuilds
+     * the primary. */
+    expect(vol.super.read_only == 1u, "a volume mounted from a backup is read-only");
+
+    wfs_stub_teardown();
+}
+
+/* The scan reads `generation` and adopts what it finds, rather than treating any
+ * valid copy as equivalent to the primary's. */
+static void test_the_backup_generation_is_adopted(void) {
+    wfs_mount_ctx_t ctx;
+    wfs_volume_t vol;
+    uint8_t* backup;
+    uint32_t i;
+
+    if (build_volume(VOL_132M, 4096u) != 0) {
+        expect(0, "build a volume with two groups");
+        return;
+    }
+    backup = wfs_stub_image + (size_t)wfs_super_backup_offset(4096u, 1u);
+    /* A backup is sealed under its own block number (§13), not under 0. */
+    for (i = 0; i < 4u; ++i) {
+        backup[offsetof(struct wfs_superblock, generation) + i] = (i == 0) ? 9u : 0u;
+    }
+    reseal_super(backup, WFS_BLOCKS_PER_GROUP(4096u));
+
+    wreck_primary();
+
+    expect(run_mount(&ctx, &vol) == 0, "the mount completes from the backup");
+    expect(vol.super.generation == 9u, "the generation comes from the copy that was used");
+
+    wfs_stub_teardown();
+}
+
+/* A single-group volume carries no backup at all (§5), so there is nothing to
+ * fall back to and the mount must report why the PRIMARY failed. Reporting a
+ * scan-shaped error instead would send a reader looking for a backup that this
+ * geometry never had. */
+static void test_a_volume_with_no_backup_reports_the_primary_failure(void) {
+    wfs_mount_ctx_t ctx;
+    wfs_volume_t vol;
+
+    if (build_volume(VOL_16M, 4096u) != 0) {
+        expect(0, "build a volume");
+        return;
+    }
+    expect(g_layout.group_count == 1u, "the fixture is a single group, so it carries no backup");
+
+    wreck_primary();
+
+    expect_rc((wasmos_error_code_t)run_mount(&ctx, &vol),
+              WASMOS_ERR_FS_BAD_MAGIC,
+              "the mount fails with the primary's own reason");
+    expect(vol.mounted == 0u, "and nothing is mounted");
+
+    wfs_stub_teardown();
+}
+
+/* A backup that does not validate is not usable either: the scan must reject it
+ * and leave the mount reporting the primary's failure, not adopt a copy whose
+ * checksum it could not confirm. */
+static void test_a_damaged_backup_is_not_adopted(void) {
+    wfs_mount_ctx_t ctx;
+    wfs_volume_t vol;
+    uint8_t* backup;
+
+    if (build_volume(VOL_132M, 4096u) != 0) {
+        expect(0, "build a volume with two groups");
+        return;
+    }
+    backup = wfs_stub_image + (size_t)wfs_super_backup_offset(4096u, 1u);
+    /* Keep the magic so the copy is FOUND, and break a checksummed field so it
+     * fails verification -- the case is about rejecting an invalid copy, not
+     * about failing to find one. */
+    backup[offsetof(struct wfs_superblock, root_object_id)] ^= 0xFFu;
+
+    wreck_primary();
+
+    expect_rc((wasmos_error_code_t)run_mount(&ctx, &vol),
+              WASMOS_ERR_FS_BAD_MAGIC,
+              "an unverifiable backup leaves the primary's failure standing");
+    expect(vol.mounted == 0u, "and nothing is mounted");
+
+    wfs_stub_teardown();
+}
+
+/* Highest generation wins, which is what makes "choose the valid copy" decidable
+ * when several validate. Tested directly: a second backup sits at group 3, which
+ * at the smallest block size is 384 MiB into the volume -- past what a RAM-backed
+ * fixture can hold, so the rule is exercised as a rule. */
+static void test_the_highest_generation_is_preferred(void) {
+    wfs_super_t a;
+    wfs_super_t b;
+
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+
+    a.generation = 4u;
+    b.generation = 7u;
+    expect(wfs_super_backup_prefer(&a, 0, &b) != 0, "the first valid copy is taken");
+    expect(wfs_super_backup_prefer(&a, 1, &b) != 0, "a newer copy replaces an older one");
+    expect(wfs_super_backup_prefer(&b, 1, &a) == 0, "an older copy does not replace a newer one");
+
+    b.generation = 4u;
+    expect(wfs_super_backup_prefer(&a, 1, &b) == 0,
+           "an equal generation keeps the copy already held, so the scan order decides");
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_mount_reads_a_volume_mkfs_wrote),
     WASMOS_TEST_CASE(test_mount_requests_exactly_the_blocks_it_should),
@@ -428,6 +587,11 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_failed_send_fails_the_mount),
     WASMOS_TEST_CASE(test_a_dirty_volume_mounts_read_only),
     WASMOS_TEST_CASE(test_every_block_size_mounts),
+    WASMOS_TEST_CASE(test_a_damaged_primary_mounts_from_a_backup),
+    WASMOS_TEST_CASE(test_the_backup_generation_is_adopted),
+    WASMOS_TEST_CASE(test_a_volume_with_no_backup_reports_the_primary_failure),
+    WASMOS_TEST_CASE(test_a_damaged_backup_is_not_adopted),
+    WASMOS_TEST_CASE(test_the_highest_generation_is_preferred),
 };
 
 int main(void) {

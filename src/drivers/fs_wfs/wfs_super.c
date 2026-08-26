@@ -43,6 +43,37 @@ uint64_t wfs_super_backup_offset(uint32_t block_size, uint32_t group) {
     return (uint64_t)group * (uint64_t)WFS_BLOCKS_PER_GROUP(block_size) * (uint64_t)block_size;
 }
 
+int wfs_super_backup_prefer(const wfs_super_t* current, int have_current,
+                            const wfs_super_t* candidate) {
+    if (!candidate) {
+        return 0;
+    }
+    if (!have_current || !current) {
+        return 1;
+    }
+    return candidate->generation > current->generation;
+}
+
+int wfs_super_backup_candidate(uint32_t index, uint32_t* out_block_size, uint32_t* out_group) {
+    /* The three permitted block sizes (§4). block_size is itself a superblock
+     * field, so a scan that runs because the primary is unreadable does not know
+     * it and must try each -- which is bounded precisely because
+     * blocks_per_group follows from block_size rather than being stored freely
+     * (§5). A wrong guess is self-rejecting: the candidate's checksum is seeded
+     * with the block number that guess implies, so it fails to verify. */
+    static const uint32_t sizes[WFS_SUPER_SCAN_SIZES] = {4096u, 8192u, 16384u};
+    uint32_t slot;
+
+    if (!out_block_size || !out_group || index >= WFS_SUPER_SCAN_CANDIDATES) {
+        return 0;
+    }
+    slot = index / WFS_SUPER_SCAN_SIZES;
+    *out_block_size = sizes[index % WFS_SUPER_SCAN_SIZES];
+    /* Backups occupy the odd groups: 1, 3, 5, ... (§5). */
+    *out_group = slot * 2u + 1u;
+    return 1;
+}
+
 wasmos_error_code_t wfs_super_parse(const void* image, uint32_t len, uint64_t location,
                                     wfs_super_t* out) {
     const uint8_t* p = (const uint8_t*)image;

@@ -234,6 +234,7 @@ typedef struct {
 typedef enum {
     WFS_MOUNT_PC_START = 0,
     WFS_MOUNT_PC_SUPER_READY,
+    WFS_MOUNT_PC_BACKUP_READY,
     WFS_MOUNT_PC_GROUP_JOINED,
 } wfs_mount_pc_t;
 
@@ -249,6 +250,17 @@ typedef struct {
     uint8_t group_started; /* a child task is outstanding and owes a join */
     wasmos_wasm_coroutine_t group_task;
     wfs_group_ctx_t group;
+
+    /* The backup-superblock scan (§5), which runs only when the primary does not
+     * validate. Every one of these survives an await, so none can be a C local:
+     * the candidate is recomputed from scan_index on each resume rather than
+     * carried across it. primary_err is kept so a scan that finds nothing
+     * reports why the PRIMARY failed, which is the useful diagnosis. */
+    wasmos_error_code_t primary_err;
+    uint32_t scan_index;
+    uint8_t scan_started; /* a candidate read is outstanding and owes a take */
+    uint8_t scan_have;    /* scan_best holds a copy that validated */
+    wfs_super_t scan_best;
 } wfs_mount_ctx_t;
 
 #endif /* FS_WFS_WFS_TYPES_H */

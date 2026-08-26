@@ -212,13 +212,82 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
         }
         ctx->err = wfs_super_parse(
             wfs_block_data(b) + WFS_SUPER_OFFSET, WFS_SUPER_SIZE, 0u, &ctx->vol->super);
-        if (ctx->err != WASMOS_ERR_NONE) {
-            /* TODO: fall back to the backup superblocks (§5) — enumerate the
-             * three permitted block sizes, take the highest valid generation.
-             * Until then a damaged primary fails the mount even where a backup
-             * would serve. */
-            return (int32_t)ctx->err;
+        if (ctx->err == WASMOS_ERR_NONE) {
+            ctx->err = wfs_block_set_block_size(b, ctx->vol->super.block_size);
+            if (ctx->err != WASMOS_ERR_NONE) {
+                return (int32_t)ctx->err;
+            }
+            ctx->next_group = 0u;
+            ctx->pc = WFS_MOUNT_PC_GROUP_JOINED;
+            goto sweep;
         }
+        /* The primary did not validate, so scan the backups (§5). Its failure is
+         * kept: if no backup validates either, that is the reason worth
+         * reporting -- a scan-shaped error would send a reader looking for a
+         * backup that this geometry may never have had. */
+        ctx->primary_err = ctx->err;
+        ctx->scan_index = 0u;
+        ctx->scan_started = 0u;
+        ctx->scan_have = 0u;
+        ctx->pc = WFS_MOUNT_PC_BACKUP_READY;
+        /* fall through into the scan */
+
+    case WFS_MOUNT_PC_BACKUP_READY:
+        for (;;) {
+            uint32_t cand_bs = 0u;
+            uint32_t cand_group = 0u;
+            uint64_t cand_offset;
+
+            if (ctx->scan_started) {
+                ctx->scan_started = 0u;
+                /* A candidate read that fails is a candidate that is not there —
+                 * past the end of a short volume, most often — and skipping it is
+                 * the whole point of a scan. */
+                if (wfs_block_take(b) == WASMOS_ERR_NONE &&
+                    wfs_super_backup_candidate(ctx->scan_index, &cand_bs, &cand_group)) {
+                    wfs_super_t cand;
+                    /* A backup is sealed under its own block number in the
+                     * volume's block units (§13), which is what makes a wrong
+                     * block-size guess self-rejecting. */
+                    uint64_t location = (uint64_t)cand_group * WFS_BLOCKS_PER_GROUP(cand_bs);
+
+                    if (wfs_super_parse(wfs_block_data(b), WFS_SUPER_SIZE, location, &cand) ==
+                            WASMOS_ERR_NONE &&
+                        cand.block_size == cand_bs &&
+                        wfs_super_backup_prefer(&ctx->scan_best, ctx->scan_have, &cand)) {
+                        ctx->scan_best = cand;
+                        ctx->scan_have = 1u;
+                    }
+                }
+                ctx->scan_index++;
+            }
+            if (!wfs_super_backup_candidate(ctx->scan_index, &cand_bs, &cand_group)) {
+                break;
+            }
+            cand_offset = wfs_super_backup_offset(cand_bs, cand_group);
+            /* Read at the DEFAULT block size, which is what the layer is still
+             * set to: the volume's own size is exactly what is not known here.
+             * Every candidate offset is a multiple of it, and a superblock is
+             * 1024 bytes at the start of its block, so one default-sized read
+             * covers the copy whatever the volume's real block size turns out to
+             * be. */
+            if (cand_offset == 0u || (cand_offset / WFS_BLOCK_SIZE_MIN) > (uint64_t)0xFFFFFFFFu) {
+                ctx->scan_index++;
+                continue;
+            }
+            ctx->scan_started = 1u;
+            WFS_AWAIT(ctx,
+                      wfs_block_read_begin(b, (uint32_t)(cand_offset / WFS_BLOCK_SIZE_MIN)),
+                      WFS_MOUNT_PC_BACKUP_READY);
+        }
+        if (!ctx->scan_have) {
+            return (int32_t)ctx->primary_err;
+        }
+        ctx->vol->super = ctx->scan_best;
+        /* Recovered, not repaired: the primary is still damaged and this copy's
+         * generation may trail it. Writing under that would compound the damage,
+         * so the volume serves reads until fsck (§24) rebuilds the primary. */
+        ctx->vol->super.read_only = 1u;
         ctx->err = wfs_block_set_block_size(b, ctx->vol->super.block_size);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
@@ -226,6 +295,8 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
         ctx->next_group = 0u;
         ctx->pc = WFS_MOUNT_PC_GROUP_JOINED;
         /* fall through into the sweep */
+
+    sweep:
 
     case WFS_MOUNT_PC_GROUP_JOINED:
         /* The descriptor sweep. Each descriptor is read by a CHILD task that

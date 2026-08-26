@@ -137,7 +137,8 @@ set(WASM_WFS_DRIVER_SRC
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_fd.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c)
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c)
 set(WASM_WFS_DRIVER_WASM ${BUILD_DIR}/fs_wfs.wasm)
 set(WASM_WFS_APP ${BUILD_DIR}/fs_wfs.wap)
 set(WASM_INITFS_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_init/fs_init.c)
@@ -2500,6 +2501,32 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_extent
   COMMAND ${BUILD_DIR}/test_wfs_extent
+  # Block allocation, against a volume mkfs_wfs built: the bitmap in the image is
+  # what the assertions read, because the counters are derived from it.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_alloc
+  COMMAND ${BUILD_DIR}/test_wfs_alloc
   # The allocation bitmaps. Pure: one bitmap block, no device and no runtime, so
   # the allocation policy is tested without an image under it.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3782,6 +3809,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_read.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_path.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_bitmap.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_alloc.c
     ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c)
 
 # The scheduler host tests drive the REAL kernel sources, so they must see the

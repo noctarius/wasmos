@@ -230,6 +230,46 @@ typedef struct {
     wfs_extent_ctx_t extent;
 } wfs_read_ctx_t;
 
+/* Allocating blocks (§12). */
+typedef enum {
+    WFS_ALLOC_PC_START = 0,
+    WFS_ALLOC_PC_DESC_JOINED,
+    WFS_ALLOC_PC_BITMAP_READY,
+    WFS_ALLOC_PC_BITMAP_WRITTEN,
+    WFS_ALLOC_PC_DESC_READY,
+    WFS_ALLOC_PC_DESC_WRITTEN,
+} wfs_alloc_pc_t;
+
+typedef struct {
+    wfs_alloc_pc_t pc;
+    wfs_volume_t* vol; /* mutable: the in-memory free counter follows the bitmap */
+    uint32_t want;     /* blocks requested; a shorter run may be returned */
+    uint32_t prefer_group;
+
+    /* Results, valid once the task completes. `length` may be less than `want`:
+     * §12 allocates contiguous extents where it can and falls back to fragments,
+     * so a caller wanting more comes back for the remainder. */
+    uint32_t first_block;
+    uint32_t length;
+
+    /* The search. `group` is the group being examined and `tried` bounds the
+     * sweep at one pass over the volume, so a full filesystem terminates instead
+     * of circling. `run_start` and `run_length` are the run found in `group`,
+     * carried from the bitmap step to the steps that mark and account for it. */
+    uint32_t group;
+    uint32_t tried;
+    uint32_t run_start;
+    uint32_t run_length;
+    uint32_t bitmap_block;
+    uint32_t desc_block;
+
+    uint8_t desc_started; /* a descriptor-read child is outstanding and owes a join */
+    wasmos_wasm_coroutine_t desc_task;
+    wfs_group_ctx_t desc;
+
+    wasmos_error_code_t err;
+} wfs_alloc_ctx_t;
+
 /* Mounting a volume. */
 typedef enum {
     WFS_MOUNT_PC_START = 0,

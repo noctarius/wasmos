@@ -802,9 +802,34 @@ linked feature documents for rationale and rollout plans.
   format does not mandate, and it costs nothing while phase 1 is read-only
   anyway — it exists so the phase-2 write path cannot silently trust a recovered
   superblock.
-- Still deferred in WFS: journal replay, so a volume that was not unmounted
+- WFS block ALLOCATION exists (phase 2's first item): `wfs_bitmap.c` holds the
+  bit access and the run search, `wfs_alloc.c` the task that marks a run and
+  accounts for it. The bitmaps are authoritative and the free counters are
+  derived from them, so the bitmap is written FIRST — a crash between the two
+  leaves a stale counter, which fsck rebuilds, whereas the reverse order would
+  leave a counter recording an allocation the bitmap does not, and the next
+  allocator would hand the same blocks to a second object.
+  Policy follows §12: prefer the group holding the parent, take a contiguous run
+  where one exists, fall back to a shorter run (the caller returns for the
+  remainder), fall back to another group. A derived counter is never trusted to
+  EXCLUDE a group, because a stale one would lose real free space; the bitmap is
+  always read. Group bits are clamped to the device, so the allocator does not
+  depend on the formatter having marked the past-the-end bits of a partial final
+  group.
+  A write is refused on `super.read_only` rather than on either of its causes (a
+  replay owed, or a primary recovered from a backup), which is what keeps a
+  backup-mounted volume from becoming writable by omission; it is refused before
+  any block is touched.
+- `wfs_block_write_begin` stages the block into the server's buffer before
+  submitting, which it previously did not — a write persisted whatever that
+  buffer held. A staging failure sends no request and is reported at the take, so
+  a NULL future cannot pass for the cache-hit case and let a write that never
+  happened read back as success.
+- Still deferred in WFS: file writes and truncation (the rest of phase 2); a sync
+  path that writes the superblock back, so on-disk `free_blocks` trails the
+  bitmaps until then; and journal replay, so a volume that was not unmounted
   cleanly mounts read-only rather than serving metadata the log has superseded
-  (phase 3); and the whole write path with its allocation bitmaps (phase 2).
+  (phase 3).
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
   calls to the live block slot.

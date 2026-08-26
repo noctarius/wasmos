@@ -132,6 +132,7 @@ const (
 	WASMOS_ERR_FS_GEOMETRY int32 = -0x00040021 // on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)
 	WASMOS_ERR_FS_VOLUME_TOO_LARGE int32 = -0x00040022 // volume exceeds the address range the driver carries (e.g. a 64-bit on-disk block count above the driver's 32-bit block number)
 	WASMOS_ERR_FS_VERSION int32 = -0x00040023 // on-disk format version is not one this driver implements; distinct from an unknown feature flag, which names a capability rather than a structure generation
+	WASMOS_ERR_FS_READ_ONLY int32 = -0x00040024 // the volume is mounted read-only, so the write cannot be attempted at all; distinct from ACCESS, which is an fd-mode violation, and from NO_SPACE, which is a writable volume with nothing free. A volume is read-only when a feature flag demands it, when a journal replay is owed, or when its primary superblock was recovered from a backup
 	WASMOS_ERR_NET_WOULD_BLOCK int32 = -0x00050001 // operation is deferred; completion arrives as a later event (retryable)
 	WASMOS_ERR_NET_INVALID int32 = -0x00050002 // invalid request arguments (socket, address, or length)
 	WASMOS_ERR_NET_NOT_READY int32 = -0x00050003 // interface or socket is not in a state that permits the operation
@@ -516,6 +517,8 @@ func WasmosStrerror(c int32) string {
 		return "volume exceeds the address range the driver carries (e.g. a 64-bit on-disk block count above the driver's 32-bit block number)"
 	case WASMOS_ERR_FS_VERSION:
 		return "on-disk format version is not one this driver implements; distinct from an unknown feature flag, which names a capability rather than a structure generation"
+	case WASMOS_ERR_FS_READ_ONLY:
+		return "the volume is mounted read-only, so the write cannot be attempted at all; distinct from ACCESS, which is an fd-mode violation, and from NO_SPACE, which is a writable volume with nothing free. A volume is read-only when a feature flag demands it, when a journal replay is owed, or when its primary superblock was recovered from a backup"
 	case WASMOS_ERR_NET_WOULD_BLOCK:
 		return "operation is deferred; completion arrives as a later event (retryable)"
 	case WASMOS_ERR_NET_INVALID:

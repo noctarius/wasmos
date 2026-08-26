@@ -124,6 +124,7 @@ export const WASMOS_ERR_FS_FEATURE_INCOMPAT: i32 = -0x00040020; // volume sets a
 export const WASMOS_ERR_FS_GEOMETRY: i32 = -0x00040021; // on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)
 export const WASMOS_ERR_FS_VOLUME_TOO_LARGE: i32 = -0x00040022; // volume exceeds the address range the driver carries (e.g. a 64-bit on-disk block count above the driver's 32-bit block number)
 export const WASMOS_ERR_FS_VERSION: i32 = -0x00040023; // on-disk format version is not one this driver implements; distinct from an unknown feature flag, which names a capability rather than a structure generation
+export const WASMOS_ERR_FS_READ_ONLY: i32 = -0x00040024; // the volume is mounted read-only, so the write cannot be attempted at all; distinct from ACCESS, which is an fd-mode violation, and from NO_SPACE, which is a writable volume with nothing free. A volume is read-only when a feature flag demands it, when a journal replay is owed, or when its primary superblock was recovered from a backup
 export const WASMOS_ERR_NET_WOULD_BLOCK: i32 = -0x00050001; // operation is deferred; completion arrives as a later event (retryable)
 export const WASMOS_ERR_NET_INVALID: i32 = -0x00050002; // invalid request arguments (socket, address, or length)
 export const WASMOS_ERR_NET_NOT_READY: i32 = -0x00050003; // interface or socket is not in a state that permits the operation
@@ -384,6 +385,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_FS_GEOMETRY: return "on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)";
     case WASMOS_ERR_FS_VOLUME_TOO_LARGE: return "volume exceeds the address range the driver carries (e.g. a 64-bit on-disk block count above the driver's 32-bit block number)";
     case WASMOS_ERR_FS_VERSION: return "on-disk format version is not one this driver implements; distinct from an unknown feature flag, which names a capability rather than a structure generation";
+    case WASMOS_ERR_FS_READ_ONLY: return "the volume is mounted read-only, so the write cannot be attempted at all; distinct from ACCESS, which is an fd-mode violation, and from NO_SPACE, which is a writable volume with nothing free. A volume is read-only when a feature flag demands it, when a journal replay is owed, or when its primary superblock was recovered from a backup";
     case WASMOS_ERR_NET_WOULD_BLOCK: return "operation is deferred; completion arrives as a later event (retryable)";
     case WASMOS_ERR_NET_INVALID: return "invalid request arguments (socket, address, or length)";
     case WASMOS_ERR_NET_NOT_READY: return "interface or socket is not in a state that permits the operation";

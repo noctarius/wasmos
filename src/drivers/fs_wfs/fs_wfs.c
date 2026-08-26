@@ -353,6 +353,113 @@ static void wfs_do_seek(int32_t src, int32_t request_id, int32_t fd, int32_t del
     (void)wfs_reply(src, FS_IPC_RESP, request_id, (int32_t)result, 0);
 }
 
+/* Stream `len` bytes to a READDIR client, four per FS_IPC_STREAM frame — the
+ * shape the client reassembles (libc_fs_request_stream) and fs-manager's own
+ * root listing already emit.
+ *
+ * A full receiver queue is backpressure, not failure: the client is blocked on
+ * exactly these frames and has no timeout, so a dropped frame strands it. Retry,
+ * yielding between tries. Returns 0, or a packed code once the retries are
+ * exhausted, which the caller reports instead of a truncated listing that would
+ * read as a complete one. */
+static wasmos_error_code_t wfs_stream(int32_t dest, int32_t request_id, const uint8_t* data,
+                                      uint32_t len) {
+    uint32_t pos = 0;
+
+    while (pos < len) {
+        int32_t a[4] = {0, 0, 0, 0};
+        uint32_t i;
+        uint32_t tries = 0;
+
+        for (i = 0; i < 4u && pos < len; ++i) {
+            a[i] = (int32_t)data[pos++];
+        }
+        for (;;) {
+            int32_t rc = wasmos_ipc_send(
+                dest, g_fs_endpoint, FS_IPC_STREAM, request_id, a[0], a[1], a[2], a[3]);
+
+            if (rc == 0) {
+                break;
+            }
+            if (rc != WASMOS_IPC_ERR_FULL || ++tries >= WFS_SEND_RETRIES) {
+                return WASMOS_ERR_FS_REPLY_SEND;
+            }
+            (void)wasmos_sched_yield();
+        }
+    }
+    return WASMOS_ERR_NONE;
+}
+
+/* READDIR: stream the entries of the client's current directory.
+ *
+ * Directories carry a trailing '/', matching fs-manager's root listing, which is
+ * what the CLI renders. "." and ".." are NOT listed: the root listing shows no
+ * dot entries either, and `cd ..` resolves through the records whether or not
+ * they appear here. */
+static void wfs_do_readdir(int32_t src, int32_t request_id) {
+    uint8_t line[WFS_NAME_MAX + 2u];
+    wasmos_error_code_t rc;
+    int32_t status;
+    uint32_t entries = 0;
+
+    g_path.object.pc = WFS_OBJECT_PC_START;
+    g_path.object.vol = &g_vol;
+    g_path.object.object_id = wfs_cwd_get(src);
+    g_path.object.err = WASMOS_ERR_NONE;
+    status = wfs_run(wfs_object_task, &g_path.object);
+    if (status != 0) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, status, 0);
+        return;
+    }
+    if (g_path.object.out.type != WFS_TYPE_DIR) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_NOT_DIR, 0);
+        return;
+    }
+
+    wfs_dir_lookup_init(&g_dir, &g_vol, &g_path.object.out, 0, 0u);
+    for (;;) {
+        uint32_t n = 0;
+        uint32_t i;
+
+        status = wfs_run(wfs_dir_task, &g_dir);
+        if (status != 0) {
+            (void)wfs_reply(src, FS_IPC_ERROR, request_id, status, 0);
+            return;
+        }
+        if (!g_dir.found) {
+            break;
+        }
+        /* Skip the two records every directory carries. */
+        if (!(g_dir.name_length == 1u && g_dir.name[0] == '.') &&
+            !(g_dir.name_length == 2u && g_dir.name[0] == '.' && g_dir.name[1] == '.')) {
+            for (i = 0; i < g_dir.name_length; ++i) {
+                line[n++] = (uint8_t)g_dir.name[i];
+            }
+            if (g_dir.type == WFS_TYPE_DIR) {
+                line[n++] = (uint8_t)'/';
+            }
+            line[n++] = (uint8_t)'\n';
+            rc = wfs_stream(src, request_id, line, n);
+            if (rc != WASMOS_ERR_NONE) {
+                (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
+                return;
+            }
+            entries++;
+        }
+        /* Resume in the block already staged: streaming sends no block requests,
+         * so what the scan left staged is still there. */
+        g_dir.pc = WFS_DIR_PC_SCAN;
+        g_dir.found = 0u;
+        if (entries > 4096u) {
+            /* A directory that never ends is a corrupt one; refuse rather than
+             * stream forever at a client that cannot stop us. */
+            (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_CORRUPT, 0);
+            return;
+        }
+    }
+    (void)wfs_reply(src, FS_IPC_RESP, request_id, 0, 0);
+}
+
 /* CHDIR carries its target packed into arg0..arg3, up to 16 bytes (the FS ABI;
  * fs-manager packs "/" when a client enters this mount).
  *
@@ -590,11 +697,12 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
     case FS_IPC_CHDIR_REQ:
         wfs_do_chdir(src, request_id, a0, a1, a2, a3);
         return;
+    case FS_IPC_READDIR_REQ:
+        wfs_do_readdir(src, request_id);
+        return;
     default:
-        /* TODO: FS_IPC_READDIR_REQ replies over the FS_IPC_STREAM frame
-         * protocol rather than a plain RESP, so it needs the streaming path
-         * fs_fat has; until then `ls` on a WFS mount reports unsupported. The
-         * write ops (WRITE/UNLINK/MKDIR/RMDIR/RENAME) wait on the write path. */
+        /* The write ops (WRITE/UNLINK/MKDIR/RMDIR/RENAME) wait on the write
+         * path. */
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_UNSUPPORTED, 0);
         return;
     }

@@ -292,6 +292,38 @@ typedef struct {
     wasmos_error_code_t err;
 } wfs_alloc_ctx_t;
 
+/* Freeing blocks (§12). */
+typedef enum {
+    WFS_FREE_PC_START = 0,
+    WFS_FREE_PC_DESC_JOINED,
+    WFS_FREE_PC_BITMAP_READY,
+    WFS_FREE_PC_BITMAP_WRITTEN,
+    WFS_FREE_PC_DESC_READY,
+    WFS_FREE_PC_DESC_WRITTEN,
+} wfs_free_pc_t;
+
+typedef struct {
+    wfs_free_pc_t pc;
+    wfs_volume_t* vol;
+    uint32_t first_block;
+    uint32_t length;
+
+    /* The run may span groups, so it is freed one group at a time: `cursor` is
+     * the next block to release and `run_in_group` how many of them fall in the
+     * group being handled. Both survive the awaits. */
+    uint32_t cursor;
+    uint32_t group;
+    uint32_t run_in_group;
+    uint32_t bitmap_block;
+    uint32_t desc_block;
+
+    uint8_t desc_started;
+    wasmos_wasm_coroutine_t desc_task;
+    wfs_group_ctx_t desc;
+
+    wasmos_error_code_t err;
+} wfs_free_ctx_t;
+
 /* Writing bytes into an object's data (§16). */
 typedef enum {
     WFS_WRITE_PC_START = 0,
@@ -353,6 +385,55 @@ typedef struct {
 
     wasmos_error_code_t err;
 } wfs_write_ctx_t;
+
+/* Truncating an object (§16). */
+typedef enum {
+    WFS_TRUNC_PC_START = 0,
+    WFS_TRUNC_PC_DIRTY_JOINED,
+    WFS_TRUNC_PC_TAIL_READ,
+    WFS_TRUNC_PC_TAIL_WRITTEN,
+    WFS_TRUNC_PC_RECORD_READ,
+    WFS_TRUNC_PC_RECORD_PATCH,
+    WFS_TRUNC_PC_RECORD_WRITTEN,
+    WFS_TRUNC_PC_FREE_JOINED,
+} wfs_trunc_pc_t;
+
+typedef struct {
+    wfs_trunc_pc_t pc;
+    wfs_volume_t* vol;
+    uint32_t object_id;
+    struct wfs_object obj;
+    uint8_t inline_data[WFS_INLINE_DATA_MAX];
+    uint64_t new_size;
+    uint64_t now_ns;
+
+    /* Runs the truncation stops referencing, collected while the extent array is
+     * trimmed and released only AFTER the record no longer names them. At most
+     * one run per inline extent, since an extent is either dropped whole or
+     * shortened once. */
+    uint32_t free_first[WFS_INLINE_EXTENTS];
+    uint32_t free_len[WFS_INLINE_EXTENTS];
+    uint32_t free_count;
+    uint32_t free_index;
+
+    /* The partial block the new end falls inside, if any: its bytes past the new
+     * size are zeroed, or a later grow would read them back as content. */
+    uint32_t tail_block;
+    uint32_t tail_from;
+    uint8_t tail_needed;
+
+    uint32_t record_block;
+
+    uint8_t free_started;
+    wasmos_wasm_coroutine_t free_task;
+    wfs_free_ctx_t free_ctx;
+
+    uint8_t dirty_started;
+    wasmos_wasm_coroutine_t dirty_task;
+    wfs_dirty_ctx_t dirty;
+
+    wasmos_error_code_t err;
+} wfs_trunc_ctx_t;
 
 /* Mounting a volume. */
 typedef enum {

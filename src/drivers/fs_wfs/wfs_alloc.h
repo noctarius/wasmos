@@ -28,4 +28,18 @@
  */
 int32_t wfs_alloc_blocks_task(void* user, uintptr_t* out_value);
 
+/* Release ctx->length blocks starting at ctx->first_block.
+ *
+ * The run may span groups and is freed one group at a time. Order within each
+ * group mirrors allocation: the BITMAP first, then the derived counter, so a
+ * crash leaves a counter fsck rebuilds rather than a bitmap that disagrees with
+ * itself.
+ *
+ * A caller must have already stopped REFERENCING these blocks -- for a
+ * truncation that means the object record is written first. Freeing bits the
+ * record still names would let a later allocation hand the same blocks to a
+ * second object.
+ */
+int32_t wfs_free_blocks_task(void* user, uintptr_t* out_value);
+
 #endif /* FS_WFS_WFS_ALLOC_H */

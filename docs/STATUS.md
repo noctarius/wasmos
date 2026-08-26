@@ -851,11 +851,27 @@ linked feature documents for rationale and rollout plans.
   site: an inline object outgrowing `WFS_INLINE_DATA_MAX` (promotion must read the
   inline bytes before an extent is written over them), and an object needing more
   than `WFS_INLINE_EXTENTS` extents (the tree reader exists, the writer does not).
-- Still deferred in WFS: truncation (the rest of phase 2); the extent-tree writer
-  and inline promotion named above; a sync path that writes the superblock back,
-  so on-disk `free_blocks` trails the bitmaps until then; and journal replay, so a
-  volume that was not unmounted cleanly mounts read-only rather than serving
-  metadata the log has superseded (phase 3).
+- WFS TRUNCATION exists (`wfs_truncate.c`), which completes phase 2. Blocks can
+  now be released as well as taken: `wfs_free_blocks_task` clears bitmap bits and
+  credits the derived counters, handling a run that spans groups as two passes
+  because that is two bitmaps and two counters.
+  The crash-safety order REVERSES relative to a write, on one principle. A write
+  is data then record; a truncation is record then free. Both pick the order whose
+  crash leaves a LEAK -- blocks allocated but unreferenced, which fsck reclaims --
+  never a block the record still names after the bitmap released it, which a later
+  allocation would hand to a second object.
+  GROWING allocates nothing: the new range is a hole and reads as zeroes (§9), so
+  a grown file is sparse until something writes into it. SHRINKING zeroes the tail
+  of the block the new end falls inside, because that block stays allocated and
+  those bytes are what a later grow would read; the same applies to an inline
+  object, whose record keeps its 144 bytes whatever the size says. This is
+  deliberately unlike `fs-fat`, where `O_TRUNC` resets the size without freeing
+  the chain and a truncated file keeps its capacity.
+- Still deferred in WFS: the extent-tree WRITER and inline-to-extent promotion
+  (both refused explicitly rather than half-done, with TODOs at the sites); a sync
+  path that writes the superblock back, so on-disk `free_blocks` trails the bitmaps
+  until then; and journal replay, so a volume that was not unmounted cleanly
+  mounts read-only rather than serving metadata the log has superseded (phase 3).
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
   calls to the live block slot.

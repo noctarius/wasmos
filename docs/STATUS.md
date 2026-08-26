@@ -830,10 +830,21 @@ linked feature documents for rationale and rollout plans.
   request is a three-descriptor chain (header, data, status byte) whose data
   descriptor points straight at the CALLER's block buffer or mapped borrow, so
   no CPU copies the sectors. Requests are serialised one at a time and wait on
-  the routed completion interrupt. It registers the concrete name `virtio-blk`
-  under the `block` service CLASS; the plain `block` name stays with the ATA
-  driver, which holds the boot disk. Failures are reported as packed
+  the completion interrupt. It registers the concrete name `virtio-blk` under
+  the `block` service CLASS; the plain `block` name stays with the ATA driver,
+  which holds the boot disk. Failures are reported as packed
   `WASMOS_ERR_VIRTIO_BLK_*` codes.
+- `virtio-blk` binds an MSI-X vector through `pci-bus` for its completion
+  interrupt, and routes INTx only when the device or the bus service offers no
+  vector. That is a correctness property rather than a latency one: with
+  `virtio-net` and `virtio-rng` both on MSI-X, an INTx `virtio-blk` would be the
+  system's only INTx consumer, sharing a line with the PIIX4 power-management
+  bridge that nothing services -- the shape of the IRQ 11 livelock this tree
+  already fixed. Enabling MSI-X inserts two vector registers at 0x14/0x16 and
+  shifts the device configuration from 0x14 to 0x18, so the capacity read goes
+  through an accessor. `test_virtio_blk.py` boots BOTH paths (the second with
+  QEMU `vectors=0`) and asserts the geometry each way, so a hardcoded
+  configuration base fails one class or the other.
 - Zig drivers reach the driver-side surface through `src/libc/zig/driver.zig`
   (granted I/O ports, pinned DMA regions, IRQ routing, service registration and
   the ready handshake) and `src/libc/zig/vring.zig`. The latter contains no ring

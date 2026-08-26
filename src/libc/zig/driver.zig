@@ -413,10 +413,109 @@ pub fn bufferRelease(buffer_id: i32) void {
 /// service endpoint would silently drop a client's first request.
 var g_registry_reply_ep: i32 = -1;
 
+/// The private reply endpoint above, for a driver's own synchronous requests
+/// during bring-up -- resolving a bus service, programming an MSI vector. It is
+/// the endpoint those calls belong on for the same reason the registry
+/// handshakes use it, and sharing one costs nothing because bring-up is
+/// sequential. Negative when no endpoint could be created.
+pub fn privateReplyEndpoint() i32 {
+    return registryReplyEndpoint();
+}
+
 fn registryReplyEndpoint() i32 {
     if (g_registry_reply_ep < 0) g_registry_reply_ep = abi.ipc_create_endpoint();
     return g_registry_reply_ep;
 }
+
+/// Pack up to 16 characters of a service name into four IPC argument words,
+/// four bytes each, little end first. Unused positions stay zero, so a shorter
+/// name is zero-padded and a 16-character one travels without a terminator;
+/// anything longer is truncated to its first 16 bytes. Mirrors
+/// wasmos_ipc_pack_name16.
+fn packName16(name: []const u8) [4]i32 {
+    var args = [4]i32{ 0, 0, 0, 0 };
+    var i: usize = 0;
+    while (i < name.len and i < 16) : (i += 1) {
+        const slot = i / 4;
+        const shift: u5 = @intCast((i % 4) * 8);
+        args[slot] |= @as(i32, name[i]) << shift;
+    }
+    return args;
+}
+
+/// Resolve a service by name through the process manager, retrying `attempts`
+/// times and yielding between tries so a service that has not registered yet
+/// gets a chance to run. Returns its endpoint, or null once the attempts are
+/// exhausted. Each attempt consumes one request id from `request_id_base`.
+pub fn lookupService(proc_endpoint: i32, name: []const u8, request_id_base: i32, attempts: i32) ?i32 {
+    const reply_ep = privateReplyEndpoint();
+    if (reply_ep < 0) return null;
+    const args = packName16(name);
+    const tries = if (attempts > 0) attempts else 1;
+    var i: i32 = 0;
+    while (i < tries) : (i += 1) {
+        if (call(
+            proc_endpoint,
+            reply_ep,
+            op.SVC_IPC_LOOKUP_REQ,
+            request_id_base + i,
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+        )) |reply| {
+            // The registry reports "no such service" as an all-ones endpoint,
+            // which is a valid reply rather than a failed call.
+            if (reply.type == op.SVC_IPC_LOOKUP_RESP and @as(u32, @bitCast(reply.arg0)) != 0xFFFFFFFF) {
+                return reply.arg0;
+            }
+        }
+        yield();
+    }
+    return null;
+}
+
+// --- message-signalled interrupts ------------------------------------------
+
+/// The interrupt-controller address/data pair that makes a device raise a
+/// vector, plus the vector itself. Layout mirrors `wasmos_msi_desc_t`.
+///
+/// A driver forwards the pair verbatim to the bus driver that owns config space
+/// and never interprets it: the kernel owns the vector namespace but never
+/// touches the device, and the bus driver touches the device but does not
+/// allocate vectors.
+pub const MsiDesc = extern struct {
+    address_lo: u32 = 0,
+    address_hi: u32 = 0,
+    data: u32 = 0,
+    vector: u32 = 0,
+};
+
+/// Allocate one MSI vector and bind it to `endpoint`, which must be owned by
+/// the caller. Returns the descriptor to hand to the bus driver, or null on
+/// failure. Requires the `irq.route` capability.
+///
+/// Unlike an IRQ line an MSI vector is edge-triggered and exclusively owned, so
+/// its events need no `irqAck` and the vector is never masked -- none of the
+/// shared-line ceremony applies. Events arrive as MSI_EVENT_TYPE with arg0 set
+/// to the table entry the driver programmed, i.e. which of its own interrupt
+/// sources fired.
+pub fn msiAlloc(endpoint: i32) ?MsiDesc {
+    var desc = MsiDesc{};
+    if (abi.msi_alloc(endpoint, @intCast(@intFromPtr(&desc))) != 0) return null;
+    return desc;
+}
+
+/// Release an MSI vector allocated by this process. Mask the device's table
+/// entry first (the bus driver's unbind), or the device can raise a vector that
+/// has been handed to someone else.
+pub fn msiFree(vector: u32) void {
+    _ = abi.msi_free(@intCast(vector));
+}
+
+/// IPC message type the kernel sends for an MSI event, mirroring
+/// WASMOS_IPC_MSI_EVENT_TYPE.
+pub const MSI_EVENT_TYPE: i32 = 0xFF01;
 
 fn copyName(dst: []u8, name: []const u8) void {
     var i: usize = 0;

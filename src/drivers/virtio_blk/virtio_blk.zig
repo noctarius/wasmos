@@ -32,6 +32,19 @@
 //! queue depth and is the obvious thing to lift later; it also means every
 //! completion the used ring reports belongs to the request being waited on.
 //!
+//! Interrupts
+//! ----------
+//! Completion is message-signalled where the device and `pci-bus` allow it. That
+//! is not a latency optimisation: this driver would otherwise be the system's
+//! only INTx consumer, on a line it shares with the PIIX4 power-management
+//! bridge, and an assertion nobody services re-fires on every unmask. An MSI-X
+//! vector is edge-triggered and nobody else's. INTx routing remains as the
+//! fallback for a device or bus service that cannot provide one.
+//!
+//! Enabling MSI-X inserts two vector registers at 0x14/0x16 and SHIFTS the
+//! device-specific configuration from 0x14 to 0x18, which is why the capacity
+//! read goes through `configBase()` rather than a constant.
+//!
 //! Service identity
 //! ----------------
 //! Registered as the concrete name "virtio-blk" under the virtual class
@@ -43,6 +56,11 @@ const driver = @import("driver.zig");
 const vring = @import("vring.zig");
 const op = @import("wasmos_opcodes.zig");
 const status = @import("wasmos_status.zig");
+
+/// `WASMOS_PCI_MSI_KIND_MSIX`, as PCI_IPC_MSI_QUERY reports it in arg0. MSI-X
+/// wins when a device offers both: it addresses each vector independently,
+/// where plain MSI needs one aligned block of consecutive vectors.
+const PCI_MSI_KIND_MSIX: i32 = 2;
 
 /// 0x1AF4 is the Red Hat / virtio vendor id. Both device ids below identify a
 /// block device and are accepted interchangeably: 0x1001 is the transitional
@@ -68,10 +86,21 @@ const REG_QUEUE_NOTIFY: u16 = 0x10;
 const REG_DEVICE_STATUS: u16 = 0x12;
 /// Reading this de-asserts the device's level-triggered INTx line.
 const REG_ISR_STATUS: u16 = 0x13;
-/// Base of `struct virtio_blk_config`.
-const REG_DEVICE_CONFIG: u16 = 0x14;
+/// Vector-selection registers, which EXIST ONLY once MSI-X is enabled, and the
+/// value the device reads back when it refuses a binding.
+const REG_MSIX_CONFIG_VECTOR: u16 = 0x14;
+const REG_MSIX_QUEUE_VECTOR: u16 = 0x16;
+const MSIX_NO_VECTOR: u16 = 0xFFFF;
+/// One interrupt source, one table entry: the request queue's completion.
+const MSIX_ENTRY_QUEUE: u16 = 0;
 
-/// Fields of `struct virtio_blk_config`, as offsets from REG_DEVICE_CONFIG.
+/// Base of `struct virtio_blk_config`. Enabling MSI-X inserts the two vector
+/// registers above at 0x14 and pushes the configuration to 0x18, so the base is
+/// a function of the interrupt mode, never a constant -- see `configBase`.
+const REG_DEVICE_CONFIG_INTX: u16 = 0x14;
+const REG_DEVICE_CONFIG_MSIX: u16 = 0x18;
+
+/// Fields of `struct virtio_blk_config`, as offsets from `configBase()`.
 /// `capacity` is the device size in 512-byte sectors and is the only field this
 /// driver reads unconditionally -- the rest are gated on feature bits.
 const CFG_CAPACITY_LO: u16 = 0x00;
@@ -159,6 +188,11 @@ const Device = struct {
     /// True when the device reports more sectors than an IPC argument can
     /// carry, so IDENTIFY reports a truncated capacity.
     capacity_truncated: bool = false,
+    /// True once `pci-bus` has programmed the device's MSI-X table entry. The
+    /// device then no longer drives INTx, and the register layout has shifted.
+    msix_enabled: bool = false,
+    /// Kernel vector behind table entry MSIX_ENTRY_QUEUE.
+    msix_vector: u32 = 0,
 };
 
 var g_dev: Device = .{};
@@ -169,6 +203,9 @@ var g_select: i32 = -1;
 var g_irq_endpoint: i32 = -1;
 var g_irq_select: i32 = -1;
 var g_irq_routed: bool = false;
+/// `pci-bus` owns PCI config space and is the only party that can program this
+/// device's MSI-X table; its absence just means the INTx fallback.
+var g_pci_endpoint: i32 = -1;
 
 var g_queue: vring.Queue = undefined;
 var g_queue_ready: bool = false;
@@ -188,11 +225,25 @@ fn setStatusBit(bits: u8) void {
     g_dev.ports.out8(REG_DEVICE_STATUS, bits);
 }
 
+/// Offset of `struct virtio_blk_config`, which moves when MSI-X is enabled.
+/// Read it through here rather than caching it: it is only correct after the
+/// MSI-X binding has either succeeded or failed.
+fn configBase() u16 {
+    return if (g_dev.msix_enabled) REG_DEVICE_CONFIG_MSIX else REG_DEVICE_CONFIG_INTX;
+}
+
+/// True while completions arrive as IPC on the interrupt endpoint, by either
+/// mechanism -- which is what decides whether the completion wait parks on that
+/// endpoint or on the service one.
+fn irqActive() bool {
+    return g_irq_routed or g_dev.msix_enabled;
+}
+
 /// Read the device's 64-bit capacity as two 32-bit halves, which is how a
 /// 32-bit guest must address it: no 64-bit value crosses a host-call boundary.
 fn readCapacity() u64 {
-    const lo: u64 = g_dev.ports.in32(REG_DEVICE_CONFIG + CFG_CAPACITY_LO);
-    const hi: u64 = g_dev.ports.in32(REG_DEVICE_CONFIG + CFG_CAPACITY_HI);
+    const lo: u64 = g_dev.ports.in32(configBase() + CFG_CAPACITY_LO);
+    const hi: u64 = g_dev.ports.in32(configBase() + CFG_CAPACITY_HI);
     return (hi << 32) | lo;
 }
 
@@ -242,6 +293,46 @@ fn probeFromStartupArgs() bool {
 
 // --- bring-up --------------------------------------------------------------
 
+/// Take one kernel MSI vector for the completion interrupt and have `pci-bus`
+/// program it into the device's MSI-X table.
+///
+/// The work is split three ways on purpose: the kernel owns the vector
+/// namespace but never touches the device, `pci-bus` owns config space but
+/// allocates no vectors, and this driver owns neither and only carries the
+/// opaque address/data pair between them.
+///
+/// Returns true when the vector is bound. Every failure is non-fatal -- the
+/// caller falls back to INTx.
+fn setupMsix() bool {
+    if (g_pci_endpoint < 0 or g_irq_endpoint < 0) return false;
+    const reply_ep = driver.privateReplyEndpoint();
+    if (reply_ep < 0) return false;
+
+    const bdf: i32 = @intCast((g_dev.bus << 8) | (g_dev.slot << 3) | g_dev.function);
+    const query = driver.call(g_pci_endpoint, reply_ep, op.PCI_IPC_MSI_QUERY, 1, bdf, 0, 0, 0) orelse return false;
+    if (query.type != op.PCI_IPC_RESP or query.arg0 != PCI_MSI_KIND_MSIX or query.arg1 < 1) return false;
+
+    const desc = driver.msiAlloc(g_irq_endpoint) orelse return false;
+    const entry: i32 = @intCast((@as(u32, @intCast(bdf)) << 8) | MSIX_ENTRY_QUEUE);
+    const bind = driver.call(
+        g_pci_endpoint,
+        reply_ep,
+        op.PCI_IPC_MSI_BIND,
+        2,
+        entry,
+        @bitCast(desc.address_lo),
+        @bitCast(desc.address_hi),
+        @bitCast(desc.data),
+    );
+    if (bind == null or bind.?.type != op.PCI_IPC_RESP) {
+        driver.msiFree(desc.vector);
+        return false;
+    }
+    g_dev.msix_vector = desc.vector;
+    g_dev.msix_enabled = true;
+    return true;
+}
+
 /// Configure the request virtqueue over a pinned DMA region and program its
 /// page frame number into the device. Returns the queue size, or null on
 /// failure.
@@ -260,6 +351,17 @@ fn setupQueue() ?u16 {
     g_queue = queue;
     g_queue_ready = true;
     g_dev.ports.out32(REG_QUEUE_PFN, @intCast(region.phys >> 12));
+
+    // Bind the request queue to its MSI-X entry. REG_QUEUE_SELECT still points
+    // at this queue, and virtio reports a refusal through the readback rather
+    // than any status bit, so the write is verified rather than assumed.
+    if (g_dev.msix_enabled) {
+        g_dev.ports.out16(REG_MSIX_QUEUE_VECTOR, MSIX_ENTRY_QUEUE);
+        if (g_dev.ports.in16(REG_MSIX_QUEUE_VECTOR) == MSIX_NO_VECTOR) {
+            driver.log("[virtio-blk] msix queue vector refused");
+            return null;
+        }
+    }
     return qsize;
 }
 
@@ -283,6 +385,16 @@ fn initializeDevice() bool {
     const device_features = g_dev.ports.in32(REG_DEVICE_FEATURES);
     g_dev.read_only = (device_features & FEATURE_RO) != 0;
     g_dev.ports.out32(REG_DRIVER_FEATURES, device_features & FEATURE_RO);
+
+    // Before queue setup: the queue's vector register only exists once MSI-X is
+    // enabled, and setupQueue is what writes it.
+    if (setupMsix()) {
+        var line = driver.Line{};
+        _ = line.str("[virtio-blk] msix enabled vector=").dec(g_dev.msix_vector);
+        line.end();
+    } else {
+        driver.log("[virtio-blk] msix unavailable; falling back to intx");
+    }
 
     const qsize = setupQueue() orelse {
         setStatusBit(state | STATUS_FAILED);
@@ -312,7 +424,7 @@ fn initializeDevice() bool {
     _ = line.str(" capacity=").dec(g_dev.capacity_sectors).str(" sectors");
     if (g_dev.read_only) _ = line.str(" read-only");
     if ((device_features & FEATURE_BLK_SIZE) != 0) {
-        _ = line.str(" blk_size=").dec(g_dev.ports.in32(REG_DEVICE_CONFIG + CFG_BLK_SIZE));
+        _ = line.str(" blk_size=").dec(g_dev.ports.in32(configBase() + CFG_BLK_SIZE));
     }
     line.end();
     if (g_dev.capacity_truncated) {
@@ -329,10 +441,15 @@ fn initializeDevice() bool {
 /// sharing it has acked. A PCI INTx line is shared, so an unserviced assertion
 /// here re-fires for every sharer on each unmask.
 fn serviceIrq() void {
-    if (!g_irq_routed) return;
+    if (!irqActive()) return;
     // Several events may have queued; the payload only names the source and the
     // work is the same for each.
     while (driver.drain(g_irq_endpoint)) {}
+    if (g_dev.msix_enabled) {
+        // Nothing to de-assert and nothing to ack: the vector is edge-triggered
+        // and exclusive to this device, so none of the ceremony below applies.
+        return;
+    }
     // Reading ISR is itself the de-assertion; the value is not wanted.
     _ = g_dev.ports.in8(REG_ISR_STATUS);
     driver.irqAck(g_dev.irq);
@@ -390,7 +507,7 @@ fn submit(req_type: u32, sector: u64, data_phys: u64, data_len: u32) i32 {
         // it cannot swallow a block request. A wait that FAILS returns
         // immediately, so looping on it would spin rather than block: give up
         // on the completion and let the timeout path run.
-        const parked = if (g_irq_routed)
+        const parked = if (irqActive())
             driver.selectWait(g_irq_select, IRQ_WAIT_MS)
         else
             driver.selectWait(g_select, IRQ_WAIT_MS);
@@ -587,6 +704,13 @@ pub export fn initialize() callconv(.c) i32 {
         g_irq_select = -1;
     }
 
+    // Resolved before device bring-up, because that is where the MSI-X vector is
+    // bound. Its absence is not fatal: bring-up falls back to INTx.
+    g_pci_endpoint = driver.lookupService(proc_endpoint, "pci", 16, 1024) orelse blk: {
+        driver.log("[virtio-blk] pci service unavailable; msi-x disabled");
+        break :blk -1;
+    };
+
     if (!probeFromStartupArgs()) {
         driver.log("[virtio-blk] startup args name no virtio-blk device");
         return status.WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY;
@@ -601,12 +725,14 @@ pub export fn initialize() callconv(.c) i32 {
         return status.WASMOS_ERR_DRIVER_DEVICE_INIT;
     }
 
-    // Routing the line is what keeps it from re-firing forever: the device
-    // asserts on every completion and nothing else clears it. Failure is not
-    // fatal -- the completion wait falls back to its timed safety net.
-    // TODO: bind an MSI-X vector through pci-bus as virtio-rng does, so this
-    // device stops sharing an INTx line with every other PCI device on it.
-    if (g_dev.irq < 16 and g_irq_endpoint >= 0) {
+    // INTx fallback only. With MSI-X bound the device's INTx is disabled, so
+    // routing the shared line would merely subscribe this driver to other
+    // devices' interrupts, which is exactly what MSI-X exists to avoid.
+    //
+    // Without it, routing is what keeps the line from re-firing forever: the
+    // device asserts on every completion and nothing else clears it. Failure is
+    // not fatal -- the completion wait falls back to its timed safety net.
+    if (!g_dev.msix_enabled and g_dev.irq < 16 and g_irq_endpoint >= 0) {
         if (driver.irqRoute(g_dev.irq, g_irq_endpoint)) {
             g_irq_routed = true;
             var line = driver.Line{};

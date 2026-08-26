@@ -891,34 +891,47 @@ tail.
   the ceiling — but it caps any format that can, including the WFS proposal
   (`docs/WFS_WASMOS_FILE_SYSTEM.md`, section 22).
 - [ ] [BUG][P1] A spawned utility does not inherit its spawner's working
-  directory, so a relative path from one never reaches a filesystem backend.
-  `cd /wfs` then `cat hello.txt` prints "fs failed"; the backend is never asked
-  (instrumenting its resolve path logs nothing). `cat /wfs/hello.txt` works, and
-  the same relative command fails identically on the FAT mounts, so this is not
-  backend-specific.
+  directory, and a fallback in fs-manager hides it for every mount except the
+  first boot-kind one.
 
-  The mechanism exists and does not take effect. PM calls
+  `cat` is a separate process. Its fs-manager client state has
+  `backend_endpoint == -1`, so a RELATIVE path is routed by
+  `resolve_backend_for_state`, which falls back to
+  `backend_first_of_kind(FSMGR_BACKEND_BOOT)`
+  (`src/services/fs_manager/fs_manager.c`). For `/boot` and `/init` that fallback
+  happens to be the correct backend, so `cd /boot; cat write_smoke.txt` works —
+  BY ACCIDENT, not because anything was inherited. For any other mount the
+  request goes to the wrong backend, which answers NOT_FOUND; the real backend is
+  never asked (instrumenting fs_wfs's resolve path logs nothing).
+
+  That fallback is the missing check: it turns "this client has no working
+  directory" into a plausible answer instead of an error, so the broken
+  inheritance stayed invisible for as long as there was only one non-root mount.
+
+  The inheritance mechanism exists and does not take effect: PM calls
   `pm_inherit_child_cwd` on every spawn path
-  (`src/kernel/process_manager_spawn.c`), which sends `FSMGR_IPC_CLONE_CWD_REQ`
-  with the parent and child CONTEXT ids; fs-manager copies `mount`,
-  `backend_endpoint` and `mount_depth` between client states
-  (`src/services/fs_manager/fs_manager.c:800`). `client_state()` allocates on
-  demand, so a child with no slot yet is not the explanation. Candidates not yet
-  eliminated: the send is fire-and-forget and its result discarded
+  (`src/kernel/process_manager_spawn.c`), sending `FSMGR_IPC_CLONE_CWD_REQ` with
+  parent and child CONTEXT ids, and fs-manager copies `mount`,
+  `backend_endpoint`, `mount_depth` between client states. `client_state()`
+  allocates on demand, so a missing slot is not the explanation. Still to
+  eliminate: the send is fire-and-forget with its result discarded
   (`(void)pm_inherit_child_cwd(...)`), PM's `fs_ctrl_endpoint` may be unset — in
-  which case the helper returns success without sending anything — or
-  fs-manager's authorization check (`source_owner != proc_owner`) may reject it.
-  Instrument the fs-manager handler first: it either never runs or refuses, and
-  which one it is decides the fix.
+  which case the helper returns success without sending — and fs-manager may
+  refuse on its `source_owner != proc_owner` authorization check. Instrument the
+  fs-manager handler: it either never runs or refuses.
 
-  Note also that the clone copies only fs-manager's view (which mount, how deep),
-  NOT the backend's own per-directory cwd. Both fs_fat and fs_wfs track that
-  themselves, so even a working clone would land a child at the mount root rather
-  than in the parent's actual directory. Fixing inheritance properly means
-  carrying the directory too.
+  Second layer, independent of the above: the clone copies only fs-manager's view
+  — which mount, how deep — and NOT the backend's own per-directory cwd, which
+  fs_fat, fs_init and fs_wfs each track themselves. So even a working clone lands
+  a child at the mount ROOT rather than in the parent's actual directory. A
+  spawner sitting in /wfs/docs would hand its child /wfs. Cloning the full VFS
+  path, rather than a (mount, depth) pair, is what actually expresses the intent.
 
+  Tests: `tests/test_fs_open_smoke.py` covers `cat` on the FAT boot volume both
+  absolutely and relatively (both pass today — the relative one via the
+  fallback), and they are the control that made this diagnosable.
   `tests/test_wfs_mount_read.py::test_reading_a_file_by_relative_name` is marked
-  expectedFailure against this and will report an unexpected success once fixed.
+  expectedFailure against this and reports an unexpected success once fixed.
 
 - [ ] [BUG][P2] `FS_IPC_CHDIR_REQ` packs its target into arg0..arg3, capping a
   path component at 15 bytes plus a NUL (`wasmos_sys_ipc_unpack_name16`). Every

@@ -131,15 +131,15 @@ class WfsMountReadTest(unittest.TestCase):
 
         EXPECTED FAILURE, for a reason outside this driver: a spawned utility
         does not inherit its spawner's working directory. `cat` is a separate
-        process, and fs-manager gives a new client the virtual root, so a
-        relative path never reaches any backend — the WFS driver is not even
-        asked (no resolve is logged). The same command fails identically on the
-        FAT mounts, so this is not specific to WFS.
+        process whose fs-manager state carries no backend, so a relative path is
+        routed by resolve_backend_for_state — which falls back to the first
+        boot-kind backend. On /boot and /init that fallback is the right backend
+        and relative `cat` works BY ACCIDENT; here it sends the request to the
+        wrong backend, which answers NOT_FOUND, and this driver is never asked.
 
-        The mechanism exists and does not work: PM sends FSMGR_IPC_CLONE_CWD_REQ
-        on every spawn path (process_manager_spawn.c) and fs-manager copies
-        mount/backend_endpoint/mount_depth (fs_manager.c). Tracked in
-        docs/TASKS.md.
+        tests/test_fs_open_smoke.py holds the control: `cat` on the FAT boot
+        volume passes both absolutely and relatively. Tracked in docs/TASKS.md
+        with the mechanism and what is left to eliminate.
 
         The assertion is left exactly as strict as it should be. When cwd
         inheritance is fixed this turns into an unexpected success, which fails

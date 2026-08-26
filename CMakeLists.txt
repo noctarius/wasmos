@@ -143,6 +143,9 @@ set(WASM_VIRTIO_SERIAL_APP ${BUILD_DIR}/virtio_serial.wap)
 set(WASM_VIRTIO_RNG_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_rng/virtio_rng.c)
 set(WASM_VIRTIO_RNG_DRIVER_WASM ${BUILD_DIR}/virtio_rng.wasm)
 set(WASM_VIRTIO_RNG_APP ${BUILD_DIR}/virtio_rng.wap)
+set(WASM_VIRTIO_BLK_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_blk/virtio_blk.zig)
+set(WASM_VIRTIO_BLK_DRIVER_WASM ${BUILD_DIR}/virtio_blk.wasm)
+set(WASM_VIRTIO_BLK_APP ${BUILD_DIR}/virtio_blk.wap)
 set(WASM_FRAMEBUFFER_APP ${BUILD_DIR}/framebuffer.wap)
 set(NATIVE_FRAMEBUFFER_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer/framebuffer_native.c)
 set(NATIVE_FRAMEBUFFER_RENDER_SRC ${DRIVER_WASM_DIR}/framebuffer/render.c)
@@ -230,6 +233,9 @@ set(WASM_IP_APP ${BUILD_DIR}/ip.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
+set(WASM_BLKINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/blkinfo/blkinfo.c)
+set(WASM_BLKINFO_WASM ${BUILD_DIR}/blkinfo.wasm)
+set(WASM_BLKINFO_APP ${BUILD_DIR}/blkinfo.wap)
 set(WASM_CURL_SRC ${CMAKE_SOURCE_DIR}/src/utils/curl/curl.c)
 set(WASM_CURL_WASM ${BUILD_DIR}/curl.wasm)
 set(WASM_CURL_APP ${BUILD_DIR}/curl.wap)
@@ -1614,6 +1620,7 @@ endif ()
 if (TARGET host_util)
   set(HOST_UTIL_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
   )
 endif ()
 if (TARGET curl_util)
@@ -1761,6 +1768,9 @@ if (ZIG_AVAILABLE)
   set(ZIG_CALCULATOR_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CALCULATOR_APP} ${BUILD_DIR}/esp/apps/calculator.wap
   )
+  set(VIRTIO_BLK_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_BLK_APP} ${BUILD_DIR}/esp/system/drivers/virtio_blk.wap
+  )
 endif ()
 
 set(WASMOS_ESP_POPULATE_CMDS
@@ -1789,6 +1799,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_NET_APP} ${BUILD_DIR}/esp/system/drivers/virtio_net.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_RNG_APP} ${BUILD_DIR}/esp/system/drivers/virtio_rng.wap
+  ${VIRTIO_BLK_COPY_CMD}
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}

@@ -817,10 +817,34 @@ linked feature documents for rationale and rollout plans.
 
 - PCI and ACPI bus services enumerate devices for policy-driven startup. Active
   device coverage includes ATA, FAT, framebuffer, PS/2 keyboard/mouse, serial,
-  RTC, `virtio-serial`, `virtio-rng`, and `virtio-net`.
+  RTC, `virtio-serial`, `virtio-rng`, `virtio-net`, and `virtio-blk`.
 - Capability policy covers I/O ports, IRQs, shared memory, and DMA in both
   runtimes. Driver-owned pinned DMA regions and a transport-neutral `vring`
-  core support virtqueues.
+  core support virtqueues. The `vring` core allocates and releases chained
+  descriptors (`vring_alloc_chain` / `vring_free_chain`, bounded by
+  `VRING_MAX_CHAIN`), which is what a request spanning several buffers needs.
+- `virtio-blk` is the first WASM device driver written in Zig. It takes its
+  device identity from the device-manager startup args, negotiates the legacy
+  PCI device, and serves `BLOCK_IPC_IDENTIFY_REQ`, `BLOCK_IPC_READ_REQ`,
+  `BLOCK_IPC_WRITE_REQ` and `BLOCK_IPC_READ_ZC_REQ` over a single requestq. A
+  request is a three-descriptor chain (header, data, status byte) whose data
+  descriptor points straight at the CALLER's block buffer or mapped borrow, so
+  no CPU copies the sectors. Requests are serialised one at a time and wait on
+  the routed completion interrupt. It registers the concrete name `virtio-blk`
+  under the `block` service CLASS; the plain `block` name stays with the ATA
+  driver, which holds the boot disk. Failures are reported as packed
+  `WASMOS_ERR_VIRTIO_BLK_*` codes.
+- Zig drivers reach the driver-side surface through `src/libc/zig/driver.zig`
+  (granted I/O ports, pinned DMA regions, IRQ routing, service registration and
+  the ready handshake) and `src/libc/zig/vring.zig`. The latter contains no ring
+  logic: `vring_shim.c` compiles the static-inline C core into the module and
+  re-exports it, so a Zig driver and a C driver drive a device through the same
+  implementation. The generated Zig ABI (`abi/generated/zig/`) supplies the
+  host-call signatures, opcodes and error codes.
+- `blkinfo` (`/system/utils/blkinfo`) enumerates the `block` class, reports each
+  provider's geometry, and reads a sector; `--write <lba>` overwrites that
+  sector with a pattern and reads it back, which is how the write direction is
+  exercised from the shell. It destroys the named sector on every provider.
 - `virtio-net` initializes RX/TX queues, routes its IRQ, exchanges an ARP
   self-probe through QEMU SLIRP, and supports pull plus notification-hinted RX
   delivery. The current INTx electrical configuration is incomplete, so

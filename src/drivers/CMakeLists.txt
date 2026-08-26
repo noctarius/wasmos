@@ -9,6 +9,7 @@ add_subdirectory(rtc)
 add_subdirectory(virtio_net)
 add_subdirectory(virtio_serial)
 add_subdirectory(virtio_rng)
+add_subdirectory(virtio_blk)
 add_subdirectory(framebuffer)
 add_subdirectory(framebuffer_pci)
 
@@ -27,3 +28,10 @@ add_custom_target(drivers DEPENDS
   framebuffer_pci_app
   chardev_server_app
 )
+
+# The virtio-blk driver is Zig, and wasmos_add_zig_wasm_app creates no target
+# when zig is absent, so it is attached only once the probe in its own
+# CMakeLists has found one.
+if (VIRTIO_BLK_ZIG_AVAILABLE)
+  add_dependencies(drivers virtio_blk_app)
+endif ()

@@ -13,3 +13,9 @@ SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{prog_if}=="0
 # "any" wildcard, so match on vendor/device IDs (transitional 0x1005, modern 0x1044).
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", RUN+="system/drivers/virtio_rng.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", RUN+="system/drivers/virtio_rng.wap"
+# virtio-blk presents PCI class 0x01 / subclass 0x00, which the ATA rule's
+# 0x01/0x01 does not match; the vendor/device pair is matched anyway so a
+# non-virtio SCSI controller is not handed to this driver (transitional 0x1001,
+# modern 0x1042).
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1001", RUN+="system/drivers/virtio_blk.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1042", RUN+="system/drivers/virtio_blk.wap"

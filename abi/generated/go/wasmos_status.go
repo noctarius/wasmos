@@ -47,6 +47,7 @@ const (
 	WASMOS_ERR_DOMAIN_ENV uint16 = 22
 	WASMOS_ERR_DOMAIN_FRAMEBUFFER uint16 = 23
 	WASMOS_ERR_DOMAIN_DEVMGR uint16 = 10
+	WASMOS_ERR_DOMAIN_VIRTIO_BLK uint16 = 24
 )
 
 const WASMOS_ERR_NONE int32 = 0
@@ -251,6 +252,13 @@ const (
 	WASMOS_ERR_FRAMEBUFFER_TOO_SMALL int32 = -0x00170002 // the caller's requested mapping is smaller than the framebuffer
 	WASMOS_ERR_DEVMGR_NO_MOUNT_RULE int32 = -0x000A0001 // no block/filesystem mount rule matches the requested unit
 	WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY int32 = -0x000A0002 // unknown or unsupported device-manager query type
+	WASMOS_ERR_VIRTIO_BLK_NOT_READY int32 = -0x00180001 // no virtio-blk device was probed, or bring-up did not complete
+	WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST int32 = -0x00180002 // the request's lba, sector count, or buffer argument is unusable
+	WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST int32 = -0x00180003 // unknown or unsupported block opcode
+	WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL int32 = -0x00180004 // no descriptors are free; the request must be retried
+	WASMOS_ERR_VIRTIO_BLK_IO_ERROR int32 = -0x00180005 // the device completed the request with a non-OK virtio-blk status
+	WASMOS_ERR_VIRTIO_BLK_TIMEOUT int32 = -0x00180006 // the device never reported the request on the used ring
+	WASMOS_ERR_VIRTIO_BLK_READ_ONLY int32 = -0x00180007 // the device negotiated VIRTIO_BLK_F_RO and cannot be written
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -343,6 +351,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "framebuffer"
 	case WASMOS_ERR_DOMAIN_DEVMGR:
 		return "devmgr"
+	case WASMOS_ERR_DOMAIN_VIRTIO_BLK:
+		return "virtio_blk"
 	default:
 		return "unknown"
 	}
@@ -748,6 +758,20 @@ func WasmosStrerror(c int32) string {
 		return "no block/filesystem mount rule matches the requested unit"
 	case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY:
 		return "unknown or unsupported device-manager query type"
+	case WASMOS_ERR_VIRTIO_BLK_NOT_READY:
+		return "no virtio-blk device was probed, or bring-up did not complete"
+	case WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST:
+		return "the request's lba, sector count, or buffer argument is unusable"
+	case WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST:
+		return "unknown or unsupported block opcode"
+	case WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL:
+		return "no descriptors are free; the request must be retried"
+	case WASMOS_ERR_VIRTIO_BLK_IO_ERROR:
+		return "the device completed the request with a non-OK virtio-blk status"
+	case WASMOS_ERR_VIRTIO_BLK_TIMEOUT:
+		return "the device never reported the request on the used ring"
+	case WASMOS_ERR_VIRTIO_BLK_READ_ONLY:
+		return "the device negotiated VIRTIO_BLK_F_RO and cannot be written"
 	default:
 		return "unknown error"
 	}

@@ -36,6 +36,10 @@
  *             -> vring_get_used()   -> owned by the driver again, buffer readable
  *             -> vring_free_desc()  -> free list
  *
+ * A request spanning several buffers takes the same path through
+ * vring_alloc_chain() and vring_free_chain(), which allocate and release the
+ * whole VRING_DESC_F_NEXT chain as one unit.
+ *
  * Nothing enforces that order: publishing an index twice, or freeing one the
  * device still owns, hands the same buffer to two users. The buffer a
  * descriptor points at is likewise off-limits between publish and get_used -
@@ -185,9 +189,9 @@ static inline void vring_set_notify(vring_t* vq, void (*notify)(void* user), voi
 
 /* Allocate one descriptor for a buffer at device address buf_phys. flags is a
  * combination of VRING_DESC_F_*, with VRING_DESC_F_NEXT masked off. Returns the
- * descriptor index, or -1 if the free list is empty.
- * TODO: chained (multi-descriptor) buffers are unsupported, so a request whose
- * payload is not physically contiguous cannot be expressed.
+ * descriptor index, or -1 if the free list is empty. For a request that spans
+ * several buffers -- a virtio-blk request is a header, a data buffer and a
+ * status byte -- use vring_alloc_chain() instead.
  *
  * The returned index is the driver's until it is published; the buffer it
  * names must stay valid and untouched from vring_publish() until the matching
@@ -218,6 +222,82 @@ static inline void vring_free_desc(vring_t* vq, uint16_t head) {
     vq->desc[head].next = vq->free_head;
     vq->free_head = head;
     vq->num_free++;
+}
+
+/* One buffer of a descriptor chain. `flags` carries VRING_DESC_F_WRITE when the
+ * DEVICE writes the buffer and the driver reads it after completion, and 0 when
+ * the driver filled it for the device to read; VRING_DESC_F_NEXT is set by
+ * vring_alloc_chain() and must not be passed in. */
+typedef struct {
+    uint64_t addr;
+    uint32_t len;
+    uint16_t flags;
+} vring_buf_t;
+
+/* Longest chain vring_alloc_chain() builds and vring_free_chain() walks. The
+ * bound is what keeps a corrupted `next` link from looping the free walk
+ * forever; virtio-blk's longest chain is three. */
+#define VRING_MAX_CHAIN 8u
+
+/* Allocate one descriptor per entry of bufs[0..count) and link them into a
+ * single chain, returning the head index, or -1 when count is 0 or above
+ * VRING_MAX_CHAIN, or the free list cannot cover it. A short free list is
+ * ordinary backpressure, not an error: retry after reclaiming completions.
+ *
+ * The chain is the driver's until vring_publish(); every buffer it names must
+ * stay valid and untouched from then until the matching vring_get_used(). Free
+ * it with vring_free_chain(), never vring_free_desc() -- the latter returns only
+ * the head and leaks the rest of the chain. */
+static inline int32_t vring_alloc_chain(vring_t* vq, const vring_buf_t* bufs, uint16_t count) {
+    if (!bufs || count == 0u || count > VRING_MAX_CHAIN || vq->num_free < count)
+        return -1;
+
+    uint16_t head = vq->free_head;
+    uint16_t current = head;
+    for (uint16_t i = 0; i < count; ++i) {
+        /* Read the free-list link before overwriting it: for a non-final entry
+         * it doubles as the chain link, and for the final one it is where the
+         * free list resumes. */
+        uint16_t next = vq->desc[current].next;
+        uint16_t flags = (uint16_t)(bufs[i].flags & ~VRING_DESC_F_NEXT);
+        vq->desc[current].addr = bufs[i].addr;
+        vq->desc[current].len = bufs[i].len;
+        if (i + 1u < count) {
+            flags |= VRING_DESC_F_NEXT;
+            vq->desc[current].next = next;
+        } else {
+            vq->desc[current].next = 0;
+        }
+        vq->desc[current].flags = flags;
+        current = next;
+    }
+    /* `current` is the first descriptor the chain did not consume. The final
+     * chained descriptor's `next` was cleared above, so the free list can no
+     * longer be walked back into the chain. */
+    vq->free_head = current;
+    vq->num_free = (uint16_t)(vq->num_free - count);
+    return (int32_t)head;
+}
+
+/* Return a whole chain to the free list by walking its VRING_DESC_F_NEXT links.
+ * Legal only once the device has reported the head through vring_get_used(), or
+ * before the chain was ever published. An out-of-range head is ignored, and a
+ * link that points outside the table ends the walk: the descriptors beyond it
+ * stay out of the free list, which costs queue capacity but never corrupts it. */
+static inline void vring_free_chain(vring_t* vq, uint16_t head) {
+    if (head >= vq->num)
+        return;
+    uint16_t current = head;
+    for (uint16_t walked = 0; walked < VRING_MAX_CHAIN; ++walked) {
+        uint16_t flags = vq->desc[current].flags;
+        uint16_t next = vq->desc[current].next;
+        vq->desc[current].next = vq->free_head;
+        vq->free_head = current;
+        vq->num_free++;
+        if ((flags & VRING_DESC_F_NEXT) == 0u || next >= vq->num)
+            return;
+        current = next;
+    }
 }
 
 /* Publish a prepared descriptor to the available ring so the device can consume

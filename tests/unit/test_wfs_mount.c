@@ -18,6 +18,7 @@
 #include "wfs_crc32c.h"
 #include "wfs_format.h"
 #include "wfs_mount.h"
+#include "wfs_ops.h"
 #include "wfs_super.h"
 
 static int g_failures;
@@ -41,6 +42,14 @@ static void expect_rc(wasmos_error_code_t got, wasmos_error_code_t want, const c
                (int)got,
                wasmos_strerror(want),
                (int)want);
+    }
+}
+
+static void expect_u32_eq(uint32_t got, uint32_t want, const char* what) {
+    g_checks++;
+    if (got != want) {
+        g_failures++;
+        printf("[fail] %s: got %u, want %u\n", what, (unsigned)got, (unsigned)want);
     }
 }
 
@@ -573,6 +582,134 @@ static void test_the_highest_generation_is_preferred(void) {
            "an equal generation keeps the copy already held, so the scan order decides");
 }
 
+/* Regression: 2026-08-26-wfs-block-write-unstaged
+ *
+ * A write request names the SERVER's block buffer, so the staged block has to be
+ * copied into that buffer before the request goes out — the reverse of what
+ * wfs_block_take does for a read. wfs_block_write_begin submitted the request
+ * without staging anything, so a write persisted whatever the shared buffer
+ * happened to hold. Nothing had exercised the write path yet, which is why it
+ * went unnoticed; the allocator is its first caller.
+ *
+ * Driven through a task because the block layer is only reachable that way: a
+ * write is a future to await like any other. */
+typedef enum {
+    RT_PC_START = 0,
+    RT_PC_WRITTEN,
+    RT_PC_REREAD,
+} rt_pc_t;
+
+typedef struct {
+    rt_pc_t pc;
+    uint32_t block;
+    uint8_t pattern;
+    wasmos_error_code_t err;
+} rt_ctx_t;
+
+static int32_t roundtrip_task(void* user, uintptr_t* out_value) {
+    rt_ctx_t* ctx = (rt_ctx_t*)user;
+    wfs_block_t* b = wfs_stub_block();
+    uint32_t i;
+
+    (void)out_value;
+
+    switch (ctx->pc) {
+    case RT_PC_START:
+        /* Fill the staged block with a position-dependent pattern, so a write
+         * that lands truncated or shifted fails rather than matching. */
+        for (i = 0; i < wfs_stub_block_size; ++i) {
+            wfs_block_data(b)[i] = (uint8_t)(ctx->pattern + (uint8_t)(i & 0xFFu));
+        }
+        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->block), RT_PC_WRITTEN);
+        /* fall through */
+
+    case RT_PC_WRITTEN:
+        ctx->err = wfs_block_take(b);
+        if (ctx->err != WASMOS_ERR_NONE) {
+            return (int32_t)ctx->err;
+        }
+        /* Drop the staged copy: without this the re-read is a cache hit and the
+         * case would compare the block against itself in memory. */
+        wfs_block_invalidate(b);
+        WFS_AWAIT(ctx, wfs_block_read_begin(b, ctx->block), RT_PC_REREAD);
+        /* fall through */
+
+    case RT_PC_REREAD:
+        ctx->err = wfs_block_take(b);
+        return (int32_t)ctx->err;
+
+    default:
+        return (int32_t)WASMOS_ERR_FS_CORRUPT;
+    }
+}
+
+static void test_a_written_block_reads_back(void) {
+    wfs_mount_ctx_t ctx;
+    wfs_volume_t vol;
+    wasmos_wasm_coroutine_t task;
+    rt_ctx_t rt;
+    uint32_t mismatches = 0u;
+    uint32_t i;
+    uint32_t target;
+
+    if (build_volume(VOL_16M, 4096u) != 0) {
+        expect(0, "build a volume");
+        return;
+    }
+    expect(run_mount(&ctx, &vol) == 0, "mount");
+
+    /* A block past every metadata region, so the case cannot corrupt the volume
+     * it is running on. */
+    target = vol.super.total_blocks - 1u;
+
+    memset(&rt, 0, sizeof(rt));
+    rt.block = target;
+    rt.pattern = 0x40u;
+    expect(wfs_stub_run_task(&task, roundtrip_task, &rt) == 0, "the write and re-read complete");
+
+    for (i = 0; i < wfs_stub_block_size; ++i) {
+        if (wfs_block_data(wfs_stub_block())[i] != (uint8_t)(0x40u + (uint8_t)(i & 0xFFu))) {
+            mismatches++;
+        }
+    }
+    expect_u32_eq(mismatches, 0u, "every byte written reads back");
+
+    wfs_stub_teardown();
+}
+
+/* A write whose staging into the server's buffer fails sends no request, so
+ * wfs_block_write_begin has nothing to hand back. That NULL must not pass for a
+ * cache hit: the caller awaits nothing, calls take, and has to be told the write
+ * did not happen. Reporting success there would leave a caller believing a block
+ * it never wrote is on the device. */
+static void test_a_write_that_cannot_be_staged_is_not_a_success(void) {
+    wfs_mount_ctx_t ctx;
+    wfs_volume_t vol;
+    wasmos_wasm_coroutine_t task;
+    rt_ctx_t rt;
+    uint32_t before;
+
+    if (build_volume(VOL_16M, 4096u) != 0) {
+        expect(0, "build a volume");
+        return;
+    }
+    expect(run_mount(&ctx, &vol) == 0, "mount");
+
+    before = wfs_stub_req_count;
+    wfs_stub_fail_stage = 1;
+
+    memset(&rt, 0, sizeof(rt));
+    rt.block = vol.super.total_blocks - 1u;
+    rt.pattern = 0x11u;
+    expect_rc((wasmos_error_code_t)wfs_stub_run_task(&task, roundtrip_task, &rt),
+              WASMOS_ERR_FS_BUFFER,
+              "the task fails with the staging error");
+    expect_u32_eq(wfs_stub_req_count, before, "and no request reached the device");
+
+    wfs_stub_fail_stage = 0;
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_mount_reads_a_volume_mkfs_wrote),
     WASMOS_TEST_CASE(test_mount_requests_exactly_the_blocks_it_should),
@@ -592,6 +729,8 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_volume_with_no_backup_reports_the_primary_failure),
     WASMOS_TEST_CASE(test_a_damaged_backup_is_not_adopted),
     WASMOS_TEST_CASE(test_the_highest_generation_is_preferred),
+    WASMOS_TEST_CASE(test_a_written_block_reads_back),
+    WASMOS_TEST_CASE(test_a_write_that_cannot_be_staged_is_not_a_success),
 };
 
 int main(void) {

@@ -136,7 +136,8 @@ set(WASM_WFS_DRIVER_SRC
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_fd.c)
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_fd.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c)
 set(WASM_WFS_DRIVER_WASM ${BUILD_DIR}/fs_wfs.wasm)
 set(WASM_WFS_APP ${BUILD_DIR}/fs_wfs.wap)
 set(WASM_INITFS_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_init/fs_init.c)
@@ -2499,6 +2500,15 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_extent
   COMMAND ${BUILD_DIR}/test_wfs_extent
+  # The allocation bitmaps. Pure: one bitmap block, no device and no runtime, so
+  # the allocation policy is tested without an image under it.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_bitmap.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+          -o ${BUILD_DIR}/test_wfs_bitmap
+  COMMAND ${BUILD_DIR}/test_wfs_bitmap
   # The directory scan. Directory blocks are laid out by the test, because
   # mkfs_wfs builds only an empty root; the extent walk is linked in because a
   # directory's blocks are reached through it like any other file's.
@@ -3771,6 +3781,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_populate.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_read.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_path.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_bitmap.c
     ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c)
 
 # The scheduler host tests drive the REAL kernel sources, so they must see the

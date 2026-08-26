@@ -43,8 +43,16 @@ extern uint32_t wfs_stub_last_sectors;
 extern int wfs_stub_fail_next;
 /* Non-zero makes wasmos_ipc_send report that failure instead of sending. */
 extern int wfs_stub_send_status;
+/* Fail the next staging copy into the server's block buffer, so a write cannot
+ * be sent. Cleared once it fires. */
+extern int wfs_stub_fail_stage;
 
 wfs_block_t* wfs_stub_block(void);
+
+/* The driver -> server direction of the block buffer. Declared here because the
+ * suites reach it through this fixture rather than through a hostcall header off
+ * wasm. */
+int32_t wasmos_block_buffer_write(int32_t phys, int32_t src, int32_t len, int32_t offset);
 
 /* The sink that writes into the fixture's image. Exposed so a test can re-format
  * the volume in place — with a tree, say — after wfs_stub_build_volume has

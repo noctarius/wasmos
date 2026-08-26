@@ -88,6 +88,36 @@ int32_t wasmos_block_buffer_copy(int32_t phys, int32_t dst, int32_t len, int32_t
     return 0;
 }
 
+/* The server's block buffer, which a write must be staged INTO before the
+ * request goes out. Reads bypass it: wasmos_block_buffer_copy above serves them
+ * straight out of the image, which is what a real server filling the buffer by
+ * physical address looks like from the driver's side.
+ *
+ * Kept separate from the image so a write that never stages anything is VISIBLE:
+ * it persists whatever this holds, not the bytes the driver meant to write. */
+static uint8_t g_srv_buf[WFS_BLOCK_SIZE_MAX];
+
+int wfs_stub_fail_stage;
+
+/* hostcalls.yaml `block_buffer_write`: the caller's linear memory into the block
+ * buffer. The reverse of block_buffer_copy, and what stages a write. */
+int32_t wasmos_block_buffer_write(int32_t phys, int32_t src, int32_t len, int32_t offset) {
+    if (wfs_stub_fail_stage) {
+        wfs_stub_fail_stage = 0;
+        return -1;
+    }
+    if (phys != WFS_STUB_BUF_ID || offset != 0 || len <= 0 || (uint32_t)len > sizeof(g_srv_buf)) {
+        return -1;
+    }
+    /* Same truncation argument as block_buffer_copy: the address is checked
+     * against the driver's own buffer, and the copy uses the real pointer. */
+    if (src != addr_cast(int32_t, g_blk.data)) {
+        return -1;
+    }
+    memcpy(g_srv_buf, g_blk.data, (size_t)len);
+    return 0;
+}
+
 /* ---- the fake server ---------------------------------------------------- */
 
 int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32_t request_id,
@@ -126,8 +156,17 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
         wfs_stub_fail_next = 0;
         g_queued.type = BLOCK_IPC_ERROR;
         g_queued.arg0 = WASMOS_ERR_FS_IO;
+    } else if (type == BLOCK_IPC_WRITE_REQ) {
+        /* Persist what the driver staged, so a write is observable in the image
+         * and a write that staged nothing shows up as the wrong bytes rather
+         * than as a success. */
+        memcpy(wfs_stub_image + (size_t)block * wfs_stub_block_size,
+               g_srv_buf,
+               (size_t)wfs_stub_block_size);
+        g_queued.type = BLOCK_IPC_WRITE_RESP;
+        g_queued.arg1 = (int32_t)sectors;
     } else {
-        g_queued.type = (type == BLOCK_IPC_WRITE_REQ) ? BLOCK_IPC_WRITE_RESP : BLOCK_IPC_READ_RESP;
+        g_queued.type = BLOCK_IPC_READ_RESP;
         g_queued.arg1 = (int32_t)sectors;
     }
     g_queued_ready = 1;

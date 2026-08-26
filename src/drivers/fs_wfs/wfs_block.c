@@ -94,12 +94,27 @@ wasmos_future_t* wfs_block_write_begin(wfs_block_t* b, uint32_t block) {
     if (b->in_flight) {
         return 0;
     }
+    /* A write request names the SERVER's buffer, so the staged block has to be
+     * copied into it first -- the reverse of the copy wfs_block_take does for a
+     * read. Without this the server persists whatever that buffer already held.
+     * Refusing here rather than submitting is what keeps a failed stage from
+     * writing the wrong bytes to a real block. */
+    if (wasmos_block_buffer_write(
+            b->buf_id, addr_cast(int32_t, b->data), (int32_t)b->block_size, 0) != 0) {
+        b->stage_failed = 1u;
+        wfs_block_invalidate(b);
+        return 0;
+    }
     return submit(b, block, 1);
 }
 
 wasmos_error_code_t wfs_block_take(wfs_block_t* b) {
     const wasmos_ipc_message_t* reply;
 
+    if (b->stage_failed) {
+        b->stage_failed = 0u;
+        return WASMOS_ERR_FS_BUFFER;
+    }
     if (!b->in_flight) {
         return WASMOS_ERR_NONE; /* the caller took the cache-hit path */
     }

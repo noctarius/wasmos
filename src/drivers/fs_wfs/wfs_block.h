@@ -50,6 +50,11 @@ typedef struct {
     wasmos_sys_wasm_ipc_future_t op;
     uint32_t pending_block;
     uint8_t in_flight;
+    /* A write whose staging into the server's buffer failed, so no request was
+     * sent. Recorded rather than returned, because a NULL future from a begin
+     * means "nothing to await" and would otherwise let a write that never
+     * happened read back as a success at the take. */
+    uint8_t stage_failed;
 } wfs_block_t;
 
 /* The staged block. Valid only until the next await. */
@@ -81,7 +86,12 @@ void wfs_block_invalidate(wfs_block_t* b);
  */
 wasmos_future_t* wfs_block_read_begin(wfs_block_t* b, uint32_t block);
 
-/* Begin writing the staged buffer to `block`. Always returns a future. */
+/* Begin writing the staged buffer to `block`.
+ *
+ * Returns the future to await, or NULL when the block could not be staged into
+ * the server's buffer and no request was sent. A NULL means the caller has
+ * nothing to await, NOT that the write succeeded: wfs_block_take() reports the
+ * failure, so the normal await-then-take sequence is correct either way. */
 wasmos_future_t* wfs_block_write_begin(wfs_block_t* b, uint32_t block);
 
 /* Consume the settled request. On success the staged buffer holds `block` and
@@ -90,7 +100,8 @@ wasmos_future_t* wfs_block_write_begin(wfs_block_t* b, uint32_t block);
  *
  * Returns WASMOS_ERR_NONE or a packed code. Calling this with nothing in flight
  * returns WASMOS_ERR_NONE, so a step that took the cache-hit path may call it
- * unconditionally.
+ * unconditionally -- except after a write whose staging failed, which is
+ * reported here precisely so it cannot pass for a cache hit.
  */
 wasmos_error_code_t wfs_block_take(wfs_block_t* b);
 

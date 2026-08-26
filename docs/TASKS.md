@@ -890,6 +890,36 @@ tail.
   staged in a transfer buffer. Blocks no current backend — FAT12/16 cannot reach
   the ceiling — but it caps any format that can, including the WFS proposal
   (`docs/WFS_WASMOS_FILE_SYSTEM.md`, section 22).
+- [ ] [BUG][P1] A spawned utility does not inherit its spawner's working
+  directory, so a relative path from one never reaches a filesystem backend.
+  `cd /wfs` then `cat hello.txt` prints "fs failed"; the backend is never asked
+  (instrumenting its resolve path logs nothing). `cat /wfs/hello.txt` works, and
+  the same relative command fails identically on the FAT mounts, so this is not
+  backend-specific.
+
+  The mechanism exists and does not take effect. PM calls
+  `pm_inherit_child_cwd` on every spawn path
+  (`src/kernel/process_manager_spawn.c`), which sends `FSMGR_IPC_CLONE_CWD_REQ`
+  with the parent and child CONTEXT ids; fs-manager copies `mount`,
+  `backend_endpoint` and `mount_depth` between client states
+  (`src/services/fs_manager/fs_manager.c:800`). `client_state()` allocates on
+  demand, so a child with no slot yet is not the explanation. Candidates not yet
+  eliminated: the send is fire-and-forget and its result discarded
+  (`(void)pm_inherit_child_cwd(...)`), PM's `fs_ctrl_endpoint` may be unset — in
+  which case the helper returns success without sending anything — or
+  fs-manager's authorization check (`source_owner != proc_owner`) may reject it.
+  Instrument the fs-manager handler first: it either never runs or refuses, and
+  which one it is decides the fix.
+
+  Note also that the clone copies only fs-manager's view (which mount, how deep),
+  NOT the backend's own per-directory cwd. Both fs_fat and fs_wfs track that
+  themselves, so even a working clone would land a child at the mount root rather
+  than in the parent's actual directory. Fixing inheritance properly means
+  carrying the directory too.
+
+  `tests/test_wfs_mount_read.py::test_reading_a_file_by_relative_name` is marked
+  expectedFailure against this and will report an unexpected success once fixed.
+
 - [ ] [BUG][P2] `FS_IPC_CHDIR_REQ` packs its target into arg0..arg3, capping a
   path component at 15 bytes plus a NUL (`wasmos_sys_ipc_unpack_name16`). Every
   filesystem in the tree allows longer names — WFS allows 255

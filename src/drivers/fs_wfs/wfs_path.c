@@ -9,15 +9,21 @@
 
 wasmos_error_code_t wfs_path_init(wfs_path_ctx_t* ctx, const wfs_volume_t* vol, const char* path,
                                   uint32_t len) {
-    uint32_t i;
-
     if (!ctx || !vol || !path) {
         return WASMOS_ERR_FS_BAD_ARGS;
     }
     if (len == 0u || path[0] != '/') {
-        /* The driver is handed a path already rooted by the caller; there is no
-         * working directory here to resolve a relative one against. */
         return WASMOS_ERR_FS_NOT_ABSOLUTE;
+    }
+    return wfs_path_init_from(ctx, vol, WFS_OBJECT_ROOT, path, len);
+}
+
+wasmos_error_code_t wfs_path_init_from(wfs_path_ctx_t* ctx, const wfs_volume_t* vol,
+                                       uint32_t start_object_id, const char* path, uint32_t len) {
+    uint32_t i;
+
+    if (!ctx || !vol || !path) {
+        return WASMOS_ERR_FS_BAD_ARGS;
     }
     if (len >= WFS_PATH_MAX) {
         return WASMOS_ERR_FS_PATH_TOO_LONG;
@@ -31,7 +37,9 @@ wasmos_error_code_t wfs_path_init(wfs_path_ctx_t* ctx, const wfs_volume_t* vol, 
     ctx->path[len] = '\0';
     ctx->path_len = len;
     ctx->cursor = 0u;
-    ctx->object_id = WFS_OBJECT_ROOT;
+    /* A leading '/' is absolute and ignores where the client stands; anything
+     * else resolves from there. */
+    ctx->object_id = (len > 0u && path[0] == '/') ? WFS_OBJECT_ROOT : start_object_id;
     ctx->err = WASMOS_ERR_NONE;
     ctx->child_started = 0u;
     ctx->found = 0u;

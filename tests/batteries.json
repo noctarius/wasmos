@@ -1,14 +1,14 @@
 {
   "_comment": [
     "Test batteries: the integration suite partitioned by subsystem, one battery",
-    "per CI runner. THE single source — scripts/run_unittest_suite.py selects",
+    "per CI runner. THE single source \u2014 scripts/run_unittest_suite.py selects",
     "files from it and .github/workflows/ci.yml builds its matrix from it, so a",
     "battery is added in one place and both follow.",
     "",
     "Batteries are semantic, not duration-balanced: 'networking' is far the largest and",
     "sets the critical path. That is deliberate. A red job named 'networking' says what",
     "broke without opening a log, and membership stays stable as tests are added,",
-    "so a battery's history stays comparable run to run — neither of which is true",
+    "so a battery's history stays comparable run to run \u2014 neither of which is true",
     "of an i-of-N shard, where adding one test reshuffles every partition.",
     "",
     "Every file under tests/ MUST appear in exactly one battery.",
@@ -85,9 +85,13 @@
     },
     {
       "name": "filesystem",
-      "description": "Filesystem reads and writes through the FAT backend.",
+      "description": "Filesystem reads and writes through the FAT and WFS backends.",
       "needs_qemu": true,
-      "files": ["test_fs_open_smoke.py", "test_fs_write_smoke.py"]
+      "files": [
+        "test_fs_open_smoke.py",
+        "test_fs_write_smoke.py",
+        "test_wfs_mount_read.py"
+      ]
     },
     {
       "name": "language-runtimes",

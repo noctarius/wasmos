@@ -183,7 +183,7 @@ static wasmos_error_code_t wfs_take_path(int32_t buffer_id, uint32_t path_len, c
 
 /* Resolve a client path to an object, reporting the outcome as a packed code so
  * a caller can hand it straight to the client. */
-static wasmos_error_code_t wfs_resolve(int32_t buffer_id, uint32_t path_len) {
+static wasmos_error_code_t wfs_resolve(int32_t owner, int32_t buffer_id, uint32_t path_len) {
     static char path[WFS_PATH_MAX];
     wasmos_error_code_t rc;
     int32_t status;
@@ -192,7 +192,10 @@ static wasmos_error_code_t wfs_resolve(int32_t buffer_id, uint32_t path_len) {
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
-    rc = wfs_path_init(&g_path, &g_vol, path, path_len);
+    /* Relative to where the CLIENT stands, not to the root: `cat hello.txt`
+     * inside a mount sends a bare name, and resolving it from the root would
+     * look in the wrong directory — or find a different file of the same name. */
+    rc = wfs_path_init_from(&g_path, &g_vol, wfs_cwd_get(owner), path, path_len);
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
@@ -216,7 +219,7 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_UNSUPPORTED, 0);
         return;
     }
-    rc = wfs_resolve(buffer_id, (uint32_t)path_len);
+    rc = wfs_resolve(src, buffer_id, (uint32_t)path_len);
     if (rc != WASMOS_ERR_NONE) {
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
         return;
@@ -240,7 +243,7 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
 }
 
 static void wfs_do_stat(int32_t src, int32_t request_id, int32_t path_len, int32_t buffer_id) {
-    wasmos_error_code_t rc = wfs_resolve(buffer_id, (uint32_t)path_len);
+    wasmos_error_code_t rc = wfs_resolve(src, buffer_id, (uint32_t)path_len);
     uint64_t size;
     int32_t reported;
 

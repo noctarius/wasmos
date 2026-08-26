@@ -31,9 +31,21 @@
  */
 int32_t wfs_path_task(void* user, uintptr_t* out_value);
 
-/* Prepare `ctx` to resolve `path`. Returns a packed code for a path this walk
- * will not accept, so a caller can reject without starting a task. */
+/* Prepare `ctx` to resolve an ABSOLUTE `path`. Returns a packed code for a path
+ * this walk will not accept, so a caller can reject without starting a task. */
 wasmos_error_code_t wfs_path_init(wfs_path_ctx_t* ctx, const wfs_volume_t* vol, const char* path,
                                   uint32_t len);
+
+/* Prepare `ctx` to resolve `path` from `start_object_id`.
+ *
+ * A path beginning with '/' is absolute and starts at the root regardless of
+ * `start_object_id`; anything else is relative and starts there. This is what a
+ * client's working directory needs: `cat hello.txt` inside a mount sends the
+ * backend a bare name, and resolving it from the root would look for it in the
+ * wrong directory — or find a different file of the same name.
+ *
+ * An empty path resolves to `start_object_id` itself. */
+wasmos_error_code_t wfs_path_init_from(wfs_path_ctx_t* ctx, const wfs_volume_t* vol,
+                                       uint32_t start_object_id, const char* path, uint32_t len);
 
 #endif /* FS_WFS_WFS_PATH_H */

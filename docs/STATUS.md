@@ -867,6 +867,23 @@ linked feature documents for rationale and rollout plans.
   object, whose record keeps its 144 bytes whatever the size says. This is
   deliberately unlike `fs-fat`, where `O_TRUNC` resets the size without freeing
   the chain and a truncated file keeps its capacity.
+- WFS writes are reachable from a guest: `FS_IPC_WRITE_REQ` is served, `OPEN`
+  accepts write modes, `O_TRUNC` truncates BEFORE the fd is handed out (so the fd
+  latches the truncated size) and `O_APPEND` starts the cursor at the end. An fd
+  remembers its access mode, so a write through a read-only descriptor is
+  `WASMOS_ERR_FS_ACCESS` — an fd-mode violation, distinct from a read-only VOLUME
+  and from a full one. The handler re-reads the object record per chunk, which is
+  load-bearing rather than symmetric with the read path: a write mutates the
+  extent map, and a chunk starting from a stale copy would allocate against the
+  pre-write map and lose the previous chunk's extent. A partial write reports what
+  landed alongside the error, since a client resending from zero would duplicate
+  bytes already on disk.
+  `O_CREAT` is refused rather than satisfied by an existing file of that name, as
+  are `UNLINK`/`MKDIR`/`RMDIR`/`RENAME`: all of them need a directory-record
+  writer, which phase 2 did not build.
+  `examples/c/wfs_write_smoke` covers the layer no host suite can link — the
+  driver's IPC dispatch — going through plain libc for an inline file, a write
+  straddling a block boundary, a read-only fd, and the `O_CREAT` refusal.
 - Still deferred in WFS: the extent-tree WRITER and inline-to-extent promotion
   (both refused explicitly rather than half-done, with TODOs at the sites); a sync
   path that writes the superblock back, so on-disk `free_blocks` trails the bitmaps

@@ -23,6 +23,7 @@ typedef struct {
     uint64_t offset; /* the seek cursor */
     uint16_t type;
     uint16_t flags;           /* the object's flags, for the inline path */
+    uint16_t open_flags;      /* the O_* the client opened with, for mode checks */
     uint8_t inline_data[144]; /* WFS_INLINE_DATA_MAX; see wfs_read.h */
 } wfs_open_file_t;
 
@@ -36,7 +37,12 @@ void wfs_fd_table_init(wfs_fd_table_t* t);
  * full. Fds start at 3, leaving 0..2 to the standard streams a client already
  * has. */
 int32_t wfs_fd_open(wfs_fd_table_t* t, int32_t owner, uint32_t object_id, uint64_t size,
-                    uint16_t type, uint16_t flags, const uint8_t* inline_data);
+                    uint16_t type, uint16_t flags, uint16_t open_flags, const uint8_t* inline_data);
+
+/* Whether `f` was opened in a mode that permits writing. A read-only fd is
+ * refused at the WRITE, not at the open: an fd-mode violation is what
+ * WASMOS_ERR_FS_ACCESS names, and it is distinct from a read-only VOLUME. */
+int wfs_fd_writable(const wfs_open_file_t* f);
 
 /* The file `fd` names for `owner`, or NULL. A number belonging to another client
  * resolves to NULL rather than to their file. */

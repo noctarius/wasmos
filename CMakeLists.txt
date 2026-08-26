@@ -67,6 +67,9 @@ set(WASM_FS_OPEN_SMOKE_APP ${BUILD_DIR}/fs_open_smoke.wap)
 set(WASM_FS_WRITE_SMOKE_SRC ${EXAMPLES_C_DIR}/fs_write_smoke/fs_write_smoke.c)
 set(WASM_FS_WRITE_SMOKE_WASM ${BUILD_DIR}/fs_write_smoke.wasm)
 set(WASM_FS_WRITE_SMOKE_APP ${BUILD_DIR}/fs_write_smoke.wap)
+set(WASM_WFS_WRITE_SMOKE_SRC ${EXAMPLES_C_DIR}/wfs_write_smoke/wfs_write_smoke.c)
+set(WASM_WFS_WRITE_SMOKE_WASM ${BUILD_DIR}/wfs_write_smoke.wasm)
+set(WASM_WFS_WRITE_SMOKE_APP ${BUILD_DIR}/wfs_write_smoke.wap)
 set(WASM_NATIVE_CALL_MIN_SRC ${EXAMPLES_C_DIR}/native_call_min/native_call_min.c)
 set(WASM_NATIVE_CALL_MIN_WASM ${BUILD_DIR}/native_call_min.wasm)
 set(WASM_NATIVE_CALL_MIN_APP ${BUILD_DIR}/native_call_min.wap)
@@ -1683,6 +1686,9 @@ set(INIT_SMOKE_COPY_CMD
 set(FS_OPEN_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_OPEN_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_open_smoke.wap
 )
+set(WFS_WRITE_SMOKE_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_WFS_WRITE_SMOKE_APP} ${BUILD_DIR}/esp/apps/wfs_write_smoke.wap
+)
 set(FS_WRITE_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_WRITE_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_write_smoke.wap
 )
@@ -1866,6 +1872,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${INIT_SMOKE_COPY_CMD}
   ${FS_OPEN_SMOKE_COPY_CMD}
   ${FS_WRITE_SMOKE_COPY_CMD}
+  ${WFS_WRITE_SMOKE_COPY_CMD}
   ${NATIVE_CALL_MIN_COPY_CMD}
   ${NATIVE_CALL_SMOKE_COPY_CMD}
   ${GFX_SMOKE_COPY_CMD}

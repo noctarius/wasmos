@@ -161,6 +161,21 @@ class WfsMountReadTest(unittest.TestCase):
         self._cmd("ls", [b"marker.txt", b"nested/"])
         self._cmd("cd /", [])
 
+    def test_writing_through_the_driver_reads_back(self):
+        """The write path, reached the way an application reaches it.
+
+        The host suites cover wfs_write.c and wfs_truncate.c as tasks. This covers
+        what they cannot: that the driver's FS IPC dispatch reaches them, that a
+        write survives fs-manager's routing and the client transfer buffer, and
+        that a SEPARATE open reads back what landed.
+
+        wfs_write_smoke exercises an inline file, a write straddling a block
+        boundary, a read-only fd refusing a write, and O_CREAT being refused --
+        printing one line per failure, so a red run says which step broke.
+        """
+        self._cmd("cd /", [])
+        self._cmd("wfs_write_smoke", [b"wfs-write-smoke: ok"], timeout_s=60)
+
     def test_reading_a_file_by_relative_name(self):
         """`cat hello.txt` from inside the mount — the shape a user types.
 

@@ -54,6 +54,7 @@
 #include "wasmos/startup.h"
 #include "wasmos_cast.h"
 #include "wasmos_driver_abi.h"
+#include <fcntl.h>
 
 #include "wfs_block.h"
 #include "wfs_dir.h"
@@ -62,6 +63,8 @@
 #include "wfs_ops.h"
 #include "wfs_path.h"
 #include "wfs_read.h"
+#include "wfs_truncate.h"
+#include "wfs_write.h"
 
 #define WFS_SEND_RETRIES 64
 #define WFS_READ_STAGE 4096u
@@ -140,6 +143,8 @@ static wasmos_error_code_t wfs_cwd_set(int32_t owner, uint32_t object_id) {
 
 static wfs_path_ctx_t g_path;
 static wfs_read_ctx_t g_read;
+static wfs_write_ctx_t g_write;
+static wfs_trunc_ctx_t g_trunc;
 static wfs_dir_ctx_t g_dir;
 static wfs_mount_ctx_t g_mount_ctx;
 static uint8_t g_stage[WFS_READ_STAGE];
@@ -240,6 +245,18 @@ static wasmos_error_code_t wfs_resolve(int32_t owner, int32_t buffer_id, uint32_
     return g_path.found ? WASMOS_ERR_NONE : WASMOS_ERR_FS_NOT_FOUND;
 }
 
+/* Re-read an object record into g_path.object, after something rewrote it. */
+static wasmos_error_code_t wfs_reload_object(uint32_t object_id) {
+    int32_t status;
+
+    g_path.object.pc = WFS_OBJECT_PC_START;
+    g_path.object.vol = &g_vol;
+    g_path.object.object_id = object_id;
+    g_path.object.err = WASMOS_ERR_NONE;
+    status = wfs_run(wfs_object_task, &g_path.object);
+    return status != 0 ? (wasmos_error_code_t)status : WASMOS_ERR_NONE;
+}
+
 /* ---- the operations ----------------------------------------------------- */
 
 static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32_t flags,
@@ -247,9 +264,11 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
     wasmos_error_code_t rc;
     int32_t fd;
 
-    /* Read-only until the write path exists: accepting a write-open would let a
-     * client believe its writes landed. */
-    if (flags != 0) {
+    /* O_CREAT needs a directory INSERT, which no writer provides yet: the extent
+     * and object writers exist, the directory-record writer does not. Refused
+     * rather than silently opening an existing file of that name, which would
+     * make a create look like it worked. */
+    if (((uint32_t)flags & (uint32_t)O_CREAT) != 0u) {
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_UNSUPPORTED, 0);
         return;
     }
@@ -262,16 +281,52 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_IS_DIR, 0);
         return;
     }
+    /* O_TRUNC applies BEFORE the fd is handed out, so the size the fd latches is
+     * the truncated one; the other order would leave a client writing against a
+     * size the file no longer has. */
+    if (((uint32_t)flags & (uint32_t)O_TRUNC) != 0u && g_path.object.out.size != 0u) {
+        int32_t status;
+
+        wfs_truncate_init(&g_trunc,
+                          &g_vol,
+                          g_path.object_id,
+                          &g_path.object.out,
+                          g_path.object.inline_data,
+                          0u,
+                          0u);
+        status = wfs_run(wfs_truncate_task, &g_trunc);
+        if (status != 0) {
+            (void)wfs_reply(src, FS_IPC_ERROR, request_id, status, 0);
+            return;
+        }
+        /* Re-read: truncation rewrote the record, and the fd must latch what is
+         * on disk rather than what was there before. */
+        rc = wfs_reload_object(g_path.object_id);
+        if (rc != WASMOS_ERR_NONE) {
+            (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
+            return;
+        }
+    }
     fd = wfs_fd_open(&g_fds,
                      src,
                      g_path.object_id,
                      g_path.object.out.size,
                      g_path.object.out.type,
                      g_path.object.out.flags,
+                     (uint16_t)flags,
                      g_path.object.inline_data);
     if (fd < 0) {
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, fd, 0);
         return;
+    }
+    /* O_APPEND starts the cursor at the end, which is the whole of what the flag
+     * means here: every write then extends from wherever the file ends. */
+    if (((uint32_t)flags & (uint32_t)O_APPEND) != 0u) {
+        wfs_open_file_t* f = wfs_fd_get(&g_fds, src, fd);
+
+        if (f) {
+            f->offset = f->size;
+        }
     }
     (void)wfs_reply(src, FS_IPC_RESP, request_id, fd, 0);
 }
@@ -366,6 +421,87 @@ static void wfs_do_read(int32_t src, int32_t request_id, int32_t fd, int32_t cou
     }
 
     f->offset += done;
+    (void)wfs_reply(src, FS_IPC_RESP, request_id, (int32_t)done, 0);
+}
+
+/* WRITE: bytes from the client's buffer into the file the fd names.
+ *
+ * Mirrors wfs_do_read, including its per-chunk re-fetch of the object record:
+ * the fd does not carry the extent map, and the write UPDATES that map, so each
+ * chunk must start from what is on disk rather than from a stale copy. Skipping
+ * the re-fetch would let a second chunk allocate against the first chunk's
+ * pre-write map and lose its extent. */
+static void wfs_do_write(int32_t src, int32_t request_id, int32_t fd, int32_t count,
+                         int32_t buffer_id) {
+    wfs_open_file_t* f = wfs_fd_get(&g_fds, src, fd);
+    uint32_t want;
+    uint32_t done = 0u;
+
+    if (!f) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_BAD_FD, 0);
+        return;
+    }
+    /* An fd-mode violation, distinct from a read-only VOLUME: this fd was opened
+     * for reading, whatever the volume permits. */
+    if (!wfs_fd_writable(f)) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_ACCESS, 0);
+        return;
+    }
+    if (count < 0) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_BAD_ARGS, 0);
+        return;
+    }
+    want = (uint32_t)count;
+    if (want > (uint32_t)wasmos_xfer_buffer_size()) {
+        want = (uint32_t)wasmos_xfer_buffer_size();
+    }
+
+    while (done < want) {
+        uint32_t chunk = want - done;
+        wasmos_error_code_t rc;
+        int32_t status;
+
+        if (chunk > WFS_READ_STAGE) {
+            chunk = WFS_READ_STAGE;
+        }
+        if (wasmos_sys_buffer_read(buffer_id, g_stage, (int32_t)chunk, (int32_t)done) != 0) {
+            (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_BUFFER, 0);
+            return;
+        }
+        rc = wfs_reload_object(f->object_id);
+        if (rc != WASMOS_ERR_NONE) {
+            (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
+            return;
+        }
+        wfs_write_init(&g_write,
+                       &g_vol,
+                       f->object_id,
+                       &g_path.object.out,
+                       g_path.object.inline_data,
+                       f->offset + done,
+                       g_stage,
+                       chunk,
+                       0u);
+        status = wfs_run(wfs_write_task, &g_write);
+        if (status != 0) {
+            /* Report what landed alongside the failure: a partial write is not a
+             * failed write, and a client that resends from zero would duplicate
+             * the bytes already on disk. */
+            (void)wfs_reply(src, FS_IPC_ERROR, request_id, status, (int32_t)done);
+            return;
+        }
+        done += g_write.done;
+        if (g_write.done < chunk) {
+            break;
+        }
+    }
+
+    f->offset += done;
+    /* The fd's cached size follows, so a later read through the same fd is not
+     * clamped against the size the file had at open. */
+    if (f->offset > f->size) {
+        f->size = f->offset;
+    }
     (void)wfs_reply(src, FS_IPC_RESP, request_id, (int32_t)done, 0);
 }
 
@@ -674,6 +810,9 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
     case FS_IPC_READ_REQ:
         wfs_do_read(src, request_id, a0, a1, a2);
         return;
+    case FS_IPC_WRITE_REQ:
+        wfs_do_write(src, request_id, a0, a1, a2);
+        return;
     case FS_IPC_SEEK_REQ:
         wfs_do_seek(src, request_id, a0, a1, a2);
         return;
@@ -687,8 +826,9 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
         wfs_do_readdir(src, request_id);
         return;
     default:
-        /* The write ops (WRITE/UNLINK/MKDIR/RMDIR/RENAME) wait on the write
-         * path. */
+        /* UNLINK/MKDIR/RMDIR/RENAME all need a directory-record WRITER, which
+         * does not exist: the object and extent writers landed with phase 2, the
+         * namespace side did not. */
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_UNSUPPORTED, 0);
         return;
     }

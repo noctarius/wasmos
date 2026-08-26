@@ -12,8 +12,15 @@ void wfs_fd_table_init(wfs_fd_table_t* t) {
     }
 }
 
+int wfs_fd_writable(const wfs_open_file_t* f) {
+    /* O_RDONLY is 0, O_WRONLY 1 and O_RDWR 2 (fcntl.h); the mode is the low two
+     * bits, so anything but O_RDONLY permits a write. */
+    return f && (f->open_flags & 3u) != 0u;
+}
+
 int32_t wfs_fd_open(wfs_fd_table_t* t, int32_t owner, uint32_t object_id, uint64_t size,
-                    uint16_t type, uint16_t flags, const uint8_t* inline_data) {
+                    uint16_t type, uint16_t flags, uint16_t open_flags,
+                    const uint8_t* inline_data) {
     uint32_t i;
     uint32_t k;
 
@@ -28,6 +35,7 @@ int32_t wfs_fd_open(wfs_fd_table_t* t, int32_t owner, uint32_t object_id, uint64
         t->files[i].offset = 0u;
         t->files[i].type = type;
         t->files[i].flags = flags;
+        t->files[i].open_flags = open_flags;
         for (k = 0; k < sizeof(t->files[i].inline_data); ++k) {
             t->files[i].inline_data[k] = inline_data ? inline_data[k] : 0u;
         }

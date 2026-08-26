@@ -639,6 +639,14 @@ linked feature documents for rationale and rollout plans.
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
+- The working directory is a full canonical VFS path owned by `fs-manager`: every
+  client path is joined onto it before routing, a spawned process inherits its
+  spawner's path by copy, and `FS_IPC_CHDIR` reports the resolved path back so no
+  client keeps a second copy. There is no fallback backend for a client that
+  names none — such a request fails rather than being routed by guesswork.
+- `FS_IPC_CHDIR` carries its target as a path in a transfer buffer, so `cd` takes
+  one request at any depth and reaches directory names up to a backend's own
+  maximum (255 bytes for WFS) instead of the 15 that fit in the argument words.
 - `fs-fat` is a single-threaded, non-blocking reactor: queued operation
   contexts are resumable stackless coroutines, while one active operation uses
   the shared 8 KiB block/DMA buffer. It supports FAT12/16/32 and LFN, reports

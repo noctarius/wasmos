@@ -78,6 +78,15 @@ handles and the current working directory for each calling process. Open
 handles are forwarded to the appropriate backend; `fs_manager` stores only
 the mapping from client handle to backend endpoint and backend-side handle.
 
+The working directory is a full canonical VFS path (`/`, `/wfs`, `/wfs/docs`) and
+`fs_manager` is its sole authority: every client path is resolved against it
+before routing, and `FS_IPC_CHDIR` reports the resulting path back to the client
+so no second copy of it exists. A spawned process inherits its spawner's path by
+copy (`FSMGR_IPC_CLONE_CWD`), which is what makes a relative name mean the same
+directory in a child as in its parent. A client whose state names no backend is
+at the VFS root; that case is answered by `fs_manager` itself and is never
+routed to a guessed backend.
+
 ---
 
 ### FS IPC Opcode Table
@@ -142,7 +151,15 @@ No copy through `fs_manager` occurs — the backend writes straight into the
 client's buffer. `FS_IPC_READ_PATH` (spawn/one-shot read) works the same way,
 with the kernel PM as the owning client; PM grants fs-manager via the kernel core
 API and its `release` cascades the grant. For requests with no payload (seek,
-close, chdir) `arg2`/`arg3` carry their normal op args and no borrow is taken.
+close) `arg2`/`arg3` carry their normal op args and no borrow is taken.
+
+`FS_IPC_CHDIR` carries its target as a path in the client's buffer, like `OPEN`:
+`arg0` = length, `arg2` = buffer id, `arg3` = the grant, a zero length naming the
+VFS root. Depth and component length are therefore bounded by the buffer, not by
+what fits in four request arguments — a directory name up to a backend's own
+maximum (255 bytes for WFS) and an arbitrarily deep path are both expressible.
+The reply carries the resolved working directory back in the same buffer, with
+its length in `arg1` (`arg0` stays the operation status).
 
 Path-only requests where the *kernel* reads the caller's buffer directly (spawn
 paths, service-register descriptors) need no grant at all — the kernel resolves
@@ -191,11 +208,19 @@ provided via a known physical address from the bootloader.
 
 `fs_manager` normalizes client paths before forwarding:
 
+- Joins a relative path onto the client's working directory, so every routed
+  path is absolute (`fsmgr_cwd_join`, unit-tested on the host).
+- Resolves `.` and `..` components and collapses redundant slashes. `..` cannot
+  escape the VFS root.
 - Strips the mount-name prefix from the path before sending to the backend
   (the backend sees a root-relative path).
-- Resolves `.` and `..` components.
-- Applies the per-client working directory (set via `FS_IPC_CHDIR`) to
-  relative paths.
+- Refuses rather than truncates when a result does not fit: a shortened path
+  names a different file, which the caller would then open unknowingly.
+
+A path-less request (`READDIR`) is preceded by a `CHDIR` re-asserting the
+requesting client's directory, because a backend holds one current directory per
+`fs_manager` connection and cannot tell two clients apart. `fs_manager` uses its
+own transfer buffer for that, since such a request supplies none.
 
 ---
 

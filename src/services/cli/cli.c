@@ -84,12 +84,10 @@ static wasmos_sys_event_loop_t g_loop;
 /* Set by the INPUT_NOTIFY handler; the read path consumes it. */
 static int32_t g_input_notified = 0;
 static int32_t g_pending_req = -1;
-static char g_cwd[64] = "/";
+static char g_cwd[128] = "/";
 static int32_t g_pending_kind = 0;
 static int32_t g_pending_exec_pid = -1;
 static int32_t g_pending_spawn_bid = -1;
-static int32_t g_pending_cd_use_path = 0;
-static char g_pending_cd_path[32] = "/";
 static char g_history[CLI_HISTORY_MAX][sizeof(g_line)];
 static uint8_t g_history_len[CLI_HISTORY_MAX];
 static uint8_t g_history_count = 0;
@@ -1263,84 +1261,6 @@ static void cli_show_mounts(void) {
     console_write(buf);
 }
 
-static void set_cwd_path(const char* path) {
-    if (!path || !path[0] || wasmos_sys_streq(path, ".")) {
-        return;
-    }
-    if (wasmos_sys_streq(path, "/")) {
-        set_cwd_root();
-        return;
-    }
-
-    char resolved[64];
-    uint32_t out = 0;
-
-    resolved[out++] = '/';
-    if (path[0] == '/') {
-        /* Absolute path starts from root. */
-    } else if (!(g_cwd[0] == '/' && g_cwd[1] == '\0')) {
-        /* Relative path starts from current cwd. */
-        uint32_t i = 0;
-        while (g_cwd[i] && out + 1 < sizeof(resolved)) {
-            if (i == 0 && g_cwd[i] == '/') {
-                i++;
-                continue;
-            }
-            resolved[out++] = g_cwd[i++];
-        }
-        if (out > 1 && resolved[out - 1] != '/' && out + 1 < sizeof(resolved)) {
-            resolved[out++] = '/';
-        }
-    }
-
-    uint32_t i = 0;
-    while (path[i]) {
-        while (path[i] == '/') {
-            i++;
-        }
-        if (!path[i]) {
-            break;
-        }
-        uint32_t seg_start = i;
-        while (path[i] && path[i] != '/') {
-            i++;
-        }
-        uint32_t seg_len = i - seg_start;
-        if (seg_len == 1 && path[seg_start] == '.') {
-            continue;
-        }
-        if (seg_len == 2 && path[seg_start] == '.' && path[seg_start + 1] == '.') {
-            if (out > 1) {
-                if (out > 1 && resolved[out - 1] == '/') {
-                    out--;
-                }
-                while (out > 1 && resolved[out - 1] != '/') {
-                    out--;
-                }
-            }
-            continue;
-        }
-        if (out > 1 && resolved[out - 1] != '/' && out + 1 < sizeof(resolved)) {
-            resolved[out++] = '/';
-        }
-        for (uint32_t j = 0; j < seg_len && out + 1 < sizeof(resolved); ++j) {
-            resolved[out++] = path[seg_start + j];
-        }
-    }
-
-    if (out > 1 && resolved[out - 1] == '/') {
-        out--;
-    }
-    resolved[out] = '\0';
-
-    uint32_t k = 0;
-    while (resolved[k] && k + 1 < sizeof(g_cwd)) {
-        g_cwd[k] = resolved[k];
-        k++;
-    }
-    g_cwd[k] = '\0';
-}
-
 static void cli_trim_name(char* name) {
     if (!name) {
         return;
@@ -1900,38 +1820,46 @@ static int cli_handle_line(void) {
     }
     if (g_line_len > 3 && line_starts_with_ci("cd ")) {
         const char* path = &g_line[3];
-        if (wasmos_sys_streq(path, "/")) {
-            set_cwd_root();
-            if (cli_send_fs(FS_IPC_CHDIR_REQ, 0, 0, 0, 0) != 0) {
-                console_write("cd failed\n");
-                return 0;
-            }
-            g_pending_cd_use_path = 0;
-            g_pending_kind = PENDING_CD;
-            return 1;
-        }
-        if (path[0] == '/' && wasmos_sys_strlen(path) >= 16) {
-            uint32_t i = 0;
-            while (path[i] && i + 1 < sizeof(g_pending_cd_path)) {
-                g_pending_cd_path[i] = path[i];
-                i++;
-            }
-            g_pending_cd_path[i] = '\0';
-            if (cli_send_fs(FS_IPC_CHDIR_REQ, 0, 0, 0, 0) != 0) {
-                console_write("cd failed\n");
-                return 0;
-            }
-            g_pending_cd_use_path = 1;
-            g_pending_kind = PENDING_CD_CHAIN;
-            return 1;
-        }
-        uint32_t packed[4];
-        cli_pack_name(path, packed);
-        if (cli_send_fs(FS_IPC_CHDIR_REQ, packed[0], packed[1], packed[2], packed[3]) != 0) {
+        /* One request, whatever the path: the target travels in a transfer
+         * buffer, so depth and component length are bounded by the buffer rather
+         * than by what fits in the request arguments. fs-manager resolves it
+         * against this client's working directory. */
+        uint32_t len = (uint32_t)wasmos_sys_strlen(path);
+        int32_t fs_buf_size = wasmos_xfer_buffer_size();
+        int32_t bid;
+        int32_t b1;
+
+        if (len == 0u || fs_buf_size <= 0 || (int32_t)len >= fs_buf_size) {
             console_write("cd failed\n");
             return 0;
         }
-        g_pending_cd_use_path = 0;
+        /* Sized for the ANSWER, not the request: fs-manager writes the resolved
+         * working directory back into this buffer. */
+        bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(g_cwd));
+        if (bid < 0) {
+            console_write("cd failed\n");
+            return 0;
+        }
+        if (wasmos_xfer_buffer_write(bid, path, (int32_t)len, 0) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
+            console_write("cd failed\n");
+            return 0;
+        }
+        b1 = wasmos_xfer_buffer_borrow(
+            g_fs_endpoint, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+        if (b1 < 0) {
+            (void)wasmos_xfer_buffer_release(bid);
+            console_write("cd failed\n");
+            return 0;
+        }
+        if (cli_send_fs(FS_IPC_CHDIR_REQ, (int32_t)len, 0, bid, b1) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
+            console_write("cd failed\n");
+            return 0;
+        }
+        /* Held until the reply lands: fs-manager reads the path through the
+         * grant, and releasing early would revoke it mid-request. */
+        g_pending_spawn_bid = bid;
         g_pending_kind = PENDING_CD;
         return 1;
     }
@@ -2488,30 +2416,14 @@ static void cli_phase_wait_ipc_step(void) {
     } else if (g_pending_kind == PENDING_SPAWN && resp_type == PROC_IPC_RESP) {
         /* detached: process started in background, $? unchanged */
         (void)resp_status;
-    } else if (g_pending_kind == PENDING_CD_CHAIN) {
-        const char* tail = g_pending_cd_path;
-        if (tail[0] == '/') {
-            tail++;
-        }
-        uint32_t packed[4];
-        cli_pack_name(tail, packed);
-        if (cli_send_fs(FS_IPC_CHDIR_REQ, packed[0], packed[1], packed[2], packed[3]) != 0) {
-            console_write("cd failed\n");
-            g_pending_req = -1;
-            g_pending_kind = PENDING_NONE;
-            g_pending_cd_use_path = 0;
-            g_phase = CLI_PHASE_PROMPT;
-            return;
-        }
-        g_pending_kind = PENDING_CD;
-        return;
     } else if (g_pending_kind == PENDING_CD) {
-        if (g_pending_cd_use_path) {
-            set_cwd_path(g_pending_cd_path);
-            g_pending_cd_use_path = 0;
-        } else if (g_line_len > 3) {
-            const char* path = &g_line[3];
-            set_cwd_path(path);
+        /* fs-manager reports the canonical working directory it settled on in
+         * arg0 + the granted buffer; adopting it verbatim is what keeps the
+         * prompt from claiming a directory the FS layer does not agree with. */
+        int32_t cwd_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        if (cwd_len > 0 && cwd_len < (int32_t)sizeof(g_cwd) && g_pending_spawn_bid >= 0 &&
+            wasmos_xfer_buffer_read(g_pending_spawn_bid, g_cwd, cwd_len, 0) == 0) {
+            g_cwd[cwd_len] = '\0';
         } else {
             set_cwd_root();
         }

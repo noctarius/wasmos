@@ -212,21 +212,18 @@ while internal kernel-managed processes use `KERNEL`.
 
 #### Directory Navigation
 
-`cd <path>` sends `FS_IPC_CHDIR_REQ` to the FS manager and waits for a
-response. Two code paths:
+`cd <path>` stages the target in a transfer buffer, grants the FS manager
+`READ|WRITE` over it, and sends one `FS_IPC_CHDIR_REQ` (`arg0` = length,
+`arg2` = buffer id, `arg3` = the grant) → `PENDING_CD`. One request serves every
+path: depth and component length are bounded by the buffer, not by what fits in
+the four argument words.
 
-- **Short path** (absolute path shorter than 16 chars, or any relative path):
-  path is packed into four `uint32_t` words via `wasmos_sys_ipc_pack_name16`
-  and sent as the four IPC arg fields → `PENDING_CD`.
-- **Long absolute path** (absolute path ≥ 16 chars): `FS_IPC_CHDIR_REQ` is
-  sent with arg fields all zero → `PENDING_CD_CHAIN`. On the response,
-  the tail component is packed and a second `FS_IPC_CHDIR_REQ` is sent →
-  `PENDING_CD`.
-
-`set_cwd_path()` normalizes the path in memory: strips trailing slashes,
-resolves `.` (skip) and `..` (pop last segment), handles absolute vs.
-relative input relative to `g_cwd`. The buffer limit of 64 bytes is enforced
-by truncation.
+The CLI does not normalize the path itself. The FS manager owns the working
+directory, resolves the target against it, and writes the resulting canonical
+path back into the same buffer with its length in `arg1`; the CLI adopts that
+verbatim into `g_cwd`. A prompt therefore cannot claim a directory the FS layer
+disagrees with, and `..`, redundant slashes and a refused `cd` all resolve in
+exactly one place.
 
 #### File Listing and Reading
 

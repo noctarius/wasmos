@@ -612,10 +612,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         } else if (type == FS_IPC_READDIR_REQ) {
             status = emit_init_listing(source, req_id);
         } else if (type == FS_IPC_CHDIR_REQ) {
+            /* CHDIR carries its target as a path in the client's transfer buffer
+             * (arg0 = length, arg2 = buffer id), the same transport OPEN uses --
+             * so a deep path and a name past 15 bytes both arrive intact. */
             char name[INITFS_PATH_MAX];
-            unpack_name(
-                (uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, name, sizeof(name));
-            status = chdir_to_path(cwd_dir, name);
+            wasmos_error_code_t path_rc =
+                copy_path_from_xfer_buffer(arg2, arg0, name, sizeof(name));
+            status = (path_rc == WASMOS_ERR_NONE) ? chdir_to_path(cwd_dir, name) : path_rc;
         } else if (type == FS_IPC_READY_REQ) {
             status = 0;
         }

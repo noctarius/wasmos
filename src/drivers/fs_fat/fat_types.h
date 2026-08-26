@@ -605,12 +605,12 @@ typedef struct {
  * cursors of its own. */
 typedef struct {
     int cont;
-    char path[32];      /* working copy of the target (from dir_name) */
-    uint32_t pos;       /* cursor into path[] */
-    char name[16];      /* current component being resolved */
-    uint8_t root;       /* running target: is-root flag */
-    uint32_t cluster;   /* running target: directory cluster */
-    uint8_t root_probe; /* fat_root_origin output, latched at entry */
+    char path[FAT_MAX_PATH]; /* working copy of the target (from dir_name) */
+    uint32_t pos;            /* cursor into path[] */
+    char name[FAT_MAX_PATH]; /* current component being resolved */
+    uint8_t root;            /* running target: is-root flag */
+    uint32_t cluster;        /* running target: directory cluster */
+    uint8_t root_probe;      /* fat_root_origin output, latched at entry */
     uint32_t root_cluster_probe;
     uint32_t root_lba_probe;
     uint32_t root_sectors_probe;
@@ -776,7 +776,9 @@ typedef struct fat_op_ctx {
     fat_chainwalk_ctx_t capwalk;   /* OPEN capacity chain walk */
 
     /* Directory navigation dispatch (CHDIR / READDIR): unpacked leaf name. */
-    char dir_name[16];
+    /* CHDIR target, read from the client transfer buffer: a full path, not one
+     * component, so it is sized like every other client path here. */
+    char dir_name[FAT_MAX_PATH];
 
     /* Directory navigation sub-machines (fat_dir.c, navigation side). */
     fat_readdir_ctx_t readdir; /* READDIR streaming scan */

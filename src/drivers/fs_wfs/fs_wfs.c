@@ -463,80 +463,29 @@ static void wfs_do_readdir(int32_t src, int32_t request_id) {
     (void)wfs_reply(src, FS_IPC_RESP, request_id, 0, 0);
 }
 
-/* CHDIR carries its target packed into arg0..arg3, up to 16 bytes (the FS ABI;
- * fs-manager packs "/" when a client enters this mount).
+/* CHDIR: move the client's working directory inside this volume.
  *
- * FIXME: that packing caps a component at 15 bytes plus a NUL, while WFS names
- * run to 255 (WFS_NAME_MAX). `cd` into a directory with a longer name cannot be
- * expressed at all — the request arrives truncated, so the lookup misses and the
- * client is told the directory does not exist rather than that its name did not
- * fit. The limit is the opcode's, not this driver's, and every backend shares
- * it; fixing it means carrying the name in a transfer buffer the way OPEN and
- * STAT already do. Tracked in docs/TASKS.md.
+ * The target arrives as a path in the client's transfer buffer, the same
+ * transport OPEN and STAT use, so it is not limited in length or to a single
+ * component: a full 255-byte WFS name (WFS_NAME_MAX) and an arbitrarily deep
+ * path both resolve here. fs-manager sends the directory relative to this
+ * mount's root, leading '/' included.
  *
- * A single component is resolved through the records the directory carries, so
- * "." and ".." need no special case — ".." from the root names the root, which
- * is what stops a client walking out of the volume. */
-static void wfs_do_chdir(int32_t src, int32_t request_id, int32_t a0, int32_t a1, int32_t a2,
-                         int32_t a3) {
-    char name[32];
-    wasmos_error_code_t rc;
-    uint32_t here;
-    uint32_t name_len;
-    int32_t status;
+ * Resolution goes through wfs_resolve, so "." and ".." need no special case and
+ * ".." from the root names the root -- which is what stops a client walking out
+ * of the volume. */
+static void wfs_do_chdir(int32_t src, int32_t request_id, int32_t path_len, int32_t buffer_id) {
+    wasmos_error_code_t rc = wfs_resolve(src, buffer_id, (uint32_t)path_len);
 
-    wasmos_sys_ipc_unpack_name16(
-        (uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, name, sizeof(name));
-
-    /* Entering the mount, or returning to its root. */
-    if (name[0] == '\0' || (name[0] == '/' && name[1] == '\0')) {
-        rc = wfs_cwd_set(src, WFS_OBJECT_ROOT);
-        (void)wfs_reply(src,
-                        rc == WASMOS_ERR_NONE ? FS_IPC_RESP : FS_IPC_ERROR,
-                        request_id,
-                        rc == WASMOS_ERR_NONE ? 0 : rc,
-                        0);
-        return;
-    }
-
-    here = wfs_cwd_get(src);
-
-    /* Read where the client stands, then look the component up in it. */
-    g_path.object.pc = WFS_OBJECT_PC_START;
-    g_path.object.vol = &g_vol;
-    g_path.object.object_id = here;
-    g_path.object.err = WASMOS_ERR_NONE;
-    status = wfs_run(wfs_object_task, &g_path.object);
-    if (status != 0) {
-        (void)wfs_reply(src, FS_IPC_ERROR, request_id, status, 0);
+    if (rc != WASMOS_ERR_NONE) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
         return;
     }
     if (g_path.object.out.type != WFS_TYPE_DIR) {
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_NOT_DIR, 0);
         return;
     }
-
-    name_len = 0;
-    while (name[name_len] != '\0') {
-        name_len++;
-    }
-    wfs_dir_lookup_init(&g_dir, &g_vol, &g_path.object.out, name, name_len);
-    status = wfs_run(wfs_dir_task, &g_dir);
-    if (status != 0) {
-        (void)wfs_reply(src, FS_IPC_ERROR, request_id, status, 0);
-        return;
-    }
-    if (!g_dir.found) {
-        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_NOT_FOUND, 0);
-        return;
-    }
-    /* The record's type is enough: a cd into a file must fail as NOT_DIR rather
-     * than succeed and leave the client standing on something unreadable. */
-    if (g_dir.type != WFS_TYPE_DIR) {
-        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_NOT_DIR, 0);
-        return;
-    }
-    rc = wfs_cwd_set(src, g_dir.object_id);
+    rc = wfs_cwd_set(src, g_path.object_id);
     (void)wfs_reply(src,
                     rc == WASMOS_ERR_NONE ? FS_IPC_RESP : FS_IPC_ERROR,
                     request_id,
@@ -698,7 +647,7 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
         wfs_do_close(src, request_id, a0);
         return;
     case FS_IPC_CHDIR_REQ:
-        wfs_do_chdir(src, request_id, a0, a1, a2, a3);
+        wfs_do_chdir(src, request_id, a0, a2);
         return;
     case FS_IPC_READDIR_REQ:
         wfs_do_readdir(src, request_id);

@@ -890,64 +890,58 @@ tail.
   staged in a transfer buffer. Blocks no current backend — FAT12/16 cannot reach
   the ceiling — but it caps any format that can, including the WFS proposal
   (`docs/WFS_WASMOS_FILE_SYSTEM.md`, section 22).
-- [ ] [BUG][P1] A spawned utility does not inherit its spawner's working
-  directory, and a fallback in fs-manager hides it for every mount except the
-  first boot-kind one.
+- [x] [BUG][P1] A spawned utility did not inherit its spawner's working
+  directory, and a fallback in fs-manager hid it for every mount except the first
+  boot-kind one. FIXED: the working directory is now a full canonical VFS path
+  owned by fs-manager.
 
-  `cat` is a separate process. Its fs-manager client state has
-  `backend_endpoint == -1`, so a RELATIVE path is routed by
-  `resolve_backend_for_state`, which falls back to
-  `backend_first_of_kind(FSMGR_BACKEND_BOOT)`
-  (`src/services/fs_manager/fs_manager.c`). For `/boot` and `/init` that fallback
-  happens to be the correct backend, so `cd /boot; cat write_smoke.txt` works —
-  BY ACCIDENT, not because anything was inherited. For any other mount the
-  request goes to the wrong backend, which answers NOT_FOUND; the real backend is
-  never asked (instrumenting fs_wfs's resolve path logs nothing).
+  fs-manager held a working directory as `(mount, depth)` and forwarded a
+  relative name to a backend UNRESOLVED, choosing that backend by falling back to
+  `backend_first_of_kind(FSMGR_BACKEND_BOOT)` when the client had none. For
+  `/boot` and `/init` that fallback is the correct backend, so relative `cat`
+  worked there BY ACCIDENT; for any other mount the request went to the wrong
+  backend, which answered NOT_FOUND, and the real backend was never asked. The
+  fallback was the missing check: it turned "this client has no working
+  directory" into a plausible answer instead of an error, which is why the broken
+  inheritance stayed invisible while there was only one non-root mount.
 
-  That fallback is the missing check: it turns "this client has no working
-  directory" into a plausible answer instead of an error, so the broken
-  inheritance stayed invisible for as long as there was only one non-root mount.
+  What landed: `fs_client_state_t` carries the full path (`fsmgr_cwd_join`
+  canonicalizes, host-unit-tested in `tests/unit/test_fs_manager_path.c`), every
+  client path is joined onto it before routing, `FSMGR_IPC_CLONE_CWD` copies the
+  path rather than a `(mount, depth)` pair, and the fallback is gone — a client
+  with no backend now fails where it is wrong instead of being guessed at.
+  `FS_IPC_CHDIR` reports the resolved path back to the client, so the CLI's
+  `g_cwd` is adopted rather than re-derived and a prompt cannot disagree with the
+  FS layer. A path-less `READDIR` is preceded by a re-assertion of the requesting
+  client's directory, because a backend holds one current directory per
+  fs-manager connection and cannot tell two clients apart.
 
-  The inheritance mechanism exists and does not take effect: PM calls
-  `pm_inherit_child_cwd` on every spawn path
-  (`src/kernel/process_manager_spawn.c`), sending `FSMGR_IPC_CLONE_CWD_REQ` with
-  parent and child CONTEXT ids, and fs-manager copies `mount`,
-  `backend_endpoint`, `mount_depth` between client states. `client_state()`
-  allocates on demand, so a missing slot is not the explanation. Still to
-  eliminate: the send is fire-and-forget with its result discarded
-  (`(void)pm_inherit_child_cwd(...)`), PM's `fs_ctrl_endpoint` may be unset — in
-  which case the helper returns success without sending — and fs-manager may
-  refuse on its `source_owner != proc_owner` authorization check. Instrument the
-  fs-manager handler: it either never runs or refuses.
+  Two tests changed shape rather than expectation. `test_cat_startup`
+  (`tests/test_cli.py`) named no directory and passed via the fallback; it now
+  states the one its relative name is resolved against, like every other case in
+  that file. `test_reading_a_file_by_relative_name`
+  (`tests/test_wfs_mount_read.py`) was marked `expectedFailure`, which reported
+  the battery green over a live bug; the marker is gone and the test is a plain
+  passing case.
 
-  Second layer, independent of the above: the clone copies only fs-manager's view
-  — which mount, how deep — and NOT the backend's own per-directory cwd, which
-  fs_fat, fs_init and fs_wfs each track themselves. So even a working clone lands
-  a child at the mount ROOT rather than in the parent's actual directory. A
-  spawner sitting in /wfs/docs would hand its child /wfs. Cloning the full VFS
-  path, rather than a (mount, depth) pair, is what actually expresses the intent.
+- [x] [BUG][P2] `FS_IPC_CHDIR_REQ` packed its target into arg0..arg3, capping a
+  path component at 15 bytes plus a NUL. FIXED: the target travels as a path in a
+  transfer buffer, `arg0` = length / `arg2` = buffer id / `arg3` = the grant, the
+  same transport `FS_IPC_OPEN_REQ` uses.
 
-  Tests: `tests/test_fs_open_smoke.py` covers `cat` on the FAT boot volume both
-  absolutely and relatively (both pass today — the relative one via the
-  fallback), and they are the control that made this diagnosable.
-  `tests/test_wfs_mount_read.py::test_reading_a_file_by_relative_name` is marked
-  expectedFailure against this and reports an unexpected success once fixed.
-
-- [ ] [BUG][P2] `FS_IPC_CHDIR_REQ` packs its target into arg0..arg3, capping a
-  path component at 15 bytes plus a NUL (`wasmos_sys_ipc_unpack_name16`). Every
-  filesystem in the tree allows longer names — WFS allows 255
-  (`WFS_NAME_MAX`) — so `cd` into a directory whose name is longer cannot be
-  expressed: the request arrives TRUNCATED, the backend's lookup misses, and the
-  client is told the directory does not exist rather than that its name did not
-  fit. Worse than a plain refusal, because a truncated name can also match a
-  DIFFERENT directory that happens to share the first 15 bytes.
-
-  The limit is the opcode's and every backend inherits it (fs_fat included, where
-  8.3 short names hid it). The fix is to carry the name in a transfer buffer the
-  way FS_IPC_OPEN_REQ and FS_IPC_STAT_REQ already do, rather than in the argument
-  words; the CLI's `PENDING_CD_CHAIN` path splits long paths into components but
-  each component still goes through the same 16-byte packing. FIXME at
-  `src/drivers/fs_wfs/fs_wfs.c` (wfs_do_chdir).
+  A directory whose name was longer could not be expressed at all: the request
+  arrived TRUNCATED, the lookup missed, and the client was told the directory did
+  not exist rather than that its name did not fit — and a truncated name could
+  also match a DIFFERENT directory sharing the first 15 bytes. Depth is no longer
+  capped either, so `cd /boot/foo/bar` is one request; the CLI's
+  `PENDING_CD_CHAIN` split, which hit the same packing limit on each piece, is
+  deleted along with the CLI's duplicate path normalizer. fs_wfs resolves the
+  target through the same path walker OPEN uses (255-byte `WFS_NAME_MAX` names
+  included), fs_fat reads it into a `FAT_MAX_PATH` buffer and reports
+  PATH_TOO_LONG rather than NOT_FOUND for a component that does not fit, and
+  fs_init reads it through `copy_path_from_xfer_buffer`. Covered by
+  `test_cd_into_a_directory_whose_name_exceeds_fifteen_bytes` and
+  `test_cd_a_deep_path_in_one_command`.
 
 - [ ] [BUG][P2] `run-qemu-test` flakes roughly 1 run in 3 on the WARP build, in
   TWO distinct shapes. Both were seen while landing WFS work that reaches no boot

@@ -25,6 +25,91 @@ static int32_t ascii_case_equal(const char* a, const char* b, int32_t n) {
     return 1;
 }
 
+int32_t fsmgr_cwd_join(const char* cwd, const char* arg, char* out_path, int32_t out_cap) {
+    int32_t len = 0;
+    int32_t i = 0;
+    const char* src = 0;
+
+    if (!cwd || !arg || !out_path || out_cap < 2) {
+        return 0;
+    }
+    if (cwd[0] != '/') {
+        return 0;
+    }
+
+    /* An absolute argument discards the working directory entirely; a relative
+     * one is canonicalized on top of it, so seeding out_path with cwd and then
+     * walking arg's segments handles both with one loop. */
+    if (arg[0] == '/') {
+        out_path[0] = '/';
+        len = 1;
+        src = arg + 1;
+    } else {
+        while (cwd[len] != '\0') {
+            if (len + 1 >= out_cap) {
+                return 0;
+            }
+            out_path[len] = cwd[len];
+            len++;
+        }
+        /* Strip a trailing slash so segment appends are uniform; the root keeps
+         * its single '/' as the one path that legitimately ends in one. */
+        while (len > 1 && out_path[len - 1] == '/') {
+            len--;
+        }
+        src = arg;
+    }
+
+    while (src[i] != '\0') {
+        int32_t seg_start;
+        int32_t seg_len;
+        int32_t k;
+
+        if (src[i] == '/') {
+            i++;
+            continue;
+        }
+        seg_start = i;
+        while (src[i] != '\0' && src[i] != '/') {
+            i++;
+        }
+        seg_len = i - seg_start;
+
+        if (seg_len == 1 && src[seg_start] == '.') {
+            continue;
+        }
+        if (seg_len == 2 && src[seg_start] == '.' && src[seg_start + 1] == '.') {
+            /* Pop one segment; at the root there is nothing to pop and the join
+             * stays there rather than escaping the VFS. */
+            while (len > 1 && out_path[len - 1] != '/') {
+                len--;
+            }
+            while (len > 1 && out_path[len - 1] == '/') {
+                len--;
+            }
+            continue;
+        }
+        if (len > 1) {
+            if (len + 1 >= out_cap) {
+                return 0;
+            }
+            out_path[len++] = '/';
+        }
+        if (len + seg_len >= out_cap) {
+            return 0;
+        }
+        for (k = 0; k < seg_len; ++k) {
+            out_path[len++] = src[seg_start + k];
+        }
+    }
+
+    if (len == 0) {
+        out_path[len++] = '/';
+    }
+    out_path[len] = '\0';
+    return 1;
+}
+
 int32_t fsmgr_route_path_for_mounts(const char* path, int32_t path_len,
                                     const char* const* mount_names, int32_t mount_count,
                                     int32_t allow_relative, int32_t* out_mount_index,

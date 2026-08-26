@@ -125,26 +125,57 @@ class WfsMountReadTest(unittest.TestCase):
         self._cmd("cd ..", [])
         self._cmd("ls", [b"docs/", b"hello.txt"])
 
-    @unittest.expectedFailure
+    def test_cd_into_a_directory_whose_name_exceeds_fifteen_bytes(self):
+        """A name that the old packed CHDIR could not express at all.
+
+        Regression: 2026-08-24-chdir-xfer-buffer
+
+        FS_IPC_CHDIR_REQ used to pack its target into arg0..arg3, capping a name
+        at 15 bytes plus a NUL while WFS names run to 255 (WFS_NAME_MAX). The
+        request arrived truncated, so the lookup missed and the client was told
+        the directory did not exist rather than that its name did not fit. The
+        target now travels in a transfer buffer, the same transport OPEN uses.
+        """
+        self._cmd("cd /", [])
+        self._cmd("cd wfs", [])
+        self._cmd("cd a-directory-name-past-fifteen-bytes", [])
+        self._cmd("ls", [b"marker.txt", b"nested/"])
+        self._cmd("cat marker.txt", [b"reached the long-named directory"])
+        self._cmd("cd /", [])
+
+    def test_cd_a_deep_path_in_one_command(self):
+        """`cd /wfs/<long>/nested/deeper` as a single request.
+
+        Regression: 2026-08-24-chdir-xfer-buffer
+
+        The whole path had to fit in 16 packed bytes, so anything deeper
+        truncated; the CLI's workaround sent the remainder in one piece and hit
+        the same cap. One buffered request now carries any depth, and fs-manager
+        canonicalizes it before routing.
+        """
+        self._cmd("cd /", [])
+        self._cmd("cd /wfs/a-directory-name-past-fifteen-bytes/nested/deeper", [])
+        self._cmd("cat deep.txt", [b"reached three levels down"])
+        # '..' unwinds the same path it walked in.
+        self._cmd("cd ../..", [])
+        self._cmd("ls", [b"marker.txt", b"nested/"])
+        self._cmd("cd /", [])
+
     def test_reading_a_file_by_relative_name(self):
         """`cat hello.txt` from inside the mount — the shape a user types.
 
-        EXPECTED FAILURE, for a reason outside this driver: a spawned utility
-        does not inherit its spawner's working directory. `cat` is a separate
-        process whose fs-manager state carries no backend, so a relative path is
-        routed by resolve_backend_for_state — which falls back to the first
-        boot-kind backend. On /boot and /init that fallback is the right backend
-        and relative `cat` works BY ACCIDENT; here it sends the request to the
-        wrong backend, which answers NOT_FOUND, and this driver is never asked.
+        Regression: 2026-08-24-cwd-full-vfs-path
 
-        tests/test_fs_open_smoke.py holds the control: `cat` on the FAT boot
-        volume passes both absolutely and relatively. Tracked in docs/TASKS.md
-        with the mechanism and what is left to eliminate.
+        `cat` is a separate process, so this passes only if it resolves the name
+        against the directory its spawner stood in. It did not: fs-manager held a
+        working directory as (mount, depth) and forwarded a relative name to a
+        backend unresolved, choosing that backend by falling back to the first
+        boot-kind one when the client had none. On /boot and /init that fallback
+        is the right backend and relative `cat` worked by accident; here the FAT
+        driver answered NOT_FOUND and this driver was never asked.
 
-        The assertion is left exactly as strict as it should be. When cwd
-        inheritance is fixed this turns into an unexpected success, which fails
-        the suite and says so — rather than quietly encoding today's behaviour as
-        correct.
+        tests/test_fs_open_smoke.py holds the FAT counterpart, so a regression
+        that breaks only non-boot mounts is still caught by one of the two.
         """
         self._cmd("cd /", [])
         self._cmd("cd wfs", [])

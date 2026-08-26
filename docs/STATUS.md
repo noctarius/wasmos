@@ -820,6 +820,16 @@ linked feature documents for rationale and rollout plans.
   replay owed, or a primary recovered from a backup), which is what keeps a
   backup-mounted volume from becoming writable by omission; it is refused before
   any block is touched.
+- A volume says `WFS_STATE_DIRTY` on disk before any metadata write lands
+  (`wfs_sync.c`, marked once per mount and driven by the allocator). That flag is
+  the whole of WFS's crash safety until the journal exists: `wfs_mount_task` turns
+  a non-clean state into `needs_replay` and mounts read-only, so a crash
+  mid-allocation leaves a volume that refuses writes rather than one serving a
+  bitmap and a counter that disagree. The superblock is RESEALED, not merely
+  patched — its checksum covers `state`, and a volume that no longer validates
+  reads as corrupt, which is worse than one that reads as dirty. Marking is
+  refused on a read-only volume, which would otherwise look like an interrupted
+  write it never had.
 - `wfs_block_write_begin` stages the block into the server's buffer before
   submitting, which it previously did not — a write persisted whatever that
   buffer held. A staging failure sends no request and is reported at the take, so

@@ -33,6 +33,9 @@
 typedef struct {
     wfs_super_t super;
     uint8_t mounted;
+    /* The volume's on-disk state has been set to WFS_STATE_DIRTY for this mount,
+     * so the marking is not repeated per write. Set by wfs_mark_dirty_task. */
+    uint8_t dirty_marked;
 } wfs_volume_t;
 
 /* Reading one group descriptor. */
@@ -230,9 +233,23 @@ typedef struct {
     wfs_extent_ctx_t extent;
 } wfs_read_ctx_t;
 
+/* Recording that a volume is mounted for writing (§4). */
+typedef enum {
+    WFS_DIRTY_PC_START = 0,
+    WFS_DIRTY_PC_SUPER_READY,
+    WFS_DIRTY_PC_SUPER_WRITTEN,
+} wfs_dirty_pc_t;
+
+typedef struct {
+    wfs_dirty_pc_t pc;
+    wfs_volume_t* vol;
+    wasmos_error_code_t err;
+} wfs_dirty_ctx_t;
+
 /* Allocating blocks (§12). */
 typedef enum {
     WFS_ALLOC_PC_START = 0,
+    WFS_ALLOC_PC_DIRTY_JOINED,
     WFS_ALLOC_PC_DESC_JOINED,
     WFS_ALLOC_PC_BITMAP_READY,
     WFS_ALLOC_PC_BITMAP_WRITTEN,
@@ -266,6 +283,11 @@ typedef struct {
     uint8_t desc_started; /* a descriptor-read child is outstanding and owes a join */
     wasmos_wasm_coroutine_t desc_task;
     wfs_group_ctx_t desc;
+
+    /* Marking the volume dirty, which must land BEFORE any metadata write. */
+    uint8_t dirty_started;
+    wasmos_wasm_coroutine_t dirty_task;
+    wfs_dirty_ctx_t dirty;
 
     wasmos_error_code_t err;
 } wfs_alloc_ctx_t;

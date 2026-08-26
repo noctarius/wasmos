@@ -19,6 +19,7 @@
 #include "wfs_format.h"
 #include "wfs_mount.h"
 #include "wfs_super.h"
+#include "wfs_sync.h"
 
 static int g_failures;
 static int g_checks;
@@ -263,6 +264,39 @@ static void test_allocation_never_returns_a_metadata_block(void) {
     wfs_stub_teardown();
 }
 
+/* An allocation writes metadata, so the volume must say DIRTY on disk before any
+ * of it lands. That flag is what makes a crash mid-allocation mount read-only
+ * instead of serving a bitmap and a counter that disagree, and it is the whole of
+ * WFS's crash safety until the journal exists.
+ *
+ * Checked by REMOUNTING, because the next mount is the only reader that matters
+ * in a crash. */
+static void test_an_allocation_marks_the_volume_dirty(void) {
+    wfs_alloc_ctx_t a;
+    wfs_mount_ctx_t m;
+    wfs_volume_t remount;
+    wasmos_wasm_coroutine_t task;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    expect_u32(g_vol.dirty_marked, 0u, "a fresh mount is not marked");
+
+    expect(run_alloc(&a, 1u, 0u) == 0, "the allocation completes");
+    expect_u32(g_vol.dirty_marked, 1u, "and the volume is now marked");
+
+    memset(&m, 0, sizeof(m));
+    memset(&remount, 0, sizeof(remount));
+    m.vol = &remount;
+    expect(wfs_stub_run_task(&task, wfs_mount_task, &m) == 0, "the volume remounts");
+    expect_u32(remount.super.state, (uint32_t)WFS_STATE_DIRTY, "reporting the dirty state");
+    expect_u32(remount.super.needs_replay, 1u, "so a replay is owed");
+    expect_u32(remount.super.read_only, 1u, "and it is read-only until it happens");
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_an_allocation_marks_the_bitmap),
     WASMOS_TEST_CASE(test_two_allocations_do_not_overlap),
@@ -271,6 +305,7 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_full_volume_reports_no_space),
     WASMOS_TEST_CASE(test_a_read_only_volume_refuses_to_allocate),
     WASMOS_TEST_CASE(test_allocation_never_returns_a_metadata_block),
+    WASMOS_TEST_CASE(test_an_allocation_marks_the_volume_dirty),
 };
 
 int main(void) {

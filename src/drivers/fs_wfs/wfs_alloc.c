@@ -8,6 +8,7 @@
 #include "wfs_crc32c.h"
 #include "wfs_mount.h"
 #include "wfs_ops.h"
+#include "wfs_sync.h"
 
 /* Little-endian field access. On-disk fields are little-endian regardless of the
  * host, so they are assembled byte-wise rather than cast over.
@@ -70,6 +71,33 @@ int32_t wfs_alloc_blocks_task(void* user, uintptr_t* out_value) {
         }
         ctx->group = ctx->prefer_group < ctx->vol->super.group_count ? ctx->prefer_group : 0u;
         ctx->tried = 0u;
+        /* The volume says DIRTY on disk before any metadata write lands. That
+         * flag is what makes a crash mid-allocation mount read-only instead of
+         * serving bitmaps and counters that disagree -- the whole of WFS's crash
+         * safety until the journal exists (phase 3). Costs one write per mount. */
+        wfs_ops_task_reset(&ctx->dirty_task);
+        memset(&ctx->dirty, 0, sizeof(ctx->dirty));
+        ctx->dirty.vol = ctx->vol;
+        if (!wasmos_async_start(
+                wfs_ops_runtime(), &ctx->dirty_task, wfs_mark_dirty_task, &ctx->dirty)) {
+            WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+        }
+        ctx->dirty_started = 1u;
+        ctx->pc = WFS_ALLOC_PC_DIRTY_JOINED;
+        /* fall through */
+
+    case WFS_ALLOC_PC_DIRTY_JOINED:
+        if (ctx->dirty_started) {
+            int dj = wasmos_wasm_coroutine_join(&ctx->dirty_task, &joined);
+
+            if (dj == WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->dirty_started = 0u;
+            if (dj != 0 || joined != 0) {
+                WFS_FAIL(ctx, joined ? (wasmos_error_code_t)joined : WASMOS_ERR_FS_IO);
+            }
+        }
         ctx->pc = WFS_ALLOC_PC_DESC_JOINED;
         /* fall through into the sweep */
 

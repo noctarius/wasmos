@@ -125,23 +125,29 @@ set(WASM_FAT_DRIVER_SRC
   ${DRIVER_WASM_DIR}/fs_fat/fat_file.c)
 set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
 set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wap)
+# Grouped by layer, matching the file map in fs_wfs.c. The format layer touches
+# no device and runs no task, which is what lets its host suites link two files
+# instead of fifteen; keep it that way.
 set(WASM_WFS_DRIVER_SRC
   ${DRIVER_WASM_DIR}/fs_wfs/fs_wfs.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+  # format: pure, on-disk structures and the arithmetic over them
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_fd.c
+  # plumbing: the device and the runtime
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+  # operations: tasks on the coroutine runtime
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_fd.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_write.c
-  ${DRIVER_WASM_DIR}/fs_wfs/wfs_truncate.c)
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_truncate.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c)
 set(WASM_WFS_DRIVER_WASM ${BUILD_DIR}/fs_wfs.wasm)
 set(WASM_WFS_APP ${BUILD_DIR}/fs_wfs.wap)
 set(WASM_INITFS_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_init/fs_init.c)

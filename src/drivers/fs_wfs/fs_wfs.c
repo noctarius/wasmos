@@ -13,6 +13,40 @@
  * block layer stages a single block and a second concurrent op would fight it
  * for the staging buffer. Interleaving needs a buffer per op, which is a change
  * to wfs_block, not to this file.
+ *
+ * ---- the files ------------------------------------------------------------
+ *
+ * Three layers, and the boundary between the first two is load-bearing rather
+ * than decorative: the FORMAT layer touches no device and runs no task, which is
+ * why its host suites link two files while every other suite links fifteen. A
+ * change that gives a format file a block request has crossed a line.
+ *
+ * Each .c below has a paired header carrying its contract; only the header-only
+ * files are named as such.
+ *
+ *   FORMAT — pure; on-disk structures and the arithmetic over them
+ *     wfs_format.h    every on-disk struct, with its layout as _Static_assert
+ *     wfs_status.h    the driver's view of the generated error codes
+ *     wfs_types.h     the per-operation task contexts (declarations only)
+ *     wfs_crc32c.c    CRC32C, and the uuid+location seeding (§13)
+ *     wfs_super.c     superblock parse/validate, and where backups sit (§4, §5)
+ *     wfs_bitmap.c    allocation bitmaps and the run search (§12)
+ *     wfs_fd.c        the per-client open-file table
+ *
+ *   PLUMBING — the device and the runtime
+ *     wfs_ops.c       the shared block client, runtime and event loop
+ *     wfs_block.c     one block staged at a time, over BLOCK_IPC futures
+ *
+ *   OPERATIONS — tasks on the coroutine runtime, one file per operation
+ *     wfs_mount.c     mount, group descriptors, object records
+ *     wfs_extent.c    logical block -> physical block, inline and tree (§9)
+ *     wfs_dir.c       directory scan and lookup (§10)
+ *     wfs_path.c      path -> object, resolved component by component
+ *     wfs_read.c      bytes out of an object (§16)
+ *     wfs_write.c     bytes into an object; allocates where nothing is mapped
+ *     wfs_truncate.c  set a size; frees or sparsens what changes
+ *     wfs_alloc.c     take and release blocks, over the bitmaps (§12)
+ *     wfs_sync.c      record that the volume is mounted for writing (§4)
  */
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"

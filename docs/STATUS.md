@@ -776,8 +776,8 @@ linked feature documents for rationale and rollout plans.
   a descriptor records where its directory entry lives, and cross-mount renames
   are refused by fs-manager.
 - WFS, the repository's own on-disk filesystem
-  (`docs/WFS_WASMOS_FILE_SYSTEM.md`), is at the end of the spec's PHASE 1
-  (§23): superblock and byte-offset mount, block-group descriptors, the object
+  (`docs/WFS_WASMOS_FILE_SYSTEM.md`), has the whole of the spec's PHASE 1 (§23)
+  IMPLEMENTED: superblock and byte-offset mount, block-group descriptors, the object
   table, directories, extents and the extent tree, seeded checksums,
   feature-flag validation, and a read-only mount. Inline data works too, ahead
   of the order that defers it to phase 4. `src/drivers/fs_wfs` runs every
@@ -851,7 +851,7 @@ linked feature documents for rationale and rollout plans.
   site: an inline object outgrowing `WFS_INLINE_DATA_MAX` (promotion must read the
   inline bytes before an extent is written over them), and an object needing more
   than `WFS_INLINE_EXTENTS` extents (the tree reader exists, the writer does not).
-- WFS TRUNCATION exists (`wfs_truncate.c`), which completes phase 2. Blocks can
+- WFS TRUNCATION exists (`wfs_truncate.c`). Blocks can
   now be released as well as taken: `wfs_free_blocks_task` clears bitmap bits and
   credits the derived counters, handling a run that spans groups as two passes
   because that is two bitmaps and two counters.
@@ -904,6 +904,25 @@ linked feature documents for rationale and rollout plans.
   names a record that verifies. That is what makes its failure cases mean
   something — an assertion that an error code came back would also pass with a
   half-written directory on disk.
+- WFS phase accounting, stated against the bar that matters: a phase is not done
+  until it works END TO END IN THE OS, not when its host suites pass. By that bar
+  NEITHER phase 1 nor phase 2 is complete, and the earlier claim that phase 2 was
+  finished was wrong.
+  Reachable from a guest today: mount, readdir, chdir (including deep paths and
+  names past 15 bytes), reads (inline, multi-block, relative and absolute), and
+  writes that patch an inline file or overwrite existing blocks across a boundary
+  (`examples/c/wfs_write_smoke`).
+  NOT reachable or not exercised in the OS, though implemented and host-tested:
+  block allocation (nothing in the guest appends past EOF, so no write has ever
+  allocated); truncation (`O_TRUNC` is wired but no guest exercises it); the whole
+  namespace writer (`MKDIR`/`UNLINK`/`RMDIR`/`RENAME` still answer UNSUPPORTED in
+  `fs_wfs.c`'s dispatch and `O_CREAT` is refused); and the extent TREE reader,
+  because mkfs_wfs bump-allocates contiguous runs so every file it writes has a
+  single extent and no volume in the guest has a tree to walk.
+  Two format capabilities are missing outright, each refused explicitly with a
+  TODO at the site rather than half-done: the extent-tree WRITER, so an object
+  caps at `WFS_INLINE_EXTENTS` extents, and inline-to-extent promotion, so a file
+  stored inline cannot grow past `WFS_INLINE_DATA_MAX`.
 - Still deferred in WFS: the extent-tree WRITER and inline-to-extent promotion
   (both refused explicitly rather than half-done, with TODOs at the sites); a sync
   path that writes the superblock back, so on-disk `free_blocks` trails the bitmaps

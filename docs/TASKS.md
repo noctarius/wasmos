@@ -946,6 +946,32 @@ tail.
   `test_cd_into_a_directory_whose_name_exceeds_fifteen_bytes` and
   `test_cd_a_deep_path_in_one_command`.
 
+- [ ] [FEATURE][P2] No shutdown notification reaches drivers or services, so
+  nothing can record a clean unmount. `halt` and `reboot` call
+  `kernel_system_poweroff()`, which does not return; every participant stops
+  mid-operation. The visible cost today is WFS: a volume written once is marked
+  DIRTY on disk and mounts READ-ONLY on every subsequent boot, because the only
+  thing that would clear the flag is a clean unmount or a journal replay and
+  neither exists.
+
+  Design is in `docs/architecture/15-drivers-and-services.md`, "Orderly Shutdown
+  Design Direction". Shape: `PROC_IPC_SHUTDOWN_REQ` / `PROC_IPC_SHUTDOWN_DONE`
+  broadcast by the process manager as the counterpart of the existing
+  `PROC_IPC_NOTIFY_READY` handshake, in REVERSE SPAWN ORDER so a participant's
+  dependencies outlive it, bounded per participant so a hung driver cannot wedge
+  the machine, and restricted to `driver` and `service` kinds.
+
+  Touches the kernel halt path, the process manager, `abi/opcodes.yaml`, and every
+  driver, so it is worth landing the opcode and the PM sequence first with drivers
+  answering immediately, then giving each one its obligation.
+
+  Two things fold into it rather than being separate work: WFS writing its
+  superblock back with the free counters reconciled (the TODO in `wfs_alloc.c`),
+  and a test path that lets writes SURVIVE a boot — `snapshot=on` on the WFS drive
+  makes the suite repeatable but forecloses the "write, halt, remount writable"
+  assertion, so a per-test opt-out or a two-phase test against a scratch image is
+  part of the feature.
+
 - [ ] [BUG][P2] `run-qemu-test` flakes roughly 1 run in 3 on the WARP build, in
   TWO distinct shapes. Both were seen while landing WFS work that reaches no boot
   artifact (no app target, no manifest, no device-manager rule, absent from

@@ -3,7 +3,9 @@ aot = true
 
 [package]
 name = "virtio-blk"
-entry = "initialize"
+# The libsys async-service entry: it creates the reply endpoint, the event loop
+# and the coroutine runtime, then pumps the root task this driver supplies.
+entry = "async_initialize"
 kind = "driver"
 native = false
 

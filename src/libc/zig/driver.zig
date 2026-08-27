@@ -10,6 +10,13 @@
 //! entry contract (importing `wasmos.zig` would require the module to export a
 //! `main` it has no use for).
 //!
+//! It offers no receive loop, no select set and no drain: a driver is an async
+//! service (`async_initialize`, `wasmos_async_service`), and the libsys runner
+//! owns its endpoint, event loop and pump. Serving work belongs in a coroutine
+//! parked on a future, never in a loop written here -- see
+//! `src/drivers/virtio_blk/virtio_blk.zig` for the shape, and
+//! docs/architecture/32-coroutines-futures-promises.md for why.
+//!
 //! Everything below is a thin, typed face over the generated ABI in
 //! `abi/generated/zig/`; the wire protocols it implements -- the service
 //! register descriptor and the ready handshake -- are the same ones
@@ -28,10 +35,6 @@ const IPC_ERR_FULL: i32 = -3;
 /// apart. Large because the peer only has to be scheduled once to drain its
 /// queue: it bounds a livelock, not a latency.
 const IPC_SEND_RETRY_LIMIT: u32 = 4096;
-/// `WASMOS_TIMEOUT`, the one negative wait result that is an elapsed window
-/// rather than a broken wait.
-const STATUS_TIMEOUT: i32 = -5;
-
 /// Cache policy for `regionAlloc`. Write-back is coherent and is what a
 /// virtqueue ring on x86 wants; write-combining is for scanout memory.
 pub const REGION_CACHE_WB: i32 = 0;
@@ -274,11 +277,10 @@ pub fn log(s: []const u8) void {
 
 // --- IPC -------------------------------------------------------------------
 
-/// A decoded IPC message. `source` is the endpoint the sender declared as its
-/// reply address and is what a server answers on; `destination` is the endpoint
-/// the message was delivered to. The four args are opaque payload words whose
-/// meaning belongs to `type`.
-pub const Message = struct {
+/// A decoded IPC message, in the layout the event loop delivers
+/// (`coroutine.IpcMessage`). Declared here so `call` can return one without a
+/// driver having to import the coroutine bindings for a bring-up request.
+pub const Message = extern struct {
     type: i32 = 0,
     request_id: i32 = 0,
     arg0: i32 = 0,
@@ -289,10 +291,7 @@ pub const Message = struct {
     destination: i32 = 0,
 };
 
-/// Decode the caller's last-received message. Valid only immediately after a
-/// receive returned a message: the slot is per context and is overwritten by
-/// the next receive on ANY endpoint.
-pub fn lastMessage() Message {
+fn lastMessage() Message {
     return .{
         .type = abi.ipc_last_field(0),
         .request_id = abi.ipc_last_field(1),
@@ -303,10 +302,6 @@ pub fn lastMessage() Message {
         .source = abi.ipc_last_field(4),
         .destination = abi.ipc_last_field(5),
     };
-}
-
-pub fn createEndpoint() i32 {
-    return abi.ipc_create_endpoint();
 }
 
 /// Send one message, yielding and retrying while the destination queue is full.
@@ -322,8 +317,16 @@ pub fn send(dest: i32, src: i32, msg_type: i32, request_id: i32, arg0: i32, arg1
     }
 }
 
-/// Synchronous request/reply: send from `reply_ep` to `dest`, then BLOCK on
-/// `reply_ep` until the matching reply arrives.
+/// Synchronous request/reply, for BRING-UP ONLY: send from `reply_ep` to
+/// `dest`, then BLOCK on `reply_ep` until the matching reply arrives.
+///
+/// A running driver must not call this. It is here for the window before the
+/// coroutine runtime exists -- `prepare` resolving a bus service, claiming an
+/// MSI vector, registering the service -- where there is no future to await on
+/// because there is no runtime to await in. Once the runtime is pumping, a
+/// request belongs on the event loop as an IpcFuture, which is why the drain
+/// and select helpers a hand-rolled loop would need are deliberately NOT part
+/// of this module.
 ///
 /// Only a message carrying this `request_id` AND sent from `dest` is accepted;
 /// every other message that lands on `reply_ep` meanwhile is consumed and
@@ -338,38 +341,6 @@ pub fn call(dest: i32, reply_ep: i32, msg_type: i32, request_id: i32, arg0: i32,
         if (abi.ipc_last_field(4) != dest) continue;
         return lastMessage();
     }
-}
-
-/// Dequeue one pending message without blocking. True when a message was
-/// received into the last-message slot.
-pub fn drain(endpoint: i32) bool {
-    return abi.ipc_drain(endpoint) > 0;
-}
-
-pub fn selectCreate() i32 {
-    return abi.ipc_select_create();
-}
-
-pub fn selectAdd(sel: i32, endpoint: i32) bool {
-    return abi.ipc_select_add(sel, endpoint) == 0;
-}
-
-/// Outcome of a timed wait. Ready and Timeout are both ordinary -- a caller
-/// loops and re-polls either way. Failed is not, and is why this exists: a
-/// failed wait returns IMMEDIATELY, so a loop that cannot tell it from a
-/// timeout stops parking and spins at full speed.
-pub const Wait = enum { ready, timeout, failed };
-
-/// Block on `sel` for at most `timeout_ms` (0 = forever).
-pub fn selectWait(sel: i32, timeout_ms: i32) Wait {
-    const rc = abi.ipc_select_wait_timeout(sel, timeout_ms);
-    // Endpoint 0 is an endpoint, not an error.
-    if (rc >= 0) return .ready;
-    return if (rc == STATUS_TIMEOUT) .timeout else .failed;
-}
-
-pub fn yield() void {
-    _ = abi.sched_yield();
 }
 
 // --- transfer buffers ------------------------------------------------------
@@ -470,7 +441,9 @@ pub fn lookupService(proc_endpoint: i32, name: []const u8, request_id_base: i32,
                 return reply.arg0;
             }
         }
-        yield();
+        // Bring-up only, and bounded: a service that has not registered yet
+        // needs the scheduler to run it before the next attempt can succeed.
+        _ = abi.sched_yield();
     }
     return null;
 }

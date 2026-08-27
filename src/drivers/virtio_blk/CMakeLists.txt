@@ -18,9 +18,12 @@ if (ZIG_ENABLE)
   endif ()
 endif ()
 
-# EXTRA_SRCS carries three kinds of file, all staged flat beside the driver so
+# EXTRA_SRCS carries four kinds of file, all staged flat beside the driver so
 # Zig's @import resolves them:
 #   - the driver-side and virtqueue Zig shims;
+#   - the coroutine runtime and its async-service entry, which owns this
+#     driver's event loop and pump: the manifest entry is async_initialize, so
+#     service_async_entry_wasm.c is what the loader actually calls;
 #   - vring_shim.c, which compiles the static-inline virtqueue core from
 #     wasmos/vring.h into the module and re-exports it (there is one ring
 #     implementation in the tree, and this is how Zig reaches it);
@@ -37,6 +40,11 @@ wasmos_add_zig_wasm_app(
     ${LIBC_DIR}/zig/driver.zig
     ${LIBC_DIR}/zig/vring.zig
     ${LIBC_DIR}/zig/vring_shim.c
+    ${LIBC_DIR}/zig/coroutine.zig
+    ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+    ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+    ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
+    ${LIBSYS_WASM_DIR}/service_async_entry_wasm.c
     ${CMAKE_SOURCE_DIR}/abi/generated/zig/wasmos_imports.zig
     ${CMAKE_SOURCE_DIR}/abi/generated/zig/wasmos_opcodes.zig
     ${CMAKE_SOURCE_DIR}/abi/generated/zig/wasmos_status.zig

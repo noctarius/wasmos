@@ -1,9 +1,37 @@
-//! virtio_blk.zig — VirtIO block-device driver, in Zig.
+//! virtio_blk.zig — VirtIO block-device driver, in Zig, on the coroutine runtime.
 //!
 //! Serves the block-device IPC interface (BLOCK_IPC_IDENTIFY_REQ,
 //! BLOCK_IPC_READ_REQ, BLOCK_IPC_WRITE_REQ, BLOCK_IPC_READ_ZC_REQ) on top of a
 //! legacy virtio-blk PCI device, so a filesystem driver reads a virtio disk
 //! through exactly the protocol it reads an ATA disk through.
+//!
+//! Shape: an async service, not a blocking loop
+//! -------------------------------------------
+//! The module's entry is `async_initialize` (libsys), which owns the reply
+//! endpoint, the event loop and the coroutine runtime, and pumps them:
+//!
+//!     while (root is alive) { runtime.runBudget(1); if (root waiting) loop.poll(1); }
+//!
+//! So this file supplies two things and no loop of its own: `prepare`, which
+//! brings the device up before the runtime starts, and `rootTask`, a stackless
+//! coroutine that parks on a future whenever it has nothing to do. `poll` parks
+//! on the loop's select set, so an idle driver sleeps rather than spins.
+//!
+//! ONE endpoint carries everything. The loop drains a single receiver endpoint
+//! and demultiplexes: a reply matching an in-flight request id settles its
+//! future, anything else reaches the default handler. So the block service is
+//! registered ON that endpoint and the interrupt is routed TO it, and
+//! `onMessage` sorts client requests from completion interrupts. That is what
+//! the loop is built for, and it is why the driver needs no select set, no
+//! drain loop and no timed wait of its own.
+//!
+//! Concurrency lives in the root task, deliberately. Spawning a coroutine per
+//! request would be the obvious shape and is WRONG under this runner: it polls
+//! whenever the ROOT is parked, and poll blocks until an event arrives, so a
+//! ready child task would sit unresumed until an unrelated message happened to
+//! come in. Instead the root task owns a slot table and keeps up to
+//! MAX_INFLIGHT chains on the queue at once, parking only when every slot is
+//! idle.
 //!
 //! What virtio-blk is
 //! ------------------
@@ -24,18 +52,8 @@
 //! that address goes straight into the data descriptor: the device transfers
 //! into the requester's pages and no byte is copied by any CPU. The same holds
 //! for BLOCK_IPC_READ_ZC_REQ, where the client's borrow of a transfer buffer is
-//! mapped for the device instead. Only the header and the status byte live in
-//! this driver's own pinned region, and together they are 17 bytes.
-//!
-//! Requests are strictly serialised: one chain is in flight at a time, and the
-//! driver blocks on the device's completion interrupt in between. That costs
-//! queue depth and is the obvious thing to lift later; it also means every
-//! completion the used ring reports belongs to the request being waited on.
-//!
-//! A chain the device has not reported still BELONGS to it, and virtio offers no
-//! way to withdraw one. A timeout is therefore terminal rather than retryable:
-//! the driver abandons the device (`quiesce`) instead of recycling descriptors
-//! the device may still complete into a client's buffer.
+//! mapped for the device instead. Only the per-slot header and status byte live
+//! in this driver's own pinned region, and together they are 17 bytes.
 //!
 //! Interrupts
 //! ----------
@@ -59,6 +77,7 @@
 
 const driver = @import("driver.zig");
 const vring = @import("vring.zig");
+const co = @import("coroutine.zig");
 const op = @import("wasmos_opcodes.zig");
 const status = @import("wasmos_status.zig");
 
@@ -67,6 +86,11 @@ const status = @import("wasmos_status.zig");
 /// where plain MSI needs one aligned block of consecutive vectors.
 const PCI_MSI_KIND_MSIX: i32 = 2;
 
+/// IPC message types the kernel sends for an interrupt: 0xFF00 for a routed
+/// INTx line (an ack is owed) and 0xFF01 for an MSI vector (none is).
+const IPC_IRQ_EVENT_TYPE: i32 = 0xFF00;
+const IPC_MSI_EVENT_TYPE: i32 = 0xFF01;
+
 /// 0x1AF4 is the Red Hat / virtio vendor id. Both device ids below identify a
 /// block device and are accepted interchangeably: 0x1001 is the transitional
 /// (legacy) id, 0x1042 is 0x1040 + virtio device type 2.
@@ -74,10 +98,7 @@ const PCI_VENDOR_VIRTIO: u32 = 0x1AF4;
 const PCI_DEVICE_BLK_LEGACY: u32 = 0x1001;
 const PCI_DEVICE_BLK_MODERN: u32 = 0x1042;
 
-/// Legacy virtqueue registers, as offsets into the device's I/O window. MSI-X
-/// is not enabled by this driver, so the device-specific configuration stays at
-/// 0x14; enabling it would insert two vector registers there and shift the
-/// configuration to 0x18.
+/// Legacy virtqueue registers, as offsets into the device's I/O window.
 const REG_DEVICE_FEATURES: u16 = 0x00;
 const REG_DRIVER_FEATURES: u16 = 0x04;
 /// u32: ring page frame number (physical address >> 12).
@@ -131,17 +152,15 @@ const FEATURE_RO: u32 = 1 << 5;
 /// Request types, and the status byte the device writes back.
 const REQ_TYPE_IN: u32 = 0; // device -> memory (a disk read)
 const REQ_TYPE_OUT: u32 = 1; // memory -> device (a disk write)
-const REQ_TYPE_FLUSH: u32 = 4;
 const REQ_STATUS_OK: u8 = 0;
-/// Sentinel written into the status byte before a request is published. The
-/// device overwrites it, so seeing it after a completion means the device
+/// Sentinel written into a slot's status byte before its chain is published.
+/// The device overwrites it, so seeing it after a completion means the device
 /// reported the chain without touching its status -- a device bug, reported as
 /// an I/O error rather than mistaken for success.
 const REQ_STATUS_UNSET: u8 = 0xFF;
 
 /// virtio-blk defines exactly one queue, index 0, the requestq. MAX_QUEUE caps
-/// the queue size this driver accepts from the device; the ring must fit the
-/// region allocated for it.
+/// the queue size this driver accepts from the device.
 const REQUEST_QUEUE: u16 = 0;
 const MAX_QUEUE: u16 = 256;
 
@@ -156,20 +175,26 @@ const MAX_SECTORS: u32 = 8;
 const ZC_BORROW_SHIFT: u5 = 12;
 const ZC_COUNT_MASK: i32 = 0xFFF;
 
-/// Offsets of the header and the status byte within the driver's scratch
-/// region. They are separate descriptors, so they only need to be distinct;
-/// keeping the status well clear of the header keeps a device that overruns the
-/// header from landing on it.
-const SCRATCH_HEADER_OFF: u32 = 0;
-const SCRATCH_STATUS_OFF: u32 = 64;
+/// Requests that may be on the queue at once. Each holds three descriptors and
+/// one SLOT_STRIDE-byte span of the scratch page, so the ceiling is the scratch
+/// page rather than the 256-entry ring.
+const MAX_INFLIGHT: usize = 8;
+/// Bytes of scratch per slot: a 16-byte header at the start and a status byte
+/// at SLOT_STATUS_OFF. They are separate descriptors and only need to be
+/// distinct; the gap keeps a device that overruns the header off the status.
+const SLOT_STRIDE: u32 = 128;
+const SLOT_STATUS_OFF: u32 = 64;
 
-/// Completion is interrupt-driven: the device raises its INTx line when it has
-/// used a buffer and the driver blocks on the routed event. The interval and
-/// try count are a safety net for a lost or unroutable interrupt, not the
-/// mechanism -- polling a device interrupt on a timer leaves a shared line
-/// asserted between ticks, which livelocks a single-CPU guest.
-const IRQ_WAIT_MS: i32 = 50;
-const IRQ_MAX_WAITS: u32 = 40; // ~2s ceiling before a request is declared timed out
+/// Idle poll interval, and how many of them an in-flight request may survive
+/// before the device is declared lost. 8 x 250 ms is the same ~2 second ceiling
+/// the driver's earlier blocking wait used.
+///
+/// The interval exists ONLY to age requests: completions arrive as interrupts,
+/// so a driver with nothing outstanding would be woken for no reason. The loop
+/// is therefore left parking indefinitely until the first request is accepted,
+/// and put back that way once the last one retires -- see `armIdleTimer`.
+const POLL_INTERVAL_MS: i32 = 250;
+const MAX_IDLE_TICKS: u16 = 8;
 
 /// The 16-byte request header, laid out as the device reads it.
 const ReqHeader = extern struct {
@@ -198,25 +223,93 @@ const Device = struct {
     msix_enabled: bool = false,
     /// Kernel vector behind table entry MSIX_ENTRY_QUEUE.
     msix_vector: u32 = 0,
+    /// True while a routed INTx line is the completion source, so an ack is owed
+    /// for every event.
+    irq_routed: bool = false,
+};
+
+/// Where one request is in its life. A slot moves free -> pending -> in_flight
+/// -> complete -> free. Only the root task advances it out of `pending` or
+/// `complete`; only the message handler advances it out of `in_flight`.
+const SlotState = enum { free, pending, in_flight, complete };
+
+const Slot = struct {
+    state: SlotState = .free,
+    /// Who to answer, and with which request id.
+    source: i32 = 0,
+    request_id: i32 = 0,
+    msg_type: i32 = 0,
+    /// Decoded request.
+    lba: u32 = 0,
+    count: u32 = 0,
+    /// Device address of the caller's data buffer.
+    data_phys: u64 = 0,
+    /// Borrow to unmap once the transfer is done; 0 for a non-zero-copy request.
+    borrow: i32 = 0,
+    borrow_bytes: u32 = 0,
+    /// Head descriptor while the chain is on the queue.
+    chain_head: u16 = 0,
+    /// Idle intervals this request has survived, for the deadline in `rootTask`.
+    idle_ticks: u16 = 0,
+    /// Outcome to report, set when the completion is observed.
+    result: i32 = 0,
 };
 
 var g_dev: Device = .{};
-var g_endpoint: i32 = -1;
-var g_select: i32 = -1;
-/// Interrupts get their own endpoint and select set so the completion wait can
-/// drain them without consuming (and discarding) pending block requests.
-var g_irq_endpoint: i32 = -1;
-var g_irq_select: i32 = -1;
-var g_irq_routed: bool = false;
-/// `pci-bus` owns PCI config space and is the only party that can program this
-/// device's MSI-X table; its absence just means the INTx fallback.
 var g_pci_endpoint: i32 = -1;
-
 var g_queue: vring.Queue = undefined;
 var g_queue_ready: bool = false;
-/// Pinned region holding the request header and the status byte. Everything
+/// Pinned region holding each slot's request header and status byte. Everything
 /// else a request touches is the client's memory.
 var g_scratch: driver.Region = undefined;
+var g_slots: [MAX_INFLIGHT]Slot = [_]Slot{.{}} ** MAX_INFLIGHT;
+
+/// The future the root task parks on when every slot is idle, and the promise
+/// the message and timeout handlers settle to wake it.
+var g_wake_future: co.Future = .{};
+var g_wake_promise: co.Promise = .{};
+/// True while the root task is parked on `g_wake_future`, so a handler only
+/// settles a promise someone is actually waiting on.
+var g_root_parked: bool = false;
+
+// --- async service contract ------------------------------------------------
+
+/// Definition of one async WASM guest, mirroring `wasmos_sys_wasm_async_config_t`.
+/// The runtime, root task, event loop and reply endpoint are scratch state the
+/// libsys runner fills in; only `resume`, `prepare` and `user` are inputs.
+const AsyncServiceConfig = extern struct {
+    runtime: co.Runtime = .{},
+    root: co.Coroutine = .{},
+    event_loop: co.EventLoop = .{},
+    reply_endpoint: i32 = 0,
+    @"resume": ?co.TaskResume = null,
+    prepare: ?*const fn (?*anyopaque, i32, i32, i32, i32) callconv(.c) void = null,
+    user: ?*anyopaque = null,
+};
+
+/// The single global the libsys `async_initialize` entry runs. A driver defines
+/// `wasmos_async_service`; an application would define `wasmos_async_app`.
+export var wasmos_async_service: AsyncServiceConfig = .{
+    .@"resume" = rootTask,
+    .prepare = prepare,
+};
+
+fn loop() *co.EventLoop {
+    return &wasmos_async_service.event_loop;
+}
+
+/// The endpoint the runner created: the loop's receiver, this driver's service
+/// endpoint, and the interrupt's destination, all the same one. See the header.
+fn endpoint() i32 {
+    return wasmos_async_service.reply_endpoint;
+}
+
+/// Turn the loop's idle timer on while requests are outstanding and off again
+/// when none are, so an idle driver parks indefinitely instead of waking on a
+/// timer that has nothing to age.
+fn armIdleTimer(on: bool) void {
+    loop().poll_timeout_ms = if (on) POLL_INTERVAL_MS else 0;
+}
 
 // --- device access ---------------------------------------------------------
 
@@ -235,13 +328,6 @@ fn setStatusBit(bits: u8) void {
 /// MSI-X binding has either succeeded or failed.
 fn configBase() u16 {
     return if (g_dev.msix_enabled) REG_DEVICE_CONFIG_MSIX else REG_DEVICE_CONFIG_INTX;
-}
-
-/// True while completions arrive as IPC on the interrupt endpoint, by either
-/// mechanism -- which is what decides whether the completion wait parks on that
-/// endpoint or on the service one.
-fn irqActive() bool {
-    return g_irq_routed or g_dev.msix_enabled;
 }
 
 /// Read the device's 64-bit capacity as two 32-bit halves, which is how a
@@ -309,7 +395,7 @@ fn probeFromStartupArgs() bool {
 /// Returns true when the vector is bound. Every failure is non-fatal -- the
 /// caller falls back to INTx.
 fn setupMsix() bool {
-    if (g_pci_endpoint < 0 or g_irq_endpoint < 0) return false;
+    if (g_pci_endpoint < 0) return false;
     const reply_ep = driver.privateReplyEndpoint();
     if (reply_ep < 0) return false;
 
@@ -317,7 +403,9 @@ fn setupMsix() bool {
     const query = driver.call(g_pci_endpoint, reply_ep, op.PCI_IPC_MSI_QUERY, 1, bdf, 0, 0, 0) orelse return false;
     if (query.type != op.PCI_IPC_RESP or query.arg0 != PCI_MSI_KIND_MSIX or query.arg1 < 1) return false;
 
-    const desc = driver.msiAlloc(g_irq_endpoint) orelse return false;
+    // The vector is bound to the loop's endpoint, so a completion arrives as an
+    // ordinary message the loop dispatches to onMessage.
+    const desc = driver.msiAlloc(endpoint()) orelse return false;
     const entry: i32 = @intCast((@as(u32, @intCast(bdf)) << 8) | MSIX_ENTRY_QUEUE);
     const bind = driver.call(
         g_pci_endpoint,
@@ -406,7 +494,7 @@ fn initializeDevice() bool {
         return false;
     };
 
-    // One page of pinned scratch for the request header and status byte.
+    // One page of pinned scratch, carved into MAX_INFLIGHT slots.
     g_scratch = driver.regionAlloc(1, driver.REGION_CACHE_WB) orelse {
         setStatusBit(state | STATUS_FAILED);
         return false;
@@ -427,6 +515,7 @@ fn initializeDevice() bool {
     var line = driver.Line{};
     _ = line.str("[virtio-blk] ready qsize=").dec(qsize);
     _ = line.str(" capacity=").dec(g_dev.capacity_sectors).str(" sectors");
+    _ = line.str(" inflight=").dec(MAX_INFLIGHT);
     if (g_dev.read_only) _ = line.str(" read-only");
     if ((device_features & FEATURE_BLK_SIZE) != 0) {
         _ = line.str(" blk_size=").dec(g_dev.ports.in32(configBase() + CFG_BLK_SIZE));
@@ -438,134 +527,89 @@ fn initializeDevice() bool {
     return true;
 }
 
-// --- interrupts ------------------------------------------------------------
-
-/// Service the device's interrupt. Both halves matter: reading the virtio ISR
-/// de-asserts the level-triggered INTx line at the DEVICE, and irq_ack unmasks
-/// it at the kernel, which keeps a dispatched line masked until every driver
-/// sharing it has acked. A PCI INTx line is shared, so an unserviced assertion
-/// here re-fires for every sharer on each unmask.
-fn serviceIrq() void {
-    if (!irqActive()) return;
-    // Several events may have queued; the payload only names the source and the
-    // work is the same for each.
-    while (driver.drain(g_irq_endpoint)) {}
-    if (g_dev.msix_enabled) {
-        // Nothing to de-assert and nothing to ack: the vector is edge-triggered
-        // and exclusive to this device, so none of the ceremony below applies.
-        return;
-    }
-    // Reading ISR is itself the de-assertion; the value is not wanted.
-    _ = g_dev.ports.in8(REG_ISR_STATUS);
-    driver.irqAck(g_dev.irq);
-}
-
-// --- requests --------------------------------------------------------------
-
-/// Build, publish and await one virtio-blk request. `data_phys` is the device
-/// address of the caller's data buffer -- the client's block buffer or a mapped
-/// borrow, never this driver's memory. Returns 0, or a packed
-/// WASMOS_ERR_VIRTIO_BLK_* code.
-fn submit(req_type: u32, sector: u64, data_phys: u64, data_len: u32) i32 {
-    if (!g_dev.ready or !g_queue_ready) return status.WASMOS_ERR_VIRTIO_BLK_NOT_READY;
-
-    const header: *ReqHeader = @ptrCast(@alignCast(g_scratch.base + SCRATCH_HEADER_OFF));
-    header.* = .{ .type = req_type, .ioprio = 0, .sector = sector };
-
-    // The device writes the status byte, so it is read and written through a
-    // volatile view: between publish and the completion it changes underneath
-    // this code.
-    const status_byte: *volatile u8 = @ptrCast(g_scratch.base + SCRATCH_STATUS_OFF);
-    status_byte.* = REQ_STATUS_UNSET;
-
-    const bufs = [3]vring.Buf{
-        .{ .addr = g_scratch.phys + SCRATCH_HEADER_OFF, .len = @sizeOf(ReqHeader), .flags = 0 },
-        .{
-            .addr = data_phys,
-            .len = data_len,
-            // The direction of this one descriptor is the whole difference
-            // between a read and a write.
-            .flags = if (req_type == REQ_TYPE_IN) vring.DESC_F_WRITE else 0,
-        },
-        .{ .addr = g_scratch.phys + SCRATCH_STATUS_OFF, .len = 1, .flags = vring.DESC_F_WRITE },
-    };
-
-    const head = g_queue.allocChain(&bufs) orelse return status.WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL;
-    g_queue.publish(head);
-    g_queue.kick();
-
-    var waits: u32 = 0;
-    while (waits <= IRQ_MAX_WAITS) : (waits += 1) {
-        if (g_queue.getUsed(null)) |completed| {
-            // Requests are serialised, so the only chain the device can be
-            // reporting is this one. Anything else means the ring is out of
-            // step, and neither chain can be accounted for -- reading a status
-            // byte that may belong to a different request, or recycling
-            // descriptors the device still owns, both corrupt a client's
-            // buffer. Abandon the device instead.
-            if (completed != head) {
-                quiesce("used ring reported a chain that was not in flight");
-                return status.WASMOS_ERR_VIRTIO_BLK_IO_ERROR;
-            }
-            // Now the device has given the chain back, so its descriptors and
-            // the buffers they name are the driver's again.
-            g_queue.freeChain(head);
-            return if (status_byte.* == REQ_STATUS_OK) 0 else status.WASMOS_ERR_VIRTIO_BLK_IO_ERROR;
-        }
-        if (waits == IRQ_MAX_WAITS) break;
-        // Block until the completion interrupt arrives, or the safety-net
-        // interval elapses. Only IRQ events land on this endpoint, so draining
-        // it cannot swallow a block request. A wait that FAILS returns
-        // immediately, so looping on it would spin rather than block: give up
-        // on the completion and let the timeout path run.
-        const parked = if (irqActive())
-            driver.selectWait(g_irq_select, IRQ_WAIT_MS)
-        else
-            driver.selectWait(g_select, IRQ_WAIT_MS);
-        if (parked == .failed) break;
-        serviceIrq();
-    }
-
-    quiesce("a request went unreported past its deadline");
-    return status.WASMOS_ERR_VIRTIO_BLK_TIMEOUT;
-}
-
 /// Abandon the device after its queue state can no longer be trusted, and
 /// refuse every later request with NOT_READY.
 ///
 /// A published chain belongs to the DEVICE until it reports it on the used
-/// ring, and there is no way to withdraw one: a timeout means the driver has
-/// lost track of a chain the device may still be working on. Freeing that chain
-/// would hand its descriptors to the next request while the device can still
-/// complete the old one -- and because the data descriptor addresses the
-/// CALLER's block buffer, the late write would land in another client's memory.
-/// So the chain is deliberately NOT freed.
+/// ring, and there is no way to withdraw one. Freeing such a chain would hand
+/// its descriptors to the next request while the device can still complete the
+/// old one -- and because the data descriptor addresses the CALLER's block
+/// buffer, the late write would land in another client's memory. So no chain is
+/// freed here.
 ///
-/// Resetting the device is what actually makes that impossible rather than
-/// merely unlikely: writing 0 to the status register is the one operation that
-/// revokes the queue, after which the device must not touch any of the memory
-/// it was configured with. FAILED is written first because that is what the bit
-/// is for -- it tells the device the driver gave up, and it is visible to
-/// anything inspecting the device afterwards.
-///
-/// Recovery would mean re-running bring-up from probe. That is deliberately not
-/// attempted: a virtio-blk request that misses a 2-second deadline means
-/// something is wrong that a silent retry would only hide.
+/// Resetting the device is what makes that impossible rather than merely
+/// unlikely: writing 0 to the status register is the one operation that revokes
+/// the queue, after which the device must not touch any of the memory it was
+/// configured with. FAILED is written first because that is what the bit is
+/// for. Every outstanding slot is then answered, so no client is left waiting.
 fn quiesce(why: []const u8) void {
     g_dev.ready = false;
     g_queue_ready = false;
     setStatusBit(STATUS_FAILED);
     setStatusBit(0);
-    // Service the line before returning: leaving it asserted turns a lost
-    // completion into an unbounded interrupt storm.
-    serviceIrq();
+    for (&g_slots) |*slot| {
+        if (slot.state == .in_flight or slot.state == .pending) {
+            slot.result = status.WASMOS_ERR_VIRTIO_BLK_IO_ERROR;
+            slot.state = .complete;
+        }
+    }
     var line = driver.Line{};
     _ = line.str("[virtio-blk] device abandoned: ").str(why);
     line.end();
 }
 
+// --- slots -----------------------------------------------------------------
+
+fn slotHeader(index: usize) *ReqHeader {
+    const off: u32 = @as(u32, @intCast(index)) * SLOT_STRIDE;
+    return @ptrCast(@alignCast(g_scratch.base + off));
+}
+
+/// The device writes a slot's status byte, so it is reached through a volatile
+/// view: between publish and completion it changes underneath this code.
+fn slotStatus(index: usize) *volatile u8 {
+    const off: u32 = @as(u32, @intCast(index)) * SLOT_STRIDE + SLOT_STATUS_OFF;
+    return @ptrCast(g_scratch.base + off);
+}
+
+fn slotHeaderPhys(index: usize) u64 {
+    return g_scratch.phys + @as(u64, @intCast(index)) * SLOT_STRIDE;
+}
+
+fn slotStatusPhys(index: usize) u64 {
+    return g_scratch.phys + @as(u64, @intCast(index)) * SLOT_STRIDE + SLOT_STATUS_OFF;
+}
+
+fn claimSlot() ?usize {
+    for (&g_slots, 0..) |*slot, i| {
+        if (slot.state == .free) {
+            slot.* = .{ .state = .pending };
+            return i;
+        }
+    }
+    return null;
+}
+
+/// The slot whose chain the device just reported, or null when the head names
+/// no request this driver has outstanding.
+fn slotForChain(head: u16) ?usize {
+    for (&g_slots, 0..) |*slot, i| {
+        if (slot.state == .in_flight and slot.chain_head == head) return i;
+    }
+    return null;
+}
+
+fn anyOutstanding() bool {
+    for (&g_slots) |*slot| {
+        if (slot.state != .free) return true;
+    }
+    return false;
+}
+
+// --- request handling ------------------------------------------------------
+
 fn sendError(dest: i32, request_id: i32, code: i32) void {
-    _ = driver.send(dest, g_endpoint, op.BLOCK_IPC_ERROR, request_id, code, 0, 0, 0);
+    _ = driver.send(dest, endpoint(), op.BLOCK_IPC_ERROR, request_id, code, 0, 0, 0);
 }
 
 /// Validate the sector range every transfer request carries. Returns 0 when the
@@ -583,19 +627,20 @@ fn checkRange(lba: i32, count: i32) i32 {
     return 0;
 }
 
-/// BLOCK_IPC_IDENTIFY_REQ: report the device geometry. arg1 is the sector
-/// count and arg2 the unit index, which is always 0 -- a virtio-blk device is
-/// one disk, and a second disk is a second device with its own driver instance.
-fn handleIdentify(source: i32, request_id: i32) void {
+/// BLOCK_IPC_IDENTIFY_REQ: report the device geometry. arg1 is the sector count
+/// and arg2 the unit index, which is always 0 -- a virtio-blk device is one
+/// disk, and a second disk is a second device with its own driver instance.
+/// Answered inline because it needs no transfer.
+fn handleIdentify(msg: *const co.IpcMessage) void {
     if (!g_dev.present or !g_dev.ready) {
-        sendError(source, request_id, status.WASMOS_ERR_VIRTIO_BLK_NOT_READY);
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_NOT_READY);
         return;
     }
     _ = driver.send(
-        source,
-        g_endpoint,
+        msg.source,
+        endpoint(),
         op.BLOCK_IPC_IDENTIFY_RESP,
-        request_id,
+        msg.request_id,
         0,
         @intCast(g_dev.capacity_sectors),
         0,
@@ -607,42 +652,32 @@ fn handleIdentify(source: i32, request_id: i32) void {
 /// named by physical address, arg1 the first sector, arg2 the sector count. The
 /// buffer address goes straight into the data descriptor, so the device
 /// transfers into (or out of) the client's pages directly.
-fn handleTransfer(msg_type: i32, source: i32, request_id: i32, buffer_phys: i32, lba: i32, count: i32) void {
-    const is_write = msg_type == op.BLOCK_IPC_WRITE_REQ;
+fn acceptTransfer(msg: *const co.IpcMessage) void {
+    const is_write = msg.type == op.BLOCK_IPC_WRITE_REQ;
     if (is_write and g_dev.read_only) {
-        sendError(source, request_id, status.WASMOS_ERR_VIRTIO_BLK_READ_ONLY);
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_READ_ONLY);
         return;
     }
-    if (buffer_phys <= 0) {
-        sendError(source, request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+    if (msg.arg0 <= 0) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
         return;
     }
-    const check = checkRange(lba, count);
+    const check = checkRange(msg.arg1, msg.arg2);
     if (check != 0) {
-        sendError(source, request_id, check);
+        sendError(msg.source, msg.request_id, check);
         return;
     }
-
-    const rc = submit(
-        if (is_write) REQ_TYPE_OUT else REQ_TYPE_IN,
-        @intCast(lba),
-        @intCast(buffer_phys),
-        @as(u32, @intCast(count)) * SECTOR_BYTES,
-    );
-    if (rc != 0) {
-        sendError(source, request_id, rc);
+    const index = claimSlot() orelse {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL);
         return;
-    }
-    _ = driver.send(
-        source,
-        g_endpoint,
-        if (is_write) op.BLOCK_IPC_WRITE_RESP else op.BLOCK_IPC_READ_RESP,
-        request_id,
-        0,
-        count,
-        0,
-        0,
-    );
+    };
+    const slot = &g_slots[index];
+    slot.source = msg.source;
+    slot.request_id = msg.request_id;
+    slot.msg_type = msg.type;
+    slot.lba = @intCast(msg.arg1);
+    slot.count = @intCast(msg.arg2);
+    slot.data_phys = @intCast(msg.arg0);
 }
 
 /// BLOCK_IPC_READ_ZC_REQ: land whole sectors straight in the client's transfer
@@ -655,95 +690,278 @@ fn handleTransfer(msg_type: i32, source: i32, request_id: i32, buffer_phys: i32,
 /// pointed at. Without a borrow there is nothing to map -- this driver has no
 /// staging path, so the request is refused and the client falls back to
 /// BLOCK_IPC_READ_REQ.
-fn handleReadZeroCopy(source: i32, request_id: i32, buffer_id: i32, lba: i32, packed_count: i32, dst_offset: i32) void {
-    const count = packed_count & ZC_COUNT_MASK;
-    const borrow = @as(i32, @intCast(@as(u32, @bitCast(packed_count)) >> ZC_BORROW_SHIFT));
-    if (buffer_id <= 0 or dst_offset < 0 or borrow <= 0) {
-        sendError(source, request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+fn acceptReadZeroCopy(msg: *const co.IpcMessage) void {
+    const count = msg.arg2 & ZC_COUNT_MASK;
+    const borrow = @as(i32, @intCast(@as(u32, @bitCast(msg.arg2)) >> ZC_BORROW_SHIFT));
+    if (msg.arg0 <= 0 or msg.arg3 < 0 or borrow <= 0) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
         return;
     }
-    const check = checkRange(lba, count);
+    const check = checkRange(msg.arg1, count);
     if (check != 0) {
-        sendError(source, request_id, check);
+        sendError(msg.source, msg.request_id, check);
         return;
     }
-
-    const bytes = @as(u32, @intCast(count)) * SECTOR_BYTES;
-    const data_phys = driver.dmaMapBorrow(borrow, @intCast(dst_offset), bytes, driver.DMA_DIR_FROM_DEVICE) orelse {
-        sendError(source, request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+    const index = claimSlot() orelse {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL);
         return;
     };
 
-    const rc = submit(REQ_TYPE_IN, @intCast(lba), data_phys, bytes);
-    // Sync before unmapping and on the failure path too: the device may have
-    // written part of the range before erroring out. The offset is relative to
-    // the MAPPING, which already starts at dst_offset, so passing it again
-    // would run off the end.
-    driver.dmaSyncBorrow(borrow, 0, bytes, driver.DMA_SYNC_FROM_DEVICE);
-    driver.dmaUnmapBorrow(borrow);
-
-    if (rc != 0) {
-        sendError(source, request_id, rc);
+    const bytes = @as(u32, @intCast(count)) * SECTOR_BYTES;
+    const data_phys = driver.dmaMapBorrow(borrow, @intCast(msg.arg3), bytes, driver.DMA_DIR_FROM_DEVICE) orelse {
+        g_slots[index].state = .free;
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
         return;
-    }
-    _ = driver.send(source, g_endpoint, op.BLOCK_IPC_READ_RESP, request_id, 0, count, 0, 0);
+    };
+
+    const slot = &g_slots[index];
+    slot.source = msg.source;
+    slot.request_id = msg.request_id;
+    slot.msg_type = msg.type;
+    slot.lba = @intCast(msg.arg1);
+    slot.count = @intCast(count);
+    slot.data_phys = data_phys;
+    slot.borrow = borrow;
+    slot.borrow_bytes = bytes;
 }
 
-fn dispatch(msg: driver.Message) void {
+/// Service a completion interrupt: ack it where one is owed, then reap every
+/// chain the device has reported.
+///
+/// Both halves of an INTx ack matter. Reading the virtio ISR de-asserts the
+/// level-triggered line at the DEVICE, and irqAck unmasks it at the kernel,
+/// which keeps a dispatched line masked until every driver sharing it has
+/// acked. An MSI vector is edge-triggered and exclusively owned, so neither
+/// applies to it.
+fn serviceCompletions() void {
+    if (g_dev.irq_routed) {
+        // Reading ISR is itself the de-assertion; the value is not wanted.
+        _ = g_dev.ports.in8(REG_ISR_STATUS);
+        driver.irqAck(g_dev.irq);
+    }
+    if (!g_queue_ready) return;
+
+    while (g_queue.getUsed(null)) |head| {
+        const index = slotForChain(head) orelse {
+            // The device reported a chain this driver has no record of, so the
+            // ring is out of step and no descriptor can be trusted -- recycling
+            // one the device still owns corrupts a client's buffer.
+            quiesce("used ring reported a chain that was not in flight");
+            return;
+        };
+        // The device has given the chain back, so its descriptors and the
+        // buffers they name are the driver's again.
+        g_queue.freeChain(head);
+        const slot = &g_slots[index];
+        slot.result = if (slotStatus(index).* == REQ_STATUS_OK)
+            0
+        else
+            status.WASMOS_ERR_VIRTIO_BLK_IO_ERROR;
+        slot.state = .complete;
+    }
+}
+
+/// Wake the root task, if it is parked. Handlers run on the runner's stack
+/// rather than in a coroutine, so this is how work reaches the task.
+fn wakeRoot() void {
+    if (!g_root_parked) return;
+    g_root_parked = false;
+    _ = g_wake_promise.resolve(0);
+}
+
+/// Every message the loop could not match to an in-flight request id. Runs from
+/// `poll`, so it does the cheap part -- accept or refuse a request, reap
+/// completions -- and leaves the virtqueue work to the root task it wakes.
+fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
+    _ = user;
     switch (msg.type) {
-        op.BLOCK_IPC_IDENTIFY_REQ => handleIdentify(msg.source, msg.request_id),
-        op.BLOCK_IPC_READ_REQ, op.BLOCK_IPC_WRITE_REQ => handleTransfer(
-            msg.type,
-            msg.source,
-            msg.request_id,
-            msg.arg0,
-            msg.arg1,
-            msg.arg2,
-        ),
-        op.BLOCK_IPC_READ_ZC_REQ => handleReadZeroCopy(
-            msg.source,
-            msg.request_id,
-            msg.arg0,
-            msg.arg1,
-            msg.arg2,
-            msg.arg3,
-        ),
-        else => sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST),
+        op.BLOCK_IPC_IDENTIFY_REQ => handleIdentify(msg),
+        op.BLOCK_IPC_READ_REQ, op.BLOCK_IPC_WRITE_REQ => acceptTransfer(msg),
+        op.BLOCK_IPC_READ_ZC_REQ => acceptReadZeroCopy(msg),
+        IPC_IRQ_EVENT_TYPE, IPC_MSI_EVENT_TYPE => serviceCompletions(),
+        else => {
+            // A message with no reply address is a stray notification, not a
+            // request to refuse.
+            if (msg.source >= 0) {
+                sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST);
+            }
+            return;
+        },
+    }
+    wakeRoot();
+}
+
+/// An idle interval elapsed with nothing delivered. Ages every outstanding
+/// request and wakes the root task, which is what enforces the deadline.
+fn onTimeout(user: ?*anyopaque) callconv(.c) void {
+    _ = user;
+    for (&g_slots) |*slot| {
+        if (slot.state == .in_flight or slot.state == .pending) slot.idle_ticks += 1;
+    }
+    wakeRoot();
+}
+
+// --- root task -------------------------------------------------------------
+
+/// Put one pending slot's chain on the queue. Returns false when the ring has no
+/// room, which is ordinary backpressure: the slot stays pending and is retried
+/// after a completion frees descriptors.
+fn submit(index: usize) bool {
+    const slot = &g_slots[index];
+    const is_write = slot.msg_type == op.BLOCK_IPC_WRITE_REQ;
+    const req_type: u32 = if (is_write) REQ_TYPE_OUT else REQ_TYPE_IN;
+
+    slotHeader(index).* = .{ .type = req_type, .ioprio = 0, .sector = slot.lba };
+    slotStatus(index).* = REQ_STATUS_UNSET;
+
+    const bufs = [3]vring.Buf{
+        .{ .addr = slotHeaderPhys(index), .len = @sizeOf(ReqHeader), .flags = 0 },
+        .{
+            .addr = slot.data_phys,
+            .len = slot.count * SECTOR_BYTES,
+            // The direction of this one descriptor is the whole difference
+            // between a read and a write.
+            .flags = if (req_type == REQ_TYPE_IN) vring.DESC_F_WRITE else 0,
+        },
+        .{ .addr = slotStatusPhys(index), .len = 1, .flags = vring.DESC_F_WRITE },
+    };
+
+    const head = g_queue.allocChain(&bufs) orelse return false;
+    slot.chain_head = head;
+    slot.state = .in_flight;
+    g_queue.publish(head);
+    return true;
+}
+
+/// Answer one finished slot and release it.
+fn complete(index: usize) void {
+    const slot = &g_slots[index];
+    if (slot.borrow > 0) {
+        // Sync before unmapping and on the failure path too: the device may have
+        // written part of the range before erroring out. The offset is relative
+        // to the MAPPING, which already starts at the destination offset, so
+        // passing that again would run off the end.
+        driver.dmaSyncBorrow(slot.borrow, 0, slot.borrow_bytes, driver.DMA_SYNC_FROM_DEVICE);
+        driver.dmaUnmapBorrow(slot.borrow);
+    }
+    if (slot.result != 0) {
+        sendError(slot.source, slot.request_id, slot.result);
+    } else {
+        _ = driver.send(
+            slot.source,
+            endpoint(),
+            if (slot.msg_type == op.BLOCK_IPC_WRITE_REQ) op.BLOCK_IPC_WRITE_RESP else op.BLOCK_IPC_READ_RESP,
+            slot.request_id,
+            0,
+            @intCast(slot.count),
+            0,
+            0,
+        );
+    }
+    slot.state = .free;
+}
+
+/// The driver's only coroutine: answer finished requests, put pending ones on
+/// the queue, enforce the deadline, and park when there is nothing to do.
+///
+/// Stackless, so it keeps no state across a yield beyond the slot table -- it
+/// re-enters at the top every time and re-derives what to do from the slots.
+/// That is why there is no step counter: the slot states ARE the program
+/// counter, and they are the same state the handlers manipulate.
+///
+/// It never returns `complete`: a driver has no finishing condition, and the
+/// runner pumps only while the root task is alive.
+fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
+    _ = user;
+    _ = out_value;
+
+    var progressed = false;
+    var published = false;
+    var expired = false;
+
+    for (&g_slots, 0..) |*slot, i| {
+        switch (slot.state) {
+            .complete => {
+                complete(i);
+                progressed = true;
+            },
+            .pending => {
+                if (slot.idle_ticks >= MAX_IDLE_TICKS) {
+                    expired = true;
+                } else if (g_queue_ready and submit(i)) {
+                    published = true;
+                    progressed = true;
+                }
+            },
+            .in_flight => {
+                if (slot.idle_ticks >= MAX_IDLE_TICKS) expired = true;
+            },
+            .free => {},
+        }
+    }
+    // One doorbell for the whole batch: publishing several chains and ringing
+    // once is the point of separating publish from kick.
+    if (published) g_queue.kick();
+
+    // A request the device never reported past its deadline means the driver has
+    // lost track of a chain the device may still be working on, so the queue
+    // cannot be reused -- see quiesce.
+    if (expired) {
+        quiesce("a request went unreported past its deadline");
+        return co.TaskResult.yielded;
+    }
+
+    // The timer exists only to age outstanding requests; with none, park
+    // indefinitely rather than wake for nothing.
+    armIdleTimer(anyOutstanding());
+
+    // Re-enter rather than park while that pass changed something: a completion
+    // may have freed descriptors a pending slot was waiting for.
+    if (progressed) return co.TaskResult.yielded;
+
+    // Nothing to do. Park on a future the handlers settle, so the runner polls --
+    // and its poll parks on the loop's select set, which is what makes an idle
+    // driver sleep instead of spin.
+    g_wake_future.init(&g_wake_promise);
+    g_root_parked = true;
+    switch (g_wake_future.awaitValue()) {
+        .pending => return co.TaskResult.yielded,
+        else => {
+            // The future settled before the await, or the runtime refused it.
+            // Either way nothing is parked, so loop rather than claim to be.
+            g_root_parked = false;
+            return co.TaskResult.yielded;
+        },
     }
 }
 
 // --- entry -----------------------------------------------------------------
 
-/// Driver entry point: bring the virtio-blk device up, register under the
-/// "block" class, and serve BLOCK_IPC_* requests forever.
+/// Bring the driver up before the coroutine runtime starts.
 ///
-/// On success this does not return. A bring-up failure does return, with a
-/// packed WASMOS_ERR_DRIVER_* code: there is nothing to serve without a device,
-/// and a driver that loops anyway would answer every request with the same
-/// refusal while holding the class instance.
-pub export fn initialize() callconv(.c) i32 {
+/// The runner has already created the endpoint and initialised the event loop,
+/// and calls this once; the runtime does not exist yet, so everything here is
+/// necessarily synchronous. That is the contract, not a shortcut -- there is no
+/// future to await on before there is a runtime to await in.
+///
+/// A failure leaves the device not-ready. The root task then still runs and
+/// answers every request with NOT_READY, which is what a client needs: a driver
+/// that exited would leave its class instance registered to a dead process.
+fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.c) void {
+    _ = user;
+    _ = arg0;
+    _ = arg1;
+    _ = arg2;
+    _ = arg3;
+
+    loop().default_on_message = @ptrCast(&onMessage);
+    loop().on_timeout = @ptrCast(&onTimeout);
+    armIdleTimer(false);
+
     const proc_endpoint = driver.procEndpoint();
-    if (proc_endpoint < 0) return status.WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT;
-
-    g_endpoint = driver.createEndpoint();
-    if (g_endpoint < 0) return status.WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
-    g_select = driver.selectCreate();
-    if (g_select < 0 or !driver.selectAdd(g_select, g_endpoint)) {
-        driver.log("[virtio-blk] select setup failed");
-        return status.WASMOS_ERR_DRIVER_SELECT_SETUP;
-    }
-
-    // Interrupts need their own endpoint, and it must exist before the device
-    // is brought up so the line can be routed as soon as the device is live.
-    g_irq_endpoint = driver.createEndpoint();
-    g_irq_select = if (g_irq_endpoint >= 0) driver.selectCreate() else -1;
-    if (g_irq_endpoint < 0 or g_irq_select < 0 or
-        !driver.selectAdd(g_irq_select, g_irq_endpoint) or
-        !driver.selectAdd(g_select, g_irq_endpoint))
-    {
-        driver.log("[virtio-blk] irq endpoint setup failed; using timed waits");
-        g_irq_endpoint = -1;
-        g_irq_select = -1;
+    if (proc_endpoint < 0 or endpoint() < 0) {
+        driver.log("[virtio-blk] no process-manager endpoint");
+        return;
     }
 
     // Resolved before device bring-up, because that is where the MSI-X vector is
@@ -755,7 +973,7 @@ pub export fn initialize() callconv(.c) i32 {
 
     if (!probeFromStartupArgs()) {
         driver.log("[virtio-blk] startup args name no virtio-blk device");
-        return status.WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY;
+        return;
     }
     var probe = driver.Line{};
     _ = probe.str("[virtio-blk] probe ok bus=").dec(g_dev.bus).str(" slot=").dec(g_dev.slot);
@@ -764,7 +982,7 @@ pub export fn initialize() callconv(.c) i32 {
 
     if (!initializeDevice()) {
         driver.log("[virtio-blk] device init failed");
-        return status.WASMOS_ERR_DRIVER_DEVICE_INIT;
+        return;
     }
 
     // INTx fallback only. With MSI-X bound the device's INTx is disabled, so
@@ -772,47 +990,33 @@ pub export fn initialize() callconv(.c) i32 {
     // devices' interrupts, which is exactly what MSI-X exists to avoid.
     //
     // Without it, routing is what keeps the line from re-firing forever: the
-    // device asserts on every completion and nothing else clears it. Failure is
-    // not fatal -- the completion wait falls back to its timed safety net.
-    if (!g_dev.msix_enabled and g_dev.irq < 16 and g_irq_endpoint >= 0) {
-        if (driver.irqRoute(g_dev.irq, g_irq_endpoint)) {
-            g_irq_routed = true;
+    // device asserts on every completion and nothing else clears it. The line
+    // is routed to the loop's endpoint so an interrupt arrives as a message the
+    // loop dispatches, like everything else this driver waits on.
+    if (!g_dev.msix_enabled and g_dev.irq < 16) {
+        if (driver.irqRoute(g_dev.irq, endpoint())) {
+            g_dev.irq_routed = true;
             var line = driver.Line{};
             _ = line.str("[virtio-blk] irq routed line=").dec(g_dev.irq);
             line.end();
         } else {
-            driver.log("[virtio-blk] irq route failed; using timed waits");
+            // No vector and no line: completions have no signal at all, and the
+            // idle timer is the only thing that will move a request -- straight
+            // to its deadline. Say so rather than appear healthy.
+            driver.log("[virtio-blk] irq route failed; completions have no signal");
         }
     }
 
+    // The service is registered ON the loop's endpoint, so client requests,
+    // interrupts and replies all arrive at the one place the loop drains.
+    //
     // The concrete name is "virtio-blk"; the class is what a client looks up, so
     // it finds whichever block backend is present without naming this driver.
     // The plain "block" NAME is deliberately not claimed: the ATA driver holds
     // it for the boot disk.
-    if (driver.registerService(proc_endpoint, g_endpoint, "virtio-blk", "block", 0, 1) == null) {
+    if (driver.registerService(proc_endpoint, endpoint(), "virtio-blk", "block", 0, 1) == null) {
         driver.log("[virtio-blk] service registration failed");
-        return status.WASMOS_ERR_DRIVER_REGISTER;
+        return;
     }
     driver.notifyReady(proc_endpoint);
-
-    while (true) {
-        // Ack the line whenever an event has arrived, not only while a request
-        // is waiting: a PCI INTx line is shared and the kernel keeps a
-        // dispatched line masked until EVERY sharer acks, so deferring this
-        // stalls the other drivers' interrupts too.
-        serviceIrq();
-        while (driver.drain(g_endpoint)) {
-            const msg = driver.lastMessage();
-            // A stray notification or an IRQ echo carries no reply address.
-            if (msg.source < 0) continue;
-            dispatch(msg);
-        }
-        if (driver.selectWait(g_select, 1000) == .failed) {
-            // A failed wait returns immediately, so this loop would stop
-            // blocking. Yield explicitly rather than tightening into a hot loop.
-            // FIXME: with a dead select set there is nothing left to park on;
-            // the real fix is not to lose the set.
-            driver.yield();
-        }
-    }
 }

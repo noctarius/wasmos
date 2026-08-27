@@ -823,21 +823,42 @@ linked feature documents for rationale and rollout plans.
   core support virtqueues. The `vring` core allocates and releases chained
   descriptors (`vring_alloc_chain` / `vring_free_chain`, bounded by
   `VRING_MAX_CHAIN`), which is what a request spanning several buffers needs.
-- `virtio-blk` is the first WASM device driver written in Zig. It takes its
-  device identity from the device-manager startup args, negotiates the legacy
-  PCI device, and serves `BLOCK_IPC_IDENTIFY_REQ`, `BLOCK_IPC_READ_REQ`,
-  `BLOCK_IPC_WRITE_REQ` and `BLOCK_IPC_READ_ZC_REQ` over a single requestq. A
-  request is a three-descriptor chain (header, data, status byte) whose data
-  descriptor points straight at the CALLER's block buffer or mapped borrow, so
-  no CPU copies the sectors. Requests are serialised one at a time and wait on
-  the completion interrupt. A chain the device has not reported still belongs to
-  it and virtio cannot withdraw one, so a timeout is terminal rather than
-  retryable: the driver resets the device and refuses every later request with
-  `WASMOS_ERR_VIRTIO_BLK_NOT_READY`, instead of recycling descriptors the device
-  could still complete into a client's block buffer. It registers the concrete name `virtio-blk` under
-  the `block` service CLASS; the plain `block` name stays with the ATA driver,
-  which holds the boot disk. Failures are reported as packed
-  `WASMOS_ERR_VIRTIO_BLK_*` codes.
+- `virtio-blk` is the first WASM device driver written in Zig, and the first
+  built on the coroutine runtime rather than a blocking loop. Its manifest entry
+  is `async_initialize`, so the libsys async-service runner owns the endpoint,
+  the event loop and the pump; the driver supplies only a `prepare` hook and a
+  root task. It takes its device identity from the device-manager startup args,
+  negotiates the legacy PCI device, and serves `BLOCK_IPC_IDENTIFY_REQ`,
+  `BLOCK_IPC_READ_REQ`, `BLOCK_IPC_WRITE_REQ` and `BLOCK_IPC_READ_ZC_REQ` over a
+  single requestq.
+- One endpoint carries everything `virtio-blk` waits on. The event loop drains a
+  single receiver and demultiplexes, so the block service is registered ON the
+  runner's endpoint and the interrupt is routed TO it; the driver owns no select
+  set, no drain loop and no timed wait. Its message handler accepts or refuses a
+  request and reaps completions, then wakes the root task by settling a promise.
+- Concurrency lives in that root task, not in a coroutine per request. The
+  runner polls whenever the ROOT is parked and its poll blocks until an event
+  arrives, so a ready child task would sit unresumed until an unrelated message
+  happened to come in. The root task instead owns a slot table and keeps up to
+  eight chains on the queue at once, parking only when every slot is idle.
+- A `virtio-blk` request is a three-descriptor chain (header, data, status byte)
+  whose data descriptor points straight at the CALLER's block buffer or mapped
+  borrow, so no CPU copies the sectors. A chain the device has not reported still
+  belongs to it and virtio cannot withdraw one, so a lost completion is terminal
+  rather than retryable: the driver resets the device and refuses every later
+  request with `WASMOS_ERR_VIRTIO_BLK_NOT_READY`, instead of recycling
+  descriptors the device could still complete into a client's block buffer. It
+  registers the concrete name `virtio-blk` under the `block` service CLASS; the
+  plain `block` name stays with the ATA driver, which holds the boot disk.
+  Failures are reported as packed `WASMOS_ERR_VIRTIO_BLK_*` codes.
+- `wasmos_sys_event_loop_t` gained a clock: `poll_timeout_ms` bounds how long a
+  poll parks with nothing queued, and `on_timeout` runs when the window elapses.
+  Without it a reactor could express "wake me when something happens" but not
+  "wake me anyway in 250 ms", so anything needing a deadline had to drive its own
+  pump -- which is how `net-stack` still advances its lwIP timers. Zero keeps the
+  original park-until-a-message behaviour, so existing loops are unaffected.
+  `virtio-blk` arms it only while requests are outstanding and uses it to age
+  them, which is what reconstructs the deadline its blocking version had.
 - `virtio-blk` binds an MSI-X vector through `pci-bus` for its completion
   interrupt, and routes INTx only when the device or the bus service offers no
   vector. That is a correctness property rather than a latency one: with
@@ -850,8 +871,12 @@ linked feature documents for rationale and rollout plans.
   QEMU `vectors=0`) and asserts the geometry each way, so a hardcoded
   configuration base fails one class or the other.
 - Zig drivers reach the driver-side surface through `src/libc/zig/driver.zig`
-  (granted I/O ports, pinned DMA regions, IRQ routing, service registration and
-  the ready handshake) and `src/libc/zig/vring.zig`. The latter contains no ring
+  (granted I/O ports, pinned DMA regions, IRQ routing, MSI vectors, service
+  lookup and registration, and the ready handshake) and `src/libc/zig/vring.zig`.
+  It deliberately offers no receive loop, select set or drain: a driver is an
+  async service, and serving work belongs in a coroutine parked on a future. Its
+  one blocking call is documented as bring-up only, for the window before the
+  runtime exists. The vring binding contains no ring
   logic: `vring_shim.c` compiles the static-inline C core into the module and
   re-exports it, so a Zig driver and a C driver drive a device through the same
   implementation. The generated Zig ABI (`abi/generated/zig/`) supplies the

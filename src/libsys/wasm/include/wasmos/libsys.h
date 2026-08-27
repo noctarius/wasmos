@@ -53,7 +53,20 @@ typedef struct {
 /* Caller-owned reactor state for one receive endpoint. A delivered message is
  * matched against the intent table by request_id first, then against the
  * handler table by type, and otherwise goes to the default handler.
- * next_request_id is a per-loop counter handed out by intent_send(). */
+ * next_request_id is a per-loop counter handed out by intent_send().
+ *
+ * poll_timeout_ms and on_timeout are how a reactor gets a clock. Without them a
+ * poll with nothing queued parks until a message arrives, so a loop can express
+ * "wake me when something happens" but not "wake me anyway in 250 ms" -- and a
+ * caller needing a deadline had no choice but to drive its own pump. Set
+ * poll_timeout_ms to a positive value and poll() bounds its park and calls
+ * on_timeout when the window elapses with nothing delivered. Zero (the default)
+ * keeps the original park-until-a-message behaviour.
+ *
+ * on_timeout runs on the poller's stack, like the message handlers, so it must
+ * not block; the useful thing for it to do is settle a promise. Both fields are
+ * appended after the tables so a binding that mirrors this layout only grows at
+ * the end. */
 typedef struct {
     int32_t receiver_endpoint;
     int32_t select_id; /* select-set watching receiver_endpoint; -1 if not created */
@@ -62,6 +75,9 @@ typedef struct {
     void* default_user;
     wasmos_sys_intent_t intents[WASMOS_SYS_INTENT_MAX];
     wasmos_sys_handler_t handlers[WASMOS_SYS_HANDLER_MAX];
+    int32_t poll_timeout_ms; /* 0 = park until a message arrives */
+    void (*on_timeout)(void* user);
+    void* timeout_user;
 } wasmos_sys_event_loop_t;
 
 /* Caller-owned bridge between one non-blocking IPC intent and a local future.
@@ -205,6 +221,11 @@ static inline void wasmos_sys_event_loop_init(wasmos_sys_event_loop_t* loop,
     loop->next_request_id = request_id_base;
     loop->default_on_message = 0;
     loop->default_user = 0;
+    /* No clock by default: a loop parks until a message arrives unless its
+     * owner asks for a bounded wait. */
+    loop->poll_timeout_ms = 0;
+    loop->on_timeout = 0;
+    loop->timeout_user = 0;
     /* Create a select-set watching this loop's endpoint so a poll that finds
      * nothing queued can park on it instead of returning immediately into a
      * caller's spin loop (Minos2 design: tasks block on events, never
@@ -512,8 +533,18 @@ static inline int32_t wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t* loop, 
              * owns a select-set, park on it rather than returning 0 into a
              * caller that would immediately poll again. */
             if (i == 0 && loop->select_id > 0) {
-                (void)wasmos_ipc_select_wait(loop->select_id);
+                /* A bounded park is what lets a caller hold a deadline without
+                 * driving its own pump; on_timeout is then the only thing that
+                 * runs, and it is what wakes whoever is waiting. */
+                if (loop->poll_timeout_ms > 0) {
+                    (void)wasmos_ipc_select_wait_timeout(loop->select_id, loop->poll_timeout_ms);
+                } else {
+                    (void)wasmos_ipc_select_wait(loop->select_id);
+                }
                 if (wasmos_ipc_drain(loop->receiver_endpoint) <= 0) {
+                    if (loop->on_timeout) {
+                        loop->on_timeout(loop->timeout_user);
+                    }
                     break;
                 }
                 wasmos_ipc_message_read_last(&msg);

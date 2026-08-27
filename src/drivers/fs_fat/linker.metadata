@@ -18,9 +18,16 @@ stack_size = 8192
 initial_memory = 262144
 max_memory = 262144
 
+# No endpoint is required by NAME, because which disk this instance serves is
+# not known at spawn time. The process manager resolves required_endpoint_name
+# before the driver runs, and a name resolves to one provider system-wide, so
+# naming one here would both gate startup on that provider existing and limit
+# this driver to it. The disk is resolved at run time from the `block` service
+# CLASS, at the instance encoding the (backend, unit) carried in the startup
+# args.
 [ipc]
-required_endpoint_name = "block"
-required_endpoint_rights = 1
+required_endpoint_name = "-"
+required_endpoint_rights = 0
 
 [[capabilities]]
 name = "ipc.basic"

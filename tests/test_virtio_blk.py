@@ -156,6 +156,38 @@ class VirtioBlkTest(unittest.TestCase):
                 "(backend, unit) pair a device-manager rule names",
             )
 
+    def test_a_rule_is_queued_only_for_its_own_backend(self) -> None:
+        """A block rule naming one backend is not queued for a disk on another.
+
+        The shipped rules name DRIVER=="ata", and a virtio disk is attached and
+        publishes its own unit 0 — the same unit number the /boot rule asks for.
+        If the matcher compared units alone, that rule would be queued for the
+        virtio disk and a filesystem would try to mount it.
+
+        This is a regression guard: the device manager had TWO copies of the
+        match predicate, and the one on the live publish path never compared the
+        backend at all. It was masked only because ATA publishes first, so /boot
+        was already mounted by the time the virtio disk arrived.
+        """
+        assert self.session is not None
+        for marker in (
+            b"block_fs rule queued spawn driver=ata unit=0",
+            b"block_fs rule queued spawn driver=ata unit=1",
+        ):
+            self.assertTrue(
+                self.session.expect(marker, timeout_s=60),
+                f"{marker!r} missing — the ATA disks did not match their own rules",
+            )
+        # No rule names virtio-blk, so none may be queued for it. Asserted as an
+        # absence over the accumulated buffer: by now both ATA disks have matched
+        # and the virtio disk has published.
+        self.assertNotIn(
+            b"block_fs rule queued spawn driver=virtio-blk",
+            self.session.buf,
+            "an ata rule was queued for the virtio disk — the matcher compared "
+            "units without comparing backends",
+        )
+
     def test_devmgr_inventory_separates_the_backends(self) -> None:
         """The virtio disk gets its own inventory record, not ATA's.
 

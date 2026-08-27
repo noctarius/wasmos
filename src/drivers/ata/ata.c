@@ -328,9 +328,9 @@ static int ata_identify_unit(uint8_t unit, uint16_t* out_words) {
  * boot regardless of which driver probed first, and a client can decode it back
  * into the pair a device-manager rule names.
  *
- * The plain "block" NAME stays registered alongside this. fs_fat still resolves
- * the backend by that name, so retiring it belongs with the change that teaches
- * fs_fat to select a backend, not with this one. */
+ * This is the ONLY way a client finds this driver: no plain "block" name is
+ * registered, because a name resolves to one provider system-wide and would
+ * make this controller the only disk anybody could reach. */
 static void ata_register_block_class(uint8_t unit, uint8_t present) {
     if (!present || g_proc_endpoint_cached < 0) {
         return;
@@ -970,9 +970,9 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
     return 0;
 }
 
-/* Driver entry point: create the block endpoint, register as the "block"
- * service, identify the attached units, route IRQ 14, notify ready, then serve
- * BLOCK_IPC_* requests forever.
+/* Driver entry point: create the block endpoint, identify the attached units,
+ * register each present one under the "block" service class, route IRQ 14,
+ * notify ready, then serve BLOCK_IPC_* requests forever.
  *
  * All four parameters are ignored, including proc_endpoint -- it is overwritten
  * from the spawn-info contract on the first line, because the entry arguments
@@ -989,13 +989,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
     g_block_endpoint = wasmos_ipc_create_endpoint();
     if (g_block_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
     g_proc_endpoint_cached = proc_endpoint;
-    if (wasmos_svc_register(proc_endpoint, g_block_endpoint, "block", 1) != 0) {
-        (void)printf("[ata] svc register failed\n");
-        return -1;
-    }
+    /* No plain "block" NAME is claimed. A name resolves to ONE provider for the
+     * whole system, so holding it made this controller the only disk any client
+     * could find -- the class is the discovery path, and this driver joins it
+     * once per present drive in ata_register_block_class(). */
     g_devmgr_endpoint = -1;
     for (int32_t attempts = 0; attempts < 256; ++attempts) {
         g_devmgr_endpoint =

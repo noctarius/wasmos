@@ -909,7 +909,8 @@ linked feature documents for rationale and rollout plans.
   backend is what would let a rule mount a filesystem on the virtio disk, and is
   the step that retires the name alias.
 - `blkinfo` (`/system/utils/blkinfo`) enumerates the `block` class, reports each
-  provider's backend, unit and geometry, and reads a sector; `--write <lba>` overwrites that
+  provider's backend, unit and geometry, and reads a sector;
+  `--write <instance> <lba>` overwrites that
   sector with a pattern and reads it back, which is how the write direction is
   exercised from the shell. It takes the INSTANCE of the disk to write and
   touches only that one -- it enumerates the boot disk now, so a tool that wrote

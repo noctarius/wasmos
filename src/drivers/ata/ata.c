@@ -151,6 +151,11 @@ static uint8_t g_zc_logged = 0;
 static uint8_t g_zc_dma_logged = 0;
 static int32_t g_client_owner[ATA_CLIENT_MAP_CAP];
 static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
+/* 0 while the entry is only a SELECTION (the unit this client named in
+ * IDENTIFY), 1 once a transfer has claimed the unit exclusively. Selections are
+ * not exclusive: several clients may name the same unit, and the first transfer
+ * decides who gets it. */
+static uint8_t g_client_claimed[ATA_CLIENT_MAP_CAP];
 
 /* PRD table. It lives in this process's own block buffer, which is already
  * everything the controller needs -- contiguous, pinned, page-aligned and below
@@ -673,6 +678,40 @@ static void ata_dma_setup(void) {
     g_dma_ready = 1u;
 }
 
+/* Record which unit a client means, without claiming it.
+ *
+ * IDENTIFY is how a client says which of this controller's drives it is talking
+ * about, and a transfer must then go to THAT drive. Without this the transfer
+ * path would fall back to "the first unclaimed unit", so a client that
+ * identified drive 1 could read drive 0 whenever drive 0 happened to be free --
+ * silently the wrong disk, and dependent on which client bound first.
+ *
+ * A selection is not exclusive, so identifying a drive someone else is using is
+ * allowed; the claim happens on the first transfer and is refused there. An
+ * existing CLAIMED entry is left alone: a client cannot re-aim itself at another
+ * drive once its transfers have started. */
+static void ata_select_unit_for_source(int32_t source, uint8_t unit) {
+    if (source < 0 || unit >= ATA_UNIT_COUNT) {
+        return;
+    }
+    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
+        if (g_client_owner[i] == source) {
+            if (!g_client_claimed[i]) {
+                g_client_unit[i] = unit;
+            }
+            return;
+        }
+    }
+    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
+        if (g_client_owner[i] < 0) {
+            g_client_owner[i] = source;
+            g_client_unit[i] = unit;
+            g_client_claimed[i] = 0;
+            return;
+        }
+    }
+}
+
 /* Reported once at startup rather than per request. A per-request "dma fallback"
  * line would read like an intermittent runtime failure; the fallback is neither
  * intermittent nor a failure — see ata_dma_prepare. */
@@ -715,10 +754,27 @@ static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, ui
         return -1;
     }
     for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-        if (g_client_owner[i] == source) {
+        if (g_client_owner[i] != source) {
+            continue;
+        }
+        if (g_client_claimed[i]) {
             *out_unit = g_client_unit[i];
             return 0;
         }
+        /* A selection recorded by IDENTIFY. Turn it into the claim, unless
+         * another client got that drive first. */
+        for (uint32_t j = 0; j < ATA_CLIENT_MAP_CAP; ++j) {
+            if (j != i && g_client_owner[j] >= 0 && g_client_claimed[j] &&
+                g_client_unit[j] == g_client_unit[i]) {
+                return -1;
+            }
+        }
+        if (!g_unit_present[g_client_unit[i]]) {
+            return -1;
+        }
+        g_client_claimed[i] = 1;
+        *out_unit = g_client_unit[i];
+        return 0;
     }
     if (preferred_unit >= 0 && preferred_unit < (int32_t)ATA_UNIT_COUNT) {
         uint8_t unit = (uint8_t)preferred_unit;
@@ -727,7 +783,7 @@ static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, ui
             return -1;
         }
         for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-            if (g_client_owner[i] >= 0 && g_client_unit[i] == unit) {
+            if (g_client_owner[i] >= 0 && g_client_claimed[i] && g_client_unit[i] == unit) {
                 claimed = 1;
                 break;
             }
@@ -739,6 +795,7 @@ static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, ui
             if (g_client_owner[i] < 0) {
                 g_client_owner[i] = source;
                 g_client_unit[i] = unit;
+                g_client_claimed[i] = 1;
                 *out_unit = unit;
                 return 0;
             }
@@ -751,7 +808,7 @@ static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, ui
             continue;
         }
         for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-            if (g_client_owner[i] >= 0 && g_client_unit[i] == unit) {
+            if (g_client_owner[i] >= 0 && g_client_claimed[i] && g_client_unit[i] == unit) {
                 claimed = 1;
                 break;
             }
@@ -763,6 +820,7 @@ static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, ui
             if (g_client_owner[i] < 0) {
                 g_client_owner[i] = source;
                 g_client_unit[i] = (uint8_t)unit;
+                g_client_claimed[i] = 1;
                 *out_unit = (uint8_t)unit;
                 return 0;
             }
@@ -790,6 +848,9 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT, 0);
             return 0;
         }
+        /* Remember which drive this client means, so its transfers reach that
+         * one rather than whichever happens to be free. */
+        ata_select_unit_for_source(source, want);
         wasmos_ipc_send(source,
                         g_block_endpoint,
                         BLOCK_IPC_IDENTIFY_RESP,
@@ -952,6 +1013,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     }
     for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
         g_client_owner[i] = -1;
+        g_client_claimed[i] = 0;
         g_client_unit[i] = 0;
     }
     for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {

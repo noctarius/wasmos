@@ -1,7 +1,7 @@
 /* blkinfo.c - report the block devices registered under the "block" class.
  *
  *   blkinfo [lba]
- *   blkinfo --write <instance> [lba]
+ *   blkinfo --write <instance> <lba>
  *
  * Enumerates the class, asks each provider for its geometry
  * (BLOCK_IPC_IDENTIFY_REQ), and reads one sector from it
@@ -10,10 +10,10 @@
  *
  * --write OVERWRITES that sector with a generated pattern and reads it back,
  * which is the only way to exercise a backend's write direction from the shell.
- * It takes the INSTANCE of the disk to write, and writes only that one: a
- * destructive tool that hits every disk it can enumerate is a footgun, and this
- * enumerates the boot disk. The sector is likewise named rather than defaulted,
- * because there is no safe-looking sector on a mounted volume.
+ * BOTH the instance and the sector must be given, and neither defaults: this
+ * enumerates the boot disk, so a tool that wrote to whatever it found, or to
+ * sector 0 because none was named, would be a footgun. There is no
+ * safe-looking sector on a mounted volume.
  *
  * It talks to whatever backend registered the class, so it is not specific to
  * any one driver. A class instance is one DISK and its number is
@@ -223,6 +223,15 @@ int main(void) {
         write_instance = parse_u32(rest, 0u);
         while (*rest >= '0' && *rest <= '9') {
             rest++;
+        }
+        while (*rest == ' ') {
+            rest++;
+        }
+        /* And no default sector either: falling back to 0 would put the most
+         * destructive invocation one omitted argument away from a boot sector. */
+        if (*rest < '0' || *rest > '9') {
+            (void)printf("[blkinfo] --write needs a sector: blkinfo --write <instance> <lba>\n");
+            return 1;
         }
     }
     uint32_t lba = parse_u32(rest, 0u);

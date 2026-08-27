@@ -1,5 +1,6 @@
 /* wfs_truncate.c - set an object's size (§16). */
 #include "wfs_truncate.h"
+#include "wfs_extent.h"
 #include "wfs_extent_write.h"
 
 #include <stddef.h>
@@ -52,6 +53,10 @@ void wfs_truncate_init(wfs_trunc_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_
     ctx->free_started = 0u;
     ctx->dirty_started = 0u;
     ctx->trim_started = 0u;
+    ctx->extent_started = 0u;
+    ctx->promote_inline = 0u;
+    ctx->promote_block = 0u;
+    ctx->alloc_started = 0u;
     ctx->trim_keep = 0u;
     ctx->trim_root = 0u;
     ctx->err = WASMOS_ERR_NONE;
@@ -140,48 +145,32 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
             if (ctx->vol->super.read_only) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_READ_ONLY);
             }
-            /* An extent TREE is trimmed a run at a time by wfs_extent_trim_task,
-             * which needs no bound on how many runs an object drops. The one case
-             * still refused is a new size INSIDE a block: zeroing that tail needs
-             * the physical block behind a logical one, which for a tree is a
-             * descent this task has no sub-task slot for.
-             *
-             * TODO: resolve the tail block through wfs_extent_task so a tree can
-             * be truncated to an arbitrary size, not only a block boundary. */
-            if (ctx->obj.extent_tree_block != 0u) {
-                if (ctx->new_size < ctx->obj.size &&
-                    (ctx->new_size % ctx->vol->super.block_size) != 0u) {
-                    WFS_FAIL(ctx, WASMOS_ERR_FS_UNSUPPORTED);
-                }
-                if (ctx->new_size == ctx->obj.size) {
-                    return WASMOS_WASM_TASK_COMPLETE;
-                }
-                if (ctx->new_size > ctx->obj.size) {
-                    /* A grow adds no extent: the range past the old end is a
-                     * hole, which reads as zeroes (§9). Only the size moves. */
-                    ctx->obj.size = ctx->new_size;
-                    ctx->pc = WFS_TRUNC_PC_RECORD_READ;
-                    continue;
-                }
-                ctx->trim_root = (uint32_t)ctx->obj.extent_tree_block;
-                ctx->trim_keep = ctx->new_size / ctx->vol->super.block_size;
-                ctx->obj.size = ctx->new_size;
-                ctx->pc = WFS_TRUNC_PC_TRIM_JOINED;
-                continue;
-            }
-            /* A truncation does not promote an inline object. The write path
-             * does (wfs_write.c), so the case a caller actually reaches -- writing
-             * past the record's capacity -- works; a truncate GROWING one past it
-             * would have to allocate and copy for a range that is all hole
-             * anyway.
-             *
-             * TODO: promote here too, so ftruncate can extend an inline object
-             * past WFS_INLINE_DATA_MAX rather than refusing. */
-            if ((ctx->obj.flags & WFS_OBJ_INLINE_DATA) && ctx->new_size > WFS_INLINE_DATA_MAX) {
-                WFS_FAIL(ctx, WASMOS_ERR_FS_UNSUPPORTED);
-            }
             if (ctx->new_size == ctx->obj.size) {
                 return WASMOS_WASM_TASK_COMPLETE;
+            }
+            /* An extent TREE is trimmed a run at a time by wfs_extent_trim_task,
+             * which needs no bound on how many runs an object drops. The volume is
+             * marked dirty first, as on the inline route: the trim rewrites a leaf
+             * before anything else, and a crash must leave a volume the next mount
+             * refuses to write. */
+            if (ctx->obj.extent_tree_block != 0u) {
+                wfs_ops_task_reset(&ctx->dirty_task);
+                ctx->dirty.pc = WFS_DIRTY_PC_START;
+                ctx->dirty.vol = ctx->vol;
+                ctx->dirty.err = WASMOS_ERR_NONE;
+                if (!wasmos_async_start(
+                        wfs_ops_runtime(), &ctx->dirty_task, wfs_mark_dirty_task, &ctx->dirty)) {
+                    WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+                }
+                ctx->dirty_started = 1u;
+                ctx->pc = WFS_TRUNC_PC_TREE_DIRTY_JOINED;
+                continue;
+            }
+            /* An inline object a grow takes past the record is PROMOTED, the same
+             * way a write past it is (wfs_write.c): the bytes move into a first
+             * data block and the flag clears. */
+            if ((ctx->obj.flags & WFS_OBJ_INLINE_DATA) && ctx->new_size > WFS_INLINE_DATA_MAX) {
+                ctx->promote_inline = 1u;
             }
             wfs_ops_task_reset(&ctx->dirty_task);
             ctx->dirty.pc = WFS_DIRTY_PC_START;
@@ -195,6 +184,32 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
             ctx->pc = WFS_TRUNC_PC_DIRTY_JOINED;
             continue;
 
+        case WFS_TRUNC_PC_TREE_DIRTY_JOINED:
+            joined = 0;
+            if (wasmos_wasm_coroutine_join(&ctx->dirty_task, &joined) ==
+                WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->dirty_started = 0u;
+            if (joined != 0) {
+                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            }
+            if (ctx->new_size > ctx->obj.size) {
+                /* A grow adds no extent: the range past the old end is a hole,
+                 * which reads as zeroes (§9). Only the size moves. */
+                ctx->obj.size = ctx->new_size;
+                ctx->pc = WFS_TRUNC_PC_RECORD_READ;
+                continue;
+            }
+            ctx->trim_root = (uint32_t)ctx->obj.extent_tree_block;
+            /* Rounded UP, so a block the new end falls INSIDE stays allocated and
+             * only its tail is cleared -- the same rule the inline route uses. */
+            ctx->trim_keep =
+                (ctx->new_size + ctx->vol->super.block_size - 1u) / ctx->vol->super.block_size;
+            ctx->obj.size = ctx->new_size;
+            ctx->pc = WFS_TRUNC_PC_TRIM_JOINED;
+            continue;
+
         case WFS_TRUNC_PC_DIRTY_JOINED:
             joined = 0;
             if (wasmos_wasm_coroutine_join(&ctx->dirty_task, &joined) ==
@@ -206,6 +221,21 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                 WFS_FAIL(ctx, (wasmos_error_code_t)joined);
             }
 
+            if (ctx->promote_inline) {
+                /* One block for the content the record held. */
+                memset(&ctx->alloc, 0, sizeof(ctx->alloc));
+                ctx->alloc.vol = ctx->vol;
+                ctx->alloc.want = 1u;
+                ctx->alloc.prefer_group = 0u;
+                wfs_ops_task_reset(&ctx->alloc_task);
+                if (!wasmos_async_start(
+                        wfs_ops_runtime(), &ctx->alloc_task, wfs_alloc_blocks_task, &ctx->alloc)) {
+                    WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+                }
+                ctx->alloc_started = 1u;
+                ctx->pc = WFS_TRUNC_PC_INLINE_ALLOC_JOINED;
+                continue;
+            }
             if (ctx->obj.flags & WFS_OBJ_INLINE_DATA) {
                 /* Shrinking an inline object zeroes the bytes it removed. Leaving
                  * them would let a later grow read back content the truncation
@@ -238,6 +268,62 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                 ctx->tail_needed = ctx->tail_block != 0u ? 1u : 0u;
             }
             ctx->pc = ctx->tail_needed ? WFS_TRUNC_PC_TAIL_READ : WFS_TRUNC_PC_RECORD_READ;
+            continue;
+
+        case WFS_TRUNC_PC_INLINE_ALLOC_JOINED:
+            joined = 0;
+            if (wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined) ==
+                WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->alloc_started = 0u;
+            if (joined != 0) {
+                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            }
+            if (ctx->alloc.length == 0u) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_NO_SPACE);
+            }
+            ctx->promote_block = ctx->alloc.first_block;
+            /* The record's bytes at the offset they were at, and zeroes for the
+             * rest: the range past the old end is content nothing has written.
+             * The block is fresh, so it is not read first. */
+            ctx->err = wfs_block_take(b);
+            if (ctx->err != WASMOS_ERR_NONE) {
+                return (int32_t)ctx->err;
+            }
+            block_size = ctx->vol->super.block_size;
+            d = wfs_block_data(b);
+            for (i = 0; i < block_size; ++i) {
+                d[i] = 0u;
+            }
+            for (i = 0; i < WFS_INLINE_DATA_MAX && (uint64_t)i < ctx->obj.size; ++i) {
+                d[i] = ctx->inline_data[i];
+            }
+            WFS_AWAIT(
+                ctx, wfs_block_write_begin(b, ctx->promote_block), WFS_TRUNC_PC_INLINE_WRITTEN);
+            continue;
+
+        case WFS_TRUNC_PC_INLINE_WRITTEN:
+            ctx->err = wfs_block_take(b);
+            if (ctx->err != WASMOS_ERR_NONE) {
+                return (int32_t)ctx->err;
+            }
+            /* The content is on disk, so the map may name it. The flag goes in the
+             * same update: while it is set a reader takes these bytes as inline
+             * content rather than as an extent (§7). */
+            ctx->obj.flags = (uint16_t)(ctx->obj.flags & ~(uint16_t)WFS_OBJ_INLINE_DATA);
+            ctx->obj.extents[0].logical_block = 0u;
+            ctx->obj.extents[0].physical_block = (uint64_t)ctx->promote_block;
+            ctx->obj.extents[0].length = 1u;
+            ctx->obj.extents[0].reserved = 0u;
+            ctx->obj.extent_count = 1u;
+            for (i = 0; i < WFS_INLINE_DATA_MAX; ++i) {
+                ctx->inline_data[i] = 0u;
+            }
+            ctx->promote_inline = 0u;
+            /* A promotion only happens on a GROW, and a grow allocates nothing
+             * further: the range past the block just written is a hole. */
+            ctx->pc = WFS_TRUNC_PC_RECORD_READ;
             continue;
 
         case WFS_TRUNC_PC_TAIL_READ:
@@ -368,6 +454,26 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                  * extents as the leaf holds, and an empty leaf is released with
                  * the map cleared, so the object goes back to an inline map. */
                 ctx->obj.extent_count = ctx->trim.remaining;
+                if (ctx->trim.remaining != 0u &&
+                    (ctx->new_size % ctx->vol->super.block_size) != 0u) {
+                    /* The new end falls inside a block that survived. Which
+                     * PHYSICAL block that is takes a descent through the tree, so
+                     * the read path resolves it -- the same walk a reader makes. */
+                    memset(&ctx->extent, 0, sizeof(ctx->extent));
+                    ctx->extent.pc = WFS_EXTENT_PC_START;
+                    ctx->extent.vol = ctx->vol;
+                    ctx->extent.obj = &ctx->obj;
+                    ctx->extent.logical = ctx->new_size / ctx->vol->super.block_size;
+                    ctx->extent.err = WASMOS_ERR_NONE;
+                    wfs_ops_task_reset(&ctx->extent_task);
+                    if (!wasmos_async_start(
+                            wfs_ops_runtime(), &ctx->extent_task, wfs_extent_task, &ctx->extent)) {
+                        WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+                    }
+                    ctx->extent_started = 1u;
+                    ctx->pc = WFS_TRUNC_PC_TAIL_LOOKUP_JOINED;
+                    continue;
+                }
                 if (ctx->trim.remaining == 0u) {
                     ctx->obj.extent_tree_block = 0u;
                     wfs_ops_task_reset(&ctx->free_task);
@@ -400,6 +506,28 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
             }
             ctx->trim_started = 1u;
+            continue;
+
+        case WFS_TRUNC_PC_TAIL_LOOKUP_JOINED:
+            joined = 0;
+            if (wasmos_wasm_coroutine_join(&ctx->extent_task, &joined) ==
+                WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->extent_started = 0u;
+            if (ctx->extent.err != WASMOS_ERR_NONE) {
+                WFS_FAIL(ctx, ctx->extent.err);
+            }
+            /* Nothing mapping it means the new end falls in a HOLE, and a hole has
+             * no bytes to clear. */
+            if (ctx->extent.found) {
+                ctx->tail_block = ctx->extent.physical;
+                ctx->tail_from = (uint32_t)(ctx->new_size % ctx->vol->super.block_size);
+                ctx->tail_needed = 1u;
+                ctx->pc = WFS_TRUNC_PC_TAIL_READ;
+                continue;
+            }
+            ctx->pc = WFS_TRUNC_PC_RECORD_READ;
             continue;
 
         case WFS_TRUNC_PC_TRIM_FREE_JOINED:

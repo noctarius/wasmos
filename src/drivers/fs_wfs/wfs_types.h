@@ -561,8 +561,12 @@ typedef enum {
     WFS_TRUNC_PC_RECORD_PATCH,
     WFS_TRUNC_PC_RECORD_WRITTEN,
     WFS_TRUNC_PC_FREE_JOINED,
+    WFS_TRUNC_PC_TREE_DIRTY_JOINED,
     WFS_TRUNC_PC_TRIM_JOINED,
     WFS_TRUNC_PC_TRIM_FREE_JOINED,
+    WFS_TRUNC_PC_TAIL_LOOKUP_JOINED,
+    WFS_TRUNC_PC_INLINE_ALLOC_JOINED,
+    WFS_TRUNC_PC_INLINE_WRITTEN,
 } wfs_trunc_pc_t;
 
 typedef struct {
@@ -608,6 +612,21 @@ typedef struct {
     /* Logical blocks retained, and the leaf's root, held across the trim steps. */
     uint64_t trim_keep;
     uint32_t trim_root;
+
+    /* Resolving the physical block behind the logical one the new end falls in.
+     * An inline map is scanned in memory; a TREE needs a descent, which is this
+     * sub-task. */
+    uint8_t extent_started;
+    wasmos_wasm_coroutine_t extent_task;
+    wfs_extent_ctx_t extent;
+
+    /* Promoting an INLINE object that a grow takes past the record, the way a
+     * write does: its bytes move into a first data block and the flag clears. */
+    uint8_t promote_inline;
+    uint32_t promote_block;
+    uint8_t alloc_started;
+    wasmos_wasm_coroutine_t alloc_task;
+    wfs_alloc_ctx_t alloc;
 
     wasmos_error_code_t err;
 } wfs_trunc_ctx_t;

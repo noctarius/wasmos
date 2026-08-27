@@ -855,6 +855,24 @@ tail.
 
 ## Filesystems and Storage
 
+- [ ] [ENHANCEMENT][P2] Give a guest a way to reach truncation at an arbitrary
+  size. `wfs_truncate_task` now shrinks a tree-mapped object to a size INSIDE a
+  block and promotes an inline object a grow takes past `WFS_INLINE_DATA_MAX`,
+  but no guest API reaches either: the libc has no `ftruncate`, so `O_TRUNC` is
+  the only route and it always truncates to zero, which is block aligned and
+  never grows. Both paths are covered by the host suites
+  (`tests/unit/test_wfs_truncate.c`) and by nothing end to end. Adding
+  `ftruncate` means a host call plus the libc and libsys wrappers kept in sync
+  across the runtime-specific variants, then a case in
+  `examples/c/wfs_write_smoke`.
+- [ ] [ENHANCEMENT][P2] Let a WFS extent tree exceed a single leaf. A tree grows
+  to one leaf, so an object stops at `wfs_extent_leaf_capacity()` extents (170 at
+  a 4096-byte block). Splitting a leaf and adding an interior level are not
+  implemented; `wfs_extent_write.c` refuses rather than editing a shape it does
+  not maintain, and the three sites carry TODOs. The reader already walks
+  interior nodes, and nothing writes that shape, so no volume this driver
+  produces can contain one.
+
 - [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
   preserve the transfer-buffer ownership contract through all VFS relay paths.

@@ -1128,11 +1128,15 @@ linked feature documents for rationale and rollout plans.
   an object stops at `wfs_extent_leaf_capacity()` extents -- 170 at a 4096-byte
   block size, against six before. Splitting a leaf and adding an interior level
   are not implemented; the reader already walks interior nodes, and nothing writes
-  that shape, so no volume this driver makes can contain one. Two narrower gaps
-  carry TODOs at their sites: a tree-mapped object cannot be shrunk to a size
-  INSIDE a block (zeroing that tail needs a descent the truncate task has no
-  sub-task slot for), and a truncate cannot promote an inline object the way a
-  write does.
+  that shape, so no volume this driver makes can contain one.
+- Truncation is complete in both directions the format allows. A tree-mapped
+  object shrunk to a size INSIDE a block keeps that block and zeroes its tail,
+  resolving the physical block behind the logical one by descending the tree
+  through `wfs_extent_task` -- the same walk a reader makes -- so a tree truncates
+  to any size rather than only a block boundary. An INLINE object a grow takes
+  past `WFS_INLINE_DATA_MAX` is promoted the way a write past it is. The tree route
+  also marks the volume dirty before its first leaf rewrite, as the inline route
+  always did.
 - The interactive QEMU targets (`run-qemu`, `run-qemu-ui`, `run-qemu-debug`) boot
   with two WFS volumes: `/wfs` over ATA and `/vwfs` over virtio-blk, so one
   filesystem is reachable over both transports from the CLI. The virtio volume is

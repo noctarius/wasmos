@@ -416,18 +416,45 @@ static void test_shrinking_an_inline_object_clears_its_tail(void) {
 
 /* An inline object grown past its 144 bytes needs the promotion the writer does
  * not have either, so it is refused rather than half-done. */
-static void test_growing_an_inline_object_past_its_area_is_refused(void) {
+/* Growing an inline object past the record PROMOTES it, the way a write does.
+ *
+ * The bytes it held have to survive at the offset they were at, and the range
+ * between the old end and the new one is a hole that reads as zeroes -- so a
+ * promotion that dropped the record's content, or wrote it into the wrong part of
+ * the block, fails here. */
+static void test_growing_an_inline_object_past_its_area_promotes_it(void) {
     wfs_object_ctx_t o;
+    uint8_t back[600];
+    uint8_t want[SMALL_SIZE];
+    uint32_t done = 0u;
+    uint32_t i;
 
     if (setup() != 0) {
         wfs_stub_teardown();
         return;
     }
-    expect_rc((wasmos_error_code_t)do_truncate(g_small_id, WFS_INLINE_DATA_MAX + 1u),
-              WASMOS_ERR_FS_UNSUPPORTED,
-              "growing an inline object past its area is refused");
     expect(load_object(&o, g_small_id) == 0, "the record reads back");
-    expect_u64(o.out.size, SMALL_SIZE, "with its size untouched");
+    expect((o.out.flags & WFS_OBJ_INLINE_DATA) != 0u, "the small file starts inline");
+    for (i = 0; i < SMALL_SIZE; ++i) {
+        want[i] = pattern(1u, i);
+    }
+
+    expect(do_truncate(g_small_id, 500u) == 0, "growing an inline object past its area succeeds");
+    expect(load_object(&o, g_small_id) == 0, "the record reads back");
+    expect_u64(o.out.size, 500u, "with the new size");
+    expect_u32((uint32_t)(o.out.flags & WFS_OBJ_INLINE_DATA), 0u, "and it is no longer inline");
+    expect_u32(o.out.extent_count, 1u, "its content is one extent");
+
+    memset(back, 0xAA, sizeof(back));
+    expect(do_read(g_small_id, 0u, back, 500u, &done) == 0, "the file reads back");
+    expect_u32(done, 500u, "in full");
+    expect_u32(diff_count(back, want, SMALL_SIZE), 0u, "the original bytes survived");
+    for (i = SMALL_SIZE; i < 500u; ++i) {
+        if (back[i] != 0u) {
+            break;
+        }
+    }
+    expect_u32(i, 500u, "and the range past the old end reads as zeroes");
 
     wfs_stub_teardown();
 }
@@ -623,6 +650,62 @@ static void test_shrinking_a_tree_mapped_file_keeps_what_is_below_the_cut(void) 
     wfs_stub_teardown();
 }
 
+/* A tree-mapped object shrunk to a size INSIDE a block keeps the partial block
+ * and zeroes its tail, which needs the physical block behind a logical one --
+ * a descent through the tree rather than a scan of the record. */
+static void test_shrinking_a_tree_mapped_file_to_a_partial_block(void) {
+    wfs_object_ctx_t o;
+    uint8_t back[64];
+    uint8_t want[64];
+    uint32_t done = 0u;
+    uint32_t baseline = 0u;
+    uint32_t i;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    if (build_tree(&baseline) != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    /* The run at logical 30 carries 64 bytes at its start. Cutting 32 bytes into
+     * that block keeps the first half and must zero the second. */
+    expect(do_truncate(g_big_id, (uint64_t)30u * 4096u + 32u) == 0,
+           "shrinking to a partial block succeeds");
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect_u64(o.out.size, (uint64_t)30u * 4096u + 32u, "the size is the new one");
+    expect(o.out.extent_tree_block != 0u, "the tree survives");
+    /* Runs at 10, 20 and 30 are at or below the cut; 40 through 70 are gone. */
+    expect_u32(o.out.extent_count, 3u, "only the runs up to the cut are left");
+
+    for (i = 0; i < sizeof(want); ++i) {
+        want[i] = pattern(11u, (uint64_t)30u * 4096u + i);
+    }
+    memset(back, 0xAA, sizeof(back));
+    expect(do_read(g_big_id, (uint64_t)30u * 4096u, back, (uint32_t)sizeof(back), &done) == 0,
+           "the partial block reads");
+    /* A read past the end stops at the size, so only the kept half comes back. */
+    expect_u32(done, 32u, "the read stops at the new end");
+    expect_u32(diff_count(back, want, 32u), 0u, "the kept bytes are intact");
+
+    /* Growing again must not bring the removed bytes back: the block is still
+     * allocated, so whatever is in its tail is what a later read returns. */
+    expect(do_truncate(g_big_id, (uint64_t)30u * 4096u + 64u) == 0, "the file grows again");
+    memset(back, 0xAA, sizeof(back));
+    expect(do_read(g_big_id, (uint64_t)30u * 4096u, back, 64u, &done) == 0, "and reads back");
+    expect_u32(done, 64u, "in full");
+    expect_u32(diff_count(back, want, 32u), 0u, "the kept bytes are still intact");
+    for (i = 32u; i < 64u; ++i) {
+        if (back[i] != 0u) {
+            break;
+        }
+    }
+    expect_u32(i, 64u, "and the removed bytes did not come back");
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_shrinking_frees_the_blocks_it_drops),
     WASMOS_TEST_CASE(test_truncating_to_zero_drops_every_extent),
@@ -631,7 +714,8 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_growing_allocates_nothing_and_reads_zeroes),
     WASMOS_TEST_CASE(test_truncating_to_the_same_size_is_a_no_op),
     WASMOS_TEST_CASE(test_shrinking_an_inline_object_clears_its_tail),
-    WASMOS_TEST_CASE(test_growing_an_inline_object_past_its_area_is_refused),
+    WASMOS_TEST_CASE(test_growing_an_inline_object_past_its_area_promotes_it),
+    WASMOS_TEST_CASE(test_shrinking_a_tree_mapped_file_to_a_partial_block),
     WASMOS_TEST_CASE(test_a_read_only_volume_refuses_to_truncate),
     WASMOS_TEST_CASE(test_truncating_a_directory_is_refused),
     WASMOS_TEST_CASE(test_freed_blocks_can_be_allocated_again),

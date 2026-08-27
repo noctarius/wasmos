@@ -7,6 +7,7 @@
 #include "wfs_block.h"
 #include "wfs_crc32c.h"
 #include "wfs_dirent.h"
+#include "wfs_extent_write.h"
 #include "wfs_mount.h"
 #include "wfs_ops.h"
 #include "wfs_path.h"
@@ -653,11 +654,47 @@ static wasmos_error_code_t ns_release_object(wfs_volume_t* vol, uint32_t id,
                                              const struct wfs_object* obj) {
     uint32_t i;
     int32_t status;
+    wfs_free_ctx_t leaf_free;
 
     if (obj->extent_tree_block != 0u) {
-        /* No writer maintains an extent tree, so its blocks cannot be walked for
-         * release without risking a partial free. */
-        return WASMOS_ERR_FS_UNSUPPORTED;
+        uint32_t root = (uint32_t)obj->extent_tree_block;
+
+        /* Every run in the leaf, one step at a time: each step rewrites the leaf
+         * without the run it reports, so an interruption leaks blocks rather than
+         * freeing one a live extent still names. keep == 0 drops them all. */
+        for (;;) {
+            wfs_xttrim_ctx_t t;
+            wfs_free_ctx_t f;
+
+            memset(&t, 0, sizeof(t));
+            t.vol = vol;
+            t.node_block = root;
+            t.keep = 0u;
+            status = wfs_ops_run(wfs_extent_trim_task, &t);
+            if (status != 0) {
+                return (wasmos_error_code_t)status;
+            }
+            if (t.freed_length == 0u) {
+                break;
+            }
+            memset(&f, 0, sizeof(f));
+            f.vol = vol;
+            f.first_block = t.freed_first;
+            f.length = t.freed_length;
+            status = wfs_ops_run(wfs_free_blocks_task, &f);
+            if (status != 0) {
+                return (wasmos_error_code_t)status;
+            }
+        }
+        /* The leaf holds nothing now, so the node block goes too. */
+        memset(&leaf_free, 0, sizeof(leaf_free));
+        leaf_free.vol = vol;
+        leaf_free.first_block = root;
+        leaf_free.length = 1u;
+        status = wfs_ops_run(wfs_free_blocks_task, &leaf_free);
+        if (status != 0) {
+            return (wasmos_error_code_t)status;
+        }
     }
     for (i = 0; i < obj->extent_count && i < WFS_INLINE_EXTENTS; ++i) {
         wfs_free_ctx_t f;

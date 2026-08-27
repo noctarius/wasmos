@@ -31,10 +31,15 @@ void wfs_truncate_init(wfs_trunc_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_
  * the new end falls inside -- without that, growing the file again would read
  * back bytes the truncation was supposed to have removed.
  *
+ * An object whose map is an extent TREE is trimmed a run at a time
+ * (wfs_extent_write.h), and a leaf left empty is released with the object put
+ * back on an inline map.
+ *
  * Fails with WASMOS_ERR_FS_READ_ONLY on a volume that does not permit writes,
  * WASMOS_ERR_FS_IS_DIR on a directory, and WASMOS_ERR_FS_UNSUPPORTED for an
- * object whose map lives in an extent TREE (no writer exists) or an inline object
- * grown past WFS_INLINE_DATA_MAX.
+ * inline object grown past WFS_INLINE_DATA_MAX, or a tree-mapped object shrunk
+ * to a size INSIDE a block -- zeroing that tail needs the physical block behind
+ * a logical one, which for a tree is a descent this task cannot yet make.
  */
 int32_t wfs_truncate_task(void* user, uintptr_t* out_value);
 

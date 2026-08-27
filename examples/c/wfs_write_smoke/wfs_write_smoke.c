@@ -264,6 +264,94 @@ int main(int argc, char** argv) {
     if (rmdir("/wfs/made") != 0) {
         return fail("wfs-write-smoke: rmdir of an empty directory failed");
     }
+    /* 9. A file that OUTGROWS its inline area and then its inline extent map, in
+     *    the guest, on a real device. A new file is created inline, so the first
+     *    write past the record's capacity has to PROMOTE it to an extent map; the
+     *    sparse runs below then take it past six extents and into an extent TREE.
+     *    Both promotions used to be refused, which capped a file created in the OS
+     *    at 144 bytes.
+     *
+     *    Unlinking it at the end is the other half: releasing a tree walks its
+     *    leaf, and without that the file would be undeletable and its blocks
+     *    unreclaimable. */
+    fd = open("/wfs/grown.txt", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: grown open failed");
+    }
+    for (i = 0; i < sizeof(buf); ++i) {
+        buf[i] = pattern(i + 71u);
+    }
+    /* 400 bytes is past WFS_INLINE_DATA_MAX (144), so the object is promoted off
+     * its inline data before a single block is written. */
+    if (write(fd, buf, 400) != 400) {
+        return fail("wfs-write-smoke: the promoting write was short");
+    }
+    /* Seven runs far enough apart to be seven separate extents. The seventh is
+     * the one the record cannot hold. */
+    for (i = 1u; i <= 7u; ++i) {
+        long at = (long)(i * 40960u);
+
+        if (lseek(fd, at, SEEK_SET) != at) {
+            return fail("wfs-write-smoke: seek to a sparse offset failed");
+        }
+        if (write(fd, buf, 64) != 64) {
+            return fail("wfs-write-smoke: a sparse run was short");
+        }
+    }
+    if (close(fd) != 0) {
+        return fail("wfs-write-smoke: grown close failed");
+    }
+
+    /* Every run reads back through the map it ended up with, and the ranges
+     * between them are holes that read as zeroes. */
+    fd = open("/wfs/grown.txt", O_RDONLY);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: grown reopen failed");
+    }
+    memset(want, 0, sizeof(want));
+    if (read(fd, want, 400) != 400) {
+        return fail("wfs-write-smoke: the promoted content was short");
+    }
+    if (memcmp(want, buf, 400) != 0) {
+        return fail("wfs-write-smoke: the promoted content does not match");
+    }
+    for (i = 1u; i <= 7u; ++i) {
+        long at = (long)(i * 40960u);
+
+        if (lseek(fd, at, SEEK_SET) != at) {
+            return fail("wfs-write-smoke: seek to verify a sparse run failed");
+        }
+        memset(want, 0, 64);
+        if (read(fd, want, 64) != 64) {
+            return fail("wfs-write-smoke: a sparse run read short");
+        }
+        if (memcmp(want, buf, 64) != 0) {
+            return fail("wfs-write-smoke: a sparse run does not match");
+        }
+    }
+    /* A hole: nothing maps it, so it must read as zeroes rather than as a
+     * neighbouring run's bytes. */
+    if (lseek(fd, 20480, SEEK_SET) != 20480) {
+        return fail("wfs-write-smoke: seek to a hole failed");
+    }
+    memset(want, 0xAA, 64);
+    if (read(fd, want, 64) != 64) {
+        return fail("wfs-write-smoke: a hole read short");
+    }
+    for (i = 0; i < 64u; ++i) {
+        if (want[i] != 0) {
+            return fail("wfs-write-smoke: a hole did not read as zeroes");
+        }
+    }
+    (void)close(fd);
+
+    if (unlink("/wfs/grown.txt") != 0) {
+        return fail("wfs-write-smoke: unlinking a tree-mapped file failed");
+    }
+    if (open("/wfs/grown.txt", O_RDONLY) >= 0) {
+        return fail("wfs-write-smoke: the unlinked grown file still opens");
+    }
+
     /* And the volume is back to what it was, with the untouched entries intact. */
     fd = open("/wfs/hello.txt", O_RDONLY);
     if (fd < 0) {

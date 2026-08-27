@@ -1,5 +1,6 @@
 /* wfs_truncate.c - set an object's size (§16). */
 #include "wfs_truncate.h"
+#include "wfs_extent_write.h"
 
 #include <stddef.h>
 
@@ -50,6 +51,9 @@ void wfs_truncate_init(wfs_trunc_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_
     ctx->record_block = 0u;
     ctx->free_started = 0u;
     ctx->dirty_started = 0u;
+    ctx->trim_started = 0u;
+    ctx->trim_keep = 0u;
+    ctx->trim_root = 0u;
     ctx->err = WASMOS_ERR_NONE;
 }
 
@@ -136,15 +140,43 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
             if (ctx->vol->super.read_only) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_READ_ONLY);
             }
-            /* An extent TREE cannot be trimmed: wfs_extent.c reads leaf and
-             * interior nodes but nothing writes them, so a trim would have to
-             * rewrite a structure this driver cannot produce. */
+            /* An extent TREE is trimmed a run at a time by wfs_extent_trim_task,
+             * which needs no bound on how many runs an object drops. The one case
+             * still refused is a new size INSIDE a block: zeroing that tail needs
+             * the physical block behind a logical one, which for a tree is a
+             * descent this task has no sub-task slot for.
+             *
+             * TODO: resolve the tail block through wfs_extent_task so a tree can
+             * be truncated to an arbitrary size, not only a block boundary. */
             if (ctx->obj.extent_tree_block != 0u) {
-                WFS_FAIL(ctx, WASMOS_ERR_FS_UNSUPPORTED);
+                if (ctx->new_size < ctx->obj.size &&
+                    (ctx->new_size % ctx->vol->super.block_size) != 0u) {
+                    WFS_FAIL(ctx, WASMOS_ERR_FS_UNSUPPORTED);
+                }
+                if (ctx->new_size == ctx->obj.size) {
+                    return WASMOS_WASM_TASK_COMPLETE;
+                }
+                if (ctx->new_size > ctx->obj.size) {
+                    /* A grow adds no extent: the range past the old end is a
+                     * hole, which reads as zeroes (§9). Only the size moves. */
+                    ctx->obj.size = ctx->new_size;
+                    ctx->pc = WFS_TRUNC_PC_RECORD_READ;
+                    continue;
+                }
+                ctx->trim_root = (uint32_t)ctx->obj.extent_tree_block;
+                ctx->trim_keep = ctx->new_size / ctx->vol->super.block_size;
+                ctx->obj.size = ctx->new_size;
+                ctx->pc = WFS_TRUNC_PC_TRIM_JOINED;
+                continue;
             }
-            /* An inline object cannot outgrow the record, for the same reason a
-             * write into one cannot: promotion needs the inline bytes read before
-             * an extent is written over them. */
+            /* A truncation does not promote an inline object. The write path
+             * does (wfs_write.c), so the case a caller actually reaches -- writing
+             * past the record's capacity -- works; a truncate GROWING one past it
+             * would have to allocate and copy for a range that is all hole
+             * anyway.
+             *
+             * TODO: promote here too, so ftruncate can extend an inline object
+             * past WFS_INLINE_DATA_MAX rather than refusing. */
             if ((ctx->obj.flags & WFS_OBJ_INLINE_DATA) && ctx->new_size > WFS_INLINE_DATA_MAX) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_UNSUPPORTED);
             }
@@ -256,6 +288,12 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
 
             wr64(d, (uint32_t)offsetof(struct wfs_object, size), ctx->obj.size);
             wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), ctx->obj.extent_count);
+            /* Written because a trim can CLEAR it: a leaf emptied by the trim is
+             * released, and a record still naming it would send the next reader
+             * to a freed block. */
+            wr64(d,
+                 (uint32_t)offsetof(struct wfs_object, extent_tree_block),
+                 ctx->obj.extent_tree_block);
             wr16(d, (uint32_t)offsetof(struct wfs_object, flags), ctx->obj.flags);
             if (ctx->now_ns != 0u) {
                 wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), ctx->now_ns);
@@ -294,6 +332,92 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                 return (int32_t)ctx->err;
             }
             ctx->pc = WFS_TRUNC_PC_FREE_JOINED;
+            continue;
+
+        case WFS_TRUNC_PC_TRIM_JOINED:
+            /* One run per step. The leaf is rewritten without a run before that
+             * run is released, so every step leaves the tree readable and an
+             * interruption leaks blocks rather than freeing a referenced one. */
+            if (ctx->trim_started) {
+                joined = 0;
+                if (wasmos_wasm_coroutine_join(&ctx->trim_task, &joined) ==
+                    WASMOS_WASM_AWAIT_PENDING) {
+                    return WASMOS_WASM_TASK_YIELDED;
+                }
+                ctx->trim_started = 0u;
+                if (joined != 0) {
+                    WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+                }
+                if (ctx->trim.freed_length != 0u) {
+                    wfs_ops_task_reset(&ctx->free_task);
+                    memset(&ctx->free_ctx, 0, sizeof(ctx->free_ctx));
+                    ctx->free_ctx.vol = ctx->vol;
+                    ctx->free_ctx.first_block = ctx->trim.freed_first;
+                    ctx->free_ctx.length = ctx->trim.freed_length;
+                    if (!wasmos_async_start(wfs_ops_runtime(),
+                                            &ctx->free_task,
+                                            wfs_free_blocks_task,
+                                            &ctx->free_ctx)) {
+                        WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+                    }
+                    ctx->free_started = 1u;
+                    ctx->pc = WFS_TRUNC_PC_TRIM_FREE_JOINED;
+                    continue;
+                }
+                /* Nothing reaches past the cut. The record now names as many
+                 * extents as the leaf holds, and an empty leaf is released with
+                 * the map cleared, so the object goes back to an inline map. */
+                ctx->obj.extent_count = ctx->trim.remaining;
+                if (ctx->trim.remaining == 0u) {
+                    ctx->obj.extent_tree_block = 0u;
+                    wfs_ops_task_reset(&ctx->free_task);
+                    memset(&ctx->free_ctx, 0, sizeof(ctx->free_ctx));
+                    ctx->free_ctx.vol = ctx->vol;
+                    ctx->free_ctx.first_block = ctx->trim_root;
+                    ctx->free_ctx.length = 1u;
+                    ctx->trim_root = 0u;
+                    if (!wasmos_async_start(wfs_ops_runtime(),
+                                            &ctx->free_task,
+                                            wfs_free_blocks_task,
+                                            &ctx->free_ctx)) {
+                        WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+                    }
+                    ctx->free_started = 1u;
+                    ctx->pc = WFS_TRUNC_PC_TRIM_FREE_JOINED;
+                    continue;
+                }
+                ctx->pc = WFS_TRUNC_PC_RECORD_READ;
+                continue;
+            }
+            memset(&ctx->trim, 0, sizeof(ctx->trim));
+            ctx->trim.pc = WFS_XTTRIM_PC_START;
+            ctx->trim.vol = ctx->vol;
+            ctx->trim.node_block = ctx->trim_root;
+            ctx->trim.keep = ctx->trim_keep;
+            wfs_ops_task_reset(&ctx->trim_task);
+            if (!wasmos_async_start(
+                    wfs_ops_runtime(), &ctx->trim_task, wfs_extent_trim_task, &ctx->trim)) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+            }
+            ctx->trim_started = 1u;
+            continue;
+
+        case WFS_TRUNC_PC_TRIM_FREE_JOINED:
+            joined = 0;
+            if (wasmos_wasm_coroutine_join(&ctx->free_task, &joined) == WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->free_started = 0u;
+            if (joined != 0) {
+                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            }
+            /* The leaf's own release is the last step: the map is already cleared,
+             * so there is nothing more to trim. */
+            if (ctx->trim_root == 0u) {
+                ctx->pc = WFS_TRUNC_PC_RECORD_READ;
+                continue;
+            }
+            ctx->pc = WFS_TRUNC_PC_TRIM_JOINED;
             continue;
 
         case WFS_TRUNC_PC_FREE_JOINED:

@@ -1104,6 +1104,35 @@ linked feature documents for rationale and rollout plans.
 - A WFS `fs.backend` service name carries all three digits of its unit. A
   virtio-blk unit is `(slot << 3) | function` and so reaches 255, where two digits
   named the wrong service.
+- An object's extent map GROWS in both directions the format allows. An inline
+  object outgrowing `WFS_INLINE_DATA_MAX` (144 bytes) is promoted to an extent
+  map: its bytes are copied into a first data block and the flag cleared before
+  the write proper begins. An object outgrowing the record's six extents is
+  promoted to an extent tree, and further extents are inserted into its leaf,
+  coalescing with the record they follow so a sequential append stays one extent.
+  Both mattered more than the six-extent ceiling suggested, because a file created
+  in the OS starts INLINE (`wfs_alloc.c`) and so could previously never exceed 144
+  bytes, nor reach an extent map at all.
+- The two maps stay exclusive (§9): a promotion writes the leaf, then names it and
+  zeroes the inline array in one update, so no reader can find two answers for one
+  logical block. A promotion also SORTS what it moves, since the inline array is
+  scanned linearly and may be appended to in any order while a tree's descent
+  requires the order.
+- Releasing an object whose map is a tree walks its leaf: `wfs_extent_trim_task`
+  detaches one run per step, rewriting the leaf without it BEFORE the run is
+  released, so an interruption leaks blocks rather than freeing one a live extent
+  still names. Both `unlink` and `truncate` use it, and a leaf left empty is
+  released with the object put back on an inline map. Without this a file past six
+  extents would have been undeletable and its blocks unreclaimable.
+- Phase 2 (§23) is complete except one ceiling: a tree grows to a SINGLE leaf, so
+  an object stops at `wfs_extent_leaf_capacity()` extents -- 170 at a 4096-byte
+  block size, against six before. Splitting a leaf and adding an interior level
+  are not implemented; the reader already walks interior nodes, and nothing writes
+  that shape, so no volume this driver makes can contain one. Two narrower gaps
+  carry TODOs at their sites: a tree-mapped object cannot be shrunk to a size
+  INSIDE a block (zeroing that tail needs a descent the truncate task has no
+  sub-task slot for), and a truncate cannot promote an inline object the way a
+  write does.
 - The interactive QEMU targets (`run-qemu`, `run-qemu-ui`, `run-qemu-debug`) boot
   with two WFS volumes: `/wfs` over ATA and `/vwfs` over virtio-blk, so one
   filesystem is reachable over both transports from the CLI. The virtio volume is

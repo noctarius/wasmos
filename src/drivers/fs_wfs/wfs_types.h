@@ -324,6 +324,71 @@ typedef struct {
     wasmos_error_code_t err;
 } wfs_free_ctx_t;
 
+/* Adding one extent to an object whose inline map is full (§9). */
+typedef enum {
+    WFS_XTADD_PC_START = 0,
+    WFS_XTADD_PC_LEAF_READY,
+    WFS_XTADD_PC_LEAF_WRITTEN,
+} wfs_xtadd_pc_t;
+
+typedef struct {
+    wfs_xtadd_pc_t pc;
+    wfs_volume_t* vol;
+    /* Updated IN PLACE. extent_tree_block, extent_count and the inline array are
+     * this task's outputs; the caller seals them into the object record. */
+    struct wfs_object* obj;
+
+    /* The extent to add. `physical` is a block number, `length` a block count. */
+    uint64_t logical;
+    uint32_t physical;
+    uint32_t length;
+
+    /* A block the CALLER allocated for a promotion, ignored once the object has
+     * a tree. Allocating it in the caller keeps the allocator a sibling sub-task
+     * rather than nesting one level deeper under this one. */
+    uint32_t leaf_block;
+
+    /* The node being edited. */
+    uint32_t node_block;
+    /* Records this added to the map: 1 for an insert, 0 when it coalesced into
+     * an existing record, and the leaf's whole entry count for a promotion. */
+    uint32_t added;
+
+    wasmos_error_code_t err;
+} wfs_xtadd_ctx_t;
+
+/* Removing one run from an extent tree's leaf (§9). One step of a trim: the
+ * caller loops until `freed_length` comes back zero, releasing the reported run
+ * between steps.
+ *
+ * Split this way so the block free stays the CALLER's sub-task rather than
+ * nesting under this one, and so the leaf is left consistent at every step: it
+ * is rewritten without the run before the run is released, never the reverse. */
+typedef enum {
+    WFS_XTTRIM_PC_START = 0,
+    WFS_XTTRIM_PC_LEAF_READY,
+    WFS_XTTRIM_PC_LEAF_WRITTEN,
+} wfs_xttrim_pc_t;
+
+typedef struct {
+    wfs_xttrim_pc_t pc;
+    wfs_volume_t* vol;
+    uint32_t node_block;
+    /* Logical blocks the object retains. Zero drops every record, which is what
+     * releasing a whole object needs. */
+    uint64_t keep;
+
+    /* The run this step detached, for the caller to release. Zero length means
+     * nothing was left to trim and the loop is done. */
+    uint32_t freed_first;
+    uint32_t freed_length;
+    /* Records still in the leaf after this step. Zero means the leaf itself is
+     * now unreferenced and the caller releases it too. */
+    uint32_t remaining;
+
+    wasmos_error_code_t err;
+} wfs_xttrim_ctx_t;
+
 /* Writing bytes into an object's data (§16). */
 typedef enum {
     WFS_WRITE_PC_START = 0,
@@ -331,6 +396,10 @@ typedef enum {
     WFS_WRITE_PC_MAP,
     WFS_WRITE_PC_MAP_JOINED,
     WFS_WRITE_PC_ALLOC_JOINED,
+    WFS_WRITE_PC_INLINE_ALLOC_JOINED,
+    WFS_WRITE_PC_INLINE_WRITTEN,
+    WFS_WRITE_PC_LEAF_ALLOC_JOINED,
+    WFS_WRITE_PC_XTADD_JOINED,
     WFS_WRITE_PC_BLOCK_READ,
     WFS_WRITE_PC_BLOCK_PATCH,
     WFS_WRITE_PC_BLOCK_WRITTEN,
@@ -382,6 +451,26 @@ typedef struct {
     uint8_t dirty_started;
     wasmos_wasm_coroutine_t dirty_task;
     wfs_dirty_ctx_t dirty;
+
+    /* One extent waiting to go into the extent TREE, held until its data block
+     * is on disk: a leaf is reachable from the object record the moment it is
+     * written, so publishing an extent first would name a block still holding
+     * what it held before. The inline map needs no such delay, because it is
+     * sealed into the record at the very end. */
+    /* An INLINE object that must outgrow the record. Its bytes live in the
+     * record where extents would be, so they are copied into a first data block
+     * and the flag cleared before the write proper begins. */
+    uint8_t promote_inline;
+    uint32_t promote_block;
+
+    uint8_t tree_pending;
+    uint64_t pending_logical;
+    uint32_t pending_physical;
+    uint32_t pending_length;
+
+    uint8_t xtadd_started;
+    wasmos_wasm_coroutine_t xtadd_task;
+    wfs_xtadd_ctx_t xtadd;
 
     wasmos_error_code_t err;
 } wfs_write_ctx_t;
@@ -472,6 +561,8 @@ typedef enum {
     WFS_TRUNC_PC_RECORD_PATCH,
     WFS_TRUNC_PC_RECORD_WRITTEN,
     WFS_TRUNC_PC_FREE_JOINED,
+    WFS_TRUNC_PC_TRIM_JOINED,
+    WFS_TRUNC_PC_TRIM_FREE_JOINED,
 } wfs_trunc_pc_t;
 
 typedef struct {
@@ -507,6 +598,16 @@ typedef struct {
     uint8_t dirty_started;
     wasmos_wasm_coroutine_t dirty_task;
     wfs_dirty_ctx_t dirty;
+
+    /* Trimming an extent TREE, which is unbounded where the inline free list is
+     * not: one run is detached and released per step, so no array has to hold
+     * every run a large object drops. */
+    uint8_t trim_started;
+    wasmos_wasm_coroutine_t trim_task;
+    wfs_xttrim_ctx_t trim;
+    /* Logical blocks retained, and the leaf's root, held across the trim steps. */
+    uint64_t trim_keep;
+    uint32_t trim_root;
 
     wasmos_error_code_t err;
 } wfs_trunc_ctx_t;

@@ -26,6 +26,7 @@
 #include "wfs_crc32c.h"
 #include "wfs_dirent.h"
 #include "wfs_super.h"
+#include "wfs_write.h"
 
 static int g_failures;
 static int g_checks;
@@ -875,6 +876,103 @@ static void test_an_entry_in_a_grown_block_can_be_removed(void) {
     wfs_stub_teardown();
 }
 
+/* ---- releasing an object whose map is a tree ---------------------------- */
+
+/* Blocks marked used in the volume's only group. A 16 MiB volume at 4096 bytes
+ * is 4096 blocks, which is one group. */
+static uint32_t ns_used_blocks(void) {
+    const uint8_t* bm =
+        wfs_stub_image + (size_t)g_layout.bitmap_start * (size_t)wfs_stub_block_size;
+    uint32_t n = 0u;
+    uint32_t i;
+    uint32_t bit;
+
+    for (i = 0; i < wfs_stub_block_size; ++i) {
+        for (bit = 0; bit < 8u; ++bit) {
+            if (bm[i] & (uint8_t)(1u << bit)) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+/* Unlinking an object whose map is an extent TREE releases its runs, its leaf
+ * and its record.
+ *
+ * The release path walked the six inline extents and refused a tree outright.
+ * With a writer that produces trees, that refusal would leave a file that cannot
+ * be deleted and whose blocks nothing reclaims. */
+static void test_unlinking_a_tree_mapped_file_frees_everything(void) {
+    uint32_t id;
+    uint32_t baseline;
+    uint32_t i;
+    struct wfs_object probe;
+    wfs_object_ctx_t probe_o;
+    wasmos_wasm_coroutine_t probe_task;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    expect_rc(
+        wfs_ns_create(&g_vol, WFS_OBJECT_ROOT, "sparse", 6u, WFS_TYPE_FILE, 0644u, NOW_NS, &id),
+        WASMOS_ERR_NONE,
+        "the file is created");
+    baseline = ns_used_blocks();
+
+    /* Seven discontiguous runs: one past the inline limit, so the object takes a
+     * tree rather than stopping at six. */
+    for (i = 1u; i <= 7u; ++i) {
+        wfs_object_ctx_t o;
+        wfs_write_ctx_t w;
+        wasmos_wasm_coroutine_t task;
+        uint8_t buf[64];
+        uint32_t k;
+
+        memset(&o, 0, sizeof(o));
+        o.vol = &g_vol;
+        o.object_id = id;
+        if (wfs_stub_run_task(&task, wfs_object_task, &o) != 0) {
+            expect(0, "the object loads");
+            wfs_stub_teardown();
+            return;
+        }
+        for (k = 0; k < sizeof(buf); ++k) {
+            buf[k] = (uint8_t)(i * 7u + k);
+        }
+        memset(&w, 0, sizeof(w));
+        wfs_write_init(&w,
+                       &g_vol,
+                       id,
+                       &o.out,
+                       o.inline_data,
+                       (uint64_t)i * 10u * 4096u,
+                       buf,
+                       sizeof(buf),
+                       NOW_NS);
+        expect(wfs_stub_run_task(&task, wfs_write_task, &w) == 0, "a sparse run is written");
+    }
+    memset(&probe_o, 0, sizeof(probe_o));
+    probe_o.vol = &g_vol;
+    probe_o.object_id = id;
+    expect(wfs_stub_run_task(&probe_task, wfs_object_task, &probe_o) == 0, "the object loads");
+    expect(probe_o.out.extent_tree_block != 0u, "and its map is a tree");
+    probe = probe_o.out;
+    expect(ns_used_blocks() > baseline, "the runs and the leaf consumed blocks");
+
+    expect_rc(wfs_ns_unlink(&g_vol, WFS_OBJECT_ROOT, "sparse", 6u, NOW_NS),
+              WASMOS_ERR_NONE,
+              "the file is unlinked");
+    expect_u32(resolve("/sparse"), 0u, "and the name is gone");
+    /* Includes the leaf: a release that walked only the runs would leave this one
+     * block permanently allocated to nothing. */
+    expect_u32(ns_used_blocks(), baseline, "every block came back, the leaf included");
+    (void)probe;
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_created_file_resolves),
     WASMOS_TEST_CASE(test_a_created_directory_has_dot_and_dotdot),
@@ -894,6 +992,7 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_failed_create_leaves_the_volume_consistent),
     WASMOS_TEST_CASE(test_a_directory_grows_past_one_block),
     WASMOS_TEST_CASE(test_an_entry_in_a_grown_block_can_be_removed),
+    WASMOS_TEST_CASE(test_unlinking_a_tree_mapped_file_frees_everything),
 };
 
 int main(void) {

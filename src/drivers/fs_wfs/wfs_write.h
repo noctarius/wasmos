@@ -30,9 +30,13 @@ void wfs_write_init(wfs_write_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_id,
  * Fails with WASMOS_ERR_FS_READ_ONLY on a volume that does not permit writes,
  * WASMOS_ERR_FS_IS_DIR on a directory (its bytes are records, not content),
  * WASMOS_ERR_FS_NO_SPACE when the volume cannot supply a block, and
- * WASMOS_ERR_FS_UNSUPPORTED for the two growth cases that are not implemented:
- * an inline object that would outgrow WFS_INLINE_DATA_MAX, and an object that
- * would need more than WFS_INLINE_EXTENTS extents.
+ * WASMOS_ERR_FS_UNSUPPORTED only when an object outgrows a single extent-tree
+ * leaf, which is wfs_extent_leaf_capacity() extents; splitting a leaf and adding
+ * an interior level are not implemented.
+ *
+ * Growth itself is handled: an inline object outgrowing WFS_INLINE_DATA_MAX is
+ * promoted to an extent map, and an object outgrowing WFS_INLINE_EXTENTS extents
+ * is promoted to a tree (wfs_extent_write.h).
  */
 int32_t wfs_write_task(void* user, uintptr_t* out_value);
 

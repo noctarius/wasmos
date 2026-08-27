@@ -481,6 +481,148 @@ static void test_freed_blocks_can_be_allocated_again(void) {
     wfs_stub_teardown();
 }
 
+/* ---- extent trees ------------------------------------------------------- */
+
+static int32_t do_write(uint32_t id, uint64_t offset, const uint8_t* src, uint32_t len) {
+    wfs_object_ctx_t o;
+    wfs_write_ctx_t w;
+    wasmos_wasm_coroutine_t task;
+
+    if (load_object(&o, id) != 0) {
+        return -1;
+    }
+    memset(&w, 0, sizeof(w));
+    wfs_write_init(&w, &g_vol, id, &o.out, o.inline_data, offset, src, len, TRUNC_NOW_NS);
+    return wfs_stub_run_task(&task, wfs_write_task, &w);
+}
+
+/* Blocks marked used in the volume's only group, so a release can be checked as
+ * a return to a baseline rather than against block numbers the test would have
+ * to predict. A 16 MiB volume at 4096 bytes is 4096 blocks and one group. */
+static uint32_t used_blocks(void) {
+    const uint8_t* bm = group_bitmap(0u);
+    uint32_t n = 0u;
+    uint32_t i;
+    uint32_t bit;
+
+    for (i = 0; i < wfs_stub_block_size; ++i) {
+        for (bit = 0; bit < 8u; ++bit) {
+            if (bm[i] & (uint8_t)(1u << bit)) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+/* One block at `logical`, far from its neighbours so it is a new extent. */
+static int32_t write_sparse_block(uint32_t id, uint64_t logical) {
+    uint8_t buf[64];
+    uint32_t i;
+
+    for (i = 0; i < sizeof(buf); ++i) {
+        buf[i] = pattern(11u, logical * 4096u + i);
+    }
+    return do_write(id, logical * 4096u, buf, (uint32_t)sizeof(buf));
+}
+
+/* Empty `big` first, then lay SEVEN sparse runs at logical 10,20,...,70 -- one
+ * past the inline limit, so the object takes a tree.
+ *
+ * Emptying it first is what makes the block accounting meaningful: *out_baseline
+ * is the volume with this object owning nothing, so a later return to it proves
+ * the tree's runs AND its leaf were released and nothing else was. */
+static int build_tree(uint32_t* out_baseline) {
+    wfs_object_ctx_t o;
+    uint32_t i;
+
+    if (do_truncate(g_big_id, 0u) != 0) {
+        expect(0, "the object empties");
+        return -1;
+    }
+    *out_baseline = used_blocks();
+    for (i = 1u; i <= 7u; ++i) {
+        if (write_sparse_block(g_big_id, i * 10u) != 0) {
+            expect(0, "a sparse block is written");
+            return -1;
+        }
+    }
+    if (load_object(&o, g_big_id) != 0 || o.out.extent_tree_block == 0u) {
+        expect(0, "the object has an extent tree");
+        return -1;
+    }
+    return 0;
+}
+
+/* Truncating a tree-mapped object to zero releases its data AND its leaf, and
+ * puts the object back on an inline map.
+ *
+ * Before the extent-tree writer existed this could not arise; with a writer and
+ * no trim it would leave a file that cannot be emptied and whose blocks nothing
+ * reclaims. */
+static void test_truncating_a_tree_mapped_file_to_zero_frees_everything(void) {
+    wfs_object_ctx_t o;
+    uint32_t baseline;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    if (build_tree(&baseline) != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    expect(used_blocks() > baseline, "the tree and its runs consumed blocks");
+
+    expect(do_truncate(g_big_id, 0u) == 0, "the truncation completes");
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect_u64(o.out.size, 0u, "the file is empty");
+    expect_u32(o.out.extent_count, 0u, "no extent is left");
+    expect_u64(o.out.extent_tree_block, 0u, "and the map is inline again");
+    /* The leaf block is included: a trim that freed only the data would leave
+     * this one block short of the baseline forever. */
+    expect_u32(used_blocks(), baseline, "every block came back, the leaf included");
+
+    wfs_stub_teardown();
+}
+
+/* A partial shrink keeps the runs below the cut and drops the rest. Block
+ * aligned, because zeroing a tail inside a block needs a descent the truncate
+ * task cannot yet make. */
+static void test_shrinking_a_tree_mapped_file_keeps_what_is_below_the_cut(void) {
+    wfs_object_ctx_t o;
+    uint8_t back[64];
+    uint8_t want[64];
+    uint32_t done = 0u;
+    uint32_t baseline = 0u;
+    uint32_t i;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    if (build_tree(&baseline) != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    /* Runs sit at logical 10,20,...,70. Cutting at 35 blocks keeps 10,20,30. */
+    expect(do_truncate(g_big_id, (uint64_t)35u * 4096u) == 0, "the shrink completes");
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect_u64(o.out.size, 35u * 4096u, "the size is the new one");
+    expect(o.out.extent_tree_block != 0u, "the tree survives a partial shrink");
+    expect_u32(o.out.extent_count, 3u, "only the runs below the cut are left");
+
+    for (i = 0; i < sizeof(want); ++i) {
+        want[i] = pattern(11u, (uint64_t)30u * 4096u + i);
+    }
+    memset(back, 0, sizeof(back));
+    expect(do_read(g_big_id, (uint64_t)30u * 4096u, back, (uint32_t)sizeof(back), &done) == 0,
+           "a surviving run reads");
+    expect_u32(diff_count(back, want, (uint32_t)sizeof(want)), 0u, "and its bytes are intact");
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_shrinking_frees_the_blocks_it_drops),
     WASMOS_TEST_CASE(test_truncating_to_zero_drops_every_extent),
@@ -493,6 +635,8 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_read_only_volume_refuses_to_truncate),
     WASMOS_TEST_CASE(test_truncating_a_directory_is_refused),
     WASMOS_TEST_CASE(test_freed_blocks_can_be_allocated_again),
+    WASMOS_TEST_CASE(test_truncating_a_tree_mapped_file_to_zero_frees_everything),
+    WASMOS_TEST_CASE(test_shrinking_a_tree_mapped_file_keeps_what_is_below_the_cut),
 };
 
 int main(void) {

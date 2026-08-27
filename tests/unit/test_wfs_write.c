@@ -435,24 +435,57 @@ static void test_an_inline_write_stays_in_the_record(void) {
  * is not implemented. It must be REFUSED rather than half-done: the promotion has
  * to read the inline bytes before writing any extent over them, and a partial
  * attempt destroys the file's content. */
-static void test_outgrowing_the_inline_area_is_refused(void) {
+/* An inline object that outgrows the record is PROMOTED to an extent map, and the
+ * bytes it already held survive the move.
+ *
+ * A new file is created inline (wfs_alloc.c), so without this a file made in the
+ * OS could never exceed WFS_INLINE_DATA_MAX bytes -- and never reach an extent
+ * map at all, let alone a tree.
+ *
+ * The write starts PAST the old end, so the original bytes, the gap between, and
+ * the new bytes are three distinct ranges: a promotion that dropped the record's
+ * content, or wrote it at the wrong offset, fails here rather than passing on a
+ * write that happens to cover everything. */
+static void test_outgrowing_the_inline_area_promotes_the_object(void) {
     uint8_t big[200];
-    uint8_t back[SMALL_SIZE];
+    uint8_t back[SMALL_SIZE + 200u + 100u];
+    wfs_object_ctx_t o;
     uint32_t done = 0u;
+    uint32_t i;
 
     if (setup() != 0) {
         wfs_stub_teardown();
         return;
     }
-    memset(big, 0x33u, sizeof(big));
-    expect_rc((wasmos_error_code_t)do_write(g_small_id, 0u, big, (uint32_t)sizeof(big), &done),
-              WASMOS_ERR_FS_UNSUPPORTED,
-              "outgrowing the inline area is refused");
+    expect(load_object(&o, g_small_id) == 0, "the object loads");
+    expect((o.out.flags & WFS_OBJ_INLINE_DATA) != 0u, "the small file starts inline");
 
-    /* And the file is untouched, which is the part that matters. */
+    for (i = 0; i < sizeof(big); ++i) {
+        big[i] = pattern(9u, i);
+    }
+    expect(do_write(g_small_id, 100u, big, (uint32_t)sizeof(big), &done) == 0,
+           "outgrowing the inline area succeeds");
+    expect_u32(done, (uint32_t)sizeof(big), "every byte landed");
+
+    expect(load_object(&o, g_small_id) == 0, "the object loads");
+    expect_u32((uint32_t)(o.out.flags & WFS_OBJ_INLINE_DATA), 0u, "it is no longer inline");
+    expect_u32(o.out.extent_count, 1u, "and its content is one extent");
+    expect_u64(o.out.size, 300u, "the size covers the new end");
+
     memset(back, 0, sizeof(back));
-    expect(do_read(g_small_id, 0u, back, SMALL_SIZE, &done) == 0, "the file still reads");
-    expect_u32(diff_count(back, g_small_src, SMALL_SIZE), 0u, "with its original content intact");
+    expect(do_read(g_small_id, 0u, back, 300u, &done) == 0, "the file reads back");
+    expect_u32(done, 300u, "in full");
+    /* The bytes the record held, at the offset they were at. */
+    expect_u32(diff_count(back, g_small_src, SMALL_SIZE), 0u, "the original bytes survived");
+    /* The gap between the old end and the write is a hole, so it reads as zeroes
+     * rather than as whatever the fresh block held. */
+    for (i = SMALL_SIZE; i < 100u; ++i) {
+        if (back[i] != 0u) {
+            break;
+        }
+    }
+    expect_u32(i, 100u, "the gap reads as zeroes");
+    expect_u32(diff_count(back + 100u, big, (uint32_t)sizeof(big)), 0u, "and the new bytes match");
 
     wfs_stub_teardown();
 }
@@ -515,6 +548,160 @@ static void test_a_write_marks_the_volume_dirty(void) {
     wfs_stub_teardown();
 }
 
+/* ---- growth past the inline extent map ----------------------------------- */
+
+/* One block at `logical`, far enough from the last to be a NEW extent rather
+ * than an extension of it: record_extent only extends when a run continues the
+ * previous one both logically and physically. */
+static int32_t write_sparse_block(uint32_t id, uint64_t logical) {
+    uint8_t buf[64];
+    uint32_t i;
+
+    for (i = 0; i < sizeof(buf); ++i) {
+        buf[i] = pattern(11u, logical * 4096u + i);
+    }
+    return do_write(id, logical * 4096u, buf, (uint32_t)sizeof(buf), 0);
+}
+
+static void expect_sparse_block_reads_back(uint32_t id, uint64_t logical, const char* what) {
+    uint8_t back[64];
+    uint8_t want[64];
+    uint32_t i;
+    uint32_t done = 0u;
+
+    for (i = 0; i < sizeof(want); ++i) {
+        want[i] = pattern(11u, logical * 4096u + i);
+    }
+    memset(back, 0, sizeof(back));
+    expect(do_read(id, logical * 4096u, back, (uint32_t)sizeof(back), &done) == 0, what);
+    expect_u32(done, (uint32_t)sizeof(back), "the whole run was read");
+    expect_u32(diff_count(back, want, (uint32_t)sizeof(want)), 0u, "and its bytes match");
+}
+
+/* A file needing a SEVENTH extent takes an extent tree.
+ *
+ * Six discontiguous runs fit in the record; the seventh does not, and before the
+ * extent-tree writer existed this refused with WASMOS_ERR_FS_UNSUPPORTED and the
+ * file simply stopped growing.
+ */
+static void test_a_file_grows_past_the_inline_extent_limit(void) {
+    wfs_object_ctx_t o;
+    uint8_t back[64];
+    uint8_t want[64];
+    uint32_t done = 0u;
+    uint32_t i;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    /* `big` is contiguous, so it starts as one extent and five sparse blocks
+     * bring it to the inline limit. */
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect_u32(o.out.extent_count, 1u, "a contiguous file is one extent");
+    expect_u64(o.out.extent_tree_block, 0u, "and has no tree");
+
+    for (i = 1; i <= 5u; ++i) {
+        expect(write_sparse_block(g_big_id, i * 10u) == 0, "a sparse block within the map");
+    }
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect_u32(o.out.extent_count, WFS_INLINE_EXTENTS, "the inline map is now full");
+    expect_u64(o.out.extent_tree_block, 0u, "and is still inline");
+
+    /* The seventh. */
+    expect(write_sparse_block(g_big_id, 60u) == 0, "the seventh extent is written");
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect_u32(o.out.extent_count, WFS_INLINE_EXTENTS + 1u, "the map holds seven extents");
+    expect(o.out.extent_tree_block != 0u, "the object now names a tree");
+    expect(o.out.extent_tree_block < g_vol.super.total_blocks, "and the root is in range");
+
+    /* The two maps are exclusive (§9): a tree means the inline array is zero, or
+     * two readers could disagree about where a block lives. */
+    for (i = 0; i < WFS_INLINE_EXTENTS; ++i) {
+        expect_u64(o.out.extents[i].logical_block, 0u, "inline logical is cleared");
+        expect_u64(o.out.extents[i].physical_block, 0u, "inline physical is cleared");
+        expect_u32(o.out.extents[i].length, 0u, "inline length is cleared");
+    }
+
+    /* Every run still reads back through the tree, including the ones that were
+     * inline before the promotion moved them. */
+    expect_sparse_block_reads_back(g_big_id, 60u, "the seventh run reads back");
+    for (i = 1; i <= 5u; ++i) {
+        expect_sparse_block_reads_back(g_big_id, i * 10u, "an earlier run reads back");
+    }
+    for (i = 0; i < sizeof(want); ++i) {
+        want[i] = pattern(2u, i);
+    }
+    memset(back, 0, sizeof(back));
+    expect(do_read(g_big_id, 0u, back, (uint32_t)sizeof(back), &done) == 0,
+           "the original content reads back");
+    expect_u32(diff_count(back, want, (uint32_t)sizeof(want)), 0u, "and is unchanged");
+
+    wfs_stub_teardown();
+}
+
+/* A promoted tree's records are SORTED by logical_block even when the writes
+ * were not. The inline array is scanned linearly, so an unsorted map reads
+ * correctly there; a tree's descent takes the last index not exceeding the
+ * target and needs the order (§9). */
+static void test_the_promoted_tree_sorts_extents_written_out_of_order(void) {
+    wfs_object_ctx_t o;
+    uint8_t back[64];
+    uint32_t done = 0u;
+    uint32_t i;
+    const uint64_t logicals[6] = {90u, 30u, 70u, 10u, 50u, 80u};
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    for (i = 0; i < 6u; ++i) {
+        expect(write_sparse_block(g_big_id, logicals[i]) == 0, "a sparse block, out of order");
+    }
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect_u32(o.out.extent_count, WFS_INLINE_EXTENTS + 1u, "one original plus six sparse");
+    expect(o.out.extent_tree_block != 0u, "the object names a tree");
+    for (i = 0; i < 6u; ++i) {
+        expect_sparse_block_reads_back(g_big_id, logicals[i], "each run reads back through it");
+    }
+    /* A hole between two runs still reads as zeroes rather than as a neighbour's
+     * bytes, which is what a mis-sorted descent would return. */
+    memset(back, 0xAA, sizeof(back));
+    expect(do_read(g_big_id, (uint64_t)20u * 4096u, back, (uint32_t)sizeof(back), &done) == 0,
+           "a hole reads");
+    for (i = 0; i < sizeof(back); ++i) {
+        if (back[i] != 0u) {
+            break;
+        }
+    }
+    expect_u32(i, (uint32_t)sizeof(back), "and reads as zeroes");
+
+    wfs_stub_teardown();
+}
+
+/* Growth continues inside the leaf once the tree exists, so promotion is not a
+ * one-shot that leaves the file stuck at seven. */
+static void test_a_tree_mapped_file_keeps_growing(void) {
+    wfs_object_ctx_t o;
+    uint32_t i;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    for (i = 1; i <= 12u; ++i) {
+        expect(write_sparse_block(g_big_id, i * 10u) == 0, "each sparse block is written");
+    }
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect(o.out.extent_tree_block != 0u, "the object names a tree");
+    expect_u32(o.out.extent_count, 13u, "every run is accounted for");
+    for (i = 1; i <= 12u; ++i) {
+        expect_sparse_block_reads_back(g_big_id, i * 10u, "and each reads back");
+    }
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_an_overwrite_inside_a_block_reads_back),
     WASMOS_TEST_CASE(test_a_write_across_a_block_boundary_reads_back),
@@ -522,10 +709,13 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_an_append_grows_the_file),
     WASMOS_TEST_CASE(test_a_partial_write_into_a_new_block_zeroes_the_rest),
     WASMOS_TEST_CASE(test_an_inline_write_stays_in_the_record),
-    WASMOS_TEST_CASE(test_outgrowing_the_inline_area_is_refused),
+    WASMOS_TEST_CASE(test_outgrowing_the_inline_area_promotes_the_object),
     WASMOS_TEST_CASE(test_a_read_only_volume_refuses_to_write),
     WASMOS_TEST_CASE(test_writing_a_directory_is_refused),
     WASMOS_TEST_CASE(test_a_write_marks_the_volume_dirty),
+    WASMOS_TEST_CASE(test_a_file_grows_past_the_inline_extent_limit),
+    WASMOS_TEST_CASE(test_the_promoted_tree_sorts_extents_written_out_of_order),
+    WASMOS_TEST_CASE(test_a_tree_mapped_file_keeps_growing),
 };
 
 int main(void) {

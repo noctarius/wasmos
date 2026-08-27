@@ -1104,6 +1104,14 @@ linked feature documents for rationale and rollout plans.
 - A WFS `fs.backend` service name carries all three digits of its unit. A
   virtio-blk unit is `(slot << 3) | function` and so reaches 255, where two digits
   named the wrong service.
+- The interactive QEMU targets (`run-qemu`, `run-qemu-ui`, `run-qemu-debug`) boot
+  with two WFS volumes: `/wfs` over ATA and `/vwfs` over virtio-blk, so one
+  filesystem is reachable over both transports from the CLI. The virtio volume is
+  a SECOND image (`build/wfs_virtio.img`, its own UUID) rather than the same file
+  attached twice: both mounts are writable in an interactive run, and two writers
+  on one backing file corrupt it. The test targets are unchanged and keep their
+  single ATA volume; `tests/test_wfs_virtio_blk.py` covers the virtio path there
+  with per-drive snapshot overlays instead.
 - The physical frame allocator reserves the kernel image by PHYSICAL address and
   spans `__kernel_end`. The link symbols are higher-half virtual, so the previous
   reservation overlapped no frame and protected nothing; the 64 KiB BSP boot stack

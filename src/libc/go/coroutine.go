@@ -44,7 +44,7 @@ type Promise struct{ storage [1]uint32 }
 type Coroutine struct{ storage [14]uint32 }
 type Continuation struct{ storage [15]uint32 }
 type FutureGroup struct{ storage [14]uint32 }
-type EventLoop struct{ storage [133]uint32 }
+type EventLoop struct{ storage [136]uint32 }
 type IPCFuture struct{ storage [20]uint32 }
 type FSRequest struct{ storage [20]uint32 }
 type FSOperation struct{ storage [24]uint32 }

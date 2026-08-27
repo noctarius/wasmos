@@ -66,7 +66,14 @@ typedef struct {
  * on_timeout runs on the poller's stack, like the message handlers, so it must
  * not block; the useful thing for it to do is settle a promise. Both fields are
  * appended after the tables so a binding that mirrors this layout only grows at
- * the end. */
+ * the end -- src/libc/{go/coroutine.go,rust/coroutine.rs,zig/coroutine.zig} do,
+ * and tests/unit/test_go_abi_sizes.c asserts the Go blob still matches.
+ *
+ * There is deliberately no counterpart in wasmos_sys_native_event_loop_t. That
+ * loop's poll is a non-blocking ipc_recv drain and never parks, so there is no
+ * park to bound; a native service that needs to sleep does it through the driver
+ * API's ipc_wait instead. The asymmetry is in the polling model, not drift
+ * between the two variants. */
 typedef struct {
     int32_t receiver_endpoint;
     int32_t select_id; /* select-set watching receiver_endpoint; -1 if not created */

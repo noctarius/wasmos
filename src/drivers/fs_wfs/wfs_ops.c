@@ -27,3 +27,26 @@ void wfs_ops_task_reset(wasmos_wasm_coroutine_t* task) {
         p[i] = 0u;
     }
 }
+
+int32_t wfs_ops_run(wasmos_wasm_task_resume_fn fn, void* ctx) {
+    wasmos_wasm_runtime_t* runtime = wfs_ops_runtime();
+    wfs_block_t* block = wfs_ops_block();
+    wasmos_wasm_coroutine_t task;
+
+    if (!runtime || !block || !block->loop) {
+        return WASMOS_ERR_FS_NOT_READY;
+    }
+    wfs_ops_task_reset(&task);
+    if (!wasmos_async_start(runtime, &task, fn, ctx)) {
+        return WASMOS_ERR_FS_BUSY;
+    }
+    for (;;) {
+        int32_t status = 0;
+
+        (void)wasmos_wasm_coroutine_run_budget(runtime, 32u);
+        if (task.state == WASMOS_WASM_COROUTINE_DEAD) {
+            return wasmos_wasm_coroutine_join(&task, &status);
+        }
+        (void)wasmos_sys_event_loop_poll(block->loop, 8);
+    }
+}

@@ -384,6 +384,57 @@ static void test_insert_splits_the_slack_of_a_used_record(void) {
     expect(reachable(g_block, "next", 6u), "and so is the new one");
 }
 
+/* ---- path splitting ----------------------------------------------------- */
+
+static void expect_split(const char* path, uint32_t want_parent, const char* want_name) {
+    uint32_t parent_len = 0xFFFFFFFFu;
+    const char* name = 0;
+    uint32_t name_len = 0u;
+
+    expect_rc(wfs_dirent_split_path(path, (uint32_t)strlen(path), &parent_len, &name, &name_len),
+              WASMOS_ERR_NONE,
+              "the split succeeds");
+    expect_u32(parent_len, want_parent, "the parent length");
+    expect_u32(name_len, (uint32_t)strlen(want_name), "the name length");
+    expect(name && memcmp(name, want_name, strlen(want_name)) == 0, "and the name itself");
+}
+
+static void test_a_path_splits_into_parent_and_name(void) {
+    expect_split("/wfs/docs/big.txt", 9u, "big.txt");
+    expect_split("/hello", 1u, "hello");
+    /* No separator: the parent length is 0, which a caller reads as "the
+     * directory the client already stands in". Returning 1 here would turn a
+     * relative name into an absolute one. */
+    expect_split("hello", 0u, "hello");
+    expect_split("docs/big.txt", 4u, "big.txt");
+    /* Trailing separators name the same thing without them. */
+    expect_split("docs/", 0u, "docs");
+    expect_split("/wfs/docs//", 4u, "docs");
+}
+
+static void test_a_path_with_no_component_is_refused(void) {
+    uint32_t parent_len = 0u;
+    const char* name = 0;
+    uint32_t name_len = 0u;
+    static char too_long[WFS_NAME_MAX + 3];
+
+    expect_rc(wfs_dirent_split_path("", 0u, &parent_len, &name, &name_len),
+              WASMOS_ERR_FS_NAME,
+              "an empty path has no component");
+    expect_rc(wfs_dirent_split_path("/", 1u, &parent_len, &name, &name_len),
+              WASMOS_ERR_FS_NAME,
+              "the root names nothing to create");
+    expect_rc(wfs_dirent_split_path("///", 3u, &parent_len, &name, &name_len),
+              WASMOS_ERR_FS_NAME,
+              "nor do separators alone");
+
+    memset(too_long, 'x', sizeof(too_long));
+    too_long[0] = '/';
+    expect_rc(wfs_dirent_split_path(too_long, WFS_NAME_MAX + 2u, &parent_len, &name, &name_len),
+              WASMOS_ERR_FS_NAME,
+              "a component past WFS_NAME_MAX is refused");
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_zeroed_block_is_not_valid),
     WASMOS_TEST_CASE(test_an_initialised_block_is_empty_and_valid),
@@ -396,6 +447,8 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_removing_an_absent_name_changes_nothing),
     WASMOS_TEST_CASE(test_adjacent_removals_merge_into_one_gap),
     WASMOS_TEST_CASE(test_insert_splits_the_slack_of_a_used_record),
+    WASMOS_TEST_CASE(test_a_path_splits_into_parent_and_name),
+    WASMOS_TEST_CASE(test_a_path_with_no_component_is_refused),
 };
 
 int main(void) {

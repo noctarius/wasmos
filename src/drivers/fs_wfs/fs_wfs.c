@@ -46,7 +46,8 @@
  *     wfs_read.c      bytes out of an object (§16)
  *     wfs_write.c     bytes into an object; allocates where nothing is mapped
  *     wfs_truncate.c  set a size; frees or sparsens what changes
- *     wfs_alloc.c     take and release blocks, over the bitmaps (§12)
+ *     wfs_alloc.c     take and release blocks and object records (§12)
+ *     wfs_namespace.c create/mkdir/unlink/rmdir/rename over the two (§10)
  *     wfs_sync.c      record that the volume is mounted for writing (§4)
  */
 #include "wasmos/api.h"
@@ -179,30 +180,11 @@ static int32_t wfs_reply(int32_t dest, int32_t type, int32_t request_id, int32_t
         dest, g_fs_endpoint, type, request_id, a0, a1, 0, 0, WFS_SEND_RETRIES);
 }
 
-/* Run one op to completion, pumping the runtime and the event loop the way the
- * ops' own host tests do: resume ready tasks, then deliver block replies, which
- * wakes whatever those tasks parked on.
- *
- * Returns the task's status: 0, or the negative packed code it failed with. */
+/* Run one op to completion. The pump lives in wfs_ops so the namespace ops can
+ * use it too; this name is kept because every call site below reads better with
+ * it. */
 static int32_t wfs_run(wasmos_wasm_task_resume_fn fn, void* ctx) {
-    wasmos_wasm_coroutine_t task;
-
-    wfs_ops_task_reset(&task);
-    if (!wasmos_async_start(&g_runtime, &task, fn, ctx)) {
-        return WASMOS_ERR_FS_BUSY;
-    }
-    for (;;) {
-        int32_t status = 0;
-
-        (void)wasmos_wasm_coroutine_run_budget(&g_runtime, 32u);
-        if (task.state == WASMOS_WASM_COROUTINE_DEAD) {
-            return wasmos_wasm_coroutine_join(&task, &status);
-        }
-        /* The loop owns a select set, so this parks rather than spinning: a task
-         * that is not runnable is waiting on a block reply and nothing else can
-         * make progress until it lands. */
-        (void)wasmos_sys_event_loop_poll(&g_loop, 8);
-    }
+    return wfs_ops_run(fn, ctx);
 }
 
 /* Copy a client's path out of the transfer buffer it borrowed to us. */

@@ -77,4 +77,21 @@ wasmos_error_code_t wfs_dirent_insert(uint8_t* block, uint32_t block_size, const
 wasmos_error_code_t wfs_dirent_remove(uint8_t* block, uint32_t block_size, const uint8_t* uuid,
                                       uint64_t location, const char* name, uint32_t name_len);
 
+/* Split a path into the directory holding the final component and that component.
+ *
+ * `*out_parent_len` is how much of `path` names the parent, so a caller resolves
+ * that prefix and looks `*out_name` up inside it. A path with no separator has a
+ * parent length of 0, which the caller reads as "the directory it already stands
+ * in" rather than as the root -- a relative name must not silently become an
+ * absolute one.
+ *
+ * Trailing separators are ignored, so "docs/" names `docs` in the same directory
+ * "docs" does. Returns WASMOS_ERR_FS_NAME when no component remains ("", "/",
+ * "///"), or when the component exceeds WFS_NAME_MAX; a caller cannot create or
+ * remove something with no name.
+ */
+wasmos_error_code_t wfs_dirent_split_path(const char* path, uint32_t path_len,
+                                          uint32_t* out_parent_len, const char** out_name,
+                                          uint32_t* out_name_len);
+
 #endif /* FS_WFS_WFS_DIRENT_H */

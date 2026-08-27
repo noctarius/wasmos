@@ -21,6 +21,22 @@ wfs_block_t* wfs_ops_block(void);
 /* The bound runtime, or NULL before wfs_ops_bind. */
 wasmos_wasm_runtime_t* wfs_ops_runtime(void);
 
+/* Run one task to completion, pumping the runtime and the event loop: resume
+ * ready tasks, then deliver block replies, which wakes whatever those tasks
+ * parked on.
+ *
+ * This is what lets an OPERATION be composed from several tasks in plain
+ * sequence — allocate, then insert, then seal — instead of as one state machine
+ * that must carry every intermediate across an await. The namespace ops are
+ * written that way, and it is why they are host-testable at all: the pump needs
+ * only the bound runtime and block client, both of which a test harness binds.
+ *
+ * Parks rather than spins: a task that is not runnable is waiting on a block
+ * reply, and nothing else can make progress until it lands.
+ *
+ * Returns the task's status: 0, or the negative packed code it failed with. */
+int32_t wfs_ops_run(wasmos_wasm_task_resume_fn fn, void* ctx);
+
 /* Put a task record back into the state wasmos_async_start accepts.
  *
  * It accepts only NEW or DEAD, and a caller-owned record is NEW exactly when it

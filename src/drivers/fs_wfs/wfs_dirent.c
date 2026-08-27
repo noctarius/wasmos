@@ -278,3 +278,37 @@ wasmos_error_code_t wfs_dirent_remove(uint8_t* block, uint32_t block_size, const
     wfs_dirent_seal(block, block_size, uuid, location);
     return WASMOS_ERR_NONE;
 }
+
+wasmos_error_code_t wfs_dirent_split_path(const char* path, uint32_t path_len,
+                                          uint32_t* out_parent_len, const char** out_name,
+                                          uint32_t* out_name_len) {
+    uint32_t end;
+    uint32_t start;
+
+    if (!path || !out_parent_len || !out_name || !out_name_len) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    end = path_len;
+    /* Trailing separators name the same thing without them, so "docs/" and "docs"
+     * resolve alike. */
+    while (end > 0u && path[end - 1u] == '/') {
+        end--;
+    }
+    if (end == 0u) {
+        return WASMOS_ERR_FS_NAME;
+    }
+    start = end;
+    while (start > 0u && path[start - 1u] != '/') {
+        start--;
+    }
+    if (end - start == 0u || end - start > WFS_NAME_MAX) {
+        return WASMOS_ERR_FS_NAME;
+    }
+    /* The separator itself is not part of the parent, except at the root: "/x"
+     * has a parent of "/", which is one byte and not zero -- zero means "the
+     * directory the client stands in". */
+    *out_parent_len = start > 1u ? start - 1u : start;
+    *out_name = path + start;
+    *out_name_len = end - start;
+    return WASMOS_ERR_NONE;
+}

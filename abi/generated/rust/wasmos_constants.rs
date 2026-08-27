@@ -4,25 +4,23 @@
 #![allow(dead_code)]
 
 // block_backend
-/// Which kind of backend serves a block device, published in arg3 of
-/// DEVMGR_PUBLISH_BLOCK_DEVICE and matched by `DRIVER==` in a block rule.
+/// Which kind of backend serves a block device, carried in the `backend`
+/// field of wasmos_block_descriptor_t and matched by `DRIVER==` in a block
+/// rule.
 ///
-/// A block device is identified by the PAIR (backend, unit), not by a unit
-/// alone. What a unit MEANS is the backend's own business -- ATA numbers the
-/// drives on a controller, a virtio-blk device numbers itself by where it sits
-/// on the bus -- so a bare unit names two different disks once more than one
-/// backend is present. The pair is also
-/// intrinsic rather than allocated: it does not depend on which driver
-/// finished probing first, which a number handed out in publish order would.
+/// What a unit MEANS is the backend's own business -- ATA numbers the drives
+/// on a controller, a virtio-blk device numbers itself by where it sits on the
+/// bus -- so a bare unit names two different disks once more than one backend
+/// is present. Backend and unit are both intrinsic rather than allocated: they
+/// do not depend on which driver finished probing first, which a number handed
+/// out in publish order would.
 ///
-/// The value is the low half of the `block` service class instance, whose
-/// high half is the backend: instance = (backend << 8) | unit. That is what
-/// lets a class lookup and a rule name the same disk without a registry
-/// handing out identities.
-///
-/// TODO: (backend, unit) still cannot separate two IDE controllers, which
-/// would both call their disks 0 and 1. block_device_record_t carries a
-/// canonical_id derived from the PCI address for that case.
+/// Neither is the device's IDENTITY. That is the descriptor's canonical_id
+/// string (`block:pci:00:01.01:ata0`), and the `block` service class instance
+/// is an opaque FNV-1a 32 fingerprint of it. The fingerprint carries no
+/// decodable structure on purpose: every attribute a caller might want to
+/// match on lives in the descriptor, where adding one costs a field rather
+/// than a redefinition of what the instance number means.
 /// Publisher named no backend.
 pub const BLOCK_BACKEND_UNKNOWN: i32 = 0;
 /// ATA/IDE controller; unit is the drive index.
@@ -33,6 +31,80 @@ pub const BLOCK_BACKEND_ATA: i32 = 1;
 /// Two virtio-blk devices therefore get different units instead of
 /// colliding on one class instance.
 pub const BLOCK_BACKEND_VIRTIO_BLK: i32 = 2;
+
+// block_descriptor
+/// Version and size ceilings of wasmos_block_descriptor_t, the record that
+/// describes one block device. The struct itself is declared in
+/// src/drivers/include/wasmos_driver_abi.h and mirrored in
+/// src/libc/zig/driver.zig; only the values a peer must agree on live here.
+///
+/// A reader MUST reject a descriptor whose version it does not know rather
+/// than interpreting the fields it recognizes, because a future version may
+/// redefine what an older field means and a partial read is worse than no
+/// read.
+/// Current wasmos_block_descriptor_t layout.
+pub const BLOCK_DESCRIPTOR_VERSION: i32 = 1;
+/// Bytes reserved for the partition label, NUL included. A GPT name is 36
+/// UTF-16 code units, which reach 3 bytes each in UTF-8 -- a code point
+/// needing 4 bytes lies outside the BMP and costs two code units, so it
+/// never exceeds that rate. 109 bytes is the bound; 144 keeps the
+/// descriptor's fixed head a multiple of 8 with room to spare, so no
+/// encoder ever has to truncate a name the format can express.
+pub const BLOCK_DESCRIPTOR_LABEL_MAX: i32 = 144;
+/// Bytes reserved for canonical_id, NUL included. The longest form is the
+/// PCI-addressed partition (`block:pci:BB:DD.FF:ata0p128`), which leaves
+/// room to spare; a producer that would overflow it must fail rather than
+/// truncate, because a truncated id is a DIFFERENT device's name.
+pub const BLOCK_DESCRIPTOR_ID_MAX: i32 = 64;
+
+// partition_scheme
+/// Which partition table a disk carries, reported in the `scheme` field of
+/// wasmos_block_descriptor_t.
+///
+/// NONE is a first-class answer, not an error: a disk may hold a filesystem
+/// at LBA 0 with no table at all, and that disk mounts. It is a matchable
+/// state (`ATTR{scheme}=="none"`) rather than a fallback branch in code.
+///
+/// The scheme decides which identity fields are populated. GPT fills
+/// type_guid, part_guid and label; MBR fills mbr_type and nothing else, so an
+/// MBR partition cannot name its own mount point and needs a rule to say
+/// where it goes.
+/// No table; the whole device is one volume.
+pub const PARTITION_SCHEME_NONE: i32 = 0;
+/// Legacy MBR at LBA 0; four slots, type bytes, no labels.
+pub const PARTITION_SCHEME_MBR: i32 = 1;
+/// GPT header at LBA 1; type GUIDs, PARTUUIDs and labels.
+pub const PARTITION_SCHEME_GPT: i32 = 2;
+
+// fs_type
+/// Which on-disk filesystem a block device holds, reported in the `fs_type`
+/// field of wasmos_block_descriptor_t.
+///
+/// This is what a SUPERBLOCK PROBE found, not what a partition type claims.
+/// The two are reported side by side because neither is sufficient alone: a
+/// GPT type GUID of Microsoft Basic Data is carried by FAT, NTFS and exFAT
+/// volumes alike and so identifies nothing, while a probe cannot distinguish
+/// an EFI System Partition from any other FAT volume. A rule may require both.
+///
+/// UNKNOWN means no probe matched, which is not the same as no filesystem --
+/// an unrecognized format reads exactly like an empty one from here.
+/// No superblock probe matched.
+pub const FS_TYPE_UNKNOWN: i32 = 0;
+/// FAT12/16/32; BPB with a 0x55AA boot signature.
+pub const FS_TYPE_FAT: i32 = 1;
+
+// block_descriptor_flags (flag bits)
+/// Bits of the `flags` field of wasmos_block_descriptor_t.
+///
+/// PRESENT distinguishes a device that exists from a registry slot that
+/// merely once described one; a publisher clearing it is how a disk is
+/// retired.
+/// The device exists and can serve transfers.
+pub const BLOCK_DESCRIPTOR_FLAG_PRESENT: i32 = 0x1;
+/// A filesystem service is mounted on it.
+pub const BLOCK_DESCRIPTOR_FLAG_ACTIVE_SERVICE: i32 = 0x2;
+/// Writes are refused by the backend.
+pub const BLOCK_DESCRIPTOR_FLAG_READ_ONLY: i32 = 0x4;
 
 // net_socket_family
 /// Address family of a socket: which layer it addresses and therefore what an

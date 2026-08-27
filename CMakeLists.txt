@@ -2299,6 +2299,15 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_device_manager_rules
   COMMAND ${BUILD_DIR}/test_device_manager_rules
+  # The block descriptor ABI and its class-instance fingerprint. Header-only:
+  # wasmos_driver_abi.h carries both, and the generated constants it includes
+  # supply the version and the field capacities.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_block_descriptor.c
+          -o ${BUILD_DIR}/test_block_descriptor
+  COMMAND ${BUILD_DIR}/test_block_descriptor
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${SERVICES_DIR}/fs_manager
           ${CMAKE_SOURCE_DIR}/tests/unit/test_fs_manager_path.c

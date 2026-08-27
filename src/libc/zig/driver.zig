@@ -26,6 +26,7 @@
 
 const abi = @import("wasmos_imports.zig");
 const op = @import("wasmos_opcodes.zig");
+const status = @import("wasmos_status.zig");
 
 /// The one kernel IPC status the send helper acts on rather than propagates: a
 /// destination queue that was full and is worth retrying. Mirrors the kernel's
@@ -78,6 +79,89 @@ const SvcRegisterDesc = extern struct {
     /// NUL-terminated class name; all-zero means no class.
     class_name: [SVC_CLASS_MAX]u8 = [_]u8{0} ** SVC_CLASS_MAX,
 };
+
+/// Label and canonical-id capacities of the block descriptor, both INCLUDING
+/// the terminating NUL. Equal to BLOCK_DESCRIPTOR_LABEL_MAX /
+/// BLOCK_DESCRIPTOR_ID_MAX in `abi/constants.yaml`.
+pub const BLOCK_LABEL_MAX: usize = 144;
+pub const BLOCK_ID_MAX: usize = 64;
+pub const BLOCK_DESCRIPTOR_VERSION: u32 = 1;
+
+/// One block device, mirroring `wasmos_block_descriptor_t` in
+/// `src/drivers/include/wasmos_driver_abi.h`. Carried in a transfer buffer by
+/// BLOCK_IPC_IDENTIFY_RESP and DEVMGR_PUBLISH_BLOCK_DEVICE.
+///
+/// The C side is `__attribute__((packed))` and this one is not, which is safe
+/// only because the layout was chosen so the two coincide: every field sits at
+/// its natural alignment and the total is a multiple of 8, so neither compiler
+/// inserts padding. The assertions below are what keep that true — a field added
+/// on one side alone shifts an offset and fails the build here rather than
+/// silently misreading a peer's bytes.
+pub const BlockDescriptor = extern struct {
+    version: u32 = BLOCK_DESCRIPTOR_VERSION,
+    /// BLOCK_BACKEND_*
+    backend: u32 = 0,
+    /// Backend-local device number.
+    unit: u32 = 0,
+    /// 0 = whole device, else partition-table slot.
+    partition: u32 = 0,
+    /// PARTITION_SCHEME_*
+    scheme: u32 = 0,
+    /// FS_TYPE_*, from a superblock probe.
+    fs_type: u32 = 0,
+    sector_bytes: u32 = 0,
+    /// BLOCK_DESCRIPTOR_FLAG_*
+    flags: u32 = 0,
+    /// Absolute on the underlying device.
+    lba_start: u64 = 0,
+    lba_count: u64 = 0,
+    /// GPT partition type; zero unless scheme is GPT.
+    type_guid: [16]u8 = [_]u8{0} ** 16,
+    /// PARTUUID; zero unless scheme is GPT.
+    part_guid: [16]u8 = [_]u8{0} ** 16,
+    /// MBR partition type byte; zero unless scheme is MBR.
+    mbr_type: u8 = 0,
+    reserved: [7]u8 = [_]u8{0} ** 7,
+    /// PARTLABEL, UTF-8, NUL-terminated.
+    label: [BLOCK_LABEL_MAX]u8 = [_]u8{0} ** BLOCK_LABEL_MAX,
+    /// NUL-terminated canonical id; the device's identity.
+    canonical_id: [BLOCK_ID_MAX]u8 = [_]u8{0} ** BLOCK_ID_MAX,
+};
+
+comptime {
+    if (@sizeOf(BlockDescriptor) != 88 + BLOCK_LABEL_MAX + BLOCK_ID_MAX) {
+        @compileError("BlockDescriptor size disagrees with wasmos_block_descriptor_t");
+    }
+    if (@offsetOf(BlockDescriptor, "lba_start") != 32) @compileError("lba_start moved");
+    if (@offsetOf(BlockDescriptor, "type_guid") != 48) @compileError("type_guid moved");
+    if (@offsetOf(BlockDescriptor, "part_guid") != 64) @compileError("part_guid moved");
+    if (@offsetOf(BlockDescriptor, "label") != 88) @compileError("label moved");
+    if (@offsetOf(BlockDescriptor, "canonical_id") != 232) @compileError("canonical_id moved");
+    // Fingerprints of two real canonical ids, pinned to the values the C
+    // implementation produces. tests/unit/test_block_descriptor.c asserts the
+    // same numbers from the other side, so the pair fails the build if either
+    // implementation drifts -- which matters because these are the addresses a
+    // filesystem uses to find its disk, and a silent divergence means it never
+    // does.
+    if (blockFingerprint("block:ata:0") != 4118534846) @compileError("fnv ata:0 mismatch");
+    if (blockFingerprint("block:virtio-blk:8") != 2695290355) @compileError("fnv virtio:8 mismatch");
+    if (blockFingerprint("") != 0) @compileError("fnv empty must be 0");
+}
+
+/// FNV-1a 32 over `id`: the `block` service class instance of a device whose
+/// canonical id is that string. Must agree byte-for-byte with
+/// wasmos_block_fingerprint() in `src/drivers/include/wasmos_driver_abi.h` —
+/// the two compute the addresses C and Zig backends register under, and a
+/// disagreement means a filesystem never finds its disk.
+pub fn blockFingerprint(id: []const u8) u32 {
+    if (id.len == 0) return 0;
+    var hash: u32 = 2166136261; // FNV offset basis
+    for (id) |c| {
+        hash ^= c;
+        hash = hash *% 16777619; // FNV prime
+    }
+    return hash;
+}
 
 /// Startup contract, mirroring `wasmos_spawn_info_t`.
 const SPAWN_INFO_MAGIC: u32 = 0x57535049; // 'WSPI'
@@ -373,6 +457,45 @@ fn bufferStage(bytes: []const u8) ?i32 {
 
 pub fn bufferRelease(buffer_id: i32) void {
     _ = abi.xfer_buffer_release(buffer_id);
+}
+
+/// Grant flags for `bufferBorrow`, matching WASMOS_BUFFER_GRANT_* in
+/// `src/drivers/include/wasmos_driver_abi.h`.
+pub const BUFFER_GRANT_READ: i32 = 0x1;
+pub const BUFFER_GRANT_WRITE: i32 = 0x2;
+
+/// Acquire a transfer buffer of at least `len` bytes, left zeroed. The caller
+/// owns it and must release it with `bufferRelease`.
+pub fn bufferAcquire(len: usize) ?i32 {
+    const bid = abi.xfer_buffer_acquire(@intCast(len));
+    return if (bid < 0) null else bid;
+}
+
+/// Lend this process's buffer `buffer_id` to whoever owns `grantee_endpoint`
+/// with `flags` rights, returning the grantee's borrow id.
+///
+/// Each call allocates its own borrow slot, so a server that re-grants the same
+/// buffer to the same client on every request accumulates them; grant once per
+/// client and let it address the buffer by object id afterwards, which any
+/// grantee may do.
+///
+/// A borrow is held per CONTEXT: the kernel resolves the endpoint to its owning
+/// process and allows one active borrow per object per process, so granting to a
+/// second endpoint of a client that already holds one returns
+/// ALREADY_BORROWED. Use `bufferGrant` when the question is "can this client
+/// read the buffer", which is what a server serving several endpoints per client
+/// actually needs.
+pub fn bufferBorrow(grantee_endpoint: i32, buffer_id: i32, flags: i32) ?i32 {
+    const borrow = abi.xfer_buffer_borrow(grantee_endpoint, buffer_id, flags);
+    return if (borrow < 0) null else borrow;
+}
+
+/// True once whoever owns `grantee_endpoint` can read `buffer_id` -- whether the
+/// grant was made here or already existed for that process. See `bufferBorrow`
+/// for why an existing grant is reported as an error and is not one.
+pub fn bufferGrant(grantee_endpoint: i32, buffer_id: i32, flags: i32) bool {
+    const rc = abi.xfer_buffer_borrow(grantee_endpoint, buffer_id, flags);
+    return rc >= 0 or rc == status.WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED;
 }
 
 // --- service registry ------------------------------------------------------

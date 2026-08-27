@@ -259,6 +259,9 @@ export const WASMOS_ERR_BLOCK_DEV_BAD_REQUEST: i32 = -0x00190004; // the request
 export const WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST: i32 = -0x00190005; // unknown or unsupported block opcode
 export const WASMOS_ERR_BLOCK_DEV_READ_FAILED: i32 = -0x00190006; // the transfer from the device failed
 export const WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: i32 = -0x00190007; // the transfer to the device failed
+export const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: i32 = -0x00190008; // the descriptor's version field names a layout this reader does not know
+export const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: i32 = -0x00190009; // the descriptor is short, unterminated, or names a length outside the transfer buffer
+export const WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: i32 = -0x0019000A; // the device has no descriptor to report, so it cannot be identified
 
 export function errMake(dom: u16, code: u16): i32 {
   return -(<i32>(((<u32>dom) << 16) | (<u32>code)));
@@ -529,6 +532,9 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST: return "unknown or unsupported block opcode";
     case WASMOS_ERR_BLOCK_DEV_READ_FAILED: return "the transfer from the device failed";
     case WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: return "the transfer to the device failed";
+    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: return "the descriptor's version field names a layout this reader does not know";
+    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "the descriptor is short, unterminated, or names a length outside the transfer buffer";
+    case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "the device has no descriptor to report, so it cannot be identified";
     default: return "unknown error";
   }
 }

@@ -404,3 +404,6 @@ domains:
       - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported block opcode" }
       - { name: READ_FAILED,         description: "the transfer from the device failed" }
       - { name: WRITE_FAILED,        description: "the transfer to the device failed" }
+      - { name: DESCRIPTOR_VERSION,  description: "the descriptor's version field names a layout this reader does not know" }
+      - { name: DESCRIPTOR_MALFORMED, description: "the descriptor is short, unterminated, or names a length outside the transfer buffer" }
+      - { name: NO_DESCRIPTOR,       description: "the device has no descriptor to report, so it cannot be identified" }

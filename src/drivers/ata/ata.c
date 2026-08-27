@@ -156,6 +156,23 @@ static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
  * not exclusive: several clients may name the same unit, and the first transfer
  * decides who gets it. */
 static uint8_t g_client_claimed[ATA_CLIENT_MAP_CAP];
+/* 1 once this client has been lent the descriptor buffer. A borrow allocates a
+ * registry slot every time it is taken, so a client that IDENTIFYs repeatedly
+ * would accumulate them; the grant is therefore made once per client and the
+ * borrow id is never needed again (the client addresses the buffer by object
+ * id, which any grantee may do). */
+static uint8_t g_client_desc_granted[ATA_CLIENT_MAP_CAP];
+
+/* One descriptor per unit, and the transfer buffer they are staged in.
+ *
+ * The buffer is filled during probing and never rewritten, which is what makes
+ * it safe to lend READ-only to device-manager and to every client at the same
+ * time: concurrent readers of immutable bytes need no arbitration. A backend
+ * that recomputed a descriptor in place would owe its grantees a barrier.
+ *
+ * Unit N occupies slot N, so an offset identifies a disk without a side table. */
+static wasmos_block_descriptor_t g_unit_desc[ATA_UNIT_COUNT];
+static int32_t g_desc_bid = -1;
 
 /* PRD table. It lives in this process's own block buffer, which is already
  * everything the controller needs -- contiguous, pinned, page-aligned and below
@@ -316,6 +333,65 @@ static int ata_identify_unit(uint8_t unit, uint16_t* out_words) {
     return 0;
 }
 
+/* Fill this unit's descriptor and stage it in the shared buffer.
+ *
+ * The canonical id is `block:ata:<unit>`, which is everything this driver can
+ * honestly say about where the disk is. It cannot include its controller's PCI
+ * address: the driver declares [[regions]], so it is spawned by module index and
+ * receives no startup arguments, and the bus address appears nowhere else it can
+ * reach. The device manager used to synthesize a PCI-addressed id on this
+ * driver's behalf; it now copies whatever the producer sent, because a consumer
+ * inventing an identity for a device it never probed is how the PCI prefix came
+ * to be attached to virtio disks that were nowhere near that address.
+ *
+ * TODO: two IDE controllers would both call their disks 0 and 1 and so collide
+ * on one canonical id. Separating them needs the bus address in the id, which
+ * needs this driver to be told its own -- today an either/or with its declared
+ * I/O windows (see the spawn-argument TODO in device_manager.c).
+ *
+ * Returns 0, or a packed error if the descriptor could not be staged. */
+static int32_t ata_build_descriptor(uint8_t unit, uint32_t sectors, uint8_t present) {
+    wasmos_block_descriptor_t* desc = 0;
+    if (unit >= ATA_UNIT_COUNT) {
+        return WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT;
+    }
+    desc = &g_unit_desc[unit];
+    (void)memset(desc, 0, sizeof(*desc));
+    desc->version = BLOCK_DESCRIPTOR_VERSION;
+    desc->backend = BLOCK_BACKEND_ATA;
+    desc->unit = unit;
+    desc->partition = 0u; /* a raw disk; partitions are the partition manager's */
+    desc->scheme = PARTITION_SCHEME_NONE;
+    desc->fs_type = FS_TYPE_UNKNOWN; /* this driver probes no superblock */
+    desc->sector_bytes = ATA_SECTOR_SIZE;
+    desc->lba_start = 0u;
+    desc->lba_count = (uint64_t)sectors;
+    if (present) {
+        desc->flags |= BLOCK_DESCRIPTOR_FLAG_PRESENT;
+    }
+    if (unit == 0 && g_present) {
+        desc->flags |= BLOCK_DESCRIPTOR_FLAG_ACTIVE_SERVICE;
+    }
+    /* Refuse rather than truncate: a truncated canonical id is a DIFFERENT
+     * device's name, and the fingerprint derived from it would address the wrong
+     * disk. */
+    if (snprintf(desc->canonical_id, sizeof(desc->canonical_id), "block:ata:%u", (unsigned)unit) <
+        0) {
+        return WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED;
+    }
+    if (g_desc_bid < 0) {
+        g_desc_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(g_unit_desc));
+        if (g_desc_bid < 0) {
+            return WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR;
+        }
+    }
+    if (wasmos_xfer_buffer_write(
+            g_desc_bid, desc, (int32_t)sizeof(*desc), (int32_t)(unit * sizeof(*desc))) != 0) {
+        return WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR;
+    }
+    return 0;
+}
+
 /* Claim one `block` class instance for a present disk.
  *
  * A class instance is a DISK, not a driver, so this controller registers once
@@ -323,19 +399,25 @@ static int ata_identify_unit(uint8_t unit, uint16_t* out_words) {
  * owner, and all of them name this same endpoint because a client picks the
  * disk with the unit argument the block protocol already carries.
  *
- * The instance is (backend << 8) | unit rather than a number handed out on
- * registration: it is derived from what the disk IS, so it is the same every
- * boot regardless of which driver probed first, and a client can decode it back
- * into the pair a device-manager rule names.
+ * The instance is the FINGERPRINT of the disk's canonical id: derived from what
+ * the disk IS, so it is the same every boot regardless of which driver probed
+ * first, and opaque, so nothing may decode it back into attributes. Attributes
+ * are read from the descriptor, which can grow a field where a packed instance
+ * could only be redefined.
  *
  * This is the ONLY way a client finds this driver: no plain "block" name is
  * registered, because a name resolves to one provider system-wide and would
  * make this controller the only disk anybody could reach. */
 static void ata_register_block_class(uint8_t unit, uint8_t present) {
-    if (!present || g_proc_endpoint_cached < 0) {
+    if (!present || g_proc_endpoint_cached < 0 || unit >= ATA_UNIT_COUNT) {
         return;
     }
-    uint32_t instance = ((uint32_t)BLOCK_BACKEND_ATA << 8) | (uint32_t)unit;
+    const char* id = g_unit_desc[unit].canonical_id;
+    uint32_t instance = wasmos_block_fingerprint(id);
+    if (instance == 0u) {
+        (void)printf("[ata] block class has no canonical id unit=%u\n", (unsigned)unit);
+        return;
+    }
     if (wasmos_svc_register_class(g_proc_endpoint_cached,
                                   g_block_endpoint,
                                   "ata",
@@ -345,31 +427,32 @@ static void ata_register_block_class(uint8_t unit, uint8_t present) {
         (void)printf("[ata] block class register failed unit=%u\n", (unsigned)unit);
         return;
     }
-    (void)printf("[ata] block class unit=%u instance=%u\n", (unsigned)unit, (unsigned)instance);
+    (void)printf("[ata] block class id=%s instance=%u\n", id, (unsigned)instance);
 }
 
-static void ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t present) {
-    if (g_devmgr_endpoint < 0 || g_block_endpoint < 0) {
+/* Announce one disk to the device-manager inventory as a descriptor in the
+ * shared buffer, lending that buffer READ-only on the first publish. */
+static void ata_publish_block_device(uint8_t unit) {
+    if (g_devmgr_endpoint < 0 || g_block_endpoint < 0 || g_desc_bid < 0 || unit >= ATA_UNIT_COUNT) {
         return;
     }
-    uint32_t flags = 0;
-    if (present) {
-        flags |= 1u;
+    static uint8_t devmgr_granted = 0;
+    if (!devmgr_granted) {
+        if (wasmos_xfer_buffer_borrow(g_devmgr_endpoint, g_desc_bid, WASMOS_BUFFER_GRANT_READ) <
+            0) {
+            (void)printf("[ata] descriptor borrow to device-manager failed\n");
+            return;
+        }
+        devmgr_granted = 1;
     }
-    if (unit == 0 && g_present) {
-        flags |= 2u;
-    }
-    /* arg3 names the backend. The unit alone does not identify a disk: it is
-     * backend-local, so this driver's unit 0 and a virtio-blk device's unit 0
-     * are different disks, and the device manager keys on the pair. */
     (void)wasmos_ipc_send(g_devmgr_endpoint,
                           g_block_endpoint,
                           DEVMGR_PUBLISH_BLOCK_DEVICE,
                           0,
-                          (int32_t)unit,
-                          (int32_t)sectors,
-                          (int32_t)flags,
-                          BLOCK_BACKEND_ATA);
+                          g_desc_bid,
+                          (int32_t)(unit * sizeof(wasmos_block_descriptor_t)),
+                          (int32_t)sizeof(wasmos_block_descriptor_t),
+                          0);
 }
 
 /* Where a read deposits each sector. The block buffer is the caller's own
@@ -690,6 +773,91 @@ static void ata_dma_setup(void) {
  * allowed; the claim happens on the first transfer and is refused there. An
  * existing CLAIMED entry is left alone: a client cannot re-aim itself at another
  * drive once its transfers have started. */
+/* Which drive a client means, given the `block` class instance it looked the
+ * provider up by. Both of this controller's instances name the same endpoint, so
+ * the instance is the only thing distinguishing them in a request.
+ *
+ * The fingerprints are recomputed from the descriptors this driver staged, so
+ * the mapping cannot drift from what was registered. Instance 0 means "the only
+ * disk you serve" and resolves to the first present drive, which is what a
+ * client that never looked up a class sends.
+ *
+ * Returns ATA_UNIT_COUNT when no drive matches. */
+static uint8_t ata_unit_for_instance(uint32_t instance) {
+    if (instance == 0u) {
+        for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
+            if (g_unit_present[unit]) {
+                return unit;
+            }
+        }
+        return ATA_UNIT_COUNT;
+    }
+    for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
+        if (g_unit_present[unit] &&
+            wasmos_block_fingerprint(g_unit_desc[unit].canonical_id) == instance) {
+            return unit;
+        }
+    }
+    return ATA_UNIT_COUNT;
+}
+
+/* Lend the descriptor buffer to `source` unless it already holds a grant.
+ *
+ * A recorded grant is an optimisation, not a requirement: it exists so a client
+ * that IDENTIFYs repeatedly does not accumulate borrow slots, since each borrow
+ * allocates its own. When there is nowhere to record one -- the client map is
+ * bounded and its entries are never reclaimed for endpoints that have gone away
+ * -- the grant is still made. A duplicate borrow is a bounded leak; refusing the
+ * grant instead makes the disk PERMANENTLY unqueryable once the map fills, which
+ * is how the second ATA drive stopped answering IDENTIFY after a few `blkinfo`
+ * runs, each of which opens a fresh endpoint per disk.
+ *
+ * Returns 1 when the client can read the buffer, 0 only when the borrow itself
+ * was refused.
+ *
+ * TODO: entries are never released when a client's endpoint dies, so a long
+ * uptime with many short-lived clients fills the map and every later client pays
+ * a repeat borrow. Reclaiming on endpoint death needs a death notification this
+ * driver does not receive. */
+static int ata_desc_grant_for_source(int32_t source) {
+    uint32_t free_slot = ATA_CLIENT_MAP_CAP;
+    if (source < 0 || g_desc_bid < 0) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
+        if (g_client_owner[i] == source) {
+            if (g_client_desc_granted[i]) {
+                return 1;
+            }
+            free_slot = i;
+            break;
+        }
+        if (g_client_owner[i] < 0 && free_slot == ATA_CLIENT_MAP_CAP) {
+            free_slot = i;
+        }
+    }
+    /* A borrow is held per CONTEXT, not per endpoint: the kernel resolves the
+     * grantee endpoint to its owning process and allows one active borrow per
+     * object per process. A client that opens an endpoint per disk -- which is
+     * what the ATA unit claim forces on it -- therefore gets ALREADY_BORROWED on
+     * its second disk, and that is a grant, not a refusal: the process can
+     * already read the buffer. Treating it as failure made the second drive
+     * permanently unidentifiable to any client that had queried the first. */
+    const int32_t rc = wasmos_xfer_buffer_borrow(source, g_desc_bid, WASMOS_BUFFER_GRANT_READ);
+    if (rc < 0 && rc != WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED) {
+        return 0;
+    }
+    if (free_slot < ATA_CLIENT_MAP_CAP) {
+        if (g_client_owner[free_slot] < 0) {
+            g_client_owner[free_slot] = source;
+            g_client_unit[free_slot] = 0u;
+            g_client_claimed[free_slot] = 0u;
+        }
+        g_client_desc_granted[free_slot] = 1u;
+    }
+    return 1;
+}
+
 static void ata_select_unit_for_source(int32_t source, uint8_t unit) {
     if (source < 0 || unit >= ATA_UNIT_COUNT) {
         return;
@@ -843,22 +1011,34 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
      * discovering it by class in the first place. Only the transfer paths below
      * bind a client. */
     if (type == BLOCK_IPC_IDENTIFY_REQ) {
-        uint8_t want = (arg0 >= 0 && arg0 < (int32_t)ATA_UNIT_COUNT) ? (uint8_t)arg0 : 0u;
-        if (!g_unit_present[want]) {
+        uint8_t want = ata_unit_for_instance((uint32_t)arg0);
+        if (want >= ATA_UNIT_COUNT || !g_unit_present[want]) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT, 0);
+            return 0;
+        }
+        if (g_desc_bid < 0) {
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR, 0);
             return 0;
         }
         /* Remember which drive this client means, so its transfers reach that
          * one rather than whichever happens to be free. */
         ata_select_unit_for_source(source, want);
+        /* Lend the descriptor buffer once per client. Every borrow allocates its
+         * own registry slot, so re-granting on each IDENTIFY would leak them; a
+         * grantee addresses the buffer by object id afterwards and never needs
+         * the borrow handle itself. */
+        if (!ata_desc_grant_for_source(source)) {
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR, 0);
+            return 0;
+        }
         wasmos_ipc_send(source,
                         g_block_endpoint,
                         BLOCK_IPC_IDENTIFY_RESP,
                         req_id,
                         0,
-                        (int32_t)g_unit_sectors[want],
-                        (int32_t)want,
-                        0);
+                        g_desc_bid,
+                        (int32_t)(want * sizeof(wasmos_block_descriptor_t)),
+                        (int32_t)sizeof(wasmos_block_descriptor_t));
         return 0;
     }
 
@@ -1015,6 +1195,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         g_client_owner[i] = -1;
         g_client_claimed[i] = 0;
         g_client_unit[i] = 0;
+        g_client_desc_granted[i] = 0;
     }
     for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
         uint16_t identify_words[256];
@@ -1034,7 +1215,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         if (unit_present) {
             g_present = 1;
         }
-        ata_publish_block_device(unit, unit_sectors, unit_present);
+        /* Build first: both the class instance and the publish read the
+         * descriptor this stages, so a failure here must stop both rather than
+         * register an instance for a disk nothing can describe. */
+        if (ata_build_descriptor(unit, unit_sectors, unit_present) != 0) {
+            (void)printf("[ata] descriptor staging failed unit=%u\n", (unsigned)unit);
+            continue;
+        }
+        ata_publish_block_device(unit);
         ata_register_block_class(unit, unit_present);
     }
 

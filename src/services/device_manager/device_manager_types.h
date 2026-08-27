@@ -4,7 +4,7 @@
 #define WASMOS_DEVICE_MANAGER_TYPES_H
 
 #include <stdint.h>
-#include "wasmos_driver_abi.h" /* wasmos_pci_bar_t, WASMOS_PCI_BAR_COUNT */
+#include "wasmos_driver_abi.h" /* wasmos_pci_bar_t, wasmos_block_descriptor_t */
 
 /* PCI/ACPI functions the registry can hold.  64 is not arbitrary: the
  * per-rule spawned_device_mask below is a uint64_t whose bit i marks registry
@@ -111,20 +111,25 @@ typedef struct {
 
 /* One entry in the block-device registry.
  *
- * A device is identified by the PAIR (backend, unit). `unit` is BACKEND-LOCAL:
- * ATA numbers its drives 0 and 1, and a virtio-blk device calls its only disk
- * 0, so a unit alone names two different disks once more than one backend is
- * present. The pair is intrinsic to the device rather than allocated in publish
- * order, so it does not change with which driver probed first. */
+ * The device is identified by `desc.canonical_id`, which its PUBLISHER assigns:
+ * a backend knows where its disks are and this service does not. Synthesizing an
+ * identity here was how the ATA controller's PCI address came to be attached to
+ * virtio disks that were nowhere near it.
+ *
+ * Every attribute -- backend, unit, capacity, partition scheme, filesystem, the
+ * GPT identity fields -- lives in the descriptor rather than being unpacked into
+ * fields here, so a new attribute reaches a rule without a change to this
+ * struct.
+ *
+ * `active_service` stays outside it because it is this service's own bookkeeping,
+ * not something the backend reported: the descriptor's own ACTIVE_SERVICE flag
+ * is the publisher's opinion at publish time, and a mount that happens later
+ * cannot go back and change it. */
 typedef struct {
     uint8_t in_use;
-    uint8_t backend; /* BLOCK_BACKEND_*; which driver published this */
-    uint8_t unit;    /* unit index WITHIN that backend */
-    uint8_t present;
     uint8_t active_service; /* non-zero once a block-fs driver is running */
-    uint32_t sector_count;
-    char canonical_id[64]; /* stable device identifier string */
-    char hash_id[17];      /* 16-char SHA-256 prefix of canonical_id + NUL */
+    wasmos_block_descriptor_t desc;
+    char hash_id[17]; /* 16-char SHA-256 prefix of desc.canonical_id + NUL */
 } block_device_record_t;
 
 /* Rule: unconditionally spawn a driver path at boot (always_spawn kind). */
@@ -155,6 +160,13 @@ typedef struct {
      * handed the driver 0xFF as though it were a unit number. */
     uint8_t matched_backend;
     uint8_t matched_unit;
+    /* The matched device's canonical id, copied verbatim so the filesystem
+     * driver can fingerprint the SAME string its backend registered under. The
+     * driver is given the id rather than (driver, unit) to rebuild it from,
+     * because a second place that spells the id is a second place that can
+     * disagree with the publisher -- and a disagreement means the filesystem
+     * looks up a class instance nothing holds. */
+    char matched_id[BLOCK_DESCRIPTOR_ID_MAX];
     char mount[16]; /* mount point name (e.g. "boot", "user") */
     char spawn_path[96];
 } block_fs_rule_t;

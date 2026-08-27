@@ -130,8 +130,34 @@ const SVC_IPC_CLASS_EVENT int32 = 0x2A4
 const SVC_IPC_ERROR int32 = 0x2AF
 
 // block (0x300..0x3FF)
+// Read `arg2` sectors from `arg1` into the block buffer at physical
+// address `arg0`, which belongs to the CALLER: the backend moves bytes
+// straight there, so neither side copies.
+//
+// TODO: arg1 is a 32-bit LBA, which caps addressing at 2 TiB on a
+// 512-byte sector. wasmos_block_descriptor_t reports a 64-bit lba_count,
+// so a disk can now be described past the point this opcode can reach it;
+// widening the transfer path needs a second argument word for the high
+// half, or a descriptor-carrying request.
 const BLOCK_IPC_READ_REQ int32 = 0x300
 const BLOCK_IPC_WRITE_REQ int32 = 0x301
+// Ask a backend to describe one of its devices. arg0 = the device's
+// `block` CLASS INSTANCE, which the backend may also record as the
+// caller's selection for later transfers. Answered with
+// BLOCK_IPC_IDENTIFY_RESP.
+//
+// The instance rather than a unit, because that is the only name a client
+// has: it found the provider by looking up the class, several instances
+// of which may share one endpoint (an ATA controller registers one per
+// drive). The instance is an opaque fingerprint of a canonical id, so
+// nothing can be decoded out of it -- but the backend computed those
+// fingerprints itself and can match one back to its own device. arg0 = 0
+// means "the only device you serve", which a single-disk backend may take
+// as read.
+//
+// IDENTIFY does not claim the device: reading a disk's geometry is not
+// exclusive use, and requiring a claim made a mounted disk unqueryable,
+// which defeats discovering it by class in the first place.
 const BLOCK_IPC_IDENTIFY_REQ int32 = 0x302
 // Zero-copy read: land whole sectors straight into a transfer buffer the
 // caller has reborrowed to this server, instead of staging them through
@@ -156,6 +182,20 @@ const BLOCK_IPC_IDENTIFY_REQ int32 = 0x302
 const BLOCK_IPC_READ_ZC_REQ int32 = 0x303
 const BLOCK_IPC_READ_RESP int32 = 0x380
 const BLOCK_IPC_WRITE_RESP int32 = 0x381
+// The answer to BLOCK_IPC_IDENTIFY_REQ: a wasmos_block_descriptor_t in a
+// transfer buffer the backend has borrowed to the caller READ-only.
+// arg0=0 on success, arg1=buffer_id, arg2=byte_offset,
+// arg3=descriptor_size.
+//
+// The borrow lasts until the caller unborrows it; the backend must not
+// rewrite that buffer region while it is lent out, so a backend serving
+// several clients stages each answer at its own offset or in its own
+// buffer.
+//
+// Geometry that used to travel in the arguments -- sector count, unit --
+// is in the descriptor, together with everything a caller now matches on:
+// canonical_id, scheme, fs_type, the GPT identity fields, and the LBA
+// window. Callers read fields; they do not decode packed words.
 const BLOCK_IPC_IDENTIFY_RESP int32 = 0x382
 const BLOCK_IPC_ERROR int32 = 0x3FF
 
@@ -302,15 +342,24 @@ const VIRTIO_SERIAL_IPC_ERROR int32 = 0x8BF
 const DEVMGR_PUBLISH_DEVICE int32 = 0x900
 const DEVMGR_PCI_SCAN_DONE int32 = 0x901
 const DEVMGR_QUERY_MOUNT_REQ int32 = 0x902
-// Announce one block device to the device-manager inventory.
-// arg0 [7:0]=unit, arg1=sector_count, arg2 [1]=active_service [0]=present,
-// arg3=BLOCK_BACKEND_* naming the publishing backend.
+// Announce one block device to the device-manager inventory as a
+// wasmos_block_descriptor_t held in a transfer buffer the publisher has
+// borrowed to this endpoint.
+// arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
 //
-// The unit is BACKEND-LOCAL: ATA numbers its drives 0 and 1 and a
-// virtio-blk device calls its only disk 0, so a device is identified by
-// the pair (backend, unit) and the inventory keys on both. Publishing
-// without a backend leaves the record BLOCK_BACKEND_UNKNOWN, which no
-// `DRIVER==` rule matches.
+// Each device occupies its own offset, so the publisher never overwrites
+// a descriptor the receiver has not read yet and no acknowledgement is
+// needed -- the same discipline DEVMGR_PUBLISH_DEVICE_DESC uses.
+//
+// The descriptor's canonical_id is the device's IDENTITY and the
+// inventory keys on it. backend and unit are attributes of the device
+// rather than its name: the unit is BACKEND-LOCAL, since ATA numbers its
+// drives 0 and 1 while a virtio-blk device numbers itself by bus
+// position. Publishing without a backend leaves the record
+// BLOCK_BACKEND_UNKNOWN, which no `DRIVER==` rule matches.
+//
+// A descriptor whose version is not BLOCK_DESCRIPTOR_VERSION is dropped
+// rather than partially read; see WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION.
 const DEVMGR_PUBLISH_BLOCK_DEVICE int32 = 0x903
 const DEVMGR_QUERY_BLOCK_MOUNT_REQ int32 = 0x904
 // ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;

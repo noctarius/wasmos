@@ -636,6 +636,23 @@ linked feature documents for rationale and rollout plans.
 
 ## Filesystems and Storage
 
+- A block device describes itself with `wasmos_block_descriptor_t`
+  (`src/drivers/include/wasmos_driver_abi.h`), carried in a transfer buffer by
+  `BLOCK_IPC_IDENTIFY_RESP` and `DEVMGR_PUBLISH_BLOCK_DEVICE` rather than packed
+  into message arguments. It reports backend, unit, partition slot, scheme,
+  probed filesystem, sector size, a 64-bit LBA window, the GPT identity fields
+  and the device's canonical id. The partition and GPT fields are defined but
+  left zero: no partition table is parsed yet
+  (`architecture/36-partition-manager-and-block-identity.md`).
+- The device's identity is its canonical id string (`block:ata:0`), assigned by
+  the PUBLISHING backend, and the `block` service class instance is an opaque
+  FNV-1a 32 fingerprint of it. Nothing decodes attributes out of an instance;
+  they are read from the descriptor. `src/libc/zig/driver.zig` mirrors the struct
+  and the fingerprint for Zig backends, with both layouts and the hash vectors
+  pinned at compile time on each side (`tests/unit/test_block_descriptor.c`).
+- A filesystem driver receives `id=` in its startup arguments and fingerprints it
+  to find its disk, so the id has exactly one producer. `blkinfo` names disks by
+  canonical id, including for `--write`.
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.

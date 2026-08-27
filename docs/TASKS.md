@@ -855,6 +855,37 @@ tail.
 
 ## Filesystems and Storage
 
+- [ ] [ENHANCEMENT][P3] Widen the block transfer path past 2 TiB.
+  `wasmos_block_descriptor_t` reports a 64-bit `lba_count`, but
+  `BLOCK_IPC_READ_REQ`/`WRITE_REQ` arg1 is a 32-bit LBA, so a disk can now be
+  DESCRIBED past the point those opcodes can address it (`abi/opcodes.yaml`,
+  `TODO` on BLOCK_IPC_READ_REQ). Needs a second argument word for the high half,
+  or a descriptor-carrying request. ATA is on `lba28` and stops at 128 GiB
+  regardless, so only virtio-blk can reach the limit today.
+- [ ] [ENHANCEMENT][P3] Reclaim ATA client-map entries when a client's endpoint dies
+  (`src/drivers/ata/ata.c`, `ata_desc_grant_for_source`). Entries are never
+  released, so a long uptime with many short-lived clients fills the 8-slot map
+  and every later client pays a repeat descriptor borrow. Needs an endpoint-death
+  notification the driver does not receive.
+- [ ] [FEATURE][P2] Phase 2: the partition manager service (Zig,
+  `src/drivers/partition_manager/`). Subscribes to the `block` class, parses GPT
+  (CRC32 + backup header) and MBR, publishes each partition as a block device
+  with its own class instance and endpoint, and proxies READ/WRITE/READ_ZC with
+  an LBA offset and a bounds clamp. One downstream endpoint per disk because
+  `ata_assign_unit_for_source` resolves the unit from the source endpoint
+  (`src/drivers/ata/ata.c:752`); one upstream endpoint per partition because a
+  block request carries no partition field. Needs `lookupClass`,
+  `subscribeClass` and reborrow/unborrow wrappers in `src/libc/zig/driver.zig`.
+  See `architecture/36-partition-manager-and-block-identity.md` §2.
+- [ ] [FEATURE][P2] Phase 3: mount policy from the partition, not from a rule naming a disk.
+  `SUBSYSTEM=="partition"` matching on `partuuid`/`partlabel`/`type`/`fstype`/
+  `scheme`, GPT label supplying the mount path, and the filesystem driver
+  receiving its window in startup arguments. Deletes `fat_try_parse_mbr`
+  (`src/drivers/fs_fat/fat_geom.c:68`), which today mounts *the first FAT
+  partition* regardless of which one the rule meant, and retires
+  `DEVMGR_QUERY_BLOCK_MOUNT_REQ` (keyed on unit alone, matches `0xFF`
+  wildcards — `src/services/device_manager/device_manager.c:1881`). See
+  `architecture/36-partition-manager-and-block-identity.md` §3.
 - [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
   preserve the transfer-buffer ownership contract through all VFS relay paths.

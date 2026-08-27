@@ -280,6 +280,9 @@ enum {
     WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 5), /* unknown or unsupported block opcode */
     WASMOS_ERR_BLOCK_DEV_READ_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 6), /* the transfer from the device failed */
     WASMOS_ERR_BLOCK_DEV_WRITE_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 7), /* the transfer to the device failed */
+    WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 8), /* the descriptor's version field names a layout this reader does not know */
+    WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 9), /* the descriptor is short, unterminated, or names a length outside the transfer buffer */
+    WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 10), /* the device has no descriptor to report, so it cannot be identified */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -566,6 +569,9 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST: return "block_dev.UNSUPPORTED_REQUEST";
     case WASMOS_ERR_BLOCK_DEV_READ_FAILED: return "block_dev.READ_FAILED";
     case WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: return "block_dev.WRITE_FAILED";
+    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: return "block_dev.DESCRIPTOR_VERSION";
+    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "block_dev.DESCRIPTOR_MALFORMED";
+    case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "block_dev.NO_DESCRIPTOR";
     default: return "unknown";
     }
 }
@@ -786,6 +792,9 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST: return "unknown or unsupported block opcode";
     case WASMOS_ERR_BLOCK_DEV_READ_FAILED: return "the transfer from the device failed";
     case WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: return "the transfer to the device failed";
+    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: return "the descriptor's version field names a layout this reader does not know";
+    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "the descriptor is short, unterminated, or names a length outside the transfer buffer";
+    case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "the device has no descriptor to report, so it cannot be identified";
     default: return "unknown error";
     }
 }

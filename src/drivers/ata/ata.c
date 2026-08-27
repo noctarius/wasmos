@@ -989,7 +989,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
     g_block_endpoint = wasmos_ipc_create_endpoint();
     if (g_block_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
     g_proc_endpoint_cached = proc_endpoint;
     /* No plain "block" NAME is claimed. A name resolves to ONE provider for the

@@ -1354,11 +1354,11 @@ static void queue_block_fs_rule_spawns(void) {
  * each -- the filesystem driver is told about the matched device, not about the
  * rule's pattern.
  *
- * The single place a block rule is tested against a device. It used to be two:
- * this walk over known devices, and a copy inside the publish handler. They
- * drifted exactly as duplicated predicates do -- the publish copy, which is the
- * path a live device actually takes, never learned to compare the backend, so a
- * rule naming one backend could be queued for a disk on another.
+ * This is the ONLY place a block rule is tested against a device, and both entry
+ * points go through it: the walk over already-known devices and the publish
+ * handler that runs when a live one arrives. A second copy of the predicate
+ * would be free to disagree with this one about what a rule matches, and a
+ * disagreement here mounts a filesystem on the wrong disk.
  *
  * Returns how many rules were queued. */
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec) {

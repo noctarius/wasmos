@@ -474,7 +474,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         /* Without both halves there is no disk to look for. The device manager
          * always sends them; a spawn that did not is a configuration error, and
          * guessing a backend would mount the wrong volume. */
-        fat_log("spawn args name no block device (need driver= and unit=)\n");
+        fat_log("startup args missing driver= or unit=; cannot resolve a block device\n");
         fat_stall();
     }
     /* The class instance that names this disk: (backend << 8) | unit. */

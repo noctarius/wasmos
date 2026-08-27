@@ -1,10 +1,12 @@
 # WASMOS Filesystem (WFS) — Feature Design Document
 
-> **Documentation status: Design proposal.** Nothing described here is
-> implemented. The filesystem stack in the source tree today is the
-> `fs_manager` router over the `fs_fat` and `fs_init` backends
-> ([Filesystem Stack](architecture/18-filesystem-stack.md)); WFS would be a
-> third backend beside them.
+> **Documentation status: format specification.** This document defines the
+> on-disk format and the procedures over it. It is not an implementation
+> snapshot: what the driver in `src/drivers/fs_wfs` implements today, and which
+> of the phases in [§23](#23-minimal-implementation-order) are complete, is
+> recorded in [Current Status](STATUS.md). WFS is a third backend beside
+> `fs_fat` and `fs_init` under the `fs_manager` router
+> ([Filesystem Stack](architecture/18-filesystem-stack.md)).
 
 # 1. Design Goals
 
@@ -758,6 +760,17 @@ struct wfs_journal_header {
 };
 ```
 
+`checksum` covers the **whole block** with its own four bytes zeroed, seeded
+with the block's own number (§13). It is not a checksum of the header alone: a
+descriptor's targets and a revoke's block list follow the header and are the
+part recovery acts on, so a header-only checksum would leave them unprotected.
+A block laid out for one offset therefore fails to verify at another.
+
+The journal superblock is the exception. It is sealed over its 32-byte record
+alone, seeded with its own block number, because nothing else in that block is
+defined.
+
+
 Block types:
 
 ```
@@ -792,6 +805,17 @@ struct wfs_journal_descriptor {
 
 A transaction with more targets than one descriptor block holds continues with
 a further descriptor carrying the same `sequence`.
+
+`checksum` is a plain CRC32C of the image, **unseeded**. An image is not
+addressed by the block it is stored in — it is identified by the descriptor
+record that names both, and that record is sealed with the descriptor block.
+
+The target list ends at the record carrying `WFS_JOURNAL_TARGET_LAST`, or at a
+record whose `target_block` is 0. Block 0 holds the boot area and the primary
+superblock and is never allocated (§4), so no transaction can target it, and an
+all-zero record past the last one therefore terminates the list. That is what
+lets a transaction with **no** targets be represented: a revoke-only
+transaction has no record on which to set the flag.
 
 ---
 

@@ -5,7 +5,9 @@
 #include "wfs_mount.h"
 
 #include "wfs_crc32c.h"
+#include "wfs_journal.h"
 #include "wfs_ops.h"
+#include "wfs_recover.h"
 #include "wfs_super.h"
 
 /* Records are read out of the staged block field by field rather than by
@@ -334,16 +336,89 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
             ctx->group_started = 1u;
         }
 
-        /* Journal replay belongs here, before the volume is handed out: a
-         * volume not unmounted cleanly has metadata in the log that the on-disk
-         * structures do not yet reflect (§15, §21).
-         *
-         * TODO: replay the journal when super.needs_replay is set. Until then a
-         * dirty volume mounts read-only rather than silently serving stale
-         * metadata, which is the conservative half of the contract. */
-        if (ctx->vol->super.needs_replay) {
-            ctx->vol->super.read_only = 1u;
+        /* The log is read on EVERY mount, clean or not. §15 skips the replay
+         * SCAN on a clean volume, not the journal superblock: a transaction
+         * cannot be opened without the log's geometry and tail, and reading it
+         * costs one block. */
+        ctx->jload.pc = WFS_JLOAD_PC_START;
+        ctx->jload.vol = ctx->vol;
+        ctx->jload.err = WASMOS_ERR_NONE;
+        wfs_ops_task_reset(&ctx->jload_task);
+        if (!wasmos_async_start(
+                wfs_ops_runtime(), &ctx->jload_task, wfs_journal_load_task, &ctx->jload)) {
+            WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
         }
+        ctx->jload_started = 1u;
+        ctx->pc = WFS_MOUNT_PC_JLOAD_JOINED;
+        /* fall through */
+
+    case WFS_MOUNT_PC_JLOAD_JOINED:
+        if (ctx->jload_started) {
+            int jr = wasmos_wasm_coroutine_join(&ctx->jload_task, &joined);
+
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->jload_started = 0u;
+            if (jr != 0) {
+                /* An unusable log costs the volume its WRITABILITY, not its
+                 * readability: every structure a reader touches is intact, and
+                 * refusing the mount outright would deny a volume whose data is
+                 * fine over a region only a writer needs. */
+                ctx->journal_err = (wasmos_error_code_t)jr;
+                ctx->vol->super.read_only = 1u;
+                ctx->vol->mounted = 1u;
+                return WASMOS_WASM_TASK_COMPLETE;
+            }
+        }
+        if (!ctx->vol->super.needs_replay) {
+            ctx->vol->mounted = 1u;
+            return WASMOS_WASM_TASK_COMPLETE;
+        }
+        /* §15, §21: a volume whose state is not CLEAN was mounted for writing
+         * and never unmounted, so the log may hold a transaction whose metadata
+         * never reached its blocks. It is applied before the volume is handed
+         * out -- afterwards a reader would see the superseded metadata. */
+        ctx->replay.pc = WFS_REPLAY_PC_START;
+        ctx->replay.vol = ctx->vol;
+        ctx->replay.err = WASMOS_ERR_NONE;
+        wfs_ops_task_reset(&ctx->replay_task);
+        if (!wasmos_async_start(
+                wfs_ops_runtime(), &ctx->replay_task, wfs_journal_replay_task, &ctx->replay)) {
+            WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+        }
+        ctx->replay_started = 1u;
+        ctx->pc = WFS_MOUNT_PC_REPLAY_JOINED;
+        /* fall through */
+
+    case WFS_MOUNT_PC_REPLAY_JOINED:
+        if (ctx->replay_started) {
+            int jr = wasmos_wasm_coroutine_join(&ctx->replay_task, &joined);
+
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->replay_started = 0u;
+            if (jr != 0) {
+                /* §21: a replay that cannot complete leaves the volume for fsck.
+                 * Read-only rather than refused, for the same reason as above --
+                 * and this time the metadata really may be stale, so the gate is
+                 * what stops a writer from building on it. */
+                ctx->journal_err = (wasmos_error_code_t)jr;
+                ctx->vol->super.read_only = 1u;
+                ctx->vol->mounted = 1u;
+                return WASMOS_WASM_TASK_COMPLETE;
+            }
+        }
+        ctx->replayed = ctx->replay.applied;
+        ctx->vol->super.needs_replay = 0u;
+        /* The volume stays READ-ONLY even though the replay succeeded, because
+         * the metadata writers do not yet run inside transactions: what a crash
+         * left behind is a half-finished allocation the log never recorded, and
+         * no replay repairs it. The gate lifts when every writer journals.
+         * TODO: clear read_only here once wfs_alloc.c, wfs_write.c,
+         * wfs_truncate.c, wfs_extent_write.c and wfs_namespace.c transact. */
+        ctx->vol->super.read_only = 1u;
         ctx->vol->mounted = 1u;
         return WASMOS_WASM_TASK_COMPLETE;
 

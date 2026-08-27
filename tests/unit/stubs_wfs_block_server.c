@@ -21,6 +21,7 @@ uint32_t wfs_stub_reads;
 uint32_t wfs_stub_last_sectors;
 int wfs_stub_fail_next;
 int wfs_stub_send_status;
+uint32_t wfs_stub_stop_after;
 
 static wasmos_wasm_runtime_t g_runtime;
 static wasmos_sys_event_loop_t g_loop;
@@ -148,6 +149,22 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
     wfs_stub_reads++;
     g_serving_block = block;
 
+    /* The crash model: past `wfs_stub_stop_after` requests the device answers
+     * nothing but errors, so the image holds exactly the writes that landed
+     * before that point. Modelling a crash as a stopped device rather than as a
+     * hand-built image is what keeps the recovery suites testing the WRITER's
+     * layout instead of the test's idea of it. */
+    if (wfs_stub_stop_after != 0u && wfs_stub_req_count > wfs_stub_stop_after) {
+        memset(&g_queued, 0, sizeof(g_queued));
+        g_queued.request_id = request_id;
+        g_queued.source = destination;
+        g_queued.destination = source;
+        g_queued.type = BLOCK_IPC_ERROR;
+        g_queued.arg0 = WASMOS_ERR_FS_IO;
+        g_queued_ready = 1;
+        return 0;
+    }
+
     memset(&g_queued, 0, sizeof(g_queued));
     g_queued.request_id = request_id;
     g_queued.source = destination;
@@ -246,6 +263,7 @@ void wfs_stub_reset_counters(void) {
     wfs_stub_last_sectors = 0;
     wfs_stub_fail_next = 0;
     wfs_stub_send_status = 0;
+    wfs_stub_stop_after = 0;
     g_queued_ready = 0;
 }
 

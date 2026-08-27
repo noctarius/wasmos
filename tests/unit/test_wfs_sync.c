@@ -1,9 +1,9 @@
 /* Host unit test for recording a volume's mount state (wfs_sync.h, §4).
  *
  * The assertion that matters is not that a byte changed: it is that a REMOUNT of
- * the image sees the volume as needing replay and mounts it read-only. That is
- * the whole purpose of the flag while phase-2 writes are not crash-safe, and it
- * is what a crash would actually exercise.
+ * the image acts on the flag -- it replays the log and mounts the volume
+ * read-only. That is the whole purpose of the flag, and it is what a crash would
+ * actually exercise.
  */
 #include <stdio.h>
 #include <string.h>
@@ -74,7 +74,12 @@ static int32_t run_mark(wfs_dirty_ctx_t* ctx, wfs_volume_t* vol) {
 }
 
 /* Marking a volume dirty must be visible to the NEXT mount, which is the only
- * reader that matters: a crash is exactly the case where nothing else runs. */
+ * reader that matters: a crash is exactly the case where nothing else runs.
+ *
+ * That mount now DISCHARGES the replay the flag asks for (§15, §21), so
+ * needs_replay comes back clear; the volume stays read-only because the metadata
+ * writers do not yet run inside transactions, and the log therefore says nothing
+ * about what an interrupted one left behind. */
 static void test_a_marked_volume_remounts_read_only(void) {
     wfs_mount_ctx_t m;
     wfs_volume_t vol;
@@ -95,8 +100,9 @@ static void test_a_marked_volume_remounts_read_only(void) {
      * write landed, not that the mount path acts on it. */
     expect(mount_volume(&m, &vol) == 0, "it still mounts");
     expect_u32(vol.super.state, (uint32_t)WFS_STATE_DIRTY, "the state says dirty");
-    expect_u32(vol.super.needs_replay, 1u, "so a replay is owed");
-    expect_u32(vol.super.read_only, 1u, "and the volume is read-only until it happens");
+    expect_u32(m.replayed, 0u, "the log held nothing to replay");
+    expect_u32(vol.super.needs_replay, 0u, "so the replay it asked for is discharged");
+    expect_u32(vol.super.read_only, 1u, "and the volume is read-only all the same");
 
     wfs_stub_teardown();
 }

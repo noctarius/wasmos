@@ -139,6 +139,9 @@ domains:
       - { name: VOLUME_TOO_LARGE, description: "volume exceeds the address range the driver carries (e.g. a 64-bit on-disk block count above the driver's 32-bit block number)" }
       - { name: VERSION,        description: "on-disk format version is not one this driver implements; distinct from an unknown feature flag, which names a capability rather than a structure generation" }
       - { name: READ_ONLY,      description: "the volume is mounted read-only, so the write cannot be attempted at all; distinct from ACCESS, which is an fd-mode violation, and from NO_SPACE, which is a writable volume with nothing free. A volume is read-only when a feature flag demands it, when a journal replay is owed, or when its primary superblock was recovered from a backup" }
+      - { name: JOURNAL,        description: "the metadata journal is unusable: its superblock does not identify a log, does not verify, or names a geometry too small for one transaction. Distinct from CORRUPT, which names a filesystem structure, because a damaged log costs writability rather than readability" }
+      - { name: TXN_FULL,       description: "a metadata transaction names more blocks than one journal descriptor carries, or more revokes than one revoke record does; the operation is refused whole rather than split across two transactions that a crash could separate" }
+      - { name: REPLAY,         description: "journal replay stopped: a committed block image did not match the checksum its descriptor recorded, so applying the transaction would write a partial one. The volume mounts read-only for fsck" }
 
   net:
     id: 5

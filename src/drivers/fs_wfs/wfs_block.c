@@ -36,6 +36,16 @@ void wfs_block_configure(wfs_block_t* b, wasmos_sys_event_loop_t* loop, int32_t 
     b->staged_block = WFS_BLOCK_NONE;
     b->pending_block = WFS_BLOCK_NONE;
     b->in_flight = 0u;
+    b->redirect = 0;
+    b->redirect_user = 0;
+}
+
+void wfs_block_set_redirect(wfs_block_t* b, wfs_block_redirect_fn fn, void* user) {
+    b->redirect = fn;
+    b->redirect_user = user;
+    /* The tag names the block the staged bytes came from. Under a different
+     * mapping the same tag would answer a request the bytes do not belong to. */
+    wfs_block_invalidate(b);
 }
 
 wasmos_error_code_t wfs_block_set_block_size(wfs_block_t* b, uint32_t block_size) {
@@ -79,6 +89,13 @@ static wasmos_future_t* submit(wfs_block_t* b, uint32_t block, int write) {
 }
 
 wasmos_future_t* wfs_block_read_begin(wfs_block_t* b, uint32_t block) {
+    /* An open transaction holds its blocks in the log rather than at their
+     * targets, so the read follows the image (§14). The tag is the block
+     * actually read, which is what keeps a later read of the same target from
+     * hitting a tag that no longer maps there. */
+    if (b->redirect) {
+        block = b->redirect(b->redirect_user, block);
+    }
     if (b->staged_block == block) {
         return 0; /* cache hit: nothing to await */
     }

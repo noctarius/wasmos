@@ -151,6 +151,8 @@ set(WASM_WFS_DRIVER_SRC
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
   # operations: tasks on the coroutine runtime
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
   ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
@@ -2526,6 +2528,8 @@ add_custom_target(run-kernel-unit-tests
           -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
@@ -2589,6 +2593,8 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
@@ -2622,6 +2628,8 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
@@ -2654,6 +2662,8 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
@@ -2679,6 +2689,8 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
@@ -2690,6 +2702,65 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_sync
   COMMAND ${BUILD_DIR}/test_wfs_sync
+  # The metadata journal: a transaction's blocks reach the log first and their
+  # targets only at the commit. The cases assert the image at a point where the
+  # checkpoint has NOT run, because a writer that logged its blocks and also
+  # wrote them in place would pass an "the bytes are there afterwards" test while
+  # providing no crash safety.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_journal
+  COMMAND ${BUILD_DIR}/test_wfs_journal
+  # Crash recovery. A crash is a STOPPED DEVICE: the transaction runs for a
+  # chosen number of block requests and everything past that fails, so the image
+  # holds exactly the writes that landed. The volume is then remounted from it.
+  # Hand-building a log instead would test the test, and would keep passing if
+  # the writer's layout drifted away from the reader's.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_recover
+  COMMAND ${BUILD_DIR}/test_wfs_recover
   # Block allocation, against a volume mkfs_wfs built: the bitmap in the image is
   # what the assertions read, because the counters are derived from it.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -2706,6 +2777,8 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
@@ -2781,6 +2854,8 @@ add_custom_target(run-kernel-unit-tests
           -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_populate.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
@@ -2810,6 +2885,8 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_read.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
@@ -2839,6 +2916,8 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_path.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
@@ -4018,6 +4097,8 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dirent.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_alloc.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_sync.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_journal.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_recover.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_write.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_truncate.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_namespace.c

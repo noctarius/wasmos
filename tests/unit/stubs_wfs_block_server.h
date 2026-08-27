@@ -41,6 +41,14 @@ extern uint32_t wfs_stub_last_sectors;
 
 /* Answer the next request with BLOCK_IPC_ERROR. Cleared once it fires. */
 extern int wfs_stub_fail_next;
+/* Stop the device after this many requests: every request past it fails, and the
+ * image keeps exactly the writes that landed first. Zero disables it.
+ *
+ * This is how the recovery suites produce a crash image. The alternative --
+ * hand-building a log and asserting the reader accepts it -- would test the test
+ * rather than the writer, and would keep passing if the writer's layout drifted
+ * away from the reader's. */
+extern uint32_t wfs_stub_stop_after;
 /* Non-zero makes wasmos_ipc_send report that failure instead of sending. */
 extern int wfs_stub_send_status;
 /* Fail the next staging copy into the server's block buffer, so a write cannot

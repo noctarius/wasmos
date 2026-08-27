@@ -24,6 +24,64 @@
 #include "wfs_format.h"
 #include "wfs_super.h"
 
+/* ---- the metadata journal (§14) ------------------------------------------
+ *
+ * Blocks a transaction may carry. The bound is the driver's, not the format's:
+ * one descriptor block holds 254 targets at a 4096-byte block size, and the log
+ * is 64 blocks at its smallest, so what constrains this is that a transaction is
+ * refused WHOLE when it does not fit. Every metadata operation in this driver
+ * touches a handful of blocks -- a bitmap, a group descriptor, an object record,
+ * a directory block, an extent leaf -- so the ceiling is reached only by an
+ * operation that should have been split into transactions of its own.
+ */
+#define WFS_TXN_MAX_TARGETS 24u
+#define WFS_TXN_MAX_REVOKES 24u
+
+/* One journaled block: where it belongs, where its image currently is, and the
+ * checksum recovery verifies the image against before applying it. */
+typedef struct {
+    uint32_t target;        /* filesystem block the image replaces */
+    uint32_t journal_block; /* absolute block of the log holding the image */
+    uint32_t checksum;      /* CRC32C of the image, as the descriptor records it */
+} wfs_txn_target_t;
+
+/* The volume's log, and the one transaction that may be open in it.
+ *
+ * ONE transaction is live at a time: this driver runs the whole of §14's
+ * sequence -- journal, commit, checkpoint, advance the tail -- before the next
+ * transaction begins, so the log is empty between transactions and the tail is
+ * always the first log block. The format permits several live transactions and a
+ * checkpoint policy that retires them lazily; that costs a wrap-aware allocator
+ * and a free-span calculation, and buys throughput this driver does not yet
+ * need.
+ *
+ * TODO: batch several operations into one transaction. Every metadata write
+ * currently pays a full descriptor, commit and checkpoint round trip.
+ */
+typedef struct {
+    /* Geometry, from the journal superblock. `start` is the absolute block of
+     * that superblock; log block N is start + N, for 1 <= N < blocks. */
+    uint8_t loaded;
+    uint32_t start;
+    uint32_t blocks;
+    /* The sequence the next transaction takes. Monotonic and never reused, which
+     * is what lets recovery tell a live block from stale content a previous
+     * transaction left at the same offset. */
+    uint64_t next_sequence;
+
+    /* The open transaction. */
+    uint8_t open;
+    uint64_t sequence;
+    uint32_t target_count;
+    wfs_txn_target_t targets[WFS_TXN_MAX_TARGETS];
+    /* Blocks that stop being metadata in this transaction (§18). A revoke is
+     * mandatory for each, because the log records block numbers rather than what
+     * a block holds: an older committed image of a freed block stays replayable
+     * after the block is handed to a file. */
+    uint32_t revoke_count;
+    uint32_t revokes[WFS_TXN_MAX_REVOKES];
+} wfs_journal_t;
+
 /* A mounted volume: the superblock as the reader parsed it.
  *
  * Group descriptors are not held here. A volume of many groups has a descriptor
@@ -36,6 +94,7 @@ typedef struct {
     /* The volume's on-disk state has been set to WFS_STATE_DIRTY for this mount,
      * so the marking is not repeated per write. Set by wfs_mark_dirty_task. */
     uint8_t dirty_marked;
+    wfs_journal_t journal;
 } wfs_volume_t;
 
 /* Reading one group descriptor. */
@@ -631,12 +690,117 @@ typedef struct {
     wasmos_error_code_t err;
 } wfs_trunc_ctx_t;
 
+/* Reading the journal superblock (§14). */
+typedef enum {
+    WFS_JLOAD_PC_START = 0,
+    WFS_JLOAD_PC_SUPER_READY,
+} wfs_jload_pc_t;
+
+typedef struct {
+    wfs_jload_pc_t pc;
+    wfs_volume_t* vol;
+    wasmos_error_code_t err;
+} wfs_jload_ctx_t;
+
+/* Writing one block image into the log (§14 step 1). */
+typedef enum {
+    WFS_TXSTAGE_PC_START = 0,
+    WFS_TXSTAGE_PC_IMAGE_WRITTEN,
+} wfs_txstage_pc_t;
+
+typedef struct {
+    wfs_txstage_pc_t pc;
+    wfs_volume_t* vol;
+    /* The filesystem block whose new content is currently staged. */
+    uint32_t target;
+    /* The slot the image takes in the transaction, and the log block it is
+     * written to. Both are decided before the write and must survive it. */
+    uint32_t slot;
+    uint32_t journal_block;
+    wasmos_error_code_t err;
+} wfs_txstage_ctx_t;
+
+/* Committing and retiring a transaction (§14 steps 1-7). */
+typedef enum {
+    WFS_TXCOMMIT_PC_START = 0,
+    WFS_TXCOMMIT_PC_DESC_WRITTEN,
+    WFS_TXCOMMIT_PC_REVOKE_WRITTEN,
+    WFS_TXCOMMIT_PC_COMMIT_WRITTEN,
+    WFS_TXCOMMIT_PC_IMAGE_READ,
+    WFS_TXCOMMIT_PC_TARGET_WRITTEN,
+    WFS_TXCOMMIT_PC_TAIL_WRITTEN,
+} wfs_txcommit_pc_t;
+
+typedef struct {
+    wfs_txcommit_pc_t pc;
+    wfs_volume_t* vol;
+    /* The checkpoint cursor: which target is being written back. Survives both
+     * awaits of each iteration. */
+    uint32_t index;
+    wasmos_error_code_t err;
+} wfs_txcommit_ctx_t;
+
+/* Replaying the log after an unclean unmount (§21).
+ *
+ * The walk holds ONE transaction, which is the shape wfs_journal.c writes: a
+ * transaction is checkpointed and retired before the next begins, so the log
+ * never carries a chain. A log that does carry one was written by something
+ * else, and is refused rather than half-applied.
+ *
+ * TODO: a chain needs §21's three separate passes -- a revoke table built over
+ * the whole replay set before any image is applied, because a later
+ * transaction's revoke bars an earlier transaction's image. Land it with the
+ * batching that would produce a chain in the first place.
+ */
+typedef enum {
+    WFS_REPLAY_PC_START = 0,
+    WFS_REPLAY_PC_LOAD_JOINED,
+    WFS_REPLAY_PC_DESC_READY, /* the record the tail names */
+    WFS_REPLAY_PC_SCAN_READY, /* the revoke and commit blocks behind it */
+    WFS_REPLAY_PC_IMAGE_READY,
+    WFS_REPLAY_PC_TARGET_WRITTEN,
+    WFS_REPLAY_PC_TAIL_WRITTEN,
+} wfs_replay_pc_t;
+
+typedef struct {
+    wfs_replay_pc_t pc;
+    wfs_volume_t* vol;
+
+    /* The forward walk (§21 pass 1). `cursor` is journal-relative and `sequence`
+     * is the transaction the tail says should be there. */
+    uint32_t cursor;
+    uint64_t sequence;
+    uint8_t committed; /* a valid COMMIT carrying `sequence` was found */
+
+    /* The transaction's targets, as its descriptor named them, and the blocks it
+     * revoked (§21 pass 2). */
+    uint32_t target_count;
+    uint32_t targets[WFS_TXN_MAX_TARGETS];
+    uint32_t checksums[WFS_TXN_MAX_TARGETS];
+    uint32_t revoke_count;
+    uint32_t revokes[WFS_TXN_MAX_REVOKES];
+
+    /* The apply cursor (§21 pass 3), and how many images it wrote. `applied` is
+     * the task's result: zero means the log held nothing to replay, which is the
+     * ordinary case for a volume that merely crashed between transactions. */
+    uint32_t index;
+    uint32_t applied;
+
+    uint8_t load_started;
+    wasmos_wasm_coroutine_t load_task;
+    wfs_jload_ctx_t load;
+
+    wasmos_error_code_t err;
+} wfs_replay_ctx_t;
+
 /* Mounting a volume. */
 typedef enum {
     WFS_MOUNT_PC_START = 0,
     WFS_MOUNT_PC_SUPER_READY,
     WFS_MOUNT_PC_BACKUP_READY,
     WFS_MOUNT_PC_GROUP_JOINED,
+    WFS_MOUNT_PC_JLOAD_JOINED,
+    WFS_MOUNT_PC_REPLAY_JOINED,
 } wfs_mount_pc_t;
 
 typedef struct {
@@ -662,6 +826,22 @@ typedef struct {
     uint8_t scan_started; /* a candidate read is outstanding and owes a take */
     uint8_t scan_have;    /* scan_best holds a copy that validated */
     wfs_super_t scan_best;
+
+    /* The log: read on every mount so transactions are available, replayed only
+     * when the volume was not unmounted cleanly (§15). Both children's records
+     * live here for the same reason the group sweep's do. */
+    uint8_t jload_started;
+    wasmos_wasm_coroutine_t jload_task;
+    wfs_jload_ctx_t jload;
+    uint8_t replay_started;
+    wasmos_wasm_coroutine_t replay_task;
+    wfs_replay_ctx_t replay;
+    /* Why the volume is read-only, when the log is the reason: reported so a
+     * caller can tell an unusable log from a replay that failed part way. Zero
+     * when the log was fine. */
+    wasmos_error_code_t journal_err;
+    /* Block images the replay applied, for a caller that logs the recovery. */
+    uint32_t replayed;
 } wfs_mount_ctx_t;
 
 #endif /* FS_WFS_WFS_TYPES_H */

@@ -154,13 +154,18 @@ static void test_mount_requests_exactly_the_blocks_it_should(void) {
     expect(g_layout.group_count == 1u, "a 16 MiB volume is one group");
     expect(run_mount(&ctx, &vol) == 0, "mount");
 
-    /* Block 0 for the superblock, then the one descriptor-table block. Mount
-     * reads neither the object table nor the bitmaps. */
-    expect(wfs_stub_req_count == 2u, "mount reads exactly two blocks");
-    if (wfs_stub_req_count >= 2u) {
+    /* Block 0 for the superblock, the one descriptor-table block, and the
+     * journal superblock -- whose geometry and tail a transaction cannot be
+     * opened without (§14). Mount reads neither the object table, nor the
+     * bitmaps, nor the log itself: this volume is clean, so §15 skips the
+     * replay scan. */
+    expect(wfs_stub_req_count == 3u, "mount reads exactly three blocks");
+    if (wfs_stub_req_count >= 3u) {
         expect(wfs_stub_req_blocks[0] == 0u, "the first read is block 0, for the superblock");
         expect(wfs_stub_req_blocks[1] == g_layout.group_table_start,
                "the second read is the group descriptor table");
+        expect(wfs_stub_req_blocks[2] == g_layout.journal_start,
+               "the third read is the journal superblock");
     }
     expect(wfs_stub_last_sectors == 4096u / WFS_SECTOR_BYTES,
            "a filesystem block is requested as its whole run of sectors");
@@ -380,8 +385,11 @@ static void test_a_failed_send_fails_the_mount(void) {
     wfs_stub_teardown();
 }
 
-/* Until replay exists a volume that was not unmounted cleanly mounts read-only
- * rather than serving metadata the log has superseded. */
+/* A volume that was not unmounted cleanly has its log REPLAYED before it is
+ * handed out (§15, §21), which discharges the replay its state asked for. It
+ * stays read-only all the same: the metadata writers do not yet run inside
+ * transactions, so what an interrupted one left behind is not in the log and no
+ * replay repairs it. */
 static void test_a_dirty_volume_mounts_read_only(void) {
     wfs_mount_ctx_t ctx;
     wfs_volume_t vol;
@@ -398,8 +406,9 @@ static void test_a_dirty_volume_mounts_read_only(void) {
     reseal_super(sb, 0u);
 
     expect(run_mount(&ctx, &vol) == 0, "a dirty volume still mounts");
-    expect(vol.super.needs_replay == 1u, "and reports that replay is owed");
-    expect(vol.super.read_only == 1u, "and is read-only until it happens");
+    expect(ctx.replayed == 0u, "its log held nothing to replay");
+    expect(vol.super.needs_replay == 0u, "so the replay it asked for is discharged");
+    expect(vol.super.read_only == 1u, "and it is read-only all the same");
 
     wfs_stub_teardown();
 }

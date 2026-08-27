@@ -277,8 +277,11 @@ static void test_allocation_never_returns_a_metadata_block(void) {
 
 /* An allocation writes metadata, so the volume must say DIRTY on disk before any
  * of it lands. That flag is what makes a crash mid-allocation mount read-only
- * instead of serving a bitmap and a counter that disagree, and it is the whole of
- * WFS's crash safety until the journal exists.
+ * instead of serving a bitmap and a counter that disagree.
+ *
+ * The allocator does not yet run inside a journal transaction, so the log has
+ * nothing to say about what a crash interrupted: the next mount replays an empty
+ * log and keeps the volume read-only on that ground alone.
  *
  * Checked by REMOUNTING, because the next mount is the only reader that matters
  * in a crash. */
@@ -302,8 +305,8 @@ static void test_an_allocation_marks_the_volume_dirty(void) {
     m.vol = &remount;
     expect(wfs_stub_run_task(&task, wfs_mount_task, &m) == 0, "the volume remounts");
     expect_u32(remount.super.state, (uint32_t)WFS_STATE_DIRTY, "reporting the dirty state");
-    expect_u32(remount.super.needs_replay, 1u, "so a replay is owed");
-    expect_u32(remount.super.read_only, 1u, "and it is read-only until it happens");
+    expect_u32(m.replayed, 0u, "the log the allocation bypassed holds nothing to replay");
+    expect_u32(remount.super.read_only, 1u, "and it is read-only all the same");
 
     wfs_stub_teardown();
 }

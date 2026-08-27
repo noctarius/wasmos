@@ -923,11 +923,10 @@ linked feature documents for rationale and rollout plans.
   TODO at the site rather than half-done: the extent-tree WRITER, so an object
   caps at `WFS_INLINE_EXTENTS` extents, and inline-to-extent promotion, so a file
   stored inline cannot grow past `WFS_INLINE_DATA_MAX`.
-- Still deferred in WFS: the extent-tree WRITER and inline-to-extent promotion
-  (both refused explicitly rather than half-done, with TODOs at the sites); a sync
-  path that writes the superblock back, so on-disk `free_blocks` trails the bitmaps
-  until then; and journal replay, so a volume that was not unmounted cleanly
-  mounts read-only rather than serving metadata the log has superseded (phase 3).
+- Still deferred in WFS: a sync path that writes the superblock back, so on-disk
+  `free_blocks` trails the bitmaps until then. (The extent-tree writer, inline-to-
+  extent promotion and journal replay have since landed; see the phase-3 entries
+  at the end of this section.)
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
   calls to the live block slot.
@@ -1145,6 +1144,51 @@ linked feature documents for rationale and rollout plans.
   on one backing file corrupt it. The test targets are unchanged and keep their
   single ATA volume; `tests/test_wfs_virtio_blk.py` covers the virtio path there
   with per-drive snapshot overlays instead.
+- WFS has a METADATA JOURNAL (`wfs_journal.c`, spec §14) and CRASH RECOVERY
+  (`wfs_recover.c`, §21). A transaction writes each changed metadata block into
+  the log, then a descriptor naming every image, then a COMMIT block, and only
+  then checkpoints the images to their real addresses and advances the log tail.
+  A crash before the COMMIT discards the transaction; one after it is finished by
+  the next mount. File DATA is not journaled (§17): after a crash the metadata is
+  consistent, but a block newly allocated to a file may hold what it held before.
+  Revoke records are written (§18), and replay honours §21's `>=` rule -- an image
+  journaled by the same transaction that revoked its block is skipped, which is
+  what stops stale metadata being replayed over a file that has since been given
+  the block.
+- Reads inside an open transaction see the transaction's own writes. The block
+  layer takes a REDIRECT (`wfs_block_set_redirect`) that maps a journaled target
+  to the log block holding its image, installed at begin and cleared at commit.
+  Without it a read-modify-write repeated inside one transaction -- a bitmap block
+  touched twice -- would work from the pre-transaction content and lose the
+  earlier change.
+- ONE transaction is live at a time: the driver runs the whole of §14's sequence
+  before the next begins, so the log is empty between transactions and its tail
+  never leaves the first log block. That is a policy, not a format restriction;
+  the format permits a chain of live transactions retired by a lazy checkpoint.
+  Recovery refuses a chain rather than half-applying it, because §21's three
+  passes -- a revoke table built over the whole replay set before any image is
+  applied -- are what a chain needs, and nothing writes one yet.
+- The barrier between §14's steps is REQUEST ORDERING, not a cache flush. Each
+  step awaits its block reply before issuing the next, so the device sees the
+  writes in order; nothing makes a device with a volatile write cache commit them
+  to media, because `abi/opcodes.yaml` has no `BLOCK_IPC_FLUSH_REQ`.
+- Every mount reads the journal superblock, clean or not: a transaction cannot be
+  opened without the log's geometry and tail. §15's skip is of the replay SCAN,
+  and a clean volume still never walks the log. A volume whose log does not
+  validate mounts READ-ONLY rather than being refused -- every structure a reader
+  touches is intact, and the log is a region only a writer needs.
+- A volume that was not unmounted cleanly now has its log replayed at mount, so
+  `needs_replay` is discharged rather than latched. It still mounts READ-ONLY: the
+  metadata writers (`wfs_alloc.c`, `wfs_write.c`, `wfs_truncate.c`,
+  `wfs_extent_write.c`, `wfs_namespace.c`) do not yet run inside transactions, so
+  what an interrupted one left behind is not in the log and no replay repairs it.
+  Converting them is what lifts the gate, and there is a TODO at the site.
+- `tests/unit/test_wfs_journal.c` and `tests/unit/test_wfs_recover.c` cover both.
+  The recovery suite models a crash as a STOPPED DEVICE -- the transaction runs
+  for a chosen number of block requests and everything past that fails, so the
+  image holds exactly the writes that landed -- and then remounts from that image
+  with a cold block cache. Hand-building a log instead would test the test, and
+  would keep passing if the writer's layout drifted away from the reader's.
 - The physical frame allocator reserves the kernel image by PHYSICAL address and
   spans `__kernel_end`. The link symbols are higher-half virtual, so the previous
   reservation overlapped no frame and protected nothing; the 64 KiB BSP boot stack

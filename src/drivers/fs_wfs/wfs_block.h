@@ -28,6 +28,19 @@
 #define WFS_BLOCK_NONE 0xFFFFFFFFu /* staged_block sentinel: nothing staged */
 #define WFS_SECTOR_BYTES 512u
 
+/* Where a read of a filesystem block must actually go.
+ *
+ * An open metadata transaction holds the new content of its blocks in the
+ * journal, not yet at their targets (§14): the images are written to the log and
+ * only checkpointed at commit. A reader inside that transaction must see what
+ * the transaction wrote, so its reads are mapped target -> journal block here
+ * rather than at every call site.
+ *
+ * Returns the block to read, which is `block` itself when no mapping applies.
+ * Reads only: a metadata WRITE inside a transaction goes through the journal by
+ * name, and a data write goes straight to its block, so neither is redirected. */
+typedef uint32_t (*wfs_block_redirect_fn)(void* user, uint32_t block);
+
 typedef struct {
     wasmos_sys_event_loop_t* loop;
     int32_t block_endpoint;
@@ -55,6 +68,10 @@ typedef struct {
      * means "nothing to await" and would otherwise let a write that never
      * happened read back as a success at the take. */
     uint8_t stage_failed;
+
+    /* The read redirect, or NULL when reads address blocks directly. */
+    wfs_block_redirect_fn redirect;
+    void* redirect_user;
 } wfs_block_t;
 
 /* The staged block. Valid only until the next await. */
@@ -74,10 +91,17 @@ void wfs_block_configure(wfs_block_t* b, wasmos_sys_event_loop_t* loop, int32_t 
  * first 4096 bytes at every permitted size. */
 wasmos_error_code_t wfs_block_set_block_size(wfs_block_t* b, uint32_t block_size);
 
+/* Install the read redirect, or clear it by passing NULL.
+ *
+ * Installing or clearing one INVALIDATES the staged block: the tag names the
+ * block the bytes were read from, and the same tag would answer a differently
+ * mapped request afterwards. */
+void wfs_block_set_redirect(wfs_block_t* b, wfs_block_redirect_fn fn, void* user);
+
 /* Discard the staged block. */
 void wfs_block_invalidate(wfs_block_t* b);
 
-/* Begin staging `block`.
+/* Begin staging `block`, which the read redirect may map elsewhere first.
  *
  * Returns NULL when the block is ALREADY STAGED: a cache hit costs no request
  * and the caller proceeds without awaiting. Otherwise returns the future to

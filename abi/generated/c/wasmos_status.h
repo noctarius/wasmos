@@ -148,6 +148,9 @@ enum {
     WASMOS_ERR_FS_VOLUME_TOO_LARGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 34), /* volume exceeds the address range the driver carries (e.g. a 64-bit on-disk block count above the driver's 32-bit block number) */
     WASMOS_ERR_FS_VERSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 35), /* on-disk format version is not one this driver implements; distinct from an unknown feature flag, which names a capability rather than a structure generation */
     WASMOS_ERR_FS_READ_ONLY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 36), /* the volume is mounted read-only, so the write cannot be attempted at all; distinct from ACCESS, which is an fd-mode violation, and from NO_SPACE, which is a writable volume with nothing free. A volume is read-only when a feature flag demands it, when a journal replay is owed, or when its primary superblock was recovered from a backup */
+    WASMOS_ERR_FS_JOURNAL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 37), /* the metadata journal is unusable: its superblock does not identify a log, does not verify, or names a geometry too small for one transaction. Distinct from CORRUPT, which names a filesystem structure, because a damaged log costs writability rather than readability */
+    WASMOS_ERR_FS_TXN_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 38), /* a metadata transaction names more blocks than one journal descriptor carries, or more revokes than one revoke record does; the operation is refused whole rather than split across two transactions that a crash could separate */
+    WASMOS_ERR_FS_REPLAY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 39), /* journal replay stopped: a committed block image did not match the checksum its descriptor recorded, so applying the transaction would write a partial one. The volume mounts read-only for fsck */
     WASMOS_ERR_NET_WOULD_BLOCK = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_NET, 1), /* operation is deferred; completion arrives as a later event (retryable) */
     WASMOS_ERR_NET_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_NET, 2), /* invalid request arguments (socket, address, or length) */
     WASMOS_ERR_NET_NOT_READY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_NET, 3), /* interface or socket is not in a state that permits the operation */
@@ -441,6 +444,9 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_FS_VOLUME_TOO_LARGE: return "fs.VOLUME_TOO_LARGE";
     case WASMOS_ERR_FS_VERSION: return "fs.VERSION";
     case WASMOS_ERR_FS_READ_ONLY: return "fs.READ_ONLY";
+    case WASMOS_ERR_FS_JOURNAL: return "fs.JOURNAL";
+    case WASMOS_ERR_FS_TXN_FULL: return "fs.TXN_FULL";
+    case WASMOS_ERR_FS_REPLAY: return "fs.REPLAY";
     case WASMOS_ERR_NET_WOULD_BLOCK: return "net.WOULD_BLOCK";
     case WASMOS_ERR_NET_INVALID: return "net.INVALID";
     case WASMOS_ERR_NET_NOT_READY: return "net.NOT_READY";
@@ -668,6 +674,9 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_FS_VOLUME_TOO_LARGE: return "volume exceeds the address range the driver carries (e.g. a 64-bit on-disk block count above the driver's 32-bit block number)";
     case WASMOS_ERR_FS_VERSION: return "on-disk format version is not one this driver implements; distinct from an unknown feature flag, which names a capability rather than a structure generation";
     case WASMOS_ERR_FS_READ_ONLY: return "the volume is mounted read-only, so the write cannot be attempted at all; distinct from ACCESS, which is an fd-mode violation, and from NO_SPACE, which is a writable volume with nothing free. A volume is read-only when a feature flag demands it, when a journal replay is owed, or when its primary superblock was recovered from a backup";
+    case WASMOS_ERR_FS_JOURNAL: return "the metadata journal is unusable: its superblock does not identify a log, does not verify, or names a geometry too small for one transaction. Distinct from CORRUPT, which names a filesystem structure, because a damaged log costs writability rather than readability";
+    case WASMOS_ERR_FS_TXN_FULL: return "a metadata transaction names more blocks than one journal descriptor carries, or more revokes than one revoke record does; the operation is refused whole rather than split across two transactions that a crash could separate";
+    case WASMOS_ERR_FS_REPLAY: return "journal replay stopped: a committed block image did not match the checksum its descriptor recorded, so applying the transaction would write a partial one. The volume mounts read-only for fsck";
     case WASMOS_ERR_NET_WOULD_BLOCK: return "operation is deferred; completion arrives as a later event (retryable)";
     case WASMOS_ERR_NET_INVALID: return "invalid request arguments (socket, address, or length)";
     case WASMOS_ERR_NET_NOT_READY: return "interface or socket is not in a state that permits the operation";

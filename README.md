@@ -47,6 +47,9 @@ It defines repository workflow and documentation/update conventions.
 - Early generic `virtio-serial` driver service (`virtio.serial`) for host/guest automation plumbing and future transport consumers.
 - `virtio-rng` hardware entropy driver with non-blocking `libsys` byte-array,
   integer, and unit-interval float helpers for WASM and native clients.
+- `virtio-blk` block-device driver, written in Zig, serving the block IPC
+  interface over a virtqueue whose data descriptor addresses the caller's own
+  buffer directly.
 - Networking stack: `virtio-net` transport driver plus a native lwIP `net-stack`
   service providing IPv4 UDP/TCP stream sockets, DHCP/static addressing, DNS
   resolution, and a verifying TLS 1.2 client (mbedTLS, full chain + hostname

@@ -20,9 +20,16 @@ stack_size = 16384
 initial_memory = 524288
 max_memory = 524288
 
+# No endpoint is required by NAME. The `block` name retired when a disk became
+# the pair (backend, unit): a name resolves to ONE provider system-wide, so it
+# could only ever reach whichever backend claimed it. The process manager
+# resolves required_endpoint_name before the driver runs, so naming a retired
+# name kills the process before its entry export ("[wasmos-app] endpoint resolve
+# failed"). The disk is resolved at run time from the `block` service CLASS, at
+# the instance encoding the (backend, unit) carried in the startup args.
 [ipc]
-required_endpoint_name = "block"
-required_endpoint_rights = 1
+required_endpoint_name = "-"
+required_endpoint_rights = 0
 
 [[capabilities]]
 name = "ipc.basic"

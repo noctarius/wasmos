@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Pattern, Union
 
 
@@ -46,6 +46,10 @@ class QemuConfig:
     #   macOS Apple NAT+DHCP:  vmnet-shared,id=net0              (needs sudo)
     #   Linux tap:             tap,id=net0,ifname=tap0,script=no,downscript=no
     netdev: str = "user,id=net0"
+    # Extra QEMU arguments appended verbatim after the standard device set, for a
+    # test that needs a device the whole suite must not carry -- an attached
+    # virtio-blk disk, say. A tuple so the default stays immutable.
+    extra_args: tuple = ()
 
     def __post_init__(self) -> None:
         # Fill the optional disks in from the environment when a caller built the
@@ -316,6 +320,7 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         ]
     # Entropy source for the virtio-rng driver (transitional 1AF4:1005).
     cmd += ["-device", "virtio-rng-pci"]
+    cmd += list(cfg.extra_args)
     if cfg.monitor_socket:
         cmd += ["-qmp", f"unix:{cfg.monitor_socket},server,wait=off"]
     return cmd
@@ -795,20 +800,10 @@ class QemuSession:
             temp_root = tempfile.mkdtemp(prefix="wasmos-esp-")
             runtime_esp = os.path.join(temp_root, "esp")
             shutil.copytree(self.cfg.esp_dir, runtime_esp)
-            runtime_cfg = QemuConfig(
-                ovmf_code=self.cfg.ovmf_code,
-                ovmf_vars=self.cfg.ovmf_vars,
-                esp_dir=runtime_esp,
-                userfs_dir=self.cfg.userfs_dir,
-                nographic=self.cfg.nographic,
-                display=self.cfg.display,
-                isolate_esp=False,
-                enable_monitor=self.cfg.enable_monitor,
-                monitor_socket=self.cfg.monitor_socket,
-                smp_count=self.cfg.smp_count,
-                nic_model=self.cfg.nic_model,
-                netdev=self.cfg.netdev,
-            )
+            # replace() rather than a field-by-field rebuild: this used to list
+            # every field, so a field added to QemuConfig was silently dropped
+            # from an isolated-ESP run and the test quietly ran without it.
+            runtime_cfg = replace(self.cfg, esp_dir=runtime_esp, isolate_esp=False)
             self._esp_runtime_dir = temp_root
             atexit.register(self._cleanup_esp_runtime_dir)
 
@@ -821,19 +816,11 @@ class QemuSession:
             self._monitor_tmp_dir = tmp_dir
             atexit.register(self._cleanup_monitor_tmp_dir)
             monitor_socket = os.path.join(tmp_dir, "qmp.sock")
-            runtime_cfg = QemuConfig(
-                ovmf_code=runtime_cfg.ovmf_code,
-                ovmf_vars=runtime_cfg.ovmf_vars,
-                esp_dir=runtime_cfg.esp_dir,
-                userfs_dir=runtime_cfg.userfs_dir,
-                nographic=runtime_cfg.nographic,
-                display=runtime_cfg.display,
+            runtime_cfg = replace(
+                runtime_cfg,
                 isolate_esp=False,
                 enable_monitor=True,
                 monitor_socket=monitor_socket,
-                smp_count=runtime_cfg.smp_count,
-                nic_model=runtime_cfg.nic_model,
-                netdev=runtime_cfg.netdev,
             )
 
         cmd = build_qemu_cmd(runtime_cfg)

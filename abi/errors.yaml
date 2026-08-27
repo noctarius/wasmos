@@ -378,3 +378,36 @@ domains:
     codes:
       - { name: NO_MOUNT_RULE,     description: "no block/filesystem mount rule matches the requested unit" }
       - { name: UNSUPPORTED_QUERY, description: "unknown or unsupported device-manager query type" }
+
+  virtio_blk:
+    id: 24
+    description: >-
+      virtio-blk block-device server failures. Distinct from `block`, which
+      describes the staging buffer a transfer moves through: these describe the
+      device and the request, and are what a BLOCK_IPC_ERROR reply carries in
+      arg0.
+    codes:
+      - { name: NOT_READY,           description: "no virtio-blk device was probed, or bring-up did not complete" }
+      - { name: BAD_REQUEST,         description: "the request's lba, sector count, or buffer argument is unusable" }
+      - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported block opcode" }
+      - { name: QUEUE_FULL,          description: "no descriptors are free; the request must be retried" }
+      - { name: IO_ERROR,            description: "the device completed the request with a non-OK virtio-blk status" }
+      - { name: TIMEOUT,             description: "the device never reported the request on the used ring" }
+      - { name: READ_ONLY,           description: "the device negotiated VIRTIO_BLK_F_RO and cannot be written" }
+
+  block_dev:
+    id: 25
+    description: >-
+      Block-device SERVER failures, as a BLOCK_IPC_ERROR reply's arg0. Distinct
+      from `block`, which describes the staging buffer a transfer moves through,
+      and shared by every backend rather than per-driver: a client that reaches a
+      disk through the `block` class should read one vocabulary whichever driver
+      answers it.
+    codes:
+      - { name: NOT_READY,           description: "the backend has no usable device" }
+      - { name: NO_SUCH_UNIT,        description: "the named unit does not exist on this backend" }
+      - { name: UNIT_CLAIMED,        description: "another client already holds this unit exclusively" }
+      - { name: BAD_REQUEST,         description: "the request's lba, sector count, or buffer argument is unusable" }
+      - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported block opcode" }
+      - { name: READ_FAILED,         description: "the transfer from the device failed" }
+      - { name: WRITE_FAILED,        description: "the transfer to the device failed" }

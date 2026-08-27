@@ -29,6 +29,13 @@ flags = 0
 name = "dma.buffer"
 flags = 1
 
+# Required to claim the virtual service class "block" at registration time (PM
+# gates class claims in SVC_IPC_REGISTER_DESC_REQ on CAP_SVC_CLASS_REGISTER).
+# This driver claims one instance per present disk.
+[[capabilities]]
+name = "svc.class"
+flags = 0
+
 # Register windows this driver needs, in the order it addresses them at runtime.
 # Region 0 is the task file at the fixed ISA ports (a legacy IDE controller
 # leaves BAR0 empty and decodes these instead); region 1 is wherever firmware put

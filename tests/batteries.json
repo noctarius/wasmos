@@ -85,11 +85,12 @@
     },
     {
       "name": "filesystem",
-      "description": "Filesystem reads and writes through the FAT and WFS backends.",
+      "description": "Filesystem reads and writes through the FAT and WFS backends, and the block devices underneath them.",
       "needs_qemu": true,
       "files": [
         "test_fs_open_smoke.py",
         "test_fs_write_smoke.py",
+        "test_virtio_blk.py",
         "test_wfs_mount_read.py"
       ]
     },

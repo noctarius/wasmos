@@ -4,4 +4,10 @@
 SUBSYSTEM=="boot", RUN+="system/services/net_stack.wap"
 SUBSYSTEM=="boot", RUN+="system/drivers/chardev_server.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", RUN+="system/drivers/ata.wap"
-SUBSYSTEM=="block", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"
+# DRIVER names the backend: a unit is backend-local, so an unqualified
+# ATTR{unit}=="0" also matches a virtio-blk device's only disk and would
+# mount a second filesystem on /boot.
+# TODO: the filesystem is hard-wired because nothing probes the disk. With no
+# partition table, a matcher reading the FAT/WFS superblock signature is what
+# would replace naming it here.
+SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"

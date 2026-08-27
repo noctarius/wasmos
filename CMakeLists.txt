@@ -180,6 +180,9 @@ set(WASM_VIRTIO_SERIAL_APP ${BUILD_DIR}/virtio_serial.wap)
 set(WASM_VIRTIO_RNG_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_rng/virtio_rng.c)
 set(WASM_VIRTIO_RNG_DRIVER_WASM ${BUILD_DIR}/virtio_rng.wasm)
 set(WASM_VIRTIO_RNG_APP ${BUILD_DIR}/virtio_rng.wap)
+set(WASM_VIRTIO_BLK_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_blk/virtio_blk.zig)
+set(WASM_VIRTIO_BLK_DRIVER_WASM ${BUILD_DIR}/virtio_blk.wasm)
+set(WASM_VIRTIO_BLK_APP ${BUILD_DIR}/virtio_blk.wap)
 set(WASM_FRAMEBUFFER_APP ${BUILD_DIR}/framebuffer.wap)
 set(NATIVE_FRAMEBUFFER_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer/framebuffer_native.c)
 set(NATIVE_FRAMEBUFFER_RENDER_SRC ${DRIVER_WASM_DIR}/framebuffer/render.c)
@@ -267,6 +270,9 @@ set(WASM_IP_APP ${BUILD_DIR}/ip.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
+set(WASM_BLKINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/blkinfo/blkinfo.c)
+set(WASM_BLKINFO_WASM ${BUILD_DIR}/blkinfo.wasm)
+set(WASM_BLKINFO_APP ${BUILD_DIR}/blkinfo.wap)
 set(WASM_CURL_SRC ${CMAKE_SOURCE_DIR}/src/utils/curl/curl.c)
 set(WASM_CURL_WASM ${BUILD_DIR}/curl.wasm)
 set(WASM_CURL_APP ${BUILD_DIR}/curl.wap)
@@ -698,8 +704,10 @@ function(wasmos_add_wasm_c_app_target target_name)
             ${_wasmos_libc_sources}
             ${_wasmos_sources}
             -o ${WASMOS_APP_OUTPUT_WASM}
+    # WASMOS_SDK_STAMP covers the wasmos-clang driver and the staged sysroot, so a
+    # change to how a module is COMPILED rebuilds the modules, not just the SDK.
     DEPENDS ${_wasmos_sources} ${_wasmos_libc_sources} ${WASMOS_LIBC_INCLUDE_DEPS}
-            ${WASMOS_APP_MANIFEST} ${_wasmos_runtime_deps}
+            ${WASMOS_APP_MANIFEST} ${_wasmos_runtime_deps} ${WASMOS_SDK_STAMP}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT ${_build_comment}
     VERBATIM
@@ -1669,6 +1677,7 @@ endif ()
 if (TARGET host_util)
   set(HOST_UTIL_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
   )
 endif ()
 if (TARGET curl_util)
@@ -1819,6 +1828,9 @@ if (ZIG_AVAILABLE)
   set(ZIG_CALCULATOR_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CALCULATOR_APP} ${BUILD_DIR}/esp/apps/calculator.wap
   )
+  set(VIRTIO_BLK_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_BLK_APP} ${BUILD_DIR}/esp/system/drivers/virtio_blk.wap
+  )
 endif ()
 
 # Rebuilt whenever the content or the formatter changes: the guest mounts this
@@ -1862,6 +1874,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_NET_APP} ${BUILD_DIR}/esp/system/drivers/virtio_net.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_RNG_APP} ${BUILD_DIR}/esp/system/drivers/virtio_rng.wap
+  ${VIRTIO_BLK_COPY_CMD}
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}

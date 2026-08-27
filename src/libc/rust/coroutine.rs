@@ -198,6 +198,14 @@ pub struct EventLoop {
     default_user: *mut c_void,
     intents: [u32; 64],
     handlers: [u32; 64],
+    /// Bound on how long `poll` parks with nothing queued, in milliseconds; 0
+    /// parks until a message arrives. A positive value plus `on_timeout` is how
+    /// a reactor holds a deadline without driving its own pump.
+    poll_timeout_ms: i32,
+    /// Runs when a bounded park elapses with nothing delivered. Called on the
+    /// poller's stack, so it must not block.
+    on_timeout: Option<unsafe extern "C" fn(*mut c_void)>,
+    timeout_user: *mut c_void,
 }
 
 /// One in-flight request exposed as a future. Caller-owned and reusable: `init`

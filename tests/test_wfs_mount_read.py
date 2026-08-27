@@ -101,6 +101,29 @@ class WfsMountReadTest(unittest.TestCase):
                 f"--- tail ---\n{self.session.tail()}\n",
             )
 
+    def test_the_driver_was_told_which_disk_it_is(self):
+        """The driver received its driver=/unit= startup args on its FIRST spawn.
+
+        Regression: 2026-08-26-second-block-fs-rule-loses-args. /wfs is the
+        SECOND block_fs rule of the boot rule set, and the device manager armed
+        it from inside the first rule's completion handler and then cleared the
+        active-spawn tracking on top of it. The downgraded spawn took the
+        no-args PROC_IPC_SPAWN_PATH_SYNC opcode, so the driver could not tell
+        which disk it was spawned for and parked itself; it only came up on the
+        tenth attempt, after nine ~5 s spawn timeouts had reset the tracking and
+        re-armed the rule properly. The volume still mounted in the end, which
+        is why the mount assertions above stayed green over a live defect --
+        this one fails on the very first stalled attempt.
+        """
+        self.assertNotIn(
+            b"[fs-wfs] startup args missing",
+            self.session.buf,
+            "the driver was spawned without driver=/unit=, so it parked instead "
+            "of mounting. The device-manager rule for /wfs reached PM through an "
+            "opcode that carries no startup args.\n"
+            f"--- tail ---\n{self.session.tail()}\n",
+        )
+
     def test_the_mount_appears_in_the_root_listing(self):
         """fs-manager routes /wfs, which is what makes the rest reachable."""
         self._cmd("cd /", [])

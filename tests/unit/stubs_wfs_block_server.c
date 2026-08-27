@@ -219,6 +219,11 @@ int32_t wasmos_ipc_select_wait(int32_t select_id) {
     (void)select_id;
     return -1;
 }
+int32_t wasmos_ipc_select_wait_timeout(int32_t select_id, int32_t timeout_ms) {
+    (void)select_id;
+    (void)timeout_ms;
+    return -1;
+}
 int32_t wasmos_ipc_select_destroy(int32_t select_id) {
     (void)select_id;
     return -1;

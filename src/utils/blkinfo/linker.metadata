@@ -1,0 +1,20 @@
+version = 1
+
+[package]
+name = "blkinfo"
+entry = "wasmos_main"
+kind = "app"
+native = false
+aot = true
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[ipc]
+required_endpoint_name = "proc"
+required_endpoint_rights = 0
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

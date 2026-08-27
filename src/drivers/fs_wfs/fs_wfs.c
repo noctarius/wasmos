@@ -87,6 +87,10 @@ static int32_t g_mount_bid = -1;
 static int32_t g_mount_len = 0;
 static uint8_t g_mount_unit = 0;
 static int32_t g_requested_unit = -1;
+/* Which backend serves the disk this instance was spawned for, as the device
+ * manager named it. A unit alone does not identify a disk -- it is
+ * backend-local -- so both halves are needed to find the right server. */
+static uint8_t g_requested_backend = (uint8_t)BLOCK_BACKEND_UNKNOWN;
 
 /* Op contexts, static because a task's context must outlive its awaits and the
  * driver runs one op at a time. */
@@ -763,6 +767,84 @@ static void wfs_report_backend_info(int32_t dst, int32_t request_id) {
                                     WFS_SEND_RETRIES);
 }
 
+/* Map the device manager's DRIVER name to the backend it stands for. The names
+ * are the drivers' manifest package names -- the same spelling a rule's DRIVER==
+ * uses and the rule parser maps -- so this list tracks fs_fat's deliberately:
+ * both filesystems resolve the same identity from the same argument. */
+static uint8_t wfs_backend_from_name(const char* name) {
+    if (!name) {
+        return (uint8_t)BLOCK_BACKEND_UNKNOWN;
+    }
+    if (strncmp(name, "ata", 3) == 0 && (name[3] == '\0' || name[3] == ' ')) {
+        return (uint8_t)BLOCK_BACKEND_ATA;
+    }
+    if (strncmp(name, "virtio-blk", 10) == 0 && (name[10] == '\0' || name[10] == ' ')) {
+        return (uint8_t)BLOCK_BACKEND_VIRTIO_BLK;
+    }
+    return (uint8_t)BLOCK_BACKEND_UNKNOWN;
+}
+
+/* The value of `token` in the startup args, or NULL. */
+static const char* wfs_find_token_value(const char* args, const char* token) {
+    uint32_t i;
+    uint32_t tlen = 0;
+
+    while (token[tlen] != '\0') {
+        tlen++;
+    }
+    for (i = 0; args[i] != '\0'; ++i) {
+        if (strncmp(&args[i], token, tlen) == 0) {
+            return &args[i] + tlen;
+        }
+    }
+    return 0;
+}
+
+static uint8_t wfs_parse_requested_backend(void) {
+    char args[64];
+
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
+        return (uint8_t)BLOCK_BACKEND_UNKNOWN;
+    }
+    return wfs_backend_from_name(wfs_find_token_value(args, "driver="));
+}
+
+/* Resolve this instance's disk through the `block` service CLASS, matching the
+ * instance that encodes its (backend, unit).
+ *
+ * By class rather than by the plain `block` NAME, because a name resolves to one
+ * provider for the whole system: it could only ever reach whichever backend
+ * registered the name, so a rule could not mount WFS on any other backend however
+ * well that backend worked. Resolving by name is what made this driver silently
+ * ATA-shaped -- it worked only while ATA was the sole block backend.
+ *
+ * Returns the provider's endpoint, or -1 while it has not registered yet; the
+ * caller retries, since a filesystem may be spawned before its disk's driver has
+ * finished coming up. */
+static int32_t wfs_lookup_block_server(uint32_t instance, int32_t request_id) {
+    svc_class_entry_t providers[8];
+    int32_t n = wasmos_svc_lookup_class(g_proc_endpoint,
+                                        g_reply_endpoint,
+                                        "block",
+                                        providers,
+                                        (int32_t)(sizeof(providers) / sizeof(providers[0])),
+                                        request_id);
+    int32_t i;
+
+    if (n < 0) {
+        return -1;
+    }
+    if (n > (int32_t)(sizeof(providers) / sizeof(providers[0]))) {
+        n = (int32_t)(sizeof(providers) / sizeof(providers[0]));
+    }
+    for (i = 0; i < n; ++i) {
+        if (providers[i].instance == instance) {
+            return (int32_t)providers[i].endpoint;
+        }
+    }
+    return -1;
+}
+
 /* Which block unit the device-manager rule asked for. */
 static int32_t wfs_parse_requested_unit(void) {
     char args[64];
@@ -933,8 +1015,18 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d
     }
 
     g_requested_unit = wfs_parse_requested_unit();
-    for (;;) {
-        block_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "block", 1);
+    g_requested_backend = wfs_parse_requested_backend();
+    if (g_requested_backend == (uint8_t)BLOCK_BACKEND_UNKNOWN || g_requested_unit < 0) {
+        /* Without both halves the disk cannot be identified, and guessing a
+         * backend would mount the wrong volume. */
+        wfs_log("[fs-wfs] startup args missing driver= or unit=; cannot resolve a block device\n");
+        wfs_stall();
+    }
+    for (int32_t attempt = 0;; ++attempt) {
+        /* The class instance that names this disk: (backend << 8) | unit. */
+        block_endpoint = wfs_lookup_block_server(((uint32_t)g_requested_backend << 8) |
+                                                     ((uint32_t)g_requested_unit & 0xFFu),
+                                                 1 + attempt);
         if (block_endpoint > 0) {
             break;
         }

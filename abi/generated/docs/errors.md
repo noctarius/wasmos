@@ -338,3 +338,15 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 |---|---|---|
 | `WASMOS_ERR_DEVMGR_NO_MOUNT_RULE` | -0x000A0001 | no block/filesystem mount rule matches the requested unit |
 | `WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY` | -0x000A0002 | unknown or unsupported device-manager query type |
+
+### `virtio_blk` (domain 24) — virtio-blk block-device server failures. Distinct from `block`, which describes the staging buffer a transfer moves through: these describe the device and the request, and are what a BLOCK_IPC_ERROR reply carries in arg0.
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_VIRTIO_BLK_NOT_READY` | -0x00180001 | no virtio-blk device was probed, or bring-up did not complete |
+| `WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST` | -0x00180002 | the request's lba, sector count, or buffer argument is unusable |
+| `WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST` | -0x00180003 | unknown or unsupported block opcode |
+| `WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL` | -0x00180004 | no descriptors are free; the request must be retried |
+| `WASMOS_ERR_VIRTIO_BLK_IO_ERROR` | -0x00180005 | the device completed the request with a non-OK virtio-blk status |
+| `WASMOS_ERR_VIRTIO_BLK_TIMEOUT` | -0x00180006 | the device never reported the request on the used ring |
+| `WASMOS_ERR_VIRTIO_BLK_READ_ONLY` | -0x00180007 | the device negotiated VIRTIO_BLK_F_RO and cannot be written |

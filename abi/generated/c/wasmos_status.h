@@ -54,6 +54,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
     WASMOS_ERR_DOMAIN_ENV = 22, /* kernel environment key/value store host calls */
     WASMOS_ERR_DOMAIN_FRAMEBUFFER = 23, /* Framebuffer access and mapping, shared by every backend that presents one -- the in-kernel framebuffer, the PCI one, and whatever follows -- so a guest sees the same code whichever is behind it. */
     WASMOS_ERR_DOMAIN_DEVMGR = 10, /* device-manager query failures */
+    WASMOS_ERR_DOMAIN_VIRTIO_BLK = 24, /* virtio-blk block-device server failures. Distinct from `block`, which describes the staging buffer a transfer moves through: these describe the device and the request, and are what a BLOCK_IPC_ERROR reply carries in arg0. */
 };
 
 /* A domain error is the negative of (domain << 16) | local_code. */
@@ -264,6 +265,13 @@ enum {
     WASMOS_ERR_FRAMEBUFFER_TOO_SMALL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 2), /* the caller's requested mapping is smaller than the framebuffer */
     WASMOS_ERR_DEVMGR_NO_MOUNT_RULE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 1), /* no block/filesystem mount rule matches the requested unit */
     WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 2), /* unknown or unsupported device-manager query type */
+    WASMOS_ERR_VIRTIO_BLK_NOT_READY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 1), /* no virtio-blk device was probed, or bring-up did not complete */
+    WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 2), /* the request's lba, sector count, or buffer argument is unusable */
+    WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 3), /* unknown or unsupported block opcode */
+    WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 4), /* no descriptors are free; the request must be retried */
+    WASMOS_ERR_VIRTIO_BLK_IO_ERROR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 5), /* the device completed the request with a non-OK virtio-blk status */
+    WASMOS_ERR_VIRTIO_BLK_TIMEOUT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 6), /* the device never reported the request on the used ring */
+    WASMOS_ERR_VIRTIO_BLK_READ_ONLY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 7), /* the device negotiated VIRTIO_BLK_F_RO and cannot be written */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -328,6 +336,7 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_ENV: return "env";
     case WASMOS_ERR_DOMAIN_FRAMEBUFFER: return "framebuffer";
     case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
+    case WASMOS_ERR_DOMAIN_VIRTIO_BLK: return "virtio_blk";
     default: return "unknown";
     }
 }
@@ -534,6 +543,13 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "framebuffer.TOO_SMALL";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "devmgr.NO_MOUNT_RULE";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "devmgr.UNSUPPORTED_QUERY";
+    case WASMOS_ERR_VIRTIO_BLK_NOT_READY: return "virtio_blk.NOT_READY";
+    case WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST: return "virtio_blk.BAD_REQUEST";
+    case WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST: return "virtio_blk.UNSUPPORTED_REQUEST";
+    case WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL: return "virtio_blk.QUEUE_FULL";
+    case WASMOS_ERR_VIRTIO_BLK_IO_ERROR: return "virtio_blk.IO_ERROR";
+    case WASMOS_ERR_VIRTIO_BLK_TIMEOUT: return "virtio_blk.TIMEOUT";
+    case WASMOS_ERR_VIRTIO_BLK_READ_ONLY: return "virtio_blk.READ_ONLY";
     default: return "unknown";
     }
 }
@@ -740,6 +756,13 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "the caller's requested mapping is smaller than the framebuffer";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "no block/filesystem mount rule matches the requested unit";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
+    case WASMOS_ERR_VIRTIO_BLK_NOT_READY: return "no virtio-blk device was probed, or bring-up did not complete";
+    case WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST: return "the request's lba, sector count, or buffer argument is unusable";
+    case WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST: return "unknown or unsupported block opcode";
+    case WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL: return "no descriptors are free; the request must be retried";
+    case WASMOS_ERR_VIRTIO_BLK_IO_ERROR: return "the device completed the request with a non-OK virtio-blk status";
+    case WASMOS_ERR_VIRTIO_BLK_TIMEOUT: return "the device never reported the request on the used ring";
+    case WASMOS_ERR_VIRTIO_BLK_READ_ONLY: return "the device negotiated VIRTIO_BLK_F_RO and cannot be written";
     default: return "unknown error";
     }
 }

@@ -1,7 +1,8 @@
 /* Host unit test for the transport-neutral vring core (wasmos/vring.h).
- * Exercises layout, descriptor alloc/free, publish/kick, used-ring consumption,
- * and consumer-side validation. No device or QEMU — the "device" side is
- * simulated in-process by reading the avail ring and writing the used ring. */
+ * Exercises layout, descriptor alloc/free, chained descriptors, publish/kick,
+ * used-ring consumption, and consumer-side validation. No device or QEMU — the
+ * "device" side is simulated in-process by reading the avail ring and writing
+ * the used ring. */
 
 #include "wasmos/vring.h"
 
@@ -188,6 +189,126 @@ static int test_consumer_validation(void) {
     return 0;
 }
 
+/* A chain is what a request spanning several buffers looks like on the ring: a
+ * virtio-blk request is a header the device reads, a data buffer, and a status
+ * byte the device writes. The three properties that make it a chain are the
+ * NEXT flag on every entry but the last, links that walk head to tail, and
+ * per-entry direction flags. */
+static int test_alloc_chain_links_and_flags(void) {
+    vring_t vq;
+    if (vring_layout(&vq, g_region, 0x3000000ULL, sizeof(g_region), QNUM, QALIGN) != 0)
+        return __LINE__;
+
+    const vring_buf_t bufs[3] = {
+        {0x3000000ULL + 0x00, 16, 0},                   /* header, device reads */
+        {0x3000000ULL + 0x40, 512, VRING_DESC_F_WRITE}, /* data, device writes */
+        {0x3000000ULL + 0x300, 1, VRING_DESC_F_WRITE},  /* status, device writes */
+    };
+    int32_t head = vring_alloc_chain(&vq, bufs, 3);
+    if (head < 0)
+        return __LINE__;
+    if (vq.num_free != QNUM - 3)
+        return __LINE__;
+
+    uint16_t idx = (uint16_t)head;
+    for (uint16_t i = 0; i < 3; ++i) {
+        if (idx >= QNUM)
+            return __LINE__;
+        if (vq.desc[idx].addr != bufs[i].addr || vq.desc[idx].len != bufs[i].len)
+            return __LINE__;
+        if ((vq.desc[idx].flags & VRING_DESC_F_WRITE) != bufs[i].flags)
+            return __LINE__;
+        /* Every entry but the last continues the chain. */
+        uint16_t want_next = (i + 1u < 3u) ? VRING_DESC_F_NEXT : 0u;
+        if ((vq.desc[idx].flags & VRING_DESC_F_NEXT) != want_next)
+            return __LINE__;
+        idx = vq.desc[idx].next;
+    }
+    return 0;
+}
+
+/* Freeing a chain must return EVERY descriptor, not just the head: a leak here
+ * shrinks the queue by two descriptors per request until it stops accepting
+ * any, which reads as a device that stopped responding. */
+static int test_free_chain_returns_every_descriptor(void) {
+    vring_t vq;
+    if (vring_layout(&vq, g_region, 0, sizeof(g_region), QNUM, QALIGN) != 0)
+        return __LINE__;
+    const vring_buf_t bufs[3] = {
+        {0x100, 16, 0}, {0x200, 512, VRING_DESC_F_WRITE}, {0x300, 1, VRING_DESC_F_WRITE}};
+
+    for (int round = 0; round < 4; ++round) {
+        int32_t head = vring_alloc_chain(&vq, bufs, 3);
+        if (head < 0)
+            return __LINE__;
+        if (vq.num_free != QNUM - 3)
+            return __LINE__;
+        vring_free_chain(&vq, (uint16_t)head);
+        /* Full capacity again, round after round — so the free list is intact
+         * and not merely long enough to survive one pass. */
+        if (vq.num_free != QNUM)
+            return __LINE__;
+    }
+    return 0;
+}
+
+static int test_alloc_chain_rejects_bad_counts(void) {
+    vring_t vq;
+    if (vring_layout(&vq, g_region, 0, sizeof(g_region), QNUM, QALIGN) != 0)
+        return __LINE__;
+    const vring_buf_t bufs[VRING_MAX_CHAIN + 1] = {{0x100, 16, 0}};
+
+    if (vring_alloc_chain(&vq, bufs, 0) != -1)
+        return __LINE__; /* empty chain */
+    if (vring_alloc_chain(&vq, bufs, VRING_MAX_CHAIN + 1) != -1)
+        return __LINE__; /* longer than the walk bound */
+    if (vring_alloc_chain(&vq, 0, 3) != -1)
+        return __LINE__; /* no buffers */
+    if (vq.num_free != QNUM)
+        return __LINE__; /* a refusal consumes nothing */
+
+    /* A chain longer than the free list is backpressure, and must also consume
+     * nothing — a partial allocation would strand the descriptors it took. */
+    if (vring_alloc_chain(&vq, bufs, 6) < 0)
+        return __LINE__;
+    if (vq.num_free != QNUM - 6)
+        return __LINE__;
+    if (vring_alloc_chain(&vq, bufs, 3) != -1)
+        return __LINE__;
+    if (vq.num_free != QNUM - 6)
+        return __LINE__;
+    return 0;
+}
+
+/* The full driver-side cycle for a chained request: publish, the device reports
+ * the HEAD on the used ring, and the whole chain goes back to the free list. */
+static int test_chain_round_trip(void) {
+    vring_t vq;
+    if (vring_layout(&vq, g_region, 0, sizeof(g_region), QNUM, QALIGN) != 0)
+        return __LINE__;
+    const vring_buf_t bufs[3] = {
+        {0x100, 16, 0}, {0x200, 512, VRING_DESC_F_WRITE}, {0x300, 1, VRING_DESC_F_WRITE}};
+    int32_t head = vring_alloc_chain(&vq, bufs, 3);
+    if (head < 0)
+        return __LINE__;
+
+    vring_publish(&vq, (uint16_t)head);
+    if (*vq.avail_idx != 1 || vq.avail_ring[0] != (uint16_t)head)
+        return __LINE__;
+
+    /* A device reports the chain by its head descriptor, never its tail. */
+    device_complete_one(&vq, 0, 513);
+    uint32_t len = 0;
+    int32_t got = vring_get_used(&vq, &len);
+    if (got != head || len != 513)
+        return __LINE__;
+
+    vring_free_chain(&vq, (uint16_t)got);
+    if (vq.num_free != QNUM)
+        return __LINE__;
+    return 0;
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -197,6 +318,10 @@ int main(void) {
         WASMOS_TEST_CASE(test_publish_kick_consume),
         WASMOS_TEST_CASE(test_free_list_exhaustion),
         WASMOS_TEST_CASE(test_consumer_validation),
+        WASMOS_TEST_CASE(test_alloc_chain_links_and_flags),
+        WASMOS_TEST_CASE(test_free_chain_returns_every_descriptor),
+        WASMOS_TEST_CASE(test_alloc_chain_rejects_bad_counts),
+        WASMOS_TEST_CASE(test_chain_round_trip),
     };
     if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
         return 1;

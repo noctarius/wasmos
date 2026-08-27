@@ -39,7 +39,7 @@ WASMOS_GO_BLOB_IS(wasmos_promise_t, 1);
 WASMOS_GO_BLOB_IS(wasmos_wasm_coroutine_t, 14);
 WASMOS_GO_BLOB_IS(wasmos_future_continuation_t, 15);
 WASMOS_GO_BLOB_IS(wasmos_future_group_t, 14);
-WASMOS_GO_BLOB_IS(wasmos_sys_event_loop_t, 133);
+WASMOS_GO_BLOB_IS(wasmos_sys_event_loop_t, 136);
 WASMOS_GO_BLOB_IS(wasmos_sys_wasm_ipc_future_t, 20);
 WASMOS_GO_BLOB_IS(wasmos_sys_wasm_fs_request_t, 20);
 WASMOS_GO_BLOB_IS(wasmos_sys_wasm_fs_operation_t, 24);

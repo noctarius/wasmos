@@ -42,6 +42,7 @@ pub const WASMOS_ERR_DOMAIN_THREAD: u16 = 21;
 pub const WASMOS_ERR_DOMAIN_ENV: u16 = 22;
 pub const WASMOS_ERR_DOMAIN_FRAMEBUFFER: u16 = 23;
 pub const WASMOS_ERR_DOMAIN_DEVMGR: u16 = 10;
+pub const WASMOS_ERR_DOMAIN_VIRTIO_BLK: u16 = 24;
 
 pub const WASMOS_ERR_NONE: i32 = 0;
 // A domain error is the negative of (domain << 16) | local_code.
@@ -243,6 +244,13 @@ pub const WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: i32 = -0x00170001; // no framebuff
 pub const WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: i32 = -0x00170002; // the caller's requested mapping is smaller than the framebuffer
 pub const WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: i32 = -0x000A0001; // no block/filesystem mount rule matches the requested unit
 pub const WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: i32 = -0x000A0002; // unknown or unsupported device-manager query type
+pub const WASMOS_ERR_VIRTIO_BLK_NOT_READY: i32 = -0x00180001; // no virtio-blk device was probed, or bring-up did not complete
+pub const WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST: i32 = -0x00180002; // the request's lba, sector count, or buffer argument is unusable
+pub const WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST: i32 = -0x00180003; // unknown or unsupported block opcode
+pub const WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL: i32 = -0x00180004; // no descriptors are free; the request must be retried
+pub const WASMOS_ERR_VIRTIO_BLK_IO_ERROR: i32 = -0x00180005; // the device completed the request with a non-OK virtio-blk status
+pub const WASMOS_ERR_VIRTIO_BLK_TIMEOUT: i32 = -0x00180006; // the device never reported the request on the used ring
+pub const WASMOS_ERR_VIRTIO_BLK_READ_ONLY: i32 = -0x00180007; // the device negotiated VIRTIO_BLK_F_RO and cannot be written
 
 #[inline]
 pub const fn wasmos_err_make(dom: u16, code: u16) -> i32 {
@@ -299,6 +307,7 @@ pub fn wasmos_error_domain_name(d: u16) -> &'static str {
         WASMOS_ERR_DOMAIN_ENV => "env",
         WASMOS_ERR_DOMAIN_FRAMEBUFFER => "framebuffer",
         WASMOS_ERR_DOMAIN_DEVMGR => "devmgr",
+        WASMOS_ERR_DOMAIN_VIRTIO_BLK => "virtio_blk",
         _ => "unknown",
     }
 }
@@ -504,6 +513,13 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_FRAMEBUFFER_TOO_SMALL => "the caller's requested mapping is smaller than the framebuffer",
         WASMOS_ERR_DEVMGR_NO_MOUNT_RULE => "no block/filesystem mount rule matches the requested unit",
         WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY => "unknown or unsupported device-manager query type",
+        WASMOS_ERR_VIRTIO_BLK_NOT_READY => "no virtio-blk device was probed, or bring-up did not complete",
+        WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST => "the request's lba, sector count, or buffer argument is unusable",
+        WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST => "unknown or unsupported block opcode",
+        WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL => "no descriptors are free; the request must be retried",
+        WASMOS_ERR_VIRTIO_BLK_IO_ERROR => "the device completed the request with a non-OK virtio-blk status",
+        WASMOS_ERR_VIRTIO_BLK_TIMEOUT => "the device never reported the request on the used ring",
+        WASMOS_ERR_VIRTIO_BLK_READ_ONLY => "the device negotiated VIRTIO_BLK_F_RO and cannot be written",
         _ => "unknown error",
     }
 }

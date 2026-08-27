@@ -67,6 +67,11 @@ static int32_t g_select_create_result = 1;
 static int32_t g_select_add_result = 0;
 static int g_select_wait_calls;
 static int g_select_destroy_calls;
+/* Timed-park bookkeeping: how many times poll took the bounded branch, and the
+ * timeout it asked for, so a case can assert WHICH wait the loop used rather
+ * than only that it waited. */
+static int g_select_wait_timeout_calls;
+static int32_t g_last_wait_timeout_ms;
 /* Messages delivered by the blocking wait, i.e. traffic that only shows up
  * once the loop actually blocks. */
 static int g_deliver_on_wait;
@@ -184,6 +189,21 @@ int32_t wasmos_ipc_select_wait(int32_t sel) {
     return 0;
 }
 
+/* The bounded park. Like wasmos_ipc_select_wait it does not actually block --
+ * see the MODELLING NOTE -- and it reports WASMOS_TIMEOUT, which is what an
+ * elapsed window looks like to the loop. Delivering on it as well is what lets
+ * a case show that a message beats the timeout to the handler. */
+int32_t wasmos_ipc_select_wait_timeout(int32_t sel, int32_t timeout_ms) {
+    (void)sel;
+    g_select_wait_timeout_calls++;
+    g_last_wait_timeout_ms = timeout_ms;
+    if (g_deliver_on_wait > 0) {
+        g_deliver_on_wait--;
+        inbox_push(0x7000, 0, 0xBB);
+    }
+    return WASMOS_TIMEOUT;
+}
+
 /* Referenced by other inline helpers in libsys.h, never by the dispatch paths
  * under test. wasmos_ipc_yield is no longer part of the hostcall ABI at all;
  * TODO: drop that definition once nothing is suspected of pulling it in. */
@@ -236,6 +256,15 @@ static void on_default(void* user, const wasmos_ipc_message_t* m) {
     trace(user ? (const char*)user : "default", m);
 }
 
+/* The timeout route. It takes no message -- an elapsed window is not a delivery
+ * -- so it traces against a zeroed one and is told apart by its label like the
+ * others. */
+static void on_timeout_trace(void* user) {
+    wasmos_ipc_message_t empty;
+    memset(&empty, 0, sizeof(empty));
+    trace(user ? (const char*)user : "timeout", &empty);
+}
+
 /* Returns the scripted kernel side and the trace to their defaults: an empty
  * inbox, no recorded sends, successful select calls, and no injected wait
  * delivery. Loop objects are NOT touched -- each case declares its own on the
@@ -254,6 +283,8 @@ static void reset(void) {
     g_select_add_result = 0;
     g_select_wait_calls = 0;
     g_select_destroy_calls = 0;
+    g_select_wait_timeout_calls = 0;
+    g_last_wait_timeout_ms = -1;
     g_deliver_on_wait = 0;
     g_trace_count = 0;
     memset(g_trace, 0, sizeof(g_trace));
@@ -579,6 +610,83 @@ static void test_a_failed_wait_is_not_a_park(void) {
     CHECK(wasmos_sys_wait_parked(WASMOS_DENIED) == 0, "a failure did not park at all");
 }
 
+/* A loop with no timeout keeps parking on the untimed wait, which is the
+ * behaviour every loop written before the clock existed relies on. */
+static void test_a_loop_without_a_timeout_parks_untimed(void) {
+    wasmos_sys_event_loop_t loop;
+    reset();
+    wasmos_sys_event_loop_init(&loop, 0x7000, 1);
+    CHECK(loop.poll_timeout_ms == 0, "init leaves the loop without a clock");
+    CHECK(loop.on_timeout == 0, "and without a timeout handler");
+
+    (void)wasmos_sys_event_loop_poll(&loop, 1);
+    CHECK(g_select_wait_calls == 1, "an empty poll parks on the untimed wait");
+    CHECK(g_select_wait_timeout_calls == 0, "and never on the bounded one");
+}
+
+/* With a timeout set, poll takes the bounded branch and passes the interval
+ * through. This is what lets a reactor hold a deadline without driving its own
+ * pump. */
+static void test_a_timeout_bounds_the_park(void) {
+    wasmos_sys_event_loop_t loop;
+    reset();
+    wasmos_sys_event_loop_init(&loop, 0x7000, 1);
+    loop.poll_timeout_ms = 250;
+
+    (void)wasmos_sys_event_loop_poll(&loop, 1);
+    CHECK(g_select_wait_timeout_calls == 1, "an empty poll parks on the bounded wait");
+    CHECK(g_select_wait_calls == 0, "and not on the untimed one");
+    CHECK(g_last_wait_timeout_ms == 250, "the loop's interval is what it asks for");
+}
+
+/* An elapsed window with nothing delivered runs on_timeout. Without this the
+ * bounded park would be pointless: poll would return having done nothing and
+ * whoever was waiting would still be waiting. */
+static void test_an_elapsed_window_runs_the_timeout_handler(void) {
+    wasmos_sys_event_loop_t loop;
+    reset();
+    wasmos_sys_event_loop_init(&loop, 0x7000, 1);
+    loop.poll_timeout_ms = 10;
+    loop.on_timeout = on_timeout_trace;
+    loop.timeout_user = (void*)"tick";
+
+    int handled = wasmos_sys_event_loop_poll(&loop, 1);
+    CHECK(handled == 0, "an elapsed window handled no message");
+    CHECK(traced("tick") == 1, "but it did run the timeout handler");
+}
+
+/* A message that arrives during the bounded window is dispatched as usual, and
+ * the timeout handler does NOT run: a poll reports one outcome, not both. */
+static void test_a_message_during_the_window_beats_the_timeout(void) {
+    wasmos_sys_event_loop_t loop;
+    reset();
+    wasmos_sys_event_loop_init(&loop, 0x7000, 1);
+    loop.poll_timeout_ms = 10;
+    loop.on_timeout = on_timeout_trace;
+    loop.timeout_user = (void*)"tick";
+    wasmos_sys_event_set_default(&loop, on_default, (void*)"default");
+    g_deliver_on_wait = 1;
+
+    int handled = wasmos_sys_event_loop_poll(&loop, 1);
+    CHECK(handled == 1, "the delivered message was handled");
+    CHECK(traced("default") == 1, "by the default handler");
+    CHECK(traced("tick") == 0, "and the timeout handler did not also run");
+}
+
+/* A timeout with no handler installed is inert rather than a crash: the field
+ * is optional, and a loop may want a bounded park purely to re-check its own
+ * state on return. */
+static void test_a_timeout_without_a_handler_is_inert(void) {
+    wasmos_sys_event_loop_t loop;
+    reset();
+    wasmos_sys_event_loop_init(&loop, 0x7000, 1);
+    loop.poll_timeout_ms = 10;
+
+    int handled = wasmos_sys_event_loop_poll(&loop, 1);
+    CHECK(handled == 0, "nothing was handled");
+    CHECK(g_select_wait_timeout_calls == 1, "and the bounded park still happened");
+}
+
 int main(void) {
     struct {
         const char* name;
@@ -600,6 +708,11 @@ int main(void) {
         {"L10 handler registration replaces and bounds",
          test_handler_registration_replaces_and_bounds},
         {"L11 a NULL loop poll is safe", test_a_null_loop_poll_is_safe},
+        {"L12 no timeout parks untimed", test_a_loop_without_a_timeout_parks_untimed},
+        {"L13 a timeout bounds the park", test_a_timeout_bounds_the_park},
+        {"L14 an elapsed window runs on_timeout", test_an_elapsed_window_runs_the_timeout_handler},
+        {"L15 a message beats the timeout", test_a_message_during_the_window_beats_the_timeout},
+        {"L16 a timeout with no handler is inert", test_a_timeout_without_a_handler_is_inert},
     };
 
     /* Randomized order: a case that leaks state must not be able to make its

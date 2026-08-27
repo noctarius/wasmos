@@ -284,6 +284,15 @@ pub const EventLoop = extern struct {
     default_user: ?*anyopaque = null,
     intents: [64]u32 = [_]u32{0} ** 64,
     handlers: [64]u32 = [_]u32{0} ** 64,
+    /// Bound on how long `poll` parks with nothing queued, in milliseconds; 0
+    /// parks until a message arrives. A positive value plus `on_timeout` is how
+    /// a reactor holds a deadline without driving its own pump.
+    poll_timeout_ms: i32 = 0,
+    /// Runs when a bounded park elapses with nothing delivered. Called on the
+    /// poller's stack, so it must not block: settling a promise is the useful
+    /// thing for it to do.
+    on_timeout: ?*const anyopaque = null,
+    timeout_user: ?*anyopaque = null,
 
     /// Binds the loop to `receiver_endpoint` and seeds its request ids at
     /// `request_id_base`, clearing both tables. Also creates a select set over

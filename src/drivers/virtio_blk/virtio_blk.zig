@@ -75,11 +75,12 @@
 //! without competing for the plain "block" name the ATA driver holds for the
 //! boot disk.
 //!
-//! A class instance is a DISK, and its number is (backend << 8) | unit -- here
-//! always (VIRTIO_BLK << 8) | 0, because one virtio-blk device is one disk and
-//! a second disk is a second device with its own driver instance. The number is
-//! derived rather than allocated, so it is the same every boot whatever order
-//! the drivers probed in, and a client can decode it back into the pair a
+//! A class instance is a DISK, and its number is (backend << 8) | unit. One
+//! virtio-blk device is one disk, so the unit identifies the DEVICE: it comes
+//! from the device's place on the bus, not from a counter, so two virtio-blk
+//! devices get different units instead of colliding on one instance. The number
+//! is derived rather than allocated, so it is the same every boot whatever
+//! order the drivers probed in, and a client can decode it back into the pair a
 //! device-manager rule names with DRIVER== and ATTR{unit}.
 //!
 //! The same disk is published to the device-manager inventory, which is what
@@ -171,11 +172,30 @@ const REQ_STATUS_OK: u8 = 0;
 /// an I/O error rather than mistaken for success.
 const REQ_STATUS_UNSET: u8 = 0xFF;
 
-/// This driver serves exactly one disk, so its backend-local unit is 0 and its
-/// `block` class instance is fixed. See the header for why the instance is
-/// derived from (backend, unit) rather than handed out.
-const BLOCK_UNIT: u32 = 0;
-const BLOCK_CLASS_INSTANCE: u32 = (@as(u32, @intCast(abi.BLOCK_BACKEND_VIRTIO_BLK)) << 8) | BLOCK_UNIT;
+/// This driver serves exactly one disk, so its backend-local unit identifies the
+/// DEVICE rather than a drive on it -- and it is taken from where the device
+/// sits on the bus, `(slot << 3) | function`, which is the same packing the
+/// BDF uses and fits a unit's eight bits exactly (5 bits of slot, 3 of
+/// function).
+///
+/// A constant 0 would have been simpler and was wrong: a second virtio-blk
+/// device would claim the same unit, and therefore the same `block` class
+/// instance, and its registration would be refused. The bus address is
+/// intrinsic to the device and stable for a machine configuration, so it does
+/// not depend on which driver probed first -- which is the whole reason the
+/// identity is derived rather than allocated.
+///
+/// TODO: the bus number is dropped, so two devices at the same slot on
+/// different buses still collide. A unit is a byte, so carrying the bus needs
+/// the device manager's record to widen -- the same change that would let two
+/// IDE controllers be told apart.
+fn blockUnit() u32 {
+    return ((g_dev.slot & 0x1F) << 3) | (g_dev.function & 0x07);
+}
+
+fn blockClassInstance() u32 {
+    return (@as(u32, @intCast(abi.BLOCK_BACKEND_VIRTIO_BLK)) << 8) | blockUnit();
+}
 
 /// virtio-blk defines exactly one queue, index 0, the requestq. MAX_QUEUE caps
 /// the queue size this driver accepts from the device.
@@ -988,14 +1008,14 @@ fn publishBlockDevice(proc_endpoint: i32) void {
         endpoint(),
         op.DEVMGR_PUBLISH_BLOCK_DEVICE,
         0,
-        @intCast(BLOCK_UNIT),
+        @intCast(blockUnit()),
         @intCast(g_dev.capacity_sectors),
         1, // present; active_service is the device manager's to set
         abi.BLOCK_BACKEND_VIRTIO_BLK,
     );
     var line = driver.Line{};
-    _ = line.str("[virtio-blk] published unit=").dec(BLOCK_UNIT);
-    _ = line.str(" instance=").dec(BLOCK_CLASS_INSTANCE).str(" sectors=").dec(g_dev.capacity_sectors);
+    _ = line.str("[virtio-blk] published unit=").dec(blockUnit());
+    _ = line.str(" instance=").dec(blockClassInstance()).str(" sectors=").dec(g_dev.capacity_sectors);
     line.end();
 }
 
@@ -1066,7 +1086,7 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     // it finds whichever block backend is present without naming this driver.
     // The plain "block" NAME is deliberately not claimed: the ATA driver holds
     // it for the boot disk.
-    if (driver.registerService(proc_endpoint, endpoint(), "virtio-blk", "block", BLOCK_CLASS_INSTANCE, 1) == null) {
+    if (driver.registerService(proc_endpoint, endpoint(), "virtio-blk", "block", blockClassInstance(), 1) == null) {
         driver.log("[virtio-blk] service registration failed");
         return;
     }

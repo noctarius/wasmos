@@ -203,7 +203,7 @@ endpoint-scoped and may repeat across subsystems.
 | `DEVMGR_PUBLISH_DEVICE` | 0x900 | req |  |
 | `DEVMGR_PCI_SCAN_DONE` | 0x901 | resp |  |
 | `DEVMGR_QUERY_MOUNT_REQ` | 0x902 | req |  |
-| `DEVMGR_PUBLISH_BLOCK_DEVICE` | 0x903 | req |  |
+| `DEVMGR_PUBLISH_BLOCK_DEVICE` | 0x903 | req | Announce one block device to the device-manager inventory. arg0 [7:0]=unit, arg1=sector_count, arg2 [1]=active_service [0]=present, arg3=BLOCK_BACKEND_* naming the publishing backend.  The unit is BACKEND-LOCAL: ATA numbers its drives 0 and 1 and a virtio-blk device calls its only disk 0, so a device is identified by the pair (backend, unit) and the inventory keys on both. Publishing without a backend leaves the record BLOCK_BACKEND_UNKNOWN, which no `DRIVER==` rule matches.  |
 | `DEVMGR_QUERY_BLOCK_MOUNT_REQ` | 0x904 | req |  |
 | `DEVMGR_ACPI_SCAN_DONE` | 0x905 | resp | ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device; device_id field carries the I/O base address for serial (class 0x07).  |
 | `DEVMGR_PUBLISH_DEVICE_DESC` | 0x906 | req | Publish one enumerated PCI function as a wasmos_pci_device_desc_t held in a transfer buffer the publisher has borrowed to this endpoint. arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0). Each device occupies its own offset, so the publisher never overwrites a descriptor the receiver has not read yet and no acknowledgement is needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words cannot describe six BARs and the capability offsets.  |

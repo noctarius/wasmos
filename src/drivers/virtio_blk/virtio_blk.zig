@@ -74,12 +74,24 @@
 //! "block", so a client discovers it by class without naming this driver, and
 //! without competing for the plain "block" name the ATA driver holds for the
 //! boot disk.
+//!
+//! A class instance is a DISK, and its number is (backend << 8) | unit -- here
+//! always (VIRTIO_BLK << 8) | 0, because one virtio-blk device is one disk and
+//! a second disk is a second device with its own driver instance. The number is
+//! derived rather than allocated, so it is the same every boot whatever order
+//! the drivers probed in, and a client can decode it back into the pair a
+//! device-manager rule names with DRIVER== and ATTR{unit}.
+//!
+//! The same disk is published to the device-manager inventory, which is what
+//! makes it visible to a block rule at all -- without that a filesystem cannot
+//! be mounted on it, however well the driver works.
 
 const driver = @import("driver.zig");
 const vring = @import("vring.zig");
 const co = @import("coroutine.zig");
 const op = @import("wasmos_opcodes.zig");
 const status = @import("wasmos_status.zig");
+const abi = @import("wasmos_constants.zig");
 
 /// `WASMOS_PCI_MSI_KIND_MSIX`, as PCI_IPC_MSI_QUERY reports it in arg0. MSI-X
 /// wins when a device offers both: it addresses each vector independently,
@@ -158,6 +170,12 @@ const REQ_STATUS_OK: u8 = 0;
 /// reported the chain without touching its status -- a device bug, reported as
 /// an I/O error rather than mistaken for success.
 const REQ_STATUS_UNSET: u8 = 0xFF;
+
+/// This driver serves exactly one disk, so its backend-local unit is 0 and its
+/// `block` class instance is fixed. See the header for why the instance is
+/// derived from (backend, unit) rather than handed out.
+const BLOCK_UNIT: u32 = 0;
+const BLOCK_CLASS_INSTANCE: u32 = (@as(u32, @intCast(abi.BLOCK_BACKEND_VIRTIO_BLK)) << 8) | BLOCK_UNIT;
 
 /// virtio-blk defines exactly one queue, index 0, the requestq. MAX_QUEUE caps
 /// the queue size this driver accepts from the device.
@@ -947,6 +965,40 @@ fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
 /// A failure leaves the device not-ready. The root task then still runs and
 /// answers every request with NOT_READY, which is what a client needs: a driver
 /// that exited would leave its class instance registered to a dead process.
+/// Announce this disk to the device-manager inventory, which is the registry a
+/// block rule matches against -- so without this the disk exists as a service
+/// but no filesystem can be mounted on it.
+///
+/// arg0 = unit (backend-local), arg1 = sectors, arg2 bit0 = present, and arg3
+/// names the backend so the device manager can tell this disk apart from an ATA
+/// unit with the same number.
+///
+/// Fire-and-forget, matching the ATA publisher: the inventory is a notification
+/// and the device manager owns what it does with it. A device manager that is
+/// not up yet simply never learns about this disk, which is why the lookup is
+/// retried rather than assumed.
+fn publishBlockDevice(proc_endpoint: i32) void {
+    if (!g_dev.ready) return;
+    const devmgr = driver.lookupService(proc_endpoint, "devmgr.inv", 32, 256) orelse {
+        driver.log("[virtio-blk] devmgr inventory unavailable; disk not published");
+        return;
+    };
+    _ = driver.send(
+        devmgr,
+        endpoint(),
+        op.DEVMGR_PUBLISH_BLOCK_DEVICE,
+        0,
+        @intCast(BLOCK_UNIT),
+        @intCast(g_dev.capacity_sectors),
+        1, // present; active_service is the device manager's to set
+        abi.BLOCK_BACKEND_VIRTIO_BLK,
+    );
+    var line = driver.Line{};
+    _ = line.str("[virtio-blk] published unit=").dec(BLOCK_UNIT);
+    _ = line.str(" instance=").dec(BLOCK_CLASS_INSTANCE).str(" sectors=").dec(g_dev.capacity_sectors);
+    line.end();
+}
+
 fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.c) void {
     _ = user;
     _ = arg0;
@@ -1014,9 +1066,10 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     // it finds whichever block backend is present without naming this driver.
     // The plain "block" NAME is deliberately not claimed: the ATA driver holds
     // it for the boot disk.
-    if (driver.registerService(proc_endpoint, endpoint(), "virtio-blk", "block", 0, 1) == null) {
+    if (driver.registerService(proc_endpoint, endpoint(), "virtio-blk", "block", BLOCK_CLASS_INSTANCE, 1) == null) {
         driver.log("[virtio-blk] service registration failed");
         return;
     }
+    publishBlockDevice(proc_endpoint);
     driver.notifyReady(proc_endpoint);
 }

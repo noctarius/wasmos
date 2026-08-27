@@ -302,6 +302,15 @@ const VIRTIO_SERIAL_IPC_ERROR int32 = 0x8BF
 const DEVMGR_PUBLISH_DEVICE int32 = 0x900
 const DEVMGR_PCI_SCAN_DONE int32 = 0x901
 const DEVMGR_QUERY_MOUNT_REQ int32 = 0x902
+// Announce one block device to the device-manager inventory.
+// arg0 [7:0]=unit, arg1=sector_count, arg2 [1]=active_service [0]=present,
+// arg3=BLOCK_BACKEND_* naming the publishing backend.
+//
+// The unit is BACKEND-LOCAL: ATA numbers its drives 0 and 1 and a
+// virtio-blk device calls its only disk 0, so a device is identified by
+// the pair (backend, unit) and the inventory keys on both. Publishing
+// without a backend leaves the record BLOCK_BACKEND_UNKNOWN, which no
+// `DRIVER==` rule matches.
 const DEVMGR_PUBLISH_BLOCK_DEVICE int32 = 0x903
 const DEVMGR_QUERY_BLOCK_MOUNT_REQ int32 = 0x904
 // ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;

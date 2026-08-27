@@ -1,6 +1,7 @@
 /* blkinfo.c - report the block devices registered under the "block" class.
  *
- *   blkinfo [--write] [lba]
+ *   blkinfo [lba]
+ *   blkinfo --write <instance> <lba>
  *
  * Enumerates the class, asks each provider for its geometry
  * (BLOCK_IPC_IDENTIFY_REQ), and reads one sector from it
@@ -9,13 +10,21 @@
  *
  * --write OVERWRITES that sector with a generated pattern and reads it back,
  * which is the only way to exercise a backend's write direction from the shell.
- * It destroys whatever was there, on EVERY provider of the class, so the sector
- * is named explicitly rather than defaulting to a safe-looking one -- there is
- * no safe-looking sector on a mounted volume.
+ * BOTH the instance and the sector must be given, and neither defaults: this
+ * enumerates the boot disk, so a tool that wrote to whatever it found, or to
+ * sector 0 because none was named, would be a footgun. There is no
+ * safe-looking sector on a mounted volume.
  *
  * It talks to whatever backend registered the class, so it is not specific to
- * any one driver; the ATA driver holds the plain "block" NAME for the boot disk
- * and does not appear here.
+ * any one driver. A class instance is one DISK and its number is
+ * (backend << 8) | unit, so this decodes it back into the pair a
+ * device-manager rule names with DRIVER== and ATTR{unit}, and passes the unit
+ * on to the block protocol.
+ *
+ * Each provider is queried from its OWN reply endpoint. The ATA driver binds a
+ * client endpoint to one unit exclusively on first use, so asking it about both
+ * of its disks over a single endpoint gets the second one refused -- one
+ * endpoint per disk is what a real client (a filesystem driver) does anyway.
  */
 #include <stdint.h>
 #include "stdio.h"
@@ -40,6 +49,27 @@ static const char BLKINFO_WRITE_TAG[] = "WASMOS-BLKWRITE";
 
 static int32_t g_reply_endpoint = -1;
 static int32_t g_request_id = 1;
+
+/* Split a `block` class instance into the pair that identifies the disk. */
+static uint8_t instance_backend(uint32_t instance) {
+    return (uint8_t)((instance >> 8) & 0xFFu);
+}
+static uint8_t instance_unit(uint32_t instance) {
+    return (uint8_t)(instance & 0xFFu);
+}
+
+/* Kept in step with block_backend_name() in the device manager and
+ * block_backend_from_name() in its rule parser; the names are the drivers'
+ * manifest package names, which is what a rule's DRIVER== spells. */
+static const char* backend_name(uint8_t backend) {
+    if (backend == (uint8_t)BLOCK_BACKEND_ATA) {
+        return "ata";
+    }
+    if (backend == (uint8_t)BLOCK_BACKEND_VIRTIO_BLK) {
+        return "virtio-blk";
+    }
+    return "unknown";
+}
 
 /* True when `s` starts with `prefix`. */
 static int str_prefix(const char* s, const char* prefix) {
@@ -74,13 +104,13 @@ static uint32_t parse_u32(const char* s, uint32_t fallback) {
 
 /* Geometry of one provider, or -1 when it does not answer with a usable
  * BLOCK_IPC_IDENTIFY_RESP. */
-static int identify(int32_t endpoint, uint32_t* out_sectors) {
+static int identify(int32_t endpoint, uint8_t unit, uint32_t* out_sectors) {
     wasmos_ipc_message_t reply;
     if (wasmos_ipc_call(endpoint,
                         g_reply_endpoint,
                         BLOCK_IPC_IDENTIFY_REQ,
                         g_request_id++,
-                        0,
+                        (int32_t)unit,
                         0,
                         0,
                         0,
@@ -177,9 +207,32 @@ int main(void) {
     (void)wasmos_startup_args(args, sizeof(args));
     const char* rest = args;
     int do_write = 0;
+    uint32_t write_instance = 0;
     if (str_prefix(rest, "--write")) {
         do_write = 1;
         rest += 7;
+        while (*rest == ' ') {
+            rest++;
+        }
+        /* No instance means no target, and writing to whatever happens to be
+         * enumerated is not a reasonable default. */
+        if (*rest < '0' || *rest > '9') {
+            (void)printf("[blkinfo] --write needs an instance: blkinfo --write <instance> [lba]\n");
+            return 1;
+        }
+        write_instance = parse_u32(rest, 0u);
+        while (*rest >= '0' && *rest <= '9') {
+            rest++;
+        }
+        while (*rest == ' ') {
+            rest++;
+        }
+        /* And no default sector either: falling back to 0 would put the most
+         * destructive invocation one omitted argument away from a boot sector. */
+        if (*rest < '0' || *rest > '9') {
+            (void)printf("[blkinfo] --write needs a sector: blkinfo --write <instance> <lba>\n");
+            return 1;
+        }
     }
     uint32_t lba = parse_u32(rest, 0u);
 
@@ -211,25 +264,37 @@ int main(void) {
          * reader) can see that read_sector writes it. */
         uint8_t preview[BLKINFO_PREVIEW_BYTES] = {0};
         uint32_t sectors = 0;
+        const uint8_t backend = instance_backend(providers[i].instance);
+        const uint8_t unit = instance_unit(providers[i].instance);
         int rc;
 
-        if (identify((int32_t)providers[i].endpoint, &sectors) != 0) {
-            (void)printf("[blkinfo] instance=%u identify failed\n",
-                         (unsigned)providers[i].instance);
+        /* A fresh endpoint per disk; see the header. */
+        g_reply_endpoint = wasmos_ipc_create_endpoint();
+        if (g_reply_endpoint < 0) {
+            (void)printf("[blkinfo] endpoint create failed\n");
+            return 1;
+        }
+        if (identify((int32_t)providers[i].endpoint, unit, &sectors) != 0) {
+            (void)printf("[blkinfo] instance=%u driver=%s unit=%u identify failed\n",
+                         (unsigned)providers[i].instance,
+                         backend_name(backend),
+                         (unsigned)unit);
             continue;
         }
-        (void)printf("[blkinfo] instance=%u sectors=%u bytes=%u\n",
+        (void)printf("[blkinfo] instance=%u driver=%s unit=%u sectors=%u bytes=%u\n",
                      (unsigned)providers[i].instance,
+                     backend_name(backend),
+                     (unsigned)unit,
                      (unsigned)sectors,
                      (unsigned)(sectors * BLKINFO_SECTOR_BYTES));
 
-        if (do_write) {
+        if (do_write && providers[i].instance == write_instance) {
             rc = write_sector((int32_t)providers[i].endpoint, lba);
             if (rc != 0) {
-                (void)printf("[blkinfo] instance=%u lba=%u write failed rc=%d\n",
+                (void)printf("[blkinfo] instance=%u lba=%u write failed: %s\n",
                              (unsigned)providers[i].instance,
                              (unsigned)lba,
-                             rc);
+                             wasmos_error_code_name(rc));
                 continue;
             }
             (void)printf("[blkinfo] instance=%u lba=%u write ok\n",
@@ -239,10 +304,10 @@ int main(void) {
 
         rc = read_sector((int32_t)providers[i].endpoint, lba, preview);
         if (rc != 0) {
-            (void)printf("[blkinfo] instance=%u lba=%u read failed rc=%d\n",
+            (void)printf("[blkinfo] instance=%u lba=%u read failed: %s\n",
                          (unsigned)providers[i].instance,
                          (unsigned)lba,
-                         rc);
+                         wasmos_error_code_name(rc));
             continue;
         }
         (void)printf(

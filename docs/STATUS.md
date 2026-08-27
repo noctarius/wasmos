@@ -884,6 +884,26 @@ linked feature documents for rationale and rollout plans.
   `examples/c/wfs_write_smoke` covers the layer no host suite can link — the
   driver's IPC dispatch — going through plain libc for an inline file, a write
   straddling a block boundary, a read-only fd, and the `O_CREAT` refusal.
+- WFS has a NAMESPACE writer: create, mkdir, unlink, rmdir and rename, over object
+  allocation and per-block record surgery. Directories GROW — an insert with no
+  room allocates a block, lays it out, and appends it to the extent map, extending
+  the last extent when the new block continues it so a directory that grew
+  repeatedly stays at one extent rather than burning the six inline slots.
+  Order everywhere is whichever sequence leaves a LEAK when interrupted: create
+  writes the object before the directory record; unlink and rmdir take the record
+  off disk before freeing anything; rename INSERTS before removing, so an
+  interruption leaves the object reachable under both names rather than neither.
+  A leak is space fsck reclaims; the alternative is an entry naming an id that is
+  unallocated or reused, which no later pass can repair.
+  rmdir refuses a non-empty directory (`.` and `..` are not contents), rename does
+  not replace an existing name, and deletion frees an object's extents DIRECTLY
+  rather than through truncate — truncate refuses a directory on purpose, and that
+  guarantee is not relaxed for an internal caller.
+  `tests/unit/test_wfs_namespace.c` verifies the whole image after each mutation:
+  every directory chain validates, every tail checksum matches, and every entry
+  names a record that verifies. That is what makes its failure cases mean
+  something — an assertion that an error code came back would also pass with a
+  half-written directory on disk.
 - Still deferred in WFS: the extent-tree WRITER and inline-to-extent promotion
   (both refused explicitly rather than half-done, with TODOs at the sites); a sync
   path that writes the superblock back, so on-disk `free_blocks` trails the bitmaps

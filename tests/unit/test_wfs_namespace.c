@@ -22,6 +22,9 @@
 #include "wfs_mount.h"
 #include "wfs_namespace.h"
 #include "wfs_path.h"
+#include "wfs_alloc.h"
+#include "wfs_crc32c.h"
+#include "wfs_dirent.h"
 #include "wfs_super.h"
 
 static int g_failures;
@@ -490,9 +493,204 @@ static void test_namespace_ops_mark_the_volume_dirty(void) {
     wfs_stub_teardown();
 }
 
+/* ---- verifying the image ------------------------------------------------ */
+
+/* Read an object record straight out of the image and check its checksum.
+ * Returns 0 on success. The record is copied into `out` decoded only as far as
+ * these checks need. */
+static int image_object(uint32_t id, uint16_t* out_type, uint64_t* out_size,
+                        uint32_t* out_extent_count, uint64_t extents[WFS_INLINE_EXTENTS][3]) {
+    uint32_t bs = wfs_stub_block_size;
+    uint32_t per_block = wfs_objects_per_block(bs);
+    const uint8_t* d;
+    uint32_t stored;
+    uint32_t i;
+
+    if (id == 0u || id >= g_layout.total_objects) {
+        return -1;
+    }
+    d = wfs_stub_image + (size_t)(g_layout.object_table_start + id / per_block) * bs +
+        (size_t)(id % per_block) * WFS_OBJECT_SIZE;
+    stored = (uint32_t)d[offsetof(struct wfs_object, checksum)] |
+             ((uint32_t)d[offsetof(struct wfs_object, checksum) + 1] << 8) |
+             ((uint32_t)d[offsetof(struct wfs_object, checksum) + 2] << 16) |
+             ((uint32_t)d[offsetof(struct wfs_object, checksum) + 3] << 24);
+    if (stored !=
+        wfs_checksum_struct(
+            k_uuid, id, d, WFS_OBJECT_SIZE, (uint32_t)offsetof(struct wfs_object, checksum))) {
+        return -1;
+    }
+    *out_type = (uint16_t)((uint32_t)d[offsetof(struct wfs_object, type)] |
+                           ((uint32_t)d[offsetof(struct wfs_object, type) + 1] << 8));
+    *out_size = 0u;
+    for (i = 0; i < 8u; ++i) {
+        *out_size |= (uint64_t)d[offsetof(struct wfs_object, size) + i] << (i * 8u);
+    }
+    *out_extent_count = (uint32_t)d[offsetof(struct wfs_object, extent_count)] |
+                        ((uint32_t)d[offsetof(struct wfs_object, extent_count) + 1] << 8) |
+                        ((uint32_t)d[offsetof(struct wfs_object, extent_count) + 2] << 16) |
+                        ((uint32_t)d[offsetof(struct wfs_object, extent_count) + 3] << 24);
+    if (*out_extent_count > WFS_INLINE_EXTENTS) {
+        return -1;
+    }
+    for (i = 0; i < *out_extent_count; ++i) {
+        const uint8_t* e = d + offsetof(struct wfs_object, extents) + i * sizeof(struct wfs_extent);
+        uint32_t k;
+
+        extents[i][0] = 0u;
+        extents[i][1] = 0u;
+        extents[i][2] = 0u;
+        for (k = 0; k < 8u; ++k) {
+            extents[i][0] |= (uint64_t)e[k] << (k * 8u);
+            extents[i][1] |= (uint64_t)e[8u + k] << (k * 8u);
+        }
+        for (k = 0; k < 4u; ++k) {
+            extents[i][2] |= (uint64_t)e[16u + k] << (k * 8u);
+        }
+    }
+    return 0;
+}
+
+/* Walk the whole tree in the IMAGE and check that it is internally consistent:
+ * every directory block's record chain validates and its tail checksum matches,
+ * and every entry names an object whose own record verifies.
+ *
+ * This is what makes a failure assertion mean something. "The call returned
+ * NO_SPACE and the source still resolves" would also hold if the failure came
+ * from somewhere unintended -- a growth allocation, the object allocator -- while
+ * leaving a half-written directory behind. Checking the image afterwards is the
+ * difference between testing the ordering and testing that an error code came
+ * back.
+ *
+ * Returns the number of live entries found, or -1 on any inconsistency. */
+static int32_t verify_subtree(uint32_t dir_id, uint32_t depth) {
+    uint32_t bs = wfs_stub_block_size;
+    uint32_t usable = wfs_dir_usable_bytes(bs);
+    uint16_t type = 0u;
+    uint64_t size = 0u;
+    uint32_t extent_count = 0u;
+    uint64_t extents[WFS_INLINE_EXTENTS][3];
+    uint32_t blocks;
+    uint32_t logical;
+    int32_t found = 0;
+
+    if (depth > 8u) {
+        return -1; /* a cycle, or deeper than any fixture builds */
+    }
+    if (image_object(dir_id, &type, &size, &extent_count, extents) != 0) {
+        return -1;
+    }
+    if (type != WFS_TYPE_DIR) {
+        return -1;
+    }
+    blocks = (uint32_t)((size + bs - 1u) / bs);
+    for (logical = 0; logical < blocks; ++logical) {
+        const uint8_t* blk = 0;
+        uint32_t phys = 0u;
+        uint32_t i;
+        uint32_t off = 0u;
+        uint32_t tail_at;
+        uint32_t stored;
+
+        for (i = 0; i < extent_count; ++i) {
+            if ((uint64_t)logical >= extents[i][0] &&
+                (uint64_t)logical < extents[i][0] + extents[i][2]) {
+                phys = (uint32_t)(extents[i][1] + ((uint64_t)logical - extents[i][0]));
+                break;
+            }
+        }
+        if (phys == 0u) {
+            continue; /* a hole maps nothing */
+        }
+        if (phys >= wfs_stub_blocks) {
+            return -1;
+        }
+        blk = wfs_stub_image + (size_t)phys * bs;
+        if (wfs_dirent_validate(blk, bs) != WASMOS_ERR_NONE) {
+            return -1;
+        }
+        tail_at = usable + (uint32_t)offsetof(struct wfs_dir_tail, checksum);
+        stored = (uint32_t)blk[tail_at] | ((uint32_t)blk[tail_at + 1] << 8) |
+                 ((uint32_t)blk[tail_at + 2] << 16) | ((uint32_t)blk[tail_at + 3] << 24);
+        if (stored != wfs_checksum_struct(k_uuid, phys, blk, bs, tail_at)) {
+            return -1;
+        }
+        while (off + WFS_DIR_ENTRY_HEADER <= usable) {
+            uint32_t len = (uint32_t)blk[off + 8u] | ((uint32_t)blk[off + 9u] << 8);
+            uint32_t nl = blk[off + 10u];
+            uint32_t id = 0u;
+            uint32_t k;
+
+            for (k = 0; k < 4u; ++k) {
+                id |= (uint32_t)blk[off + k] << (k * 8u);
+            }
+            if (id != 0u && nl != 0u) {
+                const uint8_t* nm = blk + off + WFS_DIR_ENTRY_HEADER;
+                int is_dot = nl == 1u && nm[0] == '.';
+                int is_dotdot = nl == 2u && nm[0] == '.' && nm[1] == '.';
+                uint16_t child_type = 0u;
+                uint64_t child_size = 0u;
+                uint32_t child_extents = 0u;
+                uint64_t child_ext[WFS_INLINE_EXTENTS][3];
+
+                /* Every entry must name a record that VERIFIES. An entry pointing
+                 * at an unallocated or half-written record is the corruption the
+                 * write orderings exist to prevent. */
+                if (image_object(id, &child_type, &child_size, &child_extents, child_ext) != 0) {
+                    return -1;
+                }
+                if (!is_dot && !is_dotdot) {
+                    found++;
+                    if (child_type == WFS_TYPE_DIR) {
+                        int32_t sub = verify_subtree(id, depth + 1u);
+
+                        if (sub < 0) {
+                            return -1;
+                        }
+                        found += sub;
+                    }
+                }
+            }
+            off += len;
+        }
+    }
+    return found;
+}
+
+static void expect_consistent(const char* what) {
+    g_checks++;
+    if (verify_subtree(WFS_OBJECT_ROOT, 0u) < 0) {
+        g_failures++;
+        printf("[fail] %s: the image is not internally consistent\n", what);
+    }
+}
+
+/* Allocate blocks until the volume has none, so a directory cannot GROW.
+ * Returns how many runs were taken. */
+static uint32_t exhaust_blocks(void) {
+    uint32_t runs = 0u;
+
+    for (;;) {
+        wfs_alloc_ctx_t a;
+        wasmos_wasm_coroutine_t task;
+
+        memset(&a, 0, sizeof(a));
+        a.vol = &g_vol;
+        a.want = 64u;
+        if (wfs_stub_run_task(&task, wfs_alloc_blocks_task, &a) != 0 || a.length == 0u) {
+            break;
+        }
+        runs++;
+        if (runs > 100000u) {
+            break;
+        }
+    }
+    return runs;
+}
+
 /* Fill a directory until it takes no more, returning how many names went in.
- * Directories cannot grow yet, so this is a bounded and legitimate way to make
- * the next insert fail. */
+ * Only bounded once the volume has no free block: a directory GROWS, so with
+ * space available this would run until the object table is exhausted instead. */
 static uint32_t fill_directory(const char* dir) {
     uint32_t i;
 
@@ -520,11 +718,17 @@ static uint32_t fill_directory(const char* dir) {
  * Rename inserts the destination BEFORE removing the source. Interrupted, the
  * object is reachable under both names; the other order leaves it reachable under
  * neither, which loses the file. A crash cannot be staged here, but a FAILING
- * insert has the same shape: fill the destination directory so the insert cannot
- * succeed, and the source must survive untouched.
+ * insert has the same shape.
  *
- * Reversing the two in wfs_namespace.c makes exactly this case fail -- checked,
- * because without it nothing in this suite constrained the order at all. */
+ * Manufacturing that failure takes two steps now that directories grow: exhaust
+ * the volume's blocks so no directory CAN grow, then fill the destination's
+ * existing block. Reversing the two operations in wfs_namespace.c makes exactly
+ * this case fail -- checked, because without it nothing constrained the order.
+ *
+ * The image is verified afterwards, which is what stops this passing for the
+ * wrong reason: "NO_SPACE came back and the source still resolves" would also
+ * hold if the failure arrived from somewhere unintended while leaving a
+ * half-written directory behind. */
 static void test_a_failed_rename_leaves_the_source_in_place(void) {
     uint32_t id;
     uint32_t placed;
@@ -536,22 +740,26 @@ static void test_a_failed_rename_leaves_the_source_in_place(void) {
     id = resolve("/hello.txt");
     expect(id != 0u, "the source resolves to begin with");
 
+    expect(exhaust_blocks() > 0u, "the volume's blocks are exhausted");
     placed = fill_directory("/etc");
-    expect(placed > 0u, "the destination directory took some entries");
+    expect(placed > 0u, "and the destination's own block is filled");
+    expect_consistent("after filling the destination");
 
     expect_rc(wfs_ns_rename(&g_vol, WFS_OBJECT_ROOT, "hello.txt", 9u, "/etc/hello.txt", 14u, OP_NS),
               WASMOS_ERR_FS_NO_SPACE,
               "the rename fails for want of room");
     expect_u32(resolve("/hello.txt"), id, "and the source is still there, under its own name");
     expect_u32(resolve("/etc/hello.txt"), 0u, "with nothing left behind at the destination");
+    /* And nothing else was damaged on the way to that failure. */
+    expect_consistent("after the failed rename");
 
     wfs_stub_teardown();
 }
 
 /* A create whose directory record cannot be inserted leaks an object rather than
  * writing an entry that names an unallocated id. The leak is what fsck reclaims;
- * the alternative is corruption no pass can repair. What must hold is that the
- * volume is still consistent -- every name that resolved before still resolves. */
+ * the alternative is corruption no pass can repair. So what must hold is that the
+ * image is still consistent and every name that resolved before still does. */
 static void test_a_failed_create_leaves_the_volume_consistent(void) {
     uint32_t id = 0u;
     uint32_t placed;
@@ -560,18 +768,109 @@ static void test_a_failed_create_leaves_the_volume_consistent(void) {
         wfs_stub_teardown();
         return;
     }
+    expect(exhaust_blocks() > 0u, "the volume's blocks are exhausted");
     placed = fill_directory("/etc");
-    expect(placed > 0u, "the directory took some entries");
+    expect(placed > 0u, "the directory's own block is filled");
 
     expect_rc(wfs_ns_create(
                   &g_vol, WFS_OBJECT_ROOT, "/etc/one-more", 13u, WFS_TYPE_FILE, 0644u, OP_NS, &id),
               WASMOS_ERR_FS_NO_SPACE,
               "the create fails for want of room");
     expect_u32(resolve("/etc/one-more"), 0u, "the name does not resolve");
-    /* Everything that was reachable still is: no entry was left half-written. */
     expect(resolve("/hello.txt") != 0u, "the other entries still resolve");
     expect(resolve("/docs/big.txt") != 0u, "including nested ones");
     expect(resolve("/etc/p0000") != 0u, "and the ones this case created");
+    expect_consistent("after the failed create");
+
+    wfs_stub_teardown();
+}
+
+/* ---- directory growth --------------------------------------------------- */
+
+/* A directory outgrows its first block. Every name has to stay reachable across
+ * the boundary, which is what a growth that mislaid the extent map would break --
+ * and the image is verified, so a growth that produced a block no scan can walk
+ * fails here rather than at some later read. */
+static void test_a_directory_grows_past_one_block(void) {
+    uint32_t i;
+    uint32_t made = 0u;
+    /* More entries than one 4096-byte block holds: the tail leaves 4080 bytes and
+     * each of these needs 24, so ~170 fit and 400 cannot. */
+    const uint32_t want = 400u;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    for (i = 0; i < want; ++i) {
+        char path[32];
+        uint32_t id = 0u;
+
+        snprintf(path, sizeof(path), "/etc/grow%04u", (unsigned)i);
+        if (wfs_ns_create(&g_vol,
+                          WFS_OBJECT_ROOT,
+                          path,
+                          (uint32_t)strlen(path),
+                          WFS_TYPE_FILE,
+                          0644u,
+                          OP_NS,
+                          &id) != WASMOS_ERR_NONE) {
+            break;
+        }
+        made++;
+    }
+    expect_u32(made, want, "every name went in, so the directory grew");
+    expect(resolve("/etc") != 0u, "the directory still resolves");
+    expect(g_path.object.out.size > 4096u, "and now spans more than one block");
+    expect(g_path.object.out.extent_count >= 1u, "with its extent map intact");
+
+    /* Reachability across the boundary, not just the count: the first name, the
+     * last, and one in between. */
+    expect(resolve("/etc/grow0000") != 0u, "the first name is reachable");
+    expect(resolve("/etc/grow0199") != 0u, "one past the first block is reachable");
+    expect(resolve("/etc/grow0399") != 0u, "and so is the last");
+    expect(resolve("/etc/wfs.conf") == 0u, "a name never created does not resolve");
+    expect_consistent("after growing the directory");
+
+    wfs_stub_teardown();
+}
+
+/* Growth is not one-way: an entry in a grown-into block can be removed, and the
+ * ones around it survive. */
+static void test_an_entry_in_a_grown_block_can_be_removed(void) {
+    uint32_t i;
+    uint32_t victim;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    for (i = 0; i < 300u; ++i) {
+        char path[32];
+        uint32_t id = 0u;
+
+        snprintf(path, sizeof(path), "/etc/g%04u", (unsigned)i);
+        if (wfs_ns_create(&g_vol,
+                          WFS_OBJECT_ROOT,
+                          path,
+                          (uint32_t)strlen(path),
+                          WFS_TYPE_FILE,
+                          0644u,
+                          OP_NS,
+                          &id) != WASMOS_ERR_NONE) {
+            break;
+        }
+    }
+    victim = resolve("/etc/g0250");
+    expect(victim != 0u, "a name in a grown-into block resolves");
+
+    expect_rc(wfs_ns_unlink(&g_vol, WFS_OBJECT_ROOT, "/etc/g0250", 10u, OP_NS),
+              WASMOS_ERR_NONE,
+              "and can be unlinked");
+    expect_u32(resolve("/etc/g0250"), 0u, "it no longer resolves");
+    expect(resolve("/etc/g0249") != 0u, "its neighbour below survives");
+    expect(resolve("/etc/g0251") != 0u, "and its neighbour above");
+    expect_consistent("after removing from a grown block");
 
     wfs_stub_teardown();
 }
@@ -593,6 +892,8 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_namespace_ops_mark_the_volume_dirty),
     WASMOS_TEST_CASE(test_a_failed_rename_leaves_the_source_in_place),
     WASMOS_TEST_CASE(test_a_failed_create_leaves_the_volume_consistent),
+    WASMOS_TEST_CASE(test_a_directory_grows_past_one_block),
+    WASMOS_TEST_CASE(test_an_entry_in_a_grown_block_can_be_removed),
 };
 
 int main(void) {

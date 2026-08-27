@@ -296,10 +296,93 @@ static wasmos_error_code_t ns_find_entry(wfs_volume_t* vol, const struct wfs_obj
     return WASMOS_ERR_FS_NOT_FOUND;
 }
 
-/* Insert a record into whichever of a directory's blocks has room. */
-static wasmos_error_code_t ns_insert_entry(wfs_volume_t* vol, const struct wfs_object* dir,
-                                           const char* name, uint32_t name_len, uint32_t id,
-                                           uint8_t type) {
+/* Append one freshly allocated block to a directory's extent map and grow its
+ * size by a block.
+ *
+ * Extends the last extent when the new block continues it both logically and
+ * physically, so a directory that grew several times stays at one extent rather
+ * than accumulating one per growth and hitting the inline-extent limit early.
+ *
+ * Returns WASMOS_ERR_FS_UNSUPPORTED when the map is full: growth past
+ * WFS_INLINE_EXTENTS extents needs the extent TREE, whose reader exists and whose
+ * writer does not.
+ *
+ * The reseal below is defensive rather than load-bearing today: every caller
+ * follows a growth with an ns_patch_record on the same record, which reseals it
+ * anyway, so removing this one breaks no test. It stays because a function that
+ * writes a checksummed record must not leave it unsealed regardless of what its
+ * caller does next -- the alternative is an invariant that holds by coincidence. */
+static wasmos_error_code_t ns_append_dir_block(wfs_volume_t* vol, uint32_t dir_id,
+                                               const struct wfs_object* dir, uint32_t phys,
+                                               uint64_t now_ns) {
+    uint32_t bs = vol->super.block_size;
+    uint32_t per_block = wfs_objects_per_block(bs);
+    uint32_t rec_block = vol->super.object_table_start + dir_id / per_block;
+    uint32_t at = (dir_id % per_block) * WFS_OBJECT_SIZE;
+    uint64_t logical = dir_block_count(vol, dir);
+    uint32_t count = dir->extent_count;
+    uint8_t* d;
+    uint32_t e;
+    wasmos_error_code_t rc;
+    int extended = 0;
+
+    if (count > 0u && count <= WFS_INLINE_EXTENTS) {
+        const struct wfs_extent* last = &dir->extents[count - 1u];
+
+        if (last->logical_block + last->length == logical &&
+            last->physical_block + last->length == (uint64_t)phys) {
+            extended = 1;
+        }
+    }
+    if (!extended && count >= WFS_INLINE_EXTENTS) {
+        return WASMOS_ERR_FS_UNSUPPORTED;
+    }
+
+    rc = ns_read_block(vol, rec_block);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    d = g_dirblk + at;
+    if (extended) {
+        e = (uint32_t)offsetof(struct wfs_object, extents) +
+            (count - 1u) * (uint32_t)sizeof(struct wfs_extent);
+        wr32(d, e + 16u, dir->extents[count - 1u].length + 1u);
+    } else {
+        e = (uint32_t)offsetof(struct wfs_object, extents) +
+            count * (uint32_t)sizeof(struct wfs_extent);
+        wr64(d, e + 0u, logical);
+        wr64(d, e + 8u, (uint64_t)phys);
+        wr32(d, e + 16u, 1u);
+        wr32(d, e + 20u, 0u);
+        wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), count + 1u);
+    }
+    wr64(d, (uint32_t)offsetof(struct wfs_object, size), (logical + 1u) * (uint64_t)bs);
+    if (now_ns != 0u) {
+        wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), now_ns);
+        wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), now_ns);
+    }
+    wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
+    wr32(d,
+         (uint32_t)offsetof(struct wfs_object, checksum),
+         wfs_checksum_struct(vol->super.uuid,
+                             dir_id,
+                             d,
+                             WFS_OBJECT_SIZE,
+                             (uint32_t)offsetof(struct wfs_object, checksum)));
+    return ns_write_block(vol, rec_block);
+}
+
+static wasmos_error_code_t ns_grow_and_insert(wfs_volume_t* vol, uint32_t dir_id,
+                                              const struct wfs_object* dir, const char* name,
+                                              uint32_t name_len, uint32_t id, uint8_t type,
+                                              uint64_t now_ns);
+
+/* Insert a record into whichever of a directory's blocks has room, GROWING the
+ * directory by a block when none does. */
+static wasmos_error_code_t ns_insert_entry(wfs_volume_t* vol, uint32_t dir_id,
+                                           const struct wfs_object* dir, const char* name,
+                                           uint32_t name_len, uint32_t id, uint8_t type,
+                                           uint64_t now_ns) {
     uint32_t blocks = dir_block_count(vol, dir);
     uint32_t i;
 
@@ -324,12 +407,59 @@ static wasmos_error_code_t ns_insert_entry(wfs_volume_t* vol, const struct wfs_o
         }
         return ns_write_block(vol, phys);
     }
-    /* TODO: grow the directory instead. Every existing block is full, and a
-     * directory is regular file data, so this needs one allocated block laid out
-     * by wfs_dirent_init_block and appended to the record's extent map -- the
-     * same append wfs_write.c does for a file. Until then a directory holds only
-     * what its formatted blocks have room for. */
-    return WASMOS_ERR_FS_NO_SPACE;
+    /* Every existing block is full, so the directory GROWS. A directory is
+     * regular file data, so this is one allocated block laid out as a directory
+     * block and appended to the record's extent map. */
+    return ns_grow_and_insert(vol, dir_id, dir, name, name_len, id, type, now_ns);
+}
+
+/* Allocate one block, lay it out carrying `name`, and append it to the directory's
+ * extent map. Split out so neither half needs a scope of its own for the state the
+ * other does not use. */
+static wasmos_error_code_t ns_grow_and_insert(wfs_volume_t* vol, uint32_t dir_id,
+                                              const struct wfs_object* dir, const char* name,
+                                              uint32_t name_len, uint32_t id, uint8_t type,
+                                              uint64_t now_ns) {
+    wfs_alloc_ctx_t blocks;
+    wasmos_error_code_t rc;
+    int32_t status;
+
+    memset(&blocks, 0, sizeof(blocks));
+    blocks.vol = vol;
+    blocks.want = 1u;
+    /* Locality: the group the directory's last block already sits in (§12). */
+    blocks.prefer_group = dir->extent_count > 0u
+                              ? (uint32_t)(dir->extents[dir->extent_count - 1u].physical_block /
+                                           WFS_BLOCKS_PER_GROUP(vol->super.block_size))
+                              : 0u;
+    status = wfs_ops_run(wfs_alloc_blocks_task, &blocks);
+    if (status != 0) {
+        return (wasmos_error_code_t)status;
+    }
+    if (blocks.length == 0u) {
+        return WASMOS_ERR_FS_NO_SPACE;
+    }
+    /* Laid out and carrying the new entry BEFORE the record names the block:
+     * interrupted, the block is allocated and unreferenced, which fsck
+     * reclaims. A record pointing at a block that is still whatever it was
+     * before would be read as a corrupt directory. */
+    wfs_dirent_init_block(g_dirblk, vol->super.block_size, vol->super.uuid, blocks.first_block);
+    rc = wfs_dirent_insert(g_dirblk,
+                           vol->super.block_size,
+                           vol->super.uuid,
+                           blocks.first_block,
+                           name,
+                           name_len,
+                           id,
+                           type);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    rc = ns_write_block(vol, blocks.first_block);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    return ns_append_dir_block(vol, dir_id, dir, blocks.first_block, now_ns);
 }
 
 /* Whether a directory holds any entry other than `.` and `..`. */
@@ -485,11 +615,13 @@ wasmos_error_code_t wfs_ns_create(wfs_volume_t* vol, uint32_t cwd_object, const 
 
     /* The directory record LAST, so the object exists before anything names it. */
     rc = ns_insert_entry(vol,
+                         parent_id,
                          &parent,
                          name,
                          name_len,
                          new_id,
-                         (uint8_t)(type == WFS_TYPE_DIR ? WFS_TYPE_DIR : WFS_TYPE_FILE));
+                         (uint8_t)(type == WFS_TYPE_DIR ? WFS_TYPE_DIR : WFS_TYPE_FILE),
+                         now_ns);
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
@@ -694,7 +826,8 @@ wasmos_error_code_t wfs_ns_rename(wfs_volume_t* vol, uint32_t cwd_object, const 
      * Interrupted, the object is reachable under BOTH names -- a duplicate entry
      * fsck can resolve -- where removing first would leave it reachable under
      * NEITHER, which loses the file. */
-    rc = ns_insert_entry(vol, &to_dir, to_name, to_name_len, entry_id, (uint8_t)entry_type);
+    rc = ns_insert_entry(
+        vol, to_parent_id, &to_dir, to_name, to_name_len, entry_id, (uint8_t)entry_type, now_ns);
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }

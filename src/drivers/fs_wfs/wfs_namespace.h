@@ -34,8 +34,9 @@
  *
  * Fails with WASMOS_ERR_FS_EXISTS when the name is taken, WASMOS_ERR_FS_NOT_DIR
  * when the parent is not a directory, WASMOS_ERR_FS_NAME for a path naming no
- * component, WASMOS_ERR_FS_NO_SPACE when the parent directory block is full (see
- * the TODO in wfs_namespace.c: growing a directory is not implemented) and
+ * component, WASMOS_ERR_FS_NO_SPACE when the parent directory is full and cannot
+ * grow — every existing block is packed and appending another would need more
+ * than WFS_INLINE_EXTENTS extents, or the volume has no free block left — and
  * WASMOS_ERR_FS_READ_ONLY on a volume that does not permit writes.
  */
 wasmos_error_code_t wfs_ns_create(wfs_volume_t* vol, uint32_t cwd_object, const char* path,

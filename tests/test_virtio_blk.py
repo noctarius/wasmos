@@ -18,6 +18,8 @@ import tempfile
 import unittest
 from dataclasses import replace
 
+import re
+
 from scripts.qemu_test_framework import QemuSession, default_config
 
 # Written at the start of LBA 0 of the test disk. Sixteen bytes, because that is
@@ -29,6 +31,30 @@ DISK_SECTORS = 2048
 # Leading bytes of the pattern `blkinfo --write` lays down, so the read-back
 # assertion names what it is looking for rather than a bare hex string.
 WRITE_TAG = b"WASMOS-BLKWRITE"
+# `BLOCK_BACKEND_VIRTIO_BLK` from abi/constants.yaml; the high byte of a `block`
+# class instance.
+VIRTIO_BLK_BACKEND = 2
+
+
+def _virtio_instance(session) -> int:
+    """The virtio disk's class instance, as the guest reports it.
+
+    Not hardcoded, because the instance is `(backend << 8) | unit` and the unit
+    is derived from the device's PCI slot -- so it is stable for a given machine
+    configuration but would change if QEMU laid the bus out differently. A test
+    that baked the number in would be asserting QEMU's device ordering rather
+    than this driver's behaviour.
+    """
+    match = re.search(
+        rb"\[blkinfo\] instance=(\d+) driver=virtio-blk unit=(\d+)", session.buf
+    )
+    assert match is not None, "blkinfo reported no virtio-blk disk"
+    instance = int(match.group(1))
+    unit = int(match.group(2))
+    assert (
+        instance == (VIRTIO_BLK_BACKEND << 8) | unit
+    ), f"instance {instance} does not decode to (virtio-blk, {unit})"
+    return instance
 
 
 def _make_disk(disk_dir: str) -> str:
@@ -111,14 +137,23 @@ class VirtioBlkTest(unittest.TestCase):
 
     def test_write_then_read_round_trips_a_sector(self) -> None:
         assert self.session is not None
+        # Ask the guest which disk the virtio one is rather than assuming: the
+        # instance encodes a unit derived from the device's PCI slot.
+        self.session.send("blkinfo")
+        self.assertTrue(
+            self.session.expect(b"driver=virtio-blk", timeout_s=60),
+            "blkinfo did not enumerate the virtio disk",
+        )
+        instance = _virtio_instance(self.session)
         # LBA 1, not 0: the signature at LBA 0 is what the read test asserts on,
         # and a write there would make the two tests order-dependent.
-        # --write names the disk: instance 512 is (VIRTIO_BLK << 8) | 0. It refuses
-        # to run without one, so it can never scribble on the ATA boot disk it
-        # now also enumerates.
-        self.session.send("blkinfo --write 512 1")
+        # --write names the disk, and refuses to run without one, so it can never
+        # scribble on the ATA boot disk it now also enumerates.
+        self.session.send(f"blkinfo --write {instance} 1")
         self.assertTrue(
-            self.session.expect(b"[blkinfo] instance=512 lba=1 write ok", timeout_s=60),
+            self.session.expect(
+                f"[blkinfo] instance={instance} lba=1 write ok".encode(), timeout_s=60
+            ),
             "the device refused BLOCK_IPC_WRITE_REQ — the request chain's data "
             "descriptor is device-writable in the OUT direction, or the device "
             "reported a non-OK status",
@@ -132,10 +167,12 @@ class VirtioBlkTest(unittest.TestCase):
     def test_every_backend_appears_as_its_own_disk(self) -> None:
         """Both backends enumerate under the `block` class, as distinct disks.
 
-        The instance encodes (backend << 8) | unit, so ATA's two drives are 256
-        and 257 and the virtio disk is 512. The numbers are derived from what
-        each disk IS rather than handed out on registration, which is what makes
-        them the same every boot however the drivers raced to probe.
+        The instance encodes (backend << 8) | unit. ATA's drives are 256 and 257
+        because its units are drive numbers; the virtio disk's unit comes from
+        its PCI slot, so its instance is checked by decoding rather than by a
+        literal. Both are derived from what the disk IS rather than handed out
+        on registration, which is what makes them the same every boot however
+        the drivers raced to probe.
         """
         assert self.session is not None
         self.session.send("blkinfo")
@@ -148,13 +185,15 @@ class VirtioBlkTest(unittest.TestCase):
         for marker in (
             b"instance=256 driver=ata unit=0",
             b"instance=257 driver=ata unit=1",
-            b"instance=512 driver=virtio-blk unit=0",
         ):
             self.assertTrue(
                 self.session.expect(marker, timeout_s=30),
                 f"{marker!r} missing — an instance did not decode back to the "
                 "(backend, unit) pair a device-manager rule names",
             )
+        # Asserts the same property for the virtio disk without pinning QEMU's
+        # PCI layout: the reported instance must decode to (virtio-blk, unit).
+        _virtio_instance(self.session)
 
     def test_a_rule_is_queued_only_for_its_own_backend(self) -> None:
         """A block rule naming one backend is not queued for a disk on another.
@@ -198,7 +237,7 @@ class VirtioBlkTest(unittest.TestCase):
         """
         assert self.session is not None
         self.assertTrue(
-            self.session.expect(b"block add id=block:virtio-blk:0", timeout_s=60),
+            self.session.expect(b"block add id=block:virtio-blk:", timeout_s=60),
             "the virtio disk is absent from the device-manager inventory, so no "
             "block rule can ever match it",
         )

@@ -881,10 +881,39 @@ linked feature documents for rationale and rollout plans.
   re-exports it, so a Zig driver and a C driver drive a device through the same
   implementation. The generated Zig ABI (`abi/generated/zig/`) supplies the
   host-call signatures, opcodes and error codes.
+- A block device is identified by the PAIR (backend, unit), not by a unit alone.
+  Units are BACKEND-LOCAL -- ATA numbers its drives 0 and 1 and a virtio-blk
+  device calls its only disk 0 -- so a bare unit names two different disks once
+  more than one backend is present. `BLOCK_BACKEND_*` (`abi/constants.yaml`)
+  travels in arg3 of `DEVMGR_PUBLISH_BLOCK_DEVICE`, the device-manager inventory
+  keys records on the pair, and a block rule selects with `DRIVER=="ata"`
+  alongside `ATTR{unit}`. The shipped rules are qualified: an unqualified
+  `ATTR{unit}=="0"` would match both the ATA boot disk and a virtio disk and
+  mount a filesystem twice on `/boot`.
+- The `block` service CLASS holds one instance per DISK, numbered
+  `(backend << 8) | unit` -- ATA's drives are 256 and 257, a virtio-blk disk is
+  512. The number is DERIVED from what the disk is rather than handed out at
+  registration, so it is the same every boot whatever order the drivers probed
+  in, and a client can decode it back into the pair a rule names. ATA registers
+  once per present drive (the class registry admits several instances from one
+  owner) and keeps the plain `block` NAME as a compat alias, because `fs_fat`
+  still resolves its backend by that name.
+- Identifying a disk does not claim it. ATA binds a client endpoint to one unit
+  exclusively so two filesystems cannot write one drive, but that guard used to
+  cover `BLOCK_IPC_IDENTIFY_REQ` as well, which made a mounted disk unqueryable
+  -- the opposite of what discovering it by class is for. Transfers are still
+  refused, now with `WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED` rather than a bare `1`;
+  ATA's block replies are packed `block_dev` codes throughout.
+- Not yet done: `fs_fat` still looks up the `block` NAME and is handed a bare
+  unit, so it cannot be pointed at a non-ATA backend. Teaching it to select a
+  backend is what would let a rule mount a filesystem on the virtio disk, and is
+  the step that retires the name alias.
 - `blkinfo` (`/system/utils/blkinfo`) enumerates the `block` class, reports each
-  provider's geometry, and reads a sector; `--write <lba>` overwrites that
+  provider's backend, unit and geometry, and reads a sector; `--write <lba>` overwrites that
   sector with a pattern and reads it back, which is how the write direction is
-  exercised from the shell. It destroys the named sector on every provider.
+  exercised from the shell. It takes the INSTANCE of the disk to write and
+  touches only that one -- it enumerates the boot disk now, so a tool that wrote
+  to every provider it found would be a footgun.
 - `virtio-net` initializes RX/TX queues, routes its IRQ, exchanges an ARP
   self-probe through QEMU SLIRP, and supports pull plus notification-hinted RX
   delivery. The current INTx electrical configuration is incomplete, so

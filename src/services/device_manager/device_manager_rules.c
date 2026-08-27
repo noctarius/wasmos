@@ -299,10 +299,30 @@ void dm_rules_load_always_spawn(device_manager_state_t* state, const char* text)
     state->always_spawn_rule_count = out_count;
 }
 
+/* Map a rule's DRIVER== value to the backend a publisher reports. The names are
+ * the drivers' manifest package names, so a rule spells the backend the same way
+ * everything else in the tree names that driver, and no separate taxonomy has to
+ * be kept in step. An unrecognised name yields UNKNOWN, which the caller treats
+ * as a broken rule rather than a wildcard: a rule naming a backend nobody
+ * publishes should be reported, not silently matched against everything. */
+static uint8_t block_backend_from_name(const char* name) {
+    if (!name) {
+        return (uint8_t)BLOCK_BACKEND_UNKNOWN;
+    }
+    if (strcmp(name, "ata") == 0) {
+        return (uint8_t)BLOCK_BACKEND_ATA;
+    }
+    if (strcmp(name, "virtio-blk") == 0) {
+        return (uint8_t)BLOCK_BACKEND_VIRTIO_BLK;
+    }
+    return (uint8_t)BLOCK_BACKEND_UNKNOWN;
+}
+
 static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule) {
     char line_buf[256];
     char path[96];
     char mount[16];
+    uint8_t backend = (uint8_t)BLOCK_BACKEND_UNKNOWN;
     uint8_t unit = 0xFFu;
     char* cur = 0;
     char* tok = 0;
@@ -339,6 +359,12 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
                 return -1;
             }
         }
+        if (extract_op_value(tok, "DRIVER", "==", tmp, sizeof(tmp)) == 0) {
+            backend = block_backend_from_name(tmp);
+            if (backend == BLOCK_BACKEND_UNKNOWN) {
+                return -1; /* a named backend nobody publishes matches nothing */
+            }
+        }
     }
     if (strcmp(sub, "block") != 0 || path[0] == '\0') {
         return -1;
@@ -349,6 +375,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     out_rule->active = 1;
     out_rule->queued = 0;
     out_rule->spawned = 0;
+    out_rule->backend = backend;
     out_rule->unit = unit;
     str_copy(out_rule->mount, sizeof(out_rule->mount), mount);
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);

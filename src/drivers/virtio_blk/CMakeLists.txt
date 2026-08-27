@@ -48,4 +48,5 @@ wasmos_add_zig_wasm_app(
     ${CMAKE_SOURCE_DIR}/abi/generated/zig/wasmos_imports.zig
     ${CMAKE_SOURCE_DIR}/abi/generated/zig/wasmos_opcodes.zig
     ${CMAKE_SOURCE_DIR}/abi/generated/zig/wasmos_status.zig
+    ${CMAKE_SOURCE_DIR}/abi/generated/zig/wasmos_constants.zig
 )

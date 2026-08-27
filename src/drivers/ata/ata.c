@@ -137,6 +137,9 @@ typedef struct __attribute__((packed)) {
 
 static int32_t g_block_endpoint = -1;
 static int32_t g_devmgr_endpoint = -1;
+/* Kept because the class registration happens during unit probing, well after
+ * initialize() has the endpoint on its stack. */
+static int32_t g_proc_endpoint_cached = -1;
 static uint32_t g_sector_count = 0;
 static uint8_t g_present = 0;
 static uint32_t g_unit_sectors[ATA_UNIT_COUNT];
@@ -308,6 +311,38 @@ static int ata_identify_unit(uint8_t unit, uint16_t* out_words) {
     return 0;
 }
 
+/* Claim one `block` class instance for a present disk.
+ *
+ * A class instance is a DISK, not a driver, so this controller registers once
+ * per present unit -- the class registry admits several instances from one
+ * owner, and all of them name this same endpoint because a client picks the
+ * disk with the unit argument the block protocol already carries.
+ *
+ * The instance is (backend << 8) | unit rather than a number handed out on
+ * registration: it is derived from what the disk IS, so it is the same every
+ * boot regardless of which driver probed first, and a client can decode it back
+ * into the pair a device-manager rule names.
+ *
+ * The plain "block" NAME stays registered alongside this. fs_fat still resolves
+ * the backend by that name, so retiring it belongs with the change that teaches
+ * fs_fat to select a backend, not with this one. */
+static void ata_register_block_class(uint8_t unit, uint8_t present) {
+    if (!present || g_proc_endpoint_cached < 0) {
+        return;
+    }
+    uint32_t instance = ((uint32_t)BLOCK_BACKEND_ATA << 8) | (uint32_t)unit;
+    if (wasmos_svc_register_class(g_proc_endpoint_cached,
+                                  g_block_endpoint,
+                                  "ata",
+                                  "block",
+                                  instance,
+                                  64 + (int32_t)unit) < 0) {
+        (void)printf("[ata] block class register failed unit=%u\n", (unsigned)unit);
+        return;
+    }
+    (void)printf("[ata] block class unit=%u instance=%u\n", (unsigned)unit, (unsigned)instance);
+}
+
 static void ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t present) {
     if (g_devmgr_endpoint < 0 || g_block_endpoint < 0) {
         return;
@@ -319,6 +354,9 @@ static void ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t pre
     if (unit == 0 && g_present) {
         flags |= 2u;
     }
+    /* arg3 names the backend. The unit alone does not identify a disk: it is
+     * backend-local, so this driver's unit 0 and a virtio-blk device's unit 0
+     * are different disks, and the device manager keys on the pair. */
     (void)wasmos_ipc_send(g_devmgr_endpoint,
                           g_block_endpoint,
                           DEVMGR_PUBLISH_BLOCK_DEVICE,
@@ -326,7 +364,7 @@ static void ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t pre
                           (int32_t)unit,
                           (int32_t)sectors,
                           (int32_t)flags,
-                          0);
+                          BLOCK_BACKEND_ATA);
 }
 
 /* Where a read deposits each sector. The block buffer is the caller's own
@@ -736,28 +774,36 @@ static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, ui
 static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32_t arg1,
                           int32_t arg2, int32_t arg3) {
     uint8_t unit = 0;
-    int32_t preferred_unit = -1;
     if (!g_present) {
-        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 1, 0);
-        return 0;
-    }
-    if (type == BLOCK_IPC_IDENTIFY_REQ && arg0 >= 0 && arg0 < (int32_t)ATA_UNIT_COUNT) {
-        preferred_unit = arg0;
-    }
-    if (ata_assign_unit_for_source(source, preferred_unit, &unit) != 0 || !g_unit_present[unit]) {
-        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 1, 0);
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NOT_READY, 0);
         return 0;
     }
 
+    /* IDENTIFY is answered WITHOUT claiming the unit. Exclusivity exists to keep
+     * two filesystems off one disk, and reading a disk's geometry does neither;
+     * requiring a claim made a mounted disk unqueryable, which defeats
+     * discovering it by class in the first place. Only the transfer paths below
+     * bind a client. */
     if (type == BLOCK_IPC_IDENTIFY_REQ) {
+        uint8_t want = (arg0 >= 0 && arg0 < (int32_t)ATA_UNIT_COUNT) ? (uint8_t)arg0 : 0u;
+        if (!g_unit_present[want]) {
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT, 0);
+            return 0;
+        }
         wasmos_ipc_send(source,
                         g_block_endpoint,
                         BLOCK_IPC_IDENTIFY_RESP,
                         req_id,
                         0,
-                        (int32_t)g_unit_sectors[unit],
-                        (int32_t)unit,
+                        (int32_t)g_unit_sectors[want],
+                        (int32_t)want,
                         0);
+        return 0;
+    }
+
+    /* A transfer does claim one: the first client to ask for a unit keeps it. */
+    if (ata_assign_unit_for_source(source, -1, &unit) != 0 || !g_unit_present[unit]) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED, 0);
         return 0;
     }
 
@@ -766,7 +812,7 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         int32_t dma_addr = 0;
         uint32_t byte_count = 0;
         if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 2, 0);
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
             return 0;
         }
         byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
@@ -787,12 +833,12 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
             if (dma_rc == WASMOS_ERR_NONE) {
                 (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE);
             }
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_READ_FAILED, 0);
             return 0;
         }
         if (dma_rc == WASMOS_ERR_NONE &&
             ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE) != 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_READ_FAILED, 0);
             return 0;
         }
         wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, arg2, 0, 0);
@@ -808,7 +854,7 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         int32_t count = arg2 & (int32_t)WASMOS_BLOCK_ZC_COUNT_MASK;
         int32_t borrow = (int32_t)((uint32_t)arg2 >> WASMOS_BLOCK_ZC_BORROW_SHIFT);
         if (count <= 0 || count > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0 || arg3 < 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 2, 0);
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
             return 0;
         }
         if (ata_read_zc_dma(unit, (uint32_t)arg1, (uint8_t)count, borrow, (uint32_t)arg3) != 0) {
@@ -821,7 +867,7 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
                 (void)printf("[ata] zero-copy reads: staged copy into client buffer\n");
             }
             if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)count, &sink) != 0) {
-                ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
+                ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_READ_FAILED, 0);
                 return 0;
             }
         }
@@ -834,7 +880,7 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         int32_t dma_addr = 0;
         uint32_t byte_count = 0;
         if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 2, 0);
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
             return 0;
         }
         byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
@@ -847,19 +893,19 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
             if (dma_rc == WASMOS_ERR_NONE) {
                 (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE);
             }
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 5, 0);
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_WRITE_FAILED, 0);
             return 0;
         }
         if (dma_rc == WASMOS_ERR_NONE &&
             ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE) != 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 5, 0);
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_WRITE_FAILED, 0);
             return 0;
         }
         wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_WRITE_RESP, req_id, 0, arg2, 0, 0);
         return 0;
     }
 
-    ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 4, 0);
+    ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST, 0);
     return 0;
 }
 
@@ -884,6 +930,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     if (g_block_endpoint < 0) {
         return -1;
     }
+    g_proc_endpoint_cached = proc_endpoint;
     if (wasmos_svc_register(proc_endpoint, g_block_endpoint, "block", 1) != 0) {
         (void)printf("[ata] svc register failed\n");
         return -1;
@@ -926,6 +973,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             g_present = 1;
         }
         ata_publish_block_device(unit, unit_sectors, unit_present);
+        ata_register_block_class(unit, unit_present);
     }
 
     /* The driver addresses its device by region index and never sees a port, so

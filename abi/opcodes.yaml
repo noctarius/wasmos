@@ -465,7 +465,19 @@ subsystems:
       - { symbol: DEVMGR_PUBLISH_DEVICE, value: 0x900, kind: req }
       - { symbol: DEVMGR_PCI_SCAN_DONE, value: 0x901, kind: resp }
       - { symbol: DEVMGR_QUERY_MOUNT_REQ, value: 0x902, kind: req }
-      - { symbol: DEVMGR_PUBLISH_BLOCK_DEVICE, value: 0x903, kind: req }
+      - symbol: DEVMGR_PUBLISH_BLOCK_DEVICE
+        value: 0x903
+        kind: req
+        doc: |
+          Announce one block device to the device-manager inventory.
+          arg0 [7:0]=unit, arg1=sector_count, arg2 [1]=active_service [0]=present,
+          arg3=BLOCK_BACKEND_* naming the publishing backend.
+
+          The unit is BACKEND-LOCAL: ATA numbers its drives 0 and 1 and a
+          virtio-blk device calls its only disk 0, so a device is identified by
+          the pair (backend, unit) and the inventory keys on both. Publishing
+          without a backend leaves the record BLOCK_BACKEND_UNKNOWN, which no
+          `DRIVER==` rule matches.
       - { symbol: DEVMGR_QUERY_BLOCK_MOUNT_REQ, value: 0x904, kind: req }
       - symbol: DEVMGR_ACPI_SCAN_DONE
         value: 0x905

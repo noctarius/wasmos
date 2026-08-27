@@ -113,9 +113,12 @@ class VirtioBlkTest(unittest.TestCase):
         assert self.session is not None
         # LBA 1, not 0: the signature at LBA 0 is what the read test asserts on,
         # and a write there would make the two tests order-dependent.
-        self.session.send("blkinfo --write 1")
+        # --write names the disk: instance 512 is (VIRTIO_BLK << 8) | 0. It refuses
+        # to run without one, so it can never scribble on the ATA boot disk it
+        # now also enumerates.
+        self.session.send("blkinfo --write 512 1")
         self.assertTrue(
-            self.session.expect(b"[blkinfo] instance=0 lba=1 write ok", timeout_s=60),
+            self.session.expect(b"[blkinfo] instance=512 lba=1 write ok", timeout_s=60),
             "the device refused BLOCK_IPC_WRITE_REQ — the request chain's data "
             "descriptor is device-writable in the OUT direction, or the device "
             "reported a non-OK status",
@@ -126,13 +129,83 @@ class VirtioBlkTest(unittest.TestCase):
             "but not the sector it named, or the read raced the completion",
         )
 
+    def test_every_backend_appears_as_its_own_disk(self) -> None:
+        """Both backends enumerate under the `block` class, as distinct disks.
+
+        The instance encodes (backend << 8) | unit, so ATA's two drives are 256
+        and 257 and the virtio disk is 512. The numbers are derived from what
+        each disk IS rather than handed out on registration, which is what makes
+        them the same every boot however the drivers raced to probe.
+        """
+        assert self.session is not None
+        self.session.send("blkinfo")
+        self.assertTrue(
+            self.session.expect(b"[blkinfo] providers=3", timeout_s=60),
+            "the block class did not hold all three disks (ATA's two drives plus "
+            "the virtio disk) — a backend did not register, or two collided on "
+            "one instance",
+        )
+        for marker in (
+            b"instance=256 driver=ata unit=0",
+            b"instance=257 driver=ata unit=1",
+            b"instance=512 driver=virtio-blk unit=0",
+        ):
+            self.assertTrue(
+                self.session.expect(marker, timeout_s=30),
+                f"{marker!r} missing — an instance did not decode back to the "
+                "(backend, unit) pair a device-manager rule names",
+            )
+
+    def test_devmgr_inventory_separates_the_backends(self) -> None:
+        """The virtio disk gets its own inventory record, not ATA's.
+
+        The device manager used to key block records on a bare unit and spell
+        every one of them `ata<unit>` at the ATA controller's PCI address, so a
+        virtio disk publishing unit 0 would have overwritten the ATA boot disk's
+        record and inherited its identity.
+        """
+        assert self.session is not None
+        self.assertTrue(
+            self.session.expect(b"block add id=block:virtio-blk:0", timeout_s=60),
+            "the virtio disk is absent from the device-manager inventory, so no "
+            "block rule can ever match it",
+        )
+        self.assertTrue(
+            self.session.expect(b"block add id=block:pci:", timeout_s=30),
+            "the ATA disks lost their PCI-addressed identity",
+        )
+
+    def test_a_mounted_ata_disk_is_still_identifiable(self) -> None:
+        """Discovery must not require claiming the disk.
+
+        ATA binds a client endpoint to one unit exclusively so two filesystems
+        cannot write one drive. That guard used to cover IDENTIFY too, which made
+        a mounted disk unqueryable — the opposite of what discovering it by class
+        is for. A transfer is still refused, and now says why.
+        """
+        assert self.session is not None
+        # Each case drives blkinfo itself rather than relying on another having
+        # run it: a failed expect() force-stops the VM, so a case that depends on
+        # a neighbour's output turns one real failure into a cascade of fake ones.
+        self.session.send("blkinfo")
+        self.assertTrue(
+            self.session.expect(
+                b"instance=256 driver=ata unit=0 sectors=", timeout_s=60
+            ),
+            "the mounted ATA boot disk could not be identified",
+        )
+        self.assertTrue(
+            self.session.expect(b"read failed: block_dev.UNIT_CLAIMED", timeout_s=30),
+            "a transfer on a claimed unit was not refused with a named reason",
+        )
+
     def test_block_class_read_returns_the_disk_signature(self) -> None:
         assert self.session is not None
         self.session.send("blkinfo")
         self.assertTrue(
-            self.session.expect(b"[blkinfo] providers=1", timeout_s=60),
-            'no provider registered under the "block" class — the driver did not '
-            "reach service registration",
+            self.session.expect(b"[blkinfo] providers=3", timeout_s=60),
+            'the "block" class did not hold all three disks — a backend did not '
+            "reach service registration, or two collided on one instance",
         )
         self.assertTrue(
             self.session.expect(f"sectors={DISK_SECTORS}".encode(), timeout_s=30),

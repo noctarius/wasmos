@@ -109,10 +109,17 @@ typedef struct {
     uint16_t msix_cap_offset;
 } pci_device_record_t;
 
-/* One entry in the block-device registry; present after FAT driver reports. */
+/* One entry in the block-device registry.
+ *
+ * A device is identified by the PAIR (backend, unit). `unit` is BACKEND-LOCAL:
+ * ATA numbers its drives 0 and 1, and a virtio-blk device calls its only disk
+ * 0, so a unit alone names two different disks once more than one backend is
+ * present. The pair is intrinsic to the device rather than allocated in publish
+ * order, so it does not change with which driver probed first. */
 typedef struct {
     uint8_t in_use;
-    uint8_t unit; /* physical unit index (e.g. ATA drive number) */
+    uint8_t backend; /* BLOCK_BACKEND_*; which driver published this */
+    uint8_t unit;    /* unit index WITHIN that backend */
     uint8_t present;
     uint8_t active_service; /* non-zero once a block-fs driver is running */
     uint32_t sector_count;
@@ -128,13 +135,21 @@ typedef struct {
     char spawn_path[96];
 } always_spawn_rule_t;
 
-/* Rule: spawn a block-filesystem driver for a specific block-device unit. */
+/* Rule: spawn a block-filesystem driver for a specific block device.
+ *
+ * A rule names the device by (backend, unit), because a unit alone is ambiguous
+ * across backends -- an unqualified `ATTR{unit}=="0"` would match both the ATA
+ * boot disk and a virtio-blk device's only disk, and spawn a filesystem twice
+ * on the same mount. BLOCK_BACKEND_UNKNOWN in `backend` means the rule named no
+ * DRIVER and matches any, which is kept only so an existing unqualified rule
+ * still parses. */
 typedef struct {
     uint8_t active;
     uint8_t queued;
     uint8_t spawned;
-    uint8_t unit;   /* ATA/block unit index this rule targets */
-    char mount[16]; /* mount point name (e.g. "boot", "user") */
+    uint8_t backend; /* BLOCK_BACKEND_*, or UNKNOWN to match any */
+    uint8_t unit;    /* unit index within that backend; 0xFF matches any */
+    char mount[16];  /* mount point name (e.g. "boot", "user") */
     char spawn_path[96];
 } block_fs_rule_t;
 

@@ -1358,7 +1358,14 @@ static void queue_block_fs_rules_for_known_devices(void) {
                 log_mount_already_active(rule->mount);
                 continue;
             }
-            if (rule->unit == 0xFFu || rule->unit == rec->unit) {
+            /* Both halves must match. A rule that named no DRIVER keeps the
+             * old any-backend behaviour, which is why an unqualified rule still
+             * works -- but the shipped rules name one, because an unqualified
+             * unit matches a different disk on every backend that has one. */
+            const int backend_ok =
+                rule->backend == (uint8_t)BLOCK_BACKEND_UNKNOWN || rule->backend == rec->backend;
+            const int unit_ok = rule->unit == 0xFFu || rule->unit == rec->unit;
+            if (backend_ok && unit_ok) {
                 rule->queued = 1;
             }
         }
@@ -1366,25 +1373,42 @@ static void queue_block_fs_rules_for_known_devices(void) {
     queue_block_fs_rule_spawns();
 }
 
+/* Name of a backend for the canonical id and the log line. Kept in step with
+ * block_backend_from_name() in device_manager_rules.c, which maps the same names
+ * the other way for a rule's DRIVER== value. */
+static const char* block_backend_name(uint8_t backend) {
+    switch (backend) {
+    case (uint8_t)BLOCK_BACKEND_ATA:
+        return "ata";
+    case (uint8_t)BLOCK_BACKEND_VIRTIO_BLK:
+        return "virtio-blk";
+    default:
+        return "unknown";
+    }
+}
+
 /* Unpack a block-device announcement from IPC args into the block registry.
  *
- * Bit layout (agreed with ATA/block-bus sender):
- *   arg0 [7:0]=unit (ATA drive index: 0=primary-master, 1=primary-slave, …)
- *   arg1        =sector_count (full 32-bit LBA28 capacity)
+ * Bit layout (see DEVMGR_PUBLISH_BLOCK_DEVICE in abi/opcodes.yaml):
+ *   arg0 [7:0]=unit, WITHIN the publishing backend
+ *   arg1        =sector_count (full 32-bit capacity)
  *   arg2 [1]=active_service  [0]=present
- *   arg3        unused (reserved, caller passes 0)
+ *   arg3        =BLOCK_BACKEND_* naming the publisher
  *
- * Upserts by unit: updates an existing record if the unit is already known,
- * otherwise appends a new entry. */
+ * Upserts by the PAIR (backend, unit). Keying on the unit alone was wrong the
+ * moment a second backend existed: ATA and virtio-blk both number their first
+ * disk 0, so a virtio publish would have overwritten the ATA boot disk's record
+ * and inherited its identity. */
 static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
-    (void)arg3;
     uint8_t unit = (uint8_t)((uint32_t)arg0 & 0xFFu);
     uint32_t sectors = (uint32_t)arg1;
     uint8_t present = (uint8_t)(((uint32_t)arg2 & 1u) != 0u);
     uint8_t active = (uint8_t)((((uint32_t)arg2 >> 1) & 1u) != 0u);
+    uint8_t backend = (uint8_t)((uint32_t)arg3 & 0xFFu);
     block_device_record_t* rec = 0;
     for (uint32_t i = 0; i < g_dm.block_registry_count; ++i) {
-        if (g_dm.block_registry[i].in_use && g_dm.block_registry[i].unit == unit) {
+        if (g_dm.block_registry[i].in_use && g_dm.block_registry[i].unit == unit &&
+            g_dm.block_registry[i].backend == backend) {
             rec = &g_dm.block_registry[i];
             break;
         }
@@ -1396,23 +1420,37 @@ static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2
         rec = &g_dm.block_registry[g_dm.block_registry_count++];
         rec->in_use = 1;
     }
+    rec->backend = backend;
     rec->unit = unit;
     rec->present = present;
     rec->active_service = active;
     rec->sector_count = sectors;
-    if (g_dm.selected_storage_has_record) {
+    /* The PCI prefix is the SELECTED STORAGE controller's address, which is the
+     * ATA one -- so it may only be used for an ATA publish. Spelling every
+     * device `ata<unit>` at that address was a falsehood the moment a second
+     * backend existed: a virtio disk would have claimed both the name and the
+     * ATA controller's location.
+     *
+     * TODO: a non-ATA backend gets no bus address because the publish carries
+     * none. Adding the publisher's PCI identity to DEVMGR_PUBLISH_BLOCK_DEVICE
+     * is also what would let two IDE controllers be told apart, which
+     * (backend, unit) alone cannot do. */
+    const char* backend_name = block_backend_name(backend);
+    if (backend == (uint8_t)BLOCK_BACKEND_ATA && g_dm.selected_storage_has_record) {
         const pci_device_record_t* p = &g_dm.selected_storage_record;
         (void)snprintf(rec->canonical_id,
                        sizeof(rec->canonical_id),
-                       "block:pci:%02X:%02X.%02X:ata%u",
+                       "block:pci:%02X:%02X.%02X:%s%u",
                        (unsigned)p->bus,
                        (unsigned)p->device,
                        (unsigned)p->function,
+                       backend_name,
                        (unsigned)unit);
     } else {
         (void)snprintf(rec->canonical_id,
                        sizeof(rec->canonical_id),
-                       "block:pci:??:??.??:ata%u",
+                       "block:%s:%u",
+                       backend_name,
                        (unsigned)unit);
     }
     hex16_from_sha256(rec->canonical_id, rec->hash_id);

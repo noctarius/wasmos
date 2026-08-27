@@ -3,6 +3,32 @@
 
 #![allow(dead_code)]
 
+// block_backend
+/// Which kind of backend serves a block device, published in arg3 of
+/// DEVMGR_PUBLISH_BLOCK_DEVICE and matched by `DRIVER==` in a block rule.
+///
+/// A block device is identified by the PAIR (backend, unit), not by a unit
+/// alone. Unit numbers are backend-local -- ATA calls its drives 0 and 1, and
+/// a virtio-blk device calls its only disk 0 -- so a bare unit names two
+/// different disks once more than one backend is present. The pair is also
+/// intrinsic rather than allocated: it does not depend on which driver
+/// finished probing first, which a number handed out in publish order would.
+///
+/// The value is the low half of the `block` service class instance, whose
+/// high half is the backend: instance = (backend << 8) | unit. That is what
+/// lets a class lookup and a rule name the same disk without a registry
+/// handing out identities.
+///
+/// TODO: (backend, unit) still cannot separate two IDE controllers, which
+/// would both call their disks 0 and 1. block_device_record_t carries a
+/// canonical_id derived from the PCI address for that case.
+/// Publisher named no backend.
+pub const BLOCK_BACKEND_UNKNOWN: i32 = 0;
+/// ATA/IDE controller; unit is the drive index.
+pub const BLOCK_BACKEND_ATA: i32 = 1;
+/// virtio-blk PCI device; one disk per driver instance, so unit is 0.
+pub const BLOCK_BACKEND_VIRTIO_BLK: i32 = 2;
+
 // net_socket_family
 /// Address family of a socket: which layer it addresses and therefore what an
 /// address means. Independent of the socket type below, as in BSD sockets.

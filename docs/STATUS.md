@@ -1090,6 +1090,20 @@ linked feature documents for rationale and rollout plans.
 - `fs_wfs` resolves its disk the same way `fs_fat` does: the `block` CLASS at the
   instance encoding the `(backend, unit)` from its `driver=`/`unit=` startup args,
   with no `required_endpoint_name` in its manifest.
+- A WFS volume mounts over virtio-blk as well as ATA, and the same image reads
+  identically through both. `tests/test_wfs_virtio_blk.py` attaches `build/wfs.img`
+  a second time as a virtio-blk device pinned to PCI slot 6, so both mounts come
+  up in one boot and are compared against each other rather than across runs. It
+  is also a THIRD block_fs rule, which is more pressure on the rule-arming order
+  above than the two rules that exposed it.
+- `virtio-blk`'s IDENTIFY reports the unit it publishes rather than a constant 0.
+  A filesystem driver resolves its mount point by asking the device manager which
+  rule covers the unit IDENTIFY named, so the constant sent it to whichever rule
+  covered unit 0 and its mount never came up -- the same mistake the driver's own
+  derived-identity note argues against, in a second place in the same file.
+- A WFS `fs.backend` service name carries all three digits of its unit. A
+  virtio-blk unit is `(slot << 3) | function` and so reaches 255, where two digits
+  named the wrong service.
 - The physical frame allocator reserves the kernel image by PHYSICAL address and
   spans `__kernel_end`. The link symbols are higher-half virtual, so the previous
   reservation overlapped no frame and protected nothing; the 64 KiB BSP boot stack

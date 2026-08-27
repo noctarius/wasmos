@@ -1081,17 +1081,30 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d
     }
     g_mount_len = mount_len;
 
-    /* "fs.wfs<unit>" so two WFS volumes can be mounted at once. */
+    /* "fs.wfs<unit>" so two WFS volumes can be mounted at once. A unit is a full
+     * byte and a virtio-blk unit is (slot << 3) | function, so it reaches 255;
+     * all three digits are emitted or two disks whose units differ only in the
+     * hundreds place would claim one name. */
     name_len = 0;
     while (k_service_prefix[name_len] != '\0') {
         service_name[name_len] = k_service_prefix[name_len];
         name_len++;
     }
+    if (g_mount_unit >= 100u) {
+        service_name[name_len++] = (char)('0' + (g_mount_unit / 100u));
+    }
     if (g_mount_unit >= 10u) {
-        service_name[name_len++] = (char)('0' + (g_mount_unit / 10u));
+        service_name[name_len++] = (char)('0' + ((g_mount_unit / 10u) % 10u));
     }
     service_name[name_len++] = (char)('0' + (g_mount_unit % 10u));
     service_name[name_len] = '\0';
+    /* TODO: the fs.backend instance encodes (kind, unit) but not the BLOCK
+     * backend, so two WFS volumes whose units collide across backends -- ATA
+     * unit 2 and a virtio-blk device at slot 0 function 2, say -- derive one
+     * instance, and the second registration is refused and its mount never
+     * appears. This is the same defect the retired `block` NAME had: a disk is
+     * (backend, unit), so the instance has to carry the backend. Fixing it needs
+     * a wider instance encoding, which fs-manager and fs_fat decode too. */
     if (wasmos_svc_register_class(g_proc_endpoint,
                                   g_fs_endpoint,
                                   service_name,

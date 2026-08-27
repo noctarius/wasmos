@@ -71,6 +71,17 @@ def _config_with_disk(disk_path: str, device_opts: str = ""):
 
     if=none keeps QEMU from attaching the drive to the default IDE bus, where it
     would become a second ATA unit instead of a virtio device.
+
+    addr=0x5.0 pins the PCI slot, and with it the disk's identity: a virtio-blk
+    unit is (slot << 3) | function, so this device is always unit 40 -- the slot
+    QEMU's automatic assignment happened to give it, now stated rather than
+    inferred. It is deliberately NOT slot 6, which test_wfs_virtio_blk uses: the
+    rule that mounts a WFS volume over virtio names a unit, and a signature disk
+    landing on that unit would send fs_wfs through its whole retry budget looking
+    for a superblock that is not there. Left to automatic assignment the slot
+    depends on how many devices precede it on the command line, so the unit --
+    and with it the `block` class instance a rule names -- moves whenever the
+    standard device set changes.
     """
     return replace(
         default_config(),
@@ -78,7 +89,7 @@ def _config_with_disk(disk_path: str, device_opts: str = ""):
             "-drive",
             f"file={disk_path},format=raw,if=none,id=vblk0",
             "-device",
-            "virtio-blk-pci,drive=vblk0,id=vblk" + device_opts,
+            "virtio-blk-pci,drive=vblk0,id=vblk,addr=0x5.0" + device_opts,
         ),
     )
 

@@ -9,6 +9,15 @@ SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="sy
 # DRIVER qualifier matters here for the same reason it does above -- unit 2 alone
 # would also match a second backend's unit 2.
 SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="2", ENV{MOUNT}="/wfs", RUN+="system/drivers/fs_wfs.wap"
+# The same WFS volume reached over a different transport. A virtio-blk unit is
+# (slot << 3) | function, so unit 48 is PCI slot 6 function 0 -- the slot the
+# test pins its drive to. The unit is named exactly rather than left wildcard
+# because a wildcard would also match the signature disk that test_virtio_blk
+# attaches, and fs_wfs would spend the rule's whole retry budget failing to find
+# a superblock on it. No rule can match on content: there is no matcher that
+# reads a volume signature, which is why the transport and the slot have to say
+# which disk this is.
+SUBSYSTEM=="block", DRIVER=="virtio-blk", ATTR{unit}=="48", ENV{MOUNT}="/vwfs", RUN+="system/drivers/fs_wfs.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", RUN+="system/drivers/serial.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"

@@ -91,7 +91,8 @@
         "test_fs_open_smoke.py",
         "test_fs_write_smoke.py",
         "test_virtio_blk.py",
-        "test_wfs_mount_read.py"
+        "test_wfs_mount_read.py",
+        "test_wfs_virtio_blk.py"
       ]
     },
     {

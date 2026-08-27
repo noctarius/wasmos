@@ -1887,6 +1887,13 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
             if (!rule->active) {
                 continue;
             }
+            /* TODO: the request carries a unit but not the backend, so a rule
+             * is chosen by unit alone and the first rule with that unit wins --
+             * an ATA drive 2 and a virtio-blk device at slot 0 function 2 derive
+             * the same unit and would be handed each other's mount point. A disk
+             * is (backend, unit) everywhere else; DEVMGR_QUERY_BLOCK_MOUNT_REQ
+             * needs to carry the backend too, which is an opcode change in
+             * abi/opcodes.yaml plus the two filesystem drivers that ask. */
             if (rule->unit == unit || rule->unit == 0xFFu) {
                 mount = rule->mount;
                 break;

@@ -666,9 +666,12 @@ fn checkRange(lba: i32, count: i32) i32 {
 }
 
 /// BLOCK_IPC_IDENTIFY_REQ: report the device geometry. arg1 is the sector count
-/// and arg2 the unit index, which is always 0 -- a virtio-blk device is one
-/// disk, and a second disk is a second device with its own driver instance.
-/// Answered inline because it needs no transfer.
+/// and arg2 the unit, which is `blockUnit()` -- the SAME unit this driver
+/// publishes and registers its `block` class instance under, as ATA also reports
+/// the drive it identified. A filesystem driver resolves its mount point by
+/// asking the device manager which rule covers the unit IDENTIFY named, so a
+/// constant here sends it to whichever rule happens to cover unit 0 and its
+/// mount never comes up. Answered inline because it needs no transfer.
 fn handleIdentify(msg: *const co.IpcMessage) void {
     if (!g_dev.present or !g_dev.ready) {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_NOT_READY);
@@ -681,7 +684,7 @@ fn handleIdentify(msg: *const co.IpcMessage) void {
         msg.request_id,
         0,
         @intCast(g_dev.capacity_sectors),
-        0,
+        @intCast(blockUnit()),
         0,
     );
 }

@@ -7,9 +7,10 @@
 /// DEVMGR_PUBLISH_BLOCK_DEVICE and matched by `DRIVER==` in a block rule.
 ///
 /// A block device is identified by the PAIR (backend, unit), not by a unit
-/// alone. Unit numbers are backend-local -- ATA calls its drives 0 and 1, and
-/// a virtio-blk device calls its only disk 0 -- so a bare unit names two
-/// different disks once more than one backend is present. The pair is also
+/// alone. What a unit MEANS is the backend's own business -- ATA numbers the
+/// drives on a controller, a virtio-blk device numbers itself by where it sits
+/// on the bus -- so a bare unit names two different disks once more than one
+/// backend is present. The pair is also
 /// intrinsic rather than allocated: it does not depend on which driver
 /// finished probing first, which a number handed out in publish order would.
 ///
@@ -25,7 +26,11 @@
 pub const BLOCK_BACKEND_UNKNOWN: i32 = 0;
 /// ATA/IDE controller; unit is the drive index.
 pub const BLOCK_BACKEND_ATA: i32 = 1;
-/// virtio-blk PCI device; one disk per driver instance, so unit is 0.
+/// virtio-blk PCI device. One device is one disk, so the unit identifies
+/// the DEVICE rather than a drive on it: it is (slot << 3) | function,
+/// the same packing as the BDF, which fits a unit's eight bits exactly.
+/// Two virtio-blk devices therefore get different units instead of
+/// colliding on one class instance.
 pub const BLOCK_BACKEND_VIRTIO_BLK: i32 = 2;
 
 // net_socket_family

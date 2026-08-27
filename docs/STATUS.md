@@ -904,10 +904,22 @@ linked feature documents for rationale and rollout plans.
   -- the opposite of what discovering it by class is for. Transfers are still
   refused, now with `WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED` rather than a bare `1`;
   ATA's block replies are packed `block_dev` codes throughout.
-- Not yet done: `fs_fat` still looks up the `block` NAME and is handed a bare
-  unit, so it cannot be pointed at a non-ATA backend. Teaching it to select a
-  backend is what would let a rule mount a filesystem on the virtio disk, and is
-  the step that retires the name alias.
+- `fs_fat` resolves its disk through the `block` CLASS, at the instance encoding
+  the (backend, unit) the device manager spawned it for. The plain `block` NAME
+  is gone: a name resolves to ONE provider system-wide, so holding it made the
+  ATA controller the only disk any filesystem could reach. Its manifest no
+  longer declares `required_endpoint_name`, which the process manager resolved at
+  spawn time and which tied the driver to that one name before it even ran.
+- The device manager tells a filesystem driver about the DEVICE that matched
+  (`driver=<name> unit=<n>`), not about the rule's pattern. A wildcard rule has
+  no unit of its own, and passing the pattern handed the driver 0xFF as a unit
+  number.
+- One matcher decides whether a block rule applies to a device. There were two --
+  a walk over known devices and a copy inside the publish handler -- and the
+  publish copy, which is the path a live device takes, never compared the
+  backend. A rule naming one backend could be queued for a disk on another; it
+  was masked only because ATA publishes before any other backend, so the boot
+  mounts were already claimed.
 - `blkinfo` (`/system/utils/blkinfo`) enumerates the `block` class, reports each
   provider's backend, unit and geometry, and reads a sector;
   `--write <instance> <lba>` overwrites that

@@ -18,9 +18,14 @@ stack_size = 8192
 initial_memory = 262144
 max_memory = 262144
 
+# No endpoint is required by NAME. This driver used to name "block", which the
+# process manager resolves at spawn time -- so it could only ever be started
+# once a provider held that one name, and only ever reach that provider. Its
+# disk is resolved at run time from the `block` service CLASS instead, by the
+# instance encoding the (backend, unit) the device manager spawned it for.
 [ipc]
-required_endpoint_name = "block"
-required_endpoint_rights = 1
+required_endpoint_name = "-"
+required_endpoint_rights = 0
 
 [[capabilities]]
 name = "ipc.basic"

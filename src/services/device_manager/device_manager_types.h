@@ -149,7 +149,13 @@ typedef struct {
     uint8_t spawned;
     uint8_t backend; /* BLOCK_BACKEND_*, or UNKNOWN to match any */
     uint8_t unit;    /* unit index within that backend; 0xFF matches any */
-    char mount[16];  /* mount point name (e.g. "boot", "user") */
+    /* The device that actually matched, filled in when the rule is queued. The
+     * filesystem driver is told about THIS, not about the rule's pattern: a
+     * wildcard rule has no unit of its own to pass on, and passing the pattern
+     * handed the driver 0xFF as though it were a unit number. */
+    uint8_t matched_backend;
+    uint8_t matched_unit;
+    char mount[16]; /* mount point name (e.g. "boot", "user") */
     char spawn_path[96];
 } block_fs_rule_t;
 

@@ -15,14 +15,15 @@
  *
  * Prints "wfs-write-smoke: ok" and exits 0, or a step-specific line and 1.
  *
- * What is deliberately NOT here: O_CREAT, unlink, mkdir and rename. Those need a
- * directory-record writer, which phase 2 did not build, and the driver refuses
- * them rather than pretending -- so a test of them would be a test of the
- * refusal, which the host suites already cover.
+ * Every step here exists because the piece it covers was previously HOST-TESTED
+ * ONLY. A phase is not finished when its unit suites pass; it is finished when it
+ * works through the OS, and these are the steps that make that true for
+ * allocation, truncation and the namespace.
  */
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* Position-dependent, so a write that lands shifted or short fails rather than
@@ -42,6 +43,8 @@ int main(int argc, char** argv) {
 
     unsigned char buf[512];
     unsigned char want[512];
+    struct stat st;
+    long before;
     unsigned int i;
     int fd;
     long n;
@@ -124,14 +127,149 @@ int main(int argc, char** argv) {
         return fail("wfs-write-smoke: a read-only fd accepted a write");
     }
 
-    /* 4. O_CREAT is refused, not silently satisfied by an existing file: there is
-     *    no directory-record writer, and a create that appeared to work would be
-     *    worse than one that fails. */
+    /* 4. O_CREAT makes a new file, and O_CREAT on one that already exists OPENS it
+     *    rather than failing -- which is what O_CREAT without O_EXCL means, and a
+     *    choice worth pinning because the driver could plausibly have refused. */
     fd = open("/wfs/created.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd >= 0) {
-        (void)close(fd);
-        return fail("wfs-write-smoke: O_CREAT unexpectedly succeeded");
+    if (fd < 0) {
+        return fail("wfs-write-smoke: O_CREAT failed");
     }
+    n = write(fd, "created", 7);
+    (void)close(fd);
+    if (n != 7) {
+        return fail("wfs-write-smoke: write to a created file short");
+    }
+    if (stat("/wfs/created.txt", &st) != 0 || st.st_size != 7) {
+        return fail("wfs-write-smoke: a created file has the wrong size");
+    }
+    fd = open("/wfs/created.txt", O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: O_CREAT on an existing file failed");
+    }
+    (void)close(fd);
+    /* And O_CREAT|O_TRUNC on the existing file empties it, which is the create
+     *    path and the truncate path meeting. */
+    fd = open("/wfs/created.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: O_CREAT|O_TRUNC on an existing file failed");
+    }
+    (void)close(fd);
+    if (stat("/wfs/created.txt", &st) != 0 || st.st_size != 0) {
+        return fail("wfs-write-smoke: O_TRUNC did not empty the created file");
+    }
+    if (unlink("/wfs/created.txt") != 0) {
+        return fail("wfs-write-smoke: unlink of the created file failed");
+    }
+
+    /* 5. APPENDING past the end, which is the only way a guest reaches the block
+     *    ALLOCATOR: every earlier write patched inline bytes or overwrote blocks
+     *    that already existed. */
+    /* The file's size is READ, not assumed: hardcoding it ties this app to one
+     * fixture, and the number that mattered here came from a different one. */
+    if (stat("/wfs/docs/big.txt", &st) != 0 || st.st_size <= 0) {
+        return fail("wfs-write-smoke: stat before append failed");
+    }
+    before = st.st_size;
+
+    fd = open("/wfs/docs/big.txt", O_WRONLY | O_APPEND);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: append open failed");
+    }
+    for (i = 0; i < 64u; ++i) {
+        want[i] = pattern(i + 200u);
+    }
+    n = write(fd, want, 64);
+    (void)close(fd);
+    if (n != 64) {
+        return fail("wfs-write-smoke: append short");
+    }
+    if (stat("/wfs/docs/big.txt", &st) != 0 || st.st_size != before + 64) {
+        return fail("wfs-write-smoke: append did not grow the file");
+    }
+    fd = open("/wfs/docs/big.txt", O_RDONLY);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: append reopen failed");
+    }
+    if (lseek(fd, before, SEEK_SET) != before) {
+        (void)close(fd);
+        return fail("wfs-write-smoke: append reseek failed");
+    }
+    memset(buf, 0, sizeof(buf));
+    n = read(fd, buf, 64);
+    (void)close(fd);
+    if (n != 64 || memcmp(buf, want, 64) != 0) {
+        return fail("wfs-write-smoke: append verify failed");
+    }
+
+    /* 6. O_TRUNC, which is how a guest reaches TRUNCATION. The file must come back
+     *    at zero length, and the blocks it held must have been released -- which
+     *    the create in step 8 depends on if the volume is tight. */
+    fd = open("/wfs/etc/wfs.conf", O_WRONLY | O_TRUNC);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: trunc open failed");
+    }
+    (void)close(fd);
+    if (stat("/wfs/etc/wfs.conf", &st) != 0 || st.st_size != 0) {
+        return fail("wfs-write-smoke: O_TRUNC did not empty the file");
+    }
+
+    /* 7. mkdir, and a file created inside it: a directory that cannot be written
+     *    into is not usable, so the nested create is the real check. */
+    if (mkdir("/wfs/made", 0755) != 0) {
+        return fail("wfs-write-smoke: mkdir failed");
+    }
+    fd = open("/wfs/made/inner.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: nested create failed");
+    }
+    n = write(fd, "nested", 6);
+    (void)close(fd);
+    if (n != 6) {
+        return fail("wfs-write-smoke: nested write short");
+    }
+    fd = open("/wfs/made/inner.txt", O_RDONLY);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: nested reopen failed");
+    }
+    memset(buf, 0, sizeof(buf));
+    n = read(fd, buf, 6);
+    (void)close(fd);
+    if (n != 6 || memcmp(buf, "nested", 6) != 0) {
+        return fail("wfs-write-smoke: nested verify failed");
+    }
+
+    /* 8. rename, then unlink and rmdir, which must leave the tree as it was. An
+     *    rmdir of a directory that still holds an entry has to be REFUSED. */
+    if (rename("/wfs/made/inner.txt", "/wfs/made/moved.txt") != 0) {
+        return fail("wfs-write-smoke: rename failed");
+    }
+    if (open("/wfs/made/inner.txt", O_RDONLY) >= 0) {
+        return fail("wfs-write-smoke: the old name still opens");
+    }
+    fd = open("/wfs/made/moved.txt", O_RDONLY);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: the new name does not open");
+    }
+    (void)close(fd);
+
+    if (rmdir("/wfs/made") == 0) {
+        return fail("wfs-write-smoke: rmdir accepted a populated directory");
+    }
+    if (unlink("/wfs/made/moved.txt") != 0) {
+        return fail("wfs-write-smoke: unlink failed");
+    }
+    if (open("/wfs/made/moved.txt", O_RDONLY) >= 0) {
+        return fail("wfs-write-smoke: an unlinked file still opens");
+    }
+    if (rmdir("/wfs/made") != 0) {
+        return fail("wfs-write-smoke: rmdir of an empty directory failed");
+    }
+    /* And the volume is back to what it was, with the untouched entries intact. */
+    fd = open("/wfs/hello.txt", O_RDONLY);
+    if (fd < 0) {
+        return fail("wfs-write-smoke: an untouched file stopped opening");
+    }
+    (void)close(fd);
 
     puts("wfs-write-smoke: ok");
     return 0;

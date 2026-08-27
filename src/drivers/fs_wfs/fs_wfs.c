@@ -64,6 +64,7 @@
 #include "wfs_mount.h"
 #include "wfs_ops.h"
 #include "wfs_path.h"
+#include "wfs_namespace.h"
 #include "wfs_read.h"
 #include "wfs_truncate.h"
 #include "wfs_write.h"
@@ -247,13 +248,29 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
     wasmos_error_code_t rc;
     int32_t fd;
 
-    /* O_CREAT needs a directory INSERT, which no writer provides yet: the extent
-     * and object writers exist, the directory-record writer does not. Refused
-     * rather than silently opening an existing file of that name, which would
-     * make a create look like it worked. */
+    /* O_CREAT creates the file first, then falls through to the normal open. An
+     * EXISTS from the create means the file is already there, which O_CREAT
+     * without O_EXCL asks us to open rather than refuse. */
     if (((uint32_t)flags & (uint32_t)O_CREAT) != 0u) {
-        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_UNSUPPORTED, 0);
-        return;
+        static char create_path[WFS_PATH_MAX];
+
+        rc = wfs_take_path(buffer_id, (uint32_t)path_len, create_path, sizeof(create_path));
+        if (rc != WASMOS_ERR_NONE) {
+            (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
+            return;
+        }
+        rc = wfs_ns_create(&g_vol,
+                           wfs_cwd_get(src),
+                           create_path,
+                           (uint32_t)path_len,
+                           (uint16_t)WFS_TYPE_FILE,
+                           0644u,
+                           0u,
+                           0);
+        if (rc != WASMOS_ERR_NONE && rc != WASMOS_ERR_FS_EXISTS) {
+            (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
+            return;
+        }
     }
     rc = wfs_resolve(src, buffer_id, (uint32_t)path_len);
     if (rc != WASMOS_ERR_NONE) {
@@ -486,6 +503,76 @@ static void wfs_do_write(int32_t src, int32_t request_id, int32_t fd, int32_t co
         f->size = f->offset;
     }
     (void)wfs_reply(src, FS_IPC_RESP, request_id, (int32_t)done, 0);
+}
+
+/* MKDIR / UNLINK / RMDIR: one path in the client's buffer (arg0 = length,
+ * arg2 = buffer id), resolved against where this client stands. */
+static void wfs_do_namespace(int32_t src, int32_t request_id, int32_t type, int32_t path_len,
+                             int32_t buffer_id) {
+    static char path[WFS_PATH_MAX];
+    wasmos_error_code_t rc = wfs_take_path(buffer_id, (uint32_t)path_len, path, sizeof(path));
+    uint32_t id = 0u;
+
+    if (rc != WASMOS_ERR_NONE) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
+        return;
+    }
+    switch (type) {
+    case FS_IPC_MKDIR_REQ:
+        rc = wfs_ns_create(&g_vol,
+                           wfs_cwd_get(src),
+                           path,
+                           (uint32_t)path_len,
+                           (uint16_t)WFS_TYPE_DIR,
+                           0755u,
+                           0u,
+                           &id);
+        break;
+    case FS_IPC_UNLINK_REQ:
+        rc = wfs_ns_unlink(&g_vol, wfs_cwd_get(src), path, (uint32_t)path_len, 0u);
+        break;
+    case FS_IPC_RMDIR_REQ:
+        rc = wfs_ns_rmdir(&g_vol, wfs_cwd_get(src), path, (uint32_t)path_len, 0u);
+        break;
+    default:
+        rc = WASMOS_ERR_FS_UNSUPPORTED;
+        break;
+    }
+    (void)wfs_reply(src,
+                    rc == WASMOS_ERR_NONE ? FS_IPC_RESP : FS_IPC_ERROR,
+                    request_id,
+                    rc == WASMOS_ERR_NONE ? 0 : rc,
+                    0);
+}
+
+/* RENAME carries BOTH paths in one buffer: the source at offset 0 and the
+ * destination at arg0 + 1, which is the convention fs-manager's routing already
+ * rewrites them under. */
+static void wfs_do_rename(int32_t src, int32_t request_id, int32_t from_len, int32_t to_len,
+                          int32_t buffer_id) {
+    static char from[WFS_PATH_MAX];
+    static char to[WFS_PATH_MAX];
+    wasmos_error_code_t rc;
+
+    if (from_len <= 0 || to_len <= 0 || (uint32_t)from_len >= sizeof(from) ||
+        (uint32_t)to_len >= sizeof(to)) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_PATH_TOO_LONG, 0);
+        return;
+    }
+    if (wasmos_sys_buffer_read(buffer_id, from, from_len, 0) != 0 ||
+        wasmos_sys_buffer_read(buffer_id, to, to_len, from_len + 1) != 0) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_BUFFER, 0);
+        return;
+    }
+    from[from_len] = '\0';
+    to[to_len] = '\0';
+    rc =
+        wfs_ns_rename(&g_vol, wfs_cwd_get(src), from, (uint32_t)from_len, to, (uint32_t)to_len, 0u);
+    (void)wfs_reply(src,
+                    rc == WASMOS_ERR_NONE ? FS_IPC_RESP : FS_IPC_ERROR,
+                    request_id,
+                    rc == WASMOS_ERR_NONE ? 0 : rc,
+                    0);
 }
 
 static void wfs_do_seek(int32_t src, int32_t request_id, int32_t fd, int32_t delta,
@@ -808,10 +895,16 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
     case FS_IPC_READDIR_REQ:
         wfs_do_readdir(src, request_id);
         return;
+    case FS_IPC_MKDIR_REQ:
+    case FS_IPC_UNLINK_REQ:
+    case FS_IPC_RMDIR_REQ:
+        wfs_do_namespace(src, request_id, type, a0, a2);
+        return;
+    case FS_IPC_RENAME_REQ:
+        wfs_do_rename(src, request_id, a0, a1, a2);
+        return;
     default:
-        /* UNLINK/MKDIR/RMDIR/RENAME all need a directory-record WRITER, which
-         * does not exist: the object and extent writers landed with phase 2, the
-         * namespace side did not. */
+        /* WRITE-side opcodes this driver does not implement at all. */
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_UNSUPPORTED, 0);
         return;
     }

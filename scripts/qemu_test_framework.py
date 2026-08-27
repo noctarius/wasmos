@@ -290,7 +290,19 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         # CD-ROM, and the guest's IDENTIFY aborts with the ATAPI signature
         # (status DRDY|ERR, error ABRT, LBA1/2 = 0x14/0xEB) — which reads exactly
         # like an absent drive unless you look at the signature.
-        cmd += ["-drive", f"if=ide,index=2,media=disk,format=raw,file={cfg.wfs_image}"]
+        #
+        # snapshot=on is equally load-bearing now that the guest WRITES to this
+        # volume. Without it a run's writes land in the image file and stay there,
+        # and the next boot mounts a volume the previous one left DIRTY — which
+        # WFS mounts read-only, correctly, since no journal replay exists. Every
+        # write then fails and the read fixtures no longer hold the bytes they
+        # assert. The symptom is a suite that passes once and fails afterwards, so
+        # each boot gets a throwaway overlay and starts from the pristine mkfs
+        # image.
+        cmd += [
+            "-drive",
+            f"if=ide,index=2,media=disk,format=raw,snapshot=on,file={cfg.wfs_image}",
+        ]
     if cfg.nic_model and cfg.nic_model != "none":
         # Give the NIC a stable device id so the monitor can target it with
         # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.

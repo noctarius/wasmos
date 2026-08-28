@@ -15,11 +15,13 @@
 
 #include "stubs_wfs_block_server.h"
 #include "wasmos_status.h"
+#include "wfs_block.h"
 #include "wfs_crc32c.h"
 #include "wfs_format.h"
 #include "wfs_mount.h"
 #include "wfs_ops.h"
 #include "wfs_super.h"
+#include "wfs_sync.h"
 
 static int g_failures;
 static int g_checks;
@@ -722,6 +724,96 @@ static void test_a_write_that_cannot_be_staged_is_not_a_success(void) {
     wfs_stub_teardown();
 }
 
+/* Regression: 2026-08-28-wfs-generation-never-increments
+ *
+ * §4 makes `generation` the field that orders the primary superblock against its
+ * backups: it increments on EVERY superblock write, and §5's scan takes the valid
+ * copy carrying the highest one. Nothing incremented it. mkfs stamped 1 into the
+ * primary and every backup, and it stayed 1 however many times the volume was
+ * written -- so the field ordered nothing, and a backup adopted by the scan was
+ * indistinguishable from a current primary. */
+static void test_a_superblock_write_increments_the_generation(void) {
+    wfs_mount_ctx_t ctx;
+    wfs_volume_t vol;
+    wfs_dirty_ctx_t dirty;
+    wasmos_wasm_coroutine_t task;
+    wfs_super_t parsed;
+    uint64_t before;
+
+    if (build_volume(VOL_16M, 4096u) != 0) {
+        expect(0, "build a volume");
+        return;
+    }
+    expect(run_mount(&ctx, &vol) == 0, "the fresh volume mounts");
+    before = vol.super.generation;
+    expect(before != 0u, "mkfs left a non-zero generation");
+
+    memset(&dirty, 0, sizeof(dirty));
+    dirty.vol = &vol;
+    expect(wfs_stub_run_task(&task, wfs_mark_dirty_task, &dirty) == 0, "marking it dirty lands");
+
+    /* Read back from the IMAGE: the point is what the next mount would see, not
+     * what this one holds in memory. */
+    memset(&parsed, 0, sizeof(parsed));
+    expect_rc(wfs_super_parse(wfs_stub_image + WFS_SUPER_OFFSET, WFS_SUPER_SIZE, 0u, &parsed),
+              WASMOS_ERR_NONE,
+              "the superblock still verifies after the write");
+    expect(parsed.generation == before + 1u, "and its generation advanced by one");
+    expect(parsed.state == (uint32_t)WFS_STATE_DIRTY, "carrying the new state");
+
+    wfs_stub_teardown();
+}
+
+/* Regression: 2026-08-28-wfs-backup-state-stale
+ *
+ * A backup superblock is written once, by mkfs, saying WFS_STATE_CLEAN. The live
+ * volume goes DIRTY the moment it is mounted for writing. A mount that fell back
+ * to a backup therefore read CLEAN, concluded no replay was owed, and served
+ * metadata the journal had superseded -- the one outcome §15's state check exists
+ * to prevent.
+ *
+ * Two things fix it. This case covers the first: the backups are refreshed when
+ * the volume's STATE changes, so a scan finds a copy that agrees with the volume
+ * it came from. */
+static void test_a_backup_never_reports_a_stale_clean_state(void) {
+    wfs_mount_ctx_t ctx;
+    wfs_volume_t vol;
+    wfs_dirty_ctx_t dirty;
+    wasmos_wasm_coroutine_t task;
+    wfs_super_t parsed;
+    uint64_t backup_off;
+
+    if (build_volume(VOL_132M, 4096u) != 0) {
+        expect(0, "build a volume with two groups");
+        return;
+    }
+    expect(g_layout.group_count >= 2u, "the fixture carries a backup");
+    backup_off = wfs_super_backup_offset(4096u, 1u);
+
+    expect(run_mount(&ctx, &vol) == 0, "the fresh volume mounts");
+    memset(&dirty, 0, sizeof(dirty));
+    dirty.vol = &vol;
+    expect(wfs_stub_run_task(&task, wfs_mark_dirty_task, &dirty) == 0, "marking it dirty lands");
+
+    /* The backup carries the state transition, sealed under its own block number
+     * (§13) rather than the primary's location. */
+    memset(&parsed, 0, sizeof(parsed));
+    expect_rc(
+        wfs_super_parse(
+            wfs_stub_image + backup_off, WFS_SUPER_SIZE, WFS_BLOCKS_PER_GROUP(4096u), &parsed),
+        WASMOS_ERR_NONE,
+        "the refreshed backup verifies under its own location");
+    expect(parsed.state == (uint32_t)WFS_STATE_DIRTY, "and reports the volume as dirty");
+
+    /* The other half of the fix -- that a mount does not TRUST a backup's state
+     * either -- is asserted in test_wfs_recover.c, where a committed transaction
+     * can be left in the log for the replay to apply. Here it could only be
+     * checked against an empty log, where "replayed nothing" and "never ran" look
+     * identical. */
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_mount_reads_a_volume_mkfs_wrote),
     WASMOS_TEST_CASE(test_mount_requests_exactly_the_blocks_it_should),
@@ -741,6 +833,8 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_volume_with_no_backup_reports_the_primary_failure),
     WASMOS_TEST_CASE(test_a_damaged_backup_is_not_adopted),
     WASMOS_TEST_CASE(test_the_highest_generation_is_preferred),
+    WASMOS_TEST_CASE(test_a_superblock_write_increments_the_generation),
+    WASMOS_TEST_CASE(test_a_backup_never_reports_a_stale_clean_state),
     WASMOS_TEST_CASE(test_a_written_block_reads_back),
     WASMOS_TEST_CASE(test_a_write_that_cannot_be_staged_is_not_a_success),
 };

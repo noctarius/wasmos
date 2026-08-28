@@ -24,4 +24,25 @@
  */
 int32_t wfs_mark_dirty_task(void* user, uintptr_t* out_value);
 
+/* Write the volume superblock, advancing `generation` (§4).
+ *
+ * The ONE writer of block 0. Everything that records something in the superblock
+ * goes through it, so `generation` cannot be advanced by some paths and not
+ * others -- and it must advance on every write, because §5's backup scan takes
+ * the valid copy carrying the highest one. A generation that never moved left a
+ * backup indistinguishable from a current primary.
+ *
+ * `ctx->state` is recorded always; `ctx->set_counters` also writes the volume's
+ * free counters; `ctx->refresh_backups` propagates the state and generation to
+ * the backup copies §5's scan can reach. A backup that cannot be written is
+ * passed over rather than failing the write the primary already took: the primary
+ * is what a mount reads first.
+ *
+ * Refuses a read-only volume -- writing one would compound whatever made it
+ * read-only.
+ *
+ * Context: wfs_sb_ctx_t.
+ */
+int32_t wfs_super_write_task(void* user, uintptr_t* out_value);
+
 #endif /* FS_WFS_WFS_SYNC_H */

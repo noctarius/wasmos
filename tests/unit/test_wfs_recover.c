@@ -22,6 +22,7 @@
 #include "wfs_format.h"
 #include "wfs_journal.h"
 #include "wfs_bitmap.h"
+#include "wfs_crc32c.h"
 #include "wfs_mount.h"
 #include "wfs_namespace.h"
 #include "wfs_ops.h"
@@ -65,6 +66,9 @@ static const uint8_t k_uuid[WFS_UUID_LEN] = {
     0xa1, 0x0e, 0x74, 0x33, 0xc9, 0x62, 0x48, 0xd0, 0x95, 0x1b, 0x6f, 0x27, 0x8a, 0x4c, 0xdd, 0x03};
 #define TEST_NOW_NS 1750000000000000000ull
 #define VOL_16M (16ull * 1024ull * 1024ull)
+/* Large enough that group 1 exists and so carries a backup (§5): a group spans
+ * 128 MiB at a 4096-byte block size. */
+#define VOL_132M (132ull * 1024ull * 1024ull)
 
 /* The block requests one transaction issues, in order, so a case names the point
  * it crashes at rather than a bare number. Verified by test_wfs_journal's
@@ -398,6 +402,27 @@ static void test_a_damaged_log_leaves_the_volume_readable(void) {
     wfs_stub_teardown();
 }
 
+/* Overwrite a backup superblock's `state` and reseal it under its own block
+ * number (§13), so a case can present the scan with a copy that disagrees with
+ * the volume it came from. */
+static void stamp_backup_state(uint32_t group, uint32_t state) {
+    uint8_t* sb = wfs_stub_image + (size_t)wfs_super_backup_offset(4096u, group);
+    uint32_t location = group * WFS_BLOCKS_PER_GROUP(4096u);
+    uint8_t* csum = sb + offsetof(struct wfs_superblock, checksum);
+    uint32_t i;
+    uint32_t c;
+
+    for (i = 0; i < 4u; ++i) {
+        sb[offsetof(struct wfs_superblock, state) + i] = (uint8_t)((state >> (i * 8u)) & 0xFFu);
+        csum[i] = 0u;
+    }
+    c = wfs_checksum_struct(
+        k_uuid, location, sb, WFS_SUPER_SIZE, (uint32_t)offsetof(struct wfs_superblock, checksum));
+    for (i = 0; i < 4u; ++i) {
+        csum[i] = (uint8_t)((c >> (i * 8u)) & 0xFFu);
+    }
+}
+
 /* ---- the writers, crashed at every step -------------------------------- */
 
 /* Resolve `name` in the root of the mounted volume, the way a client does.
@@ -576,6 +601,48 @@ static void test_a_create_is_all_or_nothing_at_every_crash_point(void) {
     expect(saw_present > 0u, "and some leave it fully created");
 }
 
+/* Regression: 2026-08-28-wfs-backup-state-stale
+ *
+ * A backup superblock is written by mkfs and says WFS_STATE_CLEAN. The live volume
+ * goes DIRTY the moment it is mounted for writing, and its backups only catch up
+ * when the state changes. A mount that falls back to one therefore cannot trust
+ * what it reads there: a backup saying CLEAN made the mount conclude that no
+ * replay was owed and serve metadata the log had already superseded -- the one
+ * outcome §15's state check exists to prevent.
+ *
+ * The log here holds a COMMITTED transaction that was never checkpointed, so a
+ * mount that skips the replay is distinguishable from one that runs it: the
+ * target block carries the transaction's bytes only if the replay actually ran. */
+static void test_a_backup_superblock_does_not_suppress_the_replay(void) {
+    wfs_mount_ctx_t m;
+    wfs_volume_t vol;
+    uint32_t target;
+
+    if (wfs_stub_build_volume(VOL_132M, 4096u, k_uuid, TEST_NOW_NS, &g_layout) != 0) {
+        expect(0, "build a volume with two groups");
+        return;
+    }
+    expect(g_layout.group_count >= 2u, "the fixture carries a backup");
+    expect(mount_volume(&m, &vol) == 0, "the fresh volume mounts");
+    expect(mark_dirty(&vol) == 0, "the volume is marked dirty");
+    target = g_layout.bitmap_start;
+
+    crash_during_transaction(&vol, target, 0u, CRASH_AFTER_COMMIT);
+    expect(!block_has_pattern(target, k_pattern_seed), "the checkpoint never ran");
+
+    /* Force the mount down the backup path, with the state the backup carries
+     * deliberately reset to CLEAN -- the stale value the fix must not act on. */
+    memset(wfs_stub_image + WFS_SUPER_OFFSET, 0, WFS_SUPER_SIZE);
+    stamp_backup_state(1u, (uint32_t)WFS_STATE_CLEAN);
+
+    expect(remount(&m, &vol) == 0, "the volume mounts from the backup");
+    expect_u32(m.replayed, 1u, "and the replay RAN despite the backup saying clean");
+    expect(block_has_pattern(target, k_pattern_seed), "landing the committed transaction");
+    expect_u32(vol.super.read_only, 1u, "the volume is still read-only for fsck");
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_committed_transaction_is_replayed_at_the_next_mount),
     WASMOS_TEST_CASE(test_an_uncommitted_transaction_is_discarded),
@@ -584,6 +651,7 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_damaged_image_aborts_the_replay),
     WASMOS_TEST_CASE(test_a_clean_volume_does_not_scan_the_log),
     WASMOS_TEST_CASE(test_a_damaged_log_leaves_the_volume_readable),
+    WASMOS_TEST_CASE(test_a_backup_superblock_does_not_suppress_the_replay),
     WASMOS_TEST_CASE(test_a_create_is_all_or_nothing_at_every_crash_point),
 };
 

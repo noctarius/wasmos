@@ -279,6 +279,14 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
          * generation may trail it. Writing under that would compound the damage,
          * so the volume serves reads until fsck (§24) rebuilds the primary. */
         ctx->vol->super.read_only = 1u;
+        /* And its `state` is not believed. A backup is refreshed only when the
+         * volume's state changes (wfs_sync.h), so the copy in hand may predate
+         * everything the log holds -- a backup still saying CLEAN would otherwise
+         * persuade this mount that no replay was owed and let it serve metadata
+         * the journal has already superseded, which is the outcome §15's state
+         * check exists to prevent. Replaying a log with nothing in it costs one
+         * block read. */
+        ctx->vol->super.needs_replay = 1u;
         ctx->err = wfs_block_set_block_size(b, ctx->vol->super.block_size);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;

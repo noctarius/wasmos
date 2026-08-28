@@ -299,16 +299,55 @@ typedef struct {
     wfs_extent_ctx_t extent;
 } wfs_read_ctx_t;
 
+/* Writing the volume superblock (§4). The one writer every other caller goes
+ * through, so `generation` cannot be advanced by some paths and not others. */
+typedef enum {
+    WFS_SB_PC_START = 0,
+    WFS_SB_PC_PRIMARY_READY,
+    WFS_SB_PC_PRIMARY_WRITTEN,
+    WFS_SB_PC_BACKUP_READY,
+    WFS_SB_PC_BACKUP_WRITTEN,
+} wfs_sb_pc_t;
+
+typedef struct {
+    wfs_sb_pc_t pc;
+    wfs_volume_t* vol;
+
+    /* What to record. `state` is always written; the free counters only when
+     * `set_counters` is set, because most superblock writes are state
+     * transitions that have no reason to touch them. */
+    uint32_t state;
+    uint8_t set_counters;
+    /* Also refresh the backup copies (§5). Set for a STATE TRANSITION and clear
+     * otherwise: `state` is the field a stale backup gets dangerously wrong, and
+     * a backup is allowed to trail on everything else because §5 orders copies by
+     * generation and a trailing one correctly loses. */
+    uint8_t refresh_backups;
+
+    /* The generation this write took, which is one past what the image held. */
+    uint64_t generation;
+
+    /* The backup sweep. Both survive the awaits. */
+    uint32_t backup_index;
+    uint32_t backup_block;
+
+    wasmos_error_code_t err;
+} wfs_sb_ctx_t;
+
 /* Recording that a volume is mounted for writing (§4). */
 typedef enum {
     WFS_DIRTY_PC_START = 0,
-    WFS_DIRTY_PC_SUPER_READY,
-    WFS_DIRTY_PC_SUPER_WRITTEN,
+    WFS_DIRTY_PC_WRITE_JOINED,
 } wfs_dirty_pc_t;
 
 typedef struct {
     wfs_dirty_pc_t pc;
     wfs_volume_t* vol;
+
+    uint8_t write_started;
+    wasmos_wasm_coroutine_t write_task;
+    wfs_sb_ctx_t write;
+
     wasmos_error_code_t err;
 } wfs_dirty_ctx_t;
 

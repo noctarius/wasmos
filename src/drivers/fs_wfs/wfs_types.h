@@ -80,6 +80,13 @@ typedef struct {
      * after the block is handed to a file. */
     uint32_t revoke_count;
     uint32_t revokes[WFS_TXN_MAX_REVOKES];
+
+    /* A stage that failed before it reached the device, held until the take
+     * reports it. wfs_txn_stage_begin returns NULL for both "nothing to await"
+     * cases -- a refusal and a staging failure -- and without this the refusal
+     * would pass for a write that succeeded, which is the mistake wfs_block_t's
+     * own stage_failed exists to prevent one layer down. */
+    wasmos_error_code_t stage_err;
 } wfs_journal_t;
 
 /* A mounted volume: the superblock as the reader parsed it.
@@ -308,7 +315,6 @@ typedef struct {
 /* Allocating blocks (§12). */
 typedef enum {
     WFS_ALLOC_PC_START = 0,
-    WFS_ALLOC_PC_DIRTY_JOINED,
     WFS_ALLOC_PC_DESC_JOINED,
     WFS_ALLOC_PC_BITMAP_READY,
     WFS_ALLOC_PC_BITMAP_WRITTEN,
@@ -343,11 +349,6 @@ typedef struct {
     wasmos_wasm_coroutine_t desc_task;
     wfs_group_ctx_t desc;
 
-    /* Marking the volume dirty, which must land BEFORE any metadata write. */
-    uint8_t dirty_started;
-    wasmos_wasm_coroutine_t dirty_task;
-    wfs_dirty_ctx_t dirty;
-
     wasmos_error_code_t err;
 } wfs_alloc_ctx_t;
 
@@ -366,6 +367,14 @@ typedef struct {
     wfs_volume_t* vol;
     uint32_t first_block;
     uint32_t length;
+    /* The run held METADATA -- an extent-tree node, or a directory's records --
+     * so every block in it is revoked as it is freed (§18). The log records block
+     * NUMBERS rather than what a block holds, so an older committed image of one
+     * of these stays replayable once the block has been handed to a file, and
+     * replaying it would overwrite that file's data with stale metadata.
+     *
+     * Clear for file data, which is never journaled and so has no image to bar. */
+    uint8_t metadata;
 
     /* The run may span groups, so it is freed one group at a time: `cursor` is
      * the next block to release and `run_in_group` how many of them fall in the
@@ -451,7 +460,7 @@ typedef struct {
 /* Writing bytes into an object's data (§16). */
 typedef enum {
     WFS_WRITE_PC_START = 0,
-    WFS_WRITE_PC_DIRTY_JOINED,
+    WFS_WRITE_PC_PREPARED,
     WFS_WRITE_PC_MAP,
     WFS_WRITE_PC_MAP_JOINED,
     WFS_WRITE_PC_ALLOC_JOINED,
@@ -507,10 +516,6 @@ typedef struct {
     wasmos_wasm_coroutine_t alloc_task;
     wfs_alloc_ctx_t alloc;
 
-    uint8_t dirty_started;
-    wasmos_wasm_coroutine_t dirty_task;
-    wfs_dirty_ctx_t dirty;
-
     /* One extent waiting to go into the extent TREE, held until its data block
      * is on disk: a leaf is reachable from the object record the moment it is
      * written, so publishing an extent first would name a block still holding
@@ -537,7 +542,6 @@ typedef struct {
 /* Allocating and releasing object records (§12). */
 typedef enum {
     WFS_OBJALLOC_PC_START = 0,
-    WFS_OBJALLOC_PC_DIRTY_JOINED,
     WFS_OBJALLOC_PC_DESC_JOINED,
     WFS_OBJALLOC_PC_BITMAP_READY,
     WFS_OBJALLOC_PC_RECORD_READY,
@@ -577,10 +581,6 @@ typedef struct {
     wasmos_wasm_coroutine_t desc_task;
     wfs_group_ctx_t desc;
 
-    uint8_t dirty_started;
-    wasmos_wasm_coroutine_t dirty_task;
-    wfs_dirty_ctx_t dirty;
-
     wasmos_error_code_t err;
 } wfs_objalloc_ctx_t;
 
@@ -613,14 +613,14 @@ typedef struct {
 /* Truncating an object (§16). */
 typedef enum {
     WFS_TRUNC_PC_START = 0,
-    WFS_TRUNC_PC_DIRTY_JOINED,
+    WFS_TRUNC_PC_PREPARED,
     WFS_TRUNC_PC_TAIL_READ,
     WFS_TRUNC_PC_TAIL_WRITTEN,
     WFS_TRUNC_PC_RECORD_READ,
     WFS_TRUNC_PC_RECORD_PATCH,
     WFS_TRUNC_PC_RECORD_WRITTEN,
     WFS_TRUNC_PC_FREE_JOINED,
-    WFS_TRUNC_PC_TREE_DIRTY_JOINED,
+    WFS_TRUNC_PC_TREE_PREPARED,
     WFS_TRUNC_PC_TRIM_JOINED,
     WFS_TRUNC_PC_TRIM_FREE_JOINED,
     WFS_TRUNC_PC_TAIL_LOOKUP_JOINED,
@@ -657,10 +657,6 @@ typedef struct {
     uint8_t free_started;
     wasmos_wasm_coroutine_t free_task;
     wfs_free_ctx_t free_ctx;
-
-    uint8_t dirty_started;
-    wasmos_wasm_coroutine_t dirty_task;
-    wfs_dirty_ctx_t dirty;
 
     /* Trimming an extent TREE, which is unbounded where the inline free list is
      * not: one run is detached and released per step, so no array has to hold
@@ -701,24 +697,6 @@ typedef struct {
     wfs_volume_t* vol;
     wasmos_error_code_t err;
 } wfs_jload_ctx_t;
-
-/* Writing one block image into the log (§14 step 1). */
-typedef enum {
-    WFS_TXSTAGE_PC_START = 0,
-    WFS_TXSTAGE_PC_IMAGE_WRITTEN,
-} wfs_txstage_pc_t;
-
-typedef struct {
-    wfs_txstage_pc_t pc;
-    wfs_volume_t* vol;
-    /* The filesystem block whose new content is currently staged. */
-    uint32_t target;
-    /* The slot the image takes in the transaction, and the log block it is
-     * written to. Both are decided before the write and must survive it. */
-    uint32_t slot;
-    uint32_t journal_block;
-    wasmos_error_code_t err;
-} wfs_txstage_ctx_t;
 
 /* Committing and retiring a transaction (§14 steps 1-7). */
 typedef enum {

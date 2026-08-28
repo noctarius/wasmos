@@ -1,9 +1,9 @@
 /* Host unit test for recording a volume's mount state (wfs_sync.h, §4).
  *
  * The assertion that matters is not that a byte changed: it is that a REMOUNT of
- * the image acts on the flag -- it replays the log and mounts the volume
- * read-only. That is the whole purpose of the flag, and it is what a crash would
- * actually exercise.
+ * the image acts on the flag, replaying the log before the volume is handed out.
+ * That is the whole purpose of the flag, and it is what a crash would actually
+ * exercise.
  */
 #include <stdio.h>
 #include <string.h>
@@ -76,11 +76,12 @@ static int32_t run_mark(wfs_dirty_ctx_t* ctx, wfs_volume_t* vol) {
 /* Marking a volume dirty must be visible to the NEXT mount, which is the only
  * reader that matters: a crash is exactly the case where nothing else runs.
  *
- * That mount now DISCHARGES the replay the flag asks for (§15, §21), so
- * needs_replay comes back clear; the volume stays read-only because the metadata
- * writers do not yet run inside transactions, and the log therefore says nothing
- * about what an interrupted one left behind. */
-static void test_a_marked_volume_remounts_read_only(void) {
+ * That mount DISCHARGES the replay the flag asks for (§15, §21) and comes back
+ * WRITABLE: every metadata write goes through a transaction, so a crash left
+ * either a transaction the replay applies or one it discards whole. The flag
+ * itself survives until a clean unmount clears it, which is what makes this
+ * volume -- marked and never written -- replay an empty log on every mount. */
+static void test_a_marked_volume_replays_and_stays_writable(void) {
     wfs_mount_ctx_t m;
     wfs_volume_t vol;
     wfs_dirty_ctx_t d;
@@ -102,7 +103,7 @@ static void test_a_marked_volume_remounts_read_only(void) {
     expect_u32(vol.super.state, (uint32_t)WFS_STATE_DIRTY, "the state says dirty");
     expect_u32(m.replayed, 0u, "the log held nothing to replay");
     expect_u32(vol.super.needs_replay, 0u, "so the replay it asked for is discharged");
-    expect_u32(vol.super.read_only, 1u, "and the volume is read-only all the same");
+    expect_u32(vol.super.read_only, 0u, "and the volume is writable");
 
     wfs_stub_teardown();
 }
@@ -183,7 +184,7 @@ static void test_the_marked_superblock_still_validates(void) {
 }
 
 static const wasmos_test_void_case_t k_cases[] = {
-    WASMOS_TEST_CASE(test_a_marked_volume_remounts_read_only),
+    WASMOS_TEST_CASE(test_a_marked_volume_replays_and_stays_writable),
     WASMOS_TEST_CASE(test_marking_twice_costs_one_write),
     WASMOS_TEST_CASE(test_a_read_only_volume_is_not_marked),
     WASMOS_TEST_CASE(test_the_marked_superblock_still_validates),

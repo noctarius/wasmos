@@ -92,13 +92,12 @@ static int setup(void) {
 }
 
 static int32_t run_alloc(wfs_alloc_ctx_t* ctx, uint32_t want, uint32_t prefer_group) {
-    wasmos_wasm_coroutine_t task;
 
     memset(ctx, 0, sizeof(*ctx));
     ctx->vol = &g_vol;
     ctx->want = want;
     ctx->prefer_group = prefer_group;
-    return wfs_stub_run_task(&task, wfs_alloc_blocks_task, ctx);
+    return wfs_stub_run_txn(&g_vol, wfs_alloc_blocks_task, ctx);
 }
 
 /* The group's block bitmap, straight out of the image. */
@@ -276,15 +275,14 @@ static void test_allocation_never_returns_a_metadata_block(void) {
 }
 
 /* An allocation writes metadata, so the volume must say DIRTY on disk before any
- * of it lands. That flag is what makes a crash mid-allocation mount read-only
- * instead of serving a bitmap and a counter that disagree.
+ * of it lands. That flag is what makes the next mount consult the log at all
+ * (§15), and the allocation's blocks are in the log rather than at their
+ * addresses until the transaction commits.
  *
- * The allocator does not yet run inside a journal transaction, so the log has
- * nothing to say about what a crash interrupted: the next mount replays an empty
- * log and keeps the volume read-only on that ground alone.
- *
- * Checked by REMOUNTING, because the next mount is the only reader that matters
- * in a crash. */
+ * The remount is the assertion, because the next mount is the only reader that
+ * matters in a crash -- and it must come back WRITABLE. A committed transaction
+ * leaves nothing half-applied for a replay to find, so the dirty flag costs the
+ * next mount a replay of an empty log and nothing more. */
 static void test_an_allocation_marks_the_volume_dirty(void) {
     wfs_alloc_ctx_t a;
     wfs_mount_ctx_t m;
@@ -305,8 +303,10 @@ static void test_an_allocation_marks_the_volume_dirty(void) {
     m.vol = &remount;
     expect(wfs_stub_run_task(&task, wfs_mount_task, &m) == 0, "the volume remounts");
     expect_u32(remount.super.state, (uint32_t)WFS_STATE_DIRTY, "reporting the dirty state");
-    expect_u32(m.replayed, 0u, "the log the allocation bypassed holds nothing to replay");
-    expect_u32(remount.super.read_only, 1u, "and it is read-only all the same");
+    expect_u32(m.replayed, 0u, "the committed transaction left nothing to replay");
+    expect_u32(remount.super.read_only, 0u, "and the volume is writable again");
+    expect(wfs_bitmap_test(group_bitmap(0u), a.first_block),
+           "with the allocation's bit checkpointed to the bitmap");
 
     wfs_stub_teardown();
 }
@@ -314,7 +314,6 @@ static void test_an_allocation_marks_the_volume_dirty(void) {
 /* ---- object records ----------------------------------------------------- */
 
 static int32_t run_objalloc(wfs_objalloc_ctx_t* ctx, uint16_t type) {
-    wasmos_wasm_coroutine_t task;
 
     memset(ctx, 0, sizeof(*ctx));
     ctx->vol = &g_vol;
@@ -322,16 +321,15 @@ static int32_t run_objalloc(wfs_objalloc_ctx_t* ctx, uint16_t type) {
     ctx->mode = 0644u;
     ctx->link_count = 1u;
     ctx->now_ns = TEST_NOW_NS;
-    return wfs_stub_run_task(&task, wfs_alloc_object_task, ctx);
+    return wfs_stub_run_txn(&g_vol, wfs_alloc_object_task, ctx);
 }
 
 static int32_t run_objfree(wfs_objfree_ctx_t* ctx, uint32_t id) {
-    wasmos_wasm_coroutine_t task;
 
     memset(ctx, 0, sizeof(*ctx));
     ctx->vol = &g_vol;
     ctx->object_id = id;
-    return wfs_stub_run_task(&task, wfs_free_object_task, ctx);
+    return wfs_stub_run_txn(&g_vol, wfs_free_object_task, ctx);
 }
 
 static int32_t load_object(wfs_object_ctx_t* o, uint32_t id) {

@@ -21,7 +21,12 @@
 #include "wfs_endian.h"
 #include "wfs_format.h"
 #include "wfs_journal.h"
+#include "wfs_bitmap.h"
 #include "wfs_mount.h"
+#include "wfs_namespace.h"
+#include "wfs_ops.h"
+#include "wfs_path.h"
+#include "wfs_super.h"
 #include "wfs_sync.h"
 
 static int g_failures;
@@ -129,15 +134,45 @@ static void scribble(uint32_t block, uint8_t value) {
  * Returns the commit task's status, which is the failure the stopped device
  * produced -- a crash has no return value, but the image it leaves is the point.
  */
+
+/* Journal the staged block, in the shape every participant uses: begin the
+ * stage, await it, take it. Nothing here is a shortcut around the driver's own
+ * path -- a helper that wrote the log block itself would stop testing the one
+ * thing that matters, which is where a metadata write actually lands. */
+typedef struct {
+    int pc;
+    wfs_volume_t* vol;
+    uint32_t target;
+    wasmos_error_code_t err;
+} stage_ctx_t;
+
+static int32_t stage_task(void* user, uintptr_t* out_value) {
+    stage_ctx_t* ctx = (stage_ctx_t*)user;
+
+    (void)out_value;
+    switch (ctx->pc) {
+    case 0:
+        WFS_AWAIT(ctx, wfs_txn_stage_begin(ctx->vol, ctx->target), 1);
+        /* fall through */
+    case 1:
+        ctx->err = wfs_txn_stage_take(ctx->vol);
+        if (ctx->err != WASMOS_ERR_NONE) {
+            return (int32_t)ctx->err;
+        }
+        return WASMOS_WASM_TASK_COMPLETE;
+    default:
+        return WASMOS_ERR_FS_CORRUPT;
+    }
+}
+
 static void crash_during_transaction(wfs_volume_t* vol, uint32_t target, uint32_t revoke,
                                      uint32_t stop_after) {
-    wfs_txstage_ctx_t sc;
-    wfs_txcommit_ctx_t cc;
+    stage_ctx_t sc;
     wasmos_wasm_coroutine_t task;
     uint8_t* d = wfs_block_data(wfs_stub_block());
     uint32_t i;
 
-    expect_rc(wfs_txn_begin(vol), WASMOS_ERR_NONE, "a transaction opens");
+    expect_rc(wfs_txn_open(vol), WASMOS_ERR_NONE, "a transaction opens");
     wfs_stub_reset_counters();
     wfs_stub_stop_after = stop_after;
 
@@ -147,13 +182,11 @@ static void crash_during_transaction(wfs_volume_t* vol, uint32_t target, uint32_
     memset(&sc, 0, sizeof(sc));
     sc.vol = vol;
     sc.target = target;
-    expect(wfs_stub_run_task(&task, wfs_txn_stage_task, &sc) == 0, "the block is journaled");
+    expect(wfs_stub_run_task(&task, stage_task, &sc) == 0, "the block is journaled");
     if (revoke) {
         expect_rc(wfs_txn_revoke(vol, revoke), WASMOS_ERR_NONE, "a block is revoked");
     }
-    memset(&cc, 0, sizeof(cc));
-    cc.vol = vol;
-    (void)wfs_stub_run_task(&task, wfs_txn_commit_task, &cc);
+    (void)wfs_txn_close(vol);
 }
 
 /* Set up a dirty volume and return the target block a case will journal. */
@@ -189,10 +222,10 @@ static void test_a_committed_transaction_is_replayed_at_the_next_mount(void) {
     expect_u32(vol.super.needs_replay, 0u, "the replay is no longer owed");
     expect_rc(m.journal_err, WASMOS_ERR_NONE, "and the log reported nothing");
 
-    /* The gate the phase-2 writers still need: they do not run inside
-     * transactions, so a crash may have left metadata the log never recorded and
-     * no replay repairs. */
-    expect_u32(vol.super.read_only, 1u, "the volume stays read-only");
+    /* And WRITABLE, which is what having replayed it buys: the transaction
+     * either landed whole or was discarded whole, so there is no half-applied
+     * state a mount would have to refuse to write over. */
+    expect_u32(vol.super.read_only, 0u, "the volume is writable again");
 
     wfs_stub_teardown();
 }
@@ -355,12 +388,192 @@ static void test_a_damaged_log_leaves_the_volume_readable(void) {
     expect_rc(m.journal_err, WASMOS_ERR_FS_JOURNAL, "the log is reported unusable");
     expect_u32(vol.super.read_only, 1u, "so the volume refuses writes");
     expect_u32(vol.super.root_object_id, (uint32_t)WFS_OBJECT_ROOT, "the root is still reachable");
-    /* The log, not the read-only gate, is what the caller is told about: a
-     * volume read-only for a damaged journal and one read-only for a recovered
-     * superblock need different repairs. */
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_FS_JOURNAL, "and no transaction can be opened on it");
+    /* An operation is told the volume is READ-ONLY, which is the fact that
+     * governs it. WHY it is read-only -- a damaged log here, a superblock
+     * recovered from a backup elsewhere (§5) -- is the mount's report above, and
+     * the two need different repairs. */
+    expect_rc(
+        wfs_txn_open(&vol), WASMOS_ERR_FS_READ_ONLY, "and no transaction can be opened on it");
 
     wfs_stub_teardown();
+}
+
+/* ---- the writers, crashed at every step -------------------------------- */
+
+/* Resolve `name` in the root of the mounted volume, the way a client does.
+ *
+ * Returns 1 when it names an object, 0 when it is absent, and -1 for anything
+ * else -- a lookup that fails for a reason other than absence is a damaged
+ * directory, which is one of the outcomes under test. */
+static int lookup(wfs_volume_t* vol, const char* name, uint32_t* out_id) {
+    static wfs_path_ctx_t path;
+    wasmos_wasm_coroutine_t task;
+
+    if (wfs_path_init_from(&path, vol, WFS_OBJECT_ROOT, name, (uint32_t)strlen(name)) !=
+        WASMOS_ERR_NONE) {
+        return -1;
+    }
+    if (wfs_stub_run_task(&task, wfs_path_task, &path) != 0) {
+        return -1;
+    }
+    if (!path.found) {
+        return 0;
+    }
+    *out_id = path.object_id;
+    return 1;
+}
+
+/* Group 0's bitmaps, straight out of the image: the block bitmap first, the
+ * object bitmap behind it. */
+static const uint8_t* block_bitmap(void) {
+    return wfs_stub_image + (size_t)g_layout.bitmap_start * wfs_stub_block_size;
+}
+
+static const uint8_t* object_bitmap(void) {
+    return wfs_stub_image + (size_t)(g_layout.bitmap_start + 1u) * wfs_stub_block_size;
+}
+
+/* Whether group 0's free counters still agree with its bitmaps.
+ *
+ * The bitmaps are authoritative and the counters are derived (§12), so a
+ * disagreement is precisely what a crash BETWEEN the two writes used to leave --
+ * the allocator's own comment called it a stale counter fsck rebuilds. A
+ * transaction has no between: both blocks land or neither does. This is the half
+ * of the sweep that a non-journaled writer fails.
+ */
+static int counters_agree(const wfs_volume_t* vol) {
+    const uint8_t* desc;
+    uint32_t per_block = wfs_group_descs_per_block(vol->super.block_size);
+    uint32_t bits;
+
+    (void)per_block;
+    desc = wfs_stub_image + (size_t)g_layout.group_table_start * wfs_stub_block_size;
+    bits = vol->super.blocks_per_group;
+    if (bits > vol->super.total_blocks) {
+        bits = vol->super.total_blocks;
+    }
+    if (wfs_bitmap_count_free(block_bitmap(), bits) !=
+        wfs_rd32(desc, (uint32_t)offsetof(struct wfs_group_desc, free_blocks))) {
+        return 0;
+    }
+    return wfs_bitmap_count_free(object_bitmap(), (uint32_t)vol->super.total_objects) ==
+           wfs_rd32(desc, (uint32_t)offsetof(struct wfs_group_desc, free_objects));
+}
+
+/* Block requests one uninterrupted create takes, which is what bounds the sweep
+ * below. Measured rather than written down, so the sweep cannot silently stop
+ * short of the operation as the writer changes. Returns 0 when the fixture could
+ * not be built, having reported why. */
+static uint32_t uninterrupted_create_steps(void) {
+    wfs_mount_ctx_t m;
+    wfs_volume_t vol;
+    uint32_t id = 0u;
+    uint32_t steps;
+
+    if (wfs_stub_build_volume(VOL_16M, 4096u, k_uuid, TEST_NOW_NS, &g_layout) != 0) {
+        expect(0, "build a volume");
+        return 0u;
+    }
+    expect(mount_volume(&m, &vol) == 0, "the fresh volume mounts");
+    wfs_stub_reset_counters();
+    expect_rc(wfs_ns_create(&vol,
+                            WFS_OBJECT_ROOT,
+                            "made.txt",
+                            8u,
+                            (uint16_t)WFS_TYPE_FILE,
+                            0644u,
+                            TEST_NOW_NS,
+                            &id),
+              WASMOS_ERR_NONE,
+              "an uninterrupted create succeeds");
+    steps = wfs_stub_req_count;
+    expect(steps > 0u, "and takes at least one block request");
+    wfs_stub_teardown();
+    return steps;
+}
+
+/* Stop a real namespace operation at EVERY step it takes, and require the volume
+ * that comes back to be consistent at each one.
+ *
+ * This is the assertion that the writers actually journal, and picking a single
+ * crash point would not be: a create touches an object bitmap, an object record,
+ * a group descriptor and a directory block, and it is the gaps BETWEEN them that
+ * a transaction closes. Every gap is therefore visited.
+ *
+ * Two things are required of the volume at each one. The name resolves to an
+ * object the bitmap agrees is allocated, or it is absent -- never an entry
+ * naming a record a later allocation would hand to a second file. And group 0's
+ * free counters still agree with its bitmaps, which is the half a non-journaled
+ * writer fails: it writes the bitmap and then the descriptor, and a crash
+ * between them leaves the counter stale by construction.
+ *
+ * Both outcomes must actually occur over the sweep, or the case would pass on an
+ * operation that never got anywhere.
+ */
+static void test_a_create_is_all_or_nothing_at_every_crash_point(void) {
+    uint32_t stop;
+    uint32_t steps;
+    uint32_t saw_absent = 0u;
+    uint32_t saw_present = 0u;
+    uint32_t inconsistent = 0u;
+
+    steps = uninterrupted_create_steps();
+    if (steps == 0u) {
+        return;
+    }
+
+    for (stop = 1u; stop <= steps; ++stop) {
+        wfs_mount_ctx_t m;
+        wfs_volume_t vol;
+        uint32_t id = 0u;
+        int found;
+
+        if (wfs_stub_build_volume(VOL_16M, 4096u, k_uuid, TEST_NOW_NS, &g_layout) != 0) {
+            expect(0, "build a volume");
+            return;
+        }
+        if (mount_volume(&m, &vol) != 0) {
+            expect(0, "the fresh volume mounts");
+            wfs_stub_teardown();
+            return;
+        }
+        wfs_stub_reset_counters();
+        wfs_stub_stop_after = stop;
+        (void)wfs_ns_create(&vol,
+                            WFS_OBJECT_ROOT,
+                            "made.txt",
+                            8u,
+                            (uint16_t)WFS_TYPE_FILE,
+                            0644u,
+                            TEST_NOW_NS,
+                            &id);
+        if (remount(&m, &vol) != 0) {
+            expect(0, "the volume remounts after the crash");
+            wfs_stub_teardown();
+            return;
+        }
+        if (!counters_agree(&vol)) {
+            inconsistent++;
+        }
+        found = lookup(&vol, "made.txt", &id);
+        if (found < 0) {
+            inconsistent++;
+        } else if (found == 0) {
+            saw_absent++;
+        } else if (!wfs_bitmap_test(object_bitmap(), id)) {
+            /* A name resolving to an object the bitmap calls free is exactly the
+             * corruption the transaction exists to prevent: the next allocation
+             * would hand that record to a second file. */
+            inconsistent++;
+        } else {
+            saw_present++;
+        }
+        wfs_stub_teardown();
+    }
+
+    expect_u32(inconsistent, 0u, "no crash point leaves the volume inconsistent");
+    expect(saw_absent > 0u, "some crash points leave the file absent");
+    expect(saw_present > 0u, "and some leave it fully created");
 }
 
 static const wasmos_test_void_case_t k_cases[] = {
@@ -371,6 +584,7 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_damaged_image_aborts_the_replay),
     WASMOS_TEST_CASE(test_a_clean_volume_does_not_scan_the_log),
     WASMOS_TEST_CASE(test_a_damaged_log_leaves_the_volume_readable),
+    WASMOS_TEST_CASE(test_a_create_is_all_or_nothing_at_every_crash_point),
 };
 
 int main(void) {

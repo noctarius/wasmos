@@ -21,6 +21,7 @@
 #include "wasmos/coroutine_wasm.h"
 #include "wasmos/libsys.h"
 #include "wfs_block.h"
+#include "wfs_journal.h"
 #include "wfs_mkfs.h"
 
 #define WFS_STUB_REQ_LOG_MAX 64
@@ -89,5 +90,36 @@ void wfs_stub_reset_counters(void);
  * with.
  */
 int32_t wfs_stub_run_task(wasmos_wasm_coroutine_t* task, wasmos_wasm_task_resume_fn fn, void* user);
+
+/* Run `fn` as the body of one journal transaction, the way a driver operation
+ * reaches it (wfs_journal.h).
+ *
+ * Every metadata writer STAGES its blocks into the log rather than writing them,
+ * so a participant run outside a transaction is refused. A case that drives one
+ * directly therefore has to supply the transaction its caller would, and this is
+ * that -- open, run, then commit, or abandon when the body failed.
+ *
+ * static inline so that only the suites which drive a writer pull in the journal;
+ * the read-only ones link the fixture without it.
+ *
+ * Returns 0, or the negative packed code the body or the commit failed with.
+ */
+static inline int32_t wfs_stub_run_txn(wfs_volume_t* vol, wasmos_wasm_task_resume_fn fn,
+                                       void* user) {
+    wasmos_wasm_coroutine_t task;
+    wasmos_error_code_t rc = wfs_txn_open(vol);
+    int32_t status;
+
+    if (rc != WASMOS_ERR_NONE) {
+        return (int32_t)rc;
+    }
+    status = wfs_stub_run_task(&task, fn, user);
+    if (status != 0) {
+        wfs_txn_abort(vol);
+        return status;
+    }
+    rc = wfs_txn_close(vol);
+    return rc == WASMOS_ERR_NONE ? 0 : (int32_t)rc;
+}
 
 #endif /* WASMOS_TEST_STUBS_WFS_BLOCK_SERVER_H */

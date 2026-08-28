@@ -90,23 +90,38 @@ wasmos_error_code_t wfs_txn_begin(wfs_volume_t* vol);
  */
 wasmos_error_code_t wfs_txn_revoke(wfs_volume_t* vol, uint32_t block);
 
-/* Journal the STAGED block as the new content of `target`.
+/* Journal the STAGED block as the new content of `target`, and take the result.
  *
- * The caller has just built that content in wfs_block_data(); this writes it
- * into the log and records the target, its log block and the image's checksum
- * for the descriptor. The block itself is not touched until the transaction
- * checkpoints.
+ * The begin/take pair of wfs_block_write_begin/wfs_block_take, and deliberately
+ * the same shape: converting a metadata write to a journaled one is then the
+ * swap of one call for another, with the awaits and resume points already in
+ * place. A DATA write keeps using the block layer directly, because file data is
+ * not journaled (§17).
+ *
+ * The caller has just built the block's new content in wfs_block_data(); the
+ * begin writes it into the log and records the target, its log block and the
+ * image's checksum for the descriptor. The block itself is not touched until the
+ * transaction checkpoints.
  *
  * Staging the same target twice REPLACES its image rather than adding a second
  * target, so a read-modify-write repeated inside one transaction costs one log
- * block and leaves one image for recovery to apply.
+ * block and leaves one image for recovery to apply. That is what keeps a
+ * transaction's target count proportional to the BLOCKS it touches rather than
+ * to the number of times it touches them.
  *
- * A failure aborts the transaction, because a caller that continues would commit
- * a transaction missing one of its blocks.
+ * The begin returns NULL when there is nothing to await, which covers a refusal
+ * as well as a failed stage; wfs_txn_stage_take reports either, so the ordinary
+ * await-then-take sequence is correct without the caller testing the future. Any
+ * failure ABORTS the transaction, because a caller that continued would commit a
+ * transaction missing one of its blocks.
  *
- * Context: wfs_txstage_ctx_t.
+ * Refuses a volume that is not yet marked WFS_STATE_DIRTY on disk. That flag is
+ * what makes the next mount replay at all, so a log written before it lands
+ * would be skipped by a mount reading a CLEAN volume -- and a transaction whose
+ * checkpoint had half run would then never be finished.
  */
-int32_t wfs_txn_stage_task(void* user, uintptr_t* out_value);
+wasmos_future_t* wfs_txn_stage_begin(wfs_volume_t* vol, uint32_t target);
+wasmos_error_code_t wfs_txn_stage_take(wfs_volume_t* vol);
 
 /* Commit and retire the open transaction: §14 steps 1 (descriptor) through 7.
  *
@@ -118,6 +133,21 @@ int32_t wfs_txn_stage_task(void* user, uintptr_t* out_value);
  * Context: wfs_txcommit_ctx_t.
  */
 int32_t wfs_txn_commit_task(void* user, uintptr_t* out_value);
+
+/* Open a transaction around one operation, and close it.
+ *
+ * The pair every metadata operation in this driver is written between. `open`
+ * marks the volume WFS_STATE_DIRTY on disk before the transaction begins --
+ * §14's log is only consulted by a mount that sees that flag -- and `close`
+ * commits and checkpoints it. Both drive their tasks through wfs_ops_run, so
+ * they are for the plain-sequence callers the operations are written as; a
+ * failure from either leaves no transaction open.
+ *
+ * Failing to close is not the same as aborting: see wfs_txn_commit_task for what
+ * a failure after the COMMIT block lands means for the volume.
+ */
+wasmos_error_code_t wfs_txn_open(wfs_volume_t* vol);
+wasmos_error_code_t wfs_txn_close(wfs_volume_t* vol);
 
 /* Abandon the open transaction without committing.
  *

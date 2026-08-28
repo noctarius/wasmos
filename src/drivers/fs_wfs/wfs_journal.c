@@ -7,6 +7,7 @@
 #include "wfs_crc32c.h"
 #include "wfs_endian.h"
 #include "wfs_ops.h"
+#include "wfs_sync.h"
 
 static void zero(uint8_t* p, uint32_t len) {
     uint32_t i;
@@ -223,6 +224,7 @@ wasmos_error_code_t wfs_txn_begin(wfs_volume_t* vol) {
     j->sequence = j->next_sequence;
     j->target_count = 0u;
     j->revoke_count = 0u;
+    j->stage_err = WASMOS_ERR_NONE;
     j->open = 1u;
     wfs_block_set_redirect(wfs_ops_block(), journal_redirect, j);
     return WASMOS_ERR_NONE;
@@ -265,72 +267,121 @@ wasmos_error_code_t wfs_txn_revoke(wfs_volume_t* vol, uint32_t block) {
 
 /* ---- staging one image --------------------------------------------------- */
 
-int32_t wfs_txn_stage_task(void* user, uintptr_t* out_value) {
-    wfs_txstage_ctx_t* ctx = (wfs_txstage_ctx_t*)user;
+/* Refuse the stage, recording why for the take and abandoning the transaction. */
+static wasmos_future_t* stage_refuse(wfs_volume_t* vol, wasmos_error_code_t err) {
+    vol->journal.stage_err = err;
+    wfs_txn_abort(vol);
+    return 0;
+}
+
+wasmos_future_t* wfs_txn_stage_begin(wfs_volume_t* vol, uint32_t target) {
     wfs_block_t* b = wfs_ops_block();
     wfs_journal_t* j;
+    uint32_t slot;
     uint32_t i;
 
-    (void)out_value;
-
-    switch (ctx->pc) {
-    case WFS_TXSTAGE_PC_START:
-        if (!ctx->vol || !ctx->vol->journal.open) {
-            WFS_FAIL(ctx, WASMOS_ERR_FS_BAD_ARGS);
-        }
-        j = &ctx->vol->journal;
-        if (ctx->target >= j->start && ctx->target < j->start + j->blocks) {
-            /* The log cannot journal itself: an image of a log block would be
-             * replayed over the very record recovery is reading. */
-            wfs_txn_abort(ctx->vol);
-            WFS_FAIL(ctx, WASMOS_ERR_FS_BAD_ARGS);
-        }
-
-        /* A target staged twice REPLACES its image. A read-modify-write repeated
-         * inside one transaction is the ordinary case -- a bitmap block touched
-         * by two allocations, say -- and a second target for the same block
-         * would leave recovery applying two images to it in an order the
-         * descriptor does not fix. */
-        ctx->slot = j->target_count;
-        for (i = 0; i < j->target_count; ++i) {
-            if (j->targets[i].target == ctx->target) {
-                ctx->slot = i;
-                break;
-            }
-        }
-        if (ctx->slot >= WFS_TXN_MAX_TARGETS) {
-            wfs_txn_abort(ctx->vol);
-            WFS_FAIL(ctx, WASMOS_ERR_FS_TXN_FULL);
-        }
-        ctx->journal_block = image_block(j, ctx->slot);
-
-        /* The image's checksum is taken over the bytes about to be written, so
-         * recovery compares against what the log actually received. Plain
-         * CRC32C, unseeded (§14): an image is not addressed by the block it is
-         * stored in, and the descriptor that names both is itself seeded. */
-        j->targets[ctx->slot].target = ctx->target;
-        j->targets[ctx->slot].journal_block = ctx->journal_block;
-        j->targets[ctx->slot].checksum = wfs_crc32c(wfs_block_data(b), ctx->vol->super.block_size);
-        if (ctx->slot == j->target_count) {
-            j->target_count++;
-        }
-
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->journal_block), WFS_TXSTAGE_PC_IMAGE_WRITTEN);
-        /* fall through */
-
-    case WFS_TXSTAGE_PC_IMAGE_WRITTEN:
-        ctx->err = wfs_block_take(b);
-        if (ctx->err != WASMOS_ERR_NONE) {
-            /* A caller that continued would commit a transaction one of whose
-             * promised images never reached the log. */
-            wfs_txn_abort(ctx->vol);
-            return (int32_t)ctx->err;
-        }
-        return WASMOS_WASM_TASK_COMPLETE;
-
-    default:
-        WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
+    if (!vol || !vol->journal.open) {
+        return stage_refuse(vol, WASMOS_ERR_FS_BAD_ARGS);
     }
+    j = &vol->journal;
+    /* The volume must already say DIRTY on disk. A mount reading a CLEAN volume
+     * never looks at the log (§15), so a transaction written before the flag
+     * lands is one whose half-finished checkpoint nothing would ever complete. */
+    if (!vol->dirty_marked) {
+        return stage_refuse(vol, WASMOS_ERR_FS_NOT_READY);
+    }
+    if (target >= j->start && target < j->start + j->blocks) {
+        /* The log cannot journal itself: an image of a log block would be
+         * replayed over the very record recovery is reading. */
+        return stage_refuse(vol, WASMOS_ERR_FS_BAD_ARGS);
+    }
+
+    /* A target staged twice REPLACES its image. A second target for the same
+     * block would leave recovery applying two images to it in an order the
+     * descriptor does not fix. */
+    slot = j->target_count;
+    for (i = 0; i < j->target_count; ++i) {
+        if (j->targets[i].target == target) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot >= WFS_TXN_MAX_TARGETS) {
+        return stage_refuse(vol, WASMOS_ERR_FS_TXN_FULL);
+    }
+
+    /* The image's checksum is taken over the bytes about to be written, so
+     * recovery compares against what the log actually received. Plain CRC32C,
+     * unseeded (§14): an image is not addressed by the block it is stored in,
+     * and the descriptor that names both is itself seeded. */
+    j->targets[slot].target = target;
+    j->targets[slot].journal_block = image_block(j, slot);
+    j->targets[slot].checksum = wfs_crc32c(wfs_block_data(b), vol->super.block_size);
+    if (slot == j->target_count) {
+        j->target_count++;
+    }
+    return wfs_block_write_begin(b, j->targets[slot].journal_block);
+}
+
+wasmos_error_code_t wfs_txn_stage_take(wfs_volume_t* vol) {
+    wasmos_error_code_t err;
+
+    if (!vol) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    /* Reported whether or not the transaction is still open: a refusal aborted
+     * it, and the caller has yet to learn why. */
+    if (vol->journal.stage_err != WASMOS_ERR_NONE) {
+        err = vol->journal.stage_err;
+        vol->journal.stage_err = WASMOS_ERR_NONE;
+        return err;
+    }
+    err = wfs_block_take(wfs_ops_block());
+    if (err != WASMOS_ERR_NONE) {
+        wfs_txn_abort(vol);
+    }
+    return err;
+}
+
+/* ---- one operation, one transaction -------------------------------------- */
+
+wasmos_error_code_t wfs_txn_open(wfs_volume_t* vol) {
+    wfs_dirty_ctx_t dirty;
+    int32_t status;
+
+    if (!vol) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    /* Before the transaction, not inside it: the superblock's state flag is what
+     * makes the next mount read the log at all, and it is deliberately NOT
+     * journaled -- a flag that only a replay could apply would be useless to the
+     * mount deciding whether to replay. Costs one write per mount. */
+    dirty.pc = WFS_DIRTY_PC_START;
+    dirty.vol = vol;
+    dirty.err = WASMOS_ERR_NONE;
+    status = wfs_ops_run(wfs_mark_dirty_task, &dirty);
+    if (status != 0) {
+        return (wasmos_error_code_t)status;
+    }
+    return wfs_txn_begin(vol);
+}
+
+wasmos_error_code_t wfs_txn_close(wfs_volume_t* vol) {
+    wfs_txcommit_ctx_t commit;
+    int32_t status;
+
+    if (!vol) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    commit.pc = WFS_TXCOMMIT_PC_START;
+    commit.vol = vol;
+    commit.index = 0u;
+    commit.err = WASMOS_ERR_NONE;
+    status = wfs_ops_run(wfs_txn_commit_task, &commit);
+    if (status != 0) {
+        return (wasmos_error_code_t)status;
+    }
+    return WASMOS_ERR_NONE;
 }
 
 /* ---- commit and checkpoint ----------------------------------------------- */

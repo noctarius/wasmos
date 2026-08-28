@@ -9,7 +9,7 @@
 #include "wfs_endian.h"
 #include "wfs_mount.h"
 #include "wfs_ops.h"
-#include "wfs_sync.h"
+#include "wfs_journal.h"
 
 /* Blocks of `group` that exist on the device. Every group but the last is full;
  * the last is partial on a volume whose size is not a whole number of groups.
@@ -54,33 +54,6 @@ int32_t wfs_alloc_blocks_task(void* user, uintptr_t* out_value) {
         }
         ctx->group = ctx->prefer_group < ctx->vol->super.group_count ? ctx->prefer_group : 0u;
         ctx->tried = 0u;
-        /* The volume says DIRTY on disk before any metadata write lands. That
-         * flag is what makes a crash mid-allocation mount read-only instead of
-         * serving bitmaps and counters that disagree -- the whole of WFS's crash
-         * safety until the journal exists (phase 3). Costs one write per mount. */
-        wfs_ops_task_reset(&ctx->dirty_task);
-        memset(&ctx->dirty, 0, sizeof(ctx->dirty));
-        ctx->dirty.vol = ctx->vol;
-        if (!wasmos_async_start(
-                wfs_ops_runtime(), &ctx->dirty_task, wfs_mark_dirty_task, &ctx->dirty)) {
-            WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
-        }
-        ctx->dirty_started = 1u;
-        ctx->pc = WFS_ALLOC_PC_DIRTY_JOINED;
-        /* fall through */
-
-    case WFS_ALLOC_PC_DIRTY_JOINED:
-        if (ctx->dirty_started) {
-            int dj = wasmos_wasm_coroutine_join(&ctx->dirty_task, &joined);
-
-            if (dj == WASMOS_WASM_AWAIT_PENDING) {
-                return WASMOS_WASM_TASK_YIELDED;
-            }
-            ctx->dirty_started = 0u;
-            if (dj != 0 || joined != 0) {
-                WFS_FAIL(ctx, joined ? (wasmos_error_code_t)joined : WASMOS_ERR_FS_IO);
-            }
-        }
         ctx->pc = WFS_ALLOC_PC_DESC_JOINED;
         /* fall through into the sweep */
 
@@ -146,11 +119,12 @@ int32_t wfs_alloc_blocks_task(void* user, uintptr_t* out_value) {
          * which fsck rebuilds; the reverse order would leave the counter claiming
          * an allocation the bitmap does not record, and a later allocator would
          * hand the same blocks out again. */
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->bitmap_block), WFS_ALLOC_PC_BITMAP_WRITTEN);
+        WFS_AWAIT(
+            ctx, wfs_txn_stage_begin(ctx->vol, ctx->bitmap_block), WFS_ALLOC_PC_BITMAP_WRITTEN);
         /* fall through */
 
     case WFS_ALLOC_PC_BITMAP_WRITTEN:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
@@ -180,11 +154,11 @@ int32_t wfs_alloc_blocks_task(void* user, uintptr_t* out_value) {
                                      d,
                                      WFS_GROUP_DESC_SIZE,
                                      (uint32_t)offsetof(struct wfs_group_desc, checksum)));
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->desc_block), WFS_ALLOC_PC_DESC_WRITTEN);
+        WFS_AWAIT(ctx, wfs_txn_stage_begin(ctx->vol, ctx->desc_block), WFS_ALLOC_PC_DESC_WRITTEN);
         /* fall through */
 
     case WFS_ALLOC_PC_DESC_WRITTEN:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
@@ -238,6 +212,19 @@ int32_t wfs_free_blocks_task(void* user, uintptr_t* out_value) {
         if (ctx->first_block + ctx->length > ctx->vol->super.total_blocks ||
             ctx->first_block + ctx->length < ctx->first_block) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_RANGE);
+        }
+
+        /* Barred from replay before the bitmap releases them, so a crash between
+         * the two cannot leave a block both free and replayable (§18). Pure, so
+         * no ordering concern of its own: the record reaches the log with the
+         * transaction's other blocks. */
+        if (ctx->metadata) {
+            for (i = 0; i < ctx->length; ++i) {
+                ctx->err = wfs_txn_revoke(ctx->vol, ctx->first_block + i);
+                if (ctx->err != WASMOS_ERR_NONE) {
+                    return (int32_t)ctx->err;
+                }
+            }
         }
         ctx->cursor = ctx->first_block;
         ctx->pc = WFS_FREE_PC_DESC_JOINED;
@@ -298,11 +285,12 @@ int32_t wfs_free_blocks_task(void* user, uintptr_t* out_value) {
         }
         /* Bitmap first, same as allocation: it is what the next mount believes,
          * and a crash before the counter leaves a number fsck rebuilds. */
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->bitmap_block), WFS_FREE_PC_BITMAP_WRITTEN);
+        WFS_AWAIT(
+            ctx, wfs_txn_stage_begin(ctx->vol, ctx->bitmap_block), WFS_FREE_PC_BITMAP_WRITTEN);
         /* fall through */
 
     case WFS_FREE_PC_BITMAP_WRITTEN:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
@@ -329,11 +317,11 @@ int32_t wfs_free_blocks_task(void* user, uintptr_t* out_value) {
                                      d,
                                      WFS_GROUP_DESC_SIZE,
                                      (uint32_t)offsetof(struct wfs_group_desc, checksum)));
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->desc_block), WFS_FREE_PC_DESC_WRITTEN);
+        WFS_AWAIT(ctx, wfs_txn_stage_begin(ctx->vol, ctx->desc_block), WFS_FREE_PC_DESC_WRITTEN);
         /* fall through */
 
     case WFS_FREE_PC_DESC_WRITTEN:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
@@ -378,29 +366,6 @@ int32_t wfs_alloc_object_task(void* user, uintptr_t* out_value) {
         }
         ctx->group = ctx->prefer_group < ctx->vol->super.group_count ? ctx->prefer_group : 0u;
         ctx->tried = 0u;
-        wfs_ops_task_reset(&ctx->dirty_task);
-        memset(&ctx->dirty, 0, sizeof(ctx->dirty));
-        ctx->dirty.vol = ctx->vol;
-        if (!wasmos_async_start(
-                wfs_ops_runtime(), &ctx->dirty_task, wfs_mark_dirty_task, &ctx->dirty)) {
-            WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
-        }
-        ctx->dirty_started = 1u;
-        ctx->pc = WFS_OBJALLOC_PC_DIRTY_JOINED;
-        /* fall through */
-
-    case WFS_OBJALLOC_PC_DIRTY_JOINED:
-        if (ctx->dirty_started) {
-            int dj = wasmos_wasm_coroutine_join(&ctx->dirty_task, &joined);
-
-            if (dj == WASMOS_WASM_AWAIT_PENDING) {
-                return WASMOS_WASM_TASK_YIELDED;
-            }
-            ctx->dirty_started = 0u;
-            if (dj != 0 || joined != 0) {
-                WFS_FAIL(ctx, joined ? (wasmos_error_code_t)joined : WASMOS_ERR_FS_IO);
-            }
-        }
         ctx->pc = WFS_OBJALLOC_PC_DESC_JOINED;
         /* fall through */
 
@@ -491,11 +456,12 @@ int32_t wfs_alloc_object_task(void* user, uintptr_t* out_value) {
                                      d,
                                      WFS_OBJECT_SIZE,
                                      (uint32_t)offsetof(struct wfs_object, checksum)));
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->record_block), WFS_OBJALLOC_PC_RECORD_WRITTEN);
+        WFS_AWAIT(
+            ctx, wfs_txn_stage_begin(ctx->vol, ctx->record_block), WFS_OBJALLOC_PC_RECORD_WRITTEN);
         /* fall through */
 
     case WFS_OBJALLOC_PC_RECORD_WRITTEN:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
@@ -511,8 +477,9 @@ int32_t wfs_alloc_object_task(void* user, uintptr_t* out_value) {
         }
         if (!wfs_bitmap_test(wfs_block_data(b), ctx->slot)) {
             wfs_bitmap_set(wfs_block_data(b), ctx->slot);
-            WFS_AWAIT(
-                ctx, wfs_block_write_begin(b, ctx->bitmap_block), WFS_OBJALLOC_PC_BITMAP_WRITTEN);
+            WFS_AWAIT(ctx,
+                      wfs_txn_stage_begin(ctx->vol, ctx->bitmap_block),
+                      WFS_OBJALLOC_PC_BITMAP_WRITTEN);
             return wfs_alloc_object_task(user, out_value);
         }
         ctx->pc = WFS_OBJALLOC_PC_DESC_READY;
@@ -520,7 +487,7 @@ int32_t wfs_alloc_object_task(void* user, uintptr_t* out_value) {
         /* fall through */
 
     case WFS_OBJALLOC_PC_DESC_READY:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
@@ -538,11 +505,12 @@ int32_t wfs_alloc_object_task(void* user, uintptr_t* out_value) {
                                      d,
                                      WFS_GROUP_DESC_SIZE,
                                      (uint32_t)offsetof(struct wfs_group_desc, checksum)));
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->desc_block), WFS_OBJALLOC_PC_DESC_WRITTEN);
+        WFS_AWAIT(
+            ctx, wfs_txn_stage_begin(ctx->vol, ctx->desc_block), WFS_OBJALLOC_PC_DESC_WRITTEN);
         /* fall through */
 
     case WFS_OBJALLOC_PC_DESC_WRITTEN:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
@@ -619,11 +587,12 @@ int32_t wfs_free_object_task(void* user, uintptr_t* out_value) {
             return (int32_t)ctx->err;
         }
         wfs_bitmap_clear(wfs_block_data(b), ctx->slot);
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->bitmap_block), WFS_OBJFREE_PC_BITMAP_WRITTEN);
+        WFS_AWAIT(
+            ctx, wfs_txn_stage_begin(ctx->vol, ctx->bitmap_block), WFS_OBJFREE_PC_BITMAP_WRITTEN);
         /* fall through */
 
     case WFS_OBJFREE_PC_BITMAP_WRITTEN:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }
@@ -649,11 +618,11 @@ int32_t wfs_free_object_task(void* user, uintptr_t* out_value) {
                                      d,
                                      WFS_GROUP_DESC_SIZE,
                                      (uint32_t)offsetof(struct wfs_group_desc, checksum)));
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->desc_block), WFS_OBJFREE_PC_DESC_WRITTEN);
+        WFS_AWAIT(ctx, wfs_txn_stage_begin(ctx->vol, ctx->desc_block), WFS_OBJFREE_PC_DESC_WRITTEN);
         /* fall through */
 
     case WFS_OBJFREE_PC_DESC_WRITTEN:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         if (ctx->err != WASMOS_ERR_NONE) {
             return (int32_t)ctx->err;
         }

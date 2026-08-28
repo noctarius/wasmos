@@ -2529,6 +2529,7 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
@@ -2557,6 +2558,9 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
@@ -2718,6 +2722,7 @@ add_custom_target(run-kernel-unit-tests
           -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_journal.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
@@ -2747,6 +2752,14 @@ add_custom_target(run-kernel-unit-tests
           -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_recover.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_namespace.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dirent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
@@ -2828,6 +2841,9 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
@@ -2855,6 +2871,7 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_populate.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
@@ -2886,6 +2903,7 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
@@ -2917,6 +2935,7 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c

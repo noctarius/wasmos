@@ -298,7 +298,7 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
                           g_path.object.inline_data,
                           0u,
                           0u);
-        status = wfs_run(wfs_truncate_task, &g_trunc);
+        status = (int32_t)wfs_truncate_run(&g_trunc);
         if (status != 0) {
             (void)wfs_reply(src, FS_IPC_ERROR, request_id, status, 0);
             return;
@@ -486,7 +486,7 @@ static void wfs_do_write(int32_t src, int32_t request_id, int32_t fd, int32_t co
                        g_stage,
                        chunk,
                        0u);
-        status = wfs_run(wfs_write_task, &g_write);
+        status = (int32_t)wfs_write_run(&g_write);
         if (status != 0) {
             /* Report what landed alongside the failure: a partial write is not a
              * failed write, and a client that resends from zero would duplicate

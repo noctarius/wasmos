@@ -2,9 +2,17 @@
  *
  * The bitmaps are authoritative and the free counters are derived from them, so
  * allocation is: find a run of clear bits in a group, set them, write the bitmap
- * back, and only then adjust the counter. That ORDER is deliberate — the bitmap
- * is what the next mount believes, and a crash between the two leaves a stale
- * counter, which fsck rebuilds, rather than blocks that two objects both own.
+ * back, and only then adjust the counter.
+ *
+ * Every task here is a TRANSACTION PARTICIPANT (wfs_journal.h): it stages its
+ * blocks into the caller's open transaction rather than writing them, and is
+ * refused outright when there is none. The operation that opens the transaction
+ * is what makes the bitmap and the counter land together — the ORDER above is
+ * kept because it still governs a crash before the commit, which discards the
+ * transaction and leaves whichever of the two writes had reached the log.
+ *
+ * Freeing a run that held METADATA revokes each of its blocks (§18); see
+ * wfs_free_ctx_t's `metadata`.
  *
  * Locality policy, in the order §12 gives it: prefer the group holding the
  * parent, take a contiguous run where one exists, fall back to a shorter run,

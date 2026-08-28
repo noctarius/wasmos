@@ -1189,6 +1189,47 @@ linked feature documents for rationale and rollout plans.
   image holds exactly the writes that landed -- and then remounts from that image
   with a cold block cache. Hand-building a log instead would test the test, and
   would keep passing if the writer's layout drifted away from the reader's.
+- EVERY WFS METADATA WRITE now runs inside a transaction, so phase 3 (§23) is
+  complete and a volume that was not unmounted cleanly mounts WRITABLE again
+  after its replay. `wfs_alloc.c`, `wfs_extent_write.c`, `wfs_write.c`,
+  `wfs_truncate.c` and `wfs_namespace.c` stage their blocks through
+  `wfs_txn_stage_begin`/`_take` -- deliberately the same begin/take shape as the
+  block layer's, so converting a write was swapping one call for another with the
+  awaits already in place. File DATA keeps writing straight to its block (§17):
+  the block a write lands in, the block an inline promotion moves bytes into, and
+  the tail a truncation zeroes are all data.
+- The transaction is opened and closed by the OPERATION, never by the participant
+  it composes. `wfs_txn_open`/`wfs_txn_close` wrap the five namespace operations
+  inside `wfs_namespace.c`, and `wfs_write_run`/`wfs_truncate_run` wrap the other
+  two; a participant run without one is refused rather than opening its own,
+  because a create that allocated an object in one transaction and inserted its
+  directory record in a second is exactly the pair a crash could separate.
+- The volume is marked WFS_STATE_DIRTY by `wfs_txn_open`, which is now the single
+  owner of that flag -- the per-allocation and per-write marks are gone. The order
+  is load-bearing: a mount reading a CLEAN volume never looks at the log (§15), so
+  a transaction committed before the flag landed would be one whose half-finished
+  checkpoint nothing would ever complete. `wfs_txn_stage_begin` refuses an
+  unmarked volume rather than trusting the caller.
+- Freeing a run that held METADATA revokes each of its blocks (§18):
+  `wfs_free_ctx_t` carries a `metadata` flag, set where an extent-tree leaf is
+  released and where a DIRECTORY's blocks are freed. A file's blocks were never in
+  the log, so they have no image to bar.
+- `test_wfs_recover.c` proves the conversion rather than assuming it. It runs a
+  real `wfs_ns_create` with the device stopping at EVERY one of its block
+  requests in turn -- the count is measured first, so the sweep cannot silently
+  stop short as the writer changes -- and requires the remounted volume to be
+  consistent at each: the name resolves to an object the bitmap agrees is
+  allocated, or it is absent, and group 0's free counters still agree with its
+  bitmaps. That second half is what a non-journaled writer fails, and it was
+  confirmed to fail: un-journaling one descriptor write turns the sweep red at six
+  crash points.
+- A transaction carries at most `WFS_TXN_MAX_TARGETS` (24) BLOCKS, not writes. A
+  block staged twice replaces its image, so a run of allocations in one group
+  costs one bitmap target and one descriptor target however many times it touches
+  them. An operation past the bound is refused whole with
+  `WASMOS_ERR_FS_TXN_FULL`; the reachable case is deleting a file whose extents
+  span more than about eleven block groups, which at a 4096-byte block size is
+  past a gigabyte.
 - The physical frame allocator reserves the kernel image by PHYSICAL address and
   spans `__kernel_end`. The link symbols are higher-half virtual, so the previous
   reservation overlapped no frame and protected nothing; the 64 KiB BSP boot stack

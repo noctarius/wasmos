@@ -167,14 +167,13 @@ static int32_t load_object(wfs_object_ctx_t* o, uint32_t id) {
 static int32_t do_truncate(uint32_t id, uint64_t new_size) {
     wfs_object_ctx_t o;
     wfs_trunc_ctx_t t;
-    wasmos_wasm_coroutine_t task;
 
     if (load_object(&o, id) != 0) {
         return -1;
     }
     memset(&t, 0, sizeof(t));
     wfs_truncate_init(&t, &g_vol, id, &o.out, o.inline_data, new_size, TRUNC_NOW_NS);
-    return wfs_stub_run_task(&task, wfs_truncate_task, &t);
+    return wfs_stub_run_txn(&g_vol, wfs_truncate_task, &t);
 }
 
 static int32_t do_read(uint32_t id, uint64_t offset, uint8_t* dst, uint32_t len,
@@ -513,14 +512,13 @@ static void test_freed_blocks_can_be_allocated_again(void) {
 static int32_t do_write(uint32_t id, uint64_t offset, const uint8_t* src, uint32_t len) {
     wfs_object_ctx_t o;
     wfs_write_ctx_t w;
-    wasmos_wasm_coroutine_t task;
 
     if (load_object(&o, id) != 0) {
         return -1;
     }
     memset(&w, 0, sizeof(w));
     wfs_write_init(&w, &g_vol, id, &o.out, o.inline_data, offset, src, len, TRUNC_NOW_NS);
-    return wfs_stub_run_task(&task, wfs_write_task, &w);
+    return wfs_stub_run_txn(&g_vol, wfs_write_task, &w);
 }
 
 /* Blocks marked used in the volume's only group, so a release can be checked as

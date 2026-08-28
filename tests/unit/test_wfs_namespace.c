@@ -673,12 +673,11 @@ static uint32_t exhaust_blocks(void) {
 
     for (;;) {
         wfs_alloc_ctx_t a;
-        wasmos_wasm_coroutine_t task;
 
         memset(&a, 0, sizeof(a));
         a.vol = &g_vol;
         a.want = 64u;
-        if (wfs_stub_run_task(&task, wfs_alloc_blocks_task, &a) != 0 || a.length == 0u) {
+        if (wfs_stub_run_txn(&g_vol, wfs_alloc_blocks_task, &a) != 0 || a.length == 0u) {
             break;
         }
         runs++;
@@ -951,7 +950,7 @@ static void test_unlinking_a_tree_mapped_file_frees_everything(void) {
                        buf,
                        sizeof(buf),
                        NOW_NS);
-        expect(wfs_stub_run_task(&task, wfs_write_task, &w) == 0, "a sparse run is written");
+        expect(wfs_stub_run_txn(&g_vol, wfs_write_task, &w) == 0, "a sparse run is written");
     }
     memset(&probe_o, 0, sizeof(probe_o));
     probe_o.vol = &g_vol;

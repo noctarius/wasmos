@@ -16,13 +16,18 @@
  * descent takes the last index whose logical_block does not exceed the target
  * and would silently return the wrong extent for an unsorted node.
  *
+ * A node is metadata, so both tasks here are transaction participants
+ * (wfs_journal.h): the leaf is staged into the caller's open transaction and
+ * reaches its block at the commit.
+ *
  * Ordering: the caller must have the extent's DATA block on disk before calling
  * this on an object that already has a tree. A leaf is reachable from the object
  * record the moment it is written, so publishing an extent before its content
- * would name a block still holding whatever it held before. On a promotion the
- * order does not matter, because the record naming the new tree is sealed later
- * by the caller and a crash before that leaves the leaf unreferenced -- a leak,
- * which fsck reclaims.
+ * would name a block still holding whatever it held before. File data is not
+ * journaled (§17), so the transaction does not close that gap -- which is why
+ * the rule survives it. On a promotion the order does not matter, because the
+ * record naming the new tree is sealed later by the caller and a crash before
+ * that leaves the leaf unreferenced -- a leak, which fsck reclaims.
  */
 #ifndef FS_WFS_WFS_EXTENT_WRITE_H
 #define FS_WFS_WFS_EXTENT_WRITE_H

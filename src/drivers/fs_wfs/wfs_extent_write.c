@@ -9,6 +9,7 @@
 #include "wfs_block.h"
 #include "wfs_crc32c.h"
 #include "wfs_endian.h"
+#include "wfs_journal.h"
 #include "wfs_ops.h"
 
 /* Byte offset of leaf record `i`. */
@@ -159,7 +160,8 @@ int32_t wfs_extent_add_task(void* user, uintptr_t* out_value) {
             node = wfs_block_data(b);
             fill_promoted_leaf(ctx, node);
             seal_node(ctx->vol, node, ctx->node_block);
-            WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->node_block), WFS_XTADD_PC_LEAF_WRITTEN);
+            WFS_AWAIT(
+                ctx, wfs_txn_stage_begin(ctx->vol, ctx->node_block), WFS_XTADD_PC_LEAF_WRITTEN);
             continue;
 
         case WFS_XTADD_PC_LEAF_READY:
@@ -219,8 +221,9 @@ int32_t wfs_extent_add_task(void* user, uintptr_t* out_value) {
                     put_extent(node, at - 1u, plog, pphys, plen + ctx->length);
                     seal_node(ctx->vol, node, ctx->node_block);
                     ctx->added = 0u;
-                    WFS_AWAIT(
-                        ctx, wfs_block_write_begin(b, ctx->node_block), WFS_XTADD_PC_LEAF_WRITTEN);
+                    WFS_AWAIT(ctx,
+                              wfs_txn_stage_begin(ctx->vol, ctx->node_block),
+                              WFS_XTADD_PC_LEAF_WRITTEN);
                     continue;
                 }
             }
@@ -247,11 +250,12 @@ int32_t wfs_extent_add_task(void* user, uintptr_t* out_value) {
                      (uint16_t)(entries + 1u));
             seal_node(ctx->vol, node, ctx->node_block);
             ctx->added = 1u;
-            WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->node_block), WFS_XTADD_PC_LEAF_WRITTEN);
+            WFS_AWAIT(
+                ctx, wfs_txn_stage_begin(ctx->vol, ctx->node_block), WFS_XTADD_PC_LEAF_WRITTEN);
             continue;
 
         case WFS_XTADD_PC_LEAF_WRITTEN:
-            ctx->err = wfs_block_take(b);
+            ctx->err = wfs_txn_stage_take(ctx->vol);
             if (ctx->err != WASMOS_ERR_NONE) {
                 return (int32_t)ctx->err;
             }
@@ -387,11 +391,12 @@ int32_t wfs_extent_trim_task(void* user, uintptr_t* out_value) {
             /* The leaf is rewritten BEFORE the run is released: a crash here
              * leaves blocks nothing names, which fsck reclaims, whereas freeing
              * first could hand a still-referenced block to another object. */
-            WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->node_block), WFS_XTTRIM_PC_LEAF_WRITTEN);
+            WFS_AWAIT(
+                ctx, wfs_txn_stage_begin(ctx->vol, ctx->node_block), WFS_XTTRIM_PC_LEAF_WRITTEN);
             continue;
 
         case WFS_XTTRIM_PC_LEAF_WRITTEN:
-            ctx->err = wfs_block_take(b);
+            ctx->err = wfs_txn_stage_take(ctx->vol);
             if (ctx->err != WASMOS_ERR_NONE) {
                 return (int32_t)ctx->err;
             }

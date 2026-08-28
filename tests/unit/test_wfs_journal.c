@@ -71,10 +71,40 @@ static int32_t mount_volume(wfs_mount_ctx_t* ctx, wfs_volume_t* vol) {
     return wfs_stub_run_task(&task, wfs_mount_task, ctx);
 }
 
+/* Journal the staged block, in the shape every participant uses: begin the
+ * stage, await it, take it. Nothing here is a shortcut around the driver's own
+ * path -- a helper that wrote the log block itself would stop testing the one
+ * thing that matters, which is where a metadata write actually lands. */
+typedef struct {
+    int pc;
+    wfs_volume_t* vol;
+    uint32_t target;
+    wasmos_error_code_t err;
+} stage_ctx_t;
+
+static int32_t stage_task(void* user, uintptr_t* out_value) {
+    stage_ctx_t* ctx = (stage_ctx_t*)user;
+
+    (void)out_value;
+    switch (ctx->pc) {
+    case 0:
+        WFS_AWAIT(ctx, wfs_txn_stage_begin(ctx->vol, ctx->target), 1);
+        /* fall through */
+    case 1:
+        ctx->err = wfs_txn_stage_take(ctx->vol);
+        if (ctx->err != WASMOS_ERR_NONE) {
+            return (int32_t)ctx->err;
+        }
+        return WASMOS_WASM_TASK_COMPLETE;
+    default:
+        return WASMOS_ERR_FS_CORRUPT;
+    }
+}
+
 /* Fill the staged block with a recognisable pattern and journal it as the new
  * content of `target`. */
 static int32_t stage_pattern(wfs_volume_t* vol, uint32_t target, uint8_t seed) {
-    wfs_txstage_ctx_t ctx;
+    stage_ctx_t ctx;
     wasmos_wasm_coroutine_t task;
     uint8_t* d = wfs_block_data(wfs_stub_block());
     uint32_t i;
@@ -85,16 +115,11 @@ static int32_t stage_pattern(wfs_volume_t* vol, uint32_t target, uint8_t seed) {
     memset(&ctx, 0, sizeof(ctx));
     ctx.vol = vol;
     ctx.target = target;
-    return wfs_stub_run_task(&task, wfs_txn_stage_task, &ctx);
+    return wfs_stub_run_task(&task, stage_task, &ctx);
 }
 
 static int32_t commit(wfs_volume_t* vol) {
-    wfs_txcommit_ctx_t ctx;
-    wasmos_wasm_coroutine_t task;
-
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.vol = vol;
-    return wfs_stub_run_task(&task, wfs_txn_commit_task, &ctx);
+    return (int32_t)wfs_txn_close(vol);
 }
 
 /* Whether the image's block `block` carries the pattern stage_pattern wrote. */
@@ -188,7 +213,7 @@ static void test_a_target_is_untouched_until_the_commit(void) {
     expect(mount_volume(&m, &vol) == 0, "mount");
     target = g_layout.bitmap_start;
 
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_NONE, "a transaction opens");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "a transaction opens");
     expect(stage_pattern(&vol, target, 0x41u) == 0, "and journals a block");
     expect(!block_has_pattern(target, 0x41u), "the target still holds what it held before");
     expect_u32(vol.journal.target_count, 1u, "one target is recorded");
@@ -223,7 +248,7 @@ static void test_a_reader_inside_a_transaction_sees_its_writes(void) {
     expect(mount_volume(&m, &vol) == 0, "mount");
     target = g_layout.bitmap_start;
 
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_NONE, "a transaction opens");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "a transaction opens");
     expect(stage_pattern(&vol, target, 0x55u) == 0, "and journals a block");
 
     /* Discarded so the read reaches the device: a cache hit would prove nothing
@@ -266,7 +291,7 @@ static void test_an_aborted_transaction_changes_nothing(void) {
     expect(mount_volume(&m, &vol) == 0, "mount");
     target = g_layout.object_table_start;
 
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_NONE, "a transaction opens");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "a transaction opens");
     expect(stage_pattern(&vol, target, 0x77u) == 0, "and journals a block");
     wfs_txn_abort(&vol);
 
@@ -276,7 +301,7 @@ static void test_an_aborted_transaction_changes_nothing(void) {
            "and the sequence is not spent, so a retry overwrites the log in place");
 
     /* A retry must be able to use the same log space. */
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_NONE, "a second transaction opens");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "a second transaction opens");
     expect(stage_pattern(&vol, target, 0x11u) == 0, "and journals a block");
     expect(commit(&vol) == 0, "and commits");
     expect(block_has_pattern(target, 0x11u), "landing the retry's content");
@@ -298,14 +323,14 @@ static void test_a_transaction_is_refused_when_it_cannot_be_run(void) {
     }
     expect(mount_volume(&m, &vol) == 0, "mount");
 
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_NONE, "the first transaction opens");
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_FS_BUSY, "a second one is refused");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "the first transaction opens");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_FS_BUSY, "a second one is refused");
     wfs_txn_abort(&vol);
 
     vol.super.read_only = 1u;
     before = wfs_stub_req_count;
     expect_rc(
-        wfs_txn_begin(&vol), WASMOS_ERR_FS_READ_ONLY, "a read-only volume refuses a transaction");
+        wfs_txn_open(&vol), WASMOS_ERR_FS_READ_ONLY, "a read-only volume refuses a transaction");
     expect_u32(wfs_stub_req_count, before, "without touching the device");
 
     wfs_stub_teardown();
@@ -327,7 +352,7 @@ static void test_staging_a_target_twice_replaces_its_image(void) {
     expect(mount_volume(&m, &vol) == 0, "mount");
     target = g_layout.bitmap_start;
 
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_NONE, "a transaction opens");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "a transaction opens");
     expect(stage_pattern(&vol, target, 0x20u) == 0, "the block is journaled");
     slot_block = vol.journal.targets[0].journal_block;
     expect(stage_pattern(&vol, target, 0x30u) == 0, "and journaled again");
@@ -358,7 +383,7 @@ static void test_an_oversized_transaction_is_refused_whole(void) {
     expect(mount_volume(&m, &vol) == 0, "mount");
     base = g_layout.object_table_start;
 
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_NONE, "a transaction opens");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "a transaction opens");
     for (i = 0; i < WFS_TXN_MAX_TARGETS; ++i) {
         if (stage_pattern(&vol, base + i, (uint8_t)(0x80u + i)) != 0) {
             expect(0, "every target up to the bound is journaled");
@@ -396,7 +421,7 @@ static void test_a_revoke_reaches_the_log(void) {
     target = g_layout.bitmap_start;
     freed = g_layout.object_table_start + 3u;
 
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_NONE, "a transaction opens");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "a transaction opens");
     expect(stage_pattern(&vol, target, 0x60u) == 0, "a block is journaled");
     expect_rc(wfs_txn_revoke(&vol, freed), WASMOS_ERR_NONE, "a block is revoked");
     expect_rc(wfs_txn_revoke(&vol, freed), WASMOS_ERR_NONE, "revoking it twice is accepted");
@@ -435,7 +460,7 @@ static void test_a_commit_advances_the_tail(void) {
     }
     expect(mount_volume(&m, &vol) == 0, "mount");
 
-    expect_rc(wfs_txn_begin(&vol), WASMOS_ERR_NONE, "a transaction opens");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "a transaction opens");
     expect(stage_pattern(&vol, g_layout.bitmap_start, 0x90u) == 0, "a block is journaled");
     expect(commit(&vol) == 0, "the commit completes");
 

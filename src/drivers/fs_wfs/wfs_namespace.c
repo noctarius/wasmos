@@ -9,6 +9,7 @@
 #include "wfs_dirent.h"
 #include "wfs_endian.h"
 #include "wfs_extent_write.h"
+#include "wfs_journal.h"
 #include "wfs_mount.h"
 #include "wfs_ops.h"
 #include "wfs_path.h"
@@ -30,6 +31,10 @@ typedef enum { NS_BLK_PC_START = 0, NS_BLK_PC_DONE } ns_blk_pc_t;
 
 typedef struct {
     ns_blk_pc_t pc;
+    /* Only the write half needs it, to journal the block; the read half takes it
+     * for the same reason every other context here does, so one record serves
+     * both. */
+    wfs_volume_t* vol;
     uint32_t block;
     uint32_t len;
     wasmos_error_code_t err;
@@ -74,11 +79,11 @@ static int32_t ns_write_block_task(void* user, uintptr_t* out_value) {
         for (i = 0; i < ctx->len; ++i) {
             wfs_block_data(b)[i] = g_dirblk[i];
         }
-        WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->block), NS_BLK_PC_DONE);
+        WFS_AWAIT(ctx, wfs_txn_stage_begin(ctx->vol, ctx->block), NS_BLK_PC_DONE);
         /* fall through */
 
     case NS_BLK_PC_DONE:
-        ctx->err = wfs_block_take(b);
+        ctx->err = wfs_txn_stage_take(ctx->vol);
         return (int32_t)ctx->err;
 
     default:
@@ -91,6 +96,7 @@ static wasmos_error_code_t ns_read_block(const wfs_volume_t* vol, uint32_t block
     int32_t status;
 
     c.pc = NS_BLK_PC_START;
+    c.vol = 0;
     c.block = block;
     c.len = vol->super.block_size;
     c.err = WASMOS_ERR_NONE;
@@ -98,11 +104,14 @@ static wasmos_error_code_t ns_read_block(const wfs_volume_t* vol, uint32_t block
     return status != 0 ? (wasmos_error_code_t)status : WASMOS_ERR_NONE;
 }
 
-static wasmos_error_code_t ns_write_block(const wfs_volume_t* vol, uint32_t block) {
+/* Every directory block and object record this file writes goes through here, so
+ * the whole namespace joins the caller's transaction at one point (§14). */
+static wasmos_error_code_t ns_write_block(wfs_volume_t* vol, uint32_t block) {
     ns_blk_ctx_t c;
     int32_t status;
 
     c.pc = NS_BLK_PC_START;
+    c.vol = vol;
     c.block = block;
     c.len = vol->super.block_size;
     c.err = WASMOS_ERR_NONE;
@@ -494,9 +503,9 @@ static wasmos_error_code_t ns_dir_is_empty(wfs_volume_t* vol, const struct wfs_o
 
 /* ---- the operations ---------------------------------------------------- */
 
-wasmos_error_code_t wfs_ns_create(wfs_volume_t* vol, uint32_t cwd_object, const char* path,
-                                  uint32_t path_len, uint16_t type, uint32_t mode, uint64_t now_ns,
-                                  uint32_t* out_object_id) {
+static wasmos_error_code_t ns_create(wfs_volume_t* vol, uint32_t cwd_object, const char* path,
+                                     uint32_t path_len, uint16_t type, uint32_t mode,
+                                     uint64_t now_ns, uint32_t* out_object_id) {
     const char* name = 0;
     uint32_t name_len = 0u;
     uint32_t parent_id;
@@ -662,16 +671,19 @@ static wasmos_error_code_t ns_release_object(wfs_volume_t* vol, uint32_t id,
             f.vol = vol;
             f.first_block = t.freed_first;
             f.length = t.freed_length;
+            f.metadata = obj->type == (uint16_t)WFS_TYPE_DIR;
             status = wfs_ops_run(wfs_free_blocks_task, &f);
             if (status != 0) {
                 return (wasmos_error_code_t)status;
             }
         }
-        /* The leaf holds nothing now, so the node block goes too. */
+        /* The leaf holds nothing now, so the node block goes too. It is a
+         * metadata block, so its number is revoked as it is freed (§18). */
         memset(&leaf_free, 0, sizeof(leaf_free));
         leaf_free.vol = vol;
         leaf_free.first_block = root;
         leaf_free.length = 1u;
+        leaf_free.metadata = 1u;
         status = wfs_ops_run(wfs_free_blocks_task, &leaf_free);
         if (status != 0) {
             return (wasmos_error_code_t)status;
@@ -687,6 +699,10 @@ static wasmos_error_code_t ns_release_object(wfs_volume_t* vol, uint32_t id,
         f.vol = vol;
         f.first_block = (uint32_t)obj->extents[i].physical_block;
         f.length = obj->extents[i].length;
+        /* A DIRECTORY's blocks hold records, so they were journaled and their
+         * images must be barred from replay once the blocks are handed out
+         * again. A file's blocks were never in the log (§17). */
+        f.metadata = obj->type == (uint16_t)WFS_TYPE_DIR;
         status = wfs_ops_run(wfs_free_blocks_task, &f);
         if (status != 0) {
             return (wasmos_error_code_t)status;
@@ -775,19 +791,9 @@ static wasmos_error_code_t ns_remove(wfs_volume_t* vol, uint32_t cwd_object, con
     return ns_patch_record(vol, parent_id, 0, 0, want_type == WFS_TYPE_DIR ? -1 : 0, now_ns);
 }
 
-wasmos_error_code_t wfs_ns_unlink(wfs_volume_t* vol, uint32_t cwd_object, const char* path,
-                                  uint32_t path_len, uint64_t now_ns) {
-    return ns_remove(vol, cwd_object, path, path_len, (uint16_t)WFS_TYPE_FILE, now_ns);
-}
-
-wasmos_error_code_t wfs_ns_rmdir(wfs_volume_t* vol, uint32_t cwd_object, const char* path,
-                                 uint32_t path_len, uint64_t now_ns) {
-    return ns_remove(vol, cwd_object, path, path_len, (uint16_t)WFS_TYPE_DIR, now_ns);
-}
-
-wasmos_error_code_t wfs_ns_rename(wfs_volume_t* vol, uint32_t cwd_object, const char* from,
-                                  uint32_t from_len, const char* to, uint32_t to_len,
-                                  uint64_t now_ns) {
+static wasmos_error_code_t ns_rename(wfs_volume_t* vol, uint32_t cwd_object, const char* from,
+                                     uint32_t from_len, const char* to, uint32_t to_len,
+                                     uint64_t now_ns) {
     const char* from_name = 0;
     const char* to_name = 0;
     uint32_t from_name_len = 0u;
@@ -869,4 +875,85 @@ wasmos_error_code_t wfs_ns_rename(wfs_volume_t* vol, uint32_t cwd_object, const 
         return rc;
     }
     return ns_patch_record(vol, to_parent_id, 0, 0, 0, now_ns);
+}
+
+/* ---- one operation, one transaction -------------------------------------- */
+
+/* Open the transaction each public operation below runs inside.
+ *
+ * The cheap refusals come first so a call that was never going to write does not
+ * open one. A resolution failure past this point still leaves the volume marked
+ * WFS_STATE_DIRTY and an empty transaction that commits nothing -- one superblock
+ * write per mount, which is the price of marking the volume before the log is
+ * used rather than after (wfs_txn_open).
+ */
+static wasmos_error_code_t ns_begin(wfs_volume_t* vol) {
+    if (!vol || !vol->mounted) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    if (vol->super.read_only) {
+        return WASMOS_ERR_FS_READ_ONLY;
+    }
+    return wfs_txn_open(vol);
+}
+
+/* Close it, or abandon it when the operation failed.
+ *
+ * A failed operation leaves the volume as it was: its blocks are in the log with
+ * no COMMIT naming them, which recovery reads as stale content (§14). This is
+ * what retires the ordering rules the file's header describes -- "whichever
+ * sequence leaves a LEAK when interrupted" was the best a writer without a
+ * journal could do, and inside a transaction the whole operation lands or none
+ * of it does. The orders are kept anyway, because they still govern a crash
+ * BEFORE the commit block, which discards the transaction outright.
+ */
+static wasmos_error_code_t ns_end(wfs_volume_t* vol, wasmos_error_code_t rc) {
+    if (rc != WASMOS_ERR_NONE) {
+        wfs_txn_abort(vol);
+        return rc;
+    }
+    return wfs_txn_close(vol);
+}
+
+wasmos_error_code_t wfs_ns_create(wfs_volume_t* vol, uint32_t cwd_object, const char* path,
+                                  uint32_t path_len, uint16_t type, uint32_t mode, uint64_t now_ns,
+                                  uint32_t* out_object_id) {
+    wasmos_error_code_t rc = ns_begin(vol);
+
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    return ns_end(vol,
+                  ns_create(vol, cwd_object, path, path_len, type, mode, now_ns, out_object_id));
+}
+
+wasmos_error_code_t wfs_ns_unlink(wfs_volume_t* vol, uint32_t cwd_object, const char* path,
+                                  uint32_t path_len, uint64_t now_ns) {
+    wasmos_error_code_t rc = ns_begin(vol);
+
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    return ns_end(vol, ns_remove(vol, cwd_object, path, path_len, (uint16_t)WFS_TYPE_FILE, now_ns));
+}
+
+wasmos_error_code_t wfs_ns_rmdir(wfs_volume_t* vol, uint32_t cwd_object, const char* path,
+                                 uint32_t path_len, uint64_t now_ns) {
+    wasmos_error_code_t rc = ns_begin(vol);
+
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    return ns_end(vol, ns_remove(vol, cwd_object, path, path_len, (uint16_t)WFS_TYPE_DIR, now_ns));
+}
+
+wasmos_error_code_t wfs_ns_rename(wfs_volume_t* vol, uint32_t cwd_object, const char* from,
+                                  uint32_t from_len, const char* to, uint32_t to_len,
+                                  uint64_t now_ns) {
+    wasmos_error_code_t rc = ns_begin(vol);
+
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    return ns_end(vol, ns_rename(vol, cwd_object, from, from_len, to, to_len, now_ns));
 }

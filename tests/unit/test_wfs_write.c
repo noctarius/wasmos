@@ -183,7 +183,6 @@ static int32_t do_write(uint32_t id, uint64_t offset, const uint8_t* src, uint32
                         uint32_t* out_done) {
     wfs_object_ctx_t o;
     wfs_write_ctx_t w;
-    wasmos_wasm_coroutine_t task;
     int32_t rc;
 
     if (load_object(&o, id) != 0) {
@@ -191,7 +190,7 @@ static int32_t do_write(uint32_t id, uint64_t offset, const uint8_t* src, uint32
     }
     memset(&w, 0, sizeof(w));
     wfs_write_init(&w, &g_vol, id, &o.out, o.inline_data, offset, src, len, WRITE_NOW_NS);
-    rc = wfs_stub_run_task(&task, wfs_write_task, &w);
+    rc = wfs_stub_run_txn(&g_vol, wfs_write_task, &w);
     if (out_done) {
         *out_done = w.done;
     }

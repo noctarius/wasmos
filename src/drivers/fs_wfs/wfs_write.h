@@ -40,4 +40,19 @@ void wfs_write_init(wfs_write_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_id,
  */
 int32_t wfs_write_task(void* user, uintptr_t* out_value);
 
+/* Run wfs_write_task as one journal transaction (§14), which is how the driver
+ * reaches it: the record it seals is metadata and belongs in the log, and a
+ * write that reached the device but not the record would otherwise leave blocks
+ * allocated to an object that does not name them.
+ *
+ * The DATA the write copies is not journaled (§17), so a crash between the data
+ * and the commit leaves the metadata consistent and the newly allocated blocks
+ * holding whatever they held before.
+ *
+ * `ctx->done` is meaningful whether this succeeds or fails: a partial write
+ * reports what landed, and a client resending from zero would duplicate bytes
+ * already on disk.
+ */
+wasmos_error_code_t wfs_write_run(wfs_write_ctx_t* ctx);
+
 #endif /* FS_WFS_WFS_WRITE_H */

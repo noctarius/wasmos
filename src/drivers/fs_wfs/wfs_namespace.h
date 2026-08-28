@@ -11,6 +11,10 @@
  * the block layer stages a single block. It also keeps them host-testable, since
  * the pump needs only the bound runtime and block client.
  *
+ * Each operation runs as ONE journal transaction (wfs_journal.h): its metadata
+ * blocks go into the log and reach their addresses only at the commit, so a
+ * crash leaves the whole operation or none of it.
+ *
  * ORDER, throughout: whichever sequence leaves a LEAK when it is interrupted.
  * Creating writes the object before the directory record, so a crash leaves an
  * object nothing names; removing takes the record off disk before freeing
@@ -18,6 +22,11 @@
  * a directory entry pointing at an id that is unallocated or already reused —
  * which is corruption no later pass can repair, where a leak is just space fsck
  * reclaims.
+ *
+ * The orders are kept under the transaction rather than retired by it, because
+ * they still govern the one crash the log cannot cover: a crash before the
+ * COMMIT block, which discards the transaction outright and leaves whatever the
+ * uncommitted writes had already reached.
  */
 #ifndef FS_WFS_WFS_NAMESPACE_H
 #define FS_WFS_WFS_NAMESPACE_H

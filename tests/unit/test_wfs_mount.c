@@ -386,11 +386,14 @@ static void test_a_failed_send_fails_the_mount(void) {
 }
 
 /* A volume that was not unmounted cleanly has its log REPLAYED before it is
- * handed out (§15, §21), which discharges the replay its state asked for. It
- * stays read-only all the same: the metadata writers do not yet run inside
- * transactions, so what an interrupted one left behind is not in the log and no
- * replay repairs it. */
-static void test_a_dirty_volume_mounts_read_only(void) {
+ * handed out (§15, §21), and comes back WRITABLE.
+ *
+ * That is the whole point of the journal: every metadata write goes through a
+ * transaction, so a crash left either a transaction the replay applies or one it
+ * discards whole, and there is no third state a mount would have to refuse to
+ * write over. The volume goes on saying DIRTY until a clean unmount clears it,
+ * which costs each mount a replay of an empty log and nothing else. */
+static void test_a_dirty_volume_replays_and_stays_writable(void) {
     wfs_mount_ctx_t ctx;
     wfs_volume_t vol;
     uint8_t* sb;
@@ -408,7 +411,7 @@ static void test_a_dirty_volume_mounts_read_only(void) {
     expect(run_mount(&ctx, &vol) == 0, "a dirty volume still mounts");
     expect(ctx.replayed == 0u, "its log held nothing to replay");
     expect(vol.super.needs_replay == 0u, "so the replay it asked for is discharged");
-    expect(vol.super.read_only == 1u, "and it is read-only all the same");
+    expect(vol.super.read_only == 0u, "and it is writable");
 
     wfs_stub_teardown();
 }
@@ -731,7 +734,7 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_mount_refuses_a_device_that_holds_no_volume),
     WASMOS_TEST_CASE(test_a_device_error_fails_the_mount),
     WASMOS_TEST_CASE(test_a_failed_send_fails_the_mount),
-    WASMOS_TEST_CASE(test_a_dirty_volume_mounts_read_only),
+    WASMOS_TEST_CASE(test_a_dirty_volume_replays_and_stays_writable),
     WASMOS_TEST_CASE(test_every_block_size_mounts),
     WASMOS_TEST_CASE(test_a_damaged_primary_mounts_from_a_backup),
     WASMOS_TEST_CASE(test_the_backup_generation_is_adopted),

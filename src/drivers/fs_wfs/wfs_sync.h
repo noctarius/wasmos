@@ -1,14 +1,14 @@
 /* wfs_sync.h - recording a volume's mount state on disk (§4).
  *
  * `state` says whether the volume was unmounted cleanly. A volume mounted for
- * WRITING must say WFS_STATE_DIRTY on disk before the first write lands, because
- * that flag is the only thing that tells the next mount its metadata may be
- * mid-update: wfs_mount_task turns a non-clean state into needs_replay and mounts
- * read-only, so a crash leaves a volume that refuses writes rather than one that
- * reads back plausible-looking garbage.
+ * WRITING must say WFS_STATE_DIRTY on disk before the first metadata write
+ * lands, because that flag is what makes the next mount read the log at all
+ * (§15): wfs_mount_task turns a non-clean state into needs_replay and replays.
  *
- * Until the journal exists (phase 3) this is the whole of WFS's crash safety, and
- * it is worth having early precisely because phase 2 writes are not crash-safe.
+ * The flag is deliberately NOT journaled. A mount that has not read it does not
+ * know whether to consult the log, so a value only a replay could apply would be
+ * useless to the decision it exists to inform. wfs_txn_open is what sets it, once
+ * per mount, before the transaction it opens writes anything.
  */
 #ifndef FS_WFS_WFS_SYNC_H
 #define FS_WFS_WFS_SYNC_H
@@ -16,7 +16,7 @@
 #include "wfs_types.h"
 
 /* Set the volume's on-disk state to WFS_STATE_DIRTY and record that it is set, so
- * a caller may start this before every write and pay for it once per mount.
+ * a caller may start this before every transaction and pay for it once per mount.
  *
  * Completes immediately when vol->dirty_marked is already set. Fails with
  * WASMOS_ERR_FS_READ_ONLY on a volume that does not permit writes -- marking one

@@ -401,13 +401,16 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
         }
         ctx->replayed = ctx->replay.applied;
         ctx->vol->super.needs_replay = 0u;
-        /* The volume stays READ-ONLY even though the replay succeeded, because
-         * the metadata writers do not yet run inside transactions: what a crash
-         * left behind is a half-finished allocation the log never recorded, and
-         * no replay repairs it. The gate lifts when every writer journals.
-         * TODO: clear read_only here once wfs_alloc.c, wfs_write.c,
-         * wfs_truncate.c, wfs_extent_write.c and wfs_namespace.c transact. */
-        ctx->vol->super.read_only = 1u;
+        /* WRITABLE again. Every metadata write this driver makes goes through a
+         * transaction, so what a crash left behind is either a transaction the
+         * replay above has now applied or one it discarded whole -- there is no
+         * third state for it to have been caught in. The volume keeps saying
+         * DIRTY on disk until a clean unmount clears it, which costs the next
+         * mount another replay of an empty log and nothing else.
+         *
+         * read_only is not touched rather than cleared: a volume recovered from a
+         * BACKUP superblock (§5) set it before the sweep, and its primary is
+         * still damaged whatever the log says. */
         ctx->vol->mounted = 1u;
         return WASMOS_WASM_TASK_COMPLETE;
 

@@ -865,35 +865,6 @@ tail.
   `ftruncate` means a host call plus the libc and libsys wrappers kept in sync
   across the runtime-specific variants, then a case in
   `examples/c/wfs_write_smoke`.
-- [ ] [FEATURE][P1] Run WFS's metadata writers inside journal transactions. The
-  journal and crash recovery exist (`wfs_journal.c`, `wfs_recover.c`, spec §14 and
-  §21) and are covered by `tests/unit/test_wfs_journal.c` and
-  `tests/unit/test_wfs_recover.c`, but NOTHING OPENS A TRANSACTION yet: every
-  metadata write still goes straight to its block. A crash therefore leaves damage
-  the log says nothing about, which is why `wfs_mount_task` keeps a replayed
-  volume READ-ONLY and carries a TODO naming this work.
-
-  To convert, each writer wraps its metadata block writes in
-  `wfs_txn_begin` / `wfs_txn_stage_task` / `wfs_txn_commit_task`, keeps its DATA
-  writes outside the transaction (§17), and calls `wfs_txn_revoke` for every
-  metadata block it frees (§18):
-
-  - `wfs_alloc.c` -- the block bitmap and the group descriptor, and the object
-    bitmap plus the new record for `wfs_objalloc`; `wfs_objfree` revokes.
-  - `wfs_write.c` -- the object record, after its data blocks are on disk.
-  - `wfs_truncate.c` -- the record, the extent leaf, and the freed runs' revokes.
-  - `wfs_extent_write.c` -- leaf writes, and the revoke of a released leaf.
-  - `wfs_namespace.c` -- directory blocks and object records, which is where the
-    ordering rules the file documents ("whichever sequence leaves a LEAK") stop
-    being needed, because a transaction is all-or-nothing.
-
-  Two things fall out of it. The `WFS_TXN_MAX_TARGETS` bound (24) has to cover the
-  largest single operation -- a rename touching two directory blocks, two records
-  and a bitmap is well inside it, but a truncation dropping many runs is not, and
-  those must be split into a transaction per step rather than committed short. And
-  once every writer transacts, `wfs_mount_task` clears `read_only` after a
-  successful replay, which is what finally lets a WFS volume survive a crash
-  writable.
 - [ ] [ENHANCEMENT][P2] Batch several WFS metadata operations into one journal
   transaction. The driver retires each transaction before the next begins
   (`wfs_journal_t`), so every metadata write pays a full descriptor, commit and
@@ -1012,11 +983,12 @@ tail.
 - [ ] [FEATURE][P2] No shutdown notification reaches drivers or services, so
   nothing can record a clean unmount. `halt` and `reboot` call
   `kernel_system_poweroff()`, which does not return; every participant stops
-  mid-operation. The visible cost today is WFS: a volume written once is marked
-  DIRTY on disk and mounts READ-ONLY on every subsequent boot. Journal replay now
-  exists and discharges `needs_replay`, but the read-only gate stays until the
-  metadata writers transact (see the phase-3 item below), and clearing `state`
-  back to `WFS_STATE_CLEAN` still needs a clean unmount.
+  mid-operation. The cost to WFS is now narrow but real: a volume written once
+  goes on saying `WFS_STATE_DIRTY` on disk, because only a clean unmount clears
+  it. It still mounts writable -- the journal replay discharges the flag's
+  obligation -- so the price is a replay of an empty log on every subsequent
+  mount, and a volume that can never be told apart from one that actually
+  crashed.
 
   Design is in `docs/architecture/15-drivers-and-services.md`, "Orderly Shutdown
   Design Direction". Shape: `PROC_IPC_SHUTDOWN_REQ` / `PROC_IPC_SHUTDOWN_DONE`

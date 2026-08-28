@@ -1154,6 +1154,11 @@ correctly interpret.
 Phase 2 writes without a journal and is therefore not crash-safe. That is
 acceptable only as a development stage.
 
+Phase 3 is not complete until every writer runs inside a transaction. A journal
+that exists but that the metadata writers bypass changes nothing a crash can
+observe: replay finds an empty log, and the damage an interrupted write left is
+in the filesystem rather than the journal.
+
 ---
 
 # 24. fsck Strategy

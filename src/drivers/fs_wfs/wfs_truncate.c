@@ -9,8 +9,8 @@
 #include "wfs_alloc.h"
 #include "wfs_block.h"
 #include "wfs_crc32c.h"
+#include "wfs_journal.h"
 #include "wfs_ops.h"
-#include "wfs_sync.h"
 
 void wfs_truncate_init(wfs_trunc_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_id,
                        const struct wfs_object* obj, const uint8_t* inline_data, uint64_t new_size,
@@ -35,7 +35,6 @@ void wfs_truncate_init(wfs_trunc_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_
     ctx->tail_needed = 0u;
     ctx->record_block = 0u;
     ctx->free_started = 0u;
-    ctx->dirty_started = 0u;
     ctx->trim_started = 0u;
     ctx->extent_started = 0u;
     ctx->promote_inline = 0u;
@@ -133,21 +132,9 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                 return WASMOS_WASM_TASK_COMPLETE;
             }
             /* An extent TREE is trimmed a run at a time by wfs_extent_trim_task,
-             * which needs no bound on how many runs an object drops. The volume is
-             * marked dirty first, as on the inline route: the trim rewrites a leaf
-             * before anything else, and a crash must leave a volume the next mount
-             * refuses to write. */
+             * which needs no bound on how many runs an object drops. */
             if (ctx->obj.extent_tree_block != 0u) {
-                wfs_ops_task_reset(&ctx->dirty_task);
-                ctx->dirty.pc = WFS_DIRTY_PC_START;
-                ctx->dirty.vol = ctx->vol;
-                ctx->dirty.err = WASMOS_ERR_NONE;
-                if (!wasmos_async_start(
-                        wfs_ops_runtime(), &ctx->dirty_task, wfs_mark_dirty_task, &ctx->dirty)) {
-                    WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
-                }
-                ctx->dirty_started = 1u;
-                ctx->pc = WFS_TRUNC_PC_TREE_DIRTY_JOINED;
+                ctx->pc = WFS_TRUNC_PC_TREE_PREPARED;
                 continue;
             }
             /* An inline object a grow takes past the record is PROMOTED, the same
@@ -156,28 +143,10 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
             if ((ctx->obj.flags & WFS_OBJ_INLINE_DATA) && ctx->new_size > WFS_INLINE_DATA_MAX) {
                 ctx->promote_inline = 1u;
             }
-            wfs_ops_task_reset(&ctx->dirty_task);
-            ctx->dirty.pc = WFS_DIRTY_PC_START;
-            ctx->dirty.vol = ctx->vol;
-            ctx->dirty.err = WASMOS_ERR_NONE;
-            if (!wasmos_async_start(
-                    wfs_ops_runtime(), &ctx->dirty_task, wfs_mark_dirty_task, &ctx->dirty)) {
-                WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
-            }
-            ctx->dirty_started = 1u;
-            ctx->pc = WFS_TRUNC_PC_DIRTY_JOINED;
+            ctx->pc = WFS_TRUNC_PC_PREPARED;
             continue;
 
-        case WFS_TRUNC_PC_TREE_DIRTY_JOINED:
-            joined = 0;
-            if (wasmos_wasm_coroutine_join(&ctx->dirty_task, &joined) ==
-                WASMOS_WASM_AWAIT_PENDING) {
-                return WASMOS_WASM_TASK_YIELDED;
-            }
-            ctx->dirty_started = 0u;
-            if (joined != 0) {
-                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
-            }
+        case WFS_TRUNC_PC_TREE_PREPARED:
             if (ctx->new_size > ctx->obj.size) {
                 /* A grow adds no extent: the range past the old end is a hole,
                  * which reads as zeroes (§9). Only the size moves. */
@@ -194,17 +163,7 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
             ctx->pc = WFS_TRUNC_PC_TRIM_JOINED;
             continue;
 
-        case WFS_TRUNC_PC_DIRTY_JOINED:
-            joined = 0;
-            if (wasmos_wasm_coroutine_join(&ctx->dirty_task, &joined) ==
-                WASMOS_WASM_AWAIT_PENDING) {
-                return WASMOS_WASM_TASK_YIELDED;
-            }
-            ctx->dirty_started = 0u;
-            if (joined != 0) {
-                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
-            }
-
+        case WFS_TRUNC_PC_PREPARED:
             if (ctx->promote_inline) {
                 /* One block for the content the record held. */
                 memset(&ctx->alloc, 0, sizeof(ctx->alloc));
@@ -393,11 +352,11 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                                          WFS_OBJECT_SIZE,
                                          (uint32_t)offsetof(struct wfs_object, checksum)));
             WFS_AWAIT(
-                ctx, wfs_block_write_begin(b, ctx->record_block), WFS_TRUNC_PC_RECORD_WRITTEN);
+                ctx, wfs_txn_stage_begin(ctx->vol, ctx->record_block), WFS_TRUNC_PC_RECORD_WRITTEN);
             /* fall through */
 
         case WFS_TRUNC_PC_RECORD_WRITTEN:
-            ctx->err = wfs_block_take(b);
+            ctx->err = wfs_txn_stage_take(ctx->vol);
             if (ctx->err != WASMOS_ERR_NONE) {
                 return (int32_t)ctx->err;
             }
@@ -465,6 +424,10 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                     ctx->free_ctx.vol = ctx->vol;
                     ctx->free_ctx.first_block = ctx->trim_root;
                     ctx->free_ctx.length = 1u;
+                    /* The leaf is a metadata block, so its number is revoked as
+                     * it is freed: an image of it stays replayable until then,
+                     * and the block may be a file's next (§18). */
+                    ctx->free_ctx.metadata = 1u;
                     ctx->trim_root = 0u;
                     if (!wasmos_async_start(wfs_ops_runtime(),
                                             &ctx->free_task,
@@ -570,4 +533,28 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
         }
     }
+}
+
+/* Run this operation as one transaction. The cheap refusals come first so a call
+ * that was never going to write does not open one. */
+wasmos_error_code_t wfs_truncate_run(wfs_trunc_ctx_t* ctx) {
+    wasmos_error_code_t rc;
+    int32_t status;
+
+    if (!ctx || !ctx->vol || !ctx->vol->mounted) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    if (ctx->vol->super.read_only) {
+        return WASMOS_ERR_FS_READ_ONLY;
+    }
+    rc = wfs_txn_open(ctx->vol);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    status = wfs_ops_run(wfs_truncate_task, ctx);
+    if (status != 0) {
+        wfs_txn_abort(ctx->vol);
+        return (wasmos_error_code_t)status;
+    }
+    return wfs_txn_close(ctx->vol);
 }

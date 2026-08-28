@@ -2307,6 +2307,18 @@ endforeach()
 # Explicit sysroot for the host sanitizer builds (see the note in the target).
 # Sanitizer arms build with the HOST toolchain, not ${CLANG}. On macOS the
 # Homebrew LLVM this project uses for the UEFI targets links a TSan runtime that
+# Dead-strip flag for host test suites that #include a whole service translation
+# unit to reach its file statics: the linker drops the half the suite never calls
+# rather than the suite having to stub every import of it. GNU ld spells it
+# --gc-sections and Apple's ld spells it -dead_strip, so a suite hardcoding
+# either builds on one host only -- and a Linux CI runner cannot catch the Darwin
+# half of that.
+if(APPLE)
+  set(WASMOS_HOST_DEAD_STRIP -Wl,-dead_strip)
+else()
+  set(WASMOS_HOST_DEAD_STRIP -Wl,--gc-sections)
+endif()
+
 # segfaults on entry; Apple's clang ships one that works. The kernel sources are
 # plain C11 here, so either compiler is fine for the code itself.
 set(WASMOS_HOST_SANITIZER_CC ${CLANG})
@@ -2416,17 +2428,28 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${BUILD_DIR}/test_device_manager_rules
   # The block-rule MATCHER, as opposed to the rule parser above. The suite
   # includes device_manager.c to reach its file statics, so:
-  #   --gc-sections drops the event-loop half of that translation unit, whose
+  #   the dead-strip flag drops the event-loop half of that translation unit, whose
   #     imports the block path never needs; stubs_device_manager_host.c supplies
   #     the handful that survive collection.
   #   -Wno-unused-function is required BY the include: statics reachable only
   #     from the collected half are unreferenced here, which is a property of
   #     testing one path through a TU, not a defect in the service.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -Wno-unused-function -ffunction-sections -fdata-sections -Wl,--gc-sections
+          -Wno-unused-function -ffunction-sections -fdata-sections
+          ${WASMOS_HOST_DEAD_STRIP}
           -iquote ${SERVICES_DIR}/device_manager
           -iquote ${LIBSYS_WASM_DIR}/include
-          -iquote ${LIBC_DIR}/include
+          # Our libc headers go on -I rather than -iquote, for the reason the
+          # WFS suites below give: device_manager.c reaches
+          # src/libc/include/string.h through a quoted include, and with the
+          # host's <string.h> also in scope the SDK's strcpy fortification macro
+          # breaks our declaration. Taking our libc for the angle includes too
+          # keeps one set of declarations. libc/src/string.c is NOT linked
+          # beside it, unlike the WFS suites: stubs_device_manager_host.c already
+          # defines str_copy, and linking both duplicates the symbol. The
+          # collision is a Darwin SDK property, so a Linux CI runner cannot catch
+          # it.
+          -I${LIBC_DIR}/include
           -iquote ${DRIVER_WASM_DIR}/include
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_block_rules.c

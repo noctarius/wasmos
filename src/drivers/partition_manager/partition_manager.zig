@@ -126,6 +126,17 @@ var g_down_req_bid: i32 = -1;
 /// Buffer a client's descriptor is written into when it IDENTIFYs a partition.
 /// The client owns ITS buffer; this one is only staging for the probe.
 var g_probe_bid: i32 = -1;
+/// Buffer the device manager reads published partition descriptors out of: one
+/// slot per partition, lent READ for the life of the process.
+///
+/// Separate from g_probe_bid, and slotted rather than reused, for two reasons a
+/// publish path cannot do without. A publish is fire-and-forget, so the receiver
+/// reads the bytes at a moment of its choosing; a single slot rewritten by the
+/// next probe hands it whichever descriptor arrived last. And the device manager
+/// is a grantee like any other -- it cannot read a buffer it was never lent, so
+/// the borrow below is what makes a publish legible at all rather than an
+/// optimisation. Same shape as the PCI bus's device publish.
+var g_publish_bid: i32 = -1;
 /// Physical address of this process's block buffer, where probe reads land.
 var g_block_phys: u32 = 0;
 
@@ -250,7 +261,7 @@ fn readSectors(disk: *const Disk, lba: u64, count: u32, out: []u8) bool {
 
 /// Register one partition under the `block` class and announce it to the device
 /// manager, so a rule can match it exactly as it matches a whole disk.
-fn publishPartition(part: *Partition, devmgr: i32) void {
+fn publishPartition(part: *Partition, slot: usize, devmgr: i32) void {
     if (driver.registerService(
         g_proc_endpoint,
         endpoint(),
@@ -265,16 +276,17 @@ fn publishPartition(part: *Partition, devmgr: i32) void {
         return;
     }
 
-    if (devmgr >= 0 and g_probe_bid >= 0) {
+    if (devmgr >= 0 and g_publish_bid >= 0 and slot < MAX_PARTITIONS) {
+        const offset: u32 = @intCast(slot * @sizeOf(driver.BlockDescriptor));
         const raw: [*]const u8 = @ptrCast(&part.desc);
-        if (driver.bufferWrite(g_probe_bid, raw[0..@sizeOf(driver.BlockDescriptor)], 0)) {
+        if (driver.bufferWrite(g_publish_bid, raw[0..@sizeOf(driver.BlockDescriptor)], offset)) {
             _ = driver.send(
                 devmgr,
                 endpoint(),
                 op.DEVMGR_PUBLISH_BLOCK_DEVICE,
                 0,
-                g_probe_bid,
-                0,
+                g_publish_bid,
+                @intCast(offset),
                 @intCast(@sizeOf(driver.BlockDescriptor)),
                 0,
             );
@@ -307,7 +319,8 @@ fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, devmg
         return;
     }
 
-    var part = &g_parts[g_part_count];
+    const slot = g_part_count;
+    var part = &g_parts[slot];
     part.* = .{};
     part.disk = disk_index;
     part.lba_start = entry.lba_start;
@@ -338,7 +351,7 @@ fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, devmg
     if (part.instance == 0) return;
     part.in_use = true;
     g_part_count += 1;
-    publishPartition(part, devmgr);
+    publishPartition(part, slot, devmgr);
 }
 
 // --- probing -----------------------------------------------------------------
@@ -669,10 +682,24 @@ fn probeAll() void {
         granted_count += 1;
     }
 
-    const devmgr = driver.lookupService(g_proc_endpoint, "devmgr.inv", nextRequestId(), 64) orelse -1;
-    if (devmgr < 0) {
-        driver.log("[partmgr] devmgr inventory unavailable; partitions unpublished to it");
-    }
+    const devmgr = devmgr: {
+        const ep = driver.lookupService(g_proc_endpoint, "devmgr.inv", nextRequestId(), 64) orelse {
+            driver.log("[partmgr] devmgr inventory unavailable; partitions unpublished to it");
+            break :devmgr -1;
+        };
+        // Lend the publish buffer before the first publish. Without this the
+        // device manager refuses every descriptor at the read, and since a
+        // partition still registers under the `block` class the failure looks
+        // cosmetic -- while every SUBSYSTEM=="partition" rule in the system
+        // matches nothing, because rules match the registry.
+        if (g_publish_bid < 0 or
+            driver.bufferBorrow(ep, g_publish_bid, driver.BUFFER_GRANT_READ) == null)
+        {
+            driver.log("[partmgr] publish buffer grant failed; partitions unpublished to devmgr");
+            break :devmgr -1;
+        }
+        break :devmgr ep;
+    };
 
     var i: usize = 0;
     while (i < seen and g_disk_count < MAX_DISKS) : (i += 1) {
@@ -718,6 +745,12 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     };
     g_down_req_bid = driver.bufferAcquire(@sizeOf(driver.BlockRequest)) orelse {
         driver.log("[partmgr] request buffer unavailable");
+        return;
+    };
+    g_publish_bid = driver.bufferAcquire(
+        MAX_PARTITIONS * @sizeOf(driver.BlockDescriptor),
+    ) orelse {
+        driver.log("[partmgr] publish buffer unavailable");
         return;
     };
 

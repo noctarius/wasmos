@@ -1,9 +1,16 @@
 # WASMOS device-manager persistent rules (boot FAT)
 # Loaded from /boot/system/devmgr/rules after storage is online.
 # Entries here are intended to override or extend initfs bootstrap rules.
-# DRIVER names the backend; see the initfs rules for why an unqualified unit
-# is ambiguous once more than one block backend is present.
-SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
+# /user is mounted from the PARTITION, not the disk holding it. ATTR{name} is
+# the canonical id the partition manager published, which is positional --
+# `block:ata:1p1` is the first partition of ATA unit 1 -- because a QEMU vvfat
+# disk carries a classic MBR with no GUID and no label to name it by. A GPT
+# volume is named by ATTR{partlabel} or ATTR{partuuid} instead and does not
+# depend on where it sits in the table.
+#
+# The rule must be a partition rule: SUBSYSTEM=="partition" is what keeps it off
+# the whole disk, which reports the same backend and unit as everything on it.
+SUBSYSTEM=="partition", ATTR{name}=="block:ata:1p1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
 # The partition manager names no disk: it enumerates the `block` class itself and
 # republishes every partition it finds as a block device in its own right. One
 # instance serves them all.

@@ -66,10 +66,10 @@ uint32_t fat_table_lba(const fat_mount_t* mnt) {
 /* Parse an MBR partition table in `sector`; on success writes the first FAT
  * partition's start LBA to *out_lba.  Returns 0 or -1.
  *
- * Reached ONLY when this driver was spawned for a whole disk (volume_lba 0) that
- * turned out to hold a table rather than a boot sector. When a window is given
- * it is authoritative and this is not consulted, because the partition manager
- * has already read the table and named the volume.
+ * Reached ONLY when this driver was spawned for a WHOLE DISK whose LBA 0 holds a
+ * table rather than a boot sector. A driver spawned for a partition never gets
+ * here: that device rebases every transfer onto its window, so its LBA 0 is the
+ * boot sector and the table it came from was read by the partition manager.
  *
  * TODO: delete this along with the whole-disk spawn it serves. /boot is still
  * mounted from the whole ATA disk because the partition manager is spawned from
@@ -170,9 +170,9 @@ static int fat_parse_boot(fat_mount_t* mnt, const uint8_t* sector) {
     return 0;
 }
 
-void fat_mount_init(fat_mount_t* mnt, uint32_t volume_lba) {
-    mnt->volume_lba = volume_lba;
-    mnt->boot_lba = volume_lba;
+void fat_mount_init(fat_mount_t* mnt, uint8_t is_partition) {
+    mnt->is_partition = is_partition;
+    mnt->boot_lba = 0;
     mnt->fat_type = FAT_TYPE_UNKNOWN;
     mnt->cwd_source = -1;
     mnt->cwd_cluster = 0;
@@ -189,13 +189,14 @@ int fat_mount_ready(const fat_mount_t* mnt) {
     return mnt->mounted;
 }
 
-/* Coroutine (context = *mnt): read the volume's first sector and parse its BPB.
+/* Coroutine (context = *mnt): read the device's first sector and parse its BPB.
  *
- * The first sector is mnt->volume_lba, which the block descriptor supplied. A
- * driver spawned for a partition therefore reads that partition's boot sector
- * directly and no partition table is parsed here at all. The MBR probe below
- * exists only for a whole-disk spawn (volume_lba 0) whose LBA 0 holds a table;
- * see fat_try_parse_mbr.
+ * Every block device is addressed from its own LBA 0, partitions included -- a
+ * partition device rebases each transfer onto its window before forwarding it,
+ * so the absolute lba_start in its descriptor is where the volume SITS, never an
+ * address a client sends. The read below is therefore LBA 0 in both cases, and
+ * what differs is what may be found there: a partition holds a boot sector, a
+ * whole disk may hold a table instead. See fat_try_parse_mbr.
  *
  * Locals are declared without initializers because the resume switch jumps past
  * their declarations (they are assigned before use, and none are carried across
@@ -210,20 +211,20 @@ fat_r_t fat_geom_mount_step(fat_mount_t* mnt, fat_block_t* blk) {
     if (mnt->mounted) {
         FAT_CO_DONE(mnt);
     }
-    mnt->boot_lba = mnt->volume_lba;
+    mnt->boot_lba = 0;
     mnt->tried_mbr = 0;
-    FAT_CO_READ(mnt, blk, mnt->volume_lba); /* the volume's first sector */
+    FAT_CO_READ(mnt, blk, 0u); /* the device's first sector */
 
     sector = fat_block_sector(blk);
     sig = (uint16_t)sector[510] | ((uint16_t)sector[511] << 8);
     bytes_per_sector = (uint16_t)sector[11] | ((uint16_t)sector[12] << 8);
     if (sig != 0xAA55 || bytes_per_sector == 0) {
-        /* A named window that does not hold a BPB is a fault, not an invitation
-         * to go looking: the partition manager read the table and said the
-         * filesystem is here. Searching the disk from a driver that was handed
-         * one volume is how a mount lands on the wrong one. */
-        if (mnt->volume_lba != 0u) {
-            fat_log("no FAT boot sector at the volume start\n");
+        /* A partition whose first sector is not a BPB is a fault, not an
+         * invitation to go looking: the partition manager read the table and
+         * said the filesystem is here, and a partition device cannot contain a
+         * table to search anyway. */
+        if (mnt->is_partition) {
+            fat_log("no FAT boot sector at the partition start\n");
             FAT_CO_FAIL(mnt, blk, WASMOS_ERR_FS_NOT_READY);
         }
         /* Whole-disk spawn: LBA 0 is an MBR, not a BPB. */

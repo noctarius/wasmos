@@ -273,10 +273,13 @@ static void fat_report_backend_info(int32_t dst, int32_t request_id) {
 
 /* IDENTIFY this driver's volume, filling *out_desc.
  *
- * The descriptor is what says WHERE the volume is: lba_start is the absolute LBA
- * it begins at, and the driver mounts there. That is the whole reason no
- * partition table is parsed in this driver for a volume the partition manager
- * named -- it read the table already, and a second reader is a second answer.
+ * The descriptor is what says WHAT this device is. `partition` nonzero means a
+ * partition, which the partition manager serves by rebasing every transfer onto
+ * its window -- so its LBA 0 is the volume's boot sector and it holds no table.
+ * That is the whole reason this driver parses no partition table for a volume
+ * the partition manager named: it read the table already, and a second reader is
+ * a second answer. `lba_start` records where the window sits on the underlying
+ * disk and is never an address a client sends.
  *
  * The buffer is acquired HERE and lent to the backend for the round trip, then
  * released on every path. The client of a request owns the transfer buffer and
@@ -326,13 +329,14 @@ static int fat_identify_device(wasmos_block_descriptor_t* out_desc) {
         fat_log("identify descriptor version mismatch\n");
         return -1;
     }
-    /* The block layer addresses sectors with a 32-bit LBA, so a volume starting
-     * beyond that is unreachable and refused here rather than silently wrapping
-     * into another volume's sectors.
+    /* The block layer addresses sectors with a 32-bit LBA, so a volume longer
+     * than that has a tail this driver cannot reach. Refused rather than
+     * silently truncated: a filesystem mounted over part of itself corrupts the
+     * rest of it on the first allocation past the boundary.
      * TODO: BLOCK_IPC_READ_REQ's LBA argument is what caps this; widening it is
      * what lifts the 2 TiB ceiling. */
-    if (out_desc->lba_start > 0xFFFFFFFFull) {
-        fat_log("volume starts beyond the addressable range\n");
+    if (out_desc->lba_count > 0xFFFFFFFFull) {
+        fat_log("volume extends beyond the addressable range\n");
         return -1;
     }
     return 0;
@@ -606,14 +610,15 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         fat_log("block buffer missing\n");
         fat_stall();
     }
-    /* IDENTIFY before mounting: the descriptor carries the window to mount in.
-     * A driver that mounted first would have to guess where the volume starts,
-     * and the only guess available is "parse the table yourself". */
+    /* IDENTIFY before mounting: the descriptor says whether this device is a
+     * partition, and therefore whether its first sector is a boot sector or may
+     * be a table. A driver that mounted first would have to work that out by
+     * looking, which is the guess this change removes. */
     if (fat_identify_device(&desc) != 0) {
         fat_stall();
     }
     g_mount_unit = (uint8_t)(desc.unit & 0xFFu);
-    fat_mount_init(&g_mnt, (uint32_t)desc.lba_start);
+    fat_mount_init(&g_mnt, desc.partition != 0u ? 1u : 0u);
     fat_open_pool_init(&g_pool);
     /* Mount before signalling ready, so the driver only ever advertises a
      * validated, parsed volume. */

@@ -46,6 +46,23 @@ class DeviceManagerIntegrationTests(unittest.TestCase):
     def test_device_manager_running(self):
         self._cmd_expect("ps", b"device-manager")
 
+    def test_partition_rule_mounts_a_volume(self):
+        """Regression: 2026-08-28-partition-publish-unreadable.
+
+        The partition manager wrote each partition descriptor into a transfer
+        buffer it never lent to the device manager, so every publish was refused
+        at the read and no partition ever entered the registry. Partitions
+        registered under the `block` CLASS regardless, so `blkinfo` listed them
+        and the failure looked cosmetic -- but rules match against the registry,
+        so SUBSYSTEM=="partition" matched nothing at all and the entire partition
+        half of the rule language was dead.
+
+        /user is mounted by exactly such a rule, which makes its presence in the
+        mount table the observable proof that a partition reached the registry,
+        matched a rule, and spawned a filesystem on the window the table named.
+        """
+        self._cmd_expect("mount", b"/user")
+
 
 if __name__ == "__main__":
     unittest.main()

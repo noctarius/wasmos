@@ -324,6 +324,7 @@ static void test_a_damaged_image_aborts_the_replay(void) {
     wfs_mount_ctx_t m;
     wfs_volume_t vol;
     uint32_t target = prepare(&m, &vol);
+    wfs_super_t parsed;
     uint32_t image;
 
     if (!target) {
@@ -338,8 +339,28 @@ static void test_a_damaged_image_aborts_the_replay(void) {
     expect(remount(&m, &vol) == 0, "the volume still mounts");
     expect_rc(m.journal_err, WASMOS_ERR_FS_REPLAY, "the replay reports the damaged image");
     expect_u32(vol.super.read_only, 1u, "the volume is read-only");
-    expect_u32(vol.super.needs_replay, 1u, "and the replay is still owed");
     expect(!block_has_pattern(target, k_pattern_seed), "no part of the transaction was applied");
+
+    /* Regression: 2026-08-28-wfs-error-state-never-recorded
+     *
+     * §4 defines WFS_STATE_ERROR as "an inconsistency was detected; mount
+     * read-only and run fsck", and a replay that cannot complete is exactly that
+     * (§21). Nothing ever wrote it: the driver set read_only in MEMORY and the
+     * next mount, reading a superblock that still said DIRTY, treated the volume
+     * as merely unclean -- so it attempted the same doomed replay again, and
+     * would have gone on doing so on every boot forever. */
+    memset(&parsed, 0, sizeof(parsed));
+    expect_rc(wfs_super_parse(wfs_stub_image + WFS_SUPER_OFFSET, WFS_SUPER_SIZE, 0u, &parsed),
+              WASMOS_ERR_NONE,
+              "the superblock still verifies");
+    expect_u32(parsed.state, (uint32_t)WFS_STATE_ERROR, "and records the volume as damaged");
+
+    /* And the NEXT mount acts on it: read-only without re-running the replay,
+     * which is the whole point of recording it. */
+    expect(remount(&m, &vol) == 0, "it mounts again");
+    expect_u32(vol.super.read_only, 1u, "still read-only");
+    expect_u32(m.replayed, 0u, "and the doomed replay is not attempted again");
+    expect_rc(m.journal_err, WASMOS_ERR_NONE, "so the log reports nothing this time");
 
     wfs_stub_teardown();
 }

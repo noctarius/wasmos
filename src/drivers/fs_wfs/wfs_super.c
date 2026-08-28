@@ -180,7 +180,15 @@ wasmos_error_code_t wfs_super_parse(const void* image, uint32_t len, uint64_t lo
     if (sb.state != WFS_STATE_CLEAN && sb.state != WFS_STATE_DIRTY && sb.state != WFS_STATE_ERROR) {
         return WASMOS_ERR_FS_CORRUPT;
     }
-    sb.needs_replay = (sb.state == WFS_STATE_CLEAN) ? 0u : 1u;
+    /* Only DIRTY owes a replay. WFS_STATE_ERROR says an inconsistency was
+     * already DETECTED and not repaired (§4), so replaying is not what the
+     * volume needs -- the last mount that tried is how it came to say ERROR at
+     * all, and trying again on every boot would repeat a failure forever. It
+     * mounts read-only for fsck (§24) instead. */
+    sb.needs_replay = (sb.state == WFS_STATE_DIRTY) ? 1u : 0u;
+    if (sb.state == WFS_STATE_ERROR) {
+        sb.read_only = 1u;
+    }
 
     sb.generation = wfs_rd64(p, offsetof(struct wfs_superblock, generation));
 

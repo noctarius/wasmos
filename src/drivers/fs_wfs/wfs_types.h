@@ -336,6 +336,13 @@ typedef struct {
      * a backup is allowed to trail on everything else because §5 orders copies by
      * generation and a trailing one correctly loses. */
     uint8_t refresh_backups;
+    /* Write even though the volume is read-only. Set ONLY for the write that
+     * records WFS_STATE_ERROR: that write is what says why the volume is
+     * read-only, so letting the read-only gate refuse it would mean an
+     * inconsistency could never be written down. Every other caller leaves this
+     * clear and is refused, which is what keeps a damaged volume from being
+     * written to by an ordinary operation. */
+    uint8_t force;
 
     /* The generation this write took, which is one past what the image held. */
     uint64_t generation;
@@ -907,6 +914,7 @@ typedef enum {
     WFS_MOUNT_PC_GROUP_JOINED,
     WFS_MOUNT_PC_JLOAD_JOINED,
     WFS_MOUNT_PC_REPLAY_JOINED,
+    WFS_MOUNT_PC_ERROR_JOINED,
 } wfs_mount_pc_t;
 
 typedef struct {
@@ -939,6 +947,10 @@ typedef struct {
     uint8_t jload_started;
     wasmos_wasm_coroutine_t jload_task;
     wfs_jload_ctx_t jload;
+    /* Recording WFS_STATE_ERROR when the replay could not finish. */
+    uint8_t error_started;
+    wasmos_wasm_coroutine_t error_task;
+    wfs_sb_ctx_t error_write;
     uint8_t replay_started;
     wasmos_wasm_coroutine_t replay_task;
     wfs_replay_ctx_t replay;

@@ -10,6 +10,7 @@
 #include "wfs_ops.h"
 #include "wfs_recover.h"
 #include "wfs_super.h"
+#include "wfs_sync.h"
 
 int32_t wfs_group_task(void* user, uintptr_t* out_value) {
     wfs_group_ctx_t* ctx = (wfs_group_ctx_t*)user;
@@ -403,8 +404,46 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
                  * what stops a writer from building on it. */
                 ctx->journal_err = (wasmos_error_code_t)jr;
                 ctx->vol->super.read_only = 1u;
+                /* Recorded on DISK as well, so the next mount does not repeat a
+                 * replay that already failed once -- it would fail identically
+                 * every boot, and a volume that merely says DIRTY looks to that
+                 * mount like one which was never given the chance (§4).
+                 *
+                 * Only when this mount read the PRIMARY. A superblock adopted
+                 * from a backup (§5) means the primary did not validate, and
+                 * this write is a read-modify-write of it: patching and
+                 * resealing bytes that failed their own checksum would turn
+                 * unreadable garbage into a superblock that verifies, which is
+                 * strictly worse than leaving it unreadable for fsck. */
+                if (ctx->scan_have) {
+                    ctx->vol->mounted = 1u;
+                    return WASMOS_WASM_TASK_COMPLETE;
+                }
+                /* Marked mounted BEFORE the write: the superblock writer
+                 * requires it, and by here the volume genuinely is -- the
+                 * superblock parsed and every group descriptor verified. What
+                 * failed is the replay over them. */
                 ctx->vol->mounted = 1u;
-                return WASMOS_WASM_TASK_COMPLETE;
+                ctx->error_write.pc = WFS_SB_PC_START;
+                ctx->error_write.vol = ctx->vol;
+                ctx->error_write.state = (uint32_t)WFS_STATE_ERROR;
+                ctx->error_write.set_counters = 0u;
+                ctx->error_write.refresh_backups = 1u;
+                /* The volume is already read-only; this is the write that says
+                 * why. */
+                ctx->error_write.force = 1u;
+                ctx->error_write.err = WASMOS_ERR_NONE;
+                wfs_ops_task_reset(&ctx->error_task);
+                if (!wasmos_async_start(wfs_ops_runtime(),
+                                        &ctx->error_task,
+                                        wfs_super_write_task,
+                                        &ctx->error_write)) {
+                    ctx->vol->mounted = 1u;
+                    return WASMOS_WASM_TASK_COMPLETE;
+                }
+                ctx->error_started = 1u;
+                ctx->pc = WFS_MOUNT_PC_ERROR_JOINED;
+                return wfs_mount_task(user, out_value);
             }
         }
         ctx->replayed = ctx->replay.applied;
@@ -419,6 +458,24 @@ int32_t wfs_mount_task(void* user, uintptr_t* out_value) {
          * read_only is not touched rather than cleared: a volume recovered from a
          * BACKUP superblock (§5) set it before the sweep, and its primary is
          * still damaged whatever the log says. */
+        ctx->vol->mounted = 1u;
+        return WASMOS_WASM_TASK_COMPLETE;
+
+    case WFS_MOUNT_PC_ERROR_JOINED:
+        if (ctx->error_started) {
+            int jr = wasmos_wasm_coroutine_join(&ctx->error_task, &joined);
+
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->error_started = 0u;
+            /* A failure here is not reported over the replay failure that caused
+             * it: the volume is read-only in memory either way, and the caller's
+             * useful diagnosis is why the REPLAY stopped, not why recording it
+             * did. The cost of the write not landing is a next mount that tries
+             * the doomed replay once more. */
+            (void)jr;
+        }
         ctx->vol->mounted = 1u;
         return WASMOS_WASM_TASK_COMPLETE;
 

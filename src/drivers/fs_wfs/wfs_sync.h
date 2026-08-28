@@ -24,6 +24,22 @@
  */
 int32_t wfs_mark_dirty_task(void* user, uintptr_t* out_value);
 
+/* Record that an inconsistency was detected, so the NEXT mount refuses to write
+ * (§4's WFS_STATE_ERROR).
+ *
+ * Written by wfs_mount_task when a replay cannot complete, through
+ * wfs_super_write_task with `force` set -- the volume is already read-only by
+ * then, and this is the write that says why.
+ *
+ * TODO: a checksum that fails during an ORDINARY operation -- an object record,
+ * a directory tail, an extent node -- is an inconsistency by the same definition
+ * and is not recorded. It reaches the caller as WASMOS_ERR_FS_CHECKSUM and the
+ * volume stays writable, so the next mount sees nothing wrong. Recording it
+ * needs a write from paths that are otherwise read-only, and a policy decision
+ * this does not make: whether one bad record should cost the whole volume its
+ * writability, as ext4's errors=remount-ro does.
+ */
+
 /* Write the volume superblock, advancing `generation` (§4).
  *
  * The ONE writer of block 0. Everything that records something in the superblock

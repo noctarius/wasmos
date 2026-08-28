@@ -461,11 +461,16 @@ static void test_parse_reports_whether_replay_is_needed(void) {
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb), WASMOS_ERR_NONE, "a dirty volume");
     expect(sb.needs_replay == 1u, "a dirty volume needs replay");
 
+    /* ERROR does NOT owe a replay. §4 defines it as an inconsistency already
+     * DETECTED and not repaired, and the mount that detected it is the one that
+     * wrote it -- so replaying would repeat a failure that already happened, on
+     * every boot. It mounts read-only for fsck (§24) instead. */
     format_super(image, 0u);
     wfs_wr32(image, OFF_STATE, WFS_STATE_ERROR);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb), WASMOS_ERR_NONE, "an error volume");
-    expect(sb.needs_replay == 1u, "an error volume needs replay");
+    expect(sb.needs_replay == 0u, "an error volume is not replayed again");
+    expect(sb.read_only == 1u, "and is read-only for fsck");
 }
 
 static void test_parse_rejects_a_short_read(void) {

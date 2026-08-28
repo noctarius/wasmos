@@ -86,8 +86,11 @@ int32_t wfs_super_write_task(void* user, uintptr_t* out_value) {
         }
         /* Writing a read-only volume's superblock would compound whatever made it
          * read-only: a damaged primary recovered from a backup (§5), or a replay
-         * that could not complete. */
-        if (ctx->vol->super.read_only) {
+         * that could not complete. The one exception is the write that RECORDS
+         * the damage -- refusing that would leave an inconsistency undetectable
+         * to the next mount, which is the failure §4's ERROR state exists to
+         * prevent. */
+        if (ctx->vol->super.read_only && !ctx->force) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_READ_ONLY);
         }
         /* Block 0 carries the primary superblock at a fixed byte offset (§4). */

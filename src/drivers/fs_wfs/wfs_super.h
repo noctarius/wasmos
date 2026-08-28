@@ -58,8 +58,11 @@ typedef struct {
      * corrupt what it does not maintain (§6). */
     uint8_t read_only;
 
-    /* state is not WFS_STATE_CLEAN, so the journal must be replayed before the
-     * volume is used. A clean volume skips the scan entirely (§15). */
+    /* state is WFS_STATE_DIRTY, so the journal must be replayed before the volume
+     * is used. A clean volume skips the scan entirely (§15), and so does a
+     * volume already marked WFS_STATE_ERROR: that state records a replay or a
+     * structure that ALREADY failed, so repeating it would fail identically on
+     * every boot. An ERROR volume sets read_only above instead. */
     uint8_t needs_replay;
 } wfs_super_t;
 

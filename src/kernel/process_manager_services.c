@@ -185,7 +185,12 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
             return -1;
         }
         entry->endpoint = endpoint;
-        entry->flags = flags & WASMOS_SVC_FLAG_MASK;
+        /* Flags ACCUMULATE across re-registrations rather than being replaced.
+         * The packed-name path carries no flags and passes 0, so replacing would
+         * let a service that declared WANTS_SHUTDOWN through the descriptor path
+         * silently drop out of the shutdown sequence by re-registering its name.
+         * Nothing retracts a flag today, so there is no case this loses. */
+        entry->flags |= flags & WASMOS_SVC_FLAG_MASK;
         return 0;
     }
     if (!empty) {

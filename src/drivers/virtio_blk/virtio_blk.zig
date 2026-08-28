@@ -238,6 +238,19 @@ const SLOT_STATUS_OFF: u32 = 64;
 /// and put back that way once the last one retires -- see `armIdleTimer`.
 const POLL_INTERVAL_MS: i32 = 250;
 const MAX_IDLE_TICKS: u16 = 8;
+/// A flush's deadline, in the same POLL_INTERVAL_MS ticks. Far longer than a
+/// transfer's, because the two are bounded by different things: a read or write
+/// moves the sectors it names, while VIRTIO_BLK_T_FLUSH commits whatever the
+/// device has accumulated and is bounded by that, not by the request. Expiry is
+/// not a failed request -- `quiesce` resets the device and errors everything
+/// outstanding, so a flush that is merely slow would cost the filesystem its
+/// disk for the rest of the boot.
+const MAX_FLUSH_IDLE_TICKS: u16 = 240;
+
+/// The deadline a slot is aged against, by what it asked the device to do.
+fn slotDeadline(slot: *const Slot) u16 {
+    return if (slot.msg_type == op.BLOCK_IPC_FLUSH_REQ) MAX_FLUSH_IDLE_TICKS else MAX_IDLE_TICKS;
+}
 
 /// The 16-byte request header, laid out as the device reads it.
 const ReqHeader = extern struct {
@@ -708,6 +721,14 @@ fn handleIdentify(msg: *const co.IpcMessage) void {
 /// A device that did not offer VIRTIO_BLK_F_FLUSH has no volatile write cache,
 /// so the guarantee already holds and the reply is sent without touching the
 /// queue. Answering success there is not a shortcut: there is nothing to commit.
+///
+/// That fast path speaks for the DEVICE, not for this driver's queue: a write
+/// still sitting in a slot has not reached the device at all, so a client that
+/// pipelines writes and then flushes would be told "committed" too early. WFS,
+/// the only client, issues one block operation at a time (wfs_block_t.in_flight),
+/// so no such write can exist here.
+/// TODO: drain the outstanding slots before answering, so the reply means what
+/// abi/opcodes.yaml says it means for a client that does pipeline.
 fn acceptFlush(msg: *const co.IpcMessage) void {
     if (!g_dev.flush_supported) {
         _ = driver.send(msg.source, endpoint(), op.BLOCK_IPC_FLUSH_RESP, msg.request_id, 0, 0, 0, 0);
@@ -984,7 +1005,7 @@ fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
                 progressed = true;
             },
             .pending => {
-                if (slot.idle_ticks >= MAX_IDLE_TICKS) {
+                if (slot.idle_ticks >= slotDeadline(slot)) {
                     expired = true;
                 } else if (g_queue_ready and submit(i)) {
                     published = true;
@@ -992,7 +1013,7 @@ fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
                 }
             },
             .in_flight => {
-                if (slot.idle_ticks >= MAX_IDLE_TICKS) expired = true;
+                if (slot.idle_ticks >= slotDeadline(slot)) expired = true;
             },
             .free => {},
         }

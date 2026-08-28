@@ -360,6 +360,7 @@ typedef struct {
 typedef enum {
     WFS_SYNC_PC_START = 0,
     WFS_SYNC_PC_WRITE_JOINED,
+    WFS_SYNC_PC_BARRIERED, /* the recorded state, committed to media */
 } wfs_sync_pc_t;
 
 typedef struct {

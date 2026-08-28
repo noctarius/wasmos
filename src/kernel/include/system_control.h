@@ -19,9 +19,13 @@ void kernel_system_reboot(void) __attribute__((noreturn));
  *
  * The sequence needs IPC round trips with the participants, so it is stepped by
  * the process manager's dispatch loop and normally powers the machine off from
- * there. This function yields until that happens, and powers the machine off
- * itself if the sequence stops making progress -- halt always halts. */
-void kernel_system_shutdown(uint32_t reason) __attribute__((noreturn));
+ * there. This function PARKS the caller until that happens -- on a single-CPU
+ * guest a yield loop would keep it runnable and the process manager would never
+ * be scheduled -- and powers the machine off itself if the sequence stops making
+ * progress. Halt always halts.
+ *
+ * `context_id` is the calling process's; the parking endpoint is created in it. */
+void kernel_system_shutdown(uint32_t reason, uint32_t context_id) __attribute__((noreturn));
 /* Record the request and return. Separated from kernel_system_shutdown for the
  * PM's own use and for tests; a caller that arms without waiting must have some
  * other reason to believe the machine will go down. */

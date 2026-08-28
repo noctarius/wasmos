@@ -1073,7 +1073,7 @@ static uint32_t warp_system_halt(void* ctx_) {
     if (warp_require_system_control_capability(context_id) != 0) {
         return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     }
-    kernel_system_shutdown(WASMOS_SHUTDOWN_REASON_HALT);
+    kernel_system_shutdown(WASMOS_SHUTDOWN_REASON_HALT, context_id);
 }
 /* hostcalls.yaml `system_reboot`: counterpart of warp_system_halt, same capability
  * gate and the same "returns only on refusal" contract. */
@@ -1086,7 +1086,7 @@ static uint32_t warp_system_reboot(void* ctx_) {
     if (warp_require_system_control_capability(context_id) != 0) {
         return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     }
-    kernel_system_shutdown(WASMOS_SHUTDOWN_REASON_REBOOT);
+    kernel_system_shutdown(WASMOS_SHUTDOWN_REASON_REBOOT, context_id);
 }
 
 // ---------------------------------------------------------------------------

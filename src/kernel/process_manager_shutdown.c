@@ -25,9 +25,20 @@
  * Bounded and best-effort by design: the sequence exists to let a filesystem
  * record a clean unmount, and a volume that misses it mounts read-only next boot
  * rather than serving inconsistent metadata. Shutdown may therefore give up on a
- * participant; it may not fail to bring the machine down. */
+ * participant; it may not fail to bring the machine down.
+ *
+ * Sized against the work, not against a round trip. fs-wfs answers by writing
+ * its superblock and its backup copies, and every one of those writes ends in a
+ * cache flush that a device backed by real media takes real time to honour --
+ * flushes measured, on this tree, an order of magnitude slower than the sector
+ * transfers the block drivers are otherwise tuned for. Expiry here is not merely
+ * a missed opportunity: the next thing the sequence does when the last
+ * participant is passed over is cut the power, so a deadline shorter than the
+ * write it interrupts turns a clean unmount into a torn superblock -- the one
+ * outcome worse than never having run. It costs nothing on the normal path,
+ * where the participant answers in milliseconds. */
 #ifndef WASMOS_PM_SHUTDOWN_DEADLINE_MS
-#define WASMOS_PM_SHUTDOWN_DEADLINE_MS 1000u
+#define WASMOS_PM_SHUTDOWN_DEADLINE_MS 8000u
 #endif
 
 /* Collect the participants: every distinct context owning a registered service
@@ -127,7 +138,7 @@ void pm_shutdown_note_done(const ipc_message_t* msg) {
         return;
     }
     g_pm.shutdown.pending = 0;
-    g_pm.shutdown.index++;
+    pm_atomic_store_u32(&g_pm.shutdown.index, g_pm.shutdown.index + 1u);
 }
 
 void pm_shutdown_step(uint32_t pm_context_id) {
@@ -135,7 +146,7 @@ void pm_shutdown_step(uint32_t pm_context_id) {
         if (!pm_atomic_load_u32(&g_pm.shutdown.requested)) {
             return;
         }
-        g_pm.shutdown.active = 1;
+        pm_atomic_store_u32(&g_pm.shutdown.active, 1u);
         pm_shutdown_collect();
         klog_write("[pm] shutdown: begin\n");
     }
@@ -148,7 +159,7 @@ void pm_shutdown_step(uint32_t pm_context_id) {
          * cannot answer once is not more likely to answer twice. */
         klog_write("[pm] shutdown: participant did not answer\n");
         g_pm.shutdown.pending = 0;
-        g_pm.shutdown.index++;
+        pm_atomic_store_u32(&g_pm.shutdown.index, g_pm.shutdown.index + 1u);
     }
     if (g_pm.shutdown.index < g_pm.shutdown.count) {
         pm_shutdown_notify(pm_context_id);
@@ -161,24 +172,44 @@ void pm_shutdown_step(uint32_t pm_context_id) {
     kernel_system_poweroff();
 }
 
+/* How long the halting process parks between checks. Matched to the PM's own
+ * idle poll interval, so a step the PM takes is noticed about as fast as it
+ * happens. */
+#define WASMOS_PM_SHUTDOWN_WAIT_SLICE_MS 50u
+
 /* Bring the machine down for `reason`, giving the participants their sequence
  * first. Runs on the HALTING process's CPU; the sequence itself runs on the PM's.
  *
- * The wait is a yield loop rather than a block, because there is nothing to
- * block on: the sequence's completion is a power-off, not a reply, and the
- * caller is not a participant. Yielding is what lets the PM run at all on a
- * single CPU, and a machine three seconds from powered off is not a system whose
- * idle behaviour matters.
+ * The wait PARKS the caller on an endpoint nothing ever sends to -- created
+ * here and never published, so it cannot become readable and turn the park into
+ * a poll -- rather than yielding in a loop. On a single-CPU guest the difference is the whole
+ * behaviour: a yield loop keeps the halting process runnable, so the scheduler
+ * has no reason to run the process manager, and the sequence never starts --
+ * measured as the machine powering off through the fallback below with no
+ * participant notified. Parking takes the caller out of the ready set entirely.
  *
- * Progress -- not total time -- bounds it. A sequence stepping through 32
- * participants at the per-participant deadline legitimately takes a minute, so a
+ * Progress -- not total time -- bounds it. A sequence stepping through many
+ * participants at the per-participant deadline legitimately takes a while, so a
  * total budget would either cut a working shutdown short or be too loose to
- * catch a wedged PM. The caller therefore watches the participant index and only
- * gives up when it has not moved for two deadlines, at which point it powers the
- * machine off itself. Halt always halts. */
-void kernel_system_shutdown(uint32_t reason) {
+ * catch a wedged PM. The caller therefore watches how far the sequence has got
+ * and gives up only when that has not moved for two deadlines, at which point it
+ * powers the machine off itself. Halt always halts.
+ *
+ * An endpoint that cannot be created costs the shutdown its sequence rather than
+ * its halt: there is nothing to park on, and spinning instead is what this
+ * exists to avoid. */
+void kernel_system_shutdown(uint32_t reason, uint32_t context_id) {
+    uint32_t endpoint = IPC_ENDPOINT_NONE;
     uint32_t progress;
     uint64_t give_up;
+
+    if (ipc_endpoint_create(context_id, &endpoint) != IPC_OK) {
+        klog_write("[pm] shutdown: no endpoint to wait on, powering off\n");
+        if (reason == WASMOS_SHUTDOWN_REASON_REBOOT) {
+            kernel_system_reboot();
+        }
+        kernel_system_poweroff();
+    }
 
     kernel_system_shutdown_arm(reason);
     /* One number that only ever moves forward: 0 until the PM has collected the
@@ -190,12 +221,25 @@ void kernel_system_shutdown(uint32_t reason) {
     progress = 0;
     give_up = timer_ticks() + timer_ms_to_ticks(2u * WASMOS_PM_SHUTDOWN_DEADLINE_MS);
     while (timer_ticks() < give_up) {
-        uint32_t now = g_pm.shutdown.active ? (1u + g_pm.shutdown.index) : 0u;
+        /* Read with the helpers because the PM writes them on its own CPU. The
+         * pair collapses to one forward-only number, so a stale read can only
+         * delay the give-up reset below, never bring it forward. */
+        uint32_t now = pm_atomic_load_u32(&g_pm.shutdown.active)
+                           ? (1u + pm_atomic_load_u32(&g_pm.shutdown.index))
+                           : 0u;
 
-        process_yield(PROCESS_RUN_YIELDED);
         if (now != progress) {
             progress = now;
             give_up = timer_ticks() + timer_ms_to_ticks(2u * WASMOS_PM_SHUTDOWN_DEADLINE_MS);
+        }
+        if (ipc_endpoint_wait_for(context_id, endpoint, WASMOS_PM_SHUTDOWN_WAIT_SLICE_MS) !=
+            IPC_OK) {
+            /* The wait returned without parking, so repeating it is the spin this
+             * function exists to avoid -- and a spin here starves the very
+             * process the loop is waiting for. Give the machine up rather than
+             * hold the CPU against it. */
+            klog_write("[pm] shutdown: cannot park, powering off\n");
+            break;
         }
     }
     klog_write("[pm] shutdown: sequence stalled, powering off\n");

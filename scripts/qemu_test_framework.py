@@ -27,6 +27,12 @@ class QemuConfig:
     # FAT disks this cannot be a synthetic FAT directory, so it is an image
     # mkfs_wfs built; absent, the guest simply has no WFS unit to mount.
     wfs_image: str = ""
+    # Whether the WFS drive gets a throwaway copy-on-write overlay. True keeps
+    # the suite repeatable; a test that has to prove a write REACHED the media --
+    # the clean-unmount flag surviving a halt, say -- sets it False and must then
+    # supply its own scratch copy of the image, because writes land in the file
+    # named by wfs_image and stay there.
+    wfs_snapshot: bool = True
     nographic: bool = True
     display: str = ""
     isolate_esp: bool = False
@@ -296,16 +302,20 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         # like an absent drive unless you look at the signature.
         #
         # snapshot=on is equally load-bearing now that the guest WRITES to this
-        # volume. Without it a run's writes land in the image file and stay there,
-        # and the next boot mounts a volume the previous one left DIRTY — which
-        # WFS mounts read-only, correctly, since no journal replay exists. Every
-        # write then fails and the read fixtures no longer hold the bytes they
-        # assert. The symptom is a suite that passes once and fails afterwards, so
-        # each boot gets a throwaway overlay and starts from the pristine mkfs
-        # image.
+        # volume: without it a run's writes land in the image file and stay
+        # there, so the read fixtures stop holding the bytes they assert and the
+        # suite passes once and fails afterwards. Each boot therefore gets a
+        # throwaway overlay and starts from the pristine mkfs image.
+        #
+        # cfg.wfs_snapshot turns it off for the one kind of test that cannot use
+        # an overlay, because what it asserts is that a write reached the media.
+        # Such a test owns a scratch copy of the image; it must never point
+        # wfs_image at the shared build/wfs.img, which nothing regenerates once
+        # a guest has made it newer than its inputs.
+        snapshot = "snapshot=on," if cfg.wfs_snapshot else ""
         cmd += [
             "-drive",
-            f"if=ide,index=2,media=disk,format=raw,snapshot=on,file={cfg.wfs_image}",
+            f"if=ide,index=2,media=disk,format=raw,{snapshot}file={cfg.wfs_image}",
         ]
     if cfg.nic_model and cfg.nic_model != "none":
         # Give the NIC a stable device id so the monitor can target it with

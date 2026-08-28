@@ -1275,6 +1275,12 @@ linked feature documents for rationale and rollout plans.
   and a clean volume still never walks the log. A volume whose log does not
   validate mounts READ-ONLY rather than being refused -- every structure a reader
   touches is intact, and the log is a region only a writer needs.
+- `tests/test_wfs_clean_unmount.py` is the only suite whose guest writes reach
+  real media: it owns a scratch copy of the volume and clears `wfs_snapshot`, so
+  the journal's barriers become cache flushes the host honours. Everything else
+  runs against `snapshot=on`, where a flush returns instantly. Two classes, four
+  boots -- a clean halt must leave the volume CLEAN, and a killed machine must
+  not -- because the clean assertion means nothing without the second.
 - `halt` and `reboot` run an orderly shutdown before the machine goes down, and
   `fs-wfs` is its one participant: it reconciles the superblock's free counters
   and records `WFS_STATE_CLEAN`, which is the only thing that tells the next

@@ -285,6 +285,21 @@ int32_t wfs_sync_task(void* user, uintptr_t* out_value) {
             }
         }
         ctx->vol->journal.counters_dirty = 0u;
+        /* The recorded state is only worth what reaches media. An unmount's whole
+         * purpose is to be read by the NEXT mount, and a superblock sitting in a
+         * device's volatile write cache when power is cut says nothing -- so the
+         * one write this task makes is barriered like a journal step. Not
+         * redundant on every backend: ATA ends each write with a cache flush of
+         * its own, but virtio-blk does not, and this is the path whose result has
+         * to survive exactly the moment the machine stops. */
+        WFS_AWAIT(ctx, wfs_block_flush_begin(wfs_ops_block()), WFS_SYNC_PC_BARRIERED);
+        /* fall through */
+
+    case WFS_SYNC_PC_BARRIERED:
+        ctx->err = wfs_block_take(wfs_ops_block());
+        if (ctx->err != WASMOS_ERR_NONE) {
+            return (int32_t)ctx->err;
+        }
         /* A volume left CLEAN is not marked dirty again until the next write asks
          * for it, which is what makes the flag mean "mounted for writing" rather
          * than "was written once". */

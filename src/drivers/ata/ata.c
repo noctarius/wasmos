@@ -142,6 +142,16 @@ typedef struct __attribute__((packed)) {
 #define ATA_POLL_ATTEMPTS 100000u
 #define ATA_IRQ_ATTEMPTS 200u
 #define ATA_IRQ_WAIT_MS 10
+/* CACHE FLUSH gets its own, far larger budget. Every other command this driver
+ * issues moves at most a few sectors, so the budgets above are sized for one; a
+ * flush commits the drive's entire write cache and is bounded by how much dirty
+ * data it holds, not by the command. Against a backing store that really
+ * persists -- a raw host file rather than a discarded overlay -- one flush was
+ * measured taking longer than the sector budget allows, and the driver then
+ * issued its next command while the drive was still BSY, which desynchronises
+ * the channel and hangs every request behind it. */
+#define ATA_FLUSH_POLL_ATTEMPTS 10000000u
+#define ATA_FLUSH_IRQ_ATTEMPTS 3000u
 /* Consecutive sleeps that produce no interrupt before the driver stops trusting
  * one. Without this, a line that is routed but silently undelivered would cost
  * the full timeout on every sector for the rest of the boot. */
@@ -309,14 +319,30 @@ static uint32_t ata_wait_attempts(void) {
 /* Status is read BEFORE waiting in both loops below: the condition is often
  * already true (a pre-command idle check never has an interrupt coming), and
  * sleeping first would trade a spin for a guaranteed timeout. */
-static int ata_wait_not_busy(void) {
-    for (uint32_t i = 0; i < ata_wait_attempts(); ++i) {
+static int ata_wait_not_busy_for(uint32_t attempts) {
+    for (uint32_t i = 0; i < attempts; ++i) {
         if ((ata_read_status() & ATA_SR_BSY) == 0) {
             return 0;
         }
         ata_wait_step();
     }
     return -1;
+}
+
+static int ata_wait_not_busy(void) {
+    return ata_wait_not_busy_for(ata_wait_attempts());
+}
+
+/* The BSY wait a cache flush needs; see ATA_FLUSH_POLL_ATTEMPTS. */
+static int ata_wait_flush_done(void) {
+    /* Keyed on whether a wait step SLEEPS, which is not the same as whether the
+     * interrupt is live: ata_wait_step sleeps only on the primary channel,
+     * because that is the only line routed. A flush on the secondary -- where
+     * the WFS volume lives, unit 2 -- therefore spins, and spinning through the
+     * sleep-sized budget would be a small fraction of the intended wait. */
+    int sleeps = g_irq_active && g_channel == 0u;
+
+    return ata_wait_not_busy_for(sleeps ? ATA_FLUSH_IRQ_ATTEMPTS : ATA_FLUSH_POLL_ATTEMPTS);
 }
 
 static int ata_wait_drq(void) {
@@ -673,7 +699,7 @@ static int ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t b
         return -1;
     }
     wasmos_io_region_out8(ata_region(), ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
-    return ata_wait_not_busy();
+    return ata_wait_flush_done();
 }
 
 /* Commit the drive's write cache (BLOCK_IPC_FLUSH_REQ). The same command every
@@ -690,11 +716,23 @@ static int ata_flush_unit(uint8_t unit) {
      * commit the OTHER drive's cache and report success for this one. The
      * command takes no LBA, so the address bits are zero. */
     wasmos_io_region_out8(ata_region(), ATA_REG_HDDEVSEL, (uint8_t)(0xE0u | ((unit & 1u) << 4)));
+    /* The 400 ns the drive is allowed to take before its status register answers
+     * for the newly selected drive; without it the first status read below can
+     * still answer for the previous one. */
+    wasmos_io_wait();
     if (ata_wait_not_busy() != 0) {
         return -1;
     }
     wasmos_io_region_out8(ata_region(), ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
-    return ata_wait_not_busy();
+    if (ata_wait_flush_done() != 0) {
+        return -1;
+    }
+    /* ERR is checked here, unlike the transfer paths, because this is the one
+     * command whose failure a caller cannot detect any other way. A journal
+     * barrier reporting success over a failed flush lets the writer put its
+     * COMMIT block on media believing the images it names are already there
+     * (docs/WFS_WASMOS_FILE_SYSTEM.md section 14). */
+    return (ata_read_status() & ATA_SR_ERR) ? -1 : 0;
 }
 
 static void ata_send_resp(int32_t reply_ep, int32_t req_id, int32_t type, int32_t status,

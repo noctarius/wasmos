@@ -2678,7 +2678,7 @@ m3ApiRawFunction(wasmos_system_halt) {
     if (require_system_control_capability(context_id) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
     }
-    kernel_system_shutdown(WASMOS_SHUTDOWN_REASON_HALT);
+    kernel_system_shutdown(WASMOS_SHUTDOWN_REASON_HALT, context_id);
     m3ApiReturn(0);
 }
 
@@ -2691,7 +2691,7 @@ m3ApiRawFunction(wasmos_system_reboot) {
     if (require_system_control_capability(context_id) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
     }
-    kernel_system_shutdown(WASMOS_SHUTDOWN_REASON_REBOOT);
+    kernel_system_shutdown(WASMOS_SHUTDOWN_REASON_REBOOT, context_id);
     m3ApiReturn(0);
 }
 

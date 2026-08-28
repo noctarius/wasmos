@@ -1102,6 +1102,18 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d
         wfs_stall();
     }
     wfs_log("[fs-wfs] mounted\n");
+    /* Which of the three mount paths the volume took. The state byte never
+     * leaves the driver, so this line is the only way to observe from outside
+     * whether the previous boot's unmount actually reached the media -- which is
+     * the whole of what an orderly shutdown buys, and is otherwise
+     * indistinguishable from a replay that happened to find nothing. */
+    if (g_mount_ctx.replayed != 0u) {
+        wfs_log("[fs-wfs] mounted after replay\n");
+    } else if (g_vol.super.state == (uint32_t)WFS_STATE_CLEAN) {
+        wfs_log("[fs-wfs] mounted from a clean unmount\n");
+    } else {
+        wfs_log("[fs-wfs] mounted from a volume left dirty\n");
+    }
 
     if (wfs_resolve_mount_alias(mount_alias, sizeof(mount_alias), &g_mount_unit) != 0) {
         wfs_log("[fs-wfs] mount alias resolve failed\n");

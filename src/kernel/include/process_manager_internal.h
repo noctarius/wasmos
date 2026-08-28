@@ -157,14 +157,18 @@ typedef struct {
 
 /* The orderly shutdown sequence's state (process_manager_shutdown.c).
  *
- * `requested` is the only field written from another CPU -- the halting
+ * `requested` is the only field WRITTEN from another CPU -- the halting
  * process's, through kernel_system_shutdown_arm -- and is accessed with the
  * pm_atomic_* helpers for that reason. Everything else is written by
- * pm_shutdown_step on the PM's own CPU, after it has observed that store. */
+ * pm_shutdown_step on the PM's own CPU, after it has observed that store.
+ *
+ * `active` and `index` are READ from the halting process's CPU as well, by the
+ * wait loop in kernel_system_shutdown, so they are accessed with the helpers
+ * too. The pair is read as one forward-only quantity and never written there. */
 typedef struct {
     uint32_t requested; /* armed by the halt/reboot host call */
     uint32_t reason;    /* WASMOS_SHUTDOWN_REASON_* */
-    uint8_t active;     /* participants have been collected */
+    uint32_t active;    /* participants have been collected; read cross-CPU */
     uint8_t pending;    /* the participant at `index` has been notified */
     uint32_t count;
     uint32_t index; /* the participant being waited on */

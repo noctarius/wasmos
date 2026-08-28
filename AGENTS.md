@@ -96,6 +96,19 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   and the two differ exactly where the contract is interesting. A doc that
   disagrees with the code is a `[DOCS]`/`[BUG]` entry for `docs/TASKS.md`, not
   permission to follow the code.
+- NEVER design a cross-process interaction around the four IPC argument words.
+  `ipc_message_t` carries exactly four opcode words, and that ceiling is not a
+  budget to spend cleverly. A request that carries more than a couple of
+  independent values, or any value that can grow (an LBA, a size, a string, a
+  GUID, a list), goes in a request DESCRIPTOR in a transfer buffer the CLIENT
+  owns — `arg0 = buffer_id, arg1 = offset, arg2 = size`. Bare arguments are for
+  a fixed, small set that will not grow, and "will not grow" must be an argument
+  you can make. Two tells that the message already outgrew its arguments: you
+  are writing a shift or a mask into an argument (`(x << 12) | y`), or you are
+  adding a sibling opcode that differs only in how a parameter is expressed.
+  "It's the hot path" is not a reason — a client acquires and grants ONCE per
+  operation and reuses both, so the per-request cost is one small write into an
+  already-mapped buffer. See `skills/wasmos-add-opcode` §"Step 0".
 - NEVER add bookkeeping to work around an error a primitive returns. A table,
   cache, retry, or special case introduced because a primitive "keeps failing"
   in a legitimate-looking way means you are holding it the wrong way round: stop

@@ -1313,17 +1313,24 @@ linked feature documents for rationale and rollout plans.
   awaits already in place. File DATA keeps writing straight to its block (§17):
   the block a write lands in, the block an inline promotion moves bytes into, and
   the tail a truncation zeroes are all data.
-- Phase 4 (§23) is inline data plus fsck. Inline data is implemented and in use
-  -- a small file lives in its object record and is promoted to extents when it
-  outgrows one. `fsck` does not exist, in any form, and is the only outstanding
-  phase-4 item. It is load-bearing rather than optional now that the driver
-  records `WFS_STATE_ERROR`: §4 defines that state as "mount read-only and run
-  fsck", so an ERROR volume stays read-only until one exists.
-- Formatting is HOST-ONLY (`src/tools/mkfs_wfs`). A running guest can mount,
-  read, write and recover a WFS volume but cannot create one. The sink in
-  `wfs_mkfs.c` is shared by the host tool and the unit suites, not by a guest:
-  its callbacks are synchronous, where a guest would have to await a BLOCK write
-  and an FS read. Both gaps are tracked in `docs/TASKS.md`.
+- PHASE 4 IS COMPLETE (§23): inline data was already implemented and in use, and
+  `fsck.wfs` (`src/utils/fsck_wfs`) is the checker. Its core is compiled twice --
+  into the guest utility and into `tests/unit/test_wfs_fsck.c`, which runs it
+  against volumes `mkfs_wfs` actually produced rather than hand-built fixtures.
+  It repairs only what §24 calls derived: the bitmaps are rebuilt from a walk of
+  the object table, the free counters recomputed from the bitmaps, and `state`
+  cleared only when nothing structural was found. Structural damage is reported
+  and left alone -- rewriting a failed record means inventing content, and a
+  checker that invents content turns a diagnosable volume into a plausible one.
+  A run cannot examine a MOUNTED volume: the block driver binds a unit to one
+  client exclusively, so a disk a filesystem driver holds is refused before a
+  sector is read.
+- Formatting is still HOST-ONLY (`src/tools/mkfs_wfs`): a running guest can
+  mount, read, write, recover and now CHECK a WFS volume, but cannot create one.
+  `mkfs.wfs` is tracked in `docs/TASKS.md` and is the same shape as `fsck.wfs` --
+  a utility under `src/utils` over a core shared with the host suites. The
+  synchronous sink is no obstacle: a one-shot utility may block on a BLOCK
+  request, as `blkinfo` and `fsck.wfs` both do. Only a SERVICE may not.
 - The transaction is opened and closed by the OPERATION, never by the participant
   it composes. `wfs_txn_open`/`wfs_txn_close` wrap the five namespace operations
   inside `wfs_namespace.c`, and `wfs_write_run`/`wfs_truncate_run` wrap the other

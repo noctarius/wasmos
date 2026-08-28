@@ -280,6 +280,10 @@ set(WASM_IP_APP ${BUILD_DIR}/ip.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
+set(WASM_FSCK_WFS_SRC ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/fsck_wfs.c)
+set(WASM_FSCK_WFS_CORE ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/wfs_fsck.c)
+set(WASM_FSCK_WFS_WASM ${BUILD_DIR}/fsck_wfs.wasm)
+set(WASM_FSCK_WFS_APP ${BUILD_DIR}/fsck_wfs.wap)
 set(WASM_BLKINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/blkinfo/blkinfo.c)
 set(WASM_BLKINFO_WASM ${BUILD_DIR}/blkinfo.wasm)
 set(WASM_BLKINFO_APP ${BUILD_DIR}/blkinfo.wap)
@@ -633,8 +637,17 @@ function(wasmos_add_wasm_c_app_target target_name)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
   # EXPORT, STARTUP_SHIM and NO_BUILTIN are still parsed so that passing one is a
   # loud error rather than a silent no-op; see the checks below.
-  set(multiValueArgs SOURCES)
+  # INCLUDES: extra -I directories for a module whose sources reach headers
+  # outside its own directory and outside the sysroot. The alternative is a
+  # relative include path, which is the thing the SDK has to rewrite out of
+  # wasmos/api.h (see cmake/wasmos_sdk_stage.cmake) and not worth repeating.
+  set(multiValueArgs SOURCES INCLUDES)
   cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  set(_wasmos_includes)
+  foreach(_dir ${WASMOS_APP_INCLUDES})
+    list(APPEND _wasmos_includes -I${_dir})
+  endforeach()
 
   set(_wasmos_sources ${WASMOS_APP_SOURCES})
   if (NOT _wasmos_sources AND WASMOS_APP_SOURCE)
@@ -722,6 +735,7 @@ function(wasmos_add_wasm_c_app_target target_name)
             --wasmos-manifest=${WASMOS_APP_MANIFEST}
             ${_wasmos_driver_flags}
             ${WASMOS_TRACE_DEFINE}
+            ${_wasmos_includes}
             ${_wasmos_libc_sources}
             ${_wasmos_sources}
             -o ${WASMOS_APP_OUTPUT_WASM}
@@ -747,9 +761,14 @@ function(wasmos_add_wasm_c_app_target target_name)
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASMOS_APP_OUTPUT_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ${target_name})
 
+  # The same INCLUDES the build command got. clang-tidy reads its compile line
+  # from this target, not from the custom command above, so an include dir added
+  # only there makes the module build and fail to LINT -- the header it reaches
+  # is simply not found.
   wasmos_add_ide_c_target(${target_name}_ide
     SOURCES ${_wasmos_sources}
     INCLUDES ${CMAKE_SOURCE_DIR}/src/libui/include ${LIBC_DIR}/include ${LIBSYS_WASM_DIR}/include ${DRIVER_WASM_DIR}/include
+             ${WASMOS_APP_INCLUDES}
   )
 endfunction()
 
@@ -1699,6 +1718,8 @@ if (TARGET host_util)
   set(HOST_UTIL_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
+    # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap
   )
 endif ()
 if (TARGET curl_util)
@@ -2761,6 +2782,33 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wfs_sync
   COMMAND ${BUILD_DIR}/test_wfs_sync
+  # The consistency checker (§24). The volume under test is one mkfs_wfs
+  # produced, so the checker is validated against the format rather than against
+  # a fixture some test wrote -- which would agree with the test and drift with
+  # the driver.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_fsck.c
+          ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/wfs_fsck.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_fsck
+  COMMAND ${BUILD_DIR}/test_wfs_fsck
   # The metadata journal: a transaction's blocks reach the log first and their
   # targets only at the commit. The cases assert the image at a point where the
   # checkpoint has NOT run, because a writer that logged its blocks and also
@@ -4171,6 +4219,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dirent.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_alloc.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_sync.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_fsck.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_journal.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_recover.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_write.c
@@ -4278,6 +4327,7 @@ wasmos_ide_index(wasmos_ide_unit_libc
            ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
            ${DRIVER_WASM_DIR}/fs_wfs
            ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+           ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs
            ${SERVICES_DIR}/device_manager
            ${CMAKE_SOURCE_DIR}/abi/generated/c)
 

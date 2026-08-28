@@ -247,11 +247,19 @@ linked feature documents for rationale and rollout plans.
 - `process.c` is host-testable behind `WASMOS_PROCESS_TEST_SEAMS`, which replaces
   its six inline-asm sites, the `KERNEL_HIGHER_HALF_BASE` alias helper and the
   saved-context rip/rsp validator — the arch facts a lifecycle question does not
-  depend on. `tests/unit/test_process_lifecycle.c` drives it from real pthreads
-  (one scheduler loop per CPU, a killer on the last) at 2, 4 and 8 CPUs, and
-  asserts the refusal counters are non-zero so a run that never entered the
-  window fails instead of passing vacuously. With the guards restored it aborts
-  at every width.
+  depend on — and exposes the two lifecycle transitions as `process_test_set_ready`
+  / `process_test_set_running`. `tests/unit/test_process_lifecycle.c` has two
+  layers over that. Contract cases drive each transition directly and own the
+  per-branch coverage; they state the interleaving as a starting state because
+  every production caller filters its target's state first, so the window is
+  unreachable from outside `process.c`. A pthread soak (one scheduler loop per CPU,
+  a killer on the last) at 2, 4 and 8 CPUs then proves the real interleaving is
+  survived, asserting the refusal counters' SUM is non-zero so a run that never
+  entered the window fails instead of passing vacuously. That assertion runs from
+  width 4 up and is reported rather than asserted at width 2, which spawns no
+  dispatcher thread of its own (the soak thread is the only dispatcher and also
+  owns every spawn, kill and reap) and produced 0-9 refusals against 76-110 at the
+  wider arms. With the guards restored the suite aborts at every width.
 - A dispatch holds raw pointers to a thread SLOT and a process SLOT across
   `process_schedule_once_impl` — through the switch AND through the result
   handling that follows — and reads `time_slice_ticks`, `kstack_top` and
@@ -260,6 +268,29 @@ linked feature documents for rationale and rollout plans.
   single-owner claim (`THREAD_SLOT_FREE`/`DISPATCH`/`FROZEN`) that the dispatcher,
   `thread_reset_slot` and `sched_sweep_owed_enqueues` all contest by CAS from
   FREE, so exactly one owns the slot and the losers back off.
+- Every path that takes that claim hands it back, including the ones that refuse
+  to act. `thread_reset_slot` CASes FREE -> FROZEN and then re-reads the thread's
+  state, refusing to tear down a RUNNING thread and refusing again if the state CAS
+  loses; both restore FREE before returning. FROZEN is unrecoverable if leaked --
+  every contender CASes from FREE, so a leaked FROZEN makes both the retry the
+  refusal promises and every later dispatch of that thread fail the claim rather
+  than the check, costing a slot out of a fixed-size table and stranding the thread
+  it declined to free. Reachable from `thread_reap_owner_pass`, which resets every
+  slot of the owner whatever its state.
+- The dispatch's own claim failure is the mirror case and is COUNTED, not silent:
+  `SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST` when the CAS loses and
+  `SCHED_DEBUG_DISPATCH_DROPPED_STEAL_REAPED` when a stolen thread's owner is gone.
+  Both exits run after a picker has already unlinked the thread and released
+  `on_rq`, so they leave a thread that is off every run queue. The `slot claim
+  lost` report carries the OBSERVED claim value, which separates a racing dispatch
+  (DISPATCH) from a reaper (FROZEN), and the two are treated differently: a lost
+  claim held by another DISPATCH publishes an owed-enqueue claim
+  (`sched_owe_enqueue_for_dropped_pick`) so the holder or an idle CPU's
+  `sched_sweep_owed_enqueues` re-links the thread, while a FROZEN slot is a
+  teardown whose thread is meant to end unqueued. Publishing the debt rather than
+  linking is required: the holder is still writing that thread's context.
+  Dropping without either was the live-owner strand behind the whole-session
+  wedge, reproducible on linux x86_64 under both MTTCG and single-threaded TCG.
 - A CAS, not a test-then-act, because the two sides share no lock: the dispatcher
   claims after `cpu_sched_pick_next` has dropped the queue lock, and the reaper
   holds only the thread table lock. `process_reap_claim` additionally refuses while
@@ -275,11 +306,20 @@ linked feature documents for rationale and rollout plans.
   process transition, and the dispatcher re-validates `(tid, owner_pid)` after its
   claim) but the claim is what closes the window.
 - Promotions to READY go through `thread_wake_if_blocked`, and its result is
-  deliberately IGNORED. Only the DEMOTION is avoided — writing READY over RUNNING
-  would lose a dispatch another CPU had already claimed — and `thread_set_state`
-  is not used because it clears `block_reason` as a side effect that a bare state
-  CAS does not, and a READY thread still carrying the reason it blocked for is put
-  straight back to sleep by the wait paths.
+  deliberately IGNORED. Only the DEMOTION is avoided, and what it costs is
+  specific: `THREAD_STATE_RUNNING` *is* the exclusive dispatch claim
+  (`cpu_sched_claim_for_dispatch` is a READY→RUNNING CAS), so writing READY over
+  it re-arms the claim and a second CPU can win it on a thread that is already
+  executing. Between that claim and the publication of
+  `cpu_local()->current_thread` the RUNNING state is the only record that the
+  thread is spoken for, so `sched_enqueue_thread`'s holder scan cannot see it and
+  only its `state != READY` skip keeps an executing thread out of a ready queue.
+  Pinned by "the dispatch claim survived the promotion" in
+  `tests/unit/test_process_lifecycle.c`, which fails four ways against an
+  unconditional promotion. `thread_set_state` is not used for the promotion
+  because a BLOCKED target must have `block_reason` cleared with the state, which
+  a bare state CAS does not do, and a READY thread still carrying the reason it
+  blocked for is put straight back to sleep by the wait paths.
 - Reporting the promotion's result to the caller is WRONG and was reverted twice
   for the same reason, so it is worth stating as a rule: `process_set_ready`
   answers "may this owner's thread be made runnable" (an owner question, about
@@ -288,6 +328,51 @@ linked feature documents for rationale and rollout plans.
   executing right now — that handshake exists precisely to hand such an enqueue to
   the target's own completion path. Both regressions wedged the boot with the CLI
   never seeing typed input, and both passed every local gate.
+- A wake that defers its enqueue leaves a CLAIM, never only a READY mark.
+  `sched_wake_thread`'s arm for "the completion path owns the enqueue" publishes
+  `sched_owe_enqueue` alongside the mark, because that ownership holds only until
+  the completion path makes its decision: it clears `blocking_transition`, takes
+  the token, reads the state, sees BLOCKED and correctly declines to enqueue a
+  blocked thread. A mark landing after that read is seen by nobody, and the thread
+  is then READY on no run queue with no token and no debt -- unrecoverable, since
+  `sched_sweep_owed_enqueues` is gated on the global debt counter that a thread
+  with no debt never enters. The enqueue-current path in `cpu_sched_enqueue` has
+  always published a claim for the same reason.
+- A claim consumer validates BEFORE taking the claim, never after.
+  `sched_take_owed_enqueue` is documented as consuming the claim "returning 1 to
+  the single caller that owns the enqueue", so a caller that takes ownership and
+  then declines has absorbed a wake: the debt is gone, `g_enqueue_owed_count` has
+  been decremented, and `sched_sweep_owed_enqueues` -- gated on that counter -- can
+  no longer find the thread. `sched_settle_deferred_enqueue` therefore reads the
+  state first; it runs the instant a dispatch ends, where transient states are
+  most likely. The sweep still takes before validating, and it runs on EVERY
+  iteration of the scheduler loop rather than only on an idle CPU, so it retires a
+  merely-BLOCKED thread's debt on the next iteration of the same loop -- keeping
+  the claim in the settle path is correct but is not by itself a fix for a lost
+  hand-off.
+- The stall dump carries the two fields that diagnosed that: `owed=` on every
+  thread line, and `ready_by=` (resolved to a symbol) for a stranded thread, which
+  names whoever last promoted it. `SCHED_DEBUG_DISPATCH_LEFT_STRANDED` reports a
+  dispatch ending with its thread READY, unqueued, owed nothing and its owner
+  live, on EVERY exit rather than only the aborting ones. It samples at
+  `dispatch_done` and so over-reports a promote-then-enqueue crossing CPUs; the
+  authoritative signal is a `[diag]!` strand persisting across all dump samples
+  with `disp` frozen.
+- `ready_by=` names the promoter but structurally cannot say why the thread is on
+  no run queue, so the dump also carries per-thread run-queue forensics for a
+  strand: `enq=` (the outcome of the last enqueue attempt), `links=` (times the
+  thread was actually linked), `unlink=` (who last released `on_rq`) and `enq_by=`
+  (the call site of that attempt, carried in through `cpu_sched_enqueue_from`).
+  They separate the only two histories that reach a stranded thread: it was linked
+  and a picker's caller dropped it (`links>0`, `unlink=pick_next`/`steal`), or it
+  was never linked because a guard declined (`enq=skip:*`, naming which guard;
+  `links=0`, which the first history cannot reach). Diagnostic only -- relaxed
+  atomics, read only by the dump, scrubbed with the slot.
+- Every scheduler tripwire's running total is printed on one line
+  (`[diag] sched counters:`), including the zeros. The per-event reports rate-limit
+  to powers of two, so an absent log line is not evidence the event did not fire;
+  the counters are the only honest negative and several wrong conclusions have been
+  drawn from the log's silence.
 - `proc->exiting`, `proc->thread_count`, `proc->live_thread_count` and the
   scheduler's progress diagnostics are read and written cross-CPU, so each has one
   atomic protocol rather than a mix. `live_thread_count` reaching zero gates
@@ -914,6 +999,13 @@ linked feature documents for rationale and rollout plans.
   (`driver=<name> unit=<n>`), not about the rule's pattern. A wildcard rule has
   no unit of its own, and passing the pattern handed the driver 0xFF as a unit
   number.
+- A match is reported by whichever of the two paths made it: the live publish,
+  and the re-scan of already-registered devices that runs when a later rule set
+  loads. Both matter because the override rules live on `/boot` and cannot load
+  until the boot volume is mounted, so a second disk publishing inside that
+  window is matched only by the re-scan. Reporting from the publish path alone
+  made that outcome silent while the mount itself succeeded, which reads in a
+  boot log as a rule that never matched.
 - One matcher decides whether a block rule applies to a device. There were two --
   a walk over known devices and a copy inside the publish handler -- and the
   publish copy, which is the path a live device takes, never compared the

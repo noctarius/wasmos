@@ -9,6 +9,7 @@
 #include "process.h"
 #include "process_manager_internal.h"
 #include "thread.h"
+#include "sched.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/lapic.h"
 
@@ -239,6 +240,14 @@ void diag_dump_threads(const char* reason) {
         if (t->state == THREAD_STATE_READY) {
             ready++;
             if (!t->on_rq && !is_idle) {
+                /* READY on no run queue. `owed` on the line below is what splits
+                 * this into its two causes, which have different fixes and are
+                 * otherwise indistinguishable in a dump: owed=1 means a waker
+                 * published the debt and the holder's settle never performed it,
+                 * so the hand-off exists and was dropped; owed=0 with wake=0
+                 * means nothing ever took responsibility for the enqueue -- a
+                 * site marked the thread READY and returned, which is the "a mark
+                 * is not a message" failure the claim protocol exists to prevent. */
                 stranded++;
                 anomaly = 1;
             }
@@ -267,8 +276,8 @@ void diag_dump_threads(const char* reason) {
             }
         }
         serial_printf_unlocked(
-            "[diag]%s tid=%u pid=%u %s st=%s rsn=%s rq=%u wake=%u btrans=%u ev=%u cpu=%u "
-            "ticks=%llu disp=%llu\n",
+            "[diag]%s tid=%u pid=%u %s st=%s rsn=%s rq=%u owed=%u wake=%u btrans=%u ev=%u "
+            "cpu=%u ticks=%llu disp=%llu\n",
             anomaly ? "!" : "",
             (unsigned)t->tid,
             (unsigned)t->owner_pid,
@@ -276,6 +285,7 @@ void diag_dump_threads(const char* reason) {
             diag_thread_state_name(t->state),
             diag_block_reason_name(t->block_reason),
             (unsigned)t->on_rq,
+            (unsigned)t->enqueue_owed,
             (unsigned)t->wake_pending,
             (unsigned)t->blocking_transition,
             (unsigned)(t->wait_event ? 1u : 0u),
@@ -302,6 +312,34 @@ void diag_dump_threads(const char* reason) {
             diag_print_backtrace(t->ctx.rbp, 10);
         }
         serial_printf_unlocked("\n");
+        /* For a strand, WHO made it runnable.  A READY thread on no run queue was
+         * promoted by someone who then did not enqueue it, and that promotion site
+         * is the defect; every other field in this dump describes the aftermath.
+         * Printed only for the anomaly, so a healthy dump does not grow. */
+        if (anomaly && t->state == THREAD_STATE_READY) {
+            uint64_t by = __atomic_load_n(&t->ready_by, __ATOMIC_RELAXED);
+            serial_printf_unlocked("[diag]   ready_by=%016llx", (unsigned long long)by);
+            panic_print_symbol(by);
+            serial_printf_unlocked("\n");
+            /* And WHY it is on no run queue, which ready_by cannot say.  The
+             * promoter is only half the question: a thread READY and unqueued
+             * either never made it into a queue (enq= names the skip) or was
+             * taken out of one and dropped (unlink= names who took it, links>0
+             * proves it was ever in one).  Those have different fixes, and every
+             * other field in this dump is identical between them.
+             *
+             * enq= and links= are read racily like every other field here, so a
+             * slot recycled between an enqueue and this read reports the scrubbed
+             * zeros rather than the history; treat one implausible line as a torn
+             * read, as with the rest of the dump. */
+            serial_printf_unlocked("[diag]   enq=%s links=%u unlink=%s enq_by=%016llx",
+                                   sched_enq_result_name(t->rq_enq_result),
+                                   (unsigned)t->rq_link_count,
+                                   sched_unlink_site_name(t->rq_unlink_site),
+                                   (unsigned long long)t->rq_enq_by);
+            panic_print_symbol(t->rq_enq_by);
+            serial_printf_unlocked("\n");
+        }
         /* What the thread is waiting ON, and whether anything is already there
          * for it.  A blocked owner whose endpoint holds a queued message is a
          * lost wake: the send happened and the receiver was never made
@@ -372,6 +410,47 @@ void diag_dump_threads(const char* reason) {
         (unsigned)blocked,
         (unsigned)stranded,
         (unsigned)unclaimed);
+    diag_dump_sched_counters();
+}
+
+/* Every scheduler tripwire's total, unconditionally.
+ *
+ * This exists because the tripwires' own log lines cannot be read as evidence:
+ * sched_debug_note rate-limits each event to powers of two, so with a couple of
+ * dozen hits per boot roughly six print, and "no line names this thread" is
+ * consistent with the event having fired every time. Four conclusions in this
+ * investigation were drawn from absent log lines and all four were void. The
+ * counters are exact, so a zero here is a real negative.
+ *
+ * Every event is named and printed on a single line, zeros included: the zeros
+ * are the whole point, and one line keeps the dump greppable. */
+void diag_dump_sched_counters(void) {
+    static const char* const names[SCHED_DEBUG_EVENT_COUNT] = {
+        [SCHED_DEBUG_GHOST_HEAD] = "ghost-head",
+        [SCHED_DEBUG_ENQUEUE_IDLE] = "enqueue-idle",
+        [SCHED_DEBUG_BAD_PRIO] = "bad-prio",
+        [SCHED_DEBUG_ENQUEUE_NON_READY] = "enqueue-non-ready",
+        [SCHED_DEBUG_DOUBLE_LINK] = "double-link",
+        [SCHED_DEBUG_ENQUEUE_FROM_NON_READY] = "enqueue-from-non-ready",
+        [SCHED_DEBUG_INIT_ON_QUEUED] = "init-on-queued",
+        [SCHED_DEBUG_REMOVE_GAVE_UP] = "remove-gave-up",
+        [SCHED_DEBUG_SET_PRIO_QUEUED] = "set-prio-queued",
+        [SCHED_DEBUG_ENQUEUE_CURRENT] = "enqueue-current",
+        [SCHED_DEBUG_SET_READY_EXITING] = "set-ready-exiting",
+        [SCHED_DEBUG_SET_RUNNING_EXITING] = "set-running-exiting",
+        [SCHED_DEBUG_DISPATCH_LEFT_STRANDED] = "dispatch-left-stranded",
+        [SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST] = "dispatch-dropped-slot-lost",
+        [SCHED_DEBUG_DISPATCH_DROPPED_STEAL_REAPED] = "dispatch-dropped-steal-reaped",
+        [SCHED_DEBUG_THREAD_REAP_REFUSED] = "thread-reap-refused",
+        [SCHED_DEBUG_OWNER_REAP_LEFTOVER] = "owner-reap-leftover",
+    };
+    serial_printf_unlocked("[diag] sched counters:");
+    for (uint32_t i = 0; i < (uint32_t)SCHED_DEBUG_EVENT_COUNT; ++i) {
+        serial_printf_unlocked(" %s=%u",
+                               names[i] ? names[i] : "?",
+                               (unsigned)sched_debug_count((sched_debug_event_t)i));
+    }
+    serial_printf_unlocked("\n");
 }
 
 /* NMI vector, with two entirely different behaviours depending on whether a

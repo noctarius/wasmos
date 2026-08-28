@@ -373,6 +373,48 @@ static void a_partition_matcher_on_a_disk_rule_is_refused(void) {
           "a disk rule carrying a partition matcher is refused");
 }
 
+/* Regression: 2026-08-28-rule-line-truncated-into-a-wider-rule.
+ *
+ * copy_rule_line() filled its buffer and returned success, so a rule longer than
+ * the buffer was parsed as its own prefix. That is not a smaller rule: a rule is
+ * a conjunction, so dropping its tail REMOVES matchers, and a line whose RUN+=
+ * survives while its ATTR{partlabel} is cut becomes a rule that spawns a
+ * filesystem on every partition on the system.
+ *
+ * The line below is that shape deliberately -- action first, matcher last -- and
+ * long enough to overflow the block-rule buffer. Both halves are asserted: that
+ * the rule is refused, and that no partition satisfies whatever survived, since
+ * a fix that merely stopped writing past the end would still leave the prefix
+ * behind. */
+static void an_overlong_rule_line_is_refused(void) {
+    char line[1024];
+    uint32_t n = 0;
+    harness_reset();
+
+    n = (uint32_t)snprintf(line,
+                           sizeof(line),
+                           "SUBSYSTEM==\"partition\", RUN+=\"system/drivers/fs_fat.wap\", "
+                           "ENV{MOUNT}=\"/user\"");
+    /* Pad with tokens the parser ignores, so the length -- not the content -- is
+     * what pushes the matcher past the end. */
+    while (n < 600u) {
+        n += (uint32_t)snprintf(line + n, sizeof(line) - n, ", COMMENT==\"padding\"");
+    }
+    (void)snprintf(line + n, sizeof(line) - n, ", ATTR{partlabel}==\"user\"\n");
+
+    check(load_rule(line) == 0, "a rule line too long for the parser is refused");
+
+    publish_partition((uint8_t)BLOCK_BACKEND_ATA,
+                      0u,
+                      1u,
+                      "scratch",
+                      (uint32_t)PARTITION_SCHEME_GPT,
+                      (uint32_t)FS_TYPE_FAT,
+                      NULL);
+    check(!out_has("rule queued spawn"),
+          "and no partition is spawned on by whatever survived the cut");
+}
+
 int main(void) {
     publish_after_rules_reports_the_match();
     rescan_after_late_rules_reports_the_match();
@@ -383,6 +425,7 @@ int main(void) {
     a_partition_is_matched_by_its_type_guid();
     a_malformed_matcher_rejects_the_rule();
     a_partition_matcher_on_a_disk_rule_is_refused();
+    an_overlong_rule_line_is_refused();
 
     char summary[128];
     (void)snprintf(summary,

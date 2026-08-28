@@ -207,10 +207,16 @@ typedef struct {
      * disagree with the publisher -- and a disagreement means the filesystem
      * looks up a class instance nothing holds. */
     char matched_id[BLOCK_DESCRIPTOR_ID_MAX];
-    /* Mount point the rule names. A partition may override it by carrying a path
-     * in its LABEL, which is how a GPT disk describes its own mounts; this is
-     * the fallback for a table that cannot -- an MBR partition has a type byte
-     * and no label, so /boot and /user still need one written here. */
+    /* Where the volume mounts, as a full VFS path. Delivered to the filesystem
+     * driver as `mount=` in its startup arguments; nothing overrides it
+     * afterwards, and nothing derives it from the device.
+     *
+     * A partition's LABEL is a MATCHER, not a mount path: `/user` is mounted by
+     * a rule matching ATTR{partlabel}=="user", which is what lets a GPT volume
+     * be found without naming a disk -- but the rule still says where it goes.
+     * Keeping the two apart is what allows one labelled volume to be mounted
+     * somewhere else by editing a rule rather than rewriting a partition
+     * table. */
     char mount[16];
     char spawn_path[96];
 } block_fs_rule_t;

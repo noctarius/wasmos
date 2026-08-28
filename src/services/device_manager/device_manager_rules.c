@@ -16,6 +16,15 @@ static int copy_rule_line(const char* line, char* out, uint32_t out_len) {
         out[n] = line[n];
         n++;
     }
+    /* A line that does not fit REFUSES. Truncating it does not produce a smaller
+     * rule: a rule is a conjunction of matchers, so cutting the tail REMOVES
+     * conditions, and a line whose RUN+= survives while its ATTR{partlabel} is
+     * cut becomes a rule that spawns a filesystem on every partition present.
+     * The parse would succeed, the rule would look written, and the mount would
+     * land on whichever volume published first. */
+    if (line[n] != '\0' && line[n] != '\n') {
+        return -1;
+    }
     out[n] = '\0';
     for (uint32_t i = 0; out[i] != '\0'; ++i) {
         if (out[i] == '"') {
@@ -562,6 +571,12 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     return 0;
 }
 
+/* TODO: a refused line vanishes silently. Every loader here runs over the whole
+ * rule text and ignores lines belonging to another kind, so "failed to parse" is
+ * the normal case and cannot be reported as an error -- but a line REFUSED for
+ * being malformed or overlong is a defect the author should see. Distinguishing
+ * the two means a return code this module can produce without a console, since
+ * it is deliberately pure so the host suite can link it standalone. */
 void dm_rules_load_block_fs(device_manager_state_t* state, const char* text) {
     uint32_t out_count = 0;
     if (!state || !text) {

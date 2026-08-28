@@ -57,9 +57,11 @@ static inline uint32_t wfs_extent_add_leaf_capacity(uint32_t block_size) {
  *
  * Fails with WASMOS_ERR_FS_BAD_ARGS when called with an inline map that still
  * has room (the caller records those without a node) or without a leaf_block for
- * a promotion, and WASMOS_ERR_FS_UNSUPPORTED when the leaf is full or the tree
- * is deeper than one leaf -- splitting a node and adding an interior level are
- * not implemented, so a tree only ever grows to a single leaf.
+ * a promotion, and WASMOS_ERR_FS_UNSUPPORTED once the INTERIOR ROOT is full or
+ * the tree is deeper than one interior level -- splitting the root and adding a
+ * level above it are not implemented, so a tree grows to one interior root over
+ * wfs_extent_interior_capacity() leaves. That is 255 leaves of 170 extents at a
+ * 4096-byte block size, well past what a uint32_t block number can address.
  */
 int32_t wfs_extent_add_task(void* user, uintptr_t* out_value);
 

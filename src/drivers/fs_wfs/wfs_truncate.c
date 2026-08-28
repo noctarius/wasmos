@@ -113,6 +113,7 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
     uint8_t* d;
     uint32_t i;
     int32_t joined;
+    int jr;
 
     (void)out_value;
 
@@ -215,13 +216,13 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
 
         case WFS_TRUNC_PC_INLINE_ALLOC_JOINED:
             joined = 0;
-            if (wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined) ==
-                WASMOS_WASM_AWAIT_PENDING) {
+            jr = wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined);
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
                 return WASMOS_WASM_TASK_YIELDED;
             }
             ctx->alloc_started = 0u;
-            if (joined != 0) {
-                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            if (jr != 0 || joined != 0) {
+                WFS_FAIL(ctx, joined != 0 ? (wasmos_error_code_t)joined : (wasmos_error_code_t)jr);
             }
             if (ctx->alloc.length == 0u) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_NO_SPACE);
@@ -369,20 +370,37 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
              * interruption leaks blocks rather than freeing a referenced one. */
             if (ctx->trim_started) {
                 joined = 0;
-                if (wasmos_wasm_coroutine_join(&ctx->trim_task, &joined) ==
-                    WASMOS_WASM_AWAIT_PENDING) {
+                jr = wasmos_wasm_coroutine_join(&ctx->trim_task, &joined);
+                if (jr == WASMOS_WASM_AWAIT_PENDING) {
                     return WASMOS_WASM_TASK_YIELDED;
                 }
                 ctx->trim_started = 0u;
-                if (joined != 0) {
-                    WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+                if (jr != 0 || joined != 0) {
+                    WFS_FAIL(ctx,
+                             joined != 0 ? (wasmos_error_code_t)joined : (wasmos_error_code_t)jr);
                 }
-                if (ctx->trim.freed_length != 0u) {
+                /* The step's record count comes off the object's own total: for
+                 * a tree, no single step can recompute it without reading every
+                 * leaf. */
+                if (ctx->trim.removed != 0u && ctx->obj.extent_count >= ctx->trim.removed) {
+                    ctx->obj.extent_count -= ctx->trim.removed;
+                }
+                if (ctx->trim.freed_length != 0u || ctx->trim.freed_node != 0u) {
                     wfs_ops_task_reset(&ctx->free_task);
                     memset(&ctx->free_ctx, 0, sizeof(ctx->free_ctx));
                     ctx->free_ctx.vol = ctx->vol;
-                    ctx->free_ctx.first_block = ctx->trim.freed_first;
-                    ctx->free_ctx.length = ctx->trim.freed_length;
+                    if (ctx->trim.freed_node != 0u) {
+                        /* A leaf the trim emptied out of an interior tree. It is
+                         * METADATA, so its number is revoked as it is freed
+                         * (§18): the log may still hold an image of it, and the
+                         * block may be a file's next. */
+                        ctx->free_ctx.first_block = ctx->trim.freed_node;
+                        ctx->free_ctx.length = 1u;
+                        ctx->free_ctx.metadata = 1u;
+                    } else {
+                        ctx->free_ctx.first_block = ctx->trim.freed_first;
+                        ctx->free_ctx.length = ctx->trim.freed_length;
+                    }
                     if (!wasmos_async_start(wfs_ops_runtime(),
                                             &ctx->free_task,
                                             wfs_free_blocks_task,
@@ -393,10 +411,11 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                     ctx->pc = WFS_TRUNC_PC_TRIM_FREE_JOINED;
                     continue;
                 }
-                /* Nothing reaches past the cut. The record now names as many
-                 * extents as the leaf holds, and an empty leaf is released with
-                 * the map cleared, so the object goes back to an inline map. */
-                ctx->obj.extent_count = ctx->trim.remaining;
+                /* Nothing reaches past the cut. An empty map is released with the
+                 * root, so the object goes back to an inline map. */
+                if (ctx->trim.remaining == 0u) {
+                    ctx->obj.extent_count = 0u;
+                }
                 if (ctx->trim.remaining != 0u &&
                     (ctx->new_size % ctx->vol->super.block_size) != 0u) {
                     /* The new end falls inside a block that survived. Which
@@ -457,8 +476,8 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
 
         case WFS_TRUNC_PC_TAIL_LOOKUP_JOINED:
             joined = 0;
-            if (wasmos_wasm_coroutine_join(&ctx->extent_task, &joined) ==
-                WASMOS_WASM_AWAIT_PENDING) {
+            jr = wasmos_wasm_coroutine_join(&ctx->extent_task, &joined);
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
                 return WASMOS_WASM_TASK_YIELDED;
             }
             ctx->extent_started = 0u;
@@ -483,8 +502,8 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                 return WASMOS_WASM_TASK_YIELDED;
             }
             ctx->free_started = 0u;
-            if (joined != 0) {
-                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            if (jr != 0 || joined != 0) {
+                WFS_FAIL(ctx, joined != 0 ? (wasmos_error_code_t)joined : (wasmos_error_code_t)jr);
             }
             /* The leaf's own release is the last step: the map is already cleared,
              * so there is nothing more to trim. */
@@ -504,13 +523,15 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
             for (;;) {
                 if (ctx->free_started) {
                     joined = 0;
-                    if (wasmos_wasm_coroutine_join(&ctx->free_task, &joined) ==
-                        WASMOS_WASM_AWAIT_PENDING) {
+                    jr = wasmos_wasm_coroutine_join(&ctx->free_task, &joined);
+                    if (jr == WASMOS_WASM_AWAIT_PENDING) {
                         return WASMOS_WASM_TASK_YIELDED;
                     }
                     ctx->free_started = 0u;
-                    if (joined != 0) {
-                        WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+                    if (jr != 0 || joined != 0) {
+                        WFS_FAIL(ctx,
+                                 joined != 0 ? (wasmos_error_code_t)joined
+                                             : (wasmos_error_code_t)jr);
                     }
                     ctx->free_index++;
                 }

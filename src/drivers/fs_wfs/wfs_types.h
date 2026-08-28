@@ -469,8 +469,13 @@ typedef struct {
 /* Adding one extent to an object whose inline map is full (§9). */
 typedef enum {
     WFS_XTADD_PC_START = 0,
-    WFS_XTADD_PC_LEAF_READY,
+    WFS_XTADD_PC_NODE_READY, /* the root, which may be a leaf or interior */
+    WFS_XTADD_PC_LEAF_READY, /* the leaf the insert belongs in */
     WFS_XTADD_PC_LEAF_WRITTEN,
+    WFS_XTADD_PC_SPLIT_LOWER, /* the full leaf, rewritten with the records it keeps */
+    WFS_XTADD_PC_SPLIT_UPPER, /* the new leaf holding the records it gave up */
+    WFS_XTADD_PC_ROOT_READY,  /* the interior root, read so the new leaf can be indexed */
+    WFS_XTADD_PC_ROOT_WRITTEN,
 } wfs_xtadd_pc_t;
 
 typedef struct {
@@ -485,13 +490,37 @@ typedef struct {
     uint32_t physical;
     uint32_t length;
 
-    /* A block the CALLER allocated for a promotion, ignored once the object has
-     * a tree. Allocating it in the caller keeps the allocator a sibling sub-task
-     * rather than nesting one level deeper under this one. */
+    /* Blocks the CALLER allocated for this task to consume. Allocating them in
+     * the caller keeps the allocator a sibling sub-task rather than nesting one
+     * level deeper under this one.
+     *
+     * `leaf_block` becomes the leaf a promotion creates, or the one a SPLIT moves
+     * the upper half of a full leaf into. `root_spare` becomes the interior root
+     * the FIRST split adds above them, and is needed only then -- a tree that
+     * already has an interior root indexes the new leaf into it.
+     *
+     * Neither is always used, so the caller must release what `leaf_used` and
+     * `root_used` say went unconsumed. Reporting it is what keeps this task from
+     * having to free a block itself, which would need the allocator nested here
+     * after all. */
     uint32_t leaf_block;
+    uint32_t root_spare;
+    uint8_t leaf_used;
+    uint8_t root_used;
 
-    /* The node being edited. */
+    /* The node being edited, and the interior root above it when there is one.
+     * `root_block` is 0 while the tree is a single leaf. */
     uint32_t node_block;
+    uint32_t root_block;
+    /* Which of the root's children `node_block` is, so a split knows where the
+     * new leaf's index belongs. */
+    uint32_t child;
+    /* First logical block of the half a split moved out, which is the key the
+     * new leaf is indexed under. */
+    uint64_t split_logical;
+    /* Records the split moved, held in the file's own buffer across the two
+     * writes: one staged block cannot hold both halves at once. */
+    uint32_t split_count;
     /* Records this added to the map: 1 for an insert, 0 when it coalesced into
      * an existing record, and the leaf's whole entry count for a promotion. */
     uint32_t added;
@@ -508,8 +537,10 @@ typedef struct {
  * is rewritten without the run before the run is released, never the reverse. */
 typedef enum {
     WFS_XTTRIM_PC_START = 0,
+    WFS_XTTRIM_PC_ROOT_READY, /* the root, which may be a leaf or interior */
     WFS_XTTRIM_PC_LEAF_READY,
     WFS_XTTRIM_PC_LEAF_WRITTEN,
+    WFS_XTTRIM_PC_ROOT_WRITTEN, /* the root, with an emptied child dropped */
 } wfs_xttrim_pc_t;
 
 typedef struct {
@@ -524,9 +555,22 @@ typedef struct {
      * nothing was left to trim and the loop is done. */
     uint32_t freed_first;
     uint32_t freed_length;
-    /* Records still in the leaf after this step. Zero means the leaf itself is
-     * now unreferenced and the caller releases it too. */
+    /* A METADATA block this step unreferenced -- a leaf an interior tree emptied
+     * out -- for the caller to release with wfs_free_ctx_t's `metadata` set, so
+     * its number is revoked (§18). Zero when the step freed no node. */
+    uint32_t freed_node;
+    /* Records this step removed from the map: 1 when a whole extent went, 0 when
+     * one was merely shortened or a node was dropped. The caller keeps the
+     * object's extent_count by it, which no single step could recompute for a
+     * tree without reading every leaf. */
+    uint32_t removed;
+    /* Records still in the map after this step. Zero means the map is empty and
+     * the caller releases the root too. */
     uint32_t remaining;
+    /* The interior root, when the map has one, and the child this step is
+     * working in. Both survive the awaits. */
+    uint32_t root_block;
+    uint32_t child;
 
     wasmos_error_code_t err;
 } wfs_xttrim_ctx_t;
@@ -541,6 +585,7 @@ typedef enum {
     WFS_WRITE_PC_INLINE_ALLOC_JOINED,
     WFS_WRITE_PC_INLINE_WRITTEN,
     WFS_WRITE_PC_LEAF_ALLOC_JOINED,
+    WFS_WRITE_PC_SPLIT_ALLOC_JOINED,
     WFS_WRITE_PC_XTADD_JOINED,
     WFS_WRITE_PC_BLOCK_READ,
     WFS_WRITE_PC_BLOCK_PATCH,
@@ -609,6 +654,15 @@ typedef struct {
     uint8_t xtadd_started;
     wasmos_wasm_coroutine_t xtadd_task;
     wfs_xtadd_ctx_t xtadd;
+
+    /* Blocks a leaf SPLIT asked for, held across the retries that supply them.
+     * The extent writer modifies nothing when it asks (WASMOS_ERR_FS_NEED_BLOCK),
+     * so the retry descends to the same leaf; carrying them here is what stops
+     * each retry from allocating another. `split_want` says which one the
+     * allocation in flight is for. */
+    uint32_t split_leaf;
+    uint32_t split_root;
+    uint32_t split_want;
 
     wasmos_error_code_t err;
 } wfs_write_ctx_t;

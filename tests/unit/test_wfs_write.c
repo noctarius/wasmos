@@ -21,6 +21,7 @@
 #include "wfs_mount.h"
 #include "wfs_read.h"
 #include "wfs_super.h"
+#include "wfs_truncate.h"
 #include "wfs_write.h"
 
 static int g_failures;
@@ -547,6 +548,20 @@ static void test_a_write_marks_the_volume_dirty(void) {
     wfs_stub_teardown();
 }
 
+/* Truncate through the same entry point the driver uses, so the trim runs inside
+ * a transaction as it does in the OS. */
+static wasmos_error_code_t do_truncate(uint32_t id, uint64_t new_size) {
+    static wfs_trunc_ctx_t t;
+    wfs_object_ctx_t o;
+
+    if (load_object(&o, id) != 0) {
+        return WASMOS_ERR_FS_NOT_FOUND;
+    }
+    memset(&t, 0, sizeof(t));
+    wfs_truncate_init(&t, &g_vol, id, &o.out, o.inline_data, new_size, WRITE_NOW_NS);
+    return wfs_truncate_run(&t);
+}
+
 /* ---- growth past the inline extent map ----------------------------------- */
 
 /* One block at `logical`, far enough from the last to be a NEW extent rather
@@ -701,6 +716,68 @@ static void test_a_tree_mapped_file_keeps_growing(void) {
     wfs_stub_teardown();
 }
 
+/* A file grows past ONE LEAF: the tree gains an interior root over several
+ * leaves.
+ *
+ * A leaf holds wfs_extent_leaf_capacity() extents -- 170 at a 4096-byte block
+ * size -- and the writer refused everything past that with
+ * WASMOS_ERR_FS_UNSUPPORTED, because it only ever maintained a single leaf. The
+ * reader could already descend an interior node; nothing produced one.
+ *
+ * Every run is read back afterwards, not just the ones past the split. A split
+ * MOVES records between blocks, and one that dropped or misordered them would
+ * still leave a tree whose header validates -- the descent takes the last index
+ * whose logical_block does not exceed the target, so an unsorted or truncated
+ * root silently returns the wrong extent rather than failing.
+ */
+static void test_a_file_grows_past_a_single_leaf(void) {
+    wfs_object_ctx_t o;
+    uint32_t capacity;
+    uint32_t i;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    capacity = wfs_extent_leaf_capacity(g_vol.super.block_size);
+    expect(capacity > WFS_INLINE_EXTENTS, "a leaf holds more than the record does");
+
+    /* One extent per sparse run, spaced so none coalesces with its neighbour.
+     * `big` starts as one extent, so `capacity` more take it one past a full
+     * leaf. */
+    for (i = 1u; i <= capacity; ++i) {
+        if (write_sparse_block(g_big_id, (uint64_t)i * 10u) != 0) {
+            expect(0, "every sparse run past the leaf capacity is written");
+            wfs_stub_teardown();
+            return;
+        }
+    }
+
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect_u32(o.out.extent_count, capacity + 1u, "the map holds more than one leaf's worth");
+    expect(o.out.extent_tree_block != 0u, "and it is a tree");
+
+    /* Every run, in an order unrelated to how they were written, so a descent
+     * that only works left to right does not pass. */
+    expect_sparse_block_reads_back(g_big_id, (uint64_t)capacity * 10u, "the last run reads back");
+    expect_sparse_block_reads_back(g_big_id, 10u, "the first sparse run reads back");
+    for (i = capacity; i >= 1u; --i) {
+        expect_sparse_block_reads_back(g_big_id, (uint64_t)i * 10u, "every run reads back");
+    }
+
+    /* And it can be DESTROYED again. A writer that can build a shape the trimmer
+     * refuses leaves the file undeletable and its blocks unreclaimable, which is
+     * worse than the ceiling it removed -- so the split is not finished until the
+     * trim walks the same tree. */
+    expect_rc(do_truncate(g_big_id, 0u), WASMOS_ERR_NONE, "the whole map trims away");
+    expect(load_object(&o, g_big_id) == 0, "the object loads");
+    expect_u64(o.out.size, 0u, "the file is empty");
+    expect_u64(o.out.extent_tree_block, 0u, "the tree is gone");
+    expect_u32(o.out.extent_count, 0u, "and the map holds nothing");
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_an_overwrite_inside_a_block_reads_back),
     WASMOS_TEST_CASE(test_a_write_across_a_block_boundary_reads_back),
@@ -713,6 +790,7 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_writing_a_directory_is_refused),
     WASMOS_TEST_CASE(test_a_write_marks_the_volume_dirty),
     WASMOS_TEST_CASE(test_a_file_grows_past_the_inline_extent_limit),
+    WASMOS_TEST_CASE(test_a_file_grows_past_a_single_leaf),
     WASMOS_TEST_CASE(test_the_promoted_tree_sorts_extents_written_out_of_order),
     WASMOS_TEST_CASE(test_a_tree_mapped_file_keeps_growing),
 };

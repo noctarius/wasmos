@@ -664,14 +664,22 @@ static wasmos_error_code_t ns_release_object(wfs_volume_t* vol, uint32_t id,
             if (status != 0) {
                 return (wasmos_error_code_t)status;
             }
-            if (t.freed_length == 0u) {
+            if (t.freed_length == 0u && t.freed_node == 0u) {
                 break;
             }
             memset(&f, 0, sizeof(f));
             f.vol = vol;
-            f.first_block = t.freed_first;
-            f.length = t.freed_length;
-            f.metadata = obj->type == (uint16_t)WFS_TYPE_DIR;
+            if (t.freed_node != 0u) {
+                /* A leaf the trim emptied out of an interior tree: metadata, so
+                 * its number is revoked as it is freed (§18). */
+                f.first_block = t.freed_node;
+                f.length = 1u;
+                f.metadata = 1u;
+            } else {
+                f.first_block = t.freed_first;
+                f.length = t.freed_length;
+                f.metadata = obj->type == (uint16_t)WFS_TYPE_DIR;
+            }
             status = wfs_ops_run(wfs_free_blocks_task, &f);
             if (status != 0) {
                 return (wasmos_error_code_t)status;

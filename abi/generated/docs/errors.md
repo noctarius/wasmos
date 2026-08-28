@@ -127,6 +127,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_FS_JOURNAL` | -0x00040025 | the metadata journal is unusable: its superblock does not identify a log, does not verify, or names a geometry too small for one transaction. Distinct from CORRUPT, which names a filesystem structure, because a damaged log costs writability rather than readability |
 | `WASMOS_ERR_FS_TXN_FULL` | -0x00040026 | a metadata transaction names more blocks than one journal descriptor carries, or more revokes than one revoke record does; the operation is refused whole rather than split across two transactions that a crash could separate |
 | `WASMOS_ERR_FS_REPLAY` | -0x00040027 | journal replay stopped: a committed block image did not match the checksum its descriptor recorded, so applying the transaction would write a partial one. The volume mounts read-only for fsck |
+| `WASMOS_ERR_FS_NEED_BLOCK` | -0x00040028 | the operation needs a free block the caller did not supply, and nothing has been modified: an extent-tree insert that must SPLIT a full leaf needs a block for the new leaf, and the first such split needs one more for the interior root above it. The caller allocates and retries rather than the operation nesting an allocator inside itself |
 
 ### `net` (domain 5) — networking stack / socket failures (was NET_STATUS_*)
 

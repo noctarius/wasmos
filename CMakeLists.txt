@@ -2659,6 +2659,7 @@ add_custom_target(run-kernel-unit-tests
           -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_write.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_truncate.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
           ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c

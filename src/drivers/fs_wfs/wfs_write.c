@@ -45,6 +45,9 @@ void wfs_write_init(wfs_write_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_id,
     ctx->pending_physical = 0u;
     ctx->pending_length = 0u;
     ctx->xtadd_started = 0u;
+    ctx->split_leaf = 0u;
+    ctx->split_root = 0u;
+    ctx->split_want = 0u;
     ctx->err = WASMOS_ERR_NONE;
 }
 
@@ -98,7 +101,7 @@ static uint32_t chunk_len(const wfs_write_ctx_t* ctx) {
 
 /* Start the extent-add sub-task for the held extent. `leaf_block` is the block
  * allocated for a promotion, or 0 when the object already has a tree. */
-static void start_xtadd(wfs_write_ctx_t* ctx, uint32_t leaf_block) {
+static void start_xtadd(wfs_write_ctx_t* ctx, uint32_t leaf_block, uint32_t root_spare) {
     memset(&ctx->xtadd, 0, sizeof(ctx->xtadd));
     ctx->xtadd.pc = WFS_XTADD_PC_START;
     ctx->xtadd.vol = ctx->vol;
@@ -107,6 +110,7 @@ static void start_xtadd(wfs_write_ctx_t* ctx, uint32_t leaf_block) {
     ctx->xtadd.physical = ctx->pending_physical;
     ctx->xtadd.length = ctx->pending_length;
     ctx->xtadd.leaf_block = leaf_block;
+    ctx->xtadd.root_spare = root_spare;
     wfs_ops_task_reset(&ctx->xtadd_task);
     if (!wasmos_async_start(
             wfs_ops_runtime(), &ctx->xtadd_task, wfs_extent_add_task, &ctx->xtadd)) {
@@ -126,6 +130,7 @@ int32_t wfs_write_task(void* user, uintptr_t* out_value) {
     uint32_t i;
     uint8_t* d;
     int32_t joined;
+    int jr;
 
     (void)out_value;
 
@@ -193,13 +198,13 @@ int32_t wfs_write_task(void* user, uintptr_t* out_value) {
 
         case WFS_WRITE_PC_INLINE_ALLOC_JOINED:
             joined = 0;
-            if (wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined) ==
-                WASMOS_WASM_AWAIT_PENDING) {
+            jr = wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined);
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
                 return WASMOS_WASM_TASK_YIELDED;
             }
             ctx->alloc_started = 0u;
-            if (joined != 0) {
-                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            if (jr != 0 || joined != 0) {
+                WFS_FAIL(ctx, joined != 0 ? (wasmos_error_code_t)joined : (wasmos_error_code_t)jr);
             }
             if (ctx->alloc.length == 0u) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_NO_SPACE);
@@ -268,8 +273,8 @@ int32_t wfs_write_task(void* user, uintptr_t* out_value) {
 
         case WFS_WRITE_PC_MAP_JOINED:
             joined = 0;
-            if (wasmos_wasm_coroutine_join(&ctx->extent_task, &joined) ==
-                WASMOS_WASM_AWAIT_PENDING) {
+            jr = wasmos_wasm_coroutine_join(&ctx->extent_task, &joined);
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
                 return WASMOS_WASM_TASK_YIELDED;
             }
             ctx->extent_started = 0u;
@@ -307,13 +312,13 @@ int32_t wfs_write_task(void* user, uintptr_t* out_value) {
 
         case WFS_WRITE_PC_ALLOC_JOINED:
             joined = 0;
-            if (wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined) ==
-                WASMOS_WASM_AWAIT_PENDING) {
+            jr = wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined);
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
                 return WASMOS_WASM_TASK_YIELDED;
             }
             ctx->alloc_started = 0u;
-            if (joined != 0) {
-                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            if (jr != 0 || joined != 0) {
+                WFS_FAIL(ctx, joined != 0 ? (wasmos_error_code_t)joined : (wasmos_error_code_t)jr);
             }
             if (ctx->alloc.length == 0u) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_NO_SPACE);
@@ -403,7 +408,7 @@ int32_t wfs_write_task(void* user, uintptr_t* out_value) {
                     ctx->pc = WFS_WRITE_PC_LEAF_ALLOC_JOINED;
                     continue;
                 }
-                start_xtadd(ctx, 0u);
+                start_xtadd(ctx, 0u, 0u);
                 if (ctx->err != WASMOS_ERR_NONE) {
                     return (int32_t)ctx->err;
                 }
@@ -417,18 +422,43 @@ int32_t wfs_write_task(void* user, uintptr_t* out_value) {
 
         case WFS_WRITE_PC_LEAF_ALLOC_JOINED:
             joined = 0;
-            if (wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined) ==
-                WASMOS_WASM_AWAIT_PENDING) {
+            jr = wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined);
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
                 return WASMOS_WASM_TASK_YIELDED;
             }
             ctx->alloc_started = 0u;
-            if (joined != 0) {
-                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            if (jr != 0 || joined != 0) {
+                WFS_FAIL(ctx, joined != 0 ? (wasmos_error_code_t)joined : (wasmos_error_code_t)jr);
             }
             if (ctx->alloc.length == 0u) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_NO_SPACE);
             }
-            start_xtadd(ctx, ctx->alloc.first_block);
+            start_xtadd(ctx, ctx->alloc.first_block, ctx->split_root);
+            if (ctx->err != WASMOS_ERR_NONE) {
+                return (int32_t)ctx->err;
+            }
+            ctx->pc = WFS_WRITE_PC_XTADD_JOINED;
+            continue;
+
+        case WFS_WRITE_PC_SPLIT_ALLOC_JOINED:
+            joined = 0;
+            jr = wasmos_wasm_coroutine_join(&ctx->alloc_task, &joined);
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->alloc_started = 0u;
+            if (jr != 0 || joined != 0) {
+                WFS_FAIL(ctx, joined != 0 ? (wasmos_error_code_t)joined : (wasmos_error_code_t)jr);
+            }
+            if (ctx->alloc.length == 0u) {
+                WFS_FAIL(ctx, WASMOS_ERR_FS_NO_SPACE);
+            }
+            if (ctx->split_want == 1u) {
+                ctx->split_leaf = ctx->alloc.first_block;
+            } else {
+                ctx->split_root = ctx->alloc.first_block;
+            }
+            start_xtadd(ctx, ctx->split_leaf, ctx->split_root);
             if (ctx->err != WASMOS_ERR_NONE) {
                 return (int32_t)ctx->err;
             }
@@ -437,15 +467,50 @@ int32_t wfs_write_task(void* user, uintptr_t* out_value) {
 
         case WFS_WRITE_PC_XTADD_JOINED:
             joined = 0;
-            if (wasmos_wasm_coroutine_join(&ctx->xtadd_task, &joined) ==
-                WASMOS_WASM_AWAIT_PENDING) {
+            jr = wasmos_wasm_coroutine_join(&ctx->xtadd_task, &joined);
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
                 return WASMOS_WASM_TASK_YIELDED;
             }
             ctx->xtadd_started = 0u;
-            if (joined != 0) {
-                WFS_FAIL(ctx, (wasmos_error_code_t)joined);
+            if (jr == WASMOS_ERR_FS_NEED_BLOCK || joined == WASMOS_ERR_FS_NEED_BLOCK) {
+                /* A full leaf has to split, which needs a block the descent could
+                 * not have been predicted to want. Nothing was modified, so
+                 * allocating and starting again finds the same leaf in the same
+                 * state.
+                 *
+                 * The split's blocks are taken ONE at a time and remembered
+                 * across the retries: the leaf first, then the interior root when
+                 * the tree does not have one yet. Two retries at most, and only
+                 * once per leaf-full of extents. */
+                if (ctx->split_leaf == 0u) {
+                    ctx->split_want = 1u;
+                } else if (ctx->split_root == 0u && ctx->obj.extent_tree_block != 0u) {
+                    ctx->split_want = 2u;
+                } else {
+                    /* Both are in hand and it still asked, so the refusal is not
+                     * about blocks this loop can supply. */
+                    WFS_FAIL(ctx, WASMOS_ERR_FS_NEED_BLOCK);
+                }
+                memset(&ctx->alloc, 0, sizeof(ctx->alloc));
+                ctx->alloc.vol = ctx->vol;
+                ctx->alloc.want = 1u;
+                ctx->alloc.prefer_group =
+                    ctx->pending_physical / WFS_BLOCKS_PER_GROUP(ctx->vol->super.block_size);
+                wfs_ops_task_reset(&ctx->alloc_task);
+                if (!wasmos_async_start(
+                        wfs_ops_runtime(), &ctx->alloc_task, wfs_alloc_blocks_task, &ctx->alloc)) {
+                    WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+                }
+                ctx->alloc_started = 1u;
+                ctx->pc = WFS_WRITE_PC_SPLIT_ALLOC_JOINED;
+                continue;
+            }
+            if (jr != 0 || joined != 0) {
+                WFS_FAIL(ctx, joined != 0 ? (wasmos_error_code_t)joined : (wasmos_error_code_t)jr);
             }
             ctx->tree_pending = 0u;
+            ctx->split_leaf = 0u;
+            ctx->split_root = 0u;
             ctx->done += chunk_len(ctx);
             ctx->fresh = 0u;
             ctx->pc = WFS_WRITE_PC_MAP;

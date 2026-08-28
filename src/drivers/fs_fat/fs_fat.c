@@ -235,9 +235,10 @@ static void fat_report_backend_info(int32_t dst, int32_t request_id) {
 
 /* Resolve the mount alias + unit via BLOCK_IPC_IDENTIFY + devmgr query.
  *
- * IDENTIFY answers with a block descriptor in a buffer the backend lends
- * READ-only, so the unit is read out of that record rather than out of an
- * argument word.
+ * IDENTIFY answers with a block descriptor written into a buffer THIS driver
+ * owns and lends to the backend for the request, so the unit is read out of that
+ * record rather than out of an argument word. The client holds the lifecycle
+ * (docs/architecture/12-dma-transfers.md); the backend is a transient grantee.
  *
  * TODO: the mount name still comes from a device-manager query keyed on the
  * unit, which cannot name one partition of a disk. It is the descriptor's
@@ -248,9 +249,8 @@ static int fat_resolve_mount_alias(char* out_mount, uint32_t out_mount_len, uint
     int32_t devmgr = -1;
     int32_t req_id = 41;
     int32_t unit = 0;
-    int32_t desc_bid = 0;
-    int32_t desc_off = 0;
-    int32_t desc_size = 0;
+    int32_t desc_bid = -1;
+    int32_t rc = -1;
     wasmos_block_descriptor_t desc;
     uint32_t packed[4];
     if (!out_mount || out_mount_len < 2u || !out_unit) {
@@ -258,28 +258,36 @@ static int fat_resolve_mount_alias(char* out_mount, uint32_t out_mount_len, uint
     }
     out_mount[0] = '\0';
     *out_unit = 0;
+    /* This driver owns the buffer and lends it to the backend for the round
+     * trip; release below cascade-revokes that grant on every path. */
+    desc_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(desc));
+    if (desc_bid < 0) {
+        fat_log("identify buffer unavailable\n");
+        return -1;
+    }
+    if (wasmos_xfer_buffer_borrow(g_blk.block_endpoint, desc_bid, WASMOS_BUFFER_GRANT_WRITE) < 0) {
+        fat_log("identify buffer grant failed\n");
+        (void)wasmos_xfer_buffer_release(desc_bid);
+        return -1;
+    }
     if (wasmos_ipc_send(g_blk.block_endpoint,
                         reply,
                         BLOCK_IPC_IDENTIFY_REQ,
                         req_id,
                         (int32_t)g_requested_instance,
+                        desc_bid,
                         0,
-                        0,
-                        0) != 0 ||
-        wasmos_ipc_select_one(reply) < 0) {
-        return -1;
+                        0) == 0 &&
+        wasmos_ipc_select_one(reply) >= 0 &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == BLOCK_IPC_IDENTIFY_RESP &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) == req_id &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0) == 0 &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1) >= (int32_t)sizeof(desc)) {
+        rc = wasmos_xfer_buffer_read(desc_bid, &desc, (int32_t)sizeof(desc), 0);
     }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != BLOCK_IPC_IDENTIFY_RESP ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0) != 0) {
-        return -1;
-    }
-    desc_bid = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    desc_off = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    desc_size = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-    if (desc_size < (int32_t)sizeof(desc) ||
-        wasmos_xfer_buffer_read(desc_bid, &desc, (int32_t)sizeof(desc), desc_off) != 0) {
-        fat_log("identify descriptor read failed\n");
+    (void)wasmos_xfer_buffer_release(desc_bid);
+    if (rc != 0) {
+        fat_log("identify failed\n");
         return -1;
     }
     if (desc.version != BLOCK_DESCRIPTOR_VERSION) {

@@ -156,23 +156,23 @@ static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
  * not exclusive: several clients may name the same unit, and the first transfer
  * decides who gets it. */
 static uint8_t g_client_claimed[ATA_CLIENT_MAP_CAP];
-/* 1 once this client has been lent the descriptor buffer. A borrow allocates a
- * registry slot every time it is taken, so a client that IDENTIFYs repeatedly
- * would accumulate them; the grant is therefore made once per client and the
- * borrow id is never needed again (the client addresses the buffer by object
- * id, which any grantee may do). */
-static uint8_t g_client_desc_granted[ATA_CLIENT_MAP_CAP];
-
-/* One descriptor per unit, and the transfer buffer they are staged in.
+/* One descriptor per unit: this driver's own record of what its disks are.
  *
- * The buffer is filled during probing and never rewritten, which is what makes
- * it safe to lend READ-only to device-manager and to every client at the same
- * time: concurrent readers of immutable bytes need no arbitration. A backend
- * that recomputed a descriptor in place would owe its grantees a barrier.
+ * IDENTIFY does not lend this out. It writes a copy into the buffer the CALLER
+ * owns and lent for the request, because the client holds a transfer buffer's
+ * lifecycle (docs/architecture/12-dma-transfers.md). A server that lent its own
+ * buffer instead could never free it: release is owner-only, no hostcall
+ * transfers ownership, and nothing tells a server when a client has finished
+ * reading.
  *
- * Unit N occupies slot N, so an offset identifies a disk without a side table. */
+ * The publish below is the one place this driver owns a buffer, and there it is
+ * the CLIENT -- of device-manager -- so the same rule puts the buffer here. */
 static wasmos_block_descriptor_t g_unit_desc[ATA_UNIT_COUNT];
-static int32_t g_desc_bid = -1;
+/* Staging buffer for DEVMGR_PUBLISH_BLOCK_DEVICE, lent READ to device-manager.
+ * Held for the process lifetime because the publish is fire-and-forget: there is
+ * no acknowledgement that would tell this driver when the record has been
+ * consumed. Unit N occupies slot N. */
+static int32_t g_publish_bid = -1;
 
 /* PRD table. It lives in this process's own block buffer, which is already
  * everything the controller needs -- contiguous, pinned, page-aligned and below
@@ -379,14 +379,14 @@ static int32_t ata_build_descriptor(uint8_t unit, uint32_t sectors, uint8_t pres
         0) {
         return WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED;
     }
-    if (g_desc_bid < 0) {
-        g_desc_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(g_unit_desc));
-        if (g_desc_bid < 0) {
+    if (g_publish_bid < 0) {
+        g_publish_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(g_unit_desc));
+        if (g_publish_bid < 0) {
             return WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR;
         }
     }
     if (wasmos_xfer_buffer_write(
-            g_desc_bid, desc, (int32_t)sizeof(*desc), (int32_t)(unit * sizeof(*desc))) != 0) {
+            g_publish_bid, desc, (int32_t)sizeof(*desc), (int32_t)(unit * sizeof(*desc))) != 0) {
         return WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR;
     }
     return 0;
@@ -433,12 +433,13 @@ static void ata_register_block_class(uint8_t unit, uint8_t present) {
 /* Announce one disk to the device-manager inventory as a descriptor in the
  * shared buffer, lending that buffer READ-only on the first publish. */
 static void ata_publish_block_device(uint8_t unit) {
-    if (g_devmgr_endpoint < 0 || g_block_endpoint < 0 || g_desc_bid < 0 || unit >= ATA_UNIT_COUNT) {
+    if (g_devmgr_endpoint < 0 || g_block_endpoint < 0 || g_publish_bid < 0 ||
+        unit >= ATA_UNIT_COUNT) {
         return;
     }
     static uint8_t devmgr_granted = 0;
     if (!devmgr_granted) {
-        if (wasmos_xfer_buffer_borrow(g_devmgr_endpoint, g_desc_bid, WASMOS_BUFFER_GRANT_READ) <
+        if (wasmos_xfer_buffer_borrow(g_devmgr_endpoint, g_publish_bid, WASMOS_BUFFER_GRANT_READ) <
             0) {
             (void)printf("[ata] descriptor borrow to device-manager failed\n");
             return;
@@ -449,7 +450,7 @@ static void ata_publish_block_device(uint8_t unit) {
                           g_block_endpoint,
                           DEVMGR_PUBLISH_BLOCK_DEVICE,
                           0,
-                          g_desc_bid,
+                          g_publish_bid,
                           (int32_t)(unit * sizeof(wasmos_block_descriptor_t)),
                           (int32_t)sizeof(wasmos_block_descriptor_t),
                           0);
@@ -801,63 +802,6 @@ static uint8_t ata_unit_for_instance(uint32_t instance) {
     return ATA_UNIT_COUNT;
 }
 
-/* Lend the descriptor buffer to `source` unless it already holds a grant.
- *
- * A recorded grant is an optimisation, not a requirement: it exists so a client
- * that IDENTIFYs repeatedly does not accumulate borrow slots, since each borrow
- * allocates its own. When there is nowhere to record one -- the client map is
- * bounded and its entries are never reclaimed for endpoints that have gone away
- * -- the grant is still made. A duplicate borrow is a bounded leak; refusing the
- * grant instead makes the disk PERMANENTLY unqueryable once the map fills, which
- * is how the second ATA drive stopped answering IDENTIFY after a few `blkinfo`
- * runs, each of which opens a fresh endpoint per disk.
- *
- * Returns 1 when the client can read the buffer, 0 only when the borrow itself
- * was refused.
- *
- * TODO: entries are never released when a client's endpoint dies, so a long
- * uptime with many short-lived clients fills the map and every later client pays
- * a repeat borrow. Reclaiming on endpoint death needs a death notification this
- * driver does not receive. */
-static int ata_desc_grant_for_source(int32_t source) {
-    uint32_t free_slot = ATA_CLIENT_MAP_CAP;
-    if (source < 0 || g_desc_bid < 0) {
-        return 0;
-    }
-    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-        if (g_client_owner[i] == source) {
-            if (g_client_desc_granted[i]) {
-                return 1;
-            }
-            free_slot = i;
-            break;
-        }
-        if (g_client_owner[i] < 0 && free_slot == ATA_CLIENT_MAP_CAP) {
-            free_slot = i;
-        }
-    }
-    /* A borrow is held per CONTEXT, not per endpoint: the kernel resolves the
-     * grantee endpoint to its owning process and allows one active borrow per
-     * object per process. A client that opens an endpoint per disk -- which is
-     * what the ATA unit claim forces on it -- therefore gets ALREADY_BORROWED on
-     * its second disk, and that is a grant, not a refusal: the process can
-     * already read the buffer. Treating it as failure made the second drive
-     * permanently unidentifiable to any client that had queried the first. */
-    const int32_t rc = wasmos_xfer_buffer_borrow(source, g_desc_bid, WASMOS_BUFFER_GRANT_READ);
-    if (rc < 0 && rc != WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED) {
-        return 0;
-    }
-    if (free_slot < ATA_CLIENT_MAP_CAP) {
-        if (g_client_owner[free_slot] < 0) {
-            g_client_owner[free_slot] = source;
-            g_client_unit[free_slot] = 0u;
-            g_client_claimed[free_slot] = 0u;
-        }
-        g_client_desc_granted[free_slot] = 1u;
-    }
-    return 1;
-}
-
 static void ata_select_unit_for_source(int32_t source, uint8_t unit) {
     if (source < 0 || unit >= ATA_UNIT_COUNT) {
         return;
@@ -1016,18 +960,19 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT, 0);
             return 0;
         }
-        if (g_desc_bid < 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR, 0);
-            return 0;
-        }
         /* Remember which drive this client means, so its transfers reach that
          * one rather than whichever happens to be free. */
         ata_select_unit_for_source(source, want);
-        /* Lend the descriptor buffer once per client. Every borrow allocates its
-         * own registry slot, so re-granting on each IDENTIFY would leak them; a
-         * grantee addresses the buffer by object id afterwards and never needs
-         * the borrow handle itself. */
-        if (!ata_desc_grant_for_source(source)) {
+        /* Write into the CLIENT's buffer (arg1), which it acquired and lent with
+         * WRITE for this request and releases afterwards. This driver lends
+         * nothing: a server that lent its own buffer could never free it, since
+         * release is owner-only and nothing signals when a client is done. */
+        if (arg1 <= 0) {
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
+            return 0;
+        }
+        if (wasmos_xfer_buffer_write(
+                arg1, &g_unit_desc[want], (int32_t)sizeof(g_unit_desc[want]), 0) != 0) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR, 0);
             return 0;
         }
@@ -1036,9 +981,9 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
                         BLOCK_IPC_IDENTIFY_RESP,
                         req_id,
                         0,
-                        g_desc_bid,
-                        (int32_t)(want * sizeof(wasmos_block_descriptor_t)),
-                        (int32_t)sizeof(wasmos_block_descriptor_t));
+                        (int32_t)sizeof(g_unit_desc[want]),
+                        0,
+                        0);
         return 0;
     }
 
@@ -1195,7 +1140,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         g_client_owner[i] = -1;
         g_client_claimed[i] = 0;
         g_client_unit[i] = 0;
-        g_client_desc_granted[i] = 0;
     }
     for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
         uint16_t identify_words[256];

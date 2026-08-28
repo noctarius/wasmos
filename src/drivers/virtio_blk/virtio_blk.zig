@@ -75,13 +75,14 @@
 //! without competing for the plain "block" name the ATA driver holds for the
 //! boot disk.
 //!
-//! A class instance is a DISK, and its number is (backend << 8) | unit. One
-//! virtio-blk device is one disk, so the unit identifies the DEVICE: it comes
-//! from the device's place on the bus, not from a counter, so two virtio-blk
-//! devices get different units instead of colliding on one instance. The number
-//! is derived rather than allocated, so it is the same every boot whatever
-//! order the drivers probed in, and a client can decode it back into the pair a
-//! device-manager rule names with DRIVER== and ATTR{unit}.
+//! A class instance is a DISK, and its number is an opaque FNV-1a fingerprint
+//! of the disk's canonical id (`block:virtio-blk:<unit>`). One virtio-blk device
+//! is one disk, so the unit in that id identifies the DEVICE: it comes from the
+//! device's place on the bus, not from a counter, so two virtio-blk devices get
+//! different ids instead of colliding on one instance. Both are derived rather
+//! than allocated, so they are the same every boot whatever order the drivers
+//! probed in. Nothing is decoded back OUT of an instance -- a client that wants
+//! attributes asks IDENTIFY for a descriptor.
 //!
 //! The same disk is published to the device-manager inventory, which is what
 //! makes it visible to a block rule at all -- without that a filesystem cannot
@@ -193,19 +194,20 @@ fn blockUnit() u32 {
     return ((g_dev.slot & 0x1F) << 3) | (g_dev.function & 0x07);
 }
 
-/// This disk's descriptor and the transfer buffer it is staged in.
+/// This disk's descriptor: the driver's own record of what the device is.
 ///
-/// Filled once the capacity is known and never rewritten, which is what makes it
-/// safe to lend READ-only to device-manager and to every client at the same
-/// time: concurrent readers of immutable bytes need no arbitration.
+/// IDENTIFY does not lend this out. It writes a copy into the buffer the CALLER
+/// owns and lent for the request, because the client holds a transfer buffer's
+/// lifecycle (docs/architecture/12-dma-transfers.md). A server that lent its own
+/// buffer could never free it: release is owner-only, no hostcall transfers
+/// ownership, and nothing tells a server when a client has finished reading.
 var g_desc: driver.BlockDescriptor = .{};
-var g_desc_bid: i32 = -1;
+/// Staging buffer for DEVMGR_PUBLISH_BLOCK_DEVICE, lent READ to device-manager.
+/// This driver owns it because it is the CLIENT there -- the same rule, applied
+/// to the other direction. Held for the process lifetime because the publish is
+/// fire-and-forget and carries no acknowledgement.
+var g_publish_bid: i32 = -1;
 var g_desc_devmgr_granted: bool = false;
-/// Clients already lent the descriptor buffer. A borrow allocates a registry
-/// slot every time it is taken, so a client that IDENTIFYs repeatedly would
-/// accumulate them; a grantee addresses the buffer by object id afterwards and
-/// never needs the borrow handle again.
-var g_desc_grantees: [8]i32 = [_]i32{-1} ** 8;
 
 /// `block:virtio-blk:<unit>` -- this device's canonical id, and the string the
 /// class instance below is the fingerprint of. Written into the descriptor
@@ -274,33 +276,15 @@ fn buildDescriptor() bool {
     g_desc.lba_count = g_dev.capacity_sectors;
     g_desc.flags = @intCast(abi.BLOCK_DESCRIPTOR_FLAG_PRESENT);
     if (!buildCanonicalId(&g_desc.canonical_id)) return false;
-    if (g_desc_bid < 0) {
-        g_desc_bid = driver.bufferAcquire(@sizeOf(driver.BlockDescriptor)) orelse return false;
+    if (g_publish_bid < 0) {
+        g_publish_bid = driver.bufferAcquire(@sizeOf(driver.BlockDescriptor)) orelse return false;
     }
-    const bytes = @as([*]const u8, @ptrCast(&g_desc))[0..@sizeOf(driver.BlockDescriptor)];
-    return driver.bufferWrite(g_desc_bid, bytes, 0);
+    return driver.bufferWrite(g_publish_bid, descBytes(), 0);
 }
 
-/// Lend the descriptor buffer to `dest` unless it already holds a grant.
-///
-/// A recorded grant is an optimisation, not a requirement: it exists so a client
-/// that IDENTIFYs repeatedly does not accumulate borrow slots, since each borrow
-/// allocates its own. When the table is full the grant is still made -- a
-/// duplicate borrow is a bounded leak, while refusing one makes the disk
-/// PERMANENTLY unqueryable, and entries are never reclaimed for endpoints that
-/// have gone away.
-///
-/// Returns false only when the borrow itself was refused.
-fn descGrantTo(dest: i32) bool {
-    if (g_desc_bid < 0) return false;
-    var free_slot: ?usize = null;
-    for (g_desc_grantees, 0..) |ep, i| {
-        if (ep == dest) return true;
-        if (ep < 0 and free_slot == null) free_slot = i;
-    }
-    if (!driver.bufferGrant(dest, g_desc_bid, driver.BUFFER_GRANT_READ)) return false;
-    if (free_slot) |slot| g_desc_grantees[slot] = dest;
-    return true;
+/// The descriptor as raw bytes, which is how it travels in either direction.
+fn descBytes() []const u8 {
+    return @as([*]const u8, @ptrCast(&g_desc))[0..@sizeOf(driver.BlockDescriptor)];
 }
 
 /// virtio-blk defines exactly one queue, index 0, the requestq. MAX_QUEUE caps
@@ -785,7 +769,14 @@ fn handleIdentify(msg: *const co.IpcMessage) void {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_NOT_READY);
         return;
     }
-    if (g_desc_bid < 0 or !descGrantTo(msg.source)) {
+    // Write into the CLIENT's buffer, which it acquired and lent with WRITE for
+    // this request and releases afterwards. This driver lends nothing.
+    const client_bid = msg.arg1;
+    if (client_bid <= 0) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_BAD_REQUEST);
+        return;
+    }
+    if (!driver.bufferWrite(client_bid, descBytes(), 0)) {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR);
         return;
     }
@@ -795,9 +786,9 @@ fn handleIdentify(msg: *const co.IpcMessage) void {
         op.BLOCK_IPC_IDENTIFY_RESP,
         msg.request_id,
         0,
-        g_desc_bid,
-        0,
         @intCast(@sizeOf(driver.BlockDescriptor)),
+        0,
+        0,
     );
 }
 
@@ -1114,13 +1105,13 @@ fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
 /// not up yet simply never learns about this disk, which is why the lookup is
 /// retried rather than assumed.
 fn publishBlockDevice(proc_endpoint: i32) void {
-    if (!g_dev.ready or g_desc_bid < 0) return;
+    if (!g_dev.ready or g_publish_bid < 0) return;
     const devmgr = driver.lookupService(proc_endpoint, "devmgr.inv", 32, 256) orelse {
         driver.log("[virtio-blk] devmgr inventory unavailable; disk not published");
         return;
     };
     if (!g_desc_devmgr_granted) {
-        if (driver.bufferBorrow(devmgr, g_desc_bid, driver.BUFFER_GRANT_READ) == null) {
+        if (driver.bufferBorrow(devmgr, g_publish_bid, driver.BUFFER_GRANT_READ) == null) {
             driver.log("[virtio-blk] descriptor borrow to device-manager failed");
             return;
         }
@@ -1131,7 +1122,7 @@ fn publishBlockDevice(proc_endpoint: i32) void {
         endpoint(),
         op.DEVMGR_PUBLISH_BLOCK_DEVICE,
         0,
-        g_desc_bid,
+        g_publish_bid,
         0,
         @intCast(@sizeOf(driver.BlockDescriptor)),
         0,

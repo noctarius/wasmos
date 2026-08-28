@@ -638,8 +638,11 @@ linked feature documents for rationale and rollout plans.
 
 - A block device describes itself with `wasmos_block_descriptor_t`
   (`src/drivers/include/wasmos_driver_abi.h`), carried in a transfer buffer by
-  `BLOCK_IPC_IDENTIFY_RESP` and `DEVMGR_PUBLISH_BLOCK_DEVICE` rather than packed
-  into message arguments. It reports backend, unit, partition slot, scheme,
+  `BLOCK_IPC_IDENTIFY` and `DEVMGR_PUBLISH_BLOCK_DEVICE` rather than packed into
+  message arguments. In both directions the buffer belongs to the **client** of
+  the exchange: a filesystem driver acquires it and lends it to the backend for
+  an IDENTIFY, and a block driver acquires it and lends it to device-manager for
+  a publish. It reports backend, unit, partition slot, scheme,
   probed filesystem, sector size, a 64-bit LBA window, the GPT identity fields
   and the device's canonical id. The partition and GPT fields are defined but
   left zero: no partition table is parsed yet

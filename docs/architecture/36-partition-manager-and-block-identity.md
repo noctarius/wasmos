@@ -185,26 +185,40 @@ physical MBR disk.
 
 #### Wire changes
 
-- `BLOCK_IPC_IDENTIFY_RESP` carries `(buffer_id, offset, size)` for a descriptor
-  the server has borrowed to the caller READ-only, instead of packed geometry.
+- `BLOCK_IPC_IDENTIFY_REQ` gains `arg1 = buffer_id`: the descriptor is written
+  into a buffer the **caller** acquired, lent to the backend with WRITE, and
+  releases afterwards. `IDENTIFY_RESP` reports only `arg1 = bytes written`.
+  This is the ownership model of `12-dma-transfers.md` — the client holds a
+  transfer buffer's lifecycle and the server is a transient grantee — and it is
+  not optional: a server that lends its own buffer can never free it, because
+  release is owner-only, no hostcall transfers ownership, and nothing tells a
+  server when a client has finished reading. It also means the descriptor is
+  written fresh per call rather than read out of a snapshot the backend must
+  never rewrite while lent.
 - `BLOCK_IPC_IDENTIFY_REQ` arg0 became the device's **class instance** rather
   than a unit. This followed from making the instance opaque: several instances
   may share one endpoint (an ATA controller registers one per drive), and the
   instance is the only name a client that found the provider by class actually
   holds. The backend computed those fingerprints itself and maps one back to its
   own device; arg0 = 0 means "the only device you serve".
-- `DEVMGR_PUBLISH_BLOCK_DEVICE` likewise carries a descriptor.
+- `DEVMGR_PUBLISH_BLOCK_DEVICE` carries a descriptor in a buffer the **driver**
+  owns and lends READ to device-manager. Same rule, other direction: the driver
+  is the client of device-manager there. It is held for the process lifetime
+  because a publish is fire-and-forget and carries no acknowledgement that would
+  say when the record has been consumed.
 - The device's canonical id reaches the filesystem driver as `id=` in its
   startup arguments, so the string has exactly one producer. A driver that
   rebuilt it from `driver=` and `unit=` would be a second place free to disagree
   with the publisher, and a disagreement leaves the filesystem waiting forever on
   an instance nobody registered.
-- A descriptor borrow is held per **context**, not per endpoint: the kernel
-  resolves the grantee endpoint to its owning process and allows one active
-  borrow per object per process. A backend granting to a client that already
-  holds one gets `ALREADY_BORROWED`, which is a grant and not a refusal —
-  treating it as failure made a second drive permanently unidentifiable to any
-  client that had queried the first.
+- A borrow is held per **context**, not per endpoint: the kernel resolves the
+  grantee endpoint to its owning process and allows one active borrow per object
+  per process. This is why a server-lent buffer needs per-client bookkeeping that
+  cannot be made correct, and why the client-owned shape above needs none —
+  `18-filesystem-stack.md` already records the same trap for the FS path
+  ("re-granting per chunk would hit `ALREADY_BORROWED`"). `09-process-and-ipc.md`
+  additionally notes that the one-borrow-per-context restriction is a known
+  limitation to remove, not the architectural rule.
 - `DEVMGR_QUERY_BLOCK_MOUNT_REQ` survives for now, still keyed on unit alone and
   still matching `0xFF` wildcards. It is retired in §3, when the mount name moves
   into the startup arguments and removes the `IDENTIFY` + query round-trip pair

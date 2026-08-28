@@ -480,22 +480,15 @@ pub fn bufferAcquire(len: usize) ?i32 {
 /// grantee may do.
 ///
 /// A borrow is held per CONTEXT: the kernel resolves the endpoint to its owning
-/// process and allows one active borrow per object per process, so granting to a
-/// second endpoint of a client that already holds one returns
-/// ALREADY_BORROWED. Use `bufferGrant` when the question is "can this client
-/// read the buffer", which is what a server serving several endpoints per client
-/// actually needs.
+/// process and allows one active borrow per object per process, so granting the
+/// same buffer to a second endpoint of a client that already holds one returns
+/// ALREADY_BORROWED. That is a sign the buffer is on the wrong side of the
+/// exchange -- the CLIENT owns a transfer buffer and lends it to the server for
+/// one request (docs/architecture/12-dma-transfers.md), which is the shape that
+/// needs no such bookkeeping.
 pub fn bufferBorrow(grantee_endpoint: i32, buffer_id: i32, flags: i32) ?i32 {
     const borrow = abi.xfer_buffer_borrow(grantee_endpoint, buffer_id, flags);
     return if (borrow < 0) null else borrow;
-}
-
-/// True once whoever owns `grantee_endpoint` can read `buffer_id` -- whether the
-/// grant was made here or already existed for that process. See `bufferBorrow`
-/// for why an existing grant is reported as an error and is not one.
-pub fn bufferGrant(grantee_endpoint: i32, buffer_id: i32, flags: i32) bool {
-    const rc = abi.xfer_buffer_borrow(grantee_endpoint, buffer_id, flags);
-    return rc >= 0 or rc == status.WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED;
 }
 
 // --- service registry ------------------------------------------------------

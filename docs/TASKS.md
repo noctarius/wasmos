@@ -862,11 +862,6 @@ tail.
   `TODO` on BLOCK_IPC_READ_REQ). Needs a second argument word for the high half,
   or a descriptor-carrying request. ATA is on `lba28` and stops at 128 GiB
   regardless, so only virtio-blk can reach the limit today.
-- [ ] [ENHANCEMENT][P3] Reclaim ATA client-map entries when a client's endpoint dies
-  (`src/drivers/ata/ata.c`, `ata_desc_grant_for_source`). Entries are never
-  released, so a long uptime with many short-lived clients fills the 8-slot map
-  and every later client pays a repeat descriptor borrow. Needs an endpoint-death
-  notification the driver does not receive.
 - [ ] [FEATURE][P2] Phase 2: the partition manager service (Zig,
   `src/drivers/partition_manager/`). Subscribes to the `block` class, parses GPT
   (CRC32 + backup header) and MBR, publishes each partition as a block device

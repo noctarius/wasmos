@@ -171,10 +171,18 @@ enum {
      */
     BLOCK_IPC_READ_REQ = 0x300,
     BLOCK_IPC_WRITE_REQ = 0x301,
-    /* Ask a backend to describe one of its devices. arg0 = the device's
-     * `block` CLASS INSTANCE, which the backend may also record as the
-     * caller's selection for later transfers. Answered with
-     * BLOCK_IPC_IDENTIFY_RESP.
+    /* Ask a backend to describe one of its devices into a buffer the CALLER
+     * owns. arg0 = the device's `block` CLASS INSTANCE, arg1 = buffer_id.
+     * Answered with BLOCK_IPC_IDENTIFY_RESP.
+     *
+     * The caller acquires the buffer, borrows it to this endpoint with WRITE,
+     * and releases it when done -- the ownership model of
+     * docs/architecture/12-dma-transfers.md, where the client holds the
+     * lifecycle and the server is a transient grantee. A backend lending its
+     * OWN buffer instead would have to keep it alive for every client that
+     * ever asked, track who already holds a grant, and never rewrite it while
+     * lent; none of which it can do correctly, because a borrow is held per
+     * context and nothing tells a server when a client is finished.
      *
      * The instance rather than a unit, because that is the only name a client
      * has: it found the provider by looking up the class, several instances
@@ -214,15 +222,14 @@ enum {
     BLOCK_IPC_READ_ZC_REQ = 0x303,
     BLOCK_IPC_READ_RESP = 0x380,
     BLOCK_IPC_WRITE_RESP = 0x381,
-    /* The answer to BLOCK_IPC_IDENTIFY_REQ: a wasmos_block_descriptor_t in a
-     * transfer buffer the backend has borrowed to the caller READ-only.
-     * arg0=0 on success, arg1=buffer_id, arg2=byte_offset,
-     * arg3=descriptor_size.
+    /* The answer to BLOCK_IPC_IDENTIFY_REQ: a wasmos_block_descriptor_t
+     * written into the caller's own buffer at offset 0. arg0=0 on success,
+     * arg1=bytes written. The caller already knows the buffer_id -- it
+     * acquired it -- so the reply names only how much is there.
      *
-     * The borrow lasts until the caller unborrows it; the backend must not
-     * rewrite that buffer region while it is lent out, so a backend serving
-     * several clients stages each answer at its own offset or in its own
-     * buffer.
+     * The descriptor is written FRESH on every call, so it is the device's
+     * state at reply time rather than a snapshot the backend published
+     * earlier and may since have outgrown.
      *
      * Geometry that used to travel in the arguments -- sector count, unit --
      * is in the descriptor, together with everything a caller now matches on:

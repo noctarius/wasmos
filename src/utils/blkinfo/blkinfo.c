@@ -100,37 +100,53 @@ static uint32_t parse_u32(const char* s, uint32_t fallback) {
  *
  * The instance argument is what a backend serving several disks needs to know
  * which one is meant -- several class instances may share one endpoint. The
- * answer is a descriptor in a buffer the backend lends READ-only, and every
- * attribute printed below comes out of it. */
+ * descriptor is written into a buffer THIS process owns and lends to the backend
+ * for the request, and every attribute printed below comes out of it. */
 static int identify(int32_t endpoint, uint32_t instance, wasmos_block_descriptor_t* out_desc) {
     wasmos_ipc_message_t reply;
+    int32_t bid;
+    int rc = WASMOS_ERR_BLOCK_DEV_NOT_READY;
     if (!out_desc) {
         return WASMOS_ERR_BLOCK_DEV_BAD_REQUEST;
+    }
+    /* The client owns the buffer and holds its lifecycle; release cascade-revokes
+     * the backend's grant on every path out of here. */
+    bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(*out_desc));
+    if (bid < 0) {
+        return WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR;
+    }
+    if (wasmos_xfer_buffer_borrow(endpoint, bid, WASMOS_BUFFER_GRANT_WRITE) < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR;
     }
     if (wasmos_ipc_call(endpoint,
                         g_reply_endpoint,
                         BLOCK_IPC_IDENTIFY_REQ,
                         g_request_id++,
                         (int32_t)instance,
-                        0,
+                        bid,
                         0,
                         0,
                         &reply) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return WASMOS_ERR_BLOCK_DEV_NOT_READY;
     }
     /* Report the backend's own reason. "identify failed" with nothing behind it
      * cannot distinguish a disk that refused from one that answered something
      * unreadable, and the two have opposite causes. */
     if (reply.type == BLOCK_IPC_ERROR) {
-        return (int)reply.arg0;
+        rc = (int)reply.arg0;
+    } else if (reply.type != BLOCK_IPC_IDENTIFY_RESP || reply.arg0 != 0) {
+        rc = WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST;
+    } else if (reply.arg1 < (int32_t)sizeof(*out_desc) ||
+               wasmos_xfer_buffer_read(bid, out_desc, (int32_t)sizeof(*out_desc), 0) != 0) {
+        rc = WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED;
+    } else {
+        rc = 0;
     }
-    if (reply.type != BLOCK_IPC_IDENTIFY_RESP || reply.arg0 != 0) {
-        return WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST;
-    }
-    if (reply.arg3 < (int32_t)sizeof(*out_desc) ||
-        wasmos_xfer_buffer_read(reply.arg1, out_desc, (int32_t)sizeof(*out_desc), reply.arg2) !=
-            0) {
-        return WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED;
+    (void)wasmos_xfer_buffer_release(bid);
+    if (rc != 0) {
+        return rc;
     }
     if (out_desc->version != BLOCK_DESCRIPTOR_VERSION) {
         return WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION;

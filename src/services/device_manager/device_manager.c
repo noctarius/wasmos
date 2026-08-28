@@ -139,6 +139,8 @@ static void queue_acpi_match_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char* name);
+static const char* block_backend_name(uint8_t backend);
+static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec);
 static uint16_t count_loaded_active_rules(void);
 static int is_mount_already_active(const char* mount);
 static void handle_query_message_fields(const wasmos_ipc_message_t* msg);
@@ -945,12 +947,18 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
     return rc;
 }
 
-static int build_block_fs_spawn_args(uint8_t unit, char* out, uint32_t out_cap) {
+/* What a block-filesystem driver is told about the device it was spawned for.
+ *
+ * The backend travels by name because that is how the driver addresses it: a
+ * unit is backend-local, so `unit=0` alone names a different disk on every
+ * backend, and the driver resolves its server as the `block` class instance
+ * (backend << 8) | unit. The name is the same one a rule's DRIVER== spells. */
+static int build_block_fs_spawn_args(uint8_t backend, uint8_t unit, char* out, uint32_t out_cap) {
     int n = 0;
     if (!out || out_cap == 0u) {
         return -1;
     }
-    n = snprintf(out, out_cap, "unit=%u", (unsigned)unit);
+    n = snprintf(out, out_cap, "driver=%s unit=%u", block_backend_name(backend), (unsigned)unit);
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
     }
@@ -1342,49 +1350,92 @@ static void queue_block_fs_rule_spawns(void) {
     }
 }
 
-static void queue_block_fs_rules_for_known_devices(void) {
-    for (uint32_t bi = 0; bi < g_dm.block_registry_count; ++bi) {
-        const block_device_record_t* rec = &g_dm.block_registry[bi];
-        if (!rec->in_use || !rec->present) {
+/* Queue every rule this device satisfies, and remember WHICH device satisfied
+ * each -- the filesystem driver is told about the matched device, not about the
+ * rule's pattern.
+ *
+ * This is the ONLY place a block rule is tested against a device, and both entry
+ * points go through it: the walk over already-known devices and the publish
+ * handler that runs when a live one arrives. A second copy of the predicate
+ * would be free to disagree with this one about what a rule matches, and a
+ * disagreement here mounts a filesystem on the wrong disk.
+ *
+ * Returns how many rules were queued. */
+static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec) {
+    uint32_t queued = 0;
+    if (!rec || !rec->in_use || !rec->present) {
+        return 0;
+    }
+    for (uint32_t ri = 0; ri < g_dm.block_fs_rule_count; ++ri) {
+        block_fs_rule_t* rule = &g_dm.block_fs_rules[ri];
+        if (!rule->active || rule->spawned || rule->queued) {
             continue;
         }
-        for (uint32_t ri = 0; ri < g_dm.block_fs_rule_count; ++ri) {
-            block_fs_rule_t* rule = &g_dm.block_fs_rules[ri];
-            if (!rule->active || rule->spawned || rule->queued) {
-                continue;
-            }
-            if (is_mount_already_active(rule->mount)) {
-                rule->spawned = 1;
-                log_mount_already_active(rule->mount);
-                continue;
-            }
-            if (rule->unit == 0xFFu || rule->unit == rec->unit) {
-                rule->queued = 1;
-            }
+        if (is_mount_already_active(rule->mount)) {
+            rule->spawned = 1;
+            log_mount_already_active(rule->mount);
+            continue;
         }
+        /* Both halves must match. A rule that named no DRIVER keeps the
+         * any-backend behaviour, so an unqualified rule still works -- but the
+         * shipped rules name one, because an unqualified unit matches a
+         * different disk on every backend that has one. */
+        const int backend_ok =
+            rule->backend == (uint8_t)BLOCK_BACKEND_UNKNOWN || rule->backend == rec->backend;
+        const int unit_ok = rule->unit == 0xFFu || rule->unit == rec->unit;
+        if (backend_ok && unit_ok) {
+            rule->queued = 1;
+            rule->matched_backend = rec->backend;
+            rule->matched_unit = rec->unit;
+            queued++;
+        }
+    }
+    return queued;
+}
+
+static void queue_block_fs_rules_for_known_devices(void) {
+    for (uint32_t bi = 0; bi < g_dm.block_registry_count; ++bi) {
+        (void)queue_block_fs_rules_for_record(&g_dm.block_registry[bi]);
     }
     queue_block_fs_rule_spawns();
 }
 
+/* Name of a backend for the canonical id and the log line. Kept in step with
+ * block_backend_from_name() in device_manager_rules.c, which maps the same names
+ * the other way for a rule's DRIVER== value. */
+static const char* block_backend_name(uint8_t backend) {
+    switch (backend) {
+    case (uint8_t)BLOCK_BACKEND_ATA:
+        return "ata";
+    case (uint8_t)BLOCK_BACKEND_VIRTIO_BLK:
+        return "virtio-blk";
+    default:
+        return "unknown";
+    }
+}
+
 /* Unpack a block-device announcement from IPC args into the block registry.
  *
- * Bit layout (agreed with ATA/block-bus sender):
- *   arg0 [7:0]=unit (ATA drive index: 0=primary-master, 1=primary-slave, …)
- *   arg1        =sector_count (full 32-bit LBA28 capacity)
+ * Bit layout (see DEVMGR_PUBLISH_BLOCK_DEVICE in abi/opcodes.yaml):
+ *   arg0 [7:0]=unit, WITHIN the publishing backend
+ *   arg1        =sector_count (full 32-bit capacity)
  *   arg2 [1]=active_service  [0]=present
- *   arg3        unused (reserved, caller passes 0)
+ *   arg3        =BLOCK_BACKEND_* naming the publisher
  *
- * Upserts by unit: updates an existing record if the unit is already known,
- * otherwise appends a new entry. */
+ * Upserts by the PAIR (backend, unit). Keying on the unit alone was wrong the
+ * moment a second backend existed: ATA and virtio-blk both number their first
+ * disk 0, so a virtio publish would have overwritten the ATA boot disk's record
+ * and inherited its identity. */
 static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
-    (void)arg3;
     uint8_t unit = (uint8_t)((uint32_t)arg0 & 0xFFu);
     uint32_t sectors = (uint32_t)arg1;
     uint8_t present = (uint8_t)(((uint32_t)arg2 & 1u) != 0u);
     uint8_t active = (uint8_t)((((uint32_t)arg2 >> 1) & 1u) != 0u);
+    uint8_t backend = (uint8_t)((uint32_t)arg3 & 0xFFu);
     block_device_record_t* rec = 0;
     for (uint32_t i = 0; i < g_dm.block_registry_count; ++i) {
-        if (g_dm.block_registry[i].in_use && g_dm.block_registry[i].unit == unit) {
+        if (g_dm.block_registry[i].in_use && g_dm.block_registry[i].unit == unit &&
+            g_dm.block_registry[i].backend == backend) {
             rec = &g_dm.block_registry[i];
             break;
         }
@@ -1396,23 +1447,37 @@ static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2
         rec = &g_dm.block_registry[g_dm.block_registry_count++];
         rec->in_use = 1;
     }
+    rec->backend = backend;
     rec->unit = unit;
     rec->present = present;
     rec->active_service = active;
     rec->sector_count = sectors;
-    if (g_dm.selected_storage_has_record) {
+    /* The PCI prefix is the SELECTED STORAGE controller's address, which is the
+     * ATA one -- so it may only be used for an ATA publish. Spelling every
+     * device `ata<unit>` at that address was a falsehood the moment a second
+     * backend existed: a virtio disk would have claimed both the name and the
+     * ATA controller's location.
+     *
+     * TODO: a non-ATA backend gets no bus address because the publish carries
+     * none. Adding the publisher's PCI identity to DEVMGR_PUBLISH_BLOCK_DEVICE
+     * is also what would let two IDE controllers be told apart, which
+     * (backend, unit) alone cannot do. */
+    const char* backend_name = block_backend_name(backend);
+    if (backend == (uint8_t)BLOCK_BACKEND_ATA && g_dm.selected_storage_has_record) {
         const pci_device_record_t* p = &g_dm.selected_storage_record;
         (void)snprintf(rec->canonical_id,
                        sizeof(rec->canonical_id),
-                       "block:pci:%02X:%02X.%02X:ata%u",
+                       "block:pci:%02X:%02X.%02X:%s%u",
                        (unsigned)p->bus,
                        (unsigned)p->device,
                        (unsigned)p->function,
+                       backend_name,
                        (unsigned)unit);
     } else {
         (void)snprintf(rec->canonical_id,
                        sizeof(rec->canonical_id),
-                       "block:pci:??:??.??:ata%u",
+                       "block:%s:%u",
+                       backend_name,
                        (unsigned)unit);
     }
     hex16_from_sha256(rec->canonical_id, rec->hash_id);
@@ -1427,28 +1492,19 @@ static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2
                    (unsigned)rec->sector_count);
     console_write(msg);
 
-    if (rec->present) {
-        uint8_t queued_any = 0;
-        for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
-            block_fs_rule_t* rule = &g_dm.block_fs_rules[i];
-            if (!rule->active || rule->spawned || rule->queued) {
-                continue;
-            }
-            if (is_mount_already_active(rule->mount)) {
-                rule->spawned = 1;
-                log_mount_already_active(rule->mount);
-                continue;
-            }
-            if (rule->unit == 0xFFu || rule->unit == rec->unit) {
-                rule->queued = 1;
-                queued_any = 1;
-            }
-        }
-        if (queued_any) {
-            queue_block_fs_rule_spawns();
-            g_dm.need_fat = 0;
-            console_write("[device-manager] block_fs rule queued spawn\n");
-        }
+    if (queue_block_fs_rules_for_record(rec) > 0u) {
+        queue_block_fs_rule_spawns();
+        g_dm.need_fat = 0;
+        /* Name the device a rule was queued FOR, not just that one was. A rule
+         * matching the wrong backend is otherwise invisible until a filesystem
+         * mounts the wrong volume. */
+        char queued_msg[96];
+        (void)snprintf(queued_msg,
+                       sizeof(queued_msg),
+                       "[device-manager] block_fs rule queued spawn driver=%s unit=%u\n",
+                       block_backend_name(rec->backend),
+                       (unsigned)rec->unit);
+        console_write(queued_msg);
     }
 }
 
@@ -2197,7 +2253,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                g_dm.active_rule_spawn_index >= 0 &&
                                g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count &&
                                build_block_fs_spawn_args(
-                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index].unit,
+                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index]
+                                       .matched_backend,
+                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index].matched_unit,
                                    spawn_args,
                                    sizeof(spawn_args)) > 0) {
                         args = spawn_args;

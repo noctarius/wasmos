@@ -3,6 +3,37 @@
 
 package wasmos
 
+// block_backend
+// Which kind of backend serves a block device, published in arg3 of
+// DEVMGR_PUBLISH_BLOCK_DEVICE and matched by `DRIVER==` in a block rule.
+//
+// A block device is identified by the PAIR (backend, unit), not by a unit
+// alone. What a unit MEANS is the backend's own business -- ATA numbers the
+// drives on a controller, a virtio-blk device numbers itself by where it sits
+// on the bus -- so a bare unit names two different disks once more than one
+// backend is present. The pair is also
+// intrinsic rather than allocated: it does not depend on which driver
+// finished probing first, which a number handed out in publish order would.
+//
+// The value is the low half of the `block` service class instance, whose
+// high half is the backend: instance = (backend << 8) | unit. That is what
+// lets a class lookup and a rule name the same disk without a registry
+// handing out identities.
+//
+// TODO: (backend, unit) still cannot separate two IDE controllers, which
+// would both call their disks 0 and 1. block_device_record_t carries a
+// canonical_id derived from the PCI address for that case.
+// Publisher named no backend.
+const BLOCK_BACKEND_UNKNOWN int32 = 0
+// ATA/IDE controller; unit is the drive index.
+const BLOCK_BACKEND_ATA int32 = 1
+// virtio-blk PCI device. One device is one disk, so the unit identifies
+// the DEVICE rather than a drive on it: it is (slot << 3) | function,
+// the same packing as the BDF, which fits a unit's eight bits exactly.
+// Two virtio-blk devices therefore get different units instead of
+// colliding on one class instance.
+const BLOCK_BACKEND_VIRTIO_BLK int32 = 2
+
 // net_socket_family
 // Address family of a socket: which layer it addresses and therefore what an
 // address means. Independent of the socket type below, as in BSD sockets.

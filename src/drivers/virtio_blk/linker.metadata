@@ -1,0 +1,55 @@
+version = 1
+aot = true
+
+[package]
+name = "virtio-blk"
+# The libsys async-service entry: it creates the reply endpoint, the event loop
+# and the coroutine runtime, then pumps the root task this driver supplies.
+entry = "async_initialize"
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+# region_alloc maps the request virtqueue ring and the request scratch page into
+# a window above live data; the 512-page (2 MiB) reserve is what clears
+# map_auto's 2 MiB low guard, as for every other DMA-capable driver. Paired with
+# the 4 MiB [link] memory below.
+heap_pages = 512
+
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# The virtqueue ring is mapped above the 2 MiB floor, so the module's declared
+# linear memory must contain that window.
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+
+# The device's registers are an I/O BAR. This driver declares no [[regions]] on
+# purpose: a driver with declared windows is spawned by module index, which
+# carries no startup arguments, and the arguments are the only place the matched
+# device's I/O base and IRQ line appear. See build_pci_spawn_args in
+# src/services/device_manager/device_manager.c.
+[[capabilities]]
+name = "io.port"
+flags = 0
+
+[[capabilities]]
+name = "irq.route"
+flags = 0
+
+# flags = DMA budget in pages: the request virtqueue ring (up to 3 for a
+# 256-entry queue) plus one scratch page for the request header and status byte.
+# The data buffers are the CLIENT's memory and are not charged here.
+[[capabilities]]
+name = "dma.buffer"
+flags = 4
+
+# Required to claim the virtual service class "block" at registration time (PM
+# gates class claims in SVC_IPC_REGISTER_DESC_REQ on CAP_SVC_CLASS_REGISTER).
+[[capabilities]]
+name = "svc.class"
+flags = 0

@@ -902,10 +902,116 @@ linked feature documents for rationale and rollout plans.
 
 - PCI and ACPI bus services enumerate devices for policy-driven startup. Active
   device coverage includes ATA, FAT, framebuffer, PS/2 keyboard/mouse, serial,
-  RTC, `virtio-serial`, `virtio-rng`, and `virtio-net`.
+  RTC, `virtio-serial`, `virtio-rng`, `virtio-net`, and `virtio-blk`.
 - Capability policy covers I/O ports, IRQs, shared memory, and DMA in both
   runtimes. Driver-owned pinned DMA regions and a transport-neutral `vring`
-  core support virtqueues.
+  core support virtqueues. The `vring` core allocates and releases chained
+  descriptors (`vring_alloc_chain` / `vring_free_chain`, bounded by
+  `VRING_MAX_CHAIN`), which is what a request spanning several buffers needs.
+- `virtio-blk` is the first WASM device driver written in Zig, and the first
+  built on the coroutine runtime rather than a blocking loop. Its manifest entry
+  is `async_initialize`, so the libsys async-service runner owns the endpoint,
+  the event loop and the pump; the driver supplies only a `prepare` hook and a
+  root task. It takes its device identity from the device-manager startup args,
+  negotiates the legacy PCI device, and serves `BLOCK_IPC_IDENTIFY_REQ`,
+  `BLOCK_IPC_READ_REQ`, `BLOCK_IPC_WRITE_REQ` and `BLOCK_IPC_READ_ZC_REQ` over a
+  single requestq.
+- One endpoint carries everything `virtio-blk` waits on. The event loop drains a
+  single receiver and demultiplexes, so the block service is registered ON the
+  runner's endpoint and the interrupt is routed TO it; the driver owns no select
+  set, no drain loop and no timed wait. Its message handler accepts or refuses a
+  request and reaps completions, then wakes the root task by settling a promise.
+- Concurrency lives in that root task, not in a coroutine per request. The
+  runner polls whenever the ROOT is parked and its poll blocks until an event
+  arrives, so a ready child task would sit unresumed until an unrelated message
+  happened to come in. The root task instead owns a slot table and keeps up to
+  eight chains on the queue at once, parking only when every slot is idle.
+- A `virtio-blk` request is a three-descriptor chain (header, data, status byte)
+  whose data descriptor points straight at the CALLER's block buffer or mapped
+  borrow, so no CPU copies the sectors. A chain the device has not reported still
+  belongs to it and virtio cannot withdraw one, so a lost completion is terminal
+  rather than retryable: the driver resets the device and refuses every later
+  request with `WASMOS_ERR_VIRTIO_BLK_NOT_READY`, instead of recycling
+  descriptors the device could still complete into a client's block buffer. It
+  registers the concrete name `virtio-blk` under the `block` service CLASS; the
+  plain `block` name stays with the ATA driver, which holds the boot disk.
+  Failures are reported as packed `WASMOS_ERR_VIRTIO_BLK_*` codes.
+- `wasmos_sys_event_loop_t` gained a clock: `poll_timeout_ms` bounds how long a
+  poll parks with nothing queued, and `on_timeout` runs when the window elapses.
+  Without it a reactor could express "wake me when something happens" but not
+  "wake me anyway in 250 ms", so anything needing a deadline had to drive its own
+  pump -- which is how `net-stack` still advances its lwIP timers. Zero keeps the
+  original park-until-a-message behaviour, so existing loops are unaffected.
+  `virtio-blk` arms it only while requests are outstanding and uses it to age
+  them, which is what reconstructs the deadline its blocking version had.
+- `virtio-blk` binds an MSI-X vector through `pci-bus` for its completion
+  interrupt, and routes INTx only when the device or the bus service offers no
+  vector. That is a correctness property rather than a latency one: with
+  `virtio-net` and `virtio-rng` both on MSI-X, an INTx `virtio-blk` would be the
+  system's only INTx consumer, sharing a line with the PIIX4 power-management
+  bridge that nothing services -- the shape of the IRQ 11 livelock this tree
+  already fixed. Enabling MSI-X inserts two vector registers at 0x14/0x16 and
+  shifts the device configuration from 0x14 to 0x18, so the capacity read goes
+  through an accessor. `test_virtio_blk.py` boots BOTH paths (the second with
+  QEMU `vectors=0`) and asserts the geometry each way, so a hardcoded
+  configuration base fails one class or the other.
+- Zig drivers reach the driver-side surface through `src/libc/zig/driver.zig`
+  (granted I/O ports, pinned DMA regions, IRQ routing, MSI vectors, service
+  lookup and registration, and the ready handshake) and `src/libc/zig/vring.zig`.
+  It deliberately offers no receive loop, select set or drain: a driver is an
+  async service, and serving work belongs in a coroutine parked on a future. Its
+  one blocking call is documented as bring-up only, for the window before the
+  runtime exists. The vring binding contains no ring
+  logic: `vring_shim.c` compiles the static-inline C core into the module and
+  re-exports it, so a Zig driver and a C driver drive a device through the same
+  implementation. The generated Zig ABI (`abi/generated/zig/`) supplies the
+  host-call signatures, opcodes and error codes.
+- A block device is identified by the PAIR (backend, unit), not by a unit alone.
+  Units are BACKEND-LOCAL -- ATA numbers its drives 0 and 1 and a virtio-blk
+  device calls its only disk 0 -- so a bare unit names two different disks once
+  more than one backend is present. `BLOCK_BACKEND_*` (`abi/constants.yaml`)
+  travels in arg3 of `DEVMGR_PUBLISH_BLOCK_DEVICE`, the device-manager inventory
+  keys records on the pair, and a block rule selects with `DRIVER=="ata"`
+  alongside `ATTR{unit}`. The shipped rules are qualified: an unqualified
+  `ATTR{unit}=="0"` would match both the ATA boot disk and a virtio disk and
+  mount a filesystem twice on `/boot`.
+- The `block` service CLASS holds one instance per DISK, numbered
+  `(backend << 8) | unit` -- ATA's drives are 256 and 257, a virtio-blk disk is
+  512. The number is DERIVED from what the disk is rather than handed out at
+  registration, so it is the same every boot whatever order the drivers probed
+  in, and a client can decode it back into the pair a rule names. ATA registers
+  once per present drive (the class registry admits several instances from one
+  owner) and keeps the plain `block` NAME as a compat alias, because `fs_fat`
+  still resolves its backend by that name.
+- Identifying a disk does not claim it. ATA binds a client endpoint to one unit
+  exclusively so two filesystems cannot write one drive, but that guard used to
+  cover `BLOCK_IPC_IDENTIFY_REQ` as well, which made a mounted disk unqueryable
+  -- the opposite of what discovering it by class is for. Transfers are still
+  refused, now with `WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED` rather than a bare `1`;
+  ATA's block replies are packed `block_dev` codes throughout.
+- `fs_fat` resolves its disk through the `block` CLASS, at the instance encoding
+  the (backend, unit) the device manager spawned it for. The plain `block` NAME
+  is gone: a name resolves to ONE provider system-wide, so holding it made the
+  ATA controller the only disk any filesystem could reach. Its manifest no
+  longer declares `required_endpoint_name`, which the process manager resolved at
+  spawn time and which tied the driver to that one name before it even ran.
+- The device manager tells a filesystem driver about the DEVICE that matched
+  (`driver=<name> unit=<n>`), not about the rule's pattern. A wildcard rule has
+  no unit of its own, and passing the pattern handed the driver 0xFF as a unit
+  number.
+- One matcher decides whether a block rule applies to a device. There were two --
+  a walk over known devices and a copy inside the publish handler -- and the
+  publish copy, which is the path a live device takes, never compared the
+  backend. A rule naming one backend could be queued for a disk on another; it
+  was masked only because ATA publishes before any other backend, so the boot
+  mounts were already claimed.
+- `blkinfo` (`/system/utils/blkinfo`) enumerates the `block` class, reports each
+  provider's backend, unit and geometry, and reads a sector;
+  `--write <instance> <lba>` overwrites that
+  sector with a pattern and reads it back, which is how the write direction is
+  exercised from the shell. It takes the INSTANCE of the disk to write and
+  touches only that one -- it enumerates the boot disk now, so a tool that wrote
+  to every provider it found would be a footgun.
 - `virtio-net` initializes RX/TX queues, routes its IRQ, exchanges an ARP
   self-probe through QEMU SLIRP, and supports pull plus notification-hinted RX
   delivery. The current INTx electrical configuration is incomplete, so

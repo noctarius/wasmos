@@ -47,6 +47,8 @@ const (
 	WASMOS_ERR_DOMAIN_ENV uint16 = 22
 	WASMOS_ERR_DOMAIN_FRAMEBUFFER uint16 = 23
 	WASMOS_ERR_DOMAIN_DEVMGR uint16 = 10
+	WASMOS_ERR_DOMAIN_VIRTIO_BLK uint16 = 24
+	WASMOS_ERR_DOMAIN_BLOCK_DEV uint16 = 25
 )
 
 const WASMOS_ERR_NONE int32 = 0
@@ -251,6 +253,20 @@ const (
 	WASMOS_ERR_FRAMEBUFFER_TOO_SMALL int32 = -0x00170002 // the caller's requested mapping is smaller than the framebuffer
 	WASMOS_ERR_DEVMGR_NO_MOUNT_RULE int32 = -0x000A0001 // no block/filesystem mount rule matches the requested unit
 	WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY int32 = -0x000A0002 // unknown or unsupported device-manager query type
+	WASMOS_ERR_VIRTIO_BLK_NOT_READY int32 = -0x00180001 // no virtio-blk device was probed, or bring-up did not complete
+	WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST int32 = -0x00180002 // the request's lba, sector count, or buffer argument is unusable
+	WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST int32 = -0x00180003 // unknown or unsupported block opcode
+	WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL int32 = -0x00180004 // no descriptors are free; the request must be retried
+	WASMOS_ERR_VIRTIO_BLK_IO_ERROR int32 = -0x00180005 // the device completed the request with a non-OK virtio-blk status
+	WASMOS_ERR_VIRTIO_BLK_TIMEOUT int32 = -0x00180006 // the device never reported the request on the used ring
+	WASMOS_ERR_VIRTIO_BLK_READ_ONLY int32 = -0x00180007 // the device negotiated VIRTIO_BLK_F_RO and cannot be written
+	WASMOS_ERR_BLOCK_DEV_NOT_READY int32 = -0x00190001 // the backend has no usable device
+	WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT int32 = -0x00190002 // the named unit does not exist on this backend
+	WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED int32 = -0x00190003 // another client already holds this unit exclusively
+	WASMOS_ERR_BLOCK_DEV_BAD_REQUEST int32 = -0x00190004 // the request's lba, sector count, or buffer argument is unusable
+	WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST int32 = -0x00190005 // unknown or unsupported block opcode
+	WASMOS_ERR_BLOCK_DEV_READ_FAILED int32 = -0x00190006 // the transfer from the device failed
+	WASMOS_ERR_BLOCK_DEV_WRITE_FAILED int32 = -0x00190007 // the transfer to the device failed
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -343,6 +359,10 @@ func WasmosErrorDomainName(d uint16) string {
 		return "framebuffer"
 	case WASMOS_ERR_DOMAIN_DEVMGR:
 		return "devmgr"
+	case WASMOS_ERR_DOMAIN_VIRTIO_BLK:
+		return "virtio_blk"
+	case WASMOS_ERR_DOMAIN_BLOCK_DEV:
+		return "block_dev"
 	default:
 		return "unknown"
 	}
@@ -748,6 +768,34 @@ func WasmosStrerror(c int32) string {
 		return "no block/filesystem mount rule matches the requested unit"
 	case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY:
 		return "unknown or unsupported device-manager query type"
+	case WASMOS_ERR_VIRTIO_BLK_NOT_READY:
+		return "no virtio-blk device was probed, or bring-up did not complete"
+	case WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST:
+		return "the request's lba, sector count, or buffer argument is unusable"
+	case WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST:
+		return "unknown or unsupported block opcode"
+	case WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL:
+		return "no descriptors are free; the request must be retried"
+	case WASMOS_ERR_VIRTIO_BLK_IO_ERROR:
+		return "the device completed the request with a non-OK virtio-blk status"
+	case WASMOS_ERR_VIRTIO_BLK_TIMEOUT:
+		return "the device never reported the request on the used ring"
+	case WASMOS_ERR_VIRTIO_BLK_READ_ONLY:
+		return "the device negotiated VIRTIO_BLK_F_RO and cannot be written"
+	case WASMOS_ERR_BLOCK_DEV_NOT_READY:
+		return "the backend has no usable device"
+	case WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT:
+		return "the named unit does not exist on this backend"
+	case WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED:
+		return "another client already holds this unit exclusively"
+	case WASMOS_ERR_BLOCK_DEV_BAD_REQUEST:
+		return "the request's lba, sector count, or buffer argument is unusable"
+	case WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST:
+		return "unknown or unsupported block opcode"
+	case WASMOS_ERR_BLOCK_DEV_READ_FAILED:
+		return "the transfer from the device failed"
+	case WASMOS_ERR_BLOCK_DEV_WRITE_FAILED:
+		return "the transfer to the device failed"
 	default:
 		return "unknown error"
 	}

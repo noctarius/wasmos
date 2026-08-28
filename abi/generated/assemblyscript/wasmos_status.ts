@@ -42,6 +42,8 @@ export const WASMOS_ERR_DOMAIN_THREAD: u16 = 21;
 export const WASMOS_ERR_DOMAIN_ENV: u16 = 22;
 export const WASMOS_ERR_DOMAIN_FRAMEBUFFER: u16 = 23;
 export const WASMOS_ERR_DOMAIN_DEVMGR: u16 = 10;
+export const WASMOS_ERR_DOMAIN_VIRTIO_BLK: u16 = 24;
+export const WASMOS_ERR_DOMAIN_BLOCK_DEV: u16 = 25;
 
 export const WASMOS_ERR_NONE: i32 = 0;
 // A domain error is the negative of (domain << 16) | local_code.
@@ -243,6 +245,20 @@ export const WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: i32 = -0x00170001; // no frameb
 export const WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: i32 = -0x00170002; // the caller's requested mapping is smaller than the framebuffer
 export const WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: i32 = -0x000A0001; // no block/filesystem mount rule matches the requested unit
 export const WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: i32 = -0x000A0002; // unknown or unsupported device-manager query type
+export const WASMOS_ERR_VIRTIO_BLK_NOT_READY: i32 = -0x00180001; // no virtio-blk device was probed, or bring-up did not complete
+export const WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST: i32 = -0x00180002; // the request's lba, sector count, or buffer argument is unusable
+export const WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST: i32 = -0x00180003; // unknown or unsupported block opcode
+export const WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL: i32 = -0x00180004; // no descriptors are free; the request must be retried
+export const WASMOS_ERR_VIRTIO_BLK_IO_ERROR: i32 = -0x00180005; // the device completed the request with a non-OK virtio-blk status
+export const WASMOS_ERR_VIRTIO_BLK_TIMEOUT: i32 = -0x00180006; // the device never reported the request on the used ring
+export const WASMOS_ERR_VIRTIO_BLK_READ_ONLY: i32 = -0x00180007; // the device negotiated VIRTIO_BLK_F_RO and cannot be written
+export const WASMOS_ERR_BLOCK_DEV_NOT_READY: i32 = -0x00190001; // the backend has no usable device
+export const WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT: i32 = -0x00190002; // the named unit does not exist on this backend
+export const WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED: i32 = -0x00190003; // another client already holds this unit exclusively
+export const WASMOS_ERR_BLOCK_DEV_BAD_REQUEST: i32 = -0x00190004; // the request's lba, sector count, or buffer argument is unusable
+export const WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST: i32 = -0x00190005; // unknown or unsupported block opcode
+export const WASMOS_ERR_BLOCK_DEV_READ_FAILED: i32 = -0x00190006; // the transfer from the device failed
+export const WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: i32 = -0x00190007; // the transfer to the device failed
 
 export function errMake(dom: u16, code: u16): i32 {
   return -(<i32>(((<u32>dom) << 16) | (<u32>code)));
@@ -292,6 +308,8 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_ENV: return "env";
     case WASMOS_ERR_DOMAIN_FRAMEBUFFER: return "framebuffer";
     case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
+    case WASMOS_ERR_DOMAIN_VIRTIO_BLK: return "virtio_blk";
+    case WASMOS_ERR_DOMAIN_BLOCK_DEV: return "block_dev";
     default: return "unknown";
   }
 }
@@ -497,6 +515,20 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "the caller's requested mapping is smaller than the framebuffer";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "no block/filesystem mount rule matches the requested unit";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
+    case WASMOS_ERR_VIRTIO_BLK_NOT_READY: return "no virtio-blk device was probed, or bring-up did not complete";
+    case WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST: return "the request's lba, sector count, or buffer argument is unusable";
+    case WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST: return "unknown or unsupported block opcode";
+    case WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL: return "no descriptors are free; the request must be retried";
+    case WASMOS_ERR_VIRTIO_BLK_IO_ERROR: return "the device completed the request with a non-OK virtio-blk status";
+    case WASMOS_ERR_VIRTIO_BLK_TIMEOUT: return "the device never reported the request on the used ring";
+    case WASMOS_ERR_VIRTIO_BLK_READ_ONLY: return "the device negotiated VIRTIO_BLK_F_RO and cannot be written";
+    case WASMOS_ERR_BLOCK_DEV_NOT_READY: return "the backend has no usable device";
+    case WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT: return "the named unit does not exist on this backend";
+    case WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED: return "another client already holds this unit exclusively";
+    case WASMOS_ERR_BLOCK_DEV_BAD_REQUEST: return "the request's lba, sector count, or buffer argument is unusable";
+    case WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST: return "unknown or unsupported block opcode";
+    case WASMOS_ERR_BLOCK_DEV_READ_FAILED: return "the transfer from the device failed";
+    case WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: return "the transfer to the device failed";
     default: return "unknown error";
   }
 }

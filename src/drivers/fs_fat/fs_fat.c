@@ -39,6 +39,10 @@ static int32_t g_mount_bid = -1;
 static int32_t g_mount_len = 0;
 static uint8_t g_mount_unit = 0;
 static int32_t g_requested_unit = -1;
+/* Which backend serves the disk this instance was spawned for, as the device
+ * manager named it. A unit alone does not identify a disk -- it is
+ * backend-local -- so both halves are needed to find the right server. */
+static uint8_t g_requested_backend = (uint8_t)BLOCK_BACKEND_UNKNOWN;
 
 /* In-flight op pool + FIFO of queued (not-yet-active) op indices. */
 static fat_op_ctx_t g_ops[FAT_MAX_INFLIGHT];
@@ -80,6 +84,65 @@ static int32_t fat_parse_requested_unit(void) {
         return -1;
     }
     return (int32_t)value;
+}
+
+/* Map the device manager's DRIVER name to the backend it stands for. The names
+ * are the drivers' manifest package names, the same spelling a rule's DRIVER==
+ * uses and block_backend_from_name() in the rule parser maps. */
+static uint8_t fat_backend_from_name(const char* name) {
+    if (!name) {
+        return (uint8_t)BLOCK_BACKEND_UNKNOWN;
+    }
+    if (strncmp(name, "ata", 3) == 0 && (name[3] == '\0' || name[3] == ' ')) {
+        return (uint8_t)BLOCK_BACKEND_ATA;
+    }
+    if (strncmp(name, "virtio-blk", 10) == 0 && (name[10] == '\0' || name[10] == ' ')) {
+        return (uint8_t)BLOCK_BACKEND_VIRTIO_BLK;
+    }
+    return (uint8_t)BLOCK_BACKEND_UNKNOWN;
+}
+
+static uint8_t fat_parse_requested_backend(void) {
+    char args[64];
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
+        return (uint8_t)BLOCK_BACKEND_UNKNOWN;
+    }
+    return fat_backend_from_name(fat_find_token_value(args, "driver="));
+}
+
+/* Resolve the block server for this instance's disk through the `block` service
+ * CLASS, matching the instance that encodes its (backend, unit).
+ *
+ * Resolution is by class rather than by the plain `block` NAME because a name
+ * resolves to one provider for the whole system: it could only ever reach the
+ * ATA driver, so no rule could mount a filesystem on any other backend however
+ * well that backend worked. The instance is derived from the pair, so the same
+ * disk answers every boot regardless of probe order.
+ *
+ * Returns the provider's endpoint, or -1 while it has not registered yet -- the
+ * caller retries, because a filesystem may well be spawned before its disk's
+ * driver has finished coming up. */
+static int32_t fat_lookup_block_server(int32_t reply_endpoint, uint32_t instance,
+                                       int32_t request_id) {
+    svc_class_entry_t providers[8];
+    int32_t n = wasmos_svc_lookup_class(g_proc_endpoint,
+                                        reply_endpoint,
+                                        "block",
+                                        providers,
+                                        (int32_t)(sizeof(providers) / sizeof(providers[0])),
+                                        request_id);
+    if (n < 0) {
+        return -1;
+    }
+    if (n > (int32_t)(sizeof(providers) / sizeof(providers[0]))) {
+        n = (int32_t)(sizeof(providers) / sizeof(providers[0]));
+    }
+    for (int32_t i = 0; i < n; ++i) {
+        if (providers[i].instance == instance) {
+            return (int32_t)providers[i].endpoint;
+        }
+    }
+    return -1;
 }
 
 /* Send a reply, treating a full receiver queue as backpressure rather than
@@ -378,9 +441,10 @@ static void fat_mount_bringup(void) {
 /* Driver entry point: acquire a block server, mount the volume, register under
  * the fs.backend class, then run the reactor loop forever.
  *
- * The block server is discovered through svc_lookup; that discovery loop spins
- * with a yield until a "block" provider registers, so this call does not return
- * until one exists.
+ * The block server is discovered through the `block` service CLASS, by the
+ * instance encoding the (backend, unit) the device manager spawned this
+ * instance for; that discovery loop spins with a yield until that disk's driver
+ * registers, so this call does not return until it exists.
  *
  * Mounting happens BEFORE the ready notification, so the driver never advertises
  * a volume it has not parsed. On success this does not return: the reactor loop
@@ -405,8 +469,19 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     }
 
     g_requested_unit = fat_parse_requested_unit();
-    for (;;) {
-        block_endpoint = wasmos_svc_lookup(g_proc_endpoint, reply_endpoint, "block", 1);
+    g_requested_backend = fat_parse_requested_backend();
+    if (g_requested_backend == (uint8_t)BLOCK_BACKEND_UNKNOWN || g_requested_unit < 0) {
+        /* Without both halves there is no disk to look for. The device manager
+         * always sends them; a spawn that did not is a configuration error, and
+         * guessing a backend would mount the wrong volume. */
+        fat_log("startup args missing driver= or unit=; cannot resolve a block device\n");
+        fat_stall();
+    }
+    /* The class instance that names this disk: (backend << 8) | unit. */
+    const uint32_t instance =
+        ((uint32_t)g_requested_backend << 8) | ((uint32_t)g_requested_unit & 0xFFu);
+    for (int32_t attempt = 0;; ++attempt) {
+        block_endpoint = fat_lookup_block_server(reply_endpoint, instance, 1 + attempt);
         if (block_endpoint > 0) {
             break;
         }

@@ -999,6 +999,13 @@ linked feature documents for rationale and rollout plans.
   (`driver=<name> unit=<n>`), not about the rule's pattern. A wildcard rule has
   no unit of its own, and passing the pattern handed the driver 0xFF as a unit
   number.
+- A match is reported by whichever of the two paths made it: the live publish,
+  and the re-scan of already-registered devices that runs when a later rule set
+  loads. Both matter because the override rules live on `/boot` and cannot load
+  until the boot volume is mounted, so a second disk publishing inside that
+  window is matched only by the re-scan. Reporting from the publish path alone
+  made that outcome silent while the mount itself succeeded, which reads in a
+  boot log as a rule that never matched.
 - One matcher decides whether a block rule applies to a device. There were two --
   a walk over known devices and a copy inside the publish handler -- and the
   publish copy, which is the path a live device takes, never compared the

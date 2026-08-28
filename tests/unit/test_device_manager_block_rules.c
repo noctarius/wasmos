@@ -71,7 +71,9 @@ static void check(int cond, const char* what) {
     g_checks++;
     if (!cond) {
         g_failures++;
-        report("  [FAIL] "); report(what); report("\n");
+        report("  [FAIL] ");
+        report(what);
+        report("\n");
     }
 }
 
@@ -134,8 +136,7 @@ static void rescan_after_late_rules_reports_the_match(void) {
     /* The second disk arrives while only the bootstrap rules exist. */
     publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 1u);
 
-    check(!out_has("driver=ata unit=1"),
-          "a device with no rule yet is not reported as matched");
+    check(!out_has("driver=ata unit=1"), "a device with no rule yet is not reported as matched");
 
     /* /boot is mounted; the override set naming unit 1 loads and the devices
      * already registered are re-scanned. */

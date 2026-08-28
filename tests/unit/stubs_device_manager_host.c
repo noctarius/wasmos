@@ -40,14 +40,8 @@ int32_t wasmos_ipc_select_wait_timeout(int32_t sel, int32_t timeout_ms) {
     return -1;
 }
 
-int32_t wasmos_ipc_send(int32_t dest,
-                        int32_t src,
-                        int32_t type,
-                        int32_t request_id,
-                        int32_t arg0,
-                        int32_t arg1,
-                        int32_t arg2,
-                        int32_t arg3) {
+int32_t wasmos_ipc_send(int32_t dest, int32_t src, int32_t type, int32_t request_id, int32_t arg0,
+                        int32_t arg1, int32_t arg2, int32_t arg3) {
     (void)dest;
     (void)src;
     (void)type;

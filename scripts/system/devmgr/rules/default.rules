@@ -1,16 +1,15 @@
 # WASMOS device-manager persistent rules (boot FAT)
 # Loaded from /boot/system/devmgr/rules after storage is online.
 # Entries here are intended to override or extend initfs bootstrap rules.
-# /user is mounted from the PARTITION, not the disk holding it. ATTR{name} is
-# the canonical id the partition manager published, which is positional --
-# `block:ata:1p1` is the first partition of ATA unit 1 -- because a QEMU vvfat
-# disk carries a classic MBR with no GUID and no label to name it by. A GPT
-# volume is named by ATTR{partlabel} or ATTR{partuuid} instead and does not
-# depend on where it sits in the table.
+# /user is the GPT partition LABELLED "user", wherever it is. The rule names no
+# disk, no unit, no backend and no position in the table: move the image to
+# another controller, add a disk ahead of it, repartition around it, and the
+# volume still mounts here because the label travels with the volume.
 #
-# The rule must be a partition rule: SUBSYSTEM=="partition" is what keeps it off
-# the whole disk, which reports the same backend and unit as everything on it.
-SUBSYSTEM=="partition", ATTR{name}=="block:ata:1p1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
+# SUBSYSTEM=="partition" is not decoration. A partition reports the same backend
+# and unit as the disk beneath it, so it is the subsystem that keeps a partition
+# rule off whole disks and a disk rule off partitions.
+SUBSYSTEM=="partition", ATTR{partlabel}=="user", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
 # The partition manager names no disk: it enumerates the `block` class itself and
 # republishes every partition it finds as a block device in its own right. One
 # instance serves them all.

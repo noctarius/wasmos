@@ -22,7 +22,7 @@ class QemuConfig:
     ovmf_code: str
     ovmf_vars: str
     esp_dir: str
-    userfs_dir: str = ""
+    userfs_image: str = ""
     nographic: bool = True
     display: str = ""
     isolate_esp: bool = False
@@ -48,11 +48,11 @@ class QemuConfig:
     extra_args: tuple = ()
 
     def __post_init__(self) -> None:
-        if self.userfs_dir:
+        if self.userfs_image:
             return
-        env_userfs = os.environ.get("WASMOS_USERFS", "")
+        env_userfs = os.environ.get("WASMOS_USERFS_IMAGE", "")
         if env_userfs:
-            self.userfs_dir = env_userfs
+            self.userfs_image = env_userfs
 
 
 def _read_cmake_cache(cache_path: str) -> dict:
@@ -181,6 +181,22 @@ def _resolve_kernel_addrs(kernel, addrs):
         return {}
 
 
+def default_userfs_image(esp_dir: str = "", explicit: str = "") -> str:
+    """Path to the /user GPT image, or "" when there is none to attach.
+
+    Resolution order: an explicit argument, then WASMOS_USERFS_IMAGE, then
+    `user.img` beside the ESP -- which is where the build writes it, and which
+    keeps a runner launched against one configuration's tree from attaching
+    another's disk. Returns "" when nothing resolves to a file that exists: a
+    suite that never touches /user still runs, and one that does fails on the
+    mount it cares about rather than on a QEMU argument.
+    """
+    candidate = explicit or os.environ.get("WASMOS_USERFS_IMAGE", "")
+    if not candidate and esp_dir:
+        candidate = os.path.join(os.path.dirname(os.path.abspath(esp_dir)), "user.img")
+    return candidate if candidate and os.path.exists(candidate) else ""
+
+
 def default_build_dir(build_dir: str = "build") -> str:
     """The build tree a test belongs to.
 
@@ -208,9 +224,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     ovmf_code = os.environ.get("WASMOS_OVMF_CODE", cache.get("OVMF_CODE", ""))
     ovmf_vars = os.environ.get("WASMOS_OVMF_VARS", cache.get("OVMF_VARS", ""))
     esp_dir = os.environ.get("WASMOS_ESP", os.path.join(build_dir, "esp"))
-    source_dir = cache.get("CMAKE_HOME_DIRECTORY", os.getcwd())
-    userfs_default = os.path.join(source_dir, "userfs")
-    userfs_dir = os.environ.get("WASMOS_USERFS", userfs_default)
+    userfs_image = default_userfs_image(esp_dir)
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
     # On by default: the monitor is what makes dump_stall_state possible, and a
     # stall that produces no diagnosis is the failure mode this is here to end.
@@ -229,7 +243,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         ovmf_code=ovmf_code,
         ovmf_vars=ovmf_vars,
         esp_dir=esp_dir,
-        userfs_dir=userfs_dir,
+        userfs_image=userfs_image,
         isolate_esp=isolate_esp,
         enable_monitor=enable_monitor,
         monitor_socket=monitor_socket,
@@ -271,8 +285,10 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.ovmf_vars:
         cmd += ["-drive", f"if=pflash,format=raw,file={cfg.ovmf_vars}"]
     cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.esp_dir}"]
-    if cfg.userfs_dir:
-        cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.userfs_dir}"]
+    if cfg.userfs_image:
+        # A raw GPT image, not a `fat:rw:` directory: the /user volume is a real
+        # partition with a label, which is what its mount rule matches on.
+        cmd += ["-drive", f"format=raw,file={cfg.userfs_image}"]
     if cfg.nic_model and cfg.nic_model != "none":
         # Give the NIC a stable device id so the monitor can target it with
         # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.
@@ -1191,15 +1207,13 @@ def main():
     parser.add_argument("--ovmf-code", default="")
     parser.add_argument("--ovmf-vars", default="")
     parser.add_argument("--esp", default="")
-    parser.add_argument("--userfs", default="")
+    parser.add_argument("--userfs-image", dest="userfs_image", default="")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--smp", type=int, default=1)
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
-        userfs = args.userfs or os.environ.get(
-            "WASMOS_USERFS", os.path.join(os.getcwd(), "userfs")
-        )
+        userfs = default_userfs_image(args.esp, args.userfs_image)
         cfg = QemuConfig(
             args.ovmf_code, args.ovmf_vars, args.esp, userfs, smp_count=args.smp
         )

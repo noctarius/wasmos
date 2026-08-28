@@ -46,9 +46,16 @@ offset 0x1BE:  80 01 01 00 06 …     bootable, type 0x06 (FAT16), start LBA 63
 offset 0x1FE:  55 aa
 ```
 
-Both `/boot` and `/user` are that shape. UEFI does not force GPT here — OVMF
+`/boot` is that shape, and stays that shape: UEFI does not force GPT here — OVMF
 boots the removable-media path `\EFI\BOOT\BOOTX64.EFI` off an MBR FAT partition
-— and vvfat has no GPT mode, so this is not a setting that can be changed.
+— and vvfat has no GPT mode, so a directory-backed drive cannot carry a GPT.
+
+`/user` is not directory-backed. It is a raw image built by
+`scripts/make_gpt_image.py` (protective MBR, GPT header and backup, one FAT16
+volume labelled `user`), attached with `-drive format=raw,file=<build>/user.img`.
+The image is built from `userfs/` at build time, so files still travel from the
+host into the volume; what is lost is live read-write directory sharing, which
+nothing depended on.
 
 The rule file must therefore keep working for MBR volumes while a disk that
 carries a real GPT describes its own mounts.
@@ -175,11 +182,15 @@ For rule matching, strongest to weakest:
 | 3    | `<disksig>-nn`       | MBR             | reordering                      |
 | 4    | positional `ata0p1`  | all             | nothing but a stable topology   |
 
-Rank 3 is degenerate in this environment: vvfat hardcodes the disk signature
-`0xBE1AFDFA`, identical for every directory it serves, so both `/boot` and
-`/user` would report `be1afdfa-01`. Under vvfat, rank 4 is the only identity
-that distinguishes them. It is still reported, because it is meaningful on a
-physical MBR disk.
+Rank 3 is degenerate under vvfat, which hardcodes the disk signature
+`0xBE1AFDFA` for every directory it serves — so a second vvfat disk would report
+`be1afdfa-01` exactly as the first does. On a vvfat disk rank 4 is the only
+identity that distinguishes anything, which is why `/boot` is still named
+positionally. It is reported regardless, because it is meaningful on a physical
+MBR disk.
+
+`/user` reaches rank 2: its GPT carries the label `user`, and its rule names
+that and nothing else.
 
 #### Wire changes
 
@@ -473,16 +484,23 @@ disk, and every existing mount is unchanged.
   text parsing, raised caps.
 - `device_manager.c`: partition rules drive the filesystem spawn; mount name and
   window passed as startup arguments.
-- `fs_fat`: accept the window, drop `fat_try_parse_mbr`, drop the mount-name
-  query round trip.
-- Rule files rewritten: no `DRIVER==`/`ATTR{unit}==` for filesystems.
-- Optionally convert `/user` from vvfat to a real GPT image — `userfs/` holds
-  only `.gitkeep` and no test reads it from the host, so nothing depends on
-  live-directory semantics. This is the cheapest way to get a genuine GPT onto
-  the boot path rather than only into a test fixture.
+- `fs_fat`: take the mount point and the device's kind from spawn rather than
+  looking, drop the mount-name query round trip.
+- `/user` converted from vvfat to a real GPT image built by
+  `scripts/make_gpt_image.py`, so a genuine GPT is on the boot path rather than
+  only in a test fixture.
+- `/user`'s rule rewritten to `SUBSYSTEM=="partition", ATTR{partlabel}=="user"`.
 
 **Done when** a GPT partition mounts at the path its label names, with no rule
 naming a disk.
+
+**Landed.** `/boot` keeps a whole-disk rule, and with it the one caller of
+`fat_try_parse_mbr`: the partition manager is spawned from the BOOT rules, which
+cannot load until `/boot` is mounted, so `/boot` cannot be mounted from a
+partition the partition manager published. Closing that circle means moving the
+partition manager into initfs and teaching it to probe disks that register after
+it starts — it enumerates the `block` class exactly once today, which is also why
+a disk whose driver comes up late is never probed. Tracked in Open Items.
 
 ---
 
@@ -532,3 +550,12 @@ way the virtio-blk build already is.
 - Whether the ESP itself should stop being vvfat. It would remove MBR support
   entirely, at the cost of the instant-rebuild ergonomics that `fat:rw:` gives
   across every QEMU target.
+- The partition manager enumerates the `block` class once, at bring-up. A disk
+  whose driver registers afterwards is never probed and its partitions never
+  appear. Subscribing to the class instead is also the prerequisite for running
+  the partition manager from initfs, which is what would let `/boot` mount from
+  a partition and retire `fat_try_parse_mbr`.
+- Two partitions of one disk register the same `fs.backend` class instance,
+  because `FSMGR_BACKEND_INSTANCE` packs `(kind, unit)` and a partition reports
+  its disk's unit. No shipped configuration mounts two volumes from one disk, so
+  it is latent; the block fingerprint is the identity that would fix it.

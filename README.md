@@ -269,7 +269,7 @@ Key policy/runtime notes:
 - `src/utils/`: OS-provided utilities/tools
 - `src/libc/`: shared user-space libc + shims
 - `examples/`: sample/smoke apps
-- `userfs/`: host-backed user filesystem directory attached as a second FAT drive in QEMU
+- `userfs/`: contents of the `/user` volume, built into a GPT disk image (`scripts/make_gpt_image.py`) and attached as a second drive in QEMU
 - `scripts/initfs/devmgr/rules/`: bootstrap device-manager rules packaged into initfs at `/init/devmgr/rules`
 - `scripts/system/devmgr/rules/`: runtime override rules copied to ESP at `/boot/system/devmgr/rules`
 - `tests/`: QEMU-driven tests
@@ -329,7 +329,7 @@ sudo qemu-system-x86_64 -m 512M -serial mon:stdio \
   -drive if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-x86_64-code.fd \
   -nographic \
   -drive format=raw,file=fat:rw:build/esp \
-  -drive format=raw,file=fat:rw:/Volumes/git/wasmos/userfs \
+  -drive format=raw,file=/Volumes/git/wasmos/build/user.img \
   -netdev vmnet-bridged,id=net0,ifname=en0 \ # depends on your operating system
   -device virtio-net-pci,netdev=net0,id=nic0 \
   -device virtio-rng-pci

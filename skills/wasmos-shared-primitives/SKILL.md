@@ -1,6 +1,6 @@
 ---
 name: wasmos-shared-primitives
-description: Read the ownership/lifetime contract of a shared WASMOS primitive BEFORE calling it. Triggers on the SYMBOL you are about to type, not on the kind of task you are doing - transfer buffers and DMA borrows (xfer_buffer_*, buffer_*, dma_*_borrow, shmem_*), IPC endpoints and select sets (ipc_create_endpoint, ipc_select_*), service classes (wasmos_svc_register_class / _lookup_class), coroutines and futures (wasmos_future_*, async_initialize), and kernel object tables (idtable_*). Maps each to the architecture document that OWNS its contract, states the invariants that decide a design, and names the signals that mean you are using one the wrong way round. Use before the first call to any of them, and whenever you are about to add bookkeeping because a primitive keeps returning an error.
+description: Read the ownership/lifetime contract of a shared WASMOS primitive BEFORE calling it. Triggers on the SYMBOL you are about to type, not on the kind of task you are doing. Transfer buffers and DMA borrows - wasmos_xfer_buffer_acquire/borrow/reborrow/unborrow/release/read/write, wasmos_buffer_borrow, wasmos_block_buffer_phys/copy/write, wasmos_dma_map_borrow, wasmos_shmem_map, the bare xfer_buffer_* / buffer_* / dma_*_borrow / shmem_* externs the generated Zig and Rust bindings use, and the Zig wrappers bufferAcquire / bufferBorrow / bufferRead / bufferWrite / bufferRelease / blockBufferPhys. IPC endpoints and select sets - wasmos_ipc_create_endpoint, wasmos_ipc_select_one/add/wait, wasmos_ipc_send/recv/call, and the bare ipc_create_endpoint / ipc_select_* externs. Service classes - wasmos_svc_register_class, wasmos_svc_lookup_class, wasmos_svc_subscribe_class, and the Zig lookupClass / subscribeClass / registerService. Coroutines and futures - wasmos_future_*, wasmos_wasm_coroutine_*, async_initialize, wasmos_sys_wasm_async_run. Kernel object tables - idtable_*. Maps each to the architecture document that OWNS its contract, states the invariants that decide a design, and names the signals that mean you are using one the wrong way round. Use before the first call to any of them, and whenever you are about to add bookkeeping because a primitive keeps returning an error.
 ---
 
 # WASMOS: Shared Primitive Contracts
@@ -42,13 +42,20 @@ Before the first call to any primitive below, read the document that owns it.
 
 | Symbol you are about to use | Contract |
 |---|---|
-| `xfer_buffer_*`, `buffer_*`, `dma_map_borrow`, `dma_sync_borrow`, `shmem_*` | `docs/architecture/12-dma-transfers.md` §"The object / owner / borrow model (READ THIS FIRST)" |
-| `ipc_create_endpoint`, `ipc_select_*`, endpoint lifetime, message args | `docs/architecture/09-process-and-ipc.md` |
-| `wasmos_svc_register_class`, `wasmos_svc_lookup_class`, `svc_subscribe_class` | `docs/architecture/09-process-and-ipc.md` §"Class-Based Discovery" |
-| `wasmos_future_*`, `wasmos_*coroutine*`, `async_initialize`, event loops | `docs/architecture/32-coroutines-futures-promises.md` |
+| `wasmos_xfer_buffer_*`, `wasmos_buffer_borrow`, `wasmos_block_buffer_*`, `wasmos_dma_*_borrow`, `wasmos_shmem_*` — and the bare `xfer_buffer_*` / `dma_*_borrow` externs in the generated Zig and Rust bindings, and the Zig wrappers `bufferAcquire` / `bufferBorrow` / `bufferRead` / `bufferWrite` / `bufferRelease` | `docs/architecture/12-dma-transfers.md` §"The object / owner / borrow model (READ THIS FIRST)" |
+| `wasmos_ipc_create_endpoint`, `wasmos_ipc_select_*`, `wasmos_ipc_send` / `_call`, the bare `ipc_*` externs, endpoint lifetime, message args | `docs/architecture/09-process-and-ipc.md` |
+| `wasmos_svc_register_class`, `wasmos_svc_lookup_class`, `wasmos_svc_subscribe_class`, Zig `lookupClass` / `subscribeClass` / `registerService` | `docs/architecture/09-process-and-ipc.md` §"Class-Based Discovery" |
+| `wasmos_future_*`, `wasmos_wasm_coroutine_*`, `async_initialize`, `wasmos_sys_wasm_async_run`, event loops | `docs/architecture/32-coroutines-futures-promises.md` |
 | `idtable_*` | `docs/architecture/35-kernel-object-tables.md` |
 | `ringbuf_*` | `src/drivers/include/wasmos/ringbuf.h` is the authority; `docs/architecture/22-networking-virtio-net-and-stack.md` describes the socket data-plane use |
 | Packed error codes, opcodes, generated constants | `docs/architecture/34-abi-idl-and-error-model.md` + the `wasmos-add-*` skills |
+
+One primitive appears under several spellings on purpose. A call site reaches
+it as `wasmos_xfer_buffer_borrow` from C, as a bare `xfer_buffer_borrow` extern
+from the generated Zig and Rust bindings, and as `bufferBorrow` from the Zig
+driver shim — and a trigger that lists only one of the three fires on the
+language that happens to have been written first. A new row should carry every
+spelling a caller can type.
 
 A primitive missing from this table still has a contract. Find its document
 through `docs/ARCHITECTURE.md` before calling it, and add the row.
@@ -90,7 +97,7 @@ The client-owned shape has none of those problems and needs no bookkeeping:
 
 ```c
 bid = wasmos_xfer_buffer_acquire(sizeof(record));          /* client owns it   */
-wasmos_xfer_buffer_borrow(server_ep, bid, GRANT_WRITE);    /* lend for one op  */
+wasmos_xfer_buffer_borrow(server_ep, bid, WASMOS_BUFFER_GRANT_WRITE); /* lend it  */
 wasmos_ipc_send(server_ep, reply, OP_REQ, id, arg0, bid, 0, 0);
 /* ... server writes into it and replies ... */
 wasmos_xfer_buffer_read(bid, &record, sizeof(record), 0);

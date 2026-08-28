@@ -1313,6 +1313,17 @@ linked feature documents for rationale and rollout plans.
   awaits already in place. File DATA keeps writing straight to its block (§17):
   the block a write lands in, the block an inline promotion moves bytes into, and
   the tail a truncation zeroes are all data.
+- Phase 4 (§23) is inline data plus fsck. Inline data is implemented and in use
+  -- a small file lives in its object record and is promoted to extents when it
+  outgrows one. `fsck` does not exist, in any form, and is the only outstanding
+  phase-4 item. It is load-bearing rather than optional now that the driver
+  records `WFS_STATE_ERROR`: §4 defines that state as "mount read-only and run
+  fsck", so an ERROR volume stays read-only until one exists.
+- Formatting is HOST-ONLY (`src/tools/mkfs_wfs`). A running guest can mount,
+  read, write and recover a WFS volume but cannot create one. The sink in
+  `wfs_mkfs.c` is shared by the host tool and the unit suites, not by a guest:
+  its callbacks are synchronous, where a guest would have to await a BLOCK write
+  and an FS read. Both gaps are tracked in `docs/TASKS.md`.
 - The transaction is opened and closed by the OPERATION, never by the participant
   it composes. `wfs_txn_open`/`wfs_txn_close` wrap the five namespace operations
   inside `wfs_namespace.c`, and `wfs_write_run`/`wfs_truncate_run` wrap the other

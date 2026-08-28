@@ -11,6 +11,14 @@
  * Emission goes through a sink rather than to a file, so the same code path
  * produces the images the host tool writes and the in-memory volumes the unit
  * tests validate. Nothing here opens a file or allocates the volume.
+ *
+ * The sink does NOT make this reusable by a guest-side mkfs.wfs, and it is worth
+ * saying so here because it looks as though it should. Both callbacks are
+ * synchronous; in a guest, writing a block is a BLOCK request and reading source
+ * content is an FS request, and each must be awaited from a coroutine rather
+ * than returned inline. What would port is the planning and serialization above
+ * -- layout arithmetic, record packing, checksum seeding -- which has to be
+ * split out of the emission loop first. Tracked in docs/TASKS.md.
  */
 #ifndef WFS_MKFS_H
 #define WFS_MKFS_H

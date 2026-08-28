@@ -880,6 +880,46 @@ tail.
   negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH` -- and
   `wfs_txn_commit_task` awaits one at §14's steps 2, 4 and 6, with §21's replay
   awaiting one before its tail retires the replayed writes.
+- [ ] [FEATURE][P2] A userland `mkfs.wfs`, so the OS can create a volume and not
+  only mount one. Formatting today is a HOST tool (`src/tools/mkfs_wfs`, run on
+  the developer's machine to build `build/wfs.img`); a running guest cannot
+  format a second disk at all.
+
+  The port boundary is already known and is the reason this was deferred rather
+  than overlooked. `wfs_mkfs.c` emits through a sink instead of a `FILE*`, which
+  is what lets the host tool and the unit suites share one code path -- but that
+  is NOT enough for the guest: both sink callbacks are synchronous, and in a
+  guest writing a block is a BLOCK request and reading source content is an FS
+  request, each of which must be awaited from a coroutine rather than returned
+  inline. What ports unchanged is the planning and serialization -- layout
+  arithmetic, record packing, checksum seeding -- and splitting that out of the
+  emission loop is the first step, not an afterthought.
+
+  Shape: a one-shot CLI under `src/utils/` (`skills/wasmos-system-util`) over the
+  extracted planner, driving the block device it is pointed at. Needs a story for
+  which device it is allowed to write to, since formatting the wrong unit
+  destroys a mounted volume.
+
+- [ ] [FEATURE][P2] `fsck` for WFS (spec §24), the last outstanding phase-4 item.
+  Phase 4's other item, inline data, is implemented and in use.
+
+  This is now load-bearing rather than merely nice to have. The driver records
+  `WFS_STATE_ERROR` on disk when it detects an inconsistency, and §4 defines that
+  state as "mount read-only and run fsck". With no fsck, an ERROR volume is
+  permanently read-only -- a one-way door that only a reformat escapes.
+
+  §24 lists the checks: verify the superblock and take the highest valid
+  generation, verify the group descriptor table, scan the object table, validate
+  extents and tree nodes, validate directory strides and `.`/`..`, rebuild the
+  allocation bitmaps, recompute the free counters, validate link counts, and
+  clear the state to `WFS_STATE_CLEAN`. The bitmaps are authoritative and the
+  counters derived, so a mismatch is repaired FROM the bitmap, never the reverse.
+
+  Host-side first is the cheap order: it reuses `wfs_format.h` and the existing
+  image fixtures, and gives the guest-side version something to be checked
+  against. A guest-side one hits the same synchronous-sink boundary as
+  `mkfs.wfs` above.
+
 - [ ] [ENHANCEMENT][P3] Let a WFS extent tree exceed ONE interior level. A tree
   grows to an interior root over N leaves (depth 1), which reaches roughly 255 x
   170 extents at a 4096-byte block; a second interior level is not implemented and

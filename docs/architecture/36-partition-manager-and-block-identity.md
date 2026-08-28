@@ -1,11 +1,9 @@
 ## Partition Manager and Block Device Identity
 
-> **Documentation status: Mixed reference and proposal.** §1 (block identity) is
-> implemented and is the current baseline. §2 (the partition manager) and §3
-> (mount policy) are design proposals; no partition table is parsed yet.
-> It describes the descriptor-based block identity model, the partition manager
-> service that publishes partitions as block devices, and the mount policy that
-> follows from both.
+> **Documentation status: Mixed reference and proposal.** §1 (block identity) and
+> §2 (the partition manager) are implemented and are the current baseline. §3
+> (mount policy from the partition) is a design proposal: partitions are
+> published as block devices, but nothing mounts a filesystem on one yet.
 
 **Sources this proposal changes**: `src/services/device_manager/device_manager.c`,
 `src/services/device_manager/device_manager_rules.c`, `src/drivers/ata/ata.c`,
@@ -226,7 +224,7 @@ physical MBR disk.
 
 ---
 
-### 2. The Partition Manager
+### 2. The Partition Manager — implemented
 
 A single system-wide service, written in Zig, spawned once by a rule that names
 no disk:
@@ -238,26 +236,27 @@ SUBSYSTEM=="block", RUN+="system/drivers/partition_manager.wap"
 It subscribes to the `block` service class, and for each disk that appears:
 reads the table, and either publishes partitions or gets out of the way.
 
-#### Endpoint fan-out
+#### One endpoint, not a fan-out
 
-The service holds one endpoint per relationship, not one endpoint total. Two
-independent reasons force this, and one budget bounds it:
+An earlier revision of this section gave the service one endpoint per disk
+downstream and one per published partition upstream. Both halves of that
+reasoning are now obsolete, and the design collapsed to a SINGLE endpoint:
 
-- **Downstream, one endpoint per disk.** `ata_assign_unit_for_source` resolves
-  the unit from the *source endpoint* and `BLOCK_IPC_READ_REQ` carries no unit
-  field, so a client that has claimed unit 0 can never address unit 1 on the
-  same connection. Distinct endpoints make one process look like distinct
-  clients, so ATA needs no change. virtio-blk has no claim map and is
-  indifferent.
-- **Upstream, one endpoint per published partition.** A block request carries no
-  partition field either, so the endpoint it arrives on *is* the partition
-  selector. The alternative — adding a partition argument to the block
-  opcodes — would change the contract for every backend to serve one client.
-- **Budget.** `IPC_ENDPOINT_PER_CONTEXT_MAX` is 64. Allowing 4 disks × 8
-  partitions plus a command, reply and notify endpoint is 39. The caps are
-  explicit constants and exceeding one is a logged refusal, not a silent drop.
+- Downstream needed per-disk endpoints because `ata_assign_unit_for_source`
+  resolved the drive from the sender. The ATA driver no longer binds a client
+  endpoint to a drive at all.
+- Upstream needed per-partition endpoints because a transfer request could not
+  say which device it meant, so the endpoint it arrived on had to be the
+  selector. `wasmos_block_request_t` names its `target`.
 
-`ipc_select_add` watches the whole set in one loop.
+So every partition is served on the one endpoint the async runtime owns, every
+disk is reached from it, and the target field does the work an endpoint used to
+do. The `IPC_ENDPOINT_PER_CONTEXT_MAX` budget stops being a consideration.
+
+This is worth recording rather than quietly rewriting: the fan-out was a real
+design forced by two limitations, and removing the limitations removed the
+design. A reader who finds per-endpoint bookkeeping in a block server should
+suspect the same thing.
 
 #### Probe chain
 
@@ -439,7 +438,7 @@ Two things the plan did not anticipate, both recorded above: `IDENTIFY_REQ` arg0
 had to become the class instance rather than a unit, and a descriptor borrow is
 per-context rather than per-endpoint.
 
-#### Phase 2 — The partition manager
+#### Phase 2 — The partition manager (done)
 
 - `src/drivers/partition_manager/` — Zig service, `linker.metadata`,
   `CMakeLists.txt`; bootstrap entry in `scripts/initfs.toml`.

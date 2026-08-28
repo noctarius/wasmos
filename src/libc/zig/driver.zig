@@ -699,6 +699,32 @@ pub fn registerService(proc_endpoint: i32, service_endpoint: i32, name: []const 
     return reply.arg0;
 }
 
+// --- block buffer ------------------------------------------------------------
+
+/// Physical address of this process's per-process 8 KiB block buffer, allocated
+/// on first use. It is named by PHYSICAL address because a block backend points
+/// a bus-master device straight at it, so nothing is copied on either side.
+///
+/// Returns null on any of the block_buffer_phys failure codes; the value shares
+/// one signed word with them, so a negative result is never an address.
+pub fn blockBufferPhys() ?u32 {
+    const phys = abi.block_buffer_phys();
+    return if (phys < 0) null else @intCast(phys);
+}
+
+/// Copy `out.len` bytes out of the block buffer at `phys`, starting at `offset`,
+/// into `out`. Needed because a device wrote those bytes by physical address and
+/// this process can only reach them through the host call.
+pub fn blockBufferCopy(phys: u32, out: []u8, offset: u32) bool {
+    if (out.len == 0) return true;
+    return abi.block_buffer_copy(
+        @intCast(phys),
+        @intCast(@intFromPtr(&out[0])),
+        @intCast(out.len),
+        @intCast(offset),
+    ) == 0;
+}
+
 /// One resolved provider of a virtual class, mirroring `svc_class_entry_t` in
 /// `src/drivers/include/wasmos_driver_abi.h`. This is the wire layout the
 /// process manager writes, so the field order is ABI.

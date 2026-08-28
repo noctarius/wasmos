@@ -36,8 +36,12 @@
 #include "wasmos_driver_abi.h"
 
 /* Providers reported per run. A system with more block devices than this prints
- * the total and details the first BLKINFO_MAX_PROVIDERS of them. */
-#define BLKINFO_MAX_PROVIDERS 4
+ * the total and details the first BLKINFO_MAX_PROVIDERS of them.
+ *
+ * Eight rather than four because partitions are block devices in their own
+ * right: a machine with two partitioned disks already publishes more providers
+ * than a machine with two disks. */
+#define BLKINFO_MAX_PROVIDERS 8
 /* Bytes of the sector shown. One line's worth: enough to recognise a boot
  * signature or a filesystem magic, not a hex dump tool. */
 #define BLKINFO_PREVIEW_BYTES 16

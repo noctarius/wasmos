@@ -84,6 +84,12 @@ source = "chardev_server.wap"
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
+path = "system/drivers/partmgr.wap"
+source = "partition_manager.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
 path = "system/drivers/fs_fat.wap"
 source = "fs_fat.wap"
 

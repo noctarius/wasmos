@@ -143,6 +143,9 @@ set(WASM_VIRTIO_SERIAL_APP ${BUILD_DIR}/virtio_serial.wap)
 set(WASM_VIRTIO_RNG_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_rng/virtio_rng.c)
 set(WASM_VIRTIO_RNG_DRIVER_WASM ${BUILD_DIR}/virtio_rng.wasm)
 set(WASM_VIRTIO_RNG_APP ${BUILD_DIR}/virtio_rng.wap)
+set(WASM_PARTITION_MANAGER_DRIVER_SRC ${DRIVER_WASM_DIR}/partition_manager/partition_manager.zig)
+set(WASM_PARTITION_MANAGER_DRIVER_WASM ${BUILD_DIR}/partition_manager.wasm)
+set(WASM_PARTITION_MANAGER_APP ${BUILD_DIR}/partition_manager.wap)
 set(WASM_VIRTIO_BLK_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_blk/virtio_blk.zig)
 set(WASM_VIRTIO_BLK_DRIVER_WASM ${BUILD_DIR}/virtio_blk.wasm)
 set(WASM_VIRTIO_BLK_APP ${BUILD_DIR}/virtio_blk.wap)
@@ -1773,6 +1776,9 @@ if (ZIG_AVAILABLE)
   set(VIRTIO_BLK_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_BLK_APP} ${BUILD_DIR}/esp/system/drivers/virtio_blk.wap
   )
+  set(PARTITION_MANAGER_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTITION_MANAGER_APP} ${BUILD_DIR}/esp/system/drivers/partmgr.wap
+  )
 endif ()
 
 set(WASMOS_ESP_POPULATE_CMDS
@@ -1802,6 +1808,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_NET_APP} ${BUILD_DIR}/esp/system/drivers/virtio_net.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_RNG_APP} ${BUILD_DIR}/esp/system/drivers/virtio_rng.wap
   ${VIRTIO_BLK_COPY_CMD}
+  ${PARTITION_MANAGER_COPY_CMD}
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}

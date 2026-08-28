@@ -181,10 +181,12 @@ class VirtioBlkTest(unittest.TestCase):
         assert self.session is not None
         self.session.send("blkinfo")
         self.assertTrue(
-            self.session.expect(b"[blkinfo] providers=3", timeout_s=60),
-            "the block class did not hold all three disks (ATA's two drives plus "
-            "the virtio disk) — a backend did not register, or two collided on "
-            "one identity",
+            self.session.expect(b"[blkinfo] providers=5", timeout_s=60),
+            "the block class did not hold all five providers — ATA's two drives, "
+            "the virtio disk, and the one partition on each ATA drive that the "
+            "partition manager republishes. A partition IS a block device here, "
+            "so a count of three means the partition manager did not publish, "
+            "and a count above five means something registered twice",
         )
         for marker in (
             b"id=block:ata:0 driver=ata unit=0",
@@ -260,6 +262,62 @@ class VirtioBlkTest(unittest.TestCase):
                 "under the id its own driver publishes it with",
             )
 
+    def test_a_partition_is_a_block_device_with_its_own_window(self) -> None:
+        """The partition manager republishes a partition as a block device.
+
+        The ATA disks are QEMU vvfat volumes, which carry a classic MBR with one
+        FAT16 partition starting at LBA 63 — so this exercises the MBR path on a
+        real table rather than a hand-built one.
+
+        The assertion that matters is the LAST one. Reading LBA 0 of the DISK
+        returns the MBR area; reading LBA 0 of the PARTITION returns the FAT
+        volume boot record living at absolute LBA 63. Same request, same opcode,
+        different device — which is the rebase and the containment in one
+        observation. A partition manager that forwarded without rebasing would
+        return the MBR for both.
+        """
+        assert self.session is not None
+        self.session.send("blkinfo")
+        self.assertTrue(
+            self.session.expect(
+                b"id=block:ata:0p1 driver=ata unit=0 sectors=1032129", timeout_s=60
+            ),
+            "the ATA boot disk's partition was not published as a block device — "
+            "the partition manager did not run, or its MBR parse rejected a table "
+            "that vvfat really does present",
+        )
+        # A FAT volume boot record: the JMP (EB 3E 90) followed by the OEM name
+        # "MSWIN4.1", which is what vvfat writes at the partition's first sector.
+        self.assertTrue(
+            self.session.expect(
+                b"id=block:ata:0p1 lba=0 data=EB3E904D5357494E", timeout_s=30
+            ),
+            "reading LBA 0 of the partition did not return the FAT boot sector at "
+            "absolute LBA 63 — the request was forwarded without being rebased "
+            "onto the partition's window",
+        )
+
+    def test_a_disk_without_a_table_publishes_no_partition(self) -> None:
+        """A partition table is optional, and its absence is not a failure.
+
+        The virtio test disk carries a filesystem signature at LBA 0 and no table
+        at all. The partition manager must leave it alone: its own class instance
+        already serves it, so republishing anything would be inventing a volume
+        nobody wrote.
+        """
+        assert self.session is not None
+        self.session.send("blkinfo")
+        self.assertTrue(
+            self.session.expect(b"driver=virtio-blk", timeout_s=60),
+            "blkinfo did not enumerate the virtio disk",
+        )
+        disk_id = _virtio_disk_id(self.session)
+        self.assertNotIn(
+            f"id={disk_id}p".encode(),
+            self.session.buf,
+            "a partition was published for a disk that has no partition table",
+        )
+
     def test_a_mounted_ata_disk_is_readable_by_a_second_client(self) -> None:
         """A mounted disk answers both IDENTIFY and a read from another client.
 
@@ -304,9 +362,9 @@ class VirtioBlkTest(unittest.TestCase):
         assert self.session is not None
         self.session.send("blkinfo")
         self.assertTrue(
-            self.session.expect(b"[blkinfo] providers=3", timeout_s=60),
-            'the "block" class did not hold all three disks — a backend did not '
-            "reach service registration, or two collided on one instance",
+            self.session.expect(b"[blkinfo] providers=5", timeout_s=60),
+            'the "block" class did not hold all five providers — three disks plus '
+            "the partition the partition manager publishes for each ATA drive",
         )
         self.assertTrue(
             self.session.expect(f"sectors={DISK_SECTORS}".encode(), timeout_s=30),

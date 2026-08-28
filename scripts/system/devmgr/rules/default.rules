@@ -4,6 +4,18 @@
 # DRIVER names the backend; see the initfs rules for why an unqualified unit
 # is ambiguous once more than one block backend is present.
 SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
+# The partition manager names no disk: it enumerates the `block` class itself and
+# republishes every partition it finds as a block device in its own right. One
+# instance serves them all.
+#
+# Spawned from the BOOT rules rather than the initfs ones, which load only once
+# storage is online -- so every disk has registered by the time it enumerates,
+# and there is no race with a driver that had not probed yet.
+#
+# TODO: mounting /boot itself from a partition needs this in initfs instead, and
+# that makes Zig a build requirement for the boot image. Decide that with the
+# mount-policy change, not before it.
+SUBSYSTEM=="boot", RUN+="system/drivers/partmgr.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", RUN+="system/drivers/serial.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"

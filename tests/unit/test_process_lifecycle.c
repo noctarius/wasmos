@@ -1178,16 +1178,23 @@ static void s_kill_races_the_lifecycle_transitions(void) {
      * loop made progress" check. Both are set far below what any host produces and
      * exist to catch a soak that silently stopped doing anything.
      *
-     * Deliberately not "every round": how many rounds fit depends on the host's
-     * core count, not on the kernel. A reap is refused while any thread of that
-     * process is still being dispatched, and the fewer real cores back the NCPU
-     * pthreads, the longer each dispatch holds its reference in wall-clock terms,
-     * so the process table runs short in bursts. Measured on a 10-core host under
-     * 5 concurrent instances (~8x oversubscription): 148-300 rounds against
-     * 732-1501 retirements. The events stay plentiful; the round count does
-     * not. Asserting the round count would make this suite report the runner's
-     * spare capacity rather than the kernel's behaviour. */
-    CHECK(rounds_run >= KILL_ROUNDS / 4u, "the soak completed a quarter of its rounds");
+     * Deliberately not "every round", and deliberately not a FRACTION of them
+     * either: how many rounds fit depends on the host's core count, not on the
+     * kernel. A reap is refused while any thread of that process is still being
+     * dispatched, and the fewer real cores back the NCPU pthreads, the longer
+     * each dispatch holds its reference in wall-clock terms, so the process table
+     * runs short in bursts. Measured on a 10-core host under 5 concurrent
+     * instances (~8x oversubscription): 148-300 rounds against 732-1501
+     * retirements. The events stay plentiful; the round count does not.
+     *
+     * A quarter-of-the-rounds floor was tried and is what this comment already
+     * warned against: a CI runner at NCPU=8 reported rounds=73 against the
+     * required 75 -- with spawn_retries=4727 and retired=420, so the soak was
+     * working hard and the kernel was fine -- while the same commit passed on the
+     * run before. The gate then reports the runner's spare capacity, which is the
+     * one thing this suite must not assert. Rounds must therefore only witness
+     * that the loop turned at all; the event floors below carry the weight. */
+    CHECK(rounds_run > 0u, "the soak's loop turned");
     CHECK(__atomic_load_n(&g_workers_retired, __ATOMIC_ACQUIRE) >= 100u,
           "workers retired in quantity");
     CHECK(__atomic_load_n(&g_kills_landed, __ATOMIC_ACQUIRE) >= 20u,

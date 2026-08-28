@@ -2228,7 +2228,24 @@ static int process_schedule_once_impl(void) {
             } else {
                 /* Reaped mid-steal. It is already off every queue and its slot
                  * is being torn down, so it is dropped rather than re-queued --
-                 * the same disposition cpu_sched_pick_next gives stale nodes. */
+                 * the same disposition cpu_sched_pick_next gives stale nodes.
+                 *
+                 * Counted because "off every queue" is the part that needs
+                 * watching: cpu_sched_steal_pick unlinked this thread and
+                 * released its on_rq before handing it over, so the drop is
+                 * final. Correct while the owner really is gone, and a strand if
+                 * it is not -- and the two are indistinguishable after the fact,
+                 * which is why the count exists at all. */
+                uint32_t dn = sched_debug_note(SCHED_DEBUG_DISPATCH_DROPPED_STEAL_REAPED);
+                if ((dn & (dn - 1u)) == 0u) {
+                    serial_printf(
+                        "[sched] steal dropped tid=%u owner=%u state=%u cpu=%u (n=%u)\n",
+                        (unsigned)stolen->tid,
+                        (unsigned)stolen->owner_pid,
+                        (unsigned)__atomic_load_n((uint32_t*)&stolen->state, __ATOMIC_ACQUIRE),
+                        (unsigned)cpu_local()->cpu_id,
+                        (unsigned)(dn + 1u));
+                }
                 return SCHED_R_STALE;
             }
         }
@@ -2263,7 +2280,34 @@ static int process_schedule_once_impl(void) {
                                      __ATOMIC_ACQUIRE)) {
         /* Being torn down, or already claimed by another CPU that raced us to the
          * same pick. Either way it is the reap race this file already treats as
-         * normal, and nothing has been touched yet. */
+         * normal.
+         *
+         * What has ALREADY been touched: cpu_sched_pick_next (or
+         * cpu_sched_steal_pick) unlinked this thread under the queue lock and
+         * released its on_rq before returning it, so its place in the run queue
+         * is gone. Only the SLOT claim is untaken. Returning without accounting
+         * for the lost place strands a live thread permanently -- READY, on no
+         * queue, owed nothing, so no sweep can find it -- which is why this exit
+         * leaves a debt below. Counted as well, so that reading "no strand came
+         * from here" means something. */
+        uint32_t dn = sched_debug_note(SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST);
+        if ((dn & (dn - 1u)) == 0u) {
+            serial_printf("[sched] slot claim lost tid=%u owner=%u state=%u ref=%u cpu=%u "
+                          "(n=%u)\n",
+                          (unsigned)picked_tid,
+                          (unsigned)thread->owner_pid,
+                          (unsigned)__atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE),
+                          (unsigned)slot_claim,
+                          (unsigned)cpu_local()->cpu_id,
+                          (unsigned)(dn + 1u));
+        }
+        /* Hand the enqueue this pick consumed to whoever can honour it. Only for
+         * a claim held by another DISPATCH: a FROZEN slot is thread_reset_slot
+         * mid-teardown, whose thread is meant to end unqueued and whose debts it
+         * discards anyway. */
+        if (slot_claim == THREAD_SLOT_DISPATCH) {
+            sched_owe_enqueue_for_dropped_pick(thread);
+        }
         return SCHED_R_STALE;
     }
     process_t* proc = process_owner_for_thread(thread);
@@ -2656,6 +2700,84 @@ static int process_schedule_once_impl(void) {
 
 dispatch_done:
     __atomic_store_n(&thread->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
+    /* A runnable thread must leave this function reachable: linked in a ready
+     * queue, or owed an enqueue by a CPU that will perform it.  READY with
+     * neither is terminal -- nothing enqueues it again, and sched_sweep_owed_
+     * enqueues cannot recover it because that sweep is gated on the global debt
+     * counter, which a thread carrying no debt never appears in.
+     *
+     * The aborting exits above are the ones that can produce it: by the time any
+     * of them is reachable the thread has already been unlinked (cpu_sched_pick_
+     * next unlinks under the queue lock, cpu_sched_try_steal from the remote
+     * queue), and two of them hand back only the state via
+     * thread_transit(RUNNING, READY).  An exiting or ZOMBIE owner is EXCLUDED
+     * rather than reported: leaving that thread unqueued is deliberate, the
+     * reaper collects it, and re-enqueueing it would be re-picked and re-refused
+     * at process_set_running on every scheduling attempt.
+     *
+     * EVERY exit is checked, not just the aborts, because the normal exits are not
+     * self-evidently safe either: they mark the thread READY and call
+     * sched_enqueue_thread, which SKIPS the insert for a bad priority band, for a
+     * state that is not READY, or for an idle thread, and defers with a claim when
+     * another CPU still names the thread.  A skip leaves exactly this state, and
+     * gating the check on the abort codes would have looked past it.
+     *
+     * Diagnostic, not a repair: which exit strands a LIVE owner's thread is not
+     * yet known, and the correct fix differs per exit, so this names the case
+     * instead of guessing at it.  `rc` is that name. */
+    /* The owner is re-resolved from thread->owner_pid rather than taken from
+     * `proc`, and that is not defensive coding -- it is the difference between
+     * seeing this case and not.  `proc` is the process the dispatch STARTED with,
+     * and the SCHED_R_STALE exit means the slot was recycled mid-flight: `proc` is
+     * then the old process, typically already ZOMBIE, while the thread belongs to
+     * a live one.  Testing `proc` suppressed the report for exactly the exit that
+     * needed it -- a capture carrying a persistent strand showed no report at all. */
+    uint32_t stranded_owner_pid = __atomic_load_n(&thread->owner_pid, __ATOMIC_ACQUIRE);
+    process_t* stranded_owner = stranded_owner_pid ? process_find_by_pid(stranded_owner_pid) : 0;
+    /* LIVE is an allow-list, not "not ZOMBIE". process_find_by_pid returns any
+     * slot that is not UNUSED, so REAPING, DEAD and NEW reach here too, and for
+     * each of them an unqueued runnable thread is the intended outcome rather
+     * than a strand: the reaper collects it, and re-enqueueing it would have it
+     * re-picked and re-refused on every scheduling attempt. Reporting them made
+     * the counter unreadable -- it fired in runs that passed as often as in runs
+     * that did not, which is worthless to an investigation that needs a non-zero
+     * count to mean something. */
+    const uint32_t stranded_owner_state =
+        stranded_owner ? __atomic_load_n((uint32_t*)&stranded_owner->state, __ATOMIC_ACQUIRE) : 0u;
+    const int stranded_owner_live = stranded_owner_state == (uint32_t)PROCESS_STATE_READY ||
+                                    stranded_owner_state == (uint32_t)PROCESS_STATE_RUNNING ||
+                                    stranded_owner_state == (uint32_t)PROCESS_STATE_BLOCKED;
+    if (stranded_owner && !stranded_owner->is_idle && stranded_owner_live &&
+        __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_READY &&
+        !__atomic_load_n(&thread->on_rq, __ATOMIC_ACQUIRE) &&
+        !__atomic_load_n(&thread->enqueue_owed, __ATOMIC_ACQUIRE) &&
+        !__atomic_load_n(&stranded_owner->exiting, __ATOMIC_ACQUIRE)) {
+        uint32_t sn = sched_debug_note(SCHED_DEBUG_DISPATCH_LEFT_STRANDED);
+        if ((sn & (sn - 1u)) == 0u) {
+            serial_printf_unlocked(
+                "[sched] dispatch left stranded tid=%u pid=%u rc=%d cpu=%u (n=%u)\n",
+                (unsigned)thread->tid,
+                (unsigned)stranded_owner_pid,
+                (int)sched_rc,
+                (unsigned)cpu_local()->cpu_id,
+                (unsigned)(sn + 1u));
+        }
+        /* REPORT ONLY, deliberately.  This check once repaired the state here by
+         * calling sched_enqueue_thread, and the measurement said not to: it fired
+         * 28 times in a single clean boot, because a synchronous test at this point
+         * cannot separate "stranded" from "in flight" -- the only difference is
+         * elapsed time, and a waker that promotes then enqueues a statement later,
+         * or a stealer that has unlinked but not yet claimed, both present exactly
+         * this state.  Repairing them enqueued threads that needed nothing and
+         * could leave a brief ghost entry for one another CPU was about to
+         * dispatch.
+         *
+         * Recovery belongs where the state has settled, and NOT here.  What
+         * remains is the tripwire, whose `rc` names the exit -- but read its
+         * output knowing that sched_debug_note rate-limits to powers of two on a
+         * GLOBAL per-event counter, so with tens of hits per boot only about six
+         * print and the absence of a line for a given thread means nothing. */
+    }
     /* Now that the claim is gone, a detached thread this dispatch retired can be
      * released. Its refusal path is not expected to trigger here -- nothing else
      * holds this slot -- so a refusal is reported rather than retried. */
@@ -3391,8 +3513,17 @@ static int process_set_ready(process_t* proc, thread_t* thread) {
      * is executing right now -- it hands the enqueue to that thread's completion
      * path -- so reporting 0 for those suppressed the handshake and lost the wake.
      *
-     * What the conditional promotion does buy is the demotion fix: writing READY
-     * over RUNNING would lose that dispatch, so it is no longer done. */
+     * Restricting the promotion to a BLOCKED thread is what protects a live
+     * dispatch. THREAD_STATE_RUNNING *is* the exclusive dispatch claim --
+     * cpu_sched_claim_for_dispatch is a READY->RUNNING CAS -- so writing READY
+     * over it re-arms that claim, and a second CPU then wins it on a thread that
+     * is already executing: two CPUs resuming one context on one kernel stack.
+     * Nothing else guards that window. Between the claim and the publication of
+     * cpu_local()->current_thread the RUNNING state is the only record anywhere
+     * that the thread is spoken for, so sched_enqueue_thread's holder scan cannot
+     * see it and only its "state != READY, skip" test keeps an executing thread
+     * out of a ready queue. Pinned by "the dispatch claim survived the promotion"
+     * in tests/unit/test_process_lifecycle.c. */
     (void)thread_wake_if_blocked(thread->tid);
     return 1;
 }
@@ -3426,6 +3557,17 @@ static int process_set_running(process_t* proc, thread_t* thread) {
     thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
     return 1;
 }
+
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+/* Host-test entries; see process.h.  Forwarding only. */
+int process_test_set_ready(process_t* proc, thread_t* thread) {
+    return process_set_ready(proc, thread);
+}
+
+int process_test_set_running(process_t* proc, thread_t* thread) {
+    return process_set_running(proc, thread);
+}
+#endif
 
 static void process_wake_thread_joiner(process_t* owner, thread_t* exited) {
     thread_t* waiter = 0;

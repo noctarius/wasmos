@@ -1390,6 +1390,24 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
             queued++;
         }
     }
+    /* Reported here, not at the call site, because a device is matched from two
+     * paths and both must be visible: the live publish, and the re-scan of
+     * already-registered devices that runs when a later rule set is loaded. A
+     * device publishing BEFORE the override rules arrive -- which is ordinary
+     * when /boot mounts slowly -- is matched only by the re-scan, and reporting
+     * from the publish path alone made that outcome silent while the mount
+     * itself succeeded. Name the device a rule was queued FOR, since a rule
+     * matching the wrong backend is otherwise invisible until a filesystem
+     * mounts the wrong volume. */
+    if (queued > 0u) {
+        char queued_msg[96];
+        (void)snprintf(queued_msg,
+                       sizeof(queued_msg),
+                       "[device-manager] block_fs rule queued spawn driver=%s unit=%u\n",
+                       block_backend_name(rec->backend),
+                       (unsigned)rec->unit);
+        console_write(queued_msg);
+    }
     return queued;
 }
 
@@ -1495,16 +1513,6 @@ static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2
     if (queue_block_fs_rules_for_record(rec) > 0u) {
         queue_block_fs_rule_spawns();
         g_dm.need_fat = 0;
-        /* Name the device a rule was queued FOR, not just that one was. A rule
-         * matching the wrong backend is otherwise invisible until a filesystem
-         * mounts the wrong volume. */
-        char queued_msg[96];
-        (void)snprintf(queued_msg,
-                       sizeof(queued_msg),
-                       "[device-manager] block_fs rule queued spawn driver=%s unit=%u\n",
-                       block_backend_name(rec->backend),
-                       (unsigned)rec->unit);
-        console_write(queued_msg);
     }
 }
 

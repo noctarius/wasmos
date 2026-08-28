@@ -95,8 +95,18 @@ static int thread_reset_slot(thread_t* thread) {
                                      __ATOMIC_ACQUIRE)) {
         return 0; /* a dispatch owns it (or another reset is already tearing down) */
     }
+    /* Both refusals below hand the claim back before returning, and that is
+     * required, not tidiness.  Every contender for this word CASes from FREE, so a
+     * slot left FROZEN is unrecoverable in two directions at once: a later reap
+     * fails the claim instead of reaching the state check, so the deferred
+     * teardown can never be retried and thread_reap_owner burns all its passes
+     * before reporting a leftover; and the dispatcher's claim fails too, so the
+     * thread this call declined to free can never be dispatched again -- it is
+     * picked, unlinked, dropped without a re-enqueue, and stranded.  One refused
+     * reset would cost a slot out of a fixed-size table permanently. */
     uint32_t expected = __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE);
     if (expected == THREAD_STATE_RUNNING) {
+        __atomic_store_n(&thread->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
         return 0;
     }
     if (!__atomic_compare_exchange_n((uint32_t*)&thread->state,
@@ -105,6 +115,7 @@ static int thread_reset_slot(thread_t* thread) {
                                      0,
                                      __ATOMIC_ACQ_REL,
                                      __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&thread->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
         return 0; /* a dispatch claim (or another transition) won; retry later */
     }
     /* Unlink from whatever run queue still holds this thread BEFORE the slot is
@@ -149,6 +160,13 @@ static int thread_reset_slot(thread_t* thread) {
     thread->is_kernel_worker = 0;
     thread->blocking_transition = 0;
     thread->wake_pending = 0;
+    /* Scrubbed with the rest: a breadcrumb that outlived its thread would name a
+     * promotion of the PREVIOUS occupant of this slot. */
+    thread->ready_by = 0;
+    thread->rq_enq_result = SCHED_ENQ_NONE;
+    thread->rq_unlink_site = SCHED_UNLINK_NONE;
+    thread->rq_link_count = 0;
+    thread->rq_enq_by = 0;
     thread->kstack_base = 0;
     thread->kstack_top = 0;
     thread->kstack_alloc_base_phys = 0;
@@ -546,6 +564,22 @@ static int thread_transition_legal(thread_state_t from, thread_state_t to) {
  * already holding g_thread_table_lock may use it too, the two do not conflict.
  * from == to passes the legality table, so it reports success exactly when the
  * thread is already in that state and 0 when it has moved on. */
+/* Record who promoted `thread` to READY.  Stored raw and screened at PRINT time:
+ * the stall dump already resolves an address to a symbol and labels anything
+ * below the higher half, so duplicating that screen here would only add a paging
+ * dependency to every host suite that links this file.  Relaxed because nothing
+ * but the dump reads it.
+ *
+ * ONE frame, not two: __builtin_return_address(1) is rejected as unsafe
+ * (-Wframe-address) and suppressing that would trade a real fault risk for
+ * diagnostic convenience.  One frame names the primitive's caller, which is
+ * specific enough to narrow the promotion to a handful of sites; if a capture
+ * lands on a middleman such as sched_mark_ready_if_live, that middleman can
+ * record its own caller then. */
+static inline void thread_note_ready_by(thread_t* thread, void* ret0) {
+    __atomic_store_n(&thread->ready_by, (uint64_t)(uintptr_t)ret0, __ATOMIC_RELAXED);
+}
+
 int thread_transit(thread_t* thread, thread_state_t from, thread_state_t to) {
     if (!thread) {
         return 0;
@@ -554,14 +588,18 @@ int thread_transit(thread_t* thread, thread_state_t from, thread_state_t to) {
         return 0;
     }
     uint32_t expected = (uint32_t)from;
-    return __atomic_compare_exchange_n((uint32_t*)&thread->state,
-                                       &expected,
-                                       (uint32_t)to,
-                                       0,
-                                       __ATOMIC_ACQ_REL,
-                                       __ATOMIC_ACQUIRE)
-               ? 1
-               : 0;
+    if (!__atomic_compare_exchange_n((uint32_t*)&thread->state,
+                                     &expected,
+                                     (uint32_t)to,
+                                     0,
+                                     __ATOMIC_ACQ_REL,
+                                     __ATOMIC_ACQUIRE)) {
+        return 0;
+    }
+    if (to == THREAD_STATE_READY) {
+        thread_note_ready_by(thread, __builtin_return_address(0));
+    }
+    return 1;
 }
 
 /* Unconditional-target state write: moves the thread to `state` from WHATEVER it
@@ -583,6 +621,9 @@ void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t 
     if (thread_transition_legal(thread->state, state)) {
         thread->state = state;
         thread->block_reason = reason;
+        if (state == THREAD_STATE_READY) {
+            thread_note_ready_by(thread, __builtin_return_address(0));
+        }
     }
     ksync_spinlock_unlock(&g_thread_table_lock);
 }
@@ -602,6 +643,7 @@ int thread_wake_if_blocked(uint32_t tid) {
     }
     thread->state = THREAD_STATE_READY;
     thread->block_reason = THREAD_BLOCK_NONE;
+    thread_note_ready_by(thread, __builtin_return_address(0));
     ksync_spinlock_unlock(&g_thread_table_lock);
     return 1;
 }

@@ -583,4 +583,24 @@ int process_set_main_prio(uint32_t pid, uint8_t prio);
  * verification. Only meaningful before the process is first dispatched. */
 int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp);
 
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+/* Host-test entry to the static lifecycle transitions. Compiled out of the
+ * kernel entirely; it adds no behaviour of its own and no hook into any
+ * scheduler path, it only makes two functions callable from a suite that links
+ * process.c.
+ *
+ * They exist because both transitions are reachable in production ONLY through
+ * a caller that has already filtered the target's state (a BLOCKED waiter, a
+ * READY sibling), so the interleaving each one absorbs -- the target moving to
+ * another state between that filter and the transition -- cannot be produced
+ * from outside process.c on a host. Driving the transition directly asserts the
+ * same contract without a race: the caller's filter is not what makes it safe.
+ *
+ * Return values are the transitions' own: 1 = the owner permits this thread to
+ * be made runnable/dispatched, 0 = the owner raced to a terminal state and the
+ * caller must not enqueue/dispatch. NOT "did the thread's state change". */
+int process_test_set_ready(process_t* proc, struct thread* thread);
+int process_test_set_running(process_t* proc, struct thread* thread);
+#endif
+
 #endif

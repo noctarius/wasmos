@@ -2414,6 +2414,26 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_device_manager_rules
   COMMAND ${BUILD_DIR}/test_device_manager_rules
+  # The block-rule MATCHER, as opposed to the rule parser above. The suite
+  # includes device_manager.c to reach its file statics, so:
+  #   --gc-sections drops the event-loop half of that translation unit, whose
+  #     imports the block path never needs; stubs_device_manager_host.c supplies
+  #     the handful that survive collection.
+  #   -Wno-unused-function is required BY the include: statics reachable only
+  #     from the collected half are unreferenced here, which is a property of
+  #     testing one path through a TU, not a defect in the service.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -Wno-unused-function -ffunction-sections -fdata-sections -Wl,--gc-sections
+          -iquote ${SERVICES_DIR}/device_manager
+          -iquote ${LIBSYS_WASM_DIR}/include
+          -iquote ${LIBC_DIR}/include
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_block_rules.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_device_manager_host.c
+          ${SERVICES_DIR}/device_manager/device_manager_rules.c
+          -o ${BUILD_DIR}/test_device_manager_block_rules
+  COMMAND ${BUILD_DIR}/test_device_manager_block_rules
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${SERVICES_DIR}/fs_manager
           ${CMAKE_SOURCE_DIR}/tests/unit/test_fs_manager_path.c

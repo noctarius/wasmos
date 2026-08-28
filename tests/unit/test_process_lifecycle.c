@@ -809,6 +809,75 @@ static void s_a_lost_slot_claim_leaves_the_thread_reachable(void) {
     drop_transition_target(pid);
 }
 
+/* Regression: 2026-08-28-tripwire-reports-non-live-owners
+ *
+ * The stranded-dispatch tripwire decides whether an unqueued READY thread has a
+ * LIVE owner, and excluded only ZOMBIE and `exiting`. process_find_by_pid
+ * returns any slot that is not UNUSED, so PROCESS_STATE_REAPING, _DEAD and _NEW
+ * all read as live. For a reaping or dead owner, leaving the thread unqueued is
+ * deliberate -- the reaper collects it -- exactly as it is for a ZOMBIE, so each
+ * one was a false report.
+ *
+ * The cost was not a wrong log line; it was a counter that could not be read.
+ * DISPATCH_LEFT_STRANDED fired 7-14 times in runs that passed and 9 times in one
+ * that failed, which is what a tripwire looks like when it reports a state that
+ * is usually benign. An investigation into the remaining whole-session wedge has
+ * to be able to treat a non-zero count as evidence.
+ *
+ * Constructed, not raced: the owner's state is a word this test can publish, and
+ * the tripwire samples it at dispatch_done. */
+static void s_the_tripwire_ignores_a_reaping_owner(void) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* t = 0;
+    process_t* proc = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+
+    if (process_spawn("reaping-target", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a target");
+        return;
+    }
+    if (process_thread_spawn_worker_internal(pid, "reaping-worker", sibling_worker, 0, &tid) != 0) {
+        CHECK(0, "spawned a worker");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    t = thread_get(tid);
+    proc = process_get(pid);
+    if (!t || !proc) {
+        CHECK(0, "the worker and its owner are resident");
+        (void)process_kill(pid, 0);
+        return;
+    }
+
+    /* The thread state the tripwire looks for, published directly: runnable, on
+     * no queue, owed nothing. Reached in production by any exit that drops a
+     * thread a picker had already unlinked. */
+    cpu_sched_remove_thread(t);
+    __atomic_store_n((uint32_t*)&t->state, (uint32_t)THREAD_STATE_READY, __ATOMIC_RELEASE);
+    __atomic_store_n(&t->enqueue_owed, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&t->wake_pending, 0u, __ATOMIC_RELEASE);
+
+    /* An owner mid-teardown that has NOT reached ZOMBIE. */
+    proc->state = PROCESS_STATE_REAPING;
+
+    for (uint32_t i = 0; i < 64u; ++i) {
+        (void)process_schedule_once();
+    }
+
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_LEFT_STRANDED) == 0,
+          "a reaping owner's unqueued thread is not reported as stranded");
+
+    proc->state = PROCESS_STATE_ZOMBIE;
+    (void)process_kill(pid, 0);
+    for (uint32_t i = 0; i < 16u; ++i) {
+        (void)process_schedule_once();
+    }
+    process_reap_zombie_pid(pid);
+}
+
 /* Regression: 2026-08-23-refused-reset-leaks-a-frozen-slot
  *
  * thread_reset_slot wins the slot claim by CAS'ing dispatch_ref from FREE to
@@ -1293,6 +1362,7 @@ int main(void) {
     s_exiting_owner_refuses_both_transitions();
     s_aborted_dispatch_leaves_its_thread_reachable();
     s_a_lost_slot_claim_leaves_the_thread_reachable();
+    s_the_tripwire_ignores_a_reaping_owner();
     s_a_refused_reset_does_not_leak_a_frozen_slot();
     s_a_wake_that_defers_leaves_something_actionable();
     s_a_consumer_that_declines_keeps_the_claim();

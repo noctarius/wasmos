@@ -2734,11 +2734,23 @@ dispatch_done:
      * needed it -- a capture carrying a persistent strand showed no report at all. */
     uint32_t stranded_owner_pid = __atomic_load_n(&thread->owner_pid, __ATOMIC_ACQUIRE);
     process_t* stranded_owner = stranded_owner_pid ? process_find_by_pid(stranded_owner_pid) : 0;
-    if (stranded_owner && !stranded_owner->is_idle &&
+    /* LIVE is an allow-list, not "not ZOMBIE". process_find_by_pid returns any
+     * slot that is not UNUSED, so REAPING, DEAD and NEW reach here too, and for
+     * each of them an unqueued runnable thread is the intended outcome rather
+     * than a strand: the reaper collects it, and re-enqueueing it would have it
+     * re-picked and re-refused on every scheduling attempt. Reporting them made
+     * the counter unreadable -- it fired in runs that passed as often as in runs
+     * that did not, which is worthless to an investigation that needs a non-zero
+     * count to mean something. */
+    const uint32_t stranded_owner_state =
+        stranded_owner ? __atomic_load_n((uint32_t*)&stranded_owner->state, __ATOMIC_ACQUIRE) : 0u;
+    const int stranded_owner_live = stranded_owner_state == (uint32_t)PROCESS_STATE_READY ||
+                                    stranded_owner_state == (uint32_t)PROCESS_STATE_RUNNING ||
+                                    stranded_owner_state == (uint32_t)PROCESS_STATE_BLOCKED;
+    if (stranded_owner && !stranded_owner->is_idle && stranded_owner_live &&
         __atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE) == THREAD_STATE_READY &&
         !__atomic_load_n(&thread->on_rq, __ATOMIC_ACQUIRE) &&
         !__atomic_load_n(&thread->enqueue_owed, __ATOMIC_ACQUIRE) &&
-        stranded_owner->state != PROCESS_STATE_ZOMBIE &&
         !__atomic_load_n(&stranded_owner->exiting, __ATOMIC_ACQUIRE)) {
         uint32_t sn = sched_debug_note(SCHED_DEBUG_DISPATCH_LEFT_STRANDED);
         if ((sn & (sn - 1u)) == 0u) {

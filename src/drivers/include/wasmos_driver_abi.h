@@ -275,14 +275,28 @@ typedef struct __attribute__((packed)) {
 typedef struct {
     uint32_t version;               /* = WASMOS_SVC_REGISTER_DESC_VERSION */
     uint32_t service_endpoint;      /* endpoint clients send requests to */
-    uint32_t flags;                 /* reserved, 0 */
+    uint32_t flags;                 /* WASMOS_SVC_FLAG_* */
     char name[WASMOS_SVC_NAME_MAX]; /* NUL-terminated service name */
     /* v2+ (present iff the descriptor byte length covers these fields): */
     uint32_t instance;                     /* provider instance index within the class */
     char class_name[WASMOS_SVC_CLASS_MAX]; /* NUL-term; "" = no class */
 } svc_register_desc_t;
 
-/* v1 descriptor length: fields up to and including name[], no class/instance. */
+/* svc_register_desc_t::flags. Unknown bits are masked off by the process
+ * manager rather than refused, so an older kernel accepts a descriptor from a
+ * newer service.
+ *
+ * WANTS_SHUTDOWN opts the service into the orderly shutdown sequence
+ * (WASMOS_IPC_SHUTDOWN_REQ). It is opt-IN because the sequence is SEQUENTIAL --
+ * a participant may need the services beneath it while it quiesces, so they are
+ * notified one at a time in reverse spawn order -- and every participant that
+ * has nothing to persist would otherwise cost the machine its deadline for
+ * nothing. Declare it when something the service holds must reach a device
+ * before power is cut; leave it clear otherwise, which is the vast majority. */
+#define WASMOS_SVC_FLAG_WANTS_SHUTDOWN 0x1u
+#define WASMOS_SVC_FLAG_MASK 0x1u
+
+/* v1 descriptor length: fields up to and including name/class, no flags use. */
 #define WASMOS_SVC_REGISTER_DESC_V1_BYTES (3u * (uint32_t)sizeof(uint32_t) + WASMOS_SVC_NAME_MAX)
 
 /* One resolved provider returned by SVC_IPC_LOOKUP_CLASS_REQ (wire layout;
@@ -634,6 +648,11 @@ enum { WASMOS_PCI_MSI_KIND_NONE = 0, WASMOS_PCI_MSI_KIND_MSI = 1, WASMOS_PCI_MSI
  * interrupt sources fired. Unlike IPC_IRQ_EVENT_TYPE no ack is owed: the vector
  * is edge-triggered and exclusively owned, so nothing is masked waiting for one. */
 #define WASMOS_IPC_MSI_EVENT_TYPE 0xFF01
+
+/* arg0 of WASMOS_IPC_SHUTDOWN_REQ: why the machine is going down. A participant
+ * quiesces the same way for both -- the distinction is for one that wants to
+ * skip work a reboot makes pointless, not for one that persists state. */
+enum { WASMOS_SHUTDOWN_REASON_HALT = 0, WASMOS_SHUTDOWN_REASON_REBOOT = 1 };
 
 /* One physical-address window a driver is permitted to program a device to DMA
  * into or out of. `base` is a physical address and `length` a byte count; the

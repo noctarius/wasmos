@@ -979,33 +979,19 @@ tail.
   `test_cd_into_a_directory_whose_name_exceeds_fifteen_bytes` and
   `test_cd_a_deep_path_in_one_command`.
 
-- [ ] [FEATURE][P2] No shutdown notification reaches drivers or services, so
-  nothing can record a clean unmount. `halt` and `reboot` call
-  `kernel_system_poweroff()`, which does not return; every participant stops
-  mid-operation. The cost to WFS is now narrow but real: a volume written once
-  goes on saying `WFS_STATE_DIRTY` on disk, because only a clean unmount clears
-  it. It still mounts writable -- the journal replay discharges the flag's
-  obligation -- so the price is a replay of an empty log on every subsequent
-  mount, and a volume that can never be told apart from one that actually
-  crashed.
+- [ ] [FEATURE][P3] Widen the orderly shutdown beyond WFS. The mechanism is in
+  place -- `WASMOS_IPC_SHUTDOWN_REQ` / `_DONE`, the process manager's sequence in
+  reverse spawn order, the halt/reboot host calls in both runtimes -- and
+  `fs-wfs` uses it to record `WFS_STATE_CLEAN`. What remains is other
+  participants declaring `WASMOS_SVC_FLAG_WANTS_SHUTDOWN` when they gain state
+  worth flushing: `fs-fat`'s dirty sectors and FSInfo free count are the known
+  case. Nothing needs it today, which is why this sits low.
 
-  Design is in `docs/architecture/15-drivers-and-services.md`, "Orderly Shutdown
-  Design Direction". Shape: `PROC_IPC_SHUTDOWN_REQ` / `PROC_IPC_SHUTDOWN_DONE`
-  broadcast by the process manager as the counterpart of the existing
-  `PROC_IPC_NOTIFY_READY` handshake, in REVERSE SPAWN ORDER so a participant's
-  dependencies outlive it, bounded per participant so a hung driver cannot wedge
-  the machine, and restricted to `driver` and `service` kinds.
-
-  Touches the kernel halt path, the process manager, `abi/opcodes.yaml`, and every
-  driver, so it is worth landing the opcode and the PM sequence first with drivers
-  answering immediately, then giving each one its obligation.
-
-  Two things fold into it rather than being separate work: WFS writing its
-  superblock back with the free counters reconciled (the TODO in `wfs_alloc.c`),
-  and a test path that lets writes SURVIVE a boot — `snapshot=on` on the WFS drive
-  makes the suite repeatable but forecloses the "write, halt, remount writable"
-  assertion, so a per-test opt-out or a two-phase test against a scratch image is
-  part of the feature.
+  The flag is opt-IN because the sequence is sequential -- a participant may need
+  the services beneath it while it quiesces -- so a participant with nothing to
+  persist would spend its deadline saying so. With ~29 registered services and
+  one shared async runner (`virtio_blk` alone), notifying every one of them would
+  have added roughly a minute to every halt.
 
 - [ ] [BUG][P2] `run-qemu-test` flakes roughly 1 run in 3 on the WARP build, in
   TWO distinct shapes. Both were seen while landing WFS work that reaches no boot

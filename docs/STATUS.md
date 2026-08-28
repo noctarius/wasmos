@@ -1275,6 +1275,16 @@ linked feature documents for rationale and rollout plans.
   and a clean volume still never walks the log. A volume whose log does not
   validate mounts READ-ONLY rather than being refused -- every structure a reader
   touches is intact, and the log is a region only a writer needs.
+- `halt` and `reboot` run an orderly shutdown before the machine goes down, and
+  `fs-wfs` is its one participant: it reconciles the superblock's free counters
+  and records `WFS_STATE_CLEAN`, which is the only thing that tells the next
+  mount its log holds nothing to replay (§15). Without it every volume ever
+  written stayed DIRTY for life and walked an empty log on every later mount.
+  The mechanism is `WASMOS_IPC_SHUTDOWN_REQ` / `_DONE` and a process-manager
+  sequence in reverse spawn order; participation is opt-in via
+  `WASMOS_SVC_FLAG_WANTS_SHUTDOWN`, because the sequence is sequential and a
+  participant with nothing to persist would spend a deadline saying so. See
+  `docs/architecture/15-drivers-and-services.md`, "Orderly Shutdown".
 - A volume that was not unmounted cleanly has its log replayed at mount and then
   mounts WRITABLE: `needs_replay` is discharged rather than latched, and every
   metadata writer runs inside a transaction, so what an interrupted one left

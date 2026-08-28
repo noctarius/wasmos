@@ -13,6 +13,7 @@
 #include "stubs_wfs_block_server.h"
 #include "wasmos_status.h"
 #include "wfs_format.h"
+#include "wfs_journal.h"
 #include "wfs_mount.h"
 #include "wfs_super.h"
 #include "wfs_sync.h"
@@ -108,6 +109,80 @@ static void test_a_marked_volume_replays_and_stays_writable(void) {
     wfs_stub_teardown();
 }
 
+static int32_t run_sync(wfs_sync_ctx_t* ctx, wfs_volume_t* vol, uint32_t state) {
+    wasmos_wasm_coroutine_t task;
+
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->vol = vol;
+    ctx->state = state;
+    return wfs_stub_run_task(&task, wfs_sync_task, ctx);
+}
+
+/* The clean unmount, and the whole reason an orderly shutdown exists.
+ *
+ * WFS_STATE_CLEAN is the only thing that tells the next mount its log holds
+ * nothing to replay (§15). Without it a volume stays DIRTY from its first write
+ * for the rest of its life and every later mount walks a log it did not need to
+ * read -- which the dirty case above asserts is exactly what happens.
+ *
+ * Asserted as the ABSENCE of the scan, not as the state byte: reading the byte
+ * back would prove the write landed, and the point is what the next mount does
+ * with it. */
+static void test_a_clean_unmount_stops_the_next_mount_scanning_the_log(void) {
+    wfs_mount_ctx_t m;
+    wfs_volume_t vol;
+    wfs_dirty_ctx_t d;
+    wfs_sync_ctx_t sync;
+    uint32_t i;
+    uint32_t scanned = 0;
+
+    if (wfs_stub_build_volume(VOL_16M, 4096u, k_uuid, TEST_NOW_NS, &g_layout) != 0) {
+        expect(0, "build a volume");
+        return;
+    }
+    expect(mount_volume(&m, &vol) == 0, "the fresh volume mounts");
+    expect(run_mark(&d, &vol) == 0, "it is marked dirty");
+
+    expect(run_sync(&sync, &vol, (uint32_t)WFS_STATE_CLEAN) == 0, "the clean unmount completes");
+
+    wfs_stub_reset_counters();
+    expect(mount_volume(&m, &vol) == 0, "it remounts");
+    expect_u32(vol.super.state, (uint32_t)WFS_STATE_CLEAN, "the state says clean");
+    expect_u32(vol.super.needs_replay, 0u, "no replay is owed");
+    expect_u32(vol.super.read_only, 0u, "and the volume is writable");
+    for (i = 0; i < wfs_stub_req_count && i < WFS_STUB_REQ_LOG_MAX; ++i) {
+        if (wfs_stub_req_blocks[i] == g_layout.journal_start + WFS_TXN_DESCRIPTOR_BLOCK) {
+            scanned = 1;
+        }
+    }
+    expect(!scanned, "and the mount never reads the log's first record");
+
+    wfs_stub_teardown();
+}
+
+/* A clean unmount must not be recordable on a read-only volume, for the same
+ * reason marking one dirty is refused: the mount never wrote, so it has nothing
+ * to say about how the volume was left, and saying CLEAN would clear a replay a
+ * PREVIOUS mount still owes. */
+static void test_a_read_only_volume_is_not_unmounted_clean(void) {
+    wfs_mount_ctx_t m;
+    wfs_volume_t vol;
+    wfs_sync_ctx_t sync;
+
+    if (wfs_stub_build_volume(VOL_16M, 4096u, k_uuid, TEST_NOW_NS, &g_layout) != 0) {
+        expect(0, "build a volume");
+        return;
+    }
+    expect(mount_volume(&m, &vol) == 0, "mount");
+    vol.super.read_only = 1u;
+
+    expect_rc((wasmos_error_code_t)run_sync(&sync, &vol, (uint32_t)WFS_STATE_CLEAN),
+              WASMOS_ERR_FS_READ_ONLY,
+              "the clean unmount is refused");
+
+    wfs_stub_teardown();
+}
+
 /* Once per mount, not once per write: the second call must cost no device I/O. */
 static void test_marking_twice_costs_one_write(void) {
     wfs_mount_ctx_t m;
@@ -185,6 +260,8 @@ static void test_the_marked_superblock_still_validates(void) {
 
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_marked_volume_replays_and_stays_writable),
+    WASMOS_TEST_CASE(test_a_clean_unmount_stops_the_next_mount_scanning_the_log),
+    WASMOS_TEST_CASE(test_a_read_only_volume_is_not_unmounted_clean),
     WASMOS_TEST_CASE(test_marking_twice_costs_one_write),
     WASMOS_TEST_CASE(test_a_read_only_volume_is_not_marked),
     WASMOS_TEST_CASE(test_the_marked_superblock_still_validates),

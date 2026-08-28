@@ -805,6 +805,25 @@ int32_t wasmos_sys_svc_register_class_native(wasmos_driver_api_t* api, uint32_t 
                                              const uint8_t* name, uint32_t name_len,
                                              const uint8_t* class_name, uint32_t class_len,
                                              uint32_t instance, uint32_t request_id) {
+    return wasmos_sys_svc_register_class_flags_native(api,
+                                                      proc_endpoint,
+                                                      source_endpoint,
+                                                      service_endpoint,
+                                                      name,
+                                                      name_len,
+                                                      class_name,
+                                                      class_len,
+                                                      instance,
+                                                      0u,
+                                                      request_id);
+}
+
+int32_t wasmos_sys_svc_register_class_flags_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
+                                                   uint32_t source_endpoint,
+                                                   uint32_t service_endpoint, const uint8_t* name,
+                                                   uint32_t name_len, const uint8_t* class_name,
+                                                   uint32_t class_len, uint32_t instance,
+                                                   uint32_t flags, uint32_t request_id) {
     svc_register_desc_t* desc;
     nd_ipc_message_t resp;
     uint32_t buffer_id = 0;
@@ -820,7 +839,7 @@ int32_t wasmos_sys_svc_register_class_native(wasmos_driver_api_t* api, uint32_t 
     byte_zero((uint8_t*)desc, (uint32_t)sizeof(*desc));
     desc->version = WASMOS_SVC_REGISTER_DESC_VERSION;
     desc->service_endpoint = service_endpoint;
-    desc->flags = 0u;
+    desc->flags = flags & WASMOS_SVC_FLAG_MASK;
     /* desc is zeroed above, so name/class_name default to "" if the source is
      * over-long (str_copy_bytes refuses rather than truncating) or absent. */
     (void)str_copy_bytes(desc->name, WASMOS_SVC_NAME_MAX, name, name_len);

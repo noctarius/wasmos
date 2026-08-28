@@ -230,8 +230,9 @@ static inline int32_t wasmos_xfer_stage(const void* src, int32_t len) {
     return bid;
 }
 
-/* Register service_endpoint under service_name with the process manager.
- * Returns the assigned service handle on success, -1 on failure.
+/* Register service_endpoint under service_name with the process manager,
+ * declaring `flags` (WASMOS_SVC_FLAG_*; unknown bits are dropped). Returns the
+ * assigned service handle on success, -1 on failure.
  *
  * The request payload is a svc_register_desc_t placed in the per-context xfer
  * buffer; the reply is awaited on a dedicated reply endpoint distinct from
@@ -240,9 +241,11 @@ static inline int32_t wasmos_xfer_stage(const void* src, int32_t len) {
  * wasmos_ipc_call's reply matcher.  The reply endpoint is created once per
  * translation unit and reused across registrations (no per-call leak), and is
  * private to this helper rather than the managed endpoint of ipc_managed.c. */
-static inline int32_t wasmos_svc_register_class(int32_t proc_endpoint, int32_t service_endpoint,
-                                                const char* service_name, const char* class_name,
-                                                uint32_t instance, int32_t request_id) {
+static inline int32_t wasmos_svc_register_class_flags(int32_t proc_endpoint,
+                                                      int32_t service_endpoint,
+                                                      const char* service_name,
+                                                      const char* class_name, uint32_t instance,
+                                                      uint32_t flags, int32_t request_id) {
     static int32_t s_reg_reply_ep = -1;
     svc_register_desc_t desc;
     wasmos_ipc_message_t resp;
@@ -260,7 +263,7 @@ static inline int32_t wasmos_svc_register_class(int32_t proc_endpoint, int32_t s
     }
     desc.version = WASMOS_SVC_REGISTER_DESC_VERSION;
     desc.service_endpoint = (uint32_t)service_endpoint;
-    desc.flags = 0;
+    desc.flags = flags & WASMOS_SVC_FLAG_MASK;
     for (i = 0; i + 1u < WASMOS_SVC_NAME_MAX && service_name[i] != '\0'; ++i) {
         desc.name[i] = service_name[i];
     }
@@ -290,6 +293,15 @@ static inline int32_t wasmos_svc_register_class(int32_t proc_endpoint, int32_t s
     }
     (void)wasmos_xfer_buffer_release(bid);
     return (resp.type == SVC_IPC_REGISTER_RESP) ? resp.arg0 : -1;
+}
+
+/* Register without declaring any WASMOS_SVC_FLAG_*, which is what a service that
+ * holds nothing needing to reach a device before power is cut wants. */
+static inline int32_t wasmos_svc_register_class(int32_t proc_endpoint, int32_t service_endpoint,
+                                                const char* service_name, const char* class_name,
+                                                uint32_t instance, int32_t request_id) {
+    return wasmos_svc_register_class_flags(
+        proc_endpoint, service_endpoint, service_name, class_name, instance, 0u, request_id);
 }
 
 /* Register a service by name only (no virtual class). */

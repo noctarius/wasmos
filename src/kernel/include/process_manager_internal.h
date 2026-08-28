@@ -147,8 +147,32 @@ typedef struct {
     uint8_t in_use;
     uint32_t endpoint;
     uint32_t owner_context_id;
+    uint32_t flags; /* WASMOS_SVC_FLAG_*, masked to WASMOS_SVC_FLAG_MASK */
     char name[WASMOS_SVC_NAME_MAX];
 } pm_service_entry_t;
+
+/* Most participants a shutdown notifies. One slot per CONTEXT that owns a
+ * registered service endpoint, not per registered name. */
+#define WASMOS_PM_SHUTDOWN_MAX 32u
+
+/* The orderly shutdown sequence's state (process_manager_shutdown.c).
+ *
+ * `requested` is the only field written from another CPU -- the halting
+ * process's, through kernel_system_shutdown_arm -- and is accessed with the
+ * pm_atomic_* helpers for that reason. Everything else is written by
+ * pm_shutdown_step on the PM's own CPU, after it has observed that store. */
+typedef struct {
+    uint32_t requested; /* armed by the halt/reboot host call */
+    uint32_t reason;    /* WASMOS_SHUTDOWN_REASON_* */
+    uint8_t active;     /* participants have been collected */
+    uint8_t pending;    /* the participant at `index` has been notified */
+    uint32_t count;
+    uint32_t index; /* the participant being waited on */
+    uint64_t deadline_ticks;
+    uint32_t pids[WASMOS_PM_SHUTDOWN_MAX]; /* descending: reverse spawn order */
+    uint32_t endpoints[WASMOS_PM_SHUTDOWN_MAX];
+    uint32_t context_ids[WASMOS_PM_SHUTDOWN_MAX];
+} pm_shutdown_state_t;
 
 /* The whole of the process manager's state. Single instance (g_pm), zeroed
  * before process_manager_init runs. */
@@ -177,6 +201,7 @@ typedef struct {
     list_t waits; /* pm_wait_state_t */
     pm_spawn_state_t spawn;
     list_t services; /* pm_service_entry_t */
+    pm_shutdown_state_t shutdown;
 } pm_state_t;
 
 extern pm_state_t g_pm;
@@ -225,7 +250,16 @@ const uint8_t* pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, u
  * its current owner; a different owner is refused. Returns 0, or -1 on an
  * ownership clash or when no slot could be allocated. Names longer than 16
  * characters are truncated into pm_service_entry_t::name. */
-int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id);
+/* Advance the shutdown sequence by one step, from the PM's dispatch loop. A
+ * no-op until kernel_system_shutdown_arm has been called; does not return once
+ * the last participant has answered or been passed over. */
+void pm_shutdown_step(uint32_t pm_context_id);
+/* Retire the outstanding participant on a WASMOS_IPC_SHUTDOWN_DONE. Ignores a
+ * reply from any endpoint other than the one currently waited on, so a late
+ * answer from a participant already passed over cannot retire its successor. */
+void pm_shutdown_note_done(const ipc_message_t* msg);
+
+int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id, uint32_t flags);
 /* Endpoint bound to `name`, or IPC_ENDPOINT_NONE if the name is unknown. Note
  * the sentinel: 0 is a possible endpoint id, so a zero return is not "absent". */
 uint32_t pm_service_lookup(const char* name);

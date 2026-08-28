@@ -66,6 +66,7 @@
 #include "wfs_path.h"
 #include "wfs_namespace.h"
 #include "wfs_read.h"
+#include "wfs_sync.h"
 #include "wfs_truncate.h"
 #include "wfs_write.h"
 
@@ -938,11 +939,51 @@ static int wfs_resolve_mount_alias(char* out_mount, uint32_t out_len, uint8_t* o
     return out_mount[0] == '\0' ? -1 : 0;
 }
 
+/* WASMOS_IPC_SHUTDOWN_REQ: the clean unmount.
+ *
+ * Reconciles the free counters the superblock carries and records
+ * WFS_STATE_CLEAN, which is the only thing that tells the next mount its log
+ * holds nothing to replay (§15). The volume is left mounted -- nothing revokes
+ * the endpoint, and a request arriving after this is served -- because the
+ * machine is going down either way and refusing would only turn a late read into
+ * an error the caller cannot act on.
+ *
+ * DONE is sent whether or not the write succeeded. The sequence has no failure
+ * reply and nothing to do with one: a volume whose clean mark did not land
+ * mounts read-only next boot and replays, which is exactly what happens when a
+ * volume misses the sequence entirely.
+ *
+ * A read-only volume has nothing to record, and wfs_sync_task refuses one, so it
+ * answers without a write.
+ */
+static void wfs_do_shutdown(int32_t src, int32_t request_id) {
+    static wfs_sync_ctx_t sync;
+
+    if (g_vol.mounted && !g_vol.super.read_only) {
+        /* Static and zeroed rather than a stack local: it carries a coroutine
+         * record, which must be zeroed before the task starts it, and the guest
+         * stack this driver runs on has no room to spare for a context this
+         * size. Static is safe because the sequence notifies a participant once. */
+        memset(&sync, 0, sizeof(sync));
+        sync.vol = &g_vol;
+        sync.state = (uint32_t)WFS_STATE_CLEAN;
+        if (wfs_run(wfs_sync_task, &sync) != 0) {
+            wfs_log("[fs-wfs] clean unmount failed\n");
+        } else {
+            wfs_log("[fs-wfs] unmounted clean\n");
+        }
+    }
+    (void)wfs_reply(src, WASMOS_IPC_SHUTDOWN_DONE, request_id, 0, 0);
+}
+
 /* ---- dispatch ----------------------------------------------------------- */
 
 static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t a0, int32_t a1,
                          int32_t a2, int32_t a3) {
     switch (type) {
+    case WASMOS_IPC_SHUTDOWN_REQ:
+        wfs_do_shutdown(src, request_id);
+        return;
     case FSMGR_IPC_BACKEND_INFO_REQ:
         wfs_report_backend_info(src, request_id);
         return;
@@ -1105,12 +1146,16 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d
      * appears. This is the same defect the retired `block` NAME had: a disk is
      * (backend, unit), so the instance has to carry the backend. Fixing it needs
      * a wider instance encoding, which fs-manager and fs_fat decode too. */
-    if (wasmos_svc_register_class(g_proc_endpoint,
-                                  g_fs_endpoint,
-                                  service_name,
-                                  FSMGR_BACKEND_CLASS,
-                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BOOT, g_mount_unit),
-                                  1) != 0) {
+    /* WANTS_SHUTDOWN: this driver is the reason the sequence exists. Only a
+     * clean unmount records WFS_STATE_CLEAN, and without it every volume ever
+     * written stays DIRTY and replays an empty log on every later mount. */
+    if (wasmos_svc_register_class_flags(g_proc_endpoint,
+                                        g_fs_endpoint,
+                                        service_name,
+                                        FSMGR_BACKEND_CLASS,
+                                        FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BOOT, g_mount_unit),
+                                        WASMOS_SVC_FLAG_WANTS_SHUTDOWN,
+                                        1) != 0) {
         wfs_log("[fs-wfs] fs.backend register failed\n");
         wfs_stall();
     }

@@ -165,7 +165,7 @@ void pm_update_well_known_service_endpoint(const char* name, uint32_t endpoint) 
  * A name that does not fit the entry is REFUSED rather than truncated: two names
  * sharing a truncated prefix would otherwise collide onto one entry, silently
  * rebinding an unrelated service. */
-int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id) {
+int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id, uint32_t flags) {
     pm_service_entry_t* empty = 0;
     list_iter_t it;
     pm_service_entry_t* entry = (pm_service_entry_t*)list_first(&g_pm.services, &it);
@@ -185,6 +185,7 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
             return -1;
         }
         entry->endpoint = endpoint;
+        entry->flags = flags & WASMOS_SVC_FLAG_MASK;
         return 0;
     }
     if (!empty) {
@@ -198,6 +199,7 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
     }
     empty->in_use = 1;
     empty->endpoint = endpoint;
+    empty->flags = flags & WASMOS_SVC_FLAG_MASK;
     empty->owner_context_id = owner_context_id;
     return 0;
 }
@@ -281,7 +283,9 @@ int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg)
             klog_write("[pm] fs register endpoint owner mismatch\n");
         return -1;
     }
-    if (pm_service_set(name, msg->source, owner_context_id) != 0) {
+    /* The packed-name registration carries no flags; a service that needs
+     * one registers through the descriptor path. */
+    if (pm_service_set(name, msg->source, owner_context_id, 0u) != 0) {
         if (track_fs)
             klog_write("[pm] fs register service set failed\n");
         return -1;
@@ -347,7 +351,7 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
             klog_write("[pm] fs register endpoint owner mismatch\n");
         return -1;
     }
-    if (pm_service_set(name, service_ep, reply_owner) != 0) {
+    if (pm_service_set(name, service_ep, reply_owner, desc->flags) != 0) {
         if (track_fs)
             klog_write("[pm] fs register service set failed\n");
         return -1;

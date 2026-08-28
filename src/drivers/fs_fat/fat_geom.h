@@ -10,8 +10,13 @@
 #include "fat_block.h"
 
 typedef struct {
+    /* The window this driver was spawned for: the absolute LBA the volume starts
+     * at, as the block descriptor reports it. 0 means the whole disk. Set by
+     * fat_mount_init and never changed. */
+    uint32_t volume_lba;
+
     /* Immutable-after-mount geometry. */
-    uint32_t boot_lba; /* LBA of the volume boot sector (0, or the partition) */
+    uint32_t boot_lba; /* absolute LBA of the volume boot sector */
     uint16_t bytes_per_sector;
     uint8_t sectors_per_cluster;
     uint16_t reserved_sectors;
@@ -40,7 +45,10 @@ typedef struct {
 } fat_mount_t;
 
 /* Initialize *mnt to the unmounted state (call once at driver init). */
-void fat_mount_init(fat_mount_t* mnt);
+/* Initialise *mnt for a volume starting at absolute `volume_lba`; 0 for a whole
+ * disk. The window comes from the block descriptor, so the partition manager is
+ * the only thing in the system that reads a partition table. */
+void fat_mount_init(fat_mount_t* mnt, uint32_t volume_lba);
 
 /* 1 once the volume geometry has been parsed. */
 int fat_mount_ready(const fat_mount_t* mnt);

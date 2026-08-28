@@ -81,7 +81,7 @@ static int32_t g_dm_idle_select_id = -1;
 /* Sync spawns rely on PM's own DM_SPAWN_TIMEOUT_MS deadline for termination;
  * the DM-side poll cap must not fire first. */
 #define DM_SPAWN_SYNC_POLL_MAX 0x7FFFFFFF
-#define DM_RULE_SPAWN_ARGS_MAX 128u
+#define DM_RULE_SPAWN_ARGS_MAX 192u
 static uint8_t g_dm_pci_scan_done = 0;
 static uint8_t g_dm_acpi_scan_done = 0;
 
@@ -949,30 +949,39 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
 
 /* What a block-filesystem driver is told about the device it was spawned for.
  *
- * The backend travels by name because that is how the driver addresses it: a
- * unit is backend-local, so `unit=0` alone names a different disk on every
- * backend, and the driver resolves its server as the `block` class instance
- * (backend << 8) | unit. The name is the same one a rule's DRIVER== spells. */
-/* `id=` is what the filesystem driver resolves its disk with: it fingerprints
- * that string to get the `block` class instance its backend registered under.
- * `driver=` and `unit=` remain for the driver's own diagnostics and for a
- * backend-specific IDENTIFY argument, but nothing addresses a device with them.
+ * `id=` is the address. It is the canonical id the backend published, and the
+ * driver fingerprints it to get the `block` class instance that backend
+ * registered under. `driver=` and `unit=` travel alongside for the driver's own
+ * diagnostics and for a backend-specific IDENTIFY argument, but nothing is
+ * addressed with them: a unit is backend-local, so `unit=0` alone names a
+ * different disk on every backend that has one, and since a partition publishes
+ * under its disk's unit it does not even name a volume.
+ *
+ * `mount=` is the rule's decision about WHERE the volume goes, delivered at
+ * spawn. It travels here rather than being fetched back from this service
+ * afterwards because the rule that chose it is the rule doing the spawning; a
+ * query keyed on anything less than the full identity -- as the retired
+ * DEVMGR_QUERY_BLOCK_MOUNT_REQ was, keyed on the unit -- cannot tell two volumes
+ * on one disk apart.
  *
  * Refuses rather than truncates: a truncated id fingerprints to a different
  * value than the backend registered, so the filesystem would search forever for
- * an instance that does not exist. */
+ * an instance that does not exist, and a truncated mount path puts a volume
+ * somewhere nobody asked for. */
 static int build_block_fs_spawn_args(uint8_t backend, uint8_t unit, const char* canonical_id,
-                                     char* out, uint32_t out_cap) {
+                                     const char* mount, char* out, uint32_t out_cap) {
     int n = 0;
-    if (!out || out_cap == 0u || !canonical_id || canonical_id[0] == '\0') {
+    if (!out || out_cap == 0u || !canonical_id || canonical_id[0] == '\0' || !mount ||
+        mount[0] == '\0') {
         return -1;
     }
     n = snprintf(out,
                  out_cap,
-                 "driver=%s unit=%u id=%s",
+                 "driver=%s unit=%u id=%s mount=%s",
                  block_backend_name(backend),
                  (unsigned)unit,
-                 canonical_id);
+                 canonical_id,
+                 mount);
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
     }
@@ -1730,7 +1739,7 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
         g_dm_acpi_scan_done = 1;
         return;
     }
-    if (msg->type == DEVMGR_QUERY_MOUNT_REQ || msg->type == DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
+    if (msg->type == DEVMGR_QUERY_MOUNT_REQ) {
         handle_query_message_fields(msg);
         return;
     }
@@ -1768,10 +1777,6 @@ static int dm_register_inventory_handlers(void) {
 static int dm_register_query_handlers(void) {
     if (wasmos_sys_event_register(
             &g_dm_query_loop, DEVMGR_QUERY_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
-        return -1;
-    }
-    if (wasmos_sys_event_register(
-            &g_dm_query_loop, DEVMGR_QUERY_BLOCK_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
     if (wasmos_sys_event_set_default(&g_dm_query_loop, dm_handle_ipc_default, 0) != 0) {
@@ -1941,7 +1946,7 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
     int32_t req_id = msg ? msg->request_id : 0;
     int32_t source = msg ? msg->source : 0;
     int32_t index = msg ? msg->arg0 : 0;
-    if (type != DEVMGR_QUERY_MOUNT_REQ && type != DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
+    if (type != DEVMGR_QUERY_MOUNT_REQ) {
         /* arg1 echoes the rejected type for diagnostics. */
         (void)wasmos_ipc_send(source,
                               g_dm.query_endpoint,
@@ -1951,46 +1956,6 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
                               type,
                               0,
                               0);
-        return;
-    }
-    if (type == DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
-        uint8_t unit = (uint8_t)((uint32_t)index & 0xFFu);
-        const char* mount = 0;
-        uint32_t packed[4] = {0, 0, 0, 0};
-        for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
-            block_fs_rule_t* rule = &g_dm.block_fs_rules[i];
-            if (!rule->active) {
-                continue;
-            }
-            if (rule->unit == unit || rule->unit == 0xFFu) {
-                mount = rule->mount;
-                break;
-            }
-        }
-        if (!mount || mount[0] == '\0') {
-            (void)wasmos_ipc_send(source,
-                                  g_dm.query_endpoint,
-                                  FS_IPC_ERROR,
-                                  req_id,
-                                  WASMOS_ERR_DEVMGR_NO_MOUNT_RULE,
-                                  0,
-                                  0,
-                                  0);
-            return;
-        }
-        for (uint32_t i = 0; mount[i] && i < 16u; ++i) {
-            uint32_t slot = i / 4u;
-            uint32_t shift = (i % 4u) * 8u;
-            packed[slot] |= ((uint32_t)(uint8_t)mount[i]) << shift;
-        }
-        (void)wasmos_ipc_send(source,
-                              g_dm.query_endpoint,
-                              DEVMGR_BLOCK_MOUNT_INFO,
-                              req_id,
-                              (int32_t)packed[0],
-                              (int32_t)packed[1],
-                              (int32_t)packed[2],
-                              (int32_t)packed[3]);
         return;
     }
     if (index == 0) {
@@ -2332,6 +2297,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                        .matched_backend,
                                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].matched_unit,
                                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].matched_id,
+                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index].mount,
                                    spawn_args,
                                    sizeof(spawn_args)) > 0) {
                         args = spawn_args;

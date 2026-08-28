@@ -64,7 +64,19 @@ uint32_t fat_table_lba(const fat_mount_t* mnt) {
 }
 
 /* Parse an MBR partition table in `sector`; on success writes the first FAT
- * partition's start LBA to *out_lba.  Returns 0 or -1. */
+ * partition's start LBA to *out_lba.  Returns 0 or -1.
+ *
+ * Reached ONLY when this driver was spawned for a whole disk (volume_lba 0) that
+ * turned out to hold a table rather than a boot sector. When a window is given
+ * it is authoritative and this is not consulted, because the partition manager
+ * has already read the table and named the volume.
+ *
+ * TODO: delete this along with the whole-disk spawn it serves. /boot is still
+ * mounted from the whole ATA disk because the partition manager is spawned from
+ * the BOOT rules, which cannot load until /boot is mounted; moving it into
+ * initfs and teaching it to probe disks that register after it starts is what
+ * closes that circle. Until then a disk holding several FAT partitions mounts
+ * whichever comes first in the table. */
 static int fat_try_parse_mbr(const uint8_t* sector, uint32_t* out_lba) {
     uint16_t sig = (uint16_t)sector[510] | ((uint16_t)sector[511] << 8);
     if (sig != 0xAA55) {
@@ -158,8 +170,9 @@ static int fat_parse_boot(fat_mount_t* mnt, const uint8_t* sector) {
     return 0;
 }
 
-void fat_mount_init(fat_mount_t* mnt) {
-    mnt->boot_lba = 0;
+void fat_mount_init(fat_mount_t* mnt, uint32_t volume_lba) {
+    mnt->volume_lba = volume_lba;
+    mnt->boot_lba = volume_lba;
     mnt->fat_type = FAT_TYPE_UNKNOWN;
     mnt->cwd_source = -1;
     mnt->cwd_cluster = 0;
@@ -176,10 +189,17 @@ int fat_mount_ready(const fat_mount_t* mnt) {
     return mnt->mounted;
 }
 
-/* Coroutine (context = *mnt): read LBA 0, MBR-probe once if it is not a BPB,
- * parse the BPB.  Locals are declared without initializers because the resume
- * switch jumps past their declarations (they are assigned before use, and none
- * are carried across a yield — cross-yield state lives in *mnt). */
+/* Coroutine (context = *mnt): read the volume's first sector and parse its BPB.
+ *
+ * The first sector is mnt->volume_lba, which the block descriptor supplied. A
+ * driver spawned for a partition therefore reads that partition's boot sector
+ * directly and no partition table is parsed here at all. The MBR probe below
+ * exists only for a whole-disk spawn (volume_lba 0) whose LBA 0 holds a table;
+ * see fat_try_parse_mbr.
+ *
+ * Locals are declared without initializers because the resume switch jumps past
+ * their declarations (they are assigned before use, and none are carried across
+ * a yield — cross-yield state lives in *mnt). */
 fat_r_t fat_geom_mount_step(fat_mount_t* mnt, fat_block_t* blk) {
     const uint8_t* sector;
     uint16_t sig;
@@ -190,15 +210,23 @@ fat_r_t fat_geom_mount_step(fat_mount_t* mnt, fat_block_t* blk) {
     if (mnt->mounted) {
         FAT_CO_DONE(mnt);
     }
-    mnt->boot_lba = 0;
+    mnt->boot_lba = mnt->volume_lba;
     mnt->tried_mbr = 0;
-    FAT_CO_READ(mnt, blk, 0u); /* boot sector at LBA 0 */
+    FAT_CO_READ(mnt, blk, mnt->volume_lba); /* the volume's first sector */
 
     sector = fat_block_sector(blk);
     sig = (uint16_t)sector[510] | ((uint16_t)sector[511] << 8);
     bytes_per_sector = (uint16_t)sector[11] | ((uint16_t)sector[12] << 8);
     if (sig != 0xAA55 || bytes_per_sector == 0) {
-        /* LBA 0 is an MBR, not a BPB: locate the first FAT partition. */
+        /* A named window that does not hold a BPB is a fault, not an invitation
+         * to go looking: the partition manager read the table and said the
+         * filesystem is here. Searching the disk from a driver that was handed
+         * one volume is how a mount lands on the wrong one. */
+        if (mnt->volume_lba != 0u) {
+            fat_log("no FAT boot sector at the volume start\n");
+            FAT_CO_FAIL(mnt, blk, WASMOS_ERR_FS_NOT_READY);
+        }
+        /* Whole-disk spawn: LBA 0 is an MBR, not a BPB. */
         if (fat_try_parse_mbr(sector, &part_lba) != 0) {
             fat_log("no FAT boot sector\n");
             FAT_CO_FAIL(mnt, blk, WASMOS_ERR_FS_NOT_READY);

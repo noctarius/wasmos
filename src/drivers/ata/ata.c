@@ -115,10 +115,11 @@ typedef struct __attribute__((packed)) {
  * WASMOS_BLOCK_ZC_MAX_SECTORS, since that is what a zero-copy client may ask
  * for. ATA_UNIT_COUNT is the two devices a single IDE channel addresses (master
  * and slave), which is a property of the bus, not a local budget.
- * ATA_CLIENT_MAP_CAP sizes the source-to-unit binding table. It is deliberately
- * larger than ATA_UNIT_COUNT and is not what limits clients: a unit is claimed
- * EXCLUSIVELY by the first source bound to it, so a second client asking for an
- * already-claimed unit is refused while the table still has free slots. */
+ * ATA_CLIENT_MAP_CAP sizes the source-to-unit binding table, which records which
+ * drive each client's IDENTIFY selected so its later transfers reach that one.
+ * The table is advisory: a client with no entry falls back to the first present
+ * drive, so a full table degrades addressing rather than refusing service, and
+ * several clients may select the same drive. */
 #define ATA_SECTOR_SIZE 512u
 #define ATA_MAX_READ_SECTORS 8u
 #define ATA_UNIT_COUNT 2u
@@ -151,11 +152,6 @@ static uint8_t g_zc_logged = 0;
 static uint8_t g_zc_dma_logged = 0;
 static int32_t g_client_owner[ATA_CLIENT_MAP_CAP];
 static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
-/* 0 while the entry is only a SELECTION (the unit this client named in
- * IDENTIFY), 1 once a transfer has claimed the unit exclusively. Selections are
- * not exclusive: several clients may name the same unit, and the first transfer
- * decides who gets it. */
-static uint8_t g_client_claimed[ATA_CLIENT_MAP_CAP];
 /* One descriptor per unit: this driver's own record of what its disks are.
  *
  * IDENTIFY does not lend this out. It writes a copy into the buffer the CALLER
@@ -808,9 +804,7 @@ static void ata_select_unit_for_source(int32_t source, uint8_t unit) {
     }
     for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
         if (g_client_owner[i] == source) {
-            if (!g_client_claimed[i]) {
-                g_client_unit[i] = unit;
-            }
+            g_client_unit[i] = unit;
             return;
         }
     }
@@ -818,7 +812,6 @@ static void ata_select_unit_for_source(int32_t source, uint8_t unit) {
         if (g_client_owner[i] < 0) {
             g_client_owner[i] = source;
             g_client_unit[i] = unit;
-            g_client_claimed[i] = 0;
             return;
         }
     }
@@ -861,81 +854,47 @@ static int ata_dma_finish(int32_t source_endpoint, uint32_t offset, uint32_t len
     return 0;
 }
 
+/* Which drive a transfer from `source` addresses.
+ *
+ * A transfer opcode carries no device id -- BLOCK_IPC_READ_REQ is (block-buffer
+ * physical address, lba, sector count) -- and this controller serves two drives
+ * on one endpoint, so the drive is resolved from the endpoint the request
+ * arrived on. IDENTIFY records that selection; this reads it back.
+ *
+ * The binding is NOT exclusive. A drive used to be claimed by the first client
+ * to transfer on it and never released, which refused every later client with
+ * UNIT_CLAIMED. That guard was this driver enforcing an access policy it has no
+ * information about: it has no release, no authority and no input from the rules
+ * that actually decide who mounts what, so it enforced "whoever probed first"
+ * rather than anything anyone declared. virtio-blk serves the same `block` class
+ * contract with no such table, which is what shows it was never part of the
+ * contract. Keeping two filesystems off one volume is device-manager's job
+ * through its rules, and separation by LBA WINDOW -- the useful kind, once
+ * partitions exist -- belongs to the partition manager's bounds clamp.
+ *
+ * Falls back to the first present drive for a client that never sent IDENTIFY,
+ * which is what a bare `blkinfo`-style reader does.
+ *
+ * Returns 0 and writes the drive, or -1 when no drive is present. */
 static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, uint8_t* out_unit) {
     if (!out_unit || source < 0) {
         return -1;
     }
     for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-        if (g_client_owner[i] != source) {
-            continue;
-        }
-        if (g_client_claimed[i]) {
+        if (g_client_owner[i] == source && g_unit_present[g_client_unit[i]]) {
             *out_unit = g_client_unit[i];
             return 0;
         }
-        /* A selection recorded by IDENTIFY. Turn it into the claim, unless
-         * another client got that drive first. */
-        for (uint32_t j = 0; j < ATA_CLIENT_MAP_CAP; ++j) {
-            if (j != i && g_client_owner[j] >= 0 && g_client_claimed[j] &&
-                g_client_unit[j] == g_client_unit[i]) {
-                return -1;
-            }
-        }
-        if (!g_unit_present[g_client_unit[i]]) {
-            return -1;
-        }
-        g_client_claimed[i] = 1;
-        *out_unit = g_client_unit[i];
+    }
+    if (preferred_unit >= 0 && preferred_unit < (int32_t)ATA_UNIT_COUNT &&
+        g_unit_present[preferred_unit]) {
+        *out_unit = (uint8_t)preferred_unit;
         return 0;
     }
-    if (preferred_unit >= 0 && preferred_unit < (int32_t)ATA_UNIT_COUNT) {
-        uint8_t unit = (uint8_t)preferred_unit;
-        uint8_t claimed = 0;
-        if (!g_unit_present[unit]) {
-            return -1;
-        }
-        for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-            if (g_client_owner[i] >= 0 && g_client_claimed[i] && g_client_unit[i] == unit) {
-                claimed = 1;
-                break;
-            }
-        }
-        if (claimed) {
-            return -1;
-        }
-        for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-            if (g_client_owner[i] < 0) {
-                g_client_owner[i] = source;
-                g_client_unit[i] = unit;
-                g_client_claimed[i] = 1;
-                *out_unit = unit;
-                return 0;
-            }
-        }
-        return -1;
-    }
-    for (uint32_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
-        uint8_t claimed = 0;
-        if (!g_unit_present[unit]) {
-            continue;
-        }
-        for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-            if (g_client_owner[i] >= 0 && g_client_claimed[i] && g_client_unit[i] == unit) {
-                claimed = 1;
-                break;
-            }
-        }
-        if (claimed) {
-            continue;
-        }
-        for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-            if (g_client_owner[i] < 0) {
-                g_client_owner[i] = source;
-                g_client_unit[i] = (uint8_t)unit;
-                g_client_claimed[i] = 1;
-                *out_unit = (uint8_t)unit;
-                return 0;
-            }
+    for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
+        if (g_unit_present[unit]) {
+            *out_unit = unit;
+            return 0;
         }
     }
     return -1;
@@ -987,9 +946,10 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         return 0;
     }
 
-    /* A transfer does claim one: the first client to ask for a unit keeps it. */
+    /* Resolve the drive this client selected. Failure here means no drive is
+     * present at all -- the resolver refuses nobody. */
     if (ata_assign_unit_for_source(source, -1, &unit) != 0 || !g_unit_present[unit]) {
-        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED, 0);
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT, 0);
         return 0;
     }
 
@@ -1138,7 +1098,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     }
     for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
         g_client_owner[i] = -1;
-        g_client_claimed[i] = 0;
         g_client_unit[i] = 0;
     }
     for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {

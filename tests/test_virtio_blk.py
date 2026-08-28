@@ -260,13 +260,20 @@ class VirtioBlkTest(unittest.TestCase):
                 "under the id its own driver publishes it with",
             )
 
-    def test_a_mounted_ata_disk_is_still_identifiable(self) -> None:
-        """Discovery must not require claiming the disk.
+    def test_a_mounted_ata_disk_is_readable_by_a_second_client(self) -> None:
+        """A mounted disk answers both IDENTIFY and a read from another client.
 
-        ATA binds a client endpoint to one unit exclusively so two filesystems
-        cannot write one drive. That guard used to cover IDENTIFY too, which made
-        a mounted disk unqueryable — the opposite of what discovering it by class
-        is for. A transfer is still refused, and now says why.
+        ATA used to claim a drive for the first client that transferred on it and
+        never release it, refusing everyone after with UNIT_CLAIMED. That was the
+        driver enforcing an access policy it had no information about — it has no
+        release, no authority, and no input from the rules that decide who mounts
+        what, so it enforced "whoever probed first". virtio-blk serves the same
+        class contract with no such table.
+
+        It also blocks the partition manager, which must read LBA 0/1 of a disk a
+        filesystem is already mounted on. Keeping two filesystems off one volume
+        is device-manager's job through its rules, and separation by LBA window is
+        the partition manager's.
         """
         assert self.session is not None
         # Each case drives blkinfo itself rather than relying on another having
@@ -279,9 +286,18 @@ class VirtioBlkTest(unittest.TestCase):
             ),
             "the mounted ATA boot disk could not be identified",
         )
+        # The boot disk is FAT-formatted and mounted, so sector 0 is a real
+        # partition table read back by a client that is not the filesystem: the
+        # MBR signature 0x55AA ends the sector vvfat presents.
         self.assertTrue(
-            self.session.expect(b"read failed: block_dev.UNIT_CLAIMED", timeout_s=30),
-            "a transfer on a claimed unit was not refused with a named reason",
+            self.session.expect(b"id=block:ata:0 lba=0 data=", timeout_s=30),
+            "a second client could not read the mounted boot disk — the driver "
+            "is still arbitrating access it has no basis to arbitrate",
+        )
+        self.assertNotIn(
+            b"block_dev.UNIT_CLAIMED",
+            self.session.buf,
+            "a transfer was refused for exclusivity that no longer exists",
         )
 
     def test_block_class_read_returns_the_disk_signature(self) -> None:

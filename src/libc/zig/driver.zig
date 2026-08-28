@@ -26,6 +26,7 @@
 
 const abi = @import("wasmos_imports.zig");
 const op = @import("wasmos_opcodes.zig");
+const status = @import("wasmos_status.zig");
 
 /// The one kernel IPC status the send helper acts on rather than propagates: a
 /// destination queue that was full and is worth retrying. Mirrors the kernel's
@@ -78,6 +79,127 @@ const SvcRegisterDesc = extern struct {
     /// NUL-terminated class name; all-zero means no class.
     class_name: [SVC_CLASS_MAX]u8 = [_]u8{0} ** SVC_CLASS_MAX,
 };
+
+/// Label and canonical-id capacities of the block descriptor, both INCLUDING
+/// the terminating NUL. Equal to BLOCK_DESCRIPTOR_LABEL_MAX /
+/// BLOCK_DESCRIPTOR_ID_MAX in `abi/constants.yaml`.
+pub const BLOCK_LABEL_MAX: usize = 144;
+pub const BLOCK_ID_MAX: usize = 64;
+pub const BLOCK_DESCRIPTOR_VERSION: u32 = 1;
+
+/// One block device, mirroring `wasmos_block_descriptor_t` in
+/// `src/drivers/include/wasmos_driver_abi.h`. Carried in a transfer buffer by
+/// BLOCK_IPC_IDENTIFY_RESP and DEVMGR_PUBLISH_BLOCK_DEVICE.
+///
+/// The C side is `__attribute__((packed))` and this one is not, which is safe
+/// only because the layout was chosen so the two coincide: every field sits at
+/// its natural alignment and the total is a multiple of 8, so neither compiler
+/// inserts padding. The assertions below are what keep that true — a field added
+/// on one side alone shifts an offset and fails the build here rather than
+/// silently misreading a peer's bytes.
+pub const BlockDescriptor = extern struct {
+    version: u32 = BLOCK_DESCRIPTOR_VERSION,
+    /// BLOCK_BACKEND_*
+    backend: u32 = 0,
+    /// Backend-local device number.
+    unit: u32 = 0,
+    /// 0 = whole device, else partition-table slot.
+    partition: u32 = 0,
+    /// PARTITION_SCHEME_*
+    scheme: u32 = 0,
+    /// FS_TYPE_*, from a superblock probe.
+    fs_type: u32 = 0,
+    sector_bytes: u32 = 0,
+    /// BLOCK_DESCRIPTOR_FLAG_*
+    flags: u32 = 0,
+    /// Absolute on the underlying device.
+    lba_start: u64 = 0,
+    lba_count: u64 = 0,
+    /// GPT partition type; zero unless scheme is GPT.
+    type_guid: [16]u8 = [_]u8{0} ** 16,
+    /// PARTUUID; zero unless scheme is GPT.
+    part_guid: [16]u8 = [_]u8{0} ** 16,
+    /// MBR partition type byte; zero unless scheme is MBR.
+    mbr_type: u8 = 0,
+    reserved: [7]u8 = [_]u8{0} ** 7,
+    /// PARTLABEL, UTF-8, NUL-terminated.
+    label: [BLOCK_LABEL_MAX]u8 = [_]u8{0} ** BLOCK_LABEL_MAX,
+    /// NUL-terminated canonical id; the device's identity.
+    canonical_id: [BLOCK_ID_MAX]u8 = [_]u8{0} ** BLOCK_ID_MAX,
+};
+
+/// Destination kinds of a block request, matching BLOCK_DST_* in
+/// `abi/constants.yaml`.
+pub const BLOCK_DST_BLOCK_BUFFER: u32 = 0;
+pub const BLOCK_DST_XFER_BUFFER: u32 = 1;
+pub const BLOCK_REQUEST_VERSION: u32 = 1;
+
+/// One block transfer, mirroring `wasmos_block_request_t` in
+/// `src/drivers/include/wasmos_driver_abi.h`. Carried in a transfer buffer by
+/// BLOCK_IPC_READ_REQ and BLOCK_IPC_WRITE_REQ.
+///
+/// The request says WHERE data goes and never carries the data: payload lands
+/// directly in the named destination, which is what keeps a transfer zero-copy.
+pub const BlockRequest = extern struct {
+    version: u32 = BLOCK_REQUEST_VERSION,
+    /// The device's `block` class instance; 0 means "the only device you serve".
+    target: u32 = 0,
+    lba: u64 = 0,
+    sector_count: u32 = 0,
+    /// BLOCK_DST_*
+    dst_kind: u32 = BLOCK_DST_BLOCK_BUFFER,
+    /// Block-buffer destination: the requester's per-process buffer by physical
+    /// address.
+    dst_phys: u32 = 0,
+    /// Transfer-buffer destination: the OBJECT id, for xfer_buffer read/write.
+    dst_buffer_id: i32 = 0,
+    /// Transfer-buffer destination: the GRANT, for dma_map_borrow. A backend
+    /// that cannot do DMA ignores it and goes through the object.
+    dst_borrow_id: i32 = 0,
+    dst_offset: u32 = 0,
+};
+
+comptime {
+    if (@sizeOf(BlockRequest) != 40) @compileError("BlockRequest size != 40");
+    if (@offsetOf(BlockRequest, "lba") != 8) @compileError("BlockRequest.lba moved");
+    if (@offsetOf(BlockRequest, "dst_kind") != 20) @compileError("BlockRequest.dst_kind moved");
+    if (@offsetOf(BlockRequest, "dst_offset") != 36) @compileError("BlockRequest.dst_offset moved");
+}
+
+comptime {
+    if (@sizeOf(BlockDescriptor) != 88 + BLOCK_LABEL_MAX + BLOCK_ID_MAX) {
+        @compileError("BlockDescriptor size disagrees with wasmos_block_descriptor_t");
+    }
+    if (@offsetOf(BlockDescriptor, "lba_start") != 32) @compileError("lba_start moved");
+    if (@offsetOf(BlockDescriptor, "type_guid") != 48) @compileError("type_guid moved");
+    if (@offsetOf(BlockDescriptor, "part_guid") != 64) @compileError("part_guid moved");
+    if (@offsetOf(BlockDescriptor, "label") != 88) @compileError("label moved");
+    if (@offsetOf(BlockDescriptor, "canonical_id") != 232) @compileError("canonical_id moved");
+    // Fingerprints of two real canonical ids, pinned to the values the C
+    // implementation produces. tests/unit/test_block_descriptor.c asserts the
+    // same numbers from the other side, so the pair fails the build if either
+    // implementation drifts -- which matters because these are the addresses a
+    // filesystem uses to find its disk, and a silent divergence means it never
+    // does.
+    if (blockFingerprint("block:ata:0") != 4118534846) @compileError("fnv ata:0 mismatch");
+    if (blockFingerprint("block:virtio-blk:8") != 2695290355) @compileError("fnv virtio:8 mismatch");
+    if (blockFingerprint("") != 0) @compileError("fnv empty must be 0");
+}
+
+/// FNV-1a 32 over `id`: the `block` service class instance of a device whose
+/// canonical id is that string. Must agree byte-for-byte with
+/// wasmos_block_fingerprint() in `src/drivers/include/wasmos_driver_abi.h` —
+/// the two compute the addresses C and Zig backends register under, and a
+/// disagreement means a filesystem never finds its disk.
+pub fn blockFingerprint(id: []const u8) u32 {
+    if (id.len == 0) return 0;
+    var hash: u32 = 2166136261; // FNV offset basis
+    for (id) |c| {
+        hash ^= c;
+        hash = hash *% 16777619; // FNV prime
+    }
+    return hash;
+}
 
 /// Startup contract, mirroring `wasmos_spawn_info_t`.
 const SPAWN_INFO_MAGIC: u32 = 0x57535049; // 'WSPI'
@@ -375,6 +497,52 @@ pub fn bufferRelease(buffer_id: i32) void {
     _ = abi.xfer_buffer_release(buffer_id);
 }
 
+/// Grant flags for `bufferBorrow`, matching WASMOS_BUFFER_GRANT_* in
+/// `src/drivers/include/wasmos_driver_abi.h`.
+pub const BUFFER_GRANT_READ: i32 = 0x1;
+pub const BUFFER_GRANT_WRITE: i32 = 0x2;
+
+/// Copy `@sizeOf(T)` bytes out of transfer buffer `buffer_id` at `offset` into
+/// `out`. The buffer is either this process's own or one a client borrowed to
+/// it; the kernel admits the read on the strength of that grant. Returns true on
+/// success.
+pub fn bufferRead(buffer_id: i32, out: anytype, offset: i32) bool {
+    const T = @typeInfo(@TypeOf(out)).pointer.child;
+    return abi.xfer_buffer_read(
+        buffer_id,
+        @intCast(@intFromPtr(out)),
+        @intCast(@sizeOf(T)),
+        offset,
+    ) == 0;
+}
+
+/// Acquire a transfer buffer of at least `len` bytes, left zeroed. The caller
+/// owns it and must release it with `bufferRelease`.
+pub fn bufferAcquire(len: usize) ?i32 {
+    const bid = abi.xfer_buffer_acquire(@intCast(len));
+    return if (bid < 0) null else bid;
+}
+
+/// Lend this process's buffer `buffer_id` to whoever owns `grantee_endpoint`
+/// with `flags` rights, returning the grantee's borrow id.
+///
+/// Each call allocates its own borrow slot, so a server that re-grants the same
+/// buffer to the same client on every request accumulates them; grant once per
+/// client and let it address the buffer by object id afterwards, which any
+/// grantee may do.
+///
+/// A borrow is held per CONTEXT: the kernel resolves the endpoint to its owning
+/// process and allows one active borrow per object per process, so granting the
+/// same buffer to a second endpoint of a client that already holds one returns
+/// ALREADY_BORROWED. That is a sign the buffer is on the wrong side of the
+/// exchange -- the CLIENT owns a transfer buffer and lends it to the server for
+/// one request (docs/architecture/12-dma-transfers.md), which is the shape that
+/// needs no such bookkeeping.
+pub fn bufferBorrow(grantee_endpoint: i32, buffer_id: i32, flags: i32) ?i32 {
+    const borrow = abi.xfer_buffer_borrow(grantee_endpoint, buffer_id, flags);
+    return if (borrow < 0) null else borrow;
+}
+
 // --- service registry ------------------------------------------------------
 
 /// Reply endpoint for the registry handshakes below, created once and reused.
@@ -529,6 +697,140 @@ pub fn registerService(proc_endpoint: i32, service_endpoint: i32, name: []const 
     ) orelse return null;
     if (reply.type != op.SVC_IPC_REGISTER_RESP) return null;
     return reply.arg0;
+}
+
+// --- block buffer ------------------------------------------------------------
+
+/// Physical address of this process's per-process 8 KiB block buffer, allocated
+/// on first use. It is named by PHYSICAL address because a block backend points
+/// a bus-master device straight at it, so nothing is copied on either side.
+///
+/// Returns null on any of the block_buffer_phys failure codes; the value shares
+/// one signed word with them, so a negative result is never an address.
+pub fn blockBufferPhys() ?u32 {
+    const phys = abi.block_buffer_phys();
+    return if (phys < 0) null else @intCast(phys);
+}
+
+/// Copy `out.len` bytes out of the block buffer at `phys`, starting at `offset`,
+/// into `out`. Needed because a device wrote those bytes by physical address and
+/// this process can only reach them through the host call.
+pub fn blockBufferCopy(phys: u32, out: []u8, offset: u32) bool {
+    if (out.len == 0) return true;
+    return abi.block_buffer_copy(
+        @intCast(phys),
+        @intCast(@intFromPtr(&out[0])),
+        @intCast(out.len),
+        @intCast(offset),
+    ) == 0;
+}
+
+/// One resolved provider of a virtual class, mirroring `svc_class_entry_t` in
+/// `src/drivers/include/wasmos_driver_abi.h`. This is the wire layout the
+/// process manager writes, so the field order is ABI.
+pub const ClassEntry = extern struct {
+    /// The provider's instance within the class. Opaque: for the `block` class
+    /// it is a fingerprint of the device's canonical id, and nothing may be
+    /// decoded out of it.
+    instance: u32 = 0,
+    endpoint: u32 = 0,
+    pid: u32 = 0,
+};
+
+comptime {
+    if (@sizeOf(ClassEntry) != 12) @compileError("ClassEntry size disagrees with svc_class_entry_t");
+}
+
+/// Enumerate the providers of virtual class `class_name` into `out`.
+///
+/// Returns the TOTAL number of providers, which may exceed `out.len` — only
+/// `min(total, out.len)` entries are written, so a caller that cares whether it
+/// saw everything compares the two. Returns null on error.
+///
+/// Resolution by class rather than by a concrete name is what lets a client
+/// reach whichever provider serves the thing it wants without naming a driver:
+/// several providers share one class, and one provider may hold several
+/// instances of it.
+///
+/// The buffer carries the class name IN and the entries OUT, and is NOT lent to
+/// the process manager. That is not an oversight in the ownership model: the
+/// process manager is the kernel, which reaches any buffer without a grant.
+/// Adding a borrow here would be a grant to a peer that does not need one.
+pub fn lookupClass(proc_endpoint: i32, class_name: []const u8, out: []ClassEntry, request_id: i32) ?i32 {
+    const reply_ep = registryReplyEndpoint();
+    if (reply_ep < 0) return null;
+
+    var cn: [SVC_CLASS_MAX]u8 = [_]u8{0} ** SVC_CLASS_MAX;
+    copyName(&cn, class_name);
+
+    // The one buffer must hold whichever is larger: the class name going in, or
+    // the entries coming back.
+    var size: usize = out.len * @sizeOf(ClassEntry);
+    if (size < cn.len) size = cn.len;
+    const bid = bufferAcquire(size) orelse return null;
+    defer bufferRelease(bid);
+    if (!bufferWrite(bid, cn[0..], 0)) return null;
+
+    const reply = call(
+        proc_endpoint,
+        reply_ep,
+        op.SVC_IPC_LOOKUP_CLASS_REQ,
+        request_id,
+        bid,
+        @intCast(out.len),
+        0,
+        0,
+    ) orelse return null;
+    if (reply.type != op.SVC_IPC_LOOKUP_CLASS_RESP) return null;
+
+    const total = reply.arg0;
+    if (total < 0) return null;
+    const got: usize = if (@as(usize, @intCast(total)) < out.len) @intCast(total) else out.len;
+    if (got > 0) {
+        const raw: [*]u8 = @ptrCast(out.ptr);
+        if (abi.xfer_buffer_read(
+            bid,
+            @intCast(@intFromPtr(raw)),
+            @intCast(got * @sizeOf(ClassEntry)),
+            0,
+        ) != 0) return null;
+    }
+    return total;
+}
+
+/// Subscribe `notify_endpoint` to existence events for virtual class
+/// `class_name`. Returns true on success.
+///
+/// SVC_IPC_CLASS_EVENT is then pushed to that endpoint when a provider is added,
+/// removed or dies: arg0 = SVC_CLASS_EVENT_*, arg1 = instance, arg2 = endpoint,
+/// arg3 = pid. Subscribing is what lets a client react to a provider appearing
+/// LATER instead of polling the registry, which matters when the provider is a
+/// driver that may still be probing.
+///
+/// The notify endpoint should not be the one a service takes requests on: an
+/// event arriving mid-request would be drained by a reply-matching loop and
+/// discarded.
+pub fn subscribeClass(proc_endpoint: i32, notify_endpoint: i32, class_name: []const u8, request_id: i32) bool {
+    const reply_ep = registryReplyEndpoint();
+    if (reply_ep < 0) return false;
+
+    var cn: [SVC_CLASS_MAX]u8 = [_]u8{0} ** SVC_CLASS_MAX;
+    copyName(&cn, class_name);
+
+    const bid = bufferStage(cn[0..]) orelse return false;
+    defer bufferRelease(bid);
+
+    const reply = call(
+        proc_endpoint,
+        reply_ep,
+        op.SVC_IPC_SUBSCRIBE_CLASS_REQ,
+        request_id,
+        notify_endpoint,
+        bid,
+        0,
+        0,
+    ) orelse return false;
+    return reply.type == op.SVC_IPC_SUBSCRIBE_CLASS_RESP;
 }
 
 /// Tell the process manager this driver is ready to serve, and wait for the

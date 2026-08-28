@@ -953,12 +953,26 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
  * unit is backend-local, so `unit=0` alone names a different disk on every
  * backend, and the driver resolves its server as the `block` class instance
  * (backend << 8) | unit. The name is the same one a rule's DRIVER== spells. */
-static int build_block_fs_spawn_args(uint8_t backend, uint8_t unit, char* out, uint32_t out_cap) {
+/* `id=` is what the filesystem driver resolves its disk with: it fingerprints
+ * that string to get the `block` class instance its backend registered under.
+ * `driver=` and `unit=` remain for the driver's own diagnostics and for a
+ * backend-specific IDENTIFY argument, but nothing addresses a device with them.
+ *
+ * Refuses rather than truncates: a truncated id fingerprints to a different
+ * value than the backend registered, so the filesystem would search forever for
+ * an instance that does not exist. */
+static int build_block_fs_spawn_args(uint8_t backend, uint8_t unit, const char* canonical_id,
+                                     char* out, uint32_t out_cap) {
     int n = 0;
-    if (!out || out_cap == 0u) {
+    if (!out || out_cap == 0u || !canonical_id || canonical_id[0] == '\0') {
         return -1;
     }
-    n = snprintf(out, out_cap, "driver=%s unit=%u", block_backend_name(backend), (unsigned)unit);
+    n = snprintf(out,
+                 out_cap,
+                 "driver=%s unit=%u id=%s",
+                 block_backend_name(backend),
+                 (unsigned)unit,
+                 canonical_id);
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
     }
@@ -1363,7 +1377,7 @@ static void queue_block_fs_rule_spawns(void) {
  * Returns how many rules were queued. */
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec) {
     uint32_t queued = 0;
-    if (!rec || !rec->in_use || !rec->present) {
+    if (!rec || !rec->in_use || (rec->desc.flags & BLOCK_DESCRIPTOR_FLAG_PRESENT) == 0u) {
         return 0;
     }
     for (uint32_t ri = 0; ri < g_dm.block_fs_rule_count; ++ri) {
@@ -1380,13 +1394,14 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
          * any-backend behaviour, so an unqualified rule still works -- but the
          * shipped rules name one, because an unqualified unit matches a
          * different disk on every backend that has one. */
-        const int backend_ok =
-            rule->backend == (uint8_t)BLOCK_BACKEND_UNKNOWN || rule->backend == rec->backend;
-        const int unit_ok = rule->unit == 0xFFu || rule->unit == rec->unit;
+        const int backend_ok = rule->backend == (uint8_t)BLOCK_BACKEND_UNKNOWN ||
+                               rule->backend == (uint8_t)rec->desc.backend;
+        const int unit_ok = rule->unit == 0xFFu || rule->unit == (uint8_t)rec->desc.unit;
         if (backend_ok && unit_ok) {
             rule->queued = 1;
-            rule->matched_backend = rec->backend;
-            rule->matched_unit = rec->unit;
+            rule->matched_backend = (uint8_t)rec->desc.backend;
+            rule->matched_unit = (uint8_t)rec->desc.unit;
+            (void)str_copy(rule->matched_id, sizeof(rule->matched_id), rec->desc.canonical_id);
             queued++;
         }
     }
@@ -1404,8 +1419,8 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
         (void)snprintf(queued_msg,
                        sizeof(queued_msg),
                        "[device-manager] block_fs rule queued spawn driver=%s unit=%u\n",
-                       block_backend_name(rec->backend),
-                       (unsigned)rec->unit);
+                       block_backend_name((uint8_t)rec->desc.backend),
+                       (unsigned)rec->desc.unit);
         console_write(queued_msg);
     }
     return queued;
@@ -1432,28 +1447,54 @@ static const char* block_backend_name(uint8_t backend) {
     }
 }
 
-/* Unpack a block-device announcement from IPC args into the block registry.
+/* Consume a wasmos_block_descriptor_t published into a borrowed buffer
+ * (DEVMGR_PUBLISH_BLOCK_DEVICE): arg0=buffer_id arg1=byte_offset arg2=size.
  *
- * Bit layout (see DEVMGR_PUBLISH_BLOCK_DEVICE in abi/opcodes.yaml):
- *   arg0 [7:0]=unit, WITHIN the publishing backend
- *   arg1        =sector_count (full 32-bit capacity)
- *   arg2 [1]=active_service  [0]=present
- *   arg3        =BLOCK_BACKEND_* naming the publisher
+ * Upserts by canonical_id, which is the device's identity. Keying on anything
+ * derived instead was wrong twice over: on the unit alone, because ATA and
+ * virtio-blk both number their first disk 0 and a virtio publish would have
+ * overwritten the ATA boot disk's record; and on (backend, unit), because two
+ * IDE controllers would still collide. An id the publisher assigns has neither
+ * problem, and this service is not in a position to invent a better one -- it
+ * never probed the bus the disk is on. */
+static void registry_add_block(const wasmos_block_descriptor_t* in);
+
+static void registry_add_block_from_desc(int32_t buffer_id, int32_t offset, int32_t size) {
+    wasmos_block_descriptor_t desc;
+    if (size < (int32_t)sizeof(desc) ||
+        wasmos_xfer_buffer_read(buffer_id, &desc, (int32_t)sizeof(desc), offset) != 0) {
+        console_write("[device-manager] block descriptor read failed\n");
+        return;
+    }
+    registry_add_block(&desc);
+}
+
+/* Upsert one described device and match it against the block rules.
  *
- * Upserts by the PAIR (backend, unit). Keying on the unit alone was wrong the
- * moment a second backend existed: ATA and virtio-blk both number their first
- * disk 0, so a virtio publish would have overwritten the ATA boot disk's record
- * and inherited its identity. */
-static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
-    uint8_t unit = (uint8_t)((uint32_t)arg0 & 0xFFu);
-    uint32_t sectors = (uint32_t)arg1;
-    uint8_t present = (uint8_t)(((uint32_t)arg2 & 1u) != 0u);
-    uint8_t active = (uint8_t)((((uint32_t)arg2 >> 1) & 1u) != 0u);
-    uint8_t backend = (uint8_t)((uint32_t)arg3 & 0xFFu);
+ * Split from the transfer-buffer decode above so the matcher can be exercised
+ * without a buffer: the rule-matching behaviour is what has bugs, and reaching
+ * it through a stubbed host call tests the stub as much as the code.
+ *
+ * `desc` is taken BY VALUE-ish (const pointer, copied into the record) because
+ * it is untrusted input from another process, whatever route it arrived by. */
+static void registry_add_block(const wasmos_block_descriptor_t* in) {
+    wasmos_block_descriptor_t desc = *in;
     block_device_record_t* rec = 0;
+    if (desc.version != BLOCK_DESCRIPTOR_VERSION) {
+        console_write("[device-manager] block descriptor version mismatch\n");
+        return;
+    }
+    /* An unterminated id would run past the field into hash_id and the log. The
+     * publisher is a separate process, so this is untrusted input however
+     * cooperative it means to be. */
+    if (desc.canonical_id[sizeof(desc.canonical_id) - 1u] != '\0' || desc.canonical_id[0] == '\0') {
+        console_write("[device-manager] block descriptor has no usable canonical id\n");
+        return;
+    }
+    desc.label[sizeof(desc.label) - 1u] = '\0';
     for (uint32_t i = 0; i < g_dm.block_registry_count; ++i) {
-        if (g_dm.block_registry[i].in_use && g_dm.block_registry[i].unit == unit &&
-            g_dm.block_registry[i].backend == backend) {
+        if (g_dm.block_registry[i].in_use &&
+            wasmos_sys_streq(g_dm.block_registry[i].desc.canonical_id, desc.canonical_id)) {
             rec = &g_dm.block_registry[i];
             break;
         }
@@ -1464,50 +1505,19 @@ static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2
         }
         rec = &g_dm.block_registry[g_dm.block_registry_count++];
         rec->in_use = 1;
+        rec->active_service = 0;
     }
-    rec->backend = backend;
-    rec->unit = unit;
-    rec->present = present;
-    rec->active_service = active;
-    rec->sector_count = sectors;
-    /* The PCI prefix is the SELECTED STORAGE controller's address, which is the
-     * ATA one -- so it may only be used for an ATA publish. Spelling every
-     * device `ata<unit>` at that address was a falsehood the moment a second
-     * backend existed: a virtio disk would have claimed both the name and the
-     * ATA controller's location.
-     *
-     * TODO: a non-ATA backend gets no bus address because the publish carries
-     * none. Adding the publisher's PCI identity to DEVMGR_PUBLISH_BLOCK_DEVICE
-     * is also what would let two IDE controllers be told apart, which
-     * (backend, unit) alone cannot do. */
-    const char* backend_name = block_backend_name(backend);
-    if (backend == (uint8_t)BLOCK_BACKEND_ATA && g_dm.selected_storage_has_record) {
-        const pci_device_record_t* p = &g_dm.selected_storage_record;
-        (void)snprintf(rec->canonical_id,
-                       sizeof(rec->canonical_id),
-                       "block:pci:%02X:%02X.%02X:%s%u",
-                       (unsigned)p->bus,
-                       (unsigned)p->device,
-                       (unsigned)p->function,
-                       backend_name,
-                       (unsigned)unit);
-    } else {
-        (void)snprintf(rec->canonical_id,
-                       sizeof(rec->canonical_id),
-                       "block:%s:%u",
-                       backend_name,
-                       (unsigned)unit);
-    }
-    hex16_from_sha256(rec->canonical_id, rec->hash_id);
+    rec->desc = desc;
+    hex16_from_sha256(rec->desc.canonical_id, rec->hash_id);
 
     char msg[224];
     (void)snprintf(msg,
                    sizeof(msg),
                    "[device-manager] block add id=%s hash=%s present=%u sectors=%u\n",
-                   rec->canonical_id,
+                   rec->desc.canonical_id,
                    rec->hash_id,
-                   (unsigned)rec->present,
-                   (unsigned)rec->sector_count);
+                   (unsigned)((rec->desc.flags & BLOCK_DESCRIPTOR_FLAG_PRESENT) != 0u),
+                   (unsigned)rec->desc.lba_count);
     console_write(msg);
 
     if (queue_block_fs_rules_for_record(rec) > 0u) {
@@ -1644,7 +1654,7 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
         return;
     }
     if (msg->type == DEVMGR_PUBLISH_BLOCK_DEVICE) {
-        registry_add_block_from_ipc(msg->arg0, msg->arg1, msg->arg2, msg->arg3);
+        registry_add_block_from_desc(msg->arg0, msg->arg1, msg->arg2);
         return;
     }
     /* The packed form still carries ACPI/ISA devices (bus 0xFF), which have no
@@ -2264,6 +2274,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index]
                                        .matched_backend,
                                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].matched_unit,
+                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index].matched_id,
                                    spawn_args,
                                    sizeof(spawn_args)) > 0) {
                         args = spawn_args;

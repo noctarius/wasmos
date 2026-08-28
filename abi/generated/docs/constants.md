@@ -6,31 +6,126 @@ Values a peer passes or interprets, generated from `abi/constants.yaml` into C, 
 
 ## block_backend
 
-Which kind of backend serves a block device, published in arg3 of
-DEVMGR_PUBLISH_BLOCK_DEVICE and matched by `DRIVER==` in a block rule.
+Which kind of backend serves a block device, carried in the `backend`
+field of wasmos_block_descriptor_t and matched by `DRIVER==` in a block
+rule.
 
-A block device is identified by the PAIR (backend, unit), not by a unit
-alone. What a unit MEANS is the backend's own business -- ATA numbers the
-drives on a controller, a virtio-blk device numbers itself by where it sits
-on the bus -- so a bare unit names two different disks once more than one
-backend is present. The pair is also
-intrinsic rather than allocated: it does not depend on which driver
-finished probing first, which a number handed out in publish order would.
+What a unit MEANS is the backend's own business -- ATA numbers the drives
+on a controller, a virtio-blk device numbers itself by where it sits on the
+bus -- so a bare unit names two different disks once more than one backend
+is present. Backend and unit are both intrinsic rather than allocated: they
+do not depend on which driver finished probing first, which a number handed
+out in publish order would.
 
-The value is the low half of the `block` service class instance, whose
-high half is the backend: instance = (backend << 8) | unit. That is what
-lets a class lookup and a rule name the same disk without a registry
-handing out identities.
-
-TODO: (backend, unit) still cannot separate two IDE controllers, which
-would both call their disks 0 and 1. block_device_record_t carries a
-canonical_id derived from the PCI address for that case.
+Neither is the device's IDENTITY. That is the descriptor's canonical_id
+string (`block:pci:00:01.01:ata0`), and the `block` service class instance
+is an opaque FNV-1a 32 fingerprint of it. The fingerprint carries no
+decodable structure on purpose: every attribute a caller might want to
+match on lives in the descriptor, where adding one costs a field rather
+than a redefinition of what the instance number means.
 
 | Symbol | Value | Meaning |
 | --- | --- | --- |
 | `BLOCK_BACKEND_UNKNOWN` | 0 | Publisher named no backend. |
 | `BLOCK_BACKEND_ATA` | 1 | ATA/IDE controller; unit is the drive index. |
 | `BLOCK_BACKEND_VIRTIO_BLK` | 2 | virtio-blk PCI device. One device is one disk, so the unit identifies the DEVICE rather than a drive on it: it is (slot << 3) | function, the same packing as the BDF, which fits a unit's eight bits exactly. Two virtio-blk devices therefore get different units instead of colliding on one class instance. |
+
+## block_descriptor
+
+Version and size ceilings of wasmos_block_descriptor_t, the record that
+describes one block device. The struct itself is declared in
+src/drivers/include/wasmos_driver_abi.h and mirrored in
+src/libc/zig/driver.zig; only the values a peer must agree on live here.
+
+A reader MUST reject a descriptor whose version it does not know rather
+than interpreting the fields it recognizes, because a future version may
+redefine what an older field means and a partial read is worse than no
+read.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `BLOCK_DESCRIPTOR_VERSION` | 1 | Current wasmos_block_descriptor_t layout. |
+| `BLOCK_DESCRIPTOR_LABEL_MAX` | 144 | Bytes reserved for the partition label, NUL included. A GPT name is 36 UTF-16 code units, which reach 3 bytes each in UTF-8 -- a code point needing 4 bytes lies outside the BMP and costs two code units, so it never exceeds that rate. 109 bytes is the bound; 144 keeps the descriptor's fixed head a multiple of 8 with room to spare, so no encoder ever has to truncate a name the format can express. |
+| `BLOCK_DESCRIPTOR_ID_MAX` | 64 | Bytes reserved for canonical_id, NUL included. The longest form is the PCI-addressed partition (`block:pci:BB:DD.FF:ata0p128`), which leaves room to spare; a producer that would overflow it must fail rather than truncate, because a truncated id is a DIFFERENT device's name. |
+
+## block_request
+
+Version and destination kinds of wasmos_block_request_t, the record that
+describes one block transfer. The struct is declared in
+src/drivers/include/wasmos_driver_abi.h and mirrored in
+src/libc/zig/driver.zig.
+
+A transfer used to be described by four IPC argument words, which is what
+forced a 32-bit LBA (a 2 TiB ceiling), a `(borrow_id << 12) | count`
+packing, and a SECOND opcode -- BLOCK_IPC_READ_ZC_REQ -- whose only reason
+to exist was that a transfer-buffer destination could not be spelled in the
+words left over. As a field, the destination is a choice within one
+protocol rather than a protocol of its own.
+
+The request describes WHERE data goes; it never carries the data. Payload
+still lands directly in the named destination, which is what keeps a
+transfer zero-copy.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `BLOCK_REQUEST_VERSION` | 1 | Current wasmos_block_request_t layout. |
+| `BLOCK_DST_BLOCK_BUFFER` | 0 | Destination is the caller's per-process block buffer, named by the physical address wasmos_block_buffer_phys() returns. The backend moves bytes straight there, so neither side copies. |
+| `BLOCK_DST_XFER_BUFFER` | 1 | Destination is a transfer buffer the caller owns and has reborrowed to the backend. The request names it TWICE because the two ways a backend can reach it are addressed differently: dst_buffer_id names the OBJECT, which xfer_buffer read/write take (the kernel admits the owner or any grantee), and dst_borrow_id names the GRANT, which dma_map_borrow takes, and which is what lets a bus-master device write the caller's pages directly. A backend that cannot do DMA ignores the borrow and writes through the object. Only WHOLE sectors may be requested: a partial sector would overwrite bytes around it that the caller did not ask for, so callers stage head and tail remainders through a block-buffer destination. |
+
+## partition_scheme
+
+Which partition table a disk carries, reported in the `scheme` field of
+wasmos_block_descriptor_t.
+
+NONE is a first-class answer, not an error: a disk may hold a filesystem
+at LBA 0 with no table at all, and that disk mounts. It is a matchable
+state (`ATTR{scheme}=="none"`) rather than a fallback branch in code.
+
+The scheme decides which identity fields are populated. GPT fills
+type_guid, part_guid and label; MBR fills mbr_type and nothing else, so an
+MBR partition cannot name its own mount point and needs a rule to say
+where it goes.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `PARTITION_SCHEME_NONE` | 0 | No table; the whole device is one volume. |
+| `PARTITION_SCHEME_MBR` | 1 | Legacy MBR at LBA 0; four slots, type bytes, no labels. |
+| `PARTITION_SCHEME_GPT` | 2 | GPT header at LBA 1; type GUIDs, PARTUUIDs and labels. |
+
+## fs_type
+
+Which on-disk filesystem a block device holds, reported in the `fs_type`
+field of wasmos_block_descriptor_t.
+
+This is what a SUPERBLOCK PROBE found, not what a partition type claims.
+The two are reported side by side because neither is sufficient alone: a
+GPT type GUID of Microsoft Basic Data is carried by FAT, NTFS and exFAT
+volumes alike and so identifies nothing, while a probe cannot distinguish
+an EFI System Partition from any other FAT volume. A rule may require both.
+
+UNKNOWN means no probe matched, which is not the same as no filesystem --
+an unrecognized format reads exactly like an empty one from here.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `FS_TYPE_UNKNOWN` | 0 | No superblock probe matched. |
+| `FS_TYPE_FAT` | 1 | FAT12/16/32; BPB with a 0x55AA boot signature. |
+
+## block_descriptor_flags
+
+Bits of the `flags` field of wasmos_block_descriptor_t.
+
+PRESENT distinguishes a device that exists from a registry slot that
+merely once described one; a publisher clearing it is how a disk is
+retired.
+
+Flag bits: members are OR-able rather than alternatives.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `BLOCK_DESCRIPTOR_FLAG_PRESENT` | 0x1 | The device exists and can serve transfers. |
+| `BLOCK_DESCRIPTOR_FLAG_ACTIVE_SERVICE` | 0x2 | A filesystem service is mounted on it. |
+| `BLOCK_DESCRIPTOR_FLAG_READ_ONLY` | 0x4 | Writes are refused by the backend. |
 
 ## net_socket_family
 

@@ -1,9 +1,9 @@
 //! virtio_blk.zig — VirtIO block-device driver, in Zig, on the coroutine runtime.
 //!
 //! Serves the block-device IPC interface (BLOCK_IPC_IDENTIFY_REQ,
-//! BLOCK_IPC_READ_REQ, BLOCK_IPC_WRITE_REQ, BLOCK_IPC_READ_ZC_REQ) on top of a
-//! legacy virtio-blk PCI device, so a filesystem driver reads a virtio disk
-//! through exactly the protocol it reads an ATA disk through.
+//! BLOCK_IPC_READ_REQ, BLOCK_IPC_WRITE_REQ) on top of a legacy virtio-blk PCI
+//! device, so a filesystem driver reads a virtio disk through exactly the
+//! protocol it reads an ATA disk through.
 //!
 //! Shape: an async service, not a blocking loop
 //! -------------------------------------------
@@ -48,12 +48,12 @@
 //!
 //! Zero copy, and why the data descriptor is not this driver's memory
 //! -----------------------------------------------------------------
-//! BLOCK_IPC_READ_REQ names the CLIENT's block buffer by physical address, and
-//! that address goes straight into the data descriptor: the device transfers
-//! into the requester's pages and no byte is copied by any CPU. The same holds
-//! for BLOCK_IPC_READ_ZC_REQ, where the client's borrow of a transfer buffer is
-//! mapped for the device instead. Only the per-slot header and status byte live
-//! in this driver's own pinned region, and together they are 17 bytes.
+//! A request names its destination, and the device is pointed straight at it:
+//! a block-buffer destination gives a physical address, a transfer-buffer
+//! destination gives a borrow this driver maps for DMA. Either way the device
+//! transfers into the requester's pages and no byte is copied by any CPU. Only
+//! the per-slot header and status byte live in this driver's own pinned region,
+//! and together they are 17 bytes.
 //!
 //! Interrupts
 //! ----------
@@ -75,13 +75,14 @@
 //! without competing for the plain "block" name the ATA driver holds for the
 //! boot disk.
 //!
-//! A class instance is a DISK, and its number is (backend << 8) | unit. One
-//! virtio-blk device is one disk, so the unit identifies the DEVICE: it comes
-//! from the device's place on the bus, not from a counter, so two virtio-blk
-//! devices get different units instead of colliding on one instance. The number
-//! is derived rather than allocated, so it is the same every boot whatever
-//! order the drivers probed in, and a client can decode it back into the pair a
-//! device-manager rule names with DRIVER== and ATTR{unit}.
+//! A class instance is a DISK, and its number is an opaque FNV-1a fingerprint
+//! of the disk's canonical id (`block:virtio-blk:<unit>`). One virtio-blk device
+//! is one disk, so the unit in that id identifies the DEVICE: it comes from the
+//! device's place on the bus, not from a counter, so two virtio-blk devices get
+//! different ids instead of colliding on one instance. Both are derived rather
+//! than allocated, so they are the same every boot whatever order the drivers
+//! probed in. Nothing is decoded back OUT of an instance -- a client that wants
+//! attributes asks IDENTIFY for a descriptor.
 //!
 //! The same disk is published to the device-manager inventory, which is what
 //! makes it visible to a block rule at all -- without that a filesystem cannot
@@ -193,8 +194,97 @@ fn blockUnit() u32 {
     return ((g_dev.slot & 0x1F) << 3) | (g_dev.function & 0x07);
 }
 
+/// This disk's descriptor: the driver's own record of what the device is.
+///
+/// IDENTIFY does not lend this out. It writes a copy into the buffer the CALLER
+/// owns and lent for the request, because the client holds a transfer buffer's
+/// lifecycle (docs/architecture/12-dma-transfers.md). A server that lent its own
+/// buffer could never free it: release is owner-only, no hostcall transfers
+/// ownership, and nothing tells a server when a client has finished reading.
+var g_desc: driver.BlockDescriptor = .{};
+/// Staging buffer for DEVMGR_PUBLISH_BLOCK_DEVICE, lent READ to device-manager.
+/// This driver owns it because it is the CLIENT there -- the same rule, applied
+/// to the other direction. Held for the process lifetime because the publish is
+/// fire-and-forget and carries no acknowledgement.
+var g_publish_bid: i32 = -1;
+var g_desc_devmgr_granted: bool = false;
+
+/// `block:virtio-blk:<unit>` -- this device's canonical id, and the string the
+/// class instance below is the fingerprint of. Written into the descriptor
+/// rather than returned, because the id has nowhere else to live.
+///
+/// Returns false if the id does not fit, which must fail the registration: a
+/// truncated canonical id is a DIFFERENT device's name, and the fingerprint
+/// derived from it would address the wrong disk.
+fn buildCanonicalId(out: *[driver.BLOCK_ID_MAX]u8) bool {
+    const prefix = "block:virtio-blk:";
+    var n: usize = 0;
+    for (prefix) |c| {
+        if (n + 1 >= out.len) return false;
+        out[n] = c;
+        n += 1;
+    }
+    var digits: [10]u8 = undefined;
+    var value = blockUnit();
+    var d: usize = 0;
+    if (value == 0) {
+        digits[0] = '0';
+        d = 1;
+    } else {
+        while (value != 0) : (value /= 10) {
+            digits[d] = '0' + @as(u8, @intCast(value % 10));
+            d += 1;
+        }
+    }
+    while (d > 0) {
+        d -= 1;
+        if (n + 1 >= out.len) return false;
+        out[n] = digits[d];
+        n += 1;
+    }
+    out[n] = 0;
+    return true;
+}
+
+/// Length of the NUL-terminated canonical id staged in the descriptor.
+fn canonicalIdSlice() []const u8 {
+    var n: usize = 0;
+    while (n < g_desc.canonical_id.len and g_desc.canonical_id[n] != 0) : (n += 1) {}
+    return g_desc.canonical_id[0..n];
+}
+
+/// The `block` class instance: an opaque fingerprint of the canonical id, not an
+/// encoding of (backend, unit). Attributes are read from the descriptor, which
+/// can grow a field where a packed instance could only be redefined.
 fn blockClassInstance() u32 {
-    return (@as(u32, @intCast(abi.BLOCK_BACKEND_VIRTIO_BLK)) << 8) | blockUnit();
+    return driver.blockFingerprint(canonicalIdSlice());
+}
+
+/// Fill the descriptor and stage it in its own transfer buffer. Returns false if
+/// the id does not fit or the buffer cannot be acquired or written, either of
+/// which must stop both the publish and the class registration.
+fn buildDescriptor() bool {
+    g_desc = .{};
+    g_desc.version = driver.BLOCK_DESCRIPTOR_VERSION;
+    g_desc.backend = @intCast(abi.BLOCK_BACKEND_VIRTIO_BLK);
+    g_desc.unit = blockUnit();
+    g_desc.partition = 0; // a raw disk; partitions are the partition manager's
+    g_desc.scheme = @intCast(abi.PARTITION_SCHEME_NONE);
+    g_desc.fs_type = @intCast(abi.FS_TYPE_UNKNOWN); // this driver probes no superblock
+    g_desc.sector_bytes = SECTOR_BYTES;
+    g_desc.lba_start = 0;
+    g_desc.lba_count = g_dev.capacity_sectors;
+    g_desc.flags = @intCast(abi.BLOCK_DESCRIPTOR_FLAG_PRESENT);
+    if (!buildCanonicalId(&g_desc.canonical_id)) return false;
+    if (g_publish_bid < 0) {
+        g_publish_bid = driver.bufferAcquire(@sizeOf(driver.BlockDescriptor)) orelse return false;
+    }
+    return driver.bufferWrite(g_publish_bid, descBytes(), 0);
+}
+
+/// The descriptor as raw bytes, which is how it travels in either direction.
+fn descBytes() []const u8 {
+    return @as([*]const u8, @ptrCast(&g_desc))[0..@sizeOf(driver.BlockDescriptor)];
 }
 
 /// virtio-blk defines exactly one queue, index 0, the requestq. MAX_QUEUE caps
@@ -208,10 +298,6 @@ const SECTOR_BYTES: u32 = 512;
 /// what a zero-copy client may ask for, so the two paths accept the same
 /// requests.
 const MAX_SECTORS: u32 = 8;
-/// Packing of BLOCK_IPC_READ_ZC_REQ's arg2, mirroring
-/// WASMOS_BLOCK_ZC_BORROW_SHIFT / WASMOS_BLOCK_ZC_COUNT_MASK.
-const ZC_BORROW_SHIFT: u5 = 12;
-const ZC_COUNT_MASK: i32 = 0xFFF;
 
 /// Requests that may be on the queue at once. Each holds three descriptors and
 /// one SLOT_STRIDE-byte span of the scratch page, so the ceiling is the scratch
@@ -665,13 +751,29 @@ fn checkRange(lba: i32, count: i32) i32 {
     return 0;
 }
 
-/// BLOCK_IPC_IDENTIFY_REQ: report the device geometry. arg1 is the sector count
-/// and arg2 the unit index, which is always 0 -- a virtio-blk device is one
-/// disk, and a second disk is a second device with its own driver instance.
-/// Answered inline because it needs no transfer.
+/// BLOCK_IPC_IDENTIFY_REQ: describe this disk. The answer is a block descriptor
+/// in a transfer buffer lent to the caller READ-only -- arg1 the buffer id, arg2
+/// the byte offset, arg3 the size -- rather than geometry packed into the
+/// arguments, because the set of things a caller must know about a disk is
+/// open-ended and four argument words are not.
+///
+/// arg0 of the request names a unit, which this backend ignores: a virtio-blk
+/// device is one disk, and a second disk is a second device with its own driver
+/// instance.
 fn handleIdentify(msg: *const co.IpcMessage) void {
     if (!g_dev.present or !g_dev.ready) {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_NOT_READY);
+        return;
+    }
+    // Write into the CLIENT's buffer, which it acquired and lent with WRITE for
+    // this request and releases afterwards. This driver lends nothing.
+    const client_bid = msg.arg1;
+    if (client_bid <= 0) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_BAD_REQUEST);
+        return;
+    }
+    if (!driver.bufferWrite(client_bid, descBytes(), 0)) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR);
         return;
     }
     _ = driver.send(
@@ -680,32 +782,91 @@ fn handleIdentify(msg: *const co.IpcMessage) void {
         op.BLOCK_IPC_IDENTIFY_RESP,
         msg.request_id,
         0,
-        @intCast(g_dev.capacity_sectors),
+        @intCast(@sizeOf(driver.BlockDescriptor)),
         0,
         0,
     );
 }
 
-/// BLOCK_IPC_READ_REQ / BLOCK_IPC_WRITE_REQ: arg0 is the client's block buffer
-/// named by physical address, arg1 the first sector, arg2 the sector count. The
-/// buffer address goes straight into the data descriptor, so the device
-/// transfers into (or out of) the client's pages directly.
+/// BLOCK_IPC_READ_REQ / BLOCK_IPC_WRITE_REQ: a wasmos_block_request_t in a
+/// buffer the CALLER owns and has borrowed to this endpoint --
+/// arg0 = buffer_id, arg1 = byte offset, arg2 = size.
+///
+/// One handler serves both destinations. A transfer-buffer destination used to
+/// be a second opcode purely because it could not be spelled in the argument
+/// words the block-buffer form left over; as a field it is a branch on where the
+/// data goes, which is all it ever was.
 fn acceptTransfer(msg: *const co.IpcMessage) void {
     const is_write = msg.type == op.BLOCK_IPC_WRITE_REQ;
     if (is_write and g_dev.read_only) {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_READ_ONLY);
         return;
     }
-    if (msg.arg0 <= 0) {
+    var req: driver.BlockRequest = .{};
+    if (msg.arg0 <= 0 or msg.arg1 < 0 or msg.arg2 < @as(i32, @intCast(@sizeOf(driver.BlockRequest))) or
+        !driver.bufferRead(msg.arg0, &req, msg.arg1))
+    {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
         return;
     }
-    const check = checkRange(msg.arg1, msg.arg2);
+    if (req.version != driver.BLOCK_REQUEST_VERSION) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION);
+        return;
+    }
+    // Refuse a request aimed at some other device. This backend serves exactly
+    // one disk, so it COULD ignore the target and be right by luck -- and that is
+    // the reason to check: a proxy that forwarded a partition's instance instead
+    // of the disk's would be silently serviced against the whole device, and the
+    // bug would surface as corruption somewhere else entirely. Zero means "the
+    // only device you serve", which a client that never looked up a class sends.
+    if (req.target != 0 and req.target != blockClassInstance()) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT);
+        return;
+    }
+    // This device addresses 32-bit LBAs; the request carries 64 because a disk
+    // may be larger than this driver can reach. Refuse with a reason rather than
+    // truncate an address.
+    if (req.lba > 0xFFFFFFFF) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+        return;
+    }
+    const check = checkRange(@intCast(req.lba), @intCast(req.sector_count));
     if (check != 0) {
         sendError(msg.source, msg.request_id, check);
         return;
     }
+
+    // Resolve the destination BEFORE claiming a slot, so a refused mapping does
+    // not have to unwind one.
+    var data_phys: u32 = 0;
+    var borrow: i32 = 0;
+    var borrow_bytes: u32 = 0;
+    if (req.dst_kind == driver.BLOCK_DST_XFER_BUFFER) {
+        // The request names the buffer twice; this driver uses only the GRANT,
+        // because mapping it yields a device address the disk is pointed at
+        // directly. Without a borrow there is nothing to map -- there is no
+        // staging path here -- so the request is refused and the caller falls
+        // back to a block-buffer destination.
+        if (req.dst_borrow_id <= 0 or is_write) {
+            sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+            return;
+        }
+        borrow = req.dst_borrow_id;
+        borrow_bytes = req.sector_count * SECTOR_BYTES;
+        data_phys = driver.dmaMapBorrow(borrow, req.dst_offset, borrow_bytes, driver.DMA_DIR_FROM_DEVICE) orelse {
+            sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+            return;
+        };
+    } else {
+        if (req.dst_phys == 0) {
+            sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+            return;
+        }
+        data_phys = req.dst_phys;
+    }
+
     const index = claimSlot() orelse {
+        if (borrow != 0) driver.dmaUnmapBorrow(borrow);
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL);
         return;
     };
@@ -713,54 +874,11 @@ fn acceptTransfer(msg: *const co.IpcMessage) void {
     slot.source = msg.source;
     slot.request_id = msg.request_id;
     slot.msg_type = msg.type;
-    slot.lba = @intCast(msg.arg1);
-    slot.count = @intCast(msg.arg2);
-    slot.data_phys = @intCast(msg.arg0);
-}
-
-/// BLOCK_IPC_READ_ZC_REQ: land whole sectors straight in the client's transfer
-/// buffer. arg0 = buffer_id, arg1 = lba, arg2 = (borrow_id << 12) | count,
-/// arg3 = destination byte offset.
-///
-/// The buffer is named twice because the two ways to reach it are addressed
-/// differently, and this driver uses only the second: the packed borrow id names
-/// the client's GRANT, and mapping it yields a device address the disk can be
-/// pointed at. Without a borrow there is nothing to map -- this driver has no
-/// staging path, so the request is refused and the client falls back to
-/// BLOCK_IPC_READ_REQ.
-fn acceptReadZeroCopy(msg: *const co.IpcMessage) void {
-    const count = msg.arg2 & ZC_COUNT_MASK;
-    const borrow = @as(i32, @intCast(@as(u32, @bitCast(msg.arg2)) >> ZC_BORROW_SHIFT));
-    if (msg.arg0 <= 0 or msg.arg3 < 0 or borrow <= 0) {
-        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
-        return;
-    }
-    const check = checkRange(msg.arg1, count);
-    if (check != 0) {
-        sendError(msg.source, msg.request_id, check);
-        return;
-    }
-    const index = claimSlot() orelse {
-        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL);
-        return;
-    };
-
-    const bytes = @as(u32, @intCast(count)) * SECTOR_BYTES;
-    const data_phys = driver.dmaMapBorrow(borrow, @intCast(msg.arg3), bytes, driver.DMA_DIR_FROM_DEVICE) orelse {
-        g_slots[index].state = .free;
-        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
-        return;
-    };
-
-    const slot = &g_slots[index];
-    slot.source = msg.source;
-    slot.request_id = msg.request_id;
-    slot.msg_type = msg.type;
-    slot.lba = @intCast(msg.arg1);
-    slot.count = @intCast(count);
+    slot.lba = @intCast(req.lba);
+    slot.count = @intCast(req.sector_count);
     slot.data_phys = data_phys;
     slot.borrow = borrow;
-    slot.borrow_bytes = bytes;
+    slot.borrow_bytes = borrow_bytes;
 }
 
 /// Service a completion interrupt: ack it where one is owed, then reap every
@@ -815,7 +933,6 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
     switch (msg.type) {
         op.BLOCK_IPC_IDENTIFY_REQ => handleIdentify(msg),
         op.BLOCK_IPC_READ_REQ, op.BLOCK_IPC_WRITE_REQ => acceptTransfer(msg),
-        op.BLOCK_IPC_READ_ZC_REQ => acceptReadZeroCopy(msg),
         IPC_IRQ_EVENT_TYPE, IPC_MSI_EVENT_TYPE => serviceCompletions(),
         else => {
             // A message with no reply address is a stray notification, not a
@@ -989,32 +1106,40 @@ fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
 /// block rule matches against -- so without this the disk exists as a service
 /// but no filesystem can be mounted on it.
 ///
-/// arg0 = unit (backend-local), arg1 = sectors, arg2 bit0 = present, and arg3
-/// names the backend so the device manager can tell this disk apart from an ATA
-/// unit with the same number.
+/// The announcement is a block descriptor in a transfer buffer lent to
+/// device-manager READ-only: arg0 the buffer id, arg1 the byte offset, arg2 the
+/// size. The descriptor's canonical_id is what the inventory keys on; backend
+/// and unit are attributes inside it rather than its name.
 ///
 /// Fire-and-forget, matching the ATA publisher: the inventory is a notification
 /// and the device manager owns what it does with it. A device manager that is
 /// not up yet simply never learns about this disk, which is why the lookup is
 /// retried rather than assumed.
 fn publishBlockDevice(proc_endpoint: i32) void {
-    if (!g_dev.ready) return;
+    if (!g_dev.ready or g_publish_bid < 0) return;
     const devmgr = driver.lookupService(proc_endpoint, "devmgr.inv", 32, 256) orelse {
         driver.log("[virtio-blk] devmgr inventory unavailable; disk not published");
         return;
     };
+    if (!g_desc_devmgr_granted) {
+        if (driver.bufferBorrow(devmgr, g_publish_bid, driver.BUFFER_GRANT_READ) == null) {
+            driver.log("[virtio-blk] descriptor borrow to device-manager failed");
+            return;
+        }
+        g_desc_devmgr_granted = true;
+    }
     _ = driver.send(
         devmgr,
         endpoint(),
         op.DEVMGR_PUBLISH_BLOCK_DEVICE,
         0,
-        @intCast(blockUnit()),
-        @intCast(g_dev.capacity_sectors),
-        1, // present; active_service is the device manager's to set
-        abi.BLOCK_BACKEND_VIRTIO_BLK,
+        g_publish_bid,
+        0,
+        @intCast(@sizeOf(driver.BlockDescriptor)),
+        0,
     );
     var line = driver.Line{};
-    _ = line.str("[virtio-blk] published unit=").dec(blockUnit());
+    _ = line.str("[virtio-blk] published id=").str(canonicalIdSlice());
     _ = line.str(" instance=").dec(blockClassInstance()).str(" sectors=").dec(g_dev.capacity_sectors);
     line.end();
 }
@@ -1086,6 +1211,13 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     // it finds whichever block backend is present without naming this driver.
     // The plain "block" NAME is deliberately not claimed: the ATA driver holds
     // it for the boot disk.
+    // Stage the descriptor first: the class instance is a fingerprint of the
+    // canonical id it holds, so registering before it exists would claim the
+    // instance of the empty string.
+    if (!buildDescriptor()) {
+        driver.log("[virtio-blk] descriptor staging failed; disk not registered");
+        return;
+    }
     if (driver.registerService(proc_endpoint, endpoint(), "virtio-blk", "block", blockClassInstance(), 1) == null) {
         driver.log("[virtio-blk] service registration failed");
         return;

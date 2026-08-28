@@ -24,7 +24,13 @@
 
 #include <stdarg.h>
 #include <stdint.h>
-#include <string.h>
+/* NO <string.h> here. The compile line routes `#include "string.h"` to the
+ * project's libc through -iquote, and device_manager.c includes it below. On a
+ * host whose system header fortifies (macOS at _USE_FORTIFY_LEVEL 2) that macro-
+ * defines strcpy, which then expands inside our libc's plain declaration and
+ * fails to parse. Everything this file needs -- strlen, strstr, memset, snprintf
+ * -- is declared by the headers device_manager.c pulls in, and every use is
+ * after that include. */
 
 /* vsnprintf/printf come from the service's own "stdio.h", pulled in by the
  * included translation unit; the host libc supplies the definitions at link
@@ -98,9 +104,27 @@ static void add_block_fs_rule(uint8_t backend, uint8_t unit, const char* mount) 
     (void)snprintf(rule->spawn_path, sizeof(rule->spawn_path), "system/drivers/fs_fat.wap");
 }
 
-/* The publish an ATA disk sends: present, one unit, a plausible capacity. */
+/* The publish an ATA disk sends: present, one unit, a plausible capacity.
+ *
+ * Built as a descriptor and handed to the matcher directly. The transfer-buffer
+ * decode in front of it is deliberately skipped: what these cases exercise is
+ * WHICH RULES MATCH a device, and routing that through a stubbed host call would
+ * test the stub as much as the matcher. */
 static void publish_block_device(uint8_t backend, uint8_t unit) {
-    registry_add_block_from_ipc((int32_t)unit, (int32_t)1032192, (int32_t)1, (int32_t)backend);
+    wasmos_block_descriptor_t desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.version = BLOCK_DESCRIPTOR_VERSION;
+    desc.backend = backend;
+    desc.unit = unit;
+    desc.sector_bytes = 512u;
+    desc.lba_count = 1032192u;
+    desc.flags = BLOCK_DESCRIPTOR_FLAG_PRESENT;
+    (void)snprintf(desc.canonical_id,
+                   sizeof(desc.canonical_id),
+                   "block:%s:%u",
+                   backend == (uint8_t)BLOCK_BACKEND_ATA ? "ata" : "virtio-blk",
+                   (unsigned)unit);
+    registry_add_block(&desc);
 }
 
 /* -------------------------------------------------------------------- cases */

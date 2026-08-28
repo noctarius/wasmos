@@ -73,6 +73,7 @@ in-kernel scheduler rather than an optional mode.
 ### Drivers and Services
 - [Drivers and Services](architecture/15-drivers-and-services.md)
 - [Device Manager and Bus Enumeration](architecture/16-device-manager-and-bus-enumeration.md)
+- [Partition Manager and Block Device Identity](architecture/36-partition-manager-and-block-identity.md) - proposed descriptor-based block identity replacing the packed class instance and publish arguments; a partition manager service that parses GPT and MBR tables and publishes each partition as a block device, proxying I/O with an LBA offset and a bounds clamp; mount policy read from the partition rather than from a rule naming a disk
 - [Console I/O and Character Device](architecture/17-console-io-and-character-device.md)
 - [Filesystem Stack](architecture/18-filesystem-stack.md)
 - [WFS Filesystem Format](WFS_WASMOS_FILE_SYSTEM.md) - design proposal for a journaling, extent-based on-disk format: object records, extent trees, seeded metadata checksums, and the 32-bit host-call/IPC boundaries a 64-bit format meets in a wasm driver

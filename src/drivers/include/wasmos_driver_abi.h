@@ -614,14 +614,141 @@ typedef struct __attribute__((packed)) {
  * server with a smaller limit stays correct without the client knowing. */
 #define WASMOS_BLOCK_ZC_MAX_SECTORS 8u
 
-/* BLOCK_IPC_READ_ZC_REQ.arg2 packs the borrow handle above the sector count, the
- * same (handle << 12 | small scalar) shape the spawn and mount paths already use.
- * A fifth field is needed because the server must be able to address the buffer
- * two ways -- by OBJECT to copy into it, by BORROW to map it for device DMA --
- * and dst_offset is the one field that can legitimately grow, so it keeps a slot
- * of its own rather than sharing one. The count needs 4 bits; 12 leaves room. */
-#define WASMOS_BLOCK_ZC_BORROW_SHIFT 12u
-#define WASMOS_BLOCK_ZC_COUNT_MASK 0xFFFu
+/* One block transfer, as its requester describes it. Carried in a transfer
+ * buffer by BLOCK_IPC_READ_REQ and BLOCK_IPC_WRITE_REQ; see abi/opcodes.yaml for
+ * the argument encoding that names it.
+ *
+ * A struct rather than packed message arguments because four words could not
+ * hold what a transfer actually is. The packed form forced a 32-bit LBA (a 2 TiB
+ * ceiling on a disk the descriptor can describe past), packed a borrow handle
+ * above a sector count in one word, left no room to name the target device --
+ * so backends inferred it from the sender's endpoint -- and needed a SECOND read
+ * opcode for a transfer-buffer destination. All four of those are fields here.
+ *
+ * The request says WHERE data goes; it never carries the data. Payload still
+ * lands directly in the named destination, which is what keeps a transfer
+ * zero-copy, and routing it through this struct would undo that.
+ *
+ * A requester acquires and borrows ONE buffer per operation and writes a fresh
+ * request into its own slot for each transfer; nothing here is acquired per
+ * request. Concurrent requests need distinct slots, because a slot may not be
+ * reused until its reply lands. */
+typedef struct __attribute__((packed)) {
+    uint32_t version; /* BLOCK_REQUEST_VERSION */
+    /* The device's `block` class instance, i.e. which of the backend's devices
+     * this transfer addresses. 0 means "the only device you serve", which a
+     * single-disk backend may take as read. */
+    uint32_t target;
+    uint64_t lba;
+    uint32_t sector_count;
+    uint32_t dst_kind; /* BLOCK_DST_* */
+    /* BLOCK_DST_BLOCK_BUFFER: the requester's per-process block buffer, by
+     * physical address. Zero for other kinds. */
+    uint32_t dst_phys;
+    /* BLOCK_DST_XFER_BUFFER: the OBJECT id, which xfer_buffer read/write take. */
+    int32_t dst_buffer_id;
+    /* BLOCK_DST_XFER_BUFFER: the GRANT, which dma_map_borrow takes, and what
+     * lets a bus-master device write the requester's pages directly. A backend
+     * that cannot do DMA ignores it and goes through the object. */
+    int32_t dst_borrow_id;
+    /* Byte offset within the destination. The range
+     * [dst_offset, dst_offset + sector_count * sector_bytes) must lie inside it. */
+    uint32_t dst_offset;
+} wasmos_block_request_t;
+
+/* Pins the size for the Zig mirror in src/libc/zig/driver.zig, on the same terms
+ * as wasmos_block_descriptor_t above: every field sits at its natural alignment
+ * and the total is a multiple of 8, so the packed layout here and the
+ * naturally-aligned mirror describe the same bytes. */
+_Static_assert(sizeof(wasmos_block_request_t) == 40u,
+               "wasmos_block_request_t layout changed; update BlockRequest in "
+               "src/libc/zig/driver.zig to match");
+
+/* One block device, as its backend describes it. Carried in a transfer buffer by
+ * BLOCK_IPC_IDENTIFY_RESP and DEVMGR_PUBLISH_BLOCK_DEVICE; see abi/opcodes.yaml
+ * for those two argument encodings.
+ *
+ * A struct rather than packed message arguments because the set of things a
+ * caller must know about a disk is open-ended -- scheme, filesystem, GPT
+ * identity, the LBA window -- and four argument words are not. Adding an
+ * attribute here costs a field and a version bump; adding one to a packed
+ * encoding costs a redefinition of what every existing bit means.
+ *
+ * `canonical_id` is the device's IDENTITY and every other field is an attribute
+ * of it. The `block` service class instance is wasmos_block_fingerprint() of
+ * that string, so a caller holding the id can address the device without a
+ * lookup round trip, and a caller holding only the instance must ask.
+ *
+ * lba_start and lba_count are 64-bit because this is a byte payload rather than
+ * a set of IPC arguments. The transfer opcodes still take a 32-bit LBA, so a
+ * device may be DESCRIBED past the point BLOCK_IPC_READ_REQ can address it; see
+ * the TODO on that opcode.
+ *
+ * A reader MUST reject a `version` it does not know instead of reading the
+ * fields it recognizes: a later layout may redefine an existing field, and a
+ * partial read is worse than a refusal. */
+typedef struct __attribute__((packed)) {
+    uint32_t version;   /* BLOCK_DESCRIPTOR_VERSION */
+    uint32_t backend;   /* BLOCK_BACKEND_* */
+    uint32_t unit;      /* backend-local device number */
+    uint32_t partition; /* 0 = whole device, else partition-table slot */
+    uint32_t scheme;    /* PARTITION_SCHEME_* */
+    uint32_t fs_type;   /* FS_TYPE_*, from a superblock probe */
+    uint32_t sector_bytes;
+    uint32_t flags;     /* BLOCK_DESCRIPTOR_FLAG_* */
+    uint64_t lba_start; /* absolute on the underlying device */
+    uint64_t lba_count;
+    uint8_t type_guid[16]; /* GPT partition type; zero unless scheme is GPT */
+    uint8_t part_guid[16]; /* PARTUUID; zero unless scheme is GPT */
+    uint8_t mbr_type;      /* MBR partition type byte; zero unless scheme is MBR */
+    /* Pads the fixed head to 88 bytes. The size is deliberate: every field
+     * already sits at its natural alignment, and a total that is a multiple of 8
+     * means a compiler adds no tail padding either -- so the packed layout here
+     * and the naturally-aligned Zig `extern struct` mirror describe the same
+     * bytes. Without it the two disagree by 4 bytes at the tail, which no
+     * field-by-field review would show. */
+    uint8_t reserved[7];
+    char label[BLOCK_DESCRIPTOR_LABEL_MAX];     /* PARTLABEL, UTF-8, NUL-terminated */
+    char canonical_id[BLOCK_DESCRIPTOR_ID_MAX]; /* NUL-terminated */
+} wasmos_block_descriptor_t;
+
+/* The layout is an ABI shared with src/libc/zig/driver.zig, which mirrors it as
+ * an extern struct. Pinning the size here means a field added on one side and
+ * forgotten on the other fails the build instead of shifting every field past
+ * it. tests/unit/test_block_descriptor.c pins the individual offsets. */
+_Static_assert(sizeof(wasmos_block_descriptor_t) ==
+                   88u + BLOCK_DESCRIPTOR_LABEL_MAX + BLOCK_DESCRIPTOR_ID_MAX,
+               "wasmos_block_descriptor_t layout changed; update BlockDescriptor in "
+               "src/libc/zig/driver.zig to match");
+
+/* FNV-1a 32 over a NUL-terminated string: the `block` service class instance of
+ * a device whose canonical id is `id`.
+ *
+ * The instance is a FINGERPRINT, not an encoding -- nothing may be decoded back
+ * out of it. That is the point: an instance that spelled out (backend, unit)
+ * had to be redefined the moment a partition needed addressing, and would need
+ * redefining again for whatever comes after.
+ *
+ * FNV-1a rather than the SHA-256 behind block_device_record_t.hash_id because
+ * three languages must agree on the value for the same string -- C here, Zig in
+ * driver.zig -- and this is an index key, not a security primitive. A collision
+ * is not silent: service_class_registry_add refuses a second owner for a live
+ * (class, instance), so two devices hashing alike fail the later registration
+ * instead of aliasing.
+ *
+ * Returns 0 only for a NULL or empty id, which is not a valid canonical id. */
+static inline uint32_t wasmos_block_fingerprint(const char* id) {
+    uint32_t hash = 2166136261u; /* FNV offset basis */
+    uint32_t i;
+    if (!id || id[0] == '\0') {
+        return 0u;
+    }
+    for (i = 0u; id[i] != '\0'; ++i) {
+        hash ^= (uint32_t)(uint8_t)id[i];
+        hash *= 16777619u; /* FNV prime */
+    }
+    return hash;
+}
 
 /* Message-signalled interrupt style a PCI function supports, reported by
  * PCI_IPC_MSI_QUERY. MSI-X wins when a device offers both: it addresses each

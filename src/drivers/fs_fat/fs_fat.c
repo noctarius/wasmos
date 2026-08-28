@@ -43,6 +43,11 @@ static int32_t g_requested_unit = -1;
  * manager named it. A unit alone does not identify a disk -- it is
  * backend-local -- so both halves are needed to find the right server. */
 static uint8_t g_requested_backend = (uint8_t)BLOCK_BACKEND_UNKNOWN;
+/* The `block` class instance of this driver's disk: the fingerprint of the
+ * canonical id the device manager passed in `id=`. It is both how the provider
+ * is found in the class registry and how the provider is told which of its disks
+ * is meant, since several instances may share one endpoint. */
+static uint32_t g_requested_instance = 0u;
 
 /* In-flight op pool + FIFO of queued (not-yet-active) op indices. */
 static fat_op_ctx_t g_ops[FAT_MAX_INFLIGHT];
@@ -67,8 +72,14 @@ static void fat_stall(void) {
 
 /* --- init-time handshakes (one-time, pre-reactor; synchronous by nature). --- */
 
+/* Startup-argument blob this driver reads. Large enough for
+ * `driver=<name> unit=<n> id=<canonical id>`, whose id alone may be
+ * BLOCK_DESCRIPTOR_ID_MAX bytes; the process manager truncates at
+ * WASMOS_STARTUP_ARGS_MAX, so nothing longer can arrive anyway. */
+#define FAT_STARTUP_ARGS_MAX 128
+
 static int32_t fat_parse_requested_unit(void) {
-    char args[64];
+    char args[FAT_STARTUP_ARGS_MAX];
     char* end = 0;
     const char* unit = 0;
     long value = 0;
@@ -103,11 +114,42 @@ static uint8_t fat_backend_from_name(const char* name) {
 }
 
 static uint8_t fat_parse_requested_backend(void) {
-    char args[64];
+    char args[FAT_STARTUP_ARGS_MAX];
     if (wasmos_startup_args(args, sizeof(args)) == 0u) {
         return (uint8_t)BLOCK_BACKEND_UNKNOWN;
     }
     return fat_backend_from_name(fat_find_token_value(args, "driver="));
+}
+
+/* The `block` class instance of the disk this driver was spawned for: the
+ * fingerprint of the canonical id in `id=`.
+ *
+ * The id is copied out of the argument blob because it is not NUL-terminated
+ * there -- tokens are space-separated -- and the fingerprint is defined over the
+ * id alone. Returns 0 when there is no usable id, which no valid device has.  */
+static uint32_t fat_parse_requested_instance(void) {
+    char args[FAT_STARTUP_ARGS_MAX];
+    char id[BLOCK_DESCRIPTOR_ID_MAX];
+    const char* token = 0;
+    uint32_t n = 0;
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
+        return 0u;
+    }
+    token = fat_find_token_value(args, "id=");
+    if (!token) {
+        return 0u;
+    }
+    while (n + 1u < sizeof(id) && token[n] != '\0' && token[n] != ' ') {
+        id[n] = token[n];
+        ++n;
+    }
+    id[n] = '\0';
+    /* A truncated id fingerprints to a different value than the backend
+     * registered, so refuse it rather than search for a disk that cannot answer. */
+    if (n == 0u || (token[n] != '\0' && token[n] != ' ')) {
+        return 0u;
+    }
+    return wasmos_block_fingerprint(id);
 }
 
 /* Resolve the block server for this instance's disk through the `block` service
@@ -191,34 +233,68 @@ static void fat_report_backend_info(int32_t dst, int32_t request_id) {
                          (int32_t)g_mount_unit);
 }
 
-/* Resolve the mount alias + unit via BLOCK_IPC_IDENTIFY + devmgr query. */
+/* Resolve the mount alias + unit via BLOCK_IPC_IDENTIFY + devmgr query.
+ *
+ * IDENTIFY answers with a block descriptor written into a buffer THIS driver
+ * owns and lends to the backend for the request, so the unit is read out of that
+ * record rather than out of an argument word. The client holds the lifecycle
+ * (docs/architecture/12-dma-transfers.md); the backend is a transient grantee.
+ *
+ * TODO: the mount name still comes from a device-manager query keyed on the
+ * unit, which cannot name one partition of a disk. It is the descriptor's
+ * canonical_id that identifies the volume; passing the mount in the startup
+ * arguments retires DEVMGR_QUERY_BLOCK_MOUNT_REQ altogether. */
 static int fat_resolve_mount_alias(char* out_mount, uint32_t out_mount_len, uint8_t* out_unit) {
     int32_t reply = g_blk.reply_endpoint;
     int32_t devmgr = -1;
     int32_t req_id = 41;
     int32_t unit = 0;
+    int32_t desc_bid = -1;
+    int32_t rc = -1;
+    wasmos_block_descriptor_t desc;
     uint32_t packed[4];
     if (!out_mount || out_mount_len < 2u || !out_unit) {
         return -1;
     }
     out_mount[0] = '\0';
     *out_unit = 0;
+    /* This driver owns the buffer and lends it to the backend for the round
+     * trip; release below cascade-revokes that grant on every path. */
+    desc_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(desc));
+    if (desc_bid < 0) {
+        fat_log("identify buffer unavailable\n");
+        return -1;
+    }
+    if (wasmos_xfer_buffer_borrow(g_blk.block_endpoint, desc_bid, WASMOS_BUFFER_GRANT_WRITE) < 0) {
+        fat_log("identify buffer grant failed\n");
+        (void)wasmos_xfer_buffer_release(desc_bid);
+        return -1;
+    }
     if (wasmos_ipc_send(g_blk.block_endpoint,
                         reply,
                         BLOCK_IPC_IDENTIFY_REQ,
                         req_id,
-                        g_requested_unit,
+                        (int32_t)g_requested_instance,
+                        desc_bid,
                         0,
-                        0,
-                        0) != 0 ||
-        wasmos_ipc_select_one(reply) < 0) {
+                        0) == 0 &&
+        wasmos_ipc_select_one(reply) >= 0 &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == BLOCK_IPC_IDENTIFY_RESP &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) == req_id &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0) == 0 &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1) >= (int32_t)sizeof(desc)) {
+        rc = wasmos_xfer_buffer_read(desc_bid, &desc, (int32_t)sizeof(desc), 0);
+    }
+    (void)wasmos_xfer_buffer_release(desc_bid);
+    if (rc != 0) {
+        fat_log("identify failed\n");
         return -1;
     }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != BLOCK_IPC_IDENTIFY_RESP ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+    if (desc.version != BLOCK_DESCRIPTOR_VERSION) {
+        fat_log("identify descriptor version mismatch\n");
         return -1;
     }
-    unit = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+    unit = (int32_t)desc.unit;
     *out_unit = (uint8_t)(unit & 0xFF);
     devmgr = wasmos_svc_lookup(g_proc_endpoint, reply, "devmgr.query", 1);
     if (devmgr < 0) {
@@ -471,15 +547,24 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     g_requested_unit = fat_parse_requested_unit();
     g_requested_backend = fat_parse_requested_backend();
     if (g_requested_backend == (uint8_t)BLOCK_BACKEND_UNKNOWN || g_requested_unit < 0) {
-        /* Without both halves there is no disk to look for. The device manager
+        /* Without both halves there is no disk to IDENTIFY. The device manager
          * always sends them; a spawn that did not is a configuration error, and
          * guessing a backend would mount the wrong volume. */
         fat_log("startup args missing driver= or unit=; cannot resolve a block device\n");
         fat_stall();
     }
-    /* The class instance that names this disk: (backend << 8) | unit. */
-    const uint32_t instance =
-        ((uint32_t)g_requested_backend << 8) | ((uint32_t)g_requested_unit & 0xFFu);
+    /* The class instance that names this disk: the fingerprint of the canonical
+     * id the device manager passed through from the backend's own publish. It is
+     * NOT rebuilt from driver= and unit= here -- a second place that spells the
+     * id is a second place that can disagree with the publisher, and a
+     * disagreement leaves this driver waiting forever on an instance nobody
+     * holds. */
+    g_requested_instance = fat_parse_requested_instance();
+    if (g_requested_instance == 0u) {
+        fat_log("startup args missing id=; cannot resolve a block device\n");
+        fat_stall();
+    }
+    const uint32_t instance = g_requested_instance;
     for (int32_t attempt = 0;; ++attempt) {
         block_endpoint = fat_lookup_block_server(reply_endpoint, instance, 1 + attempt);
         if (block_endpoint > 0) {
@@ -488,7 +573,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         (void)wasmos_sched_yield();
     }
 
-    fat_block_configure(&g_blk, block_endpoint, reply_endpoint);
+    fat_block_configure(&g_blk, block_endpoint, reply_endpoint, g_requested_instance);
     if (fat_block_setup(&g_blk) != 0) {
         fat_log("block buffer missing\n");
         fat_stall();

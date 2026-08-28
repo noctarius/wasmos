@@ -267,6 +267,9 @@ const (
 	WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST int32 = -0x00190005 // unknown or unsupported block opcode
 	WASMOS_ERR_BLOCK_DEV_READ_FAILED int32 = -0x00190006 // the transfer from the device failed
 	WASMOS_ERR_BLOCK_DEV_WRITE_FAILED int32 = -0x00190007 // the transfer to the device failed
+	WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION int32 = -0x00190008 // a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t
+	WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED int32 = -0x00190009 // a block record is short, unterminated, or names a length outside the transfer buffer
+	WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR int32 = -0x0019000A // the device has no descriptor to report, so it cannot be identified
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -796,6 +799,12 @@ func WasmosStrerror(c int32) string {
 		return "the transfer from the device failed"
 	case WASMOS_ERR_BLOCK_DEV_WRITE_FAILED:
 		return "the transfer to the device failed"
+	case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION:
+		return "a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t"
+	case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED:
+		return "a block record is short, unterminated, or names a length outside the transfer buffer"
+	case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR:
+		return "the device has no descriptor to report, so it cannot be identified"
 	default:
 		return "unknown error"
 	}

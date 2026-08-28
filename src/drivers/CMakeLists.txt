@@ -10,6 +10,7 @@ add_subdirectory(virtio_net)
 add_subdirectory(virtio_serial)
 add_subdirectory(virtio_rng)
 add_subdirectory(virtio_blk)
+add_subdirectory(partition_manager)
 add_subdirectory(framebuffer)
 add_subdirectory(framebuffer_pci)
 
@@ -34,4 +35,9 @@ add_custom_target(drivers DEPENDS
 # CMakeLists has found one.
 if (VIRTIO_BLK_ZIG_AVAILABLE)
   add_dependencies(drivers virtio_blk_app)
+endif ()
+
+# Same for the partition manager, which is Zig for the same reason.
+if (PARTITION_MANAGER_ZIG_AVAILABLE)
+  add_dependencies(drivers partition_manager_app)
 endif ()

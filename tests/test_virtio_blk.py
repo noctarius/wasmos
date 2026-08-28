@@ -31,30 +31,34 @@ DISK_SECTORS = 2048
 # Leading bytes of the pattern `blkinfo --write` lays down, so the read-back
 # assertion names what it is looking for rather than a bare hex string.
 WRITE_TAG = b"WASMOS-BLKWRITE"
-# `BLOCK_BACKEND_VIRTIO_BLK` from abi/constants.yaml; the high byte of a `block`
-# class instance.
-VIRTIO_BLK_BACKEND = 2
 
 
-def _virtio_instance(session) -> int:
-    """The virtio disk's class instance, as the guest reports it.
+def _virtio_disk_id(session) -> str:
+    """The virtio disk's canonical id, as the guest reports it.
 
-    Not hardcoded, because the instance is `(backend << 8) | unit` and the unit
-    is derived from the device's PCI slot -- so it is stable for a given machine
-    configuration but would change if QEMU laid the bus out differently. A test
-    that baked the number in would be asserting QEMU's device ordering rather
-    than this driver's behaviour.
+    Not hardcoded, because the id ends in a unit derived from the device's PCI
+    slot -- stable for a given machine configuration, but different if QEMU laid
+    the bus out differently. A test that baked the number in would be asserting
+    QEMU's device ordering rather than this driver's behaviour.
+
+    The id is also the only handle a client has: the `block` class instance is an
+    opaque fingerprint of this string, so nothing can be decoded out of it and
+    every tool names a disk this way instead.
     """
     match = re.search(
-        rb"\[blkinfo\] instance=(\d+) driver=virtio-blk unit=(\d+)", session.buf
+        rb"\[blkinfo\] id=(block:virtio-blk:(\d+)) driver=virtio-blk unit=(\d+)",
+        session.buf,
     )
     assert match is not None, "blkinfo reported no virtio-blk disk"
-    instance = int(match.group(1))
-    unit = int(match.group(2))
-    assert (
-        instance == (VIRTIO_BLK_BACKEND << 8) | unit
-    ), f"instance {instance} does not decode to (virtio-blk, {unit})"
-    return instance
+    disk_id = match.group(1).decode()
+    id_unit = int(match.group(2))
+    reported_unit = int(match.group(3))
+    assert id_unit == reported_unit, (
+        f"canonical id {disk_id} names unit {id_unit} but the descriptor reports "
+        f"{reported_unit} -- the publisher built the id from something other than "
+        "the unit it describes"
+    )
+    return disk_id
 
 
 def _make_disk(disk_dir: str) -> str:
@@ -137,22 +141,22 @@ class VirtioBlkTest(unittest.TestCase):
 
     def test_write_then_read_round_trips_a_sector(self) -> None:
         assert self.session is not None
-        # Ask the guest which disk the virtio one is rather than assuming: the
-        # instance encodes a unit derived from the device's PCI slot.
+        # Ask the guest which disk the virtio one is rather than assuming: its
+        # unit is derived from the device's PCI slot.
         self.session.send("blkinfo")
         self.assertTrue(
             self.session.expect(b"driver=virtio-blk", timeout_s=60),
             "blkinfo did not enumerate the virtio disk",
         )
-        instance = _virtio_instance(self.session)
+        disk_id = _virtio_disk_id(self.session)
         # LBA 1, not 0: the signature at LBA 0 is what the read test asserts on,
         # and a write there would make the two tests order-dependent.
         # --write names the disk, and refuses to run without one, so it can never
         # scribble on the ATA boot disk it now also enumerates.
-        self.session.send(f"blkinfo --write {instance} 1")
+        self.session.send(f"blkinfo --write {disk_id} 1")
         self.assertTrue(
             self.session.expect(
-                f"[blkinfo] instance={instance} lba=1 write ok".encode(), timeout_s=60
+                f"[blkinfo] id={disk_id} lba=1 write ok".encode(), timeout_s=60
             ),
             "the device refused BLOCK_IPC_WRITE_REQ — the request chain's data "
             "descriptor is device-writable in the OUT direction, or the device "
@@ -167,33 +171,35 @@ class VirtioBlkTest(unittest.TestCase):
     def test_every_backend_appears_as_its_own_disk(self) -> None:
         """Both backends enumerate under the `block` class, as distinct disks.
 
-        The instance encodes (backend << 8) | unit. ATA's drives are 256 and 257
-        because its units are drive numbers; the virtio disk's unit comes from
-        its PCI slot, so its instance is checked by decoding rather than by a
-        literal. Both are derived from what the disk IS rather than handed out
-        on registration, which is what makes them the same every boot however
+        Each disk is named by its canonical id. ATA's drives are block:ata:0 and
+        block:ata:1 because its units are drive numbers; the virtio disk's unit
+        comes from its PCI slot, so its id is matched by shape rather than by a
+        literal. All three are derived from what the disk IS rather than handed
+        out on registration, which is what makes them the same every boot however
         the drivers raced to probe.
         """
         assert self.session is not None
         self.session.send("blkinfo")
         self.assertTrue(
-            self.session.expect(b"[blkinfo] providers=3", timeout_s=60),
-            "the block class did not hold all three disks (ATA's two drives plus "
-            "the virtio disk) — a backend did not register, or two collided on "
-            "one instance",
+            self.session.expect(b"[blkinfo] providers=5", timeout_s=60),
+            "the block class did not hold all five providers — ATA's two drives, "
+            "the virtio disk, and the one partition on each ATA drive that the "
+            "partition manager republishes. A partition IS a block device here, "
+            "so a count of three means the partition manager did not publish, "
+            "and a count above five means something registered twice",
         )
         for marker in (
-            b"instance=256 driver=ata unit=0",
-            b"instance=257 driver=ata unit=1",
+            b"id=block:ata:0 driver=ata unit=0",
+            b"id=block:ata:1 driver=ata unit=1",
         ):
             self.assertTrue(
                 self.session.expect(marker, timeout_s=30),
-                f"{marker!r} missing — an instance did not decode back to the "
-                "(backend, unit) pair a device-manager rule names",
+                f"{marker!r} missing — a disk did not report the canonical id its "
+                "backend publishes it under",
             )
-        # Asserts the same property for the virtio disk without pinning QEMU's
-        # PCI layout: the reported instance must decode to (virtio-blk, unit).
-        _virtio_instance(self.session)
+        # The same property for the virtio disk without pinning QEMU's PCI
+        # layout: its id must name the unit its descriptor reports.
+        _virtio_disk_id(self.session)
 
     def test_a_rule_is_queued_only_for_its_own_backend(self) -> None:
         """A block rule naming one backend is not queued for a disk on another.
@@ -228,12 +234,20 @@ class VirtioBlkTest(unittest.TestCase):
         )
 
     def test_devmgr_inventory_separates_the_backends(self) -> None:
-        """The virtio disk gets its own inventory record, not ATA's.
+        """Each disk gets its own inventory record under its own identity.
 
         The device manager used to key block records on a bare unit and spell
         every one of them `ata<unit>` at the ATA controller's PCI address, so a
         virtio disk publishing unit 0 would have overwritten the ATA boot disk's
         record and inherited its identity.
+
+        The id now comes from the PUBLISHER rather than being synthesized here,
+        which is what makes that impossible — and is also why the ATA disks no
+        longer carry a PCI address. The ATA driver declares [[regions]], so it is
+        spawned by module index with no startup arguments and never learns its
+        controller's bus address; the device manager knew one only because it had
+        matched the rule, and attaching it to disks it had not probed is exactly
+        the falsehood that put the ATA controller's location on virtio disks.
         """
         assert self.session is not None
         self.assertTrue(
@@ -241,18 +255,83 @@ class VirtioBlkTest(unittest.TestCase):
             "the virtio disk is absent from the device-manager inventory, so no "
             "block rule can ever match it",
         )
+        for marker in (b"block add id=block:ata:0", b"block add id=block:ata:1"):
+            self.assertTrue(
+                self.session.expect(marker, timeout_s=30),
+                f"{marker!r} missing — an ATA drive did not reach the inventory "
+                "under the id its own driver publishes it with",
+            )
+
+    def test_a_partition_is_a_block_device_with_its_own_window(self) -> None:
+        """The partition manager republishes a partition as a block device.
+
+        The ATA disks are QEMU vvfat volumes, which carry a classic MBR with one
+        FAT16 partition starting at LBA 63 — so this exercises the MBR path on a
+        real table rather than a hand-built one.
+
+        The assertion that matters is the LAST one. Reading LBA 0 of the DISK
+        returns the MBR area; reading LBA 0 of the PARTITION returns the FAT
+        volume boot record living at absolute LBA 63. Same request, same opcode,
+        different device — which is the rebase and the containment in one
+        observation. A partition manager that forwarded without rebasing would
+        return the MBR for both.
+        """
+        assert self.session is not None
+        self.session.send("blkinfo")
         self.assertTrue(
-            self.session.expect(b"block add id=block:pci:", timeout_s=30),
-            "the ATA disks lost their PCI-addressed identity",
+            self.session.expect(
+                b"id=block:ata:0p1 driver=ata unit=0 sectors=1032129", timeout_s=60
+            ),
+            "the ATA boot disk's partition was not published as a block device — "
+            "the partition manager did not run, or its MBR parse rejected a table "
+            "that vvfat really does present",
+        )
+        # A FAT volume boot record: the JMP (EB 3E 90) followed by the OEM name
+        # "MSWIN4.1", which is what vvfat writes at the partition's first sector.
+        self.assertTrue(
+            self.session.expect(
+                b"id=block:ata:0p1 lba=0 data=EB3E904D5357494E", timeout_s=30
+            ),
+            "reading LBA 0 of the partition did not return the FAT boot sector at "
+            "absolute LBA 63 — the request was forwarded without being rebased "
+            "onto the partition's window",
         )
 
-    def test_a_mounted_ata_disk_is_still_identifiable(self) -> None:
-        """Discovery must not require claiming the disk.
+    def test_a_disk_without_a_table_publishes_no_partition(self) -> None:
+        """A partition table is optional, and its absence is not a failure.
 
-        ATA binds a client endpoint to one unit exclusively so two filesystems
-        cannot write one drive. That guard used to cover IDENTIFY too, which made
-        a mounted disk unqueryable — the opposite of what discovering it by class
-        is for. A transfer is still refused, and now says why.
+        The virtio test disk carries a filesystem signature at LBA 0 and no table
+        at all. The partition manager must leave it alone: its own class instance
+        already serves it, so republishing anything would be inventing a volume
+        nobody wrote.
+        """
+        assert self.session is not None
+        self.session.send("blkinfo")
+        self.assertTrue(
+            self.session.expect(b"driver=virtio-blk", timeout_s=60),
+            "blkinfo did not enumerate the virtio disk",
+        )
+        disk_id = _virtio_disk_id(self.session)
+        self.assertNotIn(
+            f"id={disk_id}p".encode(),
+            self.session.buf,
+            "a partition was published for a disk that has no partition table",
+        )
+
+    def test_a_mounted_ata_disk_is_readable_by_a_second_client(self) -> None:
+        """A mounted disk answers both IDENTIFY and a read from another client.
+
+        ATA used to claim a drive for the first client that transferred on it and
+        never release it, refusing everyone after with UNIT_CLAIMED. That was the
+        driver enforcing an access policy it had no information about — it has no
+        release, no authority, and no input from the rules that decide who mounts
+        what, so it enforced "whoever probed first". virtio-blk serves the same
+        class contract with no such table.
+
+        It also blocks the partition manager, which must read LBA 0/1 of a disk a
+        filesystem is already mounted on. Keeping two filesystems off one volume
+        is device-manager's job through its rules, and separation by LBA window is
+        the partition manager's.
         """
         assert self.session is not None
         # Each case drives blkinfo itself rather than relying on another having
@@ -261,22 +340,31 @@ class VirtioBlkTest(unittest.TestCase):
         self.session.send("blkinfo")
         self.assertTrue(
             self.session.expect(
-                b"instance=256 driver=ata unit=0 sectors=", timeout_s=60
+                b"id=block:ata:0 driver=ata unit=0 sectors=", timeout_s=60
             ),
             "the mounted ATA boot disk could not be identified",
         )
+        # The boot disk is FAT-formatted and mounted, so sector 0 is a real
+        # partition table read back by a client that is not the filesystem: the
+        # MBR signature 0x55AA ends the sector vvfat presents.
         self.assertTrue(
-            self.session.expect(b"read failed: block_dev.UNIT_CLAIMED", timeout_s=30),
-            "a transfer on a claimed unit was not refused with a named reason",
+            self.session.expect(b"id=block:ata:0 lba=0 data=", timeout_s=30),
+            "a second client could not read the mounted boot disk — the driver "
+            "is still arbitrating access it has no basis to arbitrate",
+        )
+        self.assertNotIn(
+            b"block_dev.UNIT_CLAIMED",
+            self.session.buf,
+            "a transfer was refused for exclusivity that no longer exists",
         )
 
     def test_block_class_read_returns_the_disk_signature(self) -> None:
         assert self.session is not None
         self.session.send("blkinfo")
         self.assertTrue(
-            self.session.expect(b"[blkinfo] providers=3", timeout_s=60),
-            'the "block" class did not hold all three disks — a backend did not '
-            "reach service registration, or two collided on one instance",
+            self.session.expect(b"[blkinfo] providers=5", timeout_s=60),
+            'the "block" class did not hold all five providers — three disks plus '
+            "the partition the partition manager publishes for each ATA drive",
         )
         self.assertTrue(
             self.session.expect(f"sectors={DISK_SECTORS}".encode(), timeout_s=30),

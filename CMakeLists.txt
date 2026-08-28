@@ -143,6 +143,9 @@ set(WASM_VIRTIO_SERIAL_APP ${BUILD_DIR}/virtio_serial.wap)
 set(WASM_VIRTIO_RNG_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_rng/virtio_rng.c)
 set(WASM_VIRTIO_RNG_DRIVER_WASM ${BUILD_DIR}/virtio_rng.wasm)
 set(WASM_VIRTIO_RNG_APP ${BUILD_DIR}/virtio_rng.wap)
+set(WASM_PARTITION_MANAGER_DRIVER_SRC ${DRIVER_WASM_DIR}/partition_manager/partition_manager.zig)
+set(WASM_PARTITION_MANAGER_DRIVER_WASM ${BUILD_DIR}/partition_manager.wasm)
+set(WASM_PARTITION_MANAGER_APP ${BUILD_DIR}/partition_manager.wap)
 set(WASM_VIRTIO_BLK_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_blk/virtio_blk.zig)
 set(WASM_VIRTIO_BLK_DRIVER_WASM ${BUILD_DIR}/virtio_blk.wasm)
 set(WASM_VIRTIO_BLK_APP ${BUILD_DIR}/virtio_blk.wap)
@@ -1773,6 +1776,9 @@ if (ZIG_AVAILABLE)
   set(VIRTIO_BLK_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_BLK_APP} ${BUILD_DIR}/esp/system/drivers/virtio_blk.wap
   )
+  set(PARTITION_MANAGER_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTITION_MANAGER_APP} ${BUILD_DIR}/esp/system/drivers/partmgr.wap
+  )
 endif ()
 
 set(WASMOS_ESP_POPULATE_CMDS
@@ -1802,6 +1808,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_NET_APP} ${BUILD_DIR}/esp/system/drivers/virtio_net.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_RNG_APP} ${BUILD_DIR}/esp/system/drivers/virtio_rng.wap
   ${VIRTIO_BLK_COPY_CMD}
+  ${PARTITION_MANAGER_COPY_CMD}
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}
@@ -2231,6 +2238,18 @@ add_custom_target(run-fat-image-tests
   COMMENT "Driving fs_fat against real formatter-built FAT images"
   VERBATIM)
 
+# Dead-strip flag for host unit tests that include a whole translation unit and
+# rely on collection to drop the half they do not exercise. The GNU spelling is
+# not an Apple linker option -- ld64 rejects --gc-sections outright, and so does
+# ld64.lld -- so the platform decides the spelling. Not optional: without a
+# dead-strip those suites fail to link on undefined host-call imports from the
+# uncollected half.
+if (APPLE)
+  set(DEAD_STRIP_FLAG -Wl,-dead_strip)
+else ()
+  set(DEAD_STRIP_FLAG -Wl,--gc-sections)
+endif ()
+
 add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
@@ -2299,6 +2318,15 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_device_manager_rules
   COMMAND ${BUILD_DIR}/test_device_manager_rules
+  # The block descriptor ABI and its class-instance fingerprint. Header-only:
+  # wasmos_driver_abi.h carries both, and the generated constants it includes
+  # supply the version and the field capacities.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_block_descriptor.c
+          -o ${BUILD_DIR}/test_block_descriptor
+  COMMAND ${BUILD_DIR}/test_block_descriptor
   # The block-rule MATCHER, as opposed to the rule parser above. The suite
   # includes device_manager.c to reach its file statics, so:
   #   --gc-sections drops the event-loop half of that translation unit, whose
@@ -2308,7 +2336,7 @@ add_custom_target(run-kernel-unit-tests
   #     from the collected half are unreferenced here, which is a property of
   #     testing one path through a TU, not a defect in the service.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -Wno-unused-function -ffunction-sections -fdata-sections -Wl,--gc-sections
+          -Wno-unused-function -ffunction-sections -fdata-sections ${DEAD_STRIP_FLAG}
           -iquote ${SERVICES_DIR}/device_manager
           -iquote ${LIBSYS_WASM_DIR}/include
           -iquote ${LIBC_DIR}/include
@@ -3252,6 +3280,25 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               -Mcoroutine=${LIBC_DIR}/zig/coroutine.zig
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running WASM Zig coroutine wrapper unit tests"
+      VERBATIM)
+  endif ()
+  if (ZIG_AVAILABLE)
+    # The GPT/MBR parser. Pure Zig with no C sources and no imports beyond the
+    # module under test, because it does no I/O: every case builds a sector image
+    # in memory. The NATIVE_COROUTINE_ZIG_* variables are misnamed for this use —
+    # they are the host target and link flags `zig test` needs on this platform,
+    # not anything coroutine-specific — but reusing them keeps one definition of
+    # "how to run a Zig host test" rather than a second copy that can drift.
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-partition-table-cache
+              --global-cache-dir ${BUILD_DIR}/zig-partition-table-global-cache
+              --dep partition_table
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_partition_table.zig
+              -Mpartition_table=${DRIVER_WASM_DIR}/partition_manager/partition_table.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running partition-table parser unit tests"
       VERBATIM)
   endif ()
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD

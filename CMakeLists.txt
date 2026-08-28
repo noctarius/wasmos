@@ -524,6 +524,16 @@ include(CMakeParseArguments)
 # module and one link line rather than two to keep in step.
 set(WASMOS_LIBC_C_SOURCES)
 
+# The staged sysroot carries a COPY of every generated ABI header:
+# cmake/wasmos_sdk_stage.cmake globs abi/generated/c/*.h and rewrites the
+# repo-relative includes into the sysroot layout. A dependency on the originals
+# is what makes regenerating an IDL invalidate that copy; without it a wasm
+# module compiles against the previous ABI, and the failure surfaces as an
+# undeclared constant at a call site the IDL already defines. CONFIGURE_DEPENDS
+# so a newly generated header joins the list without a manual reconfigure.
+file(GLOB WASMOS_ABI_GENERATED_C_HEADERS CONFIGURE_DEPENDS
+  ${CMAKE_SOURCE_DIR}/abi/generated/c/*.h)
+
 set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBC_DIR}/include/ctype.h
   ${LIBC_DIR}/include/stdio.h
@@ -554,6 +564,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_scroll_view.h
   ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_menu_bar.h
   ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_menu_item.h
+  ${WASMOS_ABI_GENERATED_C_HEADERS}
 )
 
 # wasmos_manifest_link_value(<out_var> <manifest> <key> <default>)

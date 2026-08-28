@@ -11,16 +11,17 @@
  * check. */
 static int32_t block_reply_status(void* user, const wasmos_ipc_message_t* reply) {
     const wfs_block_t* b = (const wfs_block_t*)user;
-    int32_t want;
 
     if (!b || !reply) {
         return WASMOS_ERR_FS_IO;
     }
-    want = b->op.reply.type == BLOCK_IPC_WRITE_RESP ? BLOCK_IPC_WRITE_RESP : BLOCK_IPC_READ_RESP;
     if (reply->type == BLOCK_IPC_ERROR) {
         return reply->arg0 ? reply->arg0 : WASMOS_ERR_FS_IO;
     }
-    if (reply->type != want) {
+    /* Which request this answers is settled by the bridge, which correlates on
+     * the request id; the type only has to be a block reply of some kind. */
+    if (reply->type != BLOCK_IPC_READ_RESP && reply->type != BLOCK_IPC_WRITE_RESP &&
+        reply->type != BLOCK_IPC_FLUSH_RESP) {
         return WASMOS_ERR_FS_IO;
     }
     return 0;
@@ -105,6 +106,19 @@ wasmos_future_t* wfs_block_read_begin(wfs_block_t* b, uint32_t block) {
         return 0;
     }
     return submit(b, block, 0);
+}
+
+wasmos_future_t* wfs_block_flush_begin(wfs_block_t* b) {
+    if (b->in_flight) {
+        return 0;
+    }
+    wasmos_sys_wasm_ipc_future_init(&b->op, block_reply_status, b);
+    /* The tag is left alone: a flush moves no data, so the staged block still
+     * holds what it held and still names the block it came from. */
+    b->pending_block = b->staged_block;
+    b->in_flight = 1u;
+    return wasmos_sys_wasm_ipc_future_send(
+        b->loop, &b->op, b->block_endpoint, b->reply_endpoint, BLOCK_IPC_FLUSH_REQ, 0, 0, 0, 0, 0);
 }
 
 wasmos_future_t* wfs_block_write_begin(wfs_block_t* b, uint32_t block) {

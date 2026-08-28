@@ -676,6 +676,27 @@ static int ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t b
     return ata_wait_not_busy();
 }
 
+/* Commit the drive's write cache (BLOCK_IPC_FLUSH_REQ). The same command every
+ * write already ends with, issued on its own so a caller can order writes across
+ * requests -- which is what a journal barrier needs and what request ordering
+ * alone does not give. */
+static int ata_flush_unit(uint8_t unit) {
+    ata_select_channel(unit);
+    if (ata_wait_not_busy() != 0) {
+        return -1;
+    }
+    /* CACHE FLUSH acts on whichever drive the channel currently addresses, so
+     * the drive-select bit is written first: a flush issued without it would
+     * commit the OTHER drive's cache and report success for this one. The
+     * command takes no LBA, so the address bits are zero. */
+    wasmos_io_region_out8(ata_region(), ATA_REG_HDDEVSEL, (uint8_t)(0xE0u | ((unit & 1u) << 4)));
+    if (ata_wait_not_busy() != 0) {
+        return -1;
+    }
+    wasmos_io_region_out8(ata_region(), ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
+    return ata_wait_not_busy();
+}
+
 static void ata_send_resp(int32_t reply_ep, int32_t req_id, int32_t type, int32_t status,
                           int32_t arg1) {
     wasmos_ipc_send(reply_ep, g_block_endpoint, type, req_id, status, arg1, 0, 0);
@@ -911,6 +932,15 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
     /* A transfer does claim one: the first client to ask for a unit keeps it. */
     if (ata_assign_unit_for_source(source, -1, &unit) != 0 || !g_unit_present[unit]) {
         ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_UNIT_CLAIMED, 0);
+        return 0;
+    }
+
+    if (type == BLOCK_IPC_FLUSH_REQ) {
+        if (ata_flush_unit(unit) != 0) {
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_WRITE_FAILED, 0);
+            return 0;
+        }
+        ata_send_resp(source, req_id, BLOCK_IPC_FLUSH_RESP, 0, 0);
         return 0;
     }
 

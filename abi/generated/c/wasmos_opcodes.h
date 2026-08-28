@@ -184,9 +184,23 @@ enum {
      * On failure: BLOCK_IPC_ERROR, arg0 = reason.
      */
     BLOCK_IPC_READ_ZC_REQ = 0x303,
+    /* Commit everything already written to durable media, so a caller that
+     * orders its writes can rely on that order surviving power loss.
+     * arg0..arg3 reserved (must be zero).
+     * Ordering a request after a reply only guarantees the DEVICE saw them in
+     * that order; a volatile write cache may still lose the earlier ones. A
+     * journal barrier (docs/WFS_WASMOS_FILE_SYSTEM.md section 14, steps 2, 4
+     * and 6) is exactly that guarantee and needs this.
+     * A device with no volatile write cache answers success without doing
+     * anything, because for it the guarantee already holds.
+     * On success: BLOCK_IPC_FLUSH_RESP. On failure: BLOCK_IPC_ERROR,
+     * arg0 = reason.
+     */
+    BLOCK_IPC_FLUSH_REQ = 0x304,
     BLOCK_IPC_READ_RESP = 0x380,
     BLOCK_IPC_WRITE_RESP = 0x381,
     BLOCK_IPC_IDENTIFY_RESP = 0x382,
+    BLOCK_IPC_FLUSH_RESP = 0x383,
     BLOCK_IPC_ERROR = 0x3FF,
 };
 
@@ -646,9 +660,11 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x301: return "BLOCK_IPC_WRITE_REQ";
         case 0x302: return "BLOCK_IPC_IDENTIFY_REQ";
         case 0x303: return "BLOCK_IPC_READ_ZC_REQ";
+        case 0x304: return "BLOCK_IPC_FLUSH_REQ";
         case 0x380: return "BLOCK_IPC_READ_RESP";
         case 0x381: return "BLOCK_IPC_WRITE_RESP";
         case 0x382: return "BLOCK_IPC_IDENTIFY_RESP";
+        case 0x383: return "BLOCK_IPC_FLUSH_RESP";
         case 0x3FF: return "BLOCK_IPC_ERROR";
         default: return "UNKNOWN";
         }

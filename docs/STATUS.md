@@ -1076,8 +1076,8 @@ linked feature documents for rationale and rollout plans.
   the event loop and the pump; the driver supplies only a `prepare` hook and a
   root task. It takes its device identity from the device-manager startup args,
   negotiates the legacy PCI device, and serves `BLOCK_IPC_IDENTIFY_REQ`,
-  `BLOCK_IPC_READ_REQ`, `BLOCK_IPC_WRITE_REQ` and `BLOCK_IPC_READ_ZC_REQ` over a
-  single requestq.
+  `BLOCK_IPC_READ_REQ`, `BLOCK_IPC_WRITE_REQ`, `BLOCK_IPC_READ_ZC_REQ` and
+  `BLOCK_IPC_FLUSH_REQ` over a single requestq.
 - One endpoint carries everything `virtio-blk` waits on. The event loop drains a
   single receiver and demultiplexes, so the block service is registered ON the
   runner's endpoint and the interrupt is routed TO it; the driver owns no select
@@ -1260,21 +1260,28 @@ linked feature documents for rationale and rollout plans.
   Recovery refuses a chain rather than half-applying it, because §21's three
   passes -- a revoke table built over the whole replay set before any image is
   applied -- are what a chain needs, and nothing writes one yet.
-- The barrier between §14's steps is REQUEST ORDERING, not a cache flush. Each
-  step awaits its block reply before issuing the next, so the device sees the
-  writes in order; nothing makes a device with a volatile write cache commit them
-  to media, because `abi/opcodes.yaml` has no `BLOCK_IPC_FLUSH_REQ`.
+- The barrier between §14's steps is a real cache flush. `BLOCK_IPC_FLUSH_REQ` /
+  `BLOCK_IPC_FLUSH_RESP` carry it, `wfs_block_flush_begin` issues it, and the
+  commit task awaits one at steps 2, 4 and 6; §21's replay awaits one before its
+  tail retires the replayed writes. Awaiting each reply before issuing the next
+  orders only what the DEVICE saw, which a volatile write cache is free to commit
+  in another order -- so ordering alone left a COMMIT able to reach media ahead of
+  the images it names. Both backends serve it: `ata` issues ATA CACHE FLUSH, and
+  `virtio-blk` negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH`,
+  answering success without a queue entry when the device did not offer the
+  feature and therefore has no volatile cache to commit.
 - Every mount reads the journal superblock, clean or not: a transaction cannot be
   opened without the log's geometry and tail. §15's skip is of the replay SCAN,
   and a clean volume still never walks the log. A volume whose log does not
   validate mounts READ-ONLY rather than being refused -- every structure a reader
   touches is intact, and the log is a region only a writer needs.
-- A volume that was not unmounted cleanly now has its log replayed at mount, so
-  `needs_replay` is discharged rather than latched. It still mounts READ-ONLY: the
-  metadata writers (`wfs_alloc.c`, `wfs_write.c`, `wfs_truncate.c`,
-  `wfs_extent_write.c`, `wfs_namespace.c`) do not yet run inside transactions, so
-  what an interrupted one left behind is not in the log and no replay repairs it.
-  Converting them is what lifts the gate, and there is a TODO at the site.
+- A volume that was not unmounted cleanly has its log replayed at mount and then
+  mounts WRITABLE: `needs_replay` is discharged rather than latched, and every
+  metadata writer runs inside a transaction, so what an interrupted one left
+  behind is in the log and the replay is what repairs it. A volume that mounted
+  from a BACKUP superblock is the exception -- a backup's `state` is stale by
+  construction, so the replay runs unconditionally and the volume stays read-only
+  whatever it finds.
 - `tests/unit/test_wfs_journal.c` and `tests/unit/test_wfs_recover.c` cover both.
   The recovery suite models a crash as a STOPPED DEVICE -- the transaction runs
   for a chosen number of block requests and everything past that fails, so the

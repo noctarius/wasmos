@@ -154,9 +154,22 @@ const BLOCK_IPC_IDENTIFY_REQ int32 = 0x302
 // On success: BLOCK_IPC_READ_RESP, arg1 = sectors transferred.
 // On failure: BLOCK_IPC_ERROR, arg0 = reason.
 const BLOCK_IPC_READ_ZC_REQ int32 = 0x303
+// Commit everything already written to durable media, so a caller that
+// orders its writes can rely on that order surviving power loss.
+// arg0..arg3 reserved (must be zero).
+// Ordering a request after a reply only guarantees the DEVICE saw them in
+// that order; a volatile write cache may still lose the earlier ones. A
+// journal barrier (docs/WFS_WASMOS_FILE_SYSTEM.md section 14, steps 2, 4
+// and 6) is exactly that guarantee and needs this.
+// A device with no volatile write cache answers success without doing
+// anything, because for it the guarantee already holds.
+// On success: BLOCK_IPC_FLUSH_RESP. On failure: BLOCK_IPC_ERROR,
+// arg0 = reason.
+const BLOCK_IPC_FLUSH_REQ int32 = 0x304
 const BLOCK_IPC_READ_RESP int32 = 0x380
 const BLOCK_IPC_WRITE_RESP int32 = 0x381
 const BLOCK_IPC_IDENTIFY_RESP int32 = 0x382
+const BLOCK_IPC_FLUSH_RESP int32 = 0x383
 const BLOCK_IPC_ERROR int32 = 0x3FF
 
 // fs (0x400..0x4FF)

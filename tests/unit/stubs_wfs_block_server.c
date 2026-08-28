@@ -22,6 +22,7 @@ uint32_t wfs_stub_last_sectors;
 int wfs_stub_fail_next;
 int wfs_stub_send_status;
 uint32_t wfs_stub_stop_after;
+uint32_t wfs_stub_flushes;
 
 static wasmos_wasm_runtime_t g_runtime;
 static wasmos_sys_event_loop_t g_loop;
@@ -129,6 +130,28 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
     (void)arg3;
     if (wfs_stub_send_status != 0) {
         return wfs_stub_send_status;
+    }
+    if (type == BLOCK_IPC_FLUSH_REQ) {
+        /* Recorded in the same sequence as the transfers, with a sentinel block,
+         * so a case can assert WHERE a barrier fell relative to them -- which is
+         * the only property of a flush that is observable from here. */
+        if (wfs_stub_req_count < WFS_STUB_REQ_LOG_MAX) {
+            wfs_stub_req_blocks[wfs_stub_req_count] = WFS_STUB_FLUSH_MARK;
+        }
+        wfs_stub_req_count++;
+        wfs_stub_flushes++;
+        memset(&g_queued, 0, sizeof(g_queued));
+        g_queued.request_id = request_id;
+        g_queued.source = destination;
+        g_queued.destination = source;
+        if (wfs_stub_stop_after != 0u && wfs_stub_req_count > wfs_stub_stop_after) {
+            g_queued.type = BLOCK_IPC_ERROR;
+            g_queued.arg0 = WASMOS_ERR_FS_IO;
+        } else {
+            g_queued.type = BLOCK_IPC_FLUSH_RESP;
+        }
+        g_queued_ready = 1;
+        return 0;
     }
     if (type != BLOCK_IPC_READ_REQ && type != BLOCK_IPC_WRITE_REQ) {
         return 0; /* not ours: accepted and never answered */
@@ -264,6 +287,7 @@ void wfs_stub_reset_counters(void) {
     wfs_stub_fail_next = 0;
     wfs_stub_send_status = 0;
     wfs_stub_stop_after = 0;
+    wfs_stub_flushes = 0;
     g_queued_ready = 0;
 }
 

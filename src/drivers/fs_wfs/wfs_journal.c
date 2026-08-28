@@ -499,6 +499,20 @@ int32_t wfs_txn_commit_task(void* user, uintptr_t* out_value) {
         }
 
     commit:
+        /* §14 step 2. The descriptor, the images and any revoke are now on the
+         * device, but a volatile write cache can still lose them -- and a COMMIT
+         * that reached media ahead of the images it names is precisely the
+         * transaction recovery would apply from a log that does not hold it. */
+        WFS_AWAIT(ctx, wfs_block_flush_begin(b), WFS_TXCOMMIT_PC_BARRIER_LOG);
+        /* fall through */
+
+    case WFS_TXCOMMIT_PC_BARRIER_LOG:
+        ctx->err = wfs_block_take(b);
+        if (ctx->err != WASMOS_ERR_NONE) {
+            wfs_txn_abort(ctx->vol);
+            return (int32_t)ctx->err;
+        }
+
         /* §14 step 3. Everything the transaction promised is now in the log, and
          * this block is what makes it replayable. `target_count` lets recovery
          * confirm the descriptor named as many targets as the transaction
@@ -511,6 +525,18 @@ int32_t wfs_txn_commit_task(void* user, uintptr_t* out_value) {
         /* fall through */
 
     case WFS_TXCOMMIT_PC_COMMIT_WRITTEN:
+        ctx->err = wfs_block_take(b);
+        if (ctx->err != WASMOS_ERR_NONE) {
+            wfs_txn_abort(ctx->vol);
+            return (int32_t)ctx->err;
+        }
+        /* §14 step 4. The transaction becomes replayable only once its COMMIT is
+         * on media: a checkpoint that overwrote a target before that would leave
+         * a crash with neither the old block nor a log entitled to restore it. */
+        WFS_AWAIT(ctx, wfs_block_flush_begin(b), WFS_TXCOMMIT_PC_BARRIER_COMMIT);
+        /* fall through */
+
+    case WFS_TXCOMMIT_PC_BARRIER_COMMIT:
         ctx->err = wfs_block_take(b);
         if (ctx->err != WASMOS_ERR_NONE) {
             wfs_txn_abort(ctx->vol);
@@ -556,6 +582,20 @@ int32_t wfs_txn_commit_task(void* user, uintptr_t* out_value) {
         goto checkpoint;
 
     tail:
+        /* §14 step 6. The tail must not retire a transaction whose checkpoint is
+         * still only in a cache: a crash there would leave the log saying the
+         * work is done and the targets still holding what they held. */
+        WFS_AWAIT(ctx, wfs_block_flush_begin(b), WFS_TXCOMMIT_PC_BARRIER_DATA);
+        /* fall through */
+
+    case WFS_TXCOMMIT_PC_BARRIER_DATA:
+        ctx->err = wfs_block_take(b);
+        if (ctx->err != WASMOS_ERR_NONE) {
+            ctx->vol->super.read_only = 1u;
+            wfs_txn_abort(ctx->vol);
+            return (int32_t)ctx->err;
+        }
+
         /* §14 step 7: retire the transaction. The tail names the sequence the
          * NEXT transaction writes, so a crash after this point replays nothing;
          * a crash before it replays this transaction again, which is harmless

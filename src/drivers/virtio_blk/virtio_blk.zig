@@ -161,10 +161,15 @@ const STATUS_FAILED: u8 = 128;
 /// the 512-byte sectors the block protocol is defined in.
 const FEATURE_BLK_SIZE: u32 = 1 << 6;
 const FEATURE_RO: u32 = 1 << 5;
+/// The device supports VIRTIO_BLK_T_FLUSH. Without it the device has no volatile
+/// write cache to commit, so a flush request is unnecessary rather than
+/// unavailable (virtio 1.2, 5.2.4).
+const FEATURE_FLUSH: u32 = 1 << 9;
 
 /// Request types, and the status byte the device writes back.
 const REQ_TYPE_IN: u32 = 0; // device -> memory (a disk read)
 const REQ_TYPE_OUT: u32 = 1; // memory -> device (a disk write)
+const REQ_TYPE_FLUSH: u32 = 4; // commit the device's write cache to media
 const REQ_STATUS_OK: u8 = 0;
 /// Sentinel written into a slot's status byte before its chain is published.
 /// The device overwrites it, so seeing it after a completion means the device
@@ -245,6 +250,9 @@ const Device = struct {
     present: bool = false,
     ready: bool = false,
     read_only: bool = false,
+    /// VIRTIO_BLK_F_FLUSH was negotiated. When it was not, the device has no
+    /// volatile write cache and a flush request is answered without one.
+    flush_supported: bool = false,
     bus: u32 = 0,
     slot: u32 = 0,
     function: u32 = 0,
@@ -509,13 +517,18 @@ fn initializeDevice() bool {
     state |= STATUS_DRIVER;
     setStatusBit(state);
 
-    // Accept nothing but the read-only bit. Every other feature either changes
-    // a layout this driver does not implement (BLK_SIZE) or is an optimisation
-    // it does not use, and an unaccepted feature is simply one the device must
-    // not rely on.
+    // Accept the read-only bit and FLUSH. Every other feature either changes a
+    // layout this driver does not implement (BLK_SIZE) or is an optimisation it
+    // does not use, and an unaccepted feature is simply one the device must not
+    // rely on.
+    //
+    // FLUSH is accepted because a filesystem journal barrier needs it: ordering
+    // a request after its reply only guarantees the device SAW the writes in
+    // that order, and a volatile write cache can still lose the earlier ones.
     const device_features = g_dev.ports.in32(REG_DEVICE_FEATURES);
     g_dev.read_only = (device_features & FEATURE_RO) != 0;
-    g_dev.ports.out32(REG_DRIVER_FEATURES, device_features & FEATURE_RO);
+    g_dev.flush_supported = (device_features & FEATURE_FLUSH) != 0;
+    g_dev.ports.out32(REG_DRIVER_FEATURES, device_features & (FEATURE_RO | FEATURE_FLUSH));
 
     // Before queue setup: the queue's vector register only exists once MSI-X is
     // enabled, and setupQueue is what writes it.
@@ -689,6 +702,38 @@ fn handleIdentify(msg: *const co.IpcMessage) void {
     );
 }
 
+/// BLOCK_IPC_FLUSH_REQ: commit the device's write cache, so a caller that orders
+/// its writes can rely on that order surviving power loss.
+///
+/// A device that did not offer VIRTIO_BLK_F_FLUSH has no volatile write cache,
+/// so the guarantee already holds and the reply is sent without touching the
+/// queue. Answering success there is not a shortcut: there is nothing to commit.
+fn acceptFlush(msg: *const co.IpcMessage) void {
+    if (!g_dev.flush_supported) {
+        _ = driver.send(msg.source, endpoint(), op.BLOCK_IPC_FLUSH_RESP, msg.request_id, 0, 0, 0, 0);
+        return;
+    }
+    const index = claimSlot() orelse {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL);
+        return;
+    };
+    const slot = &g_slots[index];
+    slot.source = msg.source;
+    slot.request_id = msg.request_id;
+    slot.msg_type = msg.type;
+    // A flush carries no data descriptor and no sector: the header's `sector`
+    // field is reserved for it (virtio 1.2, 5.2.6).
+    slot.lba = 0;
+    slot.count = 0;
+    slot.data_phys = 0;
+    slot.borrow = 0;
+    slot.borrow_bytes = 0;
+    slot.result = 0;
+    slot.idle_ticks = 0;
+    slot.state = .pending;
+    wakeRoot();
+}
+
 /// BLOCK_IPC_READ_REQ / BLOCK_IPC_WRITE_REQ: arg0 is the client's block buffer
 /// named by physical address, arg1 the first sector, arg2 the sector count. The
 /// buffer address goes straight into the data descriptor, so the device
@@ -818,6 +863,7 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
     switch (msg.type) {
         op.BLOCK_IPC_IDENTIFY_REQ => handleIdentify(msg),
         op.BLOCK_IPC_READ_REQ, op.BLOCK_IPC_WRITE_REQ => acceptTransfer(msg),
+        op.BLOCK_IPC_FLUSH_REQ => acceptFlush(msg),
         op.BLOCK_IPC_READ_ZC_REQ => acceptReadZeroCopy(msg),
         IPC_IRQ_EVENT_TYPE, IPC_MSI_EVENT_TYPE => serviceCompletions(),
         else => {
@@ -849,8 +895,9 @@ fn onTimeout(user: ?*anyopaque) callconv(.c) void {
 /// after a completion frees descriptors.
 fn submit(index: usize) bool {
     const slot = &g_slots[index];
+    const is_flush = slot.msg_type == op.BLOCK_IPC_FLUSH_REQ;
     const is_write = slot.msg_type == op.BLOCK_IPC_WRITE_REQ;
-    const req_type: u32 = if (is_write) REQ_TYPE_OUT else REQ_TYPE_IN;
+    const req_type: u32 = if (is_flush) REQ_TYPE_FLUSH else if (is_write) REQ_TYPE_OUT else REQ_TYPE_IN;
 
     slotHeader(index).* = .{ .type = req_type, .ioprio = 0, .sector = slot.lba };
     slotStatus(index).* = REQ_STATUS_UNSET;
@@ -867,7 +914,13 @@ fn submit(index: usize) bool {
         .{ .addr = slotStatusPhys(index), .len = 1, .flags = vring.DESC_F_WRITE },
     };
 
-    const head = g_queue.allocChain(&bufs) orelse return false;
+    // A flush has no data: header and status only. Passing the middle descriptor
+    // with a zero length would put a zero-length buffer on the queue, which the
+    // device is not required to accept.
+    const head = (if (is_flush)
+        g_queue.allocChain(&[2]vring.Buf{ bufs[0], bufs[2] })
+    else
+        g_queue.allocChain(&bufs)) orelse return false;
     slot.chain_head = head;
     slot.state = .in_flight;
     g_queue.publish(head);
@@ -891,7 +944,11 @@ fn complete(index: usize) void {
         _ = driver.send(
             slot.source,
             endpoint(),
-            if (slot.msg_type == op.BLOCK_IPC_WRITE_REQ) op.BLOCK_IPC_WRITE_RESP else op.BLOCK_IPC_READ_RESP,
+            switch (slot.msg_type) {
+                op.BLOCK_IPC_WRITE_REQ => op.BLOCK_IPC_WRITE_RESP,
+                op.BLOCK_IPC_FLUSH_REQ => op.BLOCK_IPC_FLUSH_RESP,
+                else => op.BLOCK_IPC_READ_RESP,
+            },
             slot.request_id,
             0,
             @intCast(slot.count),

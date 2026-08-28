@@ -874,20 +874,19 @@ tail.
   `wfs_recover.c`, since a later transaction's revoke bars an earlier one's image
   and the revoke table must be complete before any image is applied. Recovery
   refuses a chain today rather than half-applying one, so the two land together.
-- [ ] [FEATURE][P2] Give the block ABI a flush, so a WFS journal barrier means
-  what §14 says it means. `abi/opcodes.yaml` has `BLOCK_IPC_READ_REQ` and
-  `BLOCK_IPC_WRITE_REQ` and nothing else, so the barriers in `wfs_txn_commit_task`
-  are request ORDERING -- each step awaits its reply before the next is issued --
-  and a device with a volatile write cache can still reorder across them. Wants a
-  `BLOCK_IPC_FLUSH_REQ` served by `ata`, `virtio_blk` and `block_ram`, and a call
-  at §14's steps 2, 4 and 6.
-- [ ] [ENHANCEMENT][P2] Let a WFS extent tree exceed a single leaf. A tree grows
-  to one leaf, so an object stops at `wfs_extent_leaf_capacity()` extents (170 at
-  a 4096-byte block). Splitting a leaf and adding an interior level are not
-  implemented; `wfs_extent_write.c` refuses rather than editing a shape it does
-  not maintain, and the three sites carry TODOs. The reader already walks
-  interior nodes, and nothing writes that shape, so no volume this driver
-  produces can contain one.
+- [x] [FEATURE][P2] Give the block ABI a flush, so a WFS journal barrier means
+  what §14 says it means. `BLOCK_IPC_FLUSH_REQ` / `BLOCK_IPC_FLUSH_RESP` are
+  served by both block backends -- `ata` issues ATA CACHE FLUSH, `virtio_blk`
+  negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH` -- and
+  `wfs_txn_commit_task` awaits one at §14's steps 2, 4 and 6, with §21's replay
+  awaiting one before its tail retires the replayed writes.
+- [ ] [ENHANCEMENT][P3] Let a WFS extent tree exceed ONE interior level. A tree
+  grows to an interior root over N leaves (depth 1), which reaches roughly 255 x
+  170 extents at a 4096-byte block; a second interior level is not implemented and
+  `wfs_extent_write.c` refuses rather than editing a shape it does not maintain,
+  at the two TODOs it carries. The reader already walks to the depth guard, so
+  only the writer is missing -- and nothing the OS can produce reaches the
+  ceiling, which is why this sits below the work that does.
 
 - [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and

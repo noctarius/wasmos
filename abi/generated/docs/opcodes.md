@@ -71,9 +71,11 @@ endpoint-scoped and may repeat across subsystems.
 | `BLOCK_IPC_WRITE_REQ` | 0x301 | req |  |
 | `BLOCK_IPC_IDENTIFY_REQ` | 0x302 | req |  |
 | `BLOCK_IPC_READ_ZC_REQ` | 0x303 | req | Zero-copy read: land whole sectors straight into a transfer buffer the caller has reborrowed to this server, instead of staging them through the server's own block buffer. arg0=buffer_id arg1=lba arg3=dst_byte_offset, and arg2 = (borrow_id << 12) \| sector_count. The buffer is named twice because the two ways a server can reach it are addressed differently. arg0 names the OBJECT, which is what xfer_buffer read/write take (the kernel admits the owner or any grantee). The packed borrow_id names the GRANT, which is what dma_map_borrow takes, and it is what lets a server point a bus-master device straight at the client's pages instead of copying through its own staging buffer. A server that cannot do DMA ignores it. The caller reborrows its own borrow to this server's endpoint to create that grant, and unborrows when the operation completes. The destination range is [dst_offset, dst_offset + count*512) and must lie inside the buffer; only WHOLE sectors may be requested, because a partial sector would overwrite bytes around it that the client did not ask for (callers stage head/tail remainders through BLOCK_IPC_READ_REQ). On success: BLOCK_IPC_READ_RESP, arg1 = sectors transferred. On failure: BLOCK_IPC_ERROR, arg0 = reason.  |
+| `BLOCK_IPC_FLUSH_REQ` | 0x304 | req | Commit everything already written to durable media, so a caller that orders its writes can rely on that order surviving power loss. arg0..arg3 reserved (must be zero). Ordering a request after a reply only guarantees the DEVICE saw them in that order; a volatile write cache may still lose the earlier ones. A journal barrier (docs/WFS_WASMOS_FILE_SYSTEM.md section 14, steps 2, 4 and 6) is exactly that guarantee and needs this. A device with no volatile write cache answers success without doing anything, because for it the guarantee already holds. On success: BLOCK_IPC_FLUSH_RESP. On failure: BLOCK_IPC_ERROR, arg0 = reason.  |
 | `BLOCK_IPC_READ_RESP` | 0x380 | resp |  |
 | `BLOCK_IPC_WRITE_RESP` | 0x381 | resp |  |
 | `BLOCK_IPC_IDENTIFY_RESP` | 0x382 | resp |  |
+| `BLOCK_IPC_FLUSH_RESP` | 0x383 | resp |  |
 | `BLOCK_IPC_ERROR` | 0x3FF | error |  |
 
 ## fs (0x400–0x4FF)

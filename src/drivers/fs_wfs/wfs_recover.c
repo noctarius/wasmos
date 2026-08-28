@@ -289,6 +289,20 @@ int32_t wfs_journal_replay_task(void* user, uintptr_t* out_value) {
         goto replay;
 
     tail:
+        /* §21: the replayed writes are barriered before the tail retires them. A
+         * tail that reached media ahead of a checkpoint still sitting in a
+         * volatile cache would leave the log saying recovery is done and the
+         * targets holding what the crash left -- the one outcome replay's
+         * idempotence cannot repair, because nothing would replay again. */
+        WFS_AWAIT(ctx, wfs_block_flush_begin(b), WFS_REPLAY_PC_BARRIER_DATA);
+        /* fall through */
+
+    case WFS_REPLAY_PC_BARRIER_DATA:
+        ctx->err = wfs_block_take(b);
+        if (ctx->err != WASMOS_ERR_NONE) {
+            return (int32_t)ctx->err;
+        }
+
         /* §21: recovery ends by setting the tail one past the last replayed
          * transaction. A crash before this repeats the replay from the same
          * tail, which lands the same bytes -- every image is a whole-block

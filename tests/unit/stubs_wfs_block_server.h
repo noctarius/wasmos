@@ -50,6 +50,11 @@ extern int wfs_stub_fail_next;
  * rather than the writer, and would keep passing if the writer's layout drifted
  * away from the reader's. */
 extern uint32_t wfs_stub_stop_after;
+/* Flushes the driver asked for, and the value wfs_stub_req_blocks records for
+ * one. A flush names no block, so it needs a value no real block can take;
+ * WFS_BLOCK_NONE is that value already. */
+#define WFS_STUB_FLUSH_MARK WFS_BLOCK_NONE
+extern uint32_t wfs_stub_flushes;
 /* Non-zero makes wasmos_ipc_send report that failure instead of sending. */
 extern int wfs_stub_send_status;
 /* Fail the next staging copy into the server's block buffer, so a write cannot

@@ -78,15 +78,22 @@ static const uint8_t k_uuid[WFS_UUID_LEN] = {
  *   1 the block image into the log
  *   2 the descriptor naming it
  *   3 the revoke record, when the transaction has one
+ *   - a FLUSH, §14 step 2
  *   4 the COMMIT block
+ *   - a FLUSH, §14 step 4
  *   5 the checkpoint's read of the image
  *   6 the checkpoint's write to the target
+ *   - a FLUSH, §14 step 6
  *   7 the tail
+ *
+ * The barriers count as requests, which is why these are not the step numbers.
+ * A crash point names the request AFTER which the device stops, so each is the
+ * ordinal of the last request that lands.
  */
-#define CRASH_BEFORE_COMMIT 2u
-#define CRASH_AFTER_COMMIT 3u
-#define CRASH_AFTER_CHECKPOINT 5u
-#define CRASH_AFTER_COMMIT_WITH_REVOKE 4u
+#define CRASH_BEFORE_COMMIT 3u
+#define CRASH_AFTER_COMMIT 4u
+#define CRASH_AFTER_CHECKPOINT 7u
+#define CRASH_AFTER_COMMIT_WITH_REVOKE 5u
 
 static wfs_mkfs_layout_t g_layout;
 static const uint8_t k_pattern_seed = 0xC3u;
@@ -208,6 +215,37 @@ static uint32_t prepare(wfs_mount_ctx_t* m, wfs_volume_t* vol) {
 
 /* The whole point of the log. A transaction whose COMMIT landed is finished by
  * the next mount, even though the checkpoint never ran. */
+
+/* Assert §14/§21's barrier placement: a flush landed after the last write to
+ * `written` and before the last write to `retires`.
+ *
+ * Positions rather than counts, because where a flush falls relative to the
+ * writes is the whole of what it guarantees -- a flush issued at the end, or not
+ * at all, would leave every count identical. Both blocks are matched by their
+ * LAST occurrence: each is read earlier in the same sequence, and the request log
+ * records block numbers without a direction.
+ */
+static void expect_barrier_between(uint32_t written, uint32_t retires, const char* what) {
+    uint32_t i;
+    uint32_t wrote = 0u;
+    uint32_t flushed = 0u;
+    uint32_t retired = 0u;
+
+    for (i = 0; i < wfs_stub_req_count && i < WFS_STUB_REQ_LOG_MAX; ++i) {
+        uint32_t b = wfs_stub_req_blocks[i];
+
+        if (b == WFS_STUB_FLUSH_MARK) {
+            flushed = i + 1u;
+        } else if (b == written) {
+            wrote = i + 1u;
+        } else if (b == retires) {
+            retired = i + 1u;
+        }
+    }
+    expect(wrote != 0u && flushed != 0u && retired != 0u && wrote < flushed && flushed < retired,
+           what);
+}
+
 static void test_a_committed_transaction_is_replayed_at_the_next_mount(void) {
     wfs_mount_ctx_t m;
     wfs_volume_t vol;
@@ -220,9 +258,13 @@ static void test_a_committed_transaction_is_replayed_at_the_next_mount(void) {
     expect(!block_has_pattern(target, k_pattern_seed),
            "the crash left the target without the transaction's bytes");
 
+    wfs_stub_reset_counters();
     expect(remount(&m, &vol) == 0, "the volume remounts");
     expect_u32(m.replayed, 1u, "and one image was replayed");
     expect(block_has_pattern(target, k_pattern_seed), "landing the transaction's bytes");
+    expect_barrier_between(target,
+                           g_layout.journal_start,
+                           "a barrier falls between the replayed writes and the tail (§21)");
     expect_u32(vol.super.needs_replay, 0u, "the replay is no longer owed");
     expect_rc(m.journal_err, WASMOS_ERR_NONE, "and the log reported nothing");
 

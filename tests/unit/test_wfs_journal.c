@@ -481,6 +481,66 @@ static void test_a_commit_advances_the_tail(void) {
     wfs_stub_teardown();
 }
 
+/* The barriers §14 requires, in the places it requires them.
+ *
+ * Awaiting each write's reply before issuing the next only orders what the
+ * DEVICE saw; a volatile write cache can still commit them in another order. The
+ * two orderings that matter are the ones a crash would expose: a COMMIT that
+ * reached media ahead of the images it names would let recovery apply a
+ * transaction the log does not hold, and a checkpoint still sitting in a cache
+ * when the tail retires the transaction would leave the log saying the work is
+ * done and the targets holding what they held.
+ *
+ * Asserted as POSITIONS in the request sequence, because where a flush falls
+ * relative to the writes is the whole of what it guarantees -- a flush issued at
+ * the end, or not at all, would leave every count identical.
+ */
+static void test_a_commit_barriers_the_log_before_it_commits(void) {
+    wfs_mount_ctx_t m;
+    wfs_volume_t vol;
+    uint32_t i;
+    uint32_t first_flush = 0u;
+    uint32_t commit_at = 0u;
+    uint32_t target_at = 0u;
+    uint32_t last_flush = 0u;
+    uint32_t tail_at = 0u;
+
+    if (wfs_stub_build_volume(VOL_16M, 4096u, k_uuid, TEST_NOW_NS, &g_layout) != 0) {
+        expect(0, "build a volume");
+        return;
+    }
+    expect(mount_volume(&m, &vol) == 0, "mount");
+    expect_rc(wfs_txn_open(&vol), WASMOS_ERR_NONE, "a transaction opens");
+    expect(stage_pattern(&vol, g_layout.bitmap_start, 0xA0u) == 0, "a block is journaled");
+    wfs_stub_reset_counters();
+    expect(commit(&vol) == 0, "the commit completes");
+
+    expect(wfs_stub_flushes >= 3u, "the commit barriers at least three times");
+    for (i = 0; i < wfs_stub_req_count && i < WFS_STUB_REQ_LOG_MAX; ++i) {
+        uint32_t b = wfs_stub_req_blocks[i];
+
+        if (b == WFS_STUB_FLUSH_MARK) {
+            if (first_flush == 0u) {
+                first_flush = i + 1u;
+            }
+            last_flush = i + 1u;
+        } else if (b == g_layout.journal_start + WFS_TXN_DESCRIPTOR_BLOCK + 2u) {
+            commit_at = i + 1u; /* one target, so the COMMIT follows its image */
+        } else if (b == g_layout.bitmap_start) {
+            target_at = i + 1u;
+        } else if (b == g_layout.journal_start) {
+            tail_at = i + 1u;
+        }
+    }
+    expect(first_flush != 0u && commit_at != 0u, "the sequence holds a flush and a commit");
+    expect(first_flush < commit_at, "a barrier falls before the COMMIT block (step 2)");
+    expect(target_at != 0u && commit_at < target_at, "the checkpoint follows the COMMIT");
+    expect(tail_at != 0u && target_at < last_flush && last_flush < tail_at,
+           "and a barrier falls between the checkpoint and the tail (step 6)");
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_mount_loads_the_log),
     WASMOS_TEST_CASE(test_a_target_is_untouched_until_the_commit),
@@ -491,6 +551,7 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_an_oversized_transaction_is_refused_whole),
     WASMOS_TEST_CASE(test_a_revoke_reaches_the_log),
     WASMOS_TEST_CASE(test_a_commit_advances_the_tail),
+    WASMOS_TEST_CASE(test_a_commit_barriers_the_log_before_it_commits),
 };
 
 int main(void) {

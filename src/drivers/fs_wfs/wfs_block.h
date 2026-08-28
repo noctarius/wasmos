@@ -118,6 +118,19 @@ wasmos_future_t* wfs_block_read_begin(wfs_block_t* b, uint32_t block);
  * failure, so the normal await-then-take sequence is correct either way. */
 wasmos_future_t* wfs_block_write_begin(wfs_block_t* b, uint32_t block);
 
+/* Begin a flush: commit everything already written to durable media.
+ *
+ * What turns the journal's request ORDERING into a barrier (§14, steps 2, 4 and
+ * 6). Awaiting each write's reply before issuing the next only guarantees the
+ * device saw them in that order; a volatile write cache can still lose the
+ * earlier ones, which is exactly what a crash between the COMMIT block and the
+ * checkpoint would expose.
+ *
+ * Returns the future to await, or NULL when the request could not be sent, which
+ * wfs_block_take reports. The staged block is untouched: a flush transfers
+ * nothing, so it neither fills nor invalidates the buffer. */
+wasmos_future_t* wfs_block_flush_begin(wfs_block_t* b);
+
 /* Consume the settled request. On success the staged buffer holds `block` and
  * the tag names it; on failure the tag is cleared, so an error never leaves the
  * device's leftover bytes looking cached.

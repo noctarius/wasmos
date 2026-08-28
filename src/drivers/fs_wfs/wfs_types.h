@@ -838,7 +838,10 @@ typedef enum {
     WFS_TXCOMMIT_PC_START = 0,
     WFS_TXCOMMIT_PC_DESC_WRITTEN,
     WFS_TXCOMMIT_PC_REVOKE_WRITTEN,
+    WFS_TXCOMMIT_PC_BARRIER_LOG, /* §14 step 2: the log, before the COMMIT */
     WFS_TXCOMMIT_PC_COMMIT_WRITTEN,
+    WFS_TXCOMMIT_PC_BARRIER_COMMIT, /* §14 step 4: the COMMIT, before the checkpoint */
+    WFS_TXCOMMIT_PC_BARRIER_DATA,   /* §14 step 6: the checkpoint, before the tail */
     WFS_TXCOMMIT_PC_IMAGE_READ,
     WFS_TXCOMMIT_PC_TARGET_WRITTEN,
     WFS_TXCOMMIT_PC_TAIL_WRITTEN,
@@ -872,6 +875,7 @@ typedef enum {
     WFS_REPLAY_PC_SCAN_READY, /* the revoke and commit blocks behind it */
     WFS_REPLAY_PC_IMAGE_READY,
     WFS_REPLAY_PC_TARGET_WRITTEN,
+    WFS_REPLAY_PC_BARRIER_DATA, /* the replayed targets, before the tail retires them */
     WFS_REPLAY_PC_TAIL_WRITTEN,
 } wfs_replay_pc_t;
 

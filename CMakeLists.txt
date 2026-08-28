@@ -4165,7 +4165,13 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_write.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_truncate.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_namespace.c
-    ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c)
+    ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+    # And the block-rule suite, for the same reason once more: it includes
+    # device_manager.c, which reaches src/libc/include/string.h through a quoted
+    # include, so its real compile line takes our libc on -I and the lint index
+    # must match or it parses against the host's headers.
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_block_rules.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/stubs_device_manager_host.c)
 
 # The scheduler host tests drive the REAL kernel sources, so they must see the
 # real kernel headers and nothing else. tests/unit/include holds deliberately
@@ -4261,6 +4267,7 @@ wasmos_ide_index(wasmos_ide_unit_libc
            ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
            ${DRIVER_WASM_DIR}/fs_wfs
            ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+           ${SERVICES_DIR}/device_manager
            ${CMAKE_SOURCE_DIR}/abi/generated/c)
 
 # Every other unit test takes the host libc for <angle> includes, matching those

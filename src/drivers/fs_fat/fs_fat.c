@@ -573,7 +573,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         (void)wasmos_sched_yield();
     }
 
-    fat_block_configure(&g_blk, block_endpoint, reply_endpoint);
+    fat_block_configure(&g_blk, block_endpoint, reply_endpoint, g_requested_instance);
     if (fat_block_setup(&g_blk) != 0) {
         fat_log("block buffer missing\n");
         fat_stall();

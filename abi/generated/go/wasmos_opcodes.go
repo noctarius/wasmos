@@ -130,16 +130,31 @@ const SVC_IPC_CLASS_EVENT int32 = 0x2A4
 const SVC_IPC_ERROR int32 = 0x2AF
 
 // block (0x300..0x3FF)
-// Read `arg2` sectors from `arg1` into the block buffer at physical
-// address `arg0`, which belongs to the CALLER: the backend moves bytes
-// straight there, so neither side copies.
+// Read sectors, described by a wasmos_block_request_t in a buffer the
+// CALLER owns and has borrowed to this endpoint.
+// arg0=buffer_id arg1=byte_offset arg2=size arg3=reserved(0).
 //
-// TODO: arg1 is a 32-bit LBA, which caps addressing at 2 TiB on a
-// 512-byte sector. wasmos_block_descriptor_t reports a 64-bit lba_count,
-// so a disk can now be described past the point this opcode can reach it;
-// widening the transfer path needs a second argument word for the high
-// half, or a descriptor-carrying request.
+// The request names its own target device, its 64-bit LBA, and where the
+// data goes (see BLOCK_DST_* in abi/constants.yaml). None of that fits in
+// four argument words, which is why they no longer carry it: the packed
+// form forced a 32-bit LBA, inferred the target from the sender's
+// endpoint, and needed a separate opcode for a transfer-buffer
+// destination.
+//
+// A caller acquires and borrows ONE buffer per operation and reuses it
+// for every request in that operation, writing a fresh request into its
+// own slot; the buffer is not acquired per transfer.
+//
+// On success: BLOCK_IPC_READ_RESP, arg1 = sectors transferred, which may
+// be fewer than asked. On failure: BLOCK_IPC_ERROR, arg0 = reason.
 const BLOCK_IPC_READ_REQ int32 = 0x300
+// Write sectors, described by a wasmos_block_request_t exactly as
+// BLOCK_IPC_READ_REQ describes a read: arg0=buffer_id arg1=byte_offset
+// arg2=size arg3=reserved(0). The destination fields name the SOURCE of
+// the data here; the direction is the opcode's.
+//
+// On success: BLOCK_IPC_WRITE_RESP, arg1 = sectors transferred.
+// On failure: BLOCK_IPC_ERROR, arg0 = reason.
 const BLOCK_IPC_WRITE_REQ int32 = 0x301
 // Ask a backend to describe one of its devices into a buffer the CALLER
 // owns. arg0 = the device's `block` CLASS INSTANCE, arg1 = buffer_id.
@@ -167,27 +182,6 @@ const BLOCK_IPC_WRITE_REQ int32 = 0x301
 // exclusive use, and requiring a claim made a mounted disk unqueryable,
 // which defeats discovering it by class in the first place.
 const BLOCK_IPC_IDENTIFY_REQ int32 = 0x302
-// Zero-copy read: land whole sectors straight into a transfer buffer the
-// caller has reborrowed to this server, instead of staging them through
-// the server's own block buffer.
-// arg0=buffer_id arg1=lba arg3=dst_byte_offset, and
-// arg2 = (borrow_id << 12) | sector_count.
-// The buffer is named twice because the two ways a server can reach it
-// are addressed differently. arg0 names the OBJECT, which is what
-// xfer_buffer read/write take (the kernel admits the owner or any
-// grantee). The packed borrow_id names the GRANT, which is what
-// dma_map_borrow takes, and it is what lets a server point a bus-master
-// device straight at the client's pages instead of copying through its
-// own staging buffer. A server that cannot do DMA ignores it.
-// The caller reborrows its own borrow to this server's endpoint to create
-// that grant, and unborrows when the operation completes.
-// The destination range is [dst_offset, dst_offset + count*512) and must
-// lie inside the buffer; only WHOLE sectors may be requested, because a
-// partial sector would overwrite bytes around it that the client did not
-// ask for (callers stage head/tail remainders through BLOCK_IPC_READ_REQ).
-// On success: BLOCK_IPC_READ_RESP, arg1 = sectors transferred.
-// On failure: BLOCK_IPC_ERROR, arg0 = reason.
-const BLOCK_IPC_READ_ZC_REQ int32 = 0x303
 const BLOCK_IPC_READ_RESP int32 = 0x380
 const BLOCK_IPC_WRITE_RESP int32 = 0x381
 // The answer to BLOCK_IPC_IDENTIFY_REQ: a wasmos_block_descriptor_t

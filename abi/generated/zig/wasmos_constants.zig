@@ -56,6 +56,42 @@ pub const BLOCK_DESCRIPTOR_LABEL_MAX: i32 = 144;
 /// truncate, because a truncated id is a DIFFERENT device's name.
 pub const BLOCK_DESCRIPTOR_ID_MAX: i32 = 64;
 
+// block_request
+/// Version and destination kinds of wasmos_block_request_t, the record that
+/// describes one block transfer. The struct is declared in
+/// src/drivers/include/wasmos_driver_abi.h and mirrored in
+/// src/libc/zig/driver.zig.
+///
+/// A transfer used to be described by four IPC argument words, which is what
+/// forced a 32-bit LBA (a 2 TiB ceiling), a `(borrow_id << 12) | count`
+/// packing, and a SECOND opcode -- BLOCK_IPC_READ_ZC_REQ -- whose only reason
+/// to exist was that a transfer-buffer destination could not be spelled in the
+/// words left over. As a field, the destination is a choice within one
+/// protocol rather than a protocol of its own.
+///
+/// The request describes WHERE data goes; it never carries the data. Payload
+/// still lands directly in the named destination, which is what keeps a
+/// transfer zero-copy.
+/// Current wasmos_block_request_t layout.
+pub const BLOCK_REQUEST_VERSION: i32 = 1;
+/// Destination is the caller's per-process block buffer, named by the
+/// physical address wasmos_block_buffer_phys() returns. The backend moves
+/// bytes straight there, so neither side copies.
+pub const BLOCK_DST_BLOCK_BUFFER: i32 = 0;
+/// Destination is a transfer buffer the caller owns and has reborrowed to
+/// the backend. The request names it TWICE because the two ways a backend
+/// can reach it are addressed differently: dst_buffer_id names the OBJECT,
+/// which xfer_buffer read/write take (the kernel admits the owner or any
+/// grantee), and dst_borrow_id names the GRANT, which dma_map_borrow
+/// takes, and which is what lets a bus-master device write the caller's
+/// pages directly. A backend that cannot do DMA ignores the borrow and
+/// writes through the object.
+///
+/// Only WHOLE sectors may be requested: a partial sector would overwrite
+/// bytes around it that the caller did not ask for, so callers stage head
+/// and tail remainders through a block-buffer destination.
+pub const BLOCK_DST_XFER_BUFFER: i32 = 1;
+
 // partition_scheme
 /// Which partition table a disk carries, reported in the `scheme` field of
 /// wasmos_block_descriptor_t.

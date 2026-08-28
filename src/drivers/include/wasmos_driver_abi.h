@@ -614,14 +614,55 @@ typedef struct __attribute__((packed)) {
  * server with a smaller limit stays correct without the client knowing. */
 #define WASMOS_BLOCK_ZC_MAX_SECTORS 8u
 
-/* BLOCK_IPC_READ_ZC_REQ.arg2 packs the borrow handle above the sector count, the
- * same (handle << 12 | small scalar) shape the spawn and mount paths already use.
- * A fifth field is needed because the server must be able to address the buffer
- * two ways -- by OBJECT to copy into it, by BORROW to map it for device DMA --
- * and dst_offset is the one field that can legitimately grow, so it keeps a slot
- * of its own rather than sharing one. The count needs 4 bits; 12 leaves room. */
-#define WASMOS_BLOCK_ZC_BORROW_SHIFT 12u
-#define WASMOS_BLOCK_ZC_COUNT_MASK 0xFFFu
+/* One block transfer, as its requester describes it. Carried in a transfer
+ * buffer by BLOCK_IPC_READ_REQ and BLOCK_IPC_WRITE_REQ; see abi/opcodes.yaml for
+ * the argument encoding that names it.
+ *
+ * A struct rather than packed message arguments because four words could not
+ * hold what a transfer actually is. The packed form forced a 32-bit LBA (a 2 TiB
+ * ceiling on a disk the descriptor can describe past), packed a borrow handle
+ * above a sector count in one word, left no room to name the target device --
+ * so backends inferred it from the sender's endpoint -- and needed a SECOND read
+ * opcode for a transfer-buffer destination. All four of those are fields here.
+ *
+ * The request says WHERE data goes; it never carries the data. Payload still
+ * lands directly in the named destination, which is what keeps a transfer
+ * zero-copy, and routing it through this struct would undo that.
+ *
+ * A requester acquires and borrows ONE buffer per operation and writes a fresh
+ * request into its own slot for each transfer; nothing here is acquired per
+ * request. Concurrent requests need distinct slots, because a slot may not be
+ * reused until its reply lands. */
+typedef struct __attribute__((packed)) {
+    uint32_t version; /* BLOCK_REQUEST_VERSION */
+    /* The device's `block` class instance, i.e. which of the backend's devices
+     * this transfer addresses. 0 means "the only device you serve", which a
+     * single-disk backend may take as read. */
+    uint32_t target;
+    uint64_t lba;
+    uint32_t sector_count;
+    uint32_t dst_kind; /* BLOCK_DST_* */
+    /* BLOCK_DST_BLOCK_BUFFER: the requester's per-process block buffer, by
+     * physical address. Zero for other kinds. */
+    uint32_t dst_phys;
+    /* BLOCK_DST_XFER_BUFFER: the OBJECT id, which xfer_buffer read/write take. */
+    int32_t dst_buffer_id;
+    /* BLOCK_DST_XFER_BUFFER: the GRANT, which dma_map_borrow takes, and what
+     * lets a bus-master device write the requester's pages directly. A backend
+     * that cannot do DMA ignores it and goes through the object. */
+    int32_t dst_borrow_id;
+    /* Byte offset within the destination. The range
+     * [dst_offset, dst_offset + sector_count * sector_bytes) must lie inside it. */
+    uint32_t dst_offset;
+} wasmos_block_request_t;
+
+/* Pins the size for the Zig mirror in src/libc/zig/driver.zig, on the same terms
+ * as wasmos_block_descriptor_t above: every field sits at its natural alignment
+ * and the total is a multiple of 8, so the packed layout here and the
+ * naturally-aligned mirror describe the same bytes. */
+_Static_assert(sizeof(wasmos_block_request_t) == 40u,
+               "wasmos_block_request_t layout changed; update BlockRequest in "
+               "src/libc/zig/driver.zig to match");
 
 /* One block device, as its backend describes it. Carried in a transfer buffer by
  * BLOCK_IPC_IDENTIFY_RESP and DEVMGR_PUBLISH_BLOCK_DEVICE; see abi/opcodes.yaml

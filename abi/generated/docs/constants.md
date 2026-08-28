@@ -48,6 +48,30 @@ read.
 | `BLOCK_DESCRIPTOR_LABEL_MAX` | 144 | Bytes reserved for the partition label, NUL included. A GPT name is 36 UTF-16 code units, which reach 3 bytes each in UTF-8 -- a code point needing 4 bytes lies outside the BMP and costs two code units, so it never exceeds that rate. 109 bytes is the bound; 144 keeps the descriptor's fixed head a multiple of 8 with room to spare, so no encoder ever has to truncate a name the format can express. |
 | `BLOCK_DESCRIPTOR_ID_MAX` | 64 | Bytes reserved for canonical_id, NUL included. The longest form is the PCI-addressed partition (`block:pci:BB:DD.FF:ata0p128`), which leaves room to spare; a producer that would overflow it must fail rather than truncate, because a truncated id is a DIFFERENT device's name. |
 
+## block_request
+
+Version and destination kinds of wasmos_block_request_t, the record that
+describes one block transfer. The struct is declared in
+src/drivers/include/wasmos_driver_abi.h and mirrored in
+src/libc/zig/driver.zig.
+
+A transfer used to be described by four IPC argument words, which is what
+forced a 32-bit LBA (a 2 TiB ceiling), a `(borrow_id << 12) | count`
+packing, and a SECOND opcode -- BLOCK_IPC_READ_ZC_REQ -- whose only reason
+to exist was that a transfer-buffer destination could not be spelled in the
+words left over. As a field, the destination is a choice within one
+protocol rather than a protocol of its own.
+
+The request describes WHERE data goes; it never carries the data. Payload
+still lands directly in the named destination, which is what keeps a
+transfer zero-copy.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `BLOCK_REQUEST_VERSION` | 1 | Current wasmos_block_request_t layout. |
+| `BLOCK_DST_BLOCK_BUFFER` | 0 | Destination is the caller's per-process block buffer, named by the physical address wasmos_block_buffer_phys() returns. The backend moves bytes straight there, so neither side copies. |
+| `BLOCK_DST_XFER_BUFFER` | 1 | Destination is a transfer buffer the caller owns and has reborrowed to the backend. The request names it TWICE because the two ways a backend can reach it are addressed differently: dst_buffer_id names the OBJECT, which xfer_buffer read/write take (the kernel admits the owner or any grantee), and dst_borrow_id names the GRANT, which dma_map_borrow takes, and which is what lets a bus-master device write the caller's pages directly. A backend that cannot do DMA ignores the borrow and writes through the object. Only WHOLE sectors may be requested: a partial sector would overwrite bytes around it that the caller did not ask for, so callers stage head and tail remainders through a block-buffer destination. |
+
 ## partition_scheme
 
 Which partition table a disk carries, reported in the `scheme` field of

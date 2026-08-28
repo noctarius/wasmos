@@ -1,9 +1,9 @@
 //! virtio_blk.zig — VirtIO block-device driver, in Zig, on the coroutine runtime.
 //!
 //! Serves the block-device IPC interface (BLOCK_IPC_IDENTIFY_REQ,
-//! BLOCK_IPC_READ_REQ, BLOCK_IPC_WRITE_REQ, BLOCK_IPC_READ_ZC_REQ) on top of a
-//! legacy virtio-blk PCI device, so a filesystem driver reads a virtio disk
-//! through exactly the protocol it reads an ATA disk through.
+//! BLOCK_IPC_READ_REQ, BLOCK_IPC_WRITE_REQ) on top of a legacy virtio-blk PCI
+//! device, so a filesystem driver reads a virtio disk through exactly the
+//! protocol it reads an ATA disk through.
 //!
 //! Shape: an async service, not a blocking loop
 //! -------------------------------------------
@@ -48,12 +48,12 @@
 //!
 //! Zero copy, and why the data descriptor is not this driver's memory
 //! -----------------------------------------------------------------
-//! BLOCK_IPC_READ_REQ names the CLIENT's block buffer by physical address, and
-//! that address goes straight into the data descriptor: the device transfers
-//! into the requester's pages and no byte is copied by any CPU. The same holds
-//! for BLOCK_IPC_READ_ZC_REQ, where the client's borrow of a transfer buffer is
-//! mapped for the device instead. Only the per-slot header and status byte live
-//! in this driver's own pinned region, and together they are 17 bytes.
+//! A request names its destination, and the device is pointed straight at it:
+//! a block-buffer destination gives a physical address, a transfer-buffer
+//! destination gives a borrow this driver maps for DMA. Either way the device
+//! transfers into the requester's pages and no byte is copied by any CPU. Only
+//! the per-slot header and status byte live in this driver's own pinned region,
+//! and together they are 17 bytes.
 //!
 //! Interrupts
 //! ----------
@@ -298,10 +298,6 @@ const SECTOR_BYTES: u32 = 512;
 /// what a zero-copy client may ask for, so the two paths accept the same
 /// requests.
 const MAX_SECTORS: u32 = 8;
-/// Packing of BLOCK_IPC_READ_ZC_REQ's arg2, mirroring
-/// WASMOS_BLOCK_ZC_BORROW_SHIFT / WASMOS_BLOCK_ZC_COUNT_MASK.
-const ZC_BORROW_SHIFT: u5 = 12;
-const ZC_COUNT_MASK: i32 = 0xFFF;
 
 /// Requests that may be on the queue at once. Each holds three descriptors and
 /// one SLOT_STRIDE-byte span of the scratch page, so the ceiling is the scratch
@@ -792,26 +788,75 @@ fn handleIdentify(msg: *const co.IpcMessage) void {
     );
 }
 
-/// BLOCK_IPC_READ_REQ / BLOCK_IPC_WRITE_REQ: arg0 is the client's block buffer
-/// named by physical address, arg1 the first sector, arg2 the sector count. The
-/// buffer address goes straight into the data descriptor, so the device
-/// transfers into (or out of) the client's pages directly.
+/// BLOCK_IPC_READ_REQ / BLOCK_IPC_WRITE_REQ: a wasmos_block_request_t in a
+/// buffer the CALLER owns and has borrowed to this endpoint --
+/// arg0 = buffer_id, arg1 = byte offset, arg2 = size.
+///
+/// One handler serves both destinations. A transfer-buffer destination used to
+/// be a second opcode purely because it could not be spelled in the argument
+/// words the block-buffer form left over; as a field it is a branch on where the
+/// data goes, which is all it ever was.
 fn acceptTransfer(msg: *const co.IpcMessage) void {
     const is_write = msg.type == op.BLOCK_IPC_WRITE_REQ;
     if (is_write and g_dev.read_only) {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_READ_ONLY);
         return;
     }
-    if (msg.arg0 <= 0) {
+    var req: driver.BlockRequest = .{};
+    if (msg.arg0 <= 0 or msg.arg1 < 0 or msg.arg2 < @as(i32, @intCast(@sizeOf(driver.BlockRequest))) or
+        !driver.bufferRead(msg.arg0, &req, msg.arg1))
+    {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
         return;
     }
-    const check = checkRange(msg.arg1, msg.arg2);
+    if (req.version != driver.BLOCK_REQUEST_VERSION) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION);
+        return;
+    }
+    // This device addresses 32-bit LBAs; the request carries 64 because a disk
+    // may be larger than this driver can reach. Refuse with a reason rather than
+    // truncate an address.
+    if (req.lba > 0xFFFFFFFF) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+        return;
+    }
+    const check = checkRange(@intCast(req.lba), @intCast(req.sector_count));
     if (check != 0) {
         sendError(msg.source, msg.request_id, check);
         return;
     }
+
+    // Resolve the destination BEFORE claiming a slot, so a refused mapping does
+    // not have to unwind one.
+    var data_phys: u32 = 0;
+    var borrow: i32 = 0;
+    var borrow_bytes: u32 = 0;
+    if (req.dst_kind == driver.BLOCK_DST_XFER_BUFFER) {
+        // The request names the buffer twice; this driver uses only the GRANT,
+        // because mapping it yields a device address the disk is pointed at
+        // directly. Without a borrow there is nothing to map -- there is no
+        // staging path here -- so the request is refused and the caller falls
+        // back to a block-buffer destination.
+        if (req.dst_borrow_id <= 0 or is_write) {
+            sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+            return;
+        }
+        borrow = req.dst_borrow_id;
+        borrow_bytes = req.sector_count * SECTOR_BYTES;
+        data_phys = driver.dmaMapBorrow(borrow, req.dst_offset, borrow_bytes, driver.DMA_DIR_FROM_DEVICE) orelse {
+            sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+            return;
+        };
+    } else {
+        if (req.dst_phys == 0) {
+            sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
+            return;
+        }
+        data_phys = req.dst_phys;
+    }
+
     const index = claimSlot() orelse {
+        if (borrow != 0) driver.dmaUnmapBorrow(borrow);
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL);
         return;
     };
@@ -819,54 +864,11 @@ fn acceptTransfer(msg: *const co.IpcMessage) void {
     slot.source = msg.source;
     slot.request_id = msg.request_id;
     slot.msg_type = msg.type;
-    slot.lba = @intCast(msg.arg1);
-    slot.count = @intCast(msg.arg2);
-    slot.data_phys = @intCast(msg.arg0);
-}
-
-/// BLOCK_IPC_READ_ZC_REQ: land whole sectors straight in the client's transfer
-/// buffer. arg0 = buffer_id, arg1 = lba, arg2 = (borrow_id << 12) | count,
-/// arg3 = destination byte offset.
-///
-/// The buffer is named twice because the two ways to reach it are addressed
-/// differently, and this driver uses only the second: the packed borrow id names
-/// the client's GRANT, and mapping it yields a device address the disk can be
-/// pointed at. Without a borrow there is nothing to map -- this driver has no
-/// staging path, so the request is refused and the client falls back to
-/// BLOCK_IPC_READ_REQ.
-fn acceptReadZeroCopy(msg: *const co.IpcMessage) void {
-    const count = msg.arg2 & ZC_COUNT_MASK;
-    const borrow = @as(i32, @intCast(@as(u32, @bitCast(msg.arg2)) >> ZC_BORROW_SHIFT));
-    if (msg.arg0 <= 0 or msg.arg3 < 0 or borrow <= 0) {
-        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
-        return;
-    }
-    const check = checkRange(msg.arg1, count);
-    if (check != 0) {
-        sendError(msg.source, msg.request_id, check);
-        return;
-    }
-    const index = claimSlot() orelse {
-        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_QUEUE_FULL);
-        return;
-    };
-
-    const bytes = @as(u32, @intCast(count)) * SECTOR_BYTES;
-    const data_phys = driver.dmaMapBorrow(borrow, @intCast(msg.arg3), bytes, driver.DMA_DIR_FROM_DEVICE) orelse {
-        g_slots[index].state = .free;
-        sendError(msg.source, msg.request_id, status.WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST);
-        return;
-    };
-
-    const slot = &g_slots[index];
-    slot.source = msg.source;
-    slot.request_id = msg.request_id;
-    slot.msg_type = msg.type;
-    slot.lba = @intCast(msg.arg1);
-    slot.count = @intCast(count);
+    slot.lba = @intCast(req.lba);
+    slot.count = @intCast(req.sector_count);
     slot.data_phys = data_phys;
     slot.borrow = borrow;
-    slot.borrow_bytes = bytes;
+    slot.borrow_bytes = borrow_bytes;
 }
 
 /// Service a completion interrupt: ack it where one is owed, then reap every
@@ -921,7 +923,6 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
     switch (msg.type) {
         op.BLOCK_IPC_IDENTIFY_REQ => handleIdentify(msg),
         op.BLOCK_IPC_READ_REQ, op.BLOCK_IPC_WRITE_REQ => acceptTransfer(msg),
-        op.BLOCK_IPC_READ_ZC_REQ => acceptReadZeroCopy(msg),
         IPC_IRQ_EVENT_TYPE, IPC_MSI_EVENT_TYPE => serviceCompletions(),
         else => {
             // A message with no reply address is a stray notification, not a

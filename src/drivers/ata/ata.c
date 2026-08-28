@@ -111,19 +111,16 @@ typedef struct __attribute__((packed)) {
 #define ATA_IRQ_LINE 14u
 
 /* ATA_SECTOR_SIZE is the fixed 512-byte block this driver assumes throughout.
- * ATA_MAX_READ_SECTORS bounds one read request and must not exceed
- * WASMOS_BLOCK_ZC_MAX_SECTORS, since that is what a zero-copy client may ask
- * for. ATA_UNIT_COUNT is the two devices a single IDE channel addresses (master
- * and slave), which is a property of the bus, not a local budget.
- * ATA_CLIENT_MAP_CAP sizes the source-to-unit binding table, which records which
- * drive each client's IDENTIFY selected so its later transfers reach that one.
- * The table is advisory: a client with no entry falls back to the first present
- * drive, so a full table degrades addressing rather than refusing service, and
- * several clients may select the same drive. */
+ * ATA_MAX_READ_SECTORS bounds the sectors one request may move, whatever its
+ * destination. ATA_UNIT_COUNT is the two devices a single IDE channel addresses
+ * (master and slave), which is a property of the bus, not a local budget.
+ *
+ * There is no client table. A transfer names the drive it addresses in its
+ * request, so nothing here has to remember who asked for what -- which is also
+ * why two clients may use one drive concurrently. */
 #define ATA_SECTOR_SIZE 512u
 #define ATA_MAX_READ_SECTORS 8u
 #define ATA_UNIT_COUNT 2u
-#define ATA_CLIENT_MAP_CAP 8u
 
 /* Wait budgets. The polled bound counts I/O-delay iterations; the interrupt
  * bound is much smaller because each attempt sleeps rather than spinning
@@ -150,8 +147,6 @@ static uint8_t g_dma_read_ok_logged = 0;
 static uint8_t g_dma_write_ok_logged = 0;
 static uint8_t g_zc_logged = 0;
 static uint8_t g_zc_dma_logged = 0;
-static int32_t g_client_owner[ATA_CLIENT_MAP_CAP];
-static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
 /* One descriptor per unit: this driver's own record of what its disks are.
  *
  * IDENTIFY does not lend this out. It writes a copy into the buffer the CALLER
@@ -798,25 +793,6 @@ static uint8_t ata_unit_for_instance(uint32_t instance) {
     return ATA_UNIT_COUNT;
 }
 
-static void ata_select_unit_for_source(int32_t source, uint8_t unit) {
-    if (source < 0 || unit >= ATA_UNIT_COUNT) {
-        return;
-    }
-    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-        if (g_client_owner[i] == source) {
-            g_client_unit[i] = unit;
-            return;
-        }
-    }
-    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-        if (g_client_owner[i] < 0) {
-            g_client_owner[i] = source;
-            g_client_unit[i] = unit;
-            return;
-        }
-    }
-}
-
 /* Reported once at startup rather than per request. A per-request "dma fallback"
  * line would read like an intermittent runtime failure; the fallback is neither
  * intermittent nor a failure — see ata_dma_prepare. */
@@ -854,52 +830,6 @@ static int ata_dma_finish(int32_t source_endpoint, uint32_t offset, uint32_t len
     return 0;
 }
 
-/* Which drive a transfer from `source` addresses.
- *
- * A transfer opcode carries no device id -- BLOCK_IPC_READ_REQ is (block-buffer
- * physical address, lba, sector count) -- and this controller serves two drives
- * on one endpoint, so the drive is resolved from the endpoint the request
- * arrived on. IDENTIFY records that selection; this reads it back.
- *
- * The binding is NOT exclusive. A drive used to be claimed by the first client
- * to transfer on it and never released, which refused every later client with
- * UNIT_CLAIMED. That guard was this driver enforcing an access policy it has no
- * information about: it has no release, no authority and no input from the rules
- * that actually decide who mounts what, so it enforced "whoever probed first"
- * rather than anything anyone declared. virtio-blk serves the same `block` class
- * contract with no such table, which is what shows it was never part of the
- * contract. Keeping two filesystems off one volume is device-manager's job
- * through its rules, and separation by LBA WINDOW -- the useful kind, once
- * partitions exist -- belongs to the partition manager's bounds clamp.
- *
- * Falls back to the first present drive for a client that never sent IDENTIFY,
- * which is what a bare `blkinfo`-style reader does.
- *
- * Returns 0 and writes the drive, or -1 when no drive is present. */
-static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, uint8_t* out_unit) {
-    if (!out_unit || source < 0) {
-        return -1;
-    }
-    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-        if (g_client_owner[i] == source && g_unit_present[g_client_unit[i]]) {
-            *out_unit = g_client_unit[i];
-            return 0;
-        }
-    }
-    if (preferred_unit >= 0 && preferred_unit < (int32_t)ATA_UNIT_COUNT &&
-        g_unit_present[preferred_unit]) {
-        *out_unit = (uint8_t)preferred_unit;
-        return 0;
-    }
-    for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
-        if (g_unit_present[unit]) {
-            *out_unit = unit;
-            return 0;
-        }
-    }
-    return -1;
-}
-
 static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32_t arg1,
                           int32_t arg2, int32_t arg3) {
     uint8_t unit = 0;
@@ -919,9 +849,6 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT, 0);
             return 0;
         }
-        /* Remember which drive this client means, so its transfers reach that
-         * one rather than whichever happens to be free. */
-        ata_select_unit_for_source(source, want);
         /* Write into the CLIENT's buffer (arg1), which it acquired and lent with
          * WRITE for this request and releases afterwards. This driver lends
          * nothing: a server that lent its own buffer could never free it, since
@@ -946,22 +873,82 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         return 0;
     }
 
-    /* Resolve the drive this client selected. Failure here means no drive is
-     * present at all -- the resolver refuses nobody. */
-    if (ata_assign_unit_for_source(source, -1, &unit) != 0 || !g_unit_present[unit]) {
-        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT, 0);
+    if (type != BLOCK_IPC_READ_REQ && type != BLOCK_IPC_WRITE_REQ) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST, 0);
         return 0;
     }
 
+    /* A transfer is a wasmos_block_request_t in the CALLER's buffer:
+     * arg0 = buffer_id, arg1 = byte offset, arg2 = size. Every value the driver
+     * needs is a field -- including which drive it addresses, which used to be
+     * inferred from the sender's endpoint because no argument word was left to
+     * name it. */
+    wasmos_block_request_t req;
+    if (arg2 < (int32_t)sizeof(req) || arg0 <= 0 || arg1 < 0 ||
+        wasmos_xfer_buffer_read(arg0, &req, (int32_t)sizeof(req), arg1) != 0) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
+        return 0;
+    }
+    if (req.version != BLOCK_REQUEST_VERSION) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION, 0);
+        return 0;
+    }
+    unit = ata_unit_for_instance(req.target);
+    if (unit >= ATA_UNIT_COUNT || !g_unit_present[unit]) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT, 0);
+        return 0;
+    }
+    if (req.sector_count == 0u || req.sector_count > ATA_MAX_READ_SECTORS) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
+        return 0;
+    }
+    /* This controller addresses 28 bits of LBA. The request carries 64 because a
+     * disk may be larger than this driver can reach, which is a refusal with a
+     * reason rather than a silently truncated address. */
+    if (req.lba > 0x0FFFFFFFull) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
+        return 0;
+    }
+    const uint32_t lba = (uint32_t)req.lba;
+    const uint8_t count = (uint8_t)req.sector_count;
+    const uint32_t byte_count = req.sector_count * ATA_SECTOR_SIZE;
+
     if (type == BLOCK_IPC_READ_REQ) {
+        if (req.dst_kind == (uint32_t)BLOCK_DST_XFER_BUFFER) {
+            /* Land whole sectors straight in the requester's transfer buffer.
+             * It reborrowed the buffer to this driver, so the kernel admits both
+             * routes to it -- the object write and the borrow mapping -- without
+             * the driver ever learning whose buffer it is. */
+            if (req.dst_buffer_id <= 0) {
+                ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
+                return 0;
+            }
+            if (ata_read_zc_dma(unit, lba, count, req.dst_borrow_id, req.dst_offset) != 0) {
+                /* Reached the requester's buffer, but by copying into it. Worth
+                 * saying which of the two it is: both are "zero-copy" as far as
+                 * the block buffer is concerned, yet only the DMA one is
+                 * actually copy-free. */
+                ata_sink_t sink = {1u, req.dst_buffer_id, req.dst_offset};
+                if (!g_zc_logged) {
+                    g_zc_logged = 1;
+                    (void)printf("[ata] zero-copy reads: staged copy into client buffer\n");
+                }
+                if (ata_read_lba28(unit, lba, count, &sink) != 0) {
+                    ata_send_resp(
+                        source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_READ_FAILED, 0);
+                    return 0;
+                }
+            }
+            wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, count, 0, 0);
+            return 0;
+        }
+
         int32_t dma_rc = WASMOS_ERR_DMA_DENY;
         int32_t dma_addr = 0;
-        uint32_t byte_count = 0;
-        if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0) {
+        if (req.dst_phys == 0u) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
             return 0;
         }
-        byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
         dma_rc = ata_dma_prepare(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE, &dma_addr);
         if (dma_rc == WASMOS_ERR_NONE) {
             (void)dma_addr;
@@ -970,12 +957,12 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         /* The block buffer is named by physical address, so the controller can
          * write it directly -- no CPU copy on either side. PIO remains the
          * fallback for every case DMA declines. */
-        if (ata_read_lba28_dma(unit, (uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) == 0) {
-            wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, arg2, 0, 0);
+        if (ata_read_lba28_dma(unit, lba, count, req.dst_phys) == 0) {
+            wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, count, 0, 0);
             return 0;
         }
-        ata_sink_t sink = {0u, arg0, 0u};
-        if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, &sink) != 0) {
+        ata_sink_t sink = {0u, (int32_t)req.dst_phys, 0u};
+        if (ata_read_lba28(unit, lba, count, &sink) != 0) {
             if (dma_rc == WASMOS_ERR_NONE) {
                 (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE);
             }
@@ -987,71 +974,35 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_READ_FAILED, 0);
             return 0;
         }
-        wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, arg2, 0, 0);
-        return 0;
-    }
-
-    /* Zero-copy read: land whole sectors straight in the client's transfer
-     * buffer. The requester reborrowed it to this driver, so the kernel admits
-     * both routes to it -- the object write and the borrow mapping -- without
-     * the driver ever learning whose buffer it is. arg0 = buffer_id, arg1 = lba,
-     * arg2 = (borrow_id << 12) | sector count, arg3 = dst byte offset. */
-    if (type == BLOCK_IPC_READ_ZC_REQ) {
-        int32_t count = arg2 & (int32_t)WASMOS_BLOCK_ZC_COUNT_MASK;
-        int32_t borrow = (int32_t)((uint32_t)arg2 >> WASMOS_BLOCK_ZC_BORROW_SHIFT);
-        if (count <= 0 || count > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0 || arg3 < 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
-            return 0;
-        }
-        if (ata_read_zc_dma(unit, (uint32_t)arg1, (uint8_t)count, borrow, (uint32_t)arg3) != 0) {
-            /* Reached the client's buffer, but by copying into it. Worth saying
-             * which of the two it is: both are "zero-copy" as far as the block
-             * buffer is concerned, yet only the DMA one is actually copy-free. */
-            ata_sink_t sink = {1u, arg0, (uint32_t)arg3};
-            if (!g_zc_logged) {
-                g_zc_logged = 1;
-                (void)printf("[ata] zero-copy reads: staged copy into client buffer\n");
-            }
-            if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)count, &sink) != 0) {
-                ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_READ_FAILED, 0);
-                return 0;
-            }
-        }
         wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, count, 0, 0);
         return 0;
     }
 
-    if (type == BLOCK_IPC_WRITE_REQ) {
-        int32_t dma_rc = WASMOS_ERR_DMA_DENY;
-        int32_t dma_addr = 0;
-        uint32_t byte_count = 0;
-        if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
-            return 0;
-        }
-        byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
-        dma_rc = ata_dma_prepare(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE, &dma_addr);
-        if (dma_rc == WASMOS_ERR_NONE) {
-            (void)dma_addr;
-            ata_log_dma_active(1);
-        }
-        if (ata_write_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
-            if (dma_rc == WASMOS_ERR_NONE) {
-                (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE);
-            }
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_WRITE_FAILED, 0);
-            return 0;
-        }
-        if (dma_rc == WASMOS_ERR_NONE &&
-            ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE) != 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_WRITE_FAILED, 0);
-            return 0;
-        }
-        wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_WRITE_RESP, req_id, 0, arg2, 0, 0);
+    /* WRITE. The destination fields name the SOURCE of the data here.
+     * TODO: only a block-buffer source is served; a transfer-buffer source needs
+     * the WASMOS_DMA_DIR_TO_DEVICE mapping ata_dma_prepare still denies, and
+     * until then a requester must stage writes through its block buffer. */
+    if (req.dst_kind != (uint32_t)BLOCK_DST_BLOCK_BUFFER || req.dst_phys == 0u) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_BAD_REQUEST, 0);
         return 0;
     }
-
-    ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST, 0);
+    const int32_t dma_rc = ata_dma_prepare(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE, 0);
+    if (dma_rc == WASMOS_ERR_NONE) {
+        ata_log_dma_active(1);
+    }
+    if (ata_write_lba28(unit, lba, count, req.dst_phys) != 0) {
+        if (dma_rc == WASMOS_ERR_NONE) {
+            (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE);
+        }
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_WRITE_FAILED, 0);
+        return 0;
+    }
+    if (dma_rc == WASMOS_ERR_NONE &&
+        ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE) != 0) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, WASMOS_ERR_BLOCK_DEV_WRITE_FAILED, 0);
+        return 0;
+    }
+    wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_WRITE_RESP, req_id, 0, count, 0, 0);
     return 0;
 }
 
@@ -1095,10 +1046,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     for (uint32_t i = 0; i < ATA_UNIT_COUNT; ++i) {
         g_unit_present[i] = 0;
         g_unit_sectors[i] = 0;
-    }
-    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
-        g_client_owner[i] = -1;
-        g_client_unit[i] = 0;
     }
     for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
         uint16_t identify_words[256];

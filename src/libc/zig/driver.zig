@@ -128,6 +128,44 @@ pub const BlockDescriptor = extern struct {
     canonical_id: [BLOCK_ID_MAX]u8 = [_]u8{0} ** BLOCK_ID_MAX,
 };
 
+/// Destination kinds of a block request, matching BLOCK_DST_* in
+/// `abi/constants.yaml`.
+pub const BLOCK_DST_BLOCK_BUFFER: u32 = 0;
+pub const BLOCK_DST_XFER_BUFFER: u32 = 1;
+pub const BLOCK_REQUEST_VERSION: u32 = 1;
+
+/// One block transfer, mirroring `wasmos_block_request_t` in
+/// `src/drivers/include/wasmos_driver_abi.h`. Carried in a transfer buffer by
+/// BLOCK_IPC_READ_REQ and BLOCK_IPC_WRITE_REQ.
+///
+/// The request says WHERE data goes and never carries the data: payload lands
+/// directly in the named destination, which is what keeps a transfer zero-copy.
+pub const BlockRequest = extern struct {
+    version: u32 = BLOCK_REQUEST_VERSION,
+    /// The device's `block` class instance; 0 means "the only device you serve".
+    target: u32 = 0,
+    lba: u64 = 0,
+    sector_count: u32 = 0,
+    /// BLOCK_DST_*
+    dst_kind: u32 = BLOCK_DST_BLOCK_BUFFER,
+    /// Block-buffer destination: the requester's per-process buffer by physical
+    /// address.
+    dst_phys: u32 = 0,
+    /// Transfer-buffer destination: the OBJECT id, for xfer_buffer read/write.
+    dst_buffer_id: i32 = 0,
+    /// Transfer-buffer destination: the GRANT, for dma_map_borrow. A backend
+    /// that cannot do DMA ignores it and goes through the object.
+    dst_borrow_id: i32 = 0,
+    dst_offset: u32 = 0,
+};
+
+comptime {
+    if (@sizeOf(BlockRequest) != 40) @compileError("BlockRequest size != 40");
+    if (@offsetOf(BlockRequest, "lba") != 8) @compileError("BlockRequest.lba moved");
+    if (@offsetOf(BlockRequest, "dst_kind") != 20) @compileError("BlockRequest.dst_kind moved");
+    if (@offsetOf(BlockRequest, "dst_offset") != 36) @compileError("BlockRequest.dst_offset moved");
+}
+
 comptime {
     if (@sizeOf(BlockDescriptor) != 88 + BLOCK_LABEL_MAX + BLOCK_ID_MAX) {
         @compileError("BlockDescriptor size disagrees with wasmos_block_descriptor_t");
@@ -463,6 +501,20 @@ pub fn bufferRelease(buffer_id: i32) void {
 /// `src/drivers/include/wasmos_driver_abi.h`.
 pub const BUFFER_GRANT_READ: i32 = 0x1;
 pub const BUFFER_GRANT_WRITE: i32 = 0x2;
+
+/// Copy `@sizeOf(T)` bytes out of transfer buffer `buffer_id` at `offset` into
+/// `out`. The buffer is either this process's own or one a client borrowed to
+/// it; the kernel admits the read on the strength of that grant. Returns true on
+/// success.
+pub fn bufferRead(buffer_id: i32, out: anytype, offset: i32) bool {
+    const T = @typeInfo(@TypeOf(out)).pointer.child;
+    return abi.xfer_buffer_read(
+        buffer_id,
+        @intCast(@intFromPtr(out)),
+        @intCast(@sizeOf(T)),
+        offset,
+    ) == 0;
+}
 
 /// Acquire a transfer buffer of at least `len` bytes, left zeroed. The caller
 /// owns it and must release it with `bufferRelease`.

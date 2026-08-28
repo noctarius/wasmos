@@ -50,6 +50,39 @@ static const char BLKINFO_WRITE_TAG[] = "WASMOS-BLKWRITE";
 
 static int32_t g_reply_endpoint = -1;
 static int32_t g_request_id = 1;
+/* Transfer buffer holding the wasmos_block_request_t of one transfer, acquired
+ * and lent to the backend for the request and released after it. blkinfo issues
+ * one transfer at a time, so one slot is enough. */
+static int32_t g_req_bid = -1;
+
+/* Send a block transfer request described by `req` and wait for its reply.
+ * Returns the reply type, or 0 when the exchange failed. */
+static int32_t block_transfer(int32_t endpoint, int32_t req_type, const wasmos_block_request_t* req,
+                              wasmos_ipc_message_t* reply) {
+    int32_t rc;
+    g_req_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(*req));
+    if (g_req_bid < 0) {
+        return 0;
+    }
+    if (wasmos_xfer_buffer_write(g_req_bid, req, (int32_t)sizeof(*req), 0) != 0 ||
+        wasmos_xfer_buffer_borrow(endpoint, g_req_bid, WASMOS_BUFFER_GRANT_READ) < 0) {
+        (void)wasmos_xfer_buffer_release(g_req_bid);
+        g_req_bid = -1;
+        return 0;
+    }
+    rc = wasmos_ipc_call(endpoint,
+                         g_reply_endpoint,
+                         req_type,
+                         g_request_id++,
+                         g_req_bid,
+                         0,
+                         (int32_t)sizeof(*req),
+                         0,
+                         reply);
+    (void)wasmos_xfer_buffer_release(g_req_bid);
+    g_req_bid = -1;
+    return rc == 0 ? reply->type : 0;
+}
 
 /* Kept in step with block_backend_name() in the device manager and
  * block_backend_from_name() in its rule parser; the names are the drivers'
@@ -160,21 +193,20 @@ static int identify(int32_t endpoint, uint32_t instance, wasmos_block_descriptor
 /* Read one sector into this process's block buffer and copy its first bytes
  * out. Returns 0, or the provider's packed error code (negative) when the read
  * is refused, or -1 when the exchange itself failed. */
-static int read_sector(int32_t endpoint, uint32_t lba, uint8_t* preview) {
+static int read_sector(int32_t endpoint, uint32_t instance, uint32_t lba, uint8_t* preview) {
     wasmos_ipc_message_t reply;
+    wasmos_block_request_t req = {0};
     int32_t buffer_phys = wasmos_block_buffer_phys();
     if (buffer_phys < 0) {
         return -1;
     }
-    if (wasmos_ipc_call(endpoint,
-                        g_reply_endpoint,
-                        BLOCK_IPC_READ_REQ,
-                        g_request_id++,
-                        buffer_phys,
-                        (int32_t)lba,
-                        1,
-                        0,
-                        &reply) != 0) {
+    req.version = BLOCK_REQUEST_VERSION;
+    req.target = instance;
+    req.lba = lba;
+    req.sector_count = 1u;
+    req.dst_kind = BLOCK_DST_BLOCK_BUFFER;
+    req.dst_phys = (uint32_t)buffer_phys;
+    if (block_transfer(endpoint, BLOCK_IPC_READ_REQ, &req, &reply) == 0) {
         return -1;
     }
     if (reply.type == BLOCK_IPC_ERROR) {
@@ -192,8 +224,9 @@ static int read_sector(int32_t endpoint, uint32_t lba, uint8_t* preview) {
 
 /* Fill one sector with the write pattern for `lba` and hand it to the provider.
  * Returns 0, the provider's packed error code, or -1 when the exchange failed. */
-static int write_sector(int32_t endpoint, uint32_t lba) {
+static int write_sector(int32_t endpoint, uint32_t instance, uint32_t lba) {
     wasmos_ipc_message_t reply;
+    wasmos_block_request_t req = {0};
     uint8_t sector[BLKINFO_SECTOR_BYTES];
     int32_t buffer_phys = wasmos_block_buffer_phys();
     uint32_t i;
@@ -212,15 +245,13 @@ static int write_sector(int32_t endpoint, uint32_t lba) {
             buffer_phys, addr_cast(int32_t, sector), (int32_t)sizeof(sector), 0) != 0) {
         return -1;
     }
-    if (wasmos_ipc_call(endpoint,
-                        g_reply_endpoint,
-                        BLOCK_IPC_WRITE_REQ,
-                        g_request_id++,
-                        buffer_phys,
-                        (int32_t)lba,
-                        1,
-                        0,
-                        &reply) != 0) {
+    req.version = BLOCK_REQUEST_VERSION;
+    req.target = instance;
+    req.lba = lba;
+    req.sector_count = 1u;
+    req.dst_kind = BLOCK_DST_BLOCK_BUFFER;
+    req.dst_phys = (uint32_t)buffer_phys;
+    if (block_transfer(endpoint, BLOCK_IPC_WRITE_REQ, &req, &reply) == 0) {
         return -1;
     }
     if (reply.type == BLOCK_IPC_ERROR) {
@@ -334,7 +365,7 @@ int main(void) {
                      (unsigned)(sectors * BLKINFO_SECTOR_BYTES));
 
         if (do_write && wasmos_sys_streq(desc.canonical_id, write_id)) {
-            rc = write_sector((int32_t)providers[i].endpoint, lba);
+            rc = write_sector((int32_t)providers[i].endpoint, providers[i].instance, lba);
             if (rc != 0) {
                 (void)printf("[blkinfo] id=%s lba=%u write failed: %s\n",
                              desc.canonical_id,
@@ -345,7 +376,7 @@ int main(void) {
             (void)printf("[blkinfo] id=%s lba=%u write ok\n", desc.canonical_id, (unsigned)lba);
         }
 
-        rc = read_sector((int32_t)providers[i].endpoint, lba, preview);
+        rc = read_sector((int32_t)providers[i].endpoint, providers[i].instance, lba, preview);
         if (rc != 0) {
             (void)printf("[blkinfo] id=%s lba=%u read failed: %s\n",
                          desc.canonical_id,

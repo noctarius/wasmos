@@ -45,4 +45,26 @@ int32_t wfs_mark_dirty_task(void* user, uintptr_t* out_value);
  */
 int32_t wfs_super_write_task(void* user, uintptr_t* out_value);
 
+/* Reconcile the superblock with the volume and record how it is being left (§4).
+ *
+ * Writes the free counters -- which is what makes them true on disk at all,
+ * since they are adjusted in memory as blocks and objects move and are NEVER
+ * written per transaction. §4 calls them derived and advisory: the bitmaps are
+ * authoritative and land inside the transaction that moves them, and fsck
+ * recomputes the counters from those. A sync is what saves fsck the work; a
+ * crash simply leaves them trailing.
+ *
+ * `ctx->state` is what the volume is left saying. WFS_STATE_DIRTY keeps it
+ * mounted for writing; WFS_STATE_CLEAN is the unmount, and is the only thing
+ * that tells the next mount its log holds nothing to replay (§15). A transition
+ * carries the backup copies with it.
+ *
+ * Completes without a write when there is nothing to reconcile and no transition
+ * to record. Fails with WASMOS_ERR_FS_READ_ONLY on a volume that does not permit
+ * writes.
+ *
+ * Context: wfs_sync_ctx_t.
+ */
+int32_t wfs_sync_task(void* user, uintptr_t* out_value);
+
 #endif /* FS_WFS_WFS_SYNC_H */

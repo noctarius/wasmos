@@ -464,6 +464,61 @@ static void test_object_refusals(void) {
     wfs_stub_teardown();
 }
 
+/* Regression: 2026-08-28-wfs-superblock-counters-never-written
+ *
+ * §4's free_blocks / free_objects are the sums of the per-group counters and are
+ * what lets a statfs answer without scanning every bitmap. They were adjusted in
+ * MEMORY only: NOTHING ever wrote block 0 back, so the on-disk pair kept whatever
+ * mkfs computed for the life of the volume and every remount read one that
+ * claimed all its space was free.
+ *
+ * A sync is what writes them, and the remount is the assertion -- the in-memory
+ * value was always right; it is the next mount that could not see it.
+ *
+ * They are deliberately not written per transaction. §4 calls them derived and
+ * advisory: the bitmaps are authoritative and land inside the transaction that
+ * moves them, so a crash between a sync and the next one leaves these trailing
+ * for fsck rather than wrong. */
+static void test_the_superblock_counters_survive_a_remount(void) {
+    wfs_alloc_ctx_t a;
+    wfs_objalloc_ctx_t o;
+    wfs_sync_ctx_t sync;
+    wfs_mount_ctx_t m;
+    wfs_volume_t remount;
+    wasmos_wasm_coroutine_t task;
+    uint32_t want_blocks;
+    uint32_t want_objects;
+
+    if (setup() != 0) {
+        wfs_stub_teardown();
+        return;
+    }
+    expect(run_alloc(&a, 4u, 0u) == 0, "the block allocation completes");
+    expect(run_objalloc(&o, (uint16_t)WFS_TYPE_FILE) == 0, "the object allocation completes");
+    want_blocks = g_vol.super.free_blocks;
+    want_objects = g_vol.super.free_objects;
+
+    memset(&sync, 0, sizeof(sync));
+    sync.vol = &g_vol;
+    sync.state = (uint32_t)WFS_STATE_DIRTY;
+    expect(wfs_stub_run_task(&task, wfs_sync_task, &sync) == 0, "the sync completes");
+
+    memset(&m, 0, sizeof(m));
+    memset(&remount, 0, sizeof(remount));
+    m.vol = &remount;
+    expect(wfs_stub_run_task(&task, wfs_mount_task, &m) == 0, "the volume remounts");
+    expect_u32(remount.super.free_blocks, want_blocks, "the block counter survived");
+    expect_u32(remount.super.free_objects, want_objects, "and the object counter");
+
+    /* And they are not merely preserved but CORRECT: the bitmaps are
+     * authoritative and the counters are derived from them (§12). */
+    expect_u32(wfs_bitmap_count_free(group_bitmap(0u), remount.super.total_blocks),
+               remount.super.free_blocks,
+               "and the block counter agrees with the bitmap it is derived from");
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_an_allocation_marks_the_bitmap),
     WASMOS_TEST_CASE(test_two_allocations_do_not_overlap),
@@ -473,6 +528,7 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_read_only_volume_refuses_to_allocate),
     WASMOS_TEST_CASE(test_allocation_never_returns_a_metadata_block),
     WASMOS_TEST_CASE(test_an_allocation_marks_the_volume_dirty),
+    WASMOS_TEST_CASE(test_the_superblock_counters_survive_a_remount),
     WASMOS_TEST_CASE(test_a_new_object_reads_back_as_valid),
     WASMOS_TEST_CASE(test_two_allocations_get_different_ids),
     WASMOS_TEST_CASE(test_a_freed_object_is_reusable),

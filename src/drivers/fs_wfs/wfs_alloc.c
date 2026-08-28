@@ -175,6 +175,7 @@ int32_t wfs_alloc_blocks_task(void* user, uintptr_t* out_value) {
         } else {
             ctx->vol->super.free_blocks = 0u;
         }
+        wfs_txn_note_counters(ctx->vol);
         ctx->first_block =
             ctx->group * WFS_BLOCKS_PER_GROUP(ctx->vol->super.block_size) + ctx->run_start;
         ctx->length = ctx->run_length;
@@ -326,6 +327,7 @@ int32_t wfs_free_blocks_task(void* user, uintptr_t* out_value) {
             return (int32_t)ctx->err;
         }
         ctx->vol->super.free_blocks += ctx->run_in_group;
+        wfs_txn_note_counters(ctx->vol);
         ctx->cursor += ctx->run_in_group;
         ctx->pc = WFS_FREE_PC_DESC_JOINED;
         return wfs_free_blocks_task(user, out_value);
@@ -517,6 +519,7 @@ int32_t wfs_alloc_object_task(void* user, uintptr_t* out_value) {
         if (ctx->vol->super.free_objects > 0u) {
             ctx->vol->super.free_objects--;
         }
+        wfs_txn_note_counters(ctx->vol);
         return WASMOS_WASM_TASK_COMPLETE;
 
     default:
@@ -627,6 +630,7 @@ int32_t wfs_free_object_task(void* user, uintptr_t* out_value) {
             return (int32_t)ctx->err;
         }
         ctx->vol->super.free_objects++;
+        wfs_txn_note_counters(ctx->vol);
         return WASMOS_WASM_TASK_COMPLETE;
 
     default:

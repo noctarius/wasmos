@@ -224,6 +224,7 @@ wasmos_error_code_t wfs_txn_begin(wfs_volume_t* vol) {
     j->sequence = j->next_sequence;
     j->target_count = 0u;
     j->revoke_count = 0u;
+    j->counters_dirty = 0u;
     j->stage_err = WASMOS_ERR_NONE;
     j->open = 1u;
     wfs_block_set_redirect(wfs_ops_block(), journal_redirect, j);
@@ -240,9 +241,16 @@ void wfs_txn_abort(wfs_volume_t* vol) {
     j->open = 0u;
     j->target_count = 0u;
     j->revoke_count = 0u;
+    j->counters_dirty = 0u;
     /* The log keeps what was written into it. With no COMMIT carrying the
      * sequence, recovery reads it as stale content and discards it (§14). */
     wfs_block_set_redirect(wfs_ops_block(), 0, 0);
+}
+
+void wfs_txn_note_counters(wfs_volume_t* vol) {
+    if (vol && vol->journal.open) {
+        vol->journal.counters_dirty = 1u;
+    }
 }
 
 wasmos_error_code_t wfs_txn_revoke(wfs_volume_t* vol, uint32_t block) {

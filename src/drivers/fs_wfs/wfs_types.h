@@ -81,6 +81,19 @@ typedef struct {
     uint32_t revoke_count;
     uint32_t revokes[WFS_TXN_MAX_REVOKES];
 
+    /* The volume's free counters have moved since the superblock last recorded
+     * them, so a sync has something to write. Set by the allocator through
+     * wfs_txn_note_counters and cleared by wfs_sync_task.
+     *
+     * They are NOT written per transaction, and cannot be journaled inside one
+     * either: a target_block of 0 terminates a descriptor's target list, and
+     * recovery refuses block 0 as a replay destination so a damaged descriptor
+     * cannot overwrite the boot area and the primary superblock. Neither price is
+     * worth paying for numbers §4 calls derived and advisory -- the bitmaps are
+     * authoritative and land inside the transaction, and fsck recomputes these
+     * from them. A sync writes them; a crash leaves them trailing. */
+    uint8_t counters_dirty;
+
     /* A stage that failed before it reached the device, held until the take
      * reports it. wfs_txn_stage_begin returns NULL for both "nothing to await"
      * cases -- a refusal and a staging failure -- and without this the refusal
@@ -333,6 +346,28 @@ typedef struct {
 
     wasmos_error_code_t err;
 } wfs_sb_ctx_t;
+
+/* Reconciling the superblock with the volume, and recording how it was left
+ * (§4). A sync is what makes the free counters true on disk, and the CLEAN state
+ * at unmount is what tells the next mount its log holds nothing to replay. */
+typedef enum {
+    WFS_SYNC_PC_START = 0,
+    WFS_SYNC_PC_WRITE_JOINED,
+} wfs_sync_pc_t;
+
+typedef struct {
+    wfs_sync_pc_t pc;
+    wfs_volume_t* vol;
+    /* The state to leave the volume in: WFS_STATE_DIRTY for a sync that keeps it
+     * mounted, WFS_STATE_CLEAN for an unmount. */
+    uint32_t state;
+
+    uint8_t write_started;
+    wasmos_wasm_coroutine_t write_task;
+    wfs_sb_ctx_t write;
+
+    wasmos_error_code_t err;
+} wfs_sync_ctx_t;
 
 /* Recording that a volume is mounted for writing (§4). */
 typedef enum {

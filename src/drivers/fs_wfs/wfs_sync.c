@@ -226,3 +226,69 @@ int32_t wfs_mark_dirty_task(void* user, uintptr_t* out_value) {
         WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
     }
 }
+
+int32_t wfs_sync_task(void* user, uintptr_t* out_value) {
+    wfs_sync_ctx_t* ctx = (wfs_sync_ctx_t*)user;
+    int32_t joined = 0;
+
+    (void)out_value;
+
+    switch (ctx->pc) {
+    case WFS_SYNC_PC_START:
+        if (!ctx->vol || !ctx->vol->mounted) {
+            WFS_FAIL(ctx, WASMOS_ERR_FS_BAD_ARGS);
+        }
+        if (ctx->state != (uint32_t)WFS_STATE_CLEAN && ctx->state != (uint32_t)WFS_STATE_DIRTY) {
+            WFS_FAIL(ctx, WASMOS_ERR_FS_BAD_ARGS);
+        }
+        if (ctx->vol->super.read_only) {
+            WFS_FAIL(ctx, WASMOS_ERR_FS_READ_ONLY);
+        }
+        /* Nothing to reconcile and nothing to record. A volume that was mounted
+         * and never written is already CLEAN on disk, so an unmount sync over it
+         * would spend a write advancing a generation for no change. */
+        if (!ctx->vol->journal.counters_dirty && ctx->state == ctx->vol->super.state) {
+            return WASMOS_WASM_TASK_COMPLETE;
+        }
+        ctx->write.pc = WFS_SB_PC_START;
+        ctx->write.vol = ctx->vol;
+        ctx->write.state = ctx->state;
+        ctx->write.set_counters = 1u;
+        /* A state TRANSITION carries the backups with it; a sync that leaves the
+         * volume dirty does not, because `state` is the only field they hold that
+         * a mount must not read stale (wfs_sync.h). */
+        ctx->write.refresh_backups = ctx->state != ctx->vol->super.state ? 1u : 0u;
+        ctx->write.err = WASMOS_ERR_NONE;
+        wfs_ops_task_reset(&ctx->write_task);
+        if (!wasmos_async_start(
+                wfs_ops_runtime(), &ctx->write_task, wfs_super_write_task, &ctx->write)) {
+            WFS_FAIL(ctx, WASMOS_ERR_FS_BUSY);
+        }
+        ctx->write_started = 1u;
+        ctx->pc = WFS_SYNC_PC_WRITE_JOINED;
+        /* fall through */
+
+    case WFS_SYNC_PC_WRITE_JOINED:
+        if (ctx->write_started) {
+            int jr = wasmos_wasm_coroutine_join(&ctx->write_task, &joined);
+
+            if (jr == WASMOS_WASM_AWAIT_PENDING) {
+                return WASMOS_WASM_TASK_YIELDED;
+            }
+            ctx->write_started = 0u;
+            if (jr != 0) {
+                ctx->err = (wasmos_error_code_t)jr;
+                return jr;
+            }
+        }
+        ctx->vol->journal.counters_dirty = 0u;
+        /* A volume left CLEAN is not marked dirty again until the next write asks
+         * for it, which is what makes the flag mean "mounted for writing" rather
+         * than "was written once". */
+        ctx->vol->dirty_marked = ctx->state == (uint32_t)WFS_STATE_DIRTY;
+        return WASMOS_WASM_TASK_COMPLETE;
+
+    default:
+        WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
+    }
+}

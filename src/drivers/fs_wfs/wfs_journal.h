@@ -78,6 +78,16 @@ int32_t wfs_journal_load_task(void* user, uintptr_t* out_value);
  */
 wasmos_error_code_t wfs_txn_begin(wfs_volume_t* vol);
 
+/* Note that the volume's free counters moved inside this transaction, so its
+ * commit journals the superblock alongside the bitmaps and descriptors that
+ * moved them (§4, §12).
+ *
+ * Pure, and a no-op outside a transaction. The allocator calls it rather than
+ * staging block 0 itself: a transaction may allocate several times and only the
+ * final value is worth journaling.
+ */
+void wfs_txn_note_counters(wfs_volume_t* vol);
+
 /* Record that `block` stops being metadata in this transaction (§18).
  *
  * Mandatory whenever a metadata block is freed, whether or not it is reallocated

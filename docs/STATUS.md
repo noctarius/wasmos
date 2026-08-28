@@ -1329,7 +1329,6 @@ linked feature documents for rationale and rollout plans.
   the firmware still reports those frames as conventional memory, and a low
   allocation large enough to miss the earlier extents was handed the stack the
   kernel was running on.
-||||||| dc14ba7e17
 - One matcher decides whether a block rule applies to a device. There were two --
   a walk over known devices and a copy inside the publish handler -- and the
   publish copy, which is the path a live device takes, never compared the

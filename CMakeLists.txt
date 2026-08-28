@@ -2238,6 +2238,18 @@ add_custom_target(run-fat-image-tests
   COMMENT "Driving fs_fat against real formatter-built FAT images"
   VERBATIM)
 
+# Dead-strip flag for host unit tests that include a whole translation unit and
+# rely on collection to drop the half they do not exercise. The GNU spelling is
+# not an Apple linker option -- ld64 rejects --gc-sections outright, and so does
+# ld64.lld -- so the platform decides the spelling. Not optional: without a
+# dead-strip those suites fail to link on undefined host-call imports from the
+# uncollected half.
+if (APPLE)
+  set(DEAD_STRIP_FLAG -Wl,-dead_strip)
+else ()
+  set(DEAD_STRIP_FLAG -Wl,--gc-sections)
+endif ()
+
 add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
@@ -2315,6 +2327,26 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_block_descriptor.c
           -o ${BUILD_DIR}/test_block_descriptor
   COMMAND ${BUILD_DIR}/test_block_descriptor
+  # The block-rule MATCHER, as opposed to the rule parser above. The suite
+  # includes device_manager.c to reach its file statics, so:
+  #   --gc-sections drops the event-loop half of that translation unit, whose
+  #     imports the block path never needs; stubs_device_manager_host.c supplies
+  #     the handful that survive collection.
+  #   -Wno-unused-function is required BY the include: statics reachable only
+  #     from the collected half are unreferenced here, which is a property of
+  #     testing one path through a TU, not a defect in the service.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -Wno-unused-function -ffunction-sections -fdata-sections ${DEAD_STRIP_FLAG}
+          -iquote ${SERVICES_DIR}/device_manager
+          -iquote ${LIBSYS_WASM_DIR}/include
+          -iquote ${LIBC_DIR}/include
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_block_rules.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_device_manager_host.c
+          ${SERVICES_DIR}/device_manager/device_manager_rules.c
+          -o ${BUILD_DIR}/test_device_manager_block_rules
+  COMMAND ${BUILD_DIR}/test_device_manager_block_rules
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${SERVICES_DIR}/fs_manager
           ${CMAKE_SOURCE_DIR}/tests/unit/test_fs_manager_path.c

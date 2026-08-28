@@ -138,6 +138,43 @@ typedef struct thread {
      * rq names the owning queue so the reap path can unlink without knowing
      * which CPU last enqueued the thread.  Valid only while on_rq is 1. */
     uint8_t on_rq;
+    /* Diagnostic breadcrumb: the return address of whoever last moved this thread
+     * to READY, recorded by the three primitives that write the state
+     * (thread_set_state, thread_transit, thread_wake_if_blocked) and scrubbed when
+     * the slot is recycled.
+     *
+     * It answers the one question a stranded-READY thread cannot otherwise answer:
+     * who made it runnable and then did not enqueue it. Every other field in a
+     * stall dump describes the aftermath.
+     *
+     * Written cross-CPU with a relaxed atomic and read only by the dump; not
+     * load-bearing, nothing schedules on it. */
+    uint64_t ready_by;
+    /* Run-queue forensics for a strand, and the only fields that separate its
+     * two possible histories.  A thread found READY, on no run queue and owed
+     * nothing was either LINKED and then unlinked by a picker whose caller
+     * dropped it, or never linked because an enqueue attempt was skipped;
+     * rq_enq_result says which, rq_unlink_site says who took it off a queue, and
+     * rq_link_count says whether it was ever on one at all.  Values are
+     * sched_enq_result_t / sched_unlink_site_t.
+     *
+     * rq_enq_by is the call site of that last enqueue attempt, carried in through
+     * cpu_sched_enqueue_from, so for anything routed through
+     * sched_enqueue_thread_from it names the caller that wanted the enqueue
+     * rather than the funnel it passed through.
+     *
+     * rq_link_count is 32 bits and wraps only past four billion links, which no
+     * boot approaches -- width chosen for that reason, because 0 is the one value
+     * the dump draws a conclusion from and a wrapped counter would report it for a
+     * thread that has been linked all along.
+     *
+     * Diagnostic only, like ready_by: written with relaxed atomics from whichever
+     * CPU acts, read only by the stall dump, and scrubbed when the slot is
+     * recycled.  Nothing schedules on them. */
+    uint8_t rq_enq_result;
+    uint8_t rq_unlink_site;
+    uint32_t rq_link_count;
+    uint64_t rq_enq_by;
     /* An enqueue this thread is OWED.  cpu_sched_enqueue refuses to link a
      * thread that some CPU still names as current -- it is executing, and
      * linking it would let a second CPU dispatch it -- so it records the debt

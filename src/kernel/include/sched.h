@@ -93,6 +93,14 @@ void cpu_sched_init(cpu_sched_t* cs);
  * dispatch through one place. */
 void cpu_sched_enqueue(cpu_sched_t* cs, struct thread* t);
 
+/* cpu_sched_enqueue, with the ORIGINAL call site carried through so the
+ * diagnostics -- both the rate-limited reports and thread_t::rq_enq_by -- can name
+ * it.  cpu_sched_enqueue is this function with its own return address, which for
+ * anything routed through sched_enqueue_thread_from names that funnel rather than
+ * the caller that wanted the enqueue.  `caller` has no effect on placement or on
+ * whether the enqueue happens. */
+void cpu_sched_enqueue_from(cpu_sched_t* cs, struct thread* t, uintptr_t caller);
+
 /* Remove a thread from whichever priority bucket it is in.
  * Caller must hold cs->lock. */
 void cpu_sched_dequeue(cpu_sched_t* cs, struct thread* t);
@@ -153,10 +161,62 @@ void sched_settle_deferred_enqueue(struct thread* t);
  * runnable thread sits on no run queue. */
 void sched_sweep_owed_enqueues(void);
 
+/* Leave an owed-enqueue claim for a READY thread that a picker unlinked and the
+ * caller could not dispatch, having lost the dispatch_ref CAS to the CPU that
+ * holds the slot.  The pick released on_rq, so the claim is the only thing that
+ * keeps the thread findable -- by the holder, or by sched_sweep_owed_enqueues.
+ * Publishes the debt WITHOUT linking: the holder is still writing that thread's
+ * context and a queued thread can be dispatched out from under it.
+ *
+ * Pair with the dispatch claim in process_schedule_once_impl: a lost claim owes
+ * an enqueue, a won one performs it. */
+void sched_owe_enqueue_for_dropped_pick(struct thread* t);
+
 /* Drop any outstanding owed-enqueue claim on `t` WITHOUT enqueuing it, and
  * subtract its debt.  For a slot being released to the allocator
  * (thread_reset_slot); every other consumer of a claim wants to act on it. */
 void sched_drop_owed_enqueue(struct thread* t);
+
+/* Run-queue forensics, in two axes: the OUTCOME of the last enqueue attempt made
+ * on a thread, and the SITE that last released its run-queue claim.  Both are
+ * recorded per-thread (thread_t::rq_enq_result / rq_unlink_site) and printed for
+ * a strand by the stall dump.
+ *
+ * They exist because the counters cannot answer the question a strand asks. A
+ * thread found READY, on no run queue, owed no enqueue was either (a) LINKED and
+ * then unlinked by a picker whose caller dropped it without re-enqueueing, or
+ * (b) never linked at all because an enqueue attempt was skipped. Those need
+ * different fixes and the aftermath is identical, so the state alone cannot
+ * separate them. A global counter cannot either: it says a skip happened
+ * somewhere, not that it happened to THIS thread.
+ *
+ * Diagnostic only. Nothing schedules on these; they are written with relaxed
+ * atomics from whichever CPU acts and read only by the dump. */
+typedef enum {
+    SCHED_ENQ_NONE = 0,            /* no enqueue attempted since the slot was claimed */
+    SCHED_ENQ_LINKED,              /* linked into a ready list */
+    SCHED_ENQ_DEFERRED,            /* still current on some CPU; a claim was published */
+    SCHED_ENQ_SKIP_IDLE,           /* an idle thread; never queued by design */
+    SCHED_ENQ_SKIP_BAD_PRIO,       /* sched_prio past the last band */
+    SCHED_ENQ_SKIP_NON_READY,      /* state was not READY at the claim */
+    SCHED_ENQ_SKIP_ALREADY_QUEUED, /* the on_rq exchange found the claim taken */
+    SCHED_ENQ_SKIP_DOUBLE_LINK,    /* claim held but the node was still linked */
+} sched_enq_result_t;
+
+typedef enum {
+    SCHED_UNLINK_NONE = 0,    /* never linked, or never unlinked since */
+    SCHED_UNLINK_PICK_NEXT,   /* cpu_sched_pick_next handed it to a dispatch */
+    SCHED_UNLINK_STEAL,       /* cpu_sched_steal_pick handed it to another CPU */
+    SCHED_UNLINK_STALE_SWEEP, /* dropped as terminal by a picker's lazy sweep */
+    SCHED_UNLINK_DEQUEUE,     /* cpu_sched_dequeue, by an explicit caller */
+    SCHED_UNLINK_REMOVE,      /* cpu_sched_remove_thread, from the reap path */
+    SCHED_UNLINK_DOUBLE_LINK, /* the enqueue bail released the claim it took */
+} sched_unlink_site_t;
+
+/* Names for the two codes above, for the stall dump.  Out-of-range answers "?"
+ * rather than indexing past the table. */
+const char* sched_enq_result_name(uint8_t result);
+const char* sched_unlink_site_name(uint8_t site);
 
 /* Scheduler tripwires, as counters rather than only log lines.  Each tripwire
  * rate-limits its own logging to powers of two, so past the first few hits the
@@ -194,6 +254,32 @@ typedef enum {
      * slots left behind by a process reap.  Both should be unreachable; they are
      * counted rather than asserted because the cost of being wrong is a leaked
      * slot, not corruption. */
+    /* A dispatch ended with its thread READY, on no run queue, owed no enqueue
+     * and its owner still live -- so nothing will ever enqueue it and the
+     * owed-enqueue sweep cannot help either, because its gate is the global debt
+     * counter and this thread carries no debt.  Reached only through the aborting
+     * exits of process_schedule_once_impl, which hand back the thread's STATE but
+     * not its place in a queue; the report carries the abort's SCHED_R_* code,
+     * which is the field that says which one. */
+    SCHED_DEBUG_DISPATCH_LEFT_STRANDED,
+    /* A dispatch dropped a thread a picker had ALREADY unlinked, without
+     * re-enqueueing it.  Both exits run after cpu_sched_pick_next (or
+     * cpu_sched_steal_pick) has taken the node off its queue and released
+     * on_rq, so the thread's place in the run queue is already gone by the time
+     * the exit decides not to run it -- the comment that once claimed "nothing
+     * has been touched yet" described the SLOT claim, not the queue.
+     *
+     * Both are legitimate races for a thread that is going away: a reaped slot
+     * needs no queue entry.  They are counted because nothing distinguishes that
+     * from the same race against a thread whose owner is still live, which is a
+     * strand -- and until these counters existed, neither exit left any trace at
+     * all.
+     *
+     * SLOT_LOST: the dispatch_ref CAS lost to a reaper or to another CPU that
+     * raced to the same pick.  STEAL_REAPED: the stolen thread's owner was gone
+     * by the time the steal validated it. */
+    SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST,
+    SCHED_DEBUG_DISPATCH_DROPPED_STEAL_REAPED,
     SCHED_DEBUG_THREAD_REAP_REFUSED,
     SCHED_DEBUG_OWNER_REAP_LEFTOVER,
     SCHED_DEBUG_EVENT_COUNT

@@ -1328,30 +1328,6 @@ Source: `architecture/25-diagnostics-status.md`,
   measure across configs and repeated boots first
   (`src/kernel/kernel_sched_smp_stress_runtime.c:140`).
 
-- [ ] [TEST][P2] Drive the `set_ready` half of the exiting-owner refusal properly.
-  `tests/unit/test_process_lifecycle.c` hits `process_set_running` hundreds of
-  times per run but `process_set_ready` only 0-7 times per 300 rounds, because
-  `process_kill` marks the owner's threads shortly after setting `exiting`, so the
-  requeue usually finds no READY sibling and parks instead. Reaching it needs the
-  sub-window `process.h` describes as "`exiting` 1 slightly ahead of ->state".
-  The suite therefore asserts the SUM of both counters. That is honest but thin
-  for the half the original panic actually named
-  (`set_ready zombie`, CI run 32561829781): a regression that broke only that
-  branch could pass. Widening it probably means driving the kill and the
-  retirement from a shared barrier rather than the current announce-and-spin.
-- [ ] [TEST][P2] Put a test behind the promotion demotion-guard, or drop it.
-  `process_set_ready` and the `process_wake_process_waiters` fast path promote
-  only a BLOCKED thread so they cannot write READY over a RUNNING one. That guard
-  came from a PR review hypothesis, not an observed failure, and nothing
-  demonstrates the previous unconditional `thread_set_state` ever demoted
-  anything. Two attempts at implementing it wedged the boot in CI (once by
-  dropping `block_reason`, once by gating `sched_wake_claim_enqueue` on the
-  result), and no local gate caught either — unit suite, both kernels and
-  `run-qemu-test` on both defconfigs pass with either bug in place, because
-  booting to a prompt does not route a wake through those sites. Either construct
-  the interleaving that proves the guard is needed, or revert it to the simpler
-  unconditional form. Leaving an untested guard whose motivation is a hypothesis
-  invites a later "cleanup" to reintroduce the regressions.
 - [ ] [BUG][P1] Confirm the SMP scheduler stress panic stays fixed. One cause is
   found and fixed: dispatch took no exclusive claim on the thread it was about
   to run, so two CPUs could resume one `process_context_t` on one kernel stack
@@ -1381,6 +1357,52 @@ Source: `architecture/25-diagnostics-status.md`,
 
   A `[sched] claim lost` line means the race fired and the claim resolved it.
 
+- [ ] [BUG][P0] The guest reaches no CLI prompt on roughly one CI run in two, and
+  it is ONE defect with several faces, not several flakes. Every capture is a
+  whole-session stall: the tests that report it differ only by which one happened
+  to open the session first, so the battery that goes red is arbitrary.
+
+  Faces seen so far, all on the same code:
+  - `warp_smp`: `FAIL: calculator did not fully initialise`. The calculator is not
+    involved -- the log's last line is `[net-stack] tls: no CA trust store` and
+    nothing after net-stack is ever spawned (no `gfx-smoke`, no `Calculator`, no
+    `cli`). Runs 32625904585 (`main` at 78018f8191) and 32634831416.
+  - `boot-and-init`: `ERROR: setUpClass ... RuntimeError: CLI prompt not detected`
+    (`tests/test_init_smoke.py:24`). Run 32636373451. This is the capture that
+    carries a `[stall-dump]`; see the wedge item below.
+  - `networking`: `ERROR: setUpClass ... RuntimeError: CLI prompt not reached`
+    (`tests/test_net_stack_udp_echo_e2e.py:43`, run 32636373451) and
+    `test_host_resolves_localhost` timing out for 120 s on its FIRST prompt wait
+    (`tests/test_net_stack_dns_resolve_e2e.py:40`, run 32634831416). Neither is a
+    DNS or UDP defect: both fail before their subject matter runs.
+
+  An ERROR in `setUpClass` and an assertion failure are different animals, and
+  the distinction is the fastest triage available: `setUpClass` failing means the
+  session never came up, so the named test is a bystander. Read the battery name
+  as "which suite drew the short straw", never as the subsystem at fault.
+
+  Attribution is settled and is worth stating because it looks like a regression
+  from the scheduler work: PR #18 was DOCUMENTATION ONLY, and `warp_smp` went from
+  passing on PR #17's merge to failing on #18's. The trigger is runner timing.
+
+  The mechanism is the wedge item below, whose second cause now has a persistent
+  signature again. Fix that; this item is the symptom's index.
+
+  Rate, on four CI runs whose kernels are identical in every respect that could
+  matter: `warp_smp` failed, failed, passed, failed. The battery that reports the
+  stall moves between runs; the stall itself is close to a coin flip.
+
+  Where to look for evidence, because the arms are not equivalent: only the
+  BATTERY tests produce a `[stall-dump]`, because the dump comes from the Python
+  framework's stall handling. The `warp_smp` build+boot arm runs the plain
+  `run-qemu-test` halt check, so it reports `FAIL: calculator did not fully
+  initialise` and nothing else -- three captures of it carry no thread state at
+  all. Chase this through `boot-and-init` or `networking` failures, not through
+  `warp_smp`, however tempting its name is.
+
+  Reproduces on CI and probably not on an Apple Silicon box: QEMU there runs
+  `thread=single`, which masks memory-ordering races. Validate on Linux x86 with
+  `-smp 4` over repeated boots.
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and
   reaches `arp sent`, then no `notify rx=` arrives, so it fails as an assertion
@@ -1397,9 +1419,10 @@ Source: `architecture/25-diagnostics-status.md`,
   stash`.** A previous attempt was unsound because a stash silently did not
   take, so both arms ran identical code and the result meant nothing.
 
-- [ ] [BUG][P2] Confirm the whole-session wedge stays fixed. It had THREE causes,
-  all fixed, and finding each only because the previous one was gone is the
-  reason this item stays open rather than closed on one green run.
+- [ ] [BUG][P0] Confirm the whole-session wedge stays fixed. It has had FOUR
+  causes, each fixed, and finding each only because the previous one was gone is
+  why this item is never closed on a green run. The fourth was diagnosed and fixed
+  on 2026-08-23 and needs the confirmation runs described at the end.
 
   1. `46bd8b5d26` -- a READDIR's terminating `FS_IPC_RESP` was refused for a full
      relay queue and dropped, stranding fs-manager and, behind it, the client and
@@ -1421,6 +1444,17 @@ Source: `architecture/25-diagnostics-status.md`,
      blocked thread whose `wait=select:` line shows a watched endpoint with
      `q>0` (CI run 32009665809: fs-fat parked on `ep:54(q=1)` holding
      fs-manager's `type=0x420`, wedging the boot before the CLI).
+  4. `sched_wake_thread`'s claim-lost arm marked the target READY and returned
+     without leaving a CLAIM. When `sched_wake_claim_enqueue` reports that the
+     completion path owns the enqueue, that only holds while the completion path
+     has not yet made its decision; once it has -- it clears
+     `blocking_transition`, takes the token, reads the state, sees BLOCKED and
+     correctly declines to enqueue a blocked thread -- the mark lands after the
+     last thing that would have acted on it. A mark is not a message, which is
+     the identical defect the enqueue-current path in `cpu_sched_enqueue` already
+     carried a comment about, fixed the same way: publish `sched_owe_enqueue`
+     alongside the mark. Its signature is a persistent `stranded(ready,no-rq)`
+     whose `[diag]   ready_by=` line names `sched_wake_thread`.
 
   What would settle this: several consecutive green full-suite runs with no
   `[diag]!    refused` line, no `stranded(ready,no-rq)` that PERSISTS across the
@@ -1434,6 +1468,522 @@ Source: `architecture/25-diagnostics-status.md`,
   samples ~1 s apart. Run 32009665809 shows exactly that -- `stranded=1` then
   `stranded=0` on a healthy guest. The real one held across all three samples
   while the thread's `disp` never moved.
+
+  That test is now MET, in run 32636373451 (`boot-and-init`, WARP SMP):
+
+      live=28 ready=3 blocked=21 stranded(ready,no-rq)=1 running-unclaimed=2
+      [diag]! tid=46 pid=37 gfx-compositor st=ready rsn=- rq=0 wake=0 btrans=0
+              ev=0 cpu=2 ticks=4 disp=1241
+
+  Both lines are IDENTICAL in all FIVE samples: the strand persists and
+  gfx-compositor's `disp` never leaves 1241, so it is not an unsettled claim. The
+  thread is READY, on no run queue, with no wake token (`wake=0`) and no blocking
+  transition (`btrans=0`) -- nothing owes it an enqueue, so nothing will ever
+  perform one. Behind it sysinit parks on `endpoint:84` for a reply to its
+  `type=0x209 req=4` sent to `ep:5`, and the boot never reaches the CLI.
+
+  The other two causes read CLEAN in that capture, which is what points at the
+  second: no `[diag]!    refused` line anywhere, and no parked select waiter
+  watching a `q>0` endpoint (every `wait=select:` line shows `q=0`).
+
+  What is NOT established: which site left the strand. The capture does carry an
+  `[sched] enqueue current ... caller=ffffffff802229ef` line, which is the field
+  that distinguishes the two copies of the running-elsewhere guard -- but it names
+  `tid=18`, not the stranded `tid=46`, so it does not attribute this strand and
+  must not be read as if it did. Resolving that caller address needs the `nm`
+  output of the CI build's `kernel.elf`, which the run does not retain; a local
+  `-smp 4` reproduction on Linux x86 is the way in.
+
+  Start from `thread_t::enqueue_owed` and the claim protocol in
+  `sched_wake_claim_enqueue` / `sched_settle_deferred_enqueue`: a thread that is
+  READY with `wake=0` and `enqueue_owed` clear is precisely the "a mark is not a
+  message" failure those were written to close.
+
+  The dump now reports that field as `owed=` on every thread line, and two further
+  captures have read it. Both say `owed=0`:
+
+      run 32637549686, scheduler-and-ipc (bystander: test_work_stealing)
+      [diag]! tid=46 pid=37 gfx-compositor st=ready rq=0 owed=0 wake=0 btrans=0
+              ev=0 cpu=0 ticks=3 disp=1223            -- identical in 4 samples
+
+      run 32637549686, language-runtimes (bystander: test_hello_as)
+      [diag]! tid=46 pid=37 gfx-compositor st=ready rq=0 owed=0 wake=0 btrans=0
+              ev=0 cpu=2 ticks=2 disp=679             -- identical in 5 samples
+
+  ESTABLISHED by those two plus the earlier one: the strand is always the SAME
+  thread -- gfx-compositor, tid=46, pid=37 -- across three captures in three
+  different batteries; it is READY, on no run queue, with no wake token AND no
+  owed enqueue; and `disp` never moves across a capture's samples, so it is not an
+  unsettled claim caught mid-flight. Nothing owes it an enqueue, so nothing will
+  ever perform one.
+
+  CORRECTED, and the correction matters more than the original claim: the strand
+  does NOT by itself wedge a session. Run 32640235473 (`networking`, on
+  c62da74c64) reports the identical strand in two dumps -- `disp=31` and `disp=47`
+  -- with ZERO `setUpClass` errors and 85 `wamos>` prompts in the log. That session
+  booted and ran its suite with the compositor already stranded, failing only on
+  two ordinary assertion flakes (`test_lwip_arp_roundtrip`, the documented ~1-in-5
+  tx_slots framing case, and `test_link_down_up_preserves_netif`).
+
+  So the strand is necessary but not sufficient, and that resolves the shape of the
+  whole symptom: the compositor is stranded EARLY and fairly often (`disp` in the
+  30s-40s), and whether the session wedges depends on whether anything waits on the
+  compositor before the test's prompt. A battery that never touches graphics
+  finishes; one that does, stalls. That is why the failure moves between batteries
+  and why it looks like a coin flip.
+
+  Do not write "the strand causes the stall" again without a capture showing a
+  waiter on the compositor -- an earlier revision of this entry did, reasoning from
+  four correlated captures with no counter-example. Run 32640235473 is that
+  counter-example.
+
+  REFUTED, and recorded because the refutation is the useful part. Two mechanisms
+  have been proposed; neither survived.
+
+  1. The claim consumers (`sched_settle_deferred_enqueue`,
+     `sched_sweep_owed_enqueues`) take the claim before validating and destroy it
+     when the validation fails. THIS WAS REFUTED IN ERROR AND IS THE LIVE
+     SUSPECT -- see the correction below. The refutation argued that everything
+     downstream enqueues unconditionally, which is true of the DISPATCH exits (the
+     `PROCESS_RUN_BLOCKED` branch enqueues on READY and even repairs a
+     still-RUNNING legacy yielder; the yield branch enqueues with only an
+     `is_idle` guard) and false of the consumers themselves, which is where the
+     debt is destroyed. Refuting a mechanism by checking the wrong code path is
+     the single most expensive mistake made in this investigation.
+  2. An aborted dispatch. `dispatch_done` never re-enqueues, and every path
+     reaching it has already had the thread unlinked, so an abort does leave
+     exactly the captured state -- demonstrated on the host by
+     `s_aborted_dispatch_leaves_its_thread_reachable`, which measures
+     `state=1 on_rq=0 owed=0 wake=0`. But the `SCHED_DEBUG_DISPATCH_LEFT_STRANDED`
+     tripwire added for precisely this did NOT fire in run 32640235473, which
+     carries the strand. Reproducing a state is not the same as being its cause.
+
+  DIAGNOSED AND FIXED, 2026-08-23, in three steps each of which needed the
+  previous one's instrumentation. The chain is recorded because two hypotheses
+  were refuted along the way and the refutations cost less than the guesses would
+  have:
+
+  1. `owed=` on every thread line said the strand was owed nothing, ruling out a
+     dropped hand-off.
+  2. `SCHED_DEBUG_DISPATCH_LEFT_STRANDED` said `rc=7` -- the NORMAL dispatch exit,
+     via `PROCESS_RUN_BLOCKED` -- with no enqueue ever attempted (every skip
+     reason logs on its first hit, and none did). So the promotion happened
+     outside the dispatch, after that branch had read BLOCKED and correctly
+     declined.
+  3. `thread_t::ready_by` named the promoter outright:
+     `ready_by=ffffffff80227a12 (sched_wake_thread)`, on the ata driver's thread
+     at `disp=85`, identical across four samples.
+
+  That is cause 4 in the wedge item above, and the fix is one line:
+  `sched_wake_thread`'s claim-lost arm now publishes `sched_owe_enqueue` alongside
+  its READY mark, which is what the enqueue-current path in `cpu_sched_enqueue`
+  has always done for the same reason. Pinned by "a wake that declines to enqueue
+  left a claim rather than only a mark" in `tests/unit/test_process_lifecycle.c`,
+  red before the fix and green after.
+
+  READ THE TRIPWIRE CAREFULLY, because it has a known false positive and an
+  earlier revision of this entry over-read it. It samples at `dispatch_done`, so a
+  waker on another CPU that promotes a thread and enqueues it a moment later is
+  seen as READY-and-unqueued in between and reported. Counts therefore OVERSTATE
+  strands: one capture reported three hits of which only one matched the dump's
+  persistent strand. The real signal is the dump's `[diag]!` line holding across
+  every sample with `disp` frozen -- a tripwire hit alone proves nothing. The
+  claim that the strand "fires several times per boot" came from reading the
+  counts as strands and is withdrawn.
+
+  CORRECTION, 2026-08-23, and it reinstates suspect 1. The strand that survives
+  the boundary repair names a third promoter:
+
+      [diag]! tid=31 pid=22 ata st=ready rq=0 owed=0 wake=0   (four samples)
+      ready_by=ffffffff80226d91 (sched_mark_ready_if_live)
+
+  All THREE callers of `sched_mark_ready_if_live` pair it with
+  `sched_owe_enqueue` -- the two enqueue-current arms in `cpu_sched_enqueue` and,
+  since 1e46fac0aa, `sched_wake_thread`'s deferral arm. A thread promoted by that
+  function therefore always has a debt published. Observing it with `owed=0`
+  means the debt was published and then DESTROYED by a consumer that did not act
+  on it, which is suspect 1 above.
+
+  The mechanism, end to end: a waker marks the thread READY and owes the enqueue
+  (correct); a consumer takes the debt -- `sched_take_owed_enqueue` exchanges it
+  to 0 and decrements `g_enqueue_owed_count` -- and then finds the thread
+  momentarily not enqueueable (RUNNING on another CPU, or already queued) and
+  returns; the thread later settles as READY with no debt, no token and no queue.
+  Nothing can recover it, because the sweep's own gate is the counter the
+  consumer just decremented.
+
+  READ THIS BEFORE TRUSTING ANY NEGATIVE BELOW. Two independent reviews found that
+  the reasoning in this entry rested on inferences that are not sound, and the
+  errors matter more than the conclusions did:
+
+  1. EVERY "the tripwire never fired for X" and "no skip line ever names X" claim
+     is void. `sched_debug_note` rate-limits on a GLOBAL per-event counter and logs
+     only at powers of two (`sched_thread.c`, `sched.h`), so with 13-28 hits per
+     boot roughly six print. "Never printed" was never "never happened", and a
+     victim-specific hit is unlikely to be among the six. `SCHED_R_STALE` was
+     "ruled out" on exactly this basis and is NOT ruled out.
+  2. The kernel is built with NO `-O` flag, i.e. -O0 (`CMakeLists.txt`,
+     `CFLAGS_COMMON`), so nothing is inlined and every static function has its own
+     out-of-line symbol. The hedge that a promoter was "consistent with either
+     after inlining" was false. Worse, FIVE distinct READY-promotion sites live
+     inside `process_schedule_once_impl` and symbolize to that one name; the
+     recorded OFFSET discriminates them and was ignored in favour of the symbol.
+     `0x...80222ada` resolves locally to the `thread_set_state(READY)` call in the
+     PROCESS_RUN_BLOCKED completion path -- a site whose next instructions DO call
+     `sched_enqueue_thread`. Re-resolve against the CI `kernel.elf` before acting,
+     since the layouts differ.
+  3. `ready_by` structurally cannot name a stranding site of the "already READY,
+     then nobody enqueued" shape: `thread_note_ready_by` is only called when the
+     state actually CHANGES, and `sched_mark_ready_if_live` returns 1 without
+     touching it for a thread already READY. So it names the earlier, innocent
+     promoter. The "decisive experiment" of watching `ready_by` move after
+     changing `process.c:928`/`:3537` was therefore invalid -- neither site writes
+     READY, so it could not move even if those were the bug.
+  4. `kpanic_symbolize` has no upper bound on a match, so any higher-half garbage
+     resolves to a confident function name. At least one quoted value
+     (`0x...80227a12`) is mid-prologue and cannot be a return address. Validate a
+     `ready_by` as a post-call address before using it as evidence.
+  5. "Persistent across all samples with `disp` frozen" does NOT distinguish a
+     permanent strand from a pick -> abort -> re-enqueue loop: `dispatch_count` is
+     incremented only after `context_switch_high` returns, so an aborting loop
+     leaves `disp` frozen too. A livelock and a strand need different fixes.
+
+  The two-site hypothesis (`process.c:928`, `:3537`) is REFUTED, by the seq-cst
+  total order: both mark READY BEFORE calling `sched_wake_claim_enqueue`, so a
+  claim that returns 0 guarantees the completion path observes both the token and
+  READY, and `process.c:2601` tests `state == READY` OUTSIDE the token branch and
+  enqueues. It is rescued. Corroborating: that family would leave `wake_pending=1`
+  and every capture shows `wake=0`, and its `ready_by` would name
+  `process_wake_waiters`/`process_set_ready`, never observed.
+
+  TWO LIVE CANDIDATES, both of which produce the captured state exactly. Both are
+  now INSTRUMENTED, and candidate A is no longer a hypothesis -- see the two
+  entries after this list:
+
+  A. An unlink-then-drop. `cpu_sched_pick_next` and `cpu_sched_steal_pick` unlink
+     the thread and clear `on_rq` BEFORE the caller holds any claim; then
+     `process.c` returns `SCHED_R_STALE` on a failed `dispatch_ref` CAS without
+     re-enqueueing, and the neighbouring comment claiming "nothing has been touched
+     yet" is false. Same shape on the steal/owner-gone exit. Neither path counts or
+     logs anything.
+  B. An enqueue attempted and skipped. If the promoter really is the
+     PROCESS_RUN_BLOCKED completion path, the enqueue two instructions later must
+     have declined, and the candidates are enumerable in `cpu_sched_enqueue`: idle,
+     bad prio, non-READY, `on_rq` already set, and the double-link bail, which
+     releases `on_rq` and returns -- yielding READY, rq=0, owed=0 exactly.
+
+  THE DISCRIMINATOR NOW EXISTS, 2026-08-23, and reading it is the next step. Three
+  pieces, all in place:
+
+  1. Per-thread run-queue forensics on `thread_t`: `rq_enq_result` (the outcome of
+     the last enqueue attempt), `rq_link_count` (times this thread was actually
+     linked), `rq_unlink_site` (who last released `on_rq`) and `rq_enq_by` (the
+     call site of that attempt, carried in through the new
+     `cpu_sched_enqueue_from`). The stall dump prints them for a strand as
+     `enq= links= unlink= enq_by=`, beside `ready_by=`.
+  2. A counter and a one-shot log at each of the two formerly blind exits in
+     `process.c` -- `SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST` (the `dispatch_ref`
+     CAS failed) and `SCHED_DEBUG_DISPATCH_DROPPED_STEAL_REAPED` (the stolen
+     thread's owner was gone). The `slot claim lost` line carries the OBSERVED
+     `ref=` value, which separates "another CPU raced this pick" (1, DISPATCH) from
+     "a reaper is tearing the slot down" (2, FROZEN).
+  3. Every tripwire's running total on one line in the stall dump
+     (`[diag] sched counters: ...`), printed even when zero. This is what makes a
+     negative reading mean anything: the per-event logs suppress roughly four hits
+     in five, and four conclusions in this entry were drawn from absent log lines.
+
+  How to read a capture: `links>0` with `unlink=pick_next`/`steal` is candidate A
+  and points at the dispatch exits. `enq=skip:*` is candidate B and names which
+  guard in `cpu_sched_enqueue_from` declined -- `skip:double-link`,
+  `skip:already-queued`, `skip:non-ready`, `skip:bad-prio`, `skip:idle`.
+  `links=0` cannot be reached by candidate A at all. `enq=deferred` means a claim
+  was published, which `owed=` then says whether anything still holds.
+
+  Pinned by the X1-X7 cases in `tests/unit/test_sched_runqueue.c`: that the two
+  histories read differently, that each refusal outcome is distinct from every
+  other, that the record describes the last attempt rather than the last failure,
+  that each picker and remover stamps its own site, and that re-init clears the
+  record. All seven were mutation-checked against four deliberate breakages of the
+  recording and each one caught its mutant.
+
+  DO NOT ATTRIBUTE A REGRESSION FROM BATTERY COUNTS. Not because the counts are
+  noise -- they are not -- but because they are a weak, probabilistic OBSERVABLE of
+  a deterministic race, and reasoning from them the wrong way has already misled
+  once in this investigation.
+
+  The mechanism below either lands on a thread's last enqueue or it does not, and
+  that depends on interleaving. So a battery is red when the race lands somewhere
+  fatal and green when it lands somewhere survivable -- the same code, the same
+  bug, a different interleaving. Calling a green battery a "flake" or saying it
+  "flipped" describes the measurement and hides the cause.
+
+  What follows for attribution, and it is the important part: a change that alters
+  the PROBABILITY of hitting the window is a real regression, and comparing run
+  counts cannot detect one. The last eight runs on this branch were red at 1, 2, 3,
+  3, 2, 4, 3 and 4 jobs, several on documentation-only commits; run 32663402965
+  rerun on the IDENTICAL commit gave 4 then 3. Two runs cannot distinguish p=0.3
+  from p=0.4, so "the rerun gave fewer failures" is not evidence of no effect. It
+  is not evidence of anything.
+
+  Measure the RACE, not the outcome. That is what the counters are for:
+  `dispatch-dropped-slot-lost` and `dispatch-left-stranded` count the event itself,
+  per boot, and they are comparable across commits in a way battery counts are not.
+  Compare those (and the persistent red SET, and the failure SIGNATURE -- here
+  `setUpClass` errors with no panic, fault or invariant failure anywhere) rather
+  than how many jobs went red.
+
+  AND HERE IS THE SAME MISTAKE THIS ENTRY KEEPS MAKING, caught this time before it
+  was acted on. The change that added those counters has one behavioural edit,
+  `thread_reset_slot`'s claim restore, and the captures report
+  `thread-reap-refused=0` / `owner-reap-leftover=0`. Reading that as "the changed
+  path never ran, so it cannot have moved the race probability" is WRONG: those
+  zeros have two explanations, and the second is the fix working. Under the old
+  code a refused reset leaked FROZEN, and `thread_reap_owner` then burned all 64
+  passes and reported a leftover -- so `owner-reap-leftover=0` is exactly what a
+  working fix produces, and it does not distinguish that from a cold path.
+
+  What IS established: no reap is currently giving up, so no slot is being leaked.
+  What is NOT: whether returning those slots and threads to circulation changes how
+  often the dispatch race below is hit. The fix can only make reaps SUCCEED where
+  they previously gave up, which puts more live threads in front of the picker, and
+  that is a plausible way to move the probability. It is untested, and these
+  counters cannot test it -- the honest comparison needs
+  `dispatch-dropped-slot-lost` per boot measured across several runs on each side.
+
+  RESOLVED, 2026-08-23, by the first capture read through the new fields (CI run
+  32663402965, four QEMU batteries red). Candidate A is CONFIRMED and candidate B
+  is REFUTED, and for once both by positive evidence rather than by log silence.
+
+  Every strand in that run, paired with its own forensic line:
+
+      tid=46 pid=37 gfx-compositor || enq=linked links=818 unlink=steal
+      tid=46 pid=37 gfx-compositor || enq=linked links=517 unlink=steal
+      tid=46 pid=37 gfx-compositor || enq=linked links=491 unlink=steal
+      tid=31 pid=22 ata           || enq=skip:already-queued links=133 unlink=pick_next
+      tid=31 pid=22 ata           || enq=linked links=189 unlink=pick_next
+
+  `links` is 133-818 and never 0; `unlink` is always a picker, never an enqueue
+  guard. `links=0` is the candidate-B signature and appears nowhere. The counters
+  line settles the rest without relying on any absent log line: `double-link=0`
+  (B's prime suspect never fired at all), `bad-prio=0`, `enqueue-idle=0`,
+  `ghost-head=0`, `init-on-queued=0`.
+
+  And the exit is named. `dispatch-dropped-slot-lost` is non-zero in every boot
+  (1-2), `dispatch-dropped-steal-reaped` is 0, and its log line carries the
+  observed claim value:
+
+      slot claim lost tid=46 owner=37 state=1 ref=1 cpu=0
+      slot claim lost tid=31 owner=22 state=1 ref=1 cpu=1
+
+  `ref=1` is THREAD_SLOT_DISPATCH on every single line -- another CPU racing the
+  same pick, never a reaper (which would read 2, FROZEN). The victim set
+  {10, 20, 24, 31, 46} is a superset of the strand victims {31, 46}.
+
+  THE INTERLEAVING, and it is provable from the source rather than inferred. Every
+  re-enqueue in the result handling (`process.c:2640`, `:2653`, `:2687`) runs
+  BEFORE `dispatch_done` releases `dispatch_ref` (`:2695`, `:2696`). So for a
+  winner A and a second CPU B:
+
+    1. A finishes its dispatch and RE-ENQUEUES the thread (2640/2653/2687).
+    2. B picks it -- it is linked and READY -- so B's picker unlinks it and
+       releases `on_rq`.
+    3. B CASes `dispatch_ref` from FREE and LOSES, because A has not reached 2696
+       yet. B returns SCHED_R_STALE and drops the thread without re-enqueueing.
+    4. A stores FREE and returns. Its enqueue already happened, at step 1.
+
+  Nothing enqueues the thread again: READY, on no run queue, owed nothing, no wake
+  token. The window is exactly the instructions between A's enqueue and A's claim
+  release, which is why the strand is rare, why it lands on different victims, and
+  why `unlink` names both pickers (gfx-compositor via `steal`, ata via
+  `pick_next`).
+
+  CONFIRMED TWICE, independently. The rerun of the same commit reproduced the same
+  reading on different boots with different numbers -- `enq=linked links=2148
+  unlink=steal`, `links=1481 unlink=steal`, `links=356 unlink=steal`,
+  `enq=skip:already-queued links=66 unlink=pick_next`. Never `links=0`, never an
+  enqueue guard. Two independent captures agreeing on the discriminator is what
+  this entry has lacked at every previous stage.
+
+  Why the exit fires far more often than it strands: steps 1-3 are survivable
+  whenever the thread receives a later wake, which re-links it. tids 10, 20 and 24
+  took this exit and did NOT end stranded. It is fatal only when it lands on the
+  last enqueue a thread was going to get -- the same "necessary but not
+  sufficient" shape already recorded for the strand overall.
+
+  WHAT THE FIX MUST DO, and the trap in it. Dropping at that exit is sound only
+  when the CAS winner still has its own re-enqueue ahead of it, and the ordering
+  above shows it may not. So the exit must re-enqueue (or publish a claim) for a
+  thread whose owner is LIVE -- `sched_enqueue_thread` is the right call, being
+  idempotent through the `on_rq` claim, refusing a non-READY thread, and deferring
+  with a claim when the thread is still current somewhere. The live-owner condition
+  is NOT optional: `ref=2` (a reaper) reaches the same exit, and re-enqueueing a
+  dying owner's thread is the non-converging repair loop already measured at
+  `dispatch_done` (the host suite did not terminate at all with that exclusion
+  forced off). Owes its own red-first test; the existing "a lost slot claim strands
+  a live owner's thread" case asserts the CURRENT behaviour and must be rewritten
+  to assert the repair, not relaxed.
+
+  The alternative -- release `dispatch_ref` BEFORE the result handling's enqueue --
+  is worse and should not be reached for: the claim exists to keep the thread and
+  process slots un-recyclable across exactly that handling.
+
+  CANDIDATE A IS FIXED, 2026-08-28. The losing side of the `dispatch_ref` CAS now
+  leaves an owed-enqueue claim for the thread its pick unlinked
+  (`sched_owe_enqueue_for_dropped_pick`, called from the `SCHED_R_STALE` exit in
+  `process_schedule_once_impl`), so the holder or an idle CPU's
+  `sched_sweep_owed_enqueues` re-links it. It publishes the debt WITHOUT linking:
+  the holder is still writing that thread's context, and linking from the loser is
+  the variant that panicked with `rip` inside `g_threads` (see `sched_owe_enqueue`).
+  Only a claim held by another DISPATCH owes anything; a FROZEN slot is
+  `thread_reset_slot` mid-teardown, whose thread is meant to end unqueued.
+
+  Evidence, all at `5ec6f59ef` on linux x86_64 with `-smp 4`:
+
+      unit      s_a_lost_slot_claim_leaves_the_thread_reachable -- red before the
+                fix (state=1 on_rq=0 owed=0), green after; whole host suite green
+      tcg MTTCG battery scheduler-and-ipc 580s failures=1 errors=1 stranded=1
+                -> 234s (documented shmem flake only) stranded=0, then 53s 7/7 OK
+      tcg single  1738s failures=1 errors=4 stranded up to 3 -> 95s 7/7 OK
+
+  The wall-clock collapse is part of the evidence: those runs were slow because
+  sessions wedged and waited out timeouts.
+
+  NOT closed by this, and the reason this item stays open: with the strand gone
+  the sessions stop stalling, so no `[diag]` dump prints and
+  `dispatch-dropped-slot-lost` becomes unobservable. "The race fired and was
+  harmless" is therefore shown by the unit case, not by a capture. A CI run that
+  dumps with `slot-lost>0` and `stranded=0` would close it.
+
+  CORRECTION to "the strand is always the SAME thread -- gfx-compositor, tid=46,
+  pid=37": run-dependent, not fixed. Local reproduction stranded `ata` tid=31 with
+  no compositor strand at all under MTTCG, and `net-stack` tid=29, `ata` tid=31,
+  `fs-fat` tid=32 AND gfx-compositor tid=46 under single-threaded TCG. A repair
+  aimed at anything compositor-specific would be aimed wrong.
+
+  CORRECTION to "`-smp 4` reproduction on Linux x86 is the way in", which is true
+  but for the wrong reason: this is an INTERLEAVING race, not a memory-ordering
+  one. The orderings are already correct (`__ATOMIC_ACQ_REL`/`ACQUIRE` on the CAS,
+  `RELEASE` on the store), and it reproduces under `-accel tcg,thread=single`,
+  where one host thread round-robins the vCPUs and no cross-thread reordering
+  exists -- more often than under MTTCG, in fact. Single-threaded TCG cannot rule
+  this class of bug out, and an apple-silicon host's silence is a probability
+  difference, not a concurrency-model one.
+
+  CANDIDATE A WAS DEMONSTRATED, 2026-08-23, with a LIVE owner and no race. Pinned
+  by the case now named "a lost slot claim leaves the thread reachable" in
+  `tests/unit/test_process_lifecycle.c`, which holds `thread_t::dispatch_ref` at
+  `THREAD_SLOT_DISPATCH` before driving a real dispatch -- exactly what a second
+  CPU that won the same pick, or a reaper mid-teardown, presents. Measured:
+
+      state=1 on_rq=0 owed=0 wake=0 links=2 unlink=pick_next
+
+  which is the CI signature field for field, with the owner still live and
+  therefore never reaped. `cpu_sched_pick_next` had already unlinked the thread and
+  released `on_rq`; the exit returns `SCHED_R_STALE` without re-enqueueing; nothing
+  can recover it, because `sched_sweep_owed_enqueues` is gated on the global debt
+  counter and this thread carries no debt.
+
+  This SUPERSEDES, for this exit only, the note in
+  `s_aborted_dispatch_leaves_its_thread_reachable` that calls the live-owner abort
+  "not constructible from here". That note stands for the
+  `SCHED_DEBUG_SET_RUNNING_EXITING` route it was written about.
+
+  It also explains why `rc=7` on every `SCHED_DEBUG_DISPATCH_LEFT_STRANDED` report
+  never contradicted candidate A: this exit returns BEFORE `dispatch_done`, where
+  that tripwire lives, so it is structurally invisible to it. The test asserts that
+  silence so it is a documented property rather than another negative read as
+  evidence.
+
+  What that does NOT settle: whether this exit is the mechanism behind the CI
+  strands, only that it can produce them. The remaining work is one capture read
+  through the new fields. A naive repair -- re-enqueueing at the exit -- makes the
+  host case go green, and is NOT the fix to reach for: the same exit is taken for a
+  slot a reaper has FROZEN, and re-enqueueing a dying owner's thread is the
+  non-converging repair loop already measured at `dispatch_done` (the host suite
+  did not terminate at all with the live-owner exclusion forced off). Any fix here
+  needs the same owner-liveness condition.
+
+  FIXED in the consumer, 2026-08-23, and it IS a real defect regardless of the
+  above: `sched_settle_deferred_enqueue` now reads the
+  state BEFORE taking the claim, so a thread that is momentarily not enqueueable
+  keeps its debt for whoever can honour it. Pinned by "a consumer that declined to
+  enqueue left the claim outstanding" in `tests/unit/test_process_lifecycle.c`,
+  which publishes the claim through the real protocol (an enqueue refused because
+  another CPU still names the thread) rather than by poking the field: red at
+  `owed=0`, green at `owed=1`.
+
+  Validate-first rather than re-publish-on-failure, deliberately. Re-publishing
+  keeps a debt alive for a thread that is legitimately blocked, which leaves
+  `g_enqueue_owed_count` non-zero and makes the sweep scan on every idle pass.
+  Validate-first costs one thing instead: the state can change between the read and
+  the exchange, so a claim may be taken for a thread that has just stopped being
+  READY -- `cpu_sched_enqueue` re-checks and skips, a logged no-op rather than a
+  lost wake.
+
+  `sched_sweep_owed_enqueues` deliberately keeps take-then-validate. It is the
+  DEFINITIVE resolver: it runs only when a CPU has nothing else to do, so it sees
+  settled state rather than the transients the settle path meets the instant a
+  dispatch ends, and something has to be able to retire a debt whose thread is
+  never coming back. If a capture ever shows a strand whose debt the sweep
+  discarded, that is the next thing to change.
+
+  The boundary repair added in a83b9d4d35 is REVERTED to report-only, and the
+  measurement is why: 28 firings in a single clean boot. A synchronous check at
+  `dispatch_done` cannot separate "stranded" from "in flight" -- the only
+  difference is elapsed time, and a waker that promotes then enqueues a statement
+  later, or a stealer that has unlinked but not yet claimed, both present exactly
+  that state. It also could not see the case above at all, since the final
+  promotion happens outside any dispatch. The tripwire stays; it is what found all
+  of this, and `rc` is the field that names the exit.
+
+  CAUSE 4 IS FIXED AND A FIFTH WAS SUSPECTED, which is this item's usual pattern.
+  The first post-fix capture (`graphics-and-vt`, on 1e46fac0aa, failing
+  `test_tty_switch_stress_with_output_spam`) still shows a persistent strand --
+  `stranded(ready,no-rq)=1` across five samples, tid=31 `ata`, READY, unqueued,
+  owed nothing -- but the breadcrumb has MOVED:
+
+      ready_by=ffffffff80222ada (process_schedule_once_impl)
+
+  It is no longer `sched_wake_thread`, so that path is closed. The new promoter is
+  the dispatcher itself. `SCHED_R_STALE` was suspected and is now RULED OUT: with
+  the tripwire's owner resolution fixed it reports this case, and every one of the
+  seven reports in a clean boot carries `rc=7`, the normal exit, not `rc=8`. The
+  suspect text below is retained only to show what was checked:
+  `thread->tid != picked_tid || thread->owner_pid != proc->pid` transits
+  RUNNING -> READY and jumps to `dispatch_done`, which never enqueues. That is the
+  aborted-dispatch mechanism demonstrated on the host by
+  `s_aborted_dispatch_leaves_its_thread_reachable`, previously set aside as benign
+  -- it was a SECOND cause, not a refuted one, and the note above that reads it as
+  refuted should be read as "not the cause of the sched_wake_thread strand".
+
+  The tripwire was blind to exactly that case -- no `[sched] dispatch left
+  stranded` line appears anywhere in that run despite the strand -- because its
+  exclusion consulted `proc`, the process the dispatch STARTED with. A STALE exit
+  means the slot was recycled: `proc` is the old process, typically already ZOMBIE,
+  while the thread belongs to a live one, so the report was suppressed for the one
+  exit that needed it. It now re-resolves the owner from `thread->owner_pid`.
+
+  And `dispatch_done` now REPAIRS the invariant rather than only reporting it: a
+  thread that is READY, unqueued, owed nothing and whose live owner wants it
+  runnable is handed to `sched_enqueue_thread`, which links it, defers it with a
+  claim, or declines -- it cannot double-link. Justified by the invariant, not by
+  knowing which exit produced it: a READY thread with a live owner is runnable by
+  definition, so leaving it on no run queue is wrong however it got there. The
+  report runs FIRST, because the repair publishes a claim and the tripwire tests
+  for the absence of one.
+
+  The live-owner exclusion on that repair is load-bearing, and verified rather
+  than assumed: with it forced off, the host suite does not terminate at all
+  (killed at 25 s against a normal 1.5 s), because a dying owner's thread is
+  re-enqueued, re-picked, refused at `process_set_running` and repaired again. A
+  repair that ignores the owner's state does not converge.
+
+  What would confirm a fix, once that is done: several consecutive full-suite runs
+  with no persistent `stranded(ready,no-rq)` in any dump. The strand is present in
+  runs that still boot (it is fatal only when it lands on the last wake a thread
+  was going to receive), so a green run proves less here than usual, and dumps are
+  only emitted on failure -- so the confirmation has to be the absence of the
+  marker in the captures that do appear, not the absence of failures.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

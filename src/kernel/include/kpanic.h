@@ -47,6 +47,12 @@ void x86_nmi_handler(uint64_t* regs);
  * NMI path, which is how a wedged guest is asked what its threads are doing. */
 void diag_dump_threads(const char* reason);
 
+/* Every scheduler tripwire's running total on one line.  Called by
+ * diag_dump_threads, and separately callable because the counters are the only
+ * honest reading of those tripwires: each one rate-limits its own log to powers
+ * of two, so an absent log line is not evidence that the event did not fire. */
+void diag_dump_sched_counters(void);
+
 #ifdef __cplusplus
 }
 #endif

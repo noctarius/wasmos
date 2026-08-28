@@ -1405,6 +1405,24 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
             queued++;
         }
     }
+    /* Reported here, not at the call site, because a device is matched from two
+     * paths and both must be visible: the live publish, and the re-scan of
+     * already-registered devices that runs when a later rule set is loaded. A
+     * device publishing BEFORE the override rules arrive -- which is ordinary
+     * when /boot mounts slowly -- is matched only by the re-scan, and reporting
+     * from the publish path alone made that outcome silent while the mount
+     * itself succeeded. Name the device a rule was queued FOR, since a rule
+     * matching the wrong backend is otherwise invisible until a filesystem
+     * mounts the wrong volume. */
+    if (queued > 0u) {
+        char queued_msg[96];
+        (void)snprintf(queued_msg,
+                       sizeof(queued_msg),
+                       "[device-manager] block_fs rule queued spawn driver=%s unit=%u\n",
+                       block_backend_name((uint8_t)rec->desc.backend),
+                       (unsigned)rec->desc.unit);
+        console_write(queued_msg);
+    }
     return queued;
 }
 
@@ -1439,14 +1457,29 @@ static const char* block_backend_name(uint8_t backend) {
  * IDE controllers would still collide. An id the publisher assigns has neither
  * problem, and this service is not in a position to invent a better one -- it
  * never probed the bus the disk is on. */
+static void registry_add_block(const wasmos_block_descriptor_t* in);
+
 static void registry_add_block_from_desc(int32_t buffer_id, int32_t offset, int32_t size) {
     wasmos_block_descriptor_t desc;
-    block_device_record_t* rec = 0;
     if (size < (int32_t)sizeof(desc) ||
         wasmos_xfer_buffer_read(buffer_id, &desc, (int32_t)sizeof(desc), offset) != 0) {
         console_write("[device-manager] block descriptor read failed\n");
         return;
     }
+    registry_add_block(&desc);
+}
+
+/* Upsert one described device and match it against the block rules.
+ *
+ * Split from the transfer-buffer decode above so the matcher can be exercised
+ * without a buffer: the rule-matching behaviour is what has bugs, and reaching
+ * it through a stubbed host call tests the stub as much as the code.
+ *
+ * `desc` is taken BY VALUE-ish (const pointer, copied into the record) because
+ * it is untrusted input from another process, whatever route it arrived by. */
+static void registry_add_block(const wasmos_block_descriptor_t* in) {
+    wasmos_block_descriptor_t desc = *in;
+    block_device_record_t* rec = 0;
     if (desc.version != BLOCK_DESCRIPTOR_VERSION) {
         console_write("[device-manager] block descriptor version mismatch\n");
         return;
@@ -1490,16 +1523,6 @@ static void registry_add_block_from_desc(int32_t buffer_id, int32_t offset, int3
     if (queue_block_fs_rules_for_record(rec) > 0u) {
         queue_block_fs_rule_spawns();
         g_dm.need_fat = 0;
-        /* Name the device a rule was queued FOR, not just that one was. A rule
-         * matching the wrong backend is otherwise invisible until a filesystem
-         * mounts the wrong volume. */
-        char queued_msg[96];
-        (void)snprintf(queued_msg,
-                       sizeof(queued_msg),
-                       "[device-manager] block_fs rule queued spawn driver=%s unit=%u\n",
-                       block_backend_name((uint8_t)rec->desc.backend),
-                       (unsigned)rec->desc.unit);
-        console_write(queued_msg);
     }
 }
 

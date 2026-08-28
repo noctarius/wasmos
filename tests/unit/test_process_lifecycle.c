@@ -26,29 +26,49 @@
  * genuinely IS a CPU: it has its own cpu_local, its own run queue, and it
  * contends for the same locks and atomics the kernel does.
  *
- * What a passing run means: the window was ENTERED and refused, not merely
- * absent. Both halves of the transition pair are counted
- * (SCHED_DEBUG_SET_READY_EXITING, SCHED_DEBUG_SET_RUNNING_EXITING) and the soak
- * asserts their SUM is non-zero, so a run that never reached the window fails
- * rather than passing vacuously -- the failure mode a race test normally has.
+ * The suite is in two layers, and the division is deliberate.
  *
- * Be precise about which half this reliably drives. set_running (the dispatch
- * half) is hit hundreds of times per run at every width: once an owner is
- * exiting, every attempt to dispatch one of its threads lands there. set_ready
- * (the requeue half, the one the CI panic named) is hit only occasionally --
- * 0 or 1 per 300 rounds -- because process_kill marks the owner's threads
- * shortly after setting `exiting`, so the requeue finds no READY sibling and
- * parks instead. Reaching set_ready needs the sub-window where `exiting` is
- * visible but the threads are not yet marked, which process.h:217 describes as
- * "1 slightly ahead of ->state". The sum is therefore what is asserted; the
- * printout reports both so a reader can see which half a given run explored.
+ * The CONTRACT cases drive process.c's two lifecycle transitions directly, via
+ * the WASMOS_PROCESS_TEST_SEAMS entries in process.h, and cannot miss. They own
+ * the per-branch coverage: each transition's refusal under an exiting owner, the
+ * promotion of a BLOCKED target and the clearing of its block_reason, the
+ * inertness of a requeue aimed at a READY one, and the rule that a promotion
+ * never overwrites a live dispatch claim. They are single-threaded: the
+ * interleavings these transitions absorb are stated as a starting state rather
+ * than raced for, because every production caller filters its target's state
+ * first and the windows are a few instructions wide -- unreachable from outside
+ * process.c on a host, and NOT what makes the transitions safe.
+ *
+ * The SOAK proves the real interleaving is survived end to end. Both halves of
+ * the transition pair are counted (SCHED_DEBUG_SET_READY_EXITING,
+ * SCHED_DEBUG_SET_RUNNING_EXITING) and it asserts their SUM is non-zero, so a run
+ * that never reached the window fails rather than passing vacuously -- the
+ * failure mode a race test normally has.
+ *
+ * The sum, and not each half, because of how narrow one of them is. set_running
+ * (the dispatch half) is hit hundreds of times per run at every width: once an
+ * owner is exiting, every attempt to dispatch one of its threads lands there.
+ * set_ready (the requeue half, the one the CI panic named) is hit 0-7 times per
+ * 300 rounds, because process_mark_exited publishes `exiting` four statements
+ * before it marks the owner's threads (the store to ->exiting, then
+ * block_reason, wait_target_pid and the force-transit to ZOMBIE, then
+ * thread_mark_owner_exited), and a requeue arriving after that finds no READY
+ * sibling and parks instead. Landing in that sub-window -- what process.h
+ * describes as "1 slightly ahead of ->state" -- is luck, and structurally so: the
+ * retiring worker below observes `exiting` at the window's FIRST statement and
+ * then has to travel all the way back through the dispatch return before the
+ * killer reaches its fourth. Aiming the two more tightly cannot change that, and
+ * widening the window itself would mean a behavioural hook inside a hot path.
+ * The per-branch claim therefore rests on the contract case above; the soak's job
+ * is the race, and the printout reports both counters so a reader can see which
+ * half a given run explored.
  *
  * Either half was a kpanic before the fix, so the suite is red-to-green on the
  * family: with the guards restored it aborts with "set_running zombie" at every
  * width (verified at 2 and 4 CPUs, exit 134).
  *
- * The assertions themselves are deterministic: they must hold after ANY
- * interleaving. Only which interleavings get explored varies.
+ * The assertions themselves are deterministic throughout: they must hold after
+ * ANY interleaving. Only which interleavings get explored varies.
  */
 
 #include <pthread.h>
@@ -314,6 +334,755 @@ static int spawn_race_target(uint32_t* out_pid) {
     return 0;
 }
 
+/* --------------------------------------- the transitions, driven directly */
+
+/* Spawns a live process with one kernel-worker thread and hands back that
+ * thread, unlinked from every run queue.
+ *
+ * Unlinked because that is the disposition a dispatcher sees: cpu_sched_pick_next
+ * unlinks a thread before the dispatcher claims it, so "is it linked" afterwards
+ * is an observation about what the transition under test did, not a leftover from
+ * the spawn. Returns 0, or -1 when the process table is full.
+ *
+ * The worker never runs in these cases -- nothing dispatches -- so its entry is
+ * irrelevant; sibling_worker is reused for it. */
+static int spawn_transition_target(uint32_t* out_pid, thread_t** out_thread) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* thread = 0;
+
+    if (process_spawn("xition-target", idle_main, 0, &pid) != 0) {
+        return -1;
+    }
+    if (process_thread_spawn_worker_internal(pid, "xition-worker", sibling_worker, 0, &tid) != 0) {
+        (void)process_kill(pid, 0);
+        return -1;
+    }
+    thread = thread_get(tid);
+    if (!thread) {
+        (void)process_kill(pid, 0);
+        return -1;
+    }
+    cpu_sched_remove_thread(thread);
+    *out_pid = pid;
+    *out_thread = thread;
+    return 0;
+}
+
+/* Kill and reap, so a case cannot starve the next one of table slots. The
+ * dispatch loop is what lets the owner's threads retire; 16 rounds is ample with
+ * no other CPU competing for them. */
+static void drop_transition_target(uint32_t pid) {
+    (void)process_kill(pid, 0);
+    for (uint32_t i = 0; i < 16u; ++i) {
+        (void)process_schedule_once();
+    }
+    process_reap_zombie_pid(pid);
+}
+
+/* Regression: 2026-08-23-set-ready-demotes-a-running-thread -- process_set_ready
+ * promoted its target with an unconditional thread_set_state, so a sibling
+ * requeue aimed at a thread another CPU had just claimed for dispatch wrote
+ * READY over RUNNING.
+ *
+ * What that costs: RUNNING *is* the exclusive dispatch claim
+ * (cpu_sched_claim_for_dispatch is a READY->RUNNING CAS), so overwriting it
+ * re-arms the claim -- a second CPU then wins it on a thread that is already
+ * executing, and two CPUs resume one process_context_t on one kernel stack. That
+ * is the torn-rip cpu_exception the claim was introduced to stop. The enqueue
+ * side's last-resort guard is "state != READY, skip", so a demotion silences
+ * that too and the executing thread can be linked into a ready queue as well.
+ *
+ * Driven directly because every production call site filters its target's state
+ * first (a BLOCKED waiter, a READY sibling): the demotion is reachable only when
+ * the target moves between that filter and the transition, a window a few
+ * instructions wide that cannot be produced from outside process.c. The
+ * filtering is not what makes the transition safe, which is exactly the claim
+ * this case pins.
+ *
+ * The window modelled here is the one inside a dispatch: the claim is taken and
+ * cpu_local()->current_thread is NOT yet published (process_schedule_once_impl
+ * publishes it only after process_set_running). Inside it the RUNNING state is
+ * the only record anywhere that the thread is spoken for -- sched_enqueue_thread's
+ * holder scan cannot see it -- which is why losing that state is unrecoverable
+ * rather than merely untidy. */
+static void s_promotion_never_destroys_a_dispatch_claim(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    CHECK(cpu_sched_claim_for_dispatch(t) == 1, "a dispatcher took the thread's dispatch claim");
+    CHECK(t->state == THREAD_STATE_RUNNING, "the claim is recorded as RUNNING");
+
+    int runnable = process_test_set_ready(process_get(pid), t);
+
+    /* The owner is healthy, so the wake is permitted and its caller still owes
+     * the wake/block handshake. A 0 here is the OTHER half of this pair of
+     * regressions (fixed in d8d6bf3958): the return value answers "may this
+     * owner's thread be made runnable", not "did this call change the thread's
+     * state", and reporting the latter suppresses sched_wake_claim_enqueue and
+     * loses the wake for precisely the target that is executing. */
+    CHECK(runnable == 1, "the transition reported that the owner permits the wake");
+    CHECK(t->state == THREAD_STATE_RUNNING, "the dispatch claim survived the promotion");
+
+    /* And the enqueue a permitted wake performs must not link it either. Observed
+     * BEFORE the second claim attempt below, which would otherwise repair the
+     * state it is meant to catch: a claim that wrongly succeeds writes RUNNING
+     * back, and both assertions here would then pass on a demoted thread. */
+    if (sched_wake_claim_enqueue(t)) {
+        sched_enqueue_thread(t);
+    }
+    CHECK(t->on_rq == 0, "an executing thread was not linked into a ready queue");
+    CHECK(sched_debug_count(SCHED_DEBUG_ENQUEUE_FROM_NON_READY) > 0,
+          "the enqueue was refused because the thread was not READY");
+
+    CHECK(cpu_sched_claim_for_dispatch(t) == 0,
+          "no second CPU can claim a thread that is already executing");
+
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE);
+    drop_transition_target(pid);
+}
+
+/* The half the guard above must not break: a genuinely BLOCKED target is
+ * promoted, and its block_reason goes with the state.
+ *
+ * Regression: 2026-08-22-promote-leaves-stale-block-reason (fixed 06b77e3c43) --
+ * promoting with the state alone left the waiter READY still carrying the reason
+ * it had blocked for, and the wait paths read that reason and put it straight
+ * back to sleep. */
+static void s_promotion_wakes_a_blocked_target_and_clears_its_reason(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_WAIT_PROCESS);
+    /* Cleared before the transition under test, and that is the whole point of the
+     * assertion below. process_thread_spawn_worker_internal already promotes the
+     * worker via thread_transit(BLOCKED, READY), so this field was ALREADY set
+     * before this case ran: asserting it non-zero without clearing it passed even
+     * with the recorder in thread_wake_if_blocked deleted, which is exactly the dud
+     * it was meant to catch. */
+    t->ready_by = 0;
+    CHECK(process_test_set_ready(process_get(pid), t) == 1, "the owner permits the wake");
+    CHECK(t->state == THREAD_STATE_READY, "a blocked target is promoted to READY");
+    CHECK(t->block_reason == THREAD_BLOCK_NONE, "and its block reason is cleared with the state");
+    /* Non-zero rather than a specific address, which would pin the linker's layout
+     * instead of the behaviour. */
+    CHECK(t->ready_by != 0, "and the promotion recorded its call site");
+
+    drop_transition_target(pid);
+}
+
+/* An already-READY target -- the sibling-requeue case, where the scan that found
+ * the thread found it READY -- must be reported as permitted so the caller
+ * completes the handshake, and must not be touched. */
+static void s_promotion_of_a_ready_target_is_permitted_and_inert(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    CHECK(t->state == THREAD_STATE_READY, "the spawned worker is READY");
+    CHECK(process_test_set_ready(process_get(pid), t) == 1,
+          "requeueing a READY sibling is permitted");
+    CHECK(t->state == THREAD_STATE_READY, "and leaves it READY");
+
+    drop_transition_target(pid);
+}
+
+/* Regression: 2026-08-22-set-ready-on-exiting-owner -- the panic this suite was
+ * built for, driven as a contract rather than as a race.
+ *
+ * The soak below reproduces the real interleaving, but reaches the set_ready half
+ * of the pair only 0-7 times in 300 rounds: process_kill marks the owner's
+ * threads within a few instructions of setting `exiting`, so a requeue arriving
+ * afterwards finds no READY sibling and parks the process instead of transitioning
+ * it. Reaching it needs the sub-window process.h describes as "`exiting` 1
+ * slightly ahead of ->state", which the soak can only be lucky enough to land in
+ * -- which is why its assertion is on the SUM of the two counters and cannot
+ * speak for either half alone. Publishing the flag here reproduces that window
+ * exactly, so both halves are covered by a case that cannot miss.
+ *
+ * ZOMBIE is deliberately not poked in: it is refused twice over (the state test
+ * here, then process_force_transit, which has no ZOMBIE->READY edge), and the CI
+ * panic's cause was the `exiting` flag -- the process was still in a live state
+ * when the transition arrived. */
+static void s_exiting_owner_refuses_both_transitions(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+    process_t* proc = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+    proc = process_get(pid);
+    if (!proc) {
+        CHECK(0, "the target is resident");
+        return;
+    }
+
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE);
+    __atomic_store_n(&proc->exiting, 1u, __ATOMIC_RELEASE);
+
+    CHECK(process_test_set_ready(proc, t) == 0, "a requeue under an exiting owner is refused");
+    CHECK(sched_debug_count(SCHED_DEBUG_SET_READY_EXITING) == 1, "and counted, not fatal");
+    CHECK(t->state == THREAD_STATE_BLOCKED, "and left its target alone");
+
+    CHECK(process_test_set_running(proc, t) == 0, "a dispatch under an exiting owner is refused");
+    CHECK(sched_debug_count(SCHED_DEBUG_SET_RUNNING_EXITING) == 1, "and counted, not fatal");
+    CHECK(t->state == THREAD_STATE_BLOCKED, "and left its target alone");
+
+    __atomic_store_n(&proc->exiting, 0u, __ATOMIC_RELEASE);
+    drop_transition_target(pid);
+}
+
+/* Regression: 2026-08-23-aborted-dispatch-strands-its-thread -- a dispatch that
+ * aborts after its thread has been taken off a run queue leaves it on no queue,
+ * because `dispatch_done` releases the slot claim and handles reaps but never
+ * re-enqueues (`src/kernel/process.c`, the label body).
+ *
+ * By the time any of those aborts is reachable the thread is ALREADY unlinked:
+ * cpu_sched_pick_next unlinks under the queue lock and cpu_sched_try_steal
+ * unlinks from the remote queue, both before the dispatcher claims it. So the
+ * run queue is not a place the thread can be "left"; it has to be put back, and
+ * two of the aborts explicitly hand back only the STATE
+ * (`thread_transit(RUNNING, READY)`) before jumping to the label.
+ *
+ * The abort driven here is the one that needs no race: process_set_running
+ * refuses because the owner is `exiting`, which this case publishes directly.
+ * The refusal itself is correct and is asserted elsewhere in this file -- the
+ * question is what happens to the thread AFTER it.
+ *
+ * Why this is the shape to test now: six CI captures of a whole-session stall all
+ * report the same thread as READY, on no run queue, with no wake token and no owed
+ * enqueue (`stranded(ready,no-rq)=1`, gfx-compositor, `disp` frozen across every
+ * sample; see docs/TASKS.md). That is the state an aborted dispatch leaves behind,
+ * and no other mechanism in the tree has been shown to produce it.
+ *
+ * REACHABILITY is the open question this case does not settle, and it must not be
+ * read as settling it. `exiting` is set in exactly one place
+ * (`process_mark_exited`) and is followed by a forced transition to ZOMBIE, so a
+ * thread stranded by THIS abort belongs to a process that is being torn down and
+ * would be reaped anyway. What makes it worth pinning regardless: the strand is a
+ * property of the abort path, not of the reason for the abort, and the other two
+ * aborts (`SCHED_R_STALE`, and a claim lost to another CPU) reach the same label
+ * by the same route. */
+static void s_aborted_dispatch_leaves_its_thread_reachable(void) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* t = 0;
+    process_t* proc = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+
+    if (process_spawn("abort-target", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a target");
+        return;
+    }
+    if (process_thread_spawn_worker_internal(pid, "abort-worker", sibling_worker, 0, &tid) != 0) {
+        CHECK(0, "spawned a worker");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    t = thread_get(tid);
+    proc = process_get(pid);
+    if (!t || !proc) {
+        CHECK(0, "the worker and its owner are resident");
+        (void)process_kill(pid, 0);
+        return;
+    }
+
+    /* The worker is READY and queued: process_thread_spawn_worker_internal
+     * publishes it and calls sched_spawn_thread, which is the state a dispatcher
+     * finds it in. */
+    CHECK(t->state == THREAD_STATE_READY, "the worker is READY");
+    CHECK(t->on_rq == 1, "and queued, so a dispatch has something to unlink");
+
+    /* Publish the refusal condition without killing the process, so the abort is
+     * the only thing that touches the worker. */
+    __atomic_store_n(&proc->exiting, 1u, __ATOMIC_RELEASE);
+
+    /* Drive the REAL dispatch path rather than re-implementing its sequence.
+     * sched_spawn_thread may have placed the worker on another CPU's queue, so
+     * this CPU reaches it by stealing, which only happens when pick_next returns
+     * this CPU's idle thread -- hence a bounded loop rather than one call. Stops
+     * as soon as the worker is off every queue, which is the moment the abort has
+     * happened. */
+    for (uint32_t i = 0; i < 20000u && t->on_rq; ++i) {
+        (void)process_schedule_once();
+    }
+
+    CHECK(sched_debug_count(SCHED_DEBUG_SET_RUNNING_EXITING) > 0,
+          "a dispatch of the worker was refused, so the abort was reached");
+
+    /* What the abort actually does, recorded because it is the CI signature
+     * exactly: READY (1), on no run queue, owed nothing, no wake token. */
+    printf("  ... after the abort: state=%u on_rq=%u owed=%u wake=%u\n",
+           (unsigned)t->state,
+           (unsigned)t->on_rq,
+           (unsigned)t->enqueue_owed,
+           (unsigned)t->wake_pending);
+    CHECK(t->state == THREAD_STATE_READY && !t->on_rq && !t->enqueue_owed && !t->wake_pending,
+          "the abort left the thread runnable, unqueued and owed nothing");
+
+    /* DELIBERATELY NOT asserted here: "a runnable thread is reachable unless its
+     * owner is dying". That disjunction lived here and was VACUOUS -- this case
+     * sets proc->exiting itself a few lines above and does not clear it until after
+     * the assertion, so the "owner is dying" term was true by construction and the
+     * CHECK could not fail. It also asserted strictly less than the CHECK above,
+     * which already pins state/on_rq/owed/wake unconditionally.
+     *
+     * The live-owner abort -- the case the CI captures show -- is not constructible
+     * from here: `exiting` is written in exactly one place (process_mark_exited),
+     * and every other abort with a live owner needs a race (a recycled slot, or a
+     * claim lost to another CPU). This case therefore documents what the
+     * dying-owner abort does, and the tripwire-silence assertion below carries the
+     * load. Do not re-add a disjunction over state this case controls; it reads
+     * like a safety argument and is a loophole. */
+
+    /* And the kernel's own tripwire for that case must agree: it excludes a dying
+     * owner, so this abort must NOT have reported one. A count here would mean
+     * the tripwire over-reports and would bury the real signal in CI. */
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_LEFT_STRANDED) == 0,
+          "the stranded-dispatch tripwire stayed silent for a dying owner");
+
+    __atomic_store_n(&proc->exiting, 0u, __ATOMIC_RELEASE);
+    drop_transition_target(pid);
+}
+
+/* Regression: 2026-08-23-lost-slot-claim-strands-a-live-thread
+ *
+ * The live-owner abort that s_aborted_dispatch_leaves_its_thread_reachable says
+ * is "not constructible from here". It is: that case names "a claim lost to
+ * another CPU" as one of the races needed, and a lost claim is a value in one
+ * word. Holding thread_t::dispatch_ref before the dispatch runs reproduces
+ * exactly what a second CPU that won the same pick, or a reaper mid-teardown,
+ * presents -- with no race and no second thread.
+ *
+ * What it establishes, and why it matters more than the dying-owner case: this
+ * exit strands a thread whose owner is LIVE. The dispatch has already had the
+ * thread unlinked by cpu_sched_pick_next -- which releases on_rq before
+ * returning -- and then returns SCHED_R_STALE without re-enqueueing it, so the
+ * thread ends READY, on no run queue, owed no enqueue and with no wake token.
+ * Nothing will enqueue it again: sched_sweep_owed_enqueues is gated on the global
+ * debt counter and this thread carries no debt. That is candidate A of the two
+ * histories in docs/TASKS.md's wedge entry, demonstrated rather than argued, and
+ * it is the CI signature field for field.
+ *
+ * THE REPAIR THIS NOW ASSERTS: the loser of the claim owns a thread it has
+ * already taken off every queue, so it must leave a DEBT -- an owed-enqueue
+ * claim -- before returning. It must not link the thread itself: the winner is
+ * still dispatching it, and linking a thread another CPU is mid-dispatch lets a
+ * third CPU resume a context nobody has finished writing (sched_owe_enqueue's
+ * comment records the kernel panic that produced, rip inside g_threads). The
+ * debt is what sched_sweep_owed_enqueues is gated on, so publishing it is
+ * exactly what makes the thread findable again.
+ *
+ * Both halves are asserted, because either alone can pass while the thread is
+ * still lost: that the debt exists after the exit, and that the sweep actually
+ * re-links the thread once the claim is released.
+ *
+ * The comment in s_aborted_dispatch_leaves_its_thread_reachable that calls the
+ * live-owner abort unconstructible describes the SET_RUNNING_EXITING route only.
+ * It stands for that route and is superseded for this one. */
+static void s_a_lost_slot_claim_leaves_the_thread_reachable(void) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* t = 0;
+    process_t* proc = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+
+    if (process_spawn("claim-target", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a target");
+        return;
+    }
+    if (process_thread_spawn_worker_internal(pid, "claim-worker", sibling_worker, 0, &tid) != 0) {
+        CHECK(0, "spawned a worker");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    t = thread_get(tid);
+    proc = process_get(pid);
+    if (!t || !proc) {
+        CHECK(0, "the worker and its owner are resident");
+        (void)process_kill(pid, 0);
+        return;
+    }
+
+    /* Re-place the worker on THIS CPU's queue. sched_spawn_thread put it on the
+     * least-loaded CPU, and this CPU can only reach another CPU's queue by
+     * stealing -- which happens only when pick_next returns its idle thread,
+     * and CPU 0's queue holds the target's forever-yielding main thread, so it
+     * never idles. Without this the worker is simply never picked and the case
+     * asserts nothing. Which queue the thread came from is not part of what the
+     * exit under test does. */
+    cpu_sched_remove_thread(t);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+
+    CHECK(t->state == THREAD_STATE_READY, "the worker is READY");
+    CHECK(t->on_rq == 1, "and queued on this CPU, so a dispatch will pick it");
+    CHECK(t->rq_link_count > 0u, "and its record says it was linked");
+    CHECK(proc->state != PROCESS_STATE_ZOMBIE && !proc->exiting,
+          "and its owner is LIVE -- the whole point of this case");
+
+    /* The lost claim. THREAD_SLOT_DISPATCH is what a second CPU that raced this
+     * one to the same pick leaves in the word; THREAD_SLOT_FROZEN (a reaper
+     * mid-teardown) fails the dispatcher's CAS-from-FREE identically. */
+    __atomic_store_n(&t->dispatch_ref, THREAD_SLOT_DISPATCH, __ATOMIC_RELEASE);
+
+    /* Drive the REAL dispatch path rather than re-implementing its sequence.
+     * Bounded and stopping the moment the worker is off every queue, which is the
+     * moment the exit under test has run: the target's main thread shares the
+     * queue and may be picked first. */
+    for (uint32_t i = 0; i < 20000u && t->on_rq; ++i) {
+        (void)process_schedule_once();
+    }
+
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST) > 0,
+          "the lost-claim exit counted its drop");
+
+    printf("  ... after the lost claim: state=%u on_rq=%u owed=%u wake=%u links=%u unlink=%s\n",
+           (unsigned)t->state,
+           (unsigned)t->on_rq,
+           (unsigned)t->enqueue_owed,
+           (unsigned)t->wake_pending,
+           (unsigned)t->rq_link_count,
+           sched_unlink_site_name(t->rq_unlink_site));
+
+    CHECK(t->state == THREAD_STATE_READY && (t->on_rq || t->enqueue_owed),
+          "a live owner's thread is left reachable: linked, or owed an enqueue");
+    CHECK(proc->state != PROCESS_STATE_ZOMBIE && !proc->exiting,
+          "with its owner still live, so nothing else would reap or requeue it");
+
+    /* Which of the two histories the forensics report. A capture reading these
+     * values sends the reader to the dispatch exits; reading skip:* instead would
+     * send them to the enqueue guards. Getting this backwards is the failure mode
+     * the fields exist to prevent, so it is asserted where the state is known.
+     *
+     * A real capture may show enq=skip:already-queued rather than linked, since a
+     * redundant enqueue records itself; `links` and `unlink` are the fields that
+     * discriminate, and only this construction's clean path guarantees `linked`. */
+    CHECK(t->rq_unlink_site == SCHED_UNLINK_PICK_NEXT || t->rq_unlink_site == SCHED_UNLINK_STEAL,
+          "the forensics name a picker, not an enqueue skip");
+    CHECK(t->rq_enq_result == SCHED_ENQ_LINKED, "and the last enqueue attempt was a link");
+
+    /* And the tripwire that exists for this state cannot see it: the exit returns
+     * before dispatch_done, where the check lives. Asserted so the silence is a
+     * documented property rather than a reading someone takes as a negative --
+     * every "the tripwire never fired for X" conclusion in this investigation so
+     * far has been void. */
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_LEFT_STRANDED) == 0,
+          "and the dispatch_done tripwire is structurally blind to this exit");
+
+    /* Release the claim, as the winning CPU's dispatch_done does, and let the
+     * safety net run. The debt only means something if a sweep can act on it:
+     * asserting the flag alone would pass for a claim published on a thread the
+     * sweep skips (still current somewhere, or refused by cpu_sched_enqueue). */
+    __atomic_store_n(&t->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
+    sched_sweep_owed_enqueues();
+    CHECK(t->on_rq == 1, "and an idle CPU's sweep puts it back on a run queue");
+    CHECK(!t->enqueue_owed, "consuming the debt exactly once");
+
+    drop_transition_target(pid);
+}
+
+/* Regression: 2026-08-28-tripwire-reports-non-live-owners
+ *
+ * The stranded-dispatch tripwire decides whether an unqueued READY thread has a
+ * LIVE owner, and excluded only ZOMBIE and `exiting`. process_find_by_pid
+ * returns any slot that is not UNUSED, so PROCESS_STATE_REAPING, _DEAD and _NEW
+ * all read as live. For a reaping or dead owner, leaving the thread unqueued is
+ * deliberate -- the reaper collects it -- exactly as it is for a ZOMBIE, so each
+ * one was a false report.
+ *
+ * The cost was not a wrong log line; it was a counter that could not be read.
+ * DISPATCH_LEFT_STRANDED fired 7-14 times in runs that passed and 9 times in one
+ * that failed, which is what a tripwire looks like when it reports a state that
+ * is usually benign. An investigation into the remaining whole-session wedge has
+ * to be able to treat a non-zero count as evidence.
+ *
+ * Constructed, not raced: the owner's state is a word this test can publish, and
+ * the tripwire samples it at dispatch_done. */
+static void s_the_tripwire_ignores_a_reaping_owner(void) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* t = 0;
+    process_t* proc = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+
+    if (process_spawn("reaping-target", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a target");
+        return;
+    }
+    if (process_thread_spawn_worker_internal(pid, "reaping-worker", sibling_worker, 0, &tid) != 0) {
+        CHECK(0, "spawned a worker");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    t = thread_get(tid);
+    proc = process_get(pid);
+    if (!t || !proc) {
+        CHECK(0, "the worker and its owner are resident");
+        (void)process_kill(pid, 0);
+        return;
+    }
+
+    /* The thread state the tripwire looks for, published directly: runnable, on
+     * no queue, owed nothing. Reached in production by any exit that drops a
+     * thread a picker had already unlinked. */
+    cpu_sched_remove_thread(t);
+    __atomic_store_n((uint32_t*)&t->state, (uint32_t)THREAD_STATE_READY, __ATOMIC_RELEASE);
+    __atomic_store_n(&t->enqueue_owed, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&t->wake_pending, 0u, __ATOMIC_RELEASE);
+
+    /* An owner mid-teardown that has NOT reached ZOMBIE. */
+    proc->state = PROCESS_STATE_REAPING;
+
+    for (uint32_t i = 0; i < 64u; ++i) {
+        (void)process_schedule_once();
+    }
+
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_LEFT_STRANDED) == 0,
+          "a reaping owner's unqueued thread is not reported as stranded");
+
+    proc->state = PROCESS_STATE_ZOMBIE;
+    (void)process_kill(pid, 0);
+    for (uint32_t i = 0; i < 16u; ++i) {
+        (void)process_schedule_once();
+    }
+    process_reap_zombie_pid(pid);
+}
+
+/* Regression: 2026-08-23-refused-reset-leaks-a-frozen-slot
+ *
+ * thread_reset_slot wins the slot claim by CAS'ing dispatch_ref from FREE to
+ * FROZEN, then re-reads the thread's state and refuses to tear down a RUNNING
+ * thread. It returned without restoring the word, so a refused reset left the
+ * slot FROZEN forever -- and FROZEN is a value nothing recovers from:
+ *
+ *   - thread_reset_slot's own CAS is from FREE, so every later reap of that slot
+ *     fails the claim instead of the state check. The comment promising the
+ *     teardown is "deferred rather than dropped" and "retried from there" is
+ *     then false: the retry cannot succeed, and thread_reap_owner burns all 64
+ *     passes before reporting a leftover.
+ *   - process_schedule_once_impl's claim is also a CAS from FREE, so the thread
+ *     can never be dispatched again either. It is picked, unlinked, refused, and
+ *     dropped without a re-enqueue on every attempt.
+ *
+ * So one refused reset costs a thread slot permanently AND strands the thread it
+ * refused to free. The slot table is fixed-size.
+ *
+ * Driven as a contract, not a race: the refusal only needs the thread to read
+ * RUNNING while dispatch_ref reads FREE, which is a state a test can simply
+ * publish. The second early exit in the same function -- a lost race on the
+ * state CAS -- has the identical defect and the identical fix, but needs a
+ * concurrent transition between the load and the CAS and is not constructible
+ * from one host thread; it is fixed by inspection alongside this one. */
+static void s_a_refused_reset_does_not_leak_a_frozen_slot(void) {
+    uint32_t pid = 0;
+    uint32_t tid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+
+    if (process_spawn("frozen-target", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a target");
+        return;
+    }
+    if (process_thread_spawn_worker_internal(pid, "frozen-worker", sibling_worker, 0, &tid) != 0) {
+        CHECK(0, "spawned a worker");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    t = thread_get(tid);
+    if (!t) {
+        CHECK(0, "the worker is resident");
+        (void)process_kill(pid, 0);
+        return;
+    }
+    cpu_sched_remove_thread(t);
+
+    /* The refusal condition: RUNNING, with the slot claim free. That is what a
+     * reaper meets when a dispatch has published RUNNING and released its claim
+     * -- and what thread_reap_owner meets for every RUNNING thread of a process
+     * it is tearing down, since it resets every slot of the owner whatever its
+     * state. */
+    __atomic_store_n((uint32_t*)&t->state, (uint32_t)THREAD_STATE_RUNNING, __ATOMIC_RELEASE);
+    __atomic_store_n(&t->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
+
+    CHECK(thread_reap(tid) == 0, "a RUNNING thread's slot is refused, which is correct");
+    CHECK(__atomic_load_n(&t->dispatch_ref, __ATOMIC_ACQUIRE) == THREAD_SLOT_FREE,
+          "and the refusal leaves the slot claimable, not FROZEN");
+
+    /* The consequence, and the assertion that would still catch this if the one
+     * above were ever relaxed: the retry the refusal promises must be able to
+     * succeed once the thread is terminal. */
+    __atomic_store_n((uint32_t*)&t->state, (uint32_t)THREAD_STATE_ZOMBIE, __ATOMIC_RELEASE);
+    CHECK(thread_reap(tid) == 1, "so the deferred teardown can actually be retried");
+    CHECK(t->tid == 0u, "and the slot really was released to the allocator");
+
+    (void)process_kill(pid, 0);
+    for (uint32_t i = 0; i < 16u; ++i) {
+        (void)process_schedule_once();
+    }
+    process_reap_zombie_pid(pid);
+}
+
+/* Regression: 2026-08-23-wake-marks-without-claiming -- sched_wake_thread's
+ * claim-lost arm marks the target READY and returns without leaving a claim, so
+ * a wake that arrives while the target's blocking transition is in flight can be
+ * lost entirely and the thread never runs again.
+ *
+ * The arm reads: if sched_wake_claim_enqueue returns 0, the completion path is
+ * said to own the enqueue, so this side calls sched_mark_ready_if_live and
+ * returns. That holds only while the completion path has not YET made its
+ * decision. Once it has -- it clears blocking_transition, takes the token, reads
+ * the state, sees BLOCKED and correctly declines to enqueue a blocked thread --
+ * the mark lands after the last thing that would have acted on it. The thread is
+ * then READY, on no run queue, with no wake token and no owed enqueue, and the
+ * owed-enqueue sweep cannot recover it either because its gate is the global debt
+ * counter and this thread carries no debt.
+ *
+ * This is the same defect the enqueue-current path already had and fixed with
+ * sched_owe_enqueue, whose comment states the rule outright: a mark is not a
+ * message, because a holder that has already run its check never sees it. The
+ * fix there was to publish a CLAIM alongside the mark. This arm still publishes
+ * only the mark.
+ *
+ * Found by the breadcrumb, not by reading: six CI captures showed a thread READY
+ * on no run queue with nothing owing it, the tripwire narrowed it to the normal
+ * dispatch exit with no enqueue ever attempted, and thread_t::ready_by then named
+ * the promoter -- `ready_by=ffffffff80227a12 (sched_wake_thread)`, stranding the
+ * ata driver's thread at disp=85. Two earlier hypotheses (the claim consumers,
+ * an aborted dispatch) were refuted the same way.
+ *
+ * The interleaving is stated as a starting state rather than raced for: the
+ * blocking transition is published, which is what sched_event_wait does before
+ * yielding, and the completion path's decision is then simply not run -- exactly
+ * the ordering where it has already declined. */
+static void s_a_wake_that_defers_leaves_something_actionable(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    /* The target is blocked with its transition published -- the state a thread is
+     * in between sched_event_wait and its holder's completion handling. */
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_IPC);
+    __atomic_store_n(&t->blocking_transition, 1u, __ATOMIC_SEQ_CST);
+    CHECK(t->on_rq == 0, "and not queued");
+
+    sched_wake_thread(t);
+
+    /* The wake must leave the thread ACTIONABLE, by one of the two mechanisms the
+     * scheduler has: linked in a ready queue, or carrying an owed-enqueue claim
+     * that a settle or the sweep will honour. A bare READY mark is neither -- it
+     * is a note left for a reader who may already have gone. */
+    printf("  ... after the deferred wake: state=%u on_rq=%u owed=%u wake=%u\n",
+           (unsigned)t->state,
+           (unsigned)t->on_rq,
+           (unsigned)t->enqueue_owed,
+           (unsigned)t->wake_pending);
+    CHECK(t->on_rq || t->enqueue_owed,
+          "a wake that declines to enqueue left a claim rather than only a mark");
+
+    __atomic_store_n(&t->blocking_transition, 0u, __ATOMIC_SEQ_CST);
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE);
+    drop_transition_target(pid);
+}
+
+/* Regression: 2026-08-23-settle-destroys-a-claim-it-declines -- a claim consumer
+ * that declines to enqueue destroys the claim anyway, so the hand-off it was
+ * carrying is lost and no later mechanism can recover it.
+ *
+ * sched_take_owed_enqueue's own comment states the contract it breaks:
+ * "Consume the claim, returning 1 to the single caller that owns the enqueue."
+ * Owning the enqueue and then not performing it is the contradiction --
+ * sched_settle_deferred_enqueue takes the claim first and only then reads the
+ * state, so a thread that is momentarily not enqueueable leaves the consumer
+ * holding a debt it discards. Nothing recovers it: sched_sweep_owed_enqueues is
+ * gated on g_enqueue_owed_count, which sched_take_owed_enqueue has already
+ * decremented.
+ *
+ * This is the mechanism six CI captures point at, and it is also the hypothesis
+ * this investigation refuted IN ERROR (by checking the dispatch exits, which do
+ * enqueue unconditionally, rather than the consumers, which do not -- see
+ * docs/TASKS.md). What this case pins is the consumer contract itself, which is
+ * provable here regardless of how the CI strand is finally shown to arise.
+ *
+ * The claim is published the way the kernel publishes it -- an enqueue refused
+ * because another CPU still names the thread as current -- rather than by poking
+ * the field, so the test exercises the real protocol end to end. */
+static void s_a_consumer_that_declines_keeps_the_claim(void) {
+    uint32_t pid = 0;
+    thread_t* t = 0;
+
+    sched_debug_reset();
+    be_cpu(0);
+    if (spawn_transition_target(&pid, &t) != 0) {
+        CHECK(0, "spawned a target with one worker thread");
+        return;
+    }
+
+    /* Publish a claim through the real path: CPU 1 names the thread as current, so
+     * cpu_sched_enqueue refuses to link it and records the debt instead. */
+    g_cpus[1].current_thread = t;
+    sched_enqueue_thread(t);
+    CHECK(t->enqueue_owed == 1, "an enqueue refused for a running thread left a claim");
+    CHECK(t->on_rq == 0, "and did not link it");
+
+    /* The thread is no longer enqueueable -- it blocked again, which is the whole
+     * reason the consumer has a state test at all. */
+    thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_IPC);
+    g_cpus[1].current_thread = 0;
+
+    sched_settle_deferred_enqueue(t);
+
+    /* The consumer declined, correctly -- a BLOCKED thread must not be linked into
+     * a ready queue. What it must NOT do is take the claim with it. Either the
+     * thread is queued, or the debt is still outstanding for whoever can honour
+     * it; a consumer that leaves neither has silently absorbed a wake. */
+    printf("  ... after a declining settle: state=%u on_rq=%u owed=%u\n",
+           (unsigned)t->state,
+           (unsigned)t->on_rq,
+           (unsigned)t->enqueue_owed);
+    CHECK(t->on_rq || t->enqueue_owed,
+          "a consumer that declined to enqueue left the claim outstanding");
+
+    drop_transition_target(pid);
+}
+
 /* ------------------------------------------------------- the kill race soak */
 
 /* Nothing here is serialised against dispatch. Spawn, kill and reap all run
@@ -478,27 +1247,57 @@ static void s_kill_races_the_lifecycle_transitions(void) {
      * loop made progress" check. Both are set far below what any host produces and
      * exist to catch a soak that silently stopped doing anything.
      *
-     * Deliberately not "every round": how many rounds fit depends on the host's
-     * core count, not on the kernel. A reap is refused while any thread of that
-     * process is still being dispatched, and the fewer real cores back the NCPU
-     * pthreads, the longer each dispatch holds its reference in wall-clock terms,
-     * so the process table runs short in bursts. Measured on a 10-core host under
-     * 5 concurrent instances (~8x oversubscription): 148-300 rounds against
-     * 732-1501 retirements. The events stay plentiful; the round count does
-     * not. Asserting the round count would make this suite report the runner's
-     * spare capacity rather than the kernel's behaviour. */
-    CHECK(rounds_run >= KILL_ROUNDS / 4u, "the soak completed a quarter of its rounds");
+     * Deliberately not "every round", and deliberately not a FRACTION of them
+     * either: how many rounds fit depends on the host's core count, not on the
+     * kernel. A reap is refused while any thread of that process is still being
+     * dispatched, and the fewer real cores back the NCPU pthreads, the longer
+     * each dispatch holds its reference in wall-clock terms, so the process table
+     * runs short in bursts. Measured on a 10-core host under 5 concurrent
+     * instances (~8x oversubscription): 148-300 rounds against 732-1501
+     * retirements. The events stay plentiful; the round count does not.
+     *
+     * A quarter-of-the-rounds floor was tried and is what this comment already
+     * warned against: a CI runner at NCPU=8 reported rounds=73 against the
+     * required 75 -- with spawn_retries=4727 and retired=420, so the soak was
+     * working hard and the kernel was fine -- while the same commit passed on the
+     * run before. The gate then reports the runner's spare capacity, which is the
+     * one thing this suite must not assert. Rounds must therefore only witness
+     * that the loop turned at all; the event floors below carry the weight. */
+    CHECK(rounds_run > 0u, "the soak's loop turned");
     CHECK(__atomic_load_n(&g_workers_retired, __ATOMIC_ACQUIRE) >= 100u,
           "workers retired in quantity");
     CHECK(__atomic_load_n(&g_kills_landed, __ATOMIC_ACQUIRE) >= 20u,
           "the killer landed kills in quantity");
 
-    /* The decisive assertion. Reaching either transition with an owner that is
+    /* The exploration assertion. Reaching either transition with an owner that is
      * already exiting is the interleaving that used to panic; a non-zero count
      * proves this run entered that window and refused instead of dying, and a
-     * zero count means the soak never got there and has demonstrated nothing. */
-    CHECK(refused_ready + refused_running > 0,
-          "a lifecycle transition raced an exit and was refused rather than fatal");
+     * zero count means this arm explored nothing and its soak has demonstrated
+     * only that the churn does not corrupt anything.
+     *
+     * Asserted from width 4 up, and REPORTED at width 2, because width 2 does not
+     * drive the race hard enough to promise a hit. start_dispatchers(KILLER_CPU)
+     * spawns no dispatcher threads at all there -- its loop is `for cpu = 1;
+     * cpu < 1` -- so the only dispatcher is this thread, which also owns every
+     * spawn, kill and reap and is therefore inside process_schedule_once for a
+     * fraction of the run, against a full-time killer. Measured across three CI
+     * runs: 0, 2 and 9 refusals at width 2, versus 76-110 at widths 4 and 8. A
+     * gate whose verdict is a coin flip reports the runner's scheduling, not the
+     * kernel's behaviour, and it already turned a docs-only commit red on main.
+     *
+     * Nothing is lost by not asserting it here. Widths 4 and 8 assert it on the
+     * same code, and the refusal behaviour itself is proved outright by the
+     * contract cases above, which cannot miss. What width 2 is really for is the
+     * concurrent kill/retire churn against a single dispatcher, and the work
+     * counters above are what establish that it ran. */
+    if (NCPU >= 4) {
+        CHECK(refused_ready + refused_running > 0,
+              "a lifecycle transition raced an exit and was refused rather than fatal");
+    } else if (refused_ready + refused_running == 0) {
+        printf("  ... note: width %u explored no exiting-owner transition this run;"
+               " the contract cases cover the branches\n",
+               (unsigned)NCPU);
+    }
 }
 
 /* The same target with no killer: a worker retiring under a healthy owner must
@@ -535,6 +1334,14 @@ static void s_healthy_owner_still_runs_and_requeues(void) {
           "no ready transition was refused with no kill in flight");
     CHECK(sched_debug_count(SCHED_DEBUG_SET_RUNNING_EXITING) == 0,
           "no dispatch was refused with no kill in flight");
+    /* Every dispatch here ends under a healthy owner, so every one of them must
+     * leave its thread reachable -- queued, owed an enqueue, or not runnable. This
+     * is the invariant a stranded compositor violates in CI, asserted over the
+     * hundreds of dispatches this case performs, and it doubles as the guard that
+     * the tripwire does not over-report: a false positive on an ordinary dispatch
+     * would fail here rather than flooding a CI log. */
+    CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_LEFT_STRANDED) == 0,
+          "no dispatch left a runnable thread unreachable under a healthy owner");
 
     (void)process_kill(pid, 0);
     for (uint32_t i = 0; i < 16u; ++i) {
@@ -546,6 +1353,19 @@ static void s_healthy_owner_still_runs_and_requeues(void) {
 
 int main(void) {
     harness_init();
+
+    /* Deterministic contract cases first: they need no dispatchers, and a
+     * failure in one of them explains a soak failure below. */
+    s_promotion_never_destroys_a_dispatch_claim();
+    s_promotion_wakes_a_blocked_target_and_clears_its_reason();
+    s_promotion_of_a_ready_target_is_permitted_and_inert();
+    s_exiting_owner_refuses_both_transitions();
+    s_aborted_dispatch_leaves_its_thread_reachable();
+    s_a_lost_slot_claim_leaves_the_thread_reachable();
+    s_the_tripwire_ignores_a_reaping_owner();
+    s_a_refused_reset_does_not_leak_a_frozen_slot();
+    s_a_wake_that_defers_leaves_something_actionable();
+    s_a_consumer_that_declines_keeps_the_claim();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

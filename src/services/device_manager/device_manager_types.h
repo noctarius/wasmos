@@ -27,11 +27,14 @@
 #define DEVMGR_RULES_INIT_ROOT "/init/devmgr/rules"
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"
-/* Fixed read/parse buffer for the rules file.
+/* Fixed read/parse buffer for the rules file. Sized for the partition matchers:
+ * a rule naming a type GUID and a label runs to roughly twice the length of one
+ * naming a driver and a unit.
  * TODO: a rules file larger than this is silently truncated, dropping its
- * trailing rules with no diagnostic. Size the read from FS_IPC_STAT_REQ, or
- * stream it, so the file has no size limit (see docs/TASKS.md). */
-#define DEVMGR_RULE_TEXT_CAP 4096
+ * trailing rules with no diagnostic — raising the cap postpones that rather than
+ * fixing it. Size the read from FS_IPC_STAT_REQ, or stream it, so the file has
+ * no size limit (see docs/TASKS.md). */
+#define DEVMGR_RULE_TEXT_CAP 8192
 #define ALWAYS_SPAWN_RULE_CAP 8
 #define BLOCK_FS_RULE_CAP 8
 #define PCI_MATCH_RULE_CAP 8
@@ -140,20 +143,57 @@ typedef struct {
     char spawn_path[96];
 } always_spawn_rule_t;
 
+/* Which kind of block device a rule is willing to match.
+ *
+ * A partition is a block device with the same backend and unit as the disk it
+ * lives on -- `block:ata:0p1` reports backend ata, unit 0, exactly as
+ * `block:ata:0` does -- so a rule naming (backend, unit) alone matches BOTH, and
+ * only the order the two happen to publish in decides which one a filesystem is
+ * mounted on. The subsystem is what separates them, and it is not optional:
+ * `SUBSYSTEM=="block"` means a whole disk and `SUBSYSTEM=="partition"` means a
+ * partition of one. */
+#define DEVMGR_BLOCK_SUBSYS_DISK 0u
+#define DEVMGR_BLOCK_SUBSYS_PARTITION 1u
+
 /* Rule: spawn a block-filesystem driver for a specific block device.
  *
- * A rule names the device by (backend, unit), because a unit alone is ambiguous
- * across backends -- an unqualified `ATTR{unit}=="0"` would match both the ATA
- * boot disk and a virtio-blk device's only disk, and spawn a filesystem twice
- * on the same mount. BLOCK_BACKEND_UNKNOWN in `backend` means the rule named no
- * DRIVER and matches any, which is kept only so an existing unqualified rule
- * still parses. */
+ * A DISK rule names the device by (backend, unit), because a unit alone is
+ * ambiguous across backends -- an unqualified `ATTR{unit}=="0"` would match both
+ * the ATA boot disk and a virtio-blk device's only disk, and spawn a filesystem
+ * twice on the same mount. BLOCK_BACKEND_UNKNOWN in `backend` means the rule
+ * named no DRIVER and matches any, which is kept only so an existing unqualified
+ * rule still parses.
+ *
+ * A PARTITION rule matches on what a partition table says about the volume
+ * instead: its PARTUUID, its label, its type GUID, the filesystem probed in it,
+ * or the scheme of the table it came from. Those come from the disk rather than
+ * from this file, which is the point -- a GPT partition labelled with a path
+ * names its own mount and needs no rule naming a device at all.
+ *
+ * Every matcher is optional and an omitted one matches anything; a rule with no
+ * matcher at all matches every device of its subsystem. Matching is exact, with
+ * no globbing: a label or a UUID is an exact thing, and a pattern engine here is
+ * easy to add later and hard to remove. */
 typedef struct {
     uint8_t active;
     uint8_t queued;
     uint8_t spawned;
-    uint8_t backend; /* BLOCK_BACKEND_*, or UNKNOWN to match any */
-    uint8_t unit;    /* unit index within that backend; 0xFF matches any */
+    uint8_t subsystem; /* DEVMGR_BLOCK_SUBSYS_* */
+    uint8_t backend;   /* BLOCK_BACKEND_*, or UNKNOWN to match any */
+    uint8_t unit;      /* unit index within that backend; 0xFF matches any */
+    /* Partition matchers. `has_*` distinguishes "the rule did not say" from a
+     * value that happens to be zero -- FS_TYPE_UNKNOWN and PARTITION_SCHEME_NONE
+     * are both legitimate things to match on. */
+    uint8_t has_type_guid;
+    uint8_t has_part_guid;
+    uint8_t has_fs_type;
+    uint8_t has_scheme;
+    uint8_t type_guid[16]; /* raw on-disk bytes, as the descriptor carries them */
+    uint8_t part_guid[16];
+    uint32_t fs_type; /* FS_TYPE_* */
+    uint32_t scheme;  /* PARTITION_SCHEME_* */
+    char partlabel[BLOCK_DESCRIPTOR_LABEL_MAX];
+    char device_name[BLOCK_DESCRIPTOR_ID_MAX]; /* ATTR{name}: the canonical id */
     /* The device that actually matched, filled in when the rule is queued. The
      * filesystem driver is told about THIS, not about the rule's pattern: a
      * wildcard rule has no unit of its own to pass on, and passing the pattern
@@ -167,7 +207,11 @@ typedef struct {
      * disagree with the publisher -- and a disagreement means the filesystem
      * looks up a class instance nothing holds. */
     char matched_id[BLOCK_DESCRIPTOR_ID_MAX];
-    char mount[16]; /* mount point name (e.g. "boot", "user") */
+    /* Mount point the rule names. A partition may override it by carrying a path
+     * in its LABEL, which is how a GPT disk describes its own mounts; this is
+     * the fallback for a table that cannot -- an MBR partition has a type byte
+     * and no label, so /boot and /user still need one written here. */
+    char mount[16];
     char spawn_path[96];
 } block_fs_rule_t;
 

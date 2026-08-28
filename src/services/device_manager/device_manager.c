@@ -1375,6 +1375,70 @@ static void queue_block_fs_rule_spawns(void) {
  * disagreement here mounts a filesystem on the wrong disk.
  *
  * Returns how many rules were queued. */
+/* memcmp over a fixed run, as a named predicate: the matcher below reads as a
+ * list of "does this disagree" tests and a raw memcmp inverts that sense. */
+static int bytes_equal(const uint8_t* a, const uint8_t* b, uint32_t len) {
+    for (uint32_t i = 0; i < len; ++i) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Does `rule` match the device `desc` describes?
+ *
+ * Every matcher is optional and an omitted one matches anything, so the test is
+ * "nothing the rule named disagrees" rather than "everything matched". The
+ * SUBSYSTEM is the exception: it is not a matcher but a partition of the device
+ * space, and it always applies.
+ *
+ * That distinction is load-bearing. A partition reports the same backend and
+ * unit as the disk beneath it -- `block:ata:0p1` is backend ata, unit 0, exactly
+ * as `block:ata:0` is -- so before the subsystem existed a rule naming
+ * (backend, unit) matched both, and which one a filesystem landed on depended
+ * only on which record happened to be published first. */
+static int block_rule_matches(const block_fs_rule_t* rule, const wasmos_block_descriptor_t* desc) {
+    const int is_partition = desc->partition != 0u;
+    if (rule->subsystem == (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION) {
+        if (!is_partition) {
+            return 0;
+        }
+    } else if (is_partition) {
+        return 0;
+    }
+
+    if (rule->backend != (uint8_t)BLOCK_BACKEND_UNKNOWN &&
+        rule->backend != (uint8_t)desc->backend) {
+        return 0;
+    }
+    if (rule->unit != 0xFFu && rule->unit != (uint8_t)desc->unit) {
+        return 0;
+    }
+    /* GUIDs compare as the RAW on-disk bytes both sides hold: the rule parser
+     * converted the canonical text once at load time, so there is no encoding
+     * step here and no second place to get the mixed-endian layout wrong. */
+    if (rule->has_type_guid && !bytes_equal(rule->type_guid, desc->type_guid, 16u)) {
+        return 0;
+    }
+    if (rule->has_part_guid && !bytes_equal(rule->part_guid, desc->part_guid, 16u)) {
+        return 0;
+    }
+    if (rule->has_fs_type && rule->fs_type != desc->fs_type) {
+        return 0;
+    }
+    if (rule->has_scheme && rule->scheme != desc->scheme) {
+        return 0;
+    }
+    if (rule->partlabel[0] && !wasmos_sys_streq(rule->partlabel, desc->label)) {
+        return 0;
+    }
+    if (rule->device_name[0] && !wasmos_sys_streq(rule->device_name, desc->canonical_id)) {
+        return 0;
+    }
+    return 1;
+}
+
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec) {
     uint32_t queued = 0;
     if (!rec || !rec->in_use || (rec->desc.flags & BLOCK_DESCRIPTOR_FLAG_PRESENT) == 0u) {
@@ -1390,14 +1454,7 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
             log_mount_already_active(rule->mount);
             continue;
         }
-        /* Both halves must match. A rule that named no DRIVER keeps the
-         * any-backend behaviour, so an unqualified rule still works -- but the
-         * shipped rules name one, because an unqualified unit matches a
-         * different disk on every backend that has one. */
-        const int backend_ok = rule->backend == (uint8_t)BLOCK_BACKEND_UNKNOWN ||
-                               rule->backend == (uint8_t)rec->desc.backend;
-        const int unit_ok = rule->unit == 0xFFu || rule->unit == (uint8_t)rec->desc.unit;
-        if (backend_ok && unit_ok) {
+        if (block_rule_matches(rule, &rec->desc)) {
             rule->queued = 1;
             rule->matched_backend = (uint8_t)rec->desc.backend;
             rule->matched_unit = (uint8_t)rec->desc.unit;

@@ -127,6 +127,49 @@ static void publish_block_device(uint8_t backend, uint8_t unit) {
     registry_add_block(&desc);
 }
 
+/* A partition of `unit`, as the partition manager publishes one: same backend
+ * and unit as its disk -- which is the whole reason the subsystem exists -- plus
+ * the table identity a rule can match on. */
+static void publish_partition(uint8_t backend, uint8_t unit, uint32_t slot, const char* label,
+                              uint32_t scheme, uint32_t fs_type, const uint8_t* type_guid) {
+    wasmos_block_descriptor_t desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.version = BLOCK_DESCRIPTOR_VERSION;
+    desc.backend = backend;
+    desc.unit = unit;
+    desc.partition = slot;
+    desc.scheme = scheme;
+    desc.fs_type = fs_type;
+    desc.sector_bytes = 512u;
+    desc.lba_start = 2048u;
+    desc.lba_count = 1000u;
+    desc.flags = BLOCK_DESCRIPTOR_FLAG_PRESENT;
+    if (label) {
+        (void)snprintf(desc.label, sizeof(desc.label), "%s", label);
+    }
+    if (type_guid) {
+        for (uint32_t i = 0; i < 16u; ++i) {
+            desc.type_guid[i] = type_guid[i];
+        }
+    }
+    (void)snprintf(desc.canonical_id,
+                   sizeof(desc.canonical_id),
+                   "block:%s:%up%u",
+                   backend == (uint8_t)BLOCK_BACKEND_ATA ? "ata" : "virtio-blk",
+                   (unsigned)unit,
+                   (unsigned)slot);
+    registry_add_block(&desc);
+}
+
+/* Load one rule line through the real parser, so these cases exercise the
+ * parsing and the matching together -- a rule that parses into the wrong fields
+ * and a matcher that reads the wrong fields are indistinguishable from either
+ * side alone. */
+static int load_rule(const char* line) {
+    dm_rules_load_block_fs(&g_dm, line);
+    return (int)g_dm.block_fs_rule_count;
+}
+
 /* -------------------------------------------------------------------- cases */
 
 /* The ordinary ordering: the rule is loaded before the device publishes, so the
@@ -189,10 +232,157 @@ static void a_rule_matches_only_its_own_backend(void) {
           "while its own backend's disk does satisfy it");
 }
 
+/* Regression: 2026-08-28-disk-rule-matched-its-own-partition.
+ *
+ * A partition reports the SAME backend and unit as the disk it lives on, so a
+ * disk rule naming (backend, unit) matched both and the winner was whichever
+ * record published first. Ordering happened to favour the disk, so this never
+ * misbehaved -- it was a coin the system had not yet lost. Both directions are
+ * asserted, because a fix that simply stopped disk rules matching partitions
+ * would leave partition rules matching disks. */
+static void a_disk_rule_does_not_match_a_partition(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", DRIVER==\"ata\", ATTR{unit}==\"0\", "
+                    "ENV{MOUNT}=\"/boot\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "the disk rule parses");
+
+    publish_partition((uint8_t)BLOCK_BACKEND_ATA,
+                      0u,
+                      1u,
+                      "user",
+                      (uint32_t)PARTITION_SCHEME_GPT,
+                      (uint32_t)FS_TYPE_FAT,
+                      NULL);
+    check(g_dm.block_fs_rules[0].queued == 0u,
+          "a partition does not satisfy a rule written for the whole disk");
+
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "while the disk itself does");
+}
+
+/* The reverse direction, isolated. The rule names NO other matcher on purpose:
+ * with a label or a GUID in it the disk would be rejected for want of that
+ * attribute even if the subsystem split were removed, and the case would pass
+ * while asserting nothing about the split it is named for. */
+static void a_partition_rule_does_not_match_a_disk(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"partition\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "an unqualified partition rule parses");
+
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    check(g_dm.block_fs_rules[0].queued == 0u,
+          "a whole disk does not satisfy a rule written for a partition");
+
+    publish_partition((uint8_t)BLOCK_BACKEND_ATA,
+                      0u,
+                      1u,
+                      "user",
+                      (uint32_t)PARTITION_SCHEME_GPT,
+                      (uint32_t)FS_TYPE_FAT,
+                      NULL);
+    check(g_dm.block_fs_rules[0].queued == 1u, "while any partition does");
+}
+
+/* The mount that names itself: a GPT partition labelled with a path is matched
+ * without the rule naming a disk, a unit or a backend at all. */
+static void a_partition_is_matched_by_its_label(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"partition\", ATTR{partlabel}==\"user\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "the label rule parses");
+
+    publish_partition((uint8_t)BLOCK_BACKEND_ATA,
+                      1u,
+                      1u,
+                      "scratch",
+                      (uint32_t)PARTITION_SCHEME_GPT,
+                      (uint32_t)FS_TYPE_FAT,
+                      NULL);
+    check(g_dm.block_fs_rules[0].queued == 0u, "a differently-labelled partition is skipped");
+
+    publish_partition((uint8_t)BLOCK_BACKEND_VIRTIO_BLK,
+                      40u,
+                      2u,
+                      "user",
+                      (uint32_t)PARTITION_SCHEME_GPT,
+                      (uint32_t)FS_TYPE_FAT,
+                      NULL);
+    check(g_dm.block_fs_rules[0].queued == 1u,
+          "and the labelled one matches, on a different backend and unit entirely");
+}
+
+/* The ESP type GUID, in the canonical text a rule carries and the mixed-endian
+ * bytes GPT actually stores. If the parser's byte order were wrong the rule
+ * would parse cleanly and never match, which is why the two forms are written
+ * out here rather than derived from each other. */
+static const char ESP_GUID_TEXT[] = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B";
+static const uint8_t ESP_GUID_BYTES[16] = {
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B};
+
+static void a_partition_is_matched_by_its_type_guid(void) {
+    char line[192];
+    harness_reset();
+    (void)snprintf(line,
+                   sizeof(line),
+                   "SUBSYSTEM==\"partition\", ATTR{type}==\"%s\", ENV{MOUNT}=\"/boot\", "
+                   "RUN+=\"system/drivers/fs_fat.wap\"\n",
+                   ESP_GUID_TEXT);
+    check(load_rule(line) == 1, "the type-GUID rule parses");
+
+    publish_partition((uint8_t)BLOCK_BACKEND_ATA,
+                      0u,
+                      1u,
+                      NULL,
+                      (uint32_t)PARTITION_SCHEME_GPT,
+                      (uint32_t)FS_TYPE_FAT,
+                      NULL);
+    check(g_dm.block_fs_rules[0].queued == 0u, "a partition with no type GUID is skipped");
+
+    publish_partition((uint8_t)BLOCK_BACKEND_ATA,
+                      0u,
+                      2u,
+                      NULL,
+                      (uint32_t)PARTITION_SCHEME_GPT,
+                      (uint32_t)FS_TYPE_FAT,
+                      ESP_GUID_BYTES);
+    check(g_dm.block_fs_rules[0].queued == 1u,
+          "and the ESP type GUID matches its mixed-endian on-disk bytes");
+}
+
+/* A malformed matcher rejects the RULE. Dropping the attribute instead would
+ * widen the rule to everything its author did not ask for, and on the mount path
+ * that means a filesystem on the wrong volume. */
+static void a_malformed_matcher_rejects_the_rule(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"partition\", ATTR{type}==\"not-a-guid\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "a rule whose GUID does not parse is refused entirely");
+
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"partition\", ATTR{fstype}==\"reiserfs\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "and so is one naming a filesystem nothing probes for");
+}
+
+/* A partition matcher on a disk rule can never fire, so it is refused rather
+ * than left as a rule that looks written and never runs. */
+static void a_partition_matcher_on_a_disk_rule_is_refused(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", ATTR{partlabel}==\"user\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "a disk rule carrying a partition matcher is refused");
+}
+
 int main(void) {
     publish_after_rules_reports_the_match();
     rescan_after_late_rules_reports_the_match();
     a_rule_matches_only_its_own_backend();
+    a_disk_rule_does_not_match_a_partition();
+    a_partition_rule_does_not_match_a_disk();
+    a_partition_is_matched_by_its_label();
+    a_partition_is_matched_by_its_type_guid();
+    a_malformed_matcher_rejects_the_rule();
+    a_partition_matcher_on_a_disk_rule_is_refused();
 
     char summary[128];
     (void)snprintf(summary,

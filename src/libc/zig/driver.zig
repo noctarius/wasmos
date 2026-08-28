@@ -699,6 +699,114 @@ pub fn registerService(proc_endpoint: i32, service_endpoint: i32, name: []const 
     return reply.arg0;
 }
 
+/// One resolved provider of a virtual class, mirroring `svc_class_entry_t` in
+/// `src/drivers/include/wasmos_driver_abi.h`. This is the wire layout the
+/// process manager writes, so the field order is ABI.
+pub const ClassEntry = extern struct {
+    /// The provider's instance within the class. Opaque: for the `block` class
+    /// it is a fingerprint of the device's canonical id, and nothing may be
+    /// decoded out of it.
+    instance: u32 = 0,
+    endpoint: u32 = 0,
+    pid: u32 = 0,
+};
+
+comptime {
+    if (@sizeOf(ClassEntry) != 12) @compileError("ClassEntry size disagrees with svc_class_entry_t");
+}
+
+/// Enumerate the providers of virtual class `class_name` into `out`.
+///
+/// Returns the TOTAL number of providers, which may exceed `out.len` — only
+/// `min(total, out.len)` entries are written, so a caller that cares whether it
+/// saw everything compares the two. Returns null on error.
+///
+/// Resolution by class rather than by a concrete name is what lets a client
+/// reach whichever provider serves the thing it wants without naming a driver:
+/// several providers share one class, and one provider may hold several
+/// instances of it.
+///
+/// The buffer carries the class name IN and the entries OUT, and is NOT lent to
+/// the process manager. That is not an oversight in the ownership model: the
+/// process manager is the kernel, which reaches any buffer without a grant.
+/// Adding a borrow here would be a grant to a peer that does not need one.
+pub fn lookupClass(proc_endpoint: i32, class_name: []const u8, out: []ClassEntry, request_id: i32) ?i32 {
+    const reply_ep = registryReplyEndpoint();
+    if (reply_ep < 0) return null;
+
+    var cn: [SVC_CLASS_MAX]u8 = [_]u8{0} ** SVC_CLASS_MAX;
+    copyName(&cn, class_name);
+
+    // The one buffer must hold whichever is larger: the class name going in, or
+    // the entries coming back.
+    var size: usize = out.len * @sizeOf(ClassEntry);
+    if (size < cn.len) size = cn.len;
+    const bid = bufferAcquire(size) orelse return null;
+    defer bufferRelease(bid);
+    if (!bufferWrite(bid, cn[0..], 0)) return null;
+
+    const reply = call(
+        proc_endpoint,
+        reply_ep,
+        op.SVC_IPC_LOOKUP_CLASS_REQ,
+        request_id,
+        bid,
+        @intCast(out.len),
+        0,
+        0,
+    ) orelse return null;
+    if (reply.type != op.SVC_IPC_LOOKUP_CLASS_RESP) return null;
+
+    const total = reply.arg0;
+    if (total < 0) return null;
+    const got: usize = if (@as(usize, @intCast(total)) < out.len) @intCast(total) else out.len;
+    if (got > 0) {
+        const raw: [*]u8 = @ptrCast(out.ptr);
+        if (abi.xfer_buffer_read(
+            bid,
+            @intCast(@intFromPtr(raw)),
+            @intCast(got * @sizeOf(ClassEntry)),
+            0,
+        ) != 0) return null;
+    }
+    return total;
+}
+
+/// Subscribe `notify_endpoint` to existence events for virtual class
+/// `class_name`. Returns true on success.
+///
+/// SVC_IPC_CLASS_EVENT is then pushed to that endpoint when a provider is added,
+/// removed or dies: arg0 = SVC_CLASS_EVENT_*, arg1 = instance, arg2 = endpoint,
+/// arg3 = pid. Subscribing is what lets a client react to a provider appearing
+/// LATER instead of polling the registry, which matters when the provider is a
+/// driver that may still be probing.
+///
+/// The notify endpoint should not be the one a service takes requests on: an
+/// event arriving mid-request would be drained by a reply-matching loop and
+/// discarded.
+pub fn subscribeClass(proc_endpoint: i32, notify_endpoint: i32, class_name: []const u8, request_id: i32) bool {
+    const reply_ep = registryReplyEndpoint();
+    if (reply_ep < 0) return false;
+
+    var cn: [SVC_CLASS_MAX]u8 = [_]u8{0} ** SVC_CLASS_MAX;
+    copyName(&cn, class_name);
+
+    const bid = bufferStage(cn[0..]) orelse return false;
+    defer bufferRelease(bid);
+
+    const reply = call(
+        proc_endpoint,
+        reply_ep,
+        op.SVC_IPC_SUBSCRIBE_CLASS_REQ,
+        request_id,
+        notify_endpoint,
+        bid,
+        0,
+        0,
+    ) orelse return false;
+    return reply.type == op.SVC_IPC_SUBSCRIBE_CLASS_RESP;
+}
+
 /// Tell the process manager this driver is ready to serve, and wait for the
 /// acknowledgement.
 ///

@@ -56,9 +56,19 @@ undone later, and the same mistake keeps being made because packing a value
 **Default: a request DESCRIPTOR in a transfer buffer.** A struct the caller
 fills, carried as `arg0 = buffer_id, arg1 = byte_offset, arg2 = size`, with the
 CLIENT owning the buffer (`skills/wasmos-shared-primitives`,
-`docs/architecture/12-dma-transfers.md`). Precedents: `DEVMGR_PUBLISH_DEVICE_DESC`
-(which superseded `DEVMGR_PUBLISH_DEVICE` for exactly this reason — four words
-could not describe six BARs) and `PROC_BROKER_IPC_SPAWN_PLAN_REQ`.
+`docs/architecture/12-dma-transfers.md`). Precedents:
+
+- `DEVMGR_PUBLISH_DEVICE_DESC`, which superseded `DEVMGR_PUBLISH_DEVICE` for
+  exactly this reason — four words could not describe six BARs.
+- `BLOCK_IPC_IDENTIFY` and `DEVMGR_PUBLISH_BLOCK_DEVICE`, carrying
+  `wasmos_block_descriptor_t`.
+- `BLOCK_IPC_READ_REQ` / `WRITE_REQ`, carrying `wasmos_block_request_t`. Worth
+  reading as the cautionary one: the packed form it replaced forced a 32-bit LBA
+  (a 2 TiB ceiling), left no word to name the target device so backends inferred
+  it from the sender's endpoint, and needed a SECOND opcode —
+  `BLOCK_IPC_READ_ZC_REQ`, since retired — for a destination that would not fit
+  in the words left over. Undoing that took five commits.
+- `PROC_BROKER_IPC_SPAWN_PLAN_REQ`.
 
 **Use bare arguments only** for a fixed, small set that will not grow — a
 status, a handle, a count, a flag. "Will not grow" must be an argument you can
@@ -77,9 +87,12 @@ make, not a hope.
 - Identity and parameters would share the four words — hoist the identity into
   the descriptor rather than inferring it from the sender's endpoint.
 - **You are about to add a sibling opcode that differs only in how a parameter
-  is expressed.** `BLOCK_IPC_READ_REQ` and `BLOCK_IPC_READ_ZC_REQ` exist as two
-  protocols solely because the destination could not be described in the words
-  left over; as a descriptor field it is one opcode with a destination kind.
+  is expressed.** `BLOCK_IPC_READ_ZC_REQ` existed as a second read protocol
+  solely because a transfer-buffer destination could not be described in the
+  words `BLOCK_IPC_READ_REQ` left over. It is retired: as a descriptor field the
+  destination is one branch of one opcode, which is all it ever was. A duplicated
+  protocol is the most expensive form this mistake takes, because every backend
+  has to implement both halves.
 
 ### The objection that is always wrong
 

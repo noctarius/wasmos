@@ -8,40 +8,8 @@
 
 #include "wfs_block.h"
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_ops.h"
-
-/* Node records are written field by field for the same reason wfs_extent.c reads
- * them that way: the staging buffer's alignment is not a struct's, and the
- * on-disk order is little-endian whatever the host is. */
-static void wr16(uint8_t* p, uint32_t off, uint16_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-}
-
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-    p[off + 2] = (uint8_t)((v >> 16) & 0xFFu);
-    p[off + 3] = (uint8_t)((v >> 24) & 0xFFu);
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
-    wr32(p, off + 4u, (uint32_t)((v >> 32) & 0xFFFFFFFFu));
-}
-
-static uint16_t rd16(const uint8_t* p, uint32_t off) {
-    return (uint16_t)((uint32_t)p[off] | ((uint32_t)p[off + 1] << 8));
-}
-
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    return (uint64_t)rd32(p, off) | ((uint64_t)rd32(p, off + 4) << 32);
-}
 
 /* Byte offset of leaf record `i`. */
 static uint32_t leaf_slot(uint32_t i) {
@@ -52,24 +20,24 @@ static void put_extent(uint8_t* node, uint32_t i, uint64_t logical, uint64_t phy
                        uint32_t length) {
     uint32_t at = leaf_slot(i);
 
-    wr64(node, at + (uint32_t)offsetof(struct wfs_extent, logical_block), logical);
-    wr64(node, at + (uint32_t)offsetof(struct wfs_extent, physical_block), physical);
-    wr32(node, at + (uint32_t)offsetof(struct wfs_extent, length), length);
+    wfs_wr64(node, at + (uint32_t)offsetof(struct wfs_extent, logical_block), logical);
+    wfs_wr64(node, at + (uint32_t)offsetof(struct wfs_extent, physical_block), physical);
+    wfs_wr32(node, at + (uint32_t)offsetof(struct wfs_extent, length), length);
     /* `reserved` occupies what would be tail padding so the checksum covers
      * fully defined records (§9). */
-    wr32(node, at + (uint32_t)offsetof(struct wfs_extent, reserved), 0u);
+    wfs_wr32(node, at + (uint32_t)offsetof(struct wfs_extent, reserved), 0u);
 }
 
 static uint64_t get_logical(const uint8_t* node, uint32_t i) {
-    return rd64(node, leaf_slot(i) + (uint32_t)offsetof(struct wfs_extent, logical_block));
+    return wfs_rd64(node, leaf_slot(i) + (uint32_t)offsetof(struct wfs_extent, logical_block));
 }
 
 static uint64_t get_physical(const uint8_t* node, uint32_t i) {
-    return rd64(node, leaf_slot(i) + (uint32_t)offsetof(struct wfs_extent, physical_block));
+    return wfs_rd64(node, leaf_slot(i) + (uint32_t)offsetof(struct wfs_extent, physical_block));
 }
 
 static uint32_t get_length(const uint8_t* node, uint32_t i) {
-    return rd32(node, leaf_slot(i) + (uint32_t)offsetof(struct wfs_extent, length));
+    return wfs_rd32(node, leaf_slot(i) + (uint32_t)offsetof(struct wfs_extent, length));
 }
 
 /* Seal the node: the checksum is a header field, taken over the whole block and
@@ -78,8 +46,9 @@ static uint32_t get_length(const uint8_t* node, uint32_t i) {
 static void seal_node(const wfs_volume_t* vol, uint8_t* node, uint32_t block) {
     uint32_t at = (uint32_t)offsetof(struct wfs_extent_header, checksum);
 
-    wr32(node, at, 0u);
-    wr32(node, at, wfs_checksum_struct(vol->super.uuid, block, node, vol->super.block_size, at));
+    wfs_wr32(node, at, 0u);
+    wfs_wr32(
+        node, at, wfs_checksum_struct(vol->super.uuid, block, node, vol->super.block_size, at));
 }
 
 /* Write the header of a fresh leaf. The block is zeroed first: it held arbitrary
@@ -91,13 +60,13 @@ static void init_leaf(const wfs_volume_t* vol, uint8_t* node, uint32_t entries) 
     for (i = 0; i < vol->super.block_size; ++i) {
         node[i] = 0u;
     }
-    wr16(node, (uint32_t)offsetof(struct wfs_extent_header, magic), WFS_EXTENT_NODE_MAGIC);
-    wr16(node, (uint32_t)offsetof(struct wfs_extent_header, depth), 0u);
-    wr16(node, (uint32_t)offsetof(struct wfs_extent_header, entries), (uint16_t)entries);
-    wr16(node,
-         (uint32_t)offsetof(struct wfs_extent_header, capacity),
-         (uint16_t)wfs_extent_leaf_capacity(vol->super.block_size));
-    wr32(node, (uint32_t)offsetof(struct wfs_extent_header, reserved), 0u);
+    wfs_wr16(node, (uint32_t)offsetof(struct wfs_extent_header, magic), WFS_EXTENT_NODE_MAGIC);
+    wfs_wr16(node, (uint32_t)offsetof(struct wfs_extent_header, depth), 0u);
+    wfs_wr16(node, (uint32_t)offsetof(struct wfs_extent_header, entries), (uint16_t)entries);
+    wfs_wr16(node,
+             (uint32_t)offsetof(struct wfs_extent_header, capacity),
+             (uint16_t)wfs_extent_leaf_capacity(vol->super.block_size));
+    wfs_wr32(node, (uint32_t)offsetof(struct wfs_extent_header, reserved), 0u);
 }
 
 /* The six inline extents plus the new one, sorted by logical_block, written into
@@ -202,11 +171,11 @@ int32_t wfs_extent_add_task(void* user, uintptr_t* out_value) {
 
             /* Validated before a record is believed or moved, on the same terms
              * wfs_extent.c reads it: a node failing these is not a node. */
-            if (rd16(node, (uint32_t)offsetof(struct wfs_extent_header, magic)) !=
+            if (wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, magic)) !=
                 WFS_EXTENT_NODE_MAGIC) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
             }
-            if (rd32(node, (uint32_t)offsetof(struct wfs_extent_header, checksum)) !=
+            if (wfs_rd32(node, (uint32_t)offsetof(struct wfs_extent_header, checksum)) !=
                 wfs_checksum_struct(ctx->vol->super.uuid,
                                     ctx->node_block,
                                     node,
@@ -214,7 +183,7 @@ int32_t wfs_extent_add_task(void* user, uintptr_t* out_value) {
                                     (uint32_t)offsetof(struct wfs_extent_header, checksum))) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CHECKSUM);
             }
-            if (rd16(node, (uint32_t)offsetof(struct wfs_extent_header, depth)) != 0u) {
+            if (wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, depth)) != 0u) {
                 /* Only a single leaf is ever written here, so an interior root is
                  * a shape this does not maintain.
                  *
@@ -222,8 +191,8 @@ int32_t wfs_extent_add_task(void* user, uintptr_t* out_value) {
                  * adding an interior level, so a tree may exceed one leaf. */
                 WFS_FAIL(ctx, WASMOS_ERR_FS_UNSUPPORTED);
             }
-            entries = rd16(node, (uint32_t)offsetof(struct wfs_extent_header, entries));
-            capacity = rd16(node, (uint32_t)offsetof(struct wfs_extent_header, capacity));
+            entries = wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, entries));
+            capacity = wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, capacity));
             if (capacity != wfs_extent_leaf_capacity(ctx->vol->super.block_size) ||
                 entries > capacity || entries == 0u) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
@@ -273,9 +242,9 @@ int32_t wfs_extent_add_task(void* user, uintptr_t* out_value) {
                            get_length(node, i - 1u));
             }
             put_extent(node, at, ctx->logical, (uint64_t)ctx->physical, ctx->length);
-            wr16(node,
-                 (uint32_t)offsetof(struct wfs_extent_header, entries),
-                 (uint16_t)(entries + 1u));
+            wfs_wr16(node,
+                     (uint32_t)offsetof(struct wfs_extent_header, entries),
+                     (uint16_t)(entries + 1u));
             seal_node(ctx->vol, node, ctx->node_block);
             ctx->added = 1u;
             WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->node_block), WFS_XTADD_PC_LEAF_WRITTEN);
@@ -344,11 +313,11 @@ int32_t wfs_extent_trim_task(void* user, uintptr_t* out_value) {
             }
             node = wfs_block_data(b);
 
-            if (rd16(node, (uint32_t)offsetof(struct wfs_extent_header, magic)) !=
+            if (wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, magic)) !=
                 WFS_EXTENT_NODE_MAGIC) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
             }
-            if (rd32(node, (uint32_t)offsetof(struct wfs_extent_header, checksum)) !=
+            if (wfs_rd32(node, (uint32_t)offsetof(struct wfs_extent_header, checksum)) !=
                 wfs_checksum_struct(ctx->vol->super.uuid,
                                     ctx->node_block,
                                     node,
@@ -356,14 +325,14 @@ int32_t wfs_extent_trim_task(void* user, uintptr_t* out_value) {
                                     (uint32_t)offsetof(struct wfs_extent_header, checksum))) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CHECKSUM);
             }
-            if (rd16(node, (uint32_t)offsetof(struct wfs_extent_header, depth)) != 0u) {
+            if (wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, depth)) != 0u) {
                 /* TODO: trim an interior tree, once one can be written. Nothing
                  * produces that shape, so refusing cannot strand a volume this
                  * driver made. */
                 WFS_FAIL(ctx, WASMOS_ERR_FS_UNSUPPORTED);
             }
-            entries = rd16(node, (uint32_t)offsetof(struct wfs_extent_header, entries));
-            capacity = rd16(node, (uint32_t)offsetof(struct wfs_extent_header, capacity));
+            entries = wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, entries));
+            capacity = wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, capacity));
             if (capacity != wfs_extent_leaf_capacity(ctx->vol->super.block_size) ||
                 entries > capacity) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
@@ -411,7 +380,8 @@ int32_t wfs_extent_trim_task(void* user, uintptr_t* out_value) {
                 }
                 put_extent(node, i, 0u, 0u, 0u);
             }
-            wr16(node, (uint32_t)offsetof(struct wfs_extent_header, entries), (uint16_t)entries);
+            wfs_wr16(
+                node, (uint32_t)offsetof(struct wfs_extent_header, entries), (uint16_t)entries);
             seal_node(ctx->vol, node, ctx->node_block);
             ctx->remaining = entries;
             /* The leaf is rewritten BEFORE the run is released: a crash here

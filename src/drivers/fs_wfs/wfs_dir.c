@@ -5,20 +5,8 @@
 #include "wfs_dir.h"
 
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_extent.h"
-
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    return (uint64_t)rd32(p, off) | ((uint64_t)rd32(p, off + 4) << 32);
-}
-
-static uint16_t rd16(const uint8_t* p, uint32_t off) {
-    return (uint16_t)((uint32_t)p[off] | ((uint32_t)p[off + 1] << 8));
-}
 
 void wfs_dir_lookup_init(wfs_dir_ctx_t* ctx, const wfs_volume_t* vol, const struct wfs_object* dir,
                          const char* name, uint32_t name_len) {
@@ -171,7 +159,7 @@ int32_t wfs_dir_task(void* user, uintptr_t* out_value) {
 
             /* The tail carries the block's checksum, so it is verified before
              * any record in the block is believed (§10, §13). */
-            if (rd32(blk, usable + (uint32_t)offsetof(struct wfs_dir_tail, checksum)) !=
+            if (wfs_rd32(blk, usable + (uint32_t)offsetof(struct wfs_dir_tail, checksum)) !=
                 wfs_checksum_struct(ctx->vol->super.uuid,
                                     ctx->physical,
                                     blk,
@@ -182,9 +170,9 @@ int32_t wfs_dir_task(void* user, uintptr_t* out_value) {
 
             while (ctx->offset + WFS_DIR_ENTRY_HEADER <= usable) {
                 rec = blk + ctx->offset;
-                record_length = rd16(rec, 8u);
+                record_length = wfs_rd16(rec, 8u);
                 name_length = rec[10];
-                object_id = (uint32_t)rd64(rec, 0u);
+                object_id = (uint32_t)wfs_rd64(rec, 0u);
 
                 /* The stride is validated before it is used. A length below the
                  * minimum — 0 above all — would make this loop never advance,

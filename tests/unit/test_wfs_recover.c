@@ -18,6 +18,7 @@
 #include "stubs_wfs_block_server.h"
 #include "wasmos_status.h"
 #include "wfs_block.h"
+#include "wfs_endian.h"
 #include "wfs_format.h"
 #include "wfs_journal.h"
 #include "wfs_mount.h"
@@ -53,15 +54,6 @@ static void expect_rc(wasmos_error_code_t got, wasmos_error_code_t want, const c
                wasmos_strerror(want),
                (int)want);
     }
-}
-
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    return (uint64_t)rd32(p, off) | ((uint64_t)rd32(p, off + 4) << 32);
 }
 
 static const uint8_t k_uuid[WFS_UUID_LEN] = {
@@ -227,7 +219,7 @@ static void test_an_uncommitted_transaction_is_discarded(void) {
      * the next attempt would write under a sequence recovery no longer looks
      * for. */
     js = wfs_stub_image + (size_t)g_layout.journal_start * wfs_stub_block_size;
-    expect(rd64(js, (uint32_t)offsetof(struct wfs_journal_super, first_sequence)) == 1u,
+    expect(wfs_rd64(js, (uint32_t)offsetof(struct wfs_journal_super, first_sequence)) == 1u,
            "the tail still names the sequence the attempt used");
     expect(vol.journal.next_sequence == 1u, "as does the remounted volume");
 

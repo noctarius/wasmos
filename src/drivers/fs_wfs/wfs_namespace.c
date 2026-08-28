@@ -7,6 +7,7 @@
 #include "wfs_block.h"
 #include "wfs_crc32c.h"
 #include "wfs_dirent.h"
+#include "wfs_endian.h"
 #include "wfs_extent_write.h"
 #include "wfs_mount.h"
 #include "wfs_ops.h"
@@ -22,26 +23,6 @@ static wfs_path_ctx_t g_ns_path;
 static wfs_object_ctx_t g_ns_obj;
 static wfs_objalloc_ctx_t g_ns_objalloc;
 static wfs_objfree_ctx_t g_ns_objfree;
-
-static void wr16(uint8_t* p, uint32_t off, uint16_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-}
-
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    wr16(p, off, (uint16_t)(v & 0xFFFFu));
-    wr16(p, off + 2u, (uint16_t)((v >> 16) & 0xFFFFu));
-}
-
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
-    wr32(p, off + 4u, (uint32_t)((v >> 32) & 0xFFFFFFFFu));
-}
 
 /* ---- one block in, one block out --------------------------------------- */
 
@@ -219,41 +200,41 @@ static wasmos_error_code_t ns_patch_record(wfs_volume_t* vol, uint32_t id, const
     }
     d = g_dirblk + at;
     if (size) {
-        wr64(d, (uint32_t)offsetof(struct wfs_object, size), *size);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, size), *size);
     }
     if (extent) {
         uint32_t e = (uint32_t)offsetof(struct wfs_object, extents);
 
-        wr64(d, e + 0u, extent->logical_block);
-        wr64(d, e + 8u, extent->physical_block);
-        wr32(d, e + 16u, extent->length);
-        wr32(d, e + 20u, 0u);
-        wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), 1u);
+        wfs_wr64(d, e + 0u, extent->logical_block);
+        wfs_wr64(d, e + 8u, extent->physical_block);
+        wfs_wr32(d, e + 16u, extent->length);
+        wfs_wr32(d, e + 20u, 0u);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), 1u);
         /* A directory's bytes are records, never inline content. */
-        wr16(d, (uint32_t)offsetof(struct wfs_object, flags), 0u);
+        wfs_wr16(d, (uint32_t)offsetof(struct wfs_object, flags), 0u);
     }
     if (link_delta != 0) {
-        uint32_t links = rd32(d, (uint32_t)offsetof(struct wfs_object, link_count));
+        uint32_t links = wfs_rd32(d, (uint32_t)offsetof(struct wfs_object, link_count));
 
         if (link_delta < 0 && links >= (uint32_t)(-link_delta)) {
             links -= (uint32_t)(-link_delta);
         } else if (link_delta > 0) {
             links += (uint32_t)link_delta;
         }
-        wr32(d, (uint32_t)offsetof(struct wfs_object, link_count), links);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, link_count), links);
     }
     if (now_ns != 0u) {
-        wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), now_ns);
-        wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), now_ns);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), now_ns);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), now_ns);
     }
-    wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
-    wr32(d,
-         (uint32_t)offsetof(struct wfs_object, checksum),
-         wfs_checksum_struct(vol->super.uuid,
-                             id,
-                             d,
-                             WFS_OBJECT_SIZE,
-                             (uint32_t)offsetof(struct wfs_object, checksum)));
+    wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
+    wfs_wr32(d,
+             (uint32_t)offsetof(struct wfs_object, checksum),
+             wfs_checksum_struct(vol->super.uuid,
+                                 id,
+                                 d,
+                                 WFS_OBJECT_SIZE,
+                                 (uint32_t)offsetof(struct wfs_object, checksum)));
     return ns_write_block(vol, rec_block);
 }
 
@@ -347,29 +328,29 @@ static wasmos_error_code_t ns_append_dir_block(wfs_volume_t* vol, uint32_t dir_i
     if (extended) {
         e = (uint32_t)offsetof(struct wfs_object, extents) +
             (count - 1u) * (uint32_t)sizeof(struct wfs_extent);
-        wr32(d, e + 16u, dir->extents[count - 1u].length + 1u);
+        wfs_wr32(d, e + 16u, dir->extents[count - 1u].length + 1u);
     } else {
         e = (uint32_t)offsetof(struct wfs_object, extents) +
             count * (uint32_t)sizeof(struct wfs_extent);
-        wr64(d, e + 0u, logical);
-        wr64(d, e + 8u, (uint64_t)phys);
-        wr32(d, e + 16u, 1u);
-        wr32(d, e + 20u, 0u);
-        wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), count + 1u);
+        wfs_wr64(d, e + 0u, logical);
+        wfs_wr64(d, e + 8u, (uint64_t)phys);
+        wfs_wr32(d, e + 16u, 1u);
+        wfs_wr32(d, e + 20u, 0u);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), count + 1u);
     }
-    wr64(d, (uint32_t)offsetof(struct wfs_object, size), (logical + 1u) * (uint64_t)bs);
+    wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, size), (logical + 1u) * (uint64_t)bs);
     if (now_ns != 0u) {
-        wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), now_ns);
-        wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), now_ns);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), now_ns);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), now_ns);
     }
-    wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
-    wr32(d,
-         (uint32_t)offsetof(struct wfs_object, checksum),
-         wfs_checksum_struct(vol->super.uuid,
-                             dir_id,
-                             d,
-                             WFS_OBJECT_SIZE,
-                             (uint32_t)offsetof(struct wfs_object, checksum)));
+    wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
+    wfs_wr32(d,
+             (uint32_t)offsetof(struct wfs_object, checksum),
+             wfs_checksum_struct(vol->super.uuid,
+                                 dir_id,
+                                 d,
+                                 WFS_OBJECT_SIZE,
+                                 (uint32_t)offsetof(struct wfs_object, checksum)));
     return ns_write_block(vol, rec_block);
 }
 

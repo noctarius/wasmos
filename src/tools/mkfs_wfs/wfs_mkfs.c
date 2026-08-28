@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_super.h"
 
 #define MKFS_DEFAULT_BLOCK_SIZE 4096u
@@ -18,23 +19,6 @@
  * and every block is written exactly once, so a sink never has to seek and this
  * buffer never has to hold more than the block being built. */
 static uint8_t g_block[WFS_BLOCK_SIZE_MAX];
-
-static void wr16(uint8_t* p, uint32_t off, uint16_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-}
-
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-    p[off + 2] = (uint8_t)((v >> 16) & 0xFFu);
-    p[off + 3] = (uint8_t)((v >> 24) & 0xFFu);
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
-    wr32(p, off + 4u, (uint32_t)(v >> 32));
-}
 
 static uint32_t div_up(uint32_t a, uint32_t b) {
     return (a + b - 1u) / b;
@@ -220,50 +204,53 @@ static void build_super(uint8_t* dst, const wfs_mkfs_params_t* params, const wfs
                         uint64_t location) {
     memset(dst, 0, WFS_SUPER_SIZE);
 
-    wr32(dst, (uint32_t)offsetof(struct wfs_superblock, magic), WFS_MAGIC);
-    wr32(dst, (uint32_t)offsetof(struct wfs_superblock, version), WFS_VERSION);
-    wr32(dst, (uint32_t)offsetof(struct wfs_superblock, block_size), L->block_size);
-    wr32(dst, (uint32_t)offsetof(struct wfs_superblock, blocks_per_group), L->blocks_per_group);
+    wfs_wr32(dst, (uint32_t)offsetof(struct wfs_superblock, magic), WFS_MAGIC);
+    wfs_wr32(dst, (uint32_t)offsetof(struct wfs_superblock, version), WFS_VERSION);
+    wfs_wr32(dst, (uint32_t)offsetof(struct wfs_superblock, block_size), L->block_size);
+    wfs_wr32(dst, (uint32_t)offsetof(struct wfs_superblock, blocks_per_group), L->blocks_per_group);
 
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, total_blocks), L->total_blocks);
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, total_objects), L->total_objects);
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, free_blocks), L->free_blocks);
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, free_objects), L->free_objects);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, total_blocks), L->total_blocks);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, total_objects), L->total_objects);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, free_blocks), L->free_blocks);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, free_objects), L->free_objects);
 
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, root_object_id), WFS_OBJECT_ROOT);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, root_object_id), WFS_OBJECT_ROOT);
 
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, group_table_start), L->group_table_start);
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, group_table_blocks), L->group_table_blocks);
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, object_table_start), L->object_table_start);
-    wr64(dst,
-         (uint32_t)offsetof(struct wfs_superblock, object_table_blocks),
-         L->object_table_blocks);
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, bitmap_start), L->bitmap_start);
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, bitmap_blocks), L->bitmap_blocks);
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, journal_start), L->journal_start);
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, journal_blocks), L->journal_blocks);
+    wfs_wr64(
+        dst, (uint32_t)offsetof(struct wfs_superblock, group_table_start), L->group_table_start);
+    wfs_wr64(
+        dst, (uint32_t)offsetof(struct wfs_superblock, group_table_blocks), L->group_table_blocks);
+    wfs_wr64(
+        dst, (uint32_t)offsetof(struct wfs_superblock, object_table_start), L->object_table_start);
+    wfs_wr64(dst,
+             (uint32_t)offsetof(struct wfs_superblock, object_table_blocks),
+             L->object_table_blocks);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, bitmap_start), L->bitmap_start);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, bitmap_blocks), L->bitmap_blocks);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, journal_start), L->journal_start);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, journal_blocks), L->journal_blocks);
 
     /* A fresh volume starts at generation 1. Zero is left unused so an all-zero
      * region never compares as a plausible newest copy during a backup scan. */
-    wr64(dst, (uint32_t)offsetof(struct wfs_superblock, generation), 1u);
+    wfs_wr64(dst, (uint32_t)offsetof(struct wfs_superblock, generation), 1u);
 
-    wr32(dst, (uint32_t)offsetof(struct wfs_superblock, feature_compat), 0u);
-    wr32(dst, (uint32_t)offsetof(struct wfs_superblock, feature_ro_compat), 0u);
-    wr32(dst,
-         (uint32_t)offsetof(struct wfs_superblock, feature_incompat),
-         WFS_FEATURE_INCOMPAT_EXTENTS | WFS_FEATURE_INCOMPAT_JOURNAL);
+    wfs_wr32(dst, (uint32_t)offsetof(struct wfs_superblock, feature_compat), 0u);
+    wfs_wr32(dst, (uint32_t)offsetof(struct wfs_superblock, feature_ro_compat), 0u);
+    wfs_wr32(dst,
+             (uint32_t)offsetof(struct wfs_superblock, feature_incompat),
+             WFS_FEATURE_INCOMPAT_EXTENTS | WFS_FEATURE_INCOMPAT_JOURNAL);
 
-    wr32(dst, (uint32_t)offsetof(struct wfs_superblock, state), WFS_STATE_CLEAN);
+    wfs_wr32(dst, (uint32_t)offsetof(struct wfs_superblock, state), WFS_STATE_CLEAN);
 
     memcpy(dst + offsetof(struct wfs_superblock, uuid), params->uuid, WFS_UUID_LEN);
 
-    wr32(dst,
-         (uint32_t)offsetof(struct wfs_superblock, checksum),
-         wfs_checksum_struct(params->uuid,
-                             location,
-                             dst,
-                             WFS_SUPER_SIZE,
-                             (uint32_t)offsetof(struct wfs_superblock, checksum)));
+    wfs_wr32(dst,
+             (uint32_t)offsetof(struct wfs_superblock, checksum),
+             wfs_checksum_struct(params->uuid,
+                                 location,
+                                 dst,
+                                 WFS_SUPER_SIZE,
+                                 (uint32_t)offsetof(struct wfs_superblock, checksum)));
 }
 
 /* Blocks of group `g` that are already spoken for: the metadata regions that
@@ -309,35 +296,35 @@ static void build_object(uint8_t* d, const wfs_mkfs_params_t* params, uint32_t o
                          uint32_t link_count, uint32_t first_block, uint32_t block_count) {
     memset(d, 0, WFS_OBJECT_SIZE);
 
-    wr64(d, (uint32_t)offsetof(struct wfs_object, object_id), object_id);
-    wr16(d, (uint32_t)offsetof(struct wfs_object, type), type);
-    wr16(d, (uint32_t)offsetof(struct wfs_object, flags), flags);
-    wr32(d, (uint32_t)offsetof(struct wfs_object, mode), mode);
-    wr64(d, (uint32_t)offsetof(struct wfs_object, size), size);
-    wr64(d, (uint32_t)offsetof(struct wfs_object, atime), params->now_ns);
-    wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), params->now_ns);
-    wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), params->now_ns);
-    wr64(d, (uint32_t)offsetof(struct wfs_object, btime), params->now_ns);
-    wr32(d, (uint32_t)offsetof(struct wfs_object, link_count), link_count);
+    wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, object_id), object_id);
+    wfs_wr16(d, (uint32_t)offsetof(struct wfs_object, type), type);
+    wfs_wr16(d, (uint32_t)offsetof(struct wfs_object, flags), flags);
+    wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, mode), mode);
+    wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, size), size);
+    wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, atime), params->now_ns);
+    wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), params->now_ns);
+    wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), params->now_ns);
+    wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, btime), params->now_ns);
+    wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, link_count), link_count);
 
     if (block_count != 0u) {
         /* Blocks are bump-allocated, so an entry's run is always contiguous and
          * one extent maps all of it. */
         uint32_t e = (uint32_t)offsetof(struct wfs_object, extents);
 
-        wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), 1u);
-        wr64(d, e + (uint32_t)offsetof(struct wfs_extent, logical_block), 0u);
-        wr64(d, e + (uint32_t)offsetof(struct wfs_extent, physical_block), first_block);
-        wr32(d, e + (uint32_t)offsetof(struct wfs_extent, length), block_count);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), 1u);
+        wfs_wr64(d, e + (uint32_t)offsetof(struct wfs_extent, logical_block), 0u);
+        wfs_wr64(d, e + (uint32_t)offsetof(struct wfs_extent, physical_block), first_block);
+        wfs_wr32(d, e + (uint32_t)offsetof(struct wfs_extent, length), block_count);
     }
 
-    wr32(d,
-         (uint32_t)offsetof(struct wfs_object, checksum),
-         wfs_checksum_struct(params->uuid,
-                             object_id,
-                             d,
-                             WFS_OBJECT_SIZE,
-                             (uint32_t)offsetof(struct wfs_object, checksum)));
+    wfs_wr32(d,
+             (uint32_t)offsetof(struct wfs_object, checksum),
+             wfs_checksum_struct(params->uuid,
+                                 object_id,
+                                 d,
+                                 WFS_OBJECT_SIZE,
+                                 (uint32_t)offsetof(struct wfs_object, checksum)));
 }
 
 /* ---- directory blocks --------------------------------------------------- */
@@ -348,8 +335,8 @@ static uint32_t put_record(uint8_t* d, uint32_t off, uint32_t object_id, const c
     uint32_t rec = wfs_dir_record_length(name_len);
     uint32_t i;
 
-    wr64(d, off, object_id);
-    wr16(d, off + 8u, (uint16_t)rec);
+    wfs_wr64(d, off, object_id);
+    wfs_wr16(d, off + 8u, (uint16_t)rec);
     d[off + 10u] = (uint8_t)name_len;
     d[off + 11u] = type;
     for (i = 0; i < name_len; ++i) {
@@ -365,19 +352,19 @@ static void close_dir_block(uint8_t* d, const wfs_mkfs_params_t* params, uint32_
     uint32_t usable = wfs_dir_usable_bytes(block_size);
     uint8_t* t = d + usable;
 
-    wr16(d, last_off + 8u, (uint16_t)(usable - last_off));
+    wfs_wr16(d, last_off + 8u, (uint16_t)(usable - last_off));
 
-    wr64(t, (uint32_t)offsetof(struct wfs_dir_tail, object_id), 0u);
-    wr16(t, (uint32_t)offsetof(struct wfs_dir_tail, record_length), WFS_DIR_TAIL_SIZE);
+    wfs_wr64(t, (uint32_t)offsetof(struct wfs_dir_tail, object_id), 0u);
+    wfs_wr16(t, (uint32_t)offsetof(struct wfs_dir_tail, record_length), WFS_DIR_TAIL_SIZE);
     t[offsetof(struct wfs_dir_tail, name_length)] = 0u;
     t[offsetof(struct wfs_dir_tail, type)] = (uint8_t)WFS_DIR_TAIL_TYPE;
-    wr32(t,
-         (uint32_t)offsetof(struct wfs_dir_tail, checksum),
-         wfs_checksum_struct(params->uuid,
-                             block,
-                             d,
-                             block_size,
-                             usable + (uint32_t)offsetof(struct wfs_dir_tail, checksum)));
+    wfs_wr32(t,
+             (uint32_t)offsetof(struct wfs_dir_tail, checksum),
+             wfs_checksum_struct(params->uuid,
+                                 block,
+                                 d,
+                                 block_size,
+                                 usable + (uint32_t)offsetof(struct wfs_dir_tail, checksum)));
 }
 
 /* Fill the `index`-th block of `parent`'s directory data.
@@ -571,15 +558,15 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
                 group_blocks = L.total_blocks - gi * L.blocks_per_group;
             }
 
-            wr64(d,
-                 (uint32_t)offsetof(struct wfs_group_desc, block_bitmap),
-                 L.bitmap_start + 2u * gi);
-            wr64(d,
-                 (uint32_t)offsetof(struct wfs_group_desc, object_bitmap),
-                 L.bitmap_start + 2u * gi + 1u);
-            wr64(d,
-                 (uint32_t)offsetof(struct wfs_group_desc, object_table),
-                 L.object_table_start + gi * L.object_table_blocks_per_group);
+            wfs_wr64(d,
+                     (uint32_t)offsetof(struct wfs_group_desc, block_bitmap),
+                     L.bitmap_start + 2u * gi);
+            wfs_wr64(d,
+                     (uint32_t)offsetof(struct wfs_group_desc, object_bitmap),
+                     L.bitmap_start + 2u * gi + 1u);
+            wfs_wr64(d,
+                     (uint32_t)offsetof(struct wfs_group_desc, object_table),
+                     L.object_table_start + gi * L.object_table_blocks_per_group);
 
             /* Recomputed the same way the bitmap emission below marks bits, so
              * the counter and the bitmap it summarises cannot disagree. */
@@ -588,20 +575,22 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
                 memset(scratch, 0, bs);
                 used = group_mark_used(scratch, &L, gi);
             }
-            wr32(d, (uint32_t)offsetof(struct wfs_group_desc, free_blocks), group_blocks - used);
-            wr32(d,
-                 (uint32_t)offsetof(struct wfs_group_desc, free_objects),
-                 gi == 0u ? L.objects_per_group - WFS_OBJECT_FIRST - count : L.objects_per_group);
-            wr32(d,
-                 (uint32_t)offsetof(struct wfs_group_desc, flags),
-                 wfs_super_group_has_backup(gi) ? WFS_GROUP_HAS_SUPER_BACKUP : 0u);
-            wr32(d,
-                 (uint32_t)offsetof(struct wfs_group_desc, checksum),
-                 wfs_checksum_struct(params->uuid,
-                                     gi,
-                                     d,
-                                     WFS_GROUP_DESC_SIZE,
-                                     (uint32_t)offsetof(struct wfs_group_desc, checksum)));
+            wfs_wr32(
+                d, (uint32_t)offsetof(struct wfs_group_desc, free_blocks), group_blocks - used);
+            wfs_wr32(d,
+                     (uint32_t)offsetof(struct wfs_group_desc, free_objects),
+                     gi == 0u ? L.objects_per_group - WFS_OBJECT_FIRST - count
+                              : L.objects_per_group);
+            wfs_wr32(d,
+                     (uint32_t)offsetof(struct wfs_group_desc, flags),
+                     wfs_super_group_has_backup(gi) ? WFS_GROUP_HAS_SUPER_BACKUP : 0u);
+            wfs_wr32(d,
+                     (uint32_t)offsetof(struct wfs_group_desc, checksum),
+                     wfs_checksum_struct(params->uuid,
+                                         gi,
+                                         d,
+                                         WFS_GROUP_DESC_SIZE,
+                                         (uint32_t)offsetof(struct wfs_group_desc, checksum)));
         }
         rc = emit(sink, L.group_table_start + block, bs);
         if (rc != WASMOS_ERR_NONE) {
@@ -616,19 +605,19 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
         memset(g_block, 0, bs);
         if (block == 0u) {
             uint8_t* d = g_block;
-            wr32(d, (uint32_t)offsetof(struct wfs_journal_super, magic), WFS_JOURNAL_MAGIC);
-            wr32(d, (uint32_t)offsetof(struct wfs_journal_super, version), WFS_VERSION);
-            wr32(d, (uint32_t)offsetof(struct wfs_journal_super, block_size), bs);
-            wr32(d, (uint32_t)offsetof(struct wfs_journal_super, blocks), L.journal_blocks);
-            wr64(d, (uint32_t)offsetof(struct wfs_journal_super, first_sequence), 1u);
-            wr32(d, (uint32_t)offsetof(struct wfs_journal_super, first_block), 1u);
-            wr32(d,
-                 (uint32_t)offsetof(struct wfs_journal_super, checksum),
-                 wfs_checksum_struct(params->uuid,
-                                     L.journal_start,
-                                     d,
-                                     (uint32_t)sizeof(struct wfs_journal_super),
-                                     (uint32_t)offsetof(struct wfs_journal_super, checksum)));
+            wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_super, magic), WFS_JOURNAL_MAGIC);
+            wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_super, version), WFS_VERSION);
+            wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_super, block_size), bs);
+            wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_super, blocks), L.journal_blocks);
+            wfs_wr64(d, (uint32_t)offsetof(struct wfs_journal_super, first_sequence), 1u);
+            wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_super, first_block), 1u);
+            wfs_wr32(d,
+                     (uint32_t)offsetof(struct wfs_journal_super, checksum),
+                     wfs_checksum_struct(params->uuid,
+                                         L.journal_start,
+                                         d,
+                                         (uint32_t)sizeof(struct wfs_journal_super),
+                                         (uint32_t)offsetof(struct wfs_journal_super, checksum)));
         }
         rc = emit(sink, L.journal_start + block, bs);
         if (rc != WASMOS_ERR_NONE) {
@@ -691,14 +680,14 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
                             entries[k].read_ctx, 0u, d + off, (uint32_t)entries[k].size) != 0) {
                         return WASMOS_ERR_FS_IO;
                     }
-                    wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
-                    wr32(d,
-                         (uint32_t)offsetof(struct wfs_object, checksum),
-                         wfs_checksum_struct(params->uuid,
-                                             id,
-                                             d,
-                                             WFS_OBJECT_SIZE,
-                                             (uint32_t)offsetof(struct wfs_object, checksum)));
+                    wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
+                    wfs_wr32(d,
+                             (uint32_t)offsetof(struct wfs_object, checksum),
+                             wfs_checksum_struct(params->uuid,
+                                                 id,
+                                                 d,
+                                                 WFS_OBJECT_SIZE,
+                                                 (uint32_t)offsetof(struct wfs_object, checksum)));
                 }
             }
         }

@@ -21,6 +21,7 @@
 #include "wasmos_status.h"
 #include "wfs_crc32c.h"
 #include "wfs_dir.h"
+#include "wfs_endian.h"
 #include "wfs_format.h"
 #include "wfs_types.h"
 
@@ -58,23 +59,6 @@ static wfs_volume_t g_vol;
 
 /* ---- laying out directory blocks ---------------------------------------- */
 
-static void wr16(uint8_t* p, uint32_t off, uint16_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-}
-
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-    p[off + 2] = (uint8_t)((v >> 16) & 0xFFu);
-    p[off + 3] = (uint8_t)((v >> 24) & 0xFFu);
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
-    wr32(p, off + 4u, (uint32_t)(v >> 32));
-}
-
 static uint8_t* image_block(uint32_t block) {
     return wfs_stub_image + (size_t)block * wfs_stub_block_size;
 }
@@ -86,8 +70,8 @@ static void seal_dir(uint32_t block) {
     uint32_t off = wfs_dir_usable_bytes(wfs_stub_block_size) +
                    (uint32_t)offsetof(struct wfs_dir_tail, checksum);
 
-    wr32(d, off, 0u);
-    wr32(d, off, wfs_checksum_struct(k_uuid, block, d, wfs_stub_block_size, off));
+    wfs_wr32(d, off, 0u);
+    wfs_wr32(d, off, wfs_checksum_struct(k_uuid, block, d, wfs_stub_block_size, off));
 }
 
 typedef struct {
@@ -109,15 +93,15 @@ static void dir_build(uint32_t block, uint32_t self, uint32_t parent, const entr
 
     memset(d, 0, wfs_stub_block_size);
 
-    wr64(d, 0u, self);
-    wr16(d, 8u, (uint16_t)wfs_dir_record_length(1u));
+    wfs_wr64(d, 0u, self);
+    wfs_wr16(d, 8u, (uint16_t)wfs_dir_record_length(1u));
     d[10] = 1u;
     d[11] = (uint8_t)WFS_TYPE_DIR;
     d[12] = '.';
     off = wfs_dir_record_length(1u);
 
-    wr64(d, off, parent);
-    wr16(d, off + 8u, (uint16_t)wfs_dir_record_length(2u));
+    wfs_wr64(d, off, parent);
+    wfs_wr16(d, off + 8u, (uint16_t)wfs_dir_record_length(2u));
     d[off + 10u] = 2u;
     d[off + 11u] = (uint8_t)WFS_TYPE_DIR;
     d[off + 12u] = '.';
@@ -130,8 +114,8 @@ static void dir_build(uint32_t block, uint32_t self, uint32_t parent, const entr
         uint32_t rec = wfs_dir_record_length(len);
         uint32_t k;
 
-        wr64(d, off, entries[i].object_id);
-        wr16(d, off + 8u, (uint16_t)rec);
+        wfs_wr64(d, off, entries[i].object_id);
+        wfs_wr16(d, off + 8u, (uint16_t)rec);
         d[off + 10u] = (uint8_t)len;
         d[off + 11u] = entries[i].type;
         for (k = 0; k < len; ++k) {
@@ -143,11 +127,11 @@ static void dir_build(uint32_t block, uint32_t self, uint32_t parent, const entr
 
     /* The last record stretches to the tail, so a scan of the block ends
      * exactly where the tail begins (§10). */
-    wr16(d, last + 8u, (uint16_t)(usable - last));
+    wfs_wr16(d, last + 8u, (uint16_t)(usable - last));
 
     t = d + usable;
-    wr64(t, (uint32_t)offsetof(struct wfs_dir_tail, object_id), 0u);
-    wr16(t, (uint32_t)offsetof(struct wfs_dir_tail, record_length), WFS_DIR_TAIL_SIZE);
+    wfs_wr64(t, (uint32_t)offsetof(struct wfs_dir_tail, object_id), 0u);
+    wfs_wr16(t, (uint32_t)offsetof(struct wfs_dir_tail, record_length), WFS_DIR_TAIL_SIZE);
     t[offsetof(struct wfs_dir_tail, name_length)] = 0u;
     t[offsetof(struct wfs_dir_tail, type)] = (uint8_t)WFS_DIR_TAIL_TYPE;
     seal_dir(block);
@@ -297,7 +281,7 @@ static void test_a_removed_entry_is_skipped(void) {
     /* Zero "gone"'s object_id in place, leaving the name and the stride. */
     d = image_block(scratch(0));
     off = wfs_dir_record_length(1u) + wfs_dir_record_length(2u);
-    wr64(d, off, 0u);
+    wfs_wr64(d, off, 0u);
     seal_dir(scratch(0));
 
     make_dir(&dir, scratch(0), 1u);
@@ -462,7 +446,7 @@ static void test_a_zero_stride_is_refused_rather_than_looped_on(void) {
         return;
     }
     dir_build(scratch(0), WFS_OBJECT_ROOT, WFS_OBJECT_ROOT, entries, 1u);
-    wr16(image_block(scratch(0)), 8u, 0u); /* dot's stride */
+    wfs_wr16(image_block(scratch(0)), 8u, 0u); /* dot's stride */
     seal_dir(scratch(0));
     make_dir(&dir, scratch(0), 1u);
 
@@ -485,7 +469,7 @@ static void test_a_misaligned_stride_is_refused(void) {
         return;
     }
     dir_build(scratch(0), WFS_OBJECT_ROOT, WFS_OBJECT_ROOT, entries, 1u);
-    wr16(image_block(scratch(0)), 8u, 20u); /* not a multiple of 8 */
+    wfs_wr16(image_block(scratch(0)), 8u, 20u); /* not a multiple of 8 */
     seal_dir(scratch(0));
     make_dir(&dir, scratch(0), 1u);
 
@@ -510,9 +494,9 @@ static void test_a_record_running_into_the_tail_is_refused(void) {
     dir_build(scratch(0), WFS_OBJECT_ROOT, WFS_OBJECT_ROOT, NULL, 0u);
     usable = wfs_dir_usable_bytes(wfs_stub_block_size);
     /* Stretch dotdot past the tail. */
-    wr16(image_block(scratch(0)),
-         wfs_dir_record_length(1u) + 8u,
-         (uint16_t)(usable - wfs_dir_record_length(1u) + 8u));
+    wfs_wr16(image_block(scratch(0)),
+             wfs_dir_record_length(1u) + 8u,
+             (uint16_t)(usable - wfs_dir_record_length(1u) + 8u));
     seal_dir(scratch(0));
     make_dir(&dir, scratch(0), 1u);
 

@@ -5,22 +5,9 @@
 
 #include "wfs_block.h"
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_journal.h"
 #include "wfs_ops.h"
-
-/* On-disk fields are little-endian whatever the host is, and the staged block is
- * a byte image whose alignment is the staging buffer's.
- *
- * TODO: rd32/rd64 are duplicated across wfs_mount.c, wfs_alloc.c, wfs_dir.c,
- * wfs_extent.c, wfs_super.c, wfs_journal.c and here. */
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    return (uint64_t)rd32(p, off) | ((uint64_t)rd32(p, off + 4) << 32);
-}
 
 /* Whether the staged block is a live log record of `sequence`: it verifies as
  * the journal block it was read from, and carries that sequence.
@@ -33,11 +20,11 @@ static int record_is_live(const wfs_volume_t* vol, const uint8_t* d, uint32_t bl
     if (!wfs_journal_verify(vol->super.uuid, block, d, vol->super.block_size)) {
         return 0;
     }
-    return rd64(d, (uint32_t)offsetof(struct wfs_journal_header, sequence)) == sequence;
+    return wfs_rd64(d, (uint32_t)offsetof(struct wfs_journal_header, sequence)) == sequence;
 }
 
 static uint32_t record_type(const uint8_t* d) {
-    return rd32(d, (uint32_t)offsetof(struct wfs_journal_header, type));
+    return wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_header, type));
 }
 
 /* Whether `block` is a legal destination for a replayed image.
@@ -86,7 +73,7 @@ static wasmos_error_code_t parse_descriptor(wfs_replay_ctx_t* ctx, const uint8_t
              * written by anything that agrees with this format. */
             return WASMOS_ERR_FS_JOURNAL;
         }
-        target = rd64(d, off + (uint32_t)offsetof(struct wfs_journal_target, target_block));
+        target = wfs_rd64(d, off + (uint32_t)offsetof(struct wfs_journal_target, target_block));
         if (target == 0u) {
             return WASMOS_ERR_NONE;
         }
@@ -101,8 +88,8 @@ static wasmos_error_code_t parse_descriptor(wfs_replay_ctx_t* ctx, const uint8_t
         }
         ctx->targets[ctx->target_count] = (uint32_t)target;
         ctx->checksums[ctx->target_count] =
-            rd32(d, off + (uint32_t)offsetof(struct wfs_journal_target, checksum));
-        flags = rd32(d, off + (uint32_t)offsetof(struct wfs_journal_target, flags));
+            wfs_rd32(d, off + (uint32_t)offsetof(struct wfs_journal_target, checksum));
+        flags = wfs_rd32(d, off + (uint32_t)offsetof(struct wfs_journal_target, flags));
         ctx->target_count++;
         if (flags & (uint32_t)WFS_JOURNAL_TARGET_LAST) {
             return WASMOS_ERR_NONE;
@@ -114,7 +101,7 @@ static wasmos_error_code_t parse_descriptor(wfs_replay_ctx_t* ctx, const uint8_t
 /* Collect the blocks a revoke record names (§21 pass 2). */
 static wasmos_error_code_t parse_revoke(wfs_replay_ctx_t* ctx, const uint8_t* d) {
     uint32_t off = (uint32_t)offsetof(struct wfs_journal_revoke, blocks);
-    uint32_t count = rd32(d, (uint32_t)offsetof(struct wfs_journal_revoke, count));
+    uint32_t count = wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_revoke, count));
     uint32_t i;
 
     if (count > WFS_TXN_MAX_REVOKES || off + count * 8u > ctx->vol->super.block_size) {
@@ -122,7 +109,7 @@ static wasmos_error_code_t parse_revoke(wfs_replay_ctx_t* ctx, const uint8_t* d)
     }
     ctx->revoke_count = 0u;
     for (i = 0; i < count; ++i) {
-        uint64_t block = rd64(d, off + i * 8u);
+        uint64_t block = wfs_rd64(d, off + i * 8u);
 
         if (!target_is_legal(ctx->vol, block)) {
             return WASMOS_ERR_FS_CORRUPT;
@@ -252,7 +239,7 @@ int32_t wfs_journal_replay_task(void* user, uintptr_t* out_value) {
         }
         /* `target_count` is what confirms every image the transaction promised
          * is present before any of them is applied (§14). */
-        if (rd32(d, (uint32_t)offsetof(struct wfs_journal_commit, target_count)) !=
+        if (wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_commit, target_count)) !=
             ctx->target_count) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_JOURNAL);
         }

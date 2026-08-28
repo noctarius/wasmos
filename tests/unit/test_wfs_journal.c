@@ -17,6 +17,7 @@
 #include "wasmos_status.h"
 #include "wfs_block.h"
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_format.h"
 #include "wfs_journal.h"
 #include "wfs_mount.h"
@@ -52,16 +53,6 @@ static void expect_rc(wasmos_error_code_t got, wasmos_error_code_t want, const c
                wasmos_strerror(want),
                (int)want);
     }
-}
-
-/* On-disk fields are little-endian; the image is a byte buffer. */
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    return (uint64_t)rd32(p, off) | ((uint64_t)rd32(p, off + 4) << 32);
 }
 
 static const uint8_t k_uuid[WFS_UUID_LEN] = {
@@ -419,12 +410,12 @@ static void test_a_revoke_reaches_the_log(void) {
     d = wfs_stub_image + (size_t)rblock * wfs_stub_block_size;
     expect(wfs_journal_verify(vol.super.uuid, rblock, d, vol.super.block_size),
            "the revoke record verifies as the log block it sits in");
-    expect_u32(rd32(d, (uint32_t)offsetof(struct wfs_journal_header, type)),
+    expect_u32(wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_header, type)),
                (uint32_t)WFS_JOURNAL_REVOKE,
                "and is a revoke");
     expect_u32(
-        rd32(d, (uint32_t)offsetof(struct wfs_journal_revoke, count)), 1u, "naming one block");
-    expect(rd64(d, (uint32_t)offsetof(struct wfs_journal_revoke, blocks)) == (uint64_t)freed,
+        wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_revoke, count)), 1u, "naming one block");
+    expect(wfs_rd64(d, (uint32_t)offsetof(struct wfs_journal_revoke, blocks)) == (uint64_t)freed,
            "the one that was freed");
 
     wfs_stub_teardown();
@@ -449,9 +440,9 @@ static void test_a_commit_advances_the_tail(void) {
     expect(commit(&vol) == 0, "the commit completes");
 
     js = wfs_stub_image + (size_t)g_layout.journal_start * wfs_stub_block_size;
-    expect(rd64(js, (uint32_t)offsetof(struct wfs_journal_super, first_sequence)) == 2u,
+    expect(wfs_rd64(js, (uint32_t)offsetof(struct wfs_journal_super, first_sequence)) == 2u,
            "the on-disk tail names the next sequence");
-    expect_u32(rd32(js, (uint32_t)offsetof(struct wfs_journal_super, first_block)),
+    expect_u32(wfs_rd32(js, (uint32_t)offsetof(struct wfs_journal_super, first_block)),
                WFS_TXN_DESCRIPTOR_BLOCK,
                "and still the first log block");
     expect(vol.journal.next_sequence == 2u, "as does the volume in memory");

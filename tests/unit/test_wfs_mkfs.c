@@ -19,6 +19,7 @@
 
 #include "wasmos_status.h"
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_format.h"
 #include "wfs_mkfs.h"
 #include "wfs_super.h"
@@ -159,15 +160,6 @@ static uint8_t* format_image(uint64_t size, wfs_mkfs_layout_t* layout, full_sink
     return image;
 }
 
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    return (uint64_t)rd32(p, off) | ((uint64_t)rd32(p, off + 4) << 32);
-}
-
 #define IMG_16M (16ull * 1024ull * 1024ull)
 
 /* ---- the volume the reader sees ------------------------------------------ */
@@ -252,15 +244,15 @@ static void test_the_group_descriptors_verify(void) {
         uint32_t per_block = wfs_group_descs_per_block(L.block_size);
         const uint8_t* d = table + (size_t)(g / per_block) * L.block_size +
                            (size_t)(g % per_block) * WFS_GROUP_DESC_SIZE;
-        uint32_t stored = rd32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum));
+        uint32_t stored = wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum));
         uint32_t computed = wfs_checksum_struct(
             k_uuid, g, d, WFS_GROUP_DESC_SIZE, (uint32_t)offsetof(struct wfs_group_desc, checksum));
 
         expect(stored == computed, "a group descriptor verifies under its group index");
-        expect(rd64(d, (uint32_t)offsetof(struct wfs_group_desc, block_bitmap)) ==
+        expect(wfs_rd64(d, (uint32_t)offsetof(struct wfs_group_desc, block_bitmap)) ==
                    L.bitmap_start + 2u * g,
                "the descriptor names its block bitmap");
-        expect(rd64(d, (uint32_t)offsetof(struct wfs_group_desc, object_bitmap)) ==
+        expect(wfs_rd64(d, (uint32_t)offsetof(struct wfs_group_desc, object_bitmap)) ==
                    L.bitmap_start + 2u * g + 1u,
                "the descriptor names its object bitmap");
     }
@@ -281,7 +273,7 @@ static void test_a_descriptor_is_bound_to_its_slot(void) {
         return;
     }
     d = image + (size_t)L.group_table_start * L.block_size;
-    stored = rd32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum));
+    stored = wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum));
 
     expect(stored != wfs_checksum_struct(k_uuid,
                                          1u,
@@ -306,7 +298,7 @@ static void test_the_root_object_verifies_and_describes_a_directory(void) {
     /* Object 1 is the second record of the object table's first block. */
     obj = image + (size_t)L.object_table_start * L.block_size + WFS_OBJECT_SIZE;
 
-    expect(rd32(obj, (uint32_t)offsetof(struct wfs_object, checksum)) ==
+    expect(wfs_rd32(obj, (uint32_t)offsetof(struct wfs_object, checksum)) ==
                wfs_checksum_struct(k_uuid,
                                    WFS_OBJECT_ROOT,
                                    obj,
@@ -314,29 +306,29 @@ static void test_the_root_object_verifies_and_describes_a_directory(void) {
                                    (uint32_t)offsetof(struct wfs_object, checksum)),
            "the root record verifies under its object id");
 
-    expect(rd64(obj, (uint32_t)offsetof(struct wfs_object, object_id)) == WFS_OBJECT_ROOT,
+    expect(wfs_rd64(obj, (uint32_t)offsetof(struct wfs_object, object_id)) == WFS_OBJECT_ROOT,
            "the root record carries its own id");
     expect((obj[offsetof(struct wfs_object, type)] |
             (obj[offsetof(struct wfs_object, type) + 1] << 8)) == WFS_TYPE_DIR,
            "the root is a directory");
-    expect(rd64(obj, (uint32_t)offsetof(struct wfs_object, size)) == L.block_size,
+    expect(wfs_rd64(obj, (uint32_t)offsetof(struct wfs_object, size)) == L.block_size,
            "the root's size is its one directory block");
-    expect(rd32(obj, (uint32_t)offsetof(struct wfs_object, link_count)) == 2u,
+    expect(wfs_rd32(obj, (uint32_t)offsetof(struct wfs_object, link_count)) == 2u,
            "a root's link count is 2: its own . and ..");
-    expect(rd32(obj, (uint32_t)offsetof(struct wfs_object, extent_count)) == 1u,
+    expect(wfs_rd32(obj, (uint32_t)offsetof(struct wfs_object, extent_count)) == 1u,
            "the root has one extent");
-    expect(rd64(obj, (uint32_t)offsetof(struct wfs_object, extent_tree_block)) == 0u,
+    expect(wfs_rd64(obj, (uint32_t)offsetof(struct wfs_object, extent_tree_block)) == 0u,
            "an inline extent needs no tree");
-    expect(rd64(obj, (uint32_t)offsetof(struct wfs_object, mtime)) == TEST_NOW_NS,
+    expect(wfs_rd64(obj, (uint32_t)offsetof(struct wfs_object, mtime)) == TEST_NOW_NS,
            "timestamps are the nanoseconds handed to the formatter");
 
     e = (uint32_t)offsetof(struct wfs_object, extents);
-    expect(rd64(obj, e + (uint32_t)offsetof(struct wfs_extent, logical_block)) == 0u,
+    expect(wfs_rd64(obj, e + (uint32_t)offsetof(struct wfs_extent, logical_block)) == 0u,
            "the extent starts at logical block 0");
-    expect(rd64(obj, e + (uint32_t)offsetof(struct wfs_extent, physical_block)) ==
+    expect(wfs_rd64(obj, e + (uint32_t)offsetof(struct wfs_extent, physical_block)) ==
                L.root_data_block,
            "the extent points at the root's data block");
-    expect(rd32(obj, e + (uint32_t)offsetof(struct wfs_extent, length)) == 1u,
+    expect(wfs_rd32(obj, e + (uint32_t)offsetof(struct wfs_extent, length)) == 1u,
            "the extent is one block long");
 
     free(image);
@@ -357,13 +349,13 @@ static void test_the_root_directory_block_is_well_formed(void) {
     dir = image + (size_t)L.root_data_block * L.block_size;
 
     dot_len = (uint32_t)dir[8] | ((uint32_t)dir[9] << 8);
-    expect(rd64(dir, 0u) == WFS_OBJECT_ROOT, ". names the root");
+    expect(wfs_rd64(dir, 0u) == WFS_OBJECT_ROOT, ". names the root");
     expect(dir[10] == 1u && dir[12] == '.', ". is one character");
     expect(dot_len == wfs_dir_record_length(1u), ". strides by an 8-byte multiple");
     expect((dot_len & 7u) == 0u, "every stride is a multiple of 8");
 
     dotdot_len = (uint32_t)dir[dot_len + 8u] | ((uint32_t)dir[dot_len + 9u] << 8);
-    expect(rd64(dir, dot_len) == WFS_OBJECT_ROOT, ".. of the root names the root");
+    expect(wfs_rd64(dir, dot_len) == WFS_OBJECT_ROOT, ".. of the root names the root");
     expect(dir[dot_len + 10u] == 2u && dir[dot_len + 12u] == '.' && dir[dot_len + 13u] == '.',
            ".. is two characters");
 
@@ -373,10 +365,10 @@ static void test_the_root_directory_block_is_well_formed(void) {
            "the records fill the block up to the tail");
 
     tail = dir + wfs_dir_usable_bytes(L.block_size);
-    expect(rd64(tail, (uint32_t)offsetof(struct wfs_dir_tail, object_id)) == 0u,
+    expect(wfs_rd64(tail, (uint32_t)offsetof(struct wfs_dir_tail, object_id)) == 0u,
            "the tail reads as free space to a scanner that does not know it");
     expect(tail[offsetof(struct wfs_dir_tail, type)] == WFS_DIR_TAIL_TYPE, "the tail is typed");
-    expect(rd32(tail, (uint32_t)offsetof(struct wfs_dir_tail, checksum)) ==
+    expect(wfs_rd32(tail, (uint32_t)offsetof(struct wfs_dir_tail, checksum)) ==
                wfs_checksum_struct(k_uuid,
                                    L.root_data_block,
                                    dir,
@@ -399,15 +391,15 @@ static void test_the_journal_starts_empty_and_verifies(void) {
     }
     js = image + (size_t)L.journal_start * L.block_size;
 
-    expect(rd32(js, (uint32_t)offsetof(struct wfs_journal_super, magic)) == WFS_JOURNAL_MAGIC,
+    expect(wfs_rd32(js, (uint32_t)offsetof(struct wfs_journal_super, magic)) == WFS_JOURNAL_MAGIC,
            "the journal superblock carries its magic");
-    expect(rd32(js, (uint32_t)offsetof(struct wfs_journal_super, block_size)) == L.block_size,
+    expect(wfs_rd32(js, (uint32_t)offsetof(struct wfs_journal_super, block_size)) == L.block_size,
            "the journal agrees with the volume's block size");
-    expect(rd32(js, (uint32_t)offsetof(struct wfs_journal_super, blocks)) == L.journal_blocks,
+    expect(wfs_rd32(js, (uint32_t)offsetof(struct wfs_journal_super, blocks)) == L.journal_blocks,
            "the journal knows its own length");
-    expect(rd64(js, (uint32_t)offsetof(struct wfs_journal_super, first_sequence)) == 1u,
+    expect(wfs_rd64(js, (uint32_t)offsetof(struct wfs_journal_super, first_sequence)) == 1u,
            "the log tail starts at sequence 1");
-    expect(rd32(js, (uint32_t)offsetof(struct wfs_journal_super, checksum)) ==
+    expect(wfs_rd32(js, (uint32_t)offsetof(struct wfs_journal_super, checksum)) ==
                wfs_checksum_struct(k_uuid,
                                    L.journal_start,
                                    js,
@@ -417,7 +409,7 @@ static void test_the_journal_starts_empty_and_verifies(void) {
 
     /* The first log block is zero, so a recovery scan finds its head there and
      * replays nothing. */
-    expect(rd32(image + (size_t)(L.journal_start + 1u) * L.block_size, 0u) != WFS_JOURNAL_MAGIC,
+    expect(wfs_rd32(image + (size_t)(L.journal_start + 1u) * L.block_size, 0u) != WFS_JOURNAL_MAGIC,
            "the log behind it is empty");
 
     free(image);

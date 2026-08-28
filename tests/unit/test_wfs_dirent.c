@@ -13,6 +13,7 @@
 #include "wasmos_status.h"
 #include "wfs_crc32c.h"
 #include "wfs_dirent.h"
+#include "wfs_endian.h"
 #include "wfs_format.h"
 
 static int g_failures;
@@ -55,20 +56,6 @@ static const uint8_t k_uuid[WFS_UUID_LEN] = {
 
 static uint8_t g_block[BS];
 
-static uint32_t rd16(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    uint64_t v = 0;
-    uint32_t i;
-
-    for (i = 0; i < 8u; ++i) {
-        v |= (uint64_t)p[off + i] << (i * 8u);
-    }
-    return v;
-}
-
 /* Walk the chain the way the driver's scan does, counting live records and
  * checking every stride. Returns the number of live entries, or -1 when the
  * chain breaks a §10 rule. */
@@ -78,9 +65,9 @@ static int32_t walk(const uint8_t* block, uint32_t* out_covered) {
     int32_t live = 0;
 
     while (off + WFS_DIR_ENTRY_HEADER <= usable) {
-        uint32_t len = rd16(block, off + 8u);
+        uint32_t len = wfs_rd16(block, off + 8u);
         uint32_t nl = block[off + 10u];
-        uint64_t id = rd64(block, off);
+        uint64_t id = wfs_rd64(block, off);
 
         if (len < WFS_DIR_RECORD_MIN || (len & 7u) != 0u || off + len > usable) {
             return -1;
@@ -108,9 +95,9 @@ static int reachable(const uint8_t* block, const char* name, uint32_t id) {
     uint32_t want = (uint32_t)strlen(name);
 
     while (off + WFS_DIR_ENTRY_HEADER <= usable) {
-        uint32_t len = rd16(block, off + 8u);
+        uint32_t len = wfs_rd16(block, off + 8u);
         uint32_t nl = block[off + 10u];
-        uint64_t got = rd64(block, off);
+        uint64_t got = wfs_rd64(block, off);
 
         if (len < WFS_DIR_RECORD_MIN) {
             return 0;
@@ -127,7 +114,7 @@ static int reachable(const uint8_t* block, const char* name, uint32_t id) {
 static int sealed(const uint8_t* block) {
     uint32_t usable = wfs_dir_usable_bytes(BS);
     uint32_t off = usable + (uint32_t)offsetof(struct wfs_dir_tail, checksum);
-    uint32_t stored = (uint32_t)rd16(block, off) | ((uint32_t)rd16(block, off + 2u) << 16);
+    uint32_t stored = (uint32_t)wfs_rd16(block, off) | ((uint32_t)wfs_rd16(block, off + 2u) << 16);
 
     return stored == wfs_checksum_struct(k_uuid, LOC, block, BS, off);
 }

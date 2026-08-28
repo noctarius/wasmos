@@ -6,27 +6,10 @@
 #include "wfs_bitmap.h"
 #include "wfs_block.h"
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_mount.h"
 #include "wfs_ops.h"
 #include "wfs_sync.h"
-
-/* Little-endian field access. On-disk fields are little-endian regardless of the
- * host, so they are assembled byte-wise rather than cast over.
- *
- * TODO: rd32/rd64 are duplicated in wfs_mount.c, wfs_dir.c, wfs_extent.c and
- * wfs_super.c as well as here; the writers below are new. A shared header would
- * hold one copy, at the cost of touching every one of those files. */
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-    p[off + 2] = (uint8_t)((v >> 16) & 0xFFu);
-    p[off + 3] = (uint8_t)((v >> 24) & 0xFFu);
-}
 
 /* Blocks of `group` that exist on the device. Every group but the last is full;
  * the last is partial on a volume whose size is not a whole number of groups.
@@ -183,19 +166,20 @@ int32_t wfs_alloc_blocks_task(void* user, uintptr_t* out_value) {
         offset = (ctx->group % per_block) * WFS_GROUP_DESC_SIZE;
         d = wfs_block_data(b) + offset;
 
-        wr32(d,
-             (uint32_t)offsetof(struct wfs_group_desc, free_blocks),
-             rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_blocks)) - ctx->run_length);
+        wfs_wr32(d,
+                 (uint32_t)offsetof(struct wfs_group_desc, free_blocks),
+                 wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_blocks)) -
+                     ctx->run_length);
         /* Reseal: free_blocks is inside the checksummed record, and a descriptor
          * whose checksum no longer matches fails the next mount. */
-        wr32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum), 0u);
-        wr32(d,
-             (uint32_t)offsetof(struct wfs_group_desc, checksum),
-             wfs_checksum_struct(ctx->vol->super.uuid,
-                                 ctx->group,
-                                 d,
-                                 WFS_GROUP_DESC_SIZE,
-                                 (uint32_t)offsetof(struct wfs_group_desc, checksum)));
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum), 0u);
+        wfs_wr32(d,
+                 (uint32_t)offsetof(struct wfs_group_desc, checksum),
+                 wfs_checksum_struct(ctx->vol->super.uuid,
+                                     ctx->group,
+                                     d,
+                                     WFS_GROUP_DESC_SIZE,
+                                     (uint32_t)offsetof(struct wfs_group_desc, checksum)));
         WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->desc_block), WFS_ALLOC_PC_DESC_WRITTEN);
         /* fall through */
 
@@ -333,17 +317,18 @@ int32_t wfs_free_blocks_task(void* user, uintptr_t* out_value) {
         per_block = wfs_group_descs_per_block(ctx->vol->super.block_size);
         offset = (ctx->group % per_block) * WFS_GROUP_DESC_SIZE;
         d = wfs_block_data(b) + offset;
-        wr32(d,
-             (uint32_t)offsetof(struct wfs_group_desc, free_blocks),
-             rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_blocks)) + ctx->run_in_group);
-        wr32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum), 0u);
-        wr32(d,
-             (uint32_t)offsetof(struct wfs_group_desc, checksum),
-             wfs_checksum_struct(ctx->vol->super.uuid,
-                                 ctx->group,
-                                 d,
-                                 WFS_GROUP_DESC_SIZE,
-                                 (uint32_t)offsetof(struct wfs_group_desc, checksum)));
+        wfs_wr32(d,
+                 (uint32_t)offsetof(struct wfs_group_desc, free_blocks),
+                 wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_blocks)) +
+                     ctx->run_in_group);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum), 0u);
+        wfs_wr32(d,
+                 (uint32_t)offsetof(struct wfs_group_desc, checksum),
+                 wfs_checksum_struct(ctx->vol->super.uuid,
+                                     ctx->group,
+                                     d,
+                                     WFS_GROUP_DESC_SIZE,
+                                     (uint32_t)offsetof(struct wfs_group_desc, checksum)));
         WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->desc_block), WFS_FREE_PC_DESC_WRITTEN);
         /* fall through */
 
@@ -369,16 +354,6 @@ static uint32_t objects_per_group(const wfs_volume_t* vol) {
         return 0u;
     }
     return (uint32_t)(vol->super.total_objects / vol->super.group_count);
-}
-
-static void wr16(uint8_t* p, uint32_t off, uint16_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
-    wr32(p, off + 4u, (uint32_t)((v >> 32) & 0xFFFFFFFFu));
 }
 
 int32_t wfs_alloc_object_task(void* user, uintptr_t* out_value) {
@@ -495,26 +470,27 @@ int32_t wfs_alloc_object_task(void* user, uintptr_t* out_value) {
         for (i = 0; i < WFS_OBJECT_SIZE; ++i) {
             d[i] = 0u;
         }
-        wr64(d, (uint32_t)offsetof(struct wfs_object, object_id), ctx->object_id);
-        wr16(d, (uint32_t)offsetof(struct wfs_object, type), ctx->type);
-        wr32(d, (uint32_t)offsetof(struct wfs_object, mode), ctx->mode);
-        wr32(d, (uint32_t)offsetof(struct wfs_object, link_count), ctx->link_count);
-        wr64(d, (uint32_t)offsetof(struct wfs_object, atime), ctx->now_ns);
-        wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), ctx->now_ns);
-        wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), ctx->now_ns);
-        wr64(d, (uint32_t)offsetof(struct wfs_object, btime), ctx->now_ns);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, object_id), ctx->object_id);
+        wfs_wr16(d, (uint32_t)offsetof(struct wfs_object, type), ctx->type);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, mode), ctx->mode);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, link_count), ctx->link_count);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, atime), ctx->now_ns);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), ctx->now_ns);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), ctx->now_ns);
+        wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, btime), ctx->now_ns);
         /* A new file starts INLINE with nothing in it: size 0 and no extent, which
          * is what lets a first small write stay in the record. */
         if (ctx->type == WFS_TYPE_FILE) {
-            wr16(d, (uint32_t)offsetof(struct wfs_object, flags), (uint16_t)WFS_OBJ_INLINE_DATA);
+            wfs_wr16(
+                d, (uint32_t)offsetof(struct wfs_object, flags), (uint16_t)WFS_OBJ_INLINE_DATA);
         }
-        wr32(d,
-             (uint32_t)offsetof(struct wfs_object, checksum),
-             wfs_checksum_struct(ctx->vol->super.uuid,
-                                 ctx->object_id,
-                                 d,
-                                 WFS_OBJECT_SIZE,
-                                 (uint32_t)offsetof(struct wfs_object, checksum)));
+        wfs_wr32(d,
+                 (uint32_t)offsetof(struct wfs_object, checksum),
+                 wfs_checksum_struct(ctx->vol->super.uuid,
+                                     ctx->object_id,
+                                     d,
+                                     WFS_OBJECT_SIZE,
+                                     (uint32_t)offsetof(struct wfs_object, checksum)));
         WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->record_block), WFS_OBJALLOC_PC_RECORD_WRITTEN);
         /* fall through */
 
@@ -551,17 +527,17 @@ int32_t wfs_alloc_object_task(void* user, uintptr_t* out_value) {
         per_block = wfs_group_descs_per_block(ctx->vol->super.block_size);
         offset = (ctx->group % per_block) * WFS_GROUP_DESC_SIZE;
         d = wfs_block_data(b) + offset;
-        wr32(d,
-             (uint32_t)offsetof(struct wfs_group_desc, free_objects),
-             rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_objects)) - 1u);
-        wr32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum), 0u);
-        wr32(d,
-             (uint32_t)offsetof(struct wfs_group_desc, checksum),
-             wfs_checksum_struct(ctx->vol->super.uuid,
-                                 ctx->group,
-                                 d,
-                                 WFS_GROUP_DESC_SIZE,
-                                 (uint32_t)offsetof(struct wfs_group_desc, checksum)));
+        wfs_wr32(d,
+                 (uint32_t)offsetof(struct wfs_group_desc, free_objects),
+                 wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_objects)) - 1u);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum), 0u);
+        wfs_wr32(d,
+                 (uint32_t)offsetof(struct wfs_group_desc, checksum),
+                 wfs_checksum_struct(ctx->vol->super.uuid,
+                                     ctx->group,
+                                     d,
+                                     WFS_GROUP_DESC_SIZE,
+                                     (uint32_t)offsetof(struct wfs_group_desc, checksum)));
         WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->desc_block), WFS_OBJALLOC_PC_DESC_WRITTEN);
         /* fall through */
 
@@ -662,17 +638,17 @@ int32_t wfs_free_object_task(void* user, uintptr_t* out_value) {
         per_block = wfs_group_descs_per_block(ctx->vol->super.block_size);
         offset = (ctx->group % per_block) * WFS_GROUP_DESC_SIZE;
         d = wfs_block_data(b) + offset;
-        wr32(d,
-             (uint32_t)offsetof(struct wfs_group_desc, free_objects),
-             rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_objects)) + 1u);
-        wr32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum), 0u);
-        wr32(d,
-             (uint32_t)offsetof(struct wfs_group_desc, checksum),
-             wfs_checksum_struct(ctx->vol->super.uuid,
-                                 ctx->group,
-                                 d,
-                                 WFS_GROUP_DESC_SIZE,
-                                 (uint32_t)offsetof(struct wfs_group_desc, checksum)));
+        wfs_wr32(d,
+                 (uint32_t)offsetof(struct wfs_group_desc, free_objects),
+                 wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_objects)) + 1u);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum), 0u);
+        wfs_wr32(d,
+                 (uint32_t)offsetof(struct wfs_group_desc, checksum),
+                 wfs_checksum_struct(ctx->vol->super.uuid,
+                                     ctx->group,
+                                     d,
+                                     WFS_GROUP_DESC_SIZE,
+                                     (uint32_t)offsetof(struct wfs_group_desc, checksum)));
         WFS_AWAIT(ctx, wfs_block_write_begin(b, ctx->desc_block), WFS_OBJFREE_PC_DESC_WRITTEN);
         /* fall through */
 

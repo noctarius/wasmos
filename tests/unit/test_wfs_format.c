@@ -21,6 +21,7 @@
 
 #include "wasmos_status.h"
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_format.h"
 #include "wfs_super.h"
 
@@ -79,23 +80,6 @@ static void expect_rc(wasmos_error_code_t got, wasmos_error_code_t want, const c
 
 /* ---- a minimal formatter ------------------------------------------------- */
 
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-    p[off + 2] = (uint8_t)((v >> 16) & 0xFFu);
-    p[off + 3] = (uint8_t)((v >> 24) & 0xFFu);
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
-    wr32(p, off + 4, (uint32_t)(v >> 32));
-}
-
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
 static const uint8_t k_uuid[WFS_UUID_LEN] = {
     0x9e, 0x37, 0x79, 0xb9, 0x7f, 0x4a, 0x7c, 0x15, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
 
@@ -109,49 +93,50 @@ static const uint8_t k_uuid[WFS_UUID_LEN] = {
 static void format_super(uint8_t image[WFS_SUPER_SIZE], uint64_t location) {
     memset(image, 0, WFS_SUPER_SIZE);
 
-    wr32(image, OFF_MAGIC, WFS_MAGIC);
-    wr32(image, OFF_VERSION, WFS_VERSION);
-    wr32(image, OFF_BLOCK_SIZE, IMG_BLOCK_SIZE);
-    wr32(image, OFF_BLOCKS_PER_GROUP, WFS_BLOCKS_PER_GROUP(IMG_BLOCK_SIZE));
+    wfs_wr32(image, OFF_MAGIC, WFS_MAGIC);
+    wfs_wr32(image, OFF_VERSION, WFS_VERSION);
+    wfs_wr32(image, OFF_BLOCK_SIZE, IMG_BLOCK_SIZE);
+    wfs_wr32(image, OFF_BLOCKS_PER_GROUP, WFS_BLOCKS_PER_GROUP(IMG_BLOCK_SIZE));
 
-    wr64(image, OFF_TOTAL_BLOCKS, IMG_TOTAL_BLOCKS);
-    wr64(image, OFF_TOTAL_OBJECTS, 4096u);
-    wr64(image, OFF_FREE_BLOCKS, 60000u);
-    wr64(image, OFF_FREE_OBJECTS, 4000u);
+    wfs_wr64(image, OFF_TOTAL_BLOCKS, IMG_TOTAL_BLOCKS);
+    wfs_wr64(image, OFF_TOTAL_OBJECTS, 4096u);
+    wfs_wr64(image, OFF_FREE_BLOCKS, 60000u);
+    wfs_wr64(image, OFF_FREE_OBJECTS, 4000u);
 
-    wr64(image, OFF_ROOT_OBJECT_ID, WFS_OBJECT_ROOT);
+    wfs_wr64(image, OFF_ROOT_OBJECT_ID, WFS_OBJECT_ROOT);
 
-    wr64(image, OFF_GROUP_TABLE_START, 1u);
-    wr64(image, OFF_GROUP_TABLE_BLOCKS, 1u);
-    wr64(image, OFF_OBJECT_TABLE_START, 2u);
-    wr64(image, OFF_OBJECT_TABLE_BLOCKS, 256u);
-    wr64(image, OFF_BITMAP_START, 258u);
-    wr64(image, OFF_BITMAP_BLOCKS, 4u);
-    wr64(image, OFF_JOURNAL_START, 262u);
-    wr64(image, OFF_JOURNAL_BLOCKS, 1024u);
+    wfs_wr64(image, OFF_GROUP_TABLE_START, 1u);
+    wfs_wr64(image, OFF_GROUP_TABLE_BLOCKS, 1u);
+    wfs_wr64(image, OFF_OBJECT_TABLE_START, 2u);
+    wfs_wr64(image, OFF_OBJECT_TABLE_BLOCKS, 256u);
+    wfs_wr64(image, OFF_BITMAP_START, 258u);
+    wfs_wr64(image, OFF_BITMAP_BLOCKS, 4u);
+    wfs_wr64(image, OFF_JOURNAL_START, 262u);
+    wfs_wr64(image, OFF_JOURNAL_BLOCKS, 1024u);
 
-    wr64(image, OFF_GENERATION, 7u);
+    wfs_wr64(image, OFF_GENERATION, 7u);
 
-    wr32(image, OFF_FEATURE_COMPAT, 0u);
-    wr32(image, OFF_FEATURE_RO_COMPAT, 0u);
-    wr32(image, OFF_FEATURE_INCOMPAT, WFS_FEATURE_INCOMPAT_EXTENTS | WFS_FEATURE_INCOMPAT_JOURNAL);
+    wfs_wr32(image, OFF_FEATURE_COMPAT, 0u);
+    wfs_wr32(image, OFF_FEATURE_RO_COMPAT, 0u);
+    wfs_wr32(
+        image, OFF_FEATURE_INCOMPAT, WFS_FEATURE_INCOMPAT_EXTENTS | WFS_FEATURE_INCOMPAT_JOURNAL);
 
-    wr32(image, OFF_STATE, WFS_STATE_CLEAN);
+    wfs_wr32(image, OFF_STATE, WFS_STATE_CLEAN);
 
     memcpy(image + OFF_UUID, k_uuid, WFS_UUID_LEN);
 
-    wr32(image,
-         OFF_CHECKSUM,
-         wfs_checksum_struct(k_uuid, location, image, WFS_SUPER_SIZE, OFF_CHECKSUM));
+    wfs_wr32(image,
+             OFF_CHECKSUM,
+             wfs_checksum_struct(k_uuid, location, image, WFS_SUPER_SIZE, OFF_CHECKSUM));
 }
 
 /* Re-stamp the checksum after a case has edited a field, so the case tests the
  * field's own validation rather than tripping the checksum on the way. */
 static void reseal(uint8_t image[WFS_SUPER_SIZE], uint64_t location) {
-    wr32(image, OFF_CHECKSUM, 0u);
-    wr32(image,
-         OFF_CHECKSUM,
-         wfs_checksum_struct(k_uuid, location, image, WFS_SUPER_SIZE, OFF_CHECKSUM));
+    wfs_wr32(image, OFF_CHECKSUM, 0u);
+    wfs_wr32(image,
+             OFF_CHECKSUM,
+             wfs_checksum_struct(k_uuid, location, image, WFS_SUPER_SIZE, OFF_CHECKSUM));
 }
 
 /* ---- CRC32C ------------------------------------------------------------- */
@@ -227,11 +212,11 @@ static void test_checksum_ignores_the_field_it_will_overwrite(void) {
 
     format_super(image, 0u);
     before = wfs_checksum_struct(k_uuid, 0u, image, WFS_SUPER_SIZE, OFF_CHECKSUM);
-    wr32(image, OFF_CHECKSUM, 0xDEADBEEFu);
+    wfs_wr32(image, OFF_CHECKSUM, 0xDEADBEEFu);
     after = wfs_checksum_struct(k_uuid, 0u, image, WFS_SUPER_SIZE, OFF_CHECKSUM);
 
     expect(before == after, "the checksum does not depend on the stored checksum");
-    expect(before == rd32(image, OFF_CHECKSUM) || 1, "value is stable");
+    expect(before == wfs_rd32(image, OFF_CHECKSUM) || 1, "value is stable");
 }
 
 /* Every reserved byte is covered, so a writer that leaves them uninitialised
@@ -284,7 +269,7 @@ static void test_parse_reports_a_foreign_device_as_bad_magic(void) {
               "an all-zero device");
 
     format_super(image, 0u);
-    wr32(image, OFF_MAGIC, 0x12345678u);
+    wfs_wr32(image, OFF_MAGIC, 0x12345678u);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_BAD_MAGIC,
@@ -298,7 +283,7 @@ static void test_parse_reports_a_future_version(void) {
     wfs_super_t sb;
 
     format_super(image, 0u);
-    wr32(image, OFF_VERSION, WFS_VERSION + 1u);
+    wfs_wr32(image, OFF_VERSION, WFS_VERSION + 1u);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_VERSION,
@@ -347,7 +332,7 @@ static void test_parse_refuses_an_unknown_incompat_feature(void) {
     wfs_super_t sb;
 
     format_super(image, 0u);
-    wr32(image, OFF_FEATURE_INCOMPAT, WFS_FEATURE_INCOMPAT_EXTENTS | (1u << 31));
+    wfs_wr32(image, OFF_FEATURE_INCOMPAT, WFS_FEATURE_INCOMPAT_EXTENTS | (1u << 31));
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_FEATURE_INCOMPAT,
@@ -361,7 +346,7 @@ static void test_parse_mounts_read_only_on_an_unknown_ro_compat_feature(void) {
     wfs_super_t sb;
 
     format_super(image, 0u);
-    wr32(image, OFF_FEATURE_RO_COMPAT, 1u << 3);
+    wfs_wr32(image, OFF_FEATURE_RO_COMPAT, 1u << 3);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_NONE,
@@ -374,8 +359,8 @@ static void test_parse_rejects_geometry_it_cannot_serve(void) {
     wfs_super_t sb;
 
     format_super(image, 0u);
-    wr32(image, OFF_BLOCK_SIZE, 512u);
-    wr32(image, OFF_BLOCKS_PER_GROUP, WFS_BLOCKS_PER_GROUP(512u));
+    wfs_wr32(image, OFF_BLOCK_SIZE, 512u);
+    wfs_wr32(image, OFF_BLOCKS_PER_GROUP, WFS_BLOCKS_PER_GROUP(512u));
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_GEOMETRY,
@@ -384,7 +369,7 @@ static void test_parse_rejects_geometry_it_cannot_serve(void) {
     /* The group size is derived, not free: a stored value that disagrees would
      * put one group's bitmap over another group's blocks. */
     format_super(image, 0u);
-    wr32(image, OFF_BLOCKS_PER_GROUP, 1024u);
+    wfs_wr32(image, OFF_BLOCKS_PER_GROUP, 1024u);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_GEOMETRY,
@@ -400,14 +385,14 @@ static void test_parse_refuses_a_volume_past_the_32_bit_ceiling(void) {
     wfs_super_t sb;
 
     format_super(image, 0u);
-    wr64(image, OFF_TOTAL_BLOCKS, 0x100000000ull); /* one past UINT32_MAX */
+    wfs_wr64(image, OFF_TOTAL_BLOCKS, 0x100000000ull); /* one past UINT32_MAX */
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_VOLUME_TOO_LARGE,
               "a block count above UINT32_MAX");
 
     format_super(image, 0u);
-    wr64(image, OFF_TOTAL_OBJECTS, 0xFFFFFFFFFFull);
+    wfs_wr64(image, OFF_TOTAL_OBJECTS, 0xFFFFFFFFFFull);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_VOLUME_TOO_LARGE,
@@ -421,14 +406,14 @@ static void test_parse_rejects_a_region_outside_the_volume(void) {
     wfs_super_t sb;
 
     format_super(image, 0u);
-    wr64(image, OFF_JOURNAL_START, IMG_TOTAL_BLOCKS);
+    wfs_wr64(image, OFF_JOURNAL_START, IMG_TOTAL_BLOCKS);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_CORRUPT,
               "a region starting past the last block");
 
     format_super(image, 0u);
-    wr64(image, OFF_JOURNAL_BLOCKS, IMG_TOTAL_BLOCKS);
+    wfs_wr64(image, OFF_JOURNAL_BLOCKS, IMG_TOTAL_BLOCKS);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_CORRUPT,
@@ -442,8 +427,8 @@ static void test_parse_rejects_a_short_group_table(void) {
     wfs_super_t sb;
 
     format_super(image, 0u);
-    wr64(image, OFF_TOTAL_BLOCKS, 32768ull * 200ull); /* 200 groups */
-    wr64(image, OFF_GROUP_TABLE_BLOCKS, 1u);          /* one block holds 64 descriptors */
+    wfs_wr64(image, OFF_TOTAL_BLOCKS, 32768ull * 200ull); /* 200 groups */
+    wfs_wr64(image, OFF_GROUP_TABLE_BLOCKS, 1u);          /* one block holds 64 descriptors */
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb),
               WASMOS_ERR_FS_CORRUPT,
@@ -458,7 +443,7 @@ static void test_parse_rejects_an_unnamed_state(void) {
     wfs_super_t sb;
 
     format_super(image, 0u);
-    wr32(image, OFF_STATE, 0u);
+    wfs_wr32(image, OFF_STATE, 0u);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb), WASMOS_ERR_FS_CORRUPT, "state zero");
 }
@@ -471,13 +456,13 @@ static void test_parse_reports_whether_replay_is_needed(void) {
     wfs_super_t sb;
 
     format_super(image, 0u);
-    wr32(image, OFF_STATE, WFS_STATE_DIRTY);
+    wfs_wr32(image, OFF_STATE, WFS_STATE_DIRTY);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb), WASMOS_ERR_NONE, "a dirty volume");
     expect(sb.needs_replay == 1u, "a dirty volume needs replay");
 
     format_super(image, 0u);
-    wr32(image, OFF_STATE, WFS_STATE_ERROR);
+    wfs_wr32(image, OFF_STATE, WFS_STATE_ERROR);
     reseal(image, 0u);
     expect_rc(wfs_super_parse(image, WFS_SUPER_SIZE, 0u, &sb), WASMOS_ERR_NONE, "an error volume");
     expect(sb.needs_replay == 1u, "an error volume needs replay");

@@ -5,27 +5,11 @@
 #include "wfs_mount.h"
 
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_journal.h"
 #include "wfs_ops.h"
 #include "wfs_recover.h"
 #include "wfs_super.h"
-
-/* Records are read out of the staged block field by field rather than by
- * casting it to a struct: the buffer holds a byte image whose alignment is the
- * staging buffer's, and the on-disk order is little-endian whatever the host
- * is. */
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    return (uint64_t)rd32(p, off) | ((uint64_t)rd32(p, off + 4) << 32);
-}
-
-static uint16_t rd16(const uint8_t* p, uint32_t off) {
-    return (uint16_t)((uint32_t)p[off] | ((uint32_t)p[off + 1] << 8));
-}
 
 int32_t wfs_group_task(void* user, uintptr_t* out_value) {
     wfs_group_ctx_t* ctx = (wfs_group_ctx_t*)user;
@@ -61,7 +45,7 @@ int32_t wfs_group_task(void* user, uintptr_t* out_value) {
         offset = (ctx->group % per_block) * WFS_GROUP_DESC_SIZE;
         d = wfs_block_data(b) + offset;
 
-        if (rd32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum)) !=
+        if (wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, checksum)) !=
             wfs_checksum_struct(ctx->vol->super.uuid,
                                 ctx->group,
                                 d,
@@ -70,12 +54,16 @@ int32_t wfs_group_task(void* user, uintptr_t* out_value) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_CHECKSUM);
         }
 
-        ctx->out.block_bitmap = rd64(d, (uint32_t)offsetof(struct wfs_group_desc, block_bitmap));
-        ctx->out.object_bitmap = rd64(d, (uint32_t)offsetof(struct wfs_group_desc, object_bitmap));
-        ctx->out.object_table = rd64(d, (uint32_t)offsetof(struct wfs_group_desc, object_table));
-        ctx->out.free_blocks = rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_blocks));
-        ctx->out.free_objects = rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_objects));
-        ctx->out.flags = rd32(d, (uint32_t)offsetof(struct wfs_group_desc, flags));
+        ctx->out.block_bitmap =
+            wfs_rd64(d, (uint32_t)offsetof(struct wfs_group_desc, block_bitmap));
+        ctx->out.object_bitmap =
+            wfs_rd64(d, (uint32_t)offsetof(struct wfs_group_desc, object_bitmap));
+        ctx->out.object_table =
+            wfs_rd64(d, (uint32_t)offsetof(struct wfs_group_desc, object_table));
+        ctx->out.free_blocks = wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_blocks));
+        ctx->out.free_objects =
+            wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, free_objects));
+        ctx->out.flags = wfs_rd32(d, (uint32_t)offsetof(struct wfs_group_desc, flags));
 
         /* A descriptor that verifies can still name a block outside the volume,
          * and every allocation in this group would then address it. */
@@ -126,7 +114,7 @@ int32_t wfs_object_task(void* user, uintptr_t* out_value) {
         offset = (ctx->object_id % per_block) * WFS_OBJECT_SIZE;
         d = wfs_block_data(b) + offset;
 
-        if (rd32(d, (uint32_t)offsetof(struct wfs_object, checksum)) !=
+        if (wfs_rd32(d, (uint32_t)offsetof(struct wfs_object, checksum)) !=
             wfs_checksum_struct(ctx->vol->super.uuid,
                                 ctx->object_id,
                                 d,
@@ -136,35 +124,36 @@ int32_t wfs_object_task(void* user, uintptr_t* out_value) {
         }
         /* The record carries its own id, so one read from the wrong slot is
          * caught even where the checksum somehow is not. */
-        if (rd64(d, (uint32_t)offsetof(struct wfs_object, object_id)) != ctx->object_id) {
+        if (wfs_rd64(d, (uint32_t)offsetof(struct wfs_object, object_id)) != ctx->object_id) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
         }
 
         ctx->out.object_id = ctx->object_id;
-        ctx->out.type = rd16(d, (uint32_t)offsetof(struct wfs_object, type));
-        ctx->out.flags = rd16(d, (uint32_t)offsetof(struct wfs_object, flags));
-        ctx->out.mode = rd32(d, (uint32_t)offsetof(struct wfs_object, mode));
-        ctx->out.uid = rd32(d, (uint32_t)offsetof(struct wfs_object, uid));
-        ctx->out.gid = rd32(d, (uint32_t)offsetof(struct wfs_object, gid));
-        ctx->out.size = rd64(d, (uint32_t)offsetof(struct wfs_object, size));
-        ctx->out.atime = rd64(d, (uint32_t)offsetof(struct wfs_object, atime));
-        ctx->out.mtime = rd64(d, (uint32_t)offsetof(struct wfs_object, mtime));
-        ctx->out.ctime = rd64(d, (uint32_t)offsetof(struct wfs_object, ctime));
-        ctx->out.btime = rd64(d, (uint32_t)offsetof(struct wfs_object, btime));
-        ctx->out.link_count = rd32(d, (uint32_t)offsetof(struct wfs_object, link_count));
-        ctx->out.extent_count = rd32(d, (uint32_t)offsetof(struct wfs_object, extent_count));
+        ctx->out.type = wfs_rd16(d, (uint32_t)offsetof(struct wfs_object, type));
+        ctx->out.flags = wfs_rd16(d, (uint32_t)offsetof(struct wfs_object, flags));
+        ctx->out.mode = wfs_rd32(d, (uint32_t)offsetof(struct wfs_object, mode));
+        ctx->out.uid = wfs_rd32(d, (uint32_t)offsetof(struct wfs_object, uid));
+        ctx->out.gid = wfs_rd32(d, (uint32_t)offsetof(struct wfs_object, gid));
+        ctx->out.size = wfs_rd64(d, (uint32_t)offsetof(struct wfs_object, size));
+        ctx->out.atime = wfs_rd64(d, (uint32_t)offsetof(struct wfs_object, atime));
+        ctx->out.mtime = wfs_rd64(d, (uint32_t)offsetof(struct wfs_object, mtime));
+        ctx->out.ctime = wfs_rd64(d, (uint32_t)offsetof(struct wfs_object, ctime));
+        ctx->out.btime = wfs_rd64(d, (uint32_t)offsetof(struct wfs_object, btime));
+        ctx->out.link_count = wfs_rd32(d, (uint32_t)offsetof(struct wfs_object, link_count));
+        ctx->out.extent_count = wfs_rd32(d, (uint32_t)offsetof(struct wfs_object, extent_count));
         ctx->out.extent_tree_block =
-            rd64(d, (uint32_t)offsetof(struct wfs_object, extent_tree_block));
+            wfs_rd64(d, (uint32_t)offsetof(struct wfs_object, extent_tree_block));
 
         for (i = 0; i < WFS_INLINE_EXTENTS; ++i) {
             uint32_t e = (uint32_t)offsetof(struct wfs_object, extents) +
                          i * (uint32_t)sizeof(struct wfs_extent);
 
             ctx->out.extents[i].logical_block =
-                rd64(d, e + (uint32_t)offsetof(struct wfs_extent, logical_block));
+                wfs_rd64(d, e + (uint32_t)offsetof(struct wfs_extent, logical_block));
             ctx->out.extents[i].physical_block =
-                rd64(d, e + (uint32_t)offsetof(struct wfs_extent, physical_block));
-            ctx->out.extents[i].length = rd32(d, e + (uint32_t)offsetof(struct wfs_extent, length));
+                wfs_rd64(d, e + (uint32_t)offsetof(struct wfs_extent, physical_block));
+            ctx->out.extents[i].length =
+                wfs_rd32(d, e + (uint32_t)offsetof(struct wfs_extent, length));
         }
 
         /* An inline-data object stores bytes where extents would be, so a

@@ -5,26 +5,11 @@
 #include "wfs_extent.h"
 
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_ops.h"
-
-/* Records are read out of the staged block field by field rather than by casting
- * it to a struct: the buffer holds a byte image whose alignment is the staging
- * buffer's, and the on-disk order is little-endian whatever the host is. */
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    return (uint64_t)rd32(p, off) | ((uint64_t)rd32(p, off + 4) << 32);
-}
 
 /* No index chosen yet. Distinct from index 0, which is a legitimate choice. */
 #define WFS_NO_INDEX 0xFFFFFFFFu
-
-static uint16_t rd16(const uint8_t* p, uint32_t off) {
-    return (uint16_t)((uint32_t)p[off] | ((uint32_t)p[off + 1] << 8));
-}
 
 /* Record the extent covering `logical`, or leave `found` clear for a hole.
  *
@@ -110,11 +95,11 @@ int32_t wfs_extent_task(void* user, uintptr_t* out_value) {
              * named, and `capacity` is derived from the block size, so a value
              * that disagrees means the node was written by something with a
              * different idea of the layout (§9). */
-            if (rd16(node, (uint32_t)offsetof(struct wfs_extent_header, magic)) !=
+            if (wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, magic)) !=
                 WFS_EXTENT_NODE_MAGIC) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
             }
-            if (rd32(node, (uint32_t)offsetof(struct wfs_extent_header, checksum)) !=
+            if (wfs_rd32(node, (uint32_t)offsetof(struct wfs_extent_header, checksum)) !=
                 wfs_checksum_struct(ctx->vol->super.uuid,
                                     ctx->block,
                                     node,
@@ -123,9 +108,9 @@ int32_t wfs_extent_task(void* user, uintptr_t* out_value) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CHECKSUM);
             }
 
-            depth = rd16(node, (uint32_t)offsetof(struct wfs_extent_header, depth));
-            entries = rd16(node, (uint32_t)offsetof(struct wfs_extent_header, entries));
-            capacity = rd16(node, (uint32_t)offsetof(struct wfs_extent_header, capacity));
+            depth = wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, depth));
+            entries = wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, entries));
+            capacity = wfs_rd16(node, (uint32_t)offsetof(struct wfs_extent_header, capacity));
 
             if (depth == 0u) {
                 if (capacity != wfs_extent_leaf_capacity(ctx->vol->super.block_size) ||
@@ -136,10 +121,11 @@ int32_t wfs_extent_task(void* user, uintptr_t* out_value) {
                     uint32_t e = (uint32_t)sizeof(struct wfs_extent_header) +
                                  i * (uint32_t)sizeof(struct wfs_extent);
                     uint64_t lb =
-                        rd64(node, e + (uint32_t)offsetof(struct wfs_extent, logical_block));
+                        wfs_rd64(node, e + (uint32_t)offsetof(struct wfs_extent, logical_block));
                     uint64_t pb =
-                        rd64(node, e + (uint32_t)offsetof(struct wfs_extent, physical_block));
-                    uint32_t len = rd32(node, e + (uint32_t)offsetof(struct wfs_extent, length));
+                        wfs_rd64(node, e + (uint32_t)offsetof(struct wfs_extent, physical_block));
+                    uint32_t len =
+                        wfs_rd32(node, e + (uint32_t)offsetof(struct wfs_extent, length));
 
                     if (!covers(ctx, lb, len)) {
                         continue;
@@ -174,7 +160,8 @@ int32_t wfs_extent_task(void* user, uintptr_t* out_value) {
             for (i = 0; i < entries; ++i) {
                 slot = (uint32_t)sizeof(struct wfs_extent_header) +
                        i * (uint32_t)sizeof(struct wfs_extent_index);
-                if (rd64(node, slot + (uint32_t)offsetof(struct wfs_extent_index, logical_block)) >
+                if (wfs_rd64(node,
+                             slot + (uint32_t)offsetof(struct wfs_extent_index, logical_block)) >
                     ctx->logical) {
                     break;
                 }
@@ -187,7 +174,7 @@ int32_t wfs_extent_task(void* user, uintptr_t* out_value) {
 
             slot = (uint32_t)sizeof(struct wfs_extent_header) +
                    chosen * (uint32_t)sizeof(struct wfs_extent_index);
-            child = rd64(node, slot + (uint32_t)offsetof(struct wfs_extent_index, child_block));
+            child = wfs_rd64(node, slot + (uint32_t)offsetof(struct wfs_extent_index, child_block));
             if (child == 0u || child >= ctx->vol->super.total_blocks) {
                 WFS_FAIL(ctx, WASMOS_ERR_FS_CORRUPT);
             }

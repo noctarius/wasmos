@@ -4,44 +4,13 @@
 #include <stddef.h>
 
 #include "wfs_crc32c.h"
-
-static uint32_t rd16(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8);
-}
-
-static void wr16(uint8_t* p, uint32_t off, uint16_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    uint64_t v = 0;
-    uint32_t i;
-
-    for (i = 0; i < 8u; ++i) {
-        v |= (uint64_t)p[off + i] << (i * 8u);
-    }
-    return v;
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    uint32_t i;
-
-    for (i = 0; i < 8u; ++i) {
-        p[off + i] = (uint8_t)((v >> (i * 8u)) & 0xFFu);
-    }
-}
-
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    wr16(p, off, (uint16_t)(v & 0xFFFFu));
-    wr16(p, off + 2u, (uint16_t)((v >> 16) & 0xFFFFu));
-}
+#include "wfs_endian.h"
 
 /* Bytes a record genuinely occupies, as opposed to the stride it claims. Zero for
  * free space: a record whose object_id or name_length is 0 holds nothing, so all
  * of its stride is available (§10). */
 static uint32_t record_used(const uint8_t* block, uint32_t off) {
-    uint64_t id = rd64(block, off);
+    uint64_t id = wfs_rd64(block, off);
     uint32_t name_length = block[off + 10u];
 
     if (id == 0u || name_length == 0u) {
@@ -59,7 +28,7 @@ wasmos_error_code_t wfs_dirent_validate(const uint8_t* block, uint32_t block_siz
     }
     usable = wfs_dir_usable_bytes(block_size);
     while (off + WFS_DIR_ENTRY_HEADER <= usable) {
-        uint32_t len = rd16(block, off + 8u);
+        uint32_t len = wfs_rd16(block, off + 8u);
         uint32_t name_length = block[off + 10u];
 
         /* The stride is checked before it is used. Zero above all: a scan would
@@ -84,8 +53,8 @@ void wfs_dirent_seal(uint8_t* block, uint32_t block_size, const uint8_t* uuid, u
         return;
     }
     at = wfs_dir_usable_bytes(block_size) + (uint32_t)offsetof(struct wfs_dir_tail, checksum);
-    wr32(block, at, 0u);
-    wr32(block, at, wfs_checksum_struct(uuid, location, block, block_size, at));
+    wfs_wr32(block, at, 0u);
+    wfs_wr32(block, at, wfs_checksum_struct(uuid, location, block, block_size, at));
 }
 
 int32_t wfs_dirent_find(const uint8_t* block, uint32_t block_size, const char* name,
@@ -98,13 +67,13 @@ int32_t wfs_dirent_find(const uint8_t* block, uint32_t block_size, const char* n
     }
     usable = wfs_dir_usable_bytes(block_size);
     while (off + WFS_DIR_ENTRY_HEADER <= usable) {
-        uint32_t len = rd16(block, off + 8u);
+        uint32_t len = wfs_rd16(block, off + 8u);
         uint32_t nl = block[off + 10u];
 
         if (len < WFS_DIR_RECORD_MIN || (len & 7u) != 0u || off + len > usable) {
             return -1;
         }
-        if (rd64(block, off) != 0u && nl == name_len) {
+        if (wfs_rd64(block, off) != 0u && nl == name_len) {
             uint32_t i;
             uint32_t same = 1u;
 
@@ -137,10 +106,10 @@ void wfs_dirent_init_block(uint8_t* block, uint32_t block_size, const uint8_t* u
     }
     /* One free record spanning everything before the tail. object_id 0 already
      * marks it free; what a zeroed block lacks is the STRIDE. */
-    wr16(block, 8u, (uint16_t)usable);
+    wfs_wr16(block, 8u, (uint16_t)usable);
     /* And the tail, laid out as a record so a scan skips it under the free-space
      * rule rather than needing to know about it. */
-    wr16(block, usable + 8u, (uint16_t)WFS_DIR_TAIL_SIZE);
+    wfs_wr16(block, usable + 8u, (uint16_t)WFS_DIR_TAIL_SIZE);
     block[usable + 11u] = (uint8_t)WFS_DIR_TAIL_TYPE;
     wfs_dirent_seal(block, block_size, uuid, location);
 }
@@ -176,7 +145,7 @@ wasmos_error_code_t wfs_dirent_insert(uint8_t* block, uint32_t block_size, const
     need = wfs_dir_record_length(name_len);
 
     while (off + WFS_DIR_ENTRY_HEADER <= usable) {
-        uint32_t len = rd16(block, off + 8u);
+        uint32_t len = wfs_rd16(block, off + 8u);
         uint32_t used = record_used(block, off);
         uint32_t avail = len - used;
 
@@ -191,16 +160,16 @@ wasmos_error_code_t wfs_dirent_insert(uint8_t* block, uint32_t block_size, const
                 /* Leave the remainder as a free record rather than padding this
                  * one, so the space stays reusable. */
                 take = need;
-                wr64(block, at + take, 0u);
-                wr16(block, at + take + 8u, (uint16_t)(avail - need));
+                wfs_wr64(block, at + take, 0u);
+                wfs_wr16(block, at + take + 8u, (uint16_t)(avail - need));
                 block[at + take + 10u] = 0u;
                 block[at + take + 11u] = 0u;
             }
             if (used != 0u) {
-                wr16(block, off + 8u, (uint16_t)used);
+                wfs_wr16(block, off + 8u, (uint16_t)used);
             }
-            wr64(block, at, (uint64_t)object_id);
-            wr16(block, at + 8u, (uint16_t)take);
+            wfs_wr64(block, at, (uint64_t)object_id);
+            wfs_wr16(block, at + 8u, (uint16_t)take);
             block[at + 10u] = (uint8_t)name_len;
             block[at + 11u] = type;
             for (uint32_t i = 0; i < name_len; ++i) {
@@ -228,7 +197,7 @@ static void merge_free(uint8_t* block, uint32_t block_size) {
     uint32_t off = 0u;
 
     while (off + WFS_DIR_ENTRY_HEADER <= usable) {
-        uint32_t len = rd16(block, off + 8u);
+        uint32_t len = wfs_rd16(block, off + 8u);
 
         if (record_used(block, off) == 0u) {
             /* Absorb every free record that follows, stopping at the first used
@@ -236,7 +205,7 @@ static void merge_free(uint8_t* block, uint32_t block_size) {
             uint32_t next = off + len;
 
             while (next + WFS_DIR_ENTRY_HEADER <= usable && record_used(block, next) == 0u) {
-                uint32_t nlen = rd16(block, next + 8u);
+                uint32_t nlen = wfs_rd16(block, next + 8u);
 
                 if (nlen < WFS_DIR_RECORD_MIN || (nlen & 7u) != 0u || next + nlen > usable) {
                     break;
@@ -244,8 +213,8 @@ static void merge_free(uint8_t* block, uint32_t block_size) {
                 len += nlen;
                 next += nlen;
             }
-            wr64(block, off, 0u);
-            wr16(block, off + 8u, (uint16_t)len);
+            wfs_wr64(block, off, 0u);
+            wfs_wr16(block, off + 8u, (uint16_t)len);
             block[off + 10u] = 0u;
             block[off + 11u] = 0u;
         }
@@ -271,7 +240,7 @@ wasmos_error_code_t wfs_dirent_remove(uint8_t* block, uint32_t block_size, const
     }
     /* Free space is object_id 0 with no name; the stride stays, so the chain is
      * unbroken between marking and merging. */
-    wr64(block, (uint32_t)at, 0u);
+    wfs_wr64(block, (uint32_t)at, 0u);
     block[(uint32_t)at + 10u] = 0u;
     block[(uint32_t)at + 11u] = 0u;
     merge_free(block, block_size);

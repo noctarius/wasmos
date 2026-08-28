@@ -1,5 +1,6 @@
 /* wfs_truncate.c - set an object's size (§16). */
 #include "wfs_truncate.h"
+#include "wfs_endian.h"
 #include "wfs_extent.h"
 #include "wfs_extent_write.h"
 
@@ -10,23 +11,6 @@
 #include "wfs_crc32c.h"
 #include "wfs_ops.h"
 #include "wfs_sync.h"
-
-static void wr16(uint8_t* p, uint32_t off, uint16_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-}
-
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-    p[off + 2] = (uint8_t)((v >> 16) & 0xFFu);
-    p[off + 3] = (uint8_t)((v >> 24) & 0xFFu);
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
-    wr32(p, off + 4u, (uint32_t)((v >> 32) & 0xFFFFFFFFu));
-}
 
 void wfs_truncate_init(wfs_trunc_ctx_t* ctx, wfs_volume_t* vol, uint32_t object_id,
                        const struct wfs_object* obj, const uint8_t* inline_data, uint64_t new_size,
@@ -372,18 +356,18 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                 (ctx->object_id % wfs_objects_per_block(ctx->vol->super.block_size)) *
                     WFS_OBJECT_SIZE;
 
-            wr64(d, (uint32_t)offsetof(struct wfs_object, size), ctx->obj.size);
-            wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), ctx->obj.extent_count);
+            wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, size), ctx->obj.size);
+            wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, extent_count), ctx->obj.extent_count);
             /* Written because a trim can CLEAR it: a leaf emptied by the trim is
              * released, and a record still naming it would send the next reader
              * to a freed block. */
-            wr64(d,
-                 (uint32_t)offsetof(struct wfs_object, extent_tree_block),
-                 ctx->obj.extent_tree_block);
-            wr16(d, (uint32_t)offsetof(struct wfs_object, flags), ctx->obj.flags);
+            wfs_wr64(d,
+                     (uint32_t)offsetof(struct wfs_object, extent_tree_block),
+                     ctx->obj.extent_tree_block);
+            wfs_wr16(d, (uint32_t)offsetof(struct wfs_object, flags), ctx->obj.flags);
             if (ctx->now_ns != 0u) {
-                wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), ctx->now_ns);
-                wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), ctx->now_ns);
+                wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, mtime), ctx->now_ns);
+                wfs_wr64(d, (uint32_t)offsetof(struct wfs_object, ctime), ctx->now_ns);
             }
             if (ctx->obj.flags & WFS_OBJ_INLINE_DATA) {
                 for (i = 0; i < WFS_INLINE_DATA_MAX; ++i) {
@@ -394,20 +378,20 @@ int32_t wfs_truncate_task(void* user, uintptr_t* out_value) {
                     uint32_t e = (uint32_t)offsetof(struct wfs_object, extents) +
                                  i * (uint32_t)sizeof(struct wfs_extent);
 
-                    wr64(d, e + 0u, ctx->obj.extents[i].logical_block);
-                    wr64(d, e + 8u, ctx->obj.extents[i].physical_block);
-                    wr32(d, e + 16u, ctx->obj.extents[i].length);
-                    wr32(d, e + 20u, 0u);
+                    wfs_wr64(d, e + 0u, ctx->obj.extents[i].logical_block);
+                    wfs_wr64(d, e + 8u, ctx->obj.extents[i].physical_block);
+                    wfs_wr32(d, e + 16u, ctx->obj.extents[i].length);
+                    wfs_wr32(d, e + 20u, 0u);
                 }
             }
-            wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
-            wr32(d,
-                 (uint32_t)offsetof(struct wfs_object, checksum),
-                 wfs_checksum_struct(ctx->vol->super.uuid,
-                                     ctx->object_id,
-                                     d,
-                                     WFS_OBJECT_SIZE,
-                                     (uint32_t)offsetof(struct wfs_object, checksum)));
+            wfs_wr32(d, (uint32_t)offsetof(struct wfs_object, checksum), 0u);
+            wfs_wr32(d,
+                     (uint32_t)offsetof(struct wfs_object, checksum),
+                     wfs_checksum_struct(ctx->vol->super.uuid,
+                                         ctx->object_id,
+                                         d,
+                                         WFS_OBJECT_SIZE,
+                                         (uint32_t)offsetof(struct wfs_object, checksum)));
             WFS_AWAIT(
                 ctx, wfs_block_write_begin(b, ctx->record_block), WFS_TRUNC_PC_RECORD_WRITTEN);
             /* fall through */

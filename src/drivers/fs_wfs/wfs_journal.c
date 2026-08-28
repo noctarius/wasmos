@@ -5,35 +5,8 @@
 
 #include "wfs_block.h"
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_ops.h"
-
-/* On-disk fields are little-endian whatever the host is, and the staged block is
- * a byte image whose alignment is the staging buffer's, so fields are assembled
- * byte-wise rather than cast over.
- *
- * TODO: rd32/rd64/wr32/wr64 are duplicated across wfs_mount.c, wfs_alloc.c,
- * wfs_dir.c, wfs_extent.c, wfs_super.c and here. A shared header would hold one
- * copy, at the cost of touching every one of those files. */
-static uint32_t rd32(const uint8_t* p, uint32_t off) {
-    return (uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) |
-           ((uint32_t)p[off + 3] << 24);
-}
-
-static uint64_t rd64(const uint8_t* p, uint32_t off) {
-    return (uint64_t)rd32(p, off) | ((uint64_t)rd32(p, off + 4) << 32);
-}
-
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-    p[off + 2] = (uint8_t)((v >> 16) & 0xFFu);
-    p[off + 3] = (uint8_t)((v >> 24) & 0xFFu);
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
-    wr32(p, off + 4, (uint32_t)(v >> 32));
-}
 
 static void zero(uint8_t* p, uint32_t len) {
     uint32_t i;
@@ -49,16 +22,17 @@ static void zero(uint8_t* p, uint32_t len) {
 
 void wfs_journal_seal(const uint8_t uuid[WFS_UUID_LEN], uint32_t block, uint8_t* image,
                       uint32_t block_size) {
-    wr32(image, JH_CHECKSUM, 0u);
-    wr32(image, JH_CHECKSUM, wfs_checksum_struct(uuid, block, image, block_size, JH_CHECKSUM));
+    wfs_wr32(image, JH_CHECKSUM, 0u);
+    wfs_wr32(image, JH_CHECKSUM, wfs_checksum_struct(uuid, block, image, block_size, JH_CHECKSUM));
 }
 
 int wfs_journal_verify(const uint8_t uuid[WFS_UUID_LEN], uint32_t block, const uint8_t* image,
                        uint32_t block_size) {
-    if (rd32(image, (uint32_t)offsetof(struct wfs_journal_header, magic)) != WFS_JOURNAL_MAGIC) {
+    if (wfs_rd32(image, (uint32_t)offsetof(struct wfs_journal_header, magic)) !=
+        WFS_JOURNAL_MAGIC) {
         return 0;
     }
-    return rd32(image, JH_CHECKSUM) ==
+    return wfs_rd32(image, JH_CHECKSUM) ==
            wfs_checksum_struct(uuid, block, image, block_size, JH_CHECKSUM);
 }
 
@@ -138,14 +112,14 @@ int32_t wfs_journal_load_task(void* user, uintptr_t* out_value) {
         j = &ctx->vol->journal;
         d = wfs_block_data(b);
 
-        if (rd32(d, (uint32_t)offsetof(struct wfs_journal_super, magic)) != WFS_JOURNAL_MAGIC ||
-            rd32(d, (uint32_t)offsetof(struct wfs_journal_super, version)) != WFS_VERSION) {
+        if (wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_super, magic)) != WFS_JOURNAL_MAGIC ||
+            wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_super, version)) != WFS_VERSION) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_JOURNAL);
         }
         /* The journal superblock is sealed over its 32 bytes alone, seeded with
          * its own block number -- the log blocks behind it are sealed over the
          * whole block instead, because their payload follows the header. */
-        if (rd32(d, (uint32_t)offsetof(struct wfs_journal_super, checksum)) !=
+        if (wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_super, checksum)) !=
             wfs_checksum_struct(ctx->vol->super.uuid,
                                 ctx->vol->super.journal_start,
                                 d,
@@ -153,13 +127,13 @@ int32_t wfs_journal_load_task(void* user, uintptr_t* out_value) {
                                 (uint32_t)offsetof(struct wfs_journal_super, checksum))) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_JOURNAL);
         }
-        if (rd32(d, (uint32_t)offsetof(struct wfs_journal_super, block_size)) !=
+        if (wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_super, block_size)) !=
             ctx->vol->super.block_size) {
             WFS_FAIL(ctx, WASMOS_ERR_FS_JOURNAL);
         }
 
-        blocks = rd32(d, (uint32_t)offsetof(struct wfs_journal_super, blocks));
-        first_block = rd32(d, (uint32_t)offsetof(struct wfs_journal_super, first_block));
+        blocks = wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_super, blocks));
+        first_block = wfs_rd32(d, (uint32_t)offsetof(struct wfs_journal_super, first_block));
 
         /* A log the superblock and its own header disagree about is not a log
          * this driver can transact in. */
@@ -181,7 +155,8 @@ int32_t wfs_journal_load_task(void* user, uintptr_t* out_value) {
 
         j->start = ctx->vol->super.journal_start;
         j->blocks = blocks;
-        j->next_sequence = rd64(d, (uint32_t)offsetof(struct wfs_journal_super, first_sequence));
+        j->next_sequence =
+            wfs_rd64(d, (uint32_t)offsetof(struct wfs_journal_super, first_sequence));
         j->open = 0u;
         j->target_count = 0u;
         j->revoke_count = 0u;
@@ -197,23 +172,24 @@ void wfs_journal_build_super(const wfs_volume_t* vol, uint8_t* image, uint64_t f
     const wfs_journal_t* j = &vol->journal;
 
     zero(image, vol->super.block_size);
-    wr32(image, (uint32_t)offsetof(struct wfs_journal_super, magic), WFS_JOURNAL_MAGIC);
-    wr32(image, (uint32_t)offsetof(struct wfs_journal_super, version), WFS_VERSION);
-    wr32(image, (uint32_t)offsetof(struct wfs_journal_super, block_size), vol->super.block_size);
-    wr32(image, (uint32_t)offsetof(struct wfs_journal_super, blocks), j->blocks);
-    wr64(image, (uint32_t)offsetof(struct wfs_journal_super, first_sequence), first_sequence);
-    wr32(
+    wfs_wr32(image, (uint32_t)offsetof(struct wfs_journal_super, magic), WFS_JOURNAL_MAGIC);
+    wfs_wr32(image, (uint32_t)offsetof(struct wfs_journal_super, version), WFS_VERSION);
+    wfs_wr32(
+        image, (uint32_t)offsetof(struct wfs_journal_super, block_size), vol->super.block_size);
+    wfs_wr32(image, (uint32_t)offsetof(struct wfs_journal_super, blocks), j->blocks);
+    wfs_wr64(image, (uint32_t)offsetof(struct wfs_journal_super, first_sequence), first_sequence);
+    wfs_wr32(
         image, (uint32_t)offsetof(struct wfs_journal_super, first_block), WFS_TXN_DESCRIPTOR_BLOCK);
     /* Sealed over the 32-byte record alone, seeded with its own block number --
      * unlike a log block, whose payload follows its header and whose seal
      * therefore covers the whole block. */
-    wr32(image,
-         (uint32_t)offsetof(struct wfs_journal_super, checksum),
-         wfs_checksum_struct(vol->super.uuid,
-                             j->start,
-                             image,
-                             (uint32_t)sizeof(struct wfs_journal_super),
-                             (uint32_t)offsetof(struct wfs_journal_super, checksum)));
+    wfs_wr32(image,
+             (uint32_t)offsetof(struct wfs_journal_super, checksum),
+             wfs_checksum_struct(vol->super.uuid,
+                                 j->start,
+                                 image,
+                                 (uint32_t)sizeof(struct wfs_journal_super),
+                                 (uint32_t)offsetof(struct wfs_journal_super, checksum)));
 }
 
 /* ---- transaction lifetime ------------------------------------------------ */
@@ -363,9 +339,9 @@ int32_t wfs_txn_stage_task(void* user, uintptr_t* out_value) {
  * The caller fills the payload and seals. */
 static void begin_log_block(uint8_t* d, uint32_t block_size, uint32_t type, uint64_t sequence) {
     zero(d, block_size);
-    wr32(d, (uint32_t)offsetof(struct wfs_journal_header, magic), WFS_JOURNAL_MAGIC);
-    wr32(d, (uint32_t)offsetof(struct wfs_journal_header, type), type);
-    wr64(d, (uint32_t)offsetof(struct wfs_journal_header, sequence), sequence);
+    wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_header, magic), WFS_JOURNAL_MAGIC);
+    wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_header, type), type);
+    wfs_wr64(d, (uint32_t)offsetof(struct wfs_journal_header, sequence), sequence);
 }
 
 int32_t wfs_txn_commit_task(void* user, uintptr_t* out_value) {
@@ -415,15 +391,15 @@ int32_t wfs_txn_commit_task(void* user, uintptr_t* out_value) {
         for (i = 0; i < j->target_count; ++i) {
             uint32_t rec = off + i * (uint32_t)sizeof(struct wfs_journal_target);
 
-            wr64(d,
-                 rec + (uint32_t)offsetof(struct wfs_journal_target, target_block),
-                 (uint64_t)j->targets[i].target);
-            wr32(d,
-                 rec + (uint32_t)offsetof(struct wfs_journal_target, flags),
-                 i + 1u == j->target_count ? (uint32_t)WFS_JOURNAL_TARGET_LAST : 0u);
-            wr32(d,
-                 rec + (uint32_t)offsetof(struct wfs_journal_target, checksum),
-                 j->targets[i].checksum);
+            wfs_wr64(d,
+                     rec + (uint32_t)offsetof(struct wfs_journal_target, target_block),
+                     (uint64_t)j->targets[i].target);
+            wfs_wr32(d,
+                     rec + (uint32_t)offsetof(struct wfs_journal_target, flags),
+                     i + 1u == j->target_count ? (uint32_t)WFS_JOURNAL_TARGET_LAST : 0u);
+            wfs_wr32(d,
+                     rec + (uint32_t)offsetof(struct wfs_journal_target, checksum),
+                     j->targets[i].checksum);
         }
         wfs_journal_seal(ctx->vol->super.uuid, descriptor_block(j), d, ctx->vol->super.block_size);
         WFS_AWAIT(ctx, wfs_block_write_begin(b, descriptor_block(j)), WFS_TXCOMMIT_PC_DESC_WRITTEN);
@@ -448,9 +424,9 @@ int32_t wfs_txn_commit_task(void* user, uintptr_t* out_value) {
             wfs_txn_abort(ctx->vol);
             WFS_FAIL(ctx, WASMOS_ERR_FS_TXN_FULL);
         }
-        wr32(d, (uint32_t)offsetof(struct wfs_journal_revoke, count), j->revoke_count);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_revoke, count), j->revoke_count);
         for (i = 0; i < j->revoke_count; ++i) {
-            wr64(d, off + i * 8u, (uint64_t)j->revokes[i]);
+            wfs_wr64(d, off + i * 8u, (uint64_t)j->revokes[i]);
         }
         wfs_journal_seal(ctx->vol->super.uuid, revoke_block(j), d, ctx->vol->super.block_size);
         WFS_AWAIT(ctx, wfs_block_write_begin(b, revoke_block(j)), WFS_TXCOMMIT_PC_REVOKE_WRITTEN);
@@ -470,7 +446,7 @@ int32_t wfs_txn_commit_task(void* user, uintptr_t* out_value) {
          * claimed before any image is applied. */
         d = wfs_block_data(b);
         begin_log_block(d, ctx->vol->super.block_size, WFS_JOURNAL_COMMIT, j->sequence);
-        wr32(d, (uint32_t)offsetof(struct wfs_journal_commit, target_count), j->target_count);
+        wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_commit, target_count), j->target_count);
         wfs_journal_seal(ctx->vol->super.uuid, commit_block(j), d, ctx->vol->super.block_size);
         WFS_AWAIT(ctx, wfs_block_write_begin(b, commit_block(j)), WFS_TXCOMMIT_PC_COMMIT_WRITTEN);
         /* fall through */

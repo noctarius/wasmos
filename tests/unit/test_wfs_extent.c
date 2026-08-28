@@ -18,6 +18,7 @@
 #include "stubs_wfs_block_server.h"
 #include "wasmos_status.h"
 #include "wfs_crc32c.h"
+#include "wfs_endian.h"
 #include "wfs_extent.h"
 #include "wfs_format.h"
 #include "wfs_types.h"
@@ -56,23 +57,6 @@ static wfs_volume_t g_vol;
 
 /* ---- writing nodes into the image --------------------------------------- */
 
-static void wr16(uint8_t* p, uint32_t off, uint16_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-}
-
-static void wr32(uint8_t* p, uint32_t off, uint32_t v) {
-    p[off] = (uint8_t)(v & 0xFFu);
-    p[off + 1] = (uint8_t)((v >> 8) & 0xFFu);
-    p[off + 2] = (uint8_t)((v >> 16) & 0xFFu);
-    p[off + 3] = (uint8_t)((v >> 24) & 0xFFu);
-}
-
-static void wr64(uint8_t* p, uint32_t off, uint64_t v) {
-    wr32(p, off, (uint32_t)(v & 0xFFFFFFFFu));
-    wr32(p, off + 4u, (uint32_t)(v >> 32));
-}
-
 static uint8_t* image_block(uint32_t block) {
     return wfs_stub_image + (size_t)block * wfs_stub_block_size;
 }
@@ -83,18 +67,18 @@ static void seal_node(uint32_t block) {
     uint8_t* n = image_block(block);
     uint32_t off = (uint32_t)offsetof(struct wfs_extent_header, checksum);
 
-    wr32(n, off, 0u);
-    wr32(n, off, wfs_checksum_struct(k_uuid, block, n, wfs_stub_block_size, off));
+    wfs_wr32(n, off, 0u);
+    wfs_wr32(n, off, wfs_checksum_struct(k_uuid, block, n, wfs_stub_block_size, off));
 }
 
 static void write_header(uint32_t block, uint16_t depth, uint16_t entries, uint16_t capacity) {
     uint8_t* n = image_block(block);
 
     memset(n, 0, wfs_stub_block_size);
-    wr16(n, (uint32_t)offsetof(struct wfs_extent_header, magic), WFS_EXTENT_NODE_MAGIC);
-    wr16(n, (uint32_t)offsetof(struct wfs_extent_header, depth), depth);
-    wr16(n, (uint32_t)offsetof(struct wfs_extent_header, entries), entries);
-    wr16(n, (uint32_t)offsetof(struct wfs_extent_header, capacity), capacity);
+    wfs_wr16(n, (uint32_t)offsetof(struct wfs_extent_header, magic), WFS_EXTENT_NODE_MAGIC);
+    wfs_wr16(n, (uint32_t)offsetof(struct wfs_extent_header, depth), depth);
+    wfs_wr16(n, (uint32_t)offsetof(struct wfs_extent_header, entries), entries);
+    wfs_wr16(n, (uint32_t)offsetof(struct wfs_extent_header, capacity), capacity);
 }
 
 static void write_leaf_extent(uint32_t block, uint32_t slot, uint64_t logical, uint64_t physical,
@@ -102,17 +86,17 @@ static void write_leaf_extent(uint32_t block, uint32_t slot, uint64_t logical, u
     uint8_t* n = image_block(block) + sizeof(struct wfs_extent_header) +
                  (size_t)slot * sizeof(struct wfs_extent);
 
-    wr64(n, (uint32_t)offsetof(struct wfs_extent, logical_block), logical);
-    wr64(n, (uint32_t)offsetof(struct wfs_extent, physical_block), physical);
-    wr32(n, (uint32_t)offsetof(struct wfs_extent, length), length);
+    wfs_wr64(n, (uint32_t)offsetof(struct wfs_extent, logical_block), logical);
+    wfs_wr64(n, (uint32_t)offsetof(struct wfs_extent, physical_block), physical);
+    wfs_wr32(n, (uint32_t)offsetof(struct wfs_extent, length), length);
 }
 
 static void write_index(uint32_t block, uint32_t slot, uint64_t logical, uint64_t child) {
     uint8_t* n = image_block(block) + sizeof(struct wfs_extent_header) +
                  (size_t)slot * sizeof(struct wfs_extent_index);
 
-    wr64(n, (uint32_t)offsetof(struct wfs_extent_index, logical_block), logical);
-    wr64(n, (uint32_t)offsetof(struct wfs_extent_index, child_block), child);
+    wfs_wr64(n, (uint32_t)offsetof(struct wfs_extent_index, logical_block), logical);
+    wfs_wr64(n, (uint32_t)offsetof(struct wfs_extent_index, child_block), child);
 }
 
 static uint32_t leaf_cap(void) {
@@ -401,7 +385,7 @@ static void test_a_node_that_is_not_a_node_is_refused(void) {
     write_header(root, 0u, 1u, (uint16_t)leaf_cap());
     write_leaf_extent(root, 0u, 0u, 300u, 1u);
     /* Magic distinguishes a node from a data block a corrupt pointer named. */
-    wr16(image_block(root), (uint32_t)offsetof(struct wfs_extent_header, magic), 0x1234u);
+    wfs_wr16(image_block(root), (uint32_t)offsetof(struct wfs_extent_header, magic), 0x1234u);
     seal_node(root);
 
     memset(&obj, 0, sizeof(obj));

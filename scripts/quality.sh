@@ -585,7 +585,25 @@ PY
         printf '           cmake --build %q --target wasmos_tidy_plugin\n' "$build_dir" >&2
     fi
 
-    "$clang_tidy" "${load_args[@]}" -p "$tidy_db" --quiet "${tidy[@]}"
+    # Diagnose headers under the SAME roots the file allowlist uses, anchored at
+    # the repository root so the two cannot disagree.
+    #
+    # .clang-tidy's HeaderFilterRegex is unanchored and cannot be otherwise --
+    # it has no repository root to anchor to, and clang-tidy's regex engine is
+    # POSIX ERE with no negative lookahead to exclude a subtree with. Unanchored,
+    # "/(src|tests|...)/"  matches any vendored path that happens to contain such
+    # a component, and libs/lwip/src/include/... does: lwip's headers were being
+    # diagnosed through every first-party translation unit that includes them.
+    # Computing the filter here is what makes "only these roots" true rather than
+    # approximately true.
+    local header_filter
+    header_filter="^$(printf '%s' "$repo_root" | sed 's/[][\\.*^$+?(){}|]/\\&/g')/($(
+        IFS='|'
+        printf '%s' "${allowed_roots[*]}"
+    ))/"
+
+    "$clang_tidy" "${load_args[@]}" -p "$tidy_db" --quiet \
+        --header-filter="$header_filter" "${tidy[@]}"
 }
 
 run_go_lint() {

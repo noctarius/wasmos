@@ -16,9 +16,20 @@ Checks: >
   -bugprone-branch-clone,
   -bugprone-multi-level-implicit-pointer-conversion,
   wasmos-standalone-block
-# Only diagnose headers inside our own source tree; vendored libs/ headers
-# (wasm3, warp) are pulled in via -I but must not be linted or modified.
+# Only diagnose headers inside our own source tree; vendored and out-of-tree
+# headers are pulled in via -I but must not be linted or modified.
+#
+# This pattern is UNANCHORED and cannot be otherwise: a .clang-tidy file has no
+# repository root to anchor to, and clang-tidy's regex engine is POSIX ERE with
+# no negative lookahead to exclude a subtree with. Unanchored it matches any
+# vendored path that merely CONTAINS such a component, and one does --
+# libs/lwip/src/include/... -- so the exclusion below is what actually keeps
+# vendored headers out. scripts/quality.sh overrides the filter with an anchored
+# one built from its own allowlist, so the gate does not depend on this pair
+# staying in step; these two lines are what a direct or IDE-driven clang-tidy
+# gets.
 HeaderFilterRegex: '/(src|tests|examples|scripts)/'
+ExcludeHeaderFilterRegex: '/(libs|others|node_modules|userfs|tools)/'
 # wasmos-standalone-block is enforced as a hard error (fails lint); the
 # analyzer/bugprone findings above stay advisory. The check comes from the
 # wasmos clang-tidy plugin (tools/clang_tidy_wasmos), loaded via --load.

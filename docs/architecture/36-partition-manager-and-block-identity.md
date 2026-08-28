@@ -338,6 +338,28 @@ The manager is an **async service** (`entry = "async_initialize"`), not a
 drain-and-select loop: the runner polls only when the root task parks, so there
 is no coroutine per request.
 
+#### Why it is a driver and not a service
+
+It reads like a service — it touches no hardware, mediates between others, and is
+called a manager. It ships as `kind = "driver"` in `src/drivers/` anyway, and the
+reason is not naming.
+
+`kind` sets the scheduler band: `SCHED_PRIO_DRIVER` is 1, `SCHED_PRIO_SERVICE`
+is 2, and lower is higher (`src/kernel/include/sched.h`). The partition manager
+sits IN the block I/O path — every filesystem read becomes fs-driver → partition
+manager → block driver. `fs_fat` is a driver, so a service-band proxy underneath
+it would put a priority inversion in the middle of the storage path, which is
+precisely what the bands exist to prevent.
+
+`fs_fat` also settles the "touches no hardware" objection by precedent: it
+touches none either, reaches its disk over IPC, serves clients, and is a driver
+because of where it sits rather than what it drives.
+
+Publishing virtual devices points the same way. It registers `block` class
+instances, and a consumer cannot tell one of its partitions from a real disk —
+that is the whole design. Something that registers as a block provider belongs in
+the band block providers run in.
+
 #### Zig surface
 
 `src/libc/zig/driver.zig` already covers `ipc_create_endpoint`, the select set,

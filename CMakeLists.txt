@@ -3243,6 +3243,25 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
       COMMENT "Running WASM Zig coroutine wrapper unit tests"
       VERBATIM)
   endif ()
+  if (ZIG_AVAILABLE)
+    # The GPT/MBR parser. Pure Zig with no C sources and no imports beyond the
+    # module under test, because it does no I/O: every case builds a sector image
+    # in memory. The NATIVE_COROUTINE_ZIG_* variables are misnamed for this use —
+    # they are the host target and link flags `zig test` needs on this platform,
+    # not anything coroutine-specific — but reusing them keeps one definition of
+    # "how to run a Zig host test" rather than a second copy that can drift.
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-partition-table-cache
+              --global-cache-dir ${BUILD_DIR}/zig-partition-table-global-cache
+              --dep partition_table
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_partition_table.zig
+              -Mpartition_table=${DRIVER_WASM_DIR}/partition_manager/partition_table.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running partition-table parser unit tests"
+      VERBATIM)
+  endif ()
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
     COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
             -I${LIBSYS_WASM_DIR}/include

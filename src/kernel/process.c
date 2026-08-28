@@ -2282,15 +2282,14 @@ static int process_schedule_once_impl(void) {
          * same pick. Either way it is the reap race this file already treats as
          * normal.
          *
-         * What has ALREADY been touched, and what an earlier comment here denied:
-         * cpu_sched_pick_next (or cpu_sched_steal_pick) unlinked this thread
-         * under the queue lock and released its on_rq before returning it, so its
-         * place in the run queue is gone. Only the SLOT claim is untaken. This
-         * exit therefore drops a thread that is off every queue and does not
-         * re-enqueue it -- benign for a slot being torn down, and a permanent
-         * strand for a live thread whose dispatch_ref merely lost a race it could
-         * lose again. Counted so that reading "no strand came from here" means
-         * something. */
+         * What has ALREADY been touched: cpu_sched_pick_next (or
+         * cpu_sched_steal_pick) unlinked this thread under the queue lock and
+         * released its on_rq before returning it, so its place in the run queue
+         * is gone. Only the SLOT claim is untaken. Returning without accounting
+         * for the lost place strands a live thread permanently -- READY, on no
+         * queue, owed nothing, so no sweep can find it -- which is why this exit
+         * leaves a debt below. Counted as well, so that reading "no strand came
+         * from here" means something. */
         uint32_t dn = sched_debug_note(SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST);
         if ((dn & (dn - 1u)) == 0u) {
             serial_printf("[sched] slot claim lost tid=%u owner=%u state=%u ref=%u cpu=%u "
@@ -2301,6 +2300,13 @@ static int process_schedule_once_impl(void) {
                           (unsigned)slot_claim,
                           (unsigned)cpu_local()->cpu_id,
                           (unsigned)(dn + 1u));
+        }
+        /* Hand the enqueue this pick consumed to whoever can honour it. Only for
+         * a claim held by another DISPATCH: a FROZEN slot is thread_reset_slot
+         * mid-teardown, whose thread is meant to end unqueued and whose debts it
+         * discards anyway. */
+        if (slot_claim == THREAD_SLOT_DISPATCH) {
+            sched_owe_enqueue_for_dropped_pick(thread);
         }
         return SCHED_R_STALE;
     }

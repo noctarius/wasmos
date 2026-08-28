@@ -161,6 +161,17 @@ void sched_settle_deferred_enqueue(struct thread* t);
  * runnable thread sits on no run queue. */
 void sched_sweep_owed_enqueues(void);
 
+/* Leave an owed-enqueue claim for a READY thread that a picker unlinked and the
+ * caller could not dispatch, having lost the dispatch_ref CAS to the CPU that
+ * holds the slot.  The pick released on_rq, so the claim is the only thing that
+ * keeps the thread findable -- by the holder, or by sched_sweep_owed_enqueues.
+ * Publishes the debt WITHOUT linking: the holder is still writing that thread's
+ * context and a queued thread can be dispatched out from under it.
+ *
+ * Pair with the dispatch claim in process_schedule_once_impl: a lost claim owes
+ * an enqueue, a won one performs it. */
+void sched_owe_enqueue_for_dropped_pick(struct thread* t);
+
 /* Drop any outstanding owed-enqueue claim on `t` WITHOUT enqueuing it, and
  * subtract its debt.  For a slot being released to the allocator
  * (thread_reset_slot); every other consumer of a claim wants to act on it. */

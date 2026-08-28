@@ -803,6 +803,31 @@ static int sched_take_owed_enqueue(thread_t* t) {
     return 1;
 }
 
+/* Record the debt for a thread a picker unlinked and the caller then failed to
+ * dispatch, because its CAS for the slot lost to the CPU that holds it.  The
+ * pick has already released on_rq, so without a debt the thread is on no queue
+ * and nothing owes it an enqueue: terminal, since sched_sweep_owed_enqueues is
+ * gated on the global debt counter and never looks at a thread carrying none.
+ *
+ * Publishes the claim only; linking here is what the holder's window forbids.
+ * That CPU is still deciding the thread's state, and a thread dispatched out of
+ * a run queue in that window resumes a context nobody has finished writing --
+ * see sched_owe_enqueue above.  The debt is settled by whoever gets there first:
+ * the holder, or an idle CPU's sweep.
+ *
+ * READY is the only state that owes anything.  A thread that has since blocked
+ * or exited is answered by whatever moved it, and a debt against a slot being
+ * torn down is discarded by thread_reset_slot. */
+void sched_owe_enqueue_for_dropped_pick(thread_t* t) {
+    if (!t) {
+        return;
+    }
+    if (__atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE) != THREAD_STATE_READY) {
+        return;
+    }
+    sched_owe_enqueue(t);
+}
+
 /* Drop an outstanding claim without enqueuing, for a slot being released to the
  * allocator.  thread_reset_slot calls this: a claim that outlives its thread is
  * honoured against the next thread in the same slot, and its debt is never

@@ -1801,8 +1801,50 @@ Source: `architecture/25-diagnostics-status.md`,
   is worse and should not be reached for: the claim exists to keep the thread and
   process slots un-recyclable across exactly that handling.
 
-  CANDIDATE A IS DEMONSTRATED, 2026-08-23, with a LIVE owner and no race. Pinned
-  by "a lost slot claim strands a live owner's thread" in
+  CANDIDATE A IS FIXED, 2026-08-28. The losing side of the `dispatch_ref` CAS now
+  leaves an owed-enqueue claim for the thread its pick unlinked
+  (`sched_owe_enqueue_for_dropped_pick`, called from the `SCHED_R_STALE` exit in
+  `process_schedule_once_impl`), so the holder or an idle CPU's
+  `sched_sweep_owed_enqueues` re-links it. It publishes the debt WITHOUT linking:
+  the holder is still writing that thread's context, and linking from the loser is
+  the variant that panicked with `rip` inside `g_threads` (see `sched_owe_enqueue`).
+  Only a claim held by another DISPATCH owes anything; a FROZEN slot is
+  `thread_reset_slot` mid-teardown, whose thread is meant to end unqueued.
+
+  Evidence, all at `5ec6f59ef` on linux x86_64 with `-smp 4`:
+
+      unit      s_a_lost_slot_claim_leaves_the_thread_reachable -- red before the
+                fix (state=1 on_rq=0 owed=0), green after; whole host suite green
+      tcg MTTCG battery scheduler-and-ipc 580s failures=1 errors=1 stranded=1
+                -> 234s (documented shmem flake only) stranded=0, then 53s 7/7 OK
+      tcg single  1738s failures=1 errors=4 stranded up to 3 -> 95s 7/7 OK
+
+  The wall-clock collapse is part of the evidence: those runs were slow because
+  sessions wedged and waited out timeouts.
+
+  NOT closed by this, and the reason this item stays open: with the strand gone
+  the sessions stop stalling, so no `[diag]` dump prints and
+  `dispatch-dropped-slot-lost` becomes unobservable. "The race fired and was
+  harmless" is therefore shown by the unit case, not by a capture. A CI run that
+  dumps with `slot-lost>0` and `stranded=0` would close it.
+
+  CORRECTION to "the strand is always the SAME thread -- gfx-compositor, tid=46,
+  pid=37": run-dependent, not fixed. Local reproduction stranded `ata` tid=31 with
+  no compositor strand at all under MTTCG, and `net-stack` tid=29, `ata` tid=31,
+  `fs-fat` tid=32 AND gfx-compositor tid=46 under single-threaded TCG. A repair
+  aimed at anything compositor-specific would be aimed wrong.
+
+  CORRECTION to "`-smp 4` reproduction on Linux x86 is the way in", which is true
+  but for the wrong reason: this is an INTERLEAVING race, not a memory-ordering
+  one. The orderings are already correct (`__ATOMIC_ACQ_REL`/`ACQUIRE` on the CAS,
+  `RELEASE` on the store), and it reproduces under `-accel tcg,thread=single`,
+  where one host thread round-robins the vCPUs and no cross-thread reordering
+  exists -- more often than under MTTCG, in fact. Single-threaded TCG cannot rule
+  this class of bug out, and an apple-silicon host's silence is a probability
+  difference, not a concurrency-model one.
+
+  CANDIDATE A WAS DEMONSTRATED, 2026-08-23, with a LIVE owner and no race. Pinned
+  by the case now named "a lost slot claim leaves the thread reachable" in
   `tests/unit/test_process_lifecycle.c`, which holds `thread_t::dispatch_ref` at
   `THREAD_SLOT_DISPATCH` before driving a real dispatch -- exactly what a second
   CPU that won the same pick, or a reaper mid-teardown, presents. Measured:

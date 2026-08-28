@@ -281,10 +281,16 @@ linked feature documents for rationale and rollout plans.
   `SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST` when the CAS loses and
   `SCHED_DEBUG_DISPATCH_DROPPED_STEAL_REAPED` when a stolen thread's owner is gone.
   Both exits run after a picker has already unlinked the thread and released
-  `on_rq`, so they drop a thread that is off every run queue -- correct for a slot
-  being torn down, a strand for a live owner's thread, and indistinguishable after
-  the fact without the count. The `slot claim lost` report carries the OBSERVED
-  claim value, which separates a racing dispatch (DISPATCH) from a reaper (FROZEN).
+  `on_rq`, so they leave a thread that is off every run queue. The `slot claim
+  lost` report carries the OBSERVED claim value, which separates a racing dispatch
+  (DISPATCH) from a reaper (FROZEN), and the two are treated differently: a lost
+  claim held by another DISPATCH publishes an owed-enqueue claim
+  (`sched_owe_enqueue_for_dropped_pick`) so the holder or an idle CPU's
+  `sched_sweep_owed_enqueues` re-links the thread, while a FROZEN slot is a
+  teardown whose thread is meant to end unqueued. Publishing the debt rather than
+  linking is required: the holder is still writing that thread's context.
+  Dropping without either was the live-owner strand behind the whole-session
+  wedge, reproducible on linux x86_64 under both MTTCG and single-threaded TCG.
 - A CAS, not a test-then-act, because the two sides share no lock: the dispatcher
   claims after `cpu_sched_pick_next` has dropped the queue lock, and the reaper
   holds only the thread table lock. `process_reap_claim` additionally refuses while

@@ -690,16 +690,23 @@ static void s_aborted_dispatch_leaves_its_thread_reachable(void) {
  * histories in docs/TASKS.md's wedge entry, demonstrated rather than argued, and
  * it is the CI signature field for field.
  *
- * This case therefore asserts a state the scheduler should NOT be able to reach.
- * It is here to pin the mechanism while the fix is chosen -- the correct repair
- * differs per exit and guessing at it is what cost this investigation four
- * refuted conclusions. Anyone fixing the exit must rewrite this case to assert
- * the repair, NOT relax it until it passes.
+ * THE REPAIR THIS NOW ASSERTS: the loser of the claim owns a thread it has
+ * already taken off every queue, so it must leave a DEBT -- an owed-enqueue
+ * claim -- before returning. It must not link the thread itself: the winner is
+ * still dispatching it, and linking a thread another CPU is mid-dispatch lets a
+ * third CPU resume a context nobody has finished writing (sched_owe_enqueue's
+ * comment records the kernel panic that produced, rip inside g_threads). The
+ * debt is what sched_sweep_owed_enqueues is gated on, so publishing it is
+ * exactly what makes the thread findable again.
+ *
+ * Both halves are asserted, because either alone can pass while the thread is
+ * still lost: that the debt exists after the exit, and that the sweep actually
+ * re-links the thread once the claim is released.
  *
  * The comment in s_aborted_dispatch_leaves_its_thread_reachable that calls the
  * live-owner abort unconstructible describes the SET_RUNNING_EXITING route only.
  * It stands for that route and is superseded for this one. */
-static void s_a_lost_slot_claim_strands_a_live_owners_thread(void) {
+static void s_a_lost_slot_claim_leaves_the_thread_reachable(void) {
     uint32_t pid = 0;
     uint32_t tid = 0;
     thread_t* t = 0;
@@ -765,10 +772,10 @@ static void s_a_lost_slot_claim_strands_a_live_owners_thread(void) {
            (unsigned)t->rq_link_count,
            sched_unlink_site_name(t->rq_unlink_site));
 
-    CHECK(t->state == THREAD_STATE_READY && !t->on_rq && !t->enqueue_owed && !t->wake_pending,
-          "a live owner's thread is left runnable, unqueued and owed nothing");
+    CHECK(t->state == THREAD_STATE_READY && (t->on_rq || t->enqueue_owed),
+          "a live owner's thread is left reachable: linked, or owed an enqueue");
     CHECK(proc->state != PROCESS_STATE_ZOMBIE && !proc->exiting,
-          "with its owner still live, so nothing will reap it either");
+          "with its owner still live, so nothing else would reap or requeue it");
 
     /* Which of the two histories the forensics report. A capture reading these
      * values sends the reader to the dispatch exits; reading skip:* instead would
@@ -790,8 +797,15 @@ static void s_a_lost_slot_claim_strands_a_live_owners_thread(void) {
     CHECK(sched_debug_count(SCHED_DEBUG_DISPATCH_LEFT_STRANDED) == 0,
           "and the dispatch_done tripwire is structurally blind to this exit");
 
-    /* Release the claim so the teardown below can reap the slot. */
+    /* Release the claim, as the winning CPU's dispatch_done does, and let the
+     * safety net run. The debt only means something if a sweep can act on it:
+     * asserting the flag alone would pass for a claim published on a thread the
+     * sweep skips (still current somewhere, or refused by cpu_sched_enqueue). */
     __atomic_store_n(&t->dispatch_ref, THREAD_SLOT_FREE, __ATOMIC_RELEASE);
+    sched_sweep_owed_enqueues();
+    CHECK(t->on_rq == 1, "and an idle CPU's sweep puts it back on a run queue");
+    CHECK(!t->enqueue_owed, "consuming the debt exactly once");
+
     drop_transition_target(pid);
 }
 
@@ -1271,7 +1285,7 @@ int main(void) {
     s_promotion_of_a_ready_target_is_permitted_and_inert();
     s_exiting_owner_refuses_both_transitions();
     s_aborted_dispatch_leaves_its_thread_reachable();
-    s_a_lost_slot_claim_strands_a_live_owners_thread();
+    s_a_lost_slot_claim_leaves_the_thread_reachable();
     s_a_refused_reset_does_not_leak_a_frozen_slot();
     s_a_wake_that_defers_leaves_something_actionable();
     s_a_consumer_that_declines_keeps_the_claim();

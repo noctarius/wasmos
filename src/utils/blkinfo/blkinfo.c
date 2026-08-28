@@ -341,7 +341,6 @@ int main(void) {
          * through wasmos_xfer_buffer_read, an address-as-integer host call whose
          * write no analyser can see. */
         wasmos_block_descriptor_t desc = {0};
-        uint32_t sectors = 0;
         int rc;
 
         /* A fresh endpoint per disk; see the header. */
@@ -360,13 +359,17 @@ int main(void) {
                          wasmos_error_code_name(rc));
             continue;
         }
-        sectors = (uint32_t)desc.lba_count;
-        (void)printf("[blkinfo] id=%s driver=%s unit=%u sectors=%u bytes=%u\n",
+        /* Printed as 64-bit, and the byte count computed in 64-bit. The
+         * descriptor carries lba_count as u64 precisely so a disk larger than a
+         * 32-bit sector count can be described; truncating it here would put the
+         * ceiling back in the one place a reader looks to find out where it is.
+         * The byte product overflows 32 bits well before the sector count does. */
+        (void)printf("[blkinfo] id=%s driver=%s unit=%u sectors=%llu bytes=%llu\n",
                      desc.canonical_id,
                      backend_name((uint8_t)desc.backend),
                      (unsigned)desc.unit,
-                     (unsigned)sectors,
-                     (unsigned)(sectors * BLKINFO_SECTOR_BYTES));
+                     (unsigned long long)desc.lba_count,
+                     (unsigned long long)desc.lba_count * (unsigned long long)BLKINFO_SECTOR_BYTES);
 
         if (do_write && wasmos_sys_streq(desc.canonical_id, write_id)) {
             rc = write_sector((int32_t)providers[i].endpoint, providers[i].instance, lba);

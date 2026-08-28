@@ -376,10 +376,24 @@ header-only C in `src/libc/include/wasmos/ipc.h`:
 Build wiring follows `src/drivers/virtio_blk/CMakeLists.txt`: `wasmos_add_zig_wasm_app`
 with the coroutine runtime, `service_async_entry_wasm.c` and the generated ABI
 staged flat. The manifest needs `svc.class` (to claim `block` instances) and no
-hardware capabilities at all — the manager touches no device, only IPC. It ships
-as a bootstrap entry in `scripts/initfs.toml`, because it sits between the disk
-driver and the `/boot` filesystem driver and therefore must exist before `/boot`
-mounts.
+hardware capabilities at all — the manager touches no device, only IPC.
+
+It ships on the ESP and is spawned from the BOOT rules by absolute path
+(`RUN+="/boot/system/drivers/partmgr.wap"`), not from initfs. Those rules load
+only once storage is online, so every disk has registered before it enumerates
+and there is no race with a driver that had not probed yet. The absolute path
+matters: a relative rule path is resolved against the initfs module list first,
+so an ESP-only module has to say where it lives.
+
+Keeping it out of initfs is also what keeps Zig off the critical build path.
+CMake derives the initfs payload list from every `source =` line in
+`scripts/initfs.toml`, so listing a Zig artifact there makes `make_initfs`
+depend on it unconditionally and a build without Zig can no longer produce a
+boot image. Nothing in initfs is Zig today.
+
+TODO: mounting `/boot` ITSELF from a partition needs the manager to exist before
+`/boot` does, which means initfs, which means that Zig dependency. Decide it with
+the mount-policy change in §3, not before.
 
 ---
 
@@ -441,7 +455,8 @@ per-context rather than per-endpoint.
 #### Phase 2 — The partition manager (done)
 
 - `src/drivers/partition_manager/` — Zig service, `linker.metadata`,
-  `CMakeLists.txt`; bootstrap entry in `scripts/initfs.toml`.
+  `CMakeLists.txt`; staged on the ESP and spawned by absolute path from the boot
+  rules (see above for why not initfs).
 - Pure Zig table parser: GPT with CRC32 and backup fallback, MBR, UTF-16LE →
   UTF-8, mixed-endian GUID handling.
 - Filesystem probe table.

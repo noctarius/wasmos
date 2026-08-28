@@ -15,7 +15,7 @@ SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="sy
 # TODO: mounting /boot itself from a partition needs this in initfs instead, and
 # that makes Zig a build requirement for the boot image. Decide that with the
 # mount-policy change, not before it.
-SUBSYSTEM=="boot", RUN+="system/drivers/partmgr.wap"
+SUBSYSTEM=="boot", RUN+="/boot/system/drivers/partmgr.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", RUN+="system/drivers/serial.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"

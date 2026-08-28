@@ -362,6 +362,6 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST` | -0x00190005 | unknown or unsupported block opcode |
 | `WASMOS_ERR_BLOCK_DEV_READ_FAILED` | -0x00190006 | the transfer from the device failed |
 | `WASMOS_ERR_BLOCK_DEV_WRITE_FAILED` | -0x00190007 | the transfer to the device failed |
-| `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION` | -0x00190008 | the descriptor's version field names a layout this reader does not know |
-| `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED` | -0x00190009 | the descriptor is short, unterminated, or names a length outside the transfer buffer |
+| `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION` | -0x00190008 | a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t |
+| `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED` | -0x00190009 | a block record is short, unterminated, or names a length outside the transfer buffer |
 | `WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR` | -0x0019000A | the device has no descriptor to report, so it cannot be identified |

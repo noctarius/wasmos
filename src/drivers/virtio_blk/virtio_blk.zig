@@ -813,6 +813,16 @@ fn acceptTransfer(msg: *const co.IpcMessage) void {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION);
         return;
     }
+    // Refuse a request aimed at some other device. This backend serves exactly
+    // one disk, so it COULD ignore the target and be right by luck -- and that is
+    // the reason to check: a proxy that forwarded a partition's instance instead
+    // of the disk's would be silently serviced against the whole device, and the
+    // bug would surface as corruption somewhere else entirely. Zero means "the
+    // only device you serve", which a client that never looked up a class sends.
+    if (req.target != 0 and req.target != blockClassInstance()) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT);
+        return;
+    }
     // This device addresses 32-bit LBAs; the request carries 64 because a disk
     // may be larger than this driver can reach. Refuse with a reason rather than
     // truncate an address.

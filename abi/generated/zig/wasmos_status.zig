@@ -259,8 +259,8 @@ pub const WASMOS_ERR_BLOCK_DEV_BAD_REQUEST: i32 = -0x00190004; // the request's 
 pub const WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST: i32 = -0x00190005; // unknown or unsupported block opcode
 pub const WASMOS_ERR_BLOCK_DEV_READ_FAILED: i32 = -0x00190006; // the transfer from the device failed
 pub const WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: i32 = -0x00190007; // the transfer to the device failed
-pub const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: i32 = -0x00190008; // the descriptor's version field names a layout this reader does not know
-pub const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: i32 = -0x00190009; // the descriptor is short, unterminated, or names a length outside the transfer buffer
+pub const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: i32 = -0x00190008; // a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t
+pub const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: i32 = -0x00190009; // a block record is short, unterminated, or names a length outside the transfer buffer
 pub const WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: i32 = -0x0019000A; // the device has no descriptor to report, so it cannot be identified
 
 pub fn errMake(dom: u16, code: u16) i32 {
@@ -536,8 +536,8 @@ pub fn strerror(c: i32) []const u8 {
         WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST => "unknown or unsupported block opcode",
         WASMOS_ERR_BLOCK_DEV_READ_FAILED => "the transfer from the device failed",
         WASMOS_ERR_BLOCK_DEV_WRITE_FAILED => "the transfer to the device failed",
-        WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION => "the descriptor's version field names a layout this reader does not know",
-        WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED => "the descriptor is short, unterminated, or names a length outside the transfer buffer",
+        WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION => "a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t",
+        WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED => "a block record is short, unterminated, or names a length outside the transfer buffer",
         WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR => "the device has no descriptor to report, so it cannot be identified",
         else => "unknown error",
     };

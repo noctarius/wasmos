@@ -280,8 +280,8 @@ enum {
     WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 5), /* unknown or unsupported block opcode */
     WASMOS_ERR_BLOCK_DEV_READ_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 6), /* the transfer from the device failed */
     WASMOS_ERR_BLOCK_DEV_WRITE_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 7), /* the transfer to the device failed */
-    WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 8), /* the descriptor's version field names a layout this reader does not know */
-    WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 9), /* the descriptor is short, unterminated, or names a length outside the transfer buffer */
+    WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 8), /* a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t */
+    WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 9), /* a block record is short, unterminated, or names a length outside the transfer buffer */
     WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 10), /* the device has no descriptor to report, so it cannot be identified */
 };
 
@@ -792,8 +792,8 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST: return "unknown or unsupported block opcode";
     case WASMOS_ERR_BLOCK_DEV_READ_FAILED: return "the transfer from the device failed";
     case WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: return "the transfer to the device failed";
-    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: return "the descriptor's version field names a layout this reader does not know";
-    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "the descriptor is short, unterminated, or names a length outside the transfer buffer";
+    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: return "a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t";
+    case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "a block record is short, unterminated, or names a length outside the transfer buffer";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "the device has no descriptor to report, so it cannot be identified";
     default: return "unknown error";
     }

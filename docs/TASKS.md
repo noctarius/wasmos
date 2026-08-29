@@ -879,6 +879,37 @@ tail.
   label supplies the mount MATCHER, not the mount path: a rule still says where a
   volume goes, so a labelled volume can be remounted elsewhere without rewriting
   a partition table. See `architecture/36-partition-manager-and-block-identity.md` §3.
+- [ ] [FEATURE][P2] A volume manager, and filesystem recognisers.
+  Design: `architecture/37-volume-manager.md`.
+
+  A volume is a thing with a filesystem on it -- a formatted raw disk, a
+  formatted partition, later a span of several. Nothing publishes that: the
+  `block` class answers "what storage exists", which is a different question, so
+  a rule that wants a filesystem still has to name where it sits. Phase 3 got as
+  far as matching a PARTITION's label, which does not reach a formatted disk
+  with no table at all.
+
+  The blocking piece is a RECOGNISER: something that identifies a format without
+  that format's driver being resident. It cannot live in the filesystem drivers,
+  which are spawned BY the rule that needs the answer, and it does not belong in
+  the partition manager, whose job is tables and which publishes nothing for a
+  disk without one -- a recogniser written there does work, which is what makes
+  it the tempting wrong place. Linux keeps it in a library (`libblkid`,
+  `superblocks/` beside `partitions/`) that udev runs at publish time; Windows
+  keeps it in a recogniser stub separate from the filesystem. HelenOS asks each
+  filesystem server in turn, which it can afford because its servers are
+  resident and ours are not.
+
+  `wasmos_block_descriptor_t.fs_type` already exists and is always
+  `FS_TYPE_UNKNOWN`; `FS_TYPE_*` and the `ATTR{fstype}` matcher are the reporting
+  surface a recogniser would fill in.
+
+  A volume manager also gives exclusivity an owner. A checker or a formatter must
+  refuse a MOUNTED volume, and nothing enforces that since the block layer
+  stopped arbitrating who may use a drive -- correctly, because a request now
+  names its own target. A `claimed` flag on the volume is what they would
+  consult.
+
 - [ ] [FEATURE][P2] Probe disks that register after the partition manager starts,
   and move it into initfs. `probeAll` enumerates the `block` class exactly once at
   bring-up (`src/drivers/partition_manager/partition_manager.zig`), so a disk

@@ -41,9 +41,9 @@ from scripts.qemu_test_framework import QemuSession, default_config
 VOLUME_LABEL = "late"
 IMAGE_MIB = 64
 
-# `block` providers a correct boot holds with this disk attached: ATA's two
-# drives, the one partition the partition manager republishes on each, the
-# virtio disk, and its partition. The count is the assertion that nothing
+# How many `block` providers a correct boot holds with this disk attached: ATA's
+# two drives, the one partition the partition manager republishes on each, the
+# virtio disk, and its partition. The count is what asserts that nothing
 # registered twice; the ids below say which ones are present.
 EXPECTED_PROVIDERS = 6
 

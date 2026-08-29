@@ -156,7 +156,7 @@ A disk carrying a partition table must not also be published as a volume. If it
 were, `/boot` would appear twice — once as the partition holding it, once as the
 disk beneath — and a rule matching on `fstype` would match whichever arrived
 first. This is the same failure the `SUBSYSTEM` split fixed one layer down
-(`architecture/36` §3), reappearing because the volume layer flattens exactly the
+(`architecture/36-partition-manager-and-block-identity.md` §3), reappearing because the volume layer flattens exactly the
 distinction that split introduced.
 
 Recognition alone does not settle it. A recogniser reading LBA 0 of a partitioned

@@ -62,12 +62,14 @@ enum {
  * - GFX_IPC_GET_DISPLAY_INFO: arg0..arg3 reserved
  *                           reply: arg1=width arg2=height
  * - GFX_IPC_MOVE_WINDOW:    arg0=window_id arg1=x arg2=y arg3 reserved
- * - GFX_IPC_SET_WINDOW_TITLE: arg0=window_id arg1=shmem_id arg2=title_len(1..47) arg3=0
+ * - GFX_IPC_SET_WINDOW_TITLE: arg0=window_id arg1=buffer_id arg2=borrow_id
+ *   arg3=title_len(1..47); the CLIENT owns the transfer buffer and lends it READ
  *                           Caller writes title bytes to shmem before sending.
  *                           Only the window owner may set its title.
- * - GFX_IPC_GET_WINDOW_TITLE: arg0=window_id arg1=shmem_id(0=query-only) arg2=max_len arg3=0
+ * - GFX_IPC_GET_WINDOW_TITLE: arg0=window_id arg1=buffer_id(0=query-only)
+ *   arg2=borrow_id arg3=max_len; the CLIENT owns the transfer buffer and lends it WRITE
  *                           reply arg1=actual_len (0 if no title set).
- *                           If shmem_id==0 only the length is returned.
+ *                           If buffer_id==0 only the length is returned.
  * Window create/resize dimensions are logical content dimensions. Compositor
  * chrome, when enabled, is added outside that content rect.
  */

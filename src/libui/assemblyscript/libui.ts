@@ -21,12 +21,35 @@ const GFX_EVENT_RESIZE: i32 = 6;
 
 const PAGE_SIZE: i32 = 4096;
 const TITLE_BYTES_MAX: i32 = 127;
+// The compositor only reads the title, so the borrow carries READ alone.
+const BUFFER_GRANT_READ: i32 = 0x1;
 
 
 @external("wasmos", "ipc_endpoint_owner") declare function ipc_endpoint_owner(endpoint: i32): i32;
 
 
 @external("wasmos", "shmem_create") declare function shmem_create(pages: i32, flags: i32): i32;
+
+
+@external("wasmos", "xfer_buffer_acquire") declare function xfer_buffer_acquire(
+    minimumSize: i32,
+): i32;
+
+
+@external("wasmos", "xfer_buffer_borrow") declare function xfer_buffer_borrow(
+    grantee: i32,
+    bufferId: i32,
+    flags: i32,
+): i32;
+
+
+@external("wasmos", "xfer_buffer_map") declare function xfer_buffer_map(bufferId: i32): i32;
+
+
+@external("wasmos", "xfer_buffer_unmap") declare function xfer_buffer_unmap(bufferId: i32): i32;
+
+
+@external("wasmos", "xfer_buffer_release") declare function xfer_buffer_release(bufferId: i32): i32;
 
 
 @external("wasmos", "shmem_grant") declare function shmem_grant(id: i32, targetPid: i32): i32;
@@ -170,7 +193,8 @@ export class Context {
     private shmemId: i32 = -1;
     private mappedPtr: i32 = 0;
     private mappedLen: i32 = 0;
-    private titleShmemId: i32 = -1;
+    private titleBufferId: i32 = -1;
+    private titleBorrowId: i32 = -1;
     private titlePtr: i32 = 0;
     private closeRequestedFlag: bool = false;
     private pointerXValue: i32 = 0;
@@ -244,13 +268,19 @@ export class Context {
         return ctx;
     }
 
-    // Release the window, the shared buffer and both shmem mappings, and reset
-    // the ids so a second call is harmless. Drawing after this does nothing.
+    // Release the window, the shared buffer and both mappings, and reset the ids
+    // so a second call is harmless. Drawing after this does nothing. Releasing
+    // the title buffer cascade-revokes the compositor's borrow of it, so there
+    // is nothing to unborrow explicitly.
     destroy(): void {
-        if (this.titleShmemId > 0 && this.titlePtr != 0) {
-            let _ = shmem_unmap(this.titleShmemId);
+        if (this.titleBufferId > 0) {
+            if (this.titlePtr != 0) {
+                let _ = xfer_buffer_unmap(this.titleBufferId);
+            }
+            let _ = xfer_buffer_release(this.titleBufferId);
         }
-        this.titleShmemId = -1;
+        this.titleBufferId = -1;
+        this.titleBorrowId = -1;
         this.titlePtr = 0;
         if (this.windowId > 0 && this.gfxEndpoint > 0) {
             let _ = ipc.call(this.gfxEndpoint, GFX_IPC_DESTROY_WINDOW, this.windowId, 0, 0, 0);
@@ -398,16 +428,16 @@ export class Context {
             copyBytes(this.titlePtr, bytes, len);
             store<u8>(this.titlePtr + len, 0);
         }
-        if (shmem_flush(this.titleShmemId, this.titlePtr, len + 1) != 0) {
-            return false;
-        }
+        // No write-back: the mapping IS the buffer's frames on both runtimes
+        // (tests/test_xfer_map_alias.py), so the bytes written above are already
+        // what the compositor reads through its borrow.
         const reply = ipc.call(
             this.gfxEndpoint,
             GFX_IPC_SET_WINDOW_TITLE,
             this.windowId,
-            this.titleShmemId,
+            this.titleBufferId,
+            this.titleBorrowId,
             len,
-            0,
         );
         return reply != null && reply.type == 0x0280 && reply.arg0 == WASMOS_ERR_NONE;
     }
@@ -541,20 +571,34 @@ export class Context {
         return -1;
     }
 
+    // The title buffer is OWNED here and lent READ to the compositor, per the
+    // transfer-buffer contract: the client of an exchange owns the buffer and
+    // the server is a transient grantee. The borrow addresses the compositor's
+    // ENDPOINT, so no pid lookup is involved as the shmem grant needed.
     private ensureTitleBuffer(): bool {
-        if (this.titleShmemId > 0 && this.titlePtr != 0) {
+        if (this.titleBufferId > 0 && this.titlePtr != 0) {
             return true;
         }
-        this.titleShmemId = shmem_create(1, 0);
-        if (this.titleShmemId <= 0) {
+        this.titleBufferId = xfer_buffer_acquire(PAGE_SIZE);
+        if (this.titleBufferId <= 0) {
             return false;
         }
-        if (shmem_grant(this.titleShmemId, this.gfxOwnerPid) != 0) {
+        this.titleBorrowId = xfer_buffer_borrow(
+            this.gfxEndpoint,
+            this.titleBufferId,
+            BUFFER_GRANT_READ,
+        );
+        if (this.titleBorrowId <= 0) {
+            let _ = xfer_buffer_release(this.titleBufferId);
+            this.titleBufferId = -1;
             return false;
         }
-        this.titlePtr = shmem_map_auto(this.titleShmemId, PAGE_SIZE);
-        if (this.titlePtr <= 0) {
+        this.titlePtr = xfer_buffer_map(this.titleBufferId);
+        if (this.titlePtr < 0) {
             this.titlePtr = 0;
+            let _ = xfer_buffer_release(this.titleBufferId);
+            this.titleBufferId = -1;
+            this.titleBorrowId = -1;
             return false;
         }
         zeroMemory(this.titlePtr, PAGE_SIZE);

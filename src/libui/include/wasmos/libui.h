@@ -837,7 +837,14 @@ static inline int32_t ui_measure_text_width(ui_context_t* ctx, const char* text)
  * when a GFX_IPC_RESP or GFX_IPC_ERROR message came back — including an error
  * reply, whose status is in out_raw->arg0 — and -1 when the call itself failed
  * or the reply was some other message type. Callers must therefore check the
- * status separately; `out_raw` is only valid on a 0 return. */
+ * status separately; `out_raw` is only valid on a 0 return.
+ *
+ * TODO: this -1 is the root of libui's 0/-1 convention, which every ui_* entry
+ * point below inherits and which loses the reason a request failed. Converting
+ * it to the packed codes in abi/errors.yaml means changing ui_send_gfx_raw,
+ * ui_send_gfx, and the ~70 ui_* returns that forward their result, so it is its
+ * own change rather than a rider on a caller's. ui_window_set_title already
+ * returns packed codes and is the shape the rest should take. */
 static inline int32_t ui_send_gfx_raw(int32_t gfx_ep, int32_t reply_ep, int32_t req_id,
                                       int32_t opcode, int32_t arg0, int32_t arg1, int32_t arg2,
                                       int32_t arg3, wasmos_ipc_message_t* out_raw) {
@@ -1587,48 +1594,64 @@ fail:
     return -1;
 }
 
-/* Set the window title shown in the compositor chrome and task list. Returns 0
- * on success and -1 on failure, including a `title` that is empty or longer
- * than 47 bytes — the limit is a refusal, not a truncation. The string is
- * handed over through a one-page shmem region that is unmapped again before
- * returning, so the caller keeps ownership of `title`. Blocks for one
- * compositor round trip. */
+/* Set the window title shown in the compositor chrome and task list. Returns
+ * WASMOS_ERR_NONE on success and a packed error code from abi/errors.yaml on
+ * failure, including a `title` that is empty or longer than 47 bytes — the limit
+ * is a refusal, not a truncation. A failure to acquire, borrow, or map the
+ * transfer buffer propagates that primitive's own code rather than restating it
+ * as a gfx one. The string is handed over through a one-page transfer buffer
+ * this client owns and lends READ to the compositor; it is released before
+ * returning, so the caller keeps ownership of `title`. Blocks for one compositor
+ * round trip. */
 static inline int32_t ui_window_set_title(ui_context_t* ctx, const char* title) {
     if (!ctx || !title || ctx->gfx_endpoint <= 0 || ctx->window_id <= 0)
-        return -1;
+        return WASMOS_ERR_GFX_INVALID;
     const int32_t len = (int32_t)strlen(title);
     if (len <= 0 || len > 47)
-        return -1;
-    const int32_t shmem_id = wasmos_shmem_create(1, 0);
-    if (shmem_id <= 0)
-        return -1;
-    const int32_t mapped = wasmos_shmem_map_auto(shmem_id, UI_PAGE_SIZE);
+        return WASMOS_ERR_GFX_INVALID;
+    /* The title travels in a transfer buffer this client OWNS and lends READ to
+     * the compositor for the call: the client of an exchange owns the buffer and
+     * the server is a transient grantee (docs/architecture/12-dma-transfers.md).
+     * Releasing at the end cascade-revokes that borrow, so no path leaks one.
+     *
+     * No write-back after the copy -- the mapping IS the buffer's frames on both
+     * runtimes (tests/test_xfer_map_alias.py), unlike the shmem overlay this
+     * replaces, which needed a flush for wasm3. */
+    const int32_t buffer_id = wasmos_xfer_buffer_acquire(UI_PAGE_SIZE);
+    if (buffer_id <= 0)
+        return buffer_id < 0 ? buffer_id : WASMOS_ERR_GFX_IO;
+    const int32_t borrow_id =
+        wasmos_xfer_buffer_borrow(ctx->gfx_endpoint, buffer_id, WASMOS_BUFFER_GRANT_READ);
+    if (borrow_id <= 0) {
+        (void)wasmos_xfer_buffer_release(buffer_id);
+        return borrow_id < 0 ? borrow_id : WASMOS_ERR_GFX_IO;
+    }
+    const int32_t mapped = wasmos_xfer_buffer_map(buffer_id);
     if (mapped < 0) {
-        (void)wasmos_shmem_unmap(shmem_id);
-        return -1;
+        (void)wasmos_xfer_buffer_release(buffer_id);
+        return mapped;
     }
     uint8_t* ptr = ptr_cast(uint8_t, (uint32_t)mapped);
     memcpy(ptr, title, (size_t)len);
     ptr[len] = '\0';
-    if (wasmos_shmem_flush(shmem_id, addr_cast(int32_t, ptr), len + 1) != 0) {
-        (void)wasmos_shmem_unmap(shmem_id);
-        return -1;
-    }
     int32_t status = 0;
-    ui_send_gfx(ctx->gfx_endpoint,
-                ctx->reply_endpoint,
-                ctx->req_id++,
-                GFX_IPC_SET_WINDOW_TITLE,
-                ctx->window_id,
-                shmem_id,
-                len,
-                0,
-                &status,
-                0,
-                0,
-                0);
-    (void)wasmos_shmem_unmap(shmem_id);
-    return (status == WASMOS_ERR_NONE) ? 0 : -1;
+    /* A transport failure leaves `status` untouched, so it cannot be read as the
+     * request's outcome -- distinguish it from a reply that carries one. */
+    const int32_t sent = ui_send_gfx(ctx->gfx_endpoint,
+                                     ctx->reply_endpoint,
+                                     ctx->req_id++,
+                                     GFX_IPC_SET_WINDOW_TITLE,
+                                     ctx->window_id,
+                                     buffer_id,
+                                     borrow_id,
+                                     len,
+                                     &status,
+                                     0,
+                                     0,
+                                     0);
+    (void)wasmos_xfer_buffer_unmap(buffer_id);
+    (void)wasmos_xfer_buffer_release(buffer_id);
+    return sent != 0 ? WASMOS_ERR_GFX_IO : status;
 }
 
 /* ui_init() variant for the system menu bar: sizes the window to the full

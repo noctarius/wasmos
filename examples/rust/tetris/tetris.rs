@@ -34,7 +34,6 @@ unsafe extern "C" {
     fn proc_exit(status: i32) -> i32;
     fn sched_ticks() -> i32;
     fn ipc_create_endpoint() -> i32;
-    fn ipc_endpoint_owner(endpoint: i32) -> i32;
     fn ipc_send(dst: i32, src: i32, ty: i32, rid: i32, a0: i32, a1: i32, a2: i32, a3: i32) -> i32;
     fn ipc_select_one(endpoint: i32) -> i32;
     fn ipc_drain(endpoint: i32) -> i32;
@@ -42,12 +41,14 @@ unsafe extern "C" {
     fn ipc_select_add(select_id: i32, endpoint: i32) -> i32;
     fn ipc_select_wait_timeout(select_id: i32, timeout_ms: i32) -> i32;
     fn ipc_last_field(field: i32) -> i32;
-    fn shmem_create(pages: i32, flags: i32) -> i32;
-    fn shmem_grant(id: i32, target_pid: i32) -> i32;
     fn shmem_map_auto(id: i32, size: i32) -> i32;
     fn shmem_flush(id: i32, ptr: i32, size: i32) -> i32;
     fn spawn_info_buffer() -> i32;
     fn xfer_buffer_read(buffer_id: i32, ptr: i32, len: i32, offset: i32) -> i32;
+    fn xfer_buffer_acquire(minimum_size: i32) -> i32;
+    fn xfer_buffer_borrow(grantee: i32, buffer_id: i32, flags: i32) -> i32;
+    fn xfer_buffer_map(buffer_id: i32) -> i32;
+    fn xfer_buffer_release(buffer_id: i32) -> i32;
 }
 
 // Provided by net_shim.c (linked object).
@@ -88,6 +89,8 @@ const GFX_IPC_FOCUS_WINDOW: i32 = 0x020A;
 const GFX_IPC_GET_DISPLAY_INFO: i32 = 0x020C;
 const GFX_IPC_MOVE_WINDOW: i32 = 0x020D;
 const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x020E;
+/// The compositor only reads the title, so the borrow carries READ alone.
+const BUFFER_GRANT_READ: i32 = 0x1;
 const GFX_IPC_RESP: i32 = 0x0280;
 const WASMOS_ERR_NONE: i32 = 0;
 
@@ -238,7 +241,6 @@ impl Window {
             log(b"[tetris] no gfx service\n");
             return None;
         }
-        let gfx_owner = unsafe { ipc_endpoint_owner(w.gfx_ep) };
 
         // Create the window from the event endpoint so it becomes the owner the
         // compositor pushes events to; the reply comes back on that endpoint.
@@ -363,20 +365,35 @@ impl Window {
         }
         w.base = off as *mut u8;
 
-        w.set_title(gfx_owner, b"WASMOS Tetris");
+        w.set_title(b"WASMOS Tetris");
         Some(w)
     }
 
-    fn set_title(&mut self, gfx_owner: i32, title: &[u8]) {
-        let sid = unsafe { shmem_create(1, 0) };
-        if sid <= 0 {
+    /// The title travels in a transfer buffer this app OWNS and lends READ to the
+    /// compositor, which is the ownership the contract requires: the client of an
+    /// exchange owns the buffer, the server is a transient grantee. The borrow
+    /// names the compositor's ENDPOINT, so no owner pid is needed.
+    ///
+    /// No write-back after the copy. The mapping IS the buffer's frames on both
+    /// runtimes (tests/test_xfer_map_alias.py), unlike the shmem overlay this
+    /// replaces, which needed a flush under wasm3.
+    fn set_title(&mut self, title: &[u8]) {
+        let bid = unsafe { xfer_buffer_acquire(4096) };
+        if bid <= 0 {
             return;
         }
-        if unsafe { shmem_grant(sid, gfx_owner) } != 0 {
+        let borrow = unsafe { xfer_buffer_borrow(self.gfx_ep, bid, BUFFER_GRANT_READ) };
+        if borrow <= 0 {
+            unsafe {
+                let _ = xfer_buffer_release(bid);
+            }
             return;
         }
-        let off = unsafe { shmem_map_auto(sid, 4096) };
-        if off <= 0 {
+        let off = unsafe { xfer_buffer_map(bid) };
+        if off < 0 {
+            unsafe {
+                let _ = xfer_buffer_release(bid);
+            }
             return;
         }
         let p = off as *mut u8;
@@ -386,7 +403,6 @@ impl Window {
                 *p.add(i) = title[i];
             }
             *p.add(n) = 0;
-            let _ = shmem_flush(sid, off, (n + 1) as i32);
         }
         let rid = self.next_rid();
         unsafe {
@@ -396,12 +412,17 @@ impl Window {
                 GFX_IPC_SET_WINDOW_TITLE,
                 rid,
                 self.window_id,
-                sid,
+                bid,
+                borrow,
                 n as i32,
-                0,
             );
         }
         let _ = self.wait_reply(self.reply_ep, rid);
+        // Releasing cascade-revokes the compositor's borrow; the title has been
+        // copied into the window record by the time the reply lands.
+        unsafe {
+            let _ = xfer_buffer_release(bid);
+        }
     }
 
     /// Blit the back buffer into the shared buffer and present.

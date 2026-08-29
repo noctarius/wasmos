@@ -2923,10 +2923,14 @@ fn handle_move_window(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
+// The title arrives in a transfer buffer the CLIENT owns and has borrowed READ
+// to this service; arg1 names the buffer and arg2 the borrow, neither of which
+// is derivable here. Read-only is all this needs, and all the client grants.
 fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
     const window_id: u32 = @bitCast(msg.arg0);
-    const shmem_id: u32 = @bitCast(msg.arg1);
-    const title_len: u32 = @bitCast(msg.arg2);
+    const buffer_id: u32 = @bitCast(msg.arg1);
+    const borrow_id: u32 = @bitCast(msg.arg2);
+    const title_len: u32 = @bitCast(msg.arg3);
     if (title_len == 0 or title_len > GFX_WINDOW_TITLE_MAX) {
         reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
@@ -2939,11 +2943,17 @@ fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
-    const ptr_raw = api().shmem_map.?(shmem_id) orelse {
+    if (buffer_id == 0 or borrow_id == 0) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
+    const ptr_raw = api().xfer_buffer_map_borrowed.?(c.ND_BUFFER_KIND_XFER, buffer_id, borrow_id) orelse {
         reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     };
-    defer _ = api().shmem_unmap.?(shmem_id);
+    // Borrowed mapping slots are a fixed global pool shared by every native
+    // service (wasmos_native_driver.h), so this must not leak on any path.
+    defer _ = api().xfer_buffer_unmap_borrowed.?(borrow_id);
     const src: [*]const u8 = @ptrCast(@alignCast(ptr_raw));
     const n = @min(@as(usize, title_len), GFX_WINDOW_TITLE_MAX);
     @memcpy(g_windows[slot_idx].title[0..n], src[0..n]);

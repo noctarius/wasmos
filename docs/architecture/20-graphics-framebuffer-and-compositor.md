@@ -138,7 +138,7 @@ App-facing compositor interface. Defined in
 | `GFX_IPC_SET_WINDOW_FLAGS`      | 0x020B | arg0=window_id arg1=flags (GFX_WINDOW_FLAG_*)                                                   | —                                                     |
 | `GFX_IPC_GET_DISPLAY_INFO`      | 0x020C | —                                                                                              | arg1=width arg2=height                                |
 | `GFX_IPC_MOVE_WINDOW`           | 0x020D | arg0=window_id arg1=x arg2=y                                                                    | —                                                     |
-| `GFX_IPC_SET_WINDOW_TITLE`      | 0x020E | arg0=window_id arg1=shmem_id arg2=title_len arg3=0 (owner only)                                 | —                                                     |
+| `GFX_IPC_SET_WINDOW_TITLE`      | 0x020E | arg0=window_id arg1=buffer_id arg2=borrow_id arg3=title_len (owner only); the CLIENT owns the transfer buffer and lends it READ                                 | —                                                     |
 | `GFX_IPC_GET_WINDOW_TITLE`      | 0x020F | arg0=window_id arg1=buffer_id arg2=borrow_id arg3=max_len; the CLIENT owns the transfer buffer and lends it WRITE | arg1=bytes written |
 | `GFX_IPC_RESP`                  | 0x0280 | success reply; arg0=WASMOS_ERR_GFX_*                                                               | —                                                     |
 | `GFX_IPC_ERROR`                 | 0x02FF | error reply                                                                                    | —                                                     |

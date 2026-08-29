@@ -877,6 +877,17 @@ tail.
   add a native (`wasmos_sys_native_*`) flavour, and adopt it at a real call site
   (`src/utils/date/date.ts` onto `rtcIpcRead`). Roll out only if the ergonomics
   pay off — this is the optional tail of the ABI effort.
+- [ ] [CLEANUP][P2] Convert `src/libui/include/wasmos/libui.h` off its 0/-1
+  convention onto the packed codes in `abi/errors.yaml`. The root is
+  `ui_send_gfx_raw`, which returns -1 for "the call failed" and "the reply was
+  the wrong type" alike; `ui_send_gfx` forwards that, and roughly 70 `ui_*` entry
+  points forward it again, so an app cannot tell a transport failure from a
+  refused request. `ui_window_set_title` was converted with the transfer-buffer
+  migration and is the shape the rest should take: propagate the primitive's own
+  code where one exists, `WASMOS_ERR_GFX_*` where the failure is libui's own, and
+  return the reply `status` unmodified. All current callers discard the value, so
+  the change is source-compatible; the cost is that the conversion touches every
+  entry point at once, which is why it is not a rider on a caller's change.
 - [ ] [CLEANUP][P3] Unify the transport axis: `IPC_ERR_INVALID/PERM/FULL` in
   `src/kernel/include/ipc.h` duplicates `wasmos_status_t`'s `INVAL`/`DENIED`/
   `FULL` at the same values, and the same three names are redeclared in

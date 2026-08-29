@@ -75,7 +75,9 @@ class XferMapAliasTest(unittest.TestCase):
         mark = self.session.mark()
         self.session.send("spawn /apps/xfer_map_alias")
 
-        if not self.session.expect_from(mark, b"[test] xfer map alias done", timeout_s=60):
+        if not self.session.expect_from(
+            mark, b"[test] xfer map alias done", timeout_s=60
+        ):
             self.fail(
                 "the probe never finished -- it did not reach its own exit, so "
                 "neither direction was measured.\n--- tail ---\n"

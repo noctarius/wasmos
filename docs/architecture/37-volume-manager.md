@@ -1,11 +1,11 @@
 ## Volume Manager
 
-> **Documentation status: Mixed reference and proposal.** §1–§3 and §6–§8 are
+> **Documentation status: Mixed reference and proposal.** §1–§4 and §6–§8 are
 > implemented and are the current baseline: the recognisers, the `volume` class
-> and its descriptor, and the suppression rule all exist and run on every boot.
-> §4 (mount policy on volumes) and §5 (exclusivity) are still proposals — a
-> volume is published and inspectable, but no rule matches one yet and nothing
-> sets `claimed`.
+> and its descriptor, the suppression rule, and mount policy on volumes all run
+> on every boot — `/wfs` mounts from `SUBSYSTEM=="volume", ATTR{fstype}=="wfs"`,
+> naming no disk. §5 (exclusivity) is still a proposal: `VOLUME_IPC_CLAIM_REQ`
+> exists but nothing sends it.
 
 **Sources this proposal changes**: `src/drivers/partition_manager/`,
 `src/services/device_manager/device_manager_rules.c`, `src/drivers/fs_fat/`,
@@ -102,6 +102,26 @@ With volumes published, a rule names what a volume IS rather than where it sits:
 SUBSYSTEM=="volume", ATTR{fstype}=="wfs",  ENV{MOUNT}="/wfs"
 SUBSYSTEM=="volume", ATTR{label}=="user",  ENV{MOUNT}="/user"
 ```
+
+**Implemented.** The first of those is the live `/wfs` rule. It replaced
+`SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="2"`, which is the shape this
+layer exists to retire — and the WFS volume is precisely the case nothing else
+reaches, since it has no partition table for a `SUBSYSTEM=="partition"` rule to
+match.
+
+`ATTR{label}` is the FILESYSTEM's label and is deliberately not `ATTR{partlabel}`.
+They differ in practice, not just in principle: the ESP carries no partition
+label at all while its FAT boot sector says `QEMU VVFAT`, and
+`scripts/make_gpt_image.py` writes the GPT name `user` beside a FAT volume label
+`USER`. Matching the wrong one finds nothing, so the rule engine keeps them as
+separate matchers and REFUSES a rule that uses one on the other's subsystem —
+a rule that can never fire is rejected at load rather than dying silently.
+
+The filesystem driver is told about the BACKING BLOCK DEVICE, not the volume: a
+driver mounts a block device, and the volume is what selected which one. All
+three facts it receives — canonical id, backend and unit — come from the backing
+record. Passing the volume's own zeroed unit instead let `fs_wfs` mount and then
+fail to register, because `fs.backend` packs `(kind, unit)`.
 
 Neither names a disk, a unit, a backend or a table slot. Moving the image to
 another controller, or putting it in a partition, does not change the rule. This

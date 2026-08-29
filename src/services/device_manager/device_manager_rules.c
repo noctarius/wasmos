@@ -460,6 +460,8 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     char guid_text[40];
     char label[BLOCK_DESCRIPTOR_LABEL_MAX];
     char name[BLOCK_DESCRIPTOR_ID_MAX];
+    char fslabel[VOLUME_DESCRIPTOR_LABEL_MAX];
+    char uuid_text[40];
     block_fs_rule_t rule;
     if (!line || !out_rule) {
         return -1;
@@ -467,6 +469,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     memset(&rule, 0, sizeof(rule));
     label[0] = '\0';
     name[0] = '\0';
+    fslabel[0] = '\0';
     if (copy_rule_line(line, line_buf, sizeof(line_buf)) != 0) {
         return -1;
     }
@@ -540,6 +543,19 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
             rule.has_scheme = 1;
             continue;
         }
+        /* Volume matchers. ATTR{label} is the FILESYSTEM's label and is not
+         * ATTR{partlabel}: the ESP carries no partition label at all while its
+         * FAT boot sector says "QEMU VVFAT". */
+        if (extract_op_value(tok, "ATTR{label}", "==", fslabel, sizeof(fslabel)) == 0) {
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{uuid}", "==", uuid_text, sizeof(uuid_text)) == 0) {
+            if (parse_guid(uuid_text, rule.uuid) != 0) {
+                return -1;
+            }
+            rule.has_uuid = 1;
+            continue;
+        }
     }
     if (path[0] == '\0') {
         return -1;
@@ -548,7 +564,24 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
         rule.subsystem = (uint8_t)DEVMGR_BLOCK_SUBSYS_DISK;
     } else if (strcmp(sub, "partition") == 0) {
         rule.subsystem = (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION;
+    } else if (strcmp(sub, "volume") == 0) {
+        rule.subsystem = (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME;
     } else {
+        return -1;
+    }
+    /* A volume has no partition table of its own to match on, and the block
+     * layer's identity fields do not reach it: a volume is a filesystem, not a
+     * table entry. Refused for the same reason a partition matcher on a disk
+     * rule is -- the author meant a different subsystem, and a dead rule is
+     * indistinguishable from a device that never appeared. */
+    if (rule.subsystem == (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME &&
+        (rule.has_type_guid || rule.has_part_guid || rule.has_scheme || label[0])) {
+        return -1;
+    }
+    /* Conversely, the filesystem matchers belong only to a volume. `fstype` on a
+     * block or partition rule matched a descriptor field no publisher ever set
+     * (see architecture/37 section 9), so it silently matched nothing. */
+    if (rule.subsystem != (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME && (fslabel[0] || rule.has_uuid)) {
         return -1;
     }
     /* A partition matcher on a disk rule is a rule that can never fire: a whole
@@ -569,6 +602,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     rule.unit = unit;
     str_copy(rule.partlabel, sizeof(rule.partlabel), label);
     str_copy(rule.device_name, sizeof(rule.device_name), name);
+    str_copy(rule.label, sizeof(rule.label), fslabel);
     str_copy(rule.mount, sizeof(rule.mount), mount);
     str_copy(rule.spawn_path, sizeof(rule.spawn_path), path);
     *out_rule = rule;

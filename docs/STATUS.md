@@ -773,8 +773,17 @@ linked feature documents for rationale and rollout plans.
   recogniser. Host-tested against images captured from real writers -- macOS
   `newfs_msdos`, QEMU vvfat, `mkfs_wfs`, `make_gpt_image.py` --
   in `tests/unit/fixtures_disk_images.zig`.
-  Nothing MOUNTS from a volume yet: rules still match `block` and `partition`
-  (`architecture/37-volume-manager.md` §4 is the open half).
+- Mount policy reads volumes. `SUBSYSTEM=="volume"` matches `ATTR{fstype}`,
+  `ATTR{label}` and `ATTR{uuid}`, and `/wfs` mounts from
+  `ATTR{fstype}=="wfs"` -- naming no disk, no unit and no backend. That is the
+  case the block layer could not express at all: the WFS image carries no
+  partition table, so nothing publishes a partition for a rule to match.
+  `ATTR{label}` is the FILESYSTEM label and is not `ATTR{partlabel}`; the rule
+  engine refuses a rule that uses either on the other's subsystem. The filesystem
+  driver is handed the BACKING block device's id, backend and unit, because a
+  driver mounts a device and the volume is what chose it. `/user` and `/vwfs`
+  still match on a partition and a unit respectively
+  (`architecture/37-volume-manager.md` §4).
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.

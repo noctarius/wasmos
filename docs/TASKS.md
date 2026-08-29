@@ -969,30 +969,32 @@ tail.
   negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH` -- and
   `wfs_txn_commit_task` awaits one at §14's steps 2, 4 and 6, with §21's replay
   awaiting one before its tail retires the replayed writes.
-- [ ] [FEATURE][P2] Mount policy on volumes, and exclusivity.
-  Design: `architecture/37-volume-manager.md` §4 and §5. The layer beneath is
-  built: the volume manager publishes a `volume` class for every device that
-  holds a filesystem, and the recognisers identify FAT and WFS from a bounded
-  prefix (`src/services/volume_manager/`). What is missing is anything that
-  CONSUMES a volume.
+- [ ] [FEATURE][P2] Exclusivity: nothing claims a volume.
+  Mount policy on volumes is DONE -- `/wfs` mounts from
+  `SUBSYSTEM=="volume", ATTR{fstype}=="wfs"`, naming no disk, no unit and no
+  backend (`architecture/37-volume-manager.md` §4). What remains is §5.
 
-  Rules still match `block` and `partition`, so the WFS volume is still named by
-  `DRIVER=="ata", ATTR{unit}=="2"` -- a disk and a unit, which is the thing this
-  set out to stop. `SUBSYSTEM=="volume"` with `ATTR{fstype}`, `ATTR{label}` and
-  `ATTR{uuid}` is the replacement, and needs the rule engine taught the new
-  subsystem plus a publish path from the volume manager to the device manager
-  (`DEVMGR_PUBLISH_BLOCK_DEVICE` has no volume counterpart yet).
+  `VOLUME_IPC_CLAIM_REQ` exists and sets the CLAIMED flag, but nothing sends it.
+  A filesystem driver should claim on mount and release on unmount, and
+  `fsck`/`mkfs` should refuse a claimed volume. It RECORDS a claim rather than
+  enforcing one -- the volume manager is not in the I/O path, so a tool that does
+  not ask is not stopped.
 
-  Exclusivity is the other half. `VOLUME_IPC_CLAIM_REQ` exists and sets the
-  `CLAIMED` flag, but nothing sends it: a filesystem driver should claim on mount
-  and release on unmount, and `fsck`/`mkfs` should refuse a claimed volume. It
-  RECORDS a claim rather than enforcing one -- the volume manager is not in the
-  I/O path, so a tool that does not ask is not stopped.
-
-  Note the claim does not catch the overlap it looks like it should. A disk and
-  its partitions are distinct volumes, so claiming one does not mark the others;
-  today that is prevented by suppressing the whole-disk volume of a partitioned
+  The claim does not catch the overlap it looks like it should: a disk and its
+  partitions are distinct volumes, so claiming one does not mark the others.
+  Today that is prevented by suppressing the whole-disk volume of a partitioned
   disk, not by the claim.
+
+- [ ] [ENHANCEMENT][P2] Convert the remaining rules that still name a disk.
+  `/user` matches `SUBSYSTEM=="partition", ATTR{partlabel}=="user"`, which names
+  a partition rather than a disk and is already most of the way there, but its
+  volume now carries a FAT label (`USER`) that a `SUBSYSTEM=="volume"` rule could
+  match instead. `/vwfs` still names `DRIVER=="virtio-blk", ATTR{unit}=="48"`
+  outright, with a comment explaining that no matcher could read a volume
+  signature -- which is no longer true.
+
+  `/boot` cannot convert until the bootloader records the ESP; see the initfs
+  entry below.
 
 - [ ] [ENHANCEMENT][P3] Retire `wasmos_block_descriptor_t.fs_type`.
   It is set to `FS_TYPE_UNKNOWN` by all three publishers and by nothing else,

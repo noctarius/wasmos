@@ -453,6 +453,30 @@ enum {
      * cannot describe six BARs and the capability offsets.
      */
     DEVMGR_PUBLISH_DEVICE_DESC = 0x906,
+    /* Announce one VOLUME to the device-manager inventory as a
+     * wasmos_volume_descriptor_t held in a transfer buffer the publisher has
+     * borrowed to this endpoint.
+     * arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
+     *
+     * Same discipline as DEVMGR_PUBLISH_BLOCK_DEVICE: one offset per volume,
+     * so a publisher never overwrites a descriptor the receiver has not read
+     * yet, and no acknowledgement is owed.
+     *
+     * A volume is what can be MOUNTED, which the `block` inventory cannot
+     * say: a partition-table entry may hold no filesystem and a disk with no
+     * table may hold one. The two inventories are therefore separate rather
+     * than one with a flag -- a rule matching SUBSYSTEM=="volume" is asking a
+     * different question from one matching SUBSYSTEM=="block".
+     *
+     * The descriptor names its backing device by CLASS INSTANCE, not by id.
+     * A consumer that needs the id resolves it through the block inventory,
+     * which is where the publisher of that id already put it; carrying a
+     * second copy here would be a second place that can disagree.
+     *
+     * A descriptor whose version is not VOLUME_DESCRIPTOR_VERSION is dropped
+     * rather than partially read.
+     */
+    DEVMGR_PUBLISH_VOLUME = 0x907,
     DEVMGR_MOUNT_INFO = 0x980,
     DEVMGR_QUERY_DONE = 0x981,
 };
@@ -901,6 +925,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x903: return "DEVMGR_PUBLISH_BLOCK_DEVICE";
         case 0x905: return "DEVMGR_ACPI_SCAN_DONE";
         case 0x906: return "DEVMGR_PUBLISH_DEVICE_DESC";
+        case 0x907: return "DEVMGR_PUBLISH_VOLUME";
         case 0x980: return "DEVMGR_MOUNT_INFO";
         case 0x981: return "DEVMGR_QUERY_DONE";
         default: return "UNKNOWN";

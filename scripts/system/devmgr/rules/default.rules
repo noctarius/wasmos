@@ -31,11 +31,16 @@ SUBSYSTEM=="boot", RUN+="/boot/system/drivers/partition_manager.wap"
 # enumerates. That is convenience, not correctness: it subscribes to the class,
 # so a partition published later is probed when it arrives.
 SUBSYSTEM=="boot", RUN+="/boot/system/services/volume_manager.wap"
-# The WFS volume is a raw image on its own disk (build/wfs.img, ATA unit 2), so it
-# needs its own backend: fs_fat cannot read it and would refuse the mount. The
-# DRIVER qualifier matters here for the same reason it does above -- unit 2 alone
-# would also match a second backend's unit 2.
-SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="2", ENV{MOUNT}="/wfs", RUN+="system/drivers/fs_wfs.wap"
+# /wfs is the WFS volume, wherever it is. The rule names no disk, no unit, no
+# backend and no partition: the volume manager recognises the filesystem from its
+# superblock and publishes a volume, and this matches what that volume IS.
+#
+# This is the case the block layer could not express. The WFS image is written
+# straight to a device with no partition table, so the partition manager
+# publishes nothing for it and no SUBSYSTEM=="partition" rule can name it --
+# leaving only DRIVER=="ata", ATTR{unit}=="2", which is a disk and a unit, the
+# thing mount policy set out to stop naming.
+SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ENV{MOUNT}="/wfs", RUN+="system/drivers/fs_wfs.wap"
 # The same WFS volume reached over a different transport. A virtio-blk unit is
 # (slot << 3) | function, so unit 48 is PCI slot 6 function 0 -- the slot the
 # test pins its drive to. The unit is named exactly rather than left wildcard

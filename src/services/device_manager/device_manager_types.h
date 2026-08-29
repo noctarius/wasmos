@@ -13,6 +13,9 @@
 #define DEVICE_REGISTRY_CAP 64
 /* Block devices (ATA/AHCI units) the registry can hold. */
 #define BLOCK_REGISTRY_CAP 16
+/* Volumes the inventory holds. At most one per block device, and usually fewer:
+ * a partitioned disk publishes none. */
+#define VOLUME_REGISTRY_CAP 16
 /* Value a rule field carries when the corresponding ATTR{} was absent from the
  * rule line, meaning "match any device".  A device that genuinely reports 0xFF /
  * 0xFFFF in that field is therefore indistinguishable from the wildcard and
@@ -135,6 +138,23 @@ typedef struct {
     char hash_id[17]; /* 16-char SHA-256 prefix of desc.canonical_id + NUL */
 } block_device_record_t;
 
+/* One VOLUME, as the volume manager describes it.
+ *
+ * Separate from block_device_record_t rather than a flag on it, because the two
+ * answer different questions and differ in both directions: a partition-table
+ * entry may hold no filesystem, and a disk with no table may hold one. A rule
+ * matching SUBSYSTEM=="volume" is asking what can be MOUNTED; one matching
+ * SUBSYSTEM=="block" is asking what storage exists.
+ *
+ * The descriptor names its backing device by class instance. Resolving that to a
+ * canonical id is done against block_registry, where the backend that assigned
+ * the id already put it -- see devmgr_backing_id_for_volume. */
+typedef struct {
+    uint8_t in_use;
+    uint8_t active_service; /* non-zero once a filesystem is mounted on it */
+    wasmos_volume_descriptor_t desc;
+} volume_record_t;
+
 /* Rule: unconditionally spawn a driver path at boot (always_spawn kind). */
 typedef struct {
     uint8_t active;
@@ -154,6 +174,11 @@ typedef struct {
  * partition of one. */
 #define DEVMGR_BLOCK_SUBSYS_DISK 0u
 #define DEVMGR_BLOCK_SUBSYS_PARTITION 1u
+/* A volume: something with a filesystem on it, whether that is a partition or a
+ * whole unpartitioned device. The distinction the two above draw -- disk versus
+ * partition -- is invisible here on purpose, which is the whole point of the
+ * layer: a rule says what a volume IS, not where it sits. */
+#define DEVMGR_BLOCK_SUBSYS_VOLUME 2u
 
 /* Rule: spawn a block-filesystem driver for a specific block device.
  *
@@ -194,6 +219,14 @@ typedef struct {
     uint32_t scheme;  /* PARTITION_SCHEME_* */
     char partlabel[BLOCK_DESCRIPTOR_LABEL_MAX];
     char device_name[BLOCK_DESCRIPTOR_ID_MAX]; /* ATTR{name}: the canonical id */
+    /* Volume matchers. ATTR{label} is the FILESYSTEM's own label, which is not
+     * ATTR{partlabel}: the ESP's partition table carries no label at all while
+     * its FAT boot sector says "QEMU VVFAT", and make_gpt_image writes the GPT
+     * name `user` beside a FAT volume label `USER`. Matching the wrong one finds
+     * nothing, so they are separate matchers rather than one spelling. */
+    uint8_t has_uuid;
+    uint8_t uuid[VOLUME_DESCRIPTOR_UUID_MAX];
+    char label[VOLUME_DESCRIPTOR_LABEL_MAX];
     /* The device that actually matched, filled in when the rule is queued. The
      * filesystem driver is told about THIS, not about the rule's pattern: a
      * wildcard rule has no unit of its own to pass on, and passing the pattern
@@ -284,6 +317,8 @@ typedef struct {
     uint32_t registry_count;
     block_device_record_t block_registry[BLOCK_REGISTRY_CAP];
     uint32_t block_registry_count;
+    volume_record_t volume_registry[VOLUME_REGISTRY_CAP];
+    uint32_t volume_registry_count;
     spawn_caps_t active_rule_spawn_caps;
     /* The PCI function the storage-bootstrap driver was matched to. Kept because
      * the block registry names its units by that address and the mount-info

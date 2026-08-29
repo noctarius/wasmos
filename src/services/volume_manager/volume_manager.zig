@@ -68,6 +68,11 @@ var g_volumes: [MAX_VOLUMES]Volume = [_]Volume{.{}} ** MAX_VOLUMES;
 var g_volume_count: usize = 0;
 
 var g_proc_endpoint: i32 = -1;
+/// The device manager's inventory endpoint, resolved once and kept. Negative
+/// when it could not be resolved, which downgrades publishing to class
+/// registration alone -- and with it every `SUBSYSTEM=="volume"` rule, because
+/// rules match the INVENTORY, not the class.
+var g_devmgr: i32 = -1;
 
 /// Backend endpoints this process has lent its probe buffers to. Grants are per
 /// PROCESS, so one entry covers every device a backend serves and a second
@@ -98,6 +103,17 @@ var g_next_request_id: i32 = 0x7400;
 var g_ident_bid: i32 = -1;
 /// Buffer holding the read request we send downstream, reused for every probe.
 var g_req_bid: i32 = -1;
+/// Buffer the device manager reads published volume descriptors out of: one slot
+/// per volume, lent READ for the life of the process.
+///
+/// Slotted rather than reused, and lent rather than merely written, because a
+/// publish is fire-and-forget: the receiver reads the bytes at a moment of its
+/// choosing, so a single slot rewritten by the next publish hands it whichever
+/// descriptor arrived last, and a buffer it was never lent it cannot read at
+/// all. The partition manager shipped without either and every publish was
+/// refused at the read while class registration still succeeded -- so it looked
+/// cosmetic while every rule addressed an empty registry.
+var g_publish_bid: i32 = -1;
 /// Physical address of this process's block buffer, where probe reads land.
 var g_block_phys: u32 = 0;
 
@@ -200,7 +216,7 @@ fn readPrefix(endpoint_id: i32, instance: u32, sectors_available: u64) bool {
 
 // --- publishing --------------------------------------------------------------
 
-fn publishVolume(vol: *Volume) void {
+fn publishVolume(vol: *Volume, slot: usize) void {
     if (driver.registerService(
         g_proc_endpoint,
         endpoint(),
@@ -214,6 +230,23 @@ fn publishVolume(vol: *Volume) void {
         _ = line.str(idSlice(&vol.desc.canonical_id));
         line.end();
         return;
+    }
+
+    if (g_devmgr >= 0 and g_publish_bid >= 0 and slot < MAX_VOLUMES) {
+        const offset: u32 = @intCast(slot * @sizeOf(driver.VolumeDescriptor));
+        const raw: [*]const u8 = @ptrCast(&vol.desc);
+        if (driver.bufferWrite(g_publish_bid, raw[0..@sizeOf(driver.VolumeDescriptor)], offset)) {
+            _ = driver.send(
+                g_devmgr,
+                endpoint(),
+                op.DEVMGR_PUBLISH_VOLUME,
+                0,
+                g_publish_bid,
+                @intCast(offset),
+                @intCast(@sizeOf(driver.VolumeDescriptor)),
+                0,
+            );
+        }
     }
 
     var line = driver.Line{};
@@ -319,7 +352,7 @@ fn probeDevice(instance: u32, provider_endpoint: i32) void {
     if (vol.instance == 0) return;
     vol.in_use = true;
     g_volume_count += 1;
-    publishVolume(vol);
+    publishVolume(vol, slot);
 }
 
 // --- discovery ---------------------------------------------------------------
@@ -363,7 +396,26 @@ fn drainArrivals() void {
 /// Subscribe to the `block` class, then probe every device already registered.
 /// Subscription FIRST: a device registering between the two fires an event that
 /// is waiting when the loop starts, where subscribing afterwards would lose it.
+/// Resolve the device manager's inventory endpoint and lend it the publish
+/// buffer. Resolved once; the result, including a failure, stands for the life
+/// of the process.
+fn resolveDevmgr() void {
+    const ep = driver.lookupService(g_proc_endpoint, "devmgr.inv", nextRequestId(), 64) orelse {
+        driver.log("[volume-manager] devmgr inventory unavailable; volumes unpublished to it");
+        return;
+    };
+    if (g_publish_bid < 0 or
+        driver.bufferBorrow(ep, g_publish_bid, driver.BUFFER_GRANT_READ) == null)
+    {
+        driver.log("[volume-manager] publish buffer grant failed; volumes unpublished to devmgr");
+        return;
+    }
+    g_devmgr = ep;
+}
+
 fn discoverVolumes() void {
+    resolveDevmgr();
+
     if (!driver.subscribeClass(g_proc_endpoint, endpoint(), "block", nextRequestId())) {
         driver.log("[volume-manager] block class subscribe failed; later devices go unprobed");
     }
@@ -511,6 +563,12 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     };
     g_req_bid = driver.bufferAcquire(@sizeOf(driver.BlockRequest)) orelse {
         driver.log("[volume-manager] request buffer unavailable");
+        return;
+    };
+    g_publish_bid = driver.bufferAcquire(
+        MAX_VOLUMES * @sizeOf(driver.VolumeDescriptor),
+    ) orelse {
+        driver.log("[volume-manager] publish buffer unavailable");
         return;
     };
 

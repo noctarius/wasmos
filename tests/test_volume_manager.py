@@ -145,3 +145,61 @@ class VolumeManagerTest(unittest.TestCase):
             self.session.expect(b"[volume-manager] ready volumes=3", timeout_s=90),
             "the volume manager did not publish exactly three volumes",
         )
+
+    def test_the_inventory_receives_what_the_class_advertises(self) -> None:
+        """Published to the device manager, not only registered under the class.
+
+        These are two separate paths and only one of them feeds rules. A publish
+        needs the buffer BORROWED to the device manager; without that the read is
+        refused while class registration still succeeds, so the volumes look
+        present -- and every SUBSYSTEM=="volume" rule matches nothing. The
+        partition manager shipped with exactly that fault.
+        """
+        assert self.session is not None
+        self.assertTrue(
+            self.session.expect(
+                b"[device-manager] volume add id=volume:block:ata:2 fstype=",
+                timeout_s=90,
+            ),
+            "the WFS volume never reached the device-manager inventory -- the "
+            "publish buffer was not lent, or the descriptor was refused at the read",
+        )
+
+    def test_a_volume_rule_mounts_without_naming_a_disk(self) -> None:
+        """The point of the layer, end to end.
+
+        /wfs is matched by `SUBSYSTEM=="volume", ATTR{fstype}=="wfs"` -- no disk,
+        no unit, no backend, no partition. That case is unreachable any other way:
+        the WFS image has no partition table, so the partition manager publishes
+        nothing for it and no `SUBSYSTEM=="partition"` rule can name it, leaving
+        only a rule naming a disk and a unit.
+
+        The spawn is asserted on the BACKING device, because that is what a
+        filesystem driver mounts. The volume selected it; the block device is
+        what gets opened.
+        """
+        assert self.session is not None
+        self.assertTrue(
+            self.session.expect(
+                b"[device-manager] volume rule queued spawn id=volume:block:ata:2 "
+                b"on block:ata:2",
+                timeout_s=90,
+            ),
+            "no volume rule fired for the WFS volume -- it was published but "
+            "matched nothing, or its backing device could not be resolved from "
+            "the block inventory",
+        )
+        self.assertTrue(
+            self.session.expect(b"[fs-wfs] mounted", timeout_s=90),
+            "fs_wfs was spawned by the volume rule but did not mount",
+        )
+        # Registration is the half that fails when the driver is handed the wrong
+        # identity: fs.backend packs (kind, unit), so a volume rule that passed on
+        # the volume's own zeroed unit rather than the backing device's collided
+        # with another backend and the mount was never usable.
+        self.assertNotIn(
+            b"[fs-wfs] fs.backend register failed",
+            self.session.buf,
+            "fs_wfs mounted but could not register its backend -- the volume rule "
+            "gave it an identity that is not the backing device's",
+        )

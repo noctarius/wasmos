@@ -141,6 +141,7 @@ static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char* name);
 static const char* block_backend_name(uint8_t backend);
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec);
+static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec);
 static uint16_t count_loaded_active_rules(void);
 static int is_mount_already_active(const char* mount);
 static void handle_query_message_fields(const wasmos_ipc_message_t* msg);
@@ -1409,6 +1410,12 @@ static int bytes_equal(const uint8_t* a, const uint8_t* b, uint32_t len) {
  * only on which record happened to be published first. */
 static int block_rule_matches(const block_fs_rule_t* rule, const wasmos_block_descriptor_t* desc) {
     const int is_partition = desc->partition != 0u;
+    /* A volume rule is matched against the VOLUME inventory, never against a
+     * block device: the two describe different things and share only this rule
+     * table. */
+    if (rule->subsystem == (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME) {
+        return 0;
+    }
     if (rule->subsystem == (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION) {
         if (!is_partition) {
             return 0;
@@ -1492,9 +1499,130 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
     return queued;
 }
 
+/* The canonical id of the block device a volume sits on.
+ *
+ * The volume descriptor names it by CLASS INSTANCE, which is a fingerprint of
+ * that id -- so this recomputes the fingerprint of every registered device and
+ * compares. Deliberately not carried in the volume descriptor: the backend that
+ * assigned the id already published it here, and a second copy is a second place
+ * that can disagree, which would mean a filesystem looking up a class instance
+ * nothing holds.
+ *
+ * Returns NULL when the backing device is not in the inventory, which is a real
+ * state rather than an error: a volume can be published before its disk's record
+ * arrives, and the rescan that runs on the next publish picks it up. */
+static const block_device_record_t*
+devmgr_backing_record_for_volume(const wasmos_volume_descriptor_t* desc) {
+    if (!desc) {
+        return 0;
+    }
+    for (uint32_t bi = 0; bi < g_dm.block_registry_count; ++bi) {
+        const block_device_record_t* rec = &g_dm.block_registry[bi];
+        if (!rec->in_use) {
+            continue;
+        }
+        if (wasmos_block_fingerprint(rec->desc.canonical_id) == desc->backing_instance) {
+            return rec;
+        }
+    }
+    return 0;
+}
+
+static int volume_rule_matches(const block_fs_rule_t* rule,
+                               const wasmos_volume_descriptor_t* desc) {
+    if (rule->subsystem != (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME) {
+        return 0;
+    }
+    if (rule->has_fs_type && rule->fs_type != desc->fs_type) {
+        return 0;
+    }
+    /* An unlabelled format can never match a label matcher, which is not the
+     * same as matching an empty label: WFS carries no label at all, while a FAT
+     * volume may genuinely be named "". HAS_LABEL is what separates them. */
+    if (rule->label[0]) {
+        if ((desc->flags & VOLUME_DESCRIPTOR_FLAG_HAS_LABEL) == 0u) {
+            return 0;
+        }
+        if (!wasmos_sys_streq(rule->label, desc->label)) {
+            return 0;
+        }
+    }
+    if (rule->has_uuid) {
+        if ((desc->flags & VOLUME_DESCRIPTOR_FLAG_HAS_UUID) == 0u) {
+            return 0;
+        }
+        /* The whole field, not uuid_len bytes of it: a short id is zero-padded,
+         * so comparing the full width keeps a 4-byte FAT serial from aliasing
+         * the first four bytes of a 16-byte one. */
+        if (!bytes_equal(rule->uuid, desc->uuid, VOLUME_DESCRIPTOR_UUID_MAX)) {
+            return 0;
+        }
+    }
+    if (rule->device_name[0] && !wasmos_sys_streq(rule->device_name, desc->canonical_id)) {
+        return 0;
+    }
+    return 1;
+}
+
+/* Queue any volume rule this volume satisfies.
+ *
+ * The filesystem driver is told about the BACKING BLOCK DEVICE, not about the
+ * volume: a driver mounts a block device, and the volume is what selected which
+ * one. That is the whole shape of this layer -- the rule matches on what the
+ * volume IS, and the mount happens on the device beneath it. */
+static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec) {
+    uint32_t queued = 0;
+    const block_device_record_t* backing = 0;
+    if (!rec || !rec->in_use || (rec->desc.flags & VOLUME_DESCRIPTOR_FLAG_PRESENT) == 0u) {
+        return 0;
+    }
+    backing = devmgr_backing_record_for_volume(&rec->desc);
+    if (!backing) {
+        return 0;
+    }
+    for (uint32_t ri = 0; ri < g_dm.block_fs_rule_count; ++ri) {
+        block_fs_rule_t* rule = &g_dm.block_fs_rules[ri];
+        if (!rule->active || rule->spawned || rule->queued) {
+            continue;
+        }
+        if (is_mount_already_active(rule->mount)) {
+            rule->spawned = 1;
+            log_mount_already_active(rule->mount);
+            continue;
+        }
+        if (volume_rule_matches(rule, &rec->desc)) {
+            rule->queued = 1;
+            /* All three facts come from the BACKING device, not from the volume:
+             * the driver mounts a block device and identifies it exactly as a
+             * block rule's driver would. Leaving backend and unit at zero handed
+             * fs_wfs a unit it does not own, and its fs.backend class instance --
+             * which packs (kind, unit) -- collided with another backend's. */
+            rule->matched_backend = (uint8_t)backing->desc.backend;
+            rule->matched_unit = (uint8_t)backing->desc.unit;
+            (void)str_copy(rule->matched_id, sizeof(rule->matched_id), backing->desc.canonical_id);
+            queued++;
+        }
+    }
+    if (queued > 0u) {
+        char queued_msg[128];
+        (void)snprintf(queued_msg,
+                       sizeof(queued_msg),
+                       "[device-manager] volume rule queued spawn id=%s on %s\n",
+                       rec->desc.canonical_id,
+                       backing->desc.canonical_id);
+        console_write(queued_msg);
+    }
+    return queued;
+}
+
 static void queue_block_fs_rules_for_known_devices(void) {
     for (uint32_t bi = 0; bi < g_dm.block_registry_count; ++bi) {
         (void)queue_block_fs_rules_for_record(&g_dm.block_registry[bi]);
+    }
+    /* Volumes after devices, because a volume's rule needs its backing device's
+     * record to resolve the id the filesystem driver is given. */
+    for (uint32_t vi = 0; vi < g_dm.volume_registry_count; ++vi) {
+        (void)queue_block_fs_rules_for_volume(&g_dm.volume_registry[vi]);
     }
     queue_block_fs_rule_spawns();
 }
@@ -1590,6 +1718,69 @@ static void registry_add_block(const wasmos_block_descriptor_t* in) {
         queue_block_fs_rule_spawns();
         g_dm.need_fat = 0;
     }
+}
+
+/* Consume a wasmos_volume_descriptor_t published into a borrowed buffer
+ * (DEVMGR_PUBLISH_VOLUME): arg0=buffer_id arg1=byte_offset arg2=size.
+ *
+ * Upserts by canonical_id, like the block inventory and for the same reason: the
+ * id is the volume's identity, and it is derived from the backing device's id
+ * rather than allocated, so it is the same string every boot. */
+static void registry_add_volume(const wasmos_volume_descriptor_t* in) {
+    wasmos_volume_descriptor_t desc = *in;
+    volume_record_t* rec = 0;
+    if (desc.version != VOLUME_DESCRIPTOR_VERSION) {
+        console_write("[device-manager] volume descriptor version mismatch\n");
+        return;
+    }
+    /* Untrusted input from a separate process however cooperative it means to
+     * be: an unterminated id or label would run past its field into the log. */
+    if (desc.canonical_id[sizeof(desc.canonical_id) - 1u] != '\0' || desc.canonical_id[0] == '\0') {
+        console_write("[device-manager] volume descriptor has no usable canonical id\n");
+        return;
+    }
+    desc.label[sizeof(desc.label) - 1u] = '\0';
+    for (uint32_t i = 0; i < g_dm.volume_registry_count; ++i) {
+        if (g_dm.volume_registry[i].in_use &&
+            wasmos_sys_streq(g_dm.volume_registry[i].desc.canonical_id, desc.canonical_id)) {
+            rec = &g_dm.volume_registry[i];
+            break;
+        }
+    }
+    if (!rec) {
+        if (g_dm.volume_registry_count >= VOLUME_REGISTRY_CAP) {
+            return;
+        }
+        rec = &g_dm.volume_registry[g_dm.volume_registry_count++];
+        rec->in_use = 1;
+        rec->active_service = 0;
+    }
+    rec->desc = desc;
+
+    char msg[224];
+    (void)snprintf(msg,
+                   sizeof(msg),
+                   "[device-manager] volume add id=%s fstype=%u label=%s sectors=%u\n",
+                   rec->desc.canonical_id,
+                   (unsigned)rec->desc.fs_type,
+                   ((rec->desc.flags & VOLUME_DESCRIPTOR_FLAG_HAS_LABEL) != 0u) ? rec->desc.label
+                                                                                : "-",
+                   (unsigned)rec->desc.lba_count);
+    console_write(msg);
+
+    if (queue_block_fs_rules_for_volume(rec) > 0u) {
+        queue_block_fs_rule_spawns();
+    }
+}
+
+static void registry_add_volume_from_desc(int32_t buffer_id, int32_t offset, int32_t size) {
+    wasmos_volume_descriptor_t desc;
+    if (size < (int32_t)sizeof(desc) ||
+        wasmos_xfer_buffer_read(buffer_id, &desc, (int32_t)sizeof(desc), offset) != 0) {
+        console_write("[device-manager] volume descriptor read failed\n");
+        return;
+    }
+    registry_add_volume(&desc);
 }
 
 static void reset_selected_storage(void) {
@@ -1723,6 +1914,10 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
         registry_add_block_from_desc(msg->arg0, msg->arg1, msg->arg2);
         return;
     }
+    if (msg->type == DEVMGR_PUBLISH_VOLUME) {
+        registry_add_volume_from_desc(msg->arg0, msg->arg1, msg->arg2);
+        return;
+    }
     /* The packed form still carries ACPI/ISA devices (bus 0xFF), which have no
      * BARs and fit in four words; PCI functions come as descriptors. */
     if (msg->type == DEVMGR_PUBLISH_DEVICE) {
@@ -1749,6 +1944,10 @@ static int dm_register_inventory_handlers(void) {
     if (wasmos_sys_event_register(
             &g_dm_inventory_loop, DEVMGR_PUBLISH_BLOCK_DEVICE, dm_handle_inventory_message, 0) !=
         0) {
+        return -1;
+    }
+    if (wasmos_sys_event_register(
+            &g_dm_inventory_loop, DEVMGR_PUBLISH_VOLUME, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
     if (wasmos_sys_event_register(

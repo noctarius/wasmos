@@ -1053,7 +1053,18 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
     }
 }
 
-WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d) {
+/* The entry the process manager calls, and it takes NO arguments.
+ *
+ * A path-spawned entry is called with argc 0 (process_manager_spawn.c,
+ * wasmos_app.c), and wasm3 refuses argc 0 against a function that declares
+ * parameters -- so a four-parameter entry here made this driver fail to start
+ * at all under the default runtime, before its first line of output. WARP does
+ * not enforce entry arity, which is the only reason it ever ran. fs_fat and
+ * fs_init declare it the same way for the same reason.
+ *
+ * Startup values do not arrive as arguments: they come from the spawn-info
+ * buffer, read below. */
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     char mount_alias[32];
     char service_name[32];
     int32_t block_endpoint = -1;
@@ -1061,11 +1072,6 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d
     int32_t name_len;
     int32_t status;
     static const char* const k_service_prefix = "fs.wfs";
-
-    (void)a;
-    (void)b;
-    (void)c;
-    (void)d;
 
     g_proc_endpoint = wasmos_startup_proc_endpoint();
     g_fs_endpoint = wasmos_ipc_create_endpoint();

@@ -855,39 +855,28 @@ tail.
 
 ## Filesystems and Storage
 
-- [ ] [BUG][P1] `fs_wfs` cannot start under wasm3: its entry export declares four
-  parameters and the process manager always calls an entry with argc 0.
-
-  `initialize` is declared `(int32_t a, int32_t b, int32_t c, int32_t d)`
-  (`src/drivers/fs_wfs/fs_wfs.c`) and immediately discards all four. Every other
-  filesystem driver declares `initialize(void)` -- `fs_fat.c:555`,
-  `fs_init.c:421` -- which is the actual contract: `process_manager_spawn.c` sets
-  `slot->entry_argc = 0` on every path spawn, and `wasmos_app.c` defaults
-  `manifest.entry_argc` to 0. wasm3 refuses the mismatch, so the driver dies at
-  its entry export and the block rule respawns it until its retry budget is
-  spent:
-
-      [wasm-driver] call failed: argument count mismatch
-      [pm] app entry failed
-      [pm] spawn child-dead pid=0x21   (x9)
-
-  `/wfs` therefore never mounts and every test that reads it reports `fs failed`.
-
-  FIX, VERIFIED: change the signature to `initialize(void)` and drop the four
-  `(void)a;` casts. `test_wfs_mount_read` goes from 10 of 11 failing to 11 of 11
-  passing, and its runtime falls from 339s to 37s once the respawn storm stops.
-  Nothing else is needed -- the arguments were already unused.
-
-  WHY CI IS GREEN: the integration batteries run under WARP only
-  (`.github/workflows/ci.yml` pins `configs/warp_smp_defconfig`), and WARP does
-  not enforce entry arity where wasm3 does. So this is invisible to CI as it
-  stands, and the same class of defect in any future driver would be too. Worth
-  considering whether the battery matrix should cover both runtimes, or whether
-  the packer should reject an entry export whose arity is not 0.
-
-  NOT caused by the volume-manager work that found it: reproduced on
-  `origin/main` at af51ffa154 with the identical 10-of-11 failures, by checking
-  that commit out and rebuilding.
+- [x] [BUG][P1] `fs_wfs` could not start under wasm3: its entry export declared
+  four parameters and the process manager always calls an entry with argc 0, so
+  the driver died at its entry call and the block rule respawned it nine times
+  before giving up -- `/wfs` never mounted under the DEFAULT runtime, and every
+  test that read it reported `fs failed`. Fixed by declaring `initialize(void)`,
+  which `fs_fat` and `fs_init` already do. Reproduced both ways on a wasm3_smp
+  tree: 9 respawns and 0 mounts without the fix, 0 and mounted with it.
+- [ ] [BUG][P1] The QEMU battery matrix runs ONE runtime, so a whole class of
+  defect is invisible to CI. `.github/workflows/ci.yml` pins the integration
+  batteries to `configs/warp_smp_defconfig`; the `*_single` / `*_smp` jobs build
+  and boot both runtimes but run no batteries. WARP does not enforce entry-export
+  arity and wasm3 does, which is how the defect above shipped with CI green while
+  every `/wfs` test failed. Anything that differs between the two engines is
+  equally unseen. Running every battery twice doubles the QEMU time, so the
+  choice is which subset earns a second pass, not whether to double everything.
+- [ ] [ENHANCEMENT][P2] Make `scripts/make_wasmos_app.c` refuse an entry export
+  whose arity is not zero. A path-spawned entry is called with argc 0, so a
+  module declaring parameters is not startable -- under wasm3 it dies at the call
+  with "argument count mismatch" before its first line of output, and under WARP
+  it runs by accident. The packer already reads the module and knows the entry
+  name from the manifest; checking the signature turns a runtime failure that
+  reads as a spawn problem into a build error naming the function.
 
 - [ ] [ENHANCEMENT][P2] Give a guest a way to reach truncation at an arbitrary
   size. `wfs_truncate_task` now shrinks a tree-mapped object to a size INSIDE a

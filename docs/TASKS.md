@@ -908,7 +908,17 @@ tail.
   refuse a MOUNTED volume, and nothing enforces that since the block layer
   stopped arbitrating who may use a drive -- correctly, because a request now
   names its own target. A `claimed` flag on the volume is what they would
-  consult.
+  consult -- recording a claim, not enforcing one: the volume manager is not in
+  the I/O path, so a tool that does not ask is not stopped.
+
+  Two decisions gate the implementation, both in `architecture/37` §6 and §8.
+  A disk carrying a partition table must NOT also publish a volume, or `/boot`
+  appears twice; the suppressing signal is the table, and the block descriptor
+  cannot supply it today because `scheme` is always `PARTITION_SCHEME_NONE` on a
+  whole disk (the disk driver publishes that record and reads no tables). And the
+  volume manager must SUBSCRIBE to the `block` class rather than enumerate it --
+  the same fix the partition manager needs, which is the entry below; two
+  components with that gap is how it stops looking like one.
 
 - [ ] [FEATURE][P2] Probe disks that register after the partition manager starts,
   and move it into initfs. `probeAll` enumerates the `block` class exactly once at

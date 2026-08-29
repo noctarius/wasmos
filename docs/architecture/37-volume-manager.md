@@ -119,7 +119,160 @@ need it and neither has it today:
 `claimed` on the volume, set when a filesystem service mounts it, is the flag
 both consult.
 
-## 6. Boundaries
+It RECORDS a claim; it does not enforce one. The volume manager is not in the
+I/O path — unlike the partition manager, which proxies every transfer and can
+therefore clamp it, a volume names a device a client then talks to directly. A
+tool that does not ask is not stopped. That is the same cooperative arrangement
+the mount namespace already runs on, and it is worth stating rather than
+implying, because "the volume manager owns exclusivity" reads as enforcement.
+
+Enforcement would mean the volume manager standing in the data path for every
+volume, which costs a hop on every filesystem read to prevent a mistake only
+`fsck` and `mkfs` can make. The claim is checked where the damage would be done,
+not where the I/O is.
+
+## 6. Discovery
+
+The volume manager SUBSCRIBES to the `block` class; it does not enumerate it.
+
+The distinction is not stylistic. `partition_manager.zig`'s `probeAll` calls
+`lookupClass` exactly once at bring-up, so a disk whose driver registers
+afterwards is never probed and its partitions never appear — a live defect
+recorded in `TASKS.md`, invisible today only because the partition manager is
+spawned after storage is online. A volume manager built the same way inherits it
+exactly, and a second component with the same gap is how a gap stops looking like
+one. `subscribeClass` exists (`src/libc/zig/driver.zig`); the partition manager
+should move onto whatever this uses, rather than the tree carrying two answers to
+"a device appeared".
+
+What arrives on that subscription is whole disks AND partitions, in one stream,
+because the partition manager publishes each partition INTO the `block` class.
+A subscriber must expect both. It does not, however, risk consuming its own
+output: volumes are published to a different class.
+
+### The whole-disk volume that should not exist
+
+A disk carrying a partition table must not also be published as a volume. If it
+were, `/boot` would appear twice — once as the partition holding it, once as the
+disk beneath — and a rule matching on `fstype` would match whichever arrived
+first. This is the same failure the `SUBSYSTEM` split fixed one layer down
+(`architecture/36` §3), reappearing because the volume layer flattens exactly the
+distinction that split introduced.
+
+Recognition alone does not settle it. A recogniser reading LBA 0 of a partitioned
+disk finds a table, matches nothing, and yields `FS_TYPE_UNKNOWN` — which is a
+publishable volume, not a suppression, since `ATTR{fstype}=="unknown"` is a
+legitimate matcher a rule may use to select a volume no shipped filesystem
+claims. "No superblock matched" and "this is not a volume" are different answers
+and must not collapse into one.
+
+The suppressing signal is a partition table, which is why `libblkid` carries
+`partitions/` beside `superblocks/` rather than only the latter. Two ways to get
+it, and the choice is a real one:
+
+- **The volume manager parses tables too**, reusing `partition_table.zig`. Honest
+  and self-contained, but it makes two components readers of the same on-disk
+  structure, which is precisely what `architecture/36` centralised.
+- **The block descriptor carries it.** Cheaper, and wrong today: `scheme` is
+  always `PARTITION_SCHEME_NONE` on a whole disk, because the DISK DRIVER
+  publishes that record and disk drivers read no tables
+  (`ata.c`, `virtio_blk.zig`). Only a partition's descriptor carries a real
+  scheme, set by the partition manager. Making this work means the partition
+  manager amending the disk's record after parsing — a republish of a device it
+  does not own.
+
+The second is preferable if the republish is acceptable, because it keeps table
+parsing in one component. Either way the rule is the same and belongs in the
+document: **a volume is published for a device that holds a filesystem, and a
+device holding a partition table holds partitions instead.**
+
+## 7. Recognition in practice
+
+A recogniser needs to READ, which makes the volume manager a block client with
+the same obligations as any other.
+
+- One transfer buffer for the prefix, acquired by the volume manager and lent to
+  each backend, because the CLIENT of a request owns the buffer and the server is
+  a transient grantee (`architecture/12-dma-transfers.md`).
+- Grants are per PROCESS, not per endpoint or per device. An ATA controller
+  serving two drives answers both on one endpoint, so one grant covers them and a
+  second attempt is refused as `ALREADY_BORROWED`. Deduplicate by endpoint before
+  lending, as `probeAll` does.
+- A partition device is addressed from ITS OWN LBA 0. The partition manager
+  rebases every forwarded transfer onto the window, so a descriptor's `lba_start`
+  says where the volume SITS and is never an address a client sends. A recogniser
+  reading `lba_start` reads past the superblock it was looking for.
+
+The bounded prefix should be one figure stated once, not per recogniser: it sizes
+the buffer, and a recogniser that wants more than the volume manager read cannot
+have it without changing that figure deliberately.
+
+### Where the library lives
+
+`src/drivers/partition_manager/partition_table.zig` is the precedent and the
+shape to copy: a pure module with no `std`, no host calls and no globals, taking
+bytes and returning a verdict, with `test` blocks run under `zig test` in the
+unit-test target. Purity is what makes exhaustive host testing possible — the
+partition parser has 27 cases against synthetic tables — and a recogniser is the
+same kind of function.
+
+One file per format, mirroring `libblkid`'s `superblocks/`. Precedence is a
+single ordered table in the volume manager, not a property each recogniser
+asserts about itself, so the order is readable in one place.
+
+## 8. The `volume` class and its descriptor
+
+The `volume` sketch in §1 is a set of fields; what crosses IPC must be a defined
+struct in a client-owned transfer buffer, per `skills/wasmos-shared-primitives`.
+The conventions are already set by `wasmos_block_descriptor_t`
+(`src/drivers/include/wasmos_driver_abi.h`): packed, `version` first and
+validated by every reader, layout pinned by `_Static_assert` in C and comptime
+asserts in the Zig mirror, and delivered as `arg0 = buffer_id`,
+`arg1 = byte_offset`, `arg2 = size`.
+
+The class instance must be **derived, not allocated**: an FNV-1a fingerprint of
+a canonical volume id, exactly as the `block` instance is a fingerprint of
+`block:ata:0p1`. A counter would renumber volumes between boots, which is the
+property the whole change exists to remove.
+
+A publish needs a BORROW and one slot per volume at its own offset. The partition
+manager shipped without either and every publish was refused at the read while
+class registration still succeeded — so `blkinfo` listed partitions, reads
+worked, and the failure looked cosmetic while every partition rule addressed an
+empty registry.
+
+## 9. What this displaces
+
+`wasmos_block_descriptor_t.fs_type` is set to `FS_TYPE_UNKNOWN` by all three
+publishers and by nothing else, while `ATTR{fstype}` in the rule engine matches
+against it. The matcher is live, the field is not.
+
+That is a reporting surface waiting for a recogniser, and it is also a field in
+the wrong struct: `fs_type` on a BLOCK device says a disk driver probed a
+superblock, which none does and none should. Once volumes carry it, the block
+descriptor's copy should be retired rather than left as a field that is
+permanently one value — a field nothing sets is one a later reader will trust.
+`ATTR{fstype}` then means what it says, on the subsystem that can answer it.
+
+## 10. Constraints inherited from the block layer
+
+**`/boot` cannot be a volume, yet.** The mount-policy examples in §4 do not cover
+it, and it is the case that stopped `architecture/36` §3 short. The partition
+manager is spawned from the BOOT rules, which cannot load until `/boot` is
+mounted, so `/boot` cannot mount from anything the partition manager published —
+and a volume manager consuming the `block` class sits one layer further from the
+bootstrap than that. `/boot` keeps a whole-disk rule and `fat_try_parse_mbr`
+until a table reader runs from initfs.
+
+**Two volumes on one disk collide on `fs.backend`.**
+`FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`, and a partition
+reports its disk's unit, so the second filesystem to register is refused. It is
+latent today because no shipped configuration mounts two volumes from one disk;
+a volume manager whose whole purpose is to multiply mountable things makes it
+routine. The block fingerprint is the identity that fixes it, and this is the
+last packed class instance left.
+
+## 11. Boundaries
 
 The volume manager does NOT mount. It publishes volumes; the device manager's
 rules choose what mounts on them, and the filesystem drivers do the mounting.

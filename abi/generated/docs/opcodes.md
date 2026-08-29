@@ -195,7 +195,7 @@ endpoint-scoped and may repeat across subsystems.
 | `VIRTIO_SERIAL_IPC_RESP` | 0x8B0 | resp |  |
 | `VIRTIO_SERIAL_IPC_ERROR` | 0x8BF | error |  |
 
-## device_manager (0x900–0x982)
+## device_manager (0x900–0x981)
 
 | Opcode | Value | Kind | Description |
 |---|---|---|---|
@@ -203,11 +203,9 @@ endpoint-scoped and may repeat across subsystems.
 | `DEVMGR_PCI_SCAN_DONE` | 0x901 | resp |  |
 | `DEVMGR_QUERY_MOUNT_REQ` | 0x902 | req |  |
 | `DEVMGR_PUBLISH_BLOCK_DEVICE` | 0x903 | req | Announce one block device to the device-manager inventory as a wasmos_block_descriptor_t held in a transfer buffer the publisher has borrowed to this endpoint. arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).  Each device occupies its own offset, so the publisher never overwrites a descriptor the receiver has not read yet and no acknowledgement is needed -- the same discipline DEVMGR_PUBLISH_DEVICE_DESC uses.  The descriptor's canonical_id is the device's IDENTITY and the inventory keys on it. backend and unit are attributes of the device rather than its name: the unit is BACKEND-LOCAL, since ATA numbers its drives 0 and 1 while a virtio-blk device numbers itself by bus position. Publishing without a backend leaves the record BLOCK_BACKEND_UNKNOWN, which no `DRIVER==` rule matches.  A descriptor whose version is not BLOCK_DESCRIPTOR_VERSION is dropped rather than partially read; see WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION.  |
-| `DEVMGR_QUERY_BLOCK_MOUNT_REQ` | 0x904 | req |  |
 | `DEVMGR_ACPI_SCAN_DONE` | 0x905 | resp | ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device; device_id field carries the I/O base address for serial (class 0x07).  |
 | `DEVMGR_PUBLISH_DEVICE_DESC` | 0x906 | req | Publish one enumerated PCI function as a wasmos_pci_device_desc_t held in a transfer buffer the publisher has borrowed to this endpoint. arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0). Each device occupies its own offset, so the publisher never overwrites a descriptor the receiver has not read yet and no acknowledgement is needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words cannot describe six BARs and the capability offsets.  |
 | `DEVMGR_MOUNT_INFO` | 0x980 | resp |  |
-| `DEVMGR_BLOCK_MOUNT_INFO` | 0x982 | resp |  |
 | `DEVMGR_QUERY_DONE` | 0x981 | resp |  |
 
 ## netdrv (0xA00–0xAFF)

@@ -338,7 +338,7 @@ export const VIRTIO_SERIAL_IPC_WRITE_REG32_REQ: i32 = 0x832;
 export const VIRTIO_SERIAL_IPC_RESP: i32 = 0x8B0;
 export const VIRTIO_SERIAL_IPC_ERROR: i32 = 0x8BF;
 
-// device_manager (0x900..0x982)
+// device_manager (0x900..0x981)
 export const DEVMGR_PUBLISH_DEVICE: i32 = 0x900;
 export const DEVMGR_PCI_SCAN_DONE: i32 = 0x901;
 export const DEVMGR_QUERY_MOUNT_REQ: i32 = 0x902;
@@ -361,7 +361,6 @@ export const DEVMGR_QUERY_MOUNT_REQ: i32 = 0x902;
 // A descriptor whose version is not BLOCK_DESCRIPTOR_VERSION is dropped
 // rather than partially read; see WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION.
 export const DEVMGR_PUBLISH_BLOCK_DEVICE: i32 = 0x903;
-export const DEVMGR_QUERY_BLOCK_MOUNT_REQ: i32 = 0x904;
 // ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
 // device_id field carries the I/O base address for serial (class 0x07).
 export const DEVMGR_ACPI_SCAN_DONE: i32 = 0x905;
@@ -374,7 +373,6 @@ export const DEVMGR_ACPI_SCAN_DONE: i32 = 0x905;
 // cannot describe six BARs and the capability offsets.
 export const DEVMGR_PUBLISH_DEVICE_DESC: i32 = 0x906;
 export const DEVMGR_MOUNT_INFO: i32 = 0x980;
-export const DEVMGR_BLOCK_MOUNT_INFO: i32 = 0x982;
 export const DEVMGR_QUERY_DONE: i32 = 0x981;
 
 // netdrv (0xA00..0xAFF)

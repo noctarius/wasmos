@@ -544,7 +544,12 @@ subsystems:
 
           A descriptor whose version is not BLOCK_DESCRIPTOR_VERSION is dropped
           rather than partially read; see WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION.
-      - { symbol: DEVMGR_QUERY_BLOCK_MOUNT_REQ, value: 0x904, kind: req }
+      # 0x904 reserved: DEVMGR_QUERY_BLOCK_MOUNT_REQ, retired. It answered
+      # "where does the disk at this unit mount?", which cannot be asked --
+      # every partition of a disk reports that disk's unit, so the question
+      # names a device and the answer names a volume. The mount point now
+      # travels in the filesystem driver's startup arguments as `mount=`,
+      # chosen by the rule that spawned it.
       - symbol: DEVMGR_ACPI_SCAN_DONE
         value: 0x905
         kind: resp
@@ -563,7 +568,7 @@ subsystems:
           needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words
           cannot describe six BARs and the capability offsets.
       - { symbol: DEVMGR_MOUNT_INFO, value: 0x980, kind: resp }
-      - { symbol: DEVMGR_BLOCK_MOUNT_INFO, value: 0x982, kind: resp }
+      # 0x982 reserved: DEVMGR_BLOCK_MOUNT_INFO, retired with its request above.
       - { symbol: DEVMGR_QUERY_DONE, value: 0x981, kind: resp }
 
   - name: netdrv

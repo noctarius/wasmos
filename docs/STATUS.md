@@ -748,16 +748,24 @@ linked feature documents for rationale and rollout plans.
   `lba_start`/`lba_count`, and forwards transfers with the LBA rebased onto that
   window and the sector count clamped to it. A disk with no table publishes
   nothing and is left alone, which is what keeps partition tables optional.
-  Spawned from the boot rules, so every disk has registered before it enumerates.
-  Nothing mounts a filesystem on a partition yet
+  Spawned from the boot rules, so every disk has registered before it enumerates
+  -- once, at bring-up: a disk whose driver registers later is never probed.
+  `/user` mounts from a partition it names by GPT label
   (`architecture/36-partition-manager-and-block-identity.md` §3).
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
-  optional `/user`.
+  optional `/user`. `/user` is a raw GPT image built by
+  `scripts/make_gpt_image.py` from the contents of `userfs/` -- one FAT16
+  partition labelled `user`, mounted by a rule that names that label and nothing
+  else. `/boot` remains a vvfat MBR disk mounted by a whole-disk rule, because
+  the firmware boots it and the partition manager cannot run before it.
 - `fs-fat` is a single-threaded, non-blocking reactor: queued operation
   contexts are resumable stackless coroutines, while one active operation uses
   the shared 8 KiB block/DMA buffer. It supports FAT12/16/32 and LFN, reports
-  `FS_ERR_*`, and binds to its requested block-device unit.
+  `FS_ERR_*`, and binds to the block device named by the `id=` in its startup
+  arguments. `mount=` in those arguments is where the volume goes; the descriptor
+  says whether the device is a partition, and therefore whether its first sector
+  is a boot sector or may be a partition table.
 - Long file names are UTF-8 at the API and UTF-16 on disk, in both directions.
   Reading gathers UTF-16 units positionally (LFN entries arrive highest-ordinal
   first, each carrying a fixed slice, which variable-length UTF-8 cannot do) and

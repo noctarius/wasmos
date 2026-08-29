@@ -40,6 +40,13 @@ set(EXAMPLES_AS_DIR ${CMAKE_SOURCE_DIR}/examples/assemblyscript)
 set(EXAMPLES_ZIG_DIR ${CMAKE_SOURCE_DIR}/examples/zig)
 set(SERVICES_DIR ${CMAKE_SOURCE_DIR}/src/services)
 set(USERFS_DIR ${CMAKE_SOURCE_DIR}/userfs)
+# The /user disk is a real GPT image built by scripts/make_gpt_image.py, not a
+# `fat:rw:<dir>` directory. QEMU's vvfat synthesises a classic MBR whatever the
+# guest is, so a directory-backed drive cannot exercise the GPT path at all --
+# and the partition it does synthesise carries no label, leaving the volume
+# nameable only by its position in the table. Files under USERFS_DIR are copied
+# into the image's root at build time.
+set(USERFS_IMAGE ${BUILD_DIR}/user.img)
 
 set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
 set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
@@ -1782,6 +1789,9 @@ if (ZIG_AVAILABLE)
 endif ()
 
 set(WASMOS_ESP_POPULATE_CMDS
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${USERFS_DIR}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/make_gpt_image.py
+          --output ${USERFS_IMAGE} --label user --source ${USERFS_DIR}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
@@ -1865,7 +1875,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=fat:rw:${USERFS_DIR}
+            -drive format=raw,file=${USERFS_IMAGE}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
@@ -1879,7 +1889,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=fat:rw:${USERFS_DIR}
+            -drive format=raw,file=${USERFS_IMAGE}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
@@ -1892,7 +1902,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=fat:rw:${USERFS_DIR}
+            -drive format=raw,file=${USERFS_IMAGE}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (with display)"
@@ -1935,7 +1945,7 @@ if (OVMF_VARS)
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
             WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
-            WASMOS_USERFS=${USERFS_DIR}
+            WASMOS_USERFS_IMAGE=${USERFS_IMAGE}
             WASMOS_QEMU_ISOLATE_ESP=1
             WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
             PYTHONDONTWRITEBYTECODE=1
@@ -1966,7 +1976,7 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=fat:rw:${USERFS_DIR}
+              -drive format=raw,file=${USERFS_IMAGE}
       DEPENDS bootloader kernel
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU"
@@ -1979,7 +1989,7 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=fat:rw:${USERFS_DIR}
+              -drive format=raw,file=${USERFS_IMAGE}
       DEPENDS bootloader kernel
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
@@ -1991,7 +2001,7 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=fat:rw:${USERFS_DIR}
+              -drive format=raw,file=${USERFS_IMAGE}
       DEPENDS bootloader kernel
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (with display)"
@@ -2025,7 +2035,7 @@ else ()
               WASMOS_OVMF_CODE=${OVMF_CODE}
               WASMOS_ESP=${BUILD_DIR}/esp
             WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
-              WASMOS_USERFS=${USERFS_DIR}
+              WASMOS_USERFS_IMAGE=${USERFS_IMAGE}
               WASMOS_QEMU_ISOLATE_ESP=1
               WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
               PYTHONDONTWRITEBYTECODE=1

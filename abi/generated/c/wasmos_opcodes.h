@@ -401,7 +401,7 @@ enum {
     VIRTIO_SERIAL_IPC_ERROR = 0x8BF,
 };
 
-/* device_manager (0x900..0x982) */
+/* device_manager (0x900..0x981) */
 enum {
     DEVMGR_PUBLISH_DEVICE = 0x900,
     DEVMGR_PCI_SCAN_DONE = 0x901,
@@ -426,7 +426,6 @@ enum {
      * rather than partially read; see WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION.
      */
     DEVMGR_PUBLISH_BLOCK_DEVICE = 0x903,
-    DEVMGR_QUERY_BLOCK_MOUNT_REQ = 0x904,
     /* ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
      * device_id field carries the I/O base address for serial (class 0x07).
      */
@@ -441,7 +440,6 @@ enum {
      */
     DEVMGR_PUBLISH_DEVICE_DESC = 0x906,
     DEVMGR_MOUNT_INFO = 0x980,
-    DEVMGR_BLOCK_MOUNT_INFO = 0x982,
     DEVMGR_QUERY_DONE = 0x981,
 };
 
@@ -821,11 +819,9 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x901: return "DEVMGR_PCI_SCAN_DONE";
         case 0x902: return "DEVMGR_QUERY_MOUNT_REQ";
         case 0x903: return "DEVMGR_PUBLISH_BLOCK_DEVICE";
-        case 0x904: return "DEVMGR_QUERY_BLOCK_MOUNT_REQ";
         case 0x905: return "DEVMGR_ACPI_SCAN_DONE";
         case 0x906: return "DEVMGR_PUBLISH_DEVICE_DESC";
         case 0x980: return "DEVMGR_MOUNT_INFO";
-        case 0x982: return "DEVMGR_BLOCK_MOUNT_INFO";
         case 0x981: return "DEVMGR_QUERY_DONE";
         default: return "UNKNOWN";
         }

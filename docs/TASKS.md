@@ -916,8 +916,8 @@ tail.
   appears twice; the suppressing signal is the table, and the block descriptor
   cannot supply it today because `scheme` is always `PARTITION_SCHEME_NONE` on a
   whole disk (the disk driver publishes that record and reads no tables). And the
-  volume manager must SUBSCRIBE to the `block` class rather than enumerate it --
-  the same fix the partition manager needs, which is the entry below; two
+  the volume manager must SUBSCRIBE to the `block` class rather than enumerate it --
+  the same fix the partition manager needs, which is the entry below; having two
   components with that gap is how it stops looking like one.
 
 - [ ] [FEATURE][P2] Probe disks that register after the partition manager starts,

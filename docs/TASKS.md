@@ -88,7 +88,7 @@ Source: `architecture/06-memory-management.md`,
   `memcpy(phys_base | KERNEL_HIGHER_HALF_BASE, src, size)` where `src` is the
   caller's linear memory at `wasm_off` (`src/kernel/warp/link.cpp:2373`), while
   `shmem_map`/`map_auto` map the region's OWN frames into that linear memory --
-  `paging_map_4k(virt, phys_base + i*0x1000)` on WARP (`:1929`) and
+  `paging_map_4k(virt, phys_base + i*0x1000)` on WARP (`:1930`) and
   `mm_context_map_physical` on wasm3 (`src/kernel/wasm3/link.c:2280`). Source and
   destination are therefore the same physical pages. libui states it outright:
   `shmem_flush(this.shmemId, this.mappedPtr, this.strideBytes * this.height)`
@@ -123,17 +123,32 @@ Source: `architecture/06-memory-management.md`,
   4. `libui.ts`, `tetris.rs`, `gfx_smoke.c`, then `gfx_compositor.zig` +
      `font_service.zig` last, since the compositor owns the allocation.
 
-  OWNERSHIP DIRECTION, decided 2026-08-29: the WRITER owns. A CPU-visible
-  zero-copy mapping is owner-only today (`xfer_buffer_map` doc, and every caller
-  in the tree also acquires: `net_stack.c` 14 maps/7 acquires,
-  `framebuffer_native.c` 2/2); the borrow-side zero-copy path is DEVICE DMA via
-  `dma_map_borrow`, which returns a device address, not a guest window. So an app
-  that draws must ACQUIRE its surface and borrow it to the compositor READ, or the
-  ABI needs a rights-checked borrow-side CPU mapping (`xfer_buffer_map_borrow`,
-  WRITE implying a readable mapping since x86-64 PTEs cannot express write-only --
-  `paging.c:681`). The second is the missing primitive; the first needs no ABI
-  change and can land first. The borrow-side mapping is tracked as its own item
-  below.
+  OWNERSHIP DIRECTION: the APP owns its surface and borrows it to the compositor.
+  This is not a choice made here; it is the transfer-buffer invariant --
+  "**the CLIENT of an exchange owns the buffer, the server is a transient
+  grantee**" and "**a server cannot own a buffer it hands to a client**"
+  (`docs/architecture/12-dma-transfers.md`, `18-filesystem-stack.md:124`,
+  restated in `skills/wasmos-shared-primitives`). It is unimplementable the other
+  way: `xfer_buffer_release` is owner-only, no hostcall transfers ownership, and
+  nothing tells a server when a client has stopped reading.
+
+  Today's compositor is on the wrong side of that rule: it allocates each
+  window's app-facing buffer with `shmem_create` and replies
+  `(buffer_id, shmem_id, stride_bytes)` -- a server owning a buffer it hands to a
+  client. The migration must therefore INVERT it, not transliterate it. The app
+  asks the compositor for a surface SPEC (extent, format, stride), acquires the
+  buffer itself, and borrows it to the compositor; `release` then
+  cascade-revokes the compositor's grant on every path including the error ones.
+
+  Consequence for the reader side: the compositor becomes a GRANTEE that must read
+  pixels to composite, and a grantee has no CPU zero-copy path today -- owner+CPU
+  is `xfer_buffer_map`, borrower+device is `dma_map_borrow` (a device address, not
+  a guest window), borrower+CPU is missing. Verified: every `xfer_buffer_map`
+  caller in the tree also acquires (`net_stack.c` 14 maps / 7 acquires,
+  `framebuffer_native.c` 2/2). So the borrow-side mapping below is needed by the
+  COMPOSITOR, not by the drawing app -- the opposite of the first reading of this
+  entry. Until it exists the compositor must copy or DMA out of the borrowed
+  surface.
 
   Done when: no `shmem_*` host call remains in `abi/hostcalls.yaml` (ids
   renumbered per the ID RULES, whole-world rebuild + `.cache/warp_aot`
@@ -147,6 +162,12 @@ Source: `architecture/06-memory-management.md`,
   is not owner-vs-borrower but WHO TOUCHES THE PAGES -- a device or a guest CPU --
   and the CPU half of the borrow side is simply missing.
 
+  The hole binds precisely because ownership is fixed by contract: the client owns
+  and the server is a grantee (`12-dma-transfers.md`), so any server that must
+  READ a client's bytes with the CPU rather than a device is forced onto a copy.
+  A compositor reading an app's surface to blend it is the case that makes this
+  worth closing; the FS and block paths avoid it only because they DMA.
+
   Model it on `dma_map_borrow`, which already establishes borrow-scoped mapping
   with rights validation (`flags` must be non-zero and a subset of the borrow's
   rights): take a `borrow_id`, validate the requested access against the borrow,
@@ -155,7 +176,7 @@ Source: `architecture/06-memory-management.md`,
 
   Constraints established 2026-08-29, all load-bearing:
   - WRITE implies a readable mapping. x86-64 PTEs encode permission as presence
-    plus a single R/W bit (`paging.c:681-690` translates MEM_REGION_FLAG_WRITE to
+    plus a single R/W bit (`paging.c:683-690` translates MEM_REGION_FLAG_WRITE to
     PT_FLAG_WRITE, MEM_REGION_FLAG_READ is not consulted at all), so write-only is
     not representable. Say so in the ABI doc rather than implying an enforcement
     the MMU cannot deliver. WRITE alone stays meaningful for `dma_map_borrow` and
@@ -171,10 +192,27 @@ Source: `architecture/06-memory-management.md`,
     See the zero-on-acquire item below, which is the pre-existing gap and is
     independent of this one.
 
-  Unblocks the compositor providing an explicit pixel region to an app that asks
-  for one, which is the shape the graphics migration wants: draw list by default
-  via `GFX_IPC_SUBMIT_COMMANDS`, an explicit borrowed region when an app needs to
-  author pixels itself.
+  Unblocks the compositor compositing from a borrowed surface without a copy,
+  which is the shape the graphics migration wants: a draw list by default via
+  `GFX_IPC_SUBMIT_COMMANDS` (0x0204, allocated and "not yet dispatched" --
+  `docs/architecture/20-graphics-framebuffer-and-compositor.md:131`), and an
+  app-owned surface borrowed to the compositor when an app must author pixels
+  itself.
+
+  The draw list itself goes in a CLIENT-OWNED DESCRIPTOR, never in the four IPC
+  argument words: `arg0 = buffer_id, arg1 = offset, arg2 = size`, per the rule in
+  `AGENTS.md` and `skills/wasmos-add-opcode` §"Step 0". A command list is
+  unbounded and grows by construction, which is exactly what the four words are
+  not for. The app acquires the descriptor buffer once and reuses it, so the
+  per-frame cost is one write into an already-mapped buffer.
+
+  Moving the primitives compositor-side also retires four separate rasterizers --
+  `vt_main.c` (35 fill/blit sites), `tetris.rs` (20), `libui.ts` (12),
+  `gfx_smoke.c` (2) -- into the one service that owns the pixels, and text needs
+  no app-side pixels at all since `font_service` already exposes
+  `handle_raster_glyph` and `handle_raster_text_into`. It is also the natural
+  virtio-gpu seam: a draw list is already the shape a GPU consumes, so forwarding
+  becomes a backend swap behind `SUBMIT_COMMANDS` rather than an ABI change.
 - [ ] [BUG][P2] `xfer_buffer_acquire` hands out frames without zeroing them, so a
   fresh buffer can carry a previous tenant's bytes: another process's released
   buffer, a dead app's window contents, a previous FS response. The path is

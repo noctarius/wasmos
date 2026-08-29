@@ -142,8 +142,8 @@ recorded in `TASKS.md`, invisible today only because the partition manager is
 spawned after storage is online. A volume manager built the same way inherits it
 exactly, and a second component with the same gap is how a gap stops looking like
 one. `subscribeClass` exists (`src/libc/zig/driver.zig`); the partition manager
-should move onto whatever this uses, rather than the tree carrying two answers to
-"a device appeared".
+should switch from one-shot `lookupClass` enumeration to `subscribeClass`-driven
+class events, rather than the tree carrying two answers to "a device appeared".
 
 What arrives on that subscription is whole disks AND partitions, in one stream,
 because the partition manager publishes each partition INTO the `block` class.

@@ -1906,6 +1906,36 @@ add_custom_command(
   COMMENT "Building the WFS test volume with mkfs_wfs"
   VERBATIM)
 add_custom_target(wfs_image DEPENDS ${WFS_IMAGE})
+
+# The interactive targets boot COPIES of the disk fixtures, never the fixtures.
+#
+# A `run-qemu` session that writes to /wfs or /user would otherwise mutate a
+# build artifact the suites read as a fixed input, and the damage surfaces much
+# later -- in a read test asserting bytes an interactive session overwrote. That
+# reads as flakiness, because a fresh CI tree never sees it and only the machine
+# that ran interactively fails. It has already cost one debugging session.
+#
+# Copies rather than snapshot=on, so trying persistence by hand still works:
+# writes survive across `run-qemu` invocations, and are discarded when the
+# fixture is rebuilt, which is the point at which the old contents stopped
+# describing the volume anyway.
+set(WFS_RUN_IMAGE ${BUILD_DIR}/run/wfs.img)
+set(WFS_VIRTIO_RUN_IMAGE ${BUILD_DIR}/run/wfs_virtio.img)
+set(USERFS_RUN_IMAGE ${BUILD_DIR}/run/user.img)
+add_custom_command(OUTPUT ${WFS_RUN_IMAGE}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/run
+  COMMAND ${CMAKE_COMMAND} -E copy ${WFS_IMAGE} ${WFS_RUN_IMAGE}
+  DEPENDS ${WFS_IMAGE} VERBATIM)
+add_custom_command(OUTPUT ${WFS_VIRTIO_RUN_IMAGE}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/run
+  COMMAND ${CMAKE_COMMAND} -E copy ${WFS_VIRTIO_IMAGE} ${WFS_VIRTIO_RUN_IMAGE}
+  DEPENDS ${WFS_VIRTIO_IMAGE} VERBATIM)
+add_custom_command(OUTPUT ${USERFS_RUN_IMAGE}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/run
+  COMMAND ${CMAKE_COMMAND} -E copy ${USERFS_IMAGE} ${USERFS_RUN_IMAGE}
+  DEPENDS ${USERFS_IMAGE} VERBATIM)
+add_custom_target(run_images
+  DEPENDS ${WFS_RUN_IMAGE} ${WFS_VIRTIO_RUN_IMAGE} ${USERFS_RUN_IMAGE})
 add_custom_command(
   OUTPUT ${WFS_VIRTIO_IMAGE}
   COMMAND ${BUILD_DIR}/mkfs_wfs --quiet
@@ -2006,11 +2036,11 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=${USERFS_IMAGE}
-            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-            -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+            -drive format=raw,file=${USERFS_RUN_IMAGE}
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+            -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
             -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-    DEPENDS bootloader kernel wfs_image wfs_virtio_image
+    DEPENDS bootloader kernel run_images
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
     VERBATIM
@@ -2023,11 +2053,11 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=${USERFS_IMAGE}
-            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-            -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+            -drive format=raw,file=${USERFS_RUN_IMAGE}
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+            -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
             -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-    DEPENDS bootloader kernel wfs_image wfs_virtio_image
+    DEPENDS bootloader kernel run_images
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
     VERBATIM
@@ -2039,11 +2069,11 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=${USERFS_IMAGE}
-            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-            -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+            -drive format=raw,file=${USERFS_RUN_IMAGE}
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+            -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
             -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-    DEPENDS bootloader kernel wfs_image wfs_virtio_image
+    DEPENDS bootloader kernel run_images
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (with display)"
     VERBATIM
@@ -2117,11 +2147,11 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=${USERFS_IMAGE}
-              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-              -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+              -drive format=raw,file=${USERFS_RUN_IMAGE}
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+              -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
               -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-      DEPENDS bootloader kernel wfs_image wfs_virtio_image
+      DEPENDS bootloader kernel run_images
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU"
       VERBATIM
@@ -2133,11 +2163,11 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=${USERFS_IMAGE}
-              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-              -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+              -drive format=raw,file=${USERFS_RUN_IMAGE}
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+              -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
               -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-      DEPENDS bootloader kernel wfs_image wfs_virtio_image
+      DEPENDS bootloader kernel run_images
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
       VERBATIM
@@ -2148,11 +2178,11 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=${USERFS_IMAGE}
-              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-              -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+              -drive format=raw,file=${USERFS_RUN_IMAGE}
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+              -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
               -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-      DEPENDS bootloader kernel wfs_image wfs_virtio_image
+      DEPENDS bootloader kernel run_images
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (with display)"
       VERBATIM

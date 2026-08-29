@@ -44,16 +44,6 @@ source = "hello.rc"
 
 [[entries]]
 kind = "wasmos_app"
-path = "apps/shmtgt.wap"
-source = "shmtgt.wap"
-
-[[entries]]
-kind = "wasmos_app"
-path = "apps/shmownr.wap"
-source = "shmownr.wap"
-
-[[entries]]
-kind = "wasmos_app"
 path = "apps/net_smoke.wap"
 source = "net_smoke.wap"
 

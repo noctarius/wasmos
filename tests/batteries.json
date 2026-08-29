@@ -41,7 +41,6 @@
         "test_chardev_preempt.py",
         "test_ipc_wakeup.py",
         "test_preempt_smoke.py",
-        "test_shmem_grant_revoke_e2e.py",
         "test_threading_ipc_stress.py",
         "test_timer_tick.py",
         "test_work_stealing.py",

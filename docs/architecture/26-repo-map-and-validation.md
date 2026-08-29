@@ -230,8 +230,6 @@ Its manifest is `scripts/initfs.toml`:
 | `apps/init_smoke.wap`                | yes        | init_smoke        |
 | `apps/native_call_min.wap`           | yes        | native-call-min   |
 | `apps/native_call_smoke.wap`         | yes        | native-call-smoke |
-| `apps/shmtgt.wap`                    | no         | shmtgt            |
-| `apps/shmownr.wap`                   | no         | shmownr           |
 | `system/services/pci_bus.wap`        | yes        | pci_bus           |
 | `system/services/acpi_bus.wap`       | yes        | acpi_bus          |
 | `system/drivers/ata.wap`             | yes        | ata               |

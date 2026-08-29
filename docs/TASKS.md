@@ -120,9 +120,13 @@ Source: `architecture/06-memory-management.md`,
       libui.ts            14  create grant map_auto unmap flush
       gfx_smoke.c         11  create grant map_auto unmap flush
       tetris.rs            9  create grant map_auto flush
-      shmem_target.c       7  map map_auto unmap
-      shmem_owner.c        5  create grant map_auto revoke unmap
-      menu_bar.c           4  create map_auto refresh unmap
+      menu_bar.c           4  create map_auto refresh unmap  [DONE]
+
+  `shmem_target.c` (7 calls) and `shmem_owner.c` (5) were deleted rather than
+  ported, which retired the last `shmem_revoke` call site; the hostcall itself
+  survives until the ABI is retired wholesale. `kernel_shmem_owner_isolation_test`
+  in `kernel_ring3_smoke_runtime.c` still exercises the kernel-side grant
+  isolation and goes with that same step, not this one.
 
   ALREADY MIGRATED, contrary to the earlier list: `vt_main.c` calls no shmem at
   all -- its klog ring is an `xfer_buffer_acquire` overlay and the only mention
@@ -154,7 +158,16 @@ Source: `architecture/06-memory-management.md`,
   2. `shmem_owner.c` / `shmem_target.c` -- tests OF the mechanism; DELETE rather
      than port, which also retires the sole `shmem_revoke` consumer. Their
      coverage (grant/revoke/forged-id denial) belongs to xfer buffers and largely
-     exists there already.
+     exists there already. [DONE] Deleted with `tests/test_shmem_grant_revoke_e2e.py`
+     and their CMake, `scripts/initfs.toml`, and repo-map wiring. The six markers
+     that test asserted map onto `tests/unit/test_xfer_buffer/xfer_buffer.c`:
+     pre-grant and forged-id denial onto "unrelated context has no access before
+     borrow", grant onto "borrower gains requested read access", and revoke/stale
+     denial onto the borrow-removal cases and the four
+     `INACTIVE_BORROW`/`NO_ACCESS` assertions. What does NOT carry over is the
+     two-process end-to-end shape: the unit suite drives the registry in-process,
+     so nothing now exercises a borrow across a real spawn boundary under QEMU.
+     Worth restoring as an xfer-buffer e2e app pair if that boundary ever breaks.
   3. `libui.ts`, `tetris.rs`, `gfx_smoke.c`, then `gfx_compositor.zig` +
      `font_service.zig` last, since the compositor allocates the app-facing
      window buffer and is the side whose ownership inverts.

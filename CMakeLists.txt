@@ -108,12 +108,6 @@ set(WASM_IRQ_ROUTE_DENY_APP ${BUILD_DIR}/irq_route_deny.wap)
 set(WASM_IRQ_ROUTE_ALLOW_SRC ${EXAMPLES_C_DIR}/irq_route_allow/irq_route_allow.c)
 set(WASM_IRQ_ROUTE_ALLOW_WASM ${BUILD_DIR}/irq_route_allow.wasm)
 set(WASM_IRQ_ROUTE_ALLOW_APP ${BUILD_DIR}/irq_route_allow.wap)
-set(WASM_SHMEM_OWNER_SRC ${EXAMPLES_C_DIR}/shmem_owner/shmem_owner.c)
-set(WASM_SHMEM_OWNER_WASM ${BUILD_DIR}/shmownr.wasm)
-set(WASM_SHMEM_OWNER_APP ${BUILD_DIR}/shmownr.wap)
-set(WASM_SHMEM_TARGET_SRC ${EXAMPLES_C_DIR}/shmem_target/shmem_target.c)
-set(WASM_SHMEM_TARGET_WASM ${BUILD_DIR}/shmtgt.wasm)
-set(WASM_SHMEM_TARGET_APP ${BUILD_DIR}/shmtgt.wap)
 set(WASM_MENU_BAR_SRC ${EXAMPLES_C_DIR}/menu_bar/menu_bar.c)
 set(WASM_MENU_BAR_WASM ${BUILD_DIR}/menu_bar.wasm)
 set(WASM_MENU_BAR_APP ${BUILD_DIR}/menu_bar.wap)
@@ -1782,13 +1776,6 @@ set(IRQ_ROUTE_DENY_COPY_CMD
 set(IRQ_ROUTE_ALLOW_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_IRQ_ROUTE_ALLOW_APP} ${BUILD_DIR}/esp/apps/irq_route_allow.wap
 )
-set(SHMEM_OWNER_COPY_CMD
-  COMMAND ${CMAKE_COMMAND} -E rm -f ${BUILD_DIR}/esp/apps/shmem_owner.wap ${BUILD_DIR}/esp/apps/shmem_target.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SHMEM_OWNER_APP} ${BUILD_DIR}/esp/apps/shmownr.wap
-)
-set(SHMEM_TARGET_COPY_CMD
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SHMEM_TARGET_APP} ${BUILD_DIR}/esp/apps/shmtgt.wap
-)
 set(MENU_BAR_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MENU_BAR_APP} ${BUILD_DIR}/esp/apps/menu_bar.wap
 )
@@ -1965,8 +1952,6 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${NATIVE_CALL_MIN_COPY_CMD}
   ${NATIVE_CALL_SMOKE_COPY_CMD}
   ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
   ${MENU_BAR_COPY_CMD}
   ${NET_SMOKE_COPY_CMD}
   ${NET_UDP_ECHO_COPY_CMD}

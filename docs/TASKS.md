@@ -185,6 +185,29 @@ Source: `architecture/06-memory-management.md`,
         was: app asks the compositor to free the buffer the compositor owns
         now: app withdraws the surface it lent, BEFORE releasing it
 
+      NEW: GFX_IPC_ATTACH_SURFACE (window_id, buffer_id, borrow_id)
+        the app registers a surface it owns and has borrowed to the compositor
+
+  ATTACH is required, not symmetry for its own sake: the compositor cannot
+  discover either id. `xfer_buffer_borrow` returns the borrow_id to the OWNER,
+  which hands it to the grantee, and the two ids are not interchangeable --
+  `xfer_buffer_read`/`write` key on `buffer_id` (the kernel checks that the
+  caller, owner or borrower, holds the right) while `dma_map_borrow` and the
+  proposed `xfer_buffer_map_borrow` key on `borrow_id`. The compositor needs
+  both: buffer_id for the copy path that exists today, borrow_id for the mapping
+  path when it lands.
+
+  Three ids is a fixed, non-growing set, so they travel as bare argument words
+  rather than a descriptor -- the exception the four-word rule allows, not a
+  violation of it.
+
+  ATTACH also keeps PRESENT honest about double buffering: attach registers a
+  surface, PRESENT names which attached surface is ready, DETACH withdraws one.
+  Folding attach into PRESENT would force the compositor to re-derive its
+  per-surface state whenever a buffer_id changed, and would leave an app unable
+  to hold two surfaces at once -- which is exactly what resize and tear-free
+  presentation both want.
+
   `DETACH_SURFACE` is not cosmetic. There is no unborrow notification, so an app
   that releases while the compositor still holds a borrow leaves the compositor
   reading a revoked borrow mid-composite. The explicit detach is the missing

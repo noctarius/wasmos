@@ -862,25 +862,48 @@ tail.
   `TODO` on BLOCK_IPC_READ_REQ). Needs a second argument word for the high half,
   or a descriptor-carrying request. ATA is on `lba28` and stops at 128 GiB
   regardless, so only virtio-blk can reach the limit today.
-- [ ] [FEATURE][P2] Phase 2: the partition manager service (Zig,
-  `src/drivers/partition_manager/`). Subscribes to the `block` class, parses GPT
-  (CRC32 + backup header) and MBR, publishes each partition as a block device
-  with its own class instance and endpoint, and proxies READ/WRITE/READ_ZC with
-  an LBA offset and a bounds clamp. One downstream endpoint per disk because
-  `ata_assign_unit_for_source` resolves the unit from the source endpoint
-  (`src/drivers/ata/ata.c:752`); one upstream endpoint per partition because a
-  block request carries no partition field. Needs `lookupClass`,
-  `subscribeClass` and reborrow/unborrow wrappers in `src/libc/zig/driver.zig`.
+- [x] [FEATURE][P2] Phase 2: the partition manager service (Zig,
+  `src/drivers/partition_manager/`). Parses GPT (CRC32 + backup header) and MBR
+  and publishes each partition as a block device with its own class instance,
+  proxying READ/WRITE with an LBA offset and a bounds clamp. Landed in PR #25;
+  the endpoint-per-disk and endpoint-per-partition shape the plan called for was
+  not needed, because a block request carries its target in a request descriptor.
   See `architecture/36-partition-manager-and-block-identity.md` §2.
-- [ ] [FEATURE][P2] Phase 3: mount policy from the partition, not from a rule naming a disk.
-  `SUBSYSTEM=="partition"` matching on `partuuid`/`partlabel`/`type`/`fstype`/
-  `scheme`, GPT label supplying the mount path, and the filesystem driver
-  receiving its window in startup arguments. Deletes `fat_try_parse_mbr`
-  (`src/drivers/fs_fat/fat_geom.c:68`), which today mounts *the first FAT
-  partition* regardless of which one the rule meant, and retires
-  `DEVMGR_QUERY_BLOCK_MOUNT_REQ` (keyed on unit alone, matches `0xFF`
-  wildcards — `src/services/device_manager/device_manager.c:1881`). See
-  `architecture/36-partition-manager-and-block-identity.md` §3.
+- [x] [FEATURE][P2] Phase 3: mount policy from the partition, not from a rule naming a disk.
+  `SUBSYSTEM=="partition"` splits partitions from whole disks and matches on
+  `partuuid`/`partlabel`/`type`/`name`/`fstype`/`scheme`; the mount path travels
+  as `mount=` in the filesystem driver's startup arguments, retiring
+  `DEVMGR_QUERY_BLOCK_MOUNT_REQ`; `/user` is a real GPT image mounted by its
+  label. Landed in PR #27.
+  `fat_try_parse_mbr` was NOT deleted — see the follow-on below for why. The GPT
+  label supplies the mount MATCHER, not the mount path: a rule still says where a
+  volume goes, so a labelled volume can be remounted elsewhere without rewriting
+  a partition table. See `architecture/36-partition-manager-and-block-identity.md` §3.
+- [ ] [FEATURE][P2] Probe disks that register after the partition manager starts,
+  and move it into initfs. `probeAll` enumerates the `block` class exactly once at
+  bring-up (`src/drivers/partition_manager/partition_manager.zig`), so a disk
+  whose driver registers later is never probed and its partitions never appear.
+  Subscribing to the class instead is also the prerequisite for running the
+  partition manager from initfs, which is what breaks the bootstrap circle that
+  keeps `fat_try_parse_mbr` alive: it is spawned from the BOOT rules, which
+  cannot load until `/boot` is mounted, so `/boot` cannot be mounted from a
+  partition the partition manager published. Deleting `fat_try_parse_mbr`
+  (`src/drivers/fs_fat/fat_geom.c`) removes the last partition-table reader
+  outside the partition manager.
+- [ ] [BUG][P3] Two partitions of one disk collide on the `fs.backend` class
+  instance. `FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`
+  (`src/drivers/include/wasmos_driver_abi.h`) and a partition reports its disk's
+  unit, so mounting two volumes from one disk would refuse the second
+  registration. Latent — no shipped configuration does that. The block
+  fingerprint is the identity that fixes it, and this is the last packed instance
+  left after the block class moved to one.
+- [ ] [ENHANCEMENT][P3] Report a rule line the device manager REFUSES.
+  `dm_rules_load_*` cannot distinguish "this line belongs to another rule kind",
+  which is the normal case since all four loaders run over the whole text, from
+  "this line is malformed or too long", which is a defect its author should see.
+  `device_manager_rules.c` has no console on purpose — being pure is what lets
+  the host suite link it standalone — so this needs a return code rather than a
+  log call. Carries a `TODO` at the loader.
 - [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
   preserve the transfer-buffer ownership contract through all VFS relay paths.

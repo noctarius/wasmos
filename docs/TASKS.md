@@ -855,6 +855,22 @@ tail.
 
 ## Filesystems and Storage
 
+- [ ] [BUG][P1] The WFS integration tests do not pass locally: `/wfs` never
+  mounts. `fs_wfs` is spawned by its block rule and dies immediately at its entry
+  export -- `[wasm-driver] call failed: argument count mismatch`, then
+  `[pm] app entry failed` -- and the rule retries until its budget is spent, so
+  every test that reads `/wfs` reports `fs failed`.
+
+  Reproduced on `origin/main` at af51ffa154 (PR #32) as well as on branches off
+  it: 10 of 11 cases in `test_wfs_mount_read` fail identically either side, so it
+  is not caused by the volume-manager work that found it. Environment is macOS,
+  the `wasm3` runtime, SMP=1; CI is Linux MTTCG and was green for #32, so the
+  first thing to establish is whether this is runtime- or host-specific rather
+  than a plain regression. `fs_wfs` declares `initialize` with four arguments and
+  `kind = "driver"`, which is the ordinary shape, so the mismatch is between what
+  the loader passes and what the module exports -- suspect the AOT path or a
+  stale module rather than the declaration.
+
 - [ ] [ENHANCEMENT][P2] Give a guest a way to reach truncation at an arbitrary
   size. `wfs_truncate_task` now shrinks a tree-mapped object to a size INSIDE a
   block and promotes an inline object a grow takes past `WFS_INLINE_DATA_MAX`,
@@ -929,35 +945,38 @@ tail.
   negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH` -- and
   `wfs_txn_commit_task` awaits one at §14's steps 2, 4 and 6, with §21's replay
   awaiting one before its tail retires the replayed writes.
-- [ ] [FEATURE][P2] A volume manager, and filesystem recognisers.
-  Design: `docs/architecture/37-volume-manager.md`.
+- [ ] [FEATURE][P2] Mount policy on volumes, and exclusivity.
+  Design: `architecture/37-volume-manager.md` §4 and §5. The layer beneath is
+  built: the volume manager publishes a `volume` class for every device that
+  holds a filesystem, and the recognisers identify FAT and WFS from a bounded
+  prefix (`src/services/volume_manager/`). What is missing is anything that
+  CONSUMES a volume.
 
-  A volume is a thing with a filesystem on it -- a formatted raw disk, a
-  formatted partition, later a span of several. Nothing publishes that today:
-  the `block` class answers "what storage exists", which is not the same
-  question, so mount rules still name a disk and a unit
-  (`DRIVER=="ata", ATTR{unit}=="2"` for the WFS volume) even after Phase 3 set
-  out to stop them doing exactly that.
+  Rules still match `block` and `partition`, so the WFS volume is still named by
+  `DRIVER=="ata", ATTR{unit}=="2"` -- a disk and a unit, which is the thing this
+  set out to stop. `SUBSYSTEM=="volume"` with `ATTR{fstype}`, `ATTR{label}` and
+  `ATTR{uuid}` is the replacement, and needs the rule engine taught the new
+  subsystem plus a publish path from the volume manager to the device manager
+  (`DEVMGR_PUBLISH_BLOCK_DEVICE` has no volume counterpart yet).
 
-  The blocking piece is a RECOGNISER: something that identifies a format without
-  that format's driver being resident. It cannot live in the filesystem drivers,
-  which are spawned BY the rule that needs the answer, and it does not belong in
-  the partition manager, whose job is tables and which publishes nothing at all
-  for a disk without one. Linux keeps it in a library (`libblkid`, `superblocks/`
-  beside `partitions/`) run by udev at publish time; Windows keeps it in a
-  recogniser stub separate from the filesystem. We follow Linux's shape because
-  a library needs no resident process.
+  Exclusivity is the other half. `VOLUME_IPC_CLAIM_REQ` exists and sets the
+  `CLAIMED` flag, but nothing sends it: a filesystem driver should claim on mount
+  and release on unmount, and `fsck`/`mkfs` should refuse a claimed volume. It
+  RECORDS a claim rather than enforcing one -- the volume manager is not in the
+  I/O path, so a tool that does not ask is not stopped.
 
-  `FS_TYPE_WFS` and the `ATTR{fstype}=="wfs"` rule spelling are already
-  registered, so a recogniser has somewhere to report to; nothing sets the field
-  yet. A probe was briefly written into `partition_manager.zig` and taken back
-  out -- it worked, but it put filesystem knowledge in the table parser and
-  still could not describe an unpartitioned volume.
+  Note the claim does not catch the overlap it looks like it should. A disk and
+  its partitions are distinct volumes, so claiming one does not mark the others;
+  today that is prevented by suppressing the whole-disk volume of a partitioned
+  disk, not by the claim.
 
-  It also gives exclusivity an owner. `fsck.wfs` and `mkfs.wfs` must both refuse
-  a MOUNTED volume, and nothing enforces that since the block layer stopped
-  arbitrating who may use a drive -- correctly, because a request now names its
-  own target. `claimed` on the volume is what they would consult.
+- [ ] [ENHANCEMENT][P3] Retire `wasmos_block_descriptor_t.fs_type`.
+  It is set to `FS_TYPE_UNKNOWN` by all three publishers and by nothing else,
+  while the `volume` descriptor now carries the field a recogniser actually
+  fills. `ATTR{fstype}` on a BLOCK device says a disk driver probed a superblock,
+  which none does and none should. Retire it rather than leave a field that is
+  permanently one value -- a field nothing sets is one a later reader will trust.
+  Blocked on the rule engine matching `fstype` on volumes instead, above.
 
 - [ ] [FEATURE][P2] A userland `mkfs.wfs`, so the OS can create a volume and not
   only mount one. Formatting today is a HOST tool (`src/tools/mkfs_wfs`, run on
@@ -1027,48 +1046,6 @@ tail.
   label supplies the mount MATCHER, not the mount path: a rule still says where a
   volume goes, so a labelled volume can be remounted elsewhere without rewriting
   a partition table. See `architecture/36-partition-manager-and-block-identity.md` §3.
-- [ ] [FEATURE][P2] A volume manager, and filesystem recognisers.
-  Design: `architecture/37-volume-manager.md`.
-
-  A volume is a thing with a filesystem on it -- a formatted raw disk, a
-  formatted partition, later a span of several. Nothing publishes that: the
-  `block` class answers "what storage exists", which is a different question, so
-  a rule that wants a filesystem still has to name where it sits. Phase 3 got as
-  far as matching a PARTITION's label, which does not reach a formatted disk
-  with no table at all.
-
-  The blocking piece is a RECOGNISER: something that identifies a format without
-  that format's driver being resident. It cannot live in the filesystem drivers,
-  which are spawned BY the rule that needs the answer, and it does not belong in
-  the partition manager, whose job is tables and which publishes nothing for a
-  disk without one -- a recogniser written there does work, which is what makes
-  it the tempting wrong place. Linux keeps it in a library (`libblkid`,
-  `superblocks/` beside `partitions/`) that udev runs at publish time; Windows
-  keeps it in a recogniser stub separate from the filesystem. HelenOS asks each
-  filesystem server in turn, which it can afford because its servers are
-  resident and ours are not.
-
-  `wasmos_block_descriptor_t.fs_type` already exists and is always
-  `FS_TYPE_UNKNOWN`; `FS_TYPE_*` and the `ATTR{fstype}` matcher are the reporting
-  surface a recogniser would fill in.
-
-  A volume manager also gives exclusivity an owner. A checker or a formatter must
-  refuse a MOUNTED volume, and nothing enforces that since the block layer
-  stopped arbitrating who may use a drive -- correctly, because a request now
-  names its own target. A `claimed` flag on the volume is what they would
-  consult -- recording a claim, not enforcing one: the volume manager is not in
-  the I/O path, so a tool that does not ask is not stopped.
-
-  Two decisions gate the implementation, both in `architecture/37-volume-manager.md` §6.
-  A disk carrying a partition table must NOT also publish a volume, or `/boot`
-  appears twice; the suppressing signal is the table, and the block descriptor
-  cannot supply it today because `scheme` is always `PARTITION_SCHEME_NONE` on a
-  whole disk (the disk driver publishes that record and reads no tables). The
-  volume manager must also SUBSCRIBE to the `block` class rather than enumerate
-  it; the partition manager is the worked example to copy, down to dropping an
-  arrival on its own endpoint (`architecture/36-partition-manager-and-block-identity.md`
-  §2, "Discovery").
-
 - [ ] [FEATURE][P2] Move the partition manager into initfs.
   Probing late-registering disks — the prerequisite — is DONE: it subscribes to
   the `block` class and probes what arrives, guarded by

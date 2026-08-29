@@ -759,6 +759,57 @@ static inline uint32_t wasmos_block_fingerprint(const char* id) {
     return hash;
 }
 
+/* One VOLUME -- a thing with a filesystem on it. Carried in a transfer buffer by
+ * VOLUME_IPC_IDENTIFY_RESP; see abi/opcodes.yaml for that argument encoding.
+ *
+ * A volume is not a block device, and the two classes answer different
+ * questions. `block` answers "what storage exists", which does not settle what
+ * can be MOUNTED in either direction: a partition-table entry may hold no
+ * filesystem, and a disk with no table may hold one. Mount policy matching on
+ * `block` therefore has to name disks and units, which is the thing it is trying
+ * to stop doing. A raw formatted disk and a formatted partition are both one
+ * volume here, and above this layer partition-ness is not visible.
+ *
+ * This descriptor carries no way to read the volume, deliberately.
+ * `backing_instance` names the `block` device underneath and a client talks to
+ * that directly, so the volume manager stays out of the I/O path -- unlike the
+ * partition manager, which proxies every transfer because it has to rebase them.
+ *
+ * `canonical_id` is `volume:` prefixed to the backing device's canonical id
+ * (`volume:block:ata:0p1`), so it is DERIVED rather than allocated and is the
+ * same string every boot. The `volume` class instance is
+ * wasmos_block_fingerprint() of it, exactly as a `block` instance is a
+ * fingerprint of its own id.
+ *
+ * A reader MUST reject a `version` it does not know instead of reading the
+ * fields it recognizes. */
+typedef struct __attribute__((packed)) {
+    uint32_t version; /* VOLUME_DESCRIPTOR_VERSION */
+    uint32_t fs_type; /* FS_TYPE_*, from a recogniser */
+    /* The `block` class instance this volume sits on. A client reads the volume
+     * by addressing THIS, never by addressing the volume manager. */
+    uint32_t backing_instance;
+    uint32_t flags;                              /* VOLUME_DESCRIPTOR_FLAG_* */
+    uint64_t lba_start;                          /* offset within the backing device */
+    uint64_t lba_count;                          /* the volume's size, in sectors */
+    uint32_t sector_bytes;                       /* copied from the backing device */
+    uint32_t uuid_len;                           /* bytes of `uuid` the format defines */
+    uint8_t uuid[VOLUME_DESCRIPTOR_UUID_MAX];    /* zero-padded; see uuid_len */
+    char label[VOLUME_DESCRIPTOR_LABEL_MAX];     /* NUL-terminated; empty unless HAS_LABEL */
+    char canonical_id[VOLUME_DESCRIPTOR_ID_MAX]; /* NUL-terminated */
+} wasmos_volume_descriptor_t;
+
+/* Pinned on the same terms as wasmos_block_descriptor_t: every field sits at its
+ * natural alignment and the total is a multiple of 8, so the packed layout here
+ * and the naturally-aligned Zig `extern struct` mirror describe the same bytes.
+ * A field added on one side and forgotten on the other fails the build rather
+ * than shifting every field past it. */
+_Static_assert(sizeof(wasmos_volume_descriptor_t) == 40u + VOLUME_DESCRIPTOR_UUID_MAX +
+                                                         VOLUME_DESCRIPTOR_LABEL_MAX +
+                                                         VOLUME_DESCRIPTOR_ID_MAX,
+               "wasmos_volume_descriptor_t layout changed; update VolumeDescriptor in "
+               "src/libc/zig/driver.zig to match");
+
 /* Message-signalled interrupt style a PCI function supports, reported by
  * PCI_IPC_MSI_QUERY. MSI-X wins when a device offers both: it addresses each
  * vector independently, where plain MSI needs one naturally-aligned block of

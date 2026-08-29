@@ -201,6 +201,9 @@ set(WASM_VIRTIO_RNG_APP ${BUILD_DIR}/virtio_rng.wap)
 set(WASM_PARTITION_MANAGER_DRIVER_SRC ${DRIVER_WASM_DIR}/partition_manager/partition_manager.zig)
 set(WASM_PARTITION_MANAGER_DRIVER_WASM ${BUILD_DIR}/partition_manager.wasm)
 set(WASM_PARTITION_MANAGER_APP ${BUILD_DIR}/partition_manager.wap)
+set(WASM_VOLUME_MANAGER_SRC ${SERVICES_DIR}/volume_manager/volume_manager.zig)
+set(WASM_VOLUME_MANAGER_WASM ${BUILD_DIR}/volume_manager.wasm)
+set(WASM_VOLUME_MANAGER_APP ${BUILD_DIR}/volume_manager.wap)
 set(WASM_VIRTIO_BLK_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_blk/virtio_blk.zig)
 set(WASM_VIRTIO_BLK_DRIVER_WASM ${BUILD_DIR}/virtio_blk.wasm)
 set(WASM_VIRTIO_BLK_APP ${BUILD_DIR}/virtio_blk.wap)
@@ -1886,6 +1889,7 @@ if (ZIG_AVAILABLE)
   )
   set(PARTITION_MANAGER_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTITION_MANAGER_APP} ${BUILD_DIR}/esp/system/drivers/partition_manager.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VOLUME_MANAGER_APP} ${BUILD_DIR}/esp/system/services/volume_manager.wap
   )
 endif ()
 

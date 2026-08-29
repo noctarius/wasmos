@@ -646,6 +646,41 @@ enum {
     WASMOS_IPC_SHUTDOWN_DONE = 0xFF82,
 };
 
+/* volume (0xE00..0xEFF) */
+enum {
+    /* Ask the volume manager to describe one volume into a buffer the CALLER
+     * owns. arg0 = the volume's `volume` CLASS INSTANCE, arg1 = buffer_id.
+     * Answered with VOLUME_IPC_IDENTIFY_RESP.
+     *
+     * Same ownership as BLOCK_IPC_IDENTIFY_REQ, and for the same reason: the
+     * caller acquires the buffer and borrows it to this endpoint with WRITE,
+     * because the client of a request owns the buffer and the server is a
+     * transient grantee (architecture/12-dma-transfers.md).
+     *
+     * What a caller wants from this is usually `backing_instance`: a volume
+     * is not something you read from, it is something that tells you which
+     * `block` device to read from. The volume manager is deliberately not in
+     * the I/O path.
+     */
+    VOLUME_IPC_IDENTIFY_REQ = 0xE00,
+    /* Record that the sender has mounted a volume, or release that record.
+     * arg0 = the volume's class instance, arg1 = 1 to claim and 0 to release.
+     * Answered with VOLUME_IPC_RESP, arg0 = 0.
+     *
+     * RECORDS a claim; does not enforce one. The volume manager is not in the
+     * I/O path, so a tool that does not ask is not stopped -- this is what
+     * `fsck` and `mkfs` consult before touching a volume that may be mounted,
+     * and enforcing it would mean standing in the data path for every read to
+     * prevent a mistake only those two can make.
+     */
+    VOLUME_IPC_CLAIM_REQ = 0xE01,
+    /* arg0 = 0, arg1 = bytes written into the caller's buffer. */
+    VOLUME_IPC_IDENTIFY_RESP = 0xE80,
+    VOLUME_IPC_RESP = 0xE81,
+    /* arg0 = packed error code. */
+    VOLUME_IPC_ERROR = 0xEFF,
+};
+
 /* Subsystem ids for wasmos_opcode_name(). */
 enum {
     WASMOS_OPCODE_SUBSYS_CHARDEV = 0,
@@ -671,6 +706,7 @@ enum {
     WASMOS_OPCODE_SUBSYS_GFX = 20,
     WASMOS_OPCODE_SUBSYS_PCI = 21,
     WASMOS_OPCODE_SUBSYS_SYSTEM = 22,
+    WASMOS_OPCODE_SUBSYS_VOLUME = 23,
 };
 
 /* Opcode -> symbol name within a subsystem (diagnostics/logging). Pass the
@@ -973,6 +1009,15 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         switch (type) {
         case 0xFF02: return "WASMOS_IPC_SHUTDOWN_REQ";
         case 0xFF82: return "WASMOS_IPC_SHUTDOWN_DONE";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_VOLUME:
+        switch (type) {
+        case 0xE00: return "VOLUME_IPC_IDENTIFY_REQ";
+        case 0xE01: return "VOLUME_IPC_CLAIM_REQ";
+        case 0xE80: return "VOLUME_IPC_IDENTIFY_RESP";
+        case 0xE81: return "VOLUME_IPC_RESP";
+        case 0xEFF: return "VOLUME_IPC_ERROR";
         default: return "UNKNOWN";
         }
     default: return "UNKNOWN";

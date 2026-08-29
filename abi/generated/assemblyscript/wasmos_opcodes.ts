@@ -548,3 +548,34 @@ export const WASMOS_IPC_SHUTDOWN_REQ: i32 = 0xFF02;
 // arg0..arg3 reserved (0). Answering does not mean the participant stops
 // running; it means nothing it holds still needs to reach a device.
 export const WASMOS_IPC_SHUTDOWN_DONE: i32 = 0xFF82;
+
+// volume (0xE00..0xEFF)
+// Ask the volume manager to describe one volume into a buffer the CALLER
+// owns. arg0 = the volume's `volume` CLASS INSTANCE, arg1 = buffer_id.
+// Answered with VOLUME_IPC_IDENTIFY_RESP.
+//
+// Same ownership as BLOCK_IPC_IDENTIFY_REQ, and for the same reason: the
+// caller acquires the buffer and borrows it to this endpoint with WRITE,
+// because the client of a request owns the buffer and the server is a
+// transient grantee (architecture/12-dma-transfers.md).
+//
+// What a caller wants from this is usually `backing_instance`: a volume
+// is not something you read from, it is something that tells you which
+// `block` device to read from. The volume manager is deliberately not in
+// the I/O path.
+export const VOLUME_IPC_IDENTIFY_REQ: i32 = 0xE00;
+// Record that the sender has mounted a volume, or release that record.
+// arg0 = the volume's class instance, arg1 = 1 to claim and 0 to release.
+// Answered with VOLUME_IPC_RESP, arg0 = 0.
+//
+// RECORDS a claim; does not enforce one. The volume manager is not in the
+// I/O path, so a tool that does not ask is not stopped -- this is what
+// `fsck` and `mkfs` consult before touching a volume that may be mounted,
+// and enforcing it would mean standing in the data path for every read to
+// prevent a mistake only those two can make.
+export const VOLUME_IPC_CLAIM_REQ: i32 = 0xE01;
+// arg0 = 0, arg1 = bytes written into the caller's buffer.
+export const VOLUME_IPC_IDENTIFY_RESP: i32 = 0xE80;
+export const VOLUME_IPC_RESP: i32 = 0xE81;
+// arg0 = packed error code.
+export const VOLUME_IPC_ERROR: i32 = 0xEFF;

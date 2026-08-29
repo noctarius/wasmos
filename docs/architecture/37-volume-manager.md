@@ -1,8 +1,11 @@
 ## Volume Manager
 
-> **Documentation status: Proposal.** Nothing here is implemented. The block
-> layer below it exists (`architecture/36-partition-manager-and-block-identity.md`);
-> the filesystem recognisers and the `volume` class this describes do not.
+> **Documentation status: Mixed reference and proposal.** §1–§3 and §6–§8 are
+> implemented and are the current baseline: the recognisers, the `volume` class
+> and its descriptor, and the suppression rule all exist and run on every boot.
+> §4 (mount policy on volumes) and §5 (exclusivity) are still proposals — a
+> volume is published and inspectable, but no rule matches one yet and nothing
+> sets `claimed`.
 
 **Sources this proposal changes**: `src/drivers/partition_manager/`,
 `src/services/device_manager/device_manager_rules.c`, `src/drivers/fs_fat/`,
@@ -177,25 +180,34 @@ claims. "No superblock matched" and "this is not a volume" are different answers
 and must not collapse into one.
 
 The suppressing signal is a partition table, which is why `libblkid` carries
-`partitions/` beside `superblocks/` rather than only the latter. Two ways to get
-it, and the choice is a real one:
+`partitions/` beside `superblocks/` rather than only the latter.
 
-- **The volume manager parses tables too**, reusing `partition_table.zig`. Honest
-  and self-contained, but it makes two components readers of the same on-disk
-  structure, which is precisely what
-  `architecture/36-partition-manager-and-block-identity.md` centralised.
-- **The block descriptor carries it.** Cheaper, and wrong today: `scheme` is
-  always `PARTITION_SCHEME_NONE` on a whole disk, because the DISK DRIVER
-  publishes that record and disk drivers read no tables
-  (`ata.c`, `virtio_blk.zig`). Only a partition's descriptor carries a real
-  scheme, set by the partition manager. Making this work means the partition
-  manager amending the disk's record after parsing — a republish of a device it
-  does not own.
+**Implemented: the volume manager detects the table in the same read.**
+`partition_table.detectScheme` runs over the prefix already fetched for the
+recognisers — an MBR is at LBA 0 and a GPT header at LBA 1, both inside it — so
+suppression costs no extra I/O, no protocol and no ordering assumption. It reuses
+`partition_table.zig` rather than re-reading the signatures, so the objection
+that this makes two components readers of the same structure applies to the I/O
+and not to the parsing: there is still exactly one parser, and a second
+implementation could disagree with the one the partition manager acts on.
 
-The second is preferable if the republish is acceptable, because it keeps table
-parsing in one component. Either way the rule is the same and belongs in the
-document: **a volume is published for a device that holds a filesystem, and a
-device holding a partition table holds partitions instead.**
+An earlier revision of this section preferred a second option — the block
+descriptor carrying `scheme` — and that option does not work. A consumer of the
+`block` class obtains descriptors by sending `BLOCK_IPC_IDENTIFY_REQ` to the
+provider, which for a whole disk is `ata.c` or `virtio_blk.zig`; those read no
+tables and report `PARTITION_SCHEME_NONE` forever. The device manager's registry
+does upsert by `canonical_id`, so the partition manager could amend the record
+there — but that registry has no query opcode (`DEVMGR_QUERY_BLOCK_MOUNT_REQ` was
+retired), so the amendment never reaches a class client. Recorded because the
+reasoning looks sound until the retrieval path is followed.
+
+The rule either way: **a volume is published for a device that holds a
+filesystem, and a device holding a partition table holds partitions instead.**
+
+Note what does NOT suppress. A recogniser finding nothing yields
+`FS_TYPE_UNKNOWN`, and that publishes: an unrecognised format reads exactly like
+a blank disk, both are legitimate to select with `ATTR{fstype}=="unknown"`, and a
+`mkfs` needs to see a device it can format. Only a table suppresses.
 
 ## 7. Recognition in practice
 

@@ -756,6 +756,25 @@ linked feature documents for rationale and rollout plans.
   the root task, so it blocks the process but not the loop's dispatch.
   `/user` mounts from a partition it names by GPT label
   (`architecture/36-partition-manager-and-block-identity.md` §2-§3).
+- The volume manager (`src/services/volume_manager/`, Zig) publishes a `volume`
+  class for every device that holds a filesystem, which is the question the
+  `block` class cannot answer: a partition-table entry may hold no filesystem and
+  a disk with no table may hold one. It subscribes to `block`, reads a 4 KiB
+  prefix from each device's own LBA 0, and runs the recognisers over it. A device
+  carrying a GPT or an MBR publishes NO volume -- its partitions are separate
+  block devices and get their own -- while a device with no table and no
+  recognised filesystem still publishes, as `fstype=unknown`. On a normal boot
+  that is three volumes: the ESP (`fat`, labelled `QEMU VVFAT`), `/user`'s
+  partition (`fat`, labelled `USER`), and the raw WFS disk (`wfs`, whole device,
+  the case no partition rule can reach).
+- The recognisers (`src/services/volume_manager/recognise*.zig`) identify FAT and
+  WFS from a bounded prefix with no I/O, one file per format the way `libblkid`
+  keeps `superblocks/`. Precedence lives in one ordered table rather than in each
+  recogniser. Host-tested against images captured from real writers -- macOS
+  `newfs_msdos`, QEMU vvfat, `mkfs_wfs`, `make_gpt_image.py` --
+  in `tests/unit/fixtures_disk_images.zig`.
+  Nothing MOUNTS from a volume yet: rules still match `block` and `partition`
+  (`architecture/37-volume-manager.md` §4 is the open half).
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.

@@ -22,6 +22,15 @@ SUBSYSTEM=="partition", ATTR{partlabel}=="user", ENV{MOUNT}="/user", RUN+="syste
 # that makes Zig a build requirement for the boot image. Decide that with the
 # mount-policy change, not before it.
 SUBSYSTEM=="boot", RUN+="/boot/system/drivers/partition_manager.wap"
+# The volume manager names no disk either: it subscribes to the `block` class the
+# partition manager publishes into, recognises the filesystem on each device, and
+# publishes a `volume` for every mountable one. A device carrying a table
+# publishes none -- its partitions are the volumes.
+#
+# Spawned after the partition manager so the partitions exist by the time it
+# enumerates. That is convenience, not correctness: it subscribes to the class,
+# so a partition published later is probed when it arrives.
+SUBSYSTEM=="boot", RUN+="/boot/system/services/volume_manager.wap"
 # The WFS volume is a raw image on its own disk (build/wfs.img, ATA unit 2), so it
 # needs its own backend: fs_fat cannot read it and would refuse the mount. The
 # DRIVER qualifier matters here for the same reason it does above -- unit 2 alone

@@ -171,6 +171,72 @@ groups:
       - { symbol: BLOCK_DESCRIPTOR_FLAG_ACTIVE_SERVICE, value: 0x2, doc: "A filesystem service is mounted on it." }
       - { symbol: BLOCK_DESCRIPTOR_FLAG_READ_ONLY, value: 0x4, doc: "Writes are refused by the backend." }
 
+  - name: volume_descriptor
+    doc: |
+      Version and size ceilings of wasmos_volume_descriptor_t, the record that
+      describes one VOLUME -- a thing with a filesystem on it. The struct is
+      declared in src/drivers/include/wasmos_driver_abi.h and mirrored in
+      src/libc/zig/driver.zig; only the values a peer must agree on live here.
+
+      A volume is not a block device and the two classes answer different
+      questions. `block` answers "what storage exists"; a partition-table entry
+      may hold no filesystem and a disk with no table may hold one, so mount
+      policy that matches on `block` has to name disks and units. `volume`
+      answers "what can be mounted", which is the question a rule actually asks.
+      See docs/architecture/37-volume-manager.md.
+
+      As with the block descriptor, a reader MUST reject a version it does not
+      know rather than interpreting the fields it recognizes.
+    constants:
+      - { symbol: VOLUME_DESCRIPTOR_VERSION, value: 1, doc: "Current wasmos_volume_descriptor_t layout." }
+      - symbol: VOLUME_DESCRIPTOR_LABEL_MAX
+        value: 64
+        doc: |
+          Bytes reserved for the filesystem's own label, NUL included. FAT's is
+          11 and WFS carries none, so this is set by what a future format might
+          want rather than by what is read today -- ext4 allows 16 and NTFS 32
+          UTF-16 units. Sized once here so adding a recogniser never forces a
+          descriptor version bump.
+      - symbol: VOLUME_DESCRIPTOR_UUID_MAX
+        value: 16
+        doc: |
+          Bytes of volume UUID. The widest in use is WFS's 16; FAT's volume
+          serial is 4 and occupies the low bytes with the rest zero, so a
+          comparison always covers the full field and a short id can never alias
+          a long one's prefix. `uuid_len` says how many the format defines, for
+          rendering rather than for matching.
+      - symbol: VOLUME_DESCRIPTOR_ID_MAX
+        value: 64
+        doc: |
+          Bytes reserved for canonical_id, NUL included. A volume id is
+          `volume:` prefixed to the canonical id of the block device beneath it
+          (`volume:block:ata:0p1`), so it is DERIVED and stable across boots --
+          and the `volume` class instance is an FNV-1a fingerprint of it, the
+          same construction the `block` instance uses.
+
+  - name: volume_descriptor_flags
+    bits: true
+    doc: |
+      Bits of the `flags` field of wasmos_volume_descriptor_t.
+
+      BOOT marks the volume this system was booted from. It is NOT the MBR
+      active flag or the ESP type GUID: a table may mark any number of
+      partitions bootable, on any disk, including one nothing booted from, and
+      UEFI ignores the MBR flag entirely. Which volume was booted is a property
+      of the BOOT, known only to the bootloader, and travels here from there.
+
+      CLAIMED records that a filesystem service holds the volume. It RECORDS a
+      claim and does not enforce one: the volume manager is not in the I/O path,
+      so a tool that does not ask is not stopped. It is what `fsck` and `mkfs`
+      consult before touching a volume that may be mounted.
+    constants:
+      - { symbol: VOLUME_DESCRIPTOR_FLAG_PRESENT, value: 0x1, doc: "The volume exists and can be mounted." }
+      - { symbol: VOLUME_DESCRIPTOR_FLAG_HAS_LABEL, value: 0x2, doc: "The format carries a label; `label` is it, possibly empty." }
+      - { symbol: VOLUME_DESCRIPTOR_FLAG_HAS_UUID, value: 0x4, doc: "The format carries a volume id; `uuid` is it." }
+      - { symbol: VOLUME_DESCRIPTOR_FLAG_BOOT, value: 0x8, doc: "This system booted from this volume, as reported by the bootloader." }
+      - { symbol: VOLUME_DESCRIPTOR_FLAG_CLAIMED, value: 0x10, doc: "A filesystem service has mounted it; advisory, not enforced." }
+      - { symbol: VOLUME_DESCRIPTOR_FLAG_READ_ONLY, value: 0x20, doc: "The backing device refuses writes." }
+
   - name: svc_class_event
     doc: |
       Which existence event SVC_IPC_CLASS_EVENT reports, carried in its arg0.

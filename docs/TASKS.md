@@ -171,11 +171,34 @@ Source: `architecture/06-memory-management.md`,
   that a resize PRESENTS A NEW BUFFER: release the old one, acquire at the new
   spec, borrow, present. No mutation of a borrowed buffer at any point.
 
-  ABI consequence: `GFX_IPC_ALLOC_SHARED_BUFFER` changes meaning from "allocate
-  and return a buffer" to "return the spec", and `GFX_IPC_RELEASE_SHARED_BUFFER`
-  largely disappears, since an owner releasing its own buffer already
-  cascade-revokes the compositor's grant. That is an opcode SEMANTICS change, so
-  it goes through `skills/wasmos-add-opcode` rather than being quietly repurposed.
+  ABI consequence: both shared-buffer opcodes change meaning, so both are RENAMED
+  rather than quietly repurposed. A name that says "alloc" for a call that
+  allocates nothing is worse than the old contract it replaces.
+
+      GFX_IPC_ALLOC_SHARED_BUFFER   -> GFX_IPC_GET_SURFACE_SPEC
+        was: compositor allocates a buffer, replies (buffer_id, shmem_id, stride)
+        now: compositor replies the CONSTRAINTS -- extent, stride, format,
+             minimum size -- and allocates nothing. Matches the family's existing
+             GET_DISPLAY_INFO / GET_WINDOW_TITLE naming.
+
+      GFX_IPC_RELEASE_SHARED_BUFFER -> GFX_IPC_DETACH_SURFACE
+        was: app asks the compositor to free the buffer the compositor owns
+        now: app withdraws the surface it lent, BEFORE releasing it
+
+  `DETACH_SURFACE` is not cosmetic. There is no unborrow notification, so an app
+  that releases while the compositor still holds a borrow leaves the compositor
+  reading a revoked borrow mid-composite. The explicit detach is the missing
+  handshake: app detaches, compositor stops reading and acknowledges, app
+  releases. Without it every compositor read needs a revoked-borrow path anyway,
+  which is bookkeeping to work around a primitive -- the shape
+  `skills/wasmos-shared-primitives` names as a signal the design is inverted.
+
+  Both go through `skills/wasmos-add-opcode`: IDL entry in `abi/opcodes.yaml`,
+  regenerate (never hand-edit `abi/generated/**`), update the C/Rust/Go/Zig/AS
+  constants and the doc table in
+  `docs/architecture/20-graphics-framebuffer-and-compositor.md`. Its Step 4 is a
+  boot of BOTH runtimes (`wasm3_smp` and `warp_smp`), which is exactly the gate a
+  WARP-only graphics battery does not provide.
 
   Consequence for the reader side: the compositor is a GRANTEE that must read
   pixels to composite, and a grantee has no CPU zero-copy path today -- owner+CPU

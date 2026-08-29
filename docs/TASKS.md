@@ -865,6 +865,24 @@ tail.
   `ftruncate` means a host call plus the libc and libsys wrappers kept in sync
   across the runtime-specific variants, then a case in
   `examples/c/wfs_write_smoke`.
+- [ ] [BUG][P1] The QEMU battery matrix runs ONE runtime, so a whole class of
+  defect is invisible to CI. `.github/workflows/ci.yml` pins the integration
+  batteries to `configs/warp_smp_defconfig`; the `*_single` / `*_smp` jobs build
+  and boot both runtimes but run no batteries. WARP does not enforce entry-export
+  arity and wasm3 does, so `fs_wfs` shipped with a four-parameter `initialize`
+  that could never start under the DEFAULT runtime -- every `/wfs` test failing,
+  and CI green throughout. Anything that differs between the two engines is
+  equally unseen. Running every battery twice doubles the QEMU time, so the
+  choice is which subset earns a second pass, not whether to double everything.
+- [ ] [ENHANCEMENT][P2] Make `scripts/make_wasmos_app.c` refuse an entry export
+  whose arity is not zero. A path-spawned entry is called with argc 0
+  (`process_manager_spawn.c`, `wasmos_app.c`), so a module declaring parameters
+  is not startable -- under wasm3 it dies at the call with "argument count
+  mismatch" before its first line of output, and under WARP it runs by accident.
+  The packer already reads the module and knows the entry name from the
+  manifest; checking the signature turns a runtime failure that looks like a
+  spawn problem into a build error naming the function. It would have caught the
+  `fs_wfs` defect above at the moment it was written.
 - [ ] [BUG][P3] `mount` names every WFS volume `fs-fat`. `fs_manager.c` maps the
   backend KIND to a display name, and `FSMGR_BACKEND_BOOT` prints as `fs-fat`;
   `fs_wfs` registers under that kind because the kind says where a volume sits

@@ -135,17 +135,16 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
                     + f"\n--- tail ---\n{self.session.tail()}\n"
                 )
 
-    def test_the_driver_claims_the_disk_as_its_own_instance(self):
-        """The virtio disk registers as (virtio-blk, 48), distinct from ATA's."""
+    def test_the_driver_claims_the_disk_as_its_own_identity(self):
+        """The virtio disk registers under its own canonical id, distinct from ATA's.
+
+        Matched on the id rather than on a class instance: an instance is the
+        FINGERPRINT of that id now, so asserting the number would test the hash
+        and not the identity it stands for.
+        """
         self._cmd(
             "blkinfo",
-            [
-                b"instance=%d driver=virtio-blk unit=%d"
-                % (
-                    (2 << 8) | WFS_VIRTIO_UNIT,
-                    WFS_VIRTIO_UNIT,
-                )
-            ],
+            [b"driver=virtio-blk unit=%d" % WFS_VIRTIO_UNIT],
             timeout_s=60,
         )
 

@@ -88,6 +88,9 @@ static int32_t g_mount_bid = -1;
 static int32_t g_mount_len = 0;
 static uint8_t g_mount_unit = 0;
 static int32_t g_requested_unit = -1;
+/* The `block` class instance of this driver's disk, from `id=`. Both the lookup
+ * key and the `target` every transfer carries. */
+static uint32_t g_requested_instance = 0u;
 /* Which backend serves the disk this instance was spawned for, as the device
  * manager named it. A unit alone does not identify a disk -- it is
  * backend-local -- so both halves are needed to find the right server. */
@@ -785,17 +788,27 @@ static uint8_t wfs_backend_from_name(const char* name) {
     return (uint8_t)BLOCK_BACKEND_UNKNOWN;
 }
 
-/* The value of `token` in the startup args, or NULL. */
-static const char* wfs_find_token_value(const char* args, const char* token) {
+/* The value of `name` in the space-separated startup blob, or NULL when absent.
+ * The returned pointer is INTO the blob and is not NUL-terminated: a caller
+ * copies up to the next space.
+ *
+ * Anchored at a token boundary. An unanchored search finds `id=` inside
+ * `partuuid=`, which ends in those same three characters -- and the value it
+ * would return is the tail of a GUID. */
+static const char* wfs_find_token_value(const char* args, const char* name) {
     uint32_t i;
-    uint32_t tlen = 0;
 
-    while (token[tlen] != '\0') {
-        tlen++;
-    }
     for (i = 0; args[i] != '\0'; ++i) {
-        if (strncmp(&args[i], token, tlen) == 0) {
-            return &args[i] + tlen;
+        uint32_t k = 0;
+
+        if (i != 0u && args[i - 1u] != ' ') {
+            continue;
+        }
+        while (name[k] != '\0' && args[i + k] == name[k]) {
+            ++k;
+        }
+        if (name[k] == '\0') {
+            return &args[i + k];
         }
     }
     return 0;
@@ -846,97 +859,99 @@ static int32_t wfs_lookup_block_server(uint32_t instance, int32_t request_id) {
     return -1;
 }
 
-/* Which block unit the device-manager rule asked for. */
+/* Startup-argument blob this driver reads. Sized for
+ * `driver=<name> unit=<n> id=<canonical id> mount=<path>`, whose id alone may be
+ * BLOCK_DESCRIPTOR_ID_MAX bytes. The process manager truncates at
+ * WASMOS_STARTUP_ARGS_MAX, so nothing longer can arrive. */
+#define WFS_STARTUP_ARGS_MAX 192
+
+/* Copy one token's value out of the blob. Refuses a value that does not fit
+ * rather than truncating it: a truncated path is a different, valid-looking
+ * path, and a truncated id fingerprints to a device nobody registered. */
+static int wfs_copy_token(const char* args, const char* name, char* out, uint32_t out_cap) {
+    const char* token = wfs_find_token_value(args, name);
+    uint32_t n = 0;
+
+    if (!token || !out || out_cap == 0u) {
+        return -1;
+    }
+    while (n + 1u < out_cap && token[n] != '\0' && token[n] != ' ') {
+        out[n] = token[n];
+        ++n;
+    }
+    out[n] = '\0';
+    if (n == 0u || (token[n] != '\0' && token[n] != ' ')) {
+        return -1;
+    }
+    return 0;
+}
+
+/* The `block` class instance of this driver's disk: the fingerprint of the
+ * canonical id in `id=`.
+ *
+ * It is both how the provider is found in the class registry and how the
+ * provider is told which of its disks a transfer means, since several instances
+ * share one endpoint. NOT rebuilt from driver= and unit= here: a second place
+ * that spells the id is a second place that can disagree with the publisher, and
+ * a disagreement leaves this driver waiting forever on an instance nobody holds.
+ * Returns 0, which no valid device has. */
+static uint32_t wfs_parse_requested_instance(void) {
+    char args[WFS_STARTUP_ARGS_MAX];
+    char id[BLOCK_DESCRIPTOR_ID_MAX];
+
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
+        return 0u;
+    }
+    if (wfs_copy_token(args, "id=", id, sizeof(id)) != 0) {
+        return 0u;
+    }
+    return wasmos_block_fingerprint(id);
+}
+
+/* Which block unit the rule asked for. Still delivered, and still what names
+ * this driver's service ("fs.wfs<unit>") and its fs.backend instance -- only the
+ * BLOCK target moved to the canonical id. */
 static int32_t wfs_parse_requested_unit(void) {
-    char args[64];
-    uint32_t i;
+    char args[WFS_STARTUP_ARGS_MAX];
+    char value[8];
+    const char* p;
+    int32_t v = 0;
 
     if (wasmos_startup_args(args, sizeof(args)) == 0u) {
         return -1;
     }
-    for (i = 0; args[i] != '\0'; ++i) {
-        if (args[i] == 'u' && args[i + 1] == 'n' && args[i + 2] == 'i' && args[i + 3] == 't' &&
-            args[i + 4] == '=') {
-            const char* p = &args[i + 5];
-            int32_t v = 0;
-
-            if (*p < '0' || *p > '9') {
-                return -1;
-            }
-            while (*p >= '0' && *p <= '9') {
-                v = v * 10 + (*p - '0');
-                if (v > 255) {
-                    return -1;
-                }
-                p++;
-            }
-            return v;
+    if (wfs_copy_token(args, "unit=", value, sizeof(value)) != 0) {
+        return -1;
+    }
+    for (p = value; *p != '\0'; ++p) {
+        if (*p < '0' || *p > '9') {
+            return -1;
+        }
+        v = v * 10 + (*p - '0');
+        if (v > 255) {
+            return -1;
         }
     }
-    return -1;
+    return v;
 }
 
-/* Resolve the mount alias and unit the same way fs_fat does: identify the block
- * unit, then ask the device manager what the rule bound it to. */
-static int wfs_resolve_mount_alias(char* out_mount, uint32_t out_len, uint8_t* out_unit) {
-    int32_t devmgr;
-    int32_t req_id = 71;
-    int32_t unit;
-    uint32_t packed[4];
-    uint32_t i;
+/* The VFS path this volume mounts at, from `mount=`.
+ *
+ * The rule that spawned this driver chose it and the device manager delivers it
+ * at spawn; nothing is asked back afterwards. The retired
+ * DEVMGR_QUERY_BLOCK_MOUNT_REQ answered a query keyed on the disk unit, which
+ * two volumes on one disk share, so it could not say which of them was meant. */
+static int wfs_parse_requested_mount(char* out, uint32_t out_cap) {
+    char args[WFS_STARTUP_ARGS_MAX];
 
-    if (!out_mount || out_len < 2u || !out_unit) {
+    if (!out || out_cap == 0u) {
         return -1;
     }
-    out_mount[0] = '\0';
-    *out_unit = 0;
-
-    if (wasmos_ipc_send(g_blk.block_endpoint,
-                        g_reply_endpoint,
-                        BLOCK_IPC_IDENTIFY_REQ,
-                        req_id,
-                        g_requested_unit,
-                        0,
-                        0,
-                        0) != 0 ||
-        wasmos_ipc_select_one(g_reply_endpoint) < 0) {
+    out[0] = '\0';
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
         return -1;
     }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != BLOCK_IPC_IDENTIFY_RESP ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
-        return -1;
-    }
-    unit = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    *out_unit = (uint8_t)(unit & 0xFF);
-
-    devmgr = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "devmgr.query", 1);
-    if (devmgr < 0) {
-        return -1;
-    }
-    req_id++;
-    if (wasmos_ipc_send(
-            devmgr, g_reply_endpoint, DEVMGR_QUERY_BLOCK_MOUNT_REQ, req_id, unit, 0, 0, 0) != 0 ||
-        wasmos_ipc_select_one(g_reply_endpoint) < 0) {
-        return -1;
-    }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != DEVMGR_BLOCK_MOUNT_INFO ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
-        return -1;
-    }
-    packed[0] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    packed[1] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    packed[2] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    packed[3] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-    for (i = 0; i < 16u && i + 1u < out_len; ++i) {
-        char c = (char)((packed[i / 4u] >> ((i % 4u) * 8u)) & 0xFFu);
-
-        out_mount[i] = c;
-        if (c == '\0') {
-            break;
-        }
-    }
-    out_mount[out_len - 1u] = '\0';
-    return out_mount[0] == '\0' ? -1 : 0;
+    return wfs_copy_token(args, "mount=", out, out_cap);
 }
 
 /* WASMOS_IPC_SHUTDOWN_REQ: the clean unmount.
@@ -1056,18 +1071,16 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d
     }
 
     g_requested_unit = wfs_parse_requested_unit();
-    g_requested_backend = wfs_parse_requested_backend();
-    if (g_requested_backend == (uint8_t)BLOCK_BACKEND_UNKNOWN || g_requested_unit < 0) {
-        /* Without both halves the disk cannot be identified, and guessing a
-         * backend would mount the wrong volume. */
-        wfs_log("[fs-wfs] startup args missing driver= or unit=; cannot resolve a block device\n");
+    g_requested_instance = wfs_parse_requested_instance();
+    if (g_requested_instance == 0u || g_requested_unit < 0) {
+        /* The id names the disk and the unit names this driver's service. A
+         * guessed disk mounts the wrong volume, so neither is inferred. */
+        wfs_log("[fs-wfs] startup args missing id= or unit=; cannot resolve a block device\n");
         wfs_stall();
     }
+    g_mount_unit = (uint8_t)g_requested_unit;
     for (int32_t attempt = 0;; ++attempt) {
-        /* The class instance that names this disk: (backend << 8) | unit. */
-        block_endpoint = wfs_lookup_block_server(((uint32_t)g_requested_backend << 8) |
-                                                     ((uint32_t)g_requested_unit & 0xFFu),
-                                                 1 + attempt);
+        block_endpoint = wfs_lookup_block_server(g_requested_instance, 1 + attempt);
         if (block_endpoint > 0) {
             break;
         }
@@ -1076,9 +1089,13 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d
 
     wasmos_wasm_runtime_init(&g_runtime);
     wasmos_sys_event_loop_init(&g_loop, g_reply_endpoint, 0x7000);
-    wfs_block_configure(
-        &g_blk, &g_loop, block_endpoint, g_reply_endpoint, wasmos_block_buffer_phys());
-    if (g_blk.buf_id < 0) {
+    if (wfs_block_configure(&g_blk,
+                            &g_loop,
+                            block_endpoint,
+                            g_reply_endpoint,
+                            wasmos_block_buffer_phys(),
+                            g_requested_instance) != WASMOS_ERR_NONE ||
+        g_blk.buf_id < 0) {
         wfs_log("[fs-wfs] block buffer missing\n");
         wfs_stall();
     }
@@ -1115,8 +1132,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d
         wfs_log("[fs-wfs] mounted from a volume left dirty\n");
     }
 
-    if (wfs_resolve_mount_alias(mount_alias, sizeof(mount_alias), &g_mount_unit) != 0) {
-        wfs_log("[fs-wfs] mount alias resolve failed\n");
+    if (wfs_parse_requested_mount(mount_alias, sizeof(mount_alias)) != 0) {
+        wfs_log("[fs-wfs] startup args missing mount=\n");
         wfs_stall();
     }
     mount_len = 0;

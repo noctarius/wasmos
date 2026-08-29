@@ -10,8 +10,15 @@
 #include "fat_block.h"
 
 typedef struct {
+    /* Whether the block device this driver holds is a partition rather than a
+     * whole disk, from the descriptor's `partition` field. A partition device
+     * rebases every transfer onto its window, so its LBA 0 is the volume's boot
+     * sector and there is no table on it to parse. Set by fat_mount_init and
+     * never changed. */
+    uint8_t is_partition;
+
     /* Immutable-after-mount geometry. */
-    uint32_t boot_lba; /* LBA of the volume boot sector (0, or the partition) */
+    uint32_t boot_lba; /* absolute LBA of the volume boot sector */
     uint16_t bytes_per_sector;
     uint8_t sectors_per_cluster;
     uint16_t reserved_sectors;
@@ -40,7 +47,10 @@ typedef struct {
 } fat_mount_t;
 
 /* Initialize *mnt to the unmounted state (call once at driver init). */
-void fat_mount_init(fat_mount_t* mnt);
+/* Initialise *mnt. `is_partition` is the descriptor's `partition` field reduced
+ * to a flag: nonzero means the device is one partition of a disk, addressed from
+ * its own LBA 0, and holds no partition table. */
+void fat_mount_init(fat_mount_t* mnt, uint8_t is_partition);
 
 /* 1 once the volume geometry has been parsed. */
 int fat_mount_ready(const fat_mount_t* mnt);

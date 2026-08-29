@@ -721,6 +721,37 @@ linked feature documents for rationale and rollout plans.
 
 ## Filesystems and Storage
 
+- A block device describes itself with `wasmos_block_descriptor_t`
+  (`src/drivers/include/wasmos_driver_abi.h`), carried in a transfer buffer by
+  `BLOCK_IPC_IDENTIFY` and `DEVMGR_PUBLISH_BLOCK_DEVICE` rather than packed into
+  message arguments. In both directions the buffer belongs to the **client** of
+  the exchange: a filesystem driver acquires it and lends it to the backend for
+  an IDENTIFY, and a block driver acquires it and lends it to device-manager for
+  a publish. It reports backend, unit, partition slot, scheme,
+  probed filesystem, sector size, a 64-bit LBA window, the GPT identity fields
+  and the device's canonical id. The partition and GPT fields are defined but
+  left zero: no partition table is parsed yet
+  (`architecture/36-partition-manager-and-block-identity.md`).
+- The device's identity is its canonical id string (`block:ata:0`), assigned by
+  the PUBLISHING backend, and the `block` service class instance is an opaque
+  FNV-1a 32 fingerprint of it. Nothing decodes attributes out of an instance;
+  they are read from the descriptor. `src/libc/zig/driver.zig` mirrors the struct
+  and the fingerprint for Zig backends, with both layouts and the hash vectors
+  pinned at compile time on each side (`tests/unit/test_block_descriptor.c`).
+- A filesystem driver receives `id=` in its startup arguments and fingerprints it
+  to find its disk, so the id has exactly one producer. `blkinfo` names disks by
+  canonical id, including for `--write`.
+- The partition manager (`src/drivers/partition_manager/`, Zig) is a `block`
+  class client of every disk and a `block` class provider of every partition on
+  them: a consumer cannot tell a partition from a whole disk. It probes GPT then
+  MBR then nothing, publishes a descriptor per partition with the window in
+  `lba_start`/`lba_count`, and forwards transfers with the LBA rebased onto that
+  window and the sector count clamped to it. A disk with no table publishes
+  nothing and is left alone, which is what keeps partition tables optional.
+  Spawned from the boot rules, so every disk has registered before it enumerates
+  -- once, at bring-up: a disk whose driver registers later is never probed.
+  `/user` mounts from a partition it names by GPT label
+  (`architecture/36-partition-manager-and-block-identity.md` §3).
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
@@ -734,10 +765,18 @@ linked feature documents for rationale and rollout plans.
 - `FS_IPC_CHDIR` carries its target as a path in a transfer buffer, so `cd` takes
   one request at any depth and reaches directory names up to a backend's own
   maximum (255 bytes for WFS) instead of the 15 that fit in the argument words.
+  optional `/user`. `/user` is a raw GPT image built by
+  `scripts/make_gpt_image.py` from the contents of `userfs/` -- one FAT16
+  partition labelled `user`, mounted by a rule that names that label and nothing
+  else. `/boot` remains a vvfat MBR disk mounted by a whole-disk rule, because
+  the firmware boots it and the partition manager cannot run before it.
 - `fs-fat` is a single-threaded, non-blocking reactor: queued operation
   contexts are resumable stackless coroutines, while one active operation uses
   the shared 8 KiB block/DMA buffer. It supports FAT12/16/32 and LFN, reports
-  `FS_ERR_*`, and binds to its requested block-device unit.
+  `FS_ERR_*`, and binds to the block device named by the `id=` in its startup
+  arguments. `mount=` in those arguments is where the volume goes; the descriptor
+  says whether the device is a partition, and therefore whether its first sector
+  is a boot sector or may be a partition table.
 - Long file names are UTF-8 at the API and UTF-16 on disk, in both directions.
   Reading gathers UTF-16 units positionally (LFN entries arrive highest-ordinal
   first, each carrying a fixed slice, which variable-length UTF-8 cannot do) and

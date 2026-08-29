@@ -29,6 +29,16 @@ typedef struct {
     int32_t buf_phys; /* dedicated block buffer physical handle */
     int32_t next_req_id;
 
+    /* Transfer buffer holding the wasmos_block_request_t of the outstanding
+     * request, acquired and lent to the block server ONCE in fat_block_setup and
+     * reused for every transfer. One slot is enough because this layer keeps a
+     * single request in flight (see cur_req_id); a layer with several would need
+     * a slot each, since a slot may not be reused until its reply lands. */
+    int32_t req_bid;
+    /* The `block` class instance of the disk this layer talks to, carried in
+     * every request so the server never has to infer it from the sender. */
+    uint32_t target;
+
     /* Single outstanding request + staged sector (the buffer is a 1-sector
      * cache tagged by loaded_lba). */
     int32_t cur_req_id;       /* outstanding block request id, 0 if idle */
@@ -66,7 +76,8 @@ typedef struct {
     fat_op_ctx_t* owner; /* active op to resume on completion */
 } fat_block_t;
 
-void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply_endpoint);
+void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply_endpoint,
+                         uint32_t target);
 
 /* Set the per-request transfer size from the mounted volume's bytes_per_sector.
  * Refuses anything above FAT_MAX_SECTOR_BYTES or not a multiple of 512, leaving

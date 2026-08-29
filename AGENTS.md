@@ -36,6 +36,12 @@ This repository uses Codex CLI to assist with development. Follow these conventi
     runtime (wasm3 vs WARP) via Kconfig `.config` / `configs/*_defconfig`; the
     one-build-dir-per-config rule and why `-D` runtime flags can be overridden.
   - `skills/wasmos-kernel-internals` — kernel internals reference.
+  - `skills/wasmos-shared-primitives` — the ownership/lifetime contract of a
+    shared primitive (transfer buffers and DMA borrows, IPC endpoints, service
+    classes, coroutines/futures, object tables) and which architecture document
+    owns it. Read it BEFORE the first call to one, not when the task looks
+    related: the contract you break is documented somewhere you had no reason
+    to open.
 
 ## Always Do
 - Read `README.md` and `docs/ARCHITECTURE.md` at the start of a new task.
@@ -79,6 +85,37 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   conversion needs a new domain or code, add it (`skills/wasmos-add-error`); if
   it would balloon the change beyond what one review can carry, say so in the
   commit message and leave a `TODO` naming the exact sites.
+- NEVER call a shared primitive before reading the architecture document that
+  owns its contract — transfer buffers and DMA borrows, IPC endpoints and select
+  sets, service classes, coroutines and futures, object tables.
+  `skills/wasmos-shared-primitives` maps each symbol to its document. The
+  trigger is the SYMBOL you are about to type, not the subsystem you are
+  editing: a primitive's contract lives with the primitive, which is a document
+  no file in your change set points at. Reading the implementation is NOT a
+  substitute — it says what the code does today, not what a caller is promised,
+  and the two differ exactly where the contract is interesting. A doc that
+  disagrees with the code is a `[DOCS]`/`[BUG]` entry for `docs/TASKS.md`, not
+  permission to follow the code.
+- NEVER design a cross-process interaction around the four IPC argument words.
+  `ipc_message_t` carries exactly four opcode words, and that ceiling is not a
+  budget to spend cleverly. A request that carries more than a couple of
+  independent values, or any value that can grow (an LBA, a size, a string, a
+  GUID, a list), goes in a request DESCRIPTOR in a transfer buffer the CLIENT
+  owns — `arg0 = buffer_id, arg1 = offset, arg2 = size`. Bare arguments are for
+  a fixed, small set that will not grow, and "will not grow" must be an argument
+  you can make. Two tells that the message already outgrew its arguments: you
+  are writing a shift or a mask into an argument (`(x << 12) | y`), or you are
+  adding a sibling opcode that differs only in how a parameter is expressed.
+  "It's the hot path" is not a reason — a client acquires and grants ONCE per
+  operation and reuses both, so the per-request cost is one small write into an
+  already-mapped buffer. See `skills/wasmos-add-opcode` §"Step 0".
+- NEVER add bookkeeping to work around an error a primitive returns. A table,
+  cache, retry, or special case introduced because a primitive "keeps failing"
+  in a legitimate-looking way means you are holding it the wrong way round: stop
+  and re-read its contract. `ALREADY_BORROWED` from a transfer buffer means the
+  buffer is on the wrong side of the exchange — the CLIENT of a request owns it
+  and the server is a transient grantee. A per-client grant table to route
+  around that shipped once and had to be reverted.
 
 ## Code Style
 - Keep C/ASM code minimal and explicit.

@@ -880,6 +880,36 @@ tail.
   negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH` -- and
   `wfs_txn_commit_task` awaits one at §14's steps 2, 4 and 6, with §21's replay
   awaiting one before its tail retires the replayed writes.
+- [ ] [FEATURE][P2] A volume manager, and filesystem recognisers.
+  Design: `docs/architecture/37-volume-manager.md`.
+
+  A volume is a thing with a filesystem on it -- a formatted raw disk, a
+  formatted partition, later a span of several. Nothing publishes that today:
+  the `block` class answers "what storage exists", which is not the same
+  question, so mount rules still name a disk and a unit
+  (`DRIVER=="ata", ATTR{unit}=="2"` for the WFS volume) even after Phase 3 set
+  out to stop them doing exactly that.
+
+  The blocking piece is a RECOGNISER: something that identifies a format without
+  that format's driver being resident. It cannot live in the filesystem drivers,
+  which are spawned BY the rule that needs the answer, and it does not belong in
+  the partition manager, whose job is tables and which publishes nothing at all
+  for a disk without one. Linux keeps it in a library (`libblkid`, `superblocks/`
+  beside `partitions/`) run by udev at publish time; Windows keeps it in a
+  recogniser stub separate from the filesystem. We follow Linux's shape because
+  a library needs no resident process.
+
+  `FS_TYPE_WFS` and the `ATTR{fstype}=="wfs"` rule spelling are already
+  registered, so a recogniser has somewhere to report to; nothing sets the field
+  yet. A probe was briefly written into `partition_manager.zig` and taken back
+  out -- it worked, but it put filesystem knowledge in the table parser and
+  still could not describe an unpartitioned volume.
+
+  It also gives exclusivity an owner. `fsck.wfs` and `mkfs.wfs` must both refuse
+  a MOUNTED volume, and nothing enforces that since the block layer stopped
+  arbitrating who may use a drive -- correctly, because a request now names its
+  own target. `claimed` on the volume is what they would consult.
+
 - [ ] [FEATURE][P2] A userland `mkfs.wfs`, so the OS can create a volume and not
   only mount one. Formatting today is a HOST tool (`src/tools/mkfs_wfs`, run on
   the developer's machine to build `build/wfs.img`); a running guest cannot
@@ -924,6 +954,55 @@ tail.
   only the writer is missing -- and nothing the OS can produce reaches the
   ceiling, which is why this sits below the work that does.
 
+- [ ] [ENHANCEMENT][P3] Widen the block transfer path past 2 TiB.
+  `wasmos_block_descriptor_t` reports a 64-bit `lba_count`, but
+  `BLOCK_IPC_READ_REQ`/`WRITE_REQ` arg1 is a 32-bit LBA, so a disk can now be
+  DESCRIBED past the point those opcodes can address it (`abi/opcodes.yaml`,
+  `TODO` on BLOCK_IPC_READ_REQ). Needs a second argument word for the high half,
+  or a descriptor-carrying request. ATA is on `lba28` and stops at 128 GiB
+  regardless, so only virtio-blk can reach the limit today.
+- [x] [FEATURE][P2] Phase 2: the partition manager service (Zig,
+  `src/drivers/partition_manager/`). Parses GPT (CRC32 + backup header) and MBR
+  and publishes each partition as a block device with its own class instance,
+  proxying READ/WRITE with an LBA offset and a bounds clamp. Landed in PR #25;
+  the endpoint-per-disk and endpoint-per-partition shape the plan called for was
+  not needed, because a block request carries its target in a request descriptor.
+  See `architecture/36-partition-manager-and-block-identity.md` §2.
+- [x] [FEATURE][P2] Phase 3: mount policy from the partition, not from a rule naming a disk.
+  `SUBSYSTEM=="partition"` splits partitions from whole disks and matches on
+  `partuuid`/`partlabel`/`type`/`name`/`fstype`/`scheme`; the mount path travels
+  as `mount=` in the filesystem driver's startup arguments, retiring
+  `DEVMGR_QUERY_BLOCK_MOUNT_REQ`; `/user` is a real GPT image mounted by its
+  label. Landed in PR #27.
+  `fat_try_parse_mbr` was NOT deleted — see the follow-on below for why. The GPT
+  label supplies the mount MATCHER, not the mount path: a rule still says where a
+  volume goes, so a labelled volume can be remounted elsewhere without rewriting
+  a partition table. See `architecture/36-partition-manager-and-block-identity.md` §3.
+- [ ] [FEATURE][P2] Probe disks that register after the partition manager starts,
+  and move it into initfs. `probeAll` enumerates the `block` class exactly once at
+  bring-up (`src/drivers/partition_manager/partition_manager.zig`), so a disk
+  whose driver registers later is never probed and its partitions never appear.
+  Subscribing to the class instead is also the prerequisite for running the
+  partition manager from initfs, which is what breaks the bootstrap circle that
+  keeps `fat_try_parse_mbr` alive: it is spawned from the BOOT rules, which
+  cannot load until `/boot` is mounted, so `/boot` cannot be mounted from a
+  partition the partition manager published. Deleting `fat_try_parse_mbr`
+  (`src/drivers/fs_fat/fat_geom.c`) removes the last partition-table reader
+  outside the partition manager.
+- [ ] [BUG][P3] Two partitions of one disk collide on the `fs.backend` class
+  instance. `FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`
+  (`src/drivers/include/wasmos_driver_abi.h`) and a partition reports its disk's
+  unit, so mounting two volumes from one disk would refuse the second
+  registration. Latent — no shipped configuration does that. The block
+  fingerprint is the identity that fixes it, and this is the last packed instance
+  left after the block class moved to one.
+- [ ] [ENHANCEMENT][P3] Report a rule line the device manager REFUSES.
+  `dm_rules_load_*` cannot distinguish "this line belongs to another rule kind",
+  which is the normal case since all four loaders run over the whole text, from
+  "this line is malformed or too long", which is a defect its author should see.
+  `device_manager_rules.c` has no console on purpose — being pure is what lets
+  the host suite link it standalone — so this needs a return code rather than a
+  log call. Carries a `TODO` at the loader.
 - [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
   preserve the transfer-buffer ownership contract through all VFS relay paths.

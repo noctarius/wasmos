@@ -377,7 +377,7 @@ static void mount_volume(fat_mount_t* mnt, fat_block_t* blk) {
 
     memset(blk, 0, sizeof(*blk));
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
-    fat_mount_init(mnt);
+    fat_mount_init(mnt, 0u);
 
     r = fat_geom_mount_step(mnt, blk);
     assert(r == FAT_R_DONE && "mount failed: the case cannot say anything about scanning");
@@ -770,7 +770,7 @@ static void mount_volume32(fat_mount_t* mnt, fat_block_t* blk) {
 
     memset(blk, 0, sizeof(*blk));
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
-    fat_mount_init(mnt);
+    fat_mount_init(mnt, 0u);
 
     r = fat_geom_mount_step(mnt, blk);
     assert(r == FAT_R_DONE && "FAT32 mount failed: the case cannot say anything about scanning");

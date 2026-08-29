@@ -4,12 +4,15 @@
  * against volumes mkfs_wfs produced. This file is only the part that cannot be
  * shared: finding the disk, and moving blocks over the block protocol.
  *
- * Usage: fsck.wfs [--repair] <instance>
+ * Usage: fsck.wfs [--repair] <canonical-id>
  *
- *   instance   a `block` class instance, as blkinfo prints it: (backend << 8) |
- *              unit. There is no default. Checking is harmless, but --repair
- *              writes, and a tool whose most destructive invocation is one
- *              omitted argument away from an arbitrary disk is a bad tool.
+ *   canonical-id  the disk's id as blkinfo prints it, e.g. `block:ata:2`. The
+ *                 `block` class instance is its fingerprint, so the id is both
+ *                 how the provider is found and how it is told which of its
+ *                 disks is meant. There is no default: checking is harmless, but
+ *                 --repair writes, and a tool whose most destructive invocation
+ *                 is one omitted argument away from an arbitrary disk is a bad
+ *                 tool.
  *
  * WITHOUT --repair nothing is written: findings are printed and the volume is
  * left exactly as it was. That is the default because a volume that fails its
@@ -44,27 +47,23 @@
 
 #define FSCK_MAX_PROVIDERS 8
 #define FSCK_SECTOR_BYTES 512u
+/* The per-process block buffer every transfer goes through is 8 KiB (see the
+ * block_buffer_phys host call). It bounds the block size this tool can handle:
+ * a 16384-byte volume needs a transfer twice the buffer, and the host call
+ * refuses it. Reported as geometry rather than as an I/O error, because it is a
+ * limit of the tool and not damage on the disk. */
+#define FSCK_BUFFER_BYTES 8192u
 
 static int32_t g_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
 static int32_t g_request_id = 1;
 static int32_t g_buffer_phys;
-
-static uint8_t instance_unit(uint32_t instance) {
-    return (uint8_t)(instance & 0xFFu);
-}
-
-static uint32_t parse_u32(const char* s, uint32_t fallback) {
-    uint32_t v = 0;
-    int any = 0;
-
-    while (*s >= '0' && *s <= '9') {
-        v = v * 10u + (uint32_t)(*s - '0');
-        any = 1;
-        s++;
-    }
-    return any ? v : fallback;
-}
+/* The disk every request names, and the buffer the request descriptor travels
+ * in -- acquired once and borrowed READ to the block endpoint, which is the
+ * direction docs/architecture/12-dma-transfers.md requires: the requester owns
+ * the object, the backend is a transient grantee. */
+static uint32_t g_target;
+static int32_t g_req_bid = -1;
 
 static int str_prefix(const char* s, const char* prefix) {
     while (*prefix) {
@@ -81,24 +80,47 @@ static int str_prefix(const char* s, const char* prefix) {
  * block 0 at the largest permitted block size before any geometry is known, and
  * everything after at the volume's own -- so the conversion needs no separate
  * notion of the block size. */
-static wasmos_error_code_t io_read(void* user, uint32_t block, void* out, uint32_t len) {
-    wasmos_ipc_message_t reply;
-    uint64_t offset = (uint64_t)block * len;
+/* Stage one transfer descriptor and send it. The arguments name only where the
+ * request is (buffer, offset, size); everything about the transfer -- the disk,
+ * a 64-bit LBA, where the payload goes -- is in the descriptor. */
+static wasmos_error_code_t submit(int32_t type, uint64_t offset, uint32_t len,
+                                  wasmos_ipc_message_t* reply) {
+    wasmos_block_request_t req = {0};
 
-    (void)user;
-    if ((len % FSCK_SECTOR_BYTES) != 0u) {
-        return WASMOS_ERR_FS_GEOMETRY;
+    req.version = BLOCK_REQUEST_VERSION;
+    req.target = g_target;
+    req.lba = offset / FSCK_SECTOR_BYTES;
+    req.sector_count = len / FSCK_SECTOR_BYTES;
+    req.dst_kind = (uint32_t)BLOCK_DST_BLOCK_BUFFER;
+    req.dst_phys = (uint32_t)g_buffer_phys;
+    if (g_req_bid < 0 || wasmos_xfer_buffer_write(g_req_bid, &req, (int32_t)sizeof(req), 0) != 0) {
+        return WASMOS_ERR_FS_BUFFER;
     }
     if (wasmos_ipc_call(g_endpoint,
                         g_reply_endpoint,
-                        BLOCK_IPC_READ_REQ,
+                        type,
                         g_request_id++,
-                        g_buffer_phys,
-                        (int32_t)(offset / FSCK_SECTOR_BYTES),
-                        (int32_t)(len / FSCK_SECTOR_BYTES),
+                        g_req_bid,
                         0,
-                        &reply) != 0) {
+                        (int32_t)sizeof(req),
+                        0,
+                        reply) != 0) {
         return WASMOS_ERR_FS_IO;
+    }
+    return WASMOS_ERR_NONE;
+}
+
+static wasmos_error_code_t io_read(void* user, uint32_t block, void* out, uint32_t len) {
+    wasmos_ipc_message_t reply;
+    wasmos_error_code_t rc;
+
+    (void)user;
+    if ((len % FSCK_SECTOR_BYTES) != 0u || len > FSCK_BUFFER_BYTES) {
+        return WASMOS_ERR_FS_GEOMETRY;
+    }
+    rc = submit(BLOCK_IPC_READ_REQ, (uint64_t)block * len, len, &reply);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
     }
     if (reply.type == BLOCK_IPC_ERROR) {
         return reply.arg0 ? (wasmos_error_code_t)reply.arg0 : WASMOS_ERR_FS_IO;
@@ -114,26 +136,19 @@ static wasmos_error_code_t io_read(void* user, uint32_t block, void* out, uint32
 
 static wasmos_error_code_t io_write(void* user, uint32_t block, const void* in, uint32_t len) {
     wasmos_ipc_message_t reply;
-    uint64_t offset = (uint64_t)block * len;
+    wasmos_error_code_t rc;
 
     (void)user;
-    if ((len % FSCK_SECTOR_BYTES) != 0u) {
+    if ((len % FSCK_SECTOR_BYTES) != 0u || len > FSCK_BUFFER_BYTES) {
         return WASMOS_ERR_FS_GEOMETRY;
     }
     if (wasmos_block_buffer_write(
             g_buffer_phys, addr_cast(int32_t, (void*)(uintptr_t)in), (int32_t)len, 0) != 0) {
         return WASMOS_ERR_FS_BUFFER;
     }
-    if (wasmos_ipc_call(g_endpoint,
-                        g_reply_endpoint,
-                        BLOCK_IPC_WRITE_REQ,
-                        g_request_id++,
-                        g_buffer_phys,
-                        (int32_t)(offset / FSCK_SECTOR_BYTES),
-                        (int32_t)(len / FSCK_SECTOR_BYTES),
-                        0,
-                        &reply) != 0) {
-        return WASMOS_ERR_FS_IO;
+    rc = submit(BLOCK_IPC_WRITE_REQ, (uint64_t)block * len, len, &reply);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
     }
     if (reply.type == BLOCK_IPC_ERROR) {
         return reply.arg0 ? (wasmos_error_code_t)reply.arg0 : WASMOS_ERR_FS_IO;
@@ -163,7 +178,8 @@ int main(void) {
     wfs_fsck_io_t io;
     wasmos_error_code_t rc;
     const char* rest;
-    uint32_t instance;
+    char id[BLOCK_DESCRIPTOR_ID_MAX];
+    uint32_t n = 0;
     int32_t count;
     int32_t i;
     int repair = 0;
@@ -178,11 +194,18 @@ int main(void) {
             rest++;
         }
     }
-    if (*rest < '0' || *rest > '9') {
-        (void)printf("usage: fsck.wfs [--repair] <instance>   (blkinfo lists instances)\n");
+    while (n + 1u < sizeof(id) && rest[n] != '\0' && rest[n] != ' ') {
+        id[n] = rest[n];
+        ++n;
+    }
+    id[n] = '\0';
+    /* A truncated id fingerprints to a value no backend registered, so it would
+     * look like an absent disk rather than a mistyped argument. */
+    if (n == 0u || (rest[n] != '\0' && rest[n] != ' ')) {
+        (void)printf("usage: fsck.wfs [--repair] <canonical-id>   (blkinfo lists ids)\n");
         return 1;
     }
-    instance = parse_u32(rest, 0u);
+    g_target = wasmos_block_fingerprint(id);
 
     if (proc_endpoint < 0) {
         (void)printf("[fsck.wfs] no process-manager endpoint\n");
@@ -200,13 +223,13 @@ int main(void) {
         return 1;
     }
     for (i = 0; i < count; ++i) {
-        if (providers[i].instance == instance) {
+        if (providers[i].instance == g_target) {
             g_endpoint = (int32_t)providers[i].endpoint;
             break;
         }
     }
     if (g_endpoint < 0) {
-        (void)printf("[fsck.wfs] no block device with instance %u\n", (unsigned)instance);
+        (void)printf("[fsck.wfs] no block device with id %s\n", id);
         return 1;
     }
     g_buffer_phys = wasmos_block_buffer_phys();
@@ -215,10 +238,16 @@ int main(void) {
         return 1;
     }
 
-    (void)printf("[fsck.wfs] checking instance %u (unit %u)%s\n",
-                 (unsigned)instance,
-                 (unsigned)instance_unit(instance),
-                 repair ? ", repairing" : ", read-only");
+    /* The descriptor buffer is acquired AFTER the endpoint is known, because the
+     * borrow names that endpoint. */
+    g_req_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(wasmos_block_request_t));
+    if (g_req_bid < 0 ||
+        wasmos_xfer_buffer_borrow(g_endpoint, g_req_bid, WASMOS_BUFFER_GRANT_READ) < 0) {
+        (void)printf("[fsck.wfs] no request buffer\n");
+        return 1;
+    }
+
+    (void)printf("[fsck.wfs] checking %s%s\n", id, repair ? ", repairing" : ", read-only");
 
     io.read_block = io_read;
     io.write_block = repair ? io_write : 0;
@@ -238,6 +267,12 @@ int main(void) {
         (void)printf("[fsck.wfs] structural damage: this tool does not rewrite it, and the "
                      "volume stays unclean\n");
         return 2;
+    }
+    if (rc == WASMOS_ERR_FS_GEOMETRY) {
+        (void)printf("[fsck.wfs] this volume's block size is larger than the %u-byte block "
+                     "buffer a process gets; cannot check it from the guest\n",
+                     (unsigned)FSCK_BUFFER_BYTES);
+        return 1;
     }
     if (rc != WASMOS_ERR_NONE) {
         (void)printf("[fsck.wfs] check failed: %s\n", wasmos_strerror(rc));

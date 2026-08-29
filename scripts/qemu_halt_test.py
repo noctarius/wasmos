@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import argparse
-import os
 import sys
 
-from qemu_test_framework import QemuConfig, QemuSession, default_config
+from qemu_test_framework import (
+    QemuConfig,
+    QemuSession,
+    default_config,
+    default_userfs_image,
+)
 
 
 def main():
@@ -11,15 +15,13 @@ def main():
     parser.add_argument("--ovmf-code", default="")
     parser.add_argument("--ovmf-vars", default="")
     parser.add_argument("--esp", default="")
-    parser.add_argument("--userfs", default="")
+    parser.add_argument("--userfs-image", dest="userfs_image", default="")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--smp", type=int, default=1)
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
-        userfs = args.userfs or os.environ.get(
-            "WASMOS_USERFS", os.path.join(os.getcwd(), "userfs")
-        )
+        userfs = default_userfs_image(args.esp, args.userfs_image)
         cfg = QemuConfig(
             args.ovmf_code, args.ovmf_vars, args.esp, userfs, smp_count=args.smp
         )

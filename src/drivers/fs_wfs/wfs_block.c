@@ -27,18 +27,69 @@ static int32_t block_reply_status(void* user, const wasmos_ipc_message_t* reply)
     return 0;
 }
 
-void wfs_block_configure(wfs_block_t* b, wasmos_sys_event_loop_t* loop, int32_t block_endpoint,
-                         int32_t reply_endpoint, int32_t buf_id) {
+wasmos_error_code_t wfs_block_configure(wfs_block_t* b, wasmos_sys_event_loop_t* loop,
+                                        int32_t block_endpoint, int32_t reply_endpoint,
+                                        int32_t buf_id, uint32_t target) {
     b->loop = loop;
     b->block_endpoint = block_endpoint;
     b->reply_endpoint = reply_endpoint;
     b->buf_id = buf_id;
+    b->target = target;
+    b->req_bid = -1;
     b->block_size = WFS_BLOCK_SIZE_MIN;
     b->staged_block = WFS_BLOCK_NONE;
     b->pending_block = WFS_BLOCK_NONE;
     b->in_flight = 0u;
     b->redirect = 0;
     b->redirect_user = 0;
+
+    /* The descriptor buffer is the CLIENT's and is borrowed to the server, which
+     * is the direction docs/architecture/12-dma-transfers.md requires: the
+     * requester owns the object and the backend is a transient grantee. READ is
+     * the whole grant it needs -- a backend reads the request and never writes
+     * it. Acquired once here rather than per transfer, because a per-request
+     * acquire is a per-request round trip for a buffer whose contents change but
+     * whose identity does not. */
+    b->req_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(wasmos_block_request_t));
+    if (b->req_bid < 0) {
+        return WASMOS_ERR_FS_BUFFER;
+    }
+    if (wasmos_xfer_buffer_borrow(b->block_endpoint, b->req_bid, WASMOS_BUFFER_GRANT_READ) < 0) {
+        (void)wasmos_xfer_buffer_release(b->req_bid);
+        b->req_bid = -1;
+        return WASMOS_ERR_FS_BUFFER;
+    }
+    return WASMOS_ERR_NONE;
+}
+
+/* Stage `req` and send it. The request travels in the client's own buffer; the
+ * arguments name only where to find it (arg0 = buffer id, arg1 = offset,
+ * arg2 = size), which is what lets a transfer carry a 64-bit LBA and its own
+ * target instead of a backend inferring one from the sender. */
+static wasmos_future_t* send_request(wfs_block_t* b, int32_t type,
+                                     const wasmos_block_request_t* req) {
+    if (b->req_bid < 0 ||
+        wasmos_xfer_buffer_write(b->req_bid, req, (int32_t)sizeof(*req), 0) != 0) {
+        /* Recorded, not merely returned. A NULL future means "nothing to await",
+         * and wfs_block_take reads that as the cache-hit path and reports
+         * SUCCESS -- so a request that was never sent would come back as a write
+         * that happened. This is the same trap the staging copy above sets the
+         * flag for. */
+        b->stage_failed = 1u;
+        b->in_flight = 0u;
+        wfs_block_invalidate(b);
+        return 0;
+    }
+    return wasmos_sys_wasm_ipc_future_send(b->loop,
+                                           &b->op,
+                                           b->block_endpoint,
+                                           b->reply_endpoint,
+                                           type,
+                                           b->req_bid,
+                                           0,
+                                           (int32_t)sizeof(*req),
+                                           0,
+                                           0);
 }
 
 void wfs_block_set_redirect(wfs_block_t* b, wfs_block_redirect_fn fn, void* user) {
@@ -66,27 +117,26 @@ void wfs_block_invalidate(wfs_block_t* b) {
     b->staged_block = WFS_BLOCK_NONE;
 }
 
-/* Send one block request and return its future. */
+/* Send one block transfer and return its future. */
 static wasmos_future_t* submit(wfs_block_t* b, uint32_t block, int write) {
     uint32_t sectors = b->block_size / WFS_SECTOR_BYTES;
+    wasmos_block_request_t req = {0};
 
     wasmos_sys_wasm_ipc_future_init(&b->op, block_reply_status, b);
     b->pending_block = block;
     b->in_flight = 1u;
 
-    /* arg0 = the server's buffer handle, arg1 = starting sector, arg2 = sector
-     * count. A filesystem block is `sectors` device sectors, so the lba is
-     * scaled here rather than by every caller. */
-    return wasmos_sys_wasm_ipc_future_send(b->loop,
-                                           &b->op,
-                                           b->block_endpoint,
-                                           b->reply_endpoint,
-                                           write ? BLOCK_IPC_WRITE_REQ : BLOCK_IPC_READ_REQ,
-                                           b->buf_id,
-                                           (int32_t)(block * sectors),
-                                           (int32_t)sectors,
-                                           0,
-                                           0);
+    req.version = BLOCK_REQUEST_VERSION;
+    req.target = b->target;
+    /* A filesystem block is `sectors` device sectors, so the lba is scaled here
+     * rather than by every caller. */
+    req.lba = (uint64_t)block * sectors;
+    req.sector_count = sectors;
+    /* The payload still lands directly in this process's block buffer; the
+     * descriptor says where it goes, never what goes there. */
+    req.dst_kind = (uint32_t)BLOCK_DST_BLOCK_BUFFER;
+    req.dst_phys = (uint32_t)b->buf_id;
+    return send_request(b, write ? BLOCK_IPC_WRITE_REQ : BLOCK_IPC_READ_REQ, &req);
 }
 
 wasmos_future_t* wfs_block_read_begin(wfs_block_t* b, uint32_t block) {
@@ -112,13 +162,21 @@ wasmos_future_t* wfs_block_flush_begin(wfs_block_t* b) {
     if (b->in_flight) {
         return 0;
     }
+    wasmos_block_request_t req = {0};
+
     wasmos_sys_wasm_ipc_future_init(&b->op, block_reply_status, b);
     /* The tag is left alone: a flush moves no data, so the staged block still
      * holds what it held and still names the block it came from. */
     b->pending_block = b->staged_block;
     b->in_flight = 1u;
-    return wasmos_sys_wasm_ipc_future_send(
-        b->loop, &b->op, b->block_endpoint, b->reply_endpoint, BLOCK_IPC_FLUSH_REQ, 0, 0, 0, 0, 0);
+
+    /* A flush carries a descriptor for one field, `target`. It moves no sectors
+     * and names no destination -- the zeroed remainder says so -- but a backend
+     * serving several disks has to be told which one to commit, and since the
+     * client table went away nothing infers that from the sender. */
+    req.version = BLOCK_REQUEST_VERSION;
+    req.target = b->target;
+    return send_request(b, BLOCK_IPC_FLUSH_REQ, &req);
 }
 
 wasmos_future_t* wfs_block_write_begin(wfs_block_t* b, uint32_t block) {

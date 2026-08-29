@@ -9,7 +9,8 @@
 #include "wasmos/libsys.h" /* wasmos_sys_ipc_report_discard */
 #include "wasmos_driver_abi.h"
 
-void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply_endpoint) {
+void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply_endpoint,
+                         uint32_t target) {
     blk->sector_bytes = FAT_SECTOR_SIZE;
     /* The FSInfo accounting starts unknown: a caller that did not zero the
      * struct would otherwise present a garbage free count as valid and write it
@@ -18,6 +19,8 @@ void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply
     blk->free_count_valid = 0;
     blk->block_endpoint = block_endpoint;
     blk->reply_endpoint = reply_endpoint;
+    blk->target = target;
+    blk->req_bid = -1;
     blk->buf_phys = -1;
     blk->next_req_id = 1;
     blk->cur_req_id = 0;
@@ -34,7 +37,41 @@ void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply
 
 int fat_block_setup(fat_block_t* blk) {
     blk->buf_phys = wasmos_block_buffer_phys();
-    return blk->buf_phys < 0 ? -1 : 0;
+    if (blk->buf_phys < 0) {
+        return -1;
+    }
+    /* Acquire and lend the request buffer ONCE. Doing it per transfer would be
+     * the expensive shape people assume a descriptor forces; it is not the shape
+     * the descriptor asks for, and a re-grant would fail ALREADY_BORROWED
+     * anyway. */
+    blk->req_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(wasmos_block_request_t));
+    if (blk->req_bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_borrow(blk->block_endpoint, blk->req_bid, WASMOS_BUFFER_GRANT_READ) <
+        0) {
+        (void)wasmos_xfer_buffer_release(blk->req_bid);
+        blk->req_bid = -1;
+        return -1;
+    }
+    return 0;
+}
+
+/* Stage the outstanding request and hand its buffer to the server. Returns 0, or
+ * -1 when the request could not be written or sent. */
+static int fat_block_submit(fat_block_t* blk, int32_t req_type, const wasmos_block_request_t* req) {
+    if (blk->req_bid < 0 ||
+        wasmos_xfer_buffer_write(blk->req_bid, req, (int32_t)sizeof(*req), 0) != 0) {
+        return -1;
+    }
+    return wasmos_ipc_send(blk->block_endpoint,
+                           blk->reply_endpoint,
+                           req_type,
+                           blk->cur_req_id,
+                           blk->req_bid,
+                           0,
+                           (int32_t)sizeof(*req),
+                           0);
 }
 
 uint8_t* fat_block_sector(fat_block_t* blk) {
@@ -100,14 +137,14 @@ static int fat_block_start(fat_block_t* blk, uint32_t lba, int rw) {
     blk->copy_into_sector = rw ? 0u : 1u;
     req_type = rw ? BLOCK_IPC_WRITE_REQ : BLOCK_IPC_READ_REQ;
 
-    if (wasmos_ipc_send(blk->block_endpoint,
-                        blk->reply_endpoint,
-                        req_type,
-                        blk->cur_req_id,
-                        blk->buf_phys,
-                        (int32_t)lba,
-                        1,
-                        0) != 0) {
+    wasmos_block_request_t req = {0};
+    req.version = BLOCK_REQUEST_VERSION;
+    req.target = blk->target;
+    req.lba = lba;
+    req.sector_count = 1u;
+    req.dst_kind = BLOCK_DST_BLOCK_BUFFER;
+    req.dst_phys = (uint32_t)blk->buf_phys;
+    if (fat_block_submit(blk, req_type, &req) != 0) {
         blk->cur_req_id = 0;
         return -1;
     }
@@ -136,7 +173,7 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
      * reports the failure as a bare -1 instead of a packed WASMOS_ERR_FS_* code
      * (fat_send_response in fs_fat.c substitutes -1 when err is unset). */
     if (blk->block_endpoint < 0 || blk->reply_endpoint < 0 || buffer_id < 0 || count == 0 ||
-        count > WASMOS_BLOCK_ZC_COUNT_MASK) {
+        count > WASMOS_BLOCK_ZC_MAX_SECTORS) {
         return FAT_R_ERR;
     }
     blk->cur_req_id = blk->next_req_id++;
@@ -150,17 +187,19 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
     blk->copy_into_sector = 0u;
     blk->direct_read = 1u;
 
-    /* The borrow rides above the count so the server can map the destination for
-     * device DMA; a server that only copies just masks it off. */
-    if (wasmos_ipc_send(blk->block_endpoint,
-                        blk->reply_endpoint,
-                        BLOCK_IPC_READ_ZC_REQ,
-                        blk->cur_req_id,
-                        buffer_id,
-                        (int32_t)lba,
-                        (int32_t)((uint32_t)borrow_id << WASMOS_BLOCK_ZC_BORROW_SHIFT) |
-                            (int32_t)count,
-                        (int32_t)dst_offset) != 0) {
+    /* Same opcode as a staged read; only the destination differs. The borrow is
+     * carried so the server can map the destination for device DMA, and a server
+     * that only copies ignores it. */
+    wasmos_block_request_t req = {0};
+    req.version = BLOCK_REQUEST_VERSION;
+    req.target = blk->target;
+    req.lba = lba;
+    req.sector_count = count;
+    req.dst_kind = BLOCK_DST_XFER_BUFFER;
+    req.dst_buffer_id = buffer_id;
+    req.dst_borrow_id = borrow_id;
+    req.dst_offset = dst_offset;
+    if (fat_block_submit(blk, BLOCK_IPC_READ_REQ, &req) != 0) {
         blk->cur_req_id = 0;
         blk->direct_read = 0u;
         return FAT_R_ERR;

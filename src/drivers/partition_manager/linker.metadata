@@ -1,0 +1,42 @@
+version = 1
+aot = true
+
+[package]
+name = "partition-manager"
+# The libsys async-service entry: it creates the reply endpoint, the event loop
+# and the coroutine runtime, then pumps the root task this driver supplies.
+entry = "async_initialize"
+# A driver, not a service, despite touching no hardware: `kind` sets the
+# scheduler band (SCHED_PRIO_DRIVER above SCHED_PRIO_SERVICE) and this sits IN
+# the block I/O path, underneath filesystem drivers that are themselves in the
+# driver band. See docs/architecture/36 §2.
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 512
+
+# Link-time memory in bytes (docs/toolchain.md). No device memory is mapped here
+# -- this driver reaches every disk over IPC -- so it needs no window above the
+# 2 MiB low guard and takes the modest default.
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+
+# The only two capabilities a block CLIENT needs, which is all this is: IPC to
+# reach the disks and the process manager, and svc.class to claim a `block`
+# instance per partition. No io.port, no irq.route, no dma.buffer -- it drives
+# no device, and a partition that could program hardware would be a partition
+# that could reach outside its own window.
+[[capabilities]]
+name = "ipc.basic"
+flags = 0
+
+[[capabilities]]
+name = "svc.class"
+flags = 0

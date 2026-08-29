@@ -40,6 +40,14 @@ set(EXAMPLES_AS_DIR ${CMAKE_SOURCE_DIR}/examples/assemblyscript)
 set(EXAMPLES_ZIG_DIR ${CMAKE_SOURCE_DIR}/examples/zig)
 set(SERVICES_DIR ${CMAKE_SOURCE_DIR}/src/services)
 set(USERFS_DIR ${CMAKE_SOURCE_DIR}/userfs)
+# The /user disk is a real GPT image built by scripts/make_gpt_image.py, not a
+# `fat:rw:<dir>` directory. QEMU's vvfat synthesises a classic MBR whatever the
+# guest is, so a directory-backed drive cannot exercise the GPT path at all --
+# and the partition it does synthesise carries no label, leaving the volume
+# nameable only by its position in the table. Files under USERFS_DIR are copied
+# into the image's root at build time.
+set(USERFS_IMAGE ${BUILD_DIR}/user.img)
+
 # A WFS volume for the guest to mount. Unlike the two FAT disks it cannot be a
 # QEMU synthetic FAT directory, so it is a raw image mkfs_wfs builds from
 # scripts/wfs. --uuid is pinned so the image is byte-identical between builds and
@@ -190,6 +198,9 @@ set(WASM_VIRTIO_SERIAL_APP ${BUILD_DIR}/virtio_serial.wap)
 set(WASM_VIRTIO_RNG_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_rng/virtio_rng.c)
 set(WASM_VIRTIO_RNG_DRIVER_WASM ${BUILD_DIR}/virtio_rng.wasm)
 set(WASM_VIRTIO_RNG_APP ${BUILD_DIR}/virtio_rng.wap)
+set(WASM_PARTITION_MANAGER_DRIVER_SRC ${DRIVER_WASM_DIR}/partition_manager/partition_manager.zig)
+set(WASM_PARTITION_MANAGER_DRIVER_WASM ${BUILD_DIR}/partition_manager.wasm)
+set(WASM_PARTITION_MANAGER_APP ${BUILD_DIR}/partition_manager.wap)
 set(WASM_VIRTIO_BLK_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_blk/virtio_blk.zig)
 set(WASM_VIRTIO_BLK_DRIVER_WASM ${BUILD_DIR}/virtio_blk.wasm)
 set(WASM_VIRTIO_BLK_APP ${BUILD_DIR}/virtio_blk.wap)
@@ -1873,6 +1884,9 @@ if (ZIG_AVAILABLE)
   set(VIRTIO_BLK_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_BLK_APP} ${BUILD_DIR}/esp/system/drivers/virtio_blk.wap
   )
+  set(PARTITION_MANAGER_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTITION_MANAGER_APP} ${BUILD_DIR}/esp/system/drivers/partmgr.wap
+  )
 endif ()
 
 # Rebuilt whenever the content or the formatter changes: the guest mounts this
@@ -1900,6 +1914,9 @@ add_custom_command(
 add_custom_target(wfs_virtio_image DEPENDS ${WFS_VIRTIO_IMAGE})
 
 set(WASMOS_ESP_POPULATE_CMDS
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${USERFS_DIR}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/make_gpt_image.py
+          --output ${USERFS_IMAGE} --label user --source ${USERFS_DIR}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
@@ -1927,6 +1944,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_NET_APP} ${BUILD_DIR}/esp/system/drivers/virtio_net.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_RNG_APP} ${BUILD_DIR}/esp/system/drivers/virtio_rng.wap
   ${VIRTIO_BLK_COPY_CMD}
+  ${PARTITION_MANAGER_COPY_CMD}
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}
@@ -1984,7 +2002,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=fat:rw:${USERFS_DIR}
+            -drive format=raw,file=${USERFS_IMAGE}
             -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
             -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
             -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
@@ -2001,7 +2019,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=fat:rw:${USERFS_DIR}
+            -drive format=raw,file=${USERFS_IMAGE}
             -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
             -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
             -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
@@ -2017,7 +2035,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=fat:rw:${USERFS_DIR}
+            -drive format=raw,file=${USERFS_IMAGE}
             -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
             -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
             -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
@@ -2063,7 +2081,7 @@ if (OVMF_VARS)
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
             WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
-            WASMOS_USERFS=${USERFS_DIR}
+            WASMOS_USERFS_IMAGE=${USERFS_IMAGE}
             WASMOS_WFS_IMAGE=${WFS_IMAGE}
             WASMOS_QEMU_ISOLATE_ESP=1
             WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
@@ -2095,7 +2113,7 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=fat:rw:${USERFS_DIR}
+              -drive format=raw,file=${USERFS_IMAGE}
               -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
               -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
               -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
@@ -2111,7 +2129,7 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=fat:rw:${USERFS_DIR}
+              -drive format=raw,file=${USERFS_IMAGE}
               -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
               -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
               -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
@@ -2126,7 +2144,7 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=fat:rw:${USERFS_DIR}
+              -drive format=raw,file=${USERFS_IMAGE}
               -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
               -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
               -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
@@ -2163,7 +2181,7 @@ else ()
               WASMOS_OVMF_CODE=${OVMF_CODE}
               WASMOS_ESP=${BUILD_DIR}/esp
             WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
-              WASMOS_USERFS=${USERFS_DIR}
+              WASMOS_USERFS_IMAGE=${USERFS_IMAGE}
               WASMOS_WFS_IMAGE=${WFS_IMAGE}
             WASMOS_WFS_IMAGE=${WFS_IMAGE}
               WASMOS_QEMU_ISOLATE_ESP=1
@@ -2339,18 +2357,6 @@ endforeach()
 # Explicit sysroot for the host sanitizer builds (see the note in the target).
 # Sanitizer arms build with the HOST toolchain, not ${CLANG}. On macOS the
 # Homebrew LLVM this project uses for the UEFI targets links a TSan runtime that
-# Dead-strip flag for host test suites that #include a whole service translation
-# unit to reach its file statics: the linker drops the half the suite never calls
-# rather than the suite having to stub every import of it. GNU ld spells it
-# --gc-sections and Apple's ld spells it -dead_strip, so a suite hardcoding
-# either builds on one host only -- and a Linux CI runner cannot catch the Darwin
-# half of that.
-if(APPLE)
-  set(WASMOS_HOST_DEAD_STRIP -Wl,-dead_strip)
-else()
-  set(WASMOS_HOST_DEAD_STRIP -Wl,--gc-sections)
-endif()
-
 # segfaults on entry; Apple's clang ships one that works. The kernel sources are
 # plain C11 here, so either compiler is fine for the code itself.
 set(WASMOS_HOST_SANITIZER_CC ${CLANG})
@@ -2389,6 +2395,18 @@ add_custom_target(run-fat-image-tests
   DEPENDS run-kernel-unit-tests
   COMMENT "Driving fs_fat against real formatter-built FAT images"
   VERBATIM)
+
+# Dead-strip flag for host unit tests that include a whole translation unit and
+# rely on collection to drop the half they do not exercise. The GNU spelling is
+# not an Apple linker option -- ld64 rejects --gc-sections outright, and so does
+# ld64.lld -- so the platform decides the spelling. Not optional: without a
+# dead-strip those suites fail to link on undefined host-call imports from the
+# uncollected half.
+if (APPLE)
+  set(DEAD_STRIP_FLAG -Wl,-dead_strip)
+else ()
+  set(DEAD_STRIP_FLAG -Wl,--gc-sections)
+endif ()
 
 add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -2458,6 +2476,15 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_device_manager_rules
   COMMAND ${BUILD_DIR}/test_device_manager_rules
+  # The block descriptor ABI and its class-instance fingerprint. Header-only:
+  # wasmos_driver_abi.h carries both, and the generated constants it includes
+  # supply the version and the field capacities.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_block_descriptor.c
+          -o ${BUILD_DIR}/test_block_descriptor
+  COMMAND ${BUILD_DIR}/test_block_descriptor
   # The block-rule MATCHER, as opposed to the rule parser above. The suite
   # includes device_manager.c to reach its file statics, so:
   #   the dead-strip flag drops the event-loop half of that translation unit, whose
@@ -2467,8 +2494,7 @@ add_custom_target(run-kernel-unit-tests
   #     from the collected half are unreferenced here, which is a property of
   #     testing one path through a TU, not a defect in the service.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -Wno-unused-function -ffunction-sections -fdata-sections
-          ${WASMOS_HOST_DEAD_STRIP}
+          -Wno-unused-function -ffunction-sections -fdata-sections ${DEAD_STRIP_FLAG}
           -iquote ${SERVICES_DIR}/device_manager
           -iquote ${LIBSYS_WASM_DIR}/include
           # Our libc headers go on -I rather than -iquote, for the reason the
@@ -3926,6 +3952,25 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               -Mcoroutine=${LIBC_DIR}/zig/coroutine.zig
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running WASM Zig coroutine wrapper unit tests"
+      VERBATIM)
+  endif ()
+  if (ZIG_AVAILABLE)
+    # The GPT/MBR parser. Pure Zig with no C sources and no imports beyond the
+    # module under test, because it does no I/O: every case builds a sector image
+    # in memory. The NATIVE_COROUTINE_ZIG_* variables are misnamed for this use —
+    # they are the host target and link flags `zig test` needs on this platform,
+    # not anything coroutine-specific — but reusing them keeps one definition of
+    # "how to run a Zig host test" rather than a second copy that can drift.
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-partition-table-cache
+              --global-cache-dir ${BUILD_DIR}/zig-partition-table-global-cache
+              --dep partition_table
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_partition_table.zig
+              -Mpartition_table=${DRIVER_WASM_DIR}/partition_manager/partition_table.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running partition-table parser unit tests"
       VERBATIM)
   endif ()
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD

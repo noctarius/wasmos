@@ -96,10 +96,13 @@ static wasmos_error_code_t load_super(fsck_t* f) {
     int have = 0;
     wasmos_error_code_t rc;
 
-    /* The primary lives at byte WFS_SUPER_OFFSET of block 0, and the block size
-     * is not known until it parses -- so block 0 is read at the largest
-     * permitted size, which is what a mount does. */
-    rc = f->io->read_block(f->io->user, 0u, f->buf, WFS_BLOCK_SIZE_MAX);
+    /* The primary lives at byte WFS_SUPER_OFFSET of block 0 and ends well inside
+     * the first WFS_BLOCK_SIZE_MIN bytes, so that is what is read -- the block
+     * size is not known yet, and reading a whole maximum-sized block to reach a
+     * structure at a fixed byte offset asks the transport for four times what
+     * the probe needs. A guest's block buffer is 8 KiB, so the larger read was
+     * simply refused. */
+    rc = f->io->read_block(f->io->user, 0u, f->buf, WFS_BLOCK_SIZE_MIN);
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
@@ -710,7 +713,10 @@ static wasmos_error_code_t finish_super(fsck_t* f, uint32_t free_blocks, uint32_
                                         int structural) {
     uint8_t* d;
     uint32_t sum;
-    wasmos_error_code_t rc = f->io->read_block(f->io->user, 0u, f->buf, WFS_BLOCK_SIZE_MAX);
+    /* Block 0's first WFS_BLOCK_SIZE_MIN bytes, for the reason load_super reads
+     * them: the superblock lives inside them whatever the volume's block size
+     * is, and the write below puts back exactly what was read. */
+    wasmos_error_code_t rc = f->io->read_block(f->io->user, 0u, f->buf, WFS_BLOCK_SIZE_MIN);
 
     if (rc != WASMOS_ERR_NONE) {
         return rc;
@@ -737,7 +743,7 @@ static wasmos_error_code_t finish_super(fsck_t* f, uint32_t free_blocks, uint32_
     sum = wfs_checksum_struct(
         f->sb.uuid, 0u, d, WFS_SUPER_SIZE, offsetof(struct wfs_superblock, checksum));
     wfs_wr32(d, offsetof(struct wfs_superblock, checksum), sum);
-    rc = f->io->write_block(f->io->user, 0u, f->buf, WFS_BLOCK_SIZE_MAX);
+    rc = f->io->write_block(f->io->user, 0u, f->buf, WFS_BLOCK_SIZE_MIN);
     if (rc == WASMOS_ERR_NONE) {
         f->rep->repaired++;
     }
@@ -770,7 +776,7 @@ wasmos_error_code_t wfs_fsck_run(const wfs_fsck_io_t* io, wfs_fsck_log_fn log, v
 
     /* The first read is block 0 at the largest permitted block size, before any
      * geometry is known; every buffer below is sized from the superblock. */
-    f.buf = malloc(WFS_BLOCK_SIZE_MAX);
+    f.buf = malloc(WFS_BLOCK_SIZE_MAX); /* resized reads share it; the largest is a block */
     if (!f.buf) {
         return WASMOS_ERR_FS_NO_SPACE;
     }

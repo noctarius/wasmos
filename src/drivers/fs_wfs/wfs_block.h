@@ -45,7 +45,17 @@ typedef struct {
     wasmos_sys_event_loop_t* loop;
     int32_t block_endpoint;
     int32_t reply_endpoint;
-    int32_t buf_id; /* transfer buffer the block server fills */
+    int32_t buf_id; /* this process's block buffer, by PHYSICAL address */
+
+    /* The disk this client addresses: its `block` class instance, carried in
+     * every request. A backend serves several devices on one endpoint, so the
+     * endpoint alone no longer says which disk a transfer means. */
+    uint32_t target;
+    /* Transfer buffer holding the request descriptor, acquired once and
+     * borrowed READ to the block endpoint for the client's lifetime. One slot
+     * suffices because this layer keeps exactly one request in flight; a slot
+     * may not be reused until its reply lands. */
+    int32_t req_bid;
 
     uint32_t block_size;
 
@@ -79,8 +89,13 @@ static inline uint8_t* wfs_block_data(wfs_block_t* b) {
     return b->data;
 }
 
-void wfs_block_configure(wfs_block_t* b, wasmos_sys_event_loop_t* loop, int32_t block_endpoint,
-                         int32_t reply_endpoint, int32_t buf_id);
+/* Bind the client to a block endpoint and a disk. `buf_id` is this process's
+ * block buffer by physical address; `target` is the disk's `block` class
+ * instance. Acquires and borrows the request-descriptor buffer, so it may fail:
+ * returns 0, or a packed code when that buffer could not be obtained. */
+wasmos_error_code_t wfs_block_configure(wfs_block_t* b, wasmos_sys_event_loop_t* loop,
+                                        int32_t block_endpoint, int32_t reply_endpoint,
+                                        int32_t buf_id, uint32_t target);
 
 /* Adopt the volume's block size once the superblock has been read. Refuses
  * anything outside the three permitted sizes, leaving the previous value.

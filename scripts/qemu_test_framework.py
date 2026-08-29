@@ -22,7 +22,7 @@ class QemuConfig:
     ovmf_code: str
     ovmf_vars: str
     esp_dir: str
-    userfs_dir: str = ""
+    userfs_image: str = ""
     # A raw WFS volume, attached as a third disk (block unit 2). Unlike the two
     # FAT disks this cannot be a synthetic FAT directory, so it is an image
     # mkfs_wfs built; absent, the guest simply has no WFS unit to mount.
@@ -59,16 +59,17 @@ class QemuConfig:
 
     def __post_init__(self) -> None:
         # Fill the optional disks in from the environment when a caller built the
-        # config positionally. Several callers do — qemu_halt_test.py constructs
-        # QemuConfig(ovmf, vars, esp, userfs) directly — and a field they do not
-        # name would otherwise silently keep its dataclass default, which for a
-        # disk means the guest never sees it.
-        if not self.userfs_dir:
-            self.userfs_dir = os.environ.get("WASMOS_USERFS", "")
+        # config positionally: a field a caller did not name would otherwise keep
+        # its dataclass default, which for a disk means the guest never sees it.
         if not self.wfs_image:
             self.wfs_image = os.environ.get(
                 "WASMOS_WFS_IMAGE", os.path.join("build", "wfs.img")
             )
+        if self.userfs_image:
+            return
+        env_userfs = os.environ.get("WASMOS_USERFS_IMAGE", "")
+        if env_userfs:
+            self.userfs_image = env_userfs
 
 
 def _read_cmake_cache(cache_path: str) -> dict:
@@ -197,6 +198,22 @@ def _resolve_kernel_addrs(kernel, addrs):
         return {}
 
 
+def default_userfs_image(esp_dir: str = "", explicit: str = "") -> str:
+    """Path to the /user GPT image, or "" when there is none to attach.
+
+    Resolution order: an explicit argument, then WASMOS_USERFS_IMAGE, then
+    `user.img` beside the ESP -- which is where the build writes it, and which
+    keeps a runner launched against one configuration's tree from attaching
+    another's disk. Returns "" when nothing resolves to a file that exists: a
+    suite that never touches /user still runs, and one that does fails on the
+    mount it cares about rather than on a QEMU argument.
+    """
+    candidate = explicit or os.environ.get("WASMOS_USERFS_IMAGE", "")
+    if not candidate and esp_dir:
+        candidate = os.path.join(os.path.dirname(os.path.abspath(esp_dir)), "user.img")
+    return candidate if candidate and os.path.exists(candidate) else ""
+
+
 def default_build_dir(build_dir: str = "build") -> str:
     """The build tree a test belongs to.
 
@@ -224,9 +241,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     ovmf_code = os.environ.get("WASMOS_OVMF_CODE", cache.get("OVMF_CODE", ""))
     ovmf_vars = os.environ.get("WASMOS_OVMF_VARS", cache.get("OVMF_VARS", ""))
     esp_dir = os.environ.get("WASMOS_ESP", os.path.join(build_dir, "esp"))
-    source_dir = cache.get("CMAKE_HOME_DIRECTORY", os.getcwd())
-    userfs_default = os.path.join(source_dir, "userfs")
-    userfs_dir = os.environ.get("WASMOS_USERFS", userfs_default)
+    userfs_image = default_userfs_image(esp_dir)
     wfs_image = os.environ.get("WASMOS_WFS_IMAGE", os.path.join(build_dir, "wfs.img"))
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
     # On by default: the monitor is what makes dump_stall_state possible, and a
@@ -246,7 +261,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         ovmf_code=ovmf_code,
         ovmf_vars=ovmf_vars,
         esp_dir=esp_dir,
-        userfs_dir=userfs_dir,
+        userfs_image=userfs_image,
         wfs_image=wfs_image,
         isolate_esp=isolate_esp,
         enable_monitor=enable_monitor,
@@ -289,8 +304,10 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.ovmf_vars:
         cmd += ["-drive", f"if=pflash,format=raw,file={cfg.ovmf_vars}"]
     cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.esp_dir}"]
-    if cfg.userfs_dir:
-        cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.userfs_dir}"]
+    if cfg.userfs_image:
+        # A raw GPT image, not a `fat:rw:` directory: the /user volume is a real
+        # partition with a label, which is what its mount rule matches on.
+        cmd += ["-drive", f"format=raw,file={cfg.userfs_image}"]
     if cfg.wfs_image and os.path.exists(cfg.wfs_image):
         # if=ide,index=2 explicitly: index 2 is the secondary channel's master,
         # which is the unit the device-manager rule for WFS matches. Relying on
@@ -1235,15 +1252,13 @@ def main():
     parser.add_argument("--ovmf-code", default="")
     parser.add_argument("--ovmf-vars", default="")
     parser.add_argument("--esp", default="")
-    parser.add_argument("--userfs", default="")
+    parser.add_argument("--userfs-image", dest="userfs_image", default="")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--smp", type=int, default=1)
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
-        userfs = args.userfs or os.environ.get(
-            "WASMOS_USERFS", os.path.join(os.getcwd(), "userfs")
-        )
+        userfs = default_userfs_image(args.esp, args.userfs_image)
         cfg = QemuConfig(
             args.ovmf_code, args.ovmf_vars, args.esp, userfs, smp_count=args.smp
         )

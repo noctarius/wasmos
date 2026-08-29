@@ -562,7 +562,7 @@ int main(int argc, char** argv) {
     memset(&blk, 0, sizeof(blk));
     blk.loaded_lba = FAT_BLOCK_NO_LBA;
     fat_open_pool_init(&pool);
-    fat_mount_init(&mnt);
+    fat_mount_init(&mnt, 0u);
     rc = fat_geom_mount_step(&mnt, &blk);
     CHECK(rc == FAT_R_DONE, "the formatter's volume mounts");
     if (rc != FAT_R_DONE) {

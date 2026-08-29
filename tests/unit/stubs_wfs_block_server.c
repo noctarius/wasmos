@@ -52,18 +52,26 @@ int32_t wasmos_xfer_buffer_release(int32_t buffer) {
     (void)buffer;
     return 0;
 }
+/* Backing for the one buffer the client acquires: the slot its block REQUEST
+ * descriptor travels in. It used to be a no-op, which was honest while a
+ * transfer was four argument words; now the request itself lives here, so the
+ * stub has to hold what the driver wrote or it cannot decode what was asked. */
+static uint8_t g_req_buf[128];
+
 int32_t wasmos_xfer_buffer_write(int32_t buffer, const void* ptr, int32_t len, int32_t offset) {
     (void)buffer;
-    (void)ptr;
-    (void)len;
-    (void)offset;
+    if (len < 0 || offset < 0 || (size_t)offset + (size_t)len > sizeof(g_req_buf)) {
+        return -1;
+    }
+    memcpy(g_req_buf + offset, ptr, (size_t)len);
     return 0;
 }
 int32_t wasmos_xfer_buffer_read(int32_t buffer, void* ptr, int32_t len, int32_t offset) {
     (void)buffer;
-    (void)ptr;
-    (void)len;
-    (void)offset;
+    if (len < 0 || offset < 0 || (size_t)offset + (size_t)len > sizeof(g_req_buf)) {
+        return -1;
+    }
+    memcpy(ptr, g_req_buf + offset, (size_t)len);
     return 0;
 }
 
@@ -124,6 +132,7 @@ int32_t wasmos_block_buffer_write(int32_t phys, int32_t src, int32_t len, int32_
 
 int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32_t request_id,
                         int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
+    wasmos_block_request_t req;
     uint32_t sectors;
     uint32_t block;
 
@@ -157,14 +166,23 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
         return 0; /* not ours: accepted and never answered */
     }
     if (arg0 != WFS_STUB_BUF_ID) {
-        return -1; /* the driver must name the buffer it was given */
+        return -1; /* the driver must name the buffer it acquired */
     }
 
-    sectors = (uint32_t)arg2;
+    /* The request is a descriptor in the CLIENT's buffer; the arguments name
+     * only where to find it. Decoding it here is what keeps the encoding under
+     * test -- a driver that filled the descriptor wrongly fails on the block it
+     * asks for, not on a silently ignored argument. */
+    if (arg2 < (int32_t)sizeof(req) ||
+        wasmos_xfer_buffer_read(arg0, &req, (int32_t)sizeof(req), arg1) != 0 ||
+        req.version != BLOCK_REQUEST_VERSION) {
+        return -1;
+    }
+    sectors = req.sector_count;
     wfs_stub_last_sectors = sectors;
     /* Undo the driver's block -> sector scaling. This is the encoding under
      * test: the request must name a whole filesystem block. */
-    block = sectors ? (uint32_t)arg1 / sectors : 0xFFFFFFFFu;
+    block = sectors ? (uint32_t)(req.lba / sectors) : 0xFFFFFFFFu;
     if (wfs_stub_req_count < WFS_STUB_REQ_LOG_MAX) {
         wfs_stub_req_blocks[wfs_stub_req_count] = block;
     }
@@ -322,8 +340,10 @@ int wfs_stub_build_volume(uint64_t size_bytes, uint32_t block_size,
 
     wasmos_wasm_runtime_init(&g_runtime);
     wasmos_sys_event_loop_init(&g_loop, WFS_STUB_REPLY_ENDPOINT, 0x1000);
-    wfs_block_configure(
-        &g_blk, &g_loop, WFS_STUB_BLOCK_ENDPOINT, WFS_STUB_REPLY_ENDPOINT, WFS_STUB_BUF_ID);
+    /* Target 0: "the only device you serve", which is what a single-disk backend
+     * may take as read (wasmos_block_request_t). The fixture serves one image. */
+    (void)wfs_block_configure(
+        &g_blk, &g_loop, WFS_STUB_BLOCK_ENDPOINT, WFS_STUB_REPLY_ENDPOINT, WFS_STUB_BUF_ID, 0u);
     wfs_ops_bind(&g_runtime, &g_blk);
     wfs_stub_reset_counters();
     return 0;

@@ -1,6 +1,6 @@
 ---
 name: wasmos-add-opcode
-description: Add or change a WASMOS IPC opcode (a positive ipc_message_t.type value) via the single-source IDL abi/opcodes.yaml + scripts/gen_abi_opcodes.py. Covers the per-subsystem model, the REQ/RESP/ERROR convention, endpoint-scoped value collisions, what is generated (C enums in wasmos_driver_abi.h, the opcode->name diagnostic table, the doc tables, and the Rust/Go/Zig/AS constant files) vs hand-written, and how to validate. Use whenever adding/retiring an IPC opcode.
+description: Add or change a WASMOS IPC opcode (a positive ipc_message_t.type value) via the single-source IDL abi/opcodes.yaml + scripts/gen_abi_opcodes.py. Covers FIRST how to shape the message - a request descriptor in a transfer buffer is the default, four bare argument words are the exception, and packing two values into one word or adding a sibling opcode that differs only in how a parameter is expressed both mean the message outgrew its arguments - then the per-subsystem model, the REQ/RESP/ERROR convention, endpoint-scoped value collisions, what is generated (C enums in wasmos_driver_abi.h, the opcode->name diagnostic table, the doc tables, and the Rust/Go/Zig/AS constant files) vs hand-written, and how to validate. Use whenever adding or retiring an IPC opcode, and whenever deciding what a message should carry.
 ---
 
 # WASMOS: Add an IPC Opcode
@@ -39,10 +39,84 @@ lookup is subsystem-scoped so it stays exact.
 
 ## Workflow
 
+0. **Decide the message shape: four argument words, or a descriptor.**
 1. Add the entry to the right subsystem in `abi/opcodes.yaml`.
 2. Regenerate and verify.
 3. Handle the message (send/reply/dispatch) in the driver/service.
 4. Build and boot both runtimes.
+
+## Step 0: Decide the message shape (do this first)
+
+`ipc_message_t` is 32 bytes: four header words and **exactly four** opcode
+words (`src/kernel/include/ipc.h`). That ceiling is not a budget to spend
+cleverly. Every attempt to fit "just one more thing" into it has had to be
+undone later, and the same mistake keeps being made because packing a value
+*looks* like it worked.
+
+**Default: a request DESCRIPTOR in a transfer buffer.** A struct the caller
+fills, carried as `arg0 = buffer_id, arg1 = byte_offset, arg2 = size`, with the
+CLIENT owning the buffer (`skills/wasmos-shared-primitives`,
+`docs/architecture/12-dma-transfers.md`). Precedents:
+
+- `DEVMGR_PUBLISH_DEVICE_DESC`, which superseded `DEVMGR_PUBLISH_DEVICE` for
+  exactly this reason — four words could not describe six BARs.
+- `BLOCK_IPC_IDENTIFY` and `DEVMGR_PUBLISH_BLOCK_DEVICE`, carrying
+  `wasmos_block_descriptor_t`.
+- `BLOCK_IPC_READ_REQ` / `WRITE_REQ`, carrying `wasmos_block_request_t`. Worth
+  reading as the cautionary one: the packed form it replaced forced a 32-bit LBA
+  (a 2 TiB ceiling), left no word to name the target device so backends inferred
+  it from the sender's endpoint, and needed a SECOND opcode —
+  `BLOCK_IPC_READ_ZC_REQ`, since retired — for a destination that would not fit
+  in the words left over. Undoing that took five commits.
+- `PROC_BROKER_IPC_SPAWN_PLAN_REQ`.
+
+**Use bare arguments only** for a fixed, small set that will not grow — a
+status, a handle, a count, a flag. "Will not grow" must be an argument you can
+make, not a hope.
+
+### Bright lines: use a descriptor if ANY of these is true
+
+- More than about two independent values beyond an id or status.
+- **You are writing a shift or a mask into an argument.** If you type
+  `(x << 12) | y`, you have already lost. Two identities in one word is the
+  clearest possible signal the message outgrew its arguments.
+- A value that can grow: an LBA, a size, a byte count, an address, a string, a
+  GUID, a list. A 32-bit LBA is a 2 TiB ceiling; a 32-bit sector count is the
+  same ceiling on a different axis.
+- You want a `reserved` argument, or a wildcard sentinel like `0xFF = any`.
+- Identity and parameters would share the four words — hoist the identity into
+  the descriptor rather than inferring it from the sender's endpoint.
+- **You are about to add a sibling opcode that differs only in how a parameter
+  is expressed.** `BLOCK_IPC_READ_ZC_REQ` existed as a second read protocol
+  solely because a transfer-buffer destination could not be described in the
+  words `BLOCK_IPC_READ_REQ` left over. It is retired: as a descriptor field the
+  destination is one branch of one opcode, which is all it ever was. A duplicated
+  protocol is the most expensive form this mistake takes, because every backend
+  has to implement both halves.
+
+### The objection that is always wrong
+
+*"This is the hot path, a transfer buffer is too expensive."*
+
+It is not, and this has been measured in this tree. A client acquires and grants
+**once per operation** and reuses both for every request in it — see the chunk
+loop in `src/libc/zig/wasmos.zig` ("Own one buffer and grant the FS manager
+once; reuse both across the whole call") and `fat_block_setup`, which acquires
+once per driver. The per-request cost is one `xfer_buffer_write` of a few dozen
+bytes into an already-mapped, already-granted buffer, next to a send host call,
+a device transfer, an interrupt and a scheduler round trip.
+
+What a descriptor does NOT absorb is bulk payload. Read data still lands in a
+physical address or a borrowed buffer named BY the descriptor — that is what
+makes the transfer zero-copy, and routing payload through the request would
+undo it.
+
+### Concurrency
+
+Several in-flight requests need several regions, and a region cannot be recycled
+until its reply lands. Give each in-flight slot its own offset — the same
+slot-per-item discipline `pci_bus` uses when publishing devices — and bound the
+slots the way `fs_fat` already bounds `FAT_MAX_INFLIGHT`.
 
 ## Step 1: Add the entry to `abi/opcodes.yaml`
 

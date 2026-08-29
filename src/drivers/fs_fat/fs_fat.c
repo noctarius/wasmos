@@ -43,6 +43,11 @@ static int32_t g_requested_unit = -1;
  * manager named it. A unit alone does not identify a disk -- it is
  * backend-local -- so both halves are needed to find the right server. */
 static uint8_t g_requested_backend = (uint8_t)BLOCK_BACKEND_UNKNOWN;
+/* The `block` class instance of this driver's disk: the fingerprint of the
+ * canonical id the device manager passed in `id=`. It is both how the provider
+ * is found in the class registry and how the provider is told which of its disks
+ * is meant, since several instances may share one endpoint. */
+static uint32_t g_requested_instance = 0u;
 
 /* In-flight op pool + FIFO of queued (not-yet-active) op indices. */
 static fat_op_ctx_t g_ops[FAT_MAX_INFLIGHT];
@@ -67,8 +72,14 @@ static void fat_stall(void) {
 
 /* --- init-time handshakes (one-time, pre-reactor; synchronous by nature). --- */
 
+/* Startup-argument blob this driver reads. Large enough for
+ * `driver=<name> unit=<n> id=<canonical id> mount=<path>`, whose id alone may be
+ * BLOCK_DESCRIPTOR_ID_MAX bytes; the process manager truncates at
+ * WASMOS_STARTUP_ARGS_MAX, so nothing longer can arrive anyway. */
+#define FAT_STARTUP_ARGS_MAX 192
+
 static int32_t fat_parse_requested_unit(void) {
-    char args[64];
+    char args[FAT_STARTUP_ARGS_MAX];
     char* end = 0;
     const char* unit = 0;
     long value = 0;
@@ -84,6 +95,44 @@ static int32_t fat_parse_requested_unit(void) {
         return -1;
     }
     return (int32_t)value;
+}
+
+/* The VFS path this volume mounts at, from `mount=`.
+ *
+ * The rule that spawned this driver chose it, and the device manager delivers it
+ * at spawn. Nothing is asked back afterwards: the retired
+ * DEVMGR_QUERY_BLOCK_MOUNT_REQ answered a query keyed on the disk unit, which
+ * two volumes on one disk share, so it could not name which of them was being
+ * asked about.
+ *
+ * Copied out because the token is not NUL-terminated in the blob -- tokens are
+ * space-separated. Returns 0 on success; a value that does not fit is refused
+ * rather than truncated, since a truncated path is a different, valid-looking
+ * path. */
+static int fat_parse_requested_mount(char* out, uint32_t out_cap) {
+    char args[FAT_STARTUP_ARGS_MAX];
+    const char* token = 0;
+    uint32_t n = 0;
+    if (!out || out_cap == 0u) {
+        return -1;
+    }
+    out[0] = '\0';
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
+        return -1;
+    }
+    token = fat_find_token_value(args, "mount=");
+    if (!token) {
+        return -1;
+    }
+    while (n + 1u < out_cap && token[n] != '\0' && token[n] != ' ') {
+        out[n] = token[n];
+        ++n;
+    }
+    out[n] = '\0';
+    if (n == 0u || (token[n] != '\0' && token[n] != ' ')) {
+        return -1;
+    }
+    return 0;
 }
 
 /* Map the device manager's DRIVER name to the backend it stands for. The names
@@ -103,11 +152,42 @@ static uint8_t fat_backend_from_name(const char* name) {
 }
 
 static uint8_t fat_parse_requested_backend(void) {
-    char args[64];
+    char args[FAT_STARTUP_ARGS_MAX];
     if (wasmos_startup_args(args, sizeof(args)) == 0u) {
         return (uint8_t)BLOCK_BACKEND_UNKNOWN;
     }
     return fat_backend_from_name(fat_find_token_value(args, "driver="));
+}
+
+/* The `block` class instance of the disk this driver was spawned for: the
+ * fingerprint of the canonical id in `id=`.
+ *
+ * The id is copied out of the argument blob because it is not NUL-terminated
+ * there -- tokens are space-separated -- and the fingerprint is defined over the
+ * id alone. Returns 0 when there is no usable id, which no valid device has.  */
+static uint32_t fat_parse_requested_instance(void) {
+    char args[FAT_STARTUP_ARGS_MAX];
+    char id[BLOCK_DESCRIPTOR_ID_MAX];
+    const char* token = 0;
+    uint32_t n = 0;
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
+        return 0u;
+    }
+    token = fat_find_token_value(args, "id=");
+    if (!token) {
+        return 0u;
+    }
+    while (n + 1u < sizeof(id) && token[n] != '\0' && token[n] != ' ') {
+        id[n] = token[n];
+        ++n;
+    }
+    id[n] = '\0';
+    /* A truncated id fingerprints to a different value than the backend
+     * registered, so refuse it rather than search for a disk that cannot answer. */
+    if (n == 0u || (token[n] != '\0' && token[n] != ' ')) {
+        return 0u;
+    }
+    return wasmos_block_fingerprint(id);
 }
 
 /* Resolve the block server for this instance's disk through the `block` service
@@ -191,54 +271,75 @@ static void fat_report_backend_info(int32_t dst, int32_t request_id) {
                          (int32_t)g_mount_unit);
 }
 
-/* Resolve the mount alias + unit via BLOCK_IPC_IDENTIFY + devmgr query. */
-static int fat_resolve_mount_alias(char* out_mount, uint32_t out_mount_len, uint8_t* out_unit) {
+/* IDENTIFY this driver's volume, filling *out_desc.
+ *
+ * The descriptor is what says WHAT this device is. `partition` nonzero means a
+ * partition, which the partition manager serves by rebasing every transfer onto
+ * its window -- so its LBA 0 is the volume's boot sector and it holds no table.
+ * That is the whole reason this driver parses no partition table for a volume
+ * the partition manager named: it read the table already, and a second reader is
+ * a second answer. `lba_start` records where the window sits on the underlying
+ * disk and is never an address a client sends.
+ *
+ * The buffer is acquired HERE and lent to the backend for the round trip, then
+ * released on every path. The client of a request owns the transfer buffer and
+ * the server is a transient grantee; release cascade-revokes the grant
+ * (docs/architecture/12-dma-transfers.md).
+ *
+ * Returns 0 on success. */
+static int fat_identify_device(wasmos_block_descriptor_t* out_desc) {
     int32_t reply = g_blk.reply_endpoint;
-    int32_t devmgr = -1;
     int32_t req_id = 41;
-    int32_t unit = 0;
-    uint32_t packed[4];
-    if (!out_mount || out_mount_len < 2u || !out_unit) {
+    int32_t desc_bid = -1;
+    int32_t rc = -1;
+    if (!out_desc) {
         return -1;
     }
-    out_mount[0] = '\0';
-    *out_unit = 0;
+    desc_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(*out_desc));
+    if (desc_bid < 0) {
+        fat_log("identify buffer unavailable\n");
+        return -1;
+    }
+    if (wasmos_xfer_buffer_borrow(g_blk.block_endpoint, desc_bid, WASMOS_BUFFER_GRANT_WRITE) < 0) {
+        fat_log("identify buffer grant failed\n");
+        (void)wasmos_xfer_buffer_release(desc_bid);
+        return -1;
+    }
     if (wasmos_ipc_send(g_blk.block_endpoint,
                         reply,
                         BLOCK_IPC_IDENTIFY_REQ,
                         req_id,
-                        g_requested_unit,
+                        (int32_t)g_requested_instance,
+                        desc_bid,
                         0,
-                        0,
-                        0) != 0 ||
-        wasmos_ipc_select_one(reply) < 0) {
+                        0) == 0 &&
+        wasmos_ipc_select_one(reply) >= 0 &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == BLOCK_IPC_IDENTIFY_RESP &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) == req_id &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0) == 0 &&
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1) >= (int32_t)sizeof(*out_desc)) {
+        rc = wasmos_xfer_buffer_read(desc_bid, out_desc, (int32_t)sizeof(*out_desc), 0);
+    }
+    (void)wasmos_xfer_buffer_release(desc_bid);
+    if (rc != 0) {
+        fat_log("identify failed\n");
         return -1;
     }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != BLOCK_IPC_IDENTIFY_RESP ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+    if (out_desc->version != BLOCK_DESCRIPTOR_VERSION) {
+        fat_log("identify descriptor version mismatch\n");
         return -1;
     }
-    unit = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    *out_unit = (uint8_t)(unit & 0xFF);
-    devmgr = wasmos_svc_lookup(g_proc_endpoint, reply, "devmgr.query", 1);
-    if (devmgr < 0) {
+    /* The block layer addresses sectors with a 32-bit LBA, so a volume longer
+     * than that has a tail this driver cannot reach. Refused rather than
+     * silently truncated: a filesystem mounted over part of itself corrupts the
+     * rest of it on the first allocation past the boundary.
+     * TODO: BLOCK_IPC_READ_REQ's LBA argument is what caps this; widening it is
+     * what lifts the 2 TiB ceiling. */
+    if (out_desc->lba_count > 0xFFFFFFFFull) {
+        fat_log("volume extends beyond the addressable range\n");
         return -1;
     }
-    req_id++;
-    if (wasmos_ipc_send(devmgr, reply, DEVMGR_QUERY_BLOCK_MOUNT_REQ, req_id, unit, 0, 0, 0) != 0 ||
-        wasmos_ipc_select_one(reply) < 0) {
-        return -1;
-    }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != DEVMGR_BLOCK_MOUNT_INFO ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
-        return -1;
-    }
-    packed[0] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    packed[1] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    packed[2] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    packed[3] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-    fat_unpack_name(packed[0], packed[1], packed[2], packed[3], out_mount, out_mount_len);
-    return out_mount[0] ? 0 : -1;
+    return 0;
 }
 
 /* --- op pool / FIFO --- */
@@ -458,6 +559,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     char mount_alias[16];
     char service_name[16];
     int32_t mount_alias_len;
+    wasmos_block_descriptor_t desc;
 
     g_proc_endpoint = wasmos_startup_proc_endpoint();
 
@@ -471,15 +573,30 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     g_requested_unit = fat_parse_requested_unit();
     g_requested_backend = fat_parse_requested_backend();
     if (g_requested_backend == (uint8_t)BLOCK_BACKEND_UNKNOWN || g_requested_unit < 0) {
-        /* Without both halves there is no disk to look for. The device manager
+        /* Without both halves there is no disk to IDENTIFY. The device manager
          * always sends them; a spawn that did not is a configuration error, and
          * guessing a backend would mount the wrong volume. */
         fat_log("startup args missing driver= or unit=; cannot resolve a block device\n");
         fat_stall();
     }
-    /* The class instance that names this disk: (backend << 8) | unit. */
-    const uint32_t instance =
-        ((uint32_t)g_requested_backend << 8) | ((uint32_t)g_requested_unit & 0xFFu);
+    /* The class instance that names this disk: the fingerprint of the canonical
+     * id the device manager passed through from the backend's own publish. It is
+     * NOT rebuilt from driver= and unit= here -- a second place that spells the
+     * id is a second place that can disagree with the publisher, and a
+     * disagreement leaves this driver waiting forever on an instance nobody
+     * holds. */
+    g_requested_instance = fat_parse_requested_instance();
+    if (g_requested_instance == 0u) {
+        fat_log("startup args missing id=; cannot resolve a block device\n");
+        fat_stall();
+    }
+    /* Where this volume goes. The rule decided it and the device manager
+     * delivered it; there is nothing to negotiate and nobody to ask. */
+    if (fat_parse_requested_mount(mount_alias, sizeof(mount_alias)) != 0) {
+        fat_log("startup args missing mount=; no mount point for this volume\n");
+        fat_stall();
+    }
+    const uint32_t instance = g_requested_instance;
     for (int32_t attempt = 0;; ++attempt) {
         block_endpoint = fat_lookup_block_server(reply_endpoint, instance, 1 + attempt);
         if (block_endpoint > 0) {
@@ -488,22 +605,25 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         (void)wasmos_sched_yield();
     }
 
-    fat_block_configure(&g_blk, block_endpoint, reply_endpoint);
+    fat_block_configure(&g_blk, block_endpoint, reply_endpoint, g_requested_instance);
     if (fat_block_setup(&g_blk) != 0) {
         fat_log("block buffer missing\n");
         fat_stall();
     }
-    fat_mount_init(&g_mnt);
+    /* IDENTIFY before mounting: the descriptor says whether this device is a
+     * partition, and therefore whether its first sector is a boot sector or may
+     * be a table. A driver that mounted first would have to work that out by
+     * looking, which is the guess this change removes. */
+    if (fat_identify_device(&desc) != 0) {
+        fat_stall();
+    }
+    g_mount_unit = (uint8_t)(desc.unit & 0xFFu);
+    fat_mount_init(&g_mnt, desc.partition != 0u ? 1u : 0u);
     fat_open_pool_init(&g_pool);
     /* Mount before signalling ready, so the driver only ever advertises a
      * validated, parsed volume. */
     fat_mount_bringup();
 
-    /* Resolve mount identity and register under the fs.backend class. */
-    if (fat_resolve_mount_alias(mount_alias, sizeof(mount_alias), &g_mount_unit) != 0) {
-        fat_log("mount alias resolve failed\n");
-        fat_stall();
-    }
     if (snprintf(service_name, sizeof(service_name), "fs.boot%u", (unsigned)g_mount_unit) <= 0) {
         fat_stall();
     }

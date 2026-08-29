@@ -436,7 +436,7 @@ staged flat. The manifest needs `svc.class` (to claim `block` instances) and no
 hardware capabilities at all — the manager touches no device, only IPC.
 
 It ships on the ESP and is spawned from the BOOT rules by absolute path
-(`RUN+="/boot/system/drivers/partmgr.wap"`), not from initfs. Those rules load
+(`RUN+="/boot/system/drivers/partition_manager.wap"`), not from initfs. Those rules load
 only once storage is online, which is what makes `/boot` mountable at all — see
 §3. It is no longer what makes discovery correct: the class subscription above
 covers a driver that had not probed yet, and it had to, because the disks

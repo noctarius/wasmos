@@ -328,7 +328,7 @@ fn publishPartition(part: *Partition, slot: usize, devmgr: i32) void {
         nextRequestId(),
     ) == null) {
         var line = driver.Line{};
-        _ = line.str("[partmgr] class register failed id=").str(idSlice(&part.desc.canonical_id));
+        _ = line.str("[partition-manager] class register failed id=").str(idSlice(&part.desc.canonical_id));
         line.end();
         return;
     }
@@ -351,7 +351,7 @@ fn publishPartition(part: *Partition, slot: usize, devmgr: i32) void {
     }
 
     var line = driver.Line{};
-    _ = line.str("[partmgr] partition id=").str(idSlice(&part.desc.canonical_id));
+    _ = line.str("[partition-manager] partition id=").str(idSlice(&part.desc.canonical_id));
     _ = line.str(" instance=").dec(part.instance);
     _ = line.str(" lba=").dec(part.lba_start).str(" count=").dec(part.lba_count);
     line.end();
@@ -370,7 +370,7 @@ fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, devmg
         entry.lba_count > disk.sector_count - entry.lba_start)
     {
         var line = driver.Line{};
-        _ = line.str("[partmgr] partition outside disk, skipped: ").str(idSlice(&disk.canonical_id));
+        _ = line.str("[partition-manager] partition outside disk, skipped: ").str(idSlice(&disk.canonical_id));
         _ = line.str(" slot=").dec(entry.slot);
         line.end();
         return;
@@ -438,7 +438,7 @@ fn probeDisk(disk_index: usize, devmgr: i32) void {
             // not an MBR disk. Falling through to the legacy table would read
             // its protective entry as a real partition covering everything.
             var line = driver.Line{};
-            _ = line.str("[partmgr] gpt entries invalid on ").str(idSlice(&disk.canonical_id));
+            _ = line.str("[partition-manager] gpt entries invalid on ").str(idSlice(&disk.canonical_id));
             line.end();
             return;
         }
@@ -454,7 +454,7 @@ fn probeDisk(disk_index: usize, devmgr: i32) void {
             .protective => {
                 // The disk claims GPT but its header did not parse above.
                 var line = driver.Line{};
-                _ = line.str("[partmgr] protective mbr without a usable gpt on ");
+                _ = line.str("[partition-manager] protective mbr without a usable gpt on ");
                 _ = line.str(idSlice(&disk.canonical_id));
                 line.end();
                 return;
@@ -466,7 +466,7 @@ fn probeDisk(disk_index: usize, devmgr: i32) void {
     // No table. Publish nothing and leave the disk alone: its own class instance
     // already serves it, which is what makes partition tables optional.
     var line = driver.Line{};
-    _ = line.str("[partmgr] no partition table on ").str(idSlice(&disk.canonical_id));
+    _ = line.str("[partition-manager] no partition table on ").str(idSlice(&disk.canonical_id));
     line.end();
 }
 
@@ -743,7 +743,7 @@ fn grantBackend(ep: i32) void {
 /// of the process.
 fn resolveDevmgr() void {
     const ep = driver.lookupService(g_proc_endpoint, "devmgr.inv", nextRequestId(), 64) orelse {
-        driver.log("[partmgr] devmgr inventory unavailable; partitions unpublished to it");
+        driver.log("[partition-manager] devmgr inventory unavailable; partitions unpublished to it");
         return;
     };
     // Lend the publish buffer before the first publish. Without this the device
@@ -754,7 +754,7 @@ fn resolveDevmgr() void {
     if (g_publish_bid < 0 or
         driver.bufferBorrow(ep, g_publish_bid, driver.BUFFER_GRANT_READ) == null)
     {
-        driver.log("[partmgr] publish buffer grant failed; partitions unpublished to devmgr");
+        driver.log("[partition-manager] publish buffer grant failed; partitions unpublished to devmgr");
         return;
     }
     g_devmgr = ep;
@@ -767,7 +767,7 @@ fn resolveDevmgr() void {
 /// counted, so a repeated arrival does not re-probe it.
 fn probeProvider(instance: u32, provider_endpoint: i32) bool {
     if (g_disk_count >= MAX_DISKS) {
-        driver.log("[partmgr] disk table full; a block provider went unprobed");
+        driver.log("[partition-manager] disk table full; a block provider went unprobed");
         return false;
     }
     grantBackend(provider_endpoint);
@@ -825,7 +825,7 @@ fn noteArrival(instance: u32, provider_endpoint: i32) void {
         }
         return;
     }
-    driver.log("[partmgr] arrival queue full; a block provider went unprobed");
+    driver.log("[partition-manager] arrival queue full; a block provider went unprobed");
 }
 
 /// Probe every queued arrival. Runs on the root task, which is this process's
@@ -848,7 +848,7 @@ fn drainArrivals() void {
         if (diskKnown(instance)) continue;
         if (!probeProvider(instance, provider_endpoint)) continue;
         var line = driver.Line{};
-        _ = line.str("[partmgr] late disk probed instance=").dec(instance);
+        _ = line.str("[partition-manager] late disk probed instance=").dec(instance);
         _ = line.str(" disks=").dec(g_disk_count).str(" partitions=").dec(g_part_count);
         line.end();
     }
@@ -869,19 +869,19 @@ fn discoverDisks() void {
     resolveDevmgr();
 
     if (!driver.subscribeClass(g_proc_endpoint, endpoint(), "block", nextRequestId())) {
-        driver.log("[partmgr] block class subscribe failed; disks arriving later go unprobed");
+        driver.log("[partition-manager] block class subscribe failed; disks arriving later go unprobed");
     }
 
     var providers: [MAX_DISKS]driver.ClassEntry = undefined;
     const total = driver.lookupClass(g_proc_endpoint, "block", providers[0..], nextRequestId()) orelse {
-        driver.log("[partmgr] block class lookup failed; no disks probed");
+        driver.log("[partition-manager] block class lookup failed; no disks probed");
         return;
     };
     const found: usize = @intCast(total);
     const seen: usize = if (found < providers.len) found else providers.len;
     if (found > providers.len) {
         var line = driver.Line{};
-        _ = line.str("[partmgr] ").dec(found);
+        _ = line.str("[partition-manager] ").dec(found);
         _ = line.str(" block providers present, probing the first ").dec(providers.len);
         line.end();
     }
@@ -903,32 +903,32 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     g_proc_endpoint = driver.procEndpoint();
 
     g_block_phys = driver.blockBufferPhys() orelse {
-        driver.log("[partmgr] no block buffer; cannot read a partition table");
+        driver.log("[partition-manager] no block buffer; cannot read a partition table");
         return;
     };
     g_probe_bid = driver.bufferAcquire(@sizeOf(driver.BlockDescriptor)) orelse {
-        driver.log("[partmgr] descriptor buffer unavailable");
+        driver.log("[partition-manager] descriptor buffer unavailable");
         return;
     };
     g_down_req_bid = driver.bufferAcquire(@sizeOf(driver.BlockRequest)) orelse {
-        driver.log("[partmgr] request buffer unavailable");
+        driver.log("[partition-manager] request buffer unavailable");
         return;
     };
     g_probe_req_bid = driver.bufferAcquire(@sizeOf(driver.BlockRequest)) orelse {
-        driver.log("[partmgr] probe request buffer unavailable");
+        driver.log("[partition-manager] probe request buffer unavailable");
         return;
     };
     g_publish_bid = driver.bufferAcquire(
         MAX_PARTITIONS * @sizeOf(driver.BlockDescriptor),
     ) orelse {
-        driver.log("[partmgr] publish buffer unavailable");
+        driver.log("[partition-manager] publish buffer unavailable");
         return;
     };
 
     discoverDisks();
 
     var line = driver.Line{};
-    _ = line.str("[partmgr] ready disks=").dec(g_disk_count);
+    _ = line.str("[partition-manager] ready disks=").dec(g_disk_count);
     _ = line.str(" partitions=").dec(g_part_count);
     line.end();
 

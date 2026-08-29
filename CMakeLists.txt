@@ -1885,7 +1885,7 @@ if (ZIG_AVAILABLE)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_BLK_APP} ${BUILD_DIR}/esp/system/drivers/virtio_blk.wap
   )
   set(PARTITION_MANAGER_COPY_CMD
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTITION_MANAGER_APP} ${BUILD_DIR}/esp/system/drivers/partmgr.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTITION_MANAGER_APP} ${BUILD_DIR}/esp/system/drivers/partition_manager.wap
   )
 endif ()
 

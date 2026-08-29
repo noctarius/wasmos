@@ -11,9 +11,9 @@ filesystem on that disk could be mounted, however correct its table.
 The ATA driver happens to register both its drives before the partition manager
 is spawned, which is the only reason the boot image looks unaffected. virtio-blk
 does not: it negotiates a PCI device, claims an MSI-X vector and sets up a
-virtqueue first, and publishes its disk well after `[partmgr] ready`. Attaching a
-GPT-partitioned virtio disk therefore reproduces the bug on the shipped
-configuration rather than on a contrived one.
+virtqueue first, and publishes its disk well after `[partition-manager] ready`.
+Attaching a GPT-partitioned virtio disk therefore reproduces the bug on the
+shipped configuration rather than on a contrived one.
 
 The disk is built here rather than checked in: `scripts/make_gpt_image.py` is the
 tree's own GPT writer, and QEMU cannot present a GPT any other way -- a
@@ -56,7 +56,9 @@ EXPECTED_PROVIDERS = 7
 # A partition of the virtio disk, whose unit is derived from the device's PCI
 # slot and so is matched by shape rather than by a literal -- the same reason
 # test_virtio_blk.py does not bake the number in.
-VIRTIO_PARTITION_RE = re.compile(rb"\[partmgr\] partition id=block:virtio-blk:\d+p\d+")
+VIRTIO_PARTITION_RE = re.compile(
+    rb"\[partition-manager\] partition id=block:virtio-blk:\d+p\d+"
+)
 
 
 def _config_with_gpt_disk(disk_path: str):
@@ -115,10 +117,10 @@ class PartitionManagerLateDiskTest(unittest.TestCase):
         """
         assert self.session is not None
         self.assertTrue(
-            self.session.expect(b"[partmgr] ready disks=", timeout_s=90),
+            self.session.expect(b"[partition-manager] ready disks=", timeout_s=90),
             "the partition manager never finished bring-up",
         )
-        ready = self.session.buf.find(b"[partmgr] ready disks=")
+        ready = self.session.buf.find(b"[partition-manager] ready disks=")
         published = self.session.buf.find(
             b"[virtio-blk] published id=block:virtio-blk:"
         )

@@ -21,7 +21,7 @@ SUBSYSTEM=="partition", ATTR{partlabel}=="user", ENV{MOUNT}="/user", RUN+="syste
 # TODO: mounting /boot itself from a partition needs this in initfs instead, and
 # that makes Zig a build requirement for the boot image. Decide that with the
 # mount-policy change, not before it.
-SUBSYSTEM=="boot", RUN+="/boot/system/drivers/partmgr.wap"
+SUBSYSTEM=="boot", RUN+="/boot/system/drivers/partition_manager.wap"
 # The WFS volume is a raw image on its own disk (build/wfs.img, ATA unit 2), so it
 # needs its own backend: fs_fat cannot read it and would refuse the mount. The
 # DRIVER qualifier matters here for the same reason it does above -- unit 2 alone

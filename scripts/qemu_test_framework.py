@@ -33,6 +33,9 @@ class QemuConfig:
     # supply its own scratch copy of the image, because writes land in the file
     # named by wfs_image and stay there.
     wfs_snapshot: bool = True
+    # Whether the /user GPT image gets a throwaway overlay. Same contract as
+    # wfs_snapshot above, and on for the same reason.
+    userfs_snapshot: bool = True
     nographic: bool = True
     display: str = ""
     isolate_esp: bool = False
@@ -307,7 +310,14 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.userfs_image:
         # A raw GPT image, not a `fat:rw:` directory: the /user volume is a real
         # partition with a label, which is what its mount rule matches on.
-        cmd += ["-drive", f"format=raw,file={cfg.userfs_image}"]
+        #
+        # Overlaid for the same reason the WFS drive is: it is a build artifact
+        # the suites read as a fixed input, and a guest write would otherwise
+        # land in the file permanently -- nothing regenerates an image the guest
+        # has made newer than its inputs. A test that needs a write to /user to
+        # survive clears cfg.userfs_snapshot and supplies its own copy.
+        snapshot = "snapshot=on," if cfg.userfs_snapshot else ""
+        cmd += ["-drive", f"format=raw,{snapshot}file={cfg.userfs_image}"]
     if cfg.wfs_image and os.path.exists(cfg.wfs_image):
         # if=ide,index=2 explicitly: index 2 is the secondary channel's master,
         # which is the unit the device-manager rule for WFS matches. Relying on

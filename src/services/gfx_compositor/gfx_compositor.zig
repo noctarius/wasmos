@@ -2953,28 +2953,39 @@ fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
+// The destination is a transfer buffer the CLIENT owns and has borrowed WRITE to
+// this service, per the ownership rule in docs/architecture/12-dma-transfers.md:
+// the caller of an exchange owns the buffer and the server is a transient
+// grantee. arg1 names the buffer, arg2 the borrow -- both are needed and neither
+// is derivable here, since xfer_buffer_borrow returns the borrow_id to the owner.
+//
+// No flush follows the copy. The mapping IS the buffer's frames on both runtimes
+// (tests/test_xfer_map_alias.py pins it), so a write-back would copy those pages
+// onto themselves -- the shmem pattern this path replaces.
 fn handle_get_window_title(msg: *const c.nd_ipc_message_t) void {
     const window_id: u32 = @bitCast(msg.arg0);
-    const shmem_id: u32 = @bitCast(msg.arg1);
+    const buffer_id: u32 = @bitCast(msg.arg1);
+    const borrow_id: u32 = @bitCast(msg.arg2);
     const slot_idx = window_find_by_id(window_id) orelse {
         reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     const tlen = g_windows[slot_idx].title_len;
-    if (shmem_id == 0 or tlen == 0) {
+    if (buffer_id == 0 or borrow_id == 0 or tlen == 0) {
         reply_with_status(msg, c.WASMOS_ERR_NONE, @as(u32, tlen), 0, 0);
         return;
     }
-    const ptr_raw = api().shmem_map.?(shmem_id) orelse {
+    const ptr_raw = api().xfer_buffer_map_borrowed.?(c.ND_BUFFER_KIND_XFER, buffer_id, borrow_id) orelse {
         reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     };
-    defer _ = api().shmem_unmap.?(shmem_id);
+    // The borrowed mapping slots are a fixed global pool shared by every native
+    // service (wasmos_native_driver.h), so this must not leak on any path.
+    defer _ = api().xfer_buffer_unmap_borrowed.?(borrow_id);
     const dst: [*]u8 = @ptrCast(@alignCast(ptr_raw));
     const n = @min(@as(usize, tlen), GFX_WINDOW_TITLE_MAX);
     @memcpy(dst[0..n], g_windows[slot_idx].title[0..n]);
     dst[n] = 0;
-    _ = api().shmem_flush.?(shmem_id, ptr_raw, @intCast(n + 1));
     reply_with_status(msg, c.WASMOS_ERR_NONE, @as(u32, @intCast(n)), 0, 0);
 }
 

@@ -312,9 +312,22 @@ Source: `architecture/06-memory-management.md`,
 
   Moving the primitives compositor-side also retires four separate rasterizers --
   `vt_main.c` (35 fill/blit sites), `tetris.rs` (20), `libui.ts` (12),
-  `gfx_smoke.c` (2) -- into the one service that owns the pixels, and text needs
-  no app-side pixels at all since `font_service` already exposes
-  `handle_raster_glyph` and `handle_raster_text_into`. It is also the natural
+  `gfx_smoke.c` (2) -- into the one service that owns the pixels.
+
+  TEXT IS THE CASE THAT PAYS BEST. With a text command in the list, NO app needs
+  font rendering at all: the compositor resolves it through `font_service`, which
+  already exposes `handle_raster_glyph` and `handle_raster_text_into`. Today an
+  app that wants text either talks to font_service itself -- acquiring the text
+  and mask buffers, which is where several of the remaining shmem call sites live
+  -- or hand-rolls a bitmap font, as `libui.ts` does with its built-in 3x5 digit
+  font (`drawDigit3x5`, digits 0-8 only). Both disappear.
+
+  That also settles what the app-owned pixel surface is FOR. Rendering pixels
+  yourself stops being the default path every app walks and becomes an ACTIVE
+  CHOICE, taken by the apps that genuinely author pixels -- an image viewer, a
+  game, a terminal's scrollback blit. Everything else -- chrome, widgets, labels,
+  menus -- submits commands and never acquires a surface, never borrows one to
+  the compositor, and never needs the DMA capability shmem required. It is also the natural
   virtio-gpu seam: a draw list is already the shape a GPU consumes, so forwarding
   becomes a backend swap behind `SUBMIT_COMMANDS` rather than an ABI change.
 - [ ] [BUG][P2] `xfer_buffer_acquire` hands out frames without zeroing them, so a

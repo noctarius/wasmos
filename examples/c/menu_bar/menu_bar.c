@@ -14,9 +14,10 @@
  *   - an event loop that blocks. wasmos_ipc_select_wait_timeout parks on the
  *     event endpoint with a ~250 ms bound, so pushed events wake it at once
  *     while the clock and the app list still refresh at idle without polling;
- *   - reading a service reply into a shmem buffer: GFX_IPC_GET_WINDOW_TITLE
- *     writes into a region this app created and mapped once, and
- *     wasmos_shmem_refresh must be called before the bytes are read back;
+ *   - reading a service reply into a transfer buffer this app OWNS:
+ *     GFX_IPC_GET_WINDOW_TITLE writes into a buffer acquired and mapped once
+ *     here and borrowed WRITE to the compositor, so the request carries both the
+ *     buffer id and the borrow id and the reply needs no copy back;
  *   - wasmos_sync_user_read after wasmos_proc_info_stats, because the kernel
  *     writes those structs into linear memory behind the guest's back.
  *
@@ -109,8 +110,10 @@ static void update_clock(void) {
 /* single "Apps" menu item */
 static int32_t g_apps_mi_id = -1;
 
-/* reusable shmem for title fetch */
-static int32_t g_title_shmem_id = -1;
+/* reusable transfer buffer for title fetch, owned here */
+static int32_t g_title_fetch_logged = 0;
+static int32_t g_title_buffer_id = -1;
+static int32_t g_title_borrow_id = -1;
 static uint8_t* g_title_ptr = NULL;
 
 /* ---- callbacks ---- */
@@ -169,8 +172,19 @@ static void int_to_str(int32_t v, char* buf, int32_t cap) {
     buf[out] = '\0';
 }
 
+/* The compositor writes the title into a transfer buffer THIS app owns and has
+ * borrowed WRITE to it, so the request carries both ids: arg1 names the buffer
+ * (what xfer_buffer_* keys on) and arg2 the borrow (what the borrowed mapping
+ * keys on). The compositor cannot derive either -- xfer_buffer_borrow hands the
+ * borrow_id to the owner.
+ *
+ * No refresh before the read. The mapping IS the buffer's frames under both
+ * runtimes (tests/test_xfer_map_alias.py), so the bytes the compositor wrote are
+ * already here; the shmem path this replaces needed the copy because
+ * shmem_map_auto only rewrote the process page tables, which the wasm3
+ * interpreter does not read through. */
 static int32_t fetch_title(int32_t window_id, char* out, int32_t cap) {
-    if (!g_title_ptr || g_title_shmem_id <= 0)
+    if (!g_title_ptr || g_title_buffer_id <= 0 || g_title_borrow_id <= 0)
         return 0;
     int32_t status = 0, tlen = 0;
     ui_send_gfx(g_ctx.gfx_endpoint,
@@ -178,16 +192,24 @@ static int32_t fetch_title(int32_t window_id, char* out, int32_t cap) {
                 g_ctx.req_id++,
                 GFX_IPC_GET_WINDOW_TITLE,
                 window_id,
-                g_title_shmem_id,
+                g_title_buffer_id,
+                g_title_borrow_id,
                 cap - 1,
-                0,
                 &status,
                 &tlen,
                 0,
                 0);
     if (status != WASMOS_ERR_NONE || tlen <= 0)
         return 0;
-    wasmos_shmem_refresh(g_title_shmem_id, addr_cast(int32_t, g_title_ptr), tlen + 1);
+    /* One line per boot, the first time a title actually round-trips. The
+     * failure this catches is silent: GFX_IPC_GET_WINDOW_TITLE replies
+     * WASMOS_ERR_NONE with a length when the buffer or borrow id is rejected,
+     * so a broken exchange renders an empty menu on a healthy-looking desktop.
+     * tests/test_menu_bar_title.py asserts it. */
+    if (!g_title_fetch_logged) {
+        g_title_fetch_logged = 1;
+        printf("[test] menu bar title bytes=%d first=%c\n", (int)tlen, (char)g_title_ptr[0]);
+    }
     for (int32_t k = 0; k < tlen && k < cap - 1; ++k)
         out[k] = (char)g_title_ptr[k];
     out[tlen < cap - 1 ? tlen : cap - 1] = '\0';
@@ -420,12 +442,20 @@ int main(int argc, char** argv) {
         (void)wasmos_sched_yield();
     }
 
-    /* Title fetch shmem */
-    g_title_shmem_id = wasmos_shmem_create(1, 0);
-    if (g_title_shmem_id > 0) {
-        int32_t mapped = wasmos_shmem_map_auto(g_title_shmem_id, 4096);
-        if (mapped >= 0)
+    /* Title fetch buffer: owned here, borrowed WRITE to the compositor so it can
+     * fill it in, mapped here so the reply needs no copy back. */
+    g_title_buffer_id = wasmos_xfer_buffer_acquire(4096);
+    if (g_title_buffer_id > 0) {
+        g_title_borrow_id = wasmos_xfer_buffer_borrow(
+            g_ctx.gfx_endpoint, g_title_buffer_id, WASMOS_BUFFER_GRANT_WRITE);
+        int32_t mapped = wasmos_xfer_buffer_map(g_title_buffer_id);
+        if (g_title_borrow_id > 0 && mapped >= 0) {
             g_title_ptr = ptr_cast(uint8_t, (uint32_t)mapped);
+        } else {
+            (void)wasmos_xfer_buffer_release(g_title_buffer_id);
+            g_title_buffer_id = -1;
+            g_title_borrow_id = -1;
+        }
     }
 
     /* "WasmOS" system menu */

@@ -318,8 +318,28 @@ static void ata_wait_step(void) {
     }
 }
 
+/* Whether a wait step SLEEPS rather than spins.
+ *
+ * NOT the same as whether the interrupt is live. Only the primary channel's line
+ * is routed (see ata_wait_step), so a transfer on the secondary polls even when
+ * g_irq_active is set. Every attempt budget must be chosen against this rather
+ * than against g_irq_active, because a sleep-sized budget spent on spins is a
+ * timeout orders of magnitude shorter than the one intended: ATA_IRQ_ATTEMPTS is
+ * 200 sleeps, and 200 port writes is roughly 80 microseconds.
+ *
+ * Shared by both budget helpers so they cannot drift apart again. They already
+ * had: ata_wait_flush_done computed this correctly while ata_wait_attempts keyed
+ * on g_irq_active alone, which gave every read, DRQ wait and DMA completion on
+ * the secondary channel -- the channel /wfs lives on -- that 80 microseconds to
+ * finish before it was reported as WASMOS_ERR_BLOCK_DEV_READ_FAILED. Under load
+ * the drive misses that window often enough to fail roughly one boot in three,
+ * surfacing as a filesystem that intermittently cannot find a path that exists. */
+static int ata_wait_step_sleeps(void) {
+    return g_irq_active && g_channel == 0u;
+}
+
 static uint32_t ata_wait_attempts(void) {
-    return g_irq_active ? ATA_IRQ_ATTEMPTS : ATA_POLL_ATTEMPTS;
+    return ata_wait_step_sleeps() ? ATA_IRQ_ATTEMPTS : ATA_POLL_ATTEMPTS;
 }
 
 /* Status is read BEFORE waiting in both loops below: the condition is often
@@ -339,16 +359,11 @@ static int ata_wait_not_busy(void) {
     return ata_wait_not_busy_for(ata_wait_attempts());
 }
 
-/* The BSY wait a cache flush needs; see ATA_FLUSH_POLL_ATTEMPTS. */
+/* The BSY wait a cache flush needs; see ATA_FLUSH_POLL_ATTEMPTS. Keyed on
+ * whether the step sleeps, for the reason ata_wait_step_sleeps gives. */
 static int ata_wait_flush_done(void) {
-    /* Keyed on whether a wait step SLEEPS, which is not the same as whether the
-     * interrupt is live: ata_wait_step sleeps only on the primary channel,
-     * because that is the only line routed. A flush on the secondary -- where
-     * the WFS volume lives, unit 2 -- therefore spins, and spinning through the
-     * sleep-sized budget would be a small fraction of the intended wait. */
-    int sleeps = g_irq_active && g_channel == 0u;
-
-    return ata_wait_not_busy_for(sleeps ? ATA_FLUSH_IRQ_ATTEMPTS : ATA_FLUSH_POLL_ATTEMPTS);
+    return ata_wait_not_busy_for(ata_wait_step_sleeps() ? ATA_FLUSH_IRQ_ATTEMPTS
+                                                        : ATA_FLUSH_POLL_ATTEMPTS);
 }
 
 static int ata_wait_drq(void) {

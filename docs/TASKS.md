@@ -855,30 +855,22 @@ tail.
 
 ## Filesystems and Storage
 
-- [ ] [ENHANCEMENT][P2] Route the ATA secondary channel's interrupt (IRQ 15).
-  The secondary polls today, and the comment on `ata_wait_step`
-  (`src/drivers/ata/ata.c`) says routing it "would mean telling two lines apart
-  from one event and acking the right one". That is not true, and the comment
-  should go with the change: the kernel ALREADY delivers the firing line in the
-  message. `irq_ops_deliver` (`src/kernel/arch/x86_64/irq_x86_64.c:333-336`) sets
-  `irq_msg.request_id = line`, and `irq_register` / `irq_ack` are both per-line.
+- [x] [ENHANCEMENT][P2] Route the ATA secondary channel's interrupt (IRQ 15).
+  Done. Both channels now take interrupts; the only thing that polls is a channel
+  that has explicitly fallen back after its drive failed to assert.
 
-  The obstacle is entirely on the driver side: `ata_service_irq` calls
-  `wasmos_ipc_drain`, which discards the message, and then acks a hardcoded
-  `ATA_IRQ_LINE`. So the line number the kernel supplied is thrown away, and with
-  it the ability to ack the right one.
+  The comment that had justified polling claimed routing line 15 "would mean
+  telling two lines apart from one event and acking the right one". The kernel
+  already named the line: `irq_ops_deliver` sets `irq_msg.request_id = line`,
+  `ipc_drain` records the message, and `irq_register` / `irq_ack` are per-line.
+  `ata_service_irq` discarded the message with `wasmos_ipc_drain` and acked a
+  hardcoded constant, which is what made it look impossible. No kernel or ABI
+  change was needed.
 
-  The work is: register line 15 as well; read the event instead of draining it
-  and take `request_id` as the line; ack that line rather than the constant. No
-  kernel change and no ABI change.
-
-  Worth doing because the polling premise expired. The same comment justifies the
-  poll with "the secondary carries no boot-critical volume", which stopped being
-  true when `/wfs` was put on ATA unit 2 -- and a mis-sized budget on that polling
-  path is what made reads fail roughly one boot in three (fixed separately). The
-  hazard the comment names is real and is why this wants its own change and its
-  own measurement: an event acked on the wrong line leaves that line masked, i.e.
-  the disk dead.
+  The subtle part, recorded because it is what makes two lines on one endpoint
+  safe: an event must be handled per MESSAGE, not per drain. The old code drained
+  the queue and acked once, which with two lines would ack one and leave the
+  other masked -- the disk dead, the hazard the old comment named.
 
 - [x] [BUG][P1] `fs_wfs` could not start under wasm3: its entry export declared
   four parameters and the process manager always calls an entry with argc 0, so

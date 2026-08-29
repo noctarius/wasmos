@@ -915,22 +915,49 @@ tail.
   A disk carrying a partition table must NOT also publish a volume, or `/boot`
   appears twice; the suppressing signal is the table, and the block descriptor
   cannot supply it today because `scheme` is always `PARTITION_SCHEME_NONE` on a
-  whole disk (the disk driver publishes that record and reads no tables). And the
-  the volume manager must SUBSCRIBE to the `block` class rather than enumerate it --
-  the same fix the partition manager needs, which is the entry below; having two
-  components with that gap is how it stops looking like one.
+  whole disk (the disk driver publishes that record and reads no tables). The
+  volume manager must also SUBSCRIBE to the `block` class rather than enumerate
+  it; the partition manager is the worked example to copy, down to dropping an
+  arrival on its own endpoint (`architecture/36-partition-manager-and-block-identity.md`
+  §2, "Discovery").
 
-- [ ] [FEATURE][P2] Probe disks that register after the partition manager starts,
-  and move it into initfs. `probeAll` enumerates the `block` class exactly once at
-  bring-up (`src/drivers/partition_manager/partition_manager.zig`), so a disk
-  whose driver registers later is never probed and its partitions never appear.
-  Subscribing to the class instead is also the prerequisite for running the
-  partition manager from initfs, which is what breaks the bootstrap circle that
-  keeps `fat_try_parse_mbr` alive: it is spawned from the BOOT rules, which
-  cannot load until `/boot` is mounted, so `/boot` cannot be mounted from a
-  partition the partition manager published. Deleting `fat_try_parse_mbr`
+- [ ] [FEATURE][P2] Move the partition manager into initfs.
+  Probing late-registering disks — the prerequisite — is DONE: it subscribes to
+  the `block` class and probes what arrives, guarded by
+  `tests/test_partition_manager_late_disk.py`. What remains is the move itself,
+  which breaks the bootstrap circle that keeps `fat_try_parse_mbr` alive: the
+  partition manager is spawned from the BOOT rules, which cannot load until
+  `/boot` is mounted, so `/boot` cannot be mounted from a partition the partition
+  manager published. Deleting `fat_try_parse_mbr`
   (`src/drivers/fs_fat/fat_geom.c`) removes the last partition-table reader
-  outside the partition manager.
+  outside the partition manager. The cost is Zig on the critical build path:
+  CMake derives the initfs payload list from `scripts/initfs.toml`, so a Zig
+  module there makes the boot image unbuildable without a Zig toolchain.
+- [ ] [ENHANCEMENT][P3] Drive the partition manager's probe over the event loop's
+  `IpcFuture` instead of `driver.call`. A probe is synchronous, so it blocks the
+  whole process for its duration — bounded at one IDENTIFY plus at most 34 sector
+  reads, but a disk arriving under load now pauses transfers on the disks already
+  published, where before probing only ever happened at bring-up. It runs on the
+  root task rather than in the message handler, which keeps the loop's dispatch
+  unblocked but not the process. Carries a `TODO` at `drainArrivals`. The shape is
+  a state machine over IDENTIFY -> GPT header -> entry sectors -> MBR; the parser
+  itself takes byte slices and does not change.
+- [ ] [BUG][P3] Forwarded block transfers share one request-descriptor buffer.
+  `g_down_req_bid` (`src/drivers/partition_manager/partition_manager.zig`) is
+  written per forwarded transfer, but a backend reads the descriptor when it
+  reaches the message, not when the message is sent — so up to `MAX_INFLIGHT`
+  requests can occupy the slot at once and a later one can overwrite a request
+  the backend has not read. Latent: it needs two clients transferring
+  concurrently through one partition manager, which no shipped configuration
+  does. The fix is a slot per in-flight request at its own offset, the shape
+  `g_publish_bid` already uses. The probe path no longer shares this buffer.
+- [ ] [ENHANCEMENT][P3] Retire a disk's partitions when its provider goes away.
+  The partition manager receives `SVC_CLASS_EVENT_REMOVE` and ignores it
+  (`handleClassEvent`), because unregistering the partitions and telling the
+  device manager they are gone is a teardown path with no caller — no shipped
+  driver unregisters. Dropping the local record alone would be worse than doing
+  nothing: the partitions would stay in the registry addressing a disk nothing
+  could reach.
 - [ ] [BUG][P3] Two partitions of one disk collide on the `fs.backend` class
   instance. `FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`
   (`src/drivers/include/wasmos_driver_abi.h`) and a partition reports its disk's

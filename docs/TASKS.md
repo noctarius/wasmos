@@ -93,8 +93,23 @@ Source: `architecture/06-memory-management.md`,
   destination are therefore the same physical pages. libui states it outright:
   `shmem_flush(this.shmemId, this.mappedPtr, this.strideBytes * this.height)`
   (`src/libui/assemblyscript/libui.ts:331`) -- a full-window `memcpy(p, p, n)` per
-  present, ~1.9 MB for an 800x600 ARGB window, inside a hostcall. Every flush
-  caller in the tree also maps, so no caller needs it. DO NOT carry it across.
+  present, ~1.9 MB for an 800x600 ARGB window, inside a hostcall.
+
+  UNDER WARP ONLY, and this is the part that decides what may be deleted. wasm3
+  does not share the property and the flush is REQUIRED there: `shmem_map_auto`
+  rewrites the process page tables, but the interpreter reads and writes linear
+  memory through its OWN kernel-side buffer, so writes never reach the shared
+  frames without the copy. `tetris.rs:409-417` states this and carries the TODO;
+  it already drops its per-frame flush and is WARP-only by construction as a
+  result. A flush removed per call site therefore breaks the `wasm3_smp` /
+  `wasm3_single` configs CI builds, and a WARP-only battery will not catch it.
+
+  So the copy is not simply dead code to strip. It goes away when the app stops
+  writing pixels at all (the draw-list item below), or for a caller knowingly
+  WARP-only, or once wasm3's linear-memory model no longer needs it. What the
+  migration must not do is inherit the pattern by transliteration --
+  `xfer_buffer_map` + `xfer_buffer_write` reproduces exactly this -- while
+  remembering that on wasm3 the equivalent copy is load-bearing.
 
   CONSUMER AUDIT (2026-08-29, at `aea749914`). Nine guest consumers, NO drivers
   (the only `src/drivers` hit is a header declaration), 8 host calls to retire:
@@ -132,15 +147,37 @@ Source: `architecture/06-memory-management.md`,
   way: `xfer_buffer_release` is owner-only, no hostcall transfers ownership, and
   nothing tells a server when a client has stopped reading.
 
-  Today's compositor is on the wrong side of that rule: it allocates each
-  window's app-facing buffer with `shmem_create` and replies
-  `(buffer_id, shmem_id, stride_bytes)` -- a server owning a buffer it hands to a
-  client. The migration must therefore INVERT it, not transliterate it. The app
-  asks the compositor for a surface SPEC (extent, format, stride), acquires the
-  buffer itself, and borrows it to the compositor; `release` then
-  cascade-revokes the compositor's grant on every path including the error ones.
+  Today's compositor sits the other way round: it allocates each window's
+  app-facing buffer with `shmem_create` and replies
+  `(buffer_id, shmem_id, stride_bytes)`. That arrangement is DEFENSIBLE rather
+  than simply wrong -- the compositor knows the alignment and stride constraints,
+  it knows when a window leaves the UI stack, and the graphics protocol supplies
+  the completion signal (`GFX_IPC_PRESENT_WINDOW`) whose absence is what makes
+  server-owned buffers unimplementable elsewhere. `xfer_buffer_drop_context`
+  (`src/kernel/process.c:1102`, `xfer_buffer.c:919-936`) unwinds either direction
+  on process death: it revokes borrows where the dying context is lender OR
+  borrower, then destroys objects it owned.
 
-  Consequence for the reader side: the compositor becomes a GRANTEE that must read
+  DECIDED 2026-08-29: stay inside the contract anyway -- the APP owns its surface.
+  The compositor keeps ownership of the CONSTRAINTS and hands them over as a spec
+  (extent, stride, format, minimum size); the app acquires a buffer that satisfies
+  it and borrows it to the compositor. The app-owned shape needs no rule about
+  rewriting a lent buffer, and `release` cascade-revokes the compositor's grant on
+  every path including the error ones.
+
+  Resize falls out of this rather than needing new machinery, and libui already
+  has the shape: `resizeTo` -> `allocateBuffer` already unmaps, releases the old
+  buffer and asks for a new one (`libui.ts:564`, `:573`). What libui must learn is
+  that a resize PRESENTS A NEW BUFFER: release the old one, acquire at the new
+  spec, borrow, present. No mutation of a borrowed buffer at any point.
+
+  ABI consequence: `GFX_IPC_ALLOC_SHARED_BUFFER` changes meaning from "allocate
+  and return a buffer" to "return the spec", and `GFX_IPC_RELEASE_SHARED_BUFFER`
+  largely disappears, since an owner releasing its own buffer already
+  cascade-revokes the compositor's grant. That is an opcode SEMANTICS change, so
+  it goes through `skills/wasmos-add-opcode` rather than being quietly repurposed.
+
+  Consequence for the reader side: the compositor is a GRANTEE that must read
   pixels to composite, and a grantee has no CPU zero-copy path today -- owner+CPU
   is `xfer_buffer_map`, borrower+device is `dma_map_borrow` (a device address, not
   a guest window), borrower+CPU is missing. Verified: every `xfer_buffer_map`

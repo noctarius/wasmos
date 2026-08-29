@@ -164,6 +164,15 @@ wasmos_add_wasm_c_app_target(net_tcp_echo
   PACK_COMMENT  "Packing wasm TCP echo client as WASMOS-APP"
 )
 
+wasmos_add_wasm_c_app_target(xfer_map_alias
+  SOURCE      ${WASM_XFER_MAP_ALIAS_SRC}
+  OUTPUT_WASM ${WASM_XFER_MAP_ALIAS_WASM}
+  OUTPUT_APP  ${WASM_XFER_MAP_ALIAS_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/xfer_map_alias/linker.metadata
+  BUILD_COMMENT "Building wasm xfer-buffer mapping alias probe"
+  PACK_COMMENT  "Packing wasm xfer-buffer mapping alias probe as WASMOS-APP"
+)
+
 wasmos_add_wasm_c_app_target(net_tcp_server
   SOURCE      ${WASM_NET_TCP_SERVER_SRC}
   OUTPUT_WASM ${WASM_NET_TCP_SERVER_WASM}

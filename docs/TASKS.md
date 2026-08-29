@@ -111,32 +111,53 @@ Source: `architecture/06-memory-management.md`,
   `xfer_buffer_map` + `xfer_buffer_write` reproduces exactly this -- while
   remembering that on wasm3 the equivalent copy is load-bearing.
 
-  CONSUMER AUDIT (2026-08-29, at `aea749914`). Nine guest consumers, NO drivers
-  (the only `src/drivers` hit is a header declaration), 8 host calls to retire:
+  CONSUMER AUDIT (2026-08-29, at `aea749914`, RECOUNTED). An earlier revision of
+  this entry counted identifier occurrences -- comments, struct fields, Zig
+  helper names -- and reported figures up to 68 per file. These are CALL SITES:
 
-      gfx_compositor.zig  68 calls  create grant map unmap flush id buffer
-      gfx_smoke.c         43        create grant map_auto unmap flush id
-      font_service.zig    35        create grant map unmap flush id
-      shmem_owner.c       30        the full surface, incl. the only revoke
-      shmem_target.c      25        map map_auto unmap
-      libui.ts            19        create grant map_auto unmap flush
-      tetris.rs           17        create grant map_auto flush id
-      menu_bar.c          15        create map_auto unmap id, only refresh user
-      vt_main.c            1        map
+      gfx_compositor.zig  15  native API: create grant map unmap flush
+      font_service.zig    11  native API: create grant map unmap flush
+      libui.ts            14  create grant map_auto unmap flush
+      gfx_smoke.c         11  create grant map_auto unmap flush
+      tetris.rs            9  create grant map_auto flush
+      shmem_target.c       7  map map_auto unmap
+      shmem_owner.c        5  create grant map_auto revoke unmap
+      menu_bar.c           4  create map_auto refresh unmap
 
-  Kernel side is implementation, not consumption: `wasm3/link.c` (61 sites),
-  `native_driver.c` (16), `futex.c` (1).
+  ALREADY MIGRATED, contrary to the earlier list: `vt_main.c` calls no shmem at
+  all -- its klog ring is an `xfer_buffer_acquire` overlay and the only mention
+  is a comment contrasting it with "raw shmem_map". So the cheapest-first entry
+  point named below does not exist; the smallest real consumer is `menu_bar.c`.
+
+  The two Zig services reach shmem through the NATIVE driver API
+  (`api().shmem_create` etc.), not the guest hostcall ABI, because both are
+  native drivers. That matters for the migration: their side moves with
+  `wasmos_native_driver.h`, and the compositor already acquires the framebuffer
+  and its private backbuffer as xfer buffers (`ND_BUFFER_KIND_FRAMEBUFFER` /
+  `ND_BUFFER_KIND_XFER`, `gfx_compositor.zig:749`, `:778`). Only the app-facing
+  window buffer is still shmem (`:1656`), which is exactly the object whose
+  ownership this entry inverts.
+
+  SETTLED 2026-08-29: xfer buffers do NOT inherit the wasm3 aliasing defect.
+  `tests/test_xfer_map_alias.py` + `examples/c/xfer_map_alias` probe a guest's
+  own mapping in both directions and pass under wasm3 AND WARP, verified against
+  a tree carrying `[subsystem] register request=WASM runtime=WASM3` with the
+  tree's and the ESP's kernel agreeing on symbol counts. The difference from
+  shmem is structural: `shmem_map` maps into the process page tables only, while
+  `xfer_buffer_map` goes through `wasm_linmem_place_overlay(runtime, ...)`, which
+  places the overlay in the interpreter's own linear-memory region. The flush
+  caveat above is therefore scoped to shmem and does not carry to xfer buffers.
 
   ORDER, cheapest first, each independently landable:
-  1. `vt_main.c` -- one `shmem_map`; owner-side `xfer_buffer_map` is a like-for-like
-     swap.
-  2. `menu_bar.c` -- sole `shmem_refresh` consumer, so that call retires with it.
-  3. `shmem_owner.c` / `shmem_target.c` -- tests OF the mechanism; DELETE rather
+  1. `menu_bar.c` (4 calls) -- sole `shmem_refresh` consumer, so that call retires
+     with it, and it has no fill loops of its own.
+  2. `shmem_owner.c` / `shmem_target.c` -- tests OF the mechanism; DELETE rather
      than port, which also retires the sole `shmem_revoke` consumer. Their
      coverage (grant/revoke/forged-id denial) belongs to xfer buffers and largely
      exists there already.
-  4. `libui.ts`, `tetris.rs`, `gfx_smoke.c`, then `gfx_compositor.zig` +
-     `font_service.zig` last, since the compositor owns the allocation.
+  3. `libui.ts`, `tetris.rs`, `gfx_smoke.c`, then `gfx_compositor.zig` +
+     `font_service.zig` last, since the compositor allocates the app-facing
+     window buffer and is the side whose ownership inverts.
 
   OWNERSHIP DIRECTION: the APP owns its surface and borrows it to the compositor.
   This is not a choice made here; it is the transfer-buffer invariant --

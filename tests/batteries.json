@@ -44,7 +44,8 @@
         "test_shmem_grant_revoke_e2e.py",
         "test_threading_ipc_stress.py",
         "test_timer_tick.py",
-        "test_work_stealing.py"
+        "test_work_stealing.py",
+        "test_xfer_map_alias.py"
       ]
     },
     {

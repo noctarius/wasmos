@@ -126,6 +126,9 @@ set(WASM_NET_UDP_ECHO_APP ${BUILD_DIR}/net_udp_echo.wap)
 set(WASM_NET_TCP_ECHO_SRC ${EXAMPLES_C_DIR}/net_tcp_echo/net_tcp_echo.c)
 set(WASM_NET_TCP_ECHO_WASM ${BUILD_DIR}/net_tcp_echo.wasm)
 set(WASM_NET_TCP_ECHO_APP ${BUILD_DIR}/net_tcp_echo.wap)
+set(WASM_XFER_MAP_ALIAS_SRC ${EXAMPLES_C_DIR}/xfer_map_alias/xfer_map_alias.c)
+set(WASM_XFER_MAP_ALIAS_WASM ${BUILD_DIR}/xfer_map_alias.wasm)
+set(WASM_XFER_MAP_ALIAS_APP ${BUILD_DIR}/xfer_map_alias.wap)
 set(WASM_NET_TCP_SERVER_SRC ${EXAMPLES_C_DIR}/net_tcp_server/net_tcp_server.c)
 set(WASM_NET_TCP_SERVER_WASM ${BUILD_DIR}/net_tcp_server.wasm)
 set(WASM_NET_TCP_SERVER_APP ${BUILD_DIR}/net_tcp_server.wap)
@@ -1799,6 +1802,7 @@ set(NET_TCP_ECHO_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NET_TCP_ECHO_APP} ${BUILD_DIR}/esp/apps/net_tcp_echo.wap
 )
 set(NET_TCP_SERVER_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_XFER_MAP_ALIAS_APP} ${BUILD_DIR}/esp/apps/xfer_map_alias.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NET_TCP_SERVER_APP} ${BUILD_DIR}/esp/apps/net_tcp_server.wap
 )
 set(LARGE_READ_COPY_CMD

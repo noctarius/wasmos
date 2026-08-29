@@ -327,8 +327,16 @@ void pfa_init(const boot_info_t* boot_info) {
         cursor += desc_size;
     }
 
-    uint64_t kernel_base = addr_cast(uint64_t, &__kernel_start);
-    uint64_t kernel_size = addr_cast(uint64_t, &__kernel_end) - kernel_base;
+    /* __kernel_start/__kernel_end are HIGHER-HALF virtual addresses; the free
+     * list holds physical extents, so the reservation must be converted or it
+     * overlaps nothing and protects nothing. The range deliberately reaches
+     * __kernel_end (== __stack_top), because the 64 KiB BSP boot stack past
+     * .bss is covered by no section and therefore by no PT_LOAD: the firmware
+     * still reports those frames as conventional memory and the allocator would
+     * otherwise hand out the stack the kernel is running on. */
+    uint64_t kernel_base = addr_cast(uint64_t, &__kernel_start) - KERNEL_HIGHER_HALF_BASE;
+    uint64_t kernel_size =
+        addr_cast(uint64_t, &__kernel_end) - addr_cast(uint64_t, &__kernel_start);
     reserve_range(kernel_base, kernel_size);
     /* Keep the fixed AP trampoline page out of the general allocator. */
     reserve_range(0x1000ULL, PAGE_SIZE);

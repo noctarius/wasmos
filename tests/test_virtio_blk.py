@@ -75,6 +75,17 @@ def _config_with_disk(disk_path: str, device_opts: str = ""):
 
     if=none keeps QEMU from attaching the drive to the default IDE bus, where it
     would become a second ATA unit instead of a virtio device.
+
+    addr=0x5.0 pins the PCI slot, and with it the disk's identity: a virtio-blk
+    unit is (slot << 3) | function, so this device is always unit 40 -- the slot
+    QEMU's automatic assignment happened to give it, now stated rather than
+    inferred. It is deliberately NOT slot 6, which test_wfs_virtio_blk uses: the
+    rule that mounts a WFS volume over virtio names a unit, and a signature disk
+    landing on that unit would send fs_wfs through its whole retry budget looking
+    for a superblock that is not there. Left to automatic assignment the slot
+    depends on how many devices precede it on the command line, so the unit --
+    and with it the `block` class instance a rule names -- moves whenever the
+    standard device set changes.
     """
     return replace(
         default_config(),
@@ -82,7 +93,7 @@ def _config_with_disk(disk_path: str, device_opts: str = ""):
             "-drive",
             f"file={disk_path},format=raw,if=none,id=vblk0",
             "-device",
-            "virtio-blk-pci,drive=vblk0,id=vblk" + device_opts,
+            "virtio-blk-pci,drive=vblk0,id=vblk,addr=0x5.0" + device_opts,
         ),
     )
 
@@ -171,26 +182,31 @@ class VirtioBlkTest(unittest.TestCase):
     def test_every_backend_appears_as_its_own_disk(self) -> None:
         """Both backends enumerate under the `block` class, as distinct disks.
 
-        Each disk is named by its canonical id. ATA's drives are block:ata:0 and
-        block:ata:1 because its units are drive numbers; the virtio disk's unit
+        Each disk is named by its canonical id. ATA's drives are block:ata:0,
+        block:ata:1 and block:ata:2 because its units are drive numbers; the virtio disk's unit
         comes from its PCI slot, so its id is matched by shape rather than by a
         literal. All three are derived from what the disk IS rather than handed
         out on registration, which is what makes them the same every boot however
         the drivers raced to probe.
+
+        The third ATA drive carries the WFS volume. It is counted here rather
+        than ignored: a disk the class does not hold is a disk no rule can mount,
+        and this assertion is the one that would catch it.
         """
         assert self.session is not None
         self.session.send("blkinfo")
         self.assertTrue(
-            self.session.expect(b"[blkinfo] providers=5", timeout_s=60),
-            "the block class did not hold all five providers — ATA's two drives, "
+            self.session.expect(b"[blkinfo] providers=6", timeout_s=60),
+            "the block class did not hold all six providers — ATA's three drives, "
             "the virtio disk, and the one partition on each ATA drive that the "
             "partition manager republishes. A partition IS a block device here, "
-            "so a count of three means the partition manager did not publish, "
-            "and a count above five means something registered twice",
+            "so a count of four means the partition manager did not publish, "
+            "and a count above six means something registered twice",
         )
         for marker in (
             b"id=block:ata:0 driver=ata unit=0",
             b"id=block:ata:1 driver=ata unit=1",
+            b"id=block:ata:2 driver=ata unit=2",
         ):
             self.assertTrue(
                 self.session.expect(marker, timeout_s=30),
@@ -362,8 +378,8 @@ class VirtioBlkTest(unittest.TestCase):
         assert self.session is not None
         self.session.send("blkinfo")
         self.assertTrue(
-            self.session.expect(b"[blkinfo] providers=5", timeout_s=60),
-            'the "block" class did not hold all five providers — three disks plus '
+            self.session.expect(b"[blkinfo] providers=6", timeout_s=60),
+            'the "block" class did not hold all six providers — four disks plus '
             "the partition the partition manager publishes for each ATA drive",
         )
         self.assertTrue(

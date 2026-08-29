@@ -214,6 +214,19 @@ enum {
      * which defeats discovering it by class in the first place.
      */
     BLOCK_IPC_IDENTIFY_REQ = 0x302,
+    /* Commit everything already written to durable media, so a caller that
+     * orders its writes can rely on that order surviving power loss.
+     * arg0..arg3 reserved (must be zero).
+     * Ordering a request after a reply only guarantees the DEVICE saw them in
+     * that order; a volatile write cache may still lose the earlier ones. A
+     * journal barrier (docs/WFS_WASMOS_FILE_SYSTEM.md section 14, steps 2, 4
+     * and 6) is exactly that guarantee and needs this.
+     * A device with no volatile write cache answers success without doing
+     * anything, because for it the guarantee already holds.
+     * On success: BLOCK_IPC_FLUSH_RESP. On failure: BLOCK_IPC_ERROR,
+     * arg0 = reason.
+     */
+    BLOCK_IPC_FLUSH_REQ = 0x304,
     BLOCK_IPC_READ_RESP = 0x380,
     BLOCK_IPC_WRITE_RESP = 0x381,
     /* The answer to BLOCK_IPC_IDENTIFY_REQ: a wasmos_block_descriptor_t
@@ -231,6 +244,7 @@ enum {
      * window. Callers read fields; they do not decode packed words.
      */
     BLOCK_IPC_IDENTIFY_RESP = 0x382,
+    BLOCK_IPC_FLUSH_RESP = 0x383,
     BLOCK_IPC_ERROR = 0x3FF,
 };
 
@@ -605,6 +619,33 @@ enum {
     PCI_IPC_ERROR = 0xDFF,
 };
 
+/* system (0xFF02..0xFF82) */
+enum {
+    /* The system is going down; quiesce and answer WASMOS_IPC_SHUTDOWN_DONE.
+     * arg0 = reason (0 = halt, 1 = reboot), arg1..arg3 reserved (0).
+     * Sent by the process manager to every registered driver and service in
+     * REVERSE spawn order, so a participant still has the services beneath it
+     * while it quiesces (docs/architecture/15-drivers-and-services.md,
+     * "Orderly Shutdown Design Direction").
+     * A participant that does not answer within the deadline is passed over
+     * and the machine still goes down, which is safe because of what the
+     * notification exists to do: a filesystem that misses it mounts read-only
+     * next boot rather than serving inconsistent metadata.
+     * This subsystem's range is above every other subsystem's because the
+     * message arrives on the PARTICIPANT's own endpoint, where a
+     * subsystem-scoped value would collide -- gfx and proc_manager both own
+     * 0x200. It is the band the kernel's IRQ (0xff00) and MSI (0xff01) events
+     * already use for the same reason; those two stay hand-written in
+     * src/drivers/include/wasmos_driver_abi.h and src/kernel/include/irq.h.
+     */
+    WASMOS_IPC_SHUTDOWN_REQ = 0xFF02,
+    /* Sent back to the process manager when a participant has quiesced.
+     * arg0..arg3 reserved (0). Answering does not mean the participant stops
+     * running; it means nothing it holds still needs to reach a device.
+     */
+    WASMOS_IPC_SHUTDOWN_DONE = 0xFF82,
+};
+
 /* Subsystem ids for wasmos_opcode_name(). */
 enum {
     WASMOS_OPCODE_SUBSYS_CHARDEV = 0,
@@ -629,6 +670,7 @@ enum {
     WASMOS_OPCODE_SUBSYS_FONT = 19,
     WASMOS_OPCODE_SUBSYS_GFX = 20,
     WASMOS_OPCODE_SUBSYS_PCI = 21,
+    WASMOS_OPCODE_SUBSYS_SYSTEM = 22,
 };
 
 /* Opcode -> symbol name within a subsystem (diagnostics/logging). Pass the
@@ -696,9 +738,11 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x300: return "BLOCK_IPC_READ_REQ";
         case 0x301: return "BLOCK_IPC_WRITE_REQ";
         case 0x302: return "BLOCK_IPC_IDENTIFY_REQ";
+        case 0x304: return "BLOCK_IPC_FLUSH_REQ";
         case 0x380: return "BLOCK_IPC_READ_RESP";
         case 0x381: return "BLOCK_IPC_WRITE_RESP";
         case 0x382: return "BLOCK_IPC_IDENTIFY_RESP";
+        case 0x383: return "BLOCK_IPC_FLUSH_RESP";
         case 0x3FF: return "BLOCK_IPC_ERROR";
         default: return "UNKNOWN";
         }
@@ -923,6 +967,12 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0xD02: return "PCI_IPC_MSI_UNBIND";
         case 0xD80: return "PCI_IPC_RESP";
         case 0xDFF: return "PCI_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_SYSTEM:
+        switch (type) {
+        case 0xFF02: return "WASMOS_IPC_SHUTDOWN_REQ";
+        case 0xFF82: return "WASMOS_IPC_SHUTDOWN_DONE";
         default: return "UNKNOWN";
         }
     default: return "UNKNOWN";

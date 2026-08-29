@@ -855,6 +855,154 @@ tail.
 
 ## Filesystems and Storage
 
+- [ ] [ENHANCEMENT][P2] Give a guest a way to reach truncation at an arbitrary
+  size. `wfs_truncate_task` now shrinks a tree-mapped object to a size INSIDE a
+  block and promotes an inline object a grow takes past `WFS_INLINE_DATA_MAX`,
+  but no guest API reaches either: the libc has no `ftruncate`, so `O_TRUNC` is
+  the only route and it always truncates to zero, which is block aligned and
+  never grows. Both paths are covered by the host suites
+  (`tests/unit/test_wfs_truncate.c`) and by nothing end to end. Adding
+  `ftruncate` means a host call plus the libc and libsys wrappers kept in sync
+  across the runtime-specific variants, then a case in
+  `examples/c/wfs_write_smoke`.
+- [ ] [BUG][P3] `mount` names every WFS volume `fs-fat`. `fs_manager.c` maps the
+  backend KIND to a display name, and `FSMGR_BACKEND_BOOT` prints as `fs-fat`;
+  `fs_wfs` registers under that kind because the kind says where a volume sits
+  in the namespace, not which driver serves it. Routing is unaffected -- reads
+  and writes reach the right driver -- but the listing asserts something false,
+  and it cost real time in diagnosis: a WFS write failure read as "the FAT
+  driver claimed the volume". Either the backend reports its own name, or the
+  listing stops inferring one from the kind.
+- [ ] [BUG][P2] The `fs.backend` class instance encodes (kind, unit) and not the
+  BLOCK BACKEND, so two volumes whose units collide across backends -- ATA unit
+  2 and a virtio-blk device at slot 0 function 2 -- derive one instance. The
+  second registration is refused and its mount never appears. This is the defect
+  the retired `block` NAME had, one layer up: a disk is (backend, unit), so the
+  instance has to carry the backend. Fixing it widens the encoding, which
+  fs-manager and `fs_fat` decode too (`src/drivers/fs_wfs/fs_wfs.c`).
+- [ ] [FEATURE][P3] Symlinks (spec §20). Nothing creates or resolves one:
+  `WFS_TYPE_SYMLINK` is defined by the format and used by no code. The format
+  stores a short target inline in the object record, so this is a namespace
+  operation plus resolution in the path walker, not a layout change.
+- [ ] [FEATURE][P3] Hard links (spec §19). `link_count` is maintained correctly
+  -- created, incremented on a directory's `..`, decremented on unlink, and
+  checked by fsck -- but nothing can create a SECOND name for one object, so the
+  count never exceeds what a single link plus `.`/`..` implies. Wants an FS
+  operation and an opcode; deletion already does the right thing once one
+  exists.
+- [ ] [ENHANCEMENT][P3] WFS timestamps are whatever the caller passes, and the
+  driver passes nothing: `atime`/`mtime`/`ctime`/`btime` are written from a
+  `now_ns` that is zero outside the host tools, so every object on a
+  guest-written volume carries the epoch. The RTC service is the source
+  (`src/drivers/fs_wfs/wfs_types.h`); it needs a driver-side clock read that
+  does not cost an IPC round trip per metadata write.
+- [ ] [ENHANCEMENT][P3] Record `WFS_STATE_ERROR` when an ORDINARY operation
+  finds a bad checksum -- an object record, a directory tail, an extent node.
+  Only a failed journal replay records it today; every other inconsistency
+  reaches the caller as `WASMOS_ERR_FS_CHECKSUM` and leaves the volume writable,
+  so the next mount sees nothing wrong. Needs a write from paths that are
+  otherwise read-only, and a policy decision this has not made: whether one bad
+  record should cost the whole volume its writability, as ext4's
+  `errors=remount-ro` does (`src/drivers/fs_wfs/wfs_sync.h`).
+- [ ] [ENHANCEMENT][P4] A full-block overwrite still reads the block first. The
+  read is pure cost when every byte is about to be replaced, exactly as it is
+  for a freshly allocated block, which already skips it
+  (`src/drivers/fs_wfs/wfs_write.c`).
+- [ ] [ENHANCEMENT][P3] WFS mount rules still name a disk and a unit
+  (`DRIVER=="ata", ATTR{unit}=="2"`), which is what Phase 3 set out to retire.
+  They cannot stop until a volume exists to match on: a raw formatted disk is
+  not a partition, so `SUBSYSTEM=="partition"` does not reach it and no
+  `fstype` is ever reported for it. Blocked on the volume manager above.
+
+- [ ] [ENHANCEMENT][P2] Batch several WFS metadata operations into one journal
+  transaction. The driver retires each transaction before the next begins
+  (`wfs_journal_t`), so every metadata write pays a full descriptor, commit and
+  checkpoint round trip, and the log's tail never leaves its first block. Lazy
+  checkpointing would amortise that, and is what makes a CHAIN of live
+  transactions possible -- which in turn needs §21's three separate passes in
+  `wfs_recover.c`, since a later transaction's revoke bars an earlier one's image
+  and the revoke table must be complete before any image is applied. Recovery
+  refuses a chain today rather than half-applying one, so the two land together.
+- [x] [FEATURE][P2] Give the block ABI a flush, so a WFS journal barrier means
+  what §14 says it means. `BLOCK_IPC_FLUSH_REQ` / `BLOCK_IPC_FLUSH_RESP` are
+  served by both block backends -- `ata` issues ATA CACHE FLUSH, `virtio_blk`
+  negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH` -- and
+  `wfs_txn_commit_task` awaits one at §14's steps 2, 4 and 6, with §21's replay
+  awaiting one before its tail retires the replayed writes.
+- [ ] [FEATURE][P2] A volume manager, and filesystem recognisers.
+  Design: `docs/architecture/37-volume-manager.md`.
+
+  A volume is a thing with a filesystem on it -- a formatted raw disk, a
+  formatted partition, later a span of several. Nothing publishes that today:
+  the `block` class answers "what storage exists", which is not the same
+  question, so mount rules still name a disk and a unit
+  (`DRIVER=="ata", ATTR{unit}=="2"` for the WFS volume) even after Phase 3 set
+  out to stop them doing exactly that.
+
+  The blocking piece is a RECOGNISER: something that identifies a format without
+  that format's driver being resident. It cannot live in the filesystem drivers,
+  which are spawned BY the rule that needs the answer, and it does not belong in
+  the partition manager, whose job is tables and which publishes nothing at all
+  for a disk without one. Linux keeps it in a library (`libblkid`, `superblocks/`
+  beside `partitions/`) run by udev at publish time; Windows keeps it in a
+  recogniser stub separate from the filesystem. We follow Linux's shape because
+  a library needs no resident process.
+
+  `FS_TYPE_WFS` and the `ATTR{fstype}=="wfs"` rule spelling are already
+  registered, so a recogniser has somewhere to report to; nothing sets the field
+  yet. A probe was briefly written into `partition_manager.zig` and taken back
+  out -- it worked, but it put filesystem knowledge in the table parser and
+  still could not describe an unpartitioned volume.
+
+  It also gives exclusivity an owner. `fsck.wfs` and `mkfs.wfs` must both refuse
+  a MOUNTED volume, and nothing enforces that since the block layer stopped
+  arbitrating who may use a drive -- correctly, because a request now names its
+  own target. `claimed` on the volume is what they would consult.
+
+- [ ] [FEATURE][P2] A userland `mkfs.wfs`, so the OS can create a volume and not
+  only mount one. Formatting today is a HOST tool (`src/tools/mkfs_wfs`, run on
+  the developer's machine to build `build/wfs.img`); a running guest cannot
+  format a second disk at all.
+
+  `fsck.wfs` is the template: a utility under `src/utils/fsck_wfs` whose checking
+  core is compiled both into the guest module and into the host unit suite, over
+  synchronous block callbacks. The synchronous sink in `wfs_mkfs.c` is NOT the
+  obstacle it was once recorded as -- a one-shot utility may block on a BLOCK
+  request, as `blkinfo` and `fsck.wfs` both do; only a SERVICE may not, because
+  it would stall its event loop.
+
+  What is left is mechanical: give `wfs_mkfs.c` the same treatment, point it at a
+  block device instead of a file, and name it `mkfs.wfs`. Exclusivity comes for
+  free the way it does for the checker -- a disk a filesystem driver holds is
+  refused with `block_dev.UNIT_CLAIMED` -- so formatting a mounted volume is not
+  a hazard this has to invent a guard for.
+
+- [x] [FEATURE][P2] `fsck` for WFS (spec §24), phase 4's last item. `fsck.wfs`
+  lives in `src/utils/fsck_wfs`, over a checker core shared with the host unit
+  suite. Checks: superblock (falling back to the §5 backup scan), group
+  descriptors, the object table, extents and tree nodes, directory strides and
+  tails, link counts, the bitmaps, and the free counters. Repairs only what §24
+  calls derived -- the bitmaps from the walk, the counters from the bitmaps --
+  and clears `state` only when nothing structural was found.
+- [ ] [ENHANCEMENT][P3] Give the guest a way to release a mounted volume, so
+  `fsck.wfs` can be pointed at a disk in a default boot. A block driver binds a
+  unit to one client exclusively, so a disk a filesystem driver holds is refused
+  with `block_dev.UNIT_CLAIMED` -- which is correct, and also means every disk
+  the device-manager rules recognise is unavailable to the checker. Today it
+  runs against a disk no rule claimed.
+- [ ] [ENHANCEMENT][P3] Teach `fsck.wfs` to repair more than the derived state.
+  A failed object-record or directory checksum is reported and the volume is
+  left unclean, which is safe but leaves nothing to do about it. Rebuilding a
+  damaged record means inventing content, so this needs a policy first -- ext4's
+  lost+found is the shape -- not just code.
+- [ ] [ENHANCEMENT][P3] Let a WFS extent tree exceed ONE interior level. A tree
+  grows to an interior root over N leaves (depth 1), which reaches roughly 255 x
+  170 extents at a 4096-byte block; a second interior level is not implemented and
+  `wfs_extent_write.c` refuses rather than editing a shape it does not maintain,
+  at the two TODOs it carries. The reader already walks to the depth guard, so
+  only the writer is missing -- and nothing the OS can produce reaches the
+  ceiling, which is why this sits below the work that does.
+
 - [ ] [ENHANCEMENT][P3] Widen the block transfer path past 2 TiB.
   `wasmos_block_descriptor_t` reports a 64-bit `lba_count`, but
   `BLOCK_IPC_READ_REQ`/`WRITE_REQ` arg1 is a 32-bit LBA, so a disk can now be
@@ -1007,6 +1155,94 @@ tail.
   staged in a transfer buffer. Blocks no current backend — FAT12/16 cannot reach
   the ceiling — but it caps any format that can, including the WFS proposal
   (`docs/WFS_WASMOS_FILE_SYSTEM.md`, section 22).
+- [x] [BUG][P1] A spawned utility did not inherit its spawner's working
+  directory, and a fallback in fs-manager hid it for every mount except the first
+  boot-kind one. FIXED: the working directory is now a full canonical VFS path
+  owned by fs-manager.
+
+  fs-manager held a working directory as `(mount, depth)` and forwarded a
+  relative name to a backend UNRESOLVED, choosing that backend by falling back to
+  `backend_first_of_kind(FSMGR_BACKEND_BOOT)` when the client had none. For
+  `/boot` and `/init` that fallback is the correct backend, so relative `cat`
+  worked there BY ACCIDENT; for any other mount the request went to the wrong
+  backend, which answered NOT_FOUND, and the real backend was never asked. The
+  fallback was the missing check: it turned "this client has no working
+  directory" into a plausible answer instead of an error, which is why the broken
+  inheritance stayed invisible while there was only one non-root mount.
+
+  What landed: `fs_client_state_t` carries the full path (`fsmgr_cwd_join`
+  canonicalizes, host-unit-tested in `tests/unit/test_fs_manager_path.c`), every
+  client path is joined onto it before routing, `FSMGR_IPC_CLONE_CWD` copies the
+  path rather than a `(mount, depth)` pair, and choosing a backend moved out of
+  "this client named no mount" and into routing an ABSOLUTE path
+  (`route_absolute_path`), where a first segment matching no mount means the boot
+  volume as the root filesystem — the spelling `/system/utils/ip` and
+  `/apps/calculator` rely on, and a rule rather than a guess.
+  `FS_IPC_CHDIR` reports the resolved path back to the client, so the CLI's
+  `g_cwd` is adopted rather than re-derived and a prompt cannot disagree with the
+  FS layer. A path-less `READDIR` is preceded by a re-assertion of the requesting
+  client's directory, because a backend holds one current directory per
+  fs-manager connection and cannot tell two clients apart.
+
+  Two tests changed shape rather than expectation. `test_cat_startup`
+  (`tests/test_cli.py`) named no directory and passed via the fallback; it now
+  states the one its relative name is resolved against, like every other case in
+  that file. `test_reading_a_file_by_relative_name`
+  (`tests/test_wfs_mount_read.py`) was marked `expectedFailure`, which reported
+  the battery green over a live bug; the marker is gone and the test is a plain
+  passing case.
+
+- [x] [BUG][P2] `FS_IPC_CHDIR_REQ` packed its target into arg0..arg3, capping a
+  path component at 15 bytes plus a NUL. FIXED: the target travels as a path in a
+  transfer buffer, `arg0` = length / `arg2` = buffer id / `arg3` = the grant, the
+  same transport `FS_IPC_OPEN_REQ` uses.
+
+  A directory whose name was longer could not be expressed at all: the request
+  arrived TRUNCATED, the lookup missed, and the client was told the directory did
+  not exist rather than that its name did not fit — and a truncated name could
+  also match a DIFFERENT directory sharing the first 15 bytes. Depth is no longer
+  capped either, so `cd /boot/foo/bar` is one request; the CLI's
+  `PENDING_CD_CHAIN` split, which hit the same packing limit on each piece, is
+  deleted along with the CLI's duplicate path normalizer. fs_wfs resolves the
+  target through the same path walker OPEN uses (255-byte `WFS_NAME_MAX` names
+  included), fs_fat reads it into a `FAT_MAX_PATH` buffer and reports
+  PATH_TOO_LONG rather than NOT_FOUND for a component that does not fit, and
+  fs_init reads it through `copy_path_from_xfer_buffer`. Covered by
+  `test_cd_into_a_directory_whose_name_exceeds_fifteen_bytes` and
+  `test_cd_a_deep_path_in_one_command`.
+
+- [ ] [FEATURE][P3] Widen the orderly shutdown beyond WFS. The mechanism is in
+  place -- `WASMOS_IPC_SHUTDOWN_REQ` / `_DONE`, the process manager's sequence in
+  reverse spawn order, the halt/reboot host calls in both runtimes -- and
+  `fs-wfs` uses it to record `WFS_STATE_CLEAN`. What remains is other
+  participants declaring `WASMOS_SVC_FLAG_WANTS_SHUTDOWN` when they gain state
+  worth flushing: `fs-fat`'s dirty sectors and FSInfo free count are the known
+  case. Nothing needs it today, which is why this sits low.
+
+  The flag is opt-IN because the sequence is sequential -- a participant may need
+  the services beneath it while it quiesces -- so a participant with nothing to
+  persist would spend its deadline saying so. With ~29 registered services and
+  one shared async runner (`virtio_blk` alone), notifying every one of them would
+  have added roughly a minute to every halt.
+
+- [ ] [BUG][P2] `run-qemu-test` flakes roughly 1 run in 3 on the WARP build, in
+  TWO distinct shapes. Both were seen while landing WFS work that reaches no boot
+  artifact (no app target, no manifest, no device-manager rule, absent from
+  `build/esp`), so neither is attributed to it.
+
+  Shape 1: `FAIL: calculator did not fully initialise`. The guest prints
+  `[calculator] start` and the harness times out before `[calculator] ready`.
+
+  Shape 2: no `FAIL:` line at all and no `halt`. The guest reaches
+  `[calculator] ready` and the harness's typed `halt` never takes effect, so it
+  times out with the log ending mid-session. This is the serial-input path, the
+  same family as the drain-and-discard bug fixed in 24afe3fc4c.
+
+  Everything earlier in the boot — script broker, gfx smoke, compositor
+  handshake, CLI banner — is identical in passing and failing logs for both.
+  Capture a failing run with the FULL log (a `tail` loses the signal, which cost
+  two runs to learn), and check whether the harness deadlines are simply too
+  tight under MTTCG before treating either as a guest bug.
 - [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
   `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
   (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends

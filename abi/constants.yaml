@@ -156,6 +156,7 @@ groups:
     constants:
       - { symbol: FS_TYPE_UNKNOWN, value: 0, doc: "No superblock probe matched." }
       - { symbol: FS_TYPE_FAT, value: 1, doc: "FAT12/16/32; BPB with a 0x55AA boot signature." }
+      - { symbol: FS_TYPE_WFS, value: 2, doc: "WFS; superblock magic 'WFS1' at byte 1024 of the volume (docs/WFS_WASMOS_FILE_SYSTEM.md section 4)." }
 
   - name: block_descriptor_flags
     bits: true

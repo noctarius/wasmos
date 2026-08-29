@@ -127,6 +127,8 @@ pub const PARTITION_SCHEME_GPT: i32 = 2;
 pub const FS_TYPE_UNKNOWN: i32 = 0;
 /// FAT12/16/32; BPB with a 0x55AA boot signature.
 pub const FS_TYPE_FAT: i32 = 1;
+/// WFS; superblock magic 'WFS1' at byte 1024 of the volume (docs/WFS_WASMOS_FILE_SYSTEM.md section 4).
+pub const FS_TYPE_WFS: i32 = 2;
 
 // block_descriptor_flags (flag bits)
 /// Bits of the `flags` field of wasmos_block_descriptor_t.

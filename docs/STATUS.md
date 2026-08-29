@@ -758,6 +758,17 @@ linked feature documents for rationale and rollout plans.
   (`architecture/36-partition-manager-and-block-identity.md` §2-§3).
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
+  optional `/user`.
+- The working directory is a full canonical VFS path owned by `fs-manager`: every
+  client path is joined onto it before routing, a spawned process inherits its
+  spawner's path by copy, and `FS_IPC_CHDIR` reports the resolved path back so no
+  client keeps a second copy. Routing then acts on an absolute path only — a path
+  whose first segment names no mount belongs to the boot volume as the ROOT
+  filesystem (`/system/utils/ip`, `/apps/calculator`), which is a routing rule
+  rather than a guess about a client that named no directory.
+- `FS_IPC_CHDIR` carries its target as a path in a transfer buffer, so `cd` takes
+  one request at any depth and reaches directory names up to a backend's own
+  maximum (255 bytes for WFS) instead of the 15 that fit in the argument words.
   optional `/user`. `/user` is a raw GPT image built by
   `scripts/make_gpt_image.py` from the contents of `userfs/` -- one FAT16
   partition labelled `user`, mounted by a rule that names that label and nothing
@@ -892,6 +903,158 @@ linked feature documents for rationale and rollout plans.
   data. An open source or destination is refused (`WASMOS_ERR_FS_BUSY`) because
   a descriptor records where its directory entry lives, and cross-mount renames
   are refused by fs-manager.
+- WFS, the repository's own on-disk filesystem
+  (`docs/WFS_WASMOS_FILE_SYSTEM.md`), has the whole of the spec's PHASE 1 (§23)
+  IMPLEMENTED: superblock and byte-offset mount, block-group descriptors, the object
+  table, directories, extents and the extent tree, seeded checksums,
+  feature-flag validation, and a read-only mount. Inline data works too, ahead
+  of the order that defers it to phase 4. `src/drivers/fs_wfs` runs every
+  operation as a task on the SYSTEM coroutine runtime; `mkfs_wfs` is the host
+  formatter and `--populate` places a host tree into an image. A volume is
+  mounted in the guest at `/wfs` from ATA unit 2 by a device-manager rule, and
+  `tests/test_wfs_mount_read.py` exercises it end to end.
+- A damaged primary superblock no longer fails the WFS mount: the backup scan
+  (§5) reads the odd groups' first blocks and takes the valid copy with the
+  highest `generation`. `block_size` is exactly the field an unreadable primary
+  does not supply, so each candidate is tried at all three permitted sizes —
+  bounded, because `blocks_per_group` follows from `block_size` rather than
+  being stored freely. A wrong guess is self-rejecting: a backup is sealed under
+  its own block number in the volume's block units, so a wrong size implies a
+  wrong checksum seed. The scan reaches four backup-bearing groups; beyond that
+  is an fsck case, not a reason to read the whole device. When nothing
+  validates, the mount reports the PRIMARY's failure, since a scan-shaped error
+  would send a reader looking for a backup the geometry may never have had.
+- A volume mounted from a backup is READ-ONLY. The primary is still damaged and
+  the adopted copy's generation may trail it, so writing under it would compound
+  the damage; fsck (§24) is what rebuilds the primary. This is a policy the
+  format does not mandate, and it costs nothing while phase 1 is read-only
+  anyway — it exists so the phase-2 write path cannot silently trust a recovered
+  superblock.
+- WFS block ALLOCATION exists (phase 2's first item): `wfs_bitmap.c` holds the
+  bit access and the run search, `wfs_alloc.c` the task that marks a run and
+  accounts for it. The bitmaps are authoritative and the free counters are
+  derived from them, so the bitmap is written FIRST — a crash between the two
+  leaves a stale counter, which fsck rebuilds, whereas the reverse order would
+  leave a counter recording an allocation the bitmap does not, and the next
+  allocator would hand the same blocks to a second object.
+  Policy follows §12: prefer the group holding the parent, take a contiguous run
+  where one exists, fall back to a shorter run (the caller returns for the
+  remainder), fall back to another group. A derived counter is never trusted to
+  EXCLUDE a group, because a stale one would lose real free space; the bitmap is
+  always read. Group bits are clamped to the device, so the allocator does not
+  depend on the formatter having marked the past-the-end bits of a partial final
+  group.
+  A write is refused on `super.read_only` rather than on either of its causes (a
+  replay owed, or a primary recovered from a backup), which is what keeps a
+  backup-mounted volume from becoming writable by omission; it is refused before
+  any block is touched.
+- A volume says `WFS_STATE_DIRTY` on disk before any metadata write lands
+  (`wfs_sync.c`, marked once per mount and driven by the allocator). That flag is
+  the whole of WFS's crash safety until the journal exists: `wfs_mount_task` turns
+  a non-clean state into `needs_replay` and mounts read-only, so a crash
+  mid-allocation leaves a volume that refuses writes rather than one serving a
+  bitmap and a counter that disagree. The superblock is RESEALED, not merely
+  patched — its checksum covers `state`, and a volume that no longer validates
+  reads as corrupt, which is worse than one that reads as dirty. Marking is
+  refused on a read-only volume, which would otherwise look like an interrupted
+  write it never had.
+- `wfs_block_write_begin` stages the block into the server's buffer before
+  submitting, which it previously did not — a write persisted whatever that
+  buffer held. A staging failure sends no request and is reported at the take, so
+  a NULL future cannot pass for the cache-hit case and let a write that never
+  happened read back as success.
+- WFS FILE WRITES exist (`wfs_write.c`): overwrite inside allocated blocks,
+  writes straddling a block boundary, appends that allocate and extend the extent
+  map, and in-place patching of an object stored inline. Update order is data
+  blocks THEN the object record — the record names the data, so a crash before it
+  leaves blocks allocated but unreferenced (space fsck reclaims), whereas a record
+  written first would name blocks still holding what they held before. A freshly
+  allocated block is never read: it holds pre-allocation content, so a partial
+  write zeroes it and patches, which is what makes an unwritten range read as
+  zeroes. Blocks are allocated ONE at a time, because a longer run would have to
+  be recorded before it is written. A new run continuing the last one both
+  logically and physically extends that extent rather than adding one, so an
+  appended file stays at a single extent.
+  Two growth cases are refused rather than half-done, each with a TODO at the
+  site: an inline object outgrowing `WFS_INLINE_DATA_MAX` (promotion must read the
+  inline bytes before an extent is written over them), and an object needing more
+  than `WFS_INLINE_EXTENTS` extents (the tree reader exists, the writer does not).
+- WFS TRUNCATION exists (`wfs_truncate.c`). Blocks can
+  now be released as well as taken: `wfs_free_blocks_task` clears bitmap bits and
+  credits the derived counters, handling a run that spans groups as two passes
+  because that is two bitmaps and two counters.
+  The crash-safety order REVERSES relative to a write, on one principle. A write
+  is data then record; a truncation is record then free. Both pick the order whose
+  crash leaves a LEAK -- blocks allocated but unreferenced, which fsck reclaims --
+  never a block the record still names after the bitmap released it, which a later
+  allocation would hand to a second object.
+  GROWING allocates nothing: the new range is a hole and reads as zeroes (§9), so
+  a grown file is sparse until something writes into it. SHRINKING zeroes the tail
+  of the block the new end falls inside, because that block stays allocated and
+  those bytes are what a later grow would read; the same applies to an inline
+  object, whose record keeps its 144 bytes whatever the size says. This is
+  deliberately unlike `fs-fat`, where `O_TRUNC` resets the size without freeing
+  the chain and a truncated file keeps its capacity.
+- WFS writes are reachable from a guest: `FS_IPC_WRITE_REQ` is served, `OPEN`
+  accepts write modes, `O_TRUNC` truncates BEFORE the fd is handed out (so the fd
+  latches the truncated size) and `O_APPEND` starts the cursor at the end. An fd
+  remembers its access mode, so a write through a read-only descriptor is
+  `WASMOS_ERR_FS_ACCESS` — an fd-mode violation, distinct from a read-only VOLUME
+  and from a full one. The handler re-reads the object record per chunk, which is
+  load-bearing rather than symmetric with the read path: a write mutates the
+  extent map, and a chunk starting from a stale copy would allocate against the
+  pre-write map and lose the previous chunk's extent. A partial write reports what
+  landed alongside the error, since a client resending from zero would duplicate
+  bytes already on disk.
+  `O_CREAT` is refused rather than satisfied by an existing file of that name, as
+  are `UNLINK`/`MKDIR`/`RMDIR`/`RENAME`: all of them need a directory-record
+  writer, which phase 2 did not build.
+  `examples/c/wfs_write_smoke` covers the layer no host suite can link — the
+  driver's IPC dispatch — going through plain libc for an inline file, a write
+  straddling a block boundary, a read-only fd, and the `O_CREAT` refusal.
+- WFS has a NAMESPACE writer: create, mkdir, unlink, rmdir and rename, over object
+  allocation and per-block record surgery. Directories GROW — an insert with no
+  room allocates a block, lays it out, and appends it to the extent map, extending
+  the last extent when the new block continues it so a directory that grew
+  repeatedly stays at one extent rather than burning the six inline slots.
+  Order everywhere is whichever sequence leaves a LEAK when interrupted: create
+  writes the object before the directory record; unlink and rmdir take the record
+  off disk before freeing anything; rename INSERTS before removing, so an
+  interruption leaves the object reachable under both names rather than neither.
+  A leak is space fsck reclaims; the alternative is an entry naming an id that is
+  unallocated or reused, which no later pass can repair.
+  rmdir refuses a non-empty directory (`.` and `..` are not contents), rename does
+  not replace an existing name, and deletion frees an object's extents DIRECTLY
+  rather than through truncate — truncate refuses a directory on purpose, and that
+  guarantee is not relaxed for an internal caller.
+  `tests/unit/test_wfs_namespace.c` verifies the whole image after each mutation:
+  every directory chain validates, every tail checksum matches, and every entry
+  names a record that verifies. That is what makes its failure cases mean
+  something — an assertion that an error code came back would also pass with a
+  half-written directory on disk.
+- WFS phase accounting, stated against the bar that matters: a phase is not done
+  until it works END TO END IN THE OS, not when its host suites pass. By that bar
+  NEITHER phase 1 nor phase 2 is complete, and the earlier claim that phase 2 was
+  finished was wrong.
+  Reachable from a guest today: mount, readdir, chdir (including deep paths and
+  names past 15 bytes), reads (inline, multi-block, relative and absolute), and
+  writes that patch an inline file or overwrite existing blocks across a boundary
+  (`examples/c/wfs_write_smoke`).
+  NOT reachable or not exercised in the OS, though implemented and host-tested:
+  block allocation (nothing in the guest appends past EOF, so no write has ever
+  allocated); truncation (`O_TRUNC` is wired but no guest exercises it); the whole
+  namespace writer (`MKDIR`/`UNLINK`/`RMDIR`/`RENAME` still answer UNSUPPORTED in
+  `fs_wfs.c`'s dispatch and `O_CREAT` is refused); and the extent TREE reader,
+  because mkfs_wfs bump-allocates contiguous runs so every file it writes has a
+  single extent and no volume in the guest has a tree to walk.
+  Two format capabilities are missing outright, each refused explicitly with a
+  TODO at the site rather than half-done: the extent-tree WRITER, so an object
+  caps at `WFS_INLINE_EXTENTS` extents, and inline-to-extent promotion, so a file
+  stored inline cannot grow past `WFS_INLINE_DATA_MAX`.
+- Still deferred in WFS: a sync path that writes the superblock back, so on-disk
+  `free_blocks` trails the bitmaps until then. (The extent-tree writer, inline-to-
+  extent promotion and journal replay have since landed; see the phase-3 entries
+  at the end of this section.)
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
   calls to the live block slot.
@@ -956,8 +1119,8 @@ linked feature documents for rationale and rollout plans.
   the event loop and the pump; the driver supplies only a `prepare` hook and a
   root task. It takes its device identity from the device-manager startup args,
   negotiates the legacy PCI device, and serves `BLOCK_IPC_IDENTIFY_REQ`,
-  `BLOCK_IPC_READ_REQ`, `BLOCK_IPC_WRITE_REQ` and `BLOCK_IPC_READ_ZC_REQ` over a
-  single requestq.
+  `BLOCK_IPC_READ_REQ`, `BLOCK_IPC_WRITE_REQ`, `BLOCK_IPC_READ_ZC_REQ` and
+  `BLOCK_IPC_FLUSH_REQ` over a single requestq.
 - One endpoint carries everything `virtio-blk` waits on. The event loop drains a
   single receiver and demultiplexes, so the block service is registered ON the
   runner's endpoint and the interrupt is routed TO it; the driver owns no select
@@ -1041,6 +1204,16 @@ linked feature documents for rationale and rollout plans.
   (`driver=<name> unit=<n>`), not about the rule's pattern. A wildcard rule has
   no unit of its own, and passing the pattern handed the driver 0xFF as a unit
   number.
+- Every block_fs rule of a rule set now reaches the process manager through the
+  path+caps opcode that carries those startup args, not just the first. The
+  device manager armed the next rule from inside the completed rule's handler and
+  then cleared `active_rule_spawn_*` on top of it, leaving `rule_spawn_pending`
+  set with kind `NONE`; a kind-NONE rule spawn falls to
+  `PROC_IPC_SPAWN_PATH_SYNC`, whose ABI carries no arguments at all. The driver
+  came up unable to name its disk and parked, and only mounted on the tenth
+  attempt once nine spawn timeouts had reset the tracking and re-armed the rule
+  properly. The tracking is cleared BEFORE the re-drive, and an armed spawn
+  without a kind is reported rather than silently downgraded.
 - A match is reported by whichever of the two paths made it: the live publish,
   and the re-scan of already-registered devices that runs when a later rule set
   loads. Both matter because the override rules live on `/boot` and cannot load
@@ -1048,6 +1221,213 @@ linked feature documents for rationale and rollout plans.
   window is matched only by the re-scan. Reporting from the publish path alone
   made that outcome silent while the mount itself succeeded, which reads in a
   boot log as a rule that never matched.
+- `fs_wfs` resolves its disk the same way `fs_fat` does: the `block` CLASS at the
+  instance encoding the `(backend, unit)` from its `driver=`/`unit=` startup args,
+  with no `required_endpoint_name` in its manifest.
+- A WFS volume mounts over virtio-blk as well as ATA, and the same image reads
+  identically through both. `tests/test_wfs_virtio_blk.py` attaches `build/wfs.img`
+  a second time as a virtio-blk device pinned to PCI slot 6, so both mounts come
+  up in one boot and are compared against each other rather than across runs. It
+  is also a THIRD block_fs rule, which is more pressure on the rule-arming order
+  above than the two rules that exposed it.
+- `virtio-blk`'s IDENTIFY reports the unit it publishes rather than a constant 0.
+  A filesystem driver resolves its mount point by asking the device manager which
+  rule covers the unit IDENTIFY named, so the constant sent it to whichever rule
+  covered unit 0 and its mount never came up -- the same mistake the driver's own
+  derived-identity note argues against, in a second place in the same file.
+- A WFS `fs.backend` service name carries all three digits of its unit. A
+  virtio-blk unit is `(slot << 3) | function` and so reaches 255, where two digits
+  named the wrong service.
+- An object's extent map GROWS in both directions the format allows. An inline
+  object outgrowing `WFS_INLINE_DATA_MAX` (144 bytes) is promoted to an extent
+  map: its bytes are copied into a first data block and the flag cleared before
+  the write proper begins. An object outgrowing the record's six extents is
+  promoted to an extent tree, and further extents are inserted into its leaf,
+  coalescing with the record they follow so a sequential append stays one extent.
+  Both mattered more than the six-extent ceiling suggested, because a file created
+  in the OS starts INLINE (`wfs_alloc.c`) and so could previously never exceed 144
+  bytes, nor reach an extent map at all.
+- The two maps stay exclusive (§9): a promotion writes the leaf, then names it and
+  zeroes the inline array in one update, so no reader can find two answers for one
+  logical block. A promotion also SORTS what it moves, since the inline array is
+  scanned linearly and may be appended to in any order while a tree's descent
+  requires the order.
+- Releasing an object whose map is a tree walks its leaf: `wfs_extent_trim_task`
+  detaches one run per step, rewriting the leaf without it BEFORE the run is
+  released, so an interruption leaks blocks rather than freeing one a live extent
+  still names. Both `unlink` and `truncate` use it, and a leaf left empty is
+  released with the object put back on an inline map. Without this a file past six
+  extents would have been undeletable and its blocks unreclaimable.
+- Phase 2 (§23) is complete except one ceiling: a tree grows to a SINGLE leaf, so
+  an object stops at `wfs_extent_leaf_capacity()` extents -- 170 at a 4096-byte
+  block size, against six before. Splitting a leaf and adding an interior level
+  are not implemented; the reader already walks interior nodes, and nothing writes
+  that shape, so no volume this driver makes can contain one.
+- Truncation is complete in both directions the format allows. A tree-mapped
+  object shrunk to a size INSIDE a block keeps that block and zeroes its tail,
+  resolving the physical block behind the logical one by descending the tree
+  through `wfs_extent_task` -- the same walk a reader makes -- so a tree truncates
+  to any size rather than only a block boundary. An INLINE object a grow takes
+  past `WFS_INLINE_DATA_MAX` is promoted the way a write past it is. The tree route
+  also marks the volume dirty before its first leaf rewrite, as the inline route
+  always did.
+- The interactive QEMU targets (`run-qemu`, `run-qemu-ui`, `run-qemu-debug`) boot
+  with two WFS volumes: `/wfs` over ATA and `/vwfs` over virtio-blk, so one
+  filesystem is reachable over both transports from the CLI. The virtio volume is
+  a SECOND image (`build/wfs_virtio.img`, its own UUID) rather than the same file
+  attached twice: both mounts are writable in an interactive run, and two writers
+  on one backing file corrupt it. The test targets are unchanged and keep their
+  single ATA volume; `tests/test_wfs_virtio_blk.py` covers the virtio path there
+  with per-drive snapshot overlays instead.
+- WFS has a METADATA JOURNAL (`wfs_journal.c`, spec §14) and CRASH RECOVERY
+  (`wfs_recover.c`, §21). A transaction writes each changed metadata block into
+  the log, then a descriptor naming every image, then a COMMIT block, and only
+  then checkpoints the images to their real addresses and advances the log tail.
+  A crash before the COMMIT discards the transaction; one after it is finished by
+  the next mount. File DATA is not journaled (§17): after a crash the metadata is
+  consistent, but a block newly allocated to a file may hold what it held before.
+  Revoke records are written (§18), and replay honours §21's `>=` rule -- an image
+  journaled by the same transaction that revoked its block is skipped, which is
+  what stops stale metadata being replayed over a file that has since been given
+  the block.
+- Reads inside an open transaction see the transaction's own writes. The block
+  layer takes a REDIRECT (`wfs_block_set_redirect`) that maps a journaled target
+  to the log block holding its image, installed at begin and cleared at commit.
+  Without it a read-modify-write repeated inside one transaction -- a bitmap block
+  touched twice -- would work from the pre-transaction content and lose the
+  earlier change.
+- ONE transaction is live at a time: the driver runs the whole of §14's sequence
+  before the next begins, so the log is empty between transactions and its tail
+  never leaves the first log block. That is a policy, not a format restriction;
+  the format permits a chain of live transactions retired by a lazy checkpoint.
+  Recovery refuses a chain rather than half-applying it, because §21's three
+  passes -- a revoke table built over the whole replay set before any image is
+  applied -- are what a chain needs, and nothing writes one yet.
+- The barrier between §14's steps is a real cache flush. `BLOCK_IPC_FLUSH_REQ` /
+  `BLOCK_IPC_FLUSH_RESP` carry it, `wfs_block_flush_begin` issues it, and the
+  commit task awaits one at steps 2, 4 and 6; §21's replay awaits one before its
+  tail retires the replayed writes. Awaiting each reply before issuing the next
+  orders only what the DEVICE saw, which a volatile write cache is free to commit
+  in another order -- so ordering alone left a COMMIT able to reach media ahead of
+  the images it names. Both backends serve it: `ata` issues ATA CACHE FLUSH, and
+  `virtio-blk` negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH`,
+  answering success without a queue entry when the device did not offer the
+  feature and therefore has no volatile cache to commit.
+- Every mount reads the journal superblock, clean or not: a transaction cannot be
+  opened without the log's geometry and tail. §15's skip is of the replay SCAN,
+  and a clean volume still never walks the log. A volume whose log does not
+  validate mounts READ-ONLY rather than being refused -- every structure a reader
+  touches is intact, and the log is a region only a writer needs.
+- `tests/test_wfs_clean_unmount.py` is the only suite whose guest writes reach
+  real media: it owns a scratch copy of the volume and clears `wfs_snapshot`, so
+  the journal's barriers become cache flushes the host honours. Everything else
+  runs against `snapshot=on`, where a flush returns instantly. Two classes, four
+  boots -- a clean halt must leave the volume CLEAN, and a killed machine must
+  not -- because the clean assertion means nothing without the second.
+- `halt` and `reboot` run an orderly shutdown before the machine goes down, and
+  `fs-wfs` is its one participant: it reconciles the superblock's free counters
+  and records `WFS_STATE_CLEAN`, which is the only thing that tells the next
+  mount its log holds nothing to replay (§15). Without it every volume ever
+  written stayed DIRTY for life and walked an empty log on every later mount.
+  The mechanism is `WASMOS_IPC_SHUTDOWN_REQ` / `_DONE` and a process-manager
+  sequence in reverse spawn order; participation is opt-in via
+  `WASMOS_SVC_FLAG_WANTS_SHUTDOWN`, because the sequence is sequential and a
+  participant with nothing to persist would spend a deadline saying so. See
+  `docs/architecture/15-drivers-and-services.md`, "Orderly Shutdown".
+- A volume that was not unmounted cleanly has its log replayed at mount and then
+  mounts WRITABLE: `needs_replay` is discharged rather than latched, and every
+  metadata writer runs inside a transaction, so what an interrupted one left
+  behind is in the log and the replay is what repairs it. A volume that mounted
+  from a BACKUP superblock is the exception -- a backup's `state` is stale by
+  construction, so the replay runs unconditionally and the volume stays read-only
+  whatever it finds.
+- `tests/unit/test_wfs_journal.c` and `tests/unit/test_wfs_recover.c` cover both.
+  The recovery suite models a crash as a STOPPED DEVICE -- the transaction runs
+  for a chosen number of block requests and everything past that fails, so the
+  image holds exactly the writes that landed -- and then remounts from that image
+  with a cold block cache. Hand-building a log instead would test the test, and
+  would keep passing if the writer's layout drifted away from the reader's.
+- EVERY WFS METADATA WRITE now runs inside a transaction, so phase 3 (§23) is
+  complete and a volume that was not unmounted cleanly mounts WRITABLE again
+  after its replay. `wfs_alloc.c`, `wfs_extent_write.c`, `wfs_write.c`,
+  `wfs_truncate.c` and `wfs_namespace.c` stage their blocks through
+  `wfs_txn_stage_begin`/`_take` -- deliberately the same begin/take shape as the
+  block layer's, so converting a write was swapping one call for another with the
+  awaits already in place. File DATA keeps writing straight to its block (§17):
+  the block a write lands in, the block an inline promotion moves bytes into, and
+  the tail a truncation zeroes are all data.
+- WHAT WFS DOES NOT DO, so the phase count is not read as completeness. All four
+  phases (§23) are implemented; these are format features and quality-of-service
+  the phases never listed, each tracked in `docs/TASKS.md`:
+  no symlinks (§20) and no way to CREATE a hard link (§19, though `link_count`
+  is maintained and checked); timestamps are the epoch on any guest-written
+  volume, because the driver has no clock; a full-block overwrite still reads
+  the block first; an inconsistency found outside a journal replay is reported
+  but not recorded as `WFS_STATE_ERROR`; an extent tree stops at one interior
+  level; each metadata operation is its own transaction; and no guest can create
+  a volume, only mount one.
+  Two are visible from outside and worth knowing before reading a failure: the
+  `mount` listing names every WFS volume `fs-fat`, because fs-manager derives
+  that label from the backend KIND rather than from the driver; and a WFS mount
+  rule still names a disk and a unit, because a raw formatted disk is not a
+  partition and nothing publishes it as a volume yet.
+- PHASE 4 IS COMPLETE (§23): inline data was already implemented and in use, and
+  `fsck.wfs` (`src/utils/fsck_wfs`) is the checker. Its core is compiled twice --
+  into the guest utility and into `tests/unit/test_wfs_fsck.c`, which runs it
+  against volumes `mkfs_wfs` actually produced rather than hand-built fixtures.
+  It repairs only what §24 calls derived: the bitmaps are rebuilt from a walk of
+  the object table, the free counters recomputed from the bitmaps, and `state`
+  cleared only when nothing structural was found. Structural damage is reported
+  and left alone -- rewriting a failed record means inventing content, and a
+  checker that invents content turns a diagnosable volume into a plausible one.
+  A run cannot examine a MOUNTED volume: the block driver binds a unit to one
+  client exclusively, so a disk a filesystem driver holds is refused before a
+  sector is read.
+- Formatting is still HOST-ONLY (`src/tools/mkfs_wfs`): a running guest can
+  mount, read, write, recover and now CHECK a WFS volume, but cannot create one.
+  `mkfs.wfs` is tracked in `docs/TASKS.md` and is the same shape as `fsck.wfs` --
+  a utility under `src/utils` over a core shared with the host suites. The
+  synchronous sink is no obstacle: a one-shot utility may block on a BLOCK
+  request, as `blkinfo` and `fsck.wfs` both do. Only a SERVICE may not.
+- The transaction is opened and closed by the OPERATION, never by the participant
+  it composes. `wfs_txn_open`/`wfs_txn_close` wrap the five namespace operations
+  inside `wfs_namespace.c`, and `wfs_write_run`/`wfs_truncate_run` wrap the other
+  two; a participant run without one is refused rather than opening its own,
+  because a create that allocated an object in one transaction and inserted its
+  directory record in a second is exactly the pair a crash could separate.
+- The volume is marked WFS_STATE_DIRTY by `wfs_txn_open`, which is now the single
+  owner of that flag -- the per-allocation and per-write marks are gone. The order
+  is load-bearing: a mount reading a CLEAN volume never looks at the log (§15), so
+  a transaction committed before the flag landed would be one whose half-finished
+  checkpoint nothing would ever complete. `wfs_txn_stage_begin` refuses an
+  unmarked volume rather than trusting the caller.
+- Freeing a run that held METADATA revokes each of its blocks (§18):
+  `wfs_free_ctx_t` carries a `metadata` flag, set where an extent-tree leaf is
+  released and where a DIRECTORY's blocks are freed. A file's blocks were never in
+  the log, so they have no image to bar.
+- `test_wfs_recover.c` proves the conversion rather than assuming it. It runs a
+  real `wfs_ns_create` with the device stopping at EVERY one of its block
+  requests in turn -- the count is measured first, so the sweep cannot silently
+  stop short as the writer changes -- and requires the remounted volume to be
+  consistent at each: the name resolves to an object the bitmap agrees is
+  allocated, or it is absent, and group 0's free counters still agree with its
+  bitmaps. That second half is what a non-journaled writer fails, and it was
+  confirmed to fail: un-journaling one descriptor write turns the sweep red at six
+  crash points.
+- A transaction carries at most `WFS_TXN_MAX_TARGETS` (24) BLOCKS, not writes. A
+  block staged twice replaces its image, so a run of allocations in one group
+  costs one bitmap target and one descriptor target however many times it touches
+  them. An operation past the bound is refused whole with
+  `WASMOS_ERR_FS_TXN_FULL`; the reachable case is deleting a file whose extents
+  span more than about eleven block groups, which at a 4096-byte block size is
+  past a gigabyte.
+- The physical frame allocator reserves the kernel image by PHYSICAL address and
+  spans `__kernel_end`. The link symbols are higher-half virtual, so the previous
+  reservation overlapped no frame and protected nothing; the 64 KiB BSP boot stack
+  past `.bss` is reserved by address only in `linker.ld`, so no PT_LOAD covers it,
+  the firmware still reports those frames as conventional memory, and a low
+  allocation large enough to miss the earlier extents was handed the stack the
+  kernel was running on.
 - One matcher decides whether a block rule applies to a device. There were two --
   a walk over known devices and a copy inside the publish handler -- and the
   publish copy, which is the path a live device takes, never compared the

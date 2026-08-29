@@ -148,6 +148,8 @@ enum {
     FS_TYPE_UNKNOWN = 0,
     /* FAT12/16/32; BPB with a 0x55AA boot signature. */
     FS_TYPE_FAT = 1,
+    /* WFS; superblock magic 'WFS1' at byte 1024 of the volume (docs/WFS_WASMOS_FILE_SYSTEM.md section 4). */
+    FS_TYPE_WFS = 2,
 };
 
 /* Bits of the `flags` field of wasmos_block_descriptor_t.

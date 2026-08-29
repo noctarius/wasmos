@@ -45,7 +45,6 @@ enum {
     PENDING_LIST,
     PENDING_CAT,
     PENDING_CD,
-    PENDING_CD_CHAIN, /* chained cd: waiting for first segment reply */
     PENDING_EXEC,
     PENDING_WAIT,
     PENDING_SPAWN

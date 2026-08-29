@@ -1728,7 +1728,10 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
 
     c->next = fat_chdir_next_component(c);
     if (c->next < 0) {
-        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
+        /* The component does not fit, which is not the same as absent: reporting
+         * NOT_FOUND here told a client its directory did not exist when only its
+         * name was too long. */
+        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_PATH_TOO_LONG);
     }
     if (c->next == 0) {
         /* Path resolved to a directory without any real component to descend. */

@@ -1,0 +1,23 @@
+version = 1
+
+[package]
+name = "fsck.wfs"
+entry = "wasmos_main"
+kind = "app"
+native = false
+aot = true
+
+[resources]
+# The checker holds one bit per block, one bit per object and one link count per
+# object, plus two block-sized buffers. A 16 MiB volume at 4096 needs about 5
+# KiB of that; the heap is sized for volumes two orders of magnitude larger.
+stack_pages = 16
+heap_pages = 64
+
+[ipc]
+required_endpoint_name = "proc"
+required_endpoint_rights = 0
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

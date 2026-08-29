@@ -704,3 +704,82 @@ hotplug event pipeline, endpoint identity preservation across restarts,
 IRQ bind/unbind delegation to driver endpoints.
 
 DMA-specific design details are tracked in `docs/architecture/12-dma-transfers.md`.
+
+---
+
+### Orderly Shutdown
+
+Shutdown is the counterpart of the readiness handshake, not a new mechanism.
+Startup is `spawn` -> `PROC_IPC_NOTIFY_READY` -> the spawner unblocks; shutdown is
+a notification -> the participant quiesces -> it answers. The process manager owns
+both, because it already owns process lifecycle, the service registry, and the
+spawn order.
+
+```
+halt/reboot  ->  kernel_system_shutdown  ->  PM steps the sequence  ->  poweroff
+                  |
+                  +-- WASMOS_IPC_SHUTDOWN_REQ (arg0 = halt | reboot)  -> participant
+                  +-- WASMOS_IPC_SHUTDOWN_DONE                        <- participant
+```
+
+**The opcodes sit above every subsystem range** (`abi/opcodes.yaml`, subsystem
+`system`, 0xff00-0xffff), because the request arrives on the PARTICIPANT's own
+endpoint. A subsystem-scoped value would collide there -- `gfx` and
+`proc_manager` both own 0x200 -- which is the same reason the kernel's IRQ
+(0xff00) and MSI (0xff01) events already live in that band.
+
+**Ordering is the substance of the design.** A participant may need its
+dependencies alive while it quiesces: `fs-wfs` writes its superblock through the
+block driver, which needs the ATA driver. Shutdown therefore runs in reverse
+dependency order.
+
+- **Reverse spawn order** supplies that order at no cost and is correct by
+  construction wherever startup order is a valid dependency order. `pid` is
+  monotonic and never reused within a boot, so descending pid IS reverse spawn
+  order. It brings `fs-wfs` down before the block driver beneath it.
+- **Declared dependencies** in `linker.metadata` are the eventual replacement,
+  and are what a supervised lifecycle (see the device-manager direction above)
+  needs anyway. Nothing requires them yet.
+
+**Participation is opt-in**, declared as `WASMOS_SVC_FLAG_WANTS_SHUTDOWN` in the
+`flags` field of `svc_register_desc_t`. The service registry supplies both the
+filter and the endpoint to send to; an app registers no service name, so registry
+membership already excludes the kinds that hold nothing.
+
+Opt-in follows from the ordering. Notifying participants one at a time means each
+costs its deadline, so a participant with nothing to persist would spend one
+saying so. Of the registered services exactly one (`virtio_blk`) runs on the
+shared async runner that could answer for free, so notifying all of them would
+add roughly a minute to every halt. A service declares the flag when something it
+holds must reach a device before power is cut. That is `fs-wfs` today.
+
+**The sequence is bounded and best-effort.** Each participant has a deadline
+(`WASMOS_PM_SHUTDOWN_DEADLINE_MS`); one that does not answer is passed over and
+the machine still halts. This is safe because of the flag it exists to set: an
+unflushed WFS volume mounts read-only on the next boot rather than serving
+inconsistent metadata, so a missed shutdown costs writability, never integrity.
+Best-effort shutdown is possible *because* crash safety does not depend on it.
+
+**The halting process does not drive the sequence.** The replies arrive on the
+PM's own endpoint and only its dispatch loop drains them, so the sequence is a
+state machine stepped once per dispatch (`process_manager_shutdown.c`); blocking
+inside a step would deadlock against the reply it blocks for. The host call arms
+the request and yields until the PM powers the machine off, giving up and
+powering it off itself if the sequence stops making progress -- halt always
+halts.
+
+Per-participant obligations:
+
+| participant | on `SHUTDOWN_REQ` |
+|---|---|
+| `fs-wfs` | write the superblock with `state = WFS_STATE_CLEAN` and the free counters reconciled against the bitmaps |
+| `fs-fat` | flush any dirty sector and the FSInfo free count -- not declared yet, tracked in `docs/TASKS.md` |
+| everything else | does not declare the flag, and is not notified |
+
+The block drivers beneath `fs-wfs` need no obligation: reverse spawn order brings
+the filesystem down first, and its last write has completed before it answers, so
+there is nothing in flight by the time the drivers would be asked.
+
+The WFS obligation subsumes what was a separate gap: the superblock's
+`free_blocks` trailed the bitmaps because no path wrote it back. `wfs_sync_task`
+is that path, and the clean unmount is its caller.

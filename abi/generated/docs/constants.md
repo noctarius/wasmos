@@ -110,6 +110,7 @@ an unrecognized format reads exactly like an empty one from here.
 | --- | --- | --- |
 | `FS_TYPE_UNKNOWN` | 0 | No superblock probe matched. |
 | `FS_TYPE_FAT` | 1 | FAT12/16/32; BPB with a 0x55AA boot signature. |
+| `FS_TYPE_WFS` | 2 | WFS; superblock magic 'WFS1' at byte 1024 of the volume (docs/WFS_WASMOS_FILE_SYSTEM.md section 4). |
 
 ## block_descriptor_flags
 

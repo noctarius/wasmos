@@ -392,6 +392,10 @@ fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, devmg
         .mbr => @intCast(abi.PARTITION_SCHEME_MBR),
         .gpt => @intCast(abi.PARTITION_SCHEME_GPT),
     };
+    // Always UNKNOWN here. Recognising a filesystem is the volume manager's
+    // job, not the partition table parser's -- see
+    // docs/architecture/37-volume-manager.md for why it does not belong in this
+    // component and cannot live in the filesystem drivers either.
     desc.fs_type = @intCast(abi.FS_TYPE_UNKNOWN);
     desc.sector_bytes = SECTOR_BYTES;
     desc.flags = @intCast(abi.BLOCK_DESCRIPTOR_FLAG_PRESENT);

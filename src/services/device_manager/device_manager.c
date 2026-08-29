@@ -2257,6 +2257,17 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
             if (target == HW_SPAWN_RULE_PATH) {
                 int rc;
+                /* An armed rule spawn always carries the kind that armed it.
+                 * Kind NONE means something cleared active_rule_spawn_* while
+                 * rule_spawn_pending stayed set; the spawn below then degrades
+                 * to the no-capability, no-args opcode and the driver comes up
+                 * unable to tell which device it is for, with nothing in the log
+                 * naming the cause. */
+                if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_NONE) {
+                    console_write("[device-manager] rule spawn armed without a kind: ");
+                    console_write(g_dm.rule_spawn_path);
+                    console_write("\n");
+                }
                 /* Rule-based driver launches use path+caps spawn when they need
                  * inventory-derived grants or startup args to target a device. */
                 if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS ||
@@ -2271,8 +2282,16 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                      * FAT volume the storage driver itself brings up, so
                      * spawning that driver from /boot cannot work. For a PCI
                      * rule, meta_valid already records that its target resolved
-                     * to a boot module. */
-                    int from_initfs = (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS);
+                     * to a boot module.
+                     *
+                     * For a BLOCK_FS rule the question is whether /boot EXISTS
+                     * yet. Before it does the initfs is the only source, which is
+                     * the driver that brings /boot up. After it does, a later
+                     * filesystem driver reads from /boot and need not be
+                     * duplicated into the initfs. Testing the rule KIND instead
+                     * forced /init/ onto drivers that are not there at all. */
+                    int from_initfs = (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS &&
+                                       !g_dm.boot_mount_ready);
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
                         g_dm.active_rule_spawn_index >= 0 &&
                         g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_match_rule_count &&
@@ -2371,6 +2390,22 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                             }
                         }
                     }
+                    /* Clear the completed spawn's tracking BEFORE re-driving the
+                     * queue. queue_block_fs_rule_spawns() arms the next rule by
+                     * writing active_rule_spawn_kind/_index, so re-driving first
+                     * and clearing afterwards downgrades that freshly armed
+                     * spawn to kind NONE while leaving rule_spawn_pending set --
+                     * and a kind-NONE rule spawn takes the no-capability,
+                     * no-args PROC_IPC_SPAWN_PATH_SYNC path, so the driver
+                     * starts without the driver=/unit= startup args that tell it
+                     * which disk it was spawned for. Only the FIRST block_fs
+                     * rule of a rule set is armed from outside this block, which
+                     * is why a single-rule set never showed it.
+                     *
+                     * The call below is therefore both the reset point and the
+                     * re-drive: only one spawn is pending at a time, so without
+                     * it every block_fs rule after the first stays queued
+                     * forever. */
                     g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
                     g_dm.active_rule_spawn_index = -1;
                     g_dm.active_rule_spawn_device_index = -1;

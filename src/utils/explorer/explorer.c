@@ -221,8 +221,42 @@ static int explorer_path_is_prefix(const char* prefix, const char* path) {
     return path[prefix_len] == '\0' || path[prefix_len] == '/';
 }
 
+/* CHDIR carries its target as a path in a transfer buffer (arg0 = length,
+ * arg2 = buffer id, arg3 = the grant), so a name past 15 bytes and a whole path
+ * both arrive intact. An empty path names the VFS root. */
+static int explorer_fs_chdir_path(const char* path) {
+    const int32_t fs_endpoint = wasmos_fs_endpoint();
+    size_t len = path ? strlen(path) : 0u;
+    int32_t bid;
+    int32_t b1;
+    int rc;
+
+    if (len == 0u) {
+        return explorer_fs_request(FS_IPC_CHDIR_REQ, 0, 0, 0, 0, NULL);
+    }
+    if (fs_endpoint < 0 || (int32_t)len >= wasmos_xfer_buffer_size()) {
+        return -1;
+    }
+    bid = wasmos_xfer_buffer_acquire((int32_t)len + 1);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, path, (int32_t)len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    b1 = wasmos_xfer_buffer_borrow(fs_endpoint, bid, WASMOS_BUFFER_GRANT_READ);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    rc = explorer_fs_request(FS_IPC_CHDIR_REQ, (int32_t)len, 0, bid, b1, NULL);
+    (void)wasmos_xfer_buffer_release(bid);
+    return rc;
+}
+
 static int explorer_fs_chdir_root(void) {
-    return explorer_fs_request(FS_IPC_CHDIR_REQ, 0, 0, 0, 0, NULL);
+    return explorer_fs_chdir_path(NULL);
 }
 
 static int explorer_fs_chdir_abs(const char* path) {
@@ -451,13 +485,10 @@ static int explorer_chdir_root(void) {
 }
 
 static int explorer_chdir_name(const char* name) {
-    int32_t packed[4];
-
     if (!name || !name[0]) {
         return -1;
     }
-    wasmos_ipc_pack_name16(name, packed);
-    return explorer_fs_request(FS_IPC_CHDIR_REQ, packed[0], packed[1], packed[2], packed[3], NULL);
+    return explorer_fs_chdir_path(name);
 }
 
 static void explorer_path_push(const char* name) {

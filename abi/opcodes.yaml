@@ -260,6 +260,21 @@ subsystems:
       # wasmos_block_request_t. The value stays reserved rather than reused: a
       # stale client sending it should fail as unsupported, not be misread as
       # some later opcode.
+      - symbol: BLOCK_IPC_FLUSH_REQ
+        value: 0x304
+        kind: req
+        doc: |
+          Commit everything already written to durable media, so a caller that
+          orders its writes can rely on that order surviving power loss.
+          arg0..arg3 reserved (must be zero).
+          Ordering a request after a reply only guarantees the DEVICE saw them in
+          that order; a volatile write cache may still lose the earlier ones. A
+          journal barrier (docs/WFS_WASMOS_FILE_SYSTEM.md section 14, steps 2, 4
+          and 6) is exactly that guarantee and needs this.
+          A device with no volatile write cache answers success without doing
+          anything, because for it the guarantee already holds.
+          On success: BLOCK_IPC_FLUSH_RESP. On failure: BLOCK_IPC_ERROR,
+          arg0 = reason.
       - { symbol: BLOCK_IPC_READ_RESP, value: 0x380, kind: resp }
       - { symbol: BLOCK_IPC_WRITE_RESP, value: 0x381, kind: resp }
       - symbol: BLOCK_IPC_IDENTIFY_RESP
@@ -279,6 +294,7 @@ subsystems:
           is in the descriptor, together with everything a caller now matches on:
           canonical_id, scheme, fs_type, the GPT identity fields, and the LBA
           window. Callers read fields; they do not decode packed words.
+      - { symbol: BLOCK_IPC_FLUSH_RESP, value: 0x383, kind: resp }
       - { symbol: BLOCK_IPC_ERROR, value: 0x3ff, kind: error }
 
   - name: fs
@@ -738,6 +754,38 @@ subsystems:
       - { symbol: GFX_IPC_GET_WINDOW_TITLE, value: 0x20F, kind: req }
       - { symbol: GFX_IPC_RESP, value: 0x280, kind: resp }
       - { symbol: GFX_IPC_ERROR, value: 0x2FF, kind: error }
+
+  - name: system
+    id: 22
+    range: [0xff00, 0xffff]
+    opcodes:
+      - symbol: WASMOS_IPC_SHUTDOWN_REQ
+        value: 0xff02
+        kind: req
+        doc: |
+          The system is going down; quiesce and answer WASMOS_IPC_SHUTDOWN_DONE.
+          arg0 = reason (0 = halt, 1 = reboot), arg1..arg3 reserved (0).
+          Sent by the process manager to every registered driver and service in
+          REVERSE spawn order, so a participant still has the services beneath it
+          while it quiesces (docs/architecture/15-drivers-and-services.md,
+          "Orderly Shutdown Design Direction").
+          A participant that does not answer within the deadline is passed over
+          and the machine still goes down, which is safe because of what the
+          notification exists to do: a filesystem that misses it mounts read-only
+          next boot rather than serving inconsistent metadata.
+          This subsystem's range is above every other subsystem's because the
+          message arrives on the PARTICIPANT's own endpoint, where a
+          subsystem-scoped value would collide -- gfx and proc_manager both own
+          0x200. It is the band the kernel's IRQ (0xff00) and MSI (0xff01) events
+          already use for the same reason; those two stay hand-written in
+          src/drivers/include/wasmos_driver_abi.h and src/kernel/include/irq.h.
+      - symbol: WASMOS_IPC_SHUTDOWN_DONE
+        value: 0xff82
+        kind: resp
+        doc: |
+          Sent back to the process manager when a participant has quiesced.
+          arg0..arg3 reserved (0). Answering does not mean the participant stops
+          running; it means nothing it holds still needs to reach a device.
 
   - name: pci
     id: 21

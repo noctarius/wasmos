@@ -23,6 +23,16 @@ class QemuConfig:
     ovmf_vars: str
     esp_dir: str
     userfs_image: str = ""
+    # A raw WFS volume, attached as a third disk (block unit 2). Unlike the two
+    # FAT disks this cannot be a synthetic FAT directory, so it is an image
+    # mkfs_wfs built; absent, the guest simply has no WFS unit to mount.
+    wfs_image: str = ""
+    # Whether the WFS drive gets a throwaway copy-on-write overlay. True keeps
+    # the suite repeatable; a test that has to prove a write REACHED the media --
+    # the clean-unmount flag surviving a halt, say -- sets it False and must then
+    # supply its own scratch copy of the image, because writes land in the file
+    # named by wfs_image and stay there.
+    wfs_snapshot: bool = True
     nographic: bool = True
     display: str = ""
     isolate_esp: bool = False
@@ -48,6 +58,13 @@ class QemuConfig:
     extra_args: tuple = ()
 
     def __post_init__(self) -> None:
+        # Fill the optional disks in from the environment when a caller built the
+        # config positionally: a field a caller did not name would otherwise keep
+        # its dataclass default, which for a disk means the guest never sees it.
+        if not self.wfs_image:
+            self.wfs_image = os.environ.get(
+                "WASMOS_WFS_IMAGE", os.path.join("build", "wfs.img")
+            )
         if self.userfs_image:
             return
         env_userfs = os.environ.get("WASMOS_USERFS_IMAGE", "")
@@ -225,6 +242,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     ovmf_vars = os.environ.get("WASMOS_OVMF_VARS", cache.get("OVMF_VARS", ""))
     esp_dir = os.environ.get("WASMOS_ESP", os.path.join(build_dir, "esp"))
     userfs_image = default_userfs_image(esp_dir)
+    wfs_image = os.environ.get("WASMOS_WFS_IMAGE", os.path.join(build_dir, "wfs.img"))
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
     # On by default: the monitor is what makes dump_stall_state possible, and a
     # stall that produces no diagnosis is the failure mode this is here to end.
@@ -244,6 +262,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         ovmf_vars=ovmf_vars,
         esp_dir=esp_dir,
         userfs_image=userfs_image,
+        wfs_image=wfs_image,
         isolate_esp=isolate_esp,
         enable_monitor=enable_monitor,
         monitor_socket=monitor_socket,
@@ -289,6 +308,32 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         # A raw GPT image, not a `fat:rw:` directory: the /user volume is a real
         # partition with a label, which is what its mount rule matches on.
         cmd += ["-drive", f"format=raw,file={cfg.userfs_image}"]
+    if cfg.wfs_image and os.path.exists(cfg.wfs_image):
+        # if=ide,index=2 explicitly: index 2 is the secondary channel's master,
+        # which is the unit the device-manager rule for WFS matches. Relying on
+        # the implicit assignment leaves which channel it lands on up to QEMU.
+        #
+        # media=disk is load-bearing. Left out, QEMU makes the secondary master a
+        # CD-ROM, and the guest's IDENTIFY aborts with the ATAPI signature
+        # (status DRDY|ERR, error ABRT, LBA1/2 = 0x14/0xEB) — which reads exactly
+        # like an absent drive unless you look at the signature.
+        #
+        # snapshot=on is equally load-bearing now that the guest WRITES to this
+        # volume: without it a run's writes land in the image file and stay
+        # there, so the read fixtures stop holding the bytes they assert and the
+        # suite passes once and fails afterwards. Each boot therefore gets a
+        # throwaway overlay and starts from the pristine mkfs image.
+        #
+        # cfg.wfs_snapshot turns it off for the one kind of test that cannot use
+        # an overlay, because what it asserts is that a write reached the media.
+        # Such a test owns a scratch copy of the image; it must never point
+        # wfs_image at the shared build/wfs.img, which nothing regenerates once
+        # a guest has made it newer than its inputs.
+        snapshot = "snapshot=on," if cfg.wfs_snapshot else ""
+        cmd += [
+            "-drive",
+            f"if=ide,index=2,media=disk,format=raw,{snapshot}file={cfg.wfs_image}",
+        ]
     if cfg.nic_model and cfg.nic_model != "none":
         # Give the NIC a stable device id so the monitor can target it with
         # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.

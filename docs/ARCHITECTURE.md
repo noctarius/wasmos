@@ -77,7 +77,7 @@ in-kernel scheduler rather than an optional mode.
 - [Partition Manager and Block Device Identity](architecture/36-partition-manager-and-block-identity.md) - proposed descriptor-based block identity replacing the packed class instance and publish arguments; a partition manager service that parses GPT and MBR tables and publishes each partition as a block device, proxying I/O with an LBA offset and a bounds clamp; mount policy read from the partition rather than from a rule naming a disk
 - [Console I/O and Character Device](architecture/17-console-io-and-character-device.md)
 - [Filesystem Stack](architecture/18-filesystem-stack.md)
-- [WFS Filesystem Format](WFS_WASMOS_FILE_SYSTEM.md) - design proposal for a journaling, extent-based on-disk format: object records, extent trees, seeded metadata checksums, and the 32-bit host-call/IPC boundaries a 64-bit format meets in a wasm driver
+- [WFS Filesystem Format](WFS_WASMOS_FILE_SYSTEM.md) - the specification of the repository's own journaling, extent-based on-disk format: object records, extent trees, seeded metadata checksums, the write-ahead metadata journal and its replay, and the 32-bit host-call/IPC boundaries a 64-bit format meets in a wasm driver. What the driver implements today is in [Current Status](STATUS.md)
 - [Virtual Terminal — I/O Multiplexer](architecture/19-virtual-terminal.md) - keyboard/serial input routing, slot mux, klog-to-vt-1 (redesign in phases)
 - [Graphics, Framebuffer, and Compositor](architecture/20-graphics-framebuffer-and-compositor.md)
 - [Virtual Input Testing via Virtio-Serial](architecture/21-virtual-input-testing-via-virtio-serial.md)

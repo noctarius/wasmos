@@ -738,13 +738,38 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             op->arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
             op->source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
             if (op->op == FAT_OP_CHDIR) {
-                /* CHDIR carries the target name packed in arg0..arg3. */
-                fat_unpack_name((uint32_t)op->arg0,
-                                (uint32_t)op->arg1,
-                                (uint32_t)op->arg2,
-                                (uint32_t)op->arg3,
-                                op->dir_name,
-                                sizeof(op->dir_name));
+                /* CHDIR carries its target as a path in the client's transfer
+                 * buffer (arg0 = length, arg2 = buffer id), the same transport
+                 * OPEN uses. Reading it here, before the op is queued, keeps the
+                 * op steps free of buffer handling. A path that does not fit is
+                 * left empty, which fat_op_chdir reads as the mount root and
+                 * would silently move the client -- so it is failed instead by
+                 * clearing the op type. */
+                uint32_t chdir_len = (uint32_t)op->arg0;
+                wasmos_error_code_t chdir_rc = WASMOS_ERR_NONE;
+
+                /* Three different failures, three codes. Collapsing them into
+                 * PATH_TOO_LONG told a caller its name was too long when the
+                 * borrow was missing, which is the ambiguity the packed codes
+                 * exist to remove -- and the two are fixed by opposite actions. */
+                if (chdir_len == 0u) {
+                    chdir_rc = WASMOS_ERR_FS_BAD_ARGS;
+                } else if (chdir_len >= sizeof(op->dir_name) ||
+                           chdir_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
+                    chdir_rc = WASMOS_ERR_FS_PATH_TOO_LONG;
+                } else if (wasmos_sys_buffer_read(op->arg2, op->dir_name, (int32_t)chdir_len, 0) !=
+                           0) {
+                    chdir_rc = WASMOS_ERR_FS_BUFFER;
+                }
+                if (chdir_rc != WASMOS_ERR_NONE) {
+                    /* Answered here rather than queued: an empty dir_name reads
+                     * as the mount root further down, which would move the
+                     * client somewhere it did not ask for. */
+                    (void)fat_send_reply(
+                        op->source, FS_IPC_ERROR, op->request_id, chdir_rc, 0, 0, 0);
+                    continue;
+                }
+                op->dir_name[chdir_len] = '\0';
             }
             fat_fifo_push(op);
         }

@@ -343,6 +343,11 @@ class ProcessManager {
         pm_reap_apps(process);
         pm_services_class_reap(process->context_id);
         pm_poll_spawn(process->context_id);
+        /* Stepped here, before the receive, so a shutdown makes progress on the
+         * idle path too: with no request queued the receive below parks on the
+         * select set for the poll interval, which bounds how long a participant
+         * waits to be notified. Does not return once the last one has answered. */
+        pm_shutdown_step(process->context_id);
         uint32_t fs_ctrl_endpoint = pm_atomic_load_u32(&g_pm.fs_ctrl_endpoint);
         if (fs_ctrl_endpoint != IPC_ENDPOINT_NONE) {
             ipc_message_t ignored;
@@ -370,6 +375,12 @@ class ProcessManager {
 
         int rc = -1;
         switch (msg.type) {
+        case WASMOS_IPC_SHUTDOWN_DONE:
+            /* Not a request: nothing is replied to it, and it carries no status
+             * a failure reply would mean anything for. */
+            pm_shutdown_note_done(&msg);
+            rc = 0;
+            break;
         case PROC_IPC_SPAWN:
             rc = pm_handle_spawn(process->context_id, &msg);
             break;
@@ -587,7 +598,7 @@ uint32_t process_manager_framebuffer_endpoint(void) {
  * which does not allow an owner change. */
 void process_manager_set_framebuffer_endpoint(uint32_t endpoint) {
     pm_atomic_store_u32(&g_pm.fb_endpoint, endpoint);
-    (void)pm_service_set("fb", endpoint, IPC_CONTEXT_KERNEL);
+    (void)pm_service_set("fb", endpoint, IPC_CONTEXT_KERNEL, 0u);
 }
 
 /* PM's process entry point: one dispatch does the periodic sweeps (wait replies,

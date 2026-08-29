@@ -117,6 +117,17 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_FS_BACKEND_IPC` | -0x0004001B | request could not be delivered to the backend, or no reply arrived |
 | `WASMOS_ERR_FS_BAD_FD` | -0x0004001C | fd is not present in this client's fd table |
 | `WASMOS_ERR_FS_REPLY_SEND` | -0x0004001D | the reply could not be delivered to the client |
+| `WASMOS_ERR_FS_BAD_MAGIC` | -0x0004001E | on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent |
+| `WASMOS_ERR_FS_CHECKSUM` | -0x0004001F | metadata checksum mismatch: the structure did not verify against the checksum it carries |
+| `WASMOS_ERR_FS_FEATURE_INCOMPAT` | -0x00040020 | volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures |
+| `WASMOS_ERR_FS_GEOMETRY` | -0x00040021 | on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it) |
+| `WASMOS_ERR_FS_VOLUME_TOO_LARGE` | -0x00040022 | volume exceeds the address range the driver carries (e.g. a 64-bit on-disk block count above the driver's 32-bit block number) |
+| `WASMOS_ERR_FS_VERSION` | -0x00040023 | on-disk format version is not one this driver implements; distinct from an unknown feature flag, which names a capability rather than a structure generation |
+| `WASMOS_ERR_FS_READ_ONLY` | -0x00040024 | the volume is mounted read-only, so the write cannot be attempted at all; distinct from ACCESS, which is an fd-mode violation, and from NO_SPACE, which is a writable volume with nothing free. A volume is read-only when a feature flag demands it, when a journal replay is owed, or when its primary superblock was recovered from a backup |
+| `WASMOS_ERR_FS_JOURNAL` | -0x00040025 | the metadata journal is unusable: its superblock does not identify a log, does not verify, or names a geometry too small for one transaction. Distinct from CORRUPT, which names a filesystem structure, because a damaged log costs writability rather than readability |
+| `WASMOS_ERR_FS_TXN_FULL` | -0x00040026 | a metadata transaction names more blocks than one journal descriptor carries, or more revokes than one revoke record does; the operation is refused whole rather than split across two transactions that a crash could separate |
+| `WASMOS_ERR_FS_REPLAY` | -0x00040027 | journal replay stopped: a committed block image did not match the checksum its descriptor recorded, so applying the transaction would write a partial one. The volume mounts read-only for fsck |
+| `WASMOS_ERR_FS_NEED_BLOCK` | -0x00040028 | the operation needs a free block the caller did not supply, and nothing has been modified: an extent-tree insert that must SPLIT a full leaf needs a block for the new leaf, and the first such split needs one more for the interior root above it. The caller allocates and retries rather than the operation nesting an allocator inside itself |
 
 ### `net` (domain 5) — networking stack / socket failures (was NET_STATUS_*)
 

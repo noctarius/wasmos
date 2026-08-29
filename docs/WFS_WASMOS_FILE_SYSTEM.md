@@ -1,10 +1,12 @@
 # WASMOS Filesystem (WFS) — Feature Design Document
 
-> **Documentation status: Design proposal.** Nothing described here is
-> implemented. The filesystem stack in the source tree today is the
-> `fs_manager` router over the `fs_fat` and `fs_init` backends
-> ([Filesystem Stack](architecture/18-filesystem-stack.md)); WFS would be a
-> third backend beside them.
+> **Documentation status: format specification.** This document defines the
+> on-disk format and the procedures over it. It is not an implementation
+> snapshot: what the driver in `src/drivers/fs_wfs` implements today, and which
+> of the phases in [§23](#23-minimal-implementation-order) are complete, is
+> recorded in [Current Status](STATUS.md). WFS is a third backend beside
+> `fs_fat` and `fs_init` under the `fs_manager` router
+> ([Filesystem Stack](architecture/18-filesystem-stack.md)).
 
 # 1. Design Goals
 
@@ -482,6 +484,24 @@ Records are sorted by `logical_block` and cover disjoint ranges. Lookup
 descends from the root, at each interior node taking the last index whose
 `logical_block` does not exceed the target, until `depth` reaches 0.
 
+`extent_tree_block` selects which map an object has, and the two are exclusive:
+
+| `extent_tree_block` | The map is | `extent_count` |
+|---|---|---|
+| 0 | the first `extent_count` inline extents | at most 6 |
+| non-zero | the tree | total extents across its leaves |
+
+When a tree exists the inline array is **zero**. Two sources of truth for one
+logical range is a corruption nothing could detect: a reader would take whichever
+it consulted first and two readers could disagree about where a block lives.
+
+A logical block covered by no extent is a **hole**, and reads as zeroes. A hole
+is not an error: a file written sparsely has ranges no extent maps.
+
+`depth` is bounded. An interior node's children are one level shallower, so a
+descent that does not strictly decrease `depth` is a cycle, and a tree deeper
+than `WFS_EXTENT_MAX_DEPTH` cannot be reached by any legal write.
+
 `capacity` follows from the block size and is validated on read:
 
 | Block size | Leaf extents | Interior indices |
@@ -532,8 +552,32 @@ built at higher optimization levels than the driver.
 Bytes between the end of `name` and the end of the record are zero.
 
 No record straddles a block boundary. The last record in a block has its
-`record_length` extended to the end of the block, so a scan of a directory
-block ends exactly at the block end.
+`record_length` extended to the start of the block's tail, so a scan of a
+directory block ends exactly where the tail begins.
+
+## The Tail
+
+The last 16 bytes of every directory block are a tail record carrying the
+block's checksum. A directory block holds entries, not one structure, so there
+is no other field the checksum §13 requires could live in.
+
+```c
+struct wfs_dir_tail {
+    uint64_t object_id;     /* 0 */
+    uint16_t record_length; /* 16 */
+    uint8_t name_length;    /* 0 */
+    uint8_t type;           /* WFS_DIR_TAIL_TYPE */
+    uint32_t checksum;
+};
+```
+
+The tail is laid out as a directory record whose `object_id` is 0, so a scan
+that knows nothing about it reads free space and skips it — the same rule that
+already governs a removed entry. `name_length` is 0 and the four bytes a name
+would occupy hold the checksum.
+
+The checksum covers the whole block with these four bytes zeroed, seeded with
+the block's own number (§13).
 
 A record with `object_id == 0` is free space: this is how an entry is removed
 without rewriting the block. A scan skips it and an insertion may claim it.
@@ -629,9 +673,22 @@ seed  = crc32c(seed, &location, 8)      /* little-endian uint64 */
 value = crc32c(seed, structure_image)
 ```
 
-`location` is the block number for a block-addressed structure and the
-`object_id` for an object record. The primary superblock uses 0; a backup uses
-its own block number.
+`location` is the identifier that addresses the structure:
+
+| Structure | `location` |
+|---|---|
+| Primary superblock | 0 |
+| Backup superblock | its own block number |
+| Group descriptor | its group index |
+| Object record | its `object_id` |
+| Directory block | its block number |
+| Extent tree node | its block number |
+| Journal block | its block number |
+
+A group descriptor and an object record are records inside a shared block, so
+neither has a block number of its own to be bound to; the index that addresses
+the record serves instead, and a descriptor or record moved to the wrong slot
+fails to verify.
 
 Seeding is what turns a checksum into a detector of misdirected and misplaced
 writes. Unseeded, a block written to the wrong address still validates
@@ -703,6 +760,17 @@ struct wfs_journal_header {
 };
 ```
 
+`checksum` covers the **whole block** with its own four bytes zeroed, seeded
+with the block's own number (§13). It is not a checksum of the header alone: a
+descriptor's targets and a revoke's block list follow the header and are the
+part recovery acts on, so a header-only checksum would leave them unprotected.
+A block laid out for one offset therefore fails to verify at another.
+
+The journal superblock is the exception. It is sealed over its 32-byte record
+alone, seeded with its own block number, because nothing else in that block is
+defined.
+
+
 Block types:
 
 ```
@@ -737,6 +805,17 @@ struct wfs_journal_descriptor {
 
 A transaction with more targets than one descriptor block holds continues with
 a further descriptor carrying the same `sequence`.
+
+`checksum` is a plain CRC32C of the image, **unseeded**. An image is not
+addressed by the block it is stored in — it is identified by the descriptor
+record that names both, and that record is sealed with the descriptor block.
+
+The target list ends at the record carrying `WFS_JOURNAL_TARGET_LAST`, or at a
+record whose `target_block` is 0. Block 0 holds the boot area and the primary
+superblock and is never allocated (§4), so no transaction can target it, and an
+all-zero record past the last one therefore terminates the list. That is what
+lets a transaction with **no** targets be represented: a revoke-only
+transaction has no record on which to set the flag.
 
 ---
 
@@ -1074,6 +1153,11 @@ correctly interpret.
 
 Phase 2 writes without a journal and is therefore not crash-safe. That is
 acceptable only as a development stage.
+
+Phase 3 is not complete until every writer runs inside a transaction. A journal
+that exists but that the metadata writers bypass changes nothing a crash can
+observe: replay finds an empty log, and the damage an interrupted write left is
+in the filesystem rather than the journal.
 
 ---
 

@@ -48,6 +48,21 @@ set(USERFS_DIR ${CMAKE_SOURCE_DIR}/userfs)
 # into the image's root at build time.
 set(USERFS_IMAGE ${BUILD_DIR}/user.img)
 
+# A WFS volume for the guest to mount. Unlike the two FAT disks it cannot be a
+# QEMU synthetic FAT directory, so it is a raw image mkfs_wfs builds from
+# scripts/wfs. --uuid is pinned so the image is byte-identical between builds and
+# a change to it shows up as a diff rather than as noise.
+set(WFS_IMAGE ${BUILD_DIR}/wfs.img)
+# A second WFS volume, served over virtio-blk so the interactive targets mount one
+# filesystem over two different transports at once. It is a SEPARATE image rather
+# than the same file attached twice: both mounts are writable there, and two
+# writers on one backing file corrupt it. mkfs_wfs gives it its own UUID, which
+# seeds every checksum on the volume.
+set(WFS_VIRTIO_IMAGE ${BUILD_DIR}/wfs_virtio.img)
+set(WFS_CONTENT_DIR ${CMAKE_SOURCE_DIR}/scripts/wfs)
+set(WFS_IMAGE_UUID 5746532d-7465-4573-742d-766f6c756d65)
+set(WFS_VIRTIO_IMAGE_UUID 5746532d-7669-7274-696f-2d766f6c3031)
+
 set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
 set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
 set(WASM_CHARDEV_SERVER_APP ${BUILD_DIR}/chardev_server.wap)
@@ -67,6 +82,9 @@ set(WASM_FS_OPEN_SMOKE_APP ${BUILD_DIR}/fs_open_smoke.wap)
 set(WASM_FS_WRITE_SMOKE_SRC ${EXAMPLES_C_DIR}/fs_write_smoke/fs_write_smoke.c)
 set(WASM_FS_WRITE_SMOKE_WASM ${BUILD_DIR}/fs_write_smoke.wasm)
 set(WASM_FS_WRITE_SMOKE_APP ${BUILD_DIR}/fs_write_smoke.wap)
+set(WASM_WFS_WRITE_SMOKE_SRC ${EXAMPLES_C_DIR}/wfs_write_smoke/wfs_write_smoke.c)
+set(WASM_WFS_WRITE_SMOKE_WASM ${BUILD_DIR}/wfs_write_smoke.wasm)
+set(WASM_WFS_WRITE_SMOKE_APP ${BUILD_DIR}/wfs_write_smoke.wap)
 set(WASM_NATIVE_CALL_MIN_SRC ${EXAMPLES_C_DIR}/native_call_min/native_call_min.c)
 set(WASM_NATIVE_CALL_MIN_WASM ${BUILD_DIR}/native_call_min.wasm)
 set(WASM_NATIVE_CALL_MIN_APP ${BUILD_DIR}/native_call_min.wap)
@@ -125,6 +143,36 @@ set(WASM_FAT_DRIVER_SRC
   ${DRIVER_WASM_DIR}/fs_fat/fat_file.c)
 set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
 set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wap)
+# Grouped by layer, matching the file map in fs_wfs.c. The format layer touches
+# no device and runs no task, which is what lets its host suites link two files
+# instead of fifteen; keep it that way.
+set(WASM_WFS_DRIVER_SRC
+  ${DRIVER_WASM_DIR}/fs_wfs/fs_wfs.c
+  # format: pure, on-disk structures and the arithmetic over them
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_dirent.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_fd.c
+  # plumbing: the device and the runtime
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+  # operations: tasks on the coroutine runtime
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_write.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_truncate.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_namespace.c)
+set(WASM_WFS_DRIVER_WASM ${BUILD_DIR}/fs_wfs.wasm)
+set(WASM_WFS_APP ${BUILD_DIR}/fs_wfs.wap)
 set(WASM_INITFS_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_init/fs_init.c)
 set(WASM_INITFS_DRIVER_WASM ${BUILD_DIR}/fs_init.wasm)
 set(WASM_INITFS_APP ${BUILD_DIR}/fs_init.wap)
@@ -243,6 +291,10 @@ set(WASM_IP_APP ${BUILD_DIR}/ip.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
+set(WASM_FSCK_WFS_SRC ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/fsck_wfs.c)
+set(WASM_FSCK_WFS_CORE ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/wfs_fsck.c)
+set(WASM_FSCK_WFS_WASM ${BUILD_DIR}/fsck_wfs.wasm)
+set(WASM_FSCK_WFS_APP ${BUILD_DIR}/fsck_wfs.wap)
 set(WASM_BLKINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/blkinfo/blkinfo.c)
 set(WASM_BLKINFO_WASM ${BUILD_DIR}/blkinfo.wasm)
 set(WASM_BLKINFO_APP ${BUILD_DIR}/blkinfo.wap)
@@ -487,6 +539,16 @@ include(CMakeParseArguments)
 # module and one link line rather than two to keep in step.
 set(WASMOS_LIBC_C_SOURCES)
 
+# The staged sysroot carries a COPY of every generated ABI header:
+# cmake/wasmos_sdk_stage.cmake globs abi/generated/c/*.h and rewrites the
+# repo-relative includes into the sysroot layout. A dependency on the originals
+# is what makes regenerating an IDL invalidate that copy; without it a wasm
+# module compiles against the previous ABI, and the failure surfaces as an
+# undeclared constant at a call site the IDL already defines. CONFIGURE_DEPENDS
+# so a newly generated header joins the list without a manual reconfigure.
+file(GLOB WASMOS_ABI_GENERATED_C_HEADERS CONFIGURE_DEPENDS
+  ${CMAKE_SOURCE_DIR}/abi/generated/c/*.h)
+
 set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBC_DIR}/include/ctype.h
   ${LIBC_DIR}/include/stdio.h
@@ -517,6 +579,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_scroll_view.h
   ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_menu_bar.h
   ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_menu_item.h
+  ${WASMOS_ABI_GENERATED_C_HEADERS}
 )
 
 # wasmos_manifest_link_value(<out_var> <manifest> <key> <default>)
@@ -585,8 +648,17 @@ function(wasmos_add_wasm_c_app_target target_name)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
   # EXPORT, STARTUP_SHIM and NO_BUILTIN are still parsed so that passing one is a
   # loud error rather than a silent no-op; see the checks below.
-  set(multiValueArgs SOURCES)
+  # INCLUDES: extra -I directories for a module whose sources reach headers
+  # outside its own directory and outside the sysroot. The alternative is a
+  # relative include path, which is the thing the SDK has to rewrite out of
+  # wasmos/api.h (see cmake/wasmos_sdk_stage.cmake) and not worth repeating.
+  set(multiValueArgs SOURCES INCLUDES)
   cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  set(_wasmos_includes)
+  foreach(_dir ${WASMOS_APP_INCLUDES})
+    list(APPEND _wasmos_includes -I${_dir})
+  endforeach()
 
   set(_wasmos_sources ${WASMOS_APP_SOURCES})
   if (NOT _wasmos_sources AND WASMOS_APP_SOURCE)
@@ -674,6 +746,7 @@ function(wasmos_add_wasm_c_app_target target_name)
             --wasmos-manifest=${WASMOS_APP_MANIFEST}
             ${_wasmos_driver_flags}
             ${WASMOS_TRACE_DEFINE}
+            ${_wasmos_includes}
             ${_wasmos_libc_sources}
             ${_wasmos_sources}
             -o ${WASMOS_APP_OUTPUT_WASM}
@@ -699,9 +772,14 @@ function(wasmos_add_wasm_c_app_target target_name)
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASMOS_APP_OUTPUT_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ${target_name})
 
+  # The same INCLUDES the build command got. clang-tidy reads its compile line
+  # from this target, not from the custom command above, so an include dir added
+  # only there makes the module build and fail to LINT -- the header it reaches
+  # is simply not found.
   wasmos_add_ide_c_target(${target_name}_ide
     SOURCES ${_wasmos_sources}
     INCLUDES ${CMAKE_SOURCE_DIR}/src/libui/include ${LIBC_DIR}/include ${LIBSYS_WASM_DIR}/include ${DRIVER_WASM_DIR}/include
+             ${WASMOS_APP_INCLUDES}
   )
 endfunction()
 
@@ -1112,6 +1190,24 @@ endif ()
 add_executable(make_wasmos_app ${CMAKE_SOURCE_DIR}/scripts/make_wasmos_app.c)
 target_compile_options(make_wasmos_app PRIVATE -O2)
 set_target_properties(make_wasmos_app PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${BUILD_DIR}
+)
+
+# mkfs_wfs: the reference writer for the WFS format. Host-native, and built from
+# the SAME sources the wasm driver reads through (wfs_format.h, wfs_crc32c.c,
+# wfs_super.c) — a formatter with a private copy of the layout would agree with
+# the driver only by review.
+add_executable(mkfs_wfs
+  ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/main.c
+  ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+  ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c)
+target_include_directories(mkfs_wfs PRIVATE
+  ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+  ${DRIVER_WASM_DIR}/fs_wfs
+  ${CMAKE_SOURCE_DIR}/abi/generated/c)
+target_compile_options(mkfs_wfs PRIVATE -O2 -Wall -Wextra -Werror)
+set_target_properties(mkfs_wfs PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${BUILD_DIR}
 )
 
@@ -1633,6 +1729,8 @@ if (TARGET host_util)
   set(HOST_UTIL_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
+    # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap
   )
 endif ()
 if (TARGET curl_util)
@@ -1651,6 +1749,9 @@ set(INIT_SMOKE_COPY_CMD
 )
 set(FS_OPEN_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_OPEN_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_open_smoke.wap
+)
+set(WFS_WRITE_SMOKE_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_WFS_WRITE_SMOKE_APP} ${BUILD_DIR}/esp/apps/wfs_write_smoke.wap
 )
 set(FS_WRITE_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_WRITE_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_write_smoke.wap
@@ -1788,6 +1889,30 @@ if (ZIG_AVAILABLE)
   )
 endif ()
 
+# Rebuilt whenever the content or the formatter changes: the guest mounts this
+# image, so a stale one is a test passing against last build's filesystem.
+file(GLOB_RECURSE WFS_CONTENT_FILES CONFIGURE_DEPENDS "${WFS_CONTENT_DIR}/*")
+add_custom_command(
+  OUTPUT ${WFS_IMAGE}
+  COMMAND ${BUILD_DIR}/mkfs_wfs --quiet
+          --uuid 5746532d74654573742d766f6c756d65
+          --populate ${WFS_CONTENT_DIR}
+          ${WFS_IMAGE} 16M
+  DEPENDS mkfs_wfs ${WFS_CONTENT_FILES}
+  COMMENT "Building the WFS test volume with mkfs_wfs"
+  VERBATIM)
+add_custom_target(wfs_image DEPENDS ${WFS_IMAGE})
+add_custom_command(
+  OUTPUT ${WFS_VIRTIO_IMAGE}
+  COMMAND ${BUILD_DIR}/mkfs_wfs --quiet
+          --uuid 5746532d76697274696f2d766f6c3031
+          --populate ${WFS_CONTENT_DIR}
+          ${WFS_VIRTIO_IMAGE} 16M
+  DEPENDS mkfs_wfs ${WFS_CONTENT_FILES}
+  COMMENT "Building the WFS volume served over virtio-blk with mkfs_wfs"
+  VERBATIM)
+add_custom_target(wfs_virtio_image DEPENDS ${WFS_VIRTIO_IMAGE})
+
 set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E make_directory ${USERFS_DIR}
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/make_gpt_image.py
@@ -1804,6 +1929,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_SERVER_APP} ${BUILD_DIR}/esp/system/drivers/chardev_server.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_WFS_APP} ${BUILD_DIR}/esp/system/drivers/fs_wfs.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
@@ -1831,6 +1957,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${INIT_SMOKE_COPY_CMD}
   ${FS_OPEN_SMOKE_COPY_CMD}
   ${FS_WRITE_SMOKE_COPY_CMD}
+  ${WFS_WRITE_SMOKE_COPY_CMD}
   ${NATIVE_CALL_MIN_COPY_CMD}
   ${NATIVE_CALL_SMOKE_COPY_CMD}
   ${GFX_SMOKE_COPY_CMD}
@@ -1876,7 +2003,10 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
             -drive format=raw,file=${USERFS_IMAGE}
-    DEPENDS bootloader kernel
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
+            -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+            -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
     VERBATIM
@@ -1890,7 +2020,10 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
             -drive format=raw,file=${USERFS_IMAGE}
-    DEPENDS bootloader kernel
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
+            -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+            -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
     VERBATIM
@@ -1903,7 +2036,10 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
             -drive format=raw,file=${USERFS_IMAGE}
-    DEPENDS bootloader kernel
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
+            -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+            -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (with display)"
     VERBATIM
@@ -1916,7 +2052,7 @@ if (OVMF_VARS)
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
             --timeout ${WASMOS_QEMU_TEST_TIMEOUT}
-    DEPENDS bootloader kernel
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU halt test"
     VERBATIM
@@ -1933,7 +2069,7 @@ if (OVMF_VARS)
             --ovmf-vars ${OVMF_VARS}
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
-    DEPENDS bootloader kernel
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running SMP scheduler stress test"
     VERBATIM
@@ -1946,11 +2082,12 @@ if (OVMF_VARS)
             WASMOS_ESP=${BUILD_DIR}/esp
             WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
             WASMOS_USERFS_IMAGE=${USERFS_IMAGE}
+            WASMOS_WFS_IMAGE=${WFS_IMAGE}
             WASMOS_QEMU_ISOLATE_ESP=1
             WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
             PYTHONDONTWRITEBYTECODE=1
             ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
-    DEPENDS bootloader kernel
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU CLI integration tests"
     VERBATIM
@@ -1963,7 +2100,7 @@ if (OVMF_VARS)
             ${QEMU_UI_OVMF_VARS_ARG}
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
-    DEPENDS bootloader kernel
+    DEPENDS bootloader kernel wfs_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU UI test"
     VERBATIM
@@ -1977,7 +2114,10 @@ else ()
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=${USERFS_IMAGE}
-      DEPENDS bootloader kernel
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
+              -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+              -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
+      DEPENDS bootloader kernel wfs_image wfs_virtio_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU"
       VERBATIM
@@ -1990,7 +2130,10 @@ else ()
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=${USERFS_IMAGE}
-      DEPENDS bootloader kernel
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
+              -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+              -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
+      DEPENDS bootloader kernel wfs_image wfs_virtio_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
       VERBATIM
@@ -2002,7 +2145,10 @@ else ()
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=${USERFS_IMAGE}
-      DEPENDS bootloader kernel
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
+              -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+              -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
+      DEPENDS bootloader kernel wfs_image wfs_virtio_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (with display)"
       VERBATIM
@@ -2013,7 +2159,7 @@ else ()
               --ovmf-code ${OVMF_CODE}
               --esp ${BUILD_DIR}/esp
               --smp ${WASMOS_QEMU_SMP_COUNT}
-      DEPENDS bootloader kernel
+      DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU halt test"
       VERBATIM
@@ -2024,7 +2170,7 @@ else ()
               --ovmf-code ${OVMF_CODE}
               --esp ${BUILD_DIR}/esp
               --smp ${WASMOS_QEMU_SMP_COUNT}
-      DEPENDS bootloader kernel
+      DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running SMP scheduler stress test"
       VERBATIM
@@ -2036,11 +2182,13 @@ else ()
               WASMOS_ESP=${BUILD_DIR}/esp
             WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
               WASMOS_USERFS_IMAGE=${USERFS_IMAGE}
+              WASMOS_WFS_IMAGE=${WFS_IMAGE}
+            WASMOS_WFS_IMAGE=${WFS_IMAGE}
               WASMOS_QEMU_ISOLATE_ESP=1
               WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
               PYTHONDONTWRITEBYTECODE=1
               ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
-      DEPENDS bootloader kernel
+      DEPENDS bootloader kernel wfs_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU CLI integration tests"
       VERBATIM
@@ -2339,7 +2487,7 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${BUILD_DIR}/test_block_descriptor
   # The block-rule MATCHER, as opposed to the rule parser above. The suite
   # includes device_manager.c to reach its file statics, so:
-  #   --gc-sections drops the event-loop half of that translation unit, whose
+  #   the dead-strip flag drops the event-loop half of that translation unit, whose
   #     imports the block path never needs; stubs_device_manager_host.c supplies
   #     the handful that survive collection.
   #   -Wno-unused-function is required BY the include: statics reachable only
@@ -2349,7 +2497,17 @@ add_custom_target(run-kernel-unit-tests
           -Wno-unused-function -ffunction-sections -fdata-sections ${DEAD_STRIP_FLAG}
           -iquote ${SERVICES_DIR}/device_manager
           -iquote ${LIBSYS_WASM_DIR}/include
-          -iquote ${LIBC_DIR}/include
+          # Our libc headers go on -I rather than -iquote, for the reason the
+          # WFS suites below give: device_manager.c reaches
+          # src/libc/include/string.h through a quoted include, and with the
+          # host's <string.h> also in scope the SDK's strcpy fortification macro
+          # breaks our declaration. Taking our libc for the angle includes too
+          # keeps one set of declarations. libc/src/string.c is NOT linked
+          # beside it, unlike the WFS suites: stubs_device_manager_host.c already
+          # defines str_copy, and linking both duplicates the symbol. The
+          # collision is a Darwin SDK property, so a Linux CI runner cannot catch
+          # it.
+          -I${LIBC_DIR}/include
           -iquote ${DRIVER_WASM_DIR}/include
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_block_rules.c
@@ -2418,6 +2576,510 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_fat/fat_util.c
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_fat_image
+  # WFS on-disk format: CRC32C, the seeded metadata checksum, and superblock
+  # validation. Pure functions over a byte image, so no block layer is linked
+  # and the suite needs no device; the driver's reactor is tested separately.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_format.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          -o ${BUILD_DIR}/test_wfs_format
+  COMMAND ${BUILD_DIR}/test_wfs_format
+  # The WFS formatter, validated by the reader above: the same wfs_super_parse
+  # and wfs_checksum_struct the driver will use, turned on a volume the writer
+  # produced. A disagreement between the two fails here rather than waiting for
+  # a driver that cannot mount its own filesystem.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mkfs.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          -o ${BUILD_DIR}/test_wfs_mkfs
+  COMMAND ${BUILD_DIR}/test_wfs_mkfs
+  # The WFS driver operations as tasks on the SYSTEM coroutine runtime:
+  # coroutine_wasm.c and ipc_future_wasm.c are LINKED, not reimplemented, so what
+  # these suites exercise is the runtime's own parking and resumption. The device
+  # under them is stubs_wfs_block_server.c, a RAM-backed BLOCK server sharing one
+  # request-encoding check between both suites.
+  #
+  # Our libc headers go on -I rather than -iquote, unlike the neighbouring
+  # suites: wasmos/libsys.h reaches src/libc/include/string.h through a quoted
+  # include, and with the host's <string.h> also in scope the SDK's strcpy
+  # fortification macro breaks our declaration. Taking our libc for the angle
+  # includes too keeps one set of declarations, and libc/src/string.c is linked
+  # so those functions come from our implementation rather than by accident from
+  # the host's.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_mount
+  COMMAND ${BUILD_DIR}/test_wfs_mount
+  # The extent-map walk. Nodes are written into a formatted volume by the test,
+  # because mkfs_wfs builds no tree yet: every volume it makes has a root with a
+  # single inline extent.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_extent
+  COMMAND ${BUILD_DIR}/test_wfs_extent
+  # The namespace operations. Results are checked by RESOLVING the path the way a
+  # client does, because an entry only its writer can find is exactly what §10's
+  # stride rules exist to prevent.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_namespace.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_namespace.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dirent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_truncate.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_namespace
+  COMMAND ${BUILD_DIR}/test_wfs_namespace
+  # Truncation. Freed blocks are checked against the BITMAP and surviving content
+  # through the read path, because a size field that agrees with a wrong extent
+  # map is not evidence.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_truncate.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_truncate.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_truncate
+  COMMAND ${BUILD_DIR}/test_wfs_truncate
+  # File writes. Written bytes are verified by reading them back through the READ
+  # path, so the extent map and the blocks have to agree; inspecting blocks would
+  # pass for a write that landed correctly by accident.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_truncate.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_write
+  COMMAND ${BUILD_DIR}/test_wfs_write
+  # Recording a volume's mount state. The assertion is a REMOUNT, not a byte:
+  # what the flag is for is what the next mount does with it.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_sync
+  COMMAND ${BUILD_DIR}/test_wfs_sync
+  # The consistency checker (§24). The volume under test is one mkfs_wfs
+  # produced, so the checker is validated against the format rather than against
+  # a fixture some test wrote -- which would agree with the test and drift with
+  # the driver.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_fsck.c
+          ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/wfs_fsck.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_fsck
+  COMMAND ${BUILD_DIR}/test_wfs_fsck
+  # The metadata journal: a transaction's blocks reach the log first and their
+  # targets only at the commit. The cases assert the image at a point where the
+  # checkpoint has NOT run, because a writer that logged its blocks and also
+  # wrote them in place would pass an "the bytes are there afterwards" test while
+  # providing no crash safety.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_journal
+  COMMAND ${BUILD_DIR}/test_wfs_journal
+  # Crash recovery. A crash is a STOPPED DEVICE: the transaction runs for a
+  # chosen number of block requests and everything past that fails, so the image
+  # holds exactly the writes that landed. The volume is then remounted from it.
+  # Hand-building a log instead would test the test, and would keep passing if
+  # the writer's layout drifted away from the reader's.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_namespace.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dirent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_recover
+  COMMAND ${BUILD_DIR}/test_wfs_recover
+  # Block allocation, against a volume mkfs_wfs built: the bitmap in the image is
+  # what the assertions read, because the counters are derived from it.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_alloc.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_alloc
+  COMMAND ${BUILD_DIR}/test_wfs_alloc
+  # Directory record surgery. Pure: one block buffer. The assertions WALK the
+  # resulting chain the way the driver's scan does, because a chain only its
+  # writer can traverse is what §10's stride rules exist to prevent.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dirent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dirent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          -o ${BUILD_DIR}/test_wfs_dirent
+  COMMAND ${BUILD_DIR}/test_wfs_dirent
+  # The allocation bitmaps. Pure: one bitmap block, no device and no runtime, so
+  # the allocation policy is tested without an image under it.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_bitmap.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_bitmap.c
+          -o ${BUILD_DIR}/test_wfs_bitmap
+  COMMAND ${BUILD_DIR}/test_wfs_bitmap
+  # The directory scan. Directory blocks are laid out by the test, because
+  # mkfs_wfs builds only an empty root; the extent walk is linked in because a
+  # directory's blocks are reached through it like any other file's.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_dir
+  COMMAND ${BUILD_DIR}/test_wfs_dir
+  # End to end: mkfs_wfs populates a volume and the DRIVER reads it back. Every
+  # other WFS suite checks one side; this is where the writer and the reader meet
+  # on a volume with content, so a disagreement about record packing, an object
+  # id, a link count, a checksum seed or an extent surfaces as a driver that
+  # cannot find a file the formatter placed.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_populate.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_populate
+  COMMAND ${BUILD_DIR}/test_wfs_populate
+  # The read path: name to bytes. Mostly there to pin the slicing — a read
+  # starting mid-block, ending mid-block, spanning several, or running off the
+  # end — since each of those is an offset arithmetic that looks right and is not.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_read.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_read.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_read
+  COMMAND ${BUILD_DIR}/test_wfs_read
+  # Path resolution, which is what an open or a stat begins with. Its edge cases
+  # are the ones a client hits first: a bare root, redundant separators, dot and
+  # dotdot, and a component under a file.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_wfs
+          -I${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_path.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_path.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_mount.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_journal.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_sync.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_recover.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_dir.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_extent_write.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_ops.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_block.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_super.c
+          ${DRIVER_WASM_DIR}/fs_wfs/wfs_crc32c.c
+          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs/wfs_mkfs.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wfs_path
+  COMMAND ${BUILD_DIR}/test_wfs_path
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3587,7 +4249,34 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_shim_alloc.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
-    ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c)
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c
+    # Same reason as test_wasm_coroutine.c beside it: this suite includes
+    # wasmos/libsys.h, which reaches src/libc/include/string.h through a quoted
+    # include. With the host libc also serving the angle includes, the SDK's
+    # strcpy fortification macro collides with our declaration.
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_mount.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_extent.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dir.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_populate.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_read.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_path.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_bitmap.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_dirent.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_alloc.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_sync.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_fsck.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_journal.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_recover.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_write.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_truncate.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wfs_namespace.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wfs_block_server.c
+    # And the block-rule suite, for the same reason once more: it includes
+    # device_manager.c, which reaches src/libc/include/string.h through a quoted
+    # include, so its real compile line takes our libc on -I and the lint index
+    # must match or it parses against the host's headers.
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_block_rules.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/stubs_device_manager_host.c)
 
 # The scheduler host tests drive the REAL kernel sources, so they must see the
 # real kernel headers and nothing else. tests/unit/include holds deliberately
@@ -3681,6 +4370,10 @@ wasmos_ide_index(wasmos_ide_unit_libc
            ${CMAKE_SOURCE_DIR}/src/libui/include
            ${DRIVER_WASM_DIR}/include
            ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
+           ${DRIVER_WASM_DIR}/fs_wfs
+           ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
+           ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs
+           ${SERVICES_DIR}/device_manager
            ${CMAKE_SOURCE_DIR}/abi/generated/c)
 
 # Every other unit test takes the host libc for <angle> includes, matching those
@@ -3710,10 +4403,22 @@ wasmos_ide_index(wasmos_ide_unit
          ${CMAKE_SOURCE_DIR}/abi/generated/c
          ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
          ${SERVICES_DIR}/net_stack ${SERVICES_DIR}/cli
-         ${DRIVER_WASM_DIR}/fs_fat
+         ${DRIVER_WASM_DIR}/fs_fat ${DRIVER_WASM_DIR}/fs_wfs
+         ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
          ${WASM3_DIR} ${WASM3_DIR}/source)
+
+# The WFS format layer. fs_fat is indexed by the `<name>_ide` target its
+# wasmos_add_wasm_c_app_target emits; fs_wfs has no app target yet, so this is
+# what keeps its sources out of "not in a project target" and inside the lint
+# gate. Retire it once the driver's app target exists.
+wasmos_ide_index(wasmos_ide_fs_wfs
+  DIRS ${DRIVER_WASM_DIR}/fs_wfs
+  INCLUDES ${DRIVER_WASM_DIR}/fs_wfs ${CMAKE_SOURCE_DIR}/abi/generated/c
+           ${LIBSYS_WASM_DIR}/include ${LIBC_DIR}/include
+           ${DRIVER_WASM_DIR}/include)
 
 wasmos_ide_index(wasmos_ide_tools
   DIRS ${CMAKE_SOURCE_DIR}/src/tools
   INCLUDES ${WARP_DIR} ${WARP_DIR}/src ${DRIVER_WASM_DIR}/include
-           ${KERNEL_DIR}/include ${CMAKE_SOURCE_DIR}/abi/generated/c)
+           ${KERNEL_DIR}/include ${CMAKE_SOURCE_DIR}/abi/generated/c
+           ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs ${DRIVER_WASM_DIR}/fs_wfs)

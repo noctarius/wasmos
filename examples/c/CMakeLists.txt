@@ -82,6 +82,15 @@ wasmos_add_wasm_c_app_target(fs_write_smoke
   PACK_COMMENT  "Packing wasm fs write smoke as WASMOS-APP"
 )
 
+wasmos_add_wasm_c_app_target(wfs_write_smoke
+  SOURCE      ${WASM_WFS_WRITE_SMOKE_SRC}
+  OUTPUT_WASM ${WASM_WFS_WRITE_SMOKE_WASM}
+  OUTPUT_APP  ${WASM_WFS_WRITE_SMOKE_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/wfs_write_smoke/linker.metadata
+  BUILD_COMMENT "Building wasm wfs write smoke module"
+  PACK_COMMENT  "Packing wasm wfs write smoke as WASMOS-APP"
+)
+
 wasmos_add_wasm_c_app_target(native_call_min
   SOURCE      ${WASM_NATIVE_CALL_MIN_SRC}
   OUTPUT_WASM ${WASM_NATIVE_CALL_MIN_WASM}

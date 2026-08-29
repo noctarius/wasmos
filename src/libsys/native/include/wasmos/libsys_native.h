@@ -267,6 +267,15 @@ int32_t wasmos_sys_svc_register_class_native(wasmos_driver_api_t* api, uint32_t 
                                              const uint8_t* name, uint32_t name_len,
                                              const uint8_t* class_name, uint32_t class_len,
                                              uint32_t instance, uint32_t request_id);
+/* As above, declaring `flags` (WASMOS_SVC_FLAG_*; unknown bits are dropped).
+ * Mirrors wasmos_svc_register_class_flags in src/libc/include/wasmos/ipc.h. The
+ * flag that exists today opts the service into the orderly shutdown sequence. */
+int32_t wasmos_sys_svc_register_class_flags_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
+                                                   uint32_t source_endpoint,
+                                                   uint32_t service_endpoint, const uint8_t* name,
+                                                   uint32_t name_len, const uint8_t* class_name,
+                                                   uint32_t class_len, uint32_t instance,
+                                                   uint32_t flags, uint32_t request_id);
 int32_t wasmos_sys_svc_lookup_class_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
                                            uint32_t source_endpoint, const uint8_t* class_name,
                                            uint32_t class_len, svc_class_entry_t* out,

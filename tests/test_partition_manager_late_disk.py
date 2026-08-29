@@ -42,10 +42,16 @@ VOLUME_LABEL = "late"
 IMAGE_MIB = 64
 
 # How many `block` providers a correct boot holds with this disk attached: ATA's
-# two drives, the one partition the partition manager republishes on each, the
-# virtio disk, and its partition. The count is what asserts that nothing
-# registered twice; the ids below say which ones are present.
-EXPECTED_PROVIDERS = 6
+# THREE drives, the one partition the partition manager republishes on each of
+# the two that carry a table, the virtio disk, and its partition. The count is
+# what asserts that nothing registered twice; the ids below say which ones are
+# present.
+#
+# ATA unit 2 is the raw WFS volume. It contributes a disk and no partition: it
+# holds a filesystem written straight to the device with no table for the
+# partition manager to parse, which is the case a `volume` would cover and a
+# `partition` cannot (architecture/37-volume-manager.md).
+EXPECTED_PROVIDERS = 7
 
 # A partition of the virtio disk, whose unit is derived from the device's PCI
 # slot and so is matched by shape rather than by a literal -- the same reason
@@ -153,7 +159,8 @@ class PartitionManagerLateDiskTest(unittest.TestCase):
                 f"[blkinfo] providers={EXPECTED_PROVIDERS}".encode(), timeout_s=60
             ),
             f"the block class did not hold {EXPECTED_PROVIDERS} providers -- "
-            "ATA's two drives and their partitions, the virtio disk and its "
-            "partition. A count of 5 means the virtio disk's partition is "
+            "ATA's three drives, a partition on each of the two that carry a "
+            "table, the virtio disk and its partition. A count of 6 means the "
+            "virtio disk's partition is "
             "missing; a higher count means something registered twice",
         )

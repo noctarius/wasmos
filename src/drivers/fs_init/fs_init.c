@@ -61,28 +61,6 @@ static void console_write(const char* s) {
     }
 }
 
-static void unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char* out,
-                        uint32_t out_len) {
-    uint32_t args[4] = {arg0, arg1, arg2, arg3};
-    uint32_t pos = 0;
-    if (!out || out_len == 0) {
-        return;
-    }
-    for (uint32_t i = 0; i < 4 && pos + 1 < out_len; ++i) {
-        uint32_t v = args[i];
-        for (uint32_t b = 0; b < 4 && pos + 1 < out_len; ++b) {
-            char c = (char)(v & 0xFFu);
-            if (c == '\0') {
-                out[pos] = '\0';
-                return;
-            }
-            out[pos++] = c;
-            v >>= 8u;
-        }
-    }
-    out[pos] = '\0';
-}
-
 /* Returns WASMOS_ERR_NONE, or the packed reason the path could not be read. */
 static wasmos_error_code_t copy_path_from_xfer_buffer(int32_t buffer_id, int32_t path_len,
                                                       char* out, uint32_t out_len) {
@@ -612,10 +590,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         } else if (type == FS_IPC_READDIR_REQ) {
             status = emit_init_listing(source, req_id);
         } else if (type == FS_IPC_CHDIR_REQ) {
+            /* CHDIR carries its target as a path in the client's transfer buffer
+             * (arg0 = length, arg2 = buffer id), the same transport OPEN uses --
+             * so a deep path and a name past 15 bytes both arrive intact. */
             char name[INITFS_PATH_MAX];
-            unpack_name(
-                (uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, name, sizeof(name));
-            status = chdir_to_path(cwd_dir, name);
+            wasmos_error_code_t path_rc =
+                copy_path_from_xfer_buffer(arg2, arg0, name, sizeof(name));
+            status = (path_rc == WASMOS_ERR_NONE) ? chdir_to_path(cwd_dir, name) : path_rc;
         } else if (type == FS_IPC_READY_REQ) {
             status = 0;
         }

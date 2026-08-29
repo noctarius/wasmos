@@ -335,6 +335,10 @@ static int parse_fs_type(const char* s, uint32_t* out) {
         *out = (uint32_t)FS_TYPE_FAT;
         return 0;
     }
+    if (strcmp(s, "wfs") == 0) {
+        *out = (uint32_t)FS_TYPE_WFS;
+        return 0;
+    }
     return -1;
 }
 

@@ -178,6 +178,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/warp_driver_ring3_call_policy.o
   ${BUILD_DIR}/process_manager_services.o
   ${BUILD_DIR}/process_manager_spawn.o
+  ${BUILD_DIR}/process_manager_shutdown.o
   ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasmos_app_meta.o
   ${BUILD_DIR}/native_driver.o
@@ -327,6 +328,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/warp_driver_ring3_call_policy.c
   ${KERNEL_DIR}/process_manager_services.c
   ${KERNEL_DIR}/process_manager_spawn.c
+  ${KERNEL_DIR}/process_manager_shutdown.c
   ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasmos_app_meta.c
   ${KERNEL_DIR}/native_driver.c
@@ -673,6 +675,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/warp_driver_ring3_call_policy.c -o ${BUILD_DIR}/warp_driver_ring3_call_policy.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_services.c -o ${BUILD_DIR}/process_manager_services.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_spawn.c -o ${BUILD_DIR}/process_manager_spawn.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_shutdown.c -o ${BUILD_DIR}/process_manager_shutdown.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app_meta.c -o ${BUILD_DIR}/wasmos_app_meta.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/native_driver.c -o ${BUILD_DIR}/native_driver.o

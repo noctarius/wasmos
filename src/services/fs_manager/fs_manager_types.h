@@ -52,9 +52,22 @@ typedef struct {
     char mount_name[16];
 } fs_backend_t;
 
-/* Per-IPC-context state: tracks which mount point a client is currently in
- * and the forwarded backend endpoint.  mount_depth counts nested path
- * segments stripped so far during forwarded operations. */
+/* Longest working directory fs-manager will hold for a client, NUL included.
+ * A chdir whose result does not fit is refused, so no client can end up with a
+ * silently shortened cwd. */
+#define FSMGR_CWD_MAX 128
+
+/* Per-IPC-context state: the client's working directory, plus the mount that
+ * directory lives on and the backend serving it.
+ *
+ * cwd is the authority and is always a canonical absolute VFS path ("/",
+ * "/wfs", "/wfs/docs"); mount and backend_endpoint are derived from it on every
+ * chdir and cached here so a request need not re-route the directory itself.
+ * Relative paths from the client are joined onto cwd before routing, which is
+ * what makes a name mean the same directory for a spawned child as for its
+ * spawner -- a child's state is a copy of its parent's cwd, not a fresh one.
+ * mount_depth counts segments below the mount root, kept for the ".." fast
+ * path. */
 typedef struct {
     uint8_t in_use;
     /* Owning context of the requesting endpoint, so every endpoint a process
@@ -64,6 +77,7 @@ typedef struct {
     fs_mount_t mount;
     int32_t backend_endpoint; /* -1 when request is at the VFS root */
     uint16_t mount_depth;
+    char cwd[FSMGR_CWD_MAX];
     fsmgr_client_fd_t fds[FSMGR_CLIENT_FD_CAP];
 } fs_client_state_t;
 

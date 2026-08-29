@@ -746,19 +746,27 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                  * would silently move the client -- so it is failed instead by
                  * clearing the op type. */
                 uint32_t chdir_len = (uint32_t)op->arg0;
-                if (chdir_len == 0u || chdir_len >= sizeof(op->dir_name) ||
-                    chdir_len + 1u > (uint32_t)wasmos_xfer_buffer_size() ||
-                    wasmos_sys_buffer_read(op->arg2, op->dir_name, (int32_t)chdir_len, 0) != 0) {
+                wasmos_error_code_t chdir_rc = WASMOS_ERR_NONE;
+
+                /* Three different failures, three codes. Collapsing them into
+                 * PATH_TOO_LONG told a caller its name was too long when the
+                 * borrow was missing, which is the ambiguity the packed codes
+                 * exist to remove -- and the two are fixed by opposite actions. */
+                if (chdir_len == 0u) {
+                    chdir_rc = WASMOS_ERR_FS_BAD_ARGS;
+                } else if (chdir_len >= sizeof(op->dir_name) ||
+                           chdir_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
+                    chdir_rc = WASMOS_ERR_FS_PATH_TOO_LONG;
+                } else if (wasmos_sys_buffer_read(op->arg2, op->dir_name, (int32_t)chdir_len, 0) !=
+                           0) {
+                    chdir_rc = WASMOS_ERR_FS_BUFFER;
+                }
+                if (chdir_rc != WASMOS_ERR_NONE) {
                     /* Answered here rather than queued: an empty dir_name reads
                      * as the mount root further down, which would move the
                      * client somewhere it did not ask for. */
-                    (void)fat_send_reply(op->source,
-                                         FS_IPC_ERROR,
-                                         op->request_id,
-                                         WASMOS_ERR_FS_PATH_TOO_LONG,
-                                         0,
-                                         0,
-                                         0);
+                    (void)fat_send_reply(
+                        op->source, FS_IPC_ERROR, op->request_id, chdir_rc, 0, 0, 0);
                     continue;
                 }
                 op->dir_name[chdir_len] = '\0';

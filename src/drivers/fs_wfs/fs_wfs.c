@@ -199,7 +199,12 @@ static int32_t wfs_run(wasmos_wasm_task_resume_fn fn, void* ctx) {
 /* Copy a client's path out of the transfer buffer it borrowed to us. */
 static wasmos_error_code_t wfs_take_path(int32_t buffer_id, uint32_t path_len, char* out,
                                          uint32_t out_len) {
-    if (path_len == 0u || path_len >= out_len) {
+    /* An EMPTY name is not an over-long one: it is a malformed request, and a
+     * caller told "too long" would shorten a name it never sent. */
+    if (path_len == 0u) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    if (path_len >= out_len) {
         return WASMOS_ERR_FS_PATH_TOO_LONG;
     }
     if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {

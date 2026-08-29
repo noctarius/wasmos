@@ -47,6 +47,7 @@ int32_t fsmgr_cwd_join(const char* cwd, const char* arg, char* out_path, int32_t
     } else {
         while (cwd[len] != '\0') {
             if (len + 1 >= out_cap) {
+                out_path[0] = '\0';
                 return 0;
             }
             out_path[len] = cwd[len];
@@ -91,11 +92,13 @@ int32_t fsmgr_cwd_join(const char* cwd, const char* arg, char* out_path, int32_t
         }
         if (len > 1) {
             if (len + 1 >= out_cap) {
+                out_path[0] = '\0';
                 return 0;
             }
             out_path[len++] = '/';
         }
         if (len + seg_len >= out_cap) {
+            out_path[0] = '\0';
             return 0;
         }
         for (k = 0; k < seg_len; ++k) {

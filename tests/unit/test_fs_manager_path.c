@@ -452,6 +452,43 @@ static void test_join_refuses_to_overflow(void) {
     assert(strcmp(out, "/wfs/do") == 0);
 }
 
+/* A refusal must not leave a PREFIX behind.
+ *
+ * Regression: 2026-08-29-cwd-join-partial-on-refusal
+ *
+ * The join builds its result in place, so by the time it discovers the result
+ * does not fit it has already written -- and it returned 0 over a buffer holding
+ * a valid-looking shorter path. A caller that trusted the header (which said
+ * out_path was left untouched) and read it anyway would open a DIFFERENT file,
+ * which is the exact hazard the refusal exists to prevent.
+ *
+ * Asserted on a buffer seeded with a sentinel, so "cleared" is distinguishable
+ * from "never written": the bug wrote a prefix, and only an empty string proves
+ * the prefix is gone rather than merely shorter than the sentinel.
+ */
+static void test_join_leaves_no_partial_path_on_refusal(void) {
+    char out[8];
+
+    /* Overflow while copying the cwd. */
+    memset(out, 'Z', sizeof(out));
+    out[sizeof(out) - 1] = '\0';
+    assert(fsmgr_cwd_join("/a/very/long/cwd", "x", out, (int32_t)sizeof(out)) == 0);
+    assert(out[0] == '\0');
+
+    /* Overflow while appending a segment: the cwd fits, the segment does not. */
+    memset(out, 'Z', sizeof(out));
+    out[sizeof(out) - 1] = '\0';
+    assert(fsmgr_cwd_join("/wfs", "doc", out, (int32_t)sizeof(out)) == 0);
+    assert(out[0] == '\0');
+
+    /* And a refusal decided BEFORE any write leaves the buffer alone, which is
+     * why the header distinguishes the two. */
+    memset(out, 'Z', sizeof(out));
+    out[sizeof(out) - 1] = '\0';
+    assert(fsmgr_cwd_join("wfs", "x", out, (int32_t)sizeof(out)) == 0);
+    assert(out[0] == 'Z');
+}
+
 static void test_join_rejects_invalid_inputs(void) {
     char out[64];
     assert(fsmgr_cwd_join(0, "x", out, (int32_t)sizeof(out)) == 0);
@@ -520,6 +557,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_interior_dot_segments_are_canonicalized),
         WASMOS_TEST_CASE(test_redundant_slashes_collapse),
         WASMOS_TEST_CASE(test_join_refuses_to_overflow),
+        WASMOS_TEST_CASE(test_join_leaves_no_partial_path_on_refusal),
         WASMOS_TEST_CASE(test_join_rejects_invalid_inputs),
         WASMOS_TEST_CASE(test_joined_path_routes_to_its_mount),
     };

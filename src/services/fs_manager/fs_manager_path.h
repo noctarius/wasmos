@@ -25,10 +25,17 @@
  * and repeated or trailing slashes collapse. The result never has a trailing
  * slash except for the root itself.
  *
- * Returns 1 on success. Returns 0 — leaving out_path untouched — on a NULL
- * argument, an out_cap below 2, a cwd that is not absolute, or a result that
- * does not fit: the join REFUSES rather than truncating, because a truncated
- * path names a different file that the caller would then open unknowingly. */
+ * Returns 1 on success. Returns 0 on a NULL argument, an out_cap below 2, a cwd
+ * that is not absolute, or a result that does not fit: the join REFUSES rather
+ * than truncating, because a truncated path names a different file that the
+ * caller would then open unknowingly.
+ *
+ * On a refusal out_path is never left holding a PARTIAL path. The join builds
+ * its result in place, so it may already have written when it discovers the
+ * result does not fit; it clears out_path before giving up. A caller that
+ * ignores the return therefore sees an empty string rather than a prefix, which
+ * is the same hazard the refusal exists to prevent. (out_path is untouched when
+ * the arguments are rejected before any write.) */
 int32_t fsmgr_cwd_join(const char* cwd, const char* arg, char* out_path, int32_t out_cap);
 
 int32_t fsmgr_route_path_for_mounts(const char* path, int32_t path_len,

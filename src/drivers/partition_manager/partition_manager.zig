@@ -26,14 +26,32 @@
 //! the async runtime owns, and every disk is reached from it, with the target
 //! field doing the work an endpoint used to do.
 //!
+//! Discovery
+//! ---------
+//! The `block` class is SUBSCRIBED to, not enumerated. Enumeration alone answers
+//! "which disks exist now", and a driver that registers later — virtio-blk
+//! negotiates a PCI device, claims an MSI-X vector and sets up a virtqueue
+//! before it publishes anything — is then invisible for the rest of the boot,
+//! table and all. Bring-up subscribes first and enumerates second, so nothing
+//! falls between the two, and an arrival for a disk already in the table is
+//! dropped.
+//!
+//! Every partition published here registers under that same class, so our own
+//! registrations come back as arrivals. They are dropped by endpoint: probing
+//! one would send IDENTIFY to ourselves and wait for a reply only our own
+//! message loop could produce.
+//!
 //! Probing
 //! -------
-//! Bring-up is synchronous, like fs_fat's: the disks have to be described and
-//! their tables read before anything can be published, and there is nothing else
-//! for this process to do meanwhile. Per disk: IDENTIFY, then LBA 1 for a GPT
-//! header, then LBA 0 for an MBR, then nothing. A disk with no table publishes no
-//! partitions and is left alone — its own class instance already serves it, which
-//! is what keeps partition tables optional.
+//! A probe is synchronous, like fs_fat's: nothing can be published until the
+//! disk has been described and its table read. Per disk: IDENTIFY, then LBA 1
+//! for a GPT header, then LBA 0 for an MBR, then nothing. A disk with no table
+//! publishes no partitions and is left alone — its own class instance already
+//! serves it, which is what keeps partition tables optional.
+//!
+//! Because it blocks, a probe runs on the ROOT task rather than in the message
+//! handler that learned of the disk: a handler that blocks stalls the loop it
+//! was dispatched from. The handler queues the arrival and wakes the root.
 //!
 //! Forwarding
 //! ----------
@@ -107,6 +125,36 @@ var g_part_count: usize = 0;
 var g_inflight: [MAX_INFLIGHT]Inflight = [_]Inflight{.{}} ** MAX_INFLIGHT;
 
 var g_proc_endpoint: i32 = -1;
+/// The device manager's inventory endpoint, resolved once and kept: a disk
+/// arriving after bring-up publishes its partitions through the same endpoint,
+/// and re-resolving per arrival would block the probe on a lookup that already
+/// has an answer. Negative when it could not be resolved, which downgrades
+/// publishing to class registration alone.
+var g_devmgr: i32 = -1;
+
+/// Backend endpoints this process has lent its probe buffers to.
+///
+/// Grants are per PROCESS, not per endpoint or per device, so one entry covers
+/// every disk a backend serves and a second attempt would be refused as
+/// ALREADY_BORROWED. Kept for the life of the process rather than rebuilt per
+/// probe, because a late-arriving disk may be served by a backend already lent
+/// to -- an ATA controller publishing its second drive, say.
+var g_granted: [MAX_DISKS]i32 = [_]i32{-1} ** MAX_DISKS;
+var g_granted_count: usize = 0;
+
+/// Disks that have registered under the `block` class but not yet been probed.
+///
+/// An arrival is queued rather than probed where it is received: a probe is
+/// synchronous and a message handler must not block the loop it runs on. The
+/// root task drains this.
+const Arrival = struct {
+    instance: u32 = 0,
+    endpoint: i32 = -1,
+    in_use: bool = false,
+};
+/// One slot per disk this process can hold, which is the most that can ever be
+/// waiting: an arrival beyond MAX_DISKS could not be recorded even if probed.
+var g_pending: [MAX_DISKS]Arrival = [_]Arrival{.{}} ** MAX_DISKS;
 
 /// The root task parks on this and a handler settles it. Returning `yielded`
 /// WITHOUT awaiting is not parking: the coroutine stays runnable, the runner
@@ -123,6 +171,15 @@ var g_next_request_id: i32 = 0x7000;
 /// once at bring-up and reused for every forwarded transfer, which is the shape
 /// a request descriptor is meant to be used in — not one buffer per request.
 var g_down_req_bid: i32 = -1;
+/// Buffer holding the request a PROBE sends downstream.
+///
+/// Separate from g_down_req_bid even though both carry a wasmos_block_request_t,
+/// because a probe no longer happens only at bring-up: a disk registering later
+/// is probed while clients are forwarding transfers, and a backend reads a
+/// request descriptor when it gets to the message, not when the message is sent.
+/// Sharing one buffer would let a probe overwrite a client's request in the
+/// window between the two.
+var g_probe_req_bid: i32 = -1;
 /// Buffer a client's descriptor is written into when it IDENTIFYs a partition.
 /// The client owns ITS buffer; this one is only staging for the probe.
 var g_probe_bid: i32 = -1;
@@ -231,7 +288,7 @@ fn identifyDisk(disk_endpoint: i32, instance: u32, out: *driver.BlockDescriptor)
 /// Read `count` sectors from `lba` of `disk` into this process's block buffer,
 /// then copy them out into `out`. Synchronous, for the same reason as above.
 fn readSectors(disk: *const Disk, lba: u64, count: u32, out: []u8) bool {
-    if (g_down_req_bid < 0 or g_block_phys == 0) return false;
+    if (g_probe_req_bid < 0 or g_block_phys == 0) return false;
     var req = driver.BlockRequest{};
     req.target = disk.instance;
     req.lba = lba;
@@ -240,7 +297,7 @@ fn readSectors(disk: *const Disk, lba: u64, count: u32, out: []u8) bool {
     req.dst_phys = g_block_phys;
 
     const raw: [*]const u8 = @ptrCast(&req);
-    if (!driver.bufferWrite(g_down_req_bid, raw[0..@sizeOf(driver.BlockRequest)], 0)) return false;
+    if (!driver.bufferWrite(g_probe_req_bid, raw[0..@sizeOf(driver.BlockRequest)], 0)) return false;
 
     const req_id = nextRequestId();
     const reply = driver.call(
@@ -248,7 +305,7 @@ fn readSectors(disk: *const Disk, lba: u64, count: u32, out: []u8) bool {
         driver.privateReplyEndpoint(),
         op.BLOCK_IPC_READ_REQ,
         req_id,
-        g_down_req_bid,
+        g_probe_req_bid,
         0,
         @intCast(@sizeOf(driver.BlockRequest)),
         0,
@@ -629,20 +686,188 @@ fn handleDownstreamReply(msg: *const co.IpcMessage) void {
     slot.in_use = false;
 }
 
+/// An existence event for the `block` class: arg0 names the kind, arg1 the
+/// instance, arg2 the provider's endpoint, arg3 its pid.
+///
+/// REMOVE is deliberately not acted on. Retiring a disk means unregistering the
+/// partitions published from it and telling the device manager they are gone,
+/// which is a teardown path with no caller today -- no shipped driver
+/// unregisters. Dropping our record alone would be worse than doing nothing: the
+/// partitions would stay in the registry addressing a disk we could no longer
+/// reach.
+/// TODO: retire a disk's partitions when its provider goes away.
+fn handleClassEvent(msg: *const co.IpcMessage) void {
+    if (msg.arg0 != @as(i32, @intCast(abi.SVC_CLASS_EVENT_ADD))) return;
+    noteArrival(@bitCast(msg.arg1), msg.arg2);
+}
+
 fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
     _ = user;
     switch (msg.type) {
         op.BLOCK_IPC_IDENTIFY_REQ => handleIdentify(msg),
         op.BLOCK_IPC_READ_REQ, op.BLOCK_IPC_WRITE_REQ => handleTransfer(msg),
         op.BLOCK_IPC_READ_RESP, op.BLOCK_IPC_WRITE_RESP, op.BLOCK_IPC_ERROR => handleDownstreamReply(msg),
+        op.SVC_IPC_CLASS_EVENT => handleClassEvent(msg),
         else => {},
     }
 }
 
-// --- bring-up ----------------------------------------------------------------
+// --- discovery ---------------------------------------------------------------
 
-/// Discover the disks present, probe each, and publish what they hold.
-fn probeAll() void {
+/// Lend the probe buffers to a backend, once per backend process.
+///
+/// The client owns a transfer buffer and the server is a grantee, so a backend
+/// cannot write a descriptor into our buffer, nor read a request out of it,
+/// until we have lent it. Grants are per PROCESS, not per endpoint or per
+/// device: an ATA controller serving two drives answers both on one endpoint, so
+/// one grant covers them and a second attempt would be refused as
+/// ALREADY_BORROWED. Deduplicating here keeps that from looking like a failure.
+fn grantBackend(ep: i32) void {
+    for (g_granted[0..g_granted_count]) |seen| {
+        if (seen == ep) return;
+    }
+    if (g_granted_count >= g_granted.len) return;
+    _ = driver.bufferBorrow(ep, g_probe_bid, driver.BUFFER_GRANT_WRITE);
+    _ = driver.bufferBorrow(ep, g_probe_req_bid, driver.BUFFER_GRANT_READ);
+    _ = driver.bufferBorrow(ep, g_down_req_bid, driver.BUFFER_GRANT_READ);
+    g_granted[g_granted_count] = ep;
+    g_granted_count += 1;
+}
+
+/// Resolve the device manager's inventory endpoint and lend it the publish
+/// buffer. Resolved once; the result, including a failure, stands for the life
+/// of the process.
+fn resolveDevmgr() void {
+    const ep = driver.lookupService(g_proc_endpoint, "devmgr.inv", nextRequestId(), 64) orelse {
+        driver.log("[partmgr] devmgr inventory unavailable; partitions unpublished to it");
+        return;
+    };
+    // Lend the publish buffer before the first publish. Without this the device
+    // manager refuses every descriptor at the read, and since a partition still
+    // registers under the `block` class the failure looks cosmetic -- while
+    // every SUBSYSTEM=="partition" rule in the system matches nothing, because
+    // rules match the registry.
+    if (g_publish_bid < 0 or
+        driver.bufferBorrow(ep, g_publish_bid, driver.BUFFER_GRANT_READ) == null)
+    {
+        driver.log("[partmgr] publish buffer grant failed; partitions unpublished to devmgr");
+        return;
+    }
+    g_devmgr = ep;
+}
+
+/// Probe one `block` provider and publish whatever table it holds.
+///
+/// Answers whether the provider was taken on as a disk, which is not the same as
+/// whether it held partitions: a disk with no table is still ours, and is still
+/// counted, so a repeated arrival does not re-probe it.
+fn probeProvider(instance: u32, provider_endpoint: i32) bool {
+    if (g_disk_count >= MAX_DISKS) {
+        driver.log("[partmgr] disk table full; a block provider went unprobed");
+        return false;
+    }
+    grantBackend(provider_endpoint);
+
+    var desc = driver.BlockDescriptor{};
+    if (!identifyDisk(provider_endpoint, instance, &desc)) return false;
+    if (desc.version != driver.BLOCK_DESCRIPTOR_VERSION) return false;
+    // A partition is itself a `block` provider, so an enumeration -- and every
+    // arrival event -- sees our own registrations. Only a whole disk carries
+    // partition 0.
+    if (desc.partition != 0) return false;
+
+    const index = g_disk_count;
+    g_disks[index] = .{
+        .instance = instance,
+        .endpoint = provider_endpoint,
+        .sector_count = desc.lba_count,
+        .canonical_id = desc.canonical_id,
+        .backend = desc.backend,
+        .unit = desc.unit,
+        .in_use = true,
+    };
+    g_disk_count += 1;
+    probeDisk(index, g_devmgr);
+    return true;
+}
+
+fn diskKnown(instance: u32) bool {
+    for (g_disks[0..g_disk_count]) |d| {
+        if (d.in_use and d.instance == instance) return true;
+    }
+    return false;
+}
+
+/// Record a `block` provider to be probed, and wake the root task to do it.
+///
+/// Two providers are dropped here rather than probed. Our OWN endpoint, because
+/// every partition we publish registers under the same class and comes back to
+/// us as an arrival: probing one would send IDENTIFY to ourselves and then block
+/// on a reply only our own message loop could produce, which wedges the process.
+/// And an instance already in the disk table, which is what makes the overlap
+/// between the subscription and the opening enumeration harmless.
+fn noteArrival(instance: u32, provider_endpoint: i32) void {
+    if (provider_endpoint == endpoint()) return;
+    if (diskKnown(instance)) return;
+    for (&g_pending) |*a| {
+        if (a.in_use and a.instance == instance) return;
+    }
+    for (&g_pending) |*a| {
+        if (a.in_use) continue;
+        a.* = .{ .instance = instance, .endpoint = provider_endpoint, .in_use = true };
+        if (g_root_parked) {
+            g_root_parked = false;
+            _ = g_wake_promise.resolve(0);
+        }
+        return;
+    }
+    driver.log("[partmgr] arrival queue full; a block provider went unprobed");
+}
+
+/// Probe every queued arrival. Runs on the root task, which is this process's
+/// own thread of control: a probe is synchronous, and running it from the
+/// message handler would block the loop that handler was dispatched from.
+///
+/// Forwarding stalls for the duration, since the whole process blocks in each
+/// downstream call. That is bounded -- one IDENTIFY plus at most 34 sector reads
+/// per disk -- and it is why the arrival is queued rather than probed inline.
+/// TODO: drive the probe over the loop's IpcFuture instead, so a disk arriving
+/// under load does not pause transfers on the disks already published. That is a
+/// state machine over IDENTIFY -> GPT header -> entry sectors -> MBR, not a
+/// rewrite of the parser.
+fn drainArrivals() void {
+    for (&g_pending) |*a| {
+        if (!a.in_use) continue;
+        const instance = a.instance;
+        const provider_endpoint = a.endpoint;
+        a.* = .{};
+        if (diskKnown(instance)) continue;
+        if (!probeProvider(instance, provider_endpoint)) continue;
+        var line = driver.Line{};
+        _ = line.str("[partmgr] late disk probed instance=").dec(instance);
+        _ = line.str(" disks=").dec(g_disk_count).str(" partitions=").dec(g_part_count);
+        line.end();
+    }
+}
+
+/// Subscribe to the `block` class, then probe every disk already registered.
+///
+/// The subscription comes FIRST and the enumeration second, which is the order
+/// that leaves no gap: a disk registering between the two fires an event that is
+/// waiting when the loop starts, whereas subscribing afterwards would miss it
+/// silently. The two overlapping is expected and costs nothing, because an
+/// arrival for a disk already in the table is dropped.
+///
+/// Enumerating once was the whole defect: virtio-blk negotiates a PCI device
+/// before it registers, so it publishes its disk well after this runs, and
+/// without the subscription its partitions were never seen.
+fn discoverDisks() void {
+    resolveDevmgr();
+
+    if (!driver.subscribeClass(g_proc_endpoint, endpoint(), "block", nextRequestId())) {
+        driver.log("[partmgr] block class subscribe failed; disks arriving later go unprobed");
+    }
+
     var providers: [MAX_DISKS]driver.ClassEntry = undefined;
     const total = driver.lookupClass(g_proc_endpoint, "block", providers[0..], nextRequestId()) orelse {
         driver.log("[partmgr] block class lookup failed; no disks probed");
@@ -657,74 +882,12 @@ fn probeAll() void {
         line.end();
     }
 
-    // Lend both buffers to every distinct backend endpoint BEFORE probing.
-    //
-    // The client owns a transfer buffer and the server is a grantee, so a
-    // backend cannot write a descriptor into our buffer, nor read a request out
-    // of it, until we have lent it. Grants are per PROCESS, not per endpoint or
-    // per device: an ATA controller serving two drives answers both on one
-    // endpoint, so one grant covers them and a second attempt would be refused
-    // as ALREADY_BORROWED. Deduplicating here keeps that from looking like a
-    // failure.
-    var granted: [MAX_DISKS]i32 = [_]i32{-1} ** MAX_DISKS;
-    var granted_count: usize = 0;
-    var g: usize = 0;
-    while (g < seen) : (g += 1) {
-        const ep: i32 = @intCast(providers[g].endpoint);
-        var already = false;
-        for (granted[0..granted_count]) |seen_ep| {
-            if (seen_ep == ep) already = true;
-        }
-        if (already or granted_count >= granted.len) continue;
-        _ = driver.bufferBorrow(ep, g_probe_bid, driver.BUFFER_GRANT_WRITE);
-        _ = driver.bufferBorrow(ep, g_down_req_bid, driver.BUFFER_GRANT_READ);
-        granted[granted_count] = ep;
-        granted_count += 1;
-    }
-
-    const devmgr = devmgr: {
-        const ep = driver.lookupService(g_proc_endpoint, "devmgr.inv", nextRequestId(), 64) orelse {
-            driver.log("[partmgr] devmgr inventory unavailable; partitions unpublished to it");
-            break :devmgr -1;
-        };
-        // Lend the publish buffer before the first publish. Without this the
-        // device manager refuses every descriptor at the read, and since a
-        // partition still registers under the `block` class the failure looks
-        // cosmetic -- while every SUBSYSTEM=="partition" rule in the system
-        // matches nothing, because rules match the registry.
-        if (g_publish_bid < 0 or
-            driver.bufferBorrow(ep, g_publish_bid, driver.BUFFER_GRANT_READ) == null)
-        {
-            driver.log("[partmgr] publish buffer grant failed; partitions unpublished to devmgr");
-            break :devmgr -1;
-        }
-        break :devmgr ep;
-    };
-
     var i: usize = 0;
-    while (i < seen and g_disk_count < MAX_DISKS) : (i += 1) {
-        var desc = driver.BlockDescriptor{};
-        if (!identifyDisk(@intCast(providers[i].endpoint), providers[i].instance, &desc)) continue;
-        if (desc.version != driver.BLOCK_DESCRIPTOR_VERSION) continue;
-        // A partition is itself a `block` provider, so a later enumeration would
-        // see our own registrations. Only a whole disk carries partition 0.
-        if (desc.partition != 0) continue;
-
-        const index = g_disk_count;
-        g_disks[index] = .{
-            .instance = providers[i].instance,
-            .endpoint = @intCast(providers[i].endpoint),
-            .sector_count = desc.lba_count,
-            .canonical_id = desc.canonical_id,
-            .backend = desc.backend,
-            .unit = desc.unit,
-            .in_use = true,
-        };
-        g_disk_count += 1;
-        probeDisk(index, devmgr);
+    while (i < seen) : (i += 1) {
+        if (diskKnown(providers[i].instance)) continue;
+        _ = probeProvider(providers[i].instance, @intCast(providers[i].endpoint));
     }
 }
-
 fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.c) void {
     _ = user;
     _ = arg0;
@@ -747,6 +910,10 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
         driver.log("[partmgr] request buffer unavailable");
         return;
     };
+    g_probe_req_bid = driver.bufferAcquire(@sizeOf(driver.BlockRequest)) orelse {
+        driver.log("[partmgr] probe request buffer unavailable");
+        return;
+    };
     g_publish_bid = driver.bufferAcquire(
         MAX_PARTITIONS * @sizeOf(driver.BlockDescriptor),
     ) orelse {
@@ -754,7 +921,7 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
         return;
     };
 
-    probeAll();
+    discoverDisks();
 
     var line = driver.Line{};
     _ = line.str("[partmgr] ready disks=").dec(g_disk_count);
@@ -764,13 +931,21 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     driver.notifyReady(g_proc_endpoint);
 }
 
-/// The root task has no work of its own: every transfer is driven by messages
-/// through `onMessage`, which run on the loop. So it parks immediately and stays
-/// parked, and the runner's poll -- which blocks on the loop's select set -- is
-/// what makes an idle partition manager sleep rather than spin.
+/// The root task probes disks that arrive after bring-up, and otherwise parks.
+///
+/// Transfers need nothing from it -- they are driven by messages through
+/// `onMessage`, which run on the loop -- so between arrivals it is parked, and
+/// the runner's poll, which blocks on the loop's select set, is what makes an
+/// idle partition manager sleep rather than spin.
+///
+/// A stackless task is resumed from the TOP, so draining before the await is
+/// what makes this a loop: `handleClassEvent` queues an arrival and settles the
+/// promise, the runtime resumes here, the drain runs, and the task parks again
+/// on a fresh future.
 fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
     _ = user;
     _ = out_value;
+    drainArrivals();
     g_wake_future.init(&g_wake_promise);
     g_root_parked = true;
     switch (g_wake_future.awaitValue()) {

@@ -137,15 +137,22 @@ not where the I/O is.
 
 The volume manager SUBSCRIBES to the `block` class; it does not enumerate it.
 
-The distinction is not stylistic. `partition_manager.zig`'s `probeAll` calls
-`lookupClass` exactly once at bring-up, so a disk whose driver registers
-afterwards is never probed and its partitions never appear — a live defect
-recorded in `TASKS.md`, invisible today only because the partition manager is
-spawned after storage is online. A volume manager built the same way inherits it
-exactly, and a second component with the same gap is how a gap stops looking like
-one. `subscribeClass` exists (`src/libc/zig/driver.zig`); the partition manager
-should switch from one-shot `lookupClass` enumeration to `subscribeClass`-driven
-class events, rather than the tree carrying two answers to "a device appeared".
+The distinction is not stylistic, and the partition manager is the worked
+example: it enumerated the `block` class exactly once at bring-up, so a disk
+whose driver registered afterwards was never probed and its partitions never
+appeared. A GPT-partitioned virtio-blk disk reproduced it on the shipped
+configuration, because virtio-blk finishes negotiating its PCI device well after
+the partition manager reports ready. That is fixed —
+`architecture/36-partition-manager-and-block-identity.md` §2, "Discovery" — and
+the volume manager copies its shape rather than reinventing one:
+
+- Subscribe FIRST, enumerate second, so nothing falls between the two, and drop
+  an arrival naming something already known.
+- Drop an arrival on the subscriber's OWN endpoint. The registry notifies every
+  subscriber including the registrant, so a component that publishes into a
+  class it subscribes to sees its own output come back.
+- Queue the arrival in the message handler and do the work elsewhere, if the
+  work blocks. A handler that blocks stalls the loop it was dispatched from.
 
 What arrives on that subscription is whole disks AND partitions, in one stream,
 because the partition manager publishes each partition INTO the `block` class.
@@ -201,7 +208,8 @@ the same obligations as any other.
 - Grants are per PROCESS, not per endpoint or per device. An ATA controller
   serving two drives answers both on one endpoint, so one grant covers them and a
   second attempt is refused as `ALREADY_BORROWED`. Deduplicate by endpoint before
-  lending, as `probeAll` does.
+  lending, as `grantBackend` does — and keep the set for the life of the process,
+  because a disk arriving later may be served by a backend already lent to.
 - A partition device is addressed from ITS OWN LBA 0. The partition manager
   rebases every forwarded transfer onto the window, so a descriptor's `lba_start`
   says where the volume SITS and is never an address a client sends. A recogniser

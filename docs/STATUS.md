@@ -748,10 +748,14 @@ linked feature documents for rationale and rollout plans.
   `lba_start`/`lba_count`, and forwards transfers with the LBA rebased onto that
   window and the sector count clamped to it. A disk with no table publishes
   nothing and is left alone, which is what keeps partition tables optional.
-  Spawned from the boot rules, so every disk has registered before it enumerates
-  -- once, at bring-up: a disk whose driver registers later is never probed.
+  It SUBSCRIBES to the `block` class and enumerates it second, so a disk whose
+  driver registers later -- virtio-blk publishes well after the partition manager
+  reports ready -- is probed when it arrives rather than missed for the rest of
+  the boot. An arrival on its own endpoint is dropped, since every partition it
+  publishes registers under that same class. The probe is synchronous and runs on
+  the root task, so it blocks the process but not the loop's dispatch.
   `/user` mounts from a partition it names by GPT label
-  (`architecture/36-partition-manager-and-block-identity.md` §3).
+  (`architecture/36-partition-manager-and-block-identity.md` §2-§3).
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`. `/user` is a raw GPT image built by

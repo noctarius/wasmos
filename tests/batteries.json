@@ -87,7 +87,12 @@
       "name": "filesystem",
       "description": "Filesystem reads and writes through the FAT backend, and the block devices underneath it.",
       "needs_qemu": true,
-      "files": ["test_fs_open_smoke.py", "test_fs_write_smoke.py", "test_virtio_blk.py"]
+      "files": [
+        "test_fs_open_smoke.py",
+        "test_fs_write_smoke.py",
+        "test_partition_manager_late_disk.py",
+        "test_virtio_blk.py"
+      ]
     },
     {
       "name": "language-runtimes",

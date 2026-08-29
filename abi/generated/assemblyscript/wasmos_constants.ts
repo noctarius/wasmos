@@ -141,6 +141,26 @@ export const BLOCK_DESCRIPTOR_FLAG_ACTIVE_SERVICE: i32 = 0x2;
 // Writes are refused by the backend.
 export const BLOCK_DESCRIPTOR_FLAG_READ_ONLY: i32 = 0x4;
 
+// svc_class_event
+// Which existence event SVC_IPC_CLASS_EVENT reports, carried in its arg0.
+// The rest of the message names the provider it happened to: arg1=instance,
+// arg2=endpoint, arg3=pid.
+//
+// Existence only. A provider appearing, going away, or dying is the whole
+// vocabulary; link state, media change and every other DOMAIN event travels
+// over the provider's own protocol. That boundary is what keeps the registry
+// a kernel primitive instead of a framework -- see
+// docs/architecture/09-process-and-ipc.md.
+//
+// REMOVE covers a provider that unregistered and one the process manager
+// reaped after its process died, deliberately: a subscriber must drop the
+// endpoint either way, and a distinction it cannot act on differently would
+// only invite it to handle one case and not the other.
+// A provider registered under the class.
+export const SVC_CLASS_EVENT_ADD: i32 = 1;
+// A provider unregistered, or its process died and was reaped.
+export const SVC_CLASS_EVENT_REMOVE: i32 = 2;
+
 // net_socket_family
 // Address family of a socket: which layer it addresses and therefore what an
 // address means. Independent of the socket type below, as in BSD sockets.

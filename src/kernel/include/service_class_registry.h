@@ -9,12 +9,12 @@
 
 #include <stdint.h>
 
-#define SVC_CLASS_NAME_MAX 16u /* incl. NUL; keep == WASMOS_SVC_CLASS_MAX */
+/* SVC_CLASS_EVENT_* -- the existence-event kinds this registry emits -- are wire
+ * values a subscriber in any language decodes out of SVC_IPC_CLASS_EVENT arg0,
+ * so they are generated from abi/constants.yaml rather than declared here. */
+#include "../../../abi/generated/c/wasmos_constants.h"
 
-/* Existence-event kinds. Keep in sync with SVC_CLASS_EVENT_* in
- * src/drivers/include/wasmos_driver_abi.h. */
-#define SVC_CLASS_EVENT_ADD 1u
-#define SVC_CLASS_EVENT_REMOVE 2u
+#define SVC_CLASS_NAME_MAX 16u /* incl. NUL; keep == WASMOS_SVC_CLASS_MAX */
 
 /* Layout matches the wire svc_class_entry_t. */
 typedef struct {

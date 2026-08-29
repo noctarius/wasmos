@@ -84,14 +84,119 @@ Source: `architecture/06-memory-management.md`,
   (`src/services/gfx_compositor/gfx_compositor.zig:1632`) and replies
   `(buffer_id, shmem_id, stride_bytes)`; apps map it with `shmem_map_auto`
   (e.g. `examples/rust/tetris/tetris.rs:359`, `src/libui/assemblyscript`).
-  Note those apps also call `shmem_flush` per frame on a window they have
-  already mapped, which appears to be a self-copy into the pages it is mapped
-  onto -- confirm before carrying that pattern across.
+  CONFIRMED, and it is a self-copy: `warp_shmem_flush` ends in
+  `memcpy(phys_base | KERNEL_HIGHER_HALF_BASE, src, size)` where `src` is the
+  caller's linear memory at `wasm_off` (`src/kernel/warp/link.cpp:2373`), while
+  `shmem_map`/`map_auto` map the region's OWN frames into that linear memory --
+  `paging_map_4k(virt, phys_base + i*0x1000)` on WARP (`:1929`) and
+  `mm_context_map_physical` on wasm3 (`src/kernel/wasm3/link.c:2280`). Source and
+  destination are therefore the same physical pages. libui states it outright:
+  `shmem_flush(this.shmemId, this.mappedPtr, this.strideBytes * this.height)`
+  (`src/libui/assemblyscript/libui.ts:331`) -- a full-window `memcpy(p, p, n)` per
+  present, ~1.9 MB for an 800x600 ARGB window, inside a hostcall. Every flush
+  caller in the tree also maps, so no caller needs it. DO NOT carry it across.
+
+  CONSUMER AUDIT (2026-08-29, at `aea749914`). Nine guest consumers, NO drivers
+  (the only `src/drivers` hit is a header declaration), 8 host calls to retire:
+
+      gfx_compositor.zig  68 calls  create grant map unmap flush id buffer
+      gfx_smoke.c         43        create grant map_auto unmap flush id
+      font_service.zig    35        create grant map unmap flush id
+      shmem_owner.c       30        the full surface, incl. the only revoke
+      shmem_target.c      25        map map_auto unmap
+      libui.ts            19        create grant map_auto unmap flush
+      tetris.rs           17        create grant map_auto flush id
+      menu_bar.c          15        create map_auto unmap id, only refresh user
+      vt_main.c            1        map
+
+  Kernel side is implementation, not consumption: `wasm3/link.c` (61 sites),
+  `native_driver.c` (16), `futex.c` (1).
+
+  ORDER, cheapest first, each independently landable:
+  1. `vt_main.c` -- one `shmem_map`; owner-side `xfer_buffer_map` is a like-for-like
+     swap.
+  2. `menu_bar.c` -- sole `shmem_refresh` consumer, so that call retires with it.
+  3. `shmem_owner.c` / `shmem_target.c` -- tests OF the mechanism; DELETE rather
+     than port, which also retires the sole `shmem_revoke` consumer. Their
+     coverage (grant/revoke/forged-id denial) belongs to xfer buffers and largely
+     exists there already.
+  4. `libui.ts`, `tetris.rs`, `gfx_smoke.c`, then `gfx_compositor.zig` +
+     `font_service.zig` last, since the compositor owns the allocation.
+
+  OWNERSHIP DIRECTION, decided 2026-08-29: the WRITER owns. A CPU-visible
+  zero-copy mapping is owner-only today (`xfer_buffer_map` doc, and every caller
+  in the tree also acquires: `net_stack.c` 14 maps/7 acquires,
+  `framebuffer_native.c` 2/2); the borrow-side zero-copy path is DEVICE DMA via
+  `dma_map_borrow`, which returns a device address, not a guest window. So an app
+  that draws must ACQUIRE its surface and borrow it to the compositor READ, or the
+  ABI needs a rights-checked borrow-side CPU mapping (`xfer_buffer_map_borrow`,
+  WRITE implying a readable mapping since x86-64 PTEs cannot express write-only --
+  `paging.c:681`). The second is the missing primitive; the first needs no ABI
+  change and can land first. The borrow-side mapping is tracked as its own item
+  below.
 
   Done when: no `shmem_*` host call remains in `abi/hostcalls.yaml` (ids
   renumbered per the ID RULES, whole-world rebuild + `.cache/warp_aot`
   cleared), both runtimes' shims are gone, and gfx/libui/tetris run on xfer
   buffers under wasm3 AND WARP.
+- [ ] [FEATURE][P2] Add `xfer_buffer_map_borrow`: a rights-checked, borrow-scoped
+  CPU mapping, so a BORROWER can reach a buffer zero-copy. Today the matrix has a
+  hole. Owner + CPU is `xfer_buffer_map`; borrower + device is `dma_map_borrow`,
+  which returns a device DMA address; borrower + CPU has no zero-copy path at all
+  and must use `xfer_buffer_read`/`write`. The distinction the ABI actually draws
+  is not owner-vs-borrower but WHO TOUCHES THE PAGES -- a device or a guest CPU --
+  and the CPU half of the borrow side is simply missing.
+
+  Model it on `dma_map_borrow`, which already establishes borrow-scoped mapping
+  with rights validation (`flags` must be non-zero and a subset of the borrow's
+  rights): take a `borrow_id`, validate the requested access against the borrow,
+  return a linmem byte offset like `xfer_buffer_map` does, idempotent per borrow,
+  with an unmap that tears the window down.
+
+  Constraints established 2026-08-29, all load-bearing:
+  - WRITE implies a readable mapping. x86-64 PTEs encode permission as presence
+    plus a single R/W bit (`paging.c:681-690` translates MEM_REGION_FLAG_WRITE to
+    PT_FLAG_WRITE, MEM_REGION_FLAG_READ is not consulted at all), so write-only is
+    not representable. Say so in the ABI doc rather than implying an enforcement
+    the MMU cannot deliver. WRITE alone stays meaningful for `dma_map_borrow` and
+    the copy calls, where direction is enforced by the device or by the call.
+  - The mapping necessarily sets MEM_REGION_FLAG_USER, so the guard at
+    `paging.c:651` on USER && WRITE is where the existing safety reasoning about
+    writable user mappings lives; read it before adding a second caller.
+  - Teardown ordering: the window must not outlive the borrow. `unborrow` and
+    `reborrow` already exist, so revocation has to tear the mapping down rather
+    than leave stale PTEs over frames the owner may release.
+  - No new disclosure: the frames are already readable by any acquirer via the
+    owner map, and a borrower is someone the owner chose to hand the buffer to.
+    See the zero-on-acquire item below, which is the pre-existing gap and is
+    independent of this one.
+
+  Unblocks the compositor providing an explicit pixel region to an app that asks
+  for one, which is the shape the graphics migration wants: draw list by default
+  via `GFX_IPC_SUBMIT_COMMANDS`, an explicit borrowed region when an app needs to
+  author pixels itself.
+- [ ] [BUG][P2] `xfer_buffer_acquire` hands out frames without zeroing them, so a
+  fresh buffer can carry a previous tenant's bytes: another process's released
+  buffer, a dead app's window contents, a previous FS response. The path is
+  `xfer_buffer_acquire` -> `object_alloc_backing` -> `pfa_alloc_pages`, and there
+  is no `memset` in `src/kernel/xfer_buffer/xfer_buffer.c` or in the frame
+  allocator. Acquiring is not capability-gated (`warp_buffer_acquire` checks kind,
+  size, context and `warp_buffer_role_allowed`, no DMA capability), so any process
+  that may hold buffers can acquire one, map it as owner and read the recycled
+  contents before writing.
+
+  Fix is one `memset` over the freshly allocated frames in `object_alloc_backing`
+  -- once at acquire, not per borrow or per map, so it costs nothing on the
+  read/write/borrow paths. The value is that "a fresh buffer is empty" becomes a
+  property callers may rely on.
+
+  `shmem_create` wants the same treatment while it still exists: graphics buffers
+  are the largest recycled frames in the system, so a freed 3 MB window handed to
+  the next app is this issue at its worst size.
+
+  Tagged P2 because it is deliberately deferred, not because the consequence is
+  small -- by this file's own tag rules a silently-unenforced isolation property is
+  P1. Re-tag if guest isolation becomes a near-term goal.
 - [ ] [FEATURE][P2] Move native `.wap` services from ring 0 to the ring-3 native execution
   path (syscall-backed `libsys_native` primitives + capability enforcement).
   Unblocks isolating `gfx-compositor`, `font-service`, and `net-stack`

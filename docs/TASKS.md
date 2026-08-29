@@ -855,21 +855,39 @@ tail.
 
 ## Filesystems and Storage
 
-- [ ] [BUG][P1] The WFS integration tests do not pass locally: `/wfs` never
-  mounts. `fs_wfs` is spawned by its block rule and dies immediately at its entry
-  export -- `[wasm-driver] call failed: argument count mismatch`, then
-  `[pm] app entry failed` -- and the rule retries until its budget is spent, so
-  every test that reads `/wfs` reports `fs failed`.
+- [ ] [BUG][P1] `fs_wfs` cannot start under wasm3: its entry export declares four
+  parameters and the process manager always calls an entry with argc 0.
 
-  Reproduced on `origin/main` at af51ffa154 (PR #32) as well as on branches off
-  it: 10 of 11 cases in `test_wfs_mount_read` fail identically either side, so it
-  is not caused by the volume-manager work that found it. Environment is macOS,
-  the `wasm3` runtime, SMP=1; CI is Linux MTTCG and was green for #32, so the
-  first thing to establish is whether this is runtime- or host-specific rather
-  than a plain regression. `fs_wfs` declares `initialize` with four arguments and
-  `kind = "driver"`, which is the ordinary shape, so the mismatch is between what
-  the loader passes and what the module exports -- suspect the AOT path or a
-  stale module rather than the declaration.
+  `initialize` is declared `(int32_t a, int32_t b, int32_t c, int32_t d)`
+  (`src/drivers/fs_wfs/fs_wfs.c`) and immediately discards all four. Every other
+  filesystem driver declares `initialize(void)` -- `fs_fat.c:555`,
+  `fs_init.c:421` -- which is the actual contract: `process_manager_spawn.c` sets
+  `slot->entry_argc = 0` on every path spawn, and `wasmos_app.c` defaults
+  `manifest.entry_argc` to 0. wasm3 refuses the mismatch, so the driver dies at
+  its entry export and the block rule respawns it until its retry budget is
+  spent:
+
+      [wasm-driver] call failed: argument count mismatch
+      [pm] app entry failed
+      [pm] spawn child-dead pid=0x21   (x9)
+
+  `/wfs` therefore never mounts and every test that reads it reports `fs failed`.
+
+  FIX, VERIFIED: change the signature to `initialize(void)` and drop the four
+  `(void)a;` casts. `test_wfs_mount_read` goes from 10 of 11 failing to 11 of 11
+  passing, and its runtime falls from 339s to 37s once the respawn storm stops.
+  Nothing else is needed -- the arguments were already unused.
+
+  WHY CI IS GREEN: the integration batteries run under WARP only
+  (`.github/workflows/ci.yml` pins `configs/warp_smp_defconfig`), and WARP does
+  not enforce entry arity where wasm3 does. So this is invisible to CI as it
+  stands, and the same class of defect in any future driver would be too. Worth
+  considering whether the battery matrix should cover both runtimes, or whether
+  the packer should reject an entry export whose arity is not 0.
+
+  NOT caused by the volume-manager work that found it: reproduced on
+  `origin/main` at af51ffa154 with the identical 10-of-11 failures, by checking
+  that commit out and rebuilding.
 
 - [ ] [ENHANCEMENT][P2] Give a guest a way to reach truncation at an arbitrary
   size. `wfs_truncate_task` now shrinks a tree-mapped object to a size INSIDE a

@@ -3972,6 +3972,39 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running partition-table parser unit tests"
       VERBATIM)
+    # The filesystem recognisers. Unlike the parser above these import each other
+    # and the generated constants, and `wasmos_add_zig_wasm_app` resolves that by
+    # staging every .zig FLAT so @import("name.zig") finds its neighbour. The
+    # host test has to reproduce that layout, because the sources live in three
+    # directories: the recognisers under src/services/volume_manager, the table
+    # parser under src/drivers/partition_manager, and the constants under
+    # abi/generated.
+    #
+    # Only `recognise` and `wasmos_constants` are passed as named modules.
+    # partition_table deliberately is NOT: Zig gives a file reached both by path
+    # and by module name two distinct instances, whose enums are then two
+    # distinct types that compare unequal, so the suite takes Scheme from
+    # recognise.zig's re-export instead.
+    set(RECOGNISE_STAGE ${BUILD_DIR}/zig_recognise_test_src)
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${RECOGNISE_STAGE}
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              ${CMAKE_SOURCE_DIR}/src/services/volume_manager/recognise.zig
+              ${CMAKE_SOURCE_DIR}/src/services/volume_manager/recognise_fat.zig
+              ${CMAKE_SOURCE_DIR}/src/services/volume_manager/recognise_wfs.zig
+              ${DRIVER_WASM_DIR}/partition_manager/partition_table.zig
+              ${CMAKE_SOURCE_DIR}/abi/generated/zig/wasmos_constants.zig
+              ${RECOGNISE_STAGE}/
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-recognise-cache
+              --global-cache-dir ${BUILD_DIR}/zig-recognise-global-cache
+              --dep recognise
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_fs_recognise.zig
+              -Mrecognise=${RECOGNISE_STAGE}/recognise.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running filesystem recogniser unit tests"
+      VERBATIM)
   endif ()
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
     COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

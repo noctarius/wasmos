@@ -268,6 +268,43 @@ pub fn parseGptHeader(sector: []const u8) ?GptHeader {
     };
 }
 
+/// Which table, if any, a device carries — from its first two sectors, without
+/// retaining a single partition.
+///
+/// Separate from `parseMbr` because the caller that needs this needs only the
+/// answer: the volume manager suppresses a volume for a device that holds a
+/// table, and filling a `Table` to learn one enum would cost it 6 KiB of scratch
+/// on an 8 KiB shadow stack. Detection reuses the same signature checks the
+/// parsers apply, so the two cannot disagree about what a GPT is.
+///
+/// `prefix` must start at the device's own LBA 0 and reach at least two sectors;
+/// a shorter one reports `.none`, since a table cannot be ruled in without them.
+///
+/// GPT is tested first, and a protective MBR reports `.gpt` rather than `.mbr`,
+/// for the reason `probeDisk` orders its reads the same way: a GPT disk carries
+/// an MBR whose single entry spans the device, and reading that as a legacy
+/// table describes a partition nobody wrote.
+pub fn detectScheme(prefix: []const u8) Scheme {
+    if (prefix.len < SECTOR_BYTES * 2) return .none;
+    if (parseGptHeader(prefix[SECTOR_BYTES .. SECTOR_BYTES * 2]) != null) return .gpt;
+
+    const lba0 = prefix[0..SECTOR_BYTES];
+    if (lba0[MBR_SIG_OFF] != 0x55 or lba0[MBR_SIG_OFF + 1] != 0xAA) return .none;
+    var slot: usize = 0;
+    var populated = false;
+    while (slot < MBR_SLOTS) : (slot += 1) {
+        const off = MBR_TABLE_OFF + slot * MBR_ENTRY_BYTES;
+        const kind = lba0[off + 4];
+        if (kind == MBR_TYPE_PROTECTIVE) return .gpt;
+        // A slot with a type but no sectors addresses nothing, and a table of
+        // only such slots is indistinguishable from boot code that happens to
+        // end in 0x55AA. Requiring one usable entry is what keeps a FAT boot
+        // sector -- which carries that signature too -- from reading as a table.
+        if (kind != 0 and rd32(lba0, off + 12) != 0) populated = true;
+    }
+    return if (populated) .mbr else .none;
+}
+
 /// Streams the entry array past the parser while the caller reads it.
 ///
 /// The array can reach 128 x 128 bytes = 32 sectors, which does not fit the 8

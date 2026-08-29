@@ -5,9 +5,10 @@
 > the filesystem recognisers and the `volume` class this describes do not.
 
 **Sources this proposal changes**: `src/drivers/partition_manager/`,
-`src/services/device_manager/device_manager_rules.c`, `src/drivers/fs_wfs/`,
-`src/drivers/fs_fat/`, `src/utils/fsck_wfs/`, `abi/constants.yaml`,
-`abi/opcodes.yaml`, the devmgr rule files.
+`src/services/device_manager/device_manager_rules.c`, `src/drivers/fs_fat/`,
+`abi/constants.yaml`, `abi/opcodes.yaml`, the devmgr rule files.
+
+(Planned new components: a WFS filesystem driver and fsck/mkfs utilities; their exact paths are part of the implementation work.)
 
 **Related**: `architecture/36-partition-manager-and-block-identity.md` (block
 descriptors, the partition manager), `architecture/18-filesystem-stack.md`

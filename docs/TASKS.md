@@ -865,6 +865,55 @@ tail.
   `ftruncate` means a host call plus the libc and libsys wrappers kept in sync
   across the runtime-specific variants, then a case in
   `examples/c/wfs_write_smoke`.
+- [ ] [BUG][P3] `mount` names every WFS volume `fs-fat`. `fs_manager.c` maps the
+  backend KIND to a display name, and `FSMGR_BACKEND_BOOT` prints as `fs-fat`;
+  `fs_wfs` registers under that kind because the kind says where a volume sits
+  in the namespace, not which driver serves it. Routing is unaffected -- reads
+  and writes reach the right driver -- but the listing asserts something false,
+  and it cost real time in diagnosis: a WFS write failure read as "the FAT
+  driver claimed the volume". Either the backend reports its own name, or the
+  listing stops inferring one from the kind.
+- [ ] [BUG][P2] The `fs.backend` class instance encodes (kind, unit) and not the
+  BLOCK BACKEND, so two volumes whose units collide across backends -- ATA unit
+  2 and a virtio-blk device at slot 0 function 2 -- derive one instance. The
+  second registration is refused and its mount never appears. This is the defect
+  the retired `block` NAME had, one layer up: a disk is (backend, unit), so the
+  instance has to carry the backend. Fixing it widens the encoding, which
+  fs-manager and `fs_fat` decode too (`src/drivers/fs_wfs/fs_wfs.c`).
+- [ ] [FEATURE][P3] Symlinks (spec §20). Nothing creates or resolves one:
+  `WFS_TYPE_SYMLINK` is defined by the format and used by no code. The format
+  stores a short target inline in the object record, so this is a namespace
+  operation plus resolution in the path walker, not a layout change.
+- [ ] [FEATURE][P3] Hard links (spec §19). `link_count` is maintained correctly
+  -- created, incremented on a directory's `..`, decremented on unlink, and
+  checked by fsck -- but nothing can create a SECOND name for one object, so the
+  count never exceeds what a single link plus `.`/`..` implies. Wants an FS
+  operation and an opcode; deletion already does the right thing once one
+  exists.
+- [ ] [ENHANCEMENT][P3] WFS timestamps are whatever the caller passes, and the
+  driver passes nothing: `atime`/`mtime`/`ctime`/`btime` are written from a
+  `now_ns` that is zero outside the host tools, so every object on a
+  guest-written volume carries the epoch. The RTC service is the source
+  (`src/drivers/fs_wfs/wfs_types.h`); it needs a driver-side clock read that
+  does not cost an IPC round trip per metadata write.
+- [ ] [ENHANCEMENT][P3] Record `WFS_STATE_ERROR` when an ORDINARY operation
+  finds a bad checksum -- an object record, a directory tail, an extent node.
+  Only a failed journal replay records it today; every other inconsistency
+  reaches the caller as `WASMOS_ERR_FS_CHECKSUM` and leaves the volume writable,
+  so the next mount sees nothing wrong. Needs a write from paths that are
+  otherwise read-only, and a policy decision this has not made: whether one bad
+  record should cost the whole volume its writability, as ext4's
+  `errors=remount-ro` does (`src/drivers/fs_wfs/wfs_sync.h`).
+- [ ] [ENHANCEMENT][P4] A full-block overwrite still reads the block first. The
+  read is pure cost when every byte is about to be replaced, exactly as it is
+  for a freshly allocated block, which already skips it
+  (`src/drivers/fs_wfs/wfs_write.c`).
+- [ ] [ENHANCEMENT][P3] WFS mount rules still name a disk and a unit
+  (`DRIVER=="ata", ATTR{unit}=="2"`), which is what Phase 3 set out to retire.
+  They cannot stop until a volume exists to match on: a raw formatted disk is
+  not a partition, so `SUBSYSTEM=="partition"` does not reach it and no
+  `fstype` is ever reported for it. Blocked on the volume manager above.
+
 - [ ] [ENHANCEMENT][P2] Batch several WFS metadata operations into one journal
   transaction. The driver retires each transaction before the next begins
   (`wfs_journal_t`), so every metadata write pays a full descriptor, commit and

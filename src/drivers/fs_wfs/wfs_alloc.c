@@ -167,9 +167,10 @@ int32_t wfs_alloc_blocks_task(void* user, uintptr_t* out_value) {
          * synced, and writing block 0 per allocation would cost a device write
          * for a number fsck rebuilds anyway.
          *
-         * TODO: no sync path writes the superblock back yet, so a volume's
-         * on-disk free_blocks trails its bitmaps until fsck or a future unmount
-         * reconciles it. */
+         * The on-disk counter therefore trails the bitmaps between syncs, which
+         * is what §4 means by calling it derived and advisory. wfs_sync_task
+         * reconciles it -- at the clean unmount, and nowhere else -- and fsck
+         * recomputes it from the bitmaps when no clean unmount happened. */
         if (ctx->vol->super.free_blocks >= ctx->run_length) {
             ctx->vol->super.free_blocks -= ctx->run_length;
         } else {

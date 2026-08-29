@@ -27,12 +27,11 @@
  * before step 3, not which of them is written first.
  *
  * THE BARRIER IS REQUEST ORDERING, NOT A CACHE FLUSH. Every step here awaits its
- * block reply before issuing the next request, so the device sees the writes in
- * order; nothing makes a device with a volatile write cache commit them to
- * media.
- * TODO: the block ABI has no flush (abi/opcodes.yaml, BLOCK_IPC_*). Until
- * BLOCK_IPC_FLUSH_REQ exists, a device that reorders across its own cache can
- * defeat steps 2, 4 and 6.
+ * block reply before issuing the next request orders only what the DEVICE saw,
+ * so each of §14's steps 2, 4 and 6 additionally awaits a BLOCK_IPC_FLUSH_REQ:
+ * a volatile write cache may otherwise commit them in another order, and a
+ * COMMIT block reaching media ahead of the images it names is precisely the
+ * transaction recovery would apply from a log that does not hold it.
  *
  * Reads inside an open transaction see the transaction's own writes: the block
  * layer's redirect (wfs_block_set_redirect) maps a journaled target to the log

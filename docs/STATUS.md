@@ -1352,6 +1352,21 @@ linked feature documents for rationale and rollout plans.
   awaits already in place. File DATA keeps writing straight to its block (§17):
   the block a write lands in, the block an inline promotion moves bytes into, and
   the tail a truncation zeroes are all data.
+- WHAT WFS DOES NOT DO, so the phase count is not read as completeness. All four
+  phases (§23) are implemented; these are format features and quality-of-service
+  the phases never listed, each tracked in `docs/TASKS.md`:
+  no symlinks (§20) and no way to CREATE a hard link (§19, though `link_count`
+  is maintained and checked); timestamps are the epoch on any guest-written
+  volume, because the driver has no clock; a full-block overwrite still reads
+  the block first; an inconsistency found outside a journal replay is reported
+  but not recorded as `WFS_STATE_ERROR`; an extent tree stops at one interior
+  level; each metadata operation is its own transaction; and no guest can create
+  a volume, only mount one.
+  Two are visible from outside and worth knowing before reading a failure: the
+  `mount` listing names every WFS volume `fs-fat`, because fs-manager derives
+  that label from the backend KIND rather than from the driver; and a WFS mount
+  rule still names a disk and a unit, because a raw formatted disk is not a
+  partition and nothing publishes it as a volume yet.
 - PHASE 4 IS COMPLETE (§23): inline data was already implemented and in use, and
   `fsck.wfs` (`src/utils/fsck_wfs`) is the checker. Its core is compiled twice --
   into the guest utility and into `tests/unit/test_wfs_fsck.c`, which runs it

@@ -44,6 +44,11 @@ GPT_HEADER_SIZE = 92
 # "Microsoft basic data", the type every general-purpose data partition carries.
 BASIC_DATA_GUID = "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7"
 
+# The EFI System Partition. UEFI identifies the ESP by this type GUID and not by
+# any bootable flag -- GPT has none, and firmware ignores the legacy MBR active
+# bit -- so this is what "bootable" means on a GPT disk.
+ESP_GUID = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
+
 # The FAT16 window: fewer than 4085 clusters is FAT12 and 65525 or more is FAT32,
 # and a volume that lands in the wrong band is a volume this project's driver
 # reads as the wrong filesystem. 2 KiB clusters over a 64 MiB partition sits near
@@ -261,7 +266,9 @@ def gpt_header(
     return bytes(header).ljust(SECTOR, b"\0")
 
 
-def build_image(size_mib: int, label: str, files: list) -> bytes:
+def build_image(
+    size_mib: int, label: str, files: list, type_guid: str = BASIC_DATA_GUID
+) -> bytes:
     total_lbas = (size_mib * 1024 * 1024) // SECTOR
     # 1 header + 32 entry LBAs at each end, plus LBA 0 for the protective MBR.
     first_usable = 2 + GPT_ENTRY_LBAS
@@ -281,7 +288,7 @@ def build_image(size_mib: int, label: str, files: list) -> bytes:
     volume = build_fat16(part_sectors, label, files)
 
     entry = bytearray(GPT_ENTRY_SIZE)
-    entry[0:16] = guid_to_bytes(BASIC_DATA_GUID)
+    entry[0:16] = guid_to_bytes(type_guid)
     entry[16:32] = stable_guid(f"wasmos:{label}")
     struct.pack_into("<QQQ", entry, 32, part_first, part_last, 0)
     entry[56:128] = label.encode("utf-16-le").ljust(72, b"\0")[:72]
@@ -376,6 +383,11 @@ def main(argv):
     ap.add_argument(
         "--source", default="", help="directory whose files land in the volume root"
     )
+    ap.add_argument(
+        "--esp",
+        action="store_true",
+        help="type the partition as an EFI System Partition instead of basic data",
+    )
     args = ap.parse_args(argv)
 
     files = []
@@ -387,7 +399,12 @@ def main(argv):
             with open(path, "rb") as handle:
                 files.append((name, handle.read()))
 
-    image = build_image(args.size_mib, args.label, files)
+    image = build_image(
+        args.size_mib,
+        args.label,
+        files,
+        ESP_GUID if args.esp else BASIC_DATA_GUID,
+    )
     verify(image)
 
     # Written via a temporary and renamed, so a build interrupted mid-write

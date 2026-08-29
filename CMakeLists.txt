@@ -3966,9 +3966,10 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
               --cache-dir ${BUILD_DIR}/zig-partition-table-cache
               --global-cache-dir ${BUILD_DIR}/zig-partition-table-global-cache
-              --dep partition_table
+              --dep partition_table --dep fixtures_disk_images
               -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_partition_table.zig
               -Mpartition_table=${DRIVER_WASM_DIR}/partition_manager/partition_table.zig
+              -Mfixtures_disk_images=${CMAKE_SOURCE_DIR}/tests/unit/fixtures_disk_images.zig
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running partition-table parser unit tests"
       VERBATIM)
@@ -3999,9 +4000,10 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
               --cache-dir ${BUILD_DIR}/zig-recognise-cache
               --global-cache-dir ${BUILD_DIR}/zig-recognise-global-cache
-              --dep recognise
+              --dep recognise --dep fixtures_disk_images
               -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_fs_recognise.zig
               -Mrecognise=${RECOGNISE_STAGE}/recognise.zig
+              -Mfixtures_disk_images=${CMAKE_SOURCE_DIR}/tests/unit/fixtures_disk_images.zig
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running filesystem recogniser unit tests"
       VERBATIM)

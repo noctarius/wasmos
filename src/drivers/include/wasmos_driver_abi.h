@@ -262,11 +262,6 @@ typedef struct __attribute__((packed)) {
 #define WASMOS_SVC_NAME_MAX 36u
 #define WASMOS_SVC_CLASS_MAX 16u /* incl. NUL; keep == SVC_CLASS_NAME_MAX */
 
-/* Existence-event kinds carried in SVC_IPC_CLASS_EVENT arg0. Keep in sync with
- * SVC_CLASS_EVENT_* in src/kernel/include/service_class_registry.h. */
-#define SVC_CLASS_EVENT_ADD 1u
-#define SVC_CLASS_EVENT_REMOVE 2u
-
 /* Register descriptor written to the xfer buffer for SVC_IPC_REGISTER_DESC_REQ.
  * Extensible: bump WASMOS_SVC_REGISTER_DESC_VERSION and append fields.  Mirror
  * this layout in any non-C binding that registers services.  v2 appended the

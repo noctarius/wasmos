@@ -247,6 +247,52 @@ SUBSYSTEM=="block", RUN+="system/drivers/partition_manager.wap"
 It subscribes to the `block` service class, and for each disk that appears:
 reads the table, and either publishes partitions or gets out of the way.
 
+#### Discovery: subscribe, then enumerate
+
+`subscribeClass("block")` runs FIRST and `lookupClass("block")` second. That
+order is what leaves no gap — a disk registering between the two fires an event
+already waiting when the loop starts, where subscribing afterwards would lose it
+silently. The two overlapping costs nothing: an arrival naming an instance
+already in the disk table is dropped.
+
+Enumerating alone was a live defect, not a theoretical one. It answers "which
+disks exist now", and a driver that registers later is then invisible for the
+rest of the boot, table and all. virtio-blk is exactly that driver: it negotiates
+a PCI device, claims an MSI-X vector and sets up a virtqueue before publishing,
+and lands well after the partition manager reports ready. ATA does not, which is
+the only reason the shipped boot image looked unaffected —
+`tests/test_partition_manager_late_disk.py` attaches a GPT-partitioned virtio
+disk and is the regression guard.
+
+Two arrivals are dropped rather than probed:
+
+- **Our own endpoint.** Every partition published here registers under the same
+  `block` class, so our registrations come back to us. Probing one would send
+  `IDENTIFY` to ourselves and then block waiting for a reply only our own message
+  loop could produce, wedging the process. The registry notifies every
+  subscriber, the registrant included; it does not exempt the publisher.
+- **An instance already in the disk table**, which is what makes the
+  subscribe/enumerate overlap harmless.
+
+A probe is synchronous — nothing can be published before the disk is described
+and its table read — so it runs on the ROOT task, not in the handler that
+received the arrival: a handler that blocks stalls the loop it was dispatched
+from. The handler queues the arrival and settles the root's wake promise. Because
+a stackless task resumes from the top, the root drains the queue BEFORE awaiting,
+which is what makes it a loop rather than a one-shot.
+
+The probe stages its request descriptor in its own transfer buffer, separate from
+the one forwarded transfers use. Sharing it was safe only while probing happened
+solely at bring-up: a backend reads a request descriptor when it reaches the
+message, not when the message is sent, so a probe running alongside live traffic
+could overwrite a client's request in that window.
+
+`SVC_CLASS_EVENT_REMOVE` is received and ignored. Retiring a disk means
+unregistering the partitions published from it and telling the device manager
+they are gone; no shipped driver unregisters, so that path has no caller. Dropping
+the local record alone would be worse than doing nothing — the partitions would
+stay in the registry addressing a disk nothing could reach.
+
 #### One endpoint, not a fan-out
 
 An earlier revision of this section gave the service one endpoint per disk
@@ -391,10 +437,12 @@ hardware capabilities at all — the manager touches no device, only IPC.
 
 It ships on the ESP and is spawned from the BOOT rules by absolute path
 (`RUN+="/boot/system/drivers/partmgr.wap"`), not from initfs. Those rules load
-only once storage is online, so every disk has registered before it enumerates
-and there is no race with a driver that had not probed yet. The absolute path
-matters: a relative rule path is resolved against the initfs module list first,
-so an ESP-only module has to say where it lives.
+only once storage is online, which is what makes `/boot` mountable at all — see
+§3. It is no longer what makes discovery correct: the class subscription above
+covers a driver that had not probed yet, and it had to, because the disks
+registered by then are only the ones ATA published. The absolute path matters: a
+relative rule path is resolved against the initfs module list first, so an
+ESP-only module has to say where it lives.
 
 Keeping it out of initfs is also what keeps Zig off the critical build path.
 CMake derives the initfs payload list from every `source =` line in
@@ -498,9 +546,10 @@ naming a disk.
 `fat_try_parse_mbr`: the partition manager is spawned from the BOOT rules, which
 cannot load until `/boot` is mounted, so `/boot` cannot be mounted from a
 partition the partition manager published. Closing that circle means moving the
-partition manager into initfs and teaching it to probe disks that register after
-it starts — it enumerates the `block` class exactly once today, which is also why
-a disk whose driver comes up late is never probed. Tracked in Open Items.
+partition manager into initfs. Half of that is done: it subscribes to the `block`
+class and probes disks that register after it starts (§2, "Discovery"), which it
+had to before it could run anywhere but last. The move itself is still open, and
+its cost is Zig on the critical build path. Tracked in Open Items.
 
 ---
 
@@ -550,11 +599,19 @@ way the virtio-blk build already is.
 - Whether the ESP itself should stop being vvfat. It would remove MBR support
   entirely, at the cost of the instant-rebuild ergonomics that `fat:rw:` gives
   across every QEMU target.
-- The partition manager enumerates the `block` class once, at bring-up. A disk
-  whose driver registers afterwards is never probed and its partitions never
-  appear. Subscribing to the class instead is also the prerequisite for running
-  the partition manager from initfs, which is what would let `/boot` mount from
-  a partition and retire `fat_try_parse_mbr`.
+- The partition manager still runs from the BOOT rules, not from initfs, which
+  is what keeps `/boot` on a whole-disk rule and `fat_try_parse_mbr` alive.
+  Probing late arrivals — the prerequisite — is done; the move itself is not,
+  and it puts Zig on the critical build path.
+- A late probe blocks the process for its duration, because a probe is
+  synchronous and forwarding is not. Bounded (one IDENTIFY plus at most 34
+  sector reads), but a disk arriving under load pauses transfers on the disks
+  already published. Driving the probe over the loop's `IpcFuture` removes it.
+- Every forwarded transfer stages its request descriptor in ONE buffer, so up to
+  `MAX_INFLIGHT` requests share a slot a backend reads when it reaches the
+  message rather than when the message is sent. Latent: it needs two clients
+  transferring concurrently through one partition manager. The probe path no
+  longer shares that buffer.
 - Two partitions of one disk register the same `fs.backend` class instance,
   because `FSMGR_BACKEND_INSTANCE` packs `(kind, unit)` and a partition reports
   its disk's unit. No shipped configuration mounts two volumes from one disk, so

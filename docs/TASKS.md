@@ -1027,17 +1027,85 @@ tail.
   label supplies the mount MATCHER, not the mount path: a rule still says where a
   volume goes, so a labelled volume can be remounted elsewhere without rewriting
   a partition table. See `architecture/36-partition-manager-and-block-identity.md` §3.
-- [ ] [FEATURE][P2] Probe disks that register after the partition manager starts,
-  and move it into initfs. `probeAll` enumerates the `block` class exactly once at
-  bring-up (`src/drivers/partition_manager/partition_manager.zig`), so a disk
-  whose driver registers later is never probed and its partitions never appear.
-  Subscribing to the class instead is also the prerequisite for running the
-  partition manager from initfs, which is what breaks the bootstrap circle that
-  keeps `fat_try_parse_mbr` alive: it is spawned from the BOOT rules, which
-  cannot load until `/boot` is mounted, so `/boot` cannot be mounted from a
-  partition the partition manager published. Deleting `fat_try_parse_mbr`
+- [ ] [FEATURE][P2] A volume manager, and filesystem recognisers.
+  Design: `architecture/37-volume-manager.md`.
+
+  A volume is a thing with a filesystem on it -- a formatted raw disk, a
+  formatted partition, later a span of several. Nothing publishes that: the
+  `block` class answers "what storage exists", which is a different question, so
+  a rule that wants a filesystem still has to name where it sits. Phase 3 got as
+  far as matching a PARTITION's label, which does not reach a formatted disk
+  with no table at all.
+
+  The blocking piece is a RECOGNISER: something that identifies a format without
+  that format's driver being resident. It cannot live in the filesystem drivers,
+  which are spawned BY the rule that needs the answer, and it does not belong in
+  the partition manager, whose job is tables and which publishes nothing for a
+  disk without one -- a recogniser written there does work, which is what makes
+  it the tempting wrong place. Linux keeps it in a library (`libblkid`,
+  `superblocks/` beside `partitions/`) that udev runs at publish time; Windows
+  keeps it in a recogniser stub separate from the filesystem. HelenOS asks each
+  filesystem server in turn, which it can afford because its servers are
+  resident and ours are not.
+
+  `wasmos_block_descriptor_t.fs_type` already exists and is always
+  `FS_TYPE_UNKNOWN`; `FS_TYPE_*` and the `ATTR{fstype}` matcher are the reporting
+  surface a recogniser would fill in.
+
+  A volume manager also gives exclusivity an owner. A checker or a formatter must
+  refuse a MOUNTED volume, and nothing enforces that since the block layer
+  stopped arbitrating who may use a drive -- correctly, because a request now
+  names its own target. A `claimed` flag on the volume is what they would
+  consult -- recording a claim, not enforcing one: the volume manager is not in
+  the I/O path, so a tool that does not ask is not stopped.
+
+  Two decisions gate the implementation, both in `architecture/37-volume-manager.md` §6.
+  A disk carrying a partition table must NOT also publish a volume, or `/boot`
+  appears twice; the suppressing signal is the table, and the block descriptor
+  cannot supply it today because `scheme` is always `PARTITION_SCHEME_NONE` on a
+  whole disk (the disk driver publishes that record and reads no tables). The
+  volume manager must also SUBSCRIBE to the `block` class rather than enumerate
+  it; the partition manager is the worked example to copy, down to dropping an
+  arrival on its own endpoint (`architecture/36-partition-manager-and-block-identity.md`
+  §2, "Discovery").
+
+- [ ] [FEATURE][P2] Move the partition manager into initfs.
+  Probing late-registering disks — the prerequisite — is DONE: it subscribes to
+  the `block` class and probes what arrives, guarded by
+  `tests/test_partition_manager_late_disk.py`. What remains is the move itself,
+  which breaks the bootstrap circle that keeps `fat_try_parse_mbr` alive: the
+  partition manager is spawned from the BOOT rules, which cannot load until
+  `/boot` is mounted, so `/boot` cannot be mounted from a partition the partition
+  manager published. Deleting `fat_try_parse_mbr`
   (`src/drivers/fs_fat/fat_geom.c`) removes the last partition-table reader
-  outside the partition manager.
+  outside the partition manager. The cost is Zig on the critical build path:
+  CMake derives the initfs payload list from `scripts/initfs.toml`, so a Zig
+  module there makes the boot image unbuildable without a Zig toolchain.
+- [ ] [ENHANCEMENT][P3] Drive the partition manager's probe over the event loop's
+  `IpcFuture` instead of `driver.call`. A probe is synchronous, so it blocks the
+  whole process for its duration — bounded at one IDENTIFY plus at most 34 sector
+  reads, but a disk arriving under load now pauses transfers on the disks already
+  published, where before probing only ever happened at bring-up. It runs on the
+  root task rather than in the message handler, which keeps the loop's dispatch
+  unblocked but not the process. Carries a `TODO` at `drainArrivals`. The shape is
+  a state machine over IDENTIFY -> GPT header -> entry sectors -> MBR; the parser
+  itself takes byte slices and does not change.
+- [ ] [BUG][P3] Forwarded block transfers share one request-descriptor buffer.
+  `g_down_req_bid` (`src/drivers/partition_manager/partition_manager.zig`) is
+  written per forwarded transfer, but a backend reads the descriptor when it
+  reaches the message, not when the message is sent — so up to `MAX_INFLIGHT`
+  requests can occupy the slot at once and a later one can overwrite a request
+  the backend has not read. Latent: it needs two clients transferring
+  concurrently through one partition manager, which no shipped configuration
+  does. The fix is a slot per in-flight request at its own offset, the shape
+  `g_publish_bid` already uses. The probe path no longer shares this buffer.
+- [ ] [ENHANCEMENT][P3] Retire a disk's partitions when its provider goes away.
+  The partition manager receives `SVC_CLASS_EVENT_REMOVE` and ignores it
+  (`handleClassEvent`), because unregistering the partitions and telling the
+  device manager they are gone is a teardown path with no caller — no shipped
+  driver unregisters. Dropping the local record alone would be worse than doing
+  nothing: the partitions would stay in the registry addressing a disk nothing
+  could reach.
 - [ ] [BUG][P3] Two partitions of one disk collide on the `fs.backend` class
   instance. `FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`
   (`src/drivers/include/wasmos_driver_abi.h`) and a partition reports its disk's

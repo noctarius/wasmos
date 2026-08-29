@@ -171,6 +171,26 @@ groups:
       - { symbol: BLOCK_DESCRIPTOR_FLAG_ACTIVE_SERVICE, value: 0x2, doc: "A filesystem service is mounted on it." }
       - { symbol: BLOCK_DESCRIPTOR_FLAG_READ_ONLY, value: 0x4, doc: "Writes are refused by the backend." }
 
+  - name: svc_class_event
+    doc: |
+      Which existence event SVC_IPC_CLASS_EVENT reports, carried in its arg0.
+      The rest of the message names the provider it happened to: arg1=instance,
+      arg2=endpoint, arg3=pid.
+
+      Existence only. A provider appearing, going away, or dying is the whole
+      vocabulary; link state, media change and every other DOMAIN event travels
+      over the provider's own protocol. That boundary is what keeps the registry
+      a kernel primitive instead of a framework -- see
+      docs/architecture/09-process-and-ipc.md.
+
+      REMOVE covers a provider that unregistered and one the process manager
+      reaped after its process died, deliberately: a subscriber must drop the
+      endpoint either way, and a distinction it cannot act on differently would
+      only invite it to handle one case and not the other.
+    constants:
+      - { symbol: SVC_CLASS_EVENT_ADD, value: 1, doc: "A provider registered under the class." }
+      - { symbol: SVC_CLASS_EVENT_REMOVE, value: 2, doc: "A provider unregistered, or its process died and was reaped." }
+
   - name: net_socket_family
     doc: |
       Address family of a socket: which layer it addresses and therefore what an

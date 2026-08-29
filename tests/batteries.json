@@ -90,6 +90,7 @@
       "files": [
         "test_fs_open_smoke.py",
         "test_fs_write_smoke.py",
+        "test_partition_manager_late_disk.py",
         "test_virtio_blk.py",
         "test_wfs_clean_unmount.py",
         "test_wfs_mount_read.py",

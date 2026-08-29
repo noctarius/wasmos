@@ -102,8 +102,9 @@ SUBSYSTEM=="volume", ATTR{label}=="user",  ENV{MOUNT}="/user"
 
 Neither names a disk, a unit, a backend or a table slot. Moving the image to
 another controller, or putting it in a partition, does not change the rule. This
-is the end state `architecture/36` §3 was reaching for; it stops short because
-matching on the partition still requires the volume to BE a partition.
+is the end state `architecture/36-partition-manager-and-block-identity.md` §3
+was reaching for; it stops short because matching on the partition still
+requires the volume to BE a partition.
 
 ## 5. Exclusivity
 
@@ -157,8 +158,9 @@ A disk carrying a partition table must not also be published as a volume. If it
 were, `/boot` would appear twice — once as the partition holding it, once as the
 disk beneath — and a rule matching on `fstype` would match whichever arrived
 first. This is the same failure the `SUBSYSTEM` split fixed one layer down
-(`architecture/36-partition-manager-and-block-identity.md` §3), reappearing because the volume layer flattens exactly the
-distinction that split introduced.
+(`architecture/36-partition-manager-and-block-identity.md` §3), reappearing
+because the volume layer flattens exactly the distinction that split
+introduced.
 
 Recognition alone does not settle it. A recogniser reading LBA 0 of a partitioned
 disk finds a table, matches nothing, and yields `FS_TYPE_UNKNOWN` — which is a
@@ -173,7 +175,8 @@ it, and the choice is a real one:
 
 - **The volume manager parses tables too**, reusing `partition_table.zig`. Honest
   and self-contained, but it makes two components readers of the same on-disk
-  structure, which is precisely what `architecture/36` centralised.
+  structure, which is precisely what
+  `architecture/36-partition-manager-and-block-identity.md` centralised.
 - **The block descriptor carries it.** Cheaper, and wrong today: `scheme` is
   always `PARTITION_SCHEME_NONE` on a whole disk, because the DISK DRIVER
   publishes that record and disk drivers read no tables
@@ -258,7 +261,8 @@ permanently one value — a field nothing sets is one a later reader will trust.
 ## 10. Constraints inherited from the block layer
 
 **`/boot` cannot be a volume, yet.** The mount-policy examples in §4 do not cover
-it, and it is the case that stopped `architecture/36` §3 short. The partition
+it, and it is the case that stopped
+`architecture/36-partition-manager-and-block-identity.md` §3 short. The partition
 manager is spawned from the BOOT rules, which cannot load until `/boot` is
 mounted, so `/boot` cannot mount from anything the partition manager published —
 and a volume manager consuming the `block` class sits one layer further from the

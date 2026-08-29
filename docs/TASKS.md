@@ -911,7 +911,7 @@ tail.
   consult -- recording a claim, not enforcing one: the volume manager is not in
   the I/O path, so a tool that does not ask is not stopped.
 
-  Two decisions gate the implementation, both in `architecture/37` §6 and §8.
+  Two decisions gate the implementation, both in `architecture/37-volume-manager.md` §6.
   A disk carrying a partition table must NOT also publish a volume, or `/boot`
   appears twice; the suppressing signal is the table, and the block descriptor
   cannot supply it today because `scheme` is always `PARTITION_SCHEME_NONE` on a

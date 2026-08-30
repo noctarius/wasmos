@@ -358,22 +358,20 @@ static void ata_wait_step(void) {
     }
 }
 
-/* Whether a wait step SLEEPS rather than spins.
+/* Whether a wait step on the CURRENT channel sleeps rather than spins.
  *
- * NOT the same as whether the interrupt is live. Only the primary channel's line
- * is routed (see ata_wait_step), so a transfer on the secondary polls even when
- * g_irq_active is set. Every attempt budget must be chosen against this rather
- * than against g_irq_active, because a sleep-sized budget spent on spins is a
- * timeout orders of magnitude shorter than the one intended: ATA_IRQ_ATTEMPTS is
- * 200 sleeps, and 200 port writes is roughly 80 microseconds.
+ * Per channel, because each has its own line and either may fall back to polling
+ * without the other: `g_irq_active` is indexed by `g_channel`, and a channel that
+ * fell back spins in `ata_wait_step` however the other is doing.
  *
- * Shared by both budget helpers so they cannot drift apart again. They already
- * had: ata_wait_flush_done computed this correctly while ata_wait_attempts keyed
- * on g_irq_active alone, which gave every read, DRQ wait and DMA completion on
- * the secondary channel -- the channel /wfs lives on -- that 80 microseconds to
- * finish before it was reported as WASMOS_ERR_BLOCK_DEV_READ_FAILED. Under load
- * the drive misses that window often enough to fail roughly one boot in three,
- * surfacing as a filesystem that intermittently cannot find a path that exists. */
+ * Every attempt budget must be chosen against THIS rather than against a
+ * transfer's own notion of whether interrupts work, because a sleep-sized budget
+ * spent on spins is a timeout orders of magnitude shorter than the one intended:
+ * ATA_IRQ_ATTEMPTS is 200 sleeps, and 200 port writes is roughly 80 microseconds
+ * -- enough that a drive misses the window under load and a read is reported as
+ * WASMOS_ERR_BLOCK_DEV_READ_FAILED.
+ *
+ * Shared by both budget helpers so they cannot drift apart. */
 static int ata_wait_step_sleeps(void) {
     return g_irq_active[g_channel] != 0u;
 }

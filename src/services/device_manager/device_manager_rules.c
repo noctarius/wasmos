@@ -604,6 +604,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
          * ATTR{partlabel}: the ESP carries no partition label at all while its
          * FAT boot sector says "QEMU VVFAT". */
         if (extract_op_value(tok, "ATTR{label}", "==", fslabel, sizeof(fslabel)) == 0) {
+            rule.has_label = 1;
             continue;
         }
         if (extract_op_value(tok, "ATTR{uuid}", "==", uuid_text, sizeof(uuid_text)) == 0) {
@@ -650,7 +651,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
      * block or partition rule matched a descriptor field no publisher ever set
      * (see architecture/37 section 9), so it silently matched nothing. */
     if (rule.subsystem != (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME &&
-        (fslabel[0] || rule.has_uuid || rule.has_boot)) {
+        (rule.has_label || rule.has_uuid || rule.has_boot)) {
         return -1;
     }
     /* A partition matcher on a disk rule is a rule that can never fire: a whole

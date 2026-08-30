@@ -226,6 +226,13 @@ typedef struct {
      * nothing, so they are separate matchers rather than one spelling. */
     uint8_t has_uuid;
     uint8_t uuid[VOLUME_DESCRIPTOR_UUID_MAX];
+    /* `has_label` is not `label[0]`. A FAT volume may genuinely be named "", and
+     * the descriptor already separates that from a format carrying no label at
+     * all (VOLUME_DESCRIPTOR_FLAG_HAS_LABEL); a rule has to be able to say the
+     * same thing. Inferring presence from the first byte made ATTR{label}==""
+     * inexpressible, and made it invisible to the cross-subsystem check that
+     * refuses a volume matcher on a block rule. */
+    uint8_t has_label;
     char label[VOLUME_DESCRIPTOR_LABEL_MAX];
     /* ATTR{boot}: the volume this system was loaded from, as the FIRMWARE named
      * it. The one identity nothing on the volume itself can supply -- an ESP's

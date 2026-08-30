@@ -1538,8 +1538,10 @@ static int volume_rule_matches(const block_fs_rule_t* rule,
     }
     /* An unlabelled format can never match a label matcher, which is not the
      * same as matching an empty label: WFS carries no label at all, while a FAT
-     * volume may genuinely be named "". HAS_LABEL is what separates them. */
-    if (rule->label[0]) {
+     * volume may genuinely be named "". HAS_LABEL separates them on the
+     * descriptor and `has_label` does the same for the rule, so
+     * ATTR{label}=="" selects exactly the volumes whose label is blank. */
+    if (rule->has_label) {
         if ((desc->flags & VOLUME_DESCRIPTOR_FLAG_HAS_LABEL) == 0u) {
             return 0;
         }

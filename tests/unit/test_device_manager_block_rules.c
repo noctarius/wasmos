@@ -596,6 +596,37 @@ static void a_boot_matcher_outside_a_volume_rule_is_refused(void) {
           "and so is a boot matcher that is neither 0 nor 1");
 }
 
+/* An EMPTY label is a label. A FAT volume may genuinely be named "", which is
+ * not the same as a format that carries no label at all -- the descriptor has
+ * always separated the two, and a rule has to be able to say it as well.
+ *
+ * Presence inferred from `label[0]` could not: ATTR{label}=="" was
+ * indistinguishable from no matcher, so it matched every volume instead of the
+ * blank-labelled ones, and slipped past the check that refuses a volume matcher
+ * on a block rule. */
+static void an_empty_label_matcher_selects_the_blank_label(void) {
+    static const uint8_t SERIAL[4] = {0x11, 0x22, 0x33, 0x44};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{label}==\"\", "
+                    "ENV{MOUNT}=\"/blank\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "an empty-label rule parses");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 1u, (uint32_t)FS_TYPE_FAT, "USER", SERIAL, 4u);
+    check(g_dm.block_fs_rules[0].queued == 0u, "a labelled volume does not satisfy it");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_FAT, "", SERIAL, 4u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "and a blank-labelled one does");
+}
+
+/* The same flag on the refusal path: a volume matcher on a block rule can never
+ * fire, and an empty value must not smuggle one past. */
+static void an_empty_label_matcher_outside_a_volume_rule_is_refused(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", ATTR{label}==\"\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "a disk rule carrying an empty ATTR{label} is refused");
+}
+
 /* A malformed matcher rejects the RULE. Dropping the attribute instead would
  * widen the rule to everything its author did not ask for, and on the mount path
  * that means a filesystem on the wrong volume. */
@@ -677,6 +708,8 @@ int main(void) {
     the_boot_volume_is_the_one_the_firmware_named();
     without_a_boot_partition_nothing_is_the_boot_volume();
     a_boot_matcher_outside_a_volume_rule_is_refused();
+    an_empty_label_matcher_selects_the_blank_label();
+    an_empty_label_matcher_outside_a_volume_rule_is_refused();
     a_malformed_matcher_rejects_the_rule();
     a_partition_matcher_on_a_disk_rule_is_refused();
     an_overlong_rule_line_is_refused();

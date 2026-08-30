@@ -131,6 +131,11 @@ pub fn setLabel(out: *Verdict, src: []const u8) void {
     while (end > 0 and (src[end - 1] == ' ' or src[end - 1] == 0)) : (end -= 1) {}
     if (end == 0 or end >= LABEL_MAX) {
         if (end == 0) {
+            // An empty label is a label: the format carries the field and it is
+            // blank, which is not the same as carrying none (WFS). The buffer is
+            // cleared on this path too, so a Verdict written twice cannot leave
+            // an earlier label standing behind has_label.
+            for (out.label[0..]) |*b| b.* = 0;
             out.has_label = true;
             return;
         }

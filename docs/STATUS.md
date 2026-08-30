@@ -446,6 +446,12 @@ linked feature documents for rationale and rollout plans.
   `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
   parallel because they share `build/esp`.
+- Every QEMU battery runs under both wasm runtimes (`runtimes` in
+  `tests/batteries.json`). The `filesystem` battery is green under `wasm3_smp`
+  and `warp_smp` (39 tests each, TCG). Its first wasm3 run was red: the WFS
+  driver declared a four-parameter `initialize` while PM calls every entry with
+  zero arguments, which only wasm3 enforces — see the entry-arity rule in
+  `architecture/13` *Language ABI*.
 - Developer checks: `fmt`, `fmt-check`, `lint`, and `quality` are CMake targets
   backed by `scripts/quality.sh`; only first-party source roots are in scope.
 

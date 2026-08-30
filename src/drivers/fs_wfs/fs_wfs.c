@@ -1053,7 +1053,13 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
     }
 }
 
-WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d) {
+/* The entry export the package manifest names.  It takes NO parameters: the
+ * process manager calls every app entry with zero arguments and passes startup
+ * state through the spawn-info buffer instead, and wasm3 rejects a call whose
+ * argument count does not match the declared signature ("argument count
+ * mismatch"), so a parameterised entry kills the driver at spawn under the
+ * wasm3 backend. */
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     char mount_alias[32];
     char service_name[32];
     int32_t block_endpoint = -1;
@@ -1061,11 +1067,6 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t a, int32_t b, int32_t c, int32_t d
     int32_t name_len;
     int32_t status;
     static const char* const k_service_prefix = "fs.wfs";
-
-    (void)a;
-    (void)b;
-    (void)c;
-    (void)d;
 
     g_proc_endpoint = wasmos_startup_proc_endpoint();
     g_fs_endpoint = wasmos_ipc_create_endpoint();

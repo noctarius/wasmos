@@ -22,19 +22,16 @@ declares:
 | Capabilities | `system.control`                        |
 | `wants_tty`  | `true` (PM allocates a controlling TTY) |
 
-The `initialize` entry args are unused: the entry-argument mechanism is retired
-and nothing in the container carries one. At runtime the CLI reads its startup
-values from the spawn-info buffer:
+The `initialize` entry takes no arguments: the entry-argument mechanism is
+retired, nothing in the container carries one, and the declared signature must
+stay empty because wasm3 rejects a call whose argument count does not match it.
+At runtime the CLI reads its startup values from the spawn-info buffer:
 
 ```c
-WASMOS_WASM_EXPORT int32_t
-initialize(int32_t proc_endpoint,
-           int32_t home_tty_arg,
-           int32_t ignored_arg2,
-           int32_t ignored_arg3)
+WASMOS_WASM_EXPORT int32_t initialize(void)
 {
-    proc_endpoint = wasmos_startup_proc_endpoint();  // from spawn-info
-    home_tty_arg  = wasmos_startup_tty();            // TTY from wants_tty alloc
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();  // from spawn-info
+    int32_t home_tty_arg  = wasmos_startup_tty();            // TTY from wants_tty alloc
     /* ... */
 }
 ```

@@ -588,6 +588,19 @@ Source: `architecture/13-runtime-and-packaging.md`,
 `architecture/14-libsys-and-service-runtime.md`, and
 `architecture/15-drivers-and-services.md`.
 
+- [ ] [BUG][P2] Make the two wasm backends agree on entry-export arity, and gate
+  it at build time. The process manager calls every app entry with `argc = 0`
+  (`src/kernel/process_manager_spawn.c` `pm_app_entry`), which wasm3 validates
+  against the declared signature (`m3Err_argumentCountMismatch`) while WARP's
+  `call_export_mod` (`src/kernel/warp_driver.cpp:250`) switches on `argc` and
+  calls with whatever it was given, checking nothing. A parameterised entry
+  therefore runs under WARP and kills the process at spawn under wasm3 — how
+  `fs_wfs`'s `initialize(int32_t, int32_t, int32_t, int32_t)` survived until the
+  filesystem battery first ran under wasm3. Nothing rejects it at build time
+  either: `scripts/wasm_stack_check.py` covers only Zig apps, and
+  `scripts/make_wasmos_app.c` knows the entry name and holds the wasm payload but
+  never walks its export section. A 0-parameter check in the packer would make
+  this a build error in every language.
 - [ ] [FEATURE][P2] Give the non-C entry shims a real `argv`. The C `crt1`
   (`src/libc/src/startup.c`) now calls `main(argc, argv)` from
   `wasmos_startup_argv()`, but the Rust, Go, Zig and AssemblyScript shims
@@ -949,22 +962,6 @@ tail.
   cannot currently name.
 
 ## Filesystems and Storage
-
-- [ ] [BUG][P1] WFS is broken under wasm3. The `filesystem` battery is 39 tests
-  with 17 failures under `wasm3_smp` and fully green under `warp_smp`, on a
-  CI-shaped build at `54a39055` with the runtime confirmed from the boot marker
-  (`register request=WASM runtime=WASM3`). All 17 are WFS:
-  `test_wfs_mount_read` (10), `test_wfs_virtio_blk` (5),
-  `test_wfs_clean_unmount` (2); the FAT tests in the same battery pass. The run
-  takes 916s against 168s for the WARP cell, so the failures are timeouts rather
-  than wrong answers -- the volume never reaches a usable state.
-
-  This is PRE-EXISTING, not a regression from the runtime matrix that surfaces
-  it: baselined on 2026-08-30 by stashing an unrelated change and rebuilding,
-  which reproduced `test_wfs_mount_read` at 10 of 11 failing either way. It was
-  invisible because CI ran the QEMU batteries under WARP only; the matrix that
-  exposes it is the reason there is now a red cell to fix rather than a silent
-  one to discover later.
 
 - [ ] [ENHANCEMENT][P2] Give a guest a way to reach truncation at an arbitrary
   size. `wfs_truncate_task` now shrinks a tree-mapped object to a size INSIDE a

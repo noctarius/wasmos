@@ -49,10 +49,13 @@ Export exactly one entry with `WASMOS_WASM_EXPORT`
 (`src/libc/include/wasmos/imports.h:13`); it owns the driver's main loop and does
 not return.
 
-- WASM entry: `WASMOS_WASM_EXPORT int32_t initialize(int32_t, int32_t, int32_t, int32_t)`
-  (`src/drivers/virtio_rng/virtio_rng.c:374`). Ignore the entry args — fetch the
-  process-manager endpoint via `wasmos_startup_proc_endpoint()` (spawn-info
-  contract, not entry args).
+- WASM entry: `WASMOS_WASM_EXPORT int32_t initialize(void)`
+  (`src/drivers/virtio_rng/virtio_rng.c:536`). It takes NO parameters: the
+  process manager calls every entry with an argument count of zero, and wasm3
+  refuses a call whose argument count does not match the declared signature
+  ("argument count mismatch"), so a parameterised entry kills the driver at
+  spawn under wasm3 while running fine under WARP. Fetch the process-manager
+  endpoint via `wasmos_startup_proc_endpoint()` (spawn-info contract).
 - Native entry: `int initialize(wasmos_driver_api_t* api, int module_count, int, int)`
   (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:252`).
 

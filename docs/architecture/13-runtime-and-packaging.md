@@ -340,22 +340,28 @@ used by the build system.
 The kernel's entry convention for WASM processes is a single export:
 
 ```
-wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32
+wasmos_main() -> i32
 ```
 
 Each language shim exports `wasmos_main` and translates it into the language's
-native call convention. The four `int32_t` arguments are **unused (always
-zero)** — startup values are no longer passed through entry-arg registers.
-Applications read them from the spawn-info buffer via the `wasmos_startup_*()`
-accessors instead (see *Startup Contract (spawn-info)* above).
+native call convention. The export takes **no parameters**: the entry-arg
+convention is retired, and the process manager calls every entry with an
+argument count of zero (`pm_app_entry` in
+`src/kernel/process_manager_spawn.c`). The arity is binding, not cosmetic —
+wasm3 validates a call against the declared signature and refuses a mismatch
+with `argument count mismatch`, killing the process at spawn, whereas WARP
+calls whatever it is handed without checking. A parameterised entry therefore
+fails under one backend and not the other. Applications read their startup
+values from the spawn-info buffer via the `wasmos_startup_*()` accessors (see
+*Startup Contract (spawn-info)* above).
 
-| Language                                          | Export mechanism                                 | Native entry called  |
-|---------------------------------------------------|--------------------------------------------------|----------------------|
-| C (`libc/src/startup.c`)                          | `WASMOS_WASM_EXPORT int32_t wasmos_main(...)`    | `main(0, argv)`      |
-| Rust (`libc/rust/wasmos.rs`)                      | `pub extern "C" fn wasmos_main(...)`             | `crate::main(&[])`   |
-| Go (`libc/go/wasmos.go`)                          | `//export wasmos_main` + `func wasmos_main(...)` | `Main(emptyArgs)`    |
-| Zig (`libc/zig/wasmos.zig`)                       | `pub export fn wasmos_main(...) callconv(.c)`    | `root.main()`        |
-| AssemblyScript (`libc/assemblyscript/runtime.ts`) | `export function wasmos_main(...)`               | `runMain(main, ...)` |
+| Language                                          | Export mechanism                              | Native entry called  |
+|---------------------------------------------------|-----------------------------------------------|----------------------|
+| C (`libc/src/startup.c`)                          | `WASMOS_WASM_EXPORT int32_t wasmos_main(void)` | `main(0, argv)`      |
+| Rust (`libc/rust/wasmos.rs`)                      | `pub extern "C" fn wasmos_main()`             | `crate::main(&[])`   |
+| Go (`libc/go/wasmos.go`)                          | `//export wasmos_main` + `func wasmos_main()` | `Main(emptyArgs)`    |
+| Zig (`libc/zig/wasmos.zig`)                       | `pub export fn wasmos_main() callconv(.c)`    | `root.main()`        |
+| AssemblyScript (`libc/assemblyscript/runtime.ts`) | `export function wasmos_main()`               | `runMain(main, ...)` |
 
 The `wasmos_startup_*()` accessors read from the process's spawn-info buffer
 (lazily loaded on first use), so the application can retrieve its startup values
@@ -364,10 +370,11 @@ developer sees.
 
 #### Driver and Service Entries
 
-WASM drivers and services export `initialize` instead of `wasmos_main`:
+WASM drivers and services export `initialize` instead of `wasmos_main`, under
+the same zero-parameter rule:
 
 ```
-initialize(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32
+initialize() -> i32
 ```
 
 Native ELF drivers use the ELF `e_entry` address pointing at:

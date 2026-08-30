@@ -950,6 +950,46 @@ tail.
 
 ## Filesystems and Storage
 
+- [x] [ENHANCEMENT][P2] Route the ATA secondary channel's interrupt (IRQ 15).
+  Done. Both channels now take interrupts; the only thing that polls is a channel
+  that has explicitly fallen back after its drive failed to assert.
+
+  The comment that had justified polling claimed routing line 15 "would mean
+  telling two lines apart from one event and acking the right one". The kernel
+  already named the line: `irq_ops_deliver` sets `irq_msg.request_id = line`,
+  `ipc_drain` records the message, and `irq_register` / `irq_ack` are per-line.
+  `ata_service_irq` discarded the message with `wasmos_ipc_drain` and acked a
+  hardcoded constant, which is what made it look impossible. No kernel or ABI
+  change was needed.
+
+  The subtle part, recorded because it is what makes two lines on one endpoint
+  safe: an event must be handled per MESSAGE, not per drain. The old code drained
+  the queue and acked once, which with two lines would ack one and leave the
+  other masked -- the disk dead, the hazard the old comment named.
+
+- [x] [BUG][P1] `fs_wfs` could not start under wasm3: its entry export declared
+  four parameters and the process manager always calls an entry with argc 0, so
+  the driver died at its entry call and the block rule respawned it nine times
+  before giving up -- `/wfs` never mounted under the DEFAULT runtime, and every
+  test that read it reported `fs failed`. Fixed by declaring `initialize(void)`,
+  which `fs_fat` and `fs_init` already do. Reproduced both ways on a wasm3_smp
+  tree: 9 respawns and 0 mounts without the fix, 0 and mounted with it.
+- [ ] [BUG][P1] The QEMU battery matrix runs ONE runtime, so a whole class of
+  defect is invisible to CI. `.github/workflows/ci.yml` pins the integration
+  batteries to `configs/warp_smp_defconfig`; the `*_single` / `*_smp` jobs build
+  and boot both runtimes but run no batteries. WARP does not enforce entry-export
+  arity and wasm3 does, which is how the defect above shipped with CI green while
+  every `/wfs` test failed. Anything that differs between the two engines is
+  equally unseen. Running every battery twice doubles the QEMU time, so the
+  choice is which subset earns a second pass, not whether to double everything.
+- [ ] [ENHANCEMENT][P2] Make `scripts/make_wasmos_app.c` refuse an entry export
+  whose arity is not zero. A path-spawned entry is called with argc 0, so a
+  module declaring parameters is not startable -- under wasm3 it dies at the call
+  with "argument count mismatch" before its first line of output, and under WARP
+  it runs by accident. The packer already reads the module and knows the entry
+  name from the manifest; checking the signature turns a runtime failure that
+  reads as a spawn problem into a build error naming the function.
+
 - [ ] [ENHANCEMENT][P2] Give a guest a way to reach truncation at an arbitrary
   size. `wfs_truncate_task` now shrinks a tree-mapped object to a size INSIDE a
   block and promotes an inline object a grow takes past `WFS_INLINE_DATA_MAX`,
@@ -1003,11 +1043,10 @@ tail.
   read is pure cost when every byte is about to be replaced, exactly as it is
   for a freshly allocated block, which already skips it
   (`src/drivers/fs_wfs/wfs_write.c`).
-- [ ] [ENHANCEMENT][P3] WFS mount rules still name a disk and a unit
-  (`DRIVER=="ata", ATTR{unit}=="2"`), which is what Phase 3 set out to retire.
-  They cannot stop until a volume exists to match on: a raw formatted disk is
-  not a partition, so `SUBSYSTEM=="partition"` does not reach it and no
-  `fstype` is ever reported for it. Blocked on the volume manager above.
+- [x] [ENHANCEMENT][P3] WFS mount rules named a disk and a unit
+  (`DRIVER=="ata", ATTR{unit}=="2"`, `DRIVER=="virtio-blk", ATTR{unit}=="48"`),
+  which is what Phase 3 set out to retire. Both now match
+  `SUBSYSTEM=="volume"` on fstype and uuid and differ only in identity.
 
 - [ ] [ENHANCEMENT][P2] Batch several WFS metadata operations into one journal
   transaction. The driver retires each transaction before the next begins
@@ -1024,206 +1063,88 @@ tail.
   negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH` -- and
   `wfs_txn_commit_task` awaits one at §14's steps 2, 4 and 6, with §21's replay
   awaiting one before its tail retires the replayed writes.
-- [ ] [FEATURE][P2] A volume manager, and filesystem recognisers.
-  Design: `docs/architecture/37-volume-manager.md`.
+- [x] [FEATURE][P2] Exclusivity: a volume is claimed while it is mounted.
+  `fs_wfs` sends `VOLUME_IPC_CLAIM_REQ` on mount and releases it at shutdown;
+  `fsck.wfs` refuses a claimed volume, and refuses one it cannot ask about, with
+  `--force` as the documented override (`architecture/37-volume-manager.md` §5).
 
-  A volume is a thing with a filesystem on it -- a formatted raw disk, a
-  formatted partition, later a span of several. Nothing publishes that today:
-  the `block` class answers "what storage exists", which is not the same
-  question, so mount rules still name a disk and a unit
-  (`DRIVER=="ata", ATTR{unit}=="2"` for the WFS volume) even after Phase 3 set
-  out to stop them doing exactly that.
+- [ ] [ENHANCEMENT][P3] Claim the FAT volumes too. `fs_fat` mounts `/boot` and
+  `/user` without claiming them, so a tool consulting the flag sees them as idle.
+  Nothing consults it for FAT today -- there is no `fsck.fat` -- which is why this
+  is an enhancement and not a bug, but the flag means "a filesystem service holds
+  this" and for two of the three mounts it currently does not.
 
-  The blocking piece is a RECOGNISER: something that identifies a format without
-  that format's driver being resident. It cannot live in the filesystem drivers,
-  which are spawned BY the rule that needs the answer, and it does not belong in
-  the partition manager, whose job is tables and which publishes nothing at all
-  for a disk without one. Linux keeps it in a library (`libblkid`, `superblocks/`
-  beside `partitions/`) run by udev at publish time; Windows keeps it in a
-  recogniser stub separate from the filesystem. We follow Linux's shape because
-  a library needs no resident process.
+- [ ] [ENHANCEMENT][P3] A guest formatter must consult the claim. `mkfs_wfs` is a
+  HOST tool that writes an image file, so the sharper half of §5 -- refusing to
+  format a mounted volume -- has no call site yet. Whoever adds a guest `mkfs.wfs`
+  owes it the same check `fsck.wfs` makes.
 
-  `FS_TYPE_WFS` and the `ATTR{fstype}=="wfs"` rule spelling are already
-  registered, so a recogniser has somewhere to report to; nothing sets the field
-  yet. A probe was briefly written into `partition_manager.zig` and taken back
-  out -- it worked, but it put filesystem knowledge in the table parser and
-  still could not describe an unpartitioned volume.
+- [ ] [ENHANCEMENT][P4] A claim does not catch the overlap it looks like it
+  should: a disk and its partitions are distinct volumes, so claiming one does not
+  mark the others. Today that is prevented by suppressing the whole-disk volume of
+  a partitioned disk, not by the claim.
 
-  It also gives exclusivity an owner. `fsck.wfs` and `mkfs.wfs` must both refuse
-  a MOUNTED volume, and nothing enforces that since the block layer stopped
-  arbitrating who may use a drive -- correctly, because a request now names its
-  own target. `claimed` on the volume is what they would consult.
+- [x] [BUG][P2] The partition proxy forwarded a borrow it could not lend.
+  `handleTransfer` passed a client's `dst_borrow_id` through to the disk backend
+  unchanged. A borrow is held per CONTEXT, so that id named a grant between the
+  CLIENT and the PROXY and resolved to nothing for the disk: its zero-copy DMA
+  was refused, its staged fallback wrote into a buffer it may not touch and was
+  refused too, and the client got fs.IO. The proxy reborrows to the disk now.
 
-- [ ] [FEATURE][P2] A userland `mkfs.wfs`, so the OS can create a volume and not
-  only mount one. Formatting today is a HOST tool (`src/tools/mkfs_wfs`, run on
-  the developer's machine to build `build/wfs.img`); a running guest cannot
-  format a second disk at all.
+- [x] [BUG][P2] The kernel's broker self-test yield-spun on a service from
+  `/boot`. `broker_spawn_request_entry` returned `PROCESS_RUN_YIELDED` until
+  `font-service` was ready -- ~10^6 dispatches, and load on the bring-up it was
+  waiting for. `process_notify_ready` broadcasts on a scheduler event now and
+  `process_wait_for_ready_change` parks on it.
 
-  `fsck.wfs` is the template: a utility under `src/utils/fsck_wfs` whose checking
-  core is compiled both into the guest module and into the host unit suite, over
-  synchronous block callbacks. The synchronous sink in `wfs_mkfs.c` is NOT the
-  obstacle it was once recorded as -- a one-shot utility may block on a BLOCK
-  request, as `blkinfo` and `fsck.wfs` both do; only a SERVICE may not, because
-  it would stall its event loop.
+- [x] [BUG][P2] `pm_recv_fs_reply` waited without a deadline, so a filesystem
+  that accepted a spawn read and then died parked the PROCESS MANAGER for the
+  rest of the boot -- every process blocked, fs-manager idle, no fault to look
+  at. It gives up after PM_FS_REPLY_TIMEOUT_MS and the spawn fails with a reason
+  its caller can report.
+  `ipc_endpoint_wait_for` returns IPC_OK whether it was woken or timed out, so
+  the deadline is kept by the caller in ticks; the wait's own timeout only bounds
+  one sleep.
 
-  What is left is mechanical: give `wfs_mkfs.c` the same treatment, point it at a
-  block device instead of a file, and name it `mkfs.wfs`. Exclusivity comes for
-  free the way it does for the checker -- a disk a filesystem driver holds is
-  refused with `block_dev.UNIT_CLAIMED` -- so formatting a mounted volume is not
-  a hazard this has to invent a guard for.
+- [x] [ENHANCEMENT][P2] `/boot` mounts from `SUBSYSTEM=="volume", ATTR{boot}=="1"`
+  -- the volume the FIRMWARE loaded this system from, carried from the
+  bootloader's own device path through `boot_info` v5 and the `boot.partition`
+  kernel-environment variable. NO mount rule names a disk any more.
 
-- [x] [FEATURE][P2] `fsck` for WFS (spec §24), phase 4's last item. `fsck.wfs`
-  lives in `src/utils/fsck_wfs`, over a checker core shared with the host unit
-  suite. Checks: superblock (falling back to the §5 backup scan), group
-  descriptors, the object table, extents and tree nodes, directory strides and
-  tails, link counts, the bitmaps, and the free counters. Repairs only what §24
-  calls derived -- the bitmaps from the walk, the counters from the bitmaps --
-  and clears `state` only when nothing structural was found.
-- [ ] [ENHANCEMENT][P3] Give the guest a way to release a mounted volume, so
-  `fsck.wfs` can be pointed at a disk in a default boot. A block driver binds a
-  unit to one client exclusively, so a disk a filesystem driver holds is refused
-  with `block_dev.UNIT_CLAIMED` -- which is correct, and also means every disk
-  the device-manager rules recognise is unavailable to the checker. Today it
-  runs against a disk no rule claimed.
-- [ ] [ENHANCEMENT][P3] Teach `fsck.wfs` to repair more than the derived state.
-  A failed object-record or directory checksum is reported and the volume is
-  left unclean, which is safe but leaves nothing to do about it. Rebuilding a
-  damaged record means inventing content, so this needs a policy first -- ext4's
-  lost+found is the shape -- not just code.
-- [ ] [ENHANCEMENT][P3] Let a WFS extent tree exceed ONE interior level. A tree
-  grows to an interior root over N leaves (depth 1), which reaches roughly 255 x
-  170 extents at a 4096-byte block; a second interior level is not implemented and
-  `wfs_extent_write.c` refuses rather than editing a shape it does not maintain,
-  at the two TODOs it carries. The reader already walks to the depth guard, so
-  only the writer is missing -- and nothing the OS can produce reaches the
-  ceiling, which is why this sits below the work that does.
+- [x] [ENHANCEMENT][P2] Deleted `fat_try_parse_mbr`, the last partition-table
+  reader outside the partition manager, with `fat_mbr_entry_t` and `tried_mbr`.
+  Every mount names a VOLUME, so fs_fat is handed a device whose LBA 0 is a boot
+  sector and anything else there is a fault.
 
-- [ ] [ENHANCEMENT][P3] Widen the block transfer path past 2 TiB.
-  `wasmos_block_descriptor_t` reports a 64-bit `lba_count`, but
-  `BLOCK_IPC_READ_REQ`/`WRITE_REQ` arg1 is a 32-bit LBA, so a disk can now be
-  DESCRIBED past the point those opcodes can address it (`abi/opcodes.yaml`,
-  `TODO` on BLOCK_IPC_READ_REQ). Needs a second argument word for the high half,
-  or a descriptor-carrying request. ATA is on `lba28` and stops at 128 GiB
-  regardless, so only virtio-blk can reach the limit today.
-- [x] [FEATURE][P2] Phase 2: the partition manager service (Zig,
-  `src/drivers/partition_manager/`). Parses GPT (CRC32 + backup header) and MBR
-  and publishes each partition as a block device with its own class instance,
-  proxying READ/WRITE with an LBA offset and a bounds clamp. Landed in PR #25;
-  the endpoint-per-disk and endpoint-per-partition shape the plan called for was
-  not needed, because a block request carries its target in a request descriptor.
-  See `architecture/36-partition-manager-and-block-identity.md` §2.
-- [x] [FEATURE][P2] Phase 3: mount policy from the partition, not from a rule naming a disk.
-  `SUBSYSTEM=="partition"` splits partitions from whole disks and matches on
-  `partuuid`/`partlabel`/`type`/`name`/`fstype`/`scheme`; the mount path travels
-  as `mount=` in the filesystem driver's startup arguments, retiring
-  `DEVMGR_QUERY_BLOCK_MOUNT_REQ`; `/user` is a real GPT image mounted by its
-  label. Landed in PR #27.
-  `fat_try_parse_mbr` was NOT deleted — see the follow-on below for why. The GPT
-  label supplies the mount MATCHER, not the mount path: a rule still says where a
-  volume goes, so a labelled volume can be remounted elsewhere without rewriting
-  a partition table. See `architecture/36-partition-manager-and-block-identity.md` §3.
-- [ ] [FEATURE][P2] A volume manager, and filesystem recognisers.
-  Design: `architecture/37-volume-manager.md`.
+- [ ] [BUG][P3] The SMP scheduler stress test can panic with a corrupted
+  dispatch context. Seen twice on CI, on both SMP configs:
 
-  A volume is a thing with a filesystem on it -- a formatted raw disk, a
-  formatted partition, later a span of several. Nothing publishes that: the
-  `block` class answers "what storage exists", which is a different question, so
-  a rule that wants a filesystem still has to name where it sits. Phase 3 got as
-  far as matching a PARTITION's label, which does not reach a formatted disk
-  with no table at all.
+      wasm3_smp  vector=6 (#UD)  rip=ffffffff80000507  pid=13 name=smp-stress
+      warp_smp   vector=14 (#PF) rip=ffffffff80000507  cr2=ffffffffff802312
 
-  The blocking piece is a RECOGNISER: something that identifies a format without
-  that format's driver being resident. It cannot live in the filesystem drivers,
-  which are spawned BY the rule that needs the answer, and it does not belong in
-  the partition manager, whose job is tables and which publishes nothing for a
-  disk without one -- a recogniser written there does work, which is what makes
-  it the tempting wrong place. Linux keeps it in a library (`libblkid`,
-  `superblocks/` beside `partitions/`) that udev runs at publish time; Windows
-  keeps it in a recogniser stub separate from the filesystem. HelenOS asks each
-  filesystem server in turn, which it can afford because its servers are
-  resident and ours are not.
+  Both RIPs are KERNEL_HIGHER_HALF_BASE plus a tiny offset -- a small integer
+  used as an address and OR'd with the base -- and both backtraces sit in
+  `process_schedule_once`. So a thread is dispatched onto a corrupted context
+  rather than faulting on a bad access. The tree already counts the neighbouring
+  hazards (`enqueue non-ready`, `double-link`, `dispatch-left-stranded`).
 
-  `wasmos_block_descriptor_t.fs_type` already exists and is always
-  `FS_TYPE_UNKNOWN`; `FS_TYPE_*` and the `ATTR{fstype}` matcher are the reporting
-  surface a recogniser would fill in.
+  EXPOSED, and probably not caused, by making `process_notify_ready` broadcast on
+  a scheduler event: that put cross-CPU wake traffic on a path every service
+  touches during boot, and both SMP configs went from green on every push to
+  failing roughly one run in two. Reverting to a bounded park removed the
+  failures. The wake path took `ev->lock` before the run-queue lock, which is the
+  order every other event user follows, so it introduced no new inversion --
+  which is what makes exposure the better reading.
 
-  A volume manager also gives exclusivity an owner. A checker or a formatter must
-  refuse a MOUNTED volume, and nothing enforces that since the block layer
-  stopped arbitrating who may use a drive -- correctly, because a request now
-  names its own target. A `claimed` flag on the volume is what they would
-  consult -- recording a claim, not enforcing one: the volume manager is not in
-  the I/O path, so a tool that does not ask is not stopped.
+  Not reproducible here: six local runs before the revert and one after all
+  passed, and Apple Silicon cannot host MTTCG x86, where every memory-ordering
+  race in this tree has lived. Needs a Linux x86 `-smp 4` soak with the broadcast
+  restored to decide it.
 
-  Two decisions gate the implementation, both in `architecture/37-volume-manager.md` §6.
-  A disk carrying a partition table must NOT also publish a volume, or `/boot`
-  appears twice; the suppressing signal is the table, and the block descriptor
-  cannot supply it today because `scheme` is always `PARTITION_SCHEME_NONE` on a
-  whole disk (the disk driver publishes that record and reads no tables). The
-  volume manager must also SUBSCRIBE to the `block` class rather than enumerate
-  it; the partition manager is the worked example to copy, down to dropping an
-  arrival on its own endpoint (`architecture/36-partition-manager-and-block-identity.md`
-  §2, "Discovery").
-
-- [ ] [FEATURE][P2] Move the partition manager into initfs.
-  Probing late-registering disks — the prerequisite — is DONE: it subscribes to
-  the `block` class and probes what arrives, guarded by
-  `tests/test_partition_manager_late_disk.py`. What remains is the move itself,
-  which breaks the bootstrap circle that keeps `fat_try_parse_mbr` alive: the
-  partition manager is spawned from the BOOT rules, which cannot load until
-  `/boot` is mounted, so `/boot` cannot be mounted from a partition the partition
-  manager published. Deleting `fat_try_parse_mbr`
-  (`src/drivers/fs_fat/fat_geom.c`) removes the last partition-table reader
-  outside the partition manager. The cost is Zig on the critical build path:
-  CMake derives the initfs payload list from `scripts/initfs.toml`, so a Zig
-  module there makes the boot image unbuildable without a Zig toolchain.
-- [ ] [ENHANCEMENT][P3] Drive the partition manager's probe over the event loop's
-  `IpcFuture` instead of `driver.call`. A probe is synchronous, so it blocks the
-  whole process for its duration — bounded at one IDENTIFY plus at most 34 sector
-  reads, but a disk arriving under load now pauses transfers on the disks already
-  published, where before probing only ever happened at bring-up. It runs on the
-  root task rather than in the message handler, which keeps the loop's dispatch
-  unblocked but not the process. Carries a `TODO` at `drainArrivals`. The shape is
-  a state machine over IDENTIFY -> GPT header -> entry sectors -> MBR; the parser
-  itself takes byte slices and does not change.
-- [ ] [BUG][P3] Forwarded block transfers share one request-descriptor buffer.
-  `g_down_req_bid` (`src/drivers/partition_manager/partition_manager.zig`) is
-  written per forwarded transfer, but a backend reads the descriptor when it
-  reaches the message, not when the message is sent — so up to `MAX_INFLIGHT`
-  requests can occupy the slot at once and a later one can overwrite a request
-  the backend has not read. Latent: it needs two clients transferring
-  concurrently through one partition manager, which no shipped configuration
-  does. The fix is a slot per in-flight request at its own offset, the shape
-  `g_publish_bid` already uses. The probe path no longer shares this buffer.
-- [ ] [ENHANCEMENT][P3] Retire a disk's partitions when its provider goes away.
-  The partition manager receives `SVC_CLASS_EVENT_REMOVE` and ignores it
-  (`handleClassEvent`), because unregistering the partitions and telling the
-  device manager they are gone is a teardown path with no caller — no shipped
-  driver unregisters. Dropping the local record alone would be worse than doing
-  nothing: the partitions would stay in the registry addressing a disk nothing
-  could reach.
-- [ ] [BUG][P3] Two partitions of one disk collide on the `fs.backend` class
-  instance. `FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`
-  (`src/drivers/include/wasmos_driver_abi.h`) and a partition reports its disk's
-  unit, so mounting two volumes from one disk would refuse the second
-  registration. Latent — no shipped configuration does that. The block
-  fingerprint is the identity that fixes it, and this is the last packed instance
-  left after the block class moved to one.
-- [ ] [ENHANCEMENT][P3] Report a rule line the device manager REFUSES.
-  `dm_rules_load_*` cannot distinguish "this line belongs to another rule kind",
-  which is the normal case since all four loaders run over the whole text, from
-  "this line is malformed or too long", which is a defect its author should see.
-  `device_manager_rules.c` has no console on purpose — being pure is what lets
-  the host suite link it standalone — so this needs a return code rather than a
-  log call. Carries a `TODO` at the loader.
-- [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
-  dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
-  preserve the transfer-buffer ownership contract through all VFS relay paths.
-- [ ] [ENHANCEMENT][P2] Re-enable ATA bus-master DMA on the GENERIC transfer path.
-  `ata_dma_prepare` returns `WASMOS_ERR_DMA_DENY` unconditionally to force PIO,
-  and `ata_dma_finish` is unreachable behind it
-  (`src/drivers/ata/ata.c:655-673`). Carry the client `borrow_id` in the block IPC
-  for that path and map via `dma_map_borrow`.
-
+- [ ] [ENHANCEMENT][P4] `fat_mount_t.boot_lba` is always 0 now that no mount
+  starts from a partition table, but it is still added into every FAT, root-dir
+  and FSInfo LBA. Removing it simplifies that arithmetic. `is_partition` survives
+  on the same terms -- kept for diagnostics, decisive for nothing.
   Not "every op is PIO", which this entry used to claim: the zero-copy READ path
   already does real bus-master DMA. `BLOCK_IPC_READ_ZC_REQ` carries the client's
   borrow, `ata_read_zc_dma` maps it with `dma_map_borrow`

@@ -1,8 +1,11 @@
 ## Volume Manager
 
-> **Documentation status: Proposal.** Nothing here is implemented. The block
-> layer below it exists (`architecture/36-partition-manager-and-block-identity.md`);
-> the filesystem recognisers and the `volume` class this describes do not.
+> **Documentation status: Reference.** Every section is implemented and is the
+> current baseline: the recognisers, the `volume` class and its descriptor, the
+> suppression rule, exclusivity, and mount policy on volumes all run on every
+> boot — `/wfs` and `/vwfs` both mount from `SUBSYSTEM=="volume"` on fstype and
+> uuid, naming no disk, unit, backend, partition or transport, and `fs_wfs`
+> claims the volume it mounts while `fsck.wfs` refuses a claimed one.
 
 **Sources this proposal changes**: `src/drivers/partition_manager/`,
 `src/services/device_manager/device_manager_rules.c`, `src/drivers/fs_fat/`,
@@ -100,6 +103,88 @@ SUBSYSTEM=="volume", ATTR{fstype}=="wfs",  ENV{MOUNT}="/wfs"
 SUBSYSTEM=="volume", ATTR{label}=="user",  ENV{MOUNT}="/user"
 ```
 
+**Implemented.** The first of those is the live `/wfs` rule, qualified by uuid as
+§4.1 describes. It replaced `SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="2"`,
+which is the shape this layer exists to retire — and the WFS volume is precisely
+the case nothing else reaches, since it has no partition table for a
+`SUBSYSTEM=="partition"` rule to match. `/vwfs` followed, replacing
+`DRIVER=="virtio-blk", ATTR{unit}=="48"`.
+
+### 4.1 Identity: `ATTR{uuid}`
+
+`ATTR{fstype}` alone selects a KIND of volume, and a rule fires once. Two volumes
+of one format therefore make the rule's target depend on which was recognised
+first. `ATTR{uuid}` is what removes that: it is the volume's own identity, and it
+travels with the volume across disks and transports.
+
+Both live WFS rules are written this way, differing only in identity:
+
+```
+SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7465-4573-742d-766f6c756d65", ENV{MOUNT}="/wfs"
+SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7669-7274-696f-2d766f6c3031", ENV{MOUNT}="/vwfs"
+```
+
+Nothing in the second says virtio. That pair is what shows a transport is not part
+of a volume's identity: swap the two images between controllers and each still
+mounts at its own path.
+
+**A volume uuid is not a GPT GUID.** It is whatever bytes the FILESYSTEM stores,
+and the matcher takes them in on-disk order — WFS's sixteen opaque bytes as
+`mkfs_wfs` writes and prints them, FAT's four-byte volume serial as the boot
+sector stores it. `ATTR{partuuid}` and `ATTR{type}`, which match GPT's own
+identifiers, keep GPT's mixed-endian field order; the two parsers are separate
+because the byte orders genuinely differ. Reading a volume uuid through GUID order
+reverses its first eight bytes, and the rule then parses cleanly and never
+matches.
+
+The width is the format's, one to sixteen bytes, zero-padded for comparison — so a
+FAT serial is spelled at its own width (`ATTR{uuid}=="1a2b3c4d"`) rather than
+padded out to a GUID by hand. There is no separate `ATTR{serial}`: a rule asks
+"which volume", and every format answers with whatever identity it has.
+
+Hyphens are presentation and may fall anywhere; case is ignored. The volume
+manager logs each volume's uuid in the spelling a rule takes, because nothing else
+on the system reports one — a FAT serial otherwise has to be read out of the boot
+sector by hand. Note that DOS-lineage tools DISPLAY a FAT serial reversed
+(`8D93-D649` for the bytes `49 d6 93 8d`), so the value to paste is the one in our
+own log, not the one another system prints.
+
+Identity is only as strong as the format makes it. A FAT serial is 32 bits with no
+uniqueness guarantee, and `scripts/make_gpt_image.py` derives it from the label, so
+it carries no more information than `ATTR{label}` does. Prefer a label where one
+exists and the uuid where it does not — which is WFS's case, since WFS has no
+label at all.
+
+### 4.2 Labels
+
+`ATTR{label}` is the FILESYSTEM's label and is deliberately not `ATTR{partlabel}`.
+They differ in practice, not just in principle: the ESP carries no partition
+label at all while its FAT boot sector says `QEMU VVFAT`, and
+`scripts/make_gpt_image.py` writes the GPT name `user` beside a FAT volume label
+`USER`. Matching the wrong one finds nothing, so the rule engine keeps them as
+separate matchers and REFUSES a rule that uses one on the other's subsystem —
+a rule that can never fire is rejected at load rather than dying silently.
+
+**The empty value means opposite things for the two, and that is not an
+inconsistency.** `ATTR{label}==""` selects the volumes whose filesystem label is
+blank: a FAT volume may genuinely be named "", and the descriptor separates that
+from a format carrying no label at all (`VOLUME_DESCRIPTOR_FLAG_HAS_LABEL`), so
+the matcher has something to select. `ATTR{partlabel}==""` selects nothing and is
+refused at load: an MBR partition has no name concept and a GPT entry may simply
+be unnamed, and neither is "a partition named the empty string".
+`ATTR{name}==""` is refused for the same reason, a canonical id never being
+empty.
+
+A matcher's presence is therefore tracked by a flag where the empty value is
+meaningful, and by the first byte where it is not — `has_label` exists,
+`has_partlabel` does not need to.
+
+The filesystem driver is told about the BACKING BLOCK DEVICE, not the volume: a
+driver mounts a block device, and the volume is what selected which one. All
+three facts it receives — canonical id, backend and unit — come from the backing
+record. Passing the volume's own zeroed unit instead let `fs_wfs` mount and then
+fail to register, because `fs.backend` packs `(kind, unit)`.
+
 Neither names a disk, a unit, a backend or a table slot. Moving the image to
 another controller, or putting it in a partition, does not change the rule. This
 is the end state `architecture/36-partition-manager-and-block-identity.md` §3
@@ -120,6 +205,31 @@ need it and neither has it today:
 
 `claimed` on the volume, set when a filesystem service mounts it, is the flag
 both consult.
+
+**Implemented,** for `fs_wfs` and `fsck.wfs`. The driver sends
+`VOLUME_IPC_CLAIM_REQ` the moment the mount completes — not once it is ready,
+because the mount itself replays a journal and that window is exactly when a
+check would see a race — and releases at the start of shutdown, before the clean
+mark is written, since a claim that outlives its holder makes the volume
+permanently unrecheckable. The claim is fire-and-forget: blocking a mount on an
+advisory record would let it stall a boot.
+
+Both sides DERIVE the volume's class instance rather than exchanging it. A
+volume's canonical id is `volume:` prefixed to its backing device's, so a driver
+holding `id=block:ata:2` and a tool given `block:ata:2` reach the same
+fingerprint independently, and no message carries a second spelling that could
+disagree with the publisher.
+
+`fsck.wfs` distinguishes three answers, not two: claimed, not claimed, and
+**cannot tell** — no volume manager running, or no volume covering that device.
+The third is refused rather than waved through, because a check that proceeded
+because it could not find an owner is exactly as dangerous as one that ignored
+the owner it found. `--force` overrides any of them and says so in its output,
+since findings taken past a live claim may be races rather than damage.
+
+There is no `mkfs.wfs` in the guest — `mkfs_wfs` is a host tool that writes an
+image file — so the sharper half of the requirement has no call site yet. A guest
+formatter must consult the same flag when one exists.
 
 It RECORDS a claim; it does not enforce one. The volume manager is not in the
 I/O path — unlike the partition manager, which proxies every transfer and can
@@ -177,25 +287,34 @@ claims. "No superblock matched" and "this is not a volume" are different answers
 and must not collapse into one.
 
 The suppressing signal is a partition table, which is why `libblkid` carries
-`partitions/` beside `superblocks/` rather than only the latter. Two ways to get
-it, and the choice is a real one:
+`partitions/` beside `superblocks/` rather than only the latter.
 
-- **The volume manager parses tables too**, reusing `partition_table.zig`. Honest
-  and self-contained, but it makes two components readers of the same on-disk
-  structure, which is precisely what
-  `architecture/36-partition-manager-and-block-identity.md` centralised.
-- **The block descriptor carries it.** Cheaper, and wrong today: `scheme` is
-  always `PARTITION_SCHEME_NONE` on a whole disk, because the DISK DRIVER
-  publishes that record and disk drivers read no tables
-  (`ata.c`, `virtio_blk.zig`). Only a partition's descriptor carries a real
-  scheme, set by the partition manager. Making this work means the partition
-  manager amending the disk's record after parsing — a republish of a device it
-  does not own.
+**Implemented: the volume manager detects the table in the same read.**
+`partition_table.detectScheme` runs over the prefix already fetched for the
+recognisers — an MBR is at LBA 0 and a GPT header at LBA 1, both inside it — so
+suppression costs no extra I/O, no protocol and no ordering assumption. It reuses
+`partition_table.zig` rather than re-reading the signatures, so the objection
+that this makes two components readers of the same structure applies to the I/O
+and not to the parsing: there is still exactly one parser, and a second
+implementation could disagree with the one the partition manager acts on.
 
-The second is preferable if the republish is acceptable, because it keeps table
-parsing in one component. Either way the rule is the same and belongs in the
-document: **a volume is published for a device that holds a filesystem, and a
-device holding a partition table holds partitions instead.**
+An earlier revision of this section preferred a second option — the block
+descriptor carrying `scheme` — and that option does not work. A consumer of the
+`block` class obtains descriptors by sending `BLOCK_IPC_IDENTIFY_REQ` to the
+provider, which for a whole disk is `ata.c` or `virtio_blk.zig`; those read no
+tables and report `PARTITION_SCHEME_NONE` forever. The device manager's registry
+does upsert by `canonical_id`, so the partition manager could amend the record
+there — but that registry has no query opcode (`DEVMGR_QUERY_BLOCK_MOUNT_REQ` was
+retired), so the amendment never reaches a class client. Recorded because the
+reasoning looks sound until the retrieval path is followed.
+
+The rule either way: **a volume is published for a device that holds a
+filesystem, and a device holding a partition table holds partitions instead.**
+
+Note what does NOT suppress. A recogniser finding nothing yields
+`FS_TYPE_UNKNOWN`, and that publishes: an unrecognised format reads exactly like
+a blank disk, both are legitimate to select with `ATTR{fstype}=="unknown"`, and a
+`mkfs` needs to see a device it can format. Only a table suppresses.
 
 ## 7. Recognition in practice
 
@@ -268,14 +387,32 @@ permanently one value — a field nothing sets is one a later reader will trust.
 
 ## 10. Constraints inherited from the block layer
 
-**`/boot` cannot be a volume, yet.** The mount-policy examples in §4 do not cover
-it, and it is the case that stopped
-`architecture/36-partition-manager-and-block-identity.md` §3 short. The partition
-manager is spawned from the BOOT rules, which cannot load until `/boot` is
-mounted, so `/boot` cannot mount from anything the partition manager published —
-and a volume manager consuming the `block` class sits one layer further from the
-bootstrap than that. `/boot` keeps a whole-disk rule and `fat_try_parse_mbr`
-until a table reader runs from initfs.
+**`/boot` mounts from a volume, and no mount rule names a disk.** Both managers
+are initfs payloads, so a volume for the ESP exists before `/boot` is mounted, and
+`ATTR{boot}=="1"` selects the volume the FIRMWARE loaded this system from. Nothing
+on an ESP can supply that identity — its filesystem is ordinary FAT, its label is
+firmware-specific (`QEMU VVFAT` here), and an MBR gives it no partition label and
+no PARTUUID — so it comes from the bootloader, which reads the MEDIA/HARDDRIVE
+node of its own device path into `boot_info`; the kernel publishes the LBA range
+as the `boot.partition` kernel-environment variable, and the device manager marks
+the volume whose backing partition covers it.
+
+`fat_try_parse_mbr` is gone with the whole-disk mount that needed it: the
+partition manager is the only partition-table reader in the system.
+
+Getting here took two fixes one layer down, both found because `/boot` mounts
+LATER from a volume than it did from a disk rule, and both pre-existing:
+
+- The partition proxy forwarded a client's `dst_borrow_id` to the disk backend. A
+  borrow is held per CONTEXT, so that id named a grant between the client and the
+  proxy and resolved to nothing for the disk. It REBORROWS now. Invisible until a
+  filesystem served FILE reads from a partition, the mount path using the
+  caller's own block buffer.
+- Two unbounded waits turned "later" into "never": the kernel's broker self-test
+  polled for `font-service` on `PROCESS_RUN_YIELDED`, and `pm_recv_fs_reply`
+  blocked with no deadline, so a filesystem that died mid-mount parked the process
+  manager for the rest of the boot. Both now block on something that wakes them,
+  with a deadline where no wake is guaranteed.
 
 **Two volumes on one disk collide on `fs.backend`.**
 `FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`, and a partition

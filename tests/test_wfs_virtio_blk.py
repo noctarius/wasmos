@@ -1,11 +1,20 @@
-"""One WFS volume, two transports: the same image mounts over virtio-blk as well
-as ATA, and reads identically through both.
+"""One WFS filesystem, two transports: it mounts over virtio-blk as well as ATA,
+and reads identically through both.
 
 This is what the disk adapter is for. WFS talks to a `block` class instance, not
 to a controller, so the backend underneath it should not be observable in the
-filesystem's behaviour. The volume here is the very same build/wfs.img the ATA
-test uses, attached a second time as a virtio-blk device, so any difference the
+filesystem's behaviour. The virtio volume is build/wfs_virtio.img, formatted from
+the same content directory as the ATA test's build/wfs.img, so any difference the
 tests see is a difference in the transport rather than in the bytes.
+
+A SECOND IMAGE, NOT THE SAME ONE TWICE
+
+Both volumes are now selected by mount rules that name them by uuid, and one
+file attached twice carries one uuid -- so the two mounts would be indis-
+tinguishable to policy and /wfs would bind to whichever volume the boot happened
+to recognise first. mkfs_wfs pins a different uuid for each image (WFS_IMAGE_UUID
+and WFS_VIRTIO_IMAGE_UUID in CMakeLists.txt), which is what makes the two rules
+deterministic.
 
 It also puts a THIRD block_fs rule in the boot rule set. Rules after the first
 are the ones that lost their startup arguments to the device manager's
@@ -45,18 +54,16 @@ WFS_VIRTIO_UNIT = 48
 
 
 def _config_with_wfs_over_virtio(wfs_image: str):
-    """The standard device set plus build/wfs.img as a virtio-blk disk.
+    """The standard device set plus build/wfs_virtio.img as a virtio-blk disk.
 
-    The image stays attached over ATA as well, so both mounts come up in one
-    boot and can be compared against each other rather than across runs.
+    The ATA WFS drive stays attached too, so both mounts come up in one boot and
+    can be compared against each other rather than across runs.
 
     snapshot=on for the same reason the ATA WFS drive carries it: a mount marks
     the volume dirty and the guest writes to it, so without a throwaway overlay
     the next boot mounts a volume the previous one left dirty -- which WFS
     correctly mounts read-only, there being no journal replay -- and the read
-    fixtures stop holding the bytes asserted here. Two overlays over one backing
-    file also keep the two mounts from writing through to each other, which is
-    what lets both exist at once.
+    fixtures stop holding the bytes asserted here.
     """
     return replace(
         default_config(),
@@ -81,8 +88,13 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
             raise unittest.SkipTest(
                 f"no WFS image at {cfg.wfs_image!r}; build the wfs_image target"
             )
+        if not cfg.wfs_virtio_image or not os.path.exists(cfg.wfs_virtio_image):
+            raise unittest.SkipTest(
+                f"no virtio WFS image at {cfg.wfs_virtio_image!r}; "
+                "build the wfs_virtio_image target"
+            )
         cls.session = QemuSession(
-            _config_with_wfs_over_virtio(cfg.wfs_image), timeout_s=180, echo=True
+            _config_with_wfs_over_virtio(cfg.wfs_virtio_image), timeout_s=180, echo=True
         )
         cls.session.start()
         if not cls.session.expect(b"wamos> "):
@@ -147,6 +159,33 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
             [b"driver=virtio-blk unit=%d" % WFS_VIRTIO_UNIT],
             timeout_s=60,
         )
+
+    def test_each_path_bound_to_the_volume_its_rule_names(self):
+        """/wfs and /vwfs bound to the volumes their uuids name, not to whichever
+        arrived first.
+
+        Both rules match SUBSYSTEM=="volume", ATTR{fstype}=="wfs" and differ only
+        in ATTR{uuid}, so the PAIRING is the contract: which volume ended up at
+        which path. Asserting the mount count cannot see that -- two rules landing
+        on one volume, or each taking whichever was recognised first, still mounts
+        twice -- and neither can asserting that both volumes were bound, since
+        that holds whichever way round they went. Hence mount= and id= together.
+
+        The uuids are pinned by mkfs_wfs, so the expected pairing is fixed: /wfs
+        is WFS_IMAGE_UUID on the ATA drive, /vwfs is WFS_VIRTIO_IMAGE_UUID on the
+        virtio one.
+        """
+        for mount, volume in (
+            (b"/wfs", b"volume:block:ata:2"),
+            (b"/vwfs", b"volume:block:virtio-blk:48"),
+        ):
+            self.assertIn(
+                b"volume rule queued spawn mount=%s id=%s" % (mount, volume),
+                self.session.buf,
+                f"{mount!r} did not bind to {volume!r}, so the rule's uuid did not "
+                "decide which of the two WFS volumes it selected\n"
+                f"--- tail ---\n{self.session.tail()}\n",
+            )
 
     def test_the_volume_mounts_over_virtio(self):
         """fs_wfs mounted the virtio disk, not only the ATA one.

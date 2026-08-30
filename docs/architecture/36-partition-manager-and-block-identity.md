@@ -261,7 +261,7 @@ rest of the boot, table and all. virtio-blk is exactly that driver: it negotiate
 a PCI device, claims an MSI-X vector and sets up a virtqueue before publishing,
 and lands well after the partition manager reports ready. ATA does not, which is
 the only reason the shipped boot image looked unaffected —
-`tests/test_partition_manager_late_disk.py` attaches a GPT-partitioned virtio
+`tests/test_partition_manager_disk_arrival.py` attaches a GPT-partitioned virtio
 disk and is the regression guard.
 
 Two arrivals are dropped rather than probed:
@@ -372,15 +372,28 @@ For each partition endpoint the manager serves the full block contract:
 
 - `BLOCK_IPC_IDENTIFY_REQ` — answered from its own descriptor. Not forwarded;
   the reported capacity is the *partition's*, not the disk's.
-- `BLOCK_IPC_READ_REQ` / `WRITE_REQ` — arg1 becomes `lba + lba_start`; arg0 (the
-  client's block-buffer physical address) passes through untouched, so the disk
-  driver still lands bytes directly in the filesystem driver's buffer. The
-  proxy costs one IPC round trip, not a copy.
-- `BLOCK_IPC_READ_ZC_REQ` — `xfer_buffer_reborrow` sub-grants the client's
-  borrow to the downstream driver's endpoint (rights ⊆ its own), the request is
-  forwarded with the downstream borrow id and the buffer id unchanged, and
-  `xfer_buffer_unborrow` releases it on completion, cascade-revoking the chain.
-  Zero-copy survives the hop.
+- `BLOCK_IPC_READ_REQ` / `WRITE_REQ` — `lba` becomes `lba + lba_start`, and the
+  destination is carried across by KIND:
+  - `BLOCK_DST_BLOCK_BUFFER` — `dst_phys` (the client's own block-buffer physical
+    address) passes through untouched, so the disk driver still lands bytes
+    directly in the filesystem driver's buffer.
+  - `BLOCK_DST_XFER_BUFFER` — `xfer_buffer_reborrow` sub-grants the client's
+    borrow to the downstream driver's endpoint, narrowed to the transfer's
+    direction (WRITE on a read, READ on a write; rights ⊆ its own). The request
+    carries the downstream borrow id with the buffer id unchanged, and
+    `xfer_buffer_unborrow` releases it when the reply arrives, cascade-revoking
+    the chain.
+
+  The reborrow is not optional and is not an optimisation. A borrow is held per
+  CONTEXT, so forwarding the client's own `dst_borrow_id` hands the disk a handle
+  nothing resolves for it: its DMA is refused, its staged fallback writes into a
+  buffer it may not touch and is refused too, and the client sees fs.IO. This was
+  specified for the retired `BLOCK_IPC_READ_ZC_REQ` and lost when zero-copy folded
+  into `dst_kind`; it stayed invisible until `/boot` became the first mount to
+  serve FILE reads from a partition, because the mount path uses the block-buffer
+  kind and never needed a grant.
+
+  Either way the proxy costs one IPC round trip, not a copy.
 - **Bounds clamp** — any request whose `[lba, lba + count)` leaves
   `[0, lba_count)` is refused with a packed error. This is the containment the
   design exists for: a filesystem driver reaches its partition and nothing else.
@@ -435,24 +448,23 @@ with the coroutine runtime, `service_async_entry_wasm.c` and the generated ABI
 staged flat. The manifest needs `svc.class` (to claim `block` instances) and no
 hardware capabilities at all — the manager touches no device, only IPC.
 
-It ships on the ESP and is spawned from the BOOT rules by absolute path
-(`RUN+="/boot/system/drivers/partmgr.wap"`), not from initfs. Those rules load
-only once storage is online, which is what makes `/boot` mountable at all — see
-§3. It is no longer what makes discovery correct: the class subscription above
-covers a driver that had not probed yet, and it had to, because the disks
-registered by then are only the ones ATA published. The absolute path matters: a
-relative rule path is resolved against the initfs module list first, so an
-ESP-only module has to say where it lives.
+It is an INITFS payload, spawned from the bootstrap rules by relative path
+(`RUN+="system/drivers/partition_manager.wap"`), and it is not staged on the ESP
+at all. It has to be: `/boot` is mounted from a volume, and a manager spawned
+from the boot rules — which load off `/boot` — could never publish the thing that
+selects `/boot`. That is the bootstrap circle, and initfs is what breaks it.
 
-Keeping it out of initfs is also what keeps Zig off the critical build path.
-CMake derives the initfs payload list from every `source =` line in
-`scripts/initfs.toml`, so listing a Zig artifact there makes `make_initfs`
-depend on it unconditionally and a build without Zig can no longer produce a
-boot image. Nothing in initfs is Zig today.
+Being spawned ahead of every disk driver makes the class subscription the ONLY
+discovery path rather than a supplement: its startup sweep runs before ATA has
+registered anything and finds nothing, and every disk on the system is probed as
+its driver publishes it. The subscription was already required for a driver that
+had not probed yet; it now carries the whole load.
 
-TODO: mounting `/boot` ITSELF from a partition needs the manager to exist before
-`/boot` does, which means initfs, which means that Zig dependency. Decide it with
-the mount-policy change in §3, not before.
+This puts Zig on the critical build path: CMake derives the initfs payload list
+from every `source =` line in `scripts/initfs.toml`, so a Zig artifact there
+makes the boot image unbuildable without a Zig toolchain. That costs nothing in
+practice — the native gfx-compositor and font-service are Zig, so no
+configuration builds without one.
 
 ---
 

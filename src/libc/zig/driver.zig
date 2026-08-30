@@ -128,6 +128,62 @@ pub const BlockDescriptor = extern struct {
     canonical_id: [BLOCK_ID_MAX]u8 = [_]u8{0} ** BLOCK_ID_MAX,
 };
 
+pub const VOLUME_LABEL_MAX: usize = 64;
+pub const VOLUME_UUID_MAX: usize = 16;
+pub const VOLUME_ID_MAX: usize = 64;
+pub const VOLUME_DESCRIPTOR_VERSION: u32 = 1;
+
+/// One volume — a thing with a filesystem on it — mirroring
+/// `wasmos_volume_descriptor_t` in `src/drivers/include/wasmos_driver_abi.h`.
+/// Carried in a transfer buffer by VOLUME_IPC_IDENTIFY_RESP.
+///
+/// A volume is not a block device. `block` answers "what storage exists" and
+/// this answers "what can be mounted", which differ in both directions: a
+/// partition-table entry may hold no filesystem, and a disk with no table may
+/// hold one.
+///
+/// Carries no way to READ the volume, deliberately. `backing_instance` names the
+/// `block` device underneath and a client addresses that directly, which is what
+/// keeps the volume manager out of the I/O path.
+///
+/// Layout coincides with the packed C side on the same terms as
+/// `BlockDescriptor`: natural alignment throughout and a total that is a
+/// multiple of 8. The assertions below fail the build if that stops holding.
+pub const VolumeDescriptor = extern struct {
+    version: u32 = VOLUME_DESCRIPTOR_VERSION,
+    /// FS_TYPE_*, from a recogniser.
+    fs_type: u32 = 0,
+    /// The `block` class instance this volume sits on.
+    backing_instance: u32 = 0,
+    /// VOLUME_DESCRIPTOR_FLAG_*
+    flags: u32 = 0,
+    /// Offset within the backing device. Zero for every volume this version
+    /// publishes, since a volume maps one whole device; the field is what makes
+    /// a spanned volume expressible later without a version bump.
+    lba_start: u64 = 0,
+    /// The volume's size in sectors.
+    lba_count: u64 = 0,
+    sector_bytes: u32 = 0,
+    /// Bytes of `uuid` the format defines, for rendering. A comparison covers
+    /// the whole field regardless, so a short id cannot alias a long one.
+    uuid_len: u32 = 0,
+    uuid: [VOLUME_UUID_MAX]u8 = [_]u8{0} ** VOLUME_UUID_MAX,
+    /// NUL-terminated; empty unless the HAS_LABEL flag is set.
+    label: [VOLUME_LABEL_MAX]u8 = [_]u8{0} ** VOLUME_LABEL_MAX,
+    /// NUL-terminated `volume:` + the backing device's canonical id.
+    canonical_id: [VOLUME_ID_MAX]u8 = [_]u8{0} ** VOLUME_ID_MAX,
+};
+
+comptime {
+    if (@sizeOf(VolumeDescriptor) != 40 + VOLUME_UUID_MAX + VOLUME_LABEL_MAX + VOLUME_ID_MAX) {
+        @compileError("VolumeDescriptor size disagrees with wasmos_volume_descriptor_t");
+    }
+    if (@offsetOf(VolumeDescriptor, "lba_start") != 16) @compileError("volume lba_start moved");
+    if (@offsetOf(VolumeDescriptor, "uuid") != 40) @compileError("volume uuid moved");
+    if (@offsetOf(VolumeDescriptor, "label") != 56) @compileError("volume label moved");
+    if (@offsetOf(VolumeDescriptor, "canonical_id") != 120) @compileError("volume id moved");
+}
+
 /// Destination kinds of a block request, matching BLOCK_DST_* in
 /// `abi/constants.yaml`.
 pub const BLOCK_DST_BLOCK_BUFFER: u32 = 0;
@@ -541,6 +597,30 @@ pub fn bufferAcquire(len: usize) ?i32 {
 pub fn bufferBorrow(grantee_endpoint: i32, buffer_id: i32, flags: i32) ?i32 {
     const borrow = abi.xfer_buffer_borrow(grantee_endpoint, buffer_id, flags);
     return if (borrow < 0) null else borrow;
+}
+
+/// Sub-grant a borrow this process HOLDS to a further context, returning the
+/// downstream borrow id.
+///
+/// What a PROXY needs. A borrow is held per context, so a server handed a
+/// client's buffer cannot pass the client's own borrow id to a third process --
+/// that id names a grant between the client and this server, and nothing
+/// resolves it for anyone else. Reborrowing mints a distinct handle for the
+/// grantee, within this borrow's own rights: `flags` may narrow them and may
+/// never widen them.
+///
+/// Lifetime is a chain, not a copy. Dropping the upstream borrow -- or the owner
+/// releasing the object -- cascade-revokes every reborrow beneath it, so a
+/// grantee cannot outlive the grant it came from.
+pub fn bufferReborrow(grantee_endpoint: i32, borrow_id: i32, flags: i32) ?i32 {
+    const downstream = abi.xfer_buffer_reborrow(grantee_endpoint, borrow_id, flags);
+    return if (downstream < 0) null else downstream;
+}
+
+/// Drop one (re)borrow this process holds, cascade-revoking anything reborrowed
+/// from it.
+pub fn bufferUnborrow(borrow_id: i32) void {
+    _ = abi.xfer_buffer_unborrow(borrow_id);
 }
 
 // --- service registry ------------------------------------------------------

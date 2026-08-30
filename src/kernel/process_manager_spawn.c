@@ -617,24 +617,62 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32
     return 0;
 }
 
+/* How long a spawn's filesystem read may take before the PM gives up on it.
+ *
+ * Generous: a cold read through a filesystem driver, a partition proxy and a
+ * disk backend, on a machine still bringing itself up. It is a DEADLINE, not a
+ * latency budget -- reaching it means the answer is never coming. */
+#define PM_FS_REPLY_TIMEOUT_MS 15000u
+/* One sleep's length. Only a backstop: a reply wakes the sleeper immediately, so
+ * this decides how promptly the DEADLINE is noticed when no reply ever comes,
+ * not how promptly a reply is seen. Long enough that a silent wait costs a
+ * handful of wakes rather than a poll. */
+#define PM_FS_REPLY_SLICE_MS 250u
+
+/* Wait for the FS reply to `request_id`, bounded.
+ *
+ * The bound is the point. This blocked without one, so a filesystem that
+ * accepted a read and then died -- a driver whose mount failed after the rule
+ * spawned it -- parked the PROCESS MANAGER for the rest of the boot. Nothing
+ * else spawns, so the system stops without a fault to look at: every process
+ * blocked, fs-manager idle with an empty queue, and no clue which request was
+ * outstanding.
+ *
+ * On the deadline the spawn fails with a reason its caller can report, which is
+ * recoverable in a way a hung PM is not.
+ *
+ * A reply for another request is discarded, as before: ids are the PM's own and
+ * an unmatched one is a stale reply to a request already abandoned. Each such
+ * message restarts the wait, which is correct -- the deadline covers the reply
+ * being ABSENT, and a message arriving proves the peer is alive. */
 static int pm_recv_fs_reply(uint32_t source_context_id, uint32_t source_endpoint,
                             uint32_t request_id, ipc_message_t* out_msg) {
     ipc_message_t msg;
+    /* The deadline is kept HERE, in ticks, because ipc_endpoint_wait_for cannot
+     * report one: it returns IPC_OK whether it was woken or its timeout expired,
+     * so its timeout bounds one sleep and says nothing about the whole wait. */
+    const uint64_t deadline = timer_ticks() + timer_ms_to_ticks(PM_FS_REPLY_TIMEOUT_MS);
     for (;;) {
-        int rc = ipc_recv_blocking_for(source_context_id, source_endpoint, &msg);
-        if (rc == IPC_EMPTY) {
-            continue; /* spurious wake; retry */
+        int rc = ipc_recv_for(source_context_id, source_endpoint, &msg);
+        if (rc == IPC_OK) {
+            if (msg.request_id != request_id) {
+                continue;
+            }
+            if (out_msg) {
+                *out_msg = msg;
+            }
+            return 0;
         }
-        if (rc != IPC_OK) {
+        if (rc != IPC_EMPTY) {
             return PM_SPAWN_INTERNAL_ERR_RECV;
         }
-        if (msg.request_id != request_id) {
-            continue;
+        if (timer_ticks() >= deadline) {
+            klog_write("[pm] fs reply timed out; the filesystem never answered\n");
+            return PM_SPAWN_INTERNAL_ERR_RECV;
         }
-        if (out_msg) {
-            *out_msg = msg;
-        }
-        return 0;
+        /* Sleep rather than re-poll. The slice bounds one sleep so the deadline
+         * above is re-tested even if no message ever arrives to wake us. */
+        (void)ipc_endpoint_wait_for(source_context_id, source_endpoint, PM_FS_REPLY_SLICE_MS);
     }
 }
 

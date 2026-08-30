@@ -23,8 +23,23 @@ extern "C" {
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
-/* Close an FS descriptor. Returns 0 on success, -1 if the FS manager is
- * unreachable or answers with anything but a plain FS_IPC_RESP. */
+/* HOW FAILURE IS REPORTED, for every declaration below.
+ *
+ * Test `< 0`, never `== -1`. A failure is always NEGATIVE, but it is one of two
+ * things:
+ *
+ *   - a packed WASMOS_ERR_* code (abi/errors.yaml) when the FS manager refused
+ *     the request, carrying WHY it was refused -- a missing path, a full
+ *     open-file table and an I/O error are distinguishable;
+ *   - a literal -1 when this library rejected the call before any IPC, on a
+ *     NULL pointer, an unusable descriptor, or an out-of-range argument.
+ *
+ * POSIX spells both as -1. This does not, because discarding the backend's
+ * reason left every caller able to say only "it failed" (see AGENTS.md on bare
+ * -1 at a subsystem boundary). `wasmos_strerror` renders a packed code. */
+
+/* Close an FS descriptor. Returns 0 on success, or the packed reason when the
+ * FS manager is unreachable or answers with anything but a plain FS_IPC_RESP. */
 int close(int fd);
 /* Read up to `count` bytes into `buf`, in transfer-buffer-sized chunks.
  * `buf` is borrowed for the call. Returns the number of bytes read (0 at end of
@@ -47,27 +62,29 @@ ssize_t write(int fd, const void* buf, size_t count);
  * O_CREAT/O_APPEND/O_TRUNC are accepted; any other bit, a nonsensical access
  * mode, or O_APPEND/O_TRUNC on a read-only open is rejected with -1 before any
  * IPC. The variadic mode argument of POSIX open() is accepted and ignored.
- * Returns the FS manager's descriptor on success, -1 on failure. */
+ * Returns the FS manager's descriptor on success, or the packed reason the
+ * backend gave on failure. */
 int open(const char* path, int flags, ...);
 /* Reposition the descriptor. `offset` must fit in int32 (the IPC argument
  * width); a wider value is refused with (off_t)-1 without contacting the FS
- * manager. Returns the resulting absolute offset, or (off_t)-1 on failure. */
+ * manager. Returns the resulting absolute offset, or the packed reason -- also
+ * negative -- when the FS manager refuses the seek. */
 off_t lseek(int fd, off_t offset, int whence);
 /* Fill *st (st_size and st_mode only) for `path`. Returns 0 on success, -1 on a
- * NULL argument or any FS failure, leaving *st untouched. */
+ * NULL argument, or the packed reason on an FS failure, leaving *st untouched. */
 int stat(const char* path, struct stat* st);
-/* Remove a file. Returns 0 on success, -1 on failure. */
+/* Remove a file. Returns 0 on success, or the packed reason on failure. */
 int unlink(const char* path);
 
-/* Rename or move `old_path` to `new_path` within one mount.  0 on success, -1
- * otherwise.  An existing destination FILE is replaced, as POSIX requires, and
+/* Rename or move `old_path` to `new_path` within one mount.  0 on success, the
+ * packed reason otherwise.  An existing destination FILE is replaced, as POSIX requires, and
  * its data is released; an existing destination DIRECTORY is refused, because
  * freeing what it contains would be a recursive delete rather than a rename.
  * An open source or destination is refused (WASMOS_ERR_FS_BUSY): the backend's
  * descriptors record where a file's directory entry lives.  The file's data is
  * never copied -- only the directory entry changes. */
 int rename(const char* old_path, const char* new_path);
-/* Remove a directory. Returns 0 on success, -1 on failure. */
+/* Remove a directory. Returns 0 on success, or the packed reason on failure. */
 int rmdir(const char* path);
 /* List the FS manager's current directory into `buf`: one newline-terminated
  * entry per name, reassembled from the four payload bytes of each FS_IPC_STREAM

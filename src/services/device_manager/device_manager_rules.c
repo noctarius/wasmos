@@ -306,6 +306,63 @@ static int parse_guid(const char* s, uint8_t* out) {
     return 0;
 }
 
+/* A VOLUME's identity from its rule spelling, into `out` zero-padded to
+ * VOLUME_DESCRIPTOR_UUID_MAX.
+ *
+ * Deliberately not parse_guid. A volume uuid is not a GPT GUID: it is whatever
+ * bytes the FILESYSTEM stores, and no format defines them as a GUID's
+ * mixed-endian fields. WFS keeps sixteen opaque bytes and mkfs_wfs both takes
+ * and prints them in order; FAT's whole notion of identity is a four-byte volume
+ * serial. Reading either through GUID order reverses the first eight bytes, and
+ * the rule then parses cleanly and never matches -- the failure mode parse_guid's
+ * own comment calls miserable to debug.
+ *
+ * So: hex pairs in order, hyphens ignored wherever they fall, since the
+ * canonical grouping is presentation and a uuid gets pasted from a formatter's
+ * report as readily as from its argument. Width is the FORMAT's, one to
+ * VOLUME_DESCRIPTOR_UUID_MAX bytes; the remainder stays zero, matching how a
+ * descriptor pads a short identity, so the comparison can be full width.
+ *
+ * Returns 0 on success. */
+static int parse_volume_uuid(const char* s, uint8_t* out) {
+    uint32_t n = 0;
+    uint32_t i = 0;
+    int hi = -1;
+
+    if (!s || !out) {
+        return -1;
+    }
+    for (i = 0; i < (uint32_t)VOLUME_DESCRIPTOR_UUID_MAX; ++i) {
+        out[i] = 0;
+    }
+    for (i = 0; s[i] != '\0'; ++i) {
+        int nib;
+        if (s[i] == '-') {
+            continue;
+        }
+        nib = hex_nibble(s[i]);
+        if (nib < 0) {
+            return -1;
+        }
+        if (hi < 0) {
+            hi = nib;
+            continue;
+        }
+        if (n >= (uint32_t)VOLUME_DESCRIPTOR_UUID_MAX) {
+            return -1;
+        }
+        out[n++] = (uint8_t)((hi << 4) | nib);
+        hi = -1;
+    }
+    /* A trailing half-byte means the text was cut, and a cut identity is a
+     * PREFIX of the intended one -- which would match a different volume rather
+     * than none. Refuse it. */
+    if (hi >= 0 || n == 0u) {
+        return -1;
+    }
+    return 0;
+}
+
 /* PARTITION_SCHEME_* from its rule spelling. Returns 0 on success. */
 static int parse_scheme(const char* s, uint32_t* out) {
     if (strcmp(s, "none") == 0) {
@@ -460,6 +517,8 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     char guid_text[40];
     char label[BLOCK_DESCRIPTOR_LABEL_MAX];
     char name[BLOCK_DESCRIPTOR_ID_MAX];
+    char fslabel[VOLUME_DESCRIPTOR_LABEL_MAX];
+    char uuid_text[40];
     block_fs_rule_t rule;
     if (!line || !out_rule) {
         return -1;
@@ -467,6 +526,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     memset(&rule, 0, sizeof(rule));
     label[0] = '\0';
     name[0] = '\0';
+    fslabel[0] = '\0';
     if (copy_rule_line(line, line_buf, sizeof(line_buf)) != 0) {
         return -1;
     }
@@ -520,10 +580,29 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
             rule.has_part_guid = 1;
             continue;
         }
+        /* An empty value is REFUSED for both, because neither can select
+         * anything. A partition's name is not a value the way a filesystem's
+         * label is: an MBR partition has no name concept at all and a GPT entry
+         * may simply be unnamed, and neither is "a partition named the empty
+         * string". A canonical id is never empty either. So an empty matcher here
+         * is a rule that can never fire, and this refuses it at load rather than
+         * letting it die silently -- the same treatment a partition matcher on a
+         * disk rule gets.
+         *
+         * This is where ATTR{label} differs and must not be copied: a FAT volume
+         * may genuinely be NAMED "", the descriptor says so with
+         * VOLUME_DESCRIPTOR_FLAG_HAS_LABEL, and ATTR{label}=="" selects exactly
+         * those. */
         if (extract_op_value(tok, "ATTR{partlabel}", "==", label, sizeof(label)) == 0) {
+            if (label[0] == '\0') {
+                return -1;
+            }
             continue;
         }
         if (extract_op_value(tok, "ATTR{name}", "==", name, sizeof(name)) == 0) {
+            if (name[0] == '\0') {
+                return -1;
+            }
             continue;
         }
         if (extract_op_value(tok, "ATTR{fstype}", "==", tmp, sizeof(tmp)) == 0) {
@@ -540,6 +619,31 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
             rule.has_scheme = 1;
             continue;
         }
+        /* Volume matchers. ATTR{label} is the FILESYSTEM's label and is not
+         * ATTR{partlabel}: the ESP carries no partition label at all while its
+         * FAT boot sector says "QEMU VVFAT". */
+        if (extract_op_value(tok, "ATTR{label}", "==", fslabel, sizeof(fslabel)) == 0) {
+            rule.has_label = 1;
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{uuid}", "==", uuid_text, sizeof(uuid_text)) == 0) {
+            if (parse_volume_uuid(uuid_text, rule.uuid) != 0) {
+                return -1;
+            }
+            rule.has_uuid = 1;
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{boot}", "==", tmp, sizeof(tmp)) == 0) {
+            if (strcmp(tmp, "1") == 0) {
+                rule.boot = 1;
+            } else if (strcmp(tmp, "0") == 0) {
+                rule.boot = 0;
+            } else {
+                return -1;
+            }
+            rule.has_boot = 1;
+            continue;
+        }
     }
     if (path[0] == '\0') {
         return -1;
@@ -548,7 +652,25 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
         rule.subsystem = (uint8_t)DEVMGR_BLOCK_SUBSYS_DISK;
     } else if (strcmp(sub, "partition") == 0) {
         rule.subsystem = (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION;
+    } else if (strcmp(sub, "volume") == 0) {
+        rule.subsystem = (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME;
     } else {
+        return -1;
+    }
+    /* A volume has no partition table of its own to match on, and the block
+     * layer's identity fields do not reach it: a volume is a filesystem, not a
+     * table entry. Refused for the same reason a partition matcher on a disk
+     * rule is -- the author meant a different subsystem, and a dead rule is
+     * indistinguishable from a device that never appeared. */
+    if (rule.subsystem == (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME &&
+        (rule.has_type_guid || rule.has_part_guid || rule.has_scheme || label[0])) {
+        return -1;
+    }
+    /* Conversely, the filesystem matchers belong only to a volume. `fstype` on a
+     * block or partition rule matched a descriptor field no publisher ever set
+     * (see architecture/37 section 9), so it silently matched nothing. */
+    if (rule.subsystem != (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME &&
+        (rule.has_label || rule.has_uuid || rule.has_boot)) {
         return -1;
     }
     /* A partition matcher on a disk rule is a rule that can never fire: a whole
@@ -569,6 +691,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     rule.unit = unit;
     str_copy(rule.partlabel, sizeof(rule.partlabel), label);
     str_copy(rule.device_name, sizeof(rule.device_name), name);
+    str_copy(rule.label, sizeof(rule.label), fslabel);
     str_copy(rule.mount, sizeof(rule.mount), mount);
     str_copy(rule.spawn_path, sizeof(rule.spawn_path), path);
     *out_rule = rule;

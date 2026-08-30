@@ -116,7 +116,11 @@ typedef struct __attribute__((packed)) {
  * pin (config 0x3D = 0, irq_hint 0xFF), so the line is not discoverable from the
  * device record — it is the fixed ISA assignment for the primary channel, and
  * the spawn profile grants exactly 14|15 for this driver. */
-#define ATA_IRQ_LINE 14u
+/* Legacy ATA has one line per channel: 14 for the primary task file, 15 for the
+ * secondary. Both are routed; see ata_service_irq for how an event names which
+ * one fired. */
+#define ATA_IRQ_LINE_PRIMARY 14u
+#define ATA_IRQ_LINE_SECONDARY 15u
 
 /* ATA_SECTOR_SIZE is the fixed 512-byte block this driver assumes throughout.
  * ATA_MAX_READ_SECTORS bounds the sectors one request may move, whatever its
@@ -202,13 +206,28 @@ static uint8_t g_dma_ready;
 static uint8_t g_dma_logged;
 
 /* Interrupt state. Events land on their own endpoint so draining them cannot
- * discard a queued block request. g_irq_active means both halves are live: the
- * line is routed AND nIEN is clear at the drive. */
+ * discard a queued block request; a queue belongs to an endpoint, and nothing
+ * else sends to this one. g_irq_active means both halves are live for a channel:
+ * its line is routed AND nIEN is clear at its drive.
+ *
+ * Both channels' lines deliver here, so the endpoint's IPC_QUEUE_DEPTH is shared
+ * between them. That is not a ceiling worth engineering around: an event only
+ * arrives while a transfer is outstanding, and every wait step drains the queue
+ * empty. It does mean an event must be handled per message rather than per
+ * drain -- see ata_service_irq. */
 static int32_t g_irq_endpoint = -1;
 static int32_t g_irq_select = -1;
-static uint8_t g_irq_active;
-static uint8_t g_irq_seen;       /* at least one interrupt has actually arrived */
-static uint32_t g_irq_dry_waits; /* consecutive sleeps that produced nothing */
+/* Per CHANNEL, because each has its own line and either may fall back to polling
+ * without the other: a drive that never asserts on the secondary must not cost
+ * the primary its interrupt. Indexed by g_channel throughout. */
+static uint8_t g_irq_active[ATA_CHANNEL_COUNT];
+static uint8_t g_irq_seen[ATA_CHANNEL_COUNT];       /* an interrupt has arrived */
+static uint32_t g_irq_dry_waits[ATA_CHANNEL_COUNT]; /* sleeps that produced nothing */
+
+/* The line a channel's drive asserts on. */
+static uint32_t ata_irq_line(uint32_t channel) {
+    return (channel == 0u) ? ATA_IRQ_LINE_PRIMARY : ATA_IRQ_LINE_SECONDARY;
+}
 
 /* A refused read cannot be reported through the value (0xFF is a real status),
  * so a failure reads as 0 -- which has neither BSY nor DRQ set and so cannot be
@@ -254,39 +273,56 @@ static uint16_t ata_read_data16(void) {
  * Returns non-zero if an event was consumed. */
 static int ata_service_irq(void) {
     int drained = 0;
+    uint32_t saved_channel = g_channel;
     if (g_irq_endpoint < 0) {
         return 0;
     }
     while (wasmos_ipc_drain(g_irq_endpoint) > 0) {
+        /* The kernel names the line that fired in request_id (irq_ops_deliver in
+         * arch/x86_64/irq_x86_64.c), and ipc_drain records the message in the
+         * last-received slot. Both channels share this endpoint, so the event has
+         * to be read rather than counted: acking a constant would reopen a line
+         * that never fired and leave the one that did masked -- the disk dead. */
+        int32_t line = wasmos_ipc_last_field(1);
+        uint32_t channel = (line == (int32_t)ATA_IRQ_LINE_SECONDARY) ? 1u : 0u;
+
+        /* Reading the status register is what de-asserts INTRQ, and it must be
+         * read on the channel that raised it, not on whichever was selected. */
+        g_channel = channel;
+        (void)ata_read_status();
+        (void)wasmos_irq_ack(line);
+        if (!g_irq_seen[channel]) {
+            g_irq_seen[channel] = 1;
+            (void)printf("[ata] interrupt-driven transfers active on channel %u (line %d)\n",
+                         (unsigned)channel,
+                         (int)line);
+        }
+        g_irq_dry_waits[channel] = 0;
         drained = 1;
     }
-    if (drained) {
-        (void)ata_read_status();
-        (void)wasmos_irq_ack((int32_t)ATA_IRQ_LINE);
-        if (!g_irq_seen) {
-            g_irq_seen = 1;
-            (void)printf("[ata] interrupt-driven transfers active\n");
-        }
-        g_irq_dry_waits = 0;
-    }
+    g_channel = saved_channel;
     return drained;
 }
 
 /* Stop using the interrupt and go back to polling, leaving a clean state: quiet
  * the drive first, settle anything owed, then drop the route so the line is
  * masked rather than left asserted with nobody listening. */
-static void ata_disable_interrupts(const char* why) {
-    if (!g_irq_active) {
+static void ata_disable_interrupts(uint32_t channel, const char* why) {
+    uint32_t saved_channel = g_channel;
+    if (channel >= ATA_CHANNEL_COUNT || !g_irq_active[channel]) {
         return;
     }
-    g_irq_active = 0;
-    /* nIEN on the PRIMARY: that is the only channel whose interrupt was ever
-     * enabled, and this may run while a secondary transfer is the live one. */
-    g_channel = 0u;
+    g_irq_active[channel] = 0;
+    /* Quiet THIS channel's drive, settle anything it still owes, then drop only
+     * its route. The other channel keeps its interrupt: a drive that never
+     * asserts is a property of the drive, not of the driver. */
+    g_channel = channel;
     wasmos_io_region_out8(ata_region(), ATA_REG_CTRL, ATA_CTRL_NIEN);
     (void)ata_service_irq();
-    (void)wasmos_irq_unroute((int32_t)ATA_IRQ_LINE);
-    (void)printf("[ata] %s; falling back to polled transfers\n", why);
+    (void)wasmos_irq_unroute((int32_t)ata_irq_line(channel));
+    g_channel = saved_channel;
+    (void)printf(
+        "[ata] channel %u: %s; falling back to polled transfers\n", (unsigned)channel, why);
 }
 
 /* One wait step between status reads. With the interrupt live this blocks, so
@@ -294,32 +330,54 @@ static void ata_disable_interrupts(const char* why) {
  * routed-but-undelivered interrupt is detected here and abandoned once, rather
  * than being paid for on every sector. */
 static void ata_wait_step(void) {
-    /* The interrupt is routed for the PRIMARY channel only, so a transfer on the
-     * secondary polls. Routing the secondary's line 15 as well would mean
-     * telling two lines apart from one event and acking the right one, and an
-     * event acked on the wrong line leaves that line masked — the disk dead.
-     * The secondary carries no boot-critical volume, so it pays a poll instead. */
-    if (!g_irq_active || g_channel != 0u) {
+    uint32_t channel = g_channel;
+    /* Both channels' lines are routed, so a wait blocks on either. Only a channel
+     * that has FALLEN BACK spins here, and that is a drive-specific failure
+     * rather than a design choice.
+     *
+     * The wait is on the shared select set, so a transfer on one channel can be
+     * woken by the other's event. That is harmless and deliberate: the caller
+     * re-reads status every iteration, and ata_service_irq acks whichever line
+     * actually fired. */
+    if (!g_irq_active[channel]) {
         wasmos_io_wait();
         return;
     }
     if (!wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(g_irq_select, ATA_IRQ_WAIT_MS))) {
         /* The wait itself failed, so it returned without blocking. Continuing to
          * call it turns this into a spin; drop to the timed I/O delay instead. */
-        ata_disable_interrupts("interrupt wait failed");
+        ata_disable_interrupts(channel, "interrupt wait failed");
         wasmos_io_wait();
         return;
     }
-    if (ata_service_irq() || g_irq_seen) {
+    if (ata_service_irq() || g_irq_seen[channel]) {
         return;
     }
-    if (++g_irq_dry_waits >= ATA_IRQ_PROBE_LIMIT) {
-        ata_disable_interrupts("no interrupt from the drive");
+    if (++g_irq_dry_waits[channel] >= ATA_IRQ_PROBE_LIMIT) {
+        ata_disable_interrupts(channel, "no interrupt from the drive");
     }
 }
 
+/* Whether a wait step on the CURRENT channel sleeps rather than spins.
+ *
+ * Per channel, because each has its own line and either may fall back to polling
+ * without the other: `g_irq_active` is indexed by `g_channel`, and a channel that
+ * fell back spins in `ata_wait_step` however the other is doing.
+ *
+ * Every attempt budget must be chosen against THIS rather than against a
+ * transfer's own notion of whether interrupts work, because a sleep-sized budget
+ * spent on spins is a timeout orders of magnitude shorter than the one intended:
+ * ATA_IRQ_ATTEMPTS is 200 sleeps, and 200 port writes is roughly 80 microseconds
+ * -- enough that a drive misses the window under load and a read is reported as
+ * WASMOS_ERR_BLOCK_DEV_READ_FAILED.
+ *
+ * Shared by both budget helpers so they cannot drift apart. */
+static int ata_wait_step_sleeps(void) {
+    return g_irq_active[g_channel] != 0u;
+}
+
 static uint32_t ata_wait_attempts(void) {
-    return g_irq_active ? ATA_IRQ_ATTEMPTS : ATA_POLL_ATTEMPTS;
+    return ata_wait_step_sleeps() ? ATA_IRQ_ATTEMPTS : ATA_POLL_ATTEMPTS;
 }
 
 /* Status is read BEFORE waiting in both loops below: the condition is often
@@ -339,16 +397,11 @@ static int ata_wait_not_busy(void) {
     return ata_wait_not_busy_for(ata_wait_attempts());
 }
 
-/* The BSY wait a cache flush needs; see ATA_FLUSH_POLL_ATTEMPTS. */
+/* The BSY wait a cache flush needs; see ATA_FLUSH_POLL_ATTEMPTS. Keyed on
+ * whether the step sleeps, for the reason ata_wait_step_sleeps gives. */
 static int ata_wait_flush_done(void) {
-    /* Keyed on whether a wait step SLEEPS, which is not the same as whether the
-     * interrupt is live: ata_wait_step sleeps only on the primary channel,
-     * because that is the only line routed. A flush on the secondary -- where
-     * the WFS volume lives, unit 2 -- therefore spins, and spinning through the
-     * sleep-sized budget would be a small fraction of the intended wait. */
-    int sleeps = g_irq_active && g_channel == 0u;
-
-    return ata_wait_not_busy_for(sleeps ? ATA_FLUSH_IRQ_ATTEMPTS : ATA_FLUSH_POLL_ATTEMPTS);
+    return ata_wait_not_busy_for(ata_wait_step_sleeps() ? ATA_FLUSH_IRQ_ATTEMPTS
+                                                        : ATA_FLUSH_POLL_ATTEMPTS);
 }
 
 static int ata_wait_drq(void) {
@@ -1166,9 +1219,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         g_unit_present[i] = 0;
         g_unit_sectors[i] = 0;
     }
-    /* Quiet every channel first. The secondary's line is never routed, so a
-     * drive there must not assert it; the primary's nIEN is cleared later, only
-     * if its route succeeds. */
+    /* Quiet every channel first. IDENTIFY below runs polled, and each channel's
+     * nIEN is cleared later only if its own route succeeds. */
     for (uint32_t ch = 0; ch < ATA_CHANNEL_COUNT; ++ch) {
         g_channel = ch;
         wasmos_io_region_out8(ata_region(), ATA_REG_CTRL, ATA_CTRL_NIEN);
@@ -1207,10 +1259,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * The indices are stated rather than read from ata_region(), which holds
      * whichever channel was selected last. */
     (void)printf("[ata] io regions 0/1 = primary/secondary task file (+%02X status, +%03X "
-                 "control), irq line %u on the primary\n",
+                 "control), irq lines %u/%u\n",
                  (unsigned)ATA_REG_STATUS,
                  (unsigned)ATA_REG_CTRL,
-                 (unsigned)ATA_IRQ_LINE);
+                 (unsigned)ATA_IRQ_LINE_PRIMARY,
+                 (unsigned)ATA_IRQ_LINE_SECONDARY);
     ata_dma_setup();
     ata_log_transfer_mode();
 
@@ -1223,15 +1276,26 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         g_irq_endpoint = wasmos_ipc_create_endpoint();
         g_irq_select = (g_irq_endpoint >= 0) ? wasmos_ipc_select_create() : -1;
         if (g_irq_endpoint >= 0 && g_irq_select >= 0 &&
-            wasmos_ipc_select_add(g_irq_select, g_irq_endpoint) == 0 &&
-            wasmos_irq_route_ipc((int32_t)ATA_IRQ_LINE, g_irq_endpoint) == 0) {
+            wasmos_ipc_select_add(g_irq_select, g_irq_endpoint) == 0) {
+            /* Both channels, each on its own line, onto the one endpoint. A
+             * channel whose route fails keeps polling by itself rather than
+             * costing the other its interrupt. */
+            for (uint32_t ch = 0; ch < ATA_CHANNEL_COUNT; ++ch) {
+                uint32_t line = ata_irq_line(ch);
+                if (wasmos_irq_route_ipc((int32_t)line, g_irq_endpoint) != 0) {
+                    (void)printf("[ata] irq route failed line=%u; channel %u stays polled\n",
+                                 (unsigned)line,
+                                 (unsigned)ch);
+                    continue;
+                }
+                g_channel = ch;
+                wasmos_io_region_out8(ata_region(), ATA_REG_CTRL, 0); /* clear nIEN */
+                g_irq_active[ch] = 1;
+                (void)printf("[ata] irq routed line=%u channel=%u\n", (unsigned)line, (unsigned)ch);
+            }
             g_channel = 0u;
-            wasmos_io_region_out8(ata_region(), ATA_REG_CTRL, 0); /* clear nIEN */
-            g_irq_active = 1;
-            (void)printf("[ata] irq routed line=%u\n", (unsigned)ATA_IRQ_LINE);
         } else {
-            (void)printf("[ata] irq route failed line=%u; using polled transfers\n",
-                         (unsigned)ATA_IRQ_LINE);
+            (void)printf("[ata] irq endpoint unavailable; using polled transfers\n");
         }
     }
 

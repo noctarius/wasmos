@@ -140,7 +140,9 @@ static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char* name);
 static const char* block_backend_name(uint8_t backend);
+static const char* devmgr_subsystem_name(uint8_t subsystem);
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec);
+static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec);
 static uint16_t count_loaded_active_rules(void);
 static int is_mount_already_active(const char* mount);
 static void handle_query_message_fields(const wasmos_ipc_message_t* msg);
@@ -1409,6 +1411,12 @@ static int bytes_equal(const uint8_t* a, const uint8_t* b, uint32_t len) {
  * only on which record happened to be published first. */
 static int block_rule_matches(const block_fs_rule_t* rule, const wasmos_block_descriptor_t* desc) {
     const int is_partition = desc->partition != 0u;
+    /* A volume rule is matched against the VOLUME inventory, never against a
+     * block device: the two describe different things and share only this rule
+     * table. */
+    if (rule->subsystem == (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME) {
+        return 0;
+    }
     if (rule->subsystem == (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION) {
         if (!is_partition) {
             return 0;
@@ -1450,6 +1458,7 @@ static int block_rule_matches(const block_fs_rule_t* rule, const wasmos_block_de
 
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec) {
     uint32_t queued = 0;
+    const char* queued_mount = "";
     if (!rec || !rec->in_use || (rec->desc.flags & BLOCK_DESCRIPTOR_FLAG_PRESENT) == 0u) {
         return 0;
     }
@@ -1468,6 +1477,7 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
             rule->matched_backend = (uint8_t)rec->desc.backend;
             rule->matched_unit = (uint8_t)rec->desc.unit;
             (void)str_copy(rule->matched_id, sizeof(rule->matched_id), rec->desc.canonical_id);
+            queued_mount = rule->mount;
             queued++;
         }
     }
@@ -1481,13 +1491,143 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
      * matching the wrong backend is otherwise invisible until a filesystem
      * mounts the wrong volume. */
     if (queued > 0u) {
-        char queued_msg[96];
+        char queued_msg[160];
         (void)snprintf(queued_msg,
                        sizeof(queued_msg),
-                       "[device-manager] block_fs rule queued spawn driver=%s unit=%u\n",
-                       block_backend_name((uint8_t)rec->desc.backend),
-                       (unsigned)rec->desc.unit);
+                       "[device-manager] %s rule queued spawn mount=%s id=%s\n",
+                       devmgr_subsystem_name(rec->desc.partition != 0u
+                                                 ? (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION
+                                                 : (uint8_t)DEVMGR_BLOCK_SUBSYS_DISK),
+                       queued_mount[0] ? queued_mount : "(none)",
+                       rec->desc.canonical_id);
         console_write(queued_msg);
+    }
+    return queued;
+}
+
+/* The canonical id of the block device a volume sits on.
+ *
+ * The volume descriptor names it by CLASS INSTANCE, which is a fingerprint of
+ * that id -- so this recomputes the fingerprint of every registered device and
+ * compares. Deliberately not carried in the volume descriptor: the backend that
+ * assigned the id already published it here, and a second copy is a second place
+ * that can disagree, which would mean a filesystem looking up a class instance
+ * nothing holds.
+ *
+ * Returns NULL when the backing device is not in the inventory, which is a real
+ * state rather than an error: a volume can be published before its disk's record
+ * arrives, and the rescan that runs on the next publish picks it up. */
+static const block_device_record_t*
+devmgr_backing_record_for_volume(const wasmos_volume_descriptor_t* desc) {
+    if (!desc) {
+        return 0;
+    }
+    for (uint32_t bi = 0; bi < g_dm.block_registry_count; ++bi) {
+        const block_device_record_t* rec = &g_dm.block_registry[bi];
+        if (!rec->in_use) {
+            continue;
+        }
+        if (wasmos_block_fingerprint(rec->desc.canonical_id) == desc->backing_instance) {
+            return rec;
+        }
+    }
+    return 0;
+}
+
+static int volume_rule_matches(const block_fs_rule_t* rule,
+                               const wasmos_volume_descriptor_t* desc) {
+    if (rule->subsystem != (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME) {
+        return 0;
+    }
+    if (rule->has_fs_type && rule->fs_type != desc->fs_type) {
+        return 0;
+    }
+    /* An unlabelled format can never match a label matcher, which is not the
+     * same as matching an empty label: WFS carries no label at all, while a FAT
+     * volume may genuinely be named "". HAS_LABEL separates them on the
+     * descriptor and `has_label` does the same for the rule, so
+     * ATTR{label}=="" selects exactly the volumes whose label is blank. */
+    if (rule->has_label) {
+        if ((desc->flags & VOLUME_DESCRIPTOR_FLAG_HAS_LABEL) == 0u) {
+            return 0;
+        }
+        if (!wasmos_sys_streq(rule->label, desc->label)) {
+            return 0;
+        }
+    }
+    if (rule->has_boot) {
+        uint8_t is_boot = (desc->flags & VOLUME_DESCRIPTOR_FLAG_BOOT) != 0u;
+        if (is_boot != rule->boot) {
+            return 0;
+        }
+    }
+    if (rule->has_uuid) {
+        if ((desc->flags & VOLUME_DESCRIPTOR_FLAG_HAS_UUID) == 0u) {
+            return 0;
+        }
+        /* The whole field, not uuid_len bytes of it: a short id is zero-padded,
+         * so comparing the full width keeps a 4-byte FAT serial from aliasing
+         * the first four bytes of a 16-byte one. */
+        if (!bytes_equal(rule->uuid, desc->uuid, VOLUME_DESCRIPTOR_UUID_MAX)) {
+            return 0;
+        }
+    }
+    if (rule->device_name[0] && !wasmos_sys_streq(rule->device_name, desc->canonical_id)) {
+        return 0;
+    }
+    return 1;
+}
+
+/* Queue any volume rule this volume satisfies.
+ *
+ * The filesystem driver is told about the BACKING BLOCK DEVICE, not about the
+ * volume: a driver mounts a block device, and the volume is what selected which
+ * one. That is the whole shape of this layer -- the rule matches on what the
+ * volume IS, and the mount happens on the device beneath it. */
+static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec) {
+    uint32_t queued = 0;
+    const block_device_record_t* backing = 0;
+    char queued_msg[160];
+    if (!rec || !rec->in_use || (rec->desc.flags & VOLUME_DESCRIPTOR_FLAG_PRESENT) == 0u) {
+        return 0;
+    }
+    backing = devmgr_backing_record_for_volume(&rec->desc);
+    if (!backing) {
+        return 0;
+    }
+    for (uint32_t ri = 0; ri < g_dm.block_fs_rule_count; ++ri) {
+        block_fs_rule_t* rule = &g_dm.block_fs_rules[ri];
+        if (!rule->active || rule->spawned || rule->queued) {
+            continue;
+        }
+        if (is_mount_already_active(rule->mount)) {
+            rule->spawned = 1;
+            log_mount_already_active(rule->mount);
+            continue;
+        }
+        if (volume_rule_matches(rule, &rec->desc)) {
+            rule->queued = 1;
+            /* All three facts come from the BACKING device, not from the volume:
+             * the driver mounts a block device and identifies it exactly as a
+             * block rule's driver would. Leaving backend and unit at zero handed
+             * fs_wfs a unit it does not own, and its fs.backend class instance --
+             * which packs (kind, unit) -- collided with another backend's. */
+            rule->matched_backend = (uint8_t)backing->desc.backend;
+            rule->matched_unit = (uint8_t)backing->desc.unit;
+            (void)str_copy(rule->matched_id, sizeof(rule->matched_id), backing->desc.canonical_id);
+            queued++;
+            /* Per RULE and naming its mount, not once per volume: a rule matches
+             * on identity, so two rules selecting different volumes is ordinary,
+             * and which volume ends up at which path is the fact this layer
+             * decides. The mount is what makes that readable from a log. */
+            (void)snprintf(queued_msg,
+                           sizeof(queued_msg),
+                           "[device-manager] volume rule queued spawn mount=%s id=%s on %s\n",
+                           rule->mount[0] ? rule->mount : "(none)",
+                           rec->desc.canonical_id,
+                           backing->desc.canonical_id);
+            console_write(queued_msg);
+        }
     }
     return queued;
 }
@@ -1495,6 +1635,11 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
 static void queue_block_fs_rules_for_known_devices(void) {
     for (uint32_t bi = 0; bi < g_dm.block_registry_count; ++bi) {
         (void)queue_block_fs_rules_for_record(&g_dm.block_registry[bi]);
+    }
+    /* Volumes after devices, because a volume's rule needs its backing device's
+     * record to resolve the id the filesystem driver is given. */
+    for (uint32_t vi = 0; vi < g_dm.volume_registry_count; ++vi) {
+        (void)queue_block_fs_rules_for_volume(&g_dm.volume_registry[vi]);
     }
     queue_block_fs_rule_spawns();
 }
@@ -1508,6 +1653,25 @@ static const char* block_backend_name(uint8_t backend) {
         return "ata";
     case (uint8_t)BLOCK_BACKEND_VIRTIO_BLK:
         return "virtio-blk";
+    default:
+        return "unknown";
+    }
+}
+
+/* The rule's SUBSYSTEM, spelled as a rule file spells it.
+ *
+ * Reported rather than the rule table's name: disk and partition rules share one
+ * table called block_fs, so a message naming the table said "block_fs" for a
+ * `SUBSYSTEM=="partition"` rule and left a reader unable to tell which of the
+ * two had matched. */
+static const char* devmgr_subsystem_name(uint8_t subsystem) {
+    switch (subsystem) {
+    case (uint8_t)DEVMGR_BLOCK_SUBSYS_DISK:
+        return "block";
+    case (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION:
+        return "partition";
+    case (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME:
+        return "volume";
     default:
         return "unknown";
     }
@@ -1590,6 +1754,185 @@ static void registry_add_block(const wasmos_block_descriptor_t* in) {
         queue_block_fs_rule_spawns();
         g_dm.need_fat = 0;
     }
+}
+
+/* Consume a wasmos_volume_descriptor_t published into a borrowed buffer
+ * (DEVMGR_PUBLISH_VOLUME): arg0=buffer_id arg1=byte_offset arg2=size.
+ *
+ * Upserts by canonical_id, like the block inventory and for the same reason: the
+ * id is the volume's identity, and it is derived from the backing device's id
+ * rather than allocated, so it is the same string every boot. */
+/* The LBA range the firmware said this system was loaded from, as the kernel
+ * published it in `boot.partition` (see kernel_publish_boot_partition).
+ *
+ * Read once and cached, because the value cannot change while the system runs:
+ * it describes the boot that is already over. g_boot_partition_known stays 0
+ * when the variable is absent -- a network boot, or a whole disk with no table --
+ * and then no volume is ever marked, which is distinct from marking one that
+ * matches nothing. */
+static uint8_t g_boot_partition_known;
+static uint64_t g_boot_partition_start;
+static uint64_t g_boot_partition_count;
+
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+static void load_boot_partition(void) {
+    char value[64];
+    uint64_t start = 0;
+    uint64_t count = 0;
+    uint32_t i = 0;
+    int digits = 0;
+
+    static const char key[] = "boot.partition";
+    g_boot_partition_known = 0;
+    if (wasmos_env_get(key, (int32_t)(sizeof(key) - 1u), value, (int32_t)sizeof(value)) <= 0) {
+        console_write("[device-manager] no boot.partition; a volume rule cannot select /boot\n");
+        return;
+    }
+    /* `<start>:<count>`, both hexadecimal without a prefix. */
+    for (; value[i] != '\0' && value[i] != ':'; ++i) {
+        int nib = hex_digit(value[i]);
+        if (nib < 0) {
+            return;
+        }
+        start = (start << 4) | (uint64_t)nib;
+        digits++;
+    }
+    if (value[i] != ':' || digits == 0) {
+        return;
+    }
+    ++i;
+    digits = 0;
+    for (; value[i] != '\0'; ++i) {
+        int nib = hex_digit(value[i]);
+        if (nib < 0) {
+            return;
+        }
+        count = (count << 4) | (uint64_t)nib;
+        digits++;
+    }
+    if (digits == 0) {
+        return;
+    }
+    g_boot_partition_start = start;
+    g_boot_partition_count = count;
+    g_boot_partition_known = 1;
+}
+
+/* Set VOLUME_DESCRIPTOR_FLAG_BOOT when this volume sits on the partition the
+ * firmware booted from.
+ *
+ * Matched on the BACKING device's LBA range, because that is the only fact both
+ * sides describe the same way: the firmware's HARDDRIVE node gives a start and a
+ * length on the whole disk, and that is exactly what a partition-table reader
+ * publishes. Nothing on the volume itself could answer this -- an ESP's
+ * filesystem is an ordinary FAT volume.
+ *
+ * TODO: the range alone can collide. Two disks partitioned by the same tool
+ * commonly both start at LBA 2048, so identical (start, count) pairs across
+ * disks are plausible rather than contrived. The firmware also supplies an MBR
+ * disk signature or a GPT partition GUID that would settle it, but no block
+ * descriptor carries the former today. A second match is logged rather than
+ * silently taken. */
+static void mark_volume_if_booted(volume_record_t* rec) {
+    const block_device_record_t* backing = 0;
+    if (!rec || !g_boot_partition_known) {
+        return;
+    }
+    backing = devmgr_backing_record_for_volume(&rec->desc);
+    if (!backing) {
+        return;
+    }
+    if (backing->desc.lba_start != g_boot_partition_start ||
+        backing->desc.lba_count != g_boot_partition_count) {
+        return;
+    }
+    for (uint32_t i = 0; i < g_dm.volume_registry_count; ++i) {
+        volume_record_t* other = &g_dm.volume_registry[i];
+        if (other == rec || !other->in_use) {
+            continue;
+        }
+        if ((other->desc.flags & VOLUME_DESCRIPTOR_FLAG_BOOT) != 0u) {
+            char dup[192];
+            (void)snprintf(dup,
+                           sizeof(dup),
+                           "[device-manager] %s matches the boot partition too; %s keeps it\n",
+                           rec->desc.canonical_id,
+                           other->desc.canonical_id);
+            console_write(dup);
+            return;
+        }
+    }
+    rec->desc.flags |= VOLUME_DESCRIPTOR_FLAG_BOOT;
+}
+
+static void registry_add_volume(const wasmos_volume_descriptor_t* in) {
+    wasmos_volume_descriptor_t desc = *in;
+    volume_record_t* rec = 0;
+    if (desc.version != VOLUME_DESCRIPTOR_VERSION) {
+        console_write("[device-manager] volume descriptor version mismatch\n");
+        return;
+    }
+    /* Untrusted input from a separate process however cooperative it means to
+     * be: an unterminated id or label would run past its field into the log. */
+    if (desc.canonical_id[sizeof(desc.canonical_id) - 1u] != '\0' || desc.canonical_id[0] == '\0') {
+        console_write("[device-manager] volume descriptor has no usable canonical id\n");
+        return;
+    }
+    desc.label[sizeof(desc.label) - 1u] = '\0';
+    for (uint32_t i = 0; i < g_dm.volume_registry_count; ++i) {
+        if (g_dm.volume_registry[i].in_use &&
+            wasmos_sys_streq(g_dm.volume_registry[i].desc.canonical_id, desc.canonical_id)) {
+            rec = &g_dm.volume_registry[i];
+            break;
+        }
+    }
+    if (!rec) {
+        if (g_dm.volume_registry_count >= VOLUME_REGISTRY_CAP) {
+            return;
+        }
+        rec = &g_dm.volume_registry[g_dm.volume_registry_count++];
+        rec->in_use = 1;
+        rec->active_service = 0;
+    }
+    rec->desc = desc;
+    mark_volume_if_booted(rec);
+
+    char msg[224];
+    (void)snprintf(msg,
+                   sizeof(msg),
+                   "[device-manager] volume add id=%s fstype=%u label=%s sectors=%u\n",
+                   rec->desc.canonical_id,
+                   (unsigned)rec->desc.fs_type,
+                   ((rec->desc.flags & VOLUME_DESCRIPTOR_FLAG_HAS_LABEL) != 0u) ? rec->desc.label
+                                                                                : "-",
+                   (unsigned)rec->desc.lba_count);
+    console_write(msg);
+
+    if (queue_block_fs_rules_for_volume(rec) > 0u) {
+        queue_block_fs_rule_spawns();
+    }
+}
+
+static void registry_add_volume_from_desc(int32_t buffer_id, int32_t offset, int32_t size) {
+    wasmos_volume_descriptor_t desc;
+    if (size < (int32_t)sizeof(desc) ||
+        wasmos_xfer_buffer_read(buffer_id, &desc, (int32_t)sizeof(desc), offset) != 0) {
+        console_write("[device-manager] volume descriptor read failed\n");
+        return;
+    }
+    registry_add_volume(&desc);
 }
 
 static void reset_selected_storage(void) {
@@ -1723,6 +2066,10 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
         registry_add_block_from_desc(msg->arg0, msg->arg1, msg->arg2);
         return;
     }
+    if (msg->type == DEVMGR_PUBLISH_VOLUME) {
+        registry_add_volume_from_desc(msg->arg0, msg->arg1, msg->arg2);
+        return;
+    }
     /* The packed form still carries ACPI/ISA devices (bus 0xFF), which have no
      * BARs and fit in four words; PCI functions come as descriptors. */
     if (msg->type == DEVMGR_PUBLISH_DEVICE) {
@@ -1749,6 +2096,10 @@ static int dm_register_inventory_handlers(void) {
     if (wasmos_sys_event_register(
             &g_dm_inventory_loop, DEVMGR_PUBLISH_BLOCK_DEVICE, dm_handle_inventory_message, 0) !=
         0) {
+        return -1;
+    }
+    if (wasmos_sys_event_register(
+            &g_dm_inventory_loop, DEVMGR_PUBLISH_VOLUME, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
     if (wasmos_sys_event_register(
@@ -2090,6 +2441,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wasmos_sys_ipc_recv_loop();
     }
     wasmos_sys_event_loop_init(&g_dm_ipc_loop, g_dm.reply_endpoint, 0xD000);
+    /* Before any volume can be registered: a volume that arrived first would
+     * miss its BOOT mark, and nothing re-examines a registered one. */
+    load_boot_partition();
     if (dm_register_ipc_handlers() != 0) {
         g_dm.phase = HW_PHASE_FAILED;
         console_write("[device-manager] ipc handler registration failed\n");

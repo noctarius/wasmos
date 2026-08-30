@@ -1,12 +1,11 @@
 ## Volume Manager
 
-> **Documentation status: Mixed reference and proposal.** §1–§4 and §6–§8 are
-> implemented and are the current baseline: the recognisers, the `volume` class
-> and its descriptor, the suppression rule, and mount policy on volumes all run
-> on every boot — `/wfs` and `/vwfs` both mount from `SUBSYSTEM=="volume"` on
-> fstype and uuid, naming no disk, unit, backend, partition or transport. §5
-> (exclusivity) is still a proposal: `VOLUME_IPC_CLAIM_REQ` exists but nothing
-> sends it.
+> **Documentation status: Reference.** Every section is implemented and is the
+> current baseline: the recognisers, the `volume` class and its descriptor, the
+> suppression rule, exclusivity, and mount policy on volumes all run on every
+> boot — `/wfs` and `/vwfs` both mount from `SUBSYSTEM=="volume"` on fstype and
+> uuid, naming no disk, unit, backend, partition or transport, and `fs_wfs`
+> claims the volume it mounts while `fsck.wfs` refuses a claimed one.
 
 **Sources this proposal changes**: `src/drivers/partition_manager/`,
 `src/services/device_manager/device_manager_rules.c`, `src/drivers/fs_fat/`,
@@ -192,6 +191,31 @@ need it and neither has it today:
 
 `claimed` on the volume, set when a filesystem service mounts it, is the flag
 both consult.
+
+**Implemented,** for `fs_wfs` and `fsck.wfs`. The driver sends
+`VOLUME_IPC_CLAIM_REQ` the moment the mount completes — not once it is ready,
+because the mount itself replays a journal and that window is exactly when a
+check would see a race — and releases at the start of shutdown, before the clean
+mark is written, since a claim that outlives its holder makes the volume
+permanently unrecheckable. The claim is fire-and-forget: blocking a mount on an
+advisory record would let it stall a boot.
+
+Both sides DERIVE the volume's class instance rather than exchanging it. A
+volume's canonical id is `volume:` prefixed to its backing device's, so a driver
+holding `id=block:ata:2` and a tool given `block:ata:2` reach the same
+fingerprint independently, and no message carries a second spelling that could
+disagree with the publisher.
+
+`fsck.wfs` distinguishes three answers, not two: claimed, not claimed, and
+**cannot tell** — no volume manager running, or no volume covering that device.
+The third is refused rather than waved through, because a check that proceeded
+because it could not find an owner is exactly as dangerous as one that ignored
+the owner it found. `--force` overrides any of them and says so in its output,
+since findings taken past a live claim may be races rather than damage.
+
+There is no `mkfs.wfs` in the guest — `mkfs_wfs` is a host tool that writes an
+image file — so the sharper half of the requirement has no call site yet. A guest
+formatter must consult the same flag when one exists.
 
 It RECORDS a claim; it does not enforce one. The volume manager is not in the
 I/O path — unlike the partition manager, which proxies every transfer and can

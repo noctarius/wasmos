@@ -968,21 +968,26 @@ tail.
   negotiates `VIRTIO_BLK_F_FLUSH` and issues `VIRTIO_BLK_T_FLUSH` -- and
   `wfs_txn_commit_task` awaits one at §14's steps 2, 4 and 6, with §21's replay
   awaiting one before its tail retires the replayed writes.
-- [ ] [FEATURE][P2] Exclusivity: nothing claims a volume.
-  Mount policy on volumes is DONE -- `/wfs` and `/vwfs` both mount from
-  `SUBSYSTEM=="volume"` on fstype and uuid, naming no disk, unit, backend or
-  transport (`architecture/37-volume-manager.md` §4). What remains is §5.
+- [x] [FEATURE][P2] Exclusivity: a volume is claimed while it is mounted.
+  `fs_wfs` sends `VOLUME_IPC_CLAIM_REQ` on mount and releases it at shutdown;
+  `fsck.wfs` refuses a claimed volume, and refuses one it cannot ask about, with
+  `--force` as the documented override (`architecture/37-volume-manager.md` §5).
 
-  `VOLUME_IPC_CLAIM_REQ` exists and sets the CLAIMED flag, but nothing sends it.
-  A filesystem driver should claim on mount and release on unmount, and
-  `fsck`/`mkfs` should refuse a claimed volume. It RECORDS a claim rather than
-  enforcing one -- the volume manager is not in the I/O path, so a tool that does
-  not ask is not stopped.
+- [ ] [ENHANCEMENT][P3] Claim the FAT volumes too. `fs_fat` mounts `/boot` and
+  `/user` without claiming them, so a tool consulting the flag sees them as idle.
+  Nothing consults it for FAT today -- there is no `fsck.fat` -- which is why this
+  is an enhancement and not a bug, but the flag means "a filesystem service holds
+  this" and for two of the three mounts it currently does not.
 
-  The claim does not catch the overlap it looks like it should: a disk and its
-  partitions are distinct volumes, so claiming one does not mark the others.
-  Today that is prevented by suppressing the whole-disk volume of a partitioned
-  disk, not by the claim.
+- [ ] [ENHANCEMENT][P3] A guest formatter must consult the claim. `mkfs_wfs` is a
+  HOST tool that writes an image file, so the sharper half of §5 -- refusing to
+  format a mounted volume -- has no call site yet. Whoever adds a guest `mkfs.wfs`
+  owes it the same check `fsck.wfs` makes.
+
+- [ ] [ENHANCEMENT][P4] A claim does not catch the overlap it looks like it
+  should: a disk and its partitions are distinct volumes, so claiming one does not
+  mark the others. Today that is prevented by suppressing the whole-disk volume of
+  a partitioned disk, not by the claim.
 
 - [ ] [ENHANCEMENT][P3] Convert the last rule that still names a disk: `/boot`.
   It cannot until the bootloader records the ESP; see the initfs entry below.

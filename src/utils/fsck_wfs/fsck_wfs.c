@@ -4,7 +4,7 @@
  * against volumes mkfs_wfs produced. This file is only the part that cannot be
  * shared: finding the disk, and moving blocks over the block protocol.
  *
- * Usage: fsck.wfs [--repair] <canonical-id>
+ * Usage: fsck.wfs [--repair] [--force] <canonical-id>
  *
  *   canonical-id  the disk's id as blkinfo prints it, e.g. `block:ata:2`. The
  *                 `block` class instance is its fingerprint, so the id is both
@@ -23,16 +23,23 @@
  * does. A SERVICE could not -- it would stall its event loop -- which is the
  * distinction, not host versus guest.
  *
- * The volume must NOT be mounted, and that is enforced BENEATH this tool: a
- * block driver binds a unit to one client exclusively, so a disk a filesystem
- * driver holds is refused with block_dev.UNIT_CLAIMED before a single sector is
- * read. That is the right answer -- checking a volume someone else is writing
- * reports damage that is merely a race -- but it also means that in a default
- * boot, where the device-manager rules spawn a filesystem driver for every disk
- * it recognises, there is no disk left for this tool to check.
- * TODO: a way to release a mounted volume from the guest. Until one exists this
- * runs against a disk no rule claimed, and the host unit suite
- * (tests/unit/test_wfs_fsck.c) is what exercises the checks themselves.
+ * The volume must NOT be mounted, and this tool is what checks that. It asks the
+ * volume manager whether the volume carrying this device is CLAIMED -- a flag a
+ * filesystem service sets when it mounts -- and refuses one that is. Checking a
+ * volume someone else is writing reports damage that is merely a race, and
+ * --repair would then "fix" a consistent volume into an inconsistent one.
+ *
+ * The check is ADVISORY on both sides (architecture/37-volume-manager.md §5).
+ * The volume manager is not in the I/O path, so it records a claim rather than
+ * enforcing one; this tool is the one that has to ask. Nothing beneath it
+ * refuses a second client -- the block layer's per-unit arbitration was removed
+ * when a request began naming its own target -- so a tool that skipped the
+ * question would reach the sectors unimpeded.
+ *
+ * --force overrides, and exists because a claim can outlive its holder: a
+ * filesystem service killed before it releases leaves a volume nothing will ever
+ * agree to check. It is also the answer when no volume manager is running, since
+ * "cannot tell" is reported as a refusal rather than waved through.
  */
 #include <stdint.h>
 
@@ -64,6 +71,97 @@ static int32_t g_buffer_phys;
  * the object, the backend is a transient grantee. */
 static uint32_t g_target;
 static int32_t g_req_bid = -1;
+
+/* Whether a filesystem service holds the volume on `device_id`.
+ *
+ * Returns 1 claimed, 0 not claimed, and -1 when the question cannot be answered:
+ * no volume manager is running, or no volume covers this device. Those are
+ * distinct from "not claimed" and are reported as such -- a check that proceeded
+ * silently because it could not find the owner would be exactly as dangerous as
+ * one that ignored a claim, and the operator is the one who can tell whether the
+ * disk is really idle.
+ *
+ * The volume's class instance is DERIVED, not asked for: a volume's canonical id
+ * is `volume:` prefixed to its backing device's, so this builds the same string
+ * the volume manager did (architecture/37-volume-manager.md §3).
+ *
+ * The descriptor lands in a buffer THIS process owns and lends WRITE to the
+ * volume manager for the request; release cascade-revokes that grant on every
+ * path out (docs/architecture/12-dma-transfers.md). */
+static int volume_is_claimed(int32_t proc_endpoint, const char* device_id) {
+    svc_class_entry_t providers[FSCK_MAX_PROVIDERS];
+    wasmos_volume_descriptor_t desc;
+    wasmos_ipc_message_t reply;
+    char volume_id[VOLUME_DESCRIPTOR_ID_MAX];
+    static const char prefix[] = "volume:";
+    uint32_t n = 0;
+    uint32_t i = 0;
+    int32_t endpoint = -1;
+    int32_t count;
+    int32_t bid;
+    uint32_t instance;
+    int claimed;
+
+    while (prefix[n] != '\0') {
+        volume_id[n] = prefix[n];
+        ++n;
+    }
+    while (device_id[i] != '\0') {
+        if (n + 1u >= sizeof(volume_id)) {
+            return -1;
+        }
+        volume_id[n++] = device_id[i++];
+    }
+    volume_id[n] = '\0';
+    instance = wasmos_block_fingerprint(volume_id);
+
+    count = wasmos_svc_lookup_class(
+        proc_endpoint, g_reply_endpoint, "volume", providers, FSCK_MAX_PROVIDERS, g_request_id++);
+    if (count <= 0) {
+        return -1;
+    }
+    if (count > FSCK_MAX_PROVIDERS) {
+        count = FSCK_MAX_PROVIDERS;
+    }
+    for (i = 0; i < (uint32_t)count; ++i) {
+        if (providers[i].instance == instance) {
+            endpoint = (int32_t)providers[i].endpoint;
+            break;
+        }
+    }
+    if (endpoint < 0) {
+        return -1;
+    }
+
+    bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(desc));
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_borrow(endpoint, bid, WASMOS_BUFFER_GRANT_WRITE) < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    if (wasmos_ipc_call(endpoint,
+                        g_reply_endpoint,
+                        VOLUME_IPC_IDENTIFY_REQ,
+                        g_request_id++,
+                        (int32_t)instance,
+                        bid,
+                        0,
+                        0,
+                        &reply) != 0 ||
+        reply.type != VOLUME_IPC_IDENTIFY_RESP ||
+        wasmos_xfer_buffer_read(bid, &desc, (int32_t)sizeof(desc), 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    (void)wasmos_xfer_buffer_release(bid);
+    if (desc.version != VOLUME_DESCRIPTOR_VERSION) {
+        return -1;
+    }
+    claimed = (desc.flags & VOLUME_DESCRIPTOR_FLAG_CLAIMED) != 0u;
+    return claimed;
+}
 
 static int str_prefix(const char* s, const char* prefix) {
     while (*prefix) {
@@ -183,13 +281,23 @@ int main(void) {
     int32_t count;
     int32_t i;
     int repair = 0;
+    int force = 0;
+    int claimed;
 
     args[0] = '\0';
     (void)wasmos_startup_args(args, sizeof(args));
     rest = args;
-    if (str_prefix(rest, "--repair")) {
-        repair = 1;
-        rest += 8;
+    /* Both flags, in either order, before the id. */
+    for (;;) {
+        if (str_prefix(rest, "--repair")) {
+            repair = 1;
+            rest += 8;
+        } else if (str_prefix(rest, "--force")) {
+            force = 1;
+            rest += 7;
+        } else {
+            break;
+        }
         while (*rest == ' ') {
             rest++;
         }
@@ -202,7 +310,7 @@ int main(void) {
     /* A truncated id fingerprints to a value no backend registered, so it would
      * look like an absent disk rather than a mistyped argument. */
     if (n == 0u || (rest[n] != '\0' && rest[n] != ' ')) {
-        (void)printf("usage: fsck.wfs [--repair] <canonical-id>   (blkinfo lists ids)\n");
+        (void)printf("usage: fsck.wfs [--repair] [--force] <canonical-id>   (blkinfo lists ids)\n");
         return 1;
     }
     g_target = wasmos_block_fingerprint(id);
@@ -216,6 +324,26 @@ int main(void) {
         (void)printf("[fsck.wfs] no reply endpoint\n");
         return 1;
     }
+    /* Before any I/O, and before the block device is even resolved: checking a
+     * volume a filesystem is writing reports damage that is only a race, and
+     * --repair would then "fix" a consistent volume into an inconsistent one. */
+    claimed = volume_is_claimed(proc_endpoint, id);
+    if (claimed > 0 && !force) {
+        (void)printf("[fsck.wfs] %s is mounted; unmount it or pass --force\n", id);
+        return 1;
+    }
+    if (claimed < 0 && !force) {
+        (void)printf("[fsck.wfs] cannot tell whether %s is mounted -- no volume manager, or no "
+                     "volume on it; pass --force if it is idle\n",
+                     id);
+        return 1;
+    }
+    if (claimed > 0) {
+        /* --force on a volume that IS claimed. Named plainly: the findings below
+         * may be artefacts of a concurrent writer rather than damage. */
+        (void)printf("[fsck.wfs] %s is mounted and --force was given; findings may be races\n", id);
+    }
+
     count = wasmos_svc_lookup_class(
         proc_endpoint, g_reply_endpoint, "block", providers, FSCK_MAX_PROVIDERS, g_request_id++);
     if (count <= 0) {

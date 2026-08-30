@@ -789,6 +789,15 @@ linked feature documents for rationale and rollout plans.
   driver is handed the BACKING block device's id, backend and unit, because a
   driver mounts a device and the volume is what chose it. `/user` still matches on
   a partition label (`architecture/37-volume-manager.md` §4).
+- A mounted volume is CLAIMED, and `fsck.wfs` refuses one. `fs_wfs` claims the
+  moment its mount completes and releases at the start of shutdown; `fsck.wfs`
+  asks the volume manager before it reads a block, and refuses both a claimed
+  volume and one it cannot ask about -- no volume manager, or no volume on that
+  device. `--force` overrides and says the findings may be races. Advisory on both
+  sides: the volume manager is not in the I/O path, and nothing beneath the tool
+  refuses a second client since the block layer's per-unit arbitration was
+  removed. `fs_fat` does not claim yet
+  (`architecture/37-volume-manager.md` §5).
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.

@@ -418,13 +418,6 @@ void process_block_on_ipc(process_t* process);
  * setting it before any parent is waiting is fine -- the next pm_poll_spawn
  * iteration picks it up. */
 void process_notify_ready(process_t* process);
-/* Block until SOME process announces itself ready.
- *
- * For a caller waiting on a named service to come up. Test the condition first
- * and re-test on return: a wake says something became ready, never that yours
- * did. Without this the only way to observe the transition is to re-read the
- * process table, which is a poll however it is dressed. */
-void process_wait_for_ready_change(void);
 void process_set_require_explicit_ready(process_t* process);
 /*
  * Wait for a child to exit. TRI-STATE, not 0-on-success:

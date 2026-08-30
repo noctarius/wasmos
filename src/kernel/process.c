@@ -44,16 +44,6 @@ static process_t g_processes[PROCESS_MAX_COUNT];
  * boot-safe list allocator path for early scheduler init/spawn. */
 static uint32_t g_next_pid;
 static ksync_spinlock_t g_process_table_lock;
-/* Broadcast whenever any process announces itself ready.
- *
- * A waiter on "some named service is up" has no other signal: process->ready is
- * a latch nobody is woken by, so the only alternative is to re-read the process
- * table on a timer -- which is a poll however it is spelled. One event for all
- * processes rather than one per process, because a waiter names a service that
- * may not have been spawned yet and so has no slot to register on; the cost is
- * that every waiter re-tests on every readiness transition, and there are a
- * handful of both. */
-static sched_event_t g_process_ready_event;
 /* Scheduler state lives in cpu_local_t (per-CPU) — see smp.h. */
 static process_t* g_idle_process;
 /* in_context_switch is per-CPU (cpu_local_t), not global: a global flag would
@@ -1166,7 +1156,6 @@ process_context_t* cpu_local_sched_ctx(void) {
 void process_init(void) {
     g_next_pid = 1;
     ksync_spinlock_init(&g_process_table_lock);
-    sched_event_init(&g_process_ready_event, SCHED_EVENT_TYPE_PROCESS);
     cpu_local()->last_index = 0;
     cpu_local()->current_pid = 0;
     cpu_local()->need_resched = 0;
@@ -1912,38 +1901,22 @@ void process_block_on_ipc(process_t* process) {
     (void)process;
 }
 
-/* Latches the "child has announced itself" flag the sync-spawn poll waits on,
- * and wakes everything waiting for some service to come up.
+/* Latches the "child has announced itself" flag the sync-spawn poll waits on.
+ * A latch, not an event: setting it twice is harmless and it is never cleared
+ * for the life of the slot.  Does not wake or unblock anything by itself —
+ * pm_poll_sync_spawn observes it on its next PM dispatch.
  *
- * The latch is a latch: setting it twice is harmless and it is never cleared for
- * the life of the slot, and pm_poll_sync_spawn observes it on its next PM
- * dispatch rather than being woken by it.
- *
- * The BROADCAST is what a waiter blocks on. Waking all is right even though each
- * waiter cares about one particular service: a waiter names a service by name,
- * possibly before it exists, so there is nothing per-service to wake. Each
- * re-tests its own condition and blocks again. */
+ * Deliberately does NOT broadcast. A waiter for "some named service is up" would
+ * be woken by one, and that was tried: it puts cross-CPU wake traffic on a path
+ * every service touches during boot, and the SMP scheduler stress test began
+ * panicking intermittently (docs/TASKS.md). Such a waiter sleeps on its own
+ * endpoint with a timeout instead -- what it waits for is seconds away and does
+ * not merit a hot-path wake. */
 void process_notify_ready(process_t* process) {
     if (!process) {
         return;
     }
     process->ready = 1;
-    ksync_spinlock_lock(&g_process_ready_event.lock);
-    (void)sched_event_wake_all(&g_process_ready_event, 0ULL, SCHED_PEND_OK);
-    ksync_spinlock_unlock(&g_process_ready_event.lock);
-}
-
-/* Block until the next process announces itself ready.
- *
- * Caller tests its own condition first and calls this only when it does not
- * hold; it re-tests on return, because a wake means "something became ready",
- * never "your thing did". The event lock is taken before this returns to the
- * caller's re-test, so a readiness landing between the two cannot be lost.
- *
- * Returns with nothing held. */
-void process_wait_for_ready_change(void) {
-    ksync_spinlock_lock(&g_process_ready_event.lock);
-    sched_event_wait(&g_process_ready_event, 0u);
 }
 
 /* One step of a parent's wait for `target_pid`.  Tri-state, and the caller loops

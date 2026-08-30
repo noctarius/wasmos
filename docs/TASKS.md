@@ -1021,6 +1021,29 @@ tail.
   Every mount names a VOLUME, so fs_fat is handed a device whose LBA 0 is a boot
   sector and anything else there is a fault.
 
+- [ ] [BUG][P2] The SMP scheduler stress test panicked once with #UD at a
+  nonsense address. Seen on CI, `wasm3_smp` on
+  `actions/runs/33320280095/job/99280915576`:
+
+      [cpu] exception vector=6  err=0  rip=ffffffff80000516
+      [cpu] pid=13 name=smp-stress
+      KERNEL PANIC reason: cpu_exception   cpus=4 panicking_cpu=0
+
+  `rip` is not in kernel text -- the image starts around `ffffffff80200000` --
+  so the stress thread was dispatched onto a bad return address rather than
+  faulting on a bad access. That is a corrupted context or a thread resumed with
+  a stale stack, and the panic lands next to a `ctxsw out`/`ctxsw in` pair.
+
+  NOT reproduced: six local runs of the same target passed, and re-running the CI
+  job passed. Apple Silicon cannot host MTTCG x86, which is where every
+  memory-ordering race in this tree has lived, so a local pass is weak evidence.
+
+  It appeared on the change that made `process_notify_ready` broadcast on a
+  scheduler event, which adds cross-CPU wake traffic during boot. That may be
+  cause or merely exposure -- the wake path uses the same `ev->lock` ->
+  run-queue-lock order every other event user does, so it introduces no new
+  inversion. Worth a Linux x86 `-smp 4` soak before assuming it is either.
+
 - [ ] [ENHANCEMENT][P4] `fat_mount_t.boot_lba` is always 0 now that no mount
   starts from a partition table, but it is still added into every FAT, root-dir
   and FSInfo LBA. Removing it simplifies that arithmetic. `is_partition` survives

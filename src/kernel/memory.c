@@ -1,7 +1,7 @@
 /* memory.c - Virtual memory context management and shared region allocator.
  * Each process has an mm_context_t with a list of mem_region_t entries and a PML4.
  * mm_handle_page_fault() demand-maps pages on first access.
- * mm_shared_* implements cross-process shared memory (used for DMA and framebuffer). */
+ * Cross-process sharing is the transfer-buffer registry's job, not this file's. */
 #include "memory.h"
 #include "kpanic.h"
 #include "klog.h"
@@ -19,7 +19,6 @@
 #define MM_USER_HEAP_BASE 0x0000008200000000ULL
 #define MM_USER_IPC_BASE 0x0000008300000000ULL
 #define MM_USER_DEVICE_BASE 0x0000008400000000ULL
-#define MM_USER_SHARED_BASE 0x0000008500000000ULL
 #define MM_COPY_STACK_BYTES 8192u
 static const uint64_t pf_err_present = 1ULL << 0;
 static const uint64_t pf_err_write = 1ULL << 1;
@@ -40,75 +39,12 @@ static inline uintptr_t mm_kernel_alias_addr(uintptr_t addr) {
     return addr;
 }
 
-/* Array-chunk capacity of g_shared_list, not a hard cap: the list grows by
- * whole chunks. It also bounds the id-probe loop in mm_shared_create. */
-#define MM_MAX_SHARED 16
-/* Grant slots per shared region; grants beyond this are refused. */
-#define MM_MAX_SHARED_GRANTS 8
-typedef struct {
-    uint32_t id;
-    uint32_t owner_context_id;
-    uint32_t refcount;
-    uint64_t base;
-    uint64_t pages;
-    uint32_t flags;
-    uint32_t grant_contexts[MM_MAX_SHARED_GRANTS];
-    uint8_t grant_count;
-} mm_shared_region_t;
-
-static list_t g_shared_list;
-static uint8_t g_shared_list_initialized = 0;
-static uint32_t g_shared_next_id = 1;
-static ksync_spinlock_t g_shared_lock;
-
-static void mm_shared_init_once_locked(void) {
-    if (g_shared_list_initialized) {
-        return;
-    }
-    list_init(
-        &g_shared_list, (uint32_t)sizeof(mm_shared_region_t), LIST_IMPL_ARRAY_CHUNK, MM_MAX_SHARED);
-    g_shared_list_initialized = 1;
-}
 static int mm_region_flags_valid(uint32_t flags);
 typedef int (*mm_copy_work_fn)(void* arg);
 static mem_region_t* mm_context_add_region_slot(mm_context_t* ctx, uint64_t base, uint64_t size,
                                                 uint32_t flags, mem_region_type_t type);
 static void mm_context_release_regions(mm_context_t* ctx);
 static mm_context_t* mm_context_get_locked(uint32_t id);
-static mm_shared_region_t* mm_shared_find_locked(uint32_t id);
-
-/* Run fn(arg) on this CPU's higher-half copy stack.  The user-copy helpers flip
- * CR3 to a process root, which carries no low identity mapping, so a stack that
- * currently lives at a low VA would disappear mid-copy.  A stack already in the
- * higher half is safe under any root and is used as-is.  Returns fn's value, or
- * -1 for a NULL fn (internal-only; never crosses a subsystem boundary). */
-static int mm_run_on_copy_stack(mm_copy_work_fn fn, void* arg) {
-    if (!fn) {
-        return -1;
-    }
-
-    uint64_t rsp = 0;
-    uint64_t higher_half_base = paging_get_higher_half_base();
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-    if (rsp >= higher_half_base) {
-        return fn(arg);
-    }
-
-    uintptr_t stack_top = mm_kernel_alias_addr(
-        (uintptr_t)&g_mm_copy_stacks[cpu_local()->cpu_id][MM_COPY_STACK_BYTES]);
-    stack_top &= ~(uintptr_t)0xFULL;
-    int rc = -1;
-    __asm__ volatile("mov %%rsp, %%r15\n"
-                     "mov %[stack_top], %%rsp\n"
-                     "mov %[arg], %%rdi\n"
-                     "call *%[fn]\n"
-                     "mov %%r15, %%rsp\n"
-                     : "=a"(rc)
-                     : [stack_top] "r"(stack_top), [fn] "r"(fn), [arg] "r"(arg)
-                     : "r15", "rdi", "rcx", "rdx", "rsi", "r8", "r9", "r10", "memory", "cc");
-    return rc;
-}
-
 static uint64_t mm_region_virtual_base(mm_context_t* ctx, mem_region_type_t type, uint64_t pages) {
     (void)pages;
     if (!ctx) {
@@ -125,11 +61,6 @@ static uint64_t mm_region_virtual_base(mm_context_t* ctx, mem_region_type_t type
         return MM_USER_IPC_BASE;
     case MEM_REGION_DEVICE:
         return MM_USER_DEVICE_BASE;
-    case MEM_REGION_SHARED: {
-        uint64_t base = ctx->next_shared_base;
-        ctx->next_shared_base += pages * PAGE_SIZE;
-        return base;
-    }
     case MEM_REGION_CODE:
     default:
         return 0;
@@ -152,7 +83,6 @@ void mm_init(const boot_info_t* boot_info) {
     g_boot_info = boot_info;
     klog_write("[mm] init\n");
     ksync_spinlock_init(&g_contexts_lock);
-    ksync_spinlock_init(&g_shared_lock);
     pfa_init(boot_info);
     if (paging_init() != 0) {
         klog_write("[mm] paging init failed\n");
@@ -195,7 +125,6 @@ int mm_context_init(mm_context_t* ctx, uint32_t id) {
     memset(ctx, 0, sizeof(*ctx));
     ctx->id = id;
     ctx->root_table = 0;
-    ctx->next_shared_base = MM_USER_SHARED_BASE;
     ctx->region_count = 0;
     if (list_init(&ctx->regions, (uint32_t)sizeof(mem_region_t), LIST_IMPL_ARRAY_CHUNK, 8) != 0) {
         return -1;
@@ -219,7 +148,7 @@ int mm_context_add_region(mm_context_t* ctx, uint64_t base, uint64_t size, uint3
 /* Copies the FIRST region of the given type into *out_region by value, so the
  * snapshot does not track later changes and cannot be used to mutate the
  * region.  Returns 0 on a hit, -1 for a NULL argument or no region of that type.
- * MEM_REGION_SHARED can occur many times in one context; this returns whichever
+ * A type can occur many times in one context; this returns whichever
  * the list yields first. */
 int mm_context_region_for_type(mm_context_t* ctx, mem_region_type_t type,
                                mem_region_t* out_region) {
@@ -261,55 +190,6 @@ int mm_context_region_at(mm_context_t* ctx, uint32_t index, mem_region_t* out_re
     }
     return -1;
 }
-
-static mm_shared_region_t* mm_shared_find_locked(uint32_t id) {
-    if (id == 0) {
-        return 0;
-    }
-    mm_shared_init_once_locked();
-    list_iter_t it;
-    mm_shared_region_t* r = (mm_shared_region_t*)list_first(&g_shared_list, &it);
-    while (r) {
-        if (r->id == id) {
-            return r;
-        }
-        r = (mm_shared_region_t*)list_next(&it);
-    }
-    return 0;
-}
-
-static int mm_shared_access_allowed(const mm_shared_region_t* region, uint32_t context_id) {
-    uint8_t i = 0;
-    if (!region) {
-        return 0;
-    }
-    /* Context 0 is kernel/supervisor and may inspect or manage any region. */
-    if (context_id == 0) {
-        return 1;
-    }
-    if (region->owner_context_id == context_id) {
-        return 1;
-    }
-    for (i = 0; i < region->grant_count && i < MM_MAX_SHARED_GRANTS; ++i) {
-        if (region->grant_contexts[i] == context_id) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static int mm_shared_free_if_unused(mm_shared_region_t* region) {
-    if (!region) {
-        return -1;
-    }
-    if (region->refcount != 0) {
-        return 0;
-    }
-    pfa_free_pages(region->base, region->pages);
-    list_remove(&g_shared_list, region);
-    return 0;
-}
-
 static mem_region_t* mm_find_region_for_addr(mm_context_t* ctx, uint64_t addr) {
     if (!ctx) {
         return 0;
@@ -370,14 +250,7 @@ static void mm_context_release_regions(mm_context_t* ctx) {
     region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (region->phys_base != 0 && region->size != 0) {
-            if (region->type == MEM_REGION_SHARED) {
-                /* Physical pages owned by mm_shared_region_t; decrement the pin
-                 * acquired in mm_shared_map, then release the logical reference. */
-                uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
-                pfa_free_pages(region->phys_base, pages);
-                (void)mm_shared_release(ctx->id, region->shared_id);
-            } else if (!(region->flags & MEM_REGION_FLAG_PHYS_EXTERNAL) &&
-                       region->backing_pages != 0) {
+            if (!(region->flags & MEM_REGION_FLAG_PHYS_EXTERNAL) && region->backing_pages != 0) {
                 /* Free only the owned backing (backing_pages), which for a
                  * WASM_LINEAR region under the slot model is the original
                  * placeholder — NOT region->size, which tracks the (grown)
@@ -574,350 +447,8 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code
     return 0;
 }
 
-/* Allocates `pages` physically contiguous frames and registers them as a shared
- * region owned by owner_context_id.
- *
- * *out_base receives the PHYSICAL base — no virtual mapping exists yet; that is
- * mm_shared_map's job.  *out_id receives the region id, which is never 0.
- *
- * The region is created with refcount 0.  Since the region is only reclaimed
- * from the refcount-reaching-zero path in mm_shared_release/mm_shared_unmap, a
- * region that is created and never retained or mapped holds its frames for the
- * life of the kernel.
- *
- * Returns 0 on success and -1 for a NULL out pointer, a zero page count, frame
- * exhaustion, a failure to find a free id within MM_MAX_SHARED probes, or a full
- * region list; frames taken on those paths are released again.  Takes
- * g_shared_lock. */
-int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags, uint32_t* out_id,
-                     uint64_t* out_base) {
-    if (!out_id || !out_base || pages == 0) {
-        return -1;
-    }
-    ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_init_once_locked();
-#if WASMOS_WASM_RUNTIME == 1 /* WARP JIT backend */
-    /* Shmem takes frames from the zone below WASMOS_SHMEM_PHYS_LIMIT.  WARP's
-     * own allocators (warp_kmalloc, MemUtils::allocPagedMemory, the ring-3 JIT
-     * pages) take frames at or above that limit, so a bulk zero-fill reaching
-     * through their direct-map alias (phys | KERNEL_HIGHER_HALF_BASE) cannot
-     * land on an active shmem page.
-     * FIXME: linmem_slot_commit() allocates linear-memory frames with plain
-     * pfa_alloc_pages(), i.e. without the above-limit floor, so this separation
-     * no longer covers slot-backed linear memory. */
-    uint64_t base = pfa_alloc_pages_below(pages, WASMOS_SHMEM_PHYS_LIMIT);
-#else
-    /* wasm3 has no above-limit allocator zone to stay clear of, so shmem may
-     * take any free frame. */
-    uint64_t base = pfa_alloc_pages(pages);
-#endif
-    if (!base) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    uint32_t id = 0;
-    for (uint32_t tries = 0; tries <= MM_MAX_SHARED; ++tries) {
-        uint32_t candidate = g_shared_next_id++;
-        if (candidate == 0) {
-            candidate = g_shared_next_id++;
-        }
-        if (!mm_shared_find_locked(candidate)) {
-            id = candidate;
-            break;
-        }
-    }
-    if (id == 0) {
-        pfa_free_pages(base, pages);
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    mm_shared_region_t* region = (mm_shared_region_t*)list_alloc(&g_shared_list);
-    if (!region) {
-        pfa_free_pages(base, pages);
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    memset(region, 0, sizeof(*region));
-    region->id = id;
-    region->owner_context_id = owner_context_id;
-    region->refcount = 0;
-    region->base = base;
-    region->pages = pages;
-    region->flags = flags;
-    region->grant_count = 0;
-    *out_id = id;
-    *out_base = base;
-    ksync_spinlock_unlock(&g_shared_lock);
-    return 0;
-}
-
-/* Adds target_context_id to a region's grant list, letting it pass the access
- * check in the other mm_shared_* calls.  Granting does not map anything.
- *
- * owner_context_id authorises the change: 0 is the kernel and may grant on any
- * region, any other value must match the region's owner.  Granting to the owner
- * itself, or re-granting an existing grantee, succeeds without changing
- * anything.
- *
- * Returns 0 on success and -1 for an unknown id, a zero target, a non-owner
- * caller, or a grant list already at MM_MAX_SHARED_GRANTS.  Takes
- * g_shared_lock. */
-int mm_shared_grant(uint32_t owner_context_id, uint32_t id, uint32_t target_context_id) {
-    ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t* region = mm_shared_find_locked(id);
-    uint8_t i = 0;
-    if (!region || target_context_id == 0) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    if (owner_context_id != 0 && region->owner_context_id != owner_context_id) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    if (region->owner_context_id == target_context_id) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return 0;
-    }
-    for (i = 0; i < region->grant_count && i < MM_MAX_SHARED_GRANTS; ++i) {
-        if (region->grant_contexts[i] == target_context_id) {
-            ksync_spinlock_unlock(&g_shared_lock);
-            return 0;
-        }
-    }
-    if (region->grant_count >= MM_MAX_SHARED_GRANTS) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    region->grant_contexts[region->grant_count++] = target_context_id;
-    ksync_spinlock_unlock(&g_shared_lock);
-    return 0;
-}
-
-/* Removes target_context_id from a region's grant list.  Revoking withdraws
- * future permission only: it does NOT unmap the region from a context that has
- * already mapped it, nor drop the reference that mapping took.
- *
- * Authorised like mm_shared_grant.  Revoking a context that holds no grant, or
- * the owner itself, succeeds and changes nothing, so 0 does not imply a grant
- * was removed.  Returns -1 for an unknown id, a zero target, or a non-owner
- * caller.  Takes g_shared_lock. */
-int mm_shared_revoke(uint32_t owner_context_id, uint32_t id, uint32_t target_context_id) {
-    ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t* region = mm_shared_find_locked(id);
-    uint8_t i = 0;
-    if (!region || target_context_id == 0) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    if (owner_context_id != 0 && region->owner_context_id != owner_context_id) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    if (region->owner_context_id == target_context_id) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return 0;
-    }
-    for (i = 0; i < region->grant_count && i < MM_MAX_SHARED_GRANTS; ++i) {
-        if (region->grant_contexts[i] != target_context_id) {
-            continue;
-        }
-        for (uint8_t j = i; j + 1 < region->grant_count; ++j) {
-            region->grant_contexts[j] = region->grant_contexts[j + 1];
-        }
-        if (region->grant_count > 0) {
-            region->grant_count--;
-            region->grant_contexts[region->grant_count] = 0;
-        }
-        ksync_spinlock_unlock(&g_shared_lock);
-        return 0;
-    }
-    ksync_spinlock_unlock(&g_shared_lock);
-    return 0;
-}
-
-/* Reports a region's PHYSICAL base and page count to any context that owns it,
- * holds a grant, or is the kernel (context 0).  Takes no reference: the caller
- * must already hold one, or the frames can be freed underneath the value it just
- * read.  Returns 0 on success, -1 for a NULL out pointer, an unknown id, or a
- * caller without access.  Takes g_shared_lock. */
-int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id, uint64_t* out_base,
-                       uint64_t* out_pages) {
-    if (!out_base || !out_pages) {
-        return -1;
-    }
-    ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t* region = mm_shared_find_locked(id);
-    if (!region || !mm_shared_access_allowed(region, owner_context_id)) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    *out_base = region->base;
-    *out_pages = region->pages;
-    ksync_spinlock_unlock(&g_shared_lock);
-    return 0;
-}
-
-/* Takes one reference on the region.  The count is a count of LOGICAL holders —
- * every mm_shared_retain and every mm_shared_map adds one, and the region's
- * frames are released when it falls back to 0.  It is not a mapping count and
- * not the per-frame count physmem.c keeps.
- *
- * Returns 0 on success, -1 for an unknown id, a caller without access, or a
- * count already at UINT32_MAX (refused rather than wrapped).  Takes
- * g_shared_lock.  Pair every success with exactly one mm_shared_release. */
-int mm_shared_retain(uint32_t owner_context_id, uint32_t id) {
-    ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t* region = mm_shared_find_locked(id);
-    if (!region || !mm_shared_access_allowed(region, owner_context_id)) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    if (region->refcount == UINT32_MAX) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    region->refcount++;
-    ksync_spinlock_unlock(&g_shared_lock);
-    return 0;
-}
-
-/* Drops one reference.  When the count reaches 0 the region's frames go back to
- * the allocator and the region record is removed, so `id` becomes invalid and
- * any mapping still pointing at those frames is left dangling — release only
- * after unmapping.
- *
- * Returns 0 both when a reference was merely dropped and when the region was
- * freed; the two are indistinguishable to the caller.  Returns -1 for an unknown
- * id, a caller without access, or a count already at 0, so a double release is
- * refused rather than wrapping.  Takes g_shared_lock. */
-int mm_shared_release(uint32_t owner_context_id, uint32_t id) {
-    ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t* region = mm_shared_find_locked(id);
-    if (!region || !mm_shared_access_allowed(region, owner_context_id) || region->refcount == 0) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    region->refcount--;
-    int rc = mm_shared_free_if_unused(region);
-    ksync_spinlock_unlock(&g_shared_lock);
-    return rc;
-}
-
-/* Gives ctx a MEM_REGION_SHARED region over the shared object, at a fresh VA
- * taken from the context's rolling shared window.  *out_base receives that
- * VIRTUAL base; the pages are not wired into the page tables here, so they map
- * on demand through mm_handle_page_fault.
- *
- * flags intersects with the region's creation flags, so it can only narrow
- * access; passing 0 keeps the creation flags unchanged.
- *
- * Two independent counts are taken: one logical reference on the shared region
- * (the same count mm_shared_retain moves), and a physmem pin on each frame so
- * the frames survive even if the logical count drops elsewhere.
- * mm_context_release_regions undoes both at teardown.
- *
- * Returns 0 on success, -1 for a NULL ctx, an unknown id, a caller without
- * access, a saturated reference count, or a failure to place the region — the
- * reference is given back on that last path.  Takes g_shared_lock.
- *
- * The VA window only ever moves forward; repeated map/unmap cycles consume
- * address space rather than reusing it. */
-int mm_shared_map(mm_context_t* ctx, uint32_t id, uint32_t flags, uint64_t* out_base) {
-    if (!ctx) {
-        return -1;
-    }
-    ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t* region = mm_shared_find_locked(id);
-    if (!region || !mm_shared_access_allowed(region, ctx->id)) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    uint32_t effective_flags = region->flags;
-    if (flags) {
-        effective_flags &= flags;
-    }
-    if (region->refcount == UINT32_MAX) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    region->refcount++;
-    uint64_t virt_base = mm_region_virtual_base(ctx, MEM_REGION_SHARED, region->pages);
-    mem_region_t* added = 0;
-    if (virt_base != 0) {
-        added = mm_context_add_region_slot(
-            ctx, virt_base, region->pages * PAGE_SIZE, effective_flags, MEM_REGION_SHARED);
-    }
-    if (!added) {
-        region->refcount--;
-        (void)mm_shared_free_if_unused(region);
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    added->phys_base = region->base;
-    added->shared_id = id;
-    pfa_pin_pages(region->base, region->pages);
-    if (out_base) {
-        *out_base = virt_base;
-    }
-    ksync_spinlock_unlock(&g_shared_lock);
-    return 0;
-}
-
-/* Removes ctx's region entry for the shared object and drops the logical
- * reference mm_shared_map took.  The matching region is found by physical base
- * and size, so a context that mapped the same object twice loses whichever entry
- * the list yields first.
- *
- * It does NOT unmap the pages from the page tables and does NOT undo the
- * physmem pin mm_shared_map installed, so the frames stay pinned and any PTE
- * already faulted in stays live.
- *
- * Returns 0 on success, -1 for a NULL ctx, an unknown id, a caller without
- * access, no matching region in this context, or a reference count already at 0.
- * Takes g_shared_lock. */
-int mm_shared_unmap(mm_context_t* ctx, uint32_t id) {
-    if (!ctx) {
-        return -1;
-    }
-    ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t* region = mm_shared_find_locked(id);
-    if (!region || !mm_shared_access_allowed(region, ctx->id)) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-
-    uint32_t found = 0;
-    list_iter_t it;
-    mem_region_t* r = (mem_region_t*)list_first(&ctx->regions, &it);
-    while (r) {
-        if (r->type == MEM_REGION_SHARED && r->phys_base == region->base &&
-            r->size == region->pages * PAGE_SIZE) {
-            if (list_remove(&ctx->regions, r) == 0) {
-                if (ctx->region_count > 0) {
-                    ctx->region_count--;
-                }
-                found = 1;
-            }
-            break;
-        }
-        r = (mem_region_t*)list_next(&it);
-    }
-    if (!found) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    if (region->refcount == 0) {
-        ksync_spinlock_unlock(&g_shared_lock);
-        return -1;
-    }
-    region->refcount--;
-    int rc = mm_shared_free_if_unused(region);
-    ksync_spinlock_unlock(&g_shared_lock);
-    return rc;
-}
-
 /* Allocates `pages` physically contiguous frames and records a region of the
- * given type over them at the type's fixed VA (MEM_REGION_SHARED instead takes
+ * given type over them at the type's fixed VA (which takes
  * the next slice of the rolling shared window).  Nothing is mapped; the pages
  * arrive through mm_handle_page_fault on first touch.
  *
@@ -1070,7 +601,7 @@ int mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_
     /* Point the WASM_LINEAR user-VA window at the linmem slot's scattered frames,
      * page for page (region page P -> slot frame P), for the [from_page, to_page)
      * tail only.  Binding just the freshly committed tail keeps a grow from
-     * clobbering overlays (shmem / framebuffer / DMA / net ring) that earlier
+     * clobbering overlays (framebuffer / DMA / net ring) that earlier
      * hostcalls mapped over lower pages.  The slot OWNS these frames and frees
      * them via its own decommit at reap; this region must never free them.
      *
@@ -1316,6 +847,38 @@ typedef struct {
  * Chunks are 256 bytes to keep the bounce buffer small (stack space is
  * limited on the copy-stack) while amortising the two CR3 switches per
  * iteration over a reasonable number of bytes. */
+/* Run fn(arg) on this CPU's higher-half copy stack.  The user-copy helpers flip
+ * CR3 to a process root, which carries no low identity mapping, so a stack that
+ * currently lives at a low VA would disappear mid-copy.  A stack already in the
+ * higher half is safe under any root and is used as-is.  Returns fn's value, or
+ * -1 for a NULL fn (internal-only; never crosses a subsystem boundary). */
+static int mm_run_on_copy_stack(mm_copy_work_fn fn, void* arg) {
+    if (!fn) {
+        return -1;
+    }
+
+    uint64_t rsp = 0;
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+    if (rsp >= higher_half_base) {
+        return fn(arg);
+    }
+
+    uintptr_t stack_top = mm_kernel_alias_addr(
+        (uintptr_t)&g_mm_copy_stacks[cpu_local()->cpu_id][MM_COPY_STACK_BYTES]);
+    stack_top &= ~(uintptr_t)0xFULL;
+    int rc = -1;
+    __asm__ volatile("mov %%rsp, %%r15\n"
+                     "mov %[stack_top], %%rsp\n"
+                     "mov %[arg], %%rdi\n"
+                     "call *%[fn]\n"
+                     "mov %%r15, %%rsp\n"
+                     : "=a"(rc)
+                     : [stack_top] "r"(stack_top), [fn] "r"(fn), [arg] "r"(arg)
+                     : "r15", "rdi", "rcx", "rdx", "rsi", "r8", "r9", "r10", "memory", "cc");
+    return rc;
+}
+
 static int mm_copy_from_user_impl(void* opaque) {
     mm_copy_from_user_args_t* args = (mm_copy_from_user_args_t*)opaque;
     if (!args) {

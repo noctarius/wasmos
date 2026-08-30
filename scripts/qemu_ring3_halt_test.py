@@ -101,8 +101,6 @@ def main():
         b"[test] ring3 thread yield syscall ok",
         b"[test] ring3 syscall ok",
         b"[test] ring3 preempt stress ok",
-        b"[test] ring3 shmem owner deny ok",
-        b"[test] ring3 shmem grant allow ok",
     ]
     if args.require_threading:
         required.extend(

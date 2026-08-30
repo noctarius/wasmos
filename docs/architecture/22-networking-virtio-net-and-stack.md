@@ -584,7 +584,7 @@ typedef struct __attribute__((packed)) {
 
 Each ring is one xfer-buffer object sized explicitly (**~128 KiB**, not the
 2 MiB `XFER_TRANSFER_CAPACITY` default; two rings/socket → ~256 KiB/socket, and
-the shmem zone is `[0, 64 MiB)`, so ~256 sockets is the budget). Layout:
+the low buffer zone is `[0, 64 MiB)`, so ~256 sockets is the budget). Layout:
 
 ```
 +0            64-byte header (see below)
@@ -645,8 +645,8 @@ must be overlaid into the app's linear memory. That overlay satisfies the
 **pinned shared-window invariant** through the implemented WARP linear
 address-space rework — see
 [WARP Ring3 Implementation → Linear Memory: Reserve-and-Commit](31-warp-ring3-implementation.md#15--linear-memory-reserve-and-commit-no-relocation)
-and [Memory Management → Pinned VA Arena](06-memory-management.md#pinned-va-arena-shmem-rings-and-any-stable-mapping).
-The rings are one consumer of that arena, alongside shmem surfaces. The mapping
+and [Memory Management → Pinned VA Arena](06-memory-management.md#pinned-va-arena-buffer-overlays-rings-and-any-stable-mapping).
+The rings are one consumer of that arena, alongside window surfaces. The mapping
 contract is already a validated baseline for both wasm3 and WARP: shared
 buffers remain coherent across app-heap growth, and the fixed mapping is not
 relocated. The implementation anchors are the wasm3 in-place linear-memory

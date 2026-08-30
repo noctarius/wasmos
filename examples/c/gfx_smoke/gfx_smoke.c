@@ -7,18 +7,18 @@
  * view inside a panel) driven only by ui_loop_handle_ipc / ui_loop_drain.
  *
  * The raw painting sequence an app author has to get right:
- *   1. GFX_IPC_ALLOC_SHARED_BUFFER returns a buffer id, a shmem id and a
- *      stride; map the shmem with wasmos_shmem_map_auto over the whole
- *      page-rounded byte length;
- *   2. write ARGB32 pixels through that mapping;
- *   3. wasmos_shmem_flush the written range — without it the compositor is not
- *      guaranteed to observe the pixels;
+ *   1. GFX_IPC_GET_SURFACE_SPEC reports the stride and byte size the surface
+ *      must satisfy; the compositor allocates nothing;
+ *   2. acquire a transfer buffer of at least that size, lend it READ to the
+ *      compositor, map it, and register it with GFX_IPC_ATTACH_SURFACE;
+ *   3. write ARGB32 pixels through that mapping — no write-back call, because
+ *      the mapping IS the surface's frames on both runtimes;
  *   4. GFX_IPC_PRESENT_WINDOW to publish the buffer;
- *   5. on a resize event, allocate a new buffer, map it, release the old one.
- * A damage rectangle is passed by a separate one-page shmem region that must be
- * granted to the compositor's process before it can be read (see
- * create_damage_rect_shmem); the drawing buffer needs no grant of its own,
- * since the compositor allocated it.
+ *   5. on a resize event, attach a new surface at the new spec and withdraw the
+ *      old one; a borrowed buffer is never mutated in place.
+ * A damage rectangle rides inside the surface itself at ctx->damage_offset, so
+ * it needs no second buffer and no grant: the compositor reads it through the
+ * mapping it already holds.
  *
  * The run also asserts the refusal paths: presenting an unknown buffer id,
  * presenting after the window is destroyed, and releasing a buffer twice must
@@ -98,64 +98,22 @@ static ui_context_t g_ctx1;
 static ui_context_t g_ctx2;
 static ui_context_t g_ctx3;
 
-static int32_t create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t height) {
-    int32_t shmem_id = wasmos_shmem_create(1, 0);
-    if (shmem_id <= 0) {
-        puts("[test] gfx smoke damage alloc failed");
+/* Write a single full-window damage rect into the surface's own damage region.
+ * It rides in the buffer this client already lent, so the compositor reads it
+ * through the mapping it already holds -- no second buffer, borrow or grant.
+ * Returns the byte offset the present should name. */
+static int32_t write_full_damage_rect(ui_context_t* ctx, int32_t width, int32_t height) {
+    if (!ctx || !ctx->mapped_base || ctx->damage_offset <= 0) {
+        puts("[test] gfx smoke damage region missing");
         return -1;
     }
-    int32_t gfx_owner = wasmos_ipc_endpoint_owner(gfx_ep);
-    if (gfx_owner <= 0) {
-        puts("[test] gfx smoke damage owner failed");
-        return -1;
-    }
-    if (wasmos_shmem_grant(shmem_id, gfx_owner) != 0) {
-        puts("[test] gfx smoke damage grant failed");
-        return -1;
-    }
-    int32_t map_ptr = wasmos_shmem_map_auto(shmem_id, PAGE_SIZE);
-    if (map_ptr < 0) {
-        puts("[test] gfx smoke damage map failed");
-        return -1;
-    }
-    gfx_rect_t* rect = ptr_cast(gfx_rect_t, (uint32_t)map_ptr);
+    gfx_rect_t* rect =
+        ptr_cast(gfx_rect_t, addr_cast(uint32_t, ctx->mapped_base) + (uint32_t)ctx->damage_offset);
     rect->x = 0;
     rect->y = 0;
     rect->w = width;
     rect->h = height;
-    if (wasmos_shmem_flush(shmem_id, map_ptr, (int32_t)sizeof(gfx_rect_t)) != 0) {
-        puts("[test] gfx smoke damage flush failed");
-        return -1;
-    }
-    if (wasmos_shmem_unmap(shmem_id) != 0) {
-        puts("[test] gfx smoke damage unmap failed");
-        return -1;
-    }
-    return shmem_id;
-}
-
-static int map_shared_buffer_ptr(int32_t shmem_id, int32_t stride_bytes, int32_t height,
-                                 uint8_t** out_base) {
-    int32_t byte_len = stride_bytes * height;
-    int32_t map_len = (byte_len + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
-    int32_t map_ptr = wasmos_shmem_map_auto(shmem_id, map_len);
-    if (map_ptr < 0) {
-        puts("[test] gfx smoke shmem map failed");
-        return -1;
-    }
-    *out_base = ptr_cast(uint8_t, (uint32_t)map_ptr);
-    return 0;
-}
-
-static int flush_shared_buffer_ptr(int32_t shmem_id, uint8_t* base, int32_t stride_bytes,
-                                   int32_t height) {
-    int32_t byte_len = stride_bytes * height;
-    int32_t ptr = addr_cast(int32_t, base);
-    if (wasmos_shmem_flush(shmem_id, ptr, byte_len) != 0) {
-        puts("[test] gfx smoke shmem flush failed");
-        return -1;
-    }
-    return 0;
+    return ctx->damage_offset;
 }
 
 /* GFX_IPC_ALLOC_SHARED_BUFFER always reports a packed stride of width * 4 bytes,
@@ -346,9 +304,6 @@ static int handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t*
             return -1;
         }
     }
-    if (flush_shared_buffer_ptr(ctx->shmem_id, ctx->mapped_base, ctx->stride_bytes, new_h) != 0) {
-        return -1;
-    }
     if (send_gfx(gfx_ep,
                  reply_ep,
                  (*req)++,
@@ -377,9 +332,6 @@ static int handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t* req,
     }
     if (fill_pattern(ctx->mapped_base, new_w, new_h, ctx->stride_bytes, phase) != 0) {
         puts("[test] gfx smoke resize paint failed");
-        return -1;
-    }
-    if (flush_shared_buffer_ptr(ctx->shmem_id, ctx->mapped_base, ctx->stride_bytes, new_h) != 0) {
         return -1;
     }
     if (send_gfx(gfx_ep,
@@ -552,7 +504,7 @@ int main(int argc, char** argv) {
     int32_t gfx_ep = -1;
     int32_t req = GFX_REQ_BASE;
     gfx_reply_t reply;
-    int32_t damage_shmem_id;
+    int32_t damage_offset;
     int32_t libui_started = 0;
 
     if (proc_endpoint <= 0 || reply_ep < 0) {
@@ -581,10 +533,6 @@ int main(int argc, char** argv) {
 
     if (fill_pattern(g_ctx1.mapped_base, GFX_W, GFX_H, g_ctx1.stride_bytes, 1) != 0) {
         puts("[test] gfx smoke paint1 failed");
-        return GFX_SMOKE_E_PAINT0;
-    }
-    if (flush_shared_buffer_ptr(g_ctx1.shmem_id, g_ctx1.mapped_base, g_ctx1.stride_bytes, GFX_H) !=
-        0) {
         return GFX_SMOKE_E_PAINT0;
     }
 
@@ -619,41 +567,16 @@ int main(int argc, char** argv) {
         puts("[test] gfx smoke resize failed");
         return GFX_SMOKE_E_RESIZE;
     }
-    if (wasmos_shmem_unmap(g_ctx1.shmem_id) != 0) {
-        puts("[test] gfx smoke shmem unmap failed");
-        return GFX_SMOKE_E_UNMAP0;
-    }
-
-    int32_t new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
-    uint8_t* new_base = 0;
-    if (send_gfx(gfx_ep,
-                 reply_ep,
-                 req++,
-                 GFX_IPC_ALLOC_SHARED_BUFFER,
-                 g_ctx1.window_id,
-                 GFX_RESIZE_W,
-                 GFX_RESIZE_H,
-                 0,
-                 &reply) != 0 ||
-        reply.status != WASMOS_ERR_NONE) {
+    /* The surface is re-acquired at the new size rather than resized: a borrowed
+     * buffer is never mutated, so a resize attaches a new one and withdraws the
+     * old. ui_realloc_buffer does the whole exchange. */
+    if (ui_realloc_buffer(&g_ctx1, GFX_RESIZE_W, GFX_RESIZE_H) != 0) {
         puts("[test] gfx smoke resize-alloc failed");
         return GFX_SMOKE_E_ALLOC1;
     }
-    new_buffer_id = reply.arg1;
-    new_shmem_id = reply.arg2;
-    new_stride = reply.arg3;
-    if (map_shared_buffer_ptr(new_shmem_id, new_stride, GFX_RESIZE_H, &new_base) != 0) {
-        return GFX_SMOKE_E_MAP1;
-    }
-    g_ctx1.buffer_id = new_buffer_id;
-    g_ctx1.shmem_id = new_shmem_id;
-    g_ctx1.stride_bytes = new_stride;
-    g_ctx1.width = GFX_RESIZE_W;
-    g_ctx1.height = GFX_RESIZE_H;
-    g_ctx1.mapped_base = new_base;
 
-    damage_shmem_id = create_damage_rect_shmem(gfx_ep, GFX_RESIZE_W, GFX_RESIZE_H);
-    if (damage_shmem_id < 0) {
+    damage_offset = write_full_damage_rect(&g_ctx1, GFX_RESIZE_W, GFX_RESIZE_H);
+    if (damage_offset < 0) {
         return GFX_SMOKE_E_DAMAGE;
     }
 
@@ -665,10 +588,6 @@ int main(int argc, char** argv) {
             puts("[test] gfx smoke paint-loop failed");
             return GFX_SMOKE_E_PAINT_LOOP;
         }
-        if (flush_shared_buffer_ptr(
-                g_ctx1.shmem_id, g_ctx1.mapped_base, g_ctx1.stride_bytes, GFX_RESIZE_H) != 0) {
-            return GFX_SMOKE_E_PRESENT_LOOP;
-        }
         if (send_gfx(gfx_ep,
                      reply_ep,
                      req++,
@@ -676,7 +595,7 @@ int main(int argc, char** argv) {
                      g_ctx1.window_id,
                      g_ctx1.buffer_id,
                      1,
-                     damage_shmem_id,
+                     damage_offset,
                      &reply) != 0 ||
             reply.status != WASMOS_ERR_NONE) {
             puts("[test] gfx smoke present-loop failed");
@@ -697,10 +616,6 @@ int main(int argc, char** argv) {
     if (fill_pattern(g_ctx2.mapped_base, GFX2_W, GFX2_H, g_ctx2.stride_bytes, 42u) != 0) {
         puts("[test] gfx smoke paint2 failed");
         return GFX_SMOKE_E_PAINT_LOOP;
-    }
-    if (flush_shared_buffer_ptr(g_ctx2.shmem_id, g_ctx2.mapped_base, g_ctx2.stride_bytes, GFX2_H) !=
-        0) {
-        return GFX_SMOKE_E_PRESENT_LOOP;
     }
     if (send_gfx(gfx_ep,
                  reply_ep,
@@ -726,10 +641,6 @@ int main(int argc, char** argv) {
     if (fill_wasmos_logo(g_ctx3.mapped_base, GFX3_W, GFX3_H, g_ctx3.stride_bytes) != 0) {
         puts("[test] gfx smoke paint3 failed");
         return GFX_SMOKE_E_PAINT_LOOP;
-    }
-    if (flush_shared_buffer_ptr(g_ctx3.shmem_id, g_ctx3.mapped_base, g_ctx3.stride_bytes, GFX3_H) !=
-        0) {
-        return GFX_SMOKE_E_PRESENT_LOOP;
     }
     if (send_gfx(gfx_ep,
                  reply_ep,
@@ -884,88 +795,40 @@ int main(int argc, char** argv) {
         return GFX_SMOKE_E_POST_DESTROY;
     }
 
-    if (send_gfx(gfx_ep,
-                 reply_ep,
-                 req++,
-                 GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx1.buffer_id,
-                 0,
-                 0,
-                 0,
-                 &reply) != 0 ||
-        reply.status != WASMOS_ERR_NONE) {
-        puts("[test] gfx smoke release1 failed");
-        return GFX_SMOKE_E_RELEASE1;
+    /* Withdraw each surface, then assert the refusal: a second detach of a
+     * buffer this client no longer lends must be rejected, which is what stops
+     * a stale id reaching the compositor's slot table. */
+    const int32_t detached[3] = {g_ctx1.buffer_id, g_ctx2.buffer_id, g_ctx3.buffer_id};
+    const int32_t detach_wins[3] = {g_ctx1.window_id, g_ctx2.window_id, g_ctx3.window_id};
+    for (int32_t i = 0; i < 3; ++i) {
+        if (send_gfx(gfx_ep,
+                     reply_ep,
+                     req++,
+                     GFX_IPC_DETACH_SURFACE,
+                     detach_wins[i],
+                     detached[i],
+                     0,
+                     0,
+                     &reply) != 0 ||
+            reply.status != WASMOS_ERR_NONE) {
+            puts("[test] gfx smoke detach failed");
+            return GFX_SMOKE_E_RELEASE1;
+        }
     }
-    if (send_gfx(gfx_ep,
-                 reply_ep,
-                 req++,
-                 GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx2.buffer_id,
-                 0,
-                 0,
-                 0,
-                 &reply) != 0 ||
-        reply.status != WASMOS_ERR_NONE) {
-        puts("[test] gfx smoke release2a failed");
-        return GFX_SMOKE_E_RELEASE1;
-    }
-    if (send_gfx(gfx_ep,
-                 reply_ep,
-                 req++,
-                 GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx3.buffer_id,
-                 0,
-                 0,
-                 0,
-                 &reply) != 0 ||
-        reply.status != WASMOS_ERR_NONE) {
-        puts("[test] gfx smoke release3a failed");
-        return GFX_SMOKE_E_RELEASE1;
-    }
-    if (wasmos_shmem_unmap(g_ctx1.shmem_id) != 0 || wasmos_shmem_unmap(g_ctx2.shmem_id) != 0 ||
-        wasmos_shmem_unmap(g_ctx3.shmem_id) != 0) {
-        puts("[test] gfx smoke shmem unmap failed");
-        return GFX_SMOKE_E_UNMAP1;
-    }
-    if (send_gfx(gfx_ep,
-                 reply_ep,
-                 req++,
-                 GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx1.buffer_id,
-                 0,
-                 0,
-                 0,
-                 &reply) != 0 ||
-        reply.status != WASMOS_ERR_GFX_INVALID) {
-        puts("[test] gfx smoke release2 deny failed");
-        return GFX_SMOKE_E_RELEASE2;
-    }
-    if (send_gfx(gfx_ep,
-                 reply_ep,
-                 req++,
-                 GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx2.buffer_id,
-                 0,
-                 0,
-                 0,
-                 &reply) != 0 ||
-        reply.status != WASMOS_ERR_GFX_INVALID) {
-        puts("[test] gfx smoke release2b deny failed");
-        return GFX_SMOKE_E_RELEASE2;
-    }
-    if (send_gfx(gfx_ep,
-                 reply_ep,
-                 req++,
-                 GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx3.buffer_id,
-                 0,
-                 0,
-                 0,
-                 &reply) != 0 ||
-        reply.status != WASMOS_ERR_GFX_INVALID) {
-        puts("[test] gfx smoke release3b deny failed");
-        return GFX_SMOKE_E_RELEASE2;
+    for (int32_t i = 0; i < 3; ++i) {
+        if (send_gfx(gfx_ep,
+                     reply_ep,
+                     req++,
+                     GFX_IPC_DETACH_SURFACE,
+                     detach_wins[i],
+                     detached[i],
+                     0,
+                     0,
+                     &reply) != 0 ||
+            reply.status != WASMOS_ERR_GFX_INVALID) {
+            puts("[test] gfx smoke detach deny failed");
+            return GFX_SMOKE_E_RELEASE2;
+        }
     }
 
     puts("[test] gfx smoke app ok");

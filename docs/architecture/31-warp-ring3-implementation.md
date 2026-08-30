@@ -32,13 +32,13 @@ constraints.
 
 Before the ring-3 execution path, WARP ran entirely in ring 0 with the shared
 kernel page table. Physical frames from
-`pfa_alloc_pages_above(WASMOS_SHMEM_PHYS_LIMIT=64MB)` were
+`pfa_alloc_pages_above(WASMOS_BUFFER_PHYS_LIMIT=64MB)` were
 addressed through the kernel direct map `phys | kHalfBase`.  This creates
 three aliasing classes that have all produced real bugs:
 
 | Aliasing class                                               | Symptom                                                                                         |
 |--------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
-| Shmem (phys [0,64MB)) vs WARP linear mem (phys [64MB,512MB)) | menu_bar's `ensureLinearSize` memset zeroed gfx-smoke window-2 framebuffer (fixed by partition) |
+| Buffer backing (phys [0,64MB)) vs WARP linear mem (phys [64MB,512MB)) | menu_bar's `ensureLinearSize` memset zeroed gfx-smoke window-2 framebuffer (fixed by partition) |
 | WARP linear mem of process A vs WARP linear mem of process B | multiple potential cross-process corruptions                                                    |
 | WARP JIT code vs WARP linear mem of the **same** process     | `commitVirtualMemory` memset zero-filled the calculator's JIT code → #UD panic                  |
 
@@ -52,7 +52,7 @@ path became viable. It occurred because:
    memory occupies `[0x4100000, 0x4300000)` physically and canonical VA range
    `[0xffffffff84100000, 0xffffffff84300000)`.
 3. `phys_jit = 0x41dfcb0` is inside `[0x4100000, 0x4300000)`.
-4. When `ensureLinearSize(917KB)` is called for a later shmem probe, it calls
+4. When `ensureLinearSize(917KB)` is called for a later overlay probe, it calls
    `commitVirtualMemory(lmem_base + prev_usable, delta)`, which remaps the page
    at `0xffffffff841dfcb0` canonically (no-op in the PTE) then WARP immediately
    calls `std::memset(..., 0, delta)` over that range — zeroing the JIT code.
@@ -108,7 +108,7 @@ The layout defines four sub-regions (all offsets from `USER_VA_MIN`):
 > demand-committed with a non-relocating backing (see
 > [§15 Linear Memory: Reserve-and-Commit](#15--linear-memory-reserve-and-commit-no-relocation)).
 > The top of this window is further reserved as a general pinned-VA arena for
-> shmem objects, network rings, and any mapping needing a stable VA.
+> transfer-buffer overlays, network rings, and any mapping needing a stable VA.
 
 Define constants in `src/kernel/include/warp_ring3.h` (new file):
 
@@ -129,8 +129,8 @@ lifetime of the WasmModule.
 ### 3.3  Physical zone allocation
 
 No change to zone partitioning from the current state:
-- Shmem: `pfa_alloc_pages_below(WASMOS_SHMEM_PHYS_LIMIT = 64 MB)`
-- JIT code + linear mem: `pfa_alloc_pages_above(WASMOS_SHMEM_PHYS_LIMIT)`
+- Buffer backing: `pfa_alloc_pages_below(WASMOS_BUFFER_PHYS_LIMIT = 64 MB)`
+- JIT code + linear mem: `pfa_alloc_pages_above(WASMOS_BUFFER_PHYS_LIMIT)`
 
 The aliasing bug is eliminated by per-process address spaces, not by further
 physical zone sub-division.  (Zone sub-division was the workaround; ring 3 is
@@ -232,7 +232,7 @@ frame->r10 = arg2  (uint32_t)
 frame->r8  = arg3  (uint32_t, optional)
 ```
 
-The existing hostcall C functions (`warp_ipc_send`, `warp_shmem_map_auto`,
+The existing hostcall C functions (`warp_ipc_send`, `warp_xfer_buffer_map`,
 etc.) take `(arg0, arg1, ..., void *ctx_)`.  The `ctx_` pointer comes from
 the per-process `warp_ctx_for_pid(pid)`.
 
@@ -456,7 +456,7 @@ Alternatively, store in `wasm_driver_t` alongside `wasm_module`.
    the same arguments; only the calling convention (syscall frame) differs.
 4. **`warp_ctx_for_pid` still works.** The hostcall context is retrieved
    by PID from the same table; ring 3 execution does not change the PID.
-5. **No shmem zone changes.** Shmem stays in [0,64 MB); the ring-3 isolation
+5. **No low-zone changes.** Buffer backing stays in [0,64 MB); the ring-3 isolation
    makes the partition fix from the earlier session technically redundant but
    harmless to keep.
 6. **`commitVirtualMemory` is a no-op or only touches truly new pages.**
@@ -550,7 +550,7 @@ prerequisite for the cross-process shared-memory ring transport (see
 non-relocating, base-pinned per-app VA slot: `warp_linmem_move` /
 `warp_linmem_grow` (`src/kernel/warp/shim.cpp`) reserve the slot VA once, commit
 scattered physical pages on demand, and never move the base for the app's
-lifetime — so any mapping into linear memory (peer shmem, dual-mapped JIT)
+lifetime — so any mapping into linear memory (a peer's lent buffer, dual-mapped JIT)
 stays valid. The slot is armed at spawn by `warp_linmem_reserve_hint_for`
 (`src/kernel/warp_driver.cpp`, from the module's declared heap size) and
 consumed on the linmem block's first grow; if a slot is exhausted the allocator
@@ -595,10 +595,10 @@ module's lifetime**:
 ### 15.3  Pinned-VA arena sub-range
 
 The **top** of the 4 GiB window is reserved as a general **pinned-VA arena**.
-Every mapping that must hold a stable VA for its lifetime lands here: all shmem
+Every mapping that must hold a stable VA for its lifetime lands here: all buffer
 objects (framebuffer, compositor backbuffer, font data, GFX surfaces), the
 per-socket network rings, and any future pinned mapping. Its
-PTEs are established once (at map time) and owned solely by the shmem/xfer-buffer
+PTEs are established once (at map time) and owned solely by the transfer-buffer
 mapper; the linear-memory grow path is not permitted to touch them, and the app
 heap only ever commits from the **bottom** of the window upward. This is what
 makes any persistent shared mapping safe: the overlay never moves and has a
@@ -607,7 +607,7 @@ physical pages. The one real constraint driving this design is that a WASM app
 can only dereference addresses inside its own linear memory, so the arena must
 live *within* the 4 GiB offset space (native peers have a normal address space
 and are unconstrained). See
-[Memory Management → Pinned VA Arena](06-memory-management.md#pinned-va-arena-shmem-rings-and-any-stable-mapping).
+[Memory Management → Pinned VA Arena](06-memory-management.md#pinned-va-arena-buffer-overlays-rings-and-any-stable-mapping).
 
 ### 15.4  Accounting impact (ps)
 

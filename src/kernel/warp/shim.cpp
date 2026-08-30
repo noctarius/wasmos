@@ -182,7 +182,7 @@ static WarpSmallPage* warp_small_page_for(void* raw) {
 static void* warp_small_alloc(void) {
     ksync_spinlock_lock(&g_warp_small_lock);
     if (g_warp_small_free == nullptr) {
-        uint64_t phys = pfa_alloc_pages_above(1U, WASMOS_SHMEM_PHYS_LIMIT);
+        uint64_t phys = pfa_alloc_pages_above(1U, WASMOS_BUFFER_PHYS_LIMIT);
         if (!phys || warp_map_page_alias(phys, 1U) != 0) {
             if (phys) {
                 pfa_free_pages(phys, 1U);
@@ -266,7 +266,7 @@ static void* warp_kmalloc(size_t const size) {
     } else {
         /* Large path: physical page allocator */
         uint64_t pages = (static_cast<uint64_t>(total) + kPageSize - 1) / kPageSize;
-        uint64_t phys = pfa_alloc_pages_above(pages, WASMOS_SHMEM_PHYS_LIMIT);
+        uint64_t phys = pfa_alloc_pages_above(pages, WASMOS_BUFFER_PHYS_LIMIT);
         if (!phys) {
             return nullptr;
         }
@@ -330,7 +330,7 @@ static void* warp_krealloc(void* const ptr, size_t const size) {
      * linmem/job-memory block (the only page-backed block that grows).  If a
      * reservation is pending, MOVE it into a dedicated per-app VA slot: reserve
      * the VA once, commit scattered physical pages on demand, base pinned for
-     * the app's lifetime (no relocation → shmem/DMA maps stay valid). */
+     * the app's lifetime (no relocation → buffer/DMA maps stay valid). */
     /* Claim the hint only from the CPU actually running the armed pid, and take
      * it with a CAS so two CPUs cannot both move a block for one arming.  A
      * mismatch leaves the hint armed for its rightful owner instead of stamping
@@ -526,7 +526,7 @@ static void* warp_linmem_move(uint32_t pid, void* old_ptr, size_t old_bytes, siz
     cfg->linmem_committed_pages = need_pages;
     linmem_slot_set_owner((uint32_t)slot, pid);
     /* map_auto scan ceiling = the app's DECLARED size, NOT the 2 GiB slot.  The
-     * slot's capacity is 2 GiB (commit-on-demand growth), but the shmem-window
+     * slot's capacity is 2 GiB (commit-on-demand growth), but the overlay-window
      * scan must stay within what the app declared/can commit — a 2 GiB ceiling
      * would trip map_auto's 2 MiB low_guard and push a window past the app's
      * module max (fault).  This mirrors the ceiling that worked pre-VA-slot. */

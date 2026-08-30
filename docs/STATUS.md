@@ -208,6 +208,24 @@ linked feature documents for rationale and rollout plans.
 
 ### Host Calls and Capabilities
 
+- Shared memory is GONE. The eight `shmem_*` host calls, both runtime
+  implementations, the native-driver `shmem_*` hooks, the kernel `mm_shared_*`
+  registry and `MEM_REGION_SHARED` are all removed; sharing is the
+  transfer-buffer registry's job, where the CLIENT owns the buffer and lends an
+  explicit READ/WRITE borrow. The window surface protocol moved with it:
+  `GFX_IPC_GET_SURFACE_SPEC` / `ATTACH_SURFACE` / `DETACH_SURFACE` replace
+  `ALLOC_SHARED_BUFFER` / `RELEASE_SHARED_BUFFER`, a present's damage list rides
+  inside the attached surface at a byte offset, and the font calls carry a
+  `font_raster_request_t` descriptor in a caller-owned buffer. No client
+  performs a write-back before presenting: `xfer_buffer_map` places the
+  buffer's own frames in linear memory on BOTH runtimes
+  (`tests/test_xfer_map_alias.py` pins it), which is what made the old
+  per-present full-window self-copy removable.
+- Host-call ids are no longer written in `abi/hostcalls.yaml`. The id IS the
+  position (ring-3 syscall number and AOT rebind index), so the generator
+  assigns it from list order; order is therefore the ABI, and removing a call is
+  just deleting its entry.
+
 - The three `dma_*` host calls decide nothing per runtime. `hostcall_dma.c`
   holds the whole policy decision — argument signs, `POLICY_ACTION_DMA_BUFFER`,
   the granted direction, the per-mapping byte budget, and the window the
@@ -636,7 +654,7 @@ linked feature documents for rationale and rollout plans.
   returned, compared and decoded as-is — `WASMOS_ERR_MAKE` / `_DOMAIN_OF` /
   `_CODE_OF` are the only places the sign is applied or removed, and
   `wasmos_frame_t`'s unsigned 16-bit fields are the wire encoding of a chain
-  frame. Migrated onto it so far: SHMEM, FS and PROC (their `*_ERR_*` enums are
+  frame. Migrated onto it so far: LINMEM, FS and PROC (their `*_ERR_*` enums are
   gone), plus every bare `-1` that left a service in an IPC reply code arg. Bare
   `-1` survives in internal helper returns, where the `quality` lint flags it
   advisorily.
@@ -1078,8 +1096,8 @@ linked feature documents for rationale and rollout plans.
   are shipped: idle-spin fixes, serial RX via IRQ4 into the serial-bound slot,
   push-based CLI input, a single loadable-keymap decoder, and (phase 4) kernel
   klog into vt-1. klog rides a VT-owned SPSC ring (`wasmos/ringbuf.h`) overlaid
-  on a `BUFFER_KIND_TRANSFER` xfer-buffer — the socket-ring transport, not raw
-  shmem — registered with the kernel via `klog_register_ring`; `serial_write`
+  on a `BUFFER_KIND_TRANSFER` xfer-buffer — the socket-ring transport —
+  registered with the kernel via `klog_register_ring`; `serial_write`
   publishes into it additively (legacy `console_ring` + fbpci drain retained for
   early-boot on-screen klog, retired in phase 5). The VT blocks on
   `wasmos_ipc_select_one` and drains the ring on each wake (a timed select set
@@ -1597,16 +1615,16 @@ linked feature documents for rationale and rollout plans.
   itself background and stops consuming keys while the compositor owns tty0), and
   the two-player host accept pairing (the host handshake is a non-blocking
   doorbell path and the QEMU commands pass `-cpu max` so WARP's `POPCNT`-based
-  ring pow2 check no longer `#UD`s). A load bug to note: the WARP shmem mapper
+  ring pow2 check no longer `#UD`s). A load bug to note: the overlay mapper
   places a mapped window just above currently-committed linear memory, so a large
-  app-owned back buffer must be touched/committed before `shmem_map_auto` or the
-  shared window overlaps it (Tetris commits `BACK` before mapping).
+  app-owned back buffer must be touched/committed before the surface is mapped or
+  the window overlaps it (Tetris commits `BACK` before mapping).
 
 ## Current Gaps and Guardrails
 
 - Shared WARP linear-memory updates need a real cross-CPU TLB shootdown; the
   current fault-path retry is an interim SMP safeguard.
-- WARP still has a few hostcall refinements pending (SMP sync, shmem auto-map
+- WARP still has a few hostcall refinements pending (SMP sync, overlay-window
   growth, PAT, irq.configure split), no working multithreaded WASM, and an
   internal shim used to access a vendored runtime pointer. Do not modify
   `libs/warp` or `libs/wasm3` directly.

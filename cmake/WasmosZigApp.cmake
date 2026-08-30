@@ -125,7 +125,7 @@ function(wasmos_add_zig_wasm_app)
 
   # -Xlinker --initial-memory=N sets the WASM binary's declared initial memory
   # pages.  WARP's ActiveMemoryManager derives allowedLinMemPages_ from it;
-  # without it a Zig freestanding binary declares one page (64 KiB) and a shmem
+  # without it a Zig freestanding binary declares one page (64 KiB) and a buffer
   # probe beyond that throws OutOfBounds at runtime -- which reaches C++ code with
   # no handler and panics the kernel, so this is not a tuning knob.
   #

@@ -95,7 +95,7 @@ lower)` appends a frame; `unwrap`/`root`/`is`/`as` inspect the chain (max depth
   Retire by leaving the slot and marking it deprecated in its `description`.
 - Pick the right axis: transport = the call/mechanism failed; a domain code = a
   named *operation* failure. Do not add operation errors to `transport`.
-- Migrating the legacy `PROC_*`/`FS_ERR_*`/`SHMEM_*` call sites and the bare
+- Migrating the legacy `PROC_*`/`FS_ERR_*` call sites and the bare
   `return -1;` backlog onto these packed codes is **Phase 4** — the vocabulary
   exists but is not yet wired through the OS, so a code-only change needs no boot
   test.

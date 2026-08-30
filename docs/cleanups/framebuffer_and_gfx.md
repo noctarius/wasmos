@@ -13,12 +13,12 @@ Where the time actually goes (ranked)
 
 1. Text: no caching anywhere, IPC per string per frame — the dominant cost
 
-Every ui_draw_text_clip call does, unconditionally, every frame: copy string to shmem + flush, a synchronous
+Every ui_draw_text_clip call does, unconditionally, every frame: copy the string into the lent text buffer, a synchronous
 FONT_IPC_MEASURE_GLYPH round-trip, then a synchronous FONT_IPC_RASTER_GLYPH_INTO round-trip + mask refresh (libui.h:
 493–552). Buttons add a third round-trip for centering (libui_button.h:26). There is no glyph cache, no string→mask
 cache, and no "text unchanged" check in libui — and the font service has no cache either: it re-runs
 stbtt_GetCodepointBitmapBox/stbtt_MakeCodepointBitmap for every character of every request and does
-shmem_map/shmem_unmap per request (font_service.zig:613–729). A completely static label pays full TrueType rasterization
+a borrow map/unmap per request (font_service.zig). A completely static label pays full TrueType rasterization
 plus two cross-process round-trips per frame.
 
 Worse, list and tree views render all items, including off-screen ones — the loops in libui_list_view.h:39–47 and
@@ -28,7 +28,7 @@ for invisible rows.
 
 2. Redraw-everything policies defeat the damage machinery that already exists
 
-- libui has a single global dirty bool. Any change → full relayout, full-tree repaint, shmem_flush of the entire
+- libui has a single global dirty bool. Any change → full relayout, full-tree repaint of the entire
   buffer (~1.2 MB at 640×480), and PRESENT_WINDOW with damage_count=0 = full-window damage (libui.h:1878–1904). The
   damage-rect ABI exists (gfx_ipc.h:56–57) and the compositor honors it — libui just never uses it.
 - Pointer release marks dirty unconditionally even on a miss (libui.h:1774), so every click = 2 full redraws; every drag
@@ -51,7 +51,7 @@ planned async-IPC/futures work targets.
 
 - draw_window_buffer copies window content pixel-by-pixel even when formats match, because of the per-pixel
   passthrough_zero branch and | 0xFF000000 (gfx_compositor.zig:2267–2301). So every composited pixel is copied twice per
-  frame (shmem→backbuffer per-pixel, backbuffer→FB via memcpy), plus a background fill_rect with no occlusion culling.
+  frame (surface→backbuffer per-pixel, backbuffer→FB via memcpy), plus a background fill_rect with no occlusion culling.
 - libui's text blend does a 6-way bounds test and divide-by-255 read-modify-write per pixel (libui.h:575–590, 394–407);
   parent/child/row backgrounds overdraw the same pixels 3-deep.
 - All bulk copies go through an "intentionally simple" scalar 8-byte memcpy (kernel libc.c:45–70, services string.c:
@@ -71,7 +71,7 @@ What's not the problem (worth knowing)
   14–18, 567–584), but the default stdvga BAR is guest RAM, so WB is actually the fastest choice on this target. On real
   hardware WB scanout would be wrong and you'd need PAT/WC — worth a TODO, not a today-fix.
 - The backbuffer→scanout blit is already row/bulk memcpy with a full-width fast path (gfx_compositor.zig:2381–2394),
-  buffer shmem mappings are cached at alloc time, and damage plumbing exists end-to-end. The bones are good.
+  surface mappings are cached at attach time, and damage plumbing exists end-to-end. The bones are good.
 - One QEMU caveat: with -nographic (default test targets) there's no display listener, so FB write cost is invisible —
   perf only shows in run-qemu-ui, where full-surface writes force QEMU to reconvert the whole dirty surface each ~30 Hz
   refresh. Small damage rects help QEMU too, not just the guest.
@@ -81,12 +81,12 @@ Improvement roadmap (ranked by impact ÷ effort)
 
 1. Glyph atlas + text caching — biggest single win. Client-side: cache rendered masks keyed by (text, font_px),
    invalidate on set_text; skip re-copy/flush of unchanged strings. Server-side: per-(font,px) glyph bitmap cache, or
-   better, a glyph atlas delivered once via shmem so steady-state text drawing needs zero IPC. Also stop recomputing
+   better, a glyph atlas lent once so steady-state text drawing needs zero IPC. Also stop recomputing
    metrics twice per raster request (font_service.zig:675).
 2. Visible-range culling in list/tree views — compute first/last visible row from scroll_y/item_h; add a rect-vs-clip
    early return at the top of ui_draw_text_clip. Turns O(total items) IPC into O(visible).
 3. Use the damage-rect ABI end-to-end. libui: per-component dirty flags, accumulate a damage union during render, pass
-   it to PRESENT_WINDOW, and restrict shmem_flush to damaged rows. Compositor: replace the single union rect with a
+   it to PRESENT_WINDOW. Compositor: replace the single union rect with a
    small fixed damage list (4–8 rects); stop request_repaint_full() on click/focus (only the chrome of the two affected
    windows changes); drop libui's unconditional dirty-on-release.
 4. Row-memcpy fast path in draw_window_buffer. Define an alpha contract (clients write opaque pixels, or the X channel
@@ -95,7 +95,7 @@ Improvement roadmap (ranked by impact ÷ effort)
    lower windows skip covered regions.
 5. Fix the event loops. Short term: drain all pending events, render once (the AssemblyScript wrapper's pump(limit=8)
    already does this); sched_yield on EVENT_NONE; coalesce drag events. Medium term: your planned async-IPC/futures
-   rework, plus either event push to a per-client shmem event ring or a blocking poll — this removes both the idle CPU
+   rework, plus either event push to a per-client event ring or a blocking poll — this removes both the idle CPU
    burn and the per-event round-trip.
 6. One good rep movsb memcpy, shared by kernel libc and services libc (mirroring the existing rep stosb memset
    rationale, and per the keep-libc-in-sync rule), deleting the duplicated nd_memcpy/byte-loop nd_memset in render.c and

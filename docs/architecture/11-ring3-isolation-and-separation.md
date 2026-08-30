@@ -356,9 +356,6 @@ strict-ring3`). Expected passing markers (in serial output):
 - `[test] ring3 fault ac reason ok`
 
 **Shared memory:**
-- `[test] ring3 shmem owner deny ok`
-- `[test] ring3 shmem grant allow ok`
-- `[test] ring3 shmem misuse matrix ok`
 
 **Threading:**
 - `[test] ring3 thread create syscall ok`

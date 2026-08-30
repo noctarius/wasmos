@@ -25,9 +25,10 @@ lose those types under codegen — instead --verify-source guards it against dri
 
 See docs/architecture/34-abi-idl-and-error-model.md.
 
-ID guarantees enforced by the Model: ids unique, dense 0..N-1, ordered, HC
-symbols unique. Adding is append-only; removing renumbers (see the ID RULES in
-abi/hostcalls.yaml).
+IDs are ASSIGNED FROM LIST ORDER, not written in the IDL: position is the
+ring-3 syscall number and the AOT rebind index, so deriving it makes ids unique,
+dense and ordered by construction. Adding is append-only; removing is just a
+deletion (see the ID RULES in abi/hostcalls.yaml). HC symbols must be unique.
 
 Usage:
     gen_abi_hostcalls.py [--check] [--verify-source]
@@ -119,23 +120,23 @@ class Model:
         self.hostcalls = idl["hostcalls"]
         self.extra = idl.get("extra", []) or []
 
-        by_id = {}
+        # The id IS the position: it is the ring-3 syscall number (RAX = 0x100 +
+        # id) and the AOT rebind index, and both of those tables are
+        # position-coupled to this list. Deriving it from the order makes that
+        # coupling structural instead of clerical -- ids cannot collide, cannot
+        # gap, and cannot disagree with the order, so removing an entry is just
+        # deleting it. A hand-written id could only ever restate the position or
+        # be wrong.
         for e in self.hostcalls:
-            if "id" not in e:
-                die(f"host call '{e.get('name')}' has no id")
-            i = int(e["id"])
-            if i in by_id:
-                die(f"duplicate id {i}: '{by_id[i].get('name')}' and '{e.get('name')}'")
-            by_id[i] = e
-        n = len(self.hostcalls)
-        missing = [i for i in range(n) if i not in by_id]
-        if missing:
-            die(
-                f"id space has gaps (not dense 0..{n - 1}): missing {missing}. "
-                f"Removing a host call means renumbering the entries after it."
-            )
-        self.ordered = [by_id[i] for i in range(n)]
-        self.count = n
+            if "id" in e:
+                die(
+                    f"host call '{e.get('name')}' carries an explicit id; ids are "
+                    f"assigned from list order. Delete the id: line."
+                )
+        self.ordered = list(self.hostcalls)
+        for i, e in enumerate(self.ordered):
+            e["id"] = i
+        self.count = len(self.ordered)
 
         syms = {}
         for e in self.ordered:

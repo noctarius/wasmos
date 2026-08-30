@@ -62,7 +62,12 @@ extern "C" {
 void* malloc(size_t size);
 void free(void* ptr);
 
-/* UI_PAGE_SIZE      shmem granularity: every shared mapping libui creates is
+/* Damage rectangles a single present may carry; matches the compositor's own
+ * GFX_MAX_DAMAGE_RECTS bound. The array lives at ctx->damage_offset inside the
+ * attached surface. */
+#define UI_MAX_DAMAGE_RECTS 256
+
+/* UI_PAGE_SIZE      mapping granularity: every shared mapping libui creates is
  *                   rounded up to a multiple of this, matching the kernel's
  *                   4 KiB page.
  * UI_REQ_BASE       first value of ctx->req_id. Request ids only have to be
@@ -298,10 +303,10 @@ typedef struct {
      * reconciled on the next ui_loop_drain() by ui_menu_item_sync_popup(). */
     int32_t dropdown_open;
     /* popup window — managed by ui_menu_item_sync_popup (libui_menu_item.h) */
-    int32_t popup_win_id;   /* 0 when no popup window exists */
-    int32_t popup_buf_id;   /* compositor shared-buffer id backing popup_base */
-    int32_t popup_shmem_id; /* shmem id of that buffer, mapped at popup_base */
-    uint8_t* popup_base;    /* BGRA32 pixels, popup_w * popup_h * 4 bytes */
+    int32_t popup_win_id;    /* 0 when no popup window exists */
+    int32_t popup_buf_id;    /* compositor shared-buffer id backing popup_base */
+    int32_t popup_borrow_id; /* the compositor's borrow of that surface */
+    uint8_t* popup_base;     /* BGRA32 pixels, popup_w * popup_h * 4 bytes */
     int32_t popup_w;
     int32_t popup_h;
     /* popup_hovered is the row index under the pointer, -1 for none;
@@ -338,11 +343,12 @@ typedef struct ui_context {
     int32_t window_id;    /* compositor window id, 0 before ui_init succeeds */
     int32_t width;        /* content size in pixels; also the framebuffer stride in pixels */
     int32_t height;
-    int32_t stride_bytes; /* bytes per row as reported by the compositor */
-    int32_t buffer_id;    /* compositor shared-buffer id currently presented */
-    int32_t shmem_id;     /* shmem id of that buffer */
-    uint8_t* mapped_base; /* BGRA32 pixels; invalidated by every ui_realloc_buffer() */
-    int32_t pointer_x;    /* last pointer position, clamped into the window */
+    int32_t stride_bytes;  /* bytes per row as reported by the compositor */
+    int32_t buffer_id;     /* transfer buffer THIS CLIENT owns and lends to the compositor */
+    int32_t borrow_id;     /* the compositor's borrow of it, needed to detach */
+    int32_t damage_offset; /* byte offset of the damage-rect array inside that buffer */
+    uint8_t* mapped_base;  /* BGRA32 pixels; invalidated by every ui_realloc_buffer() */
+    int32_t pointer_x;     /* last pointer position, clamped into the window */
     int32_t pointer_y;
     uint32_t pointer_buttons;     /* button mask from the last pointer event; bit 0 is left */
     uint32_t pointer_drag_button; /* button held during an in-progress drag, 0 when none */
@@ -357,13 +363,16 @@ typedef struct ui_context {
     int32_t font_endpoint;
     int32_t font_handle; /* open font handle; > 0 once ui_init_font() succeeded */
     int32_t font_px;     /* requested pixel size, also used as the text line height */
-    /* Scratch shmem regions shared with the font service: the UTF-8 string to
-     * measure/raster, and the 8-bit coverage mask it writes back. Both grow on
-     * demand via ui_font_ensure_shmem_buffer(). */
-    int32_t font_text_shmem_id;
+    /* Scratch transfer buffers lent to the font service: the UTF-8 string to
+     * measure/raster, and the 8-bit coverage mask it writes back. This client
+     * owns both and grows them on demand via ui_font_ensure_buffer(). The text
+     * buffer is lent READ, the mask buffer WRITE, since the service fills it. */
+    int32_t font_text_buffer_id;
+    int32_t font_text_borrow_id;
     uint8_t* font_text_ptr;
     int32_t font_text_cap;
-    int32_t font_mask_shmem_id;
+    int32_t font_mask_buffer_id;
+    int32_t font_mask_borrow_id;
     uint8_t* font_mask_ptr;
     int32_t font_mask_cap;
 
@@ -636,28 +645,44 @@ static inline int32_t ui_utf8_prev_boundary(const char* s, int32_t len) {
     return i;
 }
 
-/* Make sure *shmem_id names a mapped shmem region of at least `need_bytes`,
- * creating and mapping a new one (rounded up to whole UI_PAGE_SIZE pages) when
- * the current one is absent or too small. On success the three out-parameters
- * describe the region and 0 is returned; on failure they are left untouched and
- * -1 is returned. Growing replaces the region, so any pointer previously read
- * out of *mapped_ptr is stale and the old contents are not carried over. */
-static inline int32_t ui_font_ensure_shmem_buffer(int32_t* shmem_id, uint8_t** mapped_ptr,
-                                                  int32_t* cap, int32_t need_bytes) {
-    if (!shmem_id || !mapped_ptr || !cap || need_bytes <= 0)
+/* Make sure *buffer_id names a mapped transfer buffer of at least `need_bytes`,
+ * lent to `font_endpoint` with `grant_flags`, acquiring a new one (rounded up to
+ * whole UI_PAGE_SIZE pages) when the current one is absent or too small. This
+ * client OWNS the buffer; the font service is a transient grantee. On success
+ * the out-parameters describe it and 0 is returned; on failure they are left
+ * untouched and -1 is returned. Growing replaces the buffer, so any pointer
+ * previously read out of *mapped_ptr is stale and the old contents are gone. */
+static inline int32_t ui_font_ensure_buffer(int32_t font_endpoint, int32_t* buffer_id,
+                                            int32_t* borrow_id, uint8_t** mapped_ptr, int32_t* cap,
+                                            int32_t need_bytes, int32_t grant_flags) {
+    if (!buffer_id || !borrow_id || !mapped_ptr || !cap || need_bytes <= 0)
         return -1;
-    if (*shmem_id > 0 && *mapped_ptr && *cap >= need_bytes)
+    if (*buffer_id > 0 && *mapped_ptr && *cap >= need_bytes)
         return 0;
     const int32_t pages = (need_bytes + (UI_PAGE_SIZE - 1)) / UI_PAGE_SIZE;
     const int32_t bytes = pages * UI_PAGE_SIZE;
-    const int32_t new_id = wasmos_shmem_create(pages, 0);
+    const int32_t new_id = wasmos_xfer_buffer_acquire(bytes);
     if (new_id <= 0)
         return -1;
-    const int32_t mapped = wasmos_shmem_map_auto(new_id, bytes);
-    if (mapped < 0)
+    const int32_t new_borrow = wasmos_xfer_buffer_borrow(font_endpoint, new_id, grant_flags);
+    if (new_borrow <= 0) {
+        (void)wasmos_xfer_buffer_release(new_id);
         return -1;
-    /* TODO(libui-font-shmem): old SHMEM IDs are not reclaimed on growth. */
-    *shmem_id = new_id;
+    }
+    const int32_t mapped = wasmos_xfer_buffer_map(new_id);
+    if (mapped < 0) {
+        (void)wasmos_xfer_buffer_release(new_id);
+        return -1;
+    }
+    /* Growing replaces the buffer, so the old one is released here rather than
+     * leaked; the release cascade-revokes its borrow, which is why no explicit
+     * unborrow is needed. */
+    if (*buffer_id > 0) {
+        (void)wasmos_xfer_buffer_unmap(*buffer_id);
+        (void)wasmos_xfer_buffer_release(*buffer_id);
+    }
+    *buffer_id = new_id;
+    *borrow_id = new_borrow;
     *mapped_ptr = ptr_cast(uint8_t, (uint32_t)mapped);
     *cap = bytes;
     return 0;
@@ -693,24 +718,37 @@ static inline int32_t ui_font_measure_text(ui_context_t* ctx, const char* text, 
             *out_adv = 0;
         return 0;
     }
-    if (ui_font_ensure_shmem_buffer(
-            &ctx->font_text_shmem_id, &ctx->font_text_ptr, &ctx->font_text_cap, text_len + 1) != 0)
+    /* The run is preceded by a raster descriptor so one buffer serves both
+     * calls; measure only needs the text, which starts at the same offset. */
+    const int32_t text_off = (int32_t)sizeof(font_raster_request_t);
+    if (ui_font_ensure_buffer(ctx->font_endpoint,
+                              &ctx->font_text_buffer_id,
+                              &ctx->font_text_borrow_id,
+                              &ctx->font_text_ptr,
+                              &ctx->font_text_cap,
+                              text_off + text_len + 1,
+                              WASMOS_BUFFER_GRANT_READ) != 0)
         return -1;
-    memcpy(ctx->font_text_ptr, text, (size_t)text_len);
-    ctx->font_text_ptr[text_len] = '\0';
-    if (wasmos_shmem_flush(
-            ctx->font_text_shmem_id, addr_cast(int32_t, ctx->font_text_ptr), text_len + 1) != 0)
-        return -1;
+    memcpy(ctx->font_text_ptr + text_off, text, (size_t)text_len);
+    ctx->font_text_ptr[text_off + text_len] = '\0';
+    /* No write-back: the mapping IS the buffer's frames on both runtimes
+     * (tests/test_xfer_map_alias.py). */
+
+    font_raster_request_t* desc = (font_raster_request_t*)ctx->font_text_ptr;
+    desc->handle_id = ctx->font_handle;
+    desc->text_len = text_len;
+    desc->mask_buffer_id = 0;
+    desc->mask_borrow_id = 0;
 
     wasmos_ipc_message_t reply;
     if (wasmos_ipc_call(ctx->font_endpoint,
                         ctx->font_reply_endpoint,
                         FONT_IPC_MEASURE_GLYPH_REQ,
                         ctx->req_id++,
-                        ctx->font_handle,
-                        ctx->font_text_shmem_id,
-                        text_len,
+                        ctx->font_text_buffer_id,
                         0,
+                        text_off + text_len + 1,
+                        ctx->font_text_borrow_id,
                         &reply) != 0) {
         return -1;
     }
@@ -755,27 +793,39 @@ static inline int32_t ui_font_measure_and_raster_text(ui_context_t* ctx, const c
     const int32_t bytes = (*out_w) * (*out_h);
     if (bytes <= 0)
         return -1;
-    if (ui_font_ensure_shmem_buffer(
-            &ctx->font_mask_shmem_id, &ctx->font_mask_ptr, &ctx->font_mask_cap, bytes) != 0)
+    /* The mask is lent WRITE: the service fills it, this client reads it. */
+    if (ui_font_ensure_buffer(ctx->font_endpoint,
+                              &ctx->font_mask_buffer_id,
+                              &ctx->font_mask_borrow_id,
+                              &ctx->font_mask_ptr,
+                              &ctx->font_mask_cap,
+                              bytes,
+                              WASMOS_BUFFER_GRANT_WRITE) != 0)
         return -1;
+
+    const int32_t text_off = (int32_t)sizeof(font_raster_request_t);
+    font_raster_request_t* desc = (font_raster_request_t*)ctx->font_text_ptr;
+    desc->handle_id = ctx->font_handle;
+    desc->text_len = text_len;
+    desc->mask_buffer_id = ctx->font_mask_buffer_id;
+    desc->mask_borrow_id = ctx->font_mask_borrow_id;
 
     wasmos_ipc_message_t reply;
     if (wasmos_ipc_call(ctx->font_endpoint,
                         ctx->font_reply_endpoint,
                         FONT_IPC_RASTER_GLYPH_INTO_REQ,
                         ctx->req_id++,
-                        ctx->font_handle,
-                        ctx->font_text_shmem_id,
-                        text_len,
-                        ctx->font_mask_shmem_id,
+                        ctx->font_text_buffer_id,
+                        0,
+                        text_off + text_len + 1,
+                        ctx->font_text_borrow_id,
                         &reply) != 0) {
         return -1;
     }
     if (reply.type != FONT_IPC_RESP || reply.arg0 != WASMOS_ERR_NONE)
         return -1;
-    if (wasmos_shmem_refresh(
-            ctx->font_mask_shmem_id, addr_cast(int32_t, ctx->font_mask_ptr), bytes) != 0)
-        return -1;
+    /* No read-back: the mask mapping IS the buffer's frames, so what the service
+     * wrote through its borrow is already visible here. */
     return 0;
 }
 
@@ -837,7 +887,14 @@ static inline int32_t ui_measure_text_width(ui_context_t* ctx, const char* text)
  * when a GFX_IPC_RESP or GFX_IPC_ERROR message came back — including an error
  * reply, whose status is in out_raw->arg0 — and -1 when the call itself failed
  * or the reply was some other message type. Callers must therefore check the
- * status separately; `out_raw` is only valid on a 0 return. */
+ * status separately; `out_raw` is only valid on a 0 return.
+ *
+ * TODO: this -1 is the root of libui's 0/-1 convention, which every ui_* entry
+ * point below inherits and which loses the reason a request failed. Converting
+ * it to the packed codes in abi/errors.yaml means changing ui_send_gfx_raw,
+ * ui_send_gfx, and the ~70 ui_* returns that forward their result, so it is its
+ * own change rather than a rider on a caller's. ui_window_set_title already
+ * returns packed codes and is the shape the rest should take. */
 static inline int32_t ui_send_gfx_raw(int32_t gfx_ep, int32_t reply_ep, int32_t req_id,
                                       int32_t opcode, int32_t arg0, int32_t arg1, int32_t arg2,
                                       int32_t arg3, wasmos_ipc_message_t* out_raw) {
@@ -1363,18 +1420,48 @@ static inline int32_t ui_component_text_len(const ui_component_t* c) {
     return td->text_len;
 }
 
-/* Commit a freshly allocated framebuffer into the context. `mapped_ptr` is the
- * guest address the shmem mapping returned. On the first allocation the pointer
+/* Withdraw and release the surface the context currently lends, if any.
+ *
+ * The order is the protocol's: DETACH first, because releasing under a live
+ * borrow leaves the compositor reading revoked frames -- there is no unborrow
+ * notification -- and only the acknowledged detach tells it to drop its
+ * mapping. That mapping comes out of a pool shared by every native service, so
+ * skipping the detach costs more than this client. */
+static inline void ui_release_surface(ui_context_t* ctx) {
+    int32_t status = 0;
+    if (!ctx || ctx->buffer_id <= 0)
+        return;
+    (void)ui_send_gfx(ctx->gfx_endpoint,
+                      ctx->reply_endpoint,
+                      ctx->req_id++,
+                      GFX_IPC_DETACH_SURFACE,
+                      ctx->window_id,
+                      ctx->buffer_id,
+                      0,
+                      0,
+                      &status,
+                      0,
+                      0,
+                      0);
+    (void)wasmos_xfer_buffer_unmap(ctx->buffer_id);
+    (void)wasmos_xfer_buffer_release(ctx->buffer_id);
+    ctx->buffer_id = 0;
+    ctx->borrow_id = 0;
+    ctx->mapped_base = NULL;
+}
+
+/* Commit a freshly acquired surface into the context. `mapped_ptr` is the guest
+ * address xfer_buffer_map returned. On the first allocation the pointer
  * position is centred in the new window; afterwards the caller's saved position
  * is restored, so a resize does not teleport the cursor. */
 __attribute__((noinline)) static void
-ui_apply_realloc_state(ui_context_t* ctx, int32_t new_buffer_id, int32_t new_shmem_id,
+ui_apply_realloc_state(ui_context_t* ctx, int32_t new_buffer_id, int32_t new_borrow_id,
                        int32_t new_stride, int32_t new_w, int32_t new_h, int32_t mapped_ptr,
                        int32_t first_alloc, int32_t prev_ptr_x, int32_t prev_ptr_y) {
     if (!ctx)
         return;
     ctx->buffer_id = new_buffer_id;
-    ctx->shmem_id = new_shmem_id;
+    ctx->borrow_id = new_borrow_id;
     ctx->stride_bytes = new_stride;
     ctx->width = new_w;
     ctx->height = new_h;
@@ -1395,7 +1482,7 @@ ui_apply_realloc_state(ui_context_t* ctx, int32_t new_buffer_id, int32_t new_shm
  * contents are undefined until painted. Blocks for up to three compositor round
  * trips. */
 static inline int32_t ui_realloc_buffer(ui_context_t* ctx, int32_t new_w, int32_t new_h) {
-    int32_t status = 0, new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
+    int32_t status = 0, new_buffer_id = 0, new_borrow_id = 0, new_stride = 0;
     if (!ctx || new_w <= 0 || new_h <= 0)
         return -1;
     if (ctx->width == new_w && ctx->height == new_h && ctx->mapped_base)
@@ -1403,57 +1490,65 @@ static inline int32_t ui_realloc_buffer(ui_context_t* ctx, int32_t new_w, int32_
     const int32_t prev_ptr_x = ctx->pointer_x;
     const int32_t prev_ptr_y = ctx->pointer_y;
     const int32_t first_alloc = (ctx->mapped_base == NULL);
+    int32_t surface_bytes = 0;
     if (ui_send_gfx(ctx->gfx_endpoint,
                     ctx->reply_endpoint,
                     ctx->req_id++,
-                    GFX_IPC_ALLOC_SHARED_BUFFER,
+                    GFX_IPC_GET_SURFACE_SPEC,
                     ctx->window_id,
-                    new_w,
-                    new_h,
+                    0,
+                    0,
                     0,
                     &status,
-                    &new_buffer_id,
-                    &new_shmem_id,
-                    &new_stride) != 0 ||
-        status != WASMOS_ERR_NONE) {
+                    &new_stride,
+                    &surface_bytes,
+                    0) != 0 ||
+        status != WASMOS_ERR_NONE || surface_bytes <= 0) {
         return -1;
     }
-    const int32_t bytes = (new_stride * new_h + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
-    const int32_t mapped_ptr = wasmos_shmem_map_auto(new_shmem_id, bytes);
+    /* The damage list rides in the same buffer, past the pixels: the compositor
+     * already holds this surface mapped, so a present's damage needs no second
+     * buffer, borrow or mapping. */
+    const int32_t damage_bytes = UI_MAX_DAMAGE_RECTS * (int32_t)sizeof(gfx_rect_t);
+    new_buffer_id = wasmos_xfer_buffer_acquire(surface_bytes + damage_bytes);
+    if (new_buffer_id <= 0)
+        return -1;
+    new_borrow_id =
+        wasmos_xfer_buffer_borrow(ctx->gfx_endpoint, new_buffer_id, WASMOS_BUFFER_GRANT_READ);
+    if (new_borrow_id <= 0) {
+        (void)wasmos_xfer_buffer_release(new_buffer_id);
+        return -1;
+    }
+    const int32_t mapped_ptr = wasmos_xfer_buffer_map(new_buffer_id);
     if (mapped_ptr < 0) {
-        (void)ui_send_gfx(ctx->gfx_endpoint,
-                          ctx->reply_endpoint,
-                          ctx->req_id++,
-                          GFX_IPC_RELEASE_SHARED_BUFFER,
-                          new_buffer_id,
-                          0,
-                          0,
-                          0,
-                          &status,
-                          0,
-                          0,
-                          0);
+        (void)wasmos_xfer_buffer_release(new_buffer_id);
         return -1;
     }
-    if (ctx->shmem_id > 0)
-        (void)wasmos_shmem_unmap(ctx->shmem_id);
-    if (ctx->buffer_id > 0) {
-        (void)ui_send_gfx(ctx->gfx_endpoint,
-                          ctx->reply_endpoint,
-                          ctx->req_id++,
-                          GFX_IPC_RELEASE_SHARED_BUFFER,
-                          ctx->buffer_id,
-                          0,
-                          0,
-                          0,
-                          &status,
-                          0,
-                          0,
-                          0);
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_ATTACH_SURFACE,
+                    ctx->window_id,
+                    new_buffer_id,
+                    new_borrow_id,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0) != 0 ||
+        status != WASMOS_ERR_NONE) {
+        (void)wasmos_xfer_buffer_unmap(new_buffer_id);
+        (void)wasmos_xfer_buffer_release(new_buffer_id);
+        return -1;
     }
+    /* The old surface is withdrawn only after the new one is attached, so the
+     * window is never without one. DETACH is refused while the surface is still
+     * the window's current buffer, which the PRESENT of the new one clears. */
+    ui_release_surface(ctx);
+    ctx->damage_offset = surface_bytes;
     ui_apply_realloc_state(ctx,
                            new_buffer_id,
-                           new_shmem_id,
+                           new_borrow_id,
                            new_stride,
                            new_w,
                            new_h,
@@ -1587,48 +1682,63 @@ fail:
     return -1;
 }
 
-/* Set the window title shown in the compositor chrome and task list. Returns 0
- * on success and -1 on failure, including a `title` that is empty or longer
- * than 47 bytes — the limit is a refusal, not a truncation. The string is
- * handed over through a one-page shmem region that is unmapped again before
- * returning, so the caller keeps ownership of `title`. Blocks for one
- * compositor round trip. */
+/* Set the window title shown in the compositor chrome and task list. Returns
+ * WASMOS_ERR_NONE on success and a packed error code from abi/errors.yaml on
+ * failure, including a `title` that is empty or longer than 47 bytes — the limit
+ * is a refusal, not a truncation. A failure to acquire, borrow, or map the
+ * transfer buffer propagates that primitive's own code rather than restating it
+ * as a gfx one. The string is handed over through a one-page transfer buffer
+ * this client owns and lends READ to the compositor; it is released before
+ * returning, so the caller keeps ownership of `title`. Blocks for one compositor
+ * round trip. */
 static inline int32_t ui_window_set_title(ui_context_t* ctx, const char* title) {
     if (!ctx || !title || ctx->gfx_endpoint <= 0 || ctx->window_id <= 0)
-        return -1;
+        return WASMOS_ERR_GFX_INVALID;
     const int32_t len = (int32_t)strlen(title);
     if (len <= 0 || len > 47)
-        return -1;
-    const int32_t shmem_id = wasmos_shmem_create(1, 0);
-    if (shmem_id <= 0)
-        return -1;
-    const int32_t mapped = wasmos_shmem_map_auto(shmem_id, UI_PAGE_SIZE);
+        return WASMOS_ERR_GFX_INVALID;
+    /* The title travels in a transfer buffer this client OWNS and lends READ to
+     * the compositor for the call: the client of an exchange owns the buffer and
+     * the server is a transient grantee (docs/architecture/12-dma-transfers.md).
+     * Releasing at the end cascade-revokes that borrow, so no path leaks one.
+     *
+     * No write-back after the copy -- the mapping IS the buffer's frames on both
+     * runtimes (tests/test_xfer_map_alias.py). */
+    const int32_t buffer_id = wasmos_xfer_buffer_acquire(UI_PAGE_SIZE);
+    if (buffer_id <= 0)
+        return buffer_id < 0 ? buffer_id : WASMOS_ERR_GFX_IO;
+    const int32_t borrow_id =
+        wasmos_xfer_buffer_borrow(ctx->gfx_endpoint, buffer_id, WASMOS_BUFFER_GRANT_READ);
+    if (borrow_id <= 0) {
+        (void)wasmos_xfer_buffer_release(buffer_id);
+        return borrow_id < 0 ? borrow_id : WASMOS_ERR_GFX_IO;
+    }
+    const int32_t mapped = wasmos_xfer_buffer_map(buffer_id);
     if (mapped < 0) {
-        (void)wasmos_shmem_unmap(shmem_id);
-        return -1;
+        (void)wasmos_xfer_buffer_release(buffer_id);
+        return mapped;
     }
     uint8_t* ptr = ptr_cast(uint8_t, (uint32_t)mapped);
     memcpy(ptr, title, (size_t)len);
     ptr[len] = '\0';
-    if (wasmos_shmem_flush(shmem_id, addr_cast(int32_t, ptr), len + 1) != 0) {
-        (void)wasmos_shmem_unmap(shmem_id);
-        return -1;
-    }
     int32_t status = 0;
-    ui_send_gfx(ctx->gfx_endpoint,
-                ctx->reply_endpoint,
-                ctx->req_id++,
-                GFX_IPC_SET_WINDOW_TITLE,
-                ctx->window_id,
-                shmem_id,
-                len,
-                0,
-                &status,
-                0,
-                0,
-                0);
-    (void)wasmos_shmem_unmap(shmem_id);
-    return (status == WASMOS_ERR_NONE) ? 0 : -1;
+    /* A transport failure leaves `status` untouched, so it cannot be read as the
+     * request's outcome -- distinguish it from a reply that carries one. */
+    const int32_t sent = ui_send_gfx(ctx->gfx_endpoint,
+                                     ctx->reply_endpoint,
+                                     ctx->req_id++,
+                                     GFX_IPC_SET_WINDOW_TITLE,
+                                     ctx->window_id,
+                                     buffer_id,
+                                     borrow_id,
+                                     len,
+                                     &status,
+                                     0,
+                                     0,
+                                     0);
+    (void)wasmos_xfer_buffer_unmap(buffer_id);
+    (void)wasmos_xfer_buffer_release(buffer_id);
+    return sent != 0 ? WASMOS_ERR_GFX_IO : status;
 }
 
 /* ui_init() variant for the system menu bar: sizes the window to the full
@@ -1784,26 +1894,15 @@ static inline void ui_destroy(ui_context_t* ctx) {
                           0,
                           0);
     }
-    if (ctx->buffer_id > 0) {
-        (void)ui_send_gfx(ctx->gfx_endpoint,
-                          ctx->reply_endpoint,
-                          ctx->req_id++,
-                          GFX_IPC_RELEASE_SHARED_BUFFER,
-                          ctx->buffer_id,
-                          0,
-                          0,
-                          0,
-                          &status,
-                          0,
-                          0,
-                          0);
+    ui_release_surface(ctx);
+    if (ctx->font_text_buffer_id > 0) {
+        (void)wasmos_xfer_buffer_unmap(ctx->font_text_buffer_id);
+        (void)wasmos_xfer_buffer_release(ctx->font_text_buffer_id);
     }
-    if (ctx->shmem_id > 0)
-        (void)wasmos_shmem_unmap(ctx->shmem_id);
-    if (ctx->font_text_shmem_id > 0)
-        (void)wasmos_shmem_unmap(ctx->font_text_shmem_id);
-    if (ctx->font_mask_shmem_id > 0)
-        (void)wasmos_shmem_unmap(ctx->font_mask_shmem_id);
+    if (ctx->font_mask_buffer_id > 0) {
+        (void)wasmos_xfer_buffer_unmap(ctx->font_mask_buffer_id);
+        (void)wasmos_xfer_buffer_release(ctx->font_mask_buffer_id);
+    }
 
     for (int32_t i = 0; i < ctx->component_count; ++i) {
         ui_component_t* c = &ctx->components[i];
@@ -2494,11 +2593,10 @@ static inline int32_t ui_loop_drain(ui_context_t* ctx) {
     ui_layout_vertical(ctx, root->id);
     ui_render_component(ctx, root->id);
 
-    if (wasmos_shmem_flush(ctx->shmem_id,
-                           addr_cast(int32_t, ctx->mapped_base),
-                           ctx->stride_bytes * ctx->height) != 0) {
-        return -1;
-    }
+    /* No write-back before the present: xfer_buffer_map places the surface's own
+     * frames in this app's linear memory, so the pixels just rendered ARE what
+     * the compositor reads through its borrow. That holds on both runtimes
+     * (tests/test_xfer_map_alias.py). */
 
     if (ui_send_gfx(ctx->gfx_endpoint,
                     ctx->reply_endpoint,

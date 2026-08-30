@@ -8,10 +8,12 @@
 //! with separate ids, and either can exist without the other.
 //!
 //! The client-side cycle is: GFX_IPC_CREATE_WINDOW (content width/height) ->
-//! GFX_IPC_ALLOC_SHARED_BUFFER (compositor creates shmem and grants it to the
-//! caller's context, replying with buffer_id, shmem_id and stride) -> the client
-//! renders into that shmem -> GFX_IPC_PRESENT_WINDOW binds the buffer to the
-//! window, optionally with a damage-rect list in a second shmem.  The window's
+//! GFX_IPC_GET_SURFACE_SPEC (this service allocates nothing; it replies with the
+//! stride and byte size a surface must satisfy) -> the client acquires a
+//! transfer buffer it OWNS, lends it READ here, and registers it with
+//! GFX_IPC_ATTACH_SURFACE -> the client renders into that buffer ->
+//! GFX_IPC_PRESENT_WINDOW binds the surface to the window, optionally with a
+//! damage-rect list carried INSIDE that same surface.  The window's
 //! content rect is what the client sizes to; chrome (border, title bar, close
 //! and maximize buttons, resize handle) is drawn OUTSIDE it by the compositor
 //! unless GFX_WINDOW_FLAG_NO_CHROME is set.  A window with no presented buffer
@@ -47,7 +49,7 @@
 //!     another buffer (or destroy the window) first.
 //!   - Destroying a window does not free its buffers.  Windows and buffers whose
 //!     owner endpoint is no longer alive are reclaimed by the periodic idle
-//!     housekeeping pass, which also unmaps the buffer's shmem — a client that
+//!     housekeeping pass, which also drops the borrow's mapping — a client that
 //!     exits without releasing does not leak indefinitely, but the reclaim is
 //!     not immediate.
 //!
@@ -146,7 +148,7 @@ const GFX_WINDOW_FLAG_NO_TASK_LIST: u32 = 1 << 6;
 // normally stacked window, which are numbered upward from 1 as they are raised.
 // One below u32 max, leaving headroom above it.
 const GFX_WINDOW_Z_SYSTEM: u32 = 0xFFFF_FFFE;
-// Page granularity of the kernel's shmem allocator: a shared buffer is rounded
+// Page granularity of the buffer allocator: a surface is rounded
 // up to a whole number of these.
 const PAGE_SIZE: u64 = 4096;
 // Dimensions of the built-in mouse cursor bitmap, in pixels.
@@ -284,16 +286,19 @@ const buffer_slot_t = struct {
     in_use: bool = false,
     owner_endpoint: u32 = IPC_ENDPOINT_NONE,
     buffer_id: u32 = 0,
-    shmem_id: u32 = 0,
     width: u32 = 0,
     height: u32 = 0,
     stride_bytes: u32 = 0,
     state: buffer_state_t = .allocated,
     bound_window_id: u32 = 0,
     bound_window_generation: u32 = 0,
-    // Cached shmem mapping — set at allocation, valid until the slot is freed.
-    // Avoids kernel shmem_map/shmem_unmap on every composite call.
+    // Cached mapping — set when the slot is filled, valid until it is freed.
+    // Avoids a kernel map/unmap on every composite call.
     mapped_pixels: ?[*]const u32 = null,
+    // The client's borrow of this surface. Every surface is client-owned: this
+    // service maps it with xfer_buffer_map_borrowed and its storage belongs to
+    // the client, so freeing a slot unmaps the borrow and nothing else.
+    borrow_id: u32 = 0,
 };
 
 const gfx_event_t = struct {
@@ -307,7 +312,6 @@ const gfx_event_t = struct {
 const glyph_cache_entry_t = struct {
     valid: bool = false,
     codepoint: u32 = 0,
-    shmem_id: u32 = 0,
     w: i32 = 0,
     h: i32 = 0,
     x0: i16 = 0,
@@ -338,10 +342,12 @@ var g_title_run_cache: [GFX_MAX_WINDOWS]title_run_cache_entry_t = [_]title_run_c
 var g_pointer_left_state: pointer_button_state_t = .{};
 var g_pointer_right_state: pointer_button_state_t = .{};
 var g_last_left_click: pointer_click_state_t = .{};
-var g_font_text_shmem_id: u32 = 0;
+var g_font_text_buffer_id: u32 = 0;
+var g_font_text_borrow_id: u32 = 0;
 var g_font_text_ptr: ?[*]u8 = null;
 var g_font_text_cap: usize = 0;
-var g_font_mask_shmem_id: u32 = 0;
+var g_font_mask_buffer_id: u32 = 0;
+var g_font_mask_borrow_id: u32 = 0;
 var g_font_mask_ptr: ?[*]u8 = null;
 var g_font_mask_cap: usize = 0;
 var g_event_head: usize = 0;
@@ -569,8 +575,11 @@ fn cleanup_orphaned_state() void {
     while (i < g_buffers.len) : (i += 1) {
         if (!g_buffers[i].in_use) continue;
         if (endpoint_alive(g_buffers[i].owner_endpoint)) continue;
-        if (g_buffers[i].shmem_id != 0) {
-            _ = api().shmem_unmap.?(g_buffers[i].shmem_id);
+        // A client that died without detaching still holds an entry in the
+        // 32-slot native borrow-mapping pool shared by every native service,
+        // so reclaiming the slot must drop the mapping too.
+        if (g_buffers[i].borrow_id != 0) {
+            _ = api().xfer_buffer_unmap_borrowed.?(g_buffers[i].borrow_id);
         }
         g_buffers[i] = .{};
         changed = true;
@@ -771,9 +780,9 @@ fn ensure_backbuffer_capacity(required_bytes: u32) i32 {
     }
 
     // The backbuffer is a private owned xfer buffer (kind=transfer): composited
-    // into, then blitted to the framebuffer, never shared. Unlike shmem it draws
+    // into, then blitted to the framebuffer, never shared. Unlike a lent surface it draws
     // from the general physical pool rather than the constrained sub-64 MiB WARP
-    // shmem zone.
+    // overlay zone.
     var buffer_id: u32 = 0;
     const raw = api().xfer_buffer_acquire.?(c.ND_BUFFER_KIND_XFER, required_bytes, &buffer_id);
     if (raw == null or buffer_id == 0) {
@@ -1633,65 +1642,6 @@ fn buffer_generate_id() ?u32 {
     return null;
 }
 
-fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
-    var slot_idx: ?usize = null;
-    var i: usize = 0;
-    while (i < g_buffers.len) : (i += 1) {
-        if (!g_buffers[i].in_use) {
-            slot_idx = i;
-            break;
-        }
-    }
-    if (slot_idx == null) return null;
-
-    const stride_u64 = @as(u64, width) * 4;
-    const bytes_u64 = stride_u64 * @as(u64, height);
-    if (stride_u64 == 0 or bytes_u64 == 0 or stride_u64 > 0xFFFF_FFFF or bytes_u64 > 0xFFFF_FFFF) {
-        return null;
-    }
-    const pages = (bytes_u64 + (PAGE_SIZE - 1)) / PAGE_SIZE;
-    if (pages == 0) return null;
-
-    const buffer_id = buffer_generate_id() orelse return null;
-    var shmem_id: u32 = 0;
-    var mapped_ptr: ?*anyopaque = null;
-    if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
-        logMsg("[gfx] alloc shmem_create failed\n");
-        return null;
-    }
-    var owner_context_id: u32 = 0;
-    if (api().ipc_endpoint_owner == null or
-        api().ipc_endpoint_owner.?(owner_endpoint, &owner_context_id) != 0)
-    {
-        logMsg("[gfx] alloc endpoint_owner failed\n");
-        _ = api().shmem_unmap.?(shmem_id);
-        return null;
-    }
-    if (owner_context_id != 0) {
-        if (api().shmem_grant == null or
-            api().shmem_grant.?(shmem_id, owner_context_id) != 0)
-        {
-            logMsg("[gfx] alloc shmem_grant failed\n");
-            _ = api().shmem_unmap.?(shmem_id);
-            return null;
-        }
-    }
-
-    const idx = slot_idx.?;
-    g_buffers[idx].in_use = true;
-    g_buffers[idx].owner_endpoint = owner_endpoint;
-    g_buffers[idx].buffer_id = buffer_id;
-    g_buffers[idx].shmem_id = shmem_id;
-    g_buffers[idx].width = width;
-    g_buffers[idx].height = height;
-    g_buffers[idx].stride_bytes = @intCast(stride_u64);
-    g_buffers[idx].state = .allocated;
-    g_buffers[idx].bound_window_id = 0;
-    g_buffers[idx].mapped_pixels = @ptrCast(@alignCast(mapped_ptr.?));
-    g_buffers[idx].bound_window_generation = 0;
-    return idx;
-}
-
 fn window_buffer_in_use(buffer_id: u32) bool {
     var i: usize = 0;
     while (i < g_windows.len) : (i += 1) {
@@ -2025,32 +1975,58 @@ fn glyph_cache_slot_for_new() ?usize {
     return null;
 }
 
-fn ensure_font_shmem_buffer(shmem_id: *u32, mapped_ptr: *?[*]u8, cap: *usize, need_bytes: usize) bool {
+// A transfer buffer this service OWNS and lends to the font service for the
+// call. Growing releases the old one, which cascade-revokes its borrow, so no
+// explicit unborrow is needed and nothing is stranded.
+fn ensure_font_buffer(buffer_id: *u32, borrow_id: *u32, mapped_ptr: *?[*]u8, cap: *usize, need_bytes: usize, grant_flags: u32) bool {
     if (need_bytes == 0) return false;
-    if (shmem_id.* != 0 and mapped_ptr.* != null and cap.* >= need_bytes) return true;
-    var new_id: u32 = 0;
-    var raw: ?*anyopaque = null;
+    if (buffer_id.* != 0 and mapped_ptr.* != null and cap.* >= need_bytes) return true;
     const pages: usize = (need_bytes + 4095) / 4096;
-    if (api().shmem_create.?(pages, 0, &new_id, @ptrCast(&raw)) != 0 or new_id == 0 or raw == null) return false;
-    // TODO(gfx-font-shmem): old SHMEM IDs are not reclaimed on growth.
-    shmem_id.* = new_id;
+    const bytes = pages * 4096;
+    var new_id: u32 = 0;
+    const raw = api().xfer_buffer_acquire.?(c.ND_BUFFER_KIND_XFER, @intCast(bytes), &new_id);
+    if (raw == null or new_id == 0) return false;
+    const new_borrow = api().xfer_buffer_borrow.?(g_font_endpoint, new_id, grant_flags);
+    if (new_borrow <= 0) {
+        _ = api().xfer_buffer_release.?(new_id);
+        return false;
+    }
+    if (buffer_id.* != 0) {
+        _ = api().xfer_buffer_release.?(buffer_id.*);
+    }
+    buffer_id.* = new_id;
+    borrow_id.* = @intCast(new_borrow);
     mapped_ptr.* = @ptrCast(@alignCast(raw.?));
-    cap.* = pages * 4096;
+    cap.* = bytes;
     return true;
+}
+
+// Fill the request descriptor at the head of the text buffer. The UTF-8 run
+// follows it in the same buffer, so one buffer and one borrow carry the whole
+// request; the mask fields stay zero for a measure.
+fn font_fill_request(text_len: i32, mask_buffer_id: u32, mask_borrow_id: u32) void {
+    const desc: *c.font_raster_request_t = @ptrCast(@alignCast(g_font_text_ptr.?));
+    desc.handle_id = @bitCast(g_font_title_handle);
+    desc.text_len = text_len;
+    desc.mask_buffer_id = @bitCast(mask_buffer_id);
+    desc.mask_borrow_id = @bitCast(mask_borrow_id);
 }
 
 fn font_measure_and_raster_text(text: []const u8, out_w: *i32, out_h: *i32, out_x0: *i16, out_y0: *i16, out_adv: *i32) bool {
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return false;
     if (text.len == 0) return false;
-    if (!ensure_font_shmem_buffer(&g_font_text_shmem_id, &g_font_text_ptr, &g_font_text_cap, text.len + 1)) return false;
+    if (!ensure_font_buffer(&g_font_text_buffer_id, &g_font_text_borrow_id, &g_font_text_ptr, &g_font_text_cap, @sizeOf(c.font_raster_request_t) + text.len + 1, c.ND_BUFFER_BORROW_READ)) return false;
+    // The run follows the descriptor in the same buffer.
+    const text_off = @sizeOf(c.font_raster_request_t);
     var i: usize = 0;
-    while (i < text.len) : (i += 1) g_font_text_ptr.?[i] = text[i];
-    g_font_text_ptr.?[text.len] = 0;
+    while (i < text.len) : (i += 1) g_font_text_ptr.?[text_off + i] = text[i];
+    g_font_text_ptr.?[text_off + text.len] = 0;
 
     var reply: c.nd_ipc_message_t = undefined;
     const req_id_measure = g_runtime_lookup_req_id;
     g_runtime_lookup_req_id +%= 1;
-    if (font_ipc_call_budgeted(g_font_endpoint, req_id_measure, c.FONT_IPC_MEASURE_GLYPH_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(text.len), 0, &reply, 32) != 0) {
+    font_fill_request(@intCast(text.len), 0, 0);
+    if (font_ipc_call_budgeted(g_font_endpoint, req_id_measure, c.FONT_IPC_MEASURE_GLYPH_REQ, @bitCast(g_font_text_buffer_id), 0, @intCast(@sizeOf(c.font_raster_request_t) + text.len), @bitCast(g_font_text_borrow_id), &reply, 32) != 0) {
         return false;
     }
     if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.WASMOS_ERR_NONE) {
@@ -2075,11 +2051,12 @@ fn font_measure_and_raster_text(text: []const u8, out_w: *i32, out_h: *i32, out_
     if (pixel_count_i32 <= 0) return false;
     const pixel_count: usize = @intCast(pixel_count_i32);
     if (pixel_count > GFX_MAX_GLYPH_BYTES) return false;
-    if (!ensure_font_shmem_buffer(&g_font_mask_shmem_id, &g_font_mask_ptr, &g_font_mask_cap, pixel_count)) return false;
+    if (!ensure_font_buffer(&g_font_mask_buffer_id, &g_font_mask_borrow_id, &g_font_mask_ptr, &g_font_mask_cap, pixel_count, c.ND_BUFFER_BORROW_WRITE)) return false;
 
     const req_id_into = g_runtime_lookup_req_id;
     g_runtime_lookup_req_id +%= 1;
-    if (font_ipc_call_budgeted(g_font_endpoint, req_id_into, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(text.len), g_font_mask_shmem_id, &reply, 32) != 0) {
+    font_fill_request(@intCast(text.len), g_font_mask_buffer_id, g_font_mask_borrow_id);
+    if (font_ipc_call_budgeted(g_font_endpoint, req_id_into, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, @bitCast(g_font_text_buffer_id), 0, @intCast(@sizeOf(c.font_raster_request_t) + text.len), @bitCast(g_font_text_borrow_id), &reply, 32) != 0) {
         return false;
     }
     if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.WASMOS_ERR_NONE) {
@@ -2191,14 +2168,16 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
     if (glyph_cache_lookup(codepoint) != null) return true;
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return false;
     const slot = glyph_cache_slot_for_new() orelse return false;
-    if (!ensure_font_shmem_buffer(&g_font_text_shmem_id, &g_font_text_ptr, &g_font_text_cap, 5)) return false;
-    const utf8_len = codepoint_to_utf8(codepoint, g_font_text_ptr.?);
-    g_font_text_ptr.?[utf8_len] = 0;
+    if (!ensure_font_buffer(&g_font_text_buffer_id, &g_font_text_borrow_id, &g_font_text_ptr, &g_font_text_cap, @sizeOf(c.font_raster_request_t) + 5, c.ND_BUFFER_BORROW_READ)) return false;
+    const text_off = @sizeOf(c.font_raster_request_t);
+    const utf8_len = codepoint_to_utf8(codepoint, g_font_text_ptr.? + text_off);
+    g_font_text_ptr.?[text_off + utf8_len] = 0;
 
     var reply: c.nd_ipc_message_t = undefined;
     const req_id = g_runtime_lookup_req_id;
     g_runtime_lookup_req_id +%= 1;
-    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_MEASURE_GLYPH_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(utf8_len), 0, &reply, 32) != 0) {
+    font_fill_request(@intCast(utf8_len), 0, 0);
+    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_MEASURE_GLYPH_REQ, @bitCast(g_font_text_buffer_id), 0, @intCast(@sizeOf(c.font_raster_request_t) + utf8_len), @bitCast(g_font_text_borrow_id), &reply, 32) != 0) {
         return false;
     }
     if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.WASMOS_ERR_NONE) {
@@ -2214,7 +2193,6 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
     var entry = glyph_cache_entry_t{
         .valid = true,
         .codepoint = codepoint,
-        .shmem_id = 0,
         .w = w,
         .h = h,
         .x0 = x0,
@@ -2230,10 +2208,11 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
         if (pixel_count > GFX_MAX_GLYPH_BYTES) {
             return false;
         }
-        if (!ensure_font_shmem_buffer(&g_font_mask_shmem_id, &g_font_mask_ptr, &g_font_mask_cap, pixel_count)) return false;
+        if (!ensure_font_buffer(&g_font_mask_buffer_id, &g_font_mask_borrow_id, &g_font_mask_ptr, &g_font_mask_cap, pixel_count, c.ND_BUFFER_BORROW_WRITE)) return false;
         const req_id_into = g_runtime_lookup_req_id;
         g_runtime_lookup_req_id +%= 1;
-        if (font_ipc_call_budgeted(g_font_endpoint, req_id_into, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(utf8_len), g_font_mask_shmem_id, &reply, 32) != 0) {
+        font_fill_request(@intCast(utf8_len), g_font_mask_buffer_id, g_font_mask_borrow_id);
+        if (font_ipc_call_budgeted(g_font_endpoint, req_id_into, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, @bitCast(g_font_text_buffer_id), 0, @intCast(@sizeOf(c.font_raster_request_t) + utf8_len), @bitCast(g_font_text_borrow_id), &reply, 32) != 0) {
             return false;
         }
         if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.WASMOS_ERR_NONE) {
@@ -2549,56 +2528,119 @@ fn handle_resize_window(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.WASMOS_ERR_NONE, width, height, 0);
 }
 
-fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
+// Reply the constraints a surface for `window_id` must satisfy, allocating
+// nothing. The client acquires a transfer buffer of at least `byte_size`,
+// borrows it here, and names it with GFX_IPC_ATTACH_SURFACE.
+//
+// A resize bumps the window generation, so the spec a client holds is only
+// valid for the extent it was read at: the answer to a resize is a new surface
+// at the new spec, never a mutation of the borrowed one.
+fn handle_get_surface_spec(msg: *const c.nd_ipc_message_t) void {
     const window_id = msg.arg0;
-    const width = msg.arg1;
-    const height = msg.arg2;
-    if (!validate_window_dims(width, height)) {
+    const window_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    };
+    if (!same_owner(g_windows[window_idx].owner_endpoint, msg.source)) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
+        return;
+    }
+    if (window_has_no_content(g_windows[window_idx])) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
+        return;
+    }
+    const width = g_windows[window_idx].width;
+    const height = g_windows[window_idx].height;
+    const stride_u64 = @as(u64, width) * 4;
+    const bytes_u64 = stride_u64 * @as(u64, height);
+    if (stride_u64 == 0 or bytes_u64 == 0 or bytes_u64 > 0xFFFF_FFFF) {
         reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
+    reply_with_status(msg, c.WASMOS_ERR_NONE, @intCast(stride_u64), @intCast(bytes_u64), (width << 16) | height);
+}
 
-    if (window_id != 0) {
-        const window_idx = window_find_by_id(window_id) orelse {
-            reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
-            return;
-        };
-        if (!same_owner(g_windows[window_idx].owner_endpoint, msg.source)) {
-            if (!g_window_owner_deny_logged) {
-                g_window_owner_deny_logged = true;
-                logMsg("[test] gfx window owner deny ok\n");
-            }
-            reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
-            return;
-        }
-        if (window_has_no_content(g_windows[window_idx])) {
-            reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
-            return;
-        }
-        if (g_windows[window_idx].width != width or g_windows[window_idx].height != height) {
-            reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
-            return;
-        }
+// Register a surface the CLIENT owns and has borrowed to this service. Both ids
+// are required: xfer_buffer_borrow returns borrow_id to the owner, so this side
+// can derive neither, and the mapping call validates that the pair names one
+// live grant rather than a borrow of an unrelated object.
+//
+// The mapping is taken once here and held until GFX_IPC_DETACH_SURFACE, which
+// matches what the allocate-side path does and keeps a map/unmap off every
+// composite. The cost is one entry in the native borrow-mapping pool per
+// attached surface, and that pool is a fixed 32 slots shared by ALL native
+// services (wasmos_native_driver.h). A client that attaches surfaces without
+// detaching them therefore starves the framebuffer and net stack, not just
+// itself -- which is what makes DETACH part of the contract rather than an
+// optimisation.
+fn handle_attach_surface(msg: *const c.nd_ipc_message_t) void {
+    const window_id = msg.arg0;
+    const buffer_id = msg.arg1;
+    const borrow_id = msg.arg2;
+    if (window_id == 0 or buffer_id == 0 or borrow_id == 0) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
+    const window_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    };
+    if (!same_owner(g_windows[window_idx].owner_endpoint, msg.source)) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
+        return;
+    }
+    if (buffer_find_by_id(buffer_id) != null) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
+    if (window_has_no_content(g_windows[window_idx])) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
+        return;
     }
 
-    const buf_idx = buffer_alloc(msg.source, width, height) orelse {
+    var slot_idx: ?usize = null;
+    var i: usize = 0;
+    while (i < g_buffers.len) : (i += 1) {
+        if (!g_buffers[i].in_use) {
+            slot_idx = i;
+            break;
+        }
+    }
+    const idx = slot_idx orelse {
         reply_with_status(msg, c.WASMOS_ERR_GFX_BUSY, 0, 0, 0);
         return;
     };
-    const buf = g_buffers[buf_idx];
 
-    if (window_id != 0) {
-        if (window_find_by_id(window_id)) |window_idx| {
-            g_buffers[buf_idx].bound_window_id = window_id;
-            g_buffers[buf_idx].bound_window_generation = g_windows[window_idx].generation;
-        }
-    }
+    const width = g_windows[window_idx].width;
+    const height = g_windows[window_idx].height;
+    const stride_u64 = @as(u64, width) * 4;
+    const ptr_raw = api().xfer_buffer_map_borrowed.?(c.ND_BUFFER_KIND_XFER, buffer_id, borrow_id) orelse {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
+        return;
+    };
 
-    reply_with_status(msg, c.WASMOS_ERR_NONE, buf.buffer_id, buf.shmem_id, buf.stride_bytes);
+    g_buffers[idx] = .{
+        .in_use = true,
+        .owner_endpoint = msg.source,
+        .buffer_id = buffer_id,
+        .borrow_id = borrow_id,
+        .width = width,
+        .height = height,
+        .stride_bytes = @intCast(stride_u64),
+        .state = .allocated,
+        .bound_window_id = window_id,
+        .bound_window_generation = g_windows[window_idx].generation,
+        .mapped_pixels = @ptrCast(@alignCast(ptr_raw)),
+    };
+    reply_with_status(msg, c.WASMOS_ERR_NONE, buffer_id, @intCast(stride_u64), 0);
 }
 
-fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
-    const buffer_id = msg.arg0;
+// Withdraw a surface the client lent. The client must land this BEFORE
+// releasing the buffer: there is no unborrow notification, so a release while
+// this mapping is live leaves a stale pointer that the next composite would
+// read (wasmos_native_driver.h).
+fn handle_detach_surface(msg: *const c.nd_ipc_message_t) void {
+    const buffer_id = msg.arg1;
     if (buffer_id == 0) {
         reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
@@ -2608,23 +2650,22 @@ fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
         return;
     };
     if (!same_owner(g_buffers[buf_idx].owner_endpoint, msg.source)) {
-        if (!g_buffer_owner_deny_logged) {
-            g_buffer_owner_deny_logged = true;
-            logMsg("[test] gfx buffer owner deny ok\n");
-        }
         reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
-
+    if (g_buffers[buf_idx].borrow_id == 0) {
+        // An allocated buffer is not a lent surface; it goes through
+        // GFX_IPC_RELEASE_SHARED_BUFFER.
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
     if (window_buffer_in_use(buffer_id)) {
         reply_with_status(msg, c.WASMOS_ERR_GFX_BUSY, 0, 0, 0);
         return;
     }
 
     const changed = detach_buffer_from_windows(buffer_id);
-    if (g_buffers[buf_idx].shmem_id != 0) {
-        _ = api().shmem_unmap.?(g_buffers[buf_idx].shmem_id);
-    }
+    _ = api().xfer_buffer_unmap_borrowed.?(g_buffers[buf_idx].borrow_id);
     g_buffers[buf_idx] = .{};
     if (changed) {
         request_repaint_full();
@@ -2636,7 +2677,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     const window_id = msg.arg0;
     const buffer_id = msg.arg1;
     const damage_count = msg.arg2;
-    const damage_shmem_id = msg.arg3;
+    const damage_offset = msg.arg3;
 
     if (window_id == 0 or buffer_id == 0) {
         reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
@@ -2711,7 +2752,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     }
     sync_console_mode_for_windows();
 
-    if (damage_count == 0 or damage_shmem_id == 0 or damage_count > GFX_MAX_DAMAGE_RECTS) {
+    if (damage_count == 0 or damage_count > GFX_MAX_DAMAGE_RECTS) {
         request_repaint_full();
         if (GFX_TRACE) {
             logMsg("[gfx-t] present-reply OK\n");
@@ -2720,14 +2761,23 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         return;
     }
 
-    const dmg_ptr_raw = api().shmem_map.?(damage_shmem_id);
-    if (dmg_ptr_raw == null) {
+    // The damage list rides in the surface the client already lent, at
+    // `damage_offset` bytes from its start, so it needs no buffer, borrow or
+    // mapping of its own -- this side already holds the surface mapped. An
+    // offset that would run the list past the surface degrades to a full
+    // repaint rather than reading out of bounds.
+    const dmg_bytes = @as(u64, damage_count) * @sizeOf(c.gfx_rect_t);
+    const surface_bytes = @as(u64, buf.stride_bytes) * @as(u64, buf.height);
+    if (buf.mapped_pixels == null or damage_offset <= 0 or
+        @as(u64, @intCast(damage_offset)) + dmg_bytes > surface_bytes)
+    {
         request_repaint_full();
         reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
         return;
     }
-    defer _ = api().shmem_unmap.?(damage_shmem_id);
-    const dmg_rects: [*]const c.gfx_rect_t = @ptrCast(@alignCast(dmg_ptr_raw.?));
+    const surface_base: [*]const u8 = @ptrCast(buf.mapped_pixels.?);
+    const dmg_rects: [*]const c.gfx_rect_t =
+        @ptrCast(@alignCast(surface_base + @as(usize, @intCast(damage_offset))));
 
     var i: u32 = 0;
     while (i < damage_count) : (i += 1) {
@@ -2923,10 +2973,14 @@ fn handle_move_window(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
+// The title arrives in a transfer buffer the CLIENT owns and has borrowed READ
+// to this service; arg1 names the buffer and arg2 the borrow, neither of which
+// is derivable here. Read-only is all this needs, and all the client grants.
 fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
     const window_id: u32 = @bitCast(msg.arg0);
-    const shmem_id: u32 = @bitCast(msg.arg1);
-    const title_len: u32 = @bitCast(msg.arg2);
+    const buffer_id: u32 = @bitCast(msg.arg1);
+    const borrow_id: u32 = @bitCast(msg.arg2);
+    const title_len: u32 = @bitCast(msg.arg3);
     if (title_len == 0 or title_len > GFX_WINDOW_TITLE_MAX) {
         reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
@@ -2939,11 +2993,17 @@ fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
-    const ptr_raw = api().shmem_map.?(shmem_id) orelse {
+    if (buffer_id == 0 or borrow_id == 0) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
+    const ptr_raw = api().xfer_buffer_map_borrowed.?(c.ND_BUFFER_KIND_XFER, buffer_id, borrow_id) orelse {
         reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     };
-    defer _ = api().shmem_unmap.?(shmem_id);
+    // Borrowed mapping slots are a fixed global pool shared by every native
+    // service (wasmos_native_driver.h), so this must not leak on any path.
+    defer _ = api().xfer_buffer_unmap_borrowed.?(borrow_id);
     const src: [*]const u8 = @ptrCast(@alignCast(ptr_raw));
     const n = @min(@as(usize, title_len), GFX_WINDOW_TITLE_MAX);
     @memcpy(g_windows[slot_idx].title[0..n], src[0..n]);
@@ -2953,28 +3013,39 @@ fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
+// The destination is a transfer buffer the CLIENT owns and has borrowed WRITE to
+// this service, per the ownership rule in docs/architecture/12-dma-transfers.md:
+// the caller of an exchange owns the buffer and the server is a transient
+// grantee. arg1 names the buffer, arg2 the borrow -- both are needed and neither
+// is derivable here, since xfer_buffer_borrow returns the borrow_id to the owner.
+//
+// No flush follows the copy. The mapping IS the buffer's frames on both runtimes
+// (tests/test_xfer_map_alias.py pins it), so a write-back would copy those pages
+// onto themselves -- the pattern this path replaces.
 fn handle_get_window_title(msg: *const c.nd_ipc_message_t) void {
     const window_id: u32 = @bitCast(msg.arg0);
-    const shmem_id: u32 = @bitCast(msg.arg1);
+    const buffer_id: u32 = @bitCast(msg.arg1);
+    const borrow_id: u32 = @bitCast(msg.arg2);
     const slot_idx = window_find_by_id(window_id) orelse {
         reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     const tlen = g_windows[slot_idx].title_len;
-    if (shmem_id == 0 or tlen == 0) {
+    if (buffer_id == 0 or borrow_id == 0 or tlen == 0) {
         reply_with_status(msg, c.WASMOS_ERR_NONE, @as(u32, tlen), 0, 0);
         return;
     }
-    const ptr_raw = api().shmem_map.?(shmem_id) orelse {
+    const ptr_raw = api().xfer_buffer_map_borrowed.?(c.ND_BUFFER_KIND_XFER, buffer_id, borrow_id) orelse {
         reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     };
-    defer _ = api().shmem_unmap.?(shmem_id);
+    // The borrowed mapping slots are a fixed global pool shared by every native
+    // service (wasmos_native_driver.h), so this must not leak on any path.
+    defer _ = api().xfer_buffer_unmap_borrowed.?(borrow_id);
     const dst: [*]u8 = @ptrCast(@alignCast(ptr_raw));
     const n = @min(@as(usize, tlen), GFX_WINDOW_TITLE_MAX);
     @memcpy(dst[0..n], g_windows[slot_idx].title[0..n]);
     dst[n] = 0;
-    _ = api().shmem_flush.?(shmem_id, ptr_raw, @intCast(n + 1));
     reply_with_status(msg, c.WASMOS_ERR_NONE, @as(u32, @intCast(n)), 0, 0);
 }
 
@@ -3020,8 +3091,9 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
         c.GFX_IPC_CREATE_WINDOW => handle_create_window(msg),
         c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(msg),
         c.GFX_IPC_RESIZE_WINDOW => handle_resize_window(msg),
-        c.GFX_IPC_ALLOC_SHARED_BUFFER => handle_alloc_shared_buffer(msg),
-        c.GFX_IPC_RELEASE_SHARED_BUFFER => handle_release_shared_buffer(msg),
+        c.GFX_IPC_GET_SURFACE_SPEC => handle_get_surface_spec(msg),
+        c.GFX_IPC_ATTACH_SURFACE => handle_attach_surface(msg),
+        c.GFX_IPC_DETACH_SURFACE => handle_detach_surface(msg),
         c.GFX_IPC_PRESENT_WINDOW => handle_present_window(msg),
         c.GFX_IPC_SET_DISPLAY_MODE => handle_set_display_mode(msg),
         c.GFX_IPC_LIST_WINDOWS => handle_list_windows(msg),
@@ -3051,8 +3123,9 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_CREATE_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_DESTROY_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_RESIZE_WINDOW, cb, null) != 0) return -1;
-    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_ALLOC_SHARED_BUFFER, cb, null) != 0) return -1;
-    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_RELEASE_SHARED_BUFFER, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_GET_SURFACE_SPEC, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_ATTACH_SURFACE, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_DETACH_SURFACE, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_PRESENT_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_DISPLAY_MODE, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_LIST_WINDOWS, cb, null) != 0) return -1;

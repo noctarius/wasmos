@@ -466,77 +466,6 @@ extern int32_t wasmos_xfer_buffer_release(int32_t buffer_id) WASMOS_WASM_IMPORT(
 extern int32_t wasmos_sched_cpu_stats(int32_t cpu_id, int32_t out) WASMOS_WASM_IMPORT("wasmos", "sched_cpu_stats");
 /* Yield the calling thread's CPU (YIELDED state) to the scheduler. Returns 0. */
 extern int32_t wasmos_thread_yield(void) WASMOS_WASM_IMPORT("wasmos", "thread_yield");
-/* Shared memory API: shmem_create allocates pages of shared memory and
- * returns an id; shmem_grant/revoke control which PIDs may map it;
- * shmem_map/map_auto map the region into WASM linear memory;
- * flush/refresh synchronise dirty regions between processes.
- */
-extern int32_t wasmos_shmem_create(int32_t pages, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "shmem_create");
-/* Grants the caller's shared-memory region `id` to the process `target_pid`
- * (resolved to its context); gated by the caller's DMA capability. Returns the
- * mm_shared_grant result (0 on success), WASMOS_ERR_SHMEM_BAD_ID if `id` or
- * `target_pid` is not positive, or WASMOS_ERR_SHMEM_NO_CAP if the caller has no
- * context, lacks the DMA capability, or `target_pid` names no live process.
- */
-extern int32_t wasmos_shmem_grant(int32_t id, int32_t target_pid) WASMOS_WASM_IMPORT("wasmos", "shmem_grant");
-/* Revokes a prior grant of the caller's shared-memory region `id` from process
- * `target_pid`; gated by the caller's DMA capability. Returns the
- * mm_shared_revoke result (0 on success), WASMOS_ERR_SHMEM_BAD_ID if `id` or
- * `target_pid` is not positive, or WASMOS_ERR_SHMEM_NO_CAP if the caller has no
- * context, lacks the DMA capability, or `target_pid` names no live process.
- */
-extern int32_t wasmos_shmem_revoke(int32_t id, int32_t target_pid) WASMOS_WASM_IMPORT("wasmos", "shmem_revoke");
-/* On success wasmos_shmem_map/_auto return the mapped guest offset (>= 0).  On
- * failure they return a negative SHMEM_ERR_* reason code (see
- * drivers/include/wasmos_driver_abi.h) rather than a blanket -1, so callers can
- * report why a map failed.
- */
-extern int32_t wasmos_shmem_map(int32_t id, int32_t wasm_off, int32_t size) WASMOS_WASM_IMPORT("wasmos", "shmem_map");
-/* Overlays shared-memory region `id` into the caller's WASM linear memory at an
- * automatically chosen page-aligned window of `size` bytes (must be non-zero,
- * page-aligned, and at least the region's size); gated by the caller's DMA
- * capability. On success returns the mapped guest offset (>= 0); on failure a
- * negative SHMEM_ERR_* reason code (BAD_ARGS, NO_CAP, BAD_ID, BAD_SIZE,
- * NO_WINDOW, MAP).
- */
-extern int32_t wasmos_shmem_map_auto(int32_t id, int32_t size) WASMOS_WASM_IMPORT("wasmos", "shmem_map_auto");
-/* Pushes `size` bytes from the caller's WASM linear memory at `wasm_off` into
- * the backing physical pages of shared-memory region `id` (local-to-shared
- * copy); gated by the caller's DMA capability and bounded by the region size.
- * Returns 0 on success, WASMOS_ERR_SHMEM_BAD_ARGS if `id`, `size` or
- * `wasm_off` is negative or non-positive, WASMOS_ERR_SHMEM_NO_CAP if the caller
- * has no context or lacks the DMA capability, WASMOS_ERR_SHMEM_BAD_ID if `id`
- * names no region of the caller's or the region has no backing pages,
- * WASMOS_ERR_SHMEM_BAD_SIZE if `size` exceeds the region, or
- * WASMOS_ERR_SHMEM_NO_WINDOW if [`wasm_off`, `wasm_off`+`size`) does not lie
- * inside the caller's linear memory.
- */
-extern int32_t wasmos_shmem_flush(int32_t id, int32_t wasm_off, int32_t size) WASMOS_WASM_IMPORT("wasmos", "shmem_flush");
-/* Pulls `size` bytes from the backing physical pages of shared-memory region
- * `id` into the caller's WASM linear memory at `wasm_off` (shared-to-local copy
- * into an already-mapped window); gated by the caller's DMA capability and
- * bounded by the region size. Returns 0 on success, WASMOS_ERR_SHMEM_BAD_ARGS
- * if `id`, `size` or `wasm_off` is negative or non-positive,
- * WASMOS_ERR_SHMEM_NO_CAP if the caller has no context or lacks the DMA
- * capability, WASMOS_ERR_SHMEM_BAD_ID if `id` names no region of the caller's
- * or the region has no backing pages, WASMOS_ERR_SHMEM_BAD_SIZE if `size`
- * exceeds the region, or WASMOS_ERR_SHMEM_NO_WINDOW if [`wasm_off`,
- * `wasm_off`+`size`) does not lie inside the caller's linear memory.
- */
-extern int32_t wasmos_shmem_refresh(int32_t id, int32_t wasm_off, int32_t size) WASMOS_WASM_IMPORT("wasmos", "shmem_refresh");
-/* Removes the caller's overlay of shared-memory region `id` from linear memory,
- * restoring the original linear window, untracking the mapping, and releasing
- * the caller's retain on the region. Returns the mm_shared_release result (0 on
- * success), WASMOS_ERR_SHMEM_BAD_ARGS if `id` is not positive or the linear
- * window could not be restored, WASMOS_ERR_SHMEM_NO_CAP if the caller has no
- * context, or WASMOS_ERR_SHMEM_NO_WINDOW if the ring-3 user window could not be
- * resynchronised.
- *
- * Only WARP restores the window: wasm3 releases the region's ownership and
- * refcount but leaves the overlay in place, and carries a FIXME saying so, so
- * the two restore-related codes cannot arise there.
- */
-extern int32_t wasmos_shmem_unmap(int32_t id) WASMOS_WASM_IMPORT("wasmos", "shmem_unmap");
 /* Route hardware IRQ line `irq_line` so its interrupts are delivered as IPC to
  * `endpoint` for the calling context. Returns the registration result (0 on
  * success), WASMOS_ERR_IRQ_BAD_LINE if `irq_line` is negative,
@@ -768,7 +697,7 @@ extern int32_t wasmos_spawn_info_buffer(void) WASMOS_WASM_IMPORT("wasmos", "spaw
  */
 extern int32_t wasmos_block_buffer_map(void) WASMOS_WASM_IMPORT("wasmos", "block_buffer_map");
 /* Overlay an OWNED xfer-buffer's backing into this process's WASM linear memory
- * (zero-copy, same pinned-window baseline as shmem/block_buffer_map). Returns the
+ * (zero-copy, same pinned-window baseline as block_buffer_map). Returns the
  * linmem byte offset (>= 0) of the mapping; the buffer's bytes are then directly
  * addressable at that offset for the socket-ring fast path. Idempotent per
  * buffer_id. unmap tears the window down; always unmap before releasing the

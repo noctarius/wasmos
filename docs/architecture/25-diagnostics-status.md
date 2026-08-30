@@ -498,8 +498,6 @@ native-call-smoke: ipc-call ok
 [test] ring3 yield syscall ok
 [test] ring3 syscall ok
 [test] ring3 preempt stress ok
-[test] ring3 shmem owner deny ok
-[test] ring3 shmem grant allow ok
 ```
 
 #### Fault Storm Markers

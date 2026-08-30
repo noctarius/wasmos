@@ -11,6 +11,7 @@
 #include "console_ring.h"
 #include "ipc.h"
 #include "memory.h"
+#include "physmem.h"
 #include "serial.h"
 #include "stdio.h"
 
@@ -67,7 +68,7 @@ static uint32_t g_early_log_count = 0; /* bytes written, capped at EARLY_LOG_SIZ
 
 static ksync_spinlock_t g_serial_lock = {0};
 static uint8_t g_serial_high_alias_enabled = 0;
-static uint32_t g_console_ring_shmem_id = 0;
+static uint32_t g_console_ring_id = 0;
 static console_ring_t* g_console_ring = 0;
 
 /* klog ring: physical base + byte size of the VT-owned SPSC ring.
@@ -116,7 +117,7 @@ static inline console_ring_t** serial_console_ring_slot(void) {
 }
 
 static inline uint32_t* serial_console_ring_id_slot(void) {
-    uintptr_t addr = (uintptr_t)&g_console_ring_shmem_id;
+    uintptr_t addr = (uintptr_t)&g_console_ring_id;
     if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
         addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
@@ -248,15 +249,14 @@ static void serial_ring_init(void) {
     if (*ring_slot) {
         return;
     }
-    uint64_t phys_base = 0;
-    if (mm_shared_create(
-            0, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, ring_id_slot, &phys_base) != 0) {
+    /* One plain page. The ring was a shared region while a driver could map it
+     * by id; nothing outside this file reads it now, so it needs no id, no
+     * grants and no refcount. */
+    const uint64_t phys_base = pfa_alloc_pages(1);
+    if (phys_base == 0) {
         return;
     }
-    if (mm_shared_retain(0, *ring_id_slot) != 0) {
-        *ring_id_slot = 0;
-        return;
-    }
+    *ring_id_slot = 0;
     *ring_slot = ptr_cast(console_ring_t, phys_base);
     (*ring_slot)->write_pos = 0;
     (*ring_slot)->read_pos = 0;
@@ -388,7 +388,7 @@ uint32_t serial_console_ring_id(void) {
     return *ring_id_slot;
 }
 
-/* The console ring as the raw value mm_shared_create handed back: a PHYSICAL
+/* The console ring's raw backing address: a PHYSICAL
  * base, NOT rebased onto the higher-half alias even when that alias is armed.
  * serial_ring_write does that rebasing itself on every write; a caller that
  * dereferences this pointer has to do the same, or run under a root that still

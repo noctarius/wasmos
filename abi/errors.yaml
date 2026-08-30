@@ -87,15 +87,10 @@ domains:
       - { name: NOT_AUTHORIZED,  description: "caller lacks the subsystem.register capability" }
       - { name: NO_PM_FSBUF,     description: "PM could not acquire its own xfer buffer" }
 
-  shmem:
+  linmem:
     id: 3
-    description: "shared-memory map/map_auto failures (was SHMEM_ERR_*)"
+    description: "linear-memory overlay placement failures"
     codes:
-      - { name: BAD_ARGS,  description: "id/size invalid or size not page-aligned" }
-      - { name: NO_CAP,    description: "caller lacks the DMA capability / no context" }
-      - { name: BAD_ID,    description: "shmem id unknown / no backing pages" }
-      - { name: BAD_SIZE,  description: "requested size smaller than the shared region" }
-      - { name: UNALIGNED, description: "fixed offset cannot yield a page-aligned host addr" }
       - { name: NO_WINDOW, description: "no free page-aligned window fits in linear memory" }
       - { name: MAP,       description: "paging/linear-memory mapping step failed" }
 

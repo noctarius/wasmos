@@ -26,7 +26,7 @@ const (
 	WASMOS_ERR_DOMAIN_NONE uint16 = 0
 	WASMOS_ERR_DOMAIN_PROC_SPAWN uint16 = 1
 	WASMOS_ERR_DOMAIN_PROC_PM uint16 = 2
-	WASMOS_ERR_DOMAIN_SHMEM uint16 = 3
+	WASMOS_ERR_DOMAIN_LINMEM uint16 = 3
 	WASMOS_ERR_DOMAIN_FS uint16 = 4
 	WASMOS_ERR_DOMAIN_NET uint16 = 5
 	WASMOS_ERR_DOMAIN_GFX uint16 = 6
@@ -92,13 +92,8 @@ const (
 	WASMOS_ERR_PROC_PM_HANDLER_REG int32 = -0x00020018 // exec-handler registration failed
 	WASMOS_ERR_PROC_PM_NOT_AUTHORIZED int32 = -0x00020019 // caller lacks the subsystem.register capability
 	WASMOS_ERR_PROC_PM_NO_PM_FSBUF int32 = -0x0002001A // PM could not acquire its own xfer buffer
-	WASMOS_ERR_SHMEM_BAD_ARGS int32 = -0x00030001 // id/size invalid or size not page-aligned
-	WASMOS_ERR_SHMEM_NO_CAP int32 = -0x00030002 // caller lacks the DMA capability / no context
-	WASMOS_ERR_SHMEM_BAD_ID int32 = -0x00030003 // shmem id unknown / no backing pages
-	WASMOS_ERR_SHMEM_BAD_SIZE int32 = -0x00030004 // requested size smaller than the shared region
-	WASMOS_ERR_SHMEM_UNALIGNED int32 = -0x00030005 // fixed offset cannot yield a page-aligned host addr
-	WASMOS_ERR_SHMEM_NO_WINDOW int32 = -0x00030006 // no free page-aligned window fits in linear memory
-	WASMOS_ERR_SHMEM_MAP int32 = -0x00030007 // paging/linear-memory mapping step failed
+	WASMOS_ERR_LINMEM_NO_WINDOW int32 = -0x00030001 // no free page-aligned window fits in linear memory
+	WASMOS_ERR_LINMEM_MAP int32 = -0x00030002 // paging/linear-memory mapping step failed
 	WASMOS_ERR_FS_BAD_ARGS int32 = -0x00040001 // invalid flags/args (len 0, bad access mode, reserved arg set)
 	WASMOS_ERR_FS_PATH_TOO_LONG int32 = -0x00040002 // path length exceeds the path or xfer buffer
 	WASMOS_ERR_FS_BUFFER int32 = -0x00040003 // xfer-buffer read/write/size call failed
@@ -331,8 +326,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "proc_spawn"
 	case WASMOS_ERR_DOMAIN_PROC_PM:
 		return "proc_pm"
-	case WASMOS_ERR_DOMAIN_SHMEM:
-		return "shmem"
+	case WASMOS_ERR_DOMAIN_LINMEM:
+		return "linmem"
 	case WASMOS_ERR_DOMAIN_FS:
 		return "fs"
 	case WASMOS_ERR_DOMAIN_NET:
@@ -460,19 +455,9 @@ func WasmosStrerror(c int32) string {
 		return "caller lacks the subsystem.register capability"
 	case WASMOS_ERR_PROC_PM_NO_PM_FSBUF:
 		return "PM could not acquire its own xfer buffer"
-	case WASMOS_ERR_SHMEM_BAD_ARGS:
-		return "id/size invalid or size not page-aligned"
-	case WASMOS_ERR_SHMEM_NO_CAP:
-		return "caller lacks the DMA capability / no context"
-	case WASMOS_ERR_SHMEM_BAD_ID:
-		return "shmem id unknown / no backing pages"
-	case WASMOS_ERR_SHMEM_BAD_SIZE:
-		return "requested size smaller than the shared region"
-	case WASMOS_ERR_SHMEM_UNALIGNED:
-		return "fixed offset cannot yield a page-aligned host addr"
-	case WASMOS_ERR_SHMEM_NO_WINDOW:
+	case WASMOS_ERR_LINMEM_NO_WINDOW:
 		return "no free page-aligned window fits in linear memory"
-	case WASMOS_ERR_SHMEM_MAP:
+	case WASMOS_ERR_LINMEM_MAP:
 		return "paging/linear-memory mapping step failed"
 	case WASMOS_ERR_FS_BAD_ARGS:
 		return "invalid flags/args (len 0, bad access mode, reserved arg set)"

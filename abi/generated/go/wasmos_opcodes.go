@@ -477,7 +477,6 @@ const PROC_IPC_DMA_BORROW_ERROR int32 = 0x2BF
 // font (0xA00..0xAFF)
 const FONT_IPC_OPEN_FONT_REQ int32 = 0xA00
 const FONT_IPC_GET_METRICS_REQ int32 = 0xA01
-const FONT_IPC_RASTER_GLYPH_REQ int32 = 0xA02
 const FONT_IPC_MEASURE_GLYPH_REQ int32 = 0xA03
 const FONT_IPC_RASTER_GLYPH_INTO_REQ int32 = 0xA04
 const FONT_IPC_RESP int32 = 0xA80
@@ -487,11 +486,9 @@ const FONT_IPC_ERROR int32 = 0xAFF
 const GFX_IPC_CREATE_WINDOW int32 = 0x200
 const GFX_IPC_DESTROY_WINDOW int32 = 0x201
 const GFX_IPC_RESIZE_WINDOW int32 = 0x202
-const GFX_IPC_ALLOC_SHARED_BUFFER int32 = 0x203
 const GFX_IPC_SUBMIT_COMMANDS int32 = 0x204
 const GFX_IPC_PRESENT_WINDOW int32 = 0x205
 const GFX_IPC_PUSH_EVENT int32 = 0x206
-const GFX_IPC_RELEASE_SHARED_BUFFER int32 = 0x207
 const GFX_IPC_SET_DISPLAY_MODE int32 = 0x208
 const GFX_IPC_LIST_WINDOWS int32 = 0x209
 const GFX_IPC_FOCUS_WINDOW int32 = 0x20A
@@ -500,6 +497,43 @@ const GFX_IPC_GET_DISPLAY_INFO int32 = 0x20C
 const GFX_IPC_MOVE_WINDOW int32 = 0x20D
 const GFX_IPC_SET_WINDOW_TITLE int32 = 0x20E
 const GFX_IPC_GET_WINDOW_TITLE int32 = 0x20F
+// Reply the CONSTRAINTS a surface must satisfy for `window_id`; allocates
+// nothing. arg0 = window_id, arg1..arg3 reserved (0). The reply carries
+// arg1 = stride in bytes, arg2 = required byte size, arg3 = (width << 16)
+// | height, all for the window's current content extent.
+//
+// The client then acquires a transfer buffer of at least that size,
+// borrows it to the compositor, and names it with GFX_IPC_ATTACH_SURFACE.
+// A resize bumps the window generation, so the spec must be re-read and a
+// new surface attached rather than the attached one resized in place --
+// a borrowed buffer is never mutated (docs/architecture/12-dma-transfers.md).
+//
+// This replaced a compositor-side allocation that granted the buffer to
+// the caller: a server cannot own a buffer it hands to a client.
+const GFX_IPC_GET_SURFACE_SPEC int32 = 0x210
+// Register a surface the CLIENT owns and has borrowed to the compositor.
+// arg0 = window_id, arg1 = buffer_id, arg2 = borrow_id, arg3 reserved (0).
+//
+// Three ids are a fixed, non-growing set, so they travel as bare argument
+// words rather than a descriptor (skills/wasmos-add-opcode, Step 0).
+// Both ids are required and neither is derivable compositor-side:
+// xfer_buffer_borrow returns borrow_id to the OWNER, and the two are not
+// interchangeable -- xfer_buffer_read/write key on buffer_id, while the
+// borrow-side mapping path keys on borrow_id.
+//
+// Attach registers a surface; GFX_IPC_PRESENT_WINDOW names which attached
+// surface is ready. Keeping them separate is what lets a client hold two
+// surfaces at once, which both resize and tear-free presentation need.
+const GFX_IPC_ATTACH_SURFACE int32 = 0x211
+// Withdraw a surface previously attached with GFX_IPC_ATTACH_SURFACE.
+// arg0 = window_id, arg1 = buffer_id, arg2..arg3 reserved (0).
+//
+// The client MUST detach before releasing the buffer. There is no
+// unborrow notification, so a release while the compositor still holds
+// the borrow leaves it reading a revoked borrow mid-composite; the
+// acknowledged detach is that missing handshake. This replaced a call
+// that asked the compositor to free a buffer the compositor owned.
+const GFX_IPC_DETACH_SURFACE int32 = 0x212
 const GFX_IPC_RESP int32 = 0x280
 const GFX_IPC_ERROR int32 = 0x2FF
 

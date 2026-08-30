@@ -44,13 +44,8 @@ source = "hello.rc"
 
 [[entries]]
 kind = "wasmos_app"
-path = "apps/shmtgt.wap"
-source = "shmtgt.wap"
-
-[[entries]]
-kind = "wasmos_app"
-path = "apps/shmownr.wap"
-source = "shmownr.wap"
+path = "apps/surface_attach.wap"
+source = "surface_attach.wap"
 
 [[entries]]
 kind = "wasmos_app"

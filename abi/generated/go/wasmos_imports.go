@@ -548,85 +548,6 @@ func SchedCpuStats(a0 int32, a1 int32) int32
 //go:wasmimport wasmos thread_yield
 func ThreadYield() int32
 
-// Shared memory API: shmem_create allocates pages of shared memory and
-// returns an id; shmem_grant/revoke control which PIDs may map it;
-// shmem_map/map_auto map the region into WASM linear memory;
-// flush/refresh synchronise dirty regions between processes.
-//go:wasmimport wasmos shmem_create
-func ShmemCreate(a0 int32, a1 int32) int32
-
-// Grants the caller's shared-memory region `id` to the process `target_pid`
-// (resolved to its context); gated by the caller's DMA capability. Returns the
-// mm_shared_grant result (0 on success), WASMOS_ERR_SHMEM_BAD_ID if `id` or
-// `target_pid` is not positive, or WASMOS_ERR_SHMEM_NO_CAP if the caller has no
-// context, lacks the DMA capability, or `target_pid` names no live process.
-//go:wasmimport wasmos shmem_grant
-func ShmemGrant(a0 int32, a1 int32) int32
-
-// Revokes a prior grant of the caller's shared-memory region `id` from process
-// `target_pid`; gated by the caller's DMA capability. Returns the
-// mm_shared_revoke result (0 on success), WASMOS_ERR_SHMEM_BAD_ID if `id` or
-// `target_pid` is not positive, or WASMOS_ERR_SHMEM_NO_CAP if the caller has no
-// context, lacks the DMA capability, or `target_pid` names no live process.
-//go:wasmimport wasmos shmem_revoke
-func ShmemRevoke(a0 int32, a1 int32) int32
-
-// On success wasmos_shmem_map/_auto return the mapped guest offset (>= 0).  On
-// failure they return a negative SHMEM_ERR_* reason code (see
-// drivers/include/wasmos_driver_abi.h) rather than a blanket -1, so callers can
-// report why a map failed.
-//go:wasmimport wasmos shmem_map
-func ShmemMap(a0 int32, a1 int32, a2 int32) int32
-
-// Overlays shared-memory region `id` into the caller's WASM linear memory at an
-// automatically chosen page-aligned window of `size` bytes (must be non-zero,
-// page-aligned, and at least the region's size); gated by the caller's DMA
-// capability. On success returns the mapped guest offset (>= 0); on failure a
-// negative SHMEM_ERR_* reason code (BAD_ARGS, NO_CAP, BAD_ID, BAD_SIZE,
-// NO_WINDOW, MAP).
-//go:wasmimport wasmos shmem_map_auto
-func ShmemMapAuto(a0 int32, a1 int32) int32
-
-// Pushes `size` bytes from the caller's WASM linear memory at `wasm_off` into
-// the backing physical pages of shared-memory region `id` (local-to-shared
-// copy); gated by the caller's DMA capability and bounded by the region size.
-// Returns 0 on success, WASMOS_ERR_SHMEM_BAD_ARGS if `id`, `size` or
-// `wasm_off` is negative or non-positive, WASMOS_ERR_SHMEM_NO_CAP if the caller
-// has no context or lacks the DMA capability, WASMOS_ERR_SHMEM_BAD_ID if `id`
-// names no region of the caller's or the region has no backing pages,
-// WASMOS_ERR_SHMEM_BAD_SIZE if `size` exceeds the region, or
-// WASMOS_ERR_SHMEM_NO_WINDOW if [`wasm_off`, `wasm_off`+`size`) does not lie
-// inside the caller's linear memory.
-//go:wasmimport wasmos shmem_flush
-func ShmemFlush(a0 int32, a1 int32, a2 int32) int32
-
-// Pulls `size` bytes from the backing physical pages of shared-memory region
-// `id` into the caller's WASM linear memory at `wasm_off` (shared-to-local copy
-// into an already-mapped window); gated by the caller's DMA capability and
-// bounded by the region size. Returns 0 on success, WASMOS_ERR_SHMEM_BAD_ARGS
-// if `id`, `size` or `wasm_off` is negative or non-positive,
-// WASMOS_ERR_SHMEM_NO_CAP if the caller has no context or lacks the DMA
-// capability, WASMOS_ERR_SHMEM_BAD_ID if `id` names no region of the caller's
-// or the region has no backing pages, WASMOS_ERR_SHMEM_BAD_SIZE if `size`
-// exceeds the region, or WASMOS_ERR_SHMEM_NO_WINDOW if [`wasm_off`,
-// `wasm_off`+`size`) does not lie inside the caller's linear memory.
-//go:wasmimport wasmos shmem_refresh
-func ShmemRefresh(a0 int32, a1 int32, a2 int32) int32
-
-// Removes the caller's overlay of shared-memory region `id` from linear memory,
-// restoring the original linear window, untracking the mapping, and releasing
-// the caller's retain on the region. Returns the mm_shared_release result (0 on
-// success), WASMOS_ERR_SHMEM_BAD_ARGS if `id` is not positive or the linear
-// window could not be restored, WASMOS_ERR_SHMEM_NO_CAP if the caller has no
-// context, or WASMOS_ERR_SHMEM_NO_WINDOW if the ring-3 user window could not be
-// resynchronised.
-//
-// Only WARP restores the window: wasm3 releases the region's ownership and
-// refcount but leaves the overlay in place, and carries a FIXME saying so, so
-// the two restore-related codes cannot arise there.
-//go:wasmimport wasmos shmem_unmap
-func ShmemUnmap(a0 int32) int32
-
 // Route hardware IRQ line `irq_line` so its interrupts are delivered as IPC to
 // `endpoint` for the calling context. Returns the registration result (0 on
 // success), WASMOS_ERR_IRQ_BAD_LINE if `irq_line` is negative,
@@ -888,7 +809,7 @@ func SpawnInfoBuffer() int32
 func BlockBufferMap() int32
 
 // Overlay an OWNED xfer-buffer's backing into this process's WASM linear memory
-// (zero-copy, same pinned-window baseline as shmem/block_buffer_map). Returns the
+// (zero-copy, same pinned-window baseline as block_buffer_map). Returns the
 // linmem byte offset (>= 0) of the mapping; the buffer's bytes are then directly
 // addressable at that offset for the socket-ring fast path. Idempotent per
 // buffer_id. unmap tears the window down; always unmap before releasing the

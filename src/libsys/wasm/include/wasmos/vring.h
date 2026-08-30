@@ -10,7 +10,7 @@
  *   - PCI/MMIO backend: region is a pinned physical region (wasmos_region_alloc),
  *     addresses in descriptors are device physical addresses, and the notify
  *     callback writes the device's QUEUE_NOTIFY doorbell.
- *   - shmem/IPC backend: region is a shmem mapping shared with a peer service,
+ *   - IPC backend: region is a transfer buffer lent to a peer service,
  *     and the notify callback rings a NOTIFICATION endpoint.
  *
  * Layout is the legacy split-virtqueue layout (virtio 0.9.5 / legacy PCI):

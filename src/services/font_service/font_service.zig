@@ -24,24 +24,25 @@
 //!                             each an int32 already scaled from font units to
 //!                             the handle's pixel size (so they are pixels, and
 //!                             carry the font's own sign convention).
-//!   FONT_IPC_RASTER_GLYPH_REQ arg0=handle_id, arg1=Unicode codepoint.
-//!                             reply arg1=shmem_id of the 8-bit coverage bitmap,
-//!                             arg2=(width | height<<16),
-//!                             arg3=(x0 | y0<<16) as signed 16-bit bearings.
-//!                             A glyph with an empty box (space) replies success
-//!                             with arg1=0 and arg2=0.  The bitmap lives in the
-//!                             service's single reused scratch shmem, granted to
-//!                             the caller's context: it is valid only until the
-//!                             next raster request, and its stride equals width.
-//!   FONT_IPC_MEASURE_GLYPH_REQ  arg0=handle_id, arg1=shmem_id holding UTF-8
-//!                             text, arg2=byte length.  Measures the whole run
-//!                             including kerning; reply arg1=(w | h<<16),
+//!   FONT_IPC_MEASURE_GLYPH_REQ  and FONT_IPC_RASTER_GLYPH_INTO_REQ both carry a
+//!                             request DESCRIPTOR in a transfer buffer the
+//!                             CALLER owns: arg0=buffer_id, arg1=byte_offset,
+//!                             arg2=size, arg3=borrow_id, with the UTF-8 run
+//!                             following font_raster_request_t in that same
+//!                             buffer.  Six independent values do not fit the
+//!                             four opcode words, and the caller owning the
+//!                             buffer is the transfer-buffer rule: a server
+//!                             cannot own a buffer it hands to a client.
+//!                             MEASURE reads only the run and leaves the mask
+//!                             fields zero; reply arg1=(w | h<<16),
 //!                             arg2=(x0 | y0<<16), arg3=total advance.
-//!   FONT_IPC_RASTER_GLYPH_INTO_REQ  as MEASURE plus arg3=destination shmem_id.
-//!                             Rasterises the whole run into the CALLER's buffer
-//!                             (8-bit coverage, stride = width) and replies with
-//!                             the same three words as MEASURE.  The caller must
-//!                             size the destination from a prior measure; a run
+//!                             RASTER_INTO additionally names a second
+//!                             caller-owned buffer, lent WRITE, in the
+//!                             descriptor's mask_buffer_id/mask_borrow_id, and
+//!                             rasterises the whole run into it (8-bit coverage,
+//!                             stride = width), replying with the same three
+//!                             words as MEASURE.  The caller must size that
+//!                             buffer from a prior measure; a run
 //!                             that measures empty replies success without
 //!                             writing.
 //!
@@ -118,9 +119,6 @@ var g_req_id: u32 = REQ_BASE;
 var g_next_handle_id: u32 = 1;
 var g_fonts: [MAX_FONTS]loaded_font_t = [_]loaded_font_t{.{}} ** MAX_FONTS;
 var g_handles: [MAX_HANDLES]font_handle_t = [_]font_handle_t{.{}} ** MAX_HANDLES;
-var g_raster_scratch_shmem_id: u32 = 0;
-var g_raster_scratch_ptr: ?[*]u8 = null;
-var g_raster_scratch_cap: usize = 0;
 var g_ipc_loop: sys.NativeEventLoop = undefined;
 
 fn api() *c.wasmos_driver_api_t {
@@ -302,9 +300,9 @@ fn stat_path_size(path: []const u8, out_size: *usize) bool {
 
 // Load a font file into an OWNED xfer buffer that doubles as the READ_PATH
 // transfer buffer: write the path in, grant fs-manager R|W, and the backend
-// writes the file blob back into the same buffer. No shmem and no bounce copy —
+// writes the file blob back into the same buffer. No bounce copy —
 // the font is parsed in place from the mapped buffer, which is held owned for
-// the font's lifetime (general physical pool, not the sub-64 MiB WARP shmem
+// the font's lifetime (general physical pool, not the sub-64 MiB WARP low
 // zone). Returns the owned buffer_id + mapped pointer + length.
 fn read_font_file(path: []const u8, out_buffer_id: *u32, out_ptr: *[*]u8, out_len: *usize) i32 {
     if (g_fs_endpoint == IPC_ENDPOINT_NONE or path.len == 0) return -1;
@@ -581,90 +579,34 @@ fn handle_get_metrics(req: *const c.nd_ipc_message_t) void {
     reply_with_status(req, c.WASMOS_ERR_NONE, @bitCast(asc), @bitCast(desc), @bitCast(gap));
 }
 
-fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
-    const handle_id = req.arg0;
-    const codepoint = req.arg1;
-    const hs = handle_slot_by_id(handle_id) orelse {
-        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
-        return;
-    };
-    const h = g_handles[hs];
-    if (h.owner_endpoint != req.source) {
-        reply_with_status(req, c.WASMOS_ERR_FONT_PERMISSION, 0, 0, 0);
-        return;
-    }
-    const fs = font_slot_by_id(h.font_id) orelse {
-        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
-        return;
-    };
-    const f = &g_fonts[fs];
-    if (!f.available or !f.font_info_ready) {
-        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
-        return;
-    }
-
-    const scale = c.stbtt_ScaleForPixelHeight(&f.font_info, @floatFromInt(h.px_size));
-    c.wasmos_stbtt_alloc_reset();
-    var x0: c_int = 0;
-    var y0: c_int = 0;
-    var x1: c_int = 0;
-    var y1: c_int = 0;
-    c.stbtt_GetCodepointBitmapBox(&f.font_info, @bitCast(codepoint), scale, scale, &x0, &y0, &x1, &y1);
-    const w: i32 = x1 - x0;
-    const hgt: i32 = y1 - y0;
-    if (w <= 0 or hgt <= 0) {
-        reply_with_status(req, c.WASMOS_ERR_NONE, 0, 0, sys.packS16Pair(x0, y0));
-        return;
-    }
-
-    const pixel_count: usize = @intCast(w * hgt);
-    if (pixel_count > RASTER_SCRATCH_BYTES) {
-        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
-        return;
-    }
-
-    if (g_raster_scratch_ptr == null or g_raster_scratch_shmem_id == 0 or g_raster_scratch_cap < pixel_count) {
-        if (g_raster_scratch_shmem_id != 0) {
-            _ = api().shmem_unmap.?(g_raster_scratch_shmem_id);
-            g_raster_scratch_shmem_id = 0;
-            g_raster_scratch_ptr = null;
-        }
-        var scratch_id: u32 = 0;
-        var scratch_ptr_raw: ?*anyopaque = null;
-        const pages = (pixel_count + 4095) / 4096;
-        if (api().shmem_create.?(pages, 0, &scratch_id, @ptrCast(&scratch_ptr_raw)) != 0 or scratch_id == 0 or scratch_ptr_raw == null) {
-            reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
-            return;
-        }
-        g_raster_scratch_shmem_id = scratch_id;
-        g_raster_scratch_ptr = @ptrCast(@alignCast(scratch_ptr_raw.?));
-        g_raster_scratch_cap = pages * 4096;
-    }
-
-    var owner_context_id: u32 = 0;
-    if (api().ipc_endpoint_owner == null or
-        api().ipc_endpoint_owner.?(req.source, &owner_context_id) != 0 or
-        owner_context_id == 0)
-    {
-        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
-        return;
-    }
-    if (api().shmem_grant == null or
-        api().shmem_grant.?(g_raster_scratch_shmem_id, owner_context_id) != 0)
-    {
-        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
-        return;
-    }
-
-    const dst: [*]u8 = g_raster_scratch_ptr.?;
-    c.stbtt_MakeCodepointBitmap(&f.font_info, dst, @intCast(w), @intCast(hgt), @intCast(w), scale, scale, @bitCast(codepoint));
-    reply_with_status(req, c.WASMOS_ERR_NONE, g_raster_scratch_shmem_id, sys.packU16Pair(@intCast(w), @intCast(hgt)), sys.packS16Pair(x0, y0));
-}
-
+// Same descriptor shape as RASTER_INTO, so one buffer layout serves both calls:
+// arg0=buffer_id, arg1=byte_offset, arg2=size, arg3=borrow_id, with the UTF-8
+// run following font_raster_request_t. The mask fields are unused here.
 fn handle_measure_text(req: *const c.nd_ipc_message_t) void {
-    const handle_id = req.arg0;
-    const text_shmem_id = req.arg1;
-    const text_len = req.arg2;
+    const req_buffer_id = req.arg0;
+    const req_offset = req.arg1;
+    const req_size = req.arg2;
+    const req_borrow_id = req.arg3;
+    if (req_buffer_id == 0 or req_borrow_id == 0 or
+        req_size < @as(i32, @intCast(@sizeOf(c.font_raster_request_t))))
+    {
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
+        return;
+    }
+    const req_ptr_raw =
+        api().xfer_buffer_map_borrowed.?(c.ND_BUFFER_KIND_XFER, req_buffer_id, req_borrow_id);
+    if (req_ptr_raw == null) {
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
+        return;
+    }
+    defer _ = api().xfer_buffer_unmap_borrowed.?(req_borrow_id);
+    const req_base: [*]const u8 = @ptrCast(@alignCast(req_ptr_raw.?));
+    const desc: *const c.font_raster_request_t =
+        @ptrCast(@alignCast(req_base + @as(usize, @intCast(req_offset))));
+    const handle_id: u32 = @bitCast(desc.handle_id);
+    const text_len = desc.text_len;
+    const text_ptr: [*]const u8 =
+        req_base + @as(usize, @intCast(req_offset)) + @sizeOf(c.font_raster_request_t);
     const hs = handle_slot_by_id(handle_id) orelse {
         reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
@@ -683,18 +625,12 @@ fn handle_measure_text(req: *const c.nd_ipc_message_t) void {
         reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
-    if (text_shmem_id == 0 or text_len == 0) {
+    if (text_len == 0 or
+        req_size < @as(i32, @intCast(@sizeOf(c.font_raster_request_t))) + text_len)
+    {
         reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     }
-
-    const text_ptr_raw = api().shmem_map.?(text_shmem_id);
-    if (text_ptr_raw == null) {
-        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
-        return;
-    }
-    defer _ = api().shmem_unmap.?(text_shmem_id);
-    const text_ptr: [*]const u8 = @ptrCast(@alignCast(text_ptr_raw.?));
     const text_n: usize = @intCast(text_len);
 
     const metrics = compute_text_metrics(f, h.px_size, text_ptr, text_n);
@@ -713,11 +649,40 @@ fn handle_measure_text(req: *const c.nd_ipc_message_t) void {
     reply_with_status(req, c.WASMOS_ERR_NONE, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(metrics.advance_x));
 }
 
+// The request travels as a descriptor in a transfer buffer the CLIENT owns:
+// arg0=buffer_id, arg1=byte_offset, arg2=size, arg3=borrow_id, with the UTF-8
+// run following font_raster_request_t in the same buffer. Six independent
+// values do not fit the four opcode words, and the destination mask is a
+// second client-owned buffer named inside the descriptor.
 fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
-    const handle_id = req.arg0;
-    const text_shmem_id = req.arg1;
-    const text_len = req.arg2;
-    const dst_shmem_id = req.arg3;
+    const req_buffer_id = req.arg0;
+    const req_offset = req.arg1;
+    const req_size = req.arg2;
+    const req_borrow_id = req.arg3;
+    if (req_buffer_id == 0 or req_borrow_id == 0 or
+        req_size < @as(i32, @intCast(@sizeOf(c.font_raster_request_t))))
+    {
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
+        return;
+    }
+    const req_ptr_raw =
+        api().xfer_buffer_map_borrowed.?(c.ND_BUFFER_KIND_XFER, req_buffer_id, req_borrow_id);
+    if (req_ptr_raw == null) {
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
+        return;
+    }
+    defer _ = api().xfer_buffer_unmap_borrowed.?(req_borrow_id);
+    const req_base: [*]const u8 = @ptrCast(@alignCast(req_ptr_raw.?));
+    const desc: *const c.font_raster_request_t =
+        @ptrCast(@alignCast(req_base + @as(usize, @intCast(req_offset))));
+    const handle_id: u32 = @bitCast(desc.handle_id);
+    const text_len = desc.text_len;
+    const dst_buffer_id: u32 = @bitCast(desc.mask_buffer_id);
+    const dst_borrow_id: u32 = @bitCast(desc.mask_borrow_id);
+    // The run follows the descriptor in the same buffer, so it needs no borrow
+    // of its own and the whole request is one mapping.
+    const text_ptr: [*]const u8 =
+        req_base + @as(usize, @intCast(req_offset)) + @sizeOf(c.font_raster_request_t);
     const hs = handle_slot_by_id(handle_id) orelse {
         reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
@@ -736,18 +701,12 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
         reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
-    if (text_shmem_id == 0 or text_len == 0 or dst_shmem_id == 0) {
+    if (text_len == 0 or dst_buffer_id == 0 or dst_borrow_id == 0 or
+        req_size < @as(i32, @intCast(@sizeOf(c.font_raster_request_t))) + text_len)
+    {
         reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     }
-
-    const text_ptr_raw = api().shmem_map.?(text_shmem_id);
-    if (text_ptr_raw == null) {
-        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
-        return;
-    }
-    defer _ = api().shmem_unmap.?(text_shmem_id);
-    const text_ptr: [*]const u8 = @ptrCast(@alignCast(text_ptr_raw.?));
     const text_n: usize = @intCast(text_len);
 
     const metrics = compute_text_metrics(f, h.px_size, text_ptr, text_n);
@@ -762,12 +721,14 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
         return;
     }
 
-    const dst_ptr_raw = api().shmem_map.?(dst_shmem_id);
+    // The mask is the caller's buffer, lent WRITE for this call.
+    const dst_ptr_raw =
+        api().xfer_buffer_map_borrowed.?(c.ND_BUFFER_KIND_XFER, dst_buffer_id, dst_borrow_id);
     if (dst_ptr_raw == null) {
         reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
-    defer _ = api().shmem_unmap.?(dst_shmem_id);
+    defer _ = api().xfer_buffer_unmap_borrowed.?(dst_borrow_id);
     const dst: [*]u8 = @ptrCast(@alignCast(dst_ptr_raw.?));
     const out_size_i32 = out_w * out_h;
     if (out_size_i32 <= 0) {
@@ -858,10 +819,8 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
     const h16: u16 = @intCast(clamp_i32(metrics.height, 0, 0xFFFF));
     const x016: i16 = @intCast(clamp_i32(metrics.x0, -32768, 32767));
     const y016: i16 = @intCast(clamp_i32(metrics.y0, -32768, 32767));
-    if (api().shmem_flush.?(dst_shmem_id, @ptrCast(dst), @intCast(out_size)) != 0) {
-        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
-        return;
-    }
+    // No write-back: the borrowed mapping IS the caller's buffer frames, so the
+    // coverage just written is already visible to it.
     reply_with_status(req, c.WASMOS_ERR_NONE, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(metrics.advance_x));
 }
 
@@ -869,7 +828,6 @@ fn handle_font_ipc_message(msg: *const c.nd_ipc_message_t) void {
     switch (msg.type) {
         c.FONT_IPC_OPEN_FONT_REQ => handle_open_font(msg),
         c.FONT_IPC_GET_METRICS_REQ => handle_get_metrics(msg),
-        c.FONT_IPC_RASTER_GLYPH_REQ => handle_raster_glyph(msg),
         c.FONT_IPC_MEASURE_GLYPH_REQ => handle_measure_text(msg),
         c.FONT_IPC_RASTER_GLYPH_INTO_REQ => handle_raster_text_into(msg),
         // font-service is itself an FS client; stray FS reply/error/stream
@@ -897,7 +855,6 @@ fn register_ipc_handlers() i32 {
     }.onMessage;
     if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_OPEN_FONT_REQ, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_GET_METRICS_REQ, cb, null) != 0) return -1;
-    if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_RASTER_GLYPH_REQ, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_MEASURE_GLYPH_REQ, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, cb, null) != 0) return -1;
     if (sys.eventSetDefault(&g_ipc_loop, cb, null) != 0) return -1;

@@ -52,22 +52,30 @@ enum {
  *                           arg3=(version<<16)|opcode
  * - GFX_IPC_DESTROY_WINDOW: arg0=window_id arg1..arg3 reserved
  * - GFX_IPC_RESIZE_WINDOW:  arg0=window_id arg1=width arg2=height
- * - GFX_IPC_ALLOC_SHARED_BUFFER:
- *                           arg0=window_id(0=unbound) arg1=width arg2=height
- *                           reply: arg1=buffer_id arg2=shmem_id arg3=stride
  * - GFX_IPC_PRESENT_WINDOW: arg0=window_id arg1=buffer_id
- *                           arg2=damage_count arg3=damage_shmem_id
- * - GFX_IPC_RELEASE_SHARED_BUFFER:
- *                           arg0=buffer_id arg1..arg3 reserved
+ *                           arg2=damage_count arg3=damage byte offset
+ *                           into the attached surface (0 = full repaint)
+ * - GFX_IPC_GET_SURFACE_SPEC:
+ *                           arg0=window_id arg1..arg3 reserved
+ *                           reply: arg1=stride arg2=byte_size
+ *                                  arg3=(width<<16)|height; allocates nothing
+ * - GFX_IPC_ATTACH_SURFACE: arg0=window_id arg1=buffer_id arg2=borrow_id
+ *                           the CLIENT owns the surface and lends it READ
+ *                           reply: arg1=buffer_id arg2=stride
+ * - GFX_IPC_DETACH_SURFACE: arg0=window_id arg1=buffer_id arg2..arg3 reserved
+ *                           withdraw before releasing; refused BUSY while the
+ *                           surface is the window's current buffer
  * - GFX_IPC_SET_DISPLAY_MODE:
  *                           arg0=width arg1=height arg2/arg3 reserved
  *                           reply: arg1=width arg2=height
- * - GFX_IPC_SET_WINDOW_TITLE: arg0=window_id arg1=shmem_id arg2=title_len(1..47) arg3=0
- *                           Caller writes title bytes to shmem before sending.
+ * - GFX_IPC_SET_WINDOW_TITLE: arg0=window_id arg1=buffer_id arg2=borrow_id
+ *   arg3=title_len(1..47); the CLIENT owns the transfer buffer and lends it READ
+ *                           Caller writes the title into its own buffer first.
  *                           Only the window owner may set its title.
- * - GFX_IPC_GET_WINDOW_TITLE: arg0=window_id arg1=shmem_id(0=query-only) arg2=max_len arg3=0
+ * - GFX_IPC_GET_WINDOW_TITLE: arg0=window_id arg1=buffer_id(0=query-only)
+ *   arg2=borrow_id arg3=max_len; the CLIENT owns the transfer buffer and lends it WRITE
  *                           reply arg1=actual_len (0 if no title set).
- *                           If shmem_id==0 only the length is returned.
+ *                           If buffer_id==0 only the length is returned.
  */
 
 /* Rectangle in pixels.  Used for damage lists passed through shared memory; x/y are

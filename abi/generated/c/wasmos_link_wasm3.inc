@@ -79,14 +79,6 @@
     X("wasmos", "xfer_buffer_release", "i(i)", wasmos_xfer_buffer_release) \
     X("wasmos", "sched_cpu_stats", "i(i*)", wasmos_sched_cpu_stats) \
     X("wasmos", "thread_yield", "i()", wasmos_thread_yield) \
-    X("wasmos", "shmem_create", "i(ii)", wasmos_shmem_create) \
-    X("wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant) \
-    X("wasmos", "shmem_revoke", "i(ii)", wasmos_shmem_revoke) \
-    X("wasmos", "shmem_map", "i(iii)", wasmos_shmem_map) \
-    X("wasmos", "shmem_map_auto", "i(ii)", wasmos_shmem_map_auto) \
-    X("wasmos", "shmem_flush", "i(iii)", wasmos_shmem_flush) \
-    X("wasmos", "shmem_refresh", "i(iii)", wasmos_shmem_refresh) \
-    X("wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap) \
     X("wasmos", "irq_route_ipc", "i(ii)", wasmos_irq_route_ipc) \
     X("wasmos", "irq_ack", "i(i)", wasmos_irq_ack) \
     X("wasmos", "irq_unroute", "i(i)", wasmos_irq_unroute) \

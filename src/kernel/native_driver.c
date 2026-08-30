@@ -12,8 +12,10 @@
 #include "process_manager.h"
 #include "serial.h"
 #include "framebuffer.h"
+#include "idtable.h"
 #include "ipc.h"
 #include "io.h"
+#include "list.h"
 #include "user_mutex.h"
 #include "policy.h"
 #include "wasmos_driver_abi.h"
@@ -200,17 +202,39 @@ static uint32_t nd_sched_ticks(void) {
     return (uint32_t)timer_ticks();
 }
 
-/* Per-driver borrow bookkeeping so buffer_release can reverse the exact
- * borrow and page mapping established by buffer_borrow. This is a global pool
- * shared by all native services. net-stack alone holds several persistent
- * mappings (RX frame, four TX slots, interface class lookup/subscribe, hrng)
- * plus two per open socket (TX/RX rings); a TCP server that listens and accepts
- * connections needs headroom for the listening socket and each accepted one, so
- * the table is sized well above the handful a single driver needs. */
-#define ND_BORROW_SLOTS 32
+/* Per-driver borrow bookkeeping so buffer_release can reverse the exact borrow
+ * and page mapping established by buffer_borrow.
+ *
+ * This is an idtable rather than a fixed array, so it grows on demand and
+ * bounds each owner instead of handing the first driver to ask the whole pool
+ * (docs/architecture/35-kernel-object-tables.md, obligations 1 and 4). The
+ * distinction matters here more than the ceiling did: the pool is shared by
+ * every native service, so an unbounded one lets a single driver starve the
+ * framebuffer and the net stack, and the property worth having is that the
+ * NEIGHBOUR still works.
+ *
+ * Lookup is by the caller's borrow_id or buffer_id, not by the table's own id,
+ * so the walks below iterate the store rather than calling idtable_get. That is
+ * the same scan the fixed array did, over a store that is no longer capped.
+ *
+ * LOCKING: idtable holds no lock of its own by design, so g_nd_borrow_lock is
+ * this table's. Native services are separate processes and these entry points
+ * run on whichever CPU the caller is on, so the previous unlocked global array
+ * was racy on SMP as well as bounded. */
+#define ND_BORROW_CHUNK 16
+
+/* Per driver context. net-stack is the heaviest known consumer: several
+ * persistent mappings (RX frame, four TX slots, interface class lookup and
+ * subscribe, hrng) plus two per open socket, and a TCP server needs the
+ * listening socket and each accepted one on top. The compositor adds one per
+ * attached window surface. 64 leaves room for both without letting one driver's
+ * leak reach its neighbours, and caps a context's mapping window at
+ * 64 * ND_MAP_STRIDE = 1 GiB. */
+#define ND_BORROW_PER_OWNER_MAX 64
 
 typedef struct {
-    uint32_t driver_ctx; /* 0 => free slot */
+    idtable_header_t header; /* FIRST member: required by idtable */
+    uint32_t driver_ctx;     /* 0 => free slot */
     uint32_t kind;
     uint32_t key_buffer_id; /* caller-supplied lookup key (0 for owner-local) */
     uint8_t owner_local;    /* 1 => object was acquired here (framebuffer) */
@@ -220,24 +244,93 @@ typedef struct {
     uint64_t pages;
 } nd_borrow_slot_t;
 
-static nd_borrow_slot_t g_nd_borrows[ND_BORROW_SLOTS];
-
-static nd_borrow_slot_t* nd_borrow_alloc(void) {
-    for (uint32_t i = 0; i < ND_BORROW_SLOTS; ++i) {
-        if (g_nd_borrows[i].driver_ctx == 0) {
-            return &g_nd_borrows[i];
-        }
-    }
-    return (nd_borrow_slot_t*)0;
-}
-
-static void nd_borrow_slot_clear(nd_borrow_slot_t* slot) {
-    memset(slot, 0, sizeof(*slot));
-}
+static idtable_t g_nd_borrows;
+static ksync_spinlock_t g_nd_borrow_lock = {0};
+static uint8_t g_nd_borrows_ready;
 
 /* Distinct VA window per mapped buffer in a driver's address space, so a driver
  * can hold several owned buffers mapped at once without overlap. */
 #define ND_MAP_STRIDE 0x01000000ULL /* 16 MiB */
+
+/* Call with g_nd_borrow_lock held. */
+static int nd_borrows_ensure_ready(void) {
+    if (g_nd_borrows_ready) {
+        return 0;
+    }
+    if (idtable_init(&g_nd_borrows,
+                     (uint32_t)sizeof(nd_borrow_slot_t),
+                     ND_BORROW_CHUNK,
+                     ND_BORROW_PER_OWNER_MAX) != WASMOS_OK) {
+        return -1;
+    }
+    g_nd_borrows_ready = 1;
+    return 0;
+}
+
+/* Call with g_nd_borrow_lock held. */
+static nd_borrow_slot_t* nd_borrow_alloc(uint32_t driver_ctx) {
+    int status = 0;
+    if (nd_borrows_ensure_ready() != 0) {
+        return (nd_borrow_slot_t*)0;
+    }
+    return (nd_borrow_slot_t*)idtable_alloc(&g_nd_borrows, driver_ctx, &status);
+}
+
+/* Call with g_nd_borrow_lock held. */
+static void nd_borrow_slot_clear(nd_borrow_slot_t* slot) {
+    if (!slot) {
+        return;
+    }
+    (void)idtable_free(&g_nd_borrows, slot->header.id);
+}
+
+/* The lowest ND_MAP_STRIDE window this context is not already using. VA only
+ * has to be unique WITHIN a driver's address space, so the search is scoped to
+ * one owner; the quota above is what bounds it. Call with the lock held. */
+static uint64_t nd_borrow_pick_virt(uint32_t driver_ctx, const nd_borrow_slot_t* skip) {
+    for (uint32_t index = 0; index < ND_BORROW_PER_OWNER_MAX; ++index) {
+        const uint64_t candidate = ND_DEVICE_VIRT_BASE + (uint64_t)index * ND_MAP_STRIDE;
+        list_iter_t it;
+        const nd_borrow_slot_t* e = (const nd_borrow_slot_t*)list_first(&g_nd_borrows.store, &it);
+        int taken = 0;
+        while (e) {
+            if (e != skip && e->header.in_use && e->driver_ctx == driver_ctx &&
+                e->virt == candidate) {
+                taken = 1;
+                break;
+            }
+            e = (const nd_borrow_slot_t*)list_next(&it);
+        }
+        if (!taken) {
+            return candidate;
+        }
+    }
+    return 0;
+}
+
+/* Find this context's slot by the caller's key. Call with the lock held. */
+static nd_borrow_slot_t* nd_borrow_find(uint32_t driver_ctx, uint32_t borrow_id,
+                                        uint32_t key_buffer_id, int want_owner_local) {
+    list_iter_t it;
+    nd_borrow_slot_t* e;
+    if (!g_nd_borrows_ready) {
+        return (nd_borrow_slot_t*)0;
+    }
+    e = (nd_borrow_slot_t*)list_first(&g_nd_borrows.store, &it);
+    while (e) {
+        if (e->header.in_use && e->driver_ctx == driver_ctx &&
+            (int)e->owner_local == want_owner_local) {
+            if (borrow_id != 0u && e->borrow.borrow_id == borrow_id) {
+                return e;
+            }
+            if (key_buffer_id != 0u && e->key_buffer_id == key_buffer_id) {
+                return e;
+            }
+        }
+        e = (nd_borrow_slot_t*)list_next(&it);
+    }
+    return (nd_borrow_slot_t*)0;
+}
 
 static int nd_map_pages(mm_context_t* ctx, uint64_t virt, uint64_t phys_base, uint64_t pages,
                         uint32_t borrow_flags) {
@@ -294,28 +387,47 @@ static void* nd_xfer_buffer_acquire(uint32_t kind, uint32_t size, uint32_t* out_
     }
     uint32_t driver_ctx = proc->context_id;
 
-    nd_borrow_slot_t* slot = nd_borrow_alloc();
+    ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
+    nd_borrow_slot_t* slot = nd_borrow_alloc(driver_ctx);
     if (!slot) {
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
         return (void*)0;
     }
+    uint64_t virt = nd_borrow_pick_virt(driver_ctx, slot);
+    if (virt == 0u) {
+        nd_borrow_slot_clear(slot);
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
+        return (void*)0;
+    }
+    slot->driver_ctx = driver_ctx;
+    slot->virt = virt;
+    ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
 
     xfer_buffer_owner_t owner = {0};
     if (xfer_buffer_acquire(kind, driver_ctx, size, &owner) != WASMOS_ERR_NONE) {
+        ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
+        nd_borrow_slot_clear(slot);
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
         return (void*)0;
     }
     uint64_t phys_base = xfer_buffer_object_phys(&owner.buffer);
     if (phys_base == 0u) {
         (void)xfer_buffer_release_owned(&owner);
+        ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
+        nd_borrow_slot_clear(slot);
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
         return (void*)0;
     }
 
-    uint32_t slot_index = (uint32_t)(slot - g_nd_borrows);
-    uint64_t virt = ND_DEVICE_VIRT_BASE + (uint64_t)slot_index * ND_MAP_STRIDE;
     uint64_t pages = ((uint64_t)owner.buffer.size_bytes + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (nd_map_pages(ctx, virt, phys_base, pages, BUFFER_BORROW_READ | BUFFER_BORROW_WRITE) != 0) {
         (void)xfer_buffer_release_owned(&owner);
+        ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
+        nd_borrow_slot_clear(slot);
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
         return (void*)0;
     }
+    ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
 
     slot->driver_ctx = driver_ctx;
     slot->kind = kind;
@@ -325,6 +437,7 @@ static void* nd_xfer_buffer_acquire(uint32_t kind, uint32_t size, uint32_t* out_
     memset(&slot->borrow, 0, sizeof(slot->borrow));
     slot->virt = virt;
     slot->pages = pages;
+    ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
     if (out_buffer_id) {
         *out_buffer_id = owner.buffer.buffer_id;
     }
@@ -354,26 +467,43 @@ static void* nd_xfer_buffer_map_borrowed(uint32_t kind, uint32_t buffer_id, uint
         borrow.buffer.size_bytes == 0u) {
         return (void*)0;
     }
-    slot = nd_borrow_alloc();
-    if (!slot) {
-        return (void*)0;
-    }
     phys_base = xfer_buffer_object_phys(&borrow.buffer);
     pages = ((uint64_t)borrow.buffer.size_bytes + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (phys_base == 0u || pages == 0u) {
         return (void*)0;
     }
-    virt = ND_DEVICE_VIRT_BASE + (uint64_t)(slot - g_nd_borrows) * ND_MAP_STRIDE;
-    if (nd_map_pages(ctx, virt, phys_base, pages, borrow.flags) != 0) {
+
+    ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
+    slot = nd_borrow_alloc(proc->context_id);
+    if (!slot) {
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
         return (void*)0;
     }
+    virt = nd_borrow_pick_virt(proc->context_id, slot);
+    if (virt == 0u) {
+        nd_borrow_slot_clear(slot);
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
+        return (void*)0;
+    }
+    /* Published before the mapping so a concurrent allocation for this context
+     * cannot pick the same window. */
     slot->driver_ctx = proc->context_id;
+    slot->virt = virt;
+    ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
+
+    if (nd_map_pages(ctx, virt, phys_base, pages, borrow.flags) != 0) {
+        ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
+        nd_borrow_slot_clear(slot);
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
+        return (void*)0;
+    }
+    ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
     slot->kind = kind;
     slot->key_buffer_id = buffer_id;
     slot->owner_local = 0;
     slot->borrow = borrow;
-    slot->virt = virt;
     slot->pages = pages;
+    ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
     return ptr_cast(void, virt);
 }
 
@@ -384,21 +514,21 @@ static int nd_xfer_buffer_unmap_borrowed(uint32_t borrow_id) {
     if (!proc || proc->context_id == 0u || borrow_id == 0u) {
         return -1;
     }
-    for (uint32_t i = 0; i < ND_BORROW_SLOTS; ++i) {
-        if (g_nd_borrows[i].driver_ctx == proc->context_id && !g_nd_borrows[i].owner_local &&
-            g_nd_borrows[i].borrow.borrow_id == borrow_id) {
-            slot = &g_nd_borrows[i];
-            break;
-        }
-    }
+    ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
+    slot = nd_borrow_find(proc->context_id, borrow_id, 0u, 0);
     if (!slot) {
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
         return -1;
     }
+    const uint64_t virt = slot->virt;
+    const uint64_t pages = slot->pages;
+    nd_borrow_slot_clear(slot);
+    ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
+
     ctx = mm_context_get(proc->context_id);
     if (ctx && ctx->root_table != 0u) {
-        nd_unmap_pages(ctx, slot->virt, slot->pages);
+        nd_unmap_pages(ctx, virt, pages);
     }
-    nd_borrow_slot_clear(slot);
     return 0;
 }
 
@@ -453,25 +583,57 @@ static int nd_xfer_buffer_release(uint32_t buffer_id) {
     }
     uint32_t driver_ctx = proc->context_id;
 
-    nd_borrow_slot_t* slot = (nd_borrow_slot_t*)0;
-    for (uint32_t i = 0; i < ND_BORROW_SLOTS; ++i) {
-        if (g_nd_borrows[i].driver_ctx == driver_ctx &&
-            g_nd_borrows[i].key_buffer_id == buffer_id) {
-            slot = &g_nd_borrows[i];
-            break;
-        }
-    }
+    /* Scoped to owner-local slots: map_borrowed records the peer's buffer_id
+     * under the same key, and releasing through a borrowed slot would hand
+     * xfer_buffer_release_owned a zeroed owner. */
+    ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
+    nd_borrow_slot_t* slot = nd_borrow_find(driver_ctx, 0u, buffer_id, 1);
     if (!slot) {
+        ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
         return -1;
     }
+    const uint64_t virt = slot->virt;
+    const uint64_t pages = slot->pages;
+    const xfer_buffer_owner_t owner = slot->owner;
+    nd_borrow_slot_clear(slot);
+    ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
 
     mm_context_t* ctx = mm_context_get(driver_ctx);
     if (ctx && ctx->root_table != 0) {
-        nd_unmap_pages(ctx, slot->virt, slot->pages);
+        nd_unmap_pages(ctx, virt, pages);
     }
-    int rc = xfer_buffer_release_owned(&slot->owner) == WASMOS_ERR_NONE ? 0 : -1;
-    nd_borrow_slot_clear(slot);
-    return rc;
+    xfer_buffer_owner_t releasing = owner;
+    return xfer_buffer_release_owned(&releasing) == WASMOS_ERR_NONE ? 0 : -1;
+}
+
+/* A dying native service takes its borrow mappings with it. Without this the
+ * slots stayed live forever with no owner to unmap them, which mattered doubly
+ * when the table was a fixed global pool: driver churn drained it and every
+ * other native service lost the ability to map anything
+ * (docs/architecture/35-kernel-object-tables.md, obligation 5).
+ *
+ * The address space is torn down separately by mm_context_destroy, so the page
+ * mappings need no unmapping here; what has to be undone is the xfer-buffer
+ * object each owner-local slot still holds. */
+static void nd_borrow_teardown(void* elem, void* user) {
+    nd_borrow_slot_t* slot = (nd_borrow_slot_t*)elem;
+    (void)user;
+    if (!slot || !slot->owner_local) {
+        return;
+    }
+    xfer_buffer_owner_t releasing = slot->owner;
+    (void)xfer_buffer_release_owned(&releasing);
+}
+
+void native_driver_release_owner(uint32_t owner_context_id) {
+    if (owner_context_id == 0u) {
+        return;
+    }
+    ksync_spinlock_lock_noirq(&g_nd_borrow_lock);
+    if (g_nd_borrows_ready) {
+        (void)idtable_release_owner(&g_nd_borrows, owner_context_id, nd_borrow_teardown, 0);
+    }
+    ksync_spinlock_unlock_noirq(&g_nd_borrow_lock);
 }
 
 static int nd_framebuffer_pixel(uint32_t x, uint32_t y, uint32_t color) {
@@ -613,26 +775,10 @@ static uint32_t nd_early_log_size(void) {
 static void nd_early_log_copy(uint8_t* dst, uint32_t offset, uint32_t len) {
     serial_early_log_copy(dst, offset, len);
 }
-
-static int nd_shmem_create(uint64_t pages, uint32_t flags, uint32_t* out_id, void** out_ptr) {
-    uint64_t phys = 0;
-    if (mm_shared_create(0, pages, flags, out_id, &phys) != 0) {
-        return -1;
-    }
-    if (mm_shared_retain(0, *out_id) != 0) {
-        (void)mm_shared_release(0, *out_id);
-        return -1;
-    }
-    if (out_ptr) {
-        *out_ptr = ptr_cast(void, (phys | KERNEL_HIGHER_HALF_BASE));
-    }
-    return 0;
-}
-
 /* Anonymous page mapping for a native service's heap. Native services run
  * supervisor and share the kernel higher-half, so raw physical pages returned as
  * higher-half pointers are directly usable — no per-service VA window needed
- * (same model as nd_shmem_map). The native stdlib slab allocator layers
+ * (identity-mapped kernel pointer). The native stdlib slab allocator layers
  * malloc/free/calloc/realloc on top. TODO(nd-vm): track per-pid so a reaped
  * service's heap pages are reclaimed (native services are long-lived today). */
 static void* nd_vm_map(uint32_t size) {
@@ -659,64 +805,9 @@ static void nd_vm_unmap(void* addr, uint32_t size) {
     phys = (uint64_t)(uintptr_t)addr - KERNEL_HIGHER_HALF_BASE;
     pfa_free_pages(phys, pages);
 }
-
-static void* nd_shmem_map(uint32_t id) {
-    uint64_t base = 0;
-    uint64_t pages = 0;
-    if (mm_shared_get_phys(0, id, &base, &pages) != 0 || pages == 0) {
-        return 0;
-    }
-    if (mm_shared_retain(0, id) != 0) {
-        return 0;
-    }
-    return ptr_cast(void, (base | KERNEL_HIGHER_HALF_BASE));
-}
-
-static int nd_shmem_unmap(uint32_t id) {
-    return mm_shared_release(0, id);
-}
-
-static int nd_shmem_flush(uint32_t id, const void* ptr, uint32_t size) {
-    uint64_t phys_base = 0;
-    uint64_t pages = 0;
-    uint32_t owner_context_id = 0;
-    process_t* proc = process_get(process_current_pid());
-    if (!ptr || size == 0) {
-        return -1;
-    }
-    if (!proc || proc->context_id == 0) {
-        return -1;
-    }
-    owner_context_id = proc->context_id;
-    if (mm_shared_get_phys(owner_context_id, id, &phys_base, &pages) != 0 || pages == 0 ||
-        phys_base == 0) {
-        /* Fallback for legacy kernel-owned shared IDs. */
-        if (mm_shared_get_phys(0, id, &phys_base, &pages) != 0 || pages == 0 || phys_base == 0) {
-            return -1;
-        }
-    }
-    if (pages == 0 || phys_base == 0) {
-        return -1;
-    }
-    if ((uint64_t)size > pages * PAGE_SIZE) {
-        return -1;
-    }
-    memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), ptr, (size_t)size);
-    return 0;
-}
-
-static int nd_shmem_grant(uint32_t id, uint32_t target_context_id) {
-    return mm_shared_grant(0, id, target_context_id);
-}
-
 static int nd_ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id) {
     return ipc_endpoint_owner(endpoint, out_owner_context_id);
 }
-
-static uint32_t nd_console_ring_id(void) {
-    return serial_console_ring_id();
-}
-
 static int nd_console_register_fb(uint32_t context_id, uint32_t endpoint) {
     (void)context_id;
     if (endpoint == IPC_ENDPOINT_NONE) {
@@ -1063,16 +1154,10 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
     api.proc_notify_ready = nd_proc_notify_ready;
     api.early_log_size = nd_early_log_size;
     api.early_log_copy = nd_early_log_copy;
-    api.shmem_create = nd_shmem_create;
-    api.shmem_grant = nd_shmem_grant;
-    api.shmem_map = nd_shmem_map;
-    api.shmem_unmap = nd_shmem_unmap;
     api.ipc_endpoint_owner = nd_ipc_endpoint_owner;
-    api.console_ring_id = nd_console_ring_id;
     api.console_register_fb = nd_console_register_fb;
     api.abi_magic = WASMOS_NATIVE_ABI_MAGIC;
     api.abi_version = WASMOS_NATIVE_ABI_VERSION;
-    api.shmem_flush = nd_shmem_flush;
     api.spawn_info = nd_spawn_info;
     api.xfer_buffer_acquire = nd_xfer_buffer_acquire;
     api.xfer_buffer_map_borrowed = nd_xfer_buffer_map_borrowed;

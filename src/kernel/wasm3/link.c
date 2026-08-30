@@ -54,11 +54,11 @@ typedef struct {
 
 typedef struct {
     uint32_t pid;
-    uint32_t shmem_id;
+    uint32_t overlay_id;
     uint32_t offset;
     uint32_t size;
     uint8_t valid;
-} wasm_shmem_linear_map_t;
+} wasm_overlay_map_t;
 
 typedef struct {
     uint32_t pid;
@@ -73,9 +73,9 @@ static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
 static ksync_spinlock_t g_wasm_side_table_lock;
-/* Allow several SHMEM mappings per process (UI + multiple window buffers + aux buffers). */
-#define WASM_SHMEM_MAP_SLOTS (PROCESS_MAX_COUNT * 32)
-static wasm_shmem_linear_map_t g_wasm_shmem_maps[WASM_SHMEM_MAP_SLOTS];
+/* Allow several overlay mappings per process (UI + multiple window surfaces + aux buffers). */
+#define WASM_OVERLAY_MAP_SLOTS (PROCESS_MAX_COUNT * 32)
+static wasm_overlay_map_t g_wasm_overlay_maps[WASM_OVERLAY_MAP_SLOTS];
 /* Driver-owned DMA regions (virtqueues, packet pools) also occupy linear-memory
  * windows and therefore must participate in overlap tracking / teardown. */
 #define WASM_DMA_REGION_MAP_SLOTS (PROCESS_MAX_COUNT * 16)
@@ -224,12 +224,12 @@ static void wasm_ipc_slots_init(void) {
         g_wasm_fs_peer_slots[i].valid = 0;
         g_wasm_fs_peer_slots[i].peer_context_id = 0;
     }
-    for (uint32_t i = 0; i < WASM_SHMEM_MAP_SLOTS; ++i) {
-        g_wasm_shmem_maps[i].pid = 0;
-        g_wasm_shmem_maps[i].shmem_id = 0;
-        g_wasm_shmem_maps[i].offset = 0;
-        g_wasm_shmem_maps[i].size = 0;
-        g_wasm_shmem_maps[i].valid = 0;
+    for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
+        g_wasm_overlay_maps[i].pid = 0;
+        g_wasm_overlay_maps[i].overlay_id = 0;
+        g_wasm_overlay_maps[i].offset = 0;
+        g_wasm_overlay_maps[i].size = 0;
+        g_wasm_overlay_maps[i].valid = 0;
     }
     for (uint32_t i = 0; i < WASM_DMA_REGION_MAP_SLOTS; ++i) {
         g_wasm_dma_region_maps[i].pid = 0;
@@ -241,11 +241,12 @@ static void wasm_ipc_slots_init(void) {
     }
 }
 
-static void wasm_shmem_map_track(uint32_t pid, uint32_t shmem_id, uint32_t offset, uint32_t size) {
-    wasm_shmem_linear_map_t* empty = 0;
-    for (uint32_t i = 0; i < WASM_SHMEM_MAP_SLOTS; ++i) {
-        wasm_shmem_linear_map_t* slot = &g_wasm_shmem_maps[i];
-        if (slot->valid && slot->pid == pid && slot->shmem_id == shmem_id &&
+static void wasm_overlay_map_track(uint32_t pid, uint32_t overlay_id, uint32_t offset,
+                                   uint32_t size) {
+    wasm_overlay_map_t* empty = 0;
+    for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
+        wasm_overlay_map_t* slot = &g_wasm_overlay_maps[i];
+        if (slot->valid && slot->pid == pid && slot->overlay_id == overlay_id &&
             slot->offset == offset) {
             slot->size = size;
             return;
@@ -256,29 +257,29 @@ static void wasm_shmem_map_track(uint32_t pid, uint32_t shmem_id, uint32_t offse
     }
     if (empty) {
         empty->pid = pid;
-        empty->shmem_id = shmem_id;
+        empty->overlay_id = overlay_id;
         empty->offset = offset;
         empty->size = size;
         empty->valid = 1;
     }
 }
 
-static void wasm_shmem_map_untrack(uint32_t pid, uint32_t shmem_id) {
-    for (uint32_t i = 0; i < WASM_SHMEM_MAP_SLOTS; ++i) {
-        wasm_shmem_linear_map_t* slot = &g_wasm_shmem_maps[i];
+static void wasm_overlay_map_untrack(uint32_t pid, uint32_t overlay_id) {
+    for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
+        wasm_overlay_map_t* slot = &g_wasm_overlay_maps[i];
         if (!slot->valid)
             continue;
-        if (slot->pid == pid && slot->shmem_id == shmem_id) {
+        if (slot->pid == pid && slot->overlay_id == overlay_id) {
             slot->valid = 0;
         }
     }
 }
 
-static uint8_t wasm_shmem_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
+static uint8_t wasm_overlay_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
     uint64_t a0 = (uint64_t)offset;
     uint64_t a1 = a0 + (uint64_t)size;
-    for (uint32_t i = 0; i < WASM_SHMEM_MAP_SLOTS; ++i) {
-        const wasm_shmem_linear_map_t* slot = &g_wasm_shmem_maps[i];
+    for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
+        const wasm_overlay_map_t* slot = &g_wasm_overlay_maps[i];
         if (!slot->valid || slot->pid != pid || slot->size == 0) {
             continue;
         }
@@ -334,12 +335,12 @@ static uint8_t wasm_dma_region_map_overlaps(uint32_t pid, uint32_t offset, uint3
 }
 
 static uint8_t wasm_linear_window_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
-    return wasm_shmem_map_overlaps(pid, offset, size) ||
+    return wasm_overlay_map_overlaps(pid, offset, size) ||
            wasm_dma_region_map_overlaps(pid, offset, size);
 }
 
 /* Reclaim every per-pid side-table resource of a reaped process: the driver DMA regions
- * (whose pages are returned to the PFA), the shmem/xfer-buffer overlay tracking entries, and
+ * (whose pages are returned to the PFA), the xfer-buffer overlay tracking entries, and
  * the per-process block buffer (also returned to the PFA).  The page-table mappings
  * themselves are torn down with the address space, so nothing is unmapped here.  A pid of 0
  * is ignored.  Safe to call for a pid that owns none of these. */
@@ -362,13 +363,13 @@ void wasm3_release_pid(uint32_t pid) {
         slot->phys_base = 0;
         slot->valid = 0;
     }
-    for (uint32_t i = 0; i < WASM_SHMEM_MAP_SLOTS; ++i) {
-        if (g_wasm_shmem_maps[i].pid == pid) {
-            g_wasm_shmem_maps[i].pid = 0;
-            g_wasm_shmem_maps[i].shmem_id = 0;
-            g_wasm_shmem_maps[i].offset = 0;
-            g_wasm_shmem_maps[i].size = 0;
-            g_wasm_shmem_maps[i].valid = 0;
+    for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
+        if (g_wasm_overlay_maps[i].pid == pid) {
+            g_wasm_overlay_maps[i].pid = 0;
+            g_wasm_overlay_maps[i].overlay_id = 0;
+            g_wasm_overlay_maps[i].offset = 0;
+            g_wasm_overlay_maps[i].size = 0;
+            g_wasm_overlay_maps[i].valid = 0;
         }
     }
     /* Reclaim the per-pid block buffer.  Capture the phys under the side-table
@@ -1128,7 +1129,7 @@ m3ApiRawFunction(wasmos_block_buffer_map) {
 }
 
 /* Synthetic tracking-id namespace for xfer-buffer linmem overlays (bit 30),
- * disjoint from real shmem ids and the region/DMA windows, so they share the
+ * disjoint from the region/DMA windows, so they share the
  * overlap-tracking table without colliding. Mirrors WARP_XFER_TRACK_ID. */
 #define WASM_XFER_TRACK_ID(id) ((uint32_t)(id) | 0x40000000u)
 
@@ -1159,10 +1160,10 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NO_BACKING);
     }
     uint32_t track_id = WASM_XFER_TRACK_ID((uint32_t)buffer_id);
-    for (uint32_t i = 0; i < WASM_SHMEM_MAP_SLOTS; ++i) {
-        if (g_wasm_shmem_maps[i].valid && g_wasm_shmem_maps[i].pid == proc->pid &&
-            g_wasm_shmem_maps[i].shmem_id == track_id) {
-            m3ApiReturn((int32_t)g_wasm_shmem_maps[i].offset); /* idempotent */
+    for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
+        if (g_wasm_overlay_maps[i].valid && g_wasm_overlay_maps[i].pid == proc->pid &&
+            g_wasm_overlay_maps[i].overlay_id == track_id) {
+            m3ApiReturn((int32_t)g_wasm_overlay_maps[i].offset); /* idempotent */
         }
     }
 
@@ -1194,11 +1195,11 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
                                     MEM_REGION_FLAG_USER) != 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INTERNAL);
     }
-    wasm_shmem_map_track(proc->pid, track_id, off32, (uint32_t)region_bytes);
+    wasm_overlay_map_track(proc->pid, track_id, off32, (uint32_t)region_bytes);
     m3ApiReturn((int32_t)off32);
 }
 
-/* Untrack an xfer-buffer overlay window. Like wasmos_shmem_unmap this does not
+/* Untrack an xfer-buffer overlay window. This does not
  * yet restore the previous linear-memory page mappings (same FIXME); the object
  * backing is reclaimed on process reap. Callers must therefore keep the buffer
  * alive (do not release it) until process exit. Returns 0. */
@@ -1209,8 +1210,9 @@ m3ApiRawFunction(wasmos_xfer_buffer_unmap) {
     if (buffer_id <= 0 || !proc || proc->context_id == 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT);
     }
-    /* FIXME(xfer-unmap): mirror wasmos_shmem_unmap — restore the prior PTEs. */
-    wasm_shmem_map_untrack(proc->pid, WASM_XFER_TRACK_ID((uint32_t)buffer_id));
+    /* FIXME(xfer-unmap): restore the prior PTEs rather than leaving the
+     * overlay mapped. */
+    wasm_overlay_map_untrack(proc->pid, WASM_XFER_TRACK_ID((uint32_t)buffer_id));
     m3ApiReturn(0);
 }
 
@@ -2172,35 +2174,6 @@ m3ApiRawFunction(wasmos_phys_map) {
     m3ApiReturn(0);
 }
 
-/* Allocate a shared-memory region of `pages` 4 KiB pages owned by the caller and return its
- * id (positive).  `flags` are MEM_REGION_FLAG_* for the region; a non-positive value defaults
- * to READ|WRITE.  Creating does not map it -- shmem_map/_auto do.  Requires
- * POLICY_ACTION_DMA_BUFFER.  Returns the id, WASMOS_ERR_SHMEM_BAD_ARGS for a non-positive
- * `pages`, WASMOS_ERR_SHMEM_NO_CAP, or WASMOS_ERR_SHMEM_MAP when the allocation fails. */
-m3ApiRawFunction(wasmos_shmem_create) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, pages) m3ApiGetArg(int32_t, flags)
-
-        if (pages <= 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ARGS);
-    }
-
-    process_t* proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-
-    uint32_t id = 0;
-    uint64_t phys = 0;
-    uint32_t create_flags =
-        (flags > 0) ? (uint32_t)flags : (MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
-    if (mm_shared_create(proc->context_id, (uint64_t)(uint32_t)pages, create_flags, &id, &phys) !=
-        0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_MAP);
-    }
-    (void)phys;
-    m3ApiReturn((int32_t)id);
-}
-
 /* Register the caller's BUFFER_KIND_TRANSFER xfer-buffer (id) as the kernel klog ring.  The
  * caller (the VT) has already acquired + mapped + wasmos_ringbuf_init'd it; the kernel takes
  * no retain and reaches the pages through the higher-half alias, so the caller must hold the
@@ -2224,301 +2197,6 @@ m3ApiRawFunction(wasmos_klog_register_ring) {
     }
     uint32_t notify = (notify_endpoint > 0) ? (uint32_t)notify_endpoint : 0u;
     m3ApiReturn(klog_register_ring(proc->context_id, (uint32_t)id, notify));
-}
-
-/* Map shared-memory region `id` over the caller-chosen wasm32 linear-memory offset `ptr`,
- * replacing whatever that window held.  `size` must be page-aligned and at least the region's
- * size; only the region's own pages are mapped, so a larger `size` bounds the window without
- * widening the mapping.  The resolved user VA must be page-aligned.  Requires
- * POLICY_ACTION_DMA_BUFFER and takes a retain on the region.  Returns 0 on success -- the
- * caller already knows the offset -- else a negative WASMOS_ERR_SHMEM_* code (UNALIGNED,
- * NO_CAP, BAD_ID, BAD_SIZE, NO_WINDOW, MAP). */
-m3ApiRawFunction(wasmos_shmem_map) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, ptr)
-        m3ApiGetArg(int32_t, size)
-
-            if (id <= 0 || ptr < 0 || size <= 0 || (size & 0xFFF) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_UNALIGNED);
-    }
-
-    process_t* proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-    mm_context_t* ctx = mm_context_get(proc->context_id);
-    if (!ctx || ctx->root_table == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-
-    uint64_t phys_base = 0;
-    uint64_t shared_pages = 0;
-    if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
-        shared_pages == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
-    }
-    uint64_t map_size = (uint64_t)(uint32_t)size;
-    uint64_t needed_size = shared_pages * 0x1000ULL;
-    if (map_size < needed_size) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
-    }
-
-    uint32_t off32 = (uint32_t)ptr;
-    uint32_t map_size32 = (uint32_t)size;
-    if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
-    }
-    uint64_t virt = 0;
-    if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
-        mm_user_range_permitted(
-            proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
-    }
-    if ((virt & 0xFFFULL) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_UNALIGNED);
-    }
-
-    if (mm_context_map_physical(proc->context_id,
-                                virt,
-                                phys_base,
-                                needed_size,
-                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
-                                    MEM_REGION_FLAG_USER) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
-    }
-
-    if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_MAP);
-    }
-    wasm_shmem_map_track(proc->pid, (uint32_t)id, off32, map_size32);
-    m3ApiReturn(0);
-}
-
-/* Like wasmos_shmem_map but the kernel picks the window: the region is overlaid one page past
- * everything the module currently has, growing linear memory as needed, and the chosen wasm32
- * offset is RETURNED (>= 0).  `size` must be non-zero, page-aligned and at least the region's
- * size.  Requires POLICY_ACTION_DMA_BUFFER and takes a retain on the region.  Failures are
- * negative WASMOS_ERR_SHMEM_* codes (BAD_ARGS, NO_CAP, BAD_ID, BAD_SIZE, NO_WINDOW,
- * UNALIGNED, MAP). */
-m3ApiRawFunction(wasmos_shmem_map_auto) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, size)
-
-        if (id <= 0 || size <= 0 || (size & 0xFFF) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ARGS);
-    }
-
-    process_t* proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-    mm_context_t* ctx = mm_context_get(proc->context_id);
-    if (!ctx || ctx->root_table == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-
-    uint64_t phys_base = 0;
-    uint64_t shared_pages = 0;
-    int get_phys_rc = mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages);
-    if (get_phys_rc != 0 || shared_pages == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
-    }
-
-    uint64_t map_size = (uint64_t)(uint32_t)size;
-    uint64_t needed_size = shared_pages * 0x1000ULL;
-    if (map_size < needed_size) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
-    }
-
-    uint32_t placed_off = 0;
-    if (wasm_linmem_place_overlay(runtime, proc, map_size, &placed_off) != WASMOS_OK) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
-    }
-    uint64_t off64 = (uint64_t)placed_off;
-
-    uint32_t off32 = (uint32_t)off64;
-    uint32_t map_size32 = (uint32_t)map_size;
-    uint64_t virt = 0;
-    if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
-        mm_user_range_permitted(
-            proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_MAP);
-    }
-    if ((virt & 0xFFFULL) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_UNALIGNED);
-    }
-
-    if (mm_context_map_physical(proc->context_id,
-                                virt,
-                                phys_base,
-                                needed_size,
-                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
-                                    MEM_REGION_FLAG_USER) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_MAP);
-    }
-    if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_MAP);
-    }
-    wasm_shmem_map_track(proc->pid, (uint32_t)id, off32, map_size32);
-
-    /* FIXME(shmem-map-auto): unmap currently only drops shared refs and does
-     * not reclaim or reuse grown linear-memory pages for future map_auto
-     * allocations. */
-    m3ApiReturn((int32_t)off32);
-}
-
-/* Grant the caller's shared-memory region `id` to the process `target_pid`, resolved to its
- * context, so that process may map it.  Requires POLICY_ACTION_DMA_BUFFER.  Returns
- * mm_shared_grant's result (0 on success), WASMOS_ERR_SHMEM_BAD_ID for a non-positive `id` or
- * `target_pid`, or WASMOS_ERR_SHMEM_NO_CAP when the caller has no context, lacks the
- * capability, or `target_pid` names no live process. */
-m3ApiRawFunction(wasmos_shmem_grant) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, target_pid)
-
-        process_t* proc = process_get(process_current_pid());
-    process_t* target = 0;
-    if (id <= 0 || target_pid <= 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
-    }
-    if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-    target = process_get((uint32_t)target_pid);
-    if (!target || target->context_id == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-    m3ApiReturn(mm_shared_grant(proc->context_id, (uint32_t)id, target->context_id));
-}
-
-/* Withdraw a prior grant of the caller's shared-memory region `id` from process `target_pid`.
- * Same gating and same code set as wasmos_shmem_grant; returns mm_shared_revoke's result. */
-m3ApiRawFunction(wasmos_shmem_revoke) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, target_pid)
-
-        process_t* proc = process_get(process_current_pid());
-    process_t* target = 0;
-    if (id <= 0 || target_pid <= 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
-    }
-    if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-    target = process_get((uint32_t)target_pid);
-    if (!target || target->context_id == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-    m3ApiReturn(mm_shared_revoke(proc->context_id, (uint32_t)id, target->context_id));
-}
-
-/* Drop the caller's tracking of, and retain on, shared-memory region `id`.  The overlay
- * itself stays in place (the FIXME below), so the linear-memory window keeps aliasing the
- * region's pages until the address space is torn down.  Returns mm_shared_release's result (0
- * on success), WASMOS_ERR_SHMEM_BAD_ARGS for a non-positive `id`, or WASMOS_ERR_SHMEM_NO_CAP
- * when the caller has no context.  No capability is required to unmap. */
-m3ApiRawFunction(wasmos_shmem_unmap) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id)
-
-        if (id <= 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ARGS);
-    }
-    /* FIXME: This currently only releases shared-region ownership/refcount.
-     * It does not restore the previous linear-memory page mappings. */
-    process_t* proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-    wasm_shmem_map_untrack(proc->pid, (uint32_t)id);
-    m3ApiReturn(mm_shared_release(proc->context_id, (uint32_t)id));
-}
-
-/* Push `size` bytes from the caller's linear memory at wasm32 offset `ptr` into the backing
- * pages of shared-memory region `id`, reached through the kernel higher-half alias
- * (local-to-shared).  For callers that keep the data in ordinary linear memory rather than in
- * a mapped window: a window mapped by shmem_map/_auto already aliases those pages and needs no
- * flush.  `size` is bounded by both linear memory and the region size.  Requires
- * POLICY_ACTION_DMA_BUFFER.  Returns 0 on success, else WASMOS_ERR_SHMEM_BAD_ARGS, _NO_CAP,
- * _BAD_ID, _NO_WINDOW, or _BAD_SIZE. */
-m3ApiRawFunction(wasmos_shmem_flush) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, ptr)
-        m3ApiGetArg(int32_t, size)
-
-            if (id <= 0 || ptr < 0 || size <= 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ARGS);
-    }
-
-    process_t* proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-
-    uint64_t phys_base = 0;
-    uint64_t shared_pages = 0;
-    if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
-        shared_pages == 0 || phys_base == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
-    }
-
-    uint32_t mem_size = 0;
-    uint8_t* mem_base = m3_GetMemory(runtime, &mem_size, 0);
-    if (!mem_base || mem_size == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
-    }
-
-    uint32_t off32 = (uint32_t)ptr;
-    uint32_t len32 = (uint32_t)size;
-    if ((uint64_t)off32 + (uint64_t)len32 > (uint64_t)mem_size) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
-    }
-
-    uint64_t max_len = shared_pages * 0x1000ULL;
-    if ((uint64_t)len32 > max_len) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
-    }
-
-    memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), mem_base + off32, (size_t)len32);
-    m3ApiReturn(0);
-}
-
-/* Pull `size` bytes from the backing pages of shared-memory region `id` into the caller's
- * linear memory at wasm32 offset `ptr` (shared-to-local).  Exact mirror of wasmos_shmem_flush,
- * including the gating, the bounds and the code set. */
-m3ApiRawFunction(wasmos_shmem_refresh) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, ptr)
-        m3ApiGetArg(int32_t, size)
-
-            if (id <= 0 || ptr < 0 || size <= 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ARGS);
-    }
-
-    process_t* proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
-    }
-
-    uint64_t phys_base = 0;
-    uint64_t shared_pages = 0;
-    if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
-        shared_pages == 0 || phys_base == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
-    }
-
-    uint32_t mem_size = 0;
-    uint8_t* mem_base = m3_GetMemory(runtime, &mem_size, 0);
-    if (!mem_base || mem_size == 0) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
-    }
-
-    uint32_t off32 = (uint32_t)ptr;
-    uint32_t len32 = (uint32_t)size;
-    if ((uint64_t)off32 + (uint64_t)len32 > (uint64_t)mem_size) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
-    }
-
-    uint64_t max_len = shared_pages * 0x1000ULL;
-    if ((uint64_t)len32 > max_len) {
-        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
-    }
-
-    memcpy(mem_base + off32, ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), (size_t)len32);
-    m3ApiReturn(0);
 }
 
 /* Route hardware IRQ line `irq_line` to the caller's context, delivering each interrupt as an

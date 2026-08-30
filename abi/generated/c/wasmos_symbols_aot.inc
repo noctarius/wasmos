@@ -80,14 +80,6 @@
     LINK("wasmos", "xfer_buffer_release", stub_i1) , \
     LINK("wasmos", "sched_cpu_stats", stub_i2) , \
     LINK("wasmos", "thread_yield", stub_i0) , \
-    LINK("wasmos", "shmem_create", stub_i2) , \
-    LINK("wasmos", "shmem_grant", stub_i2) , \
-    LINK("wasmos", "shmem_revoke", stub_i2) , \
-    LINK("wasmos", "shmem_map", stub_i3) , \
-    LINK("wasmos", "shmem_map_auto", stub_i2) , \
-    LINK("wasmos", "shmem_flush", stub_i3) , \
-    LINK("wasmos", "shmem_refresh", stub_i3) , \
-    LINK("wasmos", "shmem_unmap", stub_i1) , \
     LINK("wasmos", "irq_route_ipc", stub_i2) , \
     LINK("wasmos", "irq_ack", stub_i1) , \
     LINK("wasmos", "irq_unroute", stub_i1) , \

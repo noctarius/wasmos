@@ -180,6 +180,9 @@ void msi_release_context(uint32_t context_id) {
 void xfer_buffer_drop_context(uint32_t context_id) {
     (void)context_id;
 }
+void native_driver_release_owner(uint32_t context_id) {
+    (void)context_id;
+}
 void wasmos_subsystem_registry_drop_owner(uint32_t context_id) {
     (void)context_id;
 }

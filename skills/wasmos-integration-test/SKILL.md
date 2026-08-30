@@ -23,7 +23,7 @@ The suite is partitioned by subsystem into **batteries**, one per CI runner:
 | Battery | What it covers |
 | --- | --- |
 | `boot-and-init` | Boot chain, init, CLI, panic decoding, device manager |
-| `scheduler-and-ipc` | Scheduler, preemption, threading, IPC wakeup, shmem grants |
+| `scheduler-and-ipc` | Scheduler, preemption, threading, IPC wakeup, buffer borrows |
 | `networking` | virtio-net, net-stack, sockets, DNS, TLS |
 | `graphics-and-vt` | Graphics, virtual terminals, hardware input |
 | `filesystem` | Filesystem reads and writes |

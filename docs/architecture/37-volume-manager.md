@@ -165,6 +165,20 @@ label at all while its FAT boot sector says `QEMU VVFAT`, and
 separate matchers and REFUSES a rule that uses one on the other's subsystem —
 a rule that can never fire is rejected at load rather than dying silently.
 
+**The empty value means opposite things for the two, and that is not an
+inconsistency.** `ATTR{label}==""` selects the volumes whose filesystem label is
+blank: a FAT volume may genuinely be named "", and the descriptor separates that
+from a format carrying no label at all (`VOLUME_DESCRIPTOR_FLAG_HAS_LABEL`), so
+the matcher has something to select. `ATTR{partlabel}==""` selects nothing and is
+refused at load: an MBR partition has no name concept and a GPT entry may simply
+be unnamed, and neither is "a partition named the empty string".
+`ATTR{name}==""` is refused for the same reason, a canonical id never being
+empty.
+
+A matcher's presence is therefore tracked by a flag where the empty value is
+meaningful, and by the first byte where it is not — `has_label` exists,
+`has_partlabel` does not need to.
+
 The filesystem driver is told about the BACKING BLOCK DEVICE, not the volume: a
 driver mounts a block device, and the volume is what selected which one. All
 three facts it receives — canonical id, backend and unit — come from the backing

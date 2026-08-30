@@ -627,6 +627,25 @@ static void an_empty_label_matcher_outside_a_volume_rule_is_refused(void) {
           "a disk rule carrying an empty ATTR{label} is refused");
 }
 
+/* An empty PARTITION label is not a partition named "". An MBR partition has no
+ * name concept and a GPT entry may be unnamed; neither should satisfy a matcher
+ * asking for a name. So the matcher can select nothing and the rule is refused at
+ * load, on the same terms as a partition matcher on a disk rule.
+ *
+ * Deliberately the opposite of ATTR{label}=="" above, and the asymmetry is the
+ * point: a FILESYSTEM label is a value a volume can carry blank, and the
+ * descriptor says which volumes do. */
+static void an_empty_partition_name_matcher_is_refused(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"partition\", ATTR{partlabel}==\"\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "a rule asking for an empty partition label is refused");
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", ATTR{name}==\"\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "and so is one asking for an empty canonical id");
+}
+
 /* A malformed matcher rejects the RULE. Dropping the attribute instead would
  * widen the rule to everything its author did not ask for, and on the mount path
  * that means a filesystem on the wrong volume. */
@@ -710,6 +729,7 @@ int main(void) {
     a_boot_matcher_outside_a_volume_rule_is_refused();
     an_empty_label_matcher_selects_the_blank_label();
     an_empty_label_matcher_outside_a_volume_rule_is_refused();
+    an_empty_partition_name_matcher_is_refused();
     a_malformed_matcher_rejects_the_rule();
     a_partition_matcher_on_a_disk_rule_is_refused();
     an_overlong_rule_line_is_refused();

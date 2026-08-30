@@ -1036,19 +1036,18 @@ tail.
   stronger identity than the FAT serial beside it, which
   `scripts/make_gpt_image.py` derives from that same label anyway.
 
-- [ ] [ENHANCEMENT][P3] `ATTR{partlabel}==""` is inexpressible, the same way
-  `ATTR{label}==""` was. `block_fs_rule_matches` infers the matcher's presence
-  from `rule->partlabel[0]`, so an empty value reads as no matcher at all.
+- [x] [ENHANCEMENT][P3] `ATTR{partlabel}==""` selects nothing, and is refused at
+  load. An empty PARTITION name is not a partition named "": an MBR partition has
+  no name concept and a GPT entry may simply be unnamed, and neither should
+  satisfy a matcher asking for a name. The matcher can therefore never fire, so
+  the rule is refused rather than left to die silently — the same treatment a
+  partition matcher on a disk rule gets. `ATTR{name}==""` goes the same way, a
+  canonical id never being empty.
 
-  The fix is NOT symmetric with the one applied to `ATTR{label}`. That one worked
-  because the volume descriptor already separates "the format carries a label,
-  and it is blank" from "the format carries none"
-  (`VOLUME_DESCRIPTOR_FLAG_HAS_LABEL`), so a `has_label` flag on the rule had
-  something to compare against. `wasmos_block_descriptor_t` has no equivalent for
-  a partition name: an MBR partition has no name concept and a GPT entry with a
-  blank one both arrive as an empty string. Making the matcher expressible means
-  giving the descriptor the distinction first, and deciding whether an unnamed MBR
-  partition should satisfy `ATTR{partlabel}==""` at all.
+  Deliberately the OPPOSITE of `ATTR{label}==""`, which selects the volumes whose
+  filesystem label is blank. A filesystem label is a value a volume can carry
+  empty and the descriptor says which ones do
+  (`VOLUME_DESCRIPTOR_FLAG_HAS_LABEL`); a partition name is not.
 
 - [ ] [ENHANCEMENT][P3] Retire `wasmos_block_descriptor_t.fs_type`.
   It is set to `FS_TYPE_UNKNOWN` by all three publishers and by nothing else,

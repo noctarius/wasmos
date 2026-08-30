@@ -580,10 +580,29 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
             rule.has_part_guid = 1;
             continue;
         }
+        /* An empty value is REFUSED for both, because neither can select
+         * anything. A partition's name is not a value the way a filesystem's
+         * label is: an MBR partition has no name concept at all and a GPT entry
+         * may simply be unnamed, and neither is "a partition named the empty
+         * string". A canonical id is never empty either. So an empty matcher here
+         * is a rule that can never fire, and this refuses it at load rather than
+         * letting it die silently -- the same treatment a partition matcher on a
+         * disk rule gets.
+         *
+         * This is where ATTR{label} differs and must not be copied: a FAT volume
+         * may genuinely be NAMED "", the descriptor says so with
+         * VOLUME_DESCRIPTOR_FLAG_HAS_LABEL, and ATTR{label}=="" selects exactly
+         * those. */
         if (extract_op_value(tok, "ATTR{partlabel}", "==", label, sizeof(label)) == 0) {
+            if (label[0] == '\0') {
+                return -1;
+            }
             continue;
         }
         if (extract_op_value(tok, "ATTR{name}", "==", name, sizeof(name)) == 0) {
+            if (name[0] == '\0') {
+                return -1;
+            }
             continue;
         }
         if (extract_op_value(tok, "ATTR{fstype}", "==", tmp, sizeof(tmp)) == 0) {

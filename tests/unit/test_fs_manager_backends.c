@@ -21,7 +21,7 @@
 #include "fs_manager_backends.h"
 #include "wasmos_driver_abi.h"
 
-/* One registered backend. `kind` is FSMGR_BACKEND_BOOT for every block-backed
+/* One registered backend. `kind` is FSMGR_BACKEND_BLOCK for every block-backed
  * backend regardless of filesystem, which is the distinction these cases turn
  * on: it is `fs_type` that says which filesystem is mounted. */
 static fs_backend_t make_backend(uint8_t slot, uint8_t kind, uint32_t fs_type,
@@ -39,18 +39,18 @@ static fs_backend_t make_backend(uint8_t slot, uint8_t kind, uint32_t fs_type,
 }
 
 /* Regression: 2026-08-30-fsmgr-backend-identity — every block-backed backend
- * registers as FSMGR_BACKEND_BOOT, and `mount` derived its filesystem label
+ * registers as FSMGR_BACKEND_BLOCK, and `mount` derived its filesystem label
  * from that value, so both WFS mounts were reported as fs-fat. The label was
  * the visible half of a backend table that carried no filesystem identity at
  * all. */
 static void test_wfs_backend_is_not_named_fat(void) {
-    fs_backend_t wfs = make_backend(2, FSMGR_BACKEND_BOOT, FS_TYPE_WFS, "wfs");
+    fs_backend_t wfs = make_backend(2, FSMGR_BACKEND_BLOCK, FS_TYPE_WFS, "wfs");
     const char* name = fsmgr_backend_fs_name(&wfs);
     assert(strcmp(name, "fs-wfs") == 0);
 }
 
 static void test_fat_backend_is_named_fat(void) {
-    fs_backend_t fat = make_backend(0, FSMGR_BACKEND_BOOT, FS_TYPE_FAT, "boot");
+    fs_backend_t fat = make_backend(0, FSMGR_BACKEND_BLOCK, FS_TYPE_FAT, "boot");
     assert(strcmp(fsmgr_backend_fs_name(&fat), "fs-fat") == 0);
 }
 
@@ -66,7 +66,7 @@ static void test_init_backend_is_named_init(void) {
  * deliberately: a backend is named by WHAT IT SERVES, and `kind` must not
  * influence the answer in either direction. */
 static void test_name_comes_from_fs_type_not_kind(void) {
-    fs_backend_t initfs_kind_boot = make_backend(0, FSMGR_BACKEND_BOOT, FS_TYPE_INITFS, "init");
+    fs_backend_t initfs_kind_boot = make_backend(0, FSMGR_BACKEND_BLOCK, FS_TYPE_INITFS, "init");
     fs_backend_t wfs_kind_init = make_backend(1, FSMGR_BACKEND_INIT, FS_TYPE_WFS, "wfs");
     assert(strcmp(fsmgr_backend_fs_name(&initfs_kind_boot), "fs-init") == 0);
     assert(strcmp(fsmgr_backend_fs_name(&wfs_kind_init), "fs-wfs") == 0);
@@ -83,7 +83,7 @@ static void test_unknown_type_is_a_miss_for_any_kind(void) {
  * being guessed at: naming it after a filesystem it may not be is what this
  * suite exists to prevent. */
 static void test_unknown_fs_type_is_named_generically(void) {
-    fs_backend_t unknown = make_backend(3, FSMGR_BACKEND_BOOT, FS_TYPE_UNKNOWN, "fs");
+    fs_backend_t unknown = make_backend(3, FSMGR_BACKEND_BLOCK, FS_TYPE_UNKNOWN, "fs");
     assert(strcmp(fsmgr_backend_fs_name(&unknown), "fs") == 0);
 }
 
@@ -96,8 +96,8 @@ static void test_null_backend_is_named_generically(void) {
  * this is the case the boot log showed, where /boot and /wfs both read fs-fat. */
 static void test_two_block_backends_are_distinguished(void) {
     fs_backend_t backends[2];
-    backends[0] = make_backend(0, FSMGR_BACKEND_BOOT, FS_TYPE_FAT, "boot");
-    backends[1] = make_backend(1, FSMGR_BACKEND_BOOT, FS_TYPE_WFS, "wfs");
+    backends[0] = make_backend(0, FSMGR_BACKEND_BLOCK, FS_TYPE_FAT, "boot");
+    backends[1] = make_backend(1, FSMGR_BACKEND_BLOCK, FS_TYPE_WFS, "wfs");
     assert(strcmp(fsmgr_backend_fs_name(&backends[0]), fsmgr_backend_fs_name(&backends[1])) != 0);
 }
 
@@ -110,8 +110,8 @@ static void test_two_block_backends_are_distinguished(void) {
 static void test_root_is_not_decided_by_registration_order(void) {
     fs_backend_t backends[3];
     /* A WFS volume registers into slot 0, ahead of the boot volume. */
-    backends[0] = make_backend(0, FSMGR_BACKEND_BOOT, FS_TYPE_WFS, "wfs");
-    backends[1] = make_backend(1, FSMGR_BACKEND_BOOT, FS_TYPE_FAT, "boot");
+    backends[0] = make_backend(0, FSMGR_BACKEND_BLOCK, FS_TYPE_WFS, "wfs");
+    backends[1] = make_backend(1, FSMGR_BACKEND_BLOCK, FS_TYPE_FAT, "boot");
     backends[2] = make_backend(2, FSMGR_BACKEND_INIT, FS_TYPE_UNKNOWN, "init");
 
     int32_t root = fsmgr_select_root_backend(backends, 3);
@@ -121,8 +121,8 @@ static void test_root_is_not_decided_by_registration_order(void) {
 
 static void test_root_is_found_in_slot_order_too(void) {
     fs_backend_t backends[2];
-    backends[0] = make_backend(0, FSMGR_BACKEND_BOOT, FS_TYPE_FAT, "boot");
-    backends[1] = make_backend(1, FSMGR_BACKEND_BOOT, FS_TYPE_WFS, "wfs");
+    backends[0] = make_backend(0, FSMGR_BACKEND_BLOCK, FS_TYPE_FAT, "boot");
+    backends[1] = make_backend(1, FSMGR_BACKEND_BLOCK, FS_TYPE_WFS, "wfs");
     assert(fsmgr_select_root_backend(backends, 2) == 0);
 }
 
@@ -131,14 +131,14 @@ static void test_root_is_found_in_slot_order_too(void) {
 static void test_no_root_before_the_boot_volume_registers(void) {
     fs_backend_t backends[2];
     backends[0] = make_backend(0, FSMGR_BACKEND_INIT, FS_TYPE_UNKNOWN, "init");
-    backends[1] = make_backend(1, FSMGR_BACKEND_BOOT, FS_TYPE_WFS, "wfs");
+    backends[1] = make_backend(1, FSMGR_BACKEND_BLOCK, FS_TYPE_WFS, "wfs");
     assert(fsmgr_select_root_backend(backends, 2) == -1);
 }
 
 static void test_unused_slots_are_skipped(void) {
     fs_backend_t backends[3];
     memset(backends, 0, sizeof(backends));
-    backends[2] = make_backend(2, FSMGR_BACKEND_BOOT, FS_TYPE_FAT, "boot");
+    backends[2] = make_backend(2, FSMGR_BACKEND_BLOCK, FS_TYPE_FAT, "boot");
     assert(fsmgr_select_root_backend(backends, 3) == 2);
 }
 

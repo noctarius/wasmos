@@ -297,7 +297,7 @@ static fs_backend_t* backend_register(uint8_t kind, int32_t endpoint) {
     slot->endpoint = endpoint;
     slot->has_meta = 0;
     slot->unit = 0xFFu;
-    if (kind == FSMGR_BACKEND_BOOT) {
+    if (kind == FSMGR_BACKEND_BLOCK) {
         if (slot->slot == 0) {
             str_copy(slot->mount_name, sizeof(slot->mount_name), "boot");
         } else if (slot->slot == 1) {
@@ -323,7 +323,7 @@ static fs_backend_t* backend_register(uint8_t kind, int32_t endpoint) {
 static void backend_refresh_boot_meta(fs_backend_t* slot, int32_t req_seed) {
     int32_t devmgr = -1;
     int32_t req_id = req_seed;
-    if (!slot || slot->kind != FSMGR_BACKEND_BOOT || g_proc_endpoint < 0 || g_reply_endpoint < 0) {
+    if (!slot || slot->kind != FSMGR_BACKEND_BLOCK || g_proc_endpoint < 0 || g_reply_endpoint < 0) {
         return;
     }
     devmgr = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "devmgr.query", 1);
@@ -440,7 +440,7 @@ static wasmos_error_code_t fsmgr_emit_mounts(int32_t source, int32_t req_id, int
         n = snprintf(
             mounts + pos, sizeof(mounts) - pos, "/%s -> %s", g_backends[i].mount_name, kind);
         if (n > 0 && (uint32_t)n < sizeof(mounts) - pos &&
-            g_backends[i].kind == FSMGR_BACKEND_BOOT && g_backends[i].has_meta) {
+            g_backends[i].kind == FSMGR_BACKEND_BLOCK && g_backends[i].has_meta) {
             uint8_t dev = (uint8_t)((g_backends[i].device_fn >> 4) & 0x1Fu);
             uint8_t fun = (uint8_t)(g_backends[i].device_fn & 0x07u);
             int m = snprintf(mounts + pos + (uint32_t)n,

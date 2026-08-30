@@ -191,7 +191,7 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
         """Regression: 2026-08-30-fsmgr-backend-identity.
 
         `mount` labelled a backend from fs_backend_t.kind, which is
-        FSMGR_BACKEND_BOOT for every block-backed backend whatever it mounts, so
+        FSMGR_BACKEND_BLOCK for every block-backed backend whatever it mounts, so
         both WFS volumes were reported as fs-fat.
 
         This suite is where the virtio half is assertable: default_config()

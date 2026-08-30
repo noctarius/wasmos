@@ -88,7 +88,7 @@ class DeviceManagerIntegrationTests(unittest.TestCase):
         """Regression: 2026-08-30-fsmgr-backend-identity.
 
         `mount` derived its filesystem label from fs_backend_t.kind, which is
-        FSMGR_BACKEND_BOOT for every block-backed backend and says nothing about
+        FSMGR_BACKEND_BLOCK for every block-backed backend and says nothing about
         which filesystem is mounted. Both WFS volumes were therefore reported as
         fs-fat, and the backend table carried no filesystem identity at all --
         the same gap that let the root filesystem be chosen by registration

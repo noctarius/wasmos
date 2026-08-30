@@ -924,7 +924,7 @@ tail.
   Enum-like alternatives a peer switches on -- `PROC_STATUS_*` (3),
   `PROC_MODULE_SOURCE_INITFS`/`_FS`, `WASMOS_EXEC_MATCH_*` (6 node kinds),
   `WASMOS_BROKER_PLAN_KIND_*` (2), `SVC_CLASS_EVENT_ADD`/`_REMOVE`,
-  `FSMGR_BACKEND_BOOT`/`_INIT`, `VT_INPUT_MODE_*`.
+  `FSMGR_BACKEND_BLOCK`/`_INIT`, `VT_INPUT_MODE_*`.
 
   Descriptor versions both sides check -- `WASMOS_SVC_REGISTER_DESC_VERSION`,
   `WASMOS_MODULE_META_DESC_VERSION`, `WASMOS_PCI_DEVICE_DESC_VERSION`,
@@ -1001,14 +1001,17 @@ tail.
   `ftruncate` means a host call plus the libc and libsys wrappers kept in sync
   across the runtime-specific variants, then a case in
   `examples/c/wfs_write_smoke`.
-- [ ] [BUG][P3] `mount` names every WFS volume `fs-fat`. `fs_manager.c` maps the
-  backend KIND to a display name, and `FSMGR_BACKEND_BOOT` prints as `fs-fat`;
-  `fs_wfs` registers under that kind because the kind says where a volume sits
-  in the namespace, not which driver serves it. Routing is unaffected -- reads
-  and writes reach the right driver -- but the listing asserts something false,
-  and it cost real time in diagnosis: a WFS write failure read as "the FAT
-  driver claimed the volume". Either the backend reports its own name, or the
-  listing stops inferring one from the kind.
+- [x] [BUG][P3] `mount` named every WFS volume `fs-fat`. Fixed: a backend now
+  reports its own `FS_TYPE_*` in `FSMGR_IPC_BACKEND_INFO_RESP` arg1 and the
+  listing names a filesystem from that alone (`fsmgr_backend_fs_name`, one lookup
+  row per type), so the kind no longer decides a display name. initfs reports
+  `FS_TYPE_INITFS` rather than being recognised by its kind, so a devfs or sysfs
+  needs no branch either. The same missing identity had made the ROOT filesystem
+  the first block-backed backend in slot order, which is now selected by mount
+  name; and `FSMGR_BACKEND_BOOT` was renamed `FSMGR_BACKEND_BLOCK`, since reading
+  it as "the volume booted from" is what produced both defects.
+  `tests/unit/test_fs_manager_backends.c` plus the `mount` cases in
+  `tests/test_device_manager.py` and `tests/test_wfs_virtio_blk.py`.
 - [ ] [BUG][P2] The `fs.backend` class instance encodes (kind, unit) and not the
   BLOCK BACKEND, so two volumes whose units collide across backends -- ATA unit
   2 and a virtio-blk device at slot 0 function 2 -- derive one instance. The
@@ -1016,6 +1019,16 @@ tail.
   the retired `block` NAME had, one layer up: a disk is (backend, unit), so the
   instance has to carry the backend. Fixing it widens the encoding, which
   fs-manager and `fs_fat` decode too (`src/drivers/fs_wfs/fs_wfs.c`).
+
+  Carrying the backend is NOT sufficient on its own. A partition reports the same
+  backend AND the same unit as the disk beneath it (see the `SUBSYSTEM=="partition"`
+  note in `scripts/system/devmgr/rules/default.rules`), so a whole-disk backend and
+  a partition backend on that disk still derive one instance under the widened
+  encoding. The instance has to be derived from the block device's CANONICAL ID --
+  which already distinguishes `block:ata:1` from `block:ata:1p1` and is what
+  `wasmos_block_fingerprint` hashes for the `block` and `volume` classes -- rather
+  than from any (backend, unit) pair. Not reachable today: the mounted volumes are
+  units 0, 1, 2 and 48.
 - [ ] [FEATURE][P3] Symlinks (spec §20). Nothing creates or resolves one:
   `WFS_TYPE_SYMLINK` is defined by the format and used by no code. The format
   stores a short target inline in the object record, so this is a namespace
@@ -1179,7 +1192,7 @@ tail.
 
   fs-manager held a working directory as `(mount, depth)` and forwarded a
   relative name to a backend UNRESOLVED, choosing that backend by falling back to
-  `backend_first_of_kind(FSMGR_BACKEND_BOOT)` when the client had none. For
+  `backend_first_of_kind(FSMGR_BACKEND_BLOCK)` when the client had none. For
   `/boot` and `/init` that fallback is the correct backend, so relative `cat`
   worked there BY ACCIDENT; for any other mount the request went to the wrong
   backend, which answered NOT_FOUND, and the real backend was never asked. The

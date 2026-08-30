@@ -314,9 +314,19 @@ enum { PROC_STATUS_UNKNOWN = 0, PROC_STATUS_RUNNING = 1, PROC_STATUS_ZOMBIE = 2 
  * still reporting the plain kind over FSMGR_IPC_BACKEND_INFO_RESP arg0. */
 #define FSMGR_BACKEND_CLASS "fs.backend"
 
-/* Backend kinds fs-manager distinguishes: BOOT is the on-disk volume the system
- * booted from, INIT the kernel's built-in initfs image. */
-enum { FSMGR_BACKEND_BOOT = 1, FSMGR_BACKEND_INIT = 2 };
+/* Backend kinds fs-manager distinguishes, on the axis of WHAT A BACKEND SITS ON:
+ * BLOCK is served from a block device, INIT from the kernel's built-in initfs
+ * image. That is the whole of it -- a kind says nothing about WHICH filesystem
+ * is served (that is the backend's FS_TYPE_*, reported in
+ * FSMGR_IPC_BACKEND_INFO_RESP arg1) and nothing about WHICH volume it is.
+ *
+ * BLOCK in particular is not "the volume the system booted from": one backend
+ * registers per mounted volume, so several report it in an ordinary boot.
+ * Reading it as the boot volume is what made `mount` name every volume after
+ * FAT and made the root filesystem depend on registration order. Use the mount
+ * name to identify the root filesystem (FSMGR_ROOT_MOUNT_NAME) and FS_TYPE_* to
+ * identify the filesystem. */
+enum { FSMGR_BACKEND_BLOCK = 1, FSMGR_BACKEND_INIT = 2 };
 
 /* Pack a (kind, unit) pair into the single class-registry instance index a
  * provider registers under, since two backends of the same kind on different

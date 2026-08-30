@@ -265,7 +265,7 @@ static void fat_report_backend_info(int32_t dst, int32_t request_id) {
     (void)fat_send_reply(dst,
                          FSMGR_IPC_BACKEND_INFO_RESP,
                          (uint32_t)request_id,
-                         FSMGR_BACKEND_BOOT,
+                         FSMGR_BACKEND_BLOCK,
                          FS_TYPE_FAT,
                          mount_arg,
                          (int32_t)g_mount_unit);
@@ -644,7 +644,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                   g_fs_endpoint,
                                   service_name,
                                   FSMGR_BACKEND_CLASS,
-                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BOOT, g_mount_unit),
+                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BLOCK, g_mount_unit),
                                   1) != 0) {
         fat_log("fs.backend register failed\n");
         fat_stall();

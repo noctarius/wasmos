@@ -242,7 +242,7 @@ provided via a known physical address from the bootloader.
 A backend reports two independent things in `FSMGR_IPC_BACKEND_INFO_RESP`, and
 conflating them mislabels every mount:
 
-- `kind` (`arg0`) is `FSMGR_BACKEND_BOOT` or `FSMGR_BACKEND_INIT`. It separates a
+- `kind` (`arg0`) is `FSMGR_BACKEND_BLOCK` or `FSMGR_BACKEND_INIT`. It separates a
   block-backed backend from the initfs one and carries **no filesystem
   identity** — every block-backed backend reports the same value whatever it
   mounts.

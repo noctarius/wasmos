@@ -240,7 +240,7 @@ const FS_IPC_ERROR int32 = 0x4FF
 // Backends are discovered via svc class FSMGR_BACKEND_CLASS, not a push,
 // so fs-manager rebuilds its backend set from the registry on (re)start.
 //
-// arg0 `kind` is FSMGR_BACKEND_BOOT or FSMGR_BACKEND_INIT: it separates a
+// arg0 `kind` is FSMGR_BACKEND_BLOCK or FSMGR_BACKEND_INIT: it separates a
 // block-backed backend from the initfs one and carries NO filesystem
 // identity, so every block-backed backend reports the same value whatever
 // it mounts. arg1 `fs_type` is the FS_TYPE_* the backend serves and is the

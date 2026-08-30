@@ -773,7 +773,7 @@ static void wfs_report_backend_info(int32_t dst, int32_t request_id) {
                                     g_fs_endpoint,
                                     FSMGR_IPC_BACKEND_INFO_RESP,
                                     request_id,
-                                    FSMGR_BACKEND_BOOT,
+                                    FSMGR_BACKEND_BLOCK,
                                     FS_TYPE_WFS,
                                     mount_arg,
                                     (int32_t)g_mount_unit,
@@ -1308,7 +1308,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                         g_fs_endpoint,
                                         service_name,
                                         FSMGR_BACKEND_CLASS,
-                                        FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BOOT, g_mount_unit),
+                                        FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BLOCK, g_mount_unit),
                                         WASMOS_SVC_FLAG_WANTS_SHUTDOWN,
                                         1) != 0) {
         wfs_log("[fs-wfs] fs.backend register failed\n");

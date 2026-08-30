@@ -463,10 +463,14 @@ window (`g_map_window`).
 
 Routes virtual path requests to backend endpoints. Tracks registered backends:
 
-| Backend kind         | Value | Description             |
-|----------------------|-------|-------------------------|
-| `FSMGR_BACKEND_BOOT` | 1     | FAT partition (`/boot`) |
-| `FSMGR_BACKEND_INIT` | 2     | Initfs image            |
+| Backend kind          | Value | Description                            |
+|-----------------------|-------|----------------------------------------|
+| `FSMGR_BACKEND_BLOCK` | 1     | Served from a block device (any volume) |
+| `FSMGR_BACKEND_INIT`  | 2     | Served from the initfs image            |
+
+A kind says what a backend sits on, not which filesystem it serves and not which
+volume it is: one `BLOCK` backend registers per mounted volume, and the
+filesystem is the backend's `FS_TYPE_*` reported separately.
 
 Fs-manager IPC opcodes:
 

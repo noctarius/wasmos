@@ -373,14 +373,19 @@ permanently one value — a field nothing sets is one a later reader will trust.
 
 ## 10. Constraints inherited from the block layer
 
-**`/boot` cannot be a volume, yet.** The mount-policy examples in §4 do not cover
-it, and it is the case that stopped
-`architecture/36-partition-manager-and-block-identity.md` §3 short. The partition
-manager is spawned from the BOOT rules, which cannot load until `/boot` is
-mounted, so `/boot` cannot mount from anything the partition manager published —
-and a volume manager consuming the `block` class sits one layer further from the
-bootstrap than that. `/boot` keeps a whole-disk rule and `fat_try_parse_mbr`
-until a table reader runs from initfs.
+**`/boot` is not a volume rule yet, but the circle is broken.** Both managers are
+INITFS payloads now, spawned from the bootstrap rules ahead of every disk driver,
+so a volume for the ESP exists well before `/boot` would be mounted. What was
+blocking is gone: they used to be spawned from the BOOT rules, which load off
+`/boot` itself, so nothing they published could select it.
+
+What remains is the MATCHER. Every volume on the boot disk is FAT, and the ESP's
+only distinguishing marks are QEMU-specific (`ATTR{label}=="QEMU VVFAT"`) or
+absent (an MBR carries no partition label and no PARTUUID). The identity that
+holds is the one the firmware already knows — which volume this system was loaded
+from — so `/boot` waits on the bootloader recording it and
+`VOLUME_DESCRIPTOR_FLAG_BOOT` carrying it. `/boot` keeps its whole-disk rule and
+`fat_try_parse_mbr` until then.
 
 **Two volumes on one disk collide on `fs.backend`.**
 `FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`, and a partition

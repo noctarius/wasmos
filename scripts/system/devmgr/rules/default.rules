@@ -10,27 +10,10 @@
 # and unit as the disk beneath it, so it is the subsystem that keeps a partition
 # rule off whole disks and a disk rule off partitions.
 SUBSYSTEM=="partition", ATTR{partlabel}=="user", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
-# The partition manager names no disk: it enumerates the `block` class itself and
-# republishes every partition it finds as a block device in its own right. One
-# instance serves them all.
-#
-# Spawned from the BOOT rules rather than the initfs ones, which load only once
-# storage is online -- so every disk has registered by the time it enumerates,
-# and there is no race with a driver that had not probed yet.
-#
-# TODO: mounting /boot itself from a partition needs this in initfs instead, and
-# that makes Zig a build requirement for the boot image. Decide that with the
-# mount-policy change, not before it.
-SUBSYSTEM=="boot", RUN+="/boot/system/drivers/partition_manager.wap"
-# The volume manager names no disk either: it subscribes to the `block` class the
-# partition manager publishes into, recognises the filesystem on each device, and
-# publishes a `volume` for every mountable one. A device carrying a table
-# publishes none -- its partitions are the volumes.
-#
-# Spawned after the partition manager so the partitions exist by the time it
-# enumerates. That is convenience, not correctness: it subscribes to the class,
-# so a partition published later is probed when it arrives.
-SUBSYSTEM=="boot", RUN+="/boot/system/services/volume_manager.wap"
+# The partition and volume managers are NOT spawned here. They live in the initfs
+# bootstrap rules, because this file loads from /boot and /boot is itself selected
+# by a volume -- a manager spawned from here could never publish the volume that
+# mounts the filesystem it was spawned from.
 # /wfs is one specific WFS volume, wherever it is. The rule names no disk, no
 # unit, no backend, no partition and no transport: the volume manager recognises
 # the filesystem from its superblock and publishes a volume, and this matches

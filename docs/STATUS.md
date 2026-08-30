@@ -789,6 +789,14 @@ linked feature documents for rationale and rollout plans.
   driver is handed the BACKING block device's id, backend and unit, because a
   driver mounts a device and the volume is what chose it. `/user` still matches on
   a partition label (`architecture/37-volume-manager.md` §4).
+- The partition and volume managers are INITFS payloads, spawned from the
+  bootstrap rules ahead of every disk driver, and no longer staged on the ESP.
+  That breaks the bootstrap circle: spawned from the boot rules, which load off
+  `/boot`, nothing they published could ever select `/boot`. Their startup sweeps
+  now find nothing and every disk is probed as its driver publishes it, so the
+  `block` class subscription is the only discovery path rather than a supplement.
+  `/boot` still uses its whole-disk rule, waiting on a matcher rather than on the
+  managers (`architecture/36-partition-manager-and-block-identity.md` §2).
 - A mounted volume is CLAIMED, and `fsck.wfs` refuses one. `fs_wfs` claims the
   moment its mount completes and releases at the start of shutdown; `fsck.wfs`
   asks the volume manager before it reads a block, and refuses both a claimed

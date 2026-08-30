@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""A disk that registers under the `block` class after the partition manager has
-started still has its partitions published.
+"""A disk that registers under the `block` class has its partitions published,
+however long after the partition manager it arrives.
 
 Regression: 2026-08-29-partmgr-enumerates-once -- `probeAll` resolved the `block`
 class exactly once at bring-up, so every disk whose driver registered afterwards
@@ -8,12 +8,18 @@ was invisible to the partition manager for the rest of the boot. Its partitions
 were never published, so no `SUBSYSTEM=="partition"` rule could match them and no
 filesystem on that disk could be mounted, however correct its table.
 
-The ATA driver happens to register both its drives before the partition manager
-is spawned, which is the only reason the boot image looks unaffected. virtio-blk
-does not: it negotiates a PCI device, claims an MSI-X vector and sets up a
-virtqueue first, and publishes its disk well after `[partition-manager] ready`.
-Attaching a GPT-partitioned virtio disk therefore reproduces the bug on the
-shipped configuration rather than on a contrived one.
+This is now the ONLY path a disk can take. The partition manager is an initfs
+payload, spawned ahead of every disk driver so that /boot can be mounted from a
+volume, so its startup sweep always finds nothing and the class subscription is
+what publishes every partition on the system. When the bug was found the spawn
+order was the other way round and this was the exceptional case; keeping the test
+is worth more now, not less, because a subscription that stopped delivering would
+take the whole boot with it.
+
+The disk here is virtio-blk rather than ATA for a reason that outlives that
+change: it negotiates a PCI device, claims an MSI-X vector and sets up a
+virtqueue before publishing, so it arrives far enough behind the ATA drives to
+separate the two paths in a log.
 
 The disk is built here rather than checked in: `scripts/make_gpt_image.py` is the
 tree's own GPT writer, and QEMU cannot present a GPT any other way -- a
@@ -36,9 +42,9 @@ from scripts.qemu_test_framework import QemuSession, default_config
 # The volume label. Deliberately not "user": that label has a rule in
 # `scripts/system/devmgr/rules/default.rules` that mounts it on /user, and a test
 # disk that mounts itself over the real one would be testing the rule engine by
-# accident. Nothing matches "late", so the partition is published and left alone,
+# accident. Nothing matches "spare", so the partition is published and left alone,
 # which is exactly the property under test.
-VOLUME_LABEL = "late"
+VOLUME_LABEL = "spare"
 IMAGE_MIB = 64
 
 # How many `block` providers a correct boot holds with this disk attached: ATA's
@@ -72,14 +78,14 @@ def _config_with_gpt_disk(disk_path: str):
         default_config(),
         extra_args=(
             "-drive",
-            f"file={disk_path},format=raw,if=none,id=lateblk",
+            f"file={disk_path},format=raw,if=none,id=arrivalblk",
             "-device",
-            "virtio-blk-pci,drive=lateblk,id=lateblkdev",
+            "virtio-blk-pci,drive=arrivalblk,id=arrivalblkdev",
         ),
     )
 
 
-class PartitionManagerLateDiskTest(unittest.TestCase):
+class PartitionManagerDiskArrivalTest(unittest.TestCase):
     """The partition manager probes disks that appear after its own bring-up."""
 
     session: QemuSession | None = None
@@ -87,8 +93,8 @@ class PartitionManagerLateDiskTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.disk_dir = tempfile.mkdtemp(prefix="wasmos-late-disk-")
-        disk_path = os.path.join(cls.disk_dir, "late.img")
+        cls.disk_dir = tempfile.mkdtemp(prefix="wasmos-arrival-disk-")
+        disk_path = os.path.join(cls.disk_dir, "arrival.img")
         with open(disk_path, "wb") as handle:
             handle.write(build_image(IMAGE_MIB, VOLUME_LABEL, []))
         cls.session = QemuSession(_config_with_gpt_disk(disk_path), timeout_s=200)
@@ -110,10 +116,13 @@ class PartitionManagerLateDiskTest(unittest.TestCase):
     def test_the_virtio_disk_registers_after_the_partition_manager(self) -> None:
         """The precondition, asserted rather than assumed.
 
-        Everything below only means something if this disk really is a late
-        arrival. Were the spawn order ever to change so that virtio-blk publishes
-        first, the partition test would keep passing while testing nothing, and
-        the bug it guards could come back unnoticed. This fails loudly instead.
+        Everything below only means something if this disk registered after the
+        partition manager's startup sweep -- otherwise the sweep could have found
+        it and the subscription would go untested. That ordering is structural now
+        that the manager boots from the initfs, so this should never fail; it is
+        kept because the assertions below cannot tell which path published the
+        partition, and a sweep that silently started finding disks again would
+        make them pass while testing nothing.
         """
         assert self.session is not None
         self.assertTrue(
@@ -130,12 +139,13 @@ class PartitionManagerLateDiskTest(unittest.TestCase):
         self.assertGreater(
             published,
             ready,
-            "virtio-blk registered BEFORE the partition manager finished "
-            "enumerating, so this test no longer exercises a late arrival -- the "
-            "spawn order changed and the late-disk case needs a new lever",
+            "virtio-blk registered BEFORE the partition manager finished its "
+            "startup sweep, so the sweep could have published this partition and "
+            "the class subscription goes untested -- the spawn order changed and "
+            "this test needs a new lever",
         )
 
-    def test_the_late_disk_gets_its_partitions_published(self) -> None:
+    def test_the_arriving_disk_gets_its_partitions_published(self) -> None:
         assert self.session is not None
         self.assertTrue(
             self.session.expect(VIRTIO_PARTITION_RE, timeout_s=90),

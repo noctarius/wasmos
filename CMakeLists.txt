@@ -1887,10 +1887,10 @@ if (ZIG_AVAILABLE)
   set(VIRTIO_BLK_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_BLK_APP} ${BUILD_DIR}/esp/system/drivers/virtio_blk.wap
   )
-  set(PARTITION_MANAGER_COPY_CMD
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTITION_MANAGER_APP} ${BUILD_DIR}/esp/system/drivers/partition_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VOLUME_MANAGER_APP} ${BUILD_DIR}/esp/system/services/volume_manager.wap
-  )
+  # The partition and volume managers are NOT staged onto the ESP. They are
+  # initfs payloads (scripts/initfs.toml), because /boot is mounted from a volume
+  # and nothing on /boot can publish the volume that mounts /boot. A second copy
+  # here would be a second thing to go stale, spawned by nothing.
 endif ()
 
 # Rebuilt whenever the content or the formatter changes: the guest mounts this
@@ -1978,7 +1978,6 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_NET_APP} ${BUILD_DIR}/esp/system/drivers/virtio_net.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_RNG_APP} ${BUILD_DIR}/esp/system/drivers/virtio_rng.wap
   ${VIRTIO_BLK_COPY_CMD}
-  ${PARTITION_MANAGER_COPY_CMD}
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}

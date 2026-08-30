@@ -261,7 +261,7 @@ rest of the boot, table and all. virtio-blk is exactly that driver: it negotiate
 a PCI device, claims an MSI-X vector and sets up a virtqueue before publishing,
 and lands well after the partition manager reports ready. ATA does not, which is
 the only reason the shipped boot image looked unaffected —
-`tests/test_partition_manager_late_disk.py` attaches a GPT-partitioned virtio
+`tests/test_partition_manager_disk_arrival.py` attaches a GPT-partitioned virtio
 disk and is the regression guard.
 
 Two arrivals are dropped rather than probed:
@@ -435,24 +435,23 @@ with the coroutine runtime, `service_async_entry_wasm.c` and the generated ABI
 staged flat. The manifest needs `svc.class` (to claim `block` instances) and no
 hardware capabilities at all — the manager touches no device, only IPC.
 
-It ships on the ESP and is spawned from the BOOT rules by absolute path
-(`RUN+="/boot/system/drivers/partition_manager.wap"`), not from initfs. Those rules load
-only once storage is online, which is what makes `/boot` mountable at all — see
-§3. It is no longer what makes discovery correct: the class subscription above
-covers a driver that had not probed yet, and it had to, because the disks
-registered by then are only the ones ATA published. The absolute path matters: a
-relative rule path is resolved against the initfs module list first, so an
-ESP-only module has to say where it lives.
+It is an INITFS payload, spawned from the bootstrap rules by relative path
+(`RUN+="system/drivers/partition_manager.wap"`), and it is not staged on the ESP
+at all. It has to be: `/boot` is mounted from a volume, and a manager spawned
+from the boot rules — which load off `/boot` — could never publish the thing that
+selects `/boot`. That is the bootstrap circle, and initfs is what breaks it.
 
-Keeping it out of initfs is also what keeps Zig off the critical build path.
+Being spawned ahead of every disk driver makes the class subscription the ONLY
+discovery path rather than a supplement: its startup sweep runs before ATA has
+registered anything and finds nothing, and every disk on the system is probed as
+its driver publishes it. The subscription was already required for a driver that
+had not probed yet; it now carries the whole load.
+
+The Zig dependency this placement was avoiding turned out to be already paid.
 CMake derives the initfs payload list from every `source =` line in
-`scripts/initfs.toml`, so listing a Zig artifact there makes `make_initfs`
-depend on it unconditionally and a build without Zig can no longer produce a
-boot image. Nothing in initfs is Zig today.
-
-TODO: mounting `/boot` ITSELF from a partition needs the manager to exist before
-`/boot` does, which means initfs, which means that Zig dependency. Decide it with
-the mount-policy change in §3, not before.
+`scripts/initfs.toml`, so a Zig artifact there makes the boot image unbuildable
+without a Zig toolchain — but the native gfx-compositor and font-service are Zig,
+so no configuration builds without one regardless.
 
 ---
 

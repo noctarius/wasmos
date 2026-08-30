@@ -848,7 +848,7 @@ fn drainArrivals() void {
         if (diskKnown(instance)) continue;
         if (!probeProvider(instance, provider_endpoint)) continue;
         var line = driver.Line{};
-        _ = line.str("[partition-manager] late disk probed instance=").dec(instance);
+        _ = line.str("[partition-manager] disk probed instance=").dec(instance);
         _ = line.str(" disks=").dec(g_disk_count).str(" partitions=").dec(g_part_count);
         line.end();
     }

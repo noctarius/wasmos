@@ -1075,18 +1075,20 @@ tail.
   label supplies the mount MATCHER, not the mount path: a rule still says where a
   volume goes, so a labelled volume can be remounted elsewhere without rewriting
   a partition table. See `architecture/36-partition-manager-and-block-identity.md` §3.
-- [ ] [FEATURE][P2] Move the partition manager into initfs.
-  Probing late-registering disks — the prerequisite — is DONE: it subscribes to
-  the `block` class and probes what arrives, guarded by
-  `tests/test_partition_manager_late_disk.py`. What remains is the move itself,
-  which breaks the bootstrap circle that keeps `fat_try_parse_mbr` alive: the
-  partition manager is spawned from the BOOT rules, which cannot load until
-  `/boot` is mounted, so `/boot` cannot be mounted from a partition the partition
-  manager published. Deleting `fat_try_parse_mbr`
-  (`src/drivers/fs_fat/fat_geom.c`) removes the last partition-table reader
-  outside the partition manager. The cost is Zig on the critical build path:
-  CMake derives the initfs payload list from `scripts/initfs.toml`, so a Zig
-  module there makes the boot image unbuildable without a Zig toolchain.
+- [x] [FEATURE][P2] Move the partition manager into initfs. Both it and the
+  volume manager are initfs payloads now, spawned from the bootstrap rules ahead
+  of every disk driver, and their ESP copies are gone. That breaks the bootstrap
+  circle: they used to be spawned from the BOOT rules, which cannot load until
+  `/boot` is mounted, so nothing they published could select `/boot`.
+  The feared cost — Zig on the critical build path — was already paid: the native
+  gfx-compositor and font-service are Zig, so no configuration builds without it.
+
+- [ ] [ENHANCEMENT][P2] Delete `fat_try_parse_mbr` (`src/drivers/fs_fat/fat_geom.c`),
+  the last partition-table reader outside the partition manager. It stays alive
+  only because the `/boot` rule still mounts the whole ATA disk (`ATTR{unit}=="0"`)
+  and fs_fat parses the MBR itself to find the ESP. Once `/boot` mounts from the
+  boot VOLUME, fs_fat is handed the partition device directly and has no table to
+  read. Blocked on the boot-volume entry below.
 - [ ] [ENHANCEMENT][P3] Drive the partition manager's probe over the event loop's
   `IpcFuture` instead of `driver.call`. A probe is synchronous, so it blocks the
   whole process for its duration — bounded at one IDENTIFY plus at most 34 sector

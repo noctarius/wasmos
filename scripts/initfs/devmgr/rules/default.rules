@@ -3,6 +3,13 @@
 # udev-style syntax only.
 SUBSYSTEM=="boot", RUN+="system/services/net_stack.wap"
 SUBSYSTEM=="boot", RUN+="system/drivers/chardev_server.wap"
+# The partition and volume managers run HERE, in the bootstrap set, because /boot
+# is mounted from a volume: the boot rules that used to spawn them load from
+# /boot itself, so nothing they published could ever select it. Neither names a
+# disk -- both subscribe to the `block` class and act on what arrives -- so
+# spawning them before any disk has registered is correct and not a race.
+SUBSYSTEM=="boot", RUN+="system/drivers/partition_manager.wap"
+SUBSYSTEM=="boot", RUN+="system/services/volume_manager.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", RUN+="system/drivers/ata.wap"
 # DRIVER names the backend: a unit is backend-local, so an unqualified
 # ATTR{unit}=="0" also matches a virtio-blk device's only disk and would

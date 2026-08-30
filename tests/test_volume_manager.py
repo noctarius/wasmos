@@ -137,12 +137,24 @@ class VolumeManagerTest(unittest.TestCase):
             )
 
     def test_the_count_matches_what_was_published(self) -> None:
-        # Three: the two FAT partitions and the raw WFS disk. A higher count means
-        # a partitioned disk was published as well; a lower one means a recogniser
-        # or a prefix read failed silently.
+        """Three: the two FAT partitions and the raw WFS disk.
+
+        A higher count means a partitioned disk was published as well; a lower one
+        means a recogniser or a prefix read failed silently.
+
+        The count comes from a per-device line, not from `ready volumes=`. This
+        service is an initfs payload now, so it is up ahead of every disk driver
+        and its startup sweep always sees zero -- each device on the system is
+        probed as it registers, which is the ordinary path and not an exception.
+        """
         assert self.session is not None
         self.assertTrue(
-            self.session.expect(b"[volume-manager] ready volumes=3", timeout_s=90),
+            self.session.expect(b"[volume-manager] device probed", timeout_s=90),
+            "no device was probed after bring-up, so the class subscription is not "
+            "delivering -- with an empty startup sweep that means no volumes at all",
+        )
+        self.assertTrue(
+            self.session.expect(b" volumes=3", timeout_s=90),
             "the volume manager did not publish exactly three volumes",
         )
 

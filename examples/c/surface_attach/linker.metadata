@@ -1,0 +1,27 @@
+version = 1
+
+[package]
+name = "surface-attach"
+entry = "wasmos_main"
+kind = "app"
+native = false
+aot = true
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+# wasmos_xfer_buffer_map places its overlay above the 2 MiB floor and clear of
+# the heap, so linear memory has to reach past it for the mapping to land at
+# all. Same reasoning and same size as xfer_map_alias.
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
+[ipc]
+required_endpoint_name = "proc"
+required_endpoint_rights = 0
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

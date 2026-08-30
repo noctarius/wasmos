@@ -44,6 +44,11 @@ source = "hello.rc"
 
 [[entries]]
 kind = "wasmos_app"
+path = "apps/surface_attach.wap"
+source = "surface_attach.wap"
+
+[[entries]]
+kind = "wasmos_app"
 path = "apps/net_smoke.wap"
 source = "net_smoke.wap"
 

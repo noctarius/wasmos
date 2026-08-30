@@ -291,9 +291,16 @@ const buffer_slot_t = struct {
     state: buffer_state_t = .allocated,
     bound_window_id: u32 = 0,
     bound_window_generation: u32 = 0,
-    // Cached shmem mapping — set at allocation, valid until the slot is freed.
-    // Avoids kernel shmem_map/shmem_unmap on every composite call.
+    // Cached mapping — set when the slot is filled, valid until it is freed.
+    // Avoids a kernel map/unmap on every composite call.
     mapped_pixels: ?[*]const u32 = null,
+    // Set for a surface the CLIENT owns and has borrowed to this service
+    // (GFX_IPC_ATTACH_SURFACE); zero for a buffer this service allocated
+    // itself (GFX_IPC_ALLOC_SHARED_BUFFER). The two are freed differently:
+    // a borrowed surface is unmapped with xfer_buffer_unmap_borrowed and its
+    // storage belongs to the client, while an allocated one is shmem this
+    // service owns. `shmem_id` and `borrow_id` are therefore never both set.
+    borrow_id: u32 = 0,
 };
 
 const gfx_event_t = struct {
@@ -571,6 +578,12 @@ fn cleanup_orphaned_state() void {
         if (endpoint_alive(g_buffers[i].owner_endpoint)) continue;
         if (g_buffers[i].shmem_id != 0) {
             _ = api().shmem_unmap.?(g_buffers[i].shmem_id);
+        }
+        // A client that died without detaching still holds an entry in the
+        // 32-slot native borrow-mapping pool shared by every native service,
+        // so reclaiming the slot must drop the mapping too.
+        if (g_buffers[i].borrow_id != 0) {
+            _ = api().xfer_buffer_unmap_borrowed.?(g_buffers[i].borrow_id);
         }
         g_buffers[i] = .{};
         changed = true;
@@ -2597,6 +2610,152 @@ fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.WASMOS_ERR_NONE, buf.buffer_id, buf.shmem_id, buf.stride_bytes);
 }
 
+// Reply the constraints a surface for `window_id` must satisfy, allocating
+// nothing. The client acquires a transfer buffer of at least `byte_size`,
+// borrows it here, and names it with GFX_IPC_ATTACH_SURFACE.
+//
+// A resize bumps the window generation, so the spec a client holds is only
+// valid for the extent it was read at: the answer to a resize is a new surface
+// at the new spec, never a mutation of the borrowed one.
+fn handle_get_surface_spec(msg: *const c.nd_ipc_message_t) void {
+    const window_id = msg.arg0;
+    const window_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    };
+    if (!same_owner(g_windows[window_idx].owner_endpoint, msg.source)) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
+        return;
+    }
+    if (window_has_no_content(g_windows[window_idx])) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
+        return;
+    }
+    const width = g_windows[window_idx].width;
+    const height = g_windows[window_idx].height;
+    const stride_u64 = @as(u64, width) * 4;
+    const bytes_u64 = stride_u64 * @as(u64, height);
+    if (stride_u64 == 0 or bytes_u64 == 0 or bytes_u64 > 0xFFFF_FFFF) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
+    reply_with_status(msg, c.WASMOS_ERR_NONE, @intCast(stride_u64), @intCast(bytes_u64), (width << 16) | height);
+}
+
+// Register a surface the CLIENT owns and has borrowed to this service. Both ids
+// are required: xfer_buffer_borrow returns borrow_id to the owner, so this side
+// can derive neither, and the mapping call validates that the pair names one
+// live grant rather than a borrow of an unrelated object.
+//
+// The mapping is taken once here and held until GFX_IPC_DETACH_SURFACE, which
+// matches what the allocate-side path does and keeps a map/unmap off every
+// composite. The cost is one entry in the native borrow-mapping pool per
+// attached surface, and that pool is a fixed 32 slots shared by ALL native
+// services (wasmos_native_driver.h). A client that attaches surfaces without
+// detaching them therefore starves the framebuffer and net stack, not just
+// itself -- which is what makes DETACH part of the contract rather than an
+// optimisation.
+fn handle_attach_surface(msg: *const c.nd_ipc_message_t) void {
+    const window_id = msg.arg0;
+    const buffer_id = msg.arg1;
+    const borrow_id = msg.arg2;
+    if (window_id == 0 or buffer_id == 0 or borrow_id == 0) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
+    const window_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    };
+    if (!same_owner(g_windows[window_idx].owner_endpoint, msg.source)) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
+        return;
+    }
+    if (buffer_find_by_id(buffer_id) != null) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
+    if (window_has_no_content(g_windows[window_idx])) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
+        return;
+    }
+
+    var slot_idx: ?usize = null;
+    var i: usize = 0;
+    while (i < g_buffers.len) : (i += 1) {
+        if (!g_buffers[i].in_use) {
+            slot_idx = i;
+            break;
+        }
+    }
+    const idx = slot_idx orelse {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_BUSY, 0, 0, 0);
+        return;
+    };
+
+    const width = g_windows[window_idx].width;
+    const height = g_windows[window_idx].height;
+    const stride_u64 = @as(u64, width) * 4;
+    const ptr_raw = api().xfer_buffer_map_borrowed.?(c.ND_BUFFER_KIND_XFER, buffer_id, borrow_id) orelse {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
+        return;
+    };
+
+    g_buffers[idx] = .{
+        .in_use = true,
+        .owner_endpoint = msg.source,
+        .buffer_id = buffer_id,
+        .shmem_id = 0,
+        .borrow_id = borrow_id,
+        .width = width,
+        .height = height,
+        .stride_bytes = @intCast(stride_u64),
+        .state = .allocated,
+        .bound_window_id = window_id,
+        .bound_window_generation = g_windows[window_idx].generation,
+        .mapped_pixels = @ptrCast(@alignCast(ptr_raw)),
+    };
+    reply_with_status(msg, c.WASMOS_ERR_NONE, buffer_id, @intCast(stride_u64), 0);
+}
+
+// Withdraw a surface the client lent. The client must land this BEFORE
+// releasing the buffer: there is no unborrow notification, so a release while
+// this mapping is live leaves a stale pointer that the next composite would
+// read (wasmos_native_driver.h).
+fn handle_detach_surface(msg: *const c.nd_ipc_message_t) void {
+    const buffer_id = msg.arg1;
+    if (buffer_id == 0) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
+    const buf_idx = buffer_find_by_id(buffer_id) orelse {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    };
+    if (!same_owner(g_buffers[buf_idx].owner_endpoint, msg.source)) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
+        return;
+    }
+    if (g_buffers[buf_idx].borrow_id == 0) {
+        // An allocated buffer is not a lent surface; it goes through
+        // GFX_IPC_RELEASE_SHARED_BUFFER.
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
+    if (window_buffer_in_use(buffer_id)) {
+        reply_with_status(msg, c.WASMOS_ERR_GFX_BUSY, 0, 0, 0);
+        return;
+    }
+
+    const changed = detach_buffer_from_windows(buffer_id);
+    _ = api().xfer_buffer_unmap_borrowed.?(g_buffers[buf_idx].borrow_id);
+    g_buffers[buf_idx] = .{};
+    if (changed) {
+        request_repaint_full();
+    }
+    reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
+}
+
 fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
     const buffer_id = msg.arg0;
     if (buffer_id == 0) {
@@ -2616,6 +2775,12 @@ fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
         return;
     }
 
+    if (g_buffers[buf_idx].borrow_id != 0) {
+        // A lent surface is the client's to release; withdrawing it is
+        // GFX_IPC_DETACH_SURFACE, which also drops this side's mapping.
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
+        return;
+    }
     if (window_buffer_in_use(buffer_id)) {
         reply_with_status(msg, c.WASMOS_ERR_GFX_BUSY, 0, 0, 0);
         return;
@@ -3043,6 +3208,9 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
         c.GFX_IPC_RESIZE_WINDOW => handle_resize_window(msg),
         c.GFX_IPC_ALLOC_SHARED_BUFFER => handle_alloc_shared_buffer(msg),
         c.GFX_IPC_RELEASE_SHARED_BUFFER => handle_release_shared_buffer(msg),
+        c.GFX_IPC_GET_SURFACE_SPEC => handle_get_surface_spec(msg),
+        c.GFX_IPC_ATTACH_SURFACE => handle_attach_surface(msg),
+        c.GFX_IPC_DETACH_SURFACE => handle_detach_surface(msg),
         c.GFX_IPC_PRESENT_WINDOW => handle_present_window(msg),
         c.GFX_IPC_SET_DISPLAY_MODE => handle_set_display_mode(msg),
         c.GFX_IPC_LIST_WINDOWS => handle_list_windows(msg),
@@ -3074,6 +3242,9 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_RESIZE_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_ALLOC_SHARED_BUFFER, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_RELEASE_SHARED_BUFFER, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_GET_SURFACE_SPEC, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_ATTACH_SURFACE, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_DETACH_SURFACE, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_PRESENT_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_DISPLAY_MODE, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_LIST_WINDOWS, cb, null) != 0) return -1;

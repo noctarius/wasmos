@@ -146,6 +146,15 @@ wasmos_add_wasm_c_app_target(net_tcp_echo
   PACK_COMMENT  "Packing wasm TCP echo client as WASMOS-APP"
 )
 
+wasmos_add_wasm_c_app_target(surface_attach
+  SOURCE      ${WASM_SURFACE_ATTACH_SRC}
+  OUTPUT_WASM ${WASM_SURFACE_ATTACH_WASM}
+  OUTPUT_APP  ${WASM_SURFACE_ATTACH_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/surface_attach/linker.metadata
+  BUILD_COMMENT "Building wasm client-owned surface probe"
+  PACK_COMMENT  "Packing wasm client-owned surface probe as WASMOS-APP"
+)
+
 wasmos_add_wasm_c_app_target(xfer_map_alias
   SOURCE      ${WASM_XFER_MAP_ALIAS_SRC}
   OUTPUT_WASM ${WASM_XFER_MAP_ALIAS_WASM}
@@ -179,6 +188,7 @@ add_dependencies(c_examples
   fs_open_smoke fs_write_smoke native_call_min native_call_smoke
   gfx_smoke irq_route_deny irq_route_allow
   menu_bar net_smoke net_udp_echo net_tcp_echo net_tcp_server
+  xfer_map_alias surface_attach
 )
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_CLIENT_BLOB})

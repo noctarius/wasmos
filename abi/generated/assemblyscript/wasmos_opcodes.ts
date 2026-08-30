@@ -499,6 +499,45 @@ export const GFX_IPC_GET_DISPLAY_INFO: i32 = 0x20C;
 export const GFX_IPC_MOVE_WINDOW: i32 = 0x20D;
 export const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x20E;
 export const GFX_IPC_GET_WINDOW_TITLE: i32 = 0x20F;
+// Reply the CONSTRAINTS a surface must satisfy for `window_id`; allocates
+// nothing. arg0 = window_id, arg1..arg3 reserved (0). The reply carries
+// arg1 = stride in bytes, arg2 = required byte size, arg3 = (width << 16)
+// | height, all for the window's current content extent.
+//
+// The client then acquires a transfer buffer of at least that size,
+// borrows it to the compositor, and names it with GFX_IPC_ATTACH_SURFACE.
+// A resize bumps the window generation, so the spec must be re-read and a
+// new surface attached rather than the attached one resized in place --
+// a borrowed buffer is never mutated (docs/architecture/12-dma-transfers.md).
+//
+// Supersedes GFX_IPC_ALLOC_SHARED_BUFFER, which allocated the buffer
+// compositor-side and granted it to the caller: a server cannot own a
+// buffer it hands to a client.
+export const GFX_IPC_GET_SURFACE_SPEC: i32 = 0x210;
+// Register a surface the CLIENT owns and has borrowed to the compositor.
+// arg0 = window_id, arg1 = buffer_id, arg2 = borrow_id, arg3 reserved (0).
+//
+// Three ids are a fixed, non-growing set, so they travel as bare argument
+// words rather than a descriptor (skills/wasmos-add-opcode, Step 0).
+// Both ids are required and neither is derivable compositor-side:
+// xfer_buffer_borrow returns borrow_id to the OWNER, and the two are not
+// interchangeable -- xfer_buffer_read/write key on buffer_id, while the
+// borrow-side mapping path keys on borrow_id.
+//
+// Attach registers a surface; GFX_IPC_PRESENT_WINDOW names which attached
+// surface is ready. Keeping them separate is what lets a client hold two
+// surfaces at once, which both resize and tear-free presentation need.
+export const GFX_IPC_ATTACH_SURFACE: i32 = 0x211;
+// Withdraw a surface previously attached with GFX_IPC_ATTACH_SURFACE.
+// arg0 = window_id, arg1 = buffer_id, arg2..arg3 reserved (0).
+//
+// The client MUST detach before releasing the buffer. There is no
+// unborrow notification, so a release while the compositor still holds
+// the borrow leaves it reading a revoked borrow mid-composite; the
+// acknowledged detach is that missing handshake. Supersedes
+// GFX_IPC_RELEASE_SHARED_BUFFER, which asked the compositor to free a
+// buffer the compositor owned.
+export const GFX_IPC_DETACH_SURFACE: i32 = 0x212;
 export const GFX_IPC_RESP: i32 = 0x280;
 export const GFX_IPC_ERROR: i32 = 0x2FF;
 

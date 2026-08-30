@@ -140,6 +140,9 @@ App-facing compositor interface. Defined in
 | `GFX_IPC_MOVE_WINDOW`           | 0x020D | arg0=window_id arg1=x arg2=y                                                                    | —                                                     |
 | `GFX_IPC_SET_WINDOW_TITLE`      | 0x020E | arg0=window_id arg1=buffer_id arg2=borrow_id arg3=title_len (owner only); the CLIENT owns the transfer buffer and lends it READ                                 | —                                                     |
 | `GFX_IPC_GET_WINDOW_TITLE`      | 0x020F | arg0=window_id arg1=buffer_id arg2=borrow_id arg3=max_len; the CLIENT owns the transfer buffer and lends it WRITE | arg1=bytes written |
+| `GFX_IPC_GET_SURFACE_SPEC`      | 0x0210 | arg0=window_id; replies the constraints a surface must meet and allocates nothing | arg1=stride arg2=byte_size arg3=(width<<16)\|height |
+| `GFX_IPC_ATTACH_SURFACE`        | 0x0211 | arg0=window_id arg1=buffer_id arg2=borrow_id; the CLIENT owns the surface and lends it READ | arg1=buffer_id arg2=stride |
+| `GFX_IPC_DETACH_SURFACE`        | 0x0212 | arg0=window_id arg1=buffer_id; withdraw before releasing, refused BUSY while presented | — |
 | `GFX_IPC_RESP`                  | 0x0280 | success reply; arg0=WASMOS_ERR_GFX_*                                                               | —                                                     |
 | `GFX_IPC_ERROR`                 | 0x02FF | error reply                                                                                    | —                                                     |
 

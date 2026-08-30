@@ -120,6 +120,9 @@ set(WASM_NET_UDP_ECHO_APP ${BUILD_DIR}/net_udp_echo.wap)
 set(WASM_NET_TCP_ECHO_SRC ${EXAMPLES_C_DIR}/net_tcp_echo/net_tcp_echo.c)
 set(WASM_NET_TCP_ECHO_WASM ${BUILD_DIR}/net_tcp_echo.wasm)
 set(WASM_NET_TCP_ECHO_APP ${BUILD_DIR}/net_tcp_echo.wap)
+set(WASM_SURFACE_ATTACH_SRC ${EXAMPLES_C_DIR}/surface_attach/surface_attach.c)
+set(WASM_SURFACE_ATTACH_WASM ${BUILD_DIR}/surface_attach.wasm)
+set(WASM_SURFACE_ATTACH_APP ${BUILD_DIR}/surface_attach.wap)
 set(WASM_XFER_MAP_ALIAS_SRC ${EXAMPLES_C_DIR}/xfer_map_alias/xfer_map_alias.c)
 set(WASM_XFER_MAP_ALIAS_WASM ${BUILD_DIR}/xfer_map_alias.wasm)
 set(WASM_XFER_MAP_ALIAS_APP ${BUILD_DIR}/xfer_map_alias.wap)
@@ -1788,6 +1791,9 @@ set(NET_UDP_ECHO_COPY_CMD
 set(NET_TCP_ECHO_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NET_TCP_ECHO_APP} ${BUILD_DIR}/esp/apps/net_tcp_echo.wap
 )
+set(SURFACE_ATTACH_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SURFACE_ATTACH_APP} ${BUILD_DIR}/esp/apps/surface_attach.wap
+)
 set(NET_TCP_SERVER_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_XFER_MAP_ALIAS_APP} ${BUILD_DIR}/esp/apps/xfer_map_alias.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NET_TCP_SERVER_APP} ${BUILD_DIR}/esp/apps/net_tcp_server.wap
@@ -1957,6 +1963,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${NET_UDP_ECHO_COPY_CMD}
   ${NET_TCP_ECHO_COPY_CMD}
   ${NET_TCP_SERVER_COPY_CMD}
+  ${SURFACE_ATTACH_COPY_CMD}
   ${IRQ_ROUTE_DENY_COPY_CMD}
   ${IRQ_ROUTE_ALLOW_COPY_CMD}
   ${RUST_HELLO_COPY_CMD}

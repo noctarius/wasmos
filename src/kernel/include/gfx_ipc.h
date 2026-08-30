@@ -59,6 +59,16 @@ enum {
  *                           arg2=damage_count arg3=damage_shmem_id
  * - GFX_IPC_RELEASE_SHARED_BUFFER:
  *                           arg0=buffer_id arg1..arg3 reserved
+ * - GFX_IPC_GET_SURFACE_SPEC:
+ *                           arg0=window_id arg1..arg3 reserved
+ *                           reply: arg1=stride arg2=byte_size
+ *                                  arg3=(width<<16)|height; allocates nothing
+ * - GFX_IPC_ATTACH_SURFACE: arg0=window_id arg1=buffer_id arg2=borrow_id
+ *                           the CLIENT owns the surface and lends it READ
+ *                           reply: arg1=buffer_id arg2=stride
+ * - GFX_IPC_DETACH_SURFACE: arg0=window_id arg1=buffer_id arg2..arg3 reserved
+ *                           withdraw before releasing; refused BUSY while the
+ *                           surface is the window's current buffer
  * - GFX_IPC_SET_DISPLAY_MODE:
  *                           arg0=width arg1=height arg2/arg3 reserved
  *                           reply: arg1=width arg2=height

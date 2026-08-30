@@ -67,7 +67,7 @@ int warp_heap_probe_growth(size_t size);
  * buffer takes the slot instead. */
 void warp_linmem_reserve_hint(uint32_t pid, uint64_t reserve_bytes);
 
-/* Reserved linmem capacity in bytes for `pid`: the ceiling warp_shmem_map_auto scans
+/* Reserved linmem capacity in bytes for `pid`: the ceiling the overlay mapper scans
  * when placing a window.  0 until the pid's block has moved into its VA slot, and 0
  * for an unconfigured pid.  Set to the pid's configured heap size, NOT the 2 GiB slot
  * stride — a slot-sized ceiling would push a window past the module's own maximum. */

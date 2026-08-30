@@ -88,10 +88,12 @@ updated on each dispatch.
 checks reject lossy truncation on all current 32-bit field arguments.
 
 **Shared Memory**
-Kernel-managed shared-memory registry exposed via `shmem_create/map/unmap`
-hostcalls (WASM) and equivalent native-driver ABI hooks, backed by the same
-kernel objects. An auto-mapping variant (`shmem_map_auto`) returns a
-process-local linear-memory offset from a managed tail window.
+Sharing is the transfer-buffer registry's job: a context acquires a buffer it
+OWNS and lends it to a peer with an explicit borrow carrying READ and/or WRITE
+rights (`xfer_buffer_acquire/borrow/map/release`). `xfer_buffer_map` returns a
+process-local linear-memory offset from a managed tail window, and the mapping
+IS the buffer's frames on both runtimes, so no write-back call exists or is
+needed. There is no separate shared-memory registry.
 
 **DMA**
 Borrow-buffer DMA lifecycle (`dma_map_borrow`, `dma_sync_borrow`,

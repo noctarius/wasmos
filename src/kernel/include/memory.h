@@ -18,12 +18,12 @@
  * enforce it in mm_context_create or delete it. */
 #define MM_MAX_CONTEXTS 128
 
-/* Physical address boundary between the shmem zone and the WARP linear-memory zone.
- * Shmem pages are allocated below this limit (pfa_alloc_pages_below).
+/* Physical address boundary between the low buffer zone and the WARP linear-memory zone.
+ * Transfer-buffer backing is allocated below this limit (pfa_alloc_pages_below).
  * WARP linear memory pages are allocated at or above this limit (pfa_alloc_pages_above).
- * This prevents WARP's ensureLinearSize zero-fill from aliasing active shmem pages
+ * This prevents WARP's ensureLinearSize zero-fill from aliasing active buffer pages
  * via the kernel direct map (phys | KERNEL_HIGHER_HALF_BASE). */
-#define WASMOS_SHMEM_PHYS_LIMIT (64ULL * 1024ULL * 1024ULL) /* 64 MiB */
+#define WASMOS_BUFFER_PHYS_LIMIT (64ULL * 1024ULL * 1024ULL) /* 64 MiB */
 
 /* Semantic purpose of a mapped virtual region; controls page-table flags at fault time. */
 typedef enum {
@@ -32,8 +32,7 @@ typedef enum {
     MEM_REGION_DEVICE,          /* MMIO device memory (not cached) */
     MEM_REGION_STACK,           /* ring-3 or kernel thread stack */
     MEM_REGION_HEAP,            /* general kernel/user heap */
-    MEM_REGION_CODE,            /* executable code segments */
-    MEM_REGION_SHARED           /* shared region mapped from another context */
+    MEM_REGION_CODE             /* executable code segments */
 } mem_region_type_t;
 
 /* Region permission bits.  The same mask is what paging_map_4k_in_root consumes as its
@@ -71,17 +70,15 @@ typedef struct {
     uint64_t backing_pages;
     uint32_t flags; /* MEM_REGION_FLAG_* mask */
     mem_region_type_t type;
-    uint32_t shared_id; /* valid only when type == MEM_REGION_SHARED */
 } mem_region_t;
 
 /* Per-process memory context.  root_table is the physical address of the PML4.
- * next_shared_base is the bump pointer for shared-region VA assignments. */
+ */
 typedef struct {
-    uint32_t id;               /* context id; 0 is the kernel/root context */
-    uint64_t root_table;       /* physical address of this context's PML4; 0 = not built yet */
-    uint64_t next_shared_base; /* next user VA handed out to a MEM_REGION_SHARED mapping */
-    uint32_t region_count;     /* number of entries in `regions` */
-    list_t regions;            /* mem_region_t list, owned by the context */
+    uint32_t id;           /* context id; 0 is the kernel/root context */
+    uint64_t root_table;   /* physical address of this context's PML4; 0 = not built yet */
+    uint32_t region_count; /* number of entries in `regions` */
+    list_t regions;        /* mem_region_t list, owned by the context */
 } mm_context_t;
 
 /* Initialize the memory manager from UEFI memory map in boot_info.  Brings up the PFA
@@ -105,7 +102,7 @@ int mm_context_add_region(mm_context_t* ctx, uint64_t base, uint64_t size, uint3
                           mem_region_type_t type);
 
 /* Allocate `pages` contiguous 4 KiB physical frames and record them as a region of the
- * given type at that type's fixed user VA (MEM_REGION_SHARED bumps next_shared_base
+ * given type at that type's fixed user VA (
  * instead).  The region owns the frames: backing_pages is set to `pages` and
  * mm_context_destroy frees exactly that many.  MEM_REGION_CODE has no VA assignment and
  * is always rejected.  Returns 0 on success, -1 on a NULL ctx, pages == 0, exhausted
@@ -166,61 +163,6 @@ int mm_context_activate(uint32_t id);
 /* Return the physical address of context id's PML4, or 0 when the context is unknown or
  * has not been given an address space yet. */
 uint64_t mm_context_root_table(uint32_t id);
-
-/* Create a shared anonymous region of `pages` 4 KiB frames owned by owner_context_id.
- * Writes the new region id to *out_id and the region's PHYSICAL base address to
- * *out_base — not a virtual address; mapping it into a context is mm_shared_map's job.
- * Under the WARP backend the frames are taken from below WASMOS_SHMEM_PHYS_LIMIT so
- * WARP's own allocations cannot alias them through the kernel direct map.  The region
- * starts at refcount 0 and is destroyed by the first mm_shared_release/unmap that drives
- * the count back to 0, so a creator that intends to hold it must mm_shared_retain.
- * Returns 0 on success, -1 on a NULL out pointer, pages == 0, exhausted physical memory,
- * an exhausted id space, or a full region table. */
-int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags, uint32_t* out_id,
-                     uint64_t* out_base);
-
-/* Map shared region `id` into ctx at the next shared VA and report that VA in *out_base
- * (optional).  Requires ctx to be the owner, a grantee, or context 0.  `flags` is
- * intersected with the region's creation flags when non-zero; 0 means "the region's own
- * flags".  Takes a reference on the region and pins the frames, so the mapping survives
- * the owner releasing its own reference.  Returns 0 on success, -1 when the region does
- * not exist, access is not permitted, the refcount would overflow, or the region slot
- * could not be added. */
-int mm_shared_map(mm_context_t* ctx, uint32_t id, uint32_t flags, uint64_t* out_base);
-
-/* Remove ctx's mapping of shared region `id` and drop the reference mm_shared_map took;
- * the frames are returned to the PFA once the last reference goes.  Returns 0 on
- * success, -1 when the region does not exist, access is not permitted, ctx has no
- * matching region entry, or the refcount is already 0.  Does not tear down the page-table
- * entries — the region record is dropped, and the pin pfa_pin_pages took at map time is
- * released by mm_context_release_regions at teardown, not here. */
-int mm_shared_unmap(mm_context_t* ctx, uint32_t id);
-
-/* Allow/revoke target_context_id access to a shared region owned by owner_context_id.
- * owner_context_id 0 acts as the supervisor and bypasses the ownership check.  Both
- * return 0 on success — including the no-op cases of granting the owner itself, a
- * duplicate grant, and revoking a context that holds no grant — and -1 when the region
- * does not exist, the target id is 0, the caller does not own the region, or (grant
- * only) the fixed grant table is full.  Revoking does not unmap an existing mapping. */
-int mm_shared_grant(uint32_t owner_context_id, uint32_t id, uint32_t target_context_id);
-int mm_shared_revoke(uint32_t owner_context_id, uint32_t id, uint32_t target_context_id);
-
-/* Report the physical base address and 4 KiB page count of shared region `id` in
- * *out_base / *out_pages.  Returns 0 on success, -1 on a NULL out pointer, an unknown
- * region, or a caller that is neither owner, grantee, nor context 0. */
-int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id, uint64_t* out_base,
-                       uint64_t* out_pages);
-
-/* Take one reference on shared region `id`, keeping its frames alive across other
- * holders' releases.  Returns 0 on success, -1 on an unknown region, a caller without
- * access, or a saturated refcount. */
-int mm_shared_retain(uint32_t owner_context_id, uint32_t id);
-
-/* Drop one reference on shared region `id`; at zero the frames are freed and the region
- * record is removed, invalidating the id.  Returns 0 on success, -1 on an unknown
- * region, a caller without access, or a refcount that is already 0. */
-int mm_shared_release(uint32_t owner_context_id, uint32_t id);
-
 /* Map an arbitrary physical range into a context's virtual space (MMIO use).  `virt`,
  * `phys` and `size` must all be 4 KiB-aligned and non-zero, and [virt, virt+size) must
  * lie inside the context's WASM_LINEAR region — this call overlays device pages onto the
@@ -242,7 +184,7 @@ int mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint6
  * physical frames backing the linmem slot at slot_va_base (region page P maps
  * the frame under slot_va_base + P*PAGE, header page 0 included).  from_page/
  * to_page let a grow bind only the freshly committed tail so pre-existing
- * overlays (shmem / framebuffer / DMA / net ring) mapped into lower pages are
+ * overlays (framebuffer / DMA / net ring) mapped into lower pages are
  * never clobbered.  Grows region->size to cover to_page. */
 int mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_base,
                                           uint64_t from_page, uint64_t to_page);

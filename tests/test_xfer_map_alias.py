@@ -6,10 +6,10 @@ GUEST depends on the runtime's linear-memory model, and the two differ: under
 WARP the guest's linear memory is the mapped frames, while the wasm3 interpreter
 reads and writes linear memory through its own kernel-side buffer, so an overlay
 that only rewrites the process page tables would be invisible to it. The same
-distinction is recorded for the shmem overlay in examples/rust/tetris/tetris.rs,
+distinction is what decides whether a guest needs a write-back call at all,
 which drops its per-frame flush and is WARP-only as a result.
 
-The graphics migration off shmem depends on that promise holding for a guest, so
+Every graphics client depends on that promise holding for a guest, so
 this pins it rather than assuming it. The probe is deterministic -- the mapping
 either aliases or it does not -- and both directions are asserted separately so a
 failure says which half broke:

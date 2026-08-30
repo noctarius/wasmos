@@ -68,9 +68,10 @@ enum { PROC_MODULE_SOURCE_INITFS = 0, PROC_MODULE_SOURCE_FS = 1 };
  * PROC_IPC_ERROR.arg1 so a failed op reports WHY. Codes are negative; decode
  * arg1 with wasmos_error_* / wasmos_strerror. (From wasmos_status.h, above.) */
 
-/* shmem map/map_auto failure reasons: the host calls return WASMOS_ERR_SHMEM_*
- * (domain 3, see abi/errors.yaml / abi/generated/c/wasmos_status.h). Codes are
- * negative; decode the return value with wasmos_error_* / wasmos_strerror. */
+/* Linear-memory overlay placement failures: the mapper returns
+ * WASMOS_ERR_LINMEM_* (domain 3, see abi/errors.yaml /
+ * abi/generated/c/wasmos_status.h). Codes are negative; decode the return value
+ * with wasmos_error_* / wasmos_strerror. */
 
 /* Filesystem failure reasons: the FAT backend returns WASMOS_ERR_FS_* (domain 4,
  * abi/errors.yaml) in FS_IPC_ERROR / FS_IPC_RESP arg0, so a failed FS op reports

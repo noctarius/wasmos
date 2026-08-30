@@ -2,7 +2,7 @@
  *
  * One entry point for the boot path: spawns the smoke process, the native probe
  * (plus the thread-lifecycle probe when enabled), the twelve fault probes, runs
- * the shmem isolation test between the smoke and native contexts, and finally
+ * and finally
  * starts the fault-policy process that judges them. The return value covers
  * spawning only -- nonzero means a probe could not be started, and the probes'
  * own verdicts arrive later as "[test] ring3 ..." log lines from
@@ -70,15 +70,6 @@ int kernel_ring3_spawn_suite(uint32_t init_pid, uint8_t ring3_thread_lifecycle_s
         kernel_ring3_spawn_thread_lifecycle_probe(init_pid, &ring3_threading_pid) != 0) {
         klog_write("[kernel] ring3 threading spawn failed\n");
         return -1;
-    }
-
-    process_t* ring3_smoke_proc = process_get(ring3_smoke_pid);
-    process_t* ring3_native_proc = process_get(ring3_native_pid);
-    if (!ring3_smoke_proc || !ring3_native_proc) {
-        klog_write("[test] ring3 shmem setup failed\n");
-    } else {
-        kernel_ring3_shmem_isolation_test(ring3_smoke_proc->context_id,
-                                          ring3_native_proc->context_id);
     }
 
     if (kernel_ring3_spawn_fault_probe(init_pid, &ring3_fault_pid) != 0) {

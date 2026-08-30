@@ -179,7 +179,7 @@ void process_yield(process_run_result_t result) {
 /* ------------------------------------------------------- memory-map stub */
 
 /* Four contexts. CTX_B and CTX_SHARED are deliberately backed by the SAME fake
- * physical page (g_mem_shared) at different virtual bases — the shmem_grant
+ * physical page (g_mem_shared) at different virtual bases — the shared-buffer
  * shape the physical-address key exists to handle. CTX_A gets a page of its own
  * and CTX_NO_REGION has no linear-memory region at all. */
 #define CTX_A 1u

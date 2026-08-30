@@ -265,7 +265,7 @@ plus two backends:
 - **PCI/MMIO backend** — real virtio devices; ring memory is a pinned physical
   region (see [DMA Transfers → Driver-Owned DMA Regions](12-dma-transfers.md)),
   the doorbell is the device notify register, and completion arrives by IRQ.
-- **shmem/IPC backend** — service↔service; the ring and buffer pool are a shmem
+- **transfer-buffer/IPC backend** — service↔service; the ring and buffer pool are a lent
   region mapped into both peers, the doorbell is a `NOTIFICATION` endpoint (the
   existing block/wake + select path), and there is no device, IRQ, or physical
   address. Being CPU-coherent, this is strictly simpler than the device case.
@@ -282,7 +282,7 @@ talking to a device, and must be treated as first-class here:
   vrings the same bounds are enforced by `capability_dma_range_allowed` plus the
   low-2GB clamp.
 - **Teardown / revocation.** If a peer dies mid-stream the region must be
-  reclaimed and the other side notified; this rides on the shmem grant/revoke
+  reclaimed and the other side notified; this rides on the borrow/unborrow
   lifecycle, which must be solid before bulk service channels are built on it.
 
 The transport-neutral vring core is implemented as a header-only libsys library,
@@ -291,7 +291,7 @@ The transport-neutral vring core is implemented as a header-only libsys library,
 used-ring consumption with consumer-side bounds validation, all as pure logic
 over a caller-provided region and a `notify` callback — no device/PCI/IPC
 knowledge. It is covered by `tests/unit/test_vring.c` (host unit test). The PCI
-backend is implemented by `virtio-net` for its RX/TX queues. The shmem/service
+backend is implemented by `virtio-net` for its RX/TX queues. The service
 backend remains future work and requires proven grant/revoke teardown. See
 [Networking](22-networking-virtio-net-and-stack.md).
 

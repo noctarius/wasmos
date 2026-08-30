@@ -58,230 +58,32 @@ Source: `architecture/06-memory-management.md`,
   TLB-shootdown IPIs before any live page-table reclaim under concurrent APs
   (`src/kernel/arch/x86_64/cpu_x86_64.c:554` `TODO(smp-tlb)`,
   `src/kernel/warp/ring3_trampolines.c:166`).
-- [ ] [CLEANUP][P3] Retire the `shmem` subsystem in favour of a single `xfer_buffer` sharing
-  mechanism. The two are implementations of one concept -- an id, a
-  grant/borrow step, a copy path and a zero-copy map path -- differing mainly
-  in that `shmem_grant` addresses a **pid** while `xfer_buffer_borrow`
-  addresses the context owning an **endpoint** (the shape the rest of the
-  system uses), and that shmem is gated by the DMA capability rather than by
-  explicit per-borrow READ/WRITE rights. Nothing needs shmem's extra
-  expressiveness: xfer buffers already back **DMA** -- the ATA driver DMAs into
-  a borrowed buffer via `wasmos_dma_map_borrow` (`src/drivers/ata/ata.c:452`,
-  `abi/hostcalls.yaml` `dma_map_borrow`) -- and already back the compositor's
-  own framebuffer and backbuffer (`ND_BUFFER_KIND_FRAMEBUFFER` /
-  `ND_BUFFER_KIND_XFER`, `src/services/gfx_compositor/gfx_compositor.zig:726`
-  and `:755`).
-
-  The duplication has already cost a real bug: the linear-memory window
-  placement rule was hand-written once per mapper, so `shmem_map_auto` and
-  `xfer_buffer_map` carried the same defect and both mapped overlays on top of
-  live app data (fixed in `3d8811828e` by sharing
-  `wasm_linmem_place_overlay()`). Two mechanisms means every such rule is
-  written twice.
-
-  Main consumer to migrate is graphics: the compositor allocates each window's
-  app-facing buffer with `shmem_create`
-  (`src/services/gfx_compositor/gfx_compositor.zig:1632`) and replies
-  `(buffer_id, shmem_id, stride_bytes)`; apps map it with `shmem_map_auto`
-  (e.g. `examples/rust/tetris/tetris.rs:359`, `src/libui/assemblyscript`).
-  CONFIRMED, and it is a self-copy. `warp_shmem_flush` ends in
-
-      __builtin_memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), src, size);
-
-  where `src` is the caller's linear memory at `wasm_off`
-  (`src/kernel/warp/link.cpp:2373`), while `shmem_map`/`map_auto` map the
-  region's OWN frames into that linear memory --
-
-      paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
-
-  in a loop over the region's pages on WARP (`src/kernel/warp/link.cpp:1930`),
-  and `mm_context_map_physical(proc->context_id, virt, phys_base, needed_size,
-  ...)` on wasm3 (`src/kernel/wasm3/link.c:2280`). `virt` is the guest's linear
-  memory and `phys_base` the region's frames in both, so a flush's source and
-  destination are the same physical pages. libui shows it at the call site:
-
-      if (shmem_flush(this.shmemId, this.mappedPtr, byteLen) != 0) {
-
-  (`src/libui/assemblyscript/libui.ts:361`) -- a full-window `memcpy(p, p, n)`
-  per present, ~1.9 MB for an 800x600 ARGB window, inside a hostcall.
-
-  UNDER WARP ONLY, and this is the part that decides what may be deleted. wasm3
-  does not share the property and the flush is REQUIRED there: `shmem_map_auto`
-  rewrites the process page tables, but the interpreter reads and writes linear
-  memory through its OWN kernel-side buffer, so writes never reach the shared
-  frames without the copy. `tetris.rs:409-417` states this and carries the TODO;
-  it already drops its per-frame flush and is WARP-only by construction as a
-  result. A flush removed per call site therefore breaks the `wasm3_smp` /
-  `wasm3_single` configs CI builds, and a WARP-only battery will not catch it.
-
-  So the copy is not simply dead code to strip. It goes away when the app stops
-  writing pixels at all (the draw-list item below), or for a caller knowingly
-  WARP-only, or once wasm3's linear-memory model no longer needs it. What the
-  migration must not do is inherit the pattern by transliteration --
-  `xfer_buffer_map` + `xfer_buffer_write` reproduces exactly this -- while
-  remembering that on wasm3 the equivalent copy is load-bearing.
-
-  CONSUMER AUDIT (2026-08-29, at `aea749914`, RECOUNTED). An earlier revision of
-  this entry counted identifier occurrences -- comments, struct fields, Zig
-  helper names -- and reported figures up to 68 per file. These are CALL SITES:
-
-      gfx_compositor.zig  15  native API: create grant map unmap flush
-      font_service.zig    11  native API: create grant map unmap flush
-      libui.ts            14  create grant map_auto unmap flush
-      gfx_smoke.c         11  create grant map_auto unmap flush
-      tetris.rs            9  create grant map_auto flush
-      menu_bar.c           4  create map_auto refresh unmap  [DONE]
-
-  `shmem_target.c` (7 calls) and `shmem_owner.c` (5) were deleted rather than
-  ported, which retired the last `shmem_revoke` call site; the hostcall itself
-  survives until the ABI is retired wholesale. `kernel_shmem_owner_isolation_test`
-  in `kernel_ring3_smoke_runtime.c` still exercises the kernel-side grant
-  isolation and goes with that same step, not this one.
-
-  ALREADY MIGRATED, contrary to the earlier list: `vt_main.c` calls no shmem at
-  all -- its klog ring is an `xfer_buffer_acquire` overlay and the only mention
-  is a comment contrasting it with "raw shmem_map". So the cheapest-first entry
-  point named below does not exist; the smallest real consumer is `menu_bar.c`.
-
-  The two Zig services reach shmem through the NATIVE driver API
-  (`api().shmem_create` etc.), not the guest hostcall ABI, because both are
-  native drivers. That matters for the migration: their side moves with
-  `wasmos_native_driver.h`, and the compositor already acquires the framebuffer
-  and its private backbuffer as xfer buffers (`ND_BUFFER_KIND_FRAMEBUFFER` /
-  `ND_BUFFER_KIND_XFER`, `gfx_compositor.zig:749`, `:778`). Only the app-facing
-  window buffer is still shmem (`:1656`), which is exactly the object whose
-  ownership this entry inverts.
-
-  SETTLED 2026-08-29: xfer buffers do NOT inherit the wasm3 aliasing defect.
-  `tests/test_xfer_map_alias.py` + `examples/c/xfer_map_alias` probe a guest's
-  own mapping in both directions and pass under wasm3 AND WARP, verified against
-  a tree carrying `[subsystem] register request=WASM runtime=WASM3` with the
-  tree's and the ESP's kernel agreeing on symbol counts. The difference from
-  shmem is structural: `shmem_map` maps into the process page tables only, while
-  `xfer_buffer_map` goes through `wasm_linmem_place_overlay`
-  (`src/kernel/wasm3/link.c:1012`), which places the overlay in the
-  interpreter's own linear-memory region. The flush
-  caveat above is therefore scoped to shmem and does not carry to xfer buffers.
-
-  ORDER, cheapest first, each independently landable:
-  1. `menu_bar.c` (4 calls) -- sole `shmem_refresh` consumer, so that call retires
-     with it, and it has no fill loops of its own.
-  2. `shmem_owner.c` / `shmem_target.c` -- tests OF the mechanism; DELETE rather
-     than port, which also retires the sole `shmem_revoke` consumer. Their
-     coverage (grant/revoke/forged-id denial) belongs to xfer buffers and largely
-     exists there already. [DONE] Deleted with `tests/test_shmem_grant_revoke_e2e.py`
-     and their CMake, `scripts/initfs.toml`, and repo-map wiring. The six markers
-     that test asserted map onto `tests/unit/test_xfer_buffer/xfer_buffer.c`:
-     pre-grant and forged-id denial onto "unrelated context has no access before
-     borrow", grant onto "borrower gains requested read access", and revoke/stale
-     denial onto the borrow-removal cases and the four
-     `INACTIVE_BORROW`/`NO_ACCESS` assertions. What does NOT carry over is the
-     two-process end-to-end shape: the unit suite drives the registry in-process,
-     so nothing now exercises a borrow across a real spawn boundary under QEMU.
-     Worth restoring as an xfer-buffer e2e app pair if that boundary ever breaks.
-  3. `libui.ts`, `tetris.rs`, `gfx_smoke.c`, then `gfx_compositor.zig` +
-     `font_service.zig` last, since the compositor allocates the app-facing
-     window buffer and is the side whose ownership inverts.
-
-  OWNERSHIP DIRECTION: the APP owns its surface and borrows it to the compositor.
-  This is not a choice made here; it is the transfer-buffer invariant --
-  "**the CLIENT of an exchange owns the buffer, the server is a transient
-  grantee**" and "**a server cannot own a buffer it hands to a client**"
-  (`docs/architecture/12-dma-transfers.md`, `18-filesystem-stack.md:124`,
-  restated in `skills/wasmos-shared-primitives`). It is unimplementable the other
-  way: `xfer_buffer_release` is owner-only, no hostcall transfers ownership, and
-  nothing tells a server when a client has stopped reading.
-
-  Today's compositor sits the other way round: it allocates each window's
-  app-facing buffer with `shmem_create` and replies
-  `(buffer_id, shmem_id, stride_bytes)`. That arrangement is DEFENSIBLE rather
-  than simply wrong -- the compositor knows the alignment and stride constraints,
-  it knows when a window leaves the UI stack, and the graphics protocol supplies
-  the completion signal (`GFX_IPC_PRESENT_WINDOW`) whose absence is what makes
-  server-owned buffers unimplementable elsewhere. `xfer_buffer_drop_context`
-  (`src/kernel/process.c:1102`, `xfer_buffer.c:919-936`) unwinds either direction
-  on process death: it revokes borrows where the dying context is lender OR
-  borrower, then destroys objects it owned.
-
-  DECIDED 2026-08-29: stay inside the contract anyway -- the APP owns its surface.
-  The compositor keeps ownership of the CONSTRAINTS and hands them over as a spec
-  (extent, stride, format, minimum size); the app acquires a buffer that satisfies
-  it and borrows it to the compositor. The app-owned shape needs no rule about
-  rewriting a lent buffer, and `release` cascade-revokes the compositor's grant on
-  every path including the error ones.
-
-  Resize falls out of this rather than needing new machinery, and libui already
-  has the shape: `resizeTo` -> `allocateBuffer` already unmaps, releases the old
-  buffer and asks for a new one (`libui.ts:564`, `:573`). What libui must learn is
-  that a resize PRESENTS A NEW BUFFER: release the old one, acquire at the new
-  spec, borrow, present. No mutation of a borrowed buffer at any point.
-
-  ABI consequence: both shared-buffer opcodes change meaning, so both are RENAMED
-  rather than quietly repurposed. A name that says "alloc" for a call that
-  allocates nothing is worse than the old contract it replaces.
-
-      GFX_IPC_ALLOC_SHARED_BUFFER   -> GFX_IPC_GET_SURFACE_SPEC
-        was: compositor allocates a buffer, replies (buffer_id, shmem_id, stride)
-        now: compositor replies the CONSTRAINTS -- extent, stride, format,
-             minimum size -- and allocates nothing. Matches the family's existing
-             GET_DISPLAY_INFO / GET_WINDOW_TITLE naming.
-
-      GFX_IPC_RELEASE_SHARED_BUFFER -> GFX_IPC_DETACH_SURFACE
-        was: app asks the compositor to free the buffer the compositor owns
-        now: app withdraws the surface it lent, BEFORE releasing it
-
-      NEW: GFX_IPC_ATTACH_SURFACE (window_id, buffer_id, borrow_id)
-        the app registers a surface it owns and has borrowed to the compositor
-
-  ATTACH is required, not symmetry for its own sake: the compositor cannot
-  discover either id. `xfer_buffer_borrow` returns the borrow_id to the OWNER,
-  which hands it to the grantee, and the two ids are not interchangeable --
-  `xfer_buffer_read`/`write` key on `buffer_id` (the kernel checks that the
-  caller, owner or borrower, holds the right) while `dma_map_borrow` and the
-  proposed `xfer_buffer_map_borrow` key on `borrow_id`. The compositor needs
-  both: buffer_id for the copy path that exists today, borrow_id for the mapping
-  path when it lands.
-
-  Three ids is a fixed, non-growing set, so they travel as bare argument words
-  rather than a descriptor -- the exception the four-word rule allows, not a
-  violation of it.
-
-  ATTACH also keeps PRESENT honest about double buffering: attach registers a
-  surface, PRESENT names which attached surface is ready, DETACH withdraws one.
-  Folding attach into PRESENT would force the compositor to re-derive its
-  per-surface state whenever a buffer_id changed, and would leave an app unable
-  to hold two surfaces at once -- which is exactly what resize and tear-free
-  presentation both want.
-
-  `DETACH_SURFACE` is not cosmetic. There is no unborrow notification, so an app
-  that releases while the compositor still holds a borrow leaves the compositor
-  reading a revoked borrow mid-composite. The explicit detach is the missing
-  handshake: app detaches, compositor stops reading and acknowledges, app
-  releases. Without it every compositor read needs a revoked-borrow path anyway,
-  which is bookkeeping to work around a primitive -- the shape
-  `skills/wasmos-shared-primitives` names as a signal the design is inverted.
-
-  Both go through `skills/wasmos-add-opcode`: IDL entry in `abi/opcodes.yaml`,
-  regenerate (never hand-edit `abi/generated/**`), update the C/Rust/Go/Zig/AS
-  constants and the doc table in
-  `docs/architecture/20-graphics-framebuffer-and-compositor.md`. Its Step 4 is a
-  boot of BOTH runtimes (`wasm3_smp` and `warp_smp`), which is exactly the gate a
-  WARP-only graphics battery does not provide.
-
-  Consequence for the reader side: the compositor is a GRANTEE that must read
-  pixels to composite, and a grantee has no CPU zero-copy path today -- owner+CPU
-  is `xfer_buffer_map`, borrower+device is `dma_map_borrow` (a device address, not
-  a guest window), borrower+CPU is missing. Verified: every `xfer_buffer_map`
-  caller in the tree also acquires (`net_stack.c` 14 maps / 7 acquires,
-  `framebuffer_native.c` 2/2). So the borrow-side mapping below is needed by the
-  COMPOSITOR, not by the drawing app -- the opposite of the first reading of this
-  entry. Until it exists the compositor must copy or DMA out of the borrowed
-  surface.
-
-  Done when: no `shmem_*` host call remains in `abi/hostcalls.yaml` (ids
-  renumbered per the ID RULES, whole-world rebuild + `.cache/warp_aot`
-  cleared), both runtimes' shims are gone, and gfx/libui/tetris run on xfer
-  buffers under wasm3 AND WARP.
+- [x] [CLEANUP][P3] Retire the `shmem` subsystem in favour of a single
+  `xfer_buffer` sharing mechanism. DONE. The eight `shmem_*` host calls, both
+  runtime shims, the native-driver `shmem_*` hooks, the `mm_shared_*` registry,
+  `MEM_REGION_SHARED` and the kernel ring-3 shmem tests are all gone, and no
+  source file mentions shmem in any case.
+  What it took beyond deleting call sites, recorded because each was a design
+  decision rather than a port:
+  - The window surface INVERTED: `GFX_IPC_ALLOC_SHARED_BUFFER` had the
+    compositor allocate and grant, which the transfer-buffer contract forbids.
+    `GET_SURFACE_SPEC` / `ATTACH_SURFACE` / `DETACH_SURFACE` put the client on
+    the owning side; DETACH is load-bearing because there is no unborrow
+    notification and the compositor's mapping comes from a pool every native
+    service shares.
+  - The damage list moved INSIDE the surface (`PRESENT_WINDOW` arg3 is now a
+    byte offset), so it needs no second buffer, borrow or grant.
+  - The font protocol needed a descriptor: `RASTER_INTO` carries six
+    independent values, past the four opcode words, so both it and `MEASURE`
+    now pass `font_raster_request_t` in a caller-owned buffer with the UTF-8 run
+    behind it. `FONT_IPC_RASTER_GLYPH_REQ` was deleted outright -- it granted a
+    service-owned scratch to the caller and had no callers left.
+  - Every write-back call disappeared. The mapping IS the buffer's frames on
+    both runtimes, so libui's per-present full-window `memcpy(p, p, n)` (~1.9 MB
+    for an 800x600 window, inside a hostcall) is simply gone.
+  - Host-call ids are now assigned from list order rather than written by hand,
+    since the id already WAS the position; that is what makes a removal a
+    deletion instead of a renumbering chore.
 - [ ] [FEATURE][P2] Add `xfer_buffer_map_borrow`: a rights-checked, borrow-scoped
   CPU mapping, so a BORROWER can reach a buffer zero-copy. Today the matrix has a
   hole. Owner + CPU is `xfer_buffer_map`; borrower + device is `dma_map_borrow`,
@@ -342,8 +144,7 @@ Source: `architecture/06-memory-management.md`,
   font rendering at all: the compositor resolves it through `font_service`, which
   already exposes `handle_raster_glyph` and `handle_raster_text_into`. Today an
   app that wants text either talks to font_service itself -- acquiring the text
-  and mask buffers, which is where several of the remaining shmem call sites live
-  -- or hand-rolls a bitmap font, as `libui.ts` does with its built-in 3x5 digit
+  and mask buffers itself -- or hand-rolls a bitmap font, as `libui.ts` does with its built-in 3x5 digit
   font (`drawDigit3x5`, digits 0-8 only). Both disappear.
 
   That also settles what the app-owned pixel surface is FOR. Rendering pixels
@@ -351,7 +152,7 @@ Source: `architecture/06-memory-management.md`,
   CHOICE, taken by the apps that genuinely author pixels -- an image viewer, a
   game, a terminal's scrollback blit. Everything else -- chrome, widgets, labels,
   menus -- submits commands and never acquires a surface, never borrows one to
-  the compositor, and never needs the DMA capability shmem required. It is also the natural
+  the compositor. It is also the natural
   virtio-gpu seam: a draw list is already the shape a GPU consumes, so forwarding
   becomes a backend swap behind `SUBMIT_COMMANDS` rather than an ABI change.
 - [ ] [BUG][P2] `xfer_buffer_acquire` hands out frames without zeroing them, so a
@@ -369,9 +170,8 @@ Source: `architecture/06-memory-management.md`,
   read/write/borrow paths. The value is that "a fresh buffer is empty" becomes a
   property callers may rely on.
 
-  `shmem_create` wants the same treatment while it still exists: graphics buffers
-  are the largest recycled frames in the system, so a freed 3 MB window handed to
-  the next app is this issue at its worst size.
+  Graphics surfaces are the largest recycled frames in the system, so a freed
+  3 MB window handed to the next app is this issue at its worst size.
 
   Tagged P2 because it is deliberately deferred, not because the consequence is
   small -- by this file's own tag rules a silently-unenforced isolation property is
@@ -514,7 +314,7 @@ Source: `architecture/06-memory-management.md`,
   and device scratch pages lose cache-disable, leaving their memory type to the
   MTRRs alone. Same pattern in `arch/x86_64/lapic.c` and `ioapic.c`
   (`src/kernel/mmio.c:17` `FIXME`).
-- [ ] [BUG][P1] Apply the shmem/WARP physical-zone floor in `linmem_slot_commit`. It
+- [ ] [BUG][P1] Apply the buffer/WARP physical-zone floor in `linmem_slot_commit`. It
   calls `pfa_alloc_pages` with no floor, so slot-backed linear memory falls
   outside the guarded zone that `memory.h` and `physmem.h` still describe as an
   invariant (`src/kernel/linmem_slots.c:105`).
@@ -811,7 +611,7 @@ Source: `architecture/13-runtime-and-packaging.md`,
 - [ ] [ENHANCEMENT][P2] Close the remaining WARP refinement TODOs (host-call coverage itself is
   broad): synchronise symbol lookups/alloc under SMP (`src/kernel/warp/link.cpp:90`
   `TODO(smp-warp)`, `src/kernel/warp/shim.cpp:579` `FIXME(smp-warp)`); reserve
-  shmem auto-map windows against real heap growth (`link.cpp:1988`); write-combining
+  overlay windows against real heap growth (`link.cpp`); write-combining
   PAT for framebuffer/scanout (`link.cpp:2145`); enable W^X once kernel paging
   supports per-4K remap (`src/kernel/warp/posix_kernel.c:97`). Provide a supported
   alternative to the vendored-runtime-pointer shim without modifying `libs/warp`.
@@ -823,9 +623,9 @@ Source: `architecture/13-runtime-and-packaging.md`,
   zero because the kernel higher-half alias and the ring-3 user-VA view diverge
   for that page (wasm3 is unaffected). Verify against a repro before asserting
   fixed (`architecture/13`:549-551; STATUS known non-green path).
-- [ ] [BUG][P1] Restore prior linear-memory PTEs on wasm3 `xfer_buffer`/`shmem` unmap
-  instead of only dropping shared refcounts (`src/kernel/wasm3/link.c:1553,1563,2504,2552`
-  `FIXME(xfer-unmap)`/`FIXME(shmem-map-auto)`).
+- [ ] [BUG][P1] Restore prior linear-memory PTEs on a wasm3 `xfer_buffer` unmap
+  instead of only dropping the overlay tracking entry (`src/kernel/wasm3/link.c`
+  `FIXME(xfer-unmap)`).
 - [ ] [ENHANCEMENT][P2] Replace the wasm3 parent-name spawn heuristic with explicit per-process
   identity (`src/kernel/wasm3/link.c:589` `FIXME`).
 - [ ] [BUG][P1] Track native VM `malloc`/`free` per-PID so a reaped process's native heap
@@ -1732,14 +1532,16 @@ VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
   slot's is still started by `sysinit.rc`, last, because the first prompt is what
   the test framework reads as "the system is up". Spawning it from the vt (which
   comes up early) put that prompt in the middle of boot and made tests drive a
-  half-started system — `test_shmem_grant_revoke_pair` failed that way. Needs the
+  half-started system — a since-retired IPC lifecycle test failed that way. Needs the
   readiness contract to stop keying off the first prompt first.
 
 Other graphics/VT/UI:
 
-- [ ] [BUG][P1] Reclaim old libui font shared-memory objects when text buffers grow
-  (`src/libui/include/libui.h:471`) and the compositor's title-glyph shmem IDs
-  on growth (`src/services/gfx_compositor/gfx_compositor.zig:2007`).
+- [x] [BUG][P1] Reclaim old libui font buffers when text buffers grow, and the
+  compositor's title-glyph buffers on growth. DONE with the transfer-buffer
+  migration: `ui_font_ensure_buffer` and the compositor's `ensure_font_buffer`
+  both release the previous buffer before publishing the new one, and the
+  release cascade-revokes its borrow, so neither an id nor a grant is stranded.
 - [ ] [ENHANCEMENT][P2] Make `libui`, font-service, and compositor allocation/index arithmetic
   overflow-safe: validate dimensions before multiplication, compute buffer
   indexes in `usize`, and cap growth before capacity doubling.
@@ -1767,18 +1569,18 @@ Other graphics/VT/UI:
   SCROLL_VIEW or MENU_BAR reinterprets that component's data
   (`src/libui/include/wasmos/libui.h:676` `FIXME`).
 - [ ] [BUG][P1] Destroy an open popup's compositor window at teardown.
-  `ui_menu_item_destroy_data` releases only the shmem, leaking the window and
-  its shared buffer (`src/libui/include/wasmos/libui_menu_item.h:557` `FIXME`).
+  `ui_menu_item_destroy_data` releases only its own surface, leaking the
+  compositor window (`src/libui/include/wasmos/libui_menu_item.h` `FIXME`).
 - [ ] [BUG][P3] Add the '9' glyph to `drawDigit3x5`; the table holds 0-8 and the guard
   rejects 9 (`src/libui/assemblyscript/libui.ts`).
 - [ ] [CLEANUP][P3] Remove the no-op self-assignment `d->list.capacity = d->list.capacity`
   (`src/libui/include/wasmos/libui_dropdown.h:69` `FIXME`).
-- [ ] [BUG][P1] Flush after the tetris back-buffer blit under wasm3, or gate the app on
-  WARP. `present()` writes through the mapped window, which aliases the shared
-  region's own pages only under WARP; under wasm3 `shmem_map_auto` rewrites the
-  process page tables while the interpreter reads linear memory through its
-  kernel-side buffer, so the blit never reaches the shared pages. The app builds
-  for both runtimes (`examples/rust/tetris/tetris.rs:414` `TODO`).
+- [x] [BUG][P1] Flush after the tetris back-buffer blit under wasm3, or gate the
+  app on WARP. MOOT. Tetris presents into a transfer buffer it owns, and
+  `xfer_buffer_map` places that buffer's own frames in linear memory on BOTH
+  runtimes (`tests/test_xfer_map_alias.py`), so the blit reaches the compositor
+  with no write-back call on either. The runtime-specific hazard was the shmem
+  overlay's, and it went with it.
 
 
 - [ ] [BUG][P1] Apply the scroll offset when hit-testing scroll-view children.
@@ -2607,21 +2409,14 @@ Source: `architecture/25-diagnostics-status.md`,
   only emitted on failure -- so the confirmation has to be the absence of the
   marker in the captures that do appear, not the absence of failures.
 
-- [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
-  `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,
-  and the tail at that point is still early boot (font loading), so the guest had
-  not reached the probe rather than answering it wrongly. Seen on CI runs
-  31882420302 and 31891304942, passing in between, so it is a flake and not a
-  broken assertion.
-
-  It is NOT the whole-session wedge, which the old description guessed it was.
-  Reproduced locally on 2026-08-16 with the thread dump: no endpoint had refused
-  a send (the wedge's signature), and cli was RUNNING rather than stranded, with
-  the marker missing at the early-boot stage. The same battery passed on an
-  immediate rerun, 69/69. So this is its own fault and needs its own capture --
-  though still not by starting from `shmem_grant`/`shmem_revoke`
-  (`tests/test_shmem_grant_revoke_e2e.py`), since the guest had not reached the
-  probe.
+- [x] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
+  `scheduler-and-ipc` battery. OBSOLETE: the test and the apps it drove were
+  deleted with the shmem subsystem, so the flake has no subject. Worth keeping
+  the finding it produced, because it outlived its test: the failure was NOT the
+  whole-session wedge. The 2026-08-16 thread dump showed no endpoint had refused
+  a send (the wedge's signature) and cli was RUNNING rather than stranded, with
+  the marker missing at the early-boot stage. Whatever it was, it is its own
+  fault and still uncaptured.
 - [ ] [BUG][P2] Make `run-qemu-ring3-threading-test` assert the probe it names.
   The ring-3 thread lifecycle probe never issues a join syscall: instrumenting
   every join for the `ring3-threading` process name gave zero hits, so all three

@@ -140,43 +140,12 @@ typedef struct wasmos_driver_api {
     uint32_t (*early_log_size)(void);
     void (*early_log_copy)(uint8_t* dst, uint32_t offset, uint32_t len);
 
-    /* Shared memory — general facility for sharing pages between processes.
-     * shmem_create allocates pages and returns id plus direct pointer.
-     * shmem_map returns identity-mapped kernel pointer for native drivers.
-     * shmem_unmap releases this process's mapping reference.
-     *
-     * The region is refcounted, and every pointer handed out here is a KERNEL
-     * higher-half address: usable directly by a native driver (which runs
-     * supervisor), never valid to ship across IPC to a WASM guest.
-     *  - shmem_create: allocate `pages` whole pages; returns 0 on success with
-     *    *out_id and (when non-NULL) *out_ptr set, or -1. Holds one reference on
-     *    behalf of the caller.
-     *  - shmem_grant: let `target_context_id` map the region. Returns 0 on
-     *    success -- including the no-op cases of granting the owner or a
-     *    duplicate grant -- and -1 for an unknown region, a target id of 0, or a
-     *    full grant table.
-     *  - shmem_map: take a reference and return the mapping, or NULL if the id
-     *    is unknown or this context was never granted it. The pointer stays
-     *    valid until the matching shmem_unmap drops the last reference.
-     *  - shmem_unmap: drop one reference; 0 on success, -1 if the id is unknown
-     *    or the refcount is already 0. At zero the frames are freed and the id
-     *    is invalidated, so any pointer from shmem_map/create dangles. */
-    int (*shmem_create)(uint64_t pages, uint32_t flags, uint32_t* out_id, void** out_ptr);
-    int (*shmem_grant)(uint32_t id, uint32_t target_context_id);
-    void* (*shmem_map)(uint32_t id);
-    int (*shmem_unmap)(uint32_t id);
-
     /* Endpoint owner/context lookup for request attribution. Returns IPC_OK (0)
      * with *out_owner_context_id set, or a negative IPC_ERR_* (IPC_ERR_NOENT for
      * an endpoint that does not exist). A driver needs this to turn the
      * `grantee_endpoint` a client named into the context that must receive a
      * borrow, and to attribute an incoming request to a context. */
     int (*ipc_endpoint_owner)(uint32_t endpoint, uint32_t* out_owner_context_id);
-
-    /* Returns the shmem id of the kernel console text ring. Map it with
-     * shmem_map to read what the kernel logged; the buffer is a console_ring_t
-     * (see wasmos_driver_abi.h). */
-    uint32_t (*console_ring_id)(void);
 
     /* Publish framebuffer control endpoint for VT/control-plane clients. The
      * process manager records `endpoint` as the machine's framebuffer control
@@ -201,11 +170,7 @@ typedef struct wasmos_driver_api {
     uint32_t abi_magic;
     uint32_t abi_version;
 
-    /* ABI extension hooks (append-only to preserve legacy layout).
-     * shmem_flush copies `size` bytes from the borrowed `ptr` into the start of
-     * shared region `id`. Returns 0 on success, -1 for a NULL pointer, a zero
-     * size, an unknown/unreachable region, or a `size` larger than the region. */
-    int (*shmem_flush)(uint32_t id, const void* ptr, uint32_t size);
+    /* ABI extension hooks (append-only to preserve legacy layout). */
 
     /* Startup contract (v7). Fills *out with this process's wasmos_spawn_info_t
      * header and copies the NUL-terminated args blob into args_buf (bounded by
@@ -315,7 +280,7 @@ typedef struct wasmos_driver_api {
  * checks both before using any function pointer; see those fields for what a
  * version bump obliges. */
 #define WASMOS_NATIVE_ABI_MAGIC 0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 14u
+#define WASMOS_NATIVE_ABI_VERSION 15u
 
 /* Entry point that every native driver must provide via ELF e_entry.
  *

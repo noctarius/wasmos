@@ -1,10 +1,10 @@
 //! WASMOS Tetris — a two-player, networked Tetris for the gfx compositor.
 //!
 //! * Graphics: talks to the `gfx` compositor directly over its IPC protocol
-//!   (create window, allocate a shared BGRA32 buffer, present). Rendering is
-//!   double-buffered: every frame is composed into an app-owned back buffer and
-//!   then blitted into the shared buffer in one pass, so the compositor never
-//!   samples a half-drawn frame.
+//!   (create window, read the surface spec, attach a BGRA32 surface this app
+//!   owns, present). Rendering is double-buffered: every frame is composed into
+//!   an app-owned back buffer and then blitted into the attached surface in one
+//!   pass, so the compositor never samples a half-drawn frame.
 //! * Input: keyboard events pushed by the compositor (translated ASCII, so the
 //!   controls are WASD + space — arrow keys are not distinguishable through this
 //!   API); pointer clicks drive the start menu buttons.
@@ -41,12 +41,12 @@ unsafe extern "C" {
     fn ipc_select_add(select_id: i32, endpoint: i32) -> i32;
     fn ipc_select_wait_timeout(select_id: i32, timeout_ms: i32) -> i32;
     fn ipc_last_field(field: i32) -> i32;
-    fn shmem_map_auto(id: i32, size: i32) -> i32;
     fn spawn_info_buffer() -> i32;
     fn xfer_buffer_read(buffer_id: i32, ptr: i32, len: i32, offset: i32) -> i32;
     fn xfer_buffer_acquire(minimum_size: i32) -> i32;
     fn xfer_buffer_borrow(grantee: i32, buffer_id: i32, flags: i32) -> i32;
     fn xfer_buffer_map(buffer_id: i32) -> i32;
+    fn xfer_buffer_unmap(buffer_id: i32) -> i32;
     fn xfer_buffer_release(buffer_id: i32) -> i32;
 }
 
@@ -81,7 +81,10 @@ const SVC_IPC_LOOKUP_RESP: i32 = 0x2A1;
 const GFX_IPC_ABI_MAGIC: i32 = 0x4746_5850;
 const GFX_IPC_ABI_VERSION: i32 = 1;
 const GFX_IPC_CREATE_WINDOW: i32 = 0x0200;
-const GFX_IPC_ALLOC_SHARED_BUFFER: i32 = 0x0203;
+const GFX_IPC_DESTROY_WINDOW: i32 = 0x0201;
+const GFX_IPC_GET_SURFACE_SPEC: i32 = 0x0210;
+const GFX_IPC_ATTACH_SURFACE: i32 = 0x0211;
+const GFX_IPC_DETACH_SURFACE: i32 = 0x0212;
 const GFX_IPC_PRESENT_WINDOW: i32 = 0x0205;
 const GFX_IPC_PUSH_EVENT: i32 = 0x0206;
 const GFX_IPC_FOCUS_WINDOW: i32 = 0x020A;
@@ -141,7 +144,7 @@ struct Window {
     reply_ep: i32,
     window_id: i32,
     buffer_id: i32,
-    shmem_id: i32,
+    borrow_id: i32,
     base: *mut u8, // mapped shared buffer (BGRA32)
     stride: i32,   // bytes per row
     rid: i32,
@@ -224,7 +227,7 @@ impl Window {
             reply_ep,
             window_id: -1,
             buffer_id: 0,
-            shmem_id: -1,
+            borrow_id: -1,
             base: core::ptr::null_mut(),
             stride: W * 4,
             rid: 0,
@@ -312,38 +315,41 @@ impl Window {
             }
         }
 
-        // Allocate the shared drawing buffer and map it.
+        // Read the surface constraints. The compositor allocates nothing: this
+        // app OWNS its surface and lends it, which is the ownership the transfer
+        // buffer contract requires -- release is owner-only and nothing tells a
+        // server when a client stopped reading.
         let rid = w.next_rid();
         unsafe {
             let _ = ipc_send(
                 w.gfx_ep,
                 w.reply_ep,
-                GFX_IPC_ALLOC_SHARED_BUFFER,
+                GFX_IPC_GET_SURFACE_SPEC,
                 rid,
                 w.window_id,
-                W,
-                H,
+                0,
+                0,
                 0,
             );
         }
+        let surface_bytes;
         match w.wait_reply(w.reply_ep, rid) {
-            Some((ty, a0, a1, a2, a3)) if ty == GFX_IPC_RESP && a0 == WASMOS_ERR_NONE => {
-                w.buffer_id = a1;
-                w.shmem_id = a2;
-                w.stride = a3;
+            Some((ty, a0, a1, a2, _)) if ty == GFX_IPC_RESP && a0 == WASMOS_ERR_NONE => {
+                w.stride = a1;
+                surface_bytes = a2;
             }
             _ => {
-                log(b"[tetris] alloc buffer failed\n");
+                log(b"[tetris] surface spec failed\n");
                 return None;
             }
         }
-        // Force-commit the whole back buffer before mapping the shared buffer.
-        // The WARP shmem mapper places the mapped window just above the process's
-        // currently *committed* linear memory; the large `BACK` static is not
-        // committed until first written, so without this the shared-buffer window
-        // is placed overlapping `BACK` and the present() blit corrupts itself
-        // (content tears/duplicates). Touching one byte per page commits it so the
-        // window lands safely above.
+        // Force-commit the whole back buffer before the surface is mapped. The
+        // overlay is placed just above the process's currently *committed*
+        // linear memory, and the large `BACK` static is not committed until
+        // first written, so without this the surface can land overlapping
+        // `BACK` and the present() blit corrupts itself (content tears or
+        // duplicates). Touching one byte per page commits it so the overlay
+        // lands above.
         unsafe {
             let p = core::ptr::addr_of_mut!(BACK) as *mut u8;
             let total = (W * H * 4) as usize;
@@ -355,14 +361,60 @@ impl Window {
             core::ptr::write_volatile(p.add(total - 1), 0u8);
         }
 
-        let byte_len = w.stride * H;
-        let map_len = (byte_len + 4095) & !4095;
-        let off = unsafe { shmem_map_auto(w.shmem_id, map_len) };
-        if off <= 0 {
-            log(b"[tetris] map buffer failed\n");
+        // Acquire the surface, lend it READ to the compositor, and map it. READ
+        // is all the compositor needs: it composites out of this surface and
+        // never writes into it.
+        let bid = unsafe { xfer_buffer_acquire(surface_bytes) };
+        if bid <= 0 {
+            log(b"[tetris] surface acquire failed\n");
             return None;
         }
+        let borrow = unsafe { xfer_buffer_borrow(w.gfx_ep, bid, BUFFER_GRANT_READ) };
+        if borrow <= 0 {
+            log(b"[tetris] surface borrow failed\n");
+            unsafe {
+                let _ = xfer_buffer_release(bid);
+            }
+            return None;
+        }
+        let off = unsafe { xfer_buffer_map(bid) };
+        if off < 0 {
+            log(b"[tetris] surface map failed\n");
+            unsafe {
+                let _ = xfer_buffer_release(bid);
+            }
+            return None;
+        }
+        w.buffer_id = bid;
+        w.borrow_id = borrow;
         w.base = off as *mut u8;
+
+        // Register the surface. Both ids travel because neither is derivable on
+        // the compositor's side: xfer_buffer_borrow returns the borrow id to the
+        // OWNER, and reads key on buffer_id while the mapping keys on borrow_id.
+        let rid = w.next_rid();
+        unsafe {
+            let _ = ipc_send(
+                w.gfx_ep,
+                w.reply_ep,
+                GFX_IPC_ATTACH_SURFACE,
+                rid,
+                w.window_id,
+                bid,
+                borrow,
+                0,
+            );
+        }
+        match w.wait_reply(w.reply_ep, rid) {
+            Some((ty, a0, _, _, _)) if ty == GFX_IPC_RESP && a0 == WASMOS_ERR_NONE => {}
+            _ => {
+                log(b"[tetris] surface attach failed\n");
+                unsafe {
+                    let _ = xfer_buffer_release(bid);
+                }
+                return None;
+            }
+        }
 
         w.set_title(b"WASMOS Tetris");
         Some(w)
@@ -374,8 +426,7 @@ impl Window {
     /// names the compositor's ENDPOINT, so no owner pid is needed.
     ///
     /// No write-back after the copy. The mapping IS the buffer's frames on both
-    /// runtimes (tests/test_xfer_map_alias.py), unlike the shmem overlay this
-    /// replaces, which needed a flush under wasm3.
+    /// runtimes (tests/test_xfer_map_alias.py).
     fn set_title(&mut self, title: &[u8]) {
         let bid = unsafe { xfer_buffer_acquire(4096) };
         if bid <= 0 {
@@ -424,17 +475,64 @@ impl Window {
         }
     }
 
-    /// Blit the back buffer into the shared buffer and present.
+    /// Give the surface back before the process exits.
     ///
-    /// No shmem_flush under WARP: shmem_map_auto remaps both the kernel alias
-    /// and the ring-3 window of `base` onto the shared region's own frames, so
-    /// writing through it IS the shared buffer and a flush would copy those
-    /// pages onto themselves -- 2.4 MB per frame.
+    /// The order is forced by the protocol: DETACH is refused while the surface
+    /// is still the window's current buffer, so the window goes first. Only
+    /// after the compositor acknowledges the detach has it dropped its mapping,
+    /// which is what makes the release safe -- there is no unborrow
+    /// notification, so releasing under a live borrow would leave the
+    /// compositor reading revoked frames mid-composite.
+    fn teardown(&mut self) {
+        if self.buffer_id <= 0 {
+            return;
+        }
+        let rid = self.next_rid();
+        unsafe {
+            let _ = ipc_send(
+                self.gfx_ep,
+                self.reply_ep,
+                GFX_IPC_DESTROY_WINDOW,
+                rid,
+                self.window_id,
+                0,
+                0,
+                0,
+            );
+        }
+        let _ = self.wait_reply(self.reply_ep, rid);
+
+        let rid = self.next_rid();
+        unsafe {
+            let _ = ipc_send(
+                self.gfx_ep,
+                self.reply_ep,
+                GFX_IPC_DETACH_SURFACE,
+                rid,
+                self.window_id,
+                self.buffer_id,
+                0,
+                0,
+            );
+        }
+        let _ = self.wait_reply(self.reply_ep, rid);
+
+        unsafe {
+            let _ = xfer_buffer_unmap(self.buffer_id);
+            let _ = xfer_buffer_release(self.buffer_id);
+        }
+        self.buffer_id = -1;
+        self.borrow_id = -1;
+        self.base = core::ptr::null_mut();
+    }
+
+    /// Blit the back buffer into the attached surface and present.
     ///
-    /// TODO: wasm3 does not share that property. There shmem_map_auto only
-    /// rewrites the process page tables, while the interpreter reads and writes
-    /// linear memory through its own kernel-side buffer, so the blit never
-    /// reaches the shared frames without an explicit shmem_flush.
+    /// No write-back call of any kind: `xfer_buffer_map` places the surface's
+    /// own frames in this app's linear memory, so writing through `base` IS the
+    /// surface the compositor reads through its borrow. That holds on BOTH
+    /// runtimes -- tests/test_xfer_map_alias.py pins it -- which is the
+    /// The mapping is the frames themselves, not a copy of them.
     fn present(&mut self) {
         unsafe {
             let src = core::ptr::addr_of!(BACK) as *const u32;
@@ -1420,6 +1518,7 @@ fn run(proc_ep: i32) -> i32 {
     unsafe {
         tnet_close();
     }
+    win.teardown();
     log(b"[tetris] exit\n");
     0
 }

@@ -72,17 +72,12 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_NOT_AUTHORIZED` | -0x00020019 | caller lacks the subsystem.register capability |
 | `WASMOS_ERR_PROC_PM_NO_PM_FSBUF` | -0x0002001A | PM could not acquire its own xfer buffer |
 
-### `shmem` (domain 3) — shared-memory map/map_auto failures (was SHMEM_ERR_*)
+### `linmem` (domain 3) — linear-memory overlay placement failures
 
 | Code | Value | Description |
 |---|---|---|
-| `WASMOS_ERR_SHMEM_BAD_ARGS` | -0x00030001 | id/size invalid or size not page-aligned |
-| `WASMOS_ERR_SHMEM_NO_CAP` | -0x00030002 | caller lacks the DMA capability / no context |
-| `WASMOS_ERR_SHMEM_BAD_ID` | -0x00030003 | shmem id unknown / no backing pages |
-| `WASMOS_ERR_SHMEM_BAD_SIZE` | -0x00030004 | requested size smaller than the shared region |
-| `WASMOS_ERR_SHMEM_UNALIGNED` | -0x00030005 | fixed offset cannot yield a page-aligned host addr |
-| `WASMOS_ERR_SHMEM_NO_WINDOW` | -0x00030006 | no free page-aligned window fits in linear memory |
-| `WASMOS_ERR_SHMEM_MAP` | -0x00030007 | paging/linear-memory mapping step failed |
+| `WASMOS_ERR_LINMEM_NO_WINDOW` | -0x00030001 | no free page-aligned window fits in linear memory |
+| `WASMOS_ERR_LINMEM_MAP` | -0x00030002 | paging/linear-memory mapping step failed |
 
 ### `fs` (domain 4) — filesystem backend/VFS failures (was FS_ERR_*)
 

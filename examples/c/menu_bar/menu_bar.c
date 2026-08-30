@@ -180,8 +180,8 @@ static void int_to_str(int32_t v, char* buf, int32_t cap) {
  *
  * No refresh before the read. The mapping IS the buffer's frames under both
  * runtimes (tests/test_xfer_map_alias.py), so the bytes the compositor wrote are
- * already here; the shmem path this replaces needed the copy because
- * shmem_map_auto only rewrote the process page tables, which the wasm3
+ * already here; the shared-memory path this replaces needed the copy because
+ * its mapping only rewrote the process page tables, which the wasm3
  * interpreter does not read through. */
 static int32_t fetch_title(int32_t window_id, char* out, int32_t cap) {
     if (!g_title_ptr || g_title_buffer_id <= 0 || g_title_borrow_id <= 0)
@@ -276,9 +276,11 @@ static void remove_all_children(ui_context_t* ctx, int32_t parent_id) {
                 free(d->text.text);
                 d->text.text = NULL;
             }
-            if (d->popup_shmem_id > 0) {
-                wasmos_shmem_unmap(d->popup_shmem_id);
-                d->popup_shmem_id = 0;
+            if (d->popup_buf_id > 0) {
+                (void)wasmos_xfer_buffer_unmap(d->popup_buf_id);
+                (void)wasmos_xfer_buffer_release(d->popup_buf_id);
+                d->popup_buf_id = 0;
+                d->popup_borrow_id = 0;
             }
             free(d);
             child->component_data = NULL;

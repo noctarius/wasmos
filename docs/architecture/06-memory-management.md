@@ -263,11 +263,11 @@ release the pin before decrementing the shared region's logical refcount.
 
 ---
 
-### Pinned VA Arena (shmem, rings, and any stable mapping)
+### Pinned VA Arena (buffer overlays, rings, and any stable mapping)
 
 The **top of a WASM process's linear-memory VA window is a general-purpose
 pinned-VA arena**: every mapping that must keep a stable virtual address for its
-lifetime lands here. Consumers include all shmem objects (compositor framebuffer
+lifetime lands here. Consumers include all transfer-buffer overlays (compositor framebuffer
 and backbuffer, font-service font data, GFX window surfaces), the per-socket
 network ring buffers
 ([Networking → Socket Data Plane](architecture/22-networking-virtio-net-and-stack.md)),
@@ -278,7 +278,7 @@ mapping does not. This invariant makes that safe:
 
 > Any pinned mapping exposed to a WASM process lives in a **reserved arena at the
 > top of that process's linear-memory VA**, backed by dedicated physical pages,
-> with PTEs **established once and owned solely by the shmem/xfer-buffer mapper**
+> with PTEs **established once and owned solely by the transfer-buffer mapper**
 > — never touched by the linear-memory grow/relocation path. The process heap
 > only ever commits *below* the arena.
 
@@ -293,11 +293,11 @@ underneath a holder while the physical pages it referenced stay live elsewhere:
    ([WARP Ring3 → §15](architecture/31-warp-ring3-implementation.md#15--linear-memory-reserve-and-commit-no-relocation));
    wasm3 must satisfy the same invariant through its own linear-region backing.
 2. **Zone overlap.** Two logically distinct regions sharing a physical window
-   (the historical shmem-vs-linmem aliasing). Avoided by disjoint VA *and* PA
+   (the historical overlay-vs-linmem aliasing). Avoided by disjoint VA *and* PA
    ranges — trivially affordable in the 48-bit user VA space.
 3. **Multi-alias desync.** The same page mapped twice, with one alias repointed
    while the other is still used. Avoided by giving the shared window a **single
-   PTE owner** (the shmem mapper), never co-managed with the grow path.
+   PTE owner** (the overlay mapper), never co-managed with the grow path.
 
 The one genuine constraint — not self-inflicted — is that a WASM process can
 only dereference addresses inside its own linear memory, so the shared window

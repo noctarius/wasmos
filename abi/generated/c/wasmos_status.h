@@ -32,7 +32,7 @@ enum {
     WASMOS_ERR_DOMAIN_NONE = 0, /* no domain — success / empty chain frame */
     WASMOS_ERR_DOMAIN_PROC_SPAWN = 1, /* process-manager path-spawn failures (was PROC_SPAWN_ERR_*) */
     WASMOS_ERR_DOMAIN_PROC_PM = 2, /* non-path process-manager IPC failures (was PROC_PM_ERR_*) */
-    WASMOS_ERR_DOMAIN_SHMEM = 3, /* shared-memory map/map_auto failures (was SHMEM_ERR_*) */
+    WASMOS_ERR_DOMAIN_LINMEM = 3, /* linear-memory overlay placement failures */
     WASMOS_ERR_DOMAIN_FS = 4, /* filesystem backend/VFS failures (was FS_ERR_*) */
     WASMOS_ERR_DOMAIN_NET = 5, /* networking stack / socket failures (was NET_STATUS_*) */
     WASMOS_ERR_DOMAIN_GFX = 6, /* compositor / framebuffer text-console failures */
@@ -105,13 +105,8 @@ enum {
     WASMOS_ERR_PROC_PM_HANDLER_REG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 24), /* exec-handler registration failed */
     WASMOS_ERR_PROC_PM_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 25), /* caller lacks the subsystem.register capability */
     WASMOS_ERR_PROC_PM_NO_PM_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 26), /* PM could not acquire its own xfer buffer */
-    WASMOS_ERR_SHMEM_BAD_ARGS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 1), /* id/size invalid or size not page-aligned */
-    WASMOS_ERR_SHMEM_NO_CAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 2), /* caller lacks the DMA capability / no context */
-    WASMOS_ERR_SHMEM_BAD_ID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 3), /* shmem id unknown / no backing pages */
-    WASMOS_ERR_SHMEM_BAD_SIZE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 4), /* requested size smaller than the shared region */
-    WASMOS_ERR_SHMEM_UNALIGNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 5), /* fixed offset cannot yield a page-aligned host addr */
-    WASMOS_ERR_SHMEM_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 6), /* no free page-aligned window fits in linear memory */
-    WASMOS_ERR_SHMEM_MAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 7), /* paging/linear-memory mapping step failed */
+    WASMOS_ERR_LINMEM_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 1), /* no free page-aligned window fits in linear memory */
+    WASMOS_ERR_LINMEM_MAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 2), /* paging/linear-memory mapping step failed */
     WASMOS_ERR_FS_BAD_ARGS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 1), /* invalid flags/args (len 0, bad access mode, reserved arg set) */
     WASMOS_ERR_FS_PATH_TOO_LONG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 2), /* path length exceeds the path or xfer buffer */
     WASMOS_ERR_FS_BUFFER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 3), /* xfer-buffer read/write/size call failed */
@@ -337,7 +332,7 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_NONE: return "none";
     case WASMOS_ERR_DOMAIN_PROC_SPAWN: return "proc_spawn";
     case WASMOS_ERR_DOMAIN_PROC_PM: return "proc_pm";
-    case WASMOS_ERR_DOMAIN_SHMEM: return "shmem";
+    case WASMOS_ERR_DOMAIN_LINMEM: return "linmem";
     case WASMOS_ERR_DOMAIN_FS: return "fs";
     case WASMOS_ERR_DOMAIN_NET: return "net";
     case WASMOS_ERR_DOMAIN_GFX: return "gfx";
@@ -405,13 +400,8 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_HANDLER_REG: return "proc_pm.HANDLER_REG";
     case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: return "proc_pm.NOT_AUTHORIZED";
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "proc_pm.NO_PM_FSBUF";
-    case WASMOS_ERR_SHMEM_BAD_ARGS: return "shmem.BAD_ARGS";
-    case WASMOS_ERR_SHMEM_NO_CAP: return "shmem.NO_CAP";
-    case WASMOS_ERR_SHMEM_BAD_ID: return "shmem.BAD_ID";
-    case WASMOS_ERR_SHMEM_BAD_SIZE: return "shmem.BAD_SIZE";
-    case WASMOS_ERR_SHMEM_UNALIGNED: return "shmem.UNALIGNED";
-    case WASMOS_ERR_SHMEM_NO_WINDOW: return "shmem.NO_WINDOW";
-    case WASMOS_ERR_SHMEM_MAP: return "shmem.MAP";
+    case WASMOS_ERR_LINMEM_NO_WINDOW: return "linmem.NO_WINDOW";
+    case WASMOS_ERR_LINMEM_MAP: return "linmem.MAP";
     case WASMOS_ERR_FS_BAD_ARGS: return "fs.BAD_ARGS";
     case WASMOS_ERR_FS_PATH_TOO_LONG: return "fs.PATH_TOO_LONG";
     case WASMOS_ERR_FS_BUFFER: return "fs.BUFFER";
@@ -639,13 +629,8 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_HANDLER_REG: return "exec-handler registration failed";
     case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: return "caller lacks the subsystem.register capability";
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "PM could not acquire its own xfer buffer";
-    case WASMOS_ERR_SHMEM_BAD_ARGS: return "id/size invalid or size not page-aligned";
-    case WASMOS_ERR_SHMEM_NO_CAP: return "caller lacks the DMA capability / no context";
-    case WASMOS_ERR_SHMEM_BAD_ID: return "shmem id unknown / no backing pages";
-    case WASMOS_ERR_SHMEM_BAD_SIZE: return "requested size smaller than the shared region";
-    case WASMOS_ERR_SHMEM_UNALIGNED: return "fixed offset cannot yield a page-aligned host addr";
-    case WASMOS_ERR_SHMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
-    case WASMOS_ERR_SHMEM_MAP: return "paging/linear-memory mapping step failed";
+    case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
+    case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_FS_BAD_ARGS: return "invalid flags/args (len 0, bad access mode, reserved arg set)";
     case WASMOS_ERR_FS_PATH_TOO_LONG: return "path length exceeds the path or xfer buffer";
     case WASMOS_ERR_FS_BUFFER: return "xfer-buffer read/write/size call failed";

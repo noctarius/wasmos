@@ -1394,37 +1394,37 @@ static int warp_require_system_control_capability(uint32_t context_id) {
 }
 
 // ---------------------------------------------------------------------------
-// Shmem map tracking — mirrors g_wasm_shmem_maps in wasm3/link.c
+// Linear-memory overlay tracking — mirrors g_wasm_overlay_maps in wasm3/link.c
 // ---------------------------------------------------------------------------
 
-#define WARP_SHMEM_MAP_SLOTS (PROCESS_MAX_COUNT * 32)
+#define WARP_OVERLAY_MAP_SLOTS (PROCESS_MAX_COUNT * 32)
 
-struct WarpShmemLinearMap {
+struct WarpOverlayMap {
     uint32_t pid;
-    uint32_t shmem_id;
+    uint32_t overlay_id;
     uint32_t offset;
     uint32_t size;
     uint8_t valid;
 };
 
-static WarpShmemLinearMap g_warp_shmem_maps[WARP_SHMEM_MAP_SLOTS];
+static WarpOverlayMap g_warp_overlay_maps[WARP_OVERLAY_MAP_SLOTS];
 
 /* Registry of the linear-memory windows a process has had something mapped into, used
  * only to keep a later placement from overlapping an earlier one.  Three id namespaces
- * share it: small positive ids are real shmem ids, bit 31 marks a region/block window
+ * share it: bit 31 marks a region/block window
  * and bit 30 an xfer-buffer overlay.  The table is a fixed PROCESS_MAX_COUNT*32 array;
  * when it is full a new window is simply not recorded, so it can no longer be seen by
  * the overlap check.  Unsynchronised — safe only under the WARP single-CPU invariant.
  *
- * warp_shmem_map_track: record or resize the (pid, id, offset) window.
- * warp_shmem_map_untrack: drop every window this pid holds under `id`.
- * warp_shmem_map_find: the first window matching (pid, id), or nullptr.
- * warp_shmem_map_overlaps: whether [offset, offset+size) intersects any window of pid. */
-static void warp_shmem_map_track(uint32_t pid, uint32_t id, uint32_t offset, uint32_t size) {
-    WarpShmemLinearMap* empty = nullptr;
-    for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i) {
-        WarpShmemLinearMap* s = &g_warp_shmem_maps[i];
-        if (s->valid && s->pid == pid && s->shmem_id == id && s->offset == offset) {
+ * warp_overlay_map_track: record or resize the (pid, id, offset) window.
+ * warp_overlay_map_untrack: drop every window this pid holds under `id`.
+ * warp_overlay_map_find: the first window matching (pid, id), or nullptr.
+ * warp_overlay_map_overlaps: whether [offset, offset+size) intersects any window of pid. */
+static void warp_overlay_map_track(uint32_t pid, uint32_t id, uint32_t offset, uint32_t size) {
+    WarpOverlayMap* empty = nullptr;
+    for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i) {
+        WarpOverlayMap* s = &g_warp_overlay_maps[i];
+        if (s->valid && s->pid == pid && s->overlay_id == id && s->offset == offset) {
             s->size = size;
             return;
         }
@@ -1433,34 +1433,34 @@ static void warp_shmem_map_track(uint32_t pid, uint32_t id, uint32_t offset, uin
     }
     if (empty) {
         empty->pid = pid;
-        empty->shmem_id = id;
+        empty->overlay_id = id;
         empty->offset = offset;
         empty->size = size;
         empty->valid = 1;
     }
 }
 
-static void warp_shmem_map_untrack(uint32_t pid, uint32_t id) {
-    for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i)
-        if (g_warp_shmem_maps[i].valid && g_warp_shmem_maps[i].pid == pid &&
-            g_warp_shmem_maps[i].shmem_id == id)
-            g_warp_shmem_maps[i].valid = 0;
+static void warp_overlay_map_untrack(uint32_t pid, uint32_t id) {
+    for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i)
+        if (g_warp_overlay_maps[i].valid && g_warp_overlay_maps[i].pid == pid &&
+            g_warp_overlay_maps[i].overlay_id == id)
+            g_warp_overlay_maps[i].valid = 0;
 }
 
-static WarpShmemLinearMap* warp_shmem_map_find(uint32_t pid, uint32_t id) {
-    for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i) {
-        WarpShmemLinearMap* slot = &g_warp_shmem_maps[i];
-        if (slot->valid && slot->pid == pid && slot->shmem_id == id) {
+static WarpOverlayMap* warp_overlay_map_find(uint32_t pid, uint32_t id) {
+    for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i) {
+        WarpOverlayMap* slot = &g_warp_overlay_maps[i];
+        if (slot->valid && slot->pid == pid && slot->overlay_id == id) {
             return slot;
         }
     }
     return nullptr;
 }
 
-static uint8_t warp_shmem_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
+static uint8_t warp_overlay_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
     uint64_t a0 = offset, a1 = (uint64_t)offset + size;
-    for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i) {
-        const WarpShmemLinearMap* s = &g_warp_shmem_maps[i];
+    for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i) {
+        const WarpOverlayMap* s = &g_warp_overlay_maps[i];
         if (!s->valid || s->pid != pid || s->size == 0)
             continue;
         uint64_t b0 = s->offset, b1 = b0 + s->size;
@@ -1511,7 +1511,7 @@ static int warp_restore_linear_window(WarpCallContext* ctx, uint32_t offset, uin
          * range instead: the window lives in guarded, app-unused linmem, and a
          * fresh commit is exactly what the slot hands out initially.
          * TODO(linmem-window): preserving the original contents would need the
-         * displaced frames recorded per map; WARP_SHMEM_MAP_SLOTS is
+         * displaced frames recorded per map; WARP_OVERLAY_MAP_SLOTS is
          * PROCESS_MAX_COUNT*32, so a per-slot frame array is too costly. */
         return linmem_slot_commit(virt, 0, pages_n);
     }
@@ -1819,23 +1819,6 @@ static uint32_t warp_thread_yield(void* ctx_) {
 // ---------------------------------------------------------------------------
 // Shared memory
 // ---------------------------------------------------------------------------
-
-static uint32_t warp_shmem_create(uint32_t pages, uint32_t flags, void* ctx_) {
-    (void)ctx_;
-    if ((int32_t)pages <= 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    uint32_t id = 0;
-    uint64_t phys = 0;
-    uint32_t cflags = flags ? flags : (MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
-    if (mm_shared_create(context_id, (uint64_t)pages, cflags, &id, &phys) != 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_MAP;
-    (void)phys;
-    return id;
-}
-
 /* hostcalls.yaml `klog_register_ring`: adopt the caller's OWNED transfer buffer `id` as
  * the kernel log ring, after which klog output is also published into that ringbuf.
  * `id` is a BUFFER_KIND_TRANSFER buffer_id, not a shared-memory id; ownership, physical
@@ -1857,97 +1840,14 @@ static uint32_t warp_klog_register_ring(uint32_t id, uint32_t notify_endpoint, v
     uint32_t notify = ((int32_t)notify_endpoint > 0) ? notify_endpoint : 0u;
     return (uint32_t)klog_register_ring(context_id, id, notify);
 }
-
-/* hostcalls.yaml `shmem_grant` / `shmem_revoke`: give the process `target_pid` access
- * to the caller's shared region `id`, or take it away.  Both require the caller to hold
- * the DMA-buffer capability and to own the region.  The target is named by pid and
- * resolved to its context here, so a pid with no context is refused.  Returns
- * mm_shared_grant / mm_shared_revoke's code, or WASMOS_ERR_SHMEM_BAD_ID /
- * WASMOS_ERR_SHMEM_NO_CAP. */
-static uint32_t warp_shmem_grant(uint32_t id, uint32_t target_pid, void* ctx_) {
-    (void)ctx_;
-    if ((int32_t)id <= 0 || (int32_t)target_pid <= 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    process_t* tgt = process_get(target_pid);
-    if (!tgt || tgt->context_id == 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    return (uint32_t)mm_shared_grant(context_id, id, tgt->context_id);
-}
-
-static uint32_t warp_shmem_revoke(uint32_t id, uint32_t target_pid, void* ctx_) {
-    (void)ctx_;
-    if ((int32_t)id <= 0 || (int32_t)target_pid <= 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    process_t* tgt = process_get(target_pid);
-    if (!tgt || tgt->context_id == 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    return (uint32_t)mm_shared_revoke(context_id, id, tgt->context_id);
-}
-
-/* hostcalls.yaml `shmem_map`: map shared region `id` at a guest offset the CALLER
- * chooses.  `wasm_off` must land on a page boundary once the linear-memory base's own
- * sub-page offset is added — WARP's base is not page-aligned, so a 4 KiB-aligned
- * `wasm_off` is not sufficient and a misfit is WASMOS_ERR_SHMEM_NO_WINDOW.  `size` must
- * be page-aligned and at least the region's size.  The range is committed by probe
- * BEFORE the remap, because a later commit would zero-fill the freshly mapped frames.
- * Returns 0 on success, otherwise a negative WASMOS_ERR_SHMEM_* code.  Prefer
- * warp_shmem_map_auto, which picks a placement that satisfies these constraints. */
-static uint32_t warp_shmem_map(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
-    auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF))
-        return (uint32_t)WASMOS_ERR_SHMEM_UNALIGNED;
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    uint64_t phys_base = 0;
-    uint64_t shared_pages = 0;
-    if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0 || shared_pages == 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
-    if ((uint64_t)size < shared_pages * 0x1000ULL)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_SIZE;
-    /* Commit the range via probe() BEFORE paging_map_4k (see warp_shmem_map_auto
-     * for the rationale — ensureLinearSize would zero the shmem pages otherwise). */
-    ctx->module->getLinearMemoryRegion(wasm_off + size - 1, 1);
-    uint8_t* linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
-    if (!linmem_base)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
-#ifdef WASMOS_WASM_RUNTIME_WARP
-    if (warp_ring3_sync_linmem_user_window(linmem_base) != 0) {
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
-    }
-#endif
-    uint8_t* lmem = linmem_base + wasm_off;
-    if (addr_cast(uint64_t, lmem) & 0xFFF)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
-    uint64_t virt = addr_cast(uint64_t, lmem);
-    for (uint64_t i = 0; i < shared_pages; ++i) {
-        paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
-    }
-#ifdef WASMOS_WASM_RUNTIME_WARP
-    if (warp_ring3_map_user_window(linmem_base, wasm_off, phys_base, shared_pages) != 0) {
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
-    }
-#endif
-    if (mm_shared_retain(context_id, id) != 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_MAP;
-    warp_shmem_map_track(ctx->pid, id, wasm_off, size);
-    return 0;
-}
-
 /* Place a page-aligned window of `window_size` bytes somewhere in the calling
  * app's linear memory, grow/commit linmem to cover it, and remap the window's
  * host pages onto [phys_base, phys_base + map_pages*4KiB).  This is the delicate
- * scan + commit-probe + paging_map_4k core shared by warp_shmem_map_auto
+ * scan + commit-probe + paging_map_4k core shared by the overlay mappers
  * (peer-granted shared phys) and warp_region_alloc (driver-owned pinned phys) —
  * one code path so the pinned-linmem-base invariants only live in one place.
  * Caller owns tracking/retain and the physical backing.  Returns the wasm
- * offset (>= 0) on success, or a packed WASMOS_ERR_SHMEM_* code (negative) on failure. */
+ * offset (>= 0) on success, or a packed WASMOS_ERR_LINMEM_* code (negative) on failure. */
 static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, uint64_t map_pages,
                                       uint32_t window_size) {
     /* Scan linear memory for a free, page-aligned, non-overlapping window.
@@ -1955,7 +1855,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
      * fixed 2 MiB floor so the first map stays inside memory WARP has already
      * extended. That avoids the Could_not_extend_linear_memory fault seen when
      * gfx_smoke/menu_bar perform their first libui buffer map.
-     * TODO(warp-shmem-map-auto): reserve windows against actual heap growth
+     * TODO(warp-overlay-place): reserve windows against actual heap growth
      * instead of relying on a fixed post-active guard band. */
     /* Use the WARP-configured heap limit rather than the WASM binary's
      * declared page count.  Zig freestanding binaries declare only the
@@ -1990,7 +1890,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
      * and the top-of-memory tail, where WARP keeps private runtime state
      * outside the app's explicit globals. */
     if (mem_size < (uint64_t)window_size) {
-        return (int64_t)WASMOS_ERR_SHMEM_NO_WINDOW;
+        return (int64_t)WASMOS_ERR_LINMEM_NO_WINDOW;
     }
     const uint64_t low_guard = 0x200000ULL;
     const uint64_t high_guard = 0x20000ULL;
@@ -2002,7 +1902,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
         scan_limit -= high_guard;
     }
     if (scan_limit < (uint64_t)window_size || scan_min + (uint64_t)window_size > scan_limit) {
-        return (int64_t)WASMOS_ERR_SHMEM_NO_WINDOW;
+        return (int64_t)WASMOS_ERR_LINMEM_NO_WINDOW;
     }
     uint64_t start_off = ((scan_min + base_mod + 0xFFFULL) & ~0xFFFULL) - base_mod;
     if (start_off < scan_min) {
@@ -2010,7 +1910,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
     }
     for (uint64_t off = start_off; off + window_size <= scan_limit; off += 0x1000ULL) {
         uint32_t off32 = (uint32_t)off;
-        if (!warp_shmem_map_overlaps(ctx->pid, off32, window_size) && base) {
+        if (!warp_overlay_map_overlaps(ctx->pid, off32, window_size) && base) {
             uint8_t* p = base + off32;
             if ((addr_cast(uint64_t, p) & 0xFFFULL) == 0) {
                 found_off = off32;
@@ -2020,7 +1920,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
         }
     }
     if (!found) {
-        return (int64_t)WASMOS_ERR_SHMEM_NO_WINDOW;
+        return (int64_t)WASMOS_ERR_LINMEM_NO_WINDOW;
     }
     /* Commit the target range via probe() BEFORE paging_map_4k.
      * ensureLinearSize() zero-initialises newly committed WASM pages.  If the
@@ -2064,63 +1964,13 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
     return (int64_t)found_off;
 }
 
-/* hostcalls.yaml `shmem_map_auto`: map shared region `id` into a guest window the
- * KERNEL places, avoiding the alignment trap of warp_shmem_map.  `size` must be
- * page-aligned and at least the region's size.  Requires the DMA-buffer capability.
- * Returns the chosen guest offset (a value, not a status), or a negative
- * WASMOS_ERR_SHMEM_* code — WASMOS_ERR_SHMEM_NO_WINDOW when no free, aligned,
- * non-overlapping window of that size exists inside the app's reserved linear memory. */
-static uint32_t warp_shmem_map_auto(uint32_t id, uint32_t size, void* ctx_) {
-    auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)id <= 0 || (int32_t)size <= 0) {
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
-    }
-    /* Split from the argument check so a guest gets the same code here as from
-     * wasm3: a misaligned size is UNALIGNED, not "bad arguments". */
-    if ((size & 0xFFF) != 0) {
-        return (uint32_t)WASMOS_ERR_SHMEM_UNALIGNED;
-    }
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0) {
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    }
-    uint64_t phys_base = 0;
-    uint64_t shared_pages = 0;
-    if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0 || shared_pages == 0) {
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
-    }
-    if ((uint64_t)size < shared_pages * 0x1000ULL) {
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_SIZE;
-    }
-#if WASMOS_TRACE
-    klog_printf("[trace-shmem] map_auto pid=%u size=%llx shpg=%llx reserved=%llx "
-                "linmem_pages=%u committed=%llx\n",
-                (unsigned)ctx->pid,
-                (unsigned long long)size,
-                (unsigned long long)shared_pages,
-                (unsigned long long)warp_linmem_reserved_bytes(ctx->pid),
-                (unsigned)ctx->module->getLinearMemorySizeInPages(),
-                (unsigned long long)warp_heap_committed_bytes(ctx->pid));
-#endif
-    int64_t placed = warp_linmem_place_phys(ctx, phys_base, shared_pages, size);
-    if (placed < 0) {
-        return (uint32_t)placed;
-    }
-    uint32_t found_off = (uint32_t)placed;
-    if (mm_shared_retain(context_id, id) != 0) {
-        return (uint32_t)WASMOS_ERR_SHMEM_MAP;
-    }
-    warp_shmem_map_track(ctx->pid, id, found_off, size);
-    return found_off;
-}
-
 /* Sanity cap on a single region reservation (4 MiB). The real fit is enforced
  * by warp_linmem_place_phys returning NO_WINDOW when the driver's linmem window
  * is too small. */
 #define WARP_REGION_MAX_PAGES 1024u
 /* Synthetic tracking id for region windows: high bit set keeps it out of the
- * (small, positive) shmem id space so region windows participate in overlap
- * checks without colliding with real shmem maps. */
+ * low id space so region windows participate in overlap checks without
+ * colliding with buffer overlays. */
 #define WARP_REGION_TRACK_ID(off) ((uint32_t)(off) | 0x80000000u)
 
 /* Driver-owned pinned DMA region: allocate a contiguous, page-aligned physical
@@ -2180,7 +2030,7 @@ static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_
      * lifetime.  Single-threaded WARP kernel context: nothing allocates between
      * alloc and pin. */
     pfa_pin_pages(phys_base, pages);
-    warp_shmem_map_track(
+    warp_overlay_map_track(
         ctx->pid, WARP_REGION_TRACK_ID(found_off), found_off, (uint32_t)region_bytes);
     __builtin_memcpy(out_ptr, &phys_base, sizeof(uint64_t));
     capability_dma_commit(context_id, region_bytes); /* charge the pinned footprint */
@@ -2212,19 +2062,19 @@ static uint32_t warp_block_buffer_map(void* ctx_) {
     if (placed < 0)
         return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
     uint32_t off = (uint32_t)placed;
-    warp_shmem_map_track(ctx->pid, WARP_REGION_TRACK_ID(off), off, window);
+    warp_overlay_map_track(ctx->pid, WARP_REGION_TRACK_ID(off), off, window);
     slot->map_off = off;
     return off;
 }
 
 /* Synthetic tracking-id namespace for xfer-buffer linmem overlays: bit 30 set
- * keeps them out of the small positive shmem id space AND the region-window
+ * keeps them out of the low id space AND the region-window
  * namespace (bit 31), so all three participate in overlap checks collision-free. */
 #define WARP_XFER_TRACK_ID(id) ((uint32_t)(id) | 0x40000000u)
 
 /* Overlay the caller's OWNED xfer-buffer into its linear memory so the socket
  * rings are driven by pointer (ringbuf.h) rather than copy hostcalls — the
- * zero-copy data plane of docs/architecture/22. Mirrors warp_shmem_map_auto but
+ * zero-copy data plane of docs/architecture/22. Mirrors the overlay mapper but
  * resolves the phys backing from the xfer-buffer object; owner-only, so no DMA
  * capability is required. Idempotent per buffer_id.
  *
@@ -2254,7 +2104,7 @@ static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
     if (phys_base == 0 || (phys_base & 0xFFFULL) != 0 || buf.size_bytes == 0)
         return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_BACKING;
     uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
-    WarpShmemLinearMap* existing = warp_shmem_map_find(ctx->pid, track_id);
+    WarpOverlayMap* existing = warp_overlay_map_find(ctx->pid, track_id);
     if (existing)
         return existing->offset; /* idempotent */
     uint64_t pages = ((uint64_t)buf.size_bytes + 0xFFFULL) >> 12;
@@ -2266,7 +2116,7 @@ static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
      * decommit at teardown (process exit/trap without an unmap) cannot free them
      * out from under the xfer-buffer owner. Released in warp_xfer_buffer_unmap. */
     pfa_pin_pages(phys_base, pages);
-    warp_shmem_map_track(ctx->pid, track_id, (uint32_t)placed, window);
+    warp_overlay_map_track(ctx->pid, track_id, (uint32_t)placed, window);
     return (uint32_t)placed;
 }
 
@@ -2282,7 +2132,7 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
     if (!ctx || (int32_t)buffer_id <= 0)
         return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
-    WarpShmemLinearMap* slot = warp_shmem_map_find(ctx->pid, track_id);
+    WarpOverlayMap* slot = warp_overlay_map_find(ctx->pid, track_id);
     if (!slot)
         return 0;
     uint64_t pages = ((uint64_t)slot->size + 0xFFFULL) / 0x1000ULL;
@@ -2312,99 +2162,7 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
             pfa_free_pages(phys_base, pages);
         }
     }
-    warp_shmem_map_untrack(ctx->pid, track_id);
-    return 0;
-}
-
-/* hostcalls.yaml `shmem_unmap`: drop the caller's reference to shared region `id` and
- * restore ordinary backing under whatever window it occupied.  For a dedicated-VA slot
- * the restored pages are fresh and ZEROED, so the window's previous contents do not
- * survive the unmap.  Unmapping an id that was never mapped still releases the
- * reference.  Returns mm_shared_release's code, or WASMOS_ERR_SHMEM_BAD_ARGS /
- * NO_CAP / NO_WINDOW. */
-static uint32_t warp_shmem_unmap(uint32_t id, void* ctx_) {
-    auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)id <= 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    WarpShmemLinearMap* slot = warp_shmem_map_find(process_current_pid(), id);
-    if (slot && warp_restore_linear_window(ctx, slot->offset, slot->size) != 0) {
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
-    }
-#ifdef WASMOS_WASM_RUNTIME_WARP
-    if (slot) {
-        uint8_t* linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
-        if (!linmem_base || warp_ring3_sync_linmem_user_window(linmem_base) != 0) {
-            return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
-        }
-    }
-#endif
-    warp_shmem_map_untrack(process_current_pid(), id);
-    return (uint32_t)mm_shared_release(context_id, id);
-}
-
-/* hostcalls.yaml `shmem_flush`: copy `size` bytes from guest memory at `wasm_off` into
- * the front of shared region `id`.  A copy, not a mapping operation — for a region that
- * is already mapped into linear memory this would copy the window onto itself.  `size`
- * may not exceed the region.  Returns 0 on success, otherwise a negative
- * WASMOS_ERR_SHMEM_* code. */
-static uint32_t warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
-    auto* ctx = warp_call_ctx(ctx_);
-    /* wasm_off arrives as u32, so a negative offset becomes a huge one. Reject
-     * it as a bad argument here, as wasm3 does, rather than letting it fall
-     * through to the window check and report NO_WINDOW. */
-    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (int32_t)wasm_off < 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    uint64_t phys_base = 0;
-    uint64_t shared_pages = 0;
-    if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0 || shared_pages == 0 ||
-        phys_base == 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
-    if ((uint64_t)size > shared_pages * 0x1000ULL)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_SIZE;
-    const uint8_t* src = warp_linear_mem_window(ctx, wasm_off, size);
-    if (!src)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
-    __builtin_memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), src, size);
-    return 0;
-}
-
-/* hostcalls.yaml `shmem_refresh`: the reverse of warp_shmem_flush — copy `size` bytes
- * from the front of shared region `id` into guest memory at `wasm_off`.  The
- * destination must already be committed; this call deliberately does not extend linear
- * memory (see the comment on the window lookup below).  Returns 0 on success, otherwise
- * a negative WASMOS_ERR_SHMEM_* code. */
-static uint32_t warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
-    auto* ctx = warp_call_ctx(ctx_);
-    /* wasm_off arrives as u32, so a negative offset becomes a huge one. Reject
-     * it as a bad argument here, as wasm3 does, rather than letting it fall
-     * through to the window check and report NO_WINDOW. */
-    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (int32_t)wasm_off < 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
-    uint64_t phys_base = 0;
-    uint64_t shared_pages = 0;
-    if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0 || shared_pages == 0 ||
-        phys_base == 0)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
-    if ((uint64_t)size > shared_pages * 0x1000ULL)
-        return (uint32_t)WASMOS_ERR_SHMEM_BAD_SIZE;
-    /* shmem_refresh writes into a region already committed by shmem_map_auto.
-     * Use warp_linear_mem_window (size=0 probe, no ensureLinearSize) instead of
-     * getLinearMemoryRegion with a non-zero size, which would trigger
-     * ensureLinearSize and potentially extend the linear memory past its current
-     * limit causing a page fault at the new boundary. */
-    uint8_t* dst = warp_linear_mem_window(ctx, wasm_off, size);
-    if (!dst)
-        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
-    __builtin_memcpy(dst, ptr_cast(const void, (phys_base | KERNEL_HIGHER_HALF_BASE)), size);
+    warp_overlay_map_untrack(ctx->pid, track_id);
     return 0;
 }
 
@@ -2905,7 +2663,7 @@ extern "C" void warp_release_pid(uint32_t pid) {
      * 2 pages leak on every process exit. */
     if (auto* bslot = static_cast<WarpBlockSlot*>(hashmap_get(&g_block_map, pid))) {
         if (bslot->map_off) {
-            warp_shmem_map_untrack(pid, WARP_REGION_TRACK_ID(bslot->map_off));
+            warp_overlay_map_untrack(pid, WARP_REGION_TRACK_ID(bslot->map_off));
         }
         if (bslot->phys) {
             pfa_free_pages(bslot->phys, WARP_BLOCK_BUF_PAGES);

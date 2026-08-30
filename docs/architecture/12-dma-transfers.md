@@ -525,7 +525,7 @@ int32_t wasmos_region_alloc(int32_t pages, int32_t cache_policy, uint64_t *out_p
 ```
 
 The mapping is a real page remap (via the same pinned-base linmem window
-machinery as `shmem_map_auto`, factored into `warp_linmem_place_phys`), so the
+machinery as the overlay mapper, factored into `warp_linmem_place_phys`), so the
 driver's writes land in the exact physical pages the device DMAs from — not a
 copy. The backing run is `pfa_alloc_pages_below(pages, 2 GiB)` + `pfa_pin_pages`,
 and `capability_dma_range_allowed` is enforced on the allocation just like on

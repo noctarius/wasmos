@@ -230,8 +230,8 @@ static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_da
     if (!d || !d->popup_base || d->popup_win_id == 0 || d->popup_buf_id == 0)
         return;
     int32_t status = 0;
-    wasmos_shmem_flush(
-        d->popup_shmem_id, addr_cast(int32_t, d->popup_base), d->popup_w * d->popup_h * 4);
+    /* No write-back: the mapping IS the surface's frames on both runtimes
+     * (tests/test_xfer_map_alias.py). */
     ui_send_gfx(ctx->gfx_endpoint,
                 ctx->reply_endpoint,
                 ctx->req_id++,
@@ -246,7 +246,8 @@ static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_da
                 0);
 }
 
-/* Tear down mi's popup window: release the shared buffer, unmap the shmem,
+/* Tear down mi's popup window: destroy the window, withdraw and release the
+ * surface this client owns,
  * destroy the window, reset the popup fields, and recursively close every
  * descendant's popup (clearing their dropdown_open too). A no-op when no popup
  * window exists. Blocks for the compositor round trips involved.
@@ -260,25 +261,9 @@ static inline void ui_menu_item_popup_close(ui_context_t* ctx, ui_component_t* m
     if (!d || d->popup_win_id == 0)
         return;
     int32_t status = 0;
-    if (d->popup_buf_id > 0) {
-        ui_send_gfx(ctx->gfx_endpoint,
-                    ctx->reply_endpoint,
-                    ctx->req_id++,
-                    GFX_IPC_RELEASE_SHARED_BUFFER,
-                    d->popup_buf_id,
-                    0,
-                    0,
-                    0,
-                    &status,
-                    0,
-                    0,
-                    0);
-        d->popup_buf_id = 0;
-    }
-    if (d->popup_shmem_id > 0) {
-        wasmos_shmem_unmap(d->popup_shmem_id);
-        d->popup_shmem_id = 0;
-    }
+    /* The window goes first: DETACH is refused while the surface is still its
+     * current buffer, and the surface may only be released once the compositor
+     * has acknowledged the detach and dropped its mapping. */
     ui_send_gfx(ctx->gfx_endpoint,
                 ctx->reply_endpoint,
                 ctx->req_id++,
@@ -291,6 +276,24 @@ static inline void ui_menu_item_popup_close(ui_context_t* ctx, ui_component_t* m
                 0,
                 0,
                 0);
+    if (d->popup_buf_id > 0) {
+        ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_DETACH_SURFACE,
+                    d->popup_win_id,
+                    d->popup_buf_id,
+                    0,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0);
+        (void)wasmos_xfer_buffer_unmap(d->popup_buf_id);
+        (void)wasmos_xfer_buffer_release(d->popup_buf_id);
+        d->popup_buf_id = 0;
+        d->popup_borrow_id = 0;
+    }
     d->popup_win_id = 0;
     d->popup_base = NULL;
     d->popup_w = 0;
@@ -397,43 +400,60 @@ static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi
         status != WASMOS_ERR_NONE)
         goto fail;
 
-    int32_t buf_id = 0, shmem_id = 0, stride = 0;
+    /* The popup surface is OWNED here and lent READ to the compositor, the same
+     * ownership the main window uses: a server cannot own a buffer it hands to
+     * a client. */
+    int32_t stride = 0, surface_bytes = 0;
     if (ui_send_gfx(ctx->gfx_endpoint,
                     ctx->reply_endpoint,
                     ctx->req_id++,
-                    GFX_IPC_ALLOC_SHARED_BUFFER,
+                    GFX_IPC_GET_SURFACE_SPEC,
                     win_id,
-                    popup_w,
-                    popup_h,
+                    0,
+                    0,
                     0,
                     &status,
-                    &buf_id,
-                    &shmem_id,
-                    &stride) != 0 ||
-        status != WASMOS_ERR_NONE)
+                    &stride,
+                    &surface_bytes,
+                    0) != 0 ||
+        status != WASMOS_ERR_NONE || surface_bytes <= 0)
         goto fail;
 
-    const int32_t bytes = (popup_w * popup_h * 4 + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
-    const int32_t mapped = wasmos_shmem_map_auto(shmem_id, bytes);
+    const int32_t buf_id = wasmos_xfer_buffer_acquire(surface_bytes);
+    if (buf_id <= 0)
+        goto fail;
+    const int32_t borrow_id =
+        wasmos_xfer_buffer_borrow(ctx->gfx_endpoint, buf_id, WASMOS_BUFFER_GRANT_READ);
+    if (borrow_id <= 0) {
+        (void)wasmos_xfer_buffer_release(buf_id);
+        goto fail;
+    }
+    const int32_t mapped = wasmos_xfer_buffer_map(buf_id);
     if (mapped < 0) {
-        ui_send_gfx(ctx->gfx_endpoint,
+        (void)wasmos_xfer_buffer_release(buf_id);
+        goto fail;
+    }
+    if (ui_send_gfx(ctx->gfx_endpoint,
                     ctx->reply_endpoint,
                     ctx->req_id++,
-                    GFX_IPC_RELEASE_SHARED_BUFFER,
+                    GFX_IPC_ATTACH_SURFACE,
+                    win_id,
                     buf_id,
-                    0,
-                    0,
+                    borrow_id,
                     0,
                     &status,
                     0,
                     0,
-                    0);
+                    0) != 0 ||
+        status != WASMOS_ERR_NONE) {
+        (void)wasmos_xfer_buffer_unmap(buf_id);
+        (void)wasmos_xfer_buffer_release(buf_id);
         goto fail;
     }
 
     d->popup_win_id = win_id;
     d->popup_buf_id = buf_id;
-    d->popup_shmem_id = shmem_id;
+    d->popup_borrow_id = borrow_id;
     d->popup_base = ptr_cast(uint8_t, (uint32_t)mapped);
     d->popup_w = popup_w;
     d->popup_h = popup_h;
@@ -746,8 +766,8 @@ static inline void ui_menu_item_dismiss_popup(ui_context_t* ctx, ui_component_t*
     ui_mark_dirty(ctx);
 }
 
-/* destroy_data op for UI_COMPONENT_MENU_ITEM: frees the label, unmaps the popup
- * shmem if one is still mapped, frees the data struct and clears
+/* destroy_data op for UI_COMPONENT_MENU_ITEM: frees the label, releases the
+ * popup surface if one is still held, frees the data struct and clears
  * component_data. Tolerates already-cleared data; the component pointer itself
  * must be non-NULL. */
 static inline void ui_menu_item_destroy_data(ui_component_t* c) {
@@ -756,13 +776,17 @@ static inline void ui_menu_item_destroy_data(ui_component_t* c) {
         return;
     if (d->text.text)
         free(d->text.text);
-    /* Only the shmem mapping is released here; the compositor window and its
-     * shared buffer are torn down by ui_menu_item_popup_close().
-     * FIXME: a popup still open when ui_destroy() walks the components leaks
-     * its window and buffer, because destroy_data has no gfx endpoint to send
-     * DESTROY_WINDOW / RELEASE_SHARED_BUFFER on. */
-    if (d->popup_shmem_id > 0)
-        wasmos_shmem_unmap(d->popup_shmem_id);
+    /* Only this client's own surface is released here; the compositor window is
+     * torn down by ui_menu_item_popup_close(). Releasing cascade-revokes the
+     * compositor's borrow, so the mapping it holds is not stranded even on this
+     * path.
+     * FIXME: a popup still open when ui_destroy() walks the components leaks its
+     * compositor WINDOW, because destroy_data has no gfx endpoint to send
+     * DESTROY_WINDOW on. */
+    if (d->popup_buf_id > 0) {
+        (void)wasmos_xfer_buffer_unmap(d->popup_buf_id);
+        (void)wasmos_xfer_buffer_release(d->popup_buf_id);
+    }
     free(d);
     c->component_data = NULL;
 }

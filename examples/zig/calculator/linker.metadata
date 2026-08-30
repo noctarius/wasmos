@@ -12,7 +12,7 @@ heap_pages = 512
 
 # Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
 # Zig declares its own initial memory from the binary's live data, and
-# shmem_map_auto scans for its window ABOVE that, so the declared minimum has to
+# the overlay mapper scans for its window ABOVE that, so the declared minimum has to
 # leave room for the framebuffer mapping: 2 MiB. Without it the window lands
 # outside linear memory and WARP throws OutOfBounds, which panics the kernel.
 [link]

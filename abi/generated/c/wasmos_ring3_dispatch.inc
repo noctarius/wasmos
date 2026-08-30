@@ -156,22 +156,6 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
         return warp_sched_cpu_stats((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     case HC_THREAD_YIELD:
         return warp_thread_yield(reinterpret_cast<void*>(a0));
-    case HC_SHMEM_CREATE:
-        return warp_shmem_create((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
-    case HC_SHMEM_GRANT:
-        return warp_shmem_grant((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
-    case HC_SHMEM_REVOKE:
-        return warp_shmem_revoke((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
-    case HC_SHMEM_MAP:
-        return warp_shmem_map((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
-    case HC_SHMEM_MAP_AUTO:
-        return warp_shmem_map_auto((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
-    case HC_SHMEM_FLUSH:
-        return warp_shmem_flush((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
-    case HC_SHMEM_REFRESH:
-        return warp_shmem_refresh((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
-    case HC_SHMEM_UNMAP:
-        return warp_shmem_unmap((uint32_t)a0, reinterpret_cast<void*>(a1));
     case HC_IRQ_ROUTE_IPC:
         return warp_irq_route_ipc((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     case HC_IRQ_ACK:

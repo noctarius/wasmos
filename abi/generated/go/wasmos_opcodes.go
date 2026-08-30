@@ -477,7 +477,6 @@ const PROC_IPC_DMA_BORROW_ERROR int32 = 0x2BF
 // font (0xA00..0xAFF)
 const FONT_IPC_OPEN_FONT_REQ int32 = 0xA00
 const FONT_IPC_GET_METRICS_REQ int32 = 0xA01
-const FONT_IPC_RASTER_GLYPH_REQ int32 = 0xA02
 const FONT_IPC_MEASURE_GLYPH_REQ int32 = 0xA03
 const FONT_IPC_RASTER_GLYPH_INTO_REQ int32 = 0xA04
 const FONT_IPC_RESP int32 = 0xA80
@@ -487,11 +486,9 @@ const FONT_IPC_ERROR int32 = 0xAFF
 const GFX_IPC_CREATE_WINDOW int32 = 0x200
 const GFX_IPC_DESTROY_WINDOW int32 = 0x201
 const GFX_IPC_RESIZE_WINDOW int32 = 0x202
-const GFX_IPC_ALLOC_SHARED_BUFFER int32 = 0x203
 const GFX_IPC_SUBMIT_COMMANDS int32 = 0x204
 const GFX_IPC_PRESENT_WINDOW int32 = 0x205
 const GFX_IPC_PUSH_EVENT int32 = 0x206
-const GFX_IPC_RELEASE_SHARED_BUFFER int32 = 0x207
 const GFX_IPC_SET_DISPLAY_MODE int32 = 0x208
 const GFX_IPC_LIST_WINDOWS int32 = 0x209
 const GFX_IPC_FOCUS_WINDOW int32 = 0x20A
@@ -511,9 +508,8 @@ const GFX_IPC_GET_WINDOW_TITLE int32 = 0x20F
 // new surface attached rather than the attached one resized in place --
 // a borrowed buffer is never mutated (docs/architecture/12-dma-transfers.md).
 //
-// Supersedes GFX_IPC_ALLOC_SHARED_BUFFER, which allocated the buffer
-// compositor-side and granted it to the caller: a server cannot own a
-// buffer it hands to a client.
+// This replaced a compositor-side allocation that granted the buffer to
+// the caller: a server cannot own a buffer it hands to a client.
 const GFX_IPC_GET_SURFACE_SPEC int32 = 0x210
 // Register a surface the CLIENT owns and has borrowed to the compositor.
 // arg0 = window_id, arg1 = buffer_id, arg2 = borrow_id, arg3 reserved (0).
@@ -535,9 +531,8 @@ const GFX_IPC_ATTACH_SURFACE int32 = 0x211
 // The client MUST detach before releasing the buffer. There is no
 // unborrow notification, so a release while the compositor still holds
 // the borrow leaves it reading a revoked borrow mid-composite; the
-// acknowledged detach is that missing handshake. Supersedes
-// GFX_IPC_RELEASE_SHARED_BUFFER, which asked the compositor to free a
-// buffer the compositor owned.
+// acknowledged detach is that missing handshake. This replaced a call
+// that asked the compositor to free a buffer the compositor owned.
 const GFX_IPC_DETACH_SURFACE int32 = 0x212
 const GFX_IPC_RESP int32 = 0x280
 const GFX_IPC_ERROR int32 = 0x2FF

@@ -689,7 +689,7 @@ Host functions follow WARP's V1 import convention — `ReturnType fn(Args..., vo
 - `wasmos.console_read` is implemented (`warp_console_read`), but the WARP input
   path is polling-only: there is no ring doorbell, so a reader must poll the
   serial-backed source (see `docs/STATUS.md`).
-- A few refinement TODOs remain in `src/kernel/warp/link.cpp` (SMP sync, shmem
+- A few refinement TODOs remain in `src/kernel/warp/link.cpp` (SMP sync, overlay
   auto-map growth, PAT attrs, `irq.configure` split); host-call coverage itself
   is broad.
 - Multi-threaded WASM (`wasm_driver_spawn_vm_thread`) is not yet functional under WARP.

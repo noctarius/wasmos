@@ -12,7 +12,7 @@ heap_pages = 4096
 
 # Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
 # An app-owned BGRA32 back buffer plus the shared window the compositor presents
-# from. The back buffer has to be committed BEFORE shmem_map_auto, which places
+# from. The back buffer has to be committed BEFORE the surface is mapped, which places
 # its window just above currently-committed memory, so both live inside this.
 [link]
 initial_memory = 16777216

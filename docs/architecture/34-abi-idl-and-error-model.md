@@ -287,9 +287,9 @@ result appears:
   negative of `(domain << 16) | local_code`, so a code is returned, compared and
   decoded as-is — the sign both signals failure (`ret < 0`) and carries the
   reason, and no call site re-signs it. A plain-status host call (no datum)
-  returns `0` or the same code. `shmem_map` / `shmem_map_auto` are the first
-  migration onto this: their `WASMOS_ERR_SHMEM_*` returns replace the legacy
-  `SHMEM_ERR_*` -30 range (Phase-4 subsystem 1).
+  returns `0` or the same code. The overlay mappers are the first
+  migration onto this: their `WASMOS_ERR_LINMEM_*` returns replace the legacy
+  -30 range (Phase-4 subsystem 1).
 
   **The success value shares the channel with the error codes**, which bounds
   what a value-or-error host call may return: a datum with bit 31 set is read as
@@ -308,7 +308,7 @@ result appears:
   boundary (the caller cannot be resolved, the guest range is unmapped, the copy
   faulted, a capability check refused, a value does not fit) and the mapping
   failures every mapping call shares (unaligned, no window, paging failed). The
-  counter-example already in the tree is "denied", which exists as `shmem.NO_CAP`,
+  counter-example already in the tree is "denied", which exists per-domain,
   `dma.DENY`, `subsystem.NOT_AUTHORIZED` and `io.NOT_AUTHORIZED` — four spellings
   of one condition, and the reason new authorization checks go to `kernel`.
 

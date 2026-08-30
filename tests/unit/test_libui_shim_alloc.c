@@ -63,32 +63,6 @@ int32_t wasmos_ipc_send(int32_t dest, int32_t src, int32_t type, int32_t request
 int32_t wasmos_sched_yield(void) {
     return -1;
 }
-int32_t wasmos_shmem_create(int32_t size) {
-    (void)size;
-    return -1;
-}
-int32_t wasmos_shmem_flush(int32_t id, int32_t ptr, int32_t len, int32_t offset) {
-    (void)id;
-    (void)ptr;
-    (void)len;
-    (void)offset;
-    return -1;
-}
-int32_t wasmos_shmem_map_auto(int32_t id) {
-    (void)id;
-    return -1;
-}
-int32_t wasmos_shmem_refresh(int32_t id, int32_t ptr, int32_t len, int32_t offset) {
-    (void)id;
-    (void)ptr;
-    (void)len;
-    (void)offset;
-    return -1;
-}
-int32_t wasmos_shmem_unmap(int32_t id) {
-    (void)id;
-    return -1;
-}
 /* ui_window_set_title carries the title in a transfer buffer the client owns,
  * so the shim pulls these in even though nothing here exercises that path. */
 int32_t wasmos_xfer_buffer_acquire(int32_t minimum_size) {

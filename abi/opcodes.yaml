@@ -726,7 +726,6 @@ subsystems:
     opcodes:
       - { symbol: FONT_IPC_OPEN_FONT_REQ, value: 0xA00, kind: req }
       - { symbol: FONT_IPC_GET_METRICS_REQ, value: 0xA01, kind: req }
-      - { symbol: FONT_IPC_RASTER_GLYPH_REQ, value: 0xA02, kind: req }
       - { symbol: FONT_IPC_MEASURE_GLYPH_REQ, value: 0xA03, kind: req }
       - { symbol: FONT_IPC_RASTER_GLYPH_INTO_REQ, value: 0xA04, kind: req }
       - { symbol: FONT_IPC_RESP, value: 0xA80, kind: resp }
@@ -739,11 +738,9 @@ subsystems:
       - { symbol: GFX_IPC_CREATE_WINDOW, value: 0x200, kind: req }
       - { symbol: GFX_IPC_DESTROY_WINDOW, value: 0x201, kind: req }
       - { symbol: GFX_IPC_RESIZE_WINDOW, value: 0x202, kind: req }
-      - { symbol: GFX_IPC_ALLOC_SHARED_BUFFER, value: 0x203, kind: req }
       - { symbol: GFX_IPC_SUBMIT_COMMANDS, value: 0x204, kind: req }
       - { symbol: GFX_IPC_PRESENT_WINDOW, value: 0x205, kind: req }
       - { symbol: GFX_IPC_PUSH_EVENT, value: 0x206, kind: notify }
-      - { symbol: GFX_IPC_RELEASE_SHARED_BUFFER, value: 0x207, kind: req }
       - { symbol: GFX_IPC_SET_DISPLAY_MODE, value: 0x208, kind: req }
       - { symbol: GFX_IPC_LIST_WINDOWS, value: 0x209, kind: req }
       - { symbol: GFX_IPC_FOCUS_WINDOW, value: 0x20A, kind: req }
@@ -767,9 +764,8 @@ subsystems:
           new surface attached rather than the attached one resized in place --
           a borrowed buffer is never mutated (docs/architecture/12-dma-transfers.md).
 
-          Supersedes GFX_IPC_ALLOC_SHARED_BUFFER, which allocated the buffer
-          compositor-side and granted it to the caller: a server cannot own a
-          buffer it hands to a client.
+          This replaced a compositor-side allocation that granted the buffer to
+          the caller: a server cannot own a buffer it hands to a client.
       - symbol: GFX_IPC_ATTACH_SURFACE
         value: 0x211
         kind: req
@@ -797,9 +793,8 @@ subsystems:
           The client MUST detach before releasing the buffer. There is no
           unborrow notification, so a release while the compositor still holds
           the borrow leaves it reading a revoked borrow mid-composite; the
-          acknowledged detach is that missing handshake. Supersedes
-          GFX_IPC_RELEASE_SHARED_BUFFER, which asked the compositor to free a
-          buffer the compositor owned.
+          acknowledged detach is that missing handshake. This replaced a call
+          that asked the compositor to free a buffer the compositor owned.
       - { symbol: GFX_IPC_RESP, value: 0x280, kind: resp }
       - { symbol: GFX_IPC_ERROR, value: 0x2FF, kind: error }
 

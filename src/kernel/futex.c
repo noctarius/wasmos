@@ -14,7 +14,7 @@
  *
  * Futex words live in WASM linear memory.  The kernel key is the physical
  * address of the word, so different processes sharing the same page (via
- * shmem_grant) converge on the same futex_t bucket entry.
+ * a shared buffer) converge on the same futex_t bucket entry.
  *
  * Design mirrors Minos2's kernel/userspace/futex.c.
  */

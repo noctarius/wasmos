@@ -76,14 +76,6 @@
     LINK("wasmos", "xfer_buffer_release", warp_xfer_buffer_release) , \
     LINK("wasmos", "sched_cpu_stats", warp_sched_cpu_stats) , \
     LINK("wasmos", "thread_yield", warp_thread_yield) , \
-    LINK("wasmos", "shmem_create", warp_shmem_create) , \
-    LINK("wasmos", "shmem_grant", warp_shmem_grant) , \
-    LINK("wasmos", "shmem_revoke", warp_shmem_revoke) , \
-    LINK("wasmos", "shmem_map", warp_shmem_map) , \
-    LINK("wasmos", "shmem_map_auto", warp_shmem_map_auto) , \
-    LINK("wasmos", "shmem_flush", warp_shmem_flush) , \
-    LINK("wasmos", "shmem_refresh", warp_shmem_refresh) , \
-    LINK("wasmos", "shmem_unmap", warp_shmem_unmap) , \
     LINK("wasmos", "irq_route_ipc", warp_irq_route_ipc) , \
     LINK("wasmos", "irq_ack", warp_irq_ack) , \
     LINK("wasmos", "irq_unroute", warp_irq_unroute) , \

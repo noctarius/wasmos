@@ -127,11 +127,9 @@ App-facing compositor interface. Defined in
 | `GFX_IPC_CREATE_WINDOW`         | 0x0200 | arg0=content_width arg1=content_height arg2=GFX_IPC_ABI_MAGIC arg3=header_pack(version,opcode) | arg1=window_id arg2=content_width arg3=content_height |
 | `GFX_IPC_DESTROY_WINDOW`        | 0x0201 | arg0=window_id                                                                                 | —                                                     |
 | `GFX_IPC_RESIZE_WINDOW`         | 0x0202 | arg0=window_id arg1=content_width arg2=content_height                                          | arg1=content_width arg2=content_height                |
-| `GFX_IPC_ALLOC_SHARED_BUFFER`   | 0x0203 | arg0=window_id (0=unbound) arg1=width arg2=height                                              | arg1=buffer_id arg2=shmem_id arg3=stride              |
 | `GFX_IPC_SUBMIT_COMMANDS`       | 0x0204 | (not yet dispatched)                                                                           | —                                                     |
-| `GFX_IPC_PRESENT_WINDOW`        | 0x0205 | arg0=window_id arg1=buffer_id arg2=damage_count arg3=damage_shmem_id                           | —                                                     |
+| `GFX_IPC_PRESENT_WINDOW`        | 0x0205 | arg0=window_id arg1=buffer_id arg2=damage_count arg3=damage byte offset in the surface                           | —                                                     |
 | `GFX_IPC_PUSH_EVENT`            | 0x0206 | server→client push; arg1=event_type arg2=window_id arg3=payload                                | arg1=event_type arg2=event_arg1 arg3=event_arg2       |
-| `GFX_IPC_RELEASE_SHARED_BUFFER` | 0x0207 | arg0=buffer_id                                                                                 | —                                                     |
 | `GFX_IPC_SET_DISPLAY_MODE`      | 0x0208 | arg0=width arg1=height                                                                         | arg1=width arg2=height                                |
 | `GFX_IPC_LIST_WINDOWS`          | 0x0209 | arg0=index (0-based)                                                                           | arg1=window_id(0=end) arg2=owner_endpoint arg3=total  |
 | `GFX_IPC_FOCUS_WINDOW`          | 0x020A | arg0=window_id                                                                                 | —                                                     |
@@ -154,7 +152,7 @@ WASMOS_ERR_GFX_INVALID     // bad argument or malformed request
 WASMOS_ERR_GFX_PERMISSION  // window/buffer not owned by caller
 WASMOS_ERR_GFX_UNSUPPORTED // operation not available
 WASMOS_ERR_GFX_BUSY        // resource in use; retryable
-WASMOS_ERR_GFX_IO          // device or shmem failure
+WASMOS_ERR_GFX_IO          // device or buffer-mapping failure
 // Values are generated from the gfx domain in abi/errors.yaml.
 ```
 
@@ -193,9 +191,8 @@ Font service interface. Defined in `src/libc/include/wasmos/font_ipc.h`.
 |----------------------------------|-------|-------------------------------------------------------------------|-------------------------------------------------------|
 | `FONT_IPC_OPEN_FONT_REQ`         | 0xA00 | arg0=font_id arg1=px_size (1–256)                                 | arg1=handle_id                                        |
 | `FONT_IPC_GET_METRICS_REQ`       | 0xA01 | arg0=handle_id                                                    | arg1=ascent(i32) arg2=descent(i32) arg3=line_gap(i32) |
-| `FONT_IPC_RASTER_GLYPH_REQ`      | 0xA02 | arg0=handle_id arg1=codepoint                                     | arg1=shmem_id arg2=pack(w,h) arg3=pack(x0,y0)         |
-| `FONT_IPC_MEASURE_GLYPH_REQ`     | 0xA03 | arg0=handle_id arg1=text_shmem_id arg2=text_len                   | arg1=pack(w,h) arg2=pack(x0,y0) arg3=advance_x        |
-| `FONT_IPC_RASTER_GLYPH_INTO_REQ` | 0xA04 | arg0=handle_id arg1=text_shmem_id arg2=text_len arg3=dst_shmem_id | arg1=pack(w,h) arg2=pack(x0,y0) arg3=advance_x        |
+| `FONT_IPC_MEASURE_GLYPH_REQ`     | 0xA03 | arg0=buffer_id arg1=offset arg2=size arg3=borrow_id; `font_raster_request_t` + UTF-8 run in a client-owned buffer | arg1=pack(w,h) arg2=pack(x0,y0) arg3=advance_x        |
+| `FONT_IPC_RASTER_GLYPH_INTO_REQ` | 0xA04 | as MEASURE; the descriptor also names the caller's mask buffer and its borrow | arg1=pack(w,h) arg2=pack(x0,y0) arg3=advance_x        |
 | `FONT_IPC_RESP`                  | 0xA80 | success reply; arg0=WASMOS_ERR_NONE                                | —                                                     |
 | `FONT_IPC_ERROR`                 | 0xAFF | error reply; arg0=WASMOS_ERR_FONT_*                                   | —                                                     |
 
@@ -307,7 +304,7 @@ const buffer_slot_t = struct {
     in_use: bool,
     owner_endpoint: u32,
     buffer_id: u32,          // opaque random 32-bit ID
-    shmem_id: u32,           // shmem backing, granted to owner at alloc
+    borrow_id: u32,          // the client's borrow of the surface it lent
     width: u32, height: u32,
     stride_bytes: u32,       // width * 4 (BGRA32)
     state: buffer_state_t,   // .allocated or .acquired
@@ -324,11 +321,10 @@ const gfx_event_t = struct {
 const glyph_cache_entry_t = struct {
     valid: bool,
     codepoint: u32,
-    shmem_id: u32,
     w: i32, h: i32,
     x0: i16, y0: i16,
     mask_len: usize,
-    mask_data: [4096]u8,   // alpha mask, copied from font service shmem
+    mask_data: [4096]u8,   // alpha mask, copied out of the lent mask buffer
 };
 ```
 
@@ -398,7 +394,7 @@ Two functions accumulate damage before composition:
 3. insertion sort order[] by z (ascending)   // lowest z drawn first
 4. for each window in z order:
    - clip window rect to compose region
-   - if current_buffer_id set → draw_window_buffer (shmem pixel blit)
+   - if current_buffer_id set → draw_window_buffer (blit from the lent surface)
    - else → draw_window_placeholder (solid color)
    - draw_window_chrome (title bar, close/max buttons, border, resize handle)
 5. if g_overlay_locked:
@@ -416,7 +412,7 @@ region is written to the scanout buffer on each compose cycle.
 1. `window_id` and `buffer_id` non-zero, both owned by caller.
 2. Buffer dimensions ≥ window content dimensions.
 3. Buffer not already acquired by a different window.
-4. Damage rects: if `damage_count == 0` or `damage_shmem_id == 0` or any rect
+4. Damage rects: if `damage_count == 0` or the offset is out of range or any rect
    is invalid/out-of-bounds → `request_repaint_full()`.
 5. Valid damage rects are translated to screen space and enqueued via
    `request_repaint_rect()`.
@@ -491,18 +487,17 @@ Limits: `MAX_FONTS = 3`, `MAX_HANDLES = 16`, `RASTER_SCRATCH_BYTES = 4096`.
 
 **RASTER_GLYPH** (`arg0=handle_id`, `arg1=codepoint`):
 - Calls `stbtt_GetCodepointBitmapBox` + `stbtt_MakeCodepointBitmap`.
-- Returns alpha mask in a shmem scratch buffer (≤ 4096 bytes).
-- Reply: `arg1=shmem_id` (granted to caller), `arg2=pack(w,h)`,
   `arg3=pack(x0,y0)`.
 
-**MEASURE_GLYPH** (`arg0=handle_id`, `arg1=text_shmem_id`, `arg2=text_len`):
-- Reads text from caller-provided shmem, calls stb measure APIs.
+**MEASURE_GLYPH** (`arg0=buffer_id`, `arg1=offset`, `arg2=size`, `arg3=borrow_id`):
+- Reads the descriptor and its UTF-8 run out of the CALLER's buffer, lent READ,
+  and calls the stb measure APIs.
 - Returns `arg1=pack(w,h)`, `arg2=pack(x0,y0)`, `arg3=advance_x`.
 
-**RASTER_GLYPH_INTO** (`arg0=handle_id`, `arg1=text_shmem_id`,
-`arg2=text_len`, `arg3=dst_shmem_id`):
-- Rasterizes text into caller-provided destination shmem.
-- Calls `shmem_flush` to ensure cache coherence before reply.
+**RASTER_GLYPH_INTO** (same message shape as MEASURE):
+- The descriptor additionally names the caller's mask buffer and borrow; the
+  service maps that borrow and rasterises straight into it.
+- No write-back: the borrowed mapping IS the caller's frames.
 - Returns same layout as MEASURE_GLYPH.
 
 ---
@@ -537,7 +532,7 @@ typedef enum {
 ```c
 typedef struct ui_context {
     // GFX endpoint, window handle, compositor buffer
-    // font state (handle, metrics, shmem for text/mask)
+    // font state (handle, metrics, lent text/mask buffers)
     // event queue and dirty flag
     ui_component_t *components;
     int32_t component_count;
@@ -562,7 +557,7 @@ Scroll/list views support drag-based vertical scroll with clipped viewport
 composition. Text inputs handle printable characters and backspace. Button
 click callbacks are registered via `ui_button_click_cb_t`.
 
-TODO: libui font shmem IDs are not reclaimed on buffer growth.
+Font buffers are released and re-acquired on growth, so no id is stranded.
 
 ---
 
@@ -587,10 +582,10 @@ before resize is rejected after the resize increments `generation`.
 
 ### Structural Invariants
 
-1. **IPC carries only control; pixels go through shmem.** The GFX IPC message
-   fields carry `buffer_id`, `shmem_id`, and `damage_count` — never raw pixel
-   data. Pixel payloads are allocated via `shmem_create` and accessed by
-   pointer through `shmem_map`.
+1. **IPC carries only control; pixels go through a transfer buffer.** The GFX
+   IPC message fields carry `buffer_id`, `borrow_id` and `damage_count` — never
+   raw pixel data. The surface is acquired by the CLIENT, which lends it READ to
+   the compositor; the compositor maps that borrow and never owns the storage.
 
 2. **Backbuffer before scanout.** The compositor always renders into
    `g_backbuffer_pixels` first, then copies only the compose region to

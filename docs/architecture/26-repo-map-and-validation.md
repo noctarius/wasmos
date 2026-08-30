@@ -54,7 +54,7 @@ wasmos/
 │   │   ├── zig/            Zig shim (wasmos.zig)
 │   │   └── assemblyscript/ AssemblyScript shim (runtime.ts, wasmos.ts)
 │   ├── libsys/             Higher-level system library
-│   │   ├── wasm/           WASM-side libsys (IPC helpers, script runner, shmem)
+│   │   ├── wasm/           WASM-side libsys (IPC helpers, script runner)
 │   │   │   └── include/wasmos/  libsys.h, libsys_string.h, sha256.h, rtc_ipc.h
 │   │   └── native/         Native (Zig) libsys for native ELF components
 │   ├── utils/              Small standalone utilities
@@ -113,7 +113,6 @@ wasmos/
 │   ├── test_ring3_smoke_target.py Ring3 isolation/syscall smoke
 │   ├── test_threading_ipc_stress.py Thread+IPC stress test
 │   ├── test_irq_route_capability.py  IRQ capability enforcement test
-│   ├── test_shmem_grant_revoke_e2e.py Shmem lifecycle test
 │   ├── test_vt_cli_lockup.py   VT + CLI deadlock regression test
 │   └── test_make_wasmos_app_capabilities.py  Packer capability validation
 ├── userfs/                 Content exposed to QEMU as secondary FAT drive

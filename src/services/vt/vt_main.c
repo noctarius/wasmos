@@ -1598,7 +1598,7 @@ static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extend
 static void vt_klog_ring_init(void) {
     /* Overlay the SPSC ring on a BUFFER_KIND_TRANSFER xfer-buffer — the same
      * zero-copy transport the socket rings use (net.h), which handles WARP's
-     * non-page-aligned linear-memory base for us (unlike raw shmem_map).  The
+     * non-page-aligned linear-memory base for us.  The
      * VT's heap_pages/INITIAL_MEMORY (see CMakeLists + linker.metadata) keep
      * WARP's scan ceiling under the 2 MiB low-guard so the overlay window lands
      * just above the VT's active memory, inside declared linear memory — a cheap

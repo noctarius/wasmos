@@ -13,7 +13,7 @@
  *   WARP_R3_STACK_BASE     = 0x00A080002000  user stack,    RW-, 256 KiB
  *
  * Physical zone separation (prevents commitVirtualMemory from zeroing JIT):
- *   linmem: pfa_alloc_pages_above(WASMOS_SHMEM_PHYS_LIMIT = 64 MiB)
+ *   linmem: pfa_alloc_pages_above(WASMOS_BUFFER_PHYS_LIMIT = 64 MiB)
  *   JIT:    pfa_alloc_pages_above(WARP_JIT_PHYS_MIN       = 256 MiB)
  */
 #ifndef WASMOS_WARP_RING3_H
@@ -50,7 +50,7 @@
 #define WARP_HC_MAX 128U
 
 /* Physical zone floor for JIT allocations (separate from linmem zone).  Above the 64 MiB
- * shmem zone and above where linear memory is taken, so WARP's linear-memory zero-fill
+ * low buffer zone and above where linear memory is taken, so WARP's linear-memory zero-fill
  * through the kernel direct map cannot land on a JIT page. */
 #define WARP_JIT_PHYS_MIN (256ULL * 1024ULL * 1024ULL)
 

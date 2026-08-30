@@ -22,8 +22,8 @@ uint64_t pfa_alloc_pages(uint64_t pages);
 uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr);
 
 /* Allocate a contiguous run of pages with physical base >= min_addr.
- * Used to keep WARP linear memory above the shmem physical zone so that
- * WARP's ensureLinearSize zero-fill cannot alias active shmem pages. */
+ * Used to keep WARP linear memory above the low buffer zone so that WARP's
+ * ensureLinearSize zero-fill cannot alias active buffer pages. */
 uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr);
 
 /* Drop one reference on each of `pages` frames starting at base. A frame

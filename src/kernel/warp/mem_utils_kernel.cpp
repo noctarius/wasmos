@@ -93,7 +93,7 @@ static int remap_direct_alias_pages(uint8_t* ptr, uint64_t pages) {
  * sizeof(AllocHeader) for warp_kmalloc large entries). */
 /* Which physical zone an allocation came from, and therefore how ring-3 mapping should
  * treat it.  JIT allocations are taken from WARP_JIT_PHYS_MIN upward and linmem from
- * WASMOS_SHMEM_PHYS_LIMIT upward precisely so a linmem commit's zero-fill can never
+ * WASMOS_BUFFER_PHYS_LIMIT upward precisely so a linmem commit's zero-fill can never
  * land on JIT code. */
 enum MmapType : uint8_t { MMAP_OTHER = 0, MMAP_JIT = 1, MMAP_LINMEM = 2 };
 struct MmapEntry {
@@ -426,13 +426,13 @@ MmapMemory allocPagedMemory(size_t size) {
     uint64_t pages = aligned / kPageSize;
 
     /* JIT allocations use a higher physical zone so that linmem (which starts
-     * from WASMOS_SHMEM_PHYS_LIMIT) cannot overlap with JIT pages.  This
+     * from WASMOS_BUFFER_PHYS_LIMIT) cannot overlap with JIT pages.  This
      * prevents commitVirtualMemory's zero-fill from clobbering JIT code. */
     MmapType typ = g_next_alloc_type;
 #ifdef WASMOS_WASM_RUNTIME_WARP
-    uint64_t phys_min = (typ == MMAP_JIT) ? WARP_JIT_PHYS_MIN : WASMOS_SHMEM_PHYS_LIMIT;
+    uint64_t phys_min = (typ == MMAP_JIT) ? WARP_JIT_PHYS_MIN : WASMOS_BUFFER_PHYS_LIMIT;
 #else
-    uint64_t phys_min = WASMOS_SHMEM_PHYS_LIMIT;
+    uint64_t phys_min = WASMOS_BUFFER_PHYS_LIMIT;
     (void)typ;
 #endif
     uint64_t phys = pfa_alloc_pages_above(pages, phys_min);
@@ -521,7 +521,7 @@ void freeAlignedMemory(void* ptr) noexcept {
 }
 
 void* allocVirtualMemory(size_t size) {
-    /* Linear memory + basedata: allocate from the linmem zone (WASMOS_SHMEM_PHYS_LIMIT+)
+    /* Linear memory + basedata: allocate from the linmem zone (WASMOS_BUFFER_PHYS_LIMIT+)
      * which is separate from the JIT zone (WARP_JIT_PHYS_MIN+). */
     g_next_alloc_type = MMAP_LINMEM;
     void* p = allocAlignedMemory(size, kPageSize);

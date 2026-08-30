@@ -21,7 +21,7 @@ export const WASMOS_AGAIN: i32 = -9; // retryable: resource temporarily unavaila
 export const WASMOS_ERR_DOMAIN_NONE: u16 = 0;
 export const WASMOS_ERR_DOMAIN_PROC_SPAWN: u16 = 1;
 export const WASMOS_ERR_DOMAIN_PROC_PM: u16 = 2;
-export const WASMOS_ERR_DOMAIN_SHMEM: u16 = 3;
+export const WASMOS_ERR_DOMAIN_LINMEM: u16 = 3;
 export const WASMOS_ERR_DOMAIN_FS: u16 = 4;
 export const WASMOS_ERR_DOMAIN_NET: u16 = 5;
 export const WASMOS_ERR_DOMAIN_GFX: u16 = 6;
@@ -84,13 +84,8 @@ export const WASMOS_ERR_PROC_PM_SUBSYSTEM_REG: i32 = -0x00020017; // subsystem b
 export const WASMOS_ERR_PROC_PM_HANDLER_REG: i32 = -0x00020018; // exec-handler registration failed
 export const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: i32 = -0x00020019; // caller lacks the subsystem.register capability
 export const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001A; // PM could not acquire its own xfer buffer
-export const WASMOS_ERR_SHMEM_BAD_ARGS: i32 = -0x00030001; // id/size invalid or size not page-aligned
-export const WASMOS_ERR_SHMEM_NO_CAP: i32 = -0x00030002; // caller lacks the DMA capability / no context
-export const WASMOS_ERR_SHMEM_BAD_ID: i32 = -0x00030003; // shmem id unknown / no backing pages
-export const WASMOS_ERR_SHMEM_BAD_SIZE: i32 = -0x00030004; // requested size smaller than the shared region
-export const WASMOS_ERR_SHMEM_UNALIGNED: i32 = -0x00030005; // fixed offset cannot yield a page-aligned host addr
-export const WASMOS_ERR_SHMEM_NO_WINDOW: i32 = -0x00030006; // no free page-aligned window fits in linear memory
-export const WASMOS_ERR_SHMEM_MAP: i32 = -0x00030007; // paging/linear-memory mapping step failed
+export const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
+export const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 export const WASMOS_ERR_FS_BAD_ARGS: i32 = -0x00040001; // invalid flags/args (len 0, bad access mode, reserved arg set)
 export const WASMOS_ERR_FS_PATH_TOO_LONG: i32 = -0x00040002; // path length exceeds the path or xfer buffer
 export const WASMOS_ERR_FS_BUFFER: i32 = -0x00040003; // xfer-buffer read/write/size call failed
@@ -301,7 +296,7 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_NONE: return "none";
     case WASMOS_ERR_DOMAIN_PROC_SPAWN: return "proc_spawn";
     case WASMOS_ERR_DOMAIN_PROC_PM: return "proc_pm";
-    case WASMOS_ERR_DOMAIN_SHMEM: return "shmem";
+    case WASMOS_ERR_DOMAIN_LINMEM: return "linmem";
     case WASMOS_ERR_DOMAIN_FS: return "fs";
     case WASMOS_ERR_DOMAIN_NET: return "net";
     case WASMOS_ERR_DOMAIN_GFX: return "gfx";
@@ -368,13 +363,8 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_PM_HANDLER_REG: return "exec-handler registration failed";
     case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: return "caller lacks the subsystem.register capability";
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "PM could not acquire its own xfer buffer";
-    case WASMOS_ERR_SHMEM_BAD_ARGS: return "id/size invalid or size not page-aligned";
-    case WASMOS_ERR_SHMEM_NO_CAP: return "caller lacks the DMA capability / no context";
-    case WASMOS_ERR_SHMEM_BAD_ID: return "shmem id unknown / no backing pages";
-    case WASMOS_ERR_SHMEM_BAD_SIZE: return "requested size smaller than the shared region";
-    case WASMOS_ERR_SHMEM_UNALIGNED: return "fixed offset cannot yield a page-aligned host addr";
-    case WASMOS_ERR_SHMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
-    case WASMOS_ERR_SHMEM_MAP: return "paging/linear-memory mapping step failed";
+    case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
+    case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_FS_BAD_ARGS: return "invalid flags/args (len 0, bad access mode, reserved arg set)";
     case WASMOS_ERR_FS_PATH_TOO_LONG: return "path length exceeds the path or xfer buffer";
     case WASMOS_ERR_FS_BUFFER: return "xfer-buffer read/write/size call failed";

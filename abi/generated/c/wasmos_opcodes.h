@@ -561,7 +561,6 @@ enum {
 enum {
     FONT_IPC_OPEN_FONT_REQ = 0xA00,
     FONT_IPC_GET_METRICS_REQ = 0xA01,
-    FONT_IPC_RASTER_GLYPH_REQ = 0xA02,
     FONT_IPC_MEASURE_GLYPH_REQ = 0xA03,
     FONT_IPC_RASTER_GLYPH_INTO_REQ = 0xA04,
     FONT_IPC_RESP = 0xA80,
@@ -573,11 +572,9 @@ enum {
     GFX_IPC_CREATE_WINDOW = 0x200,
     GFX_IPC_DESTROY_WINDOW = 0x201,
     GFX_IPC_RESIZE_WINDOW = 0x202,
-    GFX_IPC_ALLOC_SHARED_BUFFER = 0x203,
     GFX_IPC_SUBMIT_COMMANDS = 0x204,
     GFX_IPC_PRESENT_WINDOW = 0x205,
     GFX_IPC_PUSH_EVENT = 0x206,
-    GFX_IPC_RELEASE_SHARED_BUFFER = 0x207,
     GFX_IPC_SET_DISPLAY_MODE = 0x208,
     GFX_IPC_LIST_WINDOWS = 0x209,
     GFX_IPC_FOCUS_WINDOW = 0x20A,
@@ -597,9 +594,8 @@ enum {
      * new surface attached rather than the attached one resized in place --
      * a borrowed buffer is never mutated (docs/architecture/12-dma-transfers.md).
      *
-     * Supersedes GFX_IPC_ALLOC_SHARED_BUFFER, which allocated the buffer
-     * compositor-side and granted it to the caller: a server cannot own a
-     * buffer it hands to a client.
+     * This replaced a compositor-side allocation that granted the buffer to
+     * the caller: a server cannot own a buffer it hands to a client.
      */
     GFX_IPC_GET_SURFACE_SPEC = 0x210,
     /* Register a surface the CLIENT owns and has borrowed to the compositor.
@@ -623,9 +619,8 @@ enum {
      * The client MUST detach before releasing the buffer. There is no
      * unborrow notification, so a release while the compositor still holds
      * the borrow leaves it reading a revoked borrow mid-composite; the
-     * acknowledged detach is that missing handshake. Supersedes
-     * GFX_IPC_RELEASE_SHARED_BUFFER, which asked the compositor to free a
-     * buffer the compositor owned.
+     * acknowledged detach is that missing handshake. This replaced a call
+     * that asked the compositor to free a buffer the compositor owned.
      */
     GFX_IPC_DETACH_SURFACE = 0x212,
     GFX_IPC_RESP = 0x280,
@@ -973,7 +968,6 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         switch (type) {
         case 0xA00: return "FONT_IPC_OPEN_FONT_REQ";
         case 0xA01: return "FONT_IPC_GET_METRICS_REQ";
-        case 0xA02: return "FONT_IPC_RASTER_GLYPH_REQ";
         case 0xA03: return "FONT_IPC_MEASURE_GLYPH_REQ";
         case 0xA04: return "FONT_IPC_RASTER_GLYPH_INTO_REQ";
         case 0xA80: return "FONT_IPC_RESP";
@@ -985,11 +979,9 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x200: return "GFX_IPC_CREATE_WINDOW";
         case 0x201: return "GFX_IPC_DESTROY_WINDOW";
         case 0x202: return "GFX_IPC_RESIZE_WINDOW";
-        case 0x203: return "GFX_IPC_ALLOC_SHARED_BUFFER";
         case 0x204: return "GFX_IPC_SUBMIT_COMMANDS";
         case 0x205: return "GFX_IPC_PRESENT_WINDOW";
         case 0x206: return "GFX_IPC_PUSH_EVENT";
-        case 0x207: return "GFX_IPC_RELEASE_SHARED_BUFFER";
         case 0x208: return "GFX_IPC_SET_DISPLAY_MODE";
         case 0x209: return "GFX_IPC_LIST_WINDOWS";
         case 0x20A: return "GFX_IPC_FOCUS_WINDOW";

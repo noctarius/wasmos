@@ -7,10 +7,11 @@ const SVC_IPC_LOOKUP_RESP: i32 = 0x2a1;
 const GFX_IPC_ABI_MAGIC: i32 = 0x47465850;
 const GFX_IPC_ABI_VERSION: i32 = 1;
 const GFX_IPC_CREATE_WINDOW: i32 = 0x0200;
-const GFX_IPC_ALLOC_SHARED_BUFFER: i32 = 0x0203;
+const GFX_IPC_GET_SURFACE_SPEC: i32 = 0x0210;
+const GFX_IPC_ATTACH_SURFACE: i32 = 0x0211;
+const GFX_IPC_DETACH_SURFACE: i32 = 0x0212;
 const GFX_IPC_PRESENT_WINDOW: i32 = 0x0205;
 const GFX_IPC_PUSH_EVENT: i32 = 0x0206;
-const GFX_IPC_RELEASE_SHARED_BUFFER: i32 = 0x0207;
 const GFX_IPC_DESTROY_WINDOW: i32 = 0x0201;
 const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x020e;
 
@@ -26,9 +27,6 @@ const BUFFER_GRANT_READ: i32 = 0x1;
 
 
 @external("wasmos", "ipc_endpoint_owner") declare function ipc_endpoint_owner(endpoint: i32): i32;
-
-
-@external("wasmos", "shmem_create") declare function shmem_create(pages: i32, flags: i32): i32;
 
 
 @external("wasmos", "xfer_buffer_acquire") declare function xfer_buffer_acquire(
@@ -50,18 +48,6 @@ const BUFFER_GRANT_READ: i32 = 0x1;
 
 
 @external("wasmos", "xfer_buffer_release") declare function xfer_buffer_release(bufferId: i32): i32;
-
-
-@external("wasmos", "shmem_grant") declare function shmem_grant(id: i32, targetPid: i32): i32;
-
-
-@external("wasmos", "shmem_map_auto") declare function shmem_map_auto(id: i32, size: i32): i32;
-
-
-@external("wasmos", "shmem_flush") declare function shmem_flush(id: i32, ptr: i32, size: i32): i32;
-
-
-@external("wasmos", "shmem_unmap") declare function shmem_unmap(id: i32): i32;
 
 
 @external("wasmos", "sched_yield") declare function sched_yield(): i32;
@@ -190,7 +176,7 @@ export class Context {
     private height: i32 = 0;
     private strideBytes: i32 = 0;
     private bufferId: i32 = 0;
-    private shmemId: i32 = -1;
+    private borrowId: i32 = -1;
     private mappedPtr: i32 = 0;
     private mappedLen: i32 = 0;
     private titleBufferId: i32 = -1;
@@ -207,7 +193,7 @@ export class Context {
     // failure. Takes the process-manager endpoint from startup argument 0, so
     // it only works in a spawned WASMOS app, and blocks while it looks the gfx
     // service up (retrying up to 4096 times with sched_yield before giving up).
-    // A returned Context owns a window, a shared buffer and two shmem mappings
+    // A returned Context owns a window, its surface and two font buffers
     // that destroy() releases.
     //
     // TODO: Once the AssemblyScript build grows a real Wasm link step, replace
@@ -275,9 +261,9 @@ export class Context {
     destroy(): void {
         if (this.titleBufferId > 0) {
             if (this.titlePtr != 0) {
-                let _ = xfer_buffer_unmap(this.titleBufferId);
+                let _unmap = xfer_buffer_unmap(this.titleBufferId);
             }
-            let _ = xfer_buffer_release(this.titleBufferId);
+            let _release = xfer_buffer_release(this.titleBufferId);
         }
         this.titleBufferId = -1;
         this.titleBorrowId = -1;
@@ -285,25 +271,9 @@ export class Context {
         if (this.windowId > 0 && this.gfxEndpoint > 0) {
             let _ = ipc.call(this.gfxEndpoint, GFX_IPC_DESTROY_WINDOW, this.windowId, 0, 0, 0);
         }
-        if (this.bufferId != 0 && this.gfxEndpoint > 0) {
-            // Release after destroying the window: only then does the compositor
-            // stop considering the buffer busy and reclaim the slot.
-            let _ = ipc.call(
-                this.gfxEndpoint,
-                GFX_IPC_RELEASE_SHARED_BUFFER,
-                this.bufferId,
-                0,
-                0,
-                0,
-            );
-        }
-        if (this.shmemId > 0 && this.mappedPtr != 0) {
-            let _ = shmem_unmap(this.shmemId);
-        }
-        this.mappedPtr = 0;
-        this.mappedLen = 0;
-        this.bufferId = 0;
-        this.shmemId = -1;
+        // Withdrawn after the window is destroyed: DETACH is refused while the
+        // surface is still the window's current buffer.
+        this.releaseSurface();
         this.windowId = -1;
     }
 
@@ -345,20 +315,18 @@ export class Context {
     // flush failed, or the compositor refused (which also happens when the
     // window resized underneath this frame).
     //
-    // The flush is required: it is what makes the pixels written through the
-    // mapping visible to the compositor.
+    // No write-back before the present: xfer_buffer_map places the surface's own
+    // frames in this app's linear memory, so the pixels just written ARE what
+    // the compositor reads through its borrow, on both runtimes
+    // (tests/test_xfer_map_alias.py).
     endFrame(): bool {
         if (
-            this.shmemId <= 0 ||
+            this.bufferId <= 0 ||
             this.mappedPtr == 0 ||
             this.gfxEndpoint <= 0 ||
             this.windowId <= 0 ||
             this.bufferId == 0
         ) {
-            return false;
-        }
-        const byteLen = this.strideBytes * this.height;
-        if (shmem_flush(this.shmemId, this.mappedPtr, byteLen) != 0) {
             return false;
         }
         const reply = ipc.call(
@@ -409,7 +377,7 @@ export class Context {
     }
 
     // Set the window title, returning true when the compositor acknowledged it.
-    // The string is UTF-8 encoded into a shmem page granted to the compositor
+    // The string is UTF-8 encoded into a transfer buffer lent to the compositor
     // and truncated to 127 bytes — by byte, so it can split a multi-byte
     // sequence. Blocks for one compositor round trip.
     setTitle(title: string): bool {
@@ -574,7 +542,7 @@ export class Context {
     // The title buffer is OWNED here and lent READ to the compositor, per the
     // transfer-buffer contract: the client of an exchange owns the buffer and
     // the server is a transient grantee. The borrow addresses the compositor's
-    // ENDPOINT, so no pid lookup is involved as the shmem grant needed.
+    // ENDPOINT, so no pid lookup is involved.
     private ensureTitleBuffer(): bool {
         if (this.titleBufferId > 0 && this.titlePtr != 0) {
             return true;
@@ -614,48 +582,75 @@ export class Context {
         return this.allocateBuffer(width, height);
     }
 
+    // The surface is OWNED here and lent READ to the compositor: a server cannot
+    // own a buffer it hands to a client, because release is owner-only and
+    // nothing tells a server when a client stopped reading.
     private allocateBuffer(width: i32, height: i32): bool {
-        if (this.shmemId > 0) {
-            if (this.mappedPtr != 0) {
-                let _ = shmem_unmap(this.shmemId);
-            }
-            if (this.bufferId != 0) {
-                let _ = ipc.call(
-                    this.gfxEndpoint,
-                    GFX_IPC_RELEASE_SHARED_BUFFER,
-                    this.bufferId,
-                    0,
-                    0,
-                    0,
-                );
-            }
-            this.bufferId = 0;
-            this.shmemId = -1;
-            this.mappedPtr = 0;
-            this.mappedLen = 0;
-        }
+        this.releaseSurface();
 
-        const reply = ipc.call(
+        const spec = ipc.call(this.gfxEndpoint, GFX_IPC_GET_SURFACE_SPEC, this.windowId, 0, 0, 0);
+        if (spec == null || spec.type != 0x0280 || spec.arg0 != WASMOS_ERR_NONE) {
+            return false;
+        }
+        this.strideBytes = spec.arg1;
+        const surfaceBytes = spec.arg2;
+        if (surfaceBytes <= 0) {
+            return false;
+        }
+        const bid = xfer_buffer_acquire(surfaceBytes);
+        if (bid <= 0) {
+            return false;
+        }
+        const borrow = xfer_buffer_borrow(this.gfxEndpoint, bid, BUFFER_GRANT_READ);
+        if (borrow <= 0) {
+            let _ = xfer_buffer_release(bid);
+            return false;
+        }
+        const mapped = xfer_buffer_map(bid);
+        if (mapped < 0) {
+            let _ = xfer_buffer_release(bid);
+            return false;
+        }
+        const attach = ipc.call(
             this.gfxEndpoint,
-            GFX_IPC_ALLOC_SHARED_BUFFER,
+            GFX_IPC_ATTACH_SURFACE,
             this.windowId,
-            width,
-            height,
+            bid,
+            borrow,
             0,
         );
-        if (reply == null || reply.type != 0x0280 || reply.arg0 != WASMOS_ERR_NONE) {
+        if (attach == null || attach.type != 0x0280 || attach.arg0 != WASMOS_ERR_NONE) {
+            let _unmap = xfer_buffer_unmap(bid);
+            let _release = xfer_buffer_release(bid);
             return false;
         }
-        this.bufferId = reply.arg1;
-        this.shmemId = reply.arg2;
-        this.strideBytes = reply.arg3;
-        const byteLen = this.strideBytes * height;
-        this.mappedLen = alignUp(byteLen, PAGE_SIZE);
-        this.mappedPtr = shmem_map_auto(this.shmemId, this.mappedLen);
-        if (this.mappedPtr <= 0) {
-            this.mappedPtr = 0;
-            return false;
-        }
+        this.bufferId = bid;
+        this.borrowId = borrow;
+        this.mappedPtr = mapped;
+        this.mappedLen = this.strideBytes * height;
         return true;
+    }
+
+    // Withdraw and release the lent surface, in that order: releasing under a
+    // live borrow would leave the compositor reading revoked frames, and only
+    // the acknowledged detach tells it to drop its mapping.
+    private releaseSurface(): void {
+        if (this.bufferId <= 0) {
+            return;
+        }
+        let _detach = ipc.call(
+            this.gfxEndpoint,
+            GFX_IPC_DETACH_SURFACE,
+            this.windowId,
+            this.bufferId,
+            0,
+            0,
+        );
+        let _unmap = xfer_buffer_unmap(this.bufferId);
+        let _release = xfer_buffer_release(this.bufferId);
+        this.bufferId = 0;
+        this.borrowId = 0;
+        this.mappedPtr = 0;
+        this.mappedLen = 0;
     }
 }

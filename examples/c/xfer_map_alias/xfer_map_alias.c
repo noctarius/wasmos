@@ -3,16 +3,16 @@
  * `xfer_buffer_map` overlays an owned buffer's backing into linear memory and
  * promises the bytes are "directly addressable at that offset". Whether that
  * holds for a guest depends on the runtime's linear-memory model, and the two
- * differ: under WARP the guest's linear memory IS the mapped frames, while the
- * wasm3 interpreter reads and writes linear memory through its own kernel-side
- * buffer, so a mapping that only rewrites the process page tables is invisible
- * to it (`examples/rust/tetris/tetris.rs` records the same distinction for the
- * shmem overlay, which is why tetris is WARP-only).
+ * models differ: under WARP the guest's linear memory IS the mapped frames,
+ * while the wasm3 interpreter reads and writes linear memory through its own
+ * kernel-side buffer, so a mapping that only rewrote the process page tables
+ * would be invisible to it.
  *
- * The whole graphics migration off shmem rests on that promise holding for a
- * guest, so this pins it as a fact rather than an assumption. Nothing here
- * races or depends on timing: the mapping either aliases or it does not, and one
- * comparison settles it.
+ * Every graphics client depends on that promise: a surface is rendered through
+ * this mapping and read by the compositor through its borrow, with no
+ * write-back call between the two. This pins it as a fact rather than an
+ * assumption. Nothing here races or depends on timing: the mapping either
+ * aliases or it does not, and one comparison settles it.
  *
  * Both directions are checked, because the migration needs both:
  *   guest -> frames  write a pattern THROUGH the mapping, then read it back with

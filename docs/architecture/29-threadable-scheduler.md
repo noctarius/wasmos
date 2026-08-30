@@ -41,7 +41,7 @@ The current scheduler eliminates all four.
 4. **Unified event system** — a single `sched_event_t` struct unifies IPC-wait,
    process-wait, thread-join, futex, and select-wait into one blocking primitive.
 5. **Futex** — two new host functions let WASM userspace build any
-   synchronization primitive on top of `shmem_grant`-shared memory.
+   synchronization primitive on top of a borrowed transfer buffer.
 6. **Full poll-hub** — kernel objects register a `poll_struct *` and call
    `poll_notify(ps, ev)` on readiness; select sets become the consumer side.
 

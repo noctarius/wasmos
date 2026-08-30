@@ -17,7 +17,7 @@ heap_pages = 512
 # Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
 # region_alloc places the virtqueue-ring window above the driver's live data
 # (the map_auto low guard is 2 MiB), so the module carries 4 MiB like the
-# shmem/DMA-capable apps. max_memory must be >= the region window's
+# DMA-capable apps. max_memory must be >= the region window's
 # offset+size or warp_linmem_place_phys returns NO_WINDOW.
 [link]
 initial_memory = 4194304

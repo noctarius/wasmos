@@ -775,26 +775,10 @@ static uint32_t nd_early_log_size(void) {
 static void nd_early_log_copy(uint8_t* dst, uint32_t offset, uint32_t len) {
     serial_early_log_copy(dst, offset, len);
 }
-
-static int nd_shmem_create(uint64_t pages, uint32_t flags, uint32_t* out_id, void** out_ptr) {
-    uint64_t phys = 0;
-    if (mm_shared_create(0, pages, flags, out_id, &phys) != 0) {
-        return -1;
-    }
-    if (mm_shared_retain(0, *out_id) != 0) {
-        (void)mm_shared_release(0, *out_id);
-        return -1;
-    }
-    if (out_ptr) {
-        *out_ptr = ptr_cast(void, (phys | KERNEL_HIGHER_HALF_BASE));
-    }
-    return 0;
-}
-
 /* Anonymous page mapping for a native service's heap. Native services run
  * supervisor and share the kernel higher-half, so raw physical pages returned as
  * higher-half pointers are directly usable — no per-service VA window needed
- * (same model as nd_shmem_map). The native stdlib slab allocator layers
+ * (identity-mapped kernel pointer). The native stdlib slab allocator layers
  * malloc/free/calloc/realloc on top. TODO(nd-vm): track per-pid so a reaped
  * service's heap pages are reclaimed (native services are long-lived today). */
 static void* nd_vm_map(uint32_t size) {
@@ -821,64 +805,9 @@ static void nd_vm_unmap(void* addr, uint32_t size) {
     phys = (uint64_t)(uintptr_t)addr - KERNEL_HIGHER_HALF_BASE;
     pfa_free_pages(phys, pages);
 }
-
-static void* nd_shmem_map(uint32_t id) {
-    uint64_t base = 0;
-    uint64_t pages = 0;
-    if (mm_shared_get_phys(0, id, &base, &pages) != 0 || pages == 0) {
-        return 0;
-    }
-    if (mm_shared_retain(0, id) != 0) {
-        return 0;
-    }
-    return ptr_cast(void, (base | KERNEL_HIGHER_HALF_BASE));
-}
-
-static int nd_shmem_unmap(uint32_t id) {
-    return mm_shared_release(0, id);
-}
-
-static int nd_shmem_flush(uint32_t id, const void* ptr, uint32_t size) {
-    uint64_t phys_base = 0;
-    uint64_t pages = 0;
-    uint32_t owner_context_id = 0;
-    process_t* proc = process_get(process_current_pid());
-    if (!ptr || size == 0) {
-        return -1;
-    }
-    if (!proc || proc->context_id == 0) {
-        return -1;
-    }
-    owner_context_id = proc->context_id;
-    if (mm_shared_get_phys(owner_context_id, id, &phys_base, &pages) != 0 || pages == 0 ||
-        phys_base == 0) {
-        /* Fallback for legacy kernel-owned shared IDs. */
-        if (mm_shared_get_phys(0, id, &phys_base, &pages) != 0 || pages == 0 || phys_base == 0) {
-            return -1;
-        }
-    }
-    if (pages == 0 || phys_base == 0) {
-        return -1;
-    }
-    if ((uint64_t)size > pages * PAGE_SIZE) {
-        return -1;
-    }
-    memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), ptr, (size_t)size);
-    return 0;
-}
-
-static int nd_shmem_grant(uint32_t id, uint32_t target_context_id) {
-    return mm_shared_grant(0, id, target_context_id);
-}
-
 static int nd_ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id) {
     return ipc_endpoint_owner(endpoint, out_owner_context_id);
 }
-
-static uint32_t nd_console_ring_id(void) {
-    return serial_console_ring_id();
-}
-
 static int nd_console_register_fb(uint32_t context_id, uint32_t endpoint) {
     (void)context_id;
     if (endpoint == IPC_ENDPOINT_NONE) {
@@ -1225,16 +1154,10 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
     api.proc_notify_ready = nd_proc_notify_ready;
     api.early_log_size = nd_early_log_size;
     api.early_log_copy = nd_early_log_copy;
-    api.shmem_create = nd_shmem_create;
-    api.shmem_grant = nd_shmem_grant;
-    api.shmem_map = nd_shmem_map;
-    api.shmem_unmap = nd_shmem_unmap;
     api.ipc_endpoint_owner = nd_ipc_endpoint_owner;
-    api.console_ring_id = nd_console_ring_id;
     api.console_register_fb = nd_console_register_fb;
     api.abi_magic = WASMOS_NATIVE_ABI_MAGIC;
     api.abi_version = WASMOS_NATIVE_ABI_VERSION;
-    api.shmem_flush = nd_shmem_flush;
     api.spawn_info = nd_spawn_info;
     api.xfer_buffer_acquire = nd_xfer_buffer_acquire;
     api.xfer_buffer_map_borrowed = nd_xfer_buffer_map_borrowed;

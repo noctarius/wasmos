@@ -11,7 +11,7 @@ stack_pages = 16
 heap_pages = 2048
 
 # Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
-# A shared BGRA32 window buffer, which shmem_map_auto places above live data.
+# A BGRA32 window surface, whose overlay is placed above live data.
 [link]
 initial_memory = 8388608
 max_memory = 8388608

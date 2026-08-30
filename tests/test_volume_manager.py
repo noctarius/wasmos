@@ -123,7 +123,11 @@ class VolumeManagerTest(unittest.TestCase):
         for device, scheme in ((b"block:ata:0", b"mbr"), (b"block:ata:1", b"gpt")):
             self.assertTrue(
                 self.session.expect(
-                    b"[volume-manager] " + device + b" holds a " + scheme, timeout_s=60
+                    b"[volume-manager] device probed id="
+                    + device
+                    + b" holds a "
+                    + scheme,
+                    timeout_s=60,
                 ),
                 f"{device!r} was not reported as carrying a {scheme!r} table",
             )

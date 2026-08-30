@@ -264,7 +264,7 @@ static void publish_after_rules_reports_the_match(void) {
 
     publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
 
-    check(out_has("block_fs rule queued spawn driver=ata unit=0"),
+    check(out_has("block rule queued spawn mount=boot id=block:ata:0"),
           "a device publishing after its rule is reported by the publish path");
     check(g_dm.block_fs_rules[0].queued == 1u, "and the rule is queued");
 }
@@ -295,7 +295,7 @@ static void rescan_after_late_rules_reports_the_match(void) {
 
     check(g_dm.block_fs_rules[1].queued == 1u || g_dm.block_fs_rules[1].spawned == 1u,
           "the re-scan queues the late rule against the already-published device");
-    check(out_has("block_fs rule queued spawn driver=ata unit=1"),
+    check(out_has("block rule queued spawn mount=user id=block:ata:1"),
           "and the re-scan reports the match, as the publish path does");
 }
 
@@ -311,7 +311,7 @@ static void a_rule_matches_only_its_own_backend(void) {
     check(g_dm.block_fs_rules[0].queued == 0u, "and the ata rule stays unqueued");
 
     publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
-    check(out_has("block_fs rule queued spawn driver=ata unit=0"),
+    check(out_has("block rule queued spawn mount=boot id=block:ata:0"),
           "while its own backend's disk does satisfy it");
 }
 

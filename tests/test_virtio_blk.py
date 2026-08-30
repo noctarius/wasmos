@@ -232,20 +232,22 @@ class VirtioBlkTest(unittest.TestCase):
         """
         assert self.session is not None
         for marker in (
-            b"block_fs rule queued spawn driver=ata unit=0",
-            b"block_fs rule queued spawn driver=ata unit=1",
+            b"block rule queued spawn mount=/boot id=block:ata:0",
+            b"partition rule queued spawn mount=/user id=block:ata:1p1",
         ):
             self.assertTrue(
                 self.session.expect(marker, timeout_s=60),
-                f"{marker!r} missing — the ATA disks did not match their own rules",
+                f"{marker!r} missing — the ATA devices did not match their own rules",
             )
-        # No rule names virtio-blk, so none may be queued for it. Asserted as an
-        # absence over the accumulated buffer: by now both ATA disks have matched
-        # and the virtio disk has published.
+        # No rule names virtio-blk, so none may be queued for one. Asserted as an
+        # absence over the accumulated buffer: by now both ATA rules have matched
+        # and the virtio disk has published. Matched on the ID rather than a
+        # driver= field, because the id is what every layer names a device by and
+        # a virtio device's id is the only place `virtio-blk` appears.
         self.assertNotIn(
-            b"block_fs rule queued spawn driver=virtio-blk",
+            b"rule queued spawn mount=/boot id=block:virtio-blk",
             self.session.buf,
-            "an ata rule was queued for the virtio disk — the matcher compared "
+            "the /boot rule was queued for the virtio disk — the matcher compared "
             "units without comparing backends",
         )
 

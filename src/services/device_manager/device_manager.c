@@ -140,6 +140,7 @@ static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char* name);
 static const char* block_backend_name(uint8_t backend);
+static const char* devmgr_subsystem_name(uint8_t subsystem);
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec);
 static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec);
 static uint16_t count_loaded_active_rules(void);
@@ -1457,6 +1458,7 @@ static int block_rule_matches(const block_fs_rule_t* rule, const wasmos_block_de
 
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec) {
     uint32_t queued = 0;
+    const char* queued_mount = "";
     if (!rec || !rec->in_use || (rec->desc.flags & BLOCK_DESCRIPTOR_FLAG_PRESENT) == 0u) {
         return 0;
     }
@@ -1475,6 +1477,7 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
             rule->matched_backend = (uint8_t)rec->desc.backend;
             rule->matched_unit = (uint8_t)rec->desc.unit;
             (void)str_copy(rule->matched_id, sizeof(rule->matched_id), rec->desc.canonical_id);
+            queued_mount = rule->mount;
             queued++;
         }
     }
@@ -1488,12 +1491,15 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
      * matching the wrong backend is otherwise invisible until a filesystem
      * mounts the wrong volume. */
     if (queued > 0u) {
-        char queued_msg[96];
+        char queued_msg[160];
         (void)snprintf(queued_msg,
                        sizeof(queued_msg),
-                       "[device-manager] block_fs rule queued spawn driver=%s unit=%u\n",
-                       block_backend_name((uint8_t)rec->desc.backend),
-                       (unsigned)rec->desc.unit);
+                       "[device-manager] %s rule queued spawn mount=%s id=%s\n",
+                       devmgr_subsystem_name(rec->desc.partition != 0u
+                                                 ? (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION
+                                                 : (uint8_t)DEVMGR_BLOCK_SUBSYS_DISK),
+                       queued_mount[0] ? queued_mount : "(none)",
+                       rec->desc.canonical_id);
         console_write(queued_msg);
     }
     return queued;
@@ -1647,6 +1653,25 @@ static const char* block_backend_name(uint8_t backend) {
         return "ata";
     case (uint8_t)BLOCK_BACKEND_VIRTIO_BLK:
         return "virtio-blk";
+    default:
+        return "unknown";
+    }
+}
+
+/* The rule's SUBSYSTEM, spelled as a rule file spells it.
+ *
+ * Reported rather than the rule table's name: disk and partition rules share one
+ * table called block_fs, so a message naming the table said "block_fs" for a
+ * `SUBSYSTEM=="partition"` rule and left a reader unable to tell which of the
+ * two had matched. */
+static const char* devmgr_subsystem_name(uint8_t subsystem) {
+    switch (subsystem) {
+    case (uint8_t)DEVMGR_BLOCK_SUBSYS_DISK:
+        return "block";
+    case (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION:
+        return "partition";
+    case (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME:
+        return "volume";
     default:
         return "unknown";
     }

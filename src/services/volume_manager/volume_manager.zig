@@ -333,9 +333,9 @@ fn probeDevice(instance: u32, provider_endpoint: i32) void {
     const scheme = rec.detectScheme(g_prefix[0..]);
     if (scheme != .none) {
         var line = driver.Line{};
-        _ = line.str("[volume-manager] ").str(idSlice(&dev.canonical_id));
+        _ = line.str("[volume-manager] device probed id=").str(idSlice(&dev.canonical_id));
         _ = line.str(" holds a ").str(if (scheme == .gpt) "gpt" else "mbr");
-        _ = line.str("; its partitions are the volumes");
+        _ = line.str("; its partitions are the volumes, volumes=").dec(g_volume_count);
         line.end();
         return;
     }
@@ -375,6 +375,20 @@ fn probeDevice(instance: u32, provider_endpoint: i32) void {
     vol.in_use = true;
     g_volume_count += 1;
     publishVolume(vol, slot);
+
+    // The running total, reported HERE rather than by the caller because this is
+    // where the device's canonical id is in hand. A class instance is a
+    // fingerprint of that id, so a line carrying only the instance cannot be
+    // tied to the device every other service names -- and every other service
+    // names it by id.
+    //
+    // `ready volumes=` carries no total: this service starts from the initfs,
+    // ahead of every disk driver, so its startup sweep finds nothing and each
+    // device is probed as it registers.
+    var done = driver.Line{};
+    _ = done.str("[volume-manager] device probed id=").str(idSlice(&dev.canonical_id));
+    _ = done.str(" volumes=").dec(g_volume_count);
+    done.end();
 }
 
 // --- discovery ---------------------------------------------------------------
@@ -412,14 +426,6 @@ fn drainArrivals() void {
         a.* = .{};
         if (volumeKnown(instance)) continue;
         probeDevice(instance, provider_endpoint);
-        // The running total. This service starts from the initfs, ahead of every
-        // disk driver, so its startup sweep finds nothing and `ready volumes=` is
-        // always zero; this is the only line that reports how many volumes the
-        // system holds. The partition manager reports its own totals the same way.
-        var line = driver.Line{};
-        _ = line.str("[volume-manager] device probed instance=").dec(instance);
-        _ = line.str(" volumes=").dec(g_volume_count);
-        line.end();
     }
 }
 

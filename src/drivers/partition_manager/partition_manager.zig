@@ -853,6 +853,16 @@ fn diskKnown(instance: u32) bool {
     return false;
 }
 
+/// A disk's canonical id, for reporting. A class instance is a FINGERPRINT of
+/// this string, so a message carrying only the instance cannot be tied back to
+/// the device any other service names -- and every service names it by id.
+fn diskId(instance: u32) []const u8 {
+    for (g_disks[0..g_disk_count]) |*d| {
+        if (d.in_use and d.instance == instance) return idSlice(&d.canonical_id);
+    }
+    return "?";
+}
+
 /// Record a `block` provider to be probed, and wake the root task to do it.
 ///
 /// Two providers are dropped here rather than probed. Our OWN endpoint, because
@@ -899,7 +909,7 @@ fn drainArrivals() void {
         if (diskKnown(instance)) continue;
         if (!probeProvider(instance, provider_endpoint)) continue;
         var line = driver.Line{};
-        _ = line.str("[partition-manager] disk probed instance=").dec(instance);
+        _ = line.str("[partition-manager] disk probed id=").str(diskId(instance));
         _ = line.str(" disks=").dec(g_disk_count).str(" partitions=").dec(g_part_count);
         line.end();
     }

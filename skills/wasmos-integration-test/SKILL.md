@@ -18,7 +18,9 @@ boot nothing.
 
 ## The battery system
 
-The suite is partitioned by subsystem into **batteries**, one per CI runner:
+The suite is partitioned by subsystem into **batteries**, and every QEMU battery
+runs once PER WASM RUNTIME — so a CI runner is a (battery, runtime) cell, not a
+battery:
 
 | Battery | What it covers |
 | --- | --- |
@@ -30,13 +32,27 @@ The suite is partitioned by subsystem into **batteries**, one per CI runner:
 | `language-runtimes` | One guest per supported source language |
 | `host-tools` | Host tools only — boots nothing, needs no emulation |
 
-`tests/batteries.json` is the single source. Two consumers read it and neither
-enumerates batteries itself:
+`tests/batteries.json` is the single source for BOTH axes — the `batteries`
+list and the `runtimes` list. Two consumers read it and neither enumerates
+either axis itself:
 
-- `scripts/run_unittest_suite.py` selects which files to run.
-- `.github/workflows/ci.yml` builds its job matrix from it.
+- `scripts/run_unittest_suite.py` selects which files to run, and its
+  `--matrix` mode emits the cross product (one cell per QEMU battery per
+  runtime, one per host battery).
+- `.github/workflows/ci.yml` consumes exactly that `--matrix` output.
 
-Add a battery there and a CI runner appears; nothing else needs editing.
+Add a battery or a runtime there and the runners appear; nothing else needs
+editing.
+
+**Why the runtime axis exists.** wasm3 interprets in-kernel at CPL 0; WARP JITs
+to ring 3. They break independently, and the difference is not always visible
+from one side: a guest mapping that aliases linear memory under WARP but not
+under wasm3 passes a WARP-only run and fails nothing until someone boots the
+other runtime by hand. CI ran WARP only for a long time, which is exactly how
+that hid. A cell also ASSERTS the runtime it claims, by grepping the booted
+kernel's `[subsystem] register request=WASM runtime=...` marker rather than
+trusting the configure flag — a stray `<repo>/.config` overrides `-D` flags, and
+an ESP can serve a kernel older than the tree it was built from.
 
 Batteries are **semantic, not duration-balanced** — `networking` is much the
 largest and sets the critical path, deliberately. A red job named `networking`

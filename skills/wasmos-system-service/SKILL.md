@@ -36,13 +36,17 @@ Legacy patterns that are GONE — do not use them:
 
 Under `src/services/<name>/`. Three flavors (examples cited):
 
-- **WASM** (`native = false`) — `src/services/cli/cli.c:2193`:
+- **WASM** (`native = false`) — `src/services/cli/cli.c:2444`:
   ```c
-  WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t, int32_t, int32_t) {
-      proc_endpoint = wasmos_startup_proc_endpoint();   // from spawn-info, not the arg
+  WASMOS_WASM_EXPORT int32_t initialize(void) {
+      int32_t proc_endpoint = wasmos_startup_proc_endpoint();   // from spawn-info
       for (;;) { /* own state machine; blocks in wasmos_ipc_select_one */ }
   }
   ```
+  The entry takes NO parameters. PM calls every entry with an argument count of
+  zero, and wasm3 rejects a call whose count does not match the declared
+  signature ("argument count mismatch"), which kills the service at spawn under
+  wasm3 even though WARP runs it.
   (`WASMOS_WASM_EXPORT` = `src/libc/include/wasmos/imports.h:13`; endpoint via
   `wasmos_startup_proc_endpoint()`, `src/libc/include/wasmos/startup.h`.)
 

@@ -9,7 +9,8 @@ Modes:
     (no args)              run everything discovered under --start-dir
     --battery NAME         run only that battery's files
     --list-batteries       print the battery names, one per line
-    --matrix               print the CI matrix as JSON
+    --matrix               print the CI matrix as JSON: one cell per QEMU
+                           battery PER RUNTIME, one per host battery
     --verify-batteries     fail unless every discovered file is in exactly one
                            battery, and every listed file exists
 
@@ -33,9 +34,22 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANIFEST = os.path.join(REPO_ROOT, "tests", "batteries.json")
 
 
-def load_batteries():
+def load_manifest():
     with open(MANIFEST, "r", encoding="utf-8") as f:
-        return json.load(f)["batteries"]
+        return json.load(f)
+
+
+def load_batteries():
+    return load_manifest()["batteries"]
+
+
+def load_runtimes():
+    """The wasm runtimes every QEMU battery runs under.
+
+    Absent from an older manifest means "just the default build", which keeps
+    this script usable against a tree that predates the runtime axis.
+    """
+    return load_manifest().get("runtimes", [])
 
 
 def discovered_files(start_dir):
@@ -92,14 +106,21 @@ def main() -> int:
             print(b["name"])
         return 0
     if args.matrix:
-        print(
-            json.dumps(
-                [
-                    {"battery": b["name"], "needs_qemu": b["needs_qemu"]}
-                    for b in load_batteries()
-                ]
-            )
-        )
+        # A QEMU battery is one cell PER RUNTIME; a host battery boots nothing,
+        # so it has no runtime and appears once. Emitting the cross product here
+        # rather than in the workflow keeps tests/batteries.json the only place
+        # either axis is written down.
+        runtimes = load_runtimes()
+        cells = []
+        for b in load_batteries():
+            if b["needs_qemu"] and runtimes:
+                cells.extend(
+                    {"battery": b["name"], "needs_qemu": True, "runtime": r}
+                    for r in runtimes
+                )
+            else:
+                cells.append({"battery": b["name"], "needs_qemu": b["needs_qemu"]})
+        print(json.dumps(cells))
         return 0
     if args.verify_batteries:
         return verify(args.start_dir)

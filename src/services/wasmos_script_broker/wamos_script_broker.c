@@ -176,11 +176,9 @@ static int32_t script_register(int32_t proc_endpoint, int32_t broker_endpoint) {
  * the requester would otherwise wait forever.  A per-request *parse* failure is
  * instead answered with PROC_BROKER_IPC_SPAWN_PLAN_ERROR
  * carrying a packed WASMOS_ERR_PROC_SPAWN_* code and does not end the service,
- * and an unexpected opcode is ignored rather than answered.  arg1..arg3 are
- * unused and proc_endpoint is overwritten from the spawn-info contract. */
+ * and an unexpected opcode is ignored rather than answered.  The entry takes no
+ * parameters and reads proc_endpoint from the spawn-info contract. */
 int32_t initialize(void) {
-    /* The 4-slot WASM service entry ABI is fixed, but the entry args carry
-     * nothing: startup values come from the spawn-info contract. */
     int32_t proc_endpoint = wasmos_startup_proc_endpoint();
     int32_t broker_endpoint = wasmos_ipc_create_endpoint();
     int32_t register_rc = 0;

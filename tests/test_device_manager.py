@@ -84,6 +84,26 @@ class DeviceManagerIntegrationTests(unittest.TestCase):
         self._cmd_expect("cd /user", b"/user wamos> ")
         self._cmd_expect("ls", b"README.TXT")
 
+    def test_mount_reports_the_filesystem_actually_serving_each_mount(self):
+        """Regression: 2026-08-30-fsmgr-backend-identity.
+
+        `mount` derived its filesystem label from fs_backend_t.kind, which is
+        FSMGR_BACKEND_BOOT for every block-backed backend and says nothing about
+        which filesystem is mounted. Both WFS volumes were therefore reported as
+        fs-fat, and the backend table carried no filesystem identity at all --
+        the same gap that let the root filesystem be chosen by registration
+        order.
+
+        Asserting both directions matters: a label fixed by inverting the
+        hardcoded string would report FAT volumes as WFS and still pass a
+        one-sided check. /wfs is the WFS volume on ATA, /boot and /user are the
+        FAT volumes. The virtio-blk /vwfs mount is asserted in
+        test_wfs_virtio_blk, which is the suite that attaches that disk.
+        """
+        self._cmd_expect("mount", b"/boot -> fs-fat")
+        self._cmd_expect("mount", b"/user -> fs-fat")
+        self._cmd_expect("mount", b"/wfs -> fs-wfs")
+
 
 if __name__ == "__main__":
     unittest.main()

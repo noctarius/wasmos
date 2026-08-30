@@ -774,7 +774,7 @@ static void wfs_report_backend_info(int32_t dst, int32_t request_id) {
                                     FSMGR_IPC_BACKEND_INFO_RESP,
                                     request_id,
                                     FSMGR_BACKEND_BOOT,
-                                    0,
+                                    FS_TYPE_WFS,
                                     mount_arg,
                                     (int32_t)g_mount_unit,
                                     WFS_SEND_RETRIES);

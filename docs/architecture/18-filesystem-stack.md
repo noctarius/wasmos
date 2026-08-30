@@ -229,6 +229,30 @@ provided via a known physical address from the bootloader.
   mount: a relative name typed in `/wfs` was handed to the FAT driver, which
   answered NOT_FOUND, and the driver holding the file was never asked.
 
+  The root backend is selected by MOUNT NAME (`FSMGR_ROOT_MOUNT_NAME`,
+  `fsmgr_select_root_backend`), not by position in the registration table. One
+  block-backed backend registers per mounted volume, so selecting the first one
+  makes the root filesystem a function of registration order; every unrouted
+  absolute path would then be served by whichever volume mounted first. No root
+  filesystem exists until the boot volume registers, and that state is distinct
+  from "the first registered backend".
+
+### Backend Identity
+
+A backend reports two independent things in `FSMGR_IPC_BACKEND_INFO_RESP`, and
+conflating them mislabels every mount:
+
+- `kind` (`arg0`) is `FSMGR_BACKEND_BOOT` or `FSMGR_BACKEND_INIT`. It separates a
+  block-backed backend from the initfs one and carries **no filesystem
+  identity** — every block-backed backend reports the same value whatever it
+  mounts.
+- `fs_type` (`arg1`) is the `FS_TYPE_*` the backend serves, and is the only field
+  that answers "which filesystem". A backend that probes no superblock reports
+  `FS_TYPE_UNKNOWN`, which is reported as such rather than guessed at.
+
+`mount` names a filesystem from `fs_type` (`fsmgr_backend_fs_name`). Deriving it
+from `kind` reports every mounted volume as FAT.
+
 A path-less request (`READDIR`) is preceded by a `CHDIR` re-asserting the
 requesting client's directory, because a backend holds one current directory per
 `fs_manager` connection and cannot tell two clients apart. `fs_manager` uses its

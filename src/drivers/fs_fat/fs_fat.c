@@ -266,7 +266,7 @@ static void fat_report_backend_info(int32_t dst, int32_t request_id) {
                          FSMGR_IPC_BACKEND_INFO_RESP,
                          (uint32_t)request_id,
                          FSMGR_BACKEND_BOOT,
-                         0,
+                         FS_TYPE_FAT,
                          mount_arg,
                          (int32_t)g_mount_unit);
 }

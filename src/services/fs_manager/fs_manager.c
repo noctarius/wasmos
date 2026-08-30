@@ -13,6 +13,7 @@
 #include "wasmos_driver_abi.h"
 #include "fs_manager_types.h"
 #include "fs_manager_path.h"
+#include "fs_manager_backends.h"
 
 /* Retries a reply gets before this service gives up on a client whose endpoint
  * stays full. Generous on purpose: the failure it guards against is permanent
@@ -435,11 +436,7 @@ static wasmos_error_code_t fsmgr_emit_mounts(int32_t source, int32_t req_id, int
         if (!g_backends[i].in_use) {
             continue;
         }
-        if (g_backends[i].kind == FSMGR_BACKEND_BOOT) {
-            kind = "fs-fat";
-        } else if (g_backends[i].kind == FSMGR_BACKEND_INIT) {
-            kind = "fs-init";
-        }
+        kind = fsmgr_backend_fs_name(&g_backends[i]);
         n = snprintf(
             mounts + pos, sizeof(mounts) - pos, "/%s -> %s", g_backends[i].mount_name, kind);
         if (n > 0 && (uint32_t)n < sizeof(mounts) - pos &&
@@ -618,14 +615,16 @@ static int32_t route_path_to_backend(const uint8_t* path_bytes, int32_t path_len
  * FILESYSTEM: "/system/utils/ip" and "/apps/calculator" are paths the shell and
  * the spawn path use throughout, and they name directories on that volume, not
  * mounts. A path whose first segment matches no mount is therefore served here
- * rather than refused. Returns NULL before any boot-kind backend registers. */
+ * rather than refused. Returns NULL until the boot volume registers, which is
+ * distinct from returning the first registered backend: several block-backed
+ * backends register per boot, and selecting by registration order would hand
+ * every unrouted absolute path to whichever volume was mounted first. */
 static fs_backend_t* backend_root_fs(void) {
-    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
-        if (g_backends[i].in_use && g_backends[i].kind == FSMGR_BACKEND_BOOT) {
-            return &g_backends[i];
-        }
+    int32_t index = fsmgr_select_root_backend(g_backends, FS_BACKEND_CAP);
+    if (index < 0) {
+        return 0;
     }
-    return 0;
+    return &g_backends[index];
 }
 
 /* Route an absolute VFS path to the backend that serves it, and report the path
@@ -790,12 +789,16 @@ static int route_rename_request(fs_client_state_t* state, int32_t buffer_id, int
     return 1;
 }
 
-/* Apply a backend's pulled info: register it at its endpoint, set unit, and
- * read its mount name (arg2 packs (buffer_id<<12)|len; the backend borrowed the
- * buffer READ to fs-manager). Shared by the initial class enumeration and ADD
- * events. */
-static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t arg2f,
-                                     int32_t unit) {
+/* Apply a backend's pulled info: register it at its endpoint, set unit and
+ * filesystem type, and read its mount name (arg2 packs (buffer_id<<12)|len; the
+ * backend borrowed the buffer READ to fs-manager). Shared by the initial class
+ * enumeration and ADD events.
+ *
+ * `fs_type` is the backend's FS_TYPE_*; `kind` distinguishes block-backed from
+ * initfs and cannot stand in for it. A backend that reports FS_TYPE_UNKNOWN is
+ * registered as such rather than assumed. */
+static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t fs_type,
+                                     int32_t arg2f, int32_t unit) {
     fs_backend_t* registered = backend_register((uint8_t)kind, backend_endpoint);
     int32_t mount_len = arg2f & 0xFFF;
     int32_t buffer_id = (int32_t)((uint32_t)arg2f >> 12);
@@ -803,6 +806,7 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
         return;
     }
     registered->unit = (uint8_t)(unit & 0xFF);
+    registered->fs_type = (uint32_t)fs_type;
     if (buffer_id > 0 && mount_len > 0 && mount_len < (int32_t)sizeof(registered->mount_name)) {
         char mount_name[16];
         int32_t copy_len = mount_len;
@@ -846,6 +850,7 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
     }
     fsmgr_apply_backend_info(backend_endpoint,
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
+                             wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3));
 }

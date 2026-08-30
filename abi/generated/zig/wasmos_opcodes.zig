@@ -233,11 +233,19 @@ pub const FS_IPC_STREAM: i32 = 0x481;
 pub const FS_IPC_ERROR: i32 = 0x4FF;
 
 // fs_manager (0x420..0x4A2)
-/// fs-manager -> backend pull: report kind/mount/unit. Reply RESP packs
-/// arg0=kind, arg2=(mount_buffer_id<<12)|mount_len (backend owns the buffer
-/// and borrows it READ to fs-manager), arg3=unit. Backends are discovered
-/// via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager rebuilds its
-/// backend set from the registry on (re)start.
+/// fs-manager -> backend pull: report kind/fs-type/mount/unit. Reply RESP
+/// packs arg0=kind, arg1=fs_type, arg2=(mount_buffer_id<<12)|mount_len
+/// (backend owns the buffer and borrows it READ to fs-manager), arg3=unit.
+/// Backends are discovered via svc class FSMGR_BACKEND_CLASS, not a push,
+/// so fs-manager rebuilds its backend set from the registry on (re)start.
+///
+/// arg0 `kind` is FSMGR_BACKEND_BOOT or FSMGR_BACKEND_INIT: it separates a
+/// block-backed backend from the initfs one and carries NO filesystem
+/// identity, so every block-backed backend reports the same value whatever
+/// it mounts. arg1 `fs_type` is the FS_TYPE_* the backend serves and is the
+/// only field that answers "which filesystem"; a backend that does not
+/// probe a superblock reports FS_TYPE_UNKNOWN. Deriving a filesystem from
+/// `kind` reports every mounted volume as FAT.
 pub const FSMGR_IPC_BACKEND_INFO_REQ: i32 = 0x420;
 pub const FSMGR_IPC_CLONE_CWD_REQ: i32 = 0x421;
 pub const FSMGR_IPC_QUERY_MOUNTS_REQ: i32 = 0x422;

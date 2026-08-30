@@ -1099,6 +1099,7 @@ static void process_reap(process_t* proc) {
         irq_release_context(proc->context_id);
         msi_release_context(proc->context_id);
         ipc_endpoints_release_owner(proc->context_id);
+        native_driver_release_owner(proc->context_id);
         xfer_buffer_drop_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);
     }

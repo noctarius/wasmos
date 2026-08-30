@@ -28,4 +28,8 @@ uint64_t native_driver_heap_committed_bytes(uint32_t pid);
 /* Release the native driver heap for pid (called on process exit). */
 void native_driver_heap_release(uint32_t pid);
 
+/* Release every borrow mapping a dying context holds. Called from process
+ * teardown alongside the other per-context release hooks. */
+void native_driver_release_owner(uint32_t owner_context_id);
+
 #endif

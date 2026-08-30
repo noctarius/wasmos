@@ -89,6 +89,30 @@ int32_t wasmos_shmem_unmap(int32_t id) {
     (void)id;
     return -1;
 }
+/* ui_window_set_title carries the title in a transfer buffer the client owns,
+ * so the shim pulls these in even though nothing here exercises that path. */
+int32_t wasmos_xfer_buffer_acquire(int32_t minimum_size) {
+    (void)minimum_size;
+    return -1;
+}
+int32_t wasmos_xfer_buffer_borrow(int32_t grantee_endpoint, int32_t buffer_id, int32_t flags) {
+    (void)grantee_endpoint;
+    (void)buffer_id;
+    (void)flags;
+    return -1;
+}
+int32_t wasmos_xfer_buffer_map(int32_t buffer_id) {
+    (void)buffer_id;
+    return -1;
+}
+int32_t wasmos_xfer_buffer_unmap(int32_t buffer_id) {
+    (void)buffer_id;
+    return -1;
+}
+int32_t wasmos_xfer_buffer_release(int32_t buffer_id) {
+    (void)buffer_id;
+    return -1;
+}
 
 /* Growing a block must preserve its contents and leave the rest zeroed.
  *

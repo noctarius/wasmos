@@ -1547,6 +1547,12 @@ static int volume_rule_matches(const block_fs_rule_t* rule,
             return 0;
         }
     }
+    if (rule->has_boot) {
+        uint8_t is_boot = (desc->flags & VOLUME_DESCRIPTOR_FLAG_BOOT) != 0u;
+        if (is_boot != rule->boot) {
+            return 0;
+        }
+    }
     if (rule->has_uuid) {
         if ((desc->flags & VOLUME_DESCRIPTOR_FLAG_HAS_UUID) == 0u) {
             return 0;
@@ -1602,11 +1608,10 @@ static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec) {
             rule->matched_unit = (uint8_t)backing->desc.unit;
             (void)str_copy(rule->matched_id, sizeof(rule->matched_id), backing->desc.canonical_id);
             queued++;
-            /* Reported per RULE and naming its mount, not once per volume: two
-             * rules selecting different volumes is the ordinary case now that a
-             * rule can match on identity, and "which volume ended up at which
-             * path" is the one fact this layer exists to decide. A message that
-             * named only the volume left that unanswerable from a log. */
+            /* Per RULE and naming its mount, not once per volume: a rule matches
+             * on identity, so two rules selecting different volumes is ordinary,
+             * and which volume ends up at which path is the fact this layer
+             * decides. The mount is what makes that readable from a log. */
             (void)snprintf(queued_msg,
                            sizeof(queued_msg),
                            "[device-manager] volume rule queued spawn mount=%s id=%s on %s\n",
@@ -1730,6 +1735,121 @@ static void registry_add_block(const wasmos_block_descriptor_t* in) {
  * Upserts by canonical_id, like the block inventory and for the same reason: the
  * id is the volume's identity, and it is derived from the backing device's id
  * rather than allocated, so it is the same string every boot. */
+/* The LBA range the firmware said this system was loaded from, as the kernel
+ * published it in `boot.partition` (see kernel_publish_boot_partition).
+ *
+ * Read once and cached, because the value cannot change while the system runs:
+ * it describes the boot that is already over. g_boot_partition_known stays 0
+ * when the variable is absent -- a network boot, or a whole disk with no table --
+ * and then no volume is ever marked, which is distinct from marking one that
+ * matches nothing. */
+static uint8_t g_boot_partition_known;
+static uint64_t g_boot_partition_start;
+static uint64_t g_boot_partition_count;
+
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+static void load_boot_partition(void) {
+    char value[64];
+    uint64_t start = 0;
+    uint64_t count = 0;
+    uint32_t i = 0;
+    int digits = 0;
+
+    static const char key[] = "boot.partition";
+    g_boot_partition_known = 0;
+    if (wasmos_env_get(key, (int32_t)(sizeof(key) - 1u), value, (int32_t)sizeof(value)) <= 0) {
+        console_write("[device-manager] no boot.partition; a volume rule cannot select /boot\n");
+        return;
+    }
+    /* `<start>:<count>`, both hexadecimal without a prefix. */
+    for (; value[i] != '\0' && value[i] != ':'; ++i) {
+        int nib = hex_digit(value[i]);
+        if (nib < 0) {
+            return;
+        }
+        start = (start << 4) | (uint64_t)nib;
+        digits++;
+    }
+    if (value[i] != ':' || digits == 0) {
+        return;
+    }
+    ++i;
+    digits = 0;
+    for (; value[i] != '\0'; ++i) {
+        int nib = hex_digit(value[i]);
+        if (nib < 0) {
+            return;
+        }
+        count = (count << 4) | (uint64_t)nib;
+        digits++;
+    }
+    if (digits == 0) {
+        return;
+    }
+    g_boot_partition_start = start;
+    g_boot_partition_count = count;
+    g_boot_partition_known = 1;
+}
+
+/* Set VOLUME_DESCRIPTOR_FLAG_BOOT when this volume sits on the partition the
+ * firmware booted from.
+ *
+ * Matched on the BACKING device's LBA range, because that is the only fact both
+ * sides describe the same way: the firmware's HARDDRIVE node gives a start and a
+ * length on the whole disk, and that is exactly what a partition-table reader
+ * publishes. Nothing on the volume itself could answer this -- an ESP's
+ * filesystem is an ordinary FAT volume.
+ *
+ * TODO: the range alone can collide. Two disks partitioned by the same tool
+ * commonly both start at LBA 2048, so identical (start, count) pairs across
+ * disks are plausible rather than contrived. The firmware also supplies an MBR
+ * disk signature or a GPT partition GUID that would settle it, but no block
+ * descriptor carries the former today. A second match is logged rather than
+ * silently taken. */
+static void mark_volume_if_booted(volume_record_t* rec) {
+    const block_device_record_t* backing = 0;
+    if (!rec || !g_boot_partition_known) {
+        return;
+    }
+    backing = devmgr_backing_record_for_volume(&rec->desc);
+    if (!backing) {
+        return;
+    }
+    if (backing->desc.lba_start != g_boot_partition_start ||
+        backing->desc.lba_count != g_boot_partition_count) {
+        return;
+    }
+    for (uint32_t i = 0; i < g_dm.volume_registry_count; ++i) {
+        volume_record_t* other = &g_dm.volume_registry[i];
+        if (other == rec || !other->in_use) {
+            continue;
+        }
+        if ((other->desc.flags & VOLUME_DESCRIPTOR_FLAG_BOOT) != 0u) {
+            char dup[192];
+            (void)snprintf(dup,
+                           sizeof(dup),
+                           "[device-manager] %s matches the boot partition too; %s keeps it\n",
+                           rec->desc.canonical_id,
+                           other->desc.canonical_id);
+            console_write(dup);
+            return;
+        }
+    }
+    rec->desc.flags |= VOLUME_DESCRIPTOR_FLAG_BOOT;
+}
+
 static void registry_add_volume(const wasmos_volume_descriptor_t* in) {
     wasmos_volume_descriptor_t desc = *in;
     volume_record_t* rec = 0;
@@ -1760,6 +1880,7 @@ static void registry_add_volume(const wasmos_volume_descriptor_t* in) {
         rec->active_service = 0;
     }
     rec->desc = desc;
+    mark_volume_if_booted(rec);
 
     char msg[224];
     (void)snprintf(msg,
@@ -2293,6 +2414,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wasmos_sys_ipc_recv_loop();
     }
     wasmos_sys_event_loop_init(&g_dm_ipc_loop, g_dm.reply_endpoint, 0xD000);
+    /* Before any volume can be registered: a volume that arrived first would
+     * miss its BOOT mark, and nothing re-examines a registered one. */
+    load_boot_partition();
     if (dm_register_ipc_handlers() != 0) {
         g_dm.phase = HW_PHASE_FAILED;
         console_write("[device-manager] ipc handler registration failed\n");

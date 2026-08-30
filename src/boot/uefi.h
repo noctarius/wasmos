@@ -449,7 +449,10 @@ struct _EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL {
  *                                          yields the ESP volume.
  *   EFI_FILE_INFO_GUID                   - InformationType for
  *                                          EFI_FILE_PROTOCOL.GetInfo, selecting
- *                                          the EFI_FILE_INFO record. */
+ *                                          the EFI_FILE_INFO record.
+ *   EFI_DEVICE_PATH_PROTOCOL_GUID        - HandleProtocol on DeviceHandle;
+ *                                          yields the path whose HARDDRIVE node
+ *                                          identifies the partition booted from. */
 #define EFI_LOADED_IMAGE_PROTOCOL_GUID                                                             \
     {0x5B1B31A1, 0x9562, 0x11d2, {0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B}}
 
@@ -459,7 +462,51 @@ struct _EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL {
 #define EFI_FILE_INFO_GUID                                                                         \
     {0x09576e92, 0x6d3f, 0x11d2, {0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B}}
 
+#define EFI_DEVICE_PATH_PROTOCOL_GUID                                                              \
+    {0x09576e91, 0x6d3f, 0x11d2, {0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B}}
+
 /* OpenMode bit for a read-only open; the loader never opens for write. */
 #define EFI_FILE_MODE_READ 0x0000000000000001ULL
+
+/* A device-path node header.  A path is a packed sequence of these, each
+ * `Length` bytes INCLUDING the header, walked until the END node (Type 0x7F).
+ * Length is a two-byte little-endian field rather than a UINT16 because a node
+ * is not guaranteed to be aligned. */
+typedef struct {
+    UINT8 Type;
+    UINT8 SubType;
+    UINT8 Length[2];
+} EFI_DEVICE_PATH_PROTOCOL;
+
+#define EFI_DEVICE_PATH_TYPE_MEDIA 0x04
+#define EFI_DEVICE_PATH_SUBTYPE_HARDDRIVE 0x01
+#define EFI_DEVICE_PATH_TYPE_END 0x7F
+
+/* MEDIA/HARDDRIVE node: which partition of which disk, in the terms the
+ * firmware used to find it.  PartitionStart and PartitionSize are in LBAs on the
+ * WHOLE disk, so they are directly comparable with what a partition-table reader
+ * publishes.
+ *
+ * SignatureType selects how Signature is read: 1 is a 32-bit MBR disk signature
+ * in the first four bytes, 2 a 16-byte GPT partition GUID.  0 means the firmware
+ * offered neither, and then only the LBA range identifies the partition.
+ *
+ * Declared packed: the node sits at whatever offset the preceding nodes leave
+ * it at, so no field can be assumed aligned. */
+typedef struct __attribute__((packed)) {
+    UINT8 Type;
+    UINT8 SubType;
+    UINT8 Length[2];
+    UINT32 PartitionNumber;
+    UINT64 PartitionStart;
+    UINT64 PartitionSize;
+    UINT8 Signature[16];
+    UINT8 MBRType;
+    UINT8 SignatureType;
+} EFI_HARDDRIVE_DEVICE_PATH;
+
+#define EFI_HARDDRIVE_SIGNATURE_NONE 0x00
+#define EFI_HARDDRIVE_SIGNATURE_MBR 0x01
+#define EFI_HARDDRIVE_SIGNATURE_GUID 0x02
 
 #endif

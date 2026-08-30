@@ -561,6 +561,89 @@ static void apply_framebuffer_snapshot(boot_info_t* boot_info,
     boot_info->flags |= snapshot->flags;
 }
 
+/* The partition the firmware loaded this image from, captured while boot
+ * services are still live and applied into boot_info_t afterwards -- the same
+ * shape as framebuffer_snapshot_t and for the same reason.
+ *
+ * `present` is false when the device path carries no MEDIA/HARDDRIVE node, which
+ * is a legitimate boot: a network boot, or a whole disk with no partition table.
+ * Nothing downstream may assume the system booted from a partition. */
+typedef struct {
+    UINT64 start;
+    UINT64 size;
+    UINT8 signature[16];
+    UINT32 number;
+    UINT8 signature_type;
+    int present;
+} boot_partition_snapshot_t;
+
+/* Walk `device`'s path for its MEDIA/HARDDRIVE node.
+ *
+ * The node names the partition in the firmware's own terms: a start LBA and a
+ * length on the WHOLE disk, which is exactly how a partition-table reader
+ * publishes one, so the two are comparable without either side knowing about the
+ * other. That is what lets the OS recognise which of its volumes it booted from
+ * without the bootloader passing a device name the OS does not use.
+ *
+ * A path is a packed sequence of nodes walked by each node's own Length until
+ * the END node. Length is read byte-wise because a node is not guaranteed to be
+ * aligned, and a node claiming less than a header's length ends the walk: a
+ * malformed path must not become an infinite loop in the bootloader. */
+static void capture_boot_partition(EFI_BOOT_SERVICES* bs, EFI_HANDLE device,
+                                   boot_partition_snapshot_t* out) {
+    EFI_GUID dp_guid = EFI_DEVICE_PATH_PROTOCOL_GUID;
+    EFI_DEVICE_PATH_PROTOCOL* node = 0;
+    EFI_STATUS status;
+
+    if (!out) {
+        return;
+    }
+    memset8(out, 0, sizeof(*out));
+    if (!bs || !device) {
+        return;
+    }
+    status = bs->HandleProtocol(device, &dp_guid, (void**)&node);
+    if (EFI_ERROR(status) || !node) {
+        return;
+    }
+    while (node->Type != EFI_DEVICE_PATH_TYPE_END) {
+        UINT32 length = (UINT32)node->Length[0] | ((UINT32)node->Length[1] << 8);
+        if (length < sizeof(EFI_DEVICE_PATH_PROTOCOL)) {
+            return;
+        }
+        if (node->Type == EFI_DEVICE_PATH_TYPE_MEDIA &&
+            node->SubType == EFI_DEVICE_PATH_SUBTYPE_HARDDRIVE &&
+            length >= sizeof(EFI_HARDDRIVE_DEVICE_PATH)) {
+            const EFI_HARDDRIVE_DEVICE_PATH* hd = (const EFI_HARDDRIVE_DEVICE_PATH*)node;
+            out->start = hd->PartitionStart;
+            out->size = hd->PartitionSize;
+            out->number = hd->PartitionNumber;
+            out->signature_type = hd->SignatureType;
+            for (UINT32 i = 0; i < 16u; ++i) {
+                out->signature[i] = hd->Signature[i];
+            }
+            out->present = 1;
+            return;
+        }
+        node = (EFI_DEVICE_PATH_PROTOCOL*)((UINT8*)node + length);
+    }
+}
+
+static void apply_boot_partition_snapshot(boot_info_t* boot_info,
+                                          const boot_partition_snapshot_t* snapshot) {
+    if (!boot_info || !snapshot || !snapshot->present) {
+        return;
+    }
+    boot_info->boot_partition_start = snapshot->start;
+    boot_info->boot_partition_size = snapshot->size;
+    boot_info->boot_partition_number = snapshot->number;
+    boot_info->boot_partition_signature_type = snapshot->signature_type;
+    for (uint32_t i = 0; i < 16u; ++i) {
+        boot_info->boot_partition_signature[i] = snapshot->signature[i];
+    }
+    boot_info->flags |= BOOT_INFO_FLAG_BOOT_PARTITION_PRESENT;
+}
+
 static void uefi_hex(UINT64 value, char* out) {
     static const char hex[] = "0123456789ABCDEF";
     out[0] = '0';
@@ -766,6 +849,19 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
     if (EFI_ERROR(status)) {
         uefi_log_status(system, "[boot] HandleProtocol failed: ", status);
         return status;
+    }
+
+    /* Recorded before anything is read from the volume: this is the one moment
+     * the firmware's own idea of "where this system came from" is available, and
+     * nothing later can reconstruct it. Failure is not fatal -- a boot with no
+     * HARDDRIVE node leaves the flag clear and the OS falls back to a rule that
+     * names a device. */
+    boot_partition_snapshot_t boot_partition;
+    capture_boot_partition(bs, loaded->DeviceHandle, &boot_partition);
+    if (!boot_partition.present) {
+        /* Not fatal, and worth a line: /boot then has no volume to match and
+         * falls back to whatever rule names a device. */
+        uefi_log(system, "[boot] no boot partition in the device path\n");
     }
 
     EFI_GUID fs_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
@@ -1004,6 +1100,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
         if (have_framebuffer) {
             apply_framebuffer_snapshot(boot_info, &framebuffer_snapshot);
         }
+        apply_boot_partition_snapshot(boot_info, &boot_partition);
 
         UINT8* cursor = (UINT8*)map_dst + map_bytes;
         UINT8* initfs_copy = cursor;

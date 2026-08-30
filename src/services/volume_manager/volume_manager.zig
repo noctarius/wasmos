@@ -412,11 +412,10 @@ fn drainArrivals() void {
         a.* = .{};
         if (volumeKnown(instance)) continue;
         probeDevice(instance, provider_endpoint);
-        // A RUNNING TOTAL, because `ready volumes=` no longer carries one. This
-        // service starts from the initfs, ahead of every disk driver, so its
-        // startup sweep sees nothing and each device is probed as it registers.
-        // Without this line the log would report zero volumes and never correct
-        // itself. The partition manager reports its own totals the same way.
+        // The running total. This service starts from the initfs, ahead of every
+        // disk driver, so its startup sweep finds nothing and `ready volumes=` is
+        // always zero; this is the only line that reports how many volumes the
+        // system holds. The partition manager reports its own totals the same way.
         var line = driver.Line{};
         _ = line.str("[volume-manager] device probed instance=").dec(instance);
         _ = line.str(" volumes=").dec(g_volume_count);

@@ -106,3 +106,32 @@ int putsn(const char* s, size_t len) {
     extern long write(int fd, const void* buf, unsigned long count);
     return (int)write(2, s, (unsigned long)len);
 }
+
+/* The kernel environment, as a test drives it.
+ *
+ * Not inert like the rest: `boot.partition` is an INPUT to the block path under
+ * test. It decides which volume carries VOLUME_DESCRIPTOR_FLAG_BOOT, and so
+ * which one an ATTR{boot} rule selects. A test sets g_test_env_boot_partition to
+ * the string the kernel would have published, or leaves it empty for a boot the
+ * firmware could not describe -- which is a distinct case, not an absent one. */
+char g_test_env_boot_partition[64];
+
+int32_t wasmos_env_get(const char* name, int32_t name_len, char* buf, int32_t buf_len) {
+    static const char key[] = "boot.partition";
+    int32_t n = 0;
+    if (!name || !buf || buf_len <= 0) {
+        return -1;
+    }
+    if (name_len != (int32_t)(sizeof(key) - 1u) || strncmp(name, key, sizeof(key) - 1u) != 0) {
+        return -1;
+    }
+    if (g_test_env_boot_partition[0] == '\0') {
+        return -1;
+    }
+    while (g_test_env_boot_partition[n] != '\0' && n + 1 < buf_len) {
+        buf[n] = g_test_env_boot_partition[n];
+        ++n;
+    }
+    buf[n] = '\0';
+    return n;
+}

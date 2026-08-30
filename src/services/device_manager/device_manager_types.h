@@ -227,6 +227,13 @@ typedef struct {
     uint8_t has_uuid;
     uint8_t uuid[VOLUME_DESCRIPTOR_UUID_MAX];
     char label[VOLUME_DESCRIPTOR_LABEL_MAX];
+    /* ATTR{boot}: the volume this system was loaded from, as the FIRMWARE named
+     * it. The one identity nothing on the volume itself can supply -- an ESP's
+     * filesystem looks like any other FAT volume -- and the only way /boot can be
+     * selected without naming a disk. `boot` holds the value matched so
+     * ATTR{boot}=="0" can select a volume that is NOT the boot one. */
+    uint8_t has_boot;
+    uint8_t boot;
     /* The device that actually matched, filled in when the rule is queued. The
      * filesystem driver is told about THIS, not about the rule's pattern: a
      * wildcard rule has no unit of its own to pass on, and passing the pattern

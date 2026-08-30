@@ -83,6 +83,9 @@ static void check(int cond, const char* what) {
     }
 }
 
+/* Defined in stubs_device_manager_host.c: what `boot.partition` reads back as. */
+extern char g_test_env_boot_partition[64];
+
 static int out_has(const char* needle) {
     return strstr(g_out, needle) != 0;
 }
@@ -195,6 +198,48 @@ static void publish_volume(uint8_t backend, uint8_t unit, uint32_t fs_type, cons
             desc.uuid[i] = uuid[i];
         }
     }
+    (void)snprintf(desc.canonical_id, sizeof(desc.canonical_id), "volume:%s", backing_id);
+    registry_add_volume(&desc);
+}
+
+/* A volume on a PARTITION of `unit`, at a given place on the whole disk.
+ *
+ * Separate from publish_volume because the boot match is on the backing device's
+ * LBA RANGE, and only a partition has one: a whole-disk record reports 0/0.
+ * `lba_start`/`lba_count` are what the firmware's HARDDRIVE node is compared
+ * against. */
+static void publish_volume_on_partition(uint8_t backend, uint8_t unit, uint32_t slot,
+                                        uint64_t lba_start, uint64_t lba_count, uint32_t fs_type) {
+    wasmos_block_descriptor_t part;
+    wasmos_volume_descriptor_t desc;
+    char backing_id[64];
+
+    memset(&part, 0, sizeof(part));
+    part.version = BLOCK_DESCRIPTOR_VERSION;
+    part.backend = backend;
+    part.unit = unit;
+    part.partition = slot;
+    part.scheme = (uint32_t)PARTITION_SCHEME_MBR;
+    part.sector_bytes = 512u;
+    part.lba_start = lba_start;
+    part.lba_count = lba_count;
+    part.flags = BLOCK_DESCRIPTOR_FLAG_PRESENT;
+    (void)snprintf(part.canonical_id,
+                   sizeof(part.canonical_id),
+                   "block:%s:%up%u",
+                   backend == (uint8_t)BLOCK_BACKEND_ATA ? "ata" : "virtio-blk",
+                   (unsigned)unit,
+                   (unsigned)slot);
+    registry_add_block(&part);
+    (void)snprintf(backing_id, sizeof(backing_id), "%s", part.canonical_id);
+
+    memset(&desc, 0, sizeof(desc));
+    desc.version = VOLUME_DESCRIPTOR_VERSION;
+    desc.fs_type = fs_type;
+    desc.backing_instance = wasmos_block_fingerprint(backing_id);
+    desc.sector_bytes = 512u;
+    desc.lba_count = lba_count;
+    desc.flags = VOLUME_DESCRIPTOR_FLAG_PRESENT;
     (void)snprintf(desc.canonical_id, sizeof(desc.canonical_id), "volume:%s", backing_id);
     registry_add_volume(&desc);
 }
@@ -490,6 +535,67 @@ static void two_volumes_of_one_format_are_told_apart_by_uuid(void) {
     check(g_dm.block_fs_rules[0].queued == 1u, "and the one it names is matched");
 }
 
+/* ATTR{boot}: the volume this system was loaded from.
+ *
+ * The one identity nothing on the volume can supply -- an ESP is an ordinary FAT
+ * volume, its label is firmware-specific, and an MBR gives it no partition label
+ * and no PARTUUID. The firmware knows, the bootloader records it, the kernel
+ * publishes `boot.partition`, and the match is on the backing partition's LBA
+ * range because that is the one fact both sides state the same way.
+ *
+ * The range below is the ESP the shipped boot image actually reports (LBA 63,
+ * 1032129 sectors), so a change that broke the hexadecimal parse would be caught
+ * with the value it will really see. */
+static void the_boot_volume_is_the_one_the_firmware_named(void) {
+    harness_reset();
+    (void)snprintf(g_test_env_boot_partition, sizeof(g_test_env_boot_partition), "%s", "3f:fbfc1");
+    load_boot_partition();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{boot}==\"1\", "
+                    "ENV{MOUNT}=\"/boot\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "the boot-volume rule parses");
+
+    publish_volume_on_partition(
+        (uint8_t)BLOCK_BACKEND_ATA, 0u, 2u, 2048u, 128991u, (uint32_t)FS_TYPE_FAT);
+    check(g_dm.block_fs_rules[0].queued == 0u,
+          "a volume elsewhere on the same disk is not the boot volume");
+
+    publish_volume_on_partition(
+        (uint8_t)BLOCK_BACKEND_ATA, 0u, 1u, 63u, 1032129u, (uint32_t)FS_TYPE_FAT);
+    check(g_dm.block_fs_rules[0].queued == 1u,
+          "and the volume covering the firmware's LBA range is");
+}
+
+/* A boot the firmware could not describe -- a network boot, or a whole disk with
+ * no table -- publishes no variable. Nothing is then marked, so an ATTR{boot}
+ * rule selects nothing rather than selecting whatever happens to be first. */
+static void without_a_boot_partition_nothing_is_the_boot_volume(void) {
+    harness_reset();
+    g_test_env_boot_partition[0] = '\0';
+    load_boot_partition();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{boot}==\"1\", "
+                    "ENV{MOUNT}=\"/boot\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "the boot-volume rule parses");
+
+    publish_volume_on_partition(
+        (uint8_t)BLOCK_BACKEND_ATA, 0u, 1u, 63u, 1032129u, (uint32_t)FS_TYPE_FAT);
+    check(g_dm.block_fs_rules[0].queued == 0u,
+          "no volume is the boot volume when the firmware named none");
+}
+
+/* ATTR{boot} on a block or partition rule can never fire: the flag lives on a
+ * volume. Refused at load, on the same terms as every other cross-subsystem
+ * matcher. */
+static void a_boot_matcher_outside_a_volume_rule_is_refused(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", ATTR{boot}==\"1\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "a disk rule carrying ATTR{boot} is refused");
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{boot}==\"yes\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "and so is a boot matcher that is neither 0 nor 1");
+}
+
 /* A malformed matcher rejects the RULE. Dropping the attribute instead would
  * widen the rule to everything its author did not ask for, and on the mount path
  * that means a filesystem on the wrong volume. */
@@ -568,6 +674,9 @@ int main(void) {
     a_volume_uuid_may_be_spelled_without_hyphens();
     a_short_format_identity_is_spelled_at_its_own_width();
     two_volumes_of_one_format_are_told_apart_by_uuid();
+    the_boot_volume_is_the_one_the_firmware_named();
+    without_a_boot_partition_nothing_is_the_boot_volume();
+    a_boot_matcher_outside_a_volume_rule_is_refused();
     a_malformed_matcher_rejects_the_rule();
     a_partition_matcher_on_a_disk_rule_is_refused();
     an_overlong_rule_line_is_refused();

@@ -373,19 +373,24 @@ permanently one value — a field nothing sets is one a later reader will trust.
 
 ## 10. Constraints inherited from the block layer
 
-**`/boot` is not a volume rule yet, but the circle is broken.** Both managers are
-INITFS payloads now, spawned from the bootstrap rules ahead of every disk driver,
-so a volume for the ESP exists well before `/boot` would be mounted. What was
-blocking is gone: they used to be spawned from the BOOT rules, which load off
-`/boot` itself, so nothing they published could select it.
+**`/boot` keeps a whole-disk rule, and the reason is now one layer down.** Both
+managers are initfs payloads, so a volume for the ESP exists well before `/boot`
+is mounted, and the matcher exists too: `ATTR{boot}=="1"` selects the volume the
+FIRMWARE loaded this system from. Nothing on an ESP can supply that identity —
+its filesystem is ordinary FAT, its label is firmware-specific
+(`QEMU VVFAT` here), and an MBR gives it no partition label and no PARTUUID — so
+it comes from the bootloader, which reads the MEDIA/HARDDRIVE node of its own
+device path into `boot_info`; the kernel publishes the LBA range as the
+`boot.partition` kernel-environment variable, and the device manager marks the
+volume whose backing partition covers it.
 
-What remains is the MATCHER. Every volume on the boot disk is FAT, and the ESP's
-only distinguishing marks are QEMU-specific (`ATTR{label}=="QEMU VVFAT"`) or
-absent (an MBR carries no partition label and no PARTUUID). The identity that
-holds is the one the firmware already knows — which volume this system was loaded
-from — so `/boot` waits on the bootloader recording it and
-`VOLUME_DESCRIPTOR_FLAG_BOOT` carrying it. `/boot` keeps its whole-disk rule and
-`fat_try_parse_mbr` until then.
+What blocks the swap is that a filesystem on a PARTITION cannot serve a zero-copy
+file read. The partition manager forwards a client's `dst_borrow_id` to the disk
+backend, and a borrow is a capability between the client and the PROXY, so the
+backend may not touch that buffer. A partition mounts — the mount path reads into
+the caller's own block buffer — and then fails on the first file read. `/boot`
+would be the first mount to exercise it. See `docs/TASKS.md`; `fat_try_parse_mbr`
+stays until it is fixed.
 
 **Two volumes on one disk collide on `fs.backend`.**
 `FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`, and a partition

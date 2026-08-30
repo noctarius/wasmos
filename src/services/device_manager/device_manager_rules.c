@@ -613,6 +613,17 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
             rule.has_uuid = 1;
             continue;
         }
+        if (extract_op_value(tok, "ATTR{boot}", "==", tmp, sizeof(tmp)) == 0) {
+            if (strcmp(tmp, "1") == 0) {
+                rule.boot = 1;
+            } else if (strcmp(tmp, "0") == 0) {
+                rule.boot = 0;
+            } else {
+                return -1;
+            }
+            rule.has_boot = 1;
+            continue;
+        }
     }
     if (path[0] == '\0') {
         return -1;
@@ -638,7 +649,8 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     /* Conversely, the filesystem matchers belong only to a volume. `fstype` on a
      * block or partition rule matched a descriptor field no publisher ever set
      * (see architecture/37 section 9), so it silently matched nothing. */
-    if (rule.subsystem != (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME && (fslabel[0] || rule.has_uuid)) {
+    if (rule.subsystem != (uint8_t)DEVMGR_BLOCK_SUBSYS_VOLUME &&
+        (fslabel[0] || rule.has_uuid || rule.has_boot)) {
         return -1;
     }
     /* A partition matcher on a disk rule is a rule that can never fire: a whole

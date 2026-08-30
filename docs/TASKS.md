@@ -989,8 +989,41 @@ tail.
   mark the others. Today that is prevented by suppressing the whole-disk volume of
   a partitioned disk, not by the claim.
 
-- [ ] [ENHANCEMENT][P3] Convert the last rule that still names a disk: `/boot`.
-  It cannot until the bootloader records the ESP; see the initfs entry below.
+- [ ] [BUG][P2] A filesystem on a PARTITION cannot serve a zero-copy file read.
+  `handleTransfer` (`src/drivers/partition_manager/partition_manager.zig`)
+  forwards the client's request with two edits — `target` and `lba` — and passes
+  the destination fields through untouched, on the stated assumption that "the
+  backing device still writes the client's own pages". For
+  `BLOCK_DST_XFER_BUFFER` that is false: `dst_borrow_id` names a grant between
+  the CLIENT and the PARTITION MANAGER, and the disk backend holds no grant on
+  that buffer. `ata_read_zc_dma` fails, the staged fallback calls
+  `wasmos_xfer_buffer_write` on a buffer it may not touch and fails too, and the
+  client gets `WASMOS_ERR_FS_IO`.
+
+  Latent until now because the mount path reads into the caller's own block
+  buffer (`BLOCK_DST_BLOCK_BUFFER`), which works: a partition mounts and then
+  fails on the first FILE read. `fat_file.c` turns a failed direct read into
+  fs.IO rather than retrying through the block buffer, so there is no fallback.
+
+  Three ways out, and the choice is a design decision: the proxy stages the
+  transfer through its OWN buffer (correct, costs the copy the doc says a
+  partition does not cost); the proxy refuses `BLOCK_DST_XFER_BUFFER` and the
+  filesystems fall back; or a borrow becomes forwardable, which is a capability
+  change well beyond this layer.
+
+- [ ] [ENHANCEMENT][P2] Convert the last rule that still names a disk: `/boot`.
+  Everything the matcher needs is IMPLEMENTED and tested: the bootloader reads
+  the MEDIA/HARDDRIVE node of its own device path into `boot_info` (v5), the
+  kernel publishes it as the `boot.partition` kernel-environment variable, the
+  device manager marks the volume whose backing partition covers that LBA range
+  with `VOLUME_DESCRIPTOR_FLAG_BOOT`, and `ATTR{boot}` matches it. Swapping the
+  rule to `SUBSYSTEM=="volume", ATTR{boot}=="1"` selects the right volume on the
+  first try.
+
+  It is blocked on the partition-proxy bug above: `/boot` is the first mount that
+  would serve file reads from a partition, and the process manager's first
+  `spawn_path` read of `/boot/system/services/sysinit.wap` fails with fs.IO. The
+  rule is one line, and it goes in once a partition can serve a file read.
 
   `/vwfs` is done -- it was `DRIVER=="virtio-blk", ATTR{unit}=="48"` and is now a
   volume rule matching on uuid. `/user` matches

@@ -447,11 +447,11 @@ registered anything and finds nothing, and every disk on the system is probed as
 its driver publishes it. The subscription was already required for a driver that
 had not probed yet; it now carries the whole load.
 
-The Zig dependency this placement was avoiding turned out to be already paid.
-CMake derives the initfs payload list from every `source =` line in
-`scripts/initfs.toml`, so a Zig artifact there makes the boot image unbuildable
-without a Zig toolchain — but the native gfx-compositor and font-service are Zig,
-so no configuration builds without one regardless.
+This puts Zig on the critical build path: CMake derives the initfs payload list
+from every `source =` line in `scripts/initfs.toml`, so a Zig artifact there
+makes the boot image unbuildable without a Zig toolchain. That costs nothing in
+practice — the native gfx-compositor and font-service are Zig, so no
+configuration builds without one.
 
 ---
 

@@ -9,7 +9,7 @@
 
 #include <stdint.h>
 
-#define BOOT_INFO_VERSION 4u /* increment on any boot_info_t field change */
+#define BOOT_INFO_VERSION 5u /* increment on any boot_info_t field change */
 /* boot_info_t.flags.  The three PRESENT bits say whether the corresponding
  * pointer/size pair is meaningful; a clear bit means the kernel must not read the
  * pointer at all.  The top nibble of the low 12 bits carries the UEFI
@@ -18,6 +18,7 @@
 #define BOOT_INFO_FLAG_GOP_PRESENT (1u << 0)
 #define BOOT_INFO_FLAG_MODULES_PRESENT (1u << 1)
 #define BOOT_INFO_FLAG_INITFS_PRESENT (1u << 2)
+#define BOOT_INFO_FLAG_BOOT_PARTITION_PRESENT (1u << 3)
 #define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT 8u
 #define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK (0xFu << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT)
 
@@ -128,6 +129,23 @@ typedef struct {
      * with its length in bytes.  NULL/0 when the initfs carries no such entry. */
     void* boot_config;
     uint32_t boot_config_size;
+    /* Which partition this system was loaded from, taken from the MEDIA/HARDDRIVE
+     * node of the loaded image's device path.  Valid only with
+     * BOOT_INFO_FLAG_BOOT_PARTITION_PRESENT, which is clear when the firmware
+     * booted from something with no such node — a network boot, or a whole disk
+     * with no partition table.
+     *
+     * The LBAs are on the WHOLE disk, so they are directly comparable with what a
+     * partition-table reader publishes; that pair is what identifies the volume
+     * this system booted from.  boot_partition_signature_type says how the
+     * signature reads: 1 is a 32-bit MBR disk signature in the first four bytes,
+     * 2 a 16-byte GPT partition GUID, 0 neither. */
+    uint64_t boot_partition_start;
+    uint64_t boot_partition_size;
+    uint8_t boot_partition_signature[16];
+    uint32_t boot_partition_number;
+    uint8_t boot_partition_signature_type;
+    uint8_t boot_partition_reserved[3];
 } boot_info_t;
 
 #endif

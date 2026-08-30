@@ -158,6 +158,26 @@ class VolumeManagerTest(unittest.TestCase):
             "the volume manager did not publish exactly three volumes",
         )
 
+    def test_the_firmwares_boot_partition_reaches_the_system(self) -> None:
+        """The identity a `SUBSYSTEM=="volume", ATTR{boot}=="1"` rule matches on.
+
+        Nothing on an ESP can supply it: its filesystem is ordinary FAT, its
+        label is firmware-specific, and an MBR gives it no partition label and no
+        PARTUUID. The firmware is the only thing that knows which volume this
+        system came from, so the bootloader reads the HARDDRIVE node of its own
+        device path and the kernel publishes the LBA range.
+
+        Only the publication is asserted here. Whether `/boot` USES it is a
+        separate question, and today it does not: see the zero-copy-through-a-
+        partition entry in docs/TASKS.md.
+        """
+        assert self.session is not None
+        self.assertTrue(
+            self.session.expect(b"[kernel] boot.partition ", timeout_s=90),
+            "the kernel published no boot.partition -- the bootloader found no "
+            "HARDDRIVE node in its device path, or boot_info did not carry it",
+        )
+
     def test_the_inventory_receives_what_the_class_advertises(self) -> None:
         """Published to the device manager, not only registered under the class.
 

@@ -8,18 +8,15 @@ was invisible to the partition manager for the rest of the boot. Its partitions
 were never published, so no `SUBSYSTEM=="partition"` rule could match them and no
 filesystem on that disk could be mounted, however correct its table.
 
-This is now the ONLY path a disk can take. The partition manager is an initfs
-payload, spawned ahead of every disk driver so that /boot can be mounted from a
-volume, so its startup sweep always finds nothing and the class subscription is
-what publishes every partition on the system. When the bug was found the spawn
-order was the other way round and this was the exceptional case; keeping the test
-is worth more now, not less, because a subscription that stopped delivering would
-take the whole boot with it.
+This is the ONLY path a disk can take. The partition manager is an initfs
+payload, spawned ahead of every disk driver so /boot can be mounted from a
+volume, so its startup sweep finds nothing and the class subscription publishes
+every partition on the system. A subscription that stopped delivering takes the
+whole boot with it.
 
-The disk here is virtio-blk rather than ATA for a reason that outlives that
-change: it negotiates a PCI device, claims an MSI-X vector and sets up a
-virtqueue before publishing, so it arrives far enough behind the ATA drives to
-separate the two paths in a log.
+The disk here is virtio-blk rather than ATA because it negotiates a PCI device,
+claims an MSI-X vector and sets up a virtqueue before publishing, so it arrives
+far enough behind the ATA drives to separate the two paths in a log.
 
 The disk is built here rather than checked in: `scripts/make_gpt_image.py` is the
 tree's own GPT writer, and QEMU cannot present a GPT any other way -- a

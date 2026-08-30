@@ -63,44 +63,6 @@ uint32_t fat_table_lba(const fat_mount_t* mnt) {
     return mnt->boot_lba + mnt->reserved_sectors;
 }
 
-/* Parse an MBR partition table in `sector`; on success writes the first FAT
- * partition's start LBA to *out_lba.  Returns 0 or -1.
- *
- * Reached ONLY when this driver was spawned for a WHOLE DISK whose LBA 0 holds a
- * table rather than a boot sector. A driver spawned for a partition never gets
- * here: that device rebases every transfer onto its window, so its LBA 0 is the
- * boot sector and the table it came from was read by the partition manager.
- *
- * TODO: delete this along with the whole-disk spawn it serves. /boot is still
- * mounted from the whole ATA disk because the partition manager is spawned from
- * the BOOT rules, which cannot load until /boot is mounted; moving it into
- * initfs and teaching it to probe disks that register after it starts is what
- * closes that circle. Until then a disk holding several FAT partitions mounts
- * whichever comes first in the table. */
-static int fat_try_parse_mbr(const uint8_t* sector, uint32_t* out_lba) {
-    uint16_t sig = (uint16_t)sector[510] | ((uint16_t)sector[511] << 8);
-    if (sig != 0xAA55) {
-        return -1;
-    }
-    const fat_mbr_entry_t* entries = ptr_cast(const fat_mbr_entry_t, (sector + 446));
-    for (uint32_t i = 0; i < 4; ++i) {
-        uint8_t type = entries[i].type;
-        if (type == 0x00) {
-            continue;
-        }
-        if (type == 0xEE) {
-            fat_log("GPT detected (unsupported)\n");
-            return -1;
-        }
-        if (type == 0x01 || type == 0x04 || type == 0x06 || type == 0x0B || type == 0x0C ||
-            type == 0x0E) {
-            *out_lba = entries[i].lba_start;
-            return 0;
-        }
-    }
-    return -1;
-}
-
 /* Parse the BPB in `sector` into *mnt (mnt->boot_lba must already be set to the
  * volume's boot-sector LBA).  Returns 0 or -1. */
 static int fat_parse_boot(fat_mount_t* mnt, const uint8_t* sector) {
@@ -182,7 +144,6 @@ void fat_mount_init(fat_mount_t* mnt, uint8_t is_partition) {
     mnt->dir_sectors = 0;
     mnt->cont = 0;
     mnt->mounted = 0;
-    mnt->tried_mbr = 0;
 }
 
 int fat_mount_ready(const fat_mount_t* mnt) {
@@ -194,9 +155,9 @@ int fat_mount_ready(const fat_mount_t* mnt) {
  * Every block device is addressed from its own LBA 0, partitions included -- a
  * partition device rebases each transfer onto its window before forwarding it,
  * so the absolute lba_start in its descriptor is where the volume SITS, never an
- * address a client sends. The read below is therefore LBA 0 in both cases, and
- * what differs is what may be found there: a partition holds a boot sector, a
- * whole disk may hold a table instead. See fat_try_parse_mbr.
+ * address a client sends. LBA 0 therefore holds this volume's boot sector, and
+ * anything else there is a fault: reading a partition table is the partition
+ * manager's job, and it has already published what it found.
  *
  * Locals are declared without initializers because the resume switch jumps past
  * their declarations (they are assigned before use, and none are carried across
@@ -205,36 +166,24 @@ fat_r_t fat_geom_mount_step(fat_mount_t* mnt, fat_block_t* blk) {
     const uint8_t* sector;
     uint16_t sig;
     uint16_t bytes_per_sector;
-    uint32_t part_lba;
 
     FAT_CO_BEGIN(mnt);
     if (mnt->mounted) {
         FAT_CO_DONE(mnt);
     }
     mnt->boot_lba = 0;
-    mnt->tried_mbr = 0;
     FAT_CO_READ(mnt, blk, 0u); /* the device's first sector */
 
     sector = fat_block_sector(blk);
     sig = (uint16_t)sector[510] | ((uint16_t)sector[511] << 8);
     bytes_per_sector = (uint16_t)sector[11] | ((uint16_t)sector[12] << 8);
     if (sig != 0xAA55 || bytes_per_sector == 0) {
-        /* A partition whose first sector is not a BPB is a fault, not an
-         * invitation to go looking: the partition manager read the table and
-         * said the filesystem is here, and a partition device cannot contain a
-         * table to search anyway. */
-        if (mnt->is_partition) {
-            fat_log("no FAT boot sector at the partition start\n");
-            FAT_CO_FAIL(mnt, blk, WASMOS_ERR_FS_NOT_READY);
-        }
-        /* Whole-disk spawn: LBA 0 is an MBR, not a BPB. */
-        if (fat_try_parse_mbr(sector, &part_lba) != 0) {
-            fat_log("no FAT boot sector\n");
-            FAT_CO_FAIL(mnt, blk, WASMOS_ERR_FS_NOT_READY);
-        }
-        mnt->tried_mbr = 1;
-        mnt->boot_lba = part_lba;
-        FAT_CO_READ(mnt, blk, mnt->boot_lba); /* partition boot sector */
+        /* A first sector that is not a BPB is a fault, not an invitation to go
+         * looking for a partition table. Mount policy names a VOLUME, and the
+         * partition manager is what reads a table and publishes what is in it;
+         * a second reader here would disagree with it sooner or later. */
+        fat_log("no FAT boot sector at the volume start\n");
+        FAT_CO_FAIL(mnt, blk, WASMOS_ERR_FS_NOT_READY);
     }
 
     if (fat_parse_boot(mnt, fat_block_sector(blk)) != 0) {

@@ -163,8 +163,8 @@ class VolumeManagerTest(unittest.TestCase):
             "the volume manager did not publish exactly three volumes",
         )
 
-    def test_the_firmwares_boot_partition_reaches_the_system(self) -> None:
-        """The identity a `SUBSYSTEM=="volume", ATTR{boot}=="1"` rule matches on.
+    def test_boot_mounts_from_the_volume_the_firmware_named(self) -> None:
+        """/boot names no disk either, and it is the case with no other answer.
 
         Nothing on an ESP can supply it: its filesystem is ordinary FAT, its label
         is firmware-specific, and an MBR gives it no partition label and no
@@ -172,16 +172,39 @@ class VolumeManagerTest(unittest.TestCase):
         system came from, so the bootloader reads the HARDDRIVE node of its own
         device path and the kernel publishes the LBA range.
 
-        Only the publication is asserted. Whether `/boot` USES it is a separate
-        question, and today it does not: mounting from a volume happens later than
-        mounting from a block rule, which exposes a yield-spin in the kernel's
-        broker self-test. See docs/TASKS.md.
+        Asserted on the PARTITION (`ata:0p1`), which is the point: /boot mounts
+        the volume, so fs_fat is handed a device whose LBA 0 is a boot sector and
+        has no table to read.
         """
         assert self.session is not None
         self.assertTrue(
             self.session.expect(b"[kernel] boot.partition ", timeout_s=90),
             "the kernel published no boot.partition -- the bootloader found no "
             "HARDDRIVE node in its device path, or boot_info did not carry it",
+        )
+        self.assertTrue(
+            self.session.expect(
+                b"[device-manager] volume rule queued spawn mount=/boot "
+                b"id=volume:block:ata:0p1 on block:ata:0p1",
+                timeout_s=90,
+            ),
+            "/boot did not bind to the ESP volume -- the boot partition reached "
+            "the device manager but matched no volume, or matched the wrong one",
+        )
+
+    def test_no_mount_rule_names_a_disk(self) -> None:
+        """The layer's whole point, as a property of the boot rather than a rule.
+
+        Every mount is now selected by what its volume IS, or by which partition
+        holds it. A `block rule queued spawn` line would mean a filesystem was
+        placed by naming a controller and a unit -- which is what this set out to
+        retire, and which /boot was the last holdout of.
+        """
+        assert self.session is not None
+        self.assertNotIn(
+            b"block rule queued spawn",
+            self.session.buf,
+            "a filesystem was mounted by a rule naming a disk and a unit",
         )
 
     def test_waiting_for_a_service_does_not_spin(self) -> None:

@@ -796,15 +796,19 @@ linked feature documents for rationale and rollout plans.
   now find nothing and every disk is probed as its driver publishes it, so the
   `block` class subscription is the only discovery path rather than a supplement.
   (`architecture/36-partition-manager-and-block-identity.md` §2).
-- The volume the firmware booted from is identified end to end, and `ATTR{boot}`
-  matches it: the bootloader reads the MEDIA/HARDDRIVE node of its own device path
-  into `boot_info` (version 5), the kernel publishes the LBA range as the
+- `/boot` mounts from `SUBSYSTEM=="volume", ATTR{boot}=="1"`, so NO mount rule
+  names a disk. The bootloader reads the MEDIA/HARDDRIVE node of its own device
+  path into `boot_info` (version 5), the kernel publishes the LBA range as the
   `boot.partition` kernel-environment variable, and the device manager marks the
   volume whose backing partition covers it with `VOLUME_DESCRIPTOR_FLAG_BOOT`.
   `env_get` carries it rather than a host call of its own: one string, read once,
-  by one service. `/boot` does NOT use the rule yet -- mounting later exposes a
-  yield-spin in the kernel's broker self-test, which waits on a service that comes
-  from `/boot` (`TASKS.md`) (`architecture/37-volume-manager.md` §10).
+  by one service. `fat_try_parse_mbr` is deleted -- the partition manager is the
+  only partition-table reader left (`architecture/37-volume-manager.md` §10).
+- Two unbounded waits are bounded, both exposed by `/boot` mounting later from a
+  volume than from a disk rule. The kernel's broker self-test blocks on a
+  readiness broadcast instead of polling the process table on every dispatch, and
+  `pm_recv_fs_reply` gives up on a deadline instead of parking the process manager
+  forever when a filesystem dies mid-mount.
 - The partition proxy REBORROWS a client's transfer buffer to the disk backend.
   Forwarding the client's own `dst_borrow_id` gave the backend a handle nothing
   resolved for it, because a borrow is held per context: a partition mounted (the

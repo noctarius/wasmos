@@ -387,32 +387,32 @@ permanently one value — a field nothing sets is one a later reader will trust.
 
 ## 10. Constraints inherited from the block layer
 
-**`/boot` keeps a whole-disk rule, and everything the volume rule needs works.**
-Both managers are initfs payloads, so a volume for the ESP exists before `/boot`
-is mounted, and `ATTR{boot}=="1"` selects the volume the FIRMWARE loaded this
-system from. Nothing on an ESP can supply that identity — its filesystem is
-ordinary FAT, its label is firmware-specific (`QEMU VVFAT` here), and an MBR gives
-it no partition label and no PARTUUID — so it comes from the bootloader, which
-reads the MEDIA/HARDDRIVE node of its own device path into `boot_info`; the kernel
-publishes the LBA range as the `boot.partition` kernel-environment variable, and
-the device manager marks the volume whose backing partition covers it. Swapping
-the rule selects the ESP on the first try.
+**`/boot` mounts from a volume, and no mount rule names a disk.** Both managers
+are initfs payloads, so a volume for the ESP exists before `/boot` is mounted, and
+`ATTR{boot}=="1"` selects the volume the FIRMWARE loaded this system from. Nothing
+on an ESP can supply that identity — its filesystem is ordinary FAT, its label is
+firmware-specific (`QEMU VVFAT` here), and an MBR gives it no partition label and
+no PARTUUID — so it comes from the bootloader, which reads the MEDIA/HARDDRIVE
+node of its own device path into `boot_info`; the kernel publishes the LBA range
+as the `boot.partition` kernel-environment variable, and the device manager marks
+the volume whose backing partition covers it.
 
-What stops the swap is a YIELD-SPIN one layer away. A volume rule mounts `/boot`
-later than a block rule, and the kernel's broker self-test spins on
-`PROCESS_RUN_YIELDED` until `font-service` is ready — a service that starts from
-`/boot`. The boot then never finishes. See `docs/TASKS.md`; `fat_try_parse_mbr`
-stays until the rule does.
+`fat_try_parse_mbr` is gone with the whole-disk mount that needed it: the
+partition manager is the only partition-table reader in the system.
 
-Attempting the swap did find and fix a real defect beneath it, because `/boot`
-would be the first mount to serve FILE reads from a partition: the partition
-manager passed a client's `dst_borrow_id` through to the disk backend, and a
-borrow is held per CONTEXT, so that id named a grant between the client and the
-proxy and resolved to nothing for the disk. It REBORROWS now —
-`xfer_buffer_reborrow` mints the backend a handle within the proxy's own rights,
-narrowed to the transfer's direction, and the chain cascade-revokes. The mount
-path was never affected because it reads into the caller's own block buffer, which
-is why a partition could mount and then fail on its first file read.
+Getting here took two fixes one layer down, both found because `/boot` mounts
+LATER from a volume than it did from a disk rule, and both pre-existing:
+
+- The partition proxy forwarded a client's `dst_borrow_id` to the disk backend. A
+  borrow is held per CONTEXT, so that id named a grant between the client and the
+  proxy and resolved to nothing for the disk. It REBORROWS now. Invisible until a
+  filesystem served FILE reads from a partition, the mount path using the
+  caller's own block buffer.
+- Two unbounded waits turned "later" into "never": the kernel's broker self-test
+  polled for `font-service` on `PROCESS_RUN_YIELDED`, and `pm_recv_fs_reply`
+  blocked with no deadline, so a filesystem that died mid-mount parked the process
+  manager for the rest of the boot. Both now block on something that wakes them,
+  with a deadline where no wake is guaranteed.
 
 **Two volumes on one disk collide on `fs.backend`.**
 `FSMGR_BACKEND_INSTANCE(kind, unit)` packs `(kind, unit)`, and a partition

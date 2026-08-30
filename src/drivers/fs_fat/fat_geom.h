@@ -43,7 +43,6 @@ typedef struct {
     /* Lazy mount bring-up state (fat_geom_mount_step is a coroutine on *mnt). */
     int cont;        /* coroutine resume point */
     uint8_t mounted; /* 1 once the BPB is parsed */
-    uint8_t tried_mbr;
 } fat_mount_t;
 
 /* Initialize *mnt to the unmounted state (call once at driver init). */

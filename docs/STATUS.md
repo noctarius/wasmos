@@ -774,16 +774,21 @@ linked feature documents for rationale and rollout plans.
   `newfs_msdos`, QEMU vvfat, `mkfs_wfs`, `make_gpt_image.py` --
   in `tests/unit/fixtures_disk_images.zig`.
 - Mount policy reads volumes. `SUBSYSTEM=="volume"` matches `ATTR{fstype}`,
-  `ATTR{label}` and `ATTR{uuid}`, and `/wfs` mounts from
-  `ATTR{fstype}=="wfs"` -- naming no disk, no unit and no backend. That is the
+  `ATTR{label}` and `ATTR{uuid}`. `/wfs` and `/vwfs` both mount from fstype plus
+  uuid -- naming no disk, unit, backend, partition or transport. `/wfs` is the
   case the block layer could not express at all: the WFS image carries no
-  partition table, so nothing publishes a partition for a rule to match.
+  partition table, so nothing publishes a partition for a rule to match. The two
+  rules differ ONLY in identity, which is what makes a transport not part of a
+  volume's identity; before that, `/vwfs` had to say `DRIVER=="virtio-blk",
+  ATTR{unit}=="48"`.
+  `ATTR{uuid}` takes the FORMAT's bytes in on-disk order at the format's own
+  width -- sixteen for WFS, four for a FAT serial -- and is a separate parser from
+  `ATTR{partuuid}`/`ATTR{type}`, which keep GPT's mixed-endian field order.
   `ATTR{label}` is the FILESYSTEM label and is not `ATTR{partlabel}`; the rule
   engine refuses a rule that uses either on the other's subsystem. The filesystem
   driver is handed the BACKING block device's id, backend and unit, because a
-  driver mounts a device and the volume is what chose it. `/user` and `/vwfs`
-  still match on a partition and a unit respectively
-  (`architecture/37-volume-manager.md` §4).
+  driver mounts a device and the volume is what chose it. `/user` still matches on
+  a partition label (`architecture/37-volume-manager.md` §4).
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.

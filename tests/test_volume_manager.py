@@ -168,8 +168,8 @@ class VolumeManagerTest(unittest.TestCase):
     def test_a_volume_rule_mounts_without_naming_a_disk(self) -> None:
         """The point of the layer, end to end.
 
-        /wfs is matched by `SUBSYSTEM=="volume", ATTR{fstype}=="wfs"` -- no disk,
-        no unit, no backend, no partition. That case is unreachable any other way:
+        /wfs is matched by `SUBSYSTEM=="volume"` on fstype and uuid -- no disk, no
+        unit, no backend, no partition. That case is unreachable any other way:
         the WFS image has no partition table, so the partition manager publishes
         nothing for it and no `SUBSYSTEM=="partition"` rule can name it, leaving
         only a rule naming a disk and a unit.
@@ -177,12 +177,16 @@ class VolumeManagerTest(unittest.TestCase):
         The spawn is asserted on the BACKING device, because that is what a
         filesystem driver mounts. The volume selected it; the block device is
         what gets opened.
+
+        mount= is part of the expectation: with two WFS volumes on the system it
+        is the pairing of path to volume that this layer decides, and a message
+        naming only the volume cannot show which path took it.
         """
         assert self.session is not None
         self.assertTrue(
             self.session.expect(
-                b"[device-manager] volume rule queued spawn id=volume:block:ata:2 "
-                b"on block:ata:2",
+                b"[device-manager] volume rule queued spawn mount=/wfs "
+                b"id=volume:block:ata:2 on block:ata:2",
                 timeout_s=90,
             ),
             "no volume rule fired for the WFS volume -- it was published but "

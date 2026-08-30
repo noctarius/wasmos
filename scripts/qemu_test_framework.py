@@ -27,6 +27,13 @@ class QemuConfig:
     # FAT disks this cannot be a synthetic FAT directory, so it is an image
     # mkfs_wfs built; absent, the guest simply has no WFS unit to mount.
     wfs_image: str = ""
+    # A SECOND WFS volume, for a test that wants one filesystem reached over two
+    # transports. Separate from wfs_image rather than the same file attached
+    # twice, because the two must be distinguishable: mkfs_wfs gives each image
+    # its own uuid, and a mount rule that names a volume by identity cannot tell
+    # apart two attachments of one file. Attached by the test that wants it, not
+    # by build_qemu_command.
+    wfs_virtio_image: str = ""
     # Whether the WFS drive gets a throwaway copy-on-write overlay. True keeps
     # the suite repeatable; a test that has to prove a write REACHED the media --
     # the clean-unmount flag surviving a halt, say -- sets it False and must then
@@ -67,6 +74,10 @@ class QemuConfig:
         if not self.wfs_image:
             self.wfs_image = os.environ.get(
                 "WASMOS_WFS_IMAGE", os.path.join("build", "wfs.img")
+            )
+        if not self.wfs_virtio_image:
+            self.wfs_virtio_image = os.environ.get(
+                "WASMOS_WFS_VIRTIO_IMAGE", os.path.join("build", "wfs_virtio.img")
             )
         if self.userfs_image:
             return
@@ -246,6 +257,9 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     esp_dir = os.environ.get("WASMOS_ESP", os.path.join(build_dir, "esp"))
     userfs_image = default_userfs_image(esp_dir)
     wfs_image = os.environ.get("WASMOS_WFS_IMAGE", os.path.join(build_dir, "wfs.img"))
+    wfs_virtio_image = os.environ.get(
+        "WASMOS_WFS_VIRTIO_IMAGE", os.path.join(build_dir, "wfs_virtio.img")
+    )
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
     # On by default: the monitor is what makes dump_stall_state possible, and a
     # stall that produces no diagnosis is the failure mode this is here to end.
@@ -266,6 +280,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         esp_dir=esp_dir,
         userfs_image=userfs_image,
         wfs_image=wfs_image,
+        wfs_virtio_image=wfs_virtio_image,
         isolate_esp=isolate_esp,
         enable_monitor=enable_monitor,
         monitor_socket=monitor_socket,

@@ -1573,6 +1573,7 @@ static int volume_rule_matches(const block_fs_rule_t* rule,
 static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec) {
     uint32_t queued = 0;
     const block_device_record_t* backing = 0;
+    char queued_msg[160];
     if (!rec || !rec->in_use || (rec->desc.flags & VOLUME_DESCRIPTOR_FLAG_PRESENT) == 0u) {
         return 0;
     }
@@ -1601,16 +1602,19 @@ static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec) {
             rule->matched_unit = (uint8_t)backing->desc.unit;
             (void)str_copy(rule->matched_id, sizeof(rule->matched_id), backing->desc.canonical_id);
             queued++;
+            /* Reported per RULE and naming its mount, not once per volume: two
+             * rules selecting different volumes is the ordinary case now that a
+             * rule can match on identity, and "which volume ended up at which
+             * path" is the one fact this layer exists to decide. A message that
+             * named only the volume left that unanswerable from a log. */
+            (void)snprintf(queued_msg,
+                           sizeof(queued_msg),
+                           "[device-manager] volume rule queued spawn mount=%s id=%s on %s\n",
+                           rule->mount[0] ? rule->mount : "(none)",
+                           rec->desc.canonical_id,
+                           backing->desc.canonical_id);
+            console_write(queued_msg);
         }
-    }
-    if (queued > 0u) {
-        char queued_msg[128];
-        (void)snprintf(queued_msg,
-                       sizeof(queued_msg),
-                       "[device-manager] volume rule queued spawn id=%s on %s\n",
-                       rec->desc.canonical_id,
-                       backing->desc.canonical_id);
-        console_write(queued_msg);
     }
     return queued;
 }

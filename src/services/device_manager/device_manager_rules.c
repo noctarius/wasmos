@@ -306,6 +306,63 @@ static int parse_guid(const char* s, uint8_t* out) {
     return 0;
 }
 
+/* A VOLUME's identity from its rule spelling, into `out` zero-padded to
+ * VOLUME_DESCRIPTOR_UUID_MAX.
+ *
+ * Deliberately not parse_guid. A volume uuid is not a GPT GUID: it is whatever
+ * bytes the FILESYSTEM stores, and no format defines them as a GUID's
+ * mixed-endian fields. WFS keeps sixteen opaque bytes and mkfs_wfs both takes
+ * and prints them in order; FAT's whole notion of identity is a four-byte volume
+ * serial. Reading either through GUID order reverses the first eight bytes, and
+ * the rule then parses cleanly and never matches -- the failure mode parse_guid's
+ * own comment calls miserable to debug.
+ *
+ * So: hex pairs in order, hyphens ignored wherever they fall, since the
+ * canonical grouping is presentation and a uuid gets pasted from a formatter's
+ * report as readily as from its argument. Width is the FORMAT's, one to
+ * VOLUME_DESCRIPTOR_UUID_MAX bytes; the remainder stays zero, matching how a
+ * descriptor pads a short identity, so the comparison can be full width.
+ *
+ * Returns 0 on success. */
+static int parse_volume_uuid(const char* s, uint8_t* out) {
+    uint32_t n = 0;
+    uint32_t i = 0;
+    int hi = -1;
+
+    if (!s || !out) {
+        return -1;
+    }
+    for (i = 0; i < (uint32_t)VOLUME_DESCRIPTOR_UUID_MAX; ++i) {
+        out[i] = 0;
+    }
+    for (i = 0; s[i] != '\0'; ++i) {
+        int nib;
+        if (s[i] == '-') {
+            continue;
+        }
+        nib = hex_nibble(s[i]);
+        if (nib < 0) {
+            return -1;
+        }
+        if (hi < 0) {
+            hi = nib;
+            continue;
+        }
+        if (n >= (uint32_t)VOLUME_DESCRIPTOR_UUID_MAX) {
+            return -1;
+        }
+        out[n++] = (uint8_t)((hi << 4) | nib);
+        hi = -1;
+    }
+    /* A trailing half-byte means the text was cut, and a cut identity is a
+     * PREFIX of the intended one -- which would match a different volume rather
+     * than none. Refuse it. */
+    if (hi >= 0 || n == 0u) {
+        return -1;
+    }
+    return 0;
+}
+
 /* PARTITION_SCHEME_* from its rule spelling. Returns 0 on success. */
 static int parse_scheme(const char* s, uint32_t* out) {
     if (strcmp(s, "none") == 0) {
@@ -550,7 +607,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
             continue;
         }
         if (extract_op_value(tok, "ATTR{uuid}", "==", uuid_text, sizeof(uuid_text)) == 0) {
-            if (parse_guid(uuid_text, rule.uuid) != 0) {
+            if (parse_volume_uuid(uuid_text, rule.uuid) != 0) {
                 return -1;
             }
             rule.has_uuid = 1;

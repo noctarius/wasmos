@@ -161,6 +161,44 @@ static void publish_partition(uint8_t backend, uint8_t unit, uint32_t slot, cons
     registry_add_block(&desc);
 }
 
+/* A volume on `unit`'s disk, as the volume manager publishes one. The backing
+ * device is published first and named by FINGERPRINT, because that is how the
+ * matcher resolves it: a helper that set `backing_instance` to anything else
+ * would exercise a resolution path the service does not have. */
+static void publish_volume(uint8_t backend, uint8_t unit, uint32_t fs_type, const char* label,
+                           const uint8_t* uuid, uint32_t uuid_len) {
+    wasmos_volume_descriptor_t desc;
+    char backing_id[64];
+
+    publish_block_device(backend, unit);
+    (void)snprintf(backing_id,
+                   sizeof(backing_id),
+                   "block:%s:%u",
+                   backend == (uint8_t)BLOCK_BACKEND_ATA ? "ata" : "virtio-blk",
+                   (unsigned)unit);
+
+    memset(&desc, 0, sizeof(desc));
+    desc.version = VOLUME_DESCRIPTOR_VERSION;
+    desc.fs_type = fs_type;
+    desc.backing_instance = wasmos_block_fingerprint(backing_id);
+    desc.sector_bytes = 512u;
+    desc.lba_count = 32768u;
+    desc.flags = VOLUME_DESCRIPTOR_FLAG_PRESENT;
+    if (label) {
+        desc.flags |= VOLUME_DESCRIPTOR_FLAG_HAS_LABEL;
+        (void)snprintf(desc.label, sizeof(desc.label), "%s", label);
+    }
+    if (uuid && uuid_len) {
+        desc.flags |= VOLUME_DESCRIPTOR_FLAG_HAS_UUID;
+        desc.uuid_len = uuid_len;
+        for (uint32_t i = 0; i < uuid_len && i < (uint32_t)VOLUME_DESCRIPTOR_UUID_MAX; ++i) {
+            desc.uuid[i] = uuid[i];
+        }
+    }
+    (void)snprintf(desc.canonical_id, sizeof(desc.canonical_id), "volume:%s", backing_id);
+    registry_add_volume(&desc);
+}
+
 /* Load one rule line through the real parser, so these cases exercise the
  * parsing and the matching together -- a rule that parses into the wrong fields
  * and a matcher that reads the wrong fields are indistinguishable from either
@@ -349,6 +387,109 @@ static void a_partition_is_matched_by_its_type_guid(void) {
           "and the ESP type GUID matches its mixed-endian on-disk bytes");
 }
 
+/* Regression: 2026-08-30-volume-uuid-read-in-gpt-byte-order.
+ *
+ * ATTR{uuid} was parsed by parse_guid, which reads the GPT mixed-endian on-disk
+ * form with its first three groups reversed. A volume uuid is not a GPT GUID: it
+ * is whatever bytes the FORMAT stores, and mkfs_wfs writes and prints them in
+ * order. A rule spelling the uuid mkfs printed therefore compared bytes
+ * 3,2,1,0,5,4,7,6 against 0,1,2,3,4,5,6,7 and could never fire -- silently, since
+ * a rule that matches nothing looks exactly like a device that is absent.
+ *
+ * The bytes below are deliberately ascending, so a reversal of any group shows
+ * up as a mismatch rather than surviving a palindrome. */
+static void a_volume_is_matched_by_the_uuid_its_formatter_printed(void) {
+    static const uint8_t WFS_UUID[16] = {0x01,
+                                         0x02,
+                                         0x03,
+                                         0x04,
+                                         0x05,
+                                         0x06,
+                                         0x07,
+                                         0x08,
+                                         0x09,
+                                         0x0a,
+                                         0x0b,
+                                         0x0c,
+                                         0x0d,
+                                         0x0e,
+                                         0x0f,
+                                         0x10};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{fstype}==\"wfs\", "
+                    "ATTR{uuid}==\"01020304-0506-0708-090a-0b0c0d0e0f10\", "
+                    "ENV{MOUNT}=\"/wfs\", RUN+=\"system/drivers/fs_wfs.wap\"\n") == 1,
+          "the volume-uuid rule parses");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, NULL, WFS_UUID, 16u);
+    check(g_dm.block_fs_rules[0].queued == 1u,
+          "a volume matches the uuid spelled in the order its formatter prints");
+}
+
+/* The hyphens are presentation. Accepting the bare form as well is what lets a
+ * uuid be pasted from either mkfs_wfs's `--uuid` argument or its report without
+ * the two disagreeing about which one a rule takes. */
+static void a_volume_uuid_may_be_spelled_without_hyphens(void) {
+    static const uint8_t WFS_UUID[16] = {0x01,
+                                         0x02,
+                                         0x03,
+                                         0x04,
+                                         0x05,
+                                         0x06,
+                                         0x07,
+                                         0x08,
+                                         0x09,
+                                         0x0a,
+                                         0x0b,
+                                         0x0c,
+                                         0x0d,
+                                         0x0e,
+                                         0x0f,
+                                         0x10};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", "
+                    "ATTR{uuid}==\"0102030405060708090a0b0c0d0e0f10\", "
+                    "ENV{MOUNT}=\"/wfs\", RUN+=\"system/drivers/fs_wfs.wap\"\n") == 1,
+          "the unhyphenated form parses");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, NULL, WFS_UUID, 16u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "and names the same volume");
+}
+
+/* A FAT volume serial is four bytes, not sixteen. Requiring a full GUID would
+ * leave every FAT volume unaddressable by identity, which is most of them. */
+static void a_short_format_identity_is_spelled_at_its_own_width(void) {
+    static const uint8_t FAT_SERIAL[4] = {0x1a, 0x2b, 0x3c, 0x4d};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{fstype}==\"fat\", "
+                    "ATTR{uuid}==\"1a2b3c4d\", "
+                    "ENV{MOUNT}=\"/user\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "a four-byte volume serial parses");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 1u, (uint32_t)FS_TYPE_FAT, "USER", FAT_SERIAL, 4u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "and matches the volume carrying it");
+}
+
+/* What the uuid matcher is FOR: two volumes of the same format, told apart by
+ * identity alone. Without this the only discriminator left is the disk each sits
+ * on, which is the naming mount policy exists to stop. */
+static void two_volumes_of_one_format_are_told_apart_by_uuid(void) {
+    static const uint8_t UUID_A[16] = {0xaa, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    static const uint8_t UUID_B[16] = {0xbb, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{fstype}==\"wfs\", "
+                    "ATTR{uuid}==\"bb000002-0000-0000-0000-000000000000\", "
+                    "ENV{MOUNT}=\"/vwfs\", RUN+=\"system/drivers/fs_wfs.wap\"\n") == 1,
+          "the rule names one of two identically-formatted volumes");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, NULL, UUID_A, 16u);
+    check(g_dm.block_fs_rules[0].queued == 0u, "the volume it does not name is skipped");
+
+    publish_volume(
+        (uint8_t)BLOCK_BACKEND_VIRTIO_BLK, 48u, (uint32_t)FS_TYPE_WFS, NULL, UUID_B, 16u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "and the one it names is matched");
+}
+
 /* A malformed matcher rejects the RULE. Dropping the attribute instead would
  * widen the rule to everything its author did not ask for, and on the mount path
  * that means a filesystem on the wrong volume. */
@@ -423,6 +564,10 @@ int main(void) {
     a_partition_rule_does_not_match_a_disk();
     a_partition_is_matched_by_its_label();
     a_partition_is_matched_by_its_type_guid();
+    a_volume_is_matched_by_the_uuid_its_formatter_printed();
+    a_volume_uuid_may_be_spelled_without_hyphens();
+    a_short_format_identity_is_spelled_at_its_own_width();
+    two_volumes_of_one_format_are_told_apart_by_uuid();
     a_malformed_matcher_rejects_the_rule();
     a_partition_matcher_on_a_disk_rule_is_refused();
     an_overlong_rule_line_is_refused();

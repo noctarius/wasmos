@@ -3,9 +3,10 @@
 > **Documentation status: Mixed reference and proposal.** §1–§4 and §6–§8 are
 > implemented and are the current baseline: the recognisers, the `volume` class
 > and its descriptor, the suppression rule, and mount policy on volumes all run
-> on every boot — `/wfs` mounts from `SUBSYSTEM=="volume", ATTR{fstype}=="wfs"`,
-> naming no disk. §5 (exclusivity) is still a proposal: `VOLUME_IPC_CLAIM_REQ`
-> exists but nothing sends it.
+> on every boot — `/wfs` and `/vwfs` both mount from `SUBSYSTEM=="volume"` on
+> fstype and uuid, naming no disk, unit, backend, partition or transport. §5
+> (exclusivity) is still a proposal: `VOLUME_IPC_CLAIM_REQ` exists but nothing
+> sends it.
 
 **Sources this proposal changes**: `src/drivers/partition_manager/`,
 `src/services/device_manager/device_manager_rules.c`, `src/drivers/fs_fat/`,
@@ -103,11 +104,59 @@ SUBSYSTEM=="volume", ATTR{fstype}=="wfs",  ENV{MOUNT}="/wfs"
 SUBSYSTEM=="volume", ATTR{label}=="user",  ENV{MOUNT}="/user"
 ```
 
-**Implemented.** The first of those is the live `/wfs` rule. It replaced
-`SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="2"`, which is the shape this
-layer exists to retire — and the WFS volume is precisely the case nothing else
-reaches, since it has no partition table for a `SUBSYSTEM=="partition"` rule to
-match.
+**Implemented.** The first of those is the live `/wfs` rule, qualified by uuid as
+§4.1 describes. It replaced `SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="2"`,
+which is the shape this layer exists to retire — and the WFS volume is precisely
+the case nothing else reaches, since it has no partition table for a
+`SUBSYSTEM=="partition"` rule to match. `/vwfs` followed, replacing
+`DRIVER=="virtio-blk", ATTR{unit}=="48"`.
+
+### 4.1 Identity: `ATTR{uuid}`
+
+`ATTR{fstype}` alone selects a KIND of volume, and a rule fires once. Two volumes
+of one format therefore make the rule's target depend on which was recognised
+first. `ATTR{uuid}` is what removes that: it is the volume's own identity, and it
+travels with the volume across disks and transports.
+
+Both live WFS rules are written this way, differing only in identity:
+
+```
+SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7465-4573-742d-766f6c756d65", ENV{MOUNT}="/wfs"
+SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7669-7274-696f-2d766f6c3031", ENV{MOUNT}="/vwfs"
+```
+
+Nothing in the second says virtio. That pair is what shows a transport is not part
+of a volume's identity: swap the two images between controllers and each still
+mounts at its own path.
+
+**A volume uuid is not a GPT GUID.** It is whatever bytes the FILESYSTEM stores,
+and the matcher takes them in on-disk order — WFS's sixteen opaque bytes as
+`mkfs_wfs` writes and prints them, FAT's four-byte volume serial as the boot
+sector stores it. `ATTR{partuuid}` and `ATTR{type}`, which match GPT's own
+identifiers, keep GPT's mixed-endian field order; the two parsers are separate
+because the byte orders genuinely differ. Reading a volume uuid through GUID order
+reverses its first eight bytes, and the rule then parses cleanly and never
+matches.
+
+The width is the format's, one to sixteen bytes, zero-padded for comparison — so a
+FAT serial is spelled at its own width (`ATTR{uuid}=="1a2b3c4d"`) rather than
+padded out to a GUID by hand. There is no separate `ATTR{serial}`: a rule asks
+"which volume", and every format answers with whatever identity it has.
+
+Hyphens are presentation and may fall anywhere; case is ignored. The volume
+manager logs each volume's uuid in the spelling a rule takes, because nothing else
+on the system reports one — a FAT serial otherwise has to be read out of the boot
+sector by hand. Note that DOS-lineage tools DISPLAY a FAT serial reversed
+(`8D93-D649` for the bytes `49 d6 93 8d`), so the value to paste is the one in our
+own log, not the one another system prints.
+
+Identity is only as strong as the format makes it. A FAT serial is 32 bits with no
+uniqueness guarantee, and `scripts/make_gpt_image.py` derives it from the label, so
+it carries no more information than `ATTR{label}` does. Prefer a label where one
+exists and the uuid where it does not — which is WFS's case, since WFS has no
+label at all.
+
+### 4.2 Labels
 
 `ATTR{label}` is the FILESYSTEM's label and is deliberately not `ATTR{partlabel}`.
 They differ in practice, not just in principle: the ESP carries no partition

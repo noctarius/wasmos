@@ -95,6 +95,15 @@ pub fn probe(prefix: []const u8, out: *r.Verdict) bool {
     // The volume serial is FAT's whole notion of identity: four bytes, no
     // format-level guarantee of uniqueness, and the only thing a rule can match
     // when a volume carries no label.
+    //
+    // Copied in ON-DISK BYTE ORDER, like every other format's identity here, so
+    // one rule holds everywhere: ATTR{uuid} is the bytes the filesystem stores.
+    // Note this is NOT how DOS-lineage tools DISPLAY a serial -- they print the
+    // little-endian word big-end first and hyphenate it (8D93-D649 for the bytes
+    // 49 d6 93 8d), so a value copied from `fatlabel` or Windows `vol` is
+    // reversed with respect to a rule. The volume manager logs the matchable
+    // form for exactly this reason: read the uuid off our own report, not off
+    // another system's.
     r.setUuid(out, sector[serial_off .. serial_off + 4]);
     return true;
 }

@@ -255,10 +255,32 @@ fn publishVolume(vol: *Volume, slot: usize) void {
     if ((vol.desc.flags & @as(u32, @intCast(abi.VOLUME_DESCRIPTOR_FLAG_HAS_LABEL))) != 0) {
         _ = line.str(" label=").str(idSlice(&vol.desc.label));
     }
+    // Reported in the spelling ATTR{uuid} takes, hyphenated at the canonical
+    // GUID groups when the format's identity is that wide. A rule selects a
+    // volume by this value, and nothing else on the system prints it: a FAT
+    // serial otherwise has to be read out of the boot sector by hand, and a WFS
+    // uuid recovered from whatever mkfs_wfs printed at format time.
+    if ((vol.desc.flags & @as(u32, @intCast(abi.VOLUME_DESCRIPTOR_FLAG_HAS_UUID))) != 0) {
+        _ = line.str(" uuid=");
+        var i: usize = 0;
+        while (i < vol.desc.uuid_len and i < vol.desc.uuid.len) : (i += 1) {
+            if (vol.desc.uuid_len == 16 and (i == 4 or i == 6 or i == 8 or i == 10)) {
+                _ = line.str("-");
+            }
+            const b = vol.desc.uuid[i];
+            _ = line.str(HEX_LOWER[b >> 4 ..][0..1]).str(HEX_LOWER[b & 0x0f ..][0..1]);
+        }
+    }
     _ = line.str(" sectors=").dec(vol.desc.lba_count);
     _ = line.str(" instance=").dec(vol.instance);
     line.end();
 }
+
+/// Lower case deliberately: mkfs_wfs prints a uuid in lower case, and a rule's
+/// value gets pasted from one report or the other. The rule parser accepts
+/// either case, so this is about the two reports agreeing on sight, not about
+/// what parses.
+const HEX_LOWER = "0123456789abcdef";
 
 fn fsTypeName(fs_type: u32) []const u8 {
     if (fs_type == @as(u32, @intCast(abi.FS_TYPE_FAT))) return "fat";

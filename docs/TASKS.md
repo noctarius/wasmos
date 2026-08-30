@@ -948,11 +948,10 @@ tail.
   read is pure cost when every byte is about to be replaced, exactly as it is
   for a freshly allocated block, which already skips it
   (`src/drivers/fs_wfs/wfs_write.c`).
-- [ ] [ENHANCEMENT][P3] WFS mount rules still name a disk and a unit
-  (`DRIVER=="ata", ATTR{unit}=="2"`), which is what Phase 3 set out to retire.
-  They cannot stop until a volume exists to match on: a raw formatted disk is
-  not a partition, so `SUBSYSTEM=="partition"` does not reach it and no
-  `fstype` is ever reported for it. Blocked on the volume manager above.
+- [x] [ENHANCEMENT][P3] WFS mount rules named a disk and a unit
+  (`DRIVER=="ata", ATTR{unit}=="2"`, `DRIVER=="virtio-blk", ATTR{unit}=="48"`),
+  which is what Phase 3 set out to retire. Both now match
+  `SUBSYSTEM=="volume"` on fstype and uuid and differ only in identity.
 
 - [ ] [ENHANCEMENT][P2] Batch several WFS metadata operations into one journal
   transaction. The driver retires each transaction before the next begins
@@ -970,9 +969,9 @@ tail.
   `wfs_txn_commit_task` awaits one at §14's steps 2, 4 and 6, with §21's replay
   awaiting one before its tail retires the replayed writes.
 - [ ] [FEATURE][P2] Exclusivity: nothing claims a volume.
-  Mount policy on volumes is DONE -- `/wfs` mounts from
-  `SUBSYSTEM=="volume", ATTR{fstype}=="wfs"`, naming no disk, no unit and no
-  backend (`architecture/37-volume-manager.md` §4). What remains is §5.
+  Mount policy on volumes is DONE -- `/wfs` and `/vwfs` both mount from
+  `SUBSYSTEM=="volume"` on fstype and uuid, naming no disk, unit, backend or
+  transport (`architecture/37-volume-manager.md` §4). What remains is §5.
 
   `VOLUME_IPC_CLAIM_REQ` exists and sets the CLAIMED flag, but nothing sends it.
   A filesystem driver should claim on mount and release on unmount, and
@@ -985,16 +984,15 @@ tail.
   Today that is prevented by suppressing the whole-disk volume of a partitioned
   disk, not by the claim.
 
-- [ ] [ENHANCEMENT][P2] Convert the remaining rules that still name a disk.
-  `/user` matches `SUBSYSTEM=="partition", ATTR{partlabel}=="user"`, which names
-  a partition rather than a disk and is already most of the way there, but its
-  volume now carries a FAT label (`USER`) that a `SUBSYSTEM=="volume"` rule could
-  match instead. `/vwfs` still names `DRIVER=="virtio-blk", ATTR{unit}=="48"`
-  outright, with a comment explaining that no matcher could read a volume
-  signature -- which is no longer true.
+- [ ] [ENHANCEMENT][P3] Convert the last rule that still names a disk: `/boot`.
+  It cannot until the bootloader records the ESP; see the initfs entry below.
 
-  `/boot` cannot convert until the bootloader records the ESP; see the initfs
-  entry below.
+  `/vwfs` is done -- it was `DRIVER=="virtio-blk", ATTR{unit}=="48"` and is now a
+  volume rule matching on uuid. `/user` matches
+  `SUBSYSTEM=="partition", ATTR{partlabel}=="user"`, which names a partition
+  rather than a disk and is left alone deliberately: a GPT partition label is a
+  stronger identity than the FAT serial beside it, which
+  `scripts/make_gpt_image.py` derives from that same label anyway.
 
 - [ ] [ENHANCEMENT][P3] Retire `wasmos_block_descriptor_t.fs_type`.
   It is set to `FS_TYPE_UNKNOWN` by all three publishers and by nothing else,

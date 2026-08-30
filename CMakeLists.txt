@@ -2086,7 +2086,7 @@ if (OVMF_VARS)
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
             --timeout ${WASMOS_QEMU_TEST_TIMEOUT}
-    DEPENDS bootloader kernel wfs_image
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU halt test"
     VERBATIM
@@ -2103,7 +2103,7 @@ if (OVMF_VARS)
             --ovmf-vars ${OVMF_VARS}
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
-    DEPENDS bootloader kernel wfs_image
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running SMP scheduler stress test"
     VERBATIM
@@ -2121,7 +2121,7 @@ if (OVMF_VARS)
             WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
             PYTHONDONTWRITEBYTECODE=1
             ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
-    DEPENDS bootloader kernel wfs_image
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU CLI integration tests"
     VERBATIM
@@ -2134,7 +2134,7 @@ if (OVMF_VARS)
             ${QEMU_UI_OVMF_VARS_ARG}
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
-    DEPENDS bootloader kernel wfs_image
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU UI test"
     VERBATIM
@@ -2193,7 +2193,7 @@ else ()
               --ovmf-code ${OVMF_CODE}
               --esp ${BUILD_DIR}/esp
               --smp ${WASMOS_QEMU_SMP_COUNT}
-      DEPENDS bootloader kernel wfs_image
+      DEPENDS bootloader kernel wfs_image wfs_virtio_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU halt test"
       VERBATIM
@@ -2204,7 +2204,7 @@ else ()
               --ovmf-code ${OVMF_CODE}
               --esp ${BUILD_DIR}/esp
               --smp ${WASMOS_QEMU_SMP_COUNT}
-      DEPENDS bootloader kernel wfs_image
+      DEPENDS bootloader kernel wfs_image wfs_virtio_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running SMP scheduler stress test"
       VERBATIM
@@ -2222,7 +2222,7 @@ else ()
               WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
               PYTHONDONTWRITEBYTECODE=1
               ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
-      DEPENDS bootloader kernel wfs_image
+      DEPENDS bootloader kernel wfs_image wfs_virtio_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU CLI integration tests"
       VERBATIM

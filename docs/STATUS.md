@@ -447,11 +447,12 @@ linked feature documents for rationale and rollout plans.
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
   parallel because they share `build/esp`.
 - Every QEMU battery runs under both wasm runtimes (`runtimes` in
-  `tests/batteries.json`). The `filesystem` battery is green under `wasm3_smp`
-  and `warp_smp` (39 tests each, TCG). Its first wasm3 run was red: the WFS
-  driver declared a four-parameter `initialize` while PM calls every entry with
-  zero arguments, which only wasm3 enforces — see the entry-arity rule in
-  `architecture/13` *Language ABI*.
+  `tests/batteries.json`), and each cell asserts the runtime it linked from the
+  boot marker. The `filesystem` battery is green under `wasm3_smp` and
+  `warp_smp` (55 tests each, TCG). The first battery run under wasm3 was red for
+  a defect WARP cannot show: a driver whose entry export declares parameters
+  starts under WARP and dies under wasm3, which validates entry arity — see the
+  entry-arity rule in `architecture/13` *Language ABI*.
 - Developer checks: `fmt`, `fmt-check`, `lint`, and `quality` are CMake targets
   backed by `scripts/quality.sh`; only first-party source roots are in scope.
 

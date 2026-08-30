@@ -15,12 +15,14 @@ SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", RUN+="system/driv
 # ATTR{unit}=="0" also matches a virtio-blk device's only disk and would
 # mount a second filesystem on /boot.
 #
-# The matcher that belongs here is `SUBSYSTEM=="volume", ATTR{boot}=="1"`, and
-# everything it needs exists: the bootloader records the partition its device
-# path names, the kernel publishes it as `boot.partition`, and the device manager
-# marks the volume covering that LBA range. What blocks the swap is beneath it --
-# a filesystem on a PARTITION cannot serve a zero-copy file read, because the
-# partition manager forwards the client's borrow id to the disk backend and a
-# borrow is a capability between the client and the PROXY. The mount succeeds and
-# the first file read fails with fs.IO. See docs/TASKS.md.
+# The matcher that belongs here is `SUBSYSTEM=="volume", ATTR{boot}=="1"` -- the
+# volume the FIRMWARE loaded this system from -- and everything it needs works:
+# the bootloader records the partition its device path names, the kernel
+# publishes it as `boot.partition`, and the device manager marks the volume
+# covering that LBA range. Swapping this line selects the ESP on the first try.
+#
+# What it exposes is a yield-spin. A volume rule mounts /boot later than a block
+# rule does, and the kernel's broker self-test spins on PROCESS_RUN_YIELDED until
+# `font-service` is ready -- a service that comes FROM /boot. The boot then never
+# completes. Fix the spin first; see docs/TASKS.md.
 SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"

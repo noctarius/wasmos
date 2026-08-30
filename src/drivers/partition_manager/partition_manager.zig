@@ -56,9 +56,14 @@
 //! Forwarding
 //! ----------
 //! A transfer for a partition is the client's own request with `lba` rebased onto
-//! the partition's window and `sector_count` clamped to it. The data destination
-//! is passed through untouched: the backing device writes the CLIENT's pages
-//! directly, so a partition costs one IPC hop and no copy.
+//! the partition's window and `sector_count` clamped to it. The backing device
+//! still writes the CLIENT's pages, so a partition costs one IPC hop and no copy.
+//!
+//! Reaching those pages takes a REBORROW, not a pass-through. A borrow is held
+//! per context, so the `dst_borrow_id` a client sends names a grant between the
+//! client and THIS driver and resolves to nothing for the disk beneath it. Each
+//! zero-copy transfer sub-grants that borrow to the backing device, narrowed to
+//! the transfer's direction, and drops it when the reply arrives.
 const driver = @import("driver.zig");
 const co = @import("coroutine.zig");
 const op = @import("wasmos_opcodes.zig");
@@ -115,6 +120,13 @@ const Inflight = struct {
     /// against what was actually requested.
     sectors: u32 = 0,
     resp_type: i32 = 0,
+    /// The downstream borrow minted for the backing device on a zero-copy
+    /// transfer, or -1 when the destination was the client's own block buffer
+    /// and no grant was needed. Dropped when the reply arrives: a reborrow held
+    /// past its transfer keeps the client's buffer lent to a device that is done
+    /// with it, and the client's next request on the same buffer would be
+    /// refused ALREADY_BORROWED.
+    down_borrow_id: i32 = -1,
     in_use: bool = false,
 };
 
@@ -589,11 +601,22 @@ fn handleIdentify(msg: *const co.IpcMessage) void {
 
 /// Forward a transfer to the disk under the addressed partition.
 ///
-/// The client's request is copied with two edits and nothing else: `target`
-/// becomes the DISK's instance, and `lba` is rebased onto the partition's
-/// window. The destination fields pass through untouched, so the backing device
-/// still writes the client's own pages — a partition costs an IPC hop, not a
-/// copy.
+/// The client's request is copied with three edits: `target` becomes the DISK's
+/// instance, `lba` is rebased onto the partition's window, and a zero-copy
+/// destination's borrow is REBORROWED to the disk. The client's pages are still
+/// what the device writes — a partition costs an IPC hop, not a copy.
+///
+/// The reborrow is what makes the pass-through legal. A borrow is held per
+/// context, so `dst_borrow_id` as the client sent it names a grant between the
+/// CLIENT and THIS driver; forwarding that id gives the disk a handle nothing
+/// resolves for it, and its write is refused. `bufferReborrow` mints the disk a
+/// handle of its own within the rights this driver was given, and the chain
+/// cascade-revokes: whatever the client drops takes the disk's access with it.
+///
+/// Rights are narrowed to the direction of the transfer. A read needs WRITE on
+/// the destination and a write needs READ, and granting only that keeps a
+/// backing device from touching a client buffer in the direction its request
+/// never asked for.
 fn handleTransfer(msg: *const co.IpcMessage) void {
     var req = driver.BlockRequest{};
     if (msg.arg0 <= 0 or msg.arg1 < 0 or
@@ -631,10 +654,28 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
     req.target = disk.instance;
     req.lba += part.lba_start;
 
+    var down_borrow: i32 = -1;
+    if (req.dst_kind == driver.BLOCK_DST_XFER_BUFFER) {
+        if (req.dst_borrow_id <= 0) {
+            sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_BAD_REQUEST);
+            return;
+        }
+        const flags: i32 = if (msg.type == op.BLOCK_IPC_WRITE_REQ)
+            driver.BUFFER_GRANT_READ
+        else
+            driver.BUFFER_GRANT_WRITE;
+        down_borrow = driver.bufferReborrow(disk.endpoint, req.dst_borrow_id, flags) orelse {
+            sendError(msg.source, msg.request_id, status.WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW);
+            return;
+        };
+        req.dst_borrow_id = down_borrow;
+    }
+
     const raw: [*]const u8 = @ptrCast(&req);
     if (g_down_req_bid < 0 or
         !driver.bufferWrite(g_down_req_bid, raw[0..@sizeOf(driver.BlockRequest)], 0))
     {
+        if (down_borrow >= 0) driver.bufferUnborrow(down_borrow);
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NOT_READY);
         return;
     }
@@ -650,6 +691,7 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
         @intCast(@sizeOf(driver.BlockRequest)),
         0,
     ) != 0) {
+        if (down_borrow >= 0) driver.bufferUnborrow(down_borrow);
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NOT_READY);
         return;
     }
@@ -658,6 +700,7 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
         .client = msg.source,
         .client_request_id = msg.request_id,
         .down_request_id = down_id,
+        .down_borrow_id = down_borrow,
         .sectors = req.sector_count,
         .resp_type = if (msg.type == op.BLOCK_IPC_WRITE_REQ)
             op.BLOCK_IPC_WRITE_RESP
@@ -673,6 +716,14 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
 /// something a client should be told about.
 fn handleDownstreamReply(msg: *const co.IpcMessage) void {
     const slot = findInflightByDownId(msg.request_id) orelse return;
+    // The device is done with the client's buffer, so its access ends here --
+    // before the client is told, since the reply is what frees the client to
+    // reuse the buffer and a grant still standing would refuse the next request.
+    // Dropped on the error path too: a refused transfer leaves the grant behind
+    // just as surely as a served one.
+    if (slot.down_borrow_id >= 0) {
+        driver.bufferUnborrow(slot.down_borrow_id);
+    }
     if (msg.type == op.BLOCK_IPC_ERROR) {
         sendError(slot.client, slot.client_request_id, msg.arg0);
     } else {

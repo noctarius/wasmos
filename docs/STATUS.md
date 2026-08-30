@@ -795,18 +795,23 @@ linked feature documents for rationale and rollout plans.
   `/boot`, nothing they published could ever select `/boot`. Their startup sweeps
   now find nothing and every disk is probed as its driver publishes it, so the
   `block` class subscription is the only discovery path rather than a supplement.
-  `/boot` still uses its whole-disk rule
   (`architecture/36-partition-manager-and-block-identity.md` §2).
 - The volume the firmware booted from is identified end to end, and `ATTR{boot}`
-  matches it. The bootloader reads the MEDIA/HARDDRIVE node of its own device
-  path into `boot_info` (version 5), the kernel publishes the LBA range as the
+  matches it: the bootloader reads the MEDIA/HARDDRIVE node of its own device path
+  into `boot_info` (version 5), the kernel publishes the LBA range as the
   `boot.partition` kernel-environment variable, and the device manager marks the
   volume whose backing partition covers it with `VOLUME_DESCRIPTOR_FLAG_BOOT`.
   `env_get` carries it rather than a host call of its own: one string, read once,
-  by one service. `/boot` does NOT use the rule yet -- a filesystem on a partition
-  cannot serve a zero-copy file read, because the partition manager forwards a
-  borrow the disk backend does not hold (`TASKS.md`)
-  (`architecture/37-volume-manager.md` §10).
+  by one service. `/boot` does NOT use the rule yet -- mounting later exposes a
+  yield-spin in the kernel's broker self-test, which waits on a service that comes
+  from `/boot` (`TASKS.md`) (`architecture/37-volume-manager.md` §10).
+- The partition proxy REBORROWS a client's transfer buffer to the disk backend.
+  Forwarding the client's own `dst_borrow_id` gave the backend a handle nothing
+  resolved for it, because a borrow is held per context: a partition mounted (the
+  mount path uses the caller's own block buffer) and then failed its first FILE
+  read with fs.IO. `xfer_buffer_reborrow` mints the backend a handle within the
+  proxy's rights, narrowed to the transfer's direction and dropped when the reply
+  arrives (`architecture/36-partition-manager-and-block-identity.md` §2).
 - A mounted volume is CLAIMED, and `fsck.wfs` refuses one. `fs_wfs` claims the
   moment its mount completes and releases at the start of shutdown; `fsck.wfs`
   asks the volume manager before it reads a block, and refuses both a claimed

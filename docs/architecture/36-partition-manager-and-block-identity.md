@@ -372,15 +372,28 @@ For each partition endpoint the manager serves the full block contract:
 
 - `BLOCK_IPC_IDENTIFY_REQ` — answered from its own descriptor. Not forwarded;
   the reported capacity is the *partition's*, not the disk's.
-- `BLOCK_IPC_READ_REQ` / `WRITE_REQ` — arg1 becomes `lba + lba_start`; arg0 (the
-  client's block-buffer physical address) passes through untouched, so the disk
-  driver still lands bytes directly in the filesystem driver's buffer. The
-  proxy costs one IPC round trip, not a copy.
-- `BLOCK_IPC_READ_ZC_REQ` — `xfer_buffer_reborrow` sub-grants the client's
-  borrow to the downstream driver's endpoint (rights ⊆ its own), the request is
-  forwarded with the downstream borrow id and the buffer id unchanged, and
-  `xfer_buffer_unborrow` releases it on completion, cascade-revoking the chain.
-  Zero-copy survives the hop.
+- `BLOCK_IPC_READ_REQ` / `WRITE_REQ` — `lba` becomes `lba + lba_start`, and the
+  destination is carried across by KIND:
+  - `BLOCK_DST_BLOCK_BUFFER` — `dst_phys` (the client's own block-buffer physical
+    address) passes through untouched, so the disk driver still lands bytes
+    directly in the filesystem driver's buffer.
+  - `BLOCK_DST_XFER_BUFFER` — `xfer_buffer_reborrow` sub-grants the client's
+    borrow to the downstream driver's endpoint, narrowed to the transfer's
+    direction (WRITE on a read, READ on a write; rights ⊆ its own). The request
+    carries the downstream borrow id with the buffer id unchanged, and
+    `xfer_buffer_unborrow` releases it when the reply arrives, cascade-revoking
+    the chain.
+
+  The reborrow is not optional and is not an optimisation. A borrow is held per
+  CONTEXT, so forwarding the client's own `dst_borrow_id` hands the disk a handle
+  nothing resolves for it: its DMA is refused, its staged fallback writes into a
+  buffer it may not touch and is refused too, and the client sees fs.IO. This was
+  specified for the retired `BLOCK_IPC_READ_ZC_REQ` and lost when zero-copy folded
+  into `dst_kind`; it stayed invisible until `/boot` became the first mount to
+  serve FILE reads from a partition, because the mount path uses the block-buffer
+  kind and never needed a grant.
+
+  Either way the proxy costs one IPC round trip, not a copy.
 - **Bounds clamp** — any request whose `[lba, lba + count)` leaves
   `[0, lba_count)` is refused with a packed error. This is the containment the
   design exists for: a filesystem driver reaches its partition and nothing else.

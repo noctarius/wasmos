@@ -22,8 +22,9 @@ import unittest
 from scripts.qemu_test_framework import QemuSession, default_config
 
 # Written by QEMU's vvfat into the ESP's FAT boot sector, padded to 11 bytes on
-# disk. It is the volume `/boot` will be selected by once mount policy moves to
-# volumes, and `tests/unit/fixtures_disk_images.zig` carries the same bytes.
+# disk. `tests/unit/fixtures_disk_images.zig` carries the same bytes. It is NOT
+# what selects /boot -- that is ATTR{boot}, since this label is QEMU's and an ESP
+# on other firmware would carry another.
 ESP_LABEL = "QEMU VVFAT"
 # The FILESYSTEM label of the /user volume, which is not the same string as its
 # GPT PARTITION label: `make_gpt_image.py` is told `user` and writes the FAT
@@ -161,15 +162,16 @@ class VolumeManagerTest(unittest.TestCase):
     def test_the_firmwares_boot_partition_reaches_the_system(self) -> None:
         """The identity a `SUBSYSTEM=="volume", ATTR{boot}=="1"` rule matches on.
 
-        Nothing on an ESP can supply it: its filesystem is ordinary FAT, its
-        label is firmware-specific, and an MBR gives it no partition label and no
+        Nothing on an ESP can supply it: its filesystem is ordinary FAT, its label
+        is firmware-specific, and an MBR gives it no partition label and no
         PARTUUID. The firmware is the only thing that knows which volume this
         system came from, so the bootloader reads the HARDDRIVE node of its own
         device path and the kernel publishes the LBA range.
 
-        Only the publication is asserted here. Whether `/boot` USES it is a
-        separate question, and today it does not: see the zero-copy-through-a-
-        partition entry in docs/TASKS.md.
+        Only the publication is asserted. Whether `/boot` USES it is a separate
+        question, and today it does not: mounting from a volume happens later than
+        mounting from a block rule, which exposes a yield-spin in the kernel's
+        broker self-test. See docs/TASKS.md.
         """
         assert self.session is not None
         self.assertTrue(

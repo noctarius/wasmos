@@ -599,6 +599,30 @@ pub fn bufferBorrow(grantee_endpoint: i32, buffer_id: i32, flags: i32) ?i32 {
     return if (borrow < 0) null else borrow;
 }
 
+/// Sub-grant a borrow this process HOLDS to a further context, returning the
+/// downstream borrow id.
+///
+/// What a PROXY needs. A borrow is held per context, so a server handed a
+/// client's buffer cannot pass the client's own borrow id to a third process --
+/// that id names a grant between the client and this server, and nothing
+/// resolves it for anyone else. Reborrowing mints a distinct handle for the
+/// grantee, within this borrow's own rights: `flags` may narrow them and may
+/// never widen them.
+///
+/// Lifetime is a chain, not a copy. Dropping the upstream borrow -- or the owner
+/// releasing the object -- cascade-revokes every reborrow beneath it, so a
+/// grantee cannot outlive the grant it came from.
+pub fn bufferReborrow(grantee_endpoint: i32, borrow_id: i32, flags: i32) ?i32 {
+    const downstream = abi.xfer_buffer_reborrow(grantee_endpoint, borrow_id, flags);
+    return if (downstream < 0) null else downstream;
+}
+
+/// Drop one (re)borrow this process holds, cascade-revoking anything reborrowed
+/// from it.
+pub fn bufferUnborrow(borrow_id: i32) void {
+    _ = abi.xfer_buffer_unborrow(borrow_id);
+}
+
 // --- service registry ------------------------------------------------------
 
 /// Reply endpoint for the registry handshakes below, created once and reused.

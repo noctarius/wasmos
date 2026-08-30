@@ -84,16 +84,26 @@ Source: `architecture/06-memory-management.md`,
   (`src/services/gfx_compositor/gfx_compositor.zig:1632`) and replies
   `(buffer_id, shmem_id, stride_bytes)`; apps map it with `shmem_map_auto`
   (e.g. `examples/rust/tetris/tetris.rs:359`, `src/libui/assemblyscript`).
-  CONFIRMED, and it is a self-copy: `warp_shmem_flush` ends in
-  `memcpy(phys_base | KERNEL_HIGHER_HALF_BASE, src, size)` where `src` is the
-  caller's linear memory at `wasm_off` (`src/kernel/warp/link.cpp:2373`), while
-  `shmem_map`/`map_auto` map the region's OWN frames into that linear memory --
-  `paging_map_4k(virt, phys_base + i*0x1000)` on WARP (`:1930`) and
-  `mm_context_map_physical` on wasm3 (`src/kernel/wasm3/link.c:2280`). Source and
-  destination are therefore the same physical pages. libui states it outright:
-  `shmem_flush(this.shmemId, this.mappedPtr, this.strideBytes * this.height)`
-  (`src/libui/assemblyscript/libui.ts:331`) -- a full-window `memcpy(p, p, n)` per
-  present, ~1.9 MB for an 800x600 ARGB window, inside a hostcall.
+  CONFIRMED, and it is a self-copy. `warp_shmem_flush` ends in
+
+      __builtin_memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), src, size);
+
+  where `src` is the caller's linear memory at `wasm_off`
+  (`src/kernel/warp/link.cpp:2373`), while `shmem_map`/`map_auto` map the
+  region's OWN frames into that linear memory --
+
+      paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
+
+  in a loop over the region's pages on WARP (`src/kernel/warp/link.cpp:1930`),
+  and `mm_context_map_physical(proc->context_id, virt, phys_base, needed_size,
+  ...)` on wasm3 (`src/kernel/wasm3/link.c:2280`). `virt` is the guest's linear
+  memory and `phys_base` the region's frames in both, so a flush's source and
+  destination are the same physical pages. libui shows it at the call site:
+
+      if (shmem_flush(this.shmemId, this.mappedPtr, byteLen) != 0) {
+
+  (`src/libui/assemblyscript/libui.ts:361`) -- a full-window `memcpy(p, p, n)`
+  per present, ~1.9 MB for an 800x600 ARGB window, inside a hostcall.
 
   UNDER WARP ONLY, and this is the part that decides what may be deleted. wasm3
   does not share the property and the flush is REQUIRED there: `shmem_map_auto`
@@ -148,8 +158,9 @@ Source: `architecture/06-memory-management.md`,
   a tree carrying `[subsystem] register request=WASM runtime=WASM3` with the
   tree's and the ESP's kernel agreeing on symbol counts. The difference from
   shmem is structural: `shmem_map` maps into the process page tables only, while
-  `xfer_buffer_map` goes through `wasm_linmem_place_overlay(runtime, ...)`, which
-  places the overlay in the interpreter's own linear-memory region. The flush
+  `xfer_buffer_map` goes through `wasm_linmem_place_overlay`
+  (`src/kernel/wasm3/link.c:1012`), which places the overlay in the
+  interpreter's own linear-memory region. The flush
   caveat above is therefore scoped to shmem and does not carry to xfer buffers.
 
   ORDER, cheapest first, each independently landable:

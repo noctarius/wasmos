@@ -359,6 +359,24 @@ static process_run_result_t broker_spawn_request_entry(process_t* process, void*
     proc_ep = process_manager_endpoint();
     if (proc_ep == IPC_ENDPOINT_NONE || process_manager_fs_endpoint() == IPC_ENDPOINT_NONE ||
         !kernel_selftest_process_ready_named("font-service")) {
+        /* BLOCK on the next readiness transition; do not spin.
+         *
+         * font-service is started from /boot, so this wait is as long as storage
+         * bring-up takes. Returning PROCESS_RUN_YIELDED here polled the process
+         * table on every dispatch -- ~10^6 of them across a boot -- and the cost
+         * is not only the cycles: it made the wait itself a load on the very
+         * bring-up it was waiting for.
+         *
+         * process_notify_ready broadcasts, so the wake arrives when any process
+         * announces itself, including font-service. The condition is re-tested
+         * on the next entry, which is where the loop belongs -- a wake means
+         * something became ready, never that this one did.
+         *
+         * A configuration that never starts font-service parks this self-test
+         * forever instead of starving a CPU forever. That is the better of the
+         * two, and it is visible: the process shows as blocked in a stall dump
+         * rather than burning dispatches. */
+        process_wait_for_ready_change();
         return PROCESS_RUN_YIELDED;
     }
 

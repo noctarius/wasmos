@@ -184,6 +184,28 @@ class VolumeManagerTest(unittest.TestCase):
             "HARDDRIVE node in its device path, or boot_info did not carry it",
         )
 
+    def test_waiting_for_a_service_does_not_spin(self) -> None:
+        """Regression: 2026-08-30-broker-selftest-polls-for-font-service.
+
+        The kernel's broker self-test returned PROCESS_RUN_YIELDED until
+        `font-service` was ready, re-reading the process table on every dispatch
+        -- roughly 10^6 of them across a boot. font-service starts from /boot, so
+        the wait lasted the whole of storage bring-up, and the polling was itself
+        load on the bring-up it was waiting for.
+
+        It blocks on the readiness broadcast now. Asserted through the self-test
+        COMPLETING, because that is the observable end of the wait: a boot that
+        reaches this line woke from the block and finished. A stall dump on a
+        failing boot shows the difference directly -- `st=blocked` with a handful
+        of dispatches, where it used to show `st=running` with ~10^6.
+        """
+        assert self.session is not None
+        self.assertTrue(
+            self.session.expect(b"[test] broker spawn delegation ok", timeout_s=120),
+            "the broker self-test never completed -- it is waiting on a service "
+            "that never came up, or its wake was lost",
+        )
+
     def test_the_inventory_receives_what_the_class_advertises(self) -> None:
         """Published to the device manager, not only registered under the class.
 

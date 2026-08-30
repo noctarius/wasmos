@@ -37,7 +37,7 @@ typedef struct {
  * then overwritten by the name the backend reports in FSMGR_IPC_BACKEND_INFO. */
 typedef struct {
     uint8_t in_use;
-    uint8_t kind;     /* FSMGR_BACKEND_BLOCK / FSMGR_BACKEND_INIT / other */
+    uint8_t kind;     /* FSMGR_BACKEND_BLOCK / FSMGR_BACKEND_PSEUDO / other */
     int32_t endpoint; /* IPC endpoint for this backend driver */
     /* Which filesystem this backend serves (FS_TYPE_*, abi/constants.yaml),
      * reported by the backend in FSMGR_IPC_BACKEND_INFO_RESP. `kind` cannot

@@ -242,8 +242,9 @@ provided via a known physical address from the bootloader.
 A backend reports two independent things in `FSMGR_IPC_BACKEND_INFO_RESP`, and
 conflating them mislabels every mount:
 
-- `kind` (`arg0`) is `FSMGR_BACKEND_BLOCK` or `FSMGR_BACKEND_INIT`. It separates a
-  block-backed backend from the initfs one and carries **no filesystem
+- `kind` (`arg0`) is `FSMGR_BACKEND_BLOCK` or `FSMGR_BACKEND_PSEUDO`. It separates a
+  backend served from a block device from one served from anything else
+  (initfs today, a devfs or sysfs later), and carries **no filesystem
   identity** — every block-backed backend reports the same value whatever it
   mounts.
 - `fs_type` (`arg1`) is the `FS_TYPE_*` the backend serves, and is the only field

@@ -278,8 +278,9 @@ enum {
      * Backends are discovered via svc class FSMGR_BACKEND_CLASS, not a push,
      * so fs-manager rebuilds its backend set from the registry on (re)start.
      *
-     * arg0 `kind` is FSMGR_BACKEND_BLOCK or FSMGR_BACKEND_INIT: it separates a
-     * block-backed backend from the initfs one and carries NO filesystem
+     * arg0 `kind` is FSMGR_BACKEND_BLOCK or FSMGR_BACKEND_PSEUDO: it separates a
+     * backend served from a block device from one served from anything else,
+     * and carries NO filesystem
      * identity, so every block-backed backend reports the same value whatever
      * it mounts. arg1 `fs_type` is the FS_TYPE_* the backend serves and is the
      * only field that answers "which filesystem". A backend that sits on no

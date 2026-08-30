@@ -446,7 +446,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                   g_fs_endpoint,
                                   "initfs.rules",
                                   FSMGR_BACKEND_CLASS,
-                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_INIT, 0),
+                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_PSEUDO, 0),
                                   1) != 0) {
         console_write("[fs-init] register failed\n");
         wasmos_sys_ipc_recv_loop();
@@ -464,7 +464,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                   g_fs_endpoint,
                                   FSMGR_IPC_BACKEND_INFO_RESP,
                                   wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
-                                  FSMGR_BACKEND_INIT,
+                                  FSMGR_BACKEND_PSEUDO,
                                   FS_TYPE_INITFS,
                                   0,
                                   0);
@@ -484,17 +484,21 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-        /* fs-manager pull: report kind=INIT and fs_type=INITFS. `kind` places this
-         * backend outside the block-backed set; `fs_type` is what names it, and
-         * initfs is a value in that enum rather than a special case at the
-         * naming site. No mount buffer (arg2=0) → fs-manager uses its default
-         * "init" mount name; unit 0. */
+        /* fs-manager pull: report kind=PSEUDO and fs_type=INITFS; unit 0. `kind`
+         * places this backend outside the block-backed set and `fs_type` names
+         * the filesystem, both as values rather than as a case at the naming
+         * site. No mount buffer (arg2=0): the mount name follows from the
+         * filesystem type, which fs-manager resolves through its per-type table.
+         * Lending a buffer from here would invert the transfer-buffer contract --
+         * fs-manager is the CLIENT of this exchange and owns any buffer it
+         * carries (architecture/12), and a server-owned one is refused
+         * ALREADY_BORROWED on the second pull. */
         if (type == FSMGR_IPC_BACKEND_INFO_REQ) {
             (void)wasmos_ipc_send(source,
                                   g_fs_endpoint,
                                   FSMGR_IPC_BACKEND_INFO_RESP,
                                   req_id,
-                                  FSMGR_BACKEND_INIT,
+                                  FSMGR_BACKEND_PSEUDO,
                                   FS_TYPE_INITFS,
                                   0,
                                   0);

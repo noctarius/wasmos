@@ -55,7 +55,7 @@ static void test_fat_backend_is_named_fat(void) {
 }
 
 static void test_init_backend_is_named_init(void) {
-    fs_backend_t init = make_backend(0, FSMGR_BACKEND_INIT, FS_TYPE_INITFS, "init");
+    fs_backend_t init = make_backend(0, FSMGR_BACKEND_PSEUDO, FS_TYPE_INITFS, "init");
     assert(strcmp(fsmgr_backend_fs_name(&init), "fs-init") == 0);
 }
 
@@ -67,7 +67,7 @@ static void test_init_backend_is_named_init(void) {
  * influence the answer in either direction. */
 static void test_name_comes_from_fs_type_not_kind(void) {
     fs_backend_t initfs_kind_boot = make_backend(0, FSMGR_BACKEND_BLOCK, FS_TYPE_INITFS, "init");
-    fs_backend_t wfs_kind_init = make_backend(1, FSMGR_BACKEND_INIT, FS_TYPE_WFS, "wfs");
+    fs_backend_t wfs_kind_init = make_backend(1, FSMGR_BACKEND_PSEUDO, FS_TYPE_WFS, "wfs");
     assert(strcmp(fsmgr_backend_fs_name(&initfs_kind_boot), "fs-init") == 0);
     assert(strcmp(fsmgr_backend_fs_name(&wfs_kind_init), "fs-wfs") == 0);
 }
@@ -75,7 +75,7 @@ static void test_name_comes_from_fs_type_not_kind(void) {
 /* An unrecognised type is the only miss, and it is a miss for a block-backed
  * and a non-block-backed backend alike. */
 static void test_unknown_type_is_a_miss_for_any_kind(void) {
-    fs_backend_t init_kind = make_backend(0, FSMGR_BACKEND_INIT, FS_TYPE_UNKNOWN, "init");
+    fs_backend_t init_kind = make_backend(0, FSMGR_BACKEND_PSEUDO, FS_TYPE_UNKNOWN, "init");
     assert(strcmp(fsmgr_backend_fs_name(&init_kind), "fs") == 0);
 }
 
@@ -112,7 +112,7 @@ static void test_root_is_not_decided_by_registration_order(void) {
     /* A WFS volume registers into slot 0, ahead of the boot volume. */
     backends[0] = make_backend(0, FSMGR_BACKEND_BLOCK, FS_TYPE_WFS, "wfs");
     backends[1] = make_backend(1, FSMGR_BACKEND_BLOCK, FS_TYPE_FAT, "boot");
-    backends[2] = make_backend(2, FSMGR_BACKEND_INIT, FS_TYPE_UNKNOWN, "init");
+    backends[2] = make_backend(2, FSMGR_BACKEND_PSEUDO, FS_TYPE_UNKNOWN, "init");
 
     int32_t root = fsmgr_select_root_backend(backends, 3);
     assert(root == 1);
@@ -130,7 +130,7 @@ static void test_root_is_found_in_slot_order_too(void) {
  * must be able to tell that from "index 0". */
 static void test_no_root_before_the_boot_volume_registers(void) {
     fs_backend_t backends[2];
-    backends[0] = make_backend(0, FSMGR_BACKEND_INIT, FS_TYPE_UNKNOWN, "init");
+    backends[0] = make_backend(0, FSMGR_BACKEND_PSEUDO, FS_TYPE_UNKNOWN, "init");
     backends[1] = make_backend(1, FSMGR_BACKEND_BLOCK, FS_TYPE_WFS, "wfs");
     assert(fsmgr_select_root_backend(backends, 2) == -1);
 }
@@ -147,6 +147,26 @@ static void test_empty_table_has_no_root(void) {
     memset(backends, 0, sizeof(backends));
     assert(fsmgr_select_root_backend(backends, 2) == -1);
     assert(fsmgr_select_root_backend(0, 2) == -1);
+}
+
+/* A pseudo-filesystem is spawned by no rule and sits on no volume, so its mount
+ * name has to follow from what it is. Keeping that in the same per-type table as
+ * the display name is what stops it from becoming a branch: a devfs adds a row.
+ * A block filesystem reports its own mount from the rule that spawned it, so it
+ * defines no default and must not acquire one by accident. */
+static void test_pseudo_filesystem_has_a_default_mount_name(void) {
+    assert(fsmgr_default_mount_name((uint32_t)FS_TYPE_INITFS) != 0);
+    assert(strcmp(fsmgr_default_mount_name((uint32_t)FS_TYPE_INITFS), "init") == 0);
+}
+
+static void test_block_filesystems_define_no_default_mount(void) {
+    assert(fsmgr_default_mount_name((uint32_t)FS_TYPE_FAT) == 0);
+    assert(fsmgr_default_mount_name((uint32_t)FS_TYPE_WFS) == 0);
+}
+
+static void test_unknown_type_has_no_default_mount(void) {
+    assert(fsmgr_default_mount_name((uint32_t)FS_TYPE_UNKNOWN) == 0);
+    assert(fsmgr_default_mount_name(0xFFFFFFFFu) == 0);
 }
 
 int main(void) {
@@ -166,6 +186,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_no_root_before_the_boot_volume_registers),
         WASMOS_TEST_CASE(test_unused_slots_are_skipped),
         WASMOS_TEST_CASE(test_empty_table_has_no_root),
+        WASMOS_TEST_CASE(test_pseudo_filesystem_has_a_default_mount_name),
+        WASMOS_TEST_CASE(test_block_filesystems_define_no_default_mount),
+        WASMOS_TEST_CASE(test_unknown_type_has_no_default_mount),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_fs_manager_backends: ok\n");

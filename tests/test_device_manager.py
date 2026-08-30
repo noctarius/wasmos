@@ -104,6 +104,23 @@ class DeviceManagerIntegrationTests(unittest.TestCase):
         self._cmd_expect("mount", b"/user -> fs-fat")
         self._cmd_expect("mount", b"/wfs -> fs-wfs")
 
+    def test_initfs_mount_name_follows_from_its_filesystem_type(self):
+        """/init is named from FS_TYPE_INITFS, not from a per-backend branch.
+
+        A pseudo-filesystem is spawned by no rule and sits on no volume, so
+        nothing tells fs-manager where to mount it. Its name therefore comes from
+        the same per-type table that names the filesystem itself
+        (`fsmgr_default_mount_name`), which is what keeps "the initfs one is
+        called init" from being a case that a devfs and a sysfs would each extend.
+
+        Asserting the path and not only the mount line: if the type carried no
+        default the mount silently becomes /fs, and every /init path stops
+        resolving while `mount` still lists a backend.
+        """
+        self._cmd_expect("mount", b"/init -> fs-init")
+        self._cmd_expect("cd /init", b"/init wamos> ")
+        self._cmd_expect("cd /", b"/ wamos> ")
+
 
 if __name__ == "__main__":
     unittest.main()

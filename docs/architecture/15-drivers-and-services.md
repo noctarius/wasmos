@@ -465,8 +465,8 @@ Routes virtual path requests to backend endpoints. Tracks registered backends:
 
 | Backend kind          | Value | Description                            |
 |-----------------------|-------|----------------------------------------|
-| `FSMGR_BACKEND_BLOCK` | 1     | Served from a block device (any volume) |
-| `FSMGR_BACKEND_INIT`  | 2     | Served from the initfs image            |
+| `FSMGR_BACKEND_BLOCK`  | 1     | Served from a block device (any volume) |
+| `FSMGR_BACKEND_PSEUDO` | 2     | Served from anything else (initfs today) |
 
 A kind says what a backend sits on, not which filesystem it serves and not which
 volume it is: one `BLOCK` backend registers per mounted volume, and the

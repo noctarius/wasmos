@@ -263,11 +263,12 @@ static fs_backend_t* backend_find_by_name(const char* name) {
 }
 
 /* Register or update a backend at endpoint; assigns a slot-based default mount
- * name ("boot"/"user" for BOOT kind; "init"/"init1" for INIT; "fs"/"fs1" for
- * others).  fsmgr_apply_backend_info overwrites that default with the mount
- * name the backend reports, when it reports one.  Idempotent for an endpoint
- * that is already registered.  Returns NULL when all FS_BACKEND_CAP slots are
- * taken. */
+ * name ("boot"/"user" for BLOCK kind, "fs"/"fs1" for every other kind).
+ * fsmgr_apply_backend_info overwrites that default with the mount name the
+ * backend reports, which is where a name that identifies a particular
+ * filesystem comes from -- a default here cannot name one without a case per
+ * filesystem.  Idempotent for an endpoint that is already registered.  Returns
+ * NULL when all FS_BACKEND_CAP slots are taken. */
 static fs_backend_t* backend_register(uint8_t kind, int32_t endpoint) {
     fs_backend_t* slot = 0;
     uint8_t kind_slot = 0;
@@ -305,9 +306,11 @@ static fs_backend_t* backend_register(uint8_t kind, int32_t endpoint) {
         } else {
             set_mount_name(slot, "boot");
         }
-    } else if (kind == FSMGR_BACKEND_INIT) {
-        set_mount_name(slot, "init");
     } else {
+        /* Every non-block backend defaults the same way. A default that spelled
+         * "init" would name a devfs or a sysfs that too: a pseudo backend
+         * publishes its own mount name in FSMGR_IPC_BACKEND_INFO_RESP arg2, and
+         * this default only stands until that arrives (or if it never does). */
         set_mount_name(slot, "fs");
     }
     return slot;
@@ -807,6 +810,16 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
     }
     registered->unit = (uint8_t)(unit & 0xFF);
     registered->fs_type = (uint32_t)fs_type;
+    /* A backend that reports no mount name of its own takes the one its
+     * filesystem type defines, which is how initfs becomes "init" without
+     * fs-manager holding a rule for any particular filesystem. Applied before
+     * the reported name is read, so a backend that does report one still wins. */
+    if (registered->kind != FSMGR_BACKEND_BLOCK) {
+        const char* by_type = fsmgr_default_mount_name(registered->fs_type);
+        if (by_type) {
+            str_copy(registered->mount_name, sizeof(registered->mount_name), by_type);
+        }
+    }
     if (buffer_id > 0 && mount_len > 0 && mount_len < (int32_t)sizeof(registered->mount_name)) {
         char mount_name[16];
         int32_t copy_len = mount_len;

@@ -854,7 +854,9 @@ linked feature documents for rationale and rollout plans.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
 - A backend reports its filesystem as `FS_TYPE_*` in `FSMGR_IPC_BACKEND_INFO_RESP`
-  `arg1`, separately from `kind`. `kind` only separates block-backed from initfs,
+  `arg1`, separately from `kind`; initfs reports `FS_TYPE_INITFS`, so a
+  pseudo-filesystem is a value in that enum and a future devfs or sysfs needs no
+  branch where a mount is named. `kind` only separates block-backed from initfs,
   so every block-backed backend shares one value; `mount` previously named the
   filesystem from it and reported both WFS volumes as `fs-fat`. The root
   filesystem is likewise selected by mount name rather than by position in the

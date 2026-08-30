@@ -1423,6 +1423,25 @@ Source: `architecture/19-virtual-terminal.md`,
   mismatched leaks its buffer, and the CLI acquires one per exec. Confirm by
   counting a context's live buffers across execs before changing anything.
 
+- [ ] [BUG][P2] `gfx-smoke` can page-fault the kernel inside WARP's linear-memory
+  growth. Captured once locally on `warp_smp` (`run-qemu-test`, 4 vCPU) right
+  after `[test] gfx smoke visible done`, green on 4 further runs of the same
+  tree, so it is load-dependent rather than deterministic.
+
+  The fault is a kernel `#PF` with `err=0` (a not-present read) at
+  `cr2=0xffffffff84746000`, inside `memcpy` called from `warp_krealloc` —
+  `ActiveMemoryManager::probe` → `ensureLinearSize` → `ensureCapacityForLinearSize`
+  → `ExtendableMemory::extensionRequest` → `WasmModule::runtimeMemoryAllocFnc`.
+  So the guest asked to grow its linear memory and the copy into the new
+  allocation walked off the end of a mapping, which points at the reallocation
+  itself rather than at anything gfx-specific; `gfx-smoke` is simply the guest
+  that grows.
+
+  Note this is the reserve-then-commit linmem path (`architecture/06`), which is
+  supposed to make a grow non-relocating — a `krealloc` + `memcpy` in the growth
+  path is itself worth explaining before diagnosing the fault. A second CPU was
+  concurrently in `warp_sync_linmem_for_pid`, which is where to look first.
+
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 
 - [ ] [FEATURE][P2] Route an app's output to its controlling tty instead of straight to

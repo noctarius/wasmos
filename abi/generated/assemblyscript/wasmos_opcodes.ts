@@ -243,9 +243,12 @@ export const FS_IPC_ERROR: i32 = 0x4FF;
 // block-backed backend from the initfs one and carries NO filesystem
 // identity, so every block-backed backend reports the same value whatever
 // it mounts. arg1 `fs_type` is the FS_TYPE_* the backend serves and is the
-// only field that answers "which filesystem"; a backend that does not
-// probe a superblock reports FS_TYPE_UNKNOWN. Deriving a filesystem from
-// `kind` reports every mounted volume as FAT.
+// only field that answers "which filesystem". A backend that sits on no
+// block device names itself too -- initfs reports FS_TYPE_INITFS -- so a
+// pseudo-filesystem is a value in that enum rather than a special case
+// wherever a mount is named; FS_TYPE_UNKNOWN means the backend named
+// nothing. Deriving a filesystem from `kind` reports every mounted volume
+// as FAT.
 export const FSMGR_IPC_BACKEND_INFO_REQ: i32 = 0x420;
 export const FSMGR_IPC_CLONE_CWD_REQ: i32 = 0x421;
 export const FSMGR_IPC_QUERY_MOUNTS_REQ: i32 = 0x422;

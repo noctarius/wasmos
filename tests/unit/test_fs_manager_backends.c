@@ -55,8 +55,28 @@ static void test_fat_backend_is_named_fat(void) {
 }
 
 static void test_init_backend_is_named_init(void) {
-    fs_backend_t init = make_backend(0, FSMGR_BACKEND_INIT, FS_TYPE_UNKNOWN, "init");
+    fs_backend_t init = make_backend(0, FSMGR_BACKEND_INIT, FS_TYPE_INITFS, "init");
     assert(strcmp(fsmgr_backend_fs_name(&init), "fs-init") == 0);
+}
+
+/* A pseudo-filesystem is named from its reported type like any other, so no
+ * call site carries a branch for one. Naming initfs from its `kind` instead
+ * worked only because initfs was the single pseudo-filesystem; a devfs or sysfs
+ * would each have needed another case. These two cases cross kind and fs_type
+ * deliberately: a backend is named by WHAT IT SERVES, and `kind` must not
+ * influence the answer in either direction. */
+static void test_name_comes_from_fs_type_not_kind(void) {
+    fs_backend_t initfs_kind_boot = make_backend(0, FSMGR_BACKEND_BOOT, FS_TYPE_INITFS, "init");
+    fs_backend_t wfs_kind_init = make_backend(1, FSMGR_BACKEND_INIT, FS_TYPE_WFS, "wfs");
+    assert(strcmp(fsmgr_backend_fs_name(&initfs_kind_boot), "fs-init") == 0);
+    assert(strcmp(fsmgr_backend_fs_name(&wfs_kind_init), "fs-wfs") == 0);
+}
+
+/* An unrecognised type is the only miss, and it is a miss for a block-backed
+ * and a non-block-backed backend alike. */
+static void test_unknown_type_is_a_miss_for_any_kind(void) {
+    fs_backend_t init_kind = make_backend(0, FSMGR_BACKEND_INIT, FS_TYPE_UNKNOWN, "init");
+    assert(strcmp(fsmgr_backend_fs_name(&init_kind), "fs") == 0);
 }
 
 /* A backend that reports no filesystem type is named generically rather than
@@ -136,6 +156,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_wfs_backend_is_not_named_fat),
         WASMOS_TEST_CASE(test_fat_backend_is_named_fat),
         WASMOS_TEST_CASE(test_init_backend_is_named_init),
+        WASMOS_TEST_CASE(test_name_comes_from_fs_type_not_kind),
+        WASMOS_TEST_CASE(test_unknown_type_is_a_miss_for_any_kind),
         WASMOS_TEST_CASE(test_unknown_fs_type_is_named_generically),
         WASMOS_TEST_CASE(test_null_backend_is_named_generically),
         WASMOS_TEST_CASE(test_two_block_backends_are_distinguished),

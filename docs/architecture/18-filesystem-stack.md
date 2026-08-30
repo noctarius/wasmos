@@ -247,11 +247,20 @@ conflating them mislabels every mount:
   identity** — every block-backed backend reports the same value whatever it
   mounts.
 - `fs_type` (`arg1`) is the `FS_TYPE_*` the backend serves, and is the only field
-  that answers "which filesystem". A backend that probes no superblock reports
-  `FS_TYPE_UNKNOWN`, which is reported as such rather than guessed at.
+  that answers "which filesystem". `FS_TYPE_UNKNOWN` means the backend named
+  nothing, and is reported as such rather than guessed at.
 
-`mount` names a filesystem from `fs_type` (`fsmgr_backend_fs_name`). Deriving it
-from `kind` reports every mounted volume as FAT.
+`mount` names a filesystem from `fs_type` alone (`fsmgr_backend_fs_name`, one
+lookup row per type). Deriving it from `kind` reports every mounted volume as
+FAT.
+
+A backend that sits on no block device names itself the same way: initfs reports
+`FS_TYPE_INITFS`, so `FS_TYPE_*` is the single namespace for "which filesystem"
+rather than a probe-result enum with pseudo-filesystems handled beside it. A
+future devfs or sysfs is therefore a value in `abi/constants.yaml` plus a lookup
+row, and costs no branch at any call site. Such a value is meaningless in a
+`SUBSYSTEM=="volume"` rule -- a volume is a formatted block device, so a rule
+spelling one could never match, and the rule parser does not accept one.
 
 A path-less request (`READDIR`) is preceded by a `CHDIR` re-asserting the
 requesting client's directory, because a backend holds one current directory per

@@ -142,21 +142,40 @@ groups:
 
   - name: fs_type
     doc: |
-      Which on-disk filesystem a block device holds, reported in the `fs_type`
-      field of wasmos_block_descriptor_t.
+      WHICH FILESYSTEM, in one namespace shared by every producer of the answer.
+      Carried in the `fs_type` field of wasmos_block_descriptor_t and
+      wasmos_volume_descriptor_t, and reported by a filesystem backend in
+      FSMGR_IPC_BACKEND_INFO_RESP arg1.
 
-      This is what a SUPERBLOCK PROBE found, not what a partition type claims.
-      The two are reported side by side because neither is sufficient alone: a
-      GPT type GUID of Microsoft Basic Data is carried by FAT, NTFS and exFAT
-      volumes alike and so identifies nothing, while a probe cannot distinguish
-      an EFI System Partition from any other FAT volume. A rule may require both.
+      Two kinds of producer emit these, and the difference decides which values
+      each can emit:
 
-      UNKNOWN means no probe matched, which is not the same as no filesystem --
-      an unrecognized format reads exactly like an empty one from here.
+      - A RECOGNISER probing a block device emits only the ON-DISK subset (FAT,
+        WFS). This is what a SUPERBLOCK PROBE found, not what a partition type
+        claims. The two are reported side by side because neither is sufficient
+        alone: a GPT type GUID of Microsoft Basic Data is carried by FAT, NTFS
+        and exFAT volumes alike and so identifies nothing, while a probe cannot
+        distinguish an EFI System Partition from any other FAT volume. A rule may
+        require both.
+      - A BACKEND self-reports what it serves, and may name a PSEUDO-FILESYSTEM
+        (INITFS, and a future devfs or sysfs) that sits on no block device and
+        that no recogniser can ever return.
+
+      A pseudo-filesystem therefore belongs in this enum rather than beside it:
+      naming a mount is one lookup for every filesystem, and a filesystem that is
+      not on a disk is a value here, not a special case at each call site. It is
+      correspondingly meaningless in a `SUBSYSTEM=="volume"` rule -- a volume is a
+      formatted block device, so a rule spelling a pseudo-filesystem could never
+      match, and the rule parser does not accept one.
+
+      UNKNOWN means no probe matched and the backend named nothing, which is not
+      the same as no filesystem -- an unrecognized format reads exactly like an
+      empty one from here.
     constants:
-      - { symbol: FS_TYPE_UNKNOWN, value: 0, doc: "No superblock probe matched." }
+      - { symbol: FS_TYPE_UNKNOWN, value: 0, doc: "No superblock probe matched, and no backend named a filesystem." }
       - { symbol: FS_TYPE_FAT, value: 1, doc: "FAT12/16/32; BPB with a 0x55AA boot signature." }
       - { symbol: FS_TYPE_WFS, value: 2, doc: "WFS; superblock magic 'WFS1' at byte 1024 of the volume (docs/WFS_WASMOS_FILE_SYSTEM.md section 4)." }
+      - { symbol: FS_TYPE_INITFS, value: 3, doc: "initfs; the boot-image filesystem served from memory. Pseudo-filesystem: self-reported by its backend, never returned by a recogniser." }
 
   - name: block_descriptor_flags
     bits: true

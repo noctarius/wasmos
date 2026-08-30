@@ -465,7 +465,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                   FSMGR_IPC_BACKEND_INFO_RESP,
                                   wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
                                   FSMGR_BACKEND_INIT,
-                                  0,
+                                  FS_TYPE_INITFS,
                                   0,
                                   0);
             break;
@@ -484,15 +484,18 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-        /* fs-manager pull: report kind=INIT. No mount buffer (arg2=0) → fs-manager
-         * uses its default "init" mount name; unit 0. */
+        /* fs-manager pull: report kind=INIT and fs_type=INITFS. `kind` places this
+         * backend outside the block-backed set; `fs_type` is what names it, and
+         * initfs is a value in that enum rather than a special case at the
+         * naming site. No mount buffer (arg2=0) → fs-manager uses its default
+         * "init" mount name; unit 0. */
         if (type == FSMGR_IPC_BACKEND_INFO_REQ) {
             (void)wasmos_ipc_send(source,
                                   g_fs_endpoint,
                                   FSMGR_IPC_BACKEND_INFO_RESP,
                                   req_id,
                                   FSMGR_BACKEND_INIT,
-                                  0,
+                                  FS_TYPE_INITFS,
                                   0,
                                   0);
             continue;

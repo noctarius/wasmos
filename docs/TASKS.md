@@ -950,6 +950,22 @@ tail.
 
 ## Filesystems and Storage
 
+- [ ] [BUG][P1] WFS is broken under wasm3. The `filesystem` battery is 39 tests
+  with 17 failures under `wasm3_smp` and fully green under `warp_smp`, on a
+  CI-shaped build at `54a39055` with the runtime confirmed from the boot marker
+  (`register request=WASM runtime=WASM3`). All 17 are WFS:
+  `test_wfs_mount_read` (10), `test_wfs_virtio_blk` (5),
+  `test_wfs_clean_unmount` (2); the FAT tests in the same battery pass. The run
+  takes 916s against 168s for the WARP cell, so the failures are timeouts rather
+  than wrong answers -- the volume never reaches a usable state.
+
+  This is PRE-EXISTING, not a regression from the runtime matrix that surfaces
+  it: baselined on 2026-08-30 by stashing an unrelated change and rebuilding,
+  which reproduced `test_wfs_mount_read` at 10 of 11 failing either way. It was
+  invisible because CI ran the QEMU batteries under WARP only; the matrix that
+  exposes it is the reason there is now a red cell to fix rather than a silent
+  one to discover later.
+
 - [ ] [ENHANCEMENT][P2] Give a guest a way to reach truncation at an arbitrary
   size. `wfs_truncate_task` now shrinks a tree-mapped object to a size INSIDE a
   block and promotes an inline object a grow takes past `WFS_INLINE_DATA_MAX`,

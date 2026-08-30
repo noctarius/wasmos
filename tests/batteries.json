@@ -17,7 +17,17 @@
     "never run, which is the one failure mode a numeric shard cannot have.",
     "",
     "needs_qemu=false marks a battery that runs without the emulation toolchain,",
-    "so CI can schedule it on a cheap fast job instead of paying for OVMF/QEMU."
+    "so CI can schedule it on a cheap fast job instead of paying for OVMF/QEMU.",
+    "",
+    "runtimes lists the wasm runtimes every QEMU battery runs under. The two are",
+    "different enough to break independently \u2014 wasm3 interprets in-kernel, WARP",
+    "JITs to ring 3 \u2014 so a green under one says nothing about the other, and a",
+    "single-runtime matrix hides breakage in the other for as long as nobody runs",
+    "it by hand. Each entry names a configs/<name>_defconfig."
+  ],
+  "runtimes": [
+    "warp_smp",
+    "wasm3_smp"
   ],
   "batteries": [
     {

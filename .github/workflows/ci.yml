@@ -169,11 +169,14 @@ jobs:
       host: ${{ steps.resolve.outputs.host }}
     steps:
       - uses: actions/checkout@v4
+      # --matrix is the script's own view of tests/batteries.json, including the
+      # runtime axis, so neither list is written out again here.
       - id: resolve
         run: |
           python3 scripts/run_unittest_suite.py --verify-batteries
-          echo "qemu=$(python3 -c "import json;print(json.dumps([b['name'] for b in json.load(open('tests/batteries.json'))['batteries'] if b['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
-          echo "host=$(python3 -c "import json;print(json.dumps([b['name'] for b in json.load(open('tests/batteries.json'))['batteries'] if not b['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
+          cells=$(python3 scripts/run_unittest_suite.py --matrix)
+          echo "qemu=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c for c in json.load(sys.stdin) if c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
+          echo "host=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c['battery'] for c in json.load(sys.stdin) if not c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
 
   # Batteries that boot nothing: no emulation toolchain, no OVMF, seconds not
   # minutes. Kept off the QEMU runners so they cannot queue behind them.
@@ -202,16 +205,23 @@ jobs:
       - name: Run battery (${{ matrix.battery }})
         run: python3 scripts/run_unittest_suite.py --battery "${{ matrix.battery }}"
 
+  # Every battery runs under EVERY wasm runtime. The two are different enough to
+  # break independently -- wasm3 interprets and runs in-kernel, WARP JITs to
+  # ring 3 -- so a green on one says nothing about the other. Running only WARP
+  # is what let a wasm3-only breakage sit unnoticed: a guest mapping that
+  # aliases under WARP but not under wasm3 looks identical in a WARP-only run.
   integration-tests:
-    name: ${{ matrix.battery }} (QEMU)
+    name: ${{ matrix.battery }} (QEMU, ${{ matrix.runtime }})
     needs: batteries
     runs-on: ubuntu-latest
     strategy:
-      # One battery's failure must not cancel the others: the whole point is to
-      # learn which subsystems are red in a single run.
+      # One cell's failure must not cancel the others: the whole point is to
+      # learn which subsystems are red, and under which runtime, in a single run.
       fail-fast: false
       matrix:
-        battery: ${{ fromJSON(needs.batteries.outputs.qemu) }}
+        # Cells come from the manifest already paired with their runtime, so the
+        # cross product is not restated here.
+        include: ${{ fromJSON(needs.batteries.outputs.qemu) }}
     env:
       # See defconfig job: wasmos only boots correctly under TCG, not KVM.
       WASMOS_QEMU_ACCEL: "tcg"
@@ -264,17 +274,43 @@ jobs:
           cp "$vars" "$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
           chmod u+w "$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
 
-      - name: Configure
+      # The runtime is pinned by the defconfig, not by a -D flag: a stray
+      # <repo>/.config would FORCE-override the flag and the job would silently
+      # test the other runtime (skills/wasmos-build-and-run).
+      - name: Configure (${{ matrix.runtime }})
         run: |
           cmake -S . -B build \
-            -DWASMOS_DOTCONFIG="configs/warp_smp_defconfig" \
+            -DWASMOS_DOTCONFIG="configs/${{ matrix.runtime }}_defconfig" \
             -DOVMF_CODE="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
             -DOVMF_VARS="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
 
       # WASMOS_TEST_BATTERY selects the battery inside the existing target, so
       # the ESP staging and QEMU wiring stay in one place rather than being
       # duplicated per battery.
-      - name: Run battery (${{ matrix.battery }})
+      # Teed so the next step can assert what actually booted. pipefail is set
+      # explicitly because the default shell here is `bash -e` without it, and
+      # tee would otherwise swallow a battery failure.
+      - name: Run battery (${{ matrix.battery }}, ${{ matrix.runtime }})
         env:
           WASMOS_TEST_BATTERY: ${{ matrix.battery }}
-        run: cmake --build build --target run-qemu-cli-test
+        run: |
+          set -o pipefail
+          cmake --build build --target run-qemu-cli-test 2>&1 | tee "$RUNNER_TEMP/battery.log"
+
+      # A battery passes under whichever runtime the build actually linked, so
+      # assert it is the one this cell claims. The marker comes from the BOOTED
+      # kernel, which is the only source that cannot be stale: a `-D` flag can be
+      # overridden by a stray .config, and an ESP can serve a kernel older than
+      # the tree it was built from.
+      - name: Confirm the runtime under test
+        run: |
+          case "${{ matrix.runtime }}" in
+            warp_*)  want=WARP ;;
+            wasm3_*) want=WASM3 ;;
+          esac
+          if ! grep -qE "register request=WASM runtime=$want\b" "$RUNNER_TEMP/battery.log"; then
+            echo "::error::expected runtime=$want, but the boot log says:"
+            grep -E "register request=WASM runtime=" "$RUNNER_TEMP/battery.log" || \
+              echo "(no runtime registration marker at all)"
+            exit 1
+          fi

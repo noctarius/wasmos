@@ -170,6 +170,10 @@ static const char* kernel_selftest_spawn_error_name(int32_t err) {
 #define BROKER_TEST_SERVICE_PATH "/init/system/services/wamos_script_broker.wap"
 #define BROKER_TEST_PATH "/init/apps/hello.rc"
 #define BROKER_TEST_MAX_ATTEMPTS 64u
+/* How long this self-test sleeps between re-tests while waiting for a service
+ * to come up. A heartbeat, not a latency budget: what it waits for arrives
+ * seconds away, and the only cost of a late notice is a late self-test. */
+#define BROKER_TEST_READY_WAIT_MS 100u
 
 static int kernel_selftest_process_ready_named(const char* name) {
     uint32_t active = 0u;
@@ -359,6 +363,28 @@ static process_run_result_t broker_spawn_request_entry(process_t* process, void*
     proc_ep = process_manager_endpoint();
     if (proc_ep == IPC_ENDPOINT_NONE || process_manager_fs_endpoint() == IPC_ENDPOINT_NONE ||
         !kernel_selftest_process_ready_named("font-service")) {
+        /* PARK, do not spin.
+         *
+         * font-service is started from /boot, so this wait is as long as storage
+         * bring-up takes. Returning PROCESS_RUN_YIELDED alone polled the process
+         * table on every dispatch -- ~10^6 across a boot -- and the cost was not
+         * the cycles: it kept the run queue non-empty, so the idle thread's
+         * sti;hlt never ran and the wait became load on the bring-up it was
+         * waiting for. kernel_init_runtime documents the same trap.
+         *
+         * Bounded, on this self-test's OWN reply endpoint, which nothing sends
+         * to while it waits -- so the sleep runs its full length and the timeout
+         * is what re-tests the condition. A few wakes per second in place of a
+         * million dispatches.
+         *
+         * Deliberately NOT a wake from process_notify_ready. Broadcasting there
+         * would make this event-driven, but it puts cross-CPU wake traffic on a
+         * path every service touches during boot, and doing so turned the SMP
+         * scheduler stress test intermittently fatal (docs/TASKS.md). The
+         * condition being waited on is a service coming up once, seconds away;
+         * it does not merit a hot-path wake. */
+        (void)ipc_endpoint_wait_for(
+            process->context_id, state->reply_endpoint, BROKER_TEST_READY_WAIT_MS);
         return PROCESS_RUN_YIELDED;
     }
 

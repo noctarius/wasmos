@@ -83,6 +83,9 @@ static void check(int cond, const char* what) {
     }
 }
 
+/* Defined in stubs_device_manager_host.c: what `boot.partition` reads back as. */
+extern char g_test_env_boot_partition[64];
+
 static int out_has(const char* needle) {
     return strstr(g_out, needle) != 0;
 }
@@ -161,6 +164,86 @@ static void publish_partition(uint8_t backend, uint8_t unit, uint32_t slot, cons
     registry_add_block(&desc);
 }
 
+/* A volume on `unit`'s disk, as the volume manager publishes one. The backing
+ * device is published first and named by FINGERPRINT, because that is how the
+ * matcher resolves it: a helper that set `backing_instance` to anything else
+ * would exercise a resolution path the service does not have. */
+static void publish_volume(uint8_t backend, uint8_t unit, uint32_t fs_type, const char* label,
+                           const uint8_t* uuid, uint32_t uuid_len) {
+    wasmos_volume_descriptor_t desc;
+    char backing_id[64];
+
+    publish_block_device(backend, unit);
+    (void)snprintf(backing_id,
+                   sizeof(backing_id),
+                   "block:%s:%u",
+                   backend == (uint8_t)BLOCK_BACKEND_ATA ? "ata" : "virtio-blk",
+                   (unsigned)unit);
+
+    memset(&desc, 0, sizeof(desc));
+    desc.version = VOLUME_DESCRIPTOR_VERSION;
+    desc.fs_type = fs_type;
+    desc.backing_instance = wasmos_block_fingerprint(backing_id);
+    desc.sector_bytes = 512u;
+    desc.lba_count = 32768u;
+    desc.flags = VOLUME_DESCRIPTOR_FLAG_PRESENT;
+    if (label) {
+        desc.flags |= VOLUME_DESCRIPTOR_FLAG_HAS_LABEL;
+        (void)snprintf(desc.label, sizeof(desc.label), "%s", label);
+    }
+    if (uuid && uuid_len) {
+        desc.flags |= VOLUME_DESCRIPTOR_FLAG_HAS_UUID;
+        desc.uuid_len = uuid_len;
+        for (uint32_t i = 0; i < uuid_len && i < (uint32_t)VOLUME_DESCRIPTOR_UUID_MAX; ++i) {
+            desc.uuid[i] = uuid[i];
+        }
+    }
+    (void)snprintf(desc.canonical_id, sizeof(desc.canonical_id), "volume:%s", backing_id);
+    registry_add_volume(&desc);
+}
+
+/* A volume on a PARTITION of `unit`, at a given place on the whole disk.
+ *
+ * Separate from publish_volume because the boot match is on the backing device's
+ * LBA RANGE, and only a partition has one: a whole-disk record reports 0/0.
+ * `lba_start`/`lba_count` are what the firmware's HARDDRIVE node is compared
+ * against. */
+static void publish_volume_on_partition(uint8_t backend, uint8_t unit, uint32_t slot,
+                                        uint64_t lba_start, uint64_t lba_count, uint32_t fs_type) {
+    wasmos_block_descriptor_t part;
+    wasmos_volume_descriptor_t desc;
+    char backing_id[64];
+
+    memset(&part, 0, sizeof(part));
+    part.version = BLOCK_DESCRIPTOR_VERSION;
+    part.backend = backend;
+    part.unit = unit;
+    part.partition = slot;
+    part.scheme = (uint32_t)PARTITION_SCHEME_MBR;
+    part.sector_bytes = 512u;
+    part.lba_start = lba_start;
+    part.lba_count = lba_count;
+    part.flags = BLOCK_DESCRIPTOR_FLAG_PRESENT;
+    (void)snprintf(part.canonical_id,
+                   sizeof(part.canonical_id),
+                   "block:%s:%up%u",
+                   backend == (uint8_t)BLOCK_BACKEND_ATA ? "ata" : "virtio-blk",
+                   (unsigned)unit,
+                   (unsigned)slot);
+    registry_add_block(&part);
+    (void)snprintf(backing_id, sizeof(backing_id), "%s", part.canonical_id);
+
+    memset(&desc, 0, sizeof(desc));
+    desc.version = VOLUME_DESCRIPTOR_VERSION;
+    desc.fs_type = fs_type;
+    desc.backing_instance = wasmos_block_fingerprint(backing_id);
+    desc.sector_bytes = 512u;
+    desc.lba_count = lba_count;
+    desc.flags = VOLUME_DESCRIPTOR_FLAG_PRESENT;
+    (void)snprintf(desc.canonical_id, sizeof(desc.canonical_id), "volume:%s", backing_id);
+    registry_add_volume(&desc);
+}
+
 /* Load one rule line through the real parser, so these cases exercise the
  * parsing and the matching together -- a rule that parses into the wrong fields
  * and a matcher that reads the wrong fields are indistinguishable from either
@@ -181,7 +264,7 @@ static void publish_after_rules_reports_the_match(void) {
 
     publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
 
-    check(out_has("block_fs rule queued spawn driver=ata unit=0"),
+    check(out_has("block rule queued spawn mount=boot id=block:ata:0"),
           "a device publishing after its rule is reported by the publish path");
     check(g_dm.block_fs_rules[0].queued == 1u, "and the rule is queued");
 }
@@ -212,7 +295,7 @@ static void rescan_after_late_rules_reports_the_match(void) {
 
     check(g_dm.block_fs_rules[1].queued == 1u || g_dm.block_fs_rules[1].spawned == 1u,
           "the re-scan queues the late rule against the already-published device");
-    check(out_has("block_fs rule queued spawn driver=ata unit=1"),
+    check(out_has("block rule queued spawn mount=user id=block:ata:1"),
           "and the re-scan reports the match, as the publish path does");
 }
 
@@ -228,7 +311,7 @@ static void a_rule_matches_only_its_own_backend(void) {
     check(g_dm.block_fs_rules[0].queued == 0u, "and the ata rule stays unqueued");
 
     publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
-    check(out_has("block_fs rule queued spawn driver=ata unit=0"),
+    check(out_has("block rule queued spawn mount=boot id=block:ata:0"),
           "while its own backend's disk does satisfy it");
 }
 
@@ -349,6 +432,220 @@ static void a_partition_is_matched_by_its_type_guid(void) {
           "and the ESP type GUID matches its mixed-endian on-disk bytes");
 }
 
+/* Regression: 2026-08-30-volume-uuid-read-in-gpt-byte-order.
+ *
+ * ATTR{uuid} was parsed by parse_guid, which reads the GPT mixed-endian on-disk
+ * form with its first three groups reversed. A volume uuid is not a GPT GUID: it
+ * is whatever bytes the FORMAT stores, and mkfs_wfs writes and prints them in
+ * order. A rule spelling the uuid mkfs printed therefore compared bytes
+ * 3,2,1,0,5,4,7,6 against 0,1,2,3,4,5,6,7 and could never fire -- silently, since
+ * a rule that matches nothing looks exactly like a device that is absent.
+ *
+ * The bytes below are deliberately ascending, so a reversal of any group shows
+ * up as a mismatch rather than surviving a palindrome. */
+static void a_volume_is_matched_by_the_uuid_its_formatter_printed(void) {
+    static const uint8_t WFS_UUID[16] = {0x01,
+                                         0x02,
+                                         0x03,
+                                         0x04,
+                                         0x05,
+                                         0x06,
+                                         0x07,
+                                         0x08,
+                                         0x09,
+                                         0x0a,
+                                         0x0b,
+                                         0x0c,
+                                         0x0d,
+                                         0x0e,
+                                         0x0f,
+                                         0x10};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{fstype}==\"wfs\", "
+                    "ATTR{uuid}==\"01020304-0506-0708-090a-0b0c0d0e0f10\", "
+                    "ENV{MOUNT}=\"/wfs\", RUN+=\"system/drivers/fs_wfs.wap\"\n") == 1,
+          "the volume-uuid rule parses");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, NULL, WFS_UUID, 16u);
+    check(g_dm.block_fs_rules[0].queued == 1u,
+          "a volume matches the uuid spelled in the order its formatter prints");
+}
+
+/* The hyphens are presentation. Accepting the bare form as well is what lets a
+ * uuid be pasted from either mkfs_wfs's `--uuid` argument or its report without
+ * the two disagreeing about which one a rule takes. */
+static void a_volume_uuid_may_be_spelled_without_hyphens(void) {
+    static const uint8_t WFS_UUID[16] = {0x01,
+                                         0x02,
+                                         0x03,
+                                         0x04,
+                                         0x05,
+                                         0x06,
+                                         0x07,
+                                         0x08,
+                                         0x09,
+                                         0x0a,
+                                         0x0b,
+                                         0x0c,
+                                         0x0d,
+                                         0x0e,
+                                         0x0f,
+                                         0x10};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", "
+                    "ATTR{uuid}==\"0102030405060708090a0b0c0d0e0f10\", "
+                    "ENV{MOUNT}=\"/wfs\", RUN+=\"system/drivers/fs_wfs.wap\"\n") == 1,
+          "the unhyphenated form parses");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, NULL, WFS_UUID, 16u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "and names the same volume");
+}
+
+/* A FAT volume serial is four bytes, not sixteen. Requiring a full GUID would
+ * leave every FAT volume unaddressable by identity, which is most of them. */
+static void a_short_format_identity_is_spelled_at_its_own_width(void) {
+    static const uint8_t FAT_SERIAL[4] = {0x1a, 0x2b, 0x3c, 0x4d};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{fstype}==\"fat\", "
+                    "ATTR{uuid}==\"1a2b3c4d\", "
+                    "ENV{MOUNT}=\"/user\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "a four-byte volume serial parses");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 1u, (uint32_t)FS_TYPE_FAT, "USER", FAT_SERIAL, 4u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "and matches the volume carrying it");
+}
+
+/* What the uuid matcher is FOR: two volumes of the same format, told apart by
+ * identity alone. Without this the only discriminator left is the disk each sits
+ * on, which is the naming mount policy exists to stop. */
+static void two_volumes_of_one_format_are_told_apart_by_uuid(void) {
+    static const uint8_t UUID_A[16] = {0xaa, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    static const uint8_t UUID_B[16] = {0xbb, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{fstype}==\"wfs\", "
+                    "ATTR{uuid}==\"bb000002-0000-0000-0000-000000000000\", "
+                    "ENV{MOUNT}=\"/vwfs\", RUN+=\"system/drivers/fs_wfs.wap\"\n") == 1,
+          "the rule names one of two identically-formatted volumes");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, NULL, UUID_A, 16u);
+    check(g_dm.block_fs_rules[0].queued == 0u, "the volume it does not name is skipped");
+
+    publish_volume(
+        (uint8_t)BLOCK_BACKEND_VIRTIO_BLK, 48u, (uint32_t)FS_TYPE_WFS, NULL, UUID_B, 16u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "and the one it names is matched");
+}
+
+/* ATTR{boot}: the volume this system was loaded from.
+ *
+ * The one identity nothing on the volume can supply -- an ESP is an ordinary FAT
+ * volume, its label is firmware-specific, and an MBR gives it no partition label
+ * and no PARTUUID. The firmware knows, the bootloader records it, the kernel
+ * publishes `boot.partition`, and the match is on the backing partition's LBA
+ * range because that is the one fact both sides state the same way.
+ *
+ * The range below is the ESP the shipped boot image actually reports (LBA 63,
+ * 1032129 sectors), so a change that broke the hexadecimal parse would be caught
+ * with the value it will really see. */
+static void the_boot_volume_is_the_one_the_firmware_named(void) {
+    harness_reset();
+    (void)snprintf(g_test_env_boot_partition, sizeof(g_test_env_boot_partition), "%s", "3f:fbfc1");
+    load_boot_partition();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{boot}==\"1\", "
+                    "ENV{MOUNT}=\"/boot\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "the boot-volume rule parses");
+
+    publish_volume_on_partition(
+        (uint8_t)BLOCK_BACKEND_ATA, 0u, 2u, 2048u, 128991u, (uint32_t)FS_TYPE_FAT);
+    check(g_dm.block_fs_rules[0].queued == 0u,
+          "a volume elsewhere on the same disk is not the boot volume");
+
+    publish_volume_on_partition(
+        (uint8_t)BLOCK_BACKEND_ATA, 0u, 1u, 63u, 1032129u, (uint32_t)FS_TYPE_FAT);
+    check(g_dm.block_fs_rules[0].queued == 1u,
+          "and the volume covering the firmware's LBA range is");
+}
+
+/* A boot the firmware could not describe -- a network boot, or a whole disk with
+ * no table -- publishes no variable. Nothing is then marked, so an ATTR{boot}
+ * rule selects nothing rather than selecting whatever happens to be first. */
+static void without_a_boot_partition_nothing_is_the_boot_volume(void) {
+    harness_reset();
+    g_test_env_boot_partition[0] = '\0';
+    load_boot_partition();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{boot}==\"1\", "
+                    "ENV{MOUNT}=\"/boot\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "the boot-volume rule parses");
+
+    publish_volume_on_partition(
+        (uint8_t)BLOCK_BACKEND_ATA, 0u, 1u, 63u, 1032129u, (uint32_t)FS_TYPE_FAT);
+    check(g_dm.block_fs_rules[0].queued == 0u,
+          "no volume is the boot volume when the firmware named none");
+}
+
+/* ATTR{boot} on a block or partition rule can never fire: the flag lives on a
+ * volume. Refused at load, on the same terms as every other cross-subsystem
+ * matcher. */
+static void a_boot_matcher_outside_a_volume_rule_is_refused(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", ATTR{boot}==\"1\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "a disk rule carrying ATTR{boot} is refused");
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{boot}==\"yes\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "and so is a boot matcher that is neither 0 nor 1");
+}
+
+/* An EMPTY label is a label. A FAT volume may genuinely be named "", which is
+ * not the same as a format that carries no label at all -- the descriptor has
+ * always separated the two, and a rule has to be able to say it as well.
+ *
+ * Presence inferred from `label[0]` could not: ATTR{label}=="" was
+ * indistinguishable from no matcher, so it matched every volume instead of the
+ * blank-labelled ones, and slipped past the check that refuses a volume matcher
+ * on a block rule. */
+static void an_empty_label_matcher_selects_the_blank_label(void) {
+    static const uint8_t SERIAL[4] = {0x11, 0x22, 0x33, 0x44};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{label}==\"\", "
+                    "ENV{MOUNT}=\"/blank\", RUN+=\"system/drivers/fs_fat.wap\"\n") == 1,
+          "an empty-label rule parses");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 1u, (uint32_t)FS_TYPE_FAT, "USER", SERIAL, 4u);
+    check(g_dm.block_fs_rules[0].queued == 0u, "a labelled volume does not satisfy it");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_FAT, "", SERIAL, 4u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "and a blank-labelled one does");
+}
+
+/* The same flag on the refusal path: a volume matcher on a block rule can never
+ * fire, and an empty value must not smuggle one past. */
+static void an_empty_label_matcher_outside_a_volume_rule_is_refused(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", ATTR{label}==\"\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "a disk rule carrying an empty ATTR{label} is refused");
+}
+
+/* An empty PARTITION label is not a partition named "". An MBR partition has no
+ * name concept and a GPT entry may be unnamed; neither should satisfy a matcher
+ * asking for a name. So the matcher can select nothing and the rule is refused at
+ * load, on the same terms as a partition matcher on a disk rule.
+ *
+ * Deliberately the opposite of ATTR{label}=="" above, and the asymmetry is the
+ * point: a FILESYSTEM label is a value a volume can carry blank, and the
+ * descriptor says which volumes do. */
+static void an_empty_partition_name_matcher_is_refused(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"partition\", ATTR{partlabel}==\"\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "a rule asking for an empty partition label is refused");
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", ATTR{name}==\"\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "and so is one asking for an empty canonical id");
+}
+
 /* A malformed matcher rejects the RULE. Dropping the attribute instead would
  * widen the rule to everything its author did not ask for, and on the mount path
  * that means a filesystem on the wrong volume. */
@@ -423,6 +720,16 @@ int main(void) {
     a_partition_rule_does_not_match_a_disk();
     a_partition_is_matched_by_its_label();
     a_partition_is_matched_by_its_type_guid();
+    a_volume_is_matched_by_the_uuid_its_formatter_printed();
+    a_volume_uuid_may_be_spelled_without_hyphens();
+    a_short_format_identity_is_spelled_at_its_own_width();
+    two_volumes_of_one_format_are_told_apart_by_uuid();
+    the_boot_volume_is_the_one_the_firmware_named();
+    without_a_boot_partition_nothing_is_the_boot_volume();
+    a_boot_matcher_outside_a_volume_rule_is_refused();
+    an_empty_label_matcher_selects_the_blank_label();
+    an_empty_label_matcher_outside_a_volume_rule_is_refused();
+    an_empty_partition_name_matcher_is_refused();
     a_malformed_matcher_rejects_the_rule();
     a_partition_matcher_on_a_disk_rule_is_refused();
     an_overlong_rule_line_is_refused();

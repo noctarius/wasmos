@@ -27,12 +27,22 @@ class QemuConfig:
     # FAT disks this cannot be a synthetic FAT directory, so it is an image
     # mkfs_wfs built; absent, the guest simply has no WFS unit to mount.
     wfs_image: str = ""
+    # A SECOND WFS volume, for a test that wants one filesystem reached over two
+    # transports. Separate from wfs_image rather than the same file attached
+    # twice, because the two must be distinguishable: mkfs_wfs gives each image
+    # its own uuid, and a mount rule that names a volume by identity cannot tell
+    # apart two attachments of one file. Attached by the test that wants it, not
+    # by build_qemu_command.
+    wfs_virtio_image: str = ""
     # Whether the WFS drive gets a throwaway copy-on-write overlay. True keeps
     # the suite repeatable; a test that has to prove a write REACHED the media --
     # the clean-unmount flag surviving a halt, say -- sets it False and must then
     # supply its own scratch copy of the image, because writes land in the file
     # named by wfs_image and stay there.
     wfs_snapshot: bool = True
+    # Whether the /user GPT image gets a throwaway overlay. Same contract as
+    # wfs_snapshot above, and on for the same reason.
+    userfs_snapshot: bool = True
     nographic: bool = True
     display: str = ""
     isolate_esp: bool = False
@@ -64,6 +74,10 @@ class QemuConfig:
         if not self.wfs_image:
             self.wfs_image = os.environ.get(
                 "WASMOS_WFS_IMAGE", os.path.join("build", "wfs.img")
+            )
+        if not self.wfs_virtio_image:
+            self.wfs_virtio_image = os.environ.get(
+                "WASMOS_WFS_VIRTIO_IMAGE", os.path.join("build", "wfs_virtio.img")
             )
         if self.userfs_image:
             return
@@ -243,6 +257,9 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     esp_dir = os.environ.get("WASMOS_ESP", os.path.join(build_dir, "esp"))
     userfs_image = default_userfs_image(esp_dir)
     wfs_image = os.environ.get("WASMOS_WFS_IMAGE", os.path.join(build_dir, "wfs.img"))
+    wfs_virtio_image = os.environ.get(
+        "WASMOS_WFS_VIRTIO_IMAGE", os.path.join(build_dir, "wfs_virtio.img")
+    )
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
     # On by default: the monitor is what makes dump_stall_state possible, and a
     # stall that produces no diagnosis is the failure mode this is here to end.
@@ -263,6 +280,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         esp_dir=esp_dir,
         userfs_image=userfs_image,
         wfs_image=wfs_image,
+        wfs_virtio_image=wfs_virtio_image,
         isolate_esp=isolate_esp,
         enable_monitor=enable_monitor,
         monitor_socket=monitor_socket,
@@ -307,7 +325,14 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.userfs_image:
         # A raw GPT image, not a `fat:rw:` directory: the /user volume is a real
         # partition with a label, which is what its mount rule matches on.
-        cmd += ["-drive", f"format=raw,file={cfg.userfs_image}"]
+        #
+        # Overlaid for the same reason the WFS drive is: it is a build artifact
+        # the suites read as a fixed input, and a guest write would otherwise
+        # land in the file permanently -- nothing regenerates an image the guest
+        # has made newer than its inputs. A test that needs a write to /user to
+        # survive clears cfg.userfs_snapshot and supplies its own copy.
+        snapshot = "snapshot=on," if cfg.userfs_snapshot else ""
+        cmd += ["-drive", f"format=raw,{snapshot}file={cfg.userfs_image}"]
     if cfg.wfs_image and os.path.exists(cfg.wfs_image):
         # if=ide,index=2 explicitly: index 2 is the secondary channel's master,
         # which is the unit the device-manager rule for WFS matches. Relying on

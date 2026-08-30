@@ -16,6 +16,7 @@
 //! only prove the builder and the parser share a misunderstanding.
 const std = @import("std");
 const pt = @import("partition_table");
+const fx = @import("fixtures_disk_images");
 
 const SECTOR = pt.SECTOR_BYTES;
 
@@ -448,4 +449,77 @@ test "gpt: type and partition GUIDs are the raw on-disk bytes" {
     try std.testing.expectEqual(@as(u8, 0x28), table.entries[0].type_guid[0]);
     try std.testing.expectEqual(@as(u8, 0x3B), table.entries[0].type_guid[15]);
     try std.testing.expectEqual(@as(u8, 0xA1), table.entries[0].part_guid[0]);
+}
+
+// --- bootable partitions, from captured images -------------------------------
+//
+// "Marked bootable" and "the volume this system booted from" are different
+// facts. A table may mark any number of partitions active, on any disk,
+// including one nothing booted from -- and UEFI ignores the MBR flag entirely,
+// selecting the ESP by its type GUID instead. Which volume was actually booted
+// is a property of the BOOT and only the bootloader knows it; see
+// `docs/architecture/37-volume-manager.md`.
+//
+// The bytes come from `fixtures_disk_images.zig`, captured from real writers, so
+// these cases cannot pass because the builders above and the parser agree with
+// each other about a layout no tool emits.
+
+test "captured mbr: the active flag is read, not skipped" {
+    // The ESP disk's entry is `80 01 01 00 06 ...`: active, FAT16, at LBA 63.
+    // The 0x80 is in the entry's FIRST byte, which the parser read past on its
+    // way to the type at byte 4.
+    var table = pt.Table{};
+    try std.testing.expectEqual(pt.MbrResult.ok, pt.parseMbr(fx.MBR_LBA0[0..SECTOR], &table));
+    try std.testing.expectEqual(@as(usize, 1), table.count);
+    try std.testing.expect(table.entries[0].bootable);
+    try std.testing.expectEqual(@as(u8, 0x06), table.entries[0].mbr_type);
+    try std.testing.expectEqual(@as(u64, 63), table.entries[0].lba_start);
+}
+
+test "captured mbr: a cleared active flag reads as not bootable" {
+    // The negative half. Without it the case above also passes for a parser that
+    // hardcodes true, which is the mistake a one-sided assertion cannot catch.
+    var sector: [SECTOR]u8 = undefined;
+    @memcpy(&sector, fx.MBR_LBA0[0..SECTOR]);
+    sector[0x1BE] = 0x00;
+    var table = pt.Table{};
+    try std.testing.expectEqual(pt.MbrResult.ok, pt.parseMbr(&sector, &table));
+    try std.testing.expectEqual(@as(usize, 1), table.count);
+    try std.testing.expect(!table.entries[0].bootable);
+}
+
+test "captured gpt: an ESP entry carries the EFI System Partition type" {
+    // GPT has no bootable flag; the type GUID
+    // C12A7328-F81F-11D2-BA4B-00A0C93EC93B is the marker, stored mixed-endian.
+    //
+    // The parse runs over the real 16 KiB array the header's CRC covers. Entries
+    // 1..127 of this image are zero, so reconstructing the array from entry 0
+    // plus zero fill reproduces the captured bytes exactly -- CRC included,
+    // which is what makes this a real parse and not a byte comparison.
+    const header = pt.parseGptHeader(fx.GPT_ESP_HEAD[SECTOR .. SECTOR * 2]) orelse
+        return error.HeaderRejected;
+    var entries: [16384]u8 = [_]u8{0} ** 16384;
+    @memcpy(entries[0..fx.GPT_ESP_ENTRY.len], &fx.GPT_ESP_ENTRY);
+
+    var scan = pt.GptEntryScan.init(header);
+    var fed: usize = 0;
+    while (fed < entries.len) : (fed += SECTOR) scan.feed(entries[fed .. fed + SECTOR]);
+    const table = scan.finish() orelse return error.EntryArrayRejected;
+
+    try std.testing.expectEqual(@as(usize, 1), table.count);
+    const esp = [_]u8{
+        0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
+        0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
+    };
+    try std.testing.expectEqualSlices(u8, &esp, &table.entries[0].type_guid);
+    // Nothing carries the MBR flag into GPT: bootability there is the type.
+    try std.testing.expect(!table.entries[0].bootable);
+}
+
+test "captured gpt: an ESP disk is still a table, so it holds no volume" {
+    // detectScheme is what suppresses a whole-disk volume. An ESP disk is the
+    // case where getting it wrong is worst: /boot would appear as both the disk
+    // and the partition on it.
+    try std.testing.expectEqual(pt.Scheme.gpt, pt.detectScheme(&fx.GPT_ESP_HEAD));
+    try std.testing.expectEqual(pt.Scheme.mbr, pt.detectScheme(&fx.MBR_LBA0));
 }

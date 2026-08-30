@@ -95,6 +95,10 @@ static uint32_t g_requested_instance = 0u;
  * manager named it. A unit alone does not identify a disk -- it is
  * backend-local -- so both halves are needed to find the right server. */
 static uint8_t g_requested_backend = (uint8_t)BLOCK_BACKEND_UNKNOWN;
+/* The `volume` class instance of the volume mounted here, DERIVED from the same
+ * `id=` (see wfs_parse_volume_instance). 0 when no volume covers this device,
+ * which is not an error: the claim is advisory. */
+static uint32_t g_volume_instance = 0u;
 
 /* Op contexts, static because a task's context must outlive its awaits and the
  * driver runs one op at a time. */
@@ -913,6 +917,94 @@ static uint32_t wfs_parse_requested_instance(void) {
     return wasmos_block_fingerprint(id);
 }
 
+/* The `volume` class instance of the volume this driver mounts.
+ *
+ * DERIVED here rather than asked for: a volume's canonical id is `volume:`
+ * prefixed to its backing device's (architecture/37-volume-manager.md §3), and
+ * its class instance is the fingerprint of that. Both sides build the same
+ * string from the same `id=`, so nothing has to carry the value and there is no
+ * second spelling to disagree with the publisher.
+ *
+ * Returns 0 -- which no volume has -- when `id=` is missing or the prefixed form
+ * would not fit. A truncated id fingerprints to a value nobody registered, so
+ * silently shortening it would claim some other volume, or none. */
+static uint32_t wfs_parse_volume_instance(void) {
+    char args[WFS_STARTUP_ARGS_MAX];
+    char id[BLOCK_DESCRIPTOR_ID_MAX];
+    char volume_id[VOLUME_DESCRIPTOR_ID_MAX];
+    static const char prefix[] = "volume:";
+    uint32_t n = 0;
+    uint32_t i = 0;
+
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
+        return 0u;
+    }
+    if (wfs_copy_token(args, "id=", id, sizeof(id)) != 0) {
+        return 0u;
+    }
+    while (prefix[n] != '\0') {
+        volume_id[n] = prefix[n];
+        ++n;
+    }
+    while (id[i] != '\0') {
+        if (n + 1u >= sizeof(volume_id)) {
+            return 0u;
+        }
+        volume_id[n++] = id[i++];
+    }
+    volume_id[n] = '\0';
+    return wasmos_block_fingerprint(volume_id);
+}
+
+/* Record or release this driver's claim on the volume it mounted.
+ *
+ * ADVISORY, and deliberately fire-and-forget. The volume manager is not in the
+ * I/O path (architecture/37-volume-manager.md §5), so the claim changes nothing
+ * about this mount -- it is what `fsck.wfs` consults before touching a volume a
+ * filesystem may be writing. Blocking the mount on the round trip would make an
+ * advisory record able to stall a boot; the reply is handled in wfs_dispatch
+ * instead, where a refusal can be reported without anyone waiting for it.
+ *
+ * A volume that no volume manager published is simply not claimed. That is the
+ * ordinary case for a driver spawned by a `SUBSYSTEM=="block"` rule, and it is
+ * why nothing here treats a failed lookup as an error. */
+static void wfs_volume_claim(int32_t claim) {
+    svc_class_entry_t providers[8];
+    int32_t n;
+    int32_t i;
+
+    if (g_volume_instance == 0u) {
+        return;
+    }
+    n = wasmos_svc_lookup_class(g_proc_endpoint,
+                                g_reply_endpoint,
+                                "volume",
+                                providers,
+                                (int32_t)(sizeof(providers) / sizeof(providers[0])),
+                                1);
+    if (n < 0) {
+        return;
+    }
+    if (n > (int32_t)(sizeof(providers) / sizeof(providers[0]))) {
+        n = (int32_t)(sizeof(providers) / sizeof(providers[0]));
+    }
+    for (i = 0; i < n; ++i) {
+        if (providers[i].instance != g_volume_instance) {
+            continue;
+        }
+        (void)wasmos_sys_ipc_send_retry((int32_t)providers[i].endpoint,
+                                        g_fs_endpoint,
+                                        VOLUME_IPC_CLAIM_REQ,
+                                        1,
+                                        (int32_t)g_volume_instance,
+                                        claim,
+                                        0,
+                                        0,
+                                        WFS_SEND_RETRIES);
+        return;
+    }
+}
+
 /* Which block unit the rule asked for. Still delivered, and still what names
  * this driver's service ("fs.wfs<unit>") and its fs.backend instance -- only the
  * BLOCK target moved to the canonical id. */
@@ -979,6 +1071,12 @@ static int wfs_parse_requested_mount(char* out, uint32_t out_cap) {
 static void wfs_do_shutdown(int32_t src, int32_t request_id) {
     static wfs_sync_ctx_t sync;
 
+    /* Released before the clean mark is written, not after: once this returns
+     * DONE the driver may be torn down at any moment, and a claim that outlives
+     * its holder makes the volume permanently unrecheckable. Releasing early
+     * costs nothing -- the machine is going down, so nothing is going to check
+     * this volume in the window. */
+    wfs_volume_claim(0);
     if (g_vol.mounted && !g_vol.super.read_only) {
         /* Static and zeroed rather than a stack local: it carries a coroutine
          * record, which must be zeroed before the task starts it, and the guest
@@ -1046,6 +1144,17 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
     case FS_IPC_RENAME_REQ:
         wfs_do_rename(src, request_id, a0, a1, a2);
         return;
+    case VOLUME_IPC_RESP:
+        /* The volume manager acknowledging a claim this driver sent
+         * fire-and-forget. Nothing waits on it; it is consumed here so the
+         * default below does not answer a reply with an error. */
+        return;
+    case VOLUME_IPC_ERROR:
+        /* A claim that did not take. The mount stands either way -- the record
+         * is advisory -- but `fsck.wfs` will not know this volume is in use, so
+         * the loss is worth a line rather than silence. */
+        wfs_log("[fs-wfs] volume claim refused\n");
+        return;
     default:
         /* WRITE-side opcodes this driver does not implement at all. */
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_UNSUPPORTED, 0);
@@ -1053,12 +1162,17 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
     }
 }
 
-/* The entry export the package manifest names.  It takes NO parameters: the
- * process manager calls every app entry with zero arguments and passes startup
- * state through the spawn-info buffer instead, and wasm3 rejects a call whose
- * argument count does not match the declared signature ("argument count
- * mismatch"), so a parameterised entry kills the driver at spawn under the
- * wasm3 backend. */
+/* The entry the process manager calls, and it takes NO arguments.
+ *
+ * A path-spawned entry is called with argc 0 (process_manager_spawn.c,
+ * wasmos_app.c), and wasm3 refuses argc 0 against a function that declares
+ * parameters -- so a four-parameter entry here made this driver fail to start
+ * at all under the default runtime, before its first line of output. WARP does
+ * not enforce entry arity, which is the only reason it ever ran. fs_fat and
+ * fs_init declare it the same way for the same reason.
+ *
+ * Startup values do not arrive as arguments: they come from the spawn-info
+ * buffer, read below. */
 WASMOS_WASM_EXPORT int32_t initialize(void) {
     char mount_alias[32];
     char service_name[32];
@@ -1078,6 +1192,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
     g_requested_unit = wfs_parse_requested_unit();
     g_requested_instance = wfs_parse_requested_instance();
+    g_volume_instance = wfs_parse_volume_instance();
     if (g_requested_instance == 0u || g_requested_unit < 0) {
         /* The id names the disk and the unit names this driver's service. A
          * guessed disk mounts the wrong volume, so neither is inferred. */
@@ -1125,6 +1240,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wfs_stall();
     }
     wfs_log("[fs-wfs] mounted\n");
+    /* Claimed the moment the volume is mounted, not once the driver is ready:
+     * between those two points the volume is already being written -- the mount
+     * itself replays a journal -- and that is exactly the window in which a
+     * check would report damage that is only a race. */
+    wfs_volume_claim(1);
     /* Which of the three mount paths the volume took. The state byte never
      * leaves the driver, so this line is the only way to observe from outside
      * whether the previous boot's unmount actually reached the media -- which is

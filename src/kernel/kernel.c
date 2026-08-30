@@ -19,6 +19,7 @@
 #endif
 #include "framebuffer.h"
 #include "capability.h"
+#include "kenv.h"
 #include "slab.h"
 #include "system_control.h"
 #include "wasm_driver.h"
@@ -43,6 +44,55 @@
 
 static const boot_info_t* g_boot_info;
 static boot_info_t g_boot_info_shadow;
+
+/* Publish the boot partition into the kernel environment, where any guest reads
+ * it with the `env_get` host call.
+ *
+ * kenv rather than a host call of its own: this is one string read once, by one
+ * service, and a dedicated call would add an ABI surface across five languages
+ * to carry it. The device manager compares the value against the LBA range each
+ * published partition reports and marks the volume on the match, which is how
+ * `SUBSYSTEM=="volume", ATTR{boot}=="1"` selects /boot without naming a disk.
+ *
+ * `<start>:<count>`, both hexadecimal without a prefix, LBAs on the whole disk.
+ * Nothing is published when the bootloader found no MEDIA/HARDDRIVE node -- a
+ * network boot, or a whole disk with no table -- and the absent variable is what
+ * tells a consumer the question has no answer, as distinct from an answer that
+ * matches nothing. */
+static void kernel_publish_boot_partition(const boot_info_t* boot_info) {
+    static const char hex[] = "0123456789abcdef";
+    char value[40];
+    uint32_t n = 0;
+    int started = 0;
+
+    if (!boot_info || (boot_info->flags & BOOT_INFO_FLAG_BOOT_PARTITION_PRESENT) == 0u) {
+        return;
+    }
+    for (int shift = 60; shift >= 0; shift -= 4) {
+        uint8_t nibble = (uint8_t)((boot_info->boot_partition_start >> shift) & 0xFu);
+        if (nibble == 0u && !started && shift != 0) {
+            continue;
+        }
+        started = 1;
+        value[n++] = hex[nibble];
+    }
+    value[n++] = ':';
+    started = 0;
+    for (int shift = 60; shift >= 0; shift -= 4) {
+        uint8_t nibble = (uint8_t)((boot_info->boot_partition_size >> shift) & 0xFu);
+        if (nibble == 0u && !started && shift != 0) {
+            continue;
+        }
+        started = 1;
+        value[n++] = hex[nibble];
+    }
+    value[n] = '\0';
+    if (kenv_set("boot.partition", value) != WASMOS_OK) {
+        klog_write("[kernel] boot.partition not published; /boot falls back to a device rule\n");
+        return;
+    }
+    klog_printf("[kernel] boot.partition %s\n", value);
+}
 
 static const uint8_t g_preempt_test_enabled = 0;
 #ifndef WASMOS_RING3_SMOKE_DEFAULT
@@ -238,6 +288,7 @@ void kmain(boot_info_t* boot_info) {
     klog_write("[kernel] wasm3 init on-demand\n");
 #endif
     klog_write("[kernel] boot_info shadow active\n");
+    kernel_publish_boot_partition(boot_info);
 
     if (process_spawn_idle("idle", idle_entry, 0, &idle_pid) != 0) {
         klog_write("[kernel] idle spawn failed\n");

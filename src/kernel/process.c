@@ -1905,7 +1905,14 @@ void process_block_on_ipc(process_t* process) {
 /* Latches the "child has announced itself" flag the sync-spawn poll waits on.
  * A latch, not an event: setting it twice is harmless and it is never cleared
  * for the life of the slot.  Does not wake or unblock anything by itself —
- * pm_poll_sync_spawn observes it on its next PM dispatch. */
+ * pm_poll_sync_spawn observes it on its next PM dispatch.
+ *
+ * Deliberately does NOT broadcast. A waiter for "some named service is up" would
+ * be woken by one, and that was tried: it puts cross-CPU wake traffic on a path
+ * every service touches during boot, and the SMP scheduler stress test began
+ * panicking intermittently (docs/TASKS.md). Such a waiter sleeps on its own
+ * endpoint with a timeout instead -- what it waits for is seconds away and does
+ * not merit a hot-path wake. */
 void process_notify_ready(process_t* process) {
     if (!process) {
         return;

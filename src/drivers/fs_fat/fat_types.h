@@ -119,19 +119,6 @@ typedef struct {
 } fat_bpb_t;
 #pragma pack(pop)
 
-/* One 16-byte MBR partition-table entry, as found at offset 0x1BE of LBA 0.
- * Probed only when LBA 0 does not parse as a BPB. The CHS fields are legacy and
- * ignored; `lba_start` is what the mount uses, and it becomes the volume's
- * boot_lba so every later LBA is relative to it. `type` 0 means an unused slot. */
-typedef struct {
-    uint8_t status;
-    uint8_t chs_first[3];
-    uint8_t type;
-    uint8_t chs_last[3];
-    uint32_t lba_start;
-    uint32_t sectors;
-} fat_mbr_entry_t;
-
 /* An open file descriptor (fd = index + 3).
  *
  * `owner` is the endpoint that opened it: a slot belongs to that client and

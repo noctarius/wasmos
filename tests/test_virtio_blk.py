@@ -217,33 +217,37 @@ class VirtioBlkTest(unittest.TestCase):
         # layout: its id must name the unit its descriptor reports.
         _virtio_disk_id(self.session)
 
-    def test_a_rule_is_queued_only_for_its_own_backend(self) -> None:
-        """A block rule naming one backend is not queued for a disk on another.
+    def test_a_rule_is_queued_only_for_its_own_device(self) -> None:
+        """A rule naming one device is not queued for another that resembles it.
 
-        The shipped rules name DRIVER=="ata", and a virtio disk is attached and
-        publishes its own unit 0 — the same unit number the /boot rule asks for.
-        If the matcher compared units alone, that rule would be queued for the
-        virtio disk and a filesystem would try to mount it.
+        A virtio disk is attached and publishes its own unit 0 — the same unit
+        number ATA's first disk carries. If the matcher compared units alone, an
+        ATA rule would be queued for the virtio disk and a filesystem would try
+        to mount it.
 
         This is a regression guard: the device manager had TWO copies of the
         match predicate, and the one on the live publish path never compared the
-        backend at all. It was masked only because ATA publishes first, so /boot
-        was already mounted by the time the virtio disk arrived.
+        backend at all.
+
+        /user is the rule asserted present, because it is the one that still
+        names a device — /boot is selected by the volume the firmware booted
+        from, which no virtio disk can satisfy however its units are numbered.
         """
         assert self.session is not None
-        for marker in (
-            b"block_fs rule queued spawn driver=ata unit=0",
-            b"block_fs rule queued spawn driver=ata unit=1",
-        ):
-            self.assertTrue(
-                self.session.expect(marker, timeout_s=60),
-                f"{marker!r} missing — the ATA disks did not match their own rules",
-            )
-        # No rule names virtio-blk, so none may be queued for it. Asserted as an
-        # absence over the accumulated buffer: by now both ATA disks have matched
-        # and the virtio disk has published.
+        self.assertTrue(
+            self.session.expect(
+                b"partition rule queued spawn mount=/user id=block:ata:1p1",
+                timeout_s=60,
+            ),
+            "the /user rule was not queued for its own ATA partition",
+        )
+        # No mount rule names virtio-blk, so none may be queued for one. Asserted
+        # as an absence over the accumulated buffer: by now the ATA rules have
+        # matched and the virtio disk has published. Matched on the ID, because
+        # that is what every layer names a device by and a virtio device's id is
+        # the only place `virtio-blk` appears.
         self.assertNotIn(
-            b"block_fs rule queued spawn driver=virtio-blk",
+            b"rule queued spawn mount=/user id=block:virtio-blk",
             self.session.buf,
             "an ata rule was queued for the virtio disk — the matcher compared "
             "units without comparing backends",

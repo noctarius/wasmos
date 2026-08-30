@@ -78,40 +78,80 @@ static int32_t libc_fs_stage_path(const char* path, size_t* out_len) {
     return bid;
 }
 
+/* Attempts of a request the backend refused as BUSY, one scheduler yield apart.
+ *
+ * WASMOS_ERR_FS_BUSY means the backend had no free op-context or task slot --
+ * abi/errors.yaml marks it retryable for exactly this reason, and fs_wfs raises
+ * it from every site where wasmos_async_start cannot get one. It is a transient
+ * shortage under concurrent load, not a property of the request, so a client
+ * that gives up on it turns someone else's busy moment into its own failure.
+ * The bound is a livelock guard, not a latency budget: the backend only has to
+ * be scheduled once to free a slot. */
+#define LIBC_FS_BUSY_RETRY_LIMIT 256
+
 /* Send an FS IPC request and wait for FS_IPC_RESP; skips unmatched messages.
- * Returns 0 on success and fills out_arg0/out_arg1 from the response. */
+ *
+ * Returns 0 on success and fills out_arg0/out_arg1 from the response. On failure
+ * returns the PACKED reason the backend sent (a negative WASMOS_ERR_*), never a
+ * bare -1: the reason arrives in FS_IPC_ERROR.arg0 and discarding it left every
+ * caller reporting "it failed" for a missing file, a full open-file table and a
+ * transient slot shortage alike. Callers may still test the result against zero.
+ *
+ * A BUSY reply is retried here rather than reported, because it says nothing
+ * about the request -- see LIBC_FS_BUSY_RETRY_LIMIT. */
 static int libc_fs_request(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
                            int32_t* out_arg0, int32_t* out_arg1) {
     int32_t fs_endpoint = libc_fs_endpoint();
     int32_t reply_endpoint = libc_fs_reply_endpoint();
     wasmos_ipc_message_t reply;
     int32_t request_id;
+    int32_t busy_tries = 0;
 
     if (fs_endpoint < 0 || reply_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_FS_NOT_READY;
     }
 
-    request_id = g_fs_request_id++;
-    if (g_fs_request_id < 1) {
-        g_fs_request_id = 1;
-    }
-
-    if (wasmos_ipc_send(fs_endpoint, reply_endpoint, type, request_id, arg0, arg1, arg2, arg3) !=
-        0) {
-        return -1;
-    }
     for (;;) {
-        if (wasmos_ipc_select_one(reply_endpoint) < 0) {
-            return -1;
+        int32_t send_rc;
+
+        request_id = g_fs_request_id++;
+        if (g_fs_request_id < 1) {
+            g_fs_request_id = 1;
         }
-        wasmos_ipc_message_read_last(&reply);
-        if (reply.request_id != request_id) {
+
+        /* Retry a full destination queue rather than failing the call. Every
+         * service in the tree sends this way; this path did not, so a burst of
+         * concurrent FS traffic surfaced as a failed read or write. */
+        send_rc = wasmos_ipc_send_retry(
+            fs_endpoint, reply_endpoint, type, request_id, arg0, arg1, arg2, arg3, 0);
+        if (send_rc != 0) {
+            return WASMOS_ERR_FS_BACKEND_IPC;
+        }
+
+        for (;;) {
+            if (wasmos_ipc_select_one(reply_endpoint) < 0) {
+                return WASMOS_ERR_FS_BACKEND_IPC;
+            }
+            wasmos_ipc_message_read_last(&reply);
+            /* A reply carrying another request's id is a leftover from a call
+             * that already returned; drop it and keep waiting for ours. */
+            if (reply.request_id != request_id) {
+                continue;
+            }
+            break;
+        }
+
+        if (reply.type == FS_IPC_RESP) {
+            break;
+        }
+        if (reply.arg0 == WASMOS_ERR_FS_BUSY && ++busy_tries < LIBC_FS_BUSY_RETRY_LIMIT) {
+            /* Give the backend a chance to retire whatever holds the slot. */
+            (void)wasmos_sched_yield();
             continue;
         }
-        if (reply.type != FS_IPC_RESP) {
-            return -1;
-        }
-        break;
+        /* Anything else is the backend's verdict on this request; hand the
+         * caller the reason rather than the fact of failure. */
+        return (reply.arg0 != 0) ? reply.arg0 : WASMOS_ERR_FS_BACKEND_IPC;
     }
     if (out_arg0) {
         *out_arg0 = reply.arg0;
@@ -209,7 +249,9 @@ int open(const char* path, int flags, ...) {
     rc = libc_fs_request(FS_IPC_OPEN_REQ, (int32_t)path_len, flags, bid, b1, &fd, NULL);
     (void)wasmos_xfer_buffer_release(bid);
     if (rc != 0) {
-        return -1;
+        /* The packed reason, not a bare -1: it is already negative, so a caller
+         * testing `fd < 0` is unaffected and one that wants to know WHY now can. */
+        return (int)rc;
     }
     return (int)fd;
 }
@@ -369,12 +411,15 @@ int close(int fd) {
 
 off_t lseek(int fd, off_t offset, int whence) {
     int32_t result = -1;
+    int seek_rc;
 
     if (offset < (off_t)INT32_MIN || offset > (off_t)INT32_MAX) {
         return (off_t)-1;
     }
-    if (libc_fs_request(FS_IPC_SEEK_REQ, fd, (int32_t)offset, whence, 0, &result, NULL) != 0) {
-        return (off_t)-1;
+    seek_rc = libc_fs_request(FS_IPC_SEEK_REQ, fd, (int32_t)offset, whence, 0, &result, NULL);
+    if (seek_rc != 0) {
+        /* The packed reason, already negative, rather than a bare -1. */
+        return (off_t)seek_rc;
     }
     return (off_t)result;
 }

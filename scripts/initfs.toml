@@ -106,6 +106,25 @@ flags = ["bootstrap"]
 path = "system/services/device_manager.wap"
 source = "device_manager.wap"
 
+# The partition and volume managers are in the INITFS, not on the ESP, because
+# /boot is mounted from a volume and a volume does not exist until they have run.
+# On the ESP they could only be spawned by the boot rules, which load after /boot
+# is already mounted -- the circle this placement breaks.
+#
+# Both are Zig, which the build already requires: the native gfx-compositor and
+# font-service are Zig too, so nothing configures without it.
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/partition_manager.wap"
+source = "partition_manager.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/volume_manager.wap"
+source = "volume_manager.wap"
+
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]

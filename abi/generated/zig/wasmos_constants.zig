@@ -143,6 +143,68 @@ pub const BLOCK_DESCRIPTOR_FLAG_ACTIVE_SERVICE: i32 = 0x2;
 /// Writes are refused by the backend.
 pub const BLOCK_DESCRIPTOR_FLAG_READ_ONLY: i32 = 0x4;
 
+// volume_descriptor
+/// Version and size ceilings of wasmos_volume_descriptor_t, the record that
+/// describes one VOLUME -- a thing with a filesystem on it. The struct is
+/// declared in src/drivers/include/wasmos_driver_abi.h and mirrored in
+/// src/libc/zig/driver.zig; only the values a peer must agree on live here.
+///
+/// A volume is not a block device and the two classes answer different
+/// questions. `block` answers "what storage exists"; a partition-table entry
+/// may hold no filesystem and a disk with no table may hold one, so mount
+/// policy that matches on `block` has to name disks and units. `volume`
+/// answers "what can be mounted", which is the question a rule actually asks.
+/// See docs/architecture/37-volume-manager.md.
+///
+/// As with the block descriptor, a reader MUST reject a version it does not
+/// know rather than interpreting the fields it recognizes.
+/// Current wasmos_volume_descriptor_t layout.
+pub const VOLUME_DESCRIPTOR_VERSION: i32 = 1;
+/// Bytes reserved for the filesystem's own label, NUL included. FAT's is
+/// 11 and WFS carries none, so this is set by what a future format might
+/// want rather than by what is read today -- ext4 allows 16 and NTFS 32
+/// UTF-16 units. Sized once here so adding a recogniser never forces a
+/// descriptor version bump.
+pub const VOLUME_DESCRIPTOR_LABEL_MAX: i32 = 64;
+/// Bytes of volume UUID. The widest in use is WFS's 16; FAT's volume
+/// serial is 4 and occupies the low bytes with the rest zero, so a
+/// comparison always covers the full field and a short id can never alias
+/// a long one's prefix. `uuid_len` says how many the format defines, for
+/// rendering rather than for matching.
+pub const VOLUME_DESCRIPTOR_UUID_MAX: i32 = 16;
+/// Bytes reserved for canonical_id, NUL included. A volume id is
+/// `volume:` prefixed to the canonical id of the block device beneath it
+/// (`volume:block:ata:0p1`), so it is DERIVED and stable across boots --
+/// and the `volume` class instance is an FNV-1a fingerprint of it, the
+/// same construction the `block` instance uses.
+pub const VOLUME_DESCRIPTOR_ID_MAX: i32 = 64;
+
+// volume_descriptor_flags (flag bits)
+/// Bits of the `flags` field of wasmos_volume_descriptor_t.
+///
+/// BOOT marks the volume this system was booted from. It is NOT the MBR
+/// active flag or the ESP type GUID: a table may mark any number of
+/// partitions bootable, on any disk, including one nothing booted from, and
+/// UEFI ignores the MBR flag entirely. Which volume was booted is a property
+/// of the BOOT, known only to the bootloader, and travels here from there.
+///
+/// CLAIMED records that a filesystem service holds the volume. It RECORDS a
+/// claim and does not enforce one: the volume manager is not in the I/O path,
+/// so a tool that does not ask is not stopped. It is what `fsck` and `mkfs`
+/// consult before touching a volume that may be mounted.
+/// The volume exists and can be mounted.
+pub const VOLUME_DESCRIPTOR_FLAG_PRESENT: i32 = 0x1;
+/// The format carries a label; `label` is it, possibly empty.
+pub const VOLUME_DESCRIPTOR_FLAG_HAS_LABEL: i32 = 0x2;
+/// The format carries a volume id; `uuid` is it.
+pub const VOLUME_DESCRIPTOR_FLAG_HAS_UUID: i32 = 0x4;
+/// This system booted from this volume, as reported by the bootloader.
+pub const VOLUME_DESCRIPTOR_FLAG_BOOT: i32 = 0x8;
+/// A filesystem service has mounted it; advisory, not enforced.
+pub const VOLUME_DESCRIPTOR_FLAG_CLAIMED: i32 = 0x10;
+/// The backing device refuses writes.
+pub const VOLUME_DESCRIPTOR_FLAG_READ_ONLY: i32 = 0x20;
+
 // svc_class_event
 /// Which existence event SVC_IPC_CLASS_EVENT reports, carried in its arg0.
 /// The rest of the message names the provider it happened to: arg1=instance,

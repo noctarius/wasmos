@@ -60,6 +60,17 @@ pub const Partition = struct {
     part_guid: [16]u8 = [_]u8{0} ** 16,
     /// MBR partition type byte; zero under GPT.
     mbr_type: u8 = 0,
+    /// The MBR active flag (0x80 in the entry's first byte). False under GPT,
+    /// where the equivalent fact is the ESP type GUID in `type_guid` rather than
+    /// a flag.
+    ///
+    /// "Marked bootable" is NOT "the volume this system booted from". A table can
+    /// mark any number of partitions active, including on a disk nothing booted
+    /// from, and firmware is free to ignore the flag entirely — UEFI does, which
+    /// is why the ESP that actually loaded us is identified by the bootloader and
+    /// not from here. Keep the two apart: this is a property of the DISK, and
+    /// which volume was booted is a property of the BOOT.
+    bootable: bool = false,
     /// PARTLABEL as UTF-8, NUL-terminated; empty under MBR, which has no labels.
     label: [LABEL_BYTES]u8 = [_]u8{0} ** LABEL_BYTES,
 };
@@ -176,11 +187,15 @@ pub fn parseMbr(lba0: []const u8, out: *Table) MbrResult {
         const start = rd32(lba0, off + 8);
         const count = rd32(lba0, off + 12);
         if (count == 0) continue; // a zero-length partition addresses nothing
+        // Bit 7 of the first byte is the active flag. The rest of that byte is
+        // reserved and set to nonsense by enough partitioners that testing the
+        // whole byte against 0x80 rejects tables that are merely untidy.
         out.push(.{
             .slot = @intCast(slot + 1),
             .lba_start = start,
             .lba_count = count,
             .mbr_type = kind,
+            .bootable = (lba0[off] & 0x80) != 0,
         });
     }
     out.scheme = .mbr;
@@ -266,6 +281,47 @@ pub fn parseGptHeader(sector: []const u8) ?GptHeader {
         .entry_size = entry_size,
         .entry_crc = rd32(sector, HDR_ENTRY_CRC),
     };
+}
+
+/// Which table, if any, a device carries — from its first two sectors, without
+/// retaining a single partition.
+///
+/// Separate from `parseMbr` because the caller that needs this needs only the
+/// answer: the volume manager suppresses a volume for a device that holds a
+/// table, and filling a `Table` to learn one enum would cost it 6 KiB of scratch
+/// on an 8 KiB shadow stack. Detection reuses the same signature checks the
+/// parsers apply, so the two cannot disagree about what a GPT is.
+///
+/// `prefix` must start at the device's own LBA 0. One sector is enough to detect
+/// an MBR, and to detect a GPT through its protective entry; the LBA 1 header is
+/// consulted when a second sector is there, which is what identifies a GPT whose
+/// protective MBR is missing or damaged. A prefix shorter than one sector reports
+/// `.none`, since nothing can be ruled in without it.
+///
+/// GPT is tested first, and a protective MBR reports `.gpt` rather than `.mbr`,
+/// for the reason `probeDisk` orders its reads the same way: a GPT disk carries
+/// an MBR whose single entry spans the device, and reading that as a legacy
+/// table describes a partition nobody wrote.
+pub fn detectScheme(prefix: []const u8) Scheme {
+    if (prefix.len < SECTOR_BYTES) return .none;
+    if (prefix.len >= SECTOR_BYTES * 2 and
+        parseGptHeader(prefix[SECTOR_BYTES .. SECTOR_BYTES * 2]) != null) return .gpt;
+
+    const lba0 = prefix[0..SECTOR_BYTES];
+    if (lba0[MBR_SIG_OFF] != 0x55 or lba0[MBR_SIG_OFF + 1] != 0xAA) return .none;
+    var slot: usize = 0;
+    var populated = false;
+    while (slot < MBR_SLOTS) : (slot += 1) {
+        const off = MBR_TABLE_OFF + slot * MBR_ENTRY_BYTES;
+        const kind = lba0[off + 4];
+        if (kind == MBR_TYPE_PROTECTIVE) return .gpt;
+        // A slot with a type but no sectors addresses nothing, and a table of
+        // only such slots is indistinguishable from boot code that happens to
+        // end in 0x55AA. Requiring one usable entry is what keeps a FAT boot
+        // sector -- which carries that signature too -- from reading as a table.
+        if (kind != 0 and rd32(lba0, off + 12) != 0) populated = true;
+    }
+    return if (populated) .mbr else .none;
 }
 
 /// Streams the entry array past the parser while the caller reads it.

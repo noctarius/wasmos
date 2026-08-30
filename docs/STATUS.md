@@ -780,6 +780,75 @@ linked feature documents for rationale and rollout plans.
   the root task, so it blocks the process but not the loop's dispatch.
   `/user` mounts from a partition it names by GPT label
   (`architecture/36-partition-manager-and-block-identity.md` §2-§3).
+- The volume manager (`src/services/volume_manager/`, Zig) publishes a `volume`
+  class for every device that holds a filesystem, which is the question the
+  `block` class cannot answer: a partition-table entry may hold no filesystem and
+  a disk with no table may hold one. It subscribes to `block`, reads a 4 KiB
+  prefix from each device's own LBA 0, and runs the recognisers over it. A device
+  carrying a GPT or an MBR publishes NO volume -- its partitions are separate
+  block devices and get their own -- while a device with no table and no
+  recognised filesystem still publishes, as `fstype=unknown`. On a normal boot
+  that is three volumes: the ESP (`fat`, labelled `QEMU VVFAT`), `/user`'s
+  partition (`fat`, labelled `USER`), and the raw WFS disk (`wfs`, whole device,
+  the case no partition rule can reach).
+- The recognisers (`src/services/volume_manager/recognise*.zig`) identify FAT and
+  WFS from a bounded prefix with no I/O, one file per format the way `libblkid`
+  keeps `superblocks/`. Precedence lives in one ordered table rather than in each
+  recogniser. Host-tested against images captured from real writers -- macOS
+  `newfs_msdos`, QEMU vvfat, `mkfs_wfs`, `make_gpt_image.py` --
+  in `tests/unit/fixtures_disk_images.zig`.
+- Mount policy reads volumes. `SUBSYSTEM=="volume"` matches `ATTR{fstype}`,
+  `ATTR{label}` and `ATTR{uuid}`. `/wfs` and `/vwfs` both mount from fstype plus
+  uuid -- naming no disk, unit, backend, partition or transport. `/wfs` is the
+  case the block layer could not express at all: the WFS image carries no
+  partition table, so nothing publishes a partition for a rule to match. The two
+  rules differ ONLY in identity, which is what makes a transport not part of a
+  volume's identity; before that, `/vwfs` had to say `DRIVER=="virtio-blk",
+  ATTR{unit}=="48"`.
+  `ATTR{uuid}` takes the FORMAT's bytes in on-disk order at the format's own
+  width -- sixteen for WFS, four for a FAT serial -- and is a separate parser from
+  `ATTR{partuuid}`/`ATTR{type}`, which keep GPT's mixed-endian field order.
+  `ATTR{label}` is the FILESYSTEM label and is not `ATTR{partlabel}`; the rule
+  engine refuses a rule that uses either on the other's subsystem. The filesystem
+  driver is handed the BACKING block device's id, backend and unit, because a
+  driver mounts a device and the volume is what chose it. `/user` still matches on
+  a partition label (`architecture/37-volume-manager.md` §4).
+- The partition and volume managers are INITFS payloads, spawned from the
+  bootstrap rules ahead of every disk driver, and no longer staged on the ESP.
+  That breaks the bootstrap circle: spawned from the boot rules, which load off
+  `/boot`, nothing they published could ever select `/boot`. Their startup sweeps
+  now find nothing and every disk is probed as its driver publishes it, so the
+  `block` class subscription is the only discovery path rather than a supplement.
+  (`architecture/36-partition-manager-and-block-identity.md` §2).
+- `/boot` mounts from `SUBSYSTEM=="volume", ATTR{boot}=="1"`, so NO mount rule
+  names a disk. The bootloader reads the MEDIA/HARDDRIVE node of its own device
+  path into `boot_info` (version 5), the kernel publishes the LBA range as the
+  `boot.partition` kernel-environment variable, and the device manager marks the
+  volume whose backing partition covers it with `VOLUME_DESCRIPTOR_FLAG_BOOT`.
+  `env_get` carries it rather than a host call of its own: one string, read once,
+  by one service. `fat_try_parse_mbr` is deleted -- the partition manager is the
+  only partition-table reader left (`architecture/37-volume-manager.md` §10).
+- Two unbounded waits are bounded, both exposed by `/boot` mounting later from a
+  volume than from a disk rule. The kernel's broker self-test blocks on a
+  readiness broadcast instead of polling the process table on every dispatch, and
+  `pm_recv_fs_reply` gives up on a deadline instead of parking the process manager
+  forever when a filesystem dies mid-mount.
+- The partition proxy REBORROWS a client's transfer buffer to the disk backend.
+  Forwarding the client's own `dst_borrow_id` gave the backend a handle nothing
+  resolved for it, because a borrow is held per context: a partition mounted (the
+  mount path uses the caller's own block buffer) and then failed its first FILE
+  read with fs.IO. `xfer_buffer_reborrow` mints the backend a handle within the
+  proxy's rights, narrowed to the transfer's direction and dropped when the reply
+  arrives (`architecture/36-partition-manager-and-block-identity.md` §2).
+- A mounted volume is CLAIMED, and `fsck.wfs` refuses one. `fs_wfs` claims the
+  moment its mount completes and releases at the start of shutdown; `fsck.wfs`
+  asks the volume manager before it reads a block, and refuses both a claimed
+  volume and one it cannot ask about -- no volume manager, or no volume on that
+  device. `--force` overrides and says the findings may be races. Advisory on both
+  sides: the volume manager is not in the I/O path, and nothing beneath the tool
+  refuses a second client since the block layer's per-unit arbitration was
+  removed. `fs_fat` does not claim yet
+  (`architecture/37-volume-manager.md` §5).
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.

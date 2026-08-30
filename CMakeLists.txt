@@ -201,6 +201,9 @@ set(WASM_VIRTIO_RNG_APP ${BUILD_DIR}/virtio_rng.wap)
 set(WASM_PARTITION_MANAGER_DRIVER_SRC ${DRIVER_WASM_DIR}/partition_manager/partition_manager.zig)
 set(WASM_PARTITION_MANAGER_DRIVER_WASM ${BUILD_DIR}/partition_manager.wasm)
 set(WASM_PARTITION_MANAGER_APP ${BUILD_DIR}/partition_manager.wap)
+set(WASM_VOLUME_MANAGER_SRC ${SERVICES_DIR}/volume_manager/volume_manager.zig)
+set(WASM_VOLUME_MANAGER_WASM ${BUILD_DIR}/volume_manager.wasm)
+set(WASM_VOLUME_MANAGER_APP ${BUILD_DIR}/volume_manager.wap)
 set(WASM_VIRTIO_BLK_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_blk/virtio_blk.zig)
 set(WASM_VIRTIO_BLK_DRIVER_WASM ${BUILD_DIR}/virtio_blk.wasm)
 set(WASM_VIRTIO_BLK_APP ${BUILD_DIR}/virtio_blk.wap)
@@ -1881,9 +1884,10 @@ if (ZIG_AVAILABLE)
   set(VIRTIO_BLK_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_BLK_APP} ${BUILD_DIR}/esp/system/drivers/virtio_blk.wap
   )
-  set(PARTITION_MANAGER_COPY_CMD
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTITION_MANAGER_APP} ${BUILD_DIR}/esp/system/drivers/partmgr.wap
-  )
+  # The partition and volume managers are NOT staged onto the ESP. They are
+  # initfs payloads (scripts/initfs.toml), because /boot is mounted from a volume
+  # and nothing on /boot can publish the volume that mounts /boot. A second copy
+  # here would be a second thing to go stale, spawned by nothing.
 endif ()
 
 # Rebuilt whenever the content or the formatter changes: the guest mounts this
@@ -1899,6 +1903,36 @@ add_custom_command(
   COMMENT "Building the WFS test volume with mkfs_wfs"
   VERBATIM)
 add_custom_target(wfs_image DEPENDS ${WFS_IMAGE})
+
+# The interactive targets boot COPIES of the disk fixtures, never the fixtures.
+#
+# A `run-qemu` session that writes to /wfs or /user would otherwise mutate a
+# build artifact the suites read as a fixed input, and the damage surfaces much
+# later -- in a read test asserting bytes an interactive session overwrote. That
+# reads as flakiness, because a fresh CI tree never sees it and only the machine
+# that ran interactively fails. It has already cost one debugging session.
+#
+# Copies rather than snapshot=on, so trying persistence by hand still works:
+# writes survive across `run-qemu` invocations, and are discarded when the
+# fixture is rebuilt, which is the point at which the old contents stopped
+# describing the volume anyway.
+set(WFS_RUN_IMAGE ${BUILD_DIR}/run/wfs.img)
+set(WFS_VIRTIO_RUN_IMAGE ${BUILD_DIR}/run/wfs_virtio.img)
+set(USERFS_RUN_IMAGE ${BUILD_DIR}/run/user.img)
+add_custom_command(OUTPUT ${WFS_RUN_IMAGE}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/run
+  COMMAND ${CMAKE_COMMAND} -E copy ${WFS_IMAGE} ${WFS_RUN_IMAGE}
+  DEPENDS ${WFS_IMAGE} VERBATIM)
+add_custom_command(OUTPUT ${WFS_VIRTIO_RUN_IMAGE}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/run
+  COMMAND ${CMAKE_COMMAND} -E copy ${WFS_VIRTIO_IMAGE} ${WFS_VIRTIO_RUN_IMAGE}
+  DEPENDS ${WFS_VIRTIO_IMAGE} VERBATIM)
+add_custom_command(OUTPUT ${USERFS_RUN_IMAGE}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/run
+  COMMAND ${CMAKE_COMMAND} -E copy ${USERFS_IMAGE} ${USERFS_RUN_IMAGE}
+  DEPENDS ${USERFS_IMAGE} VERBATIM)
+add_custom_target(run_images
+  DEPENDS ${WFS_RUN_IMAGE} ${WFS_VIRTIO_RUN_IMAGE} ${USERFS_RUN_IMAGE})
 add_custom_command(
   OUTPUT ${WFS_VIRTIO_IMAGE}
   COMMAND ${BUILD_DIR}/mkfs_wfs --quiet
@@ -1941,7 +1975,6 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_NET_APP} ${BUILD_DIR}/esp/system/drivers/virtio_net.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_RNG_APP} ${BUILD_DIR}/esp/system/drivers/virtio_rng.wap
   ${VIRTIO_BLK_COPY_CMD}
-  ${PARTITION_MANAGER_COPY_CMD}
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}
@@ -1998,11 +2031,11 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=${USERFS_IMAGE}
-            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-            -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+            -drive format=raw,file=${USERFS_RUN_IMAGE}
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+            -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
             -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-    DEPENDS bootloader kernel wfs_image wfs_virtio_image
+    DEPENDS bootloader kernel run_images
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
     VERBATIM
@@ -2015,11 +2048,11 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=${USERFS_IMAGE}
-            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-            -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+            -drive format=raw,file=${USERFS_RUN_IMAGE}
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+            -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
             -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-    DEPENDS bootloader kernel wfs_image wfs_virtio_image
+    DEPENDS bootloader kernel run_images
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
     VERBATIM
@@ -2031,11 +2064,11 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=${USERFS_IMAGE}
-            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-            -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+            -drive format=raw,file=${USERFS_RUN_IMAGE}
+            -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+            -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
             -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-    DEPENDS bootloader kernel wfs_image wfs_virtio_image
+    DEPENDS bootloader kernel run_images
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (with display)"
     VERBATIM
@@ -2048,7 +2081,7 @@ if (OVMF_VARS)
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
             --timeout ${WASMOS_QEMU_TEST_TIMEOUT}
-    DEPENDS bootloader kernel wfs_image
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU halt test"
     VERBATIM
@@ -2065,7 +2098,7 @@ if (OVMF_VARS)
             --ovmf-vars ${OVMF_VARS}
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
-    DEPENDS bootloader kernel wfs_image
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running SMP scheduler stress test"
     VERBATIM
@@ -2083,7 +2116,7 @@ if (OVMF_VARS)
             WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
             PYTHONDONTWRITEBYTECODE=1
             ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
-    DEPENDS bootloader kernel wfs_image
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU CLI integration tests"
     VERBATIM
@@ -2096,7 +2129,7 @@ if (OVMF_VARS)
             ${QEMU_UI_OVMF_VARS_ARG}
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
-    DEPENDS bootloader kernel wfs_image
+    DEPENDS bootloader kernel wfs_image wfs_virtio_image
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU UI test"
     VERBATIM
@@ -2109,11 +2142,11 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=${USERFS_IMAGE}
-              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-              -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+              -drive format=raw,file=${USERFS_RUN_IMAGE}
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+              -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
               -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-      DEPENDS bootloader kernel wfs_image wfs_virtio_image
+      DEPENDS bootloader kernel run_images
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU"
       VERBATIM
@@ -2125,11 +2158,11 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=${USERFS_IMAGE}
-              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-              -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+              -drive format=raw,file=${USERFS_RUN_IMAGE}
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+              -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
               -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-      DEPENDS bootloader kernel wfs_image wfs_virtio_image
+      DEPENDS bootloader kernel run_images
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
       VERBATIM
@@ -2140,11 +2173,11 @@ else ()
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-              -drive format=raw,file=${USERFS_IMAGE}
-              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_IMAGE}
-              -drive if=none,format=raw,file=${WFS_VIRTIO_IMAGE},id=vwfs0
+              -drive format=raw,file=${USERFS_RUN_IMAGE}
+              -drive if=ide,index=2,media=disk,format=raw,file=${WFS_RUN_IMAGE}
+              -drive if=none,format=raw,file=${WFS_VIRTIO_RUN_IMAGE},id=vwfs0
               -device virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0
-      DEPENDS bootloader kernel wfs_image wfs_virtio_image
+      DEPENDS bootloader kernel run_images
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (with display)"
       VERBATIM
@@ -2155,7 +2188,7 @@ else ()
               --ovmf-code ${OVMF_CODE}
               --esp ${BUILD_DIR}/esp
               --smp ${WASMOS_QEMU_SMP_COUNT}
-      DEPENDS bootloader kernel wfs_image
+      DEPENDS bootloader kernel wfs_image wfs_virtio_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU halt test"
       VERBATIM
@@ -2166,7 +2199,7 @@ else ()
               --ovmf-code ${OVMF_CODE}
               --esp ${BUILD_DIR}/esp
               --smp ${WASMOS_QEMU_SMP_COUNT}
-      DEPENDS bootloader kernel wfs_image
+      DEPENDS bootloader kernel wfs_image wfs_virtio_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running SMP scheduler stress test"
       VERBATIM
@@ -2184,7 +2217,7 @@ else ()
               WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
               PYTHONDONTWRITEBYTECODE=1
               ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
-      DEPENDS bootloader kernel wfs_image
+      DEPENDS bootloader kernel wfs_image wfs_virtio_image
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU CLI integration tests"
       VERBATIM
@@ -3962,11 +3995,46 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
               --cache-dir ${BUILD_DIR}/zig-partition-table-cache
               --global-cache-dir ${BUILD_DIR}/zig-partition-table-global-cache
-              --dep partition_table
+              --dep partition_table --dep fixtures_disk_images
               -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_partition_table.zig
               -Mpartition_table=${DRIVER_WASM_DIR}/partition_manager/partition_table.zig
+              -Mfixtures_disk_images=${CMAKE_SOURCE_DIR}/tests/unit/fixtures_disk_images.zig
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running partition-table parser unit tests"
+      VERBATIM)
+    # The filesystem recognisers. Unlike the parser above these import each other
+    # and the generated constants, and `wasmos_add_zig_wasm_app` resolves that by
+    # staging every .zig FLAT so @import("name.zig") finds its neighbour. The
+    # host test has to reproduce that layout, because the sources live in three
+    # directories: the recognisers under src/services/volume_manager, the table
+    # parser under src/drivers/partition_manager, and the constants under
+    # abi/generated.
+    #
+    # Only `recognise` and `wasmos_constants` are passed as named modules.
+    # partition_table deliberately is NOT: Zig gives a file reached both by path
+    # and by module name two distinct instances, whose enums are then two
+    # distinct types that compare unequal, so the suite takes Scheme from
+    # recognise.zig's re-export instead.
+    set(RECOGNISE_STAGE ${BUILD_DIR}/zig_recognise_test_src)
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${RECOGNISE_STAGE}
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              ${CMAKE_SOURCE_DIR}/src/services/volume_manager/recognise.zig
+              ${CMAKE_SOURCE_DIR}/src/services/volume_manager/recognise_fat.zig
+              ${CMAKE_SOURCE_DIR}/src/services/volume_manager/recognise_wfs.zig
+              ${DRIVER_WASM_DIR}/partition_manager/partition_table.zig
+              ${CMAKE_SOURCE_DIR}/abi/generated/zig/wasmos_constants.zig
+              ${RECOGNISE_STAGE}/
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-recognise-cache
+              --global-cache-dir ${BUILD_DIR}/zig-recognise-global-cache
+              --dep recognise --dep fixtures_disk_images
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_fs_recognise.zig
+              -Mrecognise=${RECOGNISE_STAGE}/recognise.zig
+              -Mfixtures_disk_images=${CMAKE_SOURCE_DIR}/tests/unit/fixtures_disk_images.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running filesystem recogniser unit tests"
       VERBATIM)
   endif ()
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD

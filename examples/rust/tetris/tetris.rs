@@ -42,7 +42,6 @@ unsafe extern "C" {
     fn ipc_select_wait_timeout(select_id: i32, timeout_ms: i32) -> i32;
     fn ipc_last_field(field: i32) -> i32;
     fn shmem_map_auto(id: i32, size: i32) -> i32;
-    fn shmem_flush(id: i32, ptr: i32, size: i32) -> i32;
     fn spawn_info_buffer() -> i32;
     fn xfer_buffer_read(buffer_id: i32, ptr: i32, len: i32, offset: i32) -> i32;
     fn xfer_buffer_acquire(minimum_size: i32) -> i32;

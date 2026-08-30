@@ -1407,6 +1407,22 @@ Source: `architecture/19-virtual-terminal.md`,
 `architecture/23-cli-and-user-space.md`, and
 `architecture/24-environment-scopes-and-inheritance.md`.
 
+- [ ] [BUG][P2] The CLI can lose the ability to resolve ANY command mid-session:
+  after two successful `blkinfo` execs it answered `no such command found:
+  blkinfo` to every later attempt, permanently and within 20 ms — too fast to be
+  a timed-out FS request. Captured once under `wasm3_smp` in the filesystem
+  battery (run 33324196644 job 99291355777, `test_virtio_blk`), green on the
+  rerun of the same commit and on 8 local runs (1, 4 and 16 vCPU), so it is
+  load-dependent, not deterministic.
+
+  `cli_resolve_exec_path` fails only when every PATH candidate's `fopen` fails,
+  and `open()` fails fast when `libc_fs_stage_path` cannot acquire a transfer
+  buffer — so the suspect is a per-context transfer-buffer leak on the exec
+  path, not the FS lookup itself. `g_pending_spawn_bid` is released when the
+  PENDING_EXEC reply arrives (`cli.c`); an exec whose reply is dropped or
+  mismatched leaks its buffer, and the CLI acquires one per exec. Confirm by
+  counting a context's live buffers across execs before changing anything.
+
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 
 - [ ] [FEATURE][P2] Route an app's output to its controlling tty instead of straight to
@@ -1693,6 +1709,17 @@ Source: `architecture/25-diagnostics-status.md`,
   has since survived (40 `warp_smp`, 25 instrumented `warp_smp`, 20 `wasm3_smp`,
   all Linux/MTTCG) do not resolve a second mechanism if one exists. The unit
   test is what pins this one.
+
+  REOPENED. Third capture, run 33324196644 job 99291341629 (`warp_smp`,
+  `a=0x0e`), and again on the rerun of the same commit, against a tree whose
+  only delta from a green `warp_smp` job on main is documentation. Unlike the
+  two earlier captures the panicking CPU resumed `rip=0`, not an address inside
+  `g_cpus`: CPU 0 `pid=0 tid=0 rip=0000000000000000`, CPU 1 inside the WARP JIT
+  (`vb::Frontend::startCompilation` under `wasm_driver_start` <- `pm_app_entry`),
+  CPU 2 in `process_trampoline`, CPU 3 spinning in `spinlock_lock`. A null rip
+  is a dispatch that resumed a context whose saved rip was never written, which
+  the claim fix does not cover. Not reproducible on a fast 8-core host: 3/3
+  clean stress boots there, so a slower 4-vCPU runner is part of the trigger.
 
   Reproducing needs a Linux x86 runner; MTTCG on Apple Silicon masks it. Force
   TCG (`WASMOS_QEMU_ACCEL=tcg`) and reset the OVMF vars file between boots:

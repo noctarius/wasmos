@@ -265,6 +265,27 @@ class VfsRootWritableTest(VfsSession, unittest.TestCase):
         out = self._run("cd /deep/a/b/c")
         self.assertIn(b"/deep/a/b/c wamos>", out, f"deeper path not created\n{out!r}")
 
+    def test_mkdir_p_treats_a_leading_slash_run_as_one_slash(self):
+        """`//x/y` names the same directory as `/x/y`.
+
+        Regression: 2026-08-31-mkdir-p-leading-slash-run — mkdir_parents skipped
+        ONE leading slash and then read the next as a segment terminator, so the
+        first component it tried to create was "/" itself. fs-manager refuses
+        that, and the refusal is not EXISTS, so the whole -p failed. `mkdir -p /`
+        failed the same way, where the root always existing should make it a
+        trivial success.
+        """
+        self._run("cd /")
+        out = self._run("mkdir -p //runx/runy")
+        self.assertNotIn(b"mkdir:", out, f"a leading slash run failed\n{out!r}")
+        out = self._run("cd /runx/runy")
+        self.assertIn(b"/runx/runy wamos>", out, f"path not created\n{out!r}")
+
+        # The root is nobody's to create, so asking for it succeeds trivially.
+        self._run("cd /")
+        out = self._run("mkdir -p /")
+        self.assertNotIn(b"mkdir:", out, f"`mkdir -p /` reported an error\n{out!r}")
+
     def test_mkdir_without_p_refuses_a_missing_parent(self):
         """Without -p the parent must already exist, so the flag is doing work
         rather than being the only code path."""

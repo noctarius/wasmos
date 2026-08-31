@@ -33,10 +33,19 @@ int32_t fsmgr_mount_path_from_reported(const char* reported, char* out, uint32_t
     uint32_t len = 0;
     uint32_t i;
 
-    if (!reported || !out || out_cap < 3u) {
+    if (!out) {
         return 0;
     }
-    out[0] = '\0';
+    /* Cleared before the remaining argument checks, not after: the contract is
+     * that a refusal leaves `out` empty, and a caller that ignores the return
+     * would otherwise read whatever the buffer held before. Guarded on capacity,
+     * because clearing a zero-length buffer is itself out of bounds. */
+    if (out_cap > 0u) {
+        out[0] = '\0';
+    }
+    if (!reported || out_cap < 3u) {
+        return 0;
+    }
     /* One leading slash, however many the report carried: "boot", "/boot" and
      * "//boot" are the same mount. */
     src = reported;
@@ -45,6 +54,13 @@ int32_t fsmgr_mount_path_from_reported(const char* reported, char* out, uint32_t
     }
     out[len++] = '/';
     for (i = 0u; src[i] != '\0'; ++i) {
+        /* Collapse an INTERIOR run too. A request path reaches routing already
+         * canonicalized by fsmgr_cwd_join, which collapses runs, so a mount held
+         * as "/mnt//usb" could never be matched by "/mnt/usb" -- unreachable by
+         * any path while still occupying a backend slot. */
+        if (src[i] == '/' && out[len - 1u] == '/') {
+            continue;
+        }
         if (len + 1u >= out_cap) {
             out[0] = '\0';
             return 0;

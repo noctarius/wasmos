@@ -179,6 +179,39 @@ static void test_overlong_path_is_refused_not_truncated(void) {
     assert(strcmp(out, "/abcdef") == 0);
 }
 
+/* Regression: 2026-08-31-mount-path-interior-slashes — the report was copied
+ * verbatim after the leading slash, so an interior run survived into the stored
+ * mount. Request paths are canonicalized by fsmgr_cwd_join, which collapses runs,
+ * so a mount held as "/mnt//usb" could never be string-matched by "/mnt/usb": it
+ * was unreachable by any path while still holding one of the FS_BACKEND_CAP
+ * slots. Canonical has to mean canonical throughout, not just at the ends. */
+static void test_interior_slash_runs_are_collapsed(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+    assert(fsmgr_mount_path_from_reported("/mnt//usb", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/mnt/usb") == 0);
+    assert(fsmgr_mount_path_from_reported("//a///b//", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/a/b") == 0);
+    assert(fsmgr_mount_path_from_reported("mnt//usb//deep", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/mnt/usb/deep") == 0);
+}
+
+/* A refusal leaves `out` EMPTY, which is what the header promises: a caller that
+ * ignores the return then reads an empty string rather than whatever was in the
+ * buffer before. The argument checks refused without clearing it. */
+static void test_a_refusal_always_leaves_out_empty(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+
+    memset(out, 'x', sizeof(out));
+    out[sizeof(out) - 1u] = '\0';
+    assert(fsmgr_mount_path_from_reported("/boot", out, 2u) == 0);
+    assert(out[0] == '\0');
+
+    memset(out, 'x', sizeof(out));
+    out[sizeof(out) - 1u] = '\0';
+    assert(fsmgr_mount_path_from_reported(0, out, sizeof(out)) == 0);
+    assert(out[0] == '\0');
+}
+
 static void test_degenerate_out_capacity_is_refused(void) {
     char out[2];
     assert(fsmgr_mount_path_from_reported("/", out, sizeof(out)) == 0);
@@ -204,6 +237,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_a_mount_at_depth_is_a_path),
         WASMOS_TEST_CASE(test_relative_components_are_refused),
         WASMOS_TEST_CASE(test_overlong_path_is_refused_not_truncated),
+        WASMOS_TEST_CASE(test_interior_slash_runs_are_collapsed),
+        WASMOS_TEST_CASE(test_a_refusal_always_leaves_out_empty),
         WASMOS_TEST_CASE(test_degenerate_out_capacity_is_refused),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));

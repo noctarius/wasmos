@@ -88,20 +88,25 @@ static void report(const char* path, int rc) {
 static int mkdir_parents(char* path) {
     uint32_t i = 0;
 
-    /* A leading slash is the root, which always exists and is nobody's to
-     * create; start after it. */
-    if (path[0] == '/') {
-        i = 1;
+    /* Step over the whole leading RUN, not one slash: "//a" names the same
+     * directory as "/a", and skipping only the first would leave the scan below
+     * looking at a separator, cut the path to "/" and ask the FS to create the
+     * root -- which it refuses, failing the walk. The root always exists and is
+     * nobody's to create. */
+    while (path[i] == '/') {
+        i++;
     }
     for (;;) {
         char saved;
         int rc;
 
+        /* Nothing left names a directory: an empty operand, or a path that was
+         * only slashes, which is the root. */
+        if (path[i] == '\0') {
+            return 0;
+        }
         while (path[i] != '\0' && path[i] != '/') {
             i++;
-        }
-        if (i == 0) {
-            return 0;
         }
         saved = path[i];
         path[i] = '\0';
@@ -117,9 +122,6 @@ static int mkdir_parents(char* path) {
          * directory as "/" and there is nothing between them to create. */
         while (path[i] == '/') {
             i++;
-        }
-        if (path[i] == '\0') {
-            return 0;
         }
     }
 }

@@ -416,9 +416,10 @@ linked feature documents for rationale and rollout plans.
 
 - Default configuration: **WARP** runtime, single CPU. WARP is the default
   because a WARP guest runs at CPL=3 and is preempted like any other thread,
-  while the wasm3 interpreter and its guest both run at CPL=0 where a guest loop
-  with no host call in it holds its CPU until it returns (architecture/11,
-  *Which Workloads Reach Ring 3*) -- one heavy app stalls the desktop. wasm3
+  while the wasm3 interpreter -- the only runtime component at CPL=0 -- executes
+  its guest as a kernel-mode frame, so a guest loop with no host call in it holds
+  its CPU until it returns (architecture/11, *Which Workloads Reach Ring 3*) --
+  one heavy app stalls the desktop. wasm3
   remains fully supported and is the reference implementation the two runtimes
   are read against. Pin a runtime with
   `-DWASMOS_DOTCONFIG=configs/{wasm3,warp}_{single,smp}_defconfig`; a bare
@@ -431,7 +432,9 @@ linked feature documents for rationale and rollout plans.
   options are `WASMOS_RING3_SMOKE` and `WASMOS_RING3_THREAD_LIFECYCLE_SMOKE`,
   both test probes and both `=n` in the shipped defconfigs. Ring 3 is entered
   per workload, not per build: WARP guests run at CPL=3, while the wasm3
-  interpreter and the guest it interprets both run at CPL=0. See
+  interpreter runs at CPL=0 and interprets its guest there. A guest module has no
+  CPL of its own -- it is bytecode, so the interpreter's privilege level is the
+  one in effect, and nothing about a wasm3 process's address space follows. See
   `architecture/11` *Which Workloads Reach Ring 3* for the entry paths and what
   follows from them (notably that a wasm3 guest is never timer-preempted).
 - WARP QEMU CPU model: the run/test QEMU commands pass `-cpu max`

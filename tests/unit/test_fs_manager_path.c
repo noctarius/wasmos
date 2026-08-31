@@ -194,7 +194,7 @@ static void test_relative_is_rejected_when_disallowed(void) {
     assert(ok == 0);
 }
 
-static void test_relative_non_mount_falls_through(void) {
+static void test_relative_non_mount_is_not_routed(void) {
     const char* mounts[] = {"boot", "init"};
     char out[64];
     int32_t out_len = 0;
@@ -540,7 +540,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_prefix_collision_does_not_match_mount),
         WASMOS_TEST_CASE(test_double_slash_tail_is_preserved),
         WASMOS_TEST_CASE(test_relative_is_rejected_when_disallowed),
-        WASMOS_TEST_CASE(test_relative_non_mount_falls_through),
+        WASMOS_TEST_CASE(test_relative_non_mount_is_not_routed),
         WASMOS_TEST_CASE(test_mount_only_variants_map_to_root),
         WASMOS_TEST_CASE(test_out_buffer_size_boundaries),
         WASMOS_TEST_CASE(test_invalid_inputs_are_rejected),

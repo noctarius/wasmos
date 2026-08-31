@@ -43,7 +43,7 @@ class NetStackDnsResolveE2ETest(unittest.TestCase):
             "net-stack did not configure the static default",
         )
         mark = session.mark()
-        session.send("spawn /system/utils/host localhost")
+        session.send("spawn /boot/system/utils/host localhost")
         self.assertTrue(
             session.expect_from(mark, b"[host] localhost -> 127.0.0.1", timeout_s=30),
             "host did not resolve localhost through net-stack DNS",

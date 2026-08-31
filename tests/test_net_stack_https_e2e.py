@@ -207,7 +207,7 @@ class NetStackHttpsE2ETest(unittest.TestCase):
         )
         target = "https://10.0.2.2:%d/hello" % _PORT
         mark = session.mark()
-        session.send("spawn /system/utils/curl " + target)
+        session.send("spawn /boot/system/utils/curl " + target)
         self.assertTrue(
             session.expect_from(mark, _BODY, timeout_s=60),
             "curl did not print the HTTPS body to stdout",

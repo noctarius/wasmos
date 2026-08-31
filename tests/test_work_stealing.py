@@ -45,7 +45,7 @@ class WorkStealingTest(unittest.TestCase):
 
     def _run_sched_info(self):
         """Spawn sched_info and return its output lines."""
-        self.session.send("spawn /system/utils/sched_info.wap")
+        self.session.send("spawn /boot/system/utils/sched_info.wap")
         # Wait for the header line that sched_info always prints
         if not self.session.expect(b"cpu  ready", timeout_s=15):
             self.fail("sched_info did not produce output")

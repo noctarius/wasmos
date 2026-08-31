@@ -61,6 +61,19 @@ static void console_write(const char* s) {
     }
 }
 
+/* This driver's mount name, written into the buffer fs-manager supplies with its
+ * FSMGR_IPC_BACKEND_INFO_REQ. Returns the length written, 0 on failure -- which
+ * fs-manager treats as a malformed reply and refuses to register. */
+static const char g_mount_name[] = "init";
+
+static int32_t initfs_write_mount_name(int32_t buffer_id) {
+    int32_t len = (int32_t)(sizeof(g_mount_name) - 1u);
+    if (buffer_id <= 0 || wasmos_xfer_buffer_write(buffer_id, g_mount_name, len, 0) != 0) {
+        return 0;
+    }
+    return len;
+}
+
 /* Returns WASMOS_ERR_NONE, or the packed reason the path could not be read. */
 static wasmos_error_code_t copy_path_from_xfer_buffer(int32_t buffer_id, int32_t path_len,
                                                       char* out, uint32_t out_len) {
@@ -446,7 +459,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                   g_fs_endpoint,
                                   "initfs.rules",
                                   FSMGR_BACKEND_CLASS,
-                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_INIT, 0),
+                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_PSEUDO, 0),
                                   1) != 0) {
         console_write("[fs-init] register failed\n");
         wasmos_sys_ipc_recv_loop();
@@ -460,13 +473,21 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             continue;
         }
         if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FSMGR_IPC_BACKEND_INFO_REQ) {
-            (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+            /* Read every field into a local before replying: the reply writes
+             * into fs-manager's buffer, and a host call invalidates the
+             * last-message fields. Evaluation order within one argument list is
+             * unspecified, so the two must not be mixed there. */
+            int32_t info_src = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+            int32_t info_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+            int32_t info_len =
+                initfs_write_mount_name(wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0));
+            (void)wasmos_ipc_send(info_src,
                                   g_fs_endpoint,
                                   FSMGR_IPC_BACKEND_INFO_RESP,
-                                  wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
-                                  FSMGR_BACKEND_INIT,
-                                  0,
-                                  0,
+                                  info_req,
+                                  FSMGR_BACKEND_PSEUDO,
+                                  FS_TYPE_INITFS,
+                                  info_len,
                                   0);
             break;
         }
@@ -484,16 +505,21 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-        /* fs-manager pull: report kind=INIT. No mount buffer (arg2=0) → fs-manager
-         * uses its default "init" mount name; unit 0. */
+        /* fs-manager pull: report kind=PSEUDO, fs_type=INITFS, this driver's
+         * mount name and unit 0. `kind` places this backend outside the
+         * block-backed set and `fs_type` names the filesystem, both as values
+         * rather than as a case at the naming site. The name goes into the buffer
+         * fs-manager supplied (arg0): fs-manager is the CLIENT of this exchange
+         * and owns any buffer it carries (architecture/12), so this driver writes
+         * into a grant and owns nothing. */
         if (type == FSMGR_IPC_BACKEND_INFO_REQ) {
             (void)wasmos_ipc_send(source,
                                   g_fs_endpoint,
                                   FSMGR_IPC_BACKEND_INFO_RESP,
                                   req_id,
-                                  FSMGR_BACKEND_INIT,
-                                  0,
-                                  0,
+                                  FSMGR_BACKEND_PSEUDO,
+                                  FS_TYPE_INITFS,
+                                  initfs_write_mount_name(arg0),
                                   0);
             continue;
         }

@@ -251,7 +251,9 @@ class NetStackHttpsVerifyE2ETest(unittest.TestCase):
         assert self.session is not None
         session = self.session
         mark = session.mark()
-        session.send("spawn /system/utils/curl https://10.0.2.2:%d/hello" % _PORT_OK)
+        session.send(
+            "spawn /boot/system/utils/curl https://10.0.2.2:%d/hello" % _PORT_OK
+        )
         self.assertTrue(
             session.expect_from(mark, _BODY, timeout_s=60),
             "curl did not print the HTTPS body for the CA-verified server",
@@ -261,7 +263,9 @@ class NetStackHttpsVerifyE2ETest(unittest.TestCase):
         assert self.session is not None
         session = self.session
         mark = session.mark()
-        session.send("spawn /system/utils/curl https://10.0.2.2:%d/hello" % _PORT_BAD)
+        session.send(
+            "spawn /boot/system/utils/curl https://10.0.2.2:%d/hello" % _PORT_BAD
+        )
         # curl must report a failure (the handshake is rejected on verification).
         self.assertTrue(
             session.expect_from(mark, b"[curl] connect failed", timeout_s=60),

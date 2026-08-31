@@ -62,7 +62,7 @@ class NetStackTcpEchoE2ETest(unittest.TestCase):
         self.assertTrue(
             self.session.expect(b"[net-stack] eth0 10.0.2.15/24 ready", timeout_s=90)
         )
-        self.session.send("spawn /apps/net_tcp_echo")
+        self.session.send("spawn /boot/apps/net_tcp_echo")
         self.assertTrue(
             self.session.expect(b"[net-tcp-echo] connected", timeout_s=60),
             "TCP handshake did not complete through net-stack and SLIRP",

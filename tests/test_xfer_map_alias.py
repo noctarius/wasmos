@@ -73,7 +73,7 @@ class XferMapAliasTest(unittest.TestCase):
         # its own command produced. A bare expect() scans forward from wherever
         # the stream happens to sit and would consume what a later test needs.
         mark = self.session.mark()
-        self.session.send("spawn /apps/xfer_map_alias")
+        self.session.send("spawn /boot/apps/xfer_map_alias")
 
         if not self.session.expect_from(
             mark, b"[test] xfer map alias done", timeout_s=60

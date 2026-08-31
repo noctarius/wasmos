@@ -57,7 +57,7 @@ class NetStackUdpEchoE2ETest(unittest.TestCase):
         self.assertTrue(
             self.session.expect(b"[net-stack] eth0 10.0.2.15/24 ready", timeout_s=90)
         )
-        self.session.send("spawn /apps/net_udp_echo")
+        self.session.send("spawn /boot/apps/net_udp_echo")
         self.assertTrue(
             self.session.expect(b"[net-udp-echo] echo ok", timeout_s=60),
             "UDP echo did not traverse the socket TX/RX rings through SLIRP",

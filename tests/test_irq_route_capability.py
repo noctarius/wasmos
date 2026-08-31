@@ -45,7 +45,7 @@ class IrqRouteCapabilityTest(unittest.TestCase):
             )
 
     def test_irq_route_capability_deny_then_allow(self):
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect("irq_route_deny", [b"irq-route-deny: ok"])
         self._cmd_expect("irq_route_allow", [b"irq-route-allow: ok"])
 

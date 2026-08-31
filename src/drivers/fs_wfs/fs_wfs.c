@@ -84,7 +84,10 @@ static wfs_volume_t g_vol;
 static wfs_fd_table_t g_fds;
 
 /* Mount identity reported to fs-manager on each backend-info pull. */
-static int32_t g_mount_bid = -1;
+/* This driver's mount name, reported on an fs-manager pull. Held as plain bytes:
+ * fs-manager is the CLIENT of that pull and supplies the buffer, so this driver
+ * owns no transfer buffer for it. */
+static char g_mount_name[32];
 static int32_t g_mount_len = 0;
 static uint8_t g_mount_unit = 0;
 static int32_t g_requested_unit = -1;
@@ -762,20 +765,20 @@ static void wfs_do_close(int32_t src, int32_t request_id, int32_t fd) {
 
 /* ---- fs-manager identity ------------------------------------------------ */
 
-static void wfs_report_backend_info(int32_t dst, int32_t request_id) {
-    int32_t mount_arg = 0;
+static void wfs_report_backend_info(int32_t dst, int32_t request_id, int32_t buffer_id) {
+    int32_t name_len = 0;
 
-    if (g_mount_bid >= 0 && g_mount_len > 0 &&
-        wasmos_xfer_buffer_borrow(dst, g_mount_bid, WASMOS_BUFFER_GRANT_READ) >= 0) {
-        mount_arg = (int32_t)(((uint32_t)g_mount_bid << 12) | ((uint32_t)g_mount_len & 0xFFFu));
+    if (buffer_id > 0 && g_mount_len > 0 &&
+        wasmos_xfer_buffer_write(buffer_id, g_mount_name, g_mount_len, 0) == 0) {
+        name_len = g_mount_len;
     }
     (void)wasmos_sys_ipc_send_retry(dst,
                                     g_fs_endpoint,
                                     FSMGR_IPC_BACKEND_INFO_RESP,
                                     request_id,
-                                    FSMGR_BACKEND_BOOT,
-                                    0,
-                                    mount_arg,
+                                    FSMGR_BACKEND_BLOCK,
+                                    FS_TYPE_WFS,
+                                    name_len,
                                     (int32_t)g_mount_unit,
                                     WFS_SEND_RETRIES);
 }
@@ -1103,7 +1106,7 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
         wfs_do_shutdown(src, request_id);
         return;
     case FSMGR_IPC_BACKEND_INFO_REQ:
-        wfs_report_backend_info(src, request_id);
+        wfs_report_backend_info(src, request_id, a0);
         return;
     case FS_IPC_READY_REQ:
         (void)wfs_reply(src,
@@ -1266,15 +1269,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     while (mount_alias[mount_len] != '\0') {
         mount_len++;
     }
-    if (mount_len <= 0 || mount_len >= 0xFFF || mount_len >= wasmos_xfer_buffer_size()) {
+    if (mount_len <= 0 || mount_len >= (int32_t)sizeof(g_mount_name)) {
         wfs_log("[fs-wfs] mount alias size invalid\n");
         wfs_stall();
     }
-    g_mount_bid = wasmos_xfer_buffer_acquire(mount_len);
-    if (g_mount_bid < 0 || wasmos_xfer_buffer_write(g_mount_bid, mount_alias, mount_len, 0) != 0) {
-        wfs_log("[fs-wfs] mount alias buffer write failed\n");
-        wfs_stall();
-    }
+    str_copy(g_mount_name, sizeof(g_mount_name), mount_alias);
     g_mount_len = mount_len;
 
     /* "fs.wfs<unit>" so two WFS volumes can be mounted at once. A unit is a full
@@ -1308,7 +1307,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                         g_fs_endpoint,
                                         service_name,
                                         FSMGR_BACKEND_CLASS,
-                                        FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BOOT, g_mount_unit),
+                                        FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BLOCK, g_mount_unit),
                                         WASMOS_SVC_FLAG_WANTS_SHUTDOWN,
                                         1) != 0) {
         wfs_log("[fs-wfs] fs.backend register failed\n");
@@ -1323,8 +1322,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             continue;
         }
         if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FSMGR_IPC_BACKEND_INFO_REQ) {
-            wfs_report_backend_info(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
-                                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID));
+            /* Read every field into a local before replying: the reply writes
+             * into fs-manager's buffer, and a host call invalidates the
+             * last-message fields. Evaluation order within one argument list is
+             * unspecified, so the two must not be mixed there. */
+            int32_t info_src = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+            int32_t info_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+            int32_t info_bid = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+            wfs_report_backend_info(info_src, info_req, info_bid);
             break;
         }
     }

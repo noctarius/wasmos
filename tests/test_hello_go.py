@@ -45,7 +45,7 @@ class HelloGoTest(unittest.TestCase):
             )
 
     def test_exec_hello_go(self):
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect(
             "hello_go",
             [
@@ -65,7 +65,7 @@ class HelloGoTest(unittest.TestCase):
         reach its process manager at all and the `arg:` lines prove the argv blob
         is parsed. Both are spawn-info fields; neither is reachable through the
         entry registers."""
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect(
             "hello_go alpha beta",
             [

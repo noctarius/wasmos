@@ -216,18 +216,59 @@ provided via a known physical address from the bootloader.
   (the backend sees a root-relative path).
 - Refuses rather than truncates when a result does not fit: a shortened path
   names a different file, which the caller would then open unknowingly.
-- Routes the resulting absolute path to a mount, or — when its first segment names
-  no mount — to the boot volume as the ROOT FILESYSTEM, passed through whole
-  (`route_absolute_path`). `/system/utils/ip` and `/apps/calculator` are paths on
-  that volume, not mounts, and the shell and the spawn path use them throughout.
+- Routes the resulting absolute path to a mount, matched on its FIRST SEGMENT
+  (`route_absolute_path`). A path that names no mount is NOT SERVED: the caller
+  reports `WASMOS_ERR_FS_NOT_FOUND`.
+
+  **There is no fallback backend, deliberately.** Every mount is named, so a path
+  matching none names nothing. Serving such a path from the boot volume made
+  `/system/utils/ip` resolve as a second name for `/boot/system/utils/ip`, and the
+  alias appeared in no listing — `ls /` enumerates mounts, `/system` was not among
+  them, and `cd /system` succeeded anyway. Nothing in the system emitted such a
+  path: the CLI's `PATH` is `/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils`,
+  the device-manager rule roots are `/init/…` and `/boot/…`, and a full boot never
+  reached the fallback. Its only population was paths typed by hand.
+
+  A second fallback of the same shape, keyed on the CLIENT rather than the path,
+  had already shipped and hidden broken working-directory inheritance for as long
+  as there was a single non-root mount: a relative name typed in `/wfs` was handed
+  to the FAT driver, which answered NOT_FOUND, and the driver holding the file was
+  never asked (`resolve_backend_for_state`).
 
   The distinction that carries the weight is ABSOLUTE vs relative, not routed vs
   unrouted. Routing is reached only after a name has been joined onto the client's
-  working directory, so "no mount matched" means "the root filesystem" and never
-  "this client has no directory". Answering the latter with a backend is what hid
-  broken working-directory inheritance for as long as there was a single non-root
-  mount: a relative name typed in `/wfs` was handed to the FAT driver, which
-  answered NOT_FOUND, and the driver holding the file was never asked.
+  working directory, so "no mount matched" is a statement about the PATH and never
+  about the client.
+
+  Matching on the first segment means a mount can only exist at the TOP LEVEL.
+  Mounting deeper needs a root filesystem that owns real directories to mount
+  onto; see `docs/TASKS.md`.
+
+### Backend Identity
+
+A backend reports two independent things in `FSMGR_IPC_BACKEND_INFO_RESP`, and
+conflating them mislabels every mount:
+
+- `kind` (`arg0`) is `FSMGR_BACKEND_BLOCK` or `FSMGR_BACKEND_PSEUDO`. It separates a
+  backend served from a block device from one served from anything else
+  (initfs today, a devfs or sysfs later), and carries **no filesystem
+  identity** — every block-backed backend reports the same value whatever it
+  mounts.
+- `fs_type` (`arg1`) is the `FS_TYPE_*` the backend serves, and is the only field
+  that answers "which filesystem". `FS_TYPE_UNKNOWN` means the backend named
+  nothing, and is reported as such rather than guessed at.
+
+`mount` names a filesystem from `fs_type` alone (`fsmgr_backend_fs_name`, one
+lookup row per type). Deriving it from `kind` reports every mounted volume as
+FAT.
+
+A backend that sits on no block device names itself the same way: initfs reports
+`FS_TYPE_INITFS`, so `FS_TYPE_*` is the single namespace for "which filesystem"
+rather than a probe-result enum with pseudo-filesystems handled beside it. A
+future devfs or sysfs is therefore a value in `abi/constants.yaml` plus a lookup
+row, and costs no branch at any call site. Such a value is meaningless in a
+`SUBSYSTEM=="volume"` rule -- a volume is a formatted block device, so a rule
+spelling one could never match, and the rule parser does not accept one.
 
 A path-less request (`READDIR`) is preceded by a `CHDIR` re-asserting the
 requesting client's directory, because a backend holds one current directory per

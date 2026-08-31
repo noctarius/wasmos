@@ -45,7 +45,7 @@ class HelloAssemblyScriptTest(unittest.TestCase):
             )
 
     def test_exec_hello_as(self):
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect(
             "hello_as",
             [

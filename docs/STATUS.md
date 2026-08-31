@@ -853,6 +853,15 @@ linked feature documents for rationale and rollout plans.
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
+- A backend reports its filesystem as `FS_TYPE_*` in `FSMGR_IPC_BACKEND_INFO_RESP`
+  `arg1`, separately from `kind`; initfs reports `FS_TYPE_INITFS`, so a
+  pseudo-filesystem is a value in that enum and a future devfs or sysfs needs no
+  branch where a mount is named. `kind` only separates block-backed from initfs,
+  so every block-backed backend shares one value; `mount` previously named the
+  filesystem from it and reported both WFS volumes as `fs-fat`. The root
+  filesystem is likewise selected by mount name rather than by position in the
+  registration table, which had made it a function of registration order
+  (`fs_manager_backends.c`, `tests/unit/test_fs_manager_backends.c`).
 - The working directory is a full canonical VFS path owned by `fs-manager`: every
   client path is joined onto it before routing, a spawned process inherits its
   spawner's path by copy, and `FS_IPC_CHDIR` reports the resolved path back so no

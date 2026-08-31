@@ -46,7 +46,7 @@ class NetStackTcpServerE2ETest(unittest.TestCase):
         self.assertTrue(
             self.session.expect(b"[net-stack] eth0 10.0.2.15/24 ready", timeout_s=90)
         )
-        self.session.send("spawn /apps/net_tcp_server")
+        self.session.send("spawn /boot/apps/net_tcp_server")
         self.assertTrue(
             self.session.expect(b"[net-tcp-srv] listening", timeout_s=60),
             "server did not reach the listening state",

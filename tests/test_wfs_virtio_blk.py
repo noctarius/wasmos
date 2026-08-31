@@ -187,6 +187,24 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
                 f"--- tail ---\n{self.session.tail()}\n",
             )
 
+    def test_mount_names_wfs_on_both_transports(self):
+        """Regression: 2026-08-30-fsmgr-backend-identity.
+
+        `mount` labelled a backend from fs_backend_t.kind, which is
+        FSMGR_BACKEND_BLOCK for every block-backed backend whatever it mounts, so
+        both WFS volumes were reported as fs-fat.
+
+        This suite is where the virtio half is assertable: default_config()
+        attaches no virtio-blk disk, so /vwfs exists only here. /boot is checked
+        alongside because a label fixed by inverting the hardcoded string would
+        report the FAT volume as WFS and still pass a one-sided check.
+        """
+        self._cmd(
+            "mount",
+            [b"/boot -> fs-fat", b"/wfs -> fs-wfs", b"/vwfs -> fs-wfs"],
+            timeout_s=60,
+        )
+
     def test_the_volume_mounts_over_virtio(self):
         """fs_wfs mounted the virtio disk, not only the ATA one.
 

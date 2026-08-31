@@ -47,7 +47,7 @@ class VirtioNetNotifyE2ETest(unittest.TestCase):
 
     def test_rx_frame_notify(self) -> None:
         assert self.session is not None
-        self.session.send("spawn /apps/net_smoke")
+        self.session.send("spawn /boot/apps/net_smoke")
         self.assertTrue(
             self.session.expect(b"[net-smoke] packet socket open", timeout_s=30),
             "net_smoke could not open a packet socket on net-stack",

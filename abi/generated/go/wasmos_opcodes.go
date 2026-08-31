@@ -234,11 +234,42 @@ const FS_IPC_STREAM int32 = 0x481
 const FS_IPC_ERROR int32 = 0x4FF
 
 // fs_manager (0x420..0x4A2)
-// fs-manager -> backend pull: report kind/mount/unit. Reply RESP packs
-// arg0=kind, arg2=(mount_buffer_id<<12)|mount_len (backend owns the buffer
-// and borrows it READ to fs-manager), arg3=unit. Backends are discovered
-// via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager rebuilds its
-// backend set from the registry on (re)start.
+// fs-manager -> backend pull: report kind/fs-type/mount/unit into a buffer
+// the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
+// arg1=fs_type, arg2=mount_name_len, arg3=unit. Backends are discovered
+// via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager rebuilds
+// its backend set from the registry on (re)start.
+//
+// A backend MUST name its mount: arg2 > 0 always. Nothing else knows where
+// a backend belongs -- a block backend is told by the rule that spawned it
+// and a pseudo-filesystem knows from what it is -- so a default on the
+// fs-manager side could only be a guess, and a guess that named one
+// filesystem would have to name every future one. A reply with arg2 == 0
+// is malformed and the backend is not registered.
+//
+// fs-manager acquires the buffer, borrows it to the backend with WRITE,
+// and releases it once the reply is read -- the ownership model of
+// docs/architecture/12-dma-transfers.md, where the client of an exchange
+// holds the lifecycle and the server is a transient grantee. The backend
+// writes its mount name at offset 0 and owns nothing.
+//
+// A backend lending its OWN buffer here instead is refused
+// ALREADY_BORROWED on the second pull, and fs-manager pulls each backend
+// more than once (class lookup plus the ADD event). It also could never
+// release it: a borrow is held per context and nothing tells a server when
+// a client is finished.
+//
+// arg0 `kind` is FSMGR_BACKEND_BLOCK or FSMGR_BACKEND_PSEUDO: it separates a
+// backend served from a block device from one served from anything else,
+// and carries NO filesystem
+// identity, so every block-backed backend reports the same value whatever
+// it mounts. arg1 `fs_type` is the FS_TYPE_* the backend serves and is the
+// only field that answers "which filesystem". A backend that sits on no
+// block device names itself too -- initfs reports FS_TYPE_INITFS -- so a
+// pseudo-filesystem is a value in that enum rather than a special case
+// wherever a mount is named; FS_TYPE_UNKNOWN means the backend named
+// nothing. Deriving a filesystem from `kind` reports every mounted volume
+// as FAT.
 const FSMGR_IPC_BACKEND_INFO_REQ int32 = 0x420
 const FSMGR_IPC_CLONE_CWD_REQ int32 = 0x421
 const FSMGR_IPC_QUERY_MOUNTS_REQ int32 = 0x422

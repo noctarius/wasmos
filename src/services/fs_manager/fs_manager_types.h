@@ -37,9 +37,15 @@ typedef struct {
  * then overwritten by the name the backend reports in FSMGR_IPC_BACKEND_INFO. */
 typedef struct {
     uint8_t in_use;
-    uint8_t kind;     /* FSMGR_BACKEND_BOOT / FSMGR_BACKEND_INIT / other */
+    uint8_t kind;     /* FSMGR_BACKEND_BLOCK / FSMGR_BACKEND_PSEUDO / other */
     int32_t endpoint; /* IPC endpoint for this backend driver */
-    uint8_t slot;     /* slot index in the backend table */
+    /* Which filesystem this backend serves (FS_TYPE_*, abi/constants.yaml),
+     * reported by the backend in FSMGR_IPC_BACKEND_INFO_RESP. `kind` cannot
+     * answer this: it separates a block-backed backend from the initfs one, so
+     * every block-backed backend shares one value whatever it mounts.
+     * FS_TYPE_UNKNOWN when the backend reports no type. */
+    uint32_t fs_type;
+    uint8_t slot; /* slot index in the backend table */
     uint8_t has_meta;
     uint8_t unit; /* block device unit number */
     uint8_t bus;

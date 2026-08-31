@@ -924,7 +924,7 @@ tail.
   Enum-like alternatives a peer switches on -- `PROC_STATUS_*` (3),
   `PROC_MODULE_SOURCE_INITFS`/`_FS`, `WASMOS_EXEC_MATCH_*` (6 node kinds),
   `WASMOS_BROKER_PLAN_KIND_*` (2), `SVC_CLASS_EVENT_ADD`/`_REMOVE`,
-  `FSMGR_BACKEND_BOOT`/`_INIT`, `VT_INPUT_MODE_*`.
+  `FSMGR_BACKEND_BLOCK`/`_PSEUDO`, `VT_INPUT_MODE_*`.
 
   Descriptor versions both sides check -- `WASMOS_SVC_REGISTER_DESC_VERSION`,
   `WASMOS_MODULE_META_DESC_VERSION`, `WASMOS_PCI_DEVICE_DESC_VERSION`,
@@ -1001,14 +1001,17 @@ tail.
   `ftruncate` means a host call plus the libc and libsys wrappers kept in sync
   across the runtime-specific variants, then a case in
   `examples/c/wfs_write_smoke`.
-- [ ] [BUG][P3] `mount` names every WFS volume `fs-fat`. `fs_manager.c` maps the
-  backend KIND to a display name, and `FSMGR_BACKEND_BOOT` prints as `fs-fat`;
-  `fs_wfs` registers under that kind because the kind says where a volume sits
-  in the namespace, not which driver serves it. Routing is unaffected -- reads
-  and writes reach the right driver -- but the listing asserts something false,
-  and it cost real time in diagnosis: a WFS write failure read as "the FAT
-  driver claimed the volume". Either the backend reports its own name, or the
-  listing stops inferring one from the kind.
+- [x] [BUG][P3] `mount` named every WFS volume `fs-fat`. Fixed: a backend now
+  reports its own `FS_TYPE_*` in `FSMGR_IPC_BACKEND_INFO_RESP` arg1 and the
+  listing names a filesystem from that alone (`fsmgr_backend_fs_name`, one lookup
+  row per type), so the kind no longer decides a display name. initfs reports
+  `FS_TYPE_INITFS` rather than being recognised by its kind, so a devfs or sysfs
+  needs no branch either. The same missing identity had made the ROOT filesystem
+  the first block-backed backend in slot order, which is now selected by mount
+  name; and `FSMGR_BACKEND_BOOT` was renamed `FSMGR_BACKEND_BLOCK`, since reading
+  it as "the volume booted from" is what produced both defects.
+  `tests/unit/test_fs_manager_backends.c` plus the `mount` cases in
+  `tests/test_device_manager.py` and `tests/test_wfs_virtio_blk.py`.
 - [ ] [BUG][P2] The `fs.backend` class instance encodes (kind, unit) and not the
   BLOCK BACKEND, so two volumes whose units collide across backends -- ATA unit
   2 and a virtio-blk device at slot 0 function 2 -- derive one instance. The
@@ -1016,6 +1019,16 @@ tail.
   the retired `block` NAME had, one layer up: a disk is (backend, unit), so the
   instance has to carry the backend. Fixing it widens the encoding, which
   fs-manager and `fs_fat` decode too (`src/drivers/fs_wfs/fs_wfs.c`).
+
+  Carrying the backend is NOT sufficient on its own. A partition reports the same
+  backend AND the same unit as the disk beneath it (see the `SUBSYSTEM=="partition"`
+  note in `scripts/system/devmgr/rules/default.rules`), so a whole-disk backend and
+  a partition backend on that disk still derive one instance under the widened
+  encoding. The instance has to be derived from the block device's CANONICAL ID --
+  which already distinguishes `block:ata:1` from `block:ata:1p1` and is what
+  `wasmos_block_fingerprint` hashes for the `block` and `volume` classes -- rather
+  than from any (backend, unit) pair. Not reachable today: the mounted volumes are
+  units 0, 1, 2 and 48.
 - [ ] [FEATURE][P3] Symlinks (spec §20). Nothing creates or resolves one:
   `WFS_TYPE_SYMLINK` is defined by the format and used by no code. The format
   stores a short target inline in the object record, so this is a namespace
@@ -1179,7 +1192,7 @@ tail.
 
   fs-manager held a working directory as `(mount, depth)` and forwarded a
   relative name to a backend UNRESOLVED, choosing that backend by falling back to
-  `backend_first_of_kind(FSMGR_BACKEND_BOOT)` when the client had none. For
+  `backend_first_of_kind(FSMGR_BACKEND_BLOCK)` when the client had none. For
   `/boot` and `/init` that fallback is the correct backend, so relative `cat`
   worked there BY ACCIDENT; for any other mount the request went to the wrong
   backend, which answered NOT_FOUND, and the real backend was never asked. The
@@ -1422,6 +1435,50 @@ Source: `architecture/19-virtual-terminal.md`,
   PENDING_EXEC reply arrives (`cli.c`); an exec whose reply is dropped or
   mismatched leaks its buffer, and the CLI acquires one per exec. Confirm by
   counting a context's live buffers across execs before changing anything.
+
+- [ ] [BUG][P2] `gfx-smoke` can page-fault the kernel inside WARP's linear-memory
+  growth. Captured once locally on `warp_smp` (`run-qemu-test`, 4 vCPU) right
+  after `[test] gfx smoke visible done`, green on 4 further runs of the same
+  tree, so it is load-dependent rather than deterministic.
+
+  The fault is a kernel `#PF` with `err=0` (a not-present read) at
+  `cr2=0xffffffff84746000`, inside `memcpy` called from `warp_krealloc` —
+  `ActiveMemoryManager::probe` → `ensureLinearSize` → `ensureCapacityForLinearSize`
+  → `ExtendableMemory::extensionRequest` → `WasmModule::runtimeMemoryAllocFnc`.
+  So the guest asked to grow its linear memory and the copy into the new
+  allocation walked off the end of a mapping, which points at the reallocation
+  itself rather than at anything gfx-specific; `gfx-smoke` is simply the guest
+  that grows.
+
+  Note this is the reserve-then-commit linmem path (`architecture/06`), which is
+  supposed to make a grow non-relocating — a `krealloc` + `memcpy` in the growth
+  path is itself worth explaining before diagnosing the fault. A second CPU was
+  concurrently in `warp_sync_linmem_for_pid`, which is where to look first.
+
+- [ ] [FEATURE][P2] Back the VFS root with a real filesystem (a tmpfs), so a mount
+  point is a DIRECTORY rather than a reserved top-level name. Today `fs-manager`
+  matches a path's FIRST SEGMENT against the mount table, so every mount is
+  top-level by construction: there is no way to express `/mnt/usb`, and `ls /` is
+  `send_virtual_root_listing` printing the mount table rather than reading a
+  directory.
+
+  With a tmpfs at `/`: mount points are directories in it, routing becomes
+  longest-prefix over mount paths instead of first-segment matching, `ls /` is an
+  ordinary readdir, and mounting at any depth follows without a special case. It
+  also removes the last thing the deleted root-filesystem fallback was patching
+  over — a path naming no mount currently cannot be served at all, which is
+  correct but only because `/` holds nothing.
+
+  A tmpfs is a `FSMGR_BACKEND_PSEUDO` backend reporting a new `FS_TYPE_TMPFS`, so
+  it costs one row in `abi/constants.yaml` and one in `k_fs_types[]` and no branch
+  anywhere (`fs_manager_backends.c`). Wants: the tmpfs driver itself,
+  longest-prefix routing in `route_absolute_path`, and mount-point creation.
+
+  A mount SHADOWS the directory it covers, as on Linux: the directory's previous
+  contents become unreachable for as long as the mount stands and reappear on
+  unmount, rather than the mount being refused unless the directory is empty.
+  That keeps mounting a property of the namespace rather than of the covered
+  filesystem's state, so a mount cannot fail because someone left a file behind.
 
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 

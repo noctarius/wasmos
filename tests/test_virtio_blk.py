@@ -229,27 +229,40 @@ class VirtioBlkTest(unittest.TestCase):
         match predicate, and the one on the live publish path never compared the
         backend at all.
 
-        /user is the rule asserted present, because it is the one that still
-        names a device — /boot is selected by the volume the firmware booted
+        /user is the rule asserted present, because it is the one that resolves to
+        a specific device — /boot is selected by the volume the firmware booted
         from, which no virtio disk can satisfy however its units are numbered.
+
+        The rule matches the volume's own uuid, so what is asserted is the device
+        it LANDED on: `volume:block:ata:1p1`, the FAT volume on the ATA GPT
+        partition. That the volume exists at all still requires the partition to
+        have reached the registry, so this remains a guard on the publish path.
         """
         assert self.session is not None
         self.assertTrue(
             self.session.expect(
-                b"partition rule queued spawn mount=/user id=block:ata:1p1",
+                b"volume rule queued spawn mount=/user id=volume:block:ata:1p1",
                 timeout_s=60,
             ),
-            "the /user rule was not queued for its own ATA partition",
+            "the /user rule was not queued for its own ATA volume",
         )
         # No mount rule names virtio-blk, so none may be queued for one. Asserted
         # as an absence over the accumulated buffer: by now the ATA rules have
         # matched and the virtio disk has published. Matched on the ID, because
         # that is what every layer names a device by and a virtio device's id is
-        # the only place `virtio-blk` appears.
+        # the only place `virtio-blk` appears — as `block:virtio-blk:N` for a disk
+        # rule and `volume:block:virtio-blk:N` for a volume one, so the substring
+        # asserted absent is the part they share.
         self.assertNotIn(
-            b"rule queued spawn mount=/user id=block:virtio-blk",
+            b"mount=/user id=volume:block:virtio-blk",
             self.session.buf,
-            "an ata rule was queued for the virtio disk — the matcher compared "
+            "the /user rule was queued for the virtio disk — the matcher compared "
+            "units without comparing backends",
+        )
+        self.assertNotIn(
+            b"mount=/user id=block:virtio-blk",
+            self.session.buf,
+            "the /user rule was queued for the virtio disk — the matcher compared "
             "units without comparing backends",
         )
 

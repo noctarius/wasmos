@@ -146,10 +146,10 @@ const BACKEND_UNIT: i32 = 0;
 /// arguments, so this is the mount it gets.
 const DEFAULT_MOUNT = "/";
 
-/// Longest mount path this backend can report. fs-manager holds a mount name in
-/// 16 bytes (`fs_backend_t.mount_name`) and refuses a longer one, so a path past
-/// this could not be registered even if it were accepted here.
-const MOUNT_MAX: usize = 15;
+/// Longest mount path this backend can report. fs-manager holds a mount PATH in
+/// FSMGR_MOUNT_PATH_MAX bytes (`fs_backend_t.mount_path`, 64) and refuses a longer
+/// one, so a path past this could not be registered even if it were accepted here.
+const MOUNT_MAX: usize = 63;
 
 /// Longest service name the registry stores, mirroring WASMOS_SVC_NAME_MAX.
 const SVC_NAME_MAX: usize = 15;

@@ -860,7 +860,12 @@ linked feature documents for rationale and rollout plans.
   FINGERPRINT of that path, and a second instance mounted elsewhere has its own
   separate contents. The kernel's init sequence spawns the root instance between
   `fs-manager` and `fs-init`, so it exists before any volume mounts.
-  Capacity is a fixed 192 nodes over a 512 KiB block pool; contents are not
+  Capacity is a fixed 192-entry node table over a block pool that GROWS in 32 KiB
+  chunks taken from `memory.grow`: 16 KiB of static data, an 8 MiB ceiling, and
+  an instance storing nothing costs a table of null pointers. A chunk is never
+  moved or freed, so a block index stays stable. Growth verified under both
+  wasm3 and WARP; the manifest's `max_memory` must exceed `initial_memory` or
+  `memory.grow` is refused and the pool cannot grow at all. Contents are not
   persisted. Implements OPEN/READ/WRITE/SEEK/CLOSE/STAT/READDIR/CHDIR/MKDIR/
   RMDIR/UNLINK/RENAME.
 - NOT YET MOUNTED: `fs-manager` matches a mount NAME against a path's first

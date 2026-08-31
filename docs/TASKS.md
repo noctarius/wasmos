@@ -1493,6 +1493,17 @@ Source: `architecture/19-virtual-terminal.md`,
     `send_virtual_root_listing`.
   - `fs_backend_t.mount_name` is 16 bytes, which bounds a mount PATH far more
     tightly than it bounded a mount name. Widen it with the routing change.
+  - The tmpfs STORAGE layer has no standing test. Nothing reaches it until the
+    routing above mounts it, so a boot only runs its bring-up; the block pool was
+    verified by a throwaway in-guest self-test (200 KiB written and read back
+    across 7 chunks, partial tail read, truncate-then-reuse without regrowth,
+    both runtimes) rather than by anything that runs again. Once `/` is mounted,
+    an integration test owes it read/write/readdir/rename coverage through the
+    FS path.
+  - `NAME_MAX` in the tmpfs is 60, below WFS's 255 and below FAT's LFN, so a
+    filename valid on another mount can be rejected on this one. Names are
+    stored in the node record, so raising it costs static memory per node;
+    variable-length names in the block arena would not.
   - A second tmpfs instance cannot yet be spawned from a rule file:
     `parse_always_spawn_rule_line` reads only `SUBSYSTEM` and `RUN`, so a
     `SUBSYSTEM=="boot"` rule cannot carry `ENV{MOUNT}`. Either teach it to, or

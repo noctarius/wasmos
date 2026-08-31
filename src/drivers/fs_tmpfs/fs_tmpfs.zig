@@ -33,13 +33,25 @@
 //!
 //! Storage model
 //! -------------
-//! A fixed node table plus a fixed pool of `BLOCK`-sized blocks, chained one
-//! file at a time through `g_next`. Every static here is ZERO-initialized, which
-//! is load-bearing: a Zig WASM module's initialized data must stay under the
-//! layout budget `scripts/wasm_stack_check.py` enforces, so the sentinels are
-//! chosen to be zero. Block 0 is never allocated, which is what lets `0` mean
-//! "no block" in both `Node.first` and `g_next`; the root is node 0 and is its
-//! own parent, which is what makes `..` at the root stay at the root.
+//! A fixed node table, plus a block pool that GROWS. Blocks come in chunks taken
+//! from `memory.grow`, so an instance that stores nothing costs a table of null
+//! pointers rather than its whole capacity -- which matters because the mount is
+//! per-instance and a system may run several. A chunk is never moved and never
+//! freed, so a block INDEX is stable for the life of the process; chains and the
+//! free scan address blocks by index, never by pointer. Each chunk carries the
+//! chain and allocation metadata for its own blocks, so the bookkeeping grows
+//! with the pool instead of being an array that outgrows it.
+//!
+//! The ceiling is `MAX_BLOCK_CHUNKS` chunks, bounded in turn by the manifest's
+//! `max_memory` -- which must exceed `initial_memory`, or `memory.grow` fails and
+//! the pool cannot grow at all.
+//!
+//! Every static here is ZERO-initialized, which is load-bearing: a Zig WASM
+//! module's initialized data must stay under the layout budget
+//! `scripts/wasm_stack_check.py` enforces, so the sentinels are chosen to be
+//! zero. Block 0 is never allocated, which is what lets `0` mean "no block" in
+//! both `Node.first` and a chunk's `next`; the root is node 0 and is its own
+//! parent, which is what makes `..` at the root stay at the root.
 //!
 //! Names are case-SENSITIVE, as in WFS. FAT is the outlier there, and a mount's
 //! own name is matched case-insensitively by fs-manager either way.
@@ -76,9 +88,17 @@ const NAME_MAX: usize = 60;
 const MAX_NODES: usize = 192;
 /// Bytes per storage block. A file wastes at most one short block.
 const BLOCK: usize = 512;
-/// Blocks in the pool, of which block 0 is reserved so that 0 can mean "none".
-/// The pool is the whole of this filesystem's capacity: 512 KiB.
-const MAX_BLOCKS: usize = 1024;
+/// Blocks per pool chunk. A chunk is allocated whole and never moved or freed,
+/// which is what keeps a block INDEX stable for the life of the process -- file
+/// chains and the free scan both address a block by index, never by pointer.
+const BLOCKS_PER_CHUNK: usize = 64;
+/// Chunks the block index space can address, and therefore this filesystem's
+/// ceiling: MAX_BLOCK_CHUNKS * BLOCKS_PER_CHUNK * BLOCK, or 8 MiB. It is a
+/// ceiling and not a cost -- an unallocated chunk is one null pointer -- so the
+/// real bound is the manifest's max_memory.
+const MAX_BLOCK_CHUNKS: usize = 256;
+/// Bytes per WASM page, the granularity `memory.grow` works in.
+const PAGE: u32 = 65536;
 /// Open files across all clients.
 const MAX_FDS: usize = 32;
 /// Connections whose working directory is tracked. fs-manager is normally the
@@ -176,13 +196,29 @@ var g_nodes: [MAX_NODES]Node = [_]Node{.{}} ** MAX_NODES;
 var g_fds: [MAX_FDS]Fd = [_]Fd{.{}} ** MAX_FDS;
 var g_clients: [MAX_CLIENTS]Client = [_]Client{.{}} ** MAX_CLIENTS;
 
-/// Next block in a file's chain, 0 terminating it.
-var g_next: [MAX_BLOCKS]u16 = [_]u16{0} ** MAX_BLOCKS;
-/// Whether a block is part of some file's chain. Block 0 is never allocated, so
-/// its slot is never consulted.
-var g_used: [MAX_BLOCKS]bool = [_]bool{false} ** MAX_BLOCKS;
-/// The block pool itself: this filesystem's entire contents.
-var g_store: [MAX_BLOCKS * BLOCK]u8 = [_]u8{0} ** (MAX_BLOCKS * BLOCK);
+/// One chunk of the block pool: the blocks themselves plus the chain and
+/// allocation metadata for exactly those blocks, so growing the pool grows its
+/// bookkeeping with it rather than leaving a separate array to outgrow.
+const BlockChunk = struct {
+    /// Next block in each chain, 0 terminating it.
+    next: [BLOCKS_PER_CHUNK]u16,
+    /// Whether each block belongs to some chain.
+    used: [BLOCKS_PER_CHUNK]bool,
+    data: [BLOCKS_PER_CHUNK * BLOCK]u8,
+};
+
+/// The pool, allocated a chunk at a time on demand. A null entry is a chunk that
+/// has never been needed and costs one pointer; this is what keeps an idle
+/// instance cheap, which matters because the mount is per-instance and a system
+/// may run several.
+var g_block_chunks: [MAX_BLOCK_CHUNKS]?*BlockChunk = [_]?*BlockChunk{null} ** MAX_BLOCK_CHUNKS;
+var g_block_chunk_count: usize = 0;
+
+/// The bump arena the chunks come from, in linear-memory addresses. Both zero
+/// until the first allocation, which is what makes the first call take a fresh
+/// run of pages rather than trusting a base it was never given.
+var g_arena_next: u32 = 0;
+var g_arena_end: u32 = 0;
 
 /// Path scratch, static rather than stack: a Zig WASM module here runs on an
 /// 8 KiB shadow stack, so a per-request buffer of this size belongs in .bss.
@@ -292,18 +328,101 @@ fn isAncestor(maybe_ancestor: u16, n: u16) bool {
 
 // --- blocks ------------------------------------------------------------------
 
-/// Claim a free block, zeroed. Block 0 is skipped so that 0 can mean "none".
-fn blockAlloc() ?u16 {
-    var i: usize = 1;
-    while (i < MAX_BLOCKS) : (i += 1) {
-        if (g_used[i]) continue;
-        g_used[i] = true;
-        g_next[i] = 0;
-        const base = i * BLOCK;
-        @memset(g_store[base .. base + BLOCK], 0);
-        return @intCast(i);
+/// Bump-allocate `size` bytes from pages taken with `memory.grow`, returning the
+/// linear-memory address.
+///
+/// `memory.grow` answers with the PREVIOUS page count, which is the first page of
+/// the region it just added, so this needs no linker symbol to find a base above
+/// the module's static data -- and cannot collide with it. Grown pages are
+/// zero-initialized by the WASM specification, which is what lets a fresh chunk
+/// skip clearing itself.
+///
+/// Nothing is ever freed. A chunk outlives every block in it and the pool only
+/// grows, so a free list here would be bookkeeping for an event that does not
+/// happen. Returns null once the runtime refuses to grow, which is the
+/// manifest's max_memory being reached.
+fn arenaAlloc(size: usize) ?u32 {
+    const want: u32 = @intCast((size + 7) & ~@as(usize, 7));
+    if (g_arena_end - g_arena_next < want) {
+        const pages: u32 = (want + PAGE - 1) / PAGE;
+        const prev = @wasmMemoryGrow(0, pages);
+        if (prev < 0) return null;
+        const base: u32 = @as(u32, @intCast(prev)) * PAGE;
+        // The new region begins exactly where memory ended, so when that is the
+        // run already in hand the leftover tail stays usable and the allocation
+        // simply spans the boundary; otherwise this is the first run.
+        if (base != g_arena_end) g_arena_next = base;
+        g_arena_end = base + pages * PAGE;
     }
-    return null;
+    const at = g_arena_next;
+    g_arena_next += want;
+    return at;
+}
+
+/// The chunk holding `index`, or null when that chunk has not been allocated.
+fn blockChunkOf(index: u16) ?*BlockChunk {
+    const c = @as(usize, index) / BLOCKS_PER_CHUNK;
+    if (c >= MAX_BLOCK_CHUNKS) return null;
+    return g_block_chunks[c];
+}
+
+fn blockSlot(index: u16) usize {
+    return @as(usize, index) % BLOCKS_PER_CHUNK;
+}
+
+/// Next block in `index`'s chain; 0 both terminates a chain and answers for a
+/// block whose chunk does not exist, which a caller treats the same way.
+fn blockNext(index: u16) u16 {
+    const chunk = blockChunkOf(index) orelse return 0;
+    return chunk.next[blockSlot(index)];
+}
+
+fn setBlockNext(index: u16, value: u16) void {
+    const chunk = blockChunkOf(index) orelse return;
+    chunk.next[blockSlot(index)] = value;
+}
+
+fn releaseBlock(index: u16) void {
+    const chunk = blockChunkOf(index) orelse return;
+    chunk.used[blockSlot(index)] = false;
+    chunk.next[blockSlot(index)] = 0;
+}
+
+/// The `BLOCK` bytes of `index`, or null when its chunk does not exist.
+fn blockBytes(index: u16) ?[]u8 {
+    const chunk = blockChunkOf(index) orelse return null;
+    const off = blockSlot(index) * BLOCK;
+    return chunk.data[off .. off + BLOCK];
+}
+
+/// Claim a free block, zeroed, growing the pool by one chunk when every chunk in
+/// hand is full. Block 0 is never claimed, so that 0 can mean "none".
+fn blockAlloc() ?u16 {
+    var c: usize = 0;
+    while (c < g_block_chunk_count) : (c += 1) {
+        const chunk = g_block_chunks[c] orelse continue;
+        var i: usize = 0;
+        while (i < BLOCKS_PER_CHUNK) : (i += 1) {
+            const index = c * BLOCKS_PER_CHUNK + i;
+            if (index == 0 or chunk.used[i]) continue;
+            chunk.used[i] = true;
+            chunk.next[i] = 0;
+            @memset(chunk.data[i * BLOCK .. (i + 1) * BLOCK], 0);
+            return @intCast(index);
+        }
+    }
+    if (g_block_chunk_count >= MAX_BLOCK_CHUNKS) return null;
+    const addr = arenaAlloc(@sizeOf(BlockChunk)) orelse return null;
+    const fresh: *BlockChunk = @ptrFromInt(addr);
+    const c_new = g_block_chunk_count;
+    g_block_chunks[c_new] = fresh;
+    g_block_chunk_count += 1;
+    // Index 0 is the sentinel, so the very first chunk hands out slot 1. The
+    // chunk's bytes came from grown memory and are already zero.
+    const slot: usize = if (c_new == 0) 1 else 0;
+    fresh.used[slot] = true;
+    fresh.next[slot] = 0;
+    return @intCast(c_new * BLOCKS_PER_CHUNK + slot);
 }
 
 /// Index of the `want`-th block of `n`'s chain, or null when the chain is
@@ -314,7 +433,7 @@ fn blockAt(n: u16, want: usize) ?u16 {
     while (block != 0) {
         if (i == want) return block;
         i += 1;
-        block = g_next[block];
+        block = blockNext(block);
     }
     return null;
 }
@@ -334,14 +453,14 @@ fn blockForWrite(n: u16, off: u32) ?u16 {
     while (block != 0) {
         tail = block;
         have += 1;
-        block = g_next[block];
+        block = blockNext(block);
     }
     while (have <= want) {
         const fresh = blockAlloc() orelse return null;
         if (tail == 0) {
             g_nodes[n].first = fresh;
         } else {
-            g_next[tail] = fresh;
+            setBlockNext(tail, fresh);
         }
         tail = fresh;
         have += 1;
@@ -356,18 +475,17 @@ fn truncateBlocks(n: u16, keep: usize) void {
     var i: usize = 0;
     while (block != 0 and i < keep) {
         prev = block;
-        block = g_next[block];
+        block = blockNext(block);
         i += 1;
     }
     if (prev == 0) {
         g_nodes[n].first = 0;
     } else {
-        g_next[prev] = 0;
+        setBlockNext(prev, 0);
     }
     while (block != 0) {
-        const following = g_next[block];
-        g_used[block] = false;
-        g_next[block] = 0;
+        const following = blockNext(block);
+        releaseBlock(block);
         block = following;
     }
 }
@@ -387,8 +505,8 @@ fn readAt(n: u16, off: u32, dst: []u8) u32 {
         const within: usize = @as(usize, at) % BLOCK;
         var chunk: usize = BLOCK - within;
         if (chunk > want - done) chunk = want - done;
-        const base = @as(usize, block) * BLOCK + within;
-        @memcpy(dst[done .. done + chunk], g_store[base .. base + chunk]);
+        const bytes = blockBytes(block) orelse break;
+        @memcpy(dst[done .. done + chunk], bytes[within .. within + chunk]);
         done += @intCast(chunk);
     }
     return done;
@@ -405,8 +523,8 @@ fn writeAt(n: u16, off: u32, src: []const u8) u32 {
         const within: usize = @as(usize, at) % BLOCK;
         var chunk: usize = BLOCK - within;
         if (chunk > src.len - done) chunk = src.len - done;
-        const base = @as(usize, block) * BLOCK + within;
-        @memcpy(g_store[base .. base + chunk], src[done .. done + chunk]);
+        const bytes = blockBytes(block) orelse break;
+        @memcpy(bytes[within .. within + chunk], src[done .. done + chunk]);
         done += @intCast(chunk);
         if (at + chunk > g_nodes[n].size) g_nodes[n].size = at + @as(u32, @intCast(chunk));
     }
@@ -1045,7 +1163,7 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     var line = driver.Line{};
     _ = line.str("[fs-tmpfs] ready mount=").str(mountPath());
     _ = line.str(" nodes=").dec(MAX_NODES);
-    _ = line.str(" capacity=").dec((MAX_BLOCKS - 1) * BLOCK).str("B");
+    _ = line.str(" capacity<=").dec(MAX_BLOCK_CHUNKS * BLOCKS_PER_CHUNK * BLOCK).str("B");
     line.end();
 
     // Ready is signalled here rather than deferred until fs-manager's first pull,

@@ -200,8 +200,21 @@ via the device manager's block-device registration mechanism.
 **Source**: `src/drivers/fs_tmpfs/` (Zig)
 
 A read-write filesystem held entirely in the backend's own linear memory: a fixed
-node table (192 entries) over a fixed block pool (1024 x 512 B, block 0 reserved
-so `0` can mean "no block"). Contents are not persisted.
+node table (192 entries) over a block pool that GROWS. Contents are not
+persisted.
+
+The pool takes 32 KiB chunks from `memory.grow`, so an instance storing nothing
+costs a table of null pointers rather than its whole capacity — which matters
+because the mount is per-instance and a system may run several. A chunk is never
+moved and never freed, so a block INDEX is stable for the life of the process;
+chains and the free scan address blocks by index, never by pointer, and each
+chunk carries the chain and allocation metadata for its own blocks so the
+bookkeeping grows with the pool. Measured: 16 KiB of static data, an 8 MiB
+ceiling, and growth verified under both wasm3 and WARP.
+
+The manifest's `max_memory` MUST exceed `initial_memory`. A module declaring
+`min == max` cannot grow at all — `memory.grow` is refused — which is a silent
+capacity ceiling rather than an error.
 
 It is a GENERAL in-memory filesystem, not a root-specific one. The mount comes
 from the `mount=` startup argument and defaults to `/`, so a second instance

@@ -17,12 +17,19 @@ stack_pages = 16
 heap_pages = 16
 
 # Link-time memory in bytes (docs/toolchain.md). No device memory is mapped -- this
-# driver touches no hardware -- but the filesystem's whole contents live in linear
-# memory, so the block pool and node table are sized against this number, not
-# against a heap.
+# driver touches no hardware -- but the filesystem's contents live in linear
+# memory, so these two numbers are its floor and its ceiling.
+#
+# max_memory MUST exceed initial_memory: the block pool grows with `memory.grow`,
+# which the runtime refuses once the declared maximum is reached, and a module
+# declaring min == max cannot grow at all. Verified to grow under BOTH wasm3 and
+# WARP.
+#
+# initial_memory covers only the static tables, the shadow stack and libsys; the
+# pool is not in it, which is what keeps an instance storing nothing cheap.
 [link]
-initial_memory = 4194304
-max_memory = 4194304
+initial_memory = 1048576
+max_memory = 16777216
 
 [ipc]
 required_endpoint_name = "-"

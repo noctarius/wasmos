@@ -1,15 +1,23 @@
 # WASMOS device-manager persistent rules (boot FAT)
 # Loaded from /boot/system/devmgr/rules after storage is online.
 # Entries here are intended to override or extend initfs bootstrap rules.
-# /user is the GPT partition LABELLED "user", wherever it is. The rule names no
-# disk, no unit, no backend and no position in the table: move the image to
+# /user is one specific FAT volume, wherever it is. The rule names no disk, no
+# unit, no backend, no partition and no position in the table: move the image to
 # another controller, add a disk ahead of it, repartition around it, and the
-# volume still mounts here because the label travels with the volume.
+# volume still mounts here because the uuid travels with the volume.
 #
-# SUBSYSTEM=="partition" is not decoration. A partition reports the same backend
-# and unit as the disk beneath it, so it is the subsystem that keeps a partition
-# rule off whole disks and a disk rule off partitions.
-SUBSYSTEM=="partition", ATTR{partlabel}=="user", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
+# The uuid is the FAT volume serial, and it is deterministic rather than
+# arbitrary: scripts/make_gpt_image.py writes zlib.crc32(label) into the extended
+# boot record, so crc32(b"user") == 0x8d93d649 and this rule spells the ON-DISK
+# byte order, 49d6938d. DOS-lineage tools display it the other way round
+# (8D93-D649), so read it off the volume manager's own report, not from `fatlabel`.
+#
+# SUBSYSTEM=="volume" rather than "partition": this matches what the volume IS,
+# so the same rule form covers a formatted whole disk and a formatted partition
+# alike. The tradeoff against ATTR{partlabel} is durability -- a GPT partition
+# name survives a reformat of the volume, this serial does not -- against reach,
+# since a partition label only exists where there is a partition table.
+SUBSYSTEM=="volume", ATTR{uuid}=="49d6938d", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
 # The partition and volume managers are NOT spawned here. They live in the initfs
 # bootstrap rules, because this file loads from /boot and /boot is itself selected
 # by a volume -- a manager spawned from here could never publish the volume that

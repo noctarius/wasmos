@@ -57,29 +57,34 @@ class DeviceManagerIntegrationTests(unittest.TestCase):
         so SUBSYSTEM=="partition" matched nothing at all and the entire partition
         half of the rule language was dead.
 
-        /user is mounted by exactly such a rule, which makes its presence in the
-        mount table the observable proof that a partition reached the registry,
-        matched a rule, and spawned a filesystem on the window the table named.
+        /user sits on exactly such a partition. It is mounted by a VOLUME rule,
+        and a volume exists only where a partition was published, so its presence
+        in the mount table is still the observable proof that a partition reached
+        the registry -- one layer removed rather than direct.
         """
         self._cmd_expect("mount", b"/user")
 
-    def test_user_volume_is_mounted_by_its_gpt_label(self):
+    def test_user_volume_is_mounted_by_its_own_identity(self):
         """/user names itself: no disk, no unit, no position in the table.
 
-        The rule that mounts it is `SUBSYSTEM=="partition",
-        ATTR{partlabel}=="user"`, so nothing here would work if the GPT were not
-        read end to end -- the header and entry-array CRCs verified, the UTF-16
-        label decoded, the partition published with it, and the rule matched on
-        it. A positional rule would still pass if the label were wrong or absent,
-        which is why /user is named this way and not by ATTR{name}.
+        The rule that mounts it is `SUBSYSTEM=="volume", ATTR{uuid}=="49d6938d"`,
+        so it selects the FAT volume by the serial in its own boot sector and
+        would follow that volume to another disk, another controller, or another
+        position in the table. A positional rule would still pass if the volume
+        were a different one, which is why /user is named this way.
+
+        The serial is deterministic rather than arbitrary: scripts/make_gpt_image.py
+        writes `zlib.crc32(label)` into the FAT extended boot record, so
+        crc32(b"user") == 0x8d93d649 and the rule spells the on-disk byte order,
+        49d6938d. Note that a reformat regenerates it, where the GPT partition
+        name would have survived one.
 
         Listing the volume's contents rather than only its mount point is what
-        makes this an assertion about a FILESYSTEM. The image is built by
-        scripts/make_gpt_image.py, which writes the FAT16 volume itself; a BPB
-        that merely parses proves the header, while a file read back through a
-        cluster chain proves the FAT and the root directory too. The name comes
-        back upper-case because FAT stores 8.3 names that way and the builder
-        writes no long-name entries.
+        makes this an assertion about a FILESYSTEM. A BPB that merely parses
+        proves the header, while a file read back through a cluster chain proves
+        the FAT and the root directory too. The name comes back upper-case
+        because FAT stores 8.3 names that way and the builder writes no
+        long-name entries.
         """
         self._cmd_expect("cd /user", b"/user wamos> ")
         self._cmd_expect("ls", b"README.TXT")

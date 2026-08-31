@@ -460,18 +460,48 @@ static void send_fs_error(int32_t source, int32_t request_id, wasmos_error_code_
         source, g_fs_endpoint, FS_IPC_ERROR, request_id, reason, 0, 0, 0, FSMGR_REPLY_SEND_RETRIES);
 }
 
-/* The backend serving the client's working directory, or -1 at the VFS root.
+/* Defined below, next to the rest of the routing; declared here because the
+ * backend a client's directory resolves to is answered by routing it. */
+static int32_t route_absolute_path(const char* path, char* out_path, int32_t out_cap,
+                                   int32_t* out_path_len, int32_t* out_backend);
+
+/* The backend serving the client's working directory.
  *
- * There is deliberately no fallback here. This used to answer -1 with "the boot
+ * `state->backend_endpoint` is a CACHE, filled in on chdir, and it is not the
+ * authority: a client that has never chdir'd stands at "/" with the cache unset,
+ * and every client starts that way. So an unset cache is answered by routing the
+ * working directory, which is where the answer comes from in the first place.
+ *
+ * Regression: 2026-08-31-readdir-without-chdir. Trusting the cache made `ls` fail
+ * with BACKEND_IPC as the first command of a session -- forward_request refuses a
+ * negative endpoint -- and it was invisible while "/" was not a mount, because
+ * READDIR at the root was short-circuited into the virtual mount-table listing
+ * and never reached the forward path.
+ *
+ * There is deliberately no FALLBACK here. This used to answer -1 with "the boot
  * backend", which turned "this client is not in any mount" into a plausible
  * reply: a relative name typed in /wfs was handed to the FAT driver, which
- * answered NOT_FOUND, and the driver that actually held the file was never
- * asked. Choosing a backend belongs to routing, which acts on an ABSOLUTE path
- * (route_absolute_path, including its root-filesystem rule) -- not to "this
- * client named no mount". So -1 is returned and a caller that needs a backend
- * routes for one. */
+ * answered NOT_FOUND, and the driver that actually held the file was never asked.
+ * Routing the cwd is not that: it asks the same question chdir asked, of the same
+ * mount table, and answers -1 when nothing owns it.
+ *
+ * Returns the backend, or -1 when no mount owns the client's directory -- which
+ * on a system with a root filesystem means only that the directory is gone. */
 static int32_t resolve_backend_for_state(const fs_client_state_t* state) {
-    return state ? state->backend_endpoint : -1;
+    char tail[FSMGR_CWD_MAX];
+    int32_t tail_len = 0;
+    int32_t backend = -1;
+
+    if (!state) {
+        return -1;
+    }
+    if (state->backend_endpoint >= 0) {
+        return state->backend_endpoint;
+    }
+    if (!route_absolute_path(state->cwd, tail, (int32_t)sizeof(tail), &tail_len, &backend)) {
+        return -1;
+    }
+    return backend;
 }
 
 static int is_path_op_type(int32_t type) {

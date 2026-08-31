@@ -328,6 +328,7 @@ domains:
       - { name: UNALIGNED,      description: "an address or size is not page-aligned" }
       - { name: NO_WINDOW,      description: "guest linear memory has no window the mapping can occupy" }
       - { name: MAP_FAILED,     description: "the paging step failed" }
+      - { name: LOW_SLOT_PRESENT, description: "the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force" }
 
   block:
     id: 20

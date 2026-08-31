@@ -2756,9 +2756,13 @@ m3ApiRawFunction(wasmos_debug_mark) {
 }
 
 /* Dump the caller's user page-table kernel mappings to the kernel log and, for a ring-3
- * caller, verify no low-half slot survives in its root table.  Returns 0, -1 when that
- * verification fails, or WASMOS_ERR_KERNEL_NO_CALLER when the caller or its root table cannot
- * be resolved.  Diagnostics only; WARP's counterpart prints nothing and returns 0. */
+ * caller, verify no low-half slot survives in its root table.  Returns 0,
+ * WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT when that verification fails, or
+ * WASMOS_ERR_KERNEL_NO_CALLER when the caller or its root table cannot be resolved.
+ *
+ * The ring-3 gate means the verification does not run for a wasm3-hosted process, whose
+ * context keeps KERNEL_CS.  WARP's counterpart verifies unconditionally instead, because
+ * its guests reach CPL=3 without proc->ctx.cs ever being written. */
 m3ApiRawFunction(wasmos_kmap_dump) {
     m3ApiReturnType(int32_t) process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
@@ -2770,14 +2774,17 @@ m3ApiRawFunction(wasmos_kmap_dump) {
     }
     paging_dump_user_root_kernel_mappings(root);
     if ((proc->ctx.cs & 0x3u) == 0x3u) {
-        m3ApiReturn(paging_verify_user_root_no_low_slot(root, 1) == 0 ? 0 : -1);
+        m3ApiReturn(paging_verify_user_root_no_low_slot(root, 1) == 0
+                        ? 0
+                        : WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT);
     }
     m3ApiReturn(0);
 }
 
 /* Same dump as wasmos_kmap_dump, for every active process rather than the caller.  A process
  * whose entry or context cannot be resolved is skipped, and one whose root table cannot be
- * resolved counts as a failure.  Returns 0 when every context passed, -1 otherwise. */
+ * resolved counts as a failure.  Returns 0 when every context passed and
+ * WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT when any did not. */
 m3ApiRawFunction(wasmos_kmap_dump_all) {
     m3ApiReturnType(int32_t) uint32_t count = process_count_active();
     int failures = 0;
@@ -2818,7 +2825,7 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
         }
     }
     trace_do(klog_write("[kmap] contexts end\n"));
-    m3ApiReturn(failures == 0 ? 0 : -1);
+    m3ApiReturn(failures == 0 ? 0 : WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT);
 }
 
 /* Read at most ONE byte from the serial console into the caller's linear memory at `ptr`.

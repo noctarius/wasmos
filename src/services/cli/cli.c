@@ -1752,21 +1752,28 @@ static int cli_handle_line(void) {
         cli_show_mounts();
         return 0;
     }
+    /* The dump itself goes to the KERNEL LOG, never to this console, so the reply
+     * names its destination -- "dumped" alone reads as "printed here" and sent a
+     * reader looking for output that was never going to appear at the prompt. */
     if (line_eq_ci("kmaps")) {
         int32_t rc = wasmos_kmap_dump();
         if (rc == 0) {
-            console_write("kmaps: dumped\n");
+            console_write("kmaps: dumped to kernel log\n");
         } else {
-            console_write("kmaps: failed\n");
+            console_write("kmaps: ");
+            console_write(wasmos_strerror((wasmos_error_code_t)rc));
+            console_write("\n");
         }
         return 0;
     }
     if (line_eq_ci("kmaps all")) {
         int32_t rc = wasmos_kmap_dump_all();
         if (rc == 0) {
-            console_write("kmaps all: dumped\n");
+            console_write("kmaps all: dumped to kernel log\n");
         } else {
-            console_write("kmaps all: failed\n");
+            console_write("kmaps all: ");
+            console_write(wasmos_strerror((wasmos_error_code_t)rc));
+            console_write("\n");
         }
         return 0;
     }

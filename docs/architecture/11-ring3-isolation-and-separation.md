@@ -124,6 +124,31 @@ The wasm3 subsystem additionally holds a per-process `runtime_lock` across the
 whole timeslice (`src/kernel/process.c:562`; `needs_runtime_lock = 1` in
 `src/kernel/wasmos_app.c:267`), serialising re-entry into one runtime.
 
+#### A WARP Guest Runs Against the Active Root, Not the Context Root
+
+`mm_context_root_table(proc->context_id)` is **not** the table a WARP guest
+executes against. Guest windows are published into
+`paging_get_current_root_table()` by `warp_ring3_sync_linmem_user_window` and
+`warp_mem_ring3_map_linmem` (`src/kernel/warp/link.cpp`), so the two roots differ
+for the lifetime of the process. Measured on a booted CLI via `kmaps`:
+
+| root | PML4[0] (low slot) | PML4[1] (`USER_VA_MIN`) |
+|---|---|---|
+| context root `0x2c31000` | present | empty |
+| active root `0x2cd8000` | 0 | present, USER |
+
+The low-slot invariant belongs to the **active** root. The context root keeps its
+low slot legitimately, because no ring-3 code runs against it; verifying that root
+under WARP reports a failure on every healthy boot. `wasmos_kmap_dump` verifies
+accordingly: the WARP backend checks the active root, the wasm3 backend checks the
+context root gated on a ring-3 caller — which is correct there, because the two
+ring-3 paths wasm3 can see (`process_set_user_entry`, the native user-thread
+spawn) do run against the context root and strip the slot in it. The two gates are
+not interchangeable.
+
+`kmap_dump_all` verifies nothing under WARP: another process's active root is the
+CR3 of whichever CPU is running it, which the caller cannot observe.
+
 #### Low-Slot Policy
 
 `IDENTITY_PD_COUNT = 0` in `src/kernel/paging.c`. New user roots are created

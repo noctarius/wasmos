@@ -55,6 +55,23 @@ class CliIntegrationTests(unittest.TestCase):
         is whatever the host clock says."""
         self._cmd_expect("date", re.compile(rb"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"))
 
+    def test_kmaps_dumps_page_tables(self):
+        """Regression: 2026-08-31-warp-kmaps-stub. The WARP backend implemented
+        kmap_dump/kmap_dump_all as no-op stubs returning 0, so `kmaps` printed
+        "dumped" on the default (WARP) runtime while producing no dump at all --
+        a diagnostic that reported success for work it never did. The page-table
+        walk it performs is runtime-agnostic kernel state, so the stub cost the
+        one runtime whose guests actually execute at CPL=3 against that root.
+        Asserted on the dump reaching the log, not on the CLI's reply, since the
+        reply was the part that was already (misleadingly) correct."""
+        self._cmd_expect("kmaps", b"[paging] dump root=")
+
+    def test_kmaps_all_dumps_every_context(self):
+        """Companion to test_kmaps_dumps_page_tables for the all-contexts form,
+        which was stubbed identically. The per-pid label is what makes the dump
+        attributable, so it is what this asserts."""
+        self._cmd_expect("kmaps all", re.compile(rb"\[kmap\] pid=\d+ name="))
+
     def test_ps_lists_processes(self):
         self._cmd_expect(
             "ps", b"vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name"

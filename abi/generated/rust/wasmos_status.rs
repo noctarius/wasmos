@@ -234,6 +234,7 @@ pub const WASMOS_ERR_KERNEL_TOO_LARGE: i32 = -0x00130005; // the value does not 
 pub const WASMOS_ERR_KERNEL_UNALIGNED: i32 = -0x00130006; // an address or size is not page-aligned
 pub const WASMOS_ERR_KERNEL_NO_WINDOW: i32 = -0x00130007; // guest linear memory has no window the mapping can occupy
 pub const WASMOS_ERR_KERNEL_MAP_FAILED: i32 = -0x00130008; // the paging step failed
+pub const WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT: i32 = -0x00130009; // the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force
 pub const WASMOS_ERR_BLOCK_NO_SLOT: i32 = -0x00140001; // no per-process block slot is available
 pub const WASMOS_ERR_BLOCK_NO_BACKING: i32 = -0x00140002; // no physical backing could be obtained for the buffer
 pub const WASMOS_ERR_BLOCK_ABOVE_4G: i32 = -0x00140003; // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
@@ -520,6 +521,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_KERNEL_UNALIGNED => "an address or size is not page-aligned",
         WASMOS_ERR_KERNEL_NO_WINDOW => "guest linear memory has no window the mapping can occupy",
         WASMOS_ERR_KERNEL_MAP_FAILED => "the paging step failed",
+        WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT => "the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force",
         WASMOS_ERR_BLOCK_NO_SLOT => "no per-process block slot is available",
         WASMOS_ERR_BLOCK_NO_BACKING => "no physical backing could be obtained for the buffer",
         WASMOS_ERR_BLOCK_ABOVE_4G => "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address",

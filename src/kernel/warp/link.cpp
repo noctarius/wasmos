@@ -2525,19 +2525,100 @@ static uint32_t warp_early_log_copy(uint32_t buf_off, uint32_t len, uint32_t off
     return 0;
 }
 
-/* Diagnostics that the wasm3 backend implements and this one does not: a mark is
- * dropped and a kmap dump prints nothing.  They report success so a guest that
- * instruments itself runs identically under both runtimes. */
+/* A mark is dropped: wasm3 implements it and this backend does not.  Reports success so
+ * a guest that instruments itself runs identically under both runtimes. */
 static uint32_t warp_debug_mark(uint32_t /*tag*/, void* ctx_) {
     (void)ctx_;
     return 0;
 }
+
+/* Dump the caller's page-table kernel mappings to the kernel log and verify that no
+ * identity low slot survives in the root the caller actually executes against.
+ * Returns 0, WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT when that verification fails, or
+ * WASMOS_ERR_KERNEL_NO_CALLER when the caller or its context root cannot be resolved.
+ *
+ * TWO ROOTS, and they are not the same table.  A WARP guest does NOT execute against
+ * mm_context_root_table(proc->context_id): measured on a booted CLI, the context root
+ * was 0x2c31000 while the live CR3 on the host-call path was 0x2cd8000, and the context
+ * root's PML4[1] -- the slot covering USER_VA_MIN, where WARP_R3_JIT_BASE and
+ * WARP_R3_LINMEM_BASE live -- was empty.  warp_ring3_sync_linmem_user_window and
+ * warp_mem_ring3_map_linmem publish guest windows into paging_get_current_root_table(),
+ * not into the context root.
+ *
+ * The low-slot invariant therefore belongs to the ACTIVE root.  Verifying the context
+ * root instead reports a failure on every healthy boot -- that root legitimately keeps
+ * its low slot, because no ring-3 code runs against it.  The wasm3 counterpart verifies
+ * the context root correctly, because the ring-3 paths it can see (process_set_user_entry
+ * and the native user-thread spawn) do run against that root and strip the slot there.
+ *
+ * A host call can also arrive with the KERNEL root active, in which case there is no
+ * ring-3 root to hold to the invariant and only the dump is produced -- the same guard
+ * warp_ring3_sync_linmem_user_window uses to stay safe on a ring-0 call. */
 static uint32_t warp_kmap_dump(void* ctx_) {
     (void)ctx_;
+    process_t* proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    uint64_t ctx_root = mm_context_root_table(proc->context_id);
+    if (!ctx_root) {
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    uint64_t active_root = paging_get_current_root_table();
+    uint64_t kernel_root = paging_get_root_table();
+
+    klog_printf("[kmap] pid=%u ctx_root=%016llx active_root=%016llx\n",
+                (unsigned)proc->pid,
+                (unsigned long long)ctx_root,
+                (unsigned long long)active_root);
+    paging_dump_user_root_kernel_mappings(ctx_root);
+    if (active_root != 0 && active_root != ctx_root) {
+        klog_write("[kmap] active root:\n");
+        paging_dump_user_root_kernel_mappings(active_root);
+    }
+    if (active_root != 0 && active_root != kernel_root &&
+        paging_verify_user_root_no_low_slot(active_root, 1) != 0) {
+        return (uint32_t)WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT;
+    }
     return 0;
 }
+
+/* Same dump as warp_kmap_dump, for every active process rather than the caller, each
+ * labelled with its pid so the page-table lines are attributable.
+ *
+ * Dumps CONTEXT roots only, and verifies nothing.  A process's active root is the CR3 of
+ * whichever CPU is running it, which is not observable from here -- and per
+ * warp_kmap_dump the context root is the wrong table to hold the low-slot invariant to,
+ * so verifying it would report a failure for every WARP process on a healthy boot.
+ * Returns 0; a process whose entry, context, or root cannot be resolved is skipped, and
+ * the log is the record of what was covered. */
 static uint32_t warp_kmap_dump_all(void* ctx_) {
     (void)ctx_;
+    uint32_t count = process_count_active();
+
+    klog_write("[kmap] contexts begin\n");
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t pid = 0;
+        uint32_t parent_pid = 0;
+        const char* name = 0;
+        if (process_info_at_ex(i, &pid, &parent_pid, &name) != 0) {
+            continue;
+        }
+        process_t* proc = process_get(pid);
+        if (!proc || proc->context_id == 0) {
+            continue;
+        }
+        uint64_t root = mm_context_root_table(proc->context_id);
+        if (!root) {
+            continue;
+        }
+        klog_printf("[kmap] pid=%u name=%s ctx_root=%016llx\n",
+                    (unsigned)pid,
+                    name ? name : "?",
+                    (unsigned long long)root);
+        paging_dump_user_root_kernel_mappings(root);
+    }
+    klog_write("[kmap] contexts end\n");
     return 0;
 }
 /* Stub, as recorded in abi/hostcalls.yaml (id 49): reports an empty ready queue

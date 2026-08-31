@@ -2337,17 +2337,24 @@ static int process_schedule_once_impl(void) {
          * for the lost place strands a live thread permanently -- READY, on no
          * queue, owed nothing, so no sweep can find it -- which is why this exit
          * leaves a debt below. Counted as well, so that reading "no strand came
-         * from here" means something. */
+         * from here" means something.
+         *
+         * The COUNTER is unconditional and the LINE is behind WASMOS_TRACE: this
+         * race is a legitimate outcome that a wake-heavy thread reproduces on a
+         * healthy system, so printing it on every boot spends a slow serial line
+         * on nothing.  The count still reaches a reader through the kpanic
+         * counter dump, which is where a rising number is worth seeing. */
         uint32_t dn = sched_debug_note(SCHED_DEBUG_DISPATCH_DROPPED_SLOT_LOST);
         if ((dn & (dn - 1u)) == 0u) {
-            serial_printf("[sched] slot claim lost tid=%u owner=%u state=%u ref=%u cpu=%u "
-                          "(n=%u)\n",
-                          (unsigned)picked_tid,
-                          (unsigned)thread->owner_pid,
-                          (unsigned)__atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE),
-                          (unsigned)slot_claim,
-                          (unsigned)cpu_local()->cpu_id,
-                          (unsigned)(dn + 1u));
+            trace_do(serial_printf(
+                "[sched] slot claim lost tid=%u owner=%u state=%u ref=%u cpu=%u "
+                "(n=%u)\n",
+                (unsigned)picked_tid,
+                (unsigned)thread->owner_pid,
+                (unsigned)__atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE),
+                (unsigned)slot_claim,
+                (unsigned)cpu_local()->cpu_id,
+                (unsigned)(dn + 1u)));
         }
         /* Hand the enqueue this pick consumed to whoever can honour it. Only for
          * a claim held by another DISPATCH: a FROZEN slot is thread_reset_slot
@@ -2802,13 +2809,13 @@ dispatch_done:
         !__atomic_load_n(&stranded_owner->exiting, __ATOMIC_ACQUIRE)) {
         uint32_t sn = sched_debug_note(SCHED_DEBUG_DISPATCH_LEFT_STRANDED);
         if ((sn & (sn - 1u)) == 0u) {
-            serial_printf_unlocked(
+            trace_do(serial_printf_unlocked(
                 "[sched] dispatch left stranded tid=%u pid=%u rc=%d cpu=%u (n=%u)\n",
                 (unsigned)thread->tid,
                 (unsigned)stranded_owner_pid,
                 (int)sched_rc,
                 (unsigned)cpu_local()->cpu_id,
-                (unsigned)(sn + 1u));
+                (unsigned)(sn + 1u)));
         }
         /* REPORT ONLY, deliberately.  This check once repaired the state here by
          * calling sched_enqueue_thread, and the measurement said not to: it fired
@@ -2824,7 +2831,15 @@ dispatch_done:
          * remains is the tripwire, whose `rc` names the exit -- but read its
          * output knowing that sched_debug_note rate-limits to powers of two on a
          * GLOBAL per-event counter, so with tens of hits per boot only about six
-         * print and the absence of a line for a given thread means nothing. */
+         * print and the absence of a line for a given thread means nothing.
+         *
+         * For the same reason the LINE is behind WASMOS_TRACE while the COUNTER is
+         * not.  Two in-flight states are indistinguishable from a strand at this
+         * point -- a waker that has promoted BLOCKED->READY but not yet reached its
+         * enqueue, and a stealer that has unlinked but not yet claimed -- and both
+         * occur on a healthy system, so the condition cannot carry a report a
+         * reader is meant to act on.  The count reaches a reader through the kpanic
+         * counter dump instead. */
     }
     /* Now that the claim is gone, a detached thread this dispatch retired can be
      * released. Its refusal path is not expected to trigger here -- nothing else

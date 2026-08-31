@@ -227,7 +227,11 @@ static int read_sector(int32_t endpoint, uint32_t instance, uint32_t lba, uint8_
 }
 
 /* Fill one sector with the write pattern for `lba` and hand it to the provider.
- * Returns 0, the provider's packed error code, or -1 when the exchange failed. */
+ * Returns 0 on success, else a packed error code from abi/errors.yaml -- the
+ * provider's own when it sent one, and a local code naming the step that failed
+ * otherwise. Every return is decodable by wasmos_error_code_name(): a bare -1
+ * here reaches the caller's diagnostic as an unnamed number, which is how a
+ * refused write came to report only that something was wrong. */
 static int write_sector(int32_t endpoint, uint32_t instance, uint32_t lba) {
     wasmos_ipc_message_t reply;
     wasmos_block_request_t req = {0};
@@ -236,7 +240,7 @@ static int write_sector(int32_t endpoint, uint32_t instance, uint32_t lba) {
     uint32_t i;
 
     if (buffer_phys < 0) {
-        return -1;
+        return WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR;
     }
     for (i = 0; i < sizeof(sector); ++i) {
         sector[i] = 0;
@@ -247,7 +251,7 @@ static int write_sector(int32_t endpoint, uint32_t instance, uint32_t lba) {
     sector[i] = (uint8_t)(lba & 0xFFu);
     if (wasmos_block_buffer_write(
             buffer_phys, addr_cast(int32_t, sector), (int32_t)sizeof(sector), 0) != 0) {
-        return -1;
+        return WASMOS_ERR_XFER_BUFFER_INTERNAL;
     }
     req.version = BLOCK_REQUEST_VERSION;
     req.target = instance;
@@ -256,12 +260,20 @@ static int write_sector(int32_t endpoint, uint32_t instance, uint32_t lba) {
     req.dst_kind = BLOCK_DST_BLOCK_BUFFER;
     req.dst_phys = (uint32_t)buffer_phys;
     if (block_transfer(endpoint, BLOCK_IPC_WRITE_REQ, &req, &reply) == 0) {
-        return -1;
+        /* No reply arrived at all -- the send failed or the provider never
+         * answered. Distinct from a provider that answered with a failure. */
+        return WASMOS_ERR_BLOCK_DEV_NOT_READY;
     }
     if (reply.type == BLOCK_IPC_ERROR) {
         return (int)reply.arg0;
     }
-    return (reply.type == BLOCK_IPC_WRITE_RESP && reply.arg0 == 0) ? 0 : -1;
+    if (reply.type != BLOCK_IPC_WRITE_RESP) {
+        return WASMOS_ERR_BLOCK_DEV_UNSUPPORTED_REQUEST;
+    }
+    /* A WRITE_RESP carries the provider's status in arg0; a non-zero one IS the
+     * packed code and is returned as it stands. Collapsing it to -1 discarded the
+     * only description of the failure that existed. */
+    return (int)reply.arg0;
 }
 
 int main(void) {

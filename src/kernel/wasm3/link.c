@@ -2784,12 +2784,17 @@ m3ApiRawFunction(wasmos_kmap_dump) {
 /* Same dump as wasmos_kmap_dump, for every active process rather than the caller.  A process
  * whose entry or context cannot be resolved is skipped, and one whose root table cannot be
  * resolved counts as a failure.  Returns 0 when every context passed and
- * WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT when any did not. */
+ * WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT when any did not.
+ *
+ * The per-context label is unconditional kernel log, not trace: it is what attributes each
+ * dump to a process, so gating it behind WASMOS_TRACE would leave the default build printing
+ * page tables nobody can tell apart.  WARP's counterpart prints the same `pid=` and `name=`
+ * fields in the same order, which is the shape tests/test_cli.py asserts. */
 m3ApiRawFunction(wasmos_kmap_dump_all) {
     m3ApiReturnType(int32_t) uint32_t count = process_count_active();
     int failures = 0;
 
-    trace_do(klog_write("[kmap] contexts begin\n"));
+    klog_write("[kmap] contexts begin\n");
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t pid = 0;
         uint32_t parent_pid = 0;
@@ -2807,15 +2812,12 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
             continue;
         }
 
-        trace_do(klog_write("[kmap] pid="));
-        trace_do(serial_write_hex64((uint64_t)pid));
-        trace_do(klog_write(" parent="));
-        trace_do(serial_write_hex64((uint64_t)parent_pid));
-        trace_do(klog_write(" ctx="));
-        trace_do(serial_write_hex64((uint64_t)proc->context_id));
-        trace_do(klog_write(" name="));
-        trace_do(klog_write(name ? name : "(unknown)"));
-        trace_do(klog_write("\n"));
+        klog_printf("[kmap] pid=%u name=%s parent=%u ctx=%u ctx_root=%016llx\n",
+                    (unsigned)pid,
+                    name ? name : "(unknown)",
+                    (unsigned)parent_pid,
+                    (unsigned)proc->context_id,
+                    (unsigned long long)root);
 
         paging_dump_user_root_kernel_mappings(root);
         if ((proc->ctx.cs & 0x3u) == 0x3u) {
@@ -2824,7 +2826,7 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
             }
         }
     }
-    trace_do(klog_write("[kmap] contexts end\n"));
+    klog_write("[kmap] contexts end\n");
     m3ApiReturn(failures == 0 ? 0 : WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT);
 }
 

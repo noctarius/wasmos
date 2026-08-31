@@ -303,6 +303,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_KERNEL_NO_WINDOW` | -0x00130007 | guest linear memory has no window the mapping can occupy |
 | `WASMOS_ERR_KERNEL_MAP_FAILED` | -0x00130008 | the paging step failed |
 | `WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT` | -0x00130009 | the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force |
+| `WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED` | -0x0013000A | an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution |
 
 ### `block` (domain 20) — Block-style device access -- the per-process bounce buffer today, and the block backends that share its shape. Distinct from dma: a DMA mapping describes a device's view of memory, while these describe a block transfer's staging buffer and the slice being moved through it.
 

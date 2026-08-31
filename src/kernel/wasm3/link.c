@@ -2789,9 +2789,15 @@ m3ApiRawFunction(wasmos_kmap_dump) {
  * The per-context label is unconditional kernel log, not trace: it is what attributes each
  * dump to a process, so gating it behind WASMOS_TRACE would leave the default build printing
  * page tables nobody can tell apart.  WARP's counterpart prints the same `pid=` and `name=`
- * fields in the same order, which is the shape tests/test_cli.py asserts. */
+ * fields in the same order, which is the shape tests/test_cli.py asserts.
+ *
+ * The trailing count is the honesty check on the loop above: every skip is silent, so without
+ * it a dump that resolved NOTHING is indistinguishable from one that dumped every context.
+ * Zero dumped contexts is WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED rather than success, because a
+ * caller that asked for the system's mappings and received none was not served. */
 m3ApiRawFunction(wasmos_kmap_dump_all) {
     m3ApiReturnType(int32_t) uint32_t count = process_count_active();
+    uint32_t dumped = 0;
     int failures = 0;
 
     klog_write("[kmap] contexts begin\n");
@@ -2818,6 +2824,7 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
                     (unsigned)parent_pid,
                     (unsigned)proc->context_id,
                     (unsigned long long)root);
+        dumped++;
 
         paging_dump_user_root_kernel_mappings(root);
         if ((proc->ctx.cs & 0x3u) == 0x3u) {
@@ -2826,7 +2833,10 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
             }
         }
     }
-    klog_write("[kmap] contexts end\n");
+    klog_printf("[kmap] contexts end count=%u\n", (unsigned)dumped);
+    if (dumped == 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED);
+    }
     m3ApiReturn(failures == 0 ? 0 : WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT);
 }
 

@@ -2590,11 +2590,16 @@ static uint32_t warp_kmap_dump(void* ctx_) {
  * whichever CPU is running it, which is not observable from here -- and per
  * warp_kmap_dump the context root is the wrong table to hold the low-slot invariant to,
  * so verifying it would report a failure for every WARP process on a healthy boot.
- * Returns 0; a process whose entry, context, or root cannot be resolved is skipped, and
- * the log is the record of what was covered. */
+ * A process whose entry, context, or root cannot be resolved is skipped.
+ *
+ * Returns 0 when at least one context was dumped, otherwise
+ * WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED.  Every skip above is silent, so the trailing count is
+ * what distinguishes a dump that covered the system from one that covered nothing; without
+ * it, a caller receiving success cannot tell the two apart, and neither can a test. */
 static uint32_t warp_kmap_dump_all(void* ctx_) {
     (void)ctx_;
     uint32_t count = process_count_active();
+    uint32_t dumped = 0;
 
     klog_write("[kmap] contexts begin\n");
     for (uint32_t i = 0; i < count; ++i) {
@@ -2616,10 +2621,11 @@ static uint32_t warp_kmap_dump_all(void* ctx_) {
                     (unsigned)pid,
                     name ? name : "?",
                     (unsigned long long)root);
+        dumped++;
         paging_dump_user_root_kernel_mappings(root);
     }
-    klog_write("[kmap] contexts end\n");
-    return 0;
+    klog_printf("[kmap] contexts end count=%u\n", (unsigned)dumped);
+    return dumped == 0 ? (uint32_t)WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED : 0u;
 }
 /* Stub, as recorded in abi/hostcalls.yaml (id 49): reports an empty ready queue
  * rather than the live count wasm3 returns, so a guest cannot use this to size

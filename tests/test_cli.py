@@ -69,8 +69,28 @@ class CliIntegrationTests(unittest.TestCase):
     def test_kmaps_all_dumps_every_context(self):
         """Companion to test_kmaps_dumps_page_tables for the all-contexts form,
         which was stubbed identically. The per-pid label is what makes the dump
-        attributable, so it is what this asserts."""
+        attributable, so it is what this asserts.
+
+        Regression: 2026-08-31-wasm3-kmaps-trace-gated. Under wasm3 every label
+        line sat inside trace_do(), which compiles out at the default
+        WASMOS_TRACE=0, so the default build dumped page tables with nothing
+        saying which process each belonged to -- and the label it would have
+        printed with tracing on named its fields in a different order from
+        WARP's, which no assertion on one shape can cover. Cost: the whole
+        boot-and-init battery red on every wasm3_smp run."""
         self._cmd_expect("kmaps all", re.compile(rb"\[kmap\] pid=\d+ name="))
+
+    def test_kmaps_all_reports_how_many_contexts_it_dumped(self):
+        """Regression: 2026-08-31-kmaps-silent-empty-dump. Both backends skip
+        every context they cannot resolve, silently, and used to return 0
+        regardless -- so a dump that labelled NOTHING was indistinguishable from
+        one that covered the system, and the CLI answered "dumped to kernel log"
+        either way. That is the same defect class as the stub these tests were
+        written for, one layer in. The count is what makes the difference
+        observable, so a non-zero one is asserted rather than the bare marker."""
+        self._cmd_expect(
+            "kmaps all", re.compile(rb"\[kmap\] contexts end count=[1-9]\d*")
+        )
 
     def test_ps_lists_processes(self):
         self._cmd_expect(

@@ -256,6 +256,7 @@ enum {
     WASMOS_ERR_KERNEL_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 7), /* guest linear memory has no window the mapping can occupy */
     WASMOS_ERR_KERNEL_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 8), /* the paging step failed */
     WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 9), /* the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force */
+    WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 10), /* an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution */
     WASMOS_ERR_BLOCK_NO_SLOT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 1), /* no per-process block slot is available */
     WASMOS_ERR_BLOCK_NO_BACKING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 2), /* no physical backing could be obtained for the buffer */
     WASMOS_ERR_BLOCK_ABOVE_4G = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 3), /* the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address */
@@ -552,6 +553,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_KERNEL_NO_WINDOW: return "kernel.NO_WINDOW";
     case WASMOS_ERR_KERNEL_MAP_FAILED: return "kernel.MAP_FAILED";
     case WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT: return "kernel.LOW_SLOT_PRESENT";
+    case WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED: return "kernel.NO_CONTEXT_DUMPED";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "block.NO_SLOT";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "block.NO_BACKING";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "block.ABOVE_4G";
@@ -782,6 +784,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_KERNEL_NO_WINDOW: return "guest linear memory has no window the mapping can occupy";
     case WASMOS_ERR_KERNEL_MAP_FAILED: return "the paging step failed";
     case WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT: return "the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force";
+    case WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED: return "an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "no per-process block slot is available";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address";

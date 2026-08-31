@@ -329,6 +329,7 @@ domains:
       - { name: NO_WINDOW,      description: "guest linear memory has no window the mapping can occupy" }
       - { name: MAP_FAILED,     description: "the paging step failed" }
       - { name: LOW_SLOT_PRESENT, description: "the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force" }
+      - { name: NO_CONTEXT_DUMPED, description: "an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution" }
 
   block:
     id: 20

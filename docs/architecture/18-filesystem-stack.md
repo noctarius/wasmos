@@ -229,7 +229,10 @@ answers a refused claim with no reply at all (see `docs/TASKS.md`).
 - Implements the whole opcode set except the retired `READ_APP`: `OPEN` (with
   `O_CREAT`/`O_TRUNC`/`O_APPEND`), `READ`, `WRITE`, `SEEK`, `CLOSE`, `STAT`,
   `READDIR`, `CHDIR`, `MKDIR`, `RMDIR`, `UNLINK`, `RENAME`.
-- Names are case-SENSITIVE, as in WFS; FAT is the outlier.
+- Names are case-SENSITIVE, as in WFS; FAT is the outlier. `NAME_MAX` is 255,
+  matching `WFS_NAME_MAX` and FAT's long-name limit, so a filename valid on
+  another mount is creatable here — the name lives in the node record, so the
+  parity costs 255 bytes per node (a 50 KiB table) whether names are long or not.
 - A node with a descriptor open on it, or one a connection stands in, is refused
   rather than freed: a descriptor holds a node index, so removing it underneath
   one would leave that descriptor addressing a slot the next create reuses.

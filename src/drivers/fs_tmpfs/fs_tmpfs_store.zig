@@ -25,9 +25,18 @@
 //! both `Node.first` and a chunk's `next`; the root is node 0 and is its own
 //! parent, which is what makes `..` at the root stay at the root.
 
-/// Longest single path component. A name is stored in the node record, so this is
-/// a space/limit trade rather than a protocol bound.
-pub const NAME_MAX: usize = 60;
+/// Longest single path component, matching WFS_NAME_MAX (wfs_format.h) and FAT's
+/// long-name limit. Parity is the point: a filename valid on another mount must be
+/// creatable here, or copying a file between mounts fails on the name alone.
+///
+/// The name lives in the node record, so this is 255 bytes per node whether the
+/// names are long or not -- 50 KiB of table rather than 13 KiB. That is the price
+/// of the parity and is paid per instance; variable-length names in a cell arena
+/// would not pay it, at the cost of an allocator for them (docs/TASKS.md).
+///
+/// 255 is also the ceiling `name_len` can express as a u8, so raising it further
+/// is not just a constant.
+pub const NAME_MAX: usize = 255;
 /// Files plus directories, across the whole filesystem.
 pub const MAX_NODES: usize = 192;
 /// Bytes per storage block. A file wastes at most one short block.

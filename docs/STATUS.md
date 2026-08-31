@@ -872,6 +872,10 @@ linked feature documents for rationale and rollout plans.
   seam and is therefore unit-tested on the host
   (`tests/unit/test_fs_tmpfs_store.zig`, 25 cases, run by
   `run-kernel-unit-tests`); the IPC layer above it needs a running guest.
+  `NAME_MAX` is 255, matching `WFS_NAME_MAX`, so a filename valid on another
+  mount is creatable on a tmpfs; the node table costs 50 KiB for that parity.
+  `FSMGR_CWD_MAX` (128) still bounds the working directory a client can hold, on
+  every mount alike.
 - NOT YET MOUNTED: `fs-manager` matches a mount NAME against a path's first
   segment, and `/` is a mount PATH rather than a name, so the pull is refused
   ("backend reported no usable mount name"). Longest-prefix routing

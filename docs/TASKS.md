@@ -1498,10 +1498,10 @@ Source: `architecture/19-virtual-terminal.md`,
     the IPC layer above it -- opcode dispatch, transfer-buffer handling, the
     per-connection cwd -- which needs a running guest. Once `/` is mounted, an
     integration test owes it open/read/write/readdir/rename through the FS path.
-  - `NAME_MAX` in the tmpfs is 60, below WFS's 255 and below FAT's LFN, so a
-    filename valid on another mount can be rejected on this one. Names are
-    stored in the node record, so raising it costs static memory per node;
-    variable-length names in the block arena would not.
+  - `FSMGR_CWD_MAX` is 128 bytes, which bounds the working directory a client can
+    hold for EVERY mount, not just the tmpfs -- a path built from
+    maximum-length components is unreachable on WFS for the same reason. Widen it
+    with the mount-path work above.
   - A second tmpfs instance cannot yet be spawned from a rule file:
     `parse_always_spawn_rule_line` reads only `SUBSYSTEM` and `RUN`, so a
     `SUBSYSTEM=="boot"` rule cannot carry `ENV{MOUNT}`. Either teach it to, or

@@ -129,6 +129,32 @@ test "a name longer than NAME_MAX is refused rather than truncated" {
     try std.testing.expect(store.nodeAlloc(store.ROOT, max, false) != null);
 }
 
+test "a maximum-length name round-trips, and is distinguished to its last byte" {
+    resetStore();
+    // NAME_MAX matches WFS_NAME_MAX, so a name legal on /wfs must be legal here.
+    const a = "a" ** store.NAME_MAX;
+    const b = ("a" ** (store.NAME_MAX - 1)) ++ "b";
+    const na = store.nodeAlloc(store.ROOT, a, false).?;
+    const nb = store.nodeAlloc(store.ROOT, b, false).?;
+    try std.testing.expect(na != nb);
+    try std.testing.expectEqual(@as(?u16, na), store.resolve(store.ROOT, a));
+    try std.testing.expectEqual(@as(?u16, nb), store.resolve(store.ROOT, b));
+    // The stored name is the whole name, not a prefix of it.
+    try std.testing.expectEqualStrings(a, store.nameOf(na));
+    try std.testing.expectEqual(@as(u8, store.NAME_MAX), store.g_nodes[na].name_len);
+}
+
+test "a maximum-length name is usable below the root, not only at it" {
+    resetStore();
+    const long = "z" ** store.NAME_MAX;
+    const dir = store.nodeAlloc(store.ROOT, "sub", true).?;
+    const leaf = store.nodeAlloc(dir, long, false).?;
+    var path: [store.NAME_MAX + 8]u8 = undefined;
+    const joined = std.fmt.bufPrint(&path, "sub/{s}", .{long}) catch unreachable;
+    try std.testing.expectEqual(@as(?u16, leaf), store.resolve(store.ROOT, joined));
+    try std.testing.expectEqual(dir, store.splitPath(store.ROOT, joined).?.parent);
+}
+
 // --- the namespace -----------------------------------------------------------
 
 test "lookup finds an entry only in its own directory" {

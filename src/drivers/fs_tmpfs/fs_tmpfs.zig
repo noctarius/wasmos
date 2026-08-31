@@ -123,8 +123,10 @@ const PAGE: u32 = 65536;
 /// Connections whose working directory is tracked. fs-manager is normally the
 /// only one, so this is slack rather than a budget.
 const MAX_CLIENTS: usize = 8;
-/// Longest path this driver will resolve in one request.
-const PATH_MAX: usize = 256;
+/// Longest path this driver will resolve in one request. It must exceed NAME_MAX
+/// by enough to carry a parent path as well, or a maximum-length component would
+/// be creatable only at the root.
+const PATH_MAX: usize = 512;
 
 /// The virtual class FS backends register under, and the backend KIND this one
 /// reports. Declared here rather than imported because they live in

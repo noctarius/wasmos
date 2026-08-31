@@ -723,18 +723,27 @@ static int route_rename_request(fs_client_state_t* state, int32_t buffer_id, int
 }
 
 /* Register a backend from its pulled info. `mount_name` is the name the backend
- * reported, already read out of the caller-owned buffer; a leading '/' is
- * stripped and the result lower-cased, so "/Boot" and "boot" are one mount.
+ * reported, already read out of the caller-owned buffer; normalizing it into the
+ * mount fs-manager holds belongs to fsmgr_mount_name_from_reported, which also
+ * decides which reported names yield no mount at all.
  *
  * `fs_type` is the backend's FS_TYPE_*; `kind` distinguishes block-backed from
  * pseudo and cannot stand in for it. A backend that reports FS_TYPE_UNKNOWN is
  * registered as such rather than assumed.
  *
+ * A backend whose name yields no mount is not registered, and in particular
+ * takes no slot: a backend seated under an empty name is reachable by no path,
+ * because routing compares a whole first segment and no segment is empty.
+ *
  * Shared by the initial class enumeration and ADD events. */
 static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t fs_type,
                                      const char* mount_name, int32_t unit) {
     fs_backend_t* registered;
-    if (!mount_name || mount_name[0] == '\0') {
+    /* Sized off the field it ends up in, so the two cannot drift. */
+    char mount[sizeof(((fs_backend_t*)0)->mount_name)];
+
+    if (!fsmgr_mount_name_from_reported(mount_name, mount, (uint32_t)sizeof(mount))) {
+        printf("[fs-manager] backend reported no usable mount name; not registered\n");
         return;
     }
     registered = backend_register((uint8_t)kind, backend_endpoint);
@@ -743,10 +752,7 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
     }
     registered->unit = (uint8_t)(unit & 0xFF);
     registered->fs_type = (uint32_t)fs_type;
-    str_copy(registered->mount_name,
-             sizeof(registered->mount_name),
-             mount_name[0] == '/' ? &mount_name[1] : mount_name);
-    wasmos_sys_to_lower_ascii(registered->mount_name);
+    str_copy(registered->mount_name, sizeof(registered->mount_name), mount);
     /* NOTE: do NOT call backend_refresh_boot_meta() here. This runs while
      * handling a class-discovery event, and that helper does a SYNCHRONOUS
      * DEVMGR_QUERY_MOUNT_REQ round-trip to device-manager — which at this point

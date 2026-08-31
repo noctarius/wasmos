@@ -28,4 +28,25 @@
  * Returns a static string; never NULL, including for a NULL backend. */
 const char* fsmgr_backend_fs_name(const fs_backend_t* backend);
 
+/* Turn the mount name a backend REPORTED in FSMGR_IPC_BACKEND_INFO_RESP into the
+ * mount name fs-manager holds: a leading '/' is dropped and the result is
+ * lower-cased, so "/Boot" and "boot" are one mount.
+ *
+ * Returns 1 with `out` holding a NUL-terminated name, or 0 -- leaving `out` empty
+ * -- when the reported name yields none. Three things yield none, and the second
+ * is the one that is easy to miss:
+ *
+ * - An empty reported name. A backend MUST name its mount; nothing on this side
+ *   knows where a backend belongs, so there is no default to fall back to.
+ * - A reported name of exactly "/". That names the VFS ROOT, which is a mount
+ *   PATH and not a mount name: while routing matches a path's FIRST SEGMENT there
+ *   is nothing in "/" for it to match. Registering it would seat a backend no
+ *   path can reach, which still holds one of the FS_BACKEND_CAP slots and still
+ *   prints a bare "/" entry into the root listing.
+ * - A name that does not fit out_cap. Refused rather than truncated, because a
+ *   shortened mount name names a different mount.
+ *
+ * A NULL argument or an out_cap below 2 is also a refusal. */
+int32_t fsmgr_mount_name_from_reported(const char* reported, char* out, uint32_t out_cap);
+
 #endif

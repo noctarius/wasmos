@@ -130,6 +130,7 @@ empty one from here.
 | `FS_TYPE_FAT` | 1 | FAT12/16/32; BPB with a 0x55AA boot signature. |
 | `FS_TYPE_WFS` | 2 | WFS; superblock magic 'WFS1' at byte 1024 of the volume (docs/WFS_WASMOS_FILE_SYSTEM.md section 4). |
 | `FS_TYPE_INITFS` | 3 | initfs; the boot-image filesystem served from memory. Pseudo-filesystem: self-reported by its backend, never returned by a recogniser. |
+| `FS_TYPE_TMPFS` | 4 | tmpfs; a read-write filesystem held in its backend's own memory, which serves the VFS root so that a mount point is a real directory. Pseudo-filesystem: self-reported by its backend, never returned by a recogniser. |
 
 ## block_descriptor_flags
 

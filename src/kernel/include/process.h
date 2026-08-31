@@ -8,7 +8,19 @@
 #include "sched_event.h"
 #include "wasmos_app.h"
 
-#define PROCESS_MAX_COUNT 48 /* fixed g_processes[] slot count; spawn fails past it */
+/* Fixed g_processes[] slot count; a spawn past it fails.
+ *
+ * The tightest consumer is the RING3 BOOT TREE, which runs the ring3 probe
+ * processes on top of a full desktop boot and needs 49 slots. Exhausting the
+ * table costs `sysinit` the CLI, and the loss is reported only by
+ * process_find_slot -- every layer above it turns the refused spawn into a bare
+ * timeout with no reason. Keep headroom over what a boot needs rather than
+ * trimming to it.
+ *
+ * A slot costs one process_t in BSS and nothing else: kernel stacks
+ * (PROCESS_STACK_SIZE) are allocated per LIVE process by process_alloc_stack, so
+ * unused headroom is not 512 KiB apiece. */
+#define PROCESS_MAX_COUNT 64
 /* Bytes of process_t::name_storage, NUL included. A longer name is not
  * truncated silently: process_copy_name refuses it and the spawn fails. */
 #define PROCESS_NAME_MAX 64

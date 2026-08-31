@@ -176,6 +176,7 @@ groups:
       - { symbol: FS_TYPE_FAT, value: 1, doc: "FAT12/16/32; BPB with a 0x55AA boot signature." }
       - { symbol: FS_TYPE_WFS, value: 2, doc: "WFS; superblock magic 'WFS1' at byte 1024 of the volume (docs/WFS_WASMOS_FILE_SYSTEM.md section 4)." }
       - { symbol: FS_TYPE_INITFS, value: 3, doc: "initfs; the boot-image filesystem served from memory. Pseudo-filesystem: self-reported by its backend, never returned by a recogniser." }
+      - { symbol: FS_TYPE_TMPFS, value: 4, doc: "tmpfs; a read-write filesystem held in its backend's own memory, which serves the VFS root so that a mount point is a real directory. Pseudo-filesystem: self-reported by its backend, never returned by a recogniser." }
 
   - name: block_descriptor_flags
     bits: true

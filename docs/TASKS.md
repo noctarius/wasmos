@@ -1469,16 +1469,79 @@ Source: `architecture/19-virtual-terminal.md`,
   over — a path naming no mount currently cannot be served at all, which is
   correct but only because `/` holds nothing.
 
-  A tmpfs is a `FSMGR_BACKEND_PSEUDO` backend reporting a new `FS_TYPE_TMPFS`, so
-  it costs one row in `abi/constants.yaml` and one in `k_fs_types[]` and no branch
-  anywhere (`fs_manager_backends.c`). Wants: the tmpfs driver itself,
-  longest-prefix routing in `route_absolute_path`, and mount-point creation.
-
   A mount SHADOWS the directory it covers, as on Linux: the directory's previous
   contents become unreachable for as long as the mount stands and reappear on
   unmount, rather than the mount being refused unless the directory is empty.
   That keeps mounting a property of the namespace rather than of the covered
   filesystem's state, so a mount cannot fail because someone left a file behind.
+
+  DONE: the driver (`src/drivers/fs_tmpfs/`, Zig), `FS_TYPE_TMPFS` and its
+  `k_fs_types[]` row, and the kernel-init spawn of the `/` instance. The mount is
+  the `mount=` startup argument defaulting to `/`, and the class instance is a
+  fingerprint of it, so a tmpfs is a general in-memory filesystem that can be
+  mounted anywhere rather than a root-only one.
+
+  REMAINING:
+  - Longest-prefix routing over mount PATHS in `route_absolute_path` and
+    `fsmgr_route_path_for_mounts`, matching on whole segments so `/wfsx` does not
+    match a `/wfs` mount, with `/` always matching as the shortest. Until this
+    lands the tmpfs is refused registration outright: `/` is a mount path and
+    `fsmgr_apply_backend_info` has no name for it to match.
+  - Mount-point creation: `fs-manager` `mkdir`s the point in the covering
+    filesystem when a mount registers, which is what lets `readdir(/)` be a plain
+    forwarded readdir with no merge of mount names, and retires
+    `send_virtual_root_listing`.
+  - `fs_backend_t.mount_name` is 16 bytes, which bounds a mount PATH far more
+    tightly than it bounded a mount name. Widen it with the routing change.
+  - A second tmpfs instance cannot yet be spawned from a rule file:
+    `parse_always_spawn_rule_line` reads only `SUBSYSTEM` and `RUN`, so a
+    `SUBSYSTEM=="boot"` rule cannot carry `ENV{MOUNT}`. Either teach it to, or
+    give `/tmp` and `/run` their instances from `sysinit`.
+
+- [ ] [REFACTOR][P2] Remove the PROCESS_MAX_COUNT ceiling without giving up slot
+  stability. The count is a compile-time guess a boot has to fit under, and it has
+  already cost one regression: at 48 the ring3 boot tree sat exactly on it, so
+  adding one long-lived driver broke `run-qemu-ring3-test`. Raising it to 64 buys
+  time, not a fix.
+
+  An id-map is NOT the replacement. `g_processes[]` is not a fixed array for
+  lookup speed -- it is fixed so that a POINTER into it stays valid:
+  `process_find_by_pid` runs LOCK-FREE in the dispatch hot path, and
+  `cpu_local()->current_process` caches a raw `process_t*` across operations. A
+  container that rehashes or reallocates breaks exactly that, which is the hard
+  half; the lookup is the easy half.
+
+  The reach is also wider than the process table. Nine files size a PARALLEL
+  slot-indexed table from the same macro -- `wasm3/link.c` (`g_wasm_last_slots`,
+  `g_wasm_block_slots`, `g_wasm_fs_peer_slots`), `wasm3/shim.c`, `wasm_driver.c`,
+  `warp/link.cpp` (`PROCESS_MAX_COUNT * 32` overlay slots), `syscall.c`,
+  `native_driver.c` -- so swapping the process table alone fixes the wrong half
+  and leaves every one of those still bounded.
+
+  The shape that keeps the invariants is CHUNKED slabs, the pattern
+  `fs_manager`'s client-state list already uses in this tree: a chunk is
+  allocated once from `kmem_alloc` and never moves, so pointers stay valid and the
+  lock-free reader survives, while the table grows on demand. The per-runtime
+  parallel tables want folding into the process record (or into their own chunk
+  list) in the same pass, which is what makes this a piece of work rather than a
+  one-liner.
+
+  Mitigated meanwhile: `process_find_slot` reports the table filling at 3/4
+  occupancy and reports exhaustion, so the ceiling warns before it bites.
+
+- [ ] [BUG][P3] A refused service-class claim gets NO REPLY, so the registering
+  driver blocks in its bring-up call forever instead of learning it lost. The
+  class registry refuses a second owner claiming a live `(class, instance)`
+  (`service_class_registry_add`), and `pm_handle_register_desc` answers that — and
+  every other failure on the path, including the capability check — by returning
+  without sending a message (`src/kernel/process_manager_services.c`). A driver
+  calls this synchronously during bring-up (`driver.call`, `wasmos_svc_register`)
+  and has no timeout, so a duplicate instance is a hang rather than a diagnosable
+  failure. Answer with `SVC_IPC_ERROR` carrying a packed `WASMOS_ERR_PROC_*`.
+
+  Reachable today only by a genuine instance collision, which every shipped
+  provider derives so as to avoid; it becomes reachable the moment two providers
+  disagree about an identity.
 
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 

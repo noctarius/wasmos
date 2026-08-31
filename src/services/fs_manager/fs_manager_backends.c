@@ -16,9 +16,43 @@ static const struct {
     {(uint32_t)FS_TYPE_FAT, "fs-fat"},
     {(uint32_t)FS_TYPE_WFS, "fs-wfs"},
     {(uint32_t)FS_TYPE_INITFS, "fs-init"},
+    {(uint32_t)FS_TYPE_TMPFS, "fs-tmpfs"},
 };
 
 #define K_FS_TYPE_COUNT ((uint32_t)(sizeof(k_fs_types) / sizeof(k_fs_types[0])))
+
+/* ASCII-only tolower. Local rather than libsys's wasmos_sys_to_lower_ascii so
+ * this translation unit stays linkable on the host, which is what lets the
+ * decisions in it be unit-tested (tests/unit/test_fs_manager_backends.c). */
+static char ascii_tolower(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : c;
+}
+
+int32_t fsmgr_mount_name_from_reported(const char* reported, char* out, uint32_t out_cap) {
+    const char* src;
+    uint32_t len = 0;
+
+    if (!reported || !out || out_cap < 2u) {
+        return 0;
+    }
+    out[0] = '\0';
+    src = (reported[0] == '/') ? &reported[1] : reported;
+    /* Empty after the strip: either the backend named nothing, or it named the
+     * root, which is a mount PATH and carries no mount name. */
+    if (src[0] == '\0') {
+        return 0;
+    }
+    while (src[len] != '\0') {
+        if (len + 1u >= out_cap) {
+            out[0] = '\0';
+            return 0;
+        }
+        out[len] = ascii_tolower(src[len]);
+        len++;
+    }
+    out[len] = '\0';
+    return 1;
+}
 
 const char* fsmgr_backend_fs_name(const fs_backend_t* backend) {
     if (!backend) {

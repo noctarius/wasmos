@@ -853,6 +853,23 @@ linked feature documents for rationale and rollout plans.
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
+- `fs-tmpfs` (`src/drivers/fs_tmpfs/`, Zig) is a read-write filesystem held in
+  its own linear memory, reporting `FSMGR_BACKEND_PSEUDO` + `FS_TYPE_TMPFS`. It
+  is a general in-memory filesystem, not a root-specific one: the mount comes
+  from the `mount=` startup argument and defaults to `/`, the class instance is a
+  FINGERPRINT of that path, and a second instance mounted elsewhere has its own
+  separate contents. The kernel's init sequence spawns the root instance between
+  `fs-manager` and `fs-init`, so it exists before any volume mounts.
+  Capacity is a fixed 192 nodes over a 512 KiB block pool; contents are not
+  persisted. Implements OPEN/READ/WRITE/SEEK/CLOSE/STAT/READDIR/CHDIR/MKDIR/
+  RMDIR/UNLINK/RENAME.
+- NOT YET MOUNTED: `fs-manager` matches a mount NAME against a path's first
+  segment, and `/` is a mount PATH rather than a name, so the pull is refused
+  ("backend reported no usable mount name"). Longest-prefix routing
+  over mount paths is the next step; until it lands the tmpfs runs and serves
+  nothing. A second tmpfs instance is also not yet spawnable from a rule file:
+  `SUBSYSTEM=="boot"` rules parse only `SUBSYSTEM` and `RUN`, so they cannot
+  carry `ENV{MOUNT}`.
 - A backend reports its filesystem as `FS_TYPE_*` in `FSMGR_IPC_BACKEND_INFO_RESP`
   `arg1`, separately from `kind`; initfs reports `FS_TYPE_INITFS`, so a
   pseudo-filesystem is a value in that enum and a future devfs or sysfs needs no
@@ -865,10 +882,11 @@ linked feature documents for rationale and rollout plans.
 - The working directory is a full canonical VFS path owned by `fs-manager`: every
   client path is joined onto it before routing, a spawned process inherits its
   spawner's path by copy, and `FS_IPC_CHDIR` reports the resolved path back so no
-  client keeps a second copy. Routing then acts on an absolute path only — a path
-  whose first segment names no mount belongs to the boot volume as the ROOT
-  filesystem (`/system/utils/ip`, `/apps/calculator`), which is a routing rule
-  rather than a guess about a client that named no directory.
+  client keeps a second copy. Routing then acts on an absolute path only, and a
+  path whose first segment names no mount is NOT SERVED: the caller reports
+  `WASMOS_ERR_FS_NOT_FOUND`. There is deliberately no fallback backend — the one
+  that passed such a path to the boot volume made `/system/utils/ip` a second
+  name for `/boot/system/utils/ip` that appeared in no listing.
 - `FS_IPC_CHDIR` carries its target as a path in a transfer buffer, so `cd` takes
   one request at any depth and reaches directory names up to a backend's own
   maximum (255 bytes for WFS) instead of the 15 that fit in the argument words.
@@ -1166,8 +1184,17 @@ linked feature documents for rationale and rollout plans.
 
 ## Services and System Startup
 
-- Startup order is `init` -> `fs-manager`/`fs-init` -> `device-manager` ->
-  `sysinit`. Readiness gating prevents dependent boot steps from racing ahead.
+- `PROCESS_MAX_COUNT` is 64. It was 48, and the ring3 boot tree was sitting
+  exactly on that ceiling -- it runs the ring3 probe processes on top of a full
+  desktop boot -- so adding one long-lived driver exhausted the table and
+  `sysinit` could not start the CLI. Exhaustion was silent at every layer: the
+  spawn failed, the process manager sent no reply, and `sysinit` reported a bare
+  "start failed". `process_find_slot` now logs it, edge-triggered.
+- Startup order is `init` -> `fs-manager` -> `fs-tmpfs` -> `fs-init` ->
+  `device-manager` -> `sysinit`. Readiness gating prevents dependent boot steps
+  from racing ahead. `fs-tmpfs` precedes `fs-init` and `device-manager` because a
+  mount point is a directory in the root filesystem, so the root has to be
+  mounted before anything mounts onto it.
 - `device-manager` consumes PCI/ACPI inventory and bootstrap/runtime rules,
   spawning drivers with matched capabilities and optional startup identity.
 - `chardev` is a normal initfs WASM driver started by a boot rule and registered

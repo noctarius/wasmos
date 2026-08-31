@@ -242,19 +242,29 @@ comptime {
     if (blockFingerprint("") != 0) @compileError("fnv empty must be 0");
 }
 
+/// FNV-1a 32 over `bytes`, and 0 for an empty slice.
+///
+/// What a service-class instance is DERIVED from. An instance must be unique per
+/// provider and the registry REFUSES a second claim on a live one, so a provider
+/// that hashes its own identity string needs nothing to allocate one for it and
+/// two providers cannot disagree about which is which.
+pub fn fingerprint(bytes: []const u8) u32 {
+    if (bytes.len == 0) return 0;
+    var hash: u32 = 2166136261; // FNV offset basis
+    for (bytes) |c| {
+        hash ^= c;
+        hash = hash *% 16777619; // FNV prime
+    }
+    return hash;
+}
+
 /// FNV-1a 32 over `id`: the `block` service class instance of a device whose
 /// canonical id is that string. Must agree byte-for-byte with
 /// wasmos_block_fingerprint() in `src/drivers/include/wasmos_driver_abi.h` —
 /// the two compute the addresses C and Zig backends register under, and a
 /// disagreement means a filesystem never finds its disk.
 pub fn blockFingerprint(id: []const u8) u32 {
-    if (id.len == 0) return 0;
-    var hash: u32 = 2166136261; // FNV offset basis
-    for (id) |c| {
-        hash ^= c;
-        hash = hash *% 16777619; // FNV prime
-    }
-    return hash;
+    return fingerprint(id);
 }
 
 /// Startup contract, mirroring `wasmos_spawn_info_t`.
@@ -570,6 +580,29 @@ pub fn bufferRead(buffer_id: i32, out: anytype, offset: i32) bool {
         @intCast(@sizeOf(T)),
         offset,
     ) == 0;
+}
+
+/// Copy `out.len` bytes out of transfer buffer `buffer_id` at `offset` into
+/// `out`. The slice form of `bufferRead`, for a payload whose length is a runtime
+/// value -- a path, a file's bytes -- rather than a struct's size. Returns true
+/// on success.
+pub fn bufferReadBytes(buffer_id: i32, out: []u8, offset: i32) bool {
+    if (out.len == 0) return true;
+    return abi.xfer_buffer_read(
+        buffer_id,
+        @intCast(@intFromPtr(&out[0])),
+        @intCast(out.len),
+        offset,
+    ) == 0;
+}
+
+/// Bytes one transfer buffer holds, which is the ceiling on any single-message
+/// payload: a request naming more than this is refused rather than truncated.
+/// Reports 0 when the host call fails, so a caller sizing a transfer against it
+/// moves nothing rather than moving a guessed amount.
+pub fn xferBufferSize() usize {
+    const size = abi.xfer_buffer_size();
+    return if (size <= 0) 0 else @intCast(size);
 }
 
 /// Acquire a transfer buffer of at least `len` bytes, left zeroed. The caller

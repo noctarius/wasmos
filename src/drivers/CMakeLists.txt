@@ -3,6 +3,7 @@ add_subdirectory(ata)
 add_subdirectory(fs_fat)
 add_subdirectory(fs_wfs)
 add_subdirectory(fs_init)
+add_subdirectory(fs_tmpfs)
 add_subdirectory(serial)
 add_subdirectory(keyboard)
 add_subdirectory(mouse)
@@ -42,4 +43,9 @@ endif ()
 # Same for the partition manager, which is Zig for the same reason.
 if (PARTITION_MANAGER_ZIG_AVAILABLE)
   add_dependencies(drivers partition_manager_app)
+endif ()
+
+# Same for the tmpfs backend that serves the VFS root.
+if (FS_TMPFS_ZIG_AVAILABLE)
+  add_dependencies(drivers fs_tmpfs_app)
 endif ()

@@ -825,12 +825,52 @@ static int process_copy_runtime_tag(process_t* proc, const char* tag) {
  * UNUSED/DEAD before releasing it.  (process_spawn_idle is the one exception:
  * it runs single-threaded at boot, before any AP is up.) */
 static process_t* process_find_slot(void) {
+    /* Exhaustion is reported here because it is SILENT everywhere above: the
+     * spawn fails, the process manager sends no reply, and the requesting service
+     * sees only a timeout with no reason -- `sysinit` prints a bare
+     * "start failed".
+     *
+     * Edge-triggered, so a retrying spawner cannot turn the report into a log
+     * storm while a table that refills and fills again is still reported. Safe as
+     * a plain static: every caller holds g_process_table_lock. */
+    static uint8_t reported_full = 0;
+    /* Occupancy at which the table is reported as filling, once per boot. The
+     * ceiling is a compile-time guess that a boot has to fit under, and the only
+     * warning it used to give was the spawn that lost -- by which point the
+     * system is already short a service. Reporting the approach is what makes the
+     * guess reviewable. */
+    static uint8_t reported_pressure = 0;
     process_t* table = process_table();
+    uint32_t taken = 0;
+    /* The scan runs to the end rather than stopping at the first free slot,
+     * because the occupancy above cannot be known without it. The FIRST free slot
+     * is still what gets returned. A spawn already allocates a kernel stack and an
+     * mm context, so one pass over PROCESS_MAX_COUNT state words is not on any
+     * path where it registers. */
+    process_t* found = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         /* Both free states are claimable: UNUSED (pristine) and DEAD (reaped). */
         if (table[i].state == PROCESS_STATE_UNUSED || table[i].state == PROCESS_STATE_DEAD) {
-            return &table[i];
+            if (!found) {
+                found = &table[i];
+            }
+            continue;
         }
+        taken++;
+    }
+    if (!reported_pressure && taken * 4u >= (uint32_t)PROCESS_MAX_COUNT * 3u) {
+        reported_pressure = 1;
+        klog_printf("[process] table filling: %u of %u slots in use\n",
+                    (unsigned)taken,
+                    (unsigned)PROCESS_MAX_COUNT);
+    }
+    if (found) {
+        reported_full = 0;
+        return found;
+    }
+    if (!reported_full) {
+        reported_full = 1;
+        klog_write("[process] table full; spawn refused (raise PROCESS_MAX_COUNT)\n");
     }
     return 0;
 }

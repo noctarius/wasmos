@@ -375,6 +375,11 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
         pm_service_class_ensure(pm_context_id);
         provider = process_find_by_context(reply_owner);
         provider_pid = provider ? provider->pid : 0;
+        /* FIXME: a refused claim -- another owner already holds this
+         * (class, instance) -- returns without sending any reply, so the
+         * registering driver blocks in its bring-up call forever instead of
+         * learning it lost. Every failure path above has the same shape. Answer
+         * with SVC_IPC_ERROR carrying a packed WASMOS_ERR_PROC_* code. */
         if (service_class_registry_add(
                 class_name, desc->instance, service_ep, reply_owner, provider_pid) != 0) {
             return -1;

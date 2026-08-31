@@ -6,12 +6,13 @@
 
 This document describes the filesystem stack: the `fs_manager` VFS router,
 the backend registration model, the client state allocator, the FS IPC opcode
-table, the `fs_fat` and `fs_init` backends, and the transfer-buffer borrow
-semantics used for data transfers.
+table, the `fs_fat`, `fs_init` and `fs_tmpfs` backends, and the transfer-buffer
+borrow semantics used for data transfers.
 
 **Sources**: `src/services/fs_manager/`,
 `src/drivers/fs_fat/`,
 `src/drivers/fs_init/`,
+`src/drivers/fs_tmpfs/`,
 `src/kernel/include/wasmos_ipc.h`
 
 ---
@@ -27,7 +28,9 @@ WASM service (client)
   fs_manager  ← VFS router; multiplexes by path prefix
        │  FS IPC (forwarded)
        ├──► fs_fat    ← FAT12/16 (FAT32 detected but read/write unimplemented)
-       └──► fs_init   ← read-only in-memory initramfs
+       ├──► fs_wfs    ← WFS, journalled, read-write
+       ├──► fs_init   ← read-only in-memory initramfs
+       └──► fs_tmpfs  ← read-write in-memory filesystem
 ```
 
 All inter-layer communication uses the same FS IPC opcode set. `fs_manager`
@@ -58,9 +61,12 @@ by a `mount_name` prefix (e.g. `"/boot"`, `"/user"`, `"/init"`). Path
 routing is a prefix match: the request is forwarded to the backend whose
 `mount_name` is the longest matching prefix of the requested path.
 
-Backends register by sending `FS_IPC_READY (0x404)` to `fs_manager` with
-their mount name encoded in the message arguments via
-`wasmos_sys_ipc_pack_name16`.
+Backends do NOT push a registration. `fs_manager` SUBSCRIBES to the `fs.backend`
+service class and enumerates it, then PULLS each provider's identity with
+`FSMGR_IPC_BACKEND_INFO_REQ` (see Backend Identity below), so the backend set is
+rebuilt from the registry on every (re)start and a backend that registers later
+arrives as a class event. `FS_IPC_READY (0x404)` survives only as a liveness
+question a backend answers.
 
 #### Client State
 
@@ -189,6 +195,46 @@ via the device manager's block-device registration mechanism.
 
 ---
 
+### `fs_tmpfs` Backend
+
+**Source**: `src/drivers/fs_tmpfs/` (Zig)
+
+A read-write filesystem held entirely in the backend's own linear memory: a fixed
+node table (192 entries) over a fixed block pool (1024 x 512 B, block 0 reserved
+so `0` can mean "no block"). Contents are not persisted.
+
+It is a GENERAL in-memory filesystem, not a root-specific one. The mount comes
+from the `mount=` startup argument and defaults to `/`, so a second instance
+mounted at `/tmp` is another process with another argument and its own separate
+contents. Every identity is therefore DERIVED from the mount path rather than
+fixed: the `fs.backend` class instance is an FNV-1a fingerprint of it, so two
+instances at different paths cannot claim one registry address, and two asked for
+the SAME path are refused the claim rather than answering for each other. The
+refusal is currently a HANG rather than an error, because the process manager
+answers a refused claim with no reply at all (see `docs/TASKS.md`).
+
+- Implements the whole opcode set except the retired `READ_APP`: `OPEN` (with
+  `O_CREAT`/`O_TRUNC`/`O_APPEND`), `READ`, `WRITE`, `SEEK`, `CLOSE`, `STAT`,
+  `READDIR`, `CHDIR`, `MKDIR`, `RMDIR`, `UNLINK`, `RENAME`.
+- Names are case-SENSITIVE, as in WFS; FAT is the outlier.
+- A node with a descriptor open on it, or one a connection stands in, is refused
+  rather than freed: a descriptor holds a node index, so removing it underneath
+  one would leave that descriptor addressing a slot the next create reuses.
+- Runs as an async service (`async_initialize`). Every operation completes in
+  memory with no downstream call, so the root task parks forever on a future
+  nothing resolves and the runner's poll is what an idle instance sleeps in.
+
+**Why the VFS root wants one.** A mount point has to be a directory somewhere,
+and nothing holds one while `/` has no filesystem — which is why routing matches
+a mount's first segment and a mount can only exist at the top level. The kernel's
+init sequence therefore spawns an instance for `/` between `fs-manager` and
+`fs-init`, before any volume mounts.
+
+Serving the root also needs longest-prefix routing over mount PATHS, which
+`fs_manager` does not yet do: it declines a backend naming `/`, because `/` is a
+path and there is no mount NAME in it to match. Until that lands the instance
+runs and serves nothing (`docs/TASKS.md`).
+
 ### `fs_init` Backend
 
 **Source**: `src/drivers/fs_init/`
@@ -242,7 +288,8 @@ provided via a known physical address from the bootloader.
 
   Matching on the first segment means a mount can only exist at the TOP LEVEL.
   Mounting deeper needs a root filesystem that owns real directories to mount
-  onto; see `docs/TASKS.md`.
+  onto; `fs_tmpfs` is that filesystem, and longest-prefix routing over mount
+  paths is what remains. See `docs/TASKS.md`.
 
 ### Backend Identity
 
@@ -258,12 +305,19 @@ conflating them mislabels every mount:
   that answers "which filesystem". `FS_TYPE_UNKNOWN` means the backend named
   nothing, and is reported as such rather than guessed at.
 
+A backend whose reported mount name is EMPTY once its leading `/` is stripped is
+not registered. Such a backend names a mount PATH (`/`) rather than a mount name,
+and while routing matches a first segment there is no name for it to match;
+registering it anyway gave it a slot, kept it out of routing, and printed a bare
+`/` entry into the root listing.
+
 `mount` names a filesystem from `fs_type` alone (`fsmgr_backend_fs_name`, one
 lookup row per type). Deriving it from `kind` reports every mounted volume as
 FAT.
 
 A backend that sits on no block device names itself the same way: initfs reports
-`FS_TYPE_INITFS`, so `FS_TYPE_*` is the single namespace for "which filesystem"
+`FS_TYPE_INITFS` and tmpfs reports `FS_TYPE_TMPFS`, so `FS_TYPE_*` is the single
+namespace for "which filesystem"
 rather than a probe-result enum with pseudo-filesystems handled beside it. A
 future devfs or sysfs is therefore a value in `abi/constants.yaml` plus a lookup
 row, and costs no branch at any call site. Such a value is meaningless in a
@@ -279,14 +333,17 @@ own transfer buffer for that, since such a request supplies none.
 
 ### Structural Invariants
 
-1. **Backend registration is dynamic.** Backends send `FS_IPC_READY` when
-   ready; `fs_manager` does not start until at least one backend is
-   registered. The `"/init"` backend registers first and enables early
-   rule loading by the device manager.
+1. **Backend discovery is dynamic and PULL-based.** `fs_manager` subscribes to
+   the `fs.backend` class and enumerates it, then pulls each provider's identity.
+   It registers its own name and signals readiness BEFORE discovery, because the
+   providers are peers that may still be starting and blocking readiness on them
+   would deadlock the boot sequence.
 
-2. **Path routing is prefix-longest-match.** If `/boot/system` and `/boot`
-   are both registered, a path under `/boot/system` goes to the more-specific
-   backend.
+2. **Path routing matches a mount name against the path's FIRST SEGMENT**
+   (`fsmgr_route_path_for_mounts`), so a mount can only exist at the top level.
+   Longest-prefix matching over mount PATHS — which is what makes `/mnt/usb` and
+   a shadowed mount point expressible — is the next step now that `/` has a
+   filesystem; see `docs/TASKS.md`.
 
 3. **`FS_IPC_READ_APP` is retired.** PM spawn now reads app blobs via
    `FS_IPC_READ_PATH` (see `process_manager_spawn.c`); `FS_IPC_READ_APP_REQ`

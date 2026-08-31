@@ -101,6 +101,45 @@ static void test_two_block_backends_are_distinguished(void) {
     assert(strcmp(fsmgr_backend_fs_name(&backends[0]), fsmgr_backend_fs_name(&backends[1])) != 0);
 }
 
+/* Regression: 2026-08-31-fsmgr-root-mount-name — the emptiness test on a
+ * reported mount name ran BEFORE the leading '/' was stripped, so a backend
+ * naming "/" passed it and was registered with an EMPTY mount name. Routing
+ * compares a whole first segment against each mount name and no segment is
+ * zero-length, so that backend was unreachable by any path — while still holding
+ * one of the FS_BACKEND_CAP slots and still contributing a bare "/" line to
+ * `ls /`. Surfaced by the tmpfs backend, which is the first to name the root. */
+static void test_reported_root_is_not_a_mount_name(void) {
+    char out[16];
+    memset(out, 'x', sizeof(out));
+    assert(fsmgr_mount_name_from_reported("/", out, sizeof(out)) == 0);
+    assert(out[0] == '\0');
+}
+
+/* A backend MUST name its mount: there is no default on the fs-manager side. */
+static void test_reported_empty_is_not_a_mount_name(void) {
+    char out[16];
+    assert(fsmgr_mount_name_from_reported("", out, sizeof(out)) == 0);
+    assert(out[0] == '\0');
+}
+
+/* "/Boot" and "boot" are one mount, which is what the strip plus the lower-casing
+ * are for. */
+static void test_leading_slash_stripped_and_lowercased(void) {
+    char out[16];
+    assert(fsmgr_mount_name_from_reported("/Boot", out, sizeof(out)) == 1);
+    assert(strcmp(out, "boot") == 0);
+    assert(fsmgr_mount_name_from_reported("WFS", out, sizeof(out)) == 1);
+    assert(strcmp(out, "wfs") == 0);
+}
+
+/* A name that does not fit is refused rather than truncated: a shortened mount
+ * name names a different mount, and the caller would then route paths to it. */
+static void test_overlong_name_is_refused_not_truncated(void) {
+    char out[8];
+    assert(fsmgr_mount_name_from_reported("/averylongmountname", out, sizeof(out)) == 0);
+    assert(out[0] == '\0');
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -113,6 +152,10 @@ int main(void) {
         WASMOS_TEST_CASE(test_unknown_fs_type_is_named_generically),
         WASMOS_TEST_CASE(test_null_backend_is_named_generically),
         WASMOS_TEST_CASE(test_two_block_backends_are_distinguished),
+        WASMOS_TEST_CASE(test_reported_root_is_not_a_mount_name),
+        WASMOS_TEST_CASE(test_reported_empty_is_not_a_mount_name),
+        WASMOS_TEST_CASE(test_leading_slash_stripped_and_lowercased),
+        WASMOS_TEST_CASE(test_overlong_name_is_refused_not_truncated),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_fs_manager_backends: ok\n");

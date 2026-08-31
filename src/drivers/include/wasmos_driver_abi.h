@@ -324,9 +324,8 @@ enum { PROC_STATUS_UNKNOWN = 0, PROC_STATUS_RUNNING = 1, PROC_STATUS_ZOMBIE = 2 
  * BLOCK in particular is not "the volume the system booted from": one backend
  * registers per mounted volume, so several report it in an ordinary boot.
  * Reading it as the boot volume is what made `mount` name every volume after
- * FAT and made the root filesystem depend on registration order. Use the mount
- * name to identify the root filesystem (FSMGR_ROOT_MOUNT_NAME) and FS_TYPE_* to
- * identify the filesystem. */
+ * FAT and made the root filesystem depend on registration order. Identify a
+ * mount by its mount name and a filesystem by its FS_TYPE_*. */
 enum { FSMGR_BACKEND_BLOCK = 1, FSMGR_BACKEND_PSEUDO = 2 };
 
 /* Pack a (kind, unit) pair into the single class-registry instance index a

@@ -1,0 +1,40 @@
+version = 1
+aot = true
+
+[package]
+name = "fs-tmpfs"
+# The libsys async-service entry: it creates the endpoint, the event loop and the
+# coroutine runtime, then pumps the root task this driver supplies.
+entry = "async_initialize"
+# A driver, not a service, like every other filesystem backend: `kind` sets the
+# scheduler band (SCHED_PRIO_DRIVER above SCHED_PRIO_SERVICE) and this serves the
+# VFS root, so it sits underneath every service that resolves a path.
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+# Link-time memory in bytes (docs/toolchain.md). No device memory is mapped -- this
+# driver touches no hardware -- but the filesystem's whole contents live in linear
+# memory, so the block pool and node table are sized against this number, not
+# against a heap.
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+
+# ipc.basic to reach the process manager and to be reached by fs-manager;
+# svc.class to claim an `fs.backend` instance. Nothing else: this driver has no
+# device, no ports, no interrupt and no DMA.
+[[capabilities]]
+name = "ipc.basic"
+flags = 0
+
+[[capabilities]]
+name = "svc.class"
+flags = 0

@@ -150,6 +150,8 @@ const FS_TYPE_FAT int32 = 1
 const FS_TYPE_WFS int32 = 2
 // initfs; the boot-image filesystem served from memory. Pseudo-filesystem: self-reported by its backend, never returned by a recogniser.
 const FS_TYPE_INITFS int32 = 3
+// tmpfs; a read-write filesystem held in its backend's own memory, which serves the VFS root so that a mount point is a real directory. Pseudo-filesystem: self-reported by its backend, never returned by a recogniser.
+const FS_TYPE_TMPFS int32 = 4
 
 // block_descriptor_flags (flag bits)
 // Bits of the `flags` field of wasmos_block_descriptor_t.

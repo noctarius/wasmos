@@ -35,7 +35,10 @@ static fat_mount_t g_mnt;
 static fat_open_pool_t g_pool;
 
 /* Mount identity reported to fs-manager on each backend-info pull. */
-static int32_t g_mount_bid = -1;
+/* This driver's mount name, reported on an fs-manager pull. Held as plain bytes:
+ * fs-manager is the CLIENT of that pull and supplies the buffer, so this driver
+ * owns no transfer buffer for it. */
+static char g_mount_name[16];
 static int32_t g_mount_len = 0;
 static uint8_t g_mount_unit = 0;
 static int32_t g_requested_unit = -1;
@@ -255,19 +258,22 @@ static int32_t fat_send_reply(int32_t dest, int32_t type, uint32_t request_id, i
                                      (int32_t)FAT_STREAM_SEND_RETRIES);
 }
 
-/* Answer an fs-manager FSMGR_IPC_BACKEND_INFO_REQ pull. */
-static void fat_report_backend_info(int32_t dst, int32_t request_id) {
-    int32_t mount_arg = 0;
-    if (g_mount_bid >= 0 && g_mount_len > 0 &&
-        wasmos_xfer_buffer_borrow(dst, g_mount_bid, WASMOS_BUFFER_GRANT_READ) >= 0) {
-        mount_arg = (int32_t)(((uint32_t)g_mount_bid << 12) | ((uint32_t)g_mount_len & 0xFFFu));
+/* Answer an fs-manager FSMGR_IPC_BACKEND_INFO_REQ pull: write this driver's
+ * mount name into the buffer fs-manager supplied (arg0) and report its length.
+ * The buffer belongs to fs-manager, which releases it; this driver only writes
+ * into a grant it holds for the duration of the reply. */
+static void fat_report_backend_info(int32_t dst, int32_t request_id, int32_t buffer_id) {
+    int32_t name_len = 0;
+    if (buffer_id > 0 && g_mount_len > 0 &&
+        wasmos_xfer_buffer_write(buffer_id, g_mount_name, g_mount_len, 0) == 0) {
+        name_len = g_mount_len;
     }
     (void)fat_send_reply(dst,
                          FSMGR_IPC_BACKEND_INFO_RESP,
                          (uint32_t)request_id,
                          FSMGR_BACKEND_BLOCK,
                          FS_TYPE_FAT,
-                         mount_arg,
+                         name_len,
                          (int32_t)g_mount_unit);
 }
 
@@ -628,17 +634,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         fat_stall();
     }
     mount_alias_len = (int32_t)strlen(mount_alias);
-    if (mount_alias_len <= 0 || mount_alias_len >= 0xFFF ||
-        mount_alias_len >= wasmos_xfer_buffer_size()) {
+    if (mount_alias_len <= 0 || mount_alias_len >= (int32_t)sizeof(g_mount_name)) {
         fat_log("mount alias size invalid\n");
         fat_stall();
     }
-    g_mount_bid = wasmos_xfer_buffer_acquire(mount_alias_len);
-    if (g_mount_bid < 0 ||
-        wasmos_xfer_buffer_write(g_mount_bid, mount_alias, mount_alias_len, 0) != 0) {
-        fat_log("mount alias buffer write failed\n");
-        fat_stall();
-    }
+    str_copy(g_mount_name, sizeof(g_mount_name), mount_alias);
     g_mount_len = mount_alias_len;
     if (wasmos_svc_register_class(g_proc_endpoint,
                                   g_fs_endpoint,
@@ -657,8 +657,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             continue;
         }
         if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FSMGR_IPC_BACKEND_INFO_REQ) {
-            fat_report_backend_info(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
-                                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID));
+            /* Read every field into a local before replying: the reply writes
+             * into fs-manager's buffer, and a host call invalidates the
+             * last-message fields. Evaluation order within one argument list is
+             * unspecified, so the two must not be mixed there. */
+            int32_t info_src = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+            int32_t info_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+            int32_t info_bid = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+            fat_report_backend_info(info_src, info_req, info_bid);
             break;
         }
     }
@@ -704,8 +710,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             }
             type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
             if (type == FSMGR_IPC_BACKEND_INFO_REQ) {
-                fat_report_backend_info(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
-                                        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID));
+                int32_t info_src = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+                int32_t info_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+                int32_t info_bid = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+                fat_report_backend_info(info_src, info_req, info_bid);
                 continue;
             }
             if (type == FS_IPC_READY_REQ) {

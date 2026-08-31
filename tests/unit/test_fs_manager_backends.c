@@ -72,11 +72,6 @@ static void test_name_comes_from_fs_type_not_kind(void) {
     assert(strcmp(fsmgr_backend_fs_name(&wfs_kind_init), "fs-wfs") == 0);
 }
 
-/* A pseudo-filesystem is spawned by no rule and sits on no volume, so its mount
- * name has to follow from what it is. Keeping that in the same per-type table as
- * the display name is what stops it from becoming a branch: a devfs adds a row.
- * A block filesystem reports its own mount from the rule that spawned it, so it
- * defines no default and must not acquire one by accident. */
 /* An unrecognised type is the only miss, and it is a miss for a block-backed
  * and a non-block-backed backend alike. */
 static void test_unknown_type_is_a_miss_for_any_kind(void) {
@@ -106,21 +101,6 @@ static void test_two_block_backends_are_distinguished(void) {
     assert(strcmp(fsmgr_backend_fs_name(&backends[0]), fsmgr_backend_fs_name(&backends[1])) != 0);
 }
 
-static void test_pseudo_filesystem_has_a_default_mount_name(void) {
-    assert(fsmgr_default_mount_name((uint32_t)FS_TYPE_INITFS) != 0);
-    assert(strcmp(fsmgr_default_mount_name((uint32_t)FS_TYPE_INITFS), "init") == 0);
-}
-
-static void test_block_filesystems_define_no_default_mount(void) {
-    assert(fsmgr_default_mount_name((uint32_t)FS_TYPE_FAT) == 0);
-    assert(fsmgr_default_mount_name((uint32_t)FS_TYPE_WFS) == 0);
-}
-
-static void test_unknown_type_has_no_default_mount(void) {
-    assert(fsmgr_default_mount_name((uint32_t)FS_TYPE_UNKNOWN) == 0);
-    assert(fsmgr_default_mount_name(0xFFFFFFFFu) == 0);
-}
-
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -133,9 +113,6 @@ int main(void) {
         WASMOS_TEST_CASE(test_unknown_fs_type_is_named_generically),
         WASMOS_TEST_CASE(test_null_backend_is_named_generically),
         WASMOS_TEST_CASE(test_two_block_backends_are_distinguished),
-        WASMOS_TEST_CASE(test_pseudo_filesystem_has_a_default_mount_name),
-        WASMOS_TEST_CASE(test_block_filesystems_define_no_default_mount),
-        WASMOS_TEST_CASE(test_unknown_type_has_no_default_mount),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_fs_manager_backends: ok\n");

@@ -24,6 +24,8 @@ endif ()
 #   - the coroutine runtime and its async-service entry, which owns this driver's
 #     event loop and pump (the manifest entry is async_initialize, so
 #     service_async_entry_wasm.c is what the loader actually calls);
+#   - fs_tmpfs_store.zig, the namespace and storage core, which is also compiled
+#     standalone by the host unit tests;
 #   - the generated ABI, so opcodes, packed error codes and value constants come
 #     from abi/*.yaml rather than being restated here.
 #
@@ -37,6 +39,7 @@ wasmos_add_zig_wasm_app(
   OUTPUT_APP  ${WASM_TMPFS_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
   EXTRA_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/fs_tmpfs_store.zig
     ${LIBC_DIR}/zig/driver.zig
     ${LIBC_DIR}/zig/coroutine.zig
     ${LIBSYS_WASM_DIR}/coroutine_wasm.c

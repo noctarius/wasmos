@@ -236,6 +236,13 @@ answers a refused claim with no reply at all (see `docs/TASKS.md`).
 - Runs as an async service (`async_initialize`). Every operation completes in
   memory with no downstream call, so the root task parks forever on a future
   nothing resolves and the runner's poll is what an idle instance sleeps in.
+- The namespace and storage core is a separate module, `fs_tmpfs_store.zig`,
+  which depends on nothing in the guest environment except a source of pool
+  memory. That source is a seam (`chunk_source`): the driver points it at the
+  `memory.grow` arena and `tests/unit/test_fs_tmpfs_store.zig` points it at a
+  static array, which is what makes path resolution, chain walking, truncation
+  and the namespace rules testable on the host. The IPC layer above it is not
+  host-testable and is covered only by a running guest.
 
 **Why the VFS root wants one.** A mount point has to be a directory somewhere,
 and nothing holds one while `/` has no filesystem — which is why routing matches

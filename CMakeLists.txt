@@ -4018,6 +4018,23 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running partition-table parser unit tests"
       VERBATIM)
+    # The tmpfs namespace and storage core. It is split out of the driver
+    # (fs_tmpfs.zig) precisely so it can be linked here: it depends on nothing in
+    # the guest environment except a source of pool memory, which on the guest is
+    # `memory.grow` and in the suite is a static array handed to its
+    # `chunk_source` seam. Only that one module is passed, because everything the
+    # cases reach is in it.
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-fs-tmpfs-cache
+              --global-cache-dir ${BUILD_DIR}/zig-fs-tmpfs-global-cache
+              --dep fs_tmpfs_store
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_fs_tmpfs_store.zig
+              -Mfs_tmpfs_store=${DRIVER_WASM_DIR}/fs_tmpfs/fs_tmpfs_store.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running tmpfs store unit tests"
+      VERBATIM)
     # The filesystem recognisers. Unlike the parser above these import each other
     # and the generated constants, and `wasmos_add_zig_wasm_app` resolves that by
     # staging every .zig FLAT so @import("name.zig") finds its neighbour. The

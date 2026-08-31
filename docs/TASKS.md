@@ -1493,13 +1493,11 @@ Source: `architecture/19-virtual-terminal.md`,
     `send_virtual_root_listing`.
   - `fs_backend_t.mount_name` is 16 bytes, which bounds a mount PATH far more
     tightly than it bounded a mount name. Widen it with the routing change.
-  - The tmpfs STORAGE layer has no standing test. Nothing reaches it until the
-    routing above mounts it, so a boot only runs its bring-up; the block pool was
-    verified by a throwaway in-guest self-test (200 KiB written and read back
-    across 7 chunks, partial tail read, truncate-then-reuse without regrowth,
-    both runtimes) rather than by anything that runs again. Once `/` is mounted,
-    an integration test owes it read/write/readdir/rename coverage through the
-    FS path.
+  - The tmpfs namespace and storage core IS covered on the host now
+    (`tests/unit/test_fs_tmpfs_store.zig`, 25 cases). What is still uncovered is
+    the IPC layer above it -- opcode dispatch, transfer-buffer handling, the
+    per-connection cwd -- which needs a running guest. Once `/` is mounted, an
+    integration test owes it open/read/write/readdir/rename through the FS path.
   - `NAME_MAX` in the tmpfs is 60, below WFS's 255 and below FAT's LFN, so a
     filename valid on another mount can be rejected on this one. Names are
     stored in the node record, so raising it costs static memory per node;

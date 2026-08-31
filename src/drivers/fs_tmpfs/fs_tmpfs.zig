@@ -77,40 +77,54 @@ const co = @import("coroutine.zig");
 const op = @import("wasmos_opcodes.zig");
 const status = @import("wasmos_status.zig");
 const abi = @import("wasmos_constants.zig");
+const store = @import("fs_tmpfs_store.zig");
+
+// The namespace and storage core, aliased under the names the operations below
+// already use. It lives in its own module because it depends on nothing in the
+// guest environment and is therefore exercised on the host
+// (tests/unit/test_fs_tmpfs_store.zig); everything this file adds is the parts
+// that cannot be: IPC, transfer buffers, and the pool's memory.
+const Node = store.Node;
+const Fd = store.Fd;
+const BlockChunk = store.BlockChunk;
+const Split = store.Split;
+const NAME_MAX = store.NAME_MAX;
+const MAX_NODES = store.MAX_NODES;
+const BLOCK = store.BLOCK;
+const BLOCKS_PER_CHUNK = store.BLOCKS_PER_CHUNK;
+const MAX_BLOCK_CHUNKS = store.MAX_BLOCK_CHUNKS;
+const MAX_FDS = store.MAX_FDS;
+const FD_BASE = store.FD_BASE;
+const ROOT = store.ROOT;
+/// Pointer to the table, so `g_nodes[i]` below still indexes it directly.
+const g_nodes = &store.g_nodes;
+const g_fds = &store.g_fds;
+const nameOf = store.nameOf;
+const lookup = store.lookup;
+const lookupAny = store.lookupAny;
+const isAncestor = store.isAncestor;
+const blockAlloc = store.blockAlloc;
+const releaseBlock = store.releaseBlock;
+const truncateBlocks = store.truncateBlocks;
+const readAt = store.readAt;
+const writeAt = store.writeAt;
+const nodeAlloc = store.nodeAlloc;
+const nodeFree = store.nodeFree;
+const nodeIsOpen = store.nodeIsOpen;
+const resolve = store.resolve;
+const splitPath = store.splitPath;
 
 // --- limits ------------------------------------------------------------------
+// Storage limits (node count, block size, pool chunking) belong to
+// fs_tmpfs_store.zig; what follows is what only a running instance needs.
 
-/// Longest single path component. A name is stored in the node, so this is a
-/// space/limit trade rather than a protocol bound; fs-manager and the clients
-/// carry paths in transfer buffers and impose no component limit of their own.
-const NAME_MAX: usize = 60;
-/// Files plus directories, across the whole filesystem.
-const MAX_NODES: usize = 192;
-/// Bytes per storage block. A file wastes at most one short block.
-const BLOCK: usize = 512;
-/// Blocks per pool chunk. A chunk is allocated whole and never moved or freed,
-/// which is what keeps a block INDEX stable for the life of the process -- file
-/// chains and the free scan both address a block by index, never by pointer.
-const BLOCKS_PER_CHUNK: usize = 64;
-/// Chunks the block index space can address, and therefore this filesystem's
-/// ceiling: MAX_BLOCK_CHUNKS * BLOCKS_PER_CHUNK * BLOCK, or 8 MiB. It is a
-/// ceiling and not a cost -- an unallocated chunk is one null pointer -- so the
-/// real bound is the manifest's max_memory.
-const MAX_BLOCK_CHUNKS: usize = 256;
 /// Bytes per WASM page, the granularity `memory.grow` works in.
 const PAGE: u32 = 65536;
-/// Open files across all clients.
-const MAX_FDS: usize = 32;
 /// Connections whose working directory is tracked. fs-manager is normally the
 /// only one, so this is slack rather than a budget.
 const MAX_CLIENTS: usize = 8;
 /// Longest path this driver will resolve in one request.
 const PATH_MAX: usize = 256;
-/// First descriptor handed out; 0..2 stay clear of the standard streams, as in
-/// every other backend.
-const FD_BASE: i32 = 3;
-/// The root, which always exists and is its own parent.
-const ROOT: u16 = 0;
 
 /// The virtual class FS backends register under, and the backend KIND this one
 /// reports. Declared here rather than imported because they live in
@@ -163,27 +177,6 @@ const S_IFDIR: i32 = 0x4000;
 
 // --- state -------------------------------------------------------------------
 
-/// One file or directory. `parent` of the root is the root, so `..` there stays
-/// put; `first` is 0 for a directory and for an empty file, since block 0 is
-/// never allocated.
-const Node = struct {
-    in_use: bool = false,
-    is_dir: bool = false,
-    name_len: u8 = 0,
-    parent: u16 = 0,
-    first: u16 = 0,
-    size: u32 = 0,
-    name: [NAME_MAX]u8 = [_]u8{0} ** NAME_MAX,
-};
-
-/// One open file. `node` is meaningful only while `in_use`.
-const Fd = struct {
-    in_use: bool = false,
-    node: u16 = 0,
-    flags: i32 = 0,
-    offset: u32 = 0,
-};
-
 /// The working directory held for one connection, keyed by the endpoint requests
 /// arrive from.
 const Client = struct {
@@ -192,33 +185,56 @@ const Client = struct {
     cwd: u16 = ROOT,
 };
 
-var g_nodes: [MAX_NODES]Node = [_]Node{.{}} ** MAX_NODES;
-var g_fds: [MAX_FDS]Fd = [_]Fd{.{}} ** MAX_FDS;
 var g_clients: [MAX_CLIENTS]Client = [_]Client{.{}} ** MAX_CLIENTS;
-
-/// One chunk of the block pool: the blocks themselves plus the chain and
-/// allocation metadata for exactly those blocks, so growing the pool grows its
-/// bookkeeping with it rather than leaving a separate array to outgrow.
-const BlockChunk = struct {
-    /// Next block in each chain, 0 terminating it.
-    next: [BLOCKS_PER_CHUNK]u16,
-    /// Whether each block belongs to some chain.
-    used: [BLOCKS_PER_CHUNK]bool,
-    data: [BLOCKS_PER_CHUNK * BLOCK]u8,
-};
-
-/// The pool, allocated a chunk at a time on demand. A null entry is a chunk that
-/// has never been needed and costs one pointer; this is what keeps an idle
-/// instance cheap, which matters because the mount is per-instance and a system
-/// may run several.
-var g_block_chunks: [MAX_BLOCK_CHUNKS]?*BlockChunk = [_]?*BlockChunk{null} ** MAX_BLOCK_CHUNKS;
-var g_block_chunk_count: usize = 0;
 
 /// The bump arena the chunks come from, in linear-memory addresses. Both zero
 /// until the first allocation, which is what makes the first call take a fresh
 /// run of pages rather than trusting a base it was never given.
 var g_arena_next: u32 = 0;
 var g_arena_end: u32 = 0;
+
+// --- pool memory -------------------------------------------------------------
+
+/// Bump-allocate `size` bytes from pages taken with `memory.grow`, returning the
+/// linear-memory address.
+///
+/// `memory.grow` answers with the PREVIOUS page count, which is the first page of
+/// the region it just added, so this needs no linker symbol to find a base above
+/// the module's static data -- and cannot collide with it. Grown pages are
+/// zero-initialized by the WASM specification, which is what lets a fresh chunk
+/// skip clearing itself.
+///
+/// Nothing is ever freed. A chunk outlives every block in it and the pool only
+/// grows, so a free list here would be bookkeeping for an event that does not
+/// happen. Returns null once the runtime refuses to grow, which is the
+/// manifest's max_memory being reached.
+fn arenaAlloc(size: usize) ?u32 {
+    const want: u32 = @intCast((size + 7) & ~@as(usize, 7));
+    if (g_arena_end - g_arena_next < want) {
+        const pages: u32 = (want + PAGE - 1) / PAGE;
+        const prev = @wasmMemoryGrow(0, pages);
+        if (prev < 0) return null;
+        const base: u32 = @as(u32, @intCast(prev)) * PAGE;
+        // The new region begins exactly where memory ended, so when that is the
+        // run already in hand the leftover tail stays usable and the allocation
+        // simply spans the boundary; otherwise this is the first run.
+        if (base != g_arena_end) g_arena_next = base;
+        g_arena_end = base + pages * PAGE;
+    }
+    const at = g_arena_next;
+    g_arena_next += want;
+    return at;
+}
+
+/// The store's chunk source on the guest: one `BlockChunk` out of the arena.
+///
+/// This is the whole of what the storage core cannot do for itself, and the only
+/// reason it needs a seam -- `memory.grow` exists nowhere but a WASM guest, so a
+/// host test supplies its own source and exercises everything else unchanged.
+fn wasmChunk() ?*store.BlockChunk {
+    const addr = arenaAlloc(@sizeOf(store.BlockChunk)) orelse return null;
+    return @ptrFromInt(addr);
+}
 
 /// Path scratch, static rather than stack: a Zig WASM module here runs on an
 /// 8 KiB shadow stack, so a per-request buffer of this size belongs in .bss.
@@ -277,360 +293,6 @@ fn loop() *co.EventLoop {
 /// what the `fs.backend` class registration publishes.
 fn endpoint() i32 {
     return wasmos_async_service.reply_endpoint;
-}
-
-// --- names -------------------------------------------------------------------
-
-/// A node's name as a slice of its own storage.
-fn nameOf(n: u16) []const u8 {
-    const node = &g_nodes[n];
-    return node.name[0..node.name_len];
-}
-
-fn nameEqual(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |x, y| {
-        if (x != y) return false;
-    }
-    return true;
-}
-
-/// The entry named `name` in directory `dir`.
-fn lookup(dir: u16, name: []const u8) ?u16 {
-    var i: u16 = 0;
-    while (i < MAX_NODES) : (i += 1) {
-        const node = &g_nodes[i];
-        if (!node.in_use or node.parent != dir or i == ROOT) continue;
-        if (nameEqual(nameOf(i), name)) return i;
-    }
-    return null;
-}
-
-/// Any entry of `dir`, or null when it holds none.
-fn lookupAny(dir: u16) ?u16 {
-    var i: u16 = 0;
-    while (i < MAX_NODES) : (i += 1) {
-        if (g_nodes[i].in_use and i != ROOT and g_nodes[i].parent == dir) return i;
-    }
-    return null;
-}
-
-/// Whether `maybe_ancestor` is `n` or lies above it. Used to refuse renaming a
-/// directory into its own subtree, which would detach it from the root.
-fn isAncestor(maybe_ancestor: u16, n: u16) bool {
-    var cur = n;
-    while (true) {
-        if (cur == maybe_ancestor) return true;
-        if (cur == ROOT) return false;
-        cur = g_nodes[cur].parent;
-    }
-}
-
-// --- blocks ------------------------------------------------------------------
-
-/// Bump-allocate `size` bytes from pages taken with `memory.grow`, returning the
-/// linear-memory address.
-///
-/// `memory.grow` answers with the PREVIOUS page count, which is the first page of
-/// the region it just added, so this needs no linker symbol to find a base above
-/// the module's static data -- and cannot collide with it. Grown pages are
-/// zero-initialized by the WASM specification, which is what lets a fresh chunk
-/// skip clearing itself.
-///
-/// Nothing is ever freed. A chunk outlives every block in it and the pool only
-/// grows, so a free list here would be bookkeeping for an event that does not
-/// happen. Returns null once the runtime refuses to grow, which is the
-/// manifest's max_memory being reached.
-fn arenaAlloc(size: usize) ?u32 {
-    const want: u32 = @intCast((size + 7) & ~@as(usize, 7));
-    if (g_arena_end - g_arena_next < want) {
-        const pages: u32 = (want + PAGE - 1) / PAGE;
-        const prev = @wasmMemoryGrow(0, pages);
-        if (prev < 0) return null;
-        const base: u32 = @as(u32, @intCast(prev)) * PAGE;
-        // The new region begins exactly where memory ended, so when that is the
-        // run already in hand the leftover tail stays usable and the allocation
-        // simply spans the boundary; otherwise this is the first run.
-        if (base != g_arena_end) g_arena_next = base;
-        g_arena_end = base + pages * PAGE;
-    }
-    const at = g_arena_next;
-    g_arena_next += want;
-    return at;
-}
-
-/// The chunk holding `index`, or null when that chunk has not been allocated.
-fn blockChunkOf(index: u16) ?*BlockChunk {
-    const c = @as(usize, index) / BLOCKS_PER_CHUNK;
-    if (c >= MAX_BLOCK_CHUNKS) return null;
-    return g_block_chunks[c];
-}
-
-fn blockSlot(index: u16) usize {
-    return @as(usize, index) % BLOCKS_PER_CHUNK;
-}
-
-/// Next block in `index`'s chain; 0 both terminates a chain and answers for a
-/// block whose chunk does not exist, which a caller treats the same way.
-fn blockNext(index: u16) u16 {
-    const chunk = blockChunkOf(index) orelse return 0;
-    return chunk.next[blockSlot(index)];
-}
-
-fn setBlockNext(index: u16, value: u16) void {
-    const chunk = blockChunkOf(index) orelse return;
-    chunk.next[blockSlot(index)] = value;
-}
-
-fn releaseBlock(index: u16) void {
-    const chunk = blockChunkOf(index) orelse return;
-    chunk.used[blockSlot(index)] = false;
-    chunk.next[blockSlot(index)] = 0;
-}
-
-/// The `BLOCK` bytes of `index`, or null when its chunk does not exist.
-fn blockBytes(index: u16) ?[]u8 {
-    const chunk = blockChunkOf(index) orelse return null;
-    const off = blockSlot(index) * BLOCK;
-    return chunk.data[off .. off + BLOCK];
-}
-
-/// Claim a free block, zeroed, growing the pool by one chunk when every chunk in
-/// hand is full. Block 0 is never claimed, so that 0 can mean "none".
-fn blockAlloc() ?u16 {
-    var c: usize = 0;
-    while (c < g_block_chunk_count) : (c += 1) {
-        const chunk = g_block_chunks[c] orelse continue;
-        var i: usize = 0;
-        while (i < BLOCKS_PER_CHUNK) : (i += 1) {
-            const index = c * BLOCKS_PER_CHUNK + i;
-            if (index == 0 or chunk.used[i]) continue;
-            chunk.used[i] = true;
-            chunk.next[i] = 0;
-            @memset(chunk.data[i * BLOCK .. (i + 1) * BLOCK], 0);
-            return @intCast(index);
-        }
-    }
-    if (g_block_chunk_count >= MAX_BLOCK_CHUNKS) return null;
-    const addr = arenaAlloc(@sizeOf(BlockChunk)) orelse return null;
-    const fresh: *BlockChunk = @ptrFromInt(addr);
-    const c_new = g_block_chunk_count;
-    g_block_chunks[c_new] = fresh;
-    g_block_chunk_count += 1;
-    // Index 0 is the sentinel, so the very first chunk hands out slot 1. The
-    // chunk's bytes came from grown memory and are already zero.
-    const slot: usize = if (c_new == 0) 1 else 0;
-    fresh.used[slot] = true;
-    fresh.next[slot] = 0;
-    return @intCast(c_new * BLOCKS_PER_CHUNK + slot);
-}
-
-/// Index of the `want`-th block of `n`'s chain, or null when the chain is
-/// shorter than that.
-fn blockAt(n: u16, want: usize) ?u16 {
-    var block = g_nodes[n].first;
-    var i: usize = 0;
-    while (block != 0) {
-        if (i == want) return block;
-        i += 1;
-        block = blockNext(block);
-    }
-    return null;
-}
-
-/// The block holding byte `off` of `n`, appending blocks as far as needed.
-/// Returns null when the pool is full, having kept the chain consistent.
-fn blockForWrite(n: u16, off: u32) ?u16 {
-    const want: usize = @as(usize, off) / BLOCK;
-    if (blockAt(n, want)) |block| return block;
-
-    // Append from the chain's tail rather than from its head, so a sparse write
-    // past the end fills the gap with zeroed blocks instead of leaving a hole
-    // this layout cannot express.
-    var tail: u16 = 0;
-    var have: usize = 0;
-    var block = g_nodes[n].first;
-    while (block != 0) {
-        tail = block;
-        have += 1;
-        block = blockNext(block);
-    }
-    while (have <= want) {
-        const fresh = blockAlloc() orelse return null;
-        if (tail == 0) {
-            g_nodes[n].first = fresh;
-        } else {
-            setBlockNext(tail, fresh);
-        }
-        tail = fresh;
-        have += 1;
-    }
-    return tail;
-}
-
-/// Release every block of `n` from block index `keep` onward.
-fn truncateBlocks(n: u16, keep: usize) void {
-    var prev: u16 = 0;
-    var block = g_nodes[n].first;
-    var i: usize = 0;
-    while (block != 0 and i < keep) {
-        prev = block;
-        block = blockNext(block);
-        i += 1;
-    }
-    if (prev == 0) {
-        g_nodes[n].first = 0;
-    } else {
-        setBlockNext(prev, 0);
-    }
-    while (block != 0) {
-        const following = blockNext(block);
-        releaseBlock(block);
-        block = following;
-    }
-}
-
-/// Copy out of `n` at `off` into `dst`, stopping at the file's size. Returns how
-/// many bytes were copied.
-fn readAt(n: u16, off: u32, dst: []u8) u32 {
-    const size = g_nodes[n].size;
-    if (off >= size) return 0;
-    var want: u32 = @intCast(dst.len);
-    if (want > size - off) want = size - off;
-
-    var done: u32 = 0;
-    while (done < want) {
-        const at = off + done;
-        const block = blockAt(n, @as(usize, at) / BLOCK) orelse break;
-        const within: usize = @as(usize, at) % BLOCK;
-        var chunk: usize = BLOCK - within;
-        if (chunk > want - done) chunk = want - done;
-        const bytes = blockBytes(block) orelse break;
-        @memcpy(dst[done .. done + chunk], bytes[within .. within + chunk]);
-        done += @intCast(chunk);
-    }
-    return done;
-}
-
-/// Copy `src` into `n` at `off`, growing the file as needed. Returns how many
-/// bytes were stored, which is SHORT when the pool ran out -- the same shape a
-/// full disk gives, so a caller reports what it wrote rather than failing whole.
-fn writeAt(n: u16, off: u32, src: []const u8) u32 {
-    var done: u32 = 0;
-    while (done < src.len) {
-        const at = off + done;
-        const block = blockForWrite(n, at) orelse break;
-        const within: usize = @as(usize, at) % BLOCK;
-        var chunk: usize = BLOCK - within;
-        if (chunk > src.len - done) chunk = src.len - done;
-        const bytes = blockBytes(block) orelse break;
-        @memcpy(bytes[within .. within + chunk], src[done .. done + chunk]);
-        done += @intCast(chunk);
-        if (at + chunk > g_nodes[n].size) g_nodes[n].size = at + @as(u32, @intCast(chunk));
-    }
-    return done;
-}
-
-// --- nodes -------------------------------------------------------------------
-
-/// Create an entry named `name` in `parent`. The caller has already established
-/// that no such entry exists.
-fn nodeAlloc(parent: u16, name: []const u8, is_dir: bool) ?u16 {
-    if (name.len == 0 or name.len > NAME_MAX) return null;
-    var i: u16 = 1; // node 0 is the root and is never handed out
-    while (i < MAX_NODES) : (i += 1) {
-        if (g_nodes[i].in_use) continue;
-        g_nodes[i] = .{
-            .in_use = true,
-            .is_dir = is_dir,
-            .name_len = @intCast(name.len),
-            .parent = parent,
-        };
-        @memcpy(g_nodes[i].name[0..name.len], name);
-        return i;
-    }
-    return null;
-}
-
-/// Release `n` and everything it stored. The caller has established that it is
-/// empty (a directory) and unopened.
-fn nodeFree(n: u16) void {
-    truncateBlocks(n, 0);
-    g_nodes[n] = .{};
-}
-
-/// Whether any descriptor names `n`. A node cannot be removed or renamed over
-/// while one does: a descriptor holds the node index, so freeing it under an open
-/// file would leave that descriptor addressing a reused node.
-fn nodeIsOpen(n: u16) bool {
-    for (&g_fds) |*fd| {
-        if (fd.in_use and fd.node == n) return true;
-    }
-    return false;
-}
-
-// --- paths -------------------------------------------------------------------
-
-/// Resolve `path` from `cwd` to the node it names.
-///
-/// An absolute path restarts at the root, `.` keeps the current node, `..` moves
-/// to the parent and cannot leave the root, and repeated slashes collapse.
-/// Returns null when a component does not exist or when a non-final component is
-/// not a directory.
-fn resolve(cwd: u16, path: []const u8) ?u16 {
-    var cur: u16 = if (path.len > 0 and path[0] == '/') ROOT else cwd;
-    var i: usize = 0;
-    while (i < path.len) {
-        if (path[i] == '/') {
-            i += 1;
-            continue;
-        }
-        const start = i;
-        while (i < path.len and path[i] != '/') i += 1;
-        const seg = path[start..i];
-        if (seg.len == 1 and seg[0] == '.') continue;
-        if (seg.len == 2 and seg[0] == '.' and seg[1] == '.') {
-            cur = g_nodes[cur].parent;
-            continue;
-        }
-        if (!g_nodes[cur].is_dir) return null;
-        cur = lookup(cur, seg) orelse return null;
-    }
-    return cur;
-}
-
-/// A path's last component and the directory that holds it.
-const Split = struct { parent: u16, name: []const u8 };
-
-/// Split `path` into the directory holding its last component and that
-/// component.
-///
-/// What every create and remove needs: the parent must exist and be a directory,
-/// while the component itself may or may not. Returns null when the parent does
-/// not resolve, when the path names no component at all (the root), when the last
-/// component is `.` or `..` -- neither of which names a thing to create or remove
-/// -- or when the name does not fit a node.
-fn splitPath(cwd: u16, path: []const u8) ?Split {
-    var last_start: usize = 0;
-    var last_end: usize = 0;
-    var i: usize = 0;
-    while (i < path.len) {
-        if (path[i] == '/') {
-            i += 1;
-            continue;
-        }
-        last_start = i;
-        while (i < path.len and path[i] != '/') i += 1;
-        last_end = i;
-    }
-    if (last_end == last_start) return null;
-    const name = path[last_start..last_end];
-    if (name.len > NAME_MAX) return null;
-    if (nameEqual(name, ".") or nameEqual(name, "..")) return null;
-
-    const parent = resolve(cwd, path[0..last_start]) orelse return null;
-    if (!g_nodes[parent].is_dir) return null;
-    return .{ .parent = parent, .name = name };
 }
 
 // --- request plumbing --------------------------------------------------------
@@ -751,7 +413,7 @@ fn handleOpen(cwd: u16, msg: *const co.IpcMessage) void {
         g_nodes[target].size = 0;
     }
 
-    for (&g_fds, 0..) |*fd, i| {
+    for (g_fds, 0..) |*fd, i| {
         if (fd.in_use) continue;
         fd.* = .{
             .in_use = true,
@@ -1128,9 +790,11 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     loop().default_on_message = @ptrCast(&onMessage);
     g_proc_endpoint = driver.procEndpoint();
 
-    // This filesystem's own root exists before anything can ask for it, and is
-    // the one node no request creates or removes.
-    g_nodes[ROOT] = .{ .in_use = true, .is_dir = true, .parent = ROOT };
+    // Hand the storage core its memory before anything can ask it for a block,
+    // and seed the filesystem's own root -- the one node no request creates or
+    // removes.
+    store.chunk_source = &wasmChunk;
+    store.reset();
 
     if (!resolveMount()) return;
 

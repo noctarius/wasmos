@@ -867,7 +867,11 @@ linked feature documents for rationale and rollout plans.
   wasm3 and WARP; the manifest's `max_memory` must exceed `initial_memory` or
   `memory.grow` is refused and the pool cannot grow at all. Contents are not
   persisted. Implements OPEN/READ/WRITE/SEEK/CLOSE/STAT/READDIR/CHDIR/MKDIR/
-  RMDIR/UNLINK/RENAME.
+  RMDIR/UNLINK/RENAME. The namespace and storage core is split into
+  `fs_tmpfs_store.zig`, which depends on the guest only through a `chunk_source`
+  seam and is therefore unit-tested on the host
+  (`tests/unit/test_fs_tmpfs_store.zig`, 25 cases, run by
+  `run-kernel-unit-tests`); the IPC layer above it needs a running guest.
 - NOT YET MOUNTED: `fs-manager` matches a mount NAME against a path's first
   segment, and `/` is a mount PATH rather than a name, so the pull is refused
   ("backend reported no usable mount name"). Longest-prefix routing

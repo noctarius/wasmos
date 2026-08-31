@@ -104,6 +104,7 @@
         "test_fs_write_smoke.py",
         "test_fsck_wfs_claim.py",
         "test_partition_manager_disk_arrival.py",
+        "test_vfs_root_mount.py",
         "test_virtio_blk.py",
         "test_volume_manager.py",
         "test_wfs_clean_unmount.py",

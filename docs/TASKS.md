@@ -1455,57 +1455,45 @@ Source: `architecture/19-virtual-terminal.md`,
   path is itself worth explaining before diagnosing the fault. A second CPU was
   concurrently in `warp_sync_linmem_for_pid`, which is where to look first.
 
-- [ ] [FEATURE][P2] Back the VFS root with a real filesystem (a tmpfs), so a mount
-  point is a DIRECTORY rather than a reserved top-level name. Today `fs-manager`
-  matches a path's FIRST SEGMENT against the mount table, so every mount is
-  top-level by construction: there is no way to express `/mnt/usb`, and `ls /` is
-  `send_virtual_root_listing` printing the mount table rather than reading a
-  directory.
+- [x] [FEATURE][P2] Back the VFS root with a real filesystem (a tmpfs), so a mount
+  point is a DIRECTORY rather than a reserved top-level name. DONE.
 
-  With a tmpfs at `/`: mount points are directories in it, routing becomes
-  longest-prefix over mount paths instead of first-segment matching, `ls /` is an
-  ordinary readdir, and mounting at any depth follows without a special case. It
-  also removes the last thing the deleted root-filesystem fallback was patching
-  over — a path naming no mount currently cannot be served at all, which is
-  correct but only because `/` holds nothing.
+  `fs-manager` holds a mount as an absolute canonical PATH and routes a request to
+  the longest such path prefixing it on a whole-segment boundary, so `/` is the
+  owner of last resort, `/wfs` does not own `/wfsx`, and `/mnt/usb` outranks
+  `/mnt` with no special case. A mount POINT is a directory `fs-manager` creates
+  in the filesystem covering it, ancestors included, which retired
+  `send_virtual_root_listing`: `ls /` is an ordinary forwarded readdir whose
+  entries the root filesystem holds.
 
-  A mount SHADOWS the directory it covers, as on Linux: the directory's previous
-  contents become unreachable for as long as the mount stands and reappear on
-  unmount, rather than the mount being refused unless the directory is empty.
-  That keeps mounting a property of the namespace rather than of the covered
+  A mount SHADOWS the directory it covers, as on Linux: the mount point is an
+  empty directory in the covering filesystem and a path under it reaches the
+  mount, so the covered contents are unreachable while the mount stands. That
+  keeps mounting a property of the namespace rather than of the covered
   filesystem's state, so a mount cannot fail because someone left a file behind.
 
-  DONE: the driver (`src/drivers/fs_tmpfs/`, Zig), `FS_TYPE_TMPFS` and its
-  `k_fs_types[]` row, and the kernel-init spawn of the `/` instance. The mount is
-  the `mount=` startup argument defaulting to `/`, and the class instance is a
-  fingerprint of it, so a tmpfs is a general in-memory filesystem that can be
-  mounted anywhere rather than a root-only one.
+  Covered by `tests/unit/test_fs_manager_path.c` (routing, 28 cases),
+  `tests/unit/test_fs_manager_backends.c` (mount-path normalization) and
+  `tests/test_vfs_root_mount.py` (end to end, filesystem battery). The write side
+  is driven by `src/utils/mkdir/`, added because the CLI had no way to create a
+  directory at all -- so nothing could demonstrate that `/` was writable rather
+  than merely listable.
 
   REMAINING:
-  - Longest-prefix routing over mount PATHS in `route_absolute_path` and
-    `fsmgr_route_path_for_mounts`, matching on whole segments so `/wfsx` does not
-    match a `/wfs` mount, with `/` always matching as the shortest. Until this
-    lands the tmpfs is refused registration outright: `/` is a mount path and
-    `fsmgr_apply_backend_info` has no name for it to match.
-  - Mount-point creation: `fs-manager` `mkdir`s the point in the covering
-    filesystem when a mount registers, which is what lets `readdir(/)` be a plain
-    forwarded readdir with no merge of mount names, and retires
-    `send_virtual_root_listing`.
-  - `fs_backend_t.mount_name` is 16 bytes, which bounds a mount PATH far more
-    tightly than it bounded a mount name. Widen it with the routing change.
-  - The tmpfs namespace and storage core IS covered on the host now
-    (`tests/unit/test_fs_tmpfs_store.zig`, 25 cases). What is still uncovered is
-    the IPC layer above it -- opcode dispatch, transfer-buffer handling, the
-    per-connection cwd -- which needs a running guest. Once `/` is mounted, an
-    integration test owes it open/read/write/readdir/rename through the FS path.
   - `FSMGR_CWD_MAX` is 128 bytes, which bounds the working directory a client can
-    hold for EVERY mount, not just the tmpfs -- a path built from
-    maximum-length components is unreachable on WFS for the same reason. Widen it
-    with the mount-path work above.
+    hold for EVERY mount -- a path of maximum-length components is unreachable on
+    WFS for the same reason. Widen it.
   - A second tmpfs instance cannot yet be spawned from a rule file:
     `parse_always_spawn_rule_line` reads only `SUBSYSTEM` and `RUN`, so a
     `SUBSYSTEM=="boot"` rule cannot carry `ENV{MOUNT}`. Either teach it to, or
     give `/tmp` and `/run` their instances from `sysinit`.
+  - The tmpfs `NAME_MAX` is 255 and its names live in the node record, so the
+    table costs 50 KiB whether names are long or not. Variable-length names in a
+    cell arena would not, at the cost of an allocator with reuse across rename and
+    unlink.
+  - No test mounts a volume at DEPTH. Routing supports it and
+    `ENV{MOUNT}="/mnt/usb"` needs no rule-language change, but nothing in the tree
+    exercises it, so the path is argued rather than demonstrated.
 
 - [ ] [REFACTOR][P2] Remove the PROCESS_MAX_COUNT ceiling without giving up slot
   stability. The count is a compile-time guess a boot has to fit under, and it has

@@ -56,10 +56,19 @@ typedef struct {
 } fs_backend_t;
 ```
 
-Up to 8 backends can be registered simultaneously. Each backend is identified
-by a `mount_name` prefix (e.g. `"/boot"`, `"/user"`, `"/init"`). Path
-routing is a prefix match: the request is forwarded to the backend whose
-`mount_name` is the longest matching prefix of the requested path.
+Up to 8 backends can be registered simultaneously. Each is identified by its
+`mount_path`, an absolute canonical path (`"/"`, `"/boot"`, `"/mnt/usb"`)
+normalized by `fsmgr_mount_path_from_reported` from whatever the backend
+reported. Routing forwards a request to the backend whose `mount_path` is the
+longest whole-segment prefix of it.
+
+A mount POINT is an ordinary directory: `fs_manager` creates it in the filesystem
+that covers it when the mount registers (`fsmgr_ensure_mount_points`), walking
+the ancestors so a mount at `/mnt/usb` gets `/mnt` too. That is what lets
+`readdir(/)` be a plain forwarded readdir — the mount names in it are entries the
+root filesystem holds, not names `fs_manager` appended to the reply. It runs after
+every registration and is idempotent, because a volume can mount before the root
+filesystem does and its point has to appear once the root arrives.
 
 Backends do NOT push a registration. `fs_manager` SUBSCRIBES to the `fs.backend`
 service class and enumerates it, then PULLS each provider's identity with
@@ -253,10 +262,11 @@ a mount's first segment and a mount can only exist at the top level. The kernel'
 init sequence therefore spawns an instance for `/` between `fs-manager` and
 `fs-init`, before any volume mounts.
 
-Serving the root also needs longest-prefix routing over mount PATHS, which
-`fs_manager` does not yet do: it declines a backend naming `/`, because `/` is a
-path and there is no mount NAME in it to match. Until that lands the instance
-runs and serves nothing (`docs/TASKS.md`).
+An instance mounted at `/` is what `ls /`, `cd /` and every path naming no other
+mount are served by. `tests/test_vfs_root_mount.py` pins that end to end: the
+root is reported as `fs-tmpfs`, the mount points are directories in it, `ls` and
+`cd` agree about what exists, and a path under a mount still reaches that mount
+rather than the root covering it.
 
 ### `fs_init` Backend
 
@@ -309,10 +319,11 @@ provided via a known physical address from the bootloader.
   working directory, so "no mount matched" is a statement about the PATH and never
   about the client.
 
-  Matching on the first segment means a mount can only exist at the TOP LEVEL.
-  Mounting deeper needs a root filesystem that owns real directories to mount
-  onto; `fs_tmpfs` is that filesystem, and longest-prefix routing over mount
-  paths is what remains. See `docs/TASKS.md`.
+  Once a root filesystem is mounted, every absolute path routes somewhere and
+  "not served" is reachable only on a system with nothing at `/`. The root is not
+  a fallback: it is an ordinary mount that happens to prefix every path, which is
+  why it cannot reintroduce the aliasing above — a path served by the root
+  filesystem is a path IN the root filesystem, and appears in its listing.
 
 ### Backend Identity
 
@@ -362,11 +373,13 @@ own transfer buffer for that, since such a request supplies none.
    providers are peers that may still be starting and blocking readiness on them
    would deadlock the boot sequence.
 
-2. **Path routing matches a mount name against the path's FIRST SEGMENT**
-   (`fsmgr_route_path_for_mounts`), so a mount can only exist at the top level.
-   Longest-prefix matching over mount PATHS — which is what makes `/mnt/usb` and
-   a shadowed mount point expressible — is the next step now that `/` has a
-   filesystem; see `docs/TASKS.md`.
+2. **Path routing is longest-prefix over mount PATHS, on whole segments**
+   (`fsmgr_route_path_for_mounts`). A mount is an absolute canonical path, the
+   owner of a request is the longest such path prefixing it, and a match must end
+   at a segment boundary so `/wfs` does not own `/wfsx`. `/` prefixes everything,
+   so the root filesystem is the owner of last resort rather than a case of its
+   own, and a mount at `/mnt/usb` needs no special handling — it simply outranks
+   `/mnt`.
 
 3. **`FS_IPC_READ_APP` is retired.** PM spawn now reads app blobs via
    `FS_IPC_READ_PATH` (see `process_manager_spawn.c`); `FS_IPC_READ_APP_REQ`

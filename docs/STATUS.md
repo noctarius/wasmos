@@ -876,20 +876,27 @@ linked feature documents for rationale and rollout plans.
   mount is creatable on a tmpfs; the node table costs 50 KiB for that parity.
   `FSMGR_CWD_MAX` (128) still bounds the working directory a client can hold, on
   every mount alike.
-- NOT YET MOUNTED: `fs-manager` matches a mount NAME against a path's first
-  segment, and `/` is a mount PATH rather than a name, so the pull is refused
-  ("backend reported no usable mount name"). Longest-prefix routing
-  over mount paths is the next step; until it lands the tmpfs runs and serves
-  nothing. A second tmpfs instance is also not yet spawnable from a rule file:
-  `SUBSYSTEM=="boot"` rules parse only `SUBSYSTEM` and `RUN`, so they cannot
-  carry `ENV{MOUNT}`.
+- MOUNTED AT `/`. `fs-manager` holds a mount as an absolute canonical PATH
+  (`fs_backend_t.mount_path`, 64 bytes) and routes a request to the longest such
+  path prefixing it on a whole-segment boundary, so `/` is the owner of last
+  resort, `/wfs` does not own `/wfsx`, and a mount at `/mnt/usb` outranks `/mnt`
+  without a special case. A mount POINT is a directory `fs-manager` creates in the
+  filesystem covering it (`fsmgr_ensure_mount_points`, ancestors included), which
+  is what retired `send_virtual_root_listing`: `ls /` is an ordinary forwarded
+  readdir whose entries the root filesystem actually holds. `cd /` on a system
+  with nothing mounted at `/` still succeeds and lists nothing. Pinned end to end
+  by `tests/test_vfs_root_mount.py` (filesystem battery). `src/utils/mkdir/` is
+  the CLI tool that exercises it: `mkdir [-p] <dir>...`, where `-p` creates every
+  missing ancestor and treats an existing directory as success. A second tmpfs instance
+  is still not spawnable from a rule file: `SUBSYSTEM=="boot"` rules parse only
+  `SUBSYSTEM` and `RUN`, so they cannot carry `ENV{MOUNT}`.
 - A backend reports its filesystem as `FS_TYPE_*` in `FSMGR_IPC_BACKEND_INFO_RESP`
   `arg1`, separately from `kind`; initfs reports `FS_TYPE_INITFS`, so a
   pseudo-filesystem is a value in that enum and a future devfs or sysfs needs no
   branch where a mount is named. `kind` only separates block-backed from initfs,
   so every block-backed backend shares one value; `mount` previously named the
   filesystem from it and reported both WFS volumes as `fs-fat`. The root
-  filesystem is likewise selected by mount name rather than by position in the
+  filesystem is likewise selected by its mount PATH rather than by position in the
   registration table, which had made it a function of registration order
   (`fs_manager_backends.c`, `tests/unit/test_fs_manager_backends.c`).
 - The working directory is a full canonical VFS path owned by `fs-manager`: every

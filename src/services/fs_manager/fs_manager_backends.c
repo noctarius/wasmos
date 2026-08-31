@@ -28,29 +28,54 @@ static char ascii_tolower(char c) {
     return (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : c;
 }
 
-int32_t fsmgr_mount_name_from_reported(const char* reported, char* out, uint32_t out_cap) {
+int32_t fsmgr_mount_path_from_reported(const char* reported, char* out, uint32_t out_cap) {
     const char* src;
     uint32_t len = 0;
+    uint32_t i;
 
-    if (!reported || !out || out_cap < 2u) {
+    if (!reported || !out || out_cap < 3u) {
         return 0;
     }
     out[0] = '\0';
-    src = (reported[0] == '/') ? &reported[1] : reported;
-    /* Empty after the strip: either the backend named nothing, or it named the
-     * root, which is a mount PATH and carries no mount name. */
-    if (src[0] == '\0') {
-        return 0;
+    /* One leading slash, however many the report carried: "boot", "/boot" and
+     * "//boot" are the same mount. */
+    src = reported;
+    while (*src == '/') {
+        src++;
     }
-    while (src[len] != '\0') {
+    out[len++] = '/';
+    for (i = 0u; src[i] != '\0'; ++i) {
         if (len + 1u >= out_cap) {
             out[0] = '\0';
             return 0;
         }
-        out[len] = ascii_tolower(src[len]);
-        len++;
+        out[len++] = ascii_tolower(src[i]);
     }
     out[len] = '\0';
+    /* Drop a trailing slash so "/boot/" is not a second mount; the root keeps its
+     * single one, which is the only path that legitimately ends in a slash. */
+    while (len > 1u && out[len - 1u] == '/') {
+        len--;
+        out[len] = '\0';
+    }
+    /* A report of nothing but slashes normalizes to the root, which IS a mount --
+     * but an EMPTY report does not name one, and neither does a path carrying a
+     * relative component, which nothing could route to. */
+    if (reported[0] == '\0') {
+        out[0] = '\0';
+        return 0;
+    }
+    for (i = 1u; i < len; ++i) {
+        if (out[i] != '.') {
+            continue;
+        }
+        if ((out[i - 1u] == '/') &&
+            (out[i + 1u] == '\0' || out[i + 1u] == '/' ||
+             (out[i + 1u] == '.' && (out[i + 2u] == '\0' || out[i + 2u] == '/')))) {
+            out[0] = '\0';
+            return 0;
+        }
+    }
     return 1;
 }
 

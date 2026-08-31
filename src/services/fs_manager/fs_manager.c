@@ -149,7 +149,6 @@ static fs_client_state_t* client_state(int32_t context_id) {
             slot->context_id = context_id;
             slot->mount = FS_MOUNT_ROOT;
             slot->backend_endpoint = -1;
-            slot->mount_depth = 0;
             client_state_init_cwd(slot);
             client_state_reset_fds(slot);
             return slot;
@@ -171,7 +170,6 @@ static fs_client_state_t* client_state(int32_t context_id) {
     chunk->slots[0].context_id = context_id;
     chunk->slots[0].mount = FS_MOUNT_ROOT;
     chunk->slots[0].backend_endpoint = -1;
-    chunk->slots[0].mount_depth = 0;
     client_state_init_cwd(&chunk->slots[0]);
     client_state_reset_fds(&chunk->slots[0]);
     return &chunk->slots[0];
@@ -221,18 +219,6 @@ static void fsmgr_fd_release(fs_client_state_t* state, int32_t client_fd) {
     entry->in_use = 0;
     entry->backend_endpoint = -1;
     entry->backend_fd = -1;
-}
-
-static fs_backend_t* backend_find_by_name(const char* name) {
-    if (!name) {
-        return 0;
-    }
-    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
-        if (g_backends[i].in_use && strcasecmp(g_backends[i].mount_name, name) == 0) {
-            return &g_backends[i];
-        }
-    }
-    return 0;
 }
 
 /* Register or update a backend at endpoint.  The caller sets the mount name from
@@ -347,42 +333,6 @@ static int32_t reply_to_client(int32_t source, int32_t type, int32_t request_id,
         source, g_fs_endpoint, type, request_id, a0, a1, a2, a3, FSMGR_REPLY_SEND_RETRIES);
 }
 
-static int send_virtual_root_listing(int32_t source, int32_t req_id) {
-    char root_listing[256] = {0};
-    uint32_t pos = 0;
-    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
-        if (!g_backends[i].in_use) {
-            continue;
-        }
-        uint32_t name_len = (uint32_t)strlen(g_backends[i].mount_name);
-        if (name_len + 2u >= (sizeof(root_listing) - pos)) {
-            break;
-        }
-        for (uint32_t j = 0; j < name_len; ++j) {
-            root_listing[pos++] = g_backends[i].mount_name[j];
-        }
-        root_listing[pos++] = '/';
-        root_listing[pos++] = '\n';
-        root_listing[pos] = '\0';
-    }
-    pos = 0;
-    uint32_t len = (uint32_t)strlen(root_listing);
-    while (pos < len) {
-        int32_t a0 = (int32_t)(uint8_t)root_listing[pos++];
-        int32_t a1 = 0, a2 = 0, a3 = 0;
-        if (pos < len)
-            a1 = (int32_t)(uint8_t)root_listing[pos++];
-        if (pos < len)
-            a2 = (int32_t)(uint8_t)root_listing[pos++];
-        if (pos < len)
-            a3 = (int32_t)(uint8_t)root_listing[pos++];
-        if (reply_to_client(source, FS_IPC_STREAM, req_id, a0, a1, a2, a3) != 0) {
-            return -1;
-        }
-    }
-    return reply_to_client(source, FS_IPC_RESP, req_id, 0, 0, 0, 0);
-}
-
 /* Returns WASMOS_ERR_NONE, or the packed reason the listing could not be sent. */
 static wasmos_error_code_t fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id) {
     char mounts[384];
@@ -397,7 +347,7 @@ static wasmos_error_code_t fsmgr_emit_mounts(int32_t source, int32_t req_id, int
         }
         kind = fsmgr_backend_fs_name(&g_backends[i]);
         n = snprintf(
-            mounts + pos, sizeof(mounts) - pos, "/%s -> %s", g_backends[i].mount_name, kind);
+            mounts + pos, sizeof(mounts) - pos, "%s -> %s", g_backends[i].mount_path, kind);
         if (n > 0 && (uint32_t)n < sizeof(mounts) - pos &&
             g_backends[i].kind == FSMGR_BACKEND_BLOCK && g_backends[i].has_meta) {
             uint8_t dev = (uint8_t)((g_backends[i].device_fn >> 4) & 0x1Fu);
@@ -529,10 +479,10 @@ static int is_path_op_type(int32_t type) {
            type == FS_IPC_MKDIR_REQ || type == FS_IPC_RMDIR_REQ;
 }
 
-static int32_t route_path_to_backend(const uint8_t* path_bytes, int32_t path_len,
-                                     int32_t allow_relative, char* out_path, int32_t out_path_cap,
-                                     int32_t* out_path_len, int32_t* out_backend) {
-    const char* mount_names[FS_BACKEND_CAP];
+static int32_t route_path_to_backend(const uint8_t* path_bytes, int32_t path_len, char* out_path,
+                                     int32_t out_path_cap, int32_t* out_path_len,
+                                     int32_t* out_backend) {
+    const char* mount_paths[FS_BACKEND_CAP];
     int32_t mount_endpoints[FS_BACKEND_CAP];
     int32_t mount_count = 0;
     int32_t mount_index = -1;
@@ -545,7 +495,7 @@ static int32_t route_path_to_backend(const uint8_t* path_bytes, int32_t path_len
         if (!g_backends[i].in_use) {
             continue;
         }
-        mount_names[mount_count] = g_backends[i].mount_name;
+        mount_paths[mount_count] = g_backends[i].mount_path;
         mount_endpoints[mount_count] = g_backends[i].endpoint;
         mount_count++;
     }
@@ -554,9 +504,8 @@ static int32_t route_path_to_backend(const uint8_t* path_bytes, int32_t path_len
     }
     routed = fsmgr_route_path_for_mounts((const char*)path_bytes,
                                          path_len,
-                                         mount_names,
+                                         mount_paths,
                                          mount_count,
-                                         allow_relative,
                                          &mount_index,
                                          out_path,
                                          out_path_cap,
@@ -569,23 +518,23 @@ static int32_t route_path_to_backend(const uint8_t* path_bytes, int32_t path_len
 }
 
 /* Route an absolute VFS path to the backend that serves it, and report the path
- * that backend should see, with the mount name stripped. The caller ends up with
+ * that backend should see, with the owning mount stripped. The caller ends up with
  * a backend and a path that backend can resolve on its own, which is what keeps a
  * client's working directory out of the backends.
  *
- * A path that names no mount is NOT SERVED. Every mount is named, so a path that
- * matches none names nothing, and the caller reports WASMOS_ERR_FS_NOT_FOUND.
- * There is deliberately no fallback backend: one that passed such a path to the
- * boot volume made `/system/utils/ip` resolve as an alias for
- * `/boot/system/utils/ip`, so the same file had two names, one of which appeared
- * in no listing -- `ls /` shows mounts, and `/system` was not among them while
- * `cd /system` succeeded. A second fallback of the same shape, keyed on the
- * client rather than the path, had already hidden broken working-directory
- * inheritance (see resolve_backend_for_state).
+ * The owner is the LONGEST mount path prefixing the request on a whole-segment
+ * boundary, so `/mnt/usb` is its own filesystem inside `/mnt` and `/wfs` does not
+ * own `/wfsx`. `/` prefixes every path, so once a root filesystem is mounted
+ * every absolute path routes somewhere and the root is the owner of last resort.
  *
- * Mounts are matched by first path segment, so a mount can only exist at the top
- * level. Mounting deeper wants a root filesystem that owns real directories to
- * mount ONTO; see docs/TASKS.md.
+ * With NO root filesystem mounted, a path matching no other mount is not served
+ * and the caller reports WASMOS_ERR_FS_NOT_FOUND. That is not a fallback rule:
+ * the root is an ordinary mount that happens to prefix everything, whereas the
+ * fallback this replaced sent unmatched paths to the BOOT volume, which made
+ * `/system/utils/ip` a second name for `/boot/system/utils/ip` that appeared in
+ * no listing. A second fallback of the same shape, keyed on the client rather
+ * than the path, had already hidden broken working-directory inheritance (see
+ * resolve_backend_for_state).
  *
  * Returns 1 with *out_backend and out_path set, 0 when no backend can serve it. */
 static int32_t route_absolute_path(const char* path, char* out_path, int32_t out_cap,
@@ -597,7 +546,7 @@ static int32_t route_absolute_path(const char* path, char* out_path, int32_t out
         return 0;
     }
     if (route_path_to_backend(
-            (const uint8_t*)path, path_len, 0, out_path, out_cap, out_path_len, out_backend) &&
+            (const uint8_t*)path, path_len, out_path, out_cap, out_path_len, out_backend) &&
         *out_backend >= 0) {
         return 1;
     }
@@ -722,10 +671,10 @@ static int route_rename_request(fs_client_state_t* state, int32_t buffer_id, int
     return 1;
 }
 
-/* Register a backend from its pulled info. `mount_name` is the name the backend
+/* Register a backend from its pulled info. `reported_mount` is what the backend
  * reported, already read out of the caller-owned buffer; normalizing it into the
- * mount fs-manager holds belongs to fsmgr_mount_name_from_reported, which also
- * decides which reported names yield no mount at all.
+ * absolute mount PATH fs-manager holds belongs to fsmgr_mount_path_from_reported,
+ * which also decides which reports name no mount at all.
  *
  * `fs_type` is the backend's FS_TYPE_*; `kind` distinguishes block-backed from
  * pseudo and cannot stand in for it. A backend that reports FS_TYPE_UNKNOWN is
@@ -737,13 +686,13 @@ static int route_rename_request(fs_client_state_t* state, int32_t buffer_id, int
  *
  * Shared by the initial class enumeration and ADD events. */
 static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t fs_type,
-                                     const char* mount_name, int32_t unit) {
+                                     const char* reported_mount, int32_t unit) {
     fs_backend_t* registered;
     /* Sized off the field it ends up in, so the two cannot drift. */
-    char mount[sizeof(((fs_backend_t*)0)->mount_name)];
+    char mount[sizeof(((fs_backend_t*)0)->mount_path)];
 
-    if (!fsmgr_mount_name_from_reported(mount_name, mount, (uint32_t)sizeof(mount))) {
-        printf("[fs-manager] backend reported no usable mount name; not registered\n");
+    if (!fsmgr_mount_path_from_reported(reported_mount, mount, (uint32_t)sizeof(mount))) {
+        printf("[fs-manager] backend reported no usable mount path; not registered\n");
         return;
     }
     registered = backend_register((uint8_t)kind, backend_endpoint);
@@ -752,7 +701,7 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
     }
     registered->unit = (uint8_t)(unit & 0xFF);
     registered->fs_type = (uint32_t)fs_type;
-    str_copy(registered->mount_name, sizeof(registered->mount_name), mount);
+    str_copy(registered->mount_path, sizeof(registered->mount_path), mount);
     /* NOTE: do NOT call backend_refresh_boot_meta() here. This runs while
      * handling a class-discovery event, and that helper does a SYNCHRONOUS
      * DEVMGR_QUERY_MOUNT_REQ round-trip to device-manager — which at this point
@@ -761,6 +710,149 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
      * identity, not required to mount.
      * TODO(fs-class-discovery): refetch boot meta out of band (device-manager
      * push, or a fs-manager idle step) rather than a nested synchronous call. */
+}
+
+/* Create one directory in `backend`, under the path that backend sees.
+ *
+ * fs-manager owns the buffer the path travels in (g_cwd_bid), because a
+ * registration supplies none -- the same reason backend_sync_cwd owns one. An
+ * EXISTS reply is success: this runs on every registration and a mount point that
+ * is already there is the expected case, not a conflict.
+ *
+ * Returns 0 when the directory exists afterwards, whether this call made it. */
+static int fsmgr_backend_mkdir(int32_t backend, const char* path, int32_t request_id) {
+    int32_t rr_t = FS_IPC_ERROR, rr0 = -1, rr1 = 0, rr2 = 0, rr3 = 0;
+    int32_t len;
+    int32_t borrow;
+    int32_t rc;
+
+    if (backend < 0 || !path || path[0] != '/' || path[1] == '\0' || g_cwd_bid < 0) {
+        return -1;
+    }
+    len = (int32_t)strlen(path);
+    if (len >= wasmos_xfer_buffer_size()) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(g_cwd_bid, (const uint8_t*)path, len, 0) != 0) {
+        return -1;
+    }
+    borrow = wasmos_xfer_buffer_borrow(backend, g_cwd_bid, WASMOS_BUFFER_GRANT_READ);
+    if (borrow < 0) {
+        return -1;
+    }
+    rc = forward_request(backend,
+                         FS_IPC_MKDIR_REQ,
+                         request_id,
+                         len,
+                         0,
+                         g_cwd_bid,
+                         borrow,
+                         /* No client is waiting on this, so there is nobody to
+                          * relay a STREAM frame to. MKDIR never sends one; if it
+                          * ever did, the relay's send fails and the call reports
+                          * failure rather than answering a stranger. */
+                         -1,
+                         &rr_t,
+                         &rr0,
+                         &rr1,
+                         &rr2,
+                         &rr3);
+    (void)wasmos_xfer_buffer_unborrow(borrow);
+    if (rc != 0) {
+        return -1;
+    }
+    if (rr_t == FS_IPC_RESP && rr0 == 0) {
+        return 0;
+    }
+    return rr0 == WASMOS_ERR_FS_EXISTS ? 0 : -1;
+}
+
+/* Make every registered mount PATH exist as a directory in the filesystem that
+ * covers it, so a mount point is an ordinary entry in an ordinary listing.
+ *
+ * This is what retires the invented root listing: `ls /` forwards to the root
+ * filesystem and finds `boot`, `user` and `wfs` there because they were created,
+ * rather than because fs-manager appended the mount table to the reply.
+ *
+ * Each ancestor of a mount path is created in turn, shallowest first, so a mount
+ * at `/mnt/usb` gets `/mnt` too -- routing an ancestor finds whichever mount
+ * covers it, which is the root for a top-level mount and the parent filesystem
+ * for a nested one.
+ *
+ * Runs after EVERY registration and is idempotent, because the order backends
+ * register in is not ours to choose: a volume can mount before the root
+ * filesystem does, and its mount point has to appear once the root arrives.
+ * Failures are ignored -- a read-only backend refuses MKDIR, and a mount under
+ * one is simply not visible in its listing, which is a cosmetic loss and not a
+ * routing one. */
+static void fsmgr_ensure_mount_points(void) {
+    uint32_t i;
+    int32_t request_id = 8;
+
+    for (i = 0; i < FS_BACKEND_CAP; ++i) {
+        const char* mount;
+        int32_t seg_end;
+
+        if (!g_backends[i].in_use) {
+            continue;
+        }
+        mount = g_backends[i].mount_path;
+        if (mount[0] != '/' || mount[1] == '\0') {
+            continue; /* the root itself is nobody's mount point */
+        }
+        /* Walk the ancestors: "/mnt", then "/mnt/usb". */
+        for (seg_end = 1; mount[seg_end - 1] != '\0';) {
+            char ancestor[FSMGR_MOUNT_PATH_MAX];
+            char parent[FSMGR_MOUNT_PATH_MAX];
+            char tail[FSMGR_MOUNT_PATH_MAX];
+            char target[FSMGR_MOUNT_PATH_MAX + FSMGR_MOUNT_PATH_MAX];
+            int32_t tail_len = 0;
+            int32_t backend = -1;
+            int32_t cut;
+
+            while (mount[seg_end] != '/' && mount[seg_end] != '\0') {
+                seg_end++;
+            }
+            if (seg_end >= (int32_t)sizeof(ancestor)) {
+                break;
+            }
+            memcpy(ancestor, mount, (uint32_t)seg_end);
+            ancestor[seg_end] = '\0';
+
+            /* The covering mount is found by routing the ancestor's PARENT: the
+             * ancestor may itself be a mount, and routing it would then answer
+             * with that mount rather than with what contains it. */
+            cut = seg_end;
+            while (cut > 1 && ancestor[cut - 1] != '/') {
+                cut--;
+            }
+            while (cut > 1 && ancestor[cut - 1] == '/') {
+                cut--;
+            }
+            memcpy(parent, ancestor, (uint32_t)cut);
+            parent[cut] = '\0';
+            if (cut == 0) {
+                parent[0] = '/';
+                parent[1] = '\0';
+            }
+            if (route_absolute_path(parent, tail, (int32_t)sizeof(tail), &tail_len, &backend)) {
+                const char* leaf = &ancestor[cut];
+                while (*leaf == '/') {
+                    leaf++;
+                }
+                if (tail_len == 1 && tail[0] == '/') {
+                    (void)snprintf(target, sizeof(target), "/%s", leaf);
+                } else {
+                    (void)snprintf(target, sizeof(target), "%s/%s", tail, leaf);
+                }
+                (void)fsmgr_backend_mkdir(backend, target, request_id++);
+            }
+            if (mount[seg_end] == '\0') {
+                break;
+            }
+            seg_end++; /* step over the separator onto the next segment */
+        }
+    }
 }
 
 /* Pull a discovered backend's info over FSMGR_IPC_BACKEND_INFO and register it.
@@ -778,13 +870,13 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
  * A backend that names no mount is not registered: nothing else knows where it
  * belongs, so there is no default to fall back to. */
 static void fsmgr_pull_backend(int32_t backend_endpoint) {
-    char mount_name[16];
+    char reported_mount[FSMGR_MOUNT_PATH_MAX];
     int32_t bid;
     int32_t name_len;
     if (backend_endpoint < 0) {
         return;
     }
-    bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(mount_name));
+    bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(reported_mount));
     if (bid < 0) {
         return;
     }
@@ -797,19 +889,23 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
         return;
     }
     name_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    if (name_len <= 0 || name_len >= (int32_t)sizeof(mount_name) ||
-        wasmos_sys_buffer_read(bid, mount_name, name_len, 0) != 0) {
+    if (name_len <= 0 || name_len >= (int32_t)sizeof(reported_mount) ||
+        wasmos_sys_buffer_read(bid, reported_mount, name_len, 0) != 0) {
         printf("[fs-manager] backend named no mount; not registered\n");
         (void)wasmos_xfer_buffer_release(bid);
         return;
     }
-    mount_name[name_len] = '\0';
+    reported_mount[name_len] = '\0';
     fsmgr_apply_backend_info(backend_endpoint,
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
-                             mount_name,
+                             reported_mount,
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3));
     (void)wasmos_xfer_buffer_release(bid);
+    /* The table changed, so the mount points may be incomplete: this backend's
+     * own point did not exist before now, and an earlier backend's point could
+     * not be created until the filesystem covering it registered. */
+    fsmgr_ensure_mount_points();
 }
 
 /* Drop a backend that left its class (provider died / unregistered). */
@@ -866,7 +962,6 @@ static int handle_clone_cwd_req(int32_t source, int32_t source_owner, int32_t re
     }
     dst_state->mount = src_state->mount;
     dst_state->backend_endpoint = src_state->backend_endpoint;
-    dst_state->mount_depth = src_state->mount_depth;
     /* The working directory is the full VFS path, so that is what is cloned. A
      * child that inherited only (mount, depth) landed at the mount root, which
      * is not where its spawner stood. */
@@ -1039,18 +1134,6 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
 
 /* Count segments below the mount root in a canonical absolute VFS path, so
  * "/wfs" is 0 and "/wfs/docs" is 1. */
-static uint16_t cwd_depth_below_mount(const char* path) {
-    uint16_t depth = 0;
-    int32_t i = 1; /* skip the leading '/' */
-    while (path[i] != '\0') {
-        if (path[i] == '/') {
-            depth++;
-        }
-        i++;
-    }
-    return depth;
-}
-
 /* Tell `backend` which directory subsequent path-less operations refer to.
  *
  * READDIR carries no path, so the backend has to hold a current directory of its
@@ -1136,8 +1219,11 @@ static int32_t chdir_report_cwd(const fs_client_state_t* state, int32_t buffer_i
  * to a mount. Nothing is committed until the backend confirms the directory
  * exists, so a failed chdir leaves the client exactly where it was.
  *
- * The VFS root is served by fs-manager itself: it has no backend, and its
- * listing is the mount table.
+ * `/` is an ordinary mount now, so it needs no case of its own: it routes to the
+ * root filesystem like any other path. The one exception is a system with NO root
+ * filesystem mounted, where `cd /` still has to work -- a client must be able to
+ * stand somewhere it can name other mounts from -- so the client is placed at the
+ * root with no backend and a listing there finds nothing.
  *
  * Always answers the client; the return value is 1 so the caller stops. */
 static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t request_id,
@@ -1171,20 +1257,20 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
         send_fs_error(source, request_id, WASMOS_ERR_FS_PATH_TOO_LONG);
         return 1;
     }
-    /* The VFS root is served by fs-manager itself: it has no backend, and its
-     * listing is the mount table. */
-    if (target[1] == '\0') {
+    if (!route_absolute_path(target, tail, (int32_t)sizeof(tail), &tail_len, &backend)) {
+        /* Nothing owns it. For the root that means no root filesystem is
+         * mounted, and standing there is still legal; for anything else the
+         * directory does not exist. */
+        if (target[1] != '\0') {
+            send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_FOUND);
+            return 1;
+        }
         state->mount = FS_MOUNT_ROOT;
         state->backend_endpoint = -1;
-        state->mount_depth = 0;
         state->cwd[0] = '/';
         state->cwd[1] = '\0';
         (void)reply_to_client(
             source, FS_IPC_RESP, request_id, 0, chdir_report_cwd(state, buffer_id), 0, 0);
-        return 1;
-    }
-    if (!route_absolute_path(target, tail, (int32_t)sizeof(tail), &tail_len, &backend)) {
-        send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_FOUND);
         return 1;
     }
     synced = backend_sync_cwd(backend, request_id, tail, source);
@@ -1197,7 +1283,6 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
     str_copy(state->cwd, sizeof(state->cwd), target);
     state->mount = FS_MOUNT_BACKEND;
     state->backend_endpoint = backend;
-    state->mount_depth = cwd_depth_below_mount(target);
     (void)reply_to_client(
         source, FS_IPC_RESP, request_id, 0, chdir_report_cwd(state, buffer_id), 0, 0);
     return 1;
@@ -1303,11 +1388,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
         if (type == FS_IPC_READ_PATH_REQ) {
             (void)handle_read_path_req(state, source, request_id, arg0, arg1f, arg2f, arg3f);
-            continue;
-        }
-
-        if (type == FS_IPC_READDIR_REQ && state->mount == FS_MOUNT_ROOT) {
-            (void)send_virtual_root_listing(source, request_id);
             continue;
         }
 

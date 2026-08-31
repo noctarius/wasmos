@@ -28,25 +28,32 @@
  * Returns a static string; never NULL, including for a NULL backend. */
 const char* fsmgr_backend_fs_name(const fs_backend_t* backend);
 
-/* Turn the mount name a backend REPORTED in FSMGR_IPC_BACKEND_INFO_RESP into the
- * mount name fs-manager holds: a leading '/' is dropped and the result is
- * lower-cased, so "/Boot" and "boot" are one mount.
+/* Turn what a backend REPORTED in FSMGR_IPC_BACKEND_INFO_RESP into the absolute
+ * canonical mount path fs-manager holds.
  *
- * Returns 1 with `out` holding a NUL-terminated name, or 0 -- leaving `out` empty
- * -- when the reported name yields none. Three things yield none, and the second
- * is the one that is easy to miss:
+ * A backend may report its mount with or without a leading slash ("boot" and
+ * "/boot" are the same mount, and both spellings are live in the tree), so one is
+ * ensured rather than required. The result is lower-cased, so "/Boot" and "boot"
+ * are one mount, and any trailing slash is dropped so "/boot/" is not a second
+ * mount -- except for the root, which IS a single slash.
  *
- * - An empty reported name. A backend MUST name its mount; nothing on this side
- *   knows where a backend belongs, so there is no default to fall back to.
- * - A reported name of exactly "/". That names the VFS ROOT, which is a mount
- *   PATH and not a mount name: while routing matches a path's FIRST SEGMENT there
- *   is nothing in "/" for it to match. Registering it would seat a backend no
- *   path can reach, which still holds one of the FS_BACKEND_CAP slots and still
- *   prints a bare "/" entry into the root listing.
- * - A name that does not fit out_cap. Refused rather than truncated, because a
- *   shortened mount name names a different mount.
+ * "/" is a legal mount path and names the root filesystem. Routing matches the
+ * longest mount path prefixing a request, so the root is the mount of last resort
+ * rather than a name with nothing to match.
  *
- * A NULL argument or an out_cap below 2 is also a refusal. */
-int32_t fsmgr_mount_name_from_reported(const char* reported, char* out, uint32_t out_cap);
+ * Returns 1 with `out` holding a NUL-terminated absolute path, or 0 -- leaving
+ * `out` empty -- when the report yields no mount:
+ *
+ * - An empty report, or one that is only slashes other than the root's single
+ *   one. A backend MUST name its mount; nothing on this side knows where a
+ *   backend belongs, so there is no default to fall back to.
+ * - A path that does not fit out_cap. Refused rather than truncated, because a
+ *   shortened mount path is a different mount.
+ * - A NULL argument, or an out_cap below 3 (the shortest path plus a NUL is "/"
+ *   and one leading slash may have to be added).
+ *
+ * The report is NOT otherwise canonicalized: an interior "." or ".." makes a
+ * mount path nothing can route to, and is refused for that reason. */
+int32_t fsmgr_mount_path_from_reported(const char* reported, char* out, uint32_t out_cap);
 
 #endif

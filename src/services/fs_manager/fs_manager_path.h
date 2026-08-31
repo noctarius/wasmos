@@ -39,8 +39,8 @@
 int32_t fsmgr_cwd_join(const char* cwd, const char* arg, char* out_path, int32_t out_cap);
 
 int32_t fsmgr_route_path_for_mounts(const char* path, int32_t path_len,
-                                    const char* const* mount_names, int32_t mount_count,
-                                    int32_t allow_relative, int32_t* out_mount_index,
-                                    char* out_path, int32_t out_path_cap, int32_t* out_path_len);
+                                    const char* const* mount_paths, int32_t mount_count,
+                                    int32_t* out_mount_index, char* out_path, int32_t out_path_cap,
+                                    int32_t* out_path_len);
 
 #endif

@@ -44,7 +44,7 @@ class NetStackIfaddrE2ETest(unittest.TestCase):
 
         # Show the current address via the IFADDR_LIST path.
         show1 = session.mark()
-        session.send("spawn /system/utils/ip addr show")
+        session.send("spawn /boot/system/utils/ip addr show")
         self.assertTrue(
             session.expect_from(show1, b"[ip] eth0: 10.0.2.15/24", timeout_s=30),
             "ip addr show did not report the configured address",
@@ -52,7 +52,7 @@ class NetStackIfaddrE2ETest(unittest.TestCase):
 
         # Change the address via the IFADDR_ADD path.
         add = session.mark()
-        session.send("spawn /system/utils/ip addr add 10.0.2.50/24 dev eth0")
+        session.send("spawn /boot/system/utils/ip addr add 10.0.2.50/24 dev eth0")
         self.assertTrue(
             session.expect_from(add, b"[ip] addr add ok", timeout_s=30),
             "ip addr add did not succeed",
@@ -60,7 +60,7 @@ class NetStackIfaddrE2ETest(unittest.TestCase):
 
         # The change must be observable through a fresh list.
         show2 = session.mark()
-        session.send("spawn /system/utils/ip addr show")
+        session.send("spawn /boot/system/utils/ip addr show")
         self.assertTrue(
             session.expect_from(show2, b"[ip] eth0: 10.0.2.50/24", timeout_s=30),
             "ip addr show did not reflect the new address",
@@ -73,13 +73,13 @@ class NetStackIfaddrE2ETest(unittest.TestCase):
 
         # Bring the interface administratively down, then confirm via show.
         down = session.mark()
-        session.send("spawn /system/utils/ip dev eth0 down")
+        session.send("spawn /boot/system/utils/ip dev eth0 down")
         self.assertTrue(
             session.expect_from(down, b"[ip] dev down ok", timeout_s=30),
             "ip dev down did not succeed",
         )
         show3 = session.mark()
-        session.send("spawn /system/utils/ip addr show")
+        session.send("spawn /boot/system/utils/ip addr show")
         self.assertTrue(
             session.expect_from(show3, b"state down", timeout_s=30),
             "interface did not report administratively down",
@@ -87,13 +87,13 @@ class NetStackIfaddrE2ETest(unittest.TestCase):
 
         # Bring it back up.
         up = session.mark()
-        session.send("spawn /system/utils/ip dev eth0 up")
+        session.send("spawn /boot/system/utils/ip dev eth0 up")
         self.assertTrue(
             session.expect_from(up, b"[ip] dev up ok", timeout_s=30),
             "ip dev up did not succeed",
         )
         show4 = session.mark()
-        session.send("spawn /system/utils/ip addr show")
+        session.send("spawn /boot/system/utils/ip addr show")
         self.assertTrue(
             session.expect_from(show4, b"state up", timeout_s=30),
             "interface did not report administratively up again",

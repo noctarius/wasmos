@@ -216,26 +216,33 @@ provided via a known physical address from the bootloader.
   (the backend sees a root-relative path).
 - Refuses rather than truncates when a result does not fit: a shortened path
   names a different file, which the caller would then open unknowingly.
-- Routes the resulting absolute path to a mount, or — when its first segment names
-  no mount — to the boot volume as the ROOT FILESYSTEM, passed through whole
-  (`route_absolute_path`). `/system/utils/ip` and `/apps/calculator` are paths on
-  that volume, not mounts, and the shell and the spawn path use them throughout.
+- Routes the resulting absolute path to a mount, matched on its FIRST SEGMENT
+  (`route_absolute_path`). A path that names no mount is NOT SERVED: the caller
+  reports `WASMOS_ERR_FS_NOT_FOUND`.
+
+  **There is no fallback backend, deliberately.** Every mount is named, so a path
+  matching none names nothing. Serving such a path from the boot volume made
+  `/system/utils/ip` resolve as a second name for `/boot/system/utils/ip`, and the
+  alias appeared in no listing — `ls /` enumerates mounts, `/system` was not among
+  them, and `cd /system` succeeded anyway. Nothing in the system emitted such a
+  path: the CLI's `PATH` is `/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils`,
+  the device-manager rule roots are `/init/…` and `/boot/…`, and a full boot never
+  reached the fallback. Its only population was paths typed by hand.
+
+  A second fallback of the same shape, keyed on the CLIENT rather than the path,
+  had already shipped and hidden broken working-directory inheritance for as long
+  as there was a single non-root mount: a relative name typed in `/wfs` was handed
+  to the FAT driver, which answered NOT_FOUND, and the driver holding the file was
+  never asked (`resolve_backend_for_state`).
 
   The distinction that carries the weight is ABSOLUTE vs relative, not routed vs
   unrouted. Routing is reached only after a name has been joined onto the client's
-  working directory, so "no mount matched" means "the root filesystem" and never
-  "this client has no directory". Answering the latter with a backend is what hid
-  broken working-directory inheritance for as long as there was a single non-root
-  mount: a relative name typed in `/wfs` was handed to the FAT driver, which
-  answered NOT_FOUND, and the driver holding the file was never asked.
+  working directory, so "no mount matched" is a statement about the PATH and never
+  about the client.
 
-  The root backend is selected by MOUNT NAME (`FSMGR_ROOT_MOUNT_NAME`,
-  `fsmgr_select_root_backend`), not by position in the registration table. One
-  block-backed backend registers per mounted volume, so selecting the first one
-  makes the root filesystem a function of registration order; every unrouted
-  absolute path would then be served by whichever volume mounted first. No root
-  filesystem exists until the boot volume registers, and that state is distinct
-  from "the first registered backend".
+  Matching on the first segment means a mount can only exist at the TOP LEVEL.
+  Mounting deeper needs a root filesystem that owns real directories to mount
+  onto; see `docs/TASKS.md`.
 
 ### Backend Identity
 

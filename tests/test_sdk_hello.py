@@ -82,7 +82,7 @@ class SdkHelloTest(unittest.TestCase):
             )
 
     def test_exec_sdk_hello(self):
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect(
             "sdkhello",
             [
@@ -99,7 +99,7 @@ class SdkHelloTest(unittest.TestCase):
         The path is echoed back by the program, so a tokenizer that shifted the
         arguments down would print argc=1 and the default path instead.
         """
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect(
             "sdkhello /boot/system/net/interfaces",
             [
@@ -119,7 +119,7 @@ class SdkHelloTest(unittest.TestCase):
         default puts the app's globals past the kernel's user-VA mirror region,
         where host calls that write to WASM memory fail SILENTLY. Running the
         module is the only way to know the driver got both right."""
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect("sdkzig", [b"Hello WASMOS from Zig via the SDK!"])
 
     @unittest.skipUnless(
@@ -132,7 +132,7 @@ class SdkHelloTest(unittest.TestCase):
         under the name runtime.ts imports, not the developer's filename. Whether
         that staging produced a module the runtime can instantiate is only
         answerable by running it."""
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect("sdkas", [b"Hello WASMOS from AssemblyScript via the SDK!"])
 
     @unittest.skipUnless(
@@ -146,7 +146,7 @@ class SdkHelloTest(unittest.TestCase):
         driver uses and checks the resulting layout, and the binding is staged as a
         sibling module so a plain `mod wasmos;` resolves. Running the module is what
         says both worked."""
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect("sdkrust", [b"Hello WASMOS from Rust via the SDK!"])
 
     @unittest.skipUnless(
@@ -158,7 +158,7 @@ class SdkHelloTest(unittest.TestCase):
         relative to TINYGOROOT, so wasmos-tinygo generates that file per invocation
         after asking tinygo where its root is, with the C shims' paths computed
         against it. Nothing about that is checkable short of running the module."""
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("cd /boot/apps", [b"/boot/apps wamos>"])
         self._cmd_expect("sdkgo", [b"Hello WASMOS from Go via the SDK!"])
 
 

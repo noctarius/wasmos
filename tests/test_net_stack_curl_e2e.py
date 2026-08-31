@@ -88,7 +88,7 @@ class NetStackCurlE2ETest(unittest.TestCase):
 
         # 1) body to stdout
         mark = session.mark()
-        session.send("spawn /system/utils/curl " + target)
+        session.send("spawn /boot/system/utils/curl " + target)
         self.assertTrue(
             session.expect_from(mark, _BODY, timeout_s=45),
             "curl did not print the HTTP body to stdout",
@@ -96,7 +96,9 @@ class NetStackCurlE2ETest(unittest.TestCase):
 
         # 2) body to a file in the writable /boot volume, then read it back
         mark = session.mark()
-        session.send("spawn /system/utils/curl " + target + " -o /boot/curl_dl.txt")
+        session.send(
+            "spawn /boot/system/utils/curl " + target + " -o /boot/curl_dl.txt"
+        )
         self.assertTrue(
             session.expect_from(
                 mark, b"[curl] wrote 19 bytes to /boot/curl_dl.txt", timeout_s=45
@@ -113,7 +115,7 @@ class NetStackCurlE2ETest(unittest.TestCase):
         # 3) a full URL with scheme + query + fragment still resolves and fetches
         mark = session.mark()
         session.send(
-            "spawn /system/utils/curl http://10.0.2.2:%d/hello?a=1#frag" % _PORT
+            "spawn /boot/system/utils/curl http://10.0.2.2:%d/hello?a=1#frag" % _PORT
         )
         self.assertTrue(
             session.expect_from(mark, _BODY, timeout_s=45),

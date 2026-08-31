@@ -612,45 +612,29 @@ static int32_t route_path_to_backend(const uint8_t* path_bytes, int32_t path_len
     return 1;
 }
 
-/* Root filesystem: the backend serving paths that name no mount.
- *
- * The VFS root lists the mounts, but the boot volume is also the ROOT
- * FILESYSTEM: "/system/utils/ip" and "/apps/calculator" are paths the shell and
- * the spawn path use throughout, and they name directories on that volume, not
- * mounts. A path whose first segment matches no mount is therefore served here
- * rather than refused. Returns NULL until the boot volume registers, which is
- * distinct from returning the first registered backend: several block-backed
- * backends register per boot, and selecting by registration order would hand
- * every unrouted absolute path to whichever volume was mounted first. */
-static fs_backend_t* backend_root_fs(void) {
-    int32_t index = fsmgr_select_root_backend(g_backends, FS_BACKEND_CAP);
-    if (index < 0) {
-        return 0;
-    }
-    return &g_backends[index];
-}
-
 /* Route an absolute VFS path to the backend that serves it, and report the path
- * that backend should see.
+ * that backend should see, with the mount name stripped. The caller ends up with
+ * a backend and a path that backend can resolve on its own, which is what keeps a
+ * client's working directory out of the backends.
  *
- * A path under a mount has the mount name stripped; a path that names no mount
- * belongs to the root filesystem and is passed through whole. Either way the
- * caller ends up with a backend and a path that backend can resolve on its own,
- * which is what keeps a client's working directory out of the backends.
+ * A path that names no mount is NOT SERVED. Every mount is named, so a path that
+ * matches none names nothing, and the caller reports WASMOS_ERR_FS_NOT_FOUND.
+ * There is deliberately no fallback backend: one that passed such a path to the
+ * boot volume made `/system/utils/ip` resolve as an alias for
+ * `/boot/system/utils/ip`, so the same file had two names, one of which appeared
+ * in no listing -- `ls /` shows mounts, and `/system` was not among them while
+ * `cd /system` succeeded. A second fallback of the same shape, keyed on the
+ * client rather than the path, had already hidden broken working-directory
+ * inheritance (see resolve_backend_for_state).
  *
- * The distinction that matters is ABSOLUTE vs relative, not routed vs
- * unrouted: this is only ever reached after a client path has been joined onto
- * the client's working directory, so "no mount matched" means "the root
- * filesystem", never "this client has no directory". Answering the latter with a
- * backend is what hid broken working-directory inheritance for as long as there
- * was only one non-root mount.
+ * Mounts are matched by first path segment, so a mount can only exist at the top
+ * level. Mounting deeper wants a root filesystem that owns real directories to
+ * mount ONTO; see docs/TASKS.md.
  *
  * Returns 1 with *out_backend and out_path set, 0 when no backend can serve it. */
 static int32_t route_absolute_path(const char* path, char* out_path, int32_t out_cap,
                                    int32_t* out_path_len, int32_t* out_backend) {
     int32_t path_len = (int32_t)strlen(path);
-    fs_backend_t* root_fs;
-    int32_t i;
 
     if (path_len <= 0 || path[0] != '/' || !out_path || out_cap < 2 || !out_path_len ||
         !out_backend) {
@@ -661,17 +645,7 @@ static int32_t route_absolute_path(const char* path, char* out_path, int32_t out
         *out_backend >= 0) {
         return 1;
     }
-    root_fs = backend_root_fs();
-    if (!root_fs || path_len >= out_cap) {
-        return 0;
-    }
-    for (i = 0; i < path_len; ++i) {
-        out_path[i] = path[i];
-    }
-    out_path[path_len] = '\0';
-    *out_path_len = path_len;
-    *out_backend = root_fs->endpoint;
-    return 1;
+    return 0;
 }
 
 /* Read the path from the source endpoint's xfer buffer, strip the mount prefix,

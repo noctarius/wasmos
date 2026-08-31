@@ -1455,6 +1455,31 @@ Source: `architecture/19-virtual-terminal.md`,
   path is itself worth explaining before diagnosing the fault. A second CPU was
   concurrently in `warp_sync_linmem_for_pid`, which is where to look first.
 
+- [ ] [FEATURE][P2] Back the VFS root with a real filesystem (a tmpfs), so a mount
+  point is a DIRECTORY rather than a reserved top-level name. Today `fs-manager`
+  matches a path's FIRST SEGMENT against the mount table, so every mount is
+  top-level by construction: there is no way to express `/mnt/usb`, and `ls /` is
+  `send_virtual_root_listing` printing the mount table rather than reading a
+  directory.
+
+  With a tmpfs at `/`: mount points are directories in it, routing becomes
+  longest-prefix over mount paths instead of first-segment matching, `ls /` is an
+  ordinary readdir, and mounting at any depth follows without a special case. It
+  also removes the last thing the deleted root-filesystem fallback was patching
+  over — a path naming no mount currently cannot be served at all, which is
+  correct but only because `/` holds nothing.
+
+  A tmpfs is a `FSMGR_BACKEND_PSEUDO` backend reporting a new `FS_TYPE_TMPFS`, so
+  it costs one row in `abi/constants.yaml` and one in `k_fs_types[]` and no branch
+  anywhere (`fs_manager_backends.c`). Wants: the tmpfs driver itself,
+  longest-prefix routing in `route_absolute_path`, and mount-point creation.
+
+  A mount SHADOWS the directory it covers, as on Linux: the directory's previous
+  contents become unreachable for as long as the mount stands and reappear on
+  unmount, rather than the mount being refused unless the directory is empty.
+  That keeps mounting a property of the namespace rather than of the covered
+  filesystem's state, so a mount cannot fail because someone left a file behind.
+
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 
 - [ ] [FEATURE][P2] Route an app's output to its controlling tty instead of straight to

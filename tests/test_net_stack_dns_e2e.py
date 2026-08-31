@@ -45,7 +45,7 @@ class NetStackDnsE2ETest(unittest.TestCase):
 
         # The default ifcfg sets a single resolver (10.0.2.3, the SLIRP DNS).
         show1 = session.mark()
-        session.send("spawn /system/utils/ip dns show")
+        session.send("spawn /boot/system/utils/ip dns show")
         self.assertTrue(
             session.expect_from(show1, b"[ip] dns 10.0.2.3", timeout_s=30),
             "ip dns show did not report the ifcfg resolver",
@@ -53,14 +53,14 @@ class NetStackDnsE2ETest(unittest.TestCase):
 
         # Replace the resolver list at runtime.
         setm = session.mark()
-        session.send("spawn /system/utils/ip dns set 8.8.8.8 1.1.1.1")
+        session.send("spawn /boot/system/utils/ip dns set 8.8.8.8 1.1.1.1")
         self.assertTrue(
             session.expect_from(setm, b"[ip] dns set ok", timeout_s=30),
             "ip dns set did not succeed",
         )
 
         show2 = session.mark()
-        session.send("spawn /system/utils/ip dns show")
+        session.send("spawn /boot/system/utils/ip dns show")
         self.assertTrue(
             session.expect_from(show2, b"[ip] dns 8.8.8.8", timeout_s=30),
             "ip dns show did not reflect the first new server",
@@ -72,13 +72,13 @@ class NetStackDnsE2ETest(unittest.TestCase):
 
         # Remove one server; the other must remain.
         delm = session.mark()
-        session.send("spawn /system/utils/ip dns del 8.8.8.8")
+        session.send("spawn /boot/system/utils/ip dns del 8.8.8.8")
         self.assertTrue(
             session.expect_from(delm, b"[ip] dns del ok", timeout_s=30),
             "ip dns del did not succeed",
         )
         show3 = session.mark()
-        session.send("spawn /system/utils/ip dns show")
+        session.send("spawn /boot/system/utils/ip dns show")
         self.assertTrue(
             session.expect_from(show3, b"[ip] dns 1.1.1.1", timeout_s=30),
             "ip dns show did not retain the remaining server",

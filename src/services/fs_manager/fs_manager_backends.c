@@ -4,10 +4,6 @@
 /* FS_TYPE_* arrives through this header, which pulls the generated
  * abi/constants.yaml values. */
 #include "wasmos_driver_abi.h"
-/* wasmos_sys_strcasecmp: NULL-safe ASCII compare, the same helper fs_manager.c
- * matches mount names with. */
-#include "wasmos/libsys_string.h"
-
 /* One row per FS_TYPE_*. A filesystem is described here and in
  * abi/constants.yaml and nowhere else, so a future devfs or sysfs costs a row
  * rather than a branch at each site that names something.
@@ -50,17 +46,4 @@ const char* fsmgr_default_mount_name(uint32_t fs_type) {
         }
     }
     return 0;
-}
-
-int32_t fsmgr_select_root_backend(const fs_backend_t* backends, uint32_t count) {
-    if (!backends) {
-        return -1;
-    }
-    for (uint32_t i = 0; i < count; ++i) {
-        if (backends[i].in_use &&
-            wasmos_sys_strcasecmp(backends[i].mount_name, FSMGR_ROOT_MOUNT_NAME) == 0) {
-            return (int32_t)i;
-        }
-    }
-    return -1;
 }

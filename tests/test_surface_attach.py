@@ -63,7 +63,7 @@ class SurfaceAttachTest(unittest.TestCase):
         # Mark first: expect() scans forward from wherever the stream sits, so a
         # bare one could match a marker an earlier test left behind.
         mark = self.session.mark()
-        self.session.send("spawn /apps/surface_attach")
+        self.session.send("spawn /boot/apps/surface_attach")
 
         for needle in (
             b"[test] surface attach spec ok",

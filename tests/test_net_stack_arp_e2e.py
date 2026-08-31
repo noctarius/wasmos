@@ -30,7 +30,7 @@ class NetStackArpE2ETest(unittest.TestCase):
     def test_lwip_arp_roundtrip(self) -> None:
         assert self.session is not None
         self.assertTrue(self.session.expect(b"wamos> ", timeout_s=120))
-        self.session.send("spawn /apps/net_udp_echo")
+        self.session.send("spawn /boot/apps/net_udp_echo")
         self.assertTrue(
             self.session.expect(b"[net-udp-echo] found net.stack", timeout_s=30),
             "boot-spawned net-stack was not registered before apps started",

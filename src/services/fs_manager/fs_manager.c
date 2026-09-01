@@ -727,6 +727,11 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
     }
     registered = backend_register((uint8_t)kind, backend_endpoint);
     if (!registered) {
+        /* The table is full, so this filesystem is simply not in the namespace.
+         * Said out loud because the alternative is a mount that was requested,
+         * started, and is serving nobody, with no path leading to it. */
+        printf(
+            "[fs-manager] backend table full (%d); %s not mounted\n", (int)FS_BACKEND_CAP, mount);
         return;
     }
     registered->unit = (uint8_t)(unit & 0xFF);
@@ -1043,12 +1048,18 @@ static void fsmgr_backend_remove(int32_t backend_endpoint) {
  * backend registering between here and the lookup still fires an event; the
  * lookup then captures the current set (and rebuilds it after an fs-manager
  * restart). backend_register is idempotent, so an overlap is harmless. */
-static void fsmgr_discover_backends(void) {
+/* Enumerate FSMGR_BACKEND_CLASS and pull every provider's identity.
+ *
+ * Separate from the subscription: this runs again after a mount request spawns a
+ * driver, so the mount is in the table before the request is answered rather than
+ * whenever the class event happens to be dispatched. Pulling a provider already
+ * registered is harmless -- backend_register keys on the endpoint and updates the
+ * entry in place -- which is what makes calling this twice for the same backend
+ * (once here, once from the class event) correct rather than duplicating it. */
+static void fsmgr_pull_all_backends(void) {
     svc_class_entry_t backends[8];
     int32_t n;
     int32_t i;
-    (void)wasmos_svc_subscribe_class(
-        g_proc_endpoint, g_reply_endpoint, g_fs_endpoint, FSMGR_BACKEND_CLASS, 3);
     n = wasmos_svc_lookup_class(g_proc_endpoint,
                                 g_reply_endpoint,
                                 FSMGR_BACKEND_CLASS,
@@ -1058,6 +1069,12 @@ static void fsmgr_discover_backends(void) {
     for (i = 0; i < n && i < (int32_t)(sizeof(backends) / sizeof(backends[0])); ++i) {
         fsmgr_pull_backend((int32_t)backends[i].endpoint);
     }
+}
+
+static void fsmgr_discover_backends(void) {
+    (void)wasmos_svc_subscribe_class(
+        g_proc_endpoint, g_reply_endpoint, g_fs_endpoint, FSMGR_BACKEND_CLASS, 3);
+    fsmgr_pull_all_backends();
 }
 
 static int handle_clone_cwd_req(int32_t source, int32_t source_owner, int32_t request_id,
@@ -1410,6 +1427,371 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
     return 1;
 }
 
+/* Filesystem types fs-manager can place, and the driver implementing each.
+ *
+ * The module path is RELATIVE, resolved against `/init/` then `/boot/` the same
+ * way a device-manager rule's RUN+= target is: a driver present only on the ESP
+ * would never be found by an initfs-relative path, and one present only in initfs
+ * is found before the disk is up.
+ *
+ * `needs_source` says the filesystem has a device. Those drivers accept
+ * `id=<canonical block id>`, so naming the volume is possible; requiring it is a
+ * decision, not a limitation -- see handle_mount_req. */
+typedef struct {
+    const char* type;
+    const char* module;
+    int32_t needs_source;
+} fsmgr_fstype_t;
+
+static const fsmgr_fstype_t g_fstypes[] = {
+    {"tmpfs", "system/drivers/fs_tmpfs.wap", 0},
+    {"fat", "system/drivers/fs_fat.wap", 1},
+    {"wfs", "system/drivers/fs_wfs.wap", 1},
+};
+
+/* Request ids for the nested spawn calls a mount makes. Separate from any client
+ * request id: these travel on fs-manager's own reply endpoint, and reusing a
+ * client's id would let a stale client reply satisfy a spawn await. */
+static int32_t g_mount_request_id = 1;
+
+/* Longest mount descriptor accepted. The process manager truncates startup
+ * arguments at WASMOS_STARTUP_ARGS_MAX (255), and the descriptor's tokens become
+ * those arguments, so a longer one could not be delivered anyway. */
+#define FSMGR_MOUNT_DESC_MAX 256
+
+/* Deadline for a spawned backend to reach readiness, matching device-manager's.
+ * A driver that never registers must not hold the FS service loop. */
+#define FSMGR_MOUNT_SPAWN_TIMEOUT_MS 5000
+
+/* Copy the value of `key` out of a whitespace-separated `key=value` descriptor.
+ *
+ * Matches only at the start of a token, so `source=` cannot be found inside
+ * `nosource=`. Returns 1 when the key is present and its value fits. */
+static int32_t desc_token(const char* desc, const char* key, char* out, uint32_t out_cap) {
+    uint32_t i = 0;
+    uint32_t klen = 0;
+
+    if (!desc || !key || !out || out_cap == 0u) {
+        return 0;
+    }
+    out[0] = '\0';
+    while (key[klen] != '\0') {
+        klen++;
+    }
+    while (desc[i] != '\0') {
+        uint32_t j = 0;
+        while (desc[i] == ' ' || desc[i] == '\t') {
+            i++;
+        }
+        if (desc[i] == '\0') {
+            break;
+        }
+        if (strncmp(desc + i, key, klen) == 0) {
+            i += klen;
+            while (desc[i] != '\0' && desc[i] != ' ' && desc[i] != '\t') {
+                if (j + 1u >= out_cap) {
+                    /* Refuse rather than truncate: a shortened path or device id
+                     * names something other than what the caller asked for. */
+                    out[0] = '\0';
+                    return 0;
+                }
+                out[j++] = desc[i++];
+            }
+            out[j] = '\0';
+            return j > 0u ? 1 : 0;
+        }
+        while (desc[i] != '\0' && desc[i] != ' ' && desc[i] != '\t') {
+            i++;
+        }
+    }
+    return 0;
+}
+
+static const fsmgr_fstype_t* fsmgr_fstype_find(const char* type) {
+    for (uint32_t i = 0; i < sizeof(g_fstypes) / sizeof(g_fstypes[0]); ++i) {
+        if (strcmp(g_fstypes[i].type, type) == 0) {
+            return &g_fstypes[i];
+        }
+    }
+    return 0;
+}
+
+/* A mount request waiting on the driver it asked the process manager to spawn.
+ *
+ * ONE at a time. A second request while this is occupied is answered with
+ * WASMOS_ERR_FS_BUSY, which is what that code means: a transient shortage of a
+ * single-slot resource that clears on its own, unlike MOUNT_EXISTS or
+ * MOUNT_FSTYPE. The process manager has a single sync-spawn slot of its own, so
+ * a deeper queue here would only move the refusal.
+ *
+ * The path/args buffer is held for the whole exchange rather than released after
+ * the send: the process manager reads it inside its own handler, and fs-manager
+ * cannot observe when that finishes. */
+typedef struct {
+    int32_t in_use;
+    int32_t client;
+    int32_t request_id;
+    int32_t buffer_id;
+    uint32_t prefix; /* index into fsmgr_module_prefixes */
+    const char* module;
+    char mount[FSMGR_MOUNT_PATH_MAX];
+    char args[FSMGR_MOUNT_DESC_MAX];
+} fsmgr_pending_mount_t;
+
+static fsmgr_pending_mount_t g_pending_mount;
+
+/* Where a relative driver module path is looked for, in order — the same two
+ * roots a device-manager rule's RUN+= target resolves against. A module present
+ * only on the ESP is not in initfs, and one present only in initfs is found
+ * before any disk is up, so both have to be tried. */
+static const char* const fsmgr_module_prefixes[] = {"/init/", "/boot/"};
+
+/* Ask the process manager to spawn `g_pending_mount.module` under prefix
+ * `g_pending_mount.prefix`, WITHOUT waiting for the reply.
+ *
+ * Not waiting is the whole point. The process manager READS the module blob
+ * through fs-manager while handling this request, so an fs-manager that blocked
+ * on the reply would be the one service unable to answer, and the spawn would
+ * fail with "the filesystem never answered" — a mutual wait, not a slow path. By
+ * returning to the main loop, fs-manager serves that read like any other, and the
+ * spawn's own reply arrives there too (the reply endpoint is the SERVICE endpoint,
+ * not the private one used for nested calls).
+ *
+ * The SYNC spawn opcode is used precisely because its reply is deferred until the
+ * child reports READY: the backend has registered by then, so the mount is in the
+ * table when the reply is handled, and a driver that never becomes ready is bounded
+ * by the timeout rather than leaving the client waiting forever. CAPS_SYNC rather
+ * than PATH_SYNC because it is the only path spawn that carries startup ARGUMENTS;
+ * the capability set it also carries is empty.
+ *
+ * Returns 0 when the request was sent, or a negative packed code. */
+static int32_t fsmgr_mount_send_spawn(void) {
+    char path[128];
+    uint32_t path_len;
+    uint32_t args_len;
+    int32_t bid;
+
+    path[0] = '\0';
+    str_copy(path, sizeof(path), fsmgr_module_prefixes[g_pending_mount.prefix]);
+    wasmos_sys_str_append(path, sizeof(path), g_pending_mount.module);
+    path_len = (uint32_t)strlen(path);
+    args_len = (uint32_t)strlen(g_pending_mount.args);
+    if (path_len == 0u || path_len > 0xFFFu) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    bid = wasmos_xfer_buffer_acquire((int32_t)(path_len + args_len + 1u));
+    if (bid < 0) {
+        return WASMOS_ERR_FS_BUFFER;
+    }
+    /* Path at offset 0, NUL-terminated args immediately after it; arg1 packs the
+     * buffer id above the path length. The process manager reads this buffer by
+     * OWNERSHIP, so no grant is lent. */
+    if (wasmos_xfer_buffer_write(bid, (const uint8_t*)path, (int32_t)path_len, 0) != 0 ||
+        wasmos_xfer_buffer_write(bid,
+                                 (const uint8_t*)g_pending_mount.args,
+                                 (int32_t)(args_len + 1u),
+                                 (int32_t)path_len) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return WASMOS_ERR_FS_BUFFER;
+    }
+    if (wasmos_ipc_send(g_proc_endpoint,
+                        g_fs_endpoint,
+                        PROC_IPC_SPAWN_PATH_CAPS_SYNC,
+                        g_mount_request_id++,
+                        0,
+                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                        0,
+                        FSMGR_MOUNT_SPAWN_TIMEOUT_MS) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return WASMOS_ERR_FS_BACKEND_IPC;
+    }
+    g_pending_mount.buffer_id = bid;
+    return 0;
+}
+
+static void fsmgr_mount_pending_clear(void) {
+    if (g_pending_mount.buffer_id > 0) {
+        (void)wasmos_xfer_buffer_release(g_pending_mount.buffer_id);
+    }
+    g_pending_mount.in_use = 0;
+    g_pending_mount.buffer_id = -1;
+}
+
+static void fsmgr_mount_pending_fail(wasmos_error_code_t code) {
+    int32_t client = g_pending_mount.client;
+    int32_t request_id = g_pending_mount.request_id;
+    fsmgr_mount_pending_clear();
+    send_fs_error(client, request_id, code);
+}
+
+/* The process manager answered the spawn a pending mount is waiting on.
+ *
+ * A refusal is not final while another module prefix is untried: a path that does
+ * not resolve under `/init/` is the expected case for a driver that ships only on
+ * the ESP. Once the prefixes are exhausted the client is told the driver did not
+ * come up.
+ *
+ * On success the child has reported READY, so its backend has registered — but
+ * the registration arrives as a class event this loop has not necessarily
+ * dispatched yet, so the class is pulled here rather than waited for. A backend
+ * pulled twice is registered once (backend_register keys on the endpoint). */
+static void fsmgr_mount_handle_spawn_reply(int32_t type, int32_t pid) {
+    int32_t client;
+    int32_t request_id;
+
+    if (!g_pending_mount.in_use) {
+        return;
+    }
+    if (type != PROC_IPC_RESP) {
+        if (g_pending_mount.buffer_id > 0) {
+            (void)wasmos_xfer_buffer_release(g_pending_mount.buffer_id);
+            g_pending_mount.buffer_id = -1;
+        }
+        g_pending_mount.prefix++;
+        if (g_pending_mount.prefix <
+            sizeof(fsmgr_module_prefixes) / sizeof(fsmgr_module_prefixes[0])) {
+            int32_t rc = fsmgr_mount_send_spawn();
+            if (rc == 0) {
+                return;
+            }
+            fsmgr_mount_pending_fail((wasmos_error_code_t)rc);
+            return;
+        }
+        fsmgr_mount_pending_fail(WASMOS_ERR_FS_NOT_READY);
+        return;
+    }
+
+    fsmgr_pull_all_backends();
+    client = g_pending_mount.client;
+    request_id = g_pending_mount.request_id;
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        if (g_backends[i].in_use && strcmp(g_backends[i].mount_path, g_pending_mount.mount) == 0) {
+            fsmgr_mount_pending_clear();
+            (void)reply_to_client(client, FSMGR_IPC_MOUNT_RESP, request_id, 0, pid, 0, 0);
+            return;
+        }
+    }
+    /* Ready, but no backend registered at the path it was given: the driver
+     * registered nothing, or reported a different mount. Nothing was added, so
+     * there is nothing to undo — the process is left running, the same gap
+     * unmount has. */
+    log_msg("[fs-manager] mount: backend started but registered no mount\n");
+    fsmgr_mount_pending_fail(WASMOS_ERR_FS_NOT_READY);
+}
+
+/* FSMGR_IPC_MOUNT_REQ: establish a mount.
+ *
+ * fs-manager implements no filesystem. It validates the placement, asks the
+ * process manager to spawn the driver for the requested type, and has it handed
+ * `mount=` (plus `id=<source>` for a disk-backed one) as startup arguments — the
+ * same contract a device-manager rule's ENV{MOUNT} uses, so placement is one
+ * mechanism whether a mount comes from a boot rule or from a request.
+ *
+ * The descriptor is `key=value` text in a client-owned buffer rather than packed
+ * arguments, because what a filesystem needs in order to be placed differs per
+ * type and the set grows. Bare argument words would have to be reinterpreted per
+ * type, which is the shape that makes an opcode outgrow itself.
+ *
+ * `source` is REQUIRED for a type that has a device, even though the drivers can
+ * self-select a volume when given none: a mount that picks its own device is not
+ * the mount the caller asked for, and the caller has no way to discover which one
+ * it got. Conversely a source given for a memory-backed type is refused rather
+ * than ignored, because silently dropping it would answer a different request.
+ *
+ * The reply is DEFERRED — see fsmgr_mount_send_spawn for why it must be, and
+ * fsmgr_mount_handle_spawn_reply for what completes it. The mount POINT needs no
+ * work: fsmgr_ensure_mount_points runs on every registration and creates it in
+ * whichever filesystem covers it.
+ *
+ * TODO: a driver that is spawned, reports ready, and then wedges without
+ * registering leaves nothing behind here, but the process stays. A driver that
+ * never reports ready is bounded only by FSMGR_MOUNT_SPAWN_TIMEOUT_MS in the
+ * process manager; fs-manager has no clock of its own to bound anything with. */
+static void handle_mount_req(fs_client_state_t* state, int32_t source, int32_t request_id,
+                             int32_t desc_len, int32_t buffer_id) {
+    uint8_t desc[FSMGR_MOUNT_DESC_MAX];
+    char type[16];
+    char requested[FSMGR_CWD_MAX];
+    char target[FSMGR_CWD_MAX];
+    char mount[FSMGR_MOUNT_PATH_MAX];
+    char source_id[BLOCK_DESCRIPTOR_ID_MAX];
+    const fsmgr_fstype_t* fstype;
+    int32_t has_source;
+    int32_t rc;
+
+    if (g_pending_mount.in_use) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BUSY);
+        return;
+    }
+    if (buffer_id <= 0 || desc_len <= 0 || desc_len >= (int32_t)sizeof(desc) ||
+        desc_len >= wasmos_xfer_buffer_size()) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BAD_ARGS);
+        return;
+    }
+    if (wasmos_xfer_buffer_read(buffer_id, desc, desc_len, 0) != 0) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BUFFER);
+        return;
+    }
+    desc[desc_len] = '\0';
+
+    if (!desc_token((const char*)desc, "type=", type, (uint32_t)sizeof(type))) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_MOUNT_FSTYPE);
+        return;
+    }
+    fstype = fsmgr_fstype_find(type);
+    if (!fstype) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_MOUNT_FSTYPE);
+        return;
+    }
+    has_source = desc_token((const char*)desc, "source=", source_id, (uint32_t)sizeof(source_id));
+    if (has_source != fstype->needs_source) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_MOUNT_FSTYPE);
+        return;
+    }
+    if (!desc_token((const char*)desc, "mount=", requested, (uint32_t)sizeof(requested))) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BAD_ARGS);
+        return;
+    }
+    /* Resolved against the client's working directory, so `mount=scratch` means
+     * the same thing here as every other path a client names. */
+    if (!fsmgr_cwd_join(state->cwd, requested, target, (int32_t)sizeof(target))) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_PATH_TOO_LONG);
+        return;
+    }
+    if (!fsmgr_mount_path_from_reported(target, mount, (uint32_t)sizeof(mount))) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_ABSOLUTE);
+        return;
+    }
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        if (g_backends[i].in_use && strcmp(g_backends[i].mount_path, mount) == 0) {
+            send_fs_error(source, request_id, WASMOS_ERR_FS_MOUNT_EXISTS);
+            return;
+        }
+    }
+
+    g_pending_mount.in_use = 1;
+    g_pending_mount.client = source;
+    g_pending_mount.request_id = request_id;
+    g_pending_mount.buffer_id = -1;
+    g_pending_mount.prefix = 0;
+    g_pending_mount.module = fstype->module;
+    str_copy(g_pending_mount.mount, sizeof(g_pending_mount.mount), mount);
+    /* Built in the order the drivers document: `id=` then `mount=`. */
+    g_pending_mount.args[0] = '\0';
+    if (has_source) {
+        str_copy(g_pending_mount.args, sizeof(g_pending_mount.args), "id=");
+        wasmos_sys_str_append(g_pending_mount.args, sizeof(g_pending_mount.args), source_id);
+        wasmos_sys_str_append(g_pending_mount.args, sizeof(g_pending_mount.args), " ");
+    }
+    wasmos_sys_str_append(g_pending_mount.args, sizeof(g_pending_mount.args), "mount=");
+    wasmos_sys_str_append(g_pending_mount.args, sizeof(g_pending_mount.args), mount);
+
+    rc = fsmgr_mount_send_spawn();
+    if (rc != 0) {
+        fsmgr_mount_pending_fail((wasmos_error_code_t)rc);
+    }
+}
+
 /* FSMGR_IPC_UNMOUNT_REQ: remove one mount from the namespace.
  *
  * The mount is named by PATH, not by backend endpoint or class instance: a
@@ -1582,6 +1964,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         int32_t arg2f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t arg3f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
 
+        /* The process manager's answer to a mount's spawn. It arrives on the
+         * SERVICE endpoint rather than the private reply endpoint precisely
+         * because fs-manager must not be blocked waiting for it. */
+        if (type == PROC_IPC_RESP || type == PROC_IPC_ERROR) {
+            fsmgr_mount_handle_spawn_reply(type, arg0);
+            continue;
+        }
+
         if (type == SVC_IPC_CLASS_EVENT) {
             /* Existence event for FSMGR_BACKEND_CLASS: arg0=event, arg1=instance,
              * arg2=provider endpoint, arg3=pid. */
@@ -1623,6 +2013,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
          * QUERY_MOUNTS, which reads the table and needs none. */
         if (type == FSMGR_IPC_UNMOUNT_REQ) {
             handle_unmount_req(state, source, request_id, arg0, arg2f);
+            continue;
+        }
+        if (type == FSMGR_IPC_MOUNT_REQ) {
+            handle_mount_req(state, source, request_id, arg0, arg2f);
             continue;
         }
 

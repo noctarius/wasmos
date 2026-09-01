@@ -1503,13 +1503,18 @@ Source: `architecture/19-virtual-terminal.md`,
     so the case measures the mount rather than an absent directory.
     `FSMGR_IPC_UNMOUNT_REQ` removes the mount and the file comes back, which is
     the half that was previously only construction.
-  - Mounting is still not a REQUEST. `mount` reports the table and `umount`
-    removes an entry, but nothing establishes one at runtime: a filesystem is
-    placed by whoever spawns its driver (`ENV{MOUNT}` on a device-manager rule).
-    A `FSMGR_IPC_MOUNT_REQ` would have fs-manager spawn a backend for a named
-    filesystem type at a named path; the mount would still appear asynchronously
-    through the `fs.backend` class event, so the reply reports the spawn rather
-    than the mount.
+  - DONE: mounting is a REQUEST. `FSMGR_IPC_MOUNT_REQ` carries a
+    `type=`/`mount=`/`source=` descriptor and has the process manager spawn the
+    driver, so placement is one mechanism whether it comes from a boot rule or a
+    request. Its reply is DEFERRED because the process manager reads the driver
+    module through fs-manager -- see `docs/architecture/18-filesystem-stack.md`.
+  - fs-manager still BLOCKS on other nested calls, and every one is the same
+    latent deadlock the mount request had to be built around: `forward_request`,
+    `backend_sync_cwd`, `fsmgr_pull_backend` and `fsmgr_backend_mkdir` all park
+    fs-manager on a reply while it is the service everything else needs to read a
+    file. They are safe TODAY only because the peers they wait on (filesystem
+    backends) do not themselves need the filesystem. The general fix is the async
+    service runtime (`docs/architecture/32-*`), which fs-manager does not use.
   - The backend PROCESS survives its unmount. fs-manager quiesces it
     (`WASMOS_IPC_SHUTDOWN_REQ` with `WASMOS_SHUTDOWN_REASON_UNMOUNT`) and drops
     the table entry, but the driver keeps running and holding a process slot, so

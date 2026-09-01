@@ -46,7 +46,7 @@ which backend owns the path, forwards the request, and relays the reply.
 #### Backend Registry
 
 ```c
-#define FS_BACKEND_CAP 8
+#define FS_BACKEND_CAP 16
 
 typedef struct {
     int32_t  in_use;
@@ -56,7 +56,7 @@ typedef struct {
 } fs_backend_t;
 ```
 
-Up to 8 backends can be registered simultaneously. Each is identified by its
+Up to FS_BACKEND_CAP (16) backends can be registered simultaneously. Each is identified by its
 `mount_path`, an absolute canonical path (`"/"`, `"/boot"`, `"/mnt/usb"`)
 normalized by `fsmgr_mount_path_from_reported` from whatever the backend
 reported. Routing forwards a request to the backend whose `mount_path` is the
@@ -69,6 +69,43 @@ the ancestors so a mount at `/mnt/usb` gets `/mnt` too. That is what lets
 root filesystem holds, not names `fs_manager` appended to the reply. It runs after
 every registration and is idempotent, because a volume can mount before the root
 filesystem does and its point has to appear once the root arrives.
+
+#### Establishing a Mount
+
+`FSMGR_IPC_MOUNT_REQ` places a filesystem. The request carries a `key=value`
+DESCRIPTOR in a client-owned transfer buffer — `type=`, `mount=`, and `source=`
+for a type that has a device — rather than packed arguments, because what a
+filesystem needs in order to be placed differs per type and the set grows.
+
+`fs_manager` implements no filesystem. It validates the placement and asks the
+process manager to spawn the driver for `type`, which receives `mount=` (and
+`id=<source>`) as startup arguments — the same contract a device-manager rule's
+`ENV{MOUNT}` uses, so placement is ONE mechanism whether a mount comes from a
+boot rule or from a request. The type-to-driver table is in `fs_manager.c`.
+
+`source` is required for a disk-backed type rather than optional. The drivers can
+self-select a volume when given none, but a mount that picks its own device is not
+the mount the caller asked for, and the caller cannot discover which one it got.
+
+**The reply is deferred, and must be.** The process manager READS the driver
+module through `fs_manager` while handling the spawn request. An `fs_manager` that
+blocked awaiting the spawn reply would be the one service unable to answer that
+read, and the spawn would fail with "the filesystem never answered" — a mutual
+wait, not a slow path. So the spawn request is sent with the SERVICE endpoint as
+its reply address and `fs_manager` returns to its loop, where it serves the
+module read like any other request and later handles the spawn's own reply. The
+SYNC spawn opcode is used because its reply is deferred until the child reports
+READY: the backend has registered by then, and a driver that never becomes ready
+is bounded by the process manager's timeout rather than leaving the client
+waiting. One mount request is in flight at a time; a second is refused with
+`WASMOS_ERR_FS_BUSY`.
+
+This is the general shape for any request `fs_manager` cannot answer from its own
+state: defer, do not block. `fs_manager` is below everything that needs a file.
+
+Refusals: `WASMOS_ERR_FS_MOUNT_EXISTS` (a mount already occupies that path;
+mounts do not stack), `WASMOS_ERR_FS_MOUNT_FSTYPE` (no driver for that type, or a
+type/source mismatch), `WASMOS_ERR_FS_NOT_READY` (the driver did not come up).
 
 #### Removing a Mount
 
@@ -100,11 +137,8 @@ The mount POINT is left in place. It is a directory in the covering filesystem
 and belongs to that filesystem, so what becomes visible again is whatever the
 covering filesystem holds there — the other half of shadowing.
 
-Establishing a mount is not a request. A filesystem is placed by whoever spawns
-its driver, which passes `mount=<path>` as a startup argument; the mount then
-appears through the class event below. `mount` and `umount` are utilities under
-`/system/utils`, not shell built-ins, so the table always comes from the service
-that owns it.
+`mount` and `umount` are utilities under `/system/utils`, not shell built-ins, so
+the table always comes from the service that owns it.
 
 Backends do NOT push a registration. `fs_manager` SUBSCRIBES to the `fs.backend`
 service class and enumerates it, then PULLS each provider's identity with
@@ -170,6 +204,7 @@ backend, so they carry their own response opcodes rather than `FS_IPC_RESP`:
 |----------------------------|-------|---------------------------------------|
 | `FSMGR_IPC_QUERY_MOUNTS`   | 0x422 | Report the mount table into a buffer  |
 | `FSMGR_IPC_UNMOUNT`        | 0x423 | Remove the mount at an absolute path  |
+| `FSMGR_IPC_MOUNT`          | 0x424 | Place a filesystem from a descriptor  |
 
 #### Responses (backend → fs_manager → client)
 

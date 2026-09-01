@@ -866,10 +866,26 @@ linked feature documents for rationale and rollout plans.
   directory is under the mount does NOT make it busy, because fs-manager never
   releases client state and a cwd left by an exited process would pin the mount
   forever (`docs/TASKS.md`). The backend process itself survives its unmount.
+- A mount can be ESTABLISHED at runtime. `FSMGR_IPC_MOUNT_REQ` carries a
+  `type=`/`mount=`/`source=` descriptor; fs-manager validates it and has the
+  process manager spawn the driver, which is handed `mount=` (and `id=<source>`)
+  as startup arguments -- the same contract a device-manager rule's `ENV{MOUNT}`
+  uses, so placement is one mechanism from either direction. Types: `tmpfs`,
+  `fat`, `wfs`; a source is required for the two with a device.
+
+  The reply is DEFERRED and must be: the process manager reads the driver module
+  through fs-manager, so an fs-manager blocked on the spawn reply is the one
+  service unable to answer that read, and the spawn fails with "the filesystem
+  never answered". This was measured, not anticipated -- the first implementation
+  blocked and deadlocked exactly there. One mount is in flight at a time
+  (`WASMOS_ERR_FS_BUSY` otherwise).
+- `FS_BACKEND_CAP` is 16, up from 8. A default boot uses seven mounts, so the old
+  ceiling left room for exactly one runtime mount; exhaustion is now reported
+  instead of dropping a started filesystem silently.
 - `mount` and `umount` are utilities under `/system/utils`, not shell built-ins:
   `mount` was extracted from the CLI so the table always comes from the service
-  that owns it. Establishing a mount is still not a request -- placement comes
-  from whoever spawns the driver.
+  that owns it. `mount -t <type> <path> [source]` places one; bare `mount`
+  reports the table.
 - `fs-tmpfs` (`src/drivers/fs_tmpfs/`, Zig) is a read-write filesystem held in
   its own linear memory, reporting `FSMGR_BACKEND_PSEUDO` + `FS_TYPE_TMPFS`. It
   is a general in-memory filesystem, not a root-specific one: the mount comes

@@ -233,7 +233,7 @@ const FS_IPC_RESP int32 = 0x480
 const FS_IPC_STREAM int32 = 0x481
 const FS_IPC_ERROR int32 = 0x4FF
 
-// fs_manager (0x420..0x4A3)
+// fs_manager (0x420..0x4A4)
 // fs-manager -> backend pull: report kind/fs-type/mount/unit into a buffer
 // the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
 // arg1=fs_type, arg2=mount_name_len, arg3=unit. Backends are discovered
@@ -279,10 +279,16 @@ const FSMGR_IPC_QUERY_MOUNTS_REQ int32 = 0x422
 // grow, so it does not belong in the four argument words.
 //
 // Refused with WASMOS_ERR_FS_MOUNT_BUSY while anything still stands in the
-// mount: a deeper mount inside it, an open file on it, or a client whose
-// working directory is under it. The root is therefore normally busy,
-// because every client starts at "/" -- the same answer Linux gives, and
-// not a case written for it.
+// mount: a deeper mount inside it, or an open file on it. The root is
+// therefore normally busy, because every other mount is inside it, rather
+// than by a rule written for the root.
+//
+// A client whose WORKING DIRECTORY is under the mount is NOT counted,
+// though Linux refuses on exactly that. fs-manager never releases a
+// client's state -- nothing tells it a client died -- so a working
+// directory recorded by a process that has since exited would refuse the
+// unmount forever. See docs/TASKS.md for the mechanism that has to exist
+// before the rule can be added.
 //
 // The mount POINT is left in place. It is a directory in the covering
 // filesystem, and removing it would delete state the mount only borrowed;
@@ -297,10 +303,50 @@ const FSMGR_IPC_QUERY_MOUNTS_REQ int32 = 0x422
 // does not answer is dropped anyway: the namespace is fs-manager's to
 // decide, and a wedged driver must not be able to keep a mount alive.
 const FSMGR_IPC_UNMOUNT_REQ int32 = 0x423
+// Establish a mount. arg0 = descriptor length, arg2 = the client's buffer
+// holding the descriptor, arg3 = the client's grant.
+//
+// The descriptor is whitespace-separated `key=value` text, not a packed
+// struct, because what a filesystem needs to be placed differs per type
+// and the set grows:
+//
+//   type=<tmpfs|fat|wfs>   which filesystem to place. Required.
+//   mount=<absolute path>  where it goes. Required.
+//   source=<canonical block id>
+//                          which volume backs it, e.g. `block:ata:0p1`.
+//                          Required for every type that has a device;
+//                          refused for one that has none.
+//
+// fs-manager does not implement a filesystem: it SPAWNS the driver for
+// `type` and hands it `mount=` (and `id=<source>` for a disk-backed one)
+// as startup arguments, which is the same contract a device-manager rule's
+// ENV{MOUNT} uses. Placement is therefore one mechanism whether a mount
+// comes from a boot rule or from this request.
+//
+// `source` is required rather than optional for a disk-backed type even
+// though the drivers can self-select a volume: a mount that picks its own
+// device is not the mount the caller asked for, and there is no way for
+// the caller to find out which one it got.
+//
+// On success the mount IS in the table -- fs-manager re-runs backend
+// discovery before replying rather than waiting for the class event to
+// arrive on its own, so a caller that immediately queries the mount table
+// sees it. arg1 of the reply carries the driver's pid.
+//
+// Refusals: WASMOS_ERR_FS_MOUNT_EXISTS when that path is already a mount
+// (a mount is not stacked on another at the same path);
+// WASMOS_ERR_FS_MOUNT_FSTYPE for a type with no driver, or for a
+// type/source combination that cannot be satisfied;
+// WASMOS_ERR_FS_NOT_ABSOLUTE for a path that is not absolute. A driver
+// that fails to reach readiness is reported as WASMOS_ERR_FS_NOT_READY --
+// nothing is left in the table in that case, because the entry only
+// appears when the backend registers.
+const FSMGR_IPC_MOUNT_REQ int32 = 0x424
 const FSMGR_IPC_BACKEND_INFO_RESP int32 = 0x4A0
 const FSMGR_IPC_CLONE_CWD_RESP int32 = 0x4A1
 const FSMGR_IPC_QUERY_MOUNTS_RESP int32 = 0x4A2
 const FSMGR_IPC_UNMOUNT_RESP int32 = 0x4A3
+const FSMGR_IPC_MOUNT_RESP int32 = 0x4A4
 
 // fbtext (0x600..0x6FF)
 const FBTEXT_IPC_CELL_WRITE_REQ int32 = 0x600

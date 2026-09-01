@@ -10,7 +10,13 @@
 #define FS_CLIENT_CHUNK_CAP 32 /* max concurrent per-context client state slots */
 /* Hard cap on simultaneously registered backends; a class event for a ninth
  * provider finds no free slot and is dropped. */
-#define FS_BACKEND_CAP 8 /* max registered FS backend instances */
+/* Simultaneously mounted filesystems. A default boot already uses seven (`/`,
+ * `/init`, `/boot`, `/user`, `/wfs`, and two rule-placed tmpfs instances), so the
+ * old ceiling of 8 left room for exactly one runtime mount -- and mounting is a
+ * request now, not only a boot-time property. The table is static and each entry
+ * is about a hundred bytes, so the headroom is cheap; exhaustion is reported
+ * rather than silent (fsmgr_apply_backend_info). */
+#define FS_BACKEND_CAP 16
 /* Hard cap on open files per client context.  Exhausting it fails the open with
  * WASMOS_ERR_FS_NO_FD, after fs-manager has closed the backend fd again. */
 #define FSMGR_CLIENT_FD_CAP 32 /* max forwarded open files per client context */

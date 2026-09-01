@@ -325,6 +325,91 @@ class VfsDeepAndNestedMountTest(VfsSession, unittest.TestCase):
         self.assertIn(b"hello.txt", listing, f"/wfs lost its own content\n{listing!r}")
 
 
+class VfsMountRequestTest(VfsSession, unittest.TestCase):
+    """Establishing a mount at runtime, not by boot rule.
+
+    Its own session: these cases ADD mounts, and a mount another class asserts is
+    absent must not have been created by this one.
+
+    Regression: 2026-09-01-mount-is-a-request
+    Placement was only ever a boot-rule property -- a filesystem went where
+    whoever spawned its driver said, and nothing could add one to a running
+    system. `mount` reported a table it had no way to change.
+    """
+
+    def test_a_tmpfs_can_be_mounted_at_a_new_path(self):
+        """fs-manager spawns the driver and the mount is in the table when the
+        request is answered -- not whenever the class event happens to arrive."""
+        self._run("cd /")
+        out = self._run("mount -t tmpfs /scratch", timeout_s=40)
+        self.assertIn(b"mounted", out, f"mount refused\n{out!r}")
+
+        out = self._run("mount")
+        self.assertIn(b"/scratch ->", out, f"not in the mount table\n{out!r}")
+        self.assertIn(b"fs-tmpfs", out, f"not served by a tmpfs\n{out!r}")
+
+    def test_the_new_mount_point_is_a_directory_and_the_mount_is_writable(self):
+        """The mount POINT is created by fs-manager in the filesystem covering it,
+        the same walk a boot-rule mount takes, and the mount holds its own state:
+        a file made in it is absent from the root."""
+        self._run("cd /")
+        out = self._run("mount -t tmpfs /scratch2", timeout_s=40)
+        self.assertIn(b"mounted", out, f"mount refused\n{out!r}")
+        listing = self._run("ls")
+        self.assertIn(b"scratch2/", listing, f"no mount point at /\n{listing!r}")
+
+        self._run("cd /scratch2")
+        self._run("mkdir madehere")
+        listing = self._run("ls")
+        self.assertIn(b"madehere", listing, f"not writable\n{listing!r}")
+        self._run("cd /")
+        listing = self._run("ls")
+        self.assertNotIn(
+            b"madehere", listing, f"the root and /scratch2 share state\n{listing!r}"
+        )
+
+    def test_a_path_that_is_already_a_mount_is_refused(self):
+        """Mounts do not stack: two filesystems at one path would make routing
+        pick between them by registration order, with no way to name the covered
+        one."""
+        self._run("cd /")
+        out = self._run("mount -t tmpfs /", timeout_s=40)
+        self.assertIn(b"fs.MOUNT_EXISTS", out, f"stacked on the root\n{out!r}")
+        out = self._run("mount -t tmpfs /boot", timeout_s=40)
+        self.assertIn(b"fs.MOUNT_EXISTS", out, f"stacked on /boot\n{out!r}")
+
+    def test_an_unknown_type_and_a_mismatched_source_are_refused(self):
+        """MOUNT_FSTYPE covers both: a type with no driver, and a type whose
+        device requirement the request does not match. A source given for tmpfs
+        is refused rather than ignored, because ignoring it would answer a
+        different request than the one made."""
+        self._run("cd /")
+        out = self._run("mount -t nosuchfs /nope", timeout_s=40)
+        self.assertIn(b"fs.MOUNT_FSTYPE", out, f"unknown type accepted\n{out!r}")
+        out = self._run("mount -t tmpfs /nope2 block:ata:0", timeout_s=40)
+        self.assertIn(
+            b"fs.MOUNT_FSTYPE", out, f"a source for tmpfs was ignored\n{out!r}"
+        )
+        out = self._run("mount -t wfs /nope3", timeout_s=40)
+        self.assertIn(b"fs.MOUNT_FSTYPE", out, f"wfs mounted with no source\n{out!r}")
+        out = self._run("mount")
+        for absent in (b"/nope ->", b"/nope2 ->", b"/nope3 ->"):
+            self.assertNotIn(absent, out, f"a refused mount was created\n{out!r}")
+
+    def test_a_runtime_mount_can_be_unmounted_again(self):
+        """The two halves meet: what this request created, UNMOUNT removes, and
+        the mount point it left behind is still a directory."""
+        self._run("cd /")
+        out = self._run("mount -t tmpfs /roundtrip", timeout_s=40)
+        self.assertIn(b"mounted", out, f"mount refused\n{out!r}")
+        out = self._run("umount /roundtrip")
+        self.assertIn(b"unmounted", out, f"unmount refused\n{out!r}")
+        out = self._run("mount")
+        self.assertNotIn(b"/roundtrip ->", out, f"still in the table\n{out!r}")
+        listing = self._run("ls")
+        self.assertIn(b"roundtrip/", listing, f"the mount point went too\n{listing!r}")
+
+
 class VfsUnmountTest(VfsSession, unittest.TestCase):
     """Removing a mount, and refusing to remove one that is still in use.
 

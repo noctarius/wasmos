@@ -270,7 +270,7 @@ enum {
     FS_IPC_ERROR = 0x4FF,
 };
 
-/* fs_manager (0x420..0x4A2) */
+/* fs_manager (0x420..0x4A3) */
 enum {
     /* fs-manager -> backend pull: report kind/fs-type/mount/unit into a buffer
      * the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
@@ -312,9 +312,35 @@ enum {
     FSMGR_IPC_BACKEND_INFO_REQ = 0x420,
     FSMGR_IPC_CLONE_CWD_REQ = 0x421,
     FSMGR_IPC_QUERY_MOUNTS_REQ = 0x422,
+    /* Remove a mount, named by its absolute mount PATH. arg0 = path length,
+     * arg2 = the client's buffer holding it, arg3 = the client's grant -- the
+     * transport FS_IPC_CHDIR_REQ uses, and for the same reason: a path can
+     * grow, so it does not belong in the four argument words.
+     *
+     * Refused with WASMOS_ERR_FS_MOUNT_BUSY while anything still stands in the
+     * mount: a deeper mount inside it, an open file on it, or a client whose
+     * working directory is under it. The root is therefore normally busy,
+     * because every client starts at "/" -- the same answer Linux gives, and
+     * not a case written for it.
+     *
+     * The mount POINT is left in place. It is a directory in the covering
+     * filesystem, and removing it would delete state the mount only borrowed;
+     * an empty directory left behind is harmless, and the next mount at that
+     * path reuses it. What DOES come back is whatever the covering filesystem
+     * held underneath, because routing stops preferring the mount -- the other
+     * half of shadowing.
+     *
+     * The backend is told to shut down (WASMOS_IPC_SHUTDOWN_REQ) before it is
+     * dropped, so a filesystem holding dirty state gets the chance every
+     * orderly teardown gets; WFS writes its clean mark there. A backend that
+     * does not answer is dropped anyway: the namespace is fs-manager's to
+     * decide, and a wedged driver must not be able to keep a mount alive.
+     */
+    FSMGR_IPC_UNMOUNT_REQ = 0x423,
     FSMGR_IPC_BACKEND_INFO_RESP = 0x4A0,
     FSMGR_IPC_CLONE_CWD_RESP = 0x4A1,
     FSMGR_IPC_QUERY_MOUNTS_RESP = 0x4A2,
+    FSMGR_IPC_UNMOUNT_RESP = 0x4A3,
 };
 
 /* fbtext (0x600..0x6FF) */
@@ -901,9 +927,11 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x420: return "FSMGR_IPC_BACKEND_INFO_REQ";
         case 0x421: return "FSMGR_IPC_CLONE_CWD_REQ";
         case 0x422: return "FSMGR_IPC_QUERY_MOUNTS_REQ";
+        case 0x423: return "FSMGR_IPC_UNMOUNT_REQ";
         case 0x4A0: return "FSMGR_IPC_BACKEND_INFO_RESP";
         case 0x4A1: return "FSMGR_IPC_CLONE_CWD_RESP";
         case 0x4A2: return "FSMGR_IPC_QUERY_MOUNTS_RESP";
+        case 0x4A3: return "FSMGR_IPC_UNMOUNT_RESP";
         default: return "UNKNOWN";
         }
     case WASMOS_OPCODE_SUBSYS_FBTEXT:

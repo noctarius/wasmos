@@ -70,6 +70,42 @@ root filesystem holds, not names `fs_manager` appended to the reply. It runs aft
 every registration and is idempotent, because a volume can mount before the root
 filesystem does and its point has to appear once the root arrives.
 
+#### Removing a Mount
+
+`FSMGR_IPC_UNMOUNT_REQ` removes one mount, named by the absolute PATH it
+occupies — which is what the mount table reports and the only handle a client
+has on it. The path travels in a transfer buffer the CLIENT owns
+(`arg0` = length, `arg2` = buffer, `arg3` = the client's grant), because a mount
+path is not bounded by what an argument word carries.
+
+The refusals define the operation:
+
+- Nothing mounted at that path is `WASMOS_ERR_FS_NO_BACKEND`. A path that merely
+  EXISTS inside some other mount is a directory, not a mount.
+- `WASMOS_ERR_FS_MOUNT_BUSY` while something still stands in the mount: a deeper
+  mount inside it, or an open file on it. `/` is normally unremovable for the
+  first reason rather than as a special case, since every other mount is inside
+  it. This is a statement about the namespace, not a shortage — it clears when
+  whoever is standing there leaves, and is not retryable. A client whose working
+  directory is under the mount is NOT counted; see `docs/TASKS.md` for why, and
+  what has to exist first.
+
+The backend is quiesced before it is dropped — `WASMOS_IPC_SHUTDOWN_REQ` with
+`WASMOS_SHUTDOWN_REASON_UNMOUNT`, the same sequence machine shutdown uses — so a
+filesystem with dirty state writes it while it still has a block device. A
+backend that fails to answer is dropped anyway: the mount is going regardless,
+and leaving it in the table would make an unresponsive backend permanent.
+
+The mount POINT is left in place. It is a directory in the covering filesystem
+and belongs to that filesystem, so what becomes visible again is whatever the
+covering filesystem holds there — the other half of shadowing.
+
+Establishing a mount is not a request. A filesystem is placed by whoever spawns
+its driver, which passes `mount=<path>` as a startup argument; the mount then
+appears through the class event below. `mount` and `umount` are utilities under
+`/system/utils`, not shell built-ins, so the table always comes from the service
+that owns it.
+
 Backends do NOT push a registration. `fs_manager` SUBSCRIBES to the `fs.backend`
 service class and enumerates it, then PULLS each provider's identity with
 `FSMGR_IPC_BACKEND_INFO_REQ` (see Backend Identity below), so the backend set is
@@ -126,6 +162,14 @@ All filesystem operations use opcodes in the range `0x400–0x4FF`.
 | `FS_IPC_CHDIR`     | 0x412 | Change working directory                       |
 | `FS_IPC_READ_APP`  | 0x413 | Retired; range sentinel only (see below)       |
 | `FS_IPC_READ_PATH` | 0x414 | Read a file by absolute path in one shot       |
+
+Mount-table operations are answered by `fs_manager` itself and never reach a
+backend, so they carry their own response opcodes rather than `FS_IPC_RESP`:
+
+| Opcode                     | Value | Operation                             |
+|----------------------------|-------|---------------------------------------|
+| `FSMGR_IPC_QUERY_MOUNTS`   | 0x422 | Report the mount table into a buffer  |
+| `FSMGR_IPC_UNMOUNT`        | 0x423 | Remove the mount at an absolute path  |
 
 #### Responses (backend → fs_manager → client)
 

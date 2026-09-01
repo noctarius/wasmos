@@ -366,9 +366,38 @@ subsystems:
           as FAT.
       - { symbol: FSMGR_IPC_CLONE_CWD_REQ, value: 0x421, kind: req }
       - { symbol: FSMGR_IPC_QUERY_MOUNTS_REQ, value: 0x422, kind: req }
+      - symbol: FSMGR_IPC_UNMOUNT_REQ
+        value: 0x423
+        kind: req
+        doc: |
+          Remove a mount, named by its absolute mount PATH. arg0 = path length,
+          arg2 = the client's buffer holding it, arg3 = the client's grant -- the
+          transport FS_IPC_CHDIR_REQ uses, and for the same reason: a path can
+          grow, so it does not belong in the four argument words.
+
+          Refused with WASMOS_ERR_FS_MOUNT_BUSY while anything still stands in the
+          mount: a deeper mount inside it, an open file on it, or a client whose
+          working directory is under it. The root is therefore normally busy,
+          because every client starts at "/" -- the same answer Linux gives, and
+          not a case written for it.
+
+          The mount POINT is left in place. It is a directory in the covering
+          filesystem, and removing it would delete state the mount only borrowed;
+          an empty directory left behind is harmless, and the next mount at that
+          path reuses it. What DOES come back is whatever the covering filesystem
+          held underneath, because routing stops preferring the mount -- the other
+          half of shadowing.
+
+          The backend is told to shut down (WASMOS_IPC_SHUTDOWN_REQ) before it is
+          dropped, so a filesystem holding dirty state gets the chance every
+          orderly teardown gets; WFS writes its clean mark there. A backend that
+          does not answer is dropped anyway: the namespace is fs-manager's to
+          decide, and a wedged driver must not be able to keep a mount alive.
+
       - { symbol: FSMGR_IPC_BACKEND_INFO_RESP, value: 0x4a0, kind: resp }
       - { symbol: FSMGR_IPC_CLONE_CWD_RESP, value: 0x4a1, kind: resp }
       - { symbol: FSMGR_IPC_QUERY_MOUNTS_RESP, value: 0x4a2, kind: resp }
+      - { symbol: FSMGR_IPC_UNMOUNT_RESP, value: 0x4a3, kind: resp }
 
   - name: fbtext
     id: 7

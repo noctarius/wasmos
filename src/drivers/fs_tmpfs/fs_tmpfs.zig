@@ -711,6 +711,19 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
         handleBackendInfo(msg);
         return;
     }
+    // A quiesce, for either reason. There is nothing to flush: this filesystem
+    // IS memory, so its contents do not outlive the process and no write makes
+    // them recoverable. DONE is owed all the same -- fs-manager waits for it
+    // before dropping the mount, and the machine shutdown sequence is sequential,
+    // so a participant that never answers stalls everyone behind it.
+    //
+    // The namespace is NOT cleared: fs-manager has already stopped routing to
+    // this backend by the time it sends WASMOS_SHUTDOWN_REASON_UNMOUNT, and
+    // freeing the arena here would only race a request already in flight.
+    if (msg.type == op.WASMOS_IPC_SHUTDOWN_REQ) {
+        _ = driver.send(msg.source, endpoint(), op.WASMOS_IPC_SHUTDOWN_DONE, msg.request_id, 0, 0, 0, 0);
+        return;
+    }
     const cwd = clientCwd(msg.source) orelse {
         fail(msg.source, msg.request_id, status.WASMOS_ERR_FS_NO_CLIENT_SLOT);
         return;

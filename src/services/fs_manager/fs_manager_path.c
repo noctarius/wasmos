@@ -25,6 +25,36 @@ static int32_t ascii_case_equal(const char* a, const char* b, int32_t n) {
     return 1;
 }
 
+int32_t fsmgr_path_is_within(const char* mount, const char* path) {
+    int32_t mlen = 0;
+    int32_t plen = 0;
+
+    if (!mount || !path || mount[0] != '/' || path[0] != '/') {
+        return 0;
+    }
+    while (mount[mlen] != '\0') {
+        mlen++;
+    }
+    /* A mount declared "/wfs/" names the same directory as "/wfs"; comparing the
+     * separator as part of the prefix would make it contain nothing. */
+    while (mlen > 1 && mount[mlen - 1] == '/') {
+        mlen--;
+    }
+    while (path[plen] != '\0') {
+        plen++;
+    }
+    if (mlen == 1) {
+        return 1;
+    }
+    if (plen < mlen || !ascii_case_equal(mount, path, mlen)) {
+        return 0;
+    }
+    /* The byte after the prefix decides sibling from child: end of string means
+     * the path IS the mount, a separator means it is under it, and anything else
+     * means the prefix ended mid-segment ("/wfsx" against "/wfs"). */
+    return plen == mlen || path[mlen] == '/';
+}
+
 int32_t fsmgr_cwd_join(const char* cwd, const char* arg, char* out_path, int32_t out_cap) {
     int32_t len = 0;
     int32_t i = 0;

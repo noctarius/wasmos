@@ -938,6 +938,97 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
     fsmgr_ensure_mount_points();
 }
 
+/* Forget every cached reference to `endpoint` in the client table.
+ *
+ * fs_client_state_t caches the backend serving its working directory, and an fd
+ * records the backend that issued it. Both outlive the backend if nothing clears
+ * them, and a stale endpoint is worse than an absent one: forwarding to it either
+ * reaches whatever reused the id or fails with a transport error that says
+ * nothing about the mount having gone. Clearing the cache is enough for the cwd,
+ * because an unset cache is answered by routing; an fd cannot be re-derived, so
+ * it is released and the client's next use of it is a clean BAD_FD.
+ *
+ * Applies to a provider that DIED as much as to one that was unmounted -- the
+ * table entry goes either way, and the caches have to follow it. */
+static void fsmgr_forget_backend_in_clients(int32_t endpoint) {
+    fs_client_chunk_t* chunk = g_client_chunks;
+
+    while (chunk) {
+        for (uint32_t i = 0; i < chunk->used; ++i) {
+            fs_client_state_t* state = &chunk->slots[i];
+            if (!state->in_use) {
+                continue;
+            }
+            if (state->backend_endpoint == endpoint) {
+                state->mount = FS_MOUNT_ROOT;
+                state->backend_endpoint = -1;
+            }
+            for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
+                if (state->fds[f].in_use && state->fds[f].backend_endpoint == endpoint) {
+                    state->fds[f].in_use = 0;
+                    state->fds[f].backend_endpoint = -1;
+                    state->fds[f].backend_fd = -1;
+                }
+            }
+        }
+        chunk = chunk->next;
+    }
+}
+
+/* Why `mount_path` cannot be unmounted yet, or WASMOS_ERR_NONE when it can.
+ *
+ * Two things count as standing in a mount, and both are the namespace saying
+ * someone is still there rather than a shortage to retry:
+ *
+ *  - a DEEPER mount inside it. Removing the outer one first would leave the
+ *    inner one addressable only through a path whose prefix no longer routes.
+ *    This is also what normally makes "/" unremovable, since every other mount
+ *    is inside it.
+ *  - an OPEN FILE on it. The fd names a backend that would stop existing, and
+ *    the client cannot re-derive it.
+ *
+ * A client whose WORKING DIRECTORY is under the mount is deliberately NOT
+ * counted, though Linux refuses on exactly that. fs-manager never releases a
+ * client's state -- there is no exit notification to release it on -- so a cwd
+ * recorded by a process that has since exited would refuse the unmount forever.
+ * A single `cat` run inside a mount would make it permanently unremovable, which
+ * is a worse failure than the one the rule prevents: a client standing in a
+ * removed mount gets NOT_FOUND on its next operation and recovers by moving,
+ * whereas nothing recovers a mount pinned by a dead process.
+ *
+ * TODO: count the working directory once client state is reaped on process
+ * exit. The same staleness applies to the open-file rule above, which is kept
+ * because an fd is a resource fs-manager actually holds and because a client
+ * that exits normally closes it. See docs/TASKS.md.
+ */
+static wasmos_error_code_t fsmgr_mount_busy_reason(const fs_backend_t* mount) {
+    fs_client_chunk_t* chunk = g_client_chunks;
+
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        if (!g_backends[i].in_use || &g_backends[i] == mount) {
+            continue;
+        }
+        if (fsmgr_path_is_within(mount->mount_path, g_backends[i].mount_path)) {
+            return WASMOS_ERR_FS_MOUNT_BUSY;
+        }
+    }
+    while (chunk) {
+        for (uint32_t i = 0; i < chunk->used; ++i) {
+            fs_client_state_t* state = &chunk->slots[i];
+            if (!state->in_use) {
+                continue;
+            }
+            for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
+                if (state->fds[f].in_use && state->fds[f].backend_endpoint == mount->endpoint) {
+                    return WASMOS_ERR_FS_MOUNT_BUSY;
+                }
+            }
+        }
+        chunk = chunk->next;
+    }
+    return WASMOS_ERR_NONE;
+}
+
 /* Drop a backend that left its class (provider died / unregistered). */
 static void fsmgr_backend_remove(int32_t backend_endpoint) {
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
@@ -945,6 +1036,7 @@ static void fsmgr_backend_remove(int32_t backend_endpoint) {
             g_backends[i].in_use = 0;
         }
     }
+    fsmgr_forget_backend_in_clients(backend_endpoint);
 }
 
 /* Discover the current FS backends by class and pull each. Subscribe first so a
@@ -1318,6 +1410,116 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
     return 1;
 }
 
+/* FSMGR_IPC_UNMOUNT_REQ: remove one mount from the namespace.
+ *
+ * The mount is named by PATH, not by backend endpoint or class instance: a
+ * client knows where a filesystem is, not which process serves it, and the path
+ * is what `mount` reports. The path arrives in the client's buffer (arg2, arg0 =
+ * its length) because a mount path can grow past what an argument word carries;
+ * it is resolved against the client's working directory and canonicalized
+ * exactly as a registration path is, so "/WFS", "/wfs/" and "/wfs" all name the
+ * same mount.
+ *
+ * The refusal cases are the whole point of the operation:
+ *
+ *  - nothing mounted at that path is WASMOS_ERR_FS_NO_BACKEND. A path that
+ *    merely EXISTS inside some other mount is not a mount and is refused here,
+ *    which is why the comparison is against the mount path rather than a route.
+ *  - anything still standing in the mount is WASMOS_ERR_FS_MOUNT_BUSY. The
+ *    requesting client counts: `umount` of the directory you are standing in
+ *    fails, and "/" is normally unremovable because every client starts there.
+ *
+ * The backend is quiesced before it is dropped -- WASMOS_IPC_SHUTDOWN_REQ with
+ * WASMOS_SHUTDOWN_REASON_UNMOUNT, the same sequence machine shutdown uses -- so
+ * a filesystem with dirty state writes it while it still has a block device.
+ * A backend that fails to answer is dropped anyway: the mount is going regardless
+ * and leaving it in the table would make an unresponsive backend permanent.
+ *
+ * The mount POINT is left in place. It is a directory in the covering
+ * filesystem, created when the mount was established, and it belongs to that
+ * filesystem rather than to the mount -- removing it would delete a directory
+ * fs-manager does not own, and would break re-mounting at the same path. What
+ * reappears once the mount is gone is whatever the covering filesystem holds
+ * there, which is the other half of shadowing.
+ *
+ * TODO: the backend PROCESS stays resident after its mount is dropped. It no
+ * longer serves anything (fs-manager holds no reference and class discovery only
+ * re-adds on an ADD event) but it still occupies a process slot, so repeated
+ * mount/unmount cycles leak slots. Exiting needs a process-exit path a driver
+ * can call after answering DONE, which no driver has today. */
+static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t request_id,
+                               int32_t path_len, int32_t buffer_id) {
+    uint8_t requested[FSMGR_CWD_MAX];
+    char target[FSMGR_CWD_MAX];
+    char mount[FSMGR_MOUNT_PATH_MAX];
+    fs_backend_t* victim = 0;
+    wasmos_error_code_t busy;
+    int32_t endpoint;
+    int32_t rr_t = FS_IPC_ERROR, rr0 = 0, rr1 = 0, rr2 = 0, rr3 = 0;
+
+    if (buffer_id <= 0 || path_len <= 0 || path_len >= (int32_t)sizeof(requested) ||
+        path_len >= wasmos_xfer_buffer_size()) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_PATH_TOO_LONG);
+        return;
+    }
+    if (wasmos_xfer_buffer_read(buffer_id, requested, path_len, 0) != 0) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BUFFER);
+        return;
+    }
+    requested[path_len] = '\0';
+    if (!fsmgr_cwd_join(state->cwd, (const char*)requested, target, (int32_t)sizeof(target))) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_PATH_TOO_LONG);
+        return;
+    }
+    if (!fsmgr_mount_path_from_reported(target, mount, (uint32_t)sizeof(mount))) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_ABSOLUTE);
+        return;
+    }
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        if (g_backends[i].in_use && strcmp(g_backends[i].mount_path, mount) == 0) {
+            victim = &g_backends[i];
+            break;
+        }
+    }
+    if (!victim) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NO_BACKEND);
+        return;
+    }
+    busy = fsmgr_mount_busy_reason(victim);
+    if (busy != WASMOS_ERR_NONE) {
+        send_fs_error(source, request_id, busy);
+        return;
+    }
+
+    endpoint = victim->endpoint;
+    /* The table entry goes first. The quiesce below blocks on a reply, and while
+     * it does, this loop is not serving anyone -- but a backend that answers by
+     * issuing work of its own must not find its own mount still routable. */
+    victim->in_use = 0;
+    fsmgr_forget_backend_in_clients(endpoint);
+
+    if (forward_request(endpoint,
+                        WASMOS_IPC_SHUTDOWN_REQ,
+                        request_id,
+                        WASMOS_SHUTDOWN_REASON_UNMOUNT,
+                        0,
+                        0,
+                        0,
+                        source,
+                        &rr_t,
+                        &rr0,
+                        &rr1,
+                        &rr2,
+                        &rr3) != 0 ||
+        rr_t != (int32_t)WASMOS_IPC_SHUTDOWN_DONE) {
+        /* Reported, not returned: the mount IS gone, so answering the client
+         * with an error would describe a failure that did not happen. What the
+         * backend failed to flush is the backend's loss to record. */
+        log_msg("[fs-manager] unmount: backend did not quiesce\n");
+    }
+    (void)reply_to_client(source, FSMGR_IPC_UNMOUNT_RESP, request_id, 0, 0, 0, 0);
+}
+
 /* Service entry point.  Brings up the bump heap and the two endpoints (a service
  * endpoint published as "fs.vfs" and a private reply endpoint used for nested
  * calls to backends), registers the service name, signals readiness, then
@@ -1413,6 +1615,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         fs_client_state_t* state = client_state(client_key);
         if (!state) {
             send_fs_error(source, request_id, WASMOS_ERR_FS_NO_CLIENT_SLOT);
+            continue;
+        }
+
+        /* UNMOUNT resolves its path against the client's cwd and refuses on the
+         * client's own position, so it needs client state -- unlike
+         * QUERY_MOUNTS, which reads the table and needs none. */
+        if (type == FSMGR_IPC_UNMOUNT_REQ) {
+            handle_unmount_req(state, source, request_id, arg0, arg2f);
             continue;
         }
 

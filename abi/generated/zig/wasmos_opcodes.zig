@@ -232,7 +232,7 @@ pub const FS_IPC_RESP: i32 = 0x480;
 pub const FS_IPC_STREAM: i32 = 0x481;
 pub const FS_IPC_ERROR: i32 = 0x4FF;
 
-// fs_manager (0x420..0x4A2)
+// fs_manager (0x420..0x4A3)
 /// fs-manager -> backend pull: report kind/fs-type/mount/unit into a buffer
 /// the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
 /// arg1=fs_type, arg2=mount_name_len, arg3=unit. Backends are discovered
@@ -272,9 +272,34 @@ pub const FS_IPC_ERROR: i32 = 0x4FF;
 pub const FSMGR_IPC_BACKEND_INFO_REQ: i32 = 0x420;
 pub const FSMGR_IPC_CLONE_CWD_REQ: i32 = 0x421;
 pub const FSMGR_IPC_QUERY_MOUNTS_REQ: i32 = 0x422;
+/// Remove a mount, named by its absolute mount PATH. arg0 = path length,
+/// arg2 = the client's buffer holding it, arg3 = the client's grant -- the
+/// transport FS_IPC_CHDIR_REQ uses, and for the same reason: a path can
+/// grow, so it does not belong in the four argument words.
+///
+/// Refused with WASMOS_ERR_FS_MOUNT_BUSY while anything still stands in the
+/// mount: a deeper mount inside it, an open file on it, or a client whose
+/// working directory is under it. The root is therefore normally busy,
+/// because every client starts at "/" -- the same answer Linux gives, and
+/// not a case written for it.
+///
+/// The mount POINT is left in place. It is a directory in the covering
+/// filesystem, and removing it would delete state the mount only borrowed;
+/// an empty directory left behind is harmless, and the next mount at that
+/// path reuses it. What DOES come back is whatever the covering filesystem
+/// held underneath, because routing stops preferring the mount -- the other
+/// half of shadowing.
+///
+/// The backend is told to shut down (WASMOS_IPC_SHUTDOWN_REQ) before it is
+/// dropped, so a filesystem holding dirty state gets the chance every
+/// orderly teardown gets; WFS writes its clean mark there. A backend that
+/// does not answer is dropped anyway: the namespace is fs-manager's to
+/// decide, and a wedged driver must not be able to keep a mount alive.
+pub const FSMGR_IPC_UNMOUNT_REQ: i32 = 0x423;
 pub const FSMGR_IPC_BACKEND_INFO_RESP: i32 = 0x4A0;
 pub const FSMGR_IPC_CLONE_CWD_RESP: i32 = 0x4A1;
 pub const FSMGR_IPC_QUERY_MOUNTS_RESP: i32 = 0x4A2;
+pub const FSMGR_IPC_UNMOUNT_RESP: i32 = 0x4A3;
 
 // fbtext (0x600..0x6FF)
 pub const FBTEXT_IPC_CELL_WRITE_REQ: i32 = 0x600;

@@ -325,6 +325,123 @@ class VfsDeepAndNestedMountTest(VfsSession, unittest.TestCase):
         self.assertIn(b"hello.txt", listing, f"/wfs lost its own content\n{listing!r}")
 
 
+class VfsUnmountTest(VfsSession, unittest.TestCase):
+    """Removing a mount, and refusing to remove one that is still in use.
+
+    Its own session, because unmounting is destructive to the namespace every
+    other class here reads: a mount removed by one case must not be missing when
+    another asserts it is present.
+
+    Cases run in unittest's alphabetical order and are NOT independent -- the
+    refusals must be observed while `/wfs/nested` still stands, and the two
+    removals must happen inside out. The method names carry that order, which is
+    why the last one begins with `test_with_`.
+
+    Regression: 2026-09-01-unmount-completes-shadowing
+    Mounts could be established but never removed, so shadowing was only ever
+    demonstrated in one direction: content disappeared under a mount and had no
+    way to come back. A covered file that never reappears is indistinguishable
+    from a deleted one.
+    """
+
+    def test_a_mount_with_a_deeper_mount_inside_it_is_refused(self):
+        """`/wfs` contains the `/wfs/nested` mount. Removing the outer one would
+        leave the inner reachable only through a prefix that no longer routes.
+
+        `/` is refused for the same reason and not a special case: every other
+        mount is inside it.
+        """
+        self._run("cd /")
+        out = self._run("umount /wfs")
+        self.assertIn(b"fs.MOUNT_BUSY", out, f"the deeper mount was ignored\n{out!r}")
+        out = self._run("umount /")
+        self.assertIn(b"fs.MOUNT_BUSY", out, f"the root was removable\n{out!r}")
+        out = self._run("mount")
+        self.assertIn(b"/wfs ->", out, f"a refused unmount still removed it\n{out!r}")
+        self.assertIn(
+            b"/ ->", out, f"a refused unmount still removed the root\n{out!r}"
+        )
+
+    def test_a_path_that_is_not_a_mount_is_not_unmountable(self):
+        """`/home` exists -- fs-manager created it walking to `/home/user` -- but
+        it is a directory, not a mount, and NO_BACKEND says exactly that."""
+        self._run("cd /")
+        out = self._run("umount /home")
+        self.assertIn(b"fs.NO_BACKEND", out, f"a plain directory unmounted\n{out!r}")
+        out = self._run("umount /nowhere")
+        self.assertIn(b"fs.NO_BACKEND", out, f"a missing path unmounted\n{out!r}")
+
+    def test_the_mount_table_is_read_from_the_service_not_the_shell(self):
+        """`mount` is a spawned utility, not a shell builtin.
+
+        It asks fs-manager for the table (FSMGR_IPC_QUERY_MOUNTS_REQ) and prints
+        the reply, so what it shows is what routing uses. A listing the shell
+        assembled could disagree with the service that owns it.
+        """
+        self._run("cd /")
+        out = self._run("mount")
+        self.assertIn(b"mounts:", out, f"no table printed\n{out!r}")
+        self.assertIn(b"/ ->", out, f"root missing from the table\n{out!r}")
+
+    def test_unmounting_uncovers_what_the_volume_holds(self):
+        """The other half of shadowing.
+
+        `/wfs/nested/covered.txt` is a file in the WFS image that the tmpfs
+        mounted over `/wfs/nested` hides. Removing that mount must make it
+        readable again -- the mount hid it, so nothing about the volume changed
+        and the file was never gone.
+
+        The mount point itself stays: it is a directory in the WFS volume, owned
+        by that volume rather than by the mount.
+        """
+        self._run("cd /wfs/nested")
+        listing = self._run("ls")
+        self.assertNotIn(
+            b"covered.txt", listing, f"not shadowed to begin with\n{listing!r}"
+        )
+
+        # Standing elsewhere: the covered file is read back through a fresh
+        # lookup rather than through a directory handle opened before the mount
+        # went away.
+        self._run("cd /")
+        out = self._run("umount /wfs/nested")
+        self.assertIn(b"unmounted", out, f"unmount refused\n{out!r}")
+
+        out = self._run("mount")
+        self.assertNotIn(b"/wfs/nested ->", out, f"still in the mount table\n{out!r}")
+
+        self._run("cd /wfs/nested")
+        listing = self._run("ls")
+        self.assertIn(
+            b"covered.txt",
+            listing,
+            f"the covered file did not come back\n{listing!r}",
+        )
+        out = self._run("cat covered.txt")
+        self.assertIn(
+            b"exists only to be covered",
+            out,
+            f"uncovered but not readable\n{out!r}",
+        )
+
+    def test_with_the_inner_mount_gone_the_outer_one_is_removable(self):
+        """Busy is a condition, not a property: what made `/wfs` unremovable was
+        the mount inside it, so removing that one releases it.
+
+        Runs last -- the cases above read `/wfs`, and this removes it.
+        """
+        self._run("cd /")
+        self._run("umount /wfs/nested")
+        out = self._run("umount /wfs")
+        self.assertIn(b"unmounted", out, f"still refused\n{out!r}")
+        out = self._run("mount")
+        self.assertNotIn(b"/wfs ->", out, f"still in the mount table\n{out!r}")
+        # The mount POINT survives its mount: it is a directory in the root
+        # filesystem, created when the mount registered and not owned by it.
+        listing = self._run("ls")
+        self.assertIn(b"wfs/", listing, f"the mount point was removed too\n{listing!r}")
+
+
 class VfsRootWritableTest(VfsSession, unittest.TestCase):
     """The root filesystem accepts writes, exercised through the `mkdir` util.
 

@@ -856,6 +856,20 @@ linked feature documents for rationale and rollout plans.
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
+- A mount can be REMOVED. `FSMGR_IPC_UNMOUNT_REQ` names it by the absolute path
+  it occupies, refuses with `WASMOS_ERR_FS_MOUNT_BUSY` while a deeper mount or an
+  open file is still inside it, quiesces the backend
+  (`WASMOS_IPC_SHUTDOWN_REQ` / `WASMOS_SHUTDOWN_REASON_UNMOUNT`) and drops it.
+  The mount POINT stays, so the covering filesystem's content at that path
+  becomes visible again -- shadowing now demonstrated in both directions
+  (`tests/test_vfs_root_mount.py::VfsUnmountTest`). A client whose working
+  directory is under the mount does NOT make it busy, because fs-manager never
+  releases client state and a cwd left by an exited process would pin the mount
+  forever (`docs/TASKS.md`). The backend process itself survives its unmount.
+- `mount` and `umount` are utilities under `/system/utils`, not shell built-ins:
+  `mount` was extracted from the CLI so the table always comes from the service
+  that owns it. Establishing a mount is still not a request -- placement comes
+  from whoever spawns the driver.
 - `fs-tmpfs` (`src/drivers/fs_tmpfs/`, Zig) is a read-write filesystem held in
   its own linear memory, reporting `FSMGR_BACKEND_PSEUDO` + `FS_TYPE_TMPFS`. It
   is a general in-memory filesystem, not a root-specific one: the mount comes

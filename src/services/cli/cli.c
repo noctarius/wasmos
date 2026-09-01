@@ -30,7 +30,6 @@
  *                           the name into arg0..arg3); a longer absolute path is
  *                           issued as a chdir to root followed by a second
  *                           request for the remainder
- *   mount                   list mount points
  *   kmaps [all]             dump kernel page mappings
  *   tty <0-3>               make that vt slot visible; exactly one digit
  *   tty -s <1-3>            bind the serial console to that slot; the visible
@@ -1205,62 +1204,6 @@ static int cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t ar
     return 0;
 }
 
-static void cli_show_mounts(void) {
-    char buf[384];
-    int32_t req_id = 0;
-    int32_t resp_type = 0;
-    int32_t n = 0;
-    int32_t bid = -1;
-    int32_t b1 = -1;
-    if (g_fs_endpoint < 0 || g_reply_endpoint < 0) {
-        console_write("mount failed\n");
-        return;
-    }
-    /* Owner-push: acquire a buffer and GRANT fs-manager WRITE so it can write
-     * the mounts listing back into it; ship bid (arg2) + b1 (arg3). */
-    bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(buf));
-    if (bid < 0) {
-        console_write("mount failed\n");
-        return;
-    }
-    b1 = wasmos_xfer_buffer_borrow(g_fs_endpoint, bid, WASMOS_BUFFER_GRANT_WRITE);
-    if (b1 < 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        console_write("mount failed\n");
-        return;
-    }
-    req_id = g_request_id++;
-    if (wasmos_ipc_send(
-            g_fs_endpoint, g_reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0, bid, b1) !=
-            0 ||
-        wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
-        (void)wasmos_xfer_buffer_release(bid);
-        console_write("mount failed\n");
-        return;
-    }
-    resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-    if (resp_type != FSMGR_IPC_QUERY_MOUNTS_RESP) {
-        (void)wasmos_xfer_buffer_release(bid);
-        console_write("mount failed\n");
-        return;
-    }
-    n = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    if (n <= 0 || n >= (int32_t)sizeof(buf)) {
-        (void)wasmos_xfer_buffer_release(bid);
-        console_write("mount failed\n");
-        return;
-    }
-    if (wasmos_xfer_buffer_read(bid, buf, n, 0) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        console_write("mount failed\n");
-        return;
-    }
-    (void)wasmos_xfer_buffer_release(bid);
-    buf[n] = '\0';
-    console_write(buf);
-}
-
 static void cli_trim_name(char* name) {
     if (!name) {
         return;
@@ -1743,13 +1686,9 @@ static int cli_handle_line(void) {
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, kmaps [all], ls, cd <path>, mount, script <file>, source "
+        console_write("commands: help, kmaps [all], ls, cd <path>, script <file>, source "
                       "<file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] "
                       "[--] [text|${VAR}...], tty <0-3>, tty -s <1-3>, halt, reboot\n");
-        return 0;
-    }
-    if (line_eq_ci("mount")) {
-        cli_show_mounts();
         return 0;
     }
     /* The dump itself goes to the KERNEL LOG, never to this console, so the reply
@@ -2171,7 +2110,7 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     /* Every shell announces itself, whichever slot it was spawned for: a shell
      * created for a slot the user just switched or bound to is otherwise
      * invisible until it happens to be asked something. */
-    console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, mount, script "
+    console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, script "
                   "<file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, "
                   "echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, tty -s <1-3>, halt, "
                   "reboot\n");

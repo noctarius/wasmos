@@ -297,6 +297,12 @@ set(WASM_IP_APP ${BUILD_DIR}/ip.wap)
 set(WASM_MKDIR_SRC ${CMAKE_SOURCE_DIR}/src/utils/mkdir/mkdir.c)
 set(WASM_MKDIR_WASM ${BUILD_DIR}/mkdir.wasm)
 set(WASM_MKDIR_APP ${BUILD_DIR}/mkdir.wap)
+set(WASM_MOUNT_SRC ${CMAKE_SOURCE_DIR}/src/utils/mount/mount.c)
+set(WASM_MOUNT_WASM ${BUILD_DIR}/mount.wasm)
+set(WASM_MOUNT_APP ${BUILD_DIR}/mount.wap)
+set(WASM_UMOUNT_SRC ${CMAKE_SOURCE_DIR}/src/utils/umount/umount.c)
+set(WASM_UMOUNT_WASM ${BUILD_DIR}/umount.wasm)
+set(WASM_UMOUNT_APP ${BUILD_DIR}/umount.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
@@ -1739,6 +1745,8 @@ if (TARGET host_util)
   set(HOST_UTIL_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MKDIR_APP} ${BUILD_DIR}/esp/system/utils/mkdir.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUNT_APP} ${BUILD_DIR}/esp/system/utils/mount.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_UMOUNT_APP} ${BUILD_DIR}/esp/system/utils/umount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
     # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap

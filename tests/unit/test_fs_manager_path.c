@@ -494,6 +494,76 @@ static void test_cwd_join_rejects_a_relative_cwd(void) {
     assert(fsmgr_cwd_join("wfs/docs", "x", out, (int32_t)sizeof(out)) == 0);
 }
 
+/* fsmgr_path_is_within: the containment predicate unmount refuses on.
+ *
+ * It answers the same question routing does -- "does this mount own this path?"
+ * -- so it has to agree with routing on segment boundaries. Where it disagrees,
+ * an unmount either strands a deeper mount it failed to notice, or refuses
+ * forever over a path that merely shares a prefix with the mount's name. */
+static void test_within_matches_whole_segments_only(void) {
+    assert(fsmgr_path_is_within("/wfs", "/wfs/docs") == 1);
+    assert(fsmgr_path_is_within("/wfs", "/wfs/docs/a.txt") == 1);
+    /* "/wfsx" only shares a prefix; it is a sibling, not a child. */
+    assert(fsmgr_path_is_within("/wfs", "/wfsx") == 0);
+    assert(fsmgr_path_is_within("/wfs", "/wfsx/docs") == 0);
+    assert(fsmgr_path_is_within("/wfs", "/other") == 0);
+}
+
+/* A client standing exactly on the mount point is standing IN the mount, so a
+ * cwd of "/wfs" keeps "/wfs" busy. Treating it as outside would let the mount go
+ * out from under that client. */
+static void test_within_counts_the_mount_itself(void) {
+    assert(fsmgr_path_is_within("/wfs", "/wfs") == 1);
+    assert(fsmgr_path_is_within("/home/user", "/home/user") == 1);
+    /* The parent of a mount is not inside it. */
+    assert(fsmgr_path_is_within("/home/user", "/home") == 0);
+}
+
+/* The root contains every absolute path, which is why it is normally busy:
+ * every client's working directory starts at "/". */
+static void test_within_root_contains_everything(void) {
+    assert(fsmgr_path_is_within("/", "/") == 1);
+    assert(fsmgr_path_is_within("/", "/wfs") == 1);
+    assert(fsmgr_path_is_within("/", "/a/b/c") == 1);
+}
+
+/* A mount declared with trailing slashes names the same directory, and the
+ * predicate has to see through them or "/wfs/" would contain nothing at all. */
+static void test_within_ignores_trailing_slashes_on_the_mount(void) {
+    assert(fsmgr_path_is_within("/wfs/", "/wfs/docs") == 1);
+    assert(fsmgr_path_is_within("/wfs//", "/wfs") == 1);
+    assert(fsmgr_path_is_within("//", "/anything") == 1);
+}
+
+static void test_within_is_case_insensitive(void) {
+    assert(fsmgr_path_is_within("/WFS", "/wfs/docs") == 1);
+    assert(fsmgr_path_is_within("/wfs", "/WFS/DOCS") == 1);
+    assert(fsmgr_path_is_within("/Home/User", "/home/user/x") == 1);
+}
+
+/* Deep and nested mounts: /home/user is inside /home, and unmounting /home while
+ * /home/user is mounted would leave the inner mount addressable only through a
+ * prefix that no longer routes. */
+static void test_within_detects_a_deeper_mount(void) {
+    assert(fsmgr_path_is_within("/home", "/home/user") == 1);
+    assert(fsmgr_path_is_within("/home/user", "/home") == 0);
+    assert(fsmgr_path_is_within("/wfs", "/wfs/nested") == 1);
+    /* Siblings at the same depth never contain one another. */
+    assert(fsmgr_path_is_within("/home/user", "/home/other") == 0);
+}
+
+/* Anything that is not an absolute path is not a containment question that can
+ * be answered; refusing is what keeps a relative cwd from silently reading as
+ * "not in the mount" and letting a live mount be removed. */
+static void test_within_rejects_non_absolute_inputs(void) {
+    assert(fsmgr_path_is_within("wfs", "/wfs/docs") == 0);
+    assert(fsmgr_path_is_within("/wfs", "wfs/docs") == 0);
+    assert(fsmgr_path_is_within("", "/wfs") == 0);
+    assert(fsmgr_path_is_within("/wfs", "") == 0);
+    assert(fsmgr_path_is_within(0, "/wfs") == 0);
+    assert(fsmgr_path_is_within("/wfs", 0) == 0);
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -527,6 +597,13 @@ int main(void) {
         WASMOS_TEST_CASE(test_cwd_join_resolves_dots_and_cannot_escape_the_root),
         WASMOS_TEST_CASE(test_cwd_join_refuses_rather_than_truncating),
         WASMOS_TEST_CASE(test_cwd_join_rejects_a_relative_cwd),
+        WASMOS_TEST_CASE(test_within_matches_whole_segments_only),
+        WASMOS_TEST_CASE(test_within_counts_the_mount_itself),
+        WASMOS_TEST_CASE(test_within_root_contains_everything),
+        WASMOS_TEST_CASE(test_within_ignores_trailing_slashes_on_the_mount),
+        WASMOS_TEST_CASE(test_within_is_case_insensitive),
+        WASMOS_TEST_CASE(test_within_detects_a_deeper_mount),
+        WASMOS_TEST_CASE(test_within_rejects_non_absolute_inputs),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_fs_manager_path: ok\n");

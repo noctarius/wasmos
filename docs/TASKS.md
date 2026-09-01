@@ -1497,12 +1497,46 @@ Source: `architecture/19-virtual-terminal.md`,
     `/home/user` has its ancestors created as directories in the root filesystem;
     `/wfs/nested` has its mount point created inside the WFS VOLUME, which is the
     other branch of `fsmgr_ensure_mount_points`.
-  - DONE: SHADOWING is demonstrated. `scripts/wfs/nested/covered.txt` is in the
-    WFS image, and the tmpfs mounted over `/wfs/nested` hides it -- verified by a
-    CONTROL run with the mount disabled, where the file is listed, so the case
-    measures the mount rather than an absent directory. Note that nothing
-    UNMOUNTS, so the other half of the Linux rule (contents reappearing) is still
-    only construction.
+  - DONE: SHADOWING is demonstrated in BOTH directions. `scripts/wfs/nested/covered.txt`
+    is in the WFS image, and the tmpfs mounted over `/wfs/nested` hides it --
+    verified by a CONTROL run with the mount disabled, where the file is listed,
+    so the case measures the mount rather than an absent directory.
+    `FSMGR_IPC_UNMOUNT_REQ` removes the mount and the file comes back, which is
+    the half that was previously only construction.
+  - Mounting is still not a REQUEST. `mount` reports the table and `umount`
+    removes an entry, but nothing establishes one at runtime: a filesystem is
+    placed by whoever spawns its driver (`ENV{MOUNT}` on a device-manager rule).
+    A `FSMGR_IPC_MOUNT_REQ` would have fs-manager spawn a backend for a named
+    filesystem type at a named path; the mount would still appear asynchronously
+    through the `fs.backend` class event, so the reply reports the spawn rather
+    than the mount.
+  - The backend PROCESS survives its unmount. fs-manager quiesces it
+    (`WASMOS_IPC_SHUTDOWN_REQ` with `WASMOS_SHUTDOWN_REASON_UNMOUNT`) and drops
+    the table entry, but the driver keeps running and holding a process slot, so
+    repeated mount/unmount cycles leak slots. Exiting needs a process-exit path a
+    driver can call after answering DONE, which no driver has today.
+    (`src/services/fs_manager/fs_manager.c`, the TODO above `handle_unmount_req`.)
+
+- [ ] [BUG][P2] fs-manager never releases a client's state. `client_state()`
+  allocates a `fs_client_state_t` on first contact from a context and nothing
+  ever clears `in_use`: the chunk list grows for the lifetime of the system, one
+  entry per process that has ever touched the filesystem, each holding a cwd
+  string and an fd table. A shell session that spawns utilities leaks one entry
+  per spawn.
+
+  It also costs a correctness property rather than only memory. `umount` refuses
+  a mount that still has an OPEN FILE on it, and Linux additionally refuses one
+  that a process is standing in; the second rule is deliberately NOT implemented
+  here (`fsmgr_mount_busy_reason`) because a cwd recorded by a process that has
+  since exited would refuse the unmount forever -- a single `cat` run inside a
+  mount would make it permanently unremovable. The open-file rule has the same
+  staleness and is kept only because a client that exits normally closes its fds.
+
+  The blocker is that nothing tells fs-manager a client died: there is no exit
+  notification opcode, and a service cannot ask whether a context is still alive.
+  Either would do -- a PM broadcast on process exit that interested services
+  subscribe to, or a liveness query fs-manager sweeps with. Once one exists,
+  reap the state and count the working directory in the busy rule.
 
 - [ ] [REFACTOR][P2] Remove the PROCESS_MAX_COUNT ceiling without giving up slot
   stability. The count is a compile-time guess a boot has to fit under, and it has

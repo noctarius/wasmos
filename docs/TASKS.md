@@ -1494,6 +1494,13 @@ Source: `architecture/19-virtual-terminal.md`,
   - No test mounts a volume at DEPTH. Routing supports it and
     `ENV{MOUNT}="/mnt/usb"` needs no rule-language change, but nothing in the tree
     exercises it, so the path is argued rather than demonstrated.
+  - SHADOWING is likewise argued and not demonstrated, and cannot be tested as the
+    system stands: a mount happens at boot and there is no runtime mount, so there
+    is no way to put a file in a directory and then mount over it. What holds it
+    up is construction rather than a test -- the mount point is created EMPTY and
+    routing sends every path under it to the mount -- which is worth knowing
+    before someone relies on unmount restoring the covered contents, since nothing
+    unmounts either.
 
 - [ ] [REFACTOR][P2] Remove the PROCESS_MAX_COUNT ceiling without giving up slot
   stability. The count is a compile-time guess a boot has to fit under, and it has

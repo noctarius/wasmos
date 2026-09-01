@@ -1900,6 +1900,38 @@ Source: `architecture/25-diagnostics-status.md`,
   Reproduces on CI and probably not on an Apple Silicon box: QEMU there runs
   `thread=single`, which masks memory-ordering races. Validate on Linux x86 with
   `-smp 4` over repeated boots.
+
+  A FIFTH face, and the first one that is not silence: the session stays fully
+  alive and the boot spins on a filesystem read it can never complete. Two
+  captures, both `warp_smp`, on `feat/vfs-tmpfs-root`:
+
+  - Local (Linux, TCG, `-smp 4`), `boot-and-init`: 20,449 consecutive
+    `[pm] spawn_path fs read failed:` lines, first for
+    `/boot/system/drivers/fs_wfs.wap` immediately after `[fat] fs.backend
+    registered`, then for `/boot/system/services/sysinit.wap` forever. The
+    thread table is HEALTHY -- 27 live, 22 blocked on their own endpoints,
+    `stranded(ready,no-rq)=0`, no `[diag]!    refused`, every `wait=select:`
+    line `q=0`. So none of the four causes above is present. init (tid=2) is
+    READY on a run queue with `disp=874454` and `ticks=3781`: it is not stuck,
+    it is retrying.
+  - CI run 33436808726 job 99635195798, `filesystem`: 14,829 of the same line,
+    and this one carries the cause immediately before the first failure --
+    `[pm] fs reply timed out; the filesystem never answered`
+    (`PM_FS_REPLY_TIMEOUT_MS`, 15 s) on `/boot/system/drivers/serial.wap`, while
+    volume-manager was probing a GPT on `block:virtio-blk:40`.
+
+  So the symptom's shape is: ONE filesystem read gets no answer, and the caller
+  retries the spawn forever at full speed. That the local capture reaches the
+  same storm WITHOUT a timeout line means at least one fast failure path gets
+  there too, which is why the log line now reports which of its four outcomes
+  fired and, for `FS_IPC_ERROR`, the backend's packed code
+  (`pm_fs_read_blob_for_spawn`); before that every one of those 20,449 lines was
+  the same unattributable string. Take the next capture with that in hand rather
+  than re-deriving it.
+
+  What this does NOT establish: why the filesystem stops answering, and whether
+  the unbounded retry is merely amplifying a transient or is itself holding the
+  system away from recovery. The retry has no backoff and no give-up.
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and
   reaches `arp sent`, then no `notify rx=` arrives, so it fails as an assertion

@@ -1075,6 +1075,13 @@ static int pm_fs_read_blob_for_spawn(uint32_t pm_context_id, const xfer_buffer_o
     (void)xfer_buffer_unborrow(&fs_grant);
     if (recv_rc != 0 || reply.type != FS_IPC_RESP || reply.arg0 <= 0 ||
         (uint32_t)reply.arg0 > max) {
+        /* Four different failures reach this point and only one of them is the
+         * filesystem saying no.  The reason is reported because the caller
+         * RETRIES: a boot that cannot read a service spawns this line thousands
+         * of times, and without the discriminator every one of them is the same
+         * unattributable string.  FS_IPC_ERROR carries the backend's packed code
+         * in arg0 (send_fs_error in fs_manager.c), which is the only place that
+         * code is ever visible -- it is dropped here otherwise. */
         klog_write("[pm] spawn_path fs read failed: ");
         for (uint32_t i = 0; i < path_len; ++i) {
             char c[2];
@@ -1082,7 +1089,15 @@ static int pm_fs_read_blob_for_spawn(uint32_t pm_context_id, const xfer_buffer_o
             c[1] = '\0';
             klog_write(c);
         }
-        klog_write("\n");
+        if (recv_rc != 0) {
+            klog_write(" (no reply)\n");
+        } else if (reply.type == FS_IPC_ERROR) {
+            klog_printf(" (fs: %s)\n", wasmos_strerror((wasmos_error_code_t)reply.arg0));
+        } else if (reply.type != FS_IPC_RESP) {
+            klog_printf(" (unexpected reply type=0x%x)\n", (unsigned)reply.type);
+        } else {
+            klog_printf(" (blob size %d outside 1..%u)\n", (int)reply.arg0, (unsigned)max);
+        }
         return PM_SPAWN_INTERNAL_ERR_BAD_REPLY;
     }
 

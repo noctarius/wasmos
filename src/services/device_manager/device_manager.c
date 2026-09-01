@@ -1077,6 +1077,43 @@ static int hw_spawn_rule_target(const char* rule_path) {
     return hw_spawn_driver_index(module_index);
 }
 
+/* Spawn a rule's target, carrying startup arguments.
+ *
+ * Startup args ride only on the PATH spawn opcode, never on the index one, so a
+ * rule that has something to tell its driver must name the package by path.
+ * A relative rule path is tried under /init/ first and /boot/ second, the same
+ * order and for the same reason as the capability-carrying spawn: a boot-time
+ * package lives in the initfs, and /boot is the volume a storage driver has to
+ * bring up before anything can be read from it.
+ *
+ * No capabilities are granted. A boot rule targets no device, so there is nothing
+ * to grant -- what it can carry is a mount, which is placement rather than
+ * permission. */
+static int hw_spawn_rule_target_args(const char* rule_path, const char* args) {
+    spawn_caps_t none = {0};
+    char candidate[104];
+
+    if (!rule_path || rule_path[0] == '\0') {
+        return -1;
+    }
+    if (!args || args[0] == '\0') {
+        return hw_spawn_rule_target(rule_path);
+    }
+    if (rule_path[0] == '/') {
+        return hw_spawn_driver_path_caps_args(rule_path, &none, args);
+    }
+    candidate[0] = '\0';
+    str_copy(candidate, sizeof(candidate), "/init/");
+    wasmos_sys_str_append(candidate, sizeof(candidate), rule_path);
+    if (hw_spawn_driver_path_caps_args(candidate, &none, args) == 0) {
+        return 0;
+    }
+    candidate[0] = '\0';
+    str_copy(candidate, sizeof(candidate), "/boot/");
+    wasmos_sys_str_append(candidate, sizeof(candidate), rule_path);
+    return hw_spawn_driver_path_caps_args(candidate, &none, args);
+}
+
 static int query_module_meta_by_path(const char* path, uint32_t source, int32_t* out_index) {
     uint32_t path_len = 0;
     wasmos_ipc_message_t resp;
@@ -2696,6 +2733,21 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         rc = hw_spawn_driver_path_caps_args(
                             spawn_path, &g_dm.active_rule_spawn_caps, args);
                     }
+                } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS &&
+                           g_dm.active_rule_spawn_index >= 0 &&
+                           g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count &&
+                           g_dm.always_spawn_rules[g_dm.active_rule_spawn_index].mount[0] != '\0') {
+                    /* A boot rule with ENV{MOUNT}: the only thing it has to say is
+                     * WHERE the filesystem belongs, which a filesystem with no
+                     * backing device cannot work out for itself. */
+                    char mount_args[DM_RULE_SPAWN_ARGS_MAX];
+                    mount_args[0] = '\0';
+                    str_copy(mount_args, sizeof(mount_args), "mount=");
+                    wasmos_sys_str_append(
+                        mount_args,
+                        sizeof(mount_args),
+                        g_dm.always_spawn_rules[g_dm.active_rule_spawn_index].mount);
+                    rc = hw_spawn_rule_target_args(g_dm.rule_spawn_path, mount_args);
                 } else {
                     rc = hw_spawn_rule_target(g_dm.rule_spawn_path);
                 }

@@ -1483,24 +1483,26 @@ Source: `architecture/19-virtual-terminal.md`,
   - `FSMGR_CWD_MAX` is 128 bytes, which bounds the working directory a client can
     hold for EVERY mount -- a path of maximum-length components is unreachable on
     WFS for the same reason. Widen it.
-  - A second tmpfs instance cannot yet be spawned from a rule file:
-    `parse_always_spawn_rule_line` reads only `SUBSYSTEM` and `RUN`, so a
-    `SUBSYSTEM=="boot"` rule cannot carry `ENV{MOUNT}`. Either teach it to, or
-    give `/tmp` and `/run` their instances from `sysinit`.
+  - DONE: a boot rule carries `ENV{MOUNT}` now, so a filesystem with no backing
+    device can be placed by rule. `parse_always_spawn_rule_line` reads it and the
+    spawn delivers it as a `mount=` startup argument over the PATH opcode, which
+    is the only one that carries arguments. Two instances are placed this way,
+    `/home/user` and `/wfs/nested`.
   - The tmpfs `NAME_MAX` is 255 and its names live in the node record, so the
     table costs 50 KiB whether names are long or not. Variable-length names in a
     cell arena would not, at the cost of an allocator with reuse across rename and
     unlink.
-  - No test mounts a volume at DEPTH. Routing supports it and
-    `ENV{MOUNT}="/mnt/usb"` needs no rule-language change, but nothing in the tree
-    exercises it, so the path is argued rather than demonstrated.
-  - SHADOWING is likewise argued and not demonstrated, and cannot be tested as the
-    system stands: a mount happens at boot and there is no runtime mount, so there
-    is no way to put a file in a directory and then mount over it. What holds it
-    up is construction rather than a test -- the mount point is created EMPTY and
-    routing sends every path under it to the mount -- which is worth knowing
-    before someone relies on unmount restoring the covered contents, since nothing
-    unmounts either.
+  - DONE: mounting at DEPTH and mounting INSIDE another mount are both
+    demonstrated, by two rule-placed tmpfs instances that need no disk.
+    `/home/user` has its ancestors created as directories in the root filesystem;
+    `/wfs/nested` has its mount point created inside the WFS VOLUME, which is the
+    other branch of `fsmgr_ensure_mount_points`.
+  - DONE: SHADOWING is demonstrated. `scripts/wfs/nested/covered.txt` is in the
+    WFS image, and the tmpfs mounted over `/wfs/nested` hides it -- verified by a
+    CONTROL run with the mount disabled, where the file is listed, so the case
+    measures the mount rather than an absent directory. Note that nothing
+    UNMOUNTS, so the other half of the Linux rule (contents reappearing) is still
+    only construction.
 
 - [ ] [REFACTOR][P2] Remove the PROCESS_MAX_COUNT ceiling without giving up slot
   stability. The count is a compile-time guess a boot has to fit under, and it has

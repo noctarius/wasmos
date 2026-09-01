@@ -27,6 +27,39 @@
 
 #include "device_manager_rules.h"
 
+/* A boot rule may carry ENV{MOUNT}, which is how a filesystem with NO backing
+ * device gets placed: it names no device, so nothing can be derived from one, and
+ * a tmpfs at /home/user is reachable only by being told where it belongs. */
+static void test_always_spawn_rule_carries_env_mount(void) {
+    device_manager_state_t state;
+    const char* rules = "SUBSYSTEM==\"boot\", ENV{MOUNT}=\"/home/user\", "
+                        "RUN+=\"/init/system/drivers/fs_tmpfs.wap\"\n"
+                        "SUBSYSTEM==\"boot\", RUN+=\"system/drivers/ata.wap\"\n";
+
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_always_spawn(&state, rules);
+    assert(state.always_spawn_rule_count == 2u);
+    assert(strcmp(state.always_spawn_rules[0].spawn_path, "/init/system/drivers/fs_tmpfs.wap") ==
+           0);
+    assert(strcmp(state.always_spawn_rules[0].mount, "/home/user") == 0);
+    /* A rule without one carries an EMPTY mount rather than a stale neighbour's:
+     * the spawn passes arguments only when there is a mount to pass. */
+    assert(state.always_spawn_rules[1].mount[0] == '\0');
+}
+
+/* A mount deeper than one segment is the point of holding a path: it is what
+ * places a tmpfs inside another mount. */
+static void test_always_spawn_mount_may_be_nested(void) {
+    device_manager_state_t state;
+    const char* rules = "SUBSYSTEM==\"boot\", ENV{MOUNT}=\"/wfs/nested\", "
+                        "RUN+=\"/init/system/drivers/fs_tmpfs.wap\"\n";
+
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_always_spawn(&state, rules);
+    assert(state.always_spawn_rule_count == 1u);
+    assert(strcmp(state.always_spawn_rules[0].mount, "/wfs/nested") == 0);
+}
+
 static void test_always_spawn_rule(void) {
     device_manager_state_t state;
     const char* rules = "SUBSYSTEM==\"boot\", ACTION==\"add\", RUN+=\"system/drivers/ata.wap\"\n"
@@ -91,6 +124,8 @@ int main(void) {
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_always_spawn_rule),
+        WASMOS_TEST_CASE(test_always_spawn_rule_carries_env_mount),
+        WASMOS_TEST_CASE(test_always_spawn_mount_may_be_nested),
         WASMOS_TEST_CASE(test_block_fs_rule),
         WASMOS_TEST_CASE(test_pci_match_rule),
         WASMOS_TEST_CASE(test_legacy_rule_is_rejected),

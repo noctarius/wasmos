@@ -155,12 +155,19 @@ typedef struct {
     wasmos_volume_descriptor_t desc;
 } volume_record_t;
 
-/* Rule: unconditionally spawn a driver path at boot (always_spawn kind). */
+/* Rule: unconditionally spawn a driver path at boot (always_spawn kind).
+ *
+ * `mount` is the optional ENV{MOUNT} of the rule, delivered to the spawned
+ * process as a `mount=` startup argument. A boot rule names no device, so there
+ * is nothing to derive a mount from -- which is exactly why a filesystem with no
+ * backing device (a tmpfs) can only be placed by being told. Empty when the rule
+ * carries none, and a driver that needs no mount ignores it. */
 typedef struct {
     uint8_t active;
     uint8_t queued;
     uint8_t spawned;
     char spawn_path[96];
+    char mount[64];
 } always_spawn_rule_t;
 
 /* Which kind of block device a rule is willing to match.

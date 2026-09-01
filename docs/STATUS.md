@@ -888,7 +888,13 @@ linked feature documents for rationale and rollout plans.
   is what retired `send_virtual_root_listing`: `ls /` is an ordinary forwarded
   readdir whose entries the root filesystem actually holds. `cd /` on a system
   with nothing mounted at `/` still succeeds and lists nothing. Pinned end to end
-  by `tests/test_vfs_root_mount.py` (filesystem battery). `src/utils/mkdir/` is
+  by `tests/test_vfs_root_mount.py` (filesystem battery, 17 cases). A
+  `SUBSYSTEM=="boot"` rule carries `ENV{MOUNT}` now, delivered as a `mount=`
+  startup argument, which places a filesystem that has no backing device: two
+  tmpfs instances sit at `/home/user` (a mount at depth, ancestors created in the
+  root filesystem) and `/wfs/nested` (a mount inside a mount, point created in the
+  WFS volume, shadowing the file the volume holds there). Neither needs a disk.
+  `src/utils/mkdir/` is
   the CLI tool that exercises it: `mkdir [-p] <dir>...`, where `-p` creates every
   missing ancestor and treats an existing directory as success. A second tmpfs instance
   is still not spawnable from a rule file: `SUBSYSTEM=="boot"` rules parse only

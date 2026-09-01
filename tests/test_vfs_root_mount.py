@@ -159,13 +159,13 @@ class VfsRootMountTest(VfsSession, unittest.TestCase):
         )
 
     def test_the_root_listing_is_exactly_the_mounts_and_nothing_invented(self):
-        """The directories at `/` are the mount points, and only those.
+        """The directories at `/` are the mount points and their ancestors, only.
 
         This is the property that replaced the invented root listing. fs-manager
         used to append its mount table to the reply, so `ls /` could show names no
         filesystem held; now the entries are directories it created in the tmpfs,
-        so the two views must agree in BOTH directions -- every depth-1 mount is
-        listed, and nothing is listed that is not one.
+        so the two views must agree in BOTH directions -- every mount contributes
+        its first segment, and nothing is listed that no mount accounts for.
 
         The tmpfs write path itself is covered on the host
         (tests/unit/test_fs_tmpfs_store.zig); the CLI has no mkdir, so there is
@@ -180,10 +180,12 @@ class VfsRootMountTest(VfsSession, unittest.TestCase):
             path = line.split(b"->")[0].strip()
             if not path.startswith(b"/") or path == b"/":
                 continue
-            # Only depth-1 mounts appear as entries AT the root.
+            # The FIRST segment of every mount path is what appears at the root:
+            # a depth-1 mount as its own point, and a deeper one as the ancestor
+            # directory fs-manager created on the way to it. `/home/user` puts
+            # `home` here without `/home` being a mount.
             segments = [seg for seg in path.split(b"/") if seg]
-            if len(segments) == 1:
-                expected.add(segments[0])
+            expected.add(segments[0])
         self.assertTrue(expected, f"no mounts parsed from `mount`\n{mounts!r}")
 
         self._run("cd /")
@@ -220,6 +222,107 @@ class VfsRootMountTest(VfsSession, unittest.TestCase):
         # If the tmpfs were answering, this would be the EMPTY mount-point
         # directory it holds rather than the volume's contents.
         self.assertNotIn(b"boot/", listing)
+
+
+class VfsDeepAndNestedMountTest(VfsSession, unittest.TestCase):
+    """Mounts at depth, mounts inside mounts, and shadowing.
+
+    Three tmpfs instances are placed by rule: `/`, `/home/user` and `/wfs/nested`.
+    They need no disk, which is what makes these cases affordable -- a tmpfs is
+    told where it belongs by `ENV{MOUNT}` on a boot rule, so the fixtures every
+    other test boots against are untouched.
+
+    The two non-root mounts exercise different paths through
+    `fsmgr_ensure_mount_points`: `/home/user` has its ancestors created as ordinary
+    directories in the ROOT filesystem, while `/wfs/nested` has its mount point
+    created inside the WFS VOLUME. The second is also what makes shadowing
+    testable at all -- the volume already holds a file there
+    (`scripts/wfs/nested/covered.txt`), so the mount covers real content rather
+    than an empty directory.
+    """
+
+    def test_a_mount_at_depth_is_reported_and_reachable(self):
+        out = self._run("mount")
+        self.assertIn(b"/home/user ->", out, f"deep mount not registered\n{out!r}")
+        out = self._run("cd /home/user")
+        self.assertIn(b"/home/user wamos>", out, f"cannot stand in it\n{out!r}")
+
+    def test_the_ancestors_of_a_deep_mount_exist_in_the_root_filesystem(self):
+        """`/home` is nobody's mount, so it can only be a directory fs-manager
+        created in the tmpfs at `/` while walking the mount path."""
+        self._run("cd /")
+        listing = self._run("ls")
+        self.assertIn(b"home/", listing, f"/home was not created at /\n{listing!r}")
+        out = self._run("cd /home")
+        self.assertIn(b"/home wamos>", out, f"/home is not a directory\n{out!r}")
+        listing = self._run("ls")
+        self.assertIn(
+            b"user/", listing, f"/home/user is not an entry of /home\n{listing!r}"
+        )
+
+    def test_a_deep_mount_is_writable_and_separate_from_the_root(self):
+        """A distinct instance, not the root answering for a deeper path: a file
+        made in one is absent from the other."""
+        self._run("cd /home/user")
+        self._run("mkdir deepscratch")
+        listing = self._run("ls")
+        self.assertIn(b"deepscratch", listing, f"not writable\n{listing!r}")
+        self._run("cd /")
+        listing = self._run("ls")
+        self.assertNotIn(
+            b"deepscratch", listing, f"the root and /home/user share state\n{listing!r}"
+        )
+
+    def test_a_mount_inside_a_mount_is_reported_and_reachable(self):
+        out = self._run("mount")
+        self.assertIn(b"/wfs/nested ->", out, f"nested mount not registered\n{out!r}")
+        self.assertIn(b"/wfs ->", out, f"the covering mount is gone\n{out!r}")
+        out = self._run("cd /wfs/nested")
+        self.assertIn(b"/wfs/nested wamos>", out, f"cannot stand in it\n{out!r}")
+
+    def test_the_nested_mount_point_exists_inside_the_covering_volume(self):
+        """`nested` is an entry of the WFS volume, not of the root filesystem.
+
+        fs-manager routed the mount path's parent to the WFS backend and created
+        the directory THERE, which is the branch a top-level mount never takes.
+        """
+        self._run("cd /wfs")
+        listing = self._run("ls")
+        self.assertIn(b"nested/", listing, f"mount point missing in /wfs\n{listing!r}")
+        self._run("cd /")
+        listing = self._run("ls")
+        self.assertNotIn(
+            b"nested/", listing, f"the point was created at / instead\n{listing!r}"
+        )
+
+    def test_the_nested_mount_shadows_what_the_volume_holds_there(self):
+        """The covered file is unreachable while the mount stands.
+
+        `/wfs/nested/covered.txt` exists in the WFS image. With a tmpfs mounted
+        over `/wfs/nested`, a path under it reaches the tmpfs, so the file is not
+        listed and not readable -- which is the Linux rule, and what keeps mounting
+        a property of the namespace rather than of the covered filesystem's state.
+        """
+        self._run("cd /wfs/nested")
+        listing = self._run("ls")
+        self.assertNotIn(
+            b"covered.txt",
+            listing,
+            f"the covered file is still listed, so nothing is shadowed\n{listing!r}",
+        )
+        out = self._run("cat /wfs/nested/covered.txt")
+        self.assertNotIn(
+            b"exists only to be covered",
+            out,
+            f"the covered file was readable THROUGH the mount\n{out!r}",
+        )
+
+    def test_the_covering_volume_is_otherwise_untouched(self):
+        """Shadowing hides one directory, not the volume. If the whole of /wfs
+        were being served by the tmpfs, this would be empty."""
+        self._run("cd /wfs")
+        listing = self._run("ls")
+        self.assertIn(b"hello.txt", listing, f"/wfs lost its own content\n{listing!r}")
 
 
 class VfsRootWritableTest(VfsSession, unittest.TestCase):

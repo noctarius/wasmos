@@ -256,6 +256,24 @@ answers a refused claim with no reply at all (see `docs/TASKS.md`).
   and the namespace rules testable on the host. The IPC layer above it is not
   host-testable and is covered only by a running guest.
 
+**Placed by rule.** A `SUBSYSTEM=="boot"` device-manager rule may carry
+`ENV{MOUNT}`, delivered to the spawned process as a `mount=` startup argument.
+That is what a filesystem with no backing device needs: it names no device, so
+nothing about it implies where it belongs. Two instances are placed this way and
+need no disk between them:
+
+- `/home/user` — a mount at DEPTH. `fs_manager` creates `/home` and then
+  `/home/user` as ordinary directories in the root filesystem while walking the
+  mount path.
+- `/wfs/nested` — a mount INSIDE another mount. Its point is created in the WFS
+  volume rather than in the root filesystem, which is the other branch of
+  `fsmgr_ensure_mount_points`, and it SHADOWS the file the volume already holds
+  there (`scripts/wfs/nested/covered.txt`): a path under the point reaches the
+  tmpfs, so the covered file is neither listed nor readable while the mount
+  stands. Demonstrated, and verified against a control run with the mount
+  disabled where the file IS listed. Nothing unmounts, so contents REAPPEARING on
+  unmount remains construction rather than a tested property.
+
 **Why the VFS root wants one.** A mount point has to be a directory somewhere,
 and nothing holds one while `/` has no filesystem — which is why routing matches
 a mount's first segment and a mount can only exist at the top level. The kernel's

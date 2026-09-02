@@ -62,7 +62,7 @@ const (
 	WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG int32 = -0x00010005 // args exceed the xfer buffer
 	WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF int32 = -0x00010006 // PM xfer buffer missing
 	WASMOS_ERR_PROC_SPAWN_FS_READ int32 = -0x00010007 // reading the app blob from FS failed
-	WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED int32 = -0x00010008 // process create/start failed (e.g. no free slot)
+	WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED int32 = -0x00010008 // process create/start failed. Deliberately does NOT name a cause: several distinct failures reach it (no free process slot, address-space setup, thread creation, capability application), and the kernel reports the one it hit -- table exhaustion prints "[process] table full". An earlier description offered "e.g. no free slot" and callers turned that example into a diagnosis
 	WASMOS_ERR_PROC_SPAWN_BROKER_IPC int32 = -0x00010009 // broker plan IPC transport/reply failed
 	WASMOS_ERR_PROC_SPAWN_BROKER_PLAN int32 = -0x0001000A // broker replied with malformed/unsupported plan
 	WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED int32 = -0x0001000B // valid broker plan returned; PM launch step deferred
@@ -405,7 +405,7 @@ func WasmosStrerror(c int32) string {
 	case WASMOS_ERR_PROC_SPAWN_FS_READ:
 		return "reading the app blob from FS failed"
 	case WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED:
-		return "process create/start failed (e.g. no free slot)"
+		return "process create/start failed. Deliberately does NOT name a cause: several distinct failures reach it (no free process slot, address-space setup, thread creation, capability application), and the kernel reports the one it hit -- table exhaustion prints \"[process] table full\". An earlier description offered \"e.g. no free slot\" and callers turned that example into a diagnosis"
 	case WASMOS_ERR_PROC_SPAWN_BROKER_IPC:
 		return "broker plan IPC transport/reply failed"
 	case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN:

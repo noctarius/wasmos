@@ -54,7 +54,7 @@ export const WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF: i32 = -0x00010004; // caller xf
 export const WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG: i32 = -0x00010005; // args exceed the xfer buffer
 export const WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF: i32 = -0x00010006; // PM xfer buffer missing
 export const WASMOS_ERR_PROC_SPAWN_FS_READ: i32 = -0x00010007; // reading the app blob from FS failed
-export const WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: i32 = -0x00010008; // process create/start failed (e.g. no free slot)
+export const WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: i32 = -0x00010008; // process create/start failed. Deliberately does NOT name a cause: several distinct failures reach it (no free process slot, address-space setup, thread creation, capability application), and the kernel reports the one it hit -- table exhaustion prints "[process] table full". An earlier description offered "e.g. no free slot" and callers turned that example into a diagnosis
 export const WASMOS_ERR_PROC_SPAWN_BROKER_IPC: i32 = -0x00010009; // broker plan IPC transport/reply failed
 export const WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: i32 = -0x0001000A; // broker replied with malformed/unsupported plan
 export const WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: i32 = -0x0001000B; // valid broker plan returned; PM launch step deferred
@@ -342,7 +342,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG: return "args exceed the xfer buffer";
     case WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF: return "PM xfer buffer missing";
     case WASMOS_ERR_PROC_SPAWN_FS_READ: return "reading the app blob from FS failed";
-    case WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: return "process create/start failed (e.g. no free slot)";
+    case WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: return "process create/start failed. Deliberately does NOT name a cause: several distinct failures reach it (no free process slot, address-space setup, thread creation, capability application), and the kernel reports the one it hit -- table exhaustion prints \"[process] table full\". An earlier description offered \"e.g. no free slot\" and callers turned that example into a diagnosis";
     case WASMOS_ERR_PROC_SPAWN_BROKER_IPC: return "broker plan IPC transport/reply failed";
     case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: return "broker replied with malformed/unsupported plan";
     case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: return "valid broker plan returned; PM launch step deferred";

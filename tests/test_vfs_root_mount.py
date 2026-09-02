@@ -37,6 +37,10 @@ class VfsSession:
     would make the order unittest happens to pick decide their outcomes.
     """
 
+    # Set by _await_mount_table when the shell refuses to spawn `mount`, so
+    # setUpClass can report the refusal rather than only its own timeout.
+    spawn_failure = None
+
     @classmethod
     def setUpClass(cls):
         cfg = default_config()
@@ -48,7 +52,13 @@ class VfsSession:
             raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
         if not cls._await_mount_table():
             tail = cls.session.tail()
+            refusal = getattr(cls, "spawn_failure", None)
             cls.session.close()
+            if refusal:
+                raise RuntimeError(
+                    f"the `mount` utility could not be spawned, so the mount "
+                    f"table was never readable: {refusal!r}\n--- tail ---\n{tail}\n"
+                )
             raise RuntimeError(f"mount table never settled\n--- tail ---\n{tail}\n")
 
     @classmethod
@@ -75,9 +85,23 @@ class VfsSession:
         for _ in range(tries):
             mark = cls.session.mark()
             cls.session.send("mount")
-            if not cls.session.expect_from(mark, b"wamos> ", timeout_s=10):
+            # Past the echo before looking for the prompt, for the reason _run
+            # documents: the prompt precedes the echoed command on one line, so
+            # searching from `mark` can match it and yield an empty reading.
+            if not cls.session.expect_from(mark, b"mount", timeout_s=10):
                 continue
-            out = bytes(cls.session.buf[mark:])
+            echo_end = bytes(cls.session.buf).index(b"mount", mark) + len("mount")
+            if not cls.session.expect_from(echo_end, b"wamos> ", timeout_s=10):
+                continue
+            out = bytes(cls.session.buf[echo_end:])
+            # `mount` is a spawned utility, not a shell built-in, so a session
+            # that cannot spawn reports nothing here and every retry looks
+            # identical to a table that is merely slow. Surfacing the shell's own
+            # refusal turns "never settled" -- which says only that this loop gave
+            # up -- into the reason it did.
+            if b"exec failed" in out:
+                cls.spawn_failure = out
+                return False
             if b"/ ->" in out and out == previous:
                 return True
             previous = out
@@ -90,14 +114,28 @@ class VfsSession:
         `mark()` is an index into the session's output buffer, so slicing that
         buffer from it is how a caller reads one command's output rather than the
         whole session's.
+
+        The echo has to be stepped over first. The shell prints its prompt and
+        the echoed command on the SAME line ("/ wamos> mount"), so scanning for a
+        prompt from `mark` can match the one that PRECEDES this command and
+        return while only the echo has arrived -- leaving a caller to parse an
+        empty result as a real answer. Whether that happens is pure timing, which
+        is why it surfaced under battery load and never standalone.
         """
         mark = self.session.mark()
         self.session.send(cmd)
-        if not self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s):
+        needle = cmd.encode()
+        if not self.session.expect_from(mark, needle, timeout_s=timeout_s):
+            self.fail(
+                f"'{cmd}' was never echoed.\n--- tail ---\n{self.session.tail()}\n"
+            )
+        # Resume the prompt search after the echo, not after the mark.
+        echo_end = bytes(self.session.buf).index(needle, mark) + len(needle)
+        if not self.session.expect_from(echo_end, b"wamos> ", timeout_s=timeout_s):
             self.fail(
                 f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
             )
-        return bytes(self.session.buf[mark:])
+        return bytes(self.session.buf[echo_end:])
 
 
 class VfsRootMountTest(VfsSession, unittest.TestCase):
@@ -388,7 +426,29 @@ class VfsMountRequestTest(VfsSession, unittest.TestCase):
     Placement was only ever a boot-rule property -- a filesystem went where
     whoever spawned its driver said, and nothing could add one to a running
     system. `mount` reported a table it had no way to change.
+
+    Every mount these cases create is removed again in tearDownClass. A backend
+    does not exit when its mount is dropped (docs/TASKS.md), so each one left
+    behind holds a process slot for the rest of the session -- and the cases
+    below deliberately create several. Cleaning up keeps this class from taxing
+    whatever runs after it in the same battery.
     """
+
+    #: Mounts these cases establish, removed in tearDownClass. Listed rather than
+    #: discovered so a case that fails midway still has its mount cleaned up.
+    CREATED_MOUNTS = ("/scratch", "/scratch2", "/roundtrip")
+
+    @classmethod
+    def tearDownClass(cls):
+        # Unmount before the session goes down: unlike the other classes here,
+        # this one adds to the namespace, and `umount` is the only thing that
+        # releases the driver behind a mount.
+        if cls.session:
+            for path in cls.CREATED_MOUNTS:
+                mark = cls.session.mark()
+                cls.session.send(f"umount {path}")
+                cls.session.expect_from(mark, b"wamos> ", timeout_s=20)
+        super().tearDownClass()
 
     def test_a_tmpfs_can_be_mounted_at_a_new_path(self):
         """fs-manager spawns the driver and the mount is in the table when the

@@ -75,7 +75,7 @@ enum {
     WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 5), /* args exceed the xfer buffer */
     WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 6), /* PM xfer buffer missing */
     WASMOS_ERR_PROC_SPAWN_FS_READ = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 7), /* reading the app blob from FS failed */
-    WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 8), /* process create/start failed (e.g. no free slot) */
+    WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 8), /* process create/start failed. Deliberately does NOT name a cause: several distinct failures reach it (no free process slot, address-space setup, thread creation, capability application), and the kernel reports the one it hit -- table exhaustion prints \"[process] table full\". An earlier description offered \"e.g. no free slot\" and callers turned that example into a diagnosis */
     WASMOS_ERR_PROC_SPAWN_BROKER_IPC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 9), /* broker plan IPC transport/reply failed */
     WASMOS_ERR_PROC_SPAWN_BROKER_PLAN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 10), /* broker replied with malformed/unsupported plan */
     WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 11), /* valid broker plan returned; PM launch step deferred */
@@ -617,7 +617,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG: return "args exceed the xfer buffer";
     case WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF: return "PM xfer buffer missing";
     case WASMOS_ERR_PROC_SPAWN_FS_READ: return "reading the app blob from FS failed";
-    case WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: return "process create/start failed (e.g. no free slot)";
+    case WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: return "process create/start failed. Deliberately does NOT name a cause: several distinct failures reach it (no free process slot, address-space setup, thread creation, capability application), and the kernel reports the one it hit -- table exhaustion prints \"[process] table full\". An earlier description offered \"e.g. no free slot\" and callers turned that example into a diagnosis";
     case WASMOS_ERR_PROC_SPAWN_BROKER_IPC: return "broker plan IPC transport/reply failed";
     case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: return "broker replied with malformed/unsupported plan";
     case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: return "valid broker plan returned; PM launch step deferred";

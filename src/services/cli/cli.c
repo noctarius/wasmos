@@ -2309,7 +2309,13 @@ static void cli_phase_wait_ipc_step(void) {
             reason = "broker plan validated but launch is not implemented yet";
             break;
         case WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED:
-            reason = "cannot start process (no free slot?)";
+            /* Says what is known, not a guess at why. The old wording, "no free
+             * slot?", named ONE of this code's several causes as though it were
+             * the diagnosis: a reader who trusted it went looking at the process
+             * table while the kernel was reporting 48 of 64 slots in use and no
+             * exhaustion at all. The kernel reports table exhaustion itself
+             * ("[process] table full"), so the shell has nothing to add. */
+            reason = "the process manager could not create the process";
             break;
         default:
             break;

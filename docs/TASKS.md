@@ -1529,6 +1529,25 @@ Source: `architecture/19-virtual-terminal.md`,
     driver can call after answering DONE, which no driver has today.
     (`src/services/fs_manager/fs_manager.c`, the TODO above `handle_unmount_req`.)
 
+- [ ] [TEST][P2] The overlay-unmap fix (`de9bc5e71e`) has a GUARD, not a
+  demonstration. `tests/test_gfx_surface_recycle.py` asserts the mechanism and
+  the consequence on a graphical boot, but it passes against a tree with the fix
+  reverted, so it has never been shown to fail.
+
+  The precondition is why: only SLOT-BACKED linear memory is affected, and a
+  block moves into a dedicated VA slot only when it is reallocated while the
+  reserve hint is armed and a slot is free (`warp_linmem_move`,
+  `src/kernel/warp/shim.cpp`). Slot-backing therefore depends on startup order
+  and slot availability — the same tree fails on one machine and not another,
+  which cost most of a session to establish.
+
+  A deterministic test needs an app whose linmem is FORCED onto a slot, then
+  mapping and unmapping an overlay over it and mapping again. `surface_attach`'s
+  remap stage is that shape already and passes either way, because that app is
+  not slot-backed. What is missing is the lever: find what arms
+  `g_linmem_reserve_bytes` for a spawn and drive it from a manifest, then the
+  case becomes a real regression test on any machine.
+
 - [ ] [CLEANUP][P3] libui returns bare -1 for real failures, so an app can say a
   UI call failed and not why. 63 sites across 20 functions in
   `src/libui/include/wasmos/libui.h`; the TODO above `ui_send_gfx_raw` names them.

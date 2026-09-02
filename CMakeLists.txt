@@ -1932,6 +1932,28 @@ add_custom_target(wfs_image DEPENDS ${WFS_IMAGE})
 # writes survive across `run-qemu` invocations, and are discarded when the
 # fixture is rebuilt, which is the point at which the old contents stopped
 # describing the volume anyway.
+# The /user GPT fixture, built from the SOURCE tree at ${USERFS_DIR}.
+#
+# It needs a rule of its own, not only the copy in WASMOS_ESP_POPULATE_CMDS that
+# also produces it. `run_images` consumes this file, and every interactive
+# run-qemu target both DEPENDS on run_images and runs the populate commands --
+# so the populate ran strictly AFTER the copy that needed its output, and the
+# build only worked because a previous run had left a user.img behind. On a clean
+# tree it failed with "No rule to make target 'user.img'".
+#
+# The image is regenerated when anything under ${USERFS_DIR} changes, which is
+# what the populate step's own copy achieves for the ESP; both read the same
+# source directory, so the two agree.
+file(GLOB_RECURSE USERFS_CONTENT_FILES ${USERFS_DIR}/*)
+add_custom_command(OUTPUT ${USERFS_IMAGE}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${USERFS_DIR}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/make_gpt_image.py
+          --output ${USERFS_IMAGE} --label user --source ${USERFS_DIR}
+  DEPENDS ${CMAKE_SOURCE_DIR}/scripts/make_gpt_image.py ${USERFS_CONTENT_FILES}
+  COMMENT "Building the /user GPT fixture with make_gpt_image.py"
+  VERBATIM)
+add_custom_target(userfs_image DEPENDS ${USERFS_IMAGE})
+
 set(WFS_RUN_IMAGE ${BUILD_DIR}/run/wfs.img)
 set(WFS_VIRTIO_RUN_IMAGE ${BUILD_DIR}/run/wfs_virtio.img)
 set(USERFS_RUN_IMAGE ${BUILD_DIR}/run/user.img)

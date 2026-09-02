@@ -895,16 +895,42 @@ static inline int32_t ui_measure_text_width(ui_context_t* ctx, const char* text)
  * ui_send_gfx, and the ~70 ui_* returns that forward their result, so it is its
  * own change rather than a rider on a caller's. ui_window_set_title already
  * returns packed codes and is the shape the rest should take. */
+/* TODO: the rest of libui still returns bare -1 for real failures (ui_init,
+ * ui_init_font, ui_loop_drain, ui_menu_bar_init, ui_font_measure_text,
+ * ui_font_measure_and_raster_text, ui_font_ensure_buffer, ui_components_reserve,
+ * ui_component_alloc, ui_component_append_child, ui_component_list_append,
+ * ui_component_set_text_owned, ui_component_tree_append, ui_menu_item_add_item),
+ * so an app can only report that a UI call failed and not why. The four
+ * ui_find_*_at helpers are NOT in that list and must keep returning -1: there it
+ * means "no component at this point", a sentinel rather than an error, and
+ * packing it would turn an ordinary miss into a failure.
+ *
+ * The two send helpers below and ui_realloc_buffer were converted because a
+ * resize failure was being reported as "unknown" with no way to tell a full
+ * compositor queue from an exhausted buffer pool. The remainder is a sweep of
+ * its own; see docs/TASKS.md. */
+
+/* One compositor round trip, returning 0 or the PACKED reason it did not
+ * complete.
+ *
+ * WASMOS_ERR_GFX_NO_REPLY covers both ways of not getting a usable answer: the
+ * send exhausting its retries against a full queue, and a reply arriving that is
+ * neither GFX_IPC_RESP nor GFX_IPC_ERROR. The second is a compositor protocol
+ * fault rather than a transport one, but from here they are the same fact -- the
+ * request stands unanswered -- and neither carries a verdict to report.
+ *
+ * A reply that IS a GFX_IPC_ERROR is a success for this function: the compositor
+ * answered, and its verdict is in arg0 for the caller to read. */
 static inline int32_t ui_send_gfx_raw(int32_t gfx_ep, int32_t reply_ep, int32_t req_id,
                                       int32_t opcode, int32_t arg0, int32_t arg1, int32_t arg2,
                                       int32_t arg3, wasmos_ipc_message_t* out_raw) {
     if (!out_raw)
-        return -1;
+        return WASMOS_ERR_GFX_INVALID;
     if (wasmos_ipc_call(gfx_ep, reply_ep, opcode, req_id, arg0, arg1, arg2, arg3, out_raw) != 0) {
-        return -1;
+        return WASMOS_ERR_GFX_NO_REPLY;
     }
     if (out_raw->type != GFX_IPC_RESP && out_raw->type != GFX_IPC_ERROR) {
-        return -1;
+        return WASMOS_ERR_GFX_NO_REPLY;
     }
     return 0;
 }
@@ -913,13 +939,18 @@ static inline int32_t ui_send_gfx_raw(int32_t gfx_ep, int32_t reply_ep, int32_t 
  * *out_status receives arg0, which is a packed abi/errors.yaml code
  * (WASMOS_ERR_NONE for success) — a 0 return only means the round trip
  * completed, so both the return value and the status have to be checked. */
+/* As ui_send_gfx_raw, unpacking the reply's arguments. Returns 0 or the packed
+ * reason the round trip did not complete; the compositor's own verdict, when it
+ * sent one, lands in *out_status rather than in the return. */
 static inline int32_t ui_send_gfx(int32_t gfx_ep, int32_t reply_ep, int32_t req_id, int32_t opcode,
                                   int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
                                   int32_t* out_status, int32_t* out_a1, int32_t* out_a2,
                                   int32_t* out_a3) {
     wasmos_ipc_message_t msg;
-    if (ui_send_gfx_raw(gfx_ep, reply_ep, req_id, opcode, arg0, arg1, arg2, arg3, &msg) != 0) {
-        return -1;
+    const int32_t rc =
+        ui_send_gfx_raw(gfx_ep, reply_ep, req_id, opcode, arg0, arg1, arg2, arg3, &msg);
+    if (rc != 0) {
+        return rc;
     }
     if (out_status)
         *out_status = msg.arg0;
@@ -1472,10 +1503,17 @@ ui_apply_realloc_state(ui_context_t* ctx, int32_t new_buffer_id, int32_t new_bor
 
 /* Allocate a new shared framebuffer of new_w x new_h for the context's window,
  * map it, and release the previous one. Returns 0 on success (including the
- * no-op case where the size already matches and a buffer is mapped) and -1 on
- * failure, in which case the old buffer stays in place except when the
- * compositor allocation itself succeeded but the mapping failed — that path
- * releases the new buffer and leaves the old one current.
+ * no-op case where the size already matches and a buffer is mapped), or the
+ * PACKED reason it failed, in which case the old buffer stays in place except
+ * when the compositor allocation itself succeeded but the mapping failed — that
+ * path releases the new buffer and leaves the old one current.
+ *
+ * The reason is the one its source reported: a gfx code from the compositor for
+ * the two round trips, or an xfer-buffer code from the kernel for the acquire,
+ * borrow and map. Six distinct failures used to collapse into a bare -1, which
+ * made a caller's "resize failed" message unactionable — the log said an
+ * allocation failed and nothing about whether the compositor refused the window,
+ * the buffer pool was exhausted, or the mapping did not fit.
  *
  * On success ctx->mapped_base, ctx->width, ctx->height and ctx->stride_bytes
  * all change, so any pixel pointer the caller cached is stale. The new buffer's
@@ -1484,62 +1522,76 @@ ui_apply_realloc_state(ui_context_t* ctx, int32_t new_buffer_id, int32_t new_bor
 static inline int32_t ui_realloc_buffer(ui_context_t* ctx, int32_t new_w, int32_t new_h) {
     int32_t status = 0, new_buffer_id = 0, new_borrow_id = 0, new_stride = 0;
     if (!ctx || new_w <= 0 || new_h <= 0)
-        return -1;
+        return WASMOS_ERR_GFX_INVALID;
     if (ctx->width == new_w && ctx->height == new_h && ctx->mapped_base)
         return 0;
     const int32_t prev_ptr_x = ctx->pointer_x;
     const int32_t prev_ptr_y = ctx->pointer_y;
     const int32_t first_alloc = (ctx->mapped_base == NULL);
     int32_t surface_bytes = 0;
-    if (ui_send_gfx(ctx->gfx_endpoint,
-                    ctx->reply_endpoint,
-                    ctx->req_id++,
-                    GFX_IPC_GET_SURFACE_SPEC,
-                    ctx->window_id,
-                    0,
-                    0,
-                    0,
-                    &status,
-                    &new_stride,
-                    &surface_bytes,
-                    0) != 0 ||
-        status != WASMOS_ERR_NONE || surface_bytes <= 0) {
-        return -1;
+    /* Three outcomes, three answers: the request never landed, the compositor
+     * refused it, or it answered with a surface of no size. Collapsing them lost
+     * exactly the distinction a reader needs -- whether to look at load on the
+     * compositor's queue or at the window it was asked about. */
+    const int32_t spec_rc = ui_send_gfx(ctx->gfx_endpoint,
+                                        ctx->reply_endpoint,
+                                        ctx->req_id++,
+                                        GFX_IPC_GET_SURFACE_SPEC,
+                                        ctx->window_id,
+                                        0,
+                                        0,
+                                        0,
+                                        &status,
+                                        &new_stride,
+                                        &surface_bytes,
+                                        0);
+    if (spec_rc != 0) {
+        return spec_rc;
+    }
+    if (status != WASMOS_ERR_NONE) {
+        return status;
+    }
+    if (surface_bytes <= 0) {
+        return WASMOS_ERR_GFX_IO;
     }
     /* The damage list rides in the same buffer, past the pixels: the compositor
      * already holds this surface mapped, so a present's damage needs no second
      * buffer, borrow or mapping. */
     const int32_t damage_bytes = UI_MAX_DAMAGE_RECTS * (int32_t)sizeof(gfx_rect_t);
+    /* Buffer and borrow ids are issued from 1, so a zero is as impossible as a
+     * negative and is reported rather than passed on as a valid id. */
     new_buffer_id = wasmos_xfer_buffer_acquire(surface_bytes + damage_bytes);
-    if (new_buffer_id <= 0)
-        return -1;
+    if (new_buffer_id < 0)
+        return new_buffer_id;
+    if (new_buffer_id == 0)
+        return WASMOS_ERR_XFER_BUFFER_INTERNAL;
     new_borrow_id =
         wasmos_xfer_buffer_borrow(ctx->gfx_endpoint, new_buffer_id, WASMOS_BUFFER_GRANT_READ);
     if (new_borrow_id <= 0) {
         (void)wasmos_xfer_buffer_release(new_buffer_id);
-        return -1;
+        return new_borrow_id < 0 ? new_borrow_id : WASMOS_ERR_XFER_BUFFER_INTERNAL;
     }
     const int32_t mapped_ptr = wasmos_xfer_buffer_map(new_buffer_id);
     if (mapped_ptr < 0) {
         (void)wasmos_xfer_buffer_release(new_buffer_id);
-        return -1;
+        return mapped_ptr;
     }
-    if (ui_send_gfx(ctx->gfx_endpoint,
-                    ctx->reply_endpoint,
-                    ctx->req_id++,
-                    GFX_IPC_ATTACH_SURFACE,
-                    ctx->window_id,
-                    new_buffer_id,
-                    new_borrow_id,
-                    0,
-                    &status,
-                    0,
-                    0,
-                    0) != 0 ||
-        status != WASMOS_ERR_NONE) {
+    const int32_t attach_rc = ui_send_gfx(ctx->gfx_endpoint,
+                                          ctx->reply_endpoint,
+                                          ctx->req_id++,
+                                          GFX_IPC_ATTACH_SURFACE,
+                                          ctx->window_id,
+                                          new_buffer_id,
+                                          new_borrow_id,
+                                          0,
+                                          &status,
+                                          0,
+                                          0,
+                                          0);
+    if (attach_rc != 0 || status != WASMOS_ERR_NONE) {
         (void)wasmos_xfer_buffer_unmap(new_buffer_id);
         (void)wasmos_xfer_buffer_release(new_buffer_id);
-        return -1;
+        return attach_rc != 0 ? attach_rc : status;
     }
     /* The old surface is withdrawn only after the new one is attached, so the
      * window is never without one. DETACH is refused while the surface is still

@@ -1929,16 +1929,21 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
     ctx->module->getLinearMemoryRegion(found_off + window_size - 1, 1);
     /* Re-fetch lmem after potential syncBasedataStart from ensureLinearSize. */
     uint8_t* linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
-    if (!linmem_base)
-        return -1;
+    if (!linmem_base) {
+        klog_write("[warp] linmem place: no linear-memory base after commit\n");
+        return (int64_t)WASMOS_ERR_LINMEM_NO_BASE;
+    }
 #ifdef WASMOS_WASM_RUNTIME_WARP
     if (warp_ring3_sync_linmem_user_window(linmem_base) != 0) {
-        return -1;
+        klog_write("[warp] linmem place: user-window sync failed\n");
+        return (int64_t)WASMOS_ERR_LINMEM_USER_WINDOW;
     }
 #endif
     uint8_t* lmem = linmem_base + found_off;
-    if (addr_cast(uint64_t, lmem) & 0xFFF)
-        return -1; /* alignment */
+    if (addr_cast(uint64_t, lmem) & 0xFFF) {
+        klog_write("[warp] linmem place: placed offset is not page-aligned\n");
+        return (int64_t)WASMOS_ERR_LINMEM_MISALIGNED;
+    }
 
     uint64_t virt = addr_cast(uint64_t, lmem);
     for (uint64_t i = 0; i < map_pages; ++i) {
@@ -1958,7 +1963,8 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
     }
 #ifdef WASMOS_WASM_RUNTIME_WARP
     if (warp_ring3_map_user_window(linmem_base, found_off, phys_base, map_pages) != 0) {
-        return -1;
+        klog_write("[warp] linmem place: user-window map failed\n");
+        return (int64_t)WASMOS_ERR_LINMEM_USER_WINDOW;
     }
 #endif
     return (int64_t)found_off;
@@ -2140,7 +2146,25 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
     if (base) {
         uint64_t virt = addr_cast(uint64_t, base);
         for (uint64_t i = 0; i < pages; ++i) {
-            (void)paging_unmap_4k(virt + i * 0x1000ULL);
+            uint64_t page_virt = virt + i * 0x1000ULL;
+            (void)paging_unmap_4k(page_virt);
+            /* Slot-backed linmem: warp_linmem_place_phys FREED this page's own
+             * frame when it installed the shared one, so unmapping without
+             * putting a frame back leaves a page that linear memory still counts
+             * as COMMITTED with nothing behind it. Every later walk of the
+             * committed range then fails -- warp_mem_ring3_map_linmem reports
+             * "committed page has no frame" and refuses to publish the ring-3
+             * window, which breaks the next overlay map and every sync after it.
+             *
+             * The page's former contents are gone either way (place_phys freed
+             * the frame), so a fresh zeroed frame is the only thing that can be
+             * restored, and it is what a freshly committed page reads as anyway.
+             *
+             * Direct-mapped linmem keeps its frame -- the VA IS the frame -- so
+             * committing over it would replace live guest memory. */
+            if (linmem_slot_contains(page_virt) && linmem_slot_commit(page_virt, 0, 1) != 0) {
+                klog_write("[warp] xfer unmap: slot page re-commit failed\n");
+            }
         }
     }
 #ifdef WASMOS_WASM_RUNTIME_WARP

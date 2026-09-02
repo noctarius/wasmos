@@ -78,6 +78,9 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 |---|---|---|
 | `WASMOS_ERR_LINMEM_NO_WINDOW` | -0x00030001 | no free page-aligned window fits in linear memory |
 | `WASMOS_ERR_LINMEM_MAP` | -0x00030002 | paging/linear-memory mapping step failed |
+| `WASMOS_ERR_LINMEM_NO_BASE` | -0x00030003 | the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it |
+| `WASMOS_ERR_LINMEM_MISALIGNED` | -0x00030004 | the window offset that was placed is not 4 KiB aligned, so it cannot be mapped by page. An invariant violation rather than a shortage -- the placement search only yields aligned offsets, so reaching this means the linear-memory base itself is unaligned |
+| `WASMOS_ERR_LINMEM_USER_WINDOW` | -0x00030005 | the ring-3 USER-VA window over linear memory could not be synced or installed, so the guest would see a mapping the kernel's own alias does not agree with. Distinct from MAP, which is the kernel-side paging step: this one is the second, user-visible half that only ring-3 guests have |
 
 ### `fs` (domain 4) — filesystem backend/VFS failures (was FS_ERR_*)
 
@@ -155,6 +158,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_GFX_UNSUPPORTED` | -0x00060008 | unknown or unsupported compositor request |
 | `WASMOS_ERR_GFX_BUSY` | -0x00060009 | compositor has no free window/buffer slot (retryable) |
 | `WASMOS_ERR_GFX_IO` | -0x0006000A | framebuffer or shared-buffer operation failed |
+| `WASMOS_ERR_GFX_NO_REPLY` | -0x0006000B | a compositor request could not be delivered, or no reply arrived: the send exhausted its retries against a full destination queue, or the reply endpoint faulted. Distinct from every other code in this domain, which is the compositor's VERDICT on a request it received -- this one means it may never have seen it, so the request stands unanswered rather than refused, and the caller's state is whatever it was before |
 
 ### `driver` (domain 7) — generic device-driver startup/lifecycle failures
 

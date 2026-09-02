@@ -107,6 +107,9 @@ enum {
     WASMOS_ERR_PROC_PM_NO_PM_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 26), /* PM could not acquire its own xfer buffer */
     WASMOS_ERR_LINMEM_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 1), /* no free page-aligned window fits in linear memory */
     WASMOS_ERR_LINMEM_MAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 2), /* paging/linear-memory mapping step failed */
+    WASMOS_ERR_LINMEM_NO_BASE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 3), /* the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it */
+    WASMOS_ERR_LINMEM_MISALIGNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 4), /* the window offset that was placed is not 4 KiB aligned, so it cannot be mapped by page. An invariant violation rather than a shortage -- the placement search only yields aligned offsets, so reaching this means the linear-memory base itself is unaligned */
+    WASMOS_ERR_LINMEM_USER_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 5), /* the ring-3 USER-VA window over linear memory could not be synced or installed, so the guest would see a mapping the kernel's own alias does not agree with. Distinct from MAP, which is the kernel-side paging step: this one is the second, user-visible half that only ring-3 guests have */
     WASMOS_ERR_FS_BAD_ARGS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 1), /* invalid flags/args (len 0, bad access mode, reserved arg set) */
     WASMOS_ERR_FS_PATH_TOO_LONG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 2), /* path length exceeds the path or xfer buffer */
     WASMOS_ERR_FS_BUFFER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 3), /* xfer-buffer read/write/size call failed */
@@ -169,6 +172,7 @@ enum {
     WASMOS_ERR_GFX_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 8), /* unknown or unsupported compositor request */
     WASMOS_ERR_GFX_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 9), /* compositor has no free window/buffer slot (retryable) */
     WASMOS_ERR_GFX_IO = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 10), /* framebuffer or shared-buffer operation failed */
+    WASMOS_ERR_GFX_NO_REPLY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 11), /* a compositor request could not be delivered, or no reply arrived: the send exhausted its retries against a full destination queue, or the reply endpoint faulted. Distinct from every other code in this domain, which is the compositor's VERDICT on a request it received -- this one means it may never have seen it, so the request stands unanswered rather than refused, and the caller's state is whatever it was before */
     WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 1), /* spawn info carried no process-manager endpoint */
     WASMOS_ERR_DRIVER_ENDPOINT_CREATE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 2), /* the driver could not create its own IPC endpoint */
     WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 3), /* startup args carry no valid device identity for this driver */
@@ -407,6 +411,9 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "proc_pm.NO_PM_FSBUF";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "linmem.NO_WINDOW";
     case WASMOS_ERR_LINMEM_MAP: return "linmem.MAP";
+    case WASMOS_ERR_LINMEM_NO_BASE: return "linmem.NO_BASE";
+    case WASMOS_ERR_LINMEM_MISALIGNED: return "linmem.MISALIGNED";
+    case WASMOS_ERR_LINMEM_USER_WINDOW: return "linmem.USER_WINDOW";
     case WASMOS_ERR_FS_BAD_ARGS: return "fs.BAD_ARGS";
     case WASMOS_ERR_FS_PATH_TOO_LONG: return "fs.PATH_TOO_LONG";
     case WASMOS_ERR_FS_BUFFER: return "fs.BUFFER";
@@ -469,6 +476,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_GFX_UNSUPPORTED: return "gfx.UNSUPPORTED";
     case WASMOS_ERR_GFX_BUSY: return "gfx.BUSY";
     case WASMOS_ERR_GFX_IO: return "gfx.IO";
+    case WASMOS_ERR_GFX_NO_REPLY: return "gfx.NO_REPLY";
     case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: return "driver.NO_PROC_ENDPOINT";
     case WASMOS_ERR_DRIVER_ENDPOINT_CREATE: return "driver.ENDPOINT_CREATE";
     case WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: return "driver.NO_DEVICE_IDENTITY";
@@ -641,6 +649,9 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "PM could not acquire its own xfer buffer";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
+    case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";
+    case WASMOS_ERR_LINMEM_MISALIGNED: return "the window offset that was placed is not 4 KiB aligned, so it cannot be mapped by page. An invariant violation rather than a shortage -- the placement search only yields aligned offsets, so reaching this means the linear-memory base itself is unaligned";
+    case WASMOS_ERR_LINMEM_USER_WINDOW: return "the ring-3 USER-VA window over linear memory could not be synced or installed, so the guest would see a mapping the kernel's own alias does not agree with. Distinct from MAP, which is the kernel-side paging step: this one is the second, user-visible half that only ring-3 guests have";
     case WASMOS_ERR_FS_BAD_ARGS: return "invalid flags/args (len 0, bad access mode, reserved arg set)";
     case WASMOS_ERR_FS_PATH_TOO_LONG: return "path length exceeds the path or xfer buffer";
     case WASMOS_ERR_FS_BUFFER: return "xfer-buffer read/write/size call failed";
@@ -703,6 +714,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_GFX_UNSUPPORTED: return "unknown or unsupported compositor request";
     case WASMOS_ERR_GFX_BUSY: return "compositor has no free window/buffer slot (retryable)";
     case WASMOS_ERR_GFX_IO: return "framebuffer or shared-buffer operation failed";
+    case WASMOS_ERR_GFX_NO_REPLY: return "a compositor request could not be delivered, or no reply arrived: the send exhausted its retries against a full destination queue, or the reply endpoint faulted. Distinct from every other code in this domain, which is the compositor's VERDICT on a request it received -- this one means it may never have seen it, so the request stands unanswered rather than refused, and the caller's state is whatever it was before";
     case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: return "spawn info carried no process-manager endpoint";
     case WASMOS_ERR_DRIVER_ENDPOINT_CREATE: return "the driver could not create its own IPC endpoint";
     case WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: return "startup args carry no valid device identity for this driver";

@@ -581,7 +581,16 @@ unsafe extern "C" {
     /// the owner or a grantee with the required right).
     ///
     /// All return >= 0 on success (buffer_id / borrow_id / device address / 0) and a
-    /// negative xfer_buffer_status_t code on failure.
+    /// negative PACKED error code on failure -- `WASMOS_ERR_XFER_BUFFER_*` from
+    /// `abi/errors.yaml`, decodable with `wasmos_error_code_name`. Buffer and
+    /// borrow ids are issued from 1, so zero is never a valid id.
+    ///
+    /// `xfer_buffer_map` may also report a `WASMOS_ERR_LINMEM_*` code: placing the
+    /// overlay is a linear-memory operation, and the reason it failed belongs to
+    /// that domain rather than being restated in this one.
+    ///
+    /// (The earlier `xfer_buffer_status_t` enum this doc named no longer exists;
+    /// those values were folded into the packed model.)
     pub fn xfer_buffer_acquire(a0: i32) -> i32;
     /// Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
     /// lender revokes a grant it previously extended (resolved via the lent set, not

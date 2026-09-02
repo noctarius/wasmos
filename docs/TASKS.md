@@ -1529,6 +1529,19 @@ Source: `architecture/19-virtual-terminal.md`,
     driver can call after answering DONE, which no driver has today.
     (`src/services/fs_manager/fs_manager.c`, the TODO above `handle_unmount_req`.)
 
+- [ ] [CLEANUP][P3] libui returns bare -1 for real failures, so an app can say a
+  UI call failed and not why. 63 sites across 20 functions in
+  `src/libui/include/wasmos/libui.h`; the TODO above `ui_send_gfx_raw` names them.
+
+  `ui_send_gfx_raw`, `ui_send_gfx` and `ui_realloc_buffer` are already converted:
+  a resize failure was reporting `unknown`, and a caller could not tell a full
+  compositor queue from an exhausted buffer pool.
+
+  The four `ui_find_*_at` helpers must KEEP returning -1 — there it means "no
+  component at this point", a sentinel rather than an error, and packing it would
+  turn an ordinary miss into a failure. Check each site for which kind it is
+  before converting; the count is not the work.
+
 - [ ] [BUG][P2] fs-manager never releases a client's state. `client_state()`
   allocates a `fs_client_state_t` on first contact from a context and nothing
   ever clears `in_use`: the chunk list grows for the lifetime of the system, one

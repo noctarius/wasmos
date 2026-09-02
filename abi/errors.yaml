@@ -93,6 +93,9 @@ domains:
     codes:
       - { name: NO_WINDOW, description: "no free page-aligned window fits in linear memory" }
       - { name: MAP,       description: "paging/linear-memory mapping step failed" }
+      - { name: NO_BASE,   description: "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it" }
+      - { name: MISALIGNED, description: "the window offset that was placed is not 4 KiB aligned, so it cannot be mapped by page. An invariant violation rather than a shortage -- the placement search only yields aligned offsets, so reaching this means the linear-memory base itself is unaligned" }
+      - { name: USER_WINDOW, description: "the ring-3 USER-VA window over linear memory could not be synced or installed, so the guest would see a mapping the kernel's own alias does not agree with. Distinct from MAP, which is the kernel-side paging step: this one is the second, user-visible half that only ring-3 guests have" }
 
   fs:
     id: 4
@@ -171,6 +174,7 @@ domains:
       - { name: UNSUPPORTED,         description: "unknown or unsupported compositor request" }
       - { name: BUSY,                description: "compositor has no free window/buffer slot (retryable)" }
       - { name: IO,                  description: "framebuffer or shared-buffer operation failed" }
+      - { name: NO_REPLY,            description: "a compositor request could not be delivered, or no reply arrived: the send exhausted its retries against a full destination queue, or the reply endpoint faulted. Distinct from every other code in this domain, which is the compositor's VERDICT on a request it received -- this one means it may never have seen it, so the request stands unanswered rather than refused, and the caller's state is whatever it was before" }
 
   driver:
     id: 7

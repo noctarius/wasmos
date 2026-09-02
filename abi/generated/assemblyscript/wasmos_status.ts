@@ -86,6 +86,9 @@ export const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: i32 = -0x00020019; // caller lac
 export const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001A; // PM could not acquire its own xfer buffer
 export const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 export const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
+export const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
+export const WASMOS_ERR_LINMEM_MISALIGNED: i32 = -0x00030004; // the window offset that was placed is not 4 KiB aligned, so it cannot be mapped by page. An invariant violation rather than a shortage -- the placement search only yields aligned offsets, so reaching this means the linear-memory base itself is unaligned
+export const WASMOS_ERR_LINMEM_USER_WINDOW: i32 = -0x00030005; // the ring-3 USER-VA window over linear memory could not be synced or installed, so the guest would see a mapping the kernel's own alias does not agree with. Distinct from MAP, which is the kernel-side paging step: this one is the second, user-visible half that only ring-3 guests have
 export const WASMOS_ERR_FS_BAD_ARGS: i32 = -0x00040001; // invalid flags/args (len 0, bad access mode, reserved arg set)
 export const WASMOS_ERR_FS_PATH_TOO_LONG: i32 = -0x00040002; // path length exceeds the path or xfer buffer
 export const WASMOS_ERR_FS_BUFFER: i32 = -0x00040003; // xfer-buffer read/write/size call failed
@@ -148,6 +151,7 @@ export const WASMOS_ERR_GFX_PERMISSION: i32 = -0x00060007; // caller is not perm
 export const WASMOS_ERR_GFX_UNSUPPORTED: i32 = -0x00060008; // unknown or unsupported compositor request
 export const WASMOS_ERR_GFX_BUSY: i32 = -0x00060009; // compositor has no free window/buffer slot (retryable)
 export const WASMOS_ERR_GFX_IO: i32 = -0x0006000A; // framebuffer or shared-buffer operation failed
+export const WASMOS_ERR_GFX_NO_REPLY: i32 = -0x0006000B; // a compositor request could not be delivered, or no reply arrived: the send exhausted its retries against a full destination queue, or the reply endpoint faulted. Distinct from every other code in this domain, which is the compositor's VERDICT on a request it received -- this one means it may never have seen it, so the request stands unanswered rather than refused, and the caller's state is whatever it was before
 export const WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: i32 = -0x00070001; // spawn info carried no process-manager endpoint
 export const WASMOS_ERR_DRIVER_ENDPOINT_CREATE: i32 = -0x00070002; // the driver could not create its own IPC endpoint
 export const WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: i32 = -0x00070003; // startup args carry no valid device identity for this driver
@@ -370,6 +374,9 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "PM could not acquire its own xfer buffer";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
+    case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";
+    case WASMOS_ERR_LINMEM_MISALIGNED: return "the window offset that was placed is not 4 KiB aligned, so it cannot be mapped by page. An invariant violation rather than a shortage -- the placement search only yields aligned offsets, so reaching this means the linear-memory base itself is unaligned";
+    case WASMOS_ERR_LINMEM_USER_WINDOW: return "the ring-3 USER-VA window over linear memory could not be synced or installed, so the guest would see a mapping the kernel's own alias does not agree with. Distinct from MAP, which is the kernel-side paging step: this one is the second, user-visible half that only ring-3 guests have";
     case WASMOS_ERR_FS_BAD_ARGS: return "invalid flags/args (len 0, bad access mode, reserved arg set)";
     case WASMOS_ERR_FS_PATH_TOO_LONG: return "path length exceeds the path or xfer buffer";
     case WASMOS_ERR_FS_BUFFER: return "xfer-buffer read/write/size call failed";
@@ -432,6 +439,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_GFX_UNSUPPORTED: return "unknown or unsupported compositor request";
     case WASMOS_ERR_GFX_BUSY: return "compositor has no free window/buffer slot (retryable)";
     case WASMOS_ERR_GFX_IO: return "framebuffer or shared-buffer operation failed";
+    case WASMOS_ERR_GFX_NO_REPLY: return "a compositor request could not be delivered, or no reply arrived: the send exhausted its retries against a full destination queue, or the reply endpoint faulted. Distinct from every other code in this domain, which is the compositor's VERDICT on a request it received -- this one means it may never have seen it, so the request stands unanswered rather than refused, and the caller's state is whatever it was before";
     case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: return "spawn info carried no process-manager endpoint";
     case WASMOS_ERR_DRIVER_ENDPOINT_CREATE: return "the driver could not create its own IPC endpoint";
     case WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: return "startup args carry no valid device identity for this driver";

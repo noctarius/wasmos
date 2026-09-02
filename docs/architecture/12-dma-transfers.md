@@ -94,8 +94,11 @@ transferable, not reborrowable).
 ### Stateless id-based ABI (wasm imports, `wasmos` module)
 
 Declared in `src/libc/include/wasmos/api.h`. All return `>= 0` on success
-(buffer_id / borrow_id / device address / 0) and a negative
-`xfer_buffer_status_t` on failure.
+(buffer_id / borrow_id / device address / 0) and a negative PACKED error code on
+failure — `WASMOS_ERR_XFER_BUFFER_*` from `abi/errors.yaml`. Ids are issued from
+1, so zero is never a valid buffer or borrow id. `xfer_buffer_map` may report a
+`WASMOS_ERR_LINMEM_*` code instead: placing the overlay is a linear-memory
+operation, and the reason belongs to that domain.
 
 ```c
 xfer_buffer_acquire(min_size)                 -> buffer_id   // OWNER creates an object

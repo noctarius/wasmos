@@ -189,6 +189,42 @@ int main(int argc, char** argv) {
     (void)wasmos_xfer_buffer_unmap(bid);
     (void)wasmos_xfer_buffer_release(bid);
     (void)pixels;
+
+    /* Regression: 2026-09-02-overlay-unmap-leaves-uncommitted-page
+     *
+     * A SECOND overlay after the first was unmapped. Mapping one over
+     * slot-backed linear memory frees that page's own frame and installs the
+     * shared one; the unmap above has to put a frame back, or the page stays
+     * inside what linear memory counts as COMMITTED with nothing behind it. The
+     * kernel then refuses to publish the ring-3 window for the whole allocation,
+     * so THIS map fails -- and so does every later one, in any process that
+     * resizes a window (libui's ui_realloc_buffer unmaps on every resize).
+     *
+     * The write is part of the case, not decoration: a mapping that returns an
+     * offset the guest cannot store through is not a mapping. */
+    const int32_t bid2 = wasmos_xfer_buffer_acquire(byte_size);
+    if (bid2 <= 0) {
+        printf("[test] surface attach remap acquire failed rc=%d\n", (int)bid2);
+        return 1;
+    }
+    const int32_t off2 = wasmos_xfer_buffer_map(bid2);
+    if (off2 < 0) {
+        printf("[test] surface attach remap failed rc=%d\n", (int)off2);
+        (void)wasmos_xfer_buffer_release(bid2);
+        return 1;
+    }
+    uint32_t* remapped = addr_cast(uint32_t*, off2);
+    remapped[0] = FILL_PIXEL;
+    if (remapped[0] != FILL_PIXEL) {
+        putsn("[test] surface attach remap not writable\n", 41);
+        (void)wasmos_xfer_buffer_unmap(bid2);
+        (void)wasmos_xfer_buffer_release(bid2);
+        return 1;
+    }
+    (void)wasmos_xfer_buffer_unmap(bid2);
+    (void)wasmos_xfer_buffer_release(bid2);
+    putsn("[test] surface attach remap ok\n", 31);
+
     putsn("[test] surface attach done\n", 27);
     return 0;
 }

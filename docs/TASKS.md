@@ -1557,6 +1557,13 @@ Source: `architecture/19-virtual-terminal.md`,
   mount would make it permanently unremovable. The open-file rule has the same
   staleness and is kept only because a client that exits normally closes its fds.
 
+  It is a LEAK and not a stale-state hazard, which is worth stating because the
+  keying invites the opposite conclusion: client state is keyed by context_id,
+  `mm_context_create(pid)` makes that the pid, and process SLOTS are reused. Pids
+  are not — `g_next_pid` only ever counts up — so no new process can be handed a
+  dead one's working directory or fd table. If pids ever became recyclable this
+  would turn into a correctness bug overnight.
+
   The blocker is that nothing tells fs-manager a client died: there is no exit
   notification opcode, and a service cannot ask whether a context is still alive.
   Either would do -- a PM broadcast on process exit that interested services

@@ -247,15 +247,6 @@ fat_r_t fat_resolve_path(fat_resolve_ctx_t* r, fat_block_t* blk, const fat_mount
     }
     r->pos = 0;
 
-    /* Relative path from the owning endpoint's cwd (when cwd is a subdir). */
-    if (r->path[0] != '\0' && r->path[0] != '/' && r->source == mnt->cwd_source && !mnt->cwd_root &&
-        mnt->dir_lba != 0) {
-        r->cur_root = 0;
-        r->cur_cluster = mnt->cwd_cluster;
-        r->cur_lba = mnt->dir_lba;
-        r->cur_sectors = mnt->dir_sectors;
-    }
-
     for (;;) {
         r->comp_rc = fat_path_next_component(r->path, &r->pos, r->component, sizeof(r->component));
         if (r->comp_rc <= 0) {
@@ -339,14 +330,6 @@ fat_r_t fat_resolve_parent_dir(fat_resolve_parent_ctx_t* p, fat_block_t* blk,
         FAT_CO_DONE(p);
     }
     p->pos = 0;
-
-    if (p->path[0] != '\0' && p->path[0] != '/' && p->source == mnt->cwd_source && !mnt->cwd_root &&
-        mnt->dir_lba != 0) {
-        p->cur_root = 0;
-        p->cur_cluster = mnt->cwd_cluster;
-        p->cur_lba = mnt->dir_lba;
-        p->cur_sectors = mnt->dir_sectors;
-    }
 
     for (;;) {
         p->comp_rc = fat_path_next_component(p->path, &p->pos, p->component, sizeof(p->component));
@@ -1229,11 +1212,6 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
         if ((r->entry.attr & 0x10) == 0 || r->entry.cluster < 2) {
             FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_NOT_DIR);
         }
-        /* Refuse to remove the endpoint's current working directory. */
-        if (mnt->cwd_source == r->source && !mnt->cwd_root &&
-            mnt->dir_lba == fat_lba_for_cluster(mnt, r->entry.cluster)) {
-            FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_BUSY);
-        }
         /* Must be empty. */
         r->empty.cont = 0;
         r->empty.dir_lba = fat_lba_for_cluster(mnt, r->entry.cluster);
@@ -1503,11 +1481,17 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
 
     FAT_CO_BEGIN(s);
 
-    /* Latch the region being listed: the scan reads these, not mnt, so a CHDIR
-     * that lands between this op and the next cannot shift the listing.  A cwd
-     * of "root" resolves through fat_root_origin, which on FAT32 yields an
-     * ordinary cluster chain rather than a fixed region. */
-    if (mnt->cwd_root) {
+    /* Resolve the directory the request NAMES. This driver keeps no working
+     * directory: fs-manager owns the cwd and resolves it to a mount-relative
+     * path before forwarding, so a listing depends on the request rather than on
+     * what the previous one left behind -- and no CHDIR has to precede it. */
+    FAT_CO_AWAIT(s, fat_resolve_dir(&op->chdir, blk, mnt, op->dir_name));
+
+    /* Latch the region being listed: the scan reads these, so nothing that lands
+     * between this op and the next can shift the listing. A directory of "root"
+     * resolves through fat_root_origin, which on FAT32 yields an ordinary cluster
+     * chain rather than a fixed region. */
+    if (op->chdir.root) {
         if (fat_root_origin(mnt, &s->cur_root, &s->cur_cluster, &s->base_lba, &s->dir_sectors) !=
             0) {
             fat_log("root listing unsupported\n");
@@ -1515,15 +1499,15 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
         }
         s->entry_budget = fat_dir_entry_limit(mnt, s->cur_root, s->dir_sectors);
     } else {
-        if (mnt->dir_lba == 0) {
-            fat_log("cwd invalid\n");
+        s->cur_root = 0;
+        s->base_lba = fat_lba_for_cluster(mnt, op->chdir.cluster);
+        s->dir_sectors = mnt->sectors_per_cluster;
+        if (s->base_lba == 0) {
+            fat_log("listed directory has no region\n");
             FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_NOT_FOUND);
         }
-        s->cur_root = 0;
-        s->base_lba = mnt->dir_lba;
-        s->dir_sectors = mnt->dir_sectors;
-        s->entry_budget = (mnt->dir_sectors * mnt->bytes_per_sector) / 32u;
-        s->cur_cluster = mnt->cwd_cluster;
+        s->entry_budget = (s->dir_sectors * mnt->bytes_per_sector) / 32u;
+        s->cur_cluster = op->chdir.cluster;
     }
     s->entries_left = s->entry_budget;
     s->hops = 0;
@@ -1685,20 +1669,16 @@ static int fat_chdir_next_component(fat_chdir_ctx_t* c) {
     }
 }
 
-fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
-    fat_chdir_ctx_t* c = &op->chdir;
+fat_r_t fat_resolve_dir(fat_chdir_ctx_t* c, fat_block_t* blk, const fat_mount_t* mnt,
+                        const char* path_in) {
     uint32_t j;
 
     FAT_CO_BEGIN(c);
 
-    /* Empty or "/"-only: reset the cwd to the mount root. */
-    if (op->dir_name[0] == '\0' || (op->dir_name[0] == '/' && op->dir_name[1] == '\0')) {
-        mnt->cwd_mount = VFS_MOUNT_BOOT;
-        mnt->cwd_root = 1;
-        mnt->cwd_cluster = 0;
-        mnt->dir_lba = 0;
-        mnt->dir_sectors = 0;
-        mnt->cwd_source = op->source;
+    /* Empty or "/"-only: the mount root. */
+    if (path_in[0] == '\0' || (path_in[0] == '/' && path_in[1] == '\0')) {
+        c->root = 1;
+        c->cluster = 0;
         FAT_CO_DONE(c);
     }
 
@@ -1712,18 +1692,19 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
 
     /* Copy the target into the working buffer and seed the running target from
      * the cwd (absolute paths restart at the root). */
-    for (j = 0; j + 1 < sizeof(c->path) && op->dir_name[j]; ++j) {
-        c->path[j] = op->dir_name[j];
+    for (j = 0; j + 1 < sizeof(c->path) && path_in[j]; ++j) {
+        c->path[j] = path_in[j];
     }
     c->path[j] = '\0';
     c->pos = 0;
+    /* Every path this driver receives is absolute -- fs-manager owns the working
+     * directory and resolves it before forwarding -- so a name that does not
+     * start at the root starts at the root anyway. This driver keeps no position
+     * to interpret it against. */
+    c->root = c->root_probe;
+    c->cluster = c->root_cluster_probe;
     if (c->path[0] == '/') {
-        c->root = c->root_probe;
-        c->cluster = c->root_cluster_probe;
         c->pos = 1;
-    } else {
-        c->root = mnt->cwd_root;
-        c->cluster = mnt->cwd_cluster;
     }
 
     c->next = fat_chdir_next_component(c);
@@ -1735,17 +1716,6 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
     }
     if (c->next == 0) {
         /* Path resolved to a directory without any real component to descend. */
-        mnt->cwd_mount = VFS_MOUNT_BOOT;
-        mnt->cwd_root = c->root;
-        mnt->cwd_cluster = c->cluster;
-        if (c->root) {
-            mnt->dir_lba = 0;
-            mnt->dir_sectors = 0;
-        } else {
-            mnt->dir_lba = fat_lba_for_cluster(mnt, c->cluster);
-            mnt->dir_sectors = mnt->sectors_per_cluster;
-        }
-        mnt->cwd_source = op->source;
         FAT_CO_DONE(c);
     }
 
@@ -1783,17 +1753,6 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
                 FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
             }
             if (c->next == 0) {
-                mnt->cwd_mount = VFS_MOUNT_BOOT;
-                mnt->cwd_root = c->root;
-                mnt->cwd_cluster = c->cluster;
-                if (c->root) {
-                    mnt->dir_lba = 0;
-                    mnt->dir_sectors = 0;
-                } else {
-                    mnt->dir_lba = fat_lba_for_cluster(mnt, c->cluster);
-                    mnt->dir_sectors = mnt->sectors_per_cluster;
-                }
-                mnt->cwd_source = op->source;
                 FAT_CO_DONE(c);
             }
         }
@@ -1829,12 +1788,6 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
             FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
         }
         if (c->next == 0) {
-            mnt->cwd_mount = VFS_MOUNT_BOOT;
-            mnt->cwd_cluster = c->cluster;
-            mnt->dir_lba = fat_lba_for_cluster(mnt, c->cluster);
-            mnt->dir_sectors = mnt->sectors_per_cluster;
-            mnt->cwd_root = 0;
-            mnt->cwd_source = op->source;
             FAT_CO_DONE(c);
         }
     }

@@ -163,6 +163,28 @@ handles and the current working directory for each calling process. Open
 handles are forwarded to the appropriate backend; `fs_manager` stores only
 the mapping from client handle to backend endpoint and backend-side handle.
 
+Backends are STATELESS about position. `fs_manager` owns the working directory
+and rewrites every path into a mount-relative absolute one before forwarding, so
+no backend keeps a cwd — `FS_IPC_READDIR` carries the directory to list, and
+`FS_IPC_CHDIR` is a client-to-`fs_manager` opcode that no backend ever receives.
+
+That was not always so, and the old arrangement is worth naming because its
+shape recurs. Each backend kept a working directory keyed by the endpoint a
+request arrived from; since `fs_manager` forwards everything from one reply
+endpoint, those per-client tables collapsed to a single entry shared by every
+client. `READDIR` named no path, so `fs_manager` had to send a `CHDIR` first to
+make the backend's one position the right one — a second round trip per listing,
+and a correctness argument that held only because the service handles one request
+at a time. The state was redundant with the cwd `fs_manager` already owned; a
+path in the request removed it, along with the round trip and the ordering
+constraint.
+
+`fs_manager` validates a chdir target with `FS_IPC_STAT_REQ`, which is the whole
+of what it needs to know and moves nothing. That makes the STAT reply's mode
+load-bearing: it MUST carry the file type bits, not permission bits alone, and a
+backend must answer for its own mount root even though nothing on disk describes
+it.
+
 The working directory is a full canonical VFS path (`/`, `/wfs`, `/wfs/docs`) and
 `fs_manager` is its sole authority: every client path is resolved against it
 before routing, and `FS_IPC_CHDIR` reports the resulting path back to the client

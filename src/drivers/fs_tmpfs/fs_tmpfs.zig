@@ -120,9 +120,6 @@ const splitPath = store.splitPath;
 
 /// Bytes per WASM page, the granularity `memory.grow` works in.
 const PAGE: u32 = 65536;
-/// Connections whose working directory is tracked. fs-manager is normally the
-/// only one, so this is slack rather than a budget.
-const MAX_CLIENTS: usize = 8;
 /// Longest path this driver will resolve in one request. It must exceed NAME_MAX
 /// by enough to carry a parent path as well, or a maximum-length component would
 /// be creatable only at the root.
@@ -178,16 +175,6 @@ const S_IFREG: i32 = 0x8000;
 const S_IFDIR: i32 = 0x4000;
 
 // --- state -------------------------------------------------------------------
-
-/// The working directory held for one connection, keyed by the endpoint requests
-/// arrive from.
-const Client = struct {
-    in_use: bool = false,
-    source: i32 = 0,
-    cwd: u16 = ROOT,
-};
-
-var g_clients: [MAX_CLIENTS]Client = [_]Client{.{}} ** MAX_CLIENTS;
 
 /// The bump arena the chunks come from, in linear-memory addresses. Both zero
 /// until the first allocation, which is what makes the first call take a fresh
@@ -324,17 +311,6 @@ fn takePath(buffer_id: i32, len: i32, offset: i32, out: []u8) Path {
 
 /// The working directory held for the endpoint `source`, claiming a slot on first
 /// sight. Null when every slot is taken.
-fn clientCwd(source: i32) ?*u16 {
-    var free: ?*Client = null;
-    for (&g_clients) |*client| {
-        if (client.in_use and client.source == source) return &client.cwd;
-        if (!client.in_use and free == null) free = client;
-    }
-    const slot = free orelse return null;
-    slot.* = .{ .in_use = true, .source = source, .cwd = ROOT };
-    return &slot.cwd;
-}
-
 /// Answer a request. A negative `a0` is a packed reason and makes this an error
 /// reply, which is why every status this driver produces is either a datum or a
 /// code from `abi/errors.yaml`.
@@ -534,24 +510,6 @@ fn handleClose(msg: *const co.IpcMessage) void {
 
 /// CHDIR: arg0 = path length, arg2 = the client's buffer. A zero length names the
 /// filesystem's own root, which is how fs-manager asks for it.
-fn handleChdir(cwd: *u16, msg: *const co.IpcMessage) void {
-    if (msg.arg0 == 0) {
-        cwd.* = ROOT;
-        return reply(msg.source, msg.request_id, 0, 0);
-    }
-    const path = switch (takePath(msg.arg2, msg.arg0, 0, &g_path)) {
-        .err => |code| return fail(msg.source, msg.request_id, code),
-        .ok => |p| p,
-    };
-    const node = resolve(cwd.*, path) orelse
-        return fail(msg.source, msg.request_id, status.WASMOS_ERR_FS_NOT_FOUND);
-    if (!g_nodes[node].is_dir) {
-        return fail(msg.source, msg.request_id, status.WASMOS_ERR_FS_NOT_DIR);
-    }
-    cwd.* = node;
-    reply(msg.source, msg.request_id, 0, 0);
-}
-
 /// Stream `bytes` to a READDIR client, four per FS_IPC_STREAM frame -- the shape
 /// the client reassembles and every other backend emits. `driver.send` treats a
 /// full receiver queue as backpressure and retries, which matters here because
@@ -577,13 +535,26 @@ fn stream(dest: i32, request_id: i32, bytes: []const u8) bool {
 /// Directories carry a trailing '/', which is what the CLI renders. `.` and `..`
 /// are not listed, matching every other backend: they resolve whether or not they
 /// appear.
-fn handleReaddir(cwd: u16, msg: *const co.IpcMessage) void {
-    if (!g_nodes[cwd].is_dir) {
+/// READDIR: stream the entries of the directory the request NAMES.
+///
+/// The path arrives the same way every other path does (arg0 = length, arg2 =
+/// the sender's buffer). This driver holds no working directory of its own:
+/// fs-manager owns the cwd and resolves it to a mount-relative path before
+/// forwarding, so a listing depends on the request rather than on whatever the
+/// previous request left behind.
+fn handleReaddir(msg: *const co.IpcMessage) void {
+    const path = switch (takePath(msg.arg2, msg.arg0, 0, &g_path)) {
+        .err => |code| return fail(msg.source, msg.request_id, code),
+        .ok => |p| p,
+    };
+    const dir = resolve(ROOT, path) orelse
+        return fail(msg.source, msg.request_id, status.WASMOS_ERR_FS_NOT_FOUND);
+    if (!g_nodes[dir].is_dir) {
         return fail(msg.source, msg.request_id, status.WASMOS_ERR_FS_NOT_DIR);
     }
     var i: u16 = 0;
     while (i < MAX_NODES) : (i += 1) {
-        if (!g_nodes[i].in_use or i == ROOT or g_nodes[i].parent != cwd) continue;
+        if (!g_nodes[i].in_use or i == ROOT or g_nodes[i].parent != dir) continue;
         const name = nameOf(i);
         var n: usize = 0;
         @memcpy(g_line[0..name.len], name);
@@ -642,13 +613,6 @@ fn handleNamespace(cwd: u16, msg: *const co.IpcMessage) void {
             }
             if (lookupAny(node) != null) {
                 return fail(msg.source, msg.request_id, status.WASMOS_ERR_FS_NOT_EMPTY);
-            }
-            // A directory this connection stands in would leave the cwd pointing
-            // at a freed node, so it is refused like an open file.
-            for (&g_clients) |*client| {
-                if (client.in_use and client.cwd == node) {
-                    return fail(msg.source, msg.request_id, status.WASMOS_ERR_FS_OPEN);
-                }
             }
             nodeFree(node);
         },
@@ -724,22 +688,23 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
         _ = driver.send(msg.source, endpoint(), op.WASMOS_IPC_SHUTDOWN_DONE, msg.request_id, 0, 0, 0, 0);
         return;
     }
-    const cwd = clientCwd(msg.source) orelse {
-        fail(msg.source, msg.request_id, status.WASMOS_ERR_FS_NO_CLIENT_SLOT);
-        return;
-    };
+    // Every path is resolved from ROOT: this driver holds no working directory.
+    // fs-manager owns the cwd and rewrites each path to a mount-relative absolute
+    // one before forwarding, so a request means the same thing whoever sent it and
+    // whatever came before it. FS_IPC_CHDIR_REQ is consequently NOT served here --
+    // it is a client-to-fs-manager opcode, and a backend that answered it would be
+    // keeping a second copy of state it is not the authority on.
     switch (msg.type) {
         op.FS_IPC_READY_REQ => reply(msg.source, msg.request_id, 0, 0),
-        op.FS_IPC_OPEN_REQ => handleOpen(cwd.*, msg),
-        op.FS_IPC_STAT_REQ => handleStat(cwd.*, msg),
+        op.FS_IPC_OPEN_REQ => handleOpen(ROOT, msg),
+        op.FS_IPC_STAT_REQ => handleStat(ROOT, msg),
         op.FS_IPC_READ_REQ => handleRead(msg),
         op.FS_IPC_WRITE_REQ => handleWrite(msg),
         op.FS_IPC_SEEK_REQ => handleSeek(msg),
         op.FS_IPC_CLOSE_REQ => handleClose(msg),
-        op.FS_IPC_CHDIR_REQ => handleChdir(cwd, msg),
-        op.FS_IPC_READDIR_REQ => handleReaddir(cwd.*, msg),
-        op.FS_IPC_MKDIR_REQ, op.FS_IPC_UNLINK_REQ, op.FS_IPC_RMDIR_REQ => handleNamespace(cwd.*, msg),
-        op.FS_IPC_RENAME_REQ => handleRename(cwd.*, msg),
+        op.FS_IPC_READDIR_REQ => handleReaddir(msg),
+        op.FS_IPC_MKDIR_REQ, op.FS_IPC_UNLINK_REQ, op.FS_IPC_RMDIR_REQ => handleNamespace(ROOT, msg),
+        op.FS_IPC_RENAME_REQ => handleRename(ROOT, msg),
         // Everything else, including the retired READ_APP: this backend says so
         // rather than staying silent, because a client with no reply waits
         // forever.

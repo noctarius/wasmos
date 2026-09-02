@@ -136,12 +136,6 @@ void fat_mount_init(fat_mount_t* mnt, uint8_t is_partition) {
     mnt->is_partition = is_partition;
     mnt->boot_lba = 0;
     mnt->fat_type = FAT_TYPE_UNKNOWN;
-    mnt->cwd_source = -1;
-    mnt->cwd_cluster = 0;
-    mnt->cwd_root = 1;
-    mnt->cwd_mount = VFS_MOUNT_BOOT;
-    mnt->dir_lba = 0;
-    mnt->dir_sectors = 0;
     mnt->cont = 0;
     mnt->mounted = 0;
 }

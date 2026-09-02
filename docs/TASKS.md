@@ -1510,11 +1510,18 @@ Source: `architecture/19-virtual-terminal.md`,
     module through fs-manager -- see `docs/architecture/18-filesystem-stack.md`.
   - fs-manager still BLOCKS on other nested calls, and every one is the same
     latent deadlock the mount request had to be built around: `forward_request`,
-    `backend_sync_cwd`, `fsmgr_pull_backend` and `fsmgr_backend_mkdir` all park
+    `backend_stat_dir`, `fsmgr_pull_backend` and `fsmgr_backend_mkdir` all park
     fs-manager on a reply while it is the service everything else needs to read a
     file. They are safe TODAY only because the peers they wait on (filesystem
     backends) do not themselves need the filesystem. The general fix is the async
     service runtime (`docs/architecture/32-*`), which fs-manager does not use.
+
+    The PROTOCOL obstacle to that is gone: backends no longer hold a working
+    directory, so no pair of requests has to stay adjacent and concurrency is no
+    longer a correctness question. What remains is the conversion itself, and on
+    a wasm guest that means stackless state machines -- doc 32 §52 (stackful
+    coroutines for wasm guests, via suspension at the host-call boundary) is a
+    spike, not implemented.
   - The backend PROCESS survives its unmount. fs-manager quiesces it
     (`WASMOS_IPC_SHUTDOWN_REQ` with `WASMOS_SHUTDOWN_REASON_UNMOUNT`) and drops
     the table entry, but the driver keeps running and holding a process slot, so

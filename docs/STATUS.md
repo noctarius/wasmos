@@ -856,6 +856,20 @@ linked feature documents for rationale and rollout plans.
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
+- FS backends hold NO working directory. `FS_IPC_READDIR` carries the directory
+  to list, `FS_IPC_CHDIR` is client-to-fs-manager only, and fs-manager validates
+  a chdir with `FS_IPC_STAT_REQ`. Removed from all four backends (fs-tmpfs,
+  fs-wfs, fs-fat, fs-init) along with their per-client tables. This deletes a
+  CHDIR round trip before every listing, and the cross-request ordering
+  constraint that made a listing depend on the previous request -- which was the
+  one protocol obstacle to fs-manager ever serving requests concurrently.
+
+  Two defects surfaced and were fixed with it, both pre-existing and both about
+  the STAT reply's mode, which is now contractually required to carry the file
+  TYPE bits: WFS reported the on-disk permission bits with no type, so `S_ISDIR`
+  on a WFS path was false for every directory; and fs-init implemented no STAT at
+  all. FAT additionally could not stat its own mount root, which has no on-disk
+  entry.
 - A mount can be REMOVED. `FSMGR_IPC_UNMOUNT_REQ` names it by the absolute path
   it occupies, refuses with `WASMOS_ERR_FS_MOUNT_BUSY` while a deeper mount or an
   open file is still inside it, quiesces the backend

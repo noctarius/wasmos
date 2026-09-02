@@ -133,26 +133,29 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
 fat_r_t fat_rename_path(fat_rename_ctx_t* r, fat_block_t* blk, const fat_mount_t* mnt,
                         const fat_open_file_t* files, uint32_t file_count);
 
-/* --- Directory navigation (READDIR / CHDIR).  Contexts in fat_types.h. --- */
+/* --- Directory navigation (READDIR).  Contexts in fat_types.h. --- */
 
-/* Stream the entries of the CURRENT directory (root region when mnt->cwd_root,
- * else the cwd subdir at mnt->dir_lba/dir_sectors) to op->source over
+/* Stream the entries of the directory op->dir_name NAMES to op->source over
  * fs_endpoint as FS_IPC_STREAM messages (4 bytes per message, with the
  * IPC_ERR_FULL retry + wasmos_console_write fallback), one line per
  * entry ("name" + "/" for a directory + "\n").  Uses op->readdir.  Sends no
  * response itself (resp_override stays 0); the reactor emits the final
- * FS_IPC_RESP on FAT_R_DONE.  FAT_R_ERR on a block-I/O fault, or
- * WASMOS_ERR_FS_NOT_FOUND when the volume has no root region or the cwd is
- * stale. */
+ * FS_IPC_RESP on FAT_R_DONE.  Resolves op->dir_name through fat_resolve_dir
+ * first (so it also uses op->chdir), and this driver keeps NO working directory:
+ * fs-manager owns the cwd and sends an absolute mount-relative path.  FAT_R_ERR
+ * on a block-I/O fault, or WASMOS_ERR_FS_NOT_FOUND / WASMOS_ERR_FS_NOT_DIR for a
+ * path that names no directory. */
 fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
                        int32_t fs_endpoint);
 
-/* Change the cwd to op->dir_name (already unpacked from arg0..3).  Empty or
- * "/"-only resets the cwd to the mount root.  Otherwise walks the components
- * (relative to the cwd unless the name starts with '/'), descending each matched
- * subdirectory, and on success repoints mnt's cwd_* / dir_lba / dir_sectors and
- * cwd_source.  Uses op->chdir.  FAT_CO_FAIL(WASMOS_ERR_FS_NOT_FOUND / WASMOS_ERR_FS_NOT_DIR)
- * on a missing / non-directory component. */
-fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt);
+/* Resolve `path_in` to a directory, reporting it in c->root (1 = the mount root
+ * region) and c->cluster.  Empty or "/"-only is the mount root; otherwise the
+ * components are walked from the root, descending each matched subdirectory.
+ * Paths are treated as absolute whether or not they lead with '/', because this
+ * driver keeps no working directory to resolve a relative one against.
+ * FAT_CO_FAIL(WASMOS_ERR_FS_NOT_FOUND / WASMOS_ERR_FS_NOT_DIR) on a missing or
+ * non-directory component. */
+fat_r_t fat_resolve_dir(fat_chdir_ctx_t* c, fat_block_t* blk, const fat_mount_t* mnt,
+                        const char* path_in);
 
 #endif /* FS_FAT_FAT_DIR_H */

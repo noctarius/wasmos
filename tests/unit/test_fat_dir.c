@@ -628,14 +628,9 @@ static void test_readdir_lists_entries_in_second_cluster(void) {
     build_volume(0);
     mount_volume(&mnt, &blk);
 
-    /* Make the two-cluster subdirectory the cwd, which is what READDIR lists. */
-    mnt.cwd_root = 0;
-    mnt.cwd_source = 7;
-    mnt.cwd_cluster = (uint16_t)T_DIR_FIRST_CLUSTER;
-    mnt.dir_lba = fat_lba_for_cluster(&mnt, (uint16_t)T_DIR_FIRST_CLUSTER);
-    mnt.dir_sectors = mnt.sectors_per_cluster;
-
+    /* READDIR NAMES the directory it lists; the driver keeps no cwd to set. */
     memset(&op, 0, sizeof(op));
+    memcpy(op.dir_name, "/SUB", sizeof("/SUB"));
     op.source = 7;
     op.request_id = 1;
     g_stream_len = 0;
@@ -1560,12 +1555,13 @@ static void test_unlink_an_entry_in_a_later_cluster(void) {
     free_volume();
 }
 
-/* Regression: 2026-08-18-fat-chdir-multicluster -- fat_op_chdir carried its own
- * hand-written scan that stopped at a directory's first cluster, while every
- * other read-side scan walked the chain. The result was an inconsistency a user
- * could see directly: `ls /a/b` listed an entry that `cd /a/b` reported as
- * missing. Now that directories can grow past one cluster, it is easy to reach. */
-static void test_chdir_into_a_directory_listed_in_a_later_cluster(void) {
+/* Regression: 2026-08-18-fat-chdir-multicluster -- the directory-path walk
+ * (then fat_op_chdir, now fat_resolve_dir) carried its own hand-written scan
+ * that stopped at a directory's first cluster, while every other read-side scan
+ * walked the chain. The result was an inconsistency a user could see directly:
+ * `ls /a/b` listed an entry that `cd /a/b` reported as missing. Now that
+ * directories can grow past one cluster, it is easy to reach. */
+static void test_resolve_a_directory_listed_in_a_later_cluster(void) {
     fat_mount_t mnt;
     fat_block_t blk;
     fat_op_ctx_t op;
@@ -1584,27 +1580,27 @@ static void test_chdir_into_a_directory_listed_in_a_later_cluster(void) {
     CHECK(rc == FAT_R_DONE && res.found.valid, "the subdirectory resolves by path");
 
     memset(&op, 0, sizeof(op));
-    op.source = 5;
-    memcpy(op.dir_name, "/SUB/DEEP", sizeof("/SUB/DEEP"));
-    rc = fat_op_chdir(&op, &blk, &mnt);
+    rc = fat_resolve_dir(&op.chdir, &blk, &mnt, "/SUB/DEEP");
 
-    CHECK(rc == FAT_R_DONE, "chdir into it succeeds");
-    CHECK(mnt.cwd_root == 0, "the cwd is no longer the root");
-    CHECK(mnt.cwd_cluster == T_DEEP_CLUSTER, "the cwd is the subdirectory's cluster");
+    CHECK(rc == FAT_R_DONE, "resolving it succeeds");
+    CHECK(op.chdir.root == 0, "the result is not the root region");
+    CHECK(op.chdir.cluster == T_DEEP_CLUSTER, "the result is the subdirectory's cluster");
 
-    /* Resolving a relative name proves the cwd is usable, not merely recorded. */
+    /* Resolving a file beneath it proves the result is usable, not merely
+     * reported. */
     memset(&res, 0, sizeof(res));
-    res.path = "INDEEP.TXT";
+    res.path = "/SUB/DEEP/INDEEP.TXT";
     res.source = 5;
     rc = fat_resolve_path(&res, &blk, &mnt);
-    CHECK(rc == FAT_R_DONE && res.found.valid, "a relative lookup works from the new cwd");
+    CHECK(rc == FAT_R_DONE && res.found.valid, "a file under it resolves");
 
     free_volume();
 }
 
-/* chdir must still refuse a name that is a FILE, and still find directories in
- * the first cluster -- the ordinary cases the rewrite could regress. */
-static void test_chdir_ordinary_cases_still_hold(void) {
+/* Directory resolution must still refuse a name that is a FILE, and still find
+ * directories in the first cluster -- the ordinary cases the rewrite could
+ * regress. */
+static void test_resolve_dir_ordinary_cases_still_hold(void) {
     fat_mount_t mnt;
     fat_block_t blk;
     fat_op_ctx_t op;
@@ -1614,23 +1610,17 @@ static void test_chdir_ordinary_cases_still_hold(void) {
     mount_volume(&mnt, &blk);
 
     memset(&op, 0, sizeof(op));
-    op.source = 5;
-    memcpy(op.dir_name, "/SUB", sizeof("/SUB"));
-    rc = fat_op_chdir(&op, &blk, &mnt);
-    CHECK(rc == FAT_R_DONE, "chdir into a first-cluster directory still works");
-    CHECK(mnt.cwd_cluster == T_DIR_FIRST_CLUSTER, "the cwd is that directory");
+    rc = fat_resolve_dir(&op.chdir, &blk, &mnt, "/SUB");
+    CHECK(rc == FAT_R_DONE, "a first-cluster directory still resolves");
+    CHECK(op.chdir.cluster == T_DIR_FIRST_CLUSTER, "the result is that directory");
 
     memset(&op, 0, sizeof(op));
-    op.source = 5;
-    memcpy(op.dir_name, "/INROOT.TXT", sizeof("/INROOT.TXT"));
-    rc = fat_op_chdir(&op, &blk, &mnt);
-    CHECK(rc == FAT_R_ERR, "chdir into a FILE is refused");
+    rc = fat_resolve_dir(&op.chdir, &blk, &mnt, "/INROOT.TXT");
+    CHECK(rc == FAT_R_ERR, "a FILE is refused");
 
     memset(&op, 0, sizeof(op));
-    op.source = 5;
-    memcpy(op.dir_name, "/NOSUCHDIR", sizeof("/NOSUCHDIR"));
-    rc = fat_op_chdir(&op, &blk, &mnt);
-    CHECK(rc == FAT_R_ERR, "chdir into a missing name is refused");
+    rc = fat_resolve_dir(&op.chdir, &blk, &mnt, "/NOSUCHDIR");
+    CHECK(rc == FAT_R_ERR, "a missing name is refused");
 
     free_volume();
 }
@@ -1702,18 +1692,18 @@ static void test_chdir_dotdot_returns_to_the_real_parent(void) {
     mount_volume(&mnt, &blk);
 
     memset(&op, 0, sizeof(op));
-    op.source = 5;
-    memcpy(op.dir_name, "/SUB/DEEP", sizeof("/SUB/DEEP"));
-    rc = fat_op_chdir(&op, &blk, &mnt);
-    CHECK(rc == FAT_R_DONE, "chdir into the nested directory succeeds");
+    rc = fat_resolve_dir(&op.chdir, &blk, &mnt, "/SUB/DEEP");
+    CHECK(rc == FAT_R_DONE, "the nested directory resolves");
 
+    /* One compound path rather than two calls: the driver keeps no position
+     * between requests, so ".." can only be a component of the path it appears
+     * in. fs-manager canonicalizes "." and ".." away before forwarding, so this
+     * is the resolver being correct rather than a path it will actually see. */
     memset(&op, 0, sizeof(op));
-    op.source = 5;
-    memcpy(op.dir_name, "..", sizeof(".."));
-    rc = fat_op_chdir(&op, &blk, &mnt);
-    CHECK(rc == FAT_R_DONE, "chdir .. succeeds");
-    CHECK(mnt.cwd_root == 0, "'..' from a nested directory is not the root");
-    CHECK(mnt.cwd_cluster == T_DIR_FIRST_CLUSTER, "it is the real parent");
+    rc = fat_resolve_dir(&op.chdir, &blk, &mnt, "/SUB/DEEP/..");
+    CHECK(rc == FAT_R_DONE, "'..' resolves");
+    CHECK(op.chdir.root == 0, "'..' from a nested directory is not the root");
+    CHECK(op.chdir.cluster == T_DIR_FIRST_CLUSTER, "it is the real parent");
 
     free_volume();
 }
@@ -1989,9 +1979,8 @@ static void test_readdir_emits_long_names(void) {
     rc = fat_create_empty_file(&c, &blk, &mnt);
     CHECK(rc == FAT_R_DONE, "the long-named file is created");
 
-    mnt.cwd_root = 1;
-    mnt.cwd_source = 7;
     memset(&op, 0, sizeof(op));
+    memcpy(op.dir_name, "/", sizeof("/"));
     op.source = 7;
     op.request_id = 1;
     g_stream_len = 0;
@@ -2119,8 +2108,8 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_rename_into_a_directory_past_its_first_cluster),
     WASMOS_TEST_CASE(test_directory_grows_when_every_cluster_is_full),
     WASMOS_TEST_CASE(test_unlink_an_entry_in_a_later_cluster),
-    WASMOS_TEST_CASE(test_chdir_into_a_directory_listed_in_a_later_cluster),
-    WASMOS_TEST_CASE(test_chdir_ordinary_cases_still_hold),
+    WASMOS_TEST_CASE(test_resolve_a_directory_listed_in_a_later_cluster),
+    WASMOS_TEST_CASE(test_resolve_dir_ordinary_cases_still_hold),
     WASMOS_TEST_CASE(test_dotdot_resolves_against_the_real_parent),
     WASMOS_TEST_CASE(test_dotdot_from_a_top_level_directory_reaches_the_root),
     WASMOS_TEST_CASE(test_chdir_dotdot_returns_to_the_real_parent),

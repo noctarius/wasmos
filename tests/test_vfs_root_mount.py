@@ -325,6 +325,59 @@ class VfsDeepAndNestedMountTest(VfsSession, unittest.TestCase):
         self.assertIn(b"hello.txt", listing, f"/wfs lost its own content\n{listing!r}")
 
 
+class VfsChdirAcrossBackendsTest(VfsSession, unittest.TestCase):
+    """`cd` asks the backend whether the target is a DIRECTORY, on every backend.
+
+    fs-manager validates a chdir with FS_IPC_STAT_REQ and reads the type out of
+    the mode the backend reports. That makes the mode's type bits load-bearing
+    for something a user does constantly, so every backend has to report them --
+    and two did not: WFS returned the on-disk permission bits with no type at all,
+    and fs-init implemented no STAT whatever. Both were invisible while a chdir
+    was validated by sending the backend a CHDIR and letting it decide.
+
+    The two halves are a pair on purpose. The first says a directory is accepted,
+    the second says a FILE is not; a backend that answered "directory" for
+    everything would pass the first alone.
+
+    Regression: 2026-09-01-stat-must-report-the-file-type
+    """
+
+    def test_a_directory_is_enterable_on_every_backend(self):
+        for path, marker in (
+            ("/", b"/ wamos>"),
+            ("/init", b"/init wamos>"),
+            ("/boot", b"/boot wamos>"),
+            ("/wfs", b"/wfs wamos>"),
+            ("/home/user", b"/home/user wamos>"),
+        ):
+            out = self._run(f"cd {path}")
+            self.assertIn(marker, out, f"cd {path} was refused\n{out!r}")
+        self._run("cd /")
+
+    def test_a_file_is_not_enterable_on_every_backend(self):
+        """The mutation guard: a backend reporting S_IFDIR unconditionally, or
+        fs-manager skipping the type check, passes the case above and fails here.
+
+        Each path is a regular file that exists, so a refusal can only come from
+        the type -- NOT_FOUND would mean the case stopped testing what it says.
+        """
+        for path in ("/wfs/hello.txt", "/boot/system/services/cli.wap"):
+            out = self._run(f"cd {path}")
+            # The shell prints the error's DESCRIPTION, so the fragments below
+            # are what NOT_DIR and NOT_FOUND read as at the prompt.
+            self.assertIn(
+                b"must be a directory",
+                out,
+                f"cd {path} did not refuse on the file type\n{out!r}",
+            )
+            self.assertNotIn(
+                b"does not exist",
+                out,
+                f"the file is missing, so this case proves nothing\n{out!r}",
+            )
+        self._run("cd /")
+
+
 class VfsMountRequestTest(VfsSession, unittest.TestCase):
     """Establishing a mount at runtime, not by boot rule.
 

@@ -14,7 +14,6 @@
 #define INITFS_MAX_OPEN_FILES 16
 #define INITFS_MAX_FILES 128
 #define INITFS_MAX_DIRS 128
-#define INITFS_MAX_CLIENTS 16
 #define INITFS_PATH_MAX 112
 #define INITFS_NAME_MAX 64
 
@@ -40,18 +39,11 @@ typedef struct {
     char name[INITFS_NAME_MAX];
 } initfs_dir_t;
 
-typedef struct {
-    int32_t in_use;
-    int32_t source;
-    int32_t cwd_dir;
-} initfs_client_t;
-
 static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
 static initfs_fd_t g_open_files[INITFS_MAX_OPEN_FILES];
 static initfs_file_t g_files[INITFS_MAX_FILES];
 static initfs_dir_t g_dirs[INITFS_MAX_DIRS];
-static initfs_client_t g_clients[INITFS_MAX_CLIENTS];
 static int32_t g_file_count = 0;
 static int32_t g_dir_count = 0;
 
@@ -338,16 +330,15 @@ static int emit_stream_text(int32_t source, int32_t req_id, const char* text) {
     return 0;
 }
 
-/* Returns WASMOS_ERR_NONE, or the packed reason the listing could not be sent. */
-static wasmos_error_code_t emit_init_listing(int32_t source, int32_t req_id) {
+/* Stream the entries of `dir` (an index into g_dirs; 0 is the image root).
+ *
+ * The directory is the one the request named, not one this driver remembers:
+ * fs-manager owns the working directory and resolves it to a path before
+ * forwarding, so a listing depends on the request alone.
+ *
+ * Returns WASMOS_ERR_NONE, or the packed reason the listing could not be sent. */
+static wasmos_error_code_t emit_init_listing(int32_t source, int32_t req_id, int32_t cwd_dir) {
     char line[INITFS_PATH_MAX + 4];
-    int32_t cwd_dir = 0;
-    for (int32_t i = 0; i < INITFS_MAX_CLIENTS; ++i) {
-        if (g_clients[i].in_use && g_clients[i].source == source) {
-            cwd_dir = g_clients[i].cwd_dir;
-            break;
-        }
-    }
     for (int32_t i = 0; i < g_dir_count; ++i) {
         if (!g_dirs[i].in_use || i == 0 || g_dirs[i].parent_index != cwd_dir) {
             continue;
@@ -369,51 +360,32 @@ static wasmos_error_code_t emit_init_listing(int32_t source, int32_t req_id) {
     return WASMOS_ERR_NONE;
 }
 
-/* Returns WASMOS_ERR_NONE, or the packed reason the cwd could not be changed. */
-static wasmos_error_code_t chdir_to_path(int32_t* cwd_dir, const char* path) {
+/* Resolve `path` to an index into g_dirs, 0 being the image root.
+ *
+ * Every path arrives absolute: fs-manager owns the working directory and
+ * resolves it, including "." and "..", before forwarding. So this walks from the
+ * root and needs no position of its own to interpret the name against.
+ *
+ * Returns WASMOS_ERR_NONE, or the packed reason the path names no directory. */
+static wasmos_error_code_t resolve_dir_path(int32_t* out_dir, const char* path) {
     char full[INITFS_PATH_MAX];
-    if (!cwd_dir) {
+    if (!out_dir) {
         return WASMOS_ERR_FS_BAD_ARGS;
     }
     if (!path || path[0] == '\0' || strcasecmp(path, "/") == 0 || strcasecmp(path, "init") == 0 ||
         strcasecmp(path, "/init") == 0) {
-        *cwd_dir = 0;
+        *out_dir = 0;
         return WASMOS_ERR_NONE;
     }
-    if (strcasecmp(path, "..") == 0) {
-        if (*cwd_dir > 0) {
-            *cwd_dir = g_dirs[*cwd_dir].parent_index >= 0 ? g_dirs[*cwd_dir].parent_index : 0;
-        }
-        return WASMOS_ERR_NONE;
-    }
-    if (initfs_build_absolute_path(*cwd_dir, path, full, sizeof(full)) != 0) {
+    if (initfs_build_absolute_path(0, path, full, sizeof(full)) != 0) {
         return WASMOS_ERR_FS_PATH_TOO_LONG;
     }
     int32_t dir_index = dir_find_by_path(full);
     if (dir_index < 0) {
         return WASMOS_ERR_FS_NOT_FOUND;
     }
-    *cwd_dir = dir_index;
+    *out_dir = dir_index;
     return WASMOS_ERR_NONE;
-}
-
-static int32_t* client_cwd_for_source(int32_t source) {
-    int32_t free_slot = -1;
-    for (int32_t i = 0; i < INITFS_MAX_CLIENTS; ++i) {
-        if (g_clients[i].in_use && g_clients[i].source == source) {
-            return &g_clients[i].cwd_dir;
-        }
-        if (!g_clients[i].in_use && free_slot < 0) {
-            free_slot = i;
-        }
-    }
-    if (free_slot < 0) {
-        return 0;
-    }
-    g_clients[free_slot].in_use = 1;
-    g_clients[free_slot].source = source;
-    g_clients[free_slot].cwd_dir = 0;
-    return &g_clients[free_slot].cwd_dir;
 }
 
 /* Service entry point: index the kernel's built-in initfs image, register under
@@ -423,7 +395,7 @@ static int32_t* client_cwd_for_source(int32_t source) {
  * spawn-info contract, because every entry argument is passed as zero at spawn.
  *
  * This backend is READ-ONLY: the image is baked into the boot modules, so it
- * implements only OPEN / READ / CLOSE / READDIR / CHDIR. There is no write,
+ * implements only OPEN / READ / CLOSE / READDIR / STAT. There is no write,
  * create or unlink path at all -- those opcodes fall through to the default and
  * are answered WASMOS_ERR_FS_UNSUPPORTED. It is what serves paths before any
  * on-disk volume is mounted.
@@ -444,11 +416,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     if (initfs_build_index() != 0) {
         console_write("[fs-init] initfs index build failed\n");
         wasmos_sys_ipc_recv_loop();
-    }
-    for (int32_t i = 0; i < INITFS_MAX_CLIENTS; ++i) {
-        g_clients[i].in_use = 0;
-        g_clients[i].source = -1;
-        g_clients[i].cwd_dir = 0;
     }
     /* Register the initfs.rules name plus the fs.backend class with a unique
      * encoded (kind, unit) instance. fs-manager discovers backends via the
@@ -523,19 +490,40 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                   0);
             continue;
         }
-        int32_t* cwd_dir = client_cwd_for_source(source);
         /* `status` is the reply code arg: a datum (>= 0) or a packed reason. It
-         * defaults to UNSUPPORTED so an unmatched request type says so. */
+         * defaults to UNSUPPORTED so an unmatched request type says so.
+         * `resp_arg1` is the reply's second value, which only STAT uses. */
         int32_t status = WASMOS_ERR_FS_UNSUPPORTED;
-        if (!cwd_dir) {
-            /* Every INITFS_MAX_CLIENTS slot is taken, so this client's cwd
-             * cannot be tracked. */
-            (void)wasmos_ipc_send(
-                source, g_fs_endpoint, FS_IPC_ERROR, req_id, WASMOS_ERR_FS_NO_CLIENT_SLOT, 0, 0, 0);
-            continue;
-        }
+        int32_t resp_arg1 = 0;
 
-        if (type == FS_IPC_OPEN_REQ) {
+        if (type == FS_IPC_STAT_REQ) {
+            /* STAT reports size in arg0 and a POSIX-shaped mode in arg1. The
+             * TYPE bits are the load-bearing part: fs-manager reads them to
+             * decide whether a chdir target is a directory, and libc's S_ISDIR
+             * reads them for a caller. This image is read-only, so the
+             * permission bits carry no write bit for anyone.
+             *
+             * Files are checked before directories only because the two spaces
+             * are disjoint; a path is one or the other, never both. */
+            char path[INITFS_PATH_MAX];
+            wasmos_error_code_t path_err =
+                copy_path_from_xfer_buffer(arg2, arg0, path, sizeof(path));
+            if (path_err != WASMOS_ERR_NONE) {
+                status = path_err;
+            } else {
+                int32_t file_index = initfs_find_file_record(0, path);
+                int32_t dir_index = 0;
+                if (file_index >= 0) {
+                    status = g_files[file_index].size;
+                    resp_arg1 = (int32_t)(0x8000u | 0444u); /* S_IFREG */
+                } else if (resolve_dir_path(&dir_index, path) == WASMOS_ERR_NONE) {
+                    status = 0;
+                    resp_arg1 = (int32_t)(0x4000u | 0555u); /* S_IFDIR */
+                } else {
+                    status = WASMOS_ERR_FS_NOT_FOUND;
+                }
+            }
+        } else if (type == FS_IPC_OPEN_REQ) {
             char path[INITFS_PATH_MAX];
             /* OPEN always carries the path in the client's buffer:
              * arg2 = buffer_id, arg0 = path_len. */
@@ -544,7 +532,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             if (path_err != WASMOS_ERR_NONE) {
                 status = path_err;
             } else {
-                int32_t file_index = initfs_find_file_record(*cwd_dir, path);
+                int32_t file_index = initfs_find_file_record(0, path);
                 if (file_index < 0) {
                     status = WASMOS_ERR_FS_NOT_FOUND;
                 } else {
@@ -614,15 +602,23 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 status = 0;
             }
         } else if (type == FS_IPC_READDIR_REQ) {
-            status = emit_init_listing(source, req_id);
-        } else if (type == FS_IPC_CHDIR_REQ) {
-            /* CHDIR carries its target as a path in the client's transfer buffer
-             * (arg0 = length, arg2 = buffer id), the same transport OPEN uses --
-             * so a deep path and a name past 15 bytes both arrive intact. */
+            /* READDIR carries the directory to list as a path in the sender's
+             * transfer buffer (arg0 = length, arg2 = buffer id), the same
+             * transport OPEN uses. Resolved per request: this driver keeps no
+             * working directory, so nothing has to precede the listing to make
+             * it name the right place. */
             char name[INITFS_PATH_MAX];
+            int32_t dir = 0;
             wasmos_error_code_t path_rc =
                 copy_path_from_xfer_buffer(arg2, arg0, name, sizeof(name));
-            status = (path_rc == WASMOS_ERR_NONE) ? chdir_to_path(cwd_dir, name) : path_rc;
+            if (path_rc != WASMOS_ERR_NONE) {
+                status = path_rc;
+            } else {
+                status = resolve_dir_path(&dir, name);
+                if (status == (int32_t)WASMOS_ERR_NONE) {
+                    status = emit_init_listing(source, req_id, dir);
+                }
+            }
         } else if (type == FS_IPC_READY_REQ) {
             status = 0;
         }
@@ -632,7 +628,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                               status >= 0 ? FS_IPC_RESP : FS_IPC_ERROR,
                               req_id,
                               status,
-                              0,
+                              resp_arg1,
                               0,
                               0);
     }

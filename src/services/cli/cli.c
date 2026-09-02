@@ -25,11 +25,11 @@
  *
  *   help                    print the built-in list
  *   ls                      list the current directory
- *   cd <path>               change directory.  A path fits in one request only
- *                           while it is under 16 bytes (FS_IPC_CHDIR_REQ packs
- *                           the name into arg0..arg3); a longer absolute path is
- *                           issued as a chdir to root followed by a second
- *                           request for the remainder
+ *   cd <path>               change directory.  The path travels in a transfer
+ *                           buffer this shell owns and grants fs-manager, so
+ *                           its length is not bounded by the request's argument
+ *                           words; fs-manager owns the working directory and
+ *                           reports the resolved path back
  *   kmaps [all]             dump kernel page mappings
  *   tty <0-3>               make that vt slot visible; exactly one digit
  *   tty -s <1-3>            bind the serial console to that slot; the visible

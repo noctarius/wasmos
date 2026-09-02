@@ -217,6 +217,18 @@ pub const BLOCK_IPC_ERROR: i32 = 0x3FF;
 pub const FS_IPC_OPEN_REQ: i32 = 0x400;
 pub const FS_IPC_READ_REQ: i32 = 0x401;
 pub const FS_IPC_CLOSE_REQ: i32 = 0x402;
+/// Report a path's size in the reply's arg0 and its POSIX-shaped mode in
+/// arg1.
+///
+/// The mode MUST carry the file TYPE bits (S_IFDIR 0x4000, S_IFREG 0x8000,
+/// S_IFLNK 0xA000), not permission bits alone. Two consumers read the type
+/// out of it and have nothing else to read: libc's S_ISDIR, and
+/// fs-manager when it validates a chdir target. A backend that reports
+/// permissions alone describes every directory it holds as a regular file.
+///
+/// A backend must answer for its own mount ROOT, which typically has no
+/// on-disk entry describing it: a volume whose root cannot be stat'd is a
+/// mount nobody can stand at the top of.
 pub const FS_IPC_STAT_REQ: i32 = 0x403;
 pub const FS_IPC_READY_REQ: i32 = 0x404;
 pub const FS_IPC_SEEK_REQ: i32 = 0x405;
@@ -224,7 +236,33 @@ pub const FS_IPC_WRITE_REQ: i32 = 0x406;
 pub const FS_IPC_UNLINK_REQ: i32 = 0x407;
 pub const FS_IPC_MKDIR_REQ: i32 = 0x408;
 pub const FS_IPC_RMDIR_REQ: i32 = 0x409;
+/// List a directory, streaming one FS_IPC_STREAM frame per entry and
+/// terminating with FS_IPC_RESP.
+///
+/// The two legs carry different things. From a CLIENT it names no path:
+/// fs-manager owns the working directory, so a client supplying one would
+/// have to know a path fs-manager is the authority on. To the BACKEND it
+/// carries the mount-relative path in fs-manager's own buffer -- arg0 =
+/// length, arg2 = buffer id, arg3 = the grant -- exactly like every other
+/// path op.
+///
+/// A backend therefore holds NO working directory. It previously listed
+/// whichever directory it last been told to stand in, which cost a CHDIR
+/// round trip before every listing and made the result depend on the
+/// previous request rather than on this one.
 pub const FS_IPC_READDIR_REQ: i32 = 0x410;
+/// Change the working directory. CLIENT to fs-manager ONLY: fs-manager
+/// owns the working directory as a full VFS path and resolves every client
+/// path against it, so a backend that also kept one would hold a second
+/// copy of state it is not the authority on.
+///
+/// fs-manager validates the target with FS_IPC_STAT_REQ and reads the type
+/// out of the reported mode. It does not send a backend a CHDIR; nothing
+/// does.
+///
+/// arg0 = path length, arg2 = the client's buffer, arg3 = the grant. A
+/// zero length names the VFS root. The reply reports the resolved absolute
+/// path in arg1, since arg0 carries the status.
 pub const FS_IPC_CHDIR_REQ: i32 = 0x412;
 pub const FS_IPC_READ_APP_REQ: i32 = 0x413;
 pub const FS_IPC_READ_PATH_REQ: i32 = 0x414;

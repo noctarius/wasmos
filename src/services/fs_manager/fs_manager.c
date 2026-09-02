@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"
+#include "sys/stat.h" /* S_IFMT / S_IFDIR, for validating a chdir target */
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
@@ -750,7 +751,7 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
 /* Create one directory in `backend`, under the path that backend sees.
  *
  * fs-manager owns the buffer the path travels in (g_cwd_bid), because a
- * registration supplies none -- the same reason backend_sync_cwd owns one. An
+ * registration supplies none -- the same reason backend_lend_path owns one. An
  * EXISTS reply is success: this runs on every registration and a mount point that
  * is already there is the expected case, not a conflict.
  *
@@ -1287,29 +1288,60 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
  * transfer buffer, so its depth and its component lengths are bounded only by
  * that buffer -- not by what fits in the request arguments. Returns 0 once the
  * backend stands in that directory. */
-static int backend_sync_cwd(int32_t backend, int32_t request_id, const char* mount_tail,
-                            int32_t reply_to) {
-    int32_t rr_t = FS_IPC_ERROR, rr0 = -1, rr1 = 0, rr2 = 0, rr3 = 0;
+/* Write `mount_tail` into fs-manager's own path buffer and lend the backend a
+ * READ grant on it.
+ *
+ * fs-manager supplies the path for the requests a client names no path in, so it
+ * owns the buffer they travel in: the client's own buffer holds the client's
+ * data, and a request fs-manager originates is fs-manager's to carry. One buffer
+ * serves all of them because the service loop has one request in flight.
+ *
+ * Returns the borrow handle, or a negative packed code. The caller unborrows. */
+static int32_t backend_lend_path(int32_t backend, const char* mount_tail, int32_t* out_len) {
     int32_t tail_len;
     int32_t borrow;
-    int32_t rc;
 
     if (backend < 0 || !mount_tail || mount_tail[0] != '/' || g_cwd_bid < 0) {
-        return -1;
+        return WASMOS_ERR_FS_BAD_ARGS;
     }
     tail_len = (int32_t)strlen(mount_tail);
     if (tail_len >= wasmos_xfer_buffer_size()) {
-        return -1;
+        return WASMOS_ERR_FS_PATH_TOO_LONG;
     }
     if (wasmos_xfer_buffer_write(g_cwd_bid, (const uint8_t*)mount_tail, tail_len, 0) != 0) {
-        return -1;
+        return WASMOS_ERR_FS_BUFFER;
     }
     borrow = wasmos_xfer_buffer_borrow(backend, g_cwd_bid, WASMOS_BUFFER_GRANT_READ);
     if (borrow < 0) {
-        return -1;
+        return WASMOS_ERR_FS_REBORROW;
+    }
+    if (out_len) {
+        *out_len = tail_len;
+    }
+    return borrow;
+}
+
+/* Whether `mount_tail` names an existing DIRECTORY in `backend`.
+ *
+ * This is the whole of what a chdir needs to know, and STAT answers it without
+ * moving anything. fs-manager previously asked by sending the backend a CHDIR,
+ * which made the answer a side effect of changing state that fs-manager already
+ * owns -- and left the backend holding a position that only the next request to
+ * re-assert it could correct.
+ *
+ * Returns 0 when it is a directory, or the packed reason it is not. */
+static wasmos_error_code_t backend_stat_dir(int32_t backend, int32_t request_id,
+                                            const char* mount_tail, int32_t reply_to) {
+    int32_t rr_t = FS_IPC_ERROR, rr0 = 0, rr1 = 0, rr2 = 0, rr3 = 0;
+    int32_t tail_len = 0;
+    int32_t borrow = backend_lend_path(backend, mount_tail, &tail_len);
+    int32_t rc;
+
+    if (borrow < 0) {
+        return (wasmos_error_code_t)borrow;
     }
     rc = forward_request(backend,
-                         FS_IPC_CHDIR_REQ,
+                         FS_IPC_STAT_REQ,
                          request_id,
                          tail_len,
                          0,
@@ -1322,10 +1354,17 @@ static int backend_sync_cwd(int32_t backend, int32_t request_id, const char* mou
                          &rr2,
                          &rr3);
     (void)wasmos_xfer_buffer_unborrow(borrow);
-    if (rc != 0 || rr_t != FS_IPC_RESP || rr0 != 0) {
-        return -1;
+    if (rc != 0 || rr_t != FS_IPC_RESP) {
+        /* The backend's own reason when it sent one: NOT_FOUND reads very
+         * differently from a backend that never answered. */
+        return (rc == 0 && rr0 < 0) ? (wasmos_error_code_t)rr0 : WASMOS_ERR_FS_BACKEND_IPC;
     }
-    return 0;
+    /* arg1 is the mode; the type field is what distinguishes a directory from a
+     * file that happens to exist at that path. */
+    if (((uint32_t)rr1 & S_IFMT) != S_IFDIR) {
+        return WASMOS_ERR_FS_NOT_DIR;
+    }
+    return WASMOS_ERR_NONE;
 }
 
 /* Write the client's resulting working directory back into the buffer it
@@ -1412,9 +1451,11 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
             source, FS_IPC_RESP, request_id, 0, chdir_report_cwd(state, buffer_id), 0, 0);
         return 1;
     }
-    synced = backend_sync_cwd(backend, request_id, tail, source);
-    if (synced != 0) {
-        send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_FOUND);
+    synced = (int32_t)backend_stat_dir(backend, request_id, tail, source);
+    if (synced != (int32_t)WASMOS_ERR_NONE) {
+        /* The backend's reason, not a substituted one: NOT_DIR for a file the
+         * client tried to stand in is the answer, and NOT_FOUND would be wrong. */
+        send_fs_error(source, request_id, (wasmos_error_code_t)synced);
         return 1;
     }
     /* Committed only now: a refused chdir leaves the client exactly where it
@@ -1677,6 +1718,66 @@ static void fsmgr_mount_handle_spawn_reply(int32_t type, int32_t pid) {
      * unmount has. */
     log_msg("[fs-manager] mount: backend started but registered no mount\n");
     fsmgr_mount_pending_fail(WASMOS_ERR_FS_NOT_READY);
+}
+
+/* FS_IPC_READDIR_REQ: list the client's working directory.
+ *
+ * The two legs of this opcode carry different things, and deliberately so. From
+ * a CLIENT it names no path: fs-manager owns the working directory, so a client
+ * that supplied one could name a directory it is not standing in, and would need
+ * to know a path fs-manager is the authority on. To the BACKEND it carries the
+ * mount-relative path in fs-manager's own buffer, exactly like every other path
+ * op.
+ *
+ * That is what keeps a backend STATELESS about position. It previously listed
+ * "whichever directory it currently holds", so fs-manager had to send a CHDIR
+ * first to make that the right one -- a second round trip per listing, and a
+ * correctness argument that only held because this service handles one request
+ * at a time. A path in the request needs neither.
+ *
+ * Entries come back as FS_IPC_STREAM frames, which forward_request relays to the
+ * client as they arrive; the terminating FS_IPC_RESP is what this returns on. */
+static void handle_readdir_req(fs_client_state_t* state, int32_t source, int32_t request_id) {
+    char tail[FSMGR_CWD_MAX];
+    int32_t tail_len = 0;
+    int32_t backend = -1;
+    int32_t borrow;
+    int32_t rr_t = FS_IPC_ERROR, rr0 = 0, rr1 = 0, rr2 = 0, rr3 = 0;
+    int32_t rc;
+
+    if (!route_absolute_path(state->cwd, tail, (int32_t)sizeof(tail), &tail_len, &backend)) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NO_BACKEND);
+        return;
+    }
+    borrow = backend_lend_path(backend, tail, &tail_len);
+    if (borrow < 0) {
+        send_fs_error(source, request_id, (wasmos_error_code_t)borrow);
+        return;
+    }
+    rc = forward_request(backend,
+                         FS_IPC_READDIR_REQ,
+                         request_id,
+                         tail_len,
+                         0,
+                         g_cwd_bid,
+                         borrow,
+                         source,
+                         &rr_t,
+                         &rr0,
+                         &rr1,
+                         &rr2,
+                         &rr3);
+    (void)wasmos_xfer_buffer_unborrow(borrow);
+    if (rc != 0) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BACKEND_IPC);
+        return;
+    }
+    if (rr_t != FS_IPC_RESP) {
+        send_fs_error(
+            source, request_id, rr0 < 0 ? (wasmos_error_code_t)rr0 : WASMOS_ERR_FS_BACKEND_IPC);
+        return;
+    }
+    (void)reply_to_client(source, FS_IPC_RESP, request_id, rr0, rr1, rr2, rr3);
 }
 
 /* FSMGR_IPC_MOUNT_REQ: establish a mount.
@@ -2025,20 +2126,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             continue;
         }
 
-        /* READDIR names no path, so the backend lists whichever directory it
-         * currently holds -- and it holds one per fs-manager connection, not one
-         * per client. Re-assert this client's directory first, or a listing is
-         * whatever the last client to chdir left behind. */
         if (type == FS_IPC_READDIR_REQ) {
-            char tail[FSMGR_CWD_MAX];
-            int32_t tail_len = 0;
-            int32_t dir_backend = -1;
-            if (!route_absolute_path(
-                    state->cwd, tail, (int32_t)sizeof(tail), &tail_len, &dir_backend) ||
-                backend_sync_cwd(dir_backend, request_id, tail, source) != 0) {
-                send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_FOUND);
-                continue;
-            }
+            handle_readdir_req(state, source, request_id);
+            continue;
         }
 
         /* CHDIR is resolved entirely here: fs-manager owns the working

@@ -86,6 +86,7 @@ domains:
       - { name: HANDLER_REG,     description: "exec-handler registration failed" }
       - { name: NOT_AUTHORIZED,  description: "caller lacks the subsystem.register capability" }
       - { name: NO_PM_FSBUF,     description: "PM could not acquire its own xfer buffer" }
+      - { name: EXIT_SUBS_FULL, description: "the process-exit subscriber table is full, so PROC_IPC_SUBSCRIBE_EXIT is refused rather than accepted-and-dropped. A service that does not get the subscription keeps state for processes that have ended -- the leak the event exists to close -- so a silent acceptance would be worse than a refusal the caller can report" }
 
   linmem:
     id: 3

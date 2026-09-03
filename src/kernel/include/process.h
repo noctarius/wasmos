@@ -566,6 +566,19 @@ uint32_t process_ready_count(void);
  * share an index space. Return 0 on success, -1 for a NULL out pointer or an
  * index past the end.
  */
+/* Take the oldest recorded departure -- a process that has become ZOMBIE since
+ * the last call -- into the out params. Returns 0, or -1 when the log is empty
+ * or an out pointer is NULL.
+ *
+ * The log exists so a broadcast of process exits costs nothing while nothing is
+ * exiting: draining an empty log is a comparison, where scanning the process
+ * table each dispatch is O(n^2). It is recorded under the table lock and read
+ * outside it by the process manager, which is the only reader.
+ *
+ * A departure can be DROPPED when the log fills (oldest first). A reader must
+ * therefore treat the stream as best-effort: missing one means it keeps state
+ * for a process that ended, never that it acts on a live one. */
+int process_depart_take(uint32_t* out_context_id, uint32_t* out_pid, int32_t* out_exit_status);
 int process_info_at(uint32_t index, uint32_t* out_pid, const char** out_name);
 int process_info_at_ex(uint32_t index, uint32_t* out_pid, uint32_t* out_parent_pid,
                        const char** out_name);

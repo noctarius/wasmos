@@ -92,6 +92,7 @@ const (
 	WASMOS_ERR_PROC_PM_HANDLER_REG int32 = -0x00020018 // exec-handler registration failed
 	WASMOS_ERR_PROC_PM_NOT_AUTHORIZED int32 = -0x00020019 // caller lacks the subsystem.register capability
 	WASMOS_ERR_PROC_PM_NO_PM_FSBUF int32 = -0x0002001A // PM could not acquire its own xfer buffer
+	WASMOS_ERR_PROC_PM_EXIT_SUBS_FULL int32 = -0x0002001B // the process-exit subscriber table is full, so PROC_IPC_SUBSCRIBE_EXIT is refused rather than accepted-and-dropped. A service that does not get the subscription keeps state for processes that have ended -- the leak the event exists to close -- so a silent acceptance would be worse than a refusal the caller can report
 	WASMOS_ERR_LINMEM_NO_WINDOW int32 = -0x00030001 // no free page-aligned window fits in linear memory
 	WASMOS_ERR_LINMEM_MAP int32 = -0x00030002 // paging/linear-memory mapping step failed
 	WASMOS_ERR_LINMEM_NO_BASE int32 = -0x00030003 // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -464,6 +465,8 @@ func WasmosStrerror(c int32) string {
 		return "caller lacks the subsystem.register capability"
 	case WASMOS_ERR_PROC_PM_NO_PM_FSBUF:
 		return "PM could not acquire its own xfer buffer"
+	case WASMOS_ERR_PROC_PM_EXIT_SUBS_FULL:
+		return "the process-exit subscriber table is full, so PROC_IPC_SUBSCRIBE_EXIT is refused rather than accepted-and-dropped. A service that does not get the subscription keeps state for processes that have ended -- the leak the event exists to close -- so a silent acceptance would be worse than a refusal the caller can report"
 	case WASMOS_ERR_LINMEM_NO_WINDOW:
 		return "no free page-aligned window fits in linear memory"
 	case WASMOS_ERR_LINMEM_MAP:

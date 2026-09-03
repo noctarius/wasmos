@@ -342,6 +342,7 @@ class ProcessManager {
         pm_check_waits(process->context_id);
         pm_reap_apps(process);
         pm_services_class_reap(process->context_id);
+        pm_services_exit_reap(process->context_id);
         pm_poll_spawn(process->context_id);
         /* Stepped here, before the receive, so a shutdown makes progress on the
          * idle path too: with no request queued the receive below parks on the
@@ -428,6 +429,9 @@ class ProcessManager {
             break;
         case PROC_IPC_STATUS:
             rc = handle_status(process->context_id, &msg);
+            break;
+        case PROC_IPC_SUBSCRIBE_EXIT_REQ:
+            rc = pm_handle_subscribe_exit(process->context_id, &msg);
             break;
         case PROC_IPC_WAIT:
             rc = handle_wait(process->context_id, &msg);

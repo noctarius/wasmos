@@ -1145,7 +1145,9 @@ int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     }
     parent_pid = caller->pid;
 
-    if (pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid) != 0) {
+    int spawn_rc = pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid);
+    if (spawn_rc != 0) {
+        klog_printf("[pm] spawn_module failed rc=%d\n", spawn_rc);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
@@ -1292,13 +1294,18 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
-    if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
-                             &child_pid) != 0) {
+    int spawn_rc = pm_spawn_from_buffer(parent_pid,
+                                        (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
+                                        resolved.blob_size,
+                                        resolved.args_len > 0u ? resolved.args : 0,
+                                        resolved.args_len,
+                                        PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
+                                        &child_pid);
+    if (spawn_rc != 0) {
+        /* The internal reason, which the packed code cannot carry: several
+         * distinct failures collapse into SPAWN_FAILED, and discarding which
+         * one happened leaves a caller guessing. */
+        klog_printf("[pm] spawn failed rc=%d\n", spawn_rc);
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
@@ -1425,13 +1432,19 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
-    if (pm_spawn_from_buffer(parent_pid,
+    int spawn_rc =
+        pm_spawn_from_buffer(parent_pid,
                              (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
                              0u, /* caps variants spend arg0 on capability flags: no tty pin */
-                             &child_pid) != 0) {
+                             &child_pid);
+    if (spawn_rc != 0) {
+        /* The internal reason, which the packed code cannot carry: several
+         * distinct failures collapse into SPAWN_FAILED, and discarding which
+         * one happened leaves a caller guessing. */
+        klog_printf("[pm] spawn failed rc=%d\n", spawn_rc);
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
@@ -2042,13 +2055,15 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_BUSY;
     }
-    if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
-                             &pid) != 0) {
+    int spawn_rc = pm_spawn_from_buffer(parent_pid,
+                                        (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
+                                        resolved.blob_size,
+                                        resolved.args_len > 0u ? resolved.args : 0,
+                                        resolved.args_len,
+                                        PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
+                                        &pid);
+    if (spawn_rc != 0) {
+        klog_printf("[pm] spawn_path failed rc=%d\n", spawn_rc);
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
     }
@@ -2189,13 +2204,16 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
-    if (pm_spawn_from_buffer(parent_pid,
+    int spawn_rc =
+        pm_spawn_from_buffer(parent_pid,
                              (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
                              0u, /* caps variants spend arg0 on capability flags: no tty pin */
-                             &pid) != 0) {
+                             &pid);
+    if (spawn_rc != 0) {
+        klog_printf("[pm] spawn failed rc=%d\n", spawn_rc);
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }

@@ -105,6 +105,7 @@ enum {
     WASMOS_ERR_PROC_PM_HANDLER_REG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 24), /* exec-handler registration failed */
     WASMOS_ERR_PROC_PM_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 25), /* caller lacks the subsystem.register capability */
     WASMOS_ERR_PROC_PM_NO_PM_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 26), /* PM could not acquire its own xfer buffer */
+    WASMOS_ERR_PROC_PM_EXIT_SUBS_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 27), /* the process-exit subscriber table is full, so PROC_IPC_SUBSCRIBE_EXIT is refused rather than accepted-and-dropped. A service that does not get the subscription keeps state for processes that have ended -- the leak the event exists to close -- so a silent acceptance would be worse than a refusal the caller can report */
     WASMOS_ERR_LINMEM_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 1), /* no free page-aligned window fits in linear memory */
     WASMOS_ERR_LINMEM_MAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 2), /* paging/linear-memory mapping step failed */
     WASMOS_ERR_LINMEM_NO_BASE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 3), /* the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it */
@@ -409,6 +410,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_HANDLER_REG: return "proc_pm.HANDLER_REG";
     case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: return "proc_pm.NOT_AUTHORIZED";
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "proc_pm.NO_PM_FSBUF";
+    case WASMOS_ERR_PROC_PM_EXIT_SUBS_FULL: return "proc_pm.EXIT_SUBS_FULL";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "linmem.NO_WINDOW";
     case WASMOS_ERR_LINMEM_MAP: return "linmem.MAP";
     case WASMOS_ERR_LINMEM_NO_BASE: return "linmem.NO_BASE";
@@ -647,6 +649,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_HANDLER_REG: return "exec-handler registration failed";
     case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: return "caller lacks the subsystem.register capability";
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "PM could not acquire its own xfer buffer";
+    case WASMOS_ERR_PROC_PM_EXIT_SUBS_FULL: return "the process-exit subscriber table is full, so PROC_IPC_SUBSCRIBE_EXIT is refused rather than accepted-and-dropped. A service that does not get the subscription keeps state for processes that have ended -- the leak the event exists to close -- so a silent acceptance would be worse than a refusal the caller can report";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";

@@ -42,7 +42,7 @@ It defines repository workflow and documentation/update conventions.
 - Kernel panic diagnostics with per-CPU backtraces that now resolve return addresses to in-kernel symbol names.
 - Preemptive multitasking in the kernel scheduler with runtime validation coverage.
 - Symmetric Multi-Processing (SMP) with AP trampoline bring-up, per-CPU state (`cpu_local_t`), Kconfig-selectable interrupt controller (PIC/LAPIC/IOAPIC), and per-CPU ready queues with work stealing; gated by `WASMOS_SMP` Kconfig (requires IOAPIC mode, default off).
-- Service-driven system bring-up (`init` -> `fs-manager`/`fs-init` -> `device-manager` -> `sysinit`) with discovery/registration and policy-driven driver spawning.
+- Service-driven system bring-up (`init` -> `fs-manager` -> `fs-tmpfs`/`fs-init` -> `device-manager` -> `sysinit`) with discovery/registration and policy-driven driver spawning.
 - Linux `udev`-like userspace device inventory and policy rules (`device-manager` + `pci-bus`/`acpi-bus`, with bootstrap/runtime rule roots) for deterministic driver bring-up.
 - Early generic `virtio-serial` driver service (`virtio.serial`) for host/guest automation plumbing and future transport consumers.
 - `virtio-rng` hardware entropy driver with non-blocking `libsys` byte-array,
@@ -251,7 +251,7 @@ Target summary:
 Boot sequence (high level):
 1. `BOOTX64.EFI` loads `kernel.elf` and `initfs.img`
 2. Kernel boots, initializes core subsystems, starts `init`
-3. `init` starts `fs-manager`, then `fs-init`, then `device-manager`
+3. `init` starts `fs-manager`, then `fs-tmpfs` (the in-memory filesystem for `/`), then `fs-init`, then `device-manager`
 4. `device-manager` starts `pci-bus` and `acpi-bus`, consumes inventory, and applies policy rules to spawn drivers/services
 5. Storage drivers publish block devices; `fs-fat` mounts `/boot` (and optional `/user`), then runtime policy from `/boot/system/devmgr/rules` is loaded
 6. `init` requests `sysinit` from `/boot`, and `sysinit` starts configured services/apps

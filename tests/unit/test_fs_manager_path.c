@@ -1,11 +1,16 @@
 /* test_fs_manager_path.c — mount routing for the FS manager
- * (fs_manager_path.h): which mount a path belongs to, and what is left of the
- * path once that mount's name is stripped.
+ * (fs_manager_path.h): which mount owns a path, and what is left of the path
+ * once that mount is stripped.
  *
  * src/services/fs_manager/fs_manager_path.c is the only source linked in. It is
  * split out of fs_manager.c precisely because it touches no IPC, no xfer buffer
  * and no backend table, so nothing is stubbed and the mount list is passed in
  * per call.
+ *
+ * A mount is an absolute canonical PATH ("/", "/boot", "/mnt/usb"), not a
+ * top-level name, and the match is the longest such path that prefixes the
+ * request on a whole-segment boundary. "/" therefore prefixes everything and is
+ * the mount of last resort rather than a case of its own.
  *
  * fsmgr_route_path_for_mounts returns 1 on a match and 0 otherwise -- the
  * opposite polarity to the kernel's 0-on-success convention -- and leaves its
@@ -26,6 +31,14 @@
 
 #include "fs_manager_path.h"
 
+/* Route `path` and report the mount index plus the tail, so a case reads as one
+ * call rather than five out-parameters. Returns the function's own polarity. */
+static int32_t route(const char* path, const char* const* mounts, int32_t mount_count,
+                     int32_t* out_mount_index, char* out, int32_t out_cap, int32_t* out_len) {
+    return fsmgr_route_path_for_mounts(
+        path, (int32_t)strlen(path), mounts, mount_count, out_mount_index, out, out_cap, out_len);
+}
+
 /* Route a path and turn the mount index into that mount's backend endpoint,
  * mirroring route_path_to_backend in src/services/fs_manager/fs_manager.c
  * (including its re-check of the returned index against mount_count).
@@ -37,22 +50,12 @@
  *
  * Returns 1 on a routed path, with *out_backend, out_path and *out_path_len set;
  * returns 0 otherwise, leaving *out_backend untouched. */
-static int32_t route_and_select_backend(const char* path, int32_t path_len,
-                                        const char* const* mounts, const int32_t* backends,
-                                        int32_t mount_count, int32_t allow_relative,
+static int32_t route_and_select_backend(const char* path, const char* const* mounts,
+                                        const int32_t* backends, int32_t mount_count,
                                         int32_t* out_backend, char* out_path, int32_t out_path_cap,
                                         int32_t* out_path_len) {
     int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(path,
-                                             path_len,
-                                             mounts,
-                                             mount_count,
-                                             allow_relative,
-                                             &mount_idx,
-                                             out_path,
-                                             out_path_cap,
-                                             out_path_len);
-    if (!ok) {
+    if (!route(path, mounts, mount_count, &mount_idx, out_path, out_path_cap, out_path_len)) {
         return 0;
     }
     if (mount_idx < 0 || mount_idx >= mount_count) {
@@ -62,504 +65,545 @@ static int32_t route_and_select_backend(const char* path, int32_t path_len,
     return 1;
 }
 
-/* "/" carries no mount segment after the leading slash, so it routes to no
- * backend at all: the root is not itself a mount. */
-static void test_absolute_root_path_matches_boot(void) {
-    const char* mounts[] = {"boot", "init"};
-    char out[64];
-    int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/", 1, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 0);
-}
+/* --- the root mount ------------------------------------------------------- */
 
-static void test_absolute_boot_path_is_routed_and_trimmed(void) {
-    const char* mounts[] = {"fatfs", "boot", "initfs", "init"};
+/* "/" prefixes every absolute path, so a system with a root filesystem routes
+ * everything somewhere. This is what makes a path that names no other mount
+ * reachable at all: before the root was a mount, it was NOT_FOUND. */
+static void test_root_mount_owns_every_path(void) {
+    const char* mounts[] = {"/"};
     char out[64];
     int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/boot/xyz", 9, mounts, 4, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(mount_idx == 1);
-    assert(out_len == 4);
-    assert(strcmp(out, "/xyz") == 0);
-}
+    int32_t idx = -1;
 
-static void test_absolute_init_path_is_routed_and_trimmed(void) {
-    const char* mounts[] = {"boot", "init"};
-    char out[64];
-    int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/init/xyz", 9, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(mount_idx == 1);
-    assert(out_len == 4);
-    assert(strcmp(out, "/xyz") == 0);
-}
-
-static void test_absolute_mount_path_without_tail_routes_to_root(void) {
-    const char* mounts[] = {"boot", "init"};
-    char out[64];
-    int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/boot", 5, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(mount_idx == 0);
+    assert(route("/", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
+    assert(strcmp(out, "/") == 0);
     assert(out_len == 1);
+
+    assert(route("/foo/bar", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
+    assert(strcmp(out, "/foo/bar") == 0);
+    assert(out_len == 8);
+}
+
+/* The root is the mount of LAST resort: any longer mount that prefixes the path
+ * takes it instead. */
+static void test_a_named_mount_beats_the_root(void) {
+    const char* mounts[] = {"/", "/boot"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+
+    assert(route("/boot/xyz", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 1);
+    assert(strcmp(out, "/xyz") == 0);
+
+    /* Registration order must not decide it, so the same pair reversed. */
+    const char* reversed[] = {"/boot", "/"};
+    assert(route("/boot/xyz", reversed, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
+    assert(strcmp(out, "/xyz") == 0);
+
+    /* A path under no named mount still lands on the root. */
+    assert(route("/other/xyz", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
+    assert(strcmp(out, "/other/xyz") == 0);
+}
+
+/* Without a root mount registered, a path matching nothing is not routed --
+ * the caller reports NOT_FOUND rather than guessing a backend. */
+static void test_no_root_mount_leaves_a_stray_path_unrouted(void) {
+    const char* mounts[] = {"/boot", "/user"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+    assert(route("/other/xyz", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+    assert(route("/", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+}
+
+/* --- longest prefix ------------------------------------------------------- */
+
+/* A mount at depth wins over the shallower one it sits inside, which is the
+ * whole point of routing on paths: /mnt/usb is its own filesystem even though
+ * /mnt is one too. */
+static void test_deeper_mount_wins_over_shallower(void) {
+    const char* mounts[] = {"/", "/mnt", "/mnt/usb"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+
+    assert(route("/mnt/usb/file", mounts, 3, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 2);
+    assert(strcmp(out, "/file") == 0);
+
+    assert(route("/mnt/other", mounts, 3, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 1);
+    assert(strcmp(out, "/other") == 0);
+
+    assert(route("/mnt", mounts, 3, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 1);
     assert(strcmp(out, "/") == 0);
 }
 
-static void test_relative_boot_path_is_routed_and_trimmed(void) {
-    const char* mounts[] = {"boot", "init"};
+/* Depth, not registration order, decides. Declared shallowest-first above and
+ * deepest-first here. */
+static void test_longest_prefix_ignores_registration_order(void) {
+    const char* mounts[] = {"/mnt/usb", "/mnt", "/"};
     char out[64];
     int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "boot/xyz", 8, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(mount_idx == 0);
-    assert(out_len == 4);
-    assert(strcmp(out, "/xyz") == 0);
+    int32_t idx = -1;
+    assert(route("/mnt/usb/file", mounts, 3, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
+    assert(strcmp(out, "/file") == 0);
 }
 
-static void test_relative_mount_path_without_tail_routes_to_root(void) {
-    const char* mounts[] = {"boot", "init"};
+/* --- whole-segment matching ----------------------------------------------- */
+
+/* A mount owns whole segments only. "/wfs" must not swallow "/wfsx", which is
+ * the failure a plain string-prefix test would introduce: the tail would come
+ * out as "x" and address a file nobody named. */
+static void test_mount_matches_whole_segments_only(void) {
+    const char* mounts[] = {"/", "/wfs"};
     char out[64];
     int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "boot", 4, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(mount_idx == 0);
+    int32_t idx = -1;
+
+    assert(route("/wfsx", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0); /* the root, not /wfs */
+    assert(strcmp(out, "/wfsx") == 0);
+
+    assert(route("/wfsx/file", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
+    assert(strcmp(out, "/wfsx/file") == 0);
+
+    /* And the real mount still matches. */
+    assert(route("/wfs/file", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 1);
+    assert(strcmp(out, "/file") == 0);
+}
+
+/* The same collision with no root to fall back to is simply not routed. */
+static void test_partial_segment_is_not_routed_without_a_root(void) {
+    const char* mounts[] = {"/wfs"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+    assert(route("/wfsx", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+}
+
+/* A deep mount matches on segments too: "/mnt/usbx" is not "/mnt/usb". */
+static void test_deep_mount_matches_whole_segments_only(void) {
+    const char* mounts[] = {"/mnt", "/mnt/usb"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+    assert(route("/mnt/usbx/f", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
+    assert(strcmp(out, "/usbx/f") == 0);
+}
+
+/* --- the tail handed to the backend -------------------------------------- */
+
+/* A path that IS its mount names that filesystem's own root. */
+static void test_path_equal_to_its_mount_yields_the_backend_root(void) {
+    const char* mounts[] = {"/", "/boot", "/mnt/usb"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+
+    assert(route("/boot", mounts, 3, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 1);
+    assert(strcmp(out, "/") == 0);
     assert(out_len == 1);
+
+    assert(route("/mnt/usb", mounts, 3, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 2);
     assert(strcmp(out, "/") == 0);
 }
 
-static void test_unknown_mount_is_not_routed(void) {
-    const char* mounts[] = {"boot", "init"};
+/* A trailing slash names the same directory, so it yields the same tail. */
+static void test_trailing_slash_yields_the_backend_root(void) {
+    const char* mounts[] = {"/", "/boot"};
     char out[64];
     int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/user/xyz", 9, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 0);
+    int32_t idx = -1;
+    assert(route("/boot/", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 1);
+    assert(strcmp(out, "/") == 0);
 }
 
-static void test_case_insensitive_mount_match(void) {
-    const char* mounts[] = {"boot", "init"};
+/* A mount declared with a trailing slash is the same mount as one without: the
+ * registration side canonicalizes, and this is the belt to that braces. */
+static void test_mount_declared_with_a_trailing_slash_still_matches(void) {
+    const char* mounts[] = {"/boot/"};
     char out[64];
     int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/BOOT/xyz", 9, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(mount_idx == 0);
+    int32_t idx = -1;
+    assert(route("/boot/xyz", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
     assert(strcmp(out, "/xyz") == 0);
 }
 
-static void test_prefix_collision_does_not_match_mount(void) {
-    const char* mounts[] = {"boot", "init"};
-    char out[64];
-    int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/bootx/xyz", 10, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 0);
-}
-
+/* Redundant slashes inside the tail are handed on as they arrived: the backend
+ * resolves its own path, and collapsing them here would be a second
+ * canonicalizer to keep in step with it. */
 static void test_double_slash_tail_is_preserved(void) {
-    const char* mounts[] = {"boot", "init"};
+    const char* mounts[] = {"/boot"};
     char out[64];
     int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/boot//xyz", 10, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(mount_idx == 0);
+    int32_t idx = -1;
+    assert(route("/boot//xyz", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
     assert(out_len == 5);
     assert(strcmp(out, "//xyz") == 0);
 }
 
-static void test_relative_is_rejected_when_disallowed(void) {
-    const char* mounts[] = {"boot", "init"};
+/* --- matching rules ------------------------------------------------------ */
+
+/* Mount matching is case-insensitive, so "/BOOT" and "/boot" are one mount. */
+static void test_case_insensitive_mount_match(void) {
+    const char* mounts[] = {"/", "/boot"};
     char out[64];
     int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "boot/xyz", 8, mounts, 2, 0, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 0);
-}
-
-static void test_relative_non_mount_is_not_routed(void) {
-    const char* mounts[] = {"boot", "init"};
-    char out[64];
-    int32_t out_len = 0;
-    int32_t mount_idx = -1;
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "foo/bar", 7, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 0);
-}
-
-static void test_mount_only_variants_map_to_root(void) {
-    const char* mounts[] = {"boot", "init"};
-    char out[64];
-    int32_t out_len = 0;
-    int32_t mount_idx = -1;
-
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/boot/", 6, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(strcmp(out, "/") == 0);
-
-    ok = fsmgr_route_path_for_mounts(
-        "boot/", 5, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(strcmp(out, "/") == 0);
-
-    ok = fsmgr_route_path_for_mounts(
-        "/init/", 6, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(strcmp(out, "/") == 0);
-}
-
-static void test_out_buffer_size_boundaries(void) {
-    const char* mounts[] = {"boot"};
-    char out_exact[5];
-    char out_small[4];
-    int32_t out_len = 0;
-    int32_t mount_idx = -1;
-
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/boot/xyz", 9, mounts, 1, 1, &mount_idx, out_exact, (int32_t)sizeof(out_exact), &out_len);
-    assert(ok == 1);
-    assert(out_len == 4);
-    assert(strcmp(out_exact, "/xyz") == 0);
-
-    ok = fsmgr_route_path_for_mounts(
-        "/boot/xyz", 9, mounts, 1, 1, &mount_idx, out_small, (int32_t)sizeof(out_small), &out_len);
-    assert(ok == 0);
-}
-
-static void test_invalid_inputs_are_rejected(void) {
-    const char* mounts[] = {"boot"};
-    char out[8];
-    int32_t out_len = 0;
-    int32_t mount_idx = -1;
-
-    assert(fsmgr_route_path_for_mounts(
-               "/boot", 0, mounts, 1, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len) == 0);
-    assert(fsmgr_route_path_for_mounts(
-               "", 0, mounts, 1, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len) == 0);
-    assert(fsmgr_route_path_for_mounts(
-               "/boot", 5, mounts, 0, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len) == 0);
-    assert(fsmgr_route_path_for_mounts("/boot", 5, mounts, 1, 1, &mount_idx, out, 1, &out_len) ==
-           0);
-}
-
-static void test_null_mount_entries_are_skipped(void) {
-    const char* mounts[] = {0, "boot"};
-    char out[16];
-    int32_t out_len = 0;
-    int32_t mount_idx = -1;
-
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/boot/xyz", 9, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(mount_idx == 1);
+    int32_t idx = -1;
+    assert(route("/BOOT/xyz", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 1);
     assert(strcmp(out, "/xyz") == 0);
 }
 
-static void test_duplicate_mount_names_use_first_match(void) {
-    const char* mounts[] = {"boot", "boot"};
+/* Routing acts on absolute paths only. Every client path is joined onto the
+ * client's working directory before it gets here, so a relative one arriving is
+ * a caller bug and is refused rather than guessed at. */
+static void test_relative_path_is_never_routed(void) {
+    const char* mounts[] = {"/", "/boot"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+    assert(route("boot/xyz", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+    assert(route("foo", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+}
+
+/* A mount entry that is not an absolute path cannot own anything, and must not
+ * be matched as if the leading slash were implied. */
+static void test_mount_without_a_leading_slash_is_ignored(void) {
+    const char* mounts[] = {"boot"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+    assert(route("/boot/xyz", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+}
+
+/* A ONE-CHARACTER mount that is not "/" must not be taken for the root. The
+ * root is recognised by being a single '/', so a length test alone would promote
+ * any one-byte entry to owning every path. */
+static void test_single_character_mount_is_not_the_root(void) {
+    const char* mounts[] = {"x"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+    assert(route("/x/y", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+    assert(route("/anything", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+}
+
+/* Two roots are as much a duplicate as two named mounts, and resolve the same
+ * way: to the first registered. The root is the entry most likely to be declared
+ * twice, since every backend that names no mount point would claim it. */
+static void test_duplicate_root_mounts_use_the_first(void) {
+    const char* mounts[] = {"/", "/"};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t idx = -1;
+    assert(route("/foo", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
+    assert(strcmp(out, "/foo") == 0);
+}
+
+static void test_null_mount_entries_are_skipped(void) {
+    const char* mounts[] = {0, "/boot"};
     char out[16];
     int32_t out_len = 0;
-    int32_t mount_idx = -1;
-
-    int32_t ok = fsmgr_route_path_for_mounts(
-        "/boot/xyz", 9, mounts, 2, 1, &mount_idx, out, (int32_t)sizeof(out), &out_len);
-    assert(ok == 1);
-    assert(mount_idx == 0);
+    int32_t idx = -1;
+    assert(route("/boot/xyz", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 1);
+    assert(strcmp(out, "/xyz") == 0);
 }
 
-static void test_backend_selection_absolute_boot(void) {
-    const char* mounts[] = {"boot", "init"};
-    const int32_t backends[] = {101, 202};
-    const char* path = "/boot/system/fonts/roboto.ttf";
-    char out[64];
+/* Two mounts of equal depth cannot both own a path; the first registered wins,
+ * so the answer is at least deterministic. The registration side refuses a
+ * duplicate, which is where the condition belongs. */
+static void test_duplicate_mount_paths_use_the_first(void) {
+    const char* mounts[] = {"/boot", "/boot"};
+    char out[16];
     int32_t out_len = 0;
-    int32_t backend = -1;
-    int32_t ok = route_and_select_backend(path,
-                                          (int32_t)strlen(path),
-                                          mounts,
-                                          backends,
-                                          2,
-                                          1,
-                                          &backend,
-                                          out,
-                                          (int32_t)sizeof(out),
-                                          &out_len);
-    assert(ok == 1);
-    assert(backend == 101);
-    assert(strcmp(out, "/system/fonts/roboto.ttf") == 0);
+    int32_t idx = -1;
+    assert(route("/boot/xyz", mounts, 2, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(idx == 0);
 }
 
-static void test_backend_selection_absolute_init(void) {
-    const char* mounts[] = {"boot", "init"};
-    const int32_t backends[] = {101, 202};
-    const char* path = "/init/devmgr/rules/default.rules";
-    char out[64];
+/* --- refusals ------------------------------------------------------------- */
+
+/* The tail is refused rather than truncated: a shortened path names a different
+ * file, which the caller would then open without knowing. */
+static void test_out_buffer_size_boundaries(void) {
+    const char* mounts[] = {"/boot"};
+    char out_exact[5];
+    char out_small[4];
     int32_t out_len = 0;
-    int32_t backend = -1;
-    int32_t ok = route_and_select_backend(path,
-                                          (int32_t)strlen(path),
-                                          mounts,
-                                          backends,
-                                          2,
-                                          1,
-                                          &backend,
-                                          out,
-                                          (int32_t)sizeof(out),
-                                          &out_len);
-    assert(ok == 1);
-    assert(backend == 202);
-    assert(strcmp(out, "/devmgr/rules/default.rules") == 0);
+    int32_t idx = -1;
+
+    assert(route("/boot/xyz", mounts, 1, &idx, out_exact, (int32_t)sizeof(out_exact), &out_len) ==
+           1);
+    assert(out_len == 4);
+    assert(strcmp(out_exact, "/xyz") == 0);
+
+    assert(route("/boot/xyz", mounts, 1, &idx, out_small, (int32_t)sizeof(out_small), &out_len) ==
+           0);
 }
 
-static void test_backend_selection_relative_boot(void) {
-    const char* mounts[] = {"boot", "init"};
-    const int32_t backends[] = {101, 202};
-    const char* path = "boot/apps/hello.wap";
-    char out[64];
+/* A root mount has to respect the same ceiling: its tail is the whole path, so
+ * it is the longest tail any mount produces. */
+static void test_root_mount_tail_respects_the_out_capacity(void) {
+    const char* mounts[] = {"/"};
+    char out[5];
     int32_t out_len = 0;
-    int32_t backend = -1;
-    int32_t ok = route_and_select_backend(path,
-                                          (int32_t)strlen(path),
-                                          mounts,
-                                          backends,
-                                          2,
-                                          1,
-                                          &backend,
-                                          out,
-                                          (int32_t)sizeof(out),
-                                          &out_len);
-    assert(ok == 1);
-    assert(backend == 101);
-    assert(strcmp(out, "/apps/hello.wap") == 0);
+    int32_t idx = -1;
+    assert(route("/abc", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 1);
+    assert(strcmp(out, "/abc") == 0);
+    assert(route("/abcd", mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
 }
 
-static void test_backend_selection_unknown_mount_fails(void) {
-    const char* mounts[] = {"boot", "init"};
-    const int32_t backends[] = {101, 202};
-    const char* path = "/user/docs/readme.txt";
-    char out[64];
-    int32_t out_len = 0;
-    int32_t backend = -1;
-    int32_t ok = route_and_select_backend(path,
-                                          (int32_t)strlen(path),
-                                          mounts,
-                                          backends,
-                                          2,
-                                          1,
-                                          &backend,
-                                          out,
-                                          (int32_t)sizeof(out),
-                                          &out_len);
-    assert(ok == 0);
-    assert(backend == -1);
-}
-
-/* ---------------------------------------------------------------------------
- * fsmgr_cwd_join: resolving a client-supplied name against a working directory.
- *
- * Regression: 2026-08-24-cwd-full-vfs-path
- *
- * fs-manager used to hold a working directory as (mount, depth) and forward a
- * relative name to a backend VERBATIM, leaving the backend to resolve it against
- * a cwd of its own. Two consequences, both observed in the guest: a spawned
- * utility resolved names against whatever directory the backend happened to
- * stand in rather than its spawner's, and a client with no mount at all had its
- * name routed to the boot backend by a fallback, so `cat big.txt` in /wfs/docs
- * was answered NOT_FOUND by the FAT driver and fs_wfs was never asked.
- *
- * The cwd is a full VFS path, so joining is fs-manager's job and is exercised
- * here directly.
- * ------------------------------------------------------------------------- */
-
-/* Join and assert the canonical result, so each case reads as cwd + arg = path. */
-static void expect_join(const char* cwd, const char* arg, const char* want) {
-    char out[128];
-    int32_t ok = fsmgr_cwd_join(cwd, arg, out, (int32_t)sizeof(out));
-    assert(ok == 1);
-    assert(strcmp(out, want) == 0);
-}
-
-static void test_relative_name_appends_to_cwd(void) {
-    expect_join("/wfs/docs", "big.txt", "/wfs/docs/big.txt");
-    expect_join("/wfs", "hello.txt", "/wfs/hello.txt");
-    expect_join("/", "boot", "/boot");
-}
-
-static void test_absolute_argument_replaces_cwd(void) {
-    expect_join("/wfs/docs", "/boot/startup.nsh", "/boot/startup.nsh");
-    expect_join("/wfs/docs", "/", "/");
-}
-
-static void test_dot_keeps_the_directory(void) {
-    expect_join("/wfs/docs", ".", "/wfs/docs");
-    expect_join("/", ".", "/");
-    expect_join("/wfs/docs", "", "/wfs/docs");
-}
-
-static void test_dotdot_pops_one_segment(void) {
-    expect_join("/wfs/docs", "..", "/wfs");
-    expect_join("/wfs", "..", "/");
-    /* At the root there is nothing to pop, and the join must not escape it. */
-    expect_join("/", "..", "/");
-    expect_join("/", "../../..", "/");
-}
-
-static void test_interior_dot_segments_are_canonicalized(void) {
-    expect_join("/wfs", "docs/../hello.txt", "/wfs/hello.txt");
-    expect_join("/wfs", "./docs", "/wfs/docs");
-    expect_join("/", "wfs/docs/..", "/wfs");
-    expect_join("/wfs/docs", "../../boot", "/boot");
-}
-
-static void test_redundant_slashes_collapse(void) {
-    expect_join("/wfs", "//docs//big.txt", "/docs/big.txt");
-    expect_join("/wfs", "docs//big.txt", "/wfs/docs/big.txt");
-    expect_join("/wfs", "docs/", "/wfs/docs");
-}
-
-static void test_join_refuses_to_overflow(void) {
-    /* Deliberately far smaller than the FSMGR_CWD_MAX buffer fs-manager passes,
-     * so the boundary can be pinned with short paths instead of a 128-byte one.
-     * What is under test is the cap arithmetic, which does not care about the
-     * absolute size. */
+static void test_invalid_inputs_are_rejected(void) {
+    const char* mounts[] = {"/boot"};
     char out[8];
-    /* Refusal, not truncation: a truncated path names a different file, and the
-     * caller would open it without knowing. */
-    assert(fsmgr_cwd_join("/wfs/docs", "big.txt", out, (int32_t)sizeof(out)) == 0);
-    /* out_cap counts the NUL, so eight bytes hold seven characters: "/wfs/do"
-     * is the longest result that fits and "/wfs/doc" is one past it. Asserting
-     * both sides pins the boundary rather than just the refusal. */
-    assert(fsmgr_cwd_join("/wfs", "doc", out, (int32_t)sizeof(out)) == 0);
-    assert(fsmgr_cwd_join("/wfs", "do", out, (int32_t)sizeof(out)) == 1);
-    assert(strcmp(out, "/wfs/do") == 0);
+    int32_t out_len = 0;
+    int32_t idx = -1;
+
+    assert(fsmgr_route_path_for_mounts(
+               "/boot", 0, mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+    assert(fsmgr_route_path_for_mounts(
+               "", 0, mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+    assert(fsmgr_route_path_for_mounts(
+               "/boot", 5, mounts, 0, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+    assert(fsmgr_route_path_for_mounts("/boot", 5, mounts, 1, &idx, out, 1, &out_len) == 0);
+    assert(fsmgr_route_path_for_mounts(
+               0, 5, mounts, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
+    assert(fsmgr_route_path_for_mounts(
+               "/boot", 5, 0, 1, &idx, out, (int32_t)sizeof(out), &out_len) == 0);
 }
 
-/* A refusal must not leave a PREFIX behind.
- *
- * Regression: 2026-08-29-cwd-join-partial-on-refusal
- *
- * The join builds its result in place, so by the time it discovers the result
- * does not fit it has already written -- and it returned 0 over a buffer holding
- * a valid-looking shorter path. A caller that trusted the header (which said
- * out_path was left untouched) and read it anyway would open a DIFFERENT file,
- * which is the exact hazard the refusal exists to prevent.
- *
- * Asserted on a buffer seeded with a sentinel, so "cleared" is distinguishable
- * from "never written": the bug wrote a prefix, and only an empty string proves
- * the prefix is gone rather than merely shorter than the sentinel.
- */
-static void test_join_leaves_no_partial_path_on_refusal(void) {
-    char out[8];
+/* --- backend selection --------------------------------------------------- */
 
-    /* Overflow while copying the cwd. */
-    memset(out, 'Z', sizeof(out));
-    out[sizeof(out) - 1] = '\0';
-    assert(fsmgr_cwd_join("/a/very/long/cwd", "x", out, (int32_t)sizeof(out)) == 0);
-    assert(out[0] == '\0');
-
-    /* Overflow while appending a segment: the cwd fits, the segment does not. */
-    memset(out, 'Z', sizeof(out));
-    out[sizeof(out) - 1] = '\0';
-    assert(fsmgr_cwd_join("/wfs", "doc", out, (int32_t)sizeof(out)) == 0);
-    assert(out[0] == '\0');
-
-    /* And a refusal decided BEFORE any write leaves the buffer alone, which is
-     * why the header distinguishes the two. */
-    memset(out, 'Z', sizeof(out));
-    out[sizeof(out) - 1] = '\0';
-    assert(fsmgr_cwd_join("wfs", "x", out, (int32_t)sizeof(out)) == 0);
-    assert(out[0] == 'Z');
-}
-
-static void test_join_rejects_invalid_inputs(void) {
+static void test_backend_selection_picks_the_owning_mount(void) {
+    const char* mounts[] = {"/", "/boot", "/mnt/usb"};
+    const int32_t backends[] = {101, 202, 303};
     char out[64];
-    assert(fsmgr_cwd_join(0, "x", out, (int32_t)sizeof(out)) == 0);
-    assert(fsmgr_cwd_join("/", 0, out, (int32_t)sizeof(out)) == 0);
-    assert(fsmgr_cwd_join("/", "x", 0, 64) == 0);
-    assert(fsmgr_cwd_join("/", "x", out, 1) == 0);
-    /* A cwd that is not absolute is a corrupt client state, not a relative base. */
-    assert(fsmgr_cwd_join("wfs", "x", out, (int32_t)sizeof(out)) == 0);
-}
-
-/* The mount-relative tail is what actually reaches a backend, so the pairing of
- * join + route is the contract fs-manager depends on end to end. */
-static void test_joined_path_routes_to_its_mount(void) {
-    static const char* const mounts[] = {"boot", "init", "wfs"};
-    static const int32_t backends[] = {4, 5, 6};
-    char joined[128];
-    char tail[128];
-    int32_t tail_len = 0;
+    int32_t out_len = 0;
     int32_t backend = -1;
 
-    assert(fsmgr_cwd_join("/wfs/docs", "big.txt", joined, (int32_t)sizeof(joined)) == 1);
-    assert(route_and_select_backend(joined,
-                                    (int32_t)strlen(joined),
+    assert(route_and_select_backend("/boot/system/fonts/roboto.ttf",
                                     mounts,
                                     backends,
                                     3,
-                                    0,
                                     &backend,
-                                    tail,
-                                    (int32_t)sizeof(tail),
-                                    &tail_len) == 1);
-    assert(backend == 6);
-    assert(strcmp(tail, "/docs/big.txt") == 0);
-    assert(tail_len == (int32_t)strlen("/docs/big.txt"));
+                                    out,
+                                    (int32_t)sizeof(out),
+                                    &out_len) == 1);
+    assert(backend == 202);
+    assert(strcmp(out, "/system/fonts/roboto.ttf") == 0);
+
+    assert(route_and_select_backend("/mnt/usb/notes.txt",
+                                    mounts,
+                                    backends,
+                                    3,
+                                    &backend,
+                                    out,
+                                    (int32_t)sizeof(out),
+                                    &out_len) == 1);
+    assert(backend == 303);
+    assert(strcmp(out, "/notes.txt") == 0);
+
+    /* Owned by nothing more specific, so the root serves it. */
+    assert(
+        route_and_select_backend(
+            "/tmp/scratch", mounts, backends, 3, &backend, out, (int32_t)sizeof(out), &out_len) ==
+        1);
+    assert(backend == 101);
+    assert(strcmp(out, "/tmp/scratch") == 0);
+}
+
+static void test_backend_is_untouched_when_not_routed(void) {
+    const char* mounts[] = {"/boot"};
+    const int32_t backends[] = {101};
+    char out[64];
+    int32_t out_len = 0;
+    int32_t backend = -777;
+    assert(route_and_select_backend(
+               "/user/x", mounts, backends, 1, &backend, out, (int32_t)sizeof(out), &out_len) == 0);
+    assert(backend == -777);
+}
+
+/* --- fsmgr_cwd_join ------------------------------------------------------- */
+
+static void test_cwd_join_absolute_replaces_and_relative_extends(void) {
+    char out[64];
+    assert(fsmgr_cwd_join("/wfs/docs", "/boot/x", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/boot/x") == 0);
+    assert(fsmgr_cwd_join("/wfs/docs", "notes.txt", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/wfs/docs/notes.txt") == 0);
+    assert(fsmgr_cwd_join("/", "boot", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/boot") == 0);
+}
+
+/* Relative resolution belongs to the JOIN, not to routing: ".." walks up from
+ * where the client stands, and the result is what gets routed. This is the case
+ * the retired `allow_relative` was mistaken for -- that flag matched a
+ * slash-less path's first segment against the mount table instead, ignoring the
+ * working directory altogether. */
+static void test_cwd_join_walks_up_from_the_working_directory(void) {
+    char out[64];
+    assert(fsmgr_cwd_join("/home/foo/bar", "../baz", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/home/foo/baz") == 0);
+    assert(fsmgr_cwd_join("/home/foo/bar", "../../baz", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/home/baz") == 0);
+    assert(fsmgr_cwd_join("/home/foo/bar", "./sib/../baz", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/home/foo/bar/baz") == 0);
+}
+
+static void test_cwd_join_resolves_dots_and_cannot_escape_the_root(void) {
+    char out[64];
+    assert(fsmgr_cwd_join("/wfs/docs", "..", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/wfs") == 0);
+    assert(fsmgr_cwd_join("/wfs/docs", "./.", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/wfs/docs") == 0);
+    assert(fsmgr_cwd_join("/wfs", "../../..", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/") == 0);
+    assert(fsmgr_cwd_join("/", "..", out, (int32_t)sizeof(out)) == 1);
+    assert(strcmp(out, "/") == 0);
+}
+
+static void test_cwd_join_refuses_rather_than_truncating(void) {
+    char out[8];
+    assert(fsmgr_cwd_join("/wfs", "a/very/long/tail", out, (int32_t)sizeof(out)) == 0);
+    /* A refusal leaves no PARTIAL path behind: a caller ignoring the return sees
+     * an empty string rather than a prefix naming a different file. */
+    assert(out[0] == '\0');
+}
+
+static void test_cwd_join_rejects_a_relative_cwd(void) {
+    char out[64];
+    assert(fsmgr_cwd_join("wfs/docs", "x", out, (int32_t)sizeof(out)) == 0);
+}
+
+/* fsmgr_path_is_within: the containment predicate unmount refuses on.
+ *
+ * It answers the same question routing does -- "does this mount own this path?"
+ * -- so it has to agree with routing on segment boundaries. Where it disagrees,
+ * an unmount either strands a deeper mount it failed to notice, or refuses
+ * forever over a path that merely shares a prefix with the mount's name. */
+static void test_within_matches_whole_segments_only(void) {
+    assert(fsmgr_path_is_within("/wfs", "/wfs/docs") == 1);
+    assert(fsmgr_path_is_within("/wfs", "/wfs/docs/a.txt") == 1);
+    /* "/wfsx" only shares a prefix; it is a sibling, not a child. */
+    assert(fsmgr_path_is_within("/wfs", "/wfsx") == 0);
+    assert(fsmgr_path_is_within("/wfs", "/wfsx/docs") == 0);
+    assert(fsmgr_path_is_within("/wfs", "/other") == 0);
+}
+
+/* A client standing exactly on the mount point is standing IN the mount, so a
+ * cwd of "/wfs" keeps "/wfs" busy. Treating it as outside would let the mount go
+ * out from under that client. */
+static void test_within_counts_the_mount_itself(void) {
+    assert(fsmgr_path_is_within("/wfs", "/wfs") == 1);
+    assert(fsmgr_path_is_within("/home/user", "/home/user") == 1);
+    /* The parent of a mount is not inside it. */
+    assert(fsmgr_path_is_within("/home/user", "/home") == 0);
+}
+
+/* The root contains every absolute path, which is why it is normally busy:
+ * every client's working directory starts at "/". */
+static void test_within_root_contains_everything(void) {
+    assert(fsmgr_path_is_within("/", "/") == 1);
+    assert(fsmgr_path_is_within("/", "/wfs") == 1);
+    assert(fsmgr_path_is_within("/", "/a/b/c") == 1);
+}
+
+/* A mount declared with trailing slashes names the same directory, and the
+ * predicate has to see through them or "/wfs/" would contain nothing at all. */
+static void test_within_ignores_trailing_slashes_on_the_mount(void) {
+    assert(fsmgr_path_is_within("/wfs/", "/wfs/docs") == 1);
+    assert(fsmgr_path_is_within("/wfs//", "/wfs") == 1);
+    assert(fsmgr_path_is_within("//", "/anything") == 1);
+}
+
+static void test_within_is_case_insensitive(void) {
+    assert(fsmgr_path_is_within("/WFS", "/wfs/docs") == 1);
+    assert(fsmgr_path_is_within("/wfs", "/WFS/DOCS") == 1);
+    assert(fsmgr_path_is_within("/Home/User", "/home/user/x") == 1);
+}
+
+/* Deep and nested mounts: /home/user is inside /home, and unmounting /home while
+ * /home/user is mounted would leave the inner mount addressable only through a
+ * prefix that no longer routes. */
+static void test_within_detects_a_deeper_mount(void) {
+    assert(fsmgr_path_is_within("/home", "/home/user") == 1);
+    assert(fsmgr_path_is_within("/home/user", "/home") == 0);
+    assert(fsmgr_path_is_within("/wfs", "/wfs/nested") == 1);
+    /* Siblings at the same depth never contain one another. */
+    assert(fsmgr_path_is_within("/home/user", "/home/other") == 0);
+}
+
+/* Anything that is not an absolute path is not a containment question that can
+ * be answered; refusing is what keeps a relative cwd from silently reading as
+ * "not in the mount" and letting a live mount be removed. */
+static void test_within_rejects_non_absolute_inputs(void) {
+    assert(fsmgr_path_is_within("wfs", "/wfs/docs") == 0);
+    assert(fsmgr_path_is_within("/wfs", "wfs/docs") == 0);
+    assert(fsmgr_path_is_within("", "/wfs") == 0);
+    assert(fsmgr_path_is_within("/wfs", "") == 0);
+    assert(fsmgr_path_is_within(0, "/wfs") == 0);
+    assert(fsmgr_path_is_within("/wfs", 0) == 0);
 }
 
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
     static const wasmos_test_void_case_t cases[] = {
-        WASMOS_TEST_CASE(test_absolute_root_path_matches_boot),
-        WASMOS_TEST_CASE(test_absolute_boot_path_is_routed_and_trimmed),
-        WASMOS_TEST_CASE(test_absolute_init_path_is_routed_and_trimmed),
-        WASMOS_TEST_CASE(test_absolute_mount_path_without_tail_routes_to_root),
-        WASMOS_TEST_CASE(test_relative_boot_path_is_routed_and_trimmed),
-        WASMOS_TEST_CASE(test_relative_mount_path_without_tail_routes_to_root),
-        WASMOS_TEST_CASE(test_unknown_mount_is_not_routed),
-        WASMOS_TEST_CASE(test_case_insensitive_mount_match),
-        WASMOS_TEST_CASE(test_prefix_collision_does_not_match_mount),
+        WASMOS_TEST_CASE(test_root_mount_owns_every_path),
+        WASMOS_TEST_CASE(test_a_named_mount_beats_the_root),
+        WASMOS_TEST_CASE(test_no_root_mount_leaves_a_stray_path_unrouted),
+        WASMOS_TEST_CASE(test_deeper_mount_wins_over_shallower),
+        WASMOS_TEST_CASE(test_longest_prefix_ignores_registration_order),
+        WASMOS_TEST_CASE(test_mount_matches_whole_segments_only),
+        WASMOS_TEST_CASE(test_partial_segment_is_not_routed_without_a_root),
+        WASMOS_TEST_CASE(test_deep_mount_matches_whole_segments_only),
+        WASMOS_TEST_CASE(test_path_equal_to_its_mount_yields_the_backend_root),
+        WASMOS_TEST_CASE(test_trailing_slash_yields_the_backend_root),
+        WASMOS_TEST_CASE(test_mount_declared_with_a_trailing_slash_still_matches),
         WASMOS_TEST_CASE(test_double_slash_tail_is_preserved),
-        WASMOS_TEST_CASE(test_relative_is_rejected_when_disallowed),
-        WASMOS_TEST_CASE(test_relative_non_mount_is_not_routed),
-        WASMOS_TEST_CASE(test_mount_only_variants_map_to_root),
-        WASMOS_TEST_CASE(test_out_buffer_size_boundaries),
-        WASMOS_TEST_CASE(test_invalid_inputs_are_rejected),
+        WASMOS_TEST_CASE(test_case_insensitive_mount_match),
+        WASMOS_TEST_CASE(test_relative_path_is_never_routed),
+        WASMOS_TEST_CASE(test_mount_without_a_leading_slash_is_ignored),
+        WASMOS_TEST_CASE(test_single_character_mount_is_not_the_root),
+        WASMOS_TEST_CASE(test_duplicate_root_mounts_use_the_first),
         WASMOS_TEST_CASE(test_null_mount_entries_are_skipped),
-        WASMOS_TEST_CASE(test_duplicate_mount_names_use_first_match),
-        WASMOS_TEST_CASE(test_backend_selection_absolute_boot),
-        WASMOS_TEST_CASE(test_backend_selection_absolute_init),
-        WASMOS_TEST_CASE(test_backend_selection_relative_boot),
-        WASMOS_TEST_CASE(test_backend_selection_unknown_mount_fails),
-        WASMOS_TEST_CASE(test_relative_name_appends_to_cwd),
-        WASMOS_TEST_CASE(test_absolute_argument_replaces_cwd),
-        WASMOS_TEST_CASE(test_dot_keeps_the_directory),
-        WASMOS_TEST_CASE(test_dotdot_pops_one_segment),
-        WASMOS_TEST_CASE(test_interior_dot_segments_are_canonicalized),
-        WASMOS_TEST_CASE(test_redundant_slashes_collapse),
-        WASMOS_TEST_CASE(test_join_refuses_to_overflow),
-        WASMOS_TEST_CASE(test_join_leaves_no_partial_path_on_refusal),
-        WASMOS_TEST_CASE(test_join_rejects_invalid_inputs),
-        WASMOS_TEST_CASE(test_joined_path_routes_to_its_mount),
+        WASMOS_TEST_CASE(test_duplicate_mount_paths_use_the_first),
+        WASMOS_TEST_CASE(test_out_buffer_size_boundaries),
+        WASMOS_TEST_CASE(test_root_mount_tail_respects_the_out_capacity),
+        WASMOS_TEST_CASE(test_invalid_inputs_are_rejected),
+        WASMOS_TEST_CASE(test_backend_selection_picks_the_owning_mount),
+        WASMOS_TEST_CASE(test_backend_is_untouched_when_not_routed),
+        WASMOS_TEST_CASE(test_cwd_join_absolute_replaces_and_relative_extends),
+        WASMOS_TEST_CASE(test_cwd_join_walks_up_from_the_working_directory),
+        WASMOS_TEST_CASE(test_cwd_join_resolves_dots_and_cannot_escape_the_root),
+        WASMOS_TEST_CASE(test_cwd_join_refuses_rather_than_truncating),
+        WASMOS_TEST_CASE(test_cwd_join_rejects_a_relative_cwd),
+        WASMOS_TEST_CASE(test_within_matches_whole_segments_only),
+        WASMOS_TEST_CASE(test_within_counts_the_mount_itself),
+        WASMOS_TEST_CASE(test_within_root_contains_everything),
+        WASMOS_TEST_CASE(test_within_ignores_trailing_slashes_on_the_mount),
+        WASMOS_TEST_CASE(test_within_is_case_insensitive),
+        WASMOS_TEST_CASE(test_within_detects_a_deeper_mount),
+        WASMOS_TEST_CASE(test_within_rejects_non_absolute_inputs),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_fs_manager_path: ok\n");

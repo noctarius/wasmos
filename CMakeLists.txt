@@ -198,6 +198,9 @@ set(WASM_VIRTIO_SERIAL_APP ${BUILD_DIR}/virtio_serial.wap)
 set(WASM_VIRTIO_RNG_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_rng/virtio_rng.c)
 set(WASM_VIRTIO_RNG_DRIVER_WASM ${BUILD_DIR}/virtio_rng.wasm)
 set(WASM_VIRTIO_RNG_APP ${BUILD_DIR}/virtio_rng.wap)
+set(WASM_TMPFS_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_tmpfs/fs_tmpfs.zig)
+set(WASM_TMPFS_DRIVER_WASM ${BUILD_DIR}/fs_tmpfs.wasm)
+set(WASM_TMPFS_APP ${BUILD_DIR}/fs_tmpfs.wap)
 set(WASM_PARTITION_MANAGER_DRIVER_SRC ${DRIVER_WASM_DIR}/partition_manager/partition_manager.zig)
 set(WASM_PARTITION_MANAGER_DRIVER_WASM ${BUILD_DIR}/partition_manager.wasm)
 set(WASM_PARTITION_MANAGER_APP ${BUILD_DIR}/partition_manager.wap)
@@ -291,6 +294,15 @@ set(WASM_EXPLORER_APP ${BUILD_DIR}/explorer.wap)
 set(WASM_IP_SRC ${CMAKE_SOURCE_DIR}/src/utils/ip/ip.c)
 set(WASM_IP_WASM ${BUILD_DIR}/ip.wasm)
 set(WASM_IP_APP ${BUILD_DIR}/ip.wap)
+set(WASM_MKDIR_SRC ${CMAKE_SOURCE_DIR}/src/utils/mkdir/mkdir.c)
+set(WASM_MKDIR_WASM ${BUILD_DIR}/mkdir.wasm)
+set(WASM_MKDIR_APP ${BUILD_DIR}/mkdir.wap)
+set(WASM_MOUNT_SRC ${CMAKE_SOURCE_DIR}/src/utils/mount/mount.c)
+set(WASM_MOUNT_WASM ${BUILD_DIR}/mount.wasm)
+set(WASM_MOUNT_APP ${BUILD_DIR}/mount.wap)
+set(WASM_UMOUNT_SRC ${CMAKE_SOURCE_DIR}/src/utils/umount/umount.c)
+set(WASM_UMOUNT_WASM ${BUILD_DIR}/umount.wasm)
+set(WASM_UMOUNT_APP ${BUILD_DIR}/umount.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
@@ -1732,6 +1744,9 @@ endif ()
 if (TARGET host_util)
   set(HOST_UTIL_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MKDIR_APP} ${BUILD_DIR}/esp/system/utils/mkdir.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUNT_APP} ${BUILD_DIR}/esp/system/utils/mount.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_UMOUNT_APP} ${BUILD_DIR}/esp/system/utils/umount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
     # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap
@@ -1917,6 +1932,28 @@ add_custom_target(wfs_image DEPENDS ${WFS_IMAGE})
 # writes survive across `run-qemu` invocations, and are discarded when the
 # fixture is rebuilt, which is the point at which the old contents stopped
 # describing the volume anyway.
+# The /user GPT fixture, built from the SOURCE tree at ${USERFS_DIR}.
+#
+# It needs a rule of its own, not only the copy in WASMOS_ESP_POPULATE_CMDS that
+# also produces it. `run_images` consumes this file, and every interactive
+# run-qemu target both DEPENDS on run_images and runs the populate commands --
+# so the populate ran strictly AFTER the copy that needed its output, and the
+# build only worked because a previous run had left a user.img behind. On a clean
+# tree it failed with "No rule to make target 'user.img'".
+#
+# The image is regenerated when anything under ${USERFS_DIR} changes, which is
+# what the populate step's own copy achieves for the ESP; both read the same
+# source directory, so the two agree.
+file(GLOB_RECURSE USERFS_CONTENT_FILES ${USERFS_DIR}/*)
+add_custom_command(OUTPUT ${USERFS_IMAGE}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${USERFS_DIR}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/make_gpt_image.py
+          --output ${USERFS_IMAGE} --label user --source ${USERFS_DIR}
+  DEPENDS ${CMAKE_SOURCE_DIR}/scripts/make_gpt_image.py ${USERFS_CONTENT_FILES}
+  COMMENT "Building the /user GPT fixture with make_gpt_image.py"
+  VERBATIM)
+add_custom_target(userfs_image DEPENDS ${USERFS_IMAGE})
+
 set(WFS_RUN_IMAGE ${BUILD_DIR}/run/wfs.img)
 set(WFS_VIRTIO_RUN_IMAGE ${BUILD_DIR}/run/wfs_virtio.img)
 set(USERFS_RUN_IMAGE ${BUILD_DIR}/run/user.img)
@@ -4014,6 +4051,23 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               -Mfixtures_disk_images=${CMAKE_SOURCE_DIR}/tests/unit/fixtures_disk_images.zig
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running partition-table parser unit tests"
+      VERBATIM)
+    # The tmpfs namespace and storage core. It is split out of the driver
+    # (fs_tmpfs.zig) precisely so it can be linked here: it depends on nothing in
+    # the guest environment except a source of pool memory, which on the guest is
+    # `memory.grow` and in the suite is a static array handed to its
+    # `chunk_source` seam. Only that one module is passed, because everything the
+    # cases reach is in it.
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-fs-tmpfs-cache
+              --global-cache-dir ${BUILD_DIR}/zig-fs-tmpfs-global-cache
+              --dep fs_tmpfs_store
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_fs_tmpfs_store.zig
+              -Mfs_tmpfs_store=${DRIVER_WASM_DIR}/fs_tmpfs/fs_tmpfs_store.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running tmpfs store unit tests"
       VERBATIM)
     # The filesystem recognisers. Unlike the parser above these import each other
     # and the generated constants, and `wasmos_add_zig_wasm_app` resolves that by

@@ -719,6 +719,16 @@ fat_r_t fat_op_stat(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     if (rc != 0) {
         FAT_CO_FAIL(op, blk, rc);
     }
+    /* The volume root has no directory ENTRY to resolve -- nothing on disk
+     * describes it -- so it is answered directly. Without this, stat("/") is
+     * NOT_FOUND on a volume whose root plainly exists, and fs-manager reads that
+     * as "you cannot stand at the top of this mount". */
+    if (op->fat_path[0] == '\0' || (op->fat_path[0] == '/' && op->fat_path[1] == '\0')) {
+        op->resp_override = 1;
+        op->resp_arg0 = 0;
+        op->resp_arg1 = 0x4000; /* S_IFDIR */
+        FAT_CO_DONE(op);
+    }
     op->resolve.cont = 0;
     op->resolve.path = op->fat_path;
     op->resolve.source = op->source;

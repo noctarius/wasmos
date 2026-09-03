@@ -10,12 +10,21 @@
 #define FS_CLIENT_CHUNK_CAP 32 /* max concurrent per-context client state slots */
 /* Hard cap on simultaneously registered backends; a class event for a ninth
  * provider finds no free slot and is dropped. */
-#define FS_BACKEND_CAP 8 /* max registered FS backend instances */
+/* Simultaneously mounted filesystems. A default boot already uses seven (`/`,
+ * `/init`, `/boot`, `/user`, `/wfs`, and two rule-placed tmpfs instances), so the
+ * old ceiling of 8 left room for exactly one runtime mount -- and mounting is a
+ * request now, not only a boot-time property. The table is static and each entry
+ * is about a hundred bytes, so the headroom is cheap; exhaustion is reported
+ * rather than silent (fsmgr_apply_backend_info). */
+#define FS_BACKEND_CAP 16
 /* Hard cap on open files per client context.  Exhausting it fails the open with
  * WASMOS_ERR_FS_NO_FD, after fs-manager has closed the backend fd again. */
 #define FSMGR_CLIENT_FD_CAP 32 /* max forwarded open files per client context */
 
-/* Whether a request is being handled at the VFS root or forwarded to a backend. */
+/* Whether the client stands at a VFS root that NO filesystem is mounted at, or in
+ * a directory some backend owns. Once a root filesystem is mounted "/" routes to
+ * it like any other path, so FS_MOUNT_ROOT is the degenerate case rather than the
+ * normal one. */
 typedef enum { FS_MOUNT_ROOT = 0, FS_MOUNT_BACKEND = 1 } fs_mount_t;
 
 /* One open file, as seen by a client.  fs-manager hands the client the slot's
@@ -30,11 +39,19 @@ typedef struct {
     int32_t backend_fd;
 } fsmgr_client_fd_t;
 
+/* Longest mount path fs-manager will hold, NUL included. A mount is an absolute
+ * canonical path ("/", "/boot", "/mnt/usb"), so this bounds mount DEPTH as well
+ * as name length -- it was 16 bytes while a mount was a single top-level name,
+ * which is not enough for a path. A backend reporting a longer one is refused
+ * rather than truncated: a shortened mount path is a different mount. */
+#define FSMGR_MOUNT_PATH_MAX 64
+
 /* One registered FS backend (e.g. a FAT driver instance).
  * has_meta: non-zero once PCI metadata has been filled in; the PCI fields below
  * are meaningless while it is 0.
- * mount_name: defaulted on registration from kind+slot (e.g. "boot", "user"),
- * then overwritten by the name the backend reports in FSMGR_IPC_BACKEND_INFO. */
+ * mount_path: the absolute canonical path this backend is mounted at, taken from
+ * what the backend reports in FSMGR_IPC_BACKEND_INFO and normalized by
+ * fsmgr_mount_path_from_reported. Nothing on this side supplies a default. */
 typedef struct {
     uint8_t in_use;
     uint8_t kind;     /* FSMGR_BACKEND_BLOCK / FSMGR_BACKEND_PSEUDO / other */
@@ -55,7 +72,7 @@ typedef struct {
     uint8_t prog_if;
     uint16_t vendor_id;
     uint16_t device_id;
-    char mount_name[16];
+    char mount_path[FSMGR_MOUNT_PATH_MAX];
 } fs_backend_t;
 
 /* Longest working directory fs-manager will hold for a client, NUL included.
@@ -71,9 +88,7 @@ typedef struct {
  * chdir and cached here so a request need not re-route the directory itself.
  * Relative paths from the client are joined onto cwd before routing, which is
  * what makes a name mean the same directory for a spawned child as for its
- * spawner -- a child's state is a copy of its parent's cwd, not a fresh one.
- * mount_depth counts segments below the mount root, kept for the ".." fast
- * path. */
+ * spawner -- a child's state is a copy of its parent's cwd, not a fresh one. */
 typedef struct {
     uint8_t in_use;
     /* Owning context of the requesting endpoint, so every endpoint a process
@@ -81,8 +96,7 @@ typedef struct {
      * owner cannot be resolved. */
     int32_t context_id;
     fs_mount_t mount;
-    int32_t backend_endpoint; /* -1 when request is at the VFS root */
-    uint16_t mount_depth;
+    int32_t backend_endpoint; /* -1 only when no filesystem is mounted at "/" */
     char cwd[FSMGR_CWD_MAX];
     fsmgr_client_fd_t fds[FSMGR_CLIENT_FD_CAP];
 } fs_client_state_t;

@@ -38,9 +38,27 @@
  * the arguments are rejected before any write.) */
 int32_t fsmgr_cwd_join(const char* cwd, const char* arg, char* out_path, int32_t out_cap);
 
+/* Whether `path` lies inside the mount rooted at `mount`, on a whole-segment
+ * boundary -- the same rule routing matches on, so that the two cannot disagree
+ * about who owns a path. "/wfsx" is not inside "/wfs".
+ *
+ * A path that IS the mount counts as inside it: a client standing exactly on a
+ * mount point is standing in that mount. The root contains every absolute path.
+ * Trailing slashes on `mount` are ignored, and the comparison is ASCII
+ * case-insensitive, matching how mount paths are normalized on registration.
+ *
+ * Returns 1 when contained, 0 otherwise -- including for any input that is not
+ * an absolute path, which is not a containment question that can be answered.
+ * Answering "not contained" for a path that cannot be evaluated would let a live
+ * mount be removed, so unanswerable and outside deliberately share the refusal.
+ *
+ * This is the predicate an unmount refuses on: a mount is busy while a deeper
+ * mount, an open file, or a client's working directory is still inside it. */
+int32_t fsmgr_path_is_within(const char* mount, const char* path);
+
 int32_t fsmgr_route_path_for_mounts(const char* path, int32_t path_len,
-                                    const char* const* mount_names, int32_t mount_count,
-                                    int32_t allow_relative, int32_t* out_mount_index,
-                                    char* out_path, int32_t out_path_cap, int32_t* out_path_len);
+                                    const char* const* mount_paths, int32_t mount_count,
+                                    int32_t* out_mount_index, char* out_path, int32_t out_path_cap,
+                                    int32_t* out_path_len);
 
 #endif

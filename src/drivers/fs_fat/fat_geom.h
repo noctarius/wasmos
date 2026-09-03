@@ -32,14 +32,6 @@ typedef struct {
     uint32_t root_cluster;     /* FAT32 root chain start (BPB_RootClus); 0 otherwise */
     uint32_t fsinfo_lba;       /* FAT32 FSInfo sector; 0 when absent or not FAT32 */
 
-    /* Single current-working-directory navigation state (set by CHDIR). */
-    int32_t cwd_source; /* endpoint that owns the cwd, or -1 */
-    uint32_t cwd_cluster;
-    uint8_t cwd_root;
-    vfs_mount_t cwd_mount;
-    uint32_t dir_lba;     /* current dir first LBA (when not root) */
-    uint32_t dir_sectors; /* current dir span in sectors */
-
     /* Lazy mount bring-up state (fat_geom_mount_step is a coroutine on *mnt). */
     int cont;        /* coroutine resume point */
     uint8_t mounted; /* 1 once the BPB is parsed */

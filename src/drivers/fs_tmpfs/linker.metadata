@@ -1,0 +1,47 @@
+version = 1
+aot = true
+
+[package]
+name = "fs-tmpfs"
+# The libsys async-service entry: it creates the endpoint, the event loop and the
+# coroutine runtime, then pumps the root task this driver supplies.
+entry = "async_initialize"
+# A driver, not a service, like every other filesystem backend: `kind` sets the
+# scheduler band (SCHED_PRIO_DRIVER above SCHED_PRIO_SERVICE) and this serves the
+# VFS root, so it sits underneath every service that resolves a path.
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+# Link-time memory in bytes (docs/toolchain.md). No device memory is mapped -- this
+# driver touches no hardware -- but the filesystem's contents live in linear
+# memory, so these two numbers are its floor and its ceiling.
+#
+# max_memory MUST exceed initial_memory: the block pool grows with `memory.grow`,
+# which the runtime refuses once the declared maximum is reached, and a module
+# declaring min == max cannot grow at all. Verified to grow under BOTH wasm3 and
+# WARP.
+#
+# initial_memory covers only the static tables, the shadow stack and libsys; the
+# pool is not in it, which is what keeps an instance storing nothing cheap.
+[link]
+initial_memory = 1048576
+max_memory = 16777216
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+
+# ipc.basic to reach the process manager and to be reached by fs-manager;
+# svc.class to claim an `fs.backend` instance. Nothing else: this driver has no
+# device, no ports, no interrupt and no DMA.
+[[capabilities]]
+name = "ipc.basic"
+flags = 0
+
+[[capabilities]]
+name = "svc.class"
+flags = 0

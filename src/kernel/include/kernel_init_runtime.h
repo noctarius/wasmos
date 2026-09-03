@@ -1,7 +1,7 @@
 /* kernel_init_runtime.h - Kernel init process (PID 1) state and entry.
  *
- * The init process drives early system bring-up: spawning fs-manager, fs-init,
- * and device-manager in sequence, then requesting sysinit from /boot.
+ * The init process drives early system bring-up: spawning fs-manager, fs-tmpfs,
+ * fs-init, and device-manager in sequence, then requesting sysinit from /boot.
  * init_state_t is the cooperative state machine persisted across yields. */
 #ifndef WASMOS_KERNEL_INIT_RUNTIME_H
 #define WASMOS_KERNEL_INIT_RUNTIME_H
@@ -32,6 +32,7 @@ typedef struct {
     uint32_t native_smoke_index;
     uint32_t smoke_index;
     uint32_t fs_manager_index;
+    uint32_t fs_tmpfs_index;
     uint32_t fs_init_index;
     uint32_t device_manager_index;
     uint32_t dm_pid; /* pid device-manager was spawned as; 0 before that phase completes */

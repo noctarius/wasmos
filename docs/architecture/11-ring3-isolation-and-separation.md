@@ -94,16 +94,25 @@ Everything else executes at CPL=0.
 | WARP guest code | 3 | `r3_do_iretq` → `WARP_R3_ENTRY_TRAMPOLINE` (`src/kernel/warp_driver.cpp:348`, `:476`); host calls re-enter the kernel via `int 0x80` |
 | native ring-3 probes | 3 | `process_set_user_entry` (`src/kernel/process.c:1563`), called only from `kernel_ring3_smoke_runtime.c:299` and `kernel_ring3_probe_runtime.c:110`/`:186`/`:256` |
 | native ring-3 threads | 3 | `process_thread_spawn_user_internal` (`src/kernel/process.c:1518`), called only from `syscall.c:493` |
-| **the wasm3 interpreter AND the guest it interprets** | **0** | `process_trampoline` → `entry_fn(...)` (`src/kernel/process.c:549`, `:570`) — no ring transition occurs |
+| **the wasm3 interpreter** — the only runtime component executing at CPL=0 | **0** | `process_trampoline` → `entry_fn(...)` (`src/kernel/process.c:549`, `:570`) — no ring transition occurs |
 | native `.wap` services (gfx-compositor, font-service, net-stack) | 0 | see *Native Service Isolation (planned)* |
 
 `src/kernel/wasm3/` contains no ring-3 code: the string `ring` does not appear
-in `shim.c` outside the word "string". A wasm3 guest is ordinary kernel code
-executing an interpreter loop on the process's kernel thread.
+in `shim.c` outside the word "string". The interpreter loop executing a guest is
+ordinary kernel code on the process's kernel thread.
 
-Two consequences follow from the wasm3 row, and both are load-bearing:
+A GUEST MODULE HAS NO CPL OF ITS OWN. It is bytecode, never native instructions,
+so the privilege level in effect while its semantics execute is the
+interpreter's. The ring-0 row above names the interpreter, not the application:
+a wasm3 process owns a context and user-VA mappings exactly as a WARP one does,
+and nothing about its address space may be inferred from this row. Reading the
+row as "a wasm3 app is a ring-0 app" is the specific error this section exists to
+prevent.
 
-- **A wasm3 guest is never timer-preempted.** `process_preempt_from_irq`
+Two consequences follow, and both are load-bearing:
+
+- **A wasm3 guest is never timer-preempted**, because the frame the timer
+  interrupts belongs to the interpreter and is kernel-mode. `process_preempt_from_irq`
   returns 0 for a kernel-mode frame (`if (from_kernel) return 0;`,
   `src/kernel/process.c:2299`) — before it consults `preempt_is_enabled()`. A
   guest loop that makes no host call therefore holds its CPU until it returns.
@@ -114,6 +123,31 @@ Two consequences follow from the wasm3 row, and both are load-bearing:
 The wasm3 subsystem additionally holds a per-process `runtime_lock` across the
 whole timeslice (`src/kernel/process.c:562`; `needs_runtime_lock = 1` in
 `src/kernel/wasmos_app.c:267`), serialising re-entry into one runtime.
+
+#### A WARP Guest Runs Against the Active Root, Not the Context Root
+
+`mm_context_root_table(proc->context_id)` is **not** the table a WARP guest
+executes against. Guest windows are published into
+`paging_get_current_root_table()` by `warp_ring3_sync_linmem_user_window` and
+`warp_mem_ring3_map_linmem` (`src/kernel/warp/link.cpp`), so the two roots differ
+for the lifetime of the process. Measured on a booted CLI via `kmaps`:
+
+| root | PML4[0] (low slot) | PML4[1] (`USER_VA_MIN`) |
+|---|---|---|
+| context root `0x2c31000` | present | empty |
+| active root `0x2cd8000` | 0 | present, USER |
+
+The low-slot invariant belongs to the **active** root. The context root keeps its
+low slot legitimately, because no ring-3 code runs against it; verifying that root
+under WARP reports a failure on every healthy boot. `wasmos_kmap_dump` verifies
+accordingly: the WARP backend checks the active root, the wasm3 backend checks the
+context root gated on a ring-3 caller — which is correct there, because the two
+ring-3 paths wasm3 can see (`process_set_user_entry`, the native user-thread
+spawn) do run against the context root and strip the slot in it. The two gates are
+not interchangeable.
+
+`kmap_dump_all` verifies nothing under WARP: another process's active root is the
+CR3 of whichever CPU is running it, which the caller cannot observe.
 
 #### Low-Slot Policy
 

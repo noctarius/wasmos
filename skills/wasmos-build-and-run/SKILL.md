@@ -14,8 +14,9 @@ causes "why did my build boot WARP when I asked for wasm3?" confusion:
 1. **Code default** (fresh cache, no `.config`): **WARP**. A one-time guard
    (`WASMOS_WASM_RUNTIME_DEFAULT_INITIALIZED`) sets `WARP=ON`/`WASM3=OFF` on the
    first configure of a new build dir. WARP is the default because its guests
-   run at CPL=3 and are preemptible; a wasm3 guest runs at CPL=0 and is never
-   timer-preempted (see `docs/architecture/11`).
+   run at CPL=3 and are preemptible, while the wasm3 interpreter — the only
+   runtime component at CPL=0 — executes its guest in a kernel-mode frame, so a
+   wasm3 guest is never timer-preempted (see `docs/architecture/11`).
 2. **`WASMOS_DOTCONFIG`** (default `<repo>/.config`, which is **gitignored /
    local**): if that file exists it is imported every configure and **FORCE**s
    the runtime — so a leftover local `.config` silently overrides a

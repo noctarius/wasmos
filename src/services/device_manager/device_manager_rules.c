@@ -423,6 +423,7 @@ static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* o
     char* cur = 0;
     char* tok = 0;
     char sub[32];
+    char mount[64];
     if (!line || !out_rule) {
         return -1;
     }
@@ -434,6 +435,7 @@ static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* o
     }
     path[0] = '\0';
     sub[0] = '\0';
+    mount[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
         tok = (char*)wasmos_sys_trim_left(tok);
@@ -441,6 +443,12 @@ static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* o
             continue;
         }
         if (extract_op_value(tok, "RUN", "+=", path, sizeof(path)) == 0) {
+            continue;
+        }
+        /* Optional, unlike on a volume rule. A boot rule names no device, so
+         * nothing about it implies a mount; a filesystem with no backing device
+         * can only be placed by being told, and everything else ignores it. */
+        if (extract_op_value(tok, "ENV{MOUNT}", "=", mount, sizeof(mount)) == 0) {
             continue;
         }
     }
@@ -451,6 +459,7 @@ static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* o
     out_rule->queued = 1;
     out_rule->spawned = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    str_copy(out_rule->mount, sizeof(out_rule->mount), mount);
     return 0;
 }
 

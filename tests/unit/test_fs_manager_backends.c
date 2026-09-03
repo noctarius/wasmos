@@ -25,7 +25,7 @@
  * backend regardless of filesystem, which is the distinction these cases turn
  * on: it is `fs_type` that says which filesystem is mounted. */
 static fs_backend_t make_backend(uint8_t slot, uint8_t kind, uint32_t fs_type,
-                                 const char* mount_name) {
+                                 const char* mount_path) {
     fs_backend_t backend;
     memset(&backend, 0, sizeof(backend));
     backend.in_use = 1;
@@ -34,7 +34,7 @@ static fs_backend_t make_backend(uint8_t slot, uint8_t kind, uint32_t fs_type,
     backend.fs_type = fs_type;
     backend.endpoint = 100 + (int32_t)slot;
     backend.unit = slot;
-    snprintf(backend.mount_name, sizeof(backend.mount_name), "%s", mount_name);
+    snprintf(backend.mount_path, sizeof(backend.mount_path), "%s", mount_path);
     return backend;
 }
 
@@ -101,6 +101,123 @@ static void test_two_block_backends_are_distinguished(void) {
     assert(strcmp(fsmgr_backend_fs_name(&backends[0]), fsmgr_backend_fs_name(&backends[1])) != 0);
 }
 
+/* Regression: 2026-08-31-fsmgr-root-mount-name — the emptiness test on a
+ * reported mount ran BEFORE the leading '/' was stripped, so a backend naming
+ * "/" was registered with an EMPTY mount name and was unreachable by any path.
+ * A mount is a PATH now and "/" is the root filesystem, so the case is inverted:
+ * "/" must be ACCEPTED, and what must be refused is a report naming nothing. */
+static void test_reported_root_is_the_root_mount(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+    assert(fsmgr_mount_path_from_reported("/", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/") == 0);
+    /* However many slashes it carried. */
+    assert(fsmgr_mount_path_from_reported("///", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/") == 0);
+}
+
+/* A backend MUST name its mount: there is no default on the fs-manager side. */
+static void test_reported_empty_is_not_a_mount(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+    memset(out, 'x', sizeof(out));
+    assert(fsmgr_mount_path_from_reported("", out, sizeof(out)) == 0);
+    assert(out[0] == '\0');
+}
+
+/* Both spellings are live in the tree -- fs_init reports "init" while a
+ * rule-spawned fs_wfs reports "/wfs" from ENV{MOUNT} -- so a leading slash is
+ * ensured rather than required, and the two are one mount. */
+static void test_leading_slash_is_ensured_and_case_folded(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+    assert(fsmgr_mount_path_from_reported("boot", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/boot") == 0);
+    assert(fsmgr_mount_path_from_reported("/Boot", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/boot") == 0);
+    assert(fsmgr_mount_path_from_reported("//BOOT", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/boot") == 0);
+}
+
+/* A trailing slash names the same mount, so it is dropped rather than making a
+ * second one that routing would rank differently. */
+static void test_trailing_slash_is_dropped(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+    assert(fsmgr_mount_path_from_reported("/boot/", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/boot") == 0);
+    assert(fsmgr_mount_path_from_reported("mnt/usb//", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/mnt/usb") == 0);
+}
+
+/* A mount at depth is the point of holding a path rather than a name. */
+static void test_a_mount_at_depth_is_a_path(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+    assert(fsmgr_mount_path_from_reported("/mnt/usb", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/mnt/usb") == 0);
+}
+
+/* A relative component makes a mount path nothing can route to: routing compares
+ * a mount against an already-canonical request, so "." and ".." would never
+ * match and the backend would be unreachable while still holding a slot. */
+static void test_relative_components_are_refused(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+    assert(fsmgr_mount_path_from_reported("/mnt/./usb", out, sizeof(out)) == 0);
+    assert(out[0] == '\0');
+    assert(fsmgr_mount_path_from_reported("/mnt/../usb", out, sizeof(out)) == 0);
+    assert(fsmgr_mount_path_from_reported("/mnt/..", out, sizeof(out)) == 0);
+    assert(fsmgr_mount_path_from_reported("/.", out, sizeof(out)) == 0);
+    /* A dot INSIDE a name is ordinary. */
+    assert(fsmgr_mount_path_from_reported("/my.mount", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/my.mount") == 0);
+}
+
+/* A path that does not fit is refused rather than truncated: a shortened mount
+ * path is a different mount, and routing would then hand it other mounts' paths. */
+static void test_overlong_path_is_refused_not_truncated(void) {
+    char out[8];
+    assert(fsmgr_mount_path_from_reported("/averylongmountpath", out, sizeof(out)) == 0);
+    assert(out[0] == '\0');
+    /* Exactly filling the buffer still works: "/abcdef" is 7 plus a NUL. */
+    assert(fsmgr_mount_path_from_reported("abcdef", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/abcdef") == 0);
+}
+
+/* Regression: 2026-08-31-mount-path-interior-slashes — the report was copied
+ * verbatim after the leading slash, so an interior run survived into the stored
+ * mount. Request paths are canonicalized by fsmgr_cwd_join, which collapses runs,
+ * so a mount held as "/mnt//usb" could never be string-matched by "/mnt/usb": it
+ * was unreachable by any path while still holding one of the FS_BACKEND_CAP
+ * slots. Canonical has to mean canonical throughout, not just at the ends. */
+static void test_interior_slash_runs_are_collapsed(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+    assert(fsmgr_mount_path_from_reported("/mnt//usb", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/mnt/usb") == 0);
+    assert(fsmgr_mount_path_from_reported("//a///b//", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/a/b") == 0);
+    assert(fsmgr_mount_path_from_reported("mnt//usb//deep", out, sizeof(out)) == 1);
+    assert(strcmp(out, "/mnt/usb/deep") == 0);
+}
+
+/* A refusal leaves `out` EMPTY, which is what the header promises: a caller that
+ * ignores the return then reads an empty string rather than whatever was in the
+ * buffer before. The argument checks refused without clearing it. */
+static void test_a_refusal_always_leaves_out_empty(void) {
+    char out[FSMGR_MOUNT_PATH_MAX];
+
+    memset(out, 'x', sizeof(out));
+    out[sizeof(out) - 1u] = '\0';
+    assert(fsmgr_mount_path_from_reported("/boot", out, 2u) == 0);
+    assert(out[0] == '\0');
+
+    memset(out, 'x', sizeof(out));
+    out[sizeof(out) - 1u] = '\0';
+    assert(fsmgr_mount_path_from_reported(0, out, sizeof(out)) == 0);
+    assert(out[0] == '\0');
+}
+
+static void test_degenerate_out_capacity_is_refused(void) {
+    char out[2];
+    assert(fsmgr_mount_path_from_reported("/", out, sizeof(out)) == 0);
+    assert(fsmgr_mount_path_from_reported("/", out, 0) == 0);
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -113,6 +230,16 @@ int main(void) {
         WASMOS_TEST_CASE(test_unknown_fs_type_is_named_generically),
         WASMOS_TEST_CASE(test_null_backend_is_named_generically),
         WASMOS_TEST_CASE(test_two_block_backends_are_distinguished),
+        WASMOS_TEST_CASE(test_reported_root_is_the_root_mount),
+        WASMOS_TEST_CASE(test_reported_empty_is_not_a_mount),
+        WASMOS_TEST_CASE(test_leading_slash_is_ensured_and_case_folded),
+        WASMOS_TEST_CASE(test_trailing_slash_is_dropped),
+        WASMOS_TEST_CASE(test_a_mount_at_depth_is_a_path),
+        WASMOS_TEST_CASE(test_relative_components_are_refused),
+        WASMOS_TEST_CASE(test_overlong_path_is_refused_not_truncated),
+        WASMOS_TEST_CASE(test_interior_slash_runs_are_collapsed),
+        WASMOS_TEST_CASE(test_a_refusal_always_leaves_out_empty),
+        WASMOS_TEST_CASE(test_degenerate_out_capacity_is_refused),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_fs_manager_backends: ok\n");

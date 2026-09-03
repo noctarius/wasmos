@@ -526,7 +526,14 @@ and `architecture/33-completion-ports.md`.
   endpoint" and "owned by the kernel" stop sharing a value.
 
 - [ ] [CLEANUP][P1] Retire blocking IPC from app and service CALL SITES, then delete
-  the blocking primitives that only those call sites use. Nothing gates the start:
+  the blocking primitives that only those call sites use.
+
+  NEW synchronous request/reply is banned outright (`AGENTS.md`, "Never Do"), so
+  this list only shrinks. It cannot be enforced by a lint check: the call sites
+  below are still present, so a check would flag the tree rather than the change.
+  Convert the ones in files you touch, as with bare `-1`s.
+
+  Nothing gates the start:
   the four AS drivers (keyboard, mouse, serial, rtc) are already `@coroutine` entry
   points driven by libc's pump, and the future/promise bridge is live in net-stack
   and on the CLI's VT path. Sequenced, because the order is forced by what gates
@@ -1455,30 +1462,184 @@ Source: `architecture/19-virtual-terminal.md`,
   path is itself worth explaining before diagnosing the fault. A second CPU was
   concurrently in `warp_sync_linmem_for_pid`, which is where to look first.
 
-- [ ] [FEATURE][P2] Back the VFS root with a real filesystem (a tmpfs), so a mount
-  point is a DIRECTORY rather than a reserved top-level name. Today `fs-manager`
-  matches a path's FIRST SEGMENT against the mount table, so every mount is
-  top-level by construction: there is no way to express `/mnt/usb`, and `ls /` is
-  `send_virtual_root_listing` printing the mount table rather than reading a
-  directory.
+- [x] [FEATURE][P2] Back the VFS root with a real filesystem (a tmpfs), so a mount
+  point is a DIRECTORY rather than a reserved top-level name. DONE.
 
-  With a tmpfs at `/`: mount points are directories in it, routing becomes
-  longest-prefix over mount paths instead of first-segment matching, `ls /` is an
-  ordinary readdir, and mounting at any depth follows without a special case. It
-  also removes the last thing the deleted root-filesystem fallback was patching
-  over — a path naming no mount currently cannot be served at all, which is
-  correct but only because `/` holds nothing.
+  `fs-manager` holds a mount as an absolute canonical PATH and routes a request to
+  the longest such path prefixing it on a whole-segment boundary, so `/` is the
+  owner of last resort, `/wfs` does not own `/wfsx`, and `/mnt/usb` outranks
+  `/mnt` with no special case. A mount POINT is a directory `fs-manager` creates
+  in the filesystem covering it, ancestors included, which retired
+  `send_virtual_root_listing`: `ls /` is an ordinary forwarded readdir whose
+  entries the root filesystem holds.
 
-  A tmpfs is a `FSMGR_BACKEND_PSEUDO` backend reporting a new `FS_TYPE_TMPFS`, so
-  it costs one row in `abi/constants.yaml` and one in `k_fs_types[]` and no branch
-  anywhere (`fs_manager_backends.c`). Wants: the tmpfs driver itself,
-  longest-prefix routing in `route_absolute_path`, and mount-point creation.
-
-  A mount SHADOWS the directory it covers, as on Linux: the directory's previous
-  contents become unreachable for as long as the mount stands and reappear on
-  unmount, rather than the mount being refused unless the directory is empty.
-  That keeps mounting a property of the namespace rather than of the covered
+  A mount SHADOWS the directory it covers, as on Linux: the mount point is an
+  empty directory in the covering filesystem and a path under it reaches the
+  mount, so the covered contents are unreachable while the mount stands. That
+  keeps mounting a property of the namespace rather than of the covered
   filesystem's state, so a mount cannot fail because someone left a file behind.
+
+  Covered by `tests/unit/test_fs_manager_path.c` (routing, 28 cases),
+  `tests/unit/test_fs_manager_backends.c` (mount-path normalization) and
+  `tests/test_vfs_root_mount.py` (end to end, filesystem battery). The write side
+  is driven by `src/utils/mkdir/`, added because the CLI had no way to create a
+  directory at all -- so nothing could demonstrate that `/` was writable rather
+  than merely listable.
+
+  REMAINING:
+  - `FSMGR_CWD_MAX` is 128 bytes, which bounds the working directory a client can
+    hold for EVERY mount -- a path of maximum-length components is unreachable on
+    WFS for the same reason. Widen it.
+  - DONE: a boot rule carries `ENV{MOUNT}` now, so a filesystem with no backing
+    device can be placed by rule. `parse_always_spawn_rule_line` reads it and the
+    spawn delivers it as a `mount=` startup argument over the PATH opcode, which
+    is the only one that carries arguments. Two instances are placed this way,
+    `/home/user` and `/wfs/nested`.
+  - The tmpfs `NAME_MAX` is 255 and its names live in the node record, so the
+    table costs 50 KiB whether names are long or not. Variable-length names in a
+    cell arena would not, at the cost of an allocator with reuse across rename and
+    unlink.
+  - DONE: mounting at DEPTH and mounting INSIDE another mount are both
+    demonstrated, by two rule-placed tmpfs instances that need no disk.
+    `/home/user` has its ancestors created as directories in the root filesystem;
+    `/wfs/nested` has its mount point created inside the WFS VOLUME, which is the
+    other branch of `fsmgr_ensure_mount_points`.
+  - DONE: SHADOWING is demonstrated in BOTH directions. `scripts/wfs/nested/covered.txt`
+    is in the WFS image, and the tmpfs mounted over `/wfs/nested` hides it --
+    verified by a CONTROL run with the mount disabled, where the file is listed,
+    so the case measures the mount rather than an absent directory.
+    `FSMGR_IPC_UNMOUNT_REQ` removes the mount and the file comes back, which is
+    the half that was previously only construction.
+  - DONE: mounting is a REQUEST. `FSMGR_IPC_MOUNT_REQ` carries a
+    `type=`/`mount=`/`source=` descriptor and has the process manager spawn the
+    driver, so placement is one mechanism whether it comes from a boot rule or a
+    request. Its reply is DEFERRED because the process manager reads the driver
+    module through fs-manager -- see `docs/architecture/18-filesystem-stack.md`.
+  - fs-manager still BLOCKS on other nested calls, and every one is the same
+    latent deadlock the mount request had to be built around: `forward_request`,
+    `backend_stat_dir`, `fsmgr_pull_backend` and `fsmgr_backend_mkdir` all park
+    fs-manager on a reply while it is the service everything else needs to read a
+    file. They are safe TODAY only because the peers they wait on (filesystem
+    backends) do not themselves need the filesystem. The general fix is the async
+    service runtime (`docs/architecture/32-*`), which fs-manager does not use.
+
+    The PROTOCOL obstacle to that is gone: backends no longer hold a working
+    directory, so no pair of requests has to stay adjacent and concurrency is no
+    longer a correctness question. What remains is the conversion itself, and on
+    a wasm guest that means stackless state machines -- doc 32 §52 (stackful
+    coroutines for wasm guests, via suspension at the host-call boundary) is a
+    spike, not implemented.
+  - The backend PROCESS survives its unmount. fs-manager quiesces it
+    (`WASMOS_IPC_SHUTDOWN_REQ` with `WASMOS_SHUTDOWN_REASON_UNMOUNT`) and drops
+    the table entry, but the driver keeps running and holding a process slot, so
+    repeated mount/unmount cycles leak slots. Exiting needs a process-exit path a
+    driver can call after answering DONE, which no driver has today.
+    (`src/services/fs_manager/fs_manager.c`, the TODO above `handle_unmount_req`.)
+
+- [ ] [TEST][P2] The overlay-unmap fix (`de9bc5e71e`) has a GUARD, not a
+  demonstration. `tests/test_gfx_surface_recycle.py` asserts the mechanism and
+  the consequence on a graphical boot, but it passes against a tree with the fix
+  reverted, so it has never been shown to fail.
+
+  The precondition is why: only SLOT-BACKED linear memory is affected, and a
+  block moves into a dedicated VA slot only when it is reallocated while the
+  reserve hint is armed and a slot is free (`warp_linmem_move`,
+  `src/kernel/warp/shim.cpp`). Slot-backing therefore depends on startup order
+  and slot availability — the same tree fails on one machine and not another,
+  which cost most of a session to establish.
+
+  A deterministic test needs an app whose linmem is FORCED onto a slot, then
+  mapping and unmapping an overlay over it and mapping again. `surface_attach`'s
+  remap stage is that shape already and passes either way, because that app is
+  not slot-backed. What is missing is the lever: find what arms
+  `g_linmem_reserve_bytes` for a spawn and drive it from a manifest, then the
+  case becomes a real regression test on any machine.
+
+- [ ] [CLEANUP][P3] libui returns bare -1 for real failures, so an app can say a
+  UI call failed and not why. 63 sites across 20 functions in
+  `src/libui/include/wasmos/libui.h`; the TODO above `ui_send_gfx_raw` names them.
+
+  `ui_send_gfx_raw`, `ui_send_gfx` and `ui_realloc_buffer` are already converted:
+  a resize failure was reporting `unknown`, and a caller could not tell a full
+  compositor queue from an exhausted buffer pool.
+
+  The four `ui_find_*_at` helpers must KEEP returning -1 — there it means "no
+  component at this point", a sentinel rather than an error, and packing it would
+  turn an ordinary miss into a failure. Check each site for which kind it is
+  before converting; the count is not the work.
+
+- [ ] [BUG][P2] fs-manager never releases a client's state. `client_state()`
+  allocates a `fs_client_state_t` on first contact from a context and nothing
+  ever clears `in_use`: the chunk list grows for the lifetime of the system, one
+  entry per process that has ever touched the filesystem, each holding a cwd
+  string and an fd table. A shell session that spawns utilities leaks one entry
+  per spawn.
+
+  It also costs a correctness property rather than only memory. `umount` refuses
+  a mount that still has an OPEN FILE on it, and Linux additionally refuses one
+  that a process is standing in; the second rule is deliberately NOT implemented
+  here (`fsmgr_mount_busy_reason`) because a cwd recorded by a process that has
+  since exited would refuse the unmount forever -- a single `cat` run inside a
+  mount would make it permanently unremovable. The open-file rule has the same
+  staleness and is kept only because a client that exits normally closes its fds.
+
+  It is a LEAK and not a stale-state hazard, which is worth stating because the
+  keying invites the opposite conclusion: client state is keyed by context_id,
+  `mm_context_create(pid)` makes that the pid, and process SLOTS are reused. Pids
+  are not — `g_next_pid` only ever counts up — so no new process can be handed a
+  dead one's working directory or fd table. If pids ever became recyclable this
+  would turn into a correctness bug overnight.
+
+  The blocker is that nothing tells fs-manager a client died: there is no exit
+  notification opcode, and a service cannot ask whether a context is still alive.
+  Either would do -- a PM broadcast on process exit that interested services
+  subscribe to, or a liveness query fs-manager sweeps with. Once one exists,
+  reap the state and count the working directory in the busy rule.
+
+- [ ] [REFACTOR][P2] Remove the PROCESS_MAX_COUNT ceiling without giving up slot
+  stability. The count is a compile-time guess a boot has to fit under, and it has
+  already cost one regression: at 48 the ring3 boot tree sat exactly on it, so
+  adding one long-lived driver broke `run-qemu-ring3-test`. Raising it to 64 buys
+  time, not a fix.
+
+  An id-map is NOT the replacement. `g_processes[]` is not a fixed array for
+  lookup speed -- it is fixed so that a POINTER into it stays valid:
+  `process_find_by_pid` runs LOCK-FREE in the dispatch hot path, and
+  `cpu_local()->current_process` caches a raw `process_t*` across operations. A
+  container that rehashes or reallocates breaks exactly that, which is the hard
+  half; the lookup is the easy half.
+
+  The reach is also wider than the process table. Nine files size a PARALLEL
+  slot-indexed table from the same macro -- `wasm3/link.c` (`g_wasm_last_slots`,
+  `g_wasm_block_slots`, `g_wasm_fs_peer_slots`), `wasm3/shim.c`, `wasm_driver.c`,
+  `warp/link.cpp` (`PROCESS_MAX_COUNT * 32` overlay slots), `syscall.c`,
+  `native_driver.c` -- so swapping the process table alone fixes the wrong half
+  and leaves every one of those still bounded.
+
+  The shape that keeps the invariants is CHUNKED slabs, the pattern
+  `fs_manager`'s client-state list already uses in this tree: a chunk is
+  allocated once from `kmem_alloc` and never moves, so pointers stay valid and the
+  lock-free reader survives, while the table grows on demand. The per-runtime
+  parallel tables want folding into the process record (or into their own chunk
+  list) in the same pass, which is what makes this a piece of work rather than a
+  one-liner.
+
+  Mitigated meanwhile: `process_find_slot` reports the table filling at 3/4
+  occupancy and reports exhaustion, so the ceiling warns before it bites.
+
+- [ ] [BUG][P3] A refused service-class claim gets NO REPLY, so the registering
+  driver blocks in its bring-up call forever instead of learning it lost. The
+  class registry refuses a second owner claiming a live `(class, instance)`
+  (`service_class_registry_add`), and `pm_handle_register_desc` answers that — and
+  every other failure on the path, including the capability check — by returning
+  without sending a message (`src/kernel/process_manager_services.c`). A driver
+  calls this synchronously during bring-up (`driver.call`, `wasmos_svc_register`)
+  and has no timeout, so a duplicate instance is a hang rather than a diagnosable
+  failure. Answer with `SVC_IPC_ERROR` carrying a packed `WASMOS_ERR_PROC_*`.
+
+  Reachable today only by a genuine instance collision, which every shipped
+  provider derives so as to avoid; it becomes reachable the moment two providers
+  disagree about an identity.
 
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 
@@ -1833,6 +1994,38 @@ Source: `architecture/25-diagnostics-status.md`,
   Reproduces on CI and probably not on an Apple Silicon box: QEMU there runs
   `thread=single`, which masks memory-ordering races. Validate on Linux x86 with
   `-smp 4` over repeated boots.
+
+  A FIFTH face, and the first one that is not silence: the session stays fully
+  alive and the boot spins on a filesystem read it can never complete. Two
+  captures, both `warp_smp`, on `feat/vfs-tmpfs-root`:
+
+  - Local (Linux, TCG, `-smp 4`), `boot-and-init`: 20,449 consecutive
+    `[pm] spawn_path fs read failed:` lines, first for
+    `/boot/system/drivers/fs_wfs.wap` immediately after `[fat] fs.backend
+    registered`, then for `/boot/system/services/sysinit.wap` forever. The
+    thread table is HEALTHY -- 27 live, 22 blocked on their own endpoints,
+    `stranded(ready,no-rq)=0`, no `[diag]!    refused`, every `wait=select:`
+    line `q=0`. So none of the four causes above is present. init (tid=2) is
+    READY on a run queue with `disp=874454` and `ticks=3781`: it is not stuck,
+    it is retrying.
+  - CI run 33436808726 job 99635195798, `filesystem`: 14,829 of the same line,
+    and this one carries the cause immediately before the first failure --
+    `[pm] fs reply timed out; the filesystem never answered`
+    (`PM_FS_REPLY_TIMEOUT_MS`, 15 s) on `/boot/system/drivers/serial.wap`, while
+    volume-manager was probing a GPT on `block:virtio-blk:40`.
+
+  So the symptom's shape is: ONE filesystem read gets no answer, and the caller
+  retries the spawn forever at full speed. That the local capture reaches the
+  same storm WITHOUT a timeout line means at least one fast failure path gets
+  there too, which is why the log line now reports which of its four outcomes
+  fired and, for `FS_IPC_ERROR`, the backend's packed code
+  (`pm_fs_read_blob_for_spawn`); before that every one of those 20,449 lines was
+  the same unattributable string. Take the next capture with that in hand rather
+  than re-deriving it.
+
+  What this does NOT establish: why the filesystem stops answering, and whether
+  the unbounded retry is merely amplifying a transient or is itself holding the
+  system away from recovery. The retry has no backoff and no give-up.
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and
   reaches `arp sent`, then no `notify rx=` arrives, so it fails as an assertion

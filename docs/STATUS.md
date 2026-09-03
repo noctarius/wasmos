@@ -416,9 +416,10 @@ linked feature documents for rationale and rollout plans.
 
 - Default configuration: **WARP** runtime, single CPU. WARP is the default
   because a WARP guest runs at CPL=3 and is preempted like any other thread,
-  while the wasm3 interpreter and its guest both run at CPL=0 where a guest loop
-  with no host call in it holds its CPU until it returns (architecture/11,
-  *Which Workloads Reach Ring 3*) -- one heavy app stalls the desktop. wasm3
+  while the wasm3 interpreter -- the only runtime component at CPL=0 -- executes
+  its guest as a kernel-mode frame, so a guest loop with no host call in it holds
+  its CPU until it returns (architecture/11, *Which Workloads Reach Ring 3*) --
+  one heavy app stalls the desktop. wasm3
   remains fully supported and is the reference implementation the two runtimes
   are read against. Pin a runtime with
   `-DWASMOS_DOTCONFIG=configs/{wasm3,warp}_{single,smp}_defconfig`; a bare
@@ -431,7 +432,9 @@ linked feature documents for rationale and rollout plans.
   options are `WASMOS_RING3_SMOKE` and `WASMOS_RING3_THREAD_LIFECYCLE_SMOKE`,
   both test probes and both `=n` in the shipped defconfigs. Ring 3 is entered
   per workload, not per build: WARP guests run at CPL=3, while the wasm3
-  interpreter and the guest it interprets both run at CPL=0. See
+  interpreter runs at CPL=0 and interprets its guest there. A guest module has no
+  CPL of its own -- it is bytecode, so the interpreter's privilege level is the
+  one in effect, and nothing about a wasm3 process's address space follows. See
   `architecture/11` *Which Workloads Reach Ring 3* for the entry paths and what
   follows from them (notably that a wasm3 guest is never timer-preempted).
 - WARP QEMU CPU model: the run/test QEMU commands pass `-cpu max`
@@ -853,22 +856,110 @@ linked feature documents for rationale and rollout plans.
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
+- FS backends hold NO working directory. `FS_IPC_READDIR` carries the directory
+  to list, `FS_IPC_CHDIR` is client-to-fs-manager only, and fs-manager validates
+  a chdir with `FS_IPC_STAT_REQ`. Removed from all four backends (fs-tmpfs,
+  fs-wfs, fs-fat, fs-init) along with their per-client tables. This deletes a
+  CHDIR round trip before every listing, and the cross-request ordering
+  constraint that made a listing depend on the previous request -- which was the
+  one protocol obstacle to fs-manager ever serving requests concurrently.
+
+  Two defects surfaced and were fixed with it, both pre-existing and both about
+  the STAT reply's mode, which is now contractually required to carry the file
+  TYPE bits: WFS reported the on-disk permission bits with no type, so `S_ISDIR`
+  on a WFS path was false for every directory; and fs-init implemented no STAT at
+  all. FAT additionally could not stat its own mount root, which has no on-disk
+  entry.
+- A mount can be REMOVED. `FSMGR_IPC_UNMOUNT_REQ` names it by the absolute path
+  it occupies, refuses with `WASMOS_ERR_FS_MOUNT_BUSY` while a deeper mount or an
+  open file is still inside it, quiesces the backend
+  (`WASMOS_IPC_SHUTDOWN_REQ` / `WASMOS_SHUTDOWN_REASON_UNMOUNT`) and drops it.
+  The mount POINT stays, so the covering filesystem's content at that path
+  becomes visible again -- shadowing now demonstrated in both directions
+  (`tests/test_vfs_root_mount.py::VfsUnmountTest`). A client whose working
+  directory is under the mount does NOT make it busy, because fs-manager never
+  releases client state and a cwd left by an exited process would pin the mount
+  forever (`docs/TASKS.md`). The backend process itself survives its unmount.
+- A mount can be ESTABLISHED at runtime. `FSMGR_IPC_MOUNT_REQ` carries a
+  `type=`/`mount=`/`source=` descriptor; fs-manager validates it and has the
+  process manager spawn the driver, which is handed `mount=` (and `id=<source>`)
+  as startup arguments -- the same contract a device-manager rule's `ENV{MOUNT}`
+  uses, so placement is one mechanism from either direction. Types: `tmpfs`,
+  `fat`, `wfs`; a source is required for the two with a device.
+
+  The reply is DEFERRED and must be: the process manager reads the driver module
+  through fs-manager, so an fs-manager blocked on the spawn reply is the one
+  service unable to answer that read, and the spawn fails with "the filesystem
+  never answered". This was measured, not anticipated -- the first implementation
+  blocked and deadlocked exactly there. One mount is in flight at a time
+  (`WASMOS_ERR_FS_BUSY` otherwise).
+- `FS_BACKEND_CAP` is 16, up from 8. A default boot uses seven mounts, so the old
+  ceiling left room for exactly one runtime mount; exhaustion is now reported
+  instead of dropping a started filesystem silently.
+- `mount` and `umount` are utilities under `/system/utils`, not shell built-ins:
+  `mount` was extracted from the CLI so the table always comes from the service
+  that owns it. `mount -t <type> <path> [source]` places one; bare `mount`
+  reports the table.
+- `fs-tmpfs` (`src/drivers/fs_tmpfs/`, Zig) is a read-write filesystem held in
+  its own linear memory, reporting `FSMGR_BACKEND_PSEUDO` + `FS_TYPE_TMPFS`. It
+  is a general in-memory filesystem, not a root-specific one: the mount comes
+  from the `mount=` startup argument and defaults to `/`, the class instance is a
+  FINGERPRINT of that path, and a second instance mounted elsewhere has its own
+  separate contents. The kernel's init sequence spawns the root instance between
+  `fs-manager` and `fs-init`, so it exists before any volume mounts.
+  Capacity is a fixed 192-entry node table over a block pool that GROWS in 32 KiB
+  chunks taken from `memory.grow`: 16 KiB of static data, an 8 MiB ceiling, and
+  an instance storing nothing costs a table of null pointers. A chunk is never
+  moved or freed, so a block index stays stable. Growth verified under both
+  wasm3 and WARP; the manifest's `max_memory` must exceed `initial_memory` or
+  `memory.grow` is refused and the pool cannot grow at all. Contents are not
+  persisted. Implements OPEN/READ/WRITE/SEEK/CLOSE/STAT/READDIR/CHDIR/MKDIR/
+  RMDIR/UNLINK/RENAME. The namespace and storage core is split into
+  `fs_tmpfs_store.zig`, which depends on the guest only through a `chunk_source`
+  seam and is therefore unit-tested on the host
+  (`tests/unit/test_fs_tmpfs_store.zig`, 25 cases, run by
+  `run-kernel-unit-tests`); the IPC layer above it needs a running guest.
+  `NAME_MAX` is 255, matching `WFS_NAME_MAX`, so a filename valid on another
+  mount is creatable on a tmpfs; the node table costs 50 KiB for that parity.
+  `FSMGR_CWD_MAX` (128) still bounds the working directory a client can hold, on
+  every mount alike.
+- MOUNTED AT `/`. `fs-manager` holds a mount as an absolute canonical PATH
+  (`fs_backend_t.mount_path`, 64 bytes) and routes a request to the longest such
+  path prefixing it on a whole-segment boundary, so `/` is the owner of last
+  resort, `/wfs` does not own `/wfsx`, and a mount at `/mnt/usb` outranks `/mnt`
+  without a special case. A mount POINT is a directory `fs-manager` creates in the
+  filesystem covering it (`fsmgr_ensure_mount_points`, ancestors included), which
+  is what retired `send_virtual_root_listing`: `ls /` is an ordinary forwarded
+  readdir whose entries the root filesystem actually holds. `cd /` on a system
+  with nothing mounted at `/` still succeeds and lists nothing. Pinned end to end
+  by `tests/test_vfs_root_mount.py` (filesystem battery, 17 cases). A
+  `SUBSYSTEM=="boot"` rule carries `ENV{MOUNT}` now, delivered as a `mount=`
+  startup argument, which places a filesystem that has no backing device: two
+  tmpfs instances sit at `/home/user` (a mount at depth, ancestors created in the
+  root filesystem) and `/wfs/nested` (a mount inside a mount, point created in the
+  WFS volume, shadowing the file the volume holds there). Neither needs a disk.
+  `src/utils/mkdir/` is
+  the CLI tool that exercises it: `mkdir [-p] <dir>...`, where `-p` creates every
+  missing ancestor and treats an existing directory as success. A second tmpfs instance
+  is still not spawnable from a rule file: `SUBSYSTEM=="boot"` rules parse only
+  `SUBSYSTEM` and `RUN`, so they cannot carry `ENV{MOUNT}`.
 - A backend reports its filesystem as `FS_TYPE_*` in `FSMGR_IPC_BACKEND_INFO_RESP`
   `arg1`, separately from `kind`; initfs reports `FS_TYPE_INITFS`, so a
   pseudo-filesystem is a value in that enum and a future devfs or sysfs needs no
   branch where a mount is named. `kind` only separates block-backed from initfs,
   so every block-backed backend shares one value; `mount` previously named the
   filesystem from it and reported both WFS volumes as `fs-fat`. The root
-  filesystem is likewise selected by mount name rather than by position in the
+  filesystem is likewise selected by its mount PATH rather than by position in the
   registration table, which had made it a function of registration order
   (`fs_manager_backends.c`, `tests/unit/test_fs_manager_backends.c`).
 - The working directory is a full canonical VFS path owned by `fs-manager`: every
   client path is joined onto it before routing, a spawned process inherits its
   spawner's path by copy, and `FS_IPC_CHDIR` reports the resolved path back so no
-  client keeps a second copy. Routing then acts on an absolute path only — a path
-  whose first segment names no mount belongs to the boot volume as the ROOT
-  filesystem (`/system/utils/ip`, `/apps/calculator`), which is a routing rule
-  rather than a guess about a client that named no directory.
+  client keeps a second copy. Routing then acts on an absolute path only, and a
+  path whose first segment names no mount is NOT SERVED: the caller reports
+  `WASMOS_ERR_FS_NOT_FOUND`. There is deliberately no fallback backend — the one
+  that passed such a path to the boot volume made `/system/utils/ip` a second
+  name for `/boot/system/utils/ip` that appeared in no listing.
 - `FS_IPC_CHDIR` carries its target as a path in a transfer buffer, so `cd` takes
   one request at any depth and reaches directory names up to a backend's own
   maximum (255 bytes for WFS) instead of the 15 that fit in the argument words.
@@ -1166,8 +1257,17 @@ linked feature documents for rationale and rollout plans.
 
 ## Services and System Startup
 
-- Startup order is `init` -> `fs-manager`/`fs-init` -> `device-manager` ->
-  `sysinit`. Readiness gating prevents dependent boot steps from racing ahead.
+- `PROCESS_MAX_COUNT` is 64. It was 48, and the ring3 boot tree was sitting
+  exactly on that ceiling -- it runs the ring3 probe processes on top of a full
+  desktop boot -- so adding one long-lived driver exhausted the table and
+  `sysinit` could not start the CLI. Exhaustion was silent at every layer: the
+  spawn failed, the process manager sent no reply, and `sysinit` reported a bare
+  "start failed". `process_find_slot` now logs it, edge-triggered.
+- Startup order is `init` -> `fs-manager` -> `fs-tmpfs` -> `fs-init` ->
+  `device-manager` -> `sysinit`. Readiness gating prevents dependent boot steps
+  from racing ahead. `fs-tmpfs` precedes `fs-init` and `device-manager` because a
+  mount point is a directory in the root filesystem, so the root has to be
+  mounted before anything mounts onto it.
 - `device-manager` consumes PCI/ACPI inventory and bootstrap/runtime rules,
   spawning drivers with matched capabilities and optional startup identity.
 - `chardev` is a normal initfs WASM driver started by a boot rule and registered

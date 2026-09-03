@@ -1,0 +1,6 @@
+This file is inside the /wfs volume, at /wfs/nested/covered.txt.
+
+A tmpfs is mounted over /wfs/nested, so this file is UNREACHABLE while that mount
+stands -- which is what shadowing means. tests/test_vfs_root_mount.py asserts that
+`ls /wfs/nested` does not show it, and that it comes back when read through no
+mount. It exists only to be covered.

@@ -134,18 +134,22 @@ void serial_early_log_copy(uint8_t* dst, uint32_t offset, uint32_t len);
 
 /* Diagnostic output that compiles away entirely when WASMOS_TRACE is 0: trace_write and
  * trace_write_unlocked become `((void)0)` and trace_do drops its statement, so the
- * argument is not evaluated and must have no side effects the code depends on. */
+ * argument is not evaluated and must have no side effects the code depends on.
+ *
+ * trace_do is variadic so that a call carrying its own commas -- a serial_printf with
+ * arguments -- passes through as ONE statement; a fixed single-parameter macro splits
+ * such a call across parameters and fails to compile. */
 #if WASMOS_TRACE
 #define trace_write(s) serial_write(s)
 #define trace_write_unlocked(s) serial_write_unlocked(s)
-#define trace_do(stmt)                                                                             \
+#define trace_do(...)                                                                              \
     do {                                                                                           \
-        stmt;                                                                                      \
+        __VA_ARGS__;                                                                               \
     } while (0)
 #else
 #define trace_write(s) ((void)0)
 #define trace_write_unlocked(s) ((void)0)
-#define trace_do(stmt) ((void)0)
+#define trace_do(...) ((void)0)
 #endif
 
 #endif

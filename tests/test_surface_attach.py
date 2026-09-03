@@ -24,6 +24,14 @@ own logs:
   detach ok       after the window is gone the surface withdraws cleanly, which
                   is what returns the entry to the 32-slot native borrow-mapping
                   pool shared by every native service
+  remap ok        a SECOND overlay maps after the first was unmapped, and is
+                  writable. Mapping one over slot-backed linear memory frees that
+                  page's own frame, so the unmap has to put one back; without it
+                  the page stays inside the committed count with nothing behind
+                  it, the kernel refuses to publish the ring-3 window for the
+                  whole allocation, and every later map fails -- in any process
+                  that resizes a window, since libui unmaps on every resize.
+                  Regression: 2026-09-02-overlay-unmap-leaves-uncommitted-page
 
 The app exits non-zero on any failure, but each stage prints its own marker so a
 red run says which one broke rather than only that it broke.
@@ -71,6 +79,7 @@ class SurfaceAttachTest(unittest.TestCase):
             b"[test] surface attach present ok",
             b"[test] surface attach busy deny ok",
             b"[test] surface attach detach ok",
+            b"[test] surface attach remap ok",
             b"[test] surface attach done",
         ):
             if not self.session.expect_from(mark, needle, timeout_s=60):

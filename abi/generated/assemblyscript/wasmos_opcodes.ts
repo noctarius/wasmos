@@ -216,6 +216,18 @@ export const BLOCK_IPC_ERROR: i32 = 0x3FF;
 export const FS_IPC_OPEN_REQ: i32 = 0x400;
 export const FS_IPC_READ_REQ: i32 = 0x401;
 export const FS_IPC_CLOSE_REQ: i32 = 0x402;
+// Report a path's size in the reply's arg0 and its POSIX-shaped mode in
+// arg1.
+//
+// The mode MUST carry the file TYPE bits (S_IFDIR 0x4000, S_IFREG 0x8000,
+// S_IFLNK 0xA000), not permission bits alone. Two consumers read the type
+// out of it and have nothing else to read: libc's S_ISDIR, and
+// fs-manager when it validates a chdir target. A backend that reports
+// permissions alone describes every directory it holds as a regular file.
+//
+// A backend must answer for its own mount ROOT, which typically has no
+// on-disk entry describing it: a volume whose root cannot be stat'd is a
+// mount nobody can stand at the top of.
 export const FS_IPC_STAT_REQ: i32 = 0x403;
 export const FS_IPC_READY_REQ: i32 = 0x404;
 export const FS_IPC_SEEK_REQ: i32 = 0x405;
@@ -223,7 +235,33 @@ export const FS_IPC_WRITE_REQ: i32 = 0x406;
 export const FS_IPC_UNLINK_REQ: i32 = 0x407;
 export const FS_IPC_MKDIR_REQ: i32 = 0x408;
 export const FS_IPC_RMDIR_REQ: i32 = 0x409;
+// List a directory, streaming one FS_IPC_STREAM frame per entry and
+// terminating with FS_IPC_RESP.
+//
+// The two legs carry different things. From a CLIENT it names no path:
+// fs-manager owns the working directory, so a client supplying one would
+// have to know a path fs-manager is the authority on. To the BACKEND it
+// carries the mount-relative path in fs-manager's own buffer -- arg0 =
+// length, arg2 = buffer id, arg3 = the grant -- exactly like every other
+// path op.
+//
+// A backend therefore holds NO working directory. It previously listed
+// whichever directory it last been told to stand in, which cost a CHDIR
+// round trip before every listing and made the result depend on the
+// previous request rather than on this one.
 export const FS_IPC_READDIR_REQ: i32 = 0x410;
+// Change the working directory. CLIENT to fs-manager ONLY: fs-manager
+// owns the working directory as a full VFS path and resolves every client
+// path against it, so a backend that also kept one would hold a second
+// copy of state it is not the authority on.
+//
+// fs-manager validates the target with FS_IPC_STAT_REQ and reads the type
+// out of the reported mode. It does not send a backend a CHDIR; nothing
+// does.
+//
+// arg0 = path length, arg2 = the client's buffer, arg3 = the grant. A
+// zero length names the VFS root. The reply reports the resolved absolute
+// path in arg1, since arg0 carries the status.
 export const FS_IPC_CHDIR_REQ: i32 = 0x412;
 export const FS_IPC_READ_APP_REQ: i32 = 0x413;
 export const FS_IPC_READ_PATH_REQ: i32 = 0x414;
@@ -232,7 +270,7 @@ export const FS_IPC_RESP: i32 = 0x480;
 export const FS_IPC_STREAM: i32 = 0x481;
 export const FS_IPC_ERROR: i32 = 0x4FF;
 
-// fs_manager (0x420..0x4A2)
+// fs_manager (0x420..0x4A4)
 // fs-manager -> backend pull: report kind/fs-type/mount/unit into a buffer
 // the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
 // arg1=fs_type, arg2=mount_name_len, arg3=unit. Backends are discovered
@@ -272,9 +310,80 @@ export const FS_IPC_ERROR: i32 = 0x4FF;
 export const FSMGR_IPC_BACKEND_INFO_REQ: i32 = 0x420;
 export const FSMGR_IPC_CLONE_CWD_REQ: i32 = 0x421;
 export const FSMGR_IPC_QUERY_MOUNTS_REQ: i32 = 0x422;
+// Remove a mount, named by its absolute mount PATH. arg0 = path length,
+// arg2 = the client's buffer holding it, arg3 = the client's grant -- the
+// transport FS_IPC_CHDIR_REQ uses, and for the same reason: a path can
+// grow, so it does not belong in the four argument words.
+//
+// Refused with WASMOS_ERR_FS_MOUNT_BUSY while anything still stands in the
+// mount: a deeper mount inside it, or an open file on it. The root is
+// therefore normally busy, because every other mount is inside it, rather
+// than by a rule written for the root.
+//
+// A client whose WORKING DIRECTORY is under the mount is NOT counted,
+// though Linux refuses on exactly that. fs-manager never releases a
+// client's state -- nothing tells it a client died -- so a working
+// directory recorded by a process that has since exited would refuse the
+// unmount forever. See docs/TASKS.md for the mechanism that has to exist
+// before the rule can be added.
+//
+// The mount POINT is left in place. It is a directory in the covering
+// filesystem, and removing it would delete state the mount only borrowed;
+// an empty directory left behind is harmless, and the next mount at that
+// path reuses it. What DOES come back is whatever the covering filesystem
+// held underneath, because routing stops preferring the mount -- the other
+// half of shadowing.
+//
+// The backend is told to shut down (WASMOS_IPC_SHUTDOWN_REQ) before it is
+// dropped, so a filesystem holding dirty state gets the chance every
+// orderly teardown gets; WFS writes its clean mark there. A backend that
+// does not answer is dropped anyway: the namespace is fs-manager's to
+// decide, and a wedged driver must not be able to keep a mount alive.
+export const FSMGR_IPC_UNMOUNT_REQ: i32 = 0x423;
+// Establish a mount. arg0 = descriptor length, arg2 = the client's buffer
+// holding the descriptor, arg3 = the client's grant.
+//
+// The descriptor is whitespace-separated `key=value` text, not a packed
+// struct, because what a filesystem needs to be placed differs per type
+// and the set grows:
+//
+//   type=<tmpfs|fat|wfs>   which filesystem to place. Required.
+//   mount=<absolute path>  where it goes. Required.
+//   source=<canonical block id>
+//                          which volume backs it, e.g. `block:ata:0p1`.
+//                          Required for every type that has a device;
+//                          refused for one that has none.
+//
+// fs-manager does not implement a filesystem: it SPAWNS the driver for
+// `type` and hands it `mount=` (and `id=<source>` for a disk-backed one)
+// as startup arguments, which is the same contract a device-manager rule's
+// ENV{MOUNT} uses. Placement is therefore one mechanism whether a mount
+// comes from a boot rule or from this request.
+//
+// `source` is required rather than optional for a disk-backed type even
+// though the drivers can self-select a volume: a mount that picks its own
+// device is not the mount the caller asked for, and there is no way for
+// the caller to find out which one it got.
+//
+// On success the mount IS in the table -- fs-manager re-runs backend
+// discovery before replying rather than waiting for the class event to
+// arrive on its own, so a caller that immediately queries the mount table
+// sees it. arg1 of the reply carries the driver's pid.
+//
+// Refusals: WASMOS_ERR_FS_MOUNT_EXISTS when that path is already a mount
+// (a mount is not stacked on another at the same path);
+// WASMOS_ERR_FS_MOUNT_FSTYPE for a type with no driver, or for a
+// type/source combination that cannot be satisfied;
+// WASMOS_ERR_FS_NOT_ABSOLUTE for a path that is not absolute. A driver
+// that fails to reach readiness is reported as WASMOS_ERR_FS_NOT_READY --
+// nothing is left in the table in that case, because the entry only
+// appears when the backend registers.
+export const FSMGR_IPC_MOUNT_REQ: i32 = 0x424;
 export const FSMGR_IPC_BACKEND_INFO_RESP: i32 = 0x4A0;
 export const FSMGR_IPC_CLONE_CWD_RESP: i32 = 0x4A1;
 export const FSMGR_IPC_QUERY_MOUNTS_RESP: i32 = 0x4A2;
+export const FSMGR_IPC_UNMOUNT_RESP: i32 = 0x4A3;
+export const FSMGR_IPC_MOUNT_RESP: i32 = 0x4A4;
 
 // fbtext (0x600..0x6FF)
 export const FBTEXT_IPC_CELL_WRITE_REQ: i32 = 0x600;

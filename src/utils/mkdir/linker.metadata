@@ -1,0 +1,23 @@
+version = 1
+
+[package]
+name = "mkdir"
+entry = "wasmos_main"
+kind = "app"
+native = false
+aot = true
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[ipc]
+required_endpoint_name = "proc"
+required_endpoint_rights = 0
+
+# Only ipc.basic: every directory is created by an FS_IPC_MKDIR_REQ through
+# libc, so this tool reaches the filesystem as a client of fs-manager and touches
+# nothing else.
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

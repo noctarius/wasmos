@@ -149,6 +149,8 @@ export const FS_TYPE_FAT: i32 = 1;
 export const FS_TYPE_WFS: i32 = 2;
 // initfs; the boot-image filesystem served from memory. Pseudo-filesystem: self-reported by its backend, never returned by a recogniser.
 export const FS_TYPE_INITFS: i32 = 3;
+// tmpfs; a read-write filesystem held in its backend's own memory, which serves the VFS root so that a mount point is a real directory. Pseudo-filesystem: self-reported by its backend, never returned by a recogniser.
+export const FS_TYPE_TMPFS: i32 = 4;
 
 // block_descriptor_flags (flag bits)
 // Bits of the `flags` field of wasmos_block_descriptor_t.

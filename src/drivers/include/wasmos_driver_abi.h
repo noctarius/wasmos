@@ -324,9 +324,8 @@ enum { PROC_STATUS_UNKNOWN = 0, PROC_STATUS_RUNNING = 1, PROC_STATUS_ZOMBIE = 2 
  * BLOCK in particular is not "the volume the system booted from": one backend
  * registers per mounted volume, so several report it in an ordinary boot.
  * Reading it as the boot volume is what made `mount` name every volume after
- * FAT and made the root filesystem depend on registration order. Use the mount
- * name to identify the root filesystem (FSMGR_ROOT_MOUNT_NAME) and FS_TYPE_* to
- * identify the filesystem. */
+ * FAT and made the root filesystem depend on registration order. Identify a
+ * mount by its mount name and a filesystem by its FS_TYPE_*. */
 enum { FSMGR_BACKEND_BLOCK = 1, FSMGR_BACKEND_PSEUDO = 2 };
 
 /* Pack a (kind, unit) pair into the single class-registry instance index a
@@ -834,10 +833,22 @@ enum { WASMOS_PCI_MSI_KIND_NONE = 0, WASMOS_PCI_MSI_KIND_MSI = 1, WASMOS_PCI_MSI
  * is edge-triggered and exclusively owned, so nothing is masked waiting for one. */
 #define WASMOS_IPC_MSI_EVENT_TYPE 0xFF01
 
-/* arg0 of WASMOS_IPC_SHUTDOWN_REQ: why the machine is going down. A participant
- * quiesces the same way for both -- the distinction is for one that wants to
- * skip work a reboot makes pointless, not for one that persists state. */
-enum { WASMOS_SHUTDOWN_REASON_HALT = 0, WASMOS_SHUTDOWN_REASON_REBOOT = 1 };
+/* arg0 of WASMOS_IPC_SHUTDOWN_REQ: why the participant is being quiesced. HALT
+ * and REBOOT are the machine going down, and a participant quiesces the same way
+ * for both -- the distinction is for one that wants to skip work a reboot makes
+ * pointless, not for one that persists state.
+ *
+ * UNMOUNT is narrower and is NOT the machine going down: fs-manager sends it to
+ * ONE filesystem backend whose mount is being removed while the system keeps
+ * running (FSMGR_IPC_UNMOUNT_REQ). The quiesce owed is the same -- flush, then
+ * answer WASMOS_IPC_SHUTDOWN_DONE -- but a backend that receives it is losing
+ * its place in the namespace rather than its machine, so anything it would skip
+ * "because we are going down anyway" it must still do. */
+enum {
+    WASMOS_SHUTDOWN_REASON_HALT = 0,
+    WASMOS_SHUTDOWN_REASON_REBOOT = 1,
+    WASMOS_SHUTDOWN_REASON_UNMOUNT = 2
+};
 
 /* One physical-address window a driver is permitted to program a device to DMA
  * into or out of. `base` is a physical address and `length` a byte count; the

@@ -62,7 +62,7 @@ const (
 	WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG int32 = -0x00010005 // args exceed the xfer buffer
 	WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF int32 = -0x00010006 // PM xfer buffer missing
 	WASMOS_ERR_PROC_SPAWN_FS_READ int32 = -0x00010007 // reading the app blob from FS failed
-	WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED int32 = -0x00010008 // process create/start failed (e.g. no free slot)
+	WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED int32 = -0x00010008 // process create/start failed. Deliberately does NOT name a cause: several distinct failures reach it (no free process slot, address-space setup, thread creation, capability application), and the kernel reports the one it hit -- table exhaustion prints "[process] table full". An earlier description offered "e.g. no free slot" and callers turned that example into a diagnosis
 	WASMOS_ERR_PROC_SPAWN_BROKER_IPC int32 = -0x00010009 // broker plan IPC transport/reply failed
 	WASMOS_ERR_PROC_SPAWN_BROKER_PLAN int32 = -0x0001000A // broker replied with malformed/unsupported plan
 	WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED int32 = -0x0001000B // valid broker plan returned; PM launch step deferred
@@ -94,6 +94,9 @@ const (
 	WASMOS_ERR_PROC_PM_NO_PM_FSBUF int32 = -0x0002001A // PM could not acquire its own xfer buffer
 	WASMOS_ERR_LINMEM_NO_WINDOW int32 = -0x00030001 // no free page-aligned window fits in linear memory
 	WASMOS_ERR_LINMEM_MAP int32 = -0x00030002 // paging/linear-memory mapping step failed
+	WASMOS_ERR_LINMEM_NO_BASE int32 = -0x00030003 // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
+	WASMOS_ERR_LINMEM_MISALIGNED int32 = -0x00030004 // the window offset that was placed is not 4 KiB aligned, so it cannot be mapped by page. An invariant violation rather than a shortage -- the placement search only yields aligned offsets, so reaching this means the linear-memory base itself is unaligned
+	WASMOS_ERR_LINMEM_USER_WINDOW int32 = -0x00030005 // the ring-3 USER-VA window over linear memory could not be synced or installed, so the guest would see a mapping the kernel's own alias does not agree with. Distinct from MAP, which is the kernel-side paging step: this one is the second, user-visible half that only ring-3 guests have
 	WASMOS_ERR_FS_BAD_ARGS int32 = -0x00040001 // invalid flags/args (len 0, bad access mode, reserved arg set)
 	WASMOS_ERR_FS_PATH_TOO_LONG int32 = -0x00040002 // path length exceeds the path or xfer buffer
 	WASMOS_ERR_FS_BUFFER int32 = -0x00040003 // xfer-buffer read/write/size call failed
@@ -133,7 +136,10 @@ const (
 	WASMOS_ERR_FS_JOURNAL int32 = -0x00040025 // the metadata journal is unusable: its superblock does not identify a log, does not verify, or names a geometry too small for one transaction. Distinct from CORRUPT, which names a filesystem structure, because a damaged log costs writability rather than readability
 	WASMOS_ERR_FS_TXN_FULL int32 = -0x00040026 // a metadata transaction names more blocks than one journal descriptor carries, or more revokes than one revoke record does; the operation is refused whole rather than split across two transactions that a crash could separate
 	WASMOS_ERR_FS_REPLAY int32 = -0x00040027 // journal replay stopped: a committed block image did not match the checksum its descriptor recorded, so applying the transaction would write a partial one. The volume mounts read-only for fsck
-	WASMOS_ERR_FS_NEED_BLOCK int32 = -0x00040028 // the operation needs a free block the caller did not supply, and nothing has been modified: an extent-tree insert that must SPLIT a full leaf needs a block for the new leaf, and the first such split needs one more for the interior root above it. The caller allocates and retries rather than the operation nesting an allocator inside itself
+	WASMOS_ERR_FS_MOUNT_BUSY int32 = -0x00040028 // a mount cannot be removed while something still stands in it: a deeper mount inside it, or an open file on it. Distinct from OPEN, which names one file, and from BUSY, which is a retryable shortage of op-context slots -- this one is a statement about the namespace and is resolved by whoever is standing there leaving, not by retrying. The root is normally busy for exactly this reason, since every other mount is inside it
+	WASMOS_ERR_FS_NEED_BLOCK int32 = -0x00040029 // the operation needs a free block the caller did not supply, and nothing has been modified: an extent-tree insert that must SPLIT a full leaf needs a block for the new leaf, and the first such split needs one more for the interior root above it. The caller allocates and retries rather than the operation nesting an allocator inside itself
+	WASMOS_ERR_FS_MOUNT_EXISTS int32 = -0x0004002A // a mount already occupies that path. Mounts do not stack: two filesystems at one path would make routing pick between them by registration order, and the covered one unreachable with no way to name it. Distinct from EXISTS, which is a file or directory the caller tried to create -- a mount point is expected to exist already
+	WASMOS_ERR_FS_MOUNT_FSTYPE int32 = -0x0004002B // the named filesystem type has no driver, or the type and source given cannot be satisfied together: a disk-backed type with no source names no volume, and a memory-backed type with one names a device it would ignore. Distinct from UNSUPPORTED, which is an unknown REQUEST type rather than an unknown filesystem
 	WASMOS_ERR_NET_WOULD_BLOCK int32 = -0x00050001 // operation is deferred; completion arrives as a later event (retryable)
 	WASMOS_ERR_NET_INVALID int32 = -0x00050002 // invalid request arguments (socket, address, or length)
 	WASMOS_ERR_NET_NOT_READY int32 = -0x00050003 // interface or socket is not in a state that permits the operation
@@ -153,6 +159,7 @@ const (
 	WASMOS_ERR_GFX_UNSUPPORTED int32 = -0x00060008 // unknown or unsupported compositor request
 	WASMOS_ERR_GFX_BUSY int32 = -0x00060009 // compositor has no free window/buffer slot (retryable)
 	WASMOS_ERR_GFX_IO int32 = -0x0006000A // framebuffer or shared-buffer operation failed
+	WASMOS_ERR_GFX_NO_REPLY int32 = -0x0006000B // a compositor request could not be delivered, or no reply arrived: the send exhausted its retries against a full destination queue, or the reply endpoint faulted. Distinct from every other code in this domain, which is the compositor's VERDICT on a request it received -- this one means it may never have seen it, so the request stands unanswered rather than refused, and the caller's state is whatever it was before
 	WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT int32 = -0x00070001 // spawn info carried no process-manager endpoint
 	WASMOS_ERR_DRIVER_ENDPOINT_CREATE int32 = -0x00070002 // the driver could not create its own IPC endpoint
 	WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY int32 = -0x00070003 // startup args carry no valid device identity for this driver
@@ -242,6 +249,8 @@ const (
 	WASMOS_ERR_KERNEL_UNALIGNED int32 = -0x00130006 // an address or size is not page-aligned
 	WASMOS_ERR_KERNEL_NO_WINDOW int32 = -0x00130007 // guest linear memory has no window the mapping can occupy
 	WASMOS_ERR_KERNEL_MAP_FAILED int32 = -0x00130008 // the paging step failed
+	WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT int32 = -0x00130009 // the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force
+	WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED int32 = -0x0013000A // an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution
 	WASMOS_ERR_BLOCK_NO_SLOT int32 = -0x00140001 // no per-process block slot is available
 	WASMOS_ERR_BLOCK_NO_BACKING int32 = -0x00140002 // no physical backing could be obtained for the buffer
 	WASMOS_ERR_BLOCK_ABOVE_4G int32 = -0x00140003 // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
@@ -396,7 +405,7 @@ func WasmosStrerror(c int32) string {
 	case WASMOS_ERR_PROC_SPAWN_FS_READ:
 		return "reading the app blob from FS failed"
 	case WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED:
-		return "process create/start failed (e.g. no free slot)"
+		return "process create/start failed. Deliberately does NOT name a cause: several distinct failures reach it (no free process slot, address-space setup, thread creation, capability application), and the kernel reports the one it hit -- table exhaustion prints \"[process] table full\". An earlier description offered \"e.g. no free slot\" and callers turned that example into a diagnosis"
 	case WASMOS_ERR_PROC_SPAWN_BROKER_IPC:
 		return "broker plan IPC transport/reply failed"
 	case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN:
@@ -459,6 +468,12 @@ func WasmosStrerror(c int32) string {
 		return "no free page-aligned window fits in linear memory"
 	case WASMOS_ERR_LINMEM_MAP:
 		return "paging/linear-memory mapping step failed"
+	case WASMOS_ERR_LINMEM_NO_BASE:
+		return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it"
+	case WASMOS_ERR_LINMEM_MISALIGNED:
+		return "the window offset that was placed is not 4 KiB aligned, so it cannot be mapped by page. An invariant violation rather than a shortage -- the placement search only yields aligned offsets, so reaching this means the linear-memory base itself is unaligned"
+	case WASMOS_ERR_LINMEM_USER_WINDOW:
+		return "the ring-3 USER-VA window over linear memory could not be synced or installed, so the guest would see a mapping the kernel's own alias does not agree with. Distinct from MAP, which is the kernel-side paging step: this one is the second, user-visible half that only ring-3 guests have"
 	case WASMOS_ERR_FS_BAD_ARGS:
 		return "invalid flags/args (len 0, bad access mode, reserved arg set)"
 	case WASMOS_ERR_FS_PATH_TOO_LONG:
@@ -537,8 +552,14 @@ func WasmosStrerror(c int32) string {
 		return "a metadata transaction names more blocks than one journal descriptor carries, or more revokes than one revoke record does; the operation is refused whole rather than split across two transactions that a crash could separate"
 	case WASMOS_ERR_FS_REPLAY:
 		return "journal replay stopped: a committed block image did not match the checksum its descriptor recorded, so applying the transaction would write a partial one. The volume mounts read-only for fsck"
+	case WASMOS_ERR_FS_MOUNT_BUSY:
+		return "a mount cannot be removed while something still stands in it: a deeper mount inside it, or an open file on it. Distinct from OPEN, which names one file, and from BUSY, which is a retryable shortage of op-context slots -- this one is a statement about the namespace and is resolved by whoever is standing there leaving, not by retrying. The root is normally busy for exactly this reason, since every other mount is inside it"
 	case WASMOS_ERR_FS_NEED_BLOCK:
 		return "the operation needs a free block the caller did not supply, and nothing has been modified: an extent-tree insert that must SPLIT a full leaf needs a block for the new leaf, and the first such split needs one more for the interior root above it. The caller allocates and retries rather than the operation nesting an allocator inside itself"
+	case WASMOS_ERR_FS_MOUNT_EXISTS:
+		return "a mount already occupies that path. Mounts do not stack: two filesystems at one path would make routing pick between them by registration order, and the covered one unreachable with no way to name it. Distinct from EXISTS, which is a file or directory the caller tried to create -- a mount point is expected to exist already"
+	case WASMOS_ERR_FS_MOUNT_FSTYPE:
+		return "the named filesystem type has no driver, or the type and source given cannot be satisfied together: a disk-backed type with no source names no volume, and a memory-backed type with one names a device it would ignore. Distinct from UNSUPPORTED, which is an unknown REQUEST type rather than an unknown filesystem"
 	case WASMOS_ERR_NET_WOULD_BLOCK:
 		return "operation is deferred; completion arrives as a later event (retryable)"
 	case WASMOS_ERR_NET_INVALID:
@@ -577,6 +598,8 @@ func WasmosStrerror(c int32) string {
 		return "compositor has no free window/buffer slot (retryable)"
 	case WASMOS_ERR_GFX_IO:
 		return "framebuffer or shared-buffer operation failed"
+	case WASMOS_ERR_GFX_NO_REPLY:
+		return "a compositor request could not be delivered, or no reply arrived: the send exhausted its retries against a full destination queue, or the reply endpoint faulted. Distinct from every other code in this domain, which is the compositor's VERDICT on a request it received -- this one means it may never have seen it, so the request stands unanswered rather than refused, and the caller's state is whatever it was before"
 	case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT:
 		return "spawn info carried no process-manager endpoint"
 	case WASMOS_ERR_DRIVER_ENDPOINT_CREATE:
@@ -755,6 +778,10 @@ func WasmosStrerror(c int32) string {
 		return "guest linear memory has no window the mapping can occupy"
 	case WASMOS_ERR_KERNEL_MAP_FAILED:
 		return "the paging step failed"
+	case WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT:
+		return "the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force"
+	case WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED:
+		return "an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution"
 	case WASMOS_ERR_BLOCK_NO_SLOT:
 		return "no per-process block slot is available"
 	case WASMOS_ERR_BLOCK_NO_BACKING:

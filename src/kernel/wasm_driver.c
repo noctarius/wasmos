@@ -1,7 +1,10 @@
 /* wasm_driver.c - wasm3 WASM module loader and driver/service instance runner.
  * Instantiates a wasm3 environment and runtime per driver, registers all
  * hardware and IPC hostcall imports, and runs the module's entry export.  The
- * interpreter and its guest both execute in ring 0.
+ * interpreter executes at CPL=0 and is the only runtime component that does; a
+ * guest module has no privilege level of its own, being bytecode this loop walks
+ * rather than native instructions.  See docs/architecture/11, *Which Workloads
+ * Reach Ring 3*.
  *
  * driver->lock serializes wasm_driver_call_entry() and wasm_driver_call() for
  * one driver.  wasm_driver_call_unlocked() bypasses it by contract, and

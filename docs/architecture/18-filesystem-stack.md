@@ -6,12 +6,13 @@
 
 This document describes the filesystem stack: the `fs_manager` VFS router,
 the backend registration model, the client state allocator, the FS IPC opcode
-table, the `fs_fat` and `fs_init` backends, and the transfer-buffer borrow
-semantics used for data transfers.
+table, the `fs_fat`, `fs_init` and `fs_tmpfs` backends, and the transfer-buffer
+borrow semantics used for data transfers.
 
 **Sources**: `src/services/fs_manager/`,
 `src/drivers/fs_fat/`,
 `src/drivers/fs_init/`,
+`src/drivers/fs_tmpfs/`,
 `src/kernel/include/wasmos_ipc.h`
 
 ---
@@ -27,7 +28,9 @@ WASM service (client)
   fs_manager  ← VFS router; multiplexes by path prefix
        │  FS IPC (forwarded)
        ├──► fs_fat    ← FAT12/16 (FAT32 detected but read/write unimplemented)
-       └──► fs_init   ← read-only in-memory initramfs
+       ├──► fs_wfs    ← WFS, journalled, read-write
+       ├──► fs_init   ← read-only in-memory initramfs
+       └──► fs_tmpfs  ← read-write in-memory filesystem
 ```
 
 All inter-layer communication uses the same FS IPC opcode set. `fs_manager`
@@ -43,7 +46,7 @@ which backend owns the path, forwards the request, and relays the reply.
 #### Backend Registry
 
 ```c
-#define FS_BACKEND_CAP 8
+#define FS_BACKEND_CAP 16
 
 typedef struct {
     int32_t  in_use;
@@ -53,14 +56,96 @@ typedef struct {
 } fs_backend_t;
 ```
 
-Up to 8 backends can be registered simultaneously. Each backend is identified
-by a `mount_name` prefix (e.g. `"/boot"`, `"/user"`, `"/init"`). Path
-routing is a prefix match: the request is forwarded to the backend whose
-`mount_name` is the longest matching prefix of the requested path.
+Up to FS_BACKEND_CAP (16) backends can be registered simultaneously. Each is identified by its
+`mount_path`, an absolute canonical path (`"/"`, `"/boot"`, `"/mnt/usb"`)
+normalized by `fsmgr_mount_path_from_reported` from whatever the backend
+reported. Routing forwards a request to the backend whose `mount_path` is the
+longest whole-segment prefix of it.
 
-Backends register by sending `FS_IPC_READY (0x404)` to `fs_manager` with
-their mount name encoded in the message arguments via
-`wasmos_sys_ipc_pack_name16`.
+A mount POINT is an ordinary directory: `fs_manager` creates it in the filesystem
+that covers it when the mount registers (`fsmgr_ensure_mount_points`), walking
+the ancestors so a mount at `/mnt/usb` gets `/mnt` too. That is what lets
+`readdir(/)` be a plain forwarded readdir — the mount names in it are entries the
+root filesystem holds, not names `fs_manager` appended to the reply. It runs after
+every registration and is idempotent, because a volume can mount before the root
+filesystem does and its point has to appear once the root arrives.
+
+#### Establishing a Mount
+
+`FSMGR_IPC_MOUNT_REQ` places a filesystem. The request carries a `key=value`
+DESCRIPTOR in a client-owned transfer buffer — `type=`, `mount=`, and `source=`
+for a type that has a device — rather than packed arguments, because what a
+filesystem needs in order to be placed differs per type and the set grows.
+
+`fs_manager` implements no filesystem. It validates the placement and asks the
+process manager to spawn the driver for `type`, which receives `mount=` (and
+`id=<source>`) as startup arguments — the same contract a device-manager rule's
+`ENV{MOUNT}` uses, so placement is ONE mechanism whether a mount comes from a
+boot rule or from a request. The type-to-driver table is in `fs_manager.c`.
+
+`source` is required for a disk-backed type rather than optional. The drivers can
+self-select a volume when given none, but a mount that picks its own device is not
+the mount the caller asked for, and the caller cannot discover which one it got.
+
+**The reply is deferred, and must be.** The process manager READS the driver
+module through `fs_manager` while handling the spawn request. An `fs_manager` that
+blocked awaiting the spawn reply would be the one service unable to answer that
+read, and the spawn would fail with "the filesystem never answered" — a mutual
+wait, not a slow path. So the spawn request is sent with the SERVICE endpoint as
+its reply address and `fs_manager` returns to its loop, where it serves the
+module read like any other request and later handles the spawn's own reply. The
+SYNC spawn opcode is used because its reply is deferred until the child reports
+READY: the backend has registered by then, and a driver that never becomes ready
+is bounded by the process manager's timeout rather than leaving the client
+waiting. One mount request is in flight at a time; a second is refused with
+`WASMOS_ERR_FS_BUSY`.
+
+This is the general shape for any request `fs_manager` cannot answer from its own
+state: defer, do not block. `fs_manager` is below everything that needs a file.
+
+Refusals: `WASMOS_ERR_FS_MOUNT_EXISTS` (a mount already occupies that path;
+mounts do not stack), `WASMOS_ERR_FS_MOUNT_FSTYPE` (no driver for that type, or a
+type/source mismatch), `WASMOS_ERR_FS_NOT_READY` (the driver did not come up).
+
+#### Removing a Mount
+
+`FSMGR_IPC_UNMOUNT_REQ` removes one mount, named by the absolute PATH it
+occupies — which is what the mount table reports and the only handle a client
+has on it. The path travels in a transfer buffer the CLIENT owns
+(`arg0` = length, `arg2` = buffer, `arg3` = the client's grant), because a mount
+path is not bounded by what an argument word carries.
+
+The refusals define the operation:
+
+- Nothing mounted at that path is `WASMOS_ERR_FS_NO_BACKEND`. A path that merely
+  EXISTS inside some other mount is a directory, not a mount.
+- `WASMOS_ERR_FS_MOUNT_BUSY` while something still stands in the mount: a deeper
+  mount inside it, or an open file on it. `/` is normally unremovable for the
+  first reason rather than as a special case, since every other mount is inside
+  it. This is a statement about the namespace, not a shortage — it clears when
+  whoever is standing there leaves, and is not retryable. A client whose working
+  directory is under the mount is NOT counted; see `docs/TASKS.md` for why, and
+  what has to exist first.
+
+The backend is quiesced before it is dropped — `WASMOS_IPC_SHUTDOWN_REQ` with
+`WASMOS_SHUTDOWN_REASON_UNMOUNT`, the same sequence machine shutdown uses — so a
+filesystem with dirty state writes it while it still has a block device. A
+backend that fails to answer is dropped anyway: the mount is going regardless,
+and leaving it in the table would make an unresponsive backend permanent.
+
+The mount POINT is left in place. It is a directory in the covering filesystem
+and belongs to that filesystem, so what becomes visible again is whatever the
+covering filesystem holds there — the other half of shadowing.
+
+`mount` and `umount` are utilities under `/system/utils`, not shell built-ins, so
+the table always comes from the service that owns it.
+
+Backends do NOT push a registration. `fs_manager` SUBSCRIBES to the `fs.backend`
+service class and enumerates it, then PULLS each provider's identity with
+`FSMGR_IPC_BACKEND_INFO_REQ` (see Backend Identity below), so the backend set is
+rebuilt from the registry on every (re)start and a backend that registers later
+arrives as a class event. `FS_IPC_READY (0x404)` survives only as a liveness
+question a backend answers.
 
 #### Client State
 
@@ -77,6 +162,28 @@ Up to 32 concurrent client contexts. The client state tracks open file
 handles and the current working directory for each calling process. Open
 handles are forwarded to the appropriate backend; `fs_manager` stores only
 the mapping from client handle to backend endpoint and backend-side handle.
+
+Backends are STATELESS about position. `fs_manager` owns the working directory
+and rewrites every path into a mount-relative absolute one before forwarding, so
+no backend keeps a cwd — `FS_IPC_READDIR` carries the directory to list, and
+`FS_IPC_CHDIR` is a client-to-`fs_manager` opcode that no backend ever receives.
+
+That was not always so, and the old arrangement is worth naming because its
+shape recurs. Each backend kept a working directory keyed by the endpoint a
+request arrived from; since `fs_manager` forwards everything from one reply
+endpoint, those per-client tables collapsed to a single entry shared by every
+client. `READDIR` named no path, so `fs_manager` had to send a `CHDIR` first to
+make the backend's one position the right one — a second round trip per listing,
+and a correctness argument that held only because the service handles one request
+at a time. The state was redundant with the cwd `fs_manager` already owned; a
+path in the request removed it, along with the round trip and the ordering
+constraint.
+
+`fs_manager` validates a chdir target with `FS_IPC_STAT_REQ`, which is the whole
+of what it needs to know and moves nothing. That makes the STAT reply's mode
+load-bearing: it MUST carry the file type bits, not permission bits alone, and a
+backend must answer for its own mount root even though nothing on disk describes
+it.
 
 The working directory is a full canonical VFS path (`/`, `/wfs`, `/wfs/docs`) and
 `fs_manager` is its sole authority: every client path is resolved against it
@@ -111,6 +218,15 @@ All filesystem operations use opcodes in the range `0x400–0x4FF`.
 | `FS_IPC_CHDIR`     | 0x412 | Change working directory                       |
 | `FS_IPC_READ_APP`  | 0x413 | Retired; range sentinel only (see below)       |
 | `FS_IPC_READ_PATH` | 0x414 | Read a file by absolute path in one shot       |
+
+Mount-table operations are answered by `fs_manager` itself and never reach a
+backend, so they carry their own response opcodes rather than `FS_IPC_RESP`:
+
+| Opcode                     | Value | Operation                             |
+|----------------------------|-------|---------------------------------------|
+| `FSMGR_IPC_QUERY_MOUNTS`   | 0x422 | Report the mount table into a buffer  |
+| `FSMGR_IPC_UNMOUNT`        | 0x423 | Remove the mount at an absolute path  |
+| `FSMGR_IPC_MOUNT`          | 0x424 | Place a filesystem from a descriptor  |
 
 #### Responses (backend → fs_manager → client)
 
@@ -189,6 +305,88 @@ via the device manager's block-device registration mechanism.
 
 ---
 
+### `fs_tmpfs` Backend
+
+**Source**: `src/drivers/fs_tmpfs/` (Zig)
+
+A read-write filesystem held entirely in the backend's own linear memory: a fixed
+node table (192 entries) over a block pool that GROWS. Contents are not
+persisted.
+
+The pool takes 32 KiB chunks from `memory.grow`, so an instance storing nothing
+costs a table of null pointers rather than its whole capacity — which matters
+because the mount is per-instance and a system may run several. A chunk is never
+moved and never freed, so a block INDEX is stable for the life of the process;
+chains and the free scan address blocks by index, never by pointer, and each
+chunk carries the chain and allocation metadata for its own blocks so the
+bookkeeping grows with the pool. Measured: 16 KiB of static data, an 8 MiB
+ceiling, and growth verified under both wasm3 and WARP.
+
+The manifest's `max_memory` MUST exceed `initial_memory`. A module declaring
+`min == max` cannot grow at all — `memory.grow` is refused — which is a silent
+capacity ceiling rather than an error.
+
+It is a GENERAL in-memory filesystem, not a root-specific one. The mount comes
+from the `mount=` startup argument and defaults to `/`, so a second instance
+mounted at `/tmp` is another process with another argument and its own separate
+contents. Every identity is therefore DERIVED from the mount path rather than
+fixed: the `fs.backend` class instance is an FNV-1a fingerprint of it, so two
+instances at different paths cannot claim one registry address, and two asked for
+the SAME path are refused the claim rather than answering for each other. The
+refusal is currently a HANG rather than an error, because the process manager
+answers a refused claim with no reply at all (see `docs/TASKS.md`).
+
+- Implements the whole opcode set except the retired `READ_APP`: `OPEN` (with
+  `O_CREAT`/`O_TRUNC`/`O_APPEND`), `READ`, `WRITE`, `SEEK`, `CLOSE`, `STAT`,
+  `READDIR`, `CHDIR`, `MKDIR`, `RMDIR`, `UNLINK`, `RENAME`.
+- Names are case-SENSITIVE, as in WFS; FAT is the outlier. `NAME_MAX` is 255,
+  matching `WFS_NAME_MAX` and FAT's long-name limit, so a filename valid on
+  another mount is creatable here — the name lives in the node record, so the
+  parity costs 255 bytes per node (a 50 KiB table) whether names are long or not.
+- A node with a descriptor open on it, or one a connection stands in, is refused
+  rather than freed: a descriptor holds a node index, so removing it underneath
+  one would leave that descriptor addressing a slot the next create reuses.
+- Runs as an async service (`async_initialize`). Every operation completes in
+  memory with no downstream call, so the root task parks forever on a future
+  nothing resolves and the runner's poll is what an idle instance sleeps in.
+- The namespace and storage core is a separate module, `fs_tmpfs_store.zig`,
+  which depends on nothing in the guest environment except a source of pool
+  memory. That source is a seam (`chunk_source`): the driver points it at the
+  `memory.grow` arena and `tests/unit/test_fs_tmpfs_store.zig` points it at a
+  static array, which is what makes path resolution, chain walking, truncation
+  and the namespace rules testable on the host. The IPC layer above it is not
+  host-testable and is covered only by a running guest.
+
+**Placed by rule.** A `SUBSYSTEM=="boot"` device-manager rule may carry
+`ENV{MOUNT}`, delivered to the spawned process as a `mount=` startup argument.
+That is what a filesystem with no backing device needs: it names no device, so
+nothing about it implies where it belongs. Two instances are placed this way and
+need no disk between them:
+
+- `/home/user` — a mount at DEPTH. `fs_manager` creates `/home` and then
+  `/home/user` as ordinary directories in the root filesystem while walking the
+  mount path.
+- `/wfs/nested` — a mount INSIDE another mount. Its point is created in the WFS
+  volume rather than in the root filesystem, which is the other branch of
+  `fsmgr_ensure_mount_points`, and it SHADOWS the file the volume already holds
+  there (`scripts/wfs/nested/covered.txt`): a path under the point reaches the
+  tmpfs, so the covered file is neither listed nor readable while the mount
+  stands. Demonstrated, and verified against a control run with the mount
+  disabled where the file IS listed. Nothing unmounts, so contents REAPPEARING on
+  unmount remains construction rather than a tested property.
+
+**Why the VFS root wants one.** A mount point has to be a directory somewhere,
+and nothing holds one while `/` has no filesystem — which is why routing matches
+a mount's first segment and a mount can only exist at the top level. The kernel's
+init sequence therefore spawns an instance for `/` between `fs-manager` and
+`fs-init`, before any volume mounts.
+
+An instance mounted at `/` is what `ls /`, `cd /` and every path naming no other
+mount are served by. `tests/test_vfs_root_mount.py` pins that end to end: the
+root is reported as `fs-tmpfs`, the mount points are directories in it, `ls` and
+`cd` agree about what exists, and a path under a mount still reaches that mount
+rather than the root covering it.
+
 ### `fs_init` Backend
 
 **Source**: `src/drivers/fs_init/`
@@ -240,9 +438,11 @@ provided via a known physical address from the bootloader.
   working directory, so "no mount matched" is a statement about the PATH and never
   about the client.
 
-  Matching on the first segment means a mount can only exist at the TOP LEVEL.
-  Mounting deeper needs a root filesystem that owns real directories to mount
-  onto; see `docs/TASKS.md`.
+  Once a root filesystem is mounted, every absolute path routes somewhere and
+  "not served" is reachable only on a system with nothing at `/`. The root is not
+  a fallback: it is an ordinary mount that happens to prefix every path, which is
+  why it cannot reintroduce the aliasing above — a path served by the root
+  filesystem is a path IN the root filesystem, and appears in its listing.
 
 ### Backend Identity
 
@@ -258,12 +458,19 @@ conflating them mislabels every mount:
   that answers "which filesystem". `FS_TYPE_UNKNOWN` means the backend named
   nothing, and is reported as such rather than guessed at.
 
+A backend whose reported mount name is EMPTY once its leading `/` is stripped is
+not registered. Such a backend names a mount PATH (`/`) rather than a mount name,
+and while routing matches a first segment there is no name for it to match;
+registering it anyway gave it a slot, kept it out of routing, and printed a bare
+`/` entry into the root listing.
+
 `mount` names a filesystem from `fs_type` alone (`fsmgr_backend_fs_name`, one
 lookup row per type). Deriving it from `kind` reports every mounted volume as
 FAT.
 
 A backend that sits on no block device names itself the same way: initfs reports
-`FS_TYPE_INITFS`, so `FS_TYPE_*` is the single namespace for "which filesystem"
+`FS_TYPE_INITFS` and tmpfs reports `FS_TYPE_TMPFS`, so `FS_TYPE_*` is the single
+namespace for "which filesystem"
 rather than a probe-result enum with pseudo-filesystems handled beside it. A
 future devfs or sysfs is therefore a value in `abi/constants.yaml` plus a lookup
 row, and costs no branch at any call site. Such a value is meaningless in a
@@ -279,14 +486,19 @@ own transfer buffer for that, since such a request supplies none.
 
 ### Structural Invariants
 
-1. **Backend registration is dynamic.** Backends send `FS_IPC_READY` when
-   ready; `fs_manager` does not start until at least one backend is
-   registered. The `"/init"` backend registers first and enables early
-   rule loading by the device manager.
+1. **Backend discovery is dynamic and PULL-based.** `fs_manager` subscribes to
+   the `fs.backend` class and enumerates it, then pulls each provider's identity.
+   It registers its own name and signals readiness BEFORE discovery, because the
+   providers are peers that may still be starting and blocking readiness on them
+   would deadlock the boot sequence.
 
-2. **Path routing is prefix-longest-match.** If `/boot/system` and `/boot`
-   are both registered, a path under `/boot/system` goes to the more-specific
-   backend.
+2. **Path routing is longest-prefix over mount PATHS, on whole segments**
+   (`fsmgr_route_path_for_mounts`). A mount is an absolute canonical path, the
+   owner of a request is the longest such path prefixing it, and a match must end
+   at a segment boundary so `/wfs` does not own `/wfsx`. `/` prefixes everything,
+   so the root filesystem is the owner of last resort rather than a case of its
+   own, and a mount at `/mnt/usb` needs no special handling — it simply outranks
+   `/mnt`.
 
 3. **`FS_IPC_READ_APP` is retired.** PM spawn now reads app blobs via
    `FS_IPC_READ_PATH` (see `process_manager_spawn.c`); `FS_IPC_READ_APP_REQ`

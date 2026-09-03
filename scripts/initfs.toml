@@ -88,6 +88,16 @@ flags = ["bootstrap"]
 path = "system/drivers/fs_init.wap"
 source = "fs_init.wap"
 
+# The tmpfs that serves the VFS root. It is an initfs payload rather than an ESP
+# one because the kernel's init sequence spawns it by module name, before any
+# volume exists: a mount point is a directory in this filesystem, so it has to be
+# mounted before the mounts that land on it.
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/fs_tmpfs.wap"
+source = "fs_tmpfs.wap"
+
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]

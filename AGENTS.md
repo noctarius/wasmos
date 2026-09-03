@@ -116,6 +116,26 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   buffer is on the wrong side of the exchange — the CLIENT of a request owns it
   and the server is a transient grantee. A per-client grant table to route
   around that shipped once and had to be reverted.
+- NEVER add a new SYNCHRONOUS request/reply. A call that sends and then blocks
+  until its answer arrives — `wasmos_ipc_call`, `wasmos_ipc_call_retry`, a
+  hand-rolled send-then-`select_one`, `wasmos_sys_ipc_await_reply` — is not
+  available for new code, in a service, a driver, an app or the kernel. Use a
+  future, a coroutine await, or a DEFERRED reply: record what the answer belongs
+  to, return to the loop, and answer when it arrives.
+
+  The reason is not style. A service that blocks on a reply cannot serve the
+  request its peer needs in order to produce that reply, and the graph closes
+  more often than it looks: the process manager reads every module it spawns
+  THROUGH fs-manager, so an fs-manager that waits on a spawn is waiting on
+  itself. That shipped twice in one change — once as a mount request that
+  deadlocked instantly, once as a subscribe during bring-up that hung the boot
+  before fs-manager finished starting.
+
+  This CANNOT be gated: plenty of existing code still calls synchronously, so a
+  lint check would flag the tree rather than the change. It is enforced by review
+  and by this file. The existing call sites are a tracked removal in
+  `docs/TASKS.md`; convert the ones in files you touch, as with bare `-1`s, and
+  do not add to them.
 
 ## Code Style
 - Keep C/ASM code minimal and explicit.

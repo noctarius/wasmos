@@ -416,8 +416,6 @@ static fat_op_t fat_op_for_type(int32_t type) {
         return FAT_OP_RMDIR;
     case FS_IPC_READDIR_REQ:
         return FAT_OP_READDIR;
-    case FS_IPC_CHDIR_REQ:
-        return FAT_OP_CHDIR;
     default:
         return FAT_OP_NONE;
     }
@@ -448,8 +446,6 @@ static fat_r_t fat_op_dispatch(fat_op_ctx_t* op) {
         return fat_op_rmdir(op, &g_blk, &g_mnt, &g_pool);
     case FAT_OP_READDIR:
         return fat_op_readdir(op, &g_blk, &g_mnt, g_fs_endpoint);
-    case FAT_OP_CHDIR:
-        return fat_op_chdir(op, &g_blk, &g_mnt);
     default:
         op->err = WASMOS_ERR_FS_UNSUPPORTED;
         return FAT_R_ERR;
@@ -745,14 +741,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             op->arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
             op->arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
             op->source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
-            if (op->op == FAT_OP_CHDIR) {
-                /* CHDIR carries its target as a path in the client's transfer
-                 * buffer (arg0 = length, arg2 = buffer id), the same transport
-                 * OPEN uses. Reading it here, before the op is queued, keeps the
-                 * op steps free of buffer handling. A path that does not fit is
-                 * left empty, which fat_op_chdir reads as the mount root and
-                 * would silently move the client -- so it is failed instead by
-                 * clearing the op type. */
+            if (op->op == FAT_OP_READDIR) {
+                /* READDIR carries the directory to list as a path in the
+                 * sender's transfer buffer (arg0 = length, arg2 = buffer id),
+                 * the same transport OPEN uses. Reading it here, before the op is
+                 * queued, keeps the op steps free of buffer handling. A path that
+                 * does not fit is left empty, which fat_resolve_dir reads as the
+                 * mount root and would list the wrong directory -- so it is
+                 * failed instead by clearing the op type. */
                 uint32_t chdir_len = (uint32_t)op->arg0;
                 wasmos_error_code_t chdir_rc = WASMOS_ERR_NONE;
 
@@ -771,8 +767,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 }
                 if (chdir_rc != WASMOS_ERR_NONE) {
                     /* Answered here rather than queued: an empty dir_name reads
-                     * as the mount root further down, which would move the
-                     * client somewhere it did not ask for. */
+                     * as the mount root further down, which would list a
+                     * directory the caller did not name. */
                     (void)fat_send_reply(
                         op->source, FS_IPC_ERROR, op->request_id, chdir_rc, 0, 0, 0);
                     continue;

@@ -108,56 +108,6 @@ static uint32_t g_volume_instance = 0u;
 /* Per-client working directory. Scoped to the source endpoint for the same
  * reason an fd is: one client's cd must not move another's. A client with no
  * entry stands at the root, so the table only ever holds clients that moved. */
-#define WFS_MAX_CLIENTS 16u
-
-typedef struct {
-    int32_t owner;
-    uint32_t cwd;
-} wfs_client_cwd_t;
-
-static wfs_client_cwd_t g_cwd[WFS_MAX_CLIENTS];
-
-static uint32_t wfs_cwd_get(int32_t owner) {
-    uint32_t i;
-
-    for (i = 0; i < WFS_MAX_CLIENTS; ++i) {
-        if (g_cwd[i].owner == owner) {
-            return g_cwd[i].cwd;
-        }
-    }
-    return WFS_OBJECT_ROOT;
-}
-
-/* Remember where `owner` stands. Setting the root releases the slot, so a client
- * that walks back out stops occupying one. Returns 0, or a packed code when the
- * table is full — which is a refusal to move, not a silent stay. */
-static wasmos_error_code_t wfs_cwd_set(int32_t owner, uint32_t object_id) {
-    uint32_t i;
-    uint32_t free_slot = WFS_MAX_CLIENTS;
-
-    for (i = 0; i < WFS_MAX_CLIENTS; ++i) {
-        if (g_cwd[i].owner == owner) {
-            if (object_id == WFS_OBJECT_ROOT) {
-                g_cwd[i].owner = -1;
-            } else {
-                g_cwd[i].cwd = object_id;
-            }
-            return WASMOS_ERR_NONE;
-        }
-        if (g_cwd[i].owner < 0 && free_slot == WFS_MAX_CLIENTS) {
-            free_slot = i;
-        }
-    }
-    if (object_id == WFS_OBJECT_ROOT) {
-        return WASMOS_ERR_NONE; /* already the default */
-    }
-    if (free_slot == WFS_MAX_CLIENTS) {
-        return WASMOS_ERR_FS_NO_CLIENT_SLOT;
-    }
-    g_cwd[free_slot].owner = owner;
-    g_cwd[free_slot].cwd = object_id;
-    return WASMOS_ERR_NONE;
-}
 
 static wfs_path_ctx_t g_path;
 static wfs_read_ctx_t g_read;
@@ -238,7 +188,7 @@ static wasmos_error_code_t wfs_resolve(int32_t owner, int32_t buffer_id, uint32_
     /* Relative to where the CLIENT stands, not to the root: `cat hello.txt`
      * inside a mount sends a bare name, and resolving it from the root would
      * look in the wrong directory — or find a different file of the same name. */
-    rc = wfs_path_init_from(&g_path, &g_vol, wfs_cwd_get(owner), path, path_len);
+    rc = wfs_path_init_from(&g_path, &g_vol, WFS_OBJECT_ROOT, path, path_len);
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
@@ -280,7 +230,7 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
             return;
         }
         rc = wfs_ns_create(&g_vol,
-                           wfs_cwd_get(src),
+                           WFS_OBJECT_ROOT,
                            create_path,
                            (uint32_t)path_len,
                            (uint16_t)WFS_TYPE_FILE,
@@ -351,6 +301,33 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
     (void)wfs_reply(src, FS_IPC_RESP, request_id, fd, 0);
 }
 
+/* The POSIX-shaped mode for `obj`: its permission bits with the FILE TYPE bits
+ * merged in.
+ *
+ * WFS records the type in its own field and keeps `mode` to permissions alone,
+ * but the FS ABI reports one mode, and every consumer reads the type out of it --
+ * `S_ISDIR` in libc, and fs-manager when it validates a chdir target. Reporting
+ * the on-disk mode unchanged therefore described every directory on a WFS volume
+ * as a regular file.
+ *
+ * A type with no POSIX equivalent contributes no type bits rather than a wrong
+ * one: an unknown type is better read as "not a directory, not a regular file"
+ * than as either. */
+static uint32_t wfs_stat_mode(const struct wfs_object* obj) {
+    uint32_t mode = obj->mode & 0x0FFFu;
+
+    switch (obj->type) {
+    case WFS_TYPE_DIR:
+        return mode | 0x4000u; /* S_IFDIR */
+    case WFS_TYPE_FILE:
+        return mode | 0x8000u; /* S_IFREG */
+    case WFS_TYPE_SYMLINK:
+        return mode | 0xA000u; /* S_IFLNK */
+    default:
+        return mode;
+    }
+}
+
 static void wfs_do_stat(int32_t src, int32_t request_id, int32_t path_len, int32_t buffer_id) {
     wasmos_error_code_t rc = wfs_resolve(src, buffer_id, (uint32_t)path_len);
     uint64_t size;
@@ -365,7 +342,8 @@ static void wfs_do_stat(int32_t src, int32_t request_id, int32_t path_len, int32
      * plausible size. */
     size = g_path.object.out.size;
     reported = size > 0x7FFFFFFFu ? 0x7FFFFFFF : (int32_t)size;
-    (void)wfs_reply(src, FS_IPC_RESP, request_id, reported, (int32_t)g_path.object.out.mode);
+    (void)wfs_reply(
+        src, FS_IPC_RESP, request_id, reported, (int32_t)(wfs_stat_mode(&g_path.object.out)));
 }
 
 static void wfs_do_read(int32_t src, int32_t request_id, int32_t fd, int32_t count,
@@ -540,7 +518,7 @@ static void wfs_do_namespace(int32_t src, int32_t request_id, int32_t type, int3
     switch (type) {
     case FS_IPC_MKDIR_REQ:
         rc = wfs_ns_create(&g_vol,
-                           wfs_cwd_get(src),
+                           WFS_OBJECT_ROOT,
                            path,
                            (uint32_t)path_len,
                            (uint16_t)WFS_TYPE_DIR,
@@ -549,10 +527,10 @@ static void wfs_do_namespace(int32_t src, int32_t request_id, int32_t type, int3
                            &id);
         break;
     case FS_IPC_UNLINK_REQ:
-        rc = wfs_ns_unlink(&g_vol, wfs_cwd_get(src), path, (uint32_t)path_len, 0u);
+        rc = wfs_ns_unlink(&g_vol, WFS_OBJECT_ROOT, path, (uint32_t)path_len, 0u);
         break;
     case FS_IPC_RMDIR_REQ:
-        rc = wfs_ns_rmdir(&g_vol, wfs_cwd_get(src), path, (uint32_t)path_len, 0u);
+        rc = wfs_ns_rmdir(&g_vol, WFS_OBJECT_ROOT, path, (uint32_t)path_len, 0u);
         break;
     default:
         rc = WASMOS_ERR_FS_UNSUPPORTED;
@@ -586,8 +564,7 @@ static void wfs_do_rename(int32_t src, int32_t request_id, int32_t from_len, int
     }
     from[from_len] = '\0';
     to[to_len] = '\0';
-    rc =
-        wfs_ns_rename(&g_vol, wfs_cwd_get(src), from, (uint32_t)from_len, to, (uint32_t)to_len, 0u);
+    rc = wfs_ns_rename(&g_vol, WFS_OBJECT_ROOT, from, (uint32_t)from_len, to, (uint32_t)to_len, 0u);
     (void)wfs_reply(src,
                     rc == WASMOS_ERR_NONE ? FS_IPC_RESP : FS_IPC_ERROR,
                     request_id,
@@ -653,21 +630,31 @@ static wasmos_error_code_t wfs_stream(int32_t dest, int32_t request_id, const ui
     return WASMOS_ERR_NONE;
 }
 
-/* READDIR: stream the entries of the client's current directory.
+/* READDIR: stream the entries of the directory the request names.
  *
  * Directories carry a trailing '/', matching fs-manager's root listing, which is
  * what the CLI renders. "." and ".." are NOT listed: the root listing shows no
  * dot entries either, and `cd ..` resolves through the records whether or not
  * they appear here. */
-static void wfs_do_readdir(int32_t src, int32_t request_id) {
+static void wfs_do_readdir(int32_t src, int32_t request_id, int32_t path_len, int32_t buffer_id) {
     uint8_t line[WFS_NAME_MAX + 2u];
     wasmos_error_code_t rc;
     int32_t status;
     uint32_t entries = 0;
 
+    /* The directory is the one the request NAMES. This driver holds no working
+     * directory: fs-manager owns the cwd and resolves it to a mount-relative
+     * path before forwarding, so a listing depends on the request rather than on
+     * what the previous one left behind. */
+    rc = wfs_resolve(src, buffer_id, (uint32_t)path_len);
+    if (rc != WASMOS_ERR_NONE) {
+        (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
+        return;
+    }
+
     g_path.object.pc = WFS_OBJECT_PC_START;
     g_path.object.vol = &g_vol;
-    g_path.object.object_id = wfs_cwd_get(src);
+    g_path.object.object_id = g_path.object_id;
     g_path.object.err = WASMOS_ERR_NONE;
     status = wfs_run(wfs_object_task, &g_path.object);
     if (status != 0) {
@@ -721,36 +708,6 @@ static void wfs_do_readdir(int32_t src, int32_t request_id) {
         }
     }
     (void)wfs_reply(src, FS_IPC_RESP, request_id, 0, 0);
-}
-
-/* CHDIR: move the client's working directory inside this volume.
- *
- * The target arrives as a path in the client's transfer buffer, the same
- * transport OPEN and STAT use, so it is not limited in length or to a single
- * component: a full 255-byte WFS name (WFS_NAME_MAX) and an arbitrarily deep
- * path both resolve here. fs-manager sends the directory relative to this
- * mount's root, leading '/' included.
- *
- * Resolution goes through wfs_resolve, so "." and ".." need no special case and
- * ".." from the root names the root -- which is what stops a client walking out
- * of the volume. */
-static void wfs_do_chdir(int32_t src, int32_t request_id, int32_t path_len, int32_t buffer_id) {
-    wasmos_error_code_t rc = wfs_resolve(src, buffer_id, (uint32_t)path_len);
-
-    if (rc != WASMOS_ERR_NONE) {
-        (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);
-        return;
-    }
-    if (g_path.object.out.type != WFS_TYPE_DIR) {
-        (void)wfs_reply(src, FS_IPC_ERROR, request_id, WASMOS_ERR_FS_NOT_DIR, 0);
-        return;
-    }
-    rc = wfs_cwd_set(src, g_path.object_id);
-    (void)wfs_reply(src,
-                    rc == WASMOS_ERR_NONE ? FS_IPC_RESP : FS_IPC_ERROR,
-                    request_id,
-                    rc == WASMOS_ERR_NONE ? 0 : rc,
-                    0);
 }
 
 static void wfs_do_close(int32_t src, int32_t request_id, int32_t fd) {
@@ -1133,11 +1090,8 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
     case FS_IPC_CLOSE_REQ:
         wfs_do_close(src, request_id, a0);
         return;
-    case FS_IPC_CHDIR_REQ:
-        wfs_do_chdir(src, request_id, a0, a2);
-        return;
     case FS_IPC_READDIR_REQ:
-        wfs_do_readdir(src, request_id);
+        wfs_do_readdir(src, request_id, a0, a2);
         return;
     case FS_IPC_MKDIR_REQ:
     case FS_IPC_UNLINK_REQ:
@@ -1224,10 +1178,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wfs_stall();
     }
     wfs_fd_table_init(&g_fds);
-    for (name_len = 0; name_len < (int32_t)WFS_MAX_CLIENTS; ++name_len) {
-        g_cwd[name_len].owner = -1;
-        g_cwd[name_len].cwd = WFS_OBJECT_ROOT;
-    }
     wfs_ops_bind(&g_runtime, &g_blk);
 
     /* Mount before advertising anything, so the driver only ever offers a

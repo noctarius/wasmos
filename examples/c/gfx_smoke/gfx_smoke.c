@@ -291,8 +291,10 @@ static int handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t*
     if (new_w <= 0 || new_h <= 0) {
         return -1;
     }
-    if (ui_realloc_buffer(ctx, new_w, new_h) != 0) {
-        puts("[test] gfx smoke resize3 alloc failed");
+    const int32_t alloc_rc = ui_realloc_buffer(ctx, new_w, new_h);
+    if (alloc_rc != 0) {
+        printf("[test] gfx smoke resize3 alloc failed: %s\n",
+               wasmos_error_code_name((wasmos_error_code_t)alloc_rc));
         return -1;
     }
     if (new_w >= 500 && new_h >= 500) {
@@ -326,8 +328,10 @@ static int handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t* req,
     if (new_w <= 0 || new_h <= 0) {
         return -1;
     }
-    if (ui_realloc_buffer(ctx, new_w, new_h) != 0) {
-        puts("[test] gfx smoke resize alloc failed");
+    const int32_t alloc_rc = ui_realloc_buffer(ctx, new_w, new_h);
+    if (alloc_rc != 0) {
+        printf("[test] gfx smoke resize alloc failed: %s\n",
+               wasmos_error_code_name((wasmos_error_code_t)alloc_rc));
         return -1;
     }
     if (fill_pattern(ctx->mapped_base, new_w, new_h, ctx->stride_bytes, phase) != 0) {
@@ -570,8 +574,12 @@ int main(int argc, char** argv) {
     /* The surface is re-acquired at the new size rather than resized: a borrowed
      * buffer is never mutated, so a resize attaches a new one and withdraws the
      * old. ui_realloc_buffer does the whole exchange. */
-    if (ui_realloc_buffer(&g_ctx1, GFX_RESIZE_W, GFX_RESIZE_H) != 0) {
-        puts("[test] gfx smoke resize-alloc failed");
+    const int32_t alloc_rc = ui_realloc_buffer(&g_ctx1, GFX_RESIZE_W, GFX_RESIZE_H);
+    if (alloc_rc != 0) {
+        /* The reason, not just the fact: this failure is intermittent, so a log
+         * line saying only that it happened cannot be acted on after the fact. */
+        printf("[test] gfx smoke resize-alloc failed: %s\n",
+               wasmos_error_code_name((wasmos_error_code_t)alloc_rc));
         return GFX_SMOKE_E_ALLOC1;
     }
 

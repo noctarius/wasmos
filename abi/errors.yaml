@@ -51,7 +51,7 @@ domains:
       - { name: ARGS_TOOBIG,     description: "args exceed the xfer buffer" }
       - { name: NO_PM_FSBUF,     description: "PM xfer buffer missing" }
       - { name: FS_READ,         description: "reading the app blob from FS failed" }
-      - { name: SPAWN_FAILED,    description: "process create/start failed (e.g. no free slot)" }
+      - { name: SPAWN_FAILED,    description: "process create/start failed. Deliberately does NOT name a cause: several distinct failures reach it (no free process slot, address-space setup, thread creation, capability application), and the kernel reports the one it hit -- table exhaustion prints \"[process] table full\". An earlier description offered \"e.g. no free slot\" and callers turned that example into a diagnosis" }
       - { name: BROKER_IPC,      description: "broker plan IPC transport/reply failed" }
       - { name: BROKER_PLAN,     description: "broker replied with malformed/unsupported plan" }
       - { name: BROKER_DEFERRED, description: "valid broker plan returned; PM launch step deferred" }
@@ -93,6 +93,9 @@ domains:
     codes:
       - { name: NO_WINDOW, description: "no free page-aligned window fits in linear memory" }
       - { name: MAP,       description: "paging/linear-memory mapping step failed" }
+      - { name: NO_BASE,   description: "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it" }
+      - { name: MISALIGNED, description: "the window offset that was placed is not 4 KiB aligned, so it cannot be mapped by page. An invariant violation rather than a shortage -- the placement search only yields aligned offsets, so reaching this means the linear-memory base itself is unaligned" }
+      - { name: USER_WINDOW, description: "the ring-3 USER-VA window over linear memory could not be synced or installed, so the guest would see a mapping the kernel's own alias does not agree with. Distinct from MAP, which is the kernel-side paging step: this one is the second, user-visible half that only ring-3 guests have" }
 
   fs:
     id: 4
@@ -137,7 +140,10 @@ domains:
       - { name: JOURNAL,        description: "the metadata journal is unusable: its superblock does not identify a log, does not verify, or names a geometry too small for one transaction. Distinct from CORRUPT, which names a filesystem structure, because a damaged log costs writability rather than readability" }
       - { name: TXN_FULL,       description: "a metadata transaction names more blocks than one journal descriptor carries, or more revokes than one revoke record does; the operation is refused whole rather than split across two transactions that a crash could separate" }
       - { name: REPLAY,         description: "journal replay stopped: a committed block image did not match the checksum its descriptor recorded, so applying the transaction would write a partial one. The volume mounts read-only for fsck" }
+      - { name: MOUNT_BUSY,     description: "a mount cannot be removed while something still stands in it: a deeper mount inside it, or an open file on it. Distinct from OPEN, which names one file, and from BUSY, which is a retryable shortage of op-context slots -- this one is a statement about the namespace and is resolved by whoever is standing there leaving, not by retrying. The root is normally busy for exactly this reason, since every other mount is inside it" }
       - { name: NEED_BLOCK,     description: "the operation needs a free block the caller did not supply, and nothing has been modified: an extent-tree insert that must SPLIT a full leaf needs a block for the new leaf, and the first such split needs one more for the interior root above it. The caller allocates and retries rather than the operation nesting an allocator inside itself" }
+      - { name: MOUNT_EXISTS,   description: "a mount already occupies that path. Mounts do not stack: two filesystems at one path would make routing pick between them by registration order, and the covered one unreachable with no way to name it. Distinct from EXISTS, which is a file or directory the caller tried to create -- a mount point is expected to exist already" }
+      - { name: MOUNT_FSTYPE,   description: "the named filesystem type has no driver, or the type and source given cannot be satisfied together: a disk-backed type with no source names no volume, and a memory-backed type with one names a device it would ignore. Distinct from UNSUPPORTED, which is an unknown REQUEST type rather than an unknown filesystem" }
 
   net:
     id: 5
@@ -168,6 +174,7 @@ domains:
       - { name: UNSUPPORTED,         description: "unknown or unsupported compositor request" }
       - { name: BUSY,                description: "compositor has no free window/buffer slot (retryable)" }
       - { name: IO,                  description: "framebuffer or shared-buffer operation failed" }
+      - { name: NO_REPLY,            description: "a compositor request could not be delivered, or no reply arrived: the send exhausted its retries against a full destination queue, or the reply endpoint faulted. Distinct from every other code in this domain, which is the compositor's VERDICT on a request it received -- this one means it may never have seen it, so the request stands unanswered rather than refused, and the caller's state is whatever it was before" }
 
   driver:
     id: 7
@@ -328,6 +335,8 @@ domains:
       - { name: UNALIGNED,      description: "an address or size is not page-aligned" }
       - { name: NO_WINDOW,      description: "guest linear memory has no window the mapping can occupy" }
       - { name: MAP_FAILED,     description: "the paging step failed" }
+      - { name: LOW_SLOT_PRESENT, description: "the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force" }
+      - { name: NO_CONTEXT_DUMPED, description: "an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution" }
 
   block:
     id: 20

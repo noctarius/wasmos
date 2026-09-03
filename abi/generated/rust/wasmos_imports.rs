@@ -295,13 +295,24 @@ unsafe extern "C" {
     /// trace.)
     pub fn debug_mark(a0: i32) -> i32;
     /// Dump the calling process's user page-table kernel mappings to the kernel log
-    /// and verify no low-half slots remain for ring-3 contexts. Returns 0 on success,
-    /// -1 on error or verification failure. (WARP backend is a no-op stub returning
-    /// 0.)
+    /// and verify that no identity low slot survives in its root table. Returns 0,
+    /// WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT when the verification fails, or
+    /// WASMOS_ERR_KERNEL_NO_CALLER when the caller or its root cannot be resolved.
+    /// Output goes to the kernel log, never to the caller.
+    ///
+    /// Both backends dump, and they verify DIFFERENT root tables because a WARP
+    /// guest does not execute against its process context root -- guest windows are
+    /// published into the active CR3. WARP therefore verifies the active root and
+    /// wasm3 the context root, gated on a ring-3 caller. Neither gate is
+    /// interchangeable with the other.
     pub fn kmap_dump() -> i32;
     /// Dump the user page-table kernel mappings for every active process to the
-    /// kernel log, verifying no low-half slots for ring-3 contexts. Returns 0 if all
-    /// contexts pass, -1 if any fail. (WARP backend is a no-op stub returning 0.)
+    /// kernel log, each labelled with its pid. A process whose entry, context, or
+    /// root cannot be resolved is skipped. Under WARP this dumps context roots and
+    /// verifies nothing, because another process's active root is the CR3 of
+    /// whichever CPU runs it and is not observable from the caller; wasm3 verifies
+    /// the context root of each ring-3 process. The log is the record of what was
+    /// covered.
     pub fn kmap_dump_all() -> i32;
     /// Return the number of entries in the boot initramfs (initfs). Returns the
     /// entry count, WASMOS_ERR_FS_NO_IMAGE if the initfs is absent or its header is
@@ -570,7 +581,16 @@ unsafe extern "C" {
     /// the owner or a grantee with the required right).
     ///
     /// All return >= 0 on success (buffer_id / borrow_id / device address / 0) and a
-    /// negative xfer_buffer_status_t code on failure.
+    /// negative PACKED error code on failure -- `WASMOS_ERR_XFER_BUFFER_*` from
+    /// `abi/errors.yaml`, decodable with `wasmos_error_code_name`. Buffer and
+    /// borrow ids are issued from 1, so zero is never a valid id.
+    ///
+    /// `xfer_buffer_map` may also report a `WASMOS_ERR_LINMEM_*` code: placing the
+    /// overlay is a linear-memory operation, and the reason it failed belongs to
+    /// that domain rather than being restated in this one.
+    ///
+    /// (The earlier `xfer_buffer_status_t` enum this doc named no longer exists;
+    /// those values were folded into the packed model.)
     pub fn xfer_buffer_acquire(a0: i32) -> i32;
     /// Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
     /// lender revokes a grant it previously extended (resolved via the lent set, not

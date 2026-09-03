@@ -43,6 +43,7 @@ void kernel_init_state_reset(init_state_t* state, const boot_info_t* boot_info) 
     state->native_smoke_index = 0xFFFFFFFFu;
     state->smoke_index = 0xFFFFFFFFu;
     state->fs_manager_index = 0xFFFFFFFFu;
+    state->fs_tmpfs_index = 0xFFFFFFFFu;
     state->fs_init_index = 0xFFFFFFFFu;
     state->device_manager_index = 0xFFFFFFFFu;
     state->dm_pid = 0;
@@ -168,10 +169,10 @@ static int init_send_spawn_path(process_t* process, init_state_t* state, const c
  * arg is the init_state_t prepared by kernel_init_state_reset, borrowed and
  * mutated across dispatches; `phase` is where the sequence stands.  Each call
  * advances at most one step and yields, so the whole boot chain — spawning the
- * process manager, resolving boot modules, spawning fs-manager, fs-init and
- * device-manager, then sysinit by path once a filesystem exists — plays out over
- * many dispatches.  Steps that depend on a service that is not up yet simply
- * yield and retry on the next dispatch.
+ * process manager, resolving boot modules, spawning fs-manager, fs-tmpfs,
+ * fs-init and device-manager, then sysinit by path once a filesystem exists —
+ * plays out over many dispatches.  Steps that depend on a service that is not up
+ * yet simply yield and retry on the next dispatch.
  *
  * Returns PROCESS_RUN_YIELDED for "call me again", PROCESS_RUN_IDLE for a NULL
  * process, state or boot_info, and PROCESS_RUN_EXITED with a non-zero exit
@@ -198,6 +199,7 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
             boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
         state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
         state->fs_manager_index = boot_module_index_by_app_name(state->boot_info, "fs-manager");
+        state->fs_tmpfs_index = boot_module_index_by_app_name(state->boot_info, "fs-tmpfs");
         state->fs_init_index = boot_module_index_by_app_name(state->boot_info, "fs-init");
         state->device_manager_index =
             boot_module_index_by_app_name(state->boot_info, "device-manager");
@@ -228,6 +230,13 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         state->pm_spawn_owner_test_injected = 0;
         if (state->fs_manager_index == 0xFFFFFFFFu) {
             klog_write("[init] fs-manager module not found\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        /* The root filesystem is not optional: with nothing mounted at "/", a
+         * path that names no other mount resolves to nothing. */
+        if (state->fs_tmpfs_index == 0xFFFFFFFFu) {
+            klog_write("[init] fs-tmpfs module not found\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -308,6 +317,16 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
+        } else if (state->fs_tmpfs_index != 0xFFFFFFFFu) {
+            /* Before fs-init and before device-manager, because a mount point is
+             * a directory in THIS filesystem: the root has to be mounted before
+             * anything mounts onto it. */
+            trace_write("[init] spawn fs-tmpfs\n");
+            if (init_send_spawn_index(process, state, state->fs_tmpfs_index, 7) != 0) {
+                klog_write("[init] fs-tmpfs spawn request failed\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
         } else if (state->fs_init_index != 0xFFFFFFFFu) {
             trace_write("[init] spawn fs-init\n");
             if (init_send_spawn_index(process, state, state->fs_init_index, 5) != 0) {
@@ -362,6 +381,8 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
                 klog_write("[init] init-smoke spawn failed\n");
             } else if (state->pending_kind == 4) {
                 klog_write("[init] fs-manager spawn failed\n");
+            } else if (state->pending_kind == 7) {
+                klog_write("[init] fs-tmpfs spawn failed\n");
             } else if (state->pending_kind == 5) {
                 /* FIXME: pending_kind 5 reaching phase 1 is the fs-init spawn
                  * (init_send_spawn_path reuses 5 for sysinit, but that reply is
@@ -385,6 +406,9 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         } else if (state->pending_kind == 4) {
             trace_write("[init] fs-manager spawn ok\n");
             state->fs_manager_index = 0xFFFFFFFFu;
+        } else if (state->pending_kind == 7) {
+            trace_write("[init] fs-tmpfs spawn ok\n");
+            state->fs_tmpfs_index = 0xFFFFFFFFu;
         } else if (state->pending_kind == 5) {
             trace_write("[init] fs-init spawn ok\n");
             state->fs_init_index = 0xFFFFFFFFu;

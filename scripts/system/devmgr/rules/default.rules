@@ -66,3 +66,20 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", RUN+="system/d
 # modern 0x1042).
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1001", RUN+="system/drivers/virtio_blk.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1042", RUN+="system/drivers/virtio_blk.wap"
+
+# Two tmpfs instances placed by rule, which is what ENV{MOUNT} on a boot rule is
+# for: a filesystem with no backing device names no device, so nothing about it
+# implies where it belongs and it can only be told.
+#
+# /home/user is a mount at DEPTH whose ancestors are ordinary directories in the
+# root filesystem: fs-manager creates /home and then /home/user in the tmpfs
+# mounted at /, which is a different path through fsmgr_ensure_mount_points than
+# a top-level mount takes.
+SUBSYSTEM=="boot", ENV{MOUNT}="/home/user", RUN+="system/drivers/fs_tmpfs.wap"
+# /wfs/nested is a mount INSIDE another mount. Its mount point is created in the
+# WFS volume rather than in the root filesystem, and it SHADOWS what the volume
+# already holds there (scripts/wfs/nested/covered.txt): a path under the mount
+# point reaches the tmpfs, so the WFS file beneath is unreachable while the mount
+# stands. That is the Linux rule, and it is why a mount cannot fail because
+# someone left a file behind.
+SUBSYSTEM=="boot", ENV{MOUNT}="/wfs/nested", RUN+="system/drivers/fs_tmpfs.wap"

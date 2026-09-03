@@ -79,7 +79,6 @@ typedef enum {
     FAT_OP_MKDIR,
     FAT_OP_RMDIR,
     FAT_OP_READDIR, /* directory enumeration (fat_dir.c) */
-    FAT_OP_CHDIR,   /* change directory      (fat_dir.c) */
     FAT_OP_RENAME   /* rename/move an entry  (fat_dir.c) */
 } fat_op_t;
 
@@ -563,12 +562,11 @@ typedef struct {
 
 /* --- Coroutine sub-machine contexts (fat_dir.c, navigation side). --- */
 
-/* READDIR: stream the entries of the CURRENT directory (root region when
- * mnt->cwd_root, else the cwd subdir at mnt->dir_lba/dir_sectors) to the
- * requesting endpoint.  cur_root/base_lba/dir_sectors latch the target region at
- * the first step, so the scan keeps listing the directory it started on instead
- * of re-reading mnt after every yield; the loop cursors and the LFN accumulator
- * survive the per-sector yields. */
+/* READDIR: stream the entries of the directory the request NAMES to the
+ * requesting endpoint.  The path is resolved once (fat_resolve_dir), then
+ * cur_root/base_lba/dir_sectors latch the target region, so the scan keeps
+ * listing the directory it started on instead of re-resolving after every yield;
+ * the loop cursors and the LFN accumulator survive the per-sector yields. */
 typedef struct {
     int cont;
     uint8_t cur_root;       /* 1 = scanning the root region */
@@ -762,24 +760,13 @@ typedef struct fat_op_ctx {
     fat_ensurecap_ctx_t ensurecap; /* grow capacity for a write */
     fat_chainwalk_ctx_t capwalk;   /* OPEN capacity chain walk */
 
-    /* Directory navigation dispatch (CHDIR / READDIR): unpacked leaf name. */
-    /* CHDIR target, read from the client transfer buffer: a full path, not one
-     * component, so it is sized like every other client path here. */
+    /* READDIR target, read from the sender's transfer buffer: a full path, not
+     * one component, so it is sized like every other client path here. */
     char dir_name[FAT_MAX_PATH];
 
     /* Directory navigation sub-machines (fat_dir.c, navigation side). */
     fat_readdir_ctx_t readdir; /* READDIR streaming scan */
-    fat_chdir_ctx_t chdir;     /* CHDIR component walk */
-
-    /* TODO: CHDIR working state with no reader — fat_op_chdir keeps all of this
-     * in the `chdir` sub-context above. */
-    char chdir_path[32];
-    uint32_t chdir_pos;
-    char chdir_name[16];
-    uint32_t chdir_cluster;
-    uint8_t chdir_root;
-    uint32_t chdir_dir_lba;
-    uint32_t chdir_dir_sectors;
+    fat_chdir_ctx_t chdir;     /* directory-path walk, awaited by READDIR */
 } fat_op_ctx_t;
 
 #endif /* FS_FAT_FAT_TYPES_H */

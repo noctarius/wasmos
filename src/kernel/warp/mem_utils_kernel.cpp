@@ -295,8 +295,10 @@ extern "C" int warp_mem_ring3_map_jit(uint64_t user_root, uint8_t const* jit_ker
  * success, -1 when the allocation cannot be located, a page has no backing frame, or a
  * mapping failed — partial mappings are not rolled back. */
 extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linmem_kernel_ptr) {
-    if (!linmem_kernel_ptr)
+    if (!linmem_kernel_ptr) {
+        klog_write("[warp] r3 linmem: null kernel base\n");
         return -1;
+    }
     uint64_t linmem_virt = reinterpret_cast<uint64_t>(linmem_kernel_ptr);
     uint64_t basedataLength = 0;
     uint64_t user_va_base = 0;
@@ -310,6 +312,7 @@ extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linm
         uint64_t slot_va_base = 0;
         if (warp_linmem_kernel_window_query(
                 linmem_kernel_ptr, &slot_va_base, &basedataLength, &total_pages) != 0) {
+            klog_write("[warp] r3 linmem: slot window query failed\n");
             return -1;
         }
         data_offset = linmem_virt - basedataLength - slot_va_base;
@@ -319,10 +322,12 @@ extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linm
         dedicated_slot = 1;
     } else {
         if (linmem_virt < kHalfBase) {
+            klog_write("[warp] r3 linmem: base is not a kernel alias\n");
             return -1;
         }
         uint64_t linmem_phys = warp_mem_alias_phys(linmem_virt);
         if (!linmem_phys) {
+            klog_write("[warp] r3 linmem: base has no physical frame\n");
             return -1;
         }
 
@@ -331,6 +336,7 @@ extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linm
          * for the AllocHeader prepended by warp_kmalloc (0 for mmap entries). */
         MmapEntry* e = find_entry_by_phys(linmem_phys);
         if (!e) {
+            klog_write("[warp] r3 linmem: no tracked allocation for the base\n");
             return -1;
         }
 
@@ -368,9 +374,16 @@ extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linm
             phys_page = phys_identity + i * kPageSize;
         }
         if (!phys_page) {
+            /* A committed page with no frame: the committed count and the page
+             * tables disagree, which is the invariant this walk depends on. */
+            klog_write("[warp] r3 linmem: committed page has no frame\n");
             return -1;
         }
         if (paging_map_4k_in_root(user_root, user_va_base + i * kPageSize, phys_page, flags) != 0) {
+            /* Installing a PTE needs page-table frames from the allocator, so
+             * this is the one failure here that is a SHORTAGE rather than a
+             * broken invariant -- and the one that can come and go with load. */
+            klog_write("[warp] r3 linmem: user PTE install failed\n");
             return -1;
         }
     }

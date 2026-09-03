@@ -292,13 +292,6 @@ int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg);
 void pm_services_class_reap(uint32_t pm_context_id);
-/* PROC_IPC_SUBSCRIBE_EXIT_REQ: register msg->arg0 as an endpoint that receives
- * PROC_IPC_EXIT_EVENT. Returns 0 or a packed proc_pm code. */
-int pm_handle_subscribe_exit(uint32_t pm_context_id, const ipc_message_t* msg);
-/* One process-exit sweep: broadcast for every watched context that stopped
- * running, then re-arm the watch list. Called once per PM dispatch beside
- * pm_services_class_reap. */
-void pm_services_exit_reap(uint32_t pm_context_id);
 /* PROC_IPC_SUBSYSTEM_REGISTER_BROKER / PROC_IPC_EXEC_HANDLER_REGISTER: both
  * require CAP_SUBSYSTEM_REGISTER on the caller and a descriptor in the caller's
  * transfer buffer (arg1 = length, arg2 = buffer_id) whose declared endpoint the

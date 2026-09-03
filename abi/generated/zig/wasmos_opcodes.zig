@@ -78,41 +78,6 @@ pub const PROC_IPC_SUBSYSTEM_REGISTER_BROKER: i32 = 0x210;
 /// arg0=offset(0) arg1=byte_len(sizeof(desc)+node_bytes)
 /// arg2=reserved(0) arg3=reserved(0).
 pub const PROC_IPC_EXEC_HANDLER_REGISTER: i32 = 0x211;
-/// Receive PROC_IPC_EXIT_EVENT for every process that ends, from now on.
-/// arg0 = the endpoint events are delivered to. Replies PROC_IPC_RESP with
-/// arg0 = 0.
-///
-/// A BROADCAST rather than a per-service message, because holding state on
-/// behalf of another process is not special to any one service: the
-/// filesystem keeps a working directory and open files, the network stack
-/// keeps sockets, the compositor keeps windows. One event they all
-/// subscribe to beats an opcode per holder.
-///
-/// Re-subscribing the same endpoint is a no-op. There is no unsubscribe: a
-/// subscription ends when the subscriber's own process dies, which the
-/// same sweep that delivers the events detects.
-///
-/// Subscribing does NOT replay processes that have already ended. A
-/// service that starts late has no state for them either, so there is
-/// nothing to reconcile.
-pub const PROC_IPC_SUBSCRIBE_EXIT_REQ: i32 = 0x213;
-/// A process has ended and its slot is being reclaimed. arg0 = its context
-/// id, arg1 = its pid, arg2 = its exit status. Delivered to every endpoint
-/// subscribed with PROC_IPC_SUBSCRIBE_EXIT_REQ.
-///
-/// The context id is the identity to key on: it is what an endpoint's owner
-/// resolves to (`wasmos_ipc_endpoint_owner`), so it is what a service that
-/// tracked "who sent this" already has. Context ids are never reused, so an
-/// event can never be mistaken for a later process.
-///
-/// Fire-and-forget: the process manager does not wait for an
-/// acknowledgement and cannot, since a subscriber that needed the
-/// filesystem to handle it would deadlock the manager that spawns
-/// everything. A delivery that fails because a subscriber's queue is full
-/// is DROPPED, and the consequence is bounded -- the subscriber keeps state
-/// it would have released, which is the same leak that existed before this
-/// event, not a correctness failure.
-pub const PROC_IPC_EXIT_EVENT: i32 = 0x214;
 pub const PROC_IPC_RESP: i32 = 0x280;
 pub const PROC_IPC_ERROR: i32 = 0x2FF;
 

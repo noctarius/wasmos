@@ -336,8 +336,18 @@ static uint32_t g_foreign_ep; /* owned by a third context */
  * own authenticity check untested. */
 static void service_reply(void) {
     ipc_message_t req;
-    if (ipc_recv(g_dest_ep, &req) != IPC_OK) {
-        return;
+    /* Skip anything that is not a request. A real service endpoint receives
+     * WASMOS_IPC_HANGUP when a client it served is torn down, and treating that
+     * as the request would answer a message nobody sent -- which is exactly what
+     * happened when hangups were introduced and this peer read the first thing
+     * in the queue. */
+    for (;;) {
+        if (ipc_recv(g_dest_ep, &req) != IPC_OK) {
+            return;
+        }
+        if (req.type != WASMOS_IPC_HANGUP) {
+            break;
+        }
     }
     g_service_saw_request = 1;
     g_seen_src = req.source;

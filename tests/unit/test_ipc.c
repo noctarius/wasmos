@@ -2639,6 +2639,116 @@ static void contract_env_teardown(void) {
     ipc_endpoints_release_owner(g_env.other);
 }
 
+/* ---- WASMOS_IPC_HANGUP ---------------------------------------------------- *
+ * Tearing an endpoint down tells the endpoints it had SENT to that it is gone,
+ * so a service can release what it held for a client without being told who
+ * died by some other means.
+ *
+ * Regression: 2026-09-03-exited-client-pins-a-mount
+ * fs-manager kept a working directory per client and had no way to learn a
+ * client had ended, so a directory recorded by a process that had since exited
+ * refused an unmount forever. */
+
+/* Drain `ep` and report how many hangups it received, and the last one's args. */
+static uint32_t drain_hangups(uint32_t ep, uint32_t* out_dead_ep, uint32_t* out_owner) {
+    ipc_message_t m;
+    uint32_t seen = 0;
+    while (ipc_recv(ep, &m) == IPC_OK) {
+        if (m.type == WASMOS_IPC_HANGUP) {
+            seen++;
+            if (out_dead_ep) {
+                *out_dead_ep = m.arg0;
+            }
+            if (out_owner) {
+                *out_owner = m.arg1;
+            }
+        }
+    }
+    return seen;
+}
+
+static void test_teardown_hangs_up_on_endpoints_it_sent_to(void) {
+    const uint32_t client_ctx = 71u;
+    const uint32_t service_ctx = 72u;
+    uint32_t client_ep = 0, service_ep = 0;
+    uint32_t dead_ep = 0, owner = 0;
+    ipc_message_t msg;
+
+    CHECK(ipc_endpoint_create(client_ctx, &client_ep) == IPC_OK, "the client endpoint exists");
+    CHECK(ipc_endpoint_create(service_ctx, &service_ep) == IPC_OK, "the service endpoint exists");
+
+    memset(&msg, 0, sizeof(msg));
+    msg.type = 0x400u;
+    msg.source = client_ep;
+    CHECK(ipc_send_from(client_ctx, service_ep, &msg) == IPC_OK, "the client's request lands");
+    /* The service consumes the request, exactly as it would in service. */
+    CHECK(ipc_recv(service_ep, &msg) == IPC_OK, "the service reads it");
+
+    ipc_endpoints_release_owner(client_ctx);
+
+    CHECK(drain_hangups(service_ep, &dead_ep, &owner) == 1u,
+          "the service is told once that its client is gone");
+    CHECK(dead_ep == client_ep, "the hangup names the endpoint that died");
+    CHECK(owner == client_ctx, "and the context that owned it, which is what state is keyed by");
+}
+
+static void test_teardown_does_not_hang_up_on_strangers(void) {
+    const uint32_t client_ctx = 73u;
+    const uint32_t talked_ctx = 74u;
+    const uint32_t stranger_ctx = 75u;
+    uint32_t client_ep = 0, talked_ep = 0, stranger_ep = 0;
+    ipc_message_t msg;
+
+    CHECK(ipc_endpoint_create(client_ctx, &client_ep) == IPC_OK, "the client endpoint exists");
+    CHECK(ipc_endpoint_create(talked_ctx, &talked_ep) == IPC_OK, "the contacted endpoint exists");
+    CHECK(ipc_endpoint_create(stranger_ctx, &stranger_ep) == IPC_OK, "the stranger exists");
+
+    memset(&msg, 0, sizeof(msg));
+    msg.type = 0x400u;
+    msg.source = client_ep;
+    CHECK(ipc_send_from(client_ctx, talked_ep, &msg) == IPC_OK, "the client talks to one of them");
+    CHECK(ipc_recv(talked_ep, &msg) == IPC_OK, "which consumes the request");
+
+    ipc_endpoints_release_owner(client_ctx);
+
+    CHECK(drain_hangups(talked_ep, 0, 0) == 1u, "the one it talked to is told");
+    /* The scoping IS the design: a broadcast would wake every service on the
+     * system for every process that ends, and each would filter. */
+    CHECK(drain_hangups(stranger_ep, 0, 0) == 0u,
+          "an endpoint it never sent to hears nothing");
+}
+
+static void test_a_hangup_fits_even_when_the_queue_is_full(void) {
+    const uint32_t client_ctx = 76u;
+    const uint32_t service_ctx = 77u;
+    uint32_t client_ep = 0, service_ep = 0;
+    ipc_message_t msg;
+    uint32_t i;
+
+    CHECK(ipc_endpoint_create(client_ctx, &client_ep) == IPC_OK, "the client endpoint exists");
+    CHECK(ipc_endpoint_create(service_ctx, &service_ep) == IPC_OK, "the service endpoint exists");
+
+    memset(&msg, 0, sizeof(msg));
+    msg.type = 0x400u;
+    msg.source = client_ep;
+    CHECK(ipc_send_from(client_ctx, service_ep, &msg) == IPC_OK, "the client is a known peer");
+
+    /* Fill the service's queue to the depth an ordinary sender may use. The one
+     * already queued above counts, so this tops it up. */
+    for (i = 1u; i < IPC_QUEUE_DEPTH; ++i) {
+        CHECK(ipc_send_from(client_ctx, service_ep, &msg) == IPC_OK, "the queue fills");
+    }
+    CHECK(ipc_send_from(client_ctx, service_ep, &msg) == IPC_ERR_FULL,
+          "and refuses an ordinary sender at IPC_QUEUE_DEPTH");
+
+    /* The hangup must still arrive: a service that misses it holds that client's
+     * state until it dies itself, so the last slot is reserved for exactly this.
+     * A backed-up service is also the case where it is most likely to happen. */
+    ipc_endpoints_release_owner(client_ctx);
+    CHECK(drain_hangups(service_ep, 0, 0) == 1u,
+          "the hangup is delivered past a queue that is otherwise full");
+}
+
 static void test_error_code_contract(void) {
     struct {
         const char* what;
@@ -2900,6 +3010,12 @@ int main(void) {
         {"X1 every documented error code, by precondition", test_error_code_contract},
         {"X2 the kernel wrappers match their _from variants",
          test_the_kernel_wrappers_match_their_from_variants},
+        {"H1 teardown hangs up on endpoints it sent to",
+         test_teardown_hangs_up_on_endpoints_it_sent_to},
+        {"H2 teardown does not hang up on strangers",
+         test_teardown_does_not_hang_up_on_strangers},
+        {"H3 a hangup fits even when the queue is full",
+         test_a_hangup_fits_even_when_the_queue_is_full},
     };
 
     ipc_init();

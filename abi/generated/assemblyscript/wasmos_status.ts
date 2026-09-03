@@ -84,7 +84,6 @@ export const WASMOS_ERR_PROC_PM_SUBSYSTEM_REG: i32 = -0x00020017; // subsystem b
 export const WASMOS_ERR_PROC_PM_HANDLER_REG: i32 = -0x00020018; // exec-handler registration failed
 export const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: i32 = -0x00020019; // caller lacks the subsystem.register capability
 export const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001A; // PM could not acquire its own xfer buffer
-export const WASMOS_ERR_PROC_PM_EXIT_SUBS_FULL: i32 = -0x0002001B; // the process-exit subscriber table is full, so PROC_IPC_SUBSCRIBE_EXIT is refused rather than accepted-and-dropped. A service that does not get the subscription keeps state for processes that have ended -- the leak the event exists to close -- so a silent acceptance would be worse than a refusal the caller can report
 export const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 export const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 export const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -373,7 +372,6 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_PM_HANDLER_REG: return "exec-handler registration failed";
     case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: return "caller lacks the subsystem.register capability";
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "PM could not acquire its own xfer buffer";
-    case WASMOS_ERR_PROC_PM_EXIT_SUBS_FULL: return "the process-exit subscriber table is full, so PROC_IPC_SUBSCRIBE_EXIT is refused rather than accepted-and-dropped. A service that does not get the subscription keeps state for processes that have ended -- the leak the event exists to close -- so a silent acceptance would be worse than a refusal the caller can report";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";

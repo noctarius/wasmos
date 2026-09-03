@@ -23,7 +23,22 @@
 /* Messages an endpoint can hold before ipc_send_from starts refusing with
  * IPC_ERR_FULL. There is no backpressure short of that: the sender is never
  * blocked, so a slow receiver turns into dropped sends at its peers. */
+/* Messages an ordinary sender may have queued on one endpoint. */
 #define IPC_QUEUE_DEPTH 32
+/* Ring slots actually allocated. The extra one is reserved for
+ * WASMOS_IPC_HANGUP, so a peer's death can always be delivered even to an
+ * endpoint whose ordinary depth is exhausted -- losing a hangup means the
+ * receiver holds that peer's state until it dies itself. Kept as a separate
+ * constant so IPC_QUEUE_DEPTH remains what it says: the depth a sender sees. */
+#define IPC_QUEUE_SLOTS (IPC_QUEUE_DEPTH + 1u)
+/* Destinations one endpoint remembers having sent to, so its teardown can tell
+ * them it is gone (WASMOS_IPC_HANGUP). Sized for what a client actually talks
+ * to -- the filesystem, the console, the process manager, the compositor, the
+ * font service, the network stack -- with room to spare. An endpoint that
+ * exceeds it records the overflow rather than evicting silently: the untracked
+ * destinations keep that client's state, which is a leak, and a leak nobody can
+ * see is the part worth avoiding. */
+#define IPC_ENDPOINT_CONTACTS_MAX 8
 /* Endpoints per kmem chunk of the endpoint table. A growth granularity, not a
  * ceiling -- see IPC_ENDPOINT_PER_CONTEXT_MAX for the actual bound. */
 #define IPC_ENDPOINT_TABLE_CHUNK 16u

@@ -946,9 +946,10 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
 
 /* Release the state held for `context_id`, whose process has ended.
  *
- * Driven by PROC_IPC_EXIT_EVENT, which the process manager broadcasts to every
- * subscriber: holding state on behalf of another process is not special to this
- * service, so the notification is not either.
+ * Driven by WASMOS_IPC_HANGUP, which the kernel delivers when an endpoint that
+ * had sent to this one is torn down. Scoped by construction: the client's own
+ * requests are what made it a peer, so this service hears about its own clients
+ * and nothing else, and there is nothing to subscribe to.
  *
  * Everything here is state the client can no longer use. Its open fds name
  * backend handles nobody will close, and its working directory is a path nobody
@@ -1031,12 +1032,12 @@ static void fsmgr_forget_backend_in_clients(int32_t endpoint) {
  *    applies. The requesting client counts: `umount .` refuses, and so does
  *    unmounting the directory the shell is standing in.
  *
- * The working-directory rule was deliberately absent until PROC_IPC_EXIT_EVENT
- * existed. Without it fs-manager never released a client's state, so a directory
- * recorded by a process that had since exited would refuse the unmount forever:
- * one `cat` run inside a mount made it permanently unremovable. The rule is only
- * sound because a dead client's state is now released (fsmgr_release_client), so
- * every entry this walks belongs to a process that can still act on it.
+ * The working-directory rule was deliberately absent until a dead client's state
+ * could be released. Without that, fs-manager never dropped an entry, so a
+ * directory recorded by a process that had since exited would refuse the unmount
+ * forever: one `cat` run inside a mount made it permanently unremovable. The rule
+ * is only sound because WASMOS_IPC_HANGUP now releases it (fsmgr_release_client),
+ * so every entry this walks belongs to a process that can still act on it.
  */
 static wasmos_error_code_t fsmgr_mount_busy_reason(const fs_backend_t* mount) {
     fs_client_chunk_t* chunk = g_client_chunks;
@@ -1106,36 +1107,9 @@ static void fsmgr_pull_all_backends(void) {
     }
 }
 
-/* Ask the process manager to report every process that ends, on the service
- * endpoint so the events land in the main loop like any other request.
- *
- * Without this the client table grows by one entry per process that has ever
- * touched the filesystem, and the working-directory half of the unmount rule
- * cannot be enforced: a directory recorded by a process that has since exited
- * would refuse the unmount forever.
- *
- * A refusal is reported and not retried. The consequence is bounded and known --
- * the table grows as it did before the event existed -- so it is worth a line in
- * the log rather than a startup failure. */
-static void fsmgr_subscribe_process_exits(void) {
-    /* FIRE-AND-FORGET, not a call. A standing registration has no answer worth
-     * waiting for -- if it is refused there is nothing to do but carry on -- and
-     * fs-manager must not block on the process manager at all: the manager reads
-     * every module it spawns THROUGH this service, so a wait here is the same
-     * mutual wait that the mount request had to be designed around. Waiting also
-     * hung the boot outright while the reply was missing.
-     *
-     * The reply, when it comes, lands on the service endpoint and is ignored by
-     * the PROC_IPC_RESP arm of the main loop, which acts only on a mount spawn it
-     * is actually waiting for. The process manager logs its own refusal. */
-    (void)wasmos_ipc_send(
-        g_proc_endpoint, g_fs_endpoint, PROC_IPC_SUBSCRIBE_EXIT_REQ, 5, g_fs_endpoint, 0, 0, 0);
-}
-
 static void fsmgr_discover_backends(void) {
     (void)wasmos_svc_subscribe_class(
         g_proc_endpoint, g_reply_endpoint, g_fs_endpoint, FSMGR_BACKEND_CLASS, 3);
-    fsmgr_subscribe_process_exits();
     fsmgr_pull_all_backends();
 }
 
@@ -2134,11 +2108,15 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             continue;
         }
 
-        /* A client's process has ended: release what was held for it. Arrives
-         * here rather than on the private reply endpoint because it is unsolicited
-         * -- the subscription is standing, not a request in flight. */
-        if (type == PROC_IPC_EXIT_EVENT) {
-            fsmgr_release_client(arg0);
+        /* A client that had sent to this endpoint is gone: release what was
+         * held for it. arg0 is the dead endpoint, arg1 the context that owned it,
+         * and the context is what client state is keyed by.
+         *
+         * No subscription: the kernel delivers this to the endpoints the dead one
+         * had actually sent to, so the client's own requests are what registered
+         * it for notification. */
+        if (type == WASMOS_IPC_HANGUP) {
+            fsmgr_release_client(arg1f);
             continue;
         }
 

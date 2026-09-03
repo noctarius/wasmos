@@ -2714,8 +2714,7 @@ static void test_teardown_does_not_hang_up_on_strangers(void) {
     CHECK(drain_hangups(talked_ep, 0, 0) == 1u, "the one it talked to is told");
     /* The scoping IS the design: a broadcast would wake every service on the
      * system for every process that ends, and each would filter. */
-    CHECK(drain_hangups(stranger_ep, 0, 0) == 0u,
-          "an endpoint it never sent to hears nothing");
+    CHECK(drain_hangups(stranger_ep, 0, 0) == 0u, "an endpoint it never sent to hears nothing");
 }
 
 static void test_a_hangup_fits_even_when_the_queue_is_full(void) {
@@ -3012,8 +3011,7 @@ int main(void) {
          test_the_kernel_wrappers_match_their_from_variants},
         {"H1 teardown hangs up on endpoints it sent to",
          test_teardown_hangs_up_on_endpoints_it_sent_to},
-        {"H2 teardown does not hang up on strangers",
-         test_teardown_does_not_hang_up_on_strangers},
+        {"H2 teardown does not hang up on strangers", test_teardown_does_not_hang_up_on_strangers},
         {"H3 a hangup fits even when the queue is full",
          test_a_hangup_fits_even_when_the_queue_is_full},
     };

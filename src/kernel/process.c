@@ -975,6 +975,65 @@ static void process_wake_waiters(uint32_t target_pid) {
     }
 }
 
+/* ---- Departure log ------------------------------------------------------ *
+ * Contexts that have just become ZOMBIE, for the process manager to broadcast as
+ * PROC_IPC_EXIT_EVENT. A log rather than a scan: the manager drains it once per
+ * dispatch, which costs nothing when empty, whereas walking the process table
+ * every dispatch is O(n^2) -- process_info_at scans to reach the nth entry -- and
+ * measurably starved the manager until spawns began failing.
+ *
+ * Recorded here rather than sent here: this runs with the process-table lock
+ * held, and sending IPC under it invites the deadlock the event exists to help
+ * services avoid.
+ *
+ * A full log DROPS the oldest departure, and the consequence is bounded: a
+ * service keeps state for a process that ended, which is the leak that existed
+ * before the event. Blocking or growing here would be worse than that. */
+#define PROCESS_DEPART_LOG_CAP 32
+
+typedef struct {
+    uint32_t context_id;
+    uint32_t pid;
+    int32_t exit_status;
+} process_depart_t;
+
+static process_depart_t g_depart_log[PROCESS_DEPART_LOG_CAP];
+static uint32_t g_depart_head; /* next write */
+static uint32_t g_depart_tail; /* next read */
+
+/* Append one departure. Called from process_mark_exited with the table lock
+ * held, so it does no allocation and takes no further lock. */
+static void process_depart_record(uint32_t context_id, uint32_t pid, int32_t exit_status) {
+    uint32_t next;
+    if (context_id == 0) {
+        return;
+    }
+    next = (g_depart_head + 1u) % PROCESS_DEPART_LOG_CAP;
+    if (next == g_depart_tail) {
+        /* Full: drop the oldest so the newest is kept. A reader that fell this
+         * far behind has already lost the ordering guarantee anyway. */
+        g_depart_tail = (g_depart_tail + 1u) % PROCESS_DEPART_LOG_CAP;
+    }
+    g_depart_log[g_depart_head].context_id = context_id;
+    g_depart_log[g_depart_head].pid = pid;
+    g_depart_log[g_depart_head].exit_status = exit_status;
+    g_depart_head = next;
+}
+
+int process_depart_take(uint32_t* out_context_id, uint32_t* out_pid, int32_t* out_exit_status) {
+    if (!out_context_id || !out_pid || !out_exit_status) {
+        return -1;
+    }
+    if (g_depart_tail == g_depart_head) {
+        return -1;
+    }
+    *out_context_id = g_depart_log[g_depart_tail].context_id;
+    *out_pid = g_depart_log[g_depart_tail].pid;
+    *out_exit_status = g_depart_log[g_depart_tail].exit_status;
+    g_depart_tail = (g_depart_tail + 1u) % PROCESS_DEPART_LOG_CAP;
+    return 0;
+}
+
 static void process_mark_exited(process_t* proc, int32_t exit_status) {
     if (!proc || proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_DEAD) {
         return;
@@ -989,6 +1048,7 @@ static void process_mark_exited(process_t* proc, int32_t exit_status) {
      * ALREADY ZOMBIE/REAPING/DEAD (a concurrent kill won) — all terminal — so
      * the postcondition "proc is dead" holds either way. */
     (void)process_force_transit(proc, PROCESS_STATE_ZOMBIE);
+    process_depart_record(proc->context_id, proc->pid, exit_status);
     thread_mark_owner_exited(proc->pid, exit_status);
     __atomic_store_n(&proc->live_thread_count, 0u, __ATOMIC_RELAXED);
     process_wake_waiters(proc->pid);

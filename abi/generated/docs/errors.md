@@ -71,6 +71,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_HANDLER_REG` | -0x00020018 | exec-handler registration failed |
 | `WASMOS_ERR_PROC_PM_NOT_AUTHORIZED` | -0x00020019 | caller lacks the subsystem.register capability |
 | `WASMOS_ERR_PROC_PM_NO_PM_FSBUF` | -0x0002001A | PM could not acquire its own xfer buffer |
+| `WASMOS_ERR_PROC_PM_EXIT_SUBS_FULL` | -0x0002001B | the process-exit subscriber table is full, so PROC_IPC_SUBSCRIBE_EXIT is refused rather than accepted-and-dropped. A service that does not get the subscription keeps state for processes that have ended -- the leak the event exists to close -- so a silent acceptance would be worse than a refusal the caller can report |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 

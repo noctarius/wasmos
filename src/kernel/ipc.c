@@ -24,7 +24,7 @@ typedef struct {
     idtable_header_t header;
     ipc_endpoint_type_t type;
     ksync_spinlock_t lock;
-    ipc_message_t queue[IPC_QUEUE_SLOTS];
+    ipc_message_t queue[IPC_QUEUE_DEPTH];
     uint32_t head;
     uint32_t tail;
     uint32_t count;
@@ -39,16 +39,6 @@ typedef struct {
     uint32_t last_refused_source;
     sched_event_t event;        /* supports N waiters */
     poll_struct_t* poll_struct; /* lazily allocated; notified on send */
-    /* Destinations this endpoint has sent to, so teardown can hang up on them.
-     * Recorded on send under the DESTINATION's lock is impossible -- that would
-     * need two endpoint locks -- so it is recorded under this endpoint's own
-     * lock by ipc_endpoint_note_contact, called after the send completes. */
-    uint32_t contacts[IPC_ENDPOINT_CONTACTS_MAX];
-    uint32_t contact_count;
-    /* Set when a destination could not be recorded because the array was full.
-     * Kept because the consequence -- that destination never hears this endpoint
-     * die, and holds its state -- is otherwise invisible. */
-    uint32_t contacts_overflowed;
 } ipc_endpoint_t;
 
 /* Select-set: watches up to IPC_SELECT_EPS_MAX endpoints simultaneously. */
@@ -389,8 +379,8 @@ void ipc_diag_dump_endpoint_history(uint32_t endpoint, uint32_t want) {
             (unsigned)__atomic_load_n(&ep->last_refused_source, __ATOMIC_RELAXED));
     }
     uint32_t head = __atomic_load_n(&ep->head, __ATOMIC_RELAXED);
-    for (uint32_t back = 1u; back <= want && back <= IPC_QUEUE_SLOTS; ++back) {
-        const ipc_message_t* m = &ep->queue[(head + IPC_QUEUE_SLOTS - back) % IPC_QUEUE_SLOTS];
+    for (uint32_t back = 1u; back <= want && back <= IPC_QUEUE_DEPTH; ++back) {
+        const ipc_message_t* m = &ep->queue[(head + IPC_QUEUE_DEPTH - back) % IPC_QUEUE_DEPTH];
         /* Read atomically: a sender may be writing this slot right now, and a
          * plain load beside it is a data race regardless of how tolerable the
          * value would be. */
@@ -422,8 +412,8 @@ void ipc_diag_dump_requests_from(uint32_t source_endpoint, ipc_diag_name_fn name
             continue;
         }
         uint32_t head = __atomic_load_n(&ep->head, __ATOMIC_RELAXED);
-        for (uint32_t back = 1u; back <= IPC_QUEUE_SLOTS; ++back) {
-            const ipc_message_t* m = &ep->queue[(head + IPC_QUEUE_SLOTS - back) % IPC_QUEUE_SLOTS];
+        for (uint32_t back = 1u; back <= IPC_QUEUE_DEPTH; ++back) {
+            const ipc_message_t* m = &ep->queue[(head + IPC_QUEUE_DEPTH - back) % IPC_QUEUE_DEPTH];
             if (__atomic_load_n(&m->type, __ATOMIC_RELAXED) == 0u) {
                 continue;
             }
@@ -440,43 +430,6 @@ void ipc_diag_dump_requests_from(uint32_t source_endpoint, ipc_diag_name_fn name
             break; /* newest per endpoint is enough to name the peer */
         }
     }
-}
-
-/* Remember that `source` has sent to `destination`, so tearing `source` down can
- * tell `destination` it is gone.
- *
- * Idempotent per pair, and bounded: a full list sets contacts_overflowed rather
- * than evicting, because evicting would silently pick which peer never learns
- * this endpoint died. Takes the SOURCE endpoint's lock and no other.
- *
- * A destination is remembered even if the receiver never keeps state for the
- * sender: the kernel cannot know which peers care, and an unwanted hangup is a
- * message a receiver ignores, while a missing one is state held forever. */
-static void ipc_endpoint_note_contact(uint32_t source, uint32_t destination) {
-    int rc = IPC_OK;
-    ipc_endpoint_t* src = 0;
-    uint32_t i;
-
-    if (source == IPC_ENDPOINT_NONE || destination == IPC_ENDPOINT_NONE || source == destination) {
-        return;
-    }
-    src = ipc_endpoint_acquire(source, IPC_ENDPOINT_TYPE_MESSAGE, &rc);
-    if (!src) {
-        return;
-    }
-    for (i = 0; i < src->contact_count; ++i) {
-        if (src->contacts[i] == destination) {
-            ksync_spinlock_unlock(&src->lock);
-            return;
-        }
-    }
-    if (src->contact_count >= IPC_ENDPOINT_CONTACTS_MAX) {
-        src->contacts_overflowed = 1u;
-        ksync_spinlock_unlock(&src->lock);
-        return;
-    }
-    src->contacts[src->contact_count++] = destination;
-    ksync_spinlock_unlock(&src->lock);
 }
 
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t* message) {
@@ -505,13 +458,7 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
         return rc;
     }
 
-    /* The last slot is reserved for WASMOS_IPC_HANGUP, so a peer's death can
-     * always be delivered even to an endpoint an ordinary sender has filled.
-     * Losing a hangup means the receiver holds that peer's state until it dies
-     * itself, which is the failure this reservation exists to prevent. */
-    const uint32_t send_limit =
-        (message->type == WASMOS_IPC_HANGUP) ? IPC_QUEUE_SLOTS : IPC_QUEUE_DEPTH;
-    if (ep->count >= send_limit) {
+    if (ep->count >= IPC_QUEUE_DEPTH) {
         /* Remember the refusal on the endpoint that refused it, under the lock
          * already held -- no ring, no atomics, nothing a reader can tear.  A
          * refused send lands in no queue, so unlike a delivered message it
@@ -529,8 +476,7 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     ipc_message_t msg = *message;
     msg.destination = endpoint;
     ep->queue[ep->tail] = msg;
-    const uint32_t note_source = msg.source;
-    ep->tail = (ep->tail + 1u) % IPC_QUEUE_SLOTS;
+    ep->tail = (ep->tail + 1u) % IPC_QUEUE_DEPTH;
     ep->count++;
     ksync_spinlock_lock(&ep->event.lock);
     sched_event_wake_one(&ep->event, 0, SCHED_PEND_OK);
@@ -546,13 +492,6 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
         poll_notify(ep->poll_struct, POLL_EV_IN, ep->header.id);
     }
     ksync_spinlock_unlock(&ep->lock);
-    /* Recorded AFTER the destination's lock is dropped: noting the contact takes
-     * the SOURCE endpoint's lock, and the file's lock order permits only one
-     * endpoint lock at a time. Skipped for a hangup, which is the teardown
-     * talking and must not extend anyone's contact list. */
-    if (message->type != WASMOS_IPC_HANGUP) {
-        ipc_endpoint_note_contact(note_source, endpoint);
-    }
     return IPC_OK;
 }
 
@@ -576,7 +515,7 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t*
     }
 
     *out_message = ep->queue[ep->head];
-    ep->head = (ep->head + 1u) % IPC_QUEUE_SLOTS;
+    ep->head = (ep->head + 1u) % IPC_QUEUE_DEPTH;
     ep->count--;
     ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
@@ -612,7 +551,7 @@ int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
         }
     }
     *out_message = ep->queue[ep->head];
-    ep->head = (ep->head + 1u) % IPC_QUEUE_SLOTS;
+    ep->head = (ep->head + 1u) % IPC_QUEUE_DEPTH;
     ep->count--;
     ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
@@ -716,95 +655,9 @@ int ipc_wait(uint32_t endpoint) {
  * blocked on an endpoint that is about to stop existing) and the lazily
  * allocated poll hub returned.
  */
-/* Hangups collected during a teardown pass, to be sent after the endpoint-table
- * lock is released.
- *
- * Two phases are forced by the lock order. ipc_endpoints_release_owner holds
- * g_endpoint_table_lock across the whole pass, and ipc_send_from acquires that
- * same lock to find its destination -- sending from inside the callback
- * self-deadlocks, which is exactly how the first version of this hung the boot
- * before fs-manager even started.
- *
- * Passed to the callback through idtable's `user` pointer, so it is per-pass and
- * two CPUs tearing down two contexts cannot share it. */
-#define IPC_HANGUP_BATCH_MAX 32
-
-typedef struct {
-    struct {
-        uint32_t destination;
-        uint32_t dead_endpoint;
-        uint32_t owner_context_id;
-    } items[IPC_HANGUP_BATCH_MAX];
-    uint32_t count;
-    /* Hangups that did not fit. Reported rather than silently lost: each one is
-     * a peer that keeps this client's state for the rest of its life. */
-    uint32_t dropped;
-} ipc_hangup_batch_t;
-
-/* Collect the hangups owed by `ep`, without sending any.
- *
- * Runs under g_endpoint_table_lock (the caller's pass) and takes ep->lock, which
- * is the documented order: table -> endpoint. */
-static void ipc_endpoint_collect_hangups(ipc_endpoint_t* ep, ipc_hangup_batch_t* batch) {
-    uint32_t i;
-
-    if (!batch) {
-        return;
-    }
-    ksync_spinlock_lock(&ep->lock);
-    for (i = 0; i < ep->contact_count && i < IPC_ENDPOINT_CONTACTS_MAX; ++i) {
-        if (batch->count >= IPC_HANGUP_BATCH_MAX) {
-            batch->dropped++;
-            continue;
-        }
-        batch->items[batch->count].destination = ep->contacts[i];
-        batch->items[batch->count].dead_endpoint = ep->header.id;
-        batch->items[batch->count].owner_context_id = ep->header.owner_context_id;
-        batch->count++;
-    }
-    ep->contact_count = 0;
-    ksync_spinlock_unlock(&ep->lock);
-}
-
-/* Deliver a collected batch, after the table lock is released.
- *
- * A send here cannot be refused for a full queue -- ipc_send_from reserves the
- * last slot for WASMOS_IPC_HANGUP -- but it can still fail if the destination has
- * itself been destroyed, which needs no handling: it holds nothing any more. */
-static void ipc_hangup_batch_flush(ipc_hangup_batch_t* batch) {
-    uint32_t i;
-
-    if (!batch) {
-        return;
-    }
-    for (i = 0; i < batch->count; ++i) {
-        ipc_message_t ev;
-        ev.type = WASMOS_IPC_HANGUP;
-        ev.source = IPC_ENDPOINT_NONE;
-        ev.destination = batch->items[i].destination;
-        ev.request_id = 0;
-        ev.arg0 = batch->items[i].dead_endpoint;
-        ev.arg1 = batch->items[i].owner_context_id;
-        ev.arg2 = 0;
-        ev.arg3 = 0;
-        /* From the KERNEL context: the owning process is already gone, so it
-         * cannot be the sender, and a source endpoint of its own would be one
-         * more thing being torn down. */
-        (void)ipc_send_from(IPC_CONTEXT_KERNEL, batch->items[i].destination, &ev);
-    }
-    if (batch->dropped) {
-        /* serial_printf_unlocked, not klog: this file is linked into the host
-         * unit tests, which provide the serial shim and not the kernel log. */
-        serial_printf_unlocked("[ipc] %u hangup(s) dropped; peers keep the client's state\n",
-                               (unsigned)batch->dropped);
-    }
-}
-
 static void ipc_endpoint_teardown(void* elem, void* user) {
     ipc_endpoint_t* ep = (ipc_endpoint_t*)elem;
-    /* Collected, not sent: see ipc_hangup_batch_t for why the send has to wait
-     * until the caller's table lock is released. */
-    ipc_endpoint_collect_hangups(ep, (ipc_hangup_batch_t*)user);
+    (void)user;
     ksync_spinlock_lock(&ep->lock);
     ksync_spinlock_lock(&ep->event.lock);
     sched_event_abort_all(&ep->event);
@@ -824,18 +677,12 @@ static void ipc_endpoint_teardown(void* elem, void* user) {
  * ignored, since it is the "no context" sentinel and matching on it would
  * release endpoints indiscriminately. */
 void ipc_endpoints_release_owner(uint32_t owner_context_id) {
-    ipc_hangup_batch_t batch;
-
     if (owner_context_id == 0) {
         return;
     }
-    batch.count = 0;
-    batch.dropped = 0;
     ksync_spinlock_lock(&g_endpoint_table_lock);
-    (void)idtable_release_owner(&g_endpoint_table, owner_context_id, ipc_endpoint_teardown, &batch);
+    (void)idtable_release_owner(&g_endpoint_table, owner_context_id, ipc_endpoint_teardown, 0);
     ksync_spinlock_unlock(&g_endpoint_table_lock);
-    /* Outside the lock: every send needs it to resolve its destination. */
-    ipc_hangup_batch_flush(&batch);
 }
 
 /* -------------------------------------------------------------------------

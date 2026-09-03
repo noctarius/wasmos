@@ -98,6 +98,43 @@ enum {
      * arg2=reserved(0) arg3=reserved(0).
      */
     PROC_IPC_EXEC_HANDLER_REGISTER = 0x211,
+    /* Receive PROC_IPC_EXIT_EVENT for every process that ends, from now on.
+     * arg0 = the endpoint events are delivered to. Replies PROC_IPC_RESP with
+     * arg0 = 0.
+     *
+     * A BROADCAST rather than a per-service message, because holding state on
+     * behalf of another process is not special to any one service: the
+     * filesystem keeps a working directory and open files, the network stack
+     * keeps sockets, the compositor keeps windows. One event they all
+     * subscribe to beats an opcode per holder.
+     *
+     * Re-subscribing the same endpoint is a no-op. There is no unsubscribe: a
+     * subscription ends when the subscriber's own process dies, which the
+     * same sweep that delivers the events detects.
+     *
+     * Subscribing does NOT replay processes that have already ended. A
+     * service that starts late has no state for them either, so there is
+     * nothing to reconcile.
+     */
+    PROC_IPC_SUBSCRIBE_EXIT_REQ = 0x213,
+    /* A process has ended and its slot is being reclaimed. arg0 = its context
+     * id, arg1 = its pid, arg2 = its exit status. Delivered to every endpoint
+     * subscribed with PROC_IPC_SUBSCRIBE_EXIT_REQ.
+     *
+     * The context id is the identity to key on: it is what an endpoint's owner
+     * resolves to (`wasmos_ipc_endpoint_owner`), so it is what a service that
+     * tracked "who sent this" already has. Context ids are never reused, so an
+     * event can never be mistaken for a later process.
+     *
+     * Fire-and-forget: the process manager does not wait for an
+     * acknowledgement and cannot, since a subscriber that needed the
+     * filesystem to handle it would deadlock the manager that spawns
+     * everything. A delivery that fails because a subscriber's queue is full
+     * is DROPPED, and the consequence is bounded -- the subscriber keeps state
+     * it would have released, which is the same leak that existed before this
+     * event, not a correctness failure.
+     */
+    PROC_IPC_EXIT_EVENT = 0x214,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF,
 };
@@ -845,30 +882,6 @@ enum {
      * src/drivers/include/wasmos_driver_abi.h and src/kernel/include/irq.h.
      */
     WASMOS_IPC_SHUTDOWN_REQ = 0xFF02,
-    /* An endpoint that had sent to yours has been torn down, because the
-     * process owning it ended. arg0 = the dead endpoint's id, arg1 = the
-     * context that owned it; arg2..arg3 reserved (0).
-     *
-     * Delivered to the endpoints that dead endpoint had actually SENT to, and
-     * to no others. That scoping is the point: a service that holds state on
-     * behalf of its clients -- a working directory, a socket, a window -- hears
-     * about its own clients ending and nothing else. There is no subscription,
-     * because the relationship the notification follows is the one the sends
-     * already created.
-     *
-     * The kernel reserves the last slot of every endpoint queue for this
-     * message, so a hangup cannot be refused by a queue an ordinary sender
-     * filled. A notification that a peer is gone is the one message a service
-     * cannot afford to lose: losing it means holding that peer's state until
-     * the service itself dies.
-     *
-     * A dead endpoint tracks a bounded number of destinations
-     * (IPC_ENDPOINT_CONTACTS_MAX). A client that talked to more services than
-     * that leaves the untracked ones unnotified, which is a leak rather than
-     * an error, and the endpoint records that it overflowed so the diagnostics
-     * can say so.
-     */
-    WASMOS_IPC_HANGUP = 0xFF03,
     /* Sent back to the process manager when a participant has quiesced.
      * arg0..arg3 reserved (0). Answering does not mean the participant stops
      * running; it means nothing it holds still needs to reach a device.
@@ -973,6 +986,8 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x20F: return "PROC_IPC_SPAWN_PATH_CAPS_SYNC";
         case 0x210: return "PROC_IPC_SUBSYSTEM_REGISTER_BROKER";
         case 0x211: return "PROC_IPC_EXEC_HANDLER_REGISTER";
+        case 0x213: return "PROC_IPC_SUBSCRIBE_EXIT_REQ";
+        case 0x214: return "PROC_IPC_EXIT_EVENT";
         case 0x280: return "PROC_IPC_RESP";
         case 0x2FF: return "PROC_IPC_ERROR";
         default: return "UNKNOWN";
@@ -1243,7 +1258,6 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
     case WASMOS_OPCODE_SUBSYS_SYSTEM:
         switch (type) {
         case 0xFF02: return "WASMOS_IPC_SHUTDOWN_REQ";
-        case 0xFF03: return "WASMOS_IPC_HANGUP";
         case 0xFF82: return "WASMOS_IPC_SHUTDOWN_DONE";
         default: return "UNKNOWN";
         }

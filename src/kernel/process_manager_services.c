@@ -1,8 +1,15 @@
-/* process_manager_services.c - PM service registration and discovery.
+/* process_manager_services.c - PM service registration, discovery, and the
+ * notifications built on the same machinery.
  * Maintains the name -> endpoint table (pm_service_set / pm_service_lookup) plus
  * the SVC_IPC_* handlers over it, the virtual-class registry bridge (class
  * register/lookup/subscribe and the exit-driven reap that fires REMOVE events),
- * and the subsystem broker / exec-handler registrations. */
+ * the PROCESS-EXIT broadcast (PROC_IPC_SUBSCRIBE_EXIT / PROC_IPC_EXIT_EVENT),
+ * and the subsystem broker / exec-handler registrations.
+ *
+ * The exit broadcast lives here rather than beside the spawn code because it is
+ * the same shape as the class events next to it -- subscribe an endpoint, push
+ * on a change, drop subscribers whose own process died -- and because it runs
+ * from the same once-per-dispatch sweep. */
 #include "process_manager_internal.h"
 #include "capability.h"
 #include "klog.h"
@@ -61,6 +68,159 @@ static void pm_service_class_ensure(uint32_t pm_context_id) {
 void pm_services_class_reap(uint32_t pm_context_id) {
     pm_service_class_ensure(pm_context_id);
     service_class_registry_reap_dead(pm_service_class_alive, 0);
+}
+
+/* ---- Process-exit broadcast --------------------------------------------- *
+ * Any service that holds state on behalf of another process needs to know when
+ * that process ends: the filesystem keeps a working directory and open files,
+ * the network stack keeps sockets, the compositor keeps windows. One broadcast
+ * they all subscribe to beats an opcode per holder.
+ *
+ * Detection comes from the kernel's DEPARTURE LOG (process_depart_take): the
+ * exit path records a context as it becomes ZOMBIE, and this drains the log once
+ * per dispatch. It records rather than sends because the exit path holds the
+ * process-table lock, and it logs rather than being scanned for because draining
+ * an empty log is free while walking the process table every dispatch is O(n^2)
+ * -- which measurably starved the manager until spawns failed. */
+
+/* Endpoints subscribed to PROC_IPC_EXIT_EVENT, with the context that owns each
+ * so a dead subscriber can be dropped by the same rule that drops a dead class
+ * provider. */
+typedef struct {
+    uint32_t notify_endpoint;
+    uint32_t owner_ctx;
+    uint8_t in_use;
+} pm_exit_sub_t;
+
+/* Subscribers are services, of which there are far fewer than processes; a
+ * subscribe past this is refused rather than silently dropped. */
+#define PM_EXIT_SUB_MAX 16
+static pm_exit_sub_t g_exit_subs[PM_EXIT_SUB_MAX];
+
+/* Whether `context_id` still belongs to a process that can act.
+ *
+ * A ZOMBIE counts as gone: it has no live thread, so it cannot issue another
+ * request, and the state a service holds for it is already dead weight. Waiting
+ * for the slot to be reclaimed would only delay the release. */
+static int pm_exit_context_running(uint32_t context_id) {
+    /* The same predicate the class sweep uses, and for the same reason: a direct
+     * lookup plus an exit-status probe. Scanning the table with
+     * process_info_at_stats instead made this O(n) per watch and O(n^2) per
+     * sweep, over a call that sums thread ticks and walks memory accounting --
+     * enough to starve the process manager until spawns began failing. Liveness
+     * needs none of that. */
+    return pm_service_class_alive(0, context_id);
+}
+
+/* Push one PROC_IPC_EXIT_EVENT to every live subscriber.
+ *
+ * Best effort by design: a send that fails because a subscriber's queue is full
+ * is dropped, and the subscriber simply keeps state it would have released --
+ * the leak that existed before this event, not a correctness failure. Retrying
+ * here would mean the process manager waiting on a service, which is the shape
+ * that deadlocks it. */
+static void pm_exit_broadcast(uint32_t pm_context_id, uint32_t context_id, uint32_t pid,
+                              int32_t status) {
+    ipc_message_t ev;
+    uint32_t i;
+
+    for (i = 0; i < PM_EXIT_SUB_MAX; ++i) {
+        if (!g_exit_subs[i].in_use) {
+            continue;
+        }
+        /* Drop a subscriber whose own process is gone, so the table does not
+         * fill with endpoints nothing owns. */
+        if (!pm_exit_context_running(g_exit_subs[i].owner_ctx)) {
+            g_exit_subs[i].in_use = 0;
+            continue;
+        }
+        ev.type = PROC_IPC_EXIT_EVENT;
+        /* Sent FROM the PM's well-known endpoint, as the class-event sink does.
+         * IPC_ENDPOINT_NONE looks right for a message that wants no reply, but
+         * the send is rejected without a real source and the event is silently
+         * lost -- the subscriber then keeps state forever with nothing in any log
+         * to say why. */
+        ev.source = g_pm.proc_endpoint;
+        ev.destination = g_exit_subs[i].notify_endpoint;
+        ev.request_id = 0;
+        ev.arg0 = (int32_t)context_id;
+        ev.arg1 = (int32_t)pid;
+        ev.arg2 = status;
+        ev.arg3 = 0;
+        (void)ipc_send_from(pm_context_id, g_exit_subs[i].notify_endpoint, &ev);
+    }
+}
+
+/* PROC_IPC_SUBSCRIBE_EXIT_REQ: arg0 = the endpoint events are delivered to.
+ *
+ * Re-subscribing the same endpoint is a no-op, so a service that restarts its
+ * discovery does not accumulate duplicates. Returns 0, or a packed code when the
+ * endpoint is invalid or the table is full. */
+int pm_handle_subscribe_exit(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t notify_endpoint = 0;
+    uint32_t owner = 0;
+    uint32_t i;
+    uint32_t free_slot = PM_EXIT_SUB_MAX;
+    ipc_message_t resp;
+
+    if (!msg) {
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
+    }
+    notify_endpoint = (uint32_t)msg->arg0;
+    if (notify_endpoint == IPC_ENDPOINT_NONE || (int32_t)notify_endpoint <= 0) {
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
+    }
+    if (ipc_endpoint_owner(msg->source, &owner) != IPC_OK || owner == 0) {
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
+    }
+    for (i = 0; i < PM_EXIT_SUB_MAX; ++i) {
+        if (g_exit_subs[i].in_use && g_exit_subs[i].notify_endpoint == notify_endpoint) {
+            return 0;
+        }
+        if (!g_exit_subs[i].in_use && free_slot == PM_EXIT_SUB_MAX) {
+            free_slot = i;
+        }
+    }
+    if (free_slot == PM_EXIT_SUB_MAX) {
+        klog_write("[pm] exit-event subscribers full; subscribe refused\n");
+        return WASMOS_ERR_PROC_PM_EXIT_SUBS_FULL;
+    }
+    g_exit_subs[free_slot].notify_endpoint = notify_endpoint;
+    g_exit_subs[free_slot].owner_ctx = owner;
+    g_exit_subs[free_slot].in_use = 1;
+    /* The dispatcher replies only on a non-zero return, so a successful handler
+     * owes its own reply. Omitting it left the subscriber blocked in its call --
+     * and since fs-manager subscribes during bring-up, that hung the boot. */
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = 0;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
+}
+
+/* Drain the kernel's departure log, broadcasting one PROC_IPC_EXIT_EVENT per
+ * process that has ended.
+ *
+ * Called once per PM dispatch beside pm_services_class_reap. Costs one
+ * comparison when nothing has exited, which is the point: the first version of
+ * this walked the process table every dispatch to diff it against a watch list,
+ * and process_info_at scans to reach its nth entry, so the sweep was O(n^2) over
+ * ~40 processes. That starved the manager badly enough that spawns started
+ * failing -- visible only on a single-CPU boot, where the tests run. */
+void pm_services_exit_reap(uint32_t pm_context_id) {
+    uint32_t context_id = 0;
+    uint32_t pid = 0;
+    int32_t status = 0;
+
+    while (process_depart_take(&context_id, &pid, &status) == 0) {
+        pm_exit_broadcast(pm_context_id, context_id, pid, status);
+    }
 }
 
 /* Inverse of pm_pack_name_args: reassembles up to 16 bytes of name from four IPC

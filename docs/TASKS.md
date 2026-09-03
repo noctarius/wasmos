@@ -526,7 +526,14 @@ and `architecture/33-completion-ports.md`.
   endpoint" and "owned by the kernel" stop sharing a value.
 
 - [ ] [CLEANUP][P1] Retire blocking IPC from app and service CALL SITES, then delete
-  the blocking primitives that only those call sites use. Nothing gates the start:
+  the blocking primitives that only those call sites use.
+
+  NEW synchronous request/reply is banned outright (`AGENTS.md`, "Never Do"), so
+  this list only shrinks. It cannot be enforced by a lint check: the call sites
+  below are still present, so a check would flag the tree rather than the change.
+  Convert the ones in files you touch, as with bare `-1`s.
+
+  Nothing gates the start:
   the four AS drivers (keyboard, mouse, serial, rtc) are already `@coroutine` entry
   points driven by libc's pump, and the future/promise bridge is live in net-stack
   and on the CLI's VT path. Sequenced, because the order is forced by what gates

@@ -283,7 +283,13 @@ typedef struct {
      * somewhere else by editing a rule rather than rewriting a partition
      * table. */
     char mount[16];
+    /* The rule's target, exactly one of which is set -- see always_spawn_rule_t.
+     * `fstype` means fs-manager mounts this volume and owns the result;
+     * `spawn_path` means the device manager starts the module itself, which only
+     * /boot still needs, because the driver images every other filesystem is
+     * loaded from live on it. */
     char spawn_path[96];
+    char fstype[16];
 } block_fs_rule_t;
 
 /* Rule: spawn a driver when a PCI device matching class/vendor/device is found.

@@ -903,14 +903,25 @@ linked feature documents for rationale and rollout plans.
   device manager's own `mount_reply_endpoint` -- blocking there would hold the
   device manager's query endpoint shut for a whole driver bring-up.
 
-  `/home/user` and `/wfs/nested` are placed this way. `/init` and `/boot` stay
-  where they are and for the reason they cannot be unmounted at all: `/init` is
-  the kernel's boot-module spawn and `/boot` holds the driver images every other
-  filesystem is loaded from. The block-backed rule mounts (`/user`, `/wfs`,
-  `/vwfs`) are still device-manager spawns -- moving them needs `id=` to become
-  the only device token a filesystem driver is given, and `fs_fat` today still
-  demands a dead `driver=`/`unit=` pair while `fs_wfs` derives its service name
-  from `unit=`.
+  Every rule mount is placed this way: `/home/user`, `/wfs/nested`, `/user`,
+  `/wfs` and `/vwfs`. `/init` and `/boot` stay where they are, for the reason
+  they cannot be unmounted at all: `/init` is the kernel's boot-module spawn and
+  `/boot` holds the driver images every other filesystem is loaded from.
+- `id=` is the ONLY device token a filesystem driver is given. `fs_fat` validated
+  a `driver=`/`unit=` pair at startup and then never read it again; `fs_wfs` built
+  its service name and `fs.backend` class instance out of `unit=`. Both are gone:
+  a driver resolves its block server from the id's class instance and reads the
+  backend and unit off the descriptor it IDENTIFYs, so one place spells a disk and
+  it is the publisher.
+
+  Both now derive their class instance from the MOUNT PATH, as `fs_tmpfs` always
+  did, which closes a defect that was tracked as a TODO in `fs_wfs`: a path is
+  unique by construction because fs-manager refuses a second mount at one, while a
+  unit is backend-local and a partition reports the unit of the disk beneath it --
+  so two partitions of one disk, or ATA unit 2 against a virtio-blk device at slot
+  0 function 2, derived ONE instance and the second registration was refused with
+  its mount never appearing. `wasmos_class_instance_fingerprint()` is the generic
+  form of `wasmos_block_fingerprint()`, mirroring `driver.zig`'s `fingerprint()`.
 - `FS_BACKEND_CAP` is 16, up from 8. A default boot uses seven mounts, so the old
   ceiling left room for exactly one runtime mount; exhaustion is now reported
   instead of dropping a started filesystem silently.

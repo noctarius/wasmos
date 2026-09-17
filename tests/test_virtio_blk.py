@@ -241,7 +241,7 @@ class VirtioBlkTest(unittest.TestCase):
         assert self.session is not None
         self.assertTrue(
             self.session.expect(
-                b"volume rule queued spawn mount=/user id=volume:block:ata:1p1",
+                b"volume rule queued mount=/user id=volume:block:ata:1p1",
                 timeout_s=60,
             ),
             "the /user rule was not queued for its own ATA volume",

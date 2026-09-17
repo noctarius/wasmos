@@ -81,13 +81,30 @@ mount. Both are therefore established by the code that has to run before
 Every other filesystem is `fs_manager`'s mount. A device-manager rule naming
 `ENV{FSTYPE}` sends `FSMGR_IPC_MOUNT_REQ` rather than spawning a driver, so the
 rule states policy — this volume, that path, that type — and `fs_manager` decides
-which module implements the type and spawns it.
+which module implements the type and spawns it. `ATTR{fstype}` and `ENV{FSTYPE}`
+are different fields: the first MATCHES what a recogniser found on the volume,
+the second DECLARES what to mount it as, and a rule may match on one and mount as
+the other.
 
 The reason is ownership, not tidiness. The service that holds the mount table,
 answers `mount` and serves every path through the mount is then also the PARENT
 of the process behind it, which is what makes the mount removable: a backend that
 ignores its shutdown request can be killed by its parent, and a driver the device
 manager spawned is not `fs_manager`'s to stop.
+
+A block-backed rule additionally names the volume, by the canonical id of the
+device that matched — the single device token a filesystem driver receives.
+Nothing tells a driver its backend or its unit any more: it resolves the block
+server from the id's class instance and reads everything else off the descriptor
+it IDENTIFYs, so one place spells a disk and it is the publisher. `fs_fat`
+validated a `driver=`/`unit=` pair it then never used, and `fs_wfs` built its
+service name and class instance out of `unit=`; both now derive their class
+instance from the MOUNT PATH, as `fs_tmpfs` always did. A path is unique by
+construction because `fs_manager` refuses a second mount at one, while a unit is
+backend-local and a partition reports the unit of the disk beneath it — so two
+partitions of one disk, or an ATA unit 2 against a virtio-blk device at slot 0
+function 2, derived one instance and the second registration was refused with its
+mount never appearing.
 
 The request the device manager sends is the same one `mount(1)` sends, and it is
 NOT waited on. `fs_manager` spawns the backend through the process manager, which

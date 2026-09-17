@@ -741,33 +741,44 @@ _Static_assert(sizeof(wasmos_block_descriptor_t) ==
                "wasmos_block_descriptor_t layout changed; update BlockDescriptor in "
                "src/libc/zig/driver.zig to match");
 
-/* FNV-1a 32 over a NUL-terminated string: the `block` service class instance of
- * a device whose canonical id is `id`.
+/* FNV-1a 32 over a NUL-terminated string: the service-class INSTANCE a provider
+ * registers under, derived from whatever string identifies it.
  *
  * The instance is a FINGERPRINT, not an encoding -- nothing may be decoded back
  * out of it. That is the point: an instance that spelled out (backend, unit)
  * had to be redefined the moment a partition needed addressing, and would need
- * redefining again for whatever comes after.
+ * redefining again for whatever comes after. A provider that hashes its own
+ * identity string needs nothing to allocate an instance for it, and two
+ * providers cannot disagree about which is which.
  *
  * FNV-1a rather than the SHA-256 behind block_device_record_t.hash_id because
- * three languages must agree on the value for the same string -- C here, Zig in
- * driver.zig -- and this is an index key, not a security primitive. A collision
- * is not silent: service_class_registry_add refuses a second owner for a live
- * (class, instance), so two devices hashing alike fail the later registration
- * instead of aliasing.
+ * several languages must agree on the value for the same string -- C here, Zig
+ * in driver.zig -- and this is an index key, not a security primitive. A
+ * collision is not silent: service_class_registry_add refuses a second owner for
+ * a live (class, instance), so two providers hashing alike fail the later
+ * registration instead of aliasing.
  *
- * Returns 0 only for a NULL or empty id, which is not a valid canonical id. */
-static inline uint32_t wasmos_block_fingerprint(const char* id) {
+ * Mirrors driver.zig's fingerprint(). Returns 0 only for a NULL or empty string,
+ * which no identity is. */
+static inline uint32_t wasmos_class_instance_fingerprint(const char* text) {
     uint32_t hash = 2166136261u; /* FNV offset basis */
     uint32_t i;
-    if (!id || id[0] == '\0') {
+    if (!text || text[0] == '\0') {
         return 0u;
     }
-    for (i = 0u; id[i] != '\0'; ++i) {
-        hash ^= (uint32_t)(uint8_t)id[i];
+    for (i = 0u; text[i] != '\0'; ++i) {
+        hash ^= (uint32_t)(uint8_t)text[i];
         hash *= 16777619u; /* FNV prime */
     }
     return hash;
+}
+
+/* The `block` service class instance of a device whose canonical id is `id`.
+ * Named separately from the generic form because the `block` class fixes WHICH
+ * string a provider hashes -- its canonical id and nothing else -- and a call
+ * site that spells that intent cannot quietly start hashing something else. */
+static inline uint32_t wasmos_block_fingerprint(const char* id) {
+    return wasmos_class_instance_fingerprint(id);
 }
 
 /* One VOLUME -- a thing with a filesystem on it. Carried in a transfer buffer by

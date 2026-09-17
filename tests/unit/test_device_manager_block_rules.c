@@ -264,7 +264,7 @@ static void publish_after_rules_reports_the_match(void) {
 
     publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
 
-    check(out_has("block rule queued spawn mount=boot id=block:ata:0"),
+    check(out_has("block rule queued mount=boot id=block:ata:0"),
           "a device publishing after its rule is reported by the publish path");
     check(g_dm.block_fs_rules[0].queued == 1u, "and the rule is queued");
 }
@@ -295,7 +295,7 @@ static void rescan_after_late_rules_reports_the_match(void) {
 
     check(g_dm.block_fs_rules[1].queued == 1u || g_dm.block_fs_rules[1].spawned == 1u,
           "the re-scan queues the late rule against the already-published device");
-    check(out_has("block rule queued spawn mount=user id=block:ata:1"),
+    check(out_has("block rule queued mount=user id=block:ata:1"),
           "and the re-scan reports the match, as the publish path does");
 }
 
@@ -307,11 +307,11 @@ static void a_rule_matches_only_its_own_backend(void) {
 
     publish_block_device((uint8_t)BLOCK_BACKEND_VIRTIO_BLK, 0u);
 
-    check(!out_has("rule queued spawn"), "a virtio disk does not satisfy an ata rule");
+    check(!out_has("rule queued"), "a virtio disk does not satisfy an ata rule");
     check(g_dm.block_fs_rules[0].queued == 0u, "and the ata rule stays unqueued");
 
     publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
-    check(out_has("block rule queued spawn mount=boot id=block:ata:0"),
+    check(out_has("block rule queued mount=boot id=block:ata:0"),
           "while its own backend's disk does satisfy it");
 }
 
@@ -683,6 +683,46 @@ static void a_partition_matcher_on_a_disk_rule_is_refused(void) {
  * the rule is refused, and that no partition satisfies whatever survived, since
  * a fix that merely stopped writing past the end would still leave the prefix
  * behind. */
+/* A volume rule may name a filesystem TYPE for fs-manager to mount instead of a
+ * module for the device manager to spawn. The two are alternatives, and the
+ * matched device's canonical id is what the mount request carries -- so the rule
+ * still has to record which device satisfied it, exactly as a spawn rule does. */
+static void a_volume_rule_may_name_an_fstype_instead_of_a_module(void) {
+    static const uint8_t SERIAL[4] = {0x49, 0xd6, 0x93, 0x8d};
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{uuid}==\"49d6938d\", "
+                    "ENV{MOUNT}=\"/user\", ENV{FSTYPE}=\"fat\"\n") == 1,
+          "a volume rule naming a type parses");
+    check(strcmp(g_dm.block_fs_rules[0].fstype, "fat") == 0, "and records the type");
+    check(g_dm.block_fs_rules[0].spawn_path[0] == '\0', "and carries no spawn path");
+
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 1u, (uint32_t)FS_TYPE_FAT, "USER", SERIAL, 4u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "the matching volume queues it");
+    check(g_dm.block_fs_rules[0].matched_id[0] != '\0',
+          "and the matched device's canonical id is recorded for the mount request");
+}
+
+/* A rule names exactly one target, on a volume rule as on a boot rule. A line
+ * carrying both describes two different actions for one match; one carrying
+ * neither describes none. And a type with no ENV{MOUNT} is refused rather than
+ * defaulted to "/" -- defaulting one would place a volume over the whole
+ * namespace because a line forgot a field. */
+static void a_volume_rule_needs_exactly_one_target(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{uuid}==\"49d6938d\", "
+                    "ENV{MOUNT}=\"/user\", ENV{FSTYPE}=\"fat\", "
+                    "RUN+=\"system/drivers/fs_fat.wap\"\n") == 0,
+          "a rule naming both a type and a module is refused");
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{uuid}==\"49d6938d\", "
+                    "ENV{MOUNT}=\"/user\"\n") == 0,
+          "and so is one naming neither");
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{uuid}==\"49d6938d\", "
+                    "ENV{FSTYPE}=\"fat\"\n") == 0,
+          "and so is a type with nowhere to go");
+}
+
 static void an_overlong_rule_line_is_refused(void) {
     char line[1024];
     uint32_t n = 0;
@@ -708,8 +748,7 @@ static void an_overlong_rule_line_is_refused(void) {
                       (uint32_t)PARTITION_SCHEME_GPT,
                       (uint32_t)FS_TYPE_FAT,
                       NULL);
-    check(!out_has("rule queued spawn"),
-          "and no partition is spawned on by whatever survived the cut");
+    check(!out_has("rule queued"), "and no partition is spawned on by whatever survived the cut");
 }
 
 int main(void) {
@@ -732,6 +771,8 @@ int main(void) {
     an_empty_partition_name_matcher_is_refused();
     a_malformed_matcher_rejects_the_rule();
     a_partition_matcher_on_a_disk_rule_is_refused();
+    a_volume_rule_may_name_an_fstype_instead_of_a_module();
+    a_volume_rule_needs_exactly_one_target();
     an_overlong_rule_line_is_refused();
 
     char summary[128];

@@ -180,7 +180,7 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
             (b"/vwfs", b"volume:block:virtio-blk:48"),
         ):
             self.assertIn(
-                b"volume rule queued spawn mount=%s id=%s" % (mount, volume),
+                b"volume rule queued mount=%s id=%s" % (mount, volume),
                 self.session.buf,
                 f"{mount!r} did not bind to {volume!r}, so the rule's uuid did not "
                 "decide which of the two WFS volumes it selected\n"

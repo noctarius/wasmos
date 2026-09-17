@@ -184,7 +184,7 @@ class VolumeManagerTest(unittest.TestCase):
         )
         self.assertTrue(
             self.session.expect(
-                b"[device-manager] volume rule queued spawn mount=/boot "
+                b"[device-manager] volume rule queued mount=/boot "
                 b"id=volume:block:ata:0p1 on block:ata:0p1",
                 timeout_s=90,
             ),
@@ -196,13 +196,13 @@ class VolumeManagerTest(unittest.TestCase):
         """The layer's whole point, as a property of the boot rather than a rule.
 
         Every mount is now selected by what its volume IS, or by which partition
-        holds it. A `block rule queued spawn` line would mean a filesystem was
+        holds it. A `block rule queued` line would mean a filesystem was
         placed by naming a controller and a unit -- which is what this set out to
         retire, and which /boot was the last holdout of.
         """
         assert self.session is not None
         self.assertNotIn(
-            b"block rule queued spawn",
+            b"block rule queued",
             self.session.buf,
             "a filesystem was mounted by a rule naming a disk and a unit",
         )
@@ -268,7 +268,7 @@ class VolumeManagerTest(unittest.TestCase):
         assert self.session is not None
         self.assertTrue(
             self.session.expect(
-                b"[device-manager] volume rule queued spawn mount=/wfs "
+                b"[device-manager] volume rule queued mount=/wfs "
                 b"id=volume:block:ata:2 on block:ata:2",
                 timeout_s=90,
             ),

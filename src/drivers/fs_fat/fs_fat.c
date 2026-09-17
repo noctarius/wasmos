@@ -38,14 +38,12 @@ static fat_open_pool_t g_pool;
 /* This driver's mount name, reported on an fs-manager pull. Held as plain bytes:
  * fs-manager is the CLIENT of that pull and supplies the buffer, so this driver
  * owns no transfer buffer for it. */
-static char g_mount_name[16];
+static char g_mount_name[32];
 static int32_t g_mount_len = 0;
+/* The disk's backend-local device number, read off the descriptor this driver
+ * IDENTIFYs -- not off a startup argument. Reported to fs-manager as diagnostic
+ * identity only; nothing routes on it. */
 static uint8_t g_mount_unit = 0;
-static int32_t g_requested_unit = -1;
-/* Which backend serves the disk this instance was spawned for, as the device
- * manager named it. A unit alone does not identify a disk -- it is
- * backend-local -- so both halves are needed to find the right server. */
-static uint8_t g_requested_backend = (uint8_t)BLOCK_BACKEND_UNKNOWN;
 /* The `block` class instance of this driver's disk: the fingerprint of the
  * canonical id the device manager passed in `id=`. It is both how the provider
  * is found in the class registry and how the provider is told which of its disks
@@ -80,25 +78,6 @@ static void fat_stall(void) {
  * BLOCK_DESCRIPTOR_ID_MAX bytes; the process manager truncates at
  * WASMOS_STARTUP_ARGS_MAX, so nothing longer can arrive anyway. */
 #define FAT_STARTUP_ARGS_MAX 192
-
-static int32_t fat_parse_requested_unit(void) {
-    char args[FAT_STARTUP_ARGS_MAX];
-    char* end = 0;
-    const char* unit = 0;
-    long value = 0;
-    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
-        return -1;
-    }
-    unit = fat_find_token_value(args, "unit=");
-    if (!unit) {
-        return -1;
-    }
-    value = strtol(unit, &end, 10);
-    if (end == unit || (*end != '\0' && *end != ' ') || value < 0 || value > 255) {
-        return -1;
-    }
-    return (int32_t)value;
-}
 
 /* The VFS path this volume mounts at, from `mount=`.
  *
@@ -138,30 +117,6 @@ static int fat_parse_requested_mount(char* out, uint32_t out_cap) {
     return 0;
 }
 
-/* Map the device manager's DRIVER name to the backend it stands for. The names
- * are the drivers' manifest package names, the same spelling a rule's DRIVER==
- * uses and block_backend_from_name() in the rule parser maps. */
-static uint8_t fat_backend_from_name(const char* name) {
-    if (!name) {
-        return (uint8_t)BLOCK_BACKEND_UNKNOWN;
-    }
-    if (strncmp(name, "ata", 3) == 0 && (name[3] == '\0' || name[3] == ' ')) {
-        return (uint8_t)BLOCK_BACKEND_ATA;
-    }
-    if (strncmp(name, "virtio-blk", 10) == 0 && (name[10] == '\0' || name[10] == ' ')) {
-        return (uint8_t)BLOCK_BACKEND_VIRTIO_BLK;
-    }
-    return (uint8_t)BLOCK_BACKEND_UNKNOWN;
-}
-
-static uint8_t fat_parse_requested_backend(void) {
-    char args[FAT_STARTUP_ARGS_MAX];
-    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
-        return (uint8_t)BLOCK_BACKEND_UNKNOWN;
-    }
-    return fat_backend_from_name(fat_find_token_value(args, "driver="));
-}
-
 /* The `block` class instance of the disk this driver was spawned for: the
  * fingerprint of the canonical id in `id=`.
  *
@@ -194,7 +149,7 @@ static uint32_t fat_parse_requested_instance(void) {
 }
 
 /* Resolve the block server for this instance's disk through the `block` service
- * CLASS, matching the instance that encodes its (backend, unit).
+ * CLASS, matching the instance the disk's canonical id fingerprints to.
  *
  * Resolution is by class rather than by the plain `block` NAME because a name
  * resolves to one provider for the whole system: it could only ever reach the
@@ -545,9 +500,9 @@ static void fat_mount_bringup(void) {
  * the fs.backend class, then run the reactor loop forever.
  *
  * The block server is discovered through the `block` service CLASS, by the
- * instance encoding the (backend, unit) the device manager spawned this
- * instance for; that discovery loop spins with a yield until that disk's driver
- * registers, so this call does not return until it exists.
+ * instance the `id=` this driver was spawned with fingerprints to; that
+ * discovery loop spins with a yield until that disk's driver registers, so this
+ * call does not return until it exists.
  *
  * Mounting happens BEFORE the ready notification, so the driver never advertises
  * a volume it has not parsed. On success this does not return: the reactor loop
@@ -558,7 +513,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     int32_t block_endpoint;
     int32_t reply_endpoint;
     int32_t sel;
-    char mount_alias[16];
+    char mount_alias[32];
+    /* WASMOS_SVC_NAME_MAX + 1: pm_service_set REFUSES a name that does not fit
+     * its entry rather than truncating it, so the truncation happens here. */
     char service_name[16];
     int32_t mount_alias_len;
     wasmos_block_descriptor_t desc;
@@ -572,21 +529,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         fat_stall();
     }
 
-    g_requested_unit = fat_parse_requested_unit();
-    g_requested_backend = fat_parse_requested_backend();
-    if (g_requested_backend == (uint8_t)BLOCK_BACKEND_UNKNOWN || g_requested_unit < 0) {
-        /* Without both halves there is no disk to IDENTIFY. The device manager
-         * always sends them; a spawn that did not is a configuration error, and
-         * guessing a backend would mount the wrong volume. */
-        fat_log("startup args missing driver= or unit=; cannot resolve a block device\n");
-        fat_stall();
-    }
     /* The class instance that names this disk: the fingerprint of the canonical
-     * id the device manager passed through from the backend's own publish. It is
-     * NOT rebuilt from driver= and unit= here -- a second place that spells the
-     * id is a second place that can disagree with the publisher, and a
-     * disagreement leaves this driver waiting forever on an instance nobody
-     * holds. */
+     * id whoever spawned this driver passed through from the backend's own
+     * publish. `id=` is the ONLY device token this driver takes -- a second place
+     * that spells a disk is a second place that can disagree with the publisher,
+     * and a disagreement leaves this driver waiting forever on an instance nobody
+     * holds. The backend and unit are read off the descriptor below instead. */
     g_requested_instance = fat_parse_requested_instance();
     if (g_requested_instance == 0u) {
         fat_log("startup args missing id=; cannot resolve a block device\n");
@@ -626,7 +574,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * validated, parsed volume. */
     fat_mount_bringup();
 
-    if (snprintf(service_name, sizeof(service_name), "fs.boot%u", (unsigned)g_mount_unit) <= 0) {
+    /* The concrete service name is diagnostic -- fs-manager finds backends by
+     * CLASS and nothing looks a filesystem backend up by name -- so it names the
+     * MOUNT rather than the disk, and is truncated to what the registry stores
+     * (WASMOS_SVC_NAME_MAX). Two mounts whose paths agree over that prefix claim
+     * one name, and pm_service_set refuses the second rather than rebinding it:
+     * the driver then fails loudly below instead of serving invisibly. */
+    if (snprintf(service_name, sizeof(service_name), "fs.fat%s", mount_alias) <= 0) {
         fat_stall();
     }
     mount_alias_len = (int32_t)strlen(mount_alias);
@@ -636,11 +590,18 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     }
     str_copy(g_mount_name, sizeof(g_mount_name), mount_alias);
     g_mount_len = mount_alias_len;
+    /* The class INSTANCE is a fingerprint of the MOUNT PATH, not a packed
+     * (kind, unit) pair. A path is unique by construction -- fs-manager refuses
+     * a second mount at one -- while a unit is not: it is backend-local, and a
+     * partition reports the unit of the disk it lives on, so two partitions of
+     * one disk derived the same instance and the second registration was refused
+     * with its mount never appearing. fs_wfs and fs_tmpfs derive theirs the same
+     * way. */
     if (wasmos_svc_register_class(g_proc_endpoint,
                                   g_fs_endpoint,
                                   service_name,
                                   FSMGR_BACKEND_CLASS,
-                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BLOCK, g_mount_unit),
+                                  wasmos_class_instance_fingerprint(mount_alias),
                                   1) != 0) {
         fat_log("fs.backend register failed\n");
         fat_stall();

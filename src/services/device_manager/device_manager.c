@@ -149,7 +149,6 @@ static void queue_acpi_match_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char* name);
-static const char* block_backend_name(uint8_t backend);
 static const char* devmgr_subsystem_name(uint8_t subsystem);
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec);
 static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec);
@@ -963,13 +962,14 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
 
 /* What a block-filesystem driver is told about the device it was spawned for.
  *
- * `id=` is the address. It is the canonical id the backend published, and the
- * driver fingerprints it to get the `block` class instance that backend
- * registered under. `driver=` and `unit=` travel alongside for the driver's own
- * diagnostics and for a backend-specific IDENTIFY argument, but nothing is
- * addressed with them: a unit is backend-local, so `unit=0` alone names a
- * different disk on every backend that has one, and since a partition publishes
- * under its disk's unit it does not even name a volume.
+ * TWO tokens, and only these two. `id=` is the address: the canonical id the
+ * backend published, which the driver fingerprints to get the `block` class
+ * instance that backend registered under, and off whose descriptor it reads the
+ * backend and unit it wants for itself. `driver=` and `unit=` used to travel
+ * alongside and were dead weight -- a unit is backend-local, so `unit=0` alone
+ * names a different disk on every backend that has one, and a partition
+ * publishes under its disk's unit so it does not even name a volume. One place
+ * spells a disk, and it is the publisher.
  *
  * `mount=` is the rule's decision about WHERE the volume goes, delivered at
  * spawn. It travels here rather than being fetched back from this service
@@ -978,24 +978,21 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
  * DEVMGR_QUERY_BLOCK_MOUNT_REQ was, keyed on the unit -- cannot tell two volumes
  * on one disk apart.
  *
+ * Only /boot is spawned this way now; every other block filesystem is mounted
+ * through fs-manager, which builds the same two tokens itself.
+ *
  * Refuses rather than truncates: a truncated id fingerprints to a different
  * value than the backend registered, so the filesystem would search forever for
  * an instance that does not exist, and a truncated mount path puts a volume
  * somewhere nobody asked for. */
-static int build_block_fs_spawn_args(uint8_t backend, uint8_t unit, const char* canonical_id,
-                                     const char* mount, char* out, uint32_t out_cap) {
+static int build_block_fs_spawn_args(const char* canonical_id, const char* mount, char* out,
+                                     uint32_t out_cap) {
     int n = 0;
     if (!out || out_cap == 0u || !canonical_id || canonical_id[0] == '\0' || !mount ||
         mount[0] == '\0') {
         return -1;
     }
-    n = snprintf(out,
-                 out_cap,
-                 "driver=%s unit=%u id=%s mount=%s",
-                 block_backend_name(backend),
-                 (unsigned)unit,
-                 canonical_id,
-                 mount);
+    n = snprintf(out, out_cap, "id=%s mount=%s", canonical_id, mount);
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
     }
@@ -1416,7 +1413,7 @@ static void queue_block_fs_rule_spawns(void) {
             continue;
         }
         str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
-        g_dm.active_rule_fstype[0] = '\0';
+        str_copy(g_dm.active_rule_fstype, sizeof(g_dm.active_rule_fstype), rule->fstype);
         /* Clear the grant: see the always-spawn path. A block-filesystem
          * driver reaches its device over IPC and needs no hardware window. */
         g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
@@ -1547,7 +1544,7 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
         char queued_msg[160];
         (void)snprintf(queued_msg,
                        sizeof(queued_msg),
-                       "[device-manager] %s rule queued spawn mount=%s id=%s\n",
+                       "[device-manager] %s rule queued mount=%s id=%s\n",
                        devmgr_subsystem_name(rec->desc.partition != 0u
                                                  ? (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION
                                                  : (uint8_t)DEVMGR_BLOCK_SUBSYS_DISK),
@@ -1675,7 +1672,7 @@ static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec) {
              * decides. The mount is what makes that readable from a log. */
             (void)snprintf(queued_msg,
                            sizeof(queued_msg),
-                           "[device-manager] volume rule queued spawn mount=%s id=%s on %s\n",
+                           "[device-manager] volume rule queued mount=%s id=%s on %s\n",
                            rule->mount[0] ? rule->mount : "(none)",
                            rec->desc.canonical_id,
                            backing->desc.canonical_id);
@@ -1695,20 +1692,6 @@ static void queue_block_fs_rules_for_known_devices(void) {
         (void)queue_block_fs_rules_for_volume(&g_dm.volume_registry[vi]);
     }
     queue_block_fs_rule_spawns();
-}
-
-/* Name of a backend for the canonical id and the log line. Kept in step with
- * block_backend_from_name() in device_manager_rules.c, which maps the same names
- * the other way for a rule's DRIVER== value. */
-static const char* block_backend_name(uint8_t backend) {
-    switch (backend) {
-    case (uint8_t)BLOCK_BACKEND_ATA:
-        return "ata";
-    case (uint8_t)BLOCK_BACKEND_VIRTIO_BLK:
-        return "virtio-blk";
-    default:
-        return "unknown";
-    }
 }
 
 /* The rule's SUBSYSTEM, spelled as a rule file spells it.
@@ -2954,20 +2937,29 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                  * The reply is DEFERRED -- poll_mount_request_async retires the
                  * rule -- so this must not fall through to rule_spawn_complete.
                  *
-                 * TODO: only boot rules reach this today. A block rule carries
-                 * no ENV{FSTYPE} yet, so /user, /wfs and /vwfs are still spawned
-                 * below and remain the device manager's children; that needs
-                 * `id=` to become the only device token a filesystem driver is
-                 * given (fs_fat still demands a dead driver=/unit= pair and
-                 * fs_wfs derives its service name from unit=). */
+                 * A block rule additionally names the VOLUME, by the canonical id
+                 * of the device that actually matched. That id is the only device
+                 * token the filesystem driver is given: the driver resolves its
+                 * block server from the id's class instance and reads the backend
+                 * and unit off the descriptor it IDENTIFYs, so nothing downstream
+                 * has to be told a disk twice and disagree about it. */
                 if (g_dm.active_rule_fstype[0] != '\0') {
                     const char* mount = 0;
+                    const char* source_id = 0;
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS &&
                         g_dm.active_rule_spawn_index >= 0 &&
                         g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
                         mount = g_dm.always_spawn_rules[g_dm.active_rule_spawn_index].mount;
+                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS &&
+                               g_dm.active_rule_spawn_index >= 0 &&
+                               g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+                        const block_fs_rule_t* rule =
+                            &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
+                        mount = rule->mount;
+                        source_id = rule->matched_id;
                     }
-                    if (mount && dm_mount_request_send(g_dm.active_rule_fstype, mount, 0) == 0) {
+                    if (mount &&
+                        dm_mount_request_send(g_dm.active_rule_fstype, mount, source_id) == 0) {
                         g_dm.pending = HW_SPAWN_NONE;
                         g_dm.phase = HW_PHASE_SPAWN;
                         continue;
@@ -3021,9 +3013,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                g_dm.active_rule_spawn_index >= 0 &&
                                g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count &&
                                build_block_fs_spawn_args(
-                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index]
-                                       .matched_backend,
-                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index].matched_unit,
                                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].matched_id,
                                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].mount,
                                    spawn_args,

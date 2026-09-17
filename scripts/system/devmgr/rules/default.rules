@@ -6,6 +6,12 @@
 # another controller, add a disk ahead of it, repartition around it, and the
 # volume still mounts here because the uuid travels with the volume.
 #
+# ENV{FSTYPE} rather than RUN+=, as on the tmpfs rules below: the rule says WHAT
+# this volume is and WHERE it goes, and fs-manager picks the module, spawns it
+# and owns the mount. `ATTR{fstype}` and `ENV{FSTYPE}` are not the same field --
+# the first MATCHES what a recogniser found on the volume, the second DECLARES
+# what to mount it as, and a rule may match on one and mount as the other.
+#
 # The uuid is the FAT volume serial, and it is deterministic rather than
 # arbitrary: scripts/make_gpt_image.py writes zlib.crc32(label) into the extended
 # boot record, so crc32(b"user") == 0x8d93d649 and this rule spells the ON-DISK
@@ -17,7 +23,7 @@
 # alike. The tradeoff against ATTR{partlabel} is durability -- a GPT partition
 # name survives a reformat of the volume, this serial does not -- against reach,
 # since a partition label only exists where there is a partition table.
-SUBSYSTEM=="volume", ATTR{uuid}=="49d6938d", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
+SUBSYSTEM=="volume", ATTR{uuid}=="49d6938d", ENV{MOUNT}="/user", ENV{FSTYPE}="fat"
 # The partition and volume managers are NOT spawned here. They live in the initfs
 # bootstrap rules, because this file loads from /boot and /boot is itself selected
 # by a volume -- a manager spawned from here could never publish the volume that
@@ -38,7 +44,7 @@ SUBSYSTEM=="volume", ATTR{uuid}=="49d6938d", ENV{MOUNT}="/user", RUN+="system/dr
 # the ordering would decide which filesystem the path means. The uuid is the
 # volume's own identity, pinned by mkfs_wfs (WFS_IMAGE_UUID in CMakeLists.txt),
 # and it moves with the volume to any disk or transport.
-SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7465-4573-742d-766f6c756d65", ENV{MOUNT}="/wfs", RUN+="system/drivers/fs_wfs.wap"
+SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7465-4573-742d-766f6c756d65", ENV{MOUNT}="/wfs", ENV{FSTYPE}="wfs"
 # The second WFS volume, which the suite reaches over virtio-blk. Nothing here
 # says virtio: this rule and the one above differ only in WHICH VOLUME they name,
 # so the pair is what demonstrates that a transport is not part of a volume's
@@ -48,7 +54,7 @@ SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7465-4573-742d-7
 # The uuid is WFS_VIRTIO_IMAGE_UUID, and pinning it is why the two images exist
 # separately rather than one file attached twice: one file carries one identity,
 # and policy could not tell the two mounts apart.
-SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7669-7274-696f-2d766f6c3031", ENV{MOUNT}="/vwfs", RUN+="system/drivers/fs_wfs.wap"
+SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7669-7274-696f-2d766f6c3031", ENV{MOUNT}="/vwfs", ENV{FSTYPE}="wfs"
 SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", RUN+="system/drivers/serial.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"

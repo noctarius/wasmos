@@ -549,6 +549,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     char line_buf[512];
     char path[96];
     char mount[16];
+    char fstype[16];
     uint8_t backend = (uint8_t)BLOCK_BACKEND_UNKNOWN;
     uint8_t unit = 0xFFu;
     char* cur = 0;
@@ -576,6 +577,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     }
     path[0] = '\0';
     mount[0] = '\0';
+    fstype[0] = '\0';
     sub[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
@@ -587,6 +589,9 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
             continue;
         }
         if (extract_op_value(tok, "ENV{MOUNT}", "=", mount, sizeof(mount)) == 0) {
+            continue;
+        }
+        if (extract_op_value(tok, "ENV{FSTYPE}", "=", fstype, sizeof(fstype)) == 0) {
             continue;
         }
         if (extract_op_value(tok, "ATTR{unit}", "==", tmp, sizeof(tmp)) == 0) {
@@ -686,7 +691,10 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
             continue;
         }
     }
-    if (path[0] == '\0') {
+    /* Checked BEFORE the "/" default below: a mount rule must SAY where the
+     * filesystem goes. Defaulting one to the root would place a volume over the
+     * whole namespace because a line forgot a field. */
+    if (rule_target_invalid(path, fstype, mount)) {
         return -1;
     }
     if (strcmp(sub, "block") == 0) {
@@ -735,6 +743,7 @@ static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule)
     str_copy(rule.label, sizeof(rule.label), fslabel);
     str_copy(rule.mount, sizeof(rule.mount), mount);
     str_copy(rule.spawn_path, sizeof(rule.spawn_path), path);
+    str_copy(rule.fstype, sizeof(rule.fstype), fstype);
     *out_rule = rule;
     return 0;
 }

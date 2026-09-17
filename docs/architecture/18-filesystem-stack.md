@@ -70,6 +70,32 @@ root filesystem holds, not names `fs_manager` appended to the reply. It runs aft
 every registration and is idempotent, because a volume can mount before the root
 filesystem does and its point has to appear once the root arrives.
 
+#### Who Mounts What
+
+`/init` and `/boot` are bootstrap and cannot be unmounted. `/init` is the
+kernel's own boot-module spawn, and `/boot` carries the driver images every other
+filesystem is loaded from, so it must be standing before anything can be asked to
+mount. Both are therefore established by the code that has to run before
+`fs_manager` can act: the kernel, and a device-manager rule with `RUN+=`.
+
+Every other filesystem is `fs_manager`'s mount. A device-manager rule naming
+`ENV{FSTYPE}` sends `FSMGR_IPC_MOUNT_REQ` rather than spawning a driver, so the
+rule states policy — this volume, that path, that type — and `fs_manager` decides
+which module implements the type and spawns it.
+
+The reason is ownership, not tidiness. The service that holds the mount table,
+answers `mount` and serves every path through the mount is then also the PARENT
+of the process behind it, which is what makes the mount removable: a backend that
+ignores its shutdown request can be killed by its parent, and a driver the device
+manager spawned is not `fs_manager`'s to stop.
+
+The request the device manager sends is the same one `mount(1)` sends, and it is
+NOT waited on. `fs_manager` spawns the backend through the process manager, which
+reads the module back through `fs_manager`; a device manager blocking on that
+reply would hold its own query endpoint shut for the whole bring-up of a driver,
+and everything it answers is upstream of one. The reply is matched later, on a
+dedicated endpoint, and retires the rule then.
+
 #### Establishing a Mount
 
 `FSMGR_IPC_MOUNT_REQ` places a filesystem. The request carries a `key=value`
@@ -357,9 +383,9 @@ answers a refused claim with no reply at all (see `docs/TASKS.md`).
   and the namespace rules testable on the host. The IPC layer above it is not
   host-testable and is covered only by a running guest.
 
-**Placed by rule.** A `SUBSYSTEM=="boot"` device-manager rule may carry
-`ENV{MOUNT}`, delivered to the spawned process as a `mount=` startup argument.
-That is what a filesystem with no backing device needs: it names no device, so
+**Placed by rule.** A `SUBSYSTEM=="boot"` device-manager rule carries
+`ENV{MOUNT}` and `ENV{FSTYPE}`: where the filesystem belongs and what it is. That
+is what a filesystem with no backing device needs — it names no device, so
 nothing about it implies where it belongs. Two instances are placed this way and
 need no disk between them:
 

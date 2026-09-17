@@ -417,6 +417,28 @@ static int parse_u8_dec(const char* s, uint8_t* out) {
     return 0;
 }
 
+/* Refuse a rule whose target is not exactly one of the two things a rule can name.
+ *
+ * `RUN+=` names a MODULE the device manager spawns itself; `ENV{FSTYPE}` names a
+ * filesystem TYPE fs-manager mounts, and fs-manager decides which module serves
+ * it. Both on one line describe two different actions for one match, and neither
+ * describes none -- each is a rule that reads as though it does something.
+ *
+ * A mount rule additionally requires ENV{MOUNT}: the type says what to mount and
+ * the mount says where, and a type with no place is not a mount request that
+ * could be sent. Returns non-zero when the line must be refused. */
+static int rule_target_invalid(const char* path, const char* fstype, const char* mount) {
+    int has_path = (path && path[0] != '\0');
+    int has_fstype = (fstype && fstype[0] != '\0');
+    if (has_path == has_fstype) {
+        return 1;
+    }
+    if (has_fstype && (!mount || mount[0] == '\0')) {
+        return 1;
+    }
+    return 0;
+}
+
 static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* out_rule) {
     char line_buf[256];
     char path[96];
@@ -424,6 +446,7 @@ static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* o
     char* tok = 0;
     char sub[32];
     char mount[64];
+    char fstype[16];
     if (!line || !out_rule) {
         return -1;
     }
@@ -436,6 +459,7 @@ static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* o
     path[0] = '\0';
     sub[0] = '\0';
     mount[0] = '\0';
+    fstype[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
         tok = (char*)wasmos_sys_trim_left(tok);
@@ -445,14 +469,21 @@ static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* o
         if (extract_op_value(tok, "RUN", "+=", path, sizeof(path)) == 0) {
             continue;
         }
-        /* Optional, unlike on a volume rule. A boot rule names no device, so
-         * nothing about it implies a mount; a filesystem with no backing device
-         * can only be placed by being told, and everything else ignores it. */
+        /* Optional beside RUN+=, required beside ENV{FSTYPE}. A boot rule names
+         * no device, so nothing about it implies a mount; a filesystem with no
+         * backing device can only be placed by being told, and everything else
+         * ignores it. */
         if (extract_op_value(tok, "ENV{MOUNT}", "=", mount, sizeof(mount)) == 0) {
             continue;
         }
+        if (extract_op_value(tok, "ENV{FSTYPE}", "=", fstype, sizeof(fstype)) == 0) {
+            continue;
+        }
     }
-    if (strcmp(sub, "boot") != 0 || path[0] == '\0') {
+    if (strcmp(sub, "boot") != 0) {
+        return -1;
+    }
+    if (rule_target_invalid(path, fstype, mount)) {
         return -1;
     }
     out_rule->active = 1;
@@ -460,6 +491,7 @@ static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* o
     out_rule->spawned = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     str_copy(out_rule->mount, sizeof(out_rule->mount), mount);
+    str_copy(out_rule->fstype, sizeof(out_rule->fstype), fstype);
     return 0;
 }
 

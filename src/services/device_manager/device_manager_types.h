@@ -155,19 +155,30 @@ typedef struct {
     wasmos_volume_descriptor_t desc;
 } volume_record_t;
 
-/* Rule: unconditionally spawn a driver path at boot (always_spawn kind).
+/* Rule: act unconditionally at boot (always_spawn kind).
  *
- * `mount` is the optional ENV{MOUNT} of the rule, delivered to the spawned
- * process as a `mount=` startup argument. A boot rule names no device, so there
- * is nothing to derive a mount from -- which is exactly why a filesystem with no
- * backing device (a tmpfs) can only be placed by being told. Empty when the rule
- * carries none, and a driver that needs no mount ignores it. */
+ * A rule carries EITHER `spawn_path` (RUN+=, a driver the device manager spawns
+ * itself) or `fstype` (ENV{FSTYPE}, a filesystem fs-manager mounts). The two are
+ * exclusive and one is required; the parser refuses a line carrying both or
+ * neither.
+ *
+ * `mount` is the ENV{MOUNT} of the rule: mandatory beside `fstype`, optional
+ * beside `spawn_path`, where it is delivered to the spawned process as a
+ * `mount=` startup argument. A boot rule names no device, so there is nothing to
+ * derive a mount from -- which is exactly why a filesystem with no backing
+ * device (a tmpfs) can only be placed by being told.
+ *
+ * `fstype` names a filesystem TYPE, not an implementation: which module serves
+ * it is fs-manager's table (g_fstypes), so a rule states policy and the mount
+ * has one owner. That owner is also the spawned backend's PARENT, which is what
+ * lets the mount be torn down again -- see docs/architecture/18-filesystem-stack.md. */
 typedef struct {
     uint8_t active;
     uint8_t queued;
     uint8_t spawned;
     char spawn_path[96];
     char mount[64];
+    char fstype[16];
 } always_spawn_rule_t;
 
 /* Which kind of block device a rule is willing to match.
@@ -316,9 +327,10 @@ typedef struct {
     hw_spawn_target_t pending;
     int32_t reply_endpoint;
     int32_t proc_endpoint;
-    int32_t inventory_endpoint;  /* endpoint receiving PCI/ACPI publish msgs */
-    int32_t query_endpoint;      /* endpoint for devmgr.query queries */
-    int32_t rule_reply_endpoint; /* endpoint for rule-file FS reads */
+    int32_t inventory_endpoint;   /* endpoint receiving PCI/ACPI publish msgs */
+    int32_t query_endpoint;       /* endpoint for devmgr.query queries */
+    int32_t rule_reply_endpoint;  /* endpoint for rule-file FS reads */
+    int32_t mount_reply_endpoint; /* endpoint for the mount requests sent to fs-manager */
     int32_t fs_endpoint;
     int32_t request_id;
     int32_t module_count;
@@ -368,6 +380,17 @@ typedef struct {
     uint8_t rule_spawn_pending;
     uint8_t rule_spawn_retries;
     char rule_spawn_path[96];
+    /* The armed rule's ENV{FSTYPE}, empty when the rule spawns a module instead.
+     * Copied at arm time beside rule_spawn_path, because the dispatch that acts
+     * on it must not have to know which rule array the index points into. */
+    char active_rule_fstype[16];
+    /* One mount request in flight, sent to fs-manager for the armed rule and
+     * answered later. rule_spawn_pending stays SET across it -- the rule is not
+     * retired until the reply arrives -- so next_spawn_target must refuse to
+     * re-drive the same rule while this is set. */
+    uint8_t mount_req_pending;
+    int32_t mount_req_id;
+    int32_t mount_req_bid;                  /* owner-push xfer buffer_id holding the descriptor */
     uint8_t active_rule_spawn_kind;         /* which rule kind is driving the spawn */
     int32_t active_rule_spawn_index;        /* index into the corresponding rule array */
     int32_t active_rule_spawn_device_index; /* device registry index for pci/acpi */

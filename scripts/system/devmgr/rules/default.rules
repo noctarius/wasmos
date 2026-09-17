@@ -71,15 +71,21 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1042", RUN+="system/d
 # for: a filesystem with no backing device names no device, so nothing about it
 # implies where it belongs and it can only be told.
 #
+# ENV{FSTYPE} rather than RUN+=: the rule says WHAT belongs WHERE, and fs-manager
+# decides which module serves the type and spawns it. That makes fs-manager the
+# owner of the mount and the parent of the backend, which is what lets the mount
+# be taken down again -- a driver the device manager spawned is not fs-manager's
+# to stop.
+#
 # /home/user is a mount at DEPTH whose ancestors are ordinary directories in the
 # root filesystem: fs-manager creates /home and then /home/user in the tmpfs
 # mounted at /, which is a different path through fsmgr_ensure_mount_points than
 # a top-level mount takes.
-SUBSYSTEM=="boot", ENV{MOUNT}="/home/user", RUN+="system/drivers/fs_tmpfs.wap"
+SUBSYSTEM=="boot", ENV{MOUNT}="/home/user", ENV{FSTYPE}="tmpfs"
 # /wfs/nested is a mount INSIDE another mount. Its mount point is created in the
 # WFS volume rather than in the root filesystem, and it SHADOWS what the volume
 # already holds there (scripts/wfs/nested/covered.txt): a path under the mount
 # point reaches the tmpfs, so the WFS file beneath is unreachable while the mount
 # stands. That is the Linux rule, and it is why a mount cannot fail because
 # someone left a file behind.
-SUBSYSTEM=="boot", ENV{MOUNT}="/wfs/nested", RUN+="system/drivers/fs_tmpfs.wap"
+SUBSYSTEM=="boot", ENV{MOUNT}="/wfs/nested", ENV{FSTYPE}="tmpfs"

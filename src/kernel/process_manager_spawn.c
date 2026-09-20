@@ -4,6 +4,7 @@
  * or native driver.  Responds with PROC_IPC_RESP when the child is ready. */
 #include "process_manager_internal.h"
 #include "klog.h"
+#include "kmem.h"
 #include "serial.h"
 #include "process_manager.h"
 #include "capability.h"
@@ -2042,13 +2043,28 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_BUSY;
     }
-    if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
-                             &pid) != 0) {
+    int sfb_rc = pm_spawn_from_buffer(parent_pid,
+                                      (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
+                                      resolved.blob_size,
+                                      resolved.args_len > 0u ? resolved.args : 0,
+                                      resolved.args_len,
+                                      PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
+                                      &pid);
+    if (sfb_rc != 0) {
+        /* Which step failed, because the code the caller gets cannot say.
+         * WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED covers several distinct causes and
+         * deliberately names none of them, on the grounds that the kernel
+         * reports the one it hit -- but this path reported nothing at all, so a
+         * spawn that died on PM_SPAWN_INTERNAL_ERR_ALLOC (no app slot: the
+         * kmem-backed apps list could not grow) looked identical to one that
+         * died on a malformed app. The sibling pm_spawn_module path has logged
+         * its own "no slot" since it was written. */
+        klog_printf("[pm] spawn_path: create failed rc=%d kmem_arena=%u/%u n=%u max=%u\n",
+                    sfb_rc,
+                    (unsigned)kmem_early_arena_used(),
+                    (unsigned)kmem_early_arena_bytes(),
+                    (unsigned)kmem_early_arena_count(),
+                    (unsigned)kmem_early_arena_max_request());
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
     }

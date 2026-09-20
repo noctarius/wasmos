@@ -11,14 +11,47 @@
  * where malloc already forwards to kalloc_small. */
 #include "kmem.h"
 #include "slab.h"
+#include "physmem.h"
+#include "paging.h"
 
-/* Bump-allocated fallback arena for every request kalloc_small cannot serve:
- * before slab_init, when no frame can be found to grow a size class, and for any
- * request larger than the biggest size class.  kmem_free cannot reclaim from it,
- * so those allocations are held for the life of the kernel. */
+/* Page-backed block for a request the slab cannot serve.
+ *
+ * The slab's largest size class is 128 bytes, so EVERY container chunk the
+ * kernel grows -- a list_array chunk, a hashmap table -- is larger than it. Those
+ * used to fall to the bump arena below and were then held for the life of the
+ * kernel, which made the arena a one-way sink for ordinary runtime allocation:
+ * 256 KiB of it, drained by a few hundred container growths, after which an
+ * unrelated subsystem failed to allocate and reported something that named
+ * neither memory nor the arena (a spawn refused as PM_SPAWN_INTERNAL_ERR_ALLOC).
+ *
+ * Whole pages are taken from the frame allocator instead, with the page count
+ * recorded in a header so kmem_free can give them back. The header is placed
+ * before the returned pointer and keeps its 8-byte alignment contract.
+ *
+ * The arena is now only what its name says: an EARLY one, for allocations made
+ * before the frame allocator and slab can serve anything. */
+#define KMEM_PAGE_MAGIC 0x4B4D454Du /* 'KMEM' */
+#define KMEM_PAGE_BYTES 4096ULL
+typedef struct {
+    uint32_t magic;
+    uint32_t pages;
+    uint64_t phys;
+} kmem_page_header_t;
+
+/* Bump-allocated fallback arena for a request nothing else can serve yet:
+ * before slab_init and before the frame allocator can hand out a page.
+ * kmem_free cannot reclaim from it, so those allocations are held for the life
+ * of the kernel -- which is acceptable only because early boot makes a bounded
+ * number of them. */
 #define KMEM_EARLY_ARENA_BYTES (256u * 1024u)
 static uint8_t g_kmem_early_arena[KMEM_EARLY_ARENA_BYTES];
 static uint32_t g_kmem_early_arena_off;
+/* Shape of what the arena has served, for the failure paths that report it.
+ * Counters rather than a log: kmem_alloc runs under its callers' locks, and
+ * logging every fallback both storms the console and changes the timing of the
+ * exhaustion being measured. */
+static uint32_t g_kmem_early_count;
+static uint32_t g_kmem_early_max_req;
 
 static void* kmem_early_alloc(size_t size) {
     uintptr_t base = (uintptr_t)&g_kmem_early_arena[0];
@@ -49,6 +82,11 @@ static void* kmem_early_alloc(size_t size) {
  * The returned block is uninitialised and 8-byte aligned from either source. */
 void* kmem_alloc(size_t size) {
     void* ptr = 0;
+    uint64_t need = 0;
+    uint64_t pages = 0;
+    uint64_t phys = 0;
+    kmem_page_header_t* hdr = 0;
+
     if (size == 0) {
         return 0;
     }
@@ -56,7 +94,44 @@ void* kmem_alloc(size_t size) {
     if (ptr) {
         return ptr;
     }
+    /* Too big for the slab: take pages, which kmem_free can return. */
+    need = (uint64_t)sizeof(kmem_page_header_t) + (uint64_t)size;
+    pages = (need + KMEM_PAGE_BYTES - 1u) / KMEM_PAGE_BYTES;
+    phys = pfa_alloc_pages(pages);
+    if (phys) {
+        hdr = (kmem_page_header_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+        hdr->magic = KMEM_PAGE_MAGIC;
+        hdr->pages = (uint32_t)pages;
+        hdr->phys = phys;
+        return (void*)(hdr + 1);
+    }
+    /* No frame either -- early boot, or genuinely out of memory. */
+    g_kmem_early_count++;
+    if ((uint32_t)size > g_kmem_early_max_req) {
+        g_kmem_early_max_req = (uint32_t)size;
+    }
     return kmem_early_alloc(size);
+}
+
+/* Bytes handed out of the non-reclaimable early arena, for diagnostics.
+ *
+ * Read from failure paths rather than logged from inside kmem_alloc: the
+ * allocator runs under locks its callers hold, and logging from there both
+ * storms and changes the timing of the thing being measured. */
+uint32_t kmem_early_arena_used(void) {
+    return g_kmem_early_arena_off;
+}
+
+uint32_t kmem_early_arena_count(void) {
+    return g_kmem_early_count;
+}
+
+uint32_t kmem_early_arena_max_request(void) {
+    return g_kmem_early_max_req;
+}
+
+uint32_t kmem_early_arena_bytes(void) {
+    return KMEM_EARLY_ARENA_BYTES;
 }
 
 /* Routes by address: a pointer inside the early arena is simply dropped, since
@@ -69,6 +144,20 @@ void kmem_free(void* ptr) {
     uintptr_t p = (uintptr_t)ptr;
     if (!ptr) {
         return;
+    }
+    /* A page-backed block carries its header immediately before it. Checked
+     * before the arena range and before the slab: its magic is what tells the
+     * three sources apart, and handing a page-backed pointer to kfree_small
+     * would have it rejected on the slab's own magic and silently leaked. */
+    if (p > (uintptr_t)sizeof(kmem_page_header_t)) {
+        kmem_page_header_t* hdr = ((kmem_page_header_t*)ptr) - 1;
+        if (hdr->magic == KMEM_PAGE_MAGIC && hdr->pages > 0u) {
+            uint64_t phys = hdr->phys;
+            uint32_t pages = hdr->pages;
+            hdr->magic = 0u;
+            pfa_free_pages(phys, (uint64_t)pages);
+            return;
+        }
     }
     if (p >= start && p < end) {
         /* TODO(kmem): add reclaim for early-arena allocations if repeated

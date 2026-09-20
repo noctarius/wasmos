@@ -21,4 +21,16 @@ void* kmem_alloc(size_t size);
  * Early-arena allocations are never reclaimed; freeing one is a no-op. */
 void kmem_free(void* ptr);
 
+/* Bytes already handed out of the fixed early arena, and its total size. The
+ * arena is never reclaimed, so the first is a high-water mark: a failure path
+ * that reports it says whether the kernel ran out of this or of something
+ * else. */
+uint32_t kmem_early_arena_used(void);
+uint32_t kmem_early_arena_bytes(void);
+/* How many requests the arena has served, and the largest of them. Together with
+ * the used watermark these say whether it was drained by a few large requests
+ * the slab could not size, or by many small ones it could not satisfy. */
+uint32_t kmem_early_arena_count(void);
+uint32_t kmem_early_arena_max_request(void);
+
 #endif

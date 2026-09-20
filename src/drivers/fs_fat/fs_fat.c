@@ -697,6 +697,33 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 fat_report_backend_info(info_src, info_req, info_bid);
                 continue;
             }
+            if (type == WASMOS_IPC_SHUTDOWN_REQ) {
+                /* Quiesce. There is nothing to flush: this driver buffers no
+                 * write -- every one is issued to the block layer as it arrives
+                 * and is complete when its reply lands -- so a volume is exactly
+                 * as durable here as it was one request ago. DONE is owed all the
+                 * same: fs-manager waits for it before dropping the mount, and
+                 * the machine shutdown sequence is sequential, so a participant
+                 * that never answers stalls everyone behind it.
+                 *
+                 * An UNMOUNT quiesce ends this process, a machine shutdown does
+                 * not. After an unmount the machine keeps running and the path
+                 * may be mounted again, but this process still holds the
+                 * registrations derived from that mount -- its `fs.backend` class
+                 * instance and its service name, both keyed on the owner context
+                 * -- so a surviving backend blocks its own replacement. Leaving
+                 * the reactor releases them by ending the process. */
+                int32_t sd_src = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+                int32_t sd_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+                int32_t sd_reason = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+                (void)fat_send_reply(
+                    sd_src, WASMOS_IPC_SHUTDOWN_DONE, (uint32_t)sd_req, 0, 0, 0, 0);
+                if (sd_reason == WASMOS_SHUTDOWN_REASON_UNMOUNT) {
+                    fat_log("unmounted\n");
+                    return 0;
+                }
+                continue;
+            }
             if (type == FS_IPC_READY_REQ) {
                 (void)fat_send_reply(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
                                      FS_IPC_RESP,

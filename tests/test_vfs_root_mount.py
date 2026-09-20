@@ -675,6 +675,41 @@ class VfsUnmountTest(VfsSession, unittest.TestCase):
         listing = self._run("ls")
         self.assertIn(b"wfs/", listing, f"the mount point was removed too\n{listing!r}")
 
+    def test_with_the_volume_free_it_can_be_mounted_again(self):
+        """A device-backed filesystem releases its registrations too.
+
+        Regression: 2026-09-20-remount-block-backed
+        The `fs.backend` class instance and the service name are derived from the
+        mount path and held by the backend's PROCESS, so a backend that answered
+        its unmount and kept running blocked its own replacement: the next driver
+        could claim neither and never reported ready, and the mount failed on
+        fs-manager's spawn deadline.
+
+        fs_tmpfs was fixed first and its case covers the memory-backed path. This
+        one covers a backend with a DEVICE, which reaches the same contract by a
+        different route -- fs_wfs has a clean-unmount sequence to finish first,
+        and fs_fat had no shutdown handler at all -- so neither driver's exit is
+        exercised by the tmpfs case.
+
+        Named to sort AFTER the case above, which is what leaves /wfs unmounted
+        and its volume free: unittest orders a class's methods alphabetically, and
+        this file already depends on that ("Runs last" above). Named to sort
+        first, this case found /wfs still mounted and failed on MOUNT_EXISTS --
+        which is a true statement about the namespace and nothing about the
+        contract it means to test.
+        """
+        self._run("cd /")
+        out = self._run("mount -t wfs /wfs block:ata:2", timeout_s=40)
+        self.assertIn(
+            b"mounted", out, f"the volume could not be mounted again\n{out!r}"
+        )
+
+        out = self._run("mount")
+        self.assertIn(b"/wfs ->", out, f"not in the mount table\n{out!r}")
+        self.assertIn(
+            b"on block:ata:2", out, f"the mount does not name its device\n{out!r}"
+        )
+
 
 class VfsRootWritableTest(VfsSession, unittest.TestCase):
     """The root filesystem accepts writes, exercised through the `mkdir` util.

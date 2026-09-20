@@ -987,7 +987,11 @@ static int wfs_parse_requested_mount(char* out, uint32_t out_cap) {
  * A read-only volume has nothing to record, and wfs_sync_task refuses one, so it
  * answers without a write.
  */
-static void wfs_do_shutdown(int32_t src, int32_t request_id) {
+/* Set once an UNMOUNT quiesce has been answered, so the reactor leaves its loop
+ * and this process ends. Read only by the loop in initialize. */
+static uint8_t g_unmounted = 0;
+
+static void wfs_do_shutdown(int32_t src, int32_t request_id, int32_t reason) {
     static wfs_sync_ctx_t sync;
 
     /* Released before the clean mark is written, not after: once this returns
@@ -1011,6 +1015,19 @@ static void wfs_do_shutdown(int32_t src, int32_t request_id) {
         }
     }
     (void)wfs_reply(src, WASMOS_IPC_SHUTDOWN_DONE, request_id, 0, 0);
+    /* Recorded AFTER the clean mark and after DONE, never before either. An
+     * UNMOUNT quiesce ends this process -- the machine keeps running and the path
+     * may be mounted again, while this process still holds the `fs.backend` class
+     * instance and service name derived from that mount, so a surviving backend
+     * blocks its own replacement. A machine shutdown sets nothing: the sequence
+     * is sequential and the PM decides when each participant goes.
+     *
+     * The reactor checks this between messages rather than exiting here: the
+     * clean mark is the one thing this driver exists to get right, and leaving
+     * mid-handler is how a filesystem loses it. */
+    if (reason == WASMOS_SHUTDOWN_REASON_UNMOUNT) {
+        g_unmounted = 1;
+    }
 }
 
 /* ---- dispatch ----------------------------------------------------------- */
@@ -1019,7 +1036,7 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
                          int32_t a2, int32_t a3) {
     switch (type) {
     case WASMOS_IPC_SHUTDOWN_REQ:
-        wfs_do_shutdown(src, request_id);
+        wfs_do_shutdown(src, request_id, a0);
         return;
     case FSMGR_IPC_BACKEND_INFO_REQ:
         wfs_report_backend_info(src, request_id, a0);
@@ -1250,5 +1267,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3));
+        if (g_unmounted) {
+            /* The mount this driver served is gone, so the driver is too:
+             * returning ends the process, which is what releases its class
+             * instance and service name for whatever mounts there next. Checked
+             * here rather than inside the handler so the clean mark and the DONE
+             * reply are both complete first. */
+            break;
+        }
     }
+    return 0;
 }

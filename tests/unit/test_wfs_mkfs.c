@@ -640,6 +640,187 @@ static void test_formatting_is_reproducible(void) {
     free(second);
 }
 
+/* A guest cannot hold the sink: writing a block there is a BLOCK request it must
+ * await, so a guest-side mkfs.wfs drives wfs_mkfs_block_at itself, one block per
+ * round trip. That produces the right volume only if block_at is PURE -- the
+ * same answer for a block whenever it is asked, in whatever order, however
+ * often. Pinned here against the sink path, which is what "the right volume"
+ * means.
+ *
+ * Descending order is the strongest cheap check: it fails for any state the
+ * emission carries from one block to the next, which the phase-by-phase loop
+ * this replaced did carry.
+ *
+ * Regression: 2026-09-20-mkfs-block-at-purity */
+static uint8_t content_byte(uint32_t seed, uint64_t offset) {
+    return (uint8_t)((seed * 31u + (uint32_t)(offset * 7u) + (uint32_t)(offset >> 8)) & 0xFFu);
+}
+
+static int gen_read(void* ctx, uint64_t offset, void* dst, uint32_t len) {
+    uint32_t seed = *(const uint32_t*)ctx;
+    uint8_t* out = (uint8_t*)dst;
+    uint32_t i;
+
+    for (i = 0; i < len; ++i) {
+        out[i] = content_byte(seed, offset + i);
+    }
+    return 0;
+}
+
+/* Rebuild a volume block by block, descending, and compare it with `want`.
+ * `plan` is planned here rather than handed over, because a guest plans for
+ * itself and the planning has to agree too. */
+static void rebuild_descending(const wfs_mkfs_params_t* params, const wfs_mkfs_entry_t* entries,
+                               uint32_t count, wfs_mkfs_node_t* plan, const uint8_t* want,
+                               const wfs_mkfs_layout_t* want_layout, const char* what) {
+    wfs_mkfs_layout_t L;
+    uint8_t* built;
+    uint8_t* scratch;
+    uint32_t block;
+
+    expect_rc(wfs_mkfs_plan_tree(params, entries, count, plan, &L), WASMOS_ERR_NONE, "plan_tree");
+    expect(L.total_blocks == want_layout->total_blocks && L.block_size == want_layout->block_size &&
+               L.root_blocks == want_layout->root_blocks &&
+               L.used_blocks == want_layout->used_blocks,
+           "planning alone settles the layout the formatter reports");
+
+    built = (uint8_t*)calloc(L.total_blocks, L.block_size);
+    scratch = (uint8_t*)malloc(L.block_size);
+    if (!built || !scratch) {
+        expect(0, "allocate the rebuild");
+        free(built);
+        free(scratch);
+        return;
+    }
+    for (block = L.total_blocks; block-- > 0;) {
+        if (wfs_mkfs_block_at(params, entries, count, plan, &L, block, scratch) !=
+            WASMOS_ERR_NONE) {
+            expect(0, "build a block");
+            free(built);
+            free(scratch);
+            return;
+        }
+        memcpy(built + (size_t)block * L.block_size, scratch, L.block_size);
+    }
+    expect(memcmp(built, want, (size_t)L.total_blocks * L.block_size) == 0, what);
+
+    free(built);
+    free(scratch);
+}
+
+static void test_an_empty_volume_builds_block_by_block_in_any_order(void) {
+    wfs_mkfs_params_t params;
+    wfs_mkfs_layout_t L;
+    wfs_mkfs_node_t plan[1];
+    uint8_t* reference = format_image(IMG_16M, &L, NULL);
+    uint8_t* first;
+    uint8_t* second;
+
+    if (!reference) {
+        expect(0, "format the reference volume");
+        return;
+    }
+    base_params(&params, IMG_16M);
+    rebuild_descending(&params,
+                       NULL,
+                       0u,
+                       plan,
+                       reference,
+                       &L,
+                       "an empty volume built backwards is the volume the sink received");
+
+    /* Idempotent, not merely order-free: a guest that retries a failed write
+     * asks for the same block again and must be given the same bytes. */
+    first = (uint8_t*)malloc(L.block_size);
+    second = (uint8_t*)malloc(L.block_size);
+    if (first && second) {
+        expect_rc(wfs_mkfs_block_at(&params, NULL, 0u, plan, &L, 0u, first),
+                  WASMOS_ERR_NONE,
+                  "build block 0");
+        expect_rc(wfs_mkfs_block_at(&params, NULL, 0u, plan, &L, 0u, second),
+                  WASMOS_ERR_NONE,
+                  "build block 0 again");
+        expect(memcmp(first, second, L.block_size) == 0, "asking twice gives the same block");
+    } else {
+        expect(0, "allocate the idempotence buffers");
+    }
+    expect_rc(wfs_mkfs_block_at(&params, NULL, 0u, plan, &L, L.total_blocks, first),
+              WASMOS_ERR_FS_BAD_ARGS,
+              "a block past the volume is refused rather than produced");
+
+    free(first);
+    free(second);
+    free(reference);
+}
+
+static void test_a_populated_volume_builds_block_by_block_in_any_order(void) {
+    static uint32_t seeds[4] = {3u, 11u, 5u, 0u};
+    wfs_mkfs_params_t params;
+    wfs_mkfs_layout_t L;
+    wfs_mkfs_node_t plan[5];
+    wfs_mkfs_entry_t entries[4];
+    wfs_mkfs_sink_t sink;
+    full_sink_t fs;
+    uint8_t* reference;
+    uint32_t i;
+
+    /* /README inline, /bin a directory, /bin/big.bin over several blocks, and an
+     * empty file: one entry of every shape the emission distinguishes. */
+    memset(entries, 0, sizeof(entries));
+    for (i = 0; i < 4u; ++i) {
+        entries[i].parent = WFS_MKFS_ROOT;
+        entries[i].mode = 0644u;
+    }
+    entries[0].name = "README";
+    entries[0].size = 15u;
+    entries[1].name = "bin";
+    entries[1].is_dir = 1u;
+    entries[1].mode = 0755u;
+    entries[2].name = "big.bin";
+    entries[2].parent = 1u;
+    entries[2].size = 40000u;
+    entries[3].name = "zero";
+    entries[3].parent = 1u;
+    entries[3].size = 0u;
+    for (i = 0; i < 4u; ++i) {
+        entries[i].name_len = (uint32_t)strlen(entries[i].name);
+        if (!entries[i].is_dir) {
+            entries[i].read = gen_read;
+            entries[i].read_ctx = &seeds[i];
+        }
+    }
+
+    base_params(&params, IMG_16M);
+    if (wfs_mkfs_plan(&params, &L) != WASMOS_ERR_NONE) {
+        expect(0, "plan the reference volume");
+        return;
+    }
+    reference = (uint8_t*)calloc(L.total_blocks, L.block_size);
+    if (!reference) {
+        expect(0, "allocate the reference volume");
+        return;
+    }
+    memset(&fs, 0, sizeof(fs));
+    fs.image = reference;
+    fs.blocks = L.total_blocks;
+    fs.block_size = L.block_size;
+    sink.ctx = &fs;
+    sink.write_block = full_write;
+    expect_rc(wfs_mkfs_format_tree(&params, entries, 4u, plan, &sink, &L),
+              WASMOS_ERR_NONE,
+              "format the reference tree");
+
+    rebuild_descending(&params,
+                       entries,
+                       4u,
+                       plan,
+                       reference,
+                       &L,
+                       "a populated volume built backwards is the volume the sink received");
+
+    free(reference);
+}
+
 /* ---- runner -------------------------------------------------------------- */
 
 static const wasmos_test_void_case_t k_cases[] = {
@@ -657,6 +838,8 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_plan_refuses_what_it_cannot_lay_out),
     WASMOS_TEST_CASE(test_plan_honours_every_permitted_block_size),
     WASMOS_TEST_CASE(test_formatting_is_reproducible),
+    WASMOS_TEST_CASE(test_an_empty_volume_builds_block_by_block_in_any_order),
+    WASMOS_TEST_CASE(test_a_populated_volume_builds_block_by_block_in_any_order),
 };
 
 int main(void) {

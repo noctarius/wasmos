@@ -422,25 +422,23 @@ static void build_dir_block(uint8_t* d, const wfs_mkfs_params_t* params,
     close_dir_block(d, params, block, block_size, last);
 }
 
-/* ---- emission ----------------------------------------------------------- */
+/* ---- planning ------------------------------------------------------------ */
 
-wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
-                                         const wfs_mkfs_entry_t* entries, uint32_t count,
-                                         wfs_mkfs_node_t* plan, const wfs_mkfs_sink_t* sink,
-                                         wfs_mkfs_layout_t* out_layout) {
+wasmos_error_code_t wfs_mkfs_plan_tree(const wfs_mkfs_params_t* params,
+                                       const wfs_mkfs_entry_t* entries, uint32_t count,
+                                       wfs_mkfs_node_t* plan, wfs_mkfs_layout_t* out_layout) {
     wfs_mkfs_layout_t L;
     wasmos_error_code_t rc;
     uint32_t bs;
-    uint32_t block;
     uint32_t g;
     uint32_t i;
     uint32_t next;
     uint32_t root_slot;
 
-    if (!params || !sink || !sink->write_block) {
+    if (!params || !plan || !out_layout) {
         return WASMOS_ERR_FS_BAD_ARGS;
     }
-    if (count != 0u && (!entries || !plan)) {
+    if (count != 0u && !entries) {
         return WASMOS_ERR_FS_BAD_ARGS;
     }
     rc = wfs_mkfs_plan(params, &L);
@@ -449,8 +447,6 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
     }
     bs = L.block_size;
     root_slot = count;
-
-    /* ---- plan the tree ---- */
 
     if (count + 1u > L.total_objects - WFS_OBJECT_FIRST + 1u) {
         return WASMOS_ERR_FS_NO_SPACE;
@@ -529,35 +525,61 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
         return WASMOS_ERR_FS_NO_SPACE;
     }
 
-    /* ---- emit ---- */
+    *out_layout = L;
+    return WASMOS_ERR_NONE;
+}
+
+/* ---- emission ------------------------------------------------------------ */
+
+/* Serialize one block. Contract in wfs_mkfs.h. The property every caller rests
+ * on is purity: no state survives a call, so blocks may be produced in any
+ * order, repeated, and awaited between. */
+wasmos_error_code_t wfs_mkfs_block_at(const wfs_mkfs_params_t* params,
+                                      const wfs_mkfs_entry_t* entries, uint32_t count,
+                                      const wfs_mkfs_node_t* plan, const wfs_mkfs_layout_t* layout,
+                                      uint32_t block, uint8_t* buf) {
+    wfs_mkfs_layout_t L;
+    uint32_t bs;
+    uint32_t root_slot = count;
+    uint32_t i;
+
+    if (!params || !plan || !layout || !buf) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    if (count != 0u && !entries) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    L = *layout;
+    bs = L.block_size;
+    if (block >= L.total_blocks) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    memset(buf, 0, bs);
 
     /* Block 0: the reserved boot area, then the primary superblock at byte
      * WFS_SUPER_OFFSET. Both live in block 0 at every permitted block size. */
-    memset(g_block, 0, bs);
-    build_super(g_block + WFS_SUPER_OFFSET, params, &L, 0u);
-    rc = emit(sink, 0u, bs);
-    if (rc != WASMOS_ERR_NONE) {
-        return rc;
+    if (block == 0u) {
+        build_super(buf + WFS_SUPER_OFFSET, params, &L, 0u);
+        return WASMOS_ERR_NONE;
     }
 
     /* Group descriptors. Each names its group's slice of the object table and
      * its two bitmap blocks; the superblock bounds the regions those slices sit
      * in (§11). */
-    for (block = 0u; block < L.group_table_blocks; ++block) {
+    if (block >= L.group_table_start && block < L.group_table_start + L.group_table_blocks) {
+        uint32_t idx = block - L.group_table_start;
         uint32_t per_block = wfs_group_descs_per_block(bs);
-        uint32_t first = block * per_block;
+        uint32_t first = idx * per_block;
 
-        memset(g_block, 0, bs);
         for (i = 0u; i < per_block && first + i < L.group_count; ++i) {
             uint32_t gi = first + i;
-            uint8_t* d = g_block + (uint32_t)(i * WFS_GROUP_DESC_SIZE);
+            uint8_t* d = buf + (uint32_t)(i * WFS_GROUP_DESC_SIZE);
             uint32_t group_blocks = L.blocks_per_group;
             uint32_t used;
 
             if (gi == L.group_count - 1u) {
                 group_blocks = L.total_blocks - gi * L.blocks_per_group;
             }
-
             wfs_wr64(d,
                      (uint32_t)offsetof(struct wfs_group_desc, block_bitmap),
                      L.bitmap_start + 2u * gi);
@@ -592,19 +614,15 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
                                          WFS_GROUP_DESC_SIZE,
                                          (uint32_t)offsetof(struct wfs_group_desc, checksum)));
         }
-        rc = emit(sink, L.group_table_start + block, bs);
-        if (rc != WASMOS_ERR_NONE) {
-            return rc;
-        }
+        return WASMOS_ERR_NONE;
     }
 
     /* Journal. Its first block is the journal superblock; the log behind it is
      * empty, which recovery sees as a head at the first block whose magic does
      * not validate (§21). */
-    for (block = 0u; block < L.journal_blocks; ++block) {
-        memset(g_block, 0, bs);
-        if (block == 0u) {
-            uint8_t* d = g_block;
+    if (block >= L.journal_start && block < L.journal_start + L.journal_blocks) {
+        if (block == L.journal_start) {
+            uint8_t* d = buf;
             wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_super, magic), WFS_JOURNAL_MAGIC);
             wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_super, version), WFS_VERSION);
             wfs_wr32(d, (uint32_t)offsetof(struct wfs_journal_super, block_size), bs);
@@ -619,22 +637,18 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
                                          (uint32_t)sizeof(struct wfs_journal_super),
                                          (uint32_t)offsetof(struct wfs_journal_super, checksum)));
         }
-        rc = emit(sink, L.journal_start + block, bs);
-        if (rc != WASMOS_ERR_NONE) {
-            return rc;
-        }
+        return WASMOS_ERR_NONE;
     }
 
     /* Object table. The root, then one record per entry; everything else is zero
      * and governed by the object bitmap. */
-    for (block = 0u; block < L.object_table_blocks; ++block) {
+    if (block >= L.object_table_start && block < L.object_table_start + L.object_table_blocks) {
         uint32_t per_block = wfs_objects_per_block(bs);
-        uint32_t first_id = block * per_block;
+        uint32_t first_id = (block - L.object_table_start) * per_block;
 
-        memset(g_block, 0, bs);
         for (i = 0; i < per_block; ++i) {
             uint32_t id = first_id + i;
-            uint8_t* d = g_block + i * WFS_OBJECT_SIZE;
+            uint8_t* d = buf + i * WFS_OBJECT_SIZE;
 
             if (id == WFS_OBJECT_ROOT) {
                 /* Two links: the root's own "." and its "..", both naming it. */
@@ -691,100 +705,120 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
                 }
             }
         }
-        rc = emit(sink, L.object_table_start + block, bs);
-        if (rc != WASMOS_ERR_NONE) {
-            return rc;
-        }
+        return WASMOS_ERR_NONE;
     }
 
-    /* Bitmaps, two blocks per group. */
-    for (g = 0u; g < L.group_count; ++g) {
-        memset(g_block, 0, bs);
-        (void)group_mark_used(g_block, &L, g);
-        rc = emit(sink, L.bitmap_start + 2u * g, bs);
-        if (rc != WASMOS_ERR_NONE) {
-            return rc;
-        }
+    /* Bitmaps, two blocks per group: the block bitmap then the object bitmap. */
+    if (block >= L.bitmap_start && block < L.bitmap_start + 2u * L.group_count) {
+        uint32_t off = block - L.bitmap_start;
+        uint32_t g = off / 2u;
 
-        memset(g_block, 0, bs);
+        if ((off & 1u) == 0u) {
+            (void)group_mark_used(buf, &L, g);
+            return WASMOS_ERR_NONE;
+        }
         if (g == 0u) {
             /* Ids 0..15 are reserved (§25) and the entries follow them; marking
              * both keeps an allocator from ever returning one. */
             for (i = 0u; i < WFS_OBJECT_FIRST + count; ++i) {
-                bitmap_set(g_block, i);
+                bitmap_set(buf, i);
             }
         }
-        rc = emit(sink, L.bitmap_start + 2u * g + 1u, bs);
-        if (rc != WASMOS_ERR_NONE) {
-            return rc;
-        }
+        return WASMOS_ERR_NONE;
     }
 
     /* Data blocks, in ascending order: the root's directory blocks, then each
      * entry's run, then the free tail with its backup superblocks. */
-    for (block = L.first_data_block; block < L.total_blocks; ++block) {
-        memset(g_block, 0, bs);
+    if (block < L.first_data_block + L.root_blocks) {
+        build_dir_block(buf,
+                        params,
+                        entries,
+                        plan,
+                        count,
+                        WFS_MKFS_ROOT,
+                        WFS_OBJECT_ROOT,
+                        WFS_OBJECT_ROOT,
+                        block,
+                        block - L.first_data_block,
+                        bs);
+        return WASMOS_ERR_NONE;
+    }
+    if (block < L.first_data_block + L.root_blocks + L.used_blocks) {
+        /* Which entry owns this block. Runs are contiguous and assigned in
+         * array order, so a scan forward from the previous owner would do;
+         * this stays simple instead, which a formatter can afford. */
+        uint32_t owner = count;
 
-        if (block < L.first_data_block + L.root_blocks) {
-            build_dir_block(g_block,
+        for (i = 0; i < count; ++i) {
+            if (plan[i].block_count != 0u && block >= plan[i].first_block &&
+                block < plan[i].first_block + plan[i].block_count) {
+                owner = i;
+                break;
+            }
+        }
+        if (owner == count) {
+            return WASMOS_ERR_FS_CORRUPT;
+        }
+        if (entries[owner].is_dir) {
+            uint32_t parent_id = entries[owner].parent == WFS_MKFS_ROOT
+                                     ? WFS_OBJECT_ROOT
+                                     : plan[entries[owner].parent].object_id;
+
+            build_dir_block(buf,
                             params,
                             entries,
                             plan,
                             count,
-                            WFS_MKFS_ROOT,
-                            WFS_OBJECT_ROOT,
-                            WFS_OBJECT_ROOT,
+                            owner,
+                            plan[owner].object_id,
+                            parent_id,
                             block,
-                            block - L.first_data_block,
+                            block - plan[owner].first_block,
                             bs);
-        } else if (block < L.first_data_block + L.root_blocks + L.used_blocks) {
-            /* Which entry owns this block. Runs are contiguous and assigned in
-             * array order, so a scan forward from the previous owner would do;
-             * this stays simple instead, which a formatter can afford. */
-            uint32_t owner = count;
-
-            for (i = 0; i < count; ++i) {
-                if (plan[i].block_count != 0u && block >= plan[i].first_block &&
-                    block < plan[i].first_block + plan[i].block_count) {
-                    owner = i;
-                    break;
-                }
-            }
-            if (owner == count) {
-                return WASMOS_ERR_FS_CORRUPT;
-            }
-            if (entries[owner].is_dir) {
-                uint32_t parent_id = entries[owner].parent == WFS_MKFS_ROOT
-                                         ? WFS_OBJECT_ROOT
-                                         : plan[entries[owner].parent].object_id;
-
-                build_dir_block(g_block,
-                                params,
-                                entries,
-                                plan,
-                                count,
-                                owner,
-                                plan[owner].object_id,
-                                parent_id,
-                                block,
-                                block - plan[owner].first_block,
-                                bs);
-            } else {
-                uint64_t offset = (uint64_t)(block - plan[owner].first_block) * bs;
-                uint64_t left = entries[owner].size - offset;
-                uint32_t len = left > bs ? bs : (uint32_t)left;
-
-                if (!entries[owner].read ||
-                    entries[owner].read(entries[owner].read_ctx, offset, g_block, len) != 0) {
-                    return WASMOS_ERR_FS_IO;
-                }
-            }
-        } else if ((block % L.blocks_per_group) == 0u &&
-                   wfs_super_group_has_backup(block / L.blocks_per_group)) {
-            build_super(g_block, params, &L, block);
+            return WASMOS_ERR_NONE;
         }
+        {
+            uint64_t offset = (uint64_t)(block - plan[owner].first_block) * bs;
+            uint64_t left = entries[owner].size - offset;
+            uint32_t len = left > bs ? bs : (uint32_t)left;
 
-        rc = emit(sink, block, bs);
+            if (!entries[owner].read ||
+                entries[owner].read(entries[owner].read_ctx, offset, buf, len) != 0) {
+                return WASMOS_ERR_FS_IO;
+            }
+        }
+        return WASMOS_ERR_NONE;
+    }
+    if ((block % L.blocks_per_group) == 0u &&
+        wfs_super_group_has_backup(block / L.blocks_per_group)) {
+        build_super(buf, params, &L, block);
+    }
+    return WASMOS_ERR_NONE;
+}
+
+wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
+                                         const wfs_mkfs_entry_t* entries, uint32_t count,
+                                         wfs_mkfs_node_t* plan, const wfs_mkfs_sink_t* sink,
+                                         wfs_mkfs_layout_t* out_layout) {
+    wfs_mkfs_layout_t L;
+    wasmos_error_code_t rc;
+    uint32_t block;
+
+    if (!sink || !sink->write_block) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    rc = wfs_mkfs_plan_tree(params, entries, count, plan, &L);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+
+    /* Ascending, every block once: the order a sink is entitled to assume. */
+    for (block = 0u; block < L.total_blocks; ++block) {
+        rc = wfs_mkfs_block_at(params, entries, count, plan, &L, block, g_block);
+        if (rc != WASMOS_ERR_NONE) {
+            return rc;
+        }
+        rc = emit(sink, block, L.block_size);
         if (rc != WASMOS_ERR_NONE) {
             return rc;
         }

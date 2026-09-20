@@ -1100,6 +1100,15 @@ tail.
   format a mounted volume -- has no call site yet. Whoever adds a guest `mkfs.wfs`
   owes it the same check `fsck.wfs` makes.
 
+- [ ] [ENHANCEMENT][P3] `mkfs.wfs` as a guest utility. The formatter's library
+  half is ready for one: `wfs_mkfs_plan_tree` settles the layout and the tree
+  without writing, and `wfs_mkfs_block_at` serializes any single block purely, so
+  a guest can await a BLOCK write between blocks instead of holding the
+  synchronous sink. What remains is the utility itself -- resolving a volume id,
+  granting a transfer buffer, the write loop, and the claim check above. An
+  EMPTY volume needs only the write side, because the read callback is reachable
+  only through entries.
+
 - [ ] [ENHANCEMENT][P4] A claim does not catch the overlap it looks like it
   should: a disk and its partitions are distinct volumes, so claiming one does not
   mark the others. Today that is prevented by suppressing the whole-disk volume of

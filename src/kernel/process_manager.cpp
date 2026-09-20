@@ -341,7 +341,7 @@ class ProcessManager {
 
         pm_check_waits(process->context_id);
         pm_reap_apps(process);
-        pm_services_class_reap(process->context_id);
+        pm_services_reap(process->context_id);
         pm_poll_spawn(process->context_id);
         /* Stepped here, before the receive, so a shutdown makes progress on the
          * idle path too: with no request queued the receive below parks on the

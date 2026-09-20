@@ -105,6 +105,8 @@ enum {
     WASMOS_ERR_PROC_PM_HANDLER_REG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 24), /* exec-handler registration failed */
     WASMOS_ERR_PROC_PM_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 25), /* caller lacks the subsystem.register capability */
     WASMOS_ERR_PROC_PM_NO_PM_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 26), /* PM could not acquire its own xfer buffer */
+    WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 27), /* that service name is held by another live process */
+    WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 28), /* that (class, instance) is held by another live process */
     WASMOS_ERR_LINMEM_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 1), /* no free page-aligned window fits in linear memory */
     WASMOS_ERR_LINMEM_MAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 2), /* paging/linear-memory mapping step failed */
     WASMOS_ERR_LINMEM_NO_BASE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 3), /* the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it */
@@ -139,7 +141,7 @@ enum {
     WASMOS_ERR_FS_BACKEND_IPC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 27), /* request could not be delivered to the backend, or no reply arrived */
     WASMOS_ERR_FS_BAD_FD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 28), /* fd is not present in this client's fd table */
     WASMOS_ERR_FS_REPLY_SEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 29), /* the reply could not be delivered to the client */
-    WASMOS_ERR_FS_BAD_MAGIC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 30), /* on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent */
+    WASMOS_ERR_FS_BAD_MAGIC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 30), /* not a volume of this filesystem type */
     WASMOS_ERR_FS_CHECKSUM = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 31), /* metadata checksum mismatch: the structure did not verify against the checksum it carries */
     WASMOS_ERR_FS_FEATURE_INCOMPAT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 32), /* volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures */
     WASMOS_ERR_FS_GEOMETRY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 33), /* on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it) */
@@ -409,6 +411,8 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_HANDLER_REG: return "proc_pm.HANDLER_REG";
     case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: return "proc_pm.NOT_AUTHORIZED";
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "proc_pm.NO_PM_FSBUF";
+    case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "proc_pm.SVC_NAME_TAKEN";
+    case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "proc_pm.SVC_CLASS_TAKEN";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "linmem.NO_WINDOW";
     case WASMOS_ERR_LINMEM_MAP: return "linmem.MAP";
     case WASMOS_ERR_LINMEM_NO_BASE: return "linmem.NO_BASE";
@@ -647,6 +651,8 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_HANDLER_REG: return "exec-handler registration failed";
     case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: return "caller lacks the subsystem.register capability";
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "PM could not acquire its own xfer buffer";
+    case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "that service name is held by another live process";
+    case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "that (class, instance) is held by another live process";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";
@@ -681,7 +687,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_FS_BACKEND_IPC: return "request could not be delivered to the backend, or no reply arrived";
     case WASMOS_ERR_FS_BAD_FD: return "fd is not present in this client's fd table";
     case WASMOS_ERR_FS_REPLY_SEND: return "the reply could not be delivered to the client";
-    case WASMOS_ERR_FS_BAD_MAGIC: return "on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent";
+    case WASMOS_ERR_FS_BAD_MAGIC: return "not a volume of this filesystem type";
     case WASMOS_ERR_FS_CHECKSUM: return "metadata checksum mismatch: the structure did not verify against the checksum it carries";
     case WASMOS_ERR_FS_FEATURE_INCOMPAT: return "volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures";
     case WASMOS_ERR_FS_GEOMETRY: return "on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)";

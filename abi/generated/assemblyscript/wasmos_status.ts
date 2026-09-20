@@ -84,6 +84,8 @@ export const WASMOS_ERR_PROC_PM_SUBSYSTEM_REG: i32 = -0x00020017; // subsystem b
 export const WASMOS_ERR_PROC_PM_HANDLER_REG: i32 = -0x00020018; // exec-handler registration failed
 export const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: i32 = -0x00020019; // caller lacks the subsystem.register capability
 export const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001A; // PM could not acquire its own xfer buffer
+export const WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: i32 = -0x0002001B; // that service name is held by another live process
+export const WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: i32 = -0x0002001C; // that (class, instance) is held by another live process
 export const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 export const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 export const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -118,7 +120,7 @@ export const WASMOS_ERR_FS_REBORROW: i32 = -0x0004001A; // reborrowing the clien
 export const WASMOS_ERR_FS_BACKEND_IPC: i32 = -0x0004001B; // request could not be delivered to the backend, or no reply arrived
 export const WASMOS_ERR_FS_BAD_FD: i32 = -0x0004001C; // fd is not present in this client's fd table
 export const WASMOS_ERR_FS_REPLY_SEND: i32 = -0x0004001D; // the reply could not be delivered to the client
-export const WASMOS_ERR_FS_BAD_MAGIC: i32 = -0x0004001E; // on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent
+export const WASMOS_ERR_FS_BAD_MAGIC: i32 = -0x0004001E; // not a volume of this filesystem type
 export const WASMOS_ERR_FS_CHECKSUM: i32 = -0x0004001F; // metadata checksum mismatch: the structure did not verify against the checksum it carries
 export const WASMOS_ERR_FS_FEATURE_INCOMPAT: i32 = -0x00040020; // volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures
 export const WASMOS_ERR_FS_GEOMETRY: i32 = -0x00040021; // on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)
@@ -372,6 +374,8 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_PM_HANDLER_REG: return "exec-handler registration failed";
     case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: return "caller lacks the subsystem.register capability";
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "PM could not acquire its own xfer buffer";
+    case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "that service name is held by another live process";
+    case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "that (class, instance) is held by another live process";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";
@@ -406,7 +410,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_FS_BACKEND_IPC: return "request could not be delivered to the backend, or no reply arrived";
     case WASMOS_ERR_FS_BAD_FD: return "fd is not present in this client's fd table";
     case WASMOS_ERR_FS_REPLY_SEND: return "the reply could not be delivered to the client";
-    case WASMOS_ERR_FS_BAD_MAGIC: return "on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent";
+    case WASMOS_ERR_FS_BAD_MAGIC: return "not a volume of this filesystem type";
     case WASMOS_ERR_FS_CHECKSUM: return "metadata checksum mismatch: the structure did not verify against the checksum it carries";
     case WASMOS_ERR_FS_FEATURE_INCOMPAT: return "volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures";
     case WASMOS_ERR_FS_GEOMETRY: return "on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)";

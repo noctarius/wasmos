@@ -250,10 +250,6 @@ uint32_t pm_alloc_cli_tty(void);
  * as an output area. */
 const uint8_t* pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, uint32_t* out_size);
 
-/* Bind `name` to `endpoint`. Re-binding an existing name is allowed only for
- * its current owner; a different owner is refused. Returns 0, or -1 on an
- * ownership clash or when no slot could be allocated. Names longer than 16
- * characters are truncated into pm_service_entry_t::name. */
 /* Advance the shutdown sequence by one step, from the PM's dispatch loop. A
  * no-op until kernel_system_shutdown_arm has been called; does not return once
  * the last participant has answered or been passed over. */
@@ -263,6 +259,16 @@ void pm_shutdown_step(uint32_t pm_context_id);
  * answer from a participant already passed over cannot retire its successor. */
 void pm_shutdown_note_done(const ipc_message_t* msg);
 
+/* Bind `name` to `endpoint`. Re-binding an existing name is allowed only for
+ * its current owner; a different owner is refused. Returns 0, or -1 on an
+ * ownership clash, when no slot could be allocated, or when `name` does not fit
+ * pm_service_entry_t::name -- it is REFUSED here rather than truncated, because
+ * a truncated name both loses its NUL and can collide with an unrelated one.
+ *
+ * Both callers truncate before this point, so the refusal is a backstop rather
+ * than a path anything reaches: the registration helpers copy at most
+ * WASMOS_SVC_NAME_MAX-1 characters into the descriptor, and
+ * pm_handle_service_register_desc copies out of it under the same bound. */
 int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id, uint32_t flags);
 /* Endpoint bound to `name`, or IPC_ENDPOINT_NONE if the name is unknown. Note
  * the sentinel: 0 is a possible endpoint id, so a zero return is not "absent". */
@@ -291,7 +297,11 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
 int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg);
-void pm_services_class_reap(uint32_t pm_context_id);
+/* Periodic exit-driven sweep over both service tables: drop class providers and
+ * subscribers whose owner has died (firing REMOVE events) and free the flat-table
+ * names those owners held. Called from the PM run loop, so a name or instance is
+ * reusable by the next process to serve that role. */
+void pm_services_reap(uint32_t pm_context_id);
 /* PROC_IPC_SUBSYSTEM_REGISTER_BROKER / PROC_IPC_EXEC_HANDLER_REGISTER: both
  * require CAP_SUBSYSTEM_REGISTER on the caller and a descriptor in the caller's
  * transfer buffer (arg1 = length, arg2 = buffer_id) whose declared endpoint the

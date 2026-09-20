@@ -313,6 +313,9 @@ set(WASM_FSCK_WFS_APP ${BUILD_DIR}/fsck_wfs.wap)
 set(WASM_BLKINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/blkinfo/blkinfo.c)
 set(WASM_BLKINFO_WASM ${BUILD_DIR}/blkinfo.wasm)
 set(WASM_BLKINFO_APP ${BUILD_DIR}/blkinfo.wap)
+set(WASM_VOLINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/volinfo/volinfo.c)
+set(WASM_VOLINFO_WASM ${BUILD_DIR}/volinfo.wasm)
+set(WASM_VOLINFO_APP ${BUILD_DIR}/volinfo.wap)
 set(WASM_CURL_SRC ${CMAKE_SOURCE_DIR}/src/utils/curl/curl.c)
 set(WASM_CURL_WASM ${BUILD_DIR}/curl.wasm)
 set(WASM_CURL_APP ${BUILD_DIR}/curl.wap)
@@ -1748,6 +1751,7 @@ if (TARGET host_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUNT_APP} ${BUILD_DIR}/esp/system/utils/mount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_UMOUNT_APP} ${BUILD_DIR}/esp/system/utils/umount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VOLINFO_APP} ${BUILD_DIR}/esp/system/utils/volinfo.wap
     # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap
   )

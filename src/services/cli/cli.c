@@ -71,6 +71,16 @@ static int32_t g_request_id = 1;
  * client endpoint (in this set), so the wait wakes immediately on input; the
  * timeout is only a liveness/foreground-refresh backstop. */
 static int32_t g_idle_select = -1;
+/* Select set holding g_vt_client_endpoint alone, so a wait for a VT reply can
+ * PARK instead of polling. Separate from g_idle_select because it is created as
+ * soon as the endpoint exists, before the idle set, and the VT handshake runs in
+ * that window. */
+static int32_t g_vt_select = -1;
+/* Longest a single park waits for a VT reply. The retry budget multiplies this,
+ * so it bounds the total wait without turning the loop into a poll. */
+#define CLI_VT_WAIT_MS 20
+/* Latches the first failed idle wait, so the report below is made once. */
+static uint8_t g_idle_wait_failed = 0;
 #define CLI_IDLE_WAIT_MS 1000
 
 /* The single receive pump over g_vt_client_endpoint.  It matches replies to
@@ -714,6 +724,20 @@ static int cli_vt_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg
             }
             return 0;
         }
+        /* PARK between polls, never spin. wasmos_sys_event_loop_poll does not
+         * block, so polling it in a loop ran this budget at full dispatch rate --
+         * and the reply being waited for is owed by the VT, which that spin is
+         * competing with. The wait is the load on the service that has to answer,
+         * which is why the CLI appeared to hang while the VT was merely late.
+         *
+         * A wait that cannot be performed ends the call rather than degrading to
+         * a yield loop: the caller treats -1 as "no character" and parks. */
+        if (g_vt_select >= 0) {
+            if (!wasmos_sys_wait_parked(
+                    wasmos_ipc_select_wait_timeout(g_vt_select, CLI_VT_WAIT_MS))) {
+                break;
+            }
+        }
         (void)wasmos_sys_event_loop_poll(&g_loop, 4);
     }
     /* Give up, but retract the intent: leaving it registered lets a late reply
@@ -882,7 +906,13 @@ static int cli_register_vt_writer(void) {
             return -1;
         }
         if (rc == 0) {
-            (void)wasmos_sched_yield();
+            /* Park until the endpoint has traffic rather than yielding: a yield
+             * here returns immediately and burns the whole retry budget at full
+             * dispatch rate, competing with the VT that owes this reply. */
+            if (g_vt_select >= 0 && !wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(
+                                        g_vt_select, CLI_VT_WAIT_MS))) {
+                return -1;
+            }
             continue;
         }
         int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
@@ -930,7 +960,13 @@ static int cli_set_vt_mode(uint32_t mode) {
             return -1;
         }
         if (rc == 0) {
-            (void)wasmos_sched_yield();
+            /* Park until the endpoint has traffic rather than yielding: a yield
+             * here returns immediately and burns the whole retry budget at full
+             * dispatch rate, competing with the VT that owes this reply. */
+            if (g_vt_select >= 0 && !wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(
+                                        g_vt_select, CLI_VT_WAIT_MS))) {
+                return -1;
+            }
             continue;
         }
         int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
@@ -1471,7 +1507,15 @@ static int cli_script_on_wait_svc(void* user, const char* name) {
         if (ep >= 0) {
             return 0;
         }
-        wasmos_sched_yield();
+        /* Sleep between attempts rather than yielding. A service appears because
+         * some other process got far enough to register it, so spinning here is
+         * load on exactly the bring-up being waited for -- and a yield returns
+         * immediately, making this loop a full-rate poll. The wait is timed
+         * because a name has no event to park on; only a CLASS does. */
+        if (g_idle_select >= 0 && !wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(
+                                      g_idle_select, CLI_VT_WAIT_MS))) {
+            break;
+        }
     }
     return 0;
 }
@@ -2059,6 +2103,12 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
         cli_fail_and_stall("[cli] failed to create reply endpoint\n");
     }
     g_vt_client_endpoint = wasmos_ipc_create_endpoint();
+    if (g_vt_client_endpoint >= 0) {
+        g_vt_select = wasmos_ipc_select_create();
+        if (g_vt_select >= 0 && wasmos_ipc_select_add(g_vt_select, g_vt_client_endpoint) != 0) {
+            g_vt_select = -1;
+        }
+    }
     if (g_vt_client_endpoint < 0) {
         cli_fail_and_stall("[cli] failed to create vt endpoint\n");
     }
@@ -2122,14 +2172,28 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
  * the CLI's endpoints, or CLI_IDLE_WAIT_MS elapses.  The caller must not treat
  * this as a poll: on the normal path it parks the thread. */
 static void cli_idle_wait(void) {
-    if (g_idle_select >= 0 &&
-        wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(g_idle_select, CLI_IDLE_WAIT_MS))) {
-        return;
+    if (g_idle_select >= 0) {
+        int32_t rc = wasmos_ipc_select_wait_timeout(g_idle_select, CLI_IDLE_WAIT_MS);
+        if (wasmos_sys_wait_parked(rc)) {
+            return;
+        }
+        /* Said once, not per iteration: a wait that cannot be performed does not
+         * start working again, so repeating it would be the log storm version of
+         * the spin this function exists to avoid. The code is what distinguishes
+         * the causes -- a set the table no longer holds (NOENT) from one owned by
+         * another context (PERM) from a rejected id (INVALID) -- and without it a
+         * broken wait is indistinguishable from an idle shell. */
+        if (!g_idle_wait_failed) {
+            g_idle_wait_failed = 1;
+            printf("[cli] idle wait failed rc=%d; parking on the input endpoint\n", (int)rc);
+        }
     }
-    /* Either there is no select set, or the wait failed -- a failed wait returns
-     * immediately, so retrying it would turn the caller's loop into a spin.
-     * Fall back to one explicit yield instead. */
-    (void)wasmos_sched_yield();
+    /* PARK, never yield. A failed wait returns immediately, so yielding here
+     * returns to a caller that calls straight back in: that is a busy-spin at
+     * full dispatch rate, and it pegs the CPU the rest of the system needs. A
+     * blocking receive on the input endpoint parks the thread instead, which is
+     * the worst case this path is allowed to have. */
+    (void)wasmos_ipc_select_one(g_vt_client_endpoint);
 }
 
 static void cli_phase_prompt_step(void) {

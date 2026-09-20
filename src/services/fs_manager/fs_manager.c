@@ -254,64 +254,8 @@ static fs_backend_t* backend_register(uint8_t kind, int32_t endpoint) {
     }
     slot->kind = kind;
     slot->endpoint = endpoint;
-    slot->has_meta = 0;
-    slot->unit = 0xFFu;
+    slot->source_id[0] = '\0';
     return slot;
-}
-
-/* Query devmgr.query for DEVMGR_MOUNT_INFO and populate PCI metadata fields
- * (bus, device_fn, class, vendor, etc.) on the given BOOT backend slot.
- * The IPC response arg3 bit 31 must be set for the info to be valid.
- * Currently unreferenced: the only place that wanted it is the class-discovery
- * path, which cannot make this synchronous round trip without deadlocking (see
- * fsmgr_apply_backend_info). The metadata it fills is diagnostic only, so `mount`
- * prints no PCI identity until the TODO there is resolved. */
-static void backend_refresh_boot_meta(fs_backend_t* slot, int32_t req_seed) {
-    int32_t devmgr = -1;
-    int32_t req_id = req_seed;
-    if (!slot || slot->kind != FSMGR_BACKEND_BLOCK || g_proc_endpoint < 0 || g_reply_endpoint < 0) {
-        return;
-    }
-    devmgr = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "devmgr.query", 1);
-    if (devmgr < 0) {
-        return;
-    }
-    int32_t send_rc =
-        wasmos_ipc_send(devmgr, g_reply_endpoint, DEVMGR_QUERY_MOUNT_REQ, req_id, 0, 0, 0, 0);
-    int32_t sel_rc = (send_rc == 0) ? wasmos_ipc_select_one(g_reply_endpoint) : -1;
-    int32_t last_req = (sel_rc >= 0) ? wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) : -1;
-    int32_t last_type = (sel_rc >= 0) ? wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) : -1;
-    if (send_rc != 0 || sel_rc < 0 || last_req != req_id || last_type != DEVMGR_MOUNT_INFO) {
-        printf("[fs-manager] boot-meta fail devmgr=%d send=%d sel=%d req=%d type=%d src=%d dst=%d "
-               "a0=%d a1=%d a2=%d a3=%d\n",
-               devmgr,
-               send_rc,
-               sel_rc,
-               last_req,
-               last_type,
-               wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
-               wasmos_ipc_last_field(WASMOS_IPC_FIELD_DESTINATION),
-               wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
-               wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
-               wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
-               wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3));
-        return;
-    }
-
-    uint32_t a1 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    uint32_t a2 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    uint32_t a3 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-    if ((a3 & (1u << 31)) == 0u) {
-        return;
-    }
-    slot->has_meta = 1;
-    slot->bus = (uint8_t)((a1 >> 24) & 0xFFu);
-    slot->device_fn = (uint8_t)((a1 >> 8) & 0xFFu);
-    slot->class_code = (uint8_t)(a1 & 0xFFu);
-    slot->subclass = (uint8_t)((a2 >> 24) & 0xFFu);
-    slot->prog_if = (uint8_t)((a2 >> 16) & 0xFFu);
-    slot->vendor_id = (uint16_t)(a2 & 0xFFFFu);
-    slot->device_id = (uint16_t)(a3 & 0xFFFFu);
 }
 
 /* Reply to a client, treating a full client queue as backpressure rather than
@@ -336,7 +280,11 @@ static int32_t reply_to_client(int32_t source, int32_t type, int32_t request_id,
 
 /* Returns WASMOS_ERR_NONE, or the packed reason the listing could not be sent. */
 static wasmos_error_code_t fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id) {
-    char mounts[384];
+    /* Sized for every mount a default boot carries plus the runtime ones, each
+     * now also naming its device. The loop stops appending when the next line
+     * would not fit, so a buffer that is too small silently drops the mounts at
+     * the end -- the ones a reader is most likely to have just created. */
+    char mounts[768];
     uint32_t pos = 0;
     str_copy(mounts, sizeof(mounts), "mounts:\n");
     pos = (uint32_t)strlen(mounts);
@@ -349,22 +297,17 @@ static wasmos_error_code_t fsmgr_emit_mounts(int32_t source, int32_t req_id, int
         kind = fsmgr_backend_fs_name(&g_backends[i]);
         n = snprintf(
             mounts + pos, sizeof(mounts) - pos, "%s -> %s", g_backends[i].mount_path, kind);
-        if (n > 0 && (uint32_t)n < sizeof(mounts) - pos &&
-            g_backends[i].kind == FSMGR_BACKEND_BLOCK && g_backends[i].has_meta) {
-            uint8_t dev = (uint8_t)((g_backends[i].device_fn >> 4) & 0x1Fu);
-            uint8_t fun = (uint8_t)(g_backends[i].device_fn & 0x07u);
+        /* The device the filesystem sits on, when it has one. Named by canonical
+         * id because that is the same string `blkinfo` prints and `mount -t` and
+         * `fsck.wfs` take, so a reader can carry it between them without
+         * translating. A memory-backed filesystem prints nothing here rather than
+         * a placeholder: it is not that its device is unknown, it is that there
+         * is none. */
+        if (n > 0 && (uint32_t)n < sizeof(mounts) - pos && g_backends[i].source_id[0] != '\0') {
             int m = snprintf(mounts + pos + (uint32_t)n,
                              sizeof(mounts) - (pos + (uint32_t)n),
-                             " pci %02X:%02X.%02X class %02X:%02X:%02X vid:did %04X:%04X unit %u",
-                             (unsigned)g_backends[i].bus,
-                             (unsigned)dev,
-                             (unsigned)fun,
-                             (unsigned)g_backends[i].class_code,
-                             (unsigned)g_backends[i].subclass,
-                             (unsigned)g_backends[i].prog_if,
-                             (unsigned)g_backends[i].vendor_id,
-                             (unsigned)g_backends[i].device_id,
-                             (unsigned)g_backends[i].unit);
+                             " on %s",
+                             g_backends[i].source_id);
             if (m > 0) {
                 n += m;
             }
@@ -717,7 +660,7 @@ static int route_rename_request(fs_client_state_t* state, int32_t buffer_id, int
  *
  * Shared by the initial class enumeration and ADD events. */
 static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t fs_type,
-                                     const char* reported_mount, int32_t unit) {
+                                     const char* reported_mount, const char* source_id) {
     fs_backend_t* registered;
     /* Sized off the field it ends up in, so the two cannot drift. */
     char mount[sizeof(((fs_backend_t*)0)->mount_path)];
@@ -735,17 +678,9 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
             "[fs-manager] backend table full (%d); %s not mounted\n", (int)FS_BACKEND_CAP, mount);
         return;
     }
-    registered->unit = (uint8_t)(unit & 0xFF);
     registered->fs_type = (uint32_t)fs_type;
     str_copy(registered->mount_path, sizeof(registered->mount_path), mount);
-    /* NOTE: do NOT call backend_refresh_boot_meta() here. This runs while
-     * handling a class-discovery event, and that helper does a SYNCHRONOUS
-     * DEVMGR_QUERY_MOUNT_REQ round-trip to device-manager — which at this point
-     * is itself blocked waiting for fs-manager to answer its /boot rules read,
-     * producing a mutual-wait deadlock. The boot meta is diagnostic PCI
-     * identity, not required to mount.
-     * TODO(fs-class-discovery): refetch boot meta out of band (device-manager
-     * push, or a fs-manager idle step) rather than a nested synchronous call. */
+    str_copy(registered->source_id, sizeof(registered->source_id), source_id ? source_id : "");
 }
 
 /* Create one directory in `backend`, under the path that backend sees.
@@ -907,12 +842,19 @@ static void fsmgr_ensure_mount_points(void) {
  * belongs, so there is no default to fall back to. */
 static void fsmgr_pull_backend(int32_t backend_endpoint) {
     char reported_mount[FSMGR_MOUNT_PATH_MAX];
+    char reported_source[BLOCK_DESCRIPTOR_ID_MAX];
+    /* Both strings ride one buffer: the mount at offset 0 and the device id
+     * immediately after it, lengths in arg2 and arg3. Neither is terminated in
+     * the buffer -- the lengths delimit them -- so the capacity is exactly the
+     * two fields. */
+    const int32_t info_cap = (int32_t)(FSMGR_MOUNT_PATH_MAX + BLOCK_DESCRIPTOR_ID_MAX);
     int32_t bid;
     int32_t name_len;
+    int32_t source_len;
     if (backend_endpoint < 0) {
         return;
     }
-    bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(reported_mount));
+    bid = wasmos_xfer_buffer_acquire(info_cap);
     if (bid < 0) {
         return;
     }
@@ -925,6 +867,7 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
         return;
     }
     name_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+    source_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
     if (name_len <= 0 || name_len >= (int32_t)sizeof(reported_mount) ||
         wasmos_sys_buffer_read(bid, reported_mount, name_len, 0) != 0) {
         printf("[fs-manager] backend named no mount; not registered\n");
@@ -932,11 +875,19 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
         return;
     }
     reported_mount[name_len] = '\0';
+    /* A device id is OPTIONAL -- a memory-backed filesystem has none -- so an
+     * absent or unusable one leaves it empty and the mount registers anyway. It
+     * is diagnostic: losing it costs a column in `mount`, not a mount. */
+    reported_source[0] = '\0';
+    if (source_len > 0 && source_len < (int32_t)sizeof(reported_source) &&
+        wasmos_sys_buffer_read(bid, reported_source, source_len, name_len) == 0) {
+        reported_source[source_len] = '\0';
+    }
     fsmgr_apply_backend_info(backend_endpoint,
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
                              reported_mount,
-                             wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3));
+                             reported_source);
     (void)wasmos_xfer_buffer_release(bid);
     /* The table changed, so the mount points may be incomplete: this backend's
      * own point did not exist before now, and an earlier backend's point could
@@ -1470,10 +1421,19 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
 
 /* Filesystem types fs-manager can place, and the driver implementing each.
  *
- * The module path is RELATIVE, resolved against `/init/` then `/boot/` the same
- * way a device-manager rule's RUN+= target is: a driver present only on the ESP
- * would never be found by an initfs-relative path, and one present only in initfs
- * is found before the disk is up.
+ * The module path is ABSOLUTE and names the root the module actually ships
+ * under, because the two roots do not hold the same set: fs_tmpfs is in initfs
+ * only, fs_wfs on the ESP only, and fs_fat in both (initfs is preferred for it,
+ * since it is always present and needs no disk).
+ *
+ * Naming the root rather than probing for it is deliberate. Probing meant
+ * spawning under the first root and treating ANY failure as "wrong root", which
+ * misreported every other cause: a spawn that failed for want of a process slot
+ * came back as "/boot/system/drivers/fs_tmpfs.wap does not exist" -- a file that
+ * is not supposed to exist, about a mount that failed for an unrelated reason.
+ * It also cost a failed spawn and an alarming log line on every wfs mount. A
+ * module that is not where this table says is a packaging error, and now says
+ * so.
  *
  * `needs_source` says the filesystem has a device. Those drivers accept
  * `id=<canonical block id>`, so naming the volume is possible; requiring it is a
@@ -1485,9 +1445,9 @@ typedef struct {
 } fsmgr_fstype_t;
 
 static const fsmgr_fstype_t g_fstypes[] = {
-    {"tmpfs", "system/drivers/fs_tmpfs.wap", 0},
-    {"fat", "system/drivers/fs_fat.wap", 1},
-    {"wfs", "system/drivers/fs_wfs.wap", 1},
+    {"tmpfs", "/init/system/drivers/fs_tmpfs.wap", 0},
+    {"fat", "/init/system/drivers/fs_fat.wap", 1},
+    {"wfs", "/boot/system/drivers/fs_wfs.wap", 1},
 };
 
 /* Request ids for the nested spawn calls a mount makes. Separate from any client
@@ -1573,7 +1533,6 @@ typedef struct {
     int32_t client;
     int32_t request_id;
     int32_t buffer_id;
-    uint32_t prefix; /* index into fsmgr_module_prefixes */
     const char* module;
     char mount[FSMGR_MOUNT_PATH_MAX];
     char args[FSMGR_MOUNT_DESC_MAX];
@@ -1581,14 +1540,8 @@ typedef struct {
 
 static fsmgr_pending_mount_t g_pending_mount;
 
-/* Where a relative driver module path is looked for, in order — the same two
- * roots a device-manager rule's RUN+= target resolves against. A module present
- * only on the ESP is not in initfs, and one present only in initfs is found
- * before any disk is up, so both have to be tried. */
-static const char* const fsmgr_module_prefixes[] = {"/init/", "/boot/"};
-
-/* Ask the process manager to spawn `g_pending_mount.module` under prefix
- * `g_pending_mount.prefix`, WITHOUT waiting for the reply.
+/* Ask the process manager to spawn `g_pending_mount.module`, WITHOUT waiting for
+ * the reply.
  *
  * Not waiting is the whole point. The process manager READS the module blob
  * through fs-manager while handling this request, so an fs-manager that blocked
@@ -1613,8 +1566,7 @@ static int32_t fsmgr_mount_send_spawn(void) {
     int32_t bid;
 
     path[0] = '\0';
-    str_copy(path, sizeof(path), fsmgr_module_prefixes[g_pending_mount.prefix]);
-    wasmos_sys_str_append(path, sizeof(path), g_pending_mount.module);
+    str_copy(path, sizeof(path), g_pending_mount.module);
     path_len = (uint32_t)strlen(path);
     args_len = (uint32_t)strlen(g_pending_mount.args);
     if (path_len == 0u || path_len > 0xFFFu) {
@@ -1667,10 +1619,10 @@ static void fsmgr_mount_pending_fail(wasmos_error_code_t code) {
 
 /* The process manager answered the spawn a pending mount is waiting on.
  *
- * A refusal is not final while another module prefix is untried: a path that does
- * not resolve under `/init/` is the expected case for a driver that ships only on
- * the ESP. Once the prefixes are exhausted the client is told the driver did not
- * come up.
+ * A refusal is FINAL. The module root is declared per filesystem type rather
+ * than searched, so a failure here is a failure to START the driver -- no process
+ * slot, no memory, a module that will not load -- and retrying it under another
+ * root would only replace that reason with a misleading one.
  *
  * On success the child has reported READY, so its backend has registered — but
  * the registration arrives as a class event this loop has not necessarily
@@ -1687,16 +1639,6 @@ static void fsmgr_mount_handle_spawn_reply(int32_t type, int32_t pid) {
         if (g_pending_mount.buffer_id > 0) {
             (void)wasmos_xfer_buffer_release(g_pending_mount.buffer_id);
             g_pending_mount.buffer_id = -1;
-        }
-        g_pending_mount.prefix++;
-        if (g_pending_mount.prefix <
-            sizeof(fsmgr_module_prefixes) / sizeof(fsmgr_module_prefixes[0])) {
-            int32_t rc = fsmgr_mount_send_spawn();
-            if (rc == 0) {
-                return;
-            }
-            fsmgr_mount_pending_fail((wasmos_error_code_t)rc);
-            return;
         }
         fsmgr_mount_pending_fail(WASMOS_ERR_FS_NOT_READY);
         return;
@@ -1874,7 +1816,6 @@ static void handle_mount_req(fs_client_state_t* state, int32_t source, int32_t r
     g_pending_mount.client = source;
     g_pending_mount.request_id = request_id;
     g_pending_mount.buffer_id = -1;
-    g_pending_mount.prefix = 0;
     g_pending_mount.module = fstype->module;
     str_copy(g_pending_mount.mount, sizeof(g_pending_mount.mount), mount);
     /* Built in the order the drivers document: `id=` then `mount=`. */

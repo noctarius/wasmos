@@ -436,7 +436,7 @@ class VfsMountRequestTest(VfsSession, unittest.TestCase):
 
     #: Mounts these cases establish, removed in tearDownClass. Listed rather than
     #: discovered so a case that fails midway still has its mount cleaned up.
-    CREATED_MOUNTS = ("/scratch", "/scratch2", "/roundtrip")
+    CREATED_MOUNTS = ("/scratch", "/scratch2", "/roundtrip", "/remount")
 
     @classmethod
     def tearDownClass(cls):
@@ -449,6 +449,42 @@ class VfsMountRequestTest(VfsSession, unittest.TestCase):
                 cls.session.send(f"umount {path}")
                 cls.session.expect_from(mark, b"wamos> ", timeout_s=20)
         super().tearDownClass()
+
+    def test_a_path_can_be_mounted_again_after_it_is_unmounted(self):
+        """A mount point is reusable: unmounting frees the path, and mounting it
+        again works.
+
+        Regression: 2026-09-19-remount-same-path
+        Two registrations key on something derived from the mount path -- the
+        `fs.backend` class instance, and the backend's service NAME -- and
+        neither was released when the first mount went away, so the second
+        driver could not register and never reported ready. The mount failed
+        after fs-manager's spawn deadline.
+
+        The class instance is released when the backend process dies; the flat
+        service-name table had no unregister at all. So this needs BOTH the
+        backend to exit on unmount and the name to be reclaimable -- which is why
+        it exercises the observable contract (mount, unmount, mount) rather than
+        either mechanism directly.
+
+        Releases its own mount at the end: this class creates several and a mount
+        holds its backend's process while it stands.
+        """
+        self._run("cd /")
+        out = self._run("mount -t tmpfs /remount", timeout_s=40)
+        self.assertIn(b"mounted", out, f"first mount refused\n{out!r}")
+
+        out = self._run("umount /remount", timeout_s=40)
+        self.assertIn(b"unmounted", out, f"unmount refused\n{out!r}")
+
+        out = self._run("mount -t tmpfs /remount", timeout_s=40)
+        self.assertIn(b"mounted", out, f"the path could not be mounted again\n{out!r}")
+
+        out = self._run("mount")
+        self.assertIn(b"/remount ->", out, f"not in the mount table\n{out!r}")
+
+        out = self._run("umount /remount", timeout_s=40)
+        self.assertIn(b"unmounted", out, f"the remount could not be released\n{out!r}")
 
     def test_a_tmpfs_can_be_mounted_at_a_new_path(self):
         """fs-manager spawns the driver and the mount is in the table when the

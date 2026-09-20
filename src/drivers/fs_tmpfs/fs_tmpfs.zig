@@ -131,12 +131,18 @@ const PATH_MAX: usize = 512;
 /// backend served from something other than a block device; it says nothing about
 /// WHICH filesystem, which is what `FS_TYPE_TMPFS` answers.
 const BACKEND_CLASS = "fs.backend";
+/// WASMOS_IPC_SHUTDOWN_REQ arg0, mirroring WASMOS_SHUTDOWN_REASON_UNMOUNT in
+/// `src/drivers/include/wasmos_driver_abi.h`: this mount is going away while the
+/// machine keeps running, as opposed to the machine itself coming down.
+const SHUTDOWN_REASON_UNMOUNT: i32 = 2;
 const BACKEND_PSEUDO: i32 = 2;
 
 /// This backend reports no unit. `unit` distinguishes two block-backed backends
 /// on one disk; an in-memory filesystem sits on no device, so its identity is its
 /// mount path and nothing else.
-const BACKEND_UNIT: i32 = 0;
+/// FSMGR_IPC_BACKEND_INFO_RESP's device-id length for a filesystem with no
+/// block device behind it.
+const NO_DEVICE_ID: i32 = 0;
 
 /// Where this instance mounts when the spawner named no `mount=`. The kernel's
 /// init sequence spawns the root instance by module index, which carries no
@@ -148,8 +154,12 @@ const DEFAULT_MOUNT = "/";
 /// one, so a path past this could not be registered even if it were accepted here.
 const MOUNT_MAX: usize = 63;
 
-/// Longest service name the registry stores, mirroring WASMOS_SVC_NAME_MAX.
-const SVC_NAME_MAX: usize = 15;
+/// Longest service NAME this driver builds: WASMOS_SVC_NAME_MAX minus its
+/// terminating NUL, so the name that registers is the name built here. The
+/// registration path truncates silently at that width -- driver.registerService
+/// into the descriptor, and the process manager again reading it -- so a longer
+/// name would register as something other than what this file spells.
+const SVC_NAME_MAX: usize = 35;
 
 /// Open flags, POSIX-valued, mirroring `src/libc/include/fcntl.h`. The low two
 /// bits are the access mode; the rest are modifiers. Any other bit makes the
@@ -253,6 +263,9 @@ fn mountPath() []const u8 {
 /// this process sleeps in.
 var g_park_future: co.Future = .{};
 var g_park_promise: co.Promise = .{};
+/// Set when an UNMOUNT quiesce has been answered, so the root task completes on
+/// its next resume instead of parking again. Read only by rootTask.
+var g_unmounted: bool = false;
 
 // --- async service contract --------------------------------------------------
 
@@ -338,6 +351,11 @@ fn fdLookup(fd: i32) ?*Fd {
 /// nothing. `kind` places this backend outside the block-backed set and `fs_type`
 /// names the filesystem; a reply whose name length is 0 is malformed and the
 /// backend is not registered.
+///
+/// The last argument is the length of the DEVICE ID that would follow the name in
+/// the same buffer, and it is 0 here: this filesystem is held in linear memory
+/// and sits on no block device, so `mount` names no device for it. That is an
+/// absence, not an unknown.
 fn handleBackendInfo(msg: *const co.IpcMessage) void {
     var name_len: i32 = 0;
     if (msg.arg0 > 0 and g_mount_len > 0 and driver.bufferWrite(msg.arg0, mountPath(), 0)) {
@@ -351,7 +369,7 @@ fn handleBackendInfo(msg: *const co.IpcMessage) void {
         BACKEND_PSEUDO,
         abi.FS_TYPE_TMPFS,
         name_len,
-        BACKEND_UNIT,
+        NO_DEVICE_ID,
     );
 }
 
@@ -686,6 +704,31 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
     // freeing the arena here would only race a request already in flight.
     if (msg.type == op.WASMOS_IPC_SHUTDOWN_REQ) {
         _ = driver.send(msg.source, endpoint(), op.WASMOS_IPC_SHUTDOWN_DONE, msg.request_id, 0, 0, 0, 0);
+        // An UNMOUNT quiesce ends this process, a machine shutdown does not.
+        //
+        // The difference is what happens next. After an unmount the machine
+        // keeps running and the path may be mounted again -- but this process
+        // still holds the two registrations derived from that path, the
+        // `fs.backend` class instance and its service name, and both are keyed
+        // on the OWNER CONTEXT. A surviving backend therefore blocks its own
+        // replacement: the next driver cannot claim either, never reports ready,
+        // and the mount fails on fs-manager's spawn deadline. Ending the process
+        // is what releases them.
+        //
+        // It ends by RESOLVING THE ROOT TASK'S PARK, not by calling proc_exit
+        // here. This runs inside the event loop's message dispatch, with the
+        // runner's frames live below it; exiting from that point leaves the
+        // runner mid-callback and wedged the next mount rather than failing it.
+        // Resolving the park lets this handler unwind, the root task complete,
+        // and the runner tear the process down on its own terms -- which is what
+        // the root task's own comment describes as taking the filesystem down.
+        //
+        // DONE is sent FIRST and the send is synchronous, so fs-manager has the
+        // reply queued before any of that begins.
+        if (msg.arg0 == SHUTDOWN_REASON_UNMOUNT) {
+            g_unmounted = true;
+            _ = g_park_promise.resolve(0);
+        }
         return;
     }
     // Every path is resolved from ROOT: this driver holds no working directory.
@@ -743,19 +786,18 @@ fn resolveMount() bool {
     @memcpy(g_mount[0..requested.len], requested);
     g_mount_len = requested.len;
 
-    // The concrete service name is diagnostic -- fs-manager finds backends by
-    // CLASS, and nothing looks a filesystem backend up by name -- but it must
-    // still be non-empty and it reads better naming the mount than the driver.
-    // A path too long to append is truncated, which costs a duplicate name and
-    // nothing else; the class INSTANCE is the identity that has to be unique, and
-    // it is a fingerprint of the whole path.
-    const prefix = "tmpfs";
-    @memcpy(g_service_name[0..prefix.len], prefix);
-    g_service_name_len = prefix.len;
-    var i: usize = 0;
-    while (i < requested.len and g_service_name_len < SVC_NAME_MAX) : (i += 1) {
-        g_service_name[g_service_name_len] = requested[i];
-        g_service_name_len += 1;
+    // Named after the MOUNT, not the driver. Nothing looks a filesystem backend
+    // up by name -- fs-manager finds them by CLASS -- but the kernel's panic dump
+    // reads it, and it is the only copy of this mount's identity the kernel has.
+    // A path too deep to name falls back to a fingerprint rather than being
+    // truncated, since two truncated paths could claim one name; see
+    // driver.serviceNameFromMount.
+    g_service_name_len = driver.serviceNameFromMount(&g_service_name, "tmpfs", requested);
+    if (g_service_name_len == 0) {
+        var line = driver.Line{};
+        _ = line.str("[fs-tmpfs] service name could not be built for ").str(requested);
+        line.end();
+        return false;
     }
     return true;
 }
@@ -826,6 +868,13 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
 fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
     _ = user;
     _ = out_value;
+    if (g_unmounted) {
+        // Resumed because the park was resolved by an UNMOUNT quiesce. Completing
+        // ends the runner's loop, which is how this filesystem goes away: its
+        // process exits, and the class instance and service name derived from its
+        // mount path are released for whatever mounts there next.
+        return co.TaskResult.complete;
+    }
     g_park_future.init(&g_park_promise);
     switch (g_park_future.awaitValue()) {
         .pending => return co.TaskResult.yielded,

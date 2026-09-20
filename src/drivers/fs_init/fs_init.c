@@ -472,13 +472,18 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-        /* fs-manager pull: report kind=PSEUDO, fs_type=INITFS, this driver's
-         * mount name and unit 0. `kind` places this backend outside the
-         * block-backed set and `fs_type` names the filesystem, both as values
-         * rather than as a case at the naming site. The name goes into the buffer
-         * fs-manager supplied (arg0): fs-manager is the CLIENT of this exchange
-         * and owns any buffer it carries (architecture/12), so this driver writes
-         * into a grant and owns nothing. */
+        /* fs-manager pull: report kind=PSEUDO, fs_type=INITFS and this driver's
+         * mount name. `kind` places this backend outside the block-backed set and
+         * `fs_type` names the filesystem, both as values rather than as a case at
+         * the naming site. The name goes into the buffer fs-manager supplied
+         * (arg0): fs-manager is the CLIENT of this exchange and owns any buffer it
+         * carries (architecture/12), so this driver writes into a grant and owns
+         * nothing.
+         *
+         * The last argument is the length of the DEVICE ID that would follow the
+         * name in that buffer, and it is 0 here: the initfs is an image in memory
+         * and sits on no block device, so `mount` names no device for it. That is
+         * an absence, not an unknown. */
         if (type == FSMGR_IPC_BACKEND_INFO_REQ) {
             (void)wasmos_ipc_send(source,
                                   g_fs_endpoint,

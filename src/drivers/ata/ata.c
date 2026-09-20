@@ -997,8 +997,9 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
     /* IDENTIFY is answered WITHOUT claiming the unit. Exclusivity exists to keep
      * two filesystems off one disk, and reading a disk's geometry does neither;
      * requiring a claim made a mounted disk unqueryable, which defeats
-     * discovering it by class in the first place. Only the transfer paths below
-     * bind a client. */
+     * discovering it by class in the first place. Nothing below claims one
+     * either: there is no client table here at all, and a transfer names the
+     * drive it addresses in its own request. */
     if (type == BLOCK_IPC_IDENTIFY_REQ) {
         uint8_t want = ata_unit_for_instance((uint32_t)arg0);
         if (want >= ATA_UNIT_COUNT || !g_unit_present[want]) {

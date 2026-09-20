@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 
+/* BLOCK_DESCRIPTOR_ID_MAX: a backend reports the canonical id of the device it
+ * serves, so the table sizes that field to what the block layer can produce. */
+#include "wasmos_driver_abi.h"
+
 /* Slots per client-state chunk, not a global ceiling: the chunk list grows by
  * one FS_CLIENT_CHUNK_CAP-slot chunk from the bump heap whenever every existing
  * slot is taken, so the real limit is the heap. */
@@ -47,8 +51,6 @@ typedef struct {
 #define FSMGR_MOUNT_PATH_MAX 64
 
 /* One registered FS backend (e.g. a FAT driver instance).
- * has_meta: non-zero once PCI metadata has been filled in; the PCI fields below
- * are meaningless while it is 0.
  * mount_path: the absolute canonical path this backend is mounted at, taken from
  * what the backend reports in FSMGR_IPC_BACKEND_INFO and normalized by
  * fsmgr_mount_path_from_reported. Nothing on this side supplies a default. */
@@ -63,15 +65,17 @@ typedef struct {
      * FS_TYPE_UNKNOWN when the backend reports no type. */
     uint32_t fs_type;
     uint8_t slot; /* slot index in the backend table */
-    uint8_t has_meta;
-    uint8_t unit; /* block device unit number */
-    uint8_t bus;
-    uint8_t device_fn; /* PCI device+function byte from devmgr */
-    uint8_t class_code;
-    uint8_t subclass;
-    uint8_t prog_if;
-    uint16_t vendor_id;
-    uint16_t device_id;
+    /* The canonical id of the block device this backend was given at spawn, as
+     * the backend itself reports it -- empty for a filesystem with no device.
+     *
+     * It comes from the BACKEND rather than from device-manager because the
+     * backend is the authority: it is the string it fingerprinted to find its
+     * block server, and it is the one reported for every mount including the
+     * ones device-manager and the kernel spawn. Asking device-manager instead is
+     * what the retired backend_refresh_boot_meta did, and that could never run:
+     * it was a synchronous query to a service that was itself blocked waiting on
+     * fs-manager to answer its rules read. */
+    char source_id[BLOCK_DESCRIPTOR_ID_MAX];
     char mount_path[FSMGR_MOUNT_PATH_MAX];
 } fs_backend_t;
 

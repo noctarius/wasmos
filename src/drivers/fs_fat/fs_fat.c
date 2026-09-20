@@ -44,6 +44,14 @@ static int32_t g_mount_len = 0;
  * IDENTIFYs -- not off a startup argument. Reported to fs-manager as diagnostic
  * identity only; nothing routes on it. */
 static uint8_t g_mount_unit = 0;
+/* The canonical id of this driver's disk, exactly as it was spawned with.
+ *
+ * Kept as the STRING as well as the fingerprint because fs-manager reports it in
+ * the mount table: a mount names the device it sits on with the same id blkinfo
+ * prints and `mount -t`/`fsck.wfs` take, so a reader can carry it between them.
+ * Empty until the arguments are parsed. */
+static char g_source_id[BLOCK_DESCRIPTOR_ID_MAX];
+
 /* The `block` class instance of this driver's disk: the fingerprint of the
  * canonical id the device manager passed in `id=`. It is both how the provider
  * is found in the class registry and how the provider is told which of its disks
@@ -145,6 +153,9 @@ static uint32_t fat_parse_requested_instance(void) {
     if (n == 0u || (token[n] != '\0' && token[n] != ' ')) {
         return 0u;
     }
+    /* Held only once the id is known good, so g_source_id never reports a disk
+     * this driver refused to address. */
+    str_copy(g_source_id, sizeof(g_source_id), id);
     return wasmos_block_fingerprint(id);
 }
 
@@ -219,9 +230,20 @@ static int32_t fat_send_reply(int32_t dest, int32_t type, uint32_t request_id, i
  * into a grant it holds for the duration of the reply. */
 static void fat_report_backend_info(int32_t dst, int32_t request_id, int32_t buffer_id) {
     int32_t name_len = 0;
+    int32_t source_len = 0;
     if (buffer_id > 0 && g_mount_len > 0 &&
         wasmos_xfer_buffer_write(buffer_id, g_mount_name, g_mount_len, 0) == 0) {
         name_len = g_mount_len;
+    }
+    /* The device id follows the mount name in the same buffer, delimited by the
+     * lengths rather than by a terminator. Written only when the name was, since
+     * its offset is the name's length: a reader given a source length but no name
+     * could not find it. */
+    if (name_len > 0) {
+        int32_t id_len = (int32_t)strlen(g_source_id);
+        if (id_len > 0 && wasmos_xfer_buffer_write(buffer_id, g_source_id, id_len, name_len) == 0) {
+            source_len = id_len;
+        }
     }
     (void)fat_send_reply(dst,
                          FSMGR_IPC_BACKEND_INFO_RESP,
@@ -229,7 +251,7 @@ static void fat_report_backend_info(int32_t dst, int32_t request_id, int32_t buf
                          FSMGR_BACKEND_BLOCK,
                          FS_TYPE_FAT,
                          name_len,
-                         (int32_t)g_mount_unit);
+                         source_len);
 }
 
 /* IDENTIFY this driver's volume, filling *out_desc.
@@ -514,9 +536,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     int32_t reply_endpoint;
     int32_t sel;
     char mount_alias[32];
-    /* WASMOS_SVC_NAME_MAX + 1: pm_service_set REFUSES a name that does not fit
-     * its entry rather than truncating it, so the truncation happens here. */
-    char service_name[16];
+    /* The registry's own capacity, NUL included. A longer name is truncated
+     * silently -- by wasmos_svc_register_class_flags into the descriptor, and
+     * again by the process manager reading it -- so sizing this buffer to match
+     * is what keeps the name that registers equal to the name built here. */
+    char service_name[WASMOS_SVC_NAME_MAX];
     int32_t mount_alias_len;
     wasmos_block_descriptor_t desc;
 
@@ -574,13 +598,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * validated, parsed volume. */
     fat_mount_bringup();
 
-    /* The concrete service name is diagnostic -- fs-manager finds backends by
-     * CLASS and nothing looks a filesystem backend up by name -- so it names the
-     * MOUNT rather than the disk, and is truncated to what the registry stores
-     * (WASMOS_SVC_NAME_MAX). Two mounts whose paths agree over that prefix claim
-     * one name, and pm_service_set refuses the second rather than rebinding it:
-     * the driver then fails loudly below instead of serving invisibly. */
-    if (snprintf(service_name, sizeof(service_name), "fs.fat%s", mount_alias) <= 0) {
+    /* Named after the MOUNT, not the disk. Nothing looks a filesystem backend up
+     * by name -- fs-manager finds them by CLASS -- but the kernel's panic dump
+     * reads it, and it is the only copy of this mount's identity the kernel has;
+     * see wasmos_svc_name_from_mount. */
+    if (wasmos_svc_name_from_mount(service_name, sizeof(service_name), "fs.fat", mount_alias) ==
+        0u) {
+        fat_log("service name could not be built\n");
         fat_stall();
     }
     mount_alias_len = (int32_t)strlen(mount_alias);

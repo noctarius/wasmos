@@ -313,11 +313,24 @@ enum {
 
 /* fs_manager (0x420..0x4A4) */
 enum {
-    /* fs-manager -> backend pull: report kind/fs-type/mount/unit into a buffer
-     * the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
-     * arg1=fs_type, arg2=mount_name_len, arg3=unit. Backends are discovered
-     * via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager rebuilds
-     * its backend set from the registry on (re)start.
+    /* fs-manager -> backend pull: report kind/fs-type/mount/device into a
+     * buffer the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
+     * arg1=fs_type, arg2=mount_name_len, arg3=device_id_len. Backends are
+     * discovered via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager
+     * rebuilds its backend set from the registry on (re)start.
+     *
+     * The buffer carries BOTH strings, the mount name at offset 0 and the
+     * device's canonical id immediately after it at offset arg2. Neither is
+     * NUL-terminated there; the two lengths delimit them.
+     *
+     * arg3 == 0 means this filesystem sits on no block device -- an absence,
+     * not an unknown -- and `mount` then names no device for it. A backend
+     * that HAS one reports the id it was spawned with, because the backend is
+     * the authority: it is the string it fingerprinted to find its block
+     * server. fs-manager asking device-manager instead cannot work, and the
+     * retired backend_refresh_boot_meta is the proof -- it was a synchronous
+     * query to a service that is itself blocked waiting on fs-manager during
+     * bring-up.
      *
      * A backend MUST name its mount: arg2 > 0 always. Nothing else knows where
      * a backend belongs -- a block backend is told by the rule that spawned it

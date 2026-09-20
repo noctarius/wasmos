@@ -72,9 +72,6 @@
 
 #define WFS_SEND_RETRIES 64
 #define WFS_READ_STAGE 4096u
-/* Longest service name the registry stores, mirroring WASMOS_SVC_NAME_MAX.
- * pm_service_set refuses a longer one rather than truncating it. */
-#define WFS_SVC_NAME_MAX 15
 
 static int32_t g_proc_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
@@ -96,6 +93,10 @@ static int32_t g_mount_len = 0;
  * key and the `target` every transfer carries, and the ONLY device token this
  * driver takes. */
 static uint32_t g_requested_instance = 0u;
+/* The canonical id itself, kept as the STRING as well as the fingerprint because
+ * fs-manager reports it in the mount table: a mount names the device it sits on
+ * with the same id blkinfo prints and `mount -t`/`fsck.wfs` take. */
+static char g_source_id[BLOCK_DESCRIPTOR_ID_MAX];
 /* The `volume` class instance of the volume mounted here, DERIVED from the same
  * `id=` (see wfs_parse_volume_instance). 0 when no volume covers this device,
  * which is not an error: the claim is advisory. */
@@ -722,10 +723,20 @@ static void wfs_do_close(int32_t src, int32_t request_id, int32_t fd) {
 
 static void wfs_report_backend_info(int32_t dst, int32_t request_id, int32_t buffer_id) {
     int32_t name_len = 0;
+    int32_t source_len = 0;
 
     if (buffer_id > 0 && g_mount_len > 0 &&
         wasmos_xfer_buffer_write(buffer_id, g_mount_name, g_mount_len, 0) == 0) {
         name_len = g_mount_len;
+    }
+    /* The device id follows the mount name in the same buffer, delimited by the
+     * lengths rather than by a terminator. Written only when the name was, since
+     * its offset is the name's length. */
+    if (name_len > 0) {
+        int32_t id_len = (int32_t)strlen(g_source_id);
+        if (id_len > 0 && wasmos_xfer_buffer_write(buffer_id, g_source_id, id_len, name_len) == 0) {
+            source_len = id_len;
+        }
     }
     (void)wasmos_sys_ipc_send_retry(dst,
                                     g_fs_endpoint,
@@ -734,12 +745,7 @@ static void wfs_report_backend_info(int32_t dst, int32_t request_id, int32_t buf
                                     FSMGR_BACKEND_BLOCK,
                                     FS_TYPE_WFS,
                                     name_len,
-                                    /* No unit: fs-manager records arg3 as
-                                     * diagnostic identity and this driver never
-                                     * IDENTIFYs its disk, so reporting one would
-                                     * mean relaying a number nothing here can
-                                     * check against the publisher. */
-                                    0,
+                                    source_len,
                                     WFS_SEND_RETRIES);
 }
 
@@ -851,6 +857,9 @@ static uint32_t wfs_parse_requested_instance(void) {
     if (wfs_copy_token(args, "id=", id, sizeof(id)) != 0) {
         return 0u;
     }
+    /* Held only once the id is known good, so g_source_id never reports a disk
+     * this driver refused to address. */
+    str_copy(g_source_id, sizeof(g_source_id), id);
     return wasmos_block_fingerprint(id);
 }
 
@@ -1082,7 +1091,7 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
  * buffer, read below. */
 WASMOS_WASM_EXPORT int32_t initialize(void) {
     char mount_alias[32];
-    char service_name[32];
+    char service_name[WASMOS_SVC_NAME_MAX];
     int32_t block_endpoint = -1;
     int32_t mount_len;
     int32_t name_len;
@@ -1174,24 +1183,16 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     str_copy(g_mount_name, sizeof(g_mount_name), mount_alias);
     g_mount_len = mount_len;
 
-    /* "fs.wfs<mount>", truncated to what the registry stores. The concrete name
-     * is diagnostic -- fs-manager finds backends by CLASS and nothing looks a
-     * filesystem backend up by name -- so it names the MOUNT rather than the
-     * disk, and pm_service_set REFUSES a name longer than its entry rather than
-     * truncating it, which is why the truncation happens here.
-     *
-     * Two mounts whose paths agree over that prefix claim one name and the
-     * second registration is refused, so the driver fails loudly below rather
-     * than serving invisibly. */
-    name_len = 0;
-    while (k_service_prefix[name_len] != '\0') {
-        service_name[name_len] = k_service_prefix[name_len];
-        name_len++;
+    /* Named after the MOUNT, not the disk. Nothing looks a filesystem backend up
+     * by name -- fs-manager finds them by CLASS -- but the kernel's panic dump
+     * reads it, and it is the only copy of this mount's identity the kernel has;
+     * see wasmos_svc_name_from_mount. */
+    name_len = (int32_t)wasmos_svc_name_from_mount(
+        service_name, sizeof(service_name), k_service_prefix, mount_alias);
+    if (name_len == 0) {
+        wfs_log("[fs-wfs] service name could not be built\n");
+        wfs_stall();
     }
-    for (int32_t i = 0; i < mount_len && name_len < WFS_SVC_NAME_MAX; ++i) {
-        service_name[name_len++] = mount_alias[i];
-    }
-    service_name[name_len] = '\0';
     /* The class INSTANCE is a fingerprint of the MOUNT PATH, not a packed
      * (kind, unit) pair. A path is unique by construction -- fs-manager refuses
      * a second mount at one -- while a unit is not: it is backend-local, and a

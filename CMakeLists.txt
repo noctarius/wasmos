@@ -2552,6 +2552,14 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_block_descriptor.c
           -o ${BUILD_DIR}/test_block_descriptor
   COMMAND ${BUILD_DIR}/test_block_descriptor
+  # The service NAME a filesystem backend registers. Header-only for the same
+  # reason: the builder and the fingerprint under it are static inlines.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_svc_name_from_mount.c
+          -o ${BUILD_DIR}/test_svc_name_from_mount
+  COMMAND ${BUILD_DIR}/test_svc_name_from_mount
   # The block-rule MATCHER, as opposed to the rule parser above. The suite
   # includes device_manager.c to reach its file statics, so:
   #   the dead-strip flag drops the event-loop half of that translation unit, whose

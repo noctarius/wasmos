@@ -781,6 +781,72 @@ static inline uint32_t wasmos_block_fingerprint(const char* id) {
     return wasmos_class_instance_fingerprint(id);
 }
 
+/* Build the service NAME a filesystem backend registers, for one serving `mount`.
+ *
+ * `<prefix><mount>` when that fits, and `<prefix>` followed by eight hex digits
+ * of the mount path's fingerprint when it does not. The readable form is not a
+ * convenience: the kernel's panic dump resolves a parked endpoint through
+ * pm_service_name_for_endpoint, and that name is the ONLY copy of a mount's
+ * identity the kernel holds. Everything else about a mount -- its path, its
+ * filesystem type, its table slot -- lives in fs_manager's linear memory, which
+ * a dump cannot read and must not try to ask for, since fs_manager may be the
+ * wedged process the dump exists to diagnose.
+ *
+ * The fallback exists because a mount path may be longer than a name: the path
+ * is bounded by FSMGR_MOUNT_PATH_MAX and the name by WASMOS_SVC_NAME_MAX, so a
+ * deep path would otherwise be truncated -- and two paths agreeing over the
+ * truncated width would claim one name, with the second backend refused and its
+ * mount failing on the spawn deadline. A fingerprint cannot collide that way,
+ * and costs identification only for a path too deep to name.
+ *
+ * `out_cap` counts the terminating NUL. Mirrors driver.zig's
+ * serviceNameFromMount, which must produce the same bytes for the same input.
+ * Returns the length written, or 0 when `out_cap` cannot hold even the fallback
+ * form (in which case `out` is left empty). */
+static inline uint32_t wasmos_svc_name_from_mount(char* out, uint32_t out_cap, const char* prefix,
+                                                  const char* mount) {
+    uint32_t plen = 0u;
+    uint32_t mlen = 0u;
+    uint32_t n = 0u;
+    uint32_t i;
+    uint32_t hash;
+
+    if (!out || out_cap == 0u) {
+        return 0u;
+    }
+    out[0] = '\0';
+    if (!prefix || !mount) {
+        return 0u;
+    }
+    while (prefix[plen] != '\0') {
+        plen++;
+    }
+    while (mount[mlen] != '\0') {
+        mlen++;
+    }
+    /* Eight hex digits plus the NUL is the shortest this can ever be. */
+    if (plen + 8u + 1u > out_cap) {
+        return 0u;
+    }
+    for (i = 0u; i < plen; ++i) {
+        out[n++] = prefix[i];
+    }
+    if (plen + mlen + 1u <= out_cap) {
+        for (i = 0u; i < mlen; ++i) {
+            out[n++] = mount[i];
+        }
+        out[n] = '\0';
+        return n;
+    }
+    hash = wasmos_class_instance_fingerprint(mount);
+    for (i = 0u; i < 8u; ++i) {
+        uint32_t nibble = (hash >> (28u - 4u * i)) & 0xFu;
+        out[n++] = (char)(nibble < 10u ? ('0' + (int)nibble) : ('a' + (int)(nibble - 10u)));
+    }
+    out[n] = '\0';
+    return n;
+}
+
 /* One VOLUME -- a thing with a filesystem on it. Carried in a transfer buffer by
  * VOLUME_IPC_IDENTIFY_RESP; see abi/opcodes.yaml for that argument encoding.
  *

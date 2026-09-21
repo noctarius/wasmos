@@ -2490,6 +2490,15 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_list
   COMMAND ${BUILD_DIR}/test_list
+  # kmem's own suite. It brings its OWN slab and frame allocator rather than
+  # linking stubs_slab.c: what it exercises is a slab that REFUSES a size, which
+  # the shared stub cannot express, and a frame allocator whose calls it counts.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_kmem.c
+          ${KERNEL_DIR}/kmem.c
+          -o ${BUILD_DIR}/test_kmem
+  COMMAND ${BUILD_DIR}/test_kmem
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_hashmap.c

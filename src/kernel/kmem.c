@@ -28,6 +28,14 @@
  * recorded in a header so kmem_free can give them back. The header is placed
  * before the returned pointer and keeps its 8-byte alignment contract.
  *
+ * `self` holds the header's own address, and it is what makes the block
+ * IDENTIFIABLE rather than merely plausible. kmem_free is handed bare pointers
+ * from three allocators and must not read in front of one that has no header, so
+ * the check is in two parts: the block's offset within its page, which is
+ * arithmetic on the pointer and reads nothing, and then the header itself. Magic
+ * and a non-zero page count can both occur in memory belonging to something
+ * else; a word that points at itself cannot.
+ *
  * The arena is now only what its name says: an EARLY one, for allocations made
  * before the frame allocator and slab can serve anything. */
 #define KMEM_PAGE_MAGIC 0x4B4D454Du /* 'KMEM' */
@@ -36,6 +44,7 @@ typedef struct {
     uint32_t magic;
     uint32_t pages;
     uint64_t phys;
+    uint64_t self;
 } kmem_page_header_t;
 
 /* Bump-allocated fallback arena for a request nothing else can serve yet:
@@ -103,6 +112,7 @@ void* kmem_alloc(size_t size) {
         hdr->magic = KMEM_PAGE_MAGIC;
         hdr->pages = (uint32_t)pages;
         hdr->phys = phys;
+        hdr->self = (uint64_t)(uintptr_t)hdr;
         return (void*)(hdr + 1);
     }
     /* No frame either -- early boot, or genuinely out of memory. */
@@ -134,10 +144,22 @@ uint32_t kmem_early_arena_bytes(void) {
     return KMEM_EARLY_ARENA_BYTES;
 }
 
-/* Routes by address: a pointer inside the early arena is simply dropped, since
- * a bump allocator has no reclaim, and everything else goes to kfree_small.
- * NULL is ignored.  A pointer from neither source is handed to kfree_small,
- * which rejects it on its header magic rather than corrupting a free list. */
+/* Routes a bare pointer back to whichever of the three sources served it.
+ *
+ * The order is not arbitrary. Both tests that come before kfree_small are made
+ * from the POINTER, not from memory around it: the arena is an address range,
+ * and a page-backed block sits at a known offset into its page. Only once that
+ * offset matches is the header read, and by then the bytes being read are
+ * inside a page this allocator handed out.
+ *
+ * Probing in front of every pointer instead reads memory that belongs to the
+ * slab, or to nothing -- and hands the block to the frame allocator whenever
+ * those bytes happen to spell a header, freeing memory that was never a frame
+ * while the slab leaks the block. tests/unit/test_kmem.c holds that case.
+ *
+ * An arena pointer is dropped: a bump allocator has no reclaim. NULL is ignored.
+ * Anything left is the slab's, which rejects a foreign pointer on its own header
+ * rather than corrupting a free list. */
 void kmem_free(void* ptr) {
     uintptr_t start = (uintptr_t)&g_kmem_early_arena[0];
     uintptr_t end = start + (uintptr_t)KMEM_EARLY_ARENA_BYTES;
@@ -145,24 +167,24 @@ void kmem_free(void* ptr) {
     if (!ptr) {
         return;
     }
-    /* A page-backed block carries its header immediately before it. Checked
-     * before the arena range and before the slab: its magic is what tells the
-     * three sources apart, and handing a page-backed pointer to kfree_small
-     * would have it rejected on the slab's own magic and silently leaked. */
-    if (p > (uintptr_t)sizeof(kmem_page_header_t)) {
-        kmem_page_header_t* hdr = ((kmem_page_header_t*)ptr) - 1;
-        if (hdr->magic == KMEM_PAGE_MAGIC && hdr->pages > 0u) {
-            uint64_t phys = hdr->phys;
-            uint32_t pages = hdr->pages;
-            hdr->magic = 0u;
-            pfa_free_pages(phys, (uint64_t)pages);
-            return;
-        }
-    }
     if (p >= start && p < end) {
         /* TODO(kmem): add reclaim for early-arena allocations if repeated
          * early remove/destroy paths become hot. */
         return;
+    }
+    /* kmem_alloc puts the header at the head of a page and returns the byte
+     * after it, so this offset is the only one a page-backed block can have. */
+    if ((p % KMEM_PAGE_BYTES) == (uintptr_t)sizeof(kmem_page_header_t)) {
+        kmem_page_header_t* hdr = ((kmem_page_header_t*)ptr) - 1;
+        if (hdr->magic == KMEM_PAGE_MAGIC && hdr->pages > 0u &&
+            hdr->self == (uint64_t)(uintptr_t)hdr) {
+            uint64_t phys = hdr->phys;
+            uint32_t pages = hdr->pages;
+            hdr->magic = 0u;
+            hdr->self = 0u;
+            pfa_free_pages(phys, (uint64_t)pages);
+            return;
+        }
     }
     kfree_small(ptr);
 }

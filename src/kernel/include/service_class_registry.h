@@ -50,6 +50,20 @@ void service_class_registry_set_event_sink(service_class_event_fn fn, void* user
 int service_class_registry_add(const char* class_name, uint32_t instance, uint32_t endpoint,
                                uint32_t owner_ctx, uint32_t pid);
 
+/* Retire a provider the caller itself registered, firing SVC_CLASS_EVENT_REMOVE
+ * to the class's subscribers exactly as reap_dead does for one whose owner died.
+ *
+ * `owner_ctx` must be the context that registered it. A provider is retired by
+ * its owner or by its death, and by nothing else: a registration is a claim on
+ * (class, instance), and letting another context drop it would let anything
+ * unpublish a device it does not own.
+ *
+ * Returns 0, or negative for bad arguments, a (class, instance) nobody holds, or
+ * one held by a different owner -- which are distinguishable to the caller only
+ * as "it is not yours to retire", because they are the same answer from outside.
+ */
+int service_class_registry_remove(const char* class_name, uint32_t instance, uint32_t owner_ctx);
+
 /* Write matching providers to out[0..max) in ascending instance order; returns
  * the total match count (may exceed max). */
 uint32_t service_class_registry_lookup(const char* class_name, service_class_provider_t* out,

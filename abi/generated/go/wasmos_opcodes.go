@@ -122,10 +122,33 @@ const SVC_IPC_REGISTER_DESC_REQ int32 = 0x222
 // arg0=SVC_CLASS_EVENT_* arg1=instance arg2=endpoint arg3=pid.
 const SVC_IPC_LOOKUP_CLASS_REQ int32 = 0x223
 const SVC_IPC_SUBSCRIBE_CLASS_REQ int32 = 0x224
+// Retire a class registration the sender itself made.
+// req  arg0=buffer_id (class name NUL-terminated at offset 0),
+// arg1=instance;
+// resp SVC_IPC_UNREGISTER_CLASS_RESP arg0=0.
+//
+// The class name travels in a buffer for the same reason LOOKUP_CLASS and
+// SUBSCRIBE_CLASS carry theirs there: a name is up to 16 bytes and would
+// consume every argument word.
+//
+// Subscribers see SVC_CLASS_EVENT with arg0=SVC_CLASS_EVENT_REMOVE,
+// carrying the endpoint and pid the provider HAD -- indistinguishable
+// from the event fired when an owner dies, deliberately: a subscriber
+// wants to stop addressing an endpoint, and why it went is not its
+// business.
+//
+// Only the OWNER may retire a registration. A registration is a claim on
+// (class, instance), and letting another context drop one would let
+// anything unpublish a device it does not own -- the impersonation the
+// register path already refuses, which has to be refused at both ends or
+// it is not refused at all. Retiring one nobody holds, or one held by
+// somebody else, fails the same way: it is not yours to retire.
+const SVC_IPC_UNREGISTER_CLASS_REQ int32 = 0x225
 const SVC_IPC_REGISTER_RESP int32 = 0x2A0
 const SVC_IPC_LOOKUP_RESP int32 = 0x2A1
 const SVC_IPC_LOOKUP_CLASS_RESP int32 = 0x2A2
 const SVC_IPC_SUBSCRIBE_CLASS_RESP int32 = 0x2A3
+const SVC_IPC_UNREGISTER_CLASS_RESP int32 = 0x2A5
 const SVC_IPC_CLASS_EVENT int32 = 0x2A4
 const SVC_IPC_ERROR int32 = 0x2AF
 

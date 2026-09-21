@@ -181,10 +181,37 @@ subsystems:
           CLASS_EVENT is pushed to a subscriber's notify_endpoint on add/remove/die:
           arg0=SVC_CLASS_EVENT_* arg1=instance arg2=endpoint arg3=pid.
       - { symbol: SVC_IPC_SUBSCRIBE_CLASS_REQ, value: 0x224, kind: req }
+      - symbol: SVC_IPC_UNREGISTER_CLASS_REQ
+        value: 0x225
+        kind: req
+        doc: |
+          Retire a class registration the sender itself made.
+          req  arg0=buffer_id (class name NUL-terminated at offset 0),
+          arg1=instance;
+          resp SVC_IPC_UNREGISTER_CLASS_RESP arg0=0.
+
+          The class name travels in a buffer for the same reason LOOKUP_CLASS and
+          SUBSCRIBE_CLASS carry theirs there: a name is up to 16 bytes and would
+          consume every argument word.
+
+          Subscribers see SVC_CLASS_EVENT with arg0=SVC_CLASS_EVENT_REMOVE,
+          carrying the endpoint and pid the provider HAD -- indistinguishable
+          from the event fired when an owner dies, deliberately: a subscriber
+          wants to stop addressing an endpoint, and why it went is not its
+          business.
+
+          Only the OWNER may retire a registration. A registration is a claim on
+          (class, instance), and letting another context drop one would let
+          anything unpublish a device it does not own -- the impersonation the
+          register path already refuses, which has to be refused at both ends or
+          it is not refused at all. Retiring one nobody holds, or one held by
+          somebody else, fails the same way: it is not yours to retire.
+
       - { symbol: SVC_IPC_REGISTER_RESP, value: 0x2a0, kind: resp }
       - { symbol: SVC_IPC_LOOKUP_RESP, value: 0x2a1, kind: resp }
       - { symbol: SVC_IPC_LOOKUP_CLASS_RESP, value: 0x2a2, kind: resp }
       - { symbol: SVC_IPC_SUBSCRIBE_CLASS_RESP, value: 0x2a3, kind: resp }
+      - { symbol: SVC_IPC_UNREGISTER_CLASS_RESP, value: 0x2a5, kind: resp }
       - { symbol: SVC_IPC_CLASS_EVENT, value: 0x2a4, kind: notify }
       - { symbol: SVC_IPC_ERROR, value: 0x2af, kind: error }
 

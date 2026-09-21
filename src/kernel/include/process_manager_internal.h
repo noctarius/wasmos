@@ -297,6 +297,7 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
 int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_class_unregister(uint32_t pm_context_id, const ipc_message_t* msg);
 /* Periodic exit-driven sweep over both service tables: drop class providers and
  * subscribers whose owner has died (firing REMOVE events) and free the flat-table
  * names those owners held. Called from the PM run loop, so a name or instance is

@@ -428,6 +428,45 @@ static inline int32_t wasmos_svc_subscribe_class(int32_t proc_endpoint, int32_t 
     return 0;
 }
 
+/* Retire a class registration this process made.
+ *
+ * Only the owner may retire one; PM takes the owner from the request's source
+ * endpoint rather than from anything named here. Returns 0, or -1 when the
+ * request could not be staged or sent, or when the (class, instance) is not this
+ * process's to retire -- which covers both "nobody holds it" and "somebody else
+ * does", because from out here they are the same answer. */
+static inline int32_t wasmos_svc_unregister_class(int32_t proc_endpoint, int32_t reply_endpoint,
+                                                  const char* class_name, uint32_t instance,
+                                                  int32_t request_id) {
+    wasmos_ipc_message_t resp;
+    char cn[WASMOS_SVC_CLASS_MAX];
+    uint32_t i;
+    int32_t bid;
+    for (i = 0; i + 1u < WASMOS_SVC_CLASS_MAX && class_name[i] != '\0'; ++i) {
+        cn[i] = class_name[i];
+    }
+    cn[i] = '\0';
+    bid = wasmos_xfer_stage(cn, (int32_t)i + 1);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_call(proc_endpoint,
+                        reply_endpoint,
+                        SVC_IPC_UNREGISTER_CLASS_REQ,
+                        request_id,
+                        bid,
+                        (int32_t)instance,
+                        0,
+                        0,
+                        &resp) != 0 ||
+        resp.type != SVC_IPC_UNREGISTER_CLASS_RESP) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    (void)wasmos_xfer_buffer_release(bid);
+    return 0;
+}
+
 /* Register a subsystem broker with PM. The descriptor travels in an owned xfer
  * buffer, released before returning. Returns 0 on a PROC_IPC_RESP, the reply's
  * arg1 status when PM answers with anything else, and -1 when the request could

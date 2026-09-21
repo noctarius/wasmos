@@ -558,6 +558,47 @@ int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg) 
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 
+/* Retires a class registration the caller itself made
+ * (SVC_IPC_UNREGISTER_CLASS_REQ): arg0 is the caller's transfer buffer holding
+ * the class name NUL-terminated at offset 0, arg1 the instance.
+ *
+ * The owner is the context behind msg->source, never anything the request names,
+ * which is what makes "only the owner may retire it" enforceable here rather
+ * than merely asserted: a caller cannot claim to be somebody else by filling in
+ * a field. Returns 0 once the SVC_IPC_UNREGISTER_CLASS_RESP is sent, or -1 --
+ * which the dispatcher turns into SVC_IPC_ERROR -- for an unreadable buffer or a
+ * (class, instance) that is not the caller's to retire. */
+int pm_handle_class_unregister(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t owner = 0;
+    uint32_t buffer_id = (uint32_t)msg->arg0;
+    uint32_t instance = (uint32_t)msg->arg1;
+    char class_name[WASMOS_SVC_CLASS_MAX];
+    const uint8_t* buf;
+    ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner) != IPC_OK) {
+        return -1;
+    }
+    buf = pm_foreign_xfer_ptr(buffer_id, owner, 0);
+    if (!buf) {
+        return -1;
+    }
+    str_copy(class_name, sizeof(class_name), (const char*)buf);
+    pm_service_class_ensure(pm_context_id);
+    if (service_class_registry_remove(class_name, instance, owner) != 0) {
+        return -1;
+    }
+    resp.type = SVC_IPC_UNREGISTER_CLASS_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = 0;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+}
+
 /* Registers a subsystem broker (PROC_IPC_SUBSYSTEM_REGISTER_BROKER): arg1 is the
  * descriptor byte length, arg2 the caller's transfer-buffer id holding a
  * wasmos_subsystem_broker_register_desc_t.  Returns 0 once the PROC_IPC_RESP is

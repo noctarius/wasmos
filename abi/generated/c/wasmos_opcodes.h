@@ -149,10 +149,34 @@ enum {
      */
     SVC_IPC_LOOKUP_CLASS_REQ = 0x223,
     SVC_IPC_SUBSCRIBE_CLASS_REQ = 0x224,
+    /* Retire a class registration the sender itself made.
+     * req  arg0=buffer_id (class name NUL-terminated at offset 0),
+     * arg1=instance;
+     * resp SVC_IPC_UNREGISTER_CLASS_RESP arg0=0.
+     *
+     * The class name travels in a buffer for the same reason LOOKUP_CLASS and
+     * SUBSCRIBE_CLASS carry theirs there: a name is up to 16 bytes and would
+     * consume every argument word.
+     *
+     * Subscribers see SVC_CLASS_EVENT with arg0=SVC_CLASS_EVENT_REMOVE,
+     * carrying the endpoint and pid the provider HAD -- indistinguishable
+     * from the event fired when an owner dies, deliberately: a subscriber
+     * wants to stop addressing an endpoint, and why it went is not its
+     * business.
+     *
+     * Only the OWNER may retire a registration. A registration is a claim on
+     * (class, instance), and letting another context drop one would let
+     * anything unpublish a device it does not own -- the impersonation the
+     * register path already refuses, which has to be refused at both ends or
+     * it is not refused at all. Retiring one nobody holds, or one held by
+     * somebody else, fails the same way: it is not yours to retire.
+     */
+    SVC_IPC_UNREGISTER_CLASS_REQ = 0x225,
     SVC_IPC_REGISTER_RESP = 0x2A0,
     SVC_IPC_LOOKUP_RESP = 0x2A1,
     SVC_IPC_LOOKUP_CLASS_RESP = 0x2A2,
     SVC_IPC_SUBSCRIBE_CLASS_RESP = 0x2A3,
+    SVC_IPC_UNREGISTER_CLASS_RESP = 0x2A5,
     SVC_IPC_CLASS_EVENT = 0x2A4,
     SVC_IPC_ERROR = 0x2AF,
 };
@@ -1003,10 +1027,12 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x222: return "SVC_IPC_REGISTER_DESC_REQ";
         case 0x223: return "SVC_IPC_LOOKUP_CLASS_REQ";
         case 0x224: return "SVC_IPC_SUBSCRIBE_CLASS_REQ";
+        case 0x225: return "SVC_IPC_UNREGISTER_CLASS_REQ";
         case 0x2A0: return "SVC_IPC_REGISTER_RESP";
         case 0x2A1: return "SVC_IPC_LOOKUP_RESP";
         case 0x2A2: return "SVC_IPC_LOOKUP_CLASS_RESP";
         case 0x2A3: return "SVC_IPC_SUBSCRIBE_CLASS_RESP";
+        case 0x2A5: return "SVC_IPC_UNREGISTER_CLASS_RESP";
         case 0x2A4: return "SVC_IPC_CLASS_EVENT";
         case 0x2AF: return "SVC_IPC_ERROR";
         default: return "UNKNOWN";

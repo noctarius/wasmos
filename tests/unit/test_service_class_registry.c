@@ -326,6 +326,147 @@ static int test_reap_provider_fires_remove(void) {
     return 0;
 }
 
+/* A provider can retire its own registration, and it looks to a subscriber
+ * exactly like the owner having died -- same event, same fields. That is the
+ * point: a subscriber's reason for wanting REMOVE is to stop addressing an
+ * endpoint, and why it went away is not its business. */
+static int test_remove_retires_a_provider_and_fires_remove(void) {
+    service_class_provider_t out[4];
+    fresh();
+    if (service_class_registry_subscribe("block", 999, 5) != 0)
+        return __LINE__;
+    if (service_class_registry_add("block", 0, 100, 7, 70) != 0)
+        return __LINE__;
+    if (service_class_registry_add("block", 1, 101, 7, 70) != 0)
+        return __LINE__;
+    g_ev_n = 0; /* forget the ADDs */
+
+    if (service_class_registry_remove("block", 0, 7) != 0)
+        return __LINE__;
+    if (ev_count(SVC_CLASS_EVENT_REMOVE) != 1)
+        return __LINE__;
+    /* The endpoint and pid the provider HAD: an event naming a cleared endpoint
+     * would tell a subscriber nothing about what to stop addressing. */
+    if (g_ev[0].instance != 0 || g_ev[0].endpoint != 100 || g_ev[0].pid != 70)
+        return __LINE__;
+    if (service_class_registry_lookup("block", out, 4) != 1)
+        return __LINE__;
+    if (out[0].instance != 1)
+        return __LINE__;
+    return 0;
+}
+
+/* Only the owner may retire a registration.
+ *
+ * A registration is a claim on (class, instance). Letting another context drop
+ * one would let anything unpublish a device it does not own -- the same
+ * impersonation the add path refuses, and it has to be refused at both ends or
+ * it is not refused at all. */
+static int test_remove_refuses_a_provider_owned_by_someone_else(void) {
+    service_class_provider_t out[4];
+    fresh();
+    if (service_class_registry_subscribe("block", 999, 5) != 0)
+        return __LINE__;
+    if (service_class_registry_add("block", 0, 100, 7, 70) != 0)
+        return __LINE__;
+    g_ev_n = 0;
+
+    if (service_class_registry_remove("block", 0, 8) == 0)
+        return __LINE__; /* ctx 8 does not own it */
+    if (ev_count(SVC_CLASS_EVENT_REMOVE) != 0)
+        return __LINE__; /* and no subscriber was told it went */
+    if (service_class_registry_lookup("block", out, 4) != 1)
+        return __LINE__;
+    return 0;
+}
+
+/* Retiring what is not there is refused rather than silently accepted, and
+ * fires nothing. A caller that unregisters twice would otherwise see the second
+ * call succeed and conclude it had retired something. */
+static int test_remove_of_an_absent_provider_is_refused(void) {
+    fresh();
+    if (service_class_registry_subscribe("block", 999, 5) != 0)
+        return __LINE__;
+    if (service_class_registry_remove("block", 0, 7) == 0)
+        return __LINE__; /* nothing registered */
+    if (service_class_registry_add("block", 0, 100, 7, 70) != 0)
+        return __LINE__;
+    if (service_class_registry_remove("block", 0, 7) != 0)
+        return __LINE__;
+    g_ev_n = 0;
+    if (service_class_registry_remove("block", 0, 7) == 0)
+        return __LINE__; /* already retired */
+    if (ev_count(SVC_CLASS_EVENT_REMOVE) != 0)
+        return __LINE__;
+    return 0;
+}
+
+/* A retired (class, instance) can be claimed again, by a different owner.
+ *
+ * This is what the whole primitive is for: a partition that goes away and comes
+ * back under a rewritten table is the same id, and a registration that outlived
+ * its provider would keep the new one out for the rest of the boot. */
+static int test_a_retired_instance_can_be_registered_again(void) {
+    service_class_provider_t out[4];
+    fresh();
+    /* Subscribed because events are delivered to SUBSCRIBERS: without one the
+     * counts below would be zero whatever the registry did. */
+    if (service_class_registry_subscribe("block", 999, 5) != 0)
+        return __LINE__;
+    if (service_class_registry_add("block", 0, 100, 7, 70) != 0)
+        return __LINE__;
+    if (service_class_registry_remove("block", 0, 7) != 0)
+        return __LINE__;
+    g_ev_n = 0;
+
+    if (service_class_registry_add("block", 0, 202, 9, 90) != 0)
+        return __LINE__;
+    /* A fresh claim, so it is an ADD rather than the silent update a
+     * re-registration by the same owner would be. */
+    if (ev_count(SVC_CLASS_EVENT_ADD) != 1)
+        return __LINE__;
+    if (service_class_registry_lookup("block", out, 4) != 1)
+        return __LINE__;
+    if (out[0].endpoint != 202 || out[0].pid != 90)
+        return __LINE__;
+    return 0;
+}
+
+/* Classes are separate namespaces on the way out as well as in: retiring
+ * (block, 0) leaves (net.ifc, 0) alone. */
+static int test_remove_is_scoped_to_its_class(void) {
+    service_class_provider_t out[4];
+    fresh();
+    if (service_class_registry_add("block", 0, 100, 7, 70) != 0)
+        return __LINE__;
+    if (service_class_registry_add("net.ifc", 0, 101, 7, 70) != 0)
+        return __LINE__;
+    if (service_class_registry_remove("block", 0, 7) != 0)
+        return __LINE__;
+    if (service_class_registry_lookup("block", out, 4) != 0)
+        return __LINE__;
+    if (service_class_registry_lookup("net.ifc", out, 4) != 1)
+        return __LINE__;
+    if (out[0].endpoint != 101)
+        return __LINE__;
+    return 0;
+}
+
+/* A malformed class name is refused here as it is everywhere else, rather than
+ * being normalised into some other class and retiring a provider there. */
+static int test_remove_rejects_bad_class_names(void) {
+    fresh();
+    if (service_class_registry_add("block", 0, 100, 7, 70) != 0)
+        return __LINE__;
+    if (service_class_registry_remove(0, 0, 7) == 0)
+        return __LINE__;
+    if (service_class_registry_remove("", 0, 7) == 0)
+        return __LINE__;
+    if (service_class_registry_remove("0123456789abcdefg", 0, 7) == 0)
+        return __LINE__;
+    return 0;
+}
+
 static int test_reap_dead_subscriber_gets_no_remove(void) {
     fresh();
     /* subscriber owned by ctx 5, provider owned by ctx 7; both die */
@@ -418,6 +559,12 @@ int main(void) {
         WASMOS_TEST_CASE(test_subscribe_class_isolation),
         WASMOS_TEST_CASE(test_subscribe_is_not_retroactive),
         WASMOS_TEST_CASE(test_reap_provider_fires_remove),
+        WASMOS_TEST_CASE(test_remove_retires_a_provider_and_fires_remove),
+        WASMOS_TEST_CASE(test_remove_refuses_a_provider_owned_by_someone_else),
+        WASMOS_TEST_CASE(test_remove_of_an_absent_provider_is_refused),
+        WASMOS_TEST_CASE(test_a_retired_instance_can_be_registered_again),
+        WASMOS_TEST_CASE(test_remove_is_scoped_to_its_class),
+        WASMOS_TEST_CASE(test_remove_rejects_bad_class_names),
         WASMOS_TEST_CASE(test_reap_dead_subscriber_gets_no_remove),
         WASMOS_TEST_CASE(test_no_event_sink),
         WASMOS_TEST_CASE(test_dynamic_growth),

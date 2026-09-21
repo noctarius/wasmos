@@ -306,6 +306,9 @@ set(WASM_UMOUNT_APP ${BUILD_DIR}/umount.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
+set(WASM_MKFS_WFS_SRC ${CMAKE_SOURCE_DIR}/src/utils/mkfs_wfs/mkfs_wfs.c)
+set(WASM_MKFS_WFS_WASM ${BUILD_DIR}/mkfs_wfs.wasm)
+set(WASM_MKFS_WFS_APP ${BUILD_DIR}/mkfs_wfs.wap)
 set(WASM_FSCK_WFS_SRC ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/fsck_wfs.c)
 set(WASM_FSCK_WFS_CORE ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/wfs_fsck.c)
 set(WASM_FSCK_WFS_WASM ${BUILD_DIR}/fsck_wfs.wasm)
@@ -1754,6 +1757,7 @@ if (TARGET host_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VOLINFO_APP} ${BUILD_DIR}/esp/system/utils/volinfo.wap
     # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MKFS_WFS_APP} ${BUILD_DIR}/esp/system/utils/mkfs.wfs.wap
   )
 endif ()
 if (TARGET curl_util)

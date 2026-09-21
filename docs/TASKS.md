@@ -1100,6 +1100,31 @@ tail.
   format a mounted volume -- has no call site yet. Whoever adds a guest `mkfs.wfs`
   owes it the same check `fsck.wfs` makes.
 
+- [ ] [PERF][P2] A block WRITE cannot be a DMA transfer, on either backend, so a
+  guest that writes in bulk pays one 8 KiB-capped PIO round trip per request.
+  READS already take the fast path -- ATA programs bus-master DMA and virtio-blk
+  maps the borrow and points the disk at it -- but both refuse the same
+  destination on a write:
+
+  - `src/drivers/ata/ata.c` serves only `BLOCK_DST_BLOCK_BUFFER` for a write and
+    says why in a TODO: `WASMOS_DMA_DIR_TO_DEVICE` is what `ata_dma_prepare`
+    still denies. The transfer itself is `ata_write_lba28`, i.e. PIO; only
+    `READ_DMA` has a bus-master counterpart here.
+  - `src/drivers/virtio_blk/virtio_blk.zig` refuses `BLOCK_DST_XFER_BUFFER`
+    outright when `is_write`, because it has no staging path and maps the borrow
+    only `DMA_DIR_FROM_DEVICE`.
+
+  The consequence is measurable rather than theoretical: `mkfs.wfs` writing every
+  block of a 16 MiB volume takes 110s for 4096 requests, about 27ms each, and a
+  disk of any real size is unusable that way. It is also why the request struct's
+  `dst_buffer_id`/`dst_borrow_id` pair is dead weight on the write side -- the
+  ABI already describes the transfer that neither backend performs.
+
+  Two fixes, in order: allow a transfer-buffer source so one request can carry
+  far more than the 8 KiB per-process block buffer, and issue `WRITE_DMA` on ATA.
+  The first is the larger win, because it removes round trips rather than making
+  each one faster.
+
 - [ ] [ENHANCEMENT][P3] `mkfs.wfs` as a guest utility. The formatter's library
   half is ready for one: `wfs_mkfs_plan_tree` settles the layout and the tree
   without writing, and `wfs_mkfs_block_at` serializes any single block purely, so

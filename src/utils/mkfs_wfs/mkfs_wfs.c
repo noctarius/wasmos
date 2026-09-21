@@ -506,6 +506,77 @@ static int fill_uuid(uint8_t* uuid, uint32_t target, uint64_t lba_count) {
     return 0;
 }
 
+/* Ask the volume manager to re-probe the device, so the volume layer describes
+ * the filesystem that was just written rather than whatever was there at boot.
+ *
+ * A device is probed once, when it arrives under the `block` class. Without this
+ * `volinfo` keeps reporting the old type until a reboot, and so does every
+ * `SUBSYSTEM=="volume"` rule -- the format would be invisible to the layer that
+ * decides what gets mounted.
+ *
+ * Sent AFTER the flush, because a probe reads the disk: asking before the last
+ * write reached media would re-probe the volume this tool is still writing.
+ *
+ * Advisory. The volume is on the disk whether or not anyone was told, so a
+ * system with no volume manager is reported and not treated as a failure. */
+static void request_rescan(const char* id, uint32_t target) {
+    svc_class_entry_t providers[MKFS_MAX_PROVIDERS];
+    wasmos_ipc_message_t reply;
+    int32_t count;
+    int32_t i;
+    int32_t endpoint = -1;
+
+    count = wasmos_svc_lookup_class(
+        g_proc_endpoint, g_reply_endpoint, "volume", providers, MKFS_MAX_PROVIDERS, g_request_id++);
+    if (count <= 0) {
+        (void)printf("[mkfs.wfs] no volume manager; %s keeps its old volume record until "
+                     "the next boot\n",
+                     id);
+        return;
+    }
+    if (count > MKFS_MAX_PROVIDERS) {
+        count = MKFS_MAX_PROVIDERS;
+    }
+    /* Any provider of the class answers: a rescan names the DEVICE, and the
+     * service serving one volume serves them all. */
+    for (i = 0; i < count; ++i) {
+        endpoint = (int32_t)providers[i].endpoint;
+        break;
+    }
+    if (endpoint < 0) {
+        return;
+    }
+    if (wasmos_ipc_call(endpoint,
+                        g_reply_endpoint,
+                        VOLUME_IPC_RESCAN_REQ,
+                        g_request_id++,
+                        (int32_t)target,
+                        0,
+                        0,
+                        0,
+                        &reply) != 0) {
+        (void)printf("[mkfs.wfs] volume rescan not answered; %s keeps its old volume record\n", id);
+        return;
+    }
+    if (reply.type == VOLUME_IPC_ERROR) {
+        (void)printf("[mkfs.wfs] volume rescan refused: %s\n",
+                     wasmos_error_code_name((wasmos_error_code_t)reply.arg0));
+        return;
+    }
+    if (reply.type != VOLUME_IPC_RESP || reply.arg0 != 0) {
+        (void)printf("[mkfs.wfs] volume rescan reported nothing usable\n");
+        return;
+    }
+    if (reply.arg1 == 0) {
+        /* The write succeeded and the probe found nothing, which means the two
+         * disagree about what is on the disk -- worth saying plainly, because
+         * the volume is the layer a mount goes through. */
+        (void)printf("[mkfs.wfs] the volume manager re-probed %s and found no volume\n", id);
+        return;
+    }
+    (void)printf("[mkfs.wfs] volume record updated\n");
+}
+
 int main(void) {
     char args[64];
     wasmos_block_descriptor_t desc;
@@ -666,6 +737,7 @@ int main(void) {
         (void)printf("%02x", (unsigned)ctx.params.uuid[i]);
     }
     (void)printf("\n");
+    request_rescan(id, target);
     (void)printf("[mkfs.wfs] done; mount it with: mount -t wfs <path> %s\n", id);
     return 0;
 }

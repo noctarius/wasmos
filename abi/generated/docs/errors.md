@@ -382,3 +382,4 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION` | -0x00190008 | a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t |
 | `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED` | -0x00190009 | a block record is short, unterminated, or names a length outside the transfer buffer |
 | `WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR` | -0x0019000A | the device has no descriptor to report, so it cannot be identified |
+| `WASMOS_ERR_BLOCK_DEV_QUEUE_FULL` | -0x0019000B | a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it |

@@ -127,7 +127,46 @@ class MkfsWfsTest(unittest.TestCase):
             f"--- output ---\n{out.decode('utf-8', 'replace')}\n",
         )
 
-    def test_3_the_checker_finds_it_consistent(self) -> None:
+    def test_3_the_volume_layer_sees_the_new_filesystem(self) -> None:
+        """The format is visible WITHOUT a reboot, which it was not before.
+
+        A device is probed once, when it arrives under the `block` class, so a
+        disk formatted from inside the guest kept whatever the volume manager saw
+        on it at boot -- `unknown` for a blank one. Every `SUBSYSTEM=="volume"`
+        rule reads that layer, so the filesystem existed and nothing that decides
+        what gets mounted could tell.
+
+        mkfs.wfs sends VOLUME_IPC_RESCAN_REQ once its write has landed. Asserted
+        here BEFORE anything mounts the volume, because a mount would make the
+        type observable by other means and this case would stop measuring the
+        rescan.
+        """
+        out = self._run("volinfo", [b"[volinfo] volumes="])
+        line = b""
+        for candidate in out.split(b"\n"):
+            if f"volume:{DEVICE}".encode() in candidate:
+                line = candidate
+                break
+        self.assertTrue(
+            line,
+            f"no volume for {DEVICE}\n--- output ---\n{out.decode('utf-8', 'replace')}\n",
+        )
+        self.assertIn(
+            b" wfs ",
+            line,
+            "the volume still carries the type it had before the format; the "
+            "rescan did not reach the volume manager or did not update in place\n"
+            f"--- line ---\n{line.decode('utf-8', 'replace')}\n",
+        )
+        self.assertIn(
+            b"volumes=3",
+            out,
+            "the volume count changed, so the rescan added a second volume for "
+            "the device instead of updating the one already there\n"
+            f"--- output ---\n{out.decode('utf-8', 'replace')}\n",
+        )
+
+    def test_4_the_checker_finds_it_consistent(self) -> None:
         """A second implementation reads what the formatter wrote.
 
         fsck.wfs walks the superblock, the group descriptors, the object table
@@ -140,7 +179,7 @@ class MkfsWfsTest(unittest.TestCase):
             [b"[fsck.wfs] 1 objects", b"[fsck.wfs] consistent"],
         )
 
-    def test_4_the_driver_mounts_it_from_a_clean_unmount(self) -> None:
+    def test_5_the_driver_mounts_it_from_a_clean_unmount(self) -> None:
         """The volume is not merely parseable -- it is CLEAN.
 
         A mount that had to replay, or that found the state field unreadable,
@@ -153,7 +192,7 @@ class MkfsWfsTest(unittest.TestCase):
             [b"[fs-wfs] mounted from a clean unmount", b"mount: mounted"],
         )
 
-    def test_5_the_volume_manager_sees_a_mounted_volume(self) -> None:
+    def test_6_the_volume_manager_sees_a_mounted_volume(self) -> None:
         """The volume reaches the layer that arbitrates access to it.
 
         `claimed` is the flag fs_wfs sets while it holds a volume, and it is what
@@ -174,7 +213,7 @@ class MkfsWfsTest(unittest.TestCase):
             f"--- output ---\n{out.decode('utf-8', 'replace')}\n",
         )
 
-    def test_6_a_mounted_volume_is_refused(self) -> None:
+    def test_7_a_mounted_volume_is_refused(self) -> None:
         """The check that makes this tool safe to have.
 
         Formatting under a live filesystem destroys the volume beneath a service
@@ -193,7 +232,7 @@ class MkfsWfsTest(unittest.TestCase):
             f"--- output ---\n{out.decode('utf-8', 'replace')}\n",
         )
 
-    def test_7_an_unmounted_volume_can_be_reformatted(self) -> None:
+    def test_8_an_unmounted_volume_can_be_reformatted(self) -> None:
         """Releasing the claim is what makes the device available again.
 
         Ordered last because it leaves the disk formatted but unmounted, and

@@ -300,6 +300,7 @@ enum {
     WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 8), /* a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t */
     WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 9), /* a block record is short, unterminated, or names a length outside the transfer buffer */
     WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 10), /* the device has no descriptor to report, so it cannot be identified */
+    WASMOS_ERR_BLOCK_DEV_QUEUE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 11), /* a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -606,6 +607,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: return "block_dev.DESCRIPTOR_VERSION";
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "block_dev.DESCRIPTOR_MALFORMED";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "block_dev.NO_DESCRIPTOR";
+    case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "block_dev.QUEUE_FULL";
     default: return "unknown";
     }
 }
@@ -846,6 +848,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: return "a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t";
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "a block record is short, unterminated, or names a length outside the transfer buffer";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "the device has no descriptor to report, so it cannot be identified";
+    case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it";
     default: return "unknown error";
     }
 }

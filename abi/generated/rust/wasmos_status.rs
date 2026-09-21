@@ -279,6 +279,7 @@ pub const WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: i32 = -0x00190007; // the transfer 
 pub const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: i32 = -0x00190008; // a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t
 pub const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: i32 = -0x00190009; // a block record is short, unterminated, or names a length outside the transfer buffer
 pub const WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: i32 = -0x0019000A; // the device has no descriptor to report, so it cannot be identified
+pub const WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: i32 = -0x0019000B; // a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it
 
 #[inline]
 pub const fn wasmos_err_make(dom: u16, code: u16) -> i32 {
@@ -576,6 +577,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION => "a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t",
         WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED => "a block record is short, unterminated, or names a length outside the transfer buffer",
         WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR => "the device has no descriptor to report, so it cannot be identified",
+        WASMOS_ERR_BLOCK_DEV_QUEUE_FULL => "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it",
         _ => "unknown error",
     }
 }

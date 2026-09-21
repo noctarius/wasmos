@@ -893,6 +893,29 @@ enum {
      * prevent a mistake only those two can make.
      */
     VOLUME_IPC_CLAIM_REQ = 0xE01,
+    /* Re-probe a block device and update the volume on it. arg0 = the
+     * device's `block` CLASS INSTANCE -- the device, not the volume, because
+     * a caller that has just written a filesystem knows which disk it wrote
+     * and a volume for it may not exist yet.
+     * Answered with VOLUME_IPC_RESP, arg0 = 0, arg1 = 1 when a volume is
+     * present on the device afterwards and 0 when none was recognised.
+     *
+     * A device is probed once, when it arrives under the `block` class, and
+     * nothing re-probes it afterwards -- so a disk formatted from inside the
+     * guest keeps whatever the volume manager saw on it at boot, and every
+     * rule and tool that reads the volume layer sees the stale answer. This
+     * is what `mkfs` sends once its write has landed.
+     *
+     * The reply is DEFERRED: a probe is synchronous and runs on the volume
+     * manager's root task, so the request is queued and answered when that
+     * probe completes rather than from the handler that received it.
+     *
+     * Updates the volume IN PLACE, keeping its class instance -- which is a
+     * fingerprint of a canonical id derived from the device, so it does not
+     * change -- and keeping any CLAIM on it, which belongs to whoever holds
+     * the volume and not to the probe.
+     */
+    VOLUME_IPC_RESCAN_REQ = 0xE02,
     /* arg0 = 0, arg1 = bytes written into the caller's buffer. */
     VOLUME_IPC_IDENTIFY_RESP = 0xE80,
     VOLUME_IPC_RESP = 0xE81,
@@ -1239,6 +1262,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         switch (type) {
         case 0xE00: return "VOLUME_IPC_IDENTIFY_REQ";
         case 0xE01: return "VOLUME_IPC_CLAIM_REQ";
+        case 0xE02: return "VOLUME_IPC_RESCAN_REQ";
         case 0xE80: return "VOLUME_IPC_IDENTIFY_RESP";
         case 0xE81: return "VOLUME_IPC_RESP";
         case 0xEFF: return "VOLUME_IPC_ERROR";

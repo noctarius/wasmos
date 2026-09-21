@@ -432,3 +432,4 @@ domains:
       - { name: DESCRIPTOR_VERSION,  description: "a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t" }
       - { name: DESCRIPTOR_MALFORMED, description: "a block record is short, unterminated, or names a length outside the transfer buffer" }
       - { name: NO_DESCRIPTOR,       description: "the device has no descriptor to report, so it cannot be identified" }
+      - { name: QUEUE_FULL,         description: "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it" }

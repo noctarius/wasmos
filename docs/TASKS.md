@@ -1125,6 +1125,20 @@ tail.
   The first is the larger win, because it removes round trips rather than making
   each one faster.
 
+- [ ] [ENHANCEMENT][P2] A rescan can change what a volume IS but not make one go
+  away. `VOLUME_IPC_RESCAN_REQ` re-probes a device and updates its volume in
+  place, which covers a disk that gained or changed a filesystem. It cannot cover
+  a disk that gained a PARTITION TABLE, because the volume on the whole device
+  should then stop existing -- and retiring one means unregistering it from the
+  `block`/`volume` class and telling the device manager, neither of which has an
+  unregister path. The same gap stops the partition manager retiring a disk's
+  partitions (`handleClassEvent`, where REMOVE is deliberately not acted on).
+
+  This is the prerequisite for `fdisk`: writing a table over a disk that already
+  had one must republish the partitions that changed and retire the ones that
+  went. Needs, in order: a class unregister, a devmgr unpublish, and then a
+  partition-manager rescan built on both.
+
 - [ ] [ENHANCEMENT][P3] `mkfs.wfs` as a guest utility. The formatter's library
   half is ready for one: `wfs_mkfs_plan_tree` settles the layout and the tree
   without writing, and `wfs_mkfs_block_at` serializes any single block purely, so

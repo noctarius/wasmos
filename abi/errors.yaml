@@ -397,6 +397,9 @@ domains:
     codes:
       - { name: NO_MOUNT_RULE,     description: "no block/filesystem mount rule matches the requested unit" }
       - { name: UNSUPPORTED_QUERY, description: "unknown or unsupported device-manager query type" }
+      - { name: NO_SUCH_RECORD,    description: "the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something" }
+      - { name: RECORD_BUSY,       description: "a filesystem is mounted on the device or volume named for retirement. Refused rather than retired because the mount still addresses it: the caller must unmount first, exactly as umount refuses a busy mount" }
+      - { name: BAD_RECORD_ID,     description: "the id named for retirement was empty, unterminated, or longer than the inventory's id field" }
 
   virtio_blk:
     id: 24

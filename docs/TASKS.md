@@ -1135,7 +1135,14 @@ tail.
   staged class-name buffer held alive until the reply lands.
 
 - [ ] [ENHANCEMENT][P2] A rescan can change what a volume IS but not make one go
-  away. `VOLUME_IPC_RESCAN_REQ` re-probes a device and updates its volume in
+  away. (Half-closed: the device manager now retires an inventory record --
+  `DEVMGR_UNPUBLISH_BLOCK_DEVICE` / `DEVMGR_UNPUBLISH_VOLUME`, refused while a
+  filesystem is mounted on it. What is still missing is the CALLER and the class
+  side: a retirement has to unregister the `block`/`volume` class entry too, and
+  the guest wrapper for `SVC_IPC_UNREGISTER_CLASS_REQ` has to be built on an IPC
+  future first -- the volume and partition managers are async services and must
+  not block. Retiring from one of the two views and not the other is worse than
+  neither, because the inventory and the class registry then disagree.) `VOLUME_IPC_RESCAN_REQ` re-probes a device and updates its volume in
   place, which covers a disk that gained or changed a filesystem. It cannot cover
   a disk that gained a PARTITION TABLE, because the volume on the whole device
   should then stop existing -- and retiring one means unregistering it from the

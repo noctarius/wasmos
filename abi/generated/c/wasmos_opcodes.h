@@ -597,7 +597,7 @@ enum {
     VIRTIO_SERIAL_IPC_ERROR = 0x8BF,
 };
 
-/* device_manager (0x900..0x981) */
+/* device_manager (0x900..0x982) */
 enum {
     DEVMGR_PUBLISH_DEVICE = 0x900,
     DEVMGR_PCI_SCAN_DONE = 0x901,
@@ -659,6 +659,40 @@ enum {
      * rather than partially read.
      */
     DEVMGR_PUBLISH_VOLUME = 0x907,
+    /* Retire one block device from the inventory. The device's canonical_id
+     * is the identity and travels in a transfer buffer the caller owns:
+     * arg0=buffer_id arg1=byte_offset arg2=length, NUL-terminated.
+     * Answered with DEVMGR_UNPUBLISH_RESP.
+     *
+     * The id rather than a derived key, for the same reason the publish path
+     * keys on it: a unit collides across backends, and this service never
+     * probed the bus so it is in no position to invent a better name. Too
+     * long for four argument words, hence the buffer.
+     *
+     * ANSWERED, unlike the publish opcodes, which are fire-and-forget. A
+     * publisher that is told nothing simply tried; a caller retiring a device
+     * is about to stop serving it, and has to know whether the inventory
+     * agreed -- a retire is REFUSED while a filesystem is mounted on the
+     * device, which is the one outcome the caller must not mistake for
+     * success.
+     *
+     * Retiring an id nobody published is refused rather than ignored: a
+     * caller that retires twice would otherwise read the second as having
+     * retired something.
+     */
+    DEVMGR_UNPUBLISH_BLOCK_DEVICE = 0x908,
+    /* Retire one VOLUME from the inventory, by canonical_id in a caller-owned
+     * transfer buffer: arg0=buffer_id arg1=byte_offset arg2=length.
+     * Answered with DEVMGR_UNPUBLISH_RESP.
+     *
+     * Same terms as DEVMGR_UNPUBLISH_BLOCK_DEVICE. What makes this one
+     * necessary is that a volume can cease to exist while its disk does not:
+     * writing a partition table over an unpartitioned disk ends the
+     * whole-disk volume, because the partitions are the volumes from then on.
+     */
+    DEVMGR_UNPUBLISH_VOLUME = 0x909,
+    /* arg0 = 0, or a packed error code: the id is not in the inventory, or a filesystem is still mounted on it. */
+    DEVMGR_UNPUBLISH_RESP = 0x982,
     DEVMGR_MOUNT_INFO = 0x980,
     DEVMGR_QUERY_DONE = 0x981,
 };
@@ -1174,6 +1208,9 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x905: return "DEVMGR_ACPI_SCAN_DONE";
         case 0x906: return "DEVMGR_PUBLISH_DEVICE_DESC";
         case 0x907: return "DEVMGR_PUBLISH_VOLUME";
+        case 0x908: return "DEVMGR_UNPUBLISH_BLOCK_DEVICE";
+        case 0x909: return "DEVMGR_UNPUBLISH_VOLUME";
+        case 0x982: return "DEVMGR_UNPUBLISH_RESP";
         case 0x980: return "DEVMGR_MOUNT_INFO";
         case 0x981: return "DEVMGR_QUERY_DONE";
         default: return "UNKNOWN";

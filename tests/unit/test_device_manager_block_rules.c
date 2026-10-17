@@ -443,6 +443,94 @@ static void a_partition_is_matched_by_its_type_guid(void) {
  *
  * The bytes below are deliberately ascending, so a reversal of any group shows
  * up as a mismatch rather than surviving a palindrome. */
+/* ---- retiring a record ---------------------------------------------------- */
+
+/* A device that goes away leaves the inventory.
+ *
+ * Nothing could retire a record before this: the inventory only ever grew, so a
+ * partition whose table was rewritten kept advertising a window that no longer
+ * existed, and a rule could still match it. */
+static void a_published_device_can_be_retired(void) {
+    harness_reset();
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    check(find_block_record("block:ata:0") != 0, "the disk is in the inventory");
+
+    check(registry_remove_block("block:ata:0") == WASMOS_ERR_NONE, "retiring it succeeds");
+    check(find_block_record("block:ata:0") == 0, "and it is gone from the inventory");
+}
+
+/* Retiring frees the slot for the same id again, which is the case the whole
+ * primitive exists for: a partition that is rewritten comes back under the id it
+ * had, and a record that outlived it would be upserted into rather than
+ * replaced -- carrying the old window's geometry under the new name. */
+static void a_retired_id_can_be_published_again(void) {
+    const block_device_record_t* rec;
+    harness_reset();
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    check(registry_remove_block("block:ata:0") == WASMOS_ERR_NONE, "retire");
+
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    rec = find_block_record("block:ata:0");
+    check(rec != 0, "the id can be claimed again");
+    check(rec && rec->in_use, "and the record is live");
+}
+
+/* Retiring what is not there is REFUSED, not ignored. A caller that retires
+ * twice would otherwise read the second as having retired something. */
+static void retiring_an_unknown_id_is_refused(void) {
+    harness_reset();
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    check(registry_remove_block("block:ata:7") == WASMOS_ERR_DEVMGR_NO_SUCH_RECORD,
+          "an id nobody published is refused");
+    check(registry_remove_block("block:ata:0") == WASMOS_ERR_NONE, "the real one retires");
+    check(registry_remove_block("block:ata:0") == WASMOS_ERR_DEVMGR_NO_SUCH_RECORD,
+          "and retiring it a second time is refused");
+}
+
+/* A device a filesystem is mounted on is refused, because the mount still
+ * addresses it. Same rule as umount's, and for the same reason: the caller
+ * unmounts first. */
+static void retiring_a_device_in_use_is_refused(void) {
+    block_device_record_t* rec;
+    harness_reset();
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    rec = find_block_record("block:ata:0");
+    check(rec != 0, "the disk is in the inventory");
+    if (rec) {
+        rec->active_service = 1;
+    }
+    check(registry_remove_block("block:ata:0") == WASMOS_ERR_DEVMGR_RECORD_BUSY,
+          "a device with a filesystem on it is refused");
+    check(find_block_record("block:ata:0") != 0, "and is still in the inventory");
+}
+
+/* An id that is empty, or longer than the field, names nothing: refused as a
+ * malformed request rather than failing to match. */
+static void retiring_a_malformed_id_is_refused(void) {
+    char overlong[BLOCK_DESCRIPTOR_ID_MAX + 8];
+    harness_reset();
+    memset(overlong, 'x', sizeof(overlong) - 1u);
+    overlong[sizeof(overlong) - 1u] = '\0';
+    check(registry_remove_block("") == WASMOS_ERR_DEVMGR_BAD_RECORD_ID, "an empty id is refused");
+    check(registry_remove_block(overlong) == WASMOS_ERR_DEVMGR_BAD_RECORD_ID,
+          "an over-long id is refused");
+    check(registry_remove_block(0) == WASMOS_ERR_DEVMGR_BAD_RECORD_ID, "a null id is refused");
+}
+
+/* Retiring one device leaves its neighbours alone -- including a partition of
+ * the same disk, which shares backend and unit and differs only in the id. */
+static void retiring_one_device_leaves_the_others(void) {
+    harness_reset();
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    publish_partition((uint8_t)BLOCK_BACKEND_ATA, 0u, 1u, "ESP", 0u, 0u, 0);
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 1u);
+
+    check(registry_remove_block("block:ata:0p1") == WASMOS_ERR_NONE, "the partition retires");
+    check(find_block_record("block:ata:0p1") == 0, "and is gone");
+    check(find_block_record("block:ata:0") != 0, "its disk is untouched");
+    check(find_block_record("block:ata:1") != 0, "and so is the other disk");
+}
+
 static void a_volume_is_matched_by_the_uuid_its_formatter_printed(void) {
     static const uint8_t WFS_UUID[16] = {0x01,
                                          0x02,
@@ -759,6 +847,12 @@ int main(void) {
     a_partition_rule_does_not_match_a_disk();
     a_partition_is_matched_by_its_label();
     a_partition_is_matched_by_its_type_guid();
+    a_published_device_can_be_retired();
+    a_retired_id_can_be_published_again();
+    retiring_an_unknown_id_is_refused();
+    retiring_a_device_in_use_is_refused();
+    retiring_a_malformed_id_is_refused();
+    retiring_one_device_leaves_the_others();
     a_volume_is_matched_by_the_uuid_its_formatter_printed();
     a_volume_uuid_may_be_spelled_without_hyphens();
     a_short_format_identity_is_spelled_at_its_own_width();

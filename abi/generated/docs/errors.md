@@ -356,6 +356,9 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 |---|---|---|
 | `WASMOS_ERR_DEVMGR_NO_MOUNT_RULE` | -0x000A0001 | no block/filesystem mount rule matches the requested unit |
 | `WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY` | -0x000A0002 | unknown or unsupported device-manager query type |
+| `WASMOS_ERR_DEVMGR_NO_SUCH_RECORD` | -0x000A0003 | the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something |
+| `WASMOS_ERR_DEVMGR_RECORD_BUSY` | -0x000A0004 | a filesystem is mounted on the device or volume named for retirement. Refused rather than retired because the mount still addresses it: the caller must unmount first, exactly as umount refuses a busy mount |
+| `WASMOS_ERR_DEVMGR_BAD_RECORD_ID` | -0x000A0005 | the id named for retirement was empty, unterminated, or longer than the inventory's id field |
 
 ### `virtio_blk` (domain 24) — virtio-blk block-device server failures. Distinct from `block`, which describes the staging buffer a transfer moves through: these describe the device and the request, and are what a BLOCK_IPC_ERROR reply carries in arg0.
 

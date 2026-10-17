@@ -1142,7 +1142,19 @@ tail.
   the guest wrapper for `SVC_IPC_UNREGISTER_CLASS_REQ` has to be built on an IPC
   future first -- the volume and partition managers are async services and must
   not block. Retiring from one of the two views and not the other is worse than
-  neither, because the inventory and the class registry then disagree.) `VOLUME_IPC_RESCAN_REQ` re-probes a device and updates its volume in
+  neither, because the inventory and the class registry then disagree.
+
+  Coverage of the retire path, stated so it is not mistaken for complete: the
+  registry half is host-tested and mutation-checked -- both inventories, the
+  three refusals, and slot reuse across repeated retire/publish cycles.
+  `dm_handle_unpublish` is NOT: the transfer-buffer decode, its length bound,
+  the termination and the reply are unreached, because the host stubs for
+  `wasmos_xfer_buffer_read` and `wasmos_ipc_send` are inert and testing through
+  them tests the stubs -- the same reason `registry_add_block` was split from
+  its own decode. There is no integration test either, since nothing sends the
+  opcode. Both gaps close with the caller.)
+
+  `VOLUME_IPC_RESCAN_REQ` re-probes a device and updates its volume in
   place, which covers a disk that gained or changed a filesystem. It cannot cover
   a disk that gained a PARTITION TABLE, because the volume on the whole device
   should then stop existing -- and retiring one means unregistering it from the

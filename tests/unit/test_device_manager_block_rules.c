@@ -531,6 +531,86 @@ static void retiring_one_device_leaves_the_others(void) {
     check(find_block_record("block:ata:1") != 0, "and so is the other disk");
 }
 
+/* The volume half of retirement, which has its own registry and its own lookup.
+ *
+ * It exists for a case the block half does not cover: a volume can cease to
+ * exist while its disk does not. Writing a partition table over an
+ * unpartitioned disk ends the whole-disk volume, because from then on the
+ * partitions are the volumes. */
+static void a_published_volume_can_be_retired(void) {
+    harness_reset();
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, 0, 0, 0u);
+    check(find_volume_record("volume:block:ata:2") != 0, "the volume is in the inventory");
+
+    check(registry_remove_volume("volume:block:ata:2") == WASMOS_ERR_NONE, "retiring it succeeds");
+    check(find_volume_record("volume:block:ata:2") == 0, "and it is gone");
+    /* Its backing DEVICE is untouched: the disk did not go away, the volume on
+     * it did, which is the whole distinction between the two inventories. */
+    check(find_block_record("block:ata:2") != 0, "the disk it sat on is still there");
+}
+
+/* A mounted volume is refused, and an unknown id is refused, on the same terms
+ * as the block half. Asserted separately because the two registries are
+ * separate arrays with separate lookups -- a fix applied to one would not reach
+ * the other. */
+static void retiring_a_volume_is_refused_when_it_should_be(void) {
+    volume_record_t* rec;
+    harness_reset();
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, 0, 0, 0u);
+    check(registry_remove_volume("volume:block:ata:9") == WASMOS_ERR_DEVMGR_NO_SUCH_RECORD,
+          "a volume nobody published is refused");
+    check(registry_remove_volume("") == WASMOS_ERR_DEVMGR_BAD_RECORD_ID, "an empty id is refused");
+
+    rec = find_volume_record("volume:block:ata:2");
+    check(rec != 0, "the volume is there");
+    if (rec) {
+        rec->active_service = 1;
+    }
+    check(registry_remove_volume("volume:block:ata:2") == WASMOS_ERR_DEVMGR_RECORD_BUSY,
+          "a mounted volume is refused");
+    check(find_volume_record("volume:block:ata:2") != 0, "and is still in the inventory");
+}
+
+/* Retiring frees the SLOT, not just the name.
+ *
+ * Rewriting a partition table retires and republishes every partition on the
+ * disk, so an inventory that marked a record dead without reusing its slot
+ * would exhaust its capacity after a few edits -- silently, because the publish
+ * path simply returns when it is full. Pinned by the count rather than by
+ * behaviour, since nothing else observes the difference until the array is
+ * exhausted. */
+static void retiring_frees_the_slot_for_reuse(void) {
+    uint32_t after_first;
+    harness_reset();
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    after_first = g_dm.block_registry_count;
+    check(after_first == 1u, "one device, one slot");
+
+    for (uint32_t i = 0; i < 8u; ++i) {
+        check(registry_remove_block("block:ata:0") == WASMOS_ERR_NONE, "retire");
+        publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    }
+    check(g_dm.block_registry_count == after_first,
+          "eight retire/publish cycles consume no additional slots");
+    check(find_block_record("block:ata:0") != 0, "and the device is still published");
+}
+
+/* The same for volumes, whose registry is a separate array. */
+static void retiring_a_volume_frees_its_slot(void) {
+    uint32_t after_first;
+    harness_reset();
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, 0, 0, 0u);
+    after_first = g_dm.volume_registry_count;
+    check(after_first == 1u, "one volume, one slot");
+
+    for (uint32_t i = 0; i < 8u; ++i) {
+        check(registry_remove_volume("volume:block:ata:2") == WASMOS_ERR_NONE, "retire");
+        publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, 0, 0, 0u);
+    }
+    check(g_dm.volume_registry_count == after_first,
+          "eight retire/publish cycles consume no additional slots");
+}
+
 static void a_volume_is_matched_by_the_uuid_its_formatter_printed(void) {
     static const uint8_t WFS_UUID[16] = {0x01,
                                          0x02,
@@ -848,6 +928,10 @@ int main(void) {
     a_partition_is_matched_by_its_label();
     a_partition_is_matched_by_its_type_guid();
     a_published_device_can_be_retired();
+    a_published_volume_can_be_retired();
+    retiring_a_volume_is_refused_when_it_should_be();
+    retiring_frees_the_slot_for_reuse();
+    retiring_a_volume_frees_its_slot();
     a_retired_id_can_be_published_again();
     retiring_an_unknown_id_is_refused();
     retiring_a_device_in_use_is_refused();

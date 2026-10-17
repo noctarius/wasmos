@@ -341,20 +341,26 @@ int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg)
  * service endpoint is required, not stylistic: a registrant that blocks for its
  * reply on the endpoint it is simultaneously serving can consume the reply as
  * request traffic, or serve a request in place of the reply, and deadlock. */
-/* Answer a REFUSED descriptor registration with `code`, and return -1.
+/* Answer a REFUSED descriptor registration with `code`.
  *
- * Every failure below used to return without sending anything, which left the
- * registrant blocked in the call it makes at bring-up: wasmos_svc_register_class
- * is a request/reply, so no reply is not an error the caller can see, it is a
- * wait that never ends. A driver whose name or class was already held therefore
- * hung with nothing in the log, and the service it was replacing stayed missing.
+ * Returns 0 once the refusal is sent, because the request IS then handled: the
+ * dispatcher sends its own SVC_IPC_ERROR for any non-zero return
+ * (process_manager.cpp), so returning a failure here would put a SECOND error on
+ * the same request_id -- with a different argument layout, arriving after the
+ * caller has already consumed the first, where it can be taken for the reply to
+ * a later request that reuses the id.
  *
- * The reply is SVC_IPC_ERROR rather than a RESP carrying a negative arg0: the
- * guest helper treats any non-RESP as failure and returns -1, so this needs no
- * change on the registrant's side to unblock it.
+ * Returns -1 only when the reply could not be SENT, which leaves the
+ * dispatcher's attempt as the fallback.
  *
- * If the reply itself cannot be sent there is nothing further to do -- the
- * caller is unreachable by construction -- so the refusal is still returned. */
+ * A refusal is owed at all because the registrant is blocked in a request/reply:
+ * no reply is not an error it can see, it is a wait that never ends. A driver
+ * whose name or class was already held hung with nothing in the log, and the
+ * service it was replacing stayed missing.
+ *
+ * SVC_IPC_ERROR rather than a RESP carrying a negative arg0: the guest helper
+ * treats any non-RESP as failure, so this needs no change on the registrant's
+ * side to unblock it. */
 static int pm_service_register_refuse(uint32_t pm_context_id, const ipc_message_t* msg,
                                       wasmos_error_code_t code) {
     ipc_message_t resp;
@@ -366,8 +372,7 @@ static int pm_service_register_refuse(uint32_t pm_context_id, const ipc_message_
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    (void)ipc_send_from(pm_context_id, msg->source, &resp);
-    return -1;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 
 int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -565,9 +570,13 @@ int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg) 
  * The owner is the context behind msg->source, never anything the request names,
  * which is what makes "only the owner may retire it" enforceable here rather
  * than merely asserted: a caller cannot claim to be somebody else by filling in
- * a field. Returns 0 once the SVC_IPC_UNREGISTER_CLASS_RESP is sent, or -1 --
- * which the dispatcher turns into SVC_IPC_ERROR -- for an unreadable buffer or a
- * (class, instance) that is not the caller's to retire. */
+ * a field.
+ *
+ * Returns 0 once the SVC_IPC_UNREGISTER_CLASS_RESP is sent, else a packed code
+ * the dispatcher carries in SVC_IPC_ERROR.arg1: BAD_ENDPOINT when the source has
+ * no resolvable owner, CALLER_FSBUF when the class name could not be read out of
+ * the caller's buffer, SVC_CLASS_NOT_OWNED when the registry refused, and
+ * REPLY_SEND when only the reply failed. */
 int pm_handle_class_unregister(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner = 0;
     uint32_t buffer_id = (uint32_t)msg->arg0;
@@ -577,16 +586,16 @@ int pm_handle_class_unregister(uint32_t pm_context_id, const ipc_message_t* msg)
     ipc_message_t resp;
 
     if (ipc_endpoint_owner(msg->source, &owner) != IPC_OK) {
-        return -1;
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     buf = pm_foreign_xfer_ptr(buffer_id, owner, 0);
     if (!buf) {
-        return -1;
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
     str_copy(class_name, sizeof(class_name), (const char*)buf);
     pm_service_class_ensure(pm_context_id);
     if (service_class_registry_remove(class_name, instance, owner) != 0) {
-        return -1;
+        return WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED;
     }
     resp.type = SVC_IPC_UNREGISTER_CLASS_RESP;
     resp.source = g_pm.proc_endpoint;
@@ -596,7 +605,9 @@ int pm_handle_class_unregister(uint32_t pm_context_id, const ipc_message_t* msg)
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 /* Registers a subsystem broker (PROC_IPC_SUBSYSTEM_REGISTER_BROKER): arg1 is the

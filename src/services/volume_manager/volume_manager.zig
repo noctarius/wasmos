@@ -450,7 +450,10 @@ fn queueArrival(instance: u32, provider_endpoint: i32, force: bool, reply_to: i3
     // appear here -- unlike the partition manager, which publishes INTO the class
     // it subscribes to. Checked anyway: the cost is one comparison and the
     // failure it prevents is IDENTIFYing ourselves and blocking forever.
-    if (provider_endpoint == endpoint()) {
+    // Our own endpoint serves the `volume` class, so it never arrives under
+    // `block`; a rescan passes -1 because its provider is resolved on the root
+    // task, and must not be caught by this.
+    if (provider_endpoint >= 0 and provider_endpoint == endpoint()) {
         if (reply_to >= 0) sendError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_BAD_REQUEST);
         return;
     }
@@ -498,7 +501,7 @@ fn drainArrivals() void {
     for (&g_pending) |*a| {
         if (!a.in_use) continue;
         const instance = a.instance;
-        const provider_endpoint = a.endpoint;
+        var provider_endpoint = a.endpoint;
         const force = a.force;
         const reply_to = a.reply_to;
         const reply_id = a.reply_id;
@@ -511,6 +514,16 @@ fn drainArrivals() void {
                 _ = driver.send(reply_to, endpoint(), op.VOLUME_IPC_RESP, reply_id, 0, 1, 0, 0);
             }
             continue;
+        }
+        if (provider_endpoint < 0) {
+            // A rescan queued without one. Resolved here rather than in the
+            // handler because the lookup blocks.
+            provider_endpoint = findBlockProvider(instance) orelse {
+                if (reply_to >= 0) {
+                    sendError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT);
+                }
+                continue;
+            };
         }
         const present = probeDevice(instance, provider_endpoint);
         if (reply_to >= 0) {
@@ -645,14 +658,18 @@ fn handleRescan(msg: *const co.IpcMessage) void {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_BAD_REQUEST);
         return;
     }
-    const provider = findBlockProvider(instance) orelse {
-        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT);
-        return;
-    };
-    queueArrival(instance, provider, true, msg.source, msg.request_id);
+    // The provider is NOT resolved here. Looking it up means a class lookup
+    // against the process manager, which blocks -- and a handler that blocks
+    // stops this service dispatching the IDENTIFY and CLAIM requests it exists
+    // to answer, for as long as the process manager takes. The root task already
+    // does the blocking half of a probe; the lookup belongs beside it.
+    queueArrival(instance, -1, true, msg.source, msg.request_id);
 }
 
 /// The endpoint serving `instance` in the `block` class, or null.
+///
+/// Called from the ROOT task only: a class lookup waits for the process
+/// manager's reply.
 ///
 /// Looked up per rescan rather than remembered from the arrival that first
 /// probed the device: a backend can be restarted, and a rescan naming a stale

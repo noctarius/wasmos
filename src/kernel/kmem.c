@@ -106,7 +106,11 @@ void* kmem_alloc(size_t size) {
     /* Too big for the slab: take pages, which kmem_free can return. */
     need = (uint64_t)sizeof(kmem_page_header_t) + (uint64_t)size;
     pages = (need + KMEM_PAGE_BYTES - 1u) / KMEM_PAGE_BYTES;
-    phys = pfa_alloc_pages(pages);
+    /* Constrained to the higher-half window: the block is reached at
+     * `phys | KERNEL_HIGHER_HALF_BASE`, and a frame above the window has no such
+     * alias (paging.h). The unconstrained form can return one, and the header
+     * write below would fault. */
+    phys = pfa_alloc_pages_below(pages, KERNEL_HIGHER_HALF_WINDOW_BYTES);
     if (phys) {
         hdr = (kmem_page_header_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
         hdr->magic = KMEM_PAGE_MAGIC;

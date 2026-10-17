@@ -29,6 +29,9 @@
 /* --- Driver singleton state (owned here; passed by pointer to the modules). --- */
 static int32_t g_proc_endpoint = -1;
 static int32_t g_fs_endpoint = -1; /* the fs.backend service endpoint (clients) */
+/* The endpoint that pulled this backend's info: fs-manager, which owns the
+ * mount. Only it may end this process by unmounting. -1 until the first pull. */
+static int32_t g_mount_owner = -1;
 
 static fat_block_t g_blk;
 static fat_mount_t g_mnt;
@@ -231,6 +234,12 @@ static int32_t fat_send_reply(int32_t dest, int32_t type, uint32_t request_id, i
 static void fat_report_backend_info(int32_t dst, int32_t request_id, int32_t buffer_id) {
     int32_t name_len = 0;
     int32_t source_len = 0;
+    /* The mount's owner, learned rather than configured: fs-manager is the only
+     * thing that pulls backend info, and it does so before this driver reports
+     * ready. Recorded because an UNMOUNT ends this process, and the sender of a
+     * shutdown is otherwise unchecked -- IPC authenticates the SOURCE endpoint's
+     * owner, not its authority. */
+    g_mount_owner = dst;
     if (buffer_id > 0 && g_mount_len > 0 &&
         wasmos_xfer_buffer_write(buffer_id, g_mount_name, g_mount_len, 0) == 0) {
         name_len = g_mount_len;
@@ -718,9 +727,19 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 int32_t sd_reason = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
                 (void)fat_send_reply(
                     sd_src, WASMOS_IPC_SHUTDOWN_DONE, (uint32_t)sd_req, 0, 0, 0, 0);
+                /* Only the mount's OWNER may end this process. IPC checks that a
+                 * message came from the endpoint it claims, not that its sender
+                 * is entitled to what it asks, so an ordinary client that found
+                 * this backend through the `fs.backend` class could otherwise
+                 * unmount it by naming reason 2 -- bypassing fs-manager's busy
+                 * and bootstrap rules, `/boot` included. A machine shutdown is
+                 * not gated: it does not end this process here. */
                 if (sd_reason == WASMOS_SHUTDOWN_REASON_UNMOUNT) {
-                    fat_log("unmounted\n");
-                    return 0;
+                    if (g_mount_owner >= 0 && sd_src == g_mount_owner) {
+                        fat_log("unmounted\n");
+                        return 0;
+                    }
+                    fat_log("ignoring an unmount from something that does not own this mount\n");
                 }
                 continue;
             }

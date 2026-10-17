@@ -30,6 +30,17 @@ __attribute__((weak)) uint64_t pfa_alloc_pages(uint64_t pages) {
     return 0;
 }
 
+/* The constrained form kmem takes its page-backed blocks through: a frame above
+ * the higher-half window has no `phys | KERNEL_HIGHER_HALF_BASE` alias. Refusing
+ * here, like the unconstrained form above, keeps every suite that links this on
+ * the slab and early-arena paths; tests/unit/test_kmem.c brings its own frame
+ * allocator precisely because it needs the page path to be reachable. */
+__attribute__((weak)) uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
+    (void)pages;
+    (void)max_addr;
+    return 0;
+}
+
 __attribute__((weak)) void pfa_free_pages(uint64_t base, uint64_t pages) {
     (void)base;
     (void)pages;

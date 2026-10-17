@@ -1125,6 +1125,15 @@ tail.
   The first is the larger win, because it removes round trips rather than making
   each one faster.
 
+- [ ] [FEATURE][P2] A guest-side wrapper for `SVC_IPC_UNREGISTER_CLASS_REQ`. The
+  kernel primitive and the opcode exist (`service_class_registry_remove`,
+  `pm_handle_class_unregister`), but nothing in a guest can send it: the obvious
+  wrappers are synchronous request/reply, and the caller this is FOR -- the
+  partition manager retiring a partition whose table was rewritten -- is an async
+  service that would stop dispatching while it waited. AGENTS.md bans adding
+  those, so the wrapper comes with the caller, built on an IPC future with the
+  staged class-name buffer held alive until the reply lands.
+
 - [ ] [ENHANCEMENT][P2] A rescan can change what a volume IS but not make one go
   away. `VOLUME_IPC_RESCAN_REQ` re-probes a device and updates its volume in
   place, which covers a disk that gained or changed a filesystem. It cannot cover

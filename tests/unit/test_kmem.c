@@ -110,6 +110,22 @@ uint64_t pfa_alloc_pages(uint64_t pages) {
     return 0;
 }
 
+/* The constrained form, and the ceiling it was asked for.
+ *
+ * kmem must take frames through THIS one: a page-backed block is reached at
+ * `phys | KERNEL_HIGHER_HALF_BASE`, and that alias exists only for the first
+ * KERNEL_HIGHER_HALF_WINDOW_BYTES of physical memory. A frame above the window
+ * has no alias, so writing the block's header would fault in the kernel. */
+static int g_pfa_below_allocs;
+static uint64_t g_pfa_below_max;
+
+uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
+    (void)pages;
+    g_pfa_below_allocs++;
+    g_pfa_below_max = max_addr;
+    return 0;
+}
+
 void pfa_free_pages(uint64_t base, uint64_t pages) {
     g_pfa_frees++;
     g_pfa_last_free_base = base;
@@ -123,6 +139,8 @@ static void reset(void) {
     g_slab_last_free = 0;
     g_slab_off = 64u;
     g_pfa_allocs = 0;
+    g_pfa_below_allocs = 0;
+    g_pfa_below_max = 0;
     g_pfa_frees = 0;
     g_pfa_last_free_base = 0;
     g_pfa_last_free_pages = 0;
@@ -274,6 +292,31 @@ static void test_an_early_arena_block_is_dropped_by_both_other_allocators(void) 
     expect(g_slab_frees == 0, "and it is not a slab block either");
 }
 
+/* A frame for a page-backed block is taken from inside the higher-half window.
+ *
+ * kmem reaches such a block at `phys | KERNEL_HIGHER_HALF_BASE`, and paging.h is
+ * explicit that the alias covers only the first KERNEL_HIGHER_HALF_WINDOW_BYTES:
+ * "a physical address beyond that has no alias and must not be OR-ed with this
+ * base". An unconstrained pfa_alloc_pages can return one above it, and kmem
+ * would then fault writing the header -- in the kernel, on a machine with more
+ * than 512 MiB of RAM, which no QEMU test configuration has.
+ *
+ * `slab_class_grow` already takes its frames this way, for the same reason.
+ *
+ * Regression: 2026-10-17-kmem-frame-outside-the-direct-map */
+static void test_a_page_backed_frame_comes_from_inside_the_direct_map(void) {
+    reset();
+    g_slab_limit = 0u; /* nothing is small enough, so the page path is taken */
+
+    (void)kmem_alloc(4000u);
+    expect(g_pfa_below_allocs == 1, "the frame is requested through the constrained allocator");
+    expect(g_pfa_allocs == 0,
+           "and never through the unconstrained one, which can return a frame "
+           "the higher-half alias does not cover");
+    expect(g_pfa_below_max == KERNEL_HIGHER_HALF_WINDOW_BYTES,
+           "bounded by the window paging.h documents, not by a private copy of it");
+}
+
 /* Freeing NULL is a no-op, which callers rely on for their error paths. */
 static void test_freeing_null_reaches_nothing(void) {
     reset();
@@ -293,6 +336,7 @@ int main(void) {
     test_a_forged_header_at_the_right_offset_is_still_rejected();
     test_a_well_formed_page_backed_block_returns_its_pages();
     test_an_early_arena_block_is_dropped_by_both_other_allocators();
+    test_a_page_backed_frame_comes_from_inside_the_direct_map();
     test_freeing_null_reaches_nothing();
     test_a_zero_size_request_is_refused();
 

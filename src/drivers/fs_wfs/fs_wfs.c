@@ -75,6 +75,9 @@
 
 static int32_t g_proc_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
+/* The endpoint that pulled this backend's info: fs-manager, which owns the
+ * mount. Only it may end this process by unmounting. -1 until the first pull. */
+static int32_t g_mount_owner = -1;
 static int32_t g_reply_endpoint = -1;
 
 static wasmos_wasm_runtime_t g_runtime;
@@ -722,6 +725,12 @@ static void wfs_do_close(int32_t src, int32_t request_id, int32_t fd) {
 /* ---- fs-manager identity ------------------------------------------------ */
 
 static void wfs_report_backend_info(int32_t dst, int32_t request_id, int32_t buffer_id) {
+    /* The mount's owner, learned rather than configured: fs-manager is the only
+     * thing that pulls backend info, and it does so before this driver reports
+     * ready. Recorded because an UNMOUNT ends this process, and the sender of a
+     * shutdown is otherwise unchecked -- IPC authenticates the SOURCE endpoint's
+     * owner, not its authority. */
+    g_mount_owner = dst;
     int32_t name_len = 0;
     int32_t source_len = 0;
 
@@ -1025,8 +1034,18 @@ static void wfs_do_shutdown(int32_t src, int32_t request_id, int32_t reason) {
      * The reactor checks this between messages rather than exiting here: the
      * clean mark is the one thing this driver exists to get right, and leaving
      * mid-handler is how a filesystem loses it. */
+    /* Only the mount's OWNER may end this process. IPC checks that a message came
+     * from the endpoint it claims, not that its sender is entitled to what it
+     * asks, so an ordinary client that found this backend through the
+     * `fs.backend` class could otherwise unmount it by naming reason 2 --
+     * bypassing fs-manager's busy and bootstrap rules. A machine shutdown is not
+     * gated: it does not end this process here. */
     if (reason == WASMOS_SHUTDOWN_REASON_UNMOUNT) {
-        g_unmounted = 1;
+        if (g_mount_owner >= 0 && src == g_mount_owner) {
+            g_unmounted = 1;
+        } else {
+            wfs_log("[fs-wfs] ignoring an unmount from something that does not own this mount\n");
+        }
     }
 }
 

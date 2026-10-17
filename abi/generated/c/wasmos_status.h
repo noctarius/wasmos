@@ -107,6 +107,7 @@ enum {
     WASMOS_ERR_PROC_PM_NO_PM_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 26), /* PM could not acquire its own xfer buffer */
     WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 27), /* that service name is held by another live process */
     WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 28), /* that (class, instance) is held by another live process */
+    WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 29), /* the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on */
     WASMOS_ERR_LINMEM_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 1), /* no free page-aligned window fits in linear memory */
     WASMOS_ERR_LINMEM_MAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 2), /* paging/linear-memory mapping step failed */
     WASMOS_ERR_LINMEM_NO_BASE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 3), /* the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it */
@@ -414,6 +415,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "proc_pm.NO_PM_FSBUF";
     case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "proc_pm.SVC_NAME_TAKEN";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "proc_pm.SVC_CLASS_TAKEN";
+    case WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: return "proc_pm.SVC_CLASS_NOT_OWNED";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "linmem.NO_WINDOW";
     case WASMOS_ERR_LINMEM_MAP: return "linmem.MAP";
     case WASMOS_ERR_LINMEM_NO_BASE: return "linmem.NO_BASE";
@@ -655,6 +657,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_NO_PM_FSBUF: return "PM could not acquire its own xfer buffer";
     case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "that service name is held by another live process";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "that (class, instance) is held by another live process";
+    case WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: return "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";

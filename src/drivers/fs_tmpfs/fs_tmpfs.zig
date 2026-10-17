@@ -265,6 +265,9 @@ var g_park_future: co.Future = .{};
 var g_park_promise: co.Promise = .{};
 /// Set when an UNMOUNT quiesce has been answered, so the root task completes on
 /// its next resume instead of parking again. Read only by rootTask.
+/// The endpoint that pulled this backend's info: fs-manager, which owns the
+/// mount. Only it may end this process by unmounting. -1 until the first pull.
+var g_mount_owner: i32 = -1;
 var g_unmounted: bool = false;
 
 // --- async service contract --------------------------------------------------
@@ -690,6 +693,11 @@ fn handleRename(cwd: u16, msg: *const co.IpcMessage) void {
 fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
     _ = user;
     if (msg.type == op.FSMGR_IPC_BACKEND_INFO_REQ) {
+        // The mount's owner, learned rather than configured: fs-manager is the
+        // only thing that pulls backend info, and it does so before this driver
+        // reports ready. Recorded because an UNMOUNT ends this process, and the
+        // sender of a shutdown is otherwise unchecked.
+        g_mount_owner = msg.source;
         handleBackendInfo(msg);
         return;
     }
@@ -725,9 +733,21 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
         //
         // DONE is sent FIRST and the send is synchronous, so fs-manager has the
         // reply queued before any of that begins.
+        //
+        // Only the mount's OWNER may end this process. IPC checks that a message
+        // came from the endpoint it claims, not that its sender is entitled to
+        // what it asks, so an ordinary client that found this backend through the
+        // `fs.backend` class could otherwise unmount it by naming reason 2 --
+        // bypassing fs-manager's busy and bootstrap rules, and for the root
+        // instance taking the whole namespace down. A machine shutdown is not
+        // gated: it does not end this process here.
         if (msg.arg0 == SHUTDOWN_REASON_UNMOUNT) {
-            g_unmounted = true;
-            _ = g_park_promise.resolve(0);
+            if (g_mount_owner >= 0 and msg.source == g_mount_owner) {
+                g_unmounted = true;
+                _ = g_park_promise.resolve(0);
+            } else {
+                driver.log("[fs-tmpfs] ignoring an unmount from something that does not own this mount");
+            }
         }
         return;
     }

@@ -73,6 +73,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_NO_PM_FSBUF` | -0x0002001A | PM could not acquire its own xfer buffer |
 | `WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN` | -0x0002001B | that service name is held by another live process |
 | `WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN` | -0x0002001C | that (class, instance) is held by another live process |
+| `WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED` | -0x0002001D | the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 

@@ -90,6 +90,7 @@ domains:
       # in the middle renumbers every code after it in this domain.
       - { name: SVC_NAME_TAKEN,  description: "that service name is held by another live process" }
       - { name: SVC_CLASS_TAKEN, description: "that (class, instance) is held by another live process" }
+      - { name: SVC_CLASS_NOT_OWNED,  description: "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on" }
 
   linmem:
     id: 3

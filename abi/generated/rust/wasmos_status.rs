@@ -86,6 +86,7 @@ pub const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: i32 = -0x00020019; // caller lacks 
 pub const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001A; // PM could not acquire its own xfer buffer
 pub const WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: i32 = -0x0002001B; // that service name is held by another live process
 pub const WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: i32 = -0x0002001C; // that (class, instance) is held by another live process
+pub const WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: i32 = -0x0002001D; // the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on
 pub const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 pub const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 pub const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -384,6 +385,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_PROC_PM_NO_PM_FSBUF => "PM could not acquire its own xfer buffer",
         WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN => "that service name is held by another live process",
         WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN => "that (class, instance) is held by another live process",
+        WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED => "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on",
         WASMOS_ERR_LINMEM_NO_WINDOW => "no free page-aligned window fits in linear memory",
         WASMOS_ERR_LINMEM_MAP => "paging/linear-memory mapping step failed",
         WASMOS_ERR_LINMEM_NO_BASE => "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it",

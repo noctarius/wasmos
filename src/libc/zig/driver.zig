@@ -991,39 +991,6 @@ pub fn subscribeClass(proc_endpoint: i32, notify_endpoint: i32, class_name: []co
     return reply.type == op.SVC_IPC_SUBSCRIBE_CLASS_RESP;
 }
 
-/// Retire a class registration this process made, so the (class, instance) stops
-/// being advertised and its subscribers are told it is gone.
-///
-/// Only the OWNER may retire one, and the process manager takes the owner from
-/// the request's source endpoint rather than from anything named here -- so a
-/// caller cannot retire a registration belonging to something else.
-///
-/// Returns false when the registry refused: the (class, instance) is not
-/// registered, or is registered to somebody else. Both are the same answer from
-/// out here, because they are the same answer: it is not yours to retire.
-pub fn unregisterClass(proc_endpoint: i32, class_name: []const u8, instance: u32, request_id: i32) bool {
-    const reply_ep = registryReplyEndpoint();
-    if (reply_ep < 0) return false;
-
-    var cn: [SVC_CLASS_MAX]u8 = [_]u8{0} ** SVC_CLASS_MAX;
-    copyName(&cn, class_name);
-
-    const bid = bufferStage(cn[0..]) orelse return false;
-    defer bufferRelease(bid);
-
-    const reply = call(
-        proc_endpoint,
-        reply_ep,
-        op.SVC_IPC_UNREGISTER_CLASS_REQ,
-        request_id,
-        bid,
-        @bitCast(instance),
-        0,
-        0,
-    ) orelse return false;
-    return reply.type == op.SVC_IPC_UNREGISTER_CLASS_RESP;
-}
-
 /// Tell the process manager this driver is ready to serve, and wait for the
 /// acknowledgement.
 ///

@@ -133,14 +133,7 @@ typedef struct {
  * cannot go back and change it. */
 typedef struct {
     uint8_t in_use;
-    /* FIXME: never set. Nothing in this service assigns it a non-zero value --
-     * rule_spawn_complete marks the RULE spawned, not the record -- so it reads
-     * as "no filesystem" for every device, mounted or not. Setting it on mount
-     * alone would be worse than leaving it: devmgr is never told about an
-     * unmount, so the flag would latch and no device mounted once could ever be
-     * retired. Fixing it needs a mount/unmount notification this service does
-     * not get. */
-    uint8_t active_service;
+    uint8_t active_service; /* non-zero once a block-fs driver is running */
     wasmos_block_descriptor_t desc;
     char hash_id[17]; /* 16-char SHA-256 prefix of desc.canonical_id + NUL */
 } block_device_record_t;
@@ -158,7 +151,7 @@ typedef struct {
  * the id already put it -- see devmgr_backing_id_for_volume. */
 typedef struct {
     uint8_t in_use;
-    uint8_t active_service; /* FIXME: never set; see block_device_record_t */
+    uint8_t active_service; /* non-zero once a filesystem is mounted on it */
     wasmos_volume_descriptor_t desc;
 } volume_record_t;
 
@@ -272,12 +265,6 @@ typedef struct {
      * handed the driver 0xFF as though it were a unit number. */
     uint8_t matched_backend;
     uint8_t matched_unit;
-    /* Whether a VOLUME selected this rule, as opposed to the block device.
-     * `matched_id` is the backing device's id either way -- the driver mounts a
-     * block device -- so without this a retiring volume could not tell which
-     * queued rules it had armed, and would cancel a rule the DISK had matched.
-     * Meaningful only while `queued`. */
-    uint8_t matched_from_volume;
     /* The matched device's canonical id, copied verbatim so the filesystem
      * driver can fingerprint the SAME string its backend registered under. The
      * driver is given the id rather than (driver, unit) to rebuild it from,

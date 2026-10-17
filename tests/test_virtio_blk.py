@@ -111,9 +111,7 @@ class VirtioBlkTest(unittest.TestCase):
             _config_with_disk(_make_disk(cls.disk_dir)), timeout_s=180
         )
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=150):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt(timeout_s=150)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -431,9 +429,7 @@ class VirtioBlkIntxFallbackTest(unittest.TestCase):
         cfg = _config_with_disk(_make_disk(cls.disk_dir), device_opts=",vectors=0")
         cls.session = QemuSession(cfg, timeout_s=180)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=150):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt(timeout_s=150)
 
     @classmethod
     def tearDownClass(cls) -> None:

@@ -59,9 +59,7 @@ class MkfsWfsTest(unittest.TestCase):
         cfg.wfs_image = image
         cls.session = QemuSession(cfg, timeout_s=300)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=200):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt(timeout_s=200)
 
     @classmethod
     def tearDownClass(cls) -> None:

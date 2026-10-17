@@ -79,10 +79,7 @@ class GfxSurfaceRecycleTest(unittest.TestCase):
         cfg.display = "none"
         cls.session = QemuSession(cfg, timeout_s=240, echo=True)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=200):
-            tail = cls.session.tail()
-            cls.session.close()
-            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
+        cls.session.require_prompt(timeout_s=200)
         # Wait for gfx_smoke to finish its resize sequence and settle. Its wait
         # loop is the last thing it prints, so reaching it means every surface
         # exchange the boot performs has happened.

@@ -220,9 +220,7 @@ class NetStackHttpsVerifyE2ETest(unittest.TestCase):
             shutil.copyfile(kernel_src, kernel_dst)
         cls.session = QemuSession(cfg, timeout_s=180)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=120):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt(timeout_s=120)
         # Wait for the interface AND the CA trust store to be ready before driving
         # TLS, so neither assertion races the async CA load.
         if not cls.session.expect(b"[net-stack] eth0 10.0.2.15/24 ready", timeout_s=90):

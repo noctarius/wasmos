@@ -73,10 +73,7 @@ class LibuiClickTest(unittest.TestCase):
             cfg, timeout_s=180, echo=True, force_stop_on_timeout=False
         )
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=120):
-            tail = cls.session.tail()
-            cls.session.close()
-            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
+        cls.session.require_prompt(timeout_s=120)
         cls.session.send("spawn gfx_smoke")
         if not cls.session.expect(b"[test] libui demo ready", timeout_s=30):
             cls.session.close()

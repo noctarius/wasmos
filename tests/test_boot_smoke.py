@@ -33,7 +33,9 @@ class BootSmokeTest(unittest.TestCase):
         ok = self.session.expect(b"[kernel] kmain", timeout_s=30)
         self.assertTrue(ok, "kernel entry marker not observed")
         ok = self.session.expect(b"wamos> ", timeout_s=60)
-        self.assertTrue(ok, "CLI prompt not reached")
+        # The diagnosis, not the symptom: every boot failure ends in "no prompt",
+        # so that phrase alone never said which one this was.
+        self.assertTrue(ok, self.session.boot_diagnosis())
         # Accept any IRQ-init marker; check accumulated buffer so we don't
         # need sequential expects that can race past the right marker.
         irq_ok = (

@@ -42,9 +42,7 @@ class FsckWfsClaimTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.session = QemuSession(default_config(), timeout_s=200)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=180):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt(timeout_s=180)
         # The claim is sent when fs_wfs mounts, so nothing below is meaningful
         # until that has happened. Asserted here rather than in a case, because a
         # boot without it makes every case below fail for the same wrong reason.

@@ -46,10 +46,7 @@ class VfsSession:
         cfg = default_config()
         cls.session = QemuSession(cfg, timeout_s=120, echo=True)
         cls.session.start()
-        if not cls.session.expect(b"wamos> "):
-            tail = cls.session.tail()
-            cls.session.close()
-            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
+        cls.session.require_prompt()
         if not cls._await_mount_table():
             tail = cls.session.tail()
             refusal = getattr(cls, "spawn_failure", None)

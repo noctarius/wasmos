@@ -2005,6 +2005,22 @@ Source: `architecture/25-diagnostics-status.md`,
 
   A `[sched] claim lost` line means the race fired and the claim resolved it.
 
+  FOURTH capture, run 39048670258 job 117442481201 (`wasm3_smp`, `a=0x0e`,
+  cr2=`ffffffffffffffff`), on a branch whose delta from the green runs around it
+  is filesystem tooling and a kernel allocator fix -- neither on a scheduler
+  path. CPU 0 `pid=13 tid=23 rip=ffffffff80000512` under `process_schedule_once`,
+  which is the P3 entry's shape exactly: KERNEL_HIGHER_HALF_BASE plus a tiny
+  offset (0x512 against its recorded 0x507), same pid.
+
+  Worth noting across captures: the SIBLING CPU is inside the runtime's compiler
+  every time -- here CPU 1 in wasm3's `ReleaseCompilationCodePage` <-
+  `CompileFunction` <- `m3_FindFunction` <- `wasm_driver_call_unlocked`, and in
+  the third capture CPU 1 in `vb::Frontend::startCompilation`. Two different
+  runtimes, the same position. Compilation is the longest uninterrupted stretch a
+  guest thread spends in the kernel, so it may only be the widest window rather
+  than a participant, but it has now held in three of four captures and is the
+  one correlation the claim fix does not explain.
+
 - [ ] [BUG][P0] The guest reaches no CLI prompt on roughly one CI run in two, and
   it is ONE defect with several faces, not several flakes. Every capture is a
   whole-session stall: the tests that report it differ only by which one happened
@@ -2017,7 +2033,10 @@ Source: `architecture/25-diagnostics-status.md`,
     `cli`). Runs 32625904585 (`main` at 78018f8191) and 32634831416.
   - `boot-and-init`: `ERROR: setUpClass ... RuntimeError: CLI prompt not detected`
     (`tests/test_init_smoke.py:24`). Run 32636373451. This is the capture that
-    carries a `[stall-dump]`; see the wedge item below.
+    carries a `[stall-dump]`; see the wedge item below. Seen again on run
+    39046230087 (`wasm3_smp`), where the SAME tree passed that battery on a later
+    run -- so the arbitrariness is confirmed on one commit rather than inferred
+    across several.
   - `networking`: `ERROR: setUpClass ... RuntimeError: CLI prompt not reached`
     (`tests/test_net_stack_udp_echo_e2e.py:43`, run 32636373451) and
     `test_host_resolves_localhost` timing out for 120 s on its FIRST prompt wait

@@ -148,6 +148,14 @@ def _split_guest_samples(lines):
     return blocks
 
 
+def _first_group(pattern, text, group=1, flags=0):
+    """The first match's group, or None. Keeps the diagnosis readable."""
+    m = re.search(pattern, text, flags)
+    if not m:
+        return None
+    return m.group(group)
+
+
 def _parse_diag_threads(block):
     """{tid: {name, state, disp}} from one guest sample's [diag] thread lines."""
     out = {}
@@ -1260,6 +1268,134 @@ class QemuSession:
             return ""
         data = self.buf[-max_bytes:]
         return data.decode("utf-8", errors="replace")
+
+    # x86 exception vectors a panic reports in `a=`. Named because "a=0000...0e"
+    # is the one piece of a panic that says what KIND of fault it was, and
+    # nothing downstream of the log decodes it.
+    _VECTORS = {
+        0: "#DE divide error",
+        3: "#BP breakpoint",
+        6: "#UD invalid opcode",
+        8: "#DF double fault",
+        13: "#GP general protection",
+        14: "#PF page fault",
+    }
+
+    def boot_diagnosis(self) -> str:
+        """What the serial log says went wrong, as a sentence naming a cause.
+
+        A test that waits for the prompt and does not get one knows only that it
+        did not get one, so every boot failure -- a panic, a wedge, a guest that
+        never started -- used to be reported as "CLI prompt not detected". That
+        is the terminal symptom of ALL of them and names none, which is why a CI
+        triage begins by opening the raw log to find out what actually happened.
+
+        This reads the log the session already holds and leads with the specific
+        thing it finds. Best-effort: an unrecognised failure degrades to the tail,
+        which is what the caller would have printed anyway.
+        """
+        text = self.buf.decode("utf-8", errors="replace")
+
+        # The LAST panic, anchored on its opening banner: a dump is bracketed by
+        # "KERNEL PANIC" and "END KERNEL PANIC", so searching from the last
+        # occurrence of the bare phrase lands on the closing line and reads an
+        # empty block.
+        starts = [m.start() for m in re.finditer(r"(?<!END )KERNEL PANIC", text)]
+        if starts:
+            block = text[starts[-1] :]
+            reason = _first_group(r"reason\s*:\s*(\S+)", block) or "unknown"
+            detail = f"guest panicked: {reason}"
+            vec = _first_group(r"^a=0*([0-9a-fA-F]+)\s", block, flags=re.M)
+            if vec is not None and reason == "cpu_exception":
+                n = int(vec, 16)
+                detail += f" ({self._VECTORS.get(n, f'vector {n}')})"
+                cr2 = _first_group(r"^a=\S+\s+b=([0-9a-fA-F]+)", block, flags=re.M)
+                if cr2 and n == 14:
+                    detail += f", cr2=0x{cr2.lstrip('0') or '0'}"
+            cpu = _first_group(r"panicking_cpu=(\d+)", block)
+            if cpu is not None:
+                frame = _first_group(
+                    r"--- CPU " + cpu + r" [^-]*pid=(\d+) tid=(\d+) ---", block, group=0
+                )
+                rip = _first_group(
+                    r"--- CPU " + cpu + r"\b.*?\n\s*rip=(\S+)", block, flags=re.S
+                )
+                detail += f", on CPU {cpu}"
+                if rip:
+                    detail += f" at rip={rip}"
+                if frame:
+                    ids = re.search(r"pid=(\d+) tid=(\d+)", frame)
+                    if ids:
+                        detail += f" (pid={ids.group(1)} tid={ids.group(2)})"
+            return detail + " -- decode with scripts/decode_kernel_panic.py"
+
+        if self.proc is not None and self.proc.poll() is not None:
+            return f"qemu exited with code {self.proc.returncode} before the prompt"
+
+        if not self.buf.strip():
+            return "no serial output at all: the guest never reached the kernel"
+
+        # Still alive and still quiet: a wedge. The last thing the GUEST managed
+        # to say is the only evidence of how far it got, and is what
+        # distinguishes "no driver ever started" from "everything started and the
+        # shell did not".
+        #
+        # Read only what the guest said BEFORE the harness started diagnosing.
+        # expect() dumps stall state on a timeout, and that dump both prints its
+        # own lines and NMIs every vCPU -- which makes the guest print more. All
+        # of it is newer than the stall it describes, so taking the newest line
+        # would report the diagnosis back as the symptom.
+        # `[diag]` and `[nmi]` are the GUEST's answers to being sampled, so they
+        # arrive before the dump's own lines and are dropped by prefix rather
+        # than by position.
+        own = text.find("[stall-dump]")
+        if own != -1:
+            text = text[:own]
+        induced = ("[diag]", "[nmi]")
+        lines = [
+            ln.rstrip()
+            for ln in text.splitlines()
+            if ln.strip() and not ln.lstrip().startswith(induced)
+        ]
+        last = lines[-1] if lines else ""
+        return (
+            "no prompt and the guest is still running: a stall. "
+            f"Last guest output: {last!r}"
+        )
+
+    def require_prompt(
+        self,
+        prompt: bytes = b"wamos> ",
+        timeout_s: Optional[float] = None,
+        close_on_failure: bool = True,
+    ) -> None:
+        """Wait for `prompt`, or raise naming what went wrong instead.
+
+        Raises RuntimeError whose FIRST line is a cause rather than the symptom,
+        followed by the stall dump when there is one -- a wedged guest produces no
+        further serial output, so what every vCPU is executing is the only thing
+        left that can distinguish a spin from a park.
+
+        Closes the session on failure by default: this is nearly always called
+        from setUpClass, and a setUpClass that raises never reaches
+        tearDownClass, so anything else leaks the QEMU process for the rest of
+        the run. Pass close_on_failure=False when the caller keeps the session.
+        """
+        if self.expect(prompt, timeout_s=timeout_s):
+            return
+        diagnosis = self.boot_diagnosis()
+        dump = ""
+        if "panicked" not in diagnosis:
+            try:
+                dump = self.dump_stall_state("no prompt")
+            except Exception:  # a dump must never replace the failure it describes
+                dump = ""
+        message = f"{diagnosis}\n" f"--- tail ---\n{self.tail()}\n" + (
+            f"--- stall ---\n{dump}\n" if dump else ""
+        )
+        if close_on_failure:
+            self.close()
+        raise RuntimeError(message)
 
     def wait_for_exit(self, timeout_s: float = 5.0) -> bool:
         if not self.proc:

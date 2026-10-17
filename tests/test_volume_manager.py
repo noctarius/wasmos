@@ -42,9 +42,7 @@ class VolumeManagerTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.session = QemuSession(default_config(), timeout_s=200)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=180):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt(timeout_s=180)
 
     @classmethod
     def tearDownClass(cls) -> None:

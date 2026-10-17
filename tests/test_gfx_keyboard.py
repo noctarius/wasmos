@@ -79,10 +79,7 @@ class GfxKeyboardTest(unittest.TestCase):
             cfg, timeout_s=180, echo=True, force_stop_on_timeout=False
         )
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=120):
-            tail = cls.session.tail()
-            cls.session.close()
-            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
+        cls.session.require_prompt(timeout_s=120)
         # Use the auto-started gfx_smoke; wait until it is in its steady-state
         # close-request wait loop (where it echoes key events to serial).
         if not cls.session.expect(b"gfx smoke waiting close-request", timeout_s=45):

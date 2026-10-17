@@ -21,10 +21,17 @@
  * that string and carries nothing a reader could decode or retype. Attributes --
  * backend, unit, capacity -- come out of the descriptor the provider returns.
  *
- * Each provider is queried from its OWN reply endpoint. The ATA driver binds a
- * client endpoint to one unit exclusively on first use, so asking it about both
- * of its disks over a single endpoint gets the second one refused -- one
- * endpoint per disk is what a real client (a filesystem driver) does anyway.
+ * Every provider is queried from ONE reply endpoint. An endpoint is released
+ * only when its process exits -- there is no close -- so a tool that made one
+ * per disk spent them permanently, and on a machine with several disks it ran
+ * out partway through its own listing and reported "endpoint create failed"
+ * after two lines.
+ *
+ * One endpoint suffices because nothing downstream binds it: the ATA driver has
+ * no client table, a transfer names the drive it addresses in its own request,
+ * and IDENTIFY is answered without claiming the unit at all. An earlier version
+ * of this comment said the opposite, describing a per-unit exclusivity that was
+ * removed when a request began naming its own target.
  */
 #include <stdint.h>
 #include "stdio.h"
@@ -355,12 +362,6 @@ int main(void) {
         wasmos_block_descriptor_t desc = {0};
         int rc;
 
-        /* A fresh endpoint per disk; see the header. */
-        g_reply_endpoint = wasmos_ipc_create_endpoint();
-        if (g_reply_endpoint < 0) {
-            (void)printf("[blkinfo] endpoint create failed\n");
-            return 1;
-        }
         /* The class instance is what names the disk to its backend: several
          * instances may share one endpoint, and nothing can be decoded out of
          * the number itself. */

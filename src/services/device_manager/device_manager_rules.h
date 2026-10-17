@@ -9,18 +9,25 @@
  *   - A rule is a comma-separated list of `KEY OP "value"` fields.  Whitespace
  *     around a field is ignored, and a comma inside double quotes does not
  *     split.  The operator is matched literally: `==` for a match field, `+=`
- *     for RUN, `=` for ENV{MOUNT}.  The value must be double quoted.
+ *     for RUN, `=` for an ENV field.  The value must be double quoted.
  *   - `SUBSYSTEM=="..."` selects which of the four kinds a line belongs to
- *     ("boot", "block", "pci", "acpi"), and `RUN+="<path>"` names the driver
- *     `.wap` to spawn.  Both are mandatory; a line missing either — or carrying
- *     a SUBSYSTEM that does not match the loader being run — is skipped
- *     silently, which is exactly how one file feeds all four loaders.
+ *     ("boot", "block", "pci", "acpi") and is mandatory; a line carrying a
+ *     SUBSYSTEM that does not match the loader being run is skipped silently,
+ *     which is exactly how one file feeds all four loaders.
+ *   - A rule names its target in exactly one of two ways.  `RUN+="<path>"` names
+ *     a driver `.wap` the device manager spawns itself.  `ENV{FSTYPE}="<type>"`
+ *     names a filesystem TYPE the device manager asks fs-manager to mount, which
+ *     then owns the mount and parents the backend; which module implements a
+ *     type is fs-manager's table, not a rule's business.  A line carrying both,
+ *     or neither, is refused.
  *   - `ATTR{...}=="..."` fields narrow the match.  For pci/acpi they are
  *     hexadecimal (with or without a `0x` prefix); an omitted ATTR leaves the
  *     field at MATCH_ANY_U8/MATCH_ANY_U16, i.e. a wildcard.  `ATTR{unit}` in a
  *     block rule is decimal, or the literal "any".  A value that does not parse
  *     rejects the whole line.
- *   - `ENV{MOUNT}="..."` applies to block rules only and defaults to "/".
+ *   - `ENV{MOUNT}="..."` says where the filesystem goes.  It is mandatory beside
+ *     `ENV{FSTYPE}`, optional beside `RUN+=` on a boot rule, and defaults to "/"
+ *     on a block rule.
  *   - Unrecognised fields are ignored rather than rejected.
  *
  * Limits, all of which drop input silently: a line longer than 255 characters is
@@ -45,9 +52,11 @@
  * loaders will later reject, and it counts a line of every SUBSYSTEM kind.
  * Returns 0 for NULL. */
 uint16_t dm_rules_count_active(const char* text);
-/* Parse always_spawn rules (boot-time unconditional driver spawns) from text.
+/* Parse always_spawn rules (boot-time unconditional actions) from text.
  * Accepts SUBSYSTEM=="boot" lines; fills state->always_spawn_rules[] with
- * active=1, queued=1, spawned=0 and sets state->always_spawn_rule_count. */
+ * active=1, queued=1, spawned=0 and sets state->always_spawn_rule_count.  A rule
+ * carrying ENV{FSTYPE} is a mount request rather than a spawn; see
+ * always_spawn_rule_t. */
 void dm_rules_load_always_spawn(device_manager_state_t* state, const char* text);
 /* Parse block_fs rules (block-device subsystem with mount points) from text.
  * Accepts SUBSYSTEM=="block" lines, honouring ATTR{unit} and ENV{MOUNT}.  Rules

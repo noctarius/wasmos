@@ -34,9 +34,7 @@ class VirtioNetNotifyE2ETest(unittest.TestCase):
                 pass
         cls.session = QemuSession(cfg, timeout_s=150)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=120):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt(timeout_s=120)
 
     @classmethod
     def tearDownClass(cls) -> None:

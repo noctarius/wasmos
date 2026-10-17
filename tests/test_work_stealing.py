@@ -30,9 +30,7 @@ class WorkStealingTest(unittest.TestCase):
         cfg.smp_count = max(cfg.smp_count, 4)
         cls.session = QemuSession(cfg, timeout_s=120, echo=True)
         cls.session.start()
-        if not cls.session.expect(b"wamos> "):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt()
 
     @classmethod
     def tearDownClass(cls):

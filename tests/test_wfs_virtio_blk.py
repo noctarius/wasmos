@@ -97,10 +97,7 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
             _config_with_wfs_over_virtio(cfg.wfs_virtio_image), timeout_s=180, echo=True
         )
         cls.session.start()
-        if not cls.session.expect(b"wamos> "):
-            tail = cls.session.tail()
-            cls.session.close()
-            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
+        cls.session.require_prompt()
 
     @classmethod
     def tearDownClass(cls):
@@ -180,7 +177,7 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
             (b"/vwfs", b"volume:block:virtio-blk:48"),
         ):
             self.assertIn(
-                b"volume rule queued spawn mount=%s id=%s" % (mount, volume),
+                b"volume rule queued mount=%s id=%s" % (mount, volume),
                 self.session.buf,
                 f"{mount!r} did not bind to {volume!r}, so the rule's uuid did not "
                 "decide which of the two WFS volumes it selected\n"

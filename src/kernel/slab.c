@@ -18,9 +18,9 @@
  * on its class free list and the frame stays owned by the class for good.
  */
 
-/* Must not exceed paging.c's higher-half direct-map window: frames above it are
- * not mapped at phys | KERNEL_HIGHER_HALF_BASE and could not be dereferenced. */
-#define SLAB_GROW_WINDOW_BYTES (512u * 1024u * 1024u)
+/* The higher-half direct-map window: frames above it are not mapped at
+ * phys | KERNEL_HIGHER_HALF_BASE and could not be dereferenced. */
+#define SLAB_GROW_WINDOW_BYTES KERNEL_HIGHER_HALF_WINDOW_BYTES
 #define SLAB_GROW_FRAME_BYTES 4096u
 
 #define SLAB_CLASS_COUNT 3u

@@ -75,6 +75,9 @@
 
 static int32_t g_proc_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
+/* The endpoint that pulled this backend's info: fs-manager, which owns the
+ * mount. Only it may end this process by unmounting. -1 until the first pull. */
+static int32_t g_mount_owner = -1;
 static int32_t g_reply_endpoint = -1;
 
 static wasmos_wasm_runtime_t g_runtime;
@@ -89,15 +92,14 @@ static wfs_fd_table_t g_fds;
  * owns no transfer buffer for it. */
 static char g_mount_name[32];
 static int32_t g_mount_len = 0;
-static uint8_t g_mount_unit = 0;
-static int32_t g_requested_unit = -1;
 /* The `block` class instance of this driver's disk, from `id=`. Both the lookup
- * key and the `target` every transfer carries. */
+ * key and the `target` every transfer carries, and the ONLY device token this
+ * driver takes. */
 static uint32_t g_requested_instance = 0u;
-/* Which backend serves the disk this instance was spawned for, as the device
- * manager named it. A unit alone does not identify a disk -- it is
- * backend-local -- so both halves are needed to find the right server. */
-static uint8_t g_requested_backend = (uint8_t)BLOCK_BACKEND_UNKNOWN;
+/* The canonical id itself, kept as the STRING as well as the fingerprint because
+ * fs-manager reports it in the mount table: a mount names the device it sits on
+ * with the same id blkinfo prints and `mount -t`/`fsck.wfs` take. */
+static char g_source_id[BLOCK_DESCRIPTOR_ID_MAX];
 /* The `volume` class instance of the volume mounted here, DERIVED from the same
  * `id=` (see wfs_parse_volume_instance). 0 when no volume covers this device,
  * which is not an error: the claim is advisory. */
@@ -723,11 +725,27 @@ static void wfs_do_close(int32_t src, int32_t request_id, int32_t fd) {
 /* ---- fs-manager identity ------------------------------------------------ */
 
 static void wfs_report_backend_info(int32_t dst, int32_t request_id, int32_t buffer_id) {
+    /* The mount's owner, learned rather than configured: fs-manager is the only
+     * thing that pulls backend info, and it does so before this driver reports
+     * ready. Recorded because an UNMOUNT ends this process, and the sender of a
+     * shutdown is otherwise unchecked -- IPC authenticates the SOURCE endpoint's
+     * owner, not its authority. */
+    g_mount_owner = dst;
     int32_t name_len = 0;
+    int32_t source_len = 0;
 
     if (buffer_id > 0 && g_mount_len > 0 &&
         wasmos_xfer_buffer_write(buffer_id, g_mount_name, g_mount_len, 0) == 0) {
         name_len = g_mount_len;
+    }
+    /* The device id follows the mount name in the same buffer, delimited by the
+     * lengths rather than by a terminator. Written only when the name was, since
+     * its offset is the name's length. */
+    if (name_len > 0) {
+        int32_t id_len = (int32_t)strlen(g_source_id);
+        if (id_len > 0 && wasmos_xfer_buffer_write(buffer_id, g_source_id, id_len, name_len) == 0) {
+            source_len = id_len;
+        }
     }
     (void)wasmos_sys_ipc_send_retry(dst,
                                     g_fs_endpoint,
@@ -736,25 +754,8 @@ static void wfs_report_backend_info(int32_t dst, int32_t request_id, int32_t buf
                                     FSMGR_BACKEND_BLOCK,
                                     FS_TYPE_WFS,
                                     name_len,
-                                    (int32_t)g_mount_unit,
+                                    source_len,
                                     WFS_SEND_RETRIES);
-}
-
-/* Map the device manager's DRIVER name to the backend it stands for. The names
- * are the drivers' manifest package names -- the same spelling a rule's DRIVER==
- * uses and the rule parser maps -- so this list tracks fs_fat's deliberately:
- * both filesystems resolve the same identity from the same argument. */
-static uint8_t wfs_backend_from_name(const char* name) {
-    if (!name) {
-        return (uint8_t)BLOCK_BACKEND_UNKNOWN;
-    }
-    if (strncmp(name, "ata", 3) == 0 && (name[3] == '\0' || name[3] == ' ')) {
-        return (uint8_t)BLOCK_BACKEND_ATA;
-    }
-    if (strncmp(name, "virtio-blk", 10) == 0 && (name[10] == '\0' || name[10] == ' ')) {
-        return (uint8_t)BLOCK_BACKEND_VIRTIO_BLK;
-    }
-    return (uint8_t)BLOCK_BACKEND_UNKNOWN;
 }
 
 /* The value of `name` in the space-separated startup blob, or NULL when absent.
@@ -783,17 +784,8 @@ static const char* wfs_find_token_value(const char* args, const char* name) {
     return 0;
 }
 
-static uint8_t wfs_parse_requested_backend(void) {
-    char args[64];
-
-    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
-        return (uint8_t)BLOCK_BACKEND_UNKNOWN;
-    }
-    return wfs_backend_from_name(wfs_find_token_value(args, "driver="));
-}
-
 /* Resolve this instance's disk through the `block` service CLASS, matching the
- * instance that encodes its (backend, unit).
+ * instance the disk's canonical id fingerprints to.
  *
  * By class rather than by the plain `block` NAME, because a name resolves to one
  * provider for the whole system: it could only ever reach whichever backend
@@ -874,6 +866,9 @@ static uint32_t wfs_parse_requested_instance(void) {
     if (wfs_copy_token(args, "id=", id, sizeof(id)) != 0) {
         return 0u;
     }
+    /* Held only once the id is known good, so g_source_id never reports a disk
+     * this driver refused to address. */
+    str_copy(g_source_id, sizeof(g_source_id), id);
     return wasmos_block_fingerprint(id);
 }
 
@@ -965,33 +960,6 @@ static void wfs_volume_claim(int32_t claim) {
     }
 }
 
-/* Which block unit the rule asked for. Still delivered, and still what names
- * this driver's service ("fs.wfs<unit>") and its fs.backend instance -- only the
- * BLOCK target moved to the canonical id. */
-static int32_t wfs_parse_requested_unit(void) {
-    char args[WFS_STARTUP_ARGS_MAX];
-    char value[8];
-    const char* p;
-    int32_t v = 0;
-
-    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
-        return -1;
-    }
-    if (wfs_copy_token(args, "unit=", value, sizeof(value)) != 0) {
-        return -1;
-    }
-    for (p = value; *p != '\0'; ++p) {
-        if (*p < '0' || *p > '9') {
-            return -1;
-        }
-        v = v * 10 + (*p - '0');
-        if (v > 255) {
-            return -1;
-        }
-    }
-    return v;
-}
-
 /* The VFS path this volume mounts at, from `mount=`.
  *
  * The rule that spawned this driver chose it and the device manager delivers it
@@ -1028,7 +996,11 @@ static int wfs_parse_requested_mount(char* out, uint32_t out_cap) {
  * A read-only volume has nothing to record, and wfs_sync_task refuses one, so it
  * answers without a write.
  */
-static void wfs_do_shutdown(int32_t src, int32_t request_id) {
+/* Set once an UNMOUNT quiesce has been answered, so the reactor leaves its loop
+ * and this process ends. Read only by the loop in initialize. */
+static uint8_t g_unmounted = 0;
+
+static void wfs_do_shutdown(int32_t src, int32_t request_id, int32_t reason) {
     static wfs_sync_ctx_t sync;
 
     /* Released before the clean mark is written, not after: once this returns
@@ -1052,6 +1024,29 @@ static void wfs_do_shutdown(int32_t src, int32_t request_id) {
         }
     }
     (void)wfs_reply(src, WASMOS_IPC_SHUTDOWN_DONE, request_id, 0, 0);
+    /* Recorded AFTER the clean mark and after DONE, never before either. An
+     * UNMOUNT quiesce ends this process -- the machine keeps running and the path
+     * may be mounted again, while this process still holds the `fs.backend` class
+     * instance and service name derived from that mount, so a surviving backend
+     * blocks its own replacement. A machine shutdown sets nothing: the sequence
+     * is sequential and the PM decides when each participant goes.
+     *
+     * The reactor checks this between messages rather than exiting here: the
+     * clean mark is the one thing this driver exists to get right, and leaving
+     * mid-handler is how a filesystem loses it. */
+    /* Only the mount's OWNER may end this process. IPC checks that a message came
+     * from the endpoint it claims, not that its sender is entitled to what it
+     * asks, so an ordinary client that found this backend through the
+     * `fs.backend` class could otherwise unmount it by naming reason 2 --
+     * bypassing fs-manager's busy and bootstrap rules. A machine shutdown is not
+     * gated: it does not end this process here. */
+    if (reason == WASMOS_SHUTDOWN_REASON_UNMOUNT) {
+        if (g_mount_owner >= 0 && src == g_mount_owner) {
+            g_unmounted = 1;
+        } else {
+            wfs_log("[fs-wfs] ignoring an unmount from something that does not own this mount\n");
+        }
+    }
 }
 
 /* ---- dispatch ----------------------------------------------------------- */
@@ -1060,7 +1055,7 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
                          int32_t a2, int32_t a3) {
     switch (type) {
     case WASMOS_IPC_SHUTDOWN_REQ:
-        wfs_do_shutdown(src, request_id);
+        wfs_do_shutdown(src, request_id, a0);
         return;
     case FSMGR_IPC_BACKEND_INFO_REQ:
         wfs_report_backend_info(src, request_id, a0);
@@ -1132,7 +1127,7 @@ static void wfs_dispatch(int32_t type, int32_t src, int32_t request_id, int32_t 
  * buffer, read below. */
 WASMOS_WASM_EXPORT int32_t initialize(void) {
     char mount_alias[32];
-    char service_name[32];
+    char service_name[WASMOS_SVC_NAME_MAX];
     int32_t block_endpoint = -1;
     int32_t mount_len;
     int32_t name_len;
@@ -1147,16 +1142,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wfs_stall();
     }
 
-    g_requested_unit = wfs_parse_requested_unit();
     g_requested_instance = wfs_parse_requested_instance();
     g_volume_instance = wfs_parse_volume_instance();
-    if (g_requested_instance == 0u || g_requested_unit < 0) {
-        /* The id names the disk and the unit names this driver's service. A
-         * guessed disk mounts the wrong volume, so neither is inferred. */
-        wfs_log("[fs-wfs] startup args missing id= or unit=; cannot resolve a block device\n");
+    if (g_requested_instance == 0u) {
+        /* The id names the disk, and it is the only thing that does. A guessed
+         * disk mounts the wrong volume, so nothing here is inferred. */
+        wfs_log("[fs-wfs] startup args missing id=; cannot resolve a block device\n");
         wfs_stall();
     }
-    g_mount_unit = (uint8_t)g_requested_unit;
     for (int32_t attempt = 0;; ++attempt) {
         block_endpoint = wfs_lookup_block_server(g_requested_instance, 1 + attempt);
         if (block_endpoint > 0) {
@@ -1226,38 +1219,33 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     str_copy(g_mount_name, sizeof(g_mount_name), mount_alias);
     g_mount_len = mount_len;
 
-    /* "fs.wfs<unit>" so two WFS volumes can be mounted at once. A unit is a full
-     * byte and a virtio-blk unit is (slot << 3) | function, so it reaches 255;
-     * all three digits are emitted or two disks whose units differ only in the
-     * hundreds place would claim one name. */
-    name_len = 0;
-    while (k_service_prefix[name_len] != '\0') {
-        service_name[name_len] = k_service_prefix[name_len];
-        name_len++;
+    /* Named after the MOUNT, not the disk. Nothing looks a filesystem backend up
+     * by name -- fs-manager finds them by CLASS -- but the kernel's panic dump
+     * reads it, and it is the only copy of this mount's identity the kernel has;
+     * see wasmos_svc_name_from_mount. */
+    name_len = (int32_t)wasmos_svc_name_from_mount(
+        service_name, sizeof(service_name), k_service_prefix, mount_alias);
+    if (name_len == 0) {
+        wfs_log("[fs-wfs] service name could not be built\n");
+        wfs_stall();
     }
-    if (g_mount_unit >= 100u) {
-        service_name[name_len++] = (char)('0' + (g_mount_unit / 100u));
-    }
-    if (g_mount_unit >= 10u) {
-        service_name[name_len++] = (char)('0' + ((g_mount_unit / 10u) % 10u));
-    }
-    service_name[name_len++] = (char)('0' + (g_mount_unit % 10u));
-    service_name[name_len] = '\0';
-    /* TODO: the fs.backend instance encodes (kind, unit) but not the BLOCK
-     * backend, so two WFS volumes whose units collide across backends -- ATA
-     * unit 2 and a virtio-blk device at slot 0 function 2, say -- derive one
-     * instance, and the second registration is refused and its mount never
-     * appears. This is the same defect the retired `block` NAME had: a disk is
-     * (backend, unit), so the instance has to carry the backend. Fixing it needs
-     * a wider instance encoding, which fs-manager and fs_fat decode too. */
-    /* WANTS_SHUTDOWN: this driver is the reason the sequence exists. Only a
+    /* The class INSTANCE is a fingerprint of the MOUNT PATH, not a packed
+     * (kind, unit) pair. A path is unique by construction -- fs-manager refuses
+     * a second mount at one -- while a unit is not: it is backend-local, and a
+     * partition reports the unit of the disk it lives on, so ATA unit 2 and a
+     * virtio-blk device at slot 0 function 2 derived ONE instance and the second
+     * registration was refused with its mount never appearing. The same
+     * derivation is used by fs_fat and fs_tmpfs, so one rule covers every
+     * backend.
+     *
+     * WANTS_SHUTDOWN: this driver is the reason the sequence exists. Only a
      * clean unmount records WFS_STATE_CLEAN, and without it every volume ever
      * written stays DIRTY and replays an empty log on every later mount. */
     if (wasmos_svc_register_class_flags(g_proc_endpoint,
                                         g_fs_endpoint,
                                         service_name,
                                         FSMGR_BACKEND_CLASS,
-                                        FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BLOCK, g_mount_unit),
+                                        wasmos_class_instance_fingerprint(mount_alias),
                                         WASMOS_SVC_FLAG_WANTS_SHUTDOWN,
                                         1) != 0) {
         wfs_log("[fs-wfs] fs.backend register failed\n");
@@ -1298,5 +1286,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3));
+        if (g_unmounted) {
+            /* The mount this driver served is gone, so the driver is too:
+             * returning ends the process, which is what releases its class
+             * instance and service name for whatever mounts there next. Checked
+             * here rather than inside the handler so the clean mark and the DONE
+             * reply are both complete first. */
+            break;
+        }
     }
+    return 0;
 }

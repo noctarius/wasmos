@@ -96,9 +96,7 @@ class PartitionManagerDiskArrivalTest(unittest.TestCase):
             handle.write(build_image(IMAGE_MIB, VOLUME_LABEL, []))
         cls.session = QemuSession(_config_with_gpt_disk(disk_path), timeout_s=200)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=180):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt(timeout_s=180)
 
     @classmethod
     def tearDownClass(cls) -> None:

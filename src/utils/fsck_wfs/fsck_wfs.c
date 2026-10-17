@@ -382,6 +382,21 @@ int main(void) {
     io.user = 0;
     rc = wfs_fsck_run(&io, on_finding, 0, &rep);
 
+    /* Reported BEFORE the counts, because a volume that is not WFS at all, and
+     * one whose blocks could not be read, produce no counts worth printing --
+     * "0 objects, 0 blocks in use" beside them reads as a finding about the
+     * volume rather than as the absence of a check. */
+    if (rc == WASMOS_ERR_FS_BAD_MAGIC) {
+        (void)printf("[fsck.wfs] %s is not a WFS volume\n", id);
+        return 1;
+    }
+    if (rc == WASMOS_ERR_FS_GEOMETRY) {
+        (void)printf("[fsck.wfs] this volume's block size is larger than the %u-byte block "
+                     "buffer a process gets; cannot check it from the guest\n",
+                     (unsigned)FSCK_BUFFER_BYTES);
+        return 1;
+    }
+
     (void)printf("[fsck.wfs] %u objects, %u blocks in use\n",
                  (unsigned)rep.objects_in_use,
                  (unsigned)rep.blocks_in_use);
@@ -396,14 +411,14 @@ int main(void) {
                      "volume stays unclean\n");
         return 2;
     }
-    if (rc == WASMOS_ERR_FS_GEOMETRY) {
-        (void)printf("[fsck.wfs] this volume's block size is larger than the %u-byte block "
-                     "buffer a process gets; cannot check it from the guest\n",
-                     (unsigned)FSCK_BUFFER_BYTES);
-        return 1;
-    }
     if (rc != WASMOS_ERR_NONE) {
-        (void)printf("[fsck.wfs] check failed: %s\n", wasmos_strerror(rc));
+        /* The SYMBOL, not the description: the descriptions in abi/errors.yaml
+         * are reference documentation written for whoever maintains the
+         * taxonomy, several clauses long, and a shell is not where they belong.
+         * Every outcome a user is expected to hit has its own sentence above;
+         * reaching here means a code this tool did not anticipate, which a
+         * maintainer reads. mount and umount report failures the same way. */
+        (void)printf("[fsck.wfs] check failed: %s\n", wasmos_error_code_name(rc));
         return 1;
     }
     if (rep.cleared_state) {

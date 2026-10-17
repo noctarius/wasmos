@@ -33,7 +33,6 @@ static fs_backend_t make_backend(uint8_t slot, uint8_t kind, uint32_t fs_type,
     backend.kind = kind;
     backend.fs_type = fs_type;
     backend.endpoint = 100 + (int32_t)slot;
-    backend.unit = slot;
     snprintf(backend.mount_path, sizeof(backend.mount_path), "%s", mount_path);
     return backend;
 }

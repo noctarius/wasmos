@@ -1,0 +1,23 @@
+version = 1
+
+[package]
+name = "mkfs.wfs"
+entry = "wasmos_main"
+kind = "app"
+native = false
+aot = true
+
+[resources]
+# The block client embeds one whole filesystem block (16 KiB at the largest
+# permitted size) and the formatter writes through it, so nothing else here is
+# large: the plan is one node, and the layout is a handful of words.
+stack_pages = 16
+heap_pages = 64
+
+[ipc]
+required_endpoint_name = "proc"
+required_endpoint_rights = 0
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

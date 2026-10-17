@@ -341,7 +341,7 @@ class ProcessManager {
 
         pm_check_waits(process->context_id);
         pm_reap_apps(process);
-        pm_services_class_reap(process->context_id);
+        pm_services_reap(process->context_id);
         pm_poll_spawn(process->context_id);
         /* Stepped here, before the receive, so a shutdown makes progress on the
          * idle path too: with no request queued the receive below parks on the
@@ -447,6 +447,9 @@ class ProcessManager {
         case SVC_IPC_SUBSCRIBE_CLASS_REQ:
             rc = pm_handle_class_subscribe(process->context_id, &msg);
             break;
+        case SVC_IPC_UNREGISTER_CLASS_REQ:
+            rc = pm_handle_class_unregister(process->context_id, &msg);
+            break;
         default:
             /* Unknown/unsolicited type — almost always a stray reply (a *_RESP
              * or *_ERROR) that got misrouted to PM's well-known proc endpoint.
@@ -460,7 +463,8 @@ class ProcessManager {
             ipc_message_t resp;
             if (msg.type == SVC_IPC_REGISTER_REQ || msg.type == SVC_IPC_REGISTER_DESC_REQ ||
                 msg.type == SVC_IPC_LOOKUP_REQ || msg.type == SVC_IPC_LOOKUP_CLASS_REQ ||
-                msg.type == SVC_IPC_SUBSCRIBE_CLASS_REQ) {
+                msg.type == SVC_IPC_SUBSCRIBE_CLASS_REQ ||
+                msg.type == SVC_IPC_UNREGISTER_CLASS_REQ) {
                 resp.type = SVC_IPC_ERROR;
             } else {
                 resp.type = PROC_IPC_ERROR;

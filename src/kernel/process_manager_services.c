@@ -57,8 +57,17 @@ static void pm_service_class_ensure(uint32_t pm_context_id) {
 }
 
 /* Periodic exit-driven sweep: purge class providers/subscribers whose owner has
- * died, firing REMOVE events. Called from the PM run loop's reap path. */
-void pm_services_class_reap(uint32_t pm_context_id) {
+ * died, firing REMOVE events. Called from the PM run loop's reap path.
+ *
+ * The flat NAME table is deliberately NOT swept here. It is reclaimed lazily, by
+ * pm_service_set when a new owner claims a name a dead one held -- see the note
+ * there. A sweep would walk every entry and resolve every owner on EVERY
+ * dispatch, and that cost is not theoretical: it starved the bring-up it was
+ * sweeping for, and tests/test_volume_manager.py caught it as a broker self-test
+ * that never finished. That test exists because the same shape -- re-reading the
+ * process table once per dispatch -- had already been removed from the broker
+ * once. */
+void pm_services_reap(uint32_t pm_context_id) {
     pm_service_class_ensure(pm_context_id);
     service_class_registry_reap_dead(pm_service_class_alive, 0);
 }
@@ -182,8 +191,24 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
             continue;
         }
         if (entry->owner_context_id != owner_context_id) {
-            return -1;
+            /* A name is owned, and refusing one held by a DIFFERENT context is
+             * what stops a service being impersonated by something registering
+             * its name. That protection only means anything while the owner is
+             * ALIVE: held against a dead one it protects nothing and burns the
+             * name for the rest of the boot, so the next process to serve that
+             * role could never register and would never report ready.
+             *
+             * Reclaimed HERE rather than by a sweep, because this is the only
+             * place the difference is observable -- a lookup of a dead service
+             * already returns an endpoint that fails on first use, which is the
+             * documented behaviour either way. One owner resolution on a
+             * contended registration, against one per entry per dispatch. */
+            if (pm_service_class_alive(0, entry->owner_context_id)) {
+                return -1;
+            }
+            entry->flags = 0;
         }
+        entry->owner_context_id = owner_context_id;
         entry->endpoint = endpoint;
         /* Flags ACCUMULATE across re-registrations rather than being replaced.
          * The packed-name path carries no flags and passes 0, so replacing would
@@ -316,6 +341,40 @@ int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg)
  * service endpoint is required, not stylistic: a registrant that blocks for its
  * reply on the endpoint it is simultaneously serving can consume the reply as
  * request traffic, or serve a request in place of the reply, and deadlock. */
+/* Answer a REFUSED descriptor registration with `code`.
+ *
+ * Returns 0 once the refusal is sent, because the request IS then handled: the
+ * dispatcher sends its own SVC_IPC_ERROR for any non-zero return
+ * (process_manager.cpp), so returning a failure here would put a SECOND error on
+ * the same request_id -- with a different argument layout, arriving after the
+ * caller has already consumed the first, where it can be taken for the reply to
+ * a later request that reuses the id.
+ *
+ * Returns -1 only when the reply could not be SENT, which leaves the
+ * dispatcher's attempt as the fallback.
+ *
+ * A refusal is owed at all because the registrant is blocked in a request/reply:
+ * no reply is not an error it can see, it is a wait that never ends. A driver
+ * whose name or class was already held hung with nothing in the log, and the
+ * service it was replacing stayed missing.
+ *
+ * SVC_IPC_ERROR rather than a RESP carrying a negative arg0: the guest helper
+ * treats any non-RESP as failure, so this needs no change on the registrant's
+ * side to unblock it. */
+static int pm_service_register_refuse(uint32_t pm_context_id, const ipc_message_t* msg,
+                                      wasmos_error_code_t code) {
+    ipc_message_t resp;
+    resp.type = SVC_IPC_ERROR;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = (int32_t)code;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+}
+
 int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t* msg) {
     char name[WASMOS_SVC_NAME_MAX];
     uint32_t reply_owner = 0;
@@ -354,12 +413,12 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
     if (ipc_endpoint_owner(service_ep, &service_owner) != IPC_OK || service_owner != reply_owner) {
         if (track_fs)
             klog_write("[pm] fs register endpoint owner mismatch\n");
-        return -1;
+        return pm_service_register_refuse(pm_context_id, msg, WASMOS_ERR_PROC_PM_NOT_AUTHORIZED);
     }
     if (pm_service_set(name, service_ep, reply_owner, desc->flags) != 0) {
         if (track_fs)
             klog_write("[pm] fs register service set failed\n");
-        return -1;
+        return pm_service_register_refuse(pm_context_id, msg, WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN);
     }
     pm_update_well_known_service_endpoint(name, service_ep);
     /* v2+ descriptors may additionally register the service under a virtual
@@ -369,20 +428,17 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
         process_t* provider;
         uint32_t provider_pid;
         if (!capability_has(reply_owner, CAP_SVC_CLASS_REGISTER)) {
-            return -1;
+            return pm_service_register_refuse(
+                pm_context_id, msg, WASMOS_ERR_PROC_PM_NOT_AUTHORIZED);
         }
         str_copy(class_name, sizeof(class_name), desc->class_name);
         pm_service_class_ensure(pm_context_id);
         provider = process_find_by_context(reply_owner);
         provider_pid = provider ? provider->pid : 0;
-        /* FIXME: a refused claim -- another owner already holds this
-         * (class, instance) -- returns without sending any reply, so the
-         * registering driver blocks in its bring-up call forever instead of
-         * learning it lost. Every failure path above has the same shape. Answer
-         * with SVC_IPC_ERROR carrying a packed WASMOS_ERR_PROC_* code. */
         if (service_class_registry_add(
                 class_name, desc->instance, service_ep, reply_owner, provider_pid) != 0) {
-            return -1;
+            return pm_service_register_refuse(
+                pm_context_id, msg, WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN);
         }
     }
     resp.type = SVC_IPC_REGISTER_RESP;
@@ -505,6 +561,53 @@ int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg) 
     resp.arg2 = 0;
     resp.arg3 = 0;
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+}
+
+/* Retires a class registration the caller itself made
+ * (SVC_IPC_UNREGISTER_CLASS_REQ): arg0 is the caller's transfer buffer holding
+ * the class name NUL-terminated at offset 0, arg1 the instance.
+ *
+ * The owner is the context behind msg->source, never anything the request names,
+ * which is what makes "only the owner may retire it" enforceable here rather
+ * than merely asserted: a caller cannot claim to be somebody else by filling in
+ * a field.
+ *
+ * Returns 0 once the SVC_IPC_UNREGISTER_CLASS_RESP is sent, else a packed code
+ * the dispatcher carries in SVC_IPC_ERROR.arg1: BAD_ENDPOINT when the source has
+ * no resolvable owner, CALLER_FSBUF when the class name could not be read out of
+ * the caller's buffer, SVC_CLASS_NOT_OWNED when the registry refused, and
+ * REPLY_SEND when only the reply failed. */
+int pm_handle_class_unregister(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t owner = 0;
+    uint32_t buffer_id = (uint32_t)msg->arg0;
+    uint32_t instance = (uint32_t)msg->arg1;
+    char class_name[WASMOS_SVC_CLASS_MAX];
+    const uint8_t* buf;
+    ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner) != IPC_OK) {
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
+    }
+    buf = pm_foreign_xfer_ptr(buffer_id, owner, 0);
+    if (!buf) {
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
+    }
+    str_copy(class_name, sizeof(class_name), (const char*)buf);
+    pm_service_class_ensure(pm_context_id);
+    if (service_class_registry_remove(class_name, instance, owner) != 0) {
+        return WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED;
+    }
+    resp.type = SVC_IPC_UNREGISTER_CLASS_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = 0;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 /* Registers a subsystem broker (PROC_IPC_SUBSYSTEM_REGISTER_BROKER): arg1 is the

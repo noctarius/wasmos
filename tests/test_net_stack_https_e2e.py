@@ -178,9 +178,7 @@ class NetStackHttpsE2ETest(unittest.TestCase):
             shutil.copyfile(kernel_src, kernel_dst)
         cls.session = QemuSession(cfg, timeout_s=180)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=120):
-            cls.session.close()
-            raise RuntimeError("CLI prompt not reached")
+        cls.session.require_prompt(timeout_s=120)
 
     @classmethod
     def tearDownClass(cls) -> None:

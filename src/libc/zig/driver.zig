@@ -323,6 +323,51 @@ fn loadStartup() void {
     g_startup_args_len = n;
 }
 
+/// Build the service NAME a filesystem backend registers, for one serving
+/// `mount`: `<prefix><mount>` when that fits in `out`, and `<prefix>` followed by
+/// eight hex digits of the mount path's fingerprint when it does not.
+///
+/// Mirrors wasmos_svc_name_from_mount() in
+/// `src/drivers/include/wasmos_driver_abi.h` and must produce the same bytes for
+/// the same input; that header carries the reasoning for why the readable form
+/// matters (the kernel's panic dump holds no other copy of a mount's identity)
+/// and why the fallback exists (a mount path may be longer than a name).
+///
+/// `out` holds the name alone -- no terminator, since registerService takes a
+/// slice. Returns the length written, or 0 when `out` cannot hold even the
+/// fallback form.
+pub fn serviceNameFromMount(out: []u8, prefix: []const u8, mount: []const u8) usize {
+    if (out.len == 0 or prefix.len + 8 > out.len) return 0;
+    @memcpy(out[0..prefix.len], prefix);
+    var n = prefix.len;
+    if (prefix.len + mount.len <= out.len) {
+        @memcpy(out[n..][0..mount.len], mount);
+        return n + mount.len;
+    }
+    const hash = fingerprint(mount);
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        const shift: u5 = @intCast(28 - 4 * i);
+        const nibble: u32 = (hash >> shift) & 0xF;
+        out[n] = if (nibble < 10) @intCast('0' + nibble) else @intCast('a' + (nibble - 10));
+        n += 1;
+    }
+    return n;
+}
+
+/// Ends this process with `status`, and does not return.
+///
+/// A driver normally never exits -- the libsys runner owns its loop -- so this
+/// is for the one case that ends a driver's reason to exist: a backend told to
+/// quiesce because the thing it served is being taken away. Exiting is what
+/// RELEASES what the process holds, since both service tables are keyed on the
+/// owner context: the class registry drops the provider and the process manager
+/// frees the name, so whatever serves that role next can register them.
+pub fn procExit(code: i32) noreturn {
+    _ = abi.proc_exit(code);
+    unreachable;
+}
+
 /// IPC endpoint of the process manager, or a negative value when this process
 /// carries no spawn info (which for a driver means it was not launched by the
 /// process manager and cannot register anything).

@@ -306,6 +306,9 @@ set(WASM_UMOUNT_APP ${BUILD_DIR}/umount.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
+set(WASM_MKFS_WFS_SRC ${CMAKE_SOURCE_DIR}/src/utils/mkfs_wfs/mkfs_wfs.c)
+set(WASM_MKFS_WFS_WASM ${BUILD_DIR}/mkfs_wfs.wasm)
+set(WASM_MKFS_WFS_APP ${BUILD_DIR}/mkfs_wfs.wap)
 set(WASM_FSCK_WFS_SRC ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/fsck_wfs.c)
 set(WASM_FSCK_WFS_CORE ${CMAKE_SOURCE_DIR}/src/utils/fsck_wfs/wfs_fsck.c)
 set(WASM_FSCK_WFS_WASM ${BUILD_DIR}/fsck_wfs.wasm)
@@ -313,6 +316,9 @@ set(WASM_FSCK_WFS_APP ${BUILD_DIR}/fsck_wfs.wap)
 set(WASM_BLKINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/blkinfo/blkinfo.c)
 set(WASM_BLKINFO_WASM ${BUILD_DIR}/blkinfo.wasm)
 set(WASM_BLKINFO_APP ${BUILD_DIR}/blkinfo.wap)
+set(WASM_VOLINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/volinfo/volinfo.c)
+set(WASM_VOLINFO_WASM ${BUILD_DIR}/volinfo.wasm)
+set(WASM_VOLINFO_APP ${BUILD_DIR}/volinfo.wap)
 set(WASM_CURL_SRC ${CMAKE_SOURCE_DIR}/src/utils/curl/curl.c)
 set(WASM_CURL_WASM ${BUILD_DIR}/curl.wasm)
 set(WASM_CURL_APP ${BUILD_DIR}/curl.wap)
@@ -1748,8 +1754,10 @@ if (TARGET host_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUNT_APP} ${BUILD_DIR}/esp/system/utils/mount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_UMOUNT_APP} ${BUILD_DIR}/esp/system/utils/umount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VOLINFO_APP} ${BUILD_DIR}/esp/system/utils/volinfo.wap
     # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MKFS_WFS_APP} ${BUILD_DIR}/esp/system/utils/mkfs.wfs.wap
   )
 endif ()
 if (TARGET curl_util)
@@ -2486,6 +2494,15 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_list
   COMMAND ${BUILD_DIR}/test_list
+  # kmem's own suite. It brings its OWN slab and frame allocator rather than
+  # linking stubs_slab.c: what it exercises is a slab that REFUSES a size, which
+  # the shared stub cannot express, and a frame allocator whose calls it counts.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_kmem.c
+          ${KERNEL_DIR}/kmem.c
+          -o ${BUILD_DIR}/test_kmem
+  COMMAND ${BUILD_DIR}/test_kmem
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_hashmap.c
@@ -2552,6 +2569,14 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_block_descriptor.c
           -o ${BUILD_DIR}/test_block_descriptor
   COMMAND ${BUILD_DIR}/test_block_descriptor
+  # The service NAME a filesystem backend registers. Header-only for the same
+  # reason: the builder and the fingerprint under it are static inlines.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_svc_name_from_mount.c
+          -o ${BUILD_DIR}/test_svc_name_from_mount
+  COMMAND ${BUILD_DIR}/test_svc_name_from_mount
   # The block-rule MATCHER, as opposed to the rule parser above. The suite
   # includes device_manager.c to reach its file statics, so:
   #   the dead-strip flag drops the event-loop half of that translation unit, whose

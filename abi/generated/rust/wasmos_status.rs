@@ -84,6 +84,9 @@ pub const WASMOS_ERR_PROC_PM_SUBSYSTEM_REG: i32 = -0x00020017; // subsystem brok
 pub const WASMOS_ERR_PROC_PM_HANDLER_REG: i32 = -0x00020018; // exec-handler registration failed
 pub const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: i32 = -0x00020019; // caller lacks the subsystem.register capability
 pub const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001A; // PM could not acquire its own xfer buffer
+pub const WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: i32 = -0x0002001B; // that service name is held by another live process
+pub const WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: i32 = -0x0002001C; // that (class, instance) is held by another live process
+pub const WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: i32 = -0x0002001D; // the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on
 pub const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 pub const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 pub const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -118,7 +121,7 @@ pub const WASMOS_ERR_FS_REBORROW: i32 = -0x0004001A; // reborrowing the client's
 pub const WASMOS_ERR_FS_BACKEND_IPC: i32 = -0x0004001B; // request could not be delivered to the backend, or no reply arrived
 pub const WASMOS_ERR_FS_BAD_FD: i32 = -0x0004001C; // fd is not present in this client's fd table
 pub const WASMOS_ERR_FS_REPLY_SEND: i32 = -0x0004001D; // the reply could not be delivered to the client
-pub const WASMOS_ERR_FS_BAD_MAGIC: i32 = -0x0004001E; // on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent
+pub const WASMOS_ERR_FS_BAD_MAGIC: i32 = -0x0004001E; // not a volume of this filesystem type
 pub const WASMOS_ERR_FS_CHECKSUM: i32 = -0x0004001F; // metadata checksum mismatch: the structure did not verify against the checksum it carries
 pub const WASMOS_ERR_FS_FEATURE_INCOMPAT: i32 = -0x00040020; // volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures
 pub const WASMOS_ERR_FS_GEOMETRY: i32 = -0x00040021; // on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)
@@ -277,6 +280,7 @@ pub const WASMOS_ERR_BLOCK_DEV_WRITE_FAILED: i32 = -0x00190007; // the transfer 
 pub const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: i32 = -0x00190008; // a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t
 pub const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: i32 = -0x00190009; // a block record is short, unterminated, or names a length outside the transfer buffer
 pub const WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: i32 = -0x0019000A; // the device has no descriptor to report, so it cannot be identified
+pub const WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: i32 = -0x0019000B; // a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it
 
 #[inline]
 pub const fn wasmos_err_make(dom: u16, code: u16) -> i32 {
@@ -379,6 +383,9 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_PROC_PM_HANDLER_REG => "exec-handler registration failed",
         WASMOS_ERR_PROC_PM_NOT_AUTHORIZED => "caller lacks the subsystem.register capability",
         WASMOS_ERR_PROC_PM_NO_PM_FSBUF => "PM could not acquire its own xfer buffer",
+        WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN => "that service name is held by another live process",
+        WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN => "that (class, instance) is held by another live process",
+        WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED => "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on",
         WASMOS_ERR_LINMEM_NO_WINDOW => "no free page-aligned window fits in linear memory",
         WASMOS_ERR_LINMEM_MAP => "paging/linear-memory mapping step failed",
         WASMOS_ERR_LINMEM_NO_BASE => "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it",
@@ -413,7 +420,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_FS_BACKEND_IPC => "request could not be delivered to the backend, or no reply arrived",
         WASMOS_ERR_FS_BAD_FD => "fd is not present in this client's fd table",
         WASMOS_ERR_FS_REPLY_SEND => "the reply could not be delivered to the client",
-        WASMOS_ERR_FS_BAD_MAGIC => "on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent",
+        WASMOS_ERR_FS_BAD_MAGIC => "not a volume of this filesystem type",
         WASMOS_ERR_FS_CHECKSUM => "metadata checksum mismatch: the structure did not verify against the checksum it carries",
         WASMOS_ERR_FS_FEATURE_INCOMPAT => "volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures",
         WASMOS_ERR_FS_GEOMETRY => "on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)",
@@ -572,6 +579,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION => "a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t",
         WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED => "a block record is short, unterminated, or names a length outside the transfer buffer",
         WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR => "the device has no descriptor to report, so it cannot be identified",
+        WASMOS_ERR_BLOCK_DEV_QUEUE_FULL => "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it",
         _ => "unknown error",
     }
 }

@@ -105,6 +105,53 @@ static void test_pci_match_rule(void) {
     assert(strcmp(state.pci_match_rules[0].spawn_path, "system/drivers/fbpci.wap") == 0);
 }
 
+/* ENV{FSTYPE} names a filesystem TYPE for fs-manager to mount, in place of the
+ * RUN+= module the device manager would spawn itself. The two are alternatives:
+ * a mount rule carries no spawn path at all, which is what keeps `which module
+ * serves this type` out of a rule and inside fs-manager. */
+static void test_always_spawn_rule_carries_env_fstype(void) {
+    device_manager_state_t state;
+    const char* rules = "SUBSYSTEM==\"boot\", ENV{MOUNT}=\"/home/user\", ENV{FSTYPE}=\"tmpfs\"\n";
+
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_always_spawn(&state, rules);
+    assert(state.always_spawn_rule_count == 1u);
+    assert(strcmp(state.always_spawn_rules[0].fstype, "tmpfs") == 0);
+    assert(strcmp(state.always_spawn_rules[0].mount, "/home/user") == 0);
+    assert(state.always_spawn_rules[0].spawn_path[0] == '\0');
+}
+
+/* A rule names exactly one target. Both spellings on one line describe two
+ * different actions for one match and neither describes none, so each is refused
+ * rather than resolved by precedence -- a rule that silently did one of the two
+ * would be a mount nobody owns, or a driver nobody can stop. */
+static void test_rule_needs_exactly_one_target(void) {
+    device_manager_state_t state;
+    const char* both = "SUBSYSTEM==\"boot\", ENV{MOUNT}=\"/home/user\", "
+                       "ENV{FSTYPE}=\"tmpfs\", RUN+=\"system/drivers/fs_tmpfs.wap\"\n";
+    const char* neither = "SUBSYSTEM==\"boot\", ENV{MOUNT}=\"/home/user\"\n";
+
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_always_spawn(&state, both);
+    assert(state.always_spawn_rule_count == 0u);
+
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_always_spawn(&state, neither);
+    assert(state.always_spawn_rule_count == 0u);
+}
+
+/* A type says WHAT to mount and ENV{MOUNT} says WHERE. Without the second there
+ * is no mount request that could be sent, so the rule is refused at load instead
+ * of firing into a default path nobody asked for. */
+static void test_fstype_rule_requires_a_mount(void) {
+    device_manager_state_t state;
+    const char* rules = "SUBSYSTEM==\"boot\", ENV{FSTYPE}=\"tmpfs\"\n";
+
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_always_spawn(&state, rules);
+    assert(state.always_spawn_rule_count == 0u);
+}
+
 static void test_legacy_rule_is_rejected(void) {
     device_manager_state_t state;
     const char* rules = "always_spawn spawn_path=system/drivers/ata.wap\n"
@@ -126,6 +173,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_always_spawn_rule),
         WASMOS_TEST_CASE(test_always_spawn_rule_carries_env_mount),
         WASMOS_TEST_CASE(test_always_spawn_mount_may_be_nested),
+        WASMOS_TEST_CASE(test_always_spawn_rule_carries_env_fstype),
+        WASMOS_TEST_CASE(test_rule_needs_exactly_one_target),
+        WASMOS_TEST_CASE(test_fstype_rule_requires_a_mount),
         WASMOS_TEST_CASE(test_block_fs_rule),
         WASMOS_TEST_CASE(test_pci_match_rule),
         WASMOS_TEST_CASE(test_legacy_rule_is_rejected),

@@ -36,7 +36,8 @@ class TimerTickTests(unittest.TestCase):
         ok = self.session.expect(b"wamos> ", timeout_s=60)
         if not ok:
             self.fail(
-                f"CLI prompt not found while PIT was running.\n--- tail ---\n{self.session.tail()}\n"
+                f"no prompt while the PIT was running: {self.session.boot_diagnosis()}\n"
+                f"--- tail ---\n{self.session.tail()}\n"
             )
 
 

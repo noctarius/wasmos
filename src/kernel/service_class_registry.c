@@ -146,6 +146,35 @@ int service_class_registry_add(const char* class_name, uint32_t instance, uint32
     return 0;
 }
 
+/* Retire a provider its owner registered. Contract in the header.
+ *
+ * The REMOVE is emitted BEFORE the entry is dropped, so the event carries the
+ * endpoint and pid the provider had -- a subscriber's whole reason for wanting
+ * the event is to stop addressing that endpoint, and an event naming a cleared
+ * one says nothing. Same order as reap_dead, for the same reason. */
+int service_class_registry_remove(const char* class_name, uint32_t instance, uint32_t owner_ctx) {
+    char norm[SVC_CLASS_NAME_MAX];
+    list_iter_t it;
+    provider_t* p;
+
+    scr_ensure_init();
+    if (scr_copy_class(norm, class_name) != 0) {
+        return -1;
+    }
+    for (p = (provider_t*)list_first(&g_providers, &it); p; p = (provider_t*)list_next(&it)) {
+        if (p->instance != instance || !scr_streq(p->class_name, norm)) {
+            continue;
+        }
+        if (p->owner_ctx != owner_ctx) {
+            return -1;
+        }
+        scr_emit(SVC_CLASS_EVENT_REMOVE, p->class_name, p->instance, p->endpoint, p->pid);
+        list_remove(&g_providers, p);
+        return 0;
+    }
+    return -1;
+}
+
 /* Lists the providers of a class in ascending instance order.
  *
  * Returns the TOTAL number of matching providers, which can exceed `max`: only

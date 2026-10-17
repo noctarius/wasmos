@@ -121,10 +121,33 @@ pub const SVC_IPC_REGISTER_DESC_REQ: i32 = 0x222;
 /// arg0=SVC_CLASS_EVENT_* arg1=instance arg2=endpoint arg3=pid.
 pub const SVC_IPC_LOOKUP_CLASS_REQ: i32 = 0x223;
 pub const SVC_IPC_SUBSCRIBE_CLASS_REQ: i32 = 0x224;
+/// Retire a class registration the sender itself made.
+/// req  arg0=buffer_id (class name NUL-terminated at offset 0),
+/// arg1=instance;
+/// resp SVC_IPC_UNREGISTER_CLASS_RESP arg0=0.
+///
+/// The class name travels in a buffer for the same reason LOOKUP_CLASS and
+/// SUBSCRIBE_CLASS carry theirs there: a name is up to 16 bytes and would
+/// consume every argument word.
+///
+/// Subscribers see SVC_CLASS_EVENT with arg0=SVC_CLASS_EVENT_REMOVE,
+/// carrying the endpoint and pid the provider HAD -- indistinguishable
+/// from the event fired when an owner dies, deliberately: a subscriber
+/// wants to stop addressing an endpoint, and why it went is not its
+/// business.
+///
+/// Only the OWNER may retire a registration. A registration is a claim on
+/// (class, instance), and letting another context drop one would let
+/// anything unpublish a device it does not own -- the impersonation the
+/// register path already refuses, which has to be refused at both ends or
+/// it is not refused at all. Retiring one nobody holds, or one held by
+/// somebody else, fails the same way: it is not yours to retire.
+pub const SVC_IPC_UNREGISTER_CLASS_REQ: i32 = 0x225;
 pub const SVC_IPC_REGISTER_RESP: i32 = 0x2A0;
 pub const SVC_IPC_LOOKUP_RESP: i32 = 0x2A1;
 pub const SVC_IPC_LOOKUP_CLASS_RESP: i32 = 0x2A2;
 pub const SVC_IPC_SUBSCRIBE_CLASS_RESP: i32 = 0x2A3;
+pub const SVC_IPC_UNREGISTER_CLASS_RESP: i32 = 0x2A5;
 pub const SVC_IPC_CLASS_EVENT: i32 = 0x2A4;
 pub const SVC_IPC_ERROR: i32 = 0x2AF;
 
@@ -271,11 +294,24 @@ pub const FS_IPC_STREAM: i32 = 0x481;
 pub const FS_IPC_ERROR: i32 = 0x4FF;
 
 // fs_manager (0x420..0x4A4)
-/// fs-manager -> backend pull: report kind/fs-type/mount/unit into a buffer
-/// the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
-/// arg1=fs_type, arg2=mount_name_len, arg3=unit. Backends are discovered
-/// via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager rebuilds
-/// its backend set from the registry on (re)start.
+/// fs-manager -> backend pull: report kind/fs-type/mount/device into a
+/// buffer the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
+/// arg1=fs_type, arg2=mount_name_len, arg3=device_id_len. Backends are
+/// discovered via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager
+/// rebuilds its backend set from the registry on (re)start.
+///
+/// The buffer carries BOTH strings, the mount name at offset 0 and the
+/// device's canonical id immediately after it at offset arg2. Neither is
+/// NUL-terminated there; the two lengths delimit them.
+///
+/// arg3 == 0 means this filesystem sits on no block device -- an absence,
+/// not an unknown -- and `mount` then names no device for it. A backend
+/// that HAS one reports the id it was spawned with, because the backend is
+/// the authority: it is the string it fingerprinted to find its block
+/// server. fs-manager asking device-manager instead cannot work, and the
+/// retired backend_refresh_boot_meta is the proof -- it was a synchronous
+/// query to a service that is itself blocked waiting on fs-manager during
+/// bring-up.
 ///
 /// A backend MUST name its mount: arg2 > 0 always. Nothing else knows where
 /// a backend belongs -- a block backend is told by the rule that spawned it
@@ -771,6 +807,28 @@ pub const VOLUME_IPC_IDENTIFY_REQ: i32 = 0xE00;
 /// and enforcing it would mean standing in the data path for every read to
 /// prevent a mistake only those two can make.
 pub const VOLUME_IPC_CLAIM_REQ: i32 = 0xE01;
+/// Re-probe a block device and update the volume on it. arg0 = the
+/// device's `block` CLASS INSTANCE -- the device, not the volume, because
+/// a caller that has just written a filesystem knows which disk it wrote
+/// and a volume for it may not exist yet.
+/// Answered with VOLUME_IPC_RESP, arg0 = 0, arg1 = 1 when a volume is
+/// present on the device afterwards and 0 when none was recognised.
+///
+/// A device is probed once, when it arrives under the `block` class, and
+/// nothing re-probes it afterwards -- so a disk formatted from inside the
+/// guest keeps whatever the volume manager saw on it at boot, and every
+/// rule and tool that reads the volume layer sees the stale answer. This
+/// is what `mkfs` sends once its write has landed.
+///
+/// The reply is DEFERRED: a probe is synchronous and runs on the volume
+/// manager's root task, so the request is queued and answered when that
+/// probe completes rather than from the handler that received it.
+///
+/// Updates the volume IN PLACE, keeping its class instance -- which is a
+/// fingerprint of a canonical id derived from the device, so it does not
+/// change -- and keeping any CLAIM on it, which belongs to whoever holds
+/// the volume and not to the probe.
+pub const VOLUME_IPC_RESCAN_REQ: i32 = 0xE02;
 /// arg0 = 0, arg1 = bytes written into the caller's buffer.
 pub const VOLUME_IPC_IDENTIFY_RESP: i32 = 0xE80;
 pub const VOLUME_IPC_RESP: i32 = 0xE81;

@@ -84,10 +84,7 @@ def _boot(image: str, timeout_s: int = 150) -> QemuSession:
     cfg.wfs_snapshot = False
     session = QemuSession(cfg, timeout_s=timeout_s, echo=False)
     session.start()
-    if not session.expect(b"wamos> "):
-        tail = session.tail()
-        session.close()
-        raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
+    session.require_prompt()
     return session
 
 

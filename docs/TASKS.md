@@ -1100,6 +1100,63 @@ tail.
   format a mounted volume -- has no call site yet. Whoever adds a guest `mkfs.wfs`
   owes it the same check `fsck.wfs` makes.
 
+- [ ] [PERF][P2] A block WRITE cannot be a DMA transfer, on either backend, so a
+  guest that writes in bulk pays one 8 KiB-capped PIO round trip per request.
+  READS already take the fast path -- ATA programs bus-master DMA and virtio-blk
+  maps the borrow and points the disk at it -- but both refuse the same
+  destination on a write:
+
+  - `src/drivers/ata/ata.c` serves only `BLOCK_DST_BLOCK_BUFFER` for a write and
+    says why in a TODO: `WASMOS_DMA_DIR_TO_DEVICE` is what `ata_dma_prepare`
+    still denies. The transfer itself is `ata_write_lba28`, i.e. PIO; only
+    `READ_DMA` has a bus-master counterpart here.
+  - `src/drivers/virtio_blk/virtio_blk.zig` refuses `BLOCK_DST_XFER_BUFFER`
+    outright when `is_write`, because it has no staging path and maps the borrow
+    only `DMA_DIR_FROM_DEVICE`.
+
+  The consequence is measurable rather than theoretical: `mkfs.wfs` writing every
+  block of a 16 MiB volume takes 110s for 4096 requests, about 27ms each, and a
+  disk of any real size is unusable that way. It is also why the request struct's
+  `dst_buffer_id`/`dst_borrow_id` pair is dead weight on the write side -- the
+  ABI already describes the transfer that neither backend performs.
+
+  Two fixes, in order: allow a transfer-buffer source so one request can carry
+  far more than the 8 KiB per-process block buffer, and issue `WRITE_DMA` on ATA.
+  The first is the larger win, because it removes round trips rather than making
+  each one faster.
+
+- [ ] [FEATURE][P2] A guest-side wrapper for `SVC_IPC_UNREGISTER_CLASS_REQ`. The
+  kernel primitive and the opcode exist (`service_class_registry_remove`,
+  `pm_handle_class_unregister`), but nothing in a guest can send it: the obvious
+  wrappers are synchronous request/reply, and the caller this is FOR -- the
+  partition manager retiring a partition whose table was rewritten -- is an async
+  service that would stop dispatching while it waited. AGENTS.md bans adding
+  those, so the wrapper comes with the caller, built on an IPC future with the
+  staged class-name buffer held alive until the reply lands.
+
+- [ ] [ENHANCEMENT][P2] A rescan can change what a volume IS but not make one go
+  away. `VOLUME_IPC_RESCAN_REQ` re-probes a device and updates its volume in
+  place, which covers a disk that gained or changed a filesystem. It cannot cover
+  a disk that gained a PARTITION TABLE, because the volume on the whole device
+  should then stop existing -- and retiring one means unregistering it from the
+  `block`/`volume` class and telling the device manager, neither of which has an
+  unregister path. The same gap stops the partition manager retiring a disk's
+  partitions (`handleClassEvent`, where REMOVE is deliberately not acted on).
+
+  This is the prerequisite for `fdisk`: writing a table over a disk that already
+  had one must republish the partitions that changed and retire the ones that
+  went. Needs, in order: a class unregister, a devmgr unpublish, and then a
+  partition-manager rescan built on both.
+
+- [ ] [ENHANCEMENT][P3] `mkfs.wfs` as a guest utility. The formatter's library
+  half is ready for one: `wfs_mkfs_plan_tree` settles the layout and the tree
+  without writing, and `wfs_mkfs_block_at` serializes any single block purely, so
+  a guest can await a BLOCK write between blocks instead of holding the
+  synchronous sink. What remains is the utility itself -- resolving a volume id,
+  granting a transfer buffer, the write loop, and the claim check above. An
+  EMPTY volume needs only the write side, because the read callback is reachable
+  only through entries.
+
 - [ ] [ENHANCEMENT][P4] A claim does not catch the overlap it looks like it
   should: a disk and its partitions are distinct volumes, so claiming one does not
   mark the others. Today that is prevented by suppressing the whole-disk volume of
@@ -1948,6 +2005,22 @@ Source: `architecture/25-diagnostics-status.md`,
 
   A `[sched] claim lost` line means the race fired and the claim resolved it.
 
+  FOURTH capture, run 39048670258 job 117442481201 (`wasm3_smp`, `a=0x0e`,
+  cr2=`ffffffffffffffff`), on a branch whose delta from the green runs around it
+  is filesystem tooling and a kernel allocator fix -- neither on a scheduler
+  path. CPU 0 `pid=13 tid=23 rip=ffffffff80000512` under `process_schedule_once`,
+  which is the P3 entry's shape exactly: KERNEL_HIGHER_HALF_BASE plus a tiny
+  offset (0x512 against its recorded 0x507), same pid.
+
+  Worth noting across captures: the SIBLING CPU is inside the runtime's compiler
+  every time -- here CPU 1 in wasm3's `ReleaseCompilationCodePage` <-
+  `CompileFunction` <- `m3_FindFunction` <- `wasm_driver_call_unlocked`, and in
+  the third capture CPU 1 in `vb::Frontend::startCompilation`. Two different
+  runtimes, the same position. Compilation is the longest uninterrupted stretch a
+  guest thread spends in the kernel, so it may only be the widest window rather
+  than a participant, but it has now held in three of four captures and is the
+  one correlation the claim fix does not explain.
+
 - [ ] [BUG][P0] The guest reaches no CLI prompt on roughly one CI run in two, and
   it is ONE defect with several faces, not several flakes. Every capture is a
   whole-session stall: the tests that report it differ only by which one happened
@@ -1960,7 +2033,10 @@ Source: `architecture/25-diagnostics-status.md`,
     `cli`). Runs 32625904585 (`main` at 78018f8191) and 32634831416.
   - `boot-and-init`: `ERROR: setUpClass ... RuntimeError: CLI prompt not detected`
     (`tests/test_init_smoke.py:24`). Run 32636373451. This is the capture that
-    carries a `[stall-dump]`; see the wedge item below.
+    carries a `[stall-dump]`; see the wedge item below. Seen again on run
+    39046230087 (`wasm3_smp`), where the SAME tree passed that battery on a later
+    run -- so the arbitrariness is confirmed on one commit rather than inferred
+    across several.
   - `networking`: `ERROR: setUpClass ... RuntimeError: CLI prompt not reached`
     (`tests/test_net_stack_udp_echo_e2e.py:43`, run 32636373451) and
     `test_host_resolves_localhost` timing out for 120 s on its FIRST prompt wait

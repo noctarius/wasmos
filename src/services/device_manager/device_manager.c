@@ -24,6 +24,7 @@ static device_manager_state_t g_dm = {
     .inventory_endpoint = -1,
     .query_endpoint = -1,
     .rule_reply_endpoint = -1,
+    .mount_reply_endpoint = -1,
     .fs_endpoint = -1,
     .request_id = 1,
     .module_count = 0,
@@ -46,6 +47,10 @@ static device_manager_state_t g_dm = {
     .rule_spawn_pending = 0,
     .rule_spawn_retries = 0,
     .rule_spawn_path = {0},
+    .active_rule_fstype = {0},
+    .mount_req_pending = 0,
+    .mount_req_id = -1,
+    .mount_req_bid = -1,
     .active_rule_spawn_kind = 0,
     .active_rule_spawn_index = -1,
     .active_rule_spawn_device_index = -1,
@@ -66,6 +71,7 @@ static wasmos_sys_event_loop_t g_dm_ipc_loop;
 static wasmos_sys_event_loop_t g_dm_inventory_loop;
 static wasmos_sys_event_loop_t g_dm_query_loop;
 static wasmos_sys_event_loop_t g_dm_rules_loop;
+static wasmos_sys_event_loop_t g_dm_mount_loop;
 static int32_t g_dm_call_select_id = -1;
 /* Select set the IDLE phase blocks on (reply/query/inventory) instead of
  * yield-spinning.  rule_reply is deliberately excluded: it is owned by
@@ -92,6 +98,10 @@ typedef struct {
 } dm_rules_wait_t;
 
 static dm_rules_wait_t g_dm_rules_wait = {0};
+/* The reply to the mount request in flight. Its own wait slot rather than the
+ * rules one: both are answered by fs-manager and both can carry FS_IPC_ERROR, so
+ * one slot would let a failed rules read retire a mount. */
+static dm_rules_wait_t g_dm_mount_wait = {0};
 
 #define RULE_SPAWN_KIND_NONE 0u
 #define RULE_SPAWN_KIND_ALWAYS 1u
@@ -139,7 +149,6 @@ static void queue_acpi_match_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char* name);
-static const char* block_backend_name(uint8_t backend);
 static const char* devmgr_subsystem_name(uint8_t subsystem);
 static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec);
 static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec);
@@ -154,10 +163,12 @@ static int dm_ipc_call(int32_t destination_endpoint, int32_t source_endpoint, in
                        wasmos_ipc_message_t* out_msg, int32_t max_empty_polls);
 static void dm_handle_ipc_default(void* user, const wasmos_ipc_message_t* msg);
 static void dm_handle_rules_reply(void* user, const wasmos_ipc_message_t* msg);
+static void dm_handle_mount_reply(void* user, const wasmos_ipc_message_t* msg);
 static int dm_register_ipc_handlers(void);
 static int dm_register_inventory_handlers(void);
 static int dm_register_query_handlers(void);
 static int dm_register_rules_handlers(void);
+static int dm_register_mount_handlers(void);
 
 /* Synchronous IPC call: send the request, then block on g_dm_call_select_id
  * until the reply with the matching request_id arrives.  The wait is a real
@@ -951,13 +962,14 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
 
 /* What a block-filesystem driver is told about the device it was spawned for.
  *
- * `id=` is the address. It is the canonical id the backend published, and the
- * driver fingerprints it to get the `block` class instance that backend
- * registered under. `driver=` and `unit=` travel alongside for the driver's own
- * diagnostics and for a backend-specific IDENTIFY argument, but nothing is
- * addressed with them: a unit is backend-local, so `unit=0` alone names a
- * different disk on every backend that has one, and since a partition publishes
- * under its disk's unit it does not even name a volume.
+ * TWO tokens, and only these two. `id=` is the address: the canonical id the
+ * backend published, which the driver fingerprints to get the `block` class
+ * instance that backend registered under, and off whose descriptor it reads the
+ * backend and unit it wants for itself. `driver=` and `unit=` used to travel
+ * alongside and were dead weight -- a unit is backend-local, so `unit=0` alone
+ * names a different disk on every backend that has one, and a partition
+ * publishes under its disk's unit so it does not even name a volume. One place
+ * spells a disk, and it is the publisher.
  *
  * `mount=` is the rule's decision about WHERE the volume goes, delivered at
  * spawn. It travels here rather than being fetched back from this service
@@ -966,24 +978,21 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
  * DEVMGR_QUERY_BLOCK_MOUNT_REQ was, keyed on the unit -- cannot tell two volumes
  * on one disk apart.
  *
+ * Only /boot is spawned this way now; every other block filesystem is mounted
+ * through fs-manager, which builds the same two tokens itself.
+ *
  * Refuses rather than truncates: a truncated id fingerprints to a different
  * value than the backend registered, so the filesystem would search forever for
  * an instance that does not exist, and a truncated mount path puts a volume
  * somewhere nobody asked for. */
-static int build_block_fs_spawn_args(uint8_t backend, uint8_t unit, const char* canonical_id,
-                                     const char* mount, char* out, uint32_t out_cap) {
+static int build_block_fs_spawn_args(const char* canonical_id, const char* mount, char* out,
+                                     uint32_t out_cap) {
     int n = 0;
     if (!out || out_cap == 0u || !canonical_id || canonical_id[0] == '\0' || !mount ||
         mount[0] == '\0') {
         return -1;
     }
-    n = snprintf(out,
-                 out_cap,
-                 "driver=%s unit=%u id=%s mount=%s",
-                 block_backend_name(backend),
-                 (unsigned)unit,
-                 canonical_id,
-                 mount);
+    n = snprintf(out, out_cap, "id=%s mount=%s", canonical_id, mount);
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
     }
@@ -1296,6 +1305,7 @@ static void queue_pci_match_rule_spawns(void) {
                     (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
             }
             str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+            g_dm.active_rule_fstype[0] = '\0';
             g_dm.rule_spawn_pending = 1;
             g_dm.rule_spawn_retries = 0;
             g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_PCI_MATCH;
@@ -1338,6 +1348,7 @@ static void queue_acpi_match_rule_spawns(void) {
             g_dm.active_rule_spawn_caps.irq_mask =
                 (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
             str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+            g_dm.active_rule_fstype[0] = '\0';
             g_dm.rule_spawn_pending = 1;
             g_dm.rule_spawn_retries = 0;
             g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_ACPI_MATCH;
@@ -1368,6 +1379,7 @@ static void queue_block_fs_rule_spawns(void) {
             continue;
         }
         str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+        str_copy(g_dm.active_rule_fstype, sizeof(g_dm.active_rule_fstype), rule->fstype);
         /* Clear the grant: active_rule_spawn_caps is one shared slot, and a
          * spawn must never inherit the capabilities resolved for a previous
          * one. An always-spawn rule targets no device and grants nothing. */
@@ -1401,6 +1413,7 @@ static void queue_block_fs_rule_spawns(void) {
             continue;
         }
         str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+        str_copy(g_dm.active_rule_fstype, sizeof(g_dm.active_rule_fstype), rule->fstype);
         /* Clear the grant: see the always-spawn path. A block-filesystem
          * driver reaches its device over IPC and needs no hardware window. */
         g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
@@ -1531,7 +1544,7 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
         char queued_msg[160];
         (void)snprintf(queued_msg,
                        sizeof(queued_msg),
-                       "[device-manager] %s rule queued spawn mount=%s id=%s\n",
+                       "[device-manager] %s rule queued mount=%s id=%s\n",
                        devmgr_subsystem_name(rec->desc.partition != 0u
                                                  ? (uint8_t)DEVMGR_BLOCK_SUBSYS_PARTITION
                                                  : (uint8_t)DEVMGR_BLOCK_SUBSYS_DISK),
@@ -1659,7 +1672,7 @@ static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec) {
              * decides. The mount is what makes that readable from a log. */
             (void)snprintf(queued_msg,
                            sizeof(queued_msg),
-                           "[device-manager] volume rule queued spawn mount=%s id=%s on %s\n",
+                           "[device-manager] volume rule queued mount=%s id=%s on %s\n",
                            rule->mount[0] ? rule->mount : "(none)",
                            rec->desc.canonical_id,
                            backing->desc.canonical_id);
@@ -1679,20 +1692,6 @@ static void queue_block_fs_rules_for_known_devices(void) {
         (void)queue_block_fs_rules_for_volume(&g_dm.volume_registry[vi]);
     }
     queue_block_fs_rule_spawns();
-}
-
-/* Name of a backend for the canonical id and the log line. Kept in step with
- * block_backend_from_name() in device_manager_rules.c, which maps the same names
- * the other way for a rule's DRIVER== value. */
-static const char* block_backend_name(uint8_t backend) {
-    switch (backend) {
-    case (uint8_t)BLOCK_BACKEND_ATA:
-        return "ata";
-    case (uint8_t)BLOCK_BACKEND_VIRTIO_BLK:
-        return "virtio-blk";
-    default:
-        return "unknown";
-    }
 }
 
 /* The rule's SUBSYSTEM, spelled as a rule file spells it.
@@ -2173,6 +2172,32 @@ static int dm_register_query_handlers(void) {
     return 0;
 }
 
+static void dm_handle_mount_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (!msg || !g_dm_mount_wait.pending) {
+        return;
+    }
+    if (msg->request_id != g_dm.mount_req_id) {
+        return;
+    }
+    g_dm_mount_wait.msg = *msg;
+    g_dm_mount_wait.done = 1;
+}
+
+static int dm_register_mount_handlers(void) {
+    if (wasmos_sys_event_register(
+            &g_dm_mount_loop, FSMGR_IPC_MOUNT_RESP, dm_handle_mount_reply, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_sys_event_register(&g_dm_mount_loop, FS_IPC_ERROR, dm_handle_mount_reply, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_sys_event_set_default(&g_dm_mount_loop, dm_handle_ipc_default, 0) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int dm_register_rules_handlers(void) {
     if (wasmos_sys_event_register(&g_dm_rules_loop, FS_IPC_RESP, dm_handle_rules_reply, 0) != 0) {
         return -1;
@@ -2300,6 +2325,184 @@ static void consume_acpi_inventory(void) {
      * boot_mount_ready so drivers on /boot can be found by the FS. */
 }
 
+/* Retire the rule action that just finished, and re-drive the queue.
+ *
+ * `ok` says whether the action succeeded: a spawn that the process manager
+ * accepted, or a mount fs-manager placed. Both arrive here, because what a
+ * completed rule leaves behind -- the rule marked spawned, /boot or /user noted
+ * as ready, the armed slot cleared -- does not depend on which of the two the
+ * rule asked for.
+ *
+ * A mount completion is DEFERRED: the request is sent from the spawn phase and
+ * this runs later, from poll_mount_request_async, so nothing between the two may
+ * assume the armed slot has already been retired. */
+static void rule_spawn_complete(int32_t ok) {
+    if (ok) {
+        g_dm.rule_spawn_pending = 0;
+        if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS) {
+            if (g_dm.active_rule_spawn_index >= 0 &&
+                g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
+                always_spawn_rule_t* rule = &g_dm.always_spawn_rules[g_dm.active_rule_spawn_index];
+                rule->spawned = 1;
+                rule->queued = 0;
+            }
+        } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
+            if (g_dm.active_rule_spawn_index >= 0 &&
+                g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+                block_fs_rule_t* rule = &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
+                rule->spawned = 1;
+                rule->queued = 0;
+                if (wasmos_sys_streq(rule->mount, "/boot")) {
+                    g_dm.boot_mount_ready = 1;
+                    queue_always_spawn_rules();
+                } else if (wasmos_sys_streq(rule->mount, "/user")) {
+                    g_dm.user_mount_ready = 1;
+                }
+            }
+        } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH) {
+            if (g_dm.active_rule_spawn_index >= 0 &&
+                g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_match_rule_count) {
+                if (g_dm.active_rule_spawn_device_index >= 0 &&
+                    g_dm.active_rule_spawn_device_index < 64) {
+                    g_dm.pci_match_rules[g_dm.active_rule_spawn_index].spawned_device_mask |=
+                        (uint64_t)1u << (uint32_t)g_dm.active_rule_spawn_device_index;
+                }
+            }
+        } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH) {
+            if (g_dm.active_rule_spawn_index >= 0 &&
+                g_dm.active_rule_spawn_index < (int32_t)g_dm.acpi_match_rule_count) {
+                if (g_dm.active_rule_spawn_device_index >= 0 &&
+                    g_dm.active_rule_spawn_device_index < 64) {
+                    g_dm.acpi_match_rules[g_dm.active_rule_spawn_index].spawned_device_mask |=
+                        (uint64_t)1u << (uint32_t)g_dm.active_rule_spawn_device_index;
+                }
+            }
+        }
+        /* Clear the completed spawn's tracking BEFORE re-driving the
+         * queue. queue_block_fs_rule_spawns() arms the next rule by
+         * writing active_rule_spawn_kind/_index, so re-driving first
+         * and clearing afterwards downgrades that freshly armed
+         * spawn to kind NONE while leaving rule_spawn_pending set --
+         * and a kind-NONE rule spawn takes the no-capability,
+         * no-args PROC_IPC_SPAWN_PATH_SYNC path, so the driver
+         * starts without the driver=/unit= startup args that tell it
+         * which disk it was spawned for. Only the FIRST block_fs
+         * rule of a rule set is armed from outside this block, which
+         * is why a single-rule set never showed it.
+         *
+         * The call below is therefore both the reset point and the
+         * re-drive: only one spawn is pending at a time, so without
+         * it every block_fs rule after the first stays queued
+         * forever. */
+        g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
+        g_dm.active_rule_spawn_index = -1;
+        g_dm.active_rule_spawn_device_index = -1;
+        g_dm.active_rule_spawn_caps.cap_flags = 0;
+        g_dm.active_rule_fstype[0] = '\0';
+        queue_block_fs_rule_spawns();
+    } else {
+        /* Spawn failed or timed out; apply retry policy. */
+        if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS &&
+            g_dm.active_rule_spawn_index >= 0 &&
+            g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
+            g_dm.always_spawn_rules[g_dm.active_rule_spawn_index].queued = 0;
+        }
+        g_dm.rule_spawn_retries++;
+        if (g_dm.rule_spawn_retries > 8) {
+            g_dm.rule_spawn_pending = 0;
+            if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
+                if (g_dm.active_rule_spawn_index >= 0 &&
+                    g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].queued = 0;
+                }
+            }
+            g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
+            g_dm.active_rule_spawn_index = -1;
+            g_dm.active_rule_spawn_device_index = -1;
+            g_dm.active_rule_spawn_caps.cap_flags = 0;
+            g_dm.active_rule_fstype[0] = '\0';
+            queue_block_fs_rule_spawns();
+        }
+    }
+}
+
+/* Ask fs-manager to mount `fstype` at `mount`, WITHOUT waiting for the answer.
+ *
+ * The device manager does not spawn a filesystem: it decides, from the rules and
+ * from what it has enumerated, that one BELONGS at a path, and fs-manager places
+ * it. That keeps one owner per mount -- the same service that holds the mount
+ * table, answers `mount`, and parents the backend it spawned, which is what makes
+ * the mount removable again.
+ *
+ * Not waiting is required, not a refinement. fs-manager spawns the backend
+ * through the process manager, which READS the module through fs-manager; a
+ * device manager blocking here would hold its query endpoint shut for the whole
+ * bring-up of that driver, and everything it answers is upstream of one.
+ *
+ * The descriptor is `key=value` text in a buffer this service OWNS and grants
+ * fs-manager READ -- the owner-push shape of every buffer-carrying request
+ * (docs/architecture/12-dma-transfers.md). The buffer is held until the reply
+ * arrives, because fs-manager reads it inside its own handler and nothing here
+ * can observe when that finishes.
+ *
+ * Returns 0 when the request was sent. */
+static int dm_mount_request_send(const char* fstype, const char* mount, const char* source_id) {
+    char desc[DM_RULE_SPAWN_ARGS_MAX];
+    int32_t len;
+    int32_t bid;
+    int32_t grant;
+
+    if (!fstype || fstype[0] == '\0' || !mount || mount[0] == '\0') {
+        return -1;
+    }
+    if (ensure_fs_endpoint() != 0) {
+        return -1;
+    }
+    desc[0] = '\0';
+    str_copy(desc, sizeof(desc), "type=");
+    wasmos_sys_str_append(desc, sizeof(desc), fstype);
+    wasmos_sys_str_append(desc, sizeof(desc), " mount=");
+    wasmos_sys_str_append(desc, sizeof(desc), mount);
+    if (source_id && source_id[0] != '\0') {
+        wasmos_sys_str_append(desc, sizeof(desc), " source=");
+        wasmos_sys_str_append(desc, sizeof(desc), source_id);
+    }
+    len = wasmos_sys_strlen(desc);
+    if (len <= 0 || len >= wasmos_xfer_buffer_size()) {
+        return -1;
+    }
+    bid = wasmos_xfer_buffer_acquire(len);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, desc, len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    grant = wasmos_xfer_buffer_borrow(g_dm.fs_endpoint, bid, WASMOS_BUFFER_GRANT_READ);
+    if (grant < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    g_dm.mount_req_id = g_dm.request_id++;
+    if (wasmos_ipc_send(g_dm.fs_endpoint,
+                        g_dm.mount_reply_endpoint,
+                        FSMGR_IPC_MOUNT_REQ,
+                        g_dm.mount_req_id,
+                        len,
+                        0,
+                        bid,
+                        grant) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    g_dm.mount_req_bid = bid;
+    g_dm.mount_req_pending = 1;
+    g_dm_mount_wait.pending = 1;
+    g_dm_mount_wait.done = 0;
+    return 0;
+}
+
 static hw_spawn_target_t next_spawn_target(void) {
     if (g_dm.need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
@@ -2307,7 +2510,14 @@ static hw_spawn_target_t next_spawn_target(void) {
     if (g_dm.need_acpi_bus) {
         return HW_SPAWN_ACPI_BUS;
     }
-    if (g_dm.rule_spawn_pending && g_dm.rule_spawn_path[0] != '\0') {
+    /* A mount request is in flight for the armed rule, which stays armed until
+     * fs-manager answers. Re-entering the spawn phase here would send it a
+     * second time. */
+    if (g_dm.mount_req_pending) {
+        return HW_SPAWN_NONE;
+    }
+    if (g_dm.rule_spawn_pending &&
+        (g_dm.rule_spawn_path[0] != '\0' || g_dm.active_rule_fstype[0] != '\0')) {
         /* If /boot is mounted but boot rules haven't been fully loaded yet,
          * don't start any new rule-derived spawn.  Boot rules loading resets
          * all rule tables (including active_rule_spawn_index), so allowing a
@@ -2408,6 +2618,52 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
     (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
 }
 
+/* Complete the mount request in flight once fs-manager has answered.
+ *
+ * Polled from the IDLE phase rather than waited on: this is the deferred half of
+ * dm_mount_request_send, and everything the device manager otherwise does stays
+ * served while a backend is coming up.
+ *
+ * A refusal retires the rule through the same failure path a refused spawn takes,
+ * so a filesystem that cannot be placed is retried a bounded number of times and
+ * then dropped, instead of re-arming forever.
+ *
+ * TODO: a WASMOS_ERR_FS_BUSY refusal -- fs-manager already has a mount in flight
+ * -- spends one of those retries even though nothing was attempted, and the
+ * retries are immediate, so a run of them can exhaust the budget and drop the
+ * mount within microseconds. Harmless today: only boot rules reach here, and they
+ * fire during bring-up before any shell exists to issue a competing `mount`. It
+ * stops being harmless when block rules join this path, because a disk can arrive
+ * at any time. */
+static void poll_mount_request_async(void) {
+    int32_t ok;
+    if (!g_dm.mount_req_pending) {
+        return;
+    }
+    while (!g_dm_mount_wait.done) {
+        if (wasmos_sys_event_loop_poll(&g_dm_mount_loop, 8) <= 0) {
+            return;
+        }
+    }
+    g_dm_mount_wait.pending = 0;
+    g_dm.mount_req_pending = 0;
+    /* Owner-push: fs-manager has unborrowed its grant by the time it replies, so
+     * the release succeeds here. */
+    if (g_dm.mount_req_bid >= 0) {
+        (void)wasmos_xfer_buffer_release(g_dm.mount_req_bid);
+        g_dm.mount_req_bid = -1;
+    }
+    ok = (g_dm_mount_wait.msg.type == (int32_t)FSMGR_IPC_MOUNT_RESP &&
+          g_dm_mount_wait.msg.arg0 == 0);
+    if (!ok) {
+        console_write("[device-manager] mount refused: ");
+        console_write(g_dm.rule_spawn_path[0] != '\0' ? g_dm.rule_spawn_path
+                                                      : g_dm.active_rule_fstype);
+        console_write("\n");
+    }
+    rule_spawn_complete(ok);
+}
+
 static void handle_query_endpoint_nonblocking(void) {
     for (int32_t i = 0; i < 16; ++i) {
         wasmos_ipc_message_t msg;
@@ -2461,7 +2717,8 @@ static void drain_reply_endpoint_nonblocking(int32_t budget) {
  * the initfs module count come from the spawn-info contract and overwrite the
  * corresponding parameters.  The module count decides whether the pci_bus/fat
  * modules are available at all.
- * Creates four event-loop endpoints (ipc, inventory, query, rule_reply),
+ * Creates five event-loop endpoints (ipc, inventory, query, rule_reply,
+ * mount_reply),
  * registers services "devmgr.inv" and "devmgr.query", loads init rules,
  * then runs the hw_phase state machine and never returns.
  * NOTE: boot rules (DEVMGR_RULES_BOOT_ROOT) must be fully loaded before new
@@ -2544,6 +2801,19 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     wasmos_sys_event_loop_init(&g_dm_rules_loop, g_dm.rule_reply_endpoint, 0xE100);
     if (dm_register_rules_handlers() != 0) {
         console_write("[device-manager] rules handler registration failed\n");
+        wasmos_sys_ipc_recv_loop();
+    }
+    /* Its own endpoint, not rule_reply: a rules read and a mount request are
+     * both answered by fs-manager and both can come back as FS_IPC_ERROR, so one
+     * endpoint would let either reply be dispatched to the other's handler. */
+    g_dm.mount_reply_endpoint = wasmos_ipc_create_endpoint();
+    if (g_dm.mount_reply_endpoint < 0) {
+        console_write("[device-manager] mount reply endpoint create failed\n");
+        wasmos_sys_ipc_recv_loop();
+    }
+    wasmos_sys_event_loop_init(&g_dm_mount_loop, g_dm.mount_reply_endpoint, 0xE200);
+    if (dm_register_mount_handlers() != 0) {
+        console_write("[device-manager] mount handler registration failed\n");
         wasmos_sys_ipc_recv_loop();
     }
     log_rule_roots_once();
@@ -2659,6 +2929,46 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                     console_write(g_dm.rule_spawn_path);
                     console_write("\n");
                 }
+                /* A rule naming a filesystem TYPE is a mount, not a spawn: the
+                 * device manager says what belongs where and fs-manager places
+                 * it, so one service owns the mount table, the backend process
+                 * and the ability to take the mount down again.
+                 *
+                 * The reply is DEFERRED -- poll_mount_request_async retires the
+                 * rule -- so this must not fall through to rule_spawn_complete.
+                 *
+                 * A block rule additionally names the VOLUME, by the canonical id
+                 * of the device that actually matched. That id is the only device
+                 * token the filesystem driver is given: the driver resolves its
+                 * block server from the id's class instance and reads the backend
+                 * and unit off the descriptor it IDENTIFYs, so nothing downstream
+                 * has to be told a disk twice and disagree about it. */
+                if (g_dm.active_rule_fstype[0] != '\0') {
+                    const char* mount = 0;
+                    const char* source_id = 0;
+                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS &&
+                        g_dm.active_rule_spawn_index >= 0 &&
+                        g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
+                        mount = g_dm.always_spawn_rules[g_dm.active_rule_spawn_index].mount;
+                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS &&
+                               g_dm.active_rule_spawn_index >= 0 &&
+                               g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+                        const block_fs_rule_t* rule =
+                            &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
+                        mount = rule->mount;
+                        source_id = rule->matched_id;
+                    }
+                    if (mount &&
+                        dm_mount_request_send(g_dm.active_rule_fstype, mount, source_id) == 0) {
+                        g_dm.pending = HW_SPAWN_NONE;
+                        g_dm.phase = HW_PHASE_SPAWN;
+                        continue;
+                    }
+                    rule_spawn_complete(0);
+                    g_dm.pending = HW_SPAWN_NONE;
+                    g_dm.phase = HW_PHASE_SPAWN;
+                    continue;
+                }
                 /* Rule-based driver launches use path+caps spawn when they need
                  * inventory-derived grants or startup args to target a device. */
                 if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS ||
@@ -2703,9 +3013,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                g_dm.active_rule_spawn_index >= 0 &&
                                g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count &&
                                build_block_fs_spawn_args(
-                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index]
-                                       .matched_backend,
-                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index].matched_unit,
                                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].matched_id,
                                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].mount,
                                    spawn_args,
@@ -2751,95 +3058,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 } else {
                     rc = hw_spawn_rule_target(g_dm.rule_spawn_path);
                 }
-                if (rc == 0) {
-                    g_dm.rule_spawn_pending = 0;
-                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS) {
-                        if (g_dm.active_rule_spawn_index >= 0 &&
-                            g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
-                            always_spawn_rule_t* rule =
-                                &g_dm.always_spawn_rules[g_dm.active_rule_spawn_index];
-                            rule->spawned = 1;
-                            rule->queued = 0;
-                        }
-                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
-                        if (g_dm.active_rule_spawn_index >= 0 &&
-                            g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
-                            block_fs_rule_t* rule =
-                                &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
-                            rule->spawned = 1;
-                            rule->queued = 0;
-                            if (wasmos_sys_streq(rule->mount, "/boot")) {
-                                g_dm.boot_mount_ready = 1;
-                                queue_always_spawn_rules();
-                            } else if (wasmos_sys_streq(rule->mount, "/user")) {
-                                g_dm.user_mount_ready = 1;
-                            }
-                        }
-                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH) {
-                        if (g_dm.active_rule_spawn_index >= 0 &&
-                            g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_match_rule_count) {
-                            if (g_dm.active_rule_spawn_device_index >= 0 &&
-                                g_dm.active_rule_spawn_device_index < 64) {
-                                g_dm.pci_match_rules[g_dm.active_rule_spawn_index]
-                                    .spawned_device_mask |=
-                                    (uint64_t)1u << (uint32_t)g_dm.active_rule_spawn_device_index;
-                            }
-                        }
-                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH) {
-                        if (g_dm.active_rule_spawn_index >= 0 &&
-                            g_dm.active_rule_spawn_index < (int32_t)g_dm.acpi_match_rule_count) {
-                            if (g_dm.active_rule_spawn_device_index >= 0 &&
-                                g_dm.active_rule_spawn_device_index < 64) {
-                                g_dm.acpi_match_rules[g_dm.active_rule_spawn_index]
-                                    .spawned_device_mask |=
-                                    (uint64_t)1u << (uint32_t)g_dm.active_rule_spawn_device_index;
-                            }
-                        }
-                    }
-                    /* Clear the completed spawn's tracking BEFORE re-driving the
-                     * queue. queue_block_fs_rule_spawns() arms the next rule by
-                     * writing active_rule_spawn_kind/_index, so re-driving first
-                     * and clearing afterwards downgrades that freshly armed
-                     * spawn to kind NONE while leaving rule_spawn_pending set --
-                     * and a kind-NONE rule spawn takes the no-capability,
-                     * no-args PROC_IPC_SPAWN_PATH_SYNC path, so the driver
-                     * starts without the driver=/unit= startup args that tell it
-                     * which disk it was spawned for. Only the FIRST block_fs
-                     * rule of a rule set is armed from outside this block, which
-                     * is why a single-rule set never showed it.
-                     *
-                     * The call below is therefore both the reset point and the
-                     * re-drive: only one spawn is pending at a time, so without
-                     * it every block_fs rule after the first stays queued
-                     * forever. */
-                    g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
-                    g_dm.active_rule_spawn_index = -1;
-                    g_dm.active_rule_spawn_device_index = -1;
-                    g_dm.active_rule_spawn_caps.cap_flags = 0;
-                    queue_block_fs_rule_spawns();
-                } else {
-                    /* Spawn failed or timed out; apply retry policy. */
-                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS &&
-                        g_dm.active_rule_spawn_index >= 0 &&
-                        g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
-                        g_dm.always_spawn_rules[g_dm.active_rule_spawn_index].queued = 0;
-                    }
-                    g_dm.rule_spawn_retries++;
-                    if (g_dm.rule_spawn_retries > 8) {
-                        g_dm.rule_spawn_pending = 0;
-                        if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
-                            if (g_dm.active_rule_spawn_index >= 0 &&
-                                g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
-                                g_dm.block_fs_rules[g_dm.active_rule_spawn_index].queued = 0;
-                            }
-                        }
-                        g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
-                        g_dm.active_rule_spawn_index = -1;
-                        g_dm.active_rule_spawn_device_index = -1;
-                        g_dm.active_rule_spawn_caps.cap_flags = 0;
-                        queue_block_fs_rule_spawns();
-                    }
-                }
+                rule_spawn_complete(rc == 0);
                 g_dm.pending = HW_SPAWN_NONE;
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;
@@ -2868,6 +3087,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
         if (g_dm.phase == HW_PHASE_IDLE) {
             load_rules_if_available();
+            poll_mount_request_async();
             consume_inventory_events_nonblocking();
             drain_reply_endpoint_nonblocking(4);
             if (next_spawn_target() != HW_SPAWN_NONE) {
@@ -2886,8 +3106,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
              * nonblocking drains above already consumed anything queued, and
              * select wakes immediately if a message arrived since — no lost
              * wakeup. */
+            /* A mount request in flight is NOT settled: its reply lands on
+             * mount_reply_endpoint, which is owned by g_dm_mount_loop and not in
+             * the idle select set, so an indefinite block here would never see
+             * it. The timed wait polls poll_mount_request_async instead. */
             int32_t settled = g_dm.rules_init_loaded && g_dm.rules_boot_loaded &&
-                              g_dm.ready_notified && !g_dm.rules_boot_request_pending;
+                              g_dm.ready_notified && !g_dm.rules_boot_request_pending &&
+                              !g_dm.mount_req_pending;
             if (g_dm_idle_select_id >= 0) {
                 if (settled) {
                     (void)wasmos_ipc_select_wait(g_dm_idle_select_id);

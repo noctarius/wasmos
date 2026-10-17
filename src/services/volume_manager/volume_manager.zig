@@ -87,6 +87,15 @@ const Arrival = struct {
     instance: u32 = 0,
     endpoint: i32 = -1,
     in_use: bool = false,
+    /// A RESCAN re-probes a device already in the table, which an arrival from
+    /// the class never does.
+    force: bool = false,
+    /// Who to answer once the probe has run, and with which request id. A probe
+    /// is synchronous and happens on the root task, so a RESCAN cannot be
+    /// answered from the handler that received it -- the answer is the result.
+    /// Negative when nothing is waiting, which is every arrival from the class.
+    reply_to: i32 = -1,
+    reply_id: i32 = 0,
 };
 var g_pending: [MAX_VOLUMES]Arrival = [_]Arrival{.{}} ** MAX_VOLUMES;
 
@@ -291,10 +300,20 @@ fn fsTypeName(fs_type: u32) []const u8 {
 // --- probing -----------------------------------------------------------------
 
 fn volumeKnown(backing: u32) bool {
-    for (g_volumes[0..g_volume_count]) |v| {
-        if (v.in_use and v.desc.backing_instance == backing) return true;
+    return volumeSlotFor(backing) != null;
+}
+
+/// The slot holding the volume on `backing`, or null.
+///
+/// Returned as an INDEX rather than a pointer because probeDevice needs the slot
+/// number to address the publish buffer, where each volume owns one descriptor's
+/// worth of space.
+fn volumeSlotFor(backing: u32) ?usize {
+    var i: usize = 0;
+    while (i < g_volume_count) : (i += 1) {
+        if (g_volumes[i].in_use and g_volumes[i].desc.backing_instance == backing) return i;
     }
-    return false;
+    return null;
 }
 
 fn grantBackend(ep: i32) void {
@@ -310,21 +329,27 @@ fn grantBackend(ep: i32) void {
 
 /// Probe one `block` device and publish a volume for it, unless it holds a
 /// partition table.
-fn probeDevice(instance: u32, provider_endpoint: i32) void {
-    if (g_volume_count >= MAX_VOLUMES) {
+/// Probe one device and publish or update the volume on it.
+///
+/// Returns whether a volume is present on the device afterwards, which is what a
+/// RESCAN reports back. A device carrying a partition table, or a filesystem
+/// nothing recognises, is not a failure -- it simply has no volume of its own.
+fn probeDevice(instance: u32, provider_endpoint: i32) bool {
+    const existing = volumeSlotFor(instance);
+    if (existing == null and g_volume_count >= MAX_VOLUMES) {
         driver.log("[volume-manager] volume table full; a device went unprobed");
-        return;
+        return false;
     }
     grantBackend(provider_endpoint);
 
     var dev = driver.BlockDescriptor{};
-    if (!identifyDevice(provider_endpoint, instance, &dev)) return;
-    if (dev.version != driver.BLOCK_DESCRIPTOR_VERSION) return;
+    if (!identifyDevice(provider_endpoint, instance, &dev)) return false;
+    if (dev.version != driver.BLOCK_DESCRIPTOR_VERSION) return false;
     if (!readPrefix(provider_endpoint, instance, dev.lba_count)) {
         var line = driver.Line{};
         _ = line.str("[volume-manager] prefix read failed on ").str(idSlice(&dev.canonical_id));
         line.end();
-        return;
+        return false;
     }
 
     // A table means partitions, and a partition is its own `block` device with
@@ -337,13 +362,22 @@ fn probeDevice(instance: u32, provider_endpoint: i32) void {
         _ = line.str(" holds a ").str(if (scheme == .gpt) "gpt" else "mbr");
         _ = line.str("; its partitions are the volumes, volumes=").dec(g_volume_count);
         line.end();
-        return;
+        // TODO: a device that GAINED a table still advertises the volume it had
+        // before, because retiring one means unregistering it from the class and
+        // telling the device manager, and neither has an unregister path. Until
+        // then a rescan can change what a volume IS but not make one go away.
+        return existing != null;
     }
 
     const verdict = rec.recognise(g_prefix[0..]);
 
-    const slot = g_volume_count;
+    const slot = existing orelse g_volume_count;
     var vol = &g_volumes[slot];
+    // The CLAIM belongs to whoever holds the volume, not to the probe, so a
+    // re-probe must not clear it -- the tool that asked for this rescan is
+    // usually the one that will mount the volume next, and a lost claim would
+    // let something else format it underneath.
+    const held: u32 = vol.desc.flags & @as(u32, @intCast(abi.VOLUME_DESCRIPTOR_FLAG_CLAIMED));
     vol.* = .{};
 
     var desc = driver.VolumeDescriptor{};
@@ -367,13 +401,18 @@ fn probeDevice(instance: u32, provider_endpoint: i32) void {
     if ((dev.flags & @as(u32, @intCast(abi.BLOCK_DESCRIPTOR_FLAG_READ_ONLY))) != 0) {
         desc.flags |= @as(u32, @intCast(abi.VOLUME_DESCRIPTOR_FLAG_READ_ONLY));
     }
-    if (!buildVolumeId(idSlice(&dev.canonical_id), &desc.canonical_id)) return;
+    if (!buildVolumeId(idSlice(&dev.canonical_id), &desc.canonical_id)) return false;
+    desc.flags |= held;
 
     vol.desc = desc;
     vol.instance = driver.blockFingerprint(idSlice(&desc.canonical_id));
-    if (vol.instance == 0) return;
+    if (vol.instance == 0) return false;
     vol.in_use = true;
-    g_volume_count += 1;
+    if (existing == null) g_volume_count += 1;
+    // Re-publishing is an UPDATE: the class instance is a fingerprint of a
+    // canonical id derived from the device, so a re-probe produces the same one,
+    // and the registry treats a repeat from the same owner as an update that
+    // emits no arrival event.
     publishVolume(vol, slot);
 
     // The running total, reported HERE rather than by the caller because this is
@@ -386,26 +425,65 @@ fn probeDevice(instance: u32, provider_endpoint: i32) void {
     // ahead of every disk driver, so its startup sweep finds nothing and each
     // device is probed as it registers.
     var done = driver.Line{};
-    _ = done.str("[volume-manager] device probed id=").str(idSlice(&dev.canonical_id));
+    _ = done.str("[volume-manager] device ");
+    _ = done.str(if (existing != null) "re-probed id=" else "probed id=");
+    _ = done.str(idSlice(&dev.canonical_id));
+    _ = done.str(" fs=").str(fsTypeName(desc.fs_type));
     _ = done.str(" volumes=").dec(g_volume_count);
     done.end();
+    return true;
 }
 
 // --- discovery ---------------------------------------------------------------
 
 fn noteArrival(instance: u32, provider_endpoint: i32) void {
+    queueArrival(instance, provider_endpoint, false, -1, 0);
+}
+
+/// Queue a probe and wake the root task.
+///
+/// `force` re-probes a device already in the table, which only a RESCAN does.
+/// `reply_to` is answered once the probe has run; an arrival from the class
+/// passes -1, because nothing is waiting on it.
+fn queueArrival(instance: u32, provider_endpoint: i32, force: bool, reply_to: i32, reply_id: i32) void {
     // Our own endpoint serves the `volume` class, not `block`, so it can never
     // appear here -- unlike the partition manager, which publishes INTO the class
     // it subscribes to. Checked anyway: the cost is one comparison and the
     // failure it prevents is IDENTIFYing ourselves and blocking forever.
-    if (provider_endpoint == endpoint()) return;
-    if (volumeKnown(instance)) return;
+    // Our own endpoint serves the `volume` class, so it never arrives under
+    // `block`; a rescan passes -1 because its provider is resolved on the root
+    // task, and must not be caught by this.
+    if (provider_endpoint >= 0 and provider_endpoint == endpoint()) {
+        if (reply_to >= 0) sendError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_BAD_REQUEST);
+        return;
+    }
+    if (!force and volumeKnown(instance)) return;
     for (&g_pending) |*a| {
-        if (a.in_use and a.instance == instance) return;
+        // An arrival already queued for this device covers a rescan of it too,
+        // but only once it has been upgraded to one: a queued RESCAN must not be
+        // downgraded by a plain arrival landing behind it, and a plain arrival
+        // must not answer a request nobody made.
+        if (a.in_use and a.instance == instance) {
+            if (reply_to >= 0 and a.reply_to < 0) {
+                a.force = true;
+                a.reply_to = reply_to;
+                a.reply_id = reply_id;
+                return;
+            }
+            if (reply_to >= 0) break;
+            return;
+        }
     }
     for (&g_pending) |*a| {
         if (a.in_use) continue;
-        a.* = .{ .instance = instance, .endpoint = provider_endpoint, .in_use = true };
+        a.* = .{
+            .instance = instance,
+            .endpoint = provider_endpoint,
+            .in_use = true,
+            .force = force,
+            .reply_to = reply_to,
+            .reply_id = reply_id,
+        };
         if (g_root_parked) {
             g_root_parked = false;
             _ = g_wake_promise.resolve(0);
@@ -413,6 +491,7 @@ fn noteArrival(instance: u32, provider_endpoint: i32) void {
         return;
     }
     driver.log("[volume-manager] arrival queue full; a device went unprobed");
+    if (reply_to >= 0) sendError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_QUEUE_FULL);
 }
 
 /// Probe every queued arrival. Runs on the root task, which is this process's
@@ -422,10 +501,43 @@ fn drainArrivals() void {
     for (&g_pending) |*a| {
         if (!a.in_use) continue;
         const instance = a.instance;
-        const provider_endpoint = a.endpoint;
+        var provider_endpoint = a.endpoint;
+        const force = a.force;
+        const reply_to = a.reply_to;
+        const reply_id = a.reply_id;
+        // Cleared BEFORE the probe, which is synchronous and pumps this
+        // process's loop: a handler running inside it may queue another arrival,
+        // and it must not find this slot still occupied by the one being served.
         a.* = .{};
-        if (volumeKnown(instance)) continue;
-        probeDevice(instance, provider_endpoint);
+        if (!force and volumeKnown(instance)) {
+            if (reply_to >= 0) {
+                _ = driver.send(reply_to, endpoint(), op.VOLUME_IPC_RESP, reply_id, 0, 1, 0, 0);
+            }
+            continue;
+        }
+        if (provider_endpoint < 0) {
+            // A rescan queued without one. Resolved here rather than in the
+            // handler because the lookup blocks.
+            provider_endpoint = findBlockProvider(instance) orelse {
+                if (reply_to >= 0) {
+                    sendError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT);
+                }
+                continue;
+            };
+        }
+        const present = probeDevice(instance, provider_endpoint);
+        if (reply_to >= 0) {
+            _ = driver.send(
+                reply_to,
+                endpoint(),
+                op.VOLUME_IPC_RESP,
+                reply_id,
+                0,
+                if (present) 1 else 0,
+                0,
+                0,
+            );
+        }
     }
 }
 
@@ -473,7 +585,7 @@ fn discoverVolumes() void {
     var i: usize = 0;
     while (i < seen) : (i += 1) {
         if (volumeKnown(providers[i].instance)) continue;
-        probeDevice(providers[i].instance, @intCast(providers[i].endpoint));
+        _ = probeDevice(providers[i].instance, @intCast(providers[i].endpoint));
     }
 }
 
@@ -531,6 +643,50 @@ fn handleClaim(msg: *const co.IpcMessage) void {
     _ = driver.send(msg.source, endpoint(), op.VOLUME_IPC_RESP, msg.request_id, 0, 0, 0, 0);
 }
 
+/// Re-probe a device and update the volume on it.
+///
+/// arg0 is the DEVICE's `block` class instance, not the volume's: a caller that
+/// has just written a filesystem knows which disk it wrote, and the volume it
+/// wants to exist afterwards may not exist yet.
+///
+/// Answered from drainArrivals, not here. A probe is synchronous and runs on the
+/// root task, so answering from this handler would mean either blocking the loop
+/// the handler was dispatched from or reporting a result nothing had produced.
+fn handleRescan(msg: *const co.IpcMessage) void {
+    const instance: u32 = @bitCast(msg.arg0);
+    if (instance == 0) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_BAD_REQUEST);
+        return;
+    }
+    // The provider is NOT resolved here. Looking it up means a class lookup
+    // against the process manager, which blocks -- and a handler that blocks
+    // stops this service dispatching the IDENTIFY and CLAIM requests it exists
+    // to answer, for as long as the process manager takes. The root task already
+    // does the blocking half of a probe; the lookup belongs beside it.
+    queueArrival(instance, -1, true, msg.source, msg.request_id);
+}
+
+/// The endpoint serving `instance` in the `block` class, or null.
+///
+/// Called from the ROOT task only: a class lookup waits for the process
+/// manager's reply.
+///
+/// Looked up per rescan rather than remembered from the arrival that first
+/// probed the device: a backend can be restarted, and a rescan naming a stale
+/// endpoint would block on a reply nothing will send.
+fn findBlockProvider(instance: u32) ?i32 {
+    var providers: [MAX_VOLUMES]driver.ClassEntry = undefined;
+    const found = driver.lookupClass(g_proc_endpoint, "block", providers[0..], nextRequestId()) orelse
+        return null;
+    const total: usize = if (found < 0) 0 else @intCast(found);
+    const seen: usize = if (total < providers.len) total else providers.len;
+    var i: usize = 0;
+    while (i < seen) : (i += 1) {
+        if (providers[i].instance == instance) return @intCast(providers[i].endpoint);
+    }
+    return null;
+}
+
 /// An existence event for the `block` class: arg0 names the kind, arg1 the
 /// instance, arg2 the provider's endpoint, arg3 its pid.
 ///
@@ -549,6 +705,7 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
     switch (msg.type) {
         op.VOLUME_IPC_IDENTIFY_REQ => handleIdentify(msg),
         op.VOLUME_IPC_CLAIM_REQ => handleClaim(msg),
+        op.VOLUME_IPC_RESCAN_REQ => handleRescan(msg),
         op.SVC_IPC_CLASS_EVENT => handleClassEvent(msg),
         else => {},
     }

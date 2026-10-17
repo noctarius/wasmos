@@ -54,10 +54,7 @@ class XferMapAliasTest(unittest.TestCase):
         cfg = default_config()
         cls.session = QemuSession(cfg, timeout_s=150, echo=True)
         cls.session.start()
-        if not cls.session.expect(b"wamos> "):
-            tail = cls.session.tail()
-            cls.session.close()
-            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
+        cls.session.require_prompt()
 
     @classmethod
     def tearDownClass(cls):

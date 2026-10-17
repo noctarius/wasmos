@@ -92,6 +92,9 @@ const (
 	WASMOS_ERR_PROC_PM_HANDLER_REG int32 = -0x00020018 // exec-handler registration failed
 	WASMOS_ERR_PROC_PM_NOT_AUTHORIZED int32 = -0x00020019 // caller lacks the subsystem.register capability
 	WASMOS_ERR_PROC_PM_NO_PM_FSBUF int32 = -0x0002001A // PM could not acquire its own xfer buffer
+	WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN int32 = -0x0002001B // that service name is held by another live process
+	WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN int32 = -0x0002001C // that (class, instance) is held by another live process
+	WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED int32 = -0x0002001D // the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on
 	WASMOS_ERR_LINMEM_NO_WINDOW int32 = -0x00030001 // no free page-aligned window fits in linear memory
 	WASMOS_ERR_LINMEM_MAP int32 = -0x00030002 // paging/linear-memory mapping step failed
 	WASMOS_ERR_LINMEM_NO_BASE int32 = -0x00030003 // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -126,7 +129,7 @@ const (
 	WASMOS_ERR_FS_BACKEND_IPC int32 = -0x0004001B // request could not be delivered to the backend, or no reply arrived
 	WASMOS_ERR_FS_BAD_FD int32 = -0x0004001C // fd is not present in this client's fd table
 	WASMOS_ERR_FS_REPLY_SEND int32 = -0x0004001D // the reply could not be delivered to the client
-	WASMOS_ERR_FS_BAD_MAGIC int32 = -0x0004001E // on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent
+	WASMOS_ERR_FS_BAD_MAGIC int32 = -0x0004001E // not a volume of this filesystem type
 	WASMOS_ERR_FS_CHECKSUM int32 = -0x0004001F // metadata checksum mismatch: the structure did not verify against the checksum it carries
 	WASMOS_ERR_FS_FEATURE_INCOMPAT int32 = -0x00040020 // volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures
 	WASMOS_ERR_FS_GEOMETRY int32 = -0x00040021 // on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it)
@@ -285,6 +288,7 @@ const (
 	WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION int32 = -0x00190008 // a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t
 	WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED int32 = -0x00190009 // a block record is short, unterminated, or names a length outside the transfer buffer
 	WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR int32 = -0x0019000A // the device has no descriptor to report, so it cannot be identified
+	WASMOS_ERR_BLOCK_DEV_QUEUE_FULL int32 = -0x0019000B // a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -464,6 +468,12 @@ func WasmosStrerror(c int32) string {
 		return "caller lacks the subsystem.register capability"
 	case WASMOS_ERR_PROC_PM_NO_PM_FSBUF:
 		return "PM could not acquire its own xfer buffer"
+	case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN:
+		return "that service name is held by another live process"
+	case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN:
+		return "that (class, instance) is held by another live process"
+	case WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED:
+		return "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on"
 	case WASMOS_ERR_LINMEM_NO_WINDOW:
 		return "no free page-aligned window fits in linear memory"
 	case WASMOS_ERR_LINMEM_MAP:
@@ -533,7 +543,7 @@ func WasmosStrerror(c int32) string {
 	case WASMOS_ERR_FS_REPLY_SEND:
 		return "the reply could not be delivered to the client"
 	case WASMOS_ERR_FS_BAD_MAGIC:
-		return "on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent"
+		return "not a volume of this filesystem type"
 	case WASMOS_ERR_FS_CHECKSUM:
 		return "metadata checksum mismatch: the structure did not verify against the checksum it carries"
 	case WASMOS_ERR_FS_FEATURE_INCOMPAT:
@@ -850,6 +860,8 @@ func WasmosStrerror(c int32) string {
 		return "a block record is short, unterminated, or names a length outside the transfer buffer"
 	case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR:
 		return "the device has no descriptor to report, so it cannot be identified"
+	case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL:
+		return "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it"
 	default:
 		return "unknown error"
 	}

@@ -11,6 +11,12 @@
  * only the first 512 MiB of physical memory; a physical address beyond that has no
  * alias and must not be OR-ed with this base. */
 #define KERNEL_HIGHER_HALF_BASE 0xFFFFFFFF80000000ULL
+/* Size of that window. A frame handed to anything that will dereference it at
+ * `phys | KERNEL_HIGHER_HALF_BASE` must come from below this, which is what
+ * pfa_alloc_pages_below is for; pfa_alloc_pages alone can return a frame with no
+ * alias. Stated here rather than in each consumer because it is a property of
+ * the mapping paging_init builds, and a private copy drifts from it silently. */
+#define KERNEL_HIGHER_HALF_WINDOW_BYTES (512ULL * 1024ULL * 1024ULL)
 /* PDPT slot inside the shared higher-half (PML4[511]) reserved for kernel MMIO
  * mappings.  paging_verify_user_root_impl permits this slot to be present in a user
  * root but does not descend into it, because its PD contents are device-specific. */

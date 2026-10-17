@@ -71,6 +71,9 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_HANDLER_REG` | -0x00020018 | exec-handler registration failed |
 | `WASMOS_ERR_PROC_PM_NOT_AUTHORIZED` | -0x00020019 | caller lacks the subsystem.register capability |
 | `WASMOS_ERR_PROC_PM_NO_PM_FSBUF` | -0x0002001A | PM could not acquire its own xfer buffer |
+| `WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN` | -0x0002001B | that service name is held by another live process |
+| `WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN` | -0x0002001C | that (class, instance) is held by another live process |
+| `WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED` | -0x0002001D | the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 
@@ -115,7 +118,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_FS_BACKEND_IPC` | -0x0004001B | request could not be delivered to the backend, or no reply arrived |
 | `WASMOS_ERR_FS_BAD_FD` | -0x0004001C | fd is not present in this client's fd table |
 | `WASMOS_ERR_FS_REPLY_SEND` | -0x0004001D | the reply could not be delivered to the client |
-| `WASMOS_ERR_FS_BAD_MAGIC` | -0x0004001E | on-disk magic does not identify this filesystem — the volume is not of this type at all, as distinct from a volume of this type that is inconsistent |
+| `WASMOS_ERR_FS_BAD_MAGIC` | -0x0004001E | not a volume of this filesystem type |
 | `WASMOS_ERR_FS_CHECKSUM` | -0x0004001F | metadata checksum mismatch: the structure did not verify against the checksum it carries |
 | `WASMOS_ERR_FS_FEATURE_INCOMPAT` | -0x00040020 | volume sets an INCOMPAT feature flag this driver does not implement; mounting it would misread existing structures |
 | `WASMOS_ERR_FS_GEOMETRY` | -0x00040021 | on-disk geometry is invalid or unsupported (block size not permitted, group size not derivable from it) |
@@ -380,3 +383,4 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION` | -0x00190008 | a block record's version field names a layout this reader does not know; covers both wasmos_block_descriptor_t and wasmos_block_request_t |
 | `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED` | -0x00190009 | a block record is short, unterminated, or names a length outside the transfer buffer |
 | `WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR` | -0x0019000A | the device has no descriptor to report, so it cannot be identified |
+| `WASMOS_ERR_BLOCK_DEV_QUEUE_FULL` | -0x0019000B | a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it |

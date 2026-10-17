@@ -44,10 +44,7 @@ class MenuBarTitleTest(unittest.TestCase):
         cfg = default_config()
         cls.session = QemuSession(cfg, timeout_s=200, echo=True)
         cls.session.start()
-        if not cls.session.expect(b"wamos> ", timeout_s=180):
-            tail = cls.session.tail()
-            cls.session.close()
-            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
+        cls.session.require_prompt(timeout_s=180)
 
     @classmethod
     def tearDownClass(cls):

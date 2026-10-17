@@ -12,13 +12,14 @@
  * produces the images the host tool writes and the in-memory volumes the unit
  * tests validate. Nothing here opens a file or allocates the volume.
  *
- * The sink does NOT make this reusable by a guest-side mkfs.wfs, and it is worth
- * saying so here because it looks as though it should. Both callbacks are
- * synchronous; in a guest, writing a block is a BLOCK request and reading source
- * content is an FS request, and each must be awaited from a coroutine rather
- * than returned inline. What would port is the planning and serialization above
- * -- layout arithmetic, record packing, checksum seeding -- which has to be
- * split out of the emission loop first. Tracked in docs/TASKS.md.
+ * The sink is not usable from a guest-side mkfs.wfs: both callbacks are
+ * synchronous, while in a guest a block write is a BLOCK request and reading
+ * source content is an FS request, each of which must be awaited from a
+ * coroutine rather than returned inline. A guest uses wfs_mkfs_plan_tree and
+ * wfs_mkfs_block_at instead -- planning and serialization with no loop and no
+ * I/O of their own -- and drives the writes itself, awaiting between blocks.
+ * Formatting an EMPTY volume needs only the write side, because the read
+ * callback is reachable only through entries.
  */
 #ifndef WFS_MKFS_H
 #define WFS_MKFS_H
@@ -152,6 +153,41 @@ wasmos_error_code_t wfs_mkfs_format_tree(const wfs_mkfs_params_t* params,
  * FS_VOLUME_TOO_LARGE for one past what a uint32_t block number addresses.
  */
 wasmos_error_code_t wfs_mkfs_plan(const wfs_mkfs_params_t* params, wfs_mkfs_layout_t* out);
+
+/* Plan the layout AND the tree: where each entry's blocks and object id land.
+ *
+ * `plan` must hold `count + 1` slots; slot `count` describes the root. The
+ * layout returned carries root_blocks, used_blocks and entry_count, which the
+ * bare wfs_mkfs_plan cannot know. Same failures as wfs_mkfs_format_tree minus
+ * the ones only a sink or a read callback can raise.
+ *
+ * Nothing is written. This is the half of formatting a guest can run inline.
+ */
+wasmos_error_code_t wfs_mkfs_plan_tree(const wfs_mkfs_params_t* params,
+                                       const wfs_mkfs_entry_t* entries, uint32_t count,
+                                       wfs_mkfs_node_t* plan, wfs_mkfs_layout_t* out_layout);
+
+/* Serialize ONE block of the volume a format produces into `buf`.
+ *
+ * Pure: the same inputs give the same block, in any order and any number of
+ * times, which is what lets a guest write blocks one at a time and await each
+ * one. `plan` and `layout` must both come from one wfs_mkfs_plan_tree call over
+ * the same entries; `buf` is layout->block_size bytes and is fully written,
+ * zeroes included.
+ *
+ * `block` is absolute and every block below layout->total_blocks has an answer,
+ * because a format writes each one exactly once: the regions tile the volume and
+ * the tail is free space carrying the backup superblocks.
+ *
+ * Fails with FS_BAD_ARGS for a null argument or a block at or past the end of
+ * the volume, FS_IO when an entry's read callback fails, and FS_CORRUPT for a
+ * data block the plan assigns to no entry. Only the first is reachable when
+ * count is 0, which is why an empty format cannot fail on content.
+ */
+wasmos_error_code_t wfs_mkfs_block_at(const wfs_mkfs_params_t* params,
+                                      const wfs_mkfs_entry_t* entries, uint32_t count,
+                                      const wfs_mkfs_node_t* plan, const wfs_mkfs_layout_t* layout,
+                                      uint32_t block, uint8_t* buf);
 
 /* Plan, then emit every block of the volume to `sink`. `out_layout` may be NULL.
  *

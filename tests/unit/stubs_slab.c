@@ -1,4 +1,5 @@
-/* stubs_slab.c - Host-side stand-in for the kernel slab allocator (slab.h).
+/* stubs_slab.c - Host-side stand-ins for the kernel allocators kmem.c sits on:
+ * the slab (slab.h) and the physical frame allocator (physmem.h).
  *
  * kmem.c allocates container metadata from kalloc_small/kfree_small; the host
  * test build has no physical frame allocator to back a slab, so these forward
@@ -7,8 +8,43 @@
  * size class), and allocation only fails when the host is out of memory, so
  * kmem's early-arena fallback is never reached in a test. */
 #include "slab.h"
+#include "physmem.h"
 
 #include <stdlib.h>
+
+/* The frame allocator kmem.c page-backs large requests from. Reporting NO frame
+ * is the useful stub, not a host malloc: the returned value is a PHYSICAL
+ * address that kmem turns into a pointer through the higher-half alias, which
+ * has no meaning on the host. With this returning 0, kmem falls through to its
+ * early arena exactly as it did before page-backing existed, so the suites see
+ * the behaviour they were written against.
+ *
+ * It also means the page path itself is not covered here; it is exercised on
+ * target, where a mount/unmount loop that used to exhaust the arena at nine
+ * cycles now runs twenty-four without one. */
+/* WEAK: tests/unit/stubs_xfer_buffer_platform.c defines these too, and some
+ * targets link both. The strong definition wins wherever it is present, so this
+ * only fills in for the targets that link kmem.c without it. */
+__attribute__((weak)) uint64_t pfa_alloc_pages(uint64_t pages) {
+    (void)pages;
+    return 0;
+}
+
+/* The constrained form kmem takes its page-backed blocks through: a frame above
+ * the higher-half window has no `phys | KERNEL_HIGHER_HALF_BASE` alias. Refusing
+ * here, like the unconstrained form above, keeps every suite that links this on
+ * the slab and early-arena paths; tests/unit/test_kmem.c brings its own frame
+ * allocator precisely because it needs the page path to be reachable. */
+__attribute__((weak)) uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
+    (void)pages;
+    (void)max_addr;
+    return 0;
+}
+
+__attribute__((weak)) void pfa_free_pages(uint64_t base, uint64_t pages) {
+    (void)base;
+    (void)pages;
+}
 
 /* Nothing to build: the host heap is already usable, so a suite may skip this
  * call entirely and still allocate, which on target it could not. */

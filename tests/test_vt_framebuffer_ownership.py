@@ -103,10 +103,7 @@ class VtFramebufferOwnershipTests(unittest.TestCase):
         cfg.monitor_socket = os.path.join(cls.tmpdir, "mon.sock")
         cls.session = QemuSession(cfg, timeout_s=180, echo=True)
         cls.session.start()
-        if not cls.session.expect(b"wamos> "):
-            tail = cls.session.tail()
-            cls.session.close()
-            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
+        cls.session.require_prompt()
         if not cls.session.settle():
             tail = cls.session.tail()
             cls.session.close()

@@ -741,33 +741,110 @@ _Static_assert(sizeof(wasmos_block_descriptor_t) ==
                "wasmos_block_descriptor_t layout changed; update BlockDescriptor in "
                "src/libc/zig/driver.zig to match");
 
-/* FNV-1a 32 over a NUL-terminated string: the `block` service class instance of
- * a device whose canonical id is `id`.
+/* FNV-1a 32 over a NUL-terminated string: the service-class INSTANCE a provider
+ * registers under, derived from whatever string identifies it.
  *
  * The instance is a FINGERPRINT, not an encoding -- nothing may be decoded back
  * out of it. That is the point: an instance that spelled out (backend, unit)
  * had to be redefined the moment a partition needed addressing, and would need
- * redefining again for whatever comes after.
+ * redefining again for whatever comes after. A provider that hashes its own
+ * identity string needs nothing to allocate an instance for it, and two
+ * providers cannot disagree about which is which.
  *
  * FNV-1a rather than the SHA-256 behind block_device_record_t.hash_id because
- * three languages must agree on the value for the same string -- C here, Zig in
- * driver.zig -- and this is an index key, not a security primitive. A collision
- * is not silent: service_class_registry_add refuses a second owner for a live
- * (class, instance), so two devices hashing alike fail the later registration
- * instead of aliasing.
+ * several languages must agree on the value for the same string -- C here, Zig
+ * in driver.zig -- and this is an index key, not a security primitive. A
+ * collision is not silent: service_class_registry_add refuses a second owner for
+ * a live (class, instance), so two providers hashing alike fail the later
+ * registration instead of aliasing.
  *
- * Returns 0 only for a NULL or empty id, which is not a valid canonical id. */
-static inline uint32_t wasmos_block_fingerprint(const char* id) {
+ * Mirrors driver.zig's fingerprint(). Returns 0 only for a NULL or empty string,
+ * which no identity is. */
+static inline uint32_t wasmos_class_instance_fingerprint(const char* text) {
     uint32_t hash = 2166136261u; /* FNV offset basis */
     uint32_t i;
-    if (!id || id[0] == '\0') {
+    if (!text || text[0] == '\0') {
         return 0u;
     }
-    for (i = 0u; id[i] != '\0'; ++i) {
-        hash ^= (uint32_t)(uint8_t)id[i];
+    for (i = 0u; text[i] != '\0'; ++i) {
+        hash ^= (uint32_t)(uint8_t)text[i];
         hash *= 16777619u; /* FNV prime */
     }
     return hash;
+}
+
+/* The `block` service class instance of a device whose canonical id is `id`.
+ * Named separately from the generic form because the `block` class fixes WHICH
+ * string a provider hashes -- its canonical id and nothing else -- and a call
+ * site that spells that intent cannot quietly start hashing something else. */
+static inline uint32_t wasmos_block_fingerprint(const char* id) {
+    return wasmos_class_instance_fingerprint(id);
+}
+
+/* Build the service NAME a filesystem backend registers, for one serving `mount`.
+ *
+ * `<prefix><mount>` when that fits, and `<prefix>` followed by eight hex digits
+ * of the mount path's fingerprint when it does not. The readable form is not a
+ * convenience: the kernel's panic dump resolves a parked endpoint through
+ * pm_service_name_for_endpoint, and that name is the ONLY copy of a mount's
+ * identity the kernel holds. Everything else about a mount -- its path, its
+ * filesystem type, its table slot -- lives in fs_manager's linear memory, which
+ * a dump cannot read and must not try to ask for, since fs_manager may be the
+ * wedged process the dump exists to diagnose.
+ *
+ * The fallback exists because a mount path may be longer than a name: the path
+ * is bounded by FSMGR_MOUNT_PATH_MAX and the name by WASMOS_SVC_NAME_MAX, so a
+ * deep path would otherwise be truncated -- and two paths agreeing over the
+ * truncated width would claim one name, with the second backend refused and its
+ * mount failing on the spawn deadline. A fingerprint cannot collide that way,
+ * and costs identification only for a path too deep to name.
+ *
+ * `out_cap` counts the terminating NUL. Mirrors driver.zig's
+ * serviceNameFromMount, which must produce the same bytes for the same input.
+ * Returns the length written, or 0 when `out_cap` cannot hold even the fallback
+ * form (in which case `out` is left empty). */
+static inline uint32_t wasmos_svc_name_from_mount(char* out, uint32_t out_cap, const char* prefix,
+                                                  const char* mount) {
+    uint32_t plen = 0u;
+    uint32_t mlen = 0u;
+    uint32_t n = 0u;
+    uint32_t i;
+    uint32_t hash;
+
+    if (!out || out_cap == 0u) {
+        return 0u;
+    }
+    out[0] = '\0';
+    if (!prefix || !mount) {
+        return 0u;
+    }
+    while (prefix[plen] != '\0') {
+        plen++;
+    }
+    while (mount[mlen] != '\0') {
+        mlen++;
+    }
+    /* Eight hex digits plus the NUL is the shortest this can ever be. */
+    if (plen + 8u + 1u > out_cap) {
+        return 0u;
+    }
+    for (i = 0u; i < plen; ++i) {
+        out[n++] = prefix[i];
+    }
+    if (plen + mlen + 1u <= out_cap) {
+        for (i = 0u; i < mlen; ++i) {
+            out[n++] = mount[i];
+        }
+        out[n] = '\0';
+        return n;
+    }
+    hash = wasmos_class_instance_fingerprint(mount);
+    for (i = 0u; i < 8u; ++i) {
+        uint32_t nibble = (hash >> (28u - 4u * i)) & 0xFu;
+        out[n++] = (char)(nibble < 10u ? ('0' + (int)nibble) : ('a' + (int)(nibble - 10u)));
+    }
+    out[n] = '\0';
+    return n;
 }
 
 /* One VOLUME -- a thing with a filesystem on it. Carried in a transfer buffer by

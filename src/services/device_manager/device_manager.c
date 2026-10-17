@@ -1527,6 +1527,7 @@ static uint32_t queue_block_fs_rules_for_record(const block_device_record_t* rec
             rule->matched_backend = (uint8_t)rec->desc.backend;
             rule->matched_unit = (uint8_t)rec->desc.unit;
             (void)str_copy(rule->matched_id, sizeof(rule->matched_id), rec->desc.canonical_id);
+            rule->matched_from_volume = 0u;
             queued_mount = rule->mount;
             queued++;
         }
@@ -1665,6 +1666,7 @@ static uint32_t queue_block_fs_rules_for_volume(const volume_record_t* rec) {
             rule->matched_backend = (uint8_t)backing->desc.backend;
             rule->matched_unit = (uint8_t)backing->desc.unit;
             (void)str_copy(rule->matched_id, sizeof(rule->matched_id), backing->desc.canonical_id);
+            rule->matched_from_volume = 1u;
             queued++;
             /* Per RULE and naming its mount, not once per volume: a rule matches
              * on identity, so two rules selecting different volumes is ordinary,
@@ -1730,6 +1732,39 @@ static int devmgr_id_usable(const char* id, uint32_t cap) {
     return n < cap;
 }
 
+/* Copy a caller-supplied record id out of `src`, which holds the `len` bytes a
+ * retire request carried.
+ *
+ * PURE, so it is reachable from a host test without a transfer buffer -- the
+ * same reason registry_add_block is split from its own decode: a decode tested
+ * through a stubbed host call tests the stub.
+ *
+ * The bytes must CONTAIN a terminator. Writing one at the end instead accepts an
+ * unterminated payload and silently renames it: `block:ata:0X` with len 12 would
+ * become `block:ata:0` and retire that record, which the caller never named and
+ * which exists.
+ *
+ * `cap` is the destination's size including its NUL.
+ *
+ * Regression: 2026-10-17-devmgr-retire-truncates-an-unterminated-id */
+static wasmos_error_code_t devmgr_copy_record_id(const char* src, int32_t len, char* out,
+                                                 uint32_t cap) {
+    uint32_t n = 0;
+    if (!src || !out || len <= 0 || (uint32_t)len > cap) {
+        return WASMOS_ERR_DEVMGR_BAD_RECORD_ID;
+    }
+    while (n < (uint32_t)len && src[n] != '\0') {
+        ++n;
+    }
+    if (n == (uint32_t)len || n == 0u) {
+        /* No terminator in what was read, or an empty id: neither names a
+         * record, and neither may be repaired into one. */
+        return WASMOS_ERR_DEVMGR_BAD_RECORD_ID;
+    }
+    memcpy(out, src, (size_t)n + 1u);
+    return WASMOS_ERR_NONE;
+}
+
 /* The live block record holding `id`, or NULL.
  *
  * The inventory keys on canonical_id -- see registry_add_block for why a derived
@@ -1760,14 +1795,60 @@ static volume_record_t* find_volume_record(const char* id) {
     return 0;
 }
 
-/* Retire one block device. Returns WASMOS_ERR_NONE, or a devmgr code.
+/* Disarm every rule that this record armed but that has not spawned yet.
  *
- * Refused while a filesystem is mounted on it: the mount still addresses the
- * device, so retiring it would leave the mount pointing at a record nothing
- * describes. The caller unmounts first, exactly as umount requires.
+ * A queued rule holds the matched device's canonical id and will later spawn a
+ * mount naming it. If the record is retired in between, that mount addresses a
+ * device the inventory no longer has -- the rule outlives the thing that
+ * selected it. A rule that already SPAWNED is left alone: its filesystem is
+ * running, and retiring an inventory record does not unmount anything.
+ *
+ * `from_volume` picks which arming to cancel. `matched_id` is the backing
+ * device's id whichever selected the rule, so retiring a whole-disk volume must
+ * not cancel a rule the DISK itself matched. */
+static void cancel_rules_armed_by(const char* id, uint8_t from_volume) {
+    if (!id || id[0] == '\0') {
+        return;
+    }
+    for (uint32_t ri = 0; ri < g_dm.block_fs_rule_count; ++ri) {
+        block_fs_rule_t* rule = &g_dm.block_fs_rules[ri];
+        if (!rule->active || !rule->queued || rule->spawned) {
+            continue;
+        }
+        if (rule->matched_from_volume != from_volume || !wasmos_sys_streq(rule->matched_id, id)) {
+            continue;
+        }
+        rule->queued = 0;
+        rule->matched_id[0] = '\0';
+        rule->matched_backend = 0;
+        rule->matched_unit = 0;
+        rule->matched_from_volume = 0;
+
+        char msg[200];
+        (void)snprintf(msg,
+                       sizeof(msg),
+                       "[device-manager] rule disarmed mount=%s: %s was retired before it "
+                       "mounted\n",
+                       rule->mount,
+                       id);
+        console_write(msg);
+    }
+}
+
+/* Retire one block device. Returns WASMOS_ERR_NONE, or a devmgr code.
  *
  * Refused for an id nobody published, rather than ignored, so a caller that
  * retires twice cannot read the second as having retired something.
+ *
+ * NOT refused for a device something has mounted, because this inventory is
+ * rule-matching state and no mount addresses it: a filesystem reaches its disk
+ * through the `block` class, and the double-mount guard asks FS-MANAGER
+ * (is_mount_already_active), not this table. Retiring a record therefore cannot
+ * disturb a running filesystem, and a check here would be enforcing a property
+ * this service neither holds nor is told about -- devmgr learns of the mounts it
+ * causes and never of an unmount, so a flag set on mount would make any device
+ * mounted once unretirable for the rest of the boot. The caller unmounts first,
+ * and fs-manager is what refuses a busy unmount.
  *
  * The slot is zeroed rather than merely marked free. That is hygiene, not a
  * requirement: every reader tests in_use first, and the publish path rewrites
@@ -1783,15 +1864,7 @@ static wasmos_error_code_t registry_remove_block(const char* id) {
     if (!rec) {
         return WASMOS_ERR_DEVMGR_NO_SUCH_RECORD;
     }
-    if (rec->active_service) {
-        char busy[160];
-        (void)snprintf(busy,
-                       sizeof(busy),
-                       "[device-manager] block retire refused id=%s: a filesystem is mounted\n",
-                       id);
-        console_write(busy);
-        return WASMOS_ERR_DEVMGR_RECORD_BUSY;
-    }
+    cancel_rules_armed_by(id, 0u);
 
     char msg[160];
     (void)snprintf(msg, sizeof(msg), "[device-manager] block retire id=%s\n", id);
@@ -1800,7 +1873,9 @@ static wasmos_error_code_t registry_remove_block(const char* id) {
     return WASMOS_ERR_NONE;
 }
 
-/* Retire one volume. Same terms as registry_remove_block. */
+/* Retire one volume. Same terms as registry_remove_block, including that a
+ * mounted volume is not refused -- see there for why this service is not the
+ * place that knows. */
 static wasmos_error_code_t registry_remove_volume(const char* id) {
     volume_record_t* rec;
     if (!devmgr_id_usable(id, (uint32_t)VOLUME_DESCRIPTOR_ID_MAX)) {
@@ -1810,14 +1885,11 @@ static wasmos_error_code_t registry_remove_volume(const char* id) {
     if (!rec) {
         return WASMOS_ERR_DEVMGR_NO_SUCH_RECORD;
     }
-    if (rec->active_service) {
-        char busy[160];
-        (void)snprintf(busy,
-                       sizeof(busy),
-                       "[device-manager] volume retire refused id=%s: it is mounted\n",
-                       id);
-        console_write(busy);
-        return WASMOS_ERR_DEVMGR_RECORD_BUSY;
+    /* Rules a volume armed carry the BACKING device's id, so the arming is found
+     * through it rather than through the volume's own. */
+    const block_device_record_t* backing = devmgr_backing_record_for_volume(&rec->desc);
+    if (backing) {
+        cancel_rules_armed_by(backing->desc.canonical_id, 1u);
     }
 
     char msg[160];
@@ -2230,18 +2302,18 @@ static int dm_register_ipc_handlers(void) {
  * The buffer belongs to the CALLER, which borrowed it to this endpoint for the
  * request and releases it afterwards (architecture/12-dma-transfers.md). */
 static void dm_handle_unpublish(const wasmos_ipc_message_t* msg, int volume) {
+    char raw[VOLUME_DESCRIPTOR_ID_MAX];
     char id[VOLUME_DESCRIPTOR_ID_MAX];
     wasmos_error_code_t rc;
     int32_t len = msg->arg2;
 
-    if (len <= 0 || len > (int32_t)sizeof(id) ||
-        wasmos_xfer_buffer_read(msg->arg0, id, len, msg->arg1) != 0) {
+    if (len <= 0 || len > (int32_t)sizeof(raw) ||
+        wasmos_xfer_buffer_read(msg->arg0, raw, len, msg->arg1) != 0) {
         rc = WASMOS_ERR_DEVMGR_BAD_RECORD_ID;
     } else {
-        /* Terminated here rather than trusted: the length is the caller's claim
-         * about its own buffer, and an id that fills the field has nowhere to be
-         * terminated. */
-        id[len - 1] = '\0';
+        rc = devmgr_copy_record_id(raw, len, id, (uint32_t)sizeof(id));
+    }
+    if (rc == WASMOS_ERR_NONE) {
         rc = volume ? registry_remove_volume(id) : registry_remove_block(id);
     }
     (void)wasmos_ipc_send(msg->source,

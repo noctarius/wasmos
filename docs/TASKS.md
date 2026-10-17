@@ -1146,13 +1146,23 @@ tail.
 
   Coverage of the retire path, stated so it is not mistaken for complete: the
   registry half is host-tested and mutation-checked -- both inventories, the
-  three refusals, and slot reuse across repeated retire/publish cycles.
-  `dm_handle_unpublish` is NOT: the transfer-buffer decode, its length bound,
-  the termination and the reply are unreached, because the host stubs for
+  refusals, slot reuse across repeated retire/publish cycles, the id decode, and
+  which rules a retirement disarms. What remains unreached is the transfer-buffer
+  READ and the reply send in `dm_handle_unpublish`, because the host stubs for
   `wasmos_xfer_buffer_read` and `wasmos_ipc_send` are inert and testing through
-  them tests the stubs -- the same reason `registry_add_block` was split from
-  its own decode. There is no integration test either, since nothing sends the
-  opcode. Both gaps close with the caller.)
+  them tests the stubs; the decode itself was split out (`devmgr_copy_record_id`)
+  so the part with logic in it is reachable. There is no integration test either,
+  since nothing sends the opcode. That closes with the caller.)
+
+- [ ] [BUG][P3] `block_device_record_t.active_service` and the volume record's
+  are never set. Nothing assigns either a non-zero value -- `rule_spawn_complete`
+  marks the RULE spawned, not the record -- so both read as "no filesystem" for
+  every device, mounted or not. Setting one on mount alone would be worse than
+  leaving it: the device manager is never told about an unmount, so the flag
+  would latch and no device mounted once could be retired for the rest of the
+  boot. Fixing it needs a mount/unmount notification this service does not get,
+  which is the same missing notification the fs-manager client-state leak waits
+  on. FIXME at both fields.
 
   `VOLUME_IPC_RESCAN_REQ` re-probes a device and updates its volume in
   place, which covers a disk that gained or changed a filesystem. It cannot cover

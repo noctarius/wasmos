@@ -487,10 +487,49 @@ static void retiring_an_unknown_id_is_refused(void) {
           "and retiring it a second time is refused");
 }
 
-/* A device a filesystem is mounted on is refused, because the mount still
- * addresses it. Same rule as umount's, and for the same reason: the caller
- * unmounts first. */
-static void retiring_a_device_in_use_is_refused(void) {
+/* A rule the retiring device ARMED is disarmed with it.
+ *
+ * A queued rule holds the matched device's canonical id and will later spawn a
+ * mount naming it. Retiring the record in between leaves the rule to mount a
+ * device the inventory no longer has -- the rule outliving the thing that
+ * selected it. */
+static void retiring_a_device_disarms_the_rule_it_armed(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", DRIVER==\"ata\", ENV{MOUNT}=\"/user\", "
+                    "ENV{FSTYPE}=\"fat\"\n") == 1,
+          "the rule parses");
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "publishing armed the rule");
+    check(wasmos_sys_streq(g_dm.block_fs_rules[0].matched_id, "block:ata:0"),
+          "and it names the device that armed it");
+
+    check(registry_remove_block("block:ata:0") == WASMOS_ERR_NONE, "the device retires");
+    check(g_dm.block_fs_rules[0].queued == 0u, "the rule is disarmed");
+    check(g_dm.block_fs_rules[0].matched_id[0] == '\0', "and no longer names a device");
+}
+
+/* A rule that already SPAWNED is left alone: its filesystem is running, and
+ * this retires an inventory record rather than a mount. */
+static void retiring_a_device_leaves_a_spawned_rule_alone(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"block\", DRIVER==\"ata\", ENV{MOUNT}=\"/user\", "
+                    "ENV{FSTYPE}=\"fat\"\n") == 1,
+          "the rule parses");
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+    g_dm.block_fs_rules[0].queued = 0u;
+    g_dm.block_fs_rules[0].spawned = 1u;
+
+    check(registry_remove_block("block:ata:0") == WASMOS_ERR_NONE, "the device retires");
+    check(g_dm.block_fs_rules[0].spawned == 1u, "the spawned rule is untouched");
+    check(wasmos_sys_streq(g_dm.block_fs_rules[0].matched_id, "block:ata:0"),
+          "including the id its running filesystem was given");
+}
+
+/* The inventory does not refuse a retire on mount state, because it is not
+ * where mount state lives: no mount addresses this table, and the double-mount
+ * guard asks fs-manager. Asserted so the absence is deliberate rather than an
+ * omission someone restores. */
+static void retiring_is_not_refused_on_mount_state(void) {
     block_device_record_t* rec;
     harness_reset();
     publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
@@ -499,9 +538,8 @@ static void retiring_a_device_in_use_is_refused(void) {
     if (rec) {
         rec->active_service = 1;
     }
-    check(registry_remove_block("block:ata:0") == WASMOS_ERR_DEVMGR_RECORD_BUSY,
-          "a device with a filesystem on it is refused");
-    check(find_block_record("block:ata:0") != 0, "and is still in the inventory");
+    check(registry_remove_block("block:ata:0") == WASMOS_ERR_NONE,
+          "a retire is not refused by this service's own mount bookkeeping");
 }
 
 /* An id that is empty, or longer than the field, names nothing: refused as a
@@ -537,6 +575,60 @@ static void retiring_one_device_leaves_the_others(void) {
  * exist while its disk does not. Writing a partition table over an
  * unpartitioned disk ends the whole-disk volume, because from then on the
  * partitions are the volumes. */
+/* An unterminated retire payload names nothing, and must not be repaired into
+ * something.
+ *
+ * Terminating at the last byte read turns `block:ata:0X` into `block:ata:0` --
+ * an id the caller never sent, which exists, and which is then retired. The
+ * caller believes it retired the device it named and the inventory loses a
+ * different one.
+ *
+ * Regression: 2026-10-17-devmgr-retire-truncates-an-unterminated-id */
+static void an_unterminated_retire_id_is_refused(void) {
+    char out[BLOCK_DESCRIPTOR_ID_MAX];
+    static const char unterminated[] = {'b', 'l', 'o', 'c', 'k', ':', 'a', 't', 'a', ':', '0', 'X'};
+    harness_reset();
+    publish_block_device((uint8_t)BLOCK_BACKEND_ATA, 0u);
+
+    check(devmgr_copy_record_id(
+              unterminated, (int32_t)sizeof(unterminated), out, (uint32_t)sizeof(out)) ==
+              WASMOS_ERR_DEVMGR_BAD_RECORD_ID,
+          "a payload with no terminator in the bytes read is refused");
+    check(find_block_record("block:ata:0") != 0,
+          "and the record its truncation would have named is untouched");
+}
+
+/* The rest of the decode's contract, which only a pure helper can be asked
+ * about: the transfer-buffer read it sits behind is stubbed inert on the host,
+ * and testing through that tests the stub. */
+static void a_retire_id_is_taken_only_when_it_is_well_formed(void) {
+    char out[BLOCK_DESCRIPTOR_ID_MAX];
+    static const char ok[] = "block:ata:1";
+    static const char empty[] = "";
+    harness_reset();
+
+    check(devmgr_copy_record_id(ok, (int32_t)sizeof(ok), out, (uint32_t)sizeof(out)) ==
+              WASMOS_ERR_NONE,
+          "a terminated id is accepted");
+    check(wasmos_sys_streq(out, "block:ata:1"), "and copied verbatim");
+
+    check(devmgr_copy_record_id(ok, 0, out, (uint32_t)sizeof(out)) ==
+              WASMOS_ERR_DEVMGR_BAD_RECORD_ID,
+          "a zero length is refused");
+    check(devmgr_copy_record_id(ok, -1, out, (uint32_t)sizeof(out)) ==
+              WASMOS_ERR_DEVMGR_BAD_RECORD_ID,
+          "a negative length is refused");
+    check(devmgr_copy_record_id(empty, 1, out, (uint32_t)sizeof(out)) ==
+              WASMOS_ERR_DEVMGR_BAD_RECORD_ID,
+          "a lone terminator names nothing");
+    check(devmgr_copy_record_id(ok, (int32_t)sizeof(out) + 1, out, (uint32_t)sizeof(out)) ==
+              WASMOS_ERR_DEVMGR_BAD_RECORD_ID,
+          "a length past the destination is refused rather than truncated");
+    check(devmgr_copy_record_id(0, 4, out, (uint32_t)sizeof(out)) ==
+              WASMOS_ERR_DEVMGR_BAD_RECORD_ID,
+          "a null payload is refused");
+}
+
 static void a_published_volume_can_be_retired(void) {
     harness_reset();
     publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, 0, 0, 0u);
@@ -563,12 +655,7 @@ static void retiring_a_volume_is_refused_when_it_should_be(void) {
 
     rec = find_volume_record("volume:block:ata:2");
     check(rec != 0, "the volume is there");
-    if (rec) {
-        rec->active_service = 1;
-    }
-    check(registry_remove_volume("volume:block:ata:2") == WASMOS_ERR_DEVMGR_RECORD_BUSY,
-          "a mounted volume is refused");
-    check(find_volume_record("volume:block:ata:2") != 0, "and is still in the inventory");
+    check(registry_remove_volume("volume:block:ata:2") == WASMOS_ERR_NONE, "and retires");
 }
 
 /* Retiring frees the SLOT, not just the name.
@@ -579,6 +666,52 @@ static void retiring_a_volume_is_refused_when_it_should_be(void) {
  * path simply returns when it is full. Pinned by the count rather than by
  * behaviour, since nothing else observes the difference until the array is
  * exhausted. */
+/* Retiring a volume disarms the rules the VOLUME armed, and only those.
+ *
+ * `matched_id` holds the backing device's id whichever selected the rule --
+ * the driver mounts a block device either way -- so cancelling by that id alone
+ * would also disarm a rule the DISK matched, and the disk has not gone
+ * anywhere. The selector is recorded for exactly this. */
+static void retiring_a_volume_disarms_only_the_rules_it_armed(void) {
+    harness_reset();
+    /* Both in ONE blob: dm_rules_load_block_fs REPLACES the rule set, so a
+     * second call would drop the first rule rather than add to it. */
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{fstype}==\"wfs\", ENV{MOUNT}=\"/wfs\", "
+                    "ENV{FSTYPE}=\"wfs\"\n"
+                    "SUBSYSTEM==\"block\", DRIVER==\"ata\", ENV{MOUNT}=\"/user\", "
+                    "ENV{FSTYPE}=\"fat\"\n") == 2,
+          "both rules parse");
+
+    /* publish_volume publishes the backing device first, so the block rule arms
+     * on the device and the volume rule on the volume. */
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, 0, 0, 0u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "the volume rule is armed");
+    check(g_dm.block_fs_rules[0].matched_from_volume == 1u, "by a volume");
+    check(g_dm.block_fs_rules[1].queued == 1u, "the block rule is armed");
+    check(g_dm.block_fs_rules[1].matched_from_volume == 0u, "by the device");
+    check(wasmos_sys_streq(g_dm.block_fs_rules[0].matched_id, g_dm.block_fs_rules[1].matched_id),
+          "and both name the same backing device, which is why the selector is needed");
+
+    check(registry_remove_volume("volume:block:ata:2") == WASMOS_ERR_NONE, "the volume retires");
+    check(g_dm.block_fs_rules[0].queued == 0u, "the rule the volume armed is disarmed");
+    check(g_dm.block_fs_rules[1].queued == 1u,
+          "the rule the DISK armed is untouched -- the disk did not go away");
+}
+
+/* The mirror: retiring the DEVICE must not disarm a rule a volume armed. */
+static void retiring_a_device_leaves_a_volume_armed_rule_alone(void) {
+    harness_reset();
+    check(load_rule("SUBSYSTEM==\"volume\", ATTR{fstype}==\"wfs\", ENV{MOUNT}=\"/wfs\", "
+                    "ENV{FSTYPE}=\"wfs\"\n") == 1,
+          "the volume rule parses");
+    publish_volume((uint8_t)BLOCK_BACKEND_ATA, 2u, (uint32_t)FS_TYPE_WFS, 0, 0, 0u);
+    check(g_dm.block_fs_rules[0].queued == 1u, "the volume rule is armed");
+
+    check(registry_remove_block("block:ata:2") == WASMOS_ERR_NONE, "the device retires");
+    check(g_dm.block_fs_rules[0].queued == 1u,
+          "a rule armed by the VOLUME is not disarmed by retiring the device");
+}
+
 static void retiring_frees_the_slot_for_reuse(void) {
     uint32_t after_first;
     harness_reset();
@@ -928,13 +1061,19 @@ int main(void) {
     a_partition_is_matched_by_its_label();
     a_partition_is_matched_by_its_type_guid();
     a_published_device_can_be_retired();
+    an_unterminated_retire_id_is_refused();
+    a_retire_id_is_taken_only_when_it_is_well_formed();
     a_published_volume_can_be_retired();
     retiring_a_volume_is_refused_when_it_should_be();
+    retiring_a_volume_disarms_only_the_rules_it_armed();
+    retiring_a_device_leaves_a_volume_armed_rule_alone();
     retiring_frees_the_slot_for_reuse();
     retiring_a_volume_frees_its_slot();
     a_retired_id_can_be_published_again();
     retiring_an_unknown_id_is_refused();
-    retiring_a_device_in_use_is_refused();
+    retiring_a_device_disarms_the_rule_it_armed();
+    retiring_a_device_leaves_a_spawned_rule_alone();
+    retiring_is_not_refused_on_mount_state();
     retiring_a_malformed_id_is_refused();
     retiring_one_device_leaves_the_others();
     a_volume_is_matched_by_the_uuid_its_formatter_printed();

@@ -285,7 +285,7 @@ enum {
     WASMOS_ERR_DEVMGR_NO_MOUNT_RULE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 1), /* no block/filesystem mount rule matches the requested unit */
     WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 2), /* unknown or unsupported device-manager query type */
     WASMOS_ERR_DEVMGR_NO_SUCH_RECORD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 3), /* the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something */
-    WASMOS_ERR_DEVMGR_RECORD_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 4), /* a filesystem is mounted on the device or volume named for retirement. Refused rather than retired because the mount still addresses it: the caller must unmount first, exactly as umount refuses a busy mount */
+    WASMOS_ERR_DEVMGR_RECORD_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 4), /* RESERVED, and not currently produced. A retire was once refused for a device something had mounted, but the device manager is not where that is known: its inventory is rule-matching state that no mount addresses, and it is never told about an unmount. Kept because error values are wire values and removing one renumbers every code after it */
     WASMOS_ERR_DEVMGR_BAD_RECORD_ID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 5), /* the id named for retirement was empty, unterminated, or longer than the inventory's id field */
     WASMOS_ERR_VIRTIO_BLK_NOT_READY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 1), /* no virtio-blk device was probed, or bring-up did not complete */
     WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 2), /* the request's lba, sector count, or buffer argument is unusable */
@@ -841,7 +841,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "no block/filesystem mount rule matches the requested unit";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
     case WASMOS_ERR_DEVMGR_NO_SUCH_RECORD: return "the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something";
-    case WASMOS_ERR_DEVMGR_RECORD_BUSY: return "a filesystem is mounted on the device or volume named for retirement. Refused rather than retired because the mount still addresses it: the caller must unmount first, exactly as umount refuses a busy mount";
+    case WASMOS_ERR_DEVMGR_RECORD_BUSY: return "RESERVED, and not currently produced. A retire was once refused for a device something had mounted, but the device manager is not where that is known: its inventory is rule-matching state that no mount addresses, and it is never told about an unmount. Kept because error values are wire values and removing one renumbers every code after it";
     case WASMOS_ERR_DEVMGR_BAD_RECORD_ID: return "the id named for retirement was empty, unterminated, or longer than the inventory's id field";
     case WASMOS_ERR_VIRTIO_BLK_NOT_READY: return "no virtio-blk device was probed, or bring-up did not complete";
     case WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST: return "the request's lba, sector count, or buffer argument is unusable";

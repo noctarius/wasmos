@@ -148,6 +148,15 @@ def _split_guest_samples(lines):
     return blocks
 
 
+class GuestRestarted(RuntimeError):
+    """The guest reset while a test was driving it.
+
+    Its own type so a caller can tell it from an ordinary assertion failure: a
+    reset is an environment event, not a property of the thing being asserted,
+    and the tests that hit it were asserting something unrelated.
+    """
+
+
 def _first_group(pattern, text, group=1, flags=0):
     """The first match's group, or None. Keeps the diagnosis readable."""
     m = re.search(pattern, text, flags)
@@ -827,6 +836,12 @@ class QemuSession:
         self.force_stop_on_timeout = force_stop_on_timeout
         self.proc: Optional[subprocess.Popen] = None
         self._stall_dumps = 0
+        # Guest-reset detection. The scan starts only once a prompt has been
+        # seen: the banner is also printed by the FIRST boot, where it means
+        # nothing.
+        self._restarted = False
+        self._saw_prompt = False
+        self._restart_scan = 0
         self.selector: Optional[selectors.BaseSelector] = None
         self.buf = b""
         self._esp_runtime_dir: Optional[str] = None
@@ -1003,6 +1018,53 @@ class QemuSession:
                     sys.stdout.buffer.write(chunk)
                     sys.stdout.buffer.flush()
                 self.buf += chunk
+                self._note_restart()
+
+    # The firmware's first line on a cold start. Seeing it AFTER the guest has
+    # already reached a prompt means the machine reset -- a triple fault, which
+    # produces no panic because the panic handler is what faulted.
+    _RESTART_MARK = b"BdsDxe: loading Boot"
+
+    def _note_restart(self) -> None:
+        """Notice a guest reset, loudly, as soon as the banner arrives.
+
+        A reset is the most misleading failure this harness can have, because
+        nothing after it is a reply to anything before it and `self.buf` still
+        holds the whole pre-reset session. A test that waits for a string its
+        FIRST boot already printed matches immediately, concludes the guest is
+        healthy, and then fails several commands later on something unrelated --
+        which is how a reset was once reported as a block device refusing a
+        write.
+
+        Raises GuestRestarted rather than recording and continuing. There is no
+        useful work left in the session: the machine under test is gone, the
+        state every later assertion refers to went with it, and anything the test
+        does from here measures a different boot. Failing at the reset also puts
+        the error where the cause is, instead of several commands later on
+        whatever first noticed something missing.
+
+        Raised from the read pump, so it reaches the test through whichever
+        expect/send/settle was running. Fires exactly once -- the flag is set
+        before the raise -- so teardown can still close the session.
+        """
+        if self._restarted or not self._saw_prompt:
+            return
+        if self._RESTART_MARK not in self.buf[self._restart_scan :]:
+            return
+        self._restarted = True
+        tail = self.tail()
+        self.force_stop()
+        raise GuestRestarted(
+            "the guest REBOOTED mid-session (firmware banner after a prompt), so "
+            "nothing after this point is a reply to anything before it. A triple "
+            "fault leaves no panic, because the panic handler is what faulted.\n"
+            f"--- tail ---\n{tail}\n"
+        )
+
+    @property
+    def restarted(self) -> bool:
+        """Whether the guest reset after first reaching a prompt."""
+        return self._restarted
 
     def dump_stall_state(self, reason: str) -> str:
         """Report what every vCPU is executing, symbolised against the kernel.
@@ -1184,6 +1246,9 @@ class QemuSession:
         if self._cli_settled or CLI_PROMPT not in needle:
             return True
         self._cli_settled = True
+        # From here a firmware banner means a RESET rather than this boot.
+        self._saw_prompt = True
+        self._restart_scan = len(self.buf)
         return self.settle()
 
     def mark(self) -> int:
@@ -1295,6 +1360,13 @@ class QemuSession:
         which is what the caller would have printed anyway.
         """
         text = self.buf.decode("utf-8", errors="replace")
+
+        if self._restarted:
+            return (
+                "the guest REBOOTED mid-session (firmware banner after a prompt), "
+                "so nothing since is a reply to anything before it -- a triple "
+                "fault leaves no panic, because the panic handler is what faulted"
+            )
 
         # The LAST panic, anchored on its opening banner: a dump is bracketed by
         # "KERNEL PANIC" and "END KERNEL PANIC", so searching from the last

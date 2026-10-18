@@ -1407,7 +1407,13 @@ class QemuSession:
         # it as the cause reads as "the guest went away", which sends a triage
         # looking for a shutdown that never happened; the guest was alive and
         # wedged at the only moment anything looked.
-        provoked = b"[stall-dump]" in self.buf
+        #
+        # Read from the COUNTER, not from the buffer. The dump is printed; only
+        # serial bytes reach self.buf, so its own "[stall-dump] ..." lines are
+        # never in there and a marker test silently never fires. That is how the
+        # first version of this check shipped broken, with a unit test that
+        # passed because it put the marker in the buffer itself.
+        provoked = self._stall_dumps > 0
         exited = self.proc is not None and self.proc.poll() is not None
 
         if exited and not provoked:
@@ -1422,20 +1428,15 @@ class QemuSession:
         # shell did not".
         #
         # Read only what the guest said BEFORE the harness started diagnosing.
-        # expect() dumps stall state on a timeout, and that dump both prints its
-        # own lines and NMIs every vCPU -- which makes the guest print more. All
-        # of it is newer than the stall it describes, so taking the newest line
-        # would report the diagnosis back as the symptom.
-        # `[diag]` and `[nmi]` are the GUEST's answers to being sampled, so they
-        # arrive before the dump's own lines and are dropped by prefix rather
-        # than by position.
-        # Cut at the START of the line the first marker sits on, not at the
-        # marker. The dump's banner is "=== [stall-dump] ... ===", so cutting at
-        # the marker leaves "=== " behind as the newest line and every stall
-        # would report its last guest output as '==='.
-        own = text.find("[stall-dump]")
-        if own != -1:
-            text = text[: text.rfind("\n", 0, own) + 1]
+        # expect() dumps stall state on a timeout, and that dump NMIs every vCPU
+        # -- which makes the GUEST print more. Those lines are newer than the
+        # stall they describe, so taking the newest one would report the
+        # diagnosis back as the symptom.
+        #
+        # Dropped by PREFIX, which is the only way available: the harness's own
+        # "[stall-dump] ..." lines are printed rather than written to self.buf,
+        # so there is no marker in here to cut at. `[diag]` and `[nmi]` are what
+        # the guest says when it is sampled, and they are what arrives.
         induced = ("[diag]", "[nmi]")
         lines = [
             ln.rstrip()

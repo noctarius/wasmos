@@ -46,7 +46,9 @@ class _StubProc:
         return self.returncode
 
 
-def _session(buf: bytes, returncode=None, restarted: bool = False) -> QemuSession:
+def _session(
+    buf: bytes, returncode=None, restarted: bool = False, stall_dumps: int = 0
+) -> QemuSession:
     """A session that was never started, carrying `buf` as its serial log.
 
     The paths are placeholders and are never opened: QemuSession.__init__ only
@@ -56,16 +58,20 @@ def _session(buf: bytes, returncode=None, restarted: bool = False) -> QemuSessio
     session.buf = buf
     session.proc = _StubProc(returncode)
     session._restarted = restarted
+    # How many times expect() gave up and dumped. This is the ONLY record that
+    # the harness provoked the guest: the dump is printed, never appended to
+    # session.buf, which holds serial bytes and nothing else.
+    session._stall_dumps = stall_dumps
     return session
 
 
-# What the harness itself prints once expect() gives up, and what the guest
-# prints because the dump NMIs it. Both are newer than the stall they describe.
-STALL_DUMP = (
-    b"=== [stall-dump] expect(b'wamos> ') timed out ===\n"
-    b"[stall-dump] [diag] tid=45 pid=36 fs-fat st=blocked rsn=event\n"
-    b"[stall-dump] [nmi] unexpected NMI cpu=0 rip=ffffffff80201f72\n"
-    b"[stall-dump] monitor unavailable: [Errno 32] Broken pipe\n"
+# What the GUEST prints because the dump NMIs it. These reach session.buf over
+# serial, unprefixed; the harness's own "[stall-dump] ..." lines are printed to
+# the console and never appear here, which is why a dump is detected by the
+# counter rather than by a marker in the buffer.
+INDUCED_GUEST_OUTPUT = (
+    b"[diag] tid=45 pid=36 fs-fat st=blocked rsn=event\n"
+    b"[nmi] unexpected NMI cpu=0 rip=ffffffff80201f72\n"
 )
 
 
@@ -109,7 +115,11 @@ class BootDiagnosisTest(unittest.TestCase):
         diagnosis that merely mentioned both would still have led a reader to
         the exit.
         """
-        s = _session(b"[fat] fs.backend registered\n" + STALL_DUMP, returncode=0)
+        s = _session(
+            b"[fat] fs.backend registered\n" + INDUCED_GUEST_OUTPUT,
+            returncode=0,
+            stall_dumps=1,
+        )
         d = s.boot_diagnosis()
         self.assertIn("stall", d)
         self.assertIn("fs.backend registered", d)
@@ -118,28 +128,24 @@ class BootDiagnosisTest(unittest.TestCase):
     def test_an_exit_during_the_dump_is_still_mentioned(self) -> None:
         """Not the cause is not the same as not worth saying: a reader chasing
         a truncated log needs to know the process is gone and why."""
-        s = _session(b"[fat] fs.backend registered\n" + STALL_DUMP, returncode=0)
+        s = _session(
+            b"[fat] fs.backend registered\n" + INDUCED_GUEST_OUTPUT,
+            returncode=0,
+            stall_dumps=1,
+        )
         self.assertIn("during the stall dump", s.boot_diagnosis())
-
-    def test_the_dumps_banner_does_not_become_the_last_guest_output(self) -> None:
-        """The dump opens with "=== [stall-dump] ... ===", so a truncation that
-        cuts at the MARKER rather than at the start of its line leaves "=== "
-        behind as the newest line -- and every stall reports its last guest
-        output as '==='."""
-        s = _session(b"[fat] fs.backend registered\n" + STALL_DUMP)
-        d = s.boot_diagnosis()
-        self.assertIn("fs.backend registered", d)
-        self.assertNotIn("'==='", d)
 
     def test_the_dumps_own_lines_are_never_the_last_guest_output(self) -> None:
         """`[diag]` and `[nmi]` are the guest answering the sampler, so they are
         newer than the stall and would report the diagnosis back as the symptom.
         """
-        s = _session(b"[fat] fs.backend registered\n" + STALL_DUMP)
+        s = _session(
+            b"[fat] fs.backend registered\n" + INDUCED_GUEST_OUTPUT, stall_dumps=1
+        )
         d = s.boot_diagnosis()
+        self.assertIn("fs.backend registered", d)
         self.assertNotIn("[diag]", d)
         self.assertNotIn("[nmi]", d)
-        self.assertNotIn("stall-dump", d)
 
 
 if __name__ == "__main__":

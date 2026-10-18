@@ -471,17 +471,34 @@ static void process_log_ctx_watch_if_changed(void) {
 }
 
 #ifndef WASMOS_PROCESS_TEST_SEAMS
-/* The kernel image bounds, as higher-half addresses. Inside the seam guard
- * because its only caller is, and the host build has no image to bound. */
+/* The kernel image bounds, as higher-half addresses.
+ *
+ * Computed once and cached. The transfer guard below runs on EVERY ring-0
+ * context switch, which is the hottest path in the kernel, and deriving these
+ * each time costs two symbol reads and a call to paging_get_higher_half_base.
+ * The values are fixed by the link, so a race between CPUs computing them
+ * writes identical words and needs no ordering.
+ *
+ * Inside the seam guard because its only caller is, and the host build has no
+ * image to bound. */
+static uint64_t g_image_start_cached;
+static uint64_t g_image_end_cached;
+
 static inline void process_image_bounds(uint64_t* out_start, uint64_t* out_end) {
-    uint64_t image_start = addr_cast(uint64_t, &__kernel_start);
-    uint64_t image_end = addr_cast(uint64_t, &__kernel_end);
-    uint64_t higher_half = paging_get_higher_half_base();
-    if (image_start < higher_half) {
-        image_start += higher_half;
-    }
-    if (image_end < higher_half) {
-        image_end += higher_half;
+    uint64_t image_start = g_image_start_cached;
+    uint64_t image_end = g_image_end_cached;
+    if (image_start >= image_end) {
+        uint64_t higher_half = paging_get_higher_half_base();
+        image_start = addr_cast(uint64_t, &__kernel_start);
+        image_end = addr_cast(uint64_t, &__kernel_end);
+        if (image_start < higher_half) {
+            image_start += higher_half;
+        }
+        if (image_end < higher_half) {
+            image_end += higher_half;
+        }
+        g_image_start_cached = image_start;
+        g_image_end_cached = image_end;
     }
     *out_start = image_start;
     *out_end = image_end;

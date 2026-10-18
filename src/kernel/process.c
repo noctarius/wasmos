@@ -372,8 +372,18 @@ static void context_switch_high(process_context_t* out, process_context_t* in) {
      * user address by construction, and bounding it against the kernel image
      * would panic on every ring-3 resume. */
     if (in && (in->cs & 0x3u) != 0x3u) {
-        process_validate_transfer_target(
-            (uintptr_t)in->rip, "context restore", in->cs, "(context)", (uintptr_t)in->rip);
+        /* Identified by the CPU's CURRENT thread and process, not by anything
+         * in the context: a context that was never initialised is all zeroes,
+         * so its own fields name nobody. The first capture reported
+         * `id=0 name=(context)` for exactly that reason -- cs was zero too --
+         * which said "a zeroed context" without saying whose. */
+        thread_t* cur = cpu_local()->current_thread;
+        process_t* cur_proc = cpu_local()->current_process;
+        process_validate_transfer_target((uintptr_t)in->rip,
+                                         "context restore",
+                                         (uint64_t)(cur ? cur->tid : 0u),
+                                         cur_proc ? cur_proc->name : "(no process)",
+                                         (uintptr_t)in->cs);
     }
     uint64_t higher_half_base = paging_get_higher_half_base();
     uintptr_t fn = (uintptr_t)&context_switch;
@@ -536,8 +546,8 @@ static inline void process_validate_transfer_target(uintptr_t target, const char
     if (process_entry_ptr_in_image((uint64_t)target, image_start, image_end)) {
         return;
     }
-    klog_printf("[sched] invalid %s target id=%016llx name=%s\n"
-                "[sched] target=%016llx (raw %016llx)\n"
+    klog_printf("[sched] invalid %s target tid=%llu name=%s\n"
+                "[sched] target=%016llx (cs/raw %016llx)\n"
                 "[sched] image=%016llx..%016llx\n",
                 what ? what : "?",
                 (unsigned long long)who,

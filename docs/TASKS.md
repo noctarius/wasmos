@@ -2216,6 +2216,30 @@ Source: `architecture/25-diagnostics-status.md`,
   **What writes the small integer is still unknown** -- that is the remaining
   work, and these guards are what will narrow it.
 
+  **THE GUARD CAUGHT IT (run 39144660427 job 117725943763, `wasm3_smp`), and
+  what it caught is a ZEROED context, not a torn one:**
+
+      [sched] invalid context restore target id=0000000000000000 name=(context)
+      [sched] target=0000000000000000 (raw 0000000000000000)
+      [sched] image=ffffffff80200000..ffffffff80409ae0
+      reason : invalid_transfer_target
+
+  `rip` is 0 and so is `cs` -- the whole `process_context_t` reads as never
+  written, which `thread.c:33` leaves it as. So the mechanism is **a thread
+  being dispatched whose context was never initialised**, matching the third
+  capture's `rip=0` and NOT the "torn rip" the claim fix addressed. The small
+  non-zero values (0x50, 0x507, 0x512) are presumably the same context caught
+  with one field partially written; that is a hypothesis, not established.
+
+  This is now a deterministic catch at the moment of the bad restore rather
+  than a #UD or #PF wherever the CPU landed, so the next capture is evidence
+  about the context instead of about the wreckage.
+
+  Next question, and the one the capture could not answer: WHOSE context. The
+  panic reported `id=0` because it identified the context by its own `cs`,
+  which is zero like everything else in it. It now reports the CPU's current
+  tid and process name instead, so the next occurrence names the thread.
+
   **The offset is not random, and that is the lead this entry has been missing.**
   Across eight captures it has been one of exactly TWO values: 0x507 twice and
   0x512 six times, with 0x512 in all of the last six. Two different runtimes

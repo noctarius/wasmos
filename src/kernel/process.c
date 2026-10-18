@@ -69,6 +69,11 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
                                      thread_block_reason_t initial_thread_reason,
                                      uint8_t enqueue_initial);
 
+/* Defined below, next to the context validator that shares its image bounds;
+ * declared here because the worker and context-restore call sites precede it. */
+static inline void process_validate_transfer_target(uintptr_t target, const char* what,
+                                                    uint64_t who, const char* name, uintptr_t raw);
+
 static inline uintptr_t process_kernel_alias_addr(uintptr_t addr) {
 #ifdef WASMOS_PROCESS_TEST_SEAMS
     /* A host process has one address space and no higher-half alias, so the
@@ -291,8 +296,19 @@ static void process_restore_stack_guard_mappings(uint64_t alloc_base_phys, uint3
 }
 
 static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_t* thread) {
-    process_thread_worker_entry_t entry =
-        fn_cast(process_thread_worker_entry_t, process_kernel_alias_addr(thread->worker_entry));
+    uintptr_t worker_target = process_kernel_alias_addr(thread->worker_entry);
+    /* A kernel worker never reaches the process-entry guard above: it is
+     * dispatched through here instead, and its context is not validated either.
+     * The SMP stress participants ARE kernel workers, so leaving this unchecked
+     * left the one test that panics unable to produce the diagnostic. The
+     * worker's TID and the raw field are reported, because the pid alone does
+     * not say which of a process's workers went bad. */
+    process_validate_transfer_target(worker_target,
+                                     "worker entry",
+                                     (uint64_t)(thread ? thread->tid : 0u),
+                                     proc ? proc->name : 0,
+                                     thread ? (uintptr_t)thread->worker_entry : 0u);
+    process_thread_worker_entry_t entry = fn_cast(process_thread_worker_entry_t, worker_target);
     uintptr_t stack_top = thread->kstack_top - 16u;
     stack_top &= ~(uintptr_t)0xFULL;
     process_run_result_t rc = PROCESS_RUN_EXITED;
@@ -347,6 +363,18 @@ static process_run_result_t process_thread_spawn_default_worker(process_t* proce
 }
 
 static void context_switch_high(process_context_t* out, process_context_t* in) {
+    /* The single funnel for every ring-0 context restore -- the dispatch path,
+     * process_yield's return to the scheduler, and the exit path. The dispatch
+     * validator (process_validate_thread_context) does not cover the other two,
+     * which is why the check belongs here rather than beside a caller.
+     *
+     * A USER context is skipped, as that validator skips one: its rip is a
+     * user address by construction, and bounding it against the kernel image
+     * would panic on every ring-3 resume. */
+    if (in && (in->cs & 0x3u) != 0x3u) {
+        process_validate_transfer_target(
+            (uintptr_t)in->rip, "context restore", in->cs, "(context)", (uintptr_t)in->rip);
+    }
     uint64_t higher_half_base = paging_get_higher_half_base();
     uintptr_t fn = (uintptr_t)&context_switch;
     if ((uint64_t)fn < higher_half_base) {
@@ -442,21 +470,10 @@ static void process_log_ctx_watch_if_changed(void) {
     process_log_ctx_watch("ctxsw");
 }
 
-/* Panic unless `entry_ptr` points into the kernel image.
- *
- * A corrupt entry pointer is CALLED, not dereferenced, so nothing else catches
- * it: process_validate_thread_context bounds a saved rip and runs on this same
- * dispatch, but this jump never goes through a saved context. Naming the
- * process here is the point -- the cpu_exception panic it replaces left open
- * which process's pointer went bad, through eight captures.
- *
- * Compiled out under the test seams, where there is no kernel image to bound
- * against; process_entry_ptr_in_image is what the host exercises instead. */
-static inline void process_validate_entry_ptr(process_t* proc, uintptr_t entry_ptr) {
-#ifdef WASMOS_PROCESS_TEST_SEAMS
-    (void)proc;
-    (void)entry_ptr;
-#else
+#ifndef WASMOS_PROCESS_TEST_SEAMS
+/* The kernel image bounds, as higher-half addresses. Inside the seam guard
+ * because its only caller is, and the host build has no image to bound. */
+static inline void process_image_bounds(uint64_t* out_start, uint64_t* out_end) {
     uint64_t image_start = addr_cast(uint64_t, &__kernel_start);
     uint64_t image_end = addr_cast(uint64_t, &__kernel_end);
     uint64_t higher_half = paging_get_higher_half_base();
@@ -466,20 +483,54 @@ static inline void process_validate_entry_ptr(process_t* proc, uintptr_t entry_p
     if (image_end < higher_half) {
         image_end += higher_half;
     }
-    if (process_entry_ptr_in_image((uint64_t)entry_ptr, image_start, image_end)) {
+    *out_start = image_start;
+    *out_end = image_end;
+}
+#endif
+
+/* Panic unless `target` -- an address the kernel is about to TRANSFER to, by
+ * call or by return -- points into the kernel image.
+ *
+ * Every capture of the SMP scheduler stress panic resumed a tiny address:
+ * 0x50 raw, and 0x507/0x512 with the higher-half base applied. Which transfer
+ * carried it is NOT established -- panic_backtrace walks the RBP chain, and a
+ * ring-0 context restore returns with `ret` without touching RBP, so a
+ * backtrace naming the scheduler is equally consistent with an indirect call
+ * from there and with a context resumed into a bad rip. So every transfer that
+ * can reach a small address is checked rather than the one that looked likely.
+ *
+ * `who`/`what` name the thing being transferred to, so the panic says which
+ * pointer went bad instead of leaving it to be inferred.
+ *
+ * Compiled out under the test seams, where there is no kernel image to bound
+ * against; process_entry_ptr_in_image is what the host exercises instead. */
+static inline void process_validate_transfer_target(uintptr_t target, const char* what,
+                                                    uint64_t who, const char* name, uintptr_t raw) {
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    (void)target;
+    (void)what;
+    (void)who;
+    (void)name;
+    (void)raw;
+#else
+    uint64_t image_start = 0;
+    uint64_t image_end = 0;
+    process_image_bounds(&image_start, &image_end);
+    if (process_entry_ptr_in_image((uint64_t)target, image_start, image_end)) {
         return;
     }
-    klog_printf("[sched] invalid process entry pid=%016llx name=%s\n"
-                "[sched] entry=%016llx (raw %016llx)\n"
+    klog_printf("[sched] invalid %s target id=%016llx name=%s\n"
+                "[sched] target=%016llx (raw %016llx)\n"
                 "[sched] image=%016llx..%016llx\n",
-                (unsigned long long)(proc ? proc->pid : 0u),
-                (proc && proc->name) ? proc->name : "(null)",
-                (unsigned long long)entry_ptr,
-                (unsigned long long)(proc ? (uintptr_t)proc->entry : 0u),
+                what ? what : "?",
+                (unsigned long long)who,
+                name ? name : "(null)",
+                (unsigned long long)target,
+                (unsigned long long)raw,
                 (unsigned long long)image_start,
                 (unsigned long long)image_end);
     process_log_ctxsw_state();
-    kpanic("invalid_process_entry", (uintptr_t)entry_ptr, (uintptr_t)(proc ? proc->pid : 0u));
+    kpanic("invalid_transfer_target", (uintptr_t)target, (uintptr_t)who);
 #endif
 }
 
@@ -666,7 +717,11 @@ static void process_trampoline(void) {
         } else {
             uintptr_t entry_ptr =
                 process_kernel_alias_addr((uintptr_t)cpu_local()->current_process->entry);
-            process_validate_entry_ptr(cpu_local()->current_process, entry_ptr);
+            process_validate_transfer_target(entry_ptr,
+                                             "process entry",
+                                             (uint64_t)cpu_local()->current_process->pid,
+                                             cpu_local()->current_process->name,
+                                             (uintptr_t)cpu_local()->current_process->entry);
             process_entry_t entry_fn = (process_entry_t)(void*)entry_ptr;
             /* Guard runtime reentrancy for subsystems that require a
              * single-threaded process entry path. Kernel workers

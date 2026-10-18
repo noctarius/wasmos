@@ -2173,38 +2173,48 @@ Source: `architecture/25-diagnostics-status.md`,
   run, both runtimes, the same address -- and run 39124795842 job 117667540301
   (`wasm3_smp`, `a=0x0e`).
 
-  **ROOT CAUSE LOCATED (not yet fixed): the scheduler CALLS a corrupt entry
-  pointer; it does not resume a torn context.** The warp capture's backtrace is
-  what settles it:
+  **The resumed address is a SMALL INTEGER, and that is established.** Across
+  the captures it has been `0x50` raw, and `0x507`/`0x512` with the higher-half
+  base applied. `.text` begins at `0xffffffff80200000`, so `0xffffffff80000512`
+  is 2 MiB BELOW `__kernel_start` -- no section, no symbol -- inside the
+  higher-half window that maps physical 0..512 MiB. It is the alias of PHYSICAL
+  `0x512`, which is why one capture took #UD (bytes present, not an
+  instruction) and another #PF at the same address on a different runtime.
 
-      rip=ffffffff80000512  rsp=ffffffff80449fe0
-      [0] ret=ffffffff80221a81 (process_schedule_once)
-      [1] kernel_boot_run_scheduler_loop  [2] kmain  [3] _start_high
+  **Which TRANSFER carries it is NOT established.** An earlier revision of this
+  entry claimed the backtrace proved an indirect call through
+  `process_t.entry`. It does not. `panic_backtrace` walks the RBP frame chain
+  (`kpanic.c:73`), and a ring-0 context restore returns with `ret`
+  (`arch/x86_64/context_switch.S:151`) without touching RBP -- so a backtrace
+  naming `process_schedule_once` is equally consistent with a call made there
+  and with a context resumed into a bad rip while RBP still held the
+  scheduler's frame. The capture that followed that claim supports the restore
+  reading rather than the call one: `rip=0x50` RAW, where both entry call sites
+  apply `process_kernel_alias_addr` and would have produced `0xffffffff80000050`.
 
-  The return address is INSIDE the scheduler, on CPU 0's boot stack -- an
-  indirect call, not an `iretq` into a context. `process_validate_thread_context`
-  bounds a saved rip and runs on this very dispatch (`process.c:2506`), which is
-  why it never fired: the context was fine.
+  Entry-field corruption is therefore a HYPOTHESIS, not a finding. So is
+  context corruption. What is certain is that some pointer or saved rip becomes
+  a small integer.
 
-  The call site is `process.c:605`:
+  Guards are in place at every transfer that can reach one
+  (`process_validate_transfer_target`), each naming what it was transferring to:
 
-      entry_ptr = process_kernel_alias_addr((uintptr_t)current_process->entry);
-      entry_fn  = (process_entry_t)entry_ptr;   /* called */
+  - the process entry call (`process.c`, the ring-0 trampoline),
+  - the WORKER entry call (`process_run_worker_on_stack`) -- the SMP stress
+    participants are kernel workers, so without this the one test that panics
+    could not produce a diagnostic at all,
+  - every ring-0 context restore (`context_switch_high`), which is the funnel
+    the dispatch validator does not cover: `process_yield`'s return to the
+    scheduler and the exit path both bypass `process_validate_thread_context`.
 
-  guarded only by `!current_process->entry` -- a NULL test. A small non-zero
-  value passes it, and the alias turns it into something that looks like a
-  kernel address: `alias(0x512)` is exactly `0xffffffff80000512`. That address
-  is 2 MiB BELOW `__kernel_start` (`.text` begins at `0xffffffff80200000`), in
-  the higher-half window that maps physical 0..512 MiB -- so it is the alias of
-  PHYSICAL `0x512`, which is why one capture took #UD (bytes present, not an
-  instruction) and another #PF.
+  A user context is skipped at the restore, as the dispatch validator skips
+  one. That leaves a hole worth naming: a context whose `cs` is corrupted to
+  ring 3 passes both unchecked.
 
-  A guard is in place now (`process_entry_ptr_in_image`, pinned by
-  `tests/unit/test_process_lifecycle.c`): the next occurrence panics
-  `invalid_process_entry` naming the process, its name and the raw field,
-  instead of jumping. **What is still unknown is what WRITES 0x512 into
-  `process_t.entry`** -- that is the remaining work, and the guard is what will
-  name the victim process when it next happens.
+  The next occurrence panics `invalid_transfer_target` naming WHICH transfer
+  and whose pointer it was, instead of `cpu_exception` at an unmapped address.
+  **What writes the small integer is still unknown** -- that is the remaining
+  work, and these guards are what will narrow it.
 
   **The offset is not random, and that is the lead this entry has been missing.**
   Across eight captures it has been one of exactly TWO values: 0x507 twice and

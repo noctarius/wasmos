@@ -795,21 +795,25 @@ linked feature documents for rationale and rollout plans.
   A move and a retirement run the same state machine, because neither may be
   applied to a partition a filesystem is mounted on -- every transfer is rebased
   onto the window, so moving one under a mount redirects writes the filesystem
-  believes it placed. Both ask the VOLUME manager first, whose CLAIM is the only
-  live record of what is mounted (the device manager's `active_service` is never
-  set); only NO_SUCH_UNIT is read as permission, every other answer as "cannot
-  tell". A retirement then withdraws the device from the device manager and
-  unregisters it from the `block` class, in that order. Replies are matched on
-  sender as well as request id, since an id alone is a number to guess. No stage
-  is waited for, so the rescan's reply is deferred until the last change
+  believes it placed. Both ask FS-MANAGER first, whose mount listing names each
+  mount's backing device and is the only authority on the question: the device
+  manager's `active_service` is never set, and the volume manager's CLAIM covers
+  only devices it recognised a filesystem on -- a partition whose probe failed
+  carries no volume, mounts anyway, and read as unheld until CI retired one out
+  from under a live mount. Any answer that is not a mount table is "cannot tell"
+  and refuses. A retirement then withdraws the device from the device manager
+  and unregisters it from the `block` class, in that order. Replies are matched
+  on sender as well as request id, since an id alone is a number to guess. No
+  stage is waited for, so the rescan's reply is deferred until the last change
   settles. An UNREADABLE table aborts the
   rescan rather than retiring everything, which is the distinction a first probe
   does not need.
 - `fs_fat` CLAIMS the volume it mounts and releases it on shutdown, which it
-  never did. Only `fs_wfs` claimed, so the claim -- the one live record of what
-  is mounted anywhere in the system -- was blind to every FAT mount: a FAT
-  volume could be reformatted by `mkfs.wfs` under its own filesystem, checked by
-  `fsck.wfs` mid-write, and now retired by a rescan out from under it.
+  never did. Only `fs_wfs` claimed, so a FAT volume could be reformatted by
+  `mkfs.wfs` under its own filesystem or checked by `fsck.wfs` mid-write. The
+  claim's reach is narrower than it looks and is now stated as such: it records
+  that someone ANNOUNCED a mount, which coincides with "is mounted" only while
+  every user announces and only where a volume exists to announce about.
 - Both filesystem drivers release that claim only when the mount is actually
   ending. They released it before checking who sent the UNMOUNT, so any client
   that could reach the backend through the `fs.backend` class could clear the

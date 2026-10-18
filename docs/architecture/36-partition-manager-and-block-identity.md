@@ -336,26 +336,42 @@ tests rather than disk images.
 
 A retirement asks three peers in a FIXED order, and the order is the design.
 
-The VOLUME MANAGER goes first, and it is the only one that can refuse. A volume
-carries a CLAIM while a filesystem service holds it, and that claim is the only
-live record in the system of what is mounted: the device manager's
-`active_service` is never set, so its inventory cannot answer the question
-(TASKS `[BUG][P3]`), and this driver cannot see a mount at all.
+FS-MANAGER goes first, and it is the only one that can refuse. It brokers every
+mount in the system and its listing names each one's backing device by canonical
+id (`FSMGR_IPC_QUERY_MOUNTS_REQ`), so its table is the authority. Nothing else
+can answer the question: the device manager's `active_service` is never set, so
+its inventory cannot (TASKS `[BUG][P3]`), and this driver cannot see a mount at
+all. Any answer that is not a mount table — an error, an unusable length, a read
+that fails — is "cannot tell", and "cannot tell" is treated exactly like "yes,
+it is mounted". There is no answer here that means "no".
 
-A partition with no volume — unformatted, or carrying something nothing
-recognised — has nothing that could hold it and passes. That is the ONLY error
-read as permission: `NO_SUCH_UNIT`, which is what the volume manager says about
-an instance it does not hold. Every other answer, including `BAD_REQUEST` and
-`NO_DESCRIPTOR`, means the question was not answered, and "cannot tell" is
-treated exactly like "yes, it is mounted".
+**The volume manager's CLAIM was tried here first, and is not sufficient.** That
+is a measurement, not an argument. A CI run produced
 
-The volume manager's endpoint is resolved ASYNCHRONOUSLY, on the first change
-that needs one. Not at bring-up, because this driver is an initfs payload
-spawned ahead of the services that publish volumes; and not with the blocking
-lookup helper, which is for bring-up only — a running driver that blocks on the
-process manager cannot dispatch partition I/O meanwhile, and the process manager
-reads the executables it spawns through a filesystem that may be mounted on a
-partition this driver serves.
+    [volume-manager] prefix read failed on block:virtio-blk:40p1
+
+so no volume record existed for that partition; `mount -t fat` on it succeeded
+anyway, because mounting needs no volume; `fs_fat`'s claim had nothing to attach
+to; and the retirement read "no volume" as "nothing holds it" and withdrew the
+device out from under a live filesystem. A mount can exist without a volume, and
+the claim only covers devices the volume manager managed to recognise a
+filesystem on. It remains the right mechanism for `fsck` and `mkfs`, which ask a
+different question — *may I write to this* — about a device they are about to
+address directly.
+
+Matching the id in the listing is to the END OF THE LINE, never a prefix.
+Partition ids are built by appending a slot number, so `block:ata:0p1` is a
+prefix of `block:ata:0p11`, and a prefix match fails in both directions:
+refusing to retire a partition because a different one is mounted, or retiring a
+mounted one because a shorter id appears in the text. `mounts.zig` holds the
+parse, pure and host-tested for exactly that case.
+
+fs-manager's endpoint is resolved ASYNCHRONOUSLY, on the first change that needs
+one. Not at bring-up, because this driver is an initfs payload spawned ahead of
+it; and not with the blocking lookup helper, which is for bring-up only — a
+running driver that blocks on the process manager cannot dispatch partition I/O
+meanwhile, and the process manager reads the executables it spawns through a
+filesystem that may be mounted on a partition this driver serves.
 
 Every reply is matched on its SENDER as well as its request id. A request id is
 a sequential number another process can guess, and a forged `VOLUME_IPC_ERROR`
@@ -363,11 +379,10 @@ would otherwise walk a partition straight past the check that protects a live
 mount. This is the same distinction the IPC layer draws and does not close for
 you: it authenticates an endpoint's OWNER, never its AUTHORITY.
 
-Claim checks run ONE at a time. `VOLUME_IPC_IDENTIFY_REQ` writes its descriptor
-at offset 0 of the buffer it is handed and takes no offset, so two in flight
-would both read whichever answer landed last — and a disk whose table was wiped
-retires every partition it had, which is not a rare case. The queue drains as
-each retirement leaves the claim stage; nothing polls it.
+Mount checks run ONE at a time. The whole listing comes back at offset 0 of one
+buffer, so two in flight would both read whichever answer landed last — and a
+disk whose table was wiped retires every partition it had, which is not a rare
+case. The queue drains as each change leaves the mount stage; nothing polls it.
 
 The DEVICE MANAGER goes second (`DEVMGR_UNPUBLISH_BLOCK_DEVICE`) and the CLASS
 REGISTRY last (`SVC_IPC_UNREGISTER_CLASS_REQ`). Unregistering the class before

@@ -1197,17 +1197,28 @@ tail.
   only to write a table and send `PARTITION_IPC_RESCAN_REQ`, which is what
   `partprobe` does on its own.
 
-- [ ] [BUG][P2] A rescan's claim check is a snapshot, not a reservation. The
-  partition manager asks the volume manager whether a partition is claimed and
-  then proceeds to change it, and a mount landing between the two is accepted:
-  the volume manager has no notion of a change in progress, so the partition can
-  be retired or moved under a filesystem that mounted a moment after the check
-  passed. Closing it needs a reservation the volume manager honours -- a claim
-  refused, or deferred, while a retirement holds the volume -- plus a release
-  when the change completes or is abandoned. Narrow in practice today, because
-  nothing mounts a partition except a devmgr rule or an explicit `mount`, and a
-  rescan is a deliberate act; it stops being narrow the moment a rule can fire
-  on a partition a rescan just published.
+- [ ] [BUG][P2] A rescan's mount check is a snapshot, not a reservation. The
+  partition manager asks fs-manager what is mounted and then proceeds to change
+  the partition, and a mount landing between the two is accepted: fs-manager has
+  no notion of a change in progress, so the partition can be retired or moved
+  under a filesystem that mounted a moment after the check passed. Closing it
+  needs a reservation fs-manager honours -- a mount refused, or deferred, while
+  a retirement holds the device -- plus a release when the change completes or
+  is abandoned. Narrow in practice today, because nothing mounts a partition
+  except a devmgr rule or an explicit `mount`, and a rescan is a deliberate act;
+  it stops being narrow the moment a rule can fire on a partition a rescan just
+  published.
+
+- [ ] [BUG][P3] `[volume-manager] prefix read failed on <device>` leaves a
+  device with NO volume for the rest of the boot. Seen on CI for a virtio-blk
+  partition that had probed cleanly on the previous boot of the same image, so
+  it is a transient read rather than a property of the medium -- and a probe
+  happens once, when the device arrives under the `block` class, so nothing
+  retries. Everything that reads the volume layer then describes that device as
+  having no filesystem: `volinfo` omits it, every `SUBSYSTEM=="volume"` rule
+  misses it, and the CLAIM has nothing to attach to. A bounded retry on the
+  prefix read would cover it; so would re-probing on the first failure of any
+  later read against the device.
 
 - [ ] [BUG][P2] Retiring a partition leaves its VOLUME published.
   `volume_manager.handleClassEvent` ignores `SVC_CLASS_EVENT_REMOVE`, so a

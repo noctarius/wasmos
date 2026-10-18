@@ -1239,12 +1239,13 @@ subsystems:
           writes, since every forwarded transfer is rebased onto the window and
           clamped to it.
 
-          The question is put to the VOLUME manager: a volume carries a CLAIM
-          while a filesystem service holds it, and that claim is the only live
-          record in the system of what is mounted. The device manager's
-          inventory cannot answer it. A partition with no volume at all has
-          nothing that could hold it and passes; any OTHER answer, including an
-          error, is read as "cannot tell" and refuses.
+          The question is put to FS-MANAGER, which brokers every mount and names
+          each one's backing device by canonical id. Nothing else can answer it:
+          the device manager's inventory cannot, and the volume manager's CLAIM
+          covers only devices it managed to recognise a filesystem on -- a
+          partition whose probe failed carries no volume, mounts perfectly well
+          anyway, and would read as unheld. Any answer that is not a mount table
+          is "cannot tell" and refuses.
 
           A refusal leaves the partition exactly as it was. arg2 counts every
           partition the rescan could not reconcile -- a change refused, a change

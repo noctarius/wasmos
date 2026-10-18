@@ -44,6 +44,7 @@ wasmos_add_zig_wasm_app(
     ${LIBC_DIR}/zig/coroutine.zig
     ${CMAKE_CURRENT_SOURCE_DIR}/partition_table.zig
     ${CMAKE_CURRENT_SOURCE_DIR}/reconcile.zig
+    ${CMAKE_CURRENT_SOURCE_DIR}/mounts.zig
     ${LIBSYS_WASM_DIR}/coroutine_wasm.c
     ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
     ${LIBSYS_WASM_DIR}/service_runtime_wasm.c

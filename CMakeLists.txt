@@ -4096,6 +4096,20 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running partition rescan diff unit tests"
       VERBATIM)
+    # Reading fs-manager's mount listing. Self-contained for the same reason as
+    # the diff: it takes two byte slices, and the case it exists for -- an id
+    # that is a prefix of another partition's -- is data, not a disk.
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-partition-mounts-cache
+              --global-cache-dir ${BUILD_DIR}/zig-partition-mounts-global-cache
+              --dep mounts
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_partition_mounts.zig
+              -Mmounts=${DRIVER_WASM_DIR}/partition_manager/mounts.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running partition mount-listing unit tests"
+      VERBATIM)
     # The tmpfs namespace and storage core. It is split out of the driver
     # (fs_tmpfs.zig) precisely so it can be linked here: it depends on nothing in
     # the guest environment except a source of pool memory, which on the guest is

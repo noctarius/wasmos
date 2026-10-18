@@ -71,6 +71,7 @@ const status = @import("wasmos_status.zig");
 const abi = @import("wasmos_constants.zig");
 const pt = @import("partition_table.zig");
 const rc = @import("reconcile.zig");
+const mnt = @import("mounts.zig");
 
 /// Disks probed. Each costs a descriptor plus its partitions' records; the bound
 /// is this driver's own state, not a property of the system.
@@ -145,14 +146,22 @@ var g_proc_endpoint: i32 = -1;
 /// publishing to class registration alone.
 var g_devmgr: i32 = -1;
 
-/// The volume manager's endpoint, resolved asynchronously on the first change
-/// that needs it; see `requestVolmgr` for why neither at bring-up nor with the
-/// blocking helper.
+/// fs-manager's endpoint: the authority on what is MOUNTED, and the gate every
+/// change to a published partition passes through.
+var g_fsmgr: i32 = -1;
+/// The volume manager's endpoint, used only to ask for a re-probe after a
+/// partition's descriptor changes. Advisory: an update that cannot reach it
+/// still applies.
 var g_volmgr: i32 = -1;
-/// The request id of the outstanding lookup for it, or 0 when none is in
-/// flight. One at a time: a wiped disk queues a change per partition and they
-/// all wait on the same answer.
-var g_volmgr_lookup_id: i32 = 0;
+
+/// Which service the outstanding lookup is for, and its request id.
+///
+/// One lookup at a time, because a wiped disk queues a change per partition and
+/// they all wait on the same answer. Resolved asynchronously; see
+/// `requestService` for why neither at bring-up nor with the blocking helper.
+const LookupKind = enum { none, fsmgr, volmgr };
+var g_lookup_kind: LookupKind = .none;
+var g_lookup_id: i32 = 0;
 
 /// Backend endpoints this process has lent its probe buffers to.
 ///
@@ -203,13 +212,19 @@ var g_pending: [MAX_DISKS]Arrival = [_]Arrival{.{}} ** MAX_DISKS;
 ///
 /// Three peers are involved, in a fixed order, and the order is the design.
 ///
-/// The VOLUME MANAGER goes first, and it is the only one that can refuse. A
-/// volume carries a CLAIM while a filesystem service holds it, and that claim
-/// is the only live record in the system of whether anything is mounted on a
-/// device -- the device manager's `active_service` is never set, so its
-/// inventory cannot answer this (docs/TASKS.md `[BUG][P3]`). A partition with no
-/// volume at all -- an unformatted one, or one whose filesystem nothing
-/// recognised -- has nothing that could hold it and passes.
+/// FS-MANAGER goes first, and it is the only one that can refuse. It brokers
+/// every mount in the system and names each one's backing device by canonical
+/// id, so its table is the authority on what is mounted -- the device manager's
+/// `active_service` is never set, so its inventory cannot answer this
+/// (docs/TASKS.md `[BUG][P3]`), and this driver cannot see a mount at all.
+///
+/// The volume manager's CLAIM was tried here first and is NOT sufficient, which
+/// a CI run proved rather than an argument: `[volume-manager] prefix read
+/// failed on block:virtio-blk:40p1` meant no volume record existed for a
+/// partition, `mount` succeeded anyway because mounting needs no volume, and
+/// the claim had nothing to attach to. "No volume" was then read as "nothing
+/// holds it" and a live mount's device was retired. A mount can exist without a
+/// volume; only fs-manager knows about every one.
 ///
 /// The DEVICE MANAGER goes second, and the CLASS REGISTRY last, for a retirement
 /// only. Unregistering the class before the inventory would leave a device that
@@ -239,12 +254,11 @@ const Change = struct {
     /// The class registration's withdrawal, holding the staged class name until
     /// the process manager has read it.
     class: driver.ClassRetire = .{},
-    /// `claimwait` is a change that has not asked yet. Claim checks run ONE at a
-    /// time because VOLUME_IPC_IDENTIFY_REQ writes its descriptor at offset 0 of
-    /// the buffer it is given and takes no offset, so two in flight would both
-    /// read whichever answer landed last. A wiped disk retires every partition
-    /// it had, so that is not a rare case.
-    stage: enum { claimwait, claimcheck, unpublish, unregister } = .claimwait,
+    /// `mountwait` is a change that has not asked yet. Mount checks run ONE at a
+    /// time because the whole listing comes back at offset 0 of one buffer, so
+    /// two in flight would both read whichever answer landed last. A wiped disk
+    /// retires every partition it had, so that is not a rare case.
+    stage: enum { mountwait, mountcheck, unpublish, unregister } = .mountwait,
     /// The rescan waiting on this, as an index into `g_rescans`, or null when
     /// the change was not scheduled by one.
     rescan: ?usize = null,
@@ -334,14 +348,22 @@ var g_publish_bid: i32 = -1;
 /// retirement per partition in flight at once; one slot rewritten by the next
 /// would withdraw whichever id arrived last, repeatedly.
 var g_retire_bid: i32 = -1;
-/// Buffer the volume manager writes a volume descriptor into when a retirement
-/// asks whether anything holds the partition. Lent WRITE for the life of the
+/// Buffer fs-manager writes its mount listing into when a change asks whether
+/// anything is mounted on the partition. Lent WRITE for the life of the
 /// process.
 ///
-/// ONE descriptor, not one per retirement, because VOLUME_IPC_IDENTIFY_REQ
-/// writes at offset 0 and takes no offset -- which is what forces the claim
-/// checks to run one at a time (see Retire.stage).
-var g_claim_bid: i32 = -1;
+/// ONE listing, not one per change, because the whole table comes back at
+/// offset 0 every time -- which is what forces the checks to run one at a time
+/// (see Change.stage).
+var g_mounts_bid: i32 = -1;
+/// The grant id fs-manager holds for that buffer, which the request carries so
+/// it can find its borrow.
+var g_mounts_borrow: i32 = -1;
+/// Bytes of mount listing this can hold. fs-manager's own table is 768 bytes
+/// and it truncates rather than failing, so a reader that asked for less would
+/// silently lose the LAST mounts -- which are the ones most likely to have just
+/// been created.
+const MOUNTS_BYTES: usize = 1024;
 /// Physical address of this process's block buffer, where probe reads land.
 var g_block_phys: u32 = 0;
 
@@ -355,6 +377,8 @@ var g_block_phys: u32 = 0;
 /// own logging runs. Probing is single-threaded and non-reentrant, so one copy
 /// of each is enough.
 var g_sector: [pt.SECTOR_BYTES]u8 = [_]u8{0} ** pt.SECTOR_BYTES;
+/// fs-manager's mount listing, read back one change at a time.
+var g_mounts: [MOUNTS_BYTES]u8 = [_]u8{0} ** MOUNTS_BYTES;
 var g_table: pt.Table = .{};
 var g_scan: pt.GptEntryScan = undefined;
 
@@ -882,7 +906,7 @@ fn beginChange(
         driver.log("[partition-manager] cannot change a partition whose id is unterminated");
         return false;
     }
-    if (g_retire_bid < 0 or g_claim_bid < 0) {
+    if (g_retire_bid < 0 or g_mounts_bid < 0) {
         var line = driver.Line{};
         _ = line.str("[partition-manager] cannot change ").str(id);
         _ = line.str("; bring-up did not get the buffers a change needs");
@@ -914,7 +938,7 @@ fn beginChange(
         .desc = if (desc) |d| d.* else .{},
         .lba_start = if (desc) |d| d.lba_start else 0,
         .lba_count = if (desc) |d| d.lba_count else 0,
-        .stage = .claimwait,
+        .stage = .mountwait,
         .rescan = rescan,
         .in_use = true,
     };
@@ -929,45 +953,47 @@ fn beginChange(
     return true;
 }
 
-/// Start the next queued claim check, resolving the volume manager first if it
-/// is not known yet.
+/// Start the next queued mount check, resolving fs-manager first if it is not
+/// known yet.
 ///
-/// Serialized rather than fanned out because the descriptor comes back at a
-/// fixed offset of one buffer; see Change.stage. Called whenever a change is
-/// queued and whenever one leaves the claim stage, so the queue drains without
+/// Serialized rather than fanned out because the listing comes back at a fixed
+/// offset of one buffer; see Change.stage. Called whenever a change is queued
+/// and whenever one leaves the mount stage, so the queue drains without
 /// anything polling it.
 fn pumpChanges() void {
-    if (g_volmgr < 0) {
-        requestVolmgr();
+    if (g_fsmgr < 0) {
+        requestService(.fsmgr);
         return;
     }
     for (&g_changes) |*c| {
-        if (c.in_use and c.stage == .claimcheck) return;
+        if (c.in_use and c.stage == .mountcheck) return;
     }
     for (&g_changes, 0..) |*c, slot| {
-        if (!c.in_use or c.stage != .claimwait) continue;
-        const part = &g_parts[c.part];
-        c.stage = .claimcheck;
+        if (!c.in_use or c.stage != .mountwait) continue;
+        c.stage = .mountcheck;
         c.request_id = nextRequestId();
+        // The CLIENT owns the listing buffer and fs-manager is a transient
+        // grantee, so the request carries both the buffer and the grant it
+        // holds (architecture/12-dma-transfers.md).
         if (driver.send(
-            g_volmgr,
+            g_fsmgr,
             endpoint(),
-            op.VOLUME_IPC_IDENTIFY_REQ,
+            op.FSMGR_IPC_QUERY_MOUNTS_REQ,
             c.request_id,
-            @bitCast(volumeInstanceOf(part)),
-            g_claim_bid,
             0,
             0,
+            g_mounts_bid,
+            g_mounts_borrow,
         ) != 0) {
             // The question could not be asked, so it is not answered. Treated
-            // as held, like every other way of not knowing.
+            // as mounted, like every other way of not knowing.
             finishChange(slot, true);
         }
         return;
     }
 }
 
-/// Ask the process manager where the volume manager is, without blocking.
+/// Ask the process manager where a service is, without blocking.
 ///
 /// Asynchronous, and that is a requirement rather than a preference. The
 /// blocking helper is for BRING-UP only (`driver.call`): a running driver that
@@ -977,11 +1003,16 @@ fn pumpChanges() void {
 /// waiting on the other.
 ///
 /// Not resolved at bring-up instead, because this driver is an initfs payload
-/// spawned ahead of the services that publish volumes: there is nothing to find
-/// yet, and a failure then would stand for the life of the process.
-fn requestVolmgr() void {
-    if (g_volmgr_lookup_id != 0) return;
-    const args = driver.packName16("volume");
+/// spawned ahead of both services: there is nothing to find yet, and a failure
+/// then would stand for the life of the process.
+fn requestService(kind: LookupKind) void {
+    if (g_lookup_kind != .none) return;
+    const name = switch (kind) {
+        .fsmgr => "fs.vfs",
+        .volmgr => "volume",
+        .none => return,
+    };
+    const args = driver.packName16(name);
     const id = nextRequestId();
     if (driver.send(
         g_proc_endpoint,
@@ -993,36 +1024,48 @@ fn requestVolmgr() void {
         args[2],
         args[3],
     ) != 0) {
-        failQueuedChanges();
+        if (kind == .fsmgr) failQueuedChanges();
         return;
     }
-    g_volmgr_lookup_id = id;
+    g_lookup_kind = kind;
+    g_lookup_id = id;
 }
 
-/// The process manager has answered the volume-manager lookup.
+/// The process manager has answered a service lookup.
 ///
 /// A lookup that finds nothing fails every queued change rather than latching:
-/// the next rescan asks again, because a volume manager that was not running
-/// a minute ago may be running now.
-fn handleVolmgrLookup(msg: *const co.IpcMessage) void {
-    if (g_volmgr_lookup_id == 0 or msg.request_id != g_volmgr_lookup_id) return;
+/// the next rescan asks again, because a service that was not running a minute
+/// ago may be running now.
+fn handleServiceLookup(msg: *const co.IpcMessage) void {
+    if (g_lookup_kind == .none or msg.request_id != g_lookup_id) return;
     if (msg.source != g_proc_endpoint) return;
-    g_volmgr_lookup_id = 0;
+    const kind = g_lookup_kind;
+    g_lookup_kind = .none;
+    g_lookup_id = 0;
+
     const raw: u32 = @bitCast(msg.arg0);
-    if (msg.type != op.SVC_IPC_LOOKUP_RESP or raw == 0xFFFFFFFF or msg.arg0 <= 0) {
-        driver.log("[partition-manager] no volume manager; nothing can say what is mounted");
+    const found = msg.type == op.SVC_IPC_LOOKUP_RESP and raw != 0xFFFFFFFF and msg.arg0 > 0;
+    if (kind == .volmgr) {
+        // Advisory: a re-probe that cannot be asked for is a stale volume
+        // record, not an unsafe change, so nothing is failed over it.
+        if (found) g_volmgr = msg.arg0;
+        return;
+    }
+    if (!found) {
+        driver.log("[partition-manager] no fs-manager; nothing can say what is mounted");
         failQueuedChanges();
         return;
     }
     // The grant is per PROCESS, so it is made once with the resolution rather
     // than per request, where a second attempt would be refused as
     // ALREADY_BORROWED.
-    if (driver.bufferBorrow(msg.arg0, g_claim_bid, driver.BUFFER_GRANT_WRITE) == null) {
-        driver.log("[partition-manager] claim buffer grant failed; no partition can be changed");
+    const borrow = driver.bufferBorrow(msg.arg0, g_mounts_bid, driver.BUFFER_GRANT_WRITE) orelse {
+        driver.log("[partition-manager] mounts buffer grant failed; no partition can be changed");
         failQueuedChanges();
         return;
-    }
-    g_volmgr = msg.arg0;
+    };
+    g_mounts_borrow = borrow;
+    g_fsmgr = msg.arg0;
     pumpChanges();
 }
 
@@ -1030,30 +1073,8 @@ fn handleVolmgrLookup(msg: *const co.IpcMessage) void {
 /// when nothing can tell it whether a partition is mounted.
 fn failQueuedChanges() void {
     for (&g_changes, 0..) |*c, slot| {
-        if (c.in_use and c.stage == .claimwait) finishChange(slot, true);
+        if (c.in_use and c.stage == .mountwait) finishChange(slot, true);
     }
-}
-
-/// The `volume` class instance of the volume sitting on `part`.
-///
-/// DERIVED, not looked up: a volume's canonical id is `volume:` prefixed to its
-/// backing device's, and its class instance is a fingerprint of that
-/// (docs/architecture/37-volume-manager.md §3). A partition with no volume
-/// fingerprints to an instance nothing registered, which the volume manager
-/// answers with NO_SUCH_UNIT -- and that is the right answer, because nothing
-/// can be mounted on a device that has no volume.
-fn volumeInstanceOf(part: *const Partition) u32 {
-    var id: [driver.VOLUME_ID_MAX]u8 = [_]u8{0} ** driver.VOLUME_ID_MAX;
-    const prefix = "volume:";
-    var n: usize = 0;
-    while (n < prefix.len and n + 1 < id.len) : (n += 1) id[n] = prefix[n];
-    for (idSlice(&part.desc.canonical_id)) |ch| {
-        if (n + 1 >= id.len) break;
-        id[n] = ch;
-        n += 1;
-    }
-    id[n] = 0;
-    return driver.blockFingerprint(id[0..n]);
 }
 
 /// Ask the volume manager to re-probe the device behind a partition whose
@@ -1067,7 +1088,12 @@ fn volumeInstanceOf(part: *const Partition) u32 {
 /// record is a worse answer than a late one but not a reason to withhold the
 /// reply to the change that caused it.
 fn requestVolumeRescan(block_instance: u32) void {
-    if (g_volmgr < 0) return;
+    if (g_volmgr < 0) {
+        // Resolved for next time. Nothing waits on it: a stale volume record is
+        // a wrong answer to a later question, not a hazard to this change.
+        requestService(.volmgr);
+        return;
+    }
     _ = driver.send(
         g_volmgr,
         endpoint(),
@@ -1080,41 +1106,45 @@ fn requestVolumeRescan(block_instance: u32) void {
     );
 }
 
-/// The volume manager has answered a claim check.
+/// fs-manager has answered a mount check.
 ///
-/// `described` is false for an error reply, and only NO_SUCH_UNIT among those
-/// means what this check is asking about: that no volume covers the partition,
-/// so nothing can be holding it. BAD_REQUEST and NO_DESCRIPTOR mean the
-/// question was not answered, which is not the same as "no" and is treated like
-/// every other way of not knowing.
-fn handleClaimReply(msg: *const co.IpcMessage, described: bool) void {
+/// `listed` is false for an error reply, which is not an answer: a table that
+/// could not be produced says nothing about what is mounted, and is treated
+/// exactly like "yes, it is mounted". There is no error here that means "no",
+/// which is the whole difference from the volume claim this replaced -- that
+/// one had NO_SUCH_UNIT, and reading it as permission is what retired a live
+/// mount whose volume the volume manager had failed to probe.
+fn handleMountsReply(msg: *const co.IpcMessage, listed: bool) void {
     const slot = changeByRequest(msg.request_id) orelse return;
     const c = &g_changes[slot];
-    if (c.stage != .claimcheck) return;
+    if (c.stage != .mountcheck) return;
     // A request id is a number another process can guess. The reply has to come
     // from the peer the question was put to, or a forged one could walk a
     // partition straight past the only check that protects a live mount.
-    if (msg.source != g_volmgr) return;
+    if (msg.source != g_fsmgr) return;
     const part = &g_parts[c.part];
 
-    if (described) {
-        var desc = driver.VolumeDescriptor{};
-        if (!driver.bufferRead(g_claim_bid, &desc, 0)) {
-            refuseChange(slot, "its volume could not be read");
-            return;
-        }
-        if ((desc.flags & @as(u32, @intCast(abi.VOLUME_DESCRIPTOR_FLAG_CLAIMED))) != 0) {
-            refuseChange(slot, "a filesystem is mounted on it");
-            return;
-        }
-    } else if (msg.arg0 != status.WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT) {
-        refuseChange(slot, "its volume could not be queried");
+    if (!listed) {
+        refuseChange(slot, "the mount table could not be read");
+        return;
+    }
+    const size: usize = if (msg.arg0 > 0) @intCast(msg.arg0) else 0;
+    if (size == 0 or size > g_mounts.len) {
+        refuseChange(slot, "the mount table came back unusable");
+        return;
+    }
+    if (!driver.bufferReadBytes(g_mounts_bid, g_mounts[0..size], 0)) {
+        refuseChange(slot, "the mount table could not be read back");
+        return;
+    }
+    if (mnt.mountedOn(g_mounts[0..size], idSlice(&part.desc.canonical_id))) {
+        refuseChange(slot, "a filesystem is mounted on it");
         return;
     }
 
     if (c.kind == .update) {
-        // Nothing holds it, so the window may move. Applied here rather than at
-        // the diff, which is the entire point of the queue.
+        // Nothing is mounted on it, so the window may move. Applied here rather
+        // than at the diff, which is the entire point of the queue.
         part.lba_start = c.lba_start;
         part.lba_count = c.lba_count;
         part.desc = c.desc;
@@ -1250,12 +1280,12 @@ fn finishClassRetire(slot: usize, ok: bool) void {
 fn finishChange(slot: usize, refused: bool) void {
     const c = &g_changes[slot];
     const rescan = c.rescan;
-    const was_claiming = c.stage == .claimcheck;
+    const was_checking = c.stage == .mountcheck;
     c.class.release();
     c.* = .{};
-    // A change that ended while holding the claim stage leaves it free, and the
+    // A change that ended while holding the mount stage leaves it free, and the
     // queue behind it would otherwise never move.
-    if (was_claiming) pumpChanges();
+    if (was_checking) pumpChanges();
     const index = rescan orelse return;
     const pending = &g_rescans[index];
     if (!pending.in_use) return;
@@ -1603,16 +1633,16 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
         op.BLOCK_IPC_READ_RESP, op.BLOCK_IPC_WRITE_RESP, op.BLOCK_IPC_ERROR => handleDownstreamReply(msg),
         op.SVC_IPC_CLASS_EVENT => handleClassEvent(msg),
         op.PARTITION_IPC_RESCAN_REQ => handleRescan(msg),
-        op.VOLUME_IPC_IDENTIFY_RESP => handleClaimReply(msg, true),
-        op.VOLUME_IPC_ERROR => handleClaimReply(msg, false),
-        op.SVC_IPC_LOOKUP_RESP => handleVolmgrLookup(msg),
+        op.FSMGR_IPC_QUERY_MOUNTS_RESP => handleMountsReply(msg, true),
+        op.FS_IPC_ERROR => handleMountsReply(msg, false),
+        op.SVC_IPC_LOOKUP_RESP => handleServiceLookup(msg),
         op.DEVMGR_UNPUBLISH_RESP => handleUnpublishReply(msg),
         op.SVC_IPC_UNREGISTER_CLASS_RESP => handleClassRetireReply(msg, true),
         // SVC_IPC_ERROR answers whichever request manager-side request carried
         // this id: a class withdrawal, or the lookup that finds the volume
         // manager. arg0 carries the opcode it refused.
         op.SVC_IPC_ERROR => if (msg.arg0 == op.SVC_IPC_LOOKUP_REQ)
-            handleVolmgrLookup(msg)
+            handleServiceLookup(msg)
         else
             handleClassRetireReply(msg, false),
         else => {},
@@ -1943,8 +1973,8 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
         driver.log("[partition-manager] retire buffer unavailable");
         return;
     };
-    g_claim_bid = driver.bufferAcquire(@sizeOf(driver.VolumeDescriptor)) orelse {
-        driver.log("[partition-manager] claim buffer unavailable");
+    g_mounts_bid = driver.bufferAcquire(MOUNTS_BYTES) orelse {
+        driver.log("[partition-manager] mounts buffer unavailable");
         return;
     };
 

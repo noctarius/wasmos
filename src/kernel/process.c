@@ -334,6 +334,9 @@ static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_
 }
 
 extern void context_switch(process_context_t* out, process_context_t* in);
+/* The ring-0 resume point inside context_switch; see the worker snapshot in
+ * process_schedule_once for why the scheduler context needs it by name. */
+extern uint8_t context_switch_resume;
 extern void context_switch_to(process_context_t* in);
 static void context_switch_high(process_context_t* out, process_context_t* in);
 static int process_schedule_once_impl(void);
@@ -2713,6 +2716,26 @@ static int process_schedule_once_impl(void) {
 #endif
         _sctx->rax = (uint64_t)PROCESS_RUN_BLOCKED;
         _sctx->rsp = _rsp - 8u;
+#ifndef WASMOS_PROCESS_TEST_SEAMS
+        /* The resume point, which this snapshot used to leave alone.
+         *
+         * `context_switch` writes out->rip when it SAVES a context, and the
+         * scheduler context is saved only by the non-worker dispatch below. So
+         * a CPU whose first dispatch was a kernel worker reached here with
+         * sched_ctx.rip still 0 -- the snapshot set rsp and the callee-saved
+         * registers and trusted a previous save for the rest -- and the
+         * worker's first process_yield restored that context and returned to
+         * 0. The restore PUSHES ctx->rip and `ret`s to it
+         * (arch/x86_64/context_switch.S), so a zero there is a jump to zero.
+         *
+         * That is [BUG][P1]: SMP only, because a single CPU dispatches
+         * something else first; worst under the SMP stress test, which spawns
+         * eight workers at once; and intermittent, because it depends on which
+         * CPU happens to take a worker as its first dispatch. Written
+         * unconditionally rather than only when zero, so this context says the
+         * same thing a saved one would. */
+        _sctx->rip = (uint64_t)process_kernel_alias_addr((uintptr_t)&context_switch_resume);
+#endif
 
         thread->ctx.rsp = 0;
         cpu_local()->last_run_result = process_run_worker_on_stack(proc, thread);

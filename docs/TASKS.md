@@ -2216,6 +2216,43 @@ Source: `architecture/25-diagnostics-status.md`,
   **What writes the small integer is still unknown** -- that is the remaining
   work, and these guards are what will narrow it.
 
+  **ROOT CAUSE FOUND AND FIXED (2026-10-18). `cpu_local()->sched_ctx.rip` was
+  never written on a CPU whose FIRST dispatch was a kernel worker.**
+
+  The chain, all of it checkable by reading:
+
+  - `context_switch` writes `out->rip` on the SAVE side only, as
+    `leaq 1f(%rip), %rax; movq %rax, 128(%rdi)`
+    (`arch/x86_64/context_switch.S`).
+  - The scheduler context is saved that way only by the NON-worker dispatch,
+    `context_switch_high(&cpu_local()->sched_ctx, run_ctx)`.
+  - A kernel worker is dispatched through `process_run_worker_on_stack`
+    instead, and the block above it snapshots `sched_ctx` BY HAND -- callee-
+    saved registers, rsp, rflags, rax -- deliberately not rip, on the stated
+    assumption that "RIP is always label-1, set by the last
+    `context_switch_high(&sched_ctx, ...)` call".
+  - That assumption fails on a CPU that has not yet taken a non-worker
+    dispatch. `sched_ctx.rip` is then still 0 from initialisation.
+  - The worker's first `process_yield` restores that context, and the restore
+    PUSHES `ctx->rip` and `ret`s to it -- so the CPU returns to 0.
+
+  Which is every property the entry has recorded: SMP only, because one CPU
+  dispatches something else first; worst under the stress test, which spawns
+  eight workers at once; intermittent, because it depends on which CPU happens
+  to take a worker as its first dispatch; and `rip=0` exactly, in the capture
+  where nothing had partially written the field.
+
+  Fixed by exporting the resume label as `context_switch_resume` and having the
+  worker snapshot write it, so the hand-made context says what a saved one
+  would.
+
+  NOT verifiable here: the bug needs a Linux x86 TCG runner, and MTTCG on Apple
+  Silicon masks it. What was verified instead: the mechanism by reading the
+  save, dispatch and restore paths; `run-qemu-test` clean; and the SMP
+  scheduler stress gate green three times with zero guard hits. The guard is
+  the standing detector -- if this recurs it panics `invalid_transfer_target`
+  naming the thread, rather than jumping to zero.
+
   **THE GUARD CAUGHT IT (run 39144660427 job 117725943763, `wasm3_smp`), and
   what it caught is a ZEROED context, not a torn one:**
 

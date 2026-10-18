@@ -105,6 +105,10 @@ static char g_source_id[BLOCK_DESCRIPTOR_ID_MAX];
  * which is not an error: the claim is advisory. */
 static uint32_t g_volume_instance = 0u;
 
+/* The volume manager's endpoint, resolved once when the claim is taken and kept
+ * for the release; see wfs_volume_claim for why it is not resolved twice. */
+static int32_t g_volmgr_endpoint = -1;
+
 /* Op contexts, static because a task's context must outlive its awaits and the
  * driver runs one op at a time. */
 /* Per-client working directory. Scoped to the source endpoint for the same
@@ -924,40 +928,57 @@ static uint32_t wfs_parse_volume_instance(void) {
  * ordinary case for a driver spawned by a `SUBSYSTEM=="block"` rule, and it is
  * why nothing here treats a failed lookup as an error. */
 static void wfs_volume_claim(int32_t claim) {
-    svc_class_entry_t providers[8];
+    /* Sized to the volume manager's own capacity (MAX_VOLUMES in
+     * volume_manager.zig). wasmos_svc_lookup_class writes min(total, cap)
+     * entries and returns the TOTAL, so a smaller array does not fail -- it
+     * silently returns a prefix, and a volume outside it would be read as
+     * absent. A claim skipped that way leaves a mounted filesystem looking
+     * unmounted to everything that consults the flag. */
+    svc_class_entry_t providers[16];
     int32_t n;
     int32_t i;
 
     if (g_volume_instance == 0u) {
         return;
     }
-    n = wasmos_svc_lookup_class(g_proc_endpoint,
-                                g_reply_endpoint,
-                                "volume",
-                                providers,
-                                (int32_t)(sizeof(providers) / sizeof(providers[0])),
-                                1);
-    if (n < 0) {
-        return;
-    }
-    if (n > (int32_t)(sizeof(providers) / sizeof(providers[0]))) {
-        n = (int32_t)(sizeof(providers) / sizeof(providers[0]));
-    }
-    for (i = 0; i < n; ++i) {
-        if (providers[i].instance != g_volume_instance) {
-            continue;
+    /* Resolved once and kept, because the RELEASE runs inside the reactor:
+     * wasmos_svc_lookup_class blocks on g_reply_endpoint while DISCARDING every
+     * message that is not its reply, and that endpoint is where this driver's
+     * outstanding block replies land. A lookup there would consume one and
+     * leave the operation it belonged to unable to complete. The claim is taken
+     * at mount, where nothing is in flight. */
+    if (g_volmgr_endpoint < 0) {
+        n = wasmos_svc_lookup_class(g_proc_endpoint,
+                                    g_reply_endpoint,
+                                    "volume",
+                                    providers,
+                                    (int32_t)(sizeof(providers) / sizeof(providers[0])),
+                                    1);
+        if (n < 0) {
+            return;
         }
-        (void)wasmos_sys_ipc_send_retry((int32_t)providers[i].endpoint,
-                                        g_fs_endpoint,
-                                        VOLUME_IPC_CLAIM_REQ,
-                                        1,
-                                        (int32_t)g_volume_instance,
-                                        claim,
-                                        0,
-                                        0,
-                                        WFS_SEND_RETRIES);
+        if (n > (int32_t)(sizeof(providers) / sizeof(providers[0]))) {
+            n = (int32_t)(sizeof(providers) / sizeof(providers[0]));
+        }
+        for (i = 0; i < n; ++i) {
+            if (providers[i].instance == g_volume_instance) {
+                g_volmgr_endpoint = (int32_t)providers[i].endpoint;
+                break;
+            }
+        }
+    }
+    if (g_volmgr_endpoint < 0) {
         return;
     }
+    (void)wasmos_sys_ipc_send_retry(g_volmgr_endpoint,
+                                    g_fs_endpoint,
+                                    VOLUME_IPC_CLAIM_REQ,
+                                    1,
+                                    (int32_t)g_volume_instance,
+                                    claim,
+                                    0,
+                                    0,
+                                    WFS_SEND_RETRIES);
 }
 
 /* The VFS path this volume mounts at, from `mount=`.
@@ -1002,13 +1023,28 @@ static uint8_t g_unmounted = 0;
 
 static void wfs_do_shutdown(int32_t src, int32_t request_id, int32_t reason) {
     static wfs_sync_ctx_t sync;
+    /* Whether this mount is actually ending. The same test gates the claim
+     * release here and the g_unmounted latch at the bottom, because they are
+     * the same question asked twice.
+     *
+     * IPC checks that a message came from the endpoint it claims, not that its
+     * sender is entitled to what it asks, so an ordinary client that found this
+     * backend through the `fs.backend` class can send an UNMOUNT this driver
+     * refuses. Releasing the claim for a refused unmount would leave a live
+     * mount looking unheld to `fsck.wfs`, `mkfs.wfs` and the partition
+     * manager's retirement -- all three of which would then be free to act on a
+     * volume this driver is still writing to. */
+    const int ending =
+        (reason != WASMOS_SHUTDOWN_REASON_UNMOUNT) || (g_mount_owner >= 0 && src == g_mount_owner);
 
     /* Released before the clean mark is written, not after: once this returns
      * DONE the driver may be torn down at any moment, and a claim that outlives
      * its holder makes the volume permanently unrecheckable. Releasing early
      * costs nothing -- the machine is going down, so nothing is going to check
      * this volume in the window. */
-    wfs_volume_claim(0);
+    if (ending) {
+        wfs_volume_claim(0);
+    }
     if (g_vol.mounted && !g_vol.super.read_only) {
         /* Static and zeroed rather than a stack local: it carries a coroutine
          * record, which must be zeroed before the task starts it, and the guest
@@ -1041,7 +1077,7 @@ static void wfs_do_shutdown(int32_t src, int32_t request_id, int32_t reason) {
      * bypassing fs-manager's busy and bootstrap rules. A machine shutdown is not
      * gated: it does not end this process here. */
     if (reason == WASMOS_SHUTDOWN_REASON_UNMOUNT) {
-        if (g_mount_owner >= 0 && src == g_mount_owner) {
+        if (ending) {
             g_unmounted = 1;
         } else {
             wfs_log("[fs-wfs] ignoring an unmount from something that does not own this mount\n");

@@ -72,6 +72,17 @@ static uint32_t g_volume_instance = 0u;
  * unmount path, which are different scopes. */
 static int32_t g_reply_endpoint = -1;
 
+/* The volume manager's endpoint, resolved once when the claim is taken and kept
+ * for the release.
+ *
+ * Resolved once because the release runs inside the reactor, and
+ * wasmos_svc_lookup_class BLOCKS on g_reply_endpoint while DISCARDING every
+ * message that is not its reply -- which is where this driver's outstanding
+ * block replies land. A lookup there would consume one and leave the operation
+ * it belonged to unable to complete. The claim is taken at bring-up, where
+ * nothing is in flight. */
+static int32_t g_volmgr_endpoint = -1;
+
 /* In-flight op pool + FIFO of queued (not-yet-active) op indices. */
 static fat_op_ctx_t g_ops[FAT_MAX_INFLIGHT];
 static uint32_t g_fifo[FAT_MAX_INFLIGHT];
@@ -216,39 +227,50 @@ static uint32_t fat_volume_instance_of(const char* id) {
  * simply not claimed, which is why a failed lookup is not an error.
  */
 static void fat_volume_claim(int32_t claim) {
-    svc_class_entry_t providers[8];
+    /* Sized to the volume manager's own capacity (MAX_VOLUMES in
+     * volume_manager.zig). wasmos_svc_lookup_class writes min(total, cap)
+     * entries and returns the TOTAL, so a smaller array does not fail -- it
+     * silently returns a prefix, and a volume outside it would be read as
+     * absent. A claim skipped that way leaves a mounted filesystem looking
+     * unmounted to everything that consults the flag. */
+    svc_class_entry_t providers[16];
     int32_t n;
     int32_t i;
 
     if (g_volume_instance == 0u) {
         return;
     }
-    n = wasmos_svc_lookup_class(g_proc_endpoint,
-                                g_reply_endpoint,
-                                "volume",
-                                providers,
-                                (int32_t)(sizeof(providers) / sizeof(providers[0])),
-                                1);
-    if (n < 0) {
-        return;
-    }
-    if (n > (int32_t)(sizeof(providers) / sizeof(providers[0]))) {
-        n = (int32_t)(sizeof(providers) / sizeof(providers[0]));
-    }
-    for (i = 0; i < n; ++i) {
-        if (providers[i].instance != g_volume_instance) {
-            continue;
+    if (g_volmgr_endpoint < 0) {
+        n = wasmos_svc_lookup_class(g_proc_endpoint,
+                                    g_reply_endpoint,
+                                    "volume",
+                                    providers,
+                                    (int32_t)(sizeof(providers) / sizeof(providers[0])),
+                                    1);
+        if (n < 0) {
+            return;
         }
-        (void)wasmos_ipc_send((int32_t)providers[i].endpoint,
-                              g_fs_endpoint,
-                              VOLUME_IPC_CLAIM_REQ,
-                              1,
-                              (int32_t)g_volume_instance,
-                              claim,
-                              0,
-                              0);
+        if (n > (int32_t)(sizeof(providers) / sizeof(providers[0]))) {
+            n = (int32_t)(sizeof(providers) / sizeof(providers[0]));
+        }
+        for (i = 0; i < n; ++i) {
+            if (providers[i].instance == g_volume_instance) {
+                g_volmgr_endpoint = (int32_t)providers[i].endpoint;
+                break;
+            }
+        }
+    }
+    if (g_volmgr_endpoint < 0) {
         return;
     }
+    (void)wasmos_ipc_send(g_volmgr_endpoint,
+                          g_fs_endpoint,
+                          VOLUME_IPC_CLAIM_REQ,
+                          1,
+                          (int32_t)g_volume_instance,
+                          claim,
+                          0,
+                          0);
 }
 
 /* Resolve the block server for this instance's disk through the `block` service
@@ -822,12 +844,23 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 int32_t sd_src = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
                 int32_t sd_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
                 int32_t sd_reason = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-                /* Released before DONE goes out, and for every reason rather
-                 * than only an unmount: once this driver answers DONE it may be
-                 * torn down at any moment, and a claim that outlives its holder
-                 * makes the volume permanently unformattable and its partition
-                 * permanently unretirable, since nothing else can withdraw it. */
-                fat_volume_claim(0);
+                /* Released before DONE goes out, because once this driver
+                 * answers DONE it may be torn down at any moment and a claim
+                 * that outlives its holder makes the volume permanently
+                 * unformattable and its partition permanently unretirable.
+                 *
+                 * Released only when this mount is actually ending, which is the
+                 * same test that decides whether to leave the reactor below.
+                 * IPC checks that a message came from the endpoint it claims,
+                 * not that its sender is entitled to what it asks, so an
+                 * ordinary client that found this backend through the
+                 * `fs.backend` class can send an UNMOUNT this driver refuses --
+                 * and clearing the claim for a refused unmount would leave a
+                 * live mount looking unheld to everything that consults it. */
+                if (sd_reason != WASMOS_SHUTDOWN_REASON_UNMOUNT ||
+                    (g_mount_owner >= 0 && sd_src == g_mount_owner)) {
+                    fat_volume_claim(0);
+                }
                 (void)fat_send_reply(
                     sd_src, WASMOS_IPC_SHUTDOWN_DONE, (uint32_t)sd_req, 0, 0, 0, 0);
                 /* Only the mount's OWNER may end this process. IPC checks that a

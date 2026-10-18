@@ -893,32 +893,44 @@ pub const VOLUME_IPC_ERROR: i32 = 0xEFF;
 /// is what `fdisk` sends once its write has landed.
 ///
 /// Reconciled, not republished. A partition whose window is unchanged is
-/// left strictly alone: re-registering its class or re-announcing it would
-/// disturb a filesystem mounted on it to no purpose. A partition whose
-/// window CHANGED keeps its class instance -- a fingerprint of an id
-/// derived from the disk and the slot, so it does not move -- and only its
-/// descriptor is republished. A partition the new table no longer holds is
-/// RETIRED: withdrawn from the device manager's inventory first, and
-/// unregistered from the `block` class only once that succeeded.
+/// left strictly alone, beyond restating a descriptor whose METADATA
+/// moved -- a label, a type GUID, a PARTUUID -- which moves no storage.
+/// Re-registering its class would disturb a filesystem mounted on it to
+/// no purpose.
 ///
-/// A retirement is refused when a filesystem holds the partition, which
-/// is asked of the VOLUME manager: a volume carries a CLAIM while a
-/// filesystem service holds it, and that claim is the only live record in
-/// the system of what is mounted. The device manager's inventory cannot
-/// answer it. A partition with no volume at all has nothing that could
-/// hold it and passes.
+/// A partition whose WINDOW changed keeps its class instance -- a
+/// fingerprint of an id derived from the disk and the slot, so it does
+/// not move -- and only its descriptor is restated. A partition the new
+/// table no longer holds is RETIRED: withdrawn from the device manager's
+/// inventory first, and unregistered from the `block` class only once
+/// that succeeded.
 ///
-/// A refusal leaves the partition exactly as it was and is reported in
-/// arg2 rather than failing the rescan, because the other partitions of
-/// the disk were reconciled correctly and the caller needs to know which
-/// part did not take.
+/// Both of those are gated on the same question, because both are unsafe
+/// under a live mount. A retirement makes the device unfindable while a
+/// filesystem is still writing to it; a window change redirects those
+/// writes, since every forwarded transfer is rebased onto the window and
+/// clamped to it.
+///
+/// The question is put to the VOLUME manager: a volume carries a CLAIM
+/// while a filesystem service holds it, and that claim is the only live
+/// record in the system of what is mounted. The device manager's
+/// inventory cannot answer it. A partition with no volume at all has
+/// nothing that could hold it and passes; any OTHER answer, including an
+/// error, is read as "cannot tell" and refuses.
+///
+/// A refusal leaves the partition exactly as it was. arg2 counts every
+/// partition the rescan could not reconcile -- a change refused, a change
+/// that could not be started, or an addition with no free slot -- rather
+/// than failing the whole request, because the other partitions of the
+/// disk were reconciled correctly and the caller needs to know how much
+/// did not take.
 ///
 /// The reply is DEFERRED: reading a table is synchronous and runs on the
 /// partition manager's root task, and the retirements it schedules are
 /// answered by their own peers later still, so the request is queued and
 /// answered when all of that has settled.
 pub const PARTITION_IPC_RESCAN_REQ: i32 = 0xF00;
-/// arg0 = 0, arg1 = partitions on the disk after the rescan, arg2 = partitions whose retirement was refused.
+/// arg0 = 0, arg1 = partitions on the disk after the rescan, arg2 = partitions the rescan could not reconcile.
 pub const PARTITION_IPC_RESP: i32 = 0xF80;
 /// arg0 = packed error code.
 pub const PARTITION_IPC_ERROR: i32 = 0xFFF;

@@ -15,14 +15,17 @@
  * its write has landed.
  *
  * What comes back is a reconciliation, not a republish. A partition whose
- * extent did not change is left strictly alone, because a filesystem may be
- * mounted on it; one whose extent moved keeps its identity and has only its
- * descriptor restated; one the table no longer holds is retired from the device
- * manager and the `block` class. A retirement is refused while a filesystem
- * holds the partition -- the volume manager's CLAIM, which is the only live
- * record of what is mounted -- and the refusal is reported here rather than
- * failing the rescan, because the rest of the disk was reconciled correctly and
- * the refusal is the useful half of the answer.
+ * extent did not change is left strictly alone; one whose extent moved keeps
+ * its identity and has only its descriptor restated; one the table no longer
+ * holds is retired from the device manager and the `block` class.
+ *
+ * Moving a partition and retiring one are both refused while a filesystem holds
+ * it -- the volume manager's CLAIM, which is the only live record of what is
+ * mounted. Both are unsafe for the same reason: every transfer to a partition
+ * is rebased onto its window, so moving one under a mount redirects writes the
+ * filesystem believes it placed. The count of what did not take is reported
+ * here rather than failing the rescan, because the rest of the disk was
+ * reconciled correctly and that count is the useful half of the answer.
  *
  * The request is sent over the system IPC-future bridge rather than a blocking
  * call. The reply is DEFERRED by several round trips -- a table read, then two
@@ -231,7 +234,7 @@ int main(void) {
     if (ctx.refused > 0u) {
         /* The usual cause is a filesystem still holding the partition, so say
          * what to do about it rather than reprinting the count. */
-        (void)printf("[partprobe] %u partitions could not be retired; "
+        (void)printf("[partprobe] %u partitions could not be reconciled; "
                      "unmount what is still using them and rescan again\n",
                      (unsigned)ctx.refused);
         return 1;

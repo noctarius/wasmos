@@ -204,7 +204,7 @@ class PartitionRescanTest(unittest.TestCase):
         self._run(f"mkfs.wfs {self.disk_id}", [b"[mkfs.wfs] done"])
         out = self._run(
             f"partprobe {self.disk_id}",
-            [b"could not be retired"],
+            [b"could not be reconciled"],
         )
         self.assertIn(
             b"a filesystem is mounted on it",
@@ -253,7 +253,7 @@ class PartitionRescanTest(unittest.TestCase):
             f"--- output ---\n{out.decode('utf-8', 'replace')}\n",
         )
         self.assertNotIn(
-            b"could not be retired",
+            b"could not be reconciled",
             out,
             "the retirement was refused with nothing holding the partition\n"
             f"--- output ---\n{out.decode('utf-8', 'replace')}\n",

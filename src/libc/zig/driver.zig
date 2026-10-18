@@ -729,7 +729,7 @@ fn registryReplyEndpoint() i32 {
 /// name is zero-padded and a 16-character one travels without a terminator;
 /// anything longer is truncated to its first 16 bytes. Mirrors
 /// wasmos_ipc_pack_name16.
-fn packName16(name: []const u8) [4]i32 {
+pub fn packName16(name: []const u8) [4]i32 {
     var args = [4]i32{ 0, 0, 0, 0 };
     var i: usize = 0;
     while (i < name.len and i < 16) : (i += 1) {

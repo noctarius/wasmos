@@ -1351,6 +1351,58 @@ static void s_healthy_owner_still_runs_and_requeues(void) {
     stop_dispatchers();
 }
 
+/* The scheduler calls a kernel process's entry through a function pointer, and
+ * the only check it had was "not NULL". A small non-zero value survives that,
+ * and process_kernel_alias_addr then turns it into something that LOOKS like a
+ * kernel address: alias(0x512) is 0xffffffff80000512, which is what eight CI
+ * captures of the SMP stress panic resumed. That address is 2 MiB below
+ * __kernel_start, so nothing legitimate lives there, and the backtrace put the
+ * return address inside the scheduler -- an indirect call, not a torn context.
+ *
+ * The predicate is what the guard at that call site asks. It takes its bounds
+ * rather than reading the linker symbols so it can be exercised here, where
+ * there is no kernel image to bound against.
+ *
+ * Regression: 2026-10-18-scheduler-called-a-small-integer-as-an-entry-point */
+static void s_entry_pointer_guard_rejects_what_is_not_in_the_image(void) {
+    const uint64_t start = 0xffffffff80200000ull;
+    const uint64_t end = 0xffffffff80500000ull;
+
+    /* The captured values. Both are the higher-half alias of a sub-page
+     * physical address, which is what a small integer becomes. */
+    CHECK(!process_entry_ptr_in_image(0xffffffff80000512ull, start, end),
+          "the captured entry pointer is refused");
+    CHECK(!process_entry_ptr_in_image(0xffffffff80000507ull, start, end),
+          "the other captured entry pointer is refused");
+
+    /* NULL was already refused by the old test and must stay refused. */
+    CHECK(!process_entry_ptr_in_image(0ull, start, end), "null is refused");
+    /* A small integer before aliasing, in case a caller checks the raw field. */
+    CHECK(!process_entry_ptr_in_image(0x512ull, start, end), "a bare small integer is refused");
+
+    /* A real entry point, and both edges. The guard panics, so a false
+     * positive turns a working boot into a dead one: the bounds have to be
+     * exact, not approximate. */
+    CHECK(process_entry_ptr_in_image(start, start, end), "the first byte of the image is callable");
+    CHECK(process_entry_ptr_in_image(start + 0x1234ull, start, end),
+          "an address inside the image is callable");
+    CHECK(process_entry_ptr_in_image(end - 1ull, start, end),
+          "the last byte of the image is callable");
+    CHECK(!process_entry_ptr_in_image(end, start, end), "one past the image is refused");
+    CHECK(!process_entry_ptr_in_image(start - 1ull, start, end), "one before the image is refused");
+
+    /* A user-space address. A ring-3 process never reaches this path -- its
+     * entry is a context rip, not a kernel function pointer -- so a low address
+     * here is corruption like any other. */
+    CHECK(!process_entry_ptr_in_image(0x400000ull, start, end), "a user address is refused");
+
+    /* Degenerate bounds admit nothing, which is what makes a separate
+     * fail-closed branch unnecessary rather than merely absent: an empty or
+     * inverted range cannot contain anything, so the comparison IS the guard. */
+    CHECK(!process_entry_ptr_in_image(start, 0ull, 0ull), "empty bounds refuse");
+    CHECK(!process_entry_ptr_in_image(start, end, start), "inverted bounds refuse");
+}
+
 int main(void) {
     harness_init();
 
@@ -1366,6 +1418,7 @@ int main(void) {
     s_a_refused_reset_does_not_leak_a_frozen_slot();
     s_a_wake_that_defers_leaves_something_actionable();
     s_a_consumer_that_declines_keeps_the_claim();
+    s_entry_pointer_guard_rejects_what_is_not_in_the_image();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

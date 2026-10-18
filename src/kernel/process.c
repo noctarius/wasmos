@@ -84,6 +84,27 @@ static inline uintptr_t process_kernel_alias_addr(uintptr_t addr) {
 #endif
 }
 
+/* Whether `entry_ptr` can be the address of a kernel process entry point: it
+ * must lie inside the kernel image, between `image_start` and `image_end`.
+ *
+ * The bounds are PARAMETERS rather than reads of __kernel_start/__kernel_end so
+ * this can be exercised on the host, where there is no image to bound against.
+ *
+ * The check that was here was `entry != NULL`, which only rejects zero. A small
+ * non-zero value survives it, and process_kernel_alias_addr then makes it look
+ * like a kernel address -- alias(0x512) is 0xffffffff80000512, 2 MiB below the
+ * start of .text, where the higher-half window maps physical 0x512. Eight CI
+ * captures of the SMP scheduler stress panic jumped there, with the return
+ * address inside the scheduler: an indirect call through this pointer, not a
+ * resumed context.
+ *
+ * Degenerate bounds need no separate test: an empty or inverted range admits
+ * nothing, so the comparison already fails closed if the linker symbols ever
+ * resolve to nothing. */
+int process_entry_ptr_in_image(uint64_t entry_ptr, uint64_t image_start, uint64_t image_end) {
+    return entry_ptr >= image_start && entry_ptr < image_end;
+}
+
 static inline process_t* process_table(void) {
     return (process_t*)(void*)process_kernel_alias_addr((uintptr_t)&g_processes[0]);
 }
@@ -421,6 +442,47 @@ static void process_log_ctx_watch_if_changed(void) {
     process_log_ctx_watch("ctxsw");
 }
 
+/* Panic unless `entry_ptr` points into the kernel image.
+ *
+ * A corrupt entry pointer is CALLED, not dereferenced, so nothing else catches
+ * it: process_validate_thread_context bounds a saved rip and runs on this same
+ * dispatch, but this jump never goes through a saved context. Naming the
+ * process here is the point -- the cpu_exception panic it replaces left open
+ * which process's pointer went bad, through eight captures.
+ *
+ * Compiled out under the test seams, where there is no kernel image to bound
+ * against; process_entry_ptr_in_image is what the host exercises instead. */
+static inline void process_validate_entry_ptr(process_t* proc, uintptr_t entry_ptr) {
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    (void)proc;
+    (void)entry_ptr;
+#else
+    uint64_t image_start = addr_cast(uint64_t, &__kernel_start);
+    uint64_t image_end = addr_cast(uint64_t, &__kernel_end);
+    uint64_t higher_half = paging_get_higher_half_base();
+    if (image_start < higher_half) {
+        image_start += higher_half;
+    }
+    if (image_end < higher_half) {
+        image_end += higher_half;
+    }
+    if (process_entry_ptr_in_image((uint64_t)entry_ptr, image_start, image_end)) {
+        return;
+    }
+    klog_printf("[sched] invalid process entry pid=%016llx name=%s\n"
+                "[sched] entry=%016llx (raw %016llx)\n"
+                "[sched] image=%016llx..%016llx\n",
+                (unsigned long long)(proc ? proc->pid : 0u),
+                (proc && proc->name) ? proc->name : "(null)",
+                (unsigned long long)entry_ptr,
+                (unsigned long long)(proc ? (uintptr_t)proc->entry : 0u),
+                (unsigned long long)image_start,
+                (unsigned long long)image_end);
+    process_log_ctxsw_state();
+    kpanic("invalid_process_entry", (uintptr_t)entry_ptr, (uintptr_t)(proc ? proc->pid : 0u));
+#endif
+}
+
 static void process_validate_thread_context(process_t* proc, thread_t* thread,
                                             process_context_t* ctx, const char* where) {
     if (!proc || !thread || !ctx) {
@@ -604,6 +666,7 @@ static void process_trampoline(void) {
         } else {
             uintptr_t entry_ptr =
                 process_kernel_alias_addr((uintptr_t)cpu_local()->current_process->entry);
+            process_validate_entry_ptr(cpu_local()->current_process, entry_ptr);
             process_entry_t entry_fn = (process_entry_t)(void*)entry_ptr;
             /* Guard runtime reentrancy for subsystems that require a
              * single-threaded process entry path. Kernel workers

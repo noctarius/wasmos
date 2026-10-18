@@ -2173,6 +2173,39 @@ Source: `architecture/25-diagnostics-status.md`,
   run, both runtimes, the same address -- and run 39124795842 job 117667540301
   (`wasm3_smp`, `a=0x0e`).
 
+  **ROOT CAUSE LOCATED (not yet fixed): the scheduler CALLS a corrupt entry
+  pointer; it does not resume a torn context.** The warp capture's backtrace is
+  what settles it:
+
+      rip=ffffffff80000512  rsp=ffffffff80449fe0
+      [0] ret=ffffffff80221a81 (process_schedule_once)
+      [1] kernel_boot_run_scheduler_loop  [2] kmain  [3] _start_high
+
+  The return address is INSIDE the scheduler, on CPU 0's boot stack -- an
+  indirect call, not an `iretq` into a context. `process_validate_thread_context`
+  bounds a saved rip and runs on this very dispatch (`process.c:2506`), which is
+  why it never fired: the context was fine.
+
+  The call site is `process.c:605`:
+
+      entry_ptr = process_kernel_alias_addr((uintptr_t)current_process->entry);
+      entry_fn  = (process_entry_t)entry_ptr;   /* called */
+
+  guarded only by `!current_process->entry` -- a NULL test. A small non-zero
+  value passes it, and the alias turns it into something that looks like a
+  kernel address: `alias(0x512)` is exactly `0xffffffff80000512`. That address
+  is 2 MiB BELOW `__kernel_start` (`.text` begins at `0xffffffff80200000`), in
+  the higher-half window that maps physical 0..512 MiB -- so it is the alias of
+  PHYSICAL `0x512`, which is why one capture took #UD (bytes present, not an
+  instruction) and another #PF.
+
+  A guard is in place now (`process_entry_ptr_in_image`, pinned by
+  `tests/unit/test_process_lifecycle.c`): the next occurrence panics
+  `invalid_process_entry` naming the process, its name and the raw field,
+  instead of jumping. **What is still unknown is what WRITES 0x512 into
+  `process_t.entry`** -- that is the remaining work, and the guard is what will
+  name the victim process when it next happens.
+
   **The offset is not random, and that is the lead this entry has been missing.**
   Across eight captures it has been one of exactly TWO values: 0x507 twice and
   0x512 six times, with 0x512 in all of the last six. Two different runtimes

@@ -2233,6 +2233,45 @@ Source: `architecture/25-diagnostics-status.md`,
   whole-session stall: the tests that report it differ only by which one happened
   to open the session first, so the battery that goes red is arbitrary.
 
+  **MECHANISM FOUND (2026-10-18, run 39137201185 job 117704057912): an UNBOUNDED
+  RETRY of a module read that will not succeed.** The harness named it once
+  `boot_diagnosis` stopped misreporting the stall as a qemu exit:
+
+      a stall. Last guest output: '[pm] spawn_path fs read failed:
+      /boot/system/services/sysinit.wap (fs: path component or target entry
+      does not exist)'
+
+  That line appears **17,081 times** in one battery log, spanning 14 minutes
+  (14:46:39 to 15:00:25). The process manager asks fs-manager for a module,
+  gets NOT_FOUND, and asks again forever -- `pm_fs_read_blob_for_spawn` returns
+  `PM_SPAWN_INTERNAL_ERR_BAD_REPLY` and the caller retries with no bound, no
+  backoff and no give-up. The comment at `process_manager_spawn.c:1079` already
+  concedes it: "the caller RETRIES: a boot that cannot read a service spawns
+  this line thousands of times".
+
+  That is why every face looks the same from outside. The guest never dies, so
+  there is no panic and no reset; it never progresses, so no prompt; and the CPU
+  is pegged (`dispatches=718316` on CPU 0 in one capture), which is the load that
+  makes neighbouring timing-sensitive tests fail too. `no such command found:
+  blkinfo` is the same boot seen one layer up: nothing under /boot is runnable.
+
+  TWO defects here, and they are separable:
+
+  1. **The retry is unbounded.** This is what turns a transient or ordering
+     failure into a 14-minute silent hang. A bounded retry that gave up and
+     said so would turn the whole P0 into an immediate, named boot failure --
+     worth doing even before the cause below is understood, because it converts
+     every future occurrence into a one-line diagnosis.
+  2. **Why the read fails is still open.** `/boot` IS mounted in at least one
+     captured session (`/boot -> fs-fat on block:ata:0p1`), so this is not
+     simply "no filesystem": either the read races the mount becoming usable,
+     or the lookup fails against a mount that is present. Start from
+     `pm_fs_read_blob_for_spawn` and the fs-manager path resolution, not from
+     the scheduler.
+
+  Fixing (1) first is the recommendation: it is small, it cannot make anything
+  worse, and it stops the suite paying for (2) on every other run.
+
   Faces seen so far, all on the same code:
   - `warp_smp`: `FAIL: calculator did not fully initialise`. The calculator is not
     involved -- the log's last line is `[net-stack] tls: no CA trust store` and

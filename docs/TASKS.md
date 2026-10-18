@@ -2147,6 +2147,19 @@ Source: `architecture/25-diagnostics-status.md`,
   than a participant, but it has now held in three of four captures and is the
   one correlation the claim fix does not explain.
 
+  FIFTH capture, run 39117014089 job 117644749852 (`wasm3_smp`), on a branch
+  whose delta is a partition-manager rescan and a volume-claim fix -- again
+  nothing on a scheduler path. CPU 0 `rip=ffffffff80000512`, the SAME offset as
+  the fourth capture and the same shape as the first two. The other three CPUs
+  were at `ffffffff80266420`, `ffffffff8022765f` and `ffffffff80200229`; the log
+  expired before they could be resolved to symbols, because re-running the job
+  discards the failed run's log. Capture the panic block BEFORE requesting a
+  rerun -- `gh run view --job <id> --log-failed > file` while it is still red.
+
+  The offset repeating exactly (0x512 twice, 0x507 twice) across four of five
+  captures is worth more attention than it has had: a corrupted dispatch picking
+  the same small integer twice is not what a random tear looks like.
+
 - [ ] [BUG][P0] The guest reaches no CLI prompt on roughly one CI run in two, and
   it is ONE defect with several faces, not several flakes. Every capture is a
   whole-session stall: the tests that report it differ only by which one happened

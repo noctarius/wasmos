@@ -1197,6 +1197,51 @@ tail.
   only to write a table and send `PARTITION_IPC_RESCAN_REQ`, which is what
   `partprobe` does on its own.
 
+- [ ] [BUG][P2] A rescan's claim check is a snapshot, not a reservation. The
+  partition manager asks the volume manager whether a partition is claimed and
+  then proceeds to change it, and a mount landing between the two is accepted:
+  the volume manager has no notion of a change in progress, so the partition can
+  be retired or moved under a filesystem that mounted a moment after the check
+  passed. Closing it needs a reservation the volume manager honours -- a claim
+  refused, or deferred, while a retirement holds the volume -- plus a release
+  when the change completes or is abandoned. Narrow in practice today, because
+  nothing mounts a partition except a devmgr rule or an explicit `mount`, and a
+  rescan is a deliberate act; it stops being narrow the moment a rule can fire
+  on a partition a rescan just published.
+
+- [ ] [BUG][P2] Retiring a partition leaves its VOLUME published.
+  `volume_manager.handleClassEvent` ignores `SVC_CLASS_EVENT_REMOVE`, so a
+  partition withdrawn from the `block` class keeps its volume record, its
+  `volume` class registration and its entry in the device manager's volume
+  inventory. `volinfo` goes on advertising a volume whose backing device no
+  longer answers, and recreating the same partition is then skipped by
+  `volumeKnown`, so the stale filesystem metadata survives the next rescan too.
+  This is the exact failure the partition manager's own retirement order exists
+  to avoid -- retiring from one view and not the other -- one layer up. The fix
+  is the same two-stage withdrawal the partition manager now runs
+  (`DEVMGR_UNPUBLISH_VOLUME` then `SVC_IPC_UNREGISTER_CLASS_REQ`), driven from
+  the REMOVE event.
+
+- [ ] [ENHANCEMENT][P3] A rescan drops an addition it has no slot for instead of
+  retrying it. New partitions are published during the diff, while the
+  retirements that would free their slots are still in flight -- so replacing
+  every slot of a full `g_parts` fails the additions, and only the retirements
+  take. The rescan reports the count in `PARTITION_IPC_RESP.arg2` rather than
+  claiming success, but the partitions are simply missing until something asks
+  for another rescan. Holding pending additions until the retirements settle
+  would close it.
+
+- [ ] [TEST][P3] Nothing covers a MOUNTED partition refusing to move. The
+  refusal is implemented -- a window change is gated on the same claim check as
+  a retirement, because `handleTransfer` rebases every transfer onto the window
+  -- and the retirement half of it is covered by
+  `tests/test_partition_rescan.py`. Reaching the move half needs a guest that
+  can write a MODIFIED partition table, which is `fdisk`; `make_gpt_image.py` is
+  a host script and `mkfs.wfs` can only destroy a table, not edit one. The
+  reconcile diff's own classification of a move IS host-tested
+  (`test_partition_reconcile.zig`), so what is untested is the gate, not the
+  decision.
+
 - [ ] [BUG][P3] A retirement whose reply never arrives strands its rescan.
   A `Retire` slot advances through `VOLUME_IPC_IDENTIFY_REQ`,
   `DEVMGR_UNPUBLISH_BLOCK_DEVICE` and `SVC_IPC_UNREGISTER_CLASS_REQ`, and is

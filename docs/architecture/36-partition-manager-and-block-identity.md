@@ -308,13 +308,23 @@ A rescan is a DIFF, never a teardown and rebuild. The partitions of a disk are
 live devices and a filesystem may be mounted on one, so:
 
 - A partition whose extent is unchanged is left strictly alone. Re-registering
-  its class or re-announcing its descriptor would disturb a mount to restate
-  what is already true.
+  its class would disturb a mount to restate what is already true. Its
+  METADATA — label, type GUID, PARTUUID, MBR type — is restated if it changed,
+  which moves no storage and so needs no gate.
 - A partition whose extent MOVED keeps its identity. Its canonical id is built
   from the disk and the table slot, neither of which a resize moves, so its
   class instance — a fingerprint of that id — is still correct; only the
   descriptor is restated, and only the device manager holds a copy of that.
 - A partition the table no longer holds is RETIRED.
+
+A move and a retirement run through the SAME state machine, because they share
+one precondition: neither may be applied to a partition a filesystem is mounted
+on. A retirement makes the device unfindable while it is still being written to.
+A move is less obvious and no safer — `handleTransfer` rebases every forwarded
+request onto `lba_start` and clamps it to `lba_count`, so rewriting those under
+a live mount sends its next write to a different part of the disk, and shrinking
+the window invalidates allocations the filesystem believes it owns. Keeping the
+class instance preserves the device's identity, not its storage mapping.
 
 The diff matches on the table SLOT, because that is what the published device's
 canonical id is built from. Two tables describing the same slot describe the
@@ -330,13 +340,28 @@ The VOLUME MANAGER goes first, and it is the only one that can refuse. A volume
 carries a CLAIM while a filesystem service holds it, and that claim is the only
 live record in the system of what is mounted: the device manager's
 `active_service` is never set, so its inventory cannot answer the question
-(TASKS `[BUG][P3]`), and this driver cannot see a mount at all. Retiring a
-partition out from under a filesystem would strip the device out of discovery
-AND out of the inventory while that filesystem went on writing to it. A
-partition with no volume — unformatted, or carrying something nothing
-recognised — has nothing that could hold it and passes; the volume manager
-answers such a lookup with an error, which is the right answer and is read as
-one.
+(TASKS `[BUG][P3]`), and this driver cannot see a mount at all.
+
+A partition with no volume — unformatted, or carrying something nothing
+recognised — has nothing that could hold it and passes. That is the ONLY error
+read as permission: `NO_SUCH_UNIT`, which is what the volume manager says about
+an instance it does not hold. Every other answer, including `BAD_REQUEST` and
+`NO_DESCRIPTOR`, means the question was not answered, and "cannot tell" is
+treated exactly like "yes, it is mounted".
+
+The volume manager's endpoint is resolved ASYNCHRONOUSLY, on the first change
+that needs one. Not at bring-up, because this driver is an initfs payload
+spawned ahead of the services that publish volumes; and not with the blocking
+lookup helper, which is for bring-up only — a running driver that blocks on the
+process manager cannot dispatch partition I/O meanwhile, and the process manager
+reads the executables it spawns through a filesystem that may be mounted on a
+partition this driver serves.
+
+Every reply is matched on its SENDER as well as its request id. A request id is
+a sequential number another process can guess, and a forged `VOLUME_IPC_ERROR`
+would otherwise walk a partition straight past the check that protects a live
+mount. This is the same distinction the IPC layer draws and does not close for
+you: it authenticates an endpoint's OWNER, never its AUTHORITY.
 
 Claim checks run ONE at a time. `VOLUME_IPC_IDENTIFY_REQ` writes its descriptor
 at offset 0 of the buffer it is handed and takes no offset, so two in flight
@@ -347,9 +372,19 @@ each retirement leaves the claim stage; nothing polls it.
 The DEVICE MANAGER goes second (`DEVMGR_UNPUBLISH_BLOCK_DEVICE`) and the CLASS
 REGISTRY last (`SVC_IPC_UNREGISTER_CLASS_REQ`). Unregistering the class before
 the inventory would leave a device that cannot be found but is still listed,
-with the rule engine matching on an entry nothing serves. A refusal at any stage
-leaves the partition exactly as it was, and is reported in the reply rather than
-failing the rescan: the other partitions of the disk were reconciled correctly.
+with the rule engine matching on an entry nothing serves.
+
+`DEVMGR_NO_SUCH_RECORD` is not a refusal at that second stage: it is what an
+inventory says about a device it already dropped, which is precisely the state a
+previous retirement left behind if its class unregister failed afterwards.
+Reading it as failure would make that split permanent — every retry would stop
+at the inventory and never reach the registration still outstanding.
+
+A refusal at any stage leaves the partition exactly as it was, and is counted in
+the reply rather than failing the rescan: the other partitions of the disk were
+reconciled correctly. The count covers everything that did not take, including a
+change that could not be started and an addition with no free slot, so a caller
+is never told a table was reconciled when part of it was dropped.
 
 Neither request is waited for. A service that blocked on a peer's answer could
 not serve the requests that peer may need in order to produce it, so a

@@ -788,15 +788,21 @@ linked feature documents for rationale and rollout plans.
   partitions published for one disk against what its table now says, and
   `partprobe <disk-id>` sends it; before this a table rewritten from inside the
   guest left every partition device as it was at boot. It is a diff, not a
-  rebuild: an unchanged partition is left strictly alone, because a filesystem
-  may be mounted on it; one whose extent moved keeps its class instance and has
-  only its descriptor restated; one the table no longer holds is retired. A
-  retirement asks the VOLUME manager first whether a filesystem holds the
-  partition -- a volume's CLAIM is the only live record of what is mounted,
-  since the device manager's `active_service` is never set -- then withdraws the
-  device from the device manager, and unregisters it from the `block` class only
-  once that succeeded. No stage is waited for, so the rescan's reply is deferred
-  until the last retirement settles. An UNREADABLE table aborts the
+  rebuild: an unchanged partition is left strictly alone apart from restating
+  metadata that moved; one whose extent moved keeps its class instance and has
+  only its descriptor restated; one the table no longer holds is retired.
+
+  A move and a retirement run the same state machine, because neither may be
+  applied to a partition a filesystem is mounted on -- every transfer is rebased
+  onto the window, so moving one under a mount redirects writes the filesystem
+  believes it placed. Both ask the VOLUME manager first, whose CLAIM is the only
+  live record of what is mounted (the device manager's `active_service` is never
+  set); only NO_SUCH_UNIT is read as permission, every other answer as "cannot
+  tell". A retirement then withdraws the device from the device manager and
+  unregisters it from the `block` class, in that order. Replies are matched on
+  sender as well as request id, since an id alone is a number to guess. No stage
+  is waited for, so the rescan's reply is deferred until the last change
+  settles. An UNREADABLE table aborts the
   rescan rather than retiring everything, which is the distinction a first probe
   does not need.
 - `fs_fat` CLAIMS the volume it mounts and releases it on shutdown, which it
@@ -804,6 +810,15 @@ linked feature documents for rationale and rollout plans.
   is mounted anywhere in the system -- was blind to every FAT mount: a FAT
   volume could be reformatted by `mkfs.wfs` under its own filesystem, checked by
   `fsck.wfs` mid-write, and now retired by a rescan out from under it.
+- Both filesystem drivers release that claim only when the mount is actually
+  ending. They released it before checking who sent the UNMOUNT, so any client
+  that could reach the backend through the `fs.backend` class could clear the
+  claim on a live mount with a request the driver then refused -- leaving it
+  looking unheld to all three consumers. Both also look the volume up across the
+  volume manager's full capacity rather than the first eight, and resolve its
+  endpoint ONCE: the release runs inside the reactor, and the lookup blocks on
+  the endpoint where outstanding block replies land, discarding whatever is not
+  its own.
 - `driver.ClassRetire` (`src/libc/zig/driver.zig`) is the guest path to
   `SVC_IPC_UNREGISTER_CLASS_REQ`, which the kernel has had since the device
   manager's unpublish landed but nothing could send. Asynchronous, unlike every

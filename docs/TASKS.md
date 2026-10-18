@@ -2249,7 +2249,13 @@ Source: `architecture/25-diagnostics-status.md`,
   NOT verifiable here: the bug needs a Linux x86 TCG runner, and MTTCG on Apple
   Silicon masks it. What was verified instead: the mechanism by reading the
   save, dispatch and restore paths; `run-qemu-test` clean; and the SMP
-  scheduler stress gate green three times with zero guard hits. The guard is
+  scheduler stress gate green three times with zero guard hits.
+
+  FIRST EVIDENCE FROM CI that it holds: commit e2ab1885, the first carrying this
+  fix, passed its full matrix TWICE with zero failed jobs -- the first fully
+  green commit on the branch, against roughly one red run in two before it. Two
+  runs is not proof at this bug's rate, but it is the right direction and it is
+  the only arm where both SMP stress jobs passed together. The guard is
   the standing detector -- if this recurs it panics `invalid_transfer_target`
   naming the thread, rather than jumping to zero.
 
@@ -2352,6 +2358,29 @@ Source: `architecture/25-diagnostics-status.md`,
   `fs.backend registered mount=<path>`, because a boot carries more than one FAT
   backend and the old line could not say whether `/boot`'s instance was the one
   that came up.
+
+  A SECOND face, with a different victim, 2026-10-18 run 39152571921 job
+  117749291333 (`filesystem`, `wasm3_smp`): the boot stalls during PCI
+  enumeration, nowhere near `/boot`. Last guest output `[pci-bus] bar4 m64
+  00000000 size 16384 pf`, only two `spawn_path fs read failed` lines in the
+  whole log and no panic. The sysinit retry storm is therefore NOT the only way
+  this bug shows, and the fix for it -- bounding the retry -- does not cover
+  this one. Whether the two share a cause is open.
+
+  Attribution for that capture, by construction: the commit before it passed
+  this job twice, and the delta between them is PYTHON ONLY (the harness and
+  two test files), so no guest code changed.
+
+  **The stall dump kills QEMU, often.** Across the captures taken while
+  investigating this, `monitor unavailable` appears 17 times and one run
+  recorded `qemu then exited with code -11` -- a host-side SIGSEGV. The dump
+  injects an NMI into every vCPU through the monitor (`monitor.hmp("nmi")`,
+  twice, for the two guest samples), and a wedged guest plus that sampling is
+  apparently enough to take QEMU with it. The cost is real: it destroys the
+  halted machine, which is the best evidence available, and truncates the dump
+  that was being collected. `boot_diagnosis` now says so rather than blaming
+  the exit, but the dump still does it. Worth either sampling once, or moving
+  the guest-tail capture ahead of any monitor traffic.
 
   Faces seen so far, all on the same code:
   - `warp_smp`: `FAIL: calculator did not fully initialise`. The calculator is not

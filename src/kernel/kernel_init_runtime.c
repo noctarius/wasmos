@@ -2,6 +2,7 @@
 
 #include "ipc.h"
 #include "klog.h"
+#include "kpanic.h"
 #include "memory.h"
 #include "paging.h"
 #include "process_manager.h"
@@ -469,18 +470,21 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
          * healthy boot needs a handful of attempts, and the retry yields between
          * them rather than spinning. */
         if (state->sysinit_attempts >= INIT_SYSINIT_MAX_ATTEMPTS) {
-            if (state->sysinit_attempts == INIT_SYSINIT_MAX_ATTEMPTS) {
-                state->sysinit_attempts++;
-                klog_printf("[init] GIVING UP on /boot/system/services/sysinit.wap after %u "
-                            "attempts\n"
-                            "[init] /boot never became readable, so nothing on the ESP can be "
-                            "spawned and this boot reaches no prompt.\n"
-                            "[init] The last [pm] spawn_path line above says why the read "
-                            "failed.\n",
-                            (unsigned)INIT_SYSINIT_MAX_ATTEMPTS);
-            }
-            state->phase = 5; /* park; the boot is over, and says so */
-            return PROCESS_RUN_YIELDED;
+            /* PANIC rather than park. sysinit is this system's pid 1: it reads
+             * sysinit.rc and starts every service, so a boot that cannot spawn
+             * it has no userspace and never will. Parking would leave a kernel
+             * running with nothing on top -- alive enough to look like a hang,
+             * dead enough to be useless -- which is the state this whole bug
+             * has been hiding in. Linux calls the same thing "Attempted to kill
+             * init". */
+            klog_printf("[init] cannot spawn /boot/system/services/sysinit.wap after %u "
+                        "attempts\n"
+                        "[init] sysinit starts every service, so this system has no userspace "
+                        "and no prompt is coming.\n"
+                        "[init] /boot never became readable: the last [pm] spawn_path line "
+                        "above says why the read failed.\n",
+                        (unsigned)INIT_SYSINIT_MAX_ATTEMPTS);
+            kpanic("init_no_sysinit", (uintptr_t)state->sysinit_attempts, 0);
         }
         state->sysinit_attempts++;
         if (init_send_spawn_path(process, state, "/boot/system/services/sysinit.wap") != 0) {

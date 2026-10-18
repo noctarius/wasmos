@@ -2262,15 +2262,35 @@ Source: `architecture/25-diagnostics-status.md`,
      said so would turn the whole P0 into an immediate, named boot failure --
      worth doing even before the cause below is understood, because it converts
      every future occurrence into a one-line diagnosis.
-  2. **Why the read fails is still open.** `/boot` IS mounted in at least one
-     captured session (`/boot -> fs-fat on block:ata:0p1`), so this is not
-     simply "no filesystem": either the read races the mount becoming usable,
-     or the lookup fails against a mount that is present. Start from
-     `pm_fs_read_blob_for_spawn` and the fs-manager path resolution, not from
-     the scheduler.
+  2. **Why `/boot` never becomes readable is the REAL bug, and is still open.**
+     Narrowed, in the storming session of run 39140045637:
 
-  Fixing (1) first is the recommendation: it is small, it cannot make anything
-  worse, and it stops the suite paying for (2) on every other run.
+     - `[device-manager] volume rule queued mount=/boot id=volume:block:ata:0p1`
+       at 14:46:22.90 -- the rule fires, so discovery and the volume layer are
+       fine.
+     - `[fat] fs.backend registered` at 14:46:22.96 -- a FAT backend comes up.
+     - **No `/boot -> ...` line anywhere in the session.** The mount never
+       completes, and there is no `mount refused: fat` either, so fs-manager
+       neither mounted it nor rejected it.
+     - Everything downstream follows from that: `/boot` is absent from the
+       namespace, so every ESP path reads NOT_FOUND -- sysinit, fs_wfs.wap
+       (hence the `mount refused: wfs` storm, which is a CONSEQUENCE and not a
+       second bug), and `no such command found: blkinfo` one layer up.
+     - `init` was dispatched **8,817,333** times.
+
+     So the question is narrow: a queued `/boot` volume rule, with its FAT
+     backend registered, that produces neither a mount nor a refusal. Look at
+     the devmgr MOUNT_REQ path and fs-manager's handling of it, NOT at the
+     scheduler and not at the volume layer.
+
+     One capture had a `/boot -> fs-fat on block:ata:0p1` line and stalled
+     anyway, so there may be a second path; treat that as unconfirmed until a
+     capture with the new mount-named logging says otherwise.
+
+  Diagnostic support added for the next occurrence: `fs_fat` now logs
+  `fs.backend registered mount=<path>`, because a boot carries more than one FAT
+  backend and the old line could not say whether `/boot`'s instance was the one
+  that came up.
 
   Faces seen so far, all on the same code:
   - `warp_smp`: `FAIL: calculator did not fully initialise`. The calculator is not

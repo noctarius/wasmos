@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A boot that cannot read sysinit gives up and says so, instead of hanging.
+"""A boot that cannot spawn sysinit PANICS, instead of hanging forever.
 
 sysinit ships on the ESP rather than in the initfs, so init cannot spawn it
 until device enumeration has mounted /boot. The spawn therefore RETRIES -- and
@@ -16,10 +16,17 @@ which is the one condition that reproduces it deterministically. Everything else
 about the boot is normal, so what is measured is the retry bound and nothing
 else.
 
-What is asserted is the bound AND the sentence. A bound that gave up silently
-would turn a 14-minute hang into a shorter hang; the point is that the boot now
-NAMES what it could not read, so the next occurrence is one line of triage
-rather than twenty-five thousand lines of log.
+It panics rather than parking because sysinit is this system's pid 1: it reads
+sysinit.rc and starts every service, so a boot that cannot spawn it has no
+userspace and never will. Parking would leave a kernel running with nothing on
+top -- alive enough to look like a hang, dead enough to be useless -- which is
+the state this bug has been hiding in. Linux calls the same thing "Attempted to
+kill init".
+
+What is asserted is the bound AND the sentence. Stopping silently would turn a
+14-minute hang into a shorter one; the point is that the boot NAMES what it
+could not read, so the next occurrence is one line of triage rather than
+twenty-five thousand lines of log.
 
 Regression: 2026-10-18-init-retried-the-sysinit-spawn-forever
 """
@@ -64,7 +71,7 @@ class InitSysinitGiveUpTest(unittest.TestCase):
         cls.session.start()
         # No require_prompt: this boot is NOT expected to reach one. That is the
         # condition under test, not a failure of the harness.
-        cls.session.expect(b"[init] GIVING UP", timeout_s=240)
+        cls.session.expect(b"init_no_sysinit", timeout_s=240)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -76,13 +83,29 @@ class InitSysinitGiveUpTest(unittest.TestCase):
             shutil.rmtree(cls.tmpdir, ignore_errors=True)
             cls.tmpdir = None
 
-    def test_the_boot_gives_up_rather_than_retrying_forever(self) -> None:
+    def test_the_boot_panics_rather_than_retrying_forever(self) -> None:
         assert self.session is not None
         self.assertIn(
-            b"[init] GIVING UP on /boot/system/services/sysinit.wap",
+            b"init_no_sysinit",
             self.session.buf,
             "init never stopped retrying the sysinit spawn, so this boot is the "
             "unbounded hang the bound exists to end\n"
+            f"--- tail ---\n{self.session.tail()}\n",
+        )
+
+    def test_it_is_a_panic_and_not_a_quiet_park(self) -> None:
+        """A kernel with no userspace should say so, not idle politely.
+
+        Parking is what made this bug expensive: the guest stayed alive, so
+        there was no panic to find and no reset to detect, and the only symptom
+        was whichever test happened to open the next session.
+        """
+        assert self.session is not None
+        self.assertIn(
+            b"KERNEL PANIC",
+            self.session.buf,
+            "the boot stopped without panicking, so a system with no userspace "
+            "still looks like a slow one\n"
             f"--- tail ---\n{self.session.tail()}\n",
         )
 
@@ -94,7 +117,7 @@ class InitSysinitGiveUpTest(unittest.TestCase):
         """
         assert self.session is not None
         self.assertIn(
-            b"/boot never became readable",
+            b"sysinit starts every service",
             self.session.buf,
             "the give-up does not say what went wrong, so it replaces a long "
             "mystery with a short one\n"

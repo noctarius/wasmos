@@ -758,7 +758,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         fat_log("fs.backend register failed\n");
         fat_stall();
     }
-    fat_log("fs.backend registered\n");
+    /* The MOUNT is named, not just the fact of registering. A boot carries more
+     * than one FAT backend -- /boot and /user -- and a log that cannot tell
+     * them apart cannot answer the one question a stalled boot raises: did
+     * /boot's instance come up? One capture of `[BUG][P0]` showed a single
+     * "fs.backend registered" and no /boot mount, and which of the two had
+     * registered was unknowable from the log. */
+    (void)printf("[fat] fs.backend registered mount=%s\n", mount_alias);
 
     /* Wait for fs-manager's first info pull before signalling ready. */
     for (;;) {

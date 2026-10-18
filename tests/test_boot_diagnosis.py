@@ -10,6 +10,12 @@ These run on the host with a stub process, because every input that matters is
 a serial log the harness already holds, and producing them from a real guest
 means arranging a panic, a reset and a wedge on demand.
 
+Nothing here calls `default_config()`. It resolves OVMF and the ESP out of the
+environment or a CMakeCache and RAISES when neither is there, which is exactly
+the state the host-tools battery runs in -- it exists to cover what needs no
+QEMU. `boot_diagnosis` reads a buffer and a process handle and nothing else, so
+a config that names no real file is the honest input.
+
 Regression: 2026-10-18-stall-reported-as-qemu-exit -- `expect()` dumps stall
 state on timeout and NMIs every vCPU to do it, which can kill QEMU. The exit
 check ran before the stall check, so a wedged guest the harness had just
@@ -26,7 +32,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuConfig, QemuSession
 
 
 class _StubProc:
@@ -41,8 +47,12 @@ class _StubProc:
 
 
 def _session(buf: bytes, returncode=None, restarted: bool = False) -> QemuSession:
-    """A session that was never started, carrying `buf` as its serial log."""
-    session = QemuSession(default_config())
+    """A session that was never started, carrying `buf` as its serial log.
+
+    The paths are placeholders and are never opened: QemuSession.__init__ only
+    stores its config, and nothing below starts a guest.
+    """
+    session = QemuSession(QemuConfig(ovmf_code="", ovmf_vars="", esp_dir=""))
     session.buf = buf
     session.proc = _StubProc(returncode)
     session._restarted = restarted

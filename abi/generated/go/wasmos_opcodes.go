@@ -528,7 +528,7 @@ const VIRTIO_SERIAL_IPC_WRITE_REG32_REQ int32 = 0x832
 const VIRTIO_SERIAL_IPC_RESP int32 = 0x8B0
 const VIRTIO_SERIAL_IPC_ERROR int32 = 0x8BF
 
-// device_manager (0x900..0x981)
+// device_manager (0x900..0x982)
 const DEVMGR_PUBLISH_DEVICE int32 = 0x900
 const DEVMGR_PCI_SCAN_DONE int32 = 0x901
 const DEVMGR_QUERY_MOUNT_REQ int32 = 0x902
@@ -585,6 +585,48 @@ const DEVMGR_PUBLISH_DEVICE_DESC int32 = 0x906
 // A descriptor whose version is not VOLUME_DESCRIPTOR_VERSION is dropped
 // rather than partially read.
 const DEVMGR_PUBLISH_VOLUME int32 = 0x907
+// Retire one block device from the inventory. The device's canonical_id
+// is the identity and travels in a transfer buffer the caller owns:
+// arg0=buffer_id arg1=byte_offset arg2=length, NUL-terminated.
+// Answered with DEVMGR_UNPUBLISH_RESP.
+//
+// The id rather than a derived key, for the same reason the publish path
+// keys on it: a unit collides across backends, and this service never
+// probed the bus so it is in no position to invent a better name. Too
+// long for four argument words, hence the buffer.
+//
+// ANSWERED, unlike the publish opcodes, which are fire-and-forget. A
+// publisher that is told nothing simply tried; a caller retiring a device
+// is about to stop serving it, and has to know whether the inventory
+// agreed.
+//
+// Retiring an id nobody published is refused rather than ignored: a
+// caller that retires twice would otherwise read the second as having
+// retired something.
+//
+// A retire does NOT consider whether something has the device mounted.
+// This inventory is rule-matching state and no mount addresses it, so
+// retiring a record cannot disturb a running filesystem; the device
+// manager is also never told about an unmount, so it could not answer the
+// question even if it were the right place to ask. The caller unmounts
+// first, and fs-manager is what refuses a busy unmount.
+//
+// Queued rules the record armed are DISARMED, because a rule that had
+// matched it would otherwise go on to mount a device the inventory no
+// longer has. A rule that already spawned is left alone: its filesystem
+// is running, and this retires an inventory record, not a mount.
+const DEVMGR_UNPUBLISH_BLOCK_DEVICE int32 = 0x908
+// Retire one VOLUME from the inventory, by canonical_id in a caller-owned
+// transfer buffer: arg0=buffer_id arg1=byte_offset arg2=length.
+// Answered with DEVMGR_UNPUBLISH_RESP.
+//
+// Same terms as DEVMGR_UNPUBLISH_BLOCK_DEVICE. What makes this one
+// necessary is that a volume can cease to exist while its disk does not:
+// writing a partition table over an unpartitioned disk ends the
+// whole-disk volume, because the partitions are the volumes from then on.
+const DEVMGR_UNPUBLISH_VOLUME int32 = 0x909
+// arg0 = 0, or a packed error code: the id is malformed, or is not in the inventory.
+const DEVMGR_UNPUBLISH_RESP int32 = 0x982
 const DEVMGR_MOUNT_INFO int32 = 0x980
 const DEVMGR_QUERY_DONE int32 = 0x981
 

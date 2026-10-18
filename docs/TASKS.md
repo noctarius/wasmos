@@ -2167,9 +2167,23 @@ Source: `architecture/25-diagnostics-status.md`,
   discards the failed run's log. Capture the panic block BEFORE requesting a
   rerun -- `gh run view --job <id> --log-failed > file` while it is still red.
 
-  The offset repeating exactly (0x512 twice, 0x507 twice) across four of five
-  captures is worth more attention than it has had: a corrupted dispatch picking
-  the same small integer twice is not what a random tear looks like.
+  SIXTH, SEVENTH and EIGHTH captures, all on PR #40 and all `rip=ffffffff80000512`:
+  run 39121505505 jobs 117657876134 (`warp_smp`, `a=0x06`, `b=` the rip itself)
+  and 117657876213 (`wasm3_smp`, `a=0x0e`, `cr2=ffffffffffffffff`) -- the SAME
+  run, both runtimes, the same address -- and run 39124795842 job 117667540301
+  (`wasm3_smp`, `a=0x0e`).
+
+  **The offset is not random, and that is the lead this entry has been missing.**
+  Across eight captures it has been one of exactly TWO values: 0x507 twice and
+  0x512 six times, with 0x512 in all of the last six. Two different runtimes
+  produce it, and the FAULT VECTOR differs between them (#UD on warp, #PF on
+  wasm3) while the address does not -- which is what you would see if the rip is
+  a fixed bogus value and the vector depends only on what happens to be mapped
+  there. A dispatch resuming a torn context would land on whatever bytes the
+  tear left; landing on the same small integer six times running means something
+  deterministic WRITES it. Worth chasing as "what assigns 0x512?" before chasing
+  the scheduler again: 0x512 = 1298 and 0x507 = 1287, both plausible as a size,
+  an index or an offset rather than as debris.
 
 - [ ] [BUG][P0] The guest reaches no CLI prompt on roughly one CI run in two, and
   it is ONE defect with several faces, not several flakes. Every capture is a

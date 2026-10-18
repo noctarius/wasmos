@@ -877,3 +877,48 @@ pub const VOLUME_IPC_IDENTIFY_RESP: i32 = 0xE80;
 pub const VOLUME_IPC_RESP: i32 = 0xE81;
 /// arg0 = packed error code.
 pub const VOLUME_IPC_ERROR: i32 = 0xEFF;
+
+// partition (0xF00..0xFFF)
+/// Re-read one disk's partition table and reconcile what is published
+/// against what it now says. arg0 = the DISK's `block` class instance --
+/// the backing device, never a partition of it, because a caller that has
+/// just written a table knows which disk it wrote and the partitions it
+/// describes may not exist yet.
+/// Answered with PARTITION_IPC_RESP, arg0 = 0, arg1 = the partition count
+/// on that disk afterwards.
+///
+/// A disk's table is read once, when the disk arrives under the `block`
+/// class, and nothing re-reads it afterwards -- so a table rewritten from
+/// inside the guest leaves every partition device as it was at boot. This
+/// is what `fdisk` sends once its write has landed.
+///
+/// Reconciled, not republished. A partition whose window is unchanged is
+/// left strictly alone: re-registering its class or re-announcing it would
+/// disturb a filesystem mounted on it to no purpose. A partition whose
+/// window CHANGED keeps its class instance -- a fingerprint of an id
+/// derived from the disk and the slot, so it does not move -- and only its
+/// descriptor is republished. A partition the new table no longer holds is
+/// RETIRED: withdrawn from the device manager's inventory first, and
+/// unregistered from the `block` class only once that succeeded.
+///
+/// A retirement is refused when a filesystem holds the partition, which
+/// is asked of the VOLUME manager: a volume carries a CLAIM while a
+/// filesystem service holds it, and that claim is the only live record in
+/// the system of what is mounted. The device manager's inventory cannot
+/// answer it. A partition with no volume at all has nothing that could
+/// hold it and passes.
+///
+/// A refusal leaves the partition exactly as it was and is reported in
+/// arg2 rather than failing the rescan, because the other partitions of
+/// the disk were reconciled correctly and the caller needs to know which
+/// part did not take.
+///
+/// The reply is DEFERRED: reading a table is synchronous and runs on the
+/// partition manager's root task, and the retirements it schedules are
+/// answered by their own peers later still, so the request is queued and
+/// answered when all of that has settled.
+pub const PARTITION_IPC_RESCAN_REQ: i32 = 0xF00;
+/// arg0 = 0, arg1 = partitions on the disk after the rescan, arg2 = partitions whose retirement was refused.
+pub const PARTITION_IPC_RESP: i32 = 0xF80;
+/// arg0 = packed error code.
+pub const PARTITION_IPC_ERROR: i32 = 0xFFF;

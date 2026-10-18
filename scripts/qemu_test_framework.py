@@ -1401,7 +1401,16 @@ class QemuSession:
                         detail += f" (pid={ids.group(1)} tid={ids.group(2)})"
             return detail + " -- decode with scripts/decode_kernel_panic.py"
 
-        if self.proc is not None and self.proc.poll() is not None:
+        # Whether expect() already gave up and dumped stall state. That dump
+        # NMIs every vCPU and talks to the monitor, and it can take QEMU with it
+        # -- so an exit observed AFTER it is the harness's own doing. Reporting
+        # it as the cause reads as "the guest went away", which sends a triage
+        # looking for a shutdown that never happened; the guest was alive and
+        # wedged at the only moment anything looked.
+        provoked = b"[stall-dump]" in self.buf
+        exited = self.proc is not None and self.proc.poll() is not None
+
+        if exited and not provoked:
             return f"qemu exited with code {self.proc.returncode} before the prompt"
 
         if not self.buf.strip():
@@ -1420,9 +1429,13 @@ class QemuSession:
         # `[diag]` and `[nmi]` are the GUEST's answers to being sampled, so they
         # arrive before the dump's own lines and are dropped by prefix rather
         # than by position.
+        # Cut at the START of the line the first marker sits on, not at the
+        # marker. The dump's banner is "=== [stall-dump] ... ===", so cutting at
+        # the marker leaves "=== " behind as the newest line and every stall
+        # would report its last guest output as '==='.
         own = text.find("[stall-dump]")
         if own != -1:
-            text = text[:own]
+            text = text[: text.rfind("\n", 0, own) + 1]
         induced = ("[diag]", "[nmi]")
         lines = [
             ln.rstrip()
@@ -1430,10 +1443,19 @@ class QemuSession:
             if ln.strip() and not ln.lstrip().startswith(induced)
         ]
         last = lines[-1] if lines else ""
-        return (
-            "no prompt and the guest is still running: a stall. "
-            f"Last guest output: {last!r}"
+        detail = (
+            "no prompt and the guest was still running when it was sampled: "
+            f"a stall. Last guest output: {last!r}"
         )
+        if exited:
+            # Said rather than hidden: a reader chasing a truncated log needs to
+            # know the process is gone, and needs to know it is not the reason.
+            detail += (
+                f" (qemu then exited with code {self.proc.returncode} during the "
+                "stall dump, which the NMI sampling can provoke -- a consequence "
+                "of diagnosing, not the cause)"
+            )
+        return detail
 
     def require_prompt(
         self,

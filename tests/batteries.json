@@ -137,6 +137,7 @@
       "description": "Host tools, exercised directly. Boots nothing, builds nothing, and needs no emulation: this battery's CI job compiles the packer with cc and nothing else, so a test here may not read build artifacts.",
       "needs_qemu": false,
       "files": [
+        "test_boot_diagnosis.py",
         "test_make_wasmos_app_capabilities.py"
       ]
     }

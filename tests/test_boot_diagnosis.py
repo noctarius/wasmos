@@ -32,7 +32,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from scripts.qemu_test_framework import QemuConfig, QemuSession
+from scripts.qemu_test_framework import GuestPanicked, QemuConfig, QemuSession
 
 
 class _StubProc:
@@ -146,6 +146,64 @@ class BootDiagnosisTest(unittest.TestCase):
         self.assertIn("fs.backend registered", d)
         self.assertNotIn("[diag]", d)
         self.assertNotIn("[nmi]", d)
+
+
+class GuestPanicDetectionTest(unittest.TestCase):
+    """A panicked guest ends the session instead of failing the next assertion.
+
+    Regression: 2026-10-18-panic-reported-as-a-flaky-test -- a boot that
+    panicked `init_no_sysinit`, meaning no userspace at all, was reported as
+    `FAIL: test_dhcp_lease_brings_interface_up` and written off as a flaky
+    networking test. The DHCP lease was never the issue. Every assertion after
+    a panic is made against a dead machine, so the first one to notice gets
+    blamed for it.
+    """
+
+    PANIC = (
+        b"================= KERNEL PANIC =================\n"
+        b"reason : init_no_sysinit\n"
+        b"cpus=4  panicking_cpu=0\n"
+        b"=============== END KERNEL PANIC ===============\n"
+    )
+
+    def _session(self, buf: bytes, fatal: bool = True) -> QemuSession:
+        session = QemuSession(
+            QemuConfig(ovmf_code="", ovmf_vars="", esp_dir=""), panic_is_fatal=fatal
+        )
+        session.buf = buf
+        # Stopping the VM would discard the halted machine, which is the whole
+        # point of not doing it; a call here fails the test rather than passing
+        # silently.
+        session.force_stop = self.fail  # type: ignore[method-assign]
+        return session
+
+    def test_a_complete_panic_ends_the_session(self) -> None:
+        s = self._session(b"[init] something\n" + self.PANIC)
+        with self.assertRaises(GuestPanicked) as caught:
+            s._note_panic()
+        self.assertIn("init_no_sysinit", str(caught.exception))
+
+    def test_a_partial_dump_does_not_fire_yet(self) -> None:
+        """Anchored on the CLOSING banner, so the message carries the whole
+        block rather than whatever had arrived when the first line did."""
+        s = self._session(b"KERNEL PANIC\nreason : init_no_sysinit\n")
+        s._note_panic()
+
+    def test_it_fires_once(self) -> None:
+        """So teardown can still run; a second raise from the read pump during
+        cleanup would mask the first."""
+        s = self._session(self.PANIC)
+        with self.assertRaises(GuestPanicked):
+            s._note_panic()
+        s._note_panic()
+
+    def test_a_test_that_induces_a_panic_can_opt_out(self) -> None:
+        s = self._session(self.PANIC, fatal=False)
+        s._note_panic()
+
+    def test_a_healthy_session_is_untouched(self) -> None:
+        s = self._session(b"[fat] fs.backend registered mount=/boot\nwamos> \n")
+        s._note_panic()
 
 
 if __name__ == "__main__":

@@ -157,6 +157,23 @@ class GuestRestarted(RuntimeError):
     """
 
 
+class GuestPanicked(RuntimeError):
+    """The guest panicked while a test was driving it.
+
+    Its own type, like GuestRestarted, and for the same reason: a panic is not
+    a property of whatever was being asserted. Everything after it is a dead
+    machine answering nothing, so a test that keeps going fails on whichever
+    assertion happens to come next and reports THAT as the problem.
+
+    This is not hypothetical. A boot that panicked `init_no_sysinit` -- no
+    userspace at all -- was reported as `FAIL: test_dhcp_lease_brings_interface_up`
+    and written off as a flaky networking test. The DHCP lease was never the
+    issue; the guest had no services.
+
+    A test that MEANS to panic the guest passes panic_is_fatal=False.
+    """
+
+
 def _first_group(pattern, text, group=1, flags=0):
     """The first match's group, or None. Keeps the diagnosis readable."""
     m = re.search(pattern, text, flags)
@@ -829,17 +846,23 @@ class QemuSession:
         timeout_s: int = 120,
         echo: bool = True,
         force_stop_on_timeout: bool = True,
+        panic_is_fatal: bool = True,
     ):
         self.cfg = cfg
         self.timeout_s = timeout_s
         self.echo = echo
         self.force_stop_on_timeout = force_stop_on_timeout
+        # A guest panic ends the session by default. Only a test that induces
+        # one deliberately turns this off; every other test asserting against a
+        # panicked guest is asserting against a dead machine.
+        self.panic_is_fatal = panic_is_fatal
         self.proc: Optional[subprocess.Popen] = None
         self._stall_dumps = 0
         # Guest-reset detection. The scan starts only once a prompt has been
         # seen: the banner is also printed by the FIRST boot, where it means
         # nothing.
         self._restarted = False
+        self._panicked = False
         self._saw_prompt = False
         self._restart_scan = 0
         self.selector: Optional[selectors.BaseSelector] = None
@@ -1019,11 +1042,54 @@ class QemuSession:
                     sys.stdout.buffer.flush()
                 self.buf += chunk
                 self._note_restart()
+                self._note_panic()
 
     # The firmware's first line on a cold start. Seeing it AFTER the guest has
     # already reached a prompt means the machine reset -- a triple fault, which
     # produces no panic because the panic handler is what faulted.
     _RESTART_MARK = b"BdsDxe: loading Boot"
+
+    def _note_panic(self) -> None:
+        """Notice a guest panic as soon as its reason line arrives.
+
+        Anchored on the reason rather than on the banner, because the reason is
+        the whole value of raising here and it is printed immediately after --
+        raising on the banner alone would report "the guest panicked" and make
+        the caller go and read the log for which panic.
+
+        Raises rather than recording, on the same grounds as a reset: there is
+        no useful work left in the session. Fires once, with the flag set
+        before the raise, so teardown can still close.
+
+        It does NOT stop the VM, which is where this differs from the reset
+        path. A reset destroys the machine under test -- the state every later
+        assertion refers to went with it -- so there is nothing to preserve. A
+        panicked guest is still sitting there halted, with its registers and
+        memory intact, which is the best evidence this harness ever gets:
+        killing it would throw that away and risk truncating a dump that is
+        still arriving. Teardown closes the session in the ordinary way.
+        """
+        if self._panicked or not self.panic_is_fatal:
+            return
+        # Anchored on the CLOSING banner, so the whole dump is in hand: the
+        # block carries a backtrace per CPU and raising on the opening line
+        # would report a panic parsed from whatever had arrived by then.
+        #
+        # A dump that never finishes -- a fault inside the panic handler --
+        # simply does not trigger this, and the session then fails the ordinary
+        # way on a timeout, where boot_diagnosis names the panic from the
+        # partial block. That is the right fallback rather than a special case.
+        if b"END KERNEL PANIC" not in self.buf:
+            return
+        self._panicked = True
+        # boot_diagnosis already parses a panic block into a sentence naming the
+        # reason, the vector, the CPU and the faulting rip.
+        raise GuestPanicked(
+            f"the guest PANICKED mid-session, so nothing after this point is a "
+            f"reply to anything before it and whatever this test was asserting "
+            f"was never reached.\n{self.boot_diagnosis()}\n"
+            f"--- tail ---\n{self.tail()}\n"
+        )
 
     def _note_restart(self) -> None:
         """Notice a guest reset, loudly, as soon as the banner arrives.

@@ -67,7 +67,9 @@ class InitSysinitGiveUpTest(unittest.TestCase):
         shutil.copytree(cfg.esp_dir, esp)
         os.remove(os.path.join(esp, SYSINIT))
         cfg.esp_dir = esp
-        cls.session = QemuSession(cfg, timeout_s=300, echo=False)
+        # The only test that MEANS to panic the guest, so the only one that
+        # opts out of the harness ending the session on one.
+        cls.session = QemuSession(cfg, timeout_s=300, echo=False, panic_is_fatal=False)
         cls.session.start()
         # No require_prompt: this boot is NOT expected to reach one. That is the
         # condition under test, not a failure of the harness.

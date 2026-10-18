@@ -784,6 +784,31 @@ linked feature documents for rationale and rollout plans.
   the root task, so it blocks the process but not the loop's dispatch.
   `/user` mounts from a partition it names by GPT label
   (`architecture/36-partition-manager-and-block-identity.md` §2-§3).
+- A disk's table can be RE-read. `PARTITION_IPC_RESCAN_REQ` reconciles the
+  partitions published for one disk against what its table now says, and
+  `partprobe <disk-id>` sends it; before this a table rewritten from inside the
+  guest left every partition device as it was at boot. It is a diff, not a
+  rebuild: an unchanged partition is left strictly alone, because a filesystem
+  may be mounted on it; one whose extent moved keeps its class instance and has
+  only its descriptor restated; one the table no longer holds is retired. A
+  retirement asks the VOLUME manager first whether a filesystem holds the
+  partition -- a volume's CLAIM is the only live record of what is mounted,
+  since the device manager's `active_service` is never set -- then withdraws the
+  device from the device manager, and unregisters it from the `block` class only
+  once that succeeded. No stage is waited for, so the rescan's reply is deferred
+  until the last retirement settles. An UNREADABLE table aborts the
+  rescan rather than retiring everything, which is the distinction a first probe
+  does not need.
+- `fs_fat` CLAIMS the volume it mounts and releases it on shutdown, which it
+  never did. Only `fs_wfs` claimed, so the claim -- the one live record of what
+  is mounted anywhere in the system -- was blind to every FAT mount: a FAT
+  volume could be reformatted by `mkfs.wfs` under its own filesystem, checked by
+  `fsck.wfs` mid-write, and now retired by a rescan out from under it.
+- `driver.ClassRetire` (`src/libc/zig/driver.zig`) is the guest path to
+  `SVC_IPC_UNREGISTER_CLASS_REQ`, which the kernel has had since the device
+  manager's unpublish landed but nothing could send. Asynchronous, unlike every
+  other wrapper in that file: its caller is an async service whose own message
+  loop produces the replies its peers owe it.
 - The volume manager (`src/services/volume_manager/`, Zig) publishes a `volume`
   class for every device that holds a filesystem, which is the question the
   `block` class cannot answer: a partition-table entry may hold no filesystem and

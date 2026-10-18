@@ -70,6 +70,8 @@ const op = @import("wasmos_opcodes.zig");
 const status = @import("wasmos_status.zig");
 const abi = @import("wasmos_constants.zig");
 const pt = @import("partition_table.zig");
+const rc = @import("reconcile.zig");
+const mnt = @import("mounts.zig");
 
 /// Disks probed. Each costs a descriptor plus its partitions' records; the bound
 /// is this driver's own state, not a property of the system.
@@ -144,6 +146,23 @@ var g_proc_endpoint: i32 = -1;
 /// publishing to class registration alone.
 var g_devmgr: i32 = -1;
 
+/// fs-manager's endpoint: the authority on what is MOUNTED, and the gate every
+/// change to a published partition passes through.
+var g_fsmgr: i32 = -1;
+/// The volume manager's endpoint, used only to ask for a re-probe after a
+/// partition's descriptor changes. Advisory: an update that cannot reach it
+/// still applies.
+var g_volmgr: i32 = -1;
+
+/// Which service the outstanding lookup is for, and its request id.
+///
+/// One lookup at a time, because a wiped disk queues a change per partition and
+/// they all wait on the same answer. Resolved asynchronously; see
+/// `requestService` for why neither at bring-up nor with the blocking helper.
+const LookupKind = enum { none, fsmgr, volmgr };
+var g_lookup_kind: LookupKind = .none;
+var g_lookup_id: i32 = 0;
+
 /// Backend endpoints this process has lent its probe buffers to.
 ///
 /// Grants are per PROCESS, not per endpoint or per device, so one entry covers
@@ -154,7 +173,8 @@ var g_devmgr: i32 = -1;
 var g_granted: [MAX_DISKS]i32 = [_]i32{-1} ** MAX_DISKS;
 var g_granted_count: usize = 0;
 
-/// Disks that have registered under the `block` class but not yet been probed.
+/// Disks that have registered under the `block` class but not yet been probed,
+/// and disks a RESCAN has asked to be read again.
 ///
 /// An arrival is queued rather than probed where it is received: a probe is
 /// synchronous and a message handler must not block the loop it runs on. The
@@ -163,10 +183,123 @@ const Arrival = struct {
     instance: u32 = 0,
     endpoint: i32 = -1,
     in_use: bool = false,
+    /// Re-read the table of a disk already in the table, which only a RESCAN
+    /// does. An arrival from the class never does: a disk already probed is
+    /// dropped, which is what makes the subscription and the opening
+    /// enumeration safe to overlap.
+    force: bool = false,
+    /// Who to answer once the rescan has settled, and with which request id.
+    /// Negative when nothing is waiting, which is every arrival from the class.
+    reply_to: i32 = -1,
+    reply_id: i32 = 0,
 };
 /// One slot per disk this process can hold, which is the most that can ever be
 /// waiting: an arrival beyond MAX_DISKS could not be recorded even if probed.
 var g_pending: [MAX_DISKS]Arrival = [_]Arrival{.{}} ** MAX_DISKS;
+
+/// A change a rescan must make to a partition ALREADY PUBLISHED, and how far it
+/// has got.
+///
+/// Two kinds share one machine because they share one precondition: nothing may
+/// be done to a partition a filesystem is mounted on. A RETIREMENT withdraws the
+/// device; an UPDATE moves the window every forwarded transfer is rebased onto.
+/// Applying either under a live mount is the same mistake -- the first makes
+/// the device unfindable while it is still being written to, the second
+/// redirects those writes into a different part of the disk.
+///
+/// A metadata-only edit is NOT one of these. A changed label or type GUID moves
+/// no storage, so it is announced immediately and never queued.
+///
+/// Three peers are involved, in a fixed order, and the order is the design.
+///
+/// FS-MANAGER goes first, and it is the only one that can refuse. It brokers
+/// every mount in the system and names each one's backing device by canonical
+/// id, so its table is the authority on what is mounted -- the device manager's
+/// `active_service` is never set, so its inventory cannot answer this
+/// (docs/TASKS.md `[BUG][P3]`), and this driver cannot see a mount at all.
+///
+/// The volume manager's CLAIM was tried here first and is NOT sufficient, which
+/// a CI run proved rather than an argument: `[volume-manager] prefix read
+/// failed on block:virtio-blk:40p1` meant no volume record existed for a
+/// partition, `mount` succeeded anyway because mounting needs no volume, and
+/// the claim had nothing to attach to. "No volume" was then read as "nothing
+/// holds it" and a live mount's device was retired. A mount can exist without a
+/// volume; only fs-manager knows about every one.
+///
+/// The DEVICE MANAGER goes second, and the CLASS REGISTRY last, for a retirement
+/// only. Unregistering the class before the inventory would leave a device that
+/// cannot be found but is still listed, and a rule engine matching on an entry
+/// nothing serves.
+///
+/// Every stage is request/reply and none is waited for. A service that blocked
+/// on a peer's answer could not serve the requests that peer may need in order
+/// to produce it, so a change is a state machine the message loop advances: a
+/// reply arrives, the stage moves on, and the rescan that scheduled it is
+/// answered once its last change has settled.
+const Change = struct {
+    /// The slot in `g_parts` being changed. Its record stays live and serving
+    /// until the change completes, because a refusal must leave the partition
+    /// exactly as it was.
+    part: usize = 0,
+    kind: enum { retire, update } = .retire,
+    /// What the partition becomes, for an update. Held rather than applied,
+    /// because applying it is the thing the claim check gates.
+    desc: driver.BlockDescriptor = .{},
+    lba_start: u64 = 0,
+    lba_count: u64 = 0,
+    /// The id of the request currently outstanding, which is what its reply is
+    /// matched on -- together with the sender, since a request id alone is a
+    /// number another process can guess.
+    request_id: i32 = 0,
+    /// The class registration's withdrawal, holding the staged class name until
+    /// the process manager has read it.
+    class: driver.ClassRetire = .{},
+    /// `mountwait` is a change that has not asked yet. Mount checks run ONE at a
+    /// time because the whole listing comes back at offset 0 of one buffer, so
+    /// two in flight would both read whichever answer landed last. A wiped disk
+    /// retires every partition it had, so that is not a rare case.
+    stage: enum { mountwait, mountcheck, unpublish, unregister } = .mountwait,
+    /// The rescan waiting on this, as an index into `g_rescans`, or null when
+    /// the change was not scheduled by one.
+    rescan: ?usize = null,
+    in_use: bool = false,
+};
+/// One per partition, because a disk whose table is wiped retires all of them at
+/// once and a queue shorter than that would leave the remainder published
+/// against a table that no longer describes them.
+var g_changes: [MAX_PARTITIONS]Change = [_]Change{.{}} ** MAX_PARTITIONS;
+
+/// A rescan whose reply is still owed.
+///
+/// A rescan is answered when the table has been read AND every retirement it
+/// scheduled has settled, which is later than the root task's drain: the
+/// retirements are driven by replies that arrive on the message loop long after
+/// the drain returned. The count is what ties the two together.
+const Rescan = struct {
+    reply_to: i32 = -1,
+    reply_id: i32 = 0,
+    disk: usize = 0,
+    /// Retirements this rescan started, valid only once `diffed` is set.
+    scheduled: u32 = 0,
+    /// Retirements that have reached an outcome, refused or not.
+    settled: u32 = 0,
+    /// Retirements a peer refused, reported rather than failing the rescan: the
+    /// rest of the disk was reconciled correctly, and the caller needs to know
+    /// which part did not take.
+    refused: u32 = 0,
+    /// Whether the diff has finished and `scheduled` therefore means anything.
+    ///
+    /// Settled retirements are counted UP to a total fixed afterwards rather
+    /// than a total being counted down, because the total does not exist until
+    /// the diff has walked the whole table: a count of zero means "none yet",
+    /// not "none left", and answering on it would report a rescan complete
+    /// before it had retired anything.
+    diffed: bool = false,
+    in_use: bool = false,
+};
+/// One per disk, which is the most that can be outstanding: a rescan of a disk
+/// already being rescanned is refused rather than queued.
+var g_rescans: [MAX_DISKS]Rescan = [_]Rescan{.{}} ** MAX_DISKS;
 
 /// The root task parks on this and a handler settles it. Returning `yielded`
 /// WITHOUT awaiting is not parking: the coroutine stays runnable, the runner
@@ -206,6 +339,31 @@ var g_probe_bid: i32 = -1;
 /// the borrow below is what makes a publish legible at all rather than an
 /// optimisation. Same shape as the PCI bus's device publish.
 var g_publish_bid: i32 = -1;
+/// Buffer the device manager reads a RETIRING partition's canonical id out of:
+/// one slot per in-flight retirement, lent READ for the life of the process.
+///
+/// Slotted for the same reason the publish buffer is. A retirement is answered
+/// rather than fire-and-forget, but the id is still read when the device
+/// manager reaches the message, and a disk whose table was wiped has one
+/// retirement per partition in flight at once; one slot rewritten by the next
+/// would withdraw whichever id arrived last, repeatedly.
+var g_retire_bid: i32 = -1;
+/// Buffer fs-manager writes its mount listing into when a change asks whether
+/// anything is mounted on the partition. Lent WRITE for the life of the
+/// process.
+///
+/// ONE listing, not one per change, because the whole table comes back at
+/// offset 0 every time -- which is what forces the checks to run one at a time
+/// (see Change.stage).
+var g_mounts_bid: i32 = -1;
+/// The grant id fs-manager holds for that buffer, which the request carries so
+/// it can find its borrow.
+var g_mounts_borrow: i32 = -1;
+/// Bytes of mount listing this can hold. fs-manager's own table is 768 bytes
+/// and it truncates rather than failing, so a reader that asked for less would
+/// silently lose the LAST mounts -- which are the ones most likely to have just
+/// been created.
+const MOUNTS_BYTES: usize = 1024;
 /// Physical address of this process's block buffer, where probe reads land.
 var g_block_phys: u32 = 0;
 
@@ -219,6 +377,8 @@ var g_block_phys: u32 = 0;
 /// own logging runs. Probing is single-threaded and non-reentrant, so one copy
 /// of each is enough.
 var g_sector: [pt.SECTOR_BYTES]u8 = [_]u8{0} ** pt.SECTOR_BYTES;
+/// fs-manager's mount listing, read back one change at a time.
+var g_mounts: [MOUNTS_BYTES]u8 = [_]u8{0} ** MOUNTS_BYTES;
 var g_table: pt.Table = .{};
 var g_scan: pt.GptEntryScan = undefined;
 
@@ -345,22 +505,7 @@ fn publishPartition(part: *Partition, slot: usize, devmgr: i32) void {
         return;
     }
 
-    if (devmgr >= 0 and g_publish_bid >= 0 and slot < MAX_PARTITIONS) {
-        const offset: u32 = @intCast(slot * @sizeOf(driver.BlockDescriptor));
-        const raw: [*]const u8 = @ptrCast(&part.desc);
-        if (driver.bufferWrite(g_publish_bid, raw[0..@sizeOf(driver.BlockDescriptor)], offset)) {
-            _ = driver.send(
-                devmgr,
-                endpoint(),
-                op.DEVMGR_PUBLISH_BLOCK_DEVICE,
-                0,
-                g_publish_bid,
-                @intCast(offset),
-                @intCast(@sizeOf(driver.BlockDescriptor)),
-                0,
-            );
-        }
-    }
+    announcePartition(part, slot, devmgr);
 
     var line = driver.Line{};
     _ = line.str("[partition-manager] partition id=").str(idSlice(&part.desc.canonical_id));
@@ -369,32 +514,79 @@ fn publishPartition(part: *Partition, slot: usize, devmgr: i32) void {
     line.end();
 }
 
+/// Hand the device manager this partition's descriptor.
+///
+/// Separate from the class registration above because a RESCAN needs exactly
+/// this half and not that one: a partition whose extent moved keeps its class
+/// instance -- the id it fingerprints is built from the disk and the slot, and
+/// neither moved -- so re-registering would be a duplicate, while the inventory
+/// still holds the old extent and must be told. The inventory upserts by
+/// canonical id, so a second announcement of the same device replaces the
+/// record rather than adding one.
+fn announcePartition(part: *Partition, slot: usize, devmgr: i32) void {
+    if (devmgr < 0 or g_publish_bid < 0 or slot >= MAX_PARTITIONS) return;
+    const offset: u32 = @intCast(slot * @sizeOf(driver.BlockDescriptor));
+    const raw: [*]const u8 = @ptrCast(&part.desc);
+    if (!driver.bufferWrite(g_publish_bid, raw[0..@sizeOf(driver.BlockDescriptor)], offset)) return;
+    _ = driver.send(
+        devmgr,
+        endpoint(),
+        op.DEVMGR_PUBLISH_BLOCK_DEVICE,
+        0,
+        g_publish_bid,
+        @intCast(offset),
+        @intCast(@sizeOf(driver.BlockDescriptor)),
+        0,
+    );
+}
+
 /// Turn one parsed table entry into a published partition.
-fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, devmgr: i32) void {
-    if (g_part_count >= MAX_PARTITIONS) return;
+fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, devmgr: i32) bool {
     const disk = &g_disks[disk_index];
 
     // A window that leaves the disk describes nothing on it. Refused rather than
     // clamped: a table saying something impossible is a table to distrust, and
     // silently shrinking it would publish a volume nobody wrote.
-    if (entry.lba_start >= disk.sector_count or
-        entry.lba_count == 0 or
-        entry.lba_count > disk.sector_count - entry.lba_start)
-    {
+    if (!rc.fits(windowOf(entry), disk.sector_count)) {
         var line = driver.Line{};
         _ = line.str("[partition-manager] partition outside disk, skipped: ").str(idSlice(&disk.canonical_id));
         _ = line.str(" slot=").dec(entry.slot);
         line.end();
-        return;
+        // Not an incompleteness: a window the disk cannot hold describes no
+        // partition, so there was never one here to publish.
+        return true;
     }
 
-    const slot = g_part_count;
-    var part = &g_parts[slot];
-    part.* = .{};
-    part.disk = disk_index;
-    part.lba_start = entry.lba_start;
-    part.lba_count = entry.lba_count;
+    const desc = describeEntry(disk, entry, scheme) orelse return false;
+    const instance = driver.blockFingerprint(idSlice(&desc.canonical_id));
+    if (instance == 0) return false;
 
+    const slot = claimPartitionSlot() orelse {
+        driver.log("[partition-manager] partition table full; a partition went unpublished");
+        return false;
+    };
+    const part = &g_parts[slot];
+    part.* = .{
+        .instance = instance,
+        .disk = disk_index,
+        .lba_start = entry.lba_start,
+        .lba_count = entry.lba_count,
+        .desc = desc,
+        .in_use = true,
+    };
+    g_part_count += 1;
+    publishPartition(part, slot, devmgr);
+    return true;
+}
+
+/// Build the descriptor one table entry publishes as, or null when it has no
+/// usable canonical id.
+///
+/// Shared by a first publish and a rescan's restatement, so the two cannot
+/// describe the same entry differently -- a rescan that derived one field by a
+/// second route would rewrite the inventory's record on every pass and look
+/// like a table that keeps changing.
+fn describeEntry(disk: *const Disk, entry: pt.Partition, scheme: pt.Scheme) ?driver.BlockDescriptor {
     var desc = driver.BlockDescriptor{};
     desc.backend = disk.backend;
     desc.unit = disk.unit;
@@ -417,69 +609,118 @@ fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, devmg
     desc.part_guid = entry.part_guid;
     desc.mbr_type = entry.mbr_type;
     desc.label = entry.label;
-    if (!buildPartitionId(idSlice(&disk.canonical_id), entry.slot, &desc.canonical_id)) return;
+    if (!buildPartitionId(idSlice(&disk.canonical_id), entry.slot, &desc.canonical_id)) return null;
+    return desc;
+}
 
-    part.desc = desc;
-    part.instance = driver.blockFingerprint(idSlice(&desc.canonical_id));
-    if (part.instance == 0) return;
-    part.in_use = true;
-    g_part_count += 1;
-    publishPartition(part, slot, devmgr);
+/// The first free slot in `g_parts`.
+///
+/// Reused rather than appended, because a rescan retires and publishes: a disk
+/// whose table is edited a few times would exhaust a table that only ever grew,
+/// while holding far fewer live partitions than it has room for.
+fn claimPartitionSlot() ?usize {
+    for (&g_parts, 0..) |*p, i| {
+        if (!p.in_use) return i;
+    }
+    return null;
+}
+
+/// Reduce a parsed table entry to what the rescan diff compares.
+fn windowOf(entry: pt.Partition) rc.Window {
+    return .{ .slot = entry.slot, .lba_start = entry.lba_start, .lba_count = entry.lba_count };
+}
+
+/// Reduce a published partition to what the rescan diff compares. The slot
+/// lives in the descriptor, which is the copy a peer holds, so the diff and
+/// every consumer of the device agree on which table entry it came from.
+fn windowOfPart(part: *const Partition) rc.Window {
+    return .{ .slot = part.desc.partition, .lba_start = part.lba_start, .lba_count = part.lba_count };
 }
 
 // --- probing -----------------------------------------------------------------
 
-/// Read a disk's table and publish what it holds.
+/// What reading a disk's table produced.
+///
+/// `empty` and `unreadable` are the distinction a RESCAN turns on, and keeping
+/// them apart is the difference between an edit and a catastrophe. A disk that
+/// genuinely holds no table should have every partition device retired; a disk
+/// whose sectors could not be read holds whatever it held before, and retiring
+/// against that answer would delete a live filesystem's device because one read
+/// timed out. A first probe may treat them alike -- it has nothing published to
+/// lose -- which is exactly why the two were conflated until a rescan needed
+/// them apart.
+const TableRead = union(enum) {
+    /// A table parsed. `g_table` holds it.
+    table: pt.Scheme,
+    /// The disk was read and carries no partition table.
+    empty,
+    /// The table could not be read or could not be trusted: a failed transfer,
+    /// a GPT header whose entry array did not parse, or a protective MBR with
+    /// no usable GPT behind it.
+    unreadable,
+};
+
+/// Read a disk's partition table into `g_table`.
 ///
 /// GPT first, then MBR, then nothing. GPT is tried first because a GPT disk
 /// carries a protective MBR that an MBR-first probe would read as one partition
 /// spanning the device.
-fn probeDisk(disk_index: usize, devmgr: i32) void {
-    var disk = &g_disks[disk_index];
+fn readTable(disk_index: usize) TableRead {
+    const disk = &g_disks[disk_index];
     g_table = .{};
 
     // GPT: the header lives at LBA 1.
     if (readSectors(disk, 1, 1, g_sector[0..])) {
         if (pt.parseGptHeader(g_sector[0..])) |header| {
-            if (scanGptEntries(disk, header, &g_table)) {
-                disk.scheme = .gpt;
-                publishTable(disk_index, &g_table, devmgr);
-                return;
-            }
+            if (scanGptEntries(disk, header, &g_table)) return .{ .table = .gpt };
             // A header that parsed but whose entries did not is a damaged GPT,
             // not an MBR disk. Falling through to the legacy table would read
             // its protective entry as a real partition covering everything.
             var line = driver.Line{};
             _ = line.str("[partition-manager] gpt entries invalid on ").str(idSlice(&disk.canonical_id));
             line.end();
-            return;
+            return .unreadable;
         }
     }
 
     if (readSectors(disk, 0, 1, g_sector[0..])) {
         switch (pt.parseMbr(g_sector[0..], &g_table)) {
-            .ok => {
-                disk.scheme = .mbr;
-                publishTable(disk_index, &g_table, devmgr);
-                return;
-            },
+            .ok => return .{ .table = .mbr },
             .protective => {
                 // The disk claims GPT but its header did not parse above.
                 var line = driver.Line{};
                 _ = line.str("[partition-manager] protective mbr without a usable gpt on ");
                 _ = line.str(idSlice(&disk.canonical_id));
                 line.end();
-                return;
+                return .unreadable;
             },
-            .absent => {},
+            .absent => return .empty,
         }
     }
 
-    // No table. Publish nothing and leave the disk alone: its own class instance
-    // already serves it, which is what makes partition tables optional.
-    var line = driver.Line{};
-    _ = line.str("[partition-manager] no partition table on ").str(idSlice(&disk.canonical_id));
-    line.end();
+    // Neither sector could be read. Distinct from a disk that answered and
+    // carries nothing, which `.absent` above reports.
+    return .unreadable;
+}
+
+/// Read a disk's table and publish what it holds. The FIRST read of a disk,
+/// which has nothing published to reconcile against.
+fn probeDisk(disk_index: usize, devmgr: i32) void {
+    const disk = &g_disks[disk_index];
+    switch (readTable(disk_index)) {
+        .table => |scheme| {
+            disk.scheme = scheme;
+            publishTable(disk_index, &g_table, devmgr);
+        },
+        // No table. Publish nothing and leave the disk alone: its own class
+        // instance already serves it, which is what makes partition tables
+        // optional.
+        .empty, .unreadable => {
+            var line = driver.Line{};
+            _ = line.str("[partition-manager] no partition table on ").str(idSlice(&disk.canonical_id));
+            line.end();
+        },
+    }
 }
 
 /// Stream the GPT entry array through the parser a sector at a time. The array
@@ -508,8 +749,614 @@ fn scanGptEntries(disk: *const Disk, header: pt.GptHeader, out: *pt.Table) bool 
 fn publishTable(disk_index: usize, table: *const pt.Table, devmgr: i32) void {
     var i: usize = 0;
     while (i < table.count) : (i += 1) {
-        addPartition(disk_index, table.entries[i], table.scheme, devmgr);
+        // A first publish has nobody to report a failure to: the disk arrived
+        // on its own, not on a request. It is logged where it happens.
+        _ = addPartition(disk_index, table.entries[i], table.scheme, devmgr);
     }
+}
+
+// --- rescan ------------------------------------------------------------------
+
+/// Re-read `disk_index`'s table and reconcile the partitions published for it
+/// against what it now says.
+///
+/// Returns how many changes were SCHEDULED or could not be started -- the
+/// rescan is not finished when this returns, because a change is answered by
+/// its peers later -- or null when the table could not be read, in which case
+/// nothing was touched at all.
+///
+/// Refusing to act on an unreadable table is the one decision here that is not
+/// symmetric with a first probe. A probe that cannot read a disk publishes
+/// nothing and has lost nothing; a rescan that treated the same answer as "no
+/// table" would retire every partition of a live disk because one transfer
+/// failed.
+fn rescanDisk(disk_index: usize, rescan: usize) ?void {
+    const disk = &g_disks[disk_index];
+
+    var desired: [pt.MAX_PARTITIONS]rc.Window = [_]rc.Window{.{}} ** pt.MAX_PARTITIONS;
+    var want: usize = 0;
+    switch (readTable(disk_index)) {
+        .unreadable => return null,
+        .empty => disk.scheme = .none,
+        .table => |scheme| {
+            disk.scheme = scheme;
+            while (want < g_table.count) : (want += 1) desired[want] = windowOf(g_table.entries[want]);
+            want = rc.retainFitting(desired[0..want], disk.sector_count);
+        },
+    }
+
+    // The partitions this disk has published, excluding any already being
+    // changed. A change in flight is the PREVIOUS table's answer, and matching
+    // this table against it would rescue a device that is on its way out, or
+    // queue a second move of a window the first has not applied yet.
+    var have: [MAX_PARTITIONS]rc.Window = [_]rc.Window{.{}} ** MAX_PARTITIONS;
+    var have_part: [MAX_PARTITIONS]usize = [_]usize{0} ** MAX_PARTITIONS;
+    var held: usize = 0;
+    for (&g_parts, 0..) |*part, index| {
+        if (!part.in_use or part.disk != disk_index) continue;
+        if (changeOfPart(index) != null) continue;
+        have[held] = windowOfPart(part);
+        have_part[held] = index;
+        held += 1;
+    }
+
+    var i: usize = 0;
+    while (i < want) : (i += 1) {
+        const entry = tableEntry(desired[i].slot) orelse continue;
+        switch (rc.classify(have[0..held], desired[i])) {
+            .keep => |k| refreshMetadata(have_part[k], entry, disk.scheme),
+            .update => |k| scheduleUpdate(have_part[k], entry, disk.scheme, rescan),
+            .publish => if (!addPartition(disk_index, entry, disk.scheme, g_devmgr)) {
+                // Counted, not swallowed. The usual cause is that every slot is
+                // still held by partitions this same rescan is retiring, and
+                // their slots do not free until their peers answer -- so the
+                // addition is lost and the caller would otherwise be told the
+                // table was reconciled.
+                noteIncomplete(rescan);
+            },
+        }
+    }
+
+    var k: usize = 0;
+    while (k < held) : (k += 1) {
+        if (!rc.orphaned(desired[0..want], have[k])) continue;
+        if (!beginChange(have_part[k], .retire, null, rescan)) noteIncomplete(rescan);
+    }
+    return {};
+}
+
+/// The entry in the table just read that occupies `slot`, if any. Slots are
+/// unique within a table, so this is exact.
+fn tableEntry(slot: u32) ?pt.Partition {
+    var i: usize = 0;
+    while (i < g_table.count) : (i += 1) {
+        if (g_table.entries[i].slot == slot) return g_table.entries[i];
+    }
+    return null;
+}
+
+/// A table entry whose extent did not move, but whose metadata may have.
+///
+/// A changed label, type GUID, PARTUUID or MBR type moves no storage, so there
+/// is nothing for a mount to be confused by and nothing to gate: the descriptor
+/// is restated and the volume re-probed. Announced only when it actually
+/// differs, because re-announcing an identical record on every rescan would
+/// make a disk whose table never changes look like one that changes constantly.
+///
+/// The class registration is not touched either way. The canonical id is built
+/// from the disk and the slot, neither of which metadata moves.
+fn refreshMetadata(part_index: usize, entry: pt.Partition, scheme: pt.Scheme) void {
+    const part = &g_parts[part_index];
+    const disk = &g_disks[part.disk];
+    const desc = describeEntry(disk, entry, scheme) orelse return;
+    if (sameDescriptor(&desc, &part.desc)) return;
+    part.desc = desc;
+    announcePartition(part, part_index, g_devmgr);
+    requestVolumeRescan(part.instance);
+
+    var line = driver.Line{};
+    _ = line.str("[partition-manager] partition metadata changed id=");
+    _ = line.str(idSlice(&part.desc.canonical_id));
+    line.end();
+}
+
+/// Byte equality over the published descriptor. Compared as bytes because every
+/// field of it is part of what a consumer reads: a rule can match the label, the
+/// type GUID or the PARTUUID as readily as the extent.
+fn sameDescriptor(a: *const driver.BlockDescriptor, b: *const driver.BlockDescriptor) bool {
+    const pa: [*]const u8 = @ptrCast(a);
+    const pb: [*]const u8 = @ptrCast(b);
+    var i: usize = 0;
+    while (i < @sizeOf(driver.BlockDescriptor)) : (i += 1) {
+        if (pa[i] != pb[i]) return false;
+    }
+    return true;
+}
+
+/// Queue a MOVE of a published partition's window.
+///
+/// Queued rather than applied, which is the whole of the difference from a
+/// metadata change. `handleTransfer` rebases every forwarded request onto
+/// `lba_start` and clamps it to `lba_count`, so rewriting those under a mounted
+/// filesystem sends its next write somewhere else on the disk -- and shrinking
+/// the window invalidates allocations it already believes it owns. Keeping the
+/// class instance does not preserve the storage mapping; nothing does but
+/// leaving the window alone.
+fn scheduleUpdate(part_index: usize, entry: pt.Partition, scheme: pt.Scheme, rescan: usize) void {
+    const part = &g_parts[part_index];
+    const disk = &g_disks[part.disk];
+    const desc = describeEntry(disk, entry, scheme) orelse return;
+    if (!beginChange(part_index, .update, &desc, rescan)) noteIncomplete(rescan);
+}
+
+/// Begin a change, which starts by asking whether anything holds the partition.
+/// Returns whether one is now in flight.
+fn beginChange(
+    part_index: usize,
+    kind: @FieldType(Change, "kind"),
+    desc: ?*const driver.BlockDescriptor,
+    rescan: ?usize,
+) bool {
+    const part = &g_parts[part_index];
+    const id = idSlice(&part.desc.canonical_id);
+    // An id filling the field with no terminator is not one: the device manager
+    // requires a terminator within the bytes it is given, and a length past the
+    // field would read beyond it here.
+    if (id.len == 0 or id.len >= driver.BLOCK_ID_MAX) {
+        driver.log("[partition-manager] cannot change a partition whose id is unterminated");
+        return false;
+    }
+    if (g_retire_bid < 0 or g_mounts_bid < 0) {
+        var line = driver.Line{};
+        _ = line.str("[partition-manager] cannot change ").str(id);
+        _ = line.str("; bring-up did not get the buffers a change needs");
+        line.end();
+        return false;
+    }
+    if (kind == .retire and g_devmgr < 0) {
+        var line = driver.Line{};
+        _ = line.str("[partition-manager] cannot retire ").str(id);
+        _ = line.str("; the device manager is unreachable");
+        line.end();
+        return false;
+    }
+    const slot = claimChange() orelse {
+        driver.log("[partition-manager] change queue full; a partition stayed as it was");
+        return false;
+    };
+    const c = &g_changes[slot];
+    const offset: u32 = @intCast(slot * driver.BLOCK_ID_MAX);
+    // The terminator travels with the id: the device manager requires one
+    // within the bytes it is given, and will not guess at the end of a name.
+    if (!driver.bufferWrite(g_retire_bid, part.desc.canonical_id[0 .. id.len + 1], offset)) {
+        driver.log("[partition-manager] id staging failed; a partition stayed as it was");
+        return false;
+    }
+    c.* = .{
+        .part = part_index,
+        .kind = kind,
+        .desc = if (desc) |d| d.* else .{},
+        .lba_start = if (desc) |d| d.lba_start else 0,
+        .lba_count = if (desc) |d| d.lba_count else 0,
+        .stage = .mountwait,
+        .rescan = rescan,
+        .in_use = true,
+    };
+    // Counted here rather than by the caller, so a change cannot be in flight
+    // without the rescan knowing to wait for it. `diffed` is what keeps the
+    // rescan from being answered before the whole table has been walked, so a
+    // change that settles immediately below is still accounted correctly.
+    if (rescan) |index| {
+        if (g_rescans[index].in_use) g_rescans[index].scheduled += 1;
+    }
+    pumpChanges();
+    return true;
+}
+
+/// Start the next queued mount check, resolving fs-manager first if it is not
+/// known yet.
+///
+/// Serialized rather than fanned out because the listing comes back at a fixed
+/// offset of one buffer; see Change.stage. Called whenever a change is queued
+/// and whenever one leaves the mount stage, so the queue drains without
+/// anything polling it.
+fn pumpChanges() void {
+    if (g_fsmgr < 0) {
+        requestService(.fsmgr);
+        return;
+    }
+    for (&g_changes) |*c| {
+        if (c.in_use and c.stage == .mountcheck) return;
+    }
+    for (&g_changes, 0..) |*c, slot| {
+        if (!c.in_use or c.stage != .mountwait) continue;
+        c.stage = .mountcheck;
+        c.request_id = nextRequestId();
+        // The CLIENT owns the listing buffer and fs-manager is a transient
+        // grantee, so the request carries both the buffer and the grant it
+        // holds (architecture/12-dma-transfers.md).
+        if (driver.send(
+            g_fsmgr,
+            endpoint(),
+            op.FSMGR_IPC_QUERY_MOUNTS_REQ,
+            c.request_id,
+            0,
+            0,
+            g_mounts_bid,
+            g_mounts_borrow,
+        ) != 0) {
+            // The question could not be asked, so it is not answered. Treated
+            // as mounted, like every other way of not knowing.
+            finishChange(slot, true);
+        }
+        return;
+    }
+}
+
+/// Ask the process manager where a service is, without blocking.
+///
+/// Asynchronous, and that is a requirement rather than a preference. The
+/// blocking helper is for BRING-UP only (`driver.call`): a running driver that
+/// blocks on the process manager cannot dispatch partition I/O meanwhile, and
+/// the process manager reads the executables it spawns through a filesystem
+/// that may be mounted on a partition this driver serves -- so each can end up
+/// waiting on the other.
+///
+/// Not resolved at bring-up instead, because this driver is an initfs payload
+/// spawned ahead of both services: there is nothing to find yet, and a failure
+/// then would stand for the life of the process.
+fn requestService(kind: LookupKind) void {
+    if (g_lookup_kind != .none) return;
+    const name = switch (kind) {
+        .fsmgr => "fs.vfs",
+        .volmgr => "volume",
+        .none => return,
+    };
+    const args = driver.packName16(name);
+    const id = nextRequestId();
+    if (driver.send(
+        g_proc_endpoint,
+        endpoint(),
+        op.SVC_IPC_LOOKUP_REQ,
+        id,
+        args[0],
+        args[1],
+        args[2],
+        args[3],
+    ) != 0) {
+        if (kind == .fsmgr) failQueuedChanges();
+        return;
+    }
+    g_lookup_kind = kind;
+    g_lookup_id = id;
+}
+
+/// The process manager has answered a service lookup.
+///
+/// A lookup that finds nothing fails every queued change rather than latching:
+/// the next rescan asks again, because a service that was not running a minute
+/// ago may be running now.
+fn handleServiceLookup(msg: *const co.IpcMessage) void {
+    if (g_lookup_kind == .none or msg.request_id != g_lookup_id) return;
+    if (msg.source != g_proc_endpoint) return;
+    const kind = g_lookup_kind;
+    g_lookup_kind = .none;
+    g_lookup_id = 0;
+
+    const raw: u32 = @bitCast(msg.arg0);
+    const found = msg.type == op.SVC_IPC_LOOKUP_RESP and raw != 0xFFFFFFFF and msg.arg0 > 0;
+    if (kind == .volmgr) {
+        // Advisory: a re-probe that cannot be asked for is a stale volume
+        // record, not an unsafe change, so nothing is failed over it.
+        if (found) g_volmgr = msg.arg0;
+        return;
+    }
+    if (!found) {
+        driver.log("[partition-manager] no fs-manager; nothing can say what is mounted");
+        failQueuedChanges();
+        return;
+    }
+    // The grant is per PROCESS, so it is made once with the resolution rather
+    // than per request, where a second attempt would be refused as
+    // ALREADY_BORROWED.
+    const borrow = driver.bufferBorrow(msg.arg0, g_mounts_bid, driver.BUFFER_GRANT_WRITE) orelse {
+        driver.log("[partition-manager] mounts buffer grant failed; no partition can be changed");
+        failQueuedChanges();
+        return;
+    };
+    g_mounts_borrow = borrow;
+    g_fsmgr = msg.arg0;
+    pumpChanges();
+}
+
+/// Refuse every change that has not started, which is what a rescan reports
+/// when nothing can tell it whether a partition is mounted.
+fn failQueuedChanges() void {
+    for (&g_changes, 0..) |*c, slot| {
+        if (c.in_use and c.stage == .mountwait) finishChange(slot, true);
+    }
+}
+
+/// Ask the volume manager to re-probe the device behind a partition whose
+/// descriptor changed.
+///
+/// Without it the volume layer keeps the geometry, filesystem type, label and
+/// UUID it read at first publish. Nothing else prompts a re-probe: a device is
+/// probed when it ARRIVES under the `block` class, and a partition that changed
+/// keeps its registration precisely so that no arrival is generated.
+/// Fire-and-forget -- the rescan does not wait on it, because a stale volume
+/// record is a worse answer than a late one but not a reason to withhold the
+/// reply to the change that caused it.
+fn requestVolumeRescan(block_instance: u32) void {
+    if (g_volmgr < 0) {
+        // Resolved for next time. Nothing waits on it: a stale volume record is
+        // a wrong answer to a later question, not a hazard to this change.
+        requestService(.volmgr);
+        return;
+    }
+    _ = driver.send(
+        g_volmgr,
+        endpoint(),
+        op.VOLUME_IPC_RESCAN_REQ,
+        nextRequestId(),
+        @bitCast(block_instance),
+        0,
+        0,
+        0,
+    );
+}
+
+/// fs-manager has answered a mount check.
+///
+/// `listed` is false for an error reply, which is not an answer: a table that
+/// could not be produced says nothing about what is mounted, and is treated
+/// exactly like "yes, it is mounted". There is no error here that means "no",
+/// which is the whole difference from the volume claim this replaced -- that
+/// one had NO_SUCH_UNIT, and reading it as permission is what retired a live
+/// mount whose volume the volume manager had failed to probe.
+fn handleMountsReply(msg: *const co.IpcMessage, listed: bool) void {
+    const slot = changeByRequest(msg.request_id) orelse return;
+    const c = &g_changes[slot];
+    if (c.stage != .mountcheck) return;
+    // A request id is a number another process can guess. The reply has to come
+    // from the peer the question was put to, or a forged one could walk a
+    // partition straight past the only check that protects a live mount.
+    if (msg.source != g_fsmgr) return;
+    const part = &g_parts[c.part];
+
+    if (!listed) {
+        refuseChange(slot, "the mount table could not be read");
+        return;
+    }
+    const size: usize = if (msg.arg0 > 0) @intCast(msg.arg0) else 0;
+    if (size == 0 or size > g_mounts.len) {
+        refuseChange(slot, "the mount table came back unusable");
+        return;
+    }
+    if (!driver.bufferReadBytes(g_mounts_bid, g_mounts[0..size], 0)) {
+        refuseChange(slot, "the mount table could not be read back");
+        return;
+    }
+    if (mnt.mountedOn(g_mounts[0..size], idSlice(&part.desc.canonical_id))) {
+        refuseChange(slot, "a filesystem is mounted on it");
+        return;
+    }
+
+    if (c.kind == .update) {
+        // Nothing is mounted on it, so the window may move. Applied here rather
+        // than at the diff, which is the entire point of the queue.
+        part.lba_start = c.lba_start;
+        part.lba_count = c.lba_count;
+        part.desc = c.desc;
+        announcePartition(part, c.part, g_devmgr);
+        requestVolumeRescan(part.instance);
+
+        var line = driver.Line{};
+        _ = line.str("[partition-manager] partition moved id=").str(idSlice(&part.desc.canonical_id));
+        _ = line.str(" lba=").dec(part.lba_start).str(" count=").dec(part.lba_count);
+        line.end();
+        finishChange(slot, false);
+        return;
+    }
+
+    c.stage = .unpublish;
+    c.request_id = nextRequestId();
+    const id = idSlice(&part.desc.canonical_id);
+    const offset: u32 = @intCast(slot * driver.BLOCK_ID_MAX);
+    if (driver.send(
+        g_devmgr,
+        endpoint(),
+        op.DEVMGR_UNPUBLISH_BLOCK_DEVICE,
+        c.request_id,
+        g_retire_bid,
+        @intCast(offset),
+        @intCast(id.len + 1),
+        0,
+    ) != 0) {
+        finishChange(slot, true);
+        return;
+    }
+    pumpChanges();
+}
+
+/// End a change as refused, saying why. The partition is left exactly as it
+/// was, which for an update means it keeps describing the window it did.
+fn refuseChange(slot: usize, reason: []const u8) void {
+    const c = &g_changes[slot];
+    var line = driver.Line{};
+    _ = line.str("[partition-manager] ");
+    _ = line.str(if (c.kind == .retire) "retire" else "update");
+    _ = line.str(" refused for ").str(idSlice(&g_parts[c.part].desc.canonical_id));
+    _ = line.str("; ").str(reason);
+    line.end();
+    finishChange(slot, true);
+}
+
+fn claimChange() ?usize {
+    for (&g_changes, 0..) |*c, i| {
+        if (!c.in_use) return i;
+    }
+    return null;
+}
+
+/// The change acting on `part_index`, if one is in flight.
+fn changeOfPart(part_index: usize) ?usize {
+    for (&g_changes, 0..) |*c, i| {
+        if (c.in_use and c.part == part_index) return i;
+    }
+    return null;
+}
+
+fn changeByRequest(request_id: i32) ?usize {
+    for (&g_changes, 0..) |*c, i| {
+        if (c.in_use and c.request_id == request_id) return i;
+    }
+    return null;
+}
+
+/// The device manager has answered a withdrawal.
+///
+/// NO_SUCH_RECORD is not a refusal. It is what an inventory says about a device
+/// it already dropped, which is exactly the state a retirement left behind when
+/// its class unregister failed after this stage succeeded. Starting over then
+/// would stop here forever and never finish removing the class registration, so
+/// the record being absent is read as this stage already done.
+fn handleUnpublishReply(msg: *const co.IpcMessage) void {
+    const slot = changeByRequest(msg.request_id) orelse return;
+    const c = &g_changes[slot];
+    if (c.stage != .unpublish) return;
+    if (msg.source != g_devmgr) return;
+    const part = &g_parts[c.part];
+
+    if (msg.arg0 != 0 and msg.arg0 != status.WASMOS_ERR_DEVMGR_NO_SUCH_RECORD) {
+        var line = driver.Line{};
+        _ = line.str("[partition-manager] retire refused for ").str(idSlice(&part.desc.canonical_id));
+        _ = line.str(" code=").dec(@as(u32, @bitCast(msg.arg0)));
+        line.end();
+        finishChange(slot, true);
+        return;
+    }
+
+    c.stage = .unregister;
+    c.request_id = nextRequestId();
+    if (!c.class.start(g_proc_endpoint, endpoint(), "block", part.instance, c.request_id)) {
+        // Out of the inventory but still in the class. Reported as a refusal
+        // because the retirement did not complete, and logged because the two
+        // views of this device now disagree -- a retry resumes from here,
+        // because the inventory answering NO_SUCH_RECORD above is read as this
+        // stage already done.
+        var line = driver.Line{};
+        _ = line.str("[partition-manager] class retire could not be sent for ");
+        _ = line.str(idSlice(&part.desc.canonical_id));
+        line.end();
+        finishChange(slot, true);
+    }
+}
+
+/// The process manager has answered a class withdrawal. `ok` is false when it
+/// refused, which leaves the device out of the inventory but still registered.
+fn finishClassRetire(slot: usize, ok: bool) void {
+    const c = &g_changes[slot];
+    if (c.stage != .unregister) return;
+    if (!ok) {
+        var line = driver.Line{};
+        _ = line.str("[partition-manager] class retire refused for ");
+        _ = line.str(idSlice(&g_parts[c.part].desc.canonical_id));
+        line.end();
+        finishChange(slot, true);
+        return;
+    }
+    var line = driver.Line{};
+    _ = line.str("[partition-manager] partition retired id=");
+    _ = line.str(idSlice(&g_parts[c.part].desc.canonical_id));
+    line.end();
+    g_parts[c.part] = .{};
+    if (g_part_count > 0) g_part_count -= 1;
+    finishChange(slot, false);
+}
+
+/// Release a change's slot and account for it against the rescan that scheduled
+/// it, answering that rescan when it was the last one outstanding.
+fn finishChange(slot: usize, refused: bool) void {
+    const c = &g_changes[slot];
+    const rescan = c.rescan;
+    const was_checking = c.stage == .mountcheck;
+    c.class.release();
+    c.* = .{};
+    // A change that ended while holding the mount stage leaves it free, and the
+    // queue behind it would otherwise never move.
+    if (was_checking) pumpChanges();
+    const index = rescan orelse return;
+    const pending = &g_rescans[index];
+    if (!pending.in_use) return;
+    if (refused) pending.refused += 1;
+    pending.settled += 1;
+    if (pending.diffed and pending.settled >= pending.scheduled) completeRescan(index);
+}
+
+/// Record that one partition of a rescan could not be reconciled at all -- a
+/// change that would not start, or an addition with no slot for it.
+///
+/// Counted as scheduled AND settled, so it reaches the caller's count without
+/// the rescan waiting on a reply that will never come.
+fn noteIncomplete(index: usize) void {
+    const pending = &g_rescans[index];
+    if (!pending.in_use) return;
+    pending.scheduled += 1;
+    pending.settled += 1;
+    pending.refused += 1;
+}
+
+fn claimRescan() ?usize {
+    for (&g_rescans, 0..) |*s, i| {
+        if (!s.in_use) return i;
+    }
+    return null;
+}
+
+/// Whether a rescan of `disk_index` is already running. A second one would
+/// diff against a table the first is still reconciling.
+fn rescanInFlight(disk_index: usize) bool {
+    for (&g_rescans) |*s| {
+        if (s.in_use and s.disk == disk_index) return true;
+    }
+    return false;
+}
+
+fn partitionsOn(disk_index: usize) u32 {
+    var n: u32 = 0;
+    for (&g_parts) |*p| {
+        if (p.in_use and p.disk == disk_index) n += 1;
+    }
+    return n;
+}
+
+/// Answer a rescan and release its slot.
+fn completeRescan(index: usize) void {
+    const pending = &g_rescans[index];
+    const count = partitionsOn(pending.disk);
+    if (pending.reply_to >= 0) {
+        _ = driver.send(
+            pending.reply_to,
+            endpoint(),
+            op.PARTITION_IPC_RESP,
+            pending.reply_id,
+            0,
+            @intCast(count),
+            @intCast(pending.refused),
+            0,
+        );
+    }
+    var line = driver.Line{};
+    _ = line.str("[partition-manager] rescanned ").str(idSlice(&g_disks[pending.disk].canonical_id));
+    _ = line.str(" partitions=").dec(count);
+    if (pending.refused > 0) _ = line.str(" unreconciled=").dec(pending.refused);
+    line.end();
+    pending.* = .{};
+}
+
+fn rescanError(dest: i32, request_id: i32, code: i32) void {
+    _ = driver.send(dest, endpoint(), op.PARTITION_IPC_ERROR, request_id, code, 0, 0, 0);
 }
 
 // --- async service contract --------------------------------------------------
@@ -756,6 +1603,28 @@ fn handleClassEvent(msg: *const co.IpcMessage) void {
     noteArrival(@bitCast(msg.arg1), msg.arg2);
 }
 
+/// Queue a re-read of one disk's table (PARTITION_IPC_RESCAN_REQ). arg0 is the
+/// DISK's `block` class instance.
+///
+/// Queued rather than served here, and answered later still. Reading a table is
+/// synchronous and belongs on the root task, and the retirements it schedules
+/// are answered by their own peers after that -- so the result does not exist
+/// at any point this handler could return it.
+fn handleRescan(msg: *const co.IpcMessage) void {
+    queueArrival(@bitCast(msg.arg0), -1, true, msg.source, msg.request_id);
+}
+
+/// A reply the process manager owes a class withdrawal. SVC_IPC_ERROR carries
+/// the opcode in arg0 and a packed code in arg1, and both forms carry the
+/// request id, which is what ties either to its retirement.
+fn handleClassRetireReply(msg: *const co.IpcMessage, ok: bool) void {
+    const slot = changeByRequest(msg.request_id) orelse return;
+    // Only the process manager owns a class registration, so only its answer
+    // may end a withdrawal; a request id on its own is a number to guess.
+    if (msg.source != g_proc_endpoint) return;
+    finishClassRetire(slot, ok);
+}
+
 fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
     _ = user;
     switch (msg.type) {
@@ -763,6 +1632,19 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
         op.BLOCK_IPC_READ_REQ, op.BLOCK_IPC_WRITE_REQ => handleTransfer(msg),
         op.BLOCK_IPC_READ_RESP, op.BLOCK_IPC_WRITE_RESP, op.BLOCK_IPC_ERROR => handleDownstreamReply(msg),
         op.SVC_IPC_CLASS_EVENT => handleClassEvent(msg),
+        op.PARTITION_IPC_RESCAN_REQ => handleRescan(msg),
+        op.FSMGR_IPC_QUERY_MOUNTS_RESP => handleMountsReply(msg, true),
+        op.FS_IPC_ERROR => handleMountsReply(msg, false),
+        op.SVC_IPC_LOOKUP_RESP => handleServiceLookup(msg),
+        op.DEVMGR_UNPUBLISH_RESP => handleUnpublishReply(msg),
+        op.SVC_IPC_UNREGISTER_CLASS_RESP => handleClassRetireReply(msg, true),
+        // SVC_IPC_ERROR answers whichever request manager-side request carried
+        // this id: a class withdrawal, or the lookup that finds the volume
+        // manager. arg0 carries the opcode it refused.
+        op.SVC_IPC_ERROR => if (msg.arg0 == op.SVC_IPC_LOOKUP_REQ)
+            handleServiceLookup(msg)
+        else
+            handleClassRetireReply(msg, false),
         else => {},
     }
 }
@@ -806,6 +1688,16 @@ fn resolveDevmgr() void {
         driver.bufferBorrow(ep, g_publish_bid, driver.BUFFER_GRANT_READ) == null)
     {
         driver.log("[partition-manager] publish buffer grant failed; partitions unpublished to devmgr");
+        return;
+    }
+    // The same for the retire buffer, which carries the canonical id of a
+    // partition being withdrawn. Lent here rather than at the first retirement,
+    // because a grant is per process and a second attempt is refused as
+    // ALREADY_BORROWED.
+    if (g_retire_bid < 0 or
+        driver.bufferBorrow(ep, g_retire_bid, driver.BUFFER_GRANT_READ) == null)
+    {
+        driver.log("[partition-manager] retire buffer grant failed; partitions cannot be retired");
         return;
     }
     g_devmgr = ep;
@@ -864,22 +1756,55 @@ fn diskId(instance: u32) []const u8 {
 }
 
 /// Record a `block` provider to be probed, and wake the root task to do it.
+fn noteArrival(instance: u32, provider_endpoint: i32) void {
+    queueArrival(instance, provider_endpoint, false, -1, 0);
+}
+
+/// Queue work on a disk and wake the root task.
 ///
-/// Two providers are dropped here rather than probed. Our OWN endpoint, because
+/// `force` re-reads the table of a disk already known, which only a RESCAN
+/// does; `reply_to` is answered once that has settled, and is negative for an
+/// arrival from the class because nothing is waiting on one.
+///
+/// Two providers are dropped rather than probed. Our OWN endpoint, because
 /// every partition we publish registers under the same class and comes back to
 /// us as an arrival: probing one would send IDENTIFY to ourselves and then block
 /// on a reply only our own message loop could produce, which wedges the process.
 /// And an instance already in the disk table, which is what makes the overlap
-/// between the subscription and the opening enumeration harmless.
-fn noteArrival(instance: u32, provider_endpoint: i32) void {
-    if (provider_endpoint == endpoint()) return;
-    if (diskKnown(instance)) return;
+/// between the subscription and the opening enumeration harmless -- but only
+/// for an arrival, since re-reading a known disk is the whole of a rescan.
+fn queueArrival(instance: u32, provider_endpoint: i32, force: bool, reply_to: i32, reply_id: i32) void {
+    if (provider_endpoint >= 0 and provider_endpoint == endpoint()) {
+        if (reply_to >= 0) rescanError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_BAD_REQUEST);
+        return;
+    }
+    if (!force and diskKnown(instance)) return;
     for (&g_pending) |*a| {
-        if (a.in_use and a.instance == instance) return;
+        // An arrival already queued for this disk covers a rescan of it too, but
+        // only once it has been upgraded to one: a queued rescan must not be
+        // downgraded by a plain arrival landing behind it, and a plain arrival
+        // must not answer a request nobody made.
+        if (a.in_use and a.instance == instance) {
+            if (reply_to >= 0 and a.reply_to < 0) {
+                a.force = true;
+                a.reply_to = reply_to;
+                a.reply_id = reply_id;
+                return;
+            }
+            if (reply_to >= 0) break;
+            return;
+        }
     }
     for (&g_pending) |*a| {
         if (a.in_use) continue;
-        a.* = .{ .instance = instance, .endpoint = provider_endpoint, .in_use = true };
+        a.* = .{
+            .instance = instance,
+            .endpoint = provider_endpoint,
+            .in_use = true,
+            .force = force,
+            .reply_to = reply_to,
+            .reply_id = reply_id,
+        };
         if (g_root_parked) {
             g_root_parked = false;
             _ = g_wake_promise.resolve(0);
@@ -887,6 +1812,15 @@ fn noteArrival(instance: u32, provider_endpoint: i32) void {
         return;
     }
     driver.log("[partition-manager] arrival queue full; a block provider went unprobed");
+    if (reply_to >= 0) rescanError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_QUEUE_FULL);
+}
+
+/// The disk table index holding `instance`, if it is a disk we probed.
+fn diskIndex(instance: u32) ?usize {
+    for (g_disks[0..g_disk_count], 0..) |*d, i| {
+        if (d.in_use and d.instance == instance) return i;
+    }
+    return null;
 }
 
 /// Probe every queued arrival. Runs on the root task, which is this process's
@@ -905,7 +1839,17 @@ fn drainArrivals() void {
         if (!a.in_use) continue;
         const instance = a.instance;
         const provider_endpoint = a.endpoint;
+        const force = a.force;
+        const reply_to = a.reply_to;
+        const reply_id = a.reply_id;
+        // Cleared BEFORE the work: the drain walks the queue while the work it
+        // does can add to it, and a slot still holding the entry being served
+        // would be read as a second request for the same disk.
         a.* = .{};
+        if (force) {
+            runRescan(instance, reply_to, reply_id);
+            continue;
+        }
         if (diskKnown(instance)) continue;
         if (!probeProvider(instance, provider_endpoint)) continue;
         var line = driver.Line{};
@@ -913,6 +1857,46 @@ fn drainArrivals() void {
         _ = line.str(" disks=").dec(g_disk_count).str(" partitions=").dec(g_part_count);
         line.end();
     }
+}
+
+/// Reconcile one disk against its table on the root task, and either answer the
+/// caller now or leave the answer to the retirements still in flight.
+fn runRescan(instance: u32, reply_to: i32, reply_id: i32) void {
+    const disk_index = diskIndex(instance) orelse {
+        // A disk this driver never took on. Not an error worth guessing about:
+        // a caller that just wrote a table to a device we do not serve has
+        // nothing here to reconcile.
+        if (reply_to >= 0) rescanError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_NO_SUCH_UNIT);
+        return;
+    };
+    if (rescanInFlight(disk_index)) {
+        if (reply_to >= 0) rescanError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_QUEUE_FULL);
+        return;
+    }
+    const slot = claimRescan() orelse {
+        if (reply_to >= 0) rescanError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_QUEUE_FULL);
+        return;
+    };
+    // Claimed before the diff, because every retirement the diff schedules is
+    // stamped with this index and answers back through it.
+    g_rescans[slot] = .{
+        .reply_to = reply_to,
+        .reply_id = reply_id,
+        .disk = disk_index,
+        .in_use = true,
+    };
+    rescanDisk(disk_index, slot) orelse {
+        // The table could not be read, so nothing was reconciled and nothing
+        // retired. Reported rather than treated as an empty table, which would
+        // retire every partition of a disk that is merely unreachable.
+        g_rescans[slot] = .{};
+        if (reply_to >= 0) rescanError(reply_to, reply_id, status.WASMOS_ERR_BLOCK_DEV_READ_FAILED);
+        return;
+    };
+    const pending = &g_rescans[slot];
+    if (!pending.in_use) return;
+    pending.diffed = true;
+    if (pending.settled >= pending.scheduled) completeRescan(slot);
 }
 
 /// Subscribe to the `block` class, then probe every disk already registered.
@@ -985,6 +1969,29 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
         driver.log("[partition-manager] publish buffer unavailable");
         return;
     };
+    g_retire_bid = driver.bufferAcquire(MAX_PARTITIONS * driver.BLOCK_ID_MAX) orelse {
+        driver.log("[partition-manager] retire buffer unavailable");
+        return;
+    };
+    g_mounts_bid = driver.bufferAcquire(MOUNTS_BYTES) orelse {
+        driver.log("[partition-manager] mounts buffer unavailable");
+        return;
+    };
+
+    // Bind the service NAME before anything is published.
+    //
+    // Every partition registers under this same name as a side effect of
+    // claiming its class instance, so the name exists as soon as one partition
+    // does -- and on a disk with no table, never. That is precisely the disk a
+    // rescan is wanted for: `fdisk` writing a FIRST table onto an unpartitioned
+    // device has nothing to tell afterwards, because the manager it must reach
+    // is unreachable by name. Registering here makes the name a property of the
+    // service rather than of its output. Re-registration by the owner re-points
+    // an entry rather than being refused, so the per-partition registrations
+    // below are unaffected.
+    if (driver.registerService(g_proc_endpoint, endpoint(), "partition", "", 0, nextRequestId()) == null) {
+        driver.log("[partition-manager] service name registration failed; rescans cannot be requested");
+    }
 
     discoverDisks();
 

@@ -206,13 +206,22 @@ need it and neither has it today:
 `claimed` on the volume, set when a filesystem service mounts it, is the flag
 both consult.
 
-**Implemented,** for `fs_wfs` and `fsck.wfs`. The driver sends
-`VOLUME_IPC_CLAIM_REQ` the moment the mount completes — not once it is ready,
-because the mount itself replays a journal and that window is exactly when a
+**Implemented** for every filesystem driver that mounts a volume, and read by
+`fsck.wfs` and `mkfs.wfs`. A driver
+sends `VOLUME_IPC_CLAIM_REQ` the moment the mount completes — not once it is
+ready, because a WFS mount replays a journal and that window is exactly when a
 check would see a race — and releases at the start of shutdown, before the clean
 mark is written, since a claim that outlives its holder makes the volume
 permanently unrecheckable. The claim is fire-and-forget: blocking a mount on an
 advisory record would let it stall a boot.
+
+`fs_fat` did not claim for a long time, and the omission was invisible because
+the only consumer was `fsck.wfs`, which never looks at a FAT volume. It stopped
+being invisible when a third consumer arrived: the partition manager asks
+whether a claim is held before retiring a partition, and with FAT silent it
+retired a partition out from under a live mount. The lesson is in the shape
+rather than the fix — an advisory record is only as good as its least diligent
+writer, and nothing fails loudly when one of them says nothing.
 
 Both sides DERIVE the volume's class instance rather than exchanging it. A
 volume's canonical id is `volume:` prefixed to its backing device's, so a driver
@@ -227,9 +236,26 @@ because it could not find an owner is exactly as dangerous as one that ignored
 the owner it found. `--force` overrides any of them and says so in its output,
 since findings taken past a live claim may be races rather than damage.
 
-There is no `mkfs.wfs` in the guest — `mkfs_wfs` is a host tool that writes an
-image file — so the sharper half of the requirement has no call site yet. A guest
-formatter must consult the same flag when one exists.
+`mkfs.wfs` is a guest utility now and consults the same flag before its first
+write, which is the sharper half of the requirement: a check reporting damage is
+recoverable, a format is not.
+
+The partition manager was briefly a third consumer, asking a different question
+— not "may I write to this device" but "may I take this device away" — and the
+claim turned out not to be able to answer it. The two questions differ in what a
+missing volume means. For `fsck` and `mkfs` the device is the one the user
+named, and a device with no volume is simply one with nothing on it worth
+protecting. For a retirement the device may be mounted ANYWAY: mounting needs no
+volume, so a partition whose probe failed carries no record, reads as unheld,
+and gets withdrawn under a live filesystem. That happened, in CI, and is why the
+partition manager asks fs-manager instead
+(`architecture/36-partition-manager-and-block-identity.md`).
+
+The general shape is worth keeping in view. A claim is written by the party that
+takes it and read by parties that have no other way to know, so it answers
+"did someone announce they are using this" — never "is this in use". The two
+coincide only while every user announces, and a volume that does not exist
+cannot be announced about.
 
 It RECORDS a claim; it does not enforce one. The volume manager is not in the
 I/O path — unlike the partition manager, which proxies every transfer and can

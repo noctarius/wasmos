@@ -1125,19 +1125,34 @@ tail.
   The first is the larger win, because it removes round trips rather than making
   each one faster.
 
-- [ ] [FEATURE][P2] A guest-side wrapper for `SVC_IPC_UNREGISTER_CLASS_REQ`. The
-  kernel primitive and the opcode exist (`service_class_registry_remove`,
-  `pm_handle_class_unregister`), but nothing in a guest can send it: the obvious
-  wrappers are synchronous request/reply, and the caller this is FOR -- the
-  partition manager retiring a partition whose table was rewritten -- is an async
-  service that would stop dispatching while it waited. AGENTS.md bans adding
-  those, so the wrapper comes with the caller, built on an IPC future with the
-  staged class-name buffer held alive until the reply lands.
+- [x] [FEATURE][P2] A guest-side wrapper for `SVC_IPC_UNREGISTER_CLASS_REQ`.
+  `driver.ClassRetire` (`src/libc/zig/driver.zig`): `start` sends and returns,
+  `release` ends the exchange. Asynchronous, unlike every other wrapper in that
+  file, because its caller is an async service whose own message loop is the
+  only thing that can produce the replies its peers owe it. The reply lands at
+  the caller's service endpoint as an ordinary message for its dispatcher to
+  match on `request_id`, and the staged class name is held until then -- the
+  process manager reads the buffer when it reaches the message, not when the
+  message is sent.
 
-- [ ] [ENHANCEMENT][P2] A rescan can change what a volume IS but not make one go
-  away. (Half-closed: the device manager now retires an inventory record --
-  `DEVMGR_UNPUBLISH_BLOCK_DEVICE` / `DEVMGR_UNPUBLISH_VOLUME`, refused while a
-  filesystem is mounted on it. What is still missing is the CALLER and the class
+- [x] [ENHANCEMENT][P2] A rescan can change what a volume IS but not make one go
+  away. Closed by the partition-manager rescan
+  (`PARTITION_IPC_RESCAN_REQ`, `partprobe`): a retirement withdraws the device
+  from the inventory AND unregisters it from the `block` class, in that order,
+  and the class half now has a guest path. The volume manager's own rescan
+  still only updates a volume in place -- a whole-disk volume that should cease
+  to exist because the disk gained a table is the remaining case, and it is the
+  `[ENHANCEMENT][P4]` claim-overlap entry below that describes why it is
+  currently prevented by suppression rather than by retirement. (Original note:
+  the device manager now retires an inventory record --
+  `DEVMGR_UNPUBLISH_BLOCK_DEVICE` / `DEVMGR_UNPUBLISH_VOLUME`. That note said
+  "refused while a filesystem is mounted on it" and was already stale when it
+  was written: the refusal was `DEVMGR_RECORD_BUSY` over
+  `block_device_record_t.active_service`, which nothing sets, so it was
+  unreachable and was removed rather than left as a check that always passes.
+  The refusal lives with the CALLER instead -- the partition manager asks the
+  volume manager whether a claim is held, which is the only live record of what
+  is mounted. What was still missing is the CALLER and the class
   side: a retirement has to unregister the `block`/`volume` class entry too, and
   the guest wrapper for `SVC_IPC_UNREGISTER_CLASS_REQ` has to be built on an IPC
   future first -- the volume and partition managers are async services and must
@@ -1152,7 +1167,10 @@ tail.
   `wasmos_xfer_buffer_read` and `wasmos_ipc_send` are inert and testing through
   them tests the stubs; the decode itself was split out (`devmgr_copy_record_id`)
   so the part with logic in it is reachable. There is no integration test either,
-  since nothing sends the opcode. That closes with the caller.)
+  since nothing sends the opcode. That closes with the caller.) The caller
+  landed with the rescan: `tests/test_partition_rescan.py` drives
+  `DEVMGR_UNPUBLISH_BLOCK_DEVICE` end to end, including the refusal while a
+  filesystem is mounted, so the buffer read and the reply send are covered now.
 
 - [ ] [BUG][P3] `block_device_record_t.active_service` and the volume record's
   are never set. Nothing assigns either a non-zero value -- `rule_spawn_complete`
@@ -1174,8 +1192,98 @@ tail.
 
   This is the prerequisite for `fdisk`: writing a table over a disk that already
   had one must republish the partitions that changed and retire the ones that
-  went. Needs, in order: a class unregister, a devmgr unpublish, and then a
-  partition-manager rescan built on both.
+  went. All three parts have landed -- the class unregister, the devmgr
+  unpublish, and the partition-manager rescan built on both -- so `fdisk` has
+  only to write a table and send `PARTITION_IPC_RESCAN_REQ`, which is what
+  `partprobe` does on its own.
+
+- [ ] [BUG][P2] A rescan's mount check is a snapshot, not a reservation. The
+  partition manager asks fs-manager what is mounted and then proceeds to change
+  the partition, and a mount landing between the two is accepted: fs-manager has
+  no notion of a change in progress, so the partition can be retired or moved
+  under a filesystem that mounted a moment after the check passed. Closing it
+  needs a reservation fs-manager honours -- a mount refused, or deferred, while
+  a retirement holds the device -- plus a release when the change completes or
+  is abandoned. Narrow in practice today, because nothing mounts a partition
+  except a devmgr rule or an explicit `mount`, and a rescan is a deliberate act;
+  it stops being narrow the moment a rule can fire on a partition a rescan just
+  published.
+
+- [ ] [BUG][P3] `[volume-manager] prefix read failed on <device>` leaves a
+  device with NO volume for the rest of the boot. Seen on CI for a virtio-blk
+  partition that had probed cleanly on the previous boot of the same image, so
+  it is a transient read rather than a property of the medium -- and a probe
+  happens once, when the device arrives under the `block` class, so nothing
+  retries. Everything that reads the volume layer then describes that device as
+  having no filesystem: `volinfo` omits it, every `SUBSYSTEM=="volume"` rule
+  misses it, and the CLAIM has nothing to attach to. A bounded retry on the
+  prefix read would cover it; so would re-probing on the first failure of any
+  later read against the device.
+
+- [ ] [BUG][P2] Retiring a partition leaves its VOLUME published.
+  `volume_manager.handleClassEvent` ignores `SVC_CLASS_EVENT_REMOVE`, so a
+  partition withdrawn from the `block` class keeps its volume record, its
+  `volume` class registration and its entry in the device manager's volume
+  inventory. `volinfo` goes on advertising a volume whose backing device no
+  longer answers, and recreating the same partition is then skipped by
+  `volumeKnown`, so the stale filesystem metadata survives the next rescan too.
+  This is the exact failure the partition manager's own retirement order exists
+  to avoid -- retiring from one view and not the other -- one layer up. The fix
+  is the same two-stage withdrawal the partition manager now runs
+  (`DEVMGR_UNPUBLISH_VOLUME` then `SVC_IPC_UNREGISTER_CLASS_REQ`), driven from
+  the REMOVE event.
+
+- [ ] [ENHANCEMENT][P3] A rescan drops an addition it has no slot for instead of
+  retrying it. New partitions are published during the diff, while the
+  retirements that would free their slots are still in flight -- so replacing
+  every slot of a full `g_parts` fails the additions, and only the retirements
+  take. The rescan reports the count in `PARTITION_IPC_RESP.arg2` rather than
+  claiming success, but the partitions are simply missing until something asks
+  for another rescan. Holding pending additions until the retirements settle
+  would close it.
+
+- [ ] [TEST][P3] Nothing covers a MOUNTED partition refusing to move. The
+  refusal is implemented -- a window change is gated on the same claim check as
+  a retirement, because `handleTransfer` rebases every transfer onto the window
+  -- and the retirement half of it is covered by
+  `tests/test_partition_rescan.py`. Reaching the move half needs a guest that
+  can write a MODIFIED partition table, which is `fdisk`; `make_gpt_image.py` is
+  a host script and `mkfs.wfs` can only destroy a table, not edit one. The
+  reconcile diff's own classification of a move IS host-tested
+  (`test_partition_reconcile.zig`), so what is untested is the gate, not the
+  decision.
+
+- [ ] [BUG][P3] A retirement whose reply never arrives strands its rescan.
+  A `Retire` slot advances through `VOLUME_IPC_IDENTIFY_REQ`,
+  `DEVMGR_UNPUBLISH_BLOCK_DEVICE` and `SVC_IPC_UNREGISTER_CLASS_REQ`, and is
+  released only by a reply to one of them. A peer that dies between a send and
+  its reply leaves the slot occupied -- so that partition can never be retired
+  again, since `rescanDisk` skips a partition already being withdrawn -- and
+  leaves `Rescan.settled` short of `scheduled`, so the rescan is never answered
+  and `partprobe` waits forever. The claim stage makes it worse than one stuck
+  retirement: claim checks run one at a time, so a reply lost there stalls every
+  other retirement queued behind it. There is no timer in this driver to expire
+  one on, which is the whole of why it is not already handled: the fix needs
+  either a deadline source or a liveness signal for the peer, and inventing a
+  retry without one would resend a withdrawal that may have succeeded.
+
+- [ ] [ENHANCEMENT][P4] `VOLUME_IPC_IDENTIFY_REQ` writes its descriptor at
+  offset 0 of the buffer it is handed and takes no offset, unlike every other
+  descriptor-returning opcode in the tree. That is what forces the partition
+  manager to run its claim checks ONE at a time: two in flight would both read
+  whichever answer landed last. A `arg2 = byte_offset` would let a caller slot
+  them, at the cost of a meaning for an argument that is currently ignored --
+  so it is an ABI change, small but not free, and the serialization costs
+  nothing a rescan notices today.
+
+- [ ] [ENHANCEMENT][P3] `fdisk`. Everything underneath it has landed: a table
+  can be read (`partition_table.zig`), a disk can be written through the `block`
+  class, and a rewritten table can be reconciled against the devices already
+  published (`PARTITION_IPC_RESCAN_REQ`, which `partprobe` sends on its own).
+  What remains is the tool: parse a table, edit it, write it back, and send the
+  rescan. The GPT writer in `scripts/make_gpt_image.py` is the reference for the
+  bytes, and is deliberately not shared -- it is a host script with no bearing
+  on what a guest may link.
 
 - [ ] [ENHANCEMENT][P3] `mkfs.wfs` as a guest utility. The formatter's library
   half is ready for one: `wfs_mkfs_plan_tree` settles the layout and the tree
@@ -2049,6 +2157,33 @@ Source: `architecture/25-diagnostics-status.md`,
   guest thread spends in the kernel, so it may only be the widest window rather
   than a participant, but it has now held in three of four captures and is the
   one correlation the claim fix does not explain.
+
+  FIFTH capture, run 39117014089 job 117644749852 (`wasm3_smp`), on a branch
+  whose delta is a partition-manager rescan and a volume-claim fix -- again
+  nothing on a scheduler path. CPU 0 `rip=ffffffff80000512`, the SAME offset as
+  the fourth capture and the same shape as the first two. The other three CPUs
+  were at `ffffffff80266420`, `ffffffff8022765f` and `ffffffff80200229`; the log
+  expired before they could be resolved to symbols, because re-running the job
+  discards the failed run's log. Capture the panic block BEFORE requesting a
+  rerun -- `gh run view --job <id> --log-failed > file` while it is still red.
+
+  SIXTH, SEVENTH and EIGHTH captures, all on PR #40 and all `rip=ffffffff80000512`:
+  run 39121505505 jobs 117657876134 (`warp_smp`, `a=0x06`, `b=` the rip itself)
+  and 117657876213 (`wasm3_smp`, `a=0x0e`, `cr2=ffffffffffffffff`) -- the SAME
+  run, both runtimes, the same address -- and run 39124795842 job 117667540301
+  (`wasm3_smp`, `a=0x0e`).
+
+  **The offset is not random, and that is the lead this entry has been missing.**
+  Across eight captures it has been one of exactly TWO values: 0x507 twice and
+  0x512 six times, with 0x512 in all of the last six. Two different runtimes
+  produce it, and the FAULT VECTOR differs between them (#UD on warp, #PF on
+  wasm3) while the address does not -- which is what you would see if the rip is
+  a fixed bogus value and the vector depends only on what happens to be mapped
+  there. A dispatch resuming a torn context would land on whatever bytes the
+  tear left; landing on the same small integer six times running means something
+  deterministic WRITES it. Worth chasing as "what assigns 0x512?" before chasing
+  the scheduler again: 0x512 = 1298 and 0x507 = 1287, both plausible as a size,
+  an index or an offset rather than as debris.
 
 - [ ] [BUG][P0] The guest reaches no CLI prompt on roughly one CI run in two, and
   it is ONE defect with several faces, not several flakes. Every capture is a

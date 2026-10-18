@@ -24,8 +24,9 @@ endif ()
 #   - the coroutine runtime and its async-service entry, which owns this
 #     driver's event loop and pump (the manifest entry is async_initialize, so
 #     service_async_entry_wasm.c is what the loader actually calls);
-#   - partition_table.zig, the pure GPT/MBR parser, which is also compiled
-#     standalone by the host unit tests;
+#   - partition_table.zig, the pure GPT/MBR parser, and reconcile.zig, the
+#     rescan diff, both of which are also compiled standalone by the host unit
+#     tests;
 #   - the generated ABI, so opcodes, packed error codes and value constants come
 #     from abi/*.yaml rather than being restated here.
 #
@@ -42,6 +43,8 @@ wasmos_add_zig_wasm_app(
     ${LIBC_DIR}/zig/driver.zig
     ${LIBC_DIR}/zig/coroutine.zig
     ${CMAKE_CURRENT_SOURCE_DIR}/partition_table.zig
+    ${CMAKE_CURRENT_SOURCE_DIR}/reconcile.zig
+    ${CMAKE_CURRENT_SOURCE_DIR}/mounts.zig
     ${LIBSYS_WASM_DIR}/coroutine_wasm.c
     ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
     ${LIBSYS_WASM_DIR}/service_runtime_wasm.c

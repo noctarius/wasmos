@@ -729,7 +729,7 @@ fn registryReplyEndpoint() i32 {
 /// name is zero-padded and a 16-character one travels without a terminator;
 /// anything longer is truncated to its first 16 bytes. Mirrors
 /// wasmos_ipc_pack_name16.
-fn packName16(name: []const u8) [4]i32 {
+pub fn packName16(name: []const u8) [4]i32 {
     var args = [4]i32{ 0, 0, 0, 0 };
     var i: usize = 0;
     while (i < name.len and i < 16) : (i += 1) {
@@ -990,6 +990,80 @@ pub fn subscribeClass(proc_endpoint: i32, notify_endpoint: i32, class_name: []co
     ) orelse return false;
     return reply.type == op.SVC_IPC_SUBSCRIBE_CLASS_RESP;
 }
+
+/// A class registration being withdrawn (SVC_IPC_UNREGISTER_CLASS_REQ).
+///
+/// ASYNCHRONOUS, unlike every other wrapper in this file, and that is the point
+/// of its existence rather than an option it offers. The caller this is for is
+/// the partition manager retiring a partition whose table was rewritten: an
+/// async service whose message loop is the only thing that can produce the
+/// replies its peers owe it, so a wrapper that blocked on the process manager
+/// would stop it dispatching for the duration. `send` returns as soon as the
+/// request is away, and the reply arrives at the caller's own endpoint as an
+/// ordinary SVC_IPC_UNREGISTER_CLASS_RESP for its dispatcher to match on
+/// `request_id`.
+///
+/// Holding the struct until then is not bookkeeping the caller may skip. The
+/// class name travels in a transfer buffer this owns, the process manager reads
+/// it when it reaches the message rather than when the message is sent, and
+/// releasing the buffer before that hands it an id naming nothing. `release`
+/// is what ends the exchange.
+///
+/// Only the OWNER of a registration may retire it, and ownership is the context
+/// behind the endpoint the request is sent from -- never anything the request
+/// names. A caller cannot retire another process's registration by naming it,
+/// and cannot retire its own from an endpoint it does not own.
+pub const ClassRetire = struct {
+    /// The buffer carrying the class name, or -1 when nothing is in flight.
+    bid: i32 = -1,
+
+    /// Ask the process manager to retire this process's registration of
+    /// `instance` under `class_name`, replying to `reply_endpoint`.
+    ///
+    /// `reply_endpoint` is also the SOURCE of the request, because the process
+    /// manager answers the sender and authenticates it: a service passes the
+    /// endpoint its dispatcher reads, not a private one, so the reply lands
+    /// where the rest of its traffic does.
+    pub fn start(
+        self: *ClassRetire,
+        proc_endpoint: i32,
+        reply_endpoint: i32,
+        class_name: []const u8,
+        instance: u32,
+        request_id: i32,
+    ) bool {
+        if (self.bid >= 0) return false;
+        var cn: [SVC_CLASS_MAX]u8 = [_]u8{0} ** SVC_CLASS_MAX;
+        copyName(&cn, class_name);
+        // The name is read from offset 0 of the buffer and nowhere else, which
+        // is pm_handle_class_unregister's contract and why there is no offset
+        // argument to get wrong.
+        const bid = bufferStage(cn[0..]) orelse return false;
+        if (send(
+            proc_endpoint,
+            reply_endpoint,
+            op.SVC_IPC_UNREGISTER_CLASS_REQ,
+            request_id,
+            bid,
+            @bitCast(instance),
+            0,
+            0,
+        ) != 0) {
+            bufferRelease(bid);
+            return false;
+        }
+        self.bid = bid;
+        return true;
+    }
+
+    /// Release the staged class name. Called once the reply has arrived, or to
+    /// abandon an exchange whose reply will never come.
+    pub fn release(self: *ClassRetire) void {
+        if (self.bid < 0) return;
+        bufferRelease(self.bid);
+        self.bid = -1;
+    }
+};
 
 /// Tell the process manager this driver is ready to serve, and wait for the
 /// acknowledgement.

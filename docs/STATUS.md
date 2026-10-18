@@ -784,6 +784,50 @@ linked feature documents for rationale and rollout plans.
   the root task, so it blocks the process but not the loop's dispatch.
   `/user` mounts from a partition it names by GPT label
   (`architecture/36-partition-manager-and-block-identity.md` §2-§3).
+- A disk's table can be RE-read. `PARTITION_IPC_RESCAN_REQ` reconciles the
+  partitions published for one disk against what its table now says, and
+  `partprobe <disk-id>` sends it; before this a table rewritten from inside the
+  guest left every partition device as it was at boot. It is a diff, not a
+  rebuild: an unchanged partition is left strictly alone apart from restating
+  metadata that moved; one whose extent moved keeps its class instance and has
+  only its descriptor restated; one the table no longer holds is retired.
+
+  A move and a retirement run the same state machine, because neither may be
+  applied to a partition a filesystem is mounted on -- every transfer is rebased
+  onto the window, so moving one under a mount redirects writes the filesystem
+  believes it placed. Both ask FS-MANAGER first, whose mount listing names each
+  mount's backing device and is the only authority on the question: the device
+  manager's `active_service` is never set, and the volume manager's CLAIM covers
+  only devices it recognised a filesystem on -- a partition whose probe failed
+  carries no volume, mounts anyway, and read as unheld until CI retired one out
+  from under a live mount. Any answer that is not a mount table is "cannot tell"
+  and refuses. A retirement then withdraws the device from the device manager
+  and unregisters it from the `block` class, in that order. Replies are matched
+  on sender as well as request id, since an id alone is a number to guess. No
+  stage is waited for, so the rescan's reply is deferred until the last change
+  settles. An UNREADABLE table aborts the
+  rescan rather than retiring everything, which is the distinction a first probe
+  does not need.
+- `fs_fat` CLAIMS the volume it mounts and releases it on shutdown, which it
+  never did. Only `fs_wfs` claimed, so a FAT volume could be reformatted by
+  `mkfs.wfs` under its own filesystem or checked by `fsck.wfs` mid-write. The
+  claim's reach is narrower than it looks and is now stated as such: it records
+  that someone ANNOUNCED a mount, which coincides with "is mounted" only while
+  every user announces and only where a volume exists to announce about.
+- Both filesystem drivers release that claim only when the mount is actually
+  ending. They released it before checking who sent the UNMOUNT, so any client
+  that could reach the backend through the `fs.backend` class could clear the
+  claim on a live mount with a request the driver then refused -- leaving it
+  looking unheld to all three consumers. Both also look the volume up across the
+  volume manager's full capacity rather than the first eight, and resolve its
+  endpoint ONCE: the release runs inside the reactor, and the lookup blocks on
+  the endpoint where outstanding block replies land, discarding whatever is not
+  its own.
+- `driver.ClassRetire` (`src/libc/zig/driver.zig`) is the guest path to
+  `SVC_IPC_UNREGISTER_CLASS_REQ`, which the kernel has had since the device
+  manager's unpublish landed but nothing could send. Asynchronous, unlike every
+  other wrapper in that file: its caller is an async service whose own message
+  loop produces the replies its peers owe it.
 - The volume manager (`src/services/volume_manager/`, Zig) publishes a `volume`
   class for every device that holds a filesystem, which is the question the
   `block` class cannot answer: a partition-table entry may hold no filesystem and

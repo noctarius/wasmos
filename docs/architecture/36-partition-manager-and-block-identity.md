@@ -289,9 +289,131 @@ could overwrite a client's request in that window.
 
 `SVC_CLASS_EVENT_REMOVE` is received and ignored. Retiring a disk means
 unregistering the partitions published from it and telling the device manager
-they are gone; no shipped driver unregisters, so that path has no caller. Dropping
-the local record alone would be worse than doing nothing — the partitions would
-stay in the registry addressing a disk nothing could reach.
+they are gone; no shipped driver unregisters a DISK, so that path still has no
+caller. Dropping the local record alone would be worse than doing nothing — the
+partitions would stay in the registry addressing a disk nothing could reach. The
+retirement machinery itself exists now (below); what is missing is the event
+that should drive it.
+
+#### Rescanning a table
+
+`PARTITION_IPC_RESCAN_REQ` re-reads one disk's table and reconciles the
+partitions published for it against what the table now says. `partprobe` sends
+it; `fdisk` will send the same request once its write has landed. Without it a
+table rewritten from inside the guest leaves every partition device exactly as
+it was at boot, because a disk's table is read once, when the disk arrives under
+the `block` class.
+
+A rescan is a DIFF, never a teardown and rebuild. The partitions of a disk are
+live devices and a filesystem may be mounted on one, so:
+
+- A partition whose extent is unchanged is left strictly alone. Re-registering
+  its class would disturb a mount to restate what is already true. Its
+  METADATA — label, type GUID, PARTUUID, MBR type — is restated if it changed,
+  which moves no storage and so needs no gate.
+- A partition whose extent MOVED keeps its identity. Its canonical id is built
+  from the disk and the table slot, neither of which a resize moves, so its
+  class instance — a fingerprint of that id — is still correct; only the
+  descriptor is restated, and only the device manager holds a copy of that.
+- A partition the table no longer holds is RETIRED.
+
+A move and a retirement run through the SAME state machine, because they share
+one precondition: neither may be applied to a partition a filesystem is mounted
+on. A retirement makes the device unfindable while it is still being written to.
+A move is less obvious and no safer — `handleTransfer` rebases every forwarded
+request onto `lba_start` and clamps it to `lba_count`, so rewriting those under
+a live mount sends its next write to a different part of the disk, and shrinking
+the window invalidates allocations the filesystem believes it owns. Keeping the
+class instance preserves the device's identity, not its storage mapping.
+
+The diff matches on the table SLOT, because that is what the published device's
+canonical id is built from. Two tables describing the same slot describe the
+same device however much else about it changed; two describing different slots
+never do, even if the extents coincide. The comparison lives in
+`reconcile.zig`, separate from the driver and pure, so the cases that matter —
+a slot that moved, a slot that vanished, a table that lost everything — are host
+tests rather than disk images.
+
+A retirement asks three peers in a FIXED order, and the order is the design.
+
+FS-MANAGER goes first, and it is the only one that can refuse. It brokers every
+mount in the system and its listing names each one's backing device by canonical
+id (`FSMGR_IPC_QUERY_MOUNTS_REQ`), so its table is the authority. Nothing else
+can answer the question: the device manager's `active_service` is never set, so
+its inventory cannot (TASKS `[BUG][P3]`), and this driver cannot see a mount at
+all. Any answer that is not a mount table — an error, an unusable length, a read
+that fails — is "cannot tell", and "cannot tell" is treated exactly like "yes,
+it is mounted". There is no answer here that means "no".
+
+**The volume manager's CLAIM was tried here first, and is not sufficient.** That
+is a measurement, not an argument. A CI run produced
+
+    [volume-manager] prefix read failed on block:virtio-blk:40p1
+
+so no volume record existed for that partition; `mount -t fat` on it succeeded
+anyway, because mounting needs no volume; `fs_fat`'s claim had nothing to attach
+to; and the retirement read "no volume" as "nothing holds it" and withdrew the
+device out from under a live filesystem. A mount can exist without a volume, and
+the claim only covers devices the volume manager managed to recognise a
+filesystem on. It remains the right mechanism for `fsck` and `mkfs`, which ask a
+different question — *may I write to this* — about a device they are about to
+address directly.
+
+Matching the id in the listing is to the END OF THE LINE, never a prefix.
+Partition ids are built by appending a slot number, so `block:ata:0p1` is a
+prefix of `block:ata:0p11`, and a prefix match fails in both directions:
+refusing to retire a partition because a different one is mounted, or retiring a
+mounted one because a shorter id appears in the text. `mounts.zig` holds the
+parse, pure and host-tested for exactly that case.
+
+fs-manager's endpoint is resolved ASYNCHRONOUSLY, on the first change that needs
+one. Not at bring-up, because this driver is an initfs payload spawned ahead of
+it; and not with the blocking lookup helper, which is for bring-up only — a
+running driver that blocks on the process manager cannot dispatch partition I/O
+meanwhile, and the process manager reads the executables it spawns through a
+filesystem that may be mounted on a partition this driver serves.
+
+Every reply is matched on its SENDER as well as its request id. A request id is
+a sequential number another process can guess, and a forged `VOLUME_IPC_ERROR`
+would otherwise walk a partition straight past the check that protects a live
+mount. This is the same distinction the IPC layer draws and does not close for
+you: it authenticates an endpoint's OWNER, never its AUTHORITY.
+
+Mount checks run ONE at a time. The whole listing comes back at offset 0 of one
+buffer, so two in flight would both read whichever answer landed last — and a
+disk whose table was wiped retires every partition it had, which is not a rare
+case. The queue drains as each change leaves the mount stage; nothing polls it.
+
+The DEVICE MANAGER goes second (`DEVMGR_UNPUBLISH_BLOCK_DEVICE`) and the CLASS
+REGISTRY last (`SVC_IPC_UNREGISTER_CLASS_REQ`). Unregistering the class before
+the inventory would leave a device that cannot be found but is still listed,
+with the rule engine matching on an entry nothing serves.
+
+`DEVMGR_NO_SUCH_RECORD` is not a refusal at that second stage: it is what an
+inventory says about a device it already dropped, which is precisely the state a
+previous retirement left behind if its class unregister failed afterwards.
+Reading it as failure would make that split permanent — every retry would stop
+at the inventory and never reach the registration still outstanding.
+
+A refusal at any stage leaves the partition exactly as it was, and is counted in
+the reply rather than failing the rescan: the other partitions of the disk were
+reconciled correctly. The count covers everything that did not take, including a
+change that could not be started and an addition with no free slot, so a caller
+is never told a table was reconciled when part of it was dropped.
+
+Neither request is waited for. A service that blocked on a peer's answer could
+not serve the requests that peer may need in order to produce it, so a
+retirement is a state machine the message loop advances, and the rescan is
+answered when its last retirement has settled. That is why
+`PARTITION_IPC_RESP` is deferred by several round trips, and why the guest-side
+class-unregister wrapper (`driver.ClassRetire`) is asynchronous where every
+other wrapper in that file is not.
+
+An UNREADABLE table and an ABSENT one are held apart, and the distinction is
+load-bearing here in a way it is not for a first probe. A probe that cannot read
+a disk publishes nothing and has lost nothing. A rescan that read the same
+answer as "no table" would retire every partition of a live disk because one
+transfer failed, so it refuses to act and reports `READ_FAILED`.
 
 #### One endpoint, not a fan-out
 
@@ -582,6 +704,12 @@ Per `skills/wasmos-regression-test` and `skills/wasmos-integration-test`.
 - FNV-1a fingerprint stability and cross-language agreement.
 - Rule parsing: string attributes, GUID normalisation, `!=`, cap overflow.
 - Descriptor encode/decode round trip.
+- The rescan diff (`reconcile.zig`): a slot whose extent moved or grew is an
+  UPDATE and not a keep; two slots that swapped extents are both updates, which
+  a diff comparing extents without slots would call no change at all; a slot
+  missing from the new table is orphaned even when a surviving slot occupies
+  exactly where it was; an extent that would overflow a naive `start + count`
+  does not fit.
 
 The parser is a pure Zig module with `test` blocks, run via `zig test` in the
 unit-test target. CI installs Zig for both workflows, so this is covered there;
@@ -598,6 +726,12 @@ way the virtio-blk build already is.
 - The MBR path: `/boot` still mounts through the partition manager.
 - The no-table path: a raw-superblock disk still mounts by the existing rule.
 - Bounds clamp: a request past the partition end is refused, not passed through.
+- The rescan (`test_partition_rescan.py`): a table destroyed under a live mount
+  is refused and the partition stays in the inventory; unmounting and rescanning
+  again retires it from BOTH the inventory and the `block` class; a rescan of a
+  disk whose table did not change publishes nothing, which is asserted as the
+  absence of a publish line because a count of devices cannot tell a
+  reconciliation from a republish.
 
 ---
 
@@ -615,6 +749,10 @@ way the virtio-blk build already is.
   is what keeps `/boot` on a whole-disk rule and `fat_try_parse_mbr` alive.
   Probing late arrivals — the prerequisite — is done; the move itself is not,
   and it puts Zig on the critical build path.
+- A retirement whose reply never arrives strands its `Retire` slot and the
+  rescan waiting on it, because the slot is released only by a reply and this
+  driver has no timer to expire one on. The partition can then never be retired,
+  and the caller waits forever.
 - A late probe blocks the process for its duration, because a probe is
   synchronous and forwarding is not. Bounded (one IDENTIFY plus at most 34
   sector reads), but a disk arriving under load pauses transfers on the disks

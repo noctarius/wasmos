@@ -106,6 +106,7 @@
         "test_fsck_wfs_claim.py",
         "test_mkfs_wfs.py",
         "test_partition_manager_disk_arrival.py",
+        "test_partition_rescan.py",
         "test_vfs_root_mount.py",
         "test_virtio_blk.py",
         "test_volume_manager.py",
@@ -136,6 +137,7 @@
       "description": "Host tools, exercised directly. Boots nothing, builds nothing, and needs no emulation: this battery's CI job compiles the packer with cc and nothing else, so a test here may not read build artifacts.",
       "needs_qemu": false,
       "files": [
+        "test_boot_diagnosis.py",
         "test_make_wasmos_app_capabilities.py"
       ]
     }

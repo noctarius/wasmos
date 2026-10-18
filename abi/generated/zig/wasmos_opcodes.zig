@@ -876,3 +876,61 @@ pub const VOLUME_IPC_IDENTIFY_RESP: i32 = 0xE80;
 pub const VOLUME_IPC_RESP: i32 = 0xE81;
 /// arg0 = packed error code.
 pub const VOLUME_IPC_ERROR: i32 = 0xEFF;
+
+// partition (0xF00..0xFFF)
+/// Re-read one disk's partition table and reconcile what is published
+/// against what it now says. arg0 = the DISK's `block` class instance --
+/// the backing device, never a partition of it, because a caller that has
+/// just written a table knows which disk it wrote and the partitions it
+/// describes may not exist yet.
+/// Answered with PARTITION_IPC_RESP, arg0 = 0, arg1 = the partition count
+/// on that disk afterwards.
+///
+/// A disk's table is read once, when the disk arrives under the `block`
+/// class, and nothing re-reads it afterwards -- so a table rewritten from
+/// inside the guest leaves every partition device as it was at boot. This
+/// is what `fdisk` sends once its write has landed.
+///
+/// Reconciled, not republished. A partition whose window is unchanged is
+/// left strictly alone, beyond restating a descriptor whose METADATA
+/// moved -- a label, a type GUID, a PARTUUID -- which moves no storage.
+/// Re-registering its class would disturb a filesystem mounted on it to
+/// no purpose.
+///
+/// A partition whose WINDOW changed keeps its class instance -- a
+/// fingerprint of an id derived from the disk and the slot, so it does
+/// not move -- and only its descriptor is restated. A partition the new
+/// table no longer holds is RETIRED: withdrawn from the device manager's
+/// inventory first, and unregistered from the `block` class only once
+/// that succeeded.
+///
+/// Both of those are gated on the same question, because both are unsafe
+/// under a live mount. A retirement makes the device unfindable while a
+/// filesystem is still writing to it; a window change redirects those
+/// writes, since every forwarded transfer is rebased onto the window and
+/// clamped to it.
+///
+/// The question is put to FS-MANAGER, which brokers every mount and names
+/// each one's backing device by canonical id. Nothing else can answer it:
+/// the device manager's inventory cannot, and the volume manager's CLAIM
+/// covers only devices it managed to recognise a filesystem on -- a
+/// partition whose probe failed carries no volume, mounts perfectly well
+/// anyway, and would read as unheld. Any answer that is not a mount table
+/// is "cannot tell" and refuses.
+///
+/// A refusal leaves the partition exactly as it was. arg2 counts every
+/// partition the rescan could not reconcile -- a change refused, a change
+/// that could not be started, or an addition with no free slot -- rather
+/// than failing the whole request, because the other partitions of the
+/// disk were reconciled correctly and the caller needs to know how much
+/// did not take.
+///
+/// The reply is DEFERRED: reading a table is synchronous and runs on the
+/// partition manager's root task, and the retirements it schedules are
+/// answered by their own peers later still, so the request is queued and
+/// answered when all of that has settled.
+pub const PARTITION_IPC_RESCAN_REQ: i32 = 0xF00;
+/// arg0 = 0, arg1 = partitions on the disk after the rescan, arg2 = partitions the rescan could not reconcile.
+pub const PARTITION_IPC_RESP: i32 = 0xF80;
+/// arg0 = packed error code.
+pub const PARTITION_IPC_ERROR: i32 = 0xFFF;

@@ -319,6 +319,9 @@ set(WASM_BLKINFO_APP ${BUILD_DIR}/blkinfo.wap)
 set(WASM_VOLINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/volinfo/volinfo.c)
 set(WASM_VOLINFO_WASM ${BUILD_DIR}/volinfo.wasm)
 set(WASM_VOLINFO_APP ${BUILD_DIR}/volinfo.wap)
+set(WASM_PARTPROBE_SRC ${CMAKE_SOURCE_DIR}/src/utils/partprobe/partprobe.c)
+set(WASM_PARTPROBE_WASM ${BUILD_DIR}/partprobe.wasm)
+set(WASM_PARTPROBE_APP ${BUILD_DIR}/partprobe.wap)
 set(WASM_CURL_SRC ${CMAKE_SOURCE_DIR}/src/utils/curl/curl.c)
 set(WASM_CURL_WASM ${BUILD_DIR}/curl.wasm)
 set(WASM_CURL_APP ${BUILD_DIR}/curl.wap)
@@ -1755,6 +1758,7 @@ if (TARGET host_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_UMOUNT_APP} ${BUILD_DIR}/esp/system/utils/umount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VOLINFO_APP} ${BUILD_DIR}/esp/system/utils/volinfo.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTPROBE_APP} ${BUILD_DIR}/esp/system/utils/partprobe.wap
     # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MKFS_WFS_APP} ${BUILD_DIR}/esp/system/utils/mkfs.wfs.wap
@@ -4076,6 +4080,21 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               -Mfixtures_disk_images=${CMAKE_SOURCE_DIR}/tests/unit/fixtures_disk_images.zig
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running partition-table parser unit tests"
+      VERBATIM)
+    # The rescan diff. Self-contained by design: it reduces both a table entry
+    # and a published partition to a slot plus an extent, so it imports nothing
+    # and needs no fixture, and the cases it is for -- a table rewritten under
+    # live devices -- are data rather than disk images.
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-partition-reconcile-cache
+              --global-cache-dir ${BUILD_DIR}/zig-partition-reconcile-global-cache
+              --dep reconcile
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_partition_reconcile.zig
+              -Mreconcile=${DRIVER_WASM_DIR}/partition_manager/reconcile.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running partition rescan diff unit tests"
       VERBATIM)
     # The tmpfs namespace and storage core. It is split out of the driver
     # (fs_tmpfs.zig) precisely so it can be linked here: it depends on nothing in

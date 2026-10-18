@@ -106,6 +106,7 @@
         "test_fsck_wfs_claim.py",
         "test_mkfs_wfs.py",
         "test_partition_manager_disk_arrival.py",
+        "test_partition_rescan.py",
         "test_vfs_root_mount.py",
         "test_virtio_blk.py",
         "test_volume_manager.py",

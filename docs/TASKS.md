@@ -957,6 +957,33 @@ tail.
 
 ## Filesystems and Storage
 
+- [ ] [BUG][P1] A command the CLI resolved seconds ago stops resolving, and the
+  open() behind the lookup fails transiently for a reason nothing records.
+
+  CI run 39154123903 failed `test_write_then_read_round_trips_a_sector` on BOTH
+  runtimes. In the wasm3 session `blkinfo` had just produced nine lines of
+  output; the next two invocations answered `no such command found`. The boot
+  was healthy by every other measure -- `[fat] fs.backend registered
+  mount=/boot`, the VT loaded a keymap from `/boot/system/keymaps/`, no panic,
+  no reset.
+
+  `cli_resolve_exec_path` probes each $PATH entry and the cwd fallback, so the
+  failure is one of those probes returning something other than FS_NOT_FOUND.
+  Until abf6e653 every cause printed the same sentence, which is why two
+  triages went looking for an unmounted `/boot` that was mounted. The probe now
+  prints `could not look up <cmd>: <domain>/<code>`, so the NEXT capture names
+  the reason -- which is the point of that commit, not a fix for this entry.
+
+  Suspects worth ruling out when the code arrives, in order: `FS_BUSY` (the
+  backend has no free op-context slot, and this reproduces under SMP load with
+  the net stack and gfx running), `FS_NO_FD` (the open-file table is full --
+  note that `fopen` also fails with a full 8-entry FILE stream table, which the
+  probe no longer touches), and `FS_NOT_READY`. If it is `FS_BUSY`, the defect
+  is that a retryable status is terminal at every caller, not just this one.
+
+  Do NOT re-open this as a mount bug without a log that shows `/boot` failing
+  to mount. That claim has been wrong twice.
+
 - [x] [ENHANCEMENT][P2] Route the ATA secondary channel's interrupt (IRQ 15).
   Done. Both channels now take interrupts; the only thing that polls is a channel
   that has explicitly fallen back after its drive failed to assert.

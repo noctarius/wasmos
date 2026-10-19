@@ -349,6 +349,11 @@ static inline void sched_enqueue_thread(struct thread* t) {
 
 /* Reset the process table, this CPU's scheduler state, the thread table and the
  * futex table. BSP only, once, before any AP is up. */
+/* Whether `entry_ptr` can be a kernel process entry point: inside the kernel
+ * image, between `image_start` and `image_end`. Bounds are parameters so the
+ * predicate can be exercised on the host. Fails closed on degenerate bounds. */
+int process_entry_ptr_in_image(uint64_t entry_ptr, uint64_t image_start, uint64_t image_end);
+
 void process_init(void);
 void process_ap_init(void); /* per-AP scheduler state init; call before enabling AP timer */
 /*

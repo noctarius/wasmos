@@ -2,6 +2,7 @@
 
 #include "ipc.h"
 #include "klog.h"
+#include "kpanic.h"
 #include "memory.h"
 #include "paging.h"
 #include "process_manager.h"
@@ -16,6 +17,23 @@ static const uint8_t g_skip_wasm_boot = 0;
  * idle/hlt while keeping a low-rate heartbeat.  Returning through the no-op
  * process_block_on_ipc() instead would spin the scheduler. */
 #define KERNEL_INIT_IDLE_WAIT_MS 100u
+
+/* How many times init re-asks PM to spawn sysinit by path before giving up.
+ *
+ * The retry is legitimate: sysinit ships on the ESP rather than in the initfs,
+ * so it cannot be read until device enumeration has mounted /boot. A HEALTHY
+ * boot needs none of these -- `[pm] spawn_path fs read failed` appears zero
+ * times in local boots and in a passing CI session -- so a retry at all means
+ * something is already wrong, and this bound only decides how long the system
+ * waits to find out.
+ *
+ * Generous rather than tight, because the measurement above is of healthy boots
+ * and a loaded runner is entitled to be slower: at the observed retry rate of
+ * roughly 20 per second this is about 25 seconds. Before it existed the retry
+ * was unbounded, and a boot that never got /boot retried 17,081 times over 14
+ * minutes, logging each one, pegging a CPU and reaching no prompt
+ * (docs/TASKS.md `[BUG][P0]`). */
+#define INIT_SYSINIT_MAX_ATTEMPTS 512u
 
 /* Puts an init_state_t into its pre-boot state: phase 0, nothing started, no
  * request in flight, and every boot-module index set to the 0xFFFFFFFF "not
@@ -443,7 +461,32 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         /* sysinit is not a boot-volume prerequisite, so it is NOT in the initfs
          * (which holds only what's needed to mount the boot volume). It ships on
          * the ESP and is spawned by path from the "boot" FAT mount once device
-         * enumeration has brought fs-fat up; the spawn retries until then. */
+         * enumeration has brought fs-fat up, so the spawn RETRIES until then.
+         *
+         * Bounded, because a boot where that read never succeeds used to retry
+         * forever: 17,081 attempts over 14 minutes in one CI capture, a log line
+         * each, a pegged CPU and no prompt -- `[BUG][P0]`. Giving up turns that
+         * silent hang into a named boot failure. The bound is generous: a
+         * healthy boot needs a handful of attempts, and the retry yields between
+         * them rather than spinning. */
+        if (state->sysinit_attempts >= INIT_SYSINIT_MAX_ATTEMPTS) {
+            /* PANIC rather than park. sysinit is this system's pid 1: it reads
+             * sysinit.rc and starts every service, so a boot that cannot spawn
+             * it has no userspace and never will. Parking would leave a kernel
+             * running with nothing on top -- alive enough to look like a hang,
+             * dead enough to be useless -- which is the state this whole bug
+             * has been hiding in. Linux calls the same thing "Attempted to kill
+             * init". */
+            klog_printf("[init] cannot spawn /boot/system/services/sysinit.wap after %u "
+                        "attempts\n"
+                        "[init] sysinit starts every service, so this system has no userspace "
+                        "and no prompt is coming.\n"
+                        "[init] /boot never became readable: the last [pm] spawn_path line "
+                        "above says why the read failed.\n",
+                        (unsigned)INIT_SYSINIT_MAX_ATTEMPTS);
+            kpanic("init_no_sysinit", (uintptr_t)state->sysinit_attempts, 0);
+        }
+        state->sysinit_attempts++;
         if (init_send_spawn_path(process, state, "/boot/system/services/sysinit.wap") != 0) {
             return PROCESS_RUN_YIELDED;
         }

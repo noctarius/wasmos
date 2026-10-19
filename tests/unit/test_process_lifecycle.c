@@ -1351,6 +1351,63 @@ static void s_healthy_owner_still_runs_and_requeues(void) {
     stop_dispatchers();
 }
 
+/* Every capture of the SMP scheduler stress panic transferred to a SMALL
+ * INTEGER: 0x50 raw, and 0x507/0x512 with the higher-half base applied, which
+ * lands 2 MiB below __kernel_start where nothing is mapped.
+ *
+ * These cases pin the PREDICATE the guards ask, and nothing more. They do not
+ * establish which transfer carried the bad value, and that is deliberately not
+ * claimed: panic_backtrace walks the RBP chain, and a ring-0 context restore
+ * returns with `ret` without touching RBP, so the captured backtrace cannot
+ * distinguish an indirect call in the scheduler from a context resumed into a
+ * bad rip. The guards cover every such transfer rather than a chosen one.
+ *
+ * The predicate takes its bounds rather than reading the linker symbols so it
+ * can be exercised here, where there is no kernel image to bound against.
+ *
+ * Regression: 2026-10-18-scheduler-transferred-to-a-small-integer */
+static void s_entry_pointer_guard_rejects_what_is_not_in_the_image(void) {
+    const uint64_t start = 0xffffffff80200000ull;
+    const uint64_t end = 0xffffffff80500000ull;
+
+    /* The captured values. The aliased pair are the higher-half alias of a
+     * sub-page physical address; 0x50 was captured raw, from a transfer that
+     * applies no alias -- which is itself why the guards cover more than one
+     * site. */
+    CHECK(!process_entry_ptr_in_image(0xffffffff80000512ull, start, end),
+          "the captured entry pointer is refused");
+    CHECK(!process_entry_ptr_in_image(0xffffffff80000507ull, start, end),
+          "the other captured entry pointer is refused");
+
+    /* NULL was already refused by the old test and must stay refused. */
+    CHECK(!process_entry_ptr_in_image(0ull, start, end), "null is refused");
+    /* Raw, unaliased small integers: the form the most recent capture took. */
+    CHECK(!process_entry_ptr_in_image(0x512ull, start, end), "a bare small integer is refused");
+    CHECK(!process_entry_ptr_in_image(0x50ull, start, end), "the raw captured value is refused");
+
+    /* A real entry point, and both edges. The guard panics, so a false
+     * positive turns a working boot into a dead one: the bounds have to be
+     * exact, not approximate. */
+    CHECK(process_entry_ptr_in_image(start, start, end), "the first byte of the image is callable");
+    CHECK(process_entry_ptr_in_image(start + 0x1234ull, start, end),
+          "an address inside the image is callable");
+    CHECK(process_entry_ptr_in_image(end - 1ull, start, end),
+          "the last byte of the image is callable");
+    CHECK(!process_entry_ptr_in_image(end, start, end), "one past the image is refused");
+    CHECK(!process_entry_ptr_in_image(start - 1ull, start, end), "one before the image is refused");
+
+    /* A user-space address. The callers skip a ring-3 context before asking --
+     * its rip is a user address by construction -- so anything that reaches
+     * this predicate is meant to be a kernel address. */
+    CHECK(!process_entry_ptr_in_image(0x400000ull, start, end), "a user address is refused");
+
+    /* Degenerate bounds admit nothing, which is what makes a separate
+     * fail-closed branch unnecessary rather than merely absent: an empty or
+     * inverted range cannot contain anything, so the comparison IS the guard. */
+    CHECK(!process_entry_ptr_in_image(start, 0ull, 0ull), "empty bounds refuse");
+    CHECK(!process_entry_ptr_in_image(start, end, start), "inverted bounds refuse");
+}
+
 int main(void) {
     harness_init();
 
@@ -1366,6 +1423,7 @@ int main(void) {
     s_a_refused_reset_does_not_leak_a_frozen_slot();
     s_a_wake_that_defers_leaves_something_actionable();
     s_a_consumer_that_declines_keeps_the_claim();
+    s_entry_pointer_guard_rejects_what_is_not_in_the_image();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

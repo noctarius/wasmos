@@ -102,6 +102,7 @@
       "needs_qemu": true,
       "files": [
         "test_fs_open_smoke.py",
+        "test_init_sysinit_giveup.py",
         "test_fs_write_smoke.py",
         "test_fsck_wfs_claim.py",
         "test_mkfs_wfs.py",

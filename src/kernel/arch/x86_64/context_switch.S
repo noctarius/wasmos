@@ -199,6 +199,17 @@ context_switch:
     movq 88(%rdx), %rdx
     movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     iretq
+# The ring-0 resume point: where a context saved by this routine comes back.
+# `leaq 1f(%rip)` above stores it as out->rip, so a context that was SAVED here
+# always carries it.
+#
+# Exported because one context is not saved here. A kernel worker is dispatched
+# through process_run_worker_on_stack, which snapshots the scheduler context by
+# hand -- callee-saved registers and rsp -- and cannot name this label from C.
+# A CPU whose first dispatch was a worker therefore had sched_ctx.rip == 0, and
+# the worker's first process_yield returned to 0 (docs/TASKS.md [BUG][P1]).
+    .globl context_switch_resume
+context_switch_resume:
 1:
     movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     ret

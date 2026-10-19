@@ -36,6 +36,15 @@ typedef struct {
     uint32_t fs_init_index;
     uint32_t device_manager_index;
     uint32_t dm_pid; /* pid device-manager was spawned as; 0 before that phase completes */
+    /* Attempts made to spawn sysinit by path.
+     *
+     * The spawn legitimately retries: sysinit lives on the ESP, not in the
+     * initfs, so it cannot be read until device enumeration has brought fs-fat
+     * up and /boot is mounted. What the retry must not be is UNBOUNDED -- a
+     * boot where that read never succeeds retried it 17,081 times across 14
+     * minutes in one CI capture, logging every attempt, pegging a CPU and
+     * reaching no prompt, which is the whole of `[BUG][P0]`. */
+    uint32_t sysinit_attempts;
 } init_state_t;
 
 /* Reset *state to the start of the bring-up sequence and bind it to boot_info, which is

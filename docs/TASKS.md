@@ -957,6 +957,33 @@ tail.
 
 ## Filesystems and Storage
 
+- [ ] [BUG][P1] A command the CLI resolved seconds ago stops resolving, and the
+  open() behind the lookup fails transiently for a reason nothing records.
+
+  CI run 39154123903 failed `test_write_then_read_round_trips_a_sector` on BOTH
+  runtimes. In the wasm3 session `blkinfo` had just produced nine lines of
+  output; the next two invocations answered `no such command found`. The boot
+  was healthy by every other measure -- `[fat] fs.backend registered
+  mount=/boot`, the VT loaded a keymap from `/boot/system/keymaps/`, no panic,
+  no reset.
+
+  `cli_resolve_exec_path` probes each $PATH entry and the cwd fallback, so the
+  failure is one of those probes returning something other than FS_NOT_FOUND.
+  Until abf6e653 every cause printed the same sentence, which is why two
+  triages went looking for an unmounted `/boot` that was mounted. The probe now
+  prints `could not look up <cmd>: <domain>/<code>`, so the NEXT capture names
+  the reason -- which is the point of that commit, not a fix for this entry.
+
+  Suspects worth ruling out when the code arrives, in order: `FS_BUSY` (the
+  backend has no free op-context slot, and this reproduces under SMP load with
+  the net stack and gfx running), `FS_NO_FD` (the open-file table is full --
+  note that `fopen` also fails with a full 8-entry FILE stream table, which the
+  probe no longer touches), and `FS_NOT_READY`. If it is `FS_BUSY`, the defect
+  is that a retryable status is terminal at every caller, not just this one.
+
+  Do NOT re-open this as a mount bug without a log that shows `/boot` failing
+  to mount. That claim has been wrong twice.
+
 - [x] [ENHANCEMENT][P2] Route the ATA secondary channel's interrupt (IRQ 15).
   Done. Both channels now take interrupts; the only thing that polls is a channel
   that has explicitly fallen back after its drive failed to assert.
@@ -2173,6 +2200,116 @@ Source: `architecture/25-diagnostics-status.md`,
   run, both runtimes, the same address -- and run 39124795842 job 117667540301
   (`wasm3_smp`, `a=0x0e`).
 
+  **The resumed address is a SMALL INTEGER, and that is established.** Across
+  the captures it has been `0x50` raw, and `0x507`/`0x512` with the higher-half
+  base applied. `.text` begins at `0xffffffff80200000`, so `0xffffffff80000512`
+  is 2 MiB BELOW `__kernel_start` -- no section, no symbol -- inside the
+  higher-half window that maps physical 0..512 MiB. It is the alias of PHYSICAL
+  `0x512`, which is why one capture took #UD (bytes present, not an
+  instruction) and another #PF at the same address on a different runtime.
+
+  **Which TRANSFER carries it is NOT established.** An earlier revision of this
+  entry claimed the backtrace proved an indirect call through
+  `process_t.entry`. It does not. `panic_backtrace` walks the RBP frame chain
+  (`kpanic.c:73`), and a ring-0 context restore returns with `ret`
+  (`arch/x86_64/context_switch.S:151`) without touching RBP -- so a backtrace
+  naming `process_schedule_once` is equally consistent with a call made there
+  and with a context resumed into a bad rip while RBP still held the
+  scheduler's frame. The capture that followed that claim supports the restore
+  reading rather than the call one: `rip=0x50` RAW, where both entry call sites
+  apply `process_kernel_alias_addr` and would have produced `0xffffffff80000050`.
+
+  Entry-field corruption is therefore a HYPOTHESIS, not a finding. So is
+  context corruption. What is certain is that some pointer or saved rip becomes
+  a small integer.
+
+  Guards are in place at every transfer that can reach one
+  (`process_validate_transfer_target`), each naming what it was transferring to:
+
+  - the process entry call (`process.c`, the ring-0 trampoline),
+  - the WORKER entry call (`process_run_worker_on_stack`) -- the SMP stress
+    participants are kernel workers, so without this the one test that panics
+    could not produce a diagnostic at all,
+  - every ring-0 context restore (`context_switch_high`), which is the funnel
+    the dispatch validator does not cover: `process_yield`'s return to the
+    scheduler and the exit path both bypass `process_validate_thread_context`.
+
+  A user context is skipped at the restore, as the dispatch validator skips
+  one. That leaves a hole worth naming: a context whose `cs` is corrupted to
+  ring 3 passes both unchecked.
+
+  The next occurrence panics `invalid_transfer_target` naming WHICH transfer
+  and whose pointer it was, instead of `cpu_exception` at an unmapped address.
+  **What writes the small integer is still unknown** -- that is the remaining
+  work, and these guards are what will narrow it.
+
+  **ROOT CAUSE FOUND AND FIXED (2026-10-18). `cpu_local()->sched_ctx.rip` was
+  never written on a CPU whose FIRST dispatch was a kernel worker.**
+
+  The chain, all of it checkable by reading:
+
+  - `context_switch` writes `out->rip` on the SAVE side only, as
+    `leaq 1f(%rip), %rax; movq %rax, 128(%rdi)`
+    (`arch/x86_64/context_switch.S`).
+  - The scheduler context is saved that way only by the NON-worker dispatch,
+    `context_switch_high(&cpu_local()->sched_ctx, run_ctx)`.
+  - A kernel worker is dispatched through `process_run_worker_on_stack`
+    instead, and the block above it snapshots `sched_ctx` BY HAND -- callee-
+    saved registers, rsp, rflags, rax -- deliberately not rip, on the stated
+    assumption that "RIP is always label-1, set by the last
+    `context_switch_high(&sched_ctx, ...)` call".
+  - That assumption fails on a CPU that has not yet taken a non-worker
+    dispatch. `sched_ctx.rip` is then still 0 from initialisation.
+  - The worker's first `process_yield` restores that context, and the restore
+    PUSHES `ctx->rip` and `ret`s to it -- so the CPU returns to 0.
+
+  Which is every property the entry has recorded: SMP only, because one CPU
+  dispatches something else first; worst under the stress test, which spawns
+  eight workers at once; intermittent, because it depends on which CPU happens
+  to take a worker as its first dispatch; and `rip=0` exactly, in the capture
+  where nothing had partially written the field.
+
+  Fixed by exporting the resume label as `context_switch_resume` and having the
+  worker snapshot write it, so the hand-made context says what a saved one
+  would.
+
+  NOT verifiable here: the bug needs a Linux x86 TCG runner, and MTTCG on Apple
+  Silicon masks it. What was verified instead: the mechanism by reading the
+  save, dispatch and restore paths; `run-qemu-test` clean; and the SMP
+  scheduler stress gate green three times with zero guard hits.
+
+  FIRST EVIDENCE FROM CI that it holds: commit e2ab1885, the first carrying this
+  fix, passed its full matrix TWICE with zero failed jobs -- the first fully
+  green commit on the branch, against roughly one red run in two before it. Two
+  runs is not proof at this bug's rate, but it is the right direction and it is
+  the only arm where both SMP stress jobs passed together. The guard is
+  the standing detector -- if this recurs it panics `invalid_transfer_target`
+  naming the thread, rather than jumping to zero.
+
+  **THE GUARD CAUGHT IT (run 39144660427 job 117725943763, `wasm3_smp`), and
+  what it caught is a ZEROED context, not a torn one:**
+
+      [sched] invalid context restore target id=0000000000000000 name=(context)
+      [sched] target=0000000000000000 (raw 0000000000000000)
+      [sched] image=ffffffff80200000..ffffffff80409ae0
+      reason : invalid_transfer_target
+
+  `rip` is 0 and so is `cs` -- the whole `process_context_t` reads as never
+  written, which `thread.c:33` leaves it as. So the mechanism is **a thread
+  being dispatched whose context was never initialised**, matching the third
+  capture's `rip=0` and NOT the "torn rip" the claim fix addressed. The small
+  non-zero values (0x50, 0x507, 0x512) are presumably the same context caught
+  with one field partially written; that is a hypothesis, not established.
+
+  This is now a deterministic catch at the moment of the bad restore rather
+  than a #UD or #PF wherever the CPU landed, so the next capture is evidence
+  about the context instead of about the wreckage.
+
+  Next question, and the one the capture could not answer: WHOSE context. The
+  panic reported `id=0` because it identified the context by its own `cs`,
+  which is zero like everything else in it. It now reports the CPU's current
+  tid and process name instead, so the next occurrence names the thread.
+
   **The offset is not random, and that is the lead this entry has been missing.**
   Across eight captures it has been one of exactly TWO values: 0x507 twice and
   0x512 six times, with 0x512 in all of the last six. Two different runtimes
@@ -2189,6 +2326,88 @@ Source: `architecture/25-diagnostics-status.md`,
   it is ONE defect with several faces, not several flakes. Every capture is a
   whole-session stall: the tests that report it differ only by which one happened
   to open the session first, so the battery that goes red is arbitrary.
+
+  **MECHANISM FOUND (2026-10-18, run 39137201185 job 117704057912): an UNBOUNDED
+  RETRY of a module read that will not succeed.** The harness named it once
+  `boot_diagnosis` stopped misreporting the stall as a qemu exit:
+
+      a stall. Last guest output: '[pm] spawn_path fs read failed:
+      /boot/system/services/sysinit.wap (fs: path component or target entry
+      does not exist)'
+
+  That line appears **17,081 times** in one battery log, spanning 14 minutes
+  (14:46:39 to 15:00:25). The process manager asks fs-manager for a module,
+  gets NOT_FOUND, and asks again forever -- `pm_fs_read_blob_for_spawn` returns
+  `PM_SPAWN_INTERNAL_ERR_BAD_REPLY` and the caller retries with no bound, no
+  backoff and no give-up. The comment at `process_manager_spawn.c:1079` already
+  concedes it: "the caller RETRIES: a boot that cannot read a service spawns
+  this line thousands of times".
+
+  That is why every face looks the same from outside. The guest never dies, so
+  there is no panic and no reset; it never progresses, so no prompt; and the CPU
+  is pegged (`dispatches=718316` on CPU 0 in one capture), which is the load that
+  makes neighbouring timing-sensitive tests fail too. `no such command found:
+  blkinfo` is the same boot seen one layer up: nothing under /boot is runnable.
+
+  TWO defects here, and they are separable:
+
+  1. **The retry is unbounded.** This is what turns a transient or ordering
+     failure into a 14-minute silent hang. A bounded retry that gave up and
+     said so would turn the whole P0 into an immediate, named boot failure --
+     worth doing even before the cause below is understood, because it converts
+     every future occurrence into a one-line diagnosis.
+  2. **Why `/boot` never becomes readable is the REAL bug, and is still open.**
+     Narrowed, in the storming session of run 39140045637:
+
+     - `[device-manager] volume rule queued mount=/boot id=volume:block:ata:0p1`
+       at 14:46:22.90 -- the rule fires, so discovery and the volume layer are
+       fine.
+     - `[fat] fs.backend registered` at 14:46:22.96 -- a FAT backend comes up.
+     - **No `/boot -> ...` line anywhere in the session.** The mount never
+       completes, and there is no `mount refused: fat` either, so fs-manager
+       neither mounted it nor rejected it.
+     - Everything downstream follows from that: `/boot` is absent from the
+       namespace, so every ESP path reads NOT_FOUND -- sysinit, fs_wfs.wap
+       (hence the `mount refused: wfs` storm, which is a CONSEQUENCE and not a
+       second bug), and `no such command found: blkinfo` one layer up.
+     - `init` was dispatched **8,817,333** times.
+
+     So the question is narrow: a queued `/boot` volume rule, with its FAT
+     backend registered, that produces neither a mount nor a refusal. Look at
+     the devmgr MOUNT_REQ path and fs-manager's handling of it, NOT at the
+     scheduler and not at the volume layer.
+
+     One capture had a `/boot -> fs-fat on block:ata:0p1` line and stalled
+     anyway, so there may be a second path; treat that as unconfirmed until a
+     capture with the new mount-named logging says otherwise.
+
+  Diagnostic support added for the next occurrence: `fs_fat` now logs
+  `fs.backend registered mount=<path>`, because a boot carries more than one FAT
+  backend and the old line could not say whether `/boot`'s instance was the one
+  that came up.
+
+  A SECOND face, with a different victim, 2026-10-18 run 39152571921 job
+  117749291333 (`filesystem`, `wasm3_smp`): the boot stalls during PCI
+  enumeration, nowhere near `/boot`. Last guest output `[pci-bus] bar4 m64
+  00000000 size 16384 pf`, only two `spawn_path fs read failed` lines in the
+  whole log and no panic. The sysinit retry storm is therefore NOT the only way
+  this bug shows, and the fix for it -- bounding the retry -- does not cover
+  this one. Whether the two share a cause is open.
+
+  Attribution for that capture, by construction: the commit before it passed
+  this job twice, and the delta between them is PYTHON ONLY (the harness and
+  two test files), so no guest code changed.
+
+  **The stall dump kills QEMU, often.** Across the captures taken while
+  investigating this, `monitor unavailable` appears 17 times and one run
+  recorded `qemu then exited with code -11` -- a host-side SIGSEGV. The dump
+  injects an NMI into every vCPU through the monitor (`monitor.hmp("nmi")`,
+  twice, for the two guest samples), and a wedged guest plus that sampling is
+  apparently enough to take QEMU with it. The cost is real: it destroys the
+  halted machine, which is the best evidence available, and truncates the dump
+  that was being collected. `boot_diagnosis` now says so rather than blaming
+  the exit, but the dump still does it. Worth either sampling once, or moving
+  the guest-tail capture ahead of any monitor traffic.
 
   Faces seen so far, all on the same code:
   - `warp_smp`: `FAIL: calculator did not fully initialise`. The calculator is not

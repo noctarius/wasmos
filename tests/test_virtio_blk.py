@@ -33,33 +33,51 @@ DISK_SECTORS = 2048
 WRITE_TAG = b"WASMOS-BLKWRITE"
 
 
-def _why_the_command_produced_nothing(session, since: int) -> str:
+def _why_the_command_produced_nothing(session, since: int, command: str = "") -> str:
     """An extra sentence for a failed expectation, when the guest explains it.
 
     Every assertion in this file waits for output from a CLI command, and a
     command the CLI cannot RESOLVE produces none -- so each of them fails with
-    a message about the device, having never reached the device at all. That is
-    what one CI run reported as "the device refused BLOCK_IPC_WRITE_REQ" while
-    the guest was plainly saying:
+    a message about the device, having never reached the device at all. One CI
+    run reported "the device refused BLOCK_IPC_WRITE_REQ" while the guest was
+    plainly saying:
 
         / wamos> blkinfo
         no such command found: blkinfo
 
-    which means `/boot` is not mounted. The CLI resolves a bare name through a
-    PATH that lives there, so nothing is runnable and every later assertion in
-    the session is about a command that never ran.
+    What that means is NOT determinable from the serial log alone, and this
+    helper must not pretend otherwise. `cli_resolve_exec_path` probes each PATH
+    entry with `fopen()`, which collapses `open()`'s packed reason into a bare
+    NULL, so an absent file and a transient FS failure print the same sentence.
+
+    The one distinction the log does support is whether the command produced
+    output EARLIER in this session: if it did, it was resolvable then, and a
+    missing mount or a missing binary is ruled out by the guest's own words.
 
     Checked only on the FAILURE path, so a passing test pays nothing for it.
     """
-    tail = session.buf[since:]
-    if b"no such command found" in tail:
+    if b"no such command found" not in session.buf[since:]:
+        return ""
+    name = command.split()[0] if command else ""
+    # The command's own output tag, which only the program itself emits -- the
+    # CLI's echo of the line reaches the log too, and must not count as proof
+    # that the program ran.
+    ran_before = bool(name) and f"[{name}]".encode() in session.buf[:since]
+    if ran_before:
         return (
-            "\n\nThe CLI could not resolve the command: the guest said "
-            "'no such command found'. /boot is not mounted in this boot, so "
-            "nothing under it is runnable and this assertion never reached the "
-            "device. Look for an incomplete bring-up, not a device fault."
+            "\n\nThe CLI answered 'no such command found', but this command "
+            "already produced output earlier in this same session, so it is "
+            "present and was resolvable. Resolution failed transiently: "
+            "cli_resolve_exec_path probes PATH with fopen(), which discards "
+            "open()'s packed reason, so an FS error reads as absence. This "
+            "assertion never reached the device."
         )
-    return ""
+    return (
+        "\n\nThe CLI answered 'no such command found', so this assertion "
+        "never reached the device. The log cannot say whether the file is "
+        "absent or the PATH probe failed -- fopen() discards open()'s reason. "
+        "Check whether the command's mount came up in this boot."
+    )
 
 
 def _virtio_disk_id(session) -> str:
@@ -191,7 +209,7 @@ class VirtioBlkTest(unittest.TestCase):
         self.assertTrue(
             self.session.expect_from(mark, b"driver=virtio-blk", timeout_s=60),
             "blkinfo did not enumerate the virtio disk"
-            + _why_the_command_produced_nothing(self.session, mark),
+            + _why_the_command_produced_nothing(self.session, mark, "blkinfo"),
         )
         disk_id = _virtio_disk_id(self.session)
         # LBA 1, not 0: the signature at LBA 0 is what the read test asserts on,
@@ -207,7 +225,7 @@ class VirtioBlkTest(unittest.TestCase):
             "the device refused BLOCK_IPC_WRITE_REQ — the request chain's data "
             "descriptor is device-writable in the OUT direction, or the device "
             "reported a non-OK status"
-            + _why_the_command_produced_nothing(self.session, mark),
+            + _why_the_command_produced_nothing(self.session, mark, "blkinfo"),
         )
         self.assertTrue(
             self.session.expect_from(
@@ -215,7 +233,7 @@ class VirtioBlkTest(unittest.TestCase):
             ),
             "the sector written did not read back — the write reached the device "
             "but not the sector it named, or the read raced the completion"
-            + _why_the_command_produced_nothing(self.session, mark),
+            + _why_the_command_produced_nothing(self.session, mark, "blkinfo"),
         )
 
     def test_every_backend_appears_as_its_own_disk(self) -> None:

@@ -33,6 +33,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from scripts.qemu_test_framework import GuestPanicked, QemuConfig, QemuSession
+from tests.test_virtio_blk import _why_the_command_produced_nothing
 
 
 class _StubProc:
@@ -208,3 +209,58 @@ class GuestPanicDetectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommandResolutionDiagnosisTest(unittest.TestCase):
+    """`no such command found` must not be reported as an unmounted /boot.
+
+    Regression: 2026-10-19-blkinfo-resolution-blamed-on-boot -- the diagnostic
+    appended to every failed expectation in test_virtio_blk.py asserted that
+    `/boot` is not mounted whenever the CLI could not resolve a command. CI run
+    39154123903 showed that claim being wrong in the most direct way available:
+    nine lines of `[blkinfo] ...` output, and then the very next `blkinfo` in
+    the SAME session answered `no such command found`. The same boot had logged
+    `[fat] fs.backend registered mount=/boot` and loaded a keymap from
+    `/boot/system/keymaps/`.
+
+    The CLI cannot tell the difference. `cli_resolve_exec_path` probes each PATH
+    entry with `fopen()`, and `fopen` turns `open()`'s packed reason into a bare
+    NULL, so a transient FS failure and a missing file produce the same message.
+    A diagnosis built on top of it must not invent the distinction either.
+    """
+
+    def test_a_command_that_ran_earlier_is_not_an_unmounted_boot(self) -> None:
+        session = _session(
+            b"[blkinfo] id=block:ata:0 driver=ata unit=0 sectors=1032192\n"
+            b"/ wamos> blkinfo\n"
+        )
+        mark = len(session.buf)
+        session.buf += b"no such command found: blkinfo\n"
+        text = _why_the_command_produced_nothing(session, mark, "blkinfo")
+        self.assertNotIn("/boot is not mounted", text)
+        self.assertIn("earlier in this same session", text)
+
+    def test_a_command_never_seen_does_not_name_a_cause_it_cannot_know(self) -> None:
+        session = _session(b"/ wamos> blkinfo\n")
+        mark = len(session.buf)
+        session.buf += b"no such command found: blkinfo\n"
+        text = _why_the_command_produced_nothing(session, mark, "blkinfo")
+        self.assertNotIn("/boot is not mounted", text)
+        self.assertIn("no such command found", text)
+
+    def test_output_before_the_mark_is_what_counts_as_having_run(self) -> None:
+        """Only output the command produced BEFORE this attempt proves it was
+        resolvable; the echo of the failing command itself must not count."""
+        session = _session(b"/ wamos> blkinfo --write block:virtio-blk:40 1\n")
+        mark = len(session.buf)
+        session.buf += b"no such command found: blkinfo\n"
+        text = _why_the_command_produced_nothing(session, mark, "blkinfo")
+        self.assertNotIn("earlier in this same session", text)
+
+    def test_a_failure_with_no_resolution_error_adds_nothing(self) -> None:
+        session = _session(b"[blkinfo] id=block:ata:0 driver=ata unit=0\n")
+        mark = len(session.buf)
+        session.buf += b"[blkinfo] id=block:ata:0 lba=0 data=00\n"
+        self.assertEqual(
+            _why_the_command_produced_nothing(session, mark, "blkinfo"), ""
+        )

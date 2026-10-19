@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include "ctype.h"
 #include "cli_ls_order.h"
+#include "fcntl.h"
+#include "unistd.h"
 #include "stdlib.h"
 #include "stdio.h"
 #include "string.h"
@@ -49,7 +51,10 @@
  * process the process manager spawns as a service or driver: PM has already
  * waited for its readiness signal, so the shell does not wait again and sets
  * $? to 0.  A command that cannot be resolved prints "no such command found"
- * and leaves $? untouched.  The first whitespace run separates the command from
+ * when every probe reported the file is absent, and "could not look up <cmd>:
+ * <domain>/<code>" when a probe failed for any other reason -- the two are not
+ * the same diagnosis and must not read as if they were.  Either way $? is left
+ * untouched.  The first whitespace run separates the command from
  * its arguments, which are passed on as a single unsplit string.
  */
 
@@ -574,13 +579,41 @@ static int cli_echo_env_expr(const char* expr) {
     return 0;
 }
 
-/* Walk PATH variable segments and probe each <dir>/<prog> via fopen;
- * writes the first match to resolved and returns 0, or -1 if not found. */
-static int cli_resolve_path_from_pathvar(const char* prog, char* resolved, uint32_t resolved_len) {
+/* Probe one PATH candidate for an executable.
+ *
+ * Uses open() rather than fopen(): fopen collapses open()'s packed reason into
+ * a bare NULL, and the difference between "absent" and "the filesystem failed"
+ * is the whole point of this probe. It also costs no FILE stream, of which
+ * there are eight per process.
+ *
+ * Returns 0 when the candidate exists. On failure returns -1 and stores the
+ * packed reason (already negative, from abi/errors.yaml) in *out_reason. */
+static int cli_probe_exec_candidate(const char* candidate, int32_t* out_reason) {
+    int fd = open(candidate, O_RDONLY);
+    if (fd < 0) {
+        *out_reason = (int32_t)fd;
+        return -1;
+    }
+    (void)close(fd);
+    *out_reason = 0;
+    return 0;
+}
+
+/* Resolve a bare program name against $PATH.
+ *
+ * *out_reason carries why the search came up empty: 0 when every segment
+ * reported the file simply is not there, otherwise the FIRST packed reason that
+ * was something else. A caller that reports "no such command" on a transient
+ * FS error sends its reader after a missing mount that is mounted -- which is
+ * exactly what one CI triage spent a run on. */
+static int cli_resolve_path_from_pathvar(const char* prog, char* resolved, uint32_t resolved_len,
+                                         int32_t* out_reason) {
     char candidate[96];
     const char* path = cli_env_get("PATH");
     int32_t i = 0;
     int32_t seg_start = 0;
+    int32_t first_hard_reason = 0;
+    *out_reason = 0;
     if (!path || !prog || !prog[0]) {
         return -1;
     }
@@ -589,6 +622,7 @@ static int cli_resolve_path_from_pathvar(const char* prog, char* resolved, uint3
             int32_t seg_len = i - seg_start;
             if (seg_len > 0 && seg_len < (int32_t)sizeof(candidate)) {
                 int32_t pos = 0;
+                int32_t reason = 0;
                 for (int32_t j = 0; j < seg_len && pos + 1 < (int32_t)sizeof(candidate); ++j) {
                     candidate[pos++] = path[seg_start + j];
                 }
@@ -599,11 +633,12 @@ static int cli_resolve_path_from_pathvar(const char* prog, char* resolved, uint3
                     candidate[pos++] = prog[j];
                 }
                 candidate[pos] = '\0';
-                FILE* f = fopen(candidate, "r");
-                if (f) {
-                    (void)fclose(f);
+                if (cli_probe_exec_candidate(candidate, &reason) == 0) {
                     (void)snprintf(resolved, resolved_len, "%s", candidate);
                     return 0;
+                }
+                if (first_hard_reason == 0 && reason != WASMOS_ERR_FS_NOT_FOUND) {
+                    first_hard_reason = reason;
                 }
             }
             if (path[i] == '\0') {
@@ -613,6 +648,7 @@ static int cli_resolve_path_from_pathvar(const char* prog, char* resolved, uint3
         }
         i++;
     }
+    *out_reason = first_hard_reason;
     return -1;
 }
 
@@ -1289,10 +1325,20 @@ static void cli_extract_exec_path(const char* input, char* out, uint32_t out_len
     }
 }
 
-static int cli_resolve_exec_path(const char* input, char* resolved, uint32_t resolved_len) {
+/* Resolve a command word to an absolute path.
+ *
+ * *out_reason is 0 when the command is simply not there, and otherwise the
+ * packed reason the lookup failed for -- see cli_resolve_path_from_pathvar.
+ * out_reason may be NULL for callers that only branch on success. */
+static int cli_resolve_exec_path(const char* input, char* resolved, uint32_t resolved_len,
+                                 int32_t* out_reason) {
     int n = 0;
     char path[96];
+    int32_t reason = 0;
     path[0] = '\0';
+    if (out_reason) {
+        *out_reason = 0;
+    }
     if (!input || !resolved || resolved_len == 0) {
         return -1;
     }
@@ -1307,9 +1353,9 @@ static int cli_resolve_exec_path(const char* input, char* resolved, uint32_t res
             return -1;
         }
     } else if (str_find_char(path, '/') < 0) {
-        if (cli_resolve_path_from_pathvar(path, resolved, resolved_len) != 0) {
+        if (cli_resolve_path_from_pathvar(path, resolved, resolved_len, &reason) != 0) {
             char candidate[96];
-            FILE* f = 0;
+            int32_t cwd_reason = 0;
             if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
                 n = snprintf(candidate, sizeof(candidate), "/%s", path);
             } else {
@@ -1318,11 +1364,18 @@ static int cli_resolve_exec_path(const char* input, char* resolved, uint32_t res
             if (n < 0 || (uint32_t)n >= sizeof(candidate)) {
                 return -1;
             }
-            f = fopen(candidate, "r");
-            if (!f) {
+            /* A reason from $PATH outranks the cwd fallback's: the first
+             * segment that failed for something other than absence is the one
+             * worth reporting, and the fallback usually just is not there. */
+            if (cli_probe_exec_candidate(candidate, &cwd_reason) != 0) {
+                if (reason == 0 && cwd_reason != WASMOS_ERR_FS_NOT_FOUND) {
+                    reason = cwd_reason;
+                }
+                if (out_reason) {
+                    *out_reason = reason;
+                }
                 return -1;
             }
-            (void)fclose(f);
             n = snprintf(resolved, resolved_len, "%s", candidate);
             if (n < 0 || (uint32_t)n >= resolved_len) {
                 return -1;
@@ -1348,6 +1401,33 @@ static int cli_resolve_exec_path(const char* input, char* resolved, uint32_t res
     return 0;
 }
 
+/* Report a command word that could not be resolved.
+ *
+ * `reason` is 0 when every probe said the file is not there, and otherwise the
+ * packed code from the probe that failed for another cause -- a filesystem
+ * error, a backend that is not ready, an exhausted descriptor table. Those are
+ * NOT "no such command": the file can be present and the mount healthy, and
+ * saying otherwise points the reader at a bring-up that already succeeded. */
+static void cli_report_unresolved(const char* cmd_name, int32_t reason) {
+    char msg[160];
+    int n;
+    if (reason == 0) {
+        n = snprintf(msg, sizeof(msg), "no such command found: %s\n", cmd_name);
+    } else {
+        n = snprintf(msg,
+                     sizeof(msg),
+                     "could not look up %s: %s/%s\n",
+                     cmd_name,
+                     wasmos_error_domain_name(WASMOS_ERR_DOMAIN_OF(reason)),
+                     wasmos_error_code_name(reason));
+    }
+    if (n > 0) {
+        console_write(msg);
+    } else {
+        console_write("no such command found\n");
+    }
+}
+
 static int cli_spawn_exec_path(const char* input, int32_t* out_pid) {
     char resolved[96];
     uint32_t path_len = 0;
@@ -1361,7 +1441,7 @@ static int cli_spawn_exec_path(const char* input, int32_t* out_pid) {
         return -1;
     }
     *out_pid = -1;
-    if (cli_resolve_exec_path(input, resolved, sizeof(resolved)) != 0) {
+    if (cli_resolve_exec_path(input, resolved, sizeof(resolved), NULL) != 0) {
         return -1;
     }
     while (input[i] == ' ' || input[i] == '\t') {
@@ -1927,6 +2007,7 @@ static int cli_handle_line(void) {
         uint32_t args_len = 0;
         uint32_t write_off = 0;
         int32_t fs_buf_size = 0;
+        int32_t resolve_reason = 0;
         uint32_t i = 0;
         char cmd_name[96];
         uint32_t name_len = 0;
@@ -1944,14 +2025,8 @@ static int cli_handle_line(void) {
             cmd_name[j] = spawn_input[j];
         }
         cmd_name[name_len] = '\0';
-        if (cli_resolve_exec_path(cmd_name, resolved, sizeof(resolved)) != 0) {
-            char msg[140];
-            int n = snprintf(msg, sizeof(msg), "no such command found: %s\n", cmd_name);
-            if (n > 0) {
-                console_write(msg);
-            } else {
-                console_write("no such command found\n");
-            }
+        if (cli_resolve_exec_path(cmd_name, resolved, sizeof(resolved), &resolve_reason) != 0) {
+            cli_report_unresolved(cmd_name, resolve_reason);
             return 0;
         }
         while (spawn_input[i] == ' ' || spawn_input[i] == '\t') {
@@ -2027,15 +2102,10 @@ static int cli_handle_line(void) {
     uint32_t args_len = 0;
     uint32_t write_off = 0;
     int32_t fs_buf_size = 0;
+    int32_t resolve_reason = 0;
     uint32_t i = 0;
-    if (cli_resolve_exec_path(cmd_name, resolved, sizeof(resolved)) != 0) {
-        char msg[140];
-        int n = snprintf(msg, sizeof(msg), "no such command found: %s\n", cmd_name);
-        if (n > 0) {
-            console_write(msg);
-        } else {
-            console_write("no such command found\n");
-        }
+    if (cli_resolve_exec_path(cmd_name, resolved, sizeof(resolved), &resolve_reason) != 0) {
+        cli_report_unresolved(cmd_name, resolve_reason);
         return 0;
     }
     while (g_line[i] == ' ' || g_line[i] == '\t') {

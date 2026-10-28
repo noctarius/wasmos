@@ -95,6 +95,11 @@ typedef struct {
  * spawner -- a child's state is a copy of its parent's cwd, not a fresh one. */
 typedef struct {
     uint8_t in_use;
+    /* The client's process has ended, and the slot is held only until its open
+     * files are closed on their backends (fsmgr_client_next_orphan_fd). A
+     * releasing slot belongs to no context, stands in no directory, and is not
+     * claimable; its fds still count as open, because they are. */
+    uint8_t releasing;
     /* Owning context of the requesting endpoint, so every endpoint a process
      * uses shares one cwd; falls back to the raw source endpoint id when the
      * owner cannot be resolved. */

@@ -1801,18 +1801,26 @@ Source: `architecture/19-virtual-terminal.md`,
   Pinned by `tests/unit/test_ipc.c` H1-H7, `tests/unit/test_fs_manager_clients.c`
   and `tests/test_vfs_root_mount.py::VfsUnmountTest`.
 
-- [ ] [BUG][P2] fs-manager does not close a dead client's files on their
-  backends. `fsmgr_release_client` drops the client's fd mappings, but a backend
-  keys its open files by the connection they arrived on, which is fs-manager's,
-  so it cannot tell whose they were and keeps them open for its own lifetime.
-  Closing them needs a per-fd `FS_IPC_CLOSE` forward from the release.
+- [x] [BUG][P2] fs-manager did not close a dead client's files on their
+  backends: it dropped the client's fd mappings, but the backend kept each file
+  open for its own lifetime, so a tmpfs (32 open-file slots) refused every open
+  once 32 exited processes had left a file open. FIXED: a released client with
+  open files keeps its slot (`releasing`) while fs-manager sends their closes
+  from a dedicated endpoint, at most `FSMGR_RELEASE_CLOSES_MAX` in flight, and
+  the main loop parks on a select set over the service and release endpoints to
+  drain the replies. FAT and WFS key open files by the sender's CONTEXT rather
+  than its endpoint, which is what lets that close find them. Pinned by
+  `tests/unit/test_fs_manager_clients.c` and
+  `VfsUnmountTest::test_a_dead_clients_files_are_closed_on_their_backend`.
 
-- [ ] [BUG][P2] Hangups are delivered from the reaper. `ipc_hangup_deliver` runs
-  on the process reap path and wakes the destination's receiver from there
-  (`sched_event_wake_one`), so the reaper wakes threads mid-dispatch. It survives
-  the scheduler-stress gate, but tolerating it is not the same as removing it:
-  record the hangup during teardown and wake from a context that may safely send.
-  (`src/kernel/ipc.c`, the TODO above `ipc_hangup_deliver`.)
+- [x] [BUG][P2] "Hangups are delivered from the reaper, which wakes threads
+  mid-dispatch." Investigated and NOT a defect. The reap path runs from the
+  process manager's thread, a waiting parent's syscall, or the scheduler AFTER a
+  dispatch has released its claim (`process_schedule_once_impl`, "Now that the
+  claim is gone"); none holds a scheduler lock, and `sched_wake_thread` is the
+  same cross-CPU wake every send performs. Endpoint teardown has always aborted
+  waiters from the same place. Pinned by `test_ipc` H8 (a hangup wakes a parked
+  receiver).
 
 - [ ] [REFACTOR][P2] Remove the PROCESS_MAX_COUNT ceiling without giving up slot
   stability. The count is a compile-time guess a boot has to fit under, and it has

@@ -2748,6 +2748,165 @@ static void test_a_hangup_fits_even_when_the_queue_is_full(void) {
           "the hangup is delivered past a queue that is otherwise full");
 }
 
+/* Regression: 2026-10-28-forged-hangup
+ * A guest could send WASMOS_IPC_HANGUP from its own endpoint naming ANOTHER
+ * context in arg1, and fs-manager released that live client's working directory
+ * and open files on the strength of it. The forgery also took the queue slot
+ * reserved for a real hangup. Only the kernel knows a peer is gone. */
+static void test_a_guest_cannot_send_a_hangup(void) {
+    const uint32_t forger_ctx = 78u;
+    const uint32_t victim_ctx = 79u;
+    const uint32_t service_ctx = 80u;
+    uint32_t forger_ep = 0, service_ep = 0;
+    ipc_message_t msg;
+
+    CHECK(ipc_endpoint_create(forger_ctx, &forger_ep) == IPC_OK, "the forger's endpoint exists");
+    CHECK(ipc_endpoint_create(service_ctx, &service_ep) == IPC_OK, "the service endpoint exists");
+
+    memset(&msg, 0, sizeof(msg));
+    msg.type = WASMOS_IPC_HANGUP;
+    msg.source = forger_ep;
+    msg.arg0 = forger_ep;
+    msg.arg1 = victim_ctx;
+    CHECK(ipc_send_from(forger_ctx, service_ep, &msg) == IPC_ERR_PERM,
+          "a hangup from a guest context is refused");
+    CHECK(drain_hangups(service_ep, 0, 0) == 0u, "and the service never sees it");
+
+    ipc_endpoints_release_owner(forger_ctx);
+    ipc_endpoints_release_owner(service_ctx);
+}
+
+/* Regression: 2026-10-28-second-hangup-lost
+ * One queue slot was reserved for hangups, so with a service's queue full of
+ * live traffic the first client to exit took that slot and the second client's
+ * hangup was refused with IPC_ERR_FULL and dropped. That client's working
+ * directory then pinned its mount for as long as the service lived. */
+static void test_every_hangup_survives_a_full_queue(void) {
+    const uint32_t busy_ctx = 81u;
+    const uint32_t first_ctx = 82u;
+    const uint32_t second_ctx = 83u;
+    const uint32_t service_ctx = 84u;
+    uint32_t busy_ep = 0, first_ep = 0, second_ep = 0, service_ep = 0;
+    ipc_message_t msg;
+    uint32_t hangups = 0, ordinary = 0;
+    uint32_t saw_first = 0, saw_second = 0;
+    uint32_t i;
+
+    CHECK(ipc_endpoint_create(busy_ctx, &busy_ep) == IPC_OK, "a busy peer exists");
+    CHECK(ipc_endpoint_create(first_ctx, &first_ep) == IPC_OK, "the first client exists");
+    CHECK(ipc_endpoint_create(second_ctx, &second_ep) == IPC_OK, "the second client exists");
+    CHECK(ipc_endpoint_create(service_ctx, &service_ep) == IPC_OK, "the service endpoint exists");
+
+    /* Both clients become known peers, and the service consumes their requests. */
+    memset(&msg, 0, sizeof(msg));
+    msg.type = 0x400u;
+    msg.source = first_ep;
+    CHECK(ipc_send_from(first_ctx, service_ep, &msg) == IPC_OK, "the first client talks");
+    msg.source = second_ep;
+    CHECK(ipc_send_from(second_ctx, service_ep, &msg) == IPC_OK, "the second client talks");
+    CHECK(ipc_recv(service_ep, &msg) == IPC_OK && ipc_recv(service_ep, &msg) == IPC_OK,
+          "the service reads both");
+
+    /* A live peer fills the queue to the depth an ordinary sender may use. */
+    msg.source = busy_ep;
+    for (i = 0; i < IPC_QUEUE_DEPTH; ++i) {
+        CHECK(ipc_send_from(busy_ctx, service_ep, &msg) == IPC_OK, "the queue fills");
+    }
+
+    ipc_endpoints_release_owner(first_ctx);
+    ipc_endpoints_release_owner(second_ctx);
+
+    while (ipc_recv(service_ep, &msg) == IPC_OK) {
+        if (msg.type != WASMOS_IPC_HANGUP) {
+            CHECK(hangups == 0u, "a hangup is never delivered ahead of traffic queued before it");
+            ordinary++;
+            continue;
+        }
+        hangups++;
+        saw_first |= (msg.arg1 == first_ctx);
+        saw_second |= (msg.arg1 == second_ctx);
+    }
+    CHECK(ordinary == IPC_QUEUE_DEPTH, "every ordinary message is delivered");
+    CHECK(hangups == 2u, "both clients' hangups arrive, not only the first");
+    CHECK(saw_first && saw_second, "one for each client that ended");
+
+    ipc_endpoints_release_owner(busy_ctx);
+    ipc_endpoints_release_owner(service_ctx);
+}
+
+/* Regression: 2026-10-28-clone-only-child-pins-a-mount
+ * The process manager has fs-manager copy a child's working directory before the
+ * child runs. A child that never used the filesystem never sent fs-manager
+ * anything, so no endpoint of its owed fs-manager a hangup and the copied
+ * directory pinned its mount after the child exited. A context with NO endpoints
+ * at all is the extreme case, and must still be reported. */
+static void test_a_watched_context_is_reported_without_any_endpoint(void) {
+    const uint32_t child_ctx = 85u;
+    const uint32_t service_ctx = 86u;
+    const uint32_t bystander_ctx = 87u;
+    uint32_t service_ep = 0, bystander_ep = 0;
+    uint32_t dead_ep = 0, owner = 0;
+
+    CHECK(ipc_endpoint_create(service_ctx, &service_ep) == IPC_OK, "the service endpoint exists");
+    CHECK(ipc_endpoint_create(bystander_ctx, &bystander_ep) == IPC_OK, "a bystander exists");
+    CHECK(ipc_context_watch(child_ctx, service_ep) == IPC_OK, "the service watches the child");
+    CHECK(drain_hangups(service_ep, 0, 0) == 0u, "nothing is reported while the child lives");
+
+    ipc_endpoints_release_owner(child_ctx);
+
+    CHECK(drain_hangups(service_ep, &dead_ep, &owner) == 1u,
+          "the child's end is reported once, though it owned no endpoint");
+    CHECK(dead_ep == IPC_ENDPOINT_NONE, "naming no endpoint, since none is meant");
+    CHECK(owner == child_ctx, "and naming the context, which is what state is keyed by");
+    CHECK(drain_hangups(bystander_ep, 0, 0) == 0u, "an endpoint that did not watch hears nothing");
+
+    /* The watch is spent: releasing the context again reports nothing more. */
+    ipc_endpoints_release_owner(child_ctx);
+    CHECK(drain_hangups(service_ep, 0, 0) == 0u, "a watch reports once");
+
+    CHECK(ipc_context_watch(IPC_CONTEXT_KERNEL, service_ep) == IPC_ERR_INVALID,
+          "the kernel context is never released, so it cannot be watched");
+    CHECK(ipc_context_watch(child_ctx, IPC_ENDPOINT_NONE) == IPC_ERR_INVALID,
+          "nor can a hangup be owed to no endpoint");
+
+    ipc_endpoints_release_owner(service_ctx);
+    ipc_endpoints_release_owner(bystander_ctx);
+}
+
+/* A hangup owed to an endpoint that is itself torn down before it could be
+ * delivered is dropped with that endpoint: nothing is left owed to an id that
+ * may be reused, and the records do not outlive both peers. */
+static void test_a_pending_hangup_dies_with_its_destination(void) {
+    const uint32_t busy_ctx = 88u;
+    const uint32_t client_ctx = 89u;
+    const uint32_t service_ctx = 90u;
+    uint32_t busy_ep = 0, client_ep = 0, service_ep = 0, fresh_ep = 0;
+    ipc_message_t msg;
+    uint32_t i;
+
+    CHECK(ipc_endpoint_create(busy_ctx, &busy_ep) == IPC_OK, "a busy peer exists");
+    CHECK(ipc_endpoint_create(client_ctx, &client_ep) == IPC_OK, "the client exists");
+    CHECK(ipc_endpoint_create(service_ctx, &service_ep) == IPC_OK, "the service exists");
+
+    memset(&msg, 0, sizeof(msg));
+    msg.type = 0x400u;
+    msg.source = client_ep;
+    CHECK(ipc_send_from(client_ctx, service_ep, &msg) == IPC_OK, "the client talks");
+    CHECK(ipc_recv(service_ep, &msg) == IPC_OK, "the service reads it");
+    msg.source = busy_ep;
+    for (i = 0; i < IPC_QUEUE_DEPTH; ++i) {
+        CHECK(ipc_send_from(busy_ctx, service_ep, &msg) == IPC_OK, "the queue fills");
+    }
+    CHECK(ipc_context_watch(busy_ctx, service_ep) == IPC_OK, "one hangup takes the spare slot");
+    ipc_endpoints_release_owner(busy_ctx);
+    ipc_endpoints_release_owner(client_ctx); /* this one has to wait */
+
+    ipc_endpoints_release_owner(service_ctx);
+    CHECK(ipc_endpoint_create(service_ctx, &fresh_ep) == IPC_OK, "a new endpoint exists");
+    CHECK(drain_hangups(fresh_ep, 0, 0) == 0u, "and inherits nothing owed to the old one");
+    ipc_endpoints_release_owner(service_ctx);
+}
+
 static void test_error_code_contract(void) {
     struct {
         const char* what;
@@ -3014,6 +3173,12 @@ int main(void) {
         {"H2 teardown does not hang up on strangers", test_teardown_does_not_hang_up_on_strangers},
         {"H3 a hangup fits even when the queue is full",
          test_a_hangup_fits_even_when_the_queue_is_full},
+        {"H4 a guest cannot send a hangup", test_a_guest_cannot_send_a_hangup},
+        {"H5 every hangup survives a full queue", test_every_hangup_survives_a_full_queue},
+        {"H6 a watched context is reported without any endpoint",
+         test_a_watched_context_is_reported_without_any_endpoint},
+        {"H7 a pending hangup dies with its destination",
+         test_a_pending_hangup_dies_with_its_destination},
     };
 
     ipc_init();

@@ -921,9 +921,11 @@ linked feature documents for rationale and rollout plans.
   The mount POINT stays, so the covering filesystem's content at that path
   becomes visible again -- shadowing now demonstrated in both directions
   (`tests/test_vfs_root_mount.py::VfsUnmountTest`). A client whose working
-  directory is under the mount does NOT make it busy, because fs-manager never
-  releases client state and a cwd left by an exited process would pin the mount
-  forever (`docs/TASKS.md`). The backend process itself survives its unmount.
+  directory is under the mount also makes it busy, as on Linux. That is sound
+  because fs-manager releases a client's state when its process ends
+  (`WASMOS_IPC_HANGUP`), including a spawned child that only inherited its
+  directory (`ipc_context_watch`). The backend process itself survives its
+  unmount.
 - A mount can be ESTABLISHED at runtime. `FSMGR_IPC_MOUNT_REQ` carries a
   `type=`/`mount=`/`source=` descriptor; fs-manager validates it and has the
   process manager spawn the driver, which is handed `mount=` (and `id=<source>`)

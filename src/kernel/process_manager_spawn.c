@@ -1011,6 +1011,16 @@ static int pm_inherit_child_cwd(uint32_t pm_context_id, uint32_t parent_context_
         return PM_SPAWN_INTERNAL_ERR_BAD_PROCESS;
     }
 
+    /* The copy makes fs-manager hold state for the child, and the child may never
+     * send fs-manager anything itself -- so nothing the child does would ever owe
+     * fs-manager a hangup for it. The watch is that hangup. Without it the child
+     * starts at the root instead: a directory nobody can release would pin its
+     * mount once the child exits. */
+    if (ipc_context_watch(child->context_id, g_pm.fs_endpoint) != IPC_OK) {
+        klog_printf("[pm] cwd not inherited: no hangup record for context %u\n",
+                    (unsigned)child->context_id);
+        return PM_SPAWN_INTERNAL_ERR_ALLOC;
+    }
     req_id = g_pm.fs_request_id++;
     req.type = FSMGR_IPC_CLONE_CWD_REQ;
     req.source = g_pm.fs_ctrl_endpoint;

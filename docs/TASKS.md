@@ -1789,33 +1789,30 @@ Source: `architecture/19-virtual-terminal.md`,
   turn an ordinary miss into a failure. Check each site for which kind it is
   before converting; the count is not the work.
 
-- [ ] [BUG][P2] fs-manager never releases a client's state. `client_state()`
-  allocates a `fs_client_state_t` on first contact from a context and nothing
-  ever clears `in_use`: the chunk list grows for the lifetime of the system, one
-  entry per process that has ever touched the filesystem, each holding a cwd
-  string and an fd table. A shell session that spawns utilities leaks one entry
-  per spawn.
+- [x] [BUG][P2] fs-manager never released a client's state, so its client table
+  grew by one entry per process that ever touched the filesystem, and `umount`
+  could not refuse a mount a process was standing in: a working directory left by
+  an exited process would have pinned the mount forever. FIXED:
+  `WASMOS_IPC_HANGUP` tells a service when a process that sent to it has ended,
+  fs-manager releases that context's working directory and fd mappings, released
+  slots are reused (`fs_manager_clients.c`), and the working-directory rule is in
+  `fsmgr_mount_busy_reason`. A child whose directory the process manager copied
+  is covered by `ipc_context_watch` even if it never sends fs-manager anything.
+  Pinned by `tests/unit/test_ipc.c` H1-H7, `tests/unit/test_fs_manager_clients.c`
+  and `tests/test_vfs_root_mount.py::VfsUnmountTest`.
 
-  It also costs a correctness property rather than only memory. `umount` refuses
-  a mount that still has an OPEN FILE on it, and Linux additionally refuses one
-  that a process is standing in; the second rule is deliberately NOT implemented
-  here (`fsmgr_mount_busy_reason`) because a cwd recorded by a process that has
-  since exited would refuse the unmount forever -- a single `cat` run inside a
-  mount would make it permanently unremovable. The open-file rule has the same
-  staleness and is kept only because a client that exits normally closes its fds.
+- [ ] [BUG][P2] fs-manager does not close a dead client's files on their
+  backends. `fsmgr_release_client` drops the client's fd mappings, but a backend
+  keys its open files by the connection they arrived on, which is fs-manager's,
+  so it cannot tell whose they were and keeps them open for its own lifetime.
+  Closing them needs a per-fd `FS_IPC_CLOSE` forward from the release.
 
-  It is a LEAK and not a stale-state hazard, which is worth stating because the
-  keying invites the opposite conclusion: client state is keyed by context_id,
-  `mm_context_create(pid)` makes that the pid, and process SLOTS are reused. Pids
-  are not — `g_next_pid` only ever counts up — so no new process can be handed a
-  dead one's working directory or fd table. If pids ever became recyclable this
-  would turn into a correctness bug overnight.
-
-  The blocker is that nothing tells fs-manager a client died: there is no exit
-  notification opcode, and a service cannot ask whether a context is still alive.
-  Either would do -- a PM broadcast on process exit that interested services
-  subscribe to, or a liveness query fs-manager sweeps with. Once one exists,
-  reap the state and count the working directory in the busy rule.
+- [ ] [BUG][P2] Hangups are delivered from the reaper. `ipc_hangup_deliver` runs
+  on the process reap path and wakes the destination's receiver from there
+  (`sched_event_wake_one`), so the reaper wakes threads mid-dispatch. It survives
+  the scheduler-stress gate, but tolerating it is not the same as removing it:
+  record the hangup during teardown and wake from a context that may safely send.
+  (`src/kernel/ipc.c`, the TODO above `ipc_hangup_deliver`.)
 
 - [ ] [REFACTOR][P2] Remove the PROCESS_MAX_COUNT ceiling without giving up slot
   stability. The count is a compile-time guess a boot has to fit under, and it has

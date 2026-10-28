@@ -1096,28 +1096,41 @@ subsystems:
         value: 0xff03
         kind: notify
         doc: |
-          An endpoint that had sent to yours has been torn down, because the
-          process owning it ended. arg0 = the dead endpoint's id, arg1 = the
-          context that owned it; arg2..arg3 reserved (0).
+          A process that was your peer has ended. arg0 = the endpoint of it that
+          was your peer, or IPC_ENDPOINT_NONE when the context itself was
+          watched; arg1 = the context that ended, which is what per-client state
+          is keyed by; arg2..arg3 reserved (0). Several of a context's endpoints
+          may each have been your peer, so one context can arrive more than once:
+          releasing its state must be idempotent.
 
-          Delivered to the endpoints that dead endpoint had actually SENT to, and
+          Delivered to the endpoints that ended process had actually SENT to, and
           to no others. That scoping is the point: a service that holds state on
           behalf of its clients -- a working directory, a socket, a window -- hears
           about its own clients ending and nothing else. There is no subscription,
           because the relationship the notification follows is the one the sends
-          already created.
+          already created. Where a service holds state for a context at someone
+          else's request, before that context sends it anything, the kernel-side
+          requester watches the context instead (ipc_context_watch): the process
+          manager does this when it has fs-manager copy a child's working
+          directory.
 
-          The kernel reserves the last slot of every endpoint queue for this
-          message, so a hangup cannot be refused by a queue an ordinary sender
-          filled. A notification that a peer is gone is the one message a service
-          cannot afford to lose: losing it means holding that peer's state until
-          the service itself dies.
+          Only the kernel sends it. ipc_send_from refuses this type from any
+          guest context with IPC_ERR_PERM, because a receiver acts on it by
+          releasing a client's state and a forged one would release a live
+          client's.
+
+          A hangup is never refused and never lost to a full queue. Its record
+          is allocated when it becomes owed, the last ring slot of every endpoint
+          is filled only by hangups, and further hangups wait in the kernel and
+          move into the ring as the receiver drains it -- always after every
+          message queued before them, so a client's last requests are served
+          before its state is released.
 
           A dead endpoint tracks a bounded number of destinations
           (IPC_ENDPOINT_CONTACTS_MAX). A client that talked to more services than
-          that leaves the untracked ones unnotified, which is a leak rather than
-          an error, and the endpoint records that it overflowed so the diagnostics
-          can say so.
+          that, or whose record could not be allocated, leaves the untracked ones
+          unnotified, which is a leak rather than an error; the reap reports it on
+          the serial console.
 
       - symbol: WASMOS_IPC_SHUTDOWN_DONE
         value: 0xff82

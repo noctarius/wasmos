@@ -600,7 +600,7 @@ class VfsUnmountTest(VfsSession, unittest.TestCase):
 
         `mount` is a spawned utility and inherits the shell's directory, so
         running it inside the mount is enough to create that state. The unmount
-        then has to succeed, which it only can if PROC_IPC_EXIT_EVENT released it.
+        then has to succeed, which it only can if WASMOS_IPC_HANGUP released it.
 
         Regression: 2026-09-03-exited-client-pins-a-mount
         """
@@ -616,6 +616,33 @@ class VfsUnmountTest(VfsSession, unittest.TestCase):
             out,
             f"the mount is still busy after the client that stood in it "
             f"exited -- its state was never released\n{out!r}",
+        )
+
+    def test_a_child_that_never_touched_the_filesystem_does_not_pin_a_mount(self):
+        """A spawned process inherits its spawner's directory whether or not it
+        ever uses the filesystem, and must not pin a mount after it exits.
+
+        The process manager copies the directory into fs-manager
+        (FSMGR_IPC_CLONE_CWD) from ITS OWN endpoint. `date` talks only to the RTC,
+        so it never sends fs-manager anything itself, and a hangup that follows a
+        client's own sends never reaches fs-manager for it.
+
+        A mount of its own, because the cases after it need `/home/user` to stand.
+
+        Regression: 2026-10-28-clone-only-child-pins-a-mount
+        """
+        self._run("cd /")
+        out = self._run("mount -t tmpfs /cloneonly", timeout_s=40)
+        self.assertIn(b"mounted", out, f"mount refused\n{out!r}")
+        self._run("cd /cloneonly")
+        self._run("date", timeout_s=40)
+        self._run("cd /")
+        out = self._run("umount /cloneonly")
+        self.assertIn(
+            b"unmounted",
+            out,
+            f"the mount is still busy after a child that only inherited its "
+            f"directory there exited\n{out!r}",
         )
 
     def test_a_mount_with_a_deeper_mount_inside_it_is_refused(self):

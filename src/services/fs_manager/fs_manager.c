@@ -15,6 +15,7 @@
 #include "fs_manager_types.h"
 #include "fs_manager_path.h"
 #include "fs_manager_backends.h"
+#include "fs_manager_clients.h"
 
 /* Retries a reply gets before this service gives up on a client whose endpoint
  * stays full. Generous on purpose: the failure it guards against is permanent
@@ -35,13 +36,7 @@ static int32_t g_reply_endpoint = -1;
 static fs_backend_t g_backends[FS_BACKEND_CAP];
 extern uint8_t __heap_base;
 
-typedef struct fs_client_chunk {
-    struct fs_client_chunk* next;
-    uint32_t used;
-    fs_client_state_t slots[FS_CLIENT_CHUNK_CAP];
-} fs_client_chunk_t;
-
-static fs_client_chunk_t* g_client_chunks = 0;
+static fs_client_table_t g_clients;
 static uint32_t g_heap_cursor = 0;
 static uint32_t g_heap_limit = 0;
 
@@ -80,14 +75,8 @@ static void* fsmgr_heap_alloc(uint32_t size, uint32_t align) {
     return ptr_cast(void, aligned);
 }
 
-static fs_client_chunk_t* client_chunk_alloc(void) {
-    fs_client_chunk_t* chunk =
-        (fs_client_chunk_t*)fsmgr_heap_alloc((uint32_t)sizeof(fs_client_chunk_t), 8u);
-    if (!chunk) {
-        return 0;
-    }
-    memset(chunk, 0, sizeof(*chunk));
-    return chunk;
+void* fsmgr_clients_alloc_chunk(uint32_t size) {
+    return fsmgr_heap_alloc(size, 8u);
 }
 
 /* Whether an FS IPC request type carries client buffer data (path or payload)
@@ -106,74 +95,10 @@ static void log_msg(const char* s) {
     (void)printf("%s", s);
 }
 
-/* Reset a freshly claimed slot to the VFS root. A client with no working
- * directory would otherwise have every relative name routed by guesswork; the
- * root is the one directory that needs no backend to name. */
-static void client_state_init_cwd(fs_client_state_t* slot) {
-    slot->cwd[0] = '/';
-    slot->cwd[1] = '\0';
-}
-
-static fs_client_state_t* client_state_lookup(int32_t context_id) {
-    fs_client_chunk_t* chunk = g_client_chunks;
-    while (chunk) {
-        for (uint32_t i = 0; i < chunk->used; ++i) {
-            if (chunk->slots[i].in_use && chunk->slots[i].context_id == context_id) {
-                return &chunk->slots[i];
-            }
-        }
-        chunk = chunk->next;
-    }
-    return 0;
-}
-
-static void client_state_reset_fds(fs_client_state_t* state) {
-    if (!state) {
-        return;
-    }
-    memset(state->fds, 0, sizeof(state->fds));
-}
-
-/* Find or create per-context state for context_id; allocates a new chunk if
- * the current one is full.  Returns NULL only if heap is exhausted. */
+/* Find or create per-context state for context_id. Returns NULL only if the
+ * heap is exhausted. */
 static fs_client_state_t* client_state(int32_t context_id) {
-    fs_client_state_t* state = client_state_lookup(context_id);
-    fs_client_chunk_t* chunk = g_client_chunks;
-    fs_client_chunk_t* last = 0;
-    if (state) {
-        return state;
-    }
-    while (chunk) {
-        if (chunk->used < FS_CLIENT_CHUNK_CAP) {
-            fs_client_state_t* slot = &chunk->slots[chunk->used++];
-            slot->in_use = 1;
-            slot->context_id = context_id;
-            slot->mount = FS_MOUNT_ROOT;
-            slot->backend_endpoint = -1;
-            client_state_init_cwd(slot);
-            client_state_reset_fds(slot);
-            return slot;
-        }
-        last = chunk;
-        chunk = chunk->next;
-    }
-    chunk = client_chunk_alloc();
-    if (!chunk) {
-        return 0;
-    }
-    if (last) {
-        last->next = chunk;
-    } else {
-        g_client_chunks = chunk;
-    }
-    chunk->used = 1;
-    chunk->slots[0].in_use = 1;
-    chunk->slots[0].context_id = context_id;
-    chunk->slots[0].mount = FS_MOUNT_ROOT;
-    chunk->slots[0].backend_endpoint = -1;
-    client_state_init_cwd(&chunk->slots[0]);
-    client_state_reset_fds(&chunk->slots[0]);
-    return &chunk->slots[0];
+    return fsmgr_client_get(&g_clients, context_id);
 }
 
 static int fsmgr_is_fd_op_type(int32_t type) {
@@ -895,6 +820,27 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
     fsmgr_ensure_mount_points();
 }
 
+/* Release the state held for `context_id`, whose process has ended.
+ *
+ * Driven by WASMOS_IPC_HANGUP, which the kernel delivers when an endpoint that
+ * had sent to this one is torn down. Scoped by construction: the client's own
+ * requests are what made it a peer, so this service hears about its own clients
+ * and nothing else, and there is nothing to subscribe to.
+ *
+ * Everything here is state the client can no longer use. Its open fds name
+ * backend handles nobody will close, and its working directory is a path nobody
+ * is standing in. Both are released; the slot returns to the pool, which is what
+ * stops the table growing by one entry per process that has ever touched the
+ * filesystem.
+ *
+ * The backend-side fds are NOT closed for it. A backend keys its own open files
+ * by the connection they arrived on, which is fs-manager's, so it cannot tell
+ * whose they were -- closing them is a per-fd forward this does not do, and the
+ * consequence is a backend-side leak tracked separately in docs/TASKS.md. */
+static void fsmgr_release_client(int32_t context_id) {
+    fsmgr_client_release(&g_clients, context_id);
+}
+
 /* Forget every cached reference to `endpoint` in the client table.
  *
  * fs_client_state_t caches the backend serving its working directory, and an fd
@@ -908,7 +854,7 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
  * Applies to a provider that DIED as much as to one that was unmounted -- the
  * table entry goes either way, and the caches have to follow it. */
 static void fsmgr_forget_backend_in_clients(int32_t endpoint) {
-    fs_client_chunk_t* chunk = g_client_chunks;
+    fs_client_chunk_t* chunk = g_clients.chunks;
 
     while (chunk) {
         for (uint32_t i = 0; i < chunk->used; ++i) {
@@ -934,8 +880,8 @@ static void fsmgr_forget_backend_in_clients(int32_t endpoint) {
 
 /* Why `mount_path` cannot be unmounted yet, or WASMOS_ERR_NONE when it can.
  *
- * Two things count as standing in a mount, and both are the namespace saying
- * someone is still there rather than a shortage to retry:
+ * Three things count as standing in a mount, and all three are the namespace
+ * saying someone is still there rather than a shortage to retry:
  *
  *  - a DEEPER mount inside it. Removing the outer one first would leave the
  *    inner one addressable only through a path whose prefix no longer routes.
@@ -943,23 +889,21 @@ static void fsmgr_forget_backend_in_clients(int32_t endpoint) {
  *    is inside it.
  *  - an OPEN FILE on it. The fd names a backend that would stop existing, and
  *    the client cannot re-derive it.
+ *  - a client whose WORKING DIRECTORY is under it, which is the same rule Linux
+ *    applies. The requesting client counts: `umount .` refuses, and so does
+ *    unmounting the directory the shell is standing in.
  *
- * A client whose WORKING DIRECTORY is under the mount is deliberately NOT
- * counted, though Linux refuses on exactly that. fs-manager never releases a
- * client's state -- there is no exit notification to release it on -- so a cwd
- * recorded by a process that has since exited would refuse the unmount forever.
- * A single `cat` run inside a mount would make it permanently unremovable, which
- * is a worse failure than the one the rule prevents: a client standing in a
- * removed mount gets NOT_FOUND on its next operation and recovers by moving,
- * whereas nothing recovers a mount pinned by a dead process.
- *
- * TODO: count the working directory once client state is reaped on process
- * exit. The same staleness applies to the open-file rule above, which is kept
- * because an fd is a resource fs-manager actually holds and because a client
- * that exits normally closes it. See docs/TASKS.md.
+ * The working-directory rule is sound only because every entry this walks
+ * belongs to a live process: WASMOS_IPC_HANGUP releases a client's state when its
+ * process ends (fsmgr_release_client). A directory left behind by an exited
+ * process would refuse the unmount forever -- one `cat` run inside a mount would
+ * make it permanently unremovable. That covers a client that never sent
+ * fs-manager anything too: a child whose directory the process manager copied
+ * (FSMGR_IPC_CLONE_CWD) is released through the watch the process manager
+ * registers for it (ipc_context_watch).
  */
 static wasmos_error_code_t fsmgr_mount_busy_reason(const fs_backend_t* mount) {
-    fs_client_chunk_t* chunk = g_client_chunks;
+    fs_client_chunk_t* chunk = g_clients.chunks;
 
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
         if (!g_backends[i].in_use || &g_backends[i] == mount) {
@@ -974,6 +918,9 @@ static wasmos_error_code_t fsmgr_mount_busy_reason(const fs_backend_t* mount) {
             fs_client_state_t* state = &chunk->slots[i];
             if (!state->in_use) {
                 continue;
+            }
+            if (fsmgr_path_is_within(mount->mount_path, state->cwd)) {
+                return WASMOS_ERR_FS_MOUNT_BUSY;
             }
             for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
                 if (state->fds[f].in_use && state->fds[f].backend_endpoint == mount->endpoint) {
@@ -2011,6 +1958,18 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
          * because fs-manager must not be blocked waiting for it. */
         if (type == PROC_IPC_RESP || type == PROC_IPC_ERROR) {
             fsmgr_mount_handle_spawn_reply(type, arg0);
+            continue;
+        }
+
+        /* A client that had sent to this endpoint is gone: release what was
+         * held for it. arg0 is the dead endpoint, arg1 the context that owned it,
+         * and the context is what client state is keyed by.
+         *
+         * No subscription: the kernel delivers this to the endpoints the dead one
+         * had actually sent to, so the client's own requests are what registered
+         * it for notification. */
+        if (type == WASMOS_IPC_HANGUP) {
+            fsmgr_release_client(arg1f);
             continue;
         }
 

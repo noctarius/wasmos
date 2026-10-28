@@ -201,7 +201,8 @@ typedef struct {
 } fs_client_state_t;
 ```
 
-Up to 32 concurrent client contexts. The client state tracks open file
+Client slots are claimed in chunks of `FS_CLIENT_CHUNK_CAP` (32), so the limit is
+fs-manager's heap rather than a count. The client state tracks open file
 handles and the current working directory for each calling process. Open
 handles are forwarded to the appropriate backend; `fs_manager` stores only
 the mapping from client handle to backend endpoint and backend-side handle.
@@ -236,6 +237,14 @@ copy (`FSMGR_IPC_CLONE_CWD`), which is what makes a relative name mean the same
 directory in a child as in its parent. A client whose state names no backend is
 at the VFS root; that case is answered by `fs_manager` itself and is never
 routed to a guessed backend.
+
+A client's state lives as long as its process. `fs_manager` releases it on
+`WASMOS_IPC_HANGUP` (see [Process and IPC](09-process-and-ipc.md)) and reuses
+the slot. A child whose directory was copied before it ran is released the same
+way, because the process manager watches the child's context
+(`ipc_context_watch`) before it sends `FSMGR_IPC_CLONE_CWD`. That is what lets
+`umount` refuse a mount a live client is standing in without a dead one ever
+pinning it.
 
 ---
 

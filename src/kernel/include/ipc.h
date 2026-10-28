@@ -24,6 +24,22 @@
  * IPC_ERR_FULL. There is no backpressure short of that: the sender is never
  * blocked, so a slow receiver turns into dropped sends at its peers. */
 #define IPC_QUEUE_DEPTH 32
+/* Ring slots actually allocated. The extra one is filled only by
+ * WASMOS_IPC_HANGUP, so a peer's death reaches even an endpoint whose ordinary
+ * depth is exhausted. Hangups beyond that one slot wait on the endpoint in
+ * kernel memory reserved when they became owed, and move into the ring as the
+ * receiver drains it; none is ever refused. Kept as a separate constant so
+ * IPC_QUEUE_DEPTH remains what it says: the depth a sender sees. */
+#define IPC_QUEUE_SLOTS (IPC_QUEUE_DEPTH + 1u)
+/* Destinations one endpoint remembers having sent to, so its teardown can tell
+ * them it is gone (WASMOS_IPC_HANGUP). Sized for what a client actually talks
+ * to -- the filesystem, the console, the process manager, the compositor, the
+ * font service, the network stack -- with room to spare. An endpoint that
+ * exceeds it, or whose hangup record cannot be allocated, records the overflow
+ * rather than evicting silently, and its teardown reports it: the untracked
+ * destinations keep that client's state, which is a leak, and a leak nobody can
+ * see is the part worth avoiding. */
+#define IPC_ENDPOINT_CONTACTS_MAX 8
 /* Endpoints per kmem chunk of the endpoint table. A growth granularity, not a
  * ceiling -- see IPC_ENDPOINT_PER_CONTEXT_MAX for the actual bound. */
 #define IPC_ENDPOINT_TABLE_CHUNK 16u
@@ -236,6 +252,22 @@ int ipc_wait(uint32_t endpoint);
  * context id of 0 (the kernel) is ignored, since kernel endpoints outlive any
  * one process. */
 void ipc_endpoints_release_owner(uint32_t owner_context_id);
+/* Owe `destination` a WASMOS_IPC_HANGUP for `context_id`, delivered when
+ * ipc_endpoints_release_owner(context_id) runs, whether or not the context ever
+ * sends `destination` anything. The hangup carries IPC_ENDPOINT_NONE in arg0,
+ * since no one endpoint of the context is meant, and the context in arg1.
+ *
+ * For state a service holds on a context's behalf at SOMEONE ELSE's request:
+ * the process manager has fs-manager copy a child's working directory before
+ * the child runs, and a child that never uses the filesystem would otherwise
+ * never become fs-manager's peer and never be released.
+ *
+ * Kernel-internal; no guest reaches it. The record is allocated here, so
+ * delivery cannot fail later for want of memory. Returns IPC_OK,
+ * IPC_ERR_INVALID for context 0 or IPC_ENDPOINT_NONE, or IPC_ERR_FULL when the
+ * record cannot be allocated -- in which case the caller must not create the
+ * state the hangup would have released. */
+int ipc_context_watch(uint32_t context_id, uint32_t destination);
 
 /*
  * Select-set API — multi-endpoint blocking wait.

@@ -926,6 +926,43 @@ enum {
      * src/drivers/include/wasmos_driver_abi.h and src/kernel/include/irq.h.
      */
     WASMOS_IPC_SHUTDOWN_REQ = 0xFF02,
+    /* A process that was your peer has ended. arg0 = the endpoint of it that
+     * was your peer, or IPC_ENDPOINT_NONE when the context itself was
+     * watched; arg1 = the context that ended, which is what per-client state
+     * is keyed by; arg2..arg3 reserved (0). Several of a context's endpoints
+     * may each have been your peer, so one context can arrive more than once:
+     * releasing its state must be idempotent.
+     *
+     * Delivered to the endpoints that ended process had actually SENT to, and
+     * to no others. That scoping is the point: a service that holds state on
+     * behalf of its clients -- a working directory, a socket, a window -- hears
+     * about its own clients ending and nothing else. There is no subscription,
+     * because the relationship the notification follows is the one the sends
+     * already created. Where a service holds state for a context at someone
+     * else's request, before that context sends it anything, the kernel-side
+     * requester watches the context instead (ipc_context_watch): the process
+     * manager does this when it has fs-manager copy a child's working
+     * directory.
+     *
+     * Only the kernel sends it. ipc_send_from refuses this type from any
+     * guest context with IPC_ERR_PERM, because a receiver acts on it by
+     * releasing a client's state and a forged one would release a live
+     * client's.
+     *
+     * A hangup is never refused and never lost to a full queue. Its record
+     * is allocated when it becomes owed, the last ring slot of every endpoint
+     * is filled only by hangups, and further hangups wait in the kernel and
+     * move into the ring as the receiver drains it -- always after every
+     * message queued before them, so a client's last requests are served
+     * before its state is released.
+     *
+     * A dead endpoint tracks a bounded number of destinations
+     * (IPC_ENDPOINT_CONTACTS_MAX). A client that talked to more services than
+     * that, or whose record could not be allocated, leaves the untracked ones
+     * unnotified, which is a leak rather than an error; the reap reports it on
+     * the serial console.
+     */
+    WASMOS_IPC_HANGUP = 0xFF03,
     /* Sent back to the process manager when a participant has quiesced.
      * arg0..arg3 reserved (0). Answering does not mean the participant stops
      * running; it means nothing it holds still needs to reach a device.
@@ -1390,6 +1427,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
     case WASMOS_OPCODE_SUBSYS_SYSTEM:
         switch (type) {
         case 0xFF02: return "WASMOS_IPC_SHUTDOWN_REQ";
+        case 0xFF03: return "WASMOS_IPC_HANGUP";
         case 0xFF82: return "WASMOS_IPC_SHUTDOWN_DONE";
         default: return "UNKNOWN";
         }

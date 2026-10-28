@@ -575,6 +575,76 @@ class VfsUnmountTest(VfsSession, unittest.TestCase):
     from a deleted one.
     """
 
+    def test_a_client_standing_in_a_mount_keeps_it_busy(self):
+        """The working-directory rule, which Linux applies and this did not until
+        a dead client's state could be released.
+
+        The requesting client counts, so unmounting the directory the shell is
+        standing in refuses -- there is no way to ask on someone else's behalf.
+        """
+        self._run("cd /home/user")
+        out = self._run("umount /home/user")
+        self.assertIn(
+            b"fs.MOUNT_BUSY", out, f"unmounted out from under the shell\n{out!r}"
+        )
+        self._run("cd /")
+
+    def test_the_exited_client_no_longer_keeps_a_mount_busy(self):
+        """A process that stood in a mount and EXITED must not pin it.
+
+        This is what made the rule above unsafe to have. fs-manager keys client
+        state by context id and never released it, so a utility that ran once
+        inside a mount left a working directory behind forever and the mount
+        became permanently unremovable -- `umount` would refuse on behalf of a
+        process that no longer existed.
+
+        `mount` is a spawned utility and inherits the shell's directory, so
+        running it inside the mount is enough to create that state. The unmount
+        then has to succeed, which it only can if WASMOS_IPC_HANGUP released it.
+
+        Regression: 2026-09-03-exited-client-pins-a-mount
+        """
+        self._run("cd /home/user")
+        # Spawned here, so its cloned working directory is inside the mount.
+        self._run("mount", timeout_s=40)
+        # Step out, so the only thing that could still pin the mount is the
+        # state of the utility that just exited.
+        self._run("cd /")
+        out = self._run("umount /home/user")
+        self.assertIn(
+            b"unmounted",
+            out,
+            f"the mount is still busy after the client that stood in it "
+            f"exited -- its state was never released\n{out!r}",
+        )
+
+    def test_a_child_that_never_touched_the_filesystem_does_not_pin_a_mount(self):
+        """A spawned process inherits its spawner's directory whether or not it
+        ever uses the filesystem, and must not pin a mount after it exits.
+
+        The process manager copies the directory into fs-manager
+        (FSMGR_IPC_CLONE_CWD) from ITS OWN endpoint. `date` talks only to the RTC,
+        so it never sends fs-manager anything itself, and a hangup that follows a
+        client's own sends never reaches fs-manager for it.
+
+        A mount of its own, because the cases after it need `/home/user` to stand.
+
+        Regression: 2026-10-28-clone-only-child-pins-a-mount
+        """
+        self._run("cd /")
+        out = self._run("mount -t tmpfs /cloneonly", timeout_s=40)
+        self.assertIn(b"mounted", out, f"mount refused\n{out!r}")
+        self._run("cd /cloneonly")
+        self._run("date", timeout_s=40)
+        self._run("cd /")
+        out = self._run("umount /cloneonly")
+        self.assertIn(
+            b"unmounted",
+            out,
+            f"the mount is still busy after a child that only inherited its "
+            f"directory there exited\n{out!r}",
+        )
+
     def test_a_mount_with_a_deeper_mount_inside_it_is_refused(self):
         """`/wfs` contains the `/wfs/nested` mount. Removing the outer one would
         leave the inner reachable only through a prefix that no longer routes.

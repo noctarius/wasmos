@@ -588,6 +588,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBSYS_WASM_DIR}/include/wasmos/sha256.h
   ${SERVICES_DIR}/fs_manager/fs_manager_types.h
   ${SERVICES_DIR}/fs_manager/fs_manager_backends.h
+  ${SERVICES_DIR}/fs_manager/fs_manager_clients.h
   ${SERVICES_DIR}/device_manager/device_manager_types.h
   ${SERVICES_DIR}/pci_bus/pci_bus_types.h
   ${SERVICES_DIR}/sysinit/sysinit_types.h
@@ -2629,6 +2630,18 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/fs_manager/fs_manager_backends.c
           -o ${BUILD_DIR}/test_fs_manager_backends
   COMMAND ${BUILD_DIR}/test_fs_manager_backends
+  # The per-client state table: claiming, releasing and reusing a client's slot.
+  # Split out of fs_manager.c for the same reason: no IPC, no xfer buffer; the
+  # test supplies the chunk allocator the service's bump heap otherwise does.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${SERVICES_DIR}/fs_manager
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${LIBSYS_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_fs_manager_clients.c
+          ${SERVICES_DIR}/fs_manager/fs_manager_clients.c
+          -o ${BUILD_DIR}/test_fs_manager_clients
+  COMMAND ${BUILD_DIR}/test_fs_manager_clients
   # Listing order for `ls`. Split out of cli.c for the same reason
   # fs_manager_path.c is: no IPC, no console, no globals.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

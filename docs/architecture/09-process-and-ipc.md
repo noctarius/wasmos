@@ -191,6 +191,36 @@ notification endpoint: both blocking waits require a MESSAGE endpoint, and
 `ipc_wait_for` polls.  Both are held under `ep->lock`, so the notify cannot race
 `ipc_endpoints_release_owner` freeing the hub.
 
+#### Peer Hangup
+
+When a process is reaped, `ipc_endpoints_release_owner` sends
+`WASMOS_IPC_HANGUP` to every endpoint that process's endpoints had sent to:
+`arg0` names the endpoint that was the peer, `arg1` the context that ended. It
+is how a service releases what it held for a client (a working directory, a
+socket, a window) without subscribing to anything — the client's own sends are
+the registration. A context that may never send at all is covered by
+`ipc_context_watch(context, destination)`, which a kernel-side requester
+registers when it has a service create state on that context's behalf; its
+hangup carries `IPC_ENDPOINT_NONE` in `arg0`.
+
+The contract a receiver relies on:
+
+- **Only the kernel sends it.** `ipc_send_from` refuses the type from a guest
+  context with `IPC_ERR_PERM`.
+- **It is never refused or lost to a full queue.** Each hangup's record is
+  allocated when it becomes owed (`ipc_hangup_t`), so delivery needs no memory.
+  The ring holds `IPC_QUEUE_SLOTS = IPC_QUEUE_DEPTH + 1` messages and the slot
+  past the ordinary depth is filled only by hangups; further hangups wait on the
+  endpoint's pending list and move into the ring as receives free slots.
+- **It arrives after everything queued before it**, so a client's last requests
+  are served before its state is released.
+- **One context may arrive more than once**, once per endpoint of it that was a
+  peer plus once per watch, so releasing must be idempotent.
+
+An endpoint records at most `IPC_ENDPOINT_CONTACTS_MAX` destinations; beyond
+that, or when a record cannot be allocated, the untracked peers are not told and
+the reap reports the overflow on the serial console.
+
 #### IPC Result Codes
 
 Each code names one failure, and the values are the generated transport axis

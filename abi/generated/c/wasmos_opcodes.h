@@ -926,6 +926,30 @@ enum {
      * src/drivers/include/wasmos_driver_abi.h and src/kernel/include/irq.h.
      */
     WASMOS_IPC_SHUTDOWN_REQ = 0xFF02,
+    /* An endpoint that had sent to yours has been torn down, because the
+     * process owning it ended. arg0 = the dead endpoint's id, arg1 = the
+     * context that owned it; arg2..arg3 reserved (0).
+     *
+     * Delivered to the endpoints that dead endpoint had actually SENT to, and
+     * to no others. That scoping is the point: a service that holds state on
+     * behalf of its clients -- a working directory, a socket, a window -- hears
+     * about its own clients ending and nothing else. There is no subscription,
+     * because the relationship the notification follows is the one the sends
+     * already created.
+     *
+     * The kernel reserves the last slot of every endpoint queue for this
+     * message, so a hangup cannot be refused by a queue an ordinary sender
+     * filled. A notification that a peer is gone is the one message a service
+     * cannot afford to lose: losing it means holding that peer's state until
+     * the service itself dies.
+     *
+     * A dead endpoint tracks a bounded number of destinations
+     * (IPC_ENDPOINT_CONTACTS_MAX). A client that talked to more services than
+     * that leaves the untracked ones unnotified, which is a leak rather than
+     * an error, and the endpoint records that it overflowed so the diagnostics
+     * can say so.
+     */
+    WASMOS_IPC_HANGUP = 0xFF03,
     /* Sent back to the process manager when a participant has quiesced.
      * arg0..arg3 reserved (0). Answering does not mean the participant stops
      * running; it means nothing it holds still needs to reach a device.
@@ -1390,6 +1414,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
     case WASMOS_OPCODE_SUBSYS_SYSTEM:
         switch (type) {
         case 0xFF02: return "WASMOS_IPC_SHUTDOWN_REQ";
+        case 0xFF03: return "WASMOS_IPC_HANGUP";
         case 0xFF82: return "WASMOS_IPC_SHUTDOWN_DONE";
         default: return "UNKNOWN";
         }

@@ -181,6 +181,12 @@ static int pm_slot_alloc_owned_blob(pm_app_state_t* slot, const uint8_t* blob, u
     pages = ((uint64_t)blob_size + (page_size - 1u)) / page_size;
     phys = pfa_alloc_pages(pages);
     if (phys == 0) {
+        /* Says WHAT was asked for, not only that it failed: a genuine shortage
+         * and a request for a nonsensical size both surface here as ALLOC, and
+         * they are fixed at opposite ends of the system. */
+        klog_printf("[pm] blob alloc failed: %llu page(s) for %u bytes\n",
+                    (unsigned long long)pages,
+                    (unsigned)blob_size);
         return PM_SPAWN_INTERNAL_ERR_ALLOC;
     }
     dst = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
@@ -543,6 +549,10 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32
     }
     pm_app_state_t* slot = pm_find_app_slot();
     if (!slot) {
+        /* No idle slot and the kmem-backed apps list could not grow. Slots are
+         * reused only once their app's process is reaped, so a list that keeps
+         * growing means processes are being kept alive. */
+        klog_write("[pm] app slot alloc failed; spawn refused\n");
         return PM_SPAWN_INTERNAL_ERR_ALLOC;
     }
     pm_slot_reset(slot);
@@ -571,6 +581,7 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
     if (pm_slot_alloc_owned_blob(slot, blob, blob_size) != 0) {
+        klog_write("[pm] blob storage alloc failed\n");
         return PM_SPAWN_INTERNAL_ERR_ALLOC;
     }
 
@@ -1146,7 +1157,9 @@ int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     }
     parent_pid = caller->pid;
 
-    if (pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid) != 0) {
+    int spawn_rc = pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid);
+    if (spawn_rc != 0) {
+        klog_printf("[pm] spawn_module failed rc=%d\n", spawn_rc);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
@@ -1293,13 +1306,18 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
-    if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
-                             &child_pid) != 0) {
+    int spawn_rc = pm_spawn_from_buffer(parent_pid,
+                                        (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
+                                        resolved.blob_size,
+                                        resolved.args_len > 0u ? resolved.args : 0,
+                                        resolved.args_len,
+                                        PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
+                                        &child_pid);
+    if (spawn_rc != 0) {
+        /* The internal reason, which the packed code cannot carry: several
+         * distinct failures collapse into SPAWN_FAILED, and discarding which
+         * one happened leaves a caller guessing. */
+        klog_printf("[pm] spawn failed rc=%d\n", spawn_rc);
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
@@ -1426,13 +1444,19 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
-    if (pm_spawn_from_buffer(parent_pid,
+    int spawn_rc =
+        pm_spawn_from_buffer(parent_pid,
                              (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
                              0u, /* caps variants spend arg0 on capability flags: no tty pin */
-                             &child_pid) != 0) {
+                             &child_pid);
+    if (spawn_rc != 0) {
+        /* The internal reason, which the packed code cannot carry: several
+         * distinct failures collapse into SPAWN_FAILED, and discarding which
+         * one happened leaves a caller guessing. */
+        klog_printf("[pm] spawn failed rc=%d\n", spawn_rc);
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
@@ -2205,13 +2229,16 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
-    if (pm_spawn_from_buffer(parent_pid,
+    int spawn_rc =
+        pm_spawn_from_buffer(parent_pid,
                              (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
                              0u, /* caps variants spend arg0 on capability flags: no tty pin */
-                             &pid) != 0) {
+                             &pid);
+    if (spawn_rc != 0) {
+        klog_printf("[pm] spawn failed rc=%d\n", spawn_rc);
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }

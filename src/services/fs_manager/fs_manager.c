@@ -895,6 +895,42 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
     fsmgr_ensure_mount_points();
 }
 
+/* Release the state held for `context_id`, whose process has ended.
+ *
+ * Driven by WASMOS_IPC_HANGUP, which the kernel delivers when an endpoint that
+ * had sent to this one is torn down. Scoped by construction: the client's own
+ * requests are what made it a peer, so this service hears about its own clients
+ * and nothing else, and there is nothing to subscribe to.
+ *
+ * Everything here is state the client can no longer use. Its open fds name
+ * backend handles nobody will close, and its working directory is a path nobody
+ * is standing in. Both are released; the slot returns to the pool, which is what
+ * stops the table growing by one entry per process that has ever touched the
+ * filesystem.
+ *
+ * The backend-side fds are NOT closed for it. A backend keys its own open files
+ * by the connection they arrived on, which is fs-manager's, so it cannot tell
+ * whose they were -- closing them is a per-fd forward this does not do, and the
+ * consequence is a backend-side leak tracked separately in docs/TASKS.md. */
+static void fsmgr_release_client(int32_t context_id) {
+    fs_client_chunk_t* chunk = g_client_chunks;
+
+    while (chunk) {
+        for (uint32_t i = 0; i < chunk->used; ++i) {
+            fs_client_state_t* state = &chunk->slots[i];
+            if (!state->in_use || state->context_id != context_id) {
+                continue;
+            }
+            client_state_reset_fds(state);
+            state->in_use = 0;
+            state->context_id = -1;
+            state->backend_endpoint = -1;
+            return;
+        }
+        chunk = chunk->next;
+    }
+}
+
 /* Forget every cached reference to `endpoint` in the client table.
  *
  * fs_client_state_t caches the backend serving its working directory, and an fd
@@ -934,8 +970,8 @@ static void fsmgr_forget_backend_in_clients(int32_t endpoint) {
 
 /* Why `mount_path` cannot be unmounted yet, or WASMOS_ERR_NONE when it can.
  *
- * Two things count as standing in a mount, and both are the namespace saying
- * someone is still there rather than a shortage to retry:
+ * Three things count as standing in a mount, and all three are the namespace
+ * saying someone is still there rather than a shortage to retry:
  *
  *  - a DEEPER mount inside it. Removing the outer one first would leave the
  *    inner one addressable only through a path whose prefix no longer routes.
@@ -943,20 +979,16 @@ static void fsmgr_forget_backend_in_clients(int32_t endpoint) {
  *    is inside it.
  *  - an OPEN FILE on it. The fd names a backend that would stop existing, and
  *    the client cannot re-derive it.
+ *  - a client whose WORKING DIRECTORY is under it, which is the same rule Linux
+ *    applies. The requesting client counts: `umount .` refuses, and so does
+ *    unmounting the directory the shell is standing in.
  *
- * A client whose WORKING DIRECTORY is under the mount is deliberately NOT
- * counted, though Linux refuses on exactly that. fs-manager never releases a
- * client's state -- there is no exit notification to release it on -- so a cwd
- * recorded by a process that has since exited would refuse the unmount forever.
- * A single `cat` run inside a mount would make it permanently unremovable, which
- * is a worse failure than the one the rule prevents: a client standing in a
- * removed mount gets NOT_FOUND on its next operation and recovers by moving,
- * whereas nothing recovers a mount pinned by a dead process.
- *
- * TODO: count the working directory once client state is reaped on process
- * exit. The same staleness applies to the open-file rule above, which is kept
- * because an fd is a resource fs-manager actually holds and because a client
- * that exits normally closes it. See docs/TASKS.md.
+ * The working-directory rule was deliberately absent until a dead client's state
+ * could be released. Without that, fs-manager never dropped an entry, so a
+ * directory recorded by a process that had since exited would refuse the unmount
+ * forever: one `cat` run inside a mount made it permanently unremovable. The rule
+ * is only sound because WASMOS_IPC_HANGUP now releases it (fsmgr_release_client),
+ * so every entry this walks belongs to a process that can still act on it.
  */
 static wasmos_error_code_t fsmgr_mount_busy_reason(const fs_backend_t* mount) {
     fs_client_chunk_t* chunk = g_client_chunks;
@@ -974,6 +1006,9 @@ static wasmos_error_code_t fsmgr_mount_busy_reason(const fs_backend_t* mount) {
             fs_client_state_t* state = &chunk->slots[i];
             if (!state->in_use) {
                 continue;
+            }
+            if (fsmgr_path_is_within(mount->mount_path, state->cwd)) {
+                return WASMOS_ERR_FS_MOUNT_BUSY;
             }
             for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
                 if (state->fds[f].in_use && state->fds[f].backend_endpoint == mount->endpoint) {
@@ -2011,6 +2046,18 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
          * because fs-manager must not be blocked waiting for it. */
         if (type == PROC_IPC_RESP || type == PROC_IPC_ERROR) {
             fsmgr_mount_handle_spawn_reply(type, arg0);
+            continue;
+        }
+
+        /* A client that had sent to this endpoint is gone: release what was
+         * held for it. arg0 is the dead endpoint, arg1 the context that owned it,
+         * and the context is what client state is keyed by.
+         *
+         * No subscription: the kernel delivers this to the endpoints the dead one
+         * had actually sent to, so the client's own requests are what registered
+         * it for notification. */
+        if (type == WASMOS_IPC_HANGUP) {
+            fsmgr_release_client(arg1f);
             continue;
         }
 

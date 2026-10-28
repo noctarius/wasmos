@@ -2873,6 +2873,39 @@ static void test_a_watched_context_is_reported_without_any_endpoint(void) {
     ipc_endpoints_release_owner(bystander_ctx);
 }
 
+/* A hangup is delivered on the reap path, which runs from the process manager,
+ * from a waiting parent's syscall, or from the scheduler after a dispatch has
+ * released its claim. Whichever it is, a service parked on its endpoint must be
+ * woken by the hangup exactly as by any send, or it sleeps on a client that is
+ * gone. */
+static void test_a_hangup_wakes_a_parked_receiver(void) {
+    const uint32_t client_ctx = 91u;
+    const uint32_t service_ctx = 92u;
+    uint32_t client_ep = 0, service_ep = 0;
+    ipc_message_t msg;
+
+    CHECK(ipc_endpoint_create(client_ctx, &client_ep) == IPC_OK, "the client exists");
+    CHECK(ipc_endpoint_create(service_ctx, &service_ep) == IPC_OK, "the service exists");
+    memset(&msg, 0, sizeof(msg));
+    msg.type = 0x400u;
+    msg.source = client_ep;
+    CHECK(ipc_send_from(client_ctx, service_ep, &msg) == IPC_OK, "the client talks");
+    CHECK(ipc_recv_for(service_ctx, service_ep, &msg) == IPC_OK, "the service reads it");
+
+    reset_threads();
+    thread_t* service = thread_get(2);
+    park_recv(service_ctx, service_ep, service);
+    CHECK(service->wait_event != 0, "the service is parked on its endpoint");
+
+    g_wake_calls = 0;
+    ipc_endpoints_release_owner(client_ctx);
+    CHECK(g_wake_calls == 1 && g_last_woken == service, "the hangup wakes the parked service");
+    CHECK(ipc_recv_for(service_ctx, service_ep, &msg) == IPC_OK && msg.type == WASMOS_IPC_HANGUP,
+          "and is what it then receives");
+
+    ipc_endpoints_release_owner(service_ctx);
+}
+
 /* A hangup owed to an endpoint that is itself torn down before it could be
  * delivered is dropped with that endpoint: nothing is left owed to an id that
  * may be reused, and the records do not outlive both peers. */
@@ -3179,6 +3212,7 @@ int main(void) {
          test_a_watched_context_is_reported_without_any_endpoint},
         {"H7 a pending hangup dies with its destination",
          test_a_pending_hangup_dies_with_its_destination},
+        {"H8 a hangup wakes a parked receiver", test_a_hangup_wakes_a_parked_receiver},
     };
 
     ipc_init();

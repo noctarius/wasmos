@@ -645,6 +645,35 @@ class VfsUnmountTest(VfsSession, unittest.TestCase):
             f"directory there exited\n{out!r}",
         )
 
+    def test_a_dead_clients_files_are_closed_on_their_backend(self):
+        """A process that exits with a file open must not keep that file open on
+        the backend serving it.
+
+        fs-manager released the client's fd MAPPING on its hangup but never told
+        the backend, which keeps its own open-file table for its whole life. A
+        tmpfs has 32 open-file slots, so the 33rd process to leave a file open
+        found the table full and every later open on that mount failed.
+        `fs_leave_open` opens for append and returns without fclose -- libc does
+        not close files at exit.
+
+        A mount of its own, because the cases after it need `/home/user` to stand.
+
+        Regression: 2026-10-28-dead-client-fds-stay-open-on-backend
+        """
+        self._run("cd /")
+        out = self._run("mount -t tmpfs /leakfds", timeout_s=40)
+        self.assertIn(b"mounted", out, f"mount refused\n{out!r}")
+        for i in range(40):
+            out = self._run("fs_leave_open /leakfds/held", timeout_s=40)
+            self.assertIn(
+                b"fs-leave-open: left open",
+                out,
+                f"open #{i + 1} failed: the backend's open-file table is full of "
+                f"files that exited processes left open\n{out!r}",
+            )
+        out = self._run("umount /leakfds")
+        self.assertIn(b"unmounted", out, f"unmount refused\n{out!r}")
+
     def test_a_mount_with_a_deeper_mount_inside_it_is_refused(self):
         """`/wfs` contains the `/wfs/nested` mount. Removing the outer one would
         leave the inner reachable only through a prefix that no longer routes.

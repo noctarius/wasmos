@@ -246,6 +246,15 @@ way, because the process manager watches the child's context
 `umount` refuse a mount a live client is standing in without a dead one ever
 pinning it.
 
+The files an ended client left open are closed on their backends, because a
+backend's open-file table lives as long as the backend does. The slot is held,
+marked `releasing`, until `fs_manager` has sent each close from a dedicated
+release endpoint whose replies its main loop drains, with at most
+`FSMGR_RELEASE_CLOSES_MAX` in flight so a backend never replies into a full
+queue. That works because a backend keys an open file by the sender's CONTEXT,
+not by the endpoint the open arrived on: every endpoint of `fs_manager` may name
+a file `fs_manager` opened.
+
 ---
 
 ### FS IPC Opcode Table

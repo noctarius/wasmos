@@ -893,10 +893,12 @@ static void ipc_endpoint_teardown(void* elem, void* user) {
  * into the ring in order. Neither can fail. A destination that no longer exists
  * holds nothing for anyone, so its record is simply freed.
  *
- * TODO: this runs on the reaper's path and wakes the destination's receiver from
- * it (ipc_endpoint_enqueue_locked -> sched_event_wake_one), so the reaper wakes
- * threads mid-dispatch. Recording the hangup here and waking from a context that
- * may safely send would remove that hazard instead of tolerating it. */
+ * Runs on the reap path, which is one of: the process manager's thread, a
+ * waiting parent's syscall, or the scheduler after a dispatch has released its
+ * claim (process_schedule_once_impl). None holds a scheduler lock, and the wake
+ * it performs (ipc_endpoint_enqueue_locked -> sched_event_wake_one) is the same
+ * cross-CPU wake every send performs; endpoint teardown aborts waiters from the
+ * same place. */
 static void ipc_hangup_deliver(ipc_hangup_t* record) {
     int rc = IPC_OK;
     ipc_endpoint_t* ep = ipc_endpoint_acquire(record->destination, IPC_ENDPOINT_TYPE_MESSAGE, &rc);

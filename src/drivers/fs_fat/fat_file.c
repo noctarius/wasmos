@@ -40,19 +40,19 @@ void fat_open_pool_init(fat_open_pool_t* pool) {
     }
 }
 
-fat_open_file_t* fat_open_file_for_fd(fat_open_pool_t* pool, int32_t source, int32_t fd) {
+fat_open_file_t* fat_open_file_for_fd(fat_open_pool_t* pool, int32_t owner, int32_t fd) {
     int32_t index = fd - 3;
 
     if (!pool || index < 0 || (uint32_t)index >= FAT_MAX_OPEN_FILES) {
         return 0;
     }
-    if (!pool->files[index].in_use || pool->files[index].owner != source) {
+    if (!pool->files[index].in_use || pool->files[index].owner != owner) {
         return 0;
     }
     return &pool->files[index];
 }
 
-int fat_open_file_alloc(fat_open_pool_t* pool, int32_t source, int32_t* out_fd) {
+int fat_open_file_alloc(fat_open_pool_t* pool, int32_t owner, int32_t* out_fd) {
     uint32_t i;
 
     if (!pool || !out_fd) {
@@ -61,7 +61,7 @@ int fat_open_file_alloc(fat_open_pool_t* pool, int32_t source, int32_t* out_fd) 
     for (i = 0; i < FAT_MAX_OPEN_FILES; ++i) {
         if (!pool->files[i].in_use) {
             pool->files[i].in_use = 1;
-            pool->files[i].owner = source;
+            pool->files[i].owner = owner;
             pool->files[i].flags = 0;
             pool->files[i].first_cluster = 0;
             pool->files[i].current_cluster = 0;
@@ -387,10 +387,10 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_CORRUPT);
     }
 
-    if (fat_open_file_alloc(pool, op->source, &op->fd) != 0) {
+    if (fat_open_file_alloc(pool, op->owner, &op->fd) != 0) {
         FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_NO_FD);
     }
-    file = fat_open_file_for_fd(pool, op->source, op->fd);
+    file = fat_open_file_for_fd(pool, op->owner, op->fd);
     if (!file) {
         FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_NO_FD);
     }
@@ -414,7 +414,7 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         FAT_CO_AWAIT(op, fat_chain_walk(&op->capwalk, blk, mnt));
         /* `file` is a C local (not preserved across the yield above); re-derive
          * it from the fd stored in the op ctx. */
-        file = fat_open_file_for_fd(pool, op->source, op->fd);
+        file = fat_open_file_for_fd(pool, op->owner, op->fd);
         if (!file) {
             FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_NO_FD);
         }
@@ -425,7 +425,7 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     }
 
     if ((op->arg1 & FAT_OPEN_TRUNC) != 0) {
-        file = fat_open_file_for_fd(pool, op->source, op->fd);
+        file = fat_open_file_for_fd(pool, op->owner, op->fd);
         if (!file) {
             FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_NO_FD);
         }
@@ -433,7 +433,7 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         op->storesize.file = file;
         op->storesize.size = 0;
         FAT_CO_AWAIT(op, fat_store_open_file_size(&op->storesize, blk, mnt));
-        file = fat_open_file_for_fd(pool, op->source, op->fd);
+        file = fat_open_file_for_fd(pool, op->owner, op->fd);
         if (!file) {
             FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_NO_FD);
         }
@@ -442,7 +442,7 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
             FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_IO);
         }
     } else if ((op->arg1 & FAT_OPEN_APPEND) != 0) {
-        file = fat_open_file_for_fd(pool, op->source, op->fd);
+        file = fat_open_file_for_fd(pool, op->owner, op->fd);
         if (!file) {
             FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_NO_FD);
         }
@@ -508,7 +508,7 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     /* `file` points at a stable pool slot, but the C local is re-derived every
      * step (it is not preserved across a coroutine yield); resolve it before the
      * resume switch so it is valid on every entry. */
-    fat_open_file_t* file = fat_open_file_for_fd(pool, op->source, op->arg0);
+    fat_open_file_t* file = fat_open_file_for_fd(pool, op->owner, op->arg0);
     uint32_t max_buffer;
     uint32_t remaining;
 
@@ -603,7 +603,7 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
 fat_r_t fat_op_write(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
                      fat_open_pool_t* pool) {
     /* Re-derived every step (see fat_op_read): a stable slot, an unstable local. */
-    fat_open_file_t* file = fat_open_file_for_fd(pool, op->source, op->arg0);
+    fat_open_file_t* file = fat_open_file_for_fd(pool, op->owner, op->arg0);
     uint32_t max_buffer;
     uint32_t next_end;
     uint32_t i;
@@ -869,7 +869,7 @@ fat_r_t fat_op_seek(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     int64_t target;
 
     FAT_CO_BEGIN(op);
-    file = fat_open_file_for_fd(pool, op->source, op->arg0);
+    file = fat_open_file_for_fd(pool, op->owner, op->arg0);
     if (!file) {
         FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BAD_ARGS);
     }
@@ -904,7 +904,7 @@ fat_r_t fat_op_close(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
 
     (void)mnt;
     FAT_CO_BEGIN(op);
-    file = fat_open_file_for_fd(pool, op->source, op->arg0);
+    file = fat_open_file_for_fd(pool, op->owner, op->arg0);
     if (!file) {
         FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BAD_ARGS);
     }

@@ -914,6 +914,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             op->arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
             op->arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
             op->source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+            op->owner = wasmos_ipc_endpoint_owner(op->source);
             if (op->op == FAT_OP_READDIR) {
                 /* READDIR carries the directory to list as a path in the
                  * sender's transfer buffer (arg0 = length, arg2 = buffer id),

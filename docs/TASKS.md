@@ -1801,6 +1801,35 @@ Source: `architecture/19-virtual-terminal.md`,
   Pinned by `tests/unit/test_ipc.c` H1-H7, `tests/unit/test_fs_manager_clients.c`
   and `tests/test_vfs_root_mount.py::VfsUnmountTest`.
 
+- [ ] [BUG][P1] `WASMOS_IPC_HANGUP` reaches PRIVATE reply endpoints, where
+  synchronous waits do not expect it. A hangup goes to every endpoint the dead
+  process sent to, and a backend's replies go to fs-manager's
+  `g_reply_endpoint`, so a filesystem backend that exits (an unmounted tmpfs)
+  leaves a hangup there. Seen in CI run 40760260513 as `[ipc-discard]
+  fs-manager/forward ... dropped type=0xff03`: `forward_request` survives it,
+  but `fsmgr_pull_backend` takes the FIRST message on that endpoint and requires
+  it to be `FSMGR_IPC_BACKEND_INFO_RESP`, so a stray hangup fails the pull and
+  the backend is never registered. That is one more way for `/boot` to stay
+  unmounted (the P0 below). Every service that waits on a private reply
+  endpoint with `select_one` + a type check has the same exposure. The decision
+  is a contract one, not a patch per site: either the kernel stops recording a
+  contact for a REPLY (it would need to know a message's kind, which only
+  `abi/opcodes.yaml` records), or every synchronous wait tolerates unsolicited
+  messages, which `wasmos_sys_ipc_await_reply` already does and the raw
+  `select_one` sites do not.
+
+- [ ] [BUG][P1] Under wasm3, a session stops resolving services after about 28
+  app processes. The 29th `date` in one session prints `date: rtc service not
+  found`, and `mount`/`umount` print `no filesystem service` the same way: the
+  app's `wasmos_svc_lookup` to the process manager fails. Reproduced identically
+  on `648da1d9` (before the hangup work) and after it, with nothing but `date`
+  run 40 times; WARP does not show it. Spawning itself keeps working. Unknown
+  which per-process resource runs out; suspects are whatever a wasm3 app process
+  holds until reap that the lookup path needs (its reply endpoint, a per-context
+  quota). Separately, a session that also leaves files open stalled with VT and
+  the CLI dispatching ~120k times each (VT yield-spinning in
+  `vt_ipc_reply_retry`), which may be the same exhaustion seen from VT's side.
+
 - [x] [BUG][P2] fs-manager did not close a dead client's files on their
   backends: it dropped the client's fd mappings, but the backend kept each file
   open for its own lifetime, so a tmpfs (32 open-file slots) refused every open

@@ -1818,17 +1818,23 @@ Source: `architecture/19-virtual-terminal.md`,
   messages, which `wasmos_sys_ipc_await_reply` already does and the raw
   `select_one` sites do not.
 
-- [ ] [BUG][P1] Under wasm3, a session stops resolving services after about 28
-  app processes. The 29th `date` in one session prints `date: rtc service not
-  found`, and `mount`/`umount` print `no filesystem service` the same way: the
-  app's `wasmos_svc_lookup` to the process manager fails. Reproduced identically
-  on `648da1d9` (before the hangup work) and after it, with nothing but `date`
-  run 40 times; WARP does not show it. Spawning itself keeps working. Unknown
-  which per-process resource runs out; suspects are whatever a wasm3 app process
-  holds until reap that the lookup path needs (its reply endpoint, a per-context
-  quota). Separately, a session that also leaves files open stalled with VT and
-  the CLI dispatching ~120k times each (VT yield-spinning in
-  `vt_ipc_reply_retry`), which may be the same exhaustion seen from VT's side.
+- [ ] [BUG][P1] Under wasm3, the endpoint table's chunk chain is CUT after a few
+  dozen app processes, and every endpoint in the lost chunks stops resolving.
+  Symptom: the ~29th app in one session cannot reach the process manager --
+  `date: rtc service not found`, `mount: no filesystem service` -- because its
+  send to the PM's endpoint returns `IPC_ERR_NOENT` while that endpoint was never
+  torn down. Measured with temporary markers (2026-11-02): a failed lookup walked
+  only 16 live slots of a table that held 200+ endpoints, i.e. one chunk; the
+  `list_array_chunk` chain behind it was unreachable. Chunks are never freed and
+  the list code checks out, so a chunk's `next` pointer is being OVERWRITTEN --
+  memory corruption, not a lifetime bug in idtable/list. Reproduced on
+  `648da1d9` (before the hangup work) with nothing but `date` run 40 times; WARP
+  does not show it. Leads: an endpoint chunk is ~20 KiB, so kmem serves it from
+  whole pages (e8378159), which a wasm3-only path may also free or reuse
+  (`wasm3_heap_release`, the per-pid kernel malloc). Next step: a GDB hardware
+  watchpoint on the head chunk's `next` to catch the writer. A VT/CLI livelock
+  (VT yield-spinning in `vt_ipc_reply_retry`) was seen in the same sessions and
+  is probably VT's view of the same lost endpoints.
 
 - [x] [BUG][P2] fs-manager did not close a dead client's files on their
   backends: it dropped the client's fd mappings, but the backend kept each file

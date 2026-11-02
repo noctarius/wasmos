@@ -219,6 +219,14 @@ static wasmos_error_code_t wfs_reload_object(uint32_t object_id) {
 
 /* ---- the operations ----------------------------------------------------- */
 
+/* The context that owns the files a request from `src` opens or names. Files
+ * belong to the sending PROCESS, not to the one endpoint a request arrived on:
+ * fs-manager closes a dead client's files from a different endpoint of its own
+ * than the one that opened them (wfs_fd.h). */
+static int32_t wfs_fd_owner(int32_t src) {
+    return wasmos_ipc_endpoint_owner(src);
+}
+
 static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32_t flags,
                         int32_t buffer_id) {
     wasmos_error_code_t rc;
@@ -284,7 +292,7 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
         }
     }
     fd = wfs_fd_open(&g_fds,
-                     src,
+                     wfs_fd_owner(src),
                      g_path.object_id,
                      g_path.object.out.size,
                      g_path.object.out.type,
@@ -298,7 +306,7 @@ static void wfs_do_open(int32_t src, int32_t request_id, int32_t path_len, int32
     /* O_APPEND starts the cursor at the end, which is the whole of what the flag
      * means here: every write then extends from wherever the file ends. */
     if (((uint32_t)flags & (uint32_t)O_APPEND) != 0u) {
-        wfs_open_file_t* f = wfs_fd_get(&g_fds, src, fd);
+        wfs_open_file_t* f = wfs_fd_get(&g_fds, wfs_fd_owner(src), fd);
 
         if (f) {
             f->offset = f->size;
@@ -354,7 +362,7 @@ static void wfs_do_stat(int32_t src, int32_t request_id, int32_t path_len, int32
 
 static void wfs_do_read(int32_t src, int32_t request_id, int32_t fd, int32_t count,
                         int32_t buffer_id) {
-    wfs_open_file_t* f = wfs_fd_get(&g_fds, src, fd);
+    wfs_open_file_t* f = wfs_fd_get(&g_fds, wfs_fd_owner(src), fd);
     uint32_t want;
     uint32_t done = 0u;
     struct wfs_object obj;
@@ -437,7 +445,7 @@ static void wfs_do_read(int32_t src, int32_t request_id, int32_t fd, int32_t cou
  * pre-write map and lose its extent. */
 static void wfs_do_write(int32_t src, int32_t request_id, int32_t fd, int32_t count,
                          int32_t buffer_id) {
-    wfs_open_file_t* f = wfs_fd_get(&g_fds, src, fd);
+    wfs_open_file_t* f = wfs_fd_get(&g_fds, wfs_fd_owner(src), fd);
     uint32_t want;
     uint32_t done = 0u;
 
@@ -580,7 +588,7 @@ static void wfs_do_rename(int32_t src, int32_t request_id, int32_t from_len, int
 
 static void wfs_do_seek(int32_t src, int32_t request_id, int32_t fd, int32_t delta,
                         int32_t whence) {
-    wfs_open_file_t* f = wfs_fd_get(&g_fds, src, fd);
+    wfs_open_file_t* f = wfs_fd_get(&g_fds, wfs_fd_owner(src), fd);
     int64_t result;
 
     if (!f) {
@@ -717,7 +725,7 @@ static void wfs_do_readdir(int32_t src, int32_t request_id, int32_t path_len, in
 }
 
 static void wfs_do_close(int32_t src, int32_t request_id, int32_t fd) {
-    wasmos_error_code_t rc = wfs_fd_close(&g_fds, src, fd);
+    wasmos_error_code_t rc = wfs_fd_close(&g_fds, wfs_fd_owner(src), fd);
 
     if (rc != WASMOS_ERR_NONE) {
         (void)wfs_reply(src, FS_IPC_ERROR, request_id, rc, 0);

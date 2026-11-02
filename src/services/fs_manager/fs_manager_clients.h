@@ -38,9 +38,22 @@ fs_client_state_t* fsmgr_client_lookup(fs_client_table_t* table, int32_t context
  * is exhausted. */
 fs_client_state_t* fsmgr_client_get(fs_client_table_t* table, int32_t context_id);
 
-/* Release the state held for `context_id`, whose process has ended: its working
- * directory and its fd mappings. Releasing a context with no state is a no-op. */
+/* Release the state held for `context_id`, whose process has ended. Releasing a
+ * context with no state is a no-op.
+ *
+ * Its working directory is dropped at once. A client with no open files is freed
+ * at once; one with open files keeps its slot, marked `releasing`, until
+ * fsmgr_client_next_orphan_fd has handed out every file for closing -- those
+ * files are still open on their backends, and the slot is where the record of
+ * them lives until then. */
 void fsmgr_client_release(fs_client_table_t* table, int32_t context_id);
+
+/* Hand out one open file of a released client, so the caller can close it on
+ * the backend that holds it. Returns 1 with the backend's endpoint and fd, which
+ * the table forgets; 0 when no released client has an open file left. A
+ * released slot whose last file is handed out is freed for reuse. */
+int fsmgr_client_next_orphan_fd(fs_client_table_t* table, int32_t* out_backend_endpoint,
+                                int32_t* out_backend_fd);
 
 /* Forget every open file in `state` without closing anything on a backend. */
 void fsmgr_client_reset_fds(fs_client_state_t* state);

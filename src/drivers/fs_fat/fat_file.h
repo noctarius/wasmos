@@ -36,13 +36,13 @@ void fat_open_pool_init(fat_open_pool_t* pool);
 
 /* --- Pure / simple open-file-table helpers (no I/O, no coroutine). --- */
 
-/* The open file for `fd` owned by `source`, or NULL if the fd is out of range,
- * free, or owned by another endpoint.  fd = index + 3. */
-fat_open_file_t* fat_open_file_for_fd(fat_open_pool_t* pool, int32_t source, int32_t fd);
+/* The open file for `fd` owned by context `owner`, or NULL if the fd is out of
+ * range, free, or owned by another context.  fd = index + 3. */
+fat_open_file_t* fat_open_file_for_fd(fat_open_pool_t* pool, int32_t owner, int32_t fd);
 
-/* Allocate a free slot to `source`, zeroing its cursors; *out_fd = index + 3.
- * 0 on success, -1 if the table is full. */
-int fat_open_file_alloc(fat_open_pool_t* pool, int32_t source, int32_t* out_fd);
+/* Allocate a free slot to context `owner`, zeroing its cursors;
+ * *out_fd = index + 3.  0 on success, -1 if the table is full. */
+int fat_open_file_alloc(fat_open_pool_t* pool, int32_t owner, int32_t* out_fd);
 
 /* 0 = read access, 1 = write access, -1 on NULL (flags bit 0). */
 int fat_open_file_access_mode(const fat_open_file_t* file);

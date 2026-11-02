@@ -365,6 +365,7 @@ static int32_t open_via_op(fat_block_t* blk, const fat_mount_t* mnt, fat_open_po
 
     memset(&op, 0, sizeof(op));
     op.source = -1;
+    op.owner = -1;
     op.request_id = 1;
     op.arg0 = (int32_t)path_len; /* path length */
     op.arg1 = flags;             /* access mode + O_CREAT/O_TRUNC/O_APPEND */
@@ -386,6 +387,7 @@ static int write_fd_content(fat_block_t* blk, const fat_mount_t* mnt, fat_open_p
     memcpy(g_xfer, data, len);
     memset(&op, 0, sizeof(op));
     op.source = -1;
+    op.owner = -1;
     op.request_id = 1;
     op.arg0 = fd;
     op.arg1 = (int32_t)len;
@@ -429,6 +431,7 @@ static int write_file_content(fat_block_t* blk, const fat_mount_t* mnt, fat_open
 
     memset(&op, 0, sizeof(op));
     op.source = -1;
+    op.owner = -1;
     op.request_id = 1;
     op.arg0 = fd;           /* the open file */
     op.arg1 = (int32_t)len; /* byte count */
@@ -470,6 +473,7 @@ static int read_via_op(fat_block_t* blk, const fat_mount_t* mnt, fat_open_pool_t
     memset(g_xfer, 0, XFER_CAP);
     memset(&op, 0, sizeof(op));
     op.source = -1;
+    op.owner = -1;
     op.request_id = 1;
     op.arg0 = fd;
     op.arg1 = (int32_t)len;
@@ -603,6 +607,7 @@ int main(int argc, char** argv) {
     /* Listing the root must reach the formatter's entries. */
     memset(&op, 0, sizeof(op));
     op.source = 7;
+    op.owner = 7;
     op.request_id = 1;
     g_stream_len = 0;
     g_stream[0] = '\0';

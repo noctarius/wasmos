@@ -120,8 +120,9 @@ typedef struct {
 
 /* An open file descriptor (fd = index + 3).
  *
- * `owner` is the endpoint that opened it: a slot belongs to that client and
- * lookups by another endpoint miss, so an fd is not transferable. `flags` is the
+ * `owner` is the context that opened it: a slot belongs to that process and
+ * lookups by another context miss, so an fd is not transferable between
+ * processes, while any endpoint of the owning process may use it. `flags` is the
  * FAT_OPEN_* subset the client passed.
  *
  * The cursor is split across four fields that must stay consistent: `offset` is
@@ -680,6 +681,11 @@ typedef struct fat_op_ctx {
     int32_t type;
     int32_t arg0, arg1, arg2, arg3;
     int32_t source;
+    /* The sender's CONTEXT, which owns the files it opens. Keyed by context and
+     * not by `source` because the file belongs to a process, not to the one
+     * endpoint it arrived on: fs-manager closes a dead client's files from a
+     * different endpoint of its own than the one that opened them. */
+    int32_t owner;
     int32_t request_id;
 
     /* Response staging: the reactor sends resp_arg0/1 only when resp_override is

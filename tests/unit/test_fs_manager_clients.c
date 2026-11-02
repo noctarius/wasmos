@@ -110,6 +110,8 @@ static void test_a_reused_slot_carries_nothing_over(void) {
     gone->fds[3].backend_endpoint = 42;
     gone->fds[3].backend_fd = 5;
     fsmgr_client_release(&table, 7);
+    int32_t backend = 0, backend_fd = 0;
+    assert(fsmgr_client_next_orphan_fd(&table, &backend, &backend_fd) == 1);
 
     fs_client_state_t* fresh = fsmgr_client_get(&table, 8);
     assert(fresh->context_id == 8);
@@ -117,6 +119,68 @@ static void test_a_reused_slot_carries_nothing_over(void) {
     assert(fresh->mount == FS_MOUNT_ROOT);
     assert(fresh->backend_endpoint == -1);
     assert(!fresh->fds[3].in_use);
+    table_free(&table);
+}
+
+/* Regression: 2026-10-28-dead-client-fds-stay-open-on-backend
+ * Releasing a client dropped its fd mappings and nothing else, so every file it
+ * left open stayed open on the backend for that backend's whole life. A tmpfs
+ * has 32 open-file slots; the 33rd process to exit with a file open made every
+ * later open on that mount fail. A released client's files must be handed out
+ * for closing, each exactly once. */
+static void test_a_released_clients_open_files_are_handed_out_to_close(void) {
+    fs_client_table_t table = {0};
+    fs_client_state_t* gone = fsmgr_client_get(&table, 7);
+    gone->fds[0] = (fsmgr_client_fd_t){.in_use = 1, .backend_endpoint = 40, .backend_fd = 3};
+    gone->fds[9] = (fsmgr_client_fd_t){.in_use = 1, .backend_endpoint = 41, .backend_fd = 12};
+    fsmgr_client_release(&table, 7);
+
+    int32_t backend = 0, backend_fd = 0;
+    int seen_40 = 0, seen_41 = 0;
+    for (int i = 0; i < 2; ++i) {
+        assert(fsmgr_client_next_orphan_fd(&table, &backend, &backend_fd) == 1);
+        seen_40 += (backend == 40 && backend_fd == 3);
+        seen_41 += (backend == 41 && backend_fd == 12);
+    }
+    assert(seen_40 == 1 && seen_41 == 1);
+    assert(fsmgr_client_next_orphan_fd(&table, &backend, &backend_fd) == 0);
+    table_free(&table);
+}
+
+/* While its files are still open on a backend, a released client's slot is
+ * nobody's: it answers no lookup, stands in no directory, and is not handed to a
+ * new client -- whose state would otherwise be the dead one's open files. */
+static void test_a_releasing_slot_is_nobodys_until_its_files_are_closed(void) {
+    fs_client_table_t table = {0};
+    fs_client_state_t* gone = fsmgr_client_get(&table, 7);
+    snprintf(gone->cwd, sizeof(gone->cwd), "%s", "/wfs/docs");
+    gone->fds[2] = (fsmgr_client_fd_t){.in_use = 1, .backend_endpoint = 40, .backend_fd = 3};
+    fsmgr_client_release(&table, 7);
+
+    assert(fsmgr_client_lookup(&table, 7) == 0);
+    assert(gone->releasing);
+    assert(gone->cwd[0] == '\0');
+    assert(fsmgr_client_get(&table, 8) != gone);
+
+    int32_t backend = 0, backend_fd = 0;
+    assert(fsmgr_client_next_orphan_fd(&table, &backend, &backend_fd) == 1);
+    assert(!gone->in_use);
+    assert(fsmgr_client_get(&table, 9) == gone);
+    table_free(&table);
+}
+
+/* A released client whose backend already took its files away (the backend died
+ * or was unmounted) has nothing to close, and its slot must not be stranded. */
+static void test_a_releasing_slot_with_nothing_left_is_freed(void) {
+    fs_client_table_t table = {0};
+    fs_client_state_t* gone = fsmgr_client_get(&table, 7);
+    gone->fds[2] = (fsmgr_client_fd_t){.in_use = 1, .backend_endpoint = 40, .backend_fd = 3};
+    fsmgr_client_release(&table, 7);
+    gone->fds[2].in_use = 0; /* as fsmgr_forget_backend_in_clients does */
+
+    int32_t backend = 0, backend_fd = 0;
+    assert(fsmgr_client_next_orphan_fd(&table, &backend, &backend_fd) == 0);
+    assert(!gone->in_use);
     table_free(&table);
 }
 
@@ -129,6 +193,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_a_released_client_has_no_state),
         WASMOS_TEST_CASE(test_a_released_slot_is_reused),
         WASMOS_TEST_CASE(test_a_reused_slot_carries_nothing_over),
+        WASMOS_TEST_CASE(test_a_released_clients_open_files_are_handed_out_to_close),
+        WASMOS_TEST_CASE(test_a_releasing_slot_is_nobodys_until_its_files_are_closed),
+        WASMOS_TEST_CASE(test_a_releasing_slot_with_nothing_left_is_freed),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_fs_manager_clients: ok\n");

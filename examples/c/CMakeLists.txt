@@ -91,6 +91,15 @@ wasmos_add_wasm_c_app_target(wfs_write_smoke
   PACK_COMMENT  "Packing wasm wfs write smoke as WASMOS-APP"
 )
 
+wasmos_add_wasm_c_app_target(fs_leave_open
+  SOURCE      ${WASM_FS_LEAVE_OPEN_SRC}
+  OUTPUT_WASM ${WASM_FS_LEAVE_OPEN_WASM}
+  OUTPUT_APP  ${WASM_FS_LEAVE_OPEN_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/fs_leave_open/linker.metadata
+  BUILD_COMMENT "Building wasm fs leave-open fixture"
+  PACK_COMMENT  "Packing wasm fs leave-open fixture as WASMOS-APP"
+)
+
 wasmos_add_wasm_c_app_target(native_call_min
   SOURCE      ${WASM_NATIVE_CALL_MIN_SRC}
   OUTPUT_WASM ${WASM_NATIVE_CALL_MIN_WASM}
@@ -185,7 +194,7 @@ wasmos_add_wasm_c_app_target(menu_bar
 add_custom_target(c_examples)
 add_dependencies(c_examples
   hello_c chardev_client chardev_preempt init_smoke
-  fs_open_smoke fs_write_smoke native_call_min native_call_smoke
+  fs_open_smoke fs_write_smoke fs_leave_open native_call_min native_call_smoke
   gfx_smoke irq_route_deny irq_route_allow
   menu_bar net_smoke net_udp_echo net_tcp_echo net_tcp_server
   xfer_map_alias surface_attach

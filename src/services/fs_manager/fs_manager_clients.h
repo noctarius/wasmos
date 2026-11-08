@@ -42,18 +42,35 @@ fs_client_state_t* fsmgr_client_get(fs_client_table_t* table, int32_t context_id
  * context with no state is a no-op.
  *
  * Its working directory is dropped at once. A client with no open files is freed
- * at once; one with open files keeps its slot, marked `releasing`, until
- * fsmgr_client_next_orphan_fd has handed out every file for closing -- those
- * files are still open on their backends, and the slot is where the record of
- * them lives until then. */
+ * at once; one with open files keeps its slot, marked `releasing`, until every
+ * file is confirmed closed on its backend (fsmgr_client_orphan_closed) or its
+ * backend is gone -- those files are still open there, and the slot is where the
+ * record of them lives until then. */
 void fsmgr_client_release(fs_client_table_t* table, int32_t context_id);
 
-/* Hand out one open file of a released client, so the caller can close it on
- * the backend that holds it. Returns 1 with the backend's endpoint and fd, which
- * the table forgets; 0 when no released client has an open file left. A
- * released slot whose last file is handed out is freed for reuse. */
-int fsmgr_client_next_orphan_fd(fs_client_table_t* table, int32_t* out_backend_endpoint,
-                                int32_t* out_backend_fd);
+/* The next file of a released client that needs a close sent: open, and not
+ * already awaiting one. NULL when there is none. Released slots left with no
+ * open files are freed on the way.
+ *
+ * The caller sends the close and reports it with fsmgr_client_orphan_sent. A
+ * close that could not be sent is simply not reported: the file stays eligible
+ * and is returned again by a later call. */
+fsmgr_client_fd_t* fsmgr_client_next_orphan(fs_client_table_t* table);
+
+/* Record that the close for `fd` went out with `request_id`. */
+void fsmgr_client_orphan_sent(fsmgr_client_fd_t* fd, int32_t request_id);
+
+/* The reply to the close sent with `request_id` arrived. With `retry` set (the
+ * backend was transiently unable to serve it) the file becomes eligible again;
+ * otherwise its record is dropped and a released slot left empty is freed.
+ * Returns 1 when `request_id` named an outstanding close, 0 for any other
+ * message -- including a hangup, which carries none. */
+int fsmgr_client_orphan_closed(fs_client_table_t* table, int32_t request_id, int retry);
+
+/* Closes sent and not yet answered. Derived from the records, not counted
+ * separately, so a backend that dies with closes outstanding stops counting
+ * against the cap as soon as its files are forgotten. */
+uint32_t fsmgr_client_orphans_in_flight(const fs_client_table_t* table);
 
 /* Forget every open file in `state` without closing anything on a backend. */
 void fsmgr_client_reset_fds(fs_client_state_t* state);

@@ -115,8 +115,36 @@ void fsmgr_client_release(fs_client_table_t* table, int32_t context_id) {
     state->cwd[0] = '\0';
 }
 
-int fsmgr_client_next_orphan_fd(fs_client_table_t* table, int32_t* out_backend_endpoint,
-                                int32_t* out_backend_fd) {
+fsmgr_client_fd_t* fsmgr_client_next_orphan(fs_client_table_t* table) {
+    for (fs_client_chunk_t* chunk = table->chunks; chunk; chunk = chunk->next) {
+        for (uint32_t i = 0; i < chunk->used; ++i) {
+            fs_client_state_t* slot = &chunk->slots[i];
+            if (!slot->in_use || !slot->releasing) {
+                continue;
+            }
+            if (!client_slot_has_open_fds(slot)) {
+                /* Every file confirmed closed, or forgotten with a backend that
+                 * went away (fsmgr_forget_backend_in_clients). */
+                client_slot_free(slot);
+                continue;
+            }
+            for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
+                fsmgr_client_fd_t* fd = &slot->fds[f];
+                if (fd->in_use && !fd->closing) {
+                    return fd;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+void fsmgr_client_orphan_sent(fsmgr_client_fd_t* fd, int32_t request_id) {
+    fd->closing = 1;
+    fd->close_request_id = request_id;
+}
+
+int fsmgr_client_orphan_closed(fs_client_table_t* table, int32_t request_id, int retry) {
     for (fs_client_chunk_t* chunk = table->chunks; chunk; chunk = chunk->next) {
         for (uint32_t i = 0; i < chunk->used; ++i) {
             fs_client_state_t* slot = &chunk->slots[i];
@@ -125,23 +153,37 @@ int fsmgr_client_next_orphan_fd(fs_client_table_t* table, int32_t* out_backend_e
             }
             for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
                 fsmgr_client_fd_t* fd = &slot->fds[f];
-                if (!fd->in_use) {
+                if (!fd->in_use || !fd->closing || fd->close_request_id != request_id) {
                     continue;
                 }
-                *out_backend_endpoint = fd->backend_endpoint;
-                *out_backend_fd = fd->backend_fd;
-                fd->in_use = 0;
-                fd->backend_endpoint = -1;
-                fd->backend_fd = -1;
-                if (!client_slot_has_open_fds(slot)) {
-                    client_slot_free(slot);
+                fd->closing = 0;
+                if (!retry) {
+                    fd->in_use = 0;
+                    fd->backend_endpoint = -1;
+                    fd->backend_fd = -1;
+                    if (!client_slot_has_open_fds(slot)) {
+                        client_slot_free(slot);
+                    }
                 }
                 return 1;
             }
-            /* Nothing left to close: a backend that went away took its files
-             * with it (fsmgr_forget_backend_in_clients). */
-            client_slot_free(slot);
         }
     }
     return 0;
+}
+
+uint32_t fsmgr_client_orphans_in_flight(const fs_client_table_t* table) {
+    uint32_t n = 0;
+    for (const fs_client_chunk_t* chunk = table->chunks; chunk; chunk = chunk->next) {
+        for (uint32_t i = 0; i < chunk->used; ++i) {
+            const fs_client_state_t* slot = &chunk->slots[i];
+            if (!slot->in_use || !slot->releasing) {
+                continue;
+            }
+            for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
+                n += (slot->fds[f].in_use && slot->fds[f].closing) ? 1u : 0u;
+            }
+        }
+    }
+    return n;
 }

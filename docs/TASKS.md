@@ -1834,23 +1834,29 @@ Source: `architecture/19-virtual-terminal.md`,
   messages, which `wasmos_sys_ipc_await_reply` already does and the raw
   `select_one` sites do not.
 
-- [ ] [BUG][P1] Under wasm3, the endpoint table's chunk chain is CUT after a few
-  dozen app processes, and every endpoint in the lost chunks stops resolving.
-  Symptom: the ~29th app in one session cannot reach the process manager --
-  `date: rtc service not found`, `mount: no filesystem service` -- because its
-  send to the PM's endpoint returns `IPC_ERR_NOENT` while that endpoint was never
-  torn down. Measured with temporary markers (2026-11-02): a failed lookup walked
-  only 16 live slots of a table that held 200+ endpoints, i.e. one chunk; the
-  `list_array_chunk` chain behind it was unreachable. Chunks are never freed and
-  the list code checks out, so a chunk's `next` pointer is being OVERWRITTEN --
-  memory corruption, not a lifetime bug in idtable/list. Reproduced on
-  `648da1d9` (before the hangup work) with nothing but `date` run 40 times; WARP
-  does not show it. Leads: an endpoint chunk is ~20 KiB, so kmem serves it from
-  whole pages (e8378159), which a wasm3-only path may also free or reuse
-  (`wasm3_heap_release`, the per-pid kernel malloc). Next step: a GDB hardware
-  watchpoint on the head chunk's `next` to catch the writer. A VT/CLI livelock
-  (VT yield-spinning in `vt_ipc_reply_retry`) was seen in the same sessions and
-  is probably VT's view of the same lost endpoints.
+- [x] [BUG][P1] Under wasm3, the ~30th app of a CLI session could not reach
+  any service: `date: rtc service not found`, `mount: no filesystem service`.
+  FIXED. The cause was a leak in a wasm3 side table, not the endpoint table.
+  `wasm_ipc_slot_for_pid` gives each process a "last received message" slot
+  on its first receive, from a table of `PROCESS_MAX_COUNT` (64) entries keyed
+  by pid. `wasm3_release_pid` never returned it, and pids are never reused, so
+  the table filled at the 64th wasm3 process since boot: about 30 at boot plus
+  34 `date` runs. From then on, every new app's receive hostcall returned
+  `IPC_ERR_NOENT` without consulting any endpoint. The app gave up and exited,
+  and the PM's reply then really did hit a missing endpoint. That second NOENT
+  is what made it look like endpoint loss. `g_wasm_fs_peer_slots` leaked the
+  same way. WARP keeps both tables in hashmaps that `warp_release_pid` already
+  prunes. Under GDB at the failure, the chunk chain was intact (9 chunks, all
+  links unchanged since boot) and no live endpoint was missing. The earlier
+  "cut chain" reading was wrong. Pinned by
+  `AppChurnTests::test_more_apps_than_process_slots_all_reach_their_services`
+  (72 `date` runs in one session; red at run 34 before the fix).
+
+- [ ] [BUG][P3] A VT/CLI livelock (VT yield-spinning in `vt_ipc_reply_retry`)
+  was seen in the same wasm3 sessions as the IPC-slot leak above. That leak
+  does not explain it: only processes started after the slot table filled lost
+  their receives, and VT starts at boot. Unattributed; re-check whether it
+  recurs now that long sessions no longer exhaust the table.
 
 - [x] [BUG][P2] fs-manager did not close a dead client's files on their
   backends: it dropped the client's fd mappings, but the backend kept each file

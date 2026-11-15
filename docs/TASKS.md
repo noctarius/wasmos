@@ -1502,39 +1502,21 @@ tail.
   two runs to learn), and check whether the harness deadlines are simply too
   tight under MTTCG before treating either as a guest bug.
 
-  Shape 2 is not WARP-only and not boot-only. CI run 43608707742 (wasm3_smp,
-  `filesystem` battery, PR #43 tip 04fc5608) lost a command MID-SESSION in
-  `VfsClientReleaseTest`: `mount -t tmpfs /leakfds` and the first
-  `fs_leave_open /leakfds/held 8` completed, then the second
-  `fs_leave_open` was never echoed within 40 s. The rerun of the same commit
-  passed. The stall dump taken at the timeout shows:
-  - the serial driver (pid 32) parked in `select_wait` on ep 86 with an EMPTY
-    queue, its last messages IRQ events (0xff00) -- no RX interrupt arrived for
-    the typed line, or one arrived and was lost before the driver;
-  - `vt` (pid 40) `running` and the CLI (pid 48) in `select_wait_timeout` on
-    ep 145, the CLI's last messages `VT_IPC_RESP` with req ~482800: the two are
-    polling each other and neither holds input;
-  - fs-manager and the test's tmpfs idle with empty queues, the first
-    process's eight release closes answered (last `0x480` replies req 7, 8) --
-    the filesystem path is not involved.
-  The first echo of the run was interleaved with a `[net-stack]` log line
-  (`fs_leave_open /[net-stack] tls: no CA trust store`), and an unrelated
-  `[test] menu bar title` line followed the prompt; whether concurrent serial
-  OUTPUT can cost an RX interrupt is the first lead.
-
-  The wasm3 endpoint-table P1 (the cut chunk chain, below) is NOT excluded.
-  Its usual symptom is loud (`no filesystem service`, `rtc service not
-  found`, after ~28 app processes) and this run had neither, with only two app
-  processes in the session. But the dump fits it too: had the serial driver
-  read the line and its send to vt returned `IPC_ERR_NOENT`, the bytes would
-  vanish silently, and that entry already records a VT/CLI livelock in its
-  failing sessions. Next steps, in order, on a failing run (GDB, or a
-  one-boundary marker that does not print to serial, because serial output is
-  what the harness matches against):
-  1. Did the serial driver forward the line? Break on its send to vt and check
-     the return code. `IPC_ERR_NOENT` makes this the endpoint-table bug.
-  2. If no forward happened: read the UART's LSR/IIR and the driver's ring
-     indices to see whether the bytes reached the device at all.
+- [ ] [BUG][P2] A QEMU CLI test fails with "'<cmd>' was never echoed" when a
+  service's log line lands in the middle of the CLI's echo. Service logs and the
+  CLI share the serial console, so the echo can arrive split, and
+  `VfsSession._run` (`tests/test_vfs_root_mount.py`) matches the echo as one
+  contiguous byte string. The command itself runs fine; the harness just never
+  sees it. CI run 43608707742 (wasm3_smp, `filesystem` battery, PR #43 tip
+  04fc5608) failed `VfsClientReleaseTest` this way on its FIRST
+  `fs_leave_open /leakfds/held 8`: the serial log reads
+  `fs_leave_open /[net-stack] tls: no CA trust store` then `leakfds/held 8`, then
+  `fs-leave-open: left open` and a fresh prompt. The guest was healthy and
+  idle at the timeout, and the rerun passed. Two ways to fix it, in the harness
+  or at the source: match the echo while skipping whole interleaved log lines,
+  or keep service logs off the line the CLI is echoing to (the log-mirror rules
+  in doc 19). The same exact-match pattern is in other tests' helpers, so fixing
+  it in one helper leaves the rest exposed.
 - [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
   `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
   (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends
@@ -1868,10 +1850,7 @@ Source: `architecture/19-virtual-terminal.md`,
   (`wasm3_heap_release`, the per-pid kernel malloc). Next step: a GDB hardware
   watchpoint on the head chunk's `next` to catch the writer. A VT/CLI livelock
   (VT yield-spinning in `vt_ipc_reply_retry`) was seen in the same sessions and
-  is probably VT's view of the same lost endpoints. The P2 `run-qemu-test` flake
-  entry's "Shape 2" (a typed command lost, vt and the CLI polling each other)
-  may be the same corruption seen from the serial driver; that entry lists the
-  check that tells them apart.
+  is probably VT's view of the same lost endpoints.
 
 - [x] [BUG][P2] fs-manager did not close a dead client's files on their
   backends: it dropped the client's fd mappings, but the backend kept each file

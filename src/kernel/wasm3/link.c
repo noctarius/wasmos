@@ -340,10 +340,15 @@ static uint8_t wasm_linear_window_overlaps(uint32_t pid, uint32_t offset, uint32
 }
 
 /* Reclaim every per-pid side-table resource of a reaped process: the driver DMA regions
- * (whose pages are returned to the PFA), the xfer-buffer overlay tracking entries, and
- * the per-process block buffer (also returned to the PFA).  The page-table mappings
- * themselves are torn down with the address space, so nothing is unmapped here.  A pid of 0
- * is ignored.  Safe to call for a pid that owns none of these. */
+ * (whose pages are returned to the PFA), the xfer-buffer overlay tracking entries, the
+ * IPC last-message and FS-peer slots, and the per-process block buffer (also returned to
+ * the PFA).  The page-table mappings themselves are torn down with the address space, so
+ * nothing is unmapped here.  A pid of 0 is ignored.  Safe to call for a pid that owns none
+ * of these.
+ *
+ * Every table here holds PROCESS_MAX_COUNT entries while pids are never reused, so an entry
+ * missed here is lost for the life of the kernel. Once the IPC last-message table is full,
+ * every later process fails its first receive. */
 void wasm3_release_pid(uint32_t pid) {
     if (pid == 0) {
         return;
@@ -376,6 +381,17 @@ void wasm3_release_pid(uint32_t pid) {
      * lock and free outside it so the PFA lock never nests under it. */
     uint64_t block_phys = 0;
     ksync_spinlock_lock(&g_wasm_side_table_lock);
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_wasm_last_slots[i].pid == pid) {
+            g_wasm_last_slots[i].pid = 0;
+            g_wasm_last_slots[i].valid = 0;
+        }
+        if (g_wasm_fs_peer_slots[i].pid == pid) {
+            g_wasm_fs_peer_slots[i].pid = 0;
+            g_wasm_fs_peer_slots[i].valid = 0;
+            g_wasm_fs_peer_slots[i].peer_context_id = 0;
+        }
+    }
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_block_slots[i].pid == pid) {
             block_phys = g_wasm_block_slots[i].buffer_phys;

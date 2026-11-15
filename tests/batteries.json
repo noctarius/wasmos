@@ -48,6 +48,7 @@
       "description": "Scheduler, preemption, threading, IPC wakeup and shared-memory grants.",
       "needs_qemu": true,
       "files": [
+        "test_app_churn.py",
         "test_chardev_preempt.py",
         "test_ipc_wakeup.py",
         "test_preempt_smoke.py",

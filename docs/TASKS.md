@@ -1502,21 +1502,21 @@ tail.
   two runs to learn), and check whether the harness deadlines are simply too
   tight under MTTCG before treating either as a guest bug.
 
-- [ ] [BUG][P2] A QEMU CLI test fails with "'<cmd>' was never echoed" when a
-  service's log line lands in the middle of the CLI's echo. Service logs and the
-  CLI share the serial console, so the echo can arrive split, and
-  `VfsSession._run` (`tests/test_vfs_root_mount.py`) matches the echo as one
-  contiguous byte string. The command itself runs fine; the harness just never
-  sees it. CI run 43608707742 (wasm3_smp, `filesystem` battery, PR #43 tip
-  04fc5608) failed `VfsClientReleaseTest` this way on its FIRST
-  `fs_leave_open /leakfds/held 8`: the serial log reads
-  `fs_leave_open /[net-stack] tls: no CA trust store` then `leakfds/held 8`, then
-  `fs-leave-open: left open` and a fresh prompt. The guest was healthy and
-  idle at the timeout, and the rerun passed. Two ways to fix it, in the harness
-  or at the source: match the echo while skipping whole interleaved log lines,
-  or keep service logs off the line the CLI is echoing to (the log-mirror rules
-  in doc 19). The same exact-match pattern is in other tests' helpers, so fixing
-  it in one helper leaves the rest exposed.
+- [x] [BUG][P2] A QEMU CLI test failed with "'<cmd>' was never echoed" when a
+  service's log line landed in the middle of the CLI's echo. Service logs and
+  the CLI share the serial console, and klog writes whole lines while the CLI
+  echoes keystroke by keystroke, so CI run 43608707742 (wasm3_smp, `filesystem`
+  battery) read `fs_leave_open /[net-stack] tls: no CA trust store` then
+  `leakfds/held 8` and timed out against a healthy guest.
+  Fixed in the harness: `find_echo` in `scripts/qemu_test_framework.py` accepts
+  whole bracket-tagged log lines between echoed bytes and nothing else, and
+  `QemuSession.send_command` returns where the echo ends. Every CLI helper that
+  matched with `expect_from(mark, needle)` now searches from that offset, which
+  also stops a prompt or needle from matching the line that carries the
+  command text. Regression test: `tests/test_cli_echo_match.py` (host-tools).
+  Not covered: an UNTAGGED line printed into an echo still hides it; the
+  source-side fix is routing app/service output off the CLI's tty (doc 19's
+  log-mirror rules).
 - [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
   `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
   (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends

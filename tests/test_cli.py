@@ -28,14 +28,13 @@ class CliIntegrationTests(unittest.TestCase):
             cls.session.close()
 
     def _cmd_expect(self, cmd: str, needle: bytes, timeout_s: int = 20) -> None:
-        mark = self.session.mark()
-        self.session.send(cmd)
-        ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
+        start = self.session.send_command(cmd, timeout_s=timeout_s)
+        ok = self.session.expect_from(start, needle, timeout_s=timeout_s)
         if not ok:
             self.fail(
                 f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
             )
-        ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
+        ok = self.session.expect_from(start, b"wamos> ", timeout_s=timeout_s)
         if not ok:
             self.fail(
                 f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
@@ -181,13 +180,12 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("echo -- -n literal", b"-n literal")
         self._cmd_expect("set FOO=", b"wamos> ")
         self._cmd_expect("export FOO=", b"wamos> ")
-        mark = self.session.mark()
-        self.session.send("echo ${FOO}")
+        start = self.session.send_command("echo ${FOO}", timeout_s=20)
         self.assertTrue(
-            self.session.expect_from(mark, b"\n", timeout_s=20), self.session.tail()
+            self.session.expect_from(start, b"\n", timeout_s=20), self.session.tail()
         )
         self.assertTrue(
-            self.session.expect_from(mark, b"wamos> ", timeout_s=20),
+            self.session.expect_from(start, b"wamos> ", timeout_s=20),
             self.session.tail(),
         )
 

@@ -65,10 +65,12 @@ class SurfaceAttachTest(unittest.TestCase):
             cls.session.close()
 
     def test_a_client_owned_surface_attaches_presents_and_detaches(self):
-        # Mark first: expect() scans forward from wherever the stream sits, so a
-        # bare one could match a marker an earlier test left behind.
-        mark = self.session.mark()
-        self.session.send("spawn /boot/apps/surface_attach")
+        # Expect from the end of the echo: expect() scans forward from wherever
+        # the stream sits, so a bare one could match a marker an earlier test
+        # left behind.
+        start = self.session.send_command(
+            "spawn /boot/apps/surface_attach", timeout_s=60
+        )
 
         for needle in (
             b"[test] surface attach spec ok",
@@ -79,7 +81,7 @@ class SurfaceAttachTest(unittest.TestCase):
             b"[test] surface attach remap ok",
             b"[test] surface attach done",
         ):
-            if not self.session.expect_from(mark, needle, timeout_s=60):
+            if not self.session.expect_from(start, needle, timeout_s=60):
                 self.fail(
                     f"{needle!r} never arrived -- the stage before it is where the "
                     f"protocol broke.\n--- tail ---\n{self.session.tail()}\n"

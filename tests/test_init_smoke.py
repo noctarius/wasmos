@@ -27,14 +27,13 @@ class InitSmokeTests(unittest.TestCase):
             cls.session.close()
 
     def _cmd_expect(self, cmd: str, needle: bytes, timeout_s: int = 10) -> None:
-        mark = self.session.mark()
-        self.session.send(cmd)
-        ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
+        start = self.session.send_command(cmd, timeout_s=timeout_s)
+        ok = self.session.expect_from(start, needle, timeout_s=timeout_s)
         if not ok:
             self.fail(
                 f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
             )
-        ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
+        ok = self.session.expect_from(start, b"wamos> ", timeout_s=timeout_s)
         if not ok:
             self.fail(
                 f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
@@ -46,15 +45,14 @@ class InitSmokeTests(unittest.TestCase):
     def test_sysinit_starts_configured_targets(self):
         # vt, gfx-compositor and cli are all started by sysinit.rc; their
         # presence in ps proves the full sysinit script completed.
-        mark = self.session.mark()
-        self.session.send("ps")
+        start = self.session.send_command("ps", timeout_s=10)
         for needle in (b"vt", b"gfx-compositor", b"cli"):
-            ok = self.session.expect_from(mark, needle, timeout_s=10)
+            ok = self.session.expect_from(start, needle, timeout_s=10)
             if not ok:
                 self.fail(
                     f"Expected '{needle.decode()}' in ps output.\n--- tail ---\n{self.session.tail()}\n"
                 )
-        ok = self.session.expect_from(mark, b"wamos> ", timeout_s=10)
+        ok = self.session.expect_from(start, b"wamos> ", timeout_s=10)
         if not ok:
             self.fail(
                 f"Prompt not found after ps.\n--- tail ---\n{self.session.tail()}\n"

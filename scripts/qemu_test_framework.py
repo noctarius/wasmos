@@ -117,6 +117,36 @@ def default_kernel_path(build_dir: str = "build") -> str:
 
 CLI_PROMPT = b"wamos> "
 
+
+# One complete guest log line: a bracketed tag ("[net-stack]", "[test]",
+# "[diag]") through its newline. Service logs and the CLI share COM1; klog writes
+# a whole line at once while the CLI echoes keystroke by keystroke, so a log line
+# can land between two echoed characters, but only ever as a whole line.
+_INJECTED_LOG_LINE = rb"(?:\[[^\]\r\n]+\][^\n]*\n)*"
+
+
+def find_echo(buf: bytes, start: int, cmd: str) -> Optional[tuple]:
+    """Locate the CLI's echo of `cmd` at or after `start` as (begin, end).
+
+    `begin` is the first echoed byte and `end` is one past the last, so output
+    the command produced starts at `end`. Between two echoed bytes the echo may
+    contain whole bracket-tagged log lines and nothing else: a partial line, an
+    untagged line, a bare newline or a missing keystroke is a different stream
+    from the one that was typed, and is reported as no echo. Without injected
+    lines the span equals a plain search for the command's bytes.
+    """
+    needle = cmd.encode("utf-8")
+    if not needle:
+        return None
+    pattern = _INJECTED_LOG_LINE.join(
+        re.escape(needle[i : i + 1]) for i in range(len(needle))
+    )
+    match = re.compile(pattern).search(bytes(buf), max(start, 0))
+    if not match:
+        return None
+    return match.start(), match.end()
+
+
 # Guest-state capture on a stalled command. A wedged guest answers nothing, and
 # the serial log then ends mid-sentence with no indication of what stopped --
 # which is the whole difficulty of the intermittent whole-session hang (see
@@ -1366,6 +1396,48 @@ class QemuSession:
             self._pump(0.2)
         self.dump_stall_state(f"expect_from({needle_b[:40]!r}) timed out")
         return False
+
+    def expect_echo(
+        self, start: int, cmd: str, timeout_s: Optional[int] = None
+    ) -> Optional[int]:
+        """Wait for the CLI's echo of `cmd` after `start`; return where it ends.
+
+        The echo is matched with find_echo, so a log line another process printed
+        into the middle of it does not hide it. Returns the offset one past the
+        last echoed byte, or None on timeout. Like expect_from, a timeout never
+        stops the VM.
+        """
+        limit = timeout_s if timeout_s is not None else self.timeout_s
+        deadline = time.time() + limit * _TIMEOUT_SCALE
+        while time.time() < deadline:
+            found = find_echo(self.buf, start, cmd)
+            if found:
+                return found[1]
+            self._pump(0.2)
+        self.dump_stall_state(f"expect_echo({cmd[:40]!r}) timed out")
+        return None
+
+    def send_command(self, cmd: str, timeout_s: Optional[int] = None) -> int:
+        """Type `cmd` at the CLI and return the offset where its echo ends.
+
+        Output the command produces starts at the returned offset, so callers
+        search from there, never from a mark taken before sending. The prompt and
+        the echo share a line ("/ wamos> mount"): a prompt search from the mark
+        can match the prompt that PRECEDES the command, and a needle that also
+        occurs in the command text can match its echo, both before the command
+        has run.
+
+        Raises AssertionError, which unittest reports as a failure, when the echo
+        never arrives.
+        """
+        mark = self.mark()
+        self.send(cmd)
+        end = self.expect_echo(mark, cmd, timeout_s=timeout_s)
+        if end is None:
+            raise AssertionError(
+                f"'{cmd}' was never echoed.\n--- tail ---\n{self.tail()}\n"
+            )
+        return end
 
     def settle(self, probe_s: int = 3, timeout_s: int = 30) -> bool:
         """Wait until the CLI answers promptly, i.e. it is usable.

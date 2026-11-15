@@ -39,8 +39,13 @@ typedef enum { FS_MOUNT_ROOT = 0, FS_MOUNT_BACKEND = 1 } fs_mount_t;
  * another's. Meaningful only while in_use is non-zero. */
 typedef struct {
     uint8_t in_use;
+    /* Only for a releasing client: a close for this file has been sent and is
+     * awaiting the reply carrying close_request_id. The record stays until that
+     * reply confirms it, so a close that fails or is refused can be retried. */
+    uint8_t closing;
     int32_t backend_endpoint;
     int32_t backend_fd;
+    int32_t close_request_id;
 } fsmgr_client_fd_t;
 
 /* Longest mount path fs-manager will hold, NUL included. A mount is an absolute
@@ -95,6 +100,11 @@ typedef struct {
  * spawner -- a child's state is a copy of its parent's cwd, not a fresh one. */
 typedef struct {
     uint8_t in_use;
+    /* The client's process has ended, and the slot is held only until its open
+     * files are confirmed closed on their backends (fsmgr_client_orphan_closed). A
+     * releasing slot belongs to no context, stands in no directory, and is not
+     * claimable; its fds still count as open, because they are. */
+    uint8_t releasing;
     /* Owning context of the requesting endpoint, so every endpoint a process
      * uses shares one cwd; falls back to the raw source endpoint id when the
      * owner cannot be resolved. */

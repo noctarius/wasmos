@@ -11,6 +11,17 @@ native = false
 stack_pages = 32
 heap_pages = 32
 
+# Link-time memory in bytes (docs/toolchain.md). The per-client table grows from
+# fs-manager's own bump heap with `memory.grow`, one FS_CLIENT_CHUNK_CAP-slot
+# chunk (about 21 KiB) at a time, which the runtime refuses once the declared
+# maximum is reached -- and WARP enforces it, while wasm3 does not. At the
+# toolchain default of one page, min == max, so the table could not grow at all:
+# the first chunk only just fit, and the 33rd concurrent client had none.
+# max_memory MUST exceed initial_memory for the heap to grow.
+[link]
+initial_memory = 131072
+max_memory = 1048576
+
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 1

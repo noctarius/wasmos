@@ -22,6 +22,14 @@
  * (a stranded client hangs forever) while the condition it waits out is
  * transient (a client mid-output-loop drains within a few scheduling rounds). */
 #define FSMGR_REPLY_SEND_RETRIES 8192
+/* Closes for ended clients that may be in flight at once; the rest wait in their
+ * releasing slots. Half the IPC queue depth (32): a backend replying to a full
+ * g_release_endpoint would retry instead of serving the next request, and
+ * fs-manager may be blocked in forward_request on that very backend. */
+#define FSMGR_RELEASE_CLOSES_MAX 16u
+/* How long the main loop parks before retrying a close that could not be sent
+ * or that a backend refused as busy, when nothing else would wake it. */
+#define FSMGR_RELEASE_RETRY_MS 20
 
 #define FSMGR_PATH_SCRATCH_SIZE 256
 
@@ -33,6 +41,20 @@ static int32_t g_cwd_bid = -1;
 static int32_t g_proc_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
+/* Source of the closes fs-manager sends on behalf of an ended client, and where
+ * their replies land. Separate from g_reply_endpoint because every blocking wait
+ * on that one expects only its own answer next; nothing waits on this one, and
+ * the main loop drains it (fsmgr_release_drain). */
+static int32_t g_release_endpoint = -1;
+/* g_fs_endpoint and g_release_endpoint, so the main loop parks on both. -1 when
+ * the set could not be created; the loop then waits on g_fs_endpoint alone and
+ * sends no closes at all, because a reply nothing would wake it to drain could
+ * fill g_release_endpoint. Ended clients' files then stay recorded, and open on
+ * their backends, until the service restarts. */
+static int32_t g_main_select = -1;
+/* Request id of the last close fsmgr_release_pump sent. Positive and unique
+ * among outstanding closes; a reply is matched to its file by it. */
+static int32_t g_release_request_id = 0;
 static fs_backend_t g_backends[FS_BACKEND_CAP];
 extern uint8_t __heap_base;
 
@@ -820,25 +842,89 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
     fsmgr_ensure_mount_points();
 }
 
+/* Send closes for the files ended clients left open, as many as the cap allows.
+ *
+ * Fire and forget from g_release_endpoint: fs-manager must not block on a
+ * backend for a client that no longer exists. A backend keys open files by the
+ * sender's CONTEXT, so a close from this endpoint finds a file opened through
+ * g_reply_endpoint. Each file stays recorded until fsmgr_release_drain sees the
+ * reply confirming its close (fsmgr_client_orphan_closed).
+ *
+ * Returns 1 when a file is left that could not be sent because the backend's
+ * queue was full, so the caller retries on a timer rather than waiting for
+ * traffic that may never come. A send that fails for any other reason means the
+ * backend is gone, and its file went with it. */
+static int fsmgr_release_pump(void) {
+    if (g_release_endpoint < 0 || g_main_select < 0) {
+        return 0;
+    }
+    while (fsmgr_client_orphans_in_flight(&g_clients) < FSMGR_RELEASE_CLOSES_MAX) {
+        fsmgr_client_fd_t* fd = fsmgr_client_next_orphan(&g_clients);
+        if (!fd) {
+            return 0;
+        }
+        if (++g_release_request_id <= 0) {
+            g_release_request_id = 1;
+        }
+        int32_t rc = wasmos_ipc_send(fd->backend_endpoint,
+                                     g_release_endpoint,
+                                     FS_IPC_CLOSE_REQ,
+                                     g_release_request_id,
+                                     fd->backend_fd,
+                                     0,
+                                     0,
+                                     0);
+        if (rc == WASMOS_FULL) {
+            return 1;
+        }
+        if (rc != 0) {
+            fd->in_use = 0;
+            continue;
+        }
+        fsmgr_client_orphan_sent(fd, g_release_request_id);
+    }
+    return 0;
+}
+
+/* Take every reply to fsmgr_release_pump's closes off g_release_endpoint.
+ *
+ * Only a reply naming an outstanding close counts; anything else that lands
+ * here -- a hangup from a backend that ended, which carries no request id -- is
+ * not one. A close refused as FS_BUSY is retried; any other refusal is reported
+ * and the record dropped, since the backend will not close that fd. */
+static void fsmgr_release_drain(void) {
+    if (g_release_endpoint < 0) {
+        return;
+    }
+    while (wasmos_ipc_drain(g_release_endpoint) > 0) {
+        int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        int busy = type == FS_IPC_ERROR && status == WASMOS_ERR_FS_BUSY;
+        if (!fsmgr_client_orphan_closed(
+                &g_clients, wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID), busy)) {
+            continue;
+        }
+        if (type != FS_IPC_RESP && !busy) {
+            printf("[fs-manager] backend endpoint %d refused an ended client's close: %s\n",
+                   (int)wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+                   wasmos_strerror((wasmos_error_code_t)status));
+        }
+    }
+}
+
 /* Release the state held for `context_id`, whose process has ended.
  *
- * Driven by WASMOS_IPC_HANGUP, which the kernel delivers when an endpoint that
- * had sent to this one is torn down. Scoped by construction: the client's own
- * requests are what made it a peer, so this service hears about its own clients
- * and nothing else, and there is nothing to subscribe to.
+ * Driven by WASMOS_IPC_HANGUP, which the kernel delivers when a process that had
+ * sent to this endpoint -- or that the process manager watched for it, because
+ * fs-manager holds a copied working directory for it -- has ended. Scoped by
+ * construction: this service hears about its own clients and nothing else, and
+ * there is nothing to subscribe to.
  *
- * Everything here is state the client can no longer use. Its open fds name
- * backend handles nobody will close, and its working directory is a path nobody
- * is standing in. Both are released; the slot returns to the pool, which is what
- * stops the table growing by one entry per process that has ever touched the
- * filesystem.
- *
- * The backend-side fds are NOT closed for it. A backend keys its own open files
- * by the connection they arrived on, which is fs-manager's, so it cannot tell
- * whose they were -- closing them is a per-fd forward this does not do, and the
- * consequence is a backend-side leak tracked separately in docs/TASKS.md. */
+ * Its working directory is dropped at once. Its open files are closed on their
+ * backends by fsmgr_release_pump, and its slot is reused once they are. */
 static void fsmgr_release_client(int32_t context_id) {
     fsmgr_client_release(&g_clients, context_id);
+    (void)fsmgr_release_pump();
 }
 
 /* Forget every cached reference to `endpoint` in the client table.
@@ -919,7 +1005,9 @@ static wasmos_error_code_t fsmgr_mount_busy_reason(const fs_backend_t* mount) {
             if (!state->in_use) {
                 continue;
             }
-            if (fsmgr_path_is_within(mount->mount_path, state->cwd)) {
+            /* A releasing slot stands in no directory; its fds below still count,
+             * because those files are still open on the backend. */
+            if (!state->releasing && fsmgr_path_is_within(mount->mount_path, state->cwd)) {
                 return WASMOS_ERR_FS_MOUNT_BUSY;
             }
             for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
@@ -1924,9 +2012,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     fsmgr_heap_init();
     g_reply_endpoint = wasmos_ipc_create_endpoint();
     g_fs_endpoint = wasmos_ipc_create_endpoint();
+    g_release_endpoint = wasmos_ipc_create_endpoint();
     g_cwd_bid = wasmos_xfer_buffer_acquire(FSMGR_CWD_MAX);
     log_msg("[fs-manager] init start\n");
-    if (g_proc_endpoint < 0 || g_reply_endpoint < 0 || g_fs_endpoint < 0 || g_cwd_bid < 0) {
+    if (g_proc_endpoint < 0 || g_reply_endpoint < 0 || g_fs_endpoint < 0 ||
+        g_release_endpoint < 0 || g_cwd_bid < 0) {
         log_msg("[fs-manager] endpoint init failed\n");
         wasmos_sys_ipc_recv_loop();
     }
@@ -1934,12 +2024,38 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         log_msg("[fs-manager] register fs.vfs failed\n");
         wasmos_sys_ipc_recv_loop();
     }
+    g_main_select = wasmos_ipc_select_create();
+    if (g_main_select <= 0) {
+        g_main_select = -1;
+    } else if (wasmos_ipc_select_add(g_main_select, g_fs_endpoint) != 0 ||
+               wasmos_ipc_select_add(g_main_select, g_release_endpoint) != 0) {
+        (void)wasmos_ipc_select_destroy(g_main_select);
+        g_main_select = -1;
+    }
     log_msg("[fs-manager] services registered\n");
     wasmos_sys_notify_ready(g_proc_endpoint, g_fs_endpoint);
     fsmgr_discover_backends();
 
     for (;;) {
-        if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {
+        /* Release replies first: draining them is what lets the pump send the
+         * next closes, and it reads into the same last-message slot the request
+         * below is read from. */
+        fsmgr_release_drain();
+        int release_retry = fsmgr_release_pump();
+        if (g_main_select >= 0) {
+            /* Park until either endpoint has something; a message that arrived
+             * since the drain wakes the wait at once. A close still to be resent
+             * bounds the wait, since its backend's queue draining wakes nobody
+             * here. */
+            if (wasmos_ipc_drain(g_fs_endpoint) <= 0) {
+                if (release_retry) {
+                    (void)wasmos_ipc_select_wait_timeout(g_main_select, FSMGR_RELEASE_RETRY_MS);
+                } else {
+                    (void)wasmos_ipc_select_wait(g_main_select);
+                }
+                continue;
+            }
+        } else if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {
             continue;
         }
 

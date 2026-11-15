@@ -924,8 +924,9 @@ linked feature documents for rationale and rollout plans.
   directory is under the mount also makes it busy, as on Linux. That is sound
   because fs-manager releases a client's state when its process ends
   (`WASMOS_IPC_HANGUP`), including a spawned child that only inherited its
-  directory (`ipc_context_watch`). The backend process itself survives its
-  unmount.
+  directory (`ipc_context_watch`). The files an ended client left open are
+  closed on their backends, which key open files by the sender's context. The
+  backend process itself survives its unmount.
 - A mount can be ESTABLISHED at runtime. `FSMGR_IPC_MOUNT_REQ` carries a
   `type=`/`mount=`/`source=` descriptor; fs-manager validates it and has the
   process manager spawn the driver, which is handed `mount=` (and `id=<source>`)

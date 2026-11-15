@@ -9,12 +9,30 @@
  * directory that needs no backend to name. */
 static void client_slot_claim(fs_client_state_t* slot, int32_t context_id) {
     slot->in_use = 1;
+    slot->releasing = 0;
     slot->context_id = context_id;
     slot->mount = FS_MOUNT_ROOT;
     slot->backend_endpoint = -1;
     slot->cwd[0] = '/';
     slot->cwd[1] = '\0';
     fsmgr_client_reset_fds(slot);
+}
+
+static void client_slot_free(fs_client_state_t* slot) {
+    fsmgr_client_reset_fds(slot);
+    slot->in_use = 0;
+    slot->releasing = 0;
+    slot->context_id = -1;
+    slot->backend_endpoint = -1;
+}
+
+static int client_slot_has_open_fds(const fs_client_state_t* slot) {
+    for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
+        if (slot->fds[f].in_use) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 void fsmgr_client_reset_fds(fs_client_state_t* state) {
@@ -28,8 +46,9 @@ fs_client_state_t* fsmgr_client_lookup(fs_client_table_t* table, int32_t context
     fs_client_chunk_t* chunk = table->chunks;
     while (chunk) {
         for (uint32_t i = 0; i < chunk->used; ++i) {
-            if (chunk->slots[i].in_use && chunk->slots[i].context_id == context_id) {
-                return &chunk->slots[i];
+            fs_client_state_t* slot = &chunk->slots[i];
+            if (slot->in_use && !slot->releasing && slot->context_id == context_id) {
+                return slot;
             }
         }
         chunk = chunk->next;
@@ -85,8 +104,86 @@ void fsmgr_client_release(fs_client_table_t* table, int32_t context_id) {
     if (!state) {
         return;
     }
-    fsmgr_client_reset_fds(state);
-    state->in_use = 0;
+    if (!client_slot_has_open_fds(state)) {
+        client_slot_free(state);
+        return;
+    }
+    state->releasing = 1;
     state->context_id = -1;
+    state->mount = FS_MOUNT_ROOT;
     state->backend_endpoint = -1;
+    state->cwd[0] = '\0';
+}
+
+fsmgr_client_fd_t* fsmgr_client_next_orphan(fs_client_table_t* table) {
+    for (fs_client_chunk_t* chunk = table->chunks; chunk; chunk = chunk->next) {
+        for (uint32_t i = 0; i < chunk->used; ++i) {
+            fs_client_state_t* slot = &chunk->slots[i];
+            if (!slot->in_use || !slot->releasing) {
+                continue;
+            }
+            if (!client_slot_has_open_fds(slot)) {
+                /* Every file confirmed closed, or forgotten with a backend that
+                 * went away (fsmgr_forget_backend_in_clients). */
+                client_slot_free(slot);
+                continue;
+            }
+            for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
+                fsmgr_client_fd_t* fd = &slot->fds[f];
+                if (fd->in_use && !fd->closing) {
+                    return fd;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+void fsmgr_client_orphan_sent(fsmgr_client_fd_t* fd, int32_t request_id) {
+    fd->closing = 1;
+    fd->close_request_id = request_id;
+}
+
+int fsmgr_client_orphan_closed(fs_client_table_t* table, int32_t request_id, int retry) {
+    for (fs_client_chunk_t* chunk = table->chunks; chunk; chunk = chunk->next) {
+        for (uint32_t i = 0; i < chunk->used; ++i) {
+            fs_client_state_t* slot = &chunk->slots[i];
+            if (!slot->in_use || !slot->releasing) {
+                continue;
+            }
+            for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
+                fsmgr_client_fd_t* fd = &slot->fds[f];
+                if (!fd->in_use || !fd->closing || fd->close_request_id != request_id) {
+                    continue;
+                }
+                fd->closing = 0;
+                if (!retry) {
+                    fd->in_use = 0;
+                    fd->backend_endpoint = -1;
+                    fd->backend_fd = -1;
+                    if (!client_slot_has_open_fds(slot)) {
+                        client_slot_free(slot);
+                    }
+                }
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+uint32_t fsmgr_client_orphans_in_flight(const fs_client_table_t* table) {
+    uint32_t n = 0;
+    for (const fs_client_chunk_t* chunk = table->chunks; chunk; chunk = chunk->next) {
+        for (uint32_t i = 0; i < chunk->used; ++i) {
+            const fs_client_state_t* slot = &chunk->slots[i];
+            if (!slot->in_use || !slot->releasing) {
+                continue;
+            }
+            for (uint32_t f = 0; f < FSMGR_CLIENT_FD_CAP; ++f) {
+                n += (slot->fds[f].in_use && slot->fds[f].closing) ? 1u : 0u;
+            }
+        }
+    }
+    return n;
 }

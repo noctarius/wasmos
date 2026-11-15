@@ -1,8 +1,10 @@
 /* wfs_fd.h - the open-file table.
  *
- * An fd is scoped to the CLIENT that opened it: the same number from a different
- * source endpoint is a different file, or none. Without that a client could read
- * another's file by guessing a number, and fds are small integers.
+ * An fd is scoped to the CONTEXT that opened it: the same number from a different
+ * process is a different file, or none. Without that a client could read
+ * another's file by guessing a number, and fds are small integers. Any endpoint
+ * of the owning process may use it, which is what lets fs-manager close a dead
+ * client's files from an endpoint other than the one that opened them.
  *
  * Pure bookkeeping — no I/O, no coroutines — so it is host-testable on its own.
  */
@@ -17,7 +19,7 @@
 
 typedef struct {
     uint8_t in_use;
-    int32_t owner; /* the source endpoint that opened it */
+    int32_t owner; /* the context that opened it */
     uint32_t object_id;
     uint64_t size;   /* latched at open; the read path clamps against it */
     uint64_t offset; /* the seek cursor */

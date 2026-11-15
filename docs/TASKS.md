@@ -1520,10 +1520,21 @@ tail.
   The first echo of the run was interleaved with a `[net-stack]` log line
   (`fs_leave_open /[net-stack] tls: no CA trust store`), and an unrelated
   `[test] menu bar title` line followed the prompt; whether concurrent serial
-  OUTPUT can cost an RX interrupt is the first lead. Next step: on a failing
-  run, read the UART's LSR/IIR and the serial driver's ring indices (GDB or a
+  OUTPUT can cost an RX interrupt is the first lead.
+
+  The wasm3 endpoint-table P1 (the cut chunk chain, below) is NOT excluded.
+  Its usual symptom is loud (`no filesystem service`, `rtc service not
+  found`, after ~28 app processes) and this run had neither, with only two app
+  processes in the session. But the dump fits it too: had the serial driver
+  read the line and its send to vt returned `IPC_ERR_NOENT`, the bytes would
+  vanish silently, and that entry already records a VT/CLI livelock in its
+  failing sessions. Next steps, in order, on a failing run (GDB, or a
   one-boundary marker that does not print to serial, because serial output is
-  what the harness matches against).
+  what the harness matches against):
+  1. Did the serial driver forward the line? Break on its send to vt and check
+     the return code. `IPC_ERR_NOENT` makes this the endpoint-table bug.
+  2. If no forward happened: read the UART's LSR/IIR and the driver's ring
+     indices to see whether the bytes reached the device at all.
 - [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
   `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
   (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends
@@ -1857,7 +1868,10 @@ Source: `architecture/19-virtual-terminal.md`,
   (`wasm3_heap_release`, the per-pid kernel malloc). Next step: a GDB hardware
   watchpoint on the head chunk's `next` to catch the writer. A VT/CLI livelock
   (VT yield-spinning in `vt_ipc_reply_retry`) was seen in the same sessions and
-  is probably VT's view of the same lost endpoints.
+  is probably VT's view of the same lost endpoints. The P2 `run-qemu-test` flake
+  entry's "Shape 2" (a typed command lost, vt and the CLI polling each other)
+  may be the same corruption seen from the serial driver; that entry lists the
+  check that tells them apart.
 
 - [x] [BUG][P2] fs-manager did not close a dead client's files on their
   backends: it dropped the client's fd mappings, but the backend kept each file
@@ -1869,7 +1883,7 @@ Source: `architecture/19-virtual-terminal.md`,
   drain the replies. FAT and WFS key open files by the sender's CONTEXT rather
   than its endpoint, which is what lets that close find them. Pinned by
   `tests/unit/test_fs_manager_clients.c` and
-  `VfsUnmountTest::test_a_dead_clients_files_are_closed_on_their_backend`.
+  `VfsClientReleaseTest::test_a_dead_clients_files_are_closed_on_their_backend`.
 
 - [x] [BUG][P2] "Hangups are delivered from the reaper, which wakes threads
   mid-dispatch." Investigated and NOT a defect. The reap path runs from the

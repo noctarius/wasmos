@@ -1501,6 +1501,29 @@ tail.
   Capture a failing run with the FULL log (a `tail` loses the signal, which cost
   two runs to learn), and check whether the harness deadlines are simply too
   tight under MTTCG before treating either as a guest bug.
+
+  Shape 2 is not WARP-only and not boot-only. CI run 43608707742 (wasm3_smp,
+  `filesystem` battery, PR #43 tip 04fc5608) lost a command MID-SESSION in
+  `VfsClientReleaseTest`: `mount -t tmpfs /leakfds` and the first
+  `fs_leave_open /leakfds/held 8` completed, then the second
+  `fs_leave_open` was never echoed within 40 s. The rerun of the same commit
+  passed. The stall dump taken at the timeout shows:
+  - the serial driver (pid 32) parked in `select_wait` on ep 86 with an EMPTY
+    queue, its last messages IRQ events (0xff00) -- no RX interrupt arrived for
+    the typed line, or one arrived and was lost before the driver;
+  - `vt` (pid 40) `running` and the CLI (pid 48) in `select_wait_timeout` on
+    ep 145, the CLI's last messages `VT_IPC_RESP` with req ~482800: the two are
+    polling each other and neither holds input;
+  - fs-manager and the test's tmpfs idle with empty queues, the first
+    process's eight release closes answered (last `0x480` replies req 7, 8) --
+    the filesystem path is not involved.
+  The first echo of the run was interleaved with a `[net-stack]` log line
+  (`fs_leave_open /[net-stack] tls: no CA trust store`), and an unrelated
+  `[test] menu bar title` line followed the prompt; whether concurrent serial
+  OUTPUT can cost an RX interrupt is the first lead. Next step: on a failing
+  run, read the UART's LSR/IIR and the serial driver's ring indices (GDB or a
+  one-boundary marker that does not print to serial, because serial output is
+  what the harness matches against).
 - [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
   `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
   (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends

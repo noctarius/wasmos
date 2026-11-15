@@ -1501,6 +1501,22 @@ tail.
   Capture a failing run with the FULL log (a `tail` loses the signal, which cost
   two runs to learn), and check whether the harness deadlines are simply too
   tight under MTTCG before treating either as a guest bug.
+
+- [ ] [BUG][P2] A QEMU CLI test fails with "'<cmd>' was never echoed" when a
+  service's log line lands in the middle of the CLI's echo. Service logs and the
+  CLI share the serial console, so the echo can arrive split, and
+  `VfsSession._run` (`tests/test_vfs_root_mount.py`) matches the echo as one
+  contiguous byte string. The command itself runs fine; the harness just never
+  sees it. CI run 43608707742 (wasm3_smp, `filesystem` battery, PR #43 tip
+  04fc5608) failed `VfsClientReleaseTest` this way on its FIRST
+  `fs_leave_open /leakfds/held 8`: the serial log reads
+  `fs_leave_open /[net-stack] tls: no CA trust store` then `leakfds/held 8`, then
+  `fs-leave-open: left open` and a fresh prompt. The guest was healthy and
+  idle at the timeout, and the rerun passed. Two ways to fix it, in the harness
+  or at the source: match the echo while skipping whole interleaved log lines,
+  or keep service logs off the line the CLI is echoing to (the log-mirror rules
+  in doc 19). The same exact-match pattern is in other tests' helpers, so fixing
+  it in one helper leaves the rest exposed.
 - [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
   `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
   (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends
@@ -1846,7 +1862,7 @@ Source: `architecture/19-virtual-terminal.md`,
   drain the replies. FAT and WFS key open files by the sender's CONTEXT rather
   than its endpoint, which is what lets that close find them. Pinned by
   `tests/unit/test_fs_manager_clients.c` and
-  `VfsUnmountTest::test_a_dead_clients_files_are_closed_on_their_backend`.
+  `VfsClientReleaseTest::test_a_dead_clients_files_are_closed_on_their_backend`.
 
 - [x] [BUG][P2] "Hangups are delivered from the reaper, which wakes threads
   mid-dispatch." Investigated and NOT a defect. The reap path runs from the

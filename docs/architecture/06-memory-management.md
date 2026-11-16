@@ -28,7 +28,7 @@ address 0 is excluded (`add_range` skips page 0 if `base == 0`).
 
 The memory map is scanned into a static 128-entry boot table (map extents
 beyond it are dropped). `pfa_upgrade_ranges()` then moves the list into a table
-allocated below the higher-half window and sized for the worst case: free
+allocated inside the bootstrap window and sized for the worst case: free
 extents are never adjacent, so an extent of `p` pages that entered the list
 splits into at most `ceil(p / 2)` of them, and the capacity is half the usable
 pages plus one per boot extent (about 8 bytes per page of RAM). A free or a
@@ -57,6 +57,11 @@ A byte-per-page refcount array tracks allocation state:
   `max_physical_address / 4096` pages from the just-initialized free list,
   copies the static data, and switches `g_refcount` to the dynamic array.
   Halts on upgrade failure.
+- **Placement:** `pfa_init` runs before `paging_init`, when the higher half
+  aliases only the first 64 MiB (`KERNEL_BOOTSTRAP_WINDOW_BYTES`, built by
+  `entry.S`). The refcount array and the free-extent table are both written
+  through that alias, so both are allocated below it; a window that cannot hold
+  them halts boot rather than faulting.
 
 Maximum refcount per page: 255. `pfa_pin_pages` halts on overflow.
 

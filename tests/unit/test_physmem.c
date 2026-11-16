@@ -8,6 +8,12 @@
  * contract by the free byte count and by a contiguous allocation spanning all
  * of it.
  *
+ * pfa_init runs before paging_init, while the higher half maps only the
+ * bootstrap window (entry.S: 64 MiB), so the tables it builds for itself must
+ * sit inside it. Two cases boot a map with RAM above the window in a child
+ * process; the host stand-in for the higher-half alias ends the child with
+ * TOUCHED_UNMAPPED where the kernel would fault.
+ *
  * Regression: 2026-11-16-pfa-dropped-free. A free that needed a new extent
  * while the extent table was full was discarded: its frames left the allocator
  * for good. Under a busy boot (the logger's one-page transfer buffer per write
@@ -21,9 +27,14 @@
  * here and kpanic aborts (stubs_kpanic.c).
  */
 
+#define _POSIX_C_SOURCE 200809L /* fork, waitpid under -std=c11 */
+
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "test_shuffle.h"
 
@@ -54,17 +65,20 @@ static int g_checks;
 uint8_t __kernel_start;
 uint8_t __kernel_end;
 
-/* Host memory standing in for the fake map's frames: the allocator writes its
- * free-extent table into frames it takes from the map. */
+/* Host memory standing in for the bootstrap higher-half window: the allocator
+ * writes its own tables into frames it takes from the map. */
+#define WINDOW_BYTES (64ull * 1024 * 1024)
+#define TOUCHED_UNMAPPED 42
 static uint8_t* g_backing;
 
 void* physmem_test_phys_ptr(uint64_t phys) {
-    if (phys < MAP_BASE || phys >= MAP_BASE + MAP_PAGES * PAGE) {
-        printf("  [FAIL] the allocator dereferenced 0x%llx outside the map\n",
+    if (phys >= WINDOW_BYTES) {
+        printf("  the allocator dereferenced 0x%llx, above the bootstrap window\n",
                (unsigned long long)phys);
-        abort();
+        fflush(stdout);
+        _exit(TOUCHED_UNMAPPED);
     }
-    return g_backing + (phys - MAP_BASE);
+    return g_backing + phys;
 }
 
 void klog_write(const char* s) {
@@ -83,7 +97,7 @@ typedef struct {
     uint64_t Attribute;
 } efi_desc_t;
 
-static efi_desc_t g_map[1];
+static efi_desc_t g_map[2];
 static boot_info_t g_boot;
 static uint64_t g_frames[MAP_PAGES];
 
@@ -96,10 +110,45 @@ static uint64_t reset(void) {
     g_map[0].PhysicalStart = MAP_BASE;
     g_map[0].NumberOfPages = MAP_PAGES;
     g_boot.memory_map = g_map;
-    g_boot.memory_map_size = sizeof(g_map);
+    g_boot.memory_map_size = sizeof(g_map[0]);
     g_boot.memory_desc_size = sizeof(g_map[0]);
     pfa_init(&g_boot);
     return pfa_free_bytes();
+}
+
+/* RAM split across the window: `low_pages` at 1 MiB and 16 MiB at 128 MiB.
+ * Boots it in a child (the refcount array it installs outlives pfa_init) and
+ * returns the child's wait status. With `allocate`, the child also takes and
+ * frees one frame from the high extent before exiting 0. */
+static int boot_split_map(uint64_t low_pages, int allocate) {
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        memset(&g_boot, 0, sizeof(g_boot));
+        g_map[0].Type = 7;
+        g_map[0].PhysicalStart = MAP_BASE;
+        g_map[0].NumberOfPages = low_pages;
+        g_map[1].Type = 7;
+        g_map[1].PhysicalStart = 128ull * 1024 * 1024;
+        g_map[1].NumberOfPages = 4096;
+        g_boot.memory_map = g_map;
+        g_boot.memory_map_size = sizeof(g_map);
+        g_boot.memory_desc_size = sizeof(g_map[0]);
+        pfa_init(&g_boot);
+        if (allocate) {
+            uint64_t frame = pfa_alloc_pages_above(1, 128ull * 1024 * 1024);
+            if (frame == 0) {
+                _exit(1);
+            }
+            pfa_free_pages(frame, 1);
+        }
+        _exit(0);
+    }
+    int status = 0;
+    if (pid < 0 || waitpid(pid, &status, 0) != pid) {
+        return -1;
+    }
+    return status;
 }
 
 /* Takes every free frame one at a time, in address order. */
@@ -187,6 +236,24 @@ static void s_an_above_allocation_that_splits_an_extent_keeps_both_remnants(void
     CHECK(pfa_free_bytes() == before, "freeing it restores the block");
 }
 
+static void s_boot_tables_land_inside_the_bootstrap_window(void) {
+    int status = boot_split_map(64, 1);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) != TOUCHED_UNMAPPED,
+          "pfa_init touches no frame above the bootstrap window");
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "the allocator then serves and takes back a frame above it");
+}
+
+static void s_a_window_too_small_for_the_boot_tables_panics(void) {
+    /* Four low pages hold neither the refcount array nor the extent table; the
+     * high extent holds both but has no alias yet. */
+    int status = boot_split_map(4, 0);
+    CHECK(!(WIFEXITED(status) && WEXITSTATUS(status) == TOUCHED_UNMAPPED),
+          "pfa_init does not place a boot table above the bootstrap window");
+    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+          "pfa_init panics when the window cannot hold its tables");
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     {"a_checkerboard_of_frees_is_all_free", s_a_checkerboard_of_frees_is_all_free},
     {"fragmented_memory_freed_is_contiguous_again", s_fragmented_memory_freed_is_contiguous_again},
@@ -194,11 +261,15 @@ static const wasmos_test_void_case_t k_cases[] = {
      s_a_frame_freed_into_a_fragmented_list_can_be_allocated},
     {"an_above_allocation_that_splits_an_extent_keeps_both_remnants",
      s_an_above_allocation_that_splits_an_extent_keeps_both_remnants},
+    {"boot_tables_land_inside_the_bootstrap_window",
+     s_boot_tables_land_inside_the_bootstrap_window},
+    {"a_window_too_small_for_the_boot_tables_panics",
+     s_a_window_too_small_for_the_boot_tables_panics},
 };
 
 int main(void) {
     printf("test_physmem\n");
-    g_backing = calloc(MAP_PAGES, PAGE);
+    g_backing = calloc(1, WINDOW_BYTES);
     if (!g_backing) {
         printf("test_physmem: no host memory for the map\n");
         return 1;

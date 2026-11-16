@@ -311,7 +311,8 @@ static int pfa_upgrade_refcount(uint64_t* out_pages, uint64_t* out_alloc_pages) 
     if (out_pages)
         *out_pages = needed_pages;
 
-    uint64_t rc_phys = pfa_alloc_pages_nolock(rc_alloc_pages);
+    /* pfa_init runs before paging_init: only the bootstrap window is aliased. */
+    uint64_t rc_phys = pfa_alloc_pages_below_nolock(rc_alloc_pages, KERNEL_BOOTSTRAP_WINDOW_BYTES);
     if (rc_phys == 0) {
         return -1;
     }
@@ -337,12 +338,13 @@ static int pfa_upgrade_refcount(uint64_t* out_pages, uint64_t* out_alloc_pages) 
  * ceil(p / 2) free extents, so half the pages that entered the list plus one
  * per boot extent bounds the count. Called once from pfa_init with g_pfa_lock
  * held, after the refcount upgrade, so the table's own frames get a count.
- * Returns the table's size in pages, or 0 when no run below the higher-half
- * window fits it. */
+ * Returns the table's size in pages, or 0 when no run inside the bootstrap
+ * window (KERNEL_BOOTSTRAP_WINDOW_BYTES, the only alias before paging_init)
+ * fits it. */
 static uint64_t pfa_upgrade_ranges(void) {
     uint64_t capacity = g_initial_total_pages / 2u + PFA_BOOT_RANGES;
     uint64_t table_pages = (capacity * sizeof(pfa_range_t) + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint64_t phys = pfa_alloc_pages_below_nolock(table_pages, KERNEL_HIGHER_HALF_WINDOW_BYTES);
+    uint64_t phys = pfa_alloc_pages_below_nolock(table_pages, KERNEL_BOOTSTRAP_WINDOW_BYTES);
     if (phys == 0) {
         return 0;
     }

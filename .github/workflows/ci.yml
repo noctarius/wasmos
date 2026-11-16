@@ -290,12 +290,64 @@ jobs:
       # Teed so the next step can assert what actually booted. pipefail is set
       # explicitly because the default shell here is `bash -e` without it, and
       # tee would otherwise swallow a battery failure.
+      # QEMU itself has crashed with SIGSEGV mid-battery (docs/TASKS.md, the P0
+      # "no CLI prompt" item, second face). Its core is the only evidence of
+      # where, so cores land in a runner-owned directory rather than apport,
+      # which discards crashes of binaries it does not track. A canary crash
+      # proves the capture works, so an empty directory after the battery means
+      # QEMU did not crash rather than that nothing was collected.
+      - name: Collect QEMU core dumps
+        run: |
+          mkdir -p "$RUNNER_TEMP/cores"
+          sudo sysctl -w kernel.core_pattern="$RUNNER_TEMP/cores/core.%e.%p"
+          ulimit -c unlimited
+          sleep 30 &
+          kill -SEGV $!
+          wait $! || true
+          canary=("$RUNNER_TEMP"/cores/core.sleep.*)
+          if [ ! -f "${canary[0]}" ]; then
+            echo "::error::core capture is not working (core_pattern=$(cat /proc/sys/kernel/core_pattern))"
+            exit 1
+          fi
+          rm -f "${canary[@]}"
+
       - name: Run battery (${{ matrix.battery }}, ${{ matrix.runtime }})
         env:
           WASMOS_TEST_BATTERY: ${{ matrix.battery }}
         run: |
           set -o pipefail
+          ulimit -c unlimited
           cmake --build build --target run-qemu-cli-test 2>&1 | tee "$RUNNER_TEMP/battery.log"
+
+      # Symbols come from Ubuntu's debuginfod, so the backtrace names QEMU's own
+      # functions without a debug build. Runs only when a core exists.
+      - name: Backtrace QEMU crashes
+        if: always()
+        run: |
+          shopt -s nullglob
+          cores=("$RUNNER_TEMP"/cores/core.*)
+          if [ ${#cores[@]} -eq 0 ]; then
+            echo "no QEMU core dumps"
+            exit 0
+          fi
+          sudo apt-get install -y --no-install-recommends gdb
+          export DEBUGINFOD_URLS="https://debuginfod.ubuntu.com"
+          for core in "${cores[@]}"; do
+            echo "::error::QEMU crashed: $core"
+            gdb -batch -iex "set debuginfod enabled on" \
+              -ex "info sharedlibrary" -ex "bt full" -ex "thread apply all bt" \
+              "$(command -v qemu-system-x86_64)" "$core" 2>&1 | tee "$core.bt.txt"
+            zstd -q -T0 --rm "$core"
+          done
+
+      - name: Upload QEMU crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-crash-${{ matrix.battery }}-${{ matrix.runtime }}
+          path: ${{ runner.temp }}/cores/
+          if-no-files-found: ignore
+          retention-days: 14
 
       # A battery passes under whichever runtime the build actually linked, so
       # assert it is the one this cell claims. The marker comes from the BOOTED

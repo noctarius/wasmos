@@ -322,6 +322,9 @@ set(WASM_BLKINFO_APP ${BUILD_DIR}/blkinfo.wap)
 set(WASM_VOLINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/volinfo/volinfo.c)
 set(WASM_VOLINFO_WASM ${BUILD_DIR}/volinfo.wasm)
 set(WASM_VOLINFO_APP ${BUILD_DIR}/volinfo.wap)
+set(WASM_DMESG_SRC ${CMAKE_SOURCE_DIR}/src/utils/dmesg/dmesg.c)
+set(WASM_DMESG_WASM ${BUILD_DIR}/dmesg.wasm)
+set(WASM_DMESG_APP ${BUILD_DIR}/dmesg.wap)
 set(WASM_PARTPROBE_SRC ${CMAKE_SOURCE_DIR}/src/utils/partprobe/partprobe.c)
 set(WASM_PARTPROBE_WASM ${BUILD_DIR}/partprobe.wasm)
 set(WASM_PARTPROBE_APP ${BUILD_DIR}/partprobe.wap)
@@ -1762,6 +1765,7 @@ if (TARGET host_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_UMOUNT_APP} ${BUILD_DIR}/esp/system/utils/umount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VOLINFO_APP} ${BUILD_DIR}/esp/system/utils/volinfo.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DMESG_APP} ${BUILD_DIR}/esp/system/utils/dmesg.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTPROBE_APP} ${BUILD_DIR}/esp/system/utils/partprobe.wap
     # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap
@@ -3758,6 +3762,15 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${KERNEL_DIR}/kenv.c
           -o ${BUILD_DIR}/test_kenv
   COMMAND ${BUILD_DIR}/test_kenv
+  # The kernel log ring: sequence-numbered paging for dmesg, and the
+  # offset-from-oldest copy the boot replays use.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_kmsg.c
+          ${KERNEL_DIR}/kmsg.c
+          -o ${BUILD_DIR}/test_kmsg
+  COMMAND ${BUILD_DIR}/test_kmsg
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -4523,6 +4536,7 @@ set(WASMOS_UNIT_SCHED_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_block_buffer.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_value.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_kenv.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_kmsg.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_buffer.c)
 
 wasmos_ide_index(wasmos_ide_unit_sched

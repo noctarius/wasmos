@@ -15,6 +15,7 @@ add_subdirectory(partprobe)
 add_subdirectory(fsck_wfs)
 add_subdirectory(mkfs_wfs)
 add_subdirectory(curl)
+add_subdirectory(dmesg)
 
 # Aggregate every /system/utils tool so the run-qemu-* targets (which depend on
 # `system_utils`) rebuild them before the ESP is populated. The date tool
@@ -23,7 +24,7 @@ add_subdirectory(curl)
 if (NOT TARGET system_utils)
   add_custom_target(system_utils)
 endif ()
-foreach(_util sched_info_util ps_util cat_util sysinfo_util explorer_util ip_util host_util mkdir_util mount_util umount_util curl_util blkinfo_util volinfo_util partprobe_util fsck_wfs_util mkfs_wfs_util)
+foreach(_util sched_info_util ps_util cat_util sysinfo_util explorer_util ip_util host_util mkdir_util mount_util umount_util curl_util blkinfo_util volinfo_util partprobe_util fsck_wfs_util mkfs_wfs_util dmesg_util)
   if (TARGET ${_util})
     add_dependencies(system_utils ${_util})
   endif ()

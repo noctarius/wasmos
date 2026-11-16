@@ -1375,9 +1375,15 @@ linked feature documents for rationale and rollout plans.
   `boot_info_t.cmdline`, `BOOT_INFO_VERSION` 6); the kernel publishes its
   `key=value` tokens into kenv first thing in `kmain`. The shipped file sets
   `log.serial=com2`: COM2 carries the kernel log only, written by the kernel
-  directly (early-log replay, then every kernel-log write, unlocked paths
+  directly (kmsg replay, then every kernel-log write, unlocked paths
   included). The QEMU harness captures COM2 per session and prints its tail on
   every timeout; the run targets write it to `build/syslog.log`.
+- The kernel log ring (kmsg, 64 KiB, `src/kernel/kmsg.c`) holds kernel log
+  only, LF line ends, with a 64-bit byte sequence number that never wraps. The
+  `kmsg_read` host call pages it by sequence number and reports overwritten
+  bytes; the `dmesg` utility (`/boot/system/utils/dmesg.wap`) prints it. A fresh
+  boot fits whole (about 15 KiB on the default config). A persistent
+  `/var/log/messages` (a logger service) is not implemented.
 - WARP notes for the vt: its ring and blit overlays need `INITIAL_MEMORY` /
   `heap_pages` tuned so each window lands in declared linear memory below the
   2 MiB low-guard, and `--initial/max-memory` changes are content-cached under

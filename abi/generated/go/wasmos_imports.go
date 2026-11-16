@@ -966,3 +966,28 @@ func IoRegionOut32(a0 int32, a1 int32, a2 int32) int32
 // caller did not register the console ring.
 //go:wasmimport wasmos serial_owner_write
 func SerialOwnerWrite(a0 int32, a1 int32) int32
+
+// Read the kernel log ring by sequence number. Each byte of kernel log has
+// a 64-bit sequence number (the count of bytes logged before it) that never
+// wraps; the ring retains the newest 64 KiB. The call reads the u64 at
+// `seq`, copies up to `len` bytes starting at that sequence number into
+// guest memory at `buf`, and writes the sequence number of the first byte
+// copied back to `seq`.
+//
+// A sequence number older than the oldest retained byte starts at the
+// oldest one instead, so the value written back minus the value passed is
+// the number of bytes the reader lost to overwrite; pass 0 to read from the
+// oldest retained byte. Text is the kernel log only, with '\n' line ends.
+// The copied bytes are one consistent range, but a read longer than the
+// kernel's bounce buffer is assembled from several; it stops early rather
+// than return a gap.
+//
+// Returns the number of bytes copied (0 at the end of the log), WASMOS_INVAL
+// for a negative `len` or a sequence number the log never reached, or
+// WASMOS_ERR_KERNEL_BAD_POINTER if either range is not writable linear
+// memory.
+//
+// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+// are also possible; see the note at the top of this file.
+//go:wasmimport wasmos kmsg_read
+func KmsgRead(a0 int32, a1 int32, a2 int32) int32

@@ -122,7 +122,8 @@ typedef enum {
     HC_IO_REGION_OUT16 = 112,
     HC_IO_REGION_OUT32 = 113,
     HC_SERIAL_OWNER_WRITE = 114,
-    HC_COUNT = 115,
+    HC_KMSG_READ = 115,
+    HC_COUNT = 116,
 } warp_hostcall_id_t;
 
 #endif /* WASMOS_HOSTCALL_IDS_H */

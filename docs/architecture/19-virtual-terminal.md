@@ -230,7 +230,7 @@ typedef struct {
 framebuffer driver is a **pure blit surface**: it renders the cells `vt` sends and
 nothing else. Both drivers (GOP and PCI) once drained the kernel console ring
 themselves; that drain is retired, so the only text they paint on their own is the
-early-log replay at startup, before `vt` exists.
+kernel-log (kmsg) replay at startup, before `vt` exists.
 
 | Opcode                          | Value | Arguments                                            |
 |---------------------------------|-------|------------------------------------------------------|
@@ -403,7 +403,7 @@ the IRQ→VT path and make the CLI event-driven.
   unlocked panic/NMI path below.
 - **Kernel-log port (phase 5, Shipped):** with `log.serial=com2` on the kernel
   command line (`\kernel.cmdline`, `boot.h`), the kernel also transmits every
-  kernel-log write on COM2 itself, from a replay of the early-log capture
+  kernel-log write on COM2 itself, from a replay of the kmsg ring
   onward. COM2 bypasses the vt entirely, so it is the complete, in-order kernel
   log whatever the vt is doing and whichever slot COM1 is bound to; it never
   carries a process's slot output. A COM2 with no UART behind it is detected

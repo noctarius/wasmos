@@ -1,18 +1,20 @@
 /* serial.c - COM1 UART serial driver and kernel console output.
  * Drives COM1 (0x3F8) at 115200 baud for early and runtime debug output.
  * Every write also fans out to the console_ring_t shared-memory ring for
- * user-space readers and to a small early-log capture buffer for driver handoff.
+ * user-space readers, and kernel log is appended to the kernel log ring (kmsg.h)
+ * that dmesg, the boot replays and the kernel-log port read.
  * Once the vt registers its console ring, kernel log and console output are
  * published there INSTEAD of being transmitted: the vt owns COM1 from then on
  * and writes the serial-bound slot through serial_owner_write.  Text the ring
  * cannot take, and every unlocked (panic/NMI) write, still goes straight to COM1.
- * The state on the logging path (lock, console ring, klog ring, early log) is
+ * The state on the logging path (lock, console ring, klog ring, kmsg ring) is
  * reached through *_slot() accessors that add the kernel higher-half offset once
  * serial_enable_high_alias(1) is set, so logging works under a root with no low
  * identity mapping. The input ring below has no such accessor. */
 #include <stdarg.h>
 #include "console_ring.h"
 #include "ipc.h"
+#include "kmsg.h"
 #include "memory.h"
 #include "physmem.h"
 #include "serial.h"
@@ -66,10 +68,9 @@ static inline uint8_t inb(uint16_t port) {
     return ret;
 }
 
-#define EARLY_LOG_SIZE 4096
-static uint8_t g_early_log[EARLY_LOG_SIZE];
-static uint32_t g_early_log_head = 0;  /* next write index (wraps) */
-static uint32_t g_early_log_count = 0; /* bytes written, capped at EARLY_LOG_SIZE */
+/* The kernel log ring (kmsg.h): every kernel-log write since the first line of
+ * kmain.  Appended under g_serial_lock, or unlocked on the panic path. */
+static kmsg_t g_kmsg;
 
 static ksync_spinlock_t g_serial_lock = {0};
 static uint8_t g_serial_high_alias_enabled = 0;
@@ -185,28 +186,12 @@ static inline volatile uint8_t* serial_klog_doorbell_slot(void) {
     return (volatile uint8_t*)(void*)addr;
 }
 
-static inline uint8_t* serial_early_log_buf(void) {
-    uintptr_t addr = (uintptr_t)&g_early_log[0];
+static inline kmsg_t* serial_kmsg(void) {
+    uintptr_t addr = (uintptr_t)&g_kmsg;
     if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
         addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
-    return (uint8_t*)(void*)addr;
-}
-
-static inline uint32_t* serial_early_log_head_slot(void) {
-    uintptr_t addr = (uintptr_t)&g_early_log_head;
-    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
-        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
-    }
-    return (uint32_t*)(void*)addr;
-}
-
-static inline uint32_t* serial_early_log_count_slot(void) {
-    uintptr_t addr = (uintptr_t)&g_early_log_count;
-    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
-        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
-    }
-    return (uint32_t*)(void*)addr;
+    return (kmsg_t*)(void*)addr;
 }
 
 static int serial_tx_ready(void) {
@@ -677,7 +662,7 @@ static void serial_transmit(char c) {
  * console ring.  Safe to call again: com1_serial_init only rewrites UART
  * registers, and serial_ring_init returns immediately once a ring exists.
  * Failure to create the ring is not reported; logging then reaches COM1 and the
- * early-log buffer only. */
+ * kmsg ring only. */
 void serial_init(void) {
     if (g_serial_driver && g_serial_driver->init) {
         g_serial_driver->init();
@@ -685,8 +670,8 @@ void serial_init(void) {
     serial_ring_init();
 }
 
-/* Common body of every console writer: the legacy console ring and the early-log
- * capture always see `s`, and kernel log is transmitted on the kernel-log port
+/* Common body of every console writer: the legacy console ring always sees `s`;
+ * kernel log is appended to the kmsg ring and transmitted on the kernel-log port
  * when one is enabled; with `route` set it is then offered to the vt's console
  * ring as records for `slot`, and only what the ring did not take is transmitted
  * on COM1 with LF->CRLF expansion.  Without `route` all of it is transmitted.
@@ -708,24 +693,10 @@ static void serial_emit(uint8_t slot, const char* s, int route) {
     if (!*serial_console_ring_slot()) {
         serial_ring_init();
     }
-    uint8_t* early_log = serial_early_log_buf();
-    uint32_t* early_head = serial_early_log_head_slot();
-    uint32_t* early_count = serial_early_log_count_slot();
     preempt_disable();
     serial_ring_write(s);
-    for (const char* p = s; *p; ++p) {
-        if (*p == '\n') {
-            early_log[*early_head] = '\r';
-            *early_head = (*early_head + 1) % EARLY_LOG_SIZE;
-            if (*early_count < EARLY_LOG_SIZE) {
-                (*early_count)++;
-            }
-        }
-        early_log[*early_head] = (uint8_t)*p;
-        *early_head = (*early_head + 1) % EARLY_LOG_SIZE;
-        if (*early_count < EARLY_LOG_SIZE) {
-            (*early_count)++;
-        }
+    if (slot == VT_CONSOLE_SLOT_KLOG) {
+        kmsg_append(serial_kmsg(), s);
     }
     uint16_t log_port = *serial_log_port_slot();
     if (log_port != 0 && slot == VT_CONSOLE_SLOT_KLOG) {
@@ -736,6 +707,9 @@ static void serial_emit(uint8_t slot, const char* s, int route) {
             log_port_put_char(log_port, *p);
         }
     }
+    /* TODO: a slot writer's text that the full ring cannot take goes to COM1 here
+     * and never reaches its slot's screen; console_write needs backpressure for a
+     * writer with a controlling slot (docs/TASKS.md). */
     const char* rest = route ? s + console_ring_publish(slot, s) : s;
     for (const char* p = rest; *p; ++p) {
         if (*p == '\n') {
@@ -780,7 +754,7 @@ void console_write_tty(uint32_t tty, const char* s) {
 }
 
 /* COM1 output on behalf of the console ring's owner: the vt writing the
- * serial-bound slot.  Nothing here reaches any ring or the early log, since the
+ * serial-bound slot.  Nothing here reaches the console rings or the kmsg ring, since the
  * text came out of the console ring in the first place.  LF is expanded to CRLF.
  *
  * Returns 0, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED when no console ring is
@@ -867,7 +841,7 @@ void serial_write_hex64_unlocked(uint64_t value) {
     serial_write_unlocked(buf);
 }
 
-/* The write path -- console ring, early-log capture, COM1 TX with LF->CRLF
+/* The write path -- console ring, kmsg ring, COM1 TX with LF->CRLF
  * expansion -- with the lock deliberately NOT taken, and never through the vt's
  * console ring: this always transmits.
  *
@@ -884,7 +858,7 @@ void serial_write_unlocked(const char* s) {
 }
 
 /* Programs the UART at I/O base `port` (115200 8N1, FIFO on, interrupts off) as
- * the kernel-log port and replays the early-log capture into it, so the port
+ * the kernel-log port and replays the kmsg ring into it, CR-expanded, so the port
  * starts with the boot output written before it existed.  From then on every
  * kernel-log write -- locked or unlocked, routed through the vt or not -- is also
  * transmitted there.  Console output of processes with a controlling slot is not.
@@ -906,18 +880,22 @@ int32_t serial_log_port_enable(uint16_t port) {
     outb((uint16_t)(port + 4), 0x03); /* DTR + RTS, OUT2 clear: no IRQ */
 
     ksync_spinlock_lock(serial_lock_ptr());
-    uint32_t count = *serial_early_log_count_slot();
-    if (count >= EARLY_LOG_SIZE) {
+    kmsg_t* k = serial_kmsg();
+    if (kmsg_first(k) != 0) {
         static const char k_lost[] = "[serial] log port: earlier boot output not retained\r\n";
         for (const char* p = k_lost; *p; ++p) {
             log_port_put_char(port, *p);
         }
     }
+    uint32_t count = kmsg_size(k);
     uint8_t chunk[64];
     for (uint32_t off = 0; off < count; off += (uint32_t)sizeof(chunk)) {
         uint32_t n = count - off < (uint32_t)sizeof(chunk) ? count - off : (uint32_t)sizeof(chunk);
-        serial_early_log_copy(chunk, off, n);
+        kmsg_copy(k, chunk, off, n);
         for (uint32_t i = 0; i < n; ++i) {
+            if (chunk[i] == '\n') {
+                log_port_put_char(port, '\r');
+            }
             log_port_put_char(port, (char)chunk[i]);
         }
     }
@@ -926,38 +904,30 @@ int32_t serial_log_port_enable(uint16_t port) {
     return 0;
 }
 
-/* Bytes currently retrievable through serial_early_log_copy, saturating at
- * EARLY_LOG_SIZE (4096) once the capture buffer has wrapped.  Read without the
- * lock, so it can grow between this call and the copy. */
+/* Bytes of kernel log currently retrievable through serial_early_log_copy,
+ * saturating at KMSG_SIZE once the ring has wrapped.  Read without the lock, so it
+ * can grow between this call and the copy. */
 uint32_t serial_early_log_size(void) {
-    return *serial_early_log_count_slot();
+    return kmsg_size(serial_kmsg());
 }
 
-/* Copies up to len bytes of the captured early log into dst, where offset 0 is
- * the OLDEST retained byte rather than a buffer index — the ring's wrap is
- * resolved here, so a caller can page through it with a plain counter.
- *
- * len is clamped to what remains after offset; an offset at or past the end
- * copies nothing.  There is no return value and no way to tell a clamp from a
- * full copy, so pair it with serial_early_log_size.  dst is a caller buffer of
- * at least len bytes, borrowed for the call; NULL is ignored.  Takes no lock, so
- * a concurrent serial_write can tear the result. */
+/* Copies up to len bytes of the kernel log into dst, where offset 0 is the
+ * OLDEST retained byte rather than a buffer index (kmsg_copy).  Takes no lock,
+ * so a concurrent kernel-log write can tear the result; serial_kmsg_read is the
+ * consistent reader. */
 void serial_early_log_copy(uint8_t* dst, uint32_t offset, uint32_t len) {
-    uint8_t* early_log = serial_early_log_buf();
-    uint32_t early_head = *serial_early_log_head_slot();
-    uint32_t early_count = *serial_early_log_count_slot();
-    if (!dst || offset >= early_count) {
-        return;
-    }
-    if (len > early_count - offset) {
-        len = early_count - offset;
-    }
-    /* Logical index 0 is the oldest byte. */
-    uint32_t start =
-        (early_count < EARLY_LOG_SIZE) ? 0 : early_head; /* head = oldest when ring is full */
-    for (uint32_t i = 0; i < len; ++i) {
-        dst[i] = early_log[(start + offset + i) % EARLY_LOG_SIZE];
-    }
+    kmsg_copy(serial_kmsg(), dst, offset, len);
+}
+
+/* kmsg_read under g_serial_lock, so the copied bytes are one consistent range of
+ * the kernel log.  dst must be kernel memory that cannot fault: the lock holds
+ * interrupts off, so a caller copying to a guest bounces through a stack buffer
+ * and keeps len small. */
+int32_t serial_kmsg_read(uint64_t* seq, uint8_t* dst, uint32_t len) {
+    ksync_spinlock_lock(serial_lock_ptr());
+    int32_t rc = kmsg_read(serial_kmsg(), seq, dst, len);
+    ksync_spinlock_unlock(serial_lock_ptr());
+    return rc;
 }
 
 /* Non-blocking single-character read from the console.  Returns 1 with *out_char

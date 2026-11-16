@@ -1963,6 +1963,18 @@ VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
   `serial_console_ring_id`, `serial_console_ring_ptr`), the native driver API's
   `console_ring_id` (an ABI version bump), and the type itself in
   `src/drivers/include/wasmos_driver_abi.h`. The klog ring replaced it.
+- [ ] [BUG][P2] A process's console output that overflows the vt's 16 KiB console
+  ring is transmitted on COM1 directly (`src/kernel/serial.c` `serial_emit`) and
+  never reaches its slot: it is missing from that tty's screen, and it reaches
+  serial even when another slot is bound there. Kernel log is meant to fall back
+  this way; a slot writer has nowhere better to go only because `console_write`
+  has no backpressure. `dmesg` prints up to 64 KiB in one run and reaches it once
+  the kernel log grows past what the vt drains between two of its wakes. A
+  writer with a controlling slot should wait for the vt to drain instead.
+- [ ] [FEATURE][P3] A persistent system log: a logger service that pages the kmsg
+  ring with `kmsg_read` and appends it to `/var/log/messages`, so kernel log
+  older than the ring's 64 KiB survives. It needs a way to wait for new kernel
+  log rather than poll (a doorbell on append, like the vt's console ring).
 - [ ] [ENHANCEMENT][P3] Move the console slot's shell out of `sysinit.rc` too, so the vt owns
   every shell. The vt already spawns one per slot on first use; the console
   slot's is still started by `sysinit.rc`, last, because the first prompt is what

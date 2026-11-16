@@ -31,9 +31,9 @@ void serial_init(void);
 void serial_enable_high_alias(uint8_t enabled);
 uint8_t serial_high_alias_enabled(void);
 
-/* Thread-safe kernel-log writes (acquire internal spinlock).  Each mirrors the text into
- * the early log ring and the shared console ring.  Once the vt has registered its console
- * ring (klog_register_ring) the text is published there and the vt puts it on serial;
+/* Thread-safe kernel-log writes (acquire internal spinlock).  Each appends the text to
+ * the kmsg ring (kmsg.h) and mirrors it into the shared console ring.  Once the vt has registered
+ * its console ring (klog_register_ring) the text is published there and the vt puts it on serial;
  * before that, or for whatever a full ring cannot take, it is transmitted with '\n'
  * expanded to "\r\n", busy-waiting on the UART's transmit-holding register -- so a write
  * is bounded by the line rate, not instantaneous.  A NULL string is ignored.
@@ -70,12 +70,12 @@ void console_write_tty(uint32_t tty, const char* s);
 
 /* Enable the kernel-log port: a second UART at I/O base `port` that receives every
  * kernel-log write (and only those) directly from the kernel, starting with a replay of
- * the early-log capture.  Returns 0, or WASMOS_NOENT when no UART answers there.
+ * the kmsg ring.  Returns 0, or WASMOS_NOENT when no UART answers there.
  * Called once at boot from the `log.serial` option. */
 int32_t serial_log_port_enable(uint16_t port);
 
 /* COM1 output for the console ring's owner (the vt writing its serial-bound slot): `len`
- * bytes, '\n' expanded to "\r\n", reaching no ring and not the early log.  Returns 0, or
+ * bytes, '\n' expanded to "\r\n", reaching no ring and not the kmsg ring.  Returns 0, or
  * WASMOS_ERR_KERNEL_NOT_AUTHORIZED when no console ring is registered or `context_id` did
  * not register it. */
 int32_t serial_owner_write(uint32_t context_id, const char* s, uint32_t len);
@@ -138,8 +138,8 @@ void klog_poll(void);
 void serial_input_push(uint8_t ch);
 int serial_input_read(uint8_t* out);
 
-/* Early log ring buffer — captured from the first serial_write onward.
- * Returns the number of bytes currently buffered (capped at ring size).
+/* The kmsg ring (kmsg.h): kernel log only, LF line ends, from the first serial_write on.
+ * early_log_size returns the number of bytes retained (capped at KMSG_SIZE).
  * early_log_copy copies up to len bytes starting at logical offset into dst.
  * Logical offset 0 is the oldest byte still held, so offsets shift as the ring wraps and
  * older text is overwritten.  A NULL dst, an offset past the end, or a len beyond what is
@@ -147,6 +147,12 @@ int serial_input_read(uint8_t* out);
  * nothing back — pair it with serial_early_log_size. */
 uint32_t serial_early_log_size(void);
 void serial_early_log_copy(uint8_t* dst, uint32_t offset, uint32_t len);
+
+/* Consistent paged read of the kmsg ring by sequence number (kmsg_read), taken under the
+ * serial lock with interrupts off: `dst` must be non-faulting kernel memory and `len`
+ * small.  Returns the bytes copied and stores the first byte's sequence in *seq, or
+ * WASMOS_INVAL for a sequence the log never reached. */
+int32_t serial_kmsg_read(uint64_t* seq, uint8_t* dst, uint32_t len);
 
 /* Compile-time trace gate.  Defaults to 0 (off); define it to 1 on the command line to
  * turn the trace_* macros below into real serial output. */

@@ -1460,6 +1460,78 @@ m3ApiRawFunction(wasmos_early_log_copy) {
     m3ApiReturn(0);
 }
 
+/* Page the kernel log ring by sequence number (hostcalls.yaml `kmsg_read`).  The ring is
+ * read under the serial lock with interrupts off, so it moves through a 256-byte stack
+ * bounce buffer; a piece that no longer starts where the previous one ended (the bytes were
+ * overwritten in between) ends the read, and the guest's next call reports the gap.  `ptr`
+ * and `seq_ptr` ranges outside linear memory TRAP the module via m3ApiCheckMem.  Returns the
+ * bytes copied, else WASMOS_INVAL, WASMOS_ERR_KERNEL_BAD_POINTER,
+ * WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_COPY_FAILED. */
+m3ApiRawFunction(wasmos_kmsg_read) {
+    m3ApiReturnType(int32_t) m3ApiGetArgMem(uint8_t*, ptr) m3ApiGetArg(int32_t, len)
+        m3ApiGetArgMem(uint8_t*, seq_ptr)
+
+            if (len < 0) {
+        m3ApiReturn(WASMOS_INVAL);
+    }
+    m3ApiCheckMem(ptr, (uint32_t)len);
+    m3ApiCheckMem(seq_ptr, sizeof(uint64_t));
+    process_t* proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
+    }
+    uint64_t ptr_user = 0;
+    uint64_t seq_user = 0;
+    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
+    if ((len > 0 &&
+         (wasm_user_va_from_host_ptr(
+              proc->context_id, (const uint8_t*)_mem, mem_size, ptr, (uint32_t)len, &ptr_user) !=
+              0 ||
+          mm_user_range_permitted(
+              proc->context_id, ptr_user, (uint64_t)len, MEM_REGION_FLAG_WRITE) != 0)) ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   mem_size,
+                                   seq_ptr,
+                                   sizeof(uint64_t),
+                                   &seq_user) != 0 ||
+        mm_user_range_permitted(
+            proc->context_id, seq_user, sizeof(uint64_t), MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
+    }
+    uint64_t start = 0;
+    if (mm_copy_from_user(proc->context_id, &start, seq_user, sizeof(start)) != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
+    }
+    uint32_t count = (uint32_t)len;
+    uint32_t copied = 0;
+    uint8_t bounce[256];
+    do {
+        uint64_t at = start + copied;
+        uint32_t chunk =
+            count - copied < (uint32_t)sizeof(bounce) ? count - copied : (uint32_t)sizeof(bounce);
+        int32_t n = serial_kmsg_read(copied ? &at : &start, bounce, chunk);
+        if (n < 0) {
+            m3ApiReturn(n);
+        }
+        if (copied && at != start + copied) {
+            break;
+        }
+        if (n > 0 &&
+            mm_copy_to_user(proc->context_id, ptr_user + copied, bounce, (uint64_t)n) != 0) {
+            m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
+        }
+        copied += (uint32_t)n;
+        if ((uint32_t)n < chunk) {
+            break;
+        }
+    } while (copied < count);
+    if (mm_copy_to_user(proc->context_id, seq_user, &start, sizeof(start)) != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
+    }
+    m3ApiReturn((int32_t)copied);
+}
+
 /* Return the byte size of the boot-config blob handed over by the bootloader, or WASMOS_NOENT
  * when none is present or it is empty. */
 m3ApiRawFunction(wasmos_boot_config_size) {

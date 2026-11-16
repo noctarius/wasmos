@@ -2573,6 +2573,44 @@ static uint32_t warp_early_log_copy(uint32_t buf_off, uint32_t len, uint32_t off
     return 0;
 }
 
+/* hostcalls.yaml `kmsg_read`: page the kernel log ring by sequence number.  The
+ * ring is read under the serial lock with interrupts off, so it is copied out in
+ * bounce-sized pieces; a piece that no longer starts where the previous one ended
+ * (the bytes were overwritten in between) ends the read, and the guest's next call
+ * reports the gap.  Returns the bytes copied, WASMOS_INVAL, or
+ * WASMOS_ERR_KERNEL_BAD_POINTER. */
+static uint32_t warp_kmsg_read(uint32_t buf_off, uint32_t len, uint32_t seq_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    if ((int32_t)len < 0)
+        return (uint32_t)WASMOS_INVAL;
+    uint8_t* dst = len ? warp_mem(ctx, buf_off, len) : nullptr;
+    uint8_t* seq_ptr = warp_mem(ctx, seq_off, sizeof(uint64_t));
+    if ((len && !dst) || !seq_ptr)
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    uint64_t want = 0;
+    __builtin_memcpy(&want, seq_ptr, sizeof(want));
+    uint64_t start = want;
+    uint32_t copied = 0;
+    uint8_t bounce[256];
+    do {
+        uint64_t at = start + copied;
+        uint32_t chunk =
+            len - copied < (uint32_t)sizeof(bounce) ? len - copied : (uint32_t)sizeof(bounce);
+        int32_t n = serial_kmsg_read(copied ? &at : &start, bounce, chunk);
+        if (n < 0)
+            return (uint32_t)n;
+        if (copied && at != start + copied)
+            break;
+        if (n > 0)
+            __builtin_memcpy(dst + copied, bounce, (uint32_t)n);
+        copied += (uint32_t)n;
+        if ((uint32_t)n < chunk)
+            break;
+    } while (copied < len);
+    __builtin_memcpy(seq_ptr, &start, sizeof(start));
+    return copied;
+}
+
 /* A mark is dropped: wasm3 implements it and this backend does not.  Reports success so
  * a guest that instruments itself runs identically under both runtimes. */
 static uint32_t warp_debug_mark(uint32_t /*tag*/, void* ctx_) {

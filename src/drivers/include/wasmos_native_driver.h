@@ -135,8 +135,8 @@ typedef struct wasmos_driver_api {
     void (*proc_exit)(int code);
     void (*proc_notify_ready)(void);
 
-    /* Early kernel log — ring buffer of all serial output before the VT is
-     * ready.  early_log_size() returns bytes buffered.  early_log_copy()
+    /* Kernel log — the kernel's kmsg ring (kernel log only, LF line ends,
+     * newest 64 KiB).  early_log_size() returns bytes retained.  early_log_copy()
      * copies len bytes starting at logical offset into dst.
      * Both are read-only; the ring is never flushed after handoff. */
     uint32_t (*early_log_size)(void);

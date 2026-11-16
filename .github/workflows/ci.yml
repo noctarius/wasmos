@@ -301,14 +301,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cores"
           sudo sysctl -w kernel.core_pattern="$RUNNER_TEMP/cores/core.%e.%p"
           ulimit -c unlimited
-          sleep 30 &
-          kill -SEGV $!
-          wait $! || true
-          canary=("$RUNNER_TEMP"/cores/core.sleep.*)
-          if [ ! -f "${canary[0]}" ]; then
-            echo "::error::core capture is not working (core_pattern=$(cat /proc/sys/kernel/core_pattern))"
+          sh -c 'kill -SEGV $$' || true
+          shopt -s nullglob
+          canary=("$RUNNER_TEMP"/cores/core.*)
+          if [ ${#canary[@]} -eq 0 ]; then
+            echo "::error::core capture is not working (core_pattern=$(cat /proc/sys/kernel/core_pattern), ulimit -c=$(ulimit -c))"
             exit 1
           fi
+          echo "canary core: ${canary[*]}"
           rm -f "${canary[@]}"
 
       - name: Run battery (${{ matrix.battery }}, ${{ matrix.runtime }})

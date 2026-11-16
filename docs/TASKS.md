@@ -359,10 +359,6 @@ Source: `architecture/06-memory-management.md`,
 - [ ] [BUG][P1] Serialize `x86_irq_mask`/`x86_irq_unmask`. They read-modify-write
   `g_pic_mask1/2` with no lock, while only the `irq_sharing` ops path holds
   `g_irq_lines_lock` (`src/kernel/arch/x86_64/irq_x86_64.c`).
-- [ ] [BUG][P1] Recover the lower remnant in `pfa_alloc_pages_above`. When
-  `g_ranges` is full the middle-split fallback front-allocates and silently
-  drops `[rbase, start)` from the free list; those frames become unreachable
-  and invisible to `pfa_free_bytes` (`src/kernel/physmem.c`).
 - [ ] [ENHANCEMENT][P2] Pack `EFI_ADDRESS_SPACE_DESCRIPTOR`. Without
   `__attribute__((packed))` the padding disagrees with the ACPI byte stream it
   mirrors; harmless only because nothing reads it (`src/boot/uefi.h`).
@@ -1781,18 +1777,18 @@ Source: `architecture/19-virtual-terminal.md`,
   reverted, so it has never been shown to fail.
 
   The precondition is why: only SLOT-BACKED linear memory is affected, and a
-  block moves into a dedicated VA slot only when it is reallocated while the
-  reserve hint is armed and a slot is free (`warp_linmem_move`,
-  `src/kernel/warp/shim.cpp`). Slot-backing therefore depends on startup order
-  and slot availability — the same tree fails on one machine and not another,
-  which cost most of a session to establish.
+  block moves into a dedicated VA slot only on its first page-backed grow
+  (`warp_linmem_move`, `src/kernel/warp/shim.cpp`). The reserve hint used to be
+  one global that a concurrent spawn could overwrite, so slot-backing depended
+  on startup order; it is per pid now, and a block that cannot move is refused
+  rather than relocated, so slot-backing depends only on whether the app grows.
 
   A deterministic test needs an app whose linmem is FORCED onto a slot, then
   mapping and unmapping an overlay over it and mapping again. `surface_attach`'s
   remap stage is that shape already and passes either way, because that app is
-  not slot-backed. What is missing is the lever: find what arms
-  `g_linmem_reserve_bytes` for a spawn and drive it from a manifest, then the
-  case becomes a real regression test on any machine.
+  not slot-backed: make it grow its linear memory before the overlay
+  (`examples/c/linmem_hold` shows the grow) and the case becomes a real
+  regression test on any machine.
 
 - [ ] [CLEANUP][P3] libui returns bare -1 for real failures, so an app can say a
   UI call failed and not why. 63 sites across 20 functions in

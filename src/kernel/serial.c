@@ -565,6 +565,21 @@ static uint32_t console_ring_publish(uint8_t slot, const char* s) {
     return published;
 }
 
+int console_ring_drained(void) {
+    uint64_t phys = *serial_klog_ring_phys_slot();
+    if (!phys) {
+        return 1;
+    }
+    if (g_serial_high_alias_enabled && phys < KERNEL_HIGHER_HALF_BASE) {
+        phys += KERNEL_HIGHER_HALF_BASE;
+    }
+    wasmos_ringbuf_t rb;
+    if (wasmos_ringbuf_attach(&rb, ptr_cast(void, phys), *serial_klog_ring_bytes_slot()) != 0) {
+        return 1;
+    }
+    return wasmos_ringbuf_is_empty(&rb) ? 1 : 0;
+}
+
 /* Deliver a pending klog doorbell to the registered consumer.  Called from the
  * scheduler loop (kernel_boot_run_scheduler_loop), which is the nearest point to
  * the logging path that holds no serial lock and is not interrupt context.

@@ -31,6 +31,7 @@
 #include "wasm3/link_dma.h"
 #include "wasm3/link_ipc.h"
 #include "sync/spinlock.h"
+#include "linmem_slots.h"
 
 #include "futex.h"
 
@@ -3140,6 +3141,20 @@ m3ApiRawFunction(wasmos_physmem_stats) {
         m3ApiCheckMem(out, sizeof(physmem_stats_t));
     out->total_bytes = pfa_total_bytes();
     out->free_bytes = pfa_free_bytes();
+    m3ApiReturn(0);
+}
+
+/* hostcalls.yaml `linmem_slots`: {used, limit, total} into the record at `out`; an
+ * `out` outside linear memory traps the module via m3ApiCheckMem. */
+m3ApiRawFunction(wasmos_linmem_slots) {
+    typedef struct {
+        uint32_t used;
+        uint32_t limit;
+        uint32_t total;
+    } linmem_slot_stats_t;
+    m3ApiReturnType(int32_t) m3ApiGetArgMem(linmem_slot_stats_t*, out)
+        m3ApiCheckMem(out, sizeof(linmem_slot_stats_t));
+    linmem_slot_stats(&out->used, &out->limit, &out->total);
     m3ApiReturn(0);
 }
 

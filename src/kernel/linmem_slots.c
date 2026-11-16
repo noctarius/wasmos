@@ -26,17 +26,47 @@ static uint32_t g_linmem_slot_owner[LINMEM_SLOT_COUNT];
  * wasm3 executes concurrently across CPUs, so the pool must be SMP-safe. */
 static ksync_spinlock_t g_linmem_slot_lock;
 
+/* Slots linmem_slot_alloc may hand out: indices [0, limit).  LINMEM_SLOT_COUNT
+ * unless the boot command line lowers it (linmem.slots=N). */
+static uint32_t g_linmem_slot_limit = LINMEM_SLOT_COUNT;
+
 uint32_t linmem_slot_count(void) {
     return LINMEM_SLOT_COUNT;
 }
 
-/* Claims the lowest free slot and returns its index, or -1 when all
- * LINMEM_SLOT_COUNT slots are taken.  Reserving a slot only reserves VA: no
+void linmem_slot_stats(uint32_t* used, uint32_t* limit, uint32_t* total) {
+    ksync_spinlock_lock(&g_linmem_slot_lock);
+    uint32_t in_use = (uint32_t)__builtin_popcountll(g_linmem_slot_bitmap);
+    uint32_t cap = g_linmem_slot_limit;
+    ksync_spinlock_unlock(&g_linmem_slot_lock);
+    if (used) {
+        *used = in_use;
+    }
+    if (limit) {
+        *limit = cap;
+    }
+    if (total) {
+        *total = LINMEM_SLOT_COUNT;
+    }
+}
+
+uint32_t linmem_slot_set_limit(uint32_t limit) {
+    if (limit > LINMEM_SLOT_COUNT) {
+        limit = LINMEM_SLOT_COUNT;
+    }
+    ksync_spinlock_lock(&g_linmem_slot_lock);
+    g_linmem_slot_limit = limit;
+    ksync_spinlock_unlock(&g_linmem_slot_lock);
+    return limit;
+}
+
+/* Claims the lowest free slot and returns its index, or -1 when all slots below
+ * the limit (linmem_slot_set_limit) are taken.  Reserving a slot only reserves VA: no
  * frame is allocated and nothing is mapped until linmem_slot_commit.  Takes
  * g_linmem_slot_lock. */
 int linmem_slot_alloc(void) {
     ksync_spinlock_lock(&g_linmem_slot_lock);
-    for (uint32_t i = 0; i < LINMEM_SLOT_COUNT; ++i) {
+    for (uint32_t i = 0; i < g_linmem_slot_limit; ++i) {
         if (!(g_linmem_slot_bitmap & (1ULL << i))) {
             g_linmem_slot_bitmap |= (1ULL << i);
             ksync_spinlock_unlock(&g_linmem_slot_lock);

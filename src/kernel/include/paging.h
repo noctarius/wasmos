@@ -17,6 +17,11 @@
  * alias. Stated here rather than in each consumer because it is a property of
  * the mapping paging_init builds, and a private copy drifts from it silently. */
 #define KERNEL_HIGHER_HALF_WINDOW_BYTES (512ULL * 1024ULL * 1024ULL)
+/* Size of the higher-half alias entry.S builds before paging_init (32 2 MiB
+ * pages in bootstrap_pd_high). Anything that dereferences a frame through the
+ * alias before paging_init -- the frame allocator's own tables in pfa_init --
+ * must allocate below this. */
+#define KERNEL_BOOTSTRAP_WINDOW_BYTES (64ULL * 1024ULL * 1024ULL)
 /* PDPT slot inside the shared higher-half (PML4[511]) reserved for kernel MMIO
  * mappings.  paging_verify_user_root_impl permits this slot to be present in a user
  * root but does not descend into it, because its PD contents are device-specific. */

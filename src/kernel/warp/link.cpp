@@ -2765,6 +2765,19 @@ static uint32_t warp_physmem_stats(uint32_t out_off, void* ctx_) {
     return 0;
 }
 
+/* hostcalls.yaml `linmem_slots`: write {used, limit, total} as three u32s at guest
+ * offset `out_off` (wasmos_linmem_slot_stats_t). */
+static uint32_t warp_linmem_slots(uint32_t out_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    uint32_t tmp[3];
+    uint8_t* raw = warp_mem(ctx, out_off, sizeof(tmp));
+    if (!raw)
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    linmem_slot_stats(&tmp[0], &tmp[1], &tmp[2]);
+    __builtin_memcpy(raw, tmp, sizeof(tmp));
+    return 0;
+}
+
 /* AssemblyScript runtime abort(msg, file, line, column) → exit process.
  * Called by AS-compiled modules on assertion failure or trap.
  * WASM signature: void(i32,i32,i32,i32). */

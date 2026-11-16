@@ -17,6 +17,7 @@
 #include "klog.h"
 #include "process.h"
 #include "process_manager.h"
+#include "serial.h"
 #include "system_control.h"
 #include "timer.h"
 
@@ -39,6 +40,16 @@
  * where the participant answers in milliseconds. */
 #ifndef WASMOS_PM_SHUTDOWN_DEADLINE_MS
 #define WASMOS_PM_SHUTDOWN_DEADLINE_MS 8000u
+#endif
+
+/* Milliseconds the sequence waits, after its last participant, for the vt to
+ * write out the console ring before the power goes. Once a vt owns the console
+ * the kernel's own lines reach COM1 only through it, and the sequence's final
+ * ones -- a participant's result, "complete" -- are written moments before the
+ * power-off; cutting it at once discards them. The vt drains in milliseconds;
+ * the bound only keeps a vt that has stopped from holding the machine up. */
+#ifndef WASMOS_PM_SHUTDOWN_DRAIN_MS
+#define WASMOS_PM_SHUTDOWN_DRAIN_MS 1000u
 #endif
 
 /* Collect the participants: every distinct context owning a registered service
@@ -165,7 +176,17 @@ void pm_shutdown_step(uint32_t pm_context_id) {
         pm_shutdown_notify(pm_context_id);
         return;
     }
-    klog_write("[pm] shutdown: complete\n");
+    if (!g_pm.shutdown.draining) {
+        klog_write("[pm] shutdown: complete\n");
+        g_pm.shutdown.draining = 1;
+        g_pm.shutdown.drain_deadline_ticks =
+            timer_ticks() + timer_ms_to_ticks(WASMOS_PM_SHUTDOWN_DRAIN_MS);
+    }
+    /* Returning lets the scheduler loop ring the vt's doorbell (klog_poll) and
+     * run it; the PM's idle poll brings the next check. */
+    if (!console_ring_drained() && timer_ticks() < g_pm.shutdown.drain_deadline_ticks) {
+        return;
+    }
     if (g_pm.shutdown.reason == WASMOS_SHUTDOWN_REASON_REBOOT) {
         kernel_system_reboot();
     }

@@ -86,6 +86,9 @@ set(WASM_WFS_WRITE_SMOKE_SRC ${EXAMPLES_C_DIR}/wfs_write_smoke/wfs_write_smoke.c
 set(WASM_FS_LEAVE_OPEN_SRC ${EXAMPLES_C_DIR}/fs_leave_open/fs_leave_open.c)
 set(WASM_FS_LEAVE_OPEN_WASM ${BUILD_DIR}/fs_leave_open.wasm)
 set(WASM_FS_LEAVE_OPEN_APP ${BUILD_DIR}/fs_leave_open.wap)
+set(WASM_LINMEM_HOLD_SRC ${EXAMPLES_C_DIR}/linmem_hold/linmem_hold.c)
+set(WASM_LINMEM_HOLD_WASM ${BUILD_DIR}/linmem_hold.wasm)
+set(WASM_LINMEM_HOLD_APP ${BUILD_DIR}/linmem_hold.wap)
 set(WASM_CONSOLE_CLAIM_DENY_SRC ${EXAMPLES_C_DIR}/console_claim_deny/console_claim_deny.c)
 set(WASM_CONSOLE_CLAIM_DENY_WASM ${BUILD_DIR}/console_claim_deny.wasm)
 set(WASM_CONSOLE_CLAIM_DENY_APP ${BUILD_DIR}/console_claim_deny.wap)
@@ -1800,6 +1803,7 @@ set(WFS_WRITE_SMOKE_COPY_CMD
 )
 set(FS_LEAVE_OPEN_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_LEAVE_OPEN_APP} ${BUILD_DIR}/esp/apps/fs_leave_open.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_LINMEM_HOLD_APP} ${BUILD_DIR}/esp/apps/linmem_hold.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CONSOLE_CLAIM_DENY_APP} ${BUILD_DIR}/esp/apps/console_claim_deny.wap
 )
 set(FS_WRITE_SMOKE_COPY_CMD
@@ -3787,6 +3791,32 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${KERNEL_DIR}/kmsg.c
           -o ${BUILD_DIR}/test_kmsg
   COMMAND ${BUILD_DIR}/test_kmsg
+  # The physical frame allocator: frames freed in any order are free again, so
+  # a contiguous run survives a burst of one-page allocations.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_PHYSMEM_TEST_SEAMS=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_physmem.c
+          ${KERNEL_DIR}/physmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_physmem
+  COMMAND ${BUILD_DIR}/test_physmem
+  # The shutdown sequence's ending: the power goes only once the vt has written
+  # out the console ring, or after a bounded wait.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
+          ${KERNEL_DIR}/process_manager_shutdown.c
+          -o ${BUILD_DIR}/test_pm_shutdown
+  COMMAND ${BUILD_DIR}/test_pm_shutdown
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -4567,6 +4597,7 @@ set(WASMOS_UNIT_SCHED_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_value.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_kenv.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_kmsg.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_physmem.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_buffer.c)
 
 wasmos_ide_index(wasmos_ide_unit_sched
@@ -4575,7 +4606,7 @@ wasmos_ide_index(wasmos_ide_unit_sched
          ${CMAKE_SOURCE_DIR}/abi/generated/c
   DEFINES WASMOS_HOST_TEST_SMP=1 WASMOS_SCHED_CALLER_CPU_BIAS=1
           WASMOS_IPC_TEST_SEAMS=1 WASMOS_FUTEX_TEST_SEAMS=1 WASMOS_IDTABLE_TEST_SEAMS=1
-          WASMOS_POLL_TEST_SEAMS=1
+          WASMOS_POLL_TEST_SEAMS=1 WASMOS_PHYSMEM_TEST_SEAMS=1
           WASMOS_SYSCALL_TEST_SEAMS=1)
 
 # test_hostcall_ipc.cpp drives the real kernel IPC host-call shims, so it takes
@@ -4602,6 +4633,14 @@ wasmos_ide_index(wasmos_ide_unit_hostcall_dma
   IQUOTE ${KERNEL_DIR} ${KERNEL_DIR}/include ${WASM3_DIR}/source
          ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
          ${CMAKE_SOURCE_DIR}/tests/unit)
+
+# test_pm_shutdown.c includes the process manager's internal header, which
+# reaches the driver ABI headers; same define as its compile line.
+wasmos_ide_index(wasmos_ide_unit_pm_shutdown
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
+  IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
+  DEFINES WASMOS_HOST_TEST_SMP=1)
 
 # test_process_lifecycle.c and its platform stubs link the real process.c, so
 # they take the real kernel headers and the WASMOS_PROCESS_TEST_SEAMS define its
@@ -4659,6 +4698,7 @@ wasmos_ide_index(wasmos_ide_unit
           ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_dma.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include

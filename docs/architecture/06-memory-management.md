@@ -21,10 +21,23 @@ bootloader.
 
 #### Free-Range List
 
-Available physical memory is tracked as a sorted array of up to 128
-`pfa_range_t { base, pages }` entries. Adjacent ranges are coalesced on
-insert and free. Physical address 0 is excluded (`add_range` skips page 0
-if `base == 0`).
+Available physical memory is tracked as a sorted array of
+`pfa_range_t { base, pages }` extents. Adjacent extents are coalesced on
+insert and free, and an extent emptied by an allocation is removed. Physical
+address 0 is excluded (`add_range` skips page 0 if `base == 0`).
+
+The memory map is scanned into a static 128-entry boot table (map extents
+beyond it are dropped). `pfa_upgrade_ranges()` then moves the list into a table
+allocated inside the bootstrap window and sized for the worst case: free
+extents are never adjacent, so an extent of `p` pages that entered the list
+splits into at most `ceil(p / 2)` of them, and the capacity is half the usable
+pages plus one per boot extent (about 8 bytes per page of RAM). A free or a
+`pfa_alloc_pages_above` middle split therefore always has a slot; finding the
+table full means a frame came from outside the allocator, and halts via
+`PFA_BUG`. Halts if the table cannot be allocated.
+
+Invariant: every frame freed is on the free list again, so a contiguous run
+that a burst of small allocations fragmented is whole again once they are freed.
 
 Usable EFI memory types accepted:
 - `EFI_MEMORY_TYPE_CONVENTIONAL (7)`
@@ -44,6 +57,11 @@ A byte-per-page refcount array tracks allocation state:
   `max_physical_address / 4096` pages from the just-initialized free list,
   copies the static data, and switches `g_refcount` to the dynamic array.
   Halts on upgrade failure.
+- **Placement:** `pfa_init` runs before `paging_init`, when the higher half
+  aliases only the first 64 MiB (`KERNEL_BOOTSTRAP_WINDOW_BYTES`, built by
+  `entry.S`). The refcount array and the free-extent table are both written
+  through that alias, so both are allocated below it; a window that cannot hold
+  them halts boot rather than faulting.
 
 Maximum refcount per page: 255. `pfa_pin_pages` halts on overflow.
 

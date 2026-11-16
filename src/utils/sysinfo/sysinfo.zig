@@ -1,13 +1,14 @@
 // sysinfo - print a one-shot system summary. Takes no arguments; any given are
 // ignored.
 //
-// Output is five labelled sections in this fixed order, one "  key: value" line
+// Output is six labelled sections in this fixed order, one "  key: value" line
 // each: kernel (architecture and WASM runtime), memory (total/free/used, scaled
-// to B/KB/MB/GB with 1024 as the divisor and truncated, not rounded), smp (CPU
-// count and whether SMP is on), scheduler (tick count and ready count), and
-// processes (active count). Memory prints "(unavailable)" instead of the three
-// lines when the physmem_stats host call fails; every other counter is printed
-// as returned, with no failure indication. Always exits 0.
+// to B/KB/MB/GB with 1024 as the divisor and truncated, not rounded), linmem
+// (linear-memory slots in use, the limit allocation stops at, and the pool size),
+// smp (CPU count and whether SMP is on), scheduler (tick count and ready count),
+// and processes (active count). Memory and linmem print "(unavailable)" instead
+// of their lines when their host call fails; every other counter is printed as
+// returned, with no failure indication. Always exits 0.
 const std = @import("std");
 const wasmos = @import("wasmos.zig");
 
@@ -18,6 +19,7 @@ extern "wasmos" fn sched_ticks() callconv(.c) i32;
 extern "wasmos" fn sched_ready_count() callconv(.c) i32;
 extern "wasmos" fn proc_count() callconv(.c) i32;
 extern "wasmos" fn sync_user_read(ptr: i32, len: i32) callconv(.c) i32;
+extern "wasmos" fn linmem_slots(out_ptr: i32) callconv(.c) i32;
 
 const PhysmemStats = extern struct {
     total_bytes: u64,
@@ -30,6 +32,18 @@ comptime {
 }
 
 var g_physmem: PhysmemStats = undefined;
+
+const LinmemSlotStats = extern struct {
+    used: u32,
+    limit: u32,
+    total: u32,
+};
+
+comptime {
+    if (@sizeOf(LinmemSlotStats) != 12) @compileError("LinmemSlotStats size mismatch");
+}
+
+var g_linmem: LinmemSlotStats = undefined;
 
 fn writeStr(s: []const u8) void {
     wasmos.stdlib.write(s) catch {};
@@ -83,6 +97,16 @@ pub fn main() u8 {
         writeLine(&line, "  total:    {s}\n", .{fmtBytes(g_physmem.total_bytes, &tb)});
         writeLine(&line, "  free:     {s}\n", .{fmtBytes(g_physmem.free_bytes, &fb)});
         writeLine(&line, "  used:     {s}\n", .{fmtBytes(used, &ub)});
+    }
+
+    // --- linmem ---
+    writeStr("\nlinmem\n");
+    const lm_ok = linmem_slots(@intCast(@intFromPtr(&g_linmem))) == 0 and
+        sync_user_read(@intCast(@intFromPtr(&g_linmem)), @intCast(@sizeOf(LinmemSlotStats))) == 0;
+    if (!lm_ok) {
+        writeStr("  (unavailable)\n");
+    } else {
+        writeLine(&line, "  slots:    {d} used of {d} (pool {d})\n", .{ g_linmem.used, g_linmem.limit, g_linmem.total });
     }
 
     // --- smp ---

@@ -477,9 +477,20 @@ linked feature documents for rationale and rollout plans.
   `process_context_t` in the window between the pick and `current_thread`.
 - Process-manager state and core MM registries use dynamic/list-backed storage
   rather than small fixed process/context/region tables.
+- The physical frame allocator's free-extent table is sized at boot for the
+  worst-case fragmentation (`pfa_upgrade_ranges`, ~8 bytes per page of RAM), so
+  no free and no split is ever dropped; host-tested in `tests/unit/test_physmem.c`.
+  A process-manager spawn that cannot get its transfer buffer logs the packed
+  `xfer_buffer` reason and the free memory (`[pm] no ... transfer buffer`).
 
 ## Runtime, Isolation, and IPC
 
+- Linear memory never relocates on either runtime: a module that cannot get a
+  linear-memory slot is refused with its reason rather than run from a block
+  that moves on growth. WARP's reserve hint is per pid. Slot use is queryable
+  (`linmem_slots` host call, `sysinfo`), and `linmem.slots=N` on the boot
+  command line lowers the limit; `tests/test_linmem_slots.py` runs it out on
+  both runtimes.
 - Native `libsys` now includes a caller-storage, single-worker stackful
   coroutine core and local future/promise state. The target backend is x86-64
   SysV; an AArch64 AAPCS64 backend runs the same runtime behavior in native

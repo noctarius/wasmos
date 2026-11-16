@@ -72,16 +72,13 @@ const abi = @import("wasmos_constants.zig");
 const pt = @import("partition_table.zig");
 const rc = @import("reconcile.zig");
 const mnt = @import("mounts.zig");
+const inf = @import("inflight.zig");
 
 /// Disks probed. Each costs a descriptor plus its partitions' records; the bound
 /// is this driver's own state, not a property of the system.
 const MAX_DISKS: usize = 4;
 /// Partitions published across all disks.
 const MAX_PARTITIONS: usize = 16;
-/// Transfers forwarded at once. A slot holds the client's identity until the
-/// backing device replies, and may not be reused before then.
-const MAX_INFLIGHT: usize = 8;
-
 const SECTOR_BYTES: u32 = 512;
 
 const Disk = struct {
@@ -111,32 +108,11 @@ const Partition = struct {
     in_use: bool = false,
 };
 
-const Inflight = struct {
-    /// The requesting client's endpoint, and the request id it will match a
-    /// reply against. Both belong to the client, not to us.
-    client: i32 = -1,
-    client_request_id: i32 = 0,
-    /// The id we used downstream, which is what the reply carries back.
-    down_request_id: i32 = 0,
-    /// Sectors asked for after clamping, so a short transfer can be reported
-    /// against what was actually requested.
-    sectors: u32 = 0,
-    resp_type: i32 = 0,
-    /// The downstream borrow minted for the backing device on a zero-copy
-    /// transfer, or -1 when the destination was the client's own block buffer
-    /// and no grant was needed. Dropped when the reply arrives: a reborrow held
-    /// past its transfer keeps the client's buffer lent to a device that is done
-    /// with it, and the client's next request on the same buffer would be
-    /// refused ALREADY_BORROWED.
-    down_borrow_id: i32 = -1,
-    in_use: bool = false,
-};
-
 var g_disks: [MAX_DISKS]Disk = [_]Disk{.{}} ** MAX_DISKS;
 var g_disk_count: usize = 0;
 var g_parts: [MAX_PARTITIONS]Partition = [_]Partition{.{}} ** MAX_PARTITIONS;
 var g_part_count: usize = 0;
-var g_inflight: [MAX_INFLIGHT]Inflight = [_]Inflight{.{}} ** MAX_INFLIGHT;
+var g_inflight: inf.Table = inf.Table.init(@sizeOf(driver.BlockRequest));
 
 var g_proc_endpoint: i32 = -1;
 /// The device manager's inventory endpoint, resolved once and kept: a disk
@@ -312,9 +288,12 @@ var g_wake_promise: co.Promise = .{};
 var g_root_parked: bool = false;
 var g_next_request_id: i32 = 0x7000;
 
-/// Buffer holding the request WE send downstream. Acquired and lent to each disk
+/// Buffer holding the requests WE send downstream. Acquired and lent to each disk
 /// once at bring-up and reused for every forwarded transfer, which is the shape
-/// a request descriptor is meant to be used in — not one buffer per request.
+/// a request descriptor is meant to be used in — not one buffer per request. It
+/// holds one descriptor slot per in-flight entry (`inf.Table`), because a backend
+/// reads a descriptor when it reaches the message and other transfers may be
+/// staged before then.
 var g_down_req_bid: i32 = -1;
 /// Buffer holding the request a PROBE sends downstream.
 ///
@@ -1399,20 +1378,6 @@ fn findPartition(instance: u32) ?*Partition {
     return null;
 }
 
-fn findInflightByDownId(request_id: i32) ?*Inflight {
-    for (&g_inflight) |*f| {
-        if (f.in_use and f.down_request_id == request_id) return f;
-    }
-    return null;
-}
-
-fn claimInflight() ?*Inflight {
-    for (&g_inflight) |*f| {
-        if (!f.in_use) return f;
-    }
-    return null;
-}
-
 fn sendError(dest: i32, request_id: i32, code: i32) void {
     _ = driver.send(dest, endpoint(), op.BLOCK_IPC_ERROR, request_id, code, 0, 0, 0);
 }
@@ -1492,7 +1457,7 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
     const room = part.lba_count - req.lba;
     if (req.sector_count > room) req.sector_count = @intCast(room);
 
-    const slot = claimInflight() orelse {
+    const slot = g_inflight.claim() orelse {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NOT_READY);
         return;
     };
@@ -1518,9 +1483,11 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
         req.dst_borrow_id = down_borrow;
     }
 
+    // Staged in this transfer's OWN slot: the disk reads the descriptor when it
+    // reaches the message, and other transfers may be forwarded before then.
     const raw: [*]const u8 = @ptrCast(&req);
     if (g_down_req_bid < 0 or
-        !driver.bufferWrite(g_down_req_bid, raw[0..@sizeOf(driver.BlockRequest)], 0))
+        !driver.bufferWrite(g_down_req_bid, raw[0..@sizeOf(driver.BlockRequest)], slot.req_offset))
     {
         if (down_borrow >= 0) driver.bufferUnborrow(down_borrow);
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NOT_READY);
@@ -1534,7 +1501,7 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
         msg.type,
         down_id,
         g_down_req_bid,
-        0,
+        @intCast(slot.req_offset),
         @intCast(@sizeOf(driver.BlockRequest)),
         0,
     ) != 0) {
@@ -1543,18 +1510,17 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
         return;
     }
 
-    slot.* = .{
-        .client = msg.source,
-        .client_request_id = msg.request_id,
-        .down_request_id = down_id,
-        .down_borrow_id = down_borrow,
-        .sectors = req.sector_count,
-        .resp_type = if (msg.type == op.BLOCK_IPC_WRITE_REQ)
-            op.BLOCK_IPC_WRITE_RESP
-        else
-            op.BLOCK_IPC_READ_RESP,
-        .in_use = true,
-    };
+    // Field by field: replacing the entry would reset its req_offset.
+    slot.client = msg.source;
+    slot.client_request_id = msg.request_id;
+    slot.down_request_id = down_id;
+    slot.down_borrow_id = down_borrow;
+    slot.sectors = req.sector_count;
+    slot.resp_type = if (msg.type == op.BLOCK_IPC_WRITE_REQ)
+        op.BLOCK_IPC_WRITE_RESP
+    else
+        op.BLOCK_IPC_READ_RESP;
+    slot.in_use = true;
 }
 
 /// Relay a backing device's reply to whoever asked for it, under the request id
@@ -1562,7 +1528,7 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
 /// the downstream id space is ours, so an unmatched one is our bug and not
 /// something a client should be told about.
 fn handleDownstreamReply(msg: *const co.IpcMessage) void {
-    const slot = findInflightByDownId(msg.request_id) orelse return;
+    const slot = g_inflight.findByDownId(msg.request_id) orelse return;
     // The device is done with the client's buffer, so its access ends here --
     // before the client is told, since the reply is what frees the client to
     // reuse the buffer and a grant still standing would refuse the next request.
@@ -1955,7 +1921,7 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
         driver.log("[partition-manager] descriptor buffer unavailable");
         return;
     };
-    g_down_req_bid = driver.bufferAcquire(@sizeOf(driver.BlockRequest)) orelse {
+    g_down_req_bid = driver.bufferAcquire(inf.Table.bufferBytes(@sizeOf(driver.BlockRequest))) orelse {
         driver.log("[partition-manager] request buffer unavailable");
         return;
     };

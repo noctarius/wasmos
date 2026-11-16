@@ -774,7 +774,10 @@ linked feature documents for rationale and rollout plans.
   them: a consumer cannot tell a partition from a whole disk. It probes GPT then
   MBR then nothing, publishes a descriptor per partition with the window in
   `lba_start`/`lba_count`, and forwards transfers with the LBA rebased onto that
-  window and the sector count clamped to it. A disk with no table publishes
+  window and the sector count clamped to it. Each forwarded transfer stages its
+  rewritten request descriptor in its own slot of the downstream request buffer,
+  held until the disk replies, so up to eight transfers in flight never overwrite
+  one another's descriptors. A disk with no table publishes
   nothing and is left alone, which is what keeps partition tables optional.
   It SUBSCRIBES to the `block` class and enumerates it second, so a disk whose
   driver registers later -- virtio-blk publishes well after the partition manager

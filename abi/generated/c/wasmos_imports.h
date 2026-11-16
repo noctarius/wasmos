@@ -881,5 +881,13 @@ extern int32_t wasmos_kmsg_read(void* buf, int32_t len, uint64_t* seq) WASMOS_WA
  * another process, or WASMOS_ERR_KERNEL_NO_CALLER.
  */
 extern int32_t wasmos_kmsg_subscribe(int32_t endpoint) WASMOS_WASM_IMPORT("wasmos", "kmsg_subscribe");
+/* Fill the wasmos_linmem_slot_stats_t at `out` with the linear-memory slot pool:
+ * slots in use, the limit allocation stops at (the pool size unless the boot
+ * command line lowers it with linmem.slots=N), and the pool size. Every WASM
+ * process's linear memory lives in one slot, so a full pool refuses the next
+ * module. A snapshot: another process can take or free a slot at once. Returns
+ * 0, or WASMOS_ERR_KERNEL_BAD_POINTER when `out` is outside linear memory.
+ */
+extern int32_t wasmos_linmem_slots(wasmos_linmem_slot_stats_t* out) WASMOS_WASM_IMPORT("wasmos", "linmem_slots");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

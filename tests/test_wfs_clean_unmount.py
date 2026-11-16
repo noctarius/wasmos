@@ -167,9 +167,13 @@ class WfsCleanUnmountTest(WfsShutdownTestBase):
                 first.expect_from(mark, b"[pm] shutdown: begin", timeout_s=30),
                 f"the shutdown sequence never ran\n--- tail ---\n{first.tail(4096)}\n",
             )
+            # The COM2 kernel log is printed too: the kernel writes it straight to
+            # the port, so it shows how far the sequence got when COM1 (drained
+            # by the vt) went quiet.
             self.assertTrue(
                 first.expect_from(mark, b"[fs-wfs] unmounted clean", timeout_s=30),
-                f"the volume was not recorded clean\n--- tail ---\n{first.tail(4096)}\n",
+                f"the volume was not recorded clean\n--- tail ---\n{first.tail(4096)}\n"
+                f"--- COM2 kernel log ---\n{first.syslog_tail(4096)}\n",
             )
             self.assertTrue(
                 first.wait_for_exit(30),

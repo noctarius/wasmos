@@ -552,10 +552,22 @@ non-relocating, base-pinned per-app VA slot: `warp_linmem_move` /
 scattered physical pages on demand, and never move the base for the app's
 lifetime — so any mapping into linear memory (a peer's lent buffer, dual-mapped JIT)
 stays valid. The slot is armed at spawn by `warp_linmem_reserve_hint_for`
-(`src/kernel/warp_driver.cpp`, from the module's declared heap size) and
-consumed on the linmem block's first grow; if a slot is exhausted the allocator
-falls back to the legacy contiguous realloc so the app still runs (without the
-pinned-base guarantee). Driver-owned pinned DMA regions use `warp_region_alloc`
+(`src/kernel/warp_driver.cpp`, from the module's declared heap size) into the
+pid's own heap config, and claimed by that pid's first page-backed grow on the
+CPU running it, so concurrent spawns on other CPUs can neither steal nor
+overwrite an arming. A module whose linear memory never grows stays in its
+initial contiguous block, which is never relocated because it never grows.
+
+**Linear memory never relocates.** When the move into a slot fails (no slot free,
+or a commit failed), the grow fails and the module is refused with
+`[warp] linear memory of pid N has no slot ...`; there is no relocating fallback.
+A relocating block is incompatible with buffer overlays: an overlay remaps pages
+of the block's kernel alias and its unmap clears them, so a later grow would copy
+the block through the hole. wasm3 reserves its slot at load and refuses the module
+the same way (`[wasm3] linear memory of context N has no slot ...`). The pool is
+shared by both runtimes (`src/kernel/linmem_slots.c`, 48 slots); `sysinfo` prints
+its use through the `linmem_slots` host call, and the boot option `linmem.slots=N`
+lowers its limit (how `tests/test_linmem_slots.py` runs it out). Driver-owned pinned DMA regions use `warp_region_alloc`
 (`src/kernel/warp/link.cpp`) — this is what virtio-net's virtqueues and RX/TX
 pools run on, and Phase-1b RX/TX is proven on the wire. The relocation bug class
 described below is therefore closed on WARP.

@@ -620,9 +620,11 @@ extern "C" uint64_t warp_r3_memory_helper(uint64_t min_linmem_len, uint32_t base
  * page-backed claims than the single linmem block does.  Arm it only immediately
  * before the runtime-setup phase that allocates linear memory.
  *
- * The pid identity is enforced at the claim site (warp/shim.cpp) by a CAS against
- * cpu_local()->wasm3_heap_bound_pid, so a concurrent spawn on another CPU cannot
- * steal this arming and stamp its block with the wrong owner. */
+ * The arming is stored in the pid's own heap config (warp_heap_configure must
+ * have run) and claimed only for cpu_local()->wasm3_heap_bound_pid, so a spawn
+ * arming its hint on another CPU at the same time can neither steal nor
+ * overwrite this one. A lost arming leaves the linear memory in a contiguous
+ * direct-mapped block for the app's lifetime. */
 static void warp_linmem_reserve_hint_for(uint32_t pid, uint64_t initial_linmem) {
     /* Generous default: back every WARP app with a large reserved window so it
      * can grow on demand and host zero-copy overlays, rather than the tiny

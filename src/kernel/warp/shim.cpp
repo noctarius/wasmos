@@ -64,10 +64,9 @@ static void* warp_linmem_grow(void* ptr, size_t size);
 static void warp_linmem_slot_free_pid(uint32_t pid);
 /* The VA-slot pool itself (reserve/commit/decommit) lives in the shared
  * linmem_slots primitive; WARP layers its AllocHeader + per-pid config on top. */
-/* One-shot hint: pid of the linmem block about to be identified at its first
- * warp_krealloc grow (armed by warp_linmem_reserve_hint before module init). */
-static uint32_t g_linmem_reserve_pid = 0;
-static uint64_t g_linmem_reserve_bytes = 0;
+/* Takes the pid's armed linmem reservation (warp_linmem_reserve_hint), leaving it
+ * disarmed: returns the reserved bytes, or 0 when nothing is armed for `pid`. */
+static uint64_t warp_linmem_reserve_claim(uint32_t pid);
 
 /* operator new/delete use the two-tier allocator so that C++ objects of
  * any size (e.g., vb::WasmModule itself) are allocated correctly. */
@@ -331,31 +330,34 @@ static void* warp_krealloc(void* const ptr, size_t const size) {
      * reservation is pending, MOVE it into a dedicated per-app VA slot: reserve
      * the VA once, commit scattered physical pages on demand, base pinned for
      * the app's lifetime (no relocation → buffer/DMA maps stay valid). */
-    /* Claim the hint only from the CPU actually running the armed pid, and take
-     * it with a CAS so two CPUs cannot both move a block for one arming.  A
-     * mismatch leaves the hint armed for its rightful owner instead of stamping
-     * this block with a foreign pid (whose later free would then release a slot
-     * still in use). */
+    /* The hint is per pid and claimed only for the pid bound to this CPU, so a
+     * spawn arming its own hint on another CPU can neither steal this one nor
+     * overwrite it; the exchange inside the claim makes one arming move one
+     * block. */
     uint32_t bound_pid = cpu_local()->wasm3_heap_bound_pid;
-    uint32_t claim = bound_pid;
-    if (old_hdr->is_pages == 1 && g_linmem_reserve_bytes && bound_pid != 0 &&
-        __atomic_compare_exchange_n(
-            &g_linmem_reserve_pid, &claim, 0u, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    uint64_t reserve =
+        (old_hdr->is_pages == 1 && bound_pid != 0) ? warp_linmem_reserve_claim(bound_pid) : 0;
+    if (reserve != 0) {
         uint32_t pid = bound_pid;
 #if WASMOS_TRACE
         klog_printf("[trace-linmem] hint claim pid=%u size=%llx reserve=%llx oldpages=%llx\n",
                     (unsigned)pid,
                     (unsigned long long)size,
-                    (unsigned long long)g_linmem_reserve_bytes,
+                    (unsigned long long)reserve,
                     (unsigned long long)old_hdr->pages);
 #endif
-        g_linmem_reserve_bytes = 0;
         void* moved = warp_linmem_move(pid, ptr, old_bytes, size);
         if (moved) {
             return moved; /* old contiguous block freed inside warp_linmem_move */
         }
-        /* Slot exhausted / commit failed: fall through to the legacy contiguous
-         * realloc so the app still runs (without the pinned-base benefit). */
+        /* Linear memory never relocates: buffer overlays remap pages of its
+         * kernel alias, so a moving block would carry those holes into the copy
+         * (and hand its frames back without an alias). Failing the grow fails
+         * the module's load (wasm_driver_start). */
+        klog_printf("[warp] linear memory of pid %u has no slot (none free, or commit "
+                    "failed); refusing the module\n",
+                    (unsigned)pid);
+        return nullptr;
     }
 
     size_t target = size;
@@ -465,6 +467,9 @@ struct WarpPidConfig {
     uint32_t linmem_slot;            /* dedicated-VA slot index, or LINMEM_SLOT_NONE */
     uint64_t linmem_va_base;         /* VA slot base (AllocHeader lives here) */
     uint64_t linmem_committed_pages; /* pages committed into the slot so far */
+    /* Armed reservation (bytes) for the block's first grow, 0 when not armed;
+     * written by warp_linmem_reserve_hint, taken by warp_linmem_reserve_claim. */
+    uint64_t linmem_reserve_pending;
     uint8_t configured;
 };
 
@@ -495,6 +500,14 @@ static WarpPidConfig* pid_config_get(uint32_t pid) {
 /* Move the just-identified linmem block into a dedicated per-app VA slot.
  * Returns the new memoryBase (va_base + AllocHeader), or nullptr on failure
  * (caller falls back to the legacy contiguous realloc). */
+static uint64_t warp_linmem_reserve_claim(uint32_t pid) {
+    WarpPidConfig* cfg = pid_config_get(pid);
+    if (!cfg) {
+        return 0;
+    }
+    return __atomic_exchange_n(&cfg->linmem_reserve_pending, 0ULL, __ATOMIC_ACQ_REL);
+}
+
 static void* warp_linmem_move(uint32_t pid, void* old_ptr, size_t old_bytes, size_t size) {
     WarpPidConfig* cfg = pid_config_get(pid);
     if (!cfg) {
@@ -608,6 +621,7 @@ void warp_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
     cfg->linmem_slot = LINMEM_SLOT_NONE; /* no VA slot until first grow */
     cfg->linmem_va_base = 0;
     cfg->linmem_committed_pages = 0;
+    cfg->linmem_reserve_pending = 0;
     cfg->configured = 1;
 }
 
@@ -666,12 +680,16 @@ uint64_t warp_linmem_reserved_bytes(uint32_t pid) {
     return cfg->linmem_reserved;
 }
 
-/* One-shot: arm the pid of the linmem block about to be identified at its first
- * warp_krealloc grow.  Called just before the module's first linmem-allocating
- * probe; consumed by warp_krealloc's move-to-slot path. */
+/* One-shot, per pid: arm the linmem block about to be identified at the pid's
+ * first page-backed warp_krealloc grow.  Called just before the module's first
+ * linmem-allocating probe, after warp_heap_configure; a pid with no heap config
+ * is not armed.  Consumed by warp_krealloc's move-to-slot path. */
 void warp_linmem_reserve_hint(uint32_t pid, uint64_t reserve_bytes) {
-    g_linmem_reserve_pid = pid;
-    g_linmem_reserve_bytes = reserve_bytes;
+    WarpPidConfig* cfg = pid_config_get(pid);
+    if (!cfg) {
+        return;
+    }
+    __atomic_store_n(&cfg->linmem_reserve_pending, reserve_bytes, __ATOMIC_RELEASE);
 }
 
 /* Describe the dedicated-VA linmem slot that contains `linmem_kernel_ptr`, which must

@@ -629,6 +629,9 @@ void* wasm3_linmem_reserve(size_t total_bytes, size_t max_bytes, size_t data_off
     int s = linmem_slot_alloc();
     if (s < 0) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        klog_printf("[wasm3] linear memory of context %u has no slot (none free, or commit "
+                    "failed); refusing the module\n",
+                    (unsigned)context_id);
         return 0;
     }
     uint64_t va_base = linmem_slot_va((uint32_t)s);

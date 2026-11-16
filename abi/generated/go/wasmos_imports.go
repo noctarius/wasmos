@@ -1007,3 +1007,12 @@ func KmsgRead(a0 int32, a1 int32, a2 int32) int32
 // another process, or WASMOS_ERR_KERNEL_NO_CALLER.
 //go:wasmimport wasmos kmsg_subscribe
 func KmsgSubscribe(a0 int32) int32
+
+// Fill the wasmos_linmem_slot_stats_t at `out` with the linear-memory slot pool:
+// slots in use, the limit allocation stops at (the pool size unless the boot
+// command line lowers it with linmem.slots=N), and the pool size. Every WASM
+// process's linear memory lives in one slot, so a full pool refuses the next
+// module. A snapshot: another process can take or free a slot at once. Returns
+// 0, or WASMOS_ERR_KERNEL_BAD_POINTER when `out` is outside linear memory.
+//go:wasmimport wasmos linmem_slots
+func LinmemSlots(a0 int32) int32

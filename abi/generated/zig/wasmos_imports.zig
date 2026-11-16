@@ -770,3 +770,10 @@ pub extern "wasmos" fn kmsg_read(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT when every subscriber slot is held by
 /// another process, or WASMOS_ERR_KERNEL_NO_CALLER.
 pub extern "wasmos" fn kmsg_subscribe(a0: i32) callconv(.c) i32;
+/// Fill the wasmos_linmem_slot_stats_t at `out` with the linear-memory slot pool:
+/// slots in use, the limit allocation stops at (the pool size unless the boot
+/// command line lowers it with linmem.slots=N), and the pool size. Every WASM
+/// process's linear memory lives in one slot, so a full pool refuses the next
+/// module. A snapshot: another process can take or free a slot at once. Returns
+/// 0, or WASMOS_ERR_KERNEL_BAD_POINTER when `out` is outside linear memory.
+pub extern "wasmos" fn linmem_slots(a0: i32) callconv(.c) i32;

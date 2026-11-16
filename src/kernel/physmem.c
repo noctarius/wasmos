@@ -53,7 +53,17 @@ typedef struct {
     uint64_t Attribute;
 } efi_memory_descriptor_t;
 
-static pfa_range_t g_ranges[128];
+/* The free-extent list. pfa_init scans the memory map into the static boot
+ * table, then moves the list into a table sized for the worst case, so that no
+ * free and no split can find it full: free extents are disjoint and never
+ * adjacent (adjacent ones merge), so between any two there is at least one
+ * allocated frame, and an extent of `p` free-list pages holds at most
+ * ceil(p / 2) of them. A full table therefore means a frame freed that never
+ * came from this allocator, which is a bug and panics, never a silent loss. */
+#define PFA_BOOT_RANGES 128u
+static pfa_range_t g_ranges_boot[PFA_BOOT_RANGES];
+static pfa_range_t* g_ranges = g_ranges_boot;
+static uint32_t g_range_capacity = PFA_BOOT_RANGES;
 static uint32_t g_range_count;
 static ksync_spinlock_t g_pfa_lock;
 static uint64_t g_initial_total_pages;
@@ -70,13 +80,28 @@ static uint32_t g_ram_range_count;
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
+#ifdef WASMOS_PHYSMEM_TEST_SEAMS
+/* Supplied by the host test: backs the fake physical map with host memory. */
+void* physmem_test_phys_ptr(uint64_t phys);
+#endif
+
+/* Kernel pointer to the physical frame `phys`, which must lie inside the shared
+ * higher-half window (KERNEL_HIGHER_HALF_WINDOW_BYTES). */
+static void* pfa_phys_ptr(uint64_t phys) {
+#ifdef WASMOS_PHYSMEM_TEST_SEAMS
+    return physmem_test_phys_ptr(phys);
+#else
+    return ptr_cast(void, phys + KERNEL_HIGHER_HALF_BASE);
+#endif
+}
+
 static int is_usable(uint32_t type) {
     return type == EFI_MEMORY_TYPE_CONVENTIONAL || type == EFI_MEMORY_TYPE_BOOT_SERVICES_CODE ||
            type == EFI_MEMORY_TYPE_BOOT_SERVICES_DATA;
 }
 
 static void add_range(uint64_t base, uint64_t pages) {
-    if (pages == 0 || g_range_count >= (sizeof(g_ranges) / sizeof(g_ranges[0]))) {
+    if (pages == 0 || g_range_count >= g_range_capacity) {
         return;
     }
     if (base == 0) {
@@ -156,7 +181,7 @@ static void reserve_range(uint64_t base, uint64_t size) {
         }
 
         if (start > range_start && end < range_end) {
-            if (g_range_count >= (sizeof(g_ranges) / sizeof(g_ranges[0]))) {
+            if (g_range_count >= g_range_capacity) {
                 range->pages = (start - range_start) / PAGE_SIZE;
                 return;
             }
@@ -193,8 +218,8 @@ static void pfa_insert_range(uint64_t base, uint64_t pages) {
         insert++;
     }
 
-    if (g_range_count >= (sizeof(g_ranges) / sizeof(g_ranges[0]))) {
-        return;
+    if (g_range_count >= g_range_capacity) {
+        PFA_BUG("free-extent table full", base);
     }
 
     for (uint32_t i = g_range_count; i > insert; --i) {
@@ -229,7 +254,31 @@ static void pfa_insert_range(uint64_t base, uint64_t pages) {
     }
 }
 
+/* Carves `pages` frames off the front of extent `i` (which must hold at least
+ * that many) and gives each a refcount of 1. An extent left empty is removed,
+ * so the table holds only non-empty extents — the ones its sizing counts.
+ * Caller holds g_pfa_lock. */
+static uint64_t pfa_take_front_nolock(uint32_t i, uint64_t pages) {
+    pfa_range_t* range = &g_ranges[i];
+    uint64_t addr = range->base;
+    range->base += pages * PAGE_SIZE;
+    range->pages -= pages;
+    if (range->pages == 0) {
+        for (uint32_t j = i; j + 1 < g_range_count; ++j) {
+            g_ranges[j] = g_ranges[j + 1];
+        }
+        g_range_count--;
+    }
+    for (uint64_t j = 0; j < pages; j++) {
+        uint64_t idx = (addr + j * PAGE_SIZE) >> 12;
+        if (idx < g_tracked_pages)
+            g_refcount[idx] = 1;
+    }
+    return addr;
+}
+
 static uint64_t pfa_alloc_pages_nolock(uint64_t pages);
+static uint64_t pfa_alloc_pages_below_nolock(uint64_t pages, uint64_t max_addr);
 
 /*
  * Called once from pfa_init after the free-range list is built, while
@@ -262,12 +311,13 @@ static int pfa_upgrade_refcount(uint64_t* out_pages, uint64_t* out_alloc_pages) 
     if (out_pages)
         *out_pages = needed_pages;
 
-    uint64_t rc_phys = pfa_alloc_pages_nolock(rc_alloc_pages);
+    /* pfa_init runs before paging_init: only the bootstrap window is aliased. */
+    uint64_t rc_phys = pfa_alloc_pages_below_nolock(rc_alloc_pages, KERNEL_BOOTSTRAP_WINDOW_BYTES);
     if (rc_phys == 0) {
         return -1;
     }
 
-    uint8_t* dyn = ptr_cast(uint8_t, (rc_phys + KERNEL_HIGHER_HALF_BASE));
+    uint8_t* dyn = (uint8_t*)pfa_phys_ptr(rc_phys);
     memset(dyn, 0, (size_t)needed_pages);
     memcpy(dyn, g_refcount_static, (size_t)PFA_STATIC_TRACKED_PAGES);
 
@@ -283,6 +333,30 @@ static int pfa_upgrade_refcount(uint64_t* out_pages, uint64_t* out_alloc_pages) 
     return 1;
 }
 
+/* Moves the free-extent list out of the boot table into one sized for the
+ * worst case (see g_ranges): each boot extent of p pages can split into at most
+ * ceil(p / 2) free extents, so half the pages that entered the list plus one
+ * per boot extent bounds the count. Called once from pfa_init with g_pfa_lock
+ * held, after the refcount upgrade, so the table's own frames get a count.
+ * Returns the table's size in pages, or 0 when no run inside the bootstrap
+ * window (KERNEL_BOOTSTRAP_WINDOW_BYTES, the only alias before paging_init)
+ * fits it. */
+static uint64_t pfa_upgrade_ranges(void) {
+    uint64_t capacity = g_initial_total_pages / 2u + PFA_BOOT_RANGES;
+    uint64_t table_pages = (capacity * sizeof(pfa_range_t) + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t phys = pfa_alloc_pages_below_nolock(table_pages, KERNEL_BOOTSTRAP_WINDOW_BYTES);
+    if (phys == 0) {
+        return 0;
+    }
+    /* Copied after the allocation, which carved the table's frames out of the
+     * boot table. */
+    pfa_range_t* table = (pfa_range_t*)pfa_phys_ptr(phys);
+    memcpy(table, g_ranges, (size_t)g_range_count * sizeof(pfa_range_t));
+    g_ranges = table;
+    g_range_capacity = (uint32_t)capacity;
+    return table_pages;
+}
+
 /* Builds both structures from the UEFI memory map handed over by the bootloader
  * and must run before any other pfa_* call.  Runs once on the BSP; the lock it
  * initialises here protects everything afterwards.
@@ -291,18 +365,26 @@ static int pfa_upgrade_refcount(uint64_t* out_pages, uint64_t* out_alloc_pages) 
  * through whatever mapping is active at the time (the identity map during early
  * boot).  A missing or empty map leaves the allocator with zero ranges, so every
  * later allocation returns 0 rather than failing loudly.  At most 4096
- * descriptors are examined; a larger map is truncated, and extents beyond
- * g_ranges' 128 entries are silently dropped by add_range.
+ * descriptors are examined; a larger map is truncated, and extents beyond the
+ * boot table's 128 entries are silently dropped by add_range. The free list then
+ * moves into its worst-case table (pfa_upgrade_ranges).
  *
  * Physical page 0 is trimmed off so a NULL-looking frame is never handed out,
  * and the kernel image and the 0x1000 AP trampoline page are carved back out of
  * the free list.
  *
  * Panics if the refcount array cannot be upgraded to cover all of RAM, since
- * every later free would then be unchecked past the static 64 MiB window. */
+ * every later free would then be unchecked past the static 64 MiB window, and
+ * if the worst-case extent table cannot be allocated, since a free could then
+ * find the table full. */
 void pfa_init(const boot_info_t* boot_info) {
     ksync_spinlock_init(&g_pfa_lock);
+    g_ranges = g_ranges_boot;
+    g_range_capacity = PFA_BOOT_RANGES;
     g_range_count = 0;
+    g_initial_total_pages = 0;
+    g_ram_range_count = 0;
+    g_ram_ranges_truncated = 0;
     if (!boot_info || !boot_info->memory_map || boot_info->memory_desc_size == 0) {
         klog_write("[pfa] no memory map\n");
         return;
@@ -349,6 +431,7 @@ void pfa_init(const boot_info_t* boot_info) {
     uint64_t rc_pages = 0, rc_alloc_pages = 0;
     ksync_spinlock_lock(&g_pfa_lock);
     int rc_status = pfa_upgrade_refcount(&rc_pages, &rc_alloc_pages);
+    uint64_t range_pages = rc_status < 0 ? 0 : pfa_upgrade_ranges();
     uint64_t test = pfa_alloc_pages_nolock(1);
     ksync_spinlock_unlock(&g_pfa_lock);
 
@@ -357,6 +440,13 @@ void pfa_init(const boot_info_t* boot_info) {
                     (unsigned long long)rc_alloc_pages);
         kpanic("refcount_upgrade_failed", rc_pages, rc_alloc_pages);
     }
+    if (range_pages == 0) {
+        klog_write("[pfa] free-extent table allocation failed\n");
+        kpanic("range_table_failed", g_initial_total_pages, 0);
+    }
+    klog_printf("[pfa] free-extent table: %llu extents (%llu KB)\n",
+                (unsigned long long)g_range_capacity,
+                (unsigned long long)(range_pages * PAGE_SIZE / 1024));
     if (rc_status > 0) {
         klog_printf("[pfa] refcount upgraded: %llu pages tracked (%llu KB)\n",
                     (unsigned long long)rc_pages,
@@ -367,17 +457,8 @@ void pfa_init(const boot_info_t* boot_info) {
 
 static uint64_t pfa_alloc_pages_nolock(uint64_t pages) {
     for (uint32_t i = 0; i < g_range_count; ++i) {
-        pfa_range_t* range = &g_ranges[i];
-        if (range->pages >= pages) {
-            uint64_t addr = range->base;
-            range->base += pages * PAGE_SIZE;
-            range->pages -= pages;
-            for (uint64_t j = 0; j < pages; j++) {
-                uint64_t idx = (addr + j * PAGE_SIZE) >> 12;
-                if (idx < g_tracked_pages)
-                    g_refcount[idx] = 1;
-            }
-            return addr;
+        if (g_ranges[i].pages >= pages) {
+            return pfa_take_front_nolock(i, pages);
         }
     }
     return 0;
@@ -420,6 +501,12 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
         return 0;
     }
     ksync_spinlock_lock(&g_pfa_lock);
+    uint64_t addr = pfa_alloc_pages_below_nolock(pages, max_addr);
+    ksync_spinlock_unlock(&g_pfa_lock);
+    return addr;
+}
+
+static uint64_t pfa_alloc_pages_below_nolock(uint64_t pages, uint64_t max_addr) {
     uint64_t limit = max_addr & ~(PAGE_SIZE - 1ULL);
     for (uint32_t i = 0; i < g_range_count; ++i) {
         pfa_range_t* range = &g_ranges[i];
@@ -437,17 +524,8 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
                 continue;
             }
         }
-        range->base += pages * PAGE_SIZE;
-        range->pages -= pages;
-        for (uint64_t j = 0; j < pages; j++) {
-            uint64_t idx = (addr + j * PAGE_SIZE) >> 12;
-            if (idx < g_tracked_pages)
-                g_refcount[idx] = 1;
-        }
-        ksync_spinlock_unlock(&g_pfa_lock);
-        return addr;
+        return pfa_take_front_nolock(i, pages);
     }
-    ksync_spinlock_unlock(&g_pfa_lock);
     return 0;
 }
 
@@ -455,10 +533,8 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
  * above min_addr, rounded up to a page boundary.
  *
  * Unlike the _below variant this can carve from the front, the back, or the
- * MIDDLE of an extent, splitting it into two free extents.  When the 128-entry
- * extent table is already full the split is not possible and the lower remnant
- * is discarded instead (front-allocation), which loses those frames from the
- * free list rather than failing the request.
+ * MIDDLE of an extent, splitting it into two free extents; the extent table is
+ * sized so that the split always has a slot (see g_ranges).
  *
  * Returns 0 for a zero page count and when no extent has a run of `pages`
  * contiguous frames at or above the floor. */
@@ -492,20 +568,17 @@ uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr) {
         } else {
             /* Allocate from the middle — split into lower + upper remnants.
              * Reuse the current slot for the lower part; insert upper after it. */
-            if (g_range_count >= (sizeof(g_ranges) / sizeof(g_ranges[0]))) {
-                /* Range table full: fall back to front-allocating (trims lower). */
-                range->base = alloc_end;
-                range->pages = (rend - alloc_end) / PAGE_SIZE;
-            } else {
-                uint64_t upper_pages = (rend - alloc_end) / PAGE_SIZE;
-                /* Shift entries after i to make room for the upper remnant. */
-                for (uint32_t j = g_range_count; j > i + 1; --j)
-                    g_ranges[j] = g_ranges[j - 1];
-                g_ranges[i + 1].base = alloc_end;
-                g_ranges[i + 1].pages = upper_pages;
-                g_range_count++;
-                range->pages = (start - rbase) / PAGE_SIZE;
+            if (g_range_count >= g_range_capacity) {
+                PFA_BUG("free-extent table full", start);
             }
+            uint64_t upper_pages = (rend - alloc_end) / PAGE_SIZE;
+            /* Shift entries after i to make room for the upper remnant. */
+            for (uint32_t j = g_range_count; j > i + 1; --j)
+                g_ranges[j] = g_ranges[j - 1];
+            g_ranges[i + 1].base = alloc_end;
+            g_ranges[i + 1].pages = upper_pages;
+            g_range_count++;
+            range->pages = (start - rbase) / PAGE_SIZE;
         }
         for (uint64_t j = 0; j < pages; j++) {
             uint64_t idx = (start + j * PAGE_SIZE) >> 12;

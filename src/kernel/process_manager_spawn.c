@@ -68,19 +68,24 @@ typedef enum {
  * distinct objects and buffer_ids, matching the object model (a context owns as
  * many live buffers as it has live operations). PM hands an operation's
  * buffer_id to a provider (e.g. fs-manager) which borrows it to fill it; PM
- * reads the result out of the object it owns and then releases it. */
+ * reads the result out of the object it owns and then releases it.
+ *
+ * Returns WASMOS_ERR_NONE or xfer_buffer_acquire's packed code. A failure is
+ * logged with that code, because a spawn reports it to the requester only as
+ * WASMOS_ERR_PROC_*_NO_PM_FSBUF. */
 static int pm_xfer_acquire(uint32_t pm_context_id, uint32_t minimum_size,
                            xfer_buffer_owner_t* out) {
-    if (!out || pm_context_id == 0u) {
-        return -1;
-    }
     if (minimum_size == 0u) {
         minimum_size = 1u;
     }
-    return xfer_buffer_acquire(BUFFER_KIND_TRANSFER, pm_context_id, minimum_size, out) ==
-                   WASMOS_ERR_NONE
-               ? 0
-               : -1;
+    int rc = xfer_buffer_acquire(BUFFER_KIND_TRANSFER, pm_context_id, minimum_size, out);
+    if (rc != WASMOS_ERR_NONE) {
+        klog_printf("[pm] no %u-byte transfer buffer: %s (%llu KiB free)\n",
+                    minimum_size,
+                    wasmos_strerror((wasmos_error_code_t)rc),
+                    (unsigned long long)(pfa_free_bytes() / 1024u));
+    }
+    return rc;
 }
 
 /* Kernel VA of the backing of a PM-owned buffer, or 0 if it is not live. */
@@ -1315,7 +1320,8 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
-    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
+        WASMOS_ERR_NONE) {
         return WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
     }
     if (pm_resolve_spawn_path(
@@ -1447,7 +1453,8 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
         }
     }
     cli_args[cli_args_len] = '\0';
-    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
+        WASMOS_ERR_NONE) {
         return WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
     }
     if (pm_resolve_spawn_path(pm_context_id,
@@ -2047,7 +2054,8 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     } else {
         cli_args[0] = '\0';
     }
-    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
+        WASMOS_ERR_NONE) {
         return WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF;
     }
 
@@ -2232,7 +2240,8 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
         }
     }
     cli_args[cli_args_len] = '\0';
-    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
+        WASMOS_ERR_NONE) {
         return WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
     }
     if (pm_resolve_spawn_path(pm_context_id,

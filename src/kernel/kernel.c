@@ -20,6 +20,7 @@
 #include "framebuffer.h"
 #include "capability.h"
 #include "kenv.h"
+#include "linmem_slots.h"
 #include "slab.h"
 #include "system_control.h"
 #include "wasm_driver.h"
@@ -100,14 +101,43 @@ static void kernel_publish_boot_partition(const boot_info_t* boot_info) {
  *
  *   log.serial=com2   transmit the kernel log on COM2 as well (serial_log_port_enable);
  *                     COM1 is unchanged.  A port with no UART behind it is reported
- *                     and ignored. */
+ *                     and ignored.
+ *   linmem.slots=N    hand out at most N linear-memory slots (linmem_slot_set_limit),
+ *                     so a test can run the pool out.  A value that is not a decimal
+ *                     number is reported and ignored. */
+static void kernel_apply_log_serial(void);
+static void kernel_apply_linmem_slots(void);
+
 static void kernel_apply_cmdline(const boot_info_t* boot_info) {
     if ((boot_info->flags & BOOT_INFO_FLAG_CMDLINE_PRESENT) == 0u) {
         return;
     }
     uint32_t published = kenv_load_cmdline(boot_info->cmdline);
     klog_printf("[kernel] cmdline: %s (%u option(s))\n", boot_info->cmdline, (unsigned)published);
+    kernel_apply_log_serial();
+    kernel_apply_linmem_slots();
+}
 
+static void kernel_apply_linmem_slots(void) {
+    char value[16];
+    uint32_t written = 0;
+    if (kenv_get("linmem.slots", value, sizeof(value), &written) != WASMOS_OK) {
+        return;
+    }
+    uint32_t limit = 0;
+    uint32_t i = 0;
+    for (; value[i] >= '0' && value[i] <= '9' && limit < 1000u; ++i) {
+        limit = limit * 10u + (uint32_t)(value[i] - '0');
+    }
+    if (i == 0 || value[i] != '\0') {
+        klog_printf("[kernel] linmem.slots=%s: not a decimal slot count, ignored\n", value);
+        return;
+    }
+    klog_printf("[kernel] linmem.slots: at most %u linear-memory slot(s)\n",
+                (unsigned)linmem_slot_set_limit(limit));
+}
+
+static void kernel_apply_log_serial(void) {
     char port[16];
     uint32_t written = 0;
     if (kenv_get("log.serial", port, sizeof(port), &written) != WASMOS_OK) {

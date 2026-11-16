@@ -121,4 +121,5 @@
     X("wasmos", "io_region_out32", "i(iii)", wasmos_io_region_out32) \
     X("wasmos", "serial_owner_write", "i(*i)", wasmos_serial_owner_write) \
     X("wasmos", "kmsg_read", "i(*i*)", wasmos_kmsg_read) \
-    X("wasmos", "kmsg_subscribe", "i(i)", wasmos_kmsg_subscribe)
+    X("wasmos", "kmsg_subscribe", "i(i)", wasmos_kmsg_subscribe) \
+    X("wasmos", "linmem_slots", "i(*)", wasmos_linmem_slots)

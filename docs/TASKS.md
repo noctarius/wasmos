@@ -2442,28 +2442,35 @@ Source: `architecture/25-diagnostics-status.md`,
   contract, not the race. Confirm with several green `wasm3_smp`
   `filesystem`/`networking` runs carrying no `init_no_sysinit`.
 
-  A SECOND face, with a different victim, 2026-10-18 run 39152571921 job
-  117749291333 (`filesystem`, `wasm3_smp`): the boot stalls during PCI
-  enumeration, nowhere near `/boot`. Last guest output `[pci-bus] bar4 m64
-  00000000 size 16384 pf`, only two `spawn_path fs read failed` lines in the
-  whole log and no panic. The sysinit retry storm is therefore NOT the only way
-  this bug shows, and the fix for it -- bounding the retry -- does not cover
-  this one. Whether the two share a cause is open.
+  A SECOND face is **not a guest stall: QEMU itself crashed**. Two captures:
+  run 39152571921 job 117749291333 (`filesystem`, `wasm3_smp`, last guest line
+  `[pci-bus]   bar4 m64 00000000 size 16384 pf`) and run 43884154722 job
+  133357830940 (`language-runtimes`, `warp_smp`, last guest line `[pci-bus]
+  bar2 m32 81082000 size 4096`). Both were reported as "the guest was still
+  running when it was sampled: a stall ... (qemu then exited with code -11
+  during the stall dump)", and both carry `[stall-dump] monitor unavailable:
+  [Errno 32] Broken pipe` on the dump's FIRST command -- a read-only `info cpus`
+  sent before any NMI. A closed monitor socket there means QEMU had already
+  exited, with SIGSEGV (-11), before the harness touched it. `boot_diagnosis`
+  counted the attempted dump as having provoked the exit and reported a guest
+  stall that never happened; it now counts only a dump QEMU answered, and reports
+  such an exit as the cause.
 
-  Attribution for that capture, by construction: the commit before it passed
-  this job twice, and the delta between them is PYTHON ONLY (the harness and
-  two test files), so no guest code changed.
+  Open, as a lead rather than a finding: both crashes land while pci-bus is
+  SIZING BARs (`pci_probe_bar_size`), which clears a function's memory or I/O
+  decode and writes all-ones to the BAR while other vCPUs run, so QEMU re-lays
+  out its memory map under MTTCG. The VGA function's framebuffer BAR is skipped
+  (`pci_bar_is_console`), but its MMIO BAR2 is sized with memory decode off,
+  which drops the framebuffer's decode too. Next step: capture QEMU's own
+  backtrace (core dump or `-d` on a CI runner) for one of these crashes before
+  changing the guest.
 
-  **The stall dump kills QEMU, often.** Across the captures taken while
-  investigating this, `monitor unavailable` appears 17 times and one run
-  recorded `qemu then exited with code -11` -- a host-side SIGSEGV. The dump
-  injects an NMI into every vCPU through the monitor (`monitor.hmp("nmi")`,
-  twice, for the two guest samples), and a wedged guest plus that sampling is
-  apparently enough to take QEMU with it. The cost is real: it destroys the
-  halted machine, which is the best evidence available, and truncates the dump
-  that was being collected. `boot_diagnosis` now says so rather than blaming
-  the exit, but the dump still does it. Worth either sampling once, or moving
-  the guest-tail capture ahead of any monitor traffic.
+  The stall dump's own NMIs (`monitor.hmp("nmi")`, twice) can still take a
+  wedged QEMU down mid-dump; `boot_diagnosis` then names the stall and mentions
+  the exit, which is correct for that case. Of the 17 `monitor unavailable`
+  lines seen while investigating the first face, how many were QEMU already
+  dead rather than killed by the dump is not known: the verdict could not tell
+  them apart before.
 
   Faces seen so far, all on the same code:
   - `warp_smp`: `FAIL: calculator did not fully initialise`. The calculator is not

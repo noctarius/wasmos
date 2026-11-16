@@ -959,6 +959,10 @@ class QemuSession:
         self.panic_is_fatal = panic_is_fatal
         self.proc: Optional[subprocess.Popen] = None
         self._stall_dumps = 0
+        # Dumps whose first monitor command QEMU answered. Only these can have
+        # provoked anything: a dump that found the monitor already closed found
+        # QEMU already gone. See boot_diagnosis.
+        self._stall_dumps_sampled = 0
         self._syslog_reports = 0
         # COM2 capture file, set by start(); see QemuConfig.syslog_path.
         self.syslog_path = cfg.syslog_path
@@ -1316,6 +1320,7 @@ class QemuSession:
         self._stall_dumps += 1
         try:
             cpus = self.monitor.hmp("info cpus")
+            self._stall_dumps_sampled += 1
             # Two samples: a CPU spinning on a lock moves within one function,
             # a parked one does not. Telling those apart is most of the answer,
             # and the second sample costs half a second.
@@ -1690,11 +1695,22 @@ class QemuSession:
         # never in there and a marker test silently never fires. That is how the
         # first version of this check shipped broken, with a unit test that
         # passed because it put the marker in the buffer itself.
-        provoked = self._stall_dumps > 0
+        #
+        # Counted only once QEMU ANSWERED the dump's first command. That command
+        # is a read-only `info cpus`, sent before any NMI, so a dump that failed
+        # on it touched nothing: the monitor socket was already closed because
+        # QEMU had already exited, and that exit is the cause.
+        provoked = self._stall_dumps_sampled > 0
         exited = self.proc is not None and self.proc.poll() is not None
 
         if exited and not provoked:
-            return f"qemu exited with code {self.proc.returncode} before the prompt"
+            detail = f"qemu exited with code {self.proc.returncode} before the prompt"
+            if self._stall_dumps > 0:
+                detail += (
+                    " (its monitor was already closed when the stall dump tried "
+                    "to sample it, so the exit came first and is not the dump's doing)"
+                )
+            return detail
 
         if not self.buf.strip():
             return "no serial output at all: the guest never reached the kernel"

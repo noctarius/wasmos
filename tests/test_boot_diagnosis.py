@@ -48,7 +48,11 @@ class _StubProc:
 
 
 def _session(
-    buf: bytes, returncode=None, restarted: bool = False, stall_dumps: int = 0
+    buf: bytes,
+    returncode=None,
+    restarted: bool = False,
+    stall_dumps: int = 0,
+    stall_dumps_sampled=None,
 ) -> QemuSession:
     """A session that was never started, carrying `buf` as its serial log.
 
@@ -63,6 +67,12 @@ def _session(
     # the harness provoked the guest: the dump is printed, never appended to
     # session.buf, which holds serial bytes and nothing else.
     session._stall_dumps = stall_dumps
+    # How many of those dumps QEMU actually ANSWERED. A dump whose first monitor
+    # command failed found QEMU already gone, so it provoked nothing. Defaults to
+    # every dump having reached a live QEMU.
+    session._stall_dumps_sampled = (
+        stall_dumps if stall_dumps_sampled is None else stall_dumps_sampled
+    )
     return session
 
 
@@ -125,6 +135,27 @@ class BootDiagnosisTest(unittest.TestCase):
         self.assertIn("stall", d)
         self.assertIn("fs.backend registered", d)
         self.assertNotIn("before the prompt", d)
+
+    def test_an_exit_the_dump_found_already_happened_is_the_cause(self) -> None:
+        """Regression: 2026-11-16-stall-dump-on-dead-qemu -- run 43884154722
+        (language-runtimes, warp_smp) was reported as "the guest was still
+        running when it was sampled: a stall ... (qemu then exited with code -11
+        during the stall dump)". Nothing was sampled: the dump's FIRST monitor
+        command, a read-only `info cpus`, failed with a broken pipe, so QEMU had
+        already crashed before the harness touched it. The verdict sent the
+        triage after a guest wedge in pci-bus that never happened, and hid a
+        host-side QEMU crash behind the harness's own alibi.
+        """
+        s = _session(
+            b"[pci-bus]   bar2 m32 81082000 size 4096\n",
+            returncode=-11,
+            stall_dumps=1,
+            stall_dumps_sampled=0,
+        )
+        d = s.boot_diagnosis()
+        self.assertIn("qemu exited with code -11", d)
+        self.assertNotIn("still running", d)
+        self.assertNotIn("consequence of diagnosing", d)
 
     def test_an_exit_during_the_dump_is_still_mentioned(self) -> None:
         """Not the cause is not the same as not worth saying: a reader chasing

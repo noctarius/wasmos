@@ -21,7 +21,7 @@ env:
 jobs:
   unit-tests:
     name: Kernel unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -62,7 +62,7 @@ jobs:
 
   defconfig:
     name: ${{ matrix.config }} (build + boot)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -163,7 +163,7 @@ jobs:
   # in this file enumerates them.
   batteries:
     name: Resolve test batteries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       qemu: ${{ steps.resolve.outputs.qemu }}
       host: ${{ steps.resolve.outputs.host }}
@@ -183,7 +183,7 @@ jobs:
   host-tests:
     name: ${{ matrix.battery }} (host)
     needs: batteries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -213,7 +213,7 @@ jobs:
   integration-tests:
     name: ${{ matrix.battery }} (QEMU, ${{ matrix.runtime }})
     needs: batteries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       # One cell's failure must not cancel the others: the whole point is to
       # learn which subsystems are red, and under which runtime, in a single run.

@@ -5,7 +5,10 @@
 # Ubuntu's own clang mis-handles the x86_64-unknown-uefi target (bootloader
 # codegen: "backend data layout 'e-m:w-...' does not match expected target
 # description 'e-m:e-...'"), so the workflows install upstream LLVM rather than
-# the distro package.
+# the distro package. apt.llvm.org publishes per Ubuntu codename, so the
+# workflows pin the runner image (ubuntu-24.04) instead of ubuntu-latest: when
+# ubuntu-latest moved to 26.04 ("resolute") there was no llvm-toolchain-resolute
+# repository and every job failed here.
 #
 # The retry is not defensive habit. llvm.sh decides whether it supports the
 # running distribution by making a HEAD request to

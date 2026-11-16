@@ -3787,6 +3787,19 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${KERNEL_DIR}/kmsg.c
           -o ${BUILD_DIR}/test_kmsg
   COMMAND ${BUILD_DIR}/test_kmsg
+  # The physical frame allocator: frames freed in any order are free again, so
+  # a contiguous run survives a burst of one-page allocations.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_PHYSMEM_TEST_SEAMS=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_physmem.c
+          ${KERNEL_DIR}/physmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_physmem
+  COMMAND ${BUILD_DIR}/test_physmem
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -4553,6 +4566,7 @@ set(WASMOS_UNIT_SCHED_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_value.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_kenv.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_kmsg.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_physmem.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_buffer.c)
 
 wasmos_ide_index(wasmos_ide_unit_sched
@@ -4561,7 +4575,7 @@ wasmos_ide_index(wasmos_ide_unit_sched
          ${CMAKE_SOURCE_DIR}/abi/generated/c
   DEFINES WASMOS_HOST_TEST_SMP=1 WASMOS_SCHED_CALLER_CPU_BIAS=1
           WASMOS_IPC_TEST_SEAMS=1 WASMOS_FUTEX_TEST_SEAMS=1 WASMOS_IDTABLE_TEST_SEAMS=1
-          WASMOS_POLL_TEST_SEAMS=1
+          WASMOS_POLL_TEST_SEAMS=1 WASMOS_PHYSMEM_TEST_SEAMS=1
           WASMOS_SYSCALL_TEST_SEAMS=1)
 
 # test_hostcall_ipc.cpp drives the real kernel IPC host-call shims, so it takes

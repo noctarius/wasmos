@@ -359,10 +359,6 @@ Source: `architecture/06-memory-management.md`,
 - [ ] [BUG][P1] Serialize `x86_irq_mask`/`x86_irq_unmask`. They read-modify-write
   `g_pic_mask1/2` with no lock, while only the `irq_sharing` ops path holds
   `g_irq_lines_lock` (`src/kernel/arch/x86_64/irq_x86_64.c`).
-- [ ] [BUG][P1] Recover the lower remnant in `pfa_alloc_pages_above`. When
-  `g_ranges` is full the middle-split fallback front-allocates and silently
-  drops `[rbase, start)` from the free list; those frames become unreachable
-  and invisible to `pfa_free_bytes` (`src/kernel/physmem.c`).
 - [ ] [ENHANCEMENT][P2] Pack `EFI_ADDRESS_SPACE_DESCRIPTOR`. Without
   `__attribute__((packed))` the padding disagrees with the ACPI byte stream it
   mirrors; harmless only because nothing reads it (`src/boot/uefi.h`).

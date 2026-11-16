@@ -100,6 +100,15 @@ wasmos_add_wasm_c_app_target(fs_leave_open
   PACK_COMMENT  "Packing wasm fs leave-open fixture as WASMOS-APP"
 )
 
+wasmos_add_wasm_c_app_target(console_claim_deny
+  SOURCE      ${WASM_CONSOLE_CLAIM_DENY_SRC}
+  OUTPUT_WASM ${WASM_CONSOLE_CLAIM_DENY_WASM}
+  OUTPUT_APP  ${WASM_CONSOLE_CLAIM_DENY_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/console_claim_deny/linker.metadata
+  BUILD_COMMENT "Building wasm console-claim deny fixture"
+  PACK_COMMENT  "Packing wasm console-claim deny fixture as WASMOS-APP"
+)
+
 wasmos_add_wasm_c_app_target(native_call_min
   SOURCE      ${WASM_NATIVE_CALL_MIN_SRC}
   OUTPUT_WASM ${WASM_NATIVE_CALL_MIN_WASM}
@@ -194,7 +203,7 @@ wasmos_add_wasm_c_app_target(menu_bar
 add_custom_target(c_examples)
 add_dependencies(c_examples
   hello_c chardev_client chardev_preempt init_smoke
-  fs_open_smoke fs_write_smoke fs_leave_open native_call_min native_call_smoke
+  fs_open_smoke fs_write_smoke fs_leave_open console_claim_deny native_call_min native_call_smoke
   gfx_smoke irq_route_deny irq_route_allow
   menu_bar net_smoke net_udp_echo net_tcp_echo net_tcp_server
   xfer_map_alias surface_attach

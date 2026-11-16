@@ -7,7 +7,7 @@
 #include "memory.h"
 #include "string.h"
 
-#define CAP_ALL_MASK ((1u << 7) - 1u)
+#define CAP_ALL_MASK ((1u << 8) - 1u)
 #define CAP_PAGE_SIZE 0x1000u
 
 typedef struct {
@@ -47,6 +47,8 @@ static uint32_t kind_to_mask(capability_kind_t kind) {
         return 1u << 5;
     case CAP_SVC_CLASS_REGISTER:
         return 1u << 6;
+    case CAP_CONSOLE_OWNER:
+        return 1u << 7;
     default:
         return 0;
     }
@@ -98,8 +100,8 @@ void capability_init(void) {
 
 /* Grants one capability named by an unterminated byte string, creating the
  * context's record on first grant.  The accepted names are exactly "io.port",
- * "irq.route", "mmio.map", "dma.buffer", "system.control", "subsystem.register"
- * and "svc.class"; the match is exact, so a prefix or a differently-cased name
+ * "irq.route", "mmio.map", "dma.buffer", "system.control", "subsystem.register",
+ * "svc.class" and "console.owner"; the match is exact, so a prefix or a differently-cased name
  * is refused.
  *
  * Grants accumulate — bits are OR-ed in and there is no revoke.
@@ -132,6 +134,8 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
         mask = kind_to_mask(CAP_SUBSYSTEM_REGISTER);
     } else if (str_eq_bytes(name, name_len, "svc.class")) {
         mask = kind_to_mask(CAP_SVC_CLASS_REGISTER);
+    } else if (str_eq_bytes(name, name_len, "console.owner")) {
+        mask = kind_to_mask(CAP_CONSOLE_OWNER);
     } else {
         return -1;
     }

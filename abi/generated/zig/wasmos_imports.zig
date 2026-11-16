@@ -643,12 +643,16 @@ pub extern "wasmos" fn xfer_buffer_unmap(a0: i32) callconv(.c) i32;
 /// COM1 for that text through serial_owner_write. notify_endpoint is the
 /// caller's own endpoint and receives a fire-and-forget VT_IPC_KLOG_NOTIFY
 /// doorbell once records are pending, so a consumer parked on it drains
-/// without polling; pass 0 for no doorbell. Returns 0 on success; WASMOS_INVAL
-/// for a non-positive id or a region without a valid ringbuf header; the
-/// WASMOS_ERR_XFER_BUFFER_* code for an id that is not the caller's transfer
-/// buffer; WASMOS_ERR_KERNEL_UNALIGNED for a base that is not page-aligned;
-/// WASMOS_ERR_KERNEL_NOT_AUTHORIZED for a notify_endpoint the caller does not
-/// own; or WASMOS_ERR_KERNEL_NO_CALLER.
+/// without polling; pass 0 for no doorbell. Requires the console.owner
+/// capability: the ring receives every tty's output and its registrant owns
+/// COM1, so owning the buffer and the endpoint is not enough. A later
+/// successful registration replaces the earlier one. Returns 0 on success;
+/// WASMOS_ERR_KERNEL_NOT_AUTHORIZED for a caller without console.owner or a
+/// notify_endpoint the caller does not own; WASMOS_INVAL for a non-positive id
+/// or a region without a valid ringbuf header; the WASMOS_ERR_XFER_BUFFER_*
+/// code for an id that is not the caller's transfer buffer;
+/// WASMOS_ERR_KERNEL_UNALIGNED for a base that is not page-aligned; or
+/// WASMOS_ERR_KERNEL_NO_CALLER.
 pub extern "wasmos" fn klog_register_ring(a0: i32, a1: i32) callconv(.c) i32;
 /// Allocate one message-signalled interrupt vector and bind it to `endpoint`,
 /// which must be owned by the caller. Fills the wasmos_msi_desc_t at `out` with

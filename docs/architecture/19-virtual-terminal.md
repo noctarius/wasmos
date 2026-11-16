@@ -378,7 +378,9 @@ the IRQ→VT path and make the CLI event-driven.
   one VT-owned SPSC ring (`wasmos/ringbuf.h`) overlaid on a `BUFFER_KIND_TRANSFER`
   xfer-buffer — the same zero-copy transport the socket rings use. The VT acquires
   and maps the buffer, `wasmos_ringbuf_init`s it, and registers its id with the
-  kernel (`klog_register_ring`). The kernel then publishes into it, as
+  kernel (`klog_register_ring`), which requires the `console.owner` capability
+  (only the vt's manifest declares it; a later registration replaces the
+  earlier one). The kernel then publishes into it, as
   length-prefixed records of one slot byte plus up to 255 bytes of text
   (`VT_CONSOLE_SLOT_KLOG`, `wasmos_driver_abi.h`):
   - kernel log (`serial_write`, `klog_write`) as slot `VT_CONSOLE_SLOT_KLOG` (0),
@@ -413,11 +415,17 @@ the IRQ→VT path and make the CLI event-driven.
   kernel log produces whole lines at arbitrary moments. `vt_outmux`
   (`src/services/vt/vt_outmux.c`) merges the two per slot so that a log line is
   emitted whole and never inside a writer's open line: a log line that arrives
-  while one is open erases it (`\r`, `CSI K`), prints, and repaints the open line
-  after it. A typed command therefore stays contiguous on screen and on serial
-  however late a service logs. An unterminated log tail waits for its newline (or
-  for 256 bytes); an open line longer than 256 bytes cannot be repainted, so the
-  log line starts below it instead.
+  while one is open erases it, prints, and repaints the open line after it with
+  the cursor back on the writer's column. A typed command therefore stays
+  contiguous on screen and on serial however late a service logs. The open line
+  is tracked as rendered, one byte per column plus the cursor: `\r` and `\b`
+  move the cursor and the vt's `\b` blanks the cell, so a shell's `\b \b`
+  correction does not accumulate. The line wraps at the vt's width, so the erase
+  is `\r` + `CSI K` on one row and `\r` + `CSI n A` + `CSI J` from the line's
+  first row when it wrapped. An unterminated log tail waits for its newline (or
+  for 256 bytes); an open line that cannot be modeled by column -- longer than
+  256 columns, or holding an escape sequence or another control byte -- is not
+  repainted, and the log line starts below it instead.
 - **Panic bypass:** panic/fault output writes COM1 directly (`serial_printf_unlocked`
   and the other unlocked writers never use the console ring) and paints the
   framebuffer directly (`src/kernel/framebuffer.c`, `panic_render_screen`),

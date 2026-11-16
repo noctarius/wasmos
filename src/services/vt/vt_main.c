@@ -912,6 +912,7 @@ static void vt_slot_write(uint32_t slot, const uint8_t* bytes, uint32_t len) {
     if (slot == 0 || slot >= VT_MAX_TTYS) {
         return;
     }
+    vt_outmux_set_cols(&g_outmux[slot], g_vt_cols);
     vt_outmux_write(&g_outmux[slot], bytes, len, vt_slot_sink, (void*)(uintptr_t)slot);
 }
 
@@ -1713,6 +1714,7 @@ static void vt_drain_klog_ring(void) {
         const uint8_t* text = &record[1];
         uint32_t text_len = (uint32_t)n - 1u;
         if (slot == VT_CONSOLE_SLOT_KLOG || slot >= VT_MAX_TTYS) {
+            vt_outmux_set_cols(&g_outmux[VT_KLOG_TTY], g_vt_cols);
             vt_outmux_log(&g_outmux[VT_KLOG_TTY],
                           text,
                           text_len,

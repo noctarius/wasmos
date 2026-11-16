@@ -1479,7 +1479,13 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     /* state stays NEW here; published to LIVE below once init completes. */
     slot->block_reason = PROCESS_BLOCK_NONE;
     slot->wait_target_pid = 0;
-    slot->ctty = 0;
+    /* A child prints where its parent prints until the process manager gives a
+     * wants_tty child a slot of its own (pm_app_entry).  It is taken here, while
+     * the parent is the requester being served, and not when the child first
+     * runs: a spawn that replies immediately lets the parent exit and be reaped
+     * before that. */
+    process_t* parent = process_find_by_pid(parent_pid);
+    slot->ctty = parent ? parent->ctty : 0;
     slot->exit_status = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;

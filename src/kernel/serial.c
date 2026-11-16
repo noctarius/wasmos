@@ -14,6 +14,7 @@
 #include <stdarg.h>
 #include "console_ring.h"
 #include "ipc.h"
+#include "capability.h"
 #include "kmsg.h"
 #include "memory.h"
 #include "physmem.h"
@@ -591,7 +592,13 @@ void klog_poll(void) {
  * is tracked; a second successful call replaces the first, and there is no
  * unregister.
  *
- * Returns 0 once the ring is live; WASMOS_INVAL for a zero id, a zero base or
+ * Only a holder of the console.owner capability (CAP_CONSOLE_OWNER, granted to
+ * the vt by its manifest) may register: the ring receives every tty's output
+ * and the kernel log, and its registrant owns COM1.  Owning a buffer and an
+ * endpoint is not authority over the console.
+ *
+ * Returns 0 once the ring is live; WASMOS_ERR_KERNEL_NOT_AUTHORIZED for a
+ * caller without console.owner; WASMOS_INVAL for a zero id, a zero base or
  * size, or a region without a valid ringbuf header; xfer_buffer_describe's code
  * for an id that is not a BUFFER_KIND_TRANSFER buffer of that owner;
  * WASMOS_ERR_KERNEL_UNALIGNED for a base that is not page-aligned; and
@@ -599,6 +606,9 @@ void klog_poll(void) {
  * The rejection matters: an accepted bad region would corrupt memory on every
  * subsequent write. */
 int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_endpoint) {
+    if (!capability_has(owner_context_id, CAP_CONSOLE_OWNER)) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
     if (id == 0) {
         return WASMOS_INVAL;
     }

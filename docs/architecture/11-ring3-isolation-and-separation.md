@@ -296,9 +296,9 @@ Seven capability kinds, stored as a bitmask per context:
 initialized with `CAP_ALL_MASK`. User processes start with no capabilities.
 
 Capabilities are granted by name at spawn time via `capability_grant_name`.
-The allowlist is the eight strings in `make_wasmos_app` (`ipc.basic`, `io.port`,
+The allowlist is the nine strings in `make_wasmos_app` (`ipc.basic`, `io.port`,
 `irq.route`, `mmio.map`, `dma.buffer`, `system.control`, `subsystem.register`,
-`svc.class`). Packed apps carrying unknown names are rejected at pack time
+`svc.class`, `console.owner`). Packed apps carrying unknown names are rejected at pack time
 before the kernel ever sees them.
 
 DMA capability additionally carries a spawn profile: `CAPABILITY_DMA_WINDOW_LIMIT=16`

@@ -86,6 +86,7 @@
       "description": "Graphics, virtual terminals and hardware input routing.",
       "needs_qemu": true,
       "files": [
+        "test_console_claim.py",
         "test_gfx_keyboard.py",
         "test_gfx_surface_recycle.py",
         "test_irq_input.py",

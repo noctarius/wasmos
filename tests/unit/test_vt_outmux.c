@@ -133,6 +133,75 @@ static void test_a_log_line_that_fills_the_buffer_is_flushed(void) {
           "a log line that fills the buffer is emitted with a newline of its own");
 }
 
+/* Regression: 2026-11-16-outmux-edit-history -- the open line recorded every
+ * byte the shell wrote, including the "\b \b" it sends for each backspace, so
+ * about forty corrections filled the 256-byte buffer even under a short
+ * command. The next log line then took the overflow path: the prompt and the
+ * input were not repainted, and typing continued below the log line with no
+ * prompt in front of it. */
+static void test_corrections_do_not_exhaust_the_open_line(void) {
+    vt_outmux_t mux;
+    sink_t s = {0};
+    vt_outmux_init(&mux);
+    writer(&mux, &s, "/ wamos> ");
+    type(&mux, &s, "abc");
+    for (int i = 0; i < 100; ++i) {
+        type(&mux, &s, "x");
+        writer(&mux, &s, "\b \b");
+    }
+    s.len = 0;
+    s.buf[0] = '\0';
+    klog(&mux, &s, "[x] y\n");
+    CHECK(strcmp(s.buf, "\r\x1b[K[x] y\n/ wamos> abc") == 0,
+          "the line as it stands is repainted, not its editing history");
+}
+
+/* Regression: 2026-11-16-outmux-wrapped-line -- the erase before a log line
+ * was "\r" + CSI K, which clears only the cursor's row. A prompt and command
+ * longer than the terminal width wrap onto a second row; a log line arriving
+ * then left the first row standing, and the repaint printed the prompt and
+ * command a second time below it. */
+static void test_a_wrapped_open_line_is_erased_whole(void) {
+    vt_outmux_t mux;
+    sink_t s = {0};
+    vt_outmux_init(&mux);
+    vt_outmux_set_cols(&mux, 20);
+    writer(&mux, &s, "/ wamos> ");
+    type(&mux, &s, "0123456789abcdefghijklmno");
+    s.len = 0;
+    s.buf[0] = '\0';
+    klog(&mux, &s, "[x] y\n");
+    CHECK(strcmp(s.buf, "\r\x1b[1A\x1b[J[x] y\n/ wamos> 0123456789abcdefghijklmno") == 0,
+          "the erase starts at the open line's first row and clears to the end");
+}
+
+/* A cursor left inside the line by a carriage return is restored after the
+ * repaint, so the writer's next byte lands where it would have. */
+static void test_the_cursor_is_restored_after_the_repaint(void) {
+    vt_outmux_t mux;
+    sink_t s = {0};
+    vt_outmux_init(&mux);
+    writer(&mux, &s, "progress 10%\rprog");
+    s.len = 0;
+    s.buf[0] = '\0';
+    klog(&mux, &s, "[x] y\n");
+    CHECK(strcmp(s.buf, "\r\x1b[K[x] y\nprogress 10%\x1b[8D") == 0,
+          "the whole line is repainted and the cursor moved back to column 4");
+}
+
+/* An escape sequence in the open line cannot be replayed by column; the line
+ * is left standing and the log starts below it, as for an overlong line. */
+static void test_an_open_line_with_an_escape_is_not_repainted(void) {
+    vt_outmux_t mux;
+    sink_t s = {0};
+    vt_outmux_init(&mux);
+    writer(&mux, &s, "\x1b[1mbold");
+    s.len = 0;
+    s.buf[0] = '\0';
+    klog(&mux, &s, "[x] y\n");
+    CHECK(strcmp(s.buf, "\n[x] y\n") == 0, "no erase and no repaint");
+}
+
 int main(void) {
     test_a_log_line_does_not_split_a_typed_command();
     test_a_log_line_on_an_idle_prompt_repaints_the_prompt();
@@ -140,6 +209,10 @@ int main(void) {
     test_an_unterminated_log_tail_waits_for_its_newline();
     test_an_overlong_open_line_is_not_repainted();
     test_a_log_line_that_fills_the_buffer_is_flushed();
+    test_corrections_do_not_exhaust_the_open_line();
+    test_a_wrapped_open_line_is_erased_whole();
+    test_the_cursor_is_restored_after_the_repaint();
+    test_an_open_line_with_an_escape_is_not_repainted();
     if (g_failures != 0) {
         printf("test_vt_outmux: %d failure(s)\n", g_failures);
         return 1;

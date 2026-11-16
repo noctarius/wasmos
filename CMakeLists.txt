@@ -86,6 +86,9 @@ set(WASM_WFS_WRITE_SMOKE_SRC ${EXAMPLES_C_DIR}/wfs_write_smoke/wfs_write_smoke.c
 set(WASM_FS_LEAVE_OPEN_SRC ${EXAMPLES_C_DIR}/fs_leave_open/fs_leave_open.c)
 set(WASM_FS_LEAVE_OPEN_WASM ${BUILD_DIR}/fs_leave_open.wasm)
 set(WASM_FS_LEAVE_OPEN_APP ${BUILD_DIR}/fs_leave_open.wap)
+set(WASM_CONSOLE_CLAIM_DENY_SRC ${EXAMPLES_C_DIR}/console_claim_deny/console_claim_deny.c)
+set(WASM_CONSOLE_CLAIM_DENY_WASM ${BUILD_DIR}/console_claim_deny.wasm)
+set(WASM_CONSOLE_CLAIM_DENY_APP ${BUILD_DIR}/console_claim_deny.wap)
 set(WASM_WFS_WRITE_SMOKE_WASM ${BUILD_DIR}/wfs_write_smoke.wasm)
 set(WASM_WFS_WRITE_SMOKE_APP ${BUILD_DIR}/wfs_write_smoke.wap)
 set(WASM_NATIVE_CALL_MIN_SRC ${EXAMPLES_C_DIR}/native_call_min/native_call_min.c)
@@ -1794,6 +1797,7 @@ set(WFS_WRITE_SMOKE_COPY_CMD
 )
 set(FS_LEAVE_OPEN_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_LEAVE_OPEN_APP} ${BUILD_DIR}/esp/apps/fs_leave_open.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CONSOLE_CLAIM_DENY_APP} ${BUILD_DIR}/esp/apps/console_claim_deny.wap
 )
 set(FS_WRITE_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_WRITE_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_write_smoke.wap

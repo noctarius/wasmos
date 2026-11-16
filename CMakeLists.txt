@@ -3800,6 +3800,19 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_physmem
   COMMAND ${BUILD_DIR}/test_physmem
+  # The shutdown sequence's ending: the power goes only once the vt has written
+  # out the console ring, or after a bounded wait.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
+          ${KERNEL_DIR}/process_manager_shutdown.c
+          -o ${BUILD_DIR}/test_pm_shutdown
+  COMMAND ${BUILD_DIR}/test_pm_shutdown
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -4603,6 +4616,14 @@ wasmos_ide_index(wasmos_ide_unit_hostcall_dma
          ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
          ${CMAKE_SOURCE_DIR}/tests/unit)
 
+# test_pm_shutdown.c includes the process manager's internal header, which
+# reaches the driver ABI headers; same define as its compile line.
+wasmos_ide_index(wasmos_ide_unit_pm_shutdown
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
+  IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
+  DEFINES WASMOS_HOST_TEST_SMP=1)
+
 # test_process_lifecycle.c and its platform stubs link the real process.c, so
 # they take the real kernel headers and the WASMOS_PROCESS_TEST_SEAMS define its
 # compile line passes -- indexing them without it selects a different process.c
@@ -4659,6 +4680,7 @@ wasmos_ide_index(wasmos_ide_unit
           ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_dma.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include

@@ -80,6 +80,12 @@ int32_t serial_log_port_enable(uint16_t port);
  * not register it. */
 int32_t serial_owner_write(uint32_t context_id, const char* s, uint32_t len);
 
+/* Non-zero when the vt has consumed every record in the console ring, or when no ring is
+ * registered (the kernel then transmits everything itself).  A snapshot: a write on
+ * another CPU can make it stale at once.  Used before power-off, which would otherwise
+ * discard what the vt has yet to write to COM1. */
+int console_ring_drained(void);
+
 /* Read one console byte, preferring a registered remote serial driver and falling back to
  * a direct COM1 poll.  Returns 1 with the byte in *out_char, 0 when nothing is pending, or
  * -1 on a NULL argument.  Non-blocking. */

@@ -173,6 +173,8 @@ typedef struct {
     uint32_t count;
     uint32_t index; /* the participant being waited on */
     uint64_t deadline_ticks;
+    uint8_t draining; /* every participant is done; waiting on the console */
+    uint64_t drain_deadline_ticks;
     uint32_t pids[WASMOS_PM_SHUTDOWN_MAX]; /* descending: reverse spawn order */
     uint32_t endpoints[WASMOS_PM_SHUTDOWN_MAX];
     uint32_t context_ids[WASMOS_PM_SHUTDOWN_MAX];

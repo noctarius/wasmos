@@ -31,9 +31,11 @@ void serial_init(void);
 void serial_enable_high_alias(uint8_t enabled);
 uint8_t serial_high_alias_enabled(void);
 
-/* Thread-safe writes (acquire internal spinlock).  Each mirrors the text into the early
- * log ring, the shared console ring, and the klog xfer-buffer ring, expands '\n' to
- * "\r\n" on the wire, and busy-waits on the UART's transmit-holding register — so a write
+/* Thread-safe kernel-log writes (acquire internal spinlock).  Each mirrors the text into
+ * the early log ring and the shared console ring.  Once the vt has registered its console
+ * ring (klog_register_ring) the text is published there and the vt puts it on serial;
+ * before that, or for whatever a full ring cannot take, it is transmitted with '\n'
+ * expanded to "\r\n", busy-waiting on the UART's transmit-holding register -- so a write
  * is bounded by the line rate, not instantaneous.  A NULL string is ignored.
  * serial_write_hex64 emits "0x" + 16 uppercase hex digits + newline.  serial_printf
  * formats into a 512-byte stack buffer, so longer output is truncated. */
@@ -42,7 +44,9 @@ void serial_write_hex64(uint64_t value);
 void serial_printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /* Unlocked variants — for NMI, exception and panic handlers, and for very early boot
- * before the lock is meaningful.  Same behaviour without the spinlock, so a concurrent
+ * before the lock is meaningful.  They always transmit directly and never use the vt's
+ * console ring, whose consumer may be the thing that failed.  Otherwise the same
+ * behaviour without the spinlock, so a concurrent
  * writer interleaves MID-STRING and both lines come out corrupted; preemption is still
  * disabled around the character loop.
  *
@@ -56,6 +60,25 @@ void serial_printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void serial_write_unlocked(const char* s);
 void serial_write_hex64_unlocked(uint64_t value);
 void serial_printf_unlocked(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
+/* Console output of a process whose controlling text slot is `tty` (process_t.ctty):
+ * published to the vt's console ring for that slot, so it appears on the slot and on
+ * serial only while the vt mirrors that slot there.  `tty` 0 is kernel log, identical to
+ * serial_write.  With no console ring registered, or a ring too full to take the text,
+ * it is transmitted directly.  Same lock and context rules as serial_write. */
+void console_write_tty(uint32_t tty, const char* s);
+
+/* Enable the kernel-log port: a second UART at I/O base `port` that receives every
+ * kernel-log write (and only those) directly from the kernel, starting with a replay of
+ * the early-log capture.  Returns 0, or WASMOS_NOENT when no UART answers there.
+ * Called once at boot from the `log.serial` option. */
+int32_t serial_log_port_enable(uint16_t port);
+
+/* COM1 output for the console ring's owner (the vt writing its serial-bound slot): `len`
+ * bytes, '\n' expanded to "\r\n", reaching no ring and not the early log.  Returns 0, or
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED when no console ring is registered or `context_id` did
+ * not register it. */
+int32_t serial_owner_write(uint32_t context_id, const char* s, uint32_t len);
 
 /* Read one console byte, preferring a registered remote serial driver and falling back to
  * a direct COM1 poll.  Returns 1 with the byte in *out_char, 0 when nothing is pending, or
@@ -87,17 +110,16 @@ uint32_t serial_console_ring_id(void);
  * memory.  NULL when the ring could not be created. */
 void* serial_console_ring_ptr(void);
 
-/* klog ring (VT I/O multiplexer): the VT owns an SPSC byte ring
- * (wasmos/ringbuf.h) overlaid on a BUFFER_KIND_TRANSFER xfer-buffer (the same
- * zero-copy transport the socket rings use) and registers that buffer id here.
- * serial_write then additionally publishes klog text into the ring for the VT
- * to drain into vt-1.  This is additive to the legacy console_ring (the
- * framebuffer driver still drains console_ring for early-boot on-screen klog).
+/* Console ring (VT I/O multiplexer): the VT owns an SPSC ring (wasmos/ringbuf.h)
+ * overlaid on a BUFFER_KIND_TRANSFER xfer-buffer (the same zero-copy transport the
+ * socket rings use) and registers that buffer id here.  From then on serial_write and
+ * console_write_tty publish their text into it as slot-tagged records
+ * (VT_CONSOLE_SLOT_KLOG / a controlling slot, wasmos_driver_abi.h) instead of
+ * transmitting it, and owner_context_id owns COM1 for that text (serial_owner_write).
  * owner_context_id must own the buffer and, when non-zero, notify_endpoint.
  * notify_endpoint receives the VT_IPC_KLOG_NOTIFY doorbell; 0 registers the ring
  * without one, leaving the consumer to drain on its own schedule.  Returns 0 on
- * success, -1 on a bad/foreign id, a foreign notify endpoint, or a region that is
- * not an initialized ring. */
+ * success or a packed error (see the definition in serial.c). */
 int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_endpoint);
 
 /* Deliver a pending klog doorbell, if any.  Runs from the scheduler loop, not

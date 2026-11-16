@@ -5,21 +5,20 @@
  * forwards decoded keys (VT_IPC_KEY_FORWARD) and visibility changes
  * (VT_IPC_VIS_NOTIFY) instead of painting text itself.
  *
+ * Output does not arrive over IPC.  The kernel publishes the kernel log and
+ * every process's console output into the vt's console ring, tagged with the
+ * writer's controlling slot; the vt merges each slot's stream (vt_outmux.h),
+ * renders it, and owns COM1 for the serial-bound slot.  See the console-ring
+ * comment below.
+ *
  * IPC surface, as served by the loop in initialize().  The slot model, the
  * reader/writer registration rules and the role of slot 0 and slot 1 are
  * documented in vt_types.h; opcode values and request packing come from
  * abi/opcodes.yaml.  Replies carry only two payload words (arg0, arg1):
  *
- *   VT_IPC_WRITE_REQ       1-4 bytes for the source's slot.  NOT acknowledged.
- *                          request_id is NOT a request id here: it carries the
- *                          sender's cached switch generation, and a chunk whose
- *                          value is stale is dropped.  A write from a negative
- *                          (kernel) source is a mirrored console write: it goes
- *                          to whichever slot is visible and skips both the
- *                          ownership and the generation check.
- *   VT_IPC_SERIAL_INPUT_REQ  same byte packing, from the serial driver; the
- *                          bytes enter the serial-bound slot's line discipline.
- *                          Not acknowledged.
+ *   VT_IPC_SERIAL_INPUT_REQ  1-4 bytes from the serial driver, arg0[27:24] =
+ *                          count; they enter the serial-bound slot's line
+ *                          discipline.  Not acknowledged.
  *   VT_IPC_READ_REQ        arg0=slot.  RESP arg0=0 with arg1=the byte, or
  *                          arg0=1 with arg1=0 when the queue is empty (a
  *                          non-blocking poll, not a wait).  The first caller
@@ -51,6 +50,7 @@
 #include "wasmos/ringbuf.h"
 #include "wasmos_driver_abi.h"
 #include "vt_types.h"
+#include "vt_outmux.h"
 
 #ifndef WASMOS_TRACE
 #define WASMOS_TRACE 0
@@ -89,14 +89,32 @@ static uint32_t g_heap_cursor = 0;
 static uint32_t g_heap_limit = 0;
 static int32_t g_alloc_failure = 0;
 
-/* klog ring: the VT owns an SPSC byte ring overlaid on an xfer buffer; the
- * kernel publishes klog text into it (serial_write) and the VT drains it into
- * VT_KLOG_TTY.  The main loop drains after each blocking wasmos_ipc_select_one,
- * and the kernel's VT_IPC_KLOG_NOTIFY doorbell is one such wake, so pending klog
- * is drained even when nothing else is happening. */
-#define VT_KLOG_RING_CAPACITY 4096u /* SPSC data capacity (power of two) */
+/* Console ring: the VT owns an SPSC ring overlaid on an xfer buffer, and the
+ * kernel publishes into it, as slot-tagged records, both the kernel log
+ * (VT_CONSOLE_SLOT_KLOG, drained into VT_KLOG_TTY) and every process's console
+ * output (tagged with its controlling slot).  The main loop drains after each
+ * blocking wasmos_ipc_select_one, and the kernel's VT_IPC_KLOG_NOTIFY doorbell is
+ * one such wake, so pending output is drained even when nothing else happens.
+ *
+ * Registering the ring also hands COM1 to the VT: the kernel stops transmitting
+ * what it publishes, and the VT writes the serial-bound slot's output stream
+ * through wasmos_serial_owner_write.  Text the ring cannot take is transmitted
+ * by the kernel directly, so a full ring reorders serial output but loses none.
+ * Sized for a boot-time log burst between two VT wakes. */
+#define VT_KLOG_RING_CAPACITY 16384u /* SPSC data capacity (power of two) */
 static wasmos_ringbuf_t g_klog_ring;
 static int32_t g_klog_ring_ready = 0;
+
+/* Per-slot merge of writer output and kernel log (vt_outmux.h): the single
+ * stream that is rendered into the slot and, for the serial-bound slot, sent to
+ * serial.  Slot 0 is never a text slot and its entry is unused. */
+static vt_outmux_t g_outmux[VT_MAX_TTYS];
+
+/* Serial-bound slot output not yet handed to wasmos_serial_owner_write.  Flushed
+ * when full and once per main-loop iteration, so a burst costs one host call
+ * per buffer rather than one per byte. */
+static uint8_t g_serial_out[512];
+static uint32_t g_serial_out_len = 0;
 
 /* Bulk grid blit: a shared xfer-buffer holding the visible slot's cell grid,
  * granted READ to the framebuffer driver.  A tty switch repaints the whole
@@ -865,6 +883,38 @@ static void vt_process_byte(uint32_t tty_index, vt_tty_t* tty, uint8_t c) {
     }
 }
 
+static void vt_serial_flush(void) {
+    if (g_serial_out_len == 0) {
+        return;
+    }
+    (void)wasmos_serial_owner_write(addr_cast(int32_t, g_serial_out), (int32_t)g_serial_out_len);
+    g_serial_out_len = 0;
+}
+
+/* Sink of a slot's merged output stream (vt_outmux.h): every byte is rendered
+ * into the slot, and the serial-bound slot's bytes are also queued for serial.
+ * Serial is mirrored only once the console ring is registered, because until
+ * then the kernel still transmits console output itself. */
+static void vt_slot_sink(void* user, uint8_t byte) {
+    uint32_t slot = (uint32_t)(uintptr_t)user;
+    vt_process_byte(slot, &g_ttys[slot], byte);
+    if (slot == g_serial_tty && g_klog_ring_ready) {
+        g_serial_out[g_serial_out_len++] = byte;
+        if (g_serial_out_len == (uint32_t)sizeof(g_serial_out)) {
+            vt_serial_flush();
+        }
+    }
+}
+
+/* Writer output for a text slot: a console write of a process on that slot, or
+ * the VT's own echo of typed input. */
+static void vt_slot_write(uint32_t slot, const uint8_t* bytes, uint32_t len) {
+    if (slot == 0 || slot >= VT_MAX_TTYS) {
+        return;
+    }
+    vt_outmux_write(&g_outmux[slot], bytes, len, vt_slot_sink, (void*)(uintptr_t)slot);
+}
+
 /* Return the TTY index owning source_ep (as reader or writer), or -1. */
 static int32_t vt_tty_index_for_source(int32_t source_ep) {
     if (source_ep < 0) {
@@ -959,6 +1009,7 @@ static void vt_init_ttys(void) {
         return;
     }
     for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
+        vt_outmux_init(&g_outmux[i]);
         vt_cell_t* cells = g_ttys[i].cells;
         memset(&g_ttys[i], 0, sizeof(g_ttys[i]));
         g_ttys[i].cells = cells;
@@ -988,6 +1039,10 @@ static void vt_notify_gfx_visibility(int32_t visible) {
     (void)wasmos_ipc_send(sink, g_vt_ep, VT_IPC_VIS_NOTIFY, 0, visible ? 1 : 0, 0, 0, 0);
 }
 
+/* FIXME: rapid Ctrl+Shift+Fn switching can intermittently render duplicated or
+ * misaligned prompts (framebuffer only; the cell grid is correct).  No reliable
+ * repro sequence exists yet, which is why the VT trace markers (switch and
+ * writer-registration events) stay enabled. */
 static int32_t vt_switch_tty(uint32_t tty_index) {
     if (tty_index >= VT_MAX_TTYS) {
         return WASMOS_ERR_VT_BAD_TTY_ID;
@@ -1239,18 +1294,11 @@ static void vt_load_keymap(const char* path) {
     printf("[vt] keymap loaded: %s (%d rows)\n", path, rows);
 }
 
+/* Echo a typed byte into its slot (VT_INPUT_MODE_ECHO).  It is writer output of
+ * that slot like any other, so it lands in the slot's grid whether or not the
+ * slot is visible, and on serial when the slot is serial-bound. */
 static void vt_input_echo_char(uint32_t tty_index, uint8_t ch) {
-    if (tty_index >= VT_MAX_TTYS || tty_index != g_active_tty) {
-        return;
-    }
-    if (tty_index == VT_KLOG_TTY) {
-        /* The system-console slot shows the serial stream: its reader echoes to
-         * serial and the kernel klog ring brings that echo back here, so echoing
-         * locally as well would double every typed character. */
-        return;
-    }
-    vt_tty_t* tty = &g_ttys[tty_index];
-    vt_process_byte(tty_index, tty, ch);
+    vt_slot_write(tty_index, &ch, 1u);
 }
 
 static void vt_input_commit_line(vt_tty_t* tty) {
@@ -1591,10 +1639,11 @@ static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extend
     vt_input_handle_char(g_active_tty, ch);
 }
 
-/* Create the VT-owned klog ring, map it into the VT's linear memory, initialize
- * the SPSC header, and hand its xfer-buffer id to the kernel.  Best-effort: on
- * any failure g_klog_ring_ready stays 0 and klog reaches only the legacy
- * console_ring / COM1 TX. */
+/* Create the VT-owned console ring, map it into the VT's linear memory,
+ * initialize the SPSC header, and hand its xfer-buffer id to the kernel, which
+ * hands COM1 to the VT in the same step.  Best-effort: on any failure
+ * g_klog_ring_ready stays 0, the kernel keeps transmitting all console output
+ * itself, and the VT neither shows it nor mirrors any slot to serial. */
 static void vt_klog_ring_init(void) {
     /* Overlay the SPSC ring on a BUFFER_KIND_TRANSFER xfer-buffer — the same
      * zero-copy transport the socket rings use (net.h), which handles WARP's
@@ -1626,36 +1675,58 @@ static void vt_klog_ring_init(void) {
     g_klog_ring_ready = 1;
 }
 
-/* Drain any pending klog bytes into VT_KLOG_TTY through the normal per-slot byte
- * path.  Never targets vt-0 (tty0's byte path calls wasmos_console_write, which
- * would loop back into klog).
+/* Drain every pending console record: kernel log into VT_KLOG_TTY, a process's
+ * console output into its controlling slot, both through that slot's merge
+ * (vt_outmux.h).  Kernel log never targets vt-0, whose byte path calls
+ * wasmos_console_write and would loop back into the ring; a record naming a slot
+ * the VT does not have is shown as kernel log rather than dropped.
  *
- * Rendering is deferred for the whole drain and closed with one full-grid blit.
- * Per-cell rendering would issue one framebuffer IPC per character, and klog
- * arrives in bursts of whole lines — thousands of cells during boot — which is
- * the same queue-flooding shape that wedged tty switches before the blit path
- * existed.  The grid is authoritative, so a batch repaint loses nothing. */
+ * Rendering is deferred for the whole drain and the visible slot, if it received
+ * anything, is closed with one full-grid blit.  Per-cell rendering would issue
+ * one framebuffer IPC per character, and the ring delivers bursts of whole lines
+ * -- thousands of cells during boot -- which is the same queue-flooding shape
+ * that wedged tty switches before the blit path existed.  The grid is
+ * authoritative, so a batch repaint loses nothing. */
 static void vt_drain_klog_ring(void) {
     if (!g_klog_ring_ready) {
         return;
     }
-    vt_tty_t* tty = &g_ttys[VT_KLOG_TTY];
-    uint8_t buf[128];
-    uint32_t drained = 0;
+    uint8_t record[1u + VT_CONSOLE_RECORD_TEXT_MAX];
+    uint32_t touched = 0;
     g_render_defer = 1;
     for (;;) {
-        uint32_t n = wasmos_ringbuf_read(&g_klog_ring, buf, (uint32_t)sizeof(buf));
-        if (n == 0) {
-            break;
+        uint32_t len = 0;
+        int32_t n =
+            wasmos_ringbuf_read_record(&g_klog_ring, record, (uint32_t)sizeof(record), &len);
+        if (n == -2) {
+            /* Longer than any record the kernel writes: skip it whole. */
+            (void)wasmos_ringbuf_skip(&g_klog_ring, 4u + len);
+            continue;
         }
-        drained += n;
-        for (uint32_t i = 0; i < n; ++i) {
-            vt_process_byte(VT_KLOG_TTY, tty, buf[i]);
+        if (n <= 0) {
+            if (n < 0) {
+                break;
+            }
+            continue;
+        }
+        uint32_t slot = record[0];
+        const uint8_t* text = &record[1];
+        uint32_t text_len = (uint32_t)n - 1u;
+        if (slot == VT_CONSOLE_SLOT_KLOG || slot >= VT_MAX_TTYS) {
+            vt_outmux_log(&g_outmux[VT_KLOG_TTY],
+                          text,
+                          text_len,
+                          vt_slot_sink,
+                          (void*)(uintptr_t)VT_KLOG_TTY);
+            touched |= 1u << VT_KLOG_TTY;
+        } else {
+            vt_slot_write(slot, text, text_len);
+            touched |= 1u << slot;
         }
     }
     g_render_defer = 0;
-    if (drained != 0 && VT_KLOG_TTY == g_active_tty && !g_switch_barrier) {
-        (void)vt_replay_tty(VT_KLOG_TTY, 0);
+    if ((touched & (1u << g_active_tty)) != 0 && !g_switch_barrier) {
+        (void)vt_replay_tty(g_active_tty, 0);
     }
 }
 
@@ -1840,11 +1911,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         vt_blit_init();
     }
 
-    /* Bring up the VT-owned klog ring (small, cheap overlay — see
-     * vt_klog_ring_init).  The VT drains it into vt-1 on every wake below: it
-     * blocks on g_vt_ep with wasmos_ipc_select_one (a timed select set strands
-     * serial input under WARP), and the kernel's VT_IPC_KLOG_NOTIFY doorbell is
-     * itself such a wake, so pending klog reaches vt-1 without polling. */
+    /* Bring up the VT-owned console ring (small, cheap overlay — see
+     * vt_klog_ring_init).  The VT drains it on every wake below: it blocks on
+     * g_vt_ep with wasmos_ipc_select_one (a timed select set strands serial
+     * input under WARP), and the kernel's VT_IPC_KLOG_NOTIFY doorbell is itself
+     * such a wake, so pending output reaches its slot and serial without
+     * polling. */
     vt_klog_ring_init();
 
     wasmos_sys_notify_ready(proc_endpoint, g_vt_ep);
@@ -1865,56 +1937,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wasmos_ipc_message_read_last(&msg);
 
         switch ((uint32_t)msg.type) {
-        case VT_IPC_WRITE_REQ: {
-            int32_t tty_index = -1;
-            if (msg.source < 0) {
-                /* Kernel-originated writes target whichever TTY is active. They
-                 * are advisory and intentionally bypass writer ownership plus
-                 * generation checks. */
-                tty_index = (int32_t)g_active_tty;
-            } else {
-                tty_index = vt_tty_index_for_source(msg.source);
-            }
-            if (tty_index == (int32_t)VT_KLOG_TTY) {
-                /* The system-console slot is painted from the kernel klog ring,
-                 * which already carries everything its writers put on serial.
-                 * Rendering their VT writes too would print every line twice. */
-                break;
-            }
-            if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                vt_trace_mark(
-                    VT_TRACE_DROP_UNOWNED,
-                    (uint16_t)(msg.source < 0 ? 0x0FFFu : ((uint32_t)msg.source & 0x0FFFu)),
-                    0);
-                break;
-            }
-            if (msg.source >= 0 && (uint32_t)msg.request_id != g_switch_generation) {
-                /* Drop stale write chunks queued before the last tty switch. */
-                vt_trace_mark(VT_TRACE_DROP_STALE,
-                              (uint16_t)((uint32_t)tty_index & 0x0FFFu),
-                              (uint16_t)(((uint32_t)msg.request_id) & 0x0FFFu));
-                break;
-            }
-            /* FIXME: rapid Ctrl+Shift+Fn switching can intermittently render
-             * duplicated/misaligned prompts (framebuffer-only; the cell grid is
-             * correct). No reliable repro sequence exists yet, which is why the
-             * VT trace markers (switch/write-drop/register events) stay enabled. */
-            vt_tty_t* tty = &g_ttys[(uint32_t)tty_index];
-            int32_t args[4] = {msg.arg0, msg.arg1, msg.arg2, msg.arg3};
-            int count = (args[0] >> 24) & 0xF;
-            if (count > 4)
-                count = 4;
-            args[0] &= 0xFF;
-            for (int i = 0; i < count; ++i) {
-                vt_process_byte((uint32_t)tty_index, tty, (uint8_t)(args[i] & 0xFF));
-            }
-            break;
-        }
-
         case VT_IPC_SERIAL_INPUT_REQ: {
             /* COM1 RX from the serial driver -> the serial-bound slot's input
              * queue (line discipline), regardless of which slot is visible.
-             * Bytes are packed like VT_IPC_WRITE_REQ. */
+             * arg0[27:24] = byte count (1-4), argN[7:0] = the bytes. */
             int32_t args[4] = {msg.arg0, msg.arg1, msg.arg2, msg.arg3};
             int count = (args[0] >> 24) & 0xF;
             if (count > 4)
@@ -2103,9 +2129,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             break;
 
         case VT_IPC_KLOG_NOTIFY:
-            /* The kernel's klog doorbell.  Waking the select above is its entire
-             * purpose — vt_drain_klog_ring already ran for this wake — so there is
-             * nothing to do here and nothing to reply to. */
+            /* The kernel's console-ring doorbell.  Waking the select above is its
+             * entire purpose — vt_drain_klog_ring already ran for this wake — so
+             * there is nothing to do here and nothing to reply to. */
             break;
 
         case KBD_IPC_KEY_NOTIFY:
@@ -2122,6 +2148,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             }
             break;
         }
+        /* Echo produced while handling the message, and whatever the drain left
+         * under a full buffer, reaches serial before the VT parks again. */
+        vt_serial_flush();
     }
 
     return 0;

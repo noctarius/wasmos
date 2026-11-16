@@ -118,4 +118,5 @@
     LINK("wasmos", "io_region_in32", warp_io_region_in32) , \
     LINK("wasmos", "io_region_out8", warp_io_region_out8) , \
     LINK("wasmos", "io_region_out16", warp_io_region_out16) , \
-    LINK("wasmos", "io_region_out32", warp_io_region_out32)
+    LINK("wasmos", "io_region_out32", warp_io_region_out32) , \
+    LINK("wasmos", "serial_owner_write", warp_serial_owner_write)

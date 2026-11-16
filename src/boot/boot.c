@@ -700,6 +700,30 @@ static int elf_is_valid(const Elf64_Ehdr* ehdr) {
 }
 
 static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES* bs, EFI_FILE_PROTOCOL* root, CHAR16* path,
+                                  void** out_buf, UINTN* out_size);
+
+/* Reads kernel.cmdline from the ESP root into `out` (BOOT_CMDLINE_MAX bytes) in
+ * the form boot_info_t.cmdline promises: NUL-terminated, control characters
+ * turned into spaces, anything past BOOT_CMDLINE_MAX - 1 bytes dropped.  Returns
+ * 1 when the file was read, 0 when there is none or it could not be read. */
+static int read_kernel_cmdline(EFI_BOOT_SERVICES* bs, EFI_FILE_PROTOCOL* root, char* out) {
+    static CHAR16 cmdline_path[] = L"\\kernel.cmdline";
+    void* buf = 0;
+    UINTN size = 0;
+    if (EFI_ERROR(read_file_alloc(bs, root, cmdline_path, &buf, &size))) {
+        return 0;
+    }
+    UINTN n = size < BOOT_CMDLINE_MAX - 1u ? size : BOOT_CMDLINE_MAX - 1u;
+    for (UINTN i = 0; i < n; ++i) {
+        char c = ((const char*)buf)[i];
+        out[i] = (c < 0x20 || c == 0x7F) ? ' ' : c;
+    }
+    out[n] = '\0';
+    bs->FreePool(buf);
+    return 1;
+}
+
+static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES* bs, EFI_FILE_PROTOCOL* root, CHAR16* path,
                                   void** out_buf, UINTN* out_size) {
     if (!bs || !root || !path || !out_buf || !out_size) {
         return 1;
@@ -906,6 +930,13 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
     }
     uefi_log(system, "[boot] loaded initfs: \\\\initfs.img\n");
 
+    /* The kernel command line is optional: a missing file means no options. */
+    char cmdline[BOOT_CMDLINE_MAX];
+    int have_cmdline = read_kernel_cmdline(bs, root, cmdline);
+    if (have_cmdline) {
+        uefi_log(system, "[boot] loaded kernel command line: \\\\kernel.cmdline\n");
+    }
+
     Elf64_Ehdr* ehdr = (Elf64_Ehdr*)kernel_buf;
     if (!elf_is_valid(ehdr)) {
         uefi_log(system, "[boot] Invalid ELF header\n");
@@ -1096,6 +1127,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
         boot_info->initfs_size = 0;
         boot_info->boot_config = 0;
         boot_info->boot_config_size = 0;
+        if (have_cmdline) {
+            memcpy8(boot_info->cmdline, cmdline, BOOT_CMDLINE_MAX);
+            boot_info->flags |= BOOT_INFO_FLAG_CMDLINE_PRESENT;
+        }
 
         if (have_framebuffer) {
             apply_framebuffer_snapshot(boot_info, &framebuffer_snapshot);

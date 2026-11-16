@@ -58,8 +58,11 @@ export declare function ipc_last_field(a0: i32): i32;
 // are also possible; see the note at the top of this file.
 @external("wasmos", "console_read")
 export declare function console_read(a0: i32, a1: i32): i32;
-// Write len bytes from guest memory at buf_offset to the kernel log, emitted in
-// NUL-terminated 127-byte chunks. Returns 0 on success -- including for len==0,
+// Write len bytes from guest memory at buf_offset to the caller's controlling
+// text slot -- the vt slot of the shell that started it -- or, for a process
+// with none, to the kernel log; emitted in NUL-terminated 127-byte chunks.
+// The vt puts a slot on serial only while that slot is serial-bound. Returns 0
+// on success -- including for len==0,
 // which is a no-op rather than a failure -- WASMOS_INVAL if `len` is negative,
 // or WASMOS_ERR_KERNEL_BAD_POINTER if [buf_offset, buf_offset+len) is not a
 // readable range of the caller's linear memory.
@@ -733,14 +736,20 @@ export declare function xfer_buffer_map(a0: i32): i32;
 // buffer_id or context.
 @external("wasmos", "xfer_buffer_unmap")
 export declare function xfer_buffer_unmap(a0: i32): i32;
-// klog ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
-// xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the kernel
-// klog ring, so serial_write publishes klog text into it for the VT to drain
-// into vt-1.  notify_endpoint is the caller's own endpoint and receives a
-// fire-and-forget VT_IPC_KLOG_NOTIFY doorbell once bytes are pending, so a
-// consumer parked on it drains without polling; pass 0 for no doorbell.
-// Returns 0 on success, -1 on a bad/foreign buffer id or a notify_endpoint the
-// caller does not own.
+// Console ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
+// xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the
+// console ring. From then on kernel log and every process's console output are
+// published into it as slot-tagged records (VT_CONSOLE_SLOT_KLOG or the
+// writer's controlling slot) instead of going to COM1, and the caller owns
+// COM1 for that text through serial_owner_write. notify_endpoint is the
+// caller's own endpoint and receives a fire-and-forget VT_IPC_KLOG_NOTIFY
+// doorbell once records are pending, so a consumer parked on it drains
+// without polling; pass 0 for no doorbell. Returns 0 on success; WASMOS_INVAL
+// for a non-positive id or a region without a valid ringbuf header; the
+// WASMOS_ERR_XFER_BUFFER_* code for an id that is not the caller's transfer
+// buffer; WASMOS_ERR_KERNEL_UNALIGNED for a base that is not page-aligned;
+// WASMOS_ERR_KERNEL_NOT_AUTHORIZED for a notify_endpoint the caller does not
+// own; or WASMOS_ERR_KERNEL_NO_CALLER.
 @external("wasmos", "klog_register_ring")
 export declare function klog_register_ring(a0: i32, a1: i32): i32;
 // Allocate one message-signalled interrupt vector and bind it to `endpoint`,
@@ -826,3 +835,13 @@ export declare function io_region_out16(a0: i32, a1: i32, a2: i32): i32;
 // io.port capability.
 @external("wasmos", "io_region_out32")
 export declare function io_region_out32(a0: i32, a1: i32, a2: i32): i32;
+// Transmit len bytes from guest memory at buf_offset on COM1, '\n' expanded to
+// "\r\n", without publishing them to the console ring or the kernel log. Only
+// the process that registered the console ring (klog_register_ring) may call
+// it: that is the vt, which writes its serial-bound slot through it. Returns 0
+// on success (including len == 0), WASMOS_INVAL for a negative len,
+// WASMOS_ERR_KERNEL_BAD_POINTER if the range is not readable linear memory,
+// WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED when the
+// caller did not register the console ring.
+@external("wasmos", "serial_owner_write")
+export declare function serial_owner_write(a0: i32, a1: i32): i32;

@@ -1479,6 +1479,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     /* state stays NEW here; published to LIVE below once init completes. */
     slot->block_reason = PROCESS_BLOCK_NONE;
     slot->wait_target_pid = 0;
+    slot->ctty = 0;
     slot->exit_status = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
@@ -1683,6 +1684,7 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     }
     slot->block_reason = PROCESS_BLOCK_NONE;
     slot->wait_target_pid = 0;
+    slot->ctty = 0;
     slot->exit_status = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
@@ -2025,6 +2027,11 @@ uint32_t process_current_pid(void) {
     uint32_t* pid_ptr =
         (uint32_t*)(void*)process_kernel_alias_addr((uintptr_t)&cpu_local()->current_pid);
     return *pid_ptr;
+}
+
+uint32_t process_current_ctty(void) {
+    process_t* process = process_get(process_current_pid());
+    return process ? (uint32_t)process->ctty : 0u;
 }
 
 /* Stages the status a process will exit with.  Records it only — the process

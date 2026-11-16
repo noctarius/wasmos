@@ -3,8 +3,8 @@
 > **Documentation status: Implemented reference.**
 
 This document describes the console I/O path from WASM service to terminal
-output: the `wasmos_console_write` hostcall, the VT mirror, the chardev IPC
-protocol, and the read path.
+output: the `wasmos_console_write` hostcall, its routing through the vt, the
+chardev IPC protocol, and the read path.
 
 **Sources**: `src/kernel/wasm3/link.c`,
 `src/drivers/chardev/chardev_server.c`,
@@ -14,45 +14,42 @@ protocol, and the read path.
 
 ### Overview
 
-WASM services produce output through a single hostcall,
-`wasmos_console_write`. The kernel handles this call in two ways
-simultaneously:
+Every process prints through a single hostcall, `wasmos_console_write` (native
+services: `api->console_write`). Where the bytes go depends on the caller's
+**controlling slot** (`process_t.ctty`, set at spawn — see
+`19-virtual-terminal.md`, slot model):
 
-1. **Serial output** — the bytes are forwarded directly to the UART (visible
-   in QEMU's serial console / `-serial mon:stdio`).
-2. **VT mirror** — the bytes are also passed to `wasm_console_write_vt_mirror`
-   which routes them to the active virtual terminal if one is running.
+1. **A process with a controlling slot** — a shell and everything it starts —
+   writes to that vt slot. The vt renders the slot and, while it is the
+   serial-bound slot, transmits it on serial.
+2. **A process without one** — drivers, services, anything started outside a
+   shell — writes kernel log, which the vt shows on vt-1 and transmits while
+   vt-1 is serial-bound.
 
-This dual-path design means `printf` output from any WASM service appears on
-both the serial log and the framebuffer terminal without the service having
-any knowledge of which output channel is active.
+A service therefore needs no knowledge of which output channel is active, and
+an app's output stays on the slot it was run from.
 
 ---
 
 ### `wasmos_console_write` Hostcall
 
-**Source**: `src/kernel/wasm3/link.c`
+**Sources**: `src/kernel/wasm3/link.c`, `src/kernel/warp/link.cpp`,
+`src/kernel/native_driver.c`, `src/kernel/serial.c`
 
-Signature (wasm3 import descriptor): `"i(*i*i)"`
-
-```
-arg0 : i32 — pointer to output buffer in WASM linear memory
-arg1 : i32 — length of output buffer
-arg2 : i32 — pointer to return value location
-arg3 : i32 — length of return value buffer (unused for console write)
-```
+Parameters (`abi/hostcalls.yaml` `console_write`): a guest buffer and its
+length. Returns 0, including for a zero length; `WASMOS_INVAL` for a negative
+length; `WASMOS_ERR_KERNEL_BAD_POINTER` for a range outside linear memory.
 
 Implementation path:
 
-1. Validates the pointer and length against the caller's linear memory bounds.
-2. Writes `length` bytes to the serial port via the kernel serial driver.
-3. Calls `wasm_console_write_vt_mirror(ptr, length)` to forward the same
-   bytes to the VT routing layer.
-4. Returns the number of bytes written.
-
-The VT mirror function dispatches to the compositor's virtual terminal input
-handler if the compositor service is active. If not, the call is a no-op and
-serial-only output continues.
+1. Validates the range against the caller's linear memory.
+2. Relays it in NUL-terminated 127-byte chunks to
+   `console_write_tty(process_current_ctty(), chunk)`, with preemption disabled
+   so one write is not interleaved with another process's.
+3. `console_write_tty` publishes each chunk into the vt's console ring as a
+   record tagged with the slot (0 = kernel log). Before the vt registers the ring,
+   or when the ring is too full to take the text, the kernel transmits it on
+   COM1 itself.
 
 ---
 
@@ -132,34 +129,37 @@ Error response arg0 values:
 ### Output Routing Summary
 
 ```
-WASM service calls printf / write
+process calls printf / write
          │
          ▼
-wasmos_console_write (hostcall)
+wasmos_console_write (hostcall) ──► console_write_tty(ctty)
          │
-         ├──► serial_write() ──► UART (always)
+         ├── console ring registered ──► record {slot, text} ──► vt
+         │                                  ├─► slot grid ──► framebuffer (if visible)
+         │                                  └─► COM1 via serial_owner_write (if serial-bound)
          │
-         └──► wasm_console_write_vt_mirror()
-                    │
-                    ├── compositor active? ──► VT input handler ──► framebuffer terminal
-                    │
-                    └── no compositor ──► (dropped)
+         └── no ring yet / ring full ──► COM1 directly
 ```
 
 ---
 
 ### Structural Invariants
 
-1. **Serial output is unconditional.** Every call to `wasmos_console_write`
-   reaches the UART regardless of compositor or VT state. Serial remains
-   usable for diagnostics when the framebuffer is unavailable.
+1. **Serial carries the serial-bound slot.** Once the vt owns COM1, a write
+   reaches the UART if and only if it belongs to the serial-bound slot (kernel
+   log belongs to vt-1). Before the vt is up, and for text the console ring
+   cannot take, the kernel transmits directly, so output is never lost. Panic
+   output always goes straight to the UART.
+   With `log.serial=com2` on the kernel command line a second UART carries
+   the kernel log alone, written by the kernel directly
+   (`19-virtual-terminal.md`, kernel-log port).
 
 2. **Chardev is a test stub, not a production I/O path.** Real services use
    the PS/2 keyboard driver (IRQ-driven, up to 4 subscribers) and the
    compositor's VT for interactive I/O, not the chardev single-byte buffer.
 
-3. **The VT mirror is one-way.** `wasmos_console_write` pushes output into
-   the VT; it does not read back from it. Reading is a separate hostcall
+3. **Console output is one-way.** `wasmos_console_write` pushes output into
+   the vt; it does not read back from it. Reading is a separate hostcall
    (`wasmos_console_read`) with its own input source.
 
 4. **No flow control.** The serial write path does not block if the UART is

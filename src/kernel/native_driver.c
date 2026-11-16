@@ -157,9 +157,10 @@ void native_driver_heap_release(uint32_t pid) {
 
 static int nd_console_write(const char* ptr, int len) {
     if (!ptr || len <= 0) {
-        return -1;
+        return WASMOS_INVAL;
     }
     int remaining = len;
+    uint32_t tty = process_current_ctty();
     ksync_spinlock_lock_noirq(&g_nd_console_lock);
     while (remaining > 0) {
         int chunk = remaining > (int)(sizeof(g_nd_console_buffer) - 1)
@@ -167,7 +168,7 @@ static int nd_console_write(const char* ptr, int len) {
                         : remaining;
         memcpy(g_nd_console_buffer, ptr + (len - remaining), (uint32_t)chunk);
         g_nd_console_buffer[chunk] = '\0';
-        klog_write(g_nd_console_buffer);
+        console_write_tty(tty, g_nd_console_buffer);
         remaining -= chunk;
     }
     ksync_spinlock_unlock_noirq(&g_nd_console_lock);

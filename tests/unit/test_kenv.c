@@ -141,6 +141,53 @@ static void test_short_output_buffer_truncates(void) {
     CHECK(written == 3, "written is what fit");
 }
 
+static void test_cmdline_publishes_each_key_value_token(void) {
+    char out[KENV_VAL_MAX];
+    uint32_t written = 0;
+
+    reset();
+    CHECK(kenv_load_cmdline("  log.serial=com2   boot.debug=1 ") == 2, "two tokens published");
+    CHECK(kenv_get("log.serial", out, sizeof(out), &written) == WASMOS_OK &&
+              strcmp(out, "com2") == 0,
+          "first token");
+    CHECK(kenv_get("boot.debug", out, sizeof(out), &written) == WASMOS_OK && strcmp(out, "1") == 0,
+          "second token, after a run of spaces");
+}
+
+static void test_cmdline_bare_word_is_a_flag(void) {
+    char out[KENV_VAL_MAX];
+    uint32_t written = 0;
+
+    reset();
+    CHECK(kenv_load_cmdline("quiet") == 1, "a bare word is published");
+    CHECK(kenv_get("quiet", out, sizeof(out), &written) == WASMOS_OK && strcmp(out, "1") == 0,
+          "with the value 1");
+}
+
+static void test_cmdline_value_keeps_later_equals_signs(void) {
+    char out[KENV_VAL_MAX];
+    uint32_t written = 0;
+
+    reset();
+    CHECK(kenv_load_cmdline("opt=a=b") == 1, "one token");
+    CHECK(kenv_get("opt", out, sizeof(out), &written) == WASMOS_OK && strcmp(out, "a=b") == 0,
+          "the key ends at the first '='");
+}
+
+static void test_cmdline_skips_unusable_tokens(void) {
+    char out[KENV_VAL_MAX];
+    char line[KENV_KEY_MAX + 16];
+    uint32_t written = 0;
+
+    reset();
+    memset(line, 'k', KENV_KEY_MAX + 4);
+    memcpy(line + KENV_KEY_MAX + 4, "=v ok=1", 8);
+    CHECK(kenv_load_cmdline(line) == 1, "the over-long key is skipped, the next token is not");
+    CHECK(kenv_count() == 1, "nothing truncated was published");
+    CHECK(kenv_get("ok", out, sizeof(out), &written) == WASMOS_OK, "the valid token");
+    CHECK(kenv_load_cmdline("=nokey") == 0, "an empty key is skipped");
+}
+
 static void test_table_full_is_reported(void) {
     char key[16];
 
@@ -165,6 +212,10 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_over_long_value_is_refused),
     WASMOS_TEST_CASE(test_short_output_buffer_truncates),
     WASMOS_TEST_CASE(test_table_full_is_reported),
+    WASMOS_TEST_CASE(test_cmdline_publishes_each_key_value_token),
+    WASMOS_TEST_CASE(test_cmdline_bare_word_is_a_flag),
+    WASMOS_TEST_CASE(test_cmdline_value_keeps_later_equals_signs),
+    WASMOS_TEST_CASE(test_cmdline_skips_unusable_tokens),
 };
 
 int main(void) {

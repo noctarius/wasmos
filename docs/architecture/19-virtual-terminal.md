@@ -4,7 +4,8 @@
 > line discipline, cell/TTY state, framebuffer cell IPC, and TTY switching are
 > implemented reference. The multiplexer model (slot roles, two selectors,
 > keyboard-through-VT single decoder, serial-over-IRQ into the VT, push-based
-> input notifications, and klog routed to vt-1) is a redesign landing in phases;
+> input notifications, per-slot output routing, and the vt owning serial
+> output) is a redesign landing in phases;
 > each redesign section is tagged **Shipped** or **Proposed (phase N)**, and the
 > Rollout section tracks status.
 
@@ -53,15 +54,10 @@ means the system is up rather than appearing mid-boot.
 
 `VT_MAX_TTYS` is 4 today (vt-0..vt-3).
 
-**vt-1 is a mirror of the system log, not an ordinary text slot.** Everything it
-shows comes from the kernel klog ring, which already carries every byte its
-writers put on serial (a service's `console_write` reaches the kernel log, and so
-does the CLI's). The vt therefore takes two rules for that slot alone: a
-registered writer's `VT_IPC_WRITE_REQ` is dropped, and input is not echoed
-locally. Without them each line and each typed character renders twice — once
-from the writer and once from the log. `vt-2`/`vt-3` are ordinary slots with the
-full writer and echo path. Folding vt-1 into that same model needs a way to
-write serial without feeding the klog ring, which does not exist yet.
+**vt-1 is an ordinary text slot that also shows the kernel log.** Its stream is
+the output of its own processes (its shell and what that shell runs) merged with
+the kernel log, a whole log line at a time (see *Output routing*). No other slot
+shows the kernel log.
 
 #### Two independent selectors (Shipped — phase 5)
 
@@ -77,11 +73,14 @@ session — every headless test, among others — can change what is on screen.
 `tty -s 0` is refused (`vt.SERIAL_SLOT_GUI`): vt-0 is the compositor's and cannot
 be rendered down a serial line.
 
-Note what a slot does *not* yet capture: an app's own output. `printf` in a guest
-reaches `wasmos_console_write`, i.e. the kernel log, so it shows on the console
-slot whichever slot the app belongs to. Routing a process's output to its
-controlling tty is filed in `TASKS.md` and is what would retire vt-1's
-log-mirror rules below.
+A slot captures the output of the processes it controls. Each process has a
+**controlling slot** (`process_t.ctty`), fixed at spawn: a shell (`wants_tty`)
+gets the slot it was spawned for, and every other process inherits the slot of
+the process that asked for it, so an app run from vt-2's shell prints on vt-2.
+Services, drivers and anything else started outside a shell have none, and their
+output is kernel log. Serial carries the serial-bound slot's stream and nothing
+else: with serial bound to vt-2, the kernel log and vt-1's shell are off the
+wire.
 
 The compositor requests the visible slot switch to `vt-0` **once**, when the
 first UI app appears (`try_switch_to_gfx_tty` → `VT_IPC_SWITCH_TTY 0`), and then
@@ -101,7 +100,7 @@ notify is sent *before* the vt repaints the text slot, so the compositor stops
 first. The compositor claims the notify/key-forward endpoint on its first switch
 to `vt-0`; a later `tty 0` that only changes the visible slot does not reclaim it.
 
-#### Per-slot output fan-out (Proposed — phase 4/5)
+#### Per-slot output fan-out (Shipped — phase 5)
 
 Each slot's output goes to: its own cell/scrollback buffer **always**; the
 framebuffer **iff** it is the visible slot; serial **iff** it is the
@@ -115,20 +114,23 @@ serial-bound slot.
 keyboard driver ─KBD_IPC_KEY_NOTIFY─▶ vt ◀─VT_IPC_SERIAL_INPUT_REQ─ serial driver (IRQ4)
                                        │  single scancode decoder
                                        │  slot mux · escape parser · line discipline
-        ┌──────────────┬───────────────┼───────────────┐
-        │ VT_IPC_KEY_  │ VT_IPC_INPUT_ │ FBTEXT_IPC_*   │ VT_IPC_WRITE_REQ (in)
-        │ FORWARD      │ NOTIFY (push) │ (cell/cursor)  │
-        ▼              ▼               ▼                └── kernel / CLI / services
-   gfx-compositor    CLI (awaits)   framebuffer driver
-   (vt-0 keys)       drains slot    (blit surface)
-                                       ▲
-   kernel console ring ────────────────┘  (klog → vt-1, phase 4)
+        ┌──────────────┬───────────────┼───────────────┬──────────────────┐
+        │ VT_IPC_KEY_  │ VT_IPC_INPUT_ │ FBTEXT_IPC_*   │ serial_owner_    │
+        │ FORWARD      │ NOTIFY (push) │ (cell/cursor)  │ write (host call)│
+        ▼              ▼               ▼                ▼                  │
+   gfx-compositor    CLI (awaits)   framebuffer driver  COM1 TX            │
+   (vt-0 keys)       drains slot    (blit surface)      (serial-bound slot)│
+                                                                           │
+   kernel console ring ──────────────▶ vt ◀────────────────────────────────┘
+   (klog + every process's console_write, slot-tagged records)
 ```
 
-`vt` is the sole owner of the framebuffer driver's text-cell endpoint. Clients
-write bytes with `VT_IPC_WRITE_REQ`; `vt` parses escapes, updates per-slot cell
-state, and forwards cell/cursor/scroll operations to the framebuffer driver only
-for the visible slot.
+`vt` is the sole owner of the framebuffer driver's text-cell endpoint and, once
+it has registered the console ring, of COM1 output. Output reaches it through the
+console ring rather than IPC; `vt` merges each slot's stream, parses escapes,
+updates per-slot cell state, forwards cell/cursor/scroll operations to the
+framebuffer driver only for the visible slot, and transmits the serial-bound
+slot's stream.
 
 ---
 
@@ -271,7 +273,7 @@ gates whether the compositor or the VT owns the framebuffer.
 
 | Opcode                    | Value  | Caller → vt / vt → peer                                |
 |---------------------------|--------|--------------------------------------------------------|
-| `VT_IPC_WRITE_REQ`        | 0x700  | Write up to 4 bytes: arg0–arg3, each zero-terminated   |
+| `VT_IPC_WRITE_REQ`        | 0x700  | *Retired.* Output arrives through the console ring; value reserved |
 | `VT_IPC_READ_REQ`         | 0x701  | Drain next input byte; arg0=slot index                 |
 | `VT_IPC_SET_ATTR_REQ`     | 0x702  | Set fg/bg/attr; arg0=fg, arg1=bg, arg2=attr            |
 | `VT_IPC_SWITCH_TTY`       | 0x703  | Switch visible slot; arg0=slot index                   |
@@ -284,17 +286,8 @@ gates whether the compositor or the VT owns the framebuffer.
 | `VT_IPC_INPUT_NOTIFY`     | 0x781  | *(phase 2)* vt → reader: input available on your slot  |
 | `VT_IPC_KEY_FORWARD`      | 0x782  | *(phase 3)* vt → compositor: key event for vt-0        |
 | `VT_IPC_VIS_NOTIFY`       | 0x783  | *(phase 5)* vt → compositor: arg0=1 if vt-0 is now visible, else 0 |
-| `VT_IPC_KLOG_NOTIFY`      | 0x784  | *(phase 5)* kernel → vt: klog bytes pending in the registered ring |
+| `VT_IPC_KLOG_NOTIFY`      | 0x784  | *(phase 5)* kernel → vt: records pending in the console ring |
 | `VT_IPC_ERROR`            | 0x7FF  | Error response                                          |
-
-#### VT_IPC_WRITE_REQ
-
-Bytes are packed one per arg word (arg0..arg3), high nibble of arg0 optionally
-carrying a byte count; processing stops at the first zero byte. Kernel-originated
-writes (source < 0) target `g_active_tty` unconditionally and bypass ownership
-and generation checks. Client writes from registered writers are validated
-against `g_switch_generation`; writes with a stale generation are dropped
-silently.
 
 #### VT_IPC_READ_REQ Response
 
@@ -308,8 +301,8 @@ The first client to read from a slot claims its reader slot
 
 #### VT_IPC_SERIAL_INPUT_REQ *(Proposed — phase 1)*
 
-The serial driver forwards COM1 RX bytes to `vt`, packed like
-`VT_IPC_WRITE_REQ`. `vt` feeds them into the **serial-bound slot** (`g_serial_tty`,
+The serial driver forwards COM1 RX bytes to `vt`, packed one
+byte per argument word with the count in `arg0[27:24]`. `vt` feeds them into the **serial-bound slot** (`g_serial_tty`,
 default 1) through the same line discipline as keyboard input.
 
 #### VT_IPC_INPUT_NOTIFY *(Proposed — phase 2)*
@@ -372,42 +365,64 @@ the IRQ→VT path and make the CLI event-driven.
 
 ### Output Routing
 
-- **Per-slot fan-out (phase 4/5):** cell/scrollback buffer always; framebuffer
-  iff the slot is visible (`render_now = (slot == g_active_tty) && !g_switch_barrier`);
-  serial iff the slot is serial-bound.
+- **Per-slot fan-out (phase 5, Shipped):** cell/scrollback buffer always;
+  framebuffer iff the slot is visible
+  (`render_now = (slot == g_active_tty) && !g_switch_barrier`); serial iff the slot
+  is serial-bound.
 - **Framebuffer exclusivity (phase 5):** the framebuffer is owned by exactly one
   of {compositor (vt-0), the VT's text render of one vt-x}. The compositor takes
   it by asking `vt` to switch to vt-0 and by locking the overlay
   (`FBTEXT_IPC_GFX_OVERLAY_REQ 1`); it releases by switching back to a text slot.
   Single-owner-per-frame removes the competing-writer flicker.
-- **klog (phase 4, Shipped):** normal kernel log text reaches vt-1 through a
-  VT-owned SPSC byte ring (`wasmos/ringbuf.h`) overlaid on a
-  `BUFFER_KIND_TRANSFER` xfer-buffer — the same zero-copy transport the socket
-  rings use. The VT acquires + maps the buffer, `wasmos_ringbuf_init`s it, and
-  registers its id with the kernel (`klog_register_ring`); `serial_write` then
-  publishes klog into that ring in addition to COM1 TX, and the VT drains it into
-  vt-1 on each wake of its main loop.
+- **Console ring (phase 5, Shipped):** all console output reaches the VT through
+  one VT-owned SPSC ring (`wasmos/ringbuf.h`) overlaid on a `BUFFER_KIND_TRANSFER`
+  xfer-buffer — the same zero-copy transport the socket rings use. The VT acquires
+  and maps the buffer, `wasmos_ringbuf_init`s it, and registers its id with the
+  kernel (`klog_register_ring`). The kernel then publishes into it, as
+  length-prefixed records of one slot byte plus up to 255 bytes of text
+  (`VT_CONSOLE_SLOT_KLOG`, `wasmos_driver_abi.h`):
+  - kernel log (`serial_write`, `klog_write`) as slot `VT_CONSOLE_SLOT_KLOG` (0),
+    drained into vt-1;
+  - every process's `wasmos_console_write` / native `api->console_write` as its
+    controlling slot (`console_write_tty`), or as kernel log when it has none.
 
-  The VT registers its own endpoint as the ring's **doorbell** in the same call.
-  The kernel raises a flag on the logging path and delivers `VT_IPC_KLOG_NOTIFY`
-  from the scheduler loop (`klog_poll`), never from `serial_write` itself, which
-  runs under the serial lock, in interrupt context and during a panic. The notify
-  carries no payload: waking the VT's `wasmos_ipc_select_one` is its whole
-  purpose, since the VT drains the ring on every wake. Without it an idle VT holds
-  pending klog until unrelated traffic arrives — invisible while vt-1 was hidden,
-  a stalled console once it is the visible slot.
-
-  This is **additive**: the kernel still
-  writes the legacy `console_ring` and the framebuffer driver still drains it for
-  early-boot on-screen klog. Retiring that console-ring drain (making the
-  framebuffer a pure blit surface) moves to phase 5, alongside the default-visible
-  flip to vt-1 — until vt-1 is visible, dropping it would blank the boot screen.
-  klog additionally always writes COM1 **TX** directly, so serial shows it
-  regardless of the visible slot.
-- **Panic bypass:** panic/fault output writes COM1 directly (`serial_printf_unlocked`)
-  and paints the framebuffer directly (`src/kernel/framebuffer.c`,
-  `panic_render_screen`), bypassing the ring and the VT — the kernel may be in an
-  illegal state. This is unchanged by the redesign.
+  The VT drains the ring on each wake of its main loop. It registers its own
+  endpoint as the ring's **doorbell** in the same call: the kernel raises a flag
+  on the logging path and delivers `VT_IPC_KLOG_NOTIFY` from the scheduler loop
+  (`klog_poll`), never from the write path itself, which runs under the serial
+  lock and possibly in interrupt context. The notify carries no payload: waking
+  the VT's `wasmos_ipc_select_one` is its whole purpose. Without it an idle VT
+  holds pending output until unrelated traffic arrives.
+- **Serial ownership (phase 5, Shipped):** registering the console ring hands COM1
+  output to the VT. From then on the kernel does not transmit what it publishes;
+  the VT transmits the serial-bound slot's stream through `serial_owner_write`, a
+  host call only the ring's registrant may make, which reaches neither the ring
+  nor the kernel log. What the kernel transmits directly is limited to: output
+  before the ring is registered (early boot), text a full ring cannot take
+  (reordered ahead of what the VT has yet to drain, never lost), and the
+  unlocked panic/NMI path below.
+- **Kernel-log port (phase 5, Shipped):** with `log.serial=com2` on the kernel
+  command line (`\kernel.cmdline`, `boot.h`), the kernel also transmits every
+  kernel-log write on COM2 itself, from a replay of the early-log capture
+  onward. COM2 bypasses the vt entirely, so it is the complete, in-order kernel
+  log whatever the vt is doing and whichever slot COM1 is bound to; it never
+  carries a process's slot output. A COM2 with no UART behind it is detected
+  (scratch-register probe) and ignored.
+- **Line merge (phase 5, Shipped):** a slot's writers produce partial lines — a
+  prompt waits for input, the shell echoes one keystroke at a time — while the
+  kernel log produces whole lines at arbitrary moments. `vt_outmux`
+  (`src/services/vt/vt_outmux.c`) merges the two per slot so that a log line is
+  emitted whole and never inside a writer's open line: a log line that arrives
+  while one is open erases it (`\r`, `CSI K`), prints, and repaints the open line
+  after it. A typed command therefore stays contiguous on screen and on serial
+  however late a service logs. An unterminated log tail waits for its newline (or
+  for 256 bytes); an open line longer than 256 bytes cannot be repainted, so the
+  log line starts below it instead.
+- **Panic bypass:** panic/fault output writes COM1 directly (`serial_printf_unlocked`
+  and the other unlocked writers never use the console ring) and paints the
+  framebuffer directly (`src/kernel/framebuffer.c`, `panic_render_screen`),
+  bypassing the ring and the VT — the kernel may be in an illegal state, and the
+  VT may be what failed.
 
 ---
 
@@ -493,9 +508,10 @@ Multiple SGR params in a single `m` sequence are processed left to right.
 | `\t`      | advance to next multiple of 8 (recursive space expansion)  |
 | other     | store in cell; advance cursor; wrap and scroll at edge     |
 
-**Shipped:** `vt_put_char_tty0` tracks the cursor but routes tty0 output through
-`wasmos_console_write` (serial + console ring). Phase 4/5 relocate the
-serial-mirrored console to vt-1's fan-out; vt-0 becomes GUI-only.
+`vt_put_char_tty0` tracks the cursor but routes tty0 output through
+`wasmos_console_write`, which for the vt (a service, with no controlling slot) is
+kernel log and so lands on vt-1. Nothing writes text to vt-0 in practice; it is
+the GUI slot.
 
 Scroll: `vt_scroll_up` copies rows 1..N-1 down over rows 0..N-2, clears the last
 row, and sends `FBTEXT_IPC_SCROLL_REQ(n=1)` to the framebuffer driver.
@@ -540,21 +556,17 @@ row, and sends `FBTEXT_IPC_SCROLL_REQ(n=1)` to the framebuffer driver.
 | `VT_SWITCH_ERR_REPLAY`      | -13   | Cell replay returned error                  |
 | `VT_SWITCH_ERR_MODE_ON`     | -14   | CONSOLE_MODE_REQ(1) failed on fb endpoint   |
 
-#### Stale Write Detection
-
-Every `VT_IPC_WRITE_REQ` from a registered client carries `request_id` set to the
-switch generation at write time. If `msg.request_id != g_switch_generation` the
-write is dropped with `VT_TRACE_DROP_STALE`, preventing cell writes queued before
-a switch from corrupting the newly displayed slot.
-
 ---
 
 ### Writer and Reader Registration
 
-**Writer** (`VT_IPC_REGISTER_WRITER`): a client registers its endpoint as the
-owner of a slot's write path. Conflicts replace the previous owner rather than
-rejecting, keeping CLI recovery robust when a prior process exits without an
-explicit unregister.
+**Writer** (`VT_IPC_REGISTER_WRITER`): a shell registers its endpoint as the
+slot's writer, which tells the vt the slot has a shell (so it spawns no second
+one) and routes the shell's mode changes to the slot. Output does not use it:
+it arrives through the console ring, tagged by the kernel with the writer's
+controlling slot. Conflicts replace the previous owner rather than rejecting,
+keeping CLI recovery robust when a prior process exits without an explicit
+unregister.
 
 **Reader** (`VT_IPC_READ_REQ`): the first client to read from a slot claims its
 reader slot (`g_tty_reader_ep[slot]`). Under the redesign the reader is
@@ -690,14 +702,20 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 2. **vt-0 has no text-input queue.** Keyboard input to vt-0 is forwarded to the
    compositor; serial cannot bind to vt-0.
 3. **Serial is bound to exactly one slot** (`g_serial_tty`, default 1), and that
-   slot's output mirrors to serial even when it is not visible. *(phase 5)*
+   slot's output — and nothing else — goes to serial even when it is not
+   visible. The vt is the only writer of COM1 once its console ring is
+   registered, apart from the kernel's direct fallbacks (early boot, a full
+   ring, panic). *(phase 5)*
 4. **Panic bypasses the VT.** Panic/fault output writes COM1 and the framebuffer
    directly, unlocked, because the kernel may be in an illegal state.
-5. **Framebuffer text-cell endpoint is private to `vt`.** Other services write
-   through `VT_IPC_WRITE_REQ`.
-6. **g_switch_barrier + generation counter serialize switches.** Writes queued
-   before a switch are invalidated by the generation mismatch after it completes.
-7. **Input is push, then pull-to-drain.** `VT_IPC_INPUT_NOTIFY` wakes the reader;
+5. **Framebuffer text-cell endpoint is private to `vt`.** Everything else prints
+   with `wasmos_console_write`, which reaches the vt through the console ring.
+6. **g_switch_barrier serializes switches**, and the generation counter numbers
+   them for `VT_IPC_GET_ACTIVE_TTY`/`VT_IPC_SWITCH_TTY` replies.
+7. **A log line never splits a writer's line.** The per-slot merge emits the
+   kernel log a whole line at a time and repaints an interrupted line after it.
+   *(phase 5)*
+8. **Input is push, then pull-to-drain.** `VT_IPC_INPUT_NOTIFY` wakes the reader;
    `VT_IPC_READ_REQ` drains. The VT never blocks a reader inside a read. *(phase 2)*
 
 ---
@@ -715,6 +733,7 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 | 5b    | Default visible vt-1; framebuffer console-ring drain retired (both drivers); klog doorbell | Shipped  |
 | 5c    | Serial-bound selector (`VT_IPC_BIND_SERIAL_REQ`, `tty -s N`) | Shipped  |
 | 5d    | Lazy per-slot CLI spawn, pinned to its slot (console slot still from `sysinit.rc`) | Shipped  |
+| 5e    | Per-process controlling slot; all console output through the slot-tagged console ring; vt owns COM1 (`serial_owner_write`); line merge; `VT_IPC_WRITE_REQ` and vt-1's log-mirror rules retired | Shipped  |
 
 Keymap layouts are data files under `system/keymaps/` (`us-qwerty.kmap`,
 `de-nodeadkeys.kmap`), loaded by the VT at init (built-in US fallback).  The VT

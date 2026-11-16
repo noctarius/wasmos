@@ -337,6 +337,15 @@ enum { FSMGR_BACKEND_BLOCK = 1, FSMGR_BACKEND_PSEUDO = 2 };
  * unpacking this. */
 #define FSMGR_BACKEND_INSTANCE(kind, unit) ((((uint32_t)(kind)) << 8) | ((uint32_t)(unit) & 0xFFu))
 
+/* Console ring (klog_register_ring) record layout.  Each wasmos_ringbuf record
+ * is one slot byte followed by up to VT_CONSOLE_RECORD_TEXT_MAX bytes of text:
+ * slot VT_CONSOLE_SLOT_KLOG is kernel log, any other value is the console output
+ * of a process whose controlling slot it is.  A record is published whole or not
+ * at all, so the consumer never sees a slot byte without its text.
+ * docs/architecture/19-virtual-terminal.md, "Output routing". */
+#define VT_CONSOLE_SLOT_KLOG 0u
+#define VT_CONSOLE_RECORD_TEXT_MAX 255u
+
 /* One cell in a shared FBTEXT_IPC_BLIT grid buffer.  Layout is identical to the
  * framebuffer driver's fbtext_cell_t and the VT's vt_cell_t (8 bytes), so both
  * sides copy grids without per-cell conversion. */

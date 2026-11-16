@@ -40,6 +40,7 @@
         "test_decode_kernel_panic.py",
         "test_device_manager.py",
         "test_init_smoke.py",
+        "test_syslog_port.py",
         "test_ring3_smoke_target.py"
       ]
     },

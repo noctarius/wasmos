@@ -2199,7 +2199,7 @@ m3ApiRawFunction(wasmos_phys_map) {
  * VT_IPC_KLOG_NOTIFY doorbell and must be owned by the caller (checked in
  * klog_register_ring); a negative value registers the ring without a doorbell.  Returns 0,
  * WASMOS_INVAL for a non-positive id, WASMOS_ERR_KERNEL_NO_CALLER, or klog_register_ring's
- * -1 when the id or the notify endpoint is foreign, or the region does not hold an
+ * packed code when the id or the notify endpoint is foreign, or the region does not hold an
  * initialised ring. */
 m3ApiRawFunction(wasmos_klog_register_ring) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, notify_endpoint)
@@ -2213,6 +2213,28 @@ m3ApiRawFunction(wasmos_klog_register_ring) {
     }
     uint32_t notify = (notify_endpoint > 0) ? (uint32_t)notify_endpoint : 0u;
     m3ApiReturn(klog_register_ring(proc->context_id, (uint32_t)id, notify));
+}
+
+/* Transmit `len` bytes of the caller's linear memory at `ptr` on COM1 for the console ring's
+ * owner (serial_owner_write).  A zero `len` is a no-op success; a negative one is WASMOS_INVAL,
+ * and a range outside linear memory TRAPS the module via m3ApiCheckMem.  Returns 0,
+ * WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED when the caller did not
+ * register the console ring. */
+m3ApiRawFunction(wasmos_serial_owner_write) {
+    m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, ptr) m3ApiGetArg(int32_t, len)
+
+        if (len < 0) {
+        m3ApiReturn(WASMOS_INVAL);
+    }
+    if (len == 0) {
+        m3ApiReturn(0);
+    }
+    m3ApiCheckMem(ptr, (uint32_t)len);
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
+    }
+    m3ApiReturn(serial_owner_write(context_id, ptr, (uint32_t)len));
 }
 
 /* Route hardware IRQ line `irq_line` to the caller's context, delivering each interrupt as an
@@ -2720,12 +2742,13 @@ m3ApiRawFunction(wasmos_initfs_find_path) {
     m3ApiReturn(WASMOS_ERR_FS_NOT_FOUND);
 }
 
-/* Write `len` bytes from the caller's linear memory at `ptr` to the kernel log.  Preemption is
+/* Write `len` bytes from the caller's linear memory at `ptr` to the caller's controlling text
+ * slot, or to the kernel log when it has none (console_write_tty).  Preemption is
  * disabled across the whole relay so a multi-chunk write is not interleaved with another
  * process's output.  A zero `len` is a no-op success; a negative one is WASMOS_INVAL.  `ptr`
  * is a wasm32 linear-memory range and one outside linear memory TRAPS the module via
- * m3ApiCheckMem.  The kernel log reaches the screen through the vt's klog ring, so this
- * writes only to the log — both runtimes.  Returns 0. */
+ * m3ApiCheckMem.  The vt's console ring carries the text to the screen and serial, so this
+ * writes only to the kernel — both runtimes.  Returns 0. */
 m3ApiRawFunction(wasmos_console_write) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, ptr) m3ApiGetArg(int32_t, len)
 
@@ -2738,9 +2761,10 @@ m3ApiRawFunction(wasmos_console_write) {
     m3ApiCheckMem(ptr, (uint32_t)len);
     /* m3ApiGetArgMem/m3ApiCheckMem bound ptr inside linear memory, and the
      * pointer they produce is the same one the interpreter dereferences, so it
-     * is used as-is rather than re-derived from the offset.  klog_write needs a
-     * NUL-terminated string, so the counted range is relayed in <= 127-byte
+     * is used as-is rather than re-derived from the offset.  console_write_tty
+     * needs a NUL-terminated string, so the counted range is relayed in <= 127-byte
      * chunks through a stack buffer; the guest buffer is never written. */
+    uint32_t tty = process_current_ctty();
     preempt_disable();
     char buf[128];
     uint32_t copied = 0;
@@ -2751,7 +2775,7 @@ m3ApiRawFunction(wasmos_console_write) {
         }
         __builtin_memcpy(buf, ptr + copied, chunk);
         buf[chunk] = '\0';
-        klog_write(buf);
+        console_write_tty(tty, buf);
         copied += chunk;
     }
     preempt_enable();

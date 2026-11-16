@@ -49,8 +49,10 @@ typedef struct {
  * process address space.
  */
 typedef struct wasmos_driver_api {
-    /* Console. console_write sends `len` bytes to the kernel log under a lock,
-     * returning 0 on success or -1 for a NULL pointer or len <= 0; the buffer is
+    /* Console. console_write sends `len` bytes, under a lock, to the caller's
+     * controlling text slot or, for a process without one (every driver and
+     * service), to the kernel log.  Returns 0 on success or WASMOS_INVAL for a
+     * NULL pointer or len <= 0; the buffer is
      * borrowed for the duration of the call and need not be NUL-terminated.
      * Output is NOT binary-safe: it is re-emitted as a C string, so an embedded
      * NUL truncates the rest of that chunk.

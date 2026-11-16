@@ -147,3 +147,49 @@ void kenv_reset(void) {
         g_kenv[i].in_use = 0;
     }
 }
+
+uint32_t kenv_load_cmdline(const char* line) {
+    uint32_t published = 0;
+    if (!line) {
+        return 0;
+    }
+    while (*line) {
+        while (*line == ' ' || *line == '\t') {
+            line++;
+        }
+        if (!*line) {
+            break;
+        }
+        const char* start = line;
+        while (*line && *line != ' ' && *line != '\t') {
+            line++;
+        }
+        uint32_t token_len = (uint32_t)(line - start);
+        uint32_t key_len = 0;
+        while (key_len < token_len && start[key_len] != '=') {
+            key_len++;
+        }
+        char key[KENV_KEY_MAX];
+        char value[KENV_VAL_MAX];
+        if (key_len == 0 || key_len >= KENV_KEY_MAX) {
+            continue;
+        }
+        memcpy(key, start, key_len);
+        key[key_len] = '\0';
+        if (key_len == token_len) {
+            value[0] = '1';
+            value[1] = '\0';
+        } else {
+            uint32_t value_len = token_len - key_len - 1u;
+            if (value_len >= KENV_VAL_MAX) {
+                continue;
+            }
+            memcpy(value, start + key_len + 1u, value_len);
+            value[value_len] = '\0';
+        }
+        if (kenv_set(key, value) == WASMOS_OK) {
+            published++;
+        }
+    }
+    return published;
+}

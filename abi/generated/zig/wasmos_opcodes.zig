@@ -454,7 +454,10 @@ pub const FBTEXT_IPC_RESP: i32 = 0x680;
 pub const FBTEXT_IPC_ERROR: i32 = 0x6FF;
 
 // vt (0x700..0x7FF)
-/// arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes
+/// Retired.  A process's console output reaches its controlling slot
+/// through wasmos_console_write and the vt's console ring, so nothing
+/// writes a slot four bytes per message any more and the vt does not
+/// handle this.  The value stays reserved rather than being reused.
 pub const VT_IPC_WRITE_REQ: i32 = 0x700;
 pub const VT_IPC_READ_REQ: i32 = 0x701;
 pub const VT_IPC_SET_ATTR_REQ: i32 = 0x702;
@@ -462,8 +465,8 @@ pub const VT_IPC_SWITCH_TTY: i32 = 0x703;
 pub const VT_IPC_GET_ACTIVE_TTY: i32 = 0x704;
 pub const VT_IPC_REGISTER_WRITER: i32 = 0x705;
 pub const VT_IPC_SET_MODE_REQ: i32 = 0x706;
-/// serial driver -> vt: RX bytes for the serial-bound slot, packed like
-/// VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).
+/// serial driver -> vt: RX bytes for the serial-bound slot, packed
+/// arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes.
 pub const VT_IPC_SERIAL_INPUT_REQ: i32 = 0x707;
 /// Bind the serial console to a slot: arg0=slot.  Serial RX is injected
 /// into that slot's line discipline from then on, whichever slot is
@@ -484,7 +487,7 @@ pub const VT_IPC_KEY_FORWARD: i32 = 0x782;
 /// it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now
 /// the visible slot, 0 otherwise.
 pub const VT_IPC_VIS_NOTIFY: i32 = 0x783;
-/// kernel -> vt: klog bytes are pending in the ring registered through
+/// kernel -> vt: console records are pending in the ring registered through
 /// wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt
 /// drains the ring on every wake, so receiving it is the whole point and the
 /// message itself needs no handling beyond not being treated as an error.

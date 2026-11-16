@@ -247,6 +247,12 @@ Target summary:
 - `run-qemu-ring3-test`: strict ring-3 smoke path (includes PM owner-deny test-hook marker checks)
 - `run-qemu-ring3-threading-test`: opt-in strict ring-3 threading smoke (ring3-threading spawn + ring3 thread `create`/`join`/`detach` syscall markers including detach-then-join deny + wait/kill wake marker)
 
+Two serial ports: COM1 (the terminal QEMU runs in) is the console of the
+serial-bound tty, owned by the `vt`; COM2 carries the kernel log alone, written
+by the kernel directly, and the run targets capture it in `build/syslog.log`.
+The COM2 log is switched on by `log.serial=com2` in `kernel.cmdline`, an
+optional file on the ESP root that the bootloader hands to the kernel.
+
 ## Startup Model
 Boot sequence (high level):
 1. `BOOTX64.EFI` loads `kernel.elf` and `initfs.img`

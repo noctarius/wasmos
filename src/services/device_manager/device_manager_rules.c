@@ -931,6 +931,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     char tmp[64];
     uint8_t class_code = MATCH_ANY_U8;
     uint8_t subclass = MATCH_ANY_U8;
+    uint16_t io_base = 0;
     if (!line || !out_rule) {
         return -1;
     }
@@ -963,6 +964,12 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
             }
             continue;
         }
+        if (extract_op_value(tok, "ATTR{io}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u16_hex(tmp, &io_base) != 0 || io_base == 0) {
+                return -1;
+            }
+            continue;
+        }
     }
     if (strcmp(sub, "acpi") != 0 || path[0] == '\0') {
         return -1;
@@ -970,6 +977,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     out_rule->active = 1;
     out_rule->class_code = class_code;
     out_rule->subclass = subclass;
+    out_rule->io_base = io_base;
     out_rule->spawned_device_mask = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
@@ -983,6 +991,7 @@ void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text) {
     for (uint32_t i = 0; i < ACPI_MATCH_RULE_CAP; ++i) {
         state->acpi_match_rules[i].active = 0;
         state->acpi_match_rules[i].subclass = MATCH_ANY_U8;
+        state->acpi_match_rules[i].io_base = 0;
         state->acpi_match_rules[i].spawned_device_mask = 0;
     }
     for (int32_t i = 0;;) {
@@ -1004,4 +1013,20 @@ void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text) {
         i = line_end + 1;
     }
     state->acpi_match_rule_count = out_count;
+}
+
+int dm_acpi_rule_matches(const acpi_match_rule_t* rule, const pci_device_record_t* rec) {
+    if (!rule || !rec || rec->bus != 0xFFu) {
+        return 0;
+    }
+    if (rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) {
+        return 0;
+    }
+    if (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) {
+        return 0;
+    }
+    if (rule->io_base != 0 && rec->device_id != rule->io_base) {
+        return 0;
+    }
+    return 1;
 }

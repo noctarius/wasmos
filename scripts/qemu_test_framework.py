@@ -45,6 +45,13 @@ class QemuConfig:
     userfs_snapshot: bool = True
     nographic: bool = True
     display: str = ""
+    # File the guest's COM2 is captured into. The shipped kernel.cmdline sets
+    # log.serial=com2, so COM2 carries the kernel log and nothing else, written
+    # by the kernel directly: complete and in order whatever the vt is doing,
+    # whichever slot COM1 is bound to. Empty: QemuSession.start creates one per
+    # session in WASMOS_QEMU_SYSLOG_DIR (default: the temp dir), kept only when
+    # a timeout reported it.
+    syslog_path: str = ""
     isolate_esp: bool = False
     # QMP monitor: set enable_monitor=True to have QemuSession auto-create the
     # socket, or set monitor_socket directly to a path to use a specific one.
@@ -372,9 +379,10 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         cmd += ["-accel", accel]
     if cfg.smp_count > 1:
         cmd += ["-smp", str(cfg.smp_count)]
+    cmd += ["-serial", "mon:stdio"]
+    if cfg.syslog_path:
+        cmd += ["-serial", f"file:{cfg.syslog_path}"]
     cmd += [
-        "-serial",
-        "mon:stdio",
         "-drive",
         f"if=pflash,format=raw,readonly=on,file={cfg.ovmf_code}",
     ]
@@ -888,6 +896,9 @@ class QemuSession:
         self.panic_is_fatal = panic_is_fatal
         self.proc: Optional[subprocess.Popen] = None
         self._stall_dumps = 0
+        self._syslog_reports = 0
+        # COM2 capture file, set by start(); see QemuConfig.syslog_path.
+        self.syslog_path = cfg.syslog_path
         # Guest-reset detection. The scan starts only once a prompt has been
         # seen: the banner is also printed by the FIRST boot, where it means
         # nothing.
@@ -951,6 +962,16 @@ class QemuSession:
                 monitor_socket=monitor_socket,
             )
 
+        if not runtime_cfg.syslog_path:
+            fd, syslog_path = tempfile.mkstemp(
+                prefix="wasmos-syslog-",
+                suffix=".log",
+                dir=os.environ.get("WASMOS_QEMU_SYSLOG_DIR") or None,
+            )
+            os.close(fd)
+            runtime_cfg = replace(runtime_cfg, syslog_path=syslog_path)
+        self.syslog_path = runtime_cfg.syslog_path
+
         cmd = build_qemu_cmd(runtime_cfg)
         self.proc = subprocess.Popen(
             cmd,
@@ -977,6 +998,7 @@ class QemuSession:
 
         if not self.proc:
             return
+        self._discard_unreported_syslog()
         try:
             if self.proc.poll() is None:
                 try:
@@ -1162,6 +1184,49 @@ class QemuSession:
         """Whether the guest reset after first reaching a prompt."""
         return self._restarted
 
+    def syslog_tail(self, max_bytes: int = 4096) -> str:
+        """The last `max_bytes` of the COM2 kernel log, or "" when there is none."""
+        path = self.syslog_path
+        if not path or max_bytes <= 0:
+            return ""
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - max_bytes))
+                return f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    def _discard_unreported_syslog(self) -> None:
+        """Delete a session-created COM2 capture that no timeout ever pointed at.
+
+        Every session gets one, so keeping them all would grow the temp dir by a
+        file per test class forever; the one a failure report named is the one
+        worth keeping. A path the caller supplied is the caller's to manage.
+        """
+        if self.cfg.syslog_path or self._syslog_reports or not self.syslog_path:
+            return
+        try:
+            os.unlink(self.syslog_path)
+        except OSError:
+            pass
+
+    def report_syslog(self, reason: str) -> None:
+        """Print where the COM2 kernel log is and its tail, once or twice per session.
+
+        COM1 shows the kernel log only while vt-1 is the serial-bound slot, and
+        only as fast as the vt drains it; COM2 has every line the kernel wrote,
+        in order, which is the record a timeout needs.
+        """
+        if self._syslog_reports >= _STALL_DUMP_MAX:
+            return
+        self._syslog_reports += 1
+        tail = self.syslog_tail()
+        print(f"=== [syslog] {reason}: {self.syslog_path} ===", flush=True)
+        if tail:
+            print(tail.rstrip(), flush=True)
+
     def dump_stall_state(self, reason: str) -> str:
         """Report what every vCPU is executing, symbolised against the kernel.
 
@@ -1180,6 +1245,7 @@ class QemuSession:
         (`--- CPU n` / `rip=<16 hex>`), so a saved CI log can be piped through
         `scripts/decode_kernel_panic.py` unchanged.
         """
+        self.report_syslog(reason)
         if not _STALL_DUMP_ENABLED or self.monitor is None:
             return ""
         if self._stall_dumps >= _STALL_DUMP_MAX:

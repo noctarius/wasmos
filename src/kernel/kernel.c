@@ -94,6 +94,36 @@ static void kernel_publish_boot_partition(const boot_info_t* boot_info) {
     klog_printf("[kernel] boot.partition %s\n", value);
 }
 
+/* Publishes the boot command line (\kernel.cmdline on the ESP) into kenv and acts on
+ * the options the kernel itself consumes.  Runs first thing in kmain, so an option
+ * such as the kernel-log port covers nearly the whole boot.
+ *
+ *   log.serial=com2   transmit the kernel log on COM2 as well (serial_log_port_enable);
+ *                     COM1 is unchanged.  A port with no UART behind it is reported
+ *                     and ignored. */
+static void kernel_apply_cmdline(const boot_info_t* boot_info) {
+    if ((boot_info->flags & BOOT_INFO_FLAG_CMDLINE_PRESENT) == 0u) {
+        return;
+    }
+    uint32_t published = kenv_load_cmdline(boot_info->cmdline);
+    klog_printf("[kernel] cmdline: %s (%u option(s))\n", boot_info->cmdline, (unsigned)published);
+
+    char port[16];
+    uint32_t written = 0;
+    if (kenv_get("log.serial", port, sizeof(port), &written) != WASMOS_OK) {
+        return;
+    }
+    if (strcmp(port, "com2") != 0) {
+        klog_printf("[kernel] log.serial=%s: unsupported port, only com2 is\n", port);
+        return;
+    }
+    if (serial_log_port_enable(0x2F8) != 0) {
+        klog_write("[kernel] log.serial=com2: no UART at 0x2f8, kernel log stays on COM1 only\n");
+        return;
+    }
+    klog_write("[kernel] log.serial=com2: kernel log also on COM2\n");
+}
+
 static const uint8_t g_preempt_test_enabled = 0;
 #ifndef WASMOS_RING3_SMOKE_DEFAULT
 #define WASMOS_RING3_SMOKE_DEFAULT 0
@@ -257,6 +287,7 @@ void kmain(boot_info_t* boot_info) {
     klog_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
                 (unsigned long long)boot_info->version,
                 (unsigned long long)boot_info->size);
+    kernel_apply_cmdline(boot_info);
     g_boot_info = boot_info;
     framebuffer_init(boot_info);
     cpu_init();

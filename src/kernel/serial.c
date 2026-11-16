@@ -1,8 +1,11 @@
 /* serial.c - COM1 UART serial driver and kernel console output.
  * Drives COM1 (0x3F8) at 115200 baud for early and runtime debug output.
  * Every write also fans out to the console_ring_t shared-memory ring for
- * user-space readers, to the VT-owned klog ring when one is registered, and to a
- * small early-log capture buffer for driver handoff.
+ * user-space readers and to a small early-log capture buffer for driver handoff.
+ * Once the vt registers its console ring, kernel log and console output are
+ * published there INSTEAD of being transmitted: the vt owns COM1 from then on
+ * and writes the serial-bound slot through serial_owner_write.  Text the ring
+ * cannot take, and every unlocked (panic/NMI) write, still goes straight to COM1.
  * The state on the logging path (lock, console ring, klog ring, early log) is
  * reached through *_slot() accessors that add the kernel higher-half offset once
  * serial_enable_high_alias(1) is set, so logging works under a root with no low
@@ -20,6 +23,8 @@
 #include "paging.h"
 #include "xfer_buffer.h"
 #include "wasmos/ringbuf.h"
+#include "wasmos_driver_abi.h"
+#include "wasmos_status.h"
 /* SERIAL_DRIVER_* opcodes come from the generated IPC opcode ABI (abi/opcodes.yaml). */
 #include "../../abi/generated/c/wasmos_opcodes.h"
 
@@ -72,17 +77,25 @@ static uint32_t g_console_ring_id = 0;
 static console_ring_t* g_console_ring = 0;
 
 /* klog ring: physical base + byte size of the VT-owned SPSC ring.
- * phys == 0 means no VT ring is registered yet, so klog_ring_write is a no-op
+ * phys == 0 means no VT ring is registered yet, so console_ring_publish takes nothing
  * and early boot keeps flowing only to console_ring + COM1 TX. */
 static uint64_t g_klog_ring_phys = 0;
 static uint32_t g_klog_ring_bytes = 0;
-/* Doorbell for the ring's consumer.  klog_ring_write runs under g_serial_lock and
- * from interrupt and panic context, so it may not send IPC itself; it only raises
+/* Doorbell for the ring's consumer.  console_ring_publish runs under g_serial_lock,
+ * possibly in interrupt context, so it may not send IPC itself; it only raises
  * g_klog_doorbell_pending, and klog_poll() delivers the notify from the scheduler
  * loop, where no serial lock is held.  Endpoint 0 means no consumer registered a
  * doorbell, which keeps the whole path inert. */
 static uint32_t g_klog_notify_endpoint = 0;
 static volatile uint8_t g_klog_doorbell_pending = 0;
+/* Context that registered the ring.  It drains every record and owns COM1 for
+ * the text it was handed, so it is the only caller serial_owner_write accepts. */
+static uint32_t g_klog_ring_owner = 0;
+/* Kernel-log port: the I/O base of a second UART that carries the kernel log and
+ * nothing else, written by the kernel directly on every kernel-log write --
+ * whatever the vt is doing, whichever slot serial is bound to.  0 means none.
+ * Set once from the `log.serial` boot option (serial_log_port_enable). */
+static uint16_t g_log_port = 0;
 
 static inline ksync_spinlock_t* serial_lock_ptr(void) {
     uintptr_t addr = (uintptr_t)&g_serial_lock;
@@ -148,6 +161,22 @@ static inline uint32_t* serial_klog_notify_endpoint_slot(void) {
     return (uint32_t*)(void*)addr;
 }
 
+static inline uint32_t* serial_klog_ring_owner_slot(void) {
+    uintptr_t addr = (uintptr_t)&g_klog_ring_owner;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (uint32_t*)(void*)addr;
+}
+
+static inline uint16_t* serial_log_port_slot(void) {
+    uintptr_t addr = (uintptr_t)&g_log_port;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (uint16_t*)(void*)addr;
+}
+
 static inline volatile uint8_t* serial_klog_doorbell_slot(void) {
     uintptr_t addr = (uintptr_t)&g_klog_doorbell_pending;
     if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
@@ -196,6 +225,15 @@ static void com1_serial_init(void) {
     outb(COM1_PORT + 3, 0x03); // 8 bits, no parity, one stop
     outb(COM1_PORT + 2, 0xC7); // Enable FIFO, clear, 14-byte threshold
     outb(COM1_PORT + 4, 0x0B); // IRQs enabled, RTS/DSR set
+}
+
+/* One byte to the kernel-log port.  The wait for THR-empty is bounded: a UART
+ * that stops draining drops log bytes rather than wedging every kernel-log
+ * writer behind it. */
+static void log_port_put_char(uint16_t port, char c) {
+    for (uint32_t spin = 0; spin < 100000u && (inb((uint16_t)(port + 5)) & 0x20) == 0; ++spin) {
+    }
+    outb(port, (uint8_t)c);
 }
 
 static void com1_serial_put_char(char c) {
@@ -486,13 +524,17 @@ static void serial_ring_write(const char* s) {
     ring->write_pos = wp;
 }
 
-/* Publish a klog string into the VT-owned SPSC ring, if one is registered.
- * Additive to serial_ring_write; a short write (ring near full) silently drops
- * the tail — klog is advisory and COM1 TX carries the full log regardless. */
-static void klog_ring_write(const char* s) {
+/* Publish `s` into the vt's console ring as records for `slot`
+ * (VT_CONSOLE_SLOT_KLOG for kernel log), at most VT_CONSOLE_RECORD_TEXT_MAX bytes
+ * of text per record.  Returns how many leading bytes of `s` were published:
+ * all of them, or fewer when no ring is registered or the ring is full.  The
+ * caller transmits the remainder itself, so text is never lost -- only, on a
+ * full ring, reordered ahead of what the vt has yet to drain.  Raises the
+ * doorbell when anything was published. */
+static uint32_t console_ring_publish(uint8_t slot, const char* s) {
     uint64_t phys = *serial_klog_ring_phys_slot();
     if (!phys || !s) {
-        return;
+        return 0;
     }
     uint32_t bytes = *serial_klog_ring_bytes_slot();
     /* The stored base is a raw physical address; reach it through the kernel
@@ -503,19 +545,27 @@ static void klog_ring_write(const char* s) {
     }
     wasmos_ringbuf_t rb;
     if (wasmos_ringbuf_attach(&rb, ptr_cast(void, phys), bytes) != 0) {
-        return;
+        return 0;
     }
-    uint32_t len = 0;
-    while (s[len]) {
-        len++;
+    uint8_t record[1u + VT_CONSOLE_RECORD_TEXT_MAX];
+    uint32_t published = 0;
+    record[0] = slot;
+    while (s[published]) {
+        uint32_t n = 0;
+        while (n < VT_CONSOLE_RECORD_TEXT_MAX && s[published + n]) {
+            record[1u + n] = (uint8_t)s[published + n];
+            n++;
+        }
+        if (wasmos_ringbuf_write_record(&rb, record, 1u + n) < 0) {
+            break;
+        }
+        published += n;
     }
-    if (len == 0) {
-        return;
-    }
-    if (wasmos_ringbuf_write(&rb, s, len) > 0) {
+    if (published != 0) {
         /* Raise the doorbell only; klog_poll() sends it.  See the declaration. */
         *serial_klog_doorbell_slot() = 1;
     }
+    return published;
 }
 
 /* Deliver a pending klog doorbell to the registered consumer.  Called from the
@@ -550,18 +600,22 @@ void klog_poll(void) {
 }
 
 /* Adopts an already-initialised ringbuf, owned by owner_context_id as
- * xfer-buffer `id`, as the destination of the additional klog stream.  Only one
- * ring is tracked; a second successful call replaces the first, and there is no
+ * xfer-buffer `id`, as the console ring: from then on kernel log and console
+ * output are published there as records and not transmitted, and
+ * owner_context_id owns COM1 for that text (serial_owner_write).  Only one ring
+ * is tracked; a second successful call replaces the first, and there is no
  * unregister.
  *
- * Returns 0 once the ring is live, -1 for a zero id, an id that does not resolve
- * to a BUFFER_KIND_TRANSFER buffer of that owner, a base that is zero or not
- * page-aligned, a zero size, or a region that does not carry a valid ringbuf
- * header.  The rejection matters: an accepted bad region would corrupt memory on
- * every subsequent klog write. */
+ * Returns 0 once the ring is live; WASMOS_INVAL for a zero id, a zero base or
+ * size, or a region without a valid ringbuf header; xfer_buffer_describe's code
+ * for an id that is not a BUFFER_KIND_TRANSFER buffer of that owner;
+ * WASMOS_ERR_KERNEL_UNALIGNED for a base that is not page-aligned; and
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED for a notify endpoint the owner does not own.
+ * The rejection matters: an accepted bad region would corrupt memory on every
+ * subsequent write. */
 int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_endpoint) {
     if (id == 0) {
-        return -1;
+        return WASMOS_INVAL;
     }
     /* The doorbell may only name an endpoint the registering context owns, so a
      * caller cannot point kernel notifies at a third party's endpoint. */
@@ -569,7 +623,7 @@ int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_e
         uint32_t notify_owner = 0;
         if (ipc_endpoint_owner(notify_endpoint, &notify_owner) != IPC_OK ||
             notify_owner != owner_context_id) {
-            return -1;
+            return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
         }
     }
     /* The VT owns the ring as a BUFFER_KIND_TRANSFER xfer-buffer (the same
@@ -577,13 +631,17 @@ int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_e
      * take its physical base.  No pin/retain: the VT holds the buffer for its
      * whole lifetime, matching the kernel's fixed-region console_ring model. */
     xfer_buffer_t buf;
-    if (xfer_buffer_describe(id, BUFFER_KIND_TRANSFER, owner_context_id, &buf) != WASMOS_ERR_NONE) {
-        return -1;
+    int32_t describe_rc = xfer_buffer_describe(id, BUFFER_KIND_TRANSFER, owner_context_id, &buf);
+    if (describe_rc != WASMOS_ERR_NONE) {
+        return describe_rc;
     }
     uint64_t base = xfer_buffer_object_phys(&buf);
     uint32_t region_bytes = buf.size_bytes;
-    if (base == 0 || (base & 0xFFFull) != 0 || region_bytes == 0) {
-        return -1;
+    if (base == 0 || region_bytes == 0) {
+        return WASMOS_INVAL;
+    }
+    if ((base & 0xFFFull) != 0) {
+        return WASMOS_ERR_KERNEL_UNALIGNED;
     }
     uint64_t alias = base;
     if (g_serial_high_alias_enabled && alias < KERNEL_HIGHER_HALF_BASE) {
@@ -593,11 +651,12 @@ int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_e
      * bad/foreign id cannot wedge klog output. */
     wasmos_ringbuf_t rb;
     if (wasmos_ringbuf_attach(&rb, ptr_cast(void, alias), region_bytes) != 0) {
-        return -1;
+        return WASMOS_INVAL;
     }
     *serial_klog_ring_bytes_slot() = region_bytes;
     *serial_klog_notify_endpoint_slot() = notify_endpoint;
-    /* Publish phys last: klog_ring_write reads phys first, so a non-zero phys
+    *serial_klog_ring_owner_slot() = owner_context_id;
+    /* Publish phys last: console_ring_publish reads phys first, so a non-zero phys
      * always implies a valid bytes value and doorbell endpoint are visible. */
     *serial_klog_ring_phys_slot() = base;
     return 0;
@@ -626,8 +685,70 @@ void serial_init(void) {
     serial_ring_init();
 }
 
+/* Common body of every console writer: the legacy console ring and the early-log
+ * capture always see `s`, and kernel log is transmitted on the kernel-log port
+ * when one is enabled; with `route` set it is then offered to the vt's console
+ * ring as records for `slot`, and only what the ring did not take is transmitted
+ * on COM1 with LF->CRLF expansion.  Without `route` all of it is transmitted.
+ *
+ * Takes no lock.  Preemption is disabled across the whole body, so a preemptible
+ * caller cannot be descheduled part-way through a line.  A NULL string is
+ * ignored, and a string literal in the kernel image is rebased onto the
+ * higher-half alias when that alias is armed. */
+static void serial_emit(uint8_t slot, const char* s, int route) {
+    if (!s) {
+        return;
+    }
+    if (g_serial_high_alias_enabled) {
+        uintptr_t sp = (uintptr_t)s;
+        if (serial_ptr_needs_kernel_alias(sp)) {
+            s = ptr_cast(char, ((uint64_t)sp + KERNEL_HIGHER_HALF_BASE));
+        }
+    }
+    if (!*serial_console_ring_slot()) {
+        serial_ring_init();
+    }
+    uint8_t* early_log = serial_early_log_buf();
+    uint32_t* early_head = serial_early_log_head_slot();
+    uint32_t* early_count = serial_early_log_count_slot();
+    preempt_disable();
+    serial_ring_write(s);
+    for (const char* p = s; *p; ++p) {
+        if (*p == '\n') {
+            early_log[*early_head] = '\r';
+            *early_head = (*early_head + 1) % EARLY_LOG_SIZE;
+            if (*early_count < EARLY_LOG_SIZE) {
+                (*early_count)++;
+            }
+        }
+        early_log[*early_head] = (uint8_t)*p;
+        *early_head = (*early_head + 1) % EARLY_LOG_SIZE;
+        if (*early_count < EARLY_LOG_SIZE) {
+            (*early_count)++;
+        }
+    }
+    uint16_t log_port = *serial_log_port_slot();
+    if (log_port != 0 && slot == VT_CONSOLE_SLOT_KLOG) {
+        for (const char* p = s; *p; ++p) {
+            if (*p == '\n') {
+                log_port_put_char(log_port, '\r');
+            }
+            log_port_put_char(log_port, *p);
+        }
+    }
+    const char* rest = route ? s + console_ring_publish(slot, s) : s;
+    for (const char* p = rest; *p; ++p) {
+        if (*p == '\n') {
+            serial_transmit('\r');
+        }
+        serial_transmit(*p);
+    }
+    preempt_enable();
+}
+
 /* The normal console writer: takes g_serial_lock so concurrent CPUs cannot
- * interleave their output, then does the work in serial_write_unlocked.
+ * interleave their output, then emits `s` as kernel log -- through the vt's
+ * console ring once one is registered, on COM1 before that.
  *
  * Spins on the UART's TX-ready bit for every byte, so cost is proportional to
  * the string at 115200 baud.  NULL is ignored.  Not safe from an exception, NMI
@@ -638,8 +759,48 @@ void serial_write(const char* s) {
         return;
     }
     ksync_spinlock_lock(serial_lock_ptr());
-    serial_write_unlocked(s);
+    serial_emit(VT_CONSOLE_SLOT_KLOG, s, 1);
     ksync_spinlock_unlock(serial_lock_ptr());
+}
+
+/* Console output of a process whose controlling slot is `tty`: published to the
+ * vt's console ring for that slot, so it lands on the slot and reaches serial
+ * only when the vt mirrors that slot there.  `tty` 0 -- no controlling slot -- is
+ * kernel log, exactly serial_write.  Same lock, context rules and fallback as
+ * serial_write: with no ring registered, or one too full to take the text, it
+ * is transmitted on COM1. */
+void console_write_tty(uint32_t tty, const char* s) {
+    if (!s) {
+        return;
+    }
+    uint8_t slot = (tty > 0xFFu) ? (uint8_t)VT_CONSOLE_SLOT_KLOG : (uint8_t)tty;
+    ksync_spinlock_lock(serial_lock_ptr());
+    serial_emit(slot, s, 1);
+    ksync_spinlock_unlock(serial_lock_ptr());
+}
+
+/* COM1 output on behalf of the console ring's owner: the vt writing the
+ * serial-bound slot.  Nothing here reaches any ring or the early log, since the
+ * text came out of the console ring in the first place.  LF is expanded to CRLF.
+ *
+ * Returns 0, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED when no console ring is
+ * registered or context_id is not the context that registered it. */
+int32_t serial_owner_write(uint32_t context_id, const char* s, uint32_t len) {
+    if (*serial_klog_ring_phys_slot() == 0 || context_id == 0 ||
+        context_id != *serial_klog_ring_owner_slot()) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
+    ksync_spinlock_lock(serial_lock_ptr());
+    preempt_disable();
+    for (uint32_t i = 0; i < len; ++i) {
+        if (s[i] == '\n') {
+            serial_transmit('\r');
+        }
+        serial_transmit(s[i]);
+    }
+    preempt_enable();
+    ksync_spinlock_unlock(serial_lock_ptr());
+    return 0;
 }
 
 /* Formats through vsnprintf into a 512-byte stack buffer and emits it with
@@ -706,57 +867,63 @@ void serial_write_hex64_unlocked(uint64_t value) {
     serial_write_unlocked(buf);
 }
 
-/* The whole write path — console ring, klog ring, COM1 TX with LF->CRLF
- * expansion, early-log capture — with the lock deliberately NOT taken.
+/* The write path -- console ring, early-log capture, COM1 TX with LF->CRLF
+ * expansion -- with the lock deliberately NOT taken, and never through the vt's
+ * console ring: this always transmits.
  *
  * It exists for contexts that cannot wait on g_serial_lock: a panic or exception
  * handler may have interrupted a CPU that is holding it, and an NMI can arrive
  * while this very CPU holds it, so taking it there deadlocks instead of
- * printing.  The cost is that output from another CPU can interleave
- * mid-string, and a concurrent writer can corrupt the ring positions; a
- * garbled panic line is the accepted trade for one that appears at all.
- *
- * Also the body of serial_write, which supplies the lock.  Preemption is
- * disabled across the transmit loop either way, so a preemptible caller cannot
- * be descheduled part-way through a line.  A NULL string is ignored, and a
- * string literal in the kernel image is rebased onto the higher-half alias when
- * that alias is armed. */
+ * printing.  Those are also the contexts in which the vt may never drain its
+ * ring again, which is why the text goes straight to the wire.  The cost is
+ * that output from another CPU can interleave mid-string, and a concurrent
+ * writer can corrupt the ring positions; a garbled panic line is the accepted
+ * trade for one that appears at all. */
 void serial_write_unlocked(const char* s) {
-    if (!s) {
-        return;
+    serial_emit(VT_CONSOLE_SLOT_KLOG, s, 0);
+}
+
+/* Programs the UART at I/O base `port` (115200 8N1, FIFO on, interrupts off) as
+ * the kernel-log port and replays the early-log capture into it, so the port
+ * starts with the boot output written before it existed.  From then on every
+ * kernel-log write -- locked or unlocked, routed through the vt or not -- is also
+ * transmitted there.  Console output of processes with a controlling slot is not.
+ *
+ * Returns 0, or WASMOS_NOENT when no UART answers at `port` (its scratch register
+ * does not hold a written value), in which case nothing changes.  Call it once,
+ * early, before other CPUs log. */
+int32_t serial_log_port_enable(uint16_t port) {
+    outb((uint16_t)(port + 7), 0x5A);
+    if (inb((uint16_t)(port + 7)) != 0x5A) {
+        return WASMOS_NOENT;
     }
-    if (g_serial_high_alias_enabled) {
-        uintptr_t sp = (uintptr_t)s;
-        if (serial_ptr_needs_kernel_alias(sp)) {
-            s = ptr_cast(char, ((uint64_t)sp + KERNEL_HIGHER_HALF_BASE));
+    outb((uint16_t)(port + 1), 0x00); /* interrupts off */
+    outb((uint16_t)(port + 3), 0x80); /* DLAB */
+    outb((uint16_t)(port + 0), 0x01); /* divisor low: 115200 baud */
+    outb((uint16_t)(port + 1), 0x00); /* divisor high */
+    outb((uint16_t)(port + 3), 0x03); /* 8N1 */
+    outb((uint16_t)(port + 2), 0xC7); /* FIFO on, cleared, 14-byte threshold */
+    outb((uint16_t)(port + 4), 0x03); /* DTR + RTS, OUT2 clear: no IRQ */
+
+    ksync_spinlock_lock(serial_lock_ptr());
+    uint32_t count = *serial_early_log_count_slot();
+    if (count >= EARLY_LOG_SIZE) {
+        static const char k_lost[] = "[serial] log port: earlier boot output not retained\r\n";
+        for (const char* p = k_lost; *p; ++p) {
+            log_port_put_char(port, *p);
         }
     }
-    if (!*serial_console_ring_slot()) {
-        serial_ring_init();
-    }
-    uint8_t* early_log = serial_early_log_buf();
-    uint32_t* early_head = serial_early_log_head_slot();
-    uint32_t* early_count = serial_early_log_count_slot();
-    preempt_disable();
-    serial_ring_write(s);
-    klog_ring_write(s);
-    for (const char* p = s; *p; ++p) {
-        if (*p == '\n') {
-            serial_transmit('\r');
-            early_log[*early_head] = '\r';
-            *early_head = (*early_head + 1) % EARLY_LOG_SIZE;
-            if (*early_count < EARLY_LOG_SIZE) {
-                (*early_count)++;
-            }
-        }
-        serial_transmit(*p);
-        early_log[*early_head] = (uint8_t)*p;
-        *early_head = (*early_head + 1) % EARLY_LOG_SIZE;
-        if (*early_count < EARLY_LOG_SIZE) {
-            (*early_count)++;
+    uint8_t chunk[64];
+    for (uint32_t off = 0; off < count; off += (uint32_t)sizeof(chunk)) {
+        uint32_t n = count - off < (uint32_t)sizeof(chunk) ? count - off : (uint32_t)sizeof(chunk);
+        serial_early_log_copy(chunk, off, n);
+        for (uint32_t i = 0; i < n; ++i) {
+            log_port_put_char(port, (char)chunk[i]);
         }
     }
-    preempt_enable();
+    *serial_log_port_slot() = port;
+    ksync_spinlock_unlock(serial_lock_ptr());
+    return 0;
 }
 
 /* Bytes currently retrievable through serial_early_log_copy, saturating at

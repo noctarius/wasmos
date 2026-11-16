@@ -65,8 +65,11 @@ extern int32_t wasmos_ipc_last_field(int32_t field) WASMOS_WASM_IMPORT("wasmos",
  * are also possible; see the note at the top of this file.
  */
 extern int32_t wasmos_console_read(int32_t buf, int32_t len) WASMOS_WASM_IMPORT("wasmos", "console_read");
-/* Write len bytes from guest memory at buf_offset to the kernel log, emitted in
- * NUL-terminated 127-byte chunks. Returns 0 on success -- including for len==0,
+/* Write len bytes from guest memory at buf_offset to the caller's controlling
+ * text slot -- the vt slot of the shell that started it -- or, for a process
+ * with none, to the kernel log; emitted in NUL-terminated 127-byte chunks.
+ * The vt puts a slot on serial only while that slot is serial-bound. Returns 0
+ * on success -- including for len==0,
  * which is a no-op rather than a failure -- WASMOS_INVAL if `len` is negative,
  * or WASMOS_ERR_KERNEL_BAD_POINTER if [buf_offset, buf_offset+len) is not a
  * readable range of the caller's linear memory.
@@ -730,14 +733,20 @@ extern int32_t wasmos_xfer_buffer_map(int32_t buffer_id) WASMOS_WASM_IMPORT("was
  * buffer_id or context.
  */
 extern int32_t wasmos_xfer_buffer_unmap(int32_t buffer_id) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_unmap");
-/* klog ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
- * xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the kernel
- * klog ring, so serial_write publishes klog text into it for the VT to drain
- * into vt-1.  notify_endpoint is the caller's own endpoint and receives a
- * fire-and-forget VT_IPC_KLOG_NOTIFY doorbell once bytes are pending, so a
- * consumer parked on it drains without polling; pass 0 for no doorbell.
- * Returns 0 on success, -1 on a bad/foreign buffer id or a notify_endpoint the
- * caller does not own.
+/* Console ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
+ * xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the
+ * console ring. From then on kernel log and every process's console output are
+ * published into it as slot-tagged records (VT_CONSOLE_SLOT_KLOG or the
+ * writer's controlling slot) instead of going to COM1, and the caller owns
+ * COM1 for that text through serial_owner_write. notify_endpoint is the
+ * caller's own endpoint and receives a fire-and-forget VT_IPC_KLOG_NOTIFY
+ * doorbell once records are pending, so a consumer parked on it drains
+ * without polling; pass 0 for no doorbell. Returns 0 on success; WASMOS_INVAL
+ * for a non-positive id or a region without a valid ringbuf header; the
+ * WASMOS_ERR_XFER_BUFFER_* code for an id that is not the caller's transfer
+ * buffer; WASMOS_ERR_KERNEL_UNALIGNED for a base that is not page-aligned;
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED for a notify_endpoint the caller does not
+ * own; or WASMOS_ERR_KERNEL_NO_CALLER.
  */
 extern int32_t wasmos_klog_register_ring(int32_t id, int32_t notify_endpoint) WASMOS_WASM_IMPORT("wasmos", "klog_register_ring");
 /* Allocate one message-signalled interrupt vector and bind it to `endpoint`,
@@ -823,5 +832,15 @@ extern int32_t wasmos_io_region_out16(int32_t region, int32_t offset, int32_t va
  * io.port capability.
  */
 extern int32_t wasmos_io_region_out32(int32_t region, int32_t offset, int32_t value) WASMOS_WASM_IMPORT("wasmos", "io_region_out32");
+/* Transmit len bytes from guest memory at buf_offset on COM1, '\n' expanded to
+ * "\r\n", without publishing them to the console ring or the kernel log. Only
+ * the process that registered the console ring (klog_register_ring) may call
+ * it: that is the vt, which writes its serial-bound slot through it. Returns 0
+ * on success (including len == 0), WASMOS_INVAL for a negative len,
+ * WASMOS_ERR_KERNEL_BAD_POINTER if the range is not readable linear memory,
+ * WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED when the
+ * caller did not register the console ring.
+ */
+extern int32_t wasmos_serial_owner_write(int32_t buf, int32_t len) WASMOS_WASM_IMPORT("wasmos", "serial_owner_write");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

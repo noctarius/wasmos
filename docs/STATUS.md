@@ -1353,34 +1353,35 @@ linked feature documents for rationale and rollout plans.
 - Native services use explicit cancellation for stack-backed synchronous IPC
   waits. `font-service` provides TTF measurement/rasterization for compositor
   and libui clients.
-- The `vt` service is the I/O multiplexer (`docs/architecture/19`). Phases 0–4
-  are shipped: idle-spin fixes, serial RX via IRQ4 into the serial-bound slot,
-  push-based CLI input, a single loadable-keymap decoder, and (phase 4) kernel
-  klog into vt-1. klog rides a VT-owned SPSC ring (`wasmos/ringbuf.h`) overlaid
-  on a `BUFFER_KIND_TRANSFER` xfer-buffer — the socket-ring transport —
-  registered with the kernel via `klog_register_ring`; `serial_write`
-  publishes into it additively (legacy `console_ring` + fbpci drain retained for
-  early-boot on-screen klog, retired in phase 5). The VT blocks on
-  `wasmos_ipc_select_one` and drains the ring on each wake (a timed select set
-  stranded serial input under WARP; there is no ring doorbell yet). WARP notes:
-  the overlay needs the VT's `INITIAL_MEMORY`/`heap_pages` tuned so the window
-  lands in declared linear memory below the 2 MiB low-guard (a cheap page-fault,
-  not a multi-MiB commit); a new hostcall needs the numbered `warp_ring3_dispatch`
-  case plus the AOT tool's symbol table, and `--initial/max-memory` changes are
-  content-cached under `.cache/warp_aot`.
-- Phase 5 (in progress): tty switching repaints the target slot with a single
-  shared-buffer grid blit (`FBTEXT_IPC_BLIT_ATTACH`/`BLIT_GRID`, cell grid in a
-  VT-owned xfer-buffer granted READ to the framebuffer driver) instead of a
-  per-cell `CELL_WRITE` IPC loop. The per-cell loop stormed the driver's queue
-  and, under SMP, starved it — an ~80 s switch wedge; the blit is one IPC.
-  Verified by `tests/test_vt_tty_switch.py`. The compositor now owns the
-  framebuffer only while vt-0 is visible: it switches to vt-0 once (first window),
-  never auto-grabs again, and draws only while the vt reports vt-0 visible
-  (`VT_IPC_VIS_NOTIFY`, sent on every switch; "hidden" is sent before the vt
-  repaints the text slot so the compositor stops first). Switching is user-driven
-  (`Ctrl+Shift+Fn` / `tty N`). Still to do in phase 5: default-visible vt-1 +
-  retiring the fbpci console-ring drain, the serial-bound-slot selector, and lazy
-  per-slot CLI spawn.
+- The `vt` service is the I/O multiplexer (`docs/architecture/19`), phases 0–5
+  shipped: serial RX via IRQ4 into the serial-bound slot, push-based CLI input, a
+  single loadable-keymap decoder, a default-visible system console (vt-1), the
+  serial-bound selector (`tty -s N`), lazy per-slot shells, and tty switches that
+  repaint with one shared-buffer grid blit. The compositor owns the framebuffer
+  only while vt-0 is visible (`VT_IPC_VIS_NOTIFY`).
+- Console output is routed by slot. Every process has a controlling slot
+  (`process_t.ctty`): a shell gets the slot it was spawned for, anything else
+  inherits its requester's, and services/drivers have none. `wasmos_console_write`
+  and native `api->console_write` publish into the vt's console ring (a VT-owned
+  SPSC ring on a `BUFFER_KIND_TRANSFER` xfer-buffer, 16 KiB, with a
+  `VT_IPC_KLOG_NOTIFY` doorbell) as records tagged with that slot; kernel log is
+  slot 0 and is shown on vt-1. Registering the ring hands COM1 to the vt, which
+  transmits only the serial-bound slot's stream (`serial_owner_write`); the kernel
+  transmits directly only before the ring exists, when the ring is full, and on
+  the unlocked panic path. Per slot, `vt_outmux` merges writer output with the
+  kernel log so a log line never lands inside a typed command (it erases the open
+  line, prints, and repaints it). `VT_IPC_WRITE_REQ` is retired.
+- The bootloader passes `\kernel.cmdline` from the ESP (optional, 255 bytes,
+  `boot_info_t.cmdline`, `BOOT_INFO_VERSION` 6); the kernel publishes its
+  `key=value` tokens into kenv first thing in `kmain`. The shipped file sets
+  `log.serial=com2`: COM2 carries the kernel log only, written by the kernel
+  directly (early-log replay, then every kernel-log write, unlocked paths
+  included). The QEMU harness captures COM2 per session and prints its tail on
+  every timeout; the run targets write it to `build/syslog.log`.
+- WARP notes for the vt: its ring and blit overlays need `INITIAL_MEMORY` /
+  `heap_pages` tuned so each window lands in declared linear memory below the
+  2 MiB low-guard, and `--initial/max-memory` changes are content-cached under
+  `.cache/warp_aot`.
 
 ## Drivers and Hardware
 

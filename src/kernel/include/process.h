@@ -300,6 +300,12 @@ typedef struct process {
      * header + args blob, or 0 if none. Returned by the wasmos_spawn_info_buffer()
      * hostcall so the child can read its startup contract. */
     uint32_t spawn_info_buffer_id;
+    /* Controlling text slot: the vt slot that receives this process's console
+     * output (wasmos_console_write, api->console_write), or 0 for none, in which
+     * case that output is kernel log.  Set once at spawn by the process manager
+     * -- the allocated tty for a wants_tty child, the requester's otherwise --
+     * and never changed.  docs/architecture/19-virtual-terminal.md. */
+    uint8_t ctty;
 } process_t;
 
 /* Snapshot filled by process_info_at_stats for `ps`-style reporting. Every
@@ -424,6 +430,9 @@ process_t* process_get(uint32_t pid);
 process_t* process_find_by_context(uint32_t context_id);
 /* pid dispatched on the calling CPU, or 0 while the scheduler itself is running. */
 uint32_t process_current_pid(void);
+/* Controlling text slot (process_t.ctty) of the process dispatched on the calling
+ * CPU, or 0 when it has none or nothing is dispatched. */
+uint32_t process_current_ctty(void);
 /* Record the status a later exit will publish. Does not itself exit or wake
  * anything; the value is read when the process is marked exited. */
 void process_set_exit_status(process_t* process, int32_t exit_status);

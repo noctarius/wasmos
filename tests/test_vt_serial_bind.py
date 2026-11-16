@@ -22,8 +22,9 @@ class VtSerialBindTests(unittest.TestCase):
 
     Binding to a slot that has no shell is not a dead end: the vt spawns a CLI
     pinned to that slot on the bind, so the serial line gets a prompt from the
-    new shell. The assertions run in one test, in order, because each one moves
-    the session's state.
+    new shell. Serial carries the bound slot's output only, so what a shell on
+    any other slot prints never reaches it. The assertions run in one test, in
+    order, because each one moves the session's state.
     """
 
     @classmethod
@@ -63,19 +64,12 @@ class VtSerialBindTests(unittest.TestCase):
                 f"--- tail ---\n{self.session.tail()}\n"
             )
 
-        mark = self.session.mark()
-        self.session.send("tty -s 2")
-        if not self.session.expect_from(
-            mark, b"serial console bound to tty2", timeout_s=15
-        ):
-            self.fail(
-                "binding the serial console to vt-2 was not confirmed.\n"
-                f"--- tail ---\n{self.session.tail()}\n"
-            )
-
         # vt-2 had no shell, so the bind creates one pinned to it. Its banner is
-        # how a spawn on this path is observable at all.
-        if not self.session.expect_from(mark, b"WAMOS CLI", timeout_s=30):
+        # how both the bind and the spawn are observable on serial: vt-1's shell
+        # prints its own confirmation to vt-1, which is no longer the slot serial
+        # carries.
+        bind = self.session.send_command("tty -s 2", timeout_s=15)
+        if not self.session.expect_from(bind, b"WAMOS CLI", timeout_s=30):
             self.fail(
                 "no CLI was spawned for the newly bound slot.\n"
                 f"--- tail ---\n{self.session.tail()}\n"
@@ -90,6 +84,29 @@ class VtSerialBindTests(unittest.TestCase):
                 "the newly bound slot's CLI did not answer.\n"
                 f"--- tail ---\n{self.session.tail()}\n"
             )
+
+        # Serial carries the bound slot's output and nothing else. vt-2's shell
+        # moves serial back to vt-1; the vt rebinds before it replies, so the
+        # shell's confirmation is written to vt-2 while serial belongs to vt-1
+        # and must not reach the wire. Before a process's output was routed to
+        # its own slot it went to the kernel log and from there to COM1, so it
+        # showed up here whatever the binding.
+        start = self.session.send_command("tty -s 1", timeout_s=20)
+        probe = self.session.send_command("echo back_on_one", timeout_s=20)
+        if not self.session.expect_from(probe, b"back_on_one", timeout_s=20):
+            self.fail(
+                "vt-1's shell did not answer after serial was bound back to it.\n"
+                f"--- tail ---\n{self.session.tail()}\n"
+            )
+        if not self.session.expect_from(probe, b"wamos> ", timeout_s=20):
+            self.fail(
+                f"no prompt after the probe on vt-1.\n--- tail ---\n{self.session.tail()}\n"
+            )
+        self.assertNotIn(
+            b"serial console bound to tty1",
+            bytes(self.session.buf[start:]),
+            "vt-2's shell output reached serial while serial was bound to vt-1",
+        )
 
 
 if __name__ == "__main__":

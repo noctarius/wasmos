@@ -120,4 +120,5 @@
     LINK("wasmos", "io_region_out16", warp_io_region_out16) , \
     LINK("wasmos", "io_region_out32", warp_io_region_out32) , \
     LINK("wasmos", "serial_owner_write", warp_serial_owner_write) , \
-    LINK("wasmos", "kmsg_read", warp_kmsg_read)
+    LINK("wasmos", "kmsg_read", warp_kmsg_read) , \
+    LINK("wasmos", "kmsg_subscribe", warp_kmsg_subscribe)

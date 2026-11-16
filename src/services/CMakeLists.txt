@@ -5,6 +5,7 @@ add_subdirectory(pci_bus)
 add_subdirectory(acpi_bus)
 add_subdirectory(fs_manager)
 add_subdirectory(vt)
+add_subdirectory(logger)
 add_subdirectory(gfx_compositor)
 add_subdirectory(font_service)
 add_subdirectory(net_stack)
@@ -20,6 +21,7 @@ add_custom_target(services DEPENDS
   acpi_bus_app
   fs_manager_app
   vt_app
+  logger_app
   gfx_compositor_app
   font_service_app
   net_stack_app

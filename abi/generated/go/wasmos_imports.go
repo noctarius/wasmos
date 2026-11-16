@@ -995,3 +995,15 @@ func SerialOwnerWrite(a0 int32, a1 int32) int32
 // are also possible; see the note at the top of this file.
 //go:wasmimport wasmos kmsg_read
 func KmsgRead(a0 int32, a1 int32, a2 int32) int32
+
+// Ask to be woken when kernel log is appended: from now on the kernel sends a
+// payload-less WASMOS_IPC_KMSG_NOTIFY to `endpoint`, which must be one of the
+// caller's own endpoints, once per batch of appends (never one per line). The
+// notify carries no position; the caller pages the ring with kmsg_read from
+// where it stopped. One subscription per process: subscribing again replaces
+// the endpoint. It ends when the process exits. Returns 0,
+// WASMOS_ERR_KERNEL_NOT_AUTHORIZED for an endpoint the caller does not own,
+// WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT when every subscriber slot is held by
+// another process, or WASMOS_ERR_KERNEL_NO_CALLER.
+//go:wasmimport wasmos kmsg_subscribe
+func KmsgSubscribe(a0 int32) int32

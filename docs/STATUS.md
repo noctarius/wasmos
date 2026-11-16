@@ -1382,8 +1382,14 @@ linked feature documents for rationale and rollout plans.
   only, LF line ends, with a 64-bit byte sequence number that never wraps. The
   `kmsg_read` host call pages it by sequence number and reports overwritten
   bytes; the `dmesg` utility (`/boot/system/utils/dmesg.wap`) prints it. A fresh
-  boot fits whole (about 15 KiB on the default config). A persistent
-  `/var/log/messages` (a logger service) is not implemented.
+  boot fits whole (about 15 KiB on the default config).
+- The `logger` service appends the kernel log to `/var/log/messages` on the
+  tmpfs root (lost at reboot), from the oldest ring byte on. It sleeps until the
+  kernel wakes it: `kmsg_subscribe` registers an endpoint (4 subscriber slots,
+  one per process) and `kmsg_poll` in the scheduler loop sends
+  `WASMOS_IPC_KMSG_NOTIFY` once per batch of appends. All of its FS traffic and
+  its ready notification are futures. The file is truncated at 1 MiB; there is
+  no `messages.1` (the async FS client has no rename).
 - WARP notes for the vt: its ring and blit overlays need `INITIAL_MEMORY` /
   `heap_pages` tuned so each window lands in declared linear memory below the
   2 MiB low-guard, and `--initial/max-memory` changes are content-cached under

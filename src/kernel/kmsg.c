@@ -51,3 +51,58 @@ int32_t kmsg_read(const kmsg_t* k, uint64_t* seq, uint8_t* dst, uint32_t len) {
     *seq = start;
     return (int32_t)n;
 }
+
+int32_t kmsg_notify_subscribe(kmsg_notify_t* n, uint32_t context_id, uint32_t endpoint) {
+    if (context_id == 0 || endpoint == 0) {
+        return WASMOS_INVAL;
+    }
+    kmsg_subscriber_t* free_slot = 0;
+    for (uint32_t i = 0; i < KMSG_SUBSCRIBER_MAX; ++i) {
+        if (n->subs[i].context_id == context_id) {
+            n->subs[i].endpoint = endpoint;
+            return 0;
+        }
+        if (n->subs[i].context_id == 0 && !free_slot) {
+            free_slot = &n->subs[i];
+        }
+    }
+    if (!free_slot) {
+        return WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT;
+    }
+    free_slot->context_id = context_id;
+    free_slot->endpoint = endpoint;
+    return 0;
+}
+
+void kmsg_notify_mark(kmsg_notify_t* n) {
+    for (uint32_t i = 0; i < KMSG_SUBSCRIBER_MAX; ++i) {
+        if (n->subs[i].context_id != 0) {
+            n->pending = 1;
+            return;
+        }
+    }
+}
+
+uint32_t kmsg_notify_take(kmsg_notify_t* n, kmsg_subscriber_t out[KMSG_SUBSCRIBER_MAX]) {
+    if (!n->pending) {
+        return 0;
+    }
+    n->pending = 0;
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < KMSG_SUBSCRIBER_MAX; ++i) {
+        if (n->subs[i].context_id != 0) {
+            out[count++] = n->subs[i];
+        }
+    }
+    return count;
+}
+
+void kmsg_notify_drop(kmsg_notify_t* n, const kmsg_subscriber_t* sub) {
+    for (uint32_t i = 0; i < KMSG_SUBSCRIBER_MAX; ++i) {
+        if (n->subs[i].context_id == sub->context_id && n->subs[i].endpoint == sub->endpoint) {
+            n->subs[i].context_id = 0;
+            n->subs[i].endpoint = 0;
+            return;
+        }
+    }
+}

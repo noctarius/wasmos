@@ -859,6 +859,14 @@ pub const WASMOS_IPC_SHUTDOWN_REQ: i32 = 0xFF02;
 /// unnotified, which is a leak rather than an error; the reap reports it on
 /// the serial console.
 pub const WASMOS_IPC_HANGUP: i32 = 0xFF03;
+/// kernel -> kmsg subscriber: kernel log has been appended since the last
+/// notify. Fire-and-forget, no payload (arg0..arg3 = 0): the subscriber pages
+/// the ring with kmsg_read from where it stopped, so one notify covers any
+/// number of appends and none is owed per line. Sent from the scheduler
+/// loop, never from the logging path, to the endpoint passed to
+/// kmsg_subscribe. In this band because it arrives on the SUBSCRIBER's own
+/// endpoint, like WASMOS_IPC_HANGUP.
+pub const WASMOS_IPC_KMSG_NOTIFY: i32 = 0xFF04;
 /// Sent back to the process manager when a participant has quiesced.
 /// arg0..arg3 reserved (0). Answering does not mean the participant stops
 /// running; it means nothing it holds still needs to reach a device.

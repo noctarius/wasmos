@@ -1532,6 +1532,20 @@ m3ApiRawFunction(wasmos_kmsg_read) {
     m3ApiReturn((int32_t)copied);
 }
 
+/* Wake `endpoint`, which the caller must own, on kernel-log appends
+ * (hostcalls.yaml `kmsg_subscribe`, serial_kmsg_subscribe).  Returns 0,
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED, WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT, or
+ * WASMOS_ERR_KERNEL_NO_CALLER. */
+m3ApiRawFunction(wasmos_kmsg_subscribe) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint)
+
+        process_t* proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
+    }
+    m3ApiReturn(serial_kmsg_subscribe(proc->context_id, (uint32_t)endpoint));
+}
+
 /* Return the byte size of the boot-config blob handed over by the bootloader, or WASMOS_NOENT
  * when none is present or it is empty. */
 m3ApiRawFunction(wasmos_boot_config_size) {

@@ -249,6 +249,9 @@ set(WASM_FS_MANAGER_APP ${BUILD_DIR}/fs_manager.wap)
 set(WASM_VT_APP_SRC ${SERVICES_DIR}/vt/vt_main.c ${SERVICES_DIR}/vt/vt_outmux.c)
 set(WASM_VT_APP_WASM ${BUILD_DIR}/vt.wasm)
 set(WASM_VT_APP ${BUILD_DIR}/vt.wap)
+set(WASM_LOGGER_SRC ${CMAKE_SOURCE_DIR}/src/services/logger/logger.c)
+set(WASM_LOGGER_WASM ${BUILD_DIR}/logger.wasm)
+set(WASM_LOGGER_APP ${BUILD_DIR}/logger.wap)
 set(WASM_GFX_COMPOSITOR_SRC ${SERVICES_DIR}/gfx_compositor/gfx_compositor.zig)
 set(WASM_GFX_COMPOSITOR_WASM ${BUILD_DIR}/gfx_compositor.elf)
 set(WASM_GFX_COMPOSITOR_APP ${BUILD_DIR}/gfx_compositor.wap)
@@ -2036,6 +2039,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_LOGGER_APP} ${BUILD_DIR}/esp/system/services/logger.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap

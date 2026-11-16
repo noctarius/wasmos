@@ -248,6 +248,8 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
         return warp_serial_owner_write((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     case HC_KMSG_READ:
         return warp_kmsg_read((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
+    case HC_KMSG_SUBSCRIBE:
+        return warp_kmsg_subscribe((uint32_t)a0, reinterpret_cast<void*>(a1));
     default:
         return (uint32_t)-1;
     }

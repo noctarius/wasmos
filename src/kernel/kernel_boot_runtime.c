@@ -233,5 +233,6 @@ void kernel_boot_run_scheduler_loop(void) {
          * can run under the serial lock, in interrupt context and during a panic.
          * This is the first point after a dispatch where sending IPC is safe. */
         klog_poll();
+        kmsg_poll();
     }
 }

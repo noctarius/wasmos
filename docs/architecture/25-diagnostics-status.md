@@ -88,6 +88,15 @@ one, so the difference is exactly what the reader lost to overwrite; `0` reads
 from the start. A read assembled from several bounce pieces stops at the first
 piece that no longer continues the previous one, so it never returns a gap.
 
+A reader can sleep instead of polling: `kmsg_subscribe(endpoint)` registers an
+endpoint the caller owns (`kmsg_notify_t`, 4 slots, one per process; a full
+table is `WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT`). Each kernel-log append only
+raises a pending flag; `kmsg_poll()`, called from the scheduler loop beside
+`klog_poll()`, sends one payload-less `WASMOS_IPC_KMSG_NOTIFY` per batch and
+drops a subscriber whose endpoint its context no longer owns. The `logger`
+service ([Drivers and Services](15-drivers-and-services.md)) is the subscriber
+that writes `/var/log/messages`.
+
 #### High-Alias Mode
 
 After the kernel relocates to the higher-half virtual address, `serial_enable_high_alias(1)`

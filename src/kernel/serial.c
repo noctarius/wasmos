@@ -72,6 +72,9 @@ static inline uint8_t inb(uint16_t port) {
 /* The kernel log ring (kmsg.h): every kernel-log write since the first line of
  * kmain.  Appended under g_serial_lock, or unlocked on the panic path. */
 static kmsg_t g_kmsg;
+/* Who is woken on a kernel-log append (kmsg.h).  Marked under the same lock as
+ * the append; delivered by kmsg_poll(). */
+static kmsg_notify_t g_kmsg_notify;
 
 static ksync_spinlock_t g_serial_lock = {0};
 static uint8_t g_serial_high_alias_enabled = 0;
@@ -193,6 +196,14 @@ static inline kmsg_t* serial_kmsg(void) {
         addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
     return (kmsg_t*)(void*)addr;
+}
+
+static inline kmsg_notify_t* serial_kmsg_notify(void) {
+    uintptr_t addr = (uintptr_t)&g_kmsg_notify;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (kmsg_notify_t*)(void*)addr;
 }
 
 static int serial_tx_ready(void) {
@@ -707,6 +718,7 @@ static void serial_emit(uint8_t slot, const char* s, int route) {
     serial_ring_write(s);
     if (slot == VT_CONSOLE_SLOT_KLOG) {
         kmsg_append(serial_kmsg(), s);
+        kmsg_notify_mark(serial_kmsg_notify());
     }
     uint16_t log_port = *serial_log_port_slot();
     if (log_port != 0 && slot == VT_CONSOLE_SLOT_KLOG) {
@@ -938,6 +950,61 @@ int32_t serial_kmsg_read(uint64_t* seq, uint8_t* dst, uint32_t len) {
     int32_t rc = kmsg_read(serial_kmsg(), seq, dst, len);
     ksync_spinlock_unlock(serial_lock_ptr());
     return rc;
+}
+
+/* Subscribes `endpoint`, which context_id must own, to kernel-log appends
+ * (kmsg_notify_subscribe).  Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED for an
+ * endpoint context_id does not own, WASMOS_INVAL, or
+ * WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT. */
+int32_t serial_kmsg_subscribe(uint32_t context_id, uint32_t endpoint) {
+    uint32_t owner = 0;
+    if (endpoint == 0 || ipc_endpoint_owner(endpoint, &owner) != IPC_OK || owner != context_id) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
+    ksync_spinlock_lock(serial_lock_ptr());
+    int32_t rc = kmsg_notify_subscribe(serial_kmsg_notify(), context_id, endpoint);
+    ksync_spinlock_unlock(serial_lock_ptr());
+    return rc;
+}
+
+/* Delivers the pending kmsg notify to every subscriber.  Called from the
+ * scheduler loop next to klog_poll(), for the same reasons: it holds no serial
+ * lock while sending, and it is not interrupt context.
+ *
+ * The subscriptions are copied out under the lock and the sends made outside
+ * it.  A subscriber whose endpoint is no longer owned by its context has exited
+ * (or its endpoint was replaced), and its subscription is dropped instead.  A
+ * failed send is not retried: a full queue means the subscriber has messages
+ * to process and drains the ring on that wake anyway. */
+void kmsg_poll(void) {
+    /* Unlocked first look: this runs on every scheduler pass.  A flag raised just
+     * after it is seen on the next pass. */
+    if (!__atomic_load_n(&serial_kmsg_notify()->pending, __ATOMIC_RELAXED)) {
+        return;
+    }
+    kmsg_subscriber_t subs[KMSG_SUBSCRIBER_MAX];
+    ksync_spinlock_lock(serial_lock_ptr());
+    uint32_t count = kmsg_notify_take(serial_kmsg_notify(), subs);
+    ksync_spinlock_unlock(serial_lock_ptr());
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t owner = 0;
+        if (ipc_endpoint_owner(subs[i].endpoint, &owner) != IPC_OK || owner != subs[i].context_id) {
+            ksync_spinlock_lock(serial_lock_ptr());
+            kmsg_notify_drop(serial_kmsg_notify(), &subs[i]);
+            ksync_spinlock_unlock(serial_lock_ptr());
+            continue;
+        }
+        ipc_message_t msg;
+        msg.type = (uint32_t)WASMOS_IPC_KMSG_NOTIFY;
+        msg.request_id = 0;
+        msg.source = IPC_ENDPOINT_NONE;
+        msg.destination = subs[i].endpoint;
+        msg.arg0 = 0;
+        msg.arg1 = 0;
+        msg.arg2 = 0;
+        msg.arg3 = 0;
+        (void)ipc_send_from(IPC_CONTEXT_KERNEL, subs[i].endpoint, &msg);
+    }
 }
 
 /* Non-blocking single-character read from the console.  Returns 1 with *out_char

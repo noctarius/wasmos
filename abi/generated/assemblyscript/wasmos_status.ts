@@ -246,6 +246,7 @@ export const WASMOS_ERR_KERNEL_NO_WINDOW: i32 = -0x00130007; // guest linear mem
 export const WASMOS_ERR_KERNEL_MAP_FAILED: i32 = -0x00130008; // the paging step failed
 export const WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT: i32 = -0x00130009; // the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force
 export const WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED: i32 = -0x0013000A; // an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution
+export const WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT: i32 = -0x0013000B; // every kernel-log subscriber slot is held by another process
 export const WASMOS_ERR_BLOCK_NO_SLOT: i32 = -0x00140001; // no per-process block slot is available
 export const WASMOS_ERR_BLOCK_NO_BACKING: i32 = -0x00140002; // no physical backing could be obtained for the buffer
 export const WASMOS_ERR_BLOCK_ABOVE_4G: i32 = -0x00140003; // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
@@ -540,6 +541,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_KERNEL_MAP_FAILED: return "the paging step failed";
     case WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT: return "the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force";
     case WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED: return "an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution";
+    case WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT: return "every kernel-log subscriber slot is held by another process";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "no per-process block slot is available";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address";

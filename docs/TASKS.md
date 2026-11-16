@@ -2398,87 +2398,75 @@ Source: `architecture/25-diagnostics-status.md`,
   whole-session stall: the tests that report it differ only by which one happened
   to open the session first, so the battery that goes red is arbitrary.
 
-  **MECHANISM FOUND (2026-10-18, run 39137201185 job 117704057912): an UNBOUNDED
-  RETRY of a module read that will not succeed.** The harness named it once
-  `boot_diagnosis` stopped misreporting the stall as a qemu exit:
+  **STATUS (2026-11-16): the `/boot` face is root-caused and FIXED; open until CI
+  confirms it.** Across the 47 failed CI jobs since 2026-10-17 it appears only as
+  `init_no_sysinit` (runs 39147940193 and 40760260513, both `wasm3_smp`); none of
+  the November failures is this face. Its recurrence signature is that panic,
+  preceded by `[pm] spawn_path fs read failed: /boot/... (fs: path component or
+  target entry does not exist)`.
 
-      a stall. Last guest output: '[pm] spawn_path fs read failed:
-      /boot/system/services/sysinit.wap (fs: path component or target entry
-      does not exist)'
+  Two defects, both now addressed:
 
-  That line appears **17,081 times** in one battery log, spanning 14 minutes
-  (14:46:39 to 15:00:25). The process manager asks fs-manager for a module,
-  gets NOT_FOUND, and asks again forever -- `pm_fs_read_blob_for_spawn` returns
-  `PM_SPAWN_INTERNAL_ERR_BAD_REPLY` and the caller retries with no bound, no
-  backoff and no give-up. The comment at `process_manager_spawn.c:1079` already
-  concedes it: "the caller RETRIES: a boot that cannot read a service spawns
-  this line thousands of times".
+  1. **The retry was unbounded**, which turned the failure below into a
+     14-minute silent hang (17,081 identical `spawn_path fs read failed` lines in
+     one log, CPU pegged, no panic). Bounded in 73bb22af: init gives up after 512
+     attempts and panics `init_no_sysinit` naming the reason (9424534f).
+  2. **`/boot` stopped reading because the partition manager staged every
+     forwarded transfer's request descriptor at offset 0 of ONE buffer**, while up
+     to eight transfers were in flight and a backend reads the descriptor when it
+     reaches the message. `/boot` (`block:ata:0p1`) and `/user`
+     (`block:ata:1p1`) are both partitions, so both FAT drivers forward through
+     it; a `/boot` read queued alongside `/user`'s bring-up reads was served with
+     `/user`'s disk, LBA and destination borrow. fs_fat keeps a one-sector cache,
+     and a lookup of `/boot/system/...` starts at the root-directory sector: once
+     that read was crossed, "system" was not found, the lookup returned NOT_FOUND
+     without loading another sector, and every later lookup hit the same poisoned
+     cache entry -- 512 identical NOT_FOUNDs, then the panic. In all three
+     captures `/boot` serves reads normally (device-manager loads its
+     `/boot/system/devmgr/rules`, serial/keyboard/mouse/rtc spawn from
+     `/boot/system/drivers`) until the line `[fat] fs.backend registered
+     mount=/user`, and fails from then on. Fixed by giving each in-flight entry a
+     fixed descriptor slot (`src/drivers/partition_manager/inflight.zig`), pinned
+     by `tests/unit/test_partition_inflight.zig`. The same crossing could send a
+     WRITE to the other disk.
 
-  That is why every face looks the same from outside. The guest never dies, so
-  there is no panic and no reset; it never progresses, so no prompt; and the CPU
-  is pegged (`dispatches=718316` on CPU 0 in one capture), which is the load that
-  makes neighbouring timing-sensitive tests fail too. `no such command found:
-  blkinfo` is the same boot seen one layer up: nothing under /boot is runnable.
+  The earlier reading -- "no `/boot -> ...` line anywhere in the session, so the
+  mount never completed" -- was wrong: no boot prints that line, healthy or not;
+  it comes only from `mount`. `/boot` was mounted and then misread.
 
-  TWO defects here, and they are separable:
+  What the host test does not cover is the live timing: it pins the slot
+  contract, not the race. Confirm with several green `wasm3_smp`
+  `filesystem`/`networking` runs carrying no `init_no_sysinit`.
 
-  1. **The retry is unbounded.** This is what turns a transient or ordering
-     failure into a 14-minute silent hang. A bounded retry that gave up and
-     said so would turn the whole P0 into an immediate, named boot failure --
-     worth doing even before the cause below is understood, because it converts
-     every future occurrence into a one-line diagnosis.
-  2. **Why `/boot` never becomes readable is the REAL bug, and is still open.**
-     Narrowed, in the storming session of run 39140045637:
+  A SECOND face is **not a guest stall: QEMU itself crashed**. Two captures:
+  run 39152571921 job 117749291333 (`filesystem`, `wasm3_smp`, last guest line
+  `[pci-bus]   bar4 m64 00000000 size 16384 pf`) and run 43884154722 job
+  133357830940 (`language-runtimes`, `warp_smp`, last guest line `[pci-bus]
+  bar2 m32 81082000 size 4096`). Both were reported as "the guest was still
+  running when it was sampled: a stall ... (qemu then exited with code -11
+  during the stall dump)", and both carry `[stall-dump] monitor unavailable:
+  [Errno 32] Broken pipe` on the dump's FIRST command -- a read-only `info cpus`
+  sent before any NMI. A closed monitor socket there means QEMU had already
+  exited, with SIGSEGV (-11), before the harness touched it. `boot_diagnosis`
+  counted the attempted dump as having provoked the exit and reported a guest
+  stall that never happened; it now counts only a dump QEMU answered, and reports
+  such an exit as the cause.
 
-     - `[device-manager] volume rule queued mount=/boot id=volume:block:ata:0p1`
-       at 14:46:22.90 -- the rule fires, so discovery and the volume layer are
-       fine.
-     - `[fat] fs.backend registered` at 14:46:22.96 -- a FAT backend comes up.
-     - **No `/boot -> ...` line anywhere in the session.** The mount never
-       completes, and there is no `mount refused: fat` either, so fs-manager
-       neither mounted it nor rejected it.
-     - Everything downstream follows from that: `/boot` is absent from the
-       namespace, so every ESP path reads NOT_FOUND -- sysinit, fs_wfs.wap
-       (hence the `mount refused: wfs` storm, which is a CONSEQUENCE and not a
-       second bug), and `no such command found: blkinfo` one layer up.
-     - `init` was dispatched **8,817,333** times.
+  Open, as a lead rather than a finding: both crashes land while pci-bus is
+  SIZING BARs (`pci_probe_bar_size`), which clears a function's memory or I/O
+  decode and writes all-ones to the BAR while other vCPUs run, so QEMU re-lays
+  out its memory map under MTTCG. The VGA function's framebuffer BAR is skipped
+  (`pci_bar_is_console`), but its MMIO BAR2 is sized with memory decode off,
+  which drops the framebuffer's decode too. Next step: capture QEMU's own
+  backtrace (core dump or `-d` on a CI runner) for one of these crashes before
+  changing the guest.
 
-     So the question is narrow: a queued `/boot` volume rule, with its FAT
-     backend registered, that produces neither a mount nor a refusal. Look at
-     the devmgr MOUNT_REQ path and fs-manager's handling of it, NOT at the
-     scheduler and not at the volume layer.
-
-     One capture had a `/boot -> fs-fat on block:ata:0p1` line and stalled
-     anyway, so there may be a second path; treat that as unconfirmed until a
-     capture with the new mount-named logging says otherwise.
-
-  Diagnostic support added for the next occurrence: `fs_fat` now logs
-  `fs.backend registered mount=<path>`, because a boot carries more than one FAT
-  backend and the old line could not say whether `/boot`'s instance was the one
-  that came up.
-
-  A SECOND face, with a different victim, 2026-10-18 run 39152571921 job
-  117749291333 (`filesystem`, `wasm3_smp`): the boot stalls during PCI
-  enumeration, nowhere near `/boot`. Last guest output `[pci-bus] bar4 m64
-  00000000 size 16384 pf`, only two `spawn_path fs read failed` lines in the
-  whole log and no panic. The sysinit retry storm is therefore NOT the only way
-  this bug shows, and the fix for it -- bounding the retry -- does not cover
-  this one. Whether the two share a cause is open.
-
-  Attribution for that capture, by construction: the commit before it passed
-  this job twice, and the delta between them is PYTHON ONLY (the harness and
-  two test files), so no guest code changed.
-
-  **The stall dump kills QEMU, often.** Across the captures taken while
-  investigating this, `monitor unavailable` appears 17 times and one run
-  recorded `qemu then exited with code -11` -- a host-side SIGSEGV. The dump
-  injects an NMI into every vCPU through the monitor (`monitor.hmp("nmi")`,
-  twice, for the two guest samples), and a wedged guest plus that sampling is
-  apparently enough to take QEMU with it. The cost is real: it destroys the
-  halted machine, which is the best evidence available, and truncates the dump
-  that was being collected. `boot_diagnosis` now says so rather than blaming
-  the exit, but the dump still does it. Worth either sampling once, or moving
-  the guest-tail capture ahead of any monitor traffic.
+  The stall dump's own NMIs (`monitor.hmp("nmi")`, twice) can still take a
+  wedged QEMU down mid-dump; `boot_diagnosis` then names the stall and mentions
+  the exit, which is correct for that case. Of the 17 `monitor unavailable`
+  lines seen while investigating the first face, how many were QEMU already
+  dead rather than killed by the dump is not known: the verdict could not tell
+  them apart before.
 
   Faces seen so far, all on the same code:
   - `warp_smp`: `FAIL: calculator did not fully initialise`. The calculator is not
@@ -2553,9 +2541,10 @@ Source: `architecture/25-diagnostics-status.md`,
   the same unattributable string. Take the next capture with that in hand rather
   than re-deriving it.
 
-  What this does NOT establish: why the filesystem stops answering, and whether
-  the unbounded retry is merely amplifying a transient or is itself holding the
-  system away from recovery. The retry has no backoff and no give-up.
+  The NOT_FOUND storm of this face is the crossed-descriptor misread in STATUS
+  above, and the retry is bounded since 73bb22af. The 15 s
+  `fs reply timed out` on `serial.wap` is not explained by it: that read got no
+  answer at all rather than a wrong one, and is still open.
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and
   reaches `arp sent`, then no `notify rx=` arrives, so it fails as an assertion

@@ -520,10 +520,20 @@ For each partition endpoint the manager serves the full block contract:
   `[0, lba_count)` is refused with a packed error. This is the containment the
   design exists for: a filesystem driver reaches its partition and nothing else.
 
-In-flight requests live in a fixed-size table mapping
+In-flight requests live in a fixed-size table (`inflight.zig`) mapping
 `(upstream endpoint, upstream request id)` to the downstream request id. A full
 table is answered with a packed busy error, never dropped — a dropped reply
 strands a peer that has no timeout.
+
+Each table entry also owns a fixed descriptor slot in the downstream request
+buffer (`req_offset`, one `wasmos_block_request_t` stride per entry), and a
+forwarded transfer stages its rewritten request there and sends that offset in
+`arg1`. A backend reads a request descriptor when it reaches the message, not
+when the message is sent, so a descriptor must stay untouched until its reply
+arrives. A single shared slot let the next forwarded transfer overwrite it: with
+`/boot` and `/user` both partitions, `/boot`'s FAT read was served from `/user`'s
+disk into its one-sector cache, and every later `/boot` lookup failed against
+that cached sector.
 
 The manager is an **async service** (`entry = "async_initialize"`), not a
 drain-and-select loop: the runner polls only when the root task parks, so there
@@ -757,11 +767,6 @@ way the virtio-blk build already is.
   synchronous and forwarding is not. Bounded (one IDENTIFY plus at most 34
   sector reads), but a disk arriving under load pauses transfers on the disks
   already published. Driving the probe over the loop's `IpcFuture` removes it.
-- Every forwarded transfer stages its request descriptor in ONE buffer, so up to
-  `MAX_INFLIGHT` requests share a slot a backend reads when it reaches the
-  message rather than when the message is sent. Latent: it needs two clients
-  transferring concurrently through one partition manager. The probe path no
-  longer shares that buffer.
 - Two partitions of one disk register the same `fs.backend` class instance,
   because `FSMGR_BACKEND_INSTANCE` packs `(kind, unit)` and a partition reports
   its disk's unit. No shipped configuration mounts two volumes from one disk, so

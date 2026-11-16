@@ -4200,6 +4200,20 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
       COMMENT "Running partition mount-listing unit tests"
       VERBATIM)
+    # The forwarded-transfer table. Self-contained: the case it exists for -- a
+    # descriptor overwritten by the next transfer before the disk read it -- is a
+    # byte layout, so a plain array stands in for the lent request buffer.
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              --cache-dir ${BUILD_DIR}/zig-partition-inflight-cache
+              --global-cache-dir ${BUILD_DIR}/zig-partition-inflight-global-cache
+              --dep inflight
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_partition_inflight.zig
+              -Minflight=${DRIVER_WASM_DIR}/partition_manager/inflight.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running partition in-flight table unit tests"
+      VERBATIM)
     # The tmpfs namespace and storage core. It is split out of the driver
     # (fs_tmpfs.zig) precisely so it can be linked here: it depends on nothing in
     # the guest environment except a source of pool memory, which on the guest is

@@ -100,6 +100,15 @@ wasmos_add_wasm_c_app_target(fs_leave_open
   PACK_COMMENT  "Packing wasm fs leave-open fixture as WASMOS-APP"
 )
 
+wasmos_add_wasm_c_app_target(linmem_hold
+  SOURCE      ${WASM_LINMEM_HOLD_SRC}
+  OUTPUT_WASM ${WASM_LINMEM_HOLD_WASM}
+  OUTPUT_APP  ${WASM_LINMEM_HOLD_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/linmem_hold/linker.metadata
+  BUILD_COMMENT "Building wasm linmem-hold fixture"
+  PACK_COMMENT  "Packing wasm linmem-hold fixture as WASMOS-APP"
+)
+
 wasmos_add_wasm_c_app_target(console_claim_deny
   SOURCE      ${WASM_CONSOLE_CLAIM_DENY_SRC}
   OUTPUT_WASM ${WASM_CONSOLE_CLAIM_DENY_WASM}
@@ -203,7 +212,7 @@ wasmos_add_wasm_c_app_target(menu_bar
 add_custom_target(c_examples)
 add_dependencies(c_examples
   hello_c chardev_client chardev_preempt init_smoke
-  fs_open_smoke fs_write_smoke fs_leave_open console_claim_deny native_call_min native_call_smoke
+  fs_open_smoke fs_write_smoke fs_leave_open linmem_hold console_claim_deny native_call_min native_call_smoke
   gfx_smoke irq_route_deny irq_route_allow
   menu_bar net_smoke net_udp_echo net_tcp_echo net_tcp_server
   xfer_map_alias surface_attach

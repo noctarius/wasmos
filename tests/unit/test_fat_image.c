@@ -32,6 +32,7 @@
 typedef struct wasmos_physmem_stats wasmos_physmem_stats_t;
 typedef struct wasmos_framebuffer_info wasmos_framebuffer_info_t;
 typedef struct wasmos_msi_desc wasmos_msi_desc_t;
+typedef struct wasmos_linmem_slot_stats wasmos_linmem_slot_stats_t;
 #include "wasmos_imports.h"
 
 /* --- The image, in memory. --- */

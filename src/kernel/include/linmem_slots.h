@@ -25,6 +25,16 @@ extern "C" {
 /* Number of slots in the pool. */
 uint32_t linmem_slot_count(void);
 
+/* Cap the slots linmem_slot_alloc hands out to indices below `limit` (clamped to
+ * the pool size); returns the limit in effect.  Slots already reserved above it
+ * stay valid until released.  Set from the boot command line (linmem.slots=N),
+ * which is how a test exhausts the pool without running dozens of apps. */
+uint32_t linmem_slot_set_limit(uint32_t limit);
+
+/* Slots currently reserved, the limit linmem_slot_alloc stops at, and the pool
+ * size.  A snapshot taken under the pool lock; any argument may be NULL. */
+void linmem_slot_stats(uint32_t* used, uint32_t* limit, uint32_t* total);
+
 /* Reserve a free slot index, or -1 if the pool is exhausted.  Slots are
  * recycled by linmem_slot_release, so this bounds concurrent WASM apps, not
  * total spawned. */

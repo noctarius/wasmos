@@ -53,6 +53,10 @@ class QemuConfig:
     # a timeout reported it.
     syslog_path: str = ""
     isolate_esp: bool = False
+    # Boot options appended to this session's \kernel.cmdline, e.g.
+    # ("linmem.slots=36",). Non-empty implies isolate_esp: the options go into a
+    # private copy of the ESP, never the shared one other sessions boot.
+    kernel_options: tuple = ()
     # QMP monitor: set enable_monitor=True to have QemuSession auto-create the
     # socket, or set monitor_socket directly to a path to use a specific one.
     enable_monitor: bool = False
@@ -998,10 +1002,20 @@ class QemuSession:
             raise FileNotFoundError(f"ESP dir not found: {self.cfg.esp_dir}")
 
         runtime_cfg = self.cfg
-        if self.cfg.isolate_esp:
+        if self.cfg.isolate_esp or self.cfg.kernel_options:
             temp_root = tempfile.mkdtemp(prefix="wasmos-esp-")
             runtime_esp = os.path.join(temp_root, "esp")
             shutil.copytree(self.cfg.esp_dir, runtime_esp)
+            if self.cfg.kernel_options:
+                cmdline_path = os.path.join(runtime_esp, "kernel.cmdline")
+                shipped = ""
+                if os.path.exists(cmdline_path):
+                    with open(cmdline_path, "r", encoding="ascii") as f:
+                        shipped = f.read().strip()
+                with open(cmdline_path, "w", encoding="ascii") as f:
+                    f.write(
+                        " ".join([shipped, *self.cfg.kernel_options]).strip() + "\n"
+                    )
             # replace() rather than a field-by-field rebuild: this used to list
             # every field, so a field added to QemuConfig was silently dropped
             # from an isolated-ESP run and the test quietly ran without it.

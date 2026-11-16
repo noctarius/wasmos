@@ -1393,6 +1393,17 @@ hostcalls:
       another process, or WASMOS_ERR_KERNEL_NO_CALLER.
     params:
       - { name: endpoint, kind: handle }
+  - name: linmem_slots
+    returns: status
+    doc: |
+      Fill the wasmos_linmem_slot_stats_t at `out` with the linear-memory slot pool:
+      slots in use, the limit allocation stops at (the pool size unless the boot
+      command line lowers it with linmem.slots=N), and the pool size. Every WASM
+      process's linear memory lives in one slot, so a full pool refuses the next
+      module. A snapshot: another process can take or free a slot at once. Returns
+      0, or WASMOS_ERR_KERNEL_BAD_POINTER when `out` is outside linear memory.
+    params:
+      - { name: out, kind: out, c_type: "wasmos_linmem_slot_stats_t*" }
 
 # Extra links outside the ring-3/AOT id space (no `id`).
 extra:

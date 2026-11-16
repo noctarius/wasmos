@@ -39,6 +39,14 @@ typedef struct {
     uint64_t free_bytes;
 } wasmos_physmem_stats_t;
 
+/* The linear-memory slot pool, filled by wasmos_linmem_slots: slots in use, the
+ * limit allocation stops at, and the pool size. */
+typedef struct {
+    uint32_t used;
+    uint32_t limit;
+    uint32_t total;
+} wasmos_linmem_slot_stats_t;
+
 /* One allocated message-signalled interrupt vector, filled by wasmos_msi_alloc.
  * address/data are the opaque interrupt-controller pair a device must write to
  * raise `vector`; a driver forwards them verbatim to the bus driver that owns

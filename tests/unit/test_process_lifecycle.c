@@ -1408,6 +1408,37 @@ static void s_entry_pointer_guard_rejects_what_is_not_in_the_image(void) {
     CHECK(!process_entry_ptr_in_image(start, end, start), "inverted bounds refuse");
 }
 
+/* Regression: 2026-11-16-ctty-lost-at-spawn -- a child that does not want a tty
+ * prints where its requester prints, and the process manager looked the
+ * requester up by parent_pid only when the child first ran (pm_app_entry). A
+ * spawn that replies immediately lets the requester exit and be reaped first;
+ * the child then found no parent, took slot 0, and its output became kernel log
+ * on vt-1 and COM2 instead of reaching the shell's tty. The slot has to be taken
+ * while the requester is the process being served: at spawn. */
+static void s_a_child_takes_its_parents_slot_at_spawn(void) {
+    uint32_t parent = 0;
+    uint32_t child = 0;
+
+    be_cpu(0);
+    if (process_spawn("ctty-parent", idle_main, 0, &parent) != 0) {
+        CHECK(0, "spawned a parent");
+        return;
+    }
+    process_get(parent)->ctty = 3;
+    if (process_spawn_as_parked(parent, "ctty-child", idle_main, 0, &child) != 0) {
+        CHECK(0, "spawned a parked child");
+        drop_transition_target(parent);
+        return;
+    }
+    /* The requester exits and is reaped before the child is ever unparked. */
+    drop_transition_target(parent);
+    CHECK(process_get(parent) == 0, "the parent is gone");
+    process_t* proc = process_get(child);
+    CHECK(proc && proc->ctty == 3, "the child still prints on its parent's slot");
+
+    drop_transition_target(child);
+}
+
 int main(void) {
     harness_init();
 
@@ -1424,6 +1455,7 @@ int main(void) {
     s_a_wake_that_defers_leaves_something_actionable();
     s_a_consumer_that_declines_keeps_the_claim();
     s_entry_pointer_guard_rejects_what_is_not_in_the_image();
+    s_a_child_takes_its_parents_slot_at_spawn();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

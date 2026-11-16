@@ -40,6 +40,8 @@
         "test_decode_kernel_panic.py",
         "test_device_manager.py",
         "test_init_smoke.py",
+        "test_syslog_port.py",
+        "test_dmesg.py",
         "test_ring3_smoke_target.py"
       ]
     },
@@ -84,6 +86,7 @@
       "description": "Graphics, virtual terminals and hardware input routing.",
       "needs_qemu": true,
       "files": [
+        "test_console_claim.py",
         "test_gfx_keyboard.py",
         "test_gfx_surface_recycle.py",
         "test_irq_input.py",
@@ -140,6 +143,7 @@
       "needs_qemu": false,
       "files": [
         "test_boot_diagnosis.py",
+        "test_cli_echo_match.py",
         "test_make_wasmos_app_capabilities.py"
       ]
     }

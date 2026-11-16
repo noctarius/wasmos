@@ -117,21 +117,21 @@ class PartitionRescanTest(unittest.TestCase):
     def _run(self, cmd: str, needles: list[bytes], timeout_s: int = 240) -> bytes:
         """Run `cmd`, require each needle, and return everything it printed.
 
-        Marked and expected FROM the mark, so a line an earlier case produced
-        cannot satisfy an assertion about this one.
+        Expected from the end of the command's echo, so neither a line an
+        earlier case produced nor the command text itself can satisfy an
+        assertion about this one.
         """
         assert self.session is not None
-        mark = self.session.mark()
-        self.session.send(cmd)
+        start = self.session.send_command(cmd, timeout_s=timeout_s)
         for needle in needles:
-            if not self.session.expect_from(mark, needle, timeout_s=timeout_s):
+            if not self.session.expect_from(start, needle, timeout_s=timeout_s):
                 self.fail(
                     f"'{cmd}' did not produce {needle!r}\n"
                     f"--- tail ---\n{self.session.tail()}\n"
                 )
-        if not self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s):
+        if not self.session.expect_from(start, b"wamos> ", timeout_s=timeout_s):
             self.fail(f"no prompt after '{cmd}'\n--- tail ---\n{self.session.tail()}\n")
-        return self.session.buf[mark:]
+        return self.session.buf[start:]
 
     def test_1_the_disk_arrived_with_its_partition_published(self) -> None:
         """The precondition everything below measures a change against."""

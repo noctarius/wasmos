@@ -1,5 +1,5 @@
 wasmos_add_wasm_c_app_target(vt_app
-  SOURCE ${WASM_VT_APP_SRC}
+  SOURCES ${WASM_VT_APP_SRC}
   OUTPUT_WASM ${WASM_VT_APP_WASM}
   OUTPUT_APP ${WASM_VT_APP}
   MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata

@@ -368,6 +368,13 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         } else {
             si->tty = pm_alloc_cli_tty();
         }
+        /* A wants_tty child owns its allocated slot.  Any other child keeps the
+         * slot it inherited from the requester at spawn (process.c), so an app
+         * run from a shell lands on that shell's slot and a service started by
+         * init stays kernel log. */
+        if ((desc.flags & WASMOS_APP_FLAG_WANTS_TTY) != 0u) {
+            process->ctty = (uint8_t)si->tty;
+        }
         si->module_count = g_pm.module_count;
         si->module_index = g_pm.init_module_index;
         si->args_off = (uint32_t)sizeof(wasmos_spawn_info_t);

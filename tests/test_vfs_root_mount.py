@@ -119,15 +119,7 @@ class VfsSession:
         empty result as a real answer. Whether that happens is pure timing, which
         is why it surfaced under battery load and never standalone.
         """
-        mark = self.session.mark()
-        self.session.send(cmd)
-        needle = cmd.encode()
-        if not self.session.expect_from(mark, needle, timeout_s=timeout_s):
-            self.fail(
-                f"'{cmd}' was never echoed.\n--- tail ---\n{self.session.tail()}\n"
-            )
-        # Resume the prompt search after the echo, not after the mark.
-        echo_end = bytes(self.session.buf).index(needle, mark) + len(needle)
+        echo_end = self.session.send_command(cmd, timeout_s=timeout_s)
         if not self.session.expect_from(echo_end, b"wamos> ", timeout_s=timeout_s):
             self.fail(
                 f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"

@@ -118,4 +118,6 @@
     X("wasmos", "io_region_in32", "i(ii*)", wasmos_io_region_in32) \
     X("wasmos", "io_region_out8", "i(iii)", wasmos_io_region_out8) \
     X("wasmos", "io_region_out16", "i(iii)", wasmos_io_region_out16) \
-    X("wasmos", "io_region_out32", "i(iii)", wasmos_io_region_out32)
+    X("wasmos", "io_region_out32", "i(iii)", wasmos_io_region_out32) \
+    X("wasmos", "serial_owner_write", "i(*i)", wasmos_serial_owner_write) \
+    X("wasmos", "kmsg_read", "i(*i*)", wasmos_kmsg_read)

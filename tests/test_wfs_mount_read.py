@@ -48,18 +48,17 @@ class WfsMountReadTest(unittest.TestCase):
     def _cmd(self, cmd: str, needles: list[bytes], timeout_s: int = 25) -> None:
         """Run `cmd` and require each needle, then the prompt back.
 
-        Marks the stream first and expects FROM that mark, so a needle already
-        present in the boot log cannot satisfy an assertion about this command.
+        Expects from the end of the command's echo, so a needle already present
+        in the boot log cannot satisfy an assertion about this command.
         """
-        mark = self.session.mark()
-        self.session.send(cmd)
+        start = self.session.send_command(cmd, timeout_s=timeout_s)
         for needle in needles:
-            if not self.session.expect_from(mark, needle, timeout_s=timeout_s):
+            if not self.session.expect_from(start, needle, timeout_s=timeout_s):
                 self.fail(
                     f"'{cmd}' did not produce {needle!r}\n"
                     f"--- tail ---\n{self.session.tail()}\n"
                 )
-        if not self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s):
+        if not self.session.expect_from(start, b"wamos> ", timeout_s=timeout_s):
             self.fail(f"no prompt after '{cmd}'\n--- tail ---\n{self.session.tail()}\n")
 
     def _cat(self, cmd: str, needles: list[bytes], timeout_s: int = 40) -> None:
@@ -70,11 +69,10 @@ class WfsMountReadTest(unittest.TestCase):
         text is checked in the same pass so a failure reports the reason rather
         than just a missing needle.
         """
-        mark = self.session.mark()
-        self.session.send(cmd)
+        start = self.session.send_command(cmd, timeout_s=timeout_s)
         for needle in needles:
-            if not self.session.expect_from(mark, needle, timeout_s=timeout_s):
-                failed = self.session.expect_from(mark, b"fs failed", timeout_s=1)
+            if not self.session.expect_from(start, needle, timeout_s=timeout_s):
+                failed = self.session.expect_from(start, b"fs failed", timeout_s=1)
                 self.fail(
                     f"'{cmd}' did not produce {needle!r}"
                     + (" — it reported 'fs failed'" if failed else "")

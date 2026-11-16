@@ -73,15 +73,22 @@ typedef struct {
  *     the framebuffer only while slot 0 is visible, and the vt tells it so.
  *   - slot 1 is the system console: it is the default serial-bound slot, so COM1
  *     RX (VT_IPC_SERIAL_INPUT_REQ) is injected into its input queue no matter
- *     which slot is visible, and the kernel log ring is drained into it.
+ *     which slot is visible, and it is the only slot that shows the kernel log,
+ *     merged with its writers' output a whole line at a time.
  *   - the remaining slots are plain text ttys.
+ *
+ * A text slot's output is the console output of the processes whose controlling
+ * slot it is (process_t.ctty: its shell and everything that shell starts),
+ * delivered through the console ring, plus the vt's own echo.  The
+ * serial-bound slot's output, and only that slot's, is what COM1 transmits.
  *
  * Per slot the vt tracks at most one registered writer endpoint
  * (VT_IPC_REGISTER_WRITER; a new registration replaces a stale one) and at most
  * one reader endpoint, claimed by the first VT_IPC_READ_REQ and exclusive
- * afterwards (WASMOS_ERR_VT_READER_BUSY for anyone else).  A write or a mode
- * change is routed to the slot whose reader or writer is the message source, so
- * an endpoint that is neither is dropped.
+ * afterwards (WASMOS_ERR_VT_READER_BUSY for anyone else).  A registered writer
+ * marks the slot as having a shell, so the vt spawns no second one for it.  A
+ * mode change is routed to the slot whose reader or writer is the message
+ * source, so an endpoint that is neither is dropped.
  *
  * The vt is the system's only keymap decoder: it consumes raw set-1 scancodes
  * from the `kbd` driver and everything downstream — text slots and the
@@ -118,14 +125,9 @@ enum {
     VT_ALLOC_FAIL_CAPACITY = 4
 };
 
-/* Codes passed to wasmos_debug_mark for TTY-switch and write-drop tracing. */
-enum {
-    VT_TRACE_SWITCH = 0xA1,
-    VT_TRACE_WRITER_OK = 0xA2,
-    VT_TRACE_WRITER_CONFLICT = 0xA3,
-    VT_TRACE_DROP_UNOWNED = 0xA4, /* write from an endpoint not registered for the active TTY */
-    VT_TRACE_DROP_STALE = 0xA5    /* write's generation < g_switch_generation */
-};
+/* Codes passed to wasmos_debug_mark for TTY-switch and writer-registration
+ * tracing.  0xA4/0xA5 marked dropped VT_IPC_WRITE_REQ chunks and stay unused. */
+enum { VT_TRACE_SWITCH = 0xA1, VT_TRACE_WRITER_OK = 0xA2, VT_TRACE_WRITER_CONFLICT = 0xA3 };
 
 /* VT_IPC_SWITCH_TTY reply codes are the packed vt domain in abi/errors.yaml
  * (WASMOS_ERR_VT_BAD_TTY_ID, WASMOS_ERR_VT_SWITCH_*). */

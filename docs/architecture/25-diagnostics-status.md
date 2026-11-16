@@ -55,27 +55,38 @@ remote serial driver endpoint is retained for read requests only — per-charact
 IPC on the write side overflows the 32-slot endpoint queue for strings longer
 than 32 bytes and causes out-of-order output.
 
-#### Early Log Ring
+#### Kernel Log Ring (kmsg)
 
-`serial_write_unlocked` captures all output into a 4096-byte circular ring
-(`g_early_log[EARLY_LOG_SIZE]`):
-
-```c
-#define EARLY_LOG_SIZE 4096
-static uint8_t  g_early_log[EARLY_LOG_SIZE];
-static uint32_t g_early_log_head  = 0;  /* next write index (wraps) */
-static uint32_t g_early_log_count = 0;  /* bytes written, capped at ring size */
-```
-
-The ring is queryable after boot:
+Every kernel-log write — locked, unlocked, and before the vt exists — is
+appended to the kmsg ring (`src/kernel/kmsg.c`, `kmsg.h`), owned by `serial.c`.
+Console output of a process with a controlling slot is not kernel log and never
+enters it. Text is stored as written, with `'\n'` line ends; a consumer that
+needs CRLF (the COM2 replay) expands it.
 
 ```c
-uint32_t serial_early_log_size(void);
-void     serial_early_log_copy(uint8_t *dst, uint32_t offset, uint32_t len);
+#define KMSG_SIZE 65536u
+typedef struct {
+    uint64_t next;              /* sequence number of the next byte */
+    uint8_t  data[KMSG_SIZE];
+} kmsg_t;
 ```
 
-Logical index 0 is the oldest byte. When the ring is full (count reaches 4096),
-`head` marks the oldest position and new writes overwrite oldest content.
+Each byte's sequence number is the count of bytes logged before it. It is
+64-bit and never wraps, so the oldest retained byte is `next - KMSG_SIZE` once
+the ring is full and 0 before.
+
+Three readers, two access styles:
+
+| Reader | Access | Notes |
+|---|---|---|
+| framebuffer drivers (boot replay), kernel-log port (COM2 replay) | `serial_early_log_size` / `serial_early_log_copy`: offset from the oldest retained byte | unlocked; a concurrent write can tear the copy |
+| `dmesg` (guest, `kmsg_read` host call) | `serial_kmsg_read(&seq, dst, len)`: by sequence number | under `g_serial_lock`; bounced in 256-byte pieces |
+
+`kmsg_read` copies from `*seq` and writes back the sequence number of the first
+byte copied. A `*seq` older than the oldest retained byte starts at the oldest
+one, so the difference is exactly what the reader lost to overwrite; `0` reads
+from the start. A read assembled from several bounce pieces stops at the first
+piece that no longer continues the previous one, so it never returns a gap.
 
 #### High-Alias Mode
 

@@ -105,6 +105,52 @@ static void test_pci_match_rule(void) {
     assert(strcmp(state.pci_match_rules[0].spawn_path, "system/drivers/fbpci.wap") == 0);
 }
 
+/* ATTR{io} pins an ACPI rule to one device by its I/O base. The serial driver is
+ * bound to COM1 this way: COM2 can be the kernel's own log port, and a second
+ * driver instance on it would fight the kernel for the UART. */
+static void test_acpi_rule_io_attr_selects_one_uart(void) {
+    device_manager_state_t state;
+    pci_device_record_t com1;
+    pci_device_record_t com2;
+    const char* rules = "SUBSYSTEM==\"acpi\", ATTR{class}==\"0x07\", ATTR{subclass}==\"0x00\", "
+                        "ATTR{io}==\"0x3F8\", RUN+=\"system/drivers/serial.wap\"\n";
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_acpi_match(&state, rules);
+    assert(state.acpi_match_rule_count == 1u);
+    assert(state.acpi_match_rules[0].io_base == 0x3F8u);
+
+    memset(&com1, 0, sizeof(com1));
+    com1.bus = 0xFFu;
+    com1.class_code = 0x07u;
+    com1.subclass = 0x00u;
+    com1.device_id = 0x3F8u; /* ACPI records carry the I/O base here */
+    com2 = com1;
+    com2.device_id = 0x2F8u;
+    assert(dm_acpi_rule_matches(&state.acpi_match_rules[0], &com1));
+    assert(!dm_acpi_rule_matches(&state.acpi_match_rules[0], &com2));
+}
+
+/* Without ATTR{io} an ACPI rule matches by class alone, every instance. */
+static void test_acpi_rule_without_io_matches_any_instance(void) {
+    device_manager_state_t state;
+    pci_device_record_t uart;
+    const char* rules = "SUBSYSTEM==\"acpi\", ATTR{class}==\"0x07\", ATTR{subclass}==\"0x00\", "
+                        "RUN+=\"system/drivers/serial.wap\"\n";
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_acpi_match(&state, rules);
+    assert(state.acpi_match_rule_count == 1u);
+    memset(&uart, 0, sizeof(uart));
+    uart.bus = 0xFFu;
+    uart.class_code = 0x07u;
+    uart.device_id = 0x2F8u;
+    assert(dm_acpi_rule_matches(&state.acpi_match_rules[0], &uart));
+    uart.class_code = 0x09u;
+    assert(!dm_acpi_rule_matches(&state.acpi_match_rules[0], &uart));
+    uart.class_code = 0x07u;
+    uart.bus = 0x00u; /* a PCI device is never matched by an ACPI rule */
+    assert(!dm_acpi_rule_matches(&state.acpi_match_rules[0], &uart));
+}
+
 /* ENV{FSTYPE} names a filesystem TYPE for fs-manager to mount, in place of the
  * RUN+= module the device manager would spawn itself. The two are alternatives:
  * a mount rule carries no spawn path at all, which is what keeps `which module
@@ -179,6 +225,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_block_fs_rule),
         WASMOS_TEST_CASE(test_pci_match_rule),
         WASMOS_TEST_CASE(test_legacy_rule_is_rejected),
+        WASMOS_TEST_CASE(test_acpi_rule_io_attr_selects_one_uart),
+        WASMOS_TEST_CASE(test_acpi_rule_without_io_matches_any_instance),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_device_manager_rules: ok\n");

@@ -506,7 +506,11 @@ enum {
 
 /* vt (0x700..0x7FF) */
 enum {
-    /* arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes */
+    /* Retired.  A process's console output reaches its controlling slot
+     * through wasmos_console_write and the vt's console ring, so nothing
+     * writes a slot four bytes per message any more and the vt does not
+     * handle this.  The value stays reserved rather than being reused.
+     */
     VT_IPC_WRITE_REQ = 0x700,
     VT_IPC_READ_REQ = 0x701,
     VT_IPC_SET_ATTR_REQ = 0x702,
@@ -514,8 +518,8 @@ enum {
     VT_IPC_GET_ACTIVE_TTY = 0x704,
     VT_IPC_REGISTER_WRITER = 0x705,
     VT_IPC_SET_MODE_REQ = 0x706,
-    /* serial driver -> vt: RX bytes for the serial-bound slot, packed like
-     * VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).
+    /* serial driver -> vt: RX bytes for the serial-bound slot, packed
+     * arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes.
      */
     VT_IPC_SERIAL_INPUT_REQ = 0x707,
     /* Bind the serial console to a slot: arg0=slot.  Serial RX is injected
@@ -541,7 +545,7 @@ enum {
      * the visible slot, 0 otherwise.
      */
     VT_IPC_VIS_NOTIFY = 0x783,
-    /* kernel -> vt: klog bytes are pending in the ring registered through
+    /* kernel -> vt: console records are pending in the ring registered through
      * wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt
      * drains the ring on every wake, so receiving it is the whole point and the
      * message itself needs no handling beyond not being treated as an error.

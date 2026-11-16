@@ -603,7 +603,10 @@ subsystems:
         value: 0x700
         kind: req
         doc: |
-          arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes
+          Retired.  A process's console output reaches its controlling slot
+          through wasmos_console_write and the vt's console ring, so nothing
+          writes a slot four bytes per message any more and the vt does not
+          handle this.  The value stays reserved rather than being reused.
       - { symbol: VT_IPC_READ_REQ, value: 0x701, kind: req }
       - { symbol: VT_IPC_SET_ATTR_REQ, value: 0x702, kind: req }
       - { symbol: VT_IPC_SWITCH_TTY, value: 0x703, kind: req }
@@ -614,8 +617,8 @@ subsystems:
         value: 0x707
         kind: req
         doc: |
-          serial driver -> vt: RX bytes for the serial-bound slot, packed like
-          VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).
+          serial driver -> vt: RX bytes for the serial-bound slot, packed
+          arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes.
       - symbol: VT_IPC_BIND_SERIAL_REQ
         value: 0x708
         kind: req
@@ -651,7 +654,7 @@ subsystems:
         value: 0x784
         kind: notify
         doc: |
-          kernel -> vt: klog bytes are pending in the ring registered through
+          kernel -> vt: console records are pending in the ring registered through
           wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt
           drains the ring on every wake, so receiving it is the whole point and the
           message itself needs no handling beyond not being treated as an error.

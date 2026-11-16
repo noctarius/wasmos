@@ -52,8 +52,11 @@ unsafe extern "C" {
     /// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
     /// are also possible; see the note at the top of this file.
     pub fn console_read(a0: i32, a1: i32) -> i32;
-    /// Write len bytes from guest memory at buf_offset to the kernel log, emitted in
-    /// NUL-terminated 127-byte chunks. Returns 0 on success -- including for len==0,
+    /// Write len bytes from guest memory at buf_offset to the caller's controlling
+    /// text slot -- the vt slot of the shell that started it -- or, for a process
+    /// with none, to the kernel log; emitted in NUL-terminated 127-byte chunks.
+    /// The vt puts a slot on serial only while that slot is serial-bound. Returns 0
+    /// on success -- including for len==0,
     /// which is a no-op rather than a failure -- WASMOS_INVAL if `len` is negative,
     /// or WASMOS_ERR_KERNEL_BAD_POINTER if [buf_offset, buf_offset+len) is not a
     /// readable range of the caller's linear memory.
@@ -636,14 +639,24 @@ unsafe extern "C" {
     /// map time. Returns 0 (also 0 when nothing was mapped); returns -1 on an invalid
     /// buffer_id or context.
     pub fn xfer_buffer_unmap(a0: i32) -> i32;
-    /// klog ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
-    /// xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the kernel
-    /// klog ring, so serial_write publishes klog text into it for the VT to drain
-    /// into vt-1.  notify_endpoint is the caller's own endpoint and receives a
-    /// fire-and-forget VT_IPC_KLOG_NOTIFY doorbell once bytes are pending, so a
-    /// consumer parked on it drains without polling; pass 0 for no doorbell.
-    /// Returns 0 on success, -1 on a bad/foreign buffer id or a notify_endpoint the
-    /// caller does not own.
+    /// Console ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
+    /// xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the
+    /// console ring. From then on kernel log and every process's console output are
+    /// published into it as slot-tagged records (VT_CONSOLE_SLOT_KLOG or the
+    /// writer's controlling slot) instead of going to COM1, and the caller owns
+    /// COM1 for that text through serial_owner_write. notify_endpoint is the
+    /// caller's own endpoint and receives a fire-and-forget VT_IPC_KLOG_NOTIFY
+    /// doorbell once records are pending, so a consumer parked on it drains
+    /// without polling; pass 0 for no doorbell. Requires the console.owner
+    /// capability: the ring receives every tty's output and its registrant owns
+    /// COM1, so owning the buffer and the endpoint is not enough. A later
+    /// successful registration replaces the earlier one. Returns 0 on success;
+    /// WASMOS_ERR_KERNEL_NOT_AUTHORIZED for a caller without console.owner or a
+    /// notify_endpoint the caller does not own; WASMOS_INVAL for a non-positive id
+    /// or a region without a valid ringbuf header; the WASMOS_ERR_XFER_BUFFER_*
+    /// code for an id that is not the caller's transfer buffer;
+    /// WASMOS_ERR_KERNEL_UNALIGNED for a base that is not page-aligned; or
+    /// WASMOS_ERR_KERNEL_NO_CALLER.
     pub fn klog_register_ring(a0: i32, a1: i32) -> i32;
     /// Allocate one message-signalled interrupt vector and bind it to `endpoint`,
     /// which must be owned by the caller. Fills the wasmos_msi_desc_t at `out` with
@@ -719,4 +732,36 @@ unsafe extern "C" {
     /// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
     /// io.port capability.
     pub fn io_region_out32(a0: i32, a1: i32, a2: i32) -> i32;
+    /// Transmit len bytes from guest memory at buf_offset on COM1, '\n' expanded to
+    /// "\r\n", without publishing them to the console ring or the kernel log. Only
+    /// the process that registered the console ring (klog_register_ring) may call
+    /// it: that is the vt, which writes its serial-bound slot through it. Returns 0
+    /// on success (including len == 0), WASMOS_INVAL for a negative len,
+    /// WASMOS_ERR_KERNEL_BAD_POINTER if the range is not readable linear memory,
+    /// WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED when the
+    /// caller did not register the console ring.
+    pub fn serial_owner_write(a0: i32, a1: i32) -> i32;
+    /// Read the kernel log ring by sequence number. Each byte of kernel log has
+    /// a 64-bit sequence number (the count of bytes logged before it) that never
+    /// wraps; the ring retains the newest 64 KiB. The call reads the u64 at
+    /// `seq`, copies up to `len` bytes starting at that sequence number into
+    /// guest memory at `buf`, and writes the sequence number of the first byte
+    /// copied back to `seq`.
+    ///
+    /// A sequence number older than the oldest retained byte starts at the
+    /// oldest one instead, so the value written back minus the value passed is
+    /// the number of bytes the reader lost to overwrite; pass 0 to read from the
+    /// oldest retained byte. Text is the kernel log only, with '\n' line ends.
+    /// The copied bytes are one consistent range, but a read longer than the
+    /// kernel's bounce buffer is assembled from several; it stops early rather
+    /// than return a gap.
+    ///
+    /// Returns the number of bytes copied (0 at the end of the log), WASMOS_INVAL
+    /// for a negative `len` or a sequence number the log never reached, or
+    /// WASMOS_ERR_KERNEL_BAD_POINTER if either range is not writable linear
+    /// memory.
+    ///
+    /// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+    /// are also possible; see the note at the top of this file.
+    pub fn kmsg_read(a0: i32, a1: i32, a2: i32) -> i32;
 }

@@ -27,15 +27,14 @@ class HelloGoTest(unittest.TestCase):
             cls.session.close()
 
     def _cmd_expect(self, cmd: str, needles: list[bytes], timeout_s: int = 20) -> None:
-        mark = self.session.mark()
-        self.session.send(cmd)
+        start = self.session.send_command(cmd, timeout_s=timeout_s)
         for needle in needles:
-            ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
+            ok = self.session.expect_from(start, needle, timeout_s=timeout_s)
             if not ok:
                 self.fail(
                     f"Expected output not found for '{cmd}': {needle!r}\n--- tail ---\n{self.session.tail()}\n"
                 )
-        ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
+        ok = self.session.expect_from(start, b"wamos> ", timeout_s=timeout_s)
         if not ok:
             self.fail(
                 f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"

@@ -122,4 +122,6 @@
     LINK("wasmos", "io_region_in32", stub_i3) , \
     LINK("wasmos", "io_region_out8", stub_i3) , \
     LINK("wasmos", "io_region_out16", stub_i3) , \
-    LINK("wasmos", "io_region_out32", stub_i3)
+    LINK("wasmos", "io_region_out32", stub_i3) , \
+    LINK("wasmos", "serial_owner_write", stub_i2) , \
+    LINK("wasmos", "kmsg_read", stub_i3)

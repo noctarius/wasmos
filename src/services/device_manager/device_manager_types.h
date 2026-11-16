@@ -336,6 +336,7 @@ typedef struct {
     uint8_t active;
     uint8_t class_code;           /* 0xFF = match any */
     uint8_t subclass;             /* 0xFF = match any */
+    uint16_t io_base;             /* ATTR{io}: the device's I/O base; 0 = match any */
     uint64_t spawned_device_mask; /* registry entry index bits already spawned */
     char spawn_path[96];
 } acpi_match_rule_t;

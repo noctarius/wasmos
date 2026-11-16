@@ -57,6 +57,13 @@ wasmos_error_code_t kenv_set(const char* key, const char* value);
  * key, WASMOS_OK otherwise. */
 wasmos_error_code_t kenv_unset(const char* key);
 
+/* Publish a boot command line: whitespace-separated tokens, each `key=value` (the
+ * key ends at the first '=') or a bare `key`, which is published with the value
+ * "1". A token kenv_set refuses -- an empty or over-length key, an over-length
+ * value, a full table -- is skipped whole, never shortened. Returns how many
+ * tokens were published. */
+uint32_t kenv_load_cmdline(const char* line);
+
 /* Entries in use. For tests and for kmap-style reporting. */
 uint32_t kenv_count(void);
 

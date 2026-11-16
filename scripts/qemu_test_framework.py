@@ -45,6 +45,13 @@ class QemuConfig:
     userfs_snapshot: bool = True
     nographic: bool = True
     display: str = ""
+    # File the guest's COM2 is captured into. The shipped kernel.cmdline sets
+    # log.serial=com2, so COM2 carries the kernel log and nothing else, written
+    # by the kernel directly: complete and in order whatever the vt is doing,
+    # whichever slot COM1 is bound to. Empty: QemuSession.start creates one per
+    # session in WASMOS_QEMU_SYSLOG_DIR (default: the temp dir), kept only when
+    # a timeout reported it.
+    syslog_path: str = ""
     isolate_esp: bool = False
     # QMP monitor: set enable_monitor=True to have QemuSession auto-create the
     # socket, or set monitor_socket directly to a path to use a specific one.
@@ -116,6 +123,36 @@ def default_kernel_path(build_dir: str = "build") -> str:
 
 
 CLI_PROMPT = b"wamos> "
+
+
+# One complete guest log line: a bracketed tag ("[net-stack]", "[test]",
+# "[diag]") through its newline. Service logs and the CLI share COM1; klog writes
+# a whole line at once while the CLI echoes keystroke by keystroke, so a log line
+# can land between two echoed characters, but only ever as a whole line.
+_INJECTED_LOG_LINE = rb"(?:\[[^\]\r\n]+\][^\n]*\n)*"
+
+
+def find_echo(buf: bytes, start: int, cmd: str) -> Optional[tuple]:
+    """Locate the CLI's echo of `cmd` at or after `start` as (begin, end).
+
+    `begin` is the first echoed byte and `end` is one past the last, so output
+    the command produced starts at `end`. Between two echoed bytes the echo may
+    contain whole bracket-tagged log lines and nothing else: a partial line, an
+    untagged line, a bare newline or a missing keystroke is a different stream
+    from the one that was typed, and is reported as no echo. Without injected
+    lines the span equals a plain search for the command's bytes.
+    """
+    needle = cmd.encode("utf-8")
+    if not needle:
+        return None
+    pattern = _INJECTED_LOG_LINE.join(
+        re.escape(needle[i : i + 1]) for i in range(len(needle))
+    )
+    match = re.compile(pattern).search(bytes(buf), max(start, 0))
+    if not match:
+        return None
+    return match.start(), match.end()
+
 
 # Guest-state capture on a stalled command. A wedged guest answers nothing, and
 # the serial log then ends mid-sentence with no indication of what stopped --
@@ -342,9 +379,10 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         cmd += ["-accel", accel]
     if cfg.smp_count > 1:
         cmd += ["-smp", str(cfg.smp_count)]
+    cmd += ["-serial", "mon:stdio"]
+    if cfg.syslog_path:
+        cmd += ["-serial", f"file:{cfg.syslog_path}"]
     cmd += [
-        "-serial",
-        "mon:stdio",
         "-drive",
         f"if=pflash,format=raw,readonly=on,file={cfg.ovmf_code}",
     ]
@@ -858,6 +896,9 @@ class QemuSession:
         self.panic_is_fatal = panic_is_fatal
         self.proc: Optional[subprocess.Popen] = None
         self._stall_dumps = 0
+        self._syslog_reports = 0
+        # COM2 capture file, set by start(); see QemuConfig.syslog_path.
+        self.syslog_path = cfg.syslog_path
         # Guest-reset detection. The scan starts only once a prompt has been
         # seen: the banner is also printed by the FIRST boot, where it means
         # nothing.
@@ -921,6 +962,16 @@ class QemuSession:
                 monitor_socket=monitor_socket,
             )
 
+        if not runtime_cfg.syslog_path:
+            fd, syslog_path = tempfile.mkstemp(
+                prefix="wasmos-syslog-",
+                suffix=".log",
+                dir=os.environ.get("WASMOS_QEMU_SYSLOG_DIR") or None,
+            )
+            os.close(fd)
+            runtime_cfg = replace(runtime_cfg, syslog_path=syslog_path)
+        self.syslog_path = runtime_cfg.syslog_path
+
         cmd = build_qemu_cmd(runtime_cfg)
         self.proc = subprocess.Popen(
             cmd,
@@ -947,6 +998,7 @@ class QemuSession:
 
         if not self.proc:
             return
+        self._discard_unreported_syslog()
         try:
             if self.proc.poll() is None:
                 try:
@@ -1132,6 +1184,49 @@ class QemuSession:
         """Whether the guest reset after first reaching a prompt."""
         return self._restarted
 
+    def syslog_tail(self, max_bytes: int = 4096) -> str:
+        """The last `max_bytes` of the COM2 kernel log, or "" when there is none."""
+        path = self.syslog_path
+        if not path or max_bytes <= 0:
+            return ""
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - max_bytes))
+                return f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    def _discard_unreported_syslog(self) -> None:
+        """Delete a session-created COM2 capture that no timeout ever pointed at.
+
+        Every session gets one, so keeping them all would grow the temp dir by a
+        file per test class forever; the one a failure report named is the one
+        worth keeping. A path the caller supplied is the caller's to manage.
+        """
+        if self.cfg.syslog_path or self._syslog_reports or not self.syslog_path:
+            return
+        try:
+            os.unlink(self.syslog_path)
+        except OSError:
+            pass
+
+    def report_syslog(self, reason: str) -> None:
+        """Print where the COM2 kernel log is and its tail, once or twice per session.
+
+        COM1 shows the kernel log only while vt-1 is the serial-bound slot, and
+        only as fast as the vt drains it; COM2 has every line the kernel wrote,
+        in order, which is the record a timeout needs.
+        """
+        if self._syslog_reports >= _STALL_DUMP_MAX:
+            return
+        self._syslog_reports += 1
+        tail = self.syslog_tail()
+        print(f"=== [syslog] {reason}: {self.syslog_path} ===", flush=True)
+        if tail:
+            print(tail.rstrip(), flush=True)
+
     def dump_stall_state(self, reason: str) -> str:
         """Report what every vCPU is executing, symbolised against the kernel.
 
@@ -1150,6 +1245,7 @@ class QemuSession:
         (`--- CPU n` / `rip=<16 hex>`), so a saved CI log can be piped through
         `scripts/decode_kernel_panic.py` unchanged.
         """
+        self.report_syslog(reason)
         if not _STALL_DUMP_ENABLED or self.monitor is None:
             return ""
         if self._stall_dumps >= _STALL_DUMP_MAX:
@@ -1366,6 +1462,48 @@ class QemuSession:
             self._pump(0.2)
         self.dump_stall_state(f"expect_from({needle_b[:40]!r}) timed out")
         return False
+
+    def expect_echo(
+        self, start: int, cmd: str, timeout_s: Optional[int] = None
+    ) -> Optional[int]:
+        """Wait for the CLI's echo of `cmd` after `start`; return where it ends.
+
+        The echo is matched with find_echo, so a log line another process printed
+        into the middle of it does not hide it. Returns the offset one past the
+        last echoed byte, or None on timeout. Like expect_from, a timeout never
+        stops the VM.
+        """
+        limit = timeout_s if timeout_s is not None else self.timeout_s
+        deadline = time.time() + limit * _TIMEOUT_SCALE
+        while time.time() < deadline:
+            found = find_echo(self.buf, start, cmd)
+            if found:
+                return found[1]
+            self._pump(0.2)
+        self.dump_stall_state(f"expect_echo({cmd[:40]!r}) timed out")
+        return None
+
+    def send_command(self, cmd: str, timeout_s: Optional[int] = None) -> int:
+        """Type `cmd` at the CLI and return the offset where its echo ends.
+
+        Output the command produces starts at the returned offset, so callers
+        search from there, never from a mark taken before sending. The prompt and
+        the echo share a line ("/ wamos> mount"): a prompt search from the mark
+        can match the prompt that PRECEDES the command, and a needle that also
+        occurs in the command text can match its echo, both before the command
+        has run.
+
+        Raises AssertionError, which unittest reports as a failure, when the echo
+        never arrives.
+        """
+        mark = self.mark()
+        self.send(cmd)
+        end = self.expect_echo(mark, cmd, timeout_s=timeout_s)
+        if end is None:
+            raise AssertionError(
+                f"'{cmd}' was never echoed.\n--- tail ---\n{self.tail()}\n"
+            )
+        return end
 
     def settle(self, probe_s: int = 3, timeout_s: int = 30) -> bool:
         """Wait until the CLI answers promptly, i.e. it is usable.

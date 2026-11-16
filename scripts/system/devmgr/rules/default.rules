@@ -56,7 +56,11 @@ SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7465-4573-742d-7
 # and policy could not tell the two mounts apart.
 SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7669-7274-696f-2d766f6c3031", ENV{MOUNT}="/vwfs", ENV{FSTYPE}="wfs"
 SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
-SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", RUN+="system/drivers/serial.wap"
+# The serial driver serves COM1, the console UART the vt owns. COM2 is left
+# undriven: with log.serial=com2 on the kernel command line the kernel writes the
+# kernel log to it directly, and a driver instance on it would contend for the
+# same UART.
+SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{io}=="0x3F8", RUN+="system/drivers/serial.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x08", ATTR{subclass}=="0x03", RUN+="system/drivers/rtc.wap"

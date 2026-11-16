@@ -1502,21 +1502,23 @@ tail.
   two runs to learn), and check whether the harness deadlines are simply too
   tight under MTTCG before treating either as a guest bug.
 
-- [ ] [BUG][P2] A QEMU CLI test fails with "'<cmd>' was never echoed" when a
-  service's log line lands in the middle of the CLI's echo. Service logs and the
-  CLI share the serial console, so the echo can arrive split, and
-  `VfsSession._run` (`tests/test_vfs_root_mount.py`) matches the echo as one
-  contiguous byte string. The command itself runs fine; the harness just never
-  sees it. CI run 43608707742 (wasm3_smp, `filesystem` battery, PR #43 tip
-  04fc5608) failed `VfsClientReleaseTest` this way on its FIRST
-  `fs_leave_open /leakfds/held 8`: the serial log reads
-  `fs_leave_open /[net-stack] tls: no CA trust store` then `leakfds/held 8`, then
-  `fs-leave-open: left open` and a fresh prompt. The guest was healthy and
-  idle at the timeout, and the rerun passed. Two ways to fix it, in the harness
-  or at the source: match the echo while skipping whole interleaved log lines,
-  or keep service logs off the line the CLI is echoing to (the log-mirror rules
-  in doc 19). The same exact-match pattern is in other tests' helpers, so fixing
-  it in one helper leaves the rest exposed.
+- [x] [BUG][P2] A QEMU CLI test failed with "'<cmd>' was never echoed" when a
+  service's log line landed in the middle of the CLI's echo. Service logs and
+  the CLI share the serial console, and klog writes whole lines while the CLI
+  echoes keystroke by keystroke, so CI run 43608707742 (wasm3_smp, `filesystem`
+  battery) read `fs_leave_open /[net-stack] tls: no CA trust store` then
+  `leakfds/held 8` and timed out against a healthy guest.
+  Fixed in the harness: `find_echo` in `scripts/qemu_test_framework.py` accepts
+  whole bracket-tagged log lines between echoed bytes and nothing else, and
+  `QemuSession.send_command` returns where the echo ends. Every CLI helper that
+  matched with `expect_from(mark, needle)` now searches from that offset, which
+  also stops a prompt or needle from matching the line that carries the
+  command text. Regression test: `tests/test_cli_echo_match.py` (host-tools).
+  The source is fixed too: the vt now owns serial and its per-slot merge
+  (`vt_outmux`) never emits a log line inside an open input line. What can still
+  split an echo is only what bypasses the vt: the kernel's direct transmit of
+  text a full console ring cannot take, and unlocked panic/NMI output such as the
+  harness's own `[diag]` stall dumps.
 - [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
   `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
   (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends
@@ -1926,46 +1928,53 @@ Source: `architecture/19-virtual-terminal.md`,
 
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 
-- [ ] [FEATURE][P2] Route an app's output to its controlling tty instead of straight to
-  serial. Only three writers should reach the UART directly: the vt (mirroring
-  the serial-bound slot), early boot (before the vt exists), and the panic/fault
-  path. Everything else writes to a slot and lets the vt fan out.
-
-  Today every other component writes to the kernel log instead. libc's
-  `printf`/`puts`/`putsn` and `write(1|2, …)` call `wasmos_console_write`
-  (`src/libc/src/stdio.c:294`, `unistd.c:308`), native services call
-  `api->console_write`, and both land in `klog_write` -> `serial_write`, which
-  fans out to COM1 and the vt's klog ring. The consequence is that an app's
-  output is *system log*: it appears on the console slot no matter which slot the
-  app belongs to, and on serial no matter where serial is bound. An app on vt-2
-  prints onto vt-1's screen. The CLI is the only component in the tree that
-  writes to a slot (`VT_IPC_WRITE_REQ`, `cli.c:637`), and it writes to serial as
-  well — that duplication is exactly why vt-1 currently has to drop writer writes
-  and suppress echo (doc 19, the log-mirror rules).
-
-  Do it in libc, not in the ~53 files that print: a process already knows its
-  controlling tty (`wasmos_startup_tty()`, from spawn info), so `putsn` can send
-  `VT_IPC_WRITE_REQ` to that slot and fall back to `console_write` only when
-  there is no tty (drivers, early services, anything spawned without one). Native
-  services need the same treatment behind `api->console_write`. Then apps need no
-  changes at all, and `console_write` becomes what its name says: a kernel-log
-  call, not the way user code prints.
-
-  Blocked on one missing primitive: the vt cannot mirror a slot to serial while
-  `console_write` feeds the klog ring, because the mirrored bytes come straight
-  back into the slot it just wrote (klog -> vt-1 -> console_write -> klog). A
-  serial write that bypasses the klog ring — a host call, or a flag on the
-  existing one — has to land first.
-
-  Done when: an app spawned on vt-2 prints on vt-2 and nowhere else; the
-  serial-bound slot's output reaches serial through the vt; vt-1 no longer needs
-  its log-mirror special cases; and `wasmos_console_write` has no callers outside
-  libc's fallback path, the kernel, and the panic path.
+- [x] [FEATURE][P2] Route an app's output to its controlling tty instead of straight to
+  serial. Every process now has a controlling slot (`process_t.ctty`, set by the
+  process manager at spawn: a `wants_tty` shell's own slot, otherwise the
+  requester's), and the KERNEL routes by it: the three `console_write`
+  implementations (wasm3, WARP, native) call `console_write_tty`, which publishes
+  into the vt's console ring as slot-tagged records. Done in the kernel rather
+  than in libc as first planned, because Rust/Zig/Go/AS call the host call
+  directly and libc would have covered C alone; `wasmos_console_write` therefore
+  stays the way user code prints, and is now what its routing says. The missing
+  primitive is `serial_owner_write`: registering the ring hands COM1 to the vt,
+  which transmits only the serial-bound slot. vt-1's log-mirror rules and
+  `VT_IPC_WRITE_REQ` are retired; the kernel log shows on vt-1 only, merged a
+  whole line at a time (`vt_outmux`). Verified by
+  `tests/test_vt_serial_bind.py` (vt-2's shell output stays off serial while
+  vt-1 is bound) and `tests/unit/test_vt_outmux.c`.
+- [ ] [BUG][P2] A second 16550 UART stalls the boot. With a COM2 present, the
+  `serial` driver bound to it logs "IRQ route failed, falling back to polling",
+  exits (`[pm] spawn child-dead`), is spawned again, and the CLI prompt never
+  appears (every boot of the filesystem and language-runtimes batteries once the
+  harness attached a second `-serial`). The default rule now binds the driver to
+  COM1 only (`ATTR{io}=="0x3F8"`), so the shipped configuration never starts a
+  second instance; the driver itself still cannot serve a second UART, and its
+  failure takes the boot down rather than leaving that port undriven.
+- [ ] [CLEANUP][P2] Convert the boundary-crossing bare `-1`s left in the files the
+  console-routing change touched: `src/kernel/native_driver.c` (the `nd_*` driver
+  API returns, ~40 sites), `src/kernel/serial.c` (`serial_read_char` and the
+  remote-read helpers), `src/services/vt/vt_main.c` (~27, mostly internal; check
+  which reach an IPC reply), and `src/services/cli/cli.c` (~78, mostly internal
+  helpers). Left out of that change because converting ~150 sites would have
+  buried it; `nd_console_write` and `klog_register_ring` were converted.
 - [ ] [CLEANUP][P3] Delete `console_ring_t` and the plumbing that fills it now that nothing
   drains it: the kernel producer (`src/kernel/serial.c` `serial_ring_write`,
   `serial_console_ring_id`, `serial_console_ring_ptr`), the native driver API's
   `console_ring_id` (an ABI version bump), and the type itself in
   `src/drivers/include/wasmos_driver_abi.h`. The klog ring replaced it.
+- [ ] [BUG][P2] A process's console output that overflows the vt's 16 KiB console
+  ring is transmitted on COM1 directly (`src/kernel/serial.c` `serial_emit`) and
+  never reaches its slot: it is missing from that tty's screen, and it reaches
+  serial even when another slot is bound there. Kernel log is meant to fall back
+  this way; a slot writer has nowhere better to go only because `console_write`
+  has no backpressure. `dmesg` prints up to 64 KiB in one run and reaches it once
+  the kernel log grows past what the vt drains between two of its wakes. A
+  writer with a controlling slot should wait for the vt to drain instead.
+- [ ] [FEATURE][P3] A persistent system log: a logger service that pages the kmsg
+  ring with `kmsg_read` and appends it to `/var/log/messages`, so kernel log
+  older than the ring's 64 KiB survives. It needs a way to wait for new kernel
+  log rather than poll (a doorbell on append, like the vt's console ring).
 - [ ] [ENHANCEMENT][P3] Move the console slot's shell out of `sysinit.rc` too, so the vt owns
   every shell. The vt already spawns one per slot on first use; the console
   slot's is still started by `sysinit.rc`, last, because the first prompt is what

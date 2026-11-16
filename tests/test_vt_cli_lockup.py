@@ -27,13 +27,15 @@ class VtCliLockupRegressionTests(unittest.TestCase):
             cls.session.close()
 
     def _cmd_expect_prompt(self, cmd: str, needle: bytes, timeout_s: int = 12) -> bytes:
+        # The returned output starts at the mark, before the echo, because a
+        # caller inspects the echo itself for doubled keystrokes.
         mark = self.session.mark()
-        self.session.send(cmd)
-        if not self.session.expect_from(mark, needle, timeout_s=timeout_s):
+        start = self.session.send_command(cmd, timeout_s=timeout_s)
+        if not self.session.expect_from(start, needle, timeout_s=timeout_s):
             self.fail(
                 f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
             )
-        if not self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s):
+        if not self.session.expect_from(start, b"wamos> ", timeout_s=timeout_s):
             self.fail(
                 f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
             )

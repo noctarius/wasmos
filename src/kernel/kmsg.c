@@ -1,0 +1,53 @@
+#include "kmsg.h"
+
+#include "wasmos_status.h"
+
+void kmsg_append(kmsg_t* k, const char* s) {
+    if (!s) {
+        return;
+    }
+    for (const char* p = s; *p; ++p) {
+        k->data[k->next & (KMSG_SIZE - 1u)] = (uint8_t)*p;
+        k->next++;
+    }
+}
+
+uint64_t kmsg_first(const kmsg_t* k) {
+    return k->next > KMSG_SIZE ? k->next - KMSG_SIZE : 0;
+}
+
+uint32_t kmsg_size(const kmsg_t* k) {
+    return (uint32_t)(k->next - kmsg_first(k));
+}
+
+void kmsg_copy(const kmsg_t* k, uint8_t* dst, uint32_t offset, uint32_t len) {
+    uint32_t size = kmsg_size(k);
+    if (!dst || offset >= size) {
+        return;
+    }
+    if (len > size - offset) {
+        len = size - offset;
+    }
+    uint64_t start = kmsg_first(k) + offset;
+    for (uint32_t i = 0; i < len; ++i) {
+        dst[i] = k->data[(start + i) & (KMSG_SIZE - 1u)];
+    }
+}
+
+int32_t kmsg_read(const kmsg_t* k, uint64_t* seq, uint8_t* dst, uint32_t len) {
+    if (!seq || !dst || *seq > k->next) {
+        return WASMOS_INVAL;
+    }
+    uint64_t first = kmsg_first(k);
+    uint64_t start = *seq < first ? first : *seq;
+    uint64_t avail = k->next - start;
+    uint32_t n = avail < len ? (uint32_t)avail : len;
+    if (n > (uint32_t)INT32_MAX) {
+        n = (uint32_t)INT32_MAX;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        dst[i] = k->data[(start + i) & (KMSG_SIZE - 1u)];
+    }
+    *seq = start;
+    return (int32_t)n;
+}

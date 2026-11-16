@@ -140,20 +140,20 @@ endpoint-scoped and may repeat across subsystems.
 
 | Opcode | Value | Kind | Description |
 |---|---|---|---|
-| `VT_IPC_WRITE_REQ` | 0x700 | req | arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes  |
+| `VT_IPC_WRITE_REQ` | 0x700 | req | Retired.  A process's console output reaches its controlling slot through wasmos_console_write and the vt's console ring, so nothing writes a slot four bytes per message any more and the vt does not handle this.  The value stays reserved rather than being reused.  |
 | `VT_IPC_READ_REQ` | 0x701 | req |  |
 | `VT_IPC_SET_ATTR_REQ` | 0x702 | req |  |
 | `VT_IPC_SWITCH_TTY` | 0x703 | req |  |
 | `VT_IPC_GET_ACTIVE_TTY` | 0x704 | req |  |
 | `VT_IPC_REGISTER_WRITER` | 0x705 | req |  |
 | `VT_IPC_SET_MODE_REQ` | 0x706 | req |  |
-| `VT_IPC_SERIAL_INPUT_REQ` | 0x707 | req | serial driver -> vt: RX bytes for the serial-bound slot, packed like VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).  |
+| `VT_IPC_SERIAL_INPUT_REQ` | 0x707 | req | serial driver -> vt: RX bytes for the serial-bound slot, packed arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes.  |
 | `VT_IPC_BIND_SERIAL_REQ` | 0x708 | req | Bind the serial console to a slot: arg0=slot.  Serial RX is injected into that slot's line discipline from then on, whichever slot is visible, and it is independent of VT_IPC_SWITCH_TTY.  Slot 0 is the GUI slot and is refused (WASMOS_ERR_VT_SERIAL_SLOT_GUI); an out-of-range slot answers WASMOS_ERR_VT_BAD_TTY_ID.  RESP arg0=the bound slot.  |
 | `VT_IPC_RESP` | 0x780 | resp |  |
 | `VT_IPC_INPUT_NOTIFY` | 0x781 | notify | vt -> a slot's registered reader: input is available on your slot; drain it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot.  |
 | `VT_IPC_KEY_FORWARD` | 0x782 | notify | vt -> compositor (the vt-0 key sink): a decoded key event for the focused window.  Fire-and-forget.  arg0=ascii/keysym (0 if none), arg1=scancode, arg2=flags (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr).  |
 | `VT_IPC_VIS_NOTIFY` | 0x783 | notify | vt -> compositor (the vt-0 key sink): the visible slot changed.  The compositor owns the framebuffer only while vt-0 is visible; on this notify it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now the visible slot, 0 otherwise.  |
-| `VT_IPC_KLOG_NOTIFY` | 0x784 | notify | kernel -> vt: klog bytes are pending in the ring registered through wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt drains the ring on every wake, so receiving it is the whole point and the message itself needs no handling beyond not being treated as an error. Without this doorbell an idle vt drains only on the next unrelated message, which strands klog on screen while the system is quiet.  |
+| `VT_IPC_KLOG_NOTIFY` | 0x784 | notify | kernel -> vt: console records are pending in the ring registered through wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt drains the ring on every wake, so receiving it is the whole point and the message itself needs no handling beyond not being treated as an error. Without this doorbell an idle vt drains only on the next unrelated message, which strands klog on screen while the system is quiet.  |
 | `VT_IPC_ERROR` | 0x7FF | error |  |
 
 ## serial (0x500–0x5FF)

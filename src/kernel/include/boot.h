@@ -9,7 +9,7 @@
 
 #include <stdint.h>
 
-#define BOOT_INFO_VERSION 5u /* increment on any boot_info_t field change */
+#define BOOT_INFO_VERSION 6u /* increment on any boot_info_t field change */
 /* boot_info_t.flags.  The three PRESENT bits say whether the corresponding
  * pointer/size pair is meaningful; a clear bit means the kernel must not read the
  * pointer at all.  The top nibble of the low 12 bits carries the UEFI
@@ -19,7 +19,9 @@
 #define BOOT_INFO_FLAG_MODULES_PRESENT (1u << 1)
 #define BOOT_INFO_FLAG_INITFS_PRESENT (1u << 2)
 #define BOOT_INFO_FLAG_BOOT_PARTITION_PRESENT (1u << 3)
+#define BOOT_INFO_FLAG_CMDLINE_PRESENT (1u << 4)
 #define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT 8u
+#define BOOT_CMDLINE_MAX 256u
 #define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK (0xFu << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT)
 
 /* Payload kind of a boot_module_t.  Only WASMOS_APP modules are produced today; the
@@ -146,6 +148,13 @@ typedef struct {
     uint32_t boot_partition_number;
     uint8_t boot_partition_signature_type;
     uint8_t boot_partition_reserved[3];
+    /* Kernel command line: the contents of \kernel.cmdline on the ESP, NUL-terminated,
+     * with every control character (newlines included) turned into a space and anything
+     * past BOOT_CMDLINE_MAX - 1 bytes dropped.  Whitespace-separated key=value tokens; the
+     * kernel publishes each into kenv.  Valid only with BOOT_INFO_FLAG_CMDLINE_PRESENT,
+     * which is clear when the ESP has no such file.  Held inline so it needs no
+     * re-mapping. */
+    char cmdline[BOOT_CMDLINE_MAX];
 } boot_info_t;
 
 #endif

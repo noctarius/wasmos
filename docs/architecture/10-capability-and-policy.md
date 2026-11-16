@@ -61,11 +61,14 @@ these kinds via `capability_grant_name`:
 | `"system.control"`     | `CAP_SYSTEM_CONTROL`     |
 | `"subsystem.register"` | `CAP_SUBSYSTEM_REGISTER` |
 | `"svc.class"`          | `CAP_SVC_CLASS_REGISTER` |
+| `"console.owner"`      | `CAP_CONSOLE_OWNER`      |
 
 Any unrecognized name returns -1 and grants nothing. `CAP_SVC_CLASS_REGISTER`
 gates registering a service under a virtual class (class-based discovery,
 [Process and IPC](09-process-and-ipc.md)); the plain name registration path is
-ungated.
+ungated. `CAP_CONSOLE_OWNER` gates `klog_register_ring`: the console ring
+receives every tty's output and the kernel log, and its registrant owns COM1
+([Virtual Terminal](19-virtual-terminal.md)); only the vt declares it.
 
 ---
 

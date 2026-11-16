@@ -60,19 +60,18 @@ class FsckWfsClaimTest(unittest.TestCase):
     def _run(self, cmd: str, needles: list[bytes], timeout_s: int = 60) -> None:
         """Run `cmd` and require each needle, then the prompt back.
 
-        Marked and expected FROM the mark, so a line the boot log already carries
-        cannot satisfy an assertion about this invocation.
+        Expected from the end of the command's echo, so a line the boot log
+        already carries cannot satisfy an assertion about this invocation.
         """
         assert self.session is not None
-        mark = self.session.mark()
-        self.session.send(cmd)
+        start = self.session.send_command(cmd, timeout_s=timeout_s)
         for needle in needles:
-            if not self.session.expect_from(mark, needle, timeout_s=timeout_s):
+            if not self.session.expect_from(start, needle, timeout_s=timeout_s):
                 self.fail(
                     f"'{cmd}' did not produce {needle!r}\n"
                     f"--- tail ---\n{self.session.tail()}\n"
                 )
-        if not self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s):
+        if not self.session.expect_from(start, b"wamos> ", timeout_s=timeout_s):
             self.fail(f"no prompt after '{cmd}'\n--- tail ---\n{self.session.tail()}\n")
 
     def test_a_mounted_volume_is_refused(self) -> None:
@@ -96,15 +95,14 @@ class FsckWfsClaimTest(unittest.TestCase):
         work, so its absence is what says the refusal came first.
         """
         assert self.session is not None
-        mark = self.session.mark()
-        self.session.send(f"fsck.wfs {WFS_DEVICE}")
+        start = self.session.send_command(f"fsck.wfs {WFS_DEVICE}", timeout_s=60)
         self.assertTrue(
-            self.session.expect_from(mark, b"wamos> ", timeout_s=60),
+            self.session.expect_from(start, b"wamos> ", timeout_s=60),
             f"no prompt after the refusal\n--- tail ---\n{self.session.tail()}\n",
         )
         self.assertNotIn(
             b"[fsck.wfs] checking",
-            self.session.buf[mark:],
+            self.session.buf[start:],
             "the tool began checking a claimed volume -- the claim is consulted "
             "too late to prevent the read it exists to prevent",
         )

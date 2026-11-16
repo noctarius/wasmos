@@ -27,7 +27,8 @@ typedef enum {
     CAP_DMA_BUFFER = 3,         /* allocate and share DMA-coherent buffers */
     CAP_SYSTEM_CONTROL = 4,     /* privileged kernel control (reboot, power off, etc.) */
     CAP_SUBSYSTEM_REGISTER = 5, /* register broker subsystems + executable-format handlers */
-    CAP_SVC_CLASS_REGISTER = 6  /* register a service under a virtual class (anti-spoof) */
+    CAP_SVC_CLASS_REGISTER = 6, /* register a service under a virtual class (anti-spoof) */
+    CAP_CONSOLE_OWNER = 7       /* register the console ring: all tty output and COM1 */
 } capability_kind_t;
 
 /* Initialize the capability table; called once during kernel startup.
@@ -37,7 +38,7 @@ void capability_init(void);
 /* Grant the named-endpoint capability to context_id (used for IPC access control).
  * `name`/`name_len` is a manifest capability name -- "io.port", "irq.route",
  * "mmio.map", "dma.buffer", "system.control", "subsystem.register",
- * "svc.class"; anything else is refused. Creates the context's record if
+ * "svc.class", "console.owner"; anything else is refused. Creates the context's record if
  * absent, and ORs the bit in, so grants accumulate. `flags` is used only by
  * "dma.buffer", where it is the pinning budget IN PAGES and additionally
  * installs the platform-wide low-2-GiB DMA window (a spawn profile is what

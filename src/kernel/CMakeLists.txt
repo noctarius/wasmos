@@ -151,6 +151,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/hostcall_dma.o
   ${BUILD_DIR}/hostcall_value.o
   ${BUILD_DIR}/kenv.o
+  ${BUILD_DIR}/kmsg.o
   ${BUILD_DIR}/hostcall_buffer.o
   ${BUILD_DIR}/process.o
   ${BUILD_DIR}/thread.o
@@ -301,6 +302,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/hostcall_dma.c
   ${KERNEL_DIR}/hostcall_value.c
   ${KERNEL_DIR}/kenv.c
+  ${KERNEL_DIR}/kmsg.c
   ${KERNEL_DIR}/hostcall_buffer.c
   ${KERNEL_DIR}/process.c
   ${KERNEL_DIR}/thread.c
@@ -648,6 +650,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/hostcall_dma.c -o ${BUILD_DIR}/hostcall_dma.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/hostcall_value.c -o ${BUILD_DIR}/hostcall_value.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kenv.c -o ${BUILD_DIR}/kenv.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kmsg.c -o ${BUILD_DIR}/kmsg.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/hostcall_buffer.c -o ${BUILD_DIR}/hostcall_buffer.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/thread.c -o ${BUILD_DIR}/thread.o

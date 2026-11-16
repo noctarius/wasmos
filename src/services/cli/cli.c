@@ -68,8 +68,6 @@ static int32_t g_devmgr_endpoint = -1;
 static int32_t g_proc_endpoint = -1;
 static int32_t g_vt_endpoint = -1;
 static int32_t g_home_tty = 1;
-static int32_t g_last_seen_active_tty = 1;
-static uint32_t g_vt_switch_generation = 1;
 static int32_t g_request_id = 1;
 /* Select set over the CLI's own endpoints, used to park when idle instead of
  * yield-spinning.  Input arrives as a VT_IPC_INPUT_NOTIFY push on the CLI's VT
@@ -111,7 +109,6 @@ static char g_history_scratch[sizeof(g_line)];
 static int32_t g_history_scratch_len = 0;
 static uint8_t g_history_have_scratch = 0;
 static uint8_t g_esc_state = 0;
-static uint8_t g_fg_query_backoff = 0;
 static cli_env_var_t* g_env = 0;
 static wasmos_script_state_t g_cli_script_state;
 
@@ -652,11 +649,10 @@ static int cli_resolve_path_from_pathvar(const char* prog, char* resolved, uint3
     return -1;
 }
 
-/* Emit a string to the console: sends to the VT service (4 bytes per IPC
- * message, tagged with g_vt_switch_generation) when the CLI's home TTY is
- * the active TTY; otherwise falls back to serial via putsn.
- * g_vt_switch_generation is a monotonic counter that the VT service uses to
- * drop writes from stale writers (e.g. a CLI registered on a previous focus). */
+/* Emit a string to the console.  The kernel routes it to the CLI's controlling
+ * slot (the one it was spawned for), where the vt renders it and, while that
+ * slot is serial-bound, puts it on serial; before the vt is up it goes straight
+ * to serial. */
 static void console_write(const char* s) {
     if (!s) {
         return;
@@ -664,28 +660,6 @@ static void console_write(const char* s) {
     uint32_t len = (uint32_t)wasmos_sys_strlen(s);
     if (len == 0) {
         return;
-    }
-    int use_vt = (g_vt_endpoint >= 0 && g_reply_endpoint >= 0 && g_home_tty > 0 &&
-                  g_vt_client_endpoint >= 0 && g_last_seen_active_tty == g_home_tty);
-    if (use_vt) {
-        uint32_t pos = 0;
-        while (pos < len) {
-            int32_t args[4] = {0, 0, 0, 0};
-            int count = 0;
-            for (int i = 0; i < 4 && pos < len; ++i, ++pos, ++count) {
-                args[i] = (int32_t)(uint8_t)s[pos];
-            }
-            args[0] |= (count << 24);
-            (void)wasmos_sys_ipc_send_retry(g_vt_endpoint,
-                                            g_vt_client_endpoint,
-                                            VT_IPC_WRITE_REQ,
-                                            (int32_t)g_vt_switch_generation,
-                                            args[0],
-                                            args[1],
-                                            args[2],
-                                            args[3],
-                                            CLI_VT_SEND_RETRIES);
-        }
     }
     putsn(s, len);
 }
@@ -782,34 +756,6 @@ static int cli_vt_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg
     return -1;
 }
 
-/* Ask the VT for the currently visible TTY index and its switch generation.  A
- * non-zero generation in the reply refreshes g_vt_switch_generation and, when
- * out_generation is non-NULL, *out_generation.  Returns the visible TTY index;
- * -1 if the VT did not answer, or g_home_tty when there is no VT at all. */
-static int32_t cli_query_active_tty(uint32_t* out_generation) {
-    if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
-        if (out_generation) {
-            *out_generation = g_vt_switch_generation;
-        }
-        return g_home_tty;
-    }
-    wasmos_ipc_message_t reply;
-    if (cli_vt_call(VT_IPC_GET_ACTIVE_TTY, 0, 0, 0, 0, &reply, CLI_VT_RESP_RETRIES) != 0) {
-        return -1;
-    }
-    if (reply.type != VT_IPC_RESP) {
-        return -1;
-    }
-    uint32_t gen = (uint32_t)reply.arg0;
-    if (gen != 0) {
-        g_vt_switch_generation = gen;
-        if (out_generation) {
-            *out_generation = gen;
-        }
-    }
-    return reply.arg1;
-}
-
 /* Move the serial console to `tty`.  The serial-bound slot and the visible slot
  * are separate selectors: this changes which slot receives COM1 input and mirrors
  * to it, and changes nothing on screen.  Returns 0, or -1 with *out_error set to
@@ -879,43 +825,12 @@ static int cli_switch_tty(int32_t tty, int wait_resp, int32_t* out_error) {
         return -1;
     }
     if (reply.type == VT_IPC_RESP) {
-        uint32_t gen = (uint32_t)reply.arg0;
-        if (gen != 0) {
-            g_vt_switch_generation = gen;
-        }
-        g_last_seen_active_tty = reply.arg1;
         return 0;
     }
     if (out_error) {
         *out_error = reply.arg0;
     }
     return -1;
-}
-
-/* Refresh g_last_seen_active_tty (self-throttled by g_fg_query_backoff: 31 idle
- * reads while foreground, 3 while not) and report whether the CLI's home slot is
- * the visible one.  console_write consumes g_last_seen_active_tty to decide
- * between VT output and serial; the read path ignores the return value, because
- * the VT delivers this slot's input regardless of which slot is on screen. */
-static int cli_is_foreground(void) {
-    if (g_vt_endpoint < 0 || g_home_tty <= 0) {
-        return 1;
-    }
-    if (g_fg_query_backoff > 0) {
-        g_fg_query_backoff--;
-        return g_last_seen_active_tty == g_home_tty;
-    }
-    int32_t active_tty = cli_query_active_tty(NULL);
-    if (active_tty >= 0) {
-        g_last_seen_active_tty = active_tty;
-    }
-    g_fg_query_backoff = (g_last_seen_active_tty == g_home_tty) ? 31 : 3;
-    /* While the compositor holds vt-0 the visible tty is 0, not the CLI's home
-     * tty, so console output routes to serial until the user switches back.  The
-     * CLI never reclaims its slot on its own.  With no VT at all
-     * (g_vt_endpoint < 0) the early return above reports foreground
-     * unconditionally, so the serial-only path always writes to serial. */
-    return g_last_seen_active_tty == g_home_tty;
 }
 
 static int cli_register_vt_writer(void) {
@@ -964,10 +879,6 @@ static int cli_register_vt_writer(void) {
         }
         if (resp_type != VT_IPC_RESP) {
             return -1;
-        }
-        uint32_t gen = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        if (gen != 0) {
-            g_vt_switch_generation = gen;
         }
         return 0;
     }
@@ -1882,7 +1793,6 @@ static int cli_handle_line(void) {
             }
             return 0;
         }
-        g_last_seen_active_tty = tty;
         if (tty == 0) {
             console_write("switched to tty0 (system console)\n");
         }
@@ -2211,7 +2121,6 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     } else {
         g_home_tty = 1;
     }
-    g_vt_switch_generation = 1;
     if (g_vt_endpoint >= 0 && cli_register_vt_writer() != 0) {
         console_write("[cli] vt writer register failed; serial fallback\n");
         g_vt_endpoint = -1;
@@ -2222,7 +2131,6 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
         g_vt_endpoint = -1;
         g_vt_client_endpoint = -1;
     }
-    g_last_seen_active_tty = 0;
     /* The CLI does NOT force the visible slot: the compositor owns framebuffer
      * visibility (vt-0), and the CLI reads/writes its own slot (vt-1) regardless
      * of which slot is on screen.  Forcing a switch here fights the compositor
@@ -2288,14 +2196,11 @@ static void cli_phase_read_step(void) {
     int32_t have_ch = 0;
     int32_t from_vt = 0;
     char ch = '\0';
-    /* Refresh the cached active TTY so console_write() routes output to the VT
-     * framebuffer when vt-1 is visible and to serial otherwise (the query is
-     * self-throttled).  The VT queue is read unconditionally regardless: serial
-     * RX for the serial-bound slot (vt-1) is injected by the VT no matter which
-     * slot is visible, and keyboard input only reaches that slot when it is the
-     * active one — so an unconditional read yields serial always and keyboard
-     * only when focused, without the CLI gating on focus itself. */
-    (void)cli_is_foreground();
+    /* The VT queue is read unconditionally: serial RX for the serial-bound slot
+     * is injected by the VT no matter which slot is visible, and keyboard input
+     * only reaches this slot when it is the active one -- so an unconditional
+     * read yields serial always and keyboard only when focused, without the CLI
+     * gating on focus itself. */
     if (g_vt_endpoint >= 0) {
         /* Push model: read on every wake (by VT_IPC_INPUT_NOTIFY or the
          * backstop), draining the queue one char per loop iteration until empty.

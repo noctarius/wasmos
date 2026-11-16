@@ -86,6 +86,9 @@ set(WASM_WFS_WRITE_SMOKE_SRC ${EXAMPLES_C_DIR}/wfs_write_smoke/wfs_write_smoke.c
 set(WASM_FS_LEAVE_OPEN_SRC ${EXAMPLES_C_DIR}/fs_leave_open/fs_leave_open.c)
 set(WASM_FS_LEAVE_OPEN_WASM ${BUILD_DIR}/fs_leave_open.wasm)
 set(WASM_FS_LEAVE_OPEN_APP ${BUILD_DIR}/fs_leave_open.wap)
+set(WASM_CONSOLE_CLAIM_DENY_SRC ${EXAMPLES_C_DIR}/console_claim_deny/console_claim_deny.c)
+set(WASM_CONSOLE_CLAIM_DENY_WASM ${BUILD_DIR}/console_claim_deny.wasm)
+set(WASM_CONSOLE_CLAIM_DENY_APP ${BUILD_DIR}/console_claim_deny.wap)
 set(WASM_WFS_WRITE_SMOKE_WASM ${BUILD_DIR}/wfs_write_smoke.wasm)
 set(WASM_WFS_WRITE_SMOKE_APP ${BUILD_DIR}/wfs_write_smoke.wap)
 set(WASM_NATIVE_CALL_MIN_SRC ${EXAMPLES_C_DIR}/native_call_min/native_call_min.c)
@@ -243,7 +246,7 @@ set(WASM_ACPI_BUS_APP ${BUILD_DIR}/acpi_bus.wap)
 set(WASM_FS_MANAGER_SRC ${SERVICES_DIR}/fs_manager/fs_manager.c)
 set(WASM_FS_MANAGER_WASM ${BUILD_DIR}/fs_manager.wasm)
 set(WASM_FS_MANAGER_APP ${BUILD_DIR}/fs_manager.wap)
-set(WASM_VT_APP_SRC ${SERVICES_DIR}/vt/vt_main.c)
+set(WASM_VT_APP_SRC ${SERVICES_DIR}/vt/vt_main.c ${SERVICES_DIR}/vt/vt_outmux.c)
 set(WASM_VT_APP_WASM ${BUILD_DIR}/vt.wasm)
 set(WASM_VT_APP ${BUILD_DIR}/vt.wap)
 set(WASM_GFX_COMPOSITOR_SRC ${SERVICES_DIR}/gfx_compositor/gfx_compositor.zig)
@@ -322,6 +325,9 @@ set(WASM_BLKINFO_APP ${BUILD_DIR}/blkinfo.wap)
 set(WASM_VOLINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/volinfo/volinfo.c)
 set(WASM_VOLINFO_WASM ${BUILD_DIR}/volinfo.wasm)
 set(WASM_VOLINFO_APP ${BUILD_DIR}/volinfo.wap)
+set(WASM_DMESG_SRC ${CMAKE_SOURCE_DIR}/src/utils/dmesg/dmesg.c)
+set(WASM_DMESG_WASM ${BUILD_DIR}/dmesg.wasm)
+set(WASM_DMESG_APP ${BUILD_DIR}/dmesg.wap)
 set(WASM_PARTPROBE_SRC ${CMAKE_SOURCE_DIR}/src/utils/partprobe/partprobe.c)
 set(WASM_PARTPROBE_WASM ${BUILD_DIR}/partprobe.wasm)
 set(WASM_PARTPROBE_APP ${BUILD_DIR}/partprobe.wap)
@@ -1762,6 +1768,7 @@ if (TARGET host_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_UMOUNT_APP} ${BUILD_DIR}/esp/system/utils/umount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_BLKINFO_APP} ${BUILD_DIR}/esp/system/utils/blkinfo.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VOLINFO_APP} ${BUILD_DIR}/esp/system/utils/volinfo.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DMESG_APP} ${BUILD_DIR}/esp/system/utils/dmesg.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PARTPROBE_APP} ${BUILD_DIR}/esp/system/utils/partprobe.wap
     # Staged under the name the CLI resolves: typing `fsck.wfs` appends .wap.
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FSCK_WFS_APP} ${BUILD_DIR}/esp/system/utils/fsck.wfs.wap
@@ -1790,6 +1797,7 @@ set(WFS_WRITE_SMOKE_COPY_CMD
 )
 set(FS_LEAVE_OPEN_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_LEAVE_OPEN_APP} ${BUILD_DIR}/esp/apps/fs_leave_open.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CONSOLE_CLAIM_DENY_APP} ${BUILD_DIR}/esp/apps/console_claim_deny.wap
 )
 set(FS_WRITE_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_WRITE_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_write_smoke.wap
@@ -2012,6 +2020,9 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
   COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
   COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+  # Kernel command line (src/kernel/include/boot.h, cmdline).  The shipped one turns
+  # on the COM2 kernel-log port; the run targets capture COM2 in ${BUILD_DIR}/syslog.log.
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/kernel.cmdline ${BUILD_DIR}/esp/kernel.cmdline
   ${INITFS_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
@@ -2084,7 +2095,7 @@ endif ()
 if (OVMF_VARS)
   add_custom_target(run-qemu
     ${WASMOS_ESP_POPULATE_CMDS}
-    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio -serial file:${BUILD_DIR}/syslog.log
             ${WASMOS_QEMU_NETDEV_ARGS}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
@@ -2100,7 +2111,7 @@ if (OVMF_VARS)
   )
   add_custom_target(run-qemu-debug
     ${WASMOS_ESP_POPULATE_CMDS}
-    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio -serial file:${BUILD_DIR}/syslog.log
             -S -gdb tcp::${QEMU_GDB_PORT}
             ${WASMOS_QEMU_NETDEV_ARGS}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -2117,7 +2128,7 @@ if (OVMF_VARS)
   )
   add_custom_target(run-qemu-ui
     ${WASMOS_ESP_POPULATE_CMDS}
-    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
+    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio -serial file:${BUILD_DIR}/syslog.log
             ${WASMOS_QEMU_NETDEV_ARGS}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
@@ -2196,7 +2207,7 @@ else ()
   if (OVMF_CODE)
     add_custom_target(run-qemu
       ${WASMOS_ESP_POPULATE_CMDS}
-      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio -serial file:${BUILD_DIR}/syslog.log
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
@@ -2211,7 +2222,7 @@ else ()
     )
     add_custom_target(run-qemu-debug
       ${WASMOS_ESP_POPULATE_CMDS}
-      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio -serial file:${BUILD_DIR}/syslog.log
               -S -gdb tcp::${QEMU_GDB_PORT}
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -2227,7 +2238,7 @@ else ()
     )
     add_custom_target(run-qemu-ui
       ${WASMOS_ESP_POPULATE_CMDS}
-      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
+      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio -serial file:${BUILD_DIR}/syslog.log
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
@@ -2658,6 +2669,14 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/cli/cli_ls_order.c
           -o ${BUILD_DIR}/test_cli_ls_order
   COMMAND ${BUILD_DIR}/test_cli_ls_order
+  # The vt's merge of a slot's writer output with the kernel log. Split out of
+  # vt_main.c for the same reason: no IPC, no framebuffer, no globals.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${SERVICES_DIR}/vt
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_vt_outmux.c
+          ${SERVICES_DIR}/vt/vt_outmux.c
+          -o ${BUILD_DIR}/test_vt_outmux
+  COMMAND ${BUILD_DIR}/test_vt_outmux
   # FAT directory scanning over a cluster chain. The test supplies its own block
   # layer (a RAM image served synchronously), so fat_block.c is deliberately NOT
   # linked; fat_util.c is, because fat_geom.c logs through it.
@@ -3747,6 +3766,15 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${KERNEL_DIR}/kenv.c
           -o ${BUILD_DIR}/test_kenv
   COMMAND ${BUILD_DIR}/test_kenv
+  # The kernel log ring: sequence-numbered paging for dmesg, and the
+  # offset-from-oldest copy the boot replays use.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_kmsg.c
+          ${KERNEL_DIR}/kmsg.c
+          -o ${BUILD_DIR}/test_kmsg
+  COMMAND ${BUILD_DIR}/test_kmsg
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -4512,6 +4540,7 @@ set(WASMOS_UNIT_SCHED_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_block_buffer.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_value.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_kenv.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_kmsg.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_buffer.c)
 
 wasmos_ide_index(wasmos_ide_unit_sched
@@ -4611,7 +4640,7 @@ wasmos_ide_index(wasmos_ide_unit
          ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
          ${CMAKE_SOURCE_DIR}/abi/generated/c
          ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
-         ${SERVICES_DIR}/net_stack ${SERVICES_DIR}/cli
+         ${SERVICES_DIR}/net_stack ${SERVICES_DIR}/cli ${SERVICES_DIR}/vt
          ${DRIVER_WASM_DIR}/fs_fat ${DRIVER_WASM_DIR}/fs_wfs
          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
          ${WASM3_DIR} ${WASM3_DIR}/source)

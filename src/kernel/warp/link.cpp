@@ -279,7 +279,8 @@ static uint32_t warp_console_read(uint32_t buf_offset, uint32_t len, void* ctx_)
 }
 
 /* hostcalls.yaml `console_write`.  Relays `len` bytes of guest memory at `buf_offset`
- * to the kernel log; the guest buffer is read-only to this call.  Returns 0 on success,
+ * to the caller's controlling text slot, or to the kernel log when it has none
+ * (console_write_tty); the guest buffer is read-only to this call.  Returns 0 on success,
  * 0 for len == 0 (a no-op, not a failure), WASMOS_INVAL for a negative `len`, and
  * WASMOS_ERR_KERNEL_BAD_POINTER when the range leaves the caller's linear memory.
  * Preemption is disabled across the whole relay so one write is not interleaved. */
@@ -292,9 +293,11 @@ static uint32_t warp_console_write(uint32_t buf_offset, uint32_t len, void* ctx_
     uint8_t* buf = warp_mem(ctx, buf_offset, len);
     if (!buf)
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    /* klog_write takes a NUL-terminated string but the guest buffer is a counted
-     * range, so the payload is relayed in <= 127-byte chunks through a stack
-     * buffer that is terminated in place.  The guest buffer is never written. */
+    /* console_write_tty takes a NUL-terminated string but the guest buffer is a
+     * counted range, so the payload is relayed in <= 127-byte chunks through a
+     * stack buffer that is terminated in place.  The guest buffer is never
+     * written. */
+    uint32_t tty = process_current_ctty();
     preempt_disable();
     uint32_t written = 0;
     char tmp[128];
@@ -304,7 +307,7 @@ static uint32_t warp_console_write(uint32_t buf_offset, uint32_t len, void* ctx_
             chunk = 127;
         __builtin_memcpy(tmp, buf + written, chunk);
         tmp[chunk] = '\0';
-        klog_write(tmp);
+        console_write_tty(tty, tmp);
         written += chunk;
     }
     preempt_enable();
@@ -1826,7 +1829,7 @@ static uint32_t warp_thread_yield(void* ctx_) {
  * klog_register_ring, which takes no retain — the caller must keep the buffer alive for
  * as long as the kernel logs into it.  `notify_endpoint` receives the VT_IPC_KLOG_NOTIFY
  * doorbell and must belong to the caller; a non-positive value registers the ring without
- * one.  Returns klog_register_ring's result (0, or a bare -1 on any of those checks), or
+ * one.  Returns klog_register_ring's result (0, or a packed code naming the failed check), or
  * WASMOS_INVAL / WASMOS_ERR_KERNEL_NO_CALLER. */
 static uint32_t warp_klog_register_ring(uint32_t id, uint32_t notify_endpoint, void* ctx_) {
     (void)ctx_;
@@ -1839,6 +1842,27 @@ static uint32_t warp_klog_register_ring(uint32_t id, uint32_t notify_endpoint, v
      * inside klog_register_ring, matching the wasm3 path. */
     uint32_t notify = ((int32_t)notify_endpoint > 0) ? notify_endpoint : 0u;
     return (uint32_t)klog_register_ring(context_id, id, notify);
+}
+
+/* hostcalls.yaml `serial_owner_write`: transmit `len` bytes of guest memory at
+ * `buf_offset` on COM1 for the console ring's owner.  Returns 0 (also for
+ * len == 0), WASMOS_INVAL for a negative `len`, WASMOS_ERR_KERNEL_BAD_POINTER when
+ * the range leaves linear memory, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * serial_owner_write's WASMOS_ERR_KERNEL_NOT_AUTHORIZED for a caller that did not
+ * register the console ring. */
+static uint32_t warp_serial_owner_write(uint32_t buf_offset, uint32_t len, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    if ((int32_t)len < 0)
+        return (uint32_t)WASMOS_INVAL;
+    if (len == 0)
+        return 0;
+    uint8_t* buf = warp_mem(ctx, buf_offset, len);
+    if (!buf)
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    return (uint32_t)serial_owner_write(context_id, reinterpret_cast<const char*>(buf), len);
 }
 /* Place a page-aligned window of `window_size` bytes somewhere in the calling
  * app's linear memory, grow/commit linmem to cover it, and remap the window's
@@ -2547,6 +2571,44 @@ static uint32_t warp_early_log_copy(uint32_t buf_off, uint32_t len, uint32_t off
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     serial_early_log_copy(dst, offset, len);
     return 0;
+}
+
+/* hostcalls.yaml `kmsg_read`: page the kernel log ring by sequence number.  The
+ * ring is read under the serial lock with interrupts off, so it is copied out in
+ * bounce-sized pieces; a piece that no longer starts where the previous one ended
+ * (the bytes were overwritten in between) ends the read, and the guest's next call
+ * reports the gap.  Returns the bytes copied, WASMOS_INVAL, or
+ * WASMOS_ERR_KERNEL_BAD_POINTER. */
+static uint32_t warp_kmsg_read(uint32_t buf_off, uint32_t len, uint32_t seq_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    if ((int32_t)len < 0)
+        return (uint32_t)WASMOS_INVAL;
+    uint8_t* dst = len ? warp_mem(ctx, buf_off, len) : nullptr;
+    uint8_t* seq_ptr = warp_mem(ctx, seq_off, sizeof(uint64_t));
+    if ((len && !dst) || !seq_ptr)
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    uint64_t want = 0;
+    __builtin_memcpy(&want, seq_ptr, sizeof(want));
+    uint64_t start = want;
+    uint32_t copied = 0;
+    uint8_t bounce[256];
+    do {
+        uint64_t at = start + copied;
+        uint32_t chunk =
+            len - copied < (uint32_t)sizeof(bounce) ? len - copied : (uint32_t)sizeof(bounce);
+        int32_t n = serial_kmsg_read(copied ? &at : &start, bounce, chunk);
+        if (n < 0)
+            return (uint32_t)n;
+        if (copied && at != start + copied)
+            break;
+        if (n > 0)
+            __builtin_memcpy(dst + copied, bounce, (uint32_t)n);
+        copied += (uint32_t)n;
+        if ((uint32_t)n < chunk)
+            break;
+    } while (copied < len);
+    __builtin_memcpy(seq_ptr, &start, sizeof(start));
+    return copied;
 }
 
 /* A mark is dropped: wasm3 implements it and this backend does not.  Reports success so

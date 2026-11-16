@@ -32,3 +32,9 @@ required_endpoint_rights = 1
 [[capabilities]]
 name = "ipc.basic"
 flags = 0
+
+# Registers the console ring (klog_register_ring): every tty's output and the
+# kernel log arrive there, and the vt owns COM1 (serial_owner_write).
+[[capabilities]]
+name = "console.owner"
+flags = 0

@@ -43,16 +43,18 @@ class VtTtySwitchTests(unittest.TestCase):
         # A wedge would block the VT (and the switch reply) for ~80s; keep the
         # budget far below that but above a healthy switch.
         t0 = time.time()
-        mark = self.session.mark()
-        self.session.send("tty 1")
-        if not self.session.expect_from(mark, b"wamos> ", timeout_s=15):
+        # Searched from the end of the echo: a log line that arrives while the
+        # command is typed repaints the open line, and earlier output on it,
+        # after any mark taken before the send.
+        start = self.session.send_command("tty 1", timeout_s=15)
+        if not self.session.expect_from(start, b"wamos> ", timeout_s=15):
             self.fail(
                 f"No prompt within 15s after 'tty 1' (switch wedged?).\n"
                 f"--- tail ---\n{self.session.tail()}\n"
             )
         self.assertNotIn(
             b"switch failed",
-            self.session.buf[mark:],
+            self.session.buf[start:],
             msg=f"tty switch reported failure.\n--- tail ---\n{self.session.tail()}\n",
         )
         dt = time.time() - t0

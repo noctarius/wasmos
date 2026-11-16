@@ -158,32 +158,63 @@ def find_echo(buf: bytes, start: int, cmd: str) -> Optional[tuple]:
 # (src/services/vt/vt_outmux.c): the line is erased -- "\r" + CSI K, or for a
 # wrapped line "\r" + CSI n A + CSI J -- the whole log line is printed, and the
 # open line is repainted after it.
-_MERGE_ERASE = rb"\r(?:\x1b\[\d+A)?\x1b\[[KJ]"
+_MERGE_ERASE = re.compile(rb"\r(?:\x1b\[\d+A)?\x1b\[[KJ]")
 
 
-def find_command_line_end(buf: bytes, echo_end: int, cmd: str) -> Optional[int]:
-    """Return where the command's output starts: past the line's newline.
+def find_command_line_end(buf: bytes, echo_end: int, cmd: str) -> tuple:
+    """Return (offset, settled): where the command's output starts.
 
     `echo_end` is find_echo's end of the echoed characters. The CLI writes the
-    line's newline after them, and a log line arriving in between interrupts
-    the still-open line. Stepped over here, before the newline: a whole
-    bracket-tagged log line printed straight into the stream, or the vt's merge
-    -- erase, log line, repaint of the open line ending in the command again.
-    The repaint carries whatever else was on the line (the prompt, a previous
-    command's output without a trailing newline), which is why it must not be
-    counted as this command's output. Returns None while the newline has not
-    arrived, or when the bytes after the echo are none of those.
+    line's newline after them, and a log line arriving in between makes the vt
+    erase the still-open line, print the log line and repaint the line after it.
+    The repaint carries whatever else was on that line -- the prompt, a previous
+    command's output left without a newline -- so it must not be counted as this
+    command's output. Each such repaint (erase, one log line, the line ending in
+    the command again) is stepped over, and so is the newline that ends the
+    line.
+
+    Nothing else is. Kernel log the kernel writes straight to COM1 (a vt console
+    ring that overflowed) arrives without an erase and can precede the newline;
+    for a command like `kmaps all` it IS the output, so the offset stops before
+    it.
+
+    `settled` is False while the bytes after the offset could still turn out to
+    be a repaint or a newline -- nothing yet, a lone "\r", or a repaint still
+    arriving -- so the caller should wait for more.
     """
-    needle = re.escape(cmd.encode("utf-8"))
-    pattern = (
-        rb"(?:"
-        + _MERGE_ERASE
-        + rb"\[[^\]\r\n]+\][^\n]*\n[^\n]*?"
-        + needle
-        + rb"|\[[^\]\r\n]+\][^\n]*\n)*\r?\n"
-    )
-    match = re.compile(pattern).match(bytes(buf), echo_end)
-    return match.end() if match else None
+    data = bytes(buf)
+    needle = cmd.encode("utf-8")
+    pos = echo_end
+    while True:
+        rest = data[pos:]
+        if not rest or rest == b"\r":
+            return pos, False
+        if rest.startswith(b"\n"):
+            return pos + 1, True
+        if rest.startswith(b"\r\n"):
+            return pos + 2, True
+        if not rest.startswith(b"\r\x1b"):
+            return pos, True
+        erase = _MERGE_ERASE.match(data, pos)
+        if not erase:
+            # An escape sequence still arriving, or one that is not the merge's.
+            return pos, len(rest) >= 8
+        log_end = data.find(b"\n", erase.end())
+        if log_end < 0:
+            return pos, False
+        repaint_end = data.find(b"\n", log_end + 1)
+        repaint = (
+            data[log_end + 1 :] if repaint_end < 0 else data[log_end + 1 : repaint_end]
+        )
+        at = repaint.find(needle)
+        if at >= 0 and at + len(needle) <= len(repaint):
+            # The repaint ends with the full command; anything typed later (none
+            # here) would follow it. Continue after it.
+            pos = log_end + 1 + at + len(needle)
+            continue
+        if repaint_end < 0:
+            return pos, False
+        return pos, True
 
 
 # Guest-state capture on a stalled command. A wedged guest answers nothing, and
@@ -1518,10 +1549,9 @@ class QemuSession:
     def send_command(self, cmd: str, timeout_s: Optional[int] = None) -> int:
         """Type `cmd` at the CLI and return the offset where its output starts.
 
-        That is past the newline ending the command line, not merely past the
-        echoed characters: a log line arriving before the newline makes the vt
-        repaint the line -- prompt and earlier output included -- after the
-        echo (find_command_line_end). Callers search from the returned offset,
+        That is past the echoed characters, any repaint of the line the vt
+        printed before its newline (which carries the prompt and earlier output),
+        and the newline itself (find_command_line_end). Callers search from the returned offset,
         never from a mark taken before sending. The prompt and
         the echo share a line ("/ wamos> mount"): a prompt search from the mark
         can match the prompt that PRECEDES the command, and a needle that also
@@ -1541,15 +1571,12 @@ class QemuSession:
         limit = timeout_s if timeout_s is not None else self.timeout_s
         deadline = time.time() + limit * _TIMEOUT_SCALE
         while True:
-            end = find_command_line_end(self.buf, echo_end, cmd)
-            if end is not None:
+            end, settled = find_command_line_end(self.buf, echo_end, cmd)
+            if settled or time.time() >= deadline:
+                # Unsettled at the deadline means the guest wrote nothing after
+                # the echo; the caller's own wait reports that.
                 return end
-            if time.time() >= deadline:
-                break
             self._pump(0.2)
-        raise AssertionError(
-            f"'{cmd}' was echoed but its line never ended.\n--- tail ---\n{self.tail()}\n"
-        )
 
     def settle(self, probe_s: int = 3, timeout_s: int = 30) -> bool:
         """Wait until the CLI answers promptly, i.e. it is usable.

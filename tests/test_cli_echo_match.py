@@ -188,6 +188,26 @@ class EchoEndTest(unittest.TestCase):
         after = self._end_of([SPAWN.encode() + b"\r\n[curl] connect failed\r\n"])
         self.assertTrue(after.startswith(b"[curl] connect failed"), after)
 
+    def test_kernel_log_written_straight_to_serial_stays_in_the_output(self):
+        """A command whose output is kernel log (`kmaps all`) can overflow the vt's
+        console ring; the kernel then writes the rest to COM1 directly, ahead of
+        the CLI's newline. Those lines are the command's output and must stay
+        after the offset: only the vt's own repaint is stepped over."""
+        session = _ScriptedSession(
+            b"\r\n/ wamos> ",
+            [
+                b"kmaps all",
+                b"[kmap] pid=3 name=mem-service\r\n[paging] dump: pdpt_high[72]=1\r\n",
+                b"kmaps all: dumped to kernel log\r\n\r\n/ wamos> ",
+            ],
+        )
+        end = session.send_command("kmaps all", timeout_s=2)
+        while session._chunks:
+            session._pump(0)
+        self.assertTrue(
+            bytes(session.buf[end:]).startswith(b"[kmap] pid=3"), session.buf[end:]
+        )
+
     def test_a_log_line_inside_the_echo_still_ends_after_the_newline(self):
         after = self._end_of(
             [

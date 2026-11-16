@@ -7,6 +7,13 @@ spawn /boot/apps/chardevc.wap
 
 start /boot/system/services/vt.wap
 
+# The kernel log, appended to /var/log/messages on the tmpfs root from the first
+# boot line on (the logger reads the kernel's ring from its oldest byte).
+exec /boot/system/utils/mkdir.wap -p /var/log
+if -f /boot/system/services/logger.wap then
+    spawn /boot/system/services/logger.wap
+endif
+
 if -f /boot/system/services/fontsvc.wap then
     start /boot/system/services/fontsvc.wap
 endif

@@ -254,6 +254,7 @@ const (
 	WASMOS_ERR_KERNEL_MAP_FAILED int32 = -0x00130008 // the paging step failed
 	WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT int32 = -0x00130009 // the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force
 	WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED int32 = -0x0013000A // an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution
+	WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT int32 = -0x0013000B // every kernel-log subscriber slot is held by another process
 	WASMOS_ERR_BLOCK_NO_SLOT int32 = -0x00140001 // no per-process block slot is available
 	WASMOS_ERR_BLOCK_NO_BACKING int32 = -0x00140002 // no physical backing could be obtained for the buffer
 	WASMOS_ERR_BLOCK_ABOVE_4G int32 = -0x00140003 // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
@@ -794,6 +795,8 @@ func WasmosStrerror(c int32) string {
 		return "the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force"
 	case WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED:
 		return "an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution"
+	case WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT:
+		return "every kernel-log subscriber slot is held by another process"
 	case WASMOS_ERR_BLOCK_NO_SLOT:
 		return "no per-process block slot is available"
 	case WASMOS_ERR_BLOCK_NO_BACKING:

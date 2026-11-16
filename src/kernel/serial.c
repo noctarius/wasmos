@@ -72,6 +72,9 @@ static inline uint8_t inb(uint16_t port) {
 /* The kernel log ring (kmsg.h): every kernel-log write since the first line of
  * kmain.  Appended under g_serial_lock, or unlocked on the panic path. */
 static kmsg_t g_kmsg;
+/* Who is woken on a kernel-log append (kmsg.h).  Marked under the same lock as
+ * the append; delivered by kmsg_poll(). */
+static kmsg_notify_t g_kmsg_notify;
 
 static ksync_spinlock_t g_serial_lock = {0};
 static uint8_t g_serial_high_alias_enabled = 0;
@@ -193,6 +196,14 @@ static inline kmsg_t* serial_kmsg(void) {
         addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
     return (kmsg_t*)(void*)addr;
+}
+
+static inline kmsg_notify_t* serial_kmsg_notify(void) {
+    uintptr_t addr = (uintptr_t)&g_kmsg_notify;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (kmsg_notify_t*)(void*)addr;
 }
 
 static int serial_tx_ready(void) {
@@ -707,6 +718,7 @@ static void serial_emit(uint8_t slot, const char* s, int route) {
     serial_ring_write(s);
     if (slot == VT_CONSOLE_SLOT_KLOG) {
         kmsg_append(serial_kmsg(), s);
+        kmsg_notify_mark(serial_kmsg_notify());
     }
     uint16_t log_port = *serial_log_port_slot();
     if (log_port != 0 && slot == VT_CONSOLE_SLOT_KLOG) {
@@ -938,6 +950,72 @@ int32_t serial_kmsg_read(uint64_t* seq, uint8_t* dst, uint32_t len) {
     int32_t rc = kmsg_read(serial_kmsg(), seq, dst, len);
     ksync_spinlock_unlock(serial_lock_ptr());
     return rc;
+}
+
+static void serial_kmsg_env_lock(void* user) {
+    (void)user;
+    ksync_spinlock_lock(serial_lock_ptr());
+}
+
+static void serial_kmsg_env_unlock(void* user) {
+    (void)user;
+    ksync_spinlock_unlock(serial_lock_ptr());
+}
+
+/* A subscription is alive while its context still owns its endpoint: endpoints
+ * are released when their process exits. */
+static int serial_kmsg_env_alive(void* user, uint32_t context_id, uint32_t endpoint) {
+    uint32_t owner = 0;
+    (void)user;
+    return ipc_endpoint_owner(endpoint, &owner) == IPC_OK && owner == context_id;
+}
+
+static int serial_kmsg_env_send(void* user, uint32_t endpoint) {
+    (void)user;
+    ipc_message_t msg;
+    msg.type = (uint32_t)WASMOS_IPC_KMSG_NOTIFY;
+    msg.request_id = 0;
+    msg.source = IPC_ENDPOINT_NONE;
+    msg.destination = endpoint;
+    msg.arg0 = 0;
+    msg.arg1 = 0;
+    msg.arg2 = 0;
+    msg.arg3 = 0;
+    return ipc_send_from(IPC_CONTEXT_KERNEL, endpoint, &msg) == IPC_OK ? 0 : 1;
+}
+
+/* The kernel side of the kmsg subscriber protocol (kmsg.h): the serial lock
+ * guards the table, the IPC layer answers liveness and carries the notify. */
+static const kmsg_notify_env_t g_kmsg_notify_env = {
+    serial_kmsg_env_lock,
+    serial_kmsg_env_unlock,
+    serial_kmsg_env_alive,
+    serial_kmsg_env_send,
+    0,
+};
+
+/* Subscribes `endpoint`, which context_id must own, to kernel-log appends
+ * (kmsg_notify_subscribe).  Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED for an
+ * endpoint context_id does not own, WASMOS_INVAL, or
+ * WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT. */
+int32_t serial_kmsg_subscribe(uint32_t context_id, uint32_t endpoint) {
+    if (endpoint == 0 || !serial_kmsg_env_alive(0, context_id, endpoint)) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
+    return kmsg_notify_subscribe(serial_kmsg_notify(), &g_kmsg_notify_env, context_id, endpoint);
+}
+
+/* Delivers owed kmsg notifies (kmsg_notify_deliver).  Called from the scheduler
+ * loop next to klog_poll(), for the same reasons: it is not interrupt context,
+ * and the notify is sent with no serial lock held.  A notify that could not be
+ * queued stays owed and is retried here on a later pass. */
+void kmsg_poll(void) {
+    /* Unlocked first look: this runs on every scheduler pass.  A flag raised just
+     * after it is seen on the next pass. */
+    if (!__atomic_load_n(&serial_kmsg_notify()->pending, __ATOMIC_RELAXED)) {
+        return;
+    }
+    kmsg_notify_deliver(serial_kmsg_notify(), &g_kmsg_notify_env);
 }
 
 /* Non-blocking single-character read from the console.  Returns 1 with *out_char

@@ -870,5 +870,16 @@ extern int32_t wasmos_serial_owner_write(int32_t buf, int32_t len) WASMOS_WASM_I
  * are also possible; see the note at the top of this file.
  */
 extern int32_t wasmos_kmsg_read(void* buf, int32_t len, uint64_t* seq) WASMOS_WASM_IMPORT("wasmos", "kmsg_read");
+/* Ask to be woken when kernel log is appended: from now on the kernel sends a
+ * payload-less WASMOS_IPC_KMSG_NOTIFY to `endpoint`, which must be one of the
+ * caller's own endpoints, once per batch of appends (never one per line). The
+ * notify carries no position; the caller pages the ring with kmsg_read from
+ * where it stopped. One subscription per process: subscribing again replaces
+ * the endpoint. It ends when the process exits. Returns 0,
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED for an endpoint the caller does not own,
+ * WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT when every subscriber slot is held by
+ * another process, or WASMOS_ERR_KERNEL_NO_CALLER.
+ */
+extern int32_t wasmos_kmsg_subscribe(int32_t endpoint) WASMOS_WASM_IMPORT("wasmos", "kmsg_subscribe");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

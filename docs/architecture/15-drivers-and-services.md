@@ -538,6 +538,10 @@ script interpreted by the `wasmos_script` engine. Current script:
 ```
 spawn /boot/apps/chardevc.wap
 start /boot/system/services/vt.wap
+exec /boot/system/utils/mkdir.wap -p /var/log
+if -f /boot/system/services/logger.wap then
+    spawn /boot/system/services/logger.wap
+endif
 if -f /boot/system/services/fontsvc.wap then
     start /boot/system/services/fontsvc.wap
 endif
@@ -547,6 +551,26 @@ start /boot/system/services/cli.wap
 
 `start` spawns synchronously (waits for `PROC_IPC_NOTIFY_READY` or 30-second
 timeout). `spawn` spawns asynchronously (no wait).
+
+#### `logger` — Kernel Log to `/var/log/messages`
+
+- **Kind:** WASM async service (`async_initialize`, `src/services/logger`)
+- **Entry bindings:** `proc.endpoint`
+
+Appends the kernel log to `/var/log/messages` on the tmpfs root. It pages the
+kernel's kmsg ring with `kmsg_read` from the oldest retained byte, so the file
+starts with the boot, and subscribes its reply endpoint with `kmsg_subscribe`,
+so the kernel wakes it with `WASMOS_IPC_KMSG_NOTIFY` once per batch of appends
+([Diagnostics](25-diagnostics-status.md)). Between batches it is parked on its
+event loop. Opens and writes go to fs-manager as futures
+(`wasmos_sys_wasm_fs_*_async`), and the ready notification the process manager
+waits for is a future too: the service makes no blocking call.
+
+Kernel log the ring overwrote before it was read is replaced by a
+`[logger] N bytes ... lost` line. The file is capped at 1 MiB written per
+logger instance and then truncated, with a line saying so. A write that fails
+ends the service with one kernel-log line rather than a retry, because its own
+message would wake it into the same failure.
 
 #### `cli` — Interactive Shell
 
@@ -663,6 +687,8 @@ kernel init (after device-manager NOTIFY_READY)
        └─ executes /boot/system/sysinit.rc
             ├─ spawn  chardevc.wap
             ├─ start  vt.wap
+            ├─ exec   mkdir.wap -p /var/log
+            ├─ spawn  logger.wap   (if present)
             ├─ start  fontsvc.wap  (if present)
             ├─ spawn  gfxcomp.wap
             └─ start  cli.wap

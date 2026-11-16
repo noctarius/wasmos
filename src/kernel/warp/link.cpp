@@ -2611,6 +2611,18 @@ static uint32_t warp_kmsg_read(uint32_t buf_off, uint32_t len, uint32_t seq_off,
     return copied;
 }
 
+/* hostcalls.yaml `kmsg_subscribe`: wake `endpoint`, which the caller must own, on
+ * kernel-log appends (serial_kmsg_subscribe).  Returns 0,
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED, WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT, or
+ * WASMOS_ERR_KERNEL_NO_CALLER. */
+static uint32_t warp_kmsg_subscribe(uint32_t endpoint, void* ctx_) {
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    return (uint32_t)serial_kmsg_subscribe(context_id, endpoint);
+}
+
 /* A mark is dropped: wasm3 implements it and this backend does not.  Reports success so
  * a guest that instruments itself runs identically under both runtimes. */
 static uint32_t warp_debug_mark(uint32_t /*tag*/, void* ctx_) {

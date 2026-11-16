@@ -249,6 +249,9 @@ set(WASM_FS_MANAGER_APP ${BUILD_DIR}/fs_manager.wap)
 set(WASM_VT_APP_SRC ${SERVICES_DIR}/vt/vt_main.c ${SERVICES_DIR}/vt/vt_outmux.c)
 set(WASM_VT_APP_WASM ${BUILD_DIR}/vt.wasm)
 set(WASM_VT_APP ${BUILD_DIR}/vt.wap)
+set(WASM_LOGGER_SRC ${CMAKE_SOURCE_DIR}/src/services/logger/logger.c)
+set(WASM_LOGGER_WASM ${BUILD_DIR}/logger.wasm)
+set(WASM_LOGGER_APP ${BUILD_DIR}/logger.wap)
 set(WASM_GFX_COMPOSITOR_SRC ${SERVICES_DIR}/gfx_compositor/gfx_compositor.zig)
 set(WASM_GFX_COMPOSITOR_WASM ${BUILD_DIR}/gfx_compositor.elf)
 set(WASM_GFX_COMPOSITOR_APP ${BUILD_DIR}/gfx_compositor.wap)
@@ -2036,6 +2039,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_LOGGER_APP} ${BUILD_DIR}/esp/system/services/logger.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
@@ -2677,6 +2681,14 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/vt/vt_outmux.c
           -o ${BUILD_DIR}/test_vt_outmux
   COMMAND ${BUILD_DIR}/test_vt_outmux
+  # What the logger service writes next: markers for lost and truncated log,
+  # and a short write refused. No IPC and no globals, like vt_outmux.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${SERVICES_DIR}/logger
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_logger_stage.c
+          ${SERVICES_DIR}/logger/logger_stage.c
+          -o ${BUILD_DIR}/test_logger_stage
+  COMMAND ${BUILD_DIR}/test_logger_stage
   # FAT directory scanning over a cluster chain. The test supplies its own block
   # layer (a RAM image served synchronously), so fat_block.c is deliberately NOT
   # linked; fat_util.c is, because fat_geom.c logs through it.
@@ -4641,6 +4653,7 @@ wasmos_ide_index(wasmos_ide_unit
          ${CMAKE_SOURCE_DIR}/abi/generated/c
          ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
          ${SERVICES_DIR}/net_stack ${SERVICES_DIR}/cli ${SERVICES_DIR}/vt
+         ${SERVICES_DIR}/logger
          ${DRIVER_WASM_DIR}/fs_fat ${DRIVER_WASM_DIR}/fs_wfs
          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
          ${WASM3_DIR} ${WASM3_DIR}/source)

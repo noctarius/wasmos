@@ -28,6 +28,11 @@ if SCRIPTS not in sys.path:
 
 from qemu_test_framework import QemuSession, default_config
 
+# Top-level directories the boot creates in the tmpfs root itself, as opposed to
+# the ancestors fs-manager creates for mount points: scripts/system/sysinit.rc
+# runs `mkdir -p /var/log` for the logger service.
+BOOT_CREATED_ROOT_DIRS = {b"var"}
+
 
 class VfsSession:
     """Session plumbing shared by the classes below.
@@ -186,17 +191,19 @@ class VfsRootMountTest(VfsSession, unittest.TestCase):
         )
 
     def test_the_root_listing_is_exactly_the_mounts_and_nothing_invented(self):
-        """The directories at `/` are the mount points and their ancestors, only.
+        """The directories at `/` are the mount points, their ancestors, and the
+        directories the boot creates, only.
 
         This is the property that replaced the invented root listing. fs-manager
         used to append its mount table to the reply, so `ls /` could show names no
-        filesystem held; now the entries are directories it created in the tmpfs,
-        so the two views must agree in BOTH directions -- every mount contributes
-        its first segment, and nothing is listed that no mount accounts for.
+        filesystem held; now the entries are directories in the tmpfs, so the two
+        views must agree in BOTH directions -- every mount contributes its first
+        segment, and nothing is listed that neither a mount nor the boot accounts
+        for. The boot's own directories are real tmpfs entries, not invented
+        ones: sysinit.rc creates /var/log for the logger.
 
         The tmpfs write path itself is covered on the host
-        (tests/unit/test_fs_tmpfs_store.zig); the CLI has no mkdir, so there is
-        nothing here to write with.
+        (tests/unit/test_fs_tmpfs_store.zig).
         """
         mounts = self._run("mount")
         expected = set()
@@ -214,6 +221,7 @@ class VfsRootMountTest(VfsSession, unittest.TestCase):
             segments = [seg for seg in path.split(b"/") if seg]
             expected.add(segments[0])
         self.assertTrue(expected, f"no mounts parsed from `mount`\n{mounts!r}")
+        expected |= BOOT_CREATED_ROOT_DIRS
 
         self._run("cd /")
         listing = self._run("ls")

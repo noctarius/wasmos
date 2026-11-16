@@ -873,3 +873,14 @@ export declare function serial_owner_write(a0: i32, a1: i32): i32;
 // are also possible; see the note at the top of this file.
 @external("wasmos", "kmsg_read")
 export declare function kmsg_read(a0: i32, a1: i32, a2: i32): i32;
+// Ask to be woken when kernel log is appended: from now on the kernel sends a
+// payload-less WASMOS_IPC_KMSG_NOTIFY to `endpoint`, which must be one of the
+// caller's own endpoints, once per batch of appends (never one per line). The
+// notify carries no position; the caller pages the ring with kmsg_read from
+// where it stopped. One subscription per process: subscribing again replaces
+// the endpoint. It ends when the process exits. Returns 0,
+// WASMOS_ERR_KERNEL_NOT_AUTHORIZED for an endpoint the caller does not own,
+// WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT when every subscriber slot is held by
+// another process, or WASMOS_ERR_KERNEL_NO_CALLER.
+@external("wasmos", "kmsg_subscribe")
+export declare function kmsg_subscribe(a0: i32): i32;

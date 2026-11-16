@@ -1971,10 +1971,14 @@ VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
   has no backpressure. `dmesg` prints up to 64 KiB in one run and reaches it once
   the kernel log grows past what the vt drains between two of its wakes. A
   writer with a controlling slot should wait for the vt to drain instead.
-- [ ] [FEATURE][P3] A persistent system log: a logger service that pages the kmsg
-  ring with `kmsg_read` and appends it to `/var/log/messages`, so kernel log
-  older than the ring's 64 KiB survives. It needs a way to wait for new kernel
-  log rather than poll (a doorbell on append, like the vt's console ring).
+- [ ] [ENHANCEMENT][P3] Rotate `/var/log/messages` instead of truncating it. The
+  logger (`src/services/logger/logger.c`) truncates the file at 1 MiB because the
+  async FS client has no rename; add `wasmos_sys_wasm_fs_rename_async` to libsys
+  (and its Rust, Go and Zig coroutine wrappers) and move the file to
+  `messages.1` at the cap.
+- [ ] [FEATURE][P3] Keep the system log across reboots. `/var/log/messages` lives on
+  the tmpfs root. A `log.file=` kernel option (or a sysinit setting) could point
+  the logger at a disk filesystem (`/wfs`, `/user`).
 - [ ] [ENHANCEMENT][P3] Move the console slot's shell out of `sysinit.rc` too, so the vt owns
   every shell. The vt already spawns one per slot on first use; the console
   slot's is still started by `sysinit.rc`, last, because the first prompt is what

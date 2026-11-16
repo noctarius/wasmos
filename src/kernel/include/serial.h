@@ -154,6 +154,12 @@ void serial_early_log_copy(uint8_t* dst, uint32_t offset, uint32_t len);
  * WASMOS_INVAL for a sequence the log never reached. */
 int32_t serial_kmsg_read(uint64_t* seq, uint8_t* dst, uint32_t len);
 
+/* Kernel-log subscribers (kmsg.h): serial_kmsg_subscribe registers an endpoint the caller's
+ * context owns; kmsg_poll, called from the scheduler loop, sends WASMOS_IPC_KMSG_NOTIFY to
+ * each subscriber once per batch of appends and drops subscribers that have exited. */
+int32_t serial_kmsg_subscribe(uint32_t context_id, uint32_t endpoint);
+void kmsg_poll(void);
+
 /* Compile-time trace gate.  Defaults to 0 (off); define it to 1 on the command line to
  * turn the trace_* macros below into real serial output. */
 #ifndef WASMOS_TRACE

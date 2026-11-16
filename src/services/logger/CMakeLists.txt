@@ -1,5 +1,5 @@
 wasmos_add_wasm_c_app_target(logger_app
-  SOURCES ${WASM_LOGGER_SRC}
+  SOURCES ${WASM_LOGGER_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/logger_stage.c
   OUTPUT_WASM ${WASM_LOGGER_WASM}
   OUTPUT_APP ${WASM_LOGGER_APP}
   MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata

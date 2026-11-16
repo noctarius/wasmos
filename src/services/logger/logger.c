@@ -32,15 +32,14 @@
 
 #include "fcntl.h"
 #include "stdio.h"
-#include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/libsys.h"
 #include "wasmos/service_runtime_wasm.h"
 #include "wasmos/startup.h"
 
+#include "logger_stage.h"
+
 #define LOGGER_PATH "/var/log/messages"
-#define LOGGER_CHUNK 2048u
-#define LOGGER_MARKER_MAX 128u
 #define LOGGER_FILE_MAX (1024u * 1024u)
 
 typedef enum {
@@ -59,7 +58,6 @@ typedef struct {
     logger_state_t state;
     int32_t fs_endpoint;
     int32_t fd;
-    uint64_t seq;        /* sequence number of the next kernel-log byte to read */
     uint32_t file_bytes; /* bytes this instance wrote to the open file */
     uint8_t truncate;    /* the next open restarts the file */
     uint8_t notified;    /* a KMSG_NOTIFY arrived since the last drain began */
@@ -69,11 +67,7 @@ typedef struct {
     wasmos_future_t* pending;
     wasmos_future_t wake;
     wasmos_promise_t wake_promise;
-    char marker[LOGGER_MARKER_MAX];
-    uint32_t marker_len;
-    uint8_t read_buf[LOGGER_CHUNK];
-    char out[LOGGER_MARKER_MAX + LOGGER_CHUNK];
-    uint32_t out_len;
+    logger_stage_t stage; /* the ring position and the next write (logger_stage.h) */
 } logger_t;
 
 static logger_t g_logger;
@@ -94,34 +88,9 @@ static int32_t logger_fail(const char* what, int32_t rc) {
     return rc < 0 ? rc : -1;
 }
 
-/* Builds the next write: a pending marker line, then the next chunk of kernel
- * log. Returns the bytes staged in out, 0 when the ring has nothing new, or a
- * negative kmsg_read status. */
-static int32_t logger_stage(logger_t* lg) {
-    uint64_t want = lg->seq;
-    int32_t n = wasmos_kmsg_read(lg->read_buf, (int32_t)LOGGER_CHUNK, &lg->seq);
-    if (n < 0) {
-        return n;
-    }
-    if (lg->seq != want) {
-        lg->marker_len = (uint32_t)snprintf(lg->marker,
-                                            sizeof(lg->marker),
-                                            want == 0 ? "[logger] %llu bytes of earlier "
-                                                        "kernel log were not retained\n"
-                                                      : "[logger] %llu bytes of kernel log "
-                                                        "lost before they were read\n",
-                                            (unsigned long long)(lg->seq - want));
-    }
-    lg->out_len = 0;
-    if (lg->marker_len) {
-        memcpy(lg->out, lg->marker, lg->marker_len);
-        lg->out_len = lg->marker_len;
-        lg->marker_len = 0;
-    }
-    memcpy(lg->out + lg->out_len, lg->read_buf, (uint32_t)n);
-    lg->out_len += (uint32_t)n;
-    lg->seq += (uint64_t)n;
-    return (int32_t)lg->out_len;
+static int32_t logger_read_ring(void* user, uint8_t* dst, int32_t len, uint64_t* seq) {
+    (void)user;
+    return wasmos_kmsg_read(dst, len, seq);
 }
 
 static int32_t logger_resume(void* user, uintptr_t* out_value) {
@@ -202,12 +171,7 @@ static int32_t logger_resume(void* user, uintptr_t* out_value) {
                 return logger_fail("cannot open " LOGGER_PATH, rc != 0 ? rc : lg->fd);
             }
             if (lg->truncate) {
-                lg->marker_len = (uint32_t)snprintf(lg->marker,
-                                                    sizeof(lg->marker),
-                                                    "[logger] %s reached %u bytes and was "
-                                                    "truncated\n",
-                                                    LOGGER_PATH,
-                                                    (unsigned)LOGGER_FILE_MAX);
+                logger_stage_truncated(&lg->stage, LOGGER_PATH, LOGGER_FILE_MAX);
             }
             lg->truncate = 0;
             lg->file_bytes = 0;
@@ -224,7 +188,7 @@ static int32_t logger_resume(void* user, uintptr_t* out_value) {
                 break;
             }
             lg->notified = 0;
-            rc = logger_stage(lg);
+            rc = logger_stage_next(&lg->stage, logger_read_ring, 0);
             if (rc < 0) {
                 return logger_fail("kmsg_read failed", rc);
             }
@@ -232,8 +196,14 @@ static int32_t logger_resume(void* user, uintptr_t* out_value) {
                 lg->state = LOGGER_IDLE;
                 break;
             }
-            lg->pending = wasmos_sys_wasm_fs_write_async(
-                loop, &lg->op, lg->fs_endpoint, reply_ep, lg->fd, lg->out, (int32_t)lg->out_len, 0);
+            lg->pending = wasmos_sys_wasm_fs_write_async(loop,
+                                                         &lg->op,
+                                                         lg->fs_endpoint,
+                                                         reply_ep,
+                                                         lg->fd,
+                                                         lg->stage.out,
+                                                         (int32_t)lg->stage.out_len,
+                                                         0);
             if (!lg->pending) {
                 return logger_fail("cannot start a write", -1);
             }
@@ -245,10 +215,13 @@ static int32_t logger_resume(void* user, uintptr_t* out_value) {
                 return WASMOS_WASM_TASK_YIELDED;
             }
             written = wasmos_sys_wasm_fs_operation_finish(&lg->op, 0, 0, 0);
-            if (rc != 0 || written < 0) {
-                return logger_fail("write failed", rc != 0 ? rc : written);
+            if (rc != 0) {
+                return logger_fail("write failed", rc);
             }
-            lg->file_bytes += lg->out_len;
+            if (!logger_stage_written(lg->stage.out_len, written)) {
+                return logger_fail("short or failed write (filesystem full?)", written);
+            }
+            lg->file_bytes += lg->stage.out_len;
             lg->state = LOGGER_DRAIN;
             break;
         case LOGGER_CLOSING:

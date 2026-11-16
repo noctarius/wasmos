@@ -60,14 +60,18 @@ int32_t kmsg_read(const kmsg_t* k, uint64_t* seq, uint8_t* dst, uint32_t len);
  * the logger service sleeps instead of polling the ring.
  *
  * A subscription is (context_id, endpoint), at most one per context; subscribing
- * again replaces that context's endpoint. An append only raises `pending`; the
- * kernel sends the notifies later, from the scheduler loop (kmsg_poll in
- * serial.c), never from the logging path. One notify covers any number of
- * appends: a subscriber pages the ring from where it stopped.
+ * again replaces that context's endpoint. An append only marks every
+ * subscription as owed a notify (kmsg_notify_mark); the kernel sends later, from
+ * the scheduler loop (kmsg_notify_deliver), never from the logging path. One
+ * notify covers any number of appends: a subscriber pages the ring from where
+ * it stopped.
  *
- * A subscription ends when delivery finds its endpoint no longer owned by its
- * context (the process exited), via kmsg_notify_drop. No lock is held here; the
- * kernel serializes these calls under the serial lock.
+ * Liveness and sending are the environment's (kmsg_notify_env_t): the kernel
+ * asks the IPC layer whether a context still owns its endpoint, and sends
+ * through it. Both run with the table's lock RELEASED -- the IPC layer logs
+ * under its own lock, so calling into it under the logging lock would invert
+ * that order -- which is why these functions take the lock themselves around
+ * the table and never around a callback.
  */
 
 #define KMSG_SUBSCRIBER_MAX 4u
@@ -75,28 +79,37 @@ int32_t kmsg_read(const kmsg_t* k, uint64_t* seq, uint8_t* dst, uint32_t len);
 typedef struct {
     uint32_t context_id; /* 0 marks a free slot */
     uint32_t endpoint;
+    uint8_t owed; /* appended to since this subscription was last notified */
 } kmsg_subscriber_t;
 
 typedef struct {
     kmsg_subscriber_t subs[KMSG_SUBSCRIBER_MAX];
-    uint8_t pending; /* kernel log appended since the last kmsg_notify_take */
+    uint8_t pending; /* some subscription is owed a notify */
 } kmsg_notify_t;
+
+typedef struct {
+    void (*lock)(void* user);
+    void (*unlock)(void* user);
+    /* 1 when context_id still owns endpoint, 0 when it no longer does. */
+    int (*alive)(void* user, uint32_t context_id, uint32_t endpoint);
+    /* 0 when the notify was queued, non-zero when it was not (a full queue). */
+    int (*send)(void* user, uint32_t endpoint);
+    void* user;
+} kmsg_notify_env_t;
 
 /* Subscribes `endpoint` for `context_id`, replacing that context's earlier
  * endpoint. Returns 0, WASMOS_INVAL for a zero context or endpoint, or
- * WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT when every slot belongs to another
- * context. Ownership of the endpoint is the caller's check. */
-int32_t kmsg_notify_subscribe(kmsg_notify_t* n, uint32_t context_id, uint32_t endpoint);
+ * WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT when every slot belongs to another live
+ * context. Ownership of `endpoint` is the caller's check. */
+int32_t kmsg_notify_subscribe(kmsg_notify_t* n, const kmsg_notify_env_t* env, uint32_t context_id,
+                              uint32_t endpoint);
 
-/* Records an append: raises `pending` when anyone is subscribed. */
+/* Records an append: every subscription is owed a notify. The caller holds the
+ * lock (it is called on the logging path, under the lock the append takes). */
 void kmsg_notify_mark(kmsg_notify_t* n);
 
-/* When `pending` is raised, clears it, copies the subscriptions into `out` and
- * returns how many; otherwise returns 0. */
-uint32_t kmsg_notify_take(kmsg_notify_t* n, kmsg_subscriber_t out[KMSG_SUBSCRIBER_MAX]);
-
-/* Ends the subscription `sub`, if that exact (context, endpoint) pair is still
- * subscribed. A context that re-subscribed meanwhile keeps its new endpoint. */
-void kmsg_notify_drop(kmsg_notify_t* n, const kmsg_subscriber_t* sub);
+/* Sends one notify to every subscription that is owed one and still alive, and
+ * ends the subscriptions whose context no longer owns their endpoint. */
+void kmsg_notify_deliver(kmsg_notify_t* n, const kmsg_notify_env_t* env);
 
 #endif

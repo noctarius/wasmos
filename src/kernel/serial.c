@@ -952,59 +952,70 @@ int32_t serial_kmsg_read(uint64_t* seq, uint8_t* dst, uint32_t len) {
     return rc;
 }
 
+static void serial_kmsg_env_lock(void* user) {
+    (void)user;
+    ksync_spinlock_lock(serial_lock_ptr());
+}
+
+static void serial_kmsg_env_unlock(void* user) {
+    (void)user;
+    ksync_spinlock_unlock(serial_lock_ptr());
+}
+
+/* A subscription is alive while its context still owns its endpoint: endpoints
+ * are released when their process exits. */
+static int serial_kmsg_env_alive(void* user, uint32_t context_id, uint32_t endpoint) {
+    uint32_t owner = 0;
+    (void)user;
+    return ipc_endpoint_owner(endpoint, &owner) == IPC_OK && owner == context_id;
+}
+
+static int serial_kmsg_env_send(void* user, uint32_t endpoint) {
+    (void)user;
+    ipc_message_t msg;
+    msg.type = (uint32_t)WASMOS_IPC_KMSG_NOTIFY;
+    msg.request_id = 0;
+    msg.source = IPC_ENDPOINT_NONE;
+    msg.destination = endpoint;
+    msg.arg0 = 0;
+    msg.arg1 = 0;
+    msg.arg2 = 0;
+    msg.arg3 = 0;
+    return ipc_send_from(IPC_CONTEXT_KERNEL, endpoint, &msg) == IPC_OK ? 0 : 1;
+}
+
+/* The kernel side of the kmsg subscriber protocol (kmsg.h): the serial lock
+ * guards the table, the IPC layer answers liveness and carries the notify. */
+static const kmsg_notify_env_t g_kmsg_notify_env = {
+    serial_kmsg_env_lock,
+    serial_kmsg_env_unlock,
+    serial_kmsg_env_alive,
+    serial_kmsg_env_send,
+    0,
+};
+
 /* Subscribes `endpoint`, which context_id must own, to kernel-log appends
  * (kmsg_notify_subscribe).  Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED for an
  * endpoint context_id does not own, WASMOS_INVAL, or
  * WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT. */
 int32_t serial_kmsg_subscribe(uint32_t context_id, uint32_t endpoint) {
-    uint32_t owner = 0;
-    if (endpoint == 0 || ipc_endpoint_owner(endpoint, &owner) != IPC_OK || owner != context_id) {
+    if (endpoint == 0 || !serial_kmsg_env_alive(0, context_id, endpoint)) {
         return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     }
-    ksync_spinlock_lock(serial_lock_ptr());
-    int32_t rc = kmsg_notify_subscribe(serial_kmsg_notify(), context_id, endpoint);
-    ksync_spinlock_unlock(serial_lock_ptr());
-    return rc;
+    return kmsg_notify_subscribe(serial_kmsg_notify(), &g_kmsg_notify_env, context_id, endpoint);
 }
 
-/* Delivers the pending kmsg notify to every subscriber.  Called from the
- * scheduler loop next to klog_poll(), for the same reasons: it holds no serial
- * lock while sending, and it is not interrupt context.
- *
- * The subscriptions are copied out under the lock and the sends made outside
- * it.  A subscriber whose endpoint is no longer owned by its context has exited
- * (or its endpoint was replaced), and its subscription is dropped instead.  A
- * failed send is not retried: a full queue means the subscriber has messages
- * to process and drains the ring on that wake anyway. */
+/* Delivers owed kmsg notifies (kmsg_notify_deliver).  Called from the scheduler
+ * loop next to klog_poll(), for the same reasons: it is not interrupt context,
+ * and the notify is sent with no serial lock held.  A notify that could not be
+ * queued stays owed and is retried here on a later pass. */
 void kmsg_poll(void) {
     /* Unlocked first look: this runs on every scheduler pass.  A flag raised just
      * after it is seen on the next pass. */
     if (!__atomic_load_n(&serial_kmsg_notify()->pending, __ATOMIC_RELAXED)) {
         return;
     }
-    kmsg_subscriber_t subs[KMSG_SUBSCRIBER_MAX];
-    ksync_spinlock_lock(serial_lock_ptr());
-    uint32_t count = kmsg_notify_take(serial_kmsg_notify(), subs);
-    ksync_spinlock_unlock(serial_lock_ptr());
-    for (uint32_t i = 0; i < count; ++i) {
-        uint32_t owner = 0;
-        if (ipc_endpoint_owner(subs[i].endpoint, &owner) != IPC_OK || owner != subs[i].context_id) {
-            ksync_spinlock_lock(serial_lock_ptr());
-            kmsg_notify_drop(serial_kmsg_notify(), &subs[i]);
-            ksync_spinlock_unlock(serial_lock_ptr());
-            continue;
-        }
-        ipc_message_t msg;
-        msg.type = (uint32_t)WASMOS_IPC_KMSG_NOTIFY;
-        msg.request_id = 0;
-        msg.source = IPC_ENDPOINT_NONE;
-        msg.destination = subs[i].endpoint;
-        msg.arg0 = 0;
-        msg.arg1 = 0;
-        msg.arg2 = 0;
-        msg.arg3 = 0;
-        (void)ipc_send_from(IPC_CONTEXT_KERNEL, subs[i].endpoint, &msg);
-    }
+    kmsg_notify_deliver(serial_kmsg_notify(), &g_kmsg_notify_env);
 }
 
 /* Non-blocking single-character read from the console.  Returns 1 with *out_char

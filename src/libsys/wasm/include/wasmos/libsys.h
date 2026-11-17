@@ -419,6 +419,122 @@ static inline void wasmos_sys_intent_cancel(wasmos_sys_event_loop_t* loop, int32
     }
 }
 
+/* ---------------------------------------------------- service-name watches
+ *
+ * A watch follows the binding of one service NAME: it reports the endpoint the
+ * name is bound to now, if any, and again every time the name is bound anew --
+ * a provider that restarts and registers its name again is reported without the
+ * client asking. It is the persistent form; an await (below) is the one-shot
+ * form, a future that resolves with the first endpoint.
+ *
+ * Mechanism (docs/architecture/09-process-and-ipc.md, "Service Registry"): a
+ * watch SUBSCRIBES to the name first and LOOKS IT UP second, so a registration
+ * that lands between the two is not lost. The lookup's hit and every
+ * SVC_IPC_NAME_EVENT go through one path, which reports an endpoint only when it
+ * differs from the last one reported. Every request is a loop intent: nothing
+ * blocks, and replies and events are delivered from wasmos_sys_event_loop_poll().
+ *
+ * A bound name only says a provider registered it. Names are never removed, so
+ * a provider that died leaves its name bound to a dead endpoint until another
+ * registers it; a client learns of the death from WASMOS_IPC_HANGUP on the
+ * endpoint it was using, not from the watch. */
+
+typedef struct wasmos_sys_svc_watch wasmos_sys_svc_watch_t;
+/* Runs each time the watched name is bound to an endpoint different from the
+ * last one reported. */
+typedef void (*wasmos_sys_svc_bind_fn)(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint);
+/* Runs once when a watch ends on its own: its deadline passed before a bind
+ * (WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT), or a request to the process manager
+ * failed. The watch is already stopped when this runs, so the record is the
+ * caller's again and may be restarted from inside the callback. */
+typedef void (*wasmos_sys_svc_fail_fn)(void* user, wasmos_sys_svc_watch_t* watch, int32_t status);
+
+/* The watches of one event loop. It owns the loop's SVC_IPC_NAME_EVENT handler
+ * slot and routes each event to its watch by cookie, so a loop carries at most
+ * one set. Caller-owned; must outlive every watch started on it. */
+typedef struct {
+    wasmos_sys_event_loop_t* loop;
+    int32_t proc_endpoint;
+    uint32_t next_cookie;
+    wasmos_sys_svc_watch_t* head; /* active watches, next-linked */
+} wasmos_sys_svc_watch_set_t;
+
+/* Caller-owned record of one watch. Runtime state; set up by
+ * wasmos_sys_svc_watch_start(), not by hand -- but ZERO it before its first
+ * start, because start refuses a record whose `active` byte is set. `endpoint`
+ * is the last endpoint reported, -1 until the first bind. */
+struct wasmos_sys_svc_watch {
+    wasmos_sys_svc_watch_set_t* set;
+    wasmos_sys_svc_watch_t* next;
+    wasmos_sys_svc_bind_fn on_bind;
+    wasmos_sys_svc_fail_fn on_fail;
+    void* user;
+    int32_t endpoint;
+    int32_t buffer_id;         /* subscription descriptor; held until the reply */
+    int32_t subscribe_request; /* pending intent ids, 0 when none */
+    int32_t lookup_request;
+    uint32_t cookie;
+    uint32_t deadline_tick; /* sched_ticks value; meaningful iff has_deadline */
+    uint8_t has_deadline;
+    uint8_t active;
+    char name[WASMOS_SVC_NAME_MAX];
+};
+
+/* One-shot form: a future resolved with the first endpoint the name is bound
+ * to (as a uintptr_t), or rejected with the failure status of its watch.
+ * Caller-owned; set up by wasmos_sys_svc_await_start(). */
+typedef struct {
+    wasmos_sys_svc_watch_t watch;
+    wasmos_future_t future;
+    wasmos_promise_t promise;
+} wasmos_sys_svc_await_t;
+
+/* Bind a set to `loop`, which must already be initialised, and install the
+ * SVC_IPC_NAME_EVENT handler on it. Returns 0, or -1 for a NULL argument or a
+ * full handler table. */
+int32_t wasmos_sys_svc_watch_set_init(wasmos_sys_svc_watch_set_t* set,
+                                      wasmos_sys_event_loop_t* loop, int32_t proc_endpoint);
+
+/* Start following `name`. A positive timeout_ms gives the watch a deadline that
+ * a first bind must beat, enforced by wasmos_sys_svc_watch_set_expire(); 0
+ * waits indefinitely. Once bound, a watch has no deadline. on_fail may be NULL.
+ *
+ * The name is limited to 16 characters, the packed SVC_IPC_LOOKUP_REQ's
+ * capacity.
+ * TODO: a longer name is refused rather than watched by events alone; a
+ * descriptor-based lookup would lift the limit.
+ *
+ * Returns 0 once the subscription is on its way, -1 for invalid arguments or a
+ * watch that is already active, WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER when the
+ * descriptor could not be staged, or WASMOS_ERR_PROC_PM_SVC_WATCH_SEND when the
+ * request could not be sent. On any non-zero return the record is inactive. */
+int32_t wasmos_sys_svc_watch_start(wasmos_sys_svc_watch_set_t* set, wasmos_sys_svc_watch_t* watch,
+                                   const char* name, int32_t timeout_ms,
+                                   wasmos_sys_svc_bind_fn on_bind, wasmos_sys_svc_fail_fn on_fail,
+                                   void* user);
+
+/* Stop a watch: drop its subscription and its local tracking. No callback runs
+ * for it afterwards, and the record is the caller's again. A reply to a request
+ * it had in flight then matches no intent and reaches the loop's type or default
+ * handler, like any cancelled intent. A NULL or inactive watch is ignored. */
+void wasmos_sys_svc_watch_stop(wasmos_sys_svc_watch_t* watch);
+
+/* Fail every watch of the set whose deadline has passed, with
+ * WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT. The set has no clock of its own (a
+ * loop has one timeout hook, and it belongs to the loop's owner): call this from
+ * the loop's on_timeout, with poll_timeout_ms set no longer than the precision
+ * the deadlines need, and after each poll when traffic may keep the loop from
+ * ever timing out. */
+void wasmos_sys_svc_watch_set_expire(wasmos_sys_svc_watch_set_t* set);
+
+/* Start an await for `name` and return its future, or NULL for invalid
+ * arguments. A start that fails after validation returns the future ALREADY
+ * REJECTED with the start's status, as wasmos_sys_wasm_ipc_future_send does.
+ * timeout_ms is as for wasmos_sys_svc_watch_start. */
+wasmos_future_t* wasmos_sys_svc_await_start(wasmos_sys_svc_watch_set_t* set,
+                                            wasmos_sys_svc_await_t* await, const char* name,
+                                            int32_t timeout_ms);
+
 /* Zero the record and put its future back in the pending state, with
  * `reply_status` (optional; NULL accepts every reply) as the resolve/reject
  * decision. Required before the first send and before every reuse. */

@@ -296,6 +296,17 @@ enum {
     SVC_NAME_EVENT_BIND = 1,
 };
 
+/* The rate of the scheduler tick that the sched_ticks host call counts. The
+ * kernel programs its timer at exactly this rate (src/kernel/kernel.c), and
+ * a guest converts a millisecond window to ticks with it, since sched_ticks
+ * is the only monotonic clock a guest can read. One tick is 1000/HZ ms, so
+ * every tick-based deadline is quantized to that.
+ */
+enum {
+    /* Scheduler timer interrupts per second. */
+    WASMOS_SCHED_TICK_HZ = 250,
+};
+
 /* Address family of a socket: which layer it addresses and therefore what an
  * address means. Independent of the socket type below, as in BSD sockets.
  *

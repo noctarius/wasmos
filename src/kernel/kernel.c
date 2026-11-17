@@ -33,6 +33,7 @@
 #include "kernel_ring3_smoke_runtime.h"
 #include "kernel_ring3_suite_runtime.h"
 #include "kpanic.h"
+#include "../../abi/generated/c/wasmos_constants.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -407,7 +408,8 @@ void kmain(boot_info_t* boot_info) {
     }
     kernel_boot_run_low_slot_sweep_diagnostic();
 
-    timer_init(250);
+    /* The rate is ABI: guests convert milliseconds to sched_ticks with it. */
+    timer_init(WASMOS_SCHED_TICK_HZ);
     irq_late_init(boot_info);
     smp_init();
     klog_write("[kernel] interrupts on\n");

@@ -94,6 +94,9 @@ domains:
       - { name: SVC_SUB_NO_SPACE,   description: "the service-subscription table could not grow to hold another subscription" }
       - { name: SVC_SUB_BAD_DESC,   description: "a name-subscription descriptor was short, of an unknown version, or named no service" }
       - { name: SVC_AWAIT_TIMEOUT,  description: "no provider bound the awaited service name within the caller's window" }
+      - { name: SVC_WATCH_SEND,      description: "a service watch could not send its request to the process manager" }
+      - { name: SVC_WATCH_NO_BUFFER, description: "a service watch could not acquire or fill the transfer buffer for its subscription descriptor" }
+      - { name: SVC_WATCH_BAD_REPLY, description: "the process manager answered a service-watch request with neither its response nor a packed error" }
 
   linmem:
     id: 3

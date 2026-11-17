@@ -118,6 +118,7 @@ set(WASMOS_SDK_LIBSYS_SOURCES
   ${LIBSYS_WASM_DIR}/coroutine_wasm.c
   ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
   ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
+  ${LIBSYS_WASM_DIR}/svc_watch_wasm.c
 )
 
 set(WASMOS_SDK_LIBC_OBJS)

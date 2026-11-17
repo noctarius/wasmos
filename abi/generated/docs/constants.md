@@ -237,6 +237,18 @@ WASMOS_IPC_HANGUP (docs/architecture/09-process-and-ipc.md, "Peer Hangup").
 | --- | --- | --- |
 | `SVC_NAME_EVENT_BIND` | 1 | The name was bound to the endpoint in arg2. |
 
+## sched_clock
+
+The rate of the scheduler tick that the sched_ticks host call counts. The
+kernel programs its timer at exactly this rate (src/kernel/kernel.c), and
+a guest converts a millisecond window to ticks with it, since sched_ticks
+is the only monotonic clock a guest can read. One tick is 1000/HZ ms, so
+every tick-based deadline is quantized to that.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `WASMOS_SCHED_TICK_HZ` | 250 | Scheduler timer interrupts per second. |
+
 ## net_socket_family
 
 Address family of a socket: which layer it addresses and therefore what an

@@ -90,6 +90,9 @@ export const WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: i32 = -0x0002001D; // the (
 export const WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE: i32 = -0x0002001E; // the service-subscription table could not grow to hold another subscription
 export const WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC: i32 = -0x0002001F; // a name-subscription descriptor was short, of an unknown version, or named no service
 export const WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT: i32 = -0x00020020; // no provider bound the awaited service name within the caller's window
+export const WASMOS_ERR_PROC_PM_SVC_WATCH_SEND: i32 = -0x00020021; // a service watch could not send its request to the process manager
+export const WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: i32 = -0x00020022; // a service watch could not acquire or fill the transfer buffer for its subscription descriptor
+export const WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: i32 = -0x00020023; // the process manager answered a service-watch request with neither its response nor a packed error
 export const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 export const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 export const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -388,6 +391,9 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE: return "the service-subscription table could not grow to hold another subscription";
     case WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC: return "a name-subscription descriptor was short, of an unknown version, or named no service";
     case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT: return "no provider bound the awaited service name within the caller's window";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_SEND: return "a service watch could not send its request to the process manager";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: return "a service watch could not acquire or fill the transfer buffer for its subscription descriptor";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: return "the process manager answered a service-watch request with neither its response nor a packed error";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";

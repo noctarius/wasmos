@@ -3482,6 +3482,18 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_event_loop.c
           -o ${BUILD_DIR}/test_libsys_event_loop
   COMMAND ${BUILD_DIR}/test_libsys_event_loop
+  # Service-name watches and awaits over that loop, with the real future core;
+  # the process manager is a scripted inbox.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${LIBSYS_WASM_DIR}/include
+          -iquote ${LIBC_DIR}/include
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_svc_watch.c
+          ${LIBSYS_WASM_DIR}/svc_watch_wasm.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          -o ${BUILD_DIR}/test_libsys_svc_watch
+  COMMAND ${BUILD_DIR}/test_libsys_svc_watch
   # The IPC host-call shims, BOTH runtimes in one binary so every scenario runs
   # through each and the results are compared. wasm3's raw-call ABI is stack
   # marshalling and WARP's takes an unused context pointer, so neither needs a
@@ -4333,6 +4345,21 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
             -o ${BUILD_DIR}/test_native_ipc_future
     COMMAND ${BUILD_DIR}/test_native_ipc_future
     COMMENT "Running native ${NATIVE_COROUTINE_HOST_LABEL} IPC future unit tests"
+    VERBATIM)
+  add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+    COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+            -I${LIBSYS_NATIVE_DIR}/include
+            -I${DRIVER_WASM_DIR}/include
+            -I${LIBC_DIR}/include
+            ${CMAKE_SOURCE_DIR}/tests/unit/test_native_svc_watch.c
+            ${CMAKE_SOURCE_DIR}/tests/unit/stubs_native_libsys.c
+            ${LIBSYS_NATIVE_DIR}/coroutine_native.c
+            ${LIBSYS_NATIVE_DIR}/svc_watch_native.c
+            ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
+            ${NATIVE_COROUTINE_HOST_ASM}
+            -o ${BUILD_DIR}/test_native_svc_watch
+    COMMAND ${BUILD_DIR}/test_native_svc_watch
+    COMMENT "Running native ${NATIVE_COROUTINE_HOST_LABEL} service-watch unit tests"
     VERBATIM)
   if (ZIG_AVAILABLE)
     add_custom_command(TARGET run-kernel-unit-tests POST_BUILD

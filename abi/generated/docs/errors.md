@@ -77,6 +77,9 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE` | -0x0002001E | the service-subscription table could not grow to hold another subscription |
 | `WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC` | -0x0002001F | a name-subscription descriptor was short, of an unknown version, or named no service |
 | `WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT` | -0x00020020 | no provider bound the awaited service name within the caller's window |
+| `WASMOS_ERR_PROC_PM_SVC_WATCH_SEND` | -0x00020021 | a service watch could not send its request to the process manager |
+| `WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER` | -0x00020022 | a service watch could not acquire or fill the transfer buffer for its subscription descriptor |
+| `WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY` | -0x00020023 | the process manager answered a service-watch request with neither its response nor a packed error |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 

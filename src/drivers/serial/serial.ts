@@ -1,4 +1,11 @@
-/* 16550 UART (COM1) driver.
+/* 16550 UART driver.
+ *
+ * One instance serves one UART: the one whose I/O base and IRQ the device
+ * manager passes as `io=` and `irq=` spawn args, which are also the port window
+ * and IRQ line it was granted. Without args it serves COM1. Only the instance on
+ * COM1, the console UART the vt owns, registers as "sin" and installs the kernel
+ * console hook; any other registers a name derived from its base ("s2f8"), so a
+ * second UART is served without taking the console's place.
  *
  * The driver is one coroutine, and it IS the entry point: registration,
  * hardware bring-up, the ready notification and the request loop read top to
@@ -42,19 +49,26 @@ import {
     serial_register,
 } from "./wasmos_imports";
 
-/* 16550 UART at the fixed ISA COM1 base. Registers are offsets from that base:
- * +0 is the receive/transmit holding register (and, with DLAB set, the low
- * divisor byte), +1 the Interrupt Enable Register (high divisor byte under
- * DLAB), +2 the FIFO control register, +3 the line control register holding
- * DLAB, +4 modem control, +5 the Line Status Register.
+/* 16550 registers are offsets from the UART's base: +0 is the receive/transmit
+ * holding register (and, with DLAB set, the low divisor byte), +1 the Interrupt
+ * Enable Register (high divisor byte under DLAB), +2 the FIFO control register,
+ * +3 the line control register holding DLAB, +4 modem control, +5 the Line
+ * Status Register.
  *
- * Only the three used repeatedly are named; the rest appear as COM1_PORT + n in
+ * Only the three used repeatedly are named; the rest appear as g_port + n in
  * serialInitHw, where the write order matters more than the names. In the line
  * status register bit 0 (0x01) is "receive data available" and bit 5 (0x20) is
  * "transmit holding register empty". */
-const COM1_PORT: i32 = 0x3f8;
-const COM1_IER: i32 = COM1_PORT + 1;
-const COM1_STATUS: i32 = COM1_PORT + 5;
+const REG_IER: i32 = 1;
+const REG_STATUS: i32 = 5;
+
+/* The console UART: COM1 at its fixed ISA base and IRQ. */
+const CONSOLE_PORT: i32 = 0x3f8;
+const CONSOLE_IRQ: i32 = 4;
+
+/* The UART this instance serves, from its spawn args (see the header). */
+let g_port: i32 = CONSOLE_PORT;
+let g_irq: i32 = CONSOLE_IRQ;
 
 const SERIAL_DRIVER_WRITE_REQ: i32 = 0x500;
 const SERIAL_DRIVER_READ_REQ: i32 = 0x501;
@@ -69,13 +83,12 @@ const SVC_IPC_REGISTER_RESP: i32 = 0x2a0;
  * VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]=byte). */
 const VT_IPC_SERIAL_INPUT_REQ: i32 = 0x707;
 
-const SERIAL_IRQ: i32 = 4;
 const SERIAL_IPC_IRQ_EVENT: i32 = 0xff00;
 
 const SERIAL_READ_STATUS_EMPTY: i32 = 0;
 const SERIAL_READ_STATUS_ERROR: i32 = -1;
 
-/* "sin\0" -- serial input. */
+/* "sin\0" -- serial input: the console UART's name, which the vt looks up. */
 const SERIAL_NAME_PACKED: i32 = 0x006e6973;
 
 /* Idle wait while polling the UART, and while the vt is backpressured. Short
@@ -141,26 +154,71 @@ function rxbufPeek(offset: i32): i32 {
 
 // ------------------------------------------------------------------- device
 
+/**
+ * Take the UART to serve from the spawn args: `io=` and `irq=`, both hex, as the
+ * device manager writes them. A missing or unparseable value keeps the console
+ * default, so a spawn without args (a rule set that predates them) still serves
+ * COM1.
+ */
+function readDeviceArgs(): void {
+    const args = startup.args();
+    for (let i = 0; i < args.length; ++i) {
+        const arg = unchecked(args[i]);
+        if (arg.startsWith("io=")) {
+            const v = <i32>I32.parseInt(arg.substring(3), 16);
+            if (v > 0 && v <= 0xfff8) {
+                g_port = v;
+            }
+        } else if (arg.startsWith("irq=")) {
+            const v = <i32>I32.parseInt(arg.substring(4), 16);
+            if (v >= 0 && v < 16) {
+                g_irq = v;
+            }
+        }
+    }
+}
+
+function isConsole(): bool {
+    return g_port == CONSOLE_PORT;
+}
+
+/**
+ * The registry name, packed four bytes per argument word as the process manager
+ * unpacks it: "sin" for the console, otherwise "s" and the base in lowercase hex
+ * ("s2f8"), which is unique per UART and fits the first word.
+ */
+function packedName(): i32 {
+    if (isConsole()) {
+        return SERIAL_NAME_PACKED;
+    }
+    const hex = (g_port & 0xfff).toString(16);
+    let packed: i32 = 0x73; /* 's' */
+    for (let i = 0; i < hex.length && i < 3; ++i) {
+        packed |= (hex.charCodeAt(i) & 0xff) << ((i + 1) * 8);
+    }
+    return packed;
+}
+
 function serialInitHw(): void {
-    io_out8(COM1_IER, 0x00); /* disable interrupts during setup */
-    io_out8(COM1_PORT + 3, 0x80); /* DLAB on */
-    io_out8(COM1_PORT + 0, 0x01); /* divisor low (115200) */
-    io_out8(COM1_PORT + 1, 0x00); /* divisor high */
-    io_out8(COM1_PORT + 3, 0x03); /* 8N1, DLAB off */
-    io_out8(COM1_PORT + 2, 0xc7); /* FIFO enable, clear, 14-byte threshold */
-    io_out8(COM1_PORT + 4, 0x0b); /* DTR|RTS|OUT2 (OUT2 gates IRQ to the PIC) */
-    io_out8(COM1_IER, 0x01); /* enable "received data available" interrupt */
+    io_out8(g_port + REG_IER, 0x00); /* disable interrupts during setup */
+    io_out8(g_port + 3, 0x80); /* DLAB on */
+    io_out8(g_port + 0, 0x01); /* divisor low (115200) */
+    io_out8(g_port + 1, 0x00); /* divisor high */
+    io_out8(g_port + 3, 0x03); /* 8N1, DLAB off */
+    io_out8(g_port + 2, 0xc7); /* FIFO enable, clear, 14-byte threshold */
+    io_out8(g_port + 4, 0x0b); /* DTR|RTS|OUT2 (OUT2 gates IRQ to the PIC) */
+    io_out8(g_port + REG_IER, 0x01); /* enable "received data available" interrupt */
 }
 
 /* A refused status read reports neither ready: the line-status register cannot
  * answer, so claiming either bit would be inventing hardware state. */
 function txReady(): bool {
-    const status = io.in8(COM1_STATUS);
+    const status = io.in8(g_port + REG_STATUS);
     return status >= 0 && (status & 0x20) != 0;
 }
 
 function rxReady(): bool {
-    const status = io.in8(COM1_STATUS);
+    const status = io.in8(g_port + REG_STATUS);
     return status >= 0 && (status & 0x01) != 0;
 }
 
@@ -169,7 +227,7 @@ function rxReady(): bool {
 function writePort(value: i32): void {
     for (let i = 0; i < TX_WAIT_LIMIT; ++i) {
         if (txReady()) {
-            io_out8(COM1_PORT, value & 0xff);
+            io_out8(g_port, value & 0xff);
             return;
         }
         io_wait();
@@ -182,7 +240,7 @@ function readPort(): i32 {
     if (!rxReady()) {
         return -1;
     }
-    const byte = io.in8(COM1_PORT);
+    const byte = io.in8(g_port);
     return byte < 0 ? -1 : byte;
 }
 
@@ -266,7 +324,7 @@ function serveRequest(msg: IpcMessage): void {
     if (msg.type == SERIAL_IPC_IRQ_EVENT) {
         drainUartToRing();
         /* Ack after emptying the FIFO so the line deasserts before unmask. */
-        irq_ack(SERIAL_IRQ);
+        irq_ack(g_irq);
     } else if (msg.type == SERIAL_DRIVER_WRITE_REQ) {
         writePort(msg.arg0);
         sendResponse(msg.source, msg.requestId, 0, 0);
@@ -304,14 +362,16 @@ class RegisterReply extends ReplyStatus {
 export function initialize(): i32 {
     // proc.endpoint comes from the spawn-info contract, not an entry arg.
     let procEndpoint: i32 = startup.procEndpoint();
+    readDeviceArgs();
 
     g_endpoint = ipc_create_endpoint();
     if (g_endpoint < 0) {
         std.printf("[serial] endpoint failure\n");
         return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
-    /* Kernel remote-driver hook (keeps console_read's fallback path wired). */
-    if (serial_register(g_endpoint) != 0) {
+    /* Kernel remote-driver hook (keeps console_read's fallback path wired).
+     * The console's alone: a second UART is not where console_read reads. */
+    if (isConsole() && serial_register(g_endpoint) != 0) {
         std.printf("[serial] register failure\n");
         return WASMOS_ERR_DRIVER_DEVICE_INIT;
     }
@@ -325,7 +385,7 @@ export function initialize(): i32 {
             procEndpoint,
             g_endpoint,
             SVC_IPC_REGISTER_REQ,
-            SERIAL_NAME_PACKED,
+            packedName(),
             0,
             0,
             0,
@@ -341,13 +401,21 @@ export function initialize(): i32 {
 
     serialInitHw();
 
-    let irqRouted: i32 = irq_route_ipc(SERIAL_IRQ, g_endpoint);
+    let irqRouted: i32 = irq_route_ipc(g_irq, g_endpoint);
     g_irqRouted = irqRouted == 0;
     if (g_irqRouted) {
-        std.printf("[serial] driver ready (IRQ-driven)\n");
+        std.printf(
+            "[serial] driver ready io=0x" +
+                g_port.toString(16) +
+                " irq=" +
+                g_irq.toString() +
+                " (IRQ-driven)\n",
+        );
     } else {
-        std.printf("[serial] IRQ route failed, falling back to polling\n");
-        io_out8(COM1_IER, 0x00); /* no interrupts; the idle hook polls */
+        std.printf(
+            "[serial] io=0x" + g_port.toString(16) + " IRQ route failed, falling back to polling\n",
+        );
+        io_out8(g_port + REG_IER, 0x00); /* no interrupts; the idle hook polls */
     }
     /* RX forwarding runs from the pump, not from this loop: draining the FIFO
      * has a deadline, delivering to the vt does not. */

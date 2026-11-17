@@ -1020,6 +1020,23 @@ static int build_pci_spawn_args(const pci_device_record_t* rec, char* out, uint3
     return n;
 }
 
+/* The startup args of an ACPI-matched driver: the device's I/O base and IRQ
+ * line, the same two values its capability grant is built from. A driver that
+ * can serve more than one instance of its device (a second UART) learns from
+ * these which one it was spawned for. */
+static int build_acpi_spawn_args(const pci_device_record_t* rec, char* out, uint32_t out_cap) {
+    int n = 0;
+    if (!rec || !out || out_cap == 0u) {
+        return -1;
+    }
+    n = snprintf(
+        out, out_cap, "io=%04X irq=%02X", (unsigned)rec->device_id, (unsigned)rec->irq_hint);
+    if (n <= 0 || (uint32_t)n >= out_cap) {
+        return -1;
+    }
+    return n;
+}
+
 /* Resolve a rule's RUN+= target to a boot-module index, without spawning
  * anything.  Tries the path as an initfs module, then the basename with the
  * extension stripped, then that basename with underscores turned into dashes
@@ -3282,6 +3299,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         build_pci_spawn_args(&g_dm.registry[g_dm.active_rule_spawn_device_index],
                                              spawn_args,
                                              sizeof(spawn_args)) > 0) {
+                        args = spawn_args;
+                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
+                               g_dm.active_rule_spawn_device_index >= 0 &&
+                               g_dm.active_rule_spawn_device_index < (int32_t)g_dm.registry_count &&
+                               build_acpi_spawn_args(
+                                   &g_dm.registry[g_dm.active_rule_spawn_device_index],
+                                   spawn_args,
+                                   sizeof(spawn_args)) > 0) {
                         args = spawn_args;
                     } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS &&
                                g_dm.active_rule_spawn_index >= 0 &&

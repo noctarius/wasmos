@@ -195,6 +195,15 @@ export namespace startup {
         loadSpawnInfo();
         return g_spawnModuleIndex;
     }
+    /**
+     * The spawn-time arguments, split on spaces: the same argv an app entered
+     * through runMain receives, for a service or driver entered through
+     * `initialize`. Empty when the spawn carried none.
+     */
+    export function args(): Array<string> {
+        loadSpawnInfo();
+        return readSpawnArgs();
+    }
 }
 
 

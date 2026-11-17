@@ -326,6 +326,10 @@ typedef struct {
     uint16_t vendor_id;
     uint16_t device_id;
     uint64_t spawned_device_mask; /* registry entry index bits already spawned */
+    /* Registry entry index bits whose driver never came up within its retries.
+     * Skipped like a spawned device, so one driver that cannot start does not
+     * hold the single spawn slot for every rule behind it. */
+    uint64_t given_up_device_mask;
     char spawn_path[96];
     uint8_t meta_valid;
     wasmos_module_meta_desc_t meta;
@@ -334,10 +338,11 @@ typedef struct {
 /* Rule: spawn a driver when an ACPI/ISA device with matching class is found. */
 typedef struct {
     uint8_t active;
-    uint8_t class_code;           /* 0xFF = match any */
-    uint8_t subclass;             /* 0xFF = match any */
-    uint16_t io_base;             /* ATTR{io}: the device's I/O base; 0 = match any */
-    uint64_t spawned_device_mask; /* registry entry index bits already spawned */
+    uint8_t class_code;            /* 0xFF = match any */
+    uint8_t subclass;              /* 0xFF = match any */
+    uint16_t io_base;              /* ATTR{io}: the device's I/O base; 0 = match any */
+    uint64_t spawned_device_mask;  /* registry entry index bits already spawned */
+    uint64_t given_up_device_mask; /* as on pci_match_rule_t */
     char spawn_path[96];
 } acpi_match_rule_t;
 

@@ -65,13 +65,14 @@ void dm_rules_load_always_spawn(device_manager_state_t* state, const char* text)
 void dm_rules_load_block_fs(device_manager_state_t* state, const char* text);
 /* Parse pci_match rules (PCI class/vendor/device driver binding) from text.
  * Accepts SUBSYSTEM=="pci" lines with any of ATTR{bus,slot,function,class,
- * subclass,prog_if,vendor,device}.  Each rule's spawned_device_mask is cleared,
- * so reloading rules lets an already-matched device be spawned again. */
+ * subclass,prog_if,vendor,device}.  Each rule's spawned_device_mask and
+ * given_up_device_mask are cleared, so reloading rules lets an already-matched
+ * device be spawned again, and a given-up one be tried again. */
 void dm_rules_load_pci_match(device_manager_state_t* state, const char* text);
 /* Parse acpi_match rules (ACPI/ISA class driver binding) from text.  Accepts
  * SUBSYSTEM=="acpi" lines with ATTR{class}, ATTR{subclass} and ATTR{io} (the
  * device's I/O base, hex); like the PCI loader it clears each rule's
- * spawned_device_mask. */
+ * spawned_device_mask and given_up_device_mask. */
 void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text);
 
 /* Whether an acpi_match rule selects registry entry `rec`: an ACPI/ISA device

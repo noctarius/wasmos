@@ -1052,7 +1052,72 @@ static void an_overlong_rule_line_is_refused(void) {
     check(!out_has("rule queued"), "and no partition is spawned on by whatever survived the cut");
 }
 
+/* An ACPI device as the acpi-bus inventory leaves it in the registry: bus 0xFF
+ * marks it as not PCI, and its I/O base is kept in device_id. */
+static void add_acpi_device(uint8_t class_code, uint8_t subclass, uint16_t io, uint8_t irq) {
+    pci_device_record_t* rec = &g_dm.registry[g_dm.registry_count++];
+    memset(rec, 0, sizeof(*rec));
+    rec->bus = 0xFFu;
+    rec->class_code = class_code;
+    rec->subclass = subclass;
+    rec->device_id = io;
+    rec->irq_hint = irq;
+}
+
+static void add_acpi_rule(uint8_t class_code, uint8_t subclass, const char* path) {
+    acpi_match_rule_t* rule = &g_dm.acpi_match_rules[g_dm.acpi_match_rule_count++];
+    memset(rule, 0, sizeof(*rule));
+    rule->active = 1;
+    rule->class_code = class_code;
+    rule->subclass = subclass;
+    (void)snprintf(rule->spawn_path, sizeof(rule->spawn_path), "%s", path);
+}
+
+/* Regression: 2026-11-17-devmgr-retries-a-dead-driver-forever -- a matched
+ * device whose driver died before it was ready was retried a bounded number of
+ * times and then re-armed by the very next queue walk with a fresh budget,
+ * because only a SUCCESS recorded the device as handled. Only one spawn is in
+ * flight at a time, so every rule behind it starved: with `serial` bound to a
+ * second UART it could not drive, the boot respawned it 1,756 times and never
+ * reached the keyboard, the mouse, the rtc or the CLI prompt.
+ *
+ * A driver that will never come up must cost its own device and nothing else:
+ * once its retries are spent the device is given up on, said so, and the queue
+ * moves on. */
+static void a_driver_that_never_comes_up_does_not_starve_the_queue(void) {
+    harness_reset();
+    add_acpi_device(0x07u, 0x00u, 0x02F8u, 3u); /* the UART whose driver dies */
+    add_acpi_device(0x09u, 0x00u, 0x0060u, 1u); /* the keyboard behind it */
+    add_acpi_rule(0x07u, 0x00u, "system/drivers/serial.wap");
+    add_acpi_rule(0x09u, 0x00u, "system/drivers/keyboard.wap");
+
+    queue_block_fs_rule_spawns();
+    check(g_dm.rule_spawn_pending && g_dm.active_rule_spawn_index == 0,
+          "the UART's rule is armed first");
+
+    int reached_keyboard = 0;
+    int uart_rearmed = 0;
+    for (int attempt = 0; attempt < 64 && !reached_keyboard; ++attempt) {
+        rule_spawn_complete(0); /* the child died before it was ready */
+        if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
+            g_dm.active_rule_spawn_index == 1) {
+            reached_keyboard = 1;
+        } else if (g_dm.rule_spawn_retries == 0 && g_dm.active_rule_spawn_index == 0) {
+            uart_rearmed = 1;
+        }
+    }
+    check(reached_keyboard, "the keyboard's rule is reached once the UART's retries are spent");
+    check(!uart_rearmed, "the given-up UART is not re-armed with a fresh retry budget");
+    check(out_has("[device-manager] gave up on system/drivers/serial.wap"),
+          "giving up is reported, naming the driver");
+
+    queue_block_fs_rule_spawns();
+    rule_spawn_complete(1); /* the keyboard comes up */
+    check(!g_dm.rule_spawn_pending, "and with both settled nothing is re-armed");
+}
+
 int main(void) {
+    a_driver_that_never_comes_up_does_not_starve_the_queue();
     publish_after_rules_reports_the_match();
     rescan_after_late_rules_reports_the_match();
     a_rule_matches_only_its_own_backend();

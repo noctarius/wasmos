@@ -101,9 +101,11 @@ static void sched_timeout_fire(thread_t* t) {
  *
  * O(THREAD_MAX_COUNT) when it runs at all, but the g_sched_timeout_next hint
  * short-circuits it to a single compare whenever nothing armed is due — the
- * common case on every dispatch.  Also opportunistically clears the deadline of
- * any thread that is no longer BLOCKED, so a stale arm cannot fire against a
- * later, unrelated block. */
+ * common case on every dispatch.  Fires only BLOCKED threads.  A RUNNING or
+ * READY thread's deadline is kept, not cleared: that thread is between the arm
+ * and the block in sched_event_wait, and every path that ends a timed wait
+ * clears its own deadline.  A dead slot's deadline is cleared, since nothing
+ * will resume it. */
 void sched_timeout_check(void) {
     uint64_t now = timer_ticks();
     uint64_t observed = __atomic_load_n(&g_sched_timeout_next, __ATOMIC_ACQUIRE);
@@ -118,8 +120,23 @@ void sched_timeout_check(void) {
         if (d == 0) {
             continue;
         }
+        if (t->state == THREAD_STATE_RUNNING || t->state == THREAD_STATE_READY) {
+            /* Not fired, and NOT cleared. A live thread holding a deadline is
+             * one that has armed it and not yet finished blocking:
+             * sched_event_wait arms before it marks the thread BLOCKED, so a
+             * scan on another CPU can land in between. Clearing it here left
+             * the thread parked with no deadline at all. Every path that ends
+             * a timed wait -- a normal wake, a fire, the resume tail -- clears
+             * the deadline itself, so a live thread never holds a stale one.
+             * Kept in the bound, so the next scan fires it once it blocks. */
+            if (d < next) {
+                next = d;
+            }
+            continue;
+        }
         if (t->state != THREAD_STATE_BLOCKED) {
-            /* stale: already woken some other way */
+            /* A dead or initialising slot: nothing will ever resume it to
+             * clear the deadline, and nothing may fire against it. */
             __atomic_store_n(&t->sched_timeout_tick, 0u, __ATOMIC_RELEASE);
             continue;
         }

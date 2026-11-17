@@ -736,6 +736,16 @@ run_assemblyscript_lint() {
             copy_if_needed "$libc_module" "$stage_dir/$(basename "$libc_module")"
         done
 
+        # The module's own siblings: a driver split across files imports them as
+        # "./name", and the build stages them beside it (EXTRA_SOURCES in
+        # cmake/WasmosAssemblyScript.cmake). Unreferenced ones cost nothing.
+        local sibling
+        for sibling in "$(dirname "$file")"/*.ts; do
+            if [[ "$sibling" != "$file" ]]; then
+                copy_if_needed "$sibling" "$stage_dir/$(basename "$sibling")"
+            fi
+        done
+
         if grep -q '"\./libui"' "$file"; then
             copy_if_needed "src/libui/assemblyscript/libui.ts" "$stage_dir/libui.ts"
         fi

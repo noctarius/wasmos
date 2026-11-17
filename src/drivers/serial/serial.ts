@@ -34,6 +34,7 @@
 import {io, std, startup} from "./wasmos";
 import {defaultLoop, EventLoop, IpcFuture, IpcMessage, OnIdle, ReplyStatus} from "./eventloop";
 import {AWAIT_PENDING, Box} from "./coroutine";
+import {CONSOLE_PORT, serialNameWord} from "./serial_name";
 import {
     WASMOS_ERR_DRIVER_DEVICE_INIT,
     WASMOS_ERR_DRIVER_ENDPOINT_CREATE,
@@ -62,8 +63,7 @@ import {
 const REG_IER: i32 = 1;
 const REG_STATUS: i32 = 5;
 
-/* The console UART: COM1 at its fixed ISA base and IRQ. */
-const CONSOLE_PORT: i32 = 0x3f8;
+/* The console UART's IRQ; its base is CONSOLE_PORT (serial_name.ts). */
 const CONSOLE_IRQ: i32 = 4;
 
 /* The UART this instance serves, from its spawn args (see the header). */
@@ -87,9 +87,6 @@ const SERIAL_IPC_IRQ_EVENT: i32 = 0xff00;
 
 const SERIAL_READ_STATUS_EMPTY: i32 = 0;
 const SERIAL_READ_STATUS_ERROR: i32 = -1;
-
-/* "sin\0" -- serial input: the console UART's name, which the vt looks up. */
-const SERIAL_NAME_PACKED: i32 = 0x006e6973;
 
 /* Idle wait while polling the UART, and while the vt is backpressured. Short
  * enough that input is not perceptibly late, long enough not to be a spin. */
@@ -180,23 +177,6 @@ function readDeviceArgs(): void {
 
 function isConsole(): bool {
     return g_port == CONSOLE_PORT;
-}
-
-/**
- * The registry name, packed four bytes per argument word as the process manager
- * unpacks it: "sin" for the console, otherwise "s" and the base in lowercase hex
- * ("s2f8"), which is unique per UART and fits the first word.
- */
-function packedName(): i32 {
-    if (isConsole()) {
-        return SERIAL_NAME_PACKED;
-    }
-    const hex = (g_port & 0xfff).toString(16);
-    let packed: i32 = 0x73; /* 's' */
-    for (let i = 0; i < hex.length && i < 3; ++i) {
-        packed |= (hex.charCodeAt(i) & 0xff) << ((i + 1) * 8);
-    }
-    return packed;
 }
 
 function serialInitHw(): void {
@@ -385,8 +365,8 @@ export function initialize(): i32 {
             procEndpoint,
             g_endpoint,
             SVC_IPC_REGISTER_REQ,
-            packedName(),
-            0,
+            serialNameWord(g_port, 0),
+            serialNameWord(g_port, 1),
             0,
             0,
         ) === null

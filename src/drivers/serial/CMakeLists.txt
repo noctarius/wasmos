@@ -6,6 +6,7 @@ if (AS_ENABLE)
     ENTRY ${WASM_SERIAL_DRIVER_SRC}
     OUTPUT_WASM ${WASM_SERIAL_DRIVER_WASM}
     MANIFEST ${DRIVER_WASM_DIR}/serial/linker.metadata
+    EXTRA_SOURCES ${DRIVER_WASM_DIR}/serial/serial_name.ts
   )
 
   wasmos_maybe_aot_pack(
@@ -16,7 +17,8 @@ if (AS_ENABLE)
 
   add_custom_target(serial_app
     DEPENDS ${WASM_SERIAL_APP}
-    SOURCES ${WASM_SERIAL_DRIVER_SRC} ${DRIVER_WASM_DIR}/serial/linker.metadata
+    SOURCES ${WASM_SERIAL_DRIVER_SRC} ${DRIVER_WASM_DIR}/serial/serial_name.ts
+            ${DRIVER_WASM_DIR}/serial/linker.metadata
   )
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_SERIAL_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS serial_app)

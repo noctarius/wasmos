@@ -447,6 +447,13 @@ static void test_armed_but_not_blocked_is_neither_fired_nor_disarmed(void) {
     CHECK(g_wake_calls == 0, "a non-BLOCKED thread is not fired");
     CHECK(live->sched_timeout_tick == 110, "a live thread keeps its deadline");
     CHECK(dead->sched_timeout_tick == 0, "a dead slot's deadline is cleared");
+
+    /* The live thread resumes and its resume tail clears the deadline, as in
+     * the kernel; one more scan then publishes a bound with nothing armed. The
+     * hint is module-static and reset() cannot reach it, so leaving it at 110
+     * would make the fast path scan in whichever case runs next (V8). */
+    live->sched_timeout_tick = 0;
+    sched_timeout_check();
 }
 
 static void test_fire_is_a_noop_after_a_normal_wake(void) {

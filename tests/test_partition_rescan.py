@@ -80,15 +80,16 @@ class PartitionRescanTest(unittest.TestCase):
 
     session: QemuSession | None = None
     disk_dir: str | None = None
+    disk_path: str = ""
     disk_id: str = ""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.disk_dir = tempfile.mkdtemp(prefix="wasmos-rescan-disk-")
-        disk_path = os.path.join(cls.disk_dir, "rescan.img")
-        with open(disk_path, "wb") as handle:
+        cls.disk_path = os.path.join(cls.disk_dir, "rescan.img")
+        with open(cls.disk_path, "wb") as handle:
             handle.write(build_image(IMAGE_MIB, VOLUME_LABEL, []))
-        cls.session = QemuSession(_config_with_gpt_disk(disk_path), timeout_s=300)
+        cls.session = QemuSession(_config_with_gpt_disk(cls.disk_path), timeout_s=300)
         cls.session.start()
         cls.session.require_prompt(timeout_s=200)
 
@@ -272,6 +273,51 @@ class PartitionRescanTest(unittest.TestCase):
             "the retired partition is still registered under the `block` "
             "class, so it can still be resolved and mounted\n"
             f"--- output ---\n{blk.decode('utf-8', 'replace')}\n",
+        )
+
+    def test_6_an_added_partition_is_registered_before_the_rescan_answers(
+        self,
+    ) -> None:
+        """A rescan that ADDS a partition answers only once it is registered.
+
+        Regression: 2026-11-17-rescan-answers-before-registration -- partition
+        registration became asynchronous, so the rescan's diff sent the
+        registration and answered at once, before the process manager had
+        accepted it. The caller was told the table was reconciled while the new
+        partition was not yet registered or announced to the device manager, and
+        a refused registration was only logged, never counted as unreconciled.
+
+        Both lines are the partition manager's own, so their order is strict:
+        `partition id=` is logged when the registration has taken, and
+        `rescanned` when the answer goes out.
+
+        Case 5 left the disk with no table. The host restores the original image
+        under the running guest, which the default writeback cache makes visible
+        to the next read, so the rescan sees exactly one partition appear.
+        """
+        with open(self.disk_path, "r+b") as handle:
+            handle.write(build_image(IMAGE_MIB, VOLUME_LABEL, []))
+        out = self._run(
+            f"partprobe {self.disk_id}",
+            [b"[partprobe] " + self.disk_id.encode() + b" rescanned; 1 partitions"],
+        )
+        published = out.find(
+            f"[partition-manager] partition id={self.partition_id}".encode()
+        )
+        answered = out.find(b"[partition-manager] rescanned " + self.disk_id.encode())
+        self.assertNotEqual(
+            published,
+            -1,
+            "the rescan never published the restored partition\n"
+            f"--- output ---\n{out.decode('utf-8', 'replace')}\n",
+        )
+        self.assertNotEqual(answered, -1, "the partition manager never answered")
+        self.assertLess(
+            published,
+            answered,
+            "the rescan answered before the added partition's registration had "
+            "taken\n"
+            f"--- output ---\n{out.decode('utf-8', 'replace')}\n",
         )
 
 

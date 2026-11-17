@@ -110,6 +110,9 @@ const Partition = struct {
     /// device manager only once it has taken.
     register: driver.ClassRegister = .{},
     register_id: i32 = 0,
+    /// The rescan that added this partition and is waiting on its registration,
+    /// as an index into `g_rescans`, or null when none is (a first probe).
+    rescan: ?usize = null,
     in_use: bool = false,
 };
 
@@ -252,19 +255,20 @@ var g_changes: [MAX_PARTITIONS]Change = [_]Change{.{}} ** MAX_PARTITIONS;
 
 /// A rescan whose reply is still owed.
 ///
-/// A rescan is answered when the table has been read AND every retirement it
-/// scheduled has settled, which is later than the root task's drain: the
-/// retirements are driven by replies that arrive on the message loop long after
+/// A rescan is answered when the table has been read AND every retirement and
+/// registration it scheduled has settled, which is later than the root task's
+/// drain: both are driven by replies that arrive on the message loop long after
 /// the drain returned. The count is what ties the two together.
 const Rescan = struct {
     reply_to: i32 = -1,
     reply_id: i32 = 0,
     disk: usize = 0,
-    /// Retirements this rescan started, valid only once `diffed` is set.
+    /// Retirements and registrations this rescan started, valid only once
+    /// `diffed` is set.
     scheduled: u32 = 0,
-    /// Retirements that have reached an outcome, refused or not.
+    /// Those that have reached an outcome, refused or not.
     settled: u32 = 0,
-    /// Retirements a peer refused, reported rather than failing the rescan: the
+    /// Those a peer refused, reported rather than failing the rescan: the
     /// rest of the disk was reconciled correctly, and the caller needs to know
     /// which part did not take.
     refused: u32 = 0,
@@ -494,9 +498,18 @@ fn publishPartition(part: *Partition) void {
         request_id,
     )) {
         logRegisterFailed(part);
+        settleRegistration(part, false);
         return;
     }
     part.register_id = request_id;
+}
+
+/// Account for a partition's registration against the rescan that added it, if
+/// any, answering that rescan when it was the last thing outstanding.
+fn settleRegistration(part: *Partition, ok: bool) void {
+    const index = part.rescan orelse return;
+    part.rescan = null;
+    settleRescan(index, !ok);
 }
 
 fn logRegisterFailed(part: *const Partition) void {
@@ -522,6 +535,7 @@ fn handleRegisterReply(msg: *const co.IpcMessage, slot: usize, ok: bool) void {
     part.register.release();
     if (!ok) {
         logRegisterFailed(part);
+        settleRegistration(part, false);
         return;
     }
 
@@ -532,6 +546,8 @@ fn handleRegisterReply(msg: *const co.IpcMessage, slot: usize, ok: bool) void {
     _ = line.str(" instance=").dec(part.instance);
     _ = line.str(" lba=").dec(part.lba_start).str(" count=").dec(part.lba_count);
     line.end();
+    // Last, so the rescan's answer follows the announcement it reports.
+    settleRegistration(part, true);
 }
 
 /// Hand the device manager this partition's descriptor.
@@ -560,8 +576,10 @@ fn announcePartition(part: *Partition, slot: usize, devmgr: i32) void {
     );
 }
 
-/// Turn one parsed table entry into a published partition.
-fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme) bool {
+/// Turn one parsed table entry into a published partition. `rescan` is the
+/// rescan adding it, which then waits for its registration; null for a first
+/// probe, which nobody waits on.
+fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, rescan: ?usize) bool {
     const disk = &g_disks[disk_index];
 
     // A window that leaves the disk describes nothing on it. Refused rather than
@@ -592,9 +610,16 @@ fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme) bool 
         .lba_start = entry.lba_start,
         .lba_count = entry.lba_count,
         .desc = desc,
+        .rescan = rescan,
         .in_use = true,
     };
     g_part_count += 1;
+    // Counted before the request goes out, for the same reason beginChange
+    // counts its changes: a registration that settles at once below must find
+    // itself already scheduled.
+    if (rescan) |index| {
+        if (g_rescans[index].in_use) g_rescans[index].scheduled += 1;
+    }
     publishPartition(part);
     return true;
 }
@@ -771,7 +796,7 @@ fn publishTable(disk_index: usize, table: *const pt.Table) void {
     while (i < table.count) : (i += 1) {
         // A first publish has nobody to report a failure to: the disk arrived
         // on its own, not on a request. It is logged where it happens.
-        _ = addPartition(disk_index, table.entries[i], table.scheme);
+        _ = addPartition(disk_index, table.entries[i], table.scheme, null);
     }
 }
 
@@ -826,7 +851,7 @@ fn rescanDisk(disk_index: usize, rescan: usize) ?void {
         switch (rc.classify(have[0..held], desired[i])) {
             .keep => |k| refreshMetadata(have_part[k], entry, disk.scheme),
             .update => |k| scheduleUpdate(have_part[k], entry, disk.scheme, rescan),
-            .publish => if (!addPartition(disk_index, entry, disk.scheme)) {
+            .publish => if (!addPartition(disk_index, entry, disk.scheme, rescan)) {
                 // Counted, not swallowed. The usual cause is that every slot is
                 // still held by partitions this same rescan is retiring, and
                 // their slots do not free until their peers answer -- so the
@@ -1308,6 +1333,12 @@ fn finishChange(slot: usize, refused: bool) void {
     // queue behind it would otherwise never move.
     if (was_checking) pumpChanges();
     const index = rescan orelse return;
+    settleRescan(index, refused);
+}
+
+/// Count one of a rescan's retirements or registrations as settled, and answer
+/// the rescan when it was the last one outstanding.
+fn settleRescan(index: usize, refused: bool) void {
     const pending = &g_rescans[index];
     if (!pending.in_use) return;
     if (refused) pending.refused += 1;

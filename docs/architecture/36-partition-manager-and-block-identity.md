@@ -414,7 +414,9 @@ is never told a table was reconciled when part of it was dropped.
 Neither request is waited for. A service that blocked on a peer's answer could
 not serve the requests that peer may need in order to produce it, so a
 retirement is a state machine the message loop advances, and the rescan is
-answered when its last retirement has settled. That is why
+answered when its last retirement, and the registration of every partition it
+added, has settled. A refused registration counts as unreconciled, like a
+refused retirement. That is why
 `PARTITION_IPC_RESP` is deferred by several round trips, and why the guest-side
 class-register and class-unregister wrappers (`driver.ClassRegister`,
 `driver.ClassRetire`) are asynchronous where every other wrapper in that file is

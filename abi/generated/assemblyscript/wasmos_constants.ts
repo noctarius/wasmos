@@ -247,6 +247,20 @@ export const SVC_CLASS_EVENT_ADD: i32 = 1;
 // A provider unregistered, or its process died and was reaped.
 export const SVC_CLASS_EVENT_REMOVE: i32 = 2;
 
+// svc_name_event
+// Which existence event SVC_IPC_NAME_EVENT reports, carried in its arg0.
+// The rest of the message: arg1=the subscriber's cookie, arg2=endpoint,
+// arg3=pid.
+//
+// BIND only. A name is reported when it becomes bound to an endpoint, which
+// is the one transition a waiting or rebinding client needs. There is no
+// unbind event: the name table never removes an entry (a dead owner's name is
+// reclaimed only when a new owner registers it, which IS a bind), and a
+// client that was talking to the provider already learns of its death from
+// WASMOS_IPC_HANGUP (docs/architecture/09-process-and-ipc.md, "Peer Hangup").
+// The name was bound to the endpoint in arg2.
+export const SVC_NAME_EVENT_BIND: i32 = 1;
+
 // net_socket_family
 // Address family of a socket: which layer it addresses and therefore what an
 // address means. Independent of the socket type below, as in BSD sockets.

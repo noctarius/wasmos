@@ -74,6 +74,13 @@ uint32_t service_class_registry_lookup(const char* class_name, service_class_pro
 int service_class_registry_subscribe(const char* class_name, uint32_t notify_endpoint,
                                      uint32_t owner_ctx);
 
+/* Drop the subscription of notify_endpoint to class_name. Idempotent: one that
+ * does not exist is not an error. The caller must have verified that the
+ * requester owns notify_endpoint -- a subscription belongs to whoever owns its
+ * endpoint, so no owner is compared here. Returns 0, or negative for a NULL,
+ * empty or over-long class name. */
+int service_class_registry_unsubscribe(const char* class_name, uint32_t notify_endpoint);
+
 /* Purge providers and subscribers whose owner is not alive per `alive`, firing
  * SVC_CLASS_EVENT_REMOVE to surviving subscribers for each purged provider.
  * Dead subscribers are dropped before any REMOVE is emitted. */

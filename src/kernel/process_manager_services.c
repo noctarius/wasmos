@@ -9,6 +9,7 @@
 #include "process.h"
 #include "process_manager.h"
 #include "service_class_registry.h"
+#include "service_name_watch.h"
 #include "string.h"
 #include "subsystem_registry.h"
 
@@ -48,12 +49,43 @@ static int pm_service_class_alive(void* user, uint32_t owner_ctx) {
     return process_get_exit_status(p->pid, &status) != 0;
 }
 
+/* Push an SVC_IPC_NAME_EVENT to a name subscriber's notify endpoint. */
+static void pm_service_name_event_sink(void* user, uint32_t notify_endpoint, uint32_t event,
+                                       uint32_t cookie, uint32_t endpoint, uint32_t pid) {
+    ipc_message_t ev;
+    (void)user;
+    ev.type = SVC_IPC_NAME_EVENT;
+    ev.source = g_pm.proc_endpoint;
+    ev.destination = notify_endpoint;
+    ev.request_id = 0;
+    ev.arg0 = event;
+    ev.arg1 = cookie;
+    ev.arg2 = endpoint;
+    ev.arg3 = pid;
+    (void)ipc_send_from(g_svc_class_ctx, notify_endpoint, &ev);
+}
+
 static void pm_service_class_ensure(uint32_t pm_context_id) {
     g_svc_class_ctx = pm_context_id;
     if (!g_svc_class_sink_set) {
         service_class_registry_set_event_sink(pm_service_class_event_sink, 0);
+        service_name_watch_set_event_sink(pm_service_name_event_sink, 0);
         g_svc_class_sink_set = 1;
     }
+}
+
+/* Reports a name binding to its subscribers. Events are sent FROM the PM's
+ * context, which is known only once the PM has dispatched; a bind before that
+ * (the in-kernel framebuffer's "fb") has no subscriber to tell, since
+ * subscribing is itself a PM request. */
+static void pm_service_name_bound(const char* name, uint32_t endpoint, uint32_t owner_context_id) {
+    process_t* provider;
+    if (g_svc_class_ctx == 0) {
+        return;
+    }
+    provider = process_find_by_context(owner_context_id);
+    service_name_watch_bound(
+        name, endpoint, provider ? provider->pid : 0u, pm_service_class_alive, 0);
 }
 
 /* Periodic exit-driven sweep: purge class providers/subscribers whose owner has
@@ -173,7 +205,11 @@ void pm_update_well_known_service_endpoint(const char* name, uint32_t endpoint) 
  *
  * A name that does not fit the entry is REFUSED rather than truncated: two names
  * sharing a truncated prefix would otherwise collide onto one entry, silently
- * rebinding an unrelated service. */
+ * rebinding an unrelated service.
+ *
+ * A call that changes the binding -- a new entry, a new endpoint, or a new
+ * owner -- reports it to the name's subscribers (SVC_IPC_NAME_EVENT); one that
+ * changes nothing does not. */
 int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id, uint32_t flags) {
     pm_service_entry_t* empty = 0;
     list_iter_t it;
@@ -208,6 +244,7 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
             }
             entry->flags = 0;
         }
+        int rebound = entry->owner_context_id != owner_context_id || entry->endpoint != endpoint;
         entry->owner_context_id = owner_context_id;
         entry->endpoint = endpoint;
         /* Flags ACCUMULATE across re-registrations rather than being replaced.
@@ -216,6 +253,9 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
          * silently drop out of the shutdown sequence by re-registering its name.
          * Nothing retracts a flag today, so there is no case this loses. */
         entry->flags |= flags & WASMOS_SVC_FLAG_MASK;
+        if (rebound) {
+            pm_service_name_bound(entry->name, endpoint, owner_context_id);
+        }
         return 0;
     }
     if (!empty) {
@@ -231,6 +271,7 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
     empty->endpoint = endpoint;
     empty->flags = flags & WASMOS_SVC_FLAG_MASK;
     empty->owner_context_id = owner_context_id;
+    pm_service_name_bound(empty->name, endpoint, owner_context_id);
     return 0;
 }
 
@@ -278,9 +319,10 @@ uint32_t pm_service_lookup(const char* name) {
 
 /* Packed-args service registration (SVC_IPC_REGISTER_REQ): arg0..arg3 carry the
  * name, and msg->source is BOTH the endpoint being registered and the reply
- * endpoint.  Returns 0 once the SVC_IPC_REGISTER_RESP is sent, -1 on an empty
- * name, an unresolvable source endpoint, a refused binding, or a failed reply —
- * which the PM run loop turns into an SVC_IPC_ERROR carrying that code.
+ * endpoint.  Returns 0 once the SVC_IPC_REGISTER_RESP is sent, else a packed
+ * WASMOS_ERR_PROC_PM_* code the PM run loop carries in SVC_IPC_ERROR.arg1:
+ * INVALID_NAME for an empty name, BAD_ENDPOINT for an unresolvable source,
+ * SVC_NAME_TAKEN for a refused binding, REPLY_SEND when only the reply failed.
  *
  * Limited to 16-character names by the packing; longer ones need the descriptor
  * form.  Because the registered endpoint IS the reply endpoint, a registrant
@@ -299,26 +341,27 @@ int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg)
                         name,
                         sizeof(name));
     if (name[0] == '\0') {
-        return -1;
+        return WASMOS_ERR_PROC_PM_INVALID_NAME;
     }
     track_fs = (strcmp(name, "fs") == 0) || (strcmp(name, "fs.vfs") == 0);
     if (ipc_endpoint_owner(msg->source, &owner_context_id) != IPC_OK) {
         if (track_fs)
             klog_write("[pm] fs register owner lookup failed\n");
-        return -1;
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     if (ipc_endpoint_owner(msg->source, &endpoint_owner) != IPC_OK ||
         endpoint_owner != owner_context_id) {
         if (track_fs)
             klog_write("[pm] fs register endpoint owner mismatch\n");
-        return -1;
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
+    pm_service_class_ensure(pm_context_id);
     /* The packed-name registration carries no flags; a service that needs
      * one registers through the descriptor path. */
     if (pm_service_set(name, msg->source, owner_context_id, 0u) != 0) {
         if (track_fs)
             klog_write("[pm] fs register service set failed\n");
-        return -1;
+        return WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN;
     }
     pm_update_well_known_service_endpoint(name, msg->source);
     resp.type = SVC_IPC_REGISTER_RESP;
@@ -329,7 +372,9 @@ int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg)
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 /* Descriptor-based service registration (SVC_IPC_REGISTER_DESC_REQ).
@@ -390,16 +435,19 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
     uint32_t i;
 
     if (ipc_endpoint_owner(msg->source, &reply_owner) != IPC_OK) {
-        return -1;
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     if (len < WASMOS_SVC_REGISTER_DESC_V1_BYTES || len > xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-        return -1;
+        return WASMOS_ERR_PROC_PM_INVALID_MODULE;
     }
     /* The descriptor lives in the caller's own transfer buffer; arg2 carries its
      * buffer_id (the caller owns it). PM reads it directly (kernel). */
     desc = (const svc_register_desc_t*)pm_foreign_xfer_ptr((uint32_t)msg->arg2, reply_owner, 0);
-    if (!desc || desc->version < 1u || desc->version > WASMOS_SVC_REGISTER_DESC_VERSION) {
-        return -1;
+    if (!desc) {
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
+    }
+    if (desc->version < 1u || desc->version > WASMOS_SVC_REGISTER_DESC_VERSION) {
+        return WASMOS_ERR_PROC_PM_INVALID_MODULE;
     }
     /* Copy the name out of the shared buffer and force NUL termination. */
     for (i = 0; i + 1u < sizeof(name) && desc->name[i] != '\0'; ++i) {
@@ -407,8 +455,9 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
     }
     name[i] = '\0';
     if (name[0] == '\0') {
-        return -1;
+        return WASMOS_ERR_PROC_PM_INVALID_NAME;
     }
+    pm_service_class_ensure(pm_context_id);
     service_ep = desc->service_endpoint;
     track_fs = (strcmp(name, "fs") == 0) || (strcmp(name, "fs.vfs") == 0);
     /* The endpoint being registered must belong to the same context as the
@@ -452,12 +501,14 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 /* Packed-args service lookup (SVC_IPC_LOOKUP_REQ): arg0..arg3 carry the name.
- * Returns 0 once the SVC_IPC_LOOKUP_RESP is sent, -1 on an empty name or a
- * failed reply.
+ * Returns 0 once the SVC_IPC_LOOKUP_RESP is sent, else INVALID_NAME for an
+ * empty name or REPLY_SEND for a failed reply.
  *
  * A name that is not registered is a SUCCESSFUL lookup, not an error: the reply
  * carries (uint32_t)-1 in arg0 instead of an endpoint, so the caller can retry
@@ -474,7 +525,7 @@ int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t* msg) {
                         name,
                         sizeof(name));
     if (name[0] == '\0') {
-        return -1;
+        return WASMOS_ERR_PROC_PM_INVALID_NAME;
     }
     endpoint = pm_service_lookup(name);
     resp.type = SVC_IPC_LOOKUP_RESP;
@@ -485,13 +536,16 @@ int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 /* Enumerate providers of a virtual class. The caller's transfer buffer (arg0)
  * carries the class name NUL-terminated at offset 0 on input; PM overwrites it
  * with a svc_class_entry_t[] and replies with the total match count (arg1 caps
- * how many entries the buffer holds). */
+ * how many entries the buffer holds). Failures are BAD_ENDPOINT, CALLER_FSBUF
+ * and REPLY_SEND. */
 int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner = 0;
     uint32_t buffer_id = (uint32_t)msg->arg0;
@@ -503,13 +557,13 @@ int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t* 
     ipc_message_t resp;
 
     if (ipc_endpoint_owner(msg->source, &owner) != IPC_OK) {
-        return -1;
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     /* Cast away const: the caller owns this transfer buffer and hands it in for
      * PM to fill with the result array (same write pattern as FS-read replies). */
     buf = ptr_cast(uint8_t, pm_foreign_xfer_ptr(buffer_id, owner, 0));
     if (!buf) {
-        return -1;
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
     str_copy(class_name, sizeof(class_name), (const char*)buf);
     cap_entries = xfer_buffer_size(BUFFER_KIND_TRANSFER) / (uint32_t)sizeof(svc_class_entry_t);
@@ -525,37 +579,32 @@ int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t* 
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
-/* Subscribe to existence events for a class. arg0 is the caller's notify
- * endpoint (must belong to the caller); arg1 is a transfer buffer holding the
- * class name NUL-terminated at offset 0. */
-int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg) {
+/* Resolves the context behind msg->source and checks that it also owns
+ * notify_endpoint -- a caller may only point events at its own endpoints. Writes
+ * the owner and returns 0, or BAD_ENDPOINT / NOT_AUTHORIZED. */
+static int pm_service_notify_owner(const ipc_message_t* msg, uint32_t notify_endpoint,
+                                   uint32_t* out_owner) {
     uint32_t owner = 0;
-    uint32_t notify_endpoint = (uint32_t)msg->arg0;
-    uint32_t buffer_id = (uint32_t)msg->arg1;
     uint32_t ne_owner = 0;
-    char class_name[WASMOS_SVC_CLASS_MAX];
-    const uint8_t* buf;
-    ipc_message_t resp;
-
     if (ipc_endpoint_owner(msg->source, &owner) != IPC_OK) {
-        return -1;
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     if (ipc_endpoint_owner(notify_endpoint, &ne_owner) != IPC_OK || ne_owner != owner) {
-        return -1;
+        return WASMOS_ERR_PROC_PM_NOT_AUTHORIZED;
     }
-    buf = pm_foreign_xfer_ptr(buffer_id, owner, 0);
-    if (!buf) {
-        return -1;
-    }
-    str_copy(class_name, sizeof(class_name), (const char*)buf);
-    pm_service_class_ensure(pm_context_id);
-    if (service_class_registry_subscribe(class_name, notify_endpoint, owner) != 0) {
-        return -1;
-    }
-    resp.type = SVC_IPC_SUBSCRIBE_CLASS_RESP;
+    *out_owner = owner;
+    return 0;
+}
+
+/* Sends the zero-status RESP of type `type` for `msg`; REPLY_SEND on failure. */
+static int pm_service_reply_ok(uint32_t pm_context_id, const ipc_message_t* msg, uint32_t type) {
+    ipc_message_t resp;
+    resp.type = type;
     resp.source = g_pm.proc_endpoint;
     resp.destination = msg->source;
     resp.request_id = msg->request_id;
@@ -563,7 +612,130 @@ int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg) 
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
+}
+
+/* Subscribe to existence events for a class. arg0 is the caller's notify
+ * endpoint (must belong to the caller); arg1 is a transfer buffer holding the
+ * class name NUL-terminated at offset 0. Failures are BAD_ENDPOINT,
+ * NOT_AUTHORIZED, CALLER_FSBUF, INVALID_NAME (a name the registry refuses),
+ * and REPLY_SEND. */
+int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t owner = 0;
+    uint32_t notify_endpoint = (uint32_t)msg->arg0;
+    uint32_t buffer_id = (uint32_t)msg->arg1;
+    char class_name[WASMOS_SVC_CLASS_MAX];
+    const uint8_t* buf;
+    int rc;
+
+    rc = pm_service_notify_owner(msg, notify_endpoint, &owner);
+    if (rc != 0) {
+        return rc;
+    }
+    buf = pm_foreign_xfer_ptr(buffer_id, owner, 0);
+    if (!buf) {
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
+    }
+    str_copy(class_name, sizeof(class_name), (const char*)buf);
+    pm_service_class_ensure(pm_context_id);
+    if (service_class_registry_subscribe(class_name, notify_endpoint, owner) != 0) {
+        return WASMOS_ERR_PROC_PM_INVALID_NAME;
+    }
+    return pm_service_reply_ok(pm_context_id, msg, SVC_IPC_SUBSCRIBE_CLASS_RESP);
+}
+
+/* Drop a class subscription (SVC_IPC_UNSUBSCRIBE_CLASS_REQ): the request has the
+ * same shape as SVC_IPC_SUBSCRIBE_CLASS_REQ. Idempotent. Failures are those of
+ * pm_handle_class_subscribe. */
+int pm_handle_class_unsubscribe(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t owner = 0;
+    uint32_t notify_endpoint = (uint32_t)msg->arg0;
+    char class_name[WASMOS_SVC_CLASS_MAX];
+    const uint8_t* buf;
+    int rc;
+
+    rc = pm_service_notify_owner(msg, notify_endpoint, &owner);
+    if (rc != 0) {
+        return rc;
+    }
+    buf = pm_foreign_xfer_ptr((uint32_t)msg->arg1, owner, 0);
+    if (!buf) {
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
+    }
+    str_copy(class_name, sizeof(class_name), (const char*)buf);
+    if (service_class_registry_unsubscribe(class_name, notify_endpoint) != 0) {
+        return WASMOS_ERR_PROC_PM_INVALID_NAME;
+    }
+    return pm_service_reply_ok(pm_context_id, msg, SVC_IPC_UNSUBSCRIBE_CLASS_RESP);
+}
+
+/* Subscribe to the binding of a service name (SVC_IPC_SUBSCRIBE_NAME_REQ): arg0
+ * is the caller's transfer buffer, arg1 the byte offset and arg2 the size of a
+ * svc_name_subscribe_desc_t in it. The descriptor's notify_endpoint must belong
+ * to the caller.
+ *
+ * Failures: BAD_ENDPOINT, NOT_AUTHORIZED, CALLER_FSBUF when the buffer or the
+ * range in it cannot be read, SVC_SUB_BAD_DESC for a short descriptor, an
+ * unknown version or an empty name, SVC_SUB_NO_SPACE when the subscription table
+ * cannot grow, REPLY_SEND. */
+int pm_handle_name_subscribe(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t owner = 0;
+    uint32_t offset = (uint32_t)msg->arg1;
+    uint32_t size = (uint32_t)msg->arg2;
+    const uint8_t* buf;
+    const svc_name_subscribe_desc_t* desc;
+    char name[WASMOS_SVC_NAME_MAX];
+    uint32_t i;
+    int rc;
+
+    if (ipc_endpoint_owner(msg->source, &owner) != IPC_OK) {
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
+    }
+    if (size < (uint32_t)sizeof(svc_name_subscribe_desc_t) ||
+        offset > xfer_buffer_size(BUFFER_KIND_TRANSFER) ||
+        size > xfer_buffer_size(BUFFER_KIND_TRANSFER) - offset) {
+        return WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC;
+    }
+    buf = pm_foreign_xfer_ptr((uint32_t)msg->arg0, owner, 0);
+    if (!buf) {
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
+    }
+    desc = (const svc_name_subscribe_desc_t*)(buf + offset);
+    if (desc->version != WASMOS_SVC_NAME_SUBSCRIBE_DESC_VERSION) {
+        return WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC;
+    }
+    /* Copy the name out of the shared buffer and force NUL termination. */
+    for (i = 0; i + 1u < sizeof(name) && desc->name[i] != '\0'; ++i) {
+        name[i] = desc->name[i];
+    }
+    name[i] = '\0';
+    if (name[0] == '\0') {
+        return WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC;
+    }
+    rc = pm_service_notify_owner(msg, desc->notify_endpoint, &owner);
+    if (rc != 0) {
+        return rc;
+    }
+    pm_service_class_ensure(pm_context_id);
+    if (service_name_watch_subscribe(name, desc->notify_endpoint, desc->cookie, owner) != 0) {
+        return WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE;
+    }
+    return pm_service_reply_ok(pm_context_id, msg, SVC_IPC_SUBSCRIBE_NAME_RESP);
+}
+
+/* Drop a name subscription (SVC_IPC_UNSUBSCRIBE_NAME_REQ): arg0 is the notify
+ * endpoint, arg1 the cookie. Idempotent. Failures: BAD_ENDPOINT, NOT_AUTHORIZED,
+ * REPLY_SEND. */
+int pm_handle_name_unsubscribe(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t owner = 0;
+    int rc = pm_service_notify_owner(msg, (uint32_t)msg->arg0, &owner);
+    if (rc != 0) {
+        return rc;
+    }
+    service_name_watch_unsubscribe((uint32_t)msg->arg0, (uint32_t)msg->arg1);
+    return pm_service_reply_ok(pm_context_id, msg, SVC_IPC_UNSUBSCRIBE_NAME_RESP);
 }
 
 /* Retires a class registration the caller itself made

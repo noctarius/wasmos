@@ -74,6 +74,9 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN` | -0x0002001B | that service name is held by another live process |
 | `WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN` | -0x0002001C | that (class, instance) is held by another live process |
 | `WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED` | -0x0002001D | the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on |
+| `WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE` | -0x0002001E | the service-subscription table could not grow to hold another subscription |
+| `WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC` | -0x0002001F | a name-subscription descriptor was short, of an unknown version, or named no service |
+| `WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT` | -0x00020020 | no provider bound the awaited service name within the caller's window |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 

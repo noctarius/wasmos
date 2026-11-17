@@ -277,6 +277,21 @@ groups:
       - { symbol: SVC_CLASS_EVENT_ADD, value: 1, doc: "A provider registered under the class." }
       - { symbol: SVC_CLASS_EVENT_REMOVE, value: 2, doc: "A provider unregistered, or its process died and was reaped." }
 
+  - name: svc_name_event
+    doc: |
+      Which existence event SVC_IPC_NAME_EVENT reports, carried in its arg0.
+      The rest of the message: arg1=the subscriber's cookie, arg2=endpoint,
+      arg3=pid.
+
+      BIND only. A name is reported when it becomes bound to an endpoint, which
+      is the one transition a waiting or rebinding client needs. There is no
+      unbind event: the name table never removes an entry (a dead owner's name is
+      reclaimed only when a new owner registers it, which IS a bind), and a
+      client that was talking to the provider already learns of its death from
+      WASMOS_IPC_HANGUP (docs/architecture/09-process-and-ipc.md, "Peer Hangup").
+    constants:
+      - { symbol: SVC_NAME_EVENT_BIND, value: 1, doc: "The name was bound to the endpoint in arg2." }
+
   - name: net_socket_family
     doc: |
       Address family of a socket: which layer it addresses and therefore what an

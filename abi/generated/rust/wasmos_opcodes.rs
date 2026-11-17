@@ -144,12 +144,55 @@ pub const SVC_IPC_SUBSCRIBE_CLASS_REQ: i32 = 0x224;
 /// it is not refused at all. Retiring one nobody holds, or one held by
 /// somebody else, fails the same way: it is not yours to retire.
 pub const SVC_IPC_UNREGISTER_CLASS_REQ: i32 = 0x225;
+/// Receive existence events for one service NAME.
+/// req  arg0=buffer_id arg1=byte_offset arg2=size of a
+/// svc_name_subscribe_desc_t in the caller's own transfer buffer
+/// (notify_endpoint, cookie, name);
+/// resp SVC_IPC_SUBSCRIBE_NAME_RESP arg0=0.
+///
+/// SVC_IPC_NAME_EVENT is then pushed to notify_endpoint whenever the name
+/// is BOUND: first registered, re-pointed at a different endpoint by its
+/// owner, or claimed by a new owner after the previous one died. A
+/// re-registration that changes nothing is not an event.
+///
+/// Subscribing does not replay a binding that already exists. A caller
+/// that wants "the provider, now or when it appears" subscribes FIRST and
+/// looks the name up SECOND; the reverse order loses a registration that
+/// lands between the two.
+///
+/// The subscription is keyed by (notify_endpoint, cookie), which must be
+/// the caller's: the cookie is the subscriber's own tag, echoed in every
+/// event, so one endpoint can watch several names and tell them apart.
+/// Subscribing an existing key again re-targets it at the new name.
+/// notify_endpoint must belong to the caller.
+pub const SVC_IPC_SUBSCRIBE_NAME_REQ: i32 = 0x226;
+/// Drop a name subscription the caller made.
+/// req  arg0=notify_endpoint arg1=cookie;
+/// resp SVC_IPC_UNSUBSCRIBE_NAME_RESP arg0=0.
+/// Idempotent: dropping a key that is not subscribed succeeds, so a
+/// caller tearing down after a lost reply cannot fail. Only the owner of
+/// notify_endpoint may drop it.
+pub const SVC_IPC_UNSUBSCRIBE_NAME_REQ: i32 = 0x227;
+/// Drop a class subscription the caller made.
+/// req  arg0=notify_endpoint arg1=buffer_id (class name NUL-terminated at
+/// offset 0), the same shape as SVC_IPC_SUBSCRIBE_CLASS_REQ;
+/// resp SVC_IPC_UNSUBSCRIBE_CLASS_RESP arg0=0.
+/// Idempotent, and owner-only, as for SVC_IPC_UNSUBSCRIBE_NAME_REQ.
+pub const SVC_IPC_UNSUBSCRIBE_CLASS_REQ: i32 = 0x228;
 pub const SVC_IPC_REGISTER_RESP: i32 = 0x2A0;
 pub const SVC_IPC_LOOKUP_RESP: i32 = 0x2A1;
 pub const SVC_IPC_LOOKUP_CLASS_RESP: i32 = 0x2A2;
 pub const SVC_IPC_SUBSCRIBE_CLASS_RESP: i32 = 0x2A3;
 pub const SVC_IPC_UNREGISTER_CLASS_RESP: i32 = 0x2A5;
 pub const SVC_IPC_CLASS_EVENT: i32 = 0x2A4;
+pub const SVC_IPC_SUBSCRIBE_NAME_RESP: i32 = 0x2A6;
+pub const SVC_IPC_UNSUBSCRIBE_NAME_RESP: i32 = 0x2A7;
+pub const SVC_IPC_UNSUBSCRIBE_CLASS_RESP: i32 = 0x2A8;
+/// Pushed to a name subscriber's notify_endpoint:
+/// arg0=SVC_NAME_EVENT_* arg1=cookie (the subscriber's own tag)
+/// arg2=endpoint arg3=pid of the provider the name is now bound to.
+/// request_id is 0.
+pub const SVC_IPC_NAME_EVENT: i32 = 0x2A9;
 pub const SVC_IPC_ERROR: i32 = 0x2AF;
 
 // block (0x300..0x3FF)

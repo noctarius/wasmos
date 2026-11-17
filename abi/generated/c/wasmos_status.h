@@ -108,6 +108,9 @@ enum {
     WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 27), /* that service name is held by another live process */
     WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 28), /* that (class, instance) is held by another live process */
     WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 29), /* the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on */
+    WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 30), /* the service-subscription table could not grow to hold another subscription */
+    WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 31), /* a name-subscription descriptor was short, of an unknown version, or named no service */
+    WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 32), /* no provider bound the awaited service name within the caller's window */
     WASMOS_ERR_LINMEM_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 1), /* no free page-aligned window fits in linear memory */
     WASMOS_ERR_LINMEM_MAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 2), /* paging/linear-memory mapping step failed */
     WASMOS_ERR_LINMEM_NO_BASE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 3), /* the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it */
@@ -419,6 +422,9 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "proc_pm.SVC_NAME_TAKEN";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "proc_pm.SVC_CLASS_TAKEN";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: return "proc_pm.SVC_CLASS_NOT_OWNED";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE: return "proc_pm.SVC_SUB_NO_SPACE";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC: return "proc_pm.SVC_SUB_BAD_DESC";
+    case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT: return "proc_pm.SVC_AWAIT_TIMEOUT";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "linmem.NO_WINDOW";
     case WASMOS_ERR_LINMEM_MAP: return "linmem.MAP";
     case WASMOS_ERR_LINMEM_NO_BASE: return "linmem.NO_BASE";
@@ -664,6 +670,9 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "that service name is held by another live process";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "that (class, instance) is held by another live process";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: return "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE: return "the service-subscription table could not grow to hold another subscription";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC: return "a name-subscription descriptor was short, of an unknown version, or named no service";
+    case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT: return "no provider bound the awaited service name within the caller's window";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";

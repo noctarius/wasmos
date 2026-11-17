@@ -95,6 +95,9 @@ const (
 	WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN int32 = -0x0002001B // that service name is held by another live process
 	WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN int32 = -0x0002001C // that (class, instance) is held by another live process
 	WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED int32 = -0x0002001D // the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on
+	WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE int32 = -0x0002001E // the service-subscription table could not grow to hold another subscription
+	WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC int32 = -0x0002001F // a name-subscription descriptor was short, of an unknown version, or named no service
+	WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT int32 = -0x00020020 // no provider bound the awaited service name within the caller's window
 	WASMOS_ERR_LINMEM_NO_WINDOW int32 = -0x00030001 // no free page-aligned window fits in linear memory
 	WASMOS_ERR_LINMEM_MAP int32 = -0x00030002 // paging/linear-memory mapping step failed
 	WASMOS_ERR_LINMEM_NO_BASE int32 = -0x00030003 // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -477,6 +480,12 @@ func WasmosStrerror(c int32) string {
 		return "that (class, instance) is held by another live process"
 	case WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED:
 		return "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on"
+	case WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE:
+		return "the service-subscription table could not grow to hold another subscription"
+	case WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC:
+		return "a name-subscription descriptor was short, of an unknown version, or named no service"
+	case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT:
+		return "no provider bound the awaited service name within the caller's window"
 	case WASMOS_ERR_LINMEM_NO_WINDOW:
 		return "no free page-aligned window fits in linear memory"
 	case WASMOS_ERR_LINMEM_MAP:

@@ -263,6 +263,24 @@ int service_class_registry_subscribe(const char* class_name, uint32_t notify_end
     return 0;
 }
 
+int service_class_registry_unsubscribe(const char* class_name, uint32_t notify_endpoint) {
+    char norm[SVC_CLASS_NAME_MAX];
+    list_iter_t it;
+    sub_t* s;
+
+    scr_ensure_init();
+    if (scr_copy_class(norm, class_name) != 0) {
+        return -1;
+    }
+    for (s = (sub_t*)list_first(&g_subs, &it); s; s = (sub_t*)list_next(&it)) {
+        if (s->notify_endpoint == notify_endpoint && scr_streq(s->class_name, norm)) {
+            list_remove(&g_subs, s);
+            return 0;
+        }
+    }
+    return 0;
+}
+
 /* Find one entry in `list` whose owner is not alive; return it or NULL. */
 static void* scr_find_dead(list_t* list, uint32_t owner_off, service_class_alive_fn alive,
                            void* user) {

@@ -140,6 +140,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/hashmap.o
   ${BUILD_DIR}/subsystem_registry.o
   ${BUILD_DIR}/service_class_registry.o
+  ${BUILD_DIR}/service_name_watch.o
   ${BUILD_DIR}/wasmos_exec_format.o
   ${BUILD_DIR}/paging.o
   ${BUILD_DIR}/linmem_slots.o
@@ -293,6 +294,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/hashmap.c
   ${KERNEL_DIR}/subsystem_registry.c
   ${KERNEL_DIR}/service_class_registry.c
+  ${KERNEL_DIR}/service_name_watch.c
   ${KERNEL_DIR}/wasmos_exec_format.c
   ${KERNEL_DIR}/physmem.c
   ${KERNEL_DIR}/runtime_context.c
@@ -638,6 +640,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/hashmap.c -o ${BUILD_DIR}/hashmap.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/subsystem_registry.c -o ${BUILD_DIR}/subsystem_registry.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/service_class_registry.c -o ${BUILD_DIR}/service_class_registry.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/service_name_watch.c -o ${BUILD_DIR}/service_name_watch.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_exec_format.c -o ${BUILD_DIR}/wasmos_exec_format.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o

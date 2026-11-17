@@ -278,6 +278,19 @@ typedef struct {
     char class_name[WASMOS_SVC_CLASS_MAX]; /* NUL-term; "" = no class */
 } svc_register_desc_t;
 
+/* Name-subscription descriptor for SVC_IPC_SUBSCRIBE_NAME_REQ, written by the
+ * subscriber into its own transfer buffer. (notify_endpoint, cookie) is the
+ * subscription's key and the cookie comes back in every SVC_IPC_NAME_EVENT;
+ * notify_endpoint must belong to the subscriber. Extensible: bump the version
+ * and append fields. */
+#define WASMOS_SVC_NAME_SUBSCRIBE_DESC_VERSION 1u
+typedef struct {
+    uint32_t version;               /* = WASMOS_SVC_NAME_SUBSCRIBE_DESC_VERSION */
+    uint32_t notify_endpoint;       /* where SVC_IPC_NAME_EVENT is delivered */
+    uint32_t cookie;                /* subscriber's tag, echoed in event arg1 */
+    char name[WASMOS_SVC_NAME_MAX]; /* NUL-terminated service name */
+} svc_name_subscribe_desc_t;
+
 /* svc_register_desc_t::flags. Unknown bits are masked off by the process
  * manager rather than refused, so an older kernel accepts a descriptor from a
  * newer service.

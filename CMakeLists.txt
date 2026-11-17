@@ -4102,6 +4102,19 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_service_class_registry
   COMMAND ${BUILD_DIR}/test_service_class_registry
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          -iquote ${LIBC_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_service_name_watch.c
+          ${KERNEL_DIR}/service_name_watch.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_service_name_watch
+  COMMAND ${BUILD_DIR}/test_service_name_watch
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running host kernel unit tests"
   VERBATIM

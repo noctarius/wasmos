@@ -221,6 +221,12 @@ pub fn svcWatchStop(watch: *NativeSvcWatch) void {
     c.wasmos_sys_native_svc_watch_stop(watch);
 }
 
+/// Forget the last reported endpoint so a rebind to the same endpoint id is
+/// reported; call on the provider's hangup. Pass-through.
+pub fn svcWatchForget(watch: *NativeSvcWatch) void {
+    c.wasmos_sys_native_svc_watch_forget(watch);
+}
+
 /// Fail every watch whose deadline has passed. Call from the service's idle
 /// hook. Pass-through.
 pub fn svcWatchSetExpire(set: *NativeSvcWatchSet) void {

@@ -208,6 +208,24 @@ static int test_event_bind_dedupe_and_rebind(void) {
     return 0;
 }
 
+static int test_forget_reports_a_rebind_to_the_same_endpoint(void) {
+    fresh();
+    obs_t o = {0};
+    wasmos_sys_native_svc_watch_t w = {0};
+    wasmos_sys_native_svc_watch_start(&g_set, &w, "kbd", 0, on_bind, on_fail, &o);
+    answer(77u);
+    push(SVC_IPC_NAME_EVENT, 0, SVC_NAME_EVENT_BIND, w.cookie, 77u);
+    (void)wasmos_sys_native_event_loop_poll(&g_loop, 4u);
+    if (o.binds != 1)
+        return __LINE__;
+    wasmos_sys_native_svc_watch_forget(&w);
+    push(SVC_IPC_NAME_EVENT, 0, SVC_NAME_EVENT_BIND, w.cookie, 77u);
+    (void)wasmos_sys_native_event_loop_poll(&g_loop, 4u);
+    if (o.binds != 2 || !w.active)
+        return __LINE__;
+    return 0;
+}
+
 static int test_refused_subscribe_carries_the_pm_code(void) {
     fresh();
     obs_t o = {0};
@@ -289,6 +307,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_stop_with_subscribe_in_flight),
         WASMOS_TEST_CASE(test_await_resolves),
         WASMOS_TEST_CASE(test_await_timeout_is_wrap_safe),
+        WASMOS_TEST_CASE(test_forget_reports_a_rebind_to_the_same_endpoint),
     };
     const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
     if (wasmos_test_run_all(cases, groups) != 0) {

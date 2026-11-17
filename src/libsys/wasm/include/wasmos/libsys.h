@@ -519,6 +519,13 @@ int32_t wasmos_sys_svc_watch_start(wasmos_sys_svc_watch_set_t* set, wasmos_sys_s
  * handler, like any cancelled intent. A NULL or inactive watch is ignored. */
 void wasmos_sys_svc_watch_stop(wasmos_sys_svc_watch_t* watch);
 
+/* Forget the endpoint last reported, so the next bind is reported even when it
+ * names the SAME endpoint. Call it when that endpoint's provider is known to be
+ * gone (WASMOS_IPC_HANGUP): endpoint ids are reused, so a restarted provider can
+ * come back on the id its predecessor had, and the dedupe would hide it. The
+ * watch stays active. A NULL or inactive watch is ignored. */
+void wasmos_sys_svc_watch_forget(wasmos_sys_svc_watch_t* watch);
+
 /* Fail every watch of the set whose deadline has passed, with
  * WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT. The set has no clock of its own (a
  * loop has one timeout hook, and it belongs to the loop's owner): call this from

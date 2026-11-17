@@ -426,6 +426,7 @@ int32_t wasmos_sys_native_svc_watch_start(wasmos_sys_native_svc_watch_set_t* set
                                           int32_t timeout_ms, wasmos_sys_native_svc_bind_fn on_bind,
                                           wasmos_sys_native_svc_fail_fn on_fail, void* user);
 void wasmos_sys_native_svc_watch_stop(wasmos_sys_native_svc_watch_t* watch);
+void wasmos_sys_native_svc_watch_forget(wasmos_sys_native_svc_watch_t* watch);
 void wasmos_sys_native_svc_watch_set_expire(wasmos_sys_native_svc_watch_set_t* set);
 wasmos_future_t* wasmos_sys_native_svc_await_start(wasmos_sys_native_svc_watch_set_t* set,
                                                    wasmos_sys_native_svc_await_t* await,

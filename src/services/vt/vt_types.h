@@ -94,14 +94,13 @@ typedef struct {
  * from the `kbd` driver and everything downstream — text slots and the
  * compositor alike — sees decoded characters. */
 #define VT_MAX_TTYS 4u
-/* Text geometry used when the framebuffer geometry query fails, and the
- * fallback the service retries with when the queried geometry's cell grids do
- * not fit in its heap. */
+/* Text geometry until the framebuffer reports its own, and for good when there
+ * is no framebuffer or its geometry query fails. */
 #define VT_COLS_DEFAULT 80u
 #define VT_ROWS_DEFAULT 25u
-/* Hard ceiling on a queried geometry.  These bound the per-slot cell arena
- * (VT_MAX_TTYS * VT_MAX_COLS * VT_MAX_ROWS * sizeof(vt_cell_t)), so raising them
- * raises the service's memory floor. */
+/* Hard ceiling on a queried geometry.  Every slot's grid is allocated at this
+ * size (VT_MAX_TTYS * VT_MAX_COLS * VT_MAX_ROWS * sizeof(vt_cell_t)), so raising
+ * them raises the service's memory floor. */
 #define VT_MAX_COLS 160u
 #define VT_MAX_ROWS 64u
 
@@ -113,7 +112,6 @@ typedef struct {
 #define VT_FB_SWITCH_CTRL_RETRIES 8192u
 #define VT_FB_SWITCH_CELL_RETRIES 4096u
 #define VT_IPC_REPLY_RETRIES 1024u
-#define VT_GEOMETRY_QUERY_RETRIES 2048
 
 /* Reason recorded in g_alloc_failure when a cell-grid allocation fails; logged
  * by vt_log_alloc_failure. */
@@ -121,8 +119,7 @@ enum {
     VT_ALLOC_FAIL_NONE = 0,
     VT_ALLOC_FAIL_ALIGN = 1,
     VT_ALLOC_FAIL_OVERFLOW = 2,
-    VT_ALLOC_FAIL_GROW = 3,
-    VT_ALLOC_FAIL_CAPACITY = 4
+    VT_ALLOC_FAIL_GROW = 3
 };
 
 /* Codes passed to wasmos_debug_mark for TTY-switch and writer-registration

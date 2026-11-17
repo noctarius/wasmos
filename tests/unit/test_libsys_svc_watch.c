@@ -506,6 +506,25 @@ static int test_start_failures(void) {
     return 0;
 }
 
+/* After forget(), a bind to the SAME endpoint is reported again -- the case of a
+ * restarted provider that came back on its predecessor's endpoint id. Without
+ * forget() the dedupe hides it. */
+static int test_forget_reports_a_rebind_to_the_same_endpoint(void) {
+    fresh();
+    wasmos_sys_svc_watch_t w = {0};
+    wasmos_sys_svc_watch_start(&g_set, &w, "kbd", 0, on_bind, on_fail, &g_obs);
+    answer_subscribe_and_lookup(77);
+    push(SVC_IPC_NAME_EVENT, 0, SVC_NAME_EVENT_BIND, (int32_t)w.cookie, 77, 7);
+    wasmos_sys_event_loop_poll(&g_loop, 4);
+    CHECK(g_obs.binds == 1, "same endpoint without forget is not a rebind");
+    wasmos_sys_svc_watch_forget(&w);
+    CHECK(w.active, "forget keeps the watch active");
+    push(SVC_IPC_NAME_EVENT, 0, SVC_NAME_EVENT_BIND, (int32_t)w.cookie, 77, 8);
+    wasmos_sys_event_loop_poll(&g_loop, 4);
+    CHECK(g_obs.binds == 2 && g_obs.last_endpoint == 77, "same endpoint after forget rebinds");
+    return 0;
+}
+
 /* Two watches on one loop are routed by cookie, each to its own callback. */
 static int test_two_watches_share_one_loop(void) {
     fresh();
@@ -533,6 +552,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_stop_with_a_request_in_flight),
         WASMOS_TEST_CASE(test_start_failures),
         WASMOS_TEST_CASE(test_two_watches_share_one_loop),
+        WASMOS_TEST_CASE(test_forget_reports_a_rebind_to_the_same_endpoint),
     };
     const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
     (void)wasmos_test_run_all(cases, groups);

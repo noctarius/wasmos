@@ -95,6 +95,12 @@ void wasmos_sys_native_svc_watch_stop(wasmos_sys_native_svc_watch_t* watch) {
                                         0);
 }
 
+void wasmos_sys_native_svc_watch_forget(wasmos_sys_native_svc_watch_t* watch) {
+    if (watch && watch->active) {
+        watch->bound = 0;
+    }
+}
+
 static void native_svc_watch_fail(wasmos_sys_native_svc_watch_t* watch, int32_t status) {
     wasmos_sys_native_svc_fail_fn on_fail = watch->on_fail;
     void* user = watch->user;

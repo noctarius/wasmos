@@ -1939,14 +1939,23 @@ VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
   whole line at a time (`vt_outmux`). Verified by
   `tests/test_vt_serial_bind.py` (vt-2's shell output stays off serial while
   vt-1 is bound) and `tests/unit/test_vt_outmux.c`.
-- [ ] [BUG][P2] A second 16550 UART stalls the boot. With a COM2 present, the
-  `serial` driver bound to it logs "IRQ route failed, falling back to polling",
-  exits (`[pm] spawn child-dead`), is spawned again, and the CLI prompt never
-  appears (every boot of the filesystem and language-runtimes batteries once the
-  harness attached a second `-serial`). The default rule now binds the driver to
-  COM1 only (`ATTR{io}=="0x3F8"`), so the shipped configuration never starts a
-  second instance; the driver itself still cannot serve a second UART, and its
-  failure takes the boot down rather than leaving that port undriven.
+- [x] [BUG][P2] A second 16550 UART stalled the boot. Two defects, both fixed.
+  The device manager re-armed a PCI/ACPI-matched device whose driver died
+  before it was ready with a fresh retry budget after every 8 failures, because
+  only a success recorded the device as handled; with one spawn in flight at a
+  time, every rule behind it starved and the CLI never came up. A device whose
+  retries are spent is now recorded in its rule's `given_up_device_mask` and
+  logged ("gave up on <driver>"), and the queue moves on. And `serial` was
+  hard-wired to COM1: the instance spawned for COM2 programmed COM1, was refused
+  COM1's IRQ, and took the console's "sin" name, so the instance for COM1 died.
+  The device manager now passes an ACPI-matched driver its `io=`/`irq=` as spawn
+  args (the values its grant is built from), `serial` serves that UART, and only
+  the instance on COM1 registers "sin" and the kernel console hook; another
+  registers a name derived from its base ("s2f8"). The shipped rule still binds
+  COM1 only, because COM2 carries the kernel log under `log.serial=com2`. Pinned
+  by `test_device_manager_block_rules` (a driver that never comes up does not
+  starve the queue) and `tests/test_serial_second_uart.py` (both UARTs served,
+  console input intact).
 - [ ] [CLEANUP][P2] Convert the boundary-crossing bare `-1`s left in the files the
   console-routing change touched: `src/kernel/native_driver.c` (the `nd_*` driver
   API returns, ~40 sites), `src/kernel/serial.c` (`serial_read_char` and the

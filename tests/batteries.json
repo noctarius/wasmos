@@ -43,7 +43,8 @@
         "test_syslog_port.py",
         "test_dmesg.py",
         "test_logger.py",
-        "test_ring3_smoke_target.py"
+        "test_ring3_smoke_target.py",
+        "test_serial_second_uart.py"
       ]
     },
     {

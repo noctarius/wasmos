@@ -883,6 +883,7 @@ static int parse_pci_match_rule_line(const char* line, pci_match_rule_t* out_rul
     out_rule->vendor_id = vendor_id;
     out_rule->device_id = device_id;
     out_rule->spawned_device_mask = 0;
+    out_rule->given_up_device_mask = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
 }
@@ -895,6 +896,7 @@ void dm_rules_load_pci_match(device_manager_state_t* state, const char* text) {
     for (uint32_t i = 0; i < PCI_MATCH_RULE_CAP; ++i) {
         state->pci_match_rules[i].active = 0;
         state->pci_match_rules[i].spawned_device_mask = 0;
+        state->pci_match_rules[i].given_up_device_mask = 0;
         /* The cached module descriptor belongs to the rule that occupied this
          * slot, not to the slot. Loading a rule set rebinds every slot, so the
          * cache must be dropped or the next rule inherits the previous rule's
@@ -979,6 +981,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     out_rule->subclass = subclass;
     out_rule->io_base = io_base;
     out_rule->spawned_device_mask = 0;
+    out_rule->given_up_device_mask = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
 }
@@ -993,6 +996,7 @@ void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text) {
         state->acpi_match_rules[i].subclass = MATCH_ANY_U8;
         state->acpi_match_rules[i].io_base = 0;
         state->acpi_match_rules[i].spawned_device_mask = 0;
+        state->acpi_match_rules[i].given_up_device_mask = 0;
     }
     for (int32_t i = 0;;) {
         int32_t line_start = i;

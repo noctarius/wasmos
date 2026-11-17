@@ -3710,6 +3710,23 @@ add_custom_target(run-kernel-unit-tests
           --outFile ${BUILD_DIR}/test_as_coroutine_transform.wasm
   COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/as/run_as_test.mjs
           ${BUILD_DIR}/test_as_coroutine_transform.wasm test_as_coroutine_transform
+  # The registry name each serial driver instance takes: unique per UART base,
+  # "sin" for the console the vt looks up.
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/as_serial_name_test_src
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${DRIVER_WASM_DIR}/serial/serial_name.ts
+          ${BUILD_DIR}/as_serial_name_test_src/serial_name.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/tests/unit/as/shuffle.ts
+          ${BUILD_DIR}/as_serial_name_test_src/shuffle.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_as_serial_name.ts
+          ${BUILD_DIR}/as_serial_name_test_src/test_as_serial_name.ts
+  COMMAND ${WASMOS_UNIT_ASC} ${BUILD_DIR}/as_serial_name_test_src/test_as_serial_name.ts
+          --target release -O --runtime stub
+          --outFile ${BUILD_DIR}/test_as_serial_name.wasm
+  COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/as/run_as_test.mjs
+          ${BUILD_DIR}/test_as_serial_name.wasm test_as_serial_name
   VERBATIM)
 
 # Its own command, and guarded: the comment below always claimed the Go test is

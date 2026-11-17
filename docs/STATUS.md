@@ -1363,7 +1363,12 @@ linked feature documents for rationale and rollout plans.
   mount point is a directory in the root filesystem, so the root has to be
   mounted before anything mounts onto it.
 - `device-manager` consumes PCI/ACPI inventory and bootstrap/runtime rules,
-  spawning drivers with matched capabilities and optional startup identity.
+  spawning drivers with matched capabilities and optional startup identity: a
+  PCI match gets `pci=`/`io=`/`irq=` args, an ACPI match `io=`/`irq=`. A matched
+  device whose driver never becomes ready within its retries is given up on and
+  logged, so the one-at-a-time spawn queue moves on to the next rule.
+- `serial` serves the UART it was spawned for; only the COM1 instance is the
+  console ("sin"), and the shipped rule binds COM1 only.
 - `chardev` is a normal initfs WASM driver started by a boot rule and registered
   through the service registry; it is no longer kernel-embedded.
 - `sysinit` drives `.rc` workflows, environment scopes, `script`/`source`, and

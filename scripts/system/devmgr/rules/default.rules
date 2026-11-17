@@ -59,7 +59,8 @@ SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0
 # The serial driver serves COM1, the console UART the vt owns. COM2 is left
 # undriven: with log.serial=com2 on the kernel command line the kernel writes the
 # kernel log to it directly, and a driver instance on it would contend for the
-# same UART.
+# same UART. Without the ATTR{io} match every 16550 gets an instance of its own,
+# on the port and IRQ it was spawned for (tests/test_serial_second_uart.py).
 SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{io}=="0x3F8", RUN+="system/drivers/serial.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", RUN+="system/drivers/mouse.wap"

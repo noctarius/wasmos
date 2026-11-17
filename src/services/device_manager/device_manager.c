@@ -1020,6 +1020,23 @@ static int build_pci_spawn_args(const pci_device_record_t* rec, char* out, uint3
     return n;
 }
 
+/* The startup args of an ACPI-matched driver: the device's I/O base and IRQ
+ * line, the same two values its capability grant is built from. A driver that
+ * can serve more than one instance of its device (a second UART) learns from
+ * these which one it was spawned for. */
+static int build_acpi_spawn_args(const pci_device_record_t* rec, char* out, uint32_t out_cap) {
+    int n = 0;
+    if (!rec || !out || out_cap == 0u) {
+        return -1;
+    }
+    n = snprintf(
+        out, out_cap, "io=%04X irq=%02X", (unsigned)rec->device_id, (unsigned)rec->irq_hint);
+    if (n <= 0 || (uint32_t)n >= out_cap) {
+        return -1;
+    }
+    return n;
+}
+
 /* Resolve a rule's RUN+= target to a boot-module index, without spawning
  * anything.  Tries the path as an initfs module, then the basename with the
  * extension stripped, then that basename with underscores turned into dashes
@@ -1264,7 +1281,8 @@ static void queue_pci_match_rule_spawns(void) {
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
             const pci_device_record_t* rec = &g_dm.registry[di];
-            if (di >= 64u || ((rule->spawned_device_mask >> di) & 1u) != 0u) {
+            if (di >= 64u ||
+                (((rule->spawned_device_mask | rule->given_up_device_mask) >> di) & 1u) != 0u) {
                 continue;
             }
             if (!pci_rule_matches_record(rule, rec)) {
@@ -1327,7 +1345,8 @@ static void queue_acpi_match_rule_spawns(void) {
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
             const pci_device_record_t* rec = &g_dm.registry[di];
-            if (di >= 64u || ((rule->spawned_device_mask >> di) & 1u) != 0u) {
+            if (di >= 64u ||
+                (((rule->spawned_device_mask | rule->given_up_device_mask) >> di) & 1u) != 0u) {
                 continue;
             }
             if (!dm_acpi_rule_matches(rule, rec)) {
@@ -2579,6 +2598,34 @@ static void consume_acpi_inventory(void) {
  * A mount completion is DEFERRED: the request is sent from the spawn phase and
  * this runs later, from poll_mount_request_async, so nothing between the two may
  * assume the armed slot has already been retired. */
+/* Record that the armed spawn will not be retried, and say so.
+ *
+ * A PCI- or ACPI-matched device is marked given up on its rule, which both queue
+ * walks skip. Without that mark the next walk re-armed the same device with a
+ * fresh retry budget, and since only one spawn is in flight at a time, a driver
+ * that could never start held the slot for every rule behind it -- the boot never
+ * reached the drivers or the CLI. The other kinds need no mark: a block rule is
+ * unqueued below, and an always-spawn rule was unqueued on its first failure. */
+static void give_up_on_active_spawn(void) {
+    int32_t di = g_dm.active_rule_spawn_device_index;
+    int32_t ri = g_dm.active_rule_spawn_index;
+    if (di >= 0 && di < 64 && ri >= 0) {
+        if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
+            ri < (int32_t)g_dm.pci_match_rule_count) {
+            g_dm.pci_match_rules[ri].given_up_device_mask |= (uint64_t)1u << (uint32_t)di;
+        } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
+                   ri < (int32_t)g_dm.acpi_match_rule_count) {
+            g_dm.acpi_match_rules[ri].given_up_device_mask |= (uint64_t)1u << (uint32_t)di;
+        }
+    }
+    char line[160];
+    (void)snprintf(line,
+                   sizeof(line),
+                   "[device-manager] gave up on %s: it never became ready\n",
+                   g_dm.rule_spawn_path);
+    console_write(line);
+}
+
 static void rule_spawn_complete(int32_t ok) {
     if (ok) {
         g_dm.rule_spawn_pending = 0;
@@ -2652,6 +2699,7 @@ static void rule_spawn_complete(int32_t ok) {
         }
         g_dm.rule_spawn_retries++;
         if (g_dm.rule_spawn_retries > 8) {
+            give_up_on_active_spawn();
             g_dm.rule_spawn_pending = 0;
             if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
                 if (g_dm.active_rule_spawn_index >= 0 &&
@@ -3251,6 +3299,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         build_pci_spawn_args(&g_dm.registry[g_dm.active_rule_spawn_device_index],
                                              spawn_args,
                                              sizeof(spawn_args)) > 0) {
+                        args = spawn_args;
+                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
+                               g_dm.active_rule_spawn_device_index >= 0 &&
+                               g_dm.active_rule_spawn_device_index < (int32_t)g_dm.registry_count &&
+                               build_acpi_spawn_args(
+                                   &g_dm.registry[g_dm.active_rule_spawn_device_index],
+                                   spawn_args,
+                                   sizeof(spawn_args)) > 0) {
                         args = spawn_args;
                     } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS &&
                                g_dm.active_rule_spawn_index >= 0 &&

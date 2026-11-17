@@ -1,5 +1,12 @@
-/* init.c - system initialiser service: reads sysinit.rc and drives sequential
- * service startup via the script engine callback table */
+/* init.c - system initialiser service: interprets sysinit.rc one line at a
+ * time and drives service startup from a single event loop.
+ *
+ * The script runner (wasmos/script.h) suspends on every command that waits --
+ * start, spawn, exec, wait-svc -- and this file finishes the command when its
+ * reply or event arrives on the loop. Nothing here waits inside a hook, so the
+ * loop is the only receive on the reply endpoint and sysinit never parks in a
+ * nested receive. The runner serializes the script, so at most one command is
+ * in flight, held in g_op. */
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"
@@ -16,8 +23,34 @@ static sysinit_state_t g_state = {
     .proc_endpoint = -1,
 };
 static wasmos_script_state_t g_script_state;
+static wasmos_script_runner_t g_runner;
+static wasmos_sys_event_loop_t g_loop;
+static wasmos_sys_svc_watch_set_t g_watches;
 static int32_t (*volatile g_console_write)(int32_t, int32_t);
-static int32_t (*volatile g_debug_mark)(int32_t);
+
+/* The command in flight. `kind` selects which reply handler owns it; the
+ * transfer buffer carries the path (and an exec's arguments) until the spawn
+ * reply. */
+typedef enum {
+    SYSINIT_OP_NONE = 0,
+    SYSINIT_OP_SPAWN,
+    SYSINIT_OP_START,
+    SYSINIT_OP_EXEC,
+    SYSINIT_OP_WAIT_SVC,
+} sysinit_op_kind_t;
+
+typedef struct {
+    sysinit_op_kind_t kind;
+    int32_t buffer_id; /* -1 when none */
+    uint32_t path_len;
+    uint32_t args_len;
+    uint32_t attempts; /* spawn retries after PROC_PM_BUSY */
+    uint8_t retry_due; /* resend the spawn on the next loop tick */
+    char path[WASMOS_SCRIPT_LINE_MAX];
+    wasmos_sys_svc_watch_t watch;
+} sysinit_op_t;
+
+static sysinit_op_t g_op = {.buffer_id = -1};
 
 static void log_line(const char* s) {
     if (!s) {
@@ -64,12 +97,20 @@ static const char* sysinit_spawn_error_reason(int32_t rc) {
         return "broker plan deferred";
     case WASMOS_ERR_PROC_PM_BUSY:
         return "process manager busy";
+    case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT:
+        return "no provider registered it in time";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_SEND:
+        return "could not send to the process manager";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER:
+        return "no transfer buffer for the subscription";
     default:
         return 0;
     }
 }
 
-static void sysinit_log_spawn_failure(const char* op, const char* path, int32_t rc) {
+/* Logs "[sysinit] <op> failed for <path>: <reason>"; the reason is omitted for
+ * a code this file cannot name, rather than guessed. */
+static void sysinit_log_failure(const char* op, const char* path, int32_t rc) {
     const char* reason = sysinit_spawn_error_reason(rc);
 
     log_line("[sysinit] ");
@@ -86,247 +127,259 @@ static void sysinit_log_spawn_failure(const char* op, const char* path, int32_t 
     log_line("\n");
 }
 
-/* Spawn `path` without waiting for the child to finish: PROC_SPAWN_PATH_FLAG_
- * AUTOREAP makes the PM reap it, so sysinit never issues a PROC_IPC_WAIT.  The
- * PM's spawn reply is still awaited; a PROC_IPC_ERROR carrying
- * WASMOS_ERR_PROC_PM_BUSY is retried up to SYSINIT_MAX_SPAWN_ATTEMPTS times.
- * Returns 0 once the PM accepted the spawn, -1 otherwise. */
-static int spawn_path(const char* path) {
-    wasmos_ipc_message_t reply;
-    uint32_t path_len = 0;
-    int32_t bid;
-    if (!path || path[0] == '\0') {
-        return -1;
+static void sysinit_op_release_buffer(void) {
+    if (g_op.buffer_id >= 0) {
+        (void)wasmos_xfer_buffer_release(g_op.buffer_id);
+        g_op.buffer_id = -1;
     }
-    while (path[path_len]) {
-        path_len++;
-    }
-    if (path_len == 0 || path_len > 240u) {
-        return -1;
-    }
-    /* Own a per-spawn buffer with the path at offset 0; PM reads it via
-     * ownership (arg1 = (buffer_id << 12) | path_len). Released after the reply. */
-    bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
-    if (bid < 0) {
-        return -1;
-    }
-    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    for (uint32_t attempt = 0; attempt < SYSINIT_MAX_SPAWN_ATTEMPTS; ++attempt) {
-        if (wasmos_ipc_call(
-                g_state.proc_endpoint,
-                g_state.reply_endpoint,
-                PROC_IPC_SPAWN_PATH,
-                g_state.spawn_request_id,
-                PROC_SPAWN_PATH_FLAG_AUTOREAP, /* fire-and-forget: reap the child on exit */
-                (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                0,
-                0,
-                &reply) != 0) {
-            (void)wasmos_xfer_buffer_release(bid);
-            return -1;
-        }
-        if (reply.type == PROC_IPC_RESP) {
-            g_state.spawn_request_id++;
-            (void)wasmos_xfer_buffer_release(bid);
-            return 0;
-        }
-        if (reply.type == PROC_IPC_ERROR && (int32_t)reply.arg1 == WASMOS_ERR_PROC_PM_BUSY) {
-            wasmos_sched_yield();
-            continue;
-        }
-        if (reply.type == PROC_IPC_ERROR) {
-            sysinit_log_spawn_failure("spawn", path, (int32_t)reply.arg1);
-        }
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    sysinit_log_spawn_failure("spawn", path, WASMOS_ERR_PROC_PM_BUSY);
-    (void)wasmos_xfer_buffer_release(bid);
-    return -1;
 }
 
-/* Script 'start' callback: synchronous spawn with SYSINIT_START_TIMEOUT_MS
- * deadline; blocks until the spawned service sends PROC_IPC_NOTIFY_READY. */
-static int sysinit_on_start(void* user, const char* path) {
-    wasmos_ipc_message_t reply;
-    (void)user;
-    uint32_t path_len = 0;
-    int32_t bid;
-    while (path[path_len]) {
-        path_len++;
-    }
-    if (path_len == 0 || path_len > 240u) {
+/* Ends the command in flight and hands its result to the runner. */
+static void sysinit_op_finish(int32_t rc, int32_t exit_code) {
+    sysinit_op_release_buffer();
+    g_op.kind = SYSINIT_OP_NONE;
+    g_op.retry_due = 0;
+    wasmos_script_runner_complete(&g_runner, rc, exit_code);
+}
+
+/* Copies `path` into g_op and stages path@0 and `args`@path_len+1 in a transfer
+ * buffer the process manager reads by ownership. Returns 0, or -1 for a path
+ * that is empty or too long or a buffer that cannot be staged. */
+static int sysinit_op_stage(sysinit_op_kind_t kind, const char* path, const char* args) {
+    uint32_t path_len = (uint32_t)strlen(path);
+    uint32_t args_len = (args && args[0]) ? (uint32_t)strlen(args) : 0u;
+    uint32_t write_off = path_len + 1u;
+    int32_t buf_size = wasmos_xfer_buffer_size();
+
+    if (path_len == 0 || path_len > 240u || path_len >= sizeof(g_op.path)) {
         return -1;
     }
-    bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
-    if (bid < 0) {
+    if (buf_size <= 0 || (int32_t)(write_off + args_len) > buf_size) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
+    memset(&g_op, 0, sizeof(g_op));
+    g_op.buffer_id = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
+    if (g_op.buffer_id < 0) {
+        g_op.buffer_id = -1;
         return -1;
     }
-    if (wasmos_ipc_call(g_state.proc_endpoint,
-                        g_state.reply_endpoint,
-                        PROC_IPC_SPAWN_PATH_SYNC,
-                        g_state.spawn_request_id,
-                        0,
-                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                        0,
-                        SYSINIT_START_TIMEOUT_MS,
-                        &reply) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        sysinit_log_spawn_failure("start", path, -1);
+    if (wasmos_xfer_buffer_write(g_op.buffer_id, path, (int32_t)path_len, 0) != 0 ||
+        (args_len > 0u && wasmos_xfer_buffer_write(
+                              g_op.buffer_id, args, (int32_t)args_len, (int32_t)write_off) != 0)) {
+        sysinit_op_release_buffer();
         return -1;
     }
-    (void)wasmos_xfer_buffer_release(bid);
-    if (reply.type != PROC_IPC_RESP || (int32_t)reply.arg0 < 0) {
-        if (reply.type == PROC_IPC_ERROR) {
-            sysinit_log_spawn_failure("start", path, (int32_t)reply.arg1);
-        } else {
-            sysinit_log_spawn_failure("start", path, -1);
-        }
-        return -1;
-    }
-    g_state.spawn_request_id++;
+    memcpy(g_op.path, path, path_len + 1u);
+    g_op.kind = kind;
+    g_op.path_len = path_len;
+    g_op.args_len = args_len;
     return 0;
 }
 
-static int sysinit_on_spawn(void* user, const char* path) {
-    (void)user;
-    return spawn_path(path);
+/* The spawn-path argument word: the buffer id and the path length.
+ * TODO: this packs two values into one argument, which abi/opcodes.yaml's
+ * PROC_IPC_SPAWN_PATH defines; a request descriptor would carry both, and the
+ * 4 KiB path-length ceiling with them. */
+static int32_t sysinit_op_path_word(void) {
+    return (int32_t)(((uint32_t)g_op.buffer_id << 12) | (g_op.path_len & 0xFFFu));
 }
 
-/* Script 'exec' callback: spawns path with args in the xfer buffer (path at
- * offset 0, args at offset path_len+1), then sends PROC_IPC_WAIT and blocks
- * until the child exits; sets *out_exit_code to the exit status. */
+/* ------------------------------------------------------------------ exec */
+
+static void sysinit_on_exec_wait_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (msg->type != PROC_IPC_RESP) {
+        sysinit_log_failure("exec", g_op.path, msg->arg1);
+        sysinit_op_finish(-1, 0);
+        return;
+    }
+    sysinit_op_finish(0, msg->arg1);
+}
+
+static void sysinit_on_exec_spawn_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    sysinit_op_release_buffer();
+    if (msg->type != PROC_IPC_RESP || msg->arg0 <= 0) {
+        sysinit_log_failure("exec", g_op.path, msg->type == PROC_IPC_ERROR ? msg->arg1 : 0);
+        sysinit_op_finish(-1, 0);
+        return;
+    }
+    if (wasmos_sys_intent_send(&g_loop,
+                               g_state.proc_endpoint,
+                               g_state.reply_endpoint,
+                               PROC_IPC_WAIT,
+                               msg->arg0,
+                               0,
+                               0,
+                               0,
+                               sysinit_on_exec_wait_reply,
+                               0,
+                               0) != 0) {
+        sysinit_op_finish(-1, 0);
+    }
+}
+
+/* Script 'exec': spawn path with args, then wait for its exit; the exit status
+ * becomes ${?}. */
 static int sysinit_on_exec(void* user, const char* path, const char* args, int32_t* out_exit_code) {
     (void)user;
-    uint32_t path_len = 0;
-    uint32_t args_len = 0;
-    while (path[path_len]) {
-        path_len++;
-    }
-    if (path_len == 0 || path_len > 240u) {
+    (void)out_exit_code;
+    if (sysinit_op_stage(SYSINIT_OP_EXEC, path, args) != 0) {
         return -1;
     }
-    if (args && args[0]) {
-        while (args[args_len]) {
-            args_len++;
-        }
-    }
-    uint32_t write_off = path_len + 1u;
-    int32_t fs_buf_size = wasmos_xfer_buffer_size();
-    int32_t bid;
-    if (fs_buf_size <= 0 || (int32_t)path_len >= fs_buf_size) {
+    if (wasmos_sys_intent_send(&g_loop,
+                               g_state.proc_endpoint,
+                               g_state.reply_endpoint,
+                               PROC_IPC_SPAWN_PATH,
+                               0,
+                               sysinit_op_path_word(),
+                               (int32_t)g_op.args_len,
+                               0,
+                               sysinit_on_exec_spawn_reply,
+                               0,
+                               0) != 0) {
+        sysinit_op_release_buffer();
+        g_op.kind = SYSINIT_OP_NONE;
         return -1;
     }
-    /* Own a buffer holding path@0 and args@path_len+1; PM reads via ownership
-     * (arg1 = (buffer_id << 12) | path_len, arg2 = args_len). */
-    bid = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
-    if (bid < 0) {
-        return -1;
-    }
-    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    if (args_len > 0u) {
-        if ((int32_t)write_off >= fs_buf_size || (int32_t)(write_off + args_len) > fs_buf_size) {
-            (void)wasmos_xfer_buffer_release(bid);
-            return -1;
-        }
-        if (wasmos_xfer_buffer_write(bid, args, (int32_t)args_len, (int32_t)write_off) != 0) {
-            (void)wasmos_xfer_buffer_release(bid);
-            return -1;
-        }
-    }
-    if (wasmos_ipc_send(g_state.proc_endpoint,
-                        g_state.reply_endpoint,
-                        PROC_IPC_SPAWN_PATH,
-                        g_state.spawn_request_id,
-                        0,
-                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                        (int32_t)args_len,
-                        0) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    int32_t recv_rc = wasmos_ipc_select_one(g_state.reply_endpoint);
-    (void)wasmos_xfer_buffer_release(bid);
-    if (recv_rc < 0) {
-        return -1;
-    }
-    int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-    if (resp_req != g_state.spawn_request_id) {
-        /* Consumed and abandoned: report it, because a reply eaten here is one
-         * its owner is still waiting for. */
-        wasmos_ipc_message_t dropped;
-        wasmos_ipc_message_read_last(&dropped);
-        wasmos_sys_ipc_report_discard(
-            "sysinit/spawn", g_state.reply_endpoint, g_state.spawn_request_id, &dropped);
-        return -1;
-    }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != PROC_IPC_RESP) {
-        if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == PROC_IPC_ERROR) {
-            sysinit_log_spawn_failure("exec", path, wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1));
-        }
-        return -1;
-    }
-    int32_t pid = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    g_state.spawn_request_id++;
-    if (pid <= 0) {
-        return -1;
-    }
-    if (wasmos_ipc_send(g_state.proc_endpoint,
-                        g_state.reply_endpoint,
-                        PROC_IPC_WAIT,
-                        g_state.spawn_request_id,
-                        pid,
-                        0,
-                        0,
-                        0) != 0) {
-        return -1;
-    }
-    recv_rc = wasmos_ipc_select_one(g_state.reply_endpoint);
-    if (recv_rc < 0) {
-        return -1;
-    }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != g_state.spawn_request_id) {
-        return -1;
-    }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != PROC_IPC_RESP) {
-        return -1;
-    }
-    if (out_exit_code) {
-        *out_exit_code = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    }
-    g_state.spawn_request_id++;
-    return 0;
+    return WASMOS_SCRIPT_HOOK_PENDING;
 }
 
-/* Script 'wait-svc' callback: polls wasmos_svc_lookup until the named service
- * registers, yielding between attempts.  Never gives up, so a `wait-svc` for a
- * service that never appears stalls the rest of sysinit.rc forever.
- * TODO: replace the poll with a class subscription (SVC_IPC_SUBSCRIBE_CLASS_REQ)
- * plus a bounded wait; the poll loads the process manager with lookup traffic
- * for as long as the service is missing. */
+/* ----------------------------------------------------------------- spawn */
+
+static int sysinit_spawn_send(void);
+
+static void sysinit_on_spawn_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (msg->type == PROC_IPC_RESP) {
+        sysinit_op_finish(0, 0);
+        return;
+    }
+    if (msg->type == PROC_IPC_ERROR && msg->arg1 == WASMOS_ERR_PROC_PM_BUSY &&
+        ++g_op.attempts < SYSINIT_MAX_SPAWN_ATTEMPTS) {
+        /* Resent from the loop's next tick, not from here, so a busy process
+         * manager is not answered with an immediate resend. */
+        g_op.retry_due = 1;
+        return;
+    }
+    sysinit_log_failure("spawn", g_op.path, msg->type == PROC_IPC_ERROR ? msg->arg1 : 0);
+    sysinit_op_finish(-1, 0);
+}
+
+/* PROC_SPAWN_PATH_FLAG_AUTOREAP: the process manager reaps the child, so
+ * sysinit never issues a PROC_IPC_WAIT for a fire-and-forget spawn. */
+static int sysinit_spawn_send(void) {
+    return wasmos_sys_intent_send(&g_loop,
+                                  g_state.proc_endpoint,
+                                  g_state.reply_endpoint,
+                                  PROC_IPC_SPAWN_PATH,
+                                  PROC_SPAWN_PATH_FLAG_AUTOREAP,
+                                  sysinit_op_path_word(),
+                                  0,
+                                  0,
+                                  sysinit_on_spawn_reply,
+                                  0,
+                                  0);
+}
+
+/* Script 'spawn': fire-and-forget; the script continues once the process
+ * manager has accepted the spawn. */
+static int sysinit_on_spawn(void* user, const char* path) {
+    (void)user;
+    if (sysinit_op_stage(SYSINIT_OP_SPAWN, path, 0) != 0) {
+        return -1;
+    }
+    if (sysinit_spawn_send() != 0) {
+        sysinit_op_release_buffer();
+        g_op.kind = SYSINIT_OP_NONE;
+        return -1;
+    }
+    return WASMOS_SCRIPT_HOOK_PENDING;
+}
+
+/* ----------------------------------------------------------------- start */
+
+static void sysinit_on_start_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (msg->type != PROC_IPC_RESP || msg->arg0 < 0) {
+        sysinit_log_failure("start", g_op.path, msg->type == PROC_IPC_ERROR ? msg->arg1 : 0);
+        sysinit_op_finish(-1, 0);
+        return;
+    }
+    sysinit_op_finish(0, 0);
+}
+
+/* Script 'start': the process manager replies once the child sent
+ * PROC_IPC_NOTIFY_READY, or with an error after SYSINIT_START_TIMEOUT_MS. A
+ * failed start fails the script. */
+static int sysinit_on_start(void* user, const char* path) {
+    (void)user;
+    if (sysinit_op_stage(SYSINIT_OP_START, path, 0) != 0) {
+        sysinit_log_failure("start", path, 0);
+        return -1;
+    }
+    if (wasmos_sys_intent_send(&g_loop,
+                               g_state.proc_endpoint,
+                               g_state.reply_endpoint,
+                               PROC_IPC_SPAWN_PATH_SYNC,
+                               0,
+                               sysinit_op_path_word(),
+                               0,
+                               SYSINIT_START_TIMEOUT_MS,
+                               sysinit_on_start_reply,
+                               0,
+                               0) != 0) {
+        sysinit_op_release_buffer();
+        g_op.kind = SYSINIT_OP_NONE;
+        sysinit_log_failure("start", path, 0);
+        return -1;
+    }
+    return WASMOS_SCRIPT_HOOK_PENDING;
+}
+
+/* -------------------------------------------------------------- wait-svc */
+
+static void sysinit_on_wait_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
+    (void)user;
+    (void)endpoint;
+    wasmos_sys_svc_watch_stop(watch);
+    sysinit_op_finish(0, 0);
+}
+
+static void sysinit_on_wait_failed(void* user, wasmos_sys_svc_watch_t* watch, int32_t status) {
+    (void)user;
+    (void)watch;
+    sysinit_log_failure("wait-svc", g_op.path, status);
+    sysinit_op_finish(-1, 0);
+}
+
+/* Script 'wait-svc': continue once the name is registered, or after
+ * SYSINIT_WAIT_SVC_TIMEOUT_MS with a logged failure. The script continues either
+ * way; a missing service is reported, not fatal. */
 static int sysinit_on_wait_svc(void* user, const char* name) {
     (void)user;
-    int32_t req_id = g_state.spawn_request_id;
-    for (;;) {
-        int32_t endpoint =
-            wasmos_svc_lookup(g_state.proc_endpoint, g_state.reply_endpoint, name, req_id);
-        req_id++;
-        if (endpoint >= 0) {
-            g_state.spawn_request_id = req_id;
-            return 0;
-        }
-        wasmos_sched_yield();
+    uint32_t len = (uint32_t)strlen(name);
+    int32_t rc;
+    if (len == 0 || len >= sizeof(g_op.path)) {
+        return -1;
     }
+    memset(&g_op, 0, sizeof(g_op));
+    g_op.buffer_id = -1;
+    g_op.kind = SYSINIT_OP_WAIT_SVC;
+    memcpy(g_op.path, name, len + 1u);
+    rc = wasmos_sys_svc_watch_start(&g_watches,
+                                    &g_op.watch,
+                                    name,
+                                    SYSINIT_WAIT_SVC_TIMEOUT_MS,
+                                    sysinit_on_wait_bound,
+                                    sysinit_on_wait_failed,
+                                    0);
+    if (rc != 0) {
+        g_op.kind = SYSINIT_OP_NONE;
+        sysinit_log_failure("wait-svc", name, rc);
+        return -1;
+    }
+    return WASMOS_SCRIPT_HOOK_PENDING;
 }
 
 static void sysinit_on_echo(void* user, const char* text) {
@@ -342,32 +395,74 @@ static int sysinit_on_export(void* user, const char* name, const char* value) {
     return wasmos_env_set(name, name_len, value, val_len);
 }
 
-/* Service entry point.  Calls wasmos_sys_notify_ready immediately (sysinit
- * has no readiness dependency of its own), then runs the sysinit.rc script
- * via wasmos_script_run.  Loops on ipc_recv after the script completes. */
+/* ------------------------------------------------------------- the loop */
+
+/* The loop's clock: wait-svc deadlines and the resend of a spawn the process
+ * manager answered BUSY. */
+static void sysinit_on_tick(void* user) {
+    (void)user;
+    wasmos_sys_svc_watch_set_expire(&g_watches);
+    if (g_op.kind == SYSINIT_OP_SPAWN && g_op.retry_due) {
+        g_op.retry_due = 0;
+        if (sysinit_spawn_send() != 0) {
+            sysinit_log_failure("spawn", g_op.path, 0);
+            sysinit_op_finish(-1, 0);
+        }
+    }
+}
+
+/* Messages no intent claims -- a late reply to a request whose command already
+ * ended -- are dropped. Never answered: an error reply to an unsolicited
+ * message can ping-pong with a peer that does the same. */
+static void sysinit_on_unclaimed(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    (void)msg;
+}
+
+/* Consumes the process manager's acknowledgement of NOTIFY_READY. */
+static void sysinit_on_ready_ack(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    (void)msg;
+}
+
+/* Service entry point. Reports ready first (sysinit has no readiness dependency
+ * of its own), then interprets sysinit.rc, stepping the runner whenever it can
+ * make progress and otherwise parking in the loop until a reply, an event or a
+ * tick completes the command in flight. */
 WASMOS_WASM_EXPORT int32_t initialize(void) {
-    /* The proc endpoint comes from the spawn-info contract; the entry args carry
-     * nothing and the parameter is overwritten. */
     int32_t proc_endpoint = wasmos_startup_proc_endpoint();
+    wasmos_script_ops_t ops = {0};
 
     g_console_write = wasmos_console_write;
-    g_debug_mark = wasmos_debug_mark;
 
     g_state.reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_state.reply_endpoint < 0) {
         fatal_stall("[sysinit] failed to create reply endpoint\n");
     }
-
     if (proc_endpoint < 0) {
         fatal_stall("[sysinit] invalid init args\n");
     }
     g_state.proc_endpoint = proc_endpoint;
 
-    wasmos_sys_notify_ready(g_state.proc_endpoint, g_state.reply_endpoint);
+    wasmos_sys_event_loop_init(&g_loop, g_state.reply_endpoint, g_state.spawn_request_id);
+    (void)wasmos_sys_event_set_default(&g_loop, sysinit_on_unclaimed, 0);
+    g_loop.on_timeout = sysinit_on_tick;
+    if (wasmos_sys_svc_watch_set_init(&g_watches, &g_loop, g_state.proc_endpoint) != 0) {
+        fatal_stall("[sysinit] failed to set up service watches\n");
+    }
+    (void)wasmos_sys_intent_send(&g_loop,
+                                 g_state.proc_endpoint,
+                                 g_state.reply_endpoint,
+                                 PROC_IPC_NOTIFY_READY,
+                                 0,
+                                 0,
+                                 0,
+                                 0,
+                                 sysinit_on_ready_ack,
+                                 0,
+                                 0);
 
     wasmos_script_state_init(&g_script_state);
-
-    wasmos_script_ops_t ops = {0};
     ops.on_start = sysinit_on_start;
     ops.on_spawn = sysinit_on_spawn;
     ops.on_exec = sysinit_on_exec;
@@ -376,12 +471,30 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     ops.on_export = sysinit_on_export;
     ops.user = &g_state;
 
-    int rc = wasmos_script_run(&g_script_state, &ops, SYSINIT_SCRIPT_PATH);
-    if (rc != 0) {
+    /* TODO: the runner reads script files through libc fopen/fgets, which are
+     * synchronous filesystem requests; a slow or absent filesystem still stalls
+     * a step. */
+    if (wasmos_script_runner_start(&g_runner, &g_script_state, &ops, SYSINIT_SCRIPT_PATH) != 0) {
         fatal_stall("[sysinit] script failed or not found\n");
     }
-
+    /* The tick runs only while a command is in flight; an idle sysinit parks
+     * until a message arrives. */
+    g_loop.poll_timeout_ms = SYSINIT_TICK_MS;
     for (;;) {
-        (void)wasmos_ipc_select_one(g_state.reply_endpoint);
+        int step = wasmos_script_runner_step(&g_runner);
+        if (step == WASMOS_SCRIPT_STEP_MORE) {
+            continue;
+        }
+        if (step == WASMOS_SCRIPT_STEP_DONE) {
+            break;
+        }
+        if (step == WASMOS_SCRIPT_STEP_ERROR) {
+            fatal_stall("[sysinit] script failed or not found\n");
+        }
+        (void)wasmos_sys_event_loop_poll(&g_loop, 8);
+    }
+    g_loop.poll_timeout_ms = 0;
+    for (;;) {
+        (void)wasmos_sys_event_loop_poll(&g_loop, 8);
     }
 }

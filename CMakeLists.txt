@@ -3482,6 +3482,15 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_event_loop.c
           -o ${BUILD_DIR}/test_libsys_event_loop
   COMMAND ${BUILD_DIR}/test_libsys_event_loop
+  # The .rc script runner (step API and the synchronous run over it), reading
+  # real files the test writes under /tmp.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${LIBC_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_script_runner.c
+          ${LIBC_DIR}/src/script.c
+          -o ${BUILD_DIR}/test_libc_script_runner
+  COMMAND ${BUILD_DIR}/test_libc_script_runner
   # Service-name watches and awaits over that loop, with the real future core;
   # the process manager is a scripted inbox.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

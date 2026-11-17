@@ -113,8 +113,18 @@ uint32_t thread_current_tid(void) {
  * notably anything leaving ZOMBIE -- is silently ignored there. This stub enforces no
  * such rule, so what goes untested is the refusal, not the RUNNING -> BLOCKED move
  * sched_event_wait actually performs. */
+/* Hook: when set, runs once as a thread is about to be marked BLOCKED, BEFORE the
+ * state is written -- the window in which sched_event_wait has already armed the
+ * thread's deadline but the thread still reads as RUNNING to another CPU (V18). */
+static void (*g_block_hook)(thread_t*);
+
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason) {
     thread_t* t = thread_get(tid);
+    if (t && state == THREAD_STATE_BLOCKED && g_block_hook) {
+        void (*hook)(thread_t*) = g_block_hook;
+        g_block_hook = NULL; /* once */
+        hook(t);
+    }
     if (t) {
         t->state = state;
         t->block_reason = reason;
@@ -170,6 +180,7 @@ static void reset(void) {
     g_yield_calls = 0;
     g_arm_hook = NULL;
     g_arm_at_index = 0;
+    g_block_hook = NULL;
 }
 
 /* Hand out the next pool slot as a fresh RUNNING thread with tid = its index + 1. The
@@ -415,19 +426,27 @@ static void test_due_deadline_fires_and_recomputes_the_hint(void) {
     CHECK(g_last_woken == later, "and it is the remaining waiter");
 }
 
-static void test_armed_but_not_blocked_is_disarmed_not_fired(void) {
+/* A live thread holding a deadline is never fired, and its deadline is left for
+ * the thread itself to clear: in the kernel that state exists only between
+ * sched_event_wait's arm and its block (V18), where clearing loses the timeout.
+ * A dead slot's deadline is cleared, because nothing will ever resume it. */
+static void test_armed_but_not_blocked_is_neither_fired_nor_disarmed(void) {
     reset();
     sched_event_t ev;
     sched_event_init(&ev, SCHED_EVENT_TYPE_IPC);
-    thread_t* t = mk();
-    block_on(&ev, t, 10);          /* deadline 110 */
-    t->state = THREAD_STATE_READY; /* woken some other way */
+    thread_t* live = mk();
+    thread_t* dead = mk();
+    block_on(&ev, live, 10);           /* deadline 110 */
+    block_on(&ev, dead, 10);           /* deadline 110 */
+    live->state = THREAD_STATE_READY;  /* not (yet) blocked */
+    dead->state = THREAD_STATE_ZOMBIE; /* exited while armed */
 
     g_now = 200;
     g_wake_calls = 0;
     sched_timeout_check();
     CHECK(g_wake_calls == 0, "a non-BLOCKED thread is not fired");
-    CHECK(t->sched_timeout_tick == 0, "but its stale deadline is cleared");
+    CHECK(live->sched_timeout_tick == 110, "a live thread keeps its deadline");
+    CHECK(dead->sched_timeout_tick == 0, "a dead slot's deadline is cleared");
 }
 
 static void test_fire_is_a_noop_after_a_normal_wake(void) {
@@ -522,6 +541,48 @@ static void test_arm_during_scan_is_not_lost(void) {
     sched_timeout_check();
     CHECK(g_wake_calls == 1, "the deadline armed during the scan still fires");
     CHECK(g_last_woken == g_hook_thread, "and it is the thread that armed it");
+}
+
+/* Regression: 2026-11-17-pm-poll-timeout-lost -- sched_event_wait arms a thread's
+ * deadline and only afterwards marks it BLOCKED. A scan on another CPU inside that
+ * window read the RUNNING thread's deadline as stale and cleared it, so the thread
+ * parked with no deadline at all. The process manager arms a 50 ms poll on every idle
+ * pass and answers PROC_IPC_WAIT only from that poll: once its deadline was dropped it
+ * slept until some unrelated message arrived, and a CLI waiting on an exited child hung
+ * with nothing left to send one (CI run 44034393608, its dispatch count frozen across
+ * every stall-dump sample).
+ *
+ * The hook runs the scan exactly there, with another thread's deadline due so the scan
+ * is not short-circuited by the fast path. */
+static uint64_t g_seen_tick;
+static void scan_while_blocking(thread_t* t) {
+    sched_timeout_check();
+    g_seen_tick = t->sched_timeout_tick;
+}
+
+static void test_deadline_armed_before_the_block_survives_a_scan(void) {
+    reset();
+    sched_event_t ev, other_ev;
+    sched_event_init(&ev, SCHED_EVENT_TYPE_IPC);
+    sched_event_init(&other_ev, SCHED_EVENT_TYPE_IPC);
+    thread_t* other = mk();
+    block_on(&other_ev, other, 1); /* deadline 101: due when the scan runs */
+    thread_t* t = mk();
+
+    g_now = 101;
+    g_seen_tick = 0;
+    g_block_hook = scan_while_blocking;
+    block_on(&ev, t, 50); /* arms 151, then the hook scans before BLOCKED is written */
+
+    CHECK(g_seen_tick == 151,
+          "a deadline armed by a thread that has not finished blocking survives a scan");
+
+    g_now = 151;
+    g_wake_calls = 0;
+    g_last_woken = NULL;
+    sched_timeout_check();
+    CHECK(g_last_woken == t, "and fires when it comes due");
+    CHECK(t->pend_state == SCHED_PEND_TIMEOUT, "as a timeout");
 }
 
 /* ------------------------------------------------------- wait registration */
@@ -626,7 +687,8 @@ int main(void) {
         {"V7 zero timeout arms nothing", test_arm_zero_is_coerced_to_one},
         {"V8 fast path does not scan", test_fast_path_does_not_scan},
         {"V9 due deadline fires, hint recomputed", test_due_deadline_fires_and_recomputes_the_hint},
-        {"V10 armed but not blocked is disarmed", test_armed_but_not_blocked_is_disarmed_not_fired},
+        {"V10 armed but not blocked is neither fired nor disarmed",
+         test_armed_but_not_blocked_is_neither_fired_nor_disarmed},
         {"V11 fire is a no-op after a normal wake", test_fire_is_a_noop_after_a_normal_wake},
         {"V12 stale deadline does not survive into a new event",
          test_stale_deadline_does_not_survive_into_a_new_event},
@@ -637,6 +699,8 @@ int main(void) {
         {"V16 wake cancels an armed timeout", test_wake_cancels_an_armed_timeout},
         {"V17 list survives interleaved traffic",
          test_wait_list_survives_interleaved_waits_and_wakes},
+        {"V18 a deadline armed before the block survives a scan",
+         test_deadline_armed_before_the_block_survives_a_scan},
     };
 
     /* Randomized order: a case that leaks state must not be able to make its

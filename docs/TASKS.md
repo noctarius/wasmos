@@ -2615,6 +2615,20 @@ Source: `architecture/25-diagnostics-status.md`,
      carried a comment about, fixed the same way: publish `sched_owe_enqueue`
      alongside the mark. Its signature is a persistent `stranded(ready,no-rq)`
      whose `[diag]   ready_by=` line names `sched_wake_thread`.
+  5. A timed wait could lose its deadline (2026-11-17). `sched_event_wait` arms
+     the deadline and only afterwards marks the thread BLOCKED, and a
+     `sched_timeout_check` on another CPU inside that window cleared the RUNNING
+     thread's deadline as stale, so the thread parked with no deadline at all.
+     The process manager arms a 50 ms poll on every idle pass and answers
+     `PROC_IPC_WAIT` only from that poll, so a CLI waiting on an exited child
+     hung until some unrelated message woke the process manager, and in a
+     quiet session none came (CI runs 44034393608, `test_vfs_root_mount`, and
+     43863404554, `test_app_churn`). The scan now keeps a live thread's deadline
+     and clears only a dead slot's. Its signature is a thread parked in
+     `ipc_select_wait`/`sched_event_wait` on a TIMED wait whose `disp` does not
+     move across the dump's samples while the CPUs keep dispatching; for the
+     process manager, a CLI whose last send is `type=0x201` (`PROC_IPC_WAIT`) to
+     `ep:5` beside a ZOMBIE child. Pinned by `tests/unit/test_sched_event.c` V18.
 
   What would settle this: several consecutive green full-suite runs with no
   `[diag]!    refused` line, no `stranded(ready,no-rq)` that PERSISTS across the

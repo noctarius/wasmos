@@ -281,6 +281,16 @@ from. The handler queues the arrival and settles the root's wake promise. Becaus
 a stackless task resumes from the top, the root drains the queue BEFORE awaiting,
 which is what makes it a loop rather than a one-shot.
 
+A probe blocks this whole process, forwarding included, so it may wait on the
+disk being probed and on nothing else. Registering each partition under the
+`block` class is the exception it cannot make synchronously: the process manager
+reads every module it spawns from `/boot`, through this process, and does not
+answer a registration while such a read is outstanding. A probe that waited for
+its registration therefore waited on a reply that waited on itself, until the
+process manager's 15 s fs timeout broke the cycle. The registration goes out with
+`driver.ClassRegister`, the reply is handled on the message loop, and the
+partition is announced to the device manager only once it has taken.
+
 The probe stages its request descriptor in its own transfer buffer, separate from
 the one forwarded transfers use. Sharing it was safe only while probing happened
 solely at bring-up: a backend reads a request descriptor when it reaches the
@@ -406,8 +416,9 @@ not serve the requests that peer may need in order to produce it, so a
 retirement is a state machine the message loop advances, and the rescan is
 answered when its last retirement has settled. That is why
 `PARTITION_IPC_RESP` is deferred by several round trips, and why the guest-side
-class-unregister wrapper (`driver.ClassRetire`) is asynchronous where every
-other wrapper in that file is not.
+class-register and class-unregister wrappers (`driver.ClassRegister`,
+`driver.ClassRetire`) are asynchronous where every other wrapper in that file is
+not.
 
 An UNREADABLE table and an ABSENT one are held apart, and the distinction is
 load-bearing here in a way it is not for a first probe. A probe that cannot read

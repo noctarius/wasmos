@@ -335,12 +335,15 @@ int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg)
 /* Descriptor-based service registration (SVC_IPC_REGISTER_DESC_REQ).
  *
  * Unlike pm_handle_service_register(), the request carries a svc_register_desc_t
- * in the caller's xfer buffer (arg1 = byte length, arg2 = buffer_id) and
- * msg->source is a DEDICATED reply endpoint, separate from the service endpoint
- * being registered (desc->service_endpoint).  Keeping the reply off the live
- * service endpoint is required, not stylistic: a registrant that blocks for its
- * reply on the endpoint it is simultaneously serving can consume the reply as
- * request traffic, or serve a request in place of the reply, and deadlock. */
+ * in the caller's xfer buffer (arg1 = byte length, arg2 = buffer_id), and the
+ * reply goes to msg->source, which must belong to the same context as the
+ * service endpoint being registered (desc->service_endpoint).  A registrant that
+ * BLOCKS for the reply must send from a dedicated reply endpoint, not the live
+ * service endpoint: blocking on the endpoint it is simultaneously serving, it can
+ * consume the reply as request traffic, or serve a request in place of the
+ * reply, and deadlock.  An asynchronous registrant whose dispatcher matches the
+ * reply by request_id may send from its service endpoint (the Zig
+ * `driver.ClassRegister`). */
 /* Answer a REFUSED descriptor registration with `code`.
  *
  * Returns 0 once the refusal is sent, because the request IS then handled: the

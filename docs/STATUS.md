@@ -794,8 +794,12 @@ linked feature documents for rationale and rollout plans.
   driver registers later -- virtio-blk publishes well after the partition manager
   reports ready -- is probed when it arrives rather than missed for the rest of
   the boot. An arrival on its own endpoint is dropped, since every partition it
-  publishes registers under that same class. The probe is synchronous and runs on
-  the root task, so it blocks the process but not the loop's dispatch.
+  publishes registers under that same class. The probe's disk reads are
+  synchronous and run on the root task, so they block the process but not the
+  loop's dispatch; each partition's class registration is asynchronous and
+  finished on the message loop, because the process manager reads spawned
+  modules from `/boot` through this process and cannot answer a registration
+  while such a read is outstanding.
   `/user` mounts from a partition it names by GPT label
   (`architecture/36-partition-manager-and-block-identity.md` §2-§3).
 - A disk's table can be RE-read. `PARTITION_IPC_RESCAN_REQ` reconciles the

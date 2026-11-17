@@ -105,6 +105,11 @@ const Partition = struct {
     lba_start: u64 = 0,
     lba_count: u64 = 0,
     desc: driver.BlockDescriptor = .{},
+    /// The class registration in flight for this partition, answered on the
+    /// message loop (`handleRegisterReply`). The partition is announced to the
+    /// device manager only once it has taken.
+    register: driver.ClassRegister = .{},
+    register_id: i32 = 0,
     in_use: bool = false,
 };
 
@@ -467,24 +472,60 @@ fn readSectors(disk: *const Disk, lba: u64, count: u32, out: []u8) bool {
 
 // --- publishing --------------------------------------------------------------
 
-/// Register one partition under the `block` class and announce it to the device
-/// manager, so a rule can match it exactly as it matches a whole disk.
-fn publishPartition(part: *Partition, slot: usize, devmgr: i32) void {
-    if (driver.registerService(
+/// Start registering one partition under the `block` class. The answer arrives
+/// on the message loop, where `handleRegisterReply` announces the partition to
+/// the device manager, so a rule can match it exactly as it matches a whole
+/// disk.
+///
+/// Asynchronous because a probe runs while this process forwards transfers, and
+/// the process manager may be blocked on one of them: it reads every module it
+/// spawns from /boot, through this process. A registration that waited for the
+/// process manager here waited on a reply that waited on this process, until
+/// the process manager's fs timeout broke the cycle.
+fn publishPartition(part: *Partition) void {
+    const request_id = nextRequestId();
+    if (!part.register.start(
         g_proc_endpoint,
+        endpoint(),
         endpoint(),
         "partition",
         "block",
         part.instance,
-        nextRequestId(),
-    ) == null) {
-        var line = driver.Line{};
-        _ = line.str("[partition-manager] class register failed id=").str(idSlice(&part.desc.canonical_id));
-        line.end();
+        request_id,
+    )) {
+        logRegisterFailed(part);
+        return;
+    }
+    part.register_id = request_id;
+}
+
+fn logRegisterFailed(part: *const Partition) void {
+    var line = driver.Line{};
+    _ = line.str("[partition-manager] class register failed id=").str(idSlice(&part.desc.canonical_id));
+    line.end();
+}
+
+/// The partition whose registration `request_id` answers, if any.
+fn partOfRegistration(request_id: i32) ?usize {
+    for (&g_parts, 0..) |*p, i| {
+        if (p.in_use and p.register.pending() and p.register_id == request_id) return i;
+    }
+    return null;
+}
+
+/// Finish a partition's registration: announce it when it took, report it when
+/// it was refused. Only the process manager owns the registry, so only its
+/// answer may end the exchange.
+fn handleRegisterReply(msg: *const co.IpcMessage, slot: usize, ok: bool) void {
+    if (msg.source != g_proc_endpoint) return;
+    const part = &g_parts[slot];
+    part.register.release();
+    if (!ok) {
+        logRegisterFailed(part);
         return;
     }
 
-    announcePartition(part, slot, devmgr);
+    announcePartition(part, slot, g_devmgr);
 
     var line = driver.Line{};
     _ = line.str("[partition-manager] partition id=").str(idSlice(&part.desc.canonical_id));
@@ -520,7 +561,7 @@ fn announcePartition(part: *Partition, slot: usize, devmgr: i32) void {
 }
 
 /// Turn one parsed table entry into a published partition.
-fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, devmgr: i32) bool {
+fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme) bool {
     const disk = &g_disks[disk_index];
 
     // A window that leaves the disk describes nothing on it. Refused rather than
@@ -554,7 +595,7 @@ fn addPartition(disk_index: usize, entry: pt.Partition, scheme: pt.Scheme, devmg
         .in_use = true,
     };
     g_part_count += 1;
-    publishPartition(part, slot, devmgr);
+    publishPartition(part);
     return true;
 }
 
@@ -684,12 +725,12 @@ fn readTable(disk_index: usize) TableRead {
 
 /// Read a disk's table and publish what it holds. The FIRST read of a disk,
 /// which has nothing published to reconcile against.
-fn probeDisk(disk_index: usize, devmgr: i32) void {
+fn probeDisk(disk_index: usize) void {
     const disk = &g_disks[disk_index];
     switch (readTable(disk_index)) {
         .table => |scheme| {
             disk.scheme = scheme;
-            publishTable(disk_index, &g_table, devmgr);
+            publishTable(disk_index, &g_table);
         },
         // No table. Publish nothing and leave the disk alone: its own class
         // instance already serves it, which is what makes partition tables
@@ -725,12 +766,12 @@ fn scanGptEntries(disk: *const Disk, header: pt.GptHeader, out: *pt.Table) bool 
     return false;
 }
 
-fn publishTable(disk_index: usize, table: *const pt.Table, devmgr: i32) void {
+fn publishTable(disk_index: usize, table: *const pt.Table) void {
     var i: usize = 0;
     while (i < table.count) : (i += 1) {
         // A first publish has nobody to report a failure to: the disk arrived
         // on its own, not on a request. It is logged where it happens.
-        _ = addPartition(disk_index, table.entries[i], table.scheme, devmgr);
+        _ = addPartition(disk_index, table.entries[i], table.scheme);
     }
 }
 
@@ -785,7 +826,7 @@ fn rescanDisk(disk_index: usize, rescan: usize) ?void {
         switch (rc.classify(have[0..held], desired[i])) {
             .keep => |k| refreshMetadata(have_part[k], entry, disk.scheme),
             .update => |k| scheduleUpdate(have_part[k], entry, disk.scheme, rescan),
-            .publish => if (!addPartition(disk_index, entry, disk.scheme, g_devmgr)) {
+            .publish => if (!addPartition(disk_index, entry, disk.scheme)) {
                 // Counted, not swallowed. The usual cause is that every slot is
                 // still held by partitions this same rescan is retiring, and
                 // their slots do not free until their peers answer -- so the
@@ -1249,6 +1290,7 @@ fn finishClassRetire(slot: usize, ok: bool) void {
     _ = line.str("[partition-manager] partition retired id=");
     _ = line.str(idSlice(&g_parts[c.part].desc.canonical_id));
     line.end();
+    g_parts[c.part].register.release();
     g_parts[c.part] = .{};
     if (g_part_count > 0) g_part_count -= 1;
     finishChange(slot, false);
@@ -1604,10 +1646,16 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
         op.SVC_IPC_LOOKUP_RESP => handleServiceLookup(msg),
         op.DEVMGR_UNPUBLISH_RESP => handleUnpublishReply(msg),
         op.SVC_IPC_UNREGISTER_CLASS_RESP => handleClassRetireReply(msg, true),
-        // SVC_IPC_ERROR answers whichever request manager-side request carried
-        // this id: a class withdrawal, or the lookup that finds the volume
-        // manager. arg0 carries the opcode it refused.
-        op.SVC_IPC_ERROR => if (msg.arg0 == op.SVC_IPC_LOOKUP_REQ)
+        op.SVC_IPC_REGISTER_RESP => if (partOfRegistration(msg.request_id)) |slot|
+            handleRegisterReply(msg, slot, true),
+        // SVC_IPC_ERROR answers whichever process-manager request carried this
+        // id. A refused registration is matched by its id alone, because its
+        // arg0 is the packed refusal code. Otherwise it is a class withdrawal,
+        // or the lookup that finds the volume manager, and arg0 carries the
+        // opcode it refused.
+        op.SVC_IPC_ERROR => if (partOfRegistration(msg.request_id)) |slot|
+            handleRegisterReply(msg, slot, false)
+        else if (msg.arg0 == op.SVC_IPC_LOOKUP_REQ)
             handleServiceLookup(msg)
         else
             handleClassRetireReply(msg, false),
@@ -1700,7 +1748,7 @@ fn probeProvider(instance: u32, provider_endpoint: i32) bool {
         .in_use = true,
     };
     g_disk_count += 1;
-    probeDisk(index, g_devmgr);
+    probeDisk(index);
     return true;
 }
 
@@ -1796,6 +1844,12 @@ fn diskIndex(instance: u32) ?usize {
 /// Forwarding stalls for the duration, since the whole process blocks in each
 /// downstream call. That is bounded -- one IDENTIFY plus at most 34 sector reads
 /// per disk -- and it is why the arrival is queued rather than probed inline.
+///
+/// The bound holds only while the disk being probed is the one thing a probe
+/// waits on. Anything answered by the process manager -- a class registration
+/// above all -- goes out asynchronously and is finished on the message loop,
+/// because the process manager reads the modules it spawns from /boot through
+/// this process and does not answer while such a read is outstanding.
 /// TODO: drive the probe over the loop's IpcFuture instead, so a disk arriving
 /// under load does not pause transfers on the disks already published. That is a
 /// state machine over IDENTIFY -> GPT header -> entry sectors -> MBR, not a

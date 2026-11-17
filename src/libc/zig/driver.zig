@@ -991,10 +991,88 @@ pub fn subscribeClass(proc_endpoint: i32, notify_endpoint: i32, class_name: []co
     return reply.type == op.SVC_IPC_SUBSCRIBE_CLASS_RESP;
 }
 
+/// A service registration in flight (SVC_IPC_REGISTER_DESC_REQ): the
+/// asynchronous form of `registerService`, for a service that is already
+/// serving.
+///
+/// `registerService` blocks the whole process until the process manager
+/// answers, and the process manager does not answer while it is itself blocked
+/// -- on a module read for a spawn, which travels fs-manager -> filesystem ->
+/// partition manager -> disk. A process on that path that registers a service
+/// synchronously while it is serving therefore waits on a reply that waits on
+/// it. `start` returns as soon as the request is away, and the answer arrives
+/// at `reply_endpoint` for the caller's dispatcher to match on `request_id`:
+/// SVC_IPC_REGISTER_RESP when the registration took, SVC_IPC_ERROR carrying a
+/// packed code in arg0 when it was refused.
+///
+/// Holding the struct until then is not optional, for the same reason as
+/// `ClassRetire`: the descriptor travels in a transfer buffer this owns, the
+/// process manager reads it when it reaches the message, and `release` is what
+/// ends the exchange.
+pub const ClassRegister = struct {
+    /// The buffer carrying the descriptor, or -1 when nothing is in flight.
+    bid: i32 = -1,
+
+    /// Ask the process manager to register `service_endpoint` as `name` and,
+    /// when `class_name` is non-empty, as provider `instance` of that class.
+    ///
+    /// `reply_endpoint` is also the SOURCE of the request, and must belong to
+    /// this process, which the process manager checks against
+    /// `service_endpoint`. A service passes the endpoint its dispatcher reads,
+    /// so the answer lands with the rest of its traffic. That is safe only
+    /// because nothing waits for it: a SYNCHRONOUS registrant must use a
+    /// dedicated endpoint (see `registerService`).
+    pub fn start(
+        self: *ClassRegister,
+        proc_endpoint: i32,
+        reply_endpoint: i32,
+        service_endpoint: i32,
+        name: []const u8,
+        class_name: []const u8,
+        instance: u32,
+        request_id: i32,
+    ) bool {
+        if (self.bid >= 0) return false;
+        var desc = SvcRegisterDesc{ .service_endpoint = @bitCast(service_endpoint), .instance = instance };
+        copyName(&desc.name, name);
+        copyName(&desc.class_name, class_name);
+        const raw: [*]const u8 = @ptrCast(&desc);
+        const bid = bufferStage(raw[0..@sizeOf(SvcRegisterDesc)]) orelse return false;
+        if (send(
+            proc_endpoint,
+            reply_endpoint,
+            op.SVC_IPC_REGISTER_DESC_REQ,
+            request_id,
+            0,
+            @sizeOf(SvcRegisterDesc),
+            bid,
+            0,
+        ) != 0) {
+            bufferRelease(bid);
+            return false;
+        }
+        self.bid = bid;
+        return true;
+    }
+
+    /// Whether a request is in flight and its answer still owed.
+    pub fn pending(self: *const ClassRegister) bool {
+        return self.bid >= 0;
+    }
+
+    /// Release the staged descriptor. Called once the answer has arrived, or to
+    /// abandon an exchange whose answer will never come.
+    pub fn release(self: *ClassRegister) void {
+        if (self.bid < 0) return;
+        bufferRelease(self.bid);
+        self.bid = -1;
+    }
+};
+
 /// A class registration being withdrawn (SVC_IPC_UNREGISTER_CLASS_REQ).
 ///
-/// ASYNCHRONOUS, unlike every other wrapper in this file, and that is the point
-/// of its existence rather than an option it offers. The caller this is for is
+/// ASYNCHRONOUS, like `ClassRegister`, and that is the point of its existence
+/// rather than an option it offers. The caller this is for is
 /// the partition manager retiring a partition whose table was rewritten: an
 /// async service whose message loop is the only thing that can produce the
 /// replies its peers owe it, so a wrapper that blocked on the process manager

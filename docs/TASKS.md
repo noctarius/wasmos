@@ -2398,8 +2398,12 @@ Source: `architecture/25-diagnostics-status.md`,
   whole-session stall: the tests that report it differ only by which one happened
   to open the session first, so the battery that goes red is arbitrary.
 
-  **STATUS (2026-11-16): the `/boot` face is root-caused and FIXED; open until CI
-  confirms it.** Across the 47 failed CI jobs since 2026-10-17 it appears only as
+  **STATUS (2026-11-17): the `/boot` face is root-caused, FIXED and CONFIRMED** by
+  five consecutive fully green 19-job CI matrices with no `init_no_sysinit`
+  (6c822fc5, d39236c2, 082f9273, 1551ac48, c6d36c19). The 15 s `fs reply timed
+  out` of the fifth face below is root-caused and fixed too. This item stays open
+  for the QEMU crash (the SECOND face below), which is not a guest defect but
+  still costs a battery whenever it fires. Across the 47 failed CI jobs since 2026-10-17 it appears only as
   `init_no_sysinit` (runs 39147940193 and 40760260513, both `wasm3_smp`); none of
   the November failures is this face. Its recurrence signature is that panic,
   preceded by `[pm] spawn_path fs read failed: /boot/... (fs: path component or
@@ -2435,8 +2439,7 @@ Source: `architecture/25-diagnostics-status.md`,
   it comes only from `mount`. `/boot` was mounted and then misread.
 
   What the host test does not cover is the live timing: it pins the slot
-  contract, not the race. Confirm with several green `wasm3_smp`
-  `filesystem`/`networking` runs carrying no `init_no_sysinit`.
+  contract, not the race. The CI runs listed above are that confirmation.
 
   A SECOND face is **not a guest stall: QEMU itself crashed**. Two captures:
   run 39152571921 job 117749291333 (`filesystem`, `wasm3_smp`, last guest line
@@ -2545,8 +2548,21 @@ Source: `architecture/25-diagnostics-status.md`,
 
   The NOT_FOUND storm of this face is the crossed-descriptor misread in STATUS
   above, and the retry is bounded since 73bb22af. The 15 s
-  `fs reply timed out` on `serial.wap` is not explained by it: that read got no
-  answer at all rather than a wrong one, and is still open.
+  `fs reply timed out` on `serial.wap` was a separate defect, a DEADLOCK between
+  the process manager and the partition manager, now fixed. The process manager
+  reads a module for a spawn synchronously, and that read is forwarded by the
+  partition manager. The partition manager probed the arriving virtio-blk disk
+  on its root task and registered each partition under the `block` class with a
+  synchronous call to the process manager, blocking the whole process. Each
+  waited on the other until the process manager's 15 s fs timeout broke the
+  cycle: every boot with a GPT virtio-blk disk attached lost 15 s and failed the
+  `serial` spawn once (twice per `filesystem` battery, both runtimes, every
+  run). The registration is now asynchronous (`driver.ClassRegister`, finished
+  on the partition manager's message loop), and
+  `test_partition_manager_disk_arrival` asserts that no fs read times out while
+  the disk is probed (Regression: 2026-11-17-partmgr-probe-blocks-on-pm). The
+  probe's disk IDENTIFY and sector reads are still synchronous; that is bounded
+  because they wait only on the disk itself (the TODO on `drainArrivals`).
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and
   reaches `arp sent`, then no `notify rx=` arrives, so it fails as an assertion

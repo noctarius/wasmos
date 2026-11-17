@@ -151,6 +151,31 @@ class PartitionManagerDiskArrivalTest(unittest.TestCase):
             "already enumerated it, and nothing made it look again",
         )
 
+    def test_probing_the_arriving_disk_stalls_no_filesystem_read(self) -> None:
+        """A disk's arrival must not hold up reads from the disks already up.
+
+        Regression: 2026-11-17-partmgr-probe-blocks-on-pm -- the partition
+        manager probed an arriving disk on its own thread of control and
+        registered each partition with a SYNCHRONOUS call to the process
+        manager. The process manager was itself blocked on a module read from
+        /boot, which is forwarded by that same partition manager, so each waited
+        on the other until the process manager's 15 s fs timeout broke the
+        cycle. Every boot with this disk attached lost 15 s and failed one
+        driver spawn (`spawn_path fs read failed: .../serial.wap (no reply)`),
+        and a peer with no timeout of its own would have hung the boot.
+        """
+        assert self.session is not None
+        self.assertTrue(
+            self.session.expect(VIRTIO_PARTITION_RE, timeout_s=90),
+            "the virtio disk's partition was never published",
+        )
+        self.assertFalse(
+            b"[pm] fs reply timed out" in self.session.buf,
+            "a filesystem read timed out in the process manager while the "
+            "partition manager probed the arriving disk: the probe blocked the "
+            "partition manager, which forwards every /boot read",
+        )
+
     def test_every_disk_and_partition_appears_under_the_block_class(self) -> None:
         """The count, from the guest's own view of the registry.
 

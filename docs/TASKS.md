@@ -2457,9 +2457,11 @@ Source: `architecture/25-diagnostics-status.md`,
   decode and writes all-ones to the BAR while other vCPUs run, so QEMU re-lays
   out its memory map under MTTCG. The VGA function's framebuffer BAR is skipped
   (`pci_bar_is_console`), but its MMIO BAR2 is sized with memory decode off,
-  which drops the framebuffer's decode too. Next step: capture QEMU's own
-  backtrace (core dump or `-d` on a CI runner) for one of these crashes before
-  changing the guest.
+  which drops the framebuffer's decode too. The battery jobs now keep QEMU's
+  core dump and symbolize it through Ubuntu's debuginfod (QEMU 8.2.2 on the
+  runners): a crash shows up as a `QEMU crashed:` annotation, the backtrace in
+  the `Backtrace QEMU crashes` step, and the core in the `qemu-crash-*`
+  artifact. Read that backtrace before changing the guest.
 
   The stall dump's own NMIs (`monitor.hmp("nmi")`, twice) can still take a
   wedged QEMU down mid-dump; `boot_diagnosis` then names the stall and mentions

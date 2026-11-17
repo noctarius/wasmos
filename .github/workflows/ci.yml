@@ -284,6 +284,30 @@ jobs:
             -DOVMF_CODE="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
             -DOVMF_VARS="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
 
+      # QEMU itself has crashed with SIGSEGV mid-battery (docs/TASKS.md, the P0
+      # "no CLI prompt" item, second face). Its core is the only evidence of
+      # where, so cores land in a runner-owned directory rather than apport,
+      # which discards crashes of binaries it does not track. Cores are named by
+      # executable path (%E), not by %e: %e is the crashing THREAD's name, which
+      # for a QEMU vCPU is "CPU 0/TCG". A canary crash proves the capture works,
+      # so no QEMU core after the battery means QEMU did not crash rather than
+      # that nothing was collected. The canary signals itself, so the core is
+      # written by the shell that sent the signal with no fork/exec window.
+      - name: Collect QEMU core dumps
+        run: |
+          mkdir -p "$RUNNER_TEMP/cores"
+          sudo sysctl -w kernel.core_pattern="$RUNNER_TEMP/cores/core.%E.%p"
+          ulimit -c unlimited
+          sh -c 'kill -SEGV $$' || true
+          shopt -s nullglob
+          canary=("$RUNNER_TEMP"/cores/core.*)
+          if [ ${#canary[@]} -eq 0 ]; then
+            echo "::error::core capture is not working (core_pattern=$(cat /proc/sys/kernel/core_pattern), ulimit -c=$(ulimit -c))"
+            exit 1
+          fi
+          echo "canary core: ${canary[*]}"
+          rm -f "${canary[@]}"
+
       # WASMOS_TEST_BATTERY selects the battery inside the existing target, so
       # the ESP staging and QEMU wiring stay in one place rather than being
       # duplicated per battery.
@@ -295,7 +319,45 @@ jobs:
           WASMOS_TEST_BATTERY: ${{ matrix.battery }}
         run: |
           set -o pipefail
+          ulimit -c unlimited
           cmake --build build --target run-qemu-cli-test 2>&1 | tee "$RUNNER_TEMP/battery.log"
+
+      # Symbols come from Ubuntu's debuginfod, so the backtrace names QEMU's own
+      # functions without a debug build. Only QEMU's cores are reported as QEMU
+      # crashes; a core from any other process is named as such and kept.
+      - name: Backtrace QEMU crashes
+        if: always()
+        run: |
+          shopt -s nullglob
+          for other in "$RUNNER_TEMP"/cores/core.*; do
+            case "$other" in
+              *qemu-system-x86_64.*) ;;
+              *) echo "::warning::a process other than QEMU dumped core: $other" ;;
+            esac
+          done
+          cores=("$RUNNER_TEMP"/cores/core.*qemu-system-x86_64.*)
+          if [ ${#cores[@]} -eq 0 ]; then
+            echo "no QEMU core dumps"
+            exit 0
+          fi
+          sudo apt-get install -y --no-install-recommends gdb
+          export DEBUGINFOD_URLS="https://debuginfod.ubuntu.com"
+          for core in "${cores[@]}"; do
+            echo "::error::QEMU crashed: $core"
+            gdb -batch -iex "set debuginfod enabled on" \
+              -ex "info sharedlibrary" -ex "bt full" -ex "thread apply all bt" \
+              "$(command -v qemu-system-x86_64)" "$core" 2>&1 | tee "$core.bt.txt"
+            zstd -q -T0 --rm "$core"
+          done
+
+      - name: Upload QEMU crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-crash-${{ matrix.battery }}-${{ matrix.runtime }}
+          path: ${{ runner.temp }}/cores/
+          if-no-files-found: ignore
+          retention-days: 14
 
       # A battery passes under whichever runtime the build actually linked, so
       # assert it is the one this cell claims. The marker comes from the BOOTED

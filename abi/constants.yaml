@@ -292,6 +292,54 @@ groups:
     constants:
       - { symbol: SVC_NAME_EVENT_BIND, value: 1, doc: "The name was bound to the endpoint in arg2." }
 
+  - name: proc_status
+    doc: |
+      Liveness of a process as PROC_IPC_STATUS reports it in the reply's arg1.
+      For ZOMBIE the reply also carries the exit status in arg2 and the
+      PROC_EXIT_REASON_* in arg3.
+
+      UNKNOWN covers both "never existed" and "already reaped", which are
+      indistinguishable once the slot is gone. READY is RUNNING plus the
+      process having announced its endpoint live (PROC_IPC_NOTIFY_READY), or,
+      for a wasm process that is not required to announce, having entered its
+      first blocking IPC receive. It says nothing about the process's own
+      dependencies.
+    constants:
+      - { symbol: PROC_STATUS_UNKNOWN, value: 0, doc: "No such process, or already reaped." }
+      - { symbol: PROC_STATUS_RUNNING, value: 1, doc: "Alive and not yet announced ready." }
+      - { symbol: PROC_STATUS_ZOMBIE, value: 2, doc: "Exited; slot held until its status is collected." }
+      - { symbol: PROC_STATUS_READY, value: 3, doc: "Alive and announced ready." }
+
+  - name: proc_exit_reason
+    doc: |
+      Why a process ended, carried beside its exit status: arg2 of the
+      PROC_IPC_WAIT reply and arg3 of a PROC_IPC_STATUS reply for a ZOMBIE.
+
+      The status alone cannot tell a crash from a deliberate exit: a guest may
+      exit with any value, including the -1 and -11 the kernel uses for its own
+      terminations. The reason is recorded by whoever ends the process, at the
+      point it does so, and a kill overrides an exit the process staged but had
+      not yet completed.
+    constants:
+      - { symbol: PROC_EXIT_REASON_NONE, value: 0, doc: "No exit recorded; the process has not ended." }
+      - symbol: PROC_EXIT_REASON_EXITED
+        value: 1
+        doc: |
+          The process ended itself: an exit call, or its entry returned. The
+          status is the one it chose; 0 is a clean stop.
+      - { symbol: PROC_EXIT_REASON_TRAPPED, value: 2, doc: "The guest trapped or aborted inside its runtime." }
+      - { symbol: PROC_EXIT_REASON_FAULTED, value: 3, doc: "A CPU exception in the process's own code ended it." }
+      - symbol: PROC_EXIT_REASON_KILLED
+        value: 4
+        doc: |
+          Another party ended it: its parent (PROC_IPC_KILL), the process
+          manager cleaning up a failed spawn, or the kernel's permission policy.
+      - symbol: PROC_EXIT_REASON_START_FAILED
+        value: 5
+        doc: |
+          The process never reached its entry: the package did not parse, its
+          start-up state could not be allocated, or its runtime refused it.
+
   - name: sched_clock
     doc: |
       The rate of the scheduler tick that the sched_ticks host call counts. The

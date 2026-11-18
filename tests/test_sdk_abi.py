@@ -27,7 +27,9 @@ from scripts.qemu_test_framework import default_build_dir
 # The tree the suite was started from (WASMOS_KERNEL, set by every CMake test
 # target), not a fixed "build": a stale sibling tree holds packages of an older
 # .wap version that this checkout's reader rightly refuses.
-BUILD_DIR = os.environ.get("WASMOS_BUILD_DIR", default_build_dir(os.path.join(ROOT, "build")))
+BUILD_DIR = os.environ.get(
+    "WASMOS_BUILD_DIR", default_build_dir(os.path.join(ROOT, "build"))
+)
 SDK_DIR = os.path.join(BUILD_DIR, "wasmos-sdk")
 SDK_HELLO_WAP = os.path.join(BUILD_DIR, "sdkhello.wap")
 HOSTCALLS_YAML = os.path.join(ROOT, "abi", "hostcalls.yaml")

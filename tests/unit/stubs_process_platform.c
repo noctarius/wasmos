@@ -237,12 +237,23 @@ void process_preempt_trampoline(void) {}
  * returns to decide what happened to the thread, and a stale value from a
  * previous dispatch -- THREAD_EXITED, say -- would drive a transition the
  * thread never asked for. */
+/* A pid whose non-worker dispatches report PROCESS_RUN_EXITED instead, so a
+ * case can end a process through the dispatcher's own exit branch with whatever
+ * it staged via process_set_exit. 0 matches nothing. */
+uint32_t g_stub_exit_on_dispatch_pid;
+
+static process_run_result_t stub_switch_result(void) {
+    uint32_t pid = g_stub_exit_on_dispatch_pid;
+    return (pid != 0u && cpu_local()->current_pid == pid) ? PROCESS_RUN_EXITED
+                                                          : PROCESS_RUN_YIELDED;
+}
+
 void context_switch(process_context_t* out, process_context_t* in) {
     (void)out;
     (void)in;
-    cpu_local()->last_run_result = PROCESS_RUN_YIELDED;
+    cpu_local()->last_run_result = stub_switch_result();
 }
 void context_switch_to(process_context_t* in) {
     (void)in;
-    cpu_local()->last_run_result = PROCESS_RUN_YIELDED;
+    cpu_local()->last_run_result = stub_switch_result();
 }

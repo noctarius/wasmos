@@ -1439,6 +1439,126 @@ static void s_a_child_takes_its_parents_slot_at_spawn(void) {
     drop_transition_target(child);
 }
 
+/* The exit reason travels with the exit status from the point a process ends
+ * to whoever collects it (the PROC_IPC_WAIT reply's arg2, PROC_IPC_STATUS's
+ * arg3), so a supervisor can tell a crash from a clean stop: a guest may exit
+ * with any status, including the -1 and -11 the kernel uses itself.
+ *
+ * These cases end the process through the dispatcher's real EXITED branch
+ * (g_stub_exit_on_dispatch_pid), which is where a staged reason has to survive
+ * process_mark_exited, and through process_kill. */
+extern uint32_t g_stub_exit_on_dispatch_pid;
+
+/* Dispatches on every CPU until `pid` is a zombie. Returns 1 once it is. */
+static int dispatch_until_zombie(uint32_t pid) {
+    for (uint32_t round = 0; round < 256u; ++round) {
+        for (uint32_t cpu = 0; cpu < NCPU; ++cpu) {
+            be_cpu(cpu);
+            (void)process_schedule_once();
+            process_t* proc = process_get(pid);
+            if (proc && proc->state == PROCESS_STATE_ZOMBIE) {
+                be_cpu(0);
+                return 1;
+            }
+        }
+    }
+    be_cpu(0);
+    return 0;
+}
+
+static void s_an_exit_publishes_the_reason_it_staged(void) {
+    static const struct {
+        const char* what;
+        int32_t status;
+        uint32_t reason;
+    } cases[] = {
+        {"a clean exit", 0, PROC_EXIT_REASON_EXITED},
+        {"an exit with an error status", 3, PROC_EXIT_REASON_EXITED},
+        {"a trap", -1, PROC_EXIT_REASON_TRAPPED},
+        {"a CPU fault", -11, PROC_EXIT_REASON_FAULTED},
+        {"a refused start", -1, PROC_EXIT_REASON_START_FAILED},
+    };
+
+    be_cpu(0);
+    for (uint32_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        uint32_t pid = 0;
+        if (process_spawn("exit-reason", idle_main, 0, &pid) != 0) {
+            CHECK(0, "spawned an exit-reason target");
+            return;
+        }
+        process_set_exit(process_get(pid), cases[i].status, cases[i].reason);
+        g_stub_exit_on_dispatch_pid = pid;
+        int ended = dispatch_until_zombie(pid);
+        g_stub_exit_on_dispatch_pid = 0;
+        CHECK(ended, cases[i].what);
+
+        int32_t status = 0x7777;
+        uint32_t reason = 0x7777u;
+        CHECK(process_get_exit_info(pid, &status, &reason) == 0, cases[i].what);
+        CHECK(status == cases[i].status, cases[i].what);
+        CHECK(reason == cases[i].reason, cases[i].what);
+        drop_transition_target(pid);
+    }
+}
+
+/* An exit path that staged nothing -- an in-kernel process returning EXITED --
+ * is a process ending on its own. */
+static void s_an_exit_with_nothing_staged_is_exited(void) {
+    uint32_t pid = 0;
+
+    be_cpu(0);
+    if (process_spawn("exit-unstaged", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned an unstaged target");
+        return;
+    }
+    CHECK(process_get(pid)->exit_reason == PROC_EXIT_REASON_NONE, "a new process has no reason");
+    g_stub_exit_on_dispatch_pid = pid;
+    CHECK(dispatch_until_zombie(pid), "the unstaged target exited");
+    g_stub_exit_on_dispatch_pid = 0;
+
+    int32_t status = 0x7777;
+    uint32_t reason = 0;
+    CHECK(process_get_exit_info(pid, &status, &reason) == 0, "an unstaged exit is collectable");
+    CHECK(status == 0 && reason == PROC_EXIT_REASON_EXITED, "an unstaged exit reads as EXITED 0");
+    drop_transition_target(pid);
+}
+
+/* A staged exit is not an exit until the process yields EXITED: a kill that
+ * lands first ends it, and the record says so. Once it HAS exited, a late kill
+ * changes nothing. */
+static void s_a_kill_overrides_a_staged_exit_but_not_a_finished_one(void) {
+    uint32_t pid = 0;
+    int32_t status = 0;
+    uint32_t reason = 0;
+
+    be_cpu(0);
+    if (process_spawn("kill-staged", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a kill target");
+        return;
+    }
+    CHECK(process_get_exit_info(pid, &status, &reason) == 1, "a live process has no exit info");
+    process_set_exit(process_get(pid), -11, PROC_EXIT_REASON_FAULTED);
+    CHECK(process_kill(pid, 9) == 0, "the kill landed");
+    CHECK(process_get_exit_info(pid, &status, &reason) == 0, "the killed process is collectable");
+    CHECK(status == 9 && reason == PROC_EXIT_REASON_KILLED, "the kill replaced the staged exit");
+    drop_transition_target(pid);
+
+    if (process_spawn("kill-late", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned a late-kill target");
+        return;
+    }
+    process_set_exit(process_get(pid), -1, PROC_EXIT_REASON_TRAPPED);
+    g_stub_exit_on_dispatch_pid = pid;
+    CHECK(dispatch_until_zombie(pid), "the late-kill target exited");
+    g_stub_exit_on_dispatch_pid = 0;
+    CHECK(process_kill(pid, 9) == 0, "killing a zombie is accepted");
+    CHECK(process_get_exit_info(pid, &status, &reason) == 0, "the zombie is still collectable");
+    CHECK(status == -1 && reason == PROC_EXIT_REASON_TRAPPED, "a late kill kept the real exit");
+    drop_transition_target(pid);
+
+    CHECK(process_get_exit_info(pid, &status, &reason) == -1, "a reaped pid has no exit info");
+}
+
 int main(void) {
     harness_init();
 
@@ -1456,6 +1576,9 @@ int main(void) {
     s_a_consumer_that_declines_keeps_the_claim();
     s_entry_pointer_guard_rejects_what_is_not_in_the_image();
     s_a_child_takes_its_parents_slot_at_spawn();
+    s_an_exit_publishes_the_reason_it_staged();
+    s_an_exit_with_nothing_staged_is_exited();
+    s_a_kill_overrides_a_staged_exit_but_not_a_finished_one();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

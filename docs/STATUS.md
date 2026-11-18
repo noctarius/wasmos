@@ -249,6 +249,14 @@ linked feature documents for rationale and rollout plans.
 
 ### Process Lifecycle
 
+- Every process ends with a `PROC_EXIT_REASON_*` beside its exit status
+  (`EXITED`, `TRAPPED`, `FAULTED`, `KILLED`, `START_FAILED`), recorded at the
+  exit site and returned in the `PROC_IPC_WAIT` reply's `arg2` and, for a zombie,
+  `PROC_IPC_STATUS`'s `arg3`. `PROC_IPC_STATUS` also distinguishes
+  `PROC_STATUS_READY` from `RUNNING`. A kill replaces an exit the process staged
+  but had not completed. A native module's entry runs inside its start hook, so
+  a native driver that returns non-zero is reported `START_FAILED` (TODO in
+  `pm_app_entry`). Nothing consumes the reason yet; the supervisor will.
 - `process_set_ready` and `process_set_running` refuse a transition whose owner
   is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
   (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`

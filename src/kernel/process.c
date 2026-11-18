@@ -907,6 +907,7 @@ static void process_reset_slot(process_t* proc) {
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
     proc->exit_status = 0;
+    proc->exit_reason = PROC_EXIT_REASON_NONE;
     proc->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     proc->ticks_remaining = 0;
     proc->ticks_total = 0;
@@ -1123,11 +1124,15 @@ static void process_wake_waiters(uint32_t target_pid) {
     }
 }
 
-static void process_mark_exited(process_t* proc, int32_t exit_status) {
+/* A reason of PROC_EXIT_REASON_NONE is recorded as EXITED: an exit path that
+ * staged nothing is a process ending on its own. */
+static void process_mark_exited(process_t* proc, int32_t exit_status, uint32_t reason) {
     if (!proc || proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_DEAD) {
         return;
     }
     proc->exit_status = exit_status;
+    proc->exit_reason =
+        (uint8_t)(reason == PROC_EXIT_REASON_NONE ? PROC_EXIT_REASON_EXITED : reason);
     __atomic_store_n(&proc->exiting, 1u, __ATOMIC_RELEASE);
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
@@ -1487,6 +1492,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     process_t* parent = process_find_by_pid(parent_pid);
     slot->ctty = parent ? parent->ctty : 0;
     slot->exit_status = 0;
+    slot->exit_reason = PROC_EXIT_REASON_NONE;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -1692,6 +1698,7 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->wait_target_pid = 0;
     slot->ctty = 0;
     slot->exit_status = 0;
+    slot->exit_reason = PROC_EXIT_REASON_NONE;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -2040,15 +2047,21 @@ uint32_t process_current_ctty(void) {
     return process ? (uint32_t)process->ctty : 0u;
 }
 
-/* Stages the status a process will exit with.  Records it only — the process
- * keeps running, and the exit paths (process_mark_exited, the EXITED branch of
- * the dispatch loop) read it back when the timeslice ends.  This is how a
- * ring-3 exit syscall communicates its status before yielding EXITED. */
-void process_set_exit_status(process_t* process, int32_t exit_status) {
+/* Stages the status and reason a process will exit with.  Records them only —
+ * the process keeps running, and the exit paths (process_mark_exited, the EXITED
+ * branch of the dispatch loop) read them back when the timeslice ends.  This is
+ * how an exit host call, a trap or a fault handler communicates why before
+ * yielding EXITED. */
+void process_set_exit(process_t* process, int32_t exit_status, uint32_t reason) {
     if (!process) {
         return;
     }
     process->exit_status = exit_status;
+    process->exit_reason = (uint8_t)reason;
+}
+
+void process_set_exit_status(process_t* process, int32_t exit_status) {
+    process_set_exit(process, exit_status, PROC_EXIT_REASON_EXITED);
 }
 
 /* Switches out of the running thread and back into this CPU's scheduler context,
@@ -2272,7 +2285,7 @@ int process_kill(uint32_t pid, int32_t exit_status) {
     if (target->state == PROCESS_STATE_ZOMBIE) {
         return 0;
     }
-    process_mark_exited(target, exit_status);
+    process_mark_exited(target, exit_status, PROC_EXIT_REASON_KILLED);
     process_try_auto_reap(target);
     return 0;
 }
@@ -2306,14 +2319,20 @@ int process_set_auto_reap(uint32_t pid, uint8_t enabled) {
  * Non-destructive: the zombie is left for a wait or a reap to collect, so this
  * can be polled. */
 int process_get_exit_status(uint32_t pid, int32_t* out_exit_status) {
+    uint32_t reason = 0;
+    return process_get_exit_info(pid, out_exit_status, &reason);
+}
+
+int process_get_exit_info(uint32_t pid, int32_t* out_exit_status, uint32_t* out_reason) {
     process_t* proc = process_find_by_pid(pid);
-    if (!proc || !out_exit_status) {
+    if (!proc || !out_exit_status || !out_reason) {
         return -1;
     }
     if (proc->state != PROCESS_STATE_ZOMBIE) {
         return 1;
     }
     *out_exit_status = proc->exit_status;
+    *out_reason = proc->exit_reason;
     return 0;
 }
 
@@ -2824,7 +2843,7 @@ static int process_schedule_once_impl(void) {
                 }
             }
         } else {
-            process_mark_exited(proc, proc->exit_status);
+            process_mark_exited(proc, proc->exit_status, proc->exit_reason);
         }
         if (reap_detached) {
             /* Deferred to dispatch_done: exited_tid is the thread this dispatch
@@ -2843,7 +2862,7 @@ static int process_schedule_once_impl(void) {
         reap_detached = thread->detached;
         process_count_dec(&proc->live_thread_count);
         if (__atomic_load_n(&proc->live_thread_count, __ATOMIC_ACQUIRE) == 0) {
-            process_mark_exited(proc, proc->exit_status);
+            process_mark_exited(proc, proc->exit_status, proc->exit_reason);
         } else {
             next = process_first_owner_ready_thread(proc);
             if (next) {

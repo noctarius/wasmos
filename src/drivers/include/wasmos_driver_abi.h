@@ -316,12 +316,6 @@ typedef struct {
     uint32_t pid;
 } svc_class_entry_t;
 
-/* Process liveness reported by the process manager. ZOMBIE means the process has
- * exited but its slot is still held so a waiter can collect the exit status;
- * UNKNOWN covers both "never existed" and "already reaped", which are
- * indistinguishable once the slot is gone. */
-enum { PROC_STATUS_UNKNOWN = 0, PROC_STATUS_RUNNING = 1, PROC_STATUS_ZOMBIE = 2 };
-
 /* Virtual class FS backends register under. Class instances must be unique per
  * provider, so backends encode (kind, unit) into the registry instance while
  * still reporting the plain kind over FSMGR_IPC_BACKEND_INFO_RESP arg0. */

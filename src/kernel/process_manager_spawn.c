@@ -326,7 +326,7 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         wasmos_app_desc_t desc;
         if (wasmos_app_parse(state->blob, state->blob_size, &desc) != 0) {
             klog_write("[pm] app parse failed\n");
-            process_set_exit_status(process, -1);
+            process_set_exit(process, -1, PROC_EXIT_REASON_START_FAILED);
             pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
@@ -353,7 +353,7 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
                 WASMOS_ERR_NONE ||
             (si_phys = xfer_buffer_object_phys(&si_xfer.buffer)) == 0u) {
             klog_write("[pm] spawn info alloc failed\n");
-            process_set_exit_status(process, -1);
+            process_set_exit(process, -1, PROC_EXIT_REASON_START_FAILED);
             pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
@@ -406,10 +406,13 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         process_clear_resched();
 #endif
 
+        /* TODO: a native module runs its whole entry inside the start hook, so
+         * a native driver that returns a non-zero status after running is
+         * reported as START_FAILED here instead of EXITED with its status. */
         if (wasmos_app_start(
                 &state->app, &desc, process->context_id, init_args, state->entry_argc) != 0) {
             klog_write("[pm] app start failed\n");
-            process_set_exit_status(process, -1);
+            process_set_exit(process, -1, PROC_EXIT_REASON_START_FAILED);
             pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
@@ -425,7 +428,7 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         klog_write("[pm] app entry rc=");
         serial_write_hex64((uint64_t)(int64_t)entry_rc);
         klog_write("\n");
-        process_set_exit_status(process, -1);
+        process_set_exit(process, -1, PROC_EXIT_REASON_TRAPPED);
     } else {
         process_set_exit_status(process, 0);
     }
@@ -1678,7 +1681,8 @@ void pm_check_waits(uint32_t pm_context_id) {
             continue;
         }
         int32_t exit_status = 0;
-        int rc = process_get_exit_status(waiter->pid, &exit_status);
+        uint32_t exit_reason = 0;
+        int rc = process_get_exit_info(waiter->pid, &exit_status, &exit_reason);
         if (rc != 0) {
             waiter = (pm_wait_state_t*)list_next(&it);
             continue;
@@ -1691,7 +1695,7 @@ void pm_check_waits(uint32_t pm_context_id) {
         resp.request_id = waiter->request_id;
         resp.arg0 = waiter->pid;
         resp.arg1 = (uint32_t)exit_status;
-        resp.arg2 = 0;
+        resp.arg2 = exit_reason;
         resp.arg3 = 0;
         ipc_send_from(pm_context_id, waiter->reply_endpoint, &resp);
         waiter->in_use = 0;

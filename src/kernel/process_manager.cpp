@@ -230,8 +230,9 @@ class ProcessManager {
             if (target->state == PROCESS_STATE_ZOMBIE) {
                 resp.arg1 = PROC_STATUS_ZOMBIE;
                 resp.arg2 = (uint32_t)target->exit_status;
+                resp.arg3 = target->exit_reason;
             } else if (target->state != PROCESS_STATE_UNUSED) {
-                resp.arg1 = PROC_STATUS_RUNNING;
+                resp.arg1 = target->ready ? PROC_STATUS_READY : PROC_STATUS_RUNNING;
             }
         }
 
@@ -243,6 +244,7 @@ class ProcessManager {
         process_t* caller = 0;
         process_t* target = 0;
         int32_t exit_status = 0;
+        uint32_t exit_reason = 0;
 
         if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
             return -1;
@@ -257,7 +259,7 @@ class ProcessManager {
             return -1;
         }
 
-        if (process_get_exit_status(msg->arg0, &exit_status) == 0) {
+        if (process_get_exit_info(msg->arg0, &exit_status, &exit_reason) == 0) {
             ipc_message_t resp;
             resp.type = PROC_IPC_RESP;
             resp.source = g_pm.proc_endpoint;
@@ -265,7 +267,7 @@ class ProcessManager {
             resp.request_id = msg->request_id;
             resp.arg0 = msg->arg0;
             resp.arg1 = (uint32_t)exit_status;
-            resp.arg2 = 0;
+            resp.arg2 = exit_reason;
             resp.arg3 = 0;
             int rc = ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
             /* Status delivered — reap the zombie now so its process slot is

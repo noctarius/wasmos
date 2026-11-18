@@ -11,8 +11,14 @@ export const WASM_CHARDEV_IPC_ERROR_RESP: i32 = 0x1FF;
 
 // proc_manager (0x200..0x2FF)
 export const PROC_IPC_SPAWN: i32 = 0x200;
+// Wait for a child of the caller to exit: arg0=pid. The reply is
+// deferred until it has: PROC_IPC_RESP, arg0=pid arg1=exit status
+// arg2=PROC_EXIT_REASON_*. The child is reaped once the reply is sent.
 export const PROC_IPC_WAIT: i32 = 0x201;
 export const PROC_IPC_KILL: i32 = 0x202;
+// Liveness of a process: arg0=pid. PROC_IPC_RESP, arg0=pid
+// arg1=PROC_STATUS_*; for PROC_STATUS_ZOMBIE also arg2=exit status
+// arg3=PROC_EXIT_REASON_*. Never reaps.
 export const PROC_IPC_STATUS: i32 = 0x203;
 export const PROC_IPC_SPAWN_NAME: i32 = 0x204;
 export const PROC_IPC_SPAWN_CAPS: i32 = 0x205;

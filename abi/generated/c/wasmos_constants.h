@@ -296,6 +296,58 @@ enum {
     SVC_NAME_EVENT_BIND = 1,
 };
 
+/* Liveness of a process as PROC_IPC_STATUS reports it in the reply's arg1.
+ * For ZOMBIE the reply also carries the exit status in arg2 and the
+ * PROC_EXIT_REASON_* in arg3.
+ *
+ * UNKNOWN covers both "never existed" and "already reaped", which are
+ * indistinguishable once the slot is gone. READY is RUNNING plus the
+ * process having announced its endpoint live (PROC_IPC_NOTIFY_READY), or,
+ * for a wasm process that is not required to announce, having entered its
+ * first blocking IPC receive. It says nothing about the process's own
+ * dependencies.
+ */
+enum {
+    /* No such process, or already reaped. */
+    PROC_STATUS_UNKNOWN = 0,
+    /* Alive and not yet announced ready. */
+    PROC_STATUS_RUNNING = 1,
+    /* Exited; slot held until its status is collected. */
+    PROC_STATUS_ZOMBIE = 2,
+    /* Alive and announced ready. */
+    PROC_STATUS_READY = 3,
+};
+
+/* Why a process ended, carried beside its exit status: arg2 of the
+ * PROC_IPC_WAIT reply and arg3 of a PROC_IPC_STATUS reply for a ZOMBIE.
+ *
+ * The status alone cannot tell a crash from a deliberate exit: a guest may
+ * exit with any value, including the -1 and -11 the kernel uses for its own
+ * terminations. The reason is recorded by whoever ends the process, at the
+ * point it does so, and a kill overrides an exit the process staged but had
+ * not yet completed.
+ */
+enum {
+    /* No exit recorded; the process has not ended. */
+    PROC_EXIT_REASON_NONE = 0,
+    /* The process ended itself: an exit call, or its entry returned. The
+     * status is the one it chose; 0 is a clean stop.
+     */
+    PROC_EXIT_REASON_EXITED = 1,
+    /* The guest trapped or aborted inside its runtime. */
+    PROC_EXIT_REASON_TRAPPED = 2,
+    /* A CPU exception in the process's own code ended it. */
+    PROC_EXIT_REASON_FAULTED = 3,
+    /* Another party ended it: its parent (PROC_IPC_KILL), the process
+     * manager cleaning up a failed spawn, or the kernel's permission policy.
+     */
+    PROC_EXIT_REASON_KILLED = 4,
+    /* The process never reached its entry: the package did not parse, its
+     * start-up state could not be allocated, or its runtime refused it.
+     */
+    PROC_EXIT_REASON_START_FAILED = 5,
+};
+
 /* The rate of the scheduler tick that the sched_ticks host call counts. The
  * kernel programs its timer at exactly this rate (src/kernel/kernel.c), and
  * a guest converts a millisecond window to ticks with it, since sched_ticks

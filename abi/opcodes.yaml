@@ -26,9 +26,21 @@ subsystems:
     range: [0x200, 0x2ff]
     opcodes:
       - { symbol: PROC_IPC_SPAWN, value: 0x200, kind: req }
-      - { symbol: PROC_IPC_WAIT, value: 0x201, kind: req }
+      - symbol: PROC_IPC_WAIT
+        value: 0x201
+        kind: req
+        doc: |
+          Wait for a child of the caller to exit: arg0=pid. The reply is
+          deferred until it has: PROC_IPC_RESP, arg0=pid arg1=exit status
+          arg2=PROC_EXIT_REASON_*. The child is reaped once the reply is sent.
       - { symbol: PROC_IPC_KILL, value: 0x202, kind: req }
-      - { symbol: PROC_IPC_STATUS, value: 0x203, kind: req }
+      - symbol: PROC_IPC_STATUS
+        value: 0x203
+        kind: req
+        doc: |
+          Liveness of a process: arg0=pid. PROC_IPC_RESP, arg0=pid
+          arg1=PROC_STATUS_*; for PROC_STATUS_ZOMBIE also arg2=exit status
+          arg3=PROC_EXIT_REASON_*. Never reaps.
       - { symbol: PROC_IPC_SPAWN_NAME, value: 0x204, kind: req }
       - { symbol: PROC_IPC_SPAWN_CAPS, value: 0x205, kind: req }
       - symbol: PROC_IPC_MODULE_META_DESC

@@ -495,9 +495,9 @@ The process manager (PM) runs as a kernel-native C++ service.
 | Opcode                          | Value   | Direction    | Description                           |
 |---------------------------------|---------|--------------|---------------------------------------|
 | `PROC_IPC_SPAWN`                | `0x200` | request      | Spawn by module index                 |
-| `PROC_IPC_WAIT`                 | `0x201` | request      | Wait for child exit                   |
+| `PROC_IPC_WAIT`                 | `0x201` | request      | Wait for child exit (status + reason) |
 | `PROC_IPC_KILL`                 | `0x202` | request      | Kill child                            |
-| `PROC_IPC_STATUS`               | `0x203` | request      | Query child state                     |
+| `PROC_IPC_STATUS`               | `0x203` | request      | Query process state (incl. READY)     |
 | `PROC_IPC_SPAWN_PATH`           | `0x209` | request      | Spawn by filesystem path              |
 | `PROC_IPC_SPAWN_PATH_SYNC`      | `0x20E` | request      | SPAWN_PATH; wait for NOTIFY_READY     |
 | `PROC_IPC_NOTIFY_READY`         | `0x20C` | notification | Child signals it is ready             |
@@ -522,6 +522,32 @@ prompt without waiting for process exit.
 `wasmos_proc_notify_ready()` is a direct kernel hostcall that sets
 `proc->ready = 1` without sending an IPC.  `wasmos_sys_notify_ready()` (libsys)
 sends an IPC to PM's `proc` endpoint.
+
+#### Exit Status and Exit Reason
+
+A process ends with an exit status and a **reason** (`PROC_EXIT_REASON_*`,
+`abi/constants.yaml`). The status alone cannot separate a crash from a
+deliberate exit, because a guest may exit with any value, including the `-1`
+and `-11` the kernel uses for its own terminations. The reason is recorded by
+whoever ends the process, at the point it does so:
+
+| Reason         | Recorded by                                                        |
+|----------------|--------------------------------------------------------------------|
+| `EXITED`       | an exit host call or syscall, or the entry returning               |
+| `TRAPPED`      | a guest trap (the entry call fails) or a runtime `abort`           |
+| `FAULTED`      | the CPU exception handlers, for a fault in the process's own code  |
+| `KILLED`       | `process_kill` (`PROC_IPC_KILL`, PM spawn cleanup) and the permission policy |
+| `START_FAILED` | the PM, when a package never reaches its entry                     |
+
+A process stages its status and reason (`process_set_exit`) before it yields
+`EXITED`; a kill that lands before that yield replaces them, and a kill of an
+already exited process changes nothing. Both are collected together:
+`PROC_IPC_WAIT` replies `arg0=pid arg1=status arg2=reason` and reaps the child;
+`PROC_IPC_STATUS` reports `arg1=PROC_STATUS_*` and, for a zombie, `arg2=status
+arg3=reason`, without reaping.
+
+`PROC_IPC_STATUS` reports `PROC_STATUS_READY` for a live process whose READY
+latch is set and `PROC_STATUS_RUNNING` for one that has not announced itself.
 
 #### Service Registry
 

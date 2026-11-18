@@ -2790,7 +2790,7 @@ static void warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t 
     (void)ctx_;
     process_t* proc = process_get(process_current_pid());
     if (proc) {
-        process_set_exit_status(proc, -1);
+        process_set_exit(proc, -1, PROC_EXIT_REASON_TRAPPED);
         process_yield(PROCESS_RUN_EXITED);
     }
 }

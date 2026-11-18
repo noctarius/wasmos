@@ -262,6 +262,51 @@ const SVC_CLASS_EVENT_REMOVE int32 = 2
 // The name was bound to the endpoint in arg2.
 const SVC_NAME_EVENT_BIND int32 = 1
 
+// proc_status
+// Liveness of a process as PROC_IPC_STATUS reports it in the reply's arg1.
+// For ZOMBIE the reply also carries the exit status in arg2 and the
+// PROC_EXIT_REASON_* in arg3.
+//
+// UNKNOWN covers both "never existed" and "already reaped", which are
+// indistinguishable once the slot is gone. READY is RUNNING plus the
+// process having announced its endpoint live (PROC_IPC_NOTIFY_READY), or,
+// for a wasm process that is not required to announce, having entered its
+// first blocking IPC receive. It says nothing about the process's own
+// dependencies.
+// No such process, or already reaped.
+const PROC_STATUS_UNKNOWN int32 = 0
+// Alive and not yet announced ready.
+const PROC_STATUS_RUNNING int32 = 1
+// Exited; slot held until its status is collected.
+const PROC_STATUS_ZOMBIE int32 = 2
+// Alive and announced ready.
+const PROC_STATUS_READY int32 = 3
+
+// proc_exit_reason
+// Why a process ended, carried beside its exit status: arg2 of the
+// PROC_IPC_WAIT reply and arg3 of a PROC_IPC_STATUS reply for a ZOMBIE.
+//
+// The status alone cannot tell a crash from a deliberate exit: a guest may
+// exit with any value, including the -1 and -11 the kernel uses for its own
+// terminations. The reason is recorded by whoever ends the process, at the
+// point it does so, and a kill overrides an exit the process staged but had
+// not yet completed.
+// No exit recorded; the process has not ended.
+const PROC_EXIT_REASON_NONE int32 = 0
+// The process ended itself: an exit call, or its entry returned. The
+// status is the one it chose; 0 is a clean stop.
+const PROC_EXIT_REASON_EXITED int32 = 1
+// The guest trapped or aborted inside its runtime.
+const PROC_EXIT_REASON_TRAPPED int32 = 2
+// A CPU exception in the process's own code ended it.
+const PROC_EXIT_REASON_FAULTED int32 = 3
+// Another party ended it: its parent (PROC_IPC_KILL), the process
+// manager cleaning up a failed spawn, or the kernel's permission policy.
+const PROC_EXIT_REASON_KILLED int32 = 4
+// The process never reached its entry: the package did not parse, its
+// start-up state could not be allocated, or its runtime refused it.
+const PROC_EXIT_REASON_START_FAILED int32 = 5
+
 // sched_clock
 // The rate of the scheduler tick that the sched_ticks host call counts. The
 // kernel programs its timer at exactly this rate (src/kernel/kernel.c), and

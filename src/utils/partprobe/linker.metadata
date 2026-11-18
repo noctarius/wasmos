@@ -8,8 +8,6 @@ aot = true
 [resources]
 stack_pages = 16
 heap_pages  = 16
-[ipc]
-required_endpoint_name  = "proc"
 [[capabilities]]
 name  = "ipc.basic"
 flags = 0

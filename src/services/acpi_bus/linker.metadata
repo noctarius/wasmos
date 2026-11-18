@@ -18,9 +18,8 @@ stack_size = 16384
 initial_memory = 131072
 max_memory = 131072
 
-[ipc]
-required_endpoint_name = "proc"
-required_endpoint_rights = 1
+[deps]
+needs = ["devmgr.inv"]
 
 [[capabilities]]
 name = "mmio.map"

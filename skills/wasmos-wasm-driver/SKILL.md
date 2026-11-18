@@ -95,9 +95,9 @@ native = false          # true selects the native ELF toolchain/runtime
 [resources]
 stack_pages = 16
 heap_pages = 512        # native drivers use 0/0 and get heap via vm_map
-[ipc]
-required_endpoint_name = "-"
-required_endpoint_rights = 0
+[deps]                  # peers by name or "class:<name>"; data only, never gates start
+needs = ["pci"]         # hard (cycle-checked at build time); also wants / provides
+provides = ["hrng"]
 [[capabilities]]        # one block per capability the driver needs
 name = "io.port"
 flags = 0

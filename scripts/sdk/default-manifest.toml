@@ -24,9 +24,12 @@ stack_size = 4096
 initial_memory = 65536
 max_memory = 65536
 
-[ipc]
-required_endpoint_name = "-"
-required_endpoint_rights = 0
+# Peers by service name or class ("class:<name>"), never by binary. Data for the
+# build-time cycle check and the supervisor; nothing gates the start on them.
+# [deps]
+# needs = []
+# wants = []
+# provides = []
 
 [[capabilities]]
 name = "ipc.basic"

@@ -10,9 +10,9 @@ native = true
 stack_pages = 16
 heap_pages = 16
 
-[ipc]
-required_endpoint_name = "proc"
-required_endpoint_rights = 1
+[deps]
+wants = ["fb", "vt", "mouse", "font"]
+provides = ["gfx"]
 
 [[capabilities]]
 name = "ipc.basic"

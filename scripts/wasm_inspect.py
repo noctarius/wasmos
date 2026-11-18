@@ -5,7 +5,7 @@ import struct
 WASM_MAGIC = b"\0asm"
 WASM_VERSION = 1
 WASMOS_MAGIC = b"WASMOSAP"
-WASMOS_APP_VERSION = 9
+WASMOS_APP_VERSION = 10
 SUBSYSTEM_TAG_LEN = 8
 # Fixed-size record with no trailing name: wasmos_region_entry_t in
 # scripts/make_wasmos_app.c.
@@ -70,7 +70,7 @@ def parse_wasmos_app(data):
     name_len, off = read_u32_le(data, off)
     entry_len, off = read_u32_le(data, off)
     wasm_size, off = read_u32_le(data, off)
-    req_ep_count, off = read_u32_le(data, off)
+    dep_count, off = read_u32_le(data, off)
     cap_count, off = read_u32_le(data, off)
     mem_hint_count, off = read_u32_le(data, off)
     compiled_size, off = read_u32_le(data, off)
@@ -87,9 +87,10 @@ def parse_wasmos_app(data):
     off = header_size
     name_raw, off = read_bytes(data, off, name_len)
     entry_raw, off = read_bytes(data, off, entry_len)
-    for _ in range(req_ep_count):
-        _name_len, off = read_u32_le(data, off)
-        _rights, off = read_u32_le(data, off)
+    for _ in range(dep_count):
+        # strength (u8), kind (u8), name_len (u16), then the name bytes
+        _, off = read_bytes(data, off, 2)
+        _name_len, off = read_u16_le(data, off)
         _, off = read_bytes(data, off, _name_len)
     for _ in range(cap_count):
         _name_len, off = read_u32_le(data, off)

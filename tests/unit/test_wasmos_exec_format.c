@@ -47,7 +47,7 @@ typedef struct __attribute__((packed)) {
     uint32_t name_len;
     uint32_t entry_len;
     uint32_t wasm_size;
-    uint32_t req_ep_count;
+    uint32_t dep_count;
     uint32_t cap_count;
     uint32_t mem_hint_count;
     uint32_t compiled_size;
@@ -173,6 +173,25 @@ static int test_classify_real_wap_fixtures(void) {
                                     (const uint8_t*)&wap_retired,
                                     (uint32_t)sizeof(wap_retired),
                                     &match) != 0) {
+        return __LINE__;
+    }
+    if (match.kind != WASMOS_EXEC_FORMAT_NONE)
+        return __LINE__;
+
+    /* v9 differs from v10 only in what the dependency-count field means (it
+     * counted required-endpoint records), so the header size matches and only
+     * the version tells them apart: a v9 container must not pass as current. */
+    struct {
+        test_wap_header_t header;
+        char name[1];
+        char entry[1];
+        uint8_t payload[1];
+    } wap_v9;
+    memcpy(&wap_v9, &wap_current, sizeof(wap_v9));
+    wap_v9.header.version = 9u;
+    memset(&match, 0, sizeof(match));
+    if (wasmos_exec_format_classify(
+            "/boot/apps/old.wap", (const uint8_t*)&wap_v9, (uint32_t)sizeof(wap_v9), &match) != 0) {
         return __LINE__;
     }
     if (match.kind != WASMOS_EXEC_FORMAT_NONE)

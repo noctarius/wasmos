@@ -145,7 +145,8 @@ Source: `src/services/vt/linker.metadata`
 | `native`                 | `false` (WASM)      |
 | `stack_pages`            | 16 (64 KB)          |
 | `heap_pages`             | 16 (64 KB)          |
-| `required_endpoint_name` | `proc`              |
+| `[deps] wants`           | `fb`, `kbd`, `sin`, `fs.vfs` |
+| `[deps] provides`        | `vt`                |
 | Capability               | `ipc.basic`         |
 
 ---

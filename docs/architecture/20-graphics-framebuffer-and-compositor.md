@@ -37,7 +37,9 @@ Service manifests (`linker.metadata`):
 | native                 | true           | true         |
 | stack_pages            | 16             | 16           |
 | heap_pages             | 16             | 16           |
-| required_endpoint_name | proc           | proc         |
+| [deps] needs           | -              | fs.vfs       |
+| [deps] wants           | fb, vt, mouse, font | -       |
+| [deps] provides        | gfx            | font         |
 | capabilities           | ipc.basic      | ipc.basic    |
 
 ---

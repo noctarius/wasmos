@@ -31,10 +31,6 @@ heap_pages = 16
 initial_memory = 1048576
 max_memory = 16777216
 
-[ipc]
-required_endpoint_name = "-"
-required_endpoint_rights = 0
-
 # ipc.basic to reach the process manager and to be reached by fs-manager;
 # svc.class to claim an `fs.backend` instance. Nothing else: this driver has no
 # device, no ports, no interrupt and no DMA.

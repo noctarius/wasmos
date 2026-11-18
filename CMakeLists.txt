@@ -1621,8 +1621,27 @@ get_property(WASMOS_KERNEL_BLOB_TARGETS GLOBAL PROPERTY WASMOS_KERNEL_BLOB_TARGE
 foreach (_wasm_target IN LISTS WASMOS_WASM_APP_TARGETS WASMOS_KERNEL_BLOB_TARGETS)
   add_dependencies(${_wasm_target} make_wasmos_app wasmos-sdk)
 endforeach ()
+# Build-time dependency check: every manifest's [deps] needs edges, parsed by the
+# packer itself (`make_wasmos_app --check-deps`), must not form a cycle. A
+# dependency cycle between services is a boot that can only come up by luck, so it
+# fails the build here, before any image is produced, rather than as a hang in
+# QEMU. The kernel depends on it through wasm_driver_blobs.
+file(GLOB_RECURSE WASMOS_LINKER_MANIFESTS CONFIGURE_DEPENDS
+  ${CMAKE_SOURCE_DIR}/src/linker.metadata
+  ${CMAKE_SOURCE_DIR}/examples/linker.metadata)
+set(WASMOS_DEPS_CHECK_STAMP ${BUILD_DIR}/deps-check.stamp)
+add_custom_command(
+  OUTPUT ${WASMOS_DEPS_CHECK_STAMP}
+  COMMAND $<TARGET_FILE:make_wasmos_app> --check-deps ${WASMOS_LINKER_MANIFESTS}
+  COMMAND ${CMAKE_COMMAND} -E touch ${WASMOS_DEPS_CHECK_STAMP}
+  DEPENDS make_wasmos_app ${WASMOS_LINKER_MANIFESTS}
+  COMMENT "Checking [deps] needs edges of every linker.metadata for cycles"
+  VERBATIM
+)
+add_custom_target(check-deps DEPENDS ${WASMOS_DEPS_CHECK_STAMP})
+
 set(WASM_DRIVER_BLOB_DEPS "")
-list(APPEND WASM_DRIVER_BLOB_DEPS make_wasmos_app)
+list(APPEND WASM_DRIVER_BLOB_DEPS make_wasmos_app check-deps)
 if (WASMOS_WASM_APP_TARGETS)
   list(APPEND WASM_DRIVER_BLOB_DEPS ${WASMOS_WASM_APP_TARGETS})
 endif ()
@@ -2573,6 +2592,24 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wasmos_exec_format
   COMMAND ${BUILD_DIR}/test_wasmos_exec_format
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${CMAKE_SOURCE_DIR}/src/drivers/include
+          -I${KERNEL_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          -I${WASM3_DIR}/source
+          -iquote ${LIBC_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wasmos_app_deps.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_app_runtime.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          ${KERNEL_DIR}/wasmos_app.c
+          ${KERNEL_DIR}/subsystem_registry.c
+          ${KERNEL_DIR}/hashmap.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wasmos_app_deps
+  COMMAND ${BUILD_DIR}/test_wasmos_app_deps
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${SERVICES_DIR}/device_manager
           -I${LIBSYS_WASM_DIR}/include

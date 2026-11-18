@@ -101,8 +101,10 @@ native = true           # true = native ELF; false = WASM/AOT
 [resources]
 stack_pages = 16
 heap_pages  = 512       # for WASM services this sizes the WARP reserved linmem slot
-[ipc]
-required_endpoint_name  = "proc"
+[deps]                  # peers by name or "class:<name>"; data only, never gates start
+needs    = []           # hard: cannot work without it (cycle-checked at build time)
+wants    = ["fs.vfs", "class:net.ifc"]  # soft: used when present
+provides = []           # names/classes this service registers
 [[capabilities]]
 name  = "ipc.basic"     # or "system.control" (cli, fs_manager)
 flags = 0

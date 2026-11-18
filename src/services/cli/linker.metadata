@@ -20,9 +20,9 @@ stack_size = 8192
 initial_memory = 131072
 max_memory = 131072
 
-[ipc]
-required_endpoint_name = "proc"
-required_endpoint_rights = 1
+[deps]
+needs = ["fs.vfs"]
+wants = ["vt", "devmgr.query"]
 
 [[capabilities]]
 name = "system.control"

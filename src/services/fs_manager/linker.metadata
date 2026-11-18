@@ -22,9 +22,9 @@ heap_pages = 32
 initial_memory = 131072
 max_memory = 1048576
 
-[ipc]
-required_endpoint_name = "proc"
-required_endpoint_rights = 1
+[deps]
+wants = ["class:block"]
+provides = ["fs.vfs"]
 
 [[capabilities]]
 name = "system.control"

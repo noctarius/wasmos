@@ -9,7 +9,7 @@
  * only as long as the blob is live.
  *
  * wasmos_app_start() creates a wasm_driver_t (or native_driver) from the descriptor
- * and handles endpoint resolution and capability granting via injected callbacks. */
+ * and handles capability granting via an injected callback. */
 #ifndef WASMOS_APP_H
 #define WASMOS_APP_H
 
@@ -24,7 +24,7 @@
 /* Container version the packer (scripts/make_wasmos_app.c) emits, and the only one
  * the parser accepts.  The version is bound to an exact header_size, so a blob whose
  * header_size disagrees is rejected rather than reinterpreted. */
-#define WASMOS_APP_VERSION 9u
+#define WASMOS_APP_VERSION 10u
 /* On-wire width of the subsystem tag field (v5+).  Struct fields that hold a parsed tag
  * are this + 1 so the tag is always NUL-terminated in memory. */
 #define WASMOS_APP_SUBSYSTEM_TAG_LEN 8u
@@ -60,17 +60,36 @@
 /* Capacities of the fixed-size tables in wasmos_app_desc_t.  A header count above any of
  * these makes wasmos_app_parse reject the whole package rather than truncate — a
  * truncated table would desynchronise the section walk. */
-#define WASMOS_APP_MAX_REQUIRED_ENDPOINTS 8u
+#define WASMOS_APP_MAX_DEPS 16u
 #define WASMOS_APP_MAX_CAP_REQUESTS 8u
 
-/* One entry of the endpoint table: the name of an IPC endpoint the package must have
- * resolved before its entry point runs, plus the rights mask it asks for.  `name` is
- * not NUL-terminated and points into the parsed blob; `name_len` bounds it. */
+/* Dependency declarations (the manifest's [deps] table, v10+).  A record names a
+ * service by NAME (as registered with the process manager) or a service CLASS, never a
+ * binary.  `strength` says what the package does with it:
+ *   NEEDS     it cannot do its job without one; a supervisor orders shutdown and
+ *             restarts by it, and the build rejects a cycle of NEEDS edges;
+ *   WANTS     it uses one when present and degrades without it;
+ *   PROVIDES  it registers that name or joins that class itself.
+ * The records are data only: neither the parser nor the process manager gates a
+ * start on them -- a package follows its peers at run time (service-name watches).
+ * Name lengths are bounded by the registry's limits: WASMOS_APP_DEP_NAME_MAX for a
+ * name, WASMOS_APP_DEP_CLASS_MAX for a class (both excluding a terminator). */
+#define WASMOS_APP_DEP_NEEDS 1u
+#define WASMOS_APP_DEP_WANTS 2u
+#define WASMOS_APP_DEP_PROVIDES 3u
+#define WASMOS_APP_DEP_KIND_NAME 1u
+#define WASMOS_APP_DEP_KIND_CLASS 2u
+#define WASMOS_APP_DEP_NAME_MAX 35u  /* WASMOS_SVC_NAME_MAX - 1 */
+#define WASMOS_APP_DEP_CLASS_MAX 15u /* WASMOS_SVC_CLASS_MAX - 1 */
+
+/* One parsed dependency record.  `name` is not NUL-terminated and points into the
+ * parsed blob; `name_len` bounds it. */
 typedef struct {
+    uint8_t strength; /* WASMOS_APP_DEP_NEEDS / _WANTS / _PROVIDES */
+    uint8_t kind;     /* WASMOS_APP_DEP_KIND_NAME / _CLASS */
     const uint8_t* name;
     uint32_t name_len;
-    uint32_t rights;
-} wasmos_app_req_endpoint_t;
+} wasmos_app_dep_t;
 
 /* One entry of the capability table: a capability name the package requests and the
  * flags it requests it with.  `name` is a non-NUL-terminated alias into the blob. */
@@ -126,8 +145,8 @@ typedef struct {
     uint32_t heap_pages_hint;
     uint32_t region_count;
     wasmos_app_region_t regions[WASMOS_APP_MAX_REGIONS];
-    uint32_t req_ep_count;
-    wasmos_app_req_endpoint_t req_eps[WASMOS_APP_MAX_REQUIRED_ENDPOINTS];
+    uint32_t dep_count;
+    wasmos_app_dep_t deps[WASMOS_APP_MAX_DEPS];
     uint32_t cap_count;
     wasmos_app_cap_request_t caps[WASMOS_APP_MAX_CAP_REQUESTS];
     /* Reserved for future header information.  The .wap format still carries an
@@ -217,22 +236,16 @@ struct wasmos_subsystem_ops {
     void (*stop)(wasmos_app_runtime_state_t* state);
 };
 
-/* Policy hooks wasmos_app_start calls once per endpoint-table / capability-table entry,
- * installed by the process manager via wasmos_app_set_policy_hooks.  `name` is borrowed
- * and not NUL-terminated; `name_len` bounds it.  The resolver must return 0 and write a
- * usable endpoint id to *out_endpoint, or return non-zero; writing IPC_ENDPOINT_NONE is
- * treated as failure either way.  The granter returns 0 when the capability was granted.
- * A non-zero return from either aborts the start with the process partially set up. */
-typedef int (*wasmos_app_endpoint_resolver_t)(uint32_t owner_context_id, const uint8_t* name,
-                                              uint32_t name_len, uint32_t rights,
-                                              uint32_t* out_endpoint);
+/* Policy hook wasmos_app_start calls once per capability-table entry, installed by the
+ * process manager via wasmos_app_set_policy_hooks.  `name` is borrowed and not
+ * NUL-terminated; `name_len` bounds it.  Returns 0 when the capability was granted; a
+ * non-zero return aborts the start with the process partially set up. */
 typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id, const uint8_t* name,
                                                uint32_t name_len, uint32_t flags);
 
 /* A started package.  Unlike wasmos_app_desc_t this owns its data: name and entry are
  * NUL-terminated copies, so the instance outliving the package blob is fine.  `active`
- * is 1 between a successful wasmos_app_start and wasmos_app_stop.  resolved_eps holds
- * the endpoint ids the resolver produced, in endpoint-table order.  entry_argv always
+ * is 1 between a successful wasmos_app_start and wasmos_app_stop.  entry_argv always
  * holds 4 slots of which the first entry_argc are meaningful. */
 typedef struct {
     const wasmos_subsystem_ops_t* ops;
@@ -242,21 +255,20 @@ typedef struct {
     uint32_t owner_context_id;
     char name[64];
     char entry[64];
-    uint32_t resolved_ep_count;
-    uint32_t resolved_eps[WASMOS_APP_MAX_REQUIRED_ENDPOINTS];
     uint32_t entry_argc;
     uint32_t entry_argv[4];
 } wasmos_app_instance_t;
 
 /* Validate a .wap blob and fill *out_desc with zero-copy views into it.  The parser walks
- * the blob strictly in packer order — header, name, entry, endpoint table, capability
- * table, entry-arg binding table, driver-match table, region table, memory hints, raw
- * payload bytes, then the optional AOT binary — bounds-checking each step with overflow-
+ * the blob strictly in packer order — header, name, entry, dependency table, capability
+ * table, region table, memory hints, raw payload bytes, then the optional AOT binary —
+ * bounds-checking each step with overflow-
  * safe 32-bit arithmetic.  Every header count is walked even when this build ignores the
  * section, because skipping one desynchronises the running offset and misreads
  * everything after it.  Returns 0 on success and -1 for: a NULL argument, a blob shorter
  * than the v1 header, a bad magic, an unsupported version, a header_size that disagrees
- * with the version, a non-zero reserved field, a count above its table capacity, a
+ * with the version, a count above its table capacity, a dependency record with an
+ * unknown strength or kind or a name that is empty or over its kind's limit, a
  * NATIVE package that is neither driver nor service, an invalid subsystem tag, an
  * inverted I/O window, a BAR index >= 6, or any section that runs past blob_size.
  * `blob` is borrowed: the descriptor's pointers dangle once the blob is freed or moved. */
@@ -291,15 +303,15 @@ int wasmos_app_resolve_subsystem(const wasmos_app_desc_t* desc,
 int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t* desc);
 
 /* Start `desc` into `instance` on behalf of owner_context_id: copy the name and entry
- * export, resolve every required endpoint and grant every requested capability through
- * the installed policy hooks, resolve the subsystem, and call its start hook.  `init_argv`
+ * export, grant every requested capability through the installed policy hook, resolve
+ * the subsystem, and call its start hook.  `init_argv`
  * supplies the entry-point arguments; at most 4 are kept and init_argc is clamped to 4.
  * `desc` and `init_argv` are borrowed for the call only.  Returns 0 with instance->active
  * set, or -1 on a NULL argument, owner_context_id 0, a name or entry that does not fit
- * the instance's 64-byte fields, a missing policy hook, a failed endpoint resolve or
- * capability grant, an unresolved or broker-backed subsystem, or a failing start hook.
- * On failure the instance is left inactive, but capabilities already granted and
- * endpoints already resolved are not rolled back. */
+ * the instance's 64-byte fields, a missing policy hook, a refused capability grant, an
+ * unresolved or broker-backed subsystem, or a failing start hook.  The dependency table
+ * is not consulted.  On failure the instance is left inactive, but capabilities already
+ * granted are not rolled back. */
 int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* desc,
                      uint32_t owner_context_id, const uint32_t* init_argv, uint32_t init_argc);
 
@@ -311,13 +323,12 @@ int wasmos_app_call_entry(wasmos_app_instance_t* instance);
 
 /* Stop a started instance through its subsystem's stop hook and clear its runtime
  * bookkeeping.  Idempotent: a NULL or already-inactive instance is ignored.  Does not
- * release the endpoints or capabilities wasmos_app_start acquired. */
+ * release the capabilities wasmos_app_start granted. */
 void wasmos_app_stop(wasmos_app_instance_t* instance);
 
-/* Install the process-wide endpoint resolver and capability granter wasmos_app_start
- * uses.  Either may be NULL, which makes a package that requires that kind of entry fail
- * to start.  Last call wins; the hooks are global, not per instance. */
-void wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,
-                                 wasmos_app_capability_granter_t capability_granter);
+/* Install the process-wide capability granter wasmos_app_start uses.  NULL makes a
+ * package that requests any capability fail to start.  Last call wins; the hook is
+ * global, not per instance. */
+void wasmos_app_set_policy_hooks(wasmos_app_capability_granter_t capability_granter);
 
 #endif

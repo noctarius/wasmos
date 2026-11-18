@@ -1,7 +1,7 @@
 /* wasmos_app.c - WASMOS-APP (.wap) package parser and instance launcher.
  * wasmos_app_parse() validates the magic/version and builds a wasmos_app_desc_t
  * with zero-copy pointers into the blob.  wasmos_app_start() creates the WASM
- * driver instance, resolves endpoints, grants capabilities, and prepares entry args. */
+ * driver instance, grants capabilities, and prepares entry args. */
 #include "klog.h"
 #include "native_driver.h"
 #include "serial.h"
@@ -37,7 +37,7 @@ typedef struct __attribute__((packed)) {
     uint32_t name_len;
     uint32_t entry_len;
     uint32_t wasm_size;
-    uint32_t req_ep_count;
+    uint32_t dep_count;
     uint32_t cap_count;
     uint32_t mem_hint_count;
     /* Byte length of a WARP AOT binary appended after the payload; 0 if absent. */
@@ -47,10 +47,12 @@ typedef struct __attribute__((packed)) {
     uint32_t region_count;
 } wasmos_app_header_t;
 
+/* Dependency record, followed by name_len raw name bytes with no terminator. */
 typedef struct __attribute__((packed)) {
-    uint32_t name_len;
-    uint32_t rights;
-} wasmos_req_endpoint_t;
+    uint8_t strength; /* WASMOS_APP_DEP_NEEDS / _WANTS / _PROVIDES */
+    uint8_t kind;     /* WASMOS_APP_DEP_KIND_NAME / _CLASS */
+    uint16_t name_len;
+} wasmos_app_dep_record_t;
 
 typedef struct __attribute__((packed)) {
     uint32_t name_len;
@@ -72,7 +74,6 @@ _Static_assert(WASMOS_EXEC_APP_VERSION == WASMOS_APP_VERSION,
 _Static_assert(WASMOS_EXEC_APP_HEADER_SIZE == sizeof(wasmos_app_header_t),
                "wasmos_exec_format.h's WASMOS_EXEC_APP_HEADER_SIZE must track the header layout");
 
-static wasmos_app_endpoint_resolver_t g_endpoint_resolver;
 static wasmos_app_capability_granter_t g_capability_granter;
 static uint8_t g_subsystems_initialized;
 static ksync_spinlock_t g_subsystem_lock;
@@ -342,6 +343,24 @@ static int wasmos_app_find_subsystem_handler(const char* request_tag,
     return wasmos_subsystem_registry_find(request_tag, out);
 }
 
+/* A dependency record's fixed fields: a known strength and kind, and a name that
+ * is non-empty and within the registry limit for its kind. Returns 0 or -1. */
+static int dep_record_valid(const wasmos_app_dep_record_t* dep) {
+    uint32_t max_len;
+    if (dep->strength != WASMOS_APP_DEP_NEEDS && dep->strength != WASMOS_APP_DEP_WANTS &&
+        dep->strength != WASMOS_APP_DEP_PROVIDES) {
+        return -1;
+    }
+    if (dep->kind == WASMOS_APP_DEP_KIND_NAME) {
+        max_len = WASMOS_APP_DEP_NAME_MAX;
+    } else if (dep->kind == WASMOS_APP_DEP_KIND_CLASS) {
+        max_len = WASMOS_APP_DEP_CLASS_MAX;
+    } else {
+        return -1;
+    }
+    return (dep->name_len == 0u || dep->name_len > max_len) ? -1 : 0;
+}
+
 /* Parses a WASMOS-APP container header into *out_desc.  Only the current version
  * is accepted; see wasmos_app_header_t for why no older layout is.
  *
@@ -368,7 +387,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     uint32_t name_len = 0;
     uint32_t entry_len = 0;
     uint32_t wasm_size = 0;
-    uint32_t req_ep_count = 0;
+    uint32_t dep_count = 0;
     uint32_t cap_count = 0;
     uint32_t mem_hint_count = 0;
     uint32_t compiled_size = 0;
@@ -386,7 +405,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     name_len = hdr->name_len;
     entry_len = hdr->entry_len;
     wasm_size = hdr->wasm_size;
-    req_ep_count = hdr->req_ep_count;
+    dep_count = hdr->dep_count;
     cap_count = hdr->cap_count;
     mem_hint_count = hdr->mem_hint_count;
     region_count = hdr->region_count;
@@ -403,8 +422,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
             return -1;
         }
     }
-    if (req_ep_count > WASMOS_APP_MAX_REQUIRED_ENDPOINTS ||
-        cap_count > WASMOS_APP_MAX_CAP_REQUESTS) {
+    if (dep_count > WASMOS_APP_MAX_DEPS || cap_count > WASMOS_APP_MAX_CAP_REQUESTS) {
         return -1;
     }
     /* Native payloads are privileged and valid for driver/service kinds. */
@@ -416,7 +434,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         return -1;
     }
 
-    out_desc->req_ep_count = 0;
+    out_desc->dep_count = 0;
     out_desc->cap_count = 0;
     out_desc->reserved[0] = 0u;
     out_desc->reserved[1] = 0u;
@@ -424,8 +442,8 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     out_desc->reserved[3] = 0u;
 
     /* The parser walks the blob linearly in the same order the packer writes it:
-     * fixed header, name, entry, endpoint table, capability table, region table,
-     * mem hints, then raw WASM bytes.  The endpoint and
+     * fixed header, name, entry, dependency table, capability table, region table,
+     * mem hints, then raw WASM bytes.  The dependency and
      * capability records each carry a variable-length name, so every count in the
      * header has to be walked or `off` desynchronises and every later section is
      * misread. */
@@ -442,20 +460,21 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     const uint8_t* entry = &blob[off];
     off += entry_len;
 
-    for (uint32_t i = 0; i < req_ep_count; ++i) {
-        if (check_bounds(off, sizeof(wasmos_req_endpoint_t), blob_size) != 0) {
+    for (uint32_t i = 0; i < dep_count; ++i) {
+        if (check_bounds(off, sizeof(wasmos_app_dep_record_t), blob_size) != 0) {
             return -1;
         }
-        const wasmos_req_endpoint_t* req = (const wasmos_req_endpoint_t*)&blob[off];
-        off += sizeof(wasmos_req_endpoint_t);
-        if (check_bounds(off, req->name_len, blob_size) != 0) {
+        const wasmos_app_dep_record_t* dep = (const wasmos_app_dep_record_t*)&blob[off];
+        off += sizeof(wasmos_app_dep_record_t);
+        if (dep_record_valid(dep) != 0 || check_bounds(off, dep->name_len, blob_size) != 0) {
             return -1;
         }
-        out_desc->req_eps[i].name = &blob[off];
-        out_desc->req_eps[i].name_len = req->name_len;
-        out_desc->req_eps[i].rights = req->rights;
-        off += req->name_len;
-        out_desc->req_ep_count++;
+        out_desc->deps[i].strength = dep->strength;
+        out_desc->deps[i].kind = dep->kind;
+        out_desc->deps[i].name = &blob[off];
+        out_desc->deps[i].name_len = dep->name_len;
+        off += dep->name_len;
+        out_desc->dep_count++;
     }
 
     for (uint32_t i = 0; i < cap_count; ++i) {
@@ -629,14 +648,13 @@ int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
 }
 
 /* Brings a parsed package up as a live instance owned by owner_context_id:
- * copies its name and entry export into the instance, resolves every required
- * endpoint, grants every requested capability, resolves the subsystem, and calls
- * that subsystem's start hook.  The entry export is NOT invoked;
- * wasmos_app_call_entry does that.
+ * copies its name and entry export into the instance, grants every requested
+ * capability, resolves the subsystem, and calls that subsystem's start hook.  The
+ * dependency table is data for a supervisor and is not consulted here.  The entry export is NOT
+ * invoked; wasmos_app_call_entry does that.
  *
- * The endpoint resolver and capability granter must have been installed with
- * wasmos_app_set_policy_hooks whenever the package requires either — a package
- * that requires none does not need them.
+ * The capability granter must have been installed with
+ * wasmos_app_set_policy_hooks whenever the package requests a capability.
  *
  * init_argv supplies up to FOUR entry arguments and is read as four words
  * regardless of init_argc; a NULL init_argv is read as four zeros.  init_argc is
@@ -646,10 +664,9 @@ int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
  * stay mapped through the call.
  *
  * Returns 0 with the instance marked active, or -1 for a NULL instance or desc,
- * a zero owner context, a name or entry that does not fit, an unresolvable
- * endpoint, a refused capability, an unresolvable subsystem, or a failed start
- * hook.  On failure the instance is left inactive, but capabilities already
- * granted to the context are NOT withdrawn. */
+ * a zero owner context, a name or entry that does not fit, a refused capability, an unresolvable
+ * subsystem, or a failed start hook.  On failure the instance is left inactive, but capabilities
+ * already granted to the context are NOT withdrawn. */
 int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* desc,
                      uint32_t owner_context_id, const uint32_t* init_argv, uint32_t init_argc) {
     if (!instance || !desc || owner_context_id == 0) {
@@ -660,25 +677,6 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
             0) {
         klog_write("[wasmos-app] invalid name or entry\n");
         return -1;
-    }
-
-    instance->resolved_ep_count = 0;
-    for (uint32_t i = 0; i < desc->req_ep_count; ++i) {
-        if (!g_endpoint_resolver) {
-            klog_write("[wasmos-app] endpoint resolver missing\n");
-            return -1;
-        }
-        uint32_t endpoint = IPC_ENDPOINT_NONE;
-        if (g_endpoint_resolver(owner_context_id,
-                                desc->req_eps[i].name,
-                                desc->req_eps[i].name_len,
-                                desc->req_eps[i].rights,
-                                &endpoint) != 0 ||
-            endpoint == IPC_ENDPOINT_NONE) {
-            klog_write("[wasmos-app] endpoint resolve failed\n");
-            return -1;
-        }
-        instance->resolved_eps[instance->resolved_ep_count++] = endpoint;
     }
 
     for (uint32_t i = 0; i < desc->cap_count; ++i) {
@@ -764,17 +762,13 @@ void wasmos_app_stop(wasmos_app_instance_t* instance) {
     instance->active = 0;
     instance->flags = 0;
     instance->owner_context_id = 0;
-    instance->resolved_ep_count = 0;
     instance->entry_argc = 0;
 }
 
-/* Installs the two policy callbacks wasmos_app_start uses to satisfy a package's
- * declared endpoint and capability requirements.  Both are global, so this is
- * kernel-wide policy rather than per-instance; passing 0 for either makes
- * wasmos_app_start fail for any package that requires it.  Set them before the
- * first package is started. */
-void wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,
-                                 wasmos_app_capability_granter_t capability_granter) {
-    g_endpoint_resolver = endpoint_resolver;
+/* Installs the policy callback wasmos_app_start uses to satisfy a package's
+ * capability requests.  It is global, so this is kernel-wide policy rather than
+ * per-instance; passing 0 makes wasmos_app_start fail for any package that
+ * requests a capability.  Set it before the first package is started. */
+void wasmos_app_set_policy_hooks(wasmos_app_capability_granter_t capability_granter) {
     g_capability_granter = capability_granter;
 }

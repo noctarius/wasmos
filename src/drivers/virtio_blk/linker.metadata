@@ -24,9 +24,9 @@ heap_pages = 512
 initial_memory = 4194304
 max_memory = 4194304
 
-[ipc]
-required_endpoint_name = "-"
-required_endpoint_rights = 0
+[deps]
+needs = ["devmgr.inv", "pci"]
+provides = ["class:block"]
 
 # The device's registers are an I/O BAR. This driver declares no [[regions]] on
 # purpose: a driver with declared windows is spawned by module index, which

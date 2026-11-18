@@ -16,9 +16,9 @@ heap_pages = 64
 [link]
 stack_size = 16384
 
-[ipc]
-required_endpoint_name = "proc"
-required_endpoint_rights = 1
+[deps]
+wants = ["fs.vfs"]
+provides = ["devmgr.inv", "devmgr.query"]
 
 [[capabilities]]
 name = "ipc.basic"

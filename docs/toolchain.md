@@ -425,8 +425,8 @@ stack_size = 4096
 initial_memory = 65536
 max_memory = 65536
 
-[ipc]
-required_endpoint_name = "-"
+[deps]                   # optional: peers by service name or "class:<name>"
+wants = ["fs.vfs"]       # also needs / provides; data only, never gates start
 
 [[capabilities]]
 name = "ipc.basic"

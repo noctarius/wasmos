@@ -1,0 +1,22 @@
+version = 1
+aot = true
+
+[package]
+name = "supervisor"
+entry = "initialize"
+kind = "service"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+# Spawned by kernel init right after the process manager, before anything it
+# could supervise; it reaches the process manager through spawn-info alone.
+[deps]
+provides = ["supervisor"]
+
+# system.control: a critical unit's death ends in the orderly halt.
+[[capabilities]]
+name = "system.control"
+flags = 0

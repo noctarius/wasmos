@@ -1054,3 +1054,24 @@ const PARTITION_IPC_RESCAN_REQ int32 = 0xF00
 const PARTITION_IPC_RESP int32 = 0xF80
 // arg0 = packed error code.
 const PARTITION_IPC_ERROR int32 = 0xFFF
+
+// supervisor (0x1000..0x10FF)
+// Hand a unit to the supervisor, which spawns it, watches it and
+// restarts it by its policy. The request is a
+// wasmos_supervisor_submit_desc_t in a transfer buffer the caller owns
+// and has lent READ to the supervisor: arg0=buffer_id arg1=offset
+// arg2=size. Its spec is one line of text:
+//   <unit> <path> [restart=never|on-failure|always]
+//                 [class=optional|required|critical] [tty=<slot>]
+//                 [-- <args>]
+// <unit> is template or template@instance; the instance key names
+// what the unit serves (a tty, a device) and survives a restart.
+// tty pins a wants_tty unit to text slot 1 or above; slot 0 is the
+// kernel log and is refused.
+// Answered once the unit is accepted, before it is spawned: a spawn
+// that fails later is the unit's failure, handled by its policy.
+const SUPERVISOR_IPC_SUBMIT_REQ int32 = 0x1000
+// arg0 = 0: the unit was accepted.
+const SUPERVISOR_IPC_RESP int32 = 0x1080
+// arg0 = packed WASMOS_ERR_SUPERVISOR_* code.
+const SUPERVISOR_IPC_ERROR int32 = 0x10FF

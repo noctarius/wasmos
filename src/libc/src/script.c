@@ -640,6 +640,7 @@ enum {
     SCRIPT_PENDING_SPAWN,
     SCRIPT_PENDING_EXEC,
     SCRIPT_PENDING_WAIT_SVC,
+    SCRIPT_PENDING_SERVICE,
 };
 
 /* What script_exec_line reports besides 0 (done) and -1 (fail the script). */
@@ -873,6 +874,22 @@ static int script_exec_line(wasmos_script_runner_t* runner, wasmos_script_state_
         return 0;
     }
 
+    if (strncmp(line, "service", 7) == 0 && (line[7] == ' ' || line[7] == '\t')) {
+        const char* spec = &line[8];
+        while (*spec == ' ' || *spec == '\t') {
+            spec++;
+        }
+        char expanded[WASMOS_SCRIPT_LINE_MAX];
+        if (!ops->on_service || script_expand(state, spec, expanded, (int)sizeof(expanded)) != 0) {
+            return 0;
+        }
+        if (ops->on_service(ops->user, expanded) == WASMOS_SCRIPT_HOOK_PENDING) {
+            runner->pending = SCRIPT_PENDING_SERVICE;
+            return SCRIPT_LINE_PENDING;
+        }
+        return 0;
+    }
+
     if (line[0] == 'e' && line[1] == 'x' && line[2] == 'p' && line[3] == 'o' && line[4] == 'r' &&
         line[5] == 't' && (line[6] == ' ' || line[6] == '\t')) {
         const char* rest = &line[7];
@@ -1024,8 +1041,8 @@ void wasmos_script_runner_complete(wasmos_script_runner_t* runner, int32_t rc, i
         runner->frames[runner->depth - 1].state->last_exit_code = exit_code;
         break;
     default:
-        /* spawn and wait-svc results do not affect the script, as in the
-         * synchronous path. */
+        /* spawn, wait-svc and service results do not affect the script, as in
+         * the synchronous path. */
         break;
     }
     runner->pending = SCRIPT_PENDING_NONE;

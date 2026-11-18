@@ -49,6 +49,7 @@ const (
 	WASMOS_ERR_DOMAIN_DEVMGR uint16 = 10
 	WASMOS_ERR_DOMAIN_VIRTIO_BLK uint16 = 24
 	WASMOS_ERR_DOMAIN_BLOCK_DEV uint16 = 25
+	WASMOS_ERR_DOMAIN_SUPERVISOR uint16 = 26
 )
 
 const WASMOS_ERR_NONE int32 = 0
@@ -301,6 +302,10 @@ const (
 	WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED int32 = -0x00190009 // a block record is short, unterminated, or names a length outside the transfer buffer
 	WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR int32 = -0x0019000A // the device has no descriptor to report, so it cannot be identified
 	WASMOS_ERR_BLOCK_DEV_QUEUE_FULL int32 = -0x0019000B // a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it
+	WASMOS_ERR_SUPERVISOR_BAD_DESC int32 = -0x001A0001 // the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor
+	WASMOS_ERR_SUPERVISOR_BAD_SPEC int32 = -0x001A0002 // the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option
+	WASMOS_ERR_SUPERVISOR_EXISTS int32 = -0x001A0003 // a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed
+	WASMOS_ERR_SUPERVISOR_NO_SPACE int32 = -0x001A0004 // the supervisor's unit table is full
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -397,6 +402,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "virtio_blk"
 	case WASMOS_ERR_DOMAIN_BLOCK_DEV:
 		return "block_dev"
+	case WASMOS_ERR_DOMAIN_SUPERVISOR:
+		return "supervisor"
 	default:
 		return "unknown"
 	}
@@ -898,6 +905,14 @@ func WasmosStrerror(c int32) string {
 		return "the device has no descriptor to report, so it cannot be identified"
 	case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL:
 		return "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it"
+	case WASMOS_ERR_SUPERVISOR_BAD_DESC:
+		return "the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor"
+	case WASMOS_ERR_SUPERVISOR_BAD_SPEC:
+		return "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option"
+	case WASMOS_ERR_SUPERVISOR_EXISTS:
+		return "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed"
+	case WASMOS_ERR_SUPERVISOR_NO_SPACE:
+		return "the supervisor's unit table is full"
 	default:
 		return "unknown error"
 	}

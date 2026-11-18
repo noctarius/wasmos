@@ -2,10 +2,10 @@
  * time and drives service startup from a single event loop.
  *
  * The script runner (wasmos/script.h) suspends on every command that waits --
- * start, spawn, exec, wait-svc -- and this file finishes the command when its
- * reply or event arrives on the loop. Nothing here waits inside a hook, so the
- * loop is the only receive on the reply endpoint and sysinit never parks in a
- * nested receive. The runner serializes the script, so at most one command is
+ * start, spawn, exec, wait-svc, service -- and this file finishes the command
+ * when its reply or event arrives on the loop. Nothing here waits inside a
+ * hook, so the loop is the only receive on the reply endpoint and sysinit never
+ * parks in a nested receive. The runner serializes the script, so at most one command is
  * in flight, held in g_op. */
 #include <stdint.h>
 #include "stdio.h"
@@ -37,6 +37,7 @@ typedef enum {
     SYSINIT_OP_START,
     SYSINIT_OP_EXEC,
     SYSINIT_OP_WAIT_SVC,
+    SYSINIT_OP_SERVICE,
 } sysinit_op_kind_t;
 
 typedef struct {
@@ -44,13 +45,15 @@ typedef struct {
     int32_t buffer_id; /* -1 when none */
     uint32_t path_len;
     uint32_t args_len;
-    uint32_t attempts; /* spawn retries after PROC_PM_BUSY */
-    uint8_t retry_due; /* resend the spawn on the next loop tick */
-    char path[WASMOS_SCRIPT_LINE_MAX];
+    uint32_t attempts;                 /* spawn retries after PROC_PM_BUSY */
+    uint8_t retry_due;                 /* resend the spawn on the next loop tick */
+    char path[WASMOS_SCRIPT_LINE_MAX]; /* the path, the awaited name, or the unit spec */
     wasmos_sys_svc_watch_t watch;
 } sysinit_op_t;
 
 static sysinit_op_t g_op = {.buffer_id = -1};
+/* The supervisor's endpoint, once a `service` line has found it; -1 before. */
+static int32_t g_supervisor_ep = -1;
 
 static void log_line(const char* s) {
     if (!s) {
@@ -103,6 +106,14 @@ static const char* sysinit_spawn_error_reason(int32_t rc) {
         return "could not send to the process manager";
     case WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER:
         return "no transfer buffer for the subscription";
+    case WASMOS_ERR_SUPERVISOR_BAD_DESC:
+        return "the supervisor could not read the submission";
+    case WASMOS_ERR_SUPERVISOR_BAD_SPEC:
+        return "bad unit spec";
+    case WASMOS_ERR_SUPERVISOR_EXISTS:
+        return "a unit of that name exists";
+    case WASMOS_ERR_SUPERVISOR_NO_SPACE:
+        return "the supervisor's unit table is full";
     default:
         return 0;
     }
@@ -382,6 +393,107 @@ static int sysinit_on_wait_svc(void* user, const char* name) {
     return WASMOS_SCRIPT_HOOK_PENDING;
 }
 
+/* --------------------------------------------------------------- service */
+
+static void sysinit_on_service_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (msg->type != SUPERVISOR_IPC_RESP) {
+        sysinit_log_failure(
+            "service", g_op.path, msg->type == SUPERVISOR_IPC_ERROR ? msg->arg0 : 0);
+        sysinit_op_finish(-1, 0);
+        return;
+    }
+    sysinit_op_finish(0, 0);
+}
+
+/* Sends the unit spec in g_op.path to the supervisor in a descriptor sysinit
+ * owns and lends READ; the reply releases it, which revokes the loan. */
+static int sysinit_service_submit(void) {
+    static wasmos_supervisor_submit_desc_t desc;
+    uint32_t len = (uint32_t)strlen(g_op.path);
+
+    memset(&desc, 0, sizeof(desc));
+    desc.version = SUPERVISOR_SUBMIT_DESC_VERSION;
+    desc.spec_len = len;
+    memcpy(desc.spec, g_op.path, len + 1u);
+    g_op.buffer_id = wasmos_xfer_stage(&desc, (int32_t)sizeof(desc));
+    if (g_op.buffer_id < 0) {
+        g_op.buffer_id = -1;
+        return -1;
+    }
+    if (wasmos_xfer_buffer_borrow(g_supervisor_ep, g_op.buffer_id, WASMOS_BUFFER_GRANT_READ) < 0 ||
+        wasmos_sys_intent_send(&g_loop,
+                               g_supervisor_ep,
+                               g_state.reply_endpoint,
+                               SUPERVISOR_IPC_SUBMIT_REQ,
+                               g_op.buffer_id,
+                               0,
+                               (int32_t)sizeof(desc),
+                               0,
+                               sysinit_on_service_reply,
+                               0,
+                               0) != 0) {
+        sysinit_op_release_buffer();
+        return -1;
+    }
+    return 0;
+}
+
+static void sysinit_on_supervisor_bound(void* user, wasmos_sys_svc_watch_t* watch,
+                                        int32_t endpoint) {
+    (void)user;
+    wasmos_sys_svc_watch_stop(watch);
+    g_supervisor_ep = endpoint;
+    if (sysinit_service_submit() != 0) {
+        sysinit_log_failure("service", g_op.path, 0);
+        sysinit_op_finish(-1, 0);
+    }
+}
+
+static void sysinit_on_supervisor_missing(void* user, wasmos_sys_svc_watch_t* watch,
+                                          int32_t status) {
+    (void)user;
+    (void)watch;
+    sysinit_log_failure("service", g_op.path, status);
+    sysinit_op_finish(-1, 0);
+}
+
+/* Script 'service': hand the unit to the supervisor, finding it first if no
+ * earlier line has. Continues once the supervisor has accepted the unit, not
+ * once it runs; a refused unit is logged and the script goes on. */
+static int sysinit_on_service(void* user, const char* spec) {
+    (void)user;
+    uint32_t len = (uint32_t)strlen(spec);
+    if (len == 0 || len > SUPERVISOR_SPEC_MAX || len >= sizeof(g_op.path)) {
+        sysinit_log_failure("service", spec, WASMOS_ERR_SUPERVISOR_BAD_SPEC);
+        return -1;
+    }
+    memset(&g_op, 0, sizeof(g_op));
+    g_op.buffer_id = -1;
+    g_op.kind = SYSINIT_OP_SERVICE;
+    memcpy(g_op.path, spec, len + 1u);
+    if (g_supervisor_ep >= 0) {
+        if (sysinit_service_submit() != 0) {
+            g_op.kind = SYSINIT_OP_NONE;
+            sysinit_log_failure("service", spec, 0);
+            return -1;
+        }
+        return WASMOS_SCRIPT_HOOK_PENDING;
+    }
+    if (wasmos_sys_svc_watch_start(&g_watches,
+                                   &g_op.watch,
+                                   "supervisor",
+                                   SYSINIT_WAIT_SVC_TIMEOUT_MS,
+                                   sysinit_on_supervisor_bound,
+                                   sysinit_on_supervisor_missing,
+                                   0) != 0) {
+        g_op.kind = SYSINIT_OP_NONE;
+        sysinit_log_failure("service", spec, 0);
+        return -1;
+    }
+    return WASMOS_SCRIPT_HOOK_PENDING;
+}
+
 static void sysinit_on_echo(void* user, const char* text) {
     (void)user;
     log_line(text);
@@ -467,6 +579,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     ops.on_spawn = sysinit_on_spawn;
     ops.on_exec = sysinit_on_exec;
     ops.on_wait_svc = sysinit_on_wait_svc;
+    ops.on_service = sysinit_on_service;
     ops.on_echo = sysinit_on_echo;
     ops.on_export = sysinit_on_export;
     ops.user = &g_state;

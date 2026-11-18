@@ -25,7 +25,7 @@ static int g_written_n;
 
 /* Every hook call, as "<hook>:<argument>" lines. */
 static char g_log[4096];
-static int g_pending_mask; /* bit per hook: 1 start, 2 spawn, 4 exec, 8 wait */
+static int g_pending_mask; /* bit per hook: 1 start, 2 spawn, 4 exec, 8 wait, 16 service */
 static int g_start_rc;
 static int32_t g_exec_code;
 
@@ -59,6 +59,11 @@ static int hook_wait(void* user, const char* name) {
     log_call("wait", name);
     return (g_pending_mask & 8) ? WASMOS_SCRIPT_HOOK_PENDING : 0;
 }
+static int hook_service(void* user, const char* spec) {
+    (void)user;
+    log_call("service", spec);
+    return (g_pending_mask & 16) ? WASMOS_SCRIPT_HOOK_PENDING : 0;
+}
 static void hook_echo(void* user, const char* text) {
     (void)user;
     log_call("echo", text);
@@ -69,6 +74,7 @@ static wasmos_script_ops_t g_ops = {
     .on_spawn = hook_spawn,
     .on_exec = hook_exec,
     .on_wait_svc = hook_wait,
+    .on_service = hook_service,
     .on_echo = hook_echo,
 };
 
@@ -268,6 +274,43 @@ static int test_skipped_branch_calls_no_hook(void) {
     return 0;
 }
 
+/* A `service` line hands its whole expanded spec to the host, options and
+ * `--` arguments included; a pending one suspends the runner like any other
+ * command, and its failure does not fail the script. */
+static int test_service_hands_over_the_whole_spec(void) {
+    fresh();
+    g_pending_mask = 16;
+    const char* p = write_rc("s.rc",
+                             "set SLOT=0\n"
+                             "service cli@tty${SLOT}  /s/cli.wap restart=always tty=${SLOT} -- -q\n"
+                             "spawn /s/after\n");
+    if (wasmos_script_runner_start(&g_runner, &g_state, &g_ops, p) != 0)
+        return __LINE__;
+    if (step_until_stop() != WASMOS_SCRIPT_STEP_PENDING)
+        return __LINE__;
+    if (strcmp(g_log, "service:cli@tty0  /s/cli.wap restart=always tty=0 -- -q\n") != 0)
+        return __LINE__;
+    wasmos_script_runner_complete(&g_runner, -1, 0);
+    if (step_until_stop() != WASMOS_SCRIPT_STEP_DONE)
+        return __LINE__;
+    if (strstr(g_log, "spawn:/s/after\n") == 0)
+        return __LINE__;
+    return 0;
+}
+
+/* A host that does not supervise ignores `service` lines. */
+static int test_service_without_a_hook_is_ignored(void) {
+    wasmos_script_ops_t ops = g_ops;
+    fresh();
+    ops.on_service = 0;
+    const char* p = write_rc("t.rc", "service logger /s/logger.wap\nspawn /s/b\n");
+    if (wasmos_script_run(&g_state, &ops, p) != 0)
+        return __LINE__;
+    if (strcmp(g_log, "spawn:/s/b\n") != 0)
+        return __LINE__;
+    return 0;
+}
+
 int main(void) {
     static const wasmos_test_case_t cases[] = {
         WASMOS_TEST_CASE(test_run_executes_in_order),
@@ -278,6 +321,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_run_fails_on_a_pending_hook),
         WASMOS_TEST_CASE(test_nesting_limit_and_missing_file),
         WASMOS_TEST_CASE(test_skipped_branch_calls_no_hook),
+        WASMOS_TEST_CASE(test_service_hands_over_the_whole_spec),
+        WASMOS_TEST_CASE(test_service_without_a_hook_is_ignored),
     };
     const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
     int rc = wasmos_test_run_all(cases, groups);

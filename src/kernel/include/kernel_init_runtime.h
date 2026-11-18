@@ -31,6 +31,7 @@ typedef struct {
     uint32_t native_min_index;
     uint32_t native_smoke_index;
     uint32_t smoke_index;
+    uint32_t supervisor_index;
     uint32_t fs_manager_index;
     uint32_t fs_tmpfs_index;
     uint32_t fs_init_index;

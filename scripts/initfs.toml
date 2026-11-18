@@ -104,6 +104,14 @@ flags = ["bootstrap"]
 path = "system/drivers/fbpci.wap"
 source = "framebuffer_pci.wap"
 
+# The supervisor is spawned by kernel init right after the process manager, so
+# it exists before anything it could supervise; only the initfs is readable then.
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/supervisor.wap"
+source = "supervisor.wap"
+
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]

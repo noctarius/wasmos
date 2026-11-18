@@ -1,0 +1,19 @@
+version = 1
+
+[package]
+name = "svc"
+entry = "wasmos_main"
+kind = "app"
+native = false
+aot = true
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[deps]
+wants = ["supervisor"]
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

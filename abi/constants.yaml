@@ -459,3 +459,15 @@ groups:
       - symbol: NET_IFADDR_FLAG_DHCP
         value: 0x4
         doc: Address is (or is being) assigned by DHCP.
+
+  - name: supervisor_submit_desc
+    doc: |
+      Version and size ceiling of wasmos_supervisor_submit_desc_t, the request
+      record of SUPERVISOR_IPC_SUBMIT_REQ, declared in
+      src/drivers/include/wasmos_driver_abi.h.
+
+      A reader MUST reject a descriptor whose version it does not know.
+    constants:
+      - { symbol: SUPERVISOR_SUBMIT_DESC_VERSION, value: 1, doc: "Current wasmos_supervisor_submit_desc_t layout." }
+      - { symbol: SUPERVISOR_SPEC_MAX, value: 255, doc: "Longest unit spec a submission carries, NUL excluded." }
+      - { symbol: SUPERVISOR_UNIT_NAME_MAX, value: 35, doc: "Longest unit name (template@instance), NUL excluded: a service name's ceiling." }

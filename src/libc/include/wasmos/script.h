@@ -73,6 +73,11 @@ typedef struct {
     int (*on_exec)(void* user, const char* path, const char* args, int32_t* out_exit_code);
     /* wait-svc <name> — block until endpoint registered. Return 0 or -1 */
     int (*on_wait_svc)(void* user, const char* name);
+    /* service <unit spec> — hand a unit to the supervisor (the spec grammar is
+     * SUPERVISOR_IPC_SUBMIT_REQ's, abi/opcodes.yaml). Optional: a host without
+     * it ignores the line. A failure does not fail the script. Return 0, -1 or
+     * WASMOS_SCRIPT_HOOK_PENDING. */
+    int (*on_service)(void* user, const char* spec);
     /* echo <text> — print expanded text */
     void (*on_echo)(void* user, const char* text);
     /* echo extended: print expanded text, newline=1 appends trailing newline */

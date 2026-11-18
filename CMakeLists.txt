@@ -92,6 +92,9 @@ set(WASM_LINMEM_HOLD_APP ${BUILD_DIR}/linmem_hold.wap)
 set(WASM_CONSOLE_CLAIM_DENY_SRC ${EXAMPLES_C_DIR}/console_claim_deny/console_claim_deny.c)
 set(WASM_CONSOLE_CLAIM_DENY_WASM ${BUILD_DIR}/console_claim_deny.wasm)
 set(WASM_CONSOLE_CLAIM_DENY_APP ${BUILD_DIR}/console_claim_deny.wap)
+set(WASM_SV_PROBE_SRC ${EXAMPLES_C_DIR}/sv_probe/sv_probe.c)
+set(WASM_SV_PROBE_WASM ${BUILD_DIR}/sv_probe.wasm)
+set(WASM_SV_PROBE_APP ${BUILD_DIR}/sv_probe.wap)
 set(WASM_WFS_WRITE_SMOKE_WASM ${BUILD_DIR}/wfs_write_smoke.wasm)
 set(WASM_WFS_WRITE_SMOKE_APP ${BUILD_DIR}/wfs_write_smoke.wap)
 set(WASM_NATIVE_CALL_MIN_SRC ${EXAMPLES_C_DIR}/native_call_min/native_call_min.c)
@@ -255,6 +258,9 @@ set(WASM_VT_APP ${BUILD_DIR}/vt.wap)
 set(WASM_LOGGER_SRC ${CMAKE_SOURCE_DIR}/src/services/logger/logger.c)
 set(WASM_LOGGER_WASM ${BUILD_DIR}/logger.wasm)
 set(WASM_LOGGER_APP ${BUILD_DIR}/logger.wap)
+set(WASM_SUPERVISOR_SRC ${SERVICES_DIR}/supervisor/supervisor.c)
+set(WASM_SUPERVISOR_WASM ${BUILD_DIR}/supervisor.wasm)
+set(WASM_SUPERVISOR_APP ${BUILD_DIR}/supervisor.wap)
 set(WASM_GFX_COMPOSITOR_SRC ${SERVICES_DIR}/gfx_compositor/gfx_compositor.zig)
 set(WASM_GFX_COMPOSITOR_WASM ${BUILD_DIR}/gfx_compositor.elf)
 set(WASM_GFX_COMPOSITOR_APP ${BUILD_DIR}/gfx_compositor.wap)
@@ -318,6 +324,9 @@ set(WASM_UMOUNT_APP ${BUILD_DIR}/umount.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
+set(WASM_SVC_SRC ${CMAKE_SOURCE_DIR}/src/utils/svc/svc.c)
+set(WASM_SVC_WASM ${BUILD_DIR}/svc.wasm)
+set(WASM_SVC_APP ${BUILD_DIR}/svc.wap)
 set(WASM_MKFS_WFS_SRC ${CMAKE_SOURCE_DIR}/src/utils/mkfs_wfs/mkfs_wfs.c)
 set(WASM_MKFS_WFS_WASM ${BUILD_DIR}/mkfs_wfs.wasm)
 set(WASM_MKFS_WFS_APP ${BUILD_DIR}/mkfs_wfs.wap)
@@ -1788,6 +1797,7 @@ endif ()
 if (TARGET host_util)
   set(HOST_UTIL_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SVC_APP} ${BUILD_DIR}/esp/system/utils/svc.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MKDIR_APP} ${BUILD_DIR}/esp/system/utils/mkdir.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUNT_APP} ${BUILD_DIR}/esp/system/utils/mount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_UMOUNT_APP} ${BUILD_DIR}/esp/system/utils/umount.wap
@@ -1824,6 +1834,7 @@ set(FS_LEAVE_OPEN_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_LEAVE_OPEN_APP} ${BUILD_DIR}/esp/apps/fs_leave_open.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_LINMEM_HOLD_APP} ${BUILD_DIR}/esp/apps/linmem_hold.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CONSOLE_CLAIM_DENY_APP} ${BUILD_DIR}/esp/apps/console_claim_deny.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SV_PROBE_APP} ${BUILD_DIR}/esp/apps/sv_probe.wap
 )
 set(FS_WRITE_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_WRITE_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_write_smoke.wap
@@ -2730,6 +2741,14 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/logger/logger_stage.c
           -o ${BUILD_DIR}/test_logger_stage
   COMMAND ${BUILD_DIR}/test_logger_stage
+  # The supervisor's per-unit policy: spec parsing, restart, backoff, the
+  # intensity window, READY deadlines. No IPC and no clock, like logger_stage.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${SERVICES_DIR}/supervisor
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_supervisor_unit.c
+          ${SERVICES_DIR}/supervisor/supervisor_unit.c
+          -o ${BUILD_DIR}/test_supervisor_unit
+  COMMAND ${BUILD_DIR}/test_supervisor_unit
   # FAT directory scanning over a cluster chain. The test supplies its own block
   # layer (a RAM image served synchronously), so fat_block.c is deliberately NOT
   # linked; fat_util.c is, because fat_geom.c logs through it.
@@ -4810,7 +4829,7 @@ wasmos_ide_index(wasmos_ide_unit
          ${CMAKE_SOURCE_DIR}/abi/generated/c
          ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
          ${SERVICES_DIR}/net_stack ${SERVICES_DIR}/cli ${SERVICES_DIR}/vt
-         ${SERVICES_DIR}/logger
+         ${SERVICES_DIR}/logger ${SERVICES_DIR}/supervisor
          ${DRIVER_WASM_DIR}/fs_fat ${DRIVER_WASM_DIR}/fs_wfs
          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
          ${WASM3_DIR} ${WASM3_DIR}/source)

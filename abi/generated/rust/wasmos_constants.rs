@@ -403,3 +403,16 @@ pub const NET_IFADDR_FLAG_LINK_UP: i32 = 1;
 pub const NET_IFADDR_FLAG_ADMIN_UP: i32 = 2;
 /// Address is (or is being) assigned by DHCP.
 pub const NET_IFADDR_FLAG_DHCP: i32 = 4;
+
+// supervisor_submit_desc
+/// Version and size ceiling of wasmos_supervisor_submit_desc_t, the request
+/// record of SUPERVISOR_IPC_SUBMIT_REQ, declared in
+/// src/drivers/include/wasmos_driver_abi.h.
+///
+/// A reader MUST reject a descriptor whose version it does not know.
+/// Current wasmos_supervisor_submit_desc_t layout.
+pub const SUPERVISOR_SUBMIT_DESC_VERSION: i32 = 1;
+/// Longest unit spec a submission carries, NUL excluded.
+pub const SUPERVISOR_SPEC_MAX: i32 = 255;
+/// Longest unit name (template@instance), NUL excluded: a service name's ceiling.
+pub const SUPERVISOR_UNIT_NAME_MAX: i32 = 35;

@@ -1,0 +1,327 @@
+#include "supervisor_unit.h"
+
+#include <string.h>
+
+#include "../../../abi/generated/c/wasmos_constants.h"
+#include "../../../abi/generated/c/wasmos_status.h"
+
+static int sv_due(uint32_t deadline, uint32_t now) {
+    return (int32_t)(now - deadline) >= 0;
+}
+
+static int sv_is_space(char c) {
+    return c == ' ' || c == '\t';
+}
+
+static const char* sv_skip_space(const char* s) {
+    while (sv_is_space(*s)) {
+        s++;
+    }
+    return s;
+}
+
+static uint32_t sv_token_len(const char* s) {
+    uint32_t n = 0;
+    while (s[n] != '\0' && !sv_is_space(s[n])) {
+        n++;
+    }
+    return n;
+}
+
+static int sv_token_is(const char* s, uint32_t len, const char* word) {
+    uint32_t wlen = (uint32_t)strlen(word);
+    return len == wlen && memcmp(s, word, len) == 0;
+}
+
+/* Parses an unsigned decimal of 1..3 digits filling exactly `len` bytes. */
+static int sv_parse_small(const char* s, uint32_t len, uint32_t* out) {
+    uint32_t v = 0;
+    if (len == 0 || len > 3) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < len; ++i) {
+        if (s[i] < '0' || s[i] > '9') {
+            return -1;
+        }
+        v = v * 10u + (uint32_t)(s[i] - '0');
+    }
+    *out = v;
+    return 0;
+}
+
+static int sv_parse_option(sv_unit_t* unit, const char* tok, uint32_t len) {
+    const char* eq = 0;
+    for (uint32_t i = 0; i < len; ++i) {
+        if (tok[i] == '=') {
+            eq = &tok[i];
+            break;
+        }
+    }
+    if (!eq) {
+        return -1;
+    }
+    uint32_t key_len = (uint32_t)(eq - tok);
+    const char* val = eq + 1;
+    uint32_t val_len = len - key_len - 1u;
+
+    if (sv_token_is(tok, key_len, "restart")) {
+        if (sv_token_is(val, val_len, "never")) {
+            unit->restart = SV_RESTART_NEVER;
+        } else if (sv_token_is(val, val_len, "on-failure")) {
+            unit->restart = SV_RESTART_ON_FAILURE;
+        } else if (sv_token_is(val, val_len, "always")) {
+            unit->restart = SV_RESTART_ALWAYS;
+        } else {
+            return -1;
+        }
+        return 0;
+    }
+    if (sv_token_is(tok, key_len, "class")) {
+        if (sv_token_is(val, val_len, "optional")) {
+            unit->cls = SV_CLASS_OPTIONAL;
+        } else if (sv_token_is(val, val_len, "required")) {
+            unit->cls = SV_CLASS_REQUIRED;
+        } else if (sv_token_is(val, val_len, "critical")) {
+            unit->cls = SV_CLASS_CRITICAL;
+        } else {
+            return -1;
+        }
+        return 0;
+    }
+    if (sv_token_is(tok, key_len, "tty")) {
+        uint32_t slot = 0;
+        /* Slot 0 is no controlling slot -- the child's console output goes to
+         * the kernel log -- so it is not a pin; the PM hands shells 1 and up.
+         * The descriptor carries slot + 1. */
+        if (sv_parse_small(val, val_len, &slot) != 0 || slot == 0u || slot > 254u) {
+            return -1;
+        }
+        unit->tty = slot + 1u;
+        return 0;
+    }
+    return -1;
+}
+
+int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now, sv_unit_t* out) {
+    sv_unit_t unit;
+    const char* p;
+    uint32_t len;
+
+    if (!spec || !timing || !out) {
+        return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
+    }
+    memset(&unit, 0, sizeof(unit));
+    unit.restart = SV_RESTART_ON_FAILURE;
+    unit.cls = SV_CLASS_OPTIONAL;
+
+    p = sv_skip_space(spec);
+    len = sv_token_len(p);
+    if (len == 0 || len >= SV_UNIT_NAME_MAX) {
+        return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
+    }
+    memcpy(unit.name, p, len);
+    p = sv_skip_space(p + len);
+
+    len = sv_token_len(p);
+    if (len == 0 || len >= SV_PATH_MAX || p[0] != '/') {
+        return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
+    }
+    memcpy(unit.path, p, len);
+    p = sv_skip_space(p + len);
+
+    while (*p != '\0') {
+        len = sv_token_len(p);
+        if (sv_token_is(p, len, "--")) {
+            const char* args = sv_skip_space(p + len);
+            uint32_t args_len = (uint32_t)strlen(args);
+            while (args_len > 0 && sv_is_space(args[args_len - 1u])) {
+                args_len--;
+            }
+            if (args_len >= SV_ARGS_MAX) {
+                return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
+            }
+            memcpy(unit.args, args, args_len);
+            break;
+        }
+        if (sv_parse_option(&unit, p, len) != 0) {
+            return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
+        }
+        p = sv_skip_space(p + len);
+    }
+
+    unit.state = SV_UNIT_SPAWN_DUE;
+    unit.deadline = now;
+    unit.backoff_ms = timing->backoff_min_ms;
+    *out = unit;
+    return 0;
+}
+
+/* The unit ended (or never started). `failure` says whether the end counts
+ * against it; the restart policy and the intensity window decide the rest.
+ * Every end that would restart the unit is recorded in the window, clean ends
+ * under restart=always included, so a unit that exits at once in a loop gives
+ * up like one that crashes. */
+static sv_verdict_t sv_unit_decide(sv_unit_t* unit, const sv_timing_t* timing, int failure,
+                                   uint32_t now) {
+    uint32_t in_window = 0;
+
+    unit->pid = 0;
+    if (unit->cls == SV_CLASS_CRITICAL) {
+        unit->state = SV_UNIT_FAILED;
+        return SV_VERDICT_CRITICAL;
+    }
+    if (unit->restart == SV_RESTART_NEVER || (unit->restart == SV_RESTART_ON_FAILURE && !failure)) {
+        unit->state = failure ? SV_UNIT_FAILED : SV_UNIT_STOPPED;
+        return failure ? SV_VERDICT_FAILED : SV_VERDICT_STOPPED;
+    }
+
+    unit->ends_at[unit->ends_head] = now;
+    unit->ends_head = (unit->ends_head + 1u) % SV_INTENSITY_SLOTS;
+    if (unit->ends_recorded < SV_INTENSITY_SLOTS) {
+        unit->ends_recorded++;
+    }
+    for (uint32_t i = 0; i < unit->ends_recorded; ++i) {
+        if (now - unit->ends_at[i] < timing->intensity_window_ms) {
+            in_window++;
+        }
+    }
+    if (in_window >= timing->intensity_max) {
+        unit->state = SV_UNIT_FAILED;
+        return SV_VERDICT_FAILED;
+    }
+
+    unit->state = SV_UNIT_SPAWN_DUE;
+    unit->deadline = now + unit->backoff_ms;
+    unit->backoff_ms = unit->backoff_ms > timing->backoff_max_ms / 2u ? timing->backoff_max_ms
+                                                                      : unit->backoff_ms * 2u;
+    unit->restart_count++;
+    return SV_VERDICT_RESTART;
+}
+
+void sv_unit_spawn_sent(sv_unit_t* unit) {
+    if (unit && unit->state == SV_UNIT_SPAWN_DUE) {
+        unit->state = SV_UNIT_SPAWNING;
+    }
+}
+
+void sv_unit_spawned(sv_unit_t* unit, const sv_timing_t* timing, uint32_t pid, uint32_t now) {
+    if (!unit || !timing || unit->state != SV_UNIT_SPAWNING) {
+        return;
+    }
+    unit->pid = pid;
+    unit->state = SV_UNIT_STARTING;
+    unit->deadline = now + timing->ready_timeout_ms;
+}
+
+sv_verdict_t sv_unit_spawn_failed(sv_unit_t* unit, const sv_timing_t* timing, int32_t code,
+                                  uint32_t now) {
+    if (!unit || !timing || unit->state != SV_UNIT_SPAWNING) {
+        return SV_VERDICT_NONE;
+    }
+    unit->last_status = code;
+    unit->last_reason = PROC_EXIT_REASON_START_FAILED;
+    return sv_unit_decide(unit, timing, 1, now);
+}
+
+void sv_unit_ready(sv_unit_t* unit, const sv_timing_t* timing, uint32_t now) {
+    if (!unit || !timing || unit->state != SV_UNIT_STARTING) {
+        return;
+    }
+    unit->state = SV_UNIT_RUNNING;
+    unit->deadline = now + timing->stable_ms;
+}
+
+sv_verdict_t sv_unit_exited(sv_unit_t* unit, const sv_timing_t* timing, int32_t status,
+                            uint32_t reason, uint32_t now) {
+    int failure;
+    if (!unit || !timing) {
+        return SV_VERDICT_NONE;
+    }
+    if (unit->state != SV_UNIT_STARTING && unit->state != SV_UNIT_RUNNING &&
+        unit->state != SV_UNIT_STABLE && unit->state != SV_UNIT_STOPPING) {
+        return SV_VERDICT_NONE;
+    }
+    unit->last_status = status;
+    unit->last_reason = reason;
+    /* A unit the supervisor killed for missing READY failed, whatever its
+     * exit says. */
+    failure = unit->state == SV_UNIT_STOPPING || sv_exit_is_failure(status, reason);
+    return sv_unit_decide(unit, timing, failure, now);
+}
+
+sv_verdict_t sv_unit_tick(sv_unit_t* unit, const sv_timing_t* timing, uint32_t now) {
+    if (!unit || !timing || !sv_due(unit->deadline, now)) {
+        return SV_VERDICT_NONE;
+    }
+    switch (unit->state) {
+    case SV_UNIT_SPAWN_DUE:
+        return SV_VERDICT_SPAWN;
+    case SV_UNIT_STARTING:
+        unit->state = SV_UNIT_STOPPING;
+        return SV_VERDICT_KILL;
+    case SV_UNIT_RUNNING:
+        unit->state = SV_UNIT_STABLE;
+        unit->backoff_ms = timing->backoff_min_ms;
+        return SV_VERDICT_NONE;
+    default:
+        return SV_VERDICT_NONE;
+    }
+}
+
+int sv_unit_deadline(const sv_unit_t* unit, uint32_t* out) {
+    if (!unit) {
+        return 0;
+    }
+    if (unit->state == SV_UNIT_SPAWN_DUE || unit->state == SV_UNIT_STARTING ||
+        unit->state == SV_UNIT_RUNNING) {
+        if (out) {
+            *out = unit->deadline;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+int sv_exit_is_failure(int32_t status, uint32_t reason) {
+    return !(reason == PROC_EXIT_REASON_EXITED && status == 0);
+}
+
+const char* sv_state_name(sv_state_t state) {
+    switch (state) {
+    case SV_UNIT_SPAWN_DUE:
+        return "spawn-due";
+    case SV_UNIT_SPAWNING:
+        return "spawning";
+    case SV_UNIT_STARTING:
+        return "starting";
+    case SV_UNIT_RUNNING:
+        return "running";
+    case SV_UNIT_STABLE:
+        return "stable";
+    case SV_UNIT_STOPPING:
+        return "stopping";
+    case SV_UNIT_STOPPED:
+        return "stopped";
+    case SV_UNIT_FAILED:
+        return "failed";
+    default:
+        return "free";
+    }
+}
+
+const char* sv_reason_name(uint32_t reason) {
+    switch (reason) {
+    case PROC_EXIT_REASON_EXITED:
+        return "exited";
+    case PROC_EXIT_REASON_TRAPPED:
+        return "trapped";
+    case PROC_EXIT_REASON_FAULTED:
+        return "faulted";
+    case PROC_EXIT_REASON_KILLED:
+        return "killed";
+    case PROC_EXIT_REASON_START_FAILED:
+        return "start failed";
+    default:
+        return "unknown";
+    }
+}

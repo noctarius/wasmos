@@ -60,6 +60,7 @@ void kernel_init_state_reset(init_state_t* state, const boot_info_t* boot_info) 
     state->native_min_index = 0xFFFFFFFFu;
     state->native_smoke_index = 0xFFFFFFFFu;
     state->smoke_index = 0xFFFFFFFFu;
+    state->supervisor_index = 0xFFFFFFFFu;
     state->fs_manager_index = 0xFFFFFFFFu;
     state->fs_tmpfs_index = 0xFFFFFFFFu;
     state->fs_init_index = 0xFFFFFFFFu;
@@ -187,9 +188,9 @@ static int init_send_spawn_path(process_t* process, init_state_t* state, const c
  * arg is the init_state_t prepared by kernel_init_state_reset, borrowed and
  * mutated across dispatches; `phase` is where the sequence stands.  Each call
  * advances at most one step and yields, so the whole boot chain — spawning the
- * process manager, resolving boot modules, spawning fs-manager, fs-tmpfs,
- * fs-init and device-manager, then sysinit by path once a filesystem exists —
- * plays out over many dispatches.  Steps that depend on a service that is not up
+ * process manager, resolving boot modules, spawning the supervisor, fs-manager,
+ * fs-tmpfs, fs-init and device-manager, then sysinit by path once a filesystem
+ * exists — plays out over many dispatches.  Steps that depend on a service that is not up
  * yet simply yield and retry on the next dispatch.
  *
  * Returns PROCESS_RUN_YIELDED for "call me again", PROCESS_RUN_IDLE for a NULL
@@ -216,6 +217,7 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         state->native_smoke_index =
             boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
         state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
+        state->supervisor_index = boot_module_index_by_app_name(state->boot_info, "supervisor");
         state->fs_manager_index = boot_module_index_by_app_name(state->boot_info, "fs-manager");
         state->fs_tmpfs_index = boot_module_index_by_app_name(state->boot_info, "fs-tmpfs");
         state->fs_init_index = boot_module_index_by_app_name(state->boot_info, "fs-init");
@@ -246,6 +248,13 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         state->pm_kill_owner_test_injected = 0;
         state->pm_status_owner_test_injected = 0;
         state->pm_spawn_owner_test_injected = 0;
+        /* Every service sysinit starts is handed to the supervisor, so a boot
+         * without it would bring up no services at all. */
+        if (state->supervisor_index == 0xFFFFFFFFu) {
+            klog_write("[init] supervisor module not found\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
         if (state->fs_manager_index == 0xFFFFFFFFu) {
             klog_write("[init] fs-manager module not found\n");
             process_set_exit_status(process, -1);
@@ -328,6 +337,15 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
+        } else if (state->supervisor_index != 0xFFFFFFFFu) {
+            /* First after the process manager: the supervisor must exist before
+             * anything it supervises, and it needs nothing but the PM. */
+            trace_write("[init] spawn supervisor\n");
+            if (init_send_spawn_index(process, state, state->supervisor_index, 8) != 0) {
+                klog_write("[init] supervisor spawn request failed\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
         } else if (state->fs_manager_index != 0xFFFFFFFFu) {
             trace_write("[init] spawn fs-manager\n");
             if (init_send_spawn_index(process, state, state->fs_manager_index, 4) != 0) {
@@ -401,6 +419,8 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
                 klog_write("[init] fs-manager spawn failed\n");
             } else if (state->pending_kind == 7) {
                 klog_write("[init] fs-tmpfs spawn failed\n");
+            } else if (state->pending_kind == 8) {
+                klog_write("[init] supervisor spawn failed\n");
             } else if (state->pending_kind == 5) {
                 /* FIXME: pending_kind 5 reaching phase 1 is the fs-init spawn
                  * (init_send_spawn_path reuses 5 for sysinit, but that reply is
@@ -427,6 +447,9 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         } else if (state->pending_kind == 7) {
             trace_write("[init] fs-tmpfs spawn ok\n");
             state->fs_tmpfs_index = 0xFFFFFFFFu;
+        } else if (state->pending_kind == 8) {
+            trace_write("[init] supervisor spawn ok\n");
+            state->supervisor_index = 0xFFFFFFFFu;
         } else if (state->pending_kind == 5) {
             trace_write("[init] fs-init spawn ok\n");
             state->fs_init_index = 0xFFFFFFFFu;

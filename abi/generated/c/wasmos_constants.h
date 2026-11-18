@@ -463,4 +463,19 @@ enum {
     NET_IFADDR_FLAG_DHCP = 4,
 };
 
+/* Version and size ceiling of wasmos_supervisor_submit_desc_t, the request
+ * record of SUPERVISOR_IPC_SUBMIT_REQ, declared in
+ * src/drivers/include/wasmos_driver_abi.h.
+ *
+ * A reader MUST reject a descriptor whose version it does not know.
+ */
+enum {
+    /* Current wasmos_supervisor_submit_desc_t layout. */
+    SUPERVISOR_SUBMIT_DESC_VERSION = 1,
+    /* Longest unit spec a submission carries, NUL excluded. */
+    SUPERVISOR_SPEC_MAX = 255,
+    /* Longest unit name (template@instance), NUL excluded: a service name's ceiling. */
+    SUPERVISOR_UNIT_NAME_MAX = 35,
+};
+
 #endif /* WASMOS_GENERATED_CONSTANTS_H */

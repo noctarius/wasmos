@@ -378,3 +378,17 @@ Interface address records, as reported by NET_IPC_IFADDR_LIST.
 | `NET_IFADDR_FLAG_LINK_UP` | 1 | The link itself is up (carrier present). |
 | `NET_IFADDR_FLAG_ADMIN_UP` | 2 | The interface is administratively enabled. |
 | `NET_IFADDR_FLAG_DHCP` | 4 | Address is (or is being) assigned by DHCP. |
+
+## supervisor_submit_desc
+
+Version and size ceiling of wasmos_supervisor_submit_desc_t, the request
+record of SUPERVISOR_IPC_SUBMIT_REQ, declared in
+src/drivers/include/wasmos_driver_abi.h.
+
+A reader MUST reject a descriptor whose version it does not know.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_SUBMIT_DESC_VERSION` | 1 | Current wasmos_supervisor_submit_desc_t layout. |
+| `SUPERVISOR_SPEC_MAX` | 255 | Longest unit spec a submission carries, NUL excluded. |
+| `SUPERVISOR_UNIT_NAME_MAX` | 35 | Longest unit name (template@instance), NUL excluded: a service name's ceiling. |

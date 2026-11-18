@@ -256,15 +256,37 @@ linked feature documents for rationale and rollout plans.
   `PROC_STATUS_READY` from `RUNNING`. A kill replaces an exit the process staged
   but had not completed. A native module's entry runs inside its start hook, so
   a native driver that returns non-zero is reported `START_FAILED` (TODO in
-  `pm_app_entry`). Nothing consumes the reason yet; the supervisor will.
+  `pm_app_entry`). The supervisor reads it from `PROC_IPC_CHILD_EXITED`.
 - `PROC_IPC_SPAWN_WATCHED` spawns from a path with the spawner watching:
   `PROC_IPC_CHILD_READY` / `PROC_IPC_CHILD_EXITED` (pid, status, reason) go to a
   notify endpoint the spawner owns, reserved before the child exists and
   delivered with the hangup guarantee (`ipc_owed_t`, the generalised hangup
   record). The child's `[deps]` come back in the request descriptor, and the
   child is auto-reaped. Host-tested in `test_ipc` (O1-O6) and
-  `test_process_lifecycle`; the PM handler itself has no in-tree caller or test
-  until the supervisor uses it.
+  `test_process_lifecycle`; the PM handler is exercised end to end by the
+  supervisor (`tests/test_supervisor.py`).
+- The `supervisor` service (initfs, spawned by kernel init right after the
+  process manager) keeps submitted units running. A unit arrives as a one-line
+  spec in `SUPERVISOR_IPC_SUBMIT_REQ` (`<unit> <path> [restart=never|on-failure|
+  always] [class=optional|required|critical] [tty=<slot>] [-- args]`, defaults
+  on-failure / optional) and is spawned with `PROC_IPC_SPAWN_WATCHED`. A unit
+  with no READY within 10 s is killed and counts as failed; a restart waits a
+  backoff of 250 ms doubling to 30 s, reset once the unit has been READY for
+  10 s; the fifth end within a sliding 60 s window gives the unit up (one
+  `[supervisor] <unit> failed ...` line). Under `restart=always` a clean exit
+  restarts too and counts toward the window. A critical unit is never restarted:
+  its first end logs `[supervisor] critical unit <unit> died (...)` and runs the
+  orderly halt. All times scale by kenv `supervisor.timescale` (1-100, default
+  1). The policy is `supervisor_unit.c`, host-tested in `test_supervisor_unit`.
+- `sysinit.rc` hands vt, logger, fontsvc, gfxcomp and the console shell
+  (`cli@tty1`, `restart=always`, pinned to slot 1) to the supervisor with the
+  script engine's `service` line; sysinit finds the supervisor by name watch and
+  continues once a unit is accepted, not once it is up. Apps (chardevc, the gfx
+  apps) are still plain `spawn`s, and device-manager still spawns drivers
+  itself. `svc submit <spec>` submits from the shell; `sv_probe` is the test
+  unit that crashes on demand. Not yet: the unit-table dump and `on_critical`
+  reboot mode, the kernel panic on the supervisor's own death, liveness probes,
+  a boot-complete milestone, and any operator command beyond submit.
 - `process_set_ready` and `process_set_running` refuse a transition whose owner
   is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
   (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`

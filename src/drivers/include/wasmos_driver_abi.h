@@ -636,6 +636,18 @@ _Static_assert(sizeof(wasmos_spawn_watch_desc_t) ==
                    48u + SPAWN_WATCH_DEPS_MAX * sizeof(wasmos_spawn_watch_dep_t),
                "wasmos_spawn_watch_desc_t is part of the PROC_IPC_SPAWN_WATCHED ABI");
 
+/* SUPERVISOR_IPC_SUBMIT_REQ request record (abi/opcodes.yaml), in a transfer
+ * buffer the submitter owns and lends READ to the supervisor. `spec` is one
+ * NUL-terminated unit line whose grammar the opcode documents; spec_len counts
+ * its bytes without the NUL. */
+typedef struct {
+    uint32_t version; /* SUPERVISOR_SUBMIT_DESC_VERSION */
+    uint32_t spec_len;
+    char spec[SUPERVISOR_SPEC_MAX + 1];
+} wasmos_supervisor_submit_desc_t;
+_Static_assert(sizeof(wasmos_supervisor_submit_desc_t) == 8u + SUPERVISOR_SPEC_MAX + 1u,
+               "wasmos_supervisor_submit_desc_t is part of the SUPERVISOR_IPC_SUBMIT_REQ ABI");
+
 /* --- PCI device descriptor -------------------------------------------------
  *
  * What pci-bus publishes about one enumerated function. A descriptor in a

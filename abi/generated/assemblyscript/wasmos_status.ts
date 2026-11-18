@@ -44,6 +44,7 @@ export const WASMOS_ERR_DOMAIN_FRAMEBUFFER: u16 = 23;
 export const WASMOS_ERR_DOMAIN_DEVMGR: u16 = 10;
 export const WASMOS_ERR_DOMAIN_VIRTIO_BLK: u16 = 24;
 export const WASMOS_ERR_DOMAIN_BLOCK_DEV: u16 = 25;
+export const WASMOS_ERR_DOMAIN_SUPERVISOR: u16 = 26;
 
 export const WASMOS_ERR_NONE: i32 = 0;
 // A domain error is the negative of (domain << 16) | local_code.
@@ -293,6 +294,10 @@ export const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: i32 = -0x00190008; // a bl
 export const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: i32 = -0x00190009; // a block record is short, unterminated, or names a length outside the transfer buffer
 export const WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: i32 = -0x0019000A; // the device has no descriptor to report, so it cannot be identified
 export const WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: i32 = -0x0019000B; // a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it
+export const WASMOS_ERR_SUPERVISOR_BAD_DESC: i32 = -0x001A0001; // the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor
+export const WASMOS_ERR_SUPERVISOR_BAD_SPEC: i32 = -0x001A0002; // the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option
+export const WASMOS_ERR_SUPERVISOR_EXISTS: i32 = -0x001A0003; // a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed
+export const WASMOS_ERR_SUPERVISOR_NO_SPACE: i32 = -0x001A0004; // the supervisor's unit table is full
 
 export function errMake(dom: u16, code: u16): i32 {
   return -(<i32>(((<u32>dom) << 16) | (<u32>code)));
@@ -344,6 +349,7 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
     case WASMOS_ERR_DOMAIN_VIRTIO_BLK: return "virtio_blk";
     case WASMOS_ERR_DOMAIN_BLOCK_DEV: return "block_dev";
+    case WASMOS_ERR_DOMAIN_SUPERVISOR: return "supervisor";
     default: return "unknown";
   }
 }
@@ -597,6 +603,10 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "a block record is short, unterminated, or names a length outside the transfer buffer";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "the device has no descriptor to report, so it cannot be identified";
     case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it";
+    case WASMOS_ERR_SUPERVISOR_BAD_DESC: return "the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor";
+    case WASMOS_ERR_SUPERVISOR_BAD_SPEC: return "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option";
+    case WASMOS_ERR_SUPERVISOR_EXISTS: return "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed";
+    case WASMOS_ERR_SUPERVISOR_NO_SPACE: return "the supervisor's unit table is full";
     default: return "unknown error";
   }
 }

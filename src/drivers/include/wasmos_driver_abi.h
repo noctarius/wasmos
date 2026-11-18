@@ -648,6 +648,34 @@ typedef struct {
 _Static_assert(sizeof(wasmos_supervisor_submit_desc_t) == 8u + SUPERVISOR_SPEC_MAX + 1u,
                "wasmos_supervisor_submit_desc_t is part of the SUPERVISOR_IPC_SUBMIT_REQ ABI");
 
+/* SUPERVISOR_IPC_LIST_REQ request record (abi/opcodes.yaml), in a transfer
+ * buffer the caller owns and lends READ|WRITE to the supervisor, followed
+ * directly by room for `capacity` wasmos_supervisor_unit_record_t. The caller
+ * fills version and capacity; the supervisor fills total and count. */
+typedef struct {
+    uint32_t version;  /* SUPERVISOR_LIST_DESC_VERSION */
+    uint32_t capacity; /* records the region after this header holds */
+    uint32_t total;    /* reply: units the supervisor holds */
+    uint32_t count;    /* reply: records written, min(total, capacity) */
+} wasmos_supervisor_list_desc_t;
+_Static_assert(sizeof(wasmos_supervisor_list_desc_t) == 16u,
+               "wasmos_supervisor_list_desc_t is part of the SUPERVISOR_IPC_LIST_REQ ABI");
+
+/* One unit as SUPERVISOR_IPC_LIST_REQ reports it. */
+typedef struct {
+    char name[SUPERVISOR_UNIT_NAME_MAX + 1]; /* NUL-terminated */
+    uint32_t state;                          /* SUPERVISOR_UNIT_STATE_* */
+    uint32_t restart;                        /* SUPERVISOR_RESTART_* */
+    uint32_t cls;                            /* SUPERVISOR_CLASS_* */
+    uint32_t tty;                            /* pinned text slot + 1; 0 when unpinned */
+    uint32_t pid;                            /* the running instance; 0 when none */
+    uint32_t restart_count;                  /* restarts over the unit's lifetime */
+    uint32_t last_reason;                    /* PROC_EXIT_REASON_* of the last end; 0 before one */
+    int32_t last_status;                     /* exit status of the last end, or a spawn's error */
+} wasmos_supervisor_unit_record_t;
+_Static_assert(sizeof(wasmos_supervisor_unit_record_t) == SUPERVISOR_UNIT_NAME_MAX + 1u + 32u,
+               "wasmos_supervisor_unit_record_t is part of the SUPERVISOR_IPC_LIST_REQ ABI");
+
 /* --- PCI device descriptor -------------------------------------------------
  *
  * What pci-bus publishes about one enumerated function. A descriptor in a

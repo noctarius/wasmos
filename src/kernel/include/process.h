@@ -272,6 +272,9 @@ typedef struct process {
      * unwatched process. */
     struct ipc_owed* watch_ready;
     struct ipc_owed* watch_exit;
+    /* Set by process_set_critical: a process the system cannot run without and
+     * nobody restarts. Its exit, by any path, is a kernel panic. */
+    uint8_t critical;
     char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1]; /* "KERNEL", "WARP", ... */
     /* Template context filled at spawn and copied into the main thread; also
      * refreshed from the interrupted frame on preemption. The context the
@@ -450,6 +453,10 @@ uint32_t process_current_ctty(void);
 void process_set_exit(process_t* process, int32_t exit_status, uint32_t reason);
 /* process_set_exit with PROC_EXIT_REASON_EXITED: the process ends itself. */
 void process_set_exit_status(process_t* process, int32_t exit_status);
+/* Mark `pid` critical: from now on its exit panics the kernel, naming it. A
+ * process that has already ended panics here, so a death between its spawn
+ * and this call is not missed. */
+void process_set_critical(uint32_t pid);
 /* No-op. Blocking is a per-thread concern now and lives in sched_event_wait;
  * this does nothing and a caller relying on it to block will spin instead.
  * TODO: delete once the remaining call sites stop calling it. */

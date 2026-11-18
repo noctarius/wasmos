@@ -1071,7 +1071,17 @@ const PARTITION_IPC_ERROR int32 = 0xFFF
 // Answered once the unit is accepted, before it is spawned: a spawn
 // that fails later is the unit's failure, handled by its policy.
 const SUPERVISOR_IPC_SUBMIT_REQ int32 = 0x1000
-// arg0 = 0: the unit was accepted.
+// Report every unit the supervisor holds. The request is a
+// wasmos_supervisor_list_desc_t followed by room for `capacity`
+// wasmos_supervisor_unit_record_t, in a transfer buffer the caller
+// owns and has lent READ|WRITE to the supervisor: arg0=buffer_id
+// arg1=offset arg2=size, where size covers the records. The
+// supervisor writes up to `capacity` records in table order, then
+// `total` (units held) and `count` (records written) into the
+// descriptor, and answers. count < total means the room was short;
+// SUPERVISOR_UNITS_MAX records are always enough.
+const SUPERVISOR_IPC_LIST_REQ int32 = 0x1001
+// arg0 = 0: the unit was accepted, or the list was written.
 const SUPERVISOR_IPC_RESP int32 = 0x1080
 // arg0 = packed WASMOS_ERR_SUPERVISOR_* code.
 const SUPERVISOR_IPC_ERROR int32 = 0x10FF

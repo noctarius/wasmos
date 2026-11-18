@@ -450,6 +450,9 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         } else if (state->pending_kind == 8) {
             trace_write("[init] supervisor spawn ok\n");
             state->supervisor_index = 0xFFFFFFFFu;
+            /* Nobody restarts the supervisor and nobody else halts the system
+             * when a critical unit dies, so its own death is a panic. */
+            process_set_critical((uint32_t)msg.arg0);
         } else if (state->pending_kind == 5) {
             trace_write("[init] fs-init spawn ok\n");
             state->fs_init_index = 0xFFFFFFFFu;

@@ -416,3 +416,53 @@ const SUPERVISOR_SUBMIT_DESC_VERSION int32 = 1
 const SUPERVISOR_SPEC_MAX int32 = 255
 // Longest unit name (template@instance), NUL excluded: a service name's ceiling.
 const SUPERVISOR_UNIT_NAME_MAX int32 = 35
+
+// supervisor_list_desc
+// Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a
+// wasmos_supervisor_list_desc_t followed by `capacity`
+// wasmos_supervisor_unit_record_t, both declared in
+// src/drivers/include/wasmos_driver_abi.h.
+//
+// A reader MUST reject a descriptor whose version it does not know.
+// Current wasmos_supervisor_list_desc_t and record layout.
+const SUPERVISOR_LIST_DESC_VERSION int32 = 1
+// Units the supervisor's table holds: a list sized for this many records is never short.
+const SUPERVISOR_UNITS_MAX int32 = 32
+
+// supervisor_unit_state
+// Where a supervised unit is in its lifecycle, as a
+// wasmos_supervisor_unit_record_t reports it.
+// Waiting to be spawned: a first start, or a restart's backoff.
+const SUPERVISOR_UNIT_STATE_SPAWN_DUE int32 = 1
+// Spawn request in flight; no pid yet.
+const SUPERVISOR_UNIT_STATE_SPAWNING int32 = 2
+// Spawned; READY not yet sent.
+const SUPERVISOR_UNIT_STATE_STARTING int32 = 3
+// READY; not yet up long enough to count as stable.
+const SUPERVISOR_UNIT_STATE_RUNNING int32 = 4
+// READY and up long enough that its restart backoff was reset.
+const SUPERVISOR_UNIT_STATE_STABLE int32 = 5
+// Killed by the supervisor for missing READY; its exit is due.
+const SUPERVISOR_UNIT_STATE_STOPPING int32 = 6
+// Ended and, by its restart policy, not restarted.
+const SUPERVISOR_UNIT_STATE_STOPPED int32 = 7
+// Given up on: the restart limit tripped, or a critical unit died.
+const SUPERVISOR_UNIT_STATE_FAILED int32 = 8
+
+// supervisor_restart
+// The restart= policy of a supervised unit.
+// Never restarted.
+const SUPERVISOR_RESTART_NEVER int32 = 0
+// Restarted unless it exited cleanly with status 0.
+const SUPERVISOR_RESTART_ON_FAILURE int32 = 1
+// Restarted whenever it ends.
+const SUPERVISOR_RESTART_ALWAYS int32 = 2
+
+// supervisor_class
+// The class= of a supervised unit, what its death costs the system.
+// Given up on alone.
+const SUPERVISOR_CLASS_OPTIONAL int32 = 0
+// Given up on; the system runs degraded.
+const SUPERVISOR_CLASS_REQUIRED int32 = 1
+// Never restarted: its first death takes the system down.
+const SUPERVISOR_CLASS_CRITICAL int32 = 2

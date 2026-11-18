@@ -415,3 +415,53 @@ pub const SUPERVISOR_SUBMIT_DESC_VERSION: i32 = 1;
 pub const SUPERVISOR_SPEC_MAX: i32 = 255;
 /// Longest unit name (template@instance), NUL excluded: a service name's ceiling.
 pub const SUPERVISOR_UNIT_NAME_MAX: i32 = 35;
+
+// supervisor_list_desc
+/// Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a
+/// wasmos_supervisor_list_desc_t followed by `capacity`
+/// wasmos_supervisor_unit_record_t, both declared in
+/// src/drivers/include/wasmos_driver_abi.h.
+///
+/// A reader MUST reject a descriptor whose version it does not know.
+/// Current wasmos_supervisor_list_desc_t and record layout.
+pub const SUPERVISOR_LIST_DESC_VERSION: i32 = 1;
+/// Units the supervisor's table holds: a list sized for this many records is never short.
+pub const SUPERVISOR_UNITS_MAX: i32 = 32;
+
+// supervisor_unit_state
+/// Where a supervised unit is in its lifecycle, as a
+/// wasmos_supervisor_unit_record_t reports it.
+/// Waiting to be spawned: a first start, or a restart's backoff.
+pub const SUPERVISOR_UNIT_STATE_SPAWN_DUE: i32 = 1;
+/// Spawn request in flight; no pid yet.
+pub const SUPERVISOR_UNIT_STATE_SPAWNING: i32 = 2;
+/// Spawned; READY not yet sent.
+pub const SUPERVISOR_UNIT_STATE_STARTING: i32 = 3;
+/// READY; not yet up long enough to count as stable.
+pub const SUPERVISOR_UNIT_STATE_RUNNING: i32 = 4;
+/// READY and up long enough that its restart backoff was reset.
+pub const SUPERVISOR_UNIT_STATE_STABLE: i32 = 5;
+/// Killed by the supervisor for missing READY; its exit is due.
+pub const SUPERVISOR_UNIT_STATE_STOPPING: i32 = 6;
+/// Ended and, by its restart policy, not restarted.
+pub const SUPERVISOR_UNIT_STATE_STOPPED: i32 = 7;
+/// Given up on: the restart limit tripped, or a critical unit died.
+pub const SUPERVISOR_UNIT_STATE_FAILED: i32 = 8;
+
+// supervisor_restart
+/// The restart= policy of a supervised unit.
+/// Never restarted.
+pub const SUPERVISOR_RESTART_NEVER: i32 = 0;
+/// Restarted unless it exited cleanly with status 0.
+pub const SUPERVISOR_RESTART_ON_FAILURE: i32 = 1;
+/// Restarted whenever it ends.
+pub const SUPERVISOR_RESTART_ALWAYS: i32 = 2;
+
+// supervisor_class
+/// The class= of a supervised unit, what its death costs the system.
+/// Given up on alone.
+pub const SUPERVISOR_CLASS_OPTIONAL: i32 = 0;
+/// Given up on; the system runs degraded.
+pub const SUPERVISOR_CLASS_REQUIRED: i32 = 1;
+/// Never restarted: its first death takes the system down.
+pub const SUPERVISOR_CLASS_CRITICAL: i32 = 2;

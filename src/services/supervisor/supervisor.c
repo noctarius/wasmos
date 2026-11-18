@@ -4,7 +4,19 @@
  * from then on the supervisor owns "should be running -> is running": it spawns
  * the unit with PROC_IPC_SPAWN_WATCHED, learns of its READY and its end from
  * PROC_IPC_CHILD_READY / PROC_IPC_CHILD_EXITED, and restarts or gives up by the
- * unit's policy (supervisor_unit.c). A critical unit's end halts the system.
+ * unit's policy (supervisor_unit.c). SUPERVISOR_IPC_LIST_REQ reports the unit
+ * table.
+ *
+ * A critical unit's end takes the system down: a line naming it, a dump of the
+ * unit table to the kernel log, then the orderly shutdown sequence and a halt,
+ * or a reboot when kenv supervisor.on_critical=reboot. The supervisor is itself
+ * critical: kernel init marks it so, and its own end is a kernel panic.
+ *
+ * kenv keys, read when they are needed:
+ *   supervisor.timescale=N    multiply every policy number by N (1-100)
+ *   supervisor.on_critical=   halt (default) | reboot
+ *   supervisor.fault=trap     trap on the first submission, read at start: the
+ *                             supervisor's death on demand, for testing it
  *
  * Everything runs on one event loop on the service endpoint, which is also the
  * spawn's notify endpoint, so the spawn reply precedes every event of the child
@@ -19,10 +31,12 @@
 #include "wasmos_driver_abi.h"
 #include "supervisor_unit.h"
 
-#define SV_UNITS_MAX 32
+#define SV_UNITS_MAX SUPERVISOR_UNITS_MAX
 #define SV_LOOP_REQ_BASE 0x5100
 #define SV_TIMESCALE_KEY "supervisor.timescale"
 #define SV_TIMESCALE_MAX 100u
+#define SV_ON_CRITICAL_KEY "supervisor.on_critical"
+#define SV_FAULT_KEY "supervisor.fault"
 
 _Static_assert(1000u % WASMOS_SCHED_TICK_HZ == 0u, "a tick must be a whole number of ms");
 
@@ -52,6 +66,9 @@ static sv_unit_t g_units[SV_UNITS_MAX];
  * the unit it is for, -1 when none. */
 static int32_t g_spawn_bid = -1;
 static int32_t g_spawn_unit = -1;
+/* SUPERVISOR_IPC_LIST_REQ records, staged here before they are written out. */
+static wasmos_supervisor_unit_record_t g_list[SV_UNITS_MAX];
+static int g_fault_trap;
 
 static uint32_t sv_now(void) {
     return (uint32_t)wasmos_sched_ticks() * (1000u / WASMOS_SCHED_TICK_HZ);
@@ -64,13 +81,23 @@ static void sv_log(const char* line) {
     }
 }
 
+/* Reads kenv `key` into out[0..size), truncated and NUL-terminated by the host
+ * call. Returns its length, or 0 when it is absent or empty. */
+static int32_t sv_env(const char* key, char* out, int32_t size) {
+    int32_t n = wasmos_env_get(key, (int32_t)strlen(key), out, size);
+    if (n <= 0) {
+        out[0] = '\0';
+        return 0;
+    }
+    return n;
+}
+
 /* The kenv timescale stretches every policy number; CI and test configs raise
  * it instead of tuning each timeout. Absent or out of range reads as 1. */
 static void sv_load_timing(void) {
     char buf[8];
     uint32_t scale = 1;
-    int32_t n = wasmos_env_get(
-        SV_TIMESCALE_KEY, (int32_t)sizeof(SV_TIMESCALE_KEY) - 1, buf, (int32_t)sizeof(buf));
+    int32_t n = sv_env(SV_TIMESCALE_KEY, buf, (int32_t)sizeof(buf));
     if (n > 0) {
         uint32_t v = 0;
         int32_t i = 0;
@@ -122,6 +149,65 @@ static void sv_on_ignored_reply(void* user, const wasmos_ipc_message_t* msg) {
     (void)msg;
 }
 
+static int sv_fault_is_trap(void) {
+    char fault[8];
+    return sv_env(SV_FAULT_KEY, fault, (int32_t)sizeof(fault)) > 0 && strcmp(fault, "trap") == 0;
+}
+
+/* The unit table, one line per held unit, for the kernel log. */
+static void sv_dump_units(void) {
+    char line[160];
+    sv_log("[supervisor] unit table:\n");
+    for (int32_t i = 0; i < SV_UNITS_MAX; ++i) {
+        const sv_unit_t* u = &g_units[i];
+        if (u->state == SV_UNIT_FREE) {
+            continue;
+        }
+        (void)snprintf(line,
+                       sizeof(line),
+                       "[supervisor]   %s %s pid=%u restarts=%u last=%s status=%d\n",
+                       u->name,
+                       sv_state_name(u->state),
+                       u->pid,
+                       u->restart_count,
+                       u->last_reason == 0 ? "-" : sv_reason_name(u->last_reason),
+                       (int)u->last_status);
+        sv_log(line);
+    }
+}
+
+/* A critical unit ended: name it, dump the table, then the orderly shutdown
+ * sequence and power-off or reboot. Returns only when the system-control
+ * capability is refused, and then the system stays up without the unit rather
+ * than in a loop. An unknown supervisor.on_critical halts. */
+static void sv_critical(const sv_unit_t* u) {
+    char mode[16];
+    char line[160];
+    int reboot =
+        sv_env(SV_ON_CRITICAL_KEY, mode, (int32_t)sizeof(mode)) > 0 && strcmp(mode, "reboot") == 0;
+    (void)snprintf(line,
+                   sizeof(line),
+                   "[supervisor] critical unit %s died (%s, status %d); %s\n",
+                   u->name,
+                   sv_reason_name(u->last_reason),
+                   (int)u->last_status,
+                   reboot ? "rebooting" : "halting");
+    sv_log(line);
+    sv_dump_units();
+    if (reboot) {
+        /* TODO: nothing bounds a reboot loop: a critical unit that dies on
+         * every boot reboots forever. A guard needs a boot counter that
+         * survives the reboot (on the ESP or a WFS volume). */
+        if (wasmos_system_reboot() != 0) {
+            sv_log("[supervisor] reboot refused; continuing without the unit\n");
+        }
+        return;
+    }
+    if (wasmos_system_halt() != 0) {
+        sv_log("[supervisor] halt refused; continuing without the unit\n");
+    }
+}
+
 /* Logs a verdict and carries out the parts that are not the next spawn. */
 static void sv_act(sv_unit_t* u, sv_verdict_t verdict) {
     char line[160];
@@ -145,19 +231,7 @@ static void sv_act(sv_unit_t* u, sv_verdict_t verdict) {
         sv_log(line);
         break;
     case SV_VERDICT_CRITICAL:
-        (void)snprintf(line,
-                       sizeof(line),
-                       "[supervisor] critical unit %s died (%s, status %d); halting\n",
-                       u->name,
-                       sv_reason_name(u->last_reason),
-                       (int)u->last_status);
-        sv_log(line);
-        /* The orderly shutdown sequence, then power-off. Returns only when the
-         * capability check refuses it, and then the system stays up without
-         * the unit rather than in a loop. */
-        if (wasmos_system_halt() != 0) {
-            sv_log("[supervisor] halt refused; continuing without the unit\n");
-        }
+        sv_critical(u);
         break;
     case SV_VERDICT_KILL:
         (void)snprintf(line,
@@ -339,6 +413,10 @@ static void sv_on_submit(void* user, const wasmos_ipc_message_t* msg) {
     int32_t rc;
     (void)user;
 
+    if (g_fault_trap) {
+        sv_log("[supervisor] supervisor.fault=trap: trapping\n");
+        __builtin_trap();
+    }
     if (msg->arg2 < (int32_t)sizeof(desc) || msg->arg1 < 0 ||
         wasmos_xfer_buffer_read(msg->arg0, &desc, (int32_t)sizeof(desc), msg->arg1) != 0 ||
         desc.version != SUPERVISOR_SUBMIT_DESC_VERSION || desc.spec_len > SUPERVISOR_SPEC_MAX ||
@@ -367,6 +445,46 @@ static void sv_on_submit(void* user, const wasmos_ipc_message_t* msg) {
         return;
     }
     g_units[free_slot] = unit;
+    sv_reply(msg, 0);
+}
+
+/* SUPERVISOR_IPC_LIST_REQ: arg0=buffer_id arg1=offset arg2=size of a
+ * wasmos_supervisor_list_desc_t and the room for its records, lent READ|WRITE.
+ * A capacity the region cannot hold is a bad descriptor; one larger than the
+ * table is served up to the table. */
+static void sv_on_list(void* user, const wasmos_ipc_message_t* msg) {
+    wasmos_supervisor_list_desc_t desc;
+    uint32_t room;
+    uint32_t capacity;
+    uint32_t total = 0;
+    uint32_t count;
+    (void)user;
+
+    if (msg->arg2 < (int32_t)sizeof(desc) || msg->arg1 < 0 ||
+        wasmos_xfer_buffer_read(msg->arg0, &desc, (int32_t)sizeof(desc), msg->arg1) != 0 ||
+        desc.version != SUPERVISOR_LIST_DESC_VERSION) {
+        sv_reply(msg, WASMOS_ERR_SUPERVISOR_BAD_DESC);
+        return;
+    }
+    room = ((uint32_t)msg->arg2 - (uint32_t)sizeof(desc)) /
+           (uint32_t)sizeof(wasmos_supervisor_unit_record_t);
+    if (desc.capacity > room) {
+        sv_reply(msg, WASMOS_ERR_SUPERVISOR_BAD_DESC);
+        return;
+    }
+    capacity = desc.capacity < SV_UNITS_MAX ? desc.capacity : SV_UNITS_MAX;
+    count = sv_units_list(g_units, SV_UNITS_MAX, g_list, capacity, &total);
+    desc.total = total;
+    desc.count = count;
+    if ((count > 0 &&
+         wasmos_xfer_buffer_write(msg->arg0,
+                                  g_list,
+                                  (int32_t)(count * sizeof(wasmos_supervisor_unit_record_t)),
+                                  msg->arg1 + (int32_t)sizeof(desc)) != 0) ||
+        wasmos_xfer_buffer_write(msg->arg0, &desc, (int32_t)sizeof(desc), msg->arg1) != 0) {
+        sv_reply(msg, WASMOS_ERR_SUPERVISOR_BAD_DESC);
+        return;
+    }
     sv_reply(msg, 0);
 }
 
@@ -418,12 +536,12 @@ static int sv_register(void) {
     return 0;
 }
 
-/* TODO: a supervisor that cannot set itself up parks instead of exiting, so
- * nothing notices that units will never be supervised; its death is meant to
- * be a kernel panic, which needs the kernel's critical-process flag. */
+/* A supervisor that cannot set itself up exits: it is a critical process, so
+ * the kernel panics naming it rather than running on with nothing supervised. */
 static void sv_fatal(const char* msg) {
     sv_log(msg);
-    wasmos_sys_ipc_recv_loop();
+    (void)wasmos_proc_exit(1);
+    __builtin_trap();
 }
 
 WASMOS_WASM_EXPORT int32_t initialize(void) {
@@ -440,10 +558,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         sv_fatal("[supervisor] cannot acquire the spawn buffer\n");
     }
     sv_load_timing();
+    g_fault_trap = sv_fault_is_trap();
 
     wasmos_sys_event_loop_init(&g_loop, g_ep, SV_LOOP_REQ_BASE);
     (void)wasmos_sys_event_set_default(&g_loop, sv_on_unclaimed, 0);
     if (wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_SUBMIT_REQ, sv_on_submit, 0) != 0 ||
+        wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_LIST_REQ, sv_on_list, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, PROC_IPC_CHILD_READY, sv_on_child_ready, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, PROC_IPC_CHILD_EXITED, sv_on_child_exited, 0) != 0) {
         sv_fatal("[supervisor] cannot register message handlers\n");

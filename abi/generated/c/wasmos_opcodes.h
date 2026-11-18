@@ -1201,7 +1201,18 @@ enum {
      * that fails later is the unit's failure, handled by its policy.
      */
     SUPERVISOR_IPC_SUBMIT_REQ = 0x1000,
-    /* arg0 = 0: the unit was accepted. */
+    /* Report every unit the supervisor holds. The request is a
+     * wasmos_supervisor_list_desc_t followed by room for `capacity`
+     * wasmos_supervisor_unit_record_t, in a transfer buffer the caller
+     * owns and has lent READ|WRITE to the supervisor: arg0=buffer_id
+     * arg1=offset arg2=size, where size covers the records. The
+     * supervisor writes up to `capacity` records in table order, then
+     * `total` (units held) and `count` (records written) into the
+     * descriptor, and answers. count < total means the room was short;
+     * SUPERVISOR_UNITS_MAX records are always enough.
+     */
+    SUPERVISOR_IPC_LIST_REQ = 0x1001,
+    /* arg0 = 0: the unit was accepted, or the list was written. */
     SUPERVISOR_IPC_RESP = 0x1080,
     /* arg0 = packed WASMOS_ERR_SUPERVISOR_* code. */
     SUPERVISOR_IPC_ERROR = 0x10FF,
@@ -1581,6 +1592,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
     case WASMOS_OPCODE_SUBSYS_SUPERVISOR:
         switch (type) {
         case 0x1000: return "SUPERVISOR_IPC_SUBMIT_REQ";
+        case 0x1001: return "SUPERVISOR_IPC_LIST_REQ";
         case 0x1080: return "SUPERVISOR_IPC_RESP";
         case 0x10FF: return "SUPERVISOR_IPC_ERROR";
         default: return "UNKNOWN";

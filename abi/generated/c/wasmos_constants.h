@@ -478,4 +478,60 @@ enum {
     SUPERVISOR_UNIT_NAME_MAX = 35,
 };
 
+/* Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a
+ * wasmos_supervisor_list_desc_t followed by `capacity`
+ * wasmos_supervisor_unit_record_t, both declared in
+ * src/drivers/include/wasmos_driver_abi.h.
+ *
+ * A reader MUST reject a descriptor whose version it does not know.
+ */
+enum {
+    /* Current wasmos_supervisor_list_desc_t and record layout. */
+    SUPERVISOR_LIST_DESC_VERSION = 1,
+    /* Units the supervisor's table holds: a list sized for this many records is never short. */
+    SUPERVISOR_UNITS_MAX = 32,
+};
+
+/* Where a supervised unit is in its lifecycle, as a
+ * wasmos_supervisor_unit_record_t reports it.
+ */
+enum {
+    /* Waiting to be spawned: a first start, or a restart's backoff. */
+    SUPERVISOR_UNIT_STATE_SPAWN_DUE = 1,
+    /* Spawn request in flight; no pid yet. */
+    SUPERVISOR_UNIT_STATE_SPAWNING = 2,
+    /* Spawned; READY not yet sent. */
+    SUPERVISOR_UNIT_STATE_STARTING = 3,
+    /* READY; not yet up long enough to count as stable. */
+    SUPERVISOR_UNIT_STATE_RUNNING = 4,
+    /* READY and up long enough that its restart backoff was reset. */
+    SUPERVISOR_UNIT_STATE_STABLE = 5,
+    /* Killed by the supervisor for missing READY; its exit is due. */
+    SUPERVISOR_UNIT_STATE_STOPPING = 6,
+    /* Ended and, by its restart policy, not restarted. */
+    SUPERVISOR_UNIT_STATE_STOPPED = 7,
+    /* Given up on: the restart limit tripped, or a critical unit died. */
+    SUPERVISOR_UNIT_STATE_FAILED = 8,
+};
+
+/* The restart= policy of a supervised unit. */
+enum {
+    /* Never restarted. */
+    SUPERVISOR_RESTART_NEVER = 0,
+    /* Restarted unless it exited cleanly with status 0. */
+    SUPERVISOR_RESTART_ON_FAILURE = 1,
+    /* Restarted whenever it ends. */
+    SUPERVISOR_RESTART_ALWAYS = 2,
+};
+
+/* The class= of a supervised unit, what its death costs the system. */
+enum {
+    /* Given up on alone. */
+    SUPERVISOR_CLASS_OPTIONAL = 0,
+    /* Given up on; the system runs degraded. */
+    SUPERVISOR_CLASS_REQUIRED = 1,
+    /* Never restarted: its first death takes the system down. */
+    SUPERVISOR_CLASS_CRITICAL = 2,
+};
+
 #endif /* WASMOS_GENERATED_CONSTANTS_H */

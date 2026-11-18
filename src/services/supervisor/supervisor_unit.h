@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "../../drivers/include/wasmos_driver_abi.h"
+
 /* The supervisor's per-unit policy: what a unit spec says, and what to do when
  * a unit is spawned, becomes READY, ends, or reaches a deadline. No IPC, no
  * clock and no globals: time is passed in as milliseconds and every decision
@@ -20,31 +22,41 @@
  * exceed it. */
 #define SV_INTENSITY_SLOTS 16u
 
+/* The enums below take their values from abi/constants.yaml, so a unit's
+ * fields are reported over SUPERVISOR_IPC_LIST_REQ as they are. */
 typedef enum {
-    SV_RESTART_NEVER = 0,
-    SV_RESTART_ON_FAILURE,
-    SV_RESTART_ALWAYS,
+    SV_RESTART_NEVER = SUPERVISOR_RESTART_NEVER,
+    SV_RESTART_ON_FAILURE = SUPERVISOR_RESTART_ON_FAILURE,
+    SV_RESTART_ALWAYS = SUPERVISOR_RESTART_ALWAYS,
 } sv_restart_t;
 
 /* What the death of a unit costs the system once it can no longer be
  * restarted. CRITICAL units are never restarted: their first death ends the
  * system. */
 typedef enum {
-    SV_CLASS_OPTIONAL = 0,
-    SV_CLASS_REQUIRED,
-    SV_CLASS_CRITICAL,
+    SV_CLASS_OPTIONAL = SUPERVISOR_CLASS_OPTIONAL,
+    SV_CLASS_REQUIRED = SUPERVISOR_CLASS_REQUIRED,
+    SV_CLASS_CRITICAL = SUPERVISOR_CLASS_CRITICAL,
 } sv_class_t;
 
 typedef enum {
-    SV_UNIT_FREE = 0,  /* table slot unused */
-    SV_UNIT_SPAWN_DUE, /* to be spawned once `deadline` has passed */
-    SV_UNIT_SPAWNING,  /* spawn request in flight; no pid yet */
-    SV_UNIT_STARTING,  /* spawned; READY due by `deadline` */
-    SV_UNIT_RUNNING,   /* READY; counts as stable at `deadline` */
-    SV_UNIT_STABLE,    /* READY and survived stable_ms */
-    SV_UNIT_STOPPING,  /* killed by the supervisor; its exit is due */
-    SV_UNIT_STOPPED,   /* ended and, by its policy, not restarted */
-    SV_UNIT_FAILED,    /* given up on: restart limit reached */
+    SV_UNIT_FREE = 0, /* table slot unused; never reported */
+    /* to be spawned once `deadline` has passed */
+    SV_UNIT_SPAWN_DUE = SUPERVISOR_UNIT_STATE_SPAWN_DUE,
+    /* spawn request in flight; no pid yet */
+    SV_UNIT_SPAWNING = SUPERVISOR_UNIT_STATE_SPAWNING,
+    /* spawned; READY due by `deadline` */
+    SV_UNIT_STARTING = SUPERVISOR_UNIT_STATE_STARTING,
+    /* READY; counts as stable at `deadline` */
+    SV_UNIT_RUNNING = SUPERVISOR_UNIT_STATE_RUNNING,
+    /* READY and survived stable_ms */
+    SV_UNIT_STABLE = SUPERVISOR_UNIT_STATE_STABLE,
+    /* killed by the supervisor; its exit is due */
+    SV_UNIT_STOPPING = SUPERVISOR_UNIT_STATE_STOPPING,
+    /* ended and, by its policy, not restarted */
+    SV_UNIT_STOPPED = SUPERVISOR_UNIT_STATE_STOPPED,
+    /* given up on: restart limit reached, or a critical unit died */
+    SV_UNIT_FAILED = SUPERVISOR_UNIT_STATE_FAILED,
 } sv_state_t;
 
 /* Policy numbers, in milliseconds; supervisor.c scales them. */
@@ -123,6 +135,13 @@ int sv_unit_deadline(const sv_unit_t* unit, uint32_t* out);
  * supervisor is reported as a failure by the caller (a missed READY), not
  * here. */
 int sv_exit_is_failure(int32_t status, uint32_t reason);
+
+/* Writes the SUPERVISOR_IPC_LIST_REQ records of the occupied slots of
+ * `units[0..n)`, in table order, into out[0..capacity). Returns the records
+ * written; *total gets the occupied slots, which exceeds the return value
+ * when `capacity` was short. */
+uint32_t sv_units_list(const sv_unit_t* units, uint32_t n, wasmos_supervisor_unit_record_t* out,
+                       uint32_t capacity, uint32_t* total);
 
 const char* sv_state_name(sv_state_t state);
 const char* sv_reason_name(uint32_t reason);

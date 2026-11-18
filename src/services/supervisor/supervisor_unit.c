@@ -5,6 +5,9 @@
 #include "../../../abi/generated/c/wasmos_constants.h"
 #include "../../../abi/generated/c/wasmos_status.h"
 
+_Static_assert(sizeof(((wasmos_supervisor_unit_record_t*)0)->name) == SV_UNIT_NAME_MAX,
+               "a unit name is copied whole into its list record");
+
 static int sv_due(uint32_t deadline, uint32_t now) {
     return (int32_t)(now - deadline) >= 0;
 }
@@ -280,6 +283,38 @@ int sv_unit_deadline(const sv_unit_t* unit, uint32_t* out) {
         return 1;
     }
     return 0;
+}
+
+uint32_t sv_units_list(const sv_unit_t* units, uint32_t n, wasmos_supervisor_unit_record_t* out,
+                       uint32_t capacity, uint32_t* total) {
+    uint32_t held = 0;
+    uint32_t written = 0;
+    for (uint32_t i = 0; units && i < n; ++i) {
+        const sv_unit_t* u = &units[i];
+        wasmos_supervisor_unit_record_t* r;
+        if (u->state == SV_UNIT_FREE) {
+            continue;
+        }
+        held++;
+        if (!out || written >= capacity) {
+            continue;
+        }
+        r = &out[written++];
+        memset(r, 0, sizeof(*r));
+        memcpy(r->name, u->name, sizeof(u->name));
+        r->state = (uint32_t)u->state;
+        r->restart = (uint32_t)u->restart;
+        r->cls = (uint32_t)u->cls;
+        r->tty = u->tty;
+        r->pid = u->pid;
+        r->restart_count = u->restart_count;
+        r->last_reason = u->last_reason;
+        r->last_status = u->last_status;
+    }
+    if (total) {
+        *total = held;
+    }
+    return written;
 }
 
 int sv_exit_is_failure(int32_t status, uint32_t reason) {

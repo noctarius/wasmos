@@ -392,3 +392,53 @@ A reader MUST reject a descriptor whose version it does not know.
 | `SUPERVISOR_SUBMIT_DESC_VERSION` | 1 | Current wasmos_supervisor_submit_desc_t layout. |
 | `SUPERVISOR_SPEC_MAX` | 255 | Longest unit spec a submission carries, NUL excluded. |
 | `SUPERVISOR_UNIT_NAME_MAX` | 35 | Longest unit name (template@instance), NUL excluded: a service name's ceiling. |
+
+## supervisor_list_desc
+
+Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a
+wasmos_supervisor_list_desc_t followed by `capacity`
+wasmos_supervisor_unit_record_t, both declared in
+src/drivers/include/wasmos_driver_abi.h.
+
+A reader MUST reject a descriptor whose version it does not know.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_LIST_DESC_VERSION` | 1 | Current wasmos_supervisor_list_desc_t and record layout. |
+| `SUPERVISOR_UNITS_MAX` | 32 | Units the supervisor's table holds: a list sized for this many records is never short. |
+
+## supervisor_unit_state
+
+Where a supervised unit is in its lifecycle, as a
+wasmos_supervisor_unit_record_t reports it.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_UNIT_STATE_SPAWN_DUE` | 1 | Waiting to be spawned: a first start, or a restart's backoff. |
+| `SUPERVISOR_UNIT_STATE_SPAWNING` | 2 | Spawn request in flight; no pid yet. |
+| `SUPERVISOR_UNIT_STATE_STARTING` | 3 | Spawned; READY not yet sent. |
+| `SUPERVISOR_UNIT_STATE_RUNNING` | 4 | READY; not yet up long enough to count as stable. |
+| `SUPERVISOR_UNIT_STATE_STABLE` | 5 | READY and up long enough that its restart backoff was reset. |
+| `SUPERVISOR_UNIT_STATE_STOPPING` | 6 | Killed by the supervisor for missing READY; its exit is due. |
+| `SUPERVISOR_UNIT_STATE_STOPPED` | 7 | Ended and, by its restart policy, not restarted. |
+| `SUPERVISOR_UNIT_STATE_FAILED` | 8 | Given up on: the restart limit tripped, or a critical unit died. |
+
+## supervisor_restart
+
+The restart= policy of a supervised unit.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_RESTART_NEVER` | 0 | Never restarted. |
+| `SUPERVISOR_RESTART_ON_FAILURE` | 1 | Restarted unless it exited cleanly with status 0. |
+| `SUPERVISOR_RESTART_ALWAYS` | 2 | Restarted whenever it ends. |
+
+## supervisor_class
+
+The class= of a supervised unit, what its death costs the system.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_CLASS_OPTIONAL` | 0 | Given up on alone. |
+| `SUPERVISOR_CLASS_REQUIRED` | 1 | Given up on; the system runs degraded. |
+| `SUPERVISOR_CLASS_CRITICAL` | 2 | Never restarted: its first death takes the system down. |

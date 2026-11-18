@@ -1126,6 +1126,18 @@ static void process_wake_waiters(uint32_t target_pid) {
     }
 }
 
+/* A critical process ended: nobody is left to act on it, so the kernel stops
+ * here, before the exit is published. The line names the process and how it
+ * ended; the panic carries the pid and the PROC_EXIT_REASON_*. */
+__attribute__((noreturn)) static void process_critical_ended(const process_t* proc) {
+    klog_printf("[kernel] critical process %s (pid %u) ended (reason %u, status %d)\n",
+                proc->name ? proc->name : "?",
+                (unsigned)proc->pid,
+                (unsigned)proc->exit_reason,
+                (int)proc->exit_status);
+    kpanic("critical_process_ended", proc->pid, proc->exit_reason);
+}
+
 /* A reason of PROC_EXIT_REASON_NONE is recorded as EXITED: an exit path that
  * staged nothing is a process ending on its own. */
 static void process_mark_exited(process_t* proc, int32_t exit_status, uint32_t reason) {
@@ -1135,6 +1147,9 @@ static void process_mark_exited(process_t* proc, int32_t exit_status, uint32_t r
     proc->exit_status = exit_status;
     proc->exit_reason =
         (uint8_t)(reason == PROC_EXIT_REASON_NONE ? PROC_EXIT_REASON_EXITED : reason);
+    if (proc->critical) {
+        process_critical_ended(proc);
+    }
     __atomic_store_n(&proc->exiting, 1u, __ATOMIC_RELEASE);
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
@@ -1505,6 +1520,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->exit_reason = PROC_EXIT_REASON_NONE;
     slot->watch_ready = 0;
     slot->watch_exit = 0;
+    slot->critical = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -1713,6 +1729,7 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->exit_reason = PROC_EXIT_REASON_NONE;
     slot->watch_ready = 0;
     slot->watch_exit = 0;
+    slot->critical = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -2059,6 +2076,18 @@ uint32_t process_current_pid(void) {
 uint32_t process_current_ctty(void) {
     process_t* process = process_get(process_current_pid());
     return process ? (uint32_t)process->ctty : 0u;
+}
+
+void process_set_critical(uint32_t pid) {
+    process_t* proc = process_get(pid);
+    if (!proc) {
+        klog_printf("[kernel] critical process pid %u ended before it was marked\n", (unsigned)pid);
+        kpanic("critical_process_ended", pid, 0);
+    }
+    proc->critical = 1;
+    if (__atomic_load_n(&proc->exiting, __ATOMIC_ACQUIRE) != 0u) {
+        process_critical_ended(proc);
+    }
 }
 
 /* Stages the status and reason a process will exit with.  Records them only —

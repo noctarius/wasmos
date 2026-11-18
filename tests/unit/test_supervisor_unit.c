@@ -6,7 +6,9 @@
  * unit is restarted by its policy with a doubling backoff, gives up after too
  * many ends inside the sliding window, resets its backoff only after a stable
  * run, is killed when it misses its READY deadline, and a critical unit's
- * first end is reported as such instead of restarted.
+ * first end is reported as such instead of restarted. What the supervisor
+ * reports of its table over SUPERVISOR_IPC_LIST_REQ is each held unit's own
+ * state, in ABI values, and never more records than the caller made room for.
  *
  * Only supervisor_unit.c is linked; time is passed in explicitly.
  */
@@ -287,6 +289,52 @@ static void test_stale_events_are_ignored(void) {
           "as is a refusal nobody asked for");
 }
 
+static void test_the_list_reports_each_held_unit(void) {
+    sv_unit_t units[4];
+    wasmos_supervisor_unit_record_t out[4];
+    uint32_t total = 99;
+    memset(units, 0, sizeof(units));
+    memset(out, 0x5A, sizeof(out));
+    units[1] = parse_ok("cli@tty1 /c.wap restart=always class=required tty=1", 0);
+    start(&units[1], 12, 0);
+    sv_unit_ready(&units[1], &k_timing, 5);
+    units[3] = parse_ok("probe /p.wap", 0);
+    start(&units[3], 40, 0);
+    (void)sv_unit_exited(&units[3], &k_timing, 7, PROC_EXIT_REASON_TRAPPED, 100);
+
+    CHECK(sv_units_list(units, 4, out, 4, &total) == 2, "two records, free slots skipped");
+    CHECK(total == 2, "two units held");
+    CHECK(strcmp(out[0].name, "cli@tty1") == 0, "table order: cli first");
+    CHECK(out[0].state == SUPERVISOR_UNIT_STATE_RUNNING, "cli is running");
+    CHECK(out[0].restart == SUPERVISOR_RESTART_ALWAYS, "cli restart policy");
+    CHECK(out[0].cls == SUPERVISOR_CLASS_REQUIRED, "cli class");
+    CHECK(out[0].tty == 2u && out[0].pid == 12u, "cli tty pin and pid");
+    CHECK(out[0].restart_count == 0u && out[0].last_reason == 0u, "cli never ended");
+    CHECK(strcmp(out[1].name, "probe") == 0, "probe second");
+    CHECK(out[1].state == SUPERVISOR_UNIT_STATE_SPAWN_DUE, "probe waits out its backoff");
+    CHECK(out[1].pid == 0u, "no instance while it waits");
+    CHECK(out[1].restart_count == 1u, "one restart scheduled");
+    CHECK(out[1].last_reason == PROC_EXIT_REASON_TRAPPED && out[1].last_status == 7,
+          "the end that caused it");
+    CHECK(out[2].name[0] == 0x5A, "nothing written past the records");
+}
+
+static void test_a_short_list_reports_the_total(void) {
+    sv_unit_t units[3];
+    wasmos_supervisor_unit_record_t out[1];
+    uint32_t total = 0;
+    memset(units, 0, sizeof(units));
+    for (int i = 0; i < 3; ++i) {
+        char spec[32];
+        snprintf(spec, sizeof(spec), "u%d /u.wap", i);
+        units[i] = parse_ok(spec, 0);
+    }
+    CHECK(sv_units_list(units, 3, out, 1, &total) == 1, "one record fits");
+    CHECK(total == 3, "the total says the room was short");
+    CHECK(strcmp(out[0].name, "u0") == 0, "the first unit");
+    CHECK(sv_units_list(units, 3, 0, 0, &total) == 0 && total == 3, "a count-only call");
+}
+
 int main(void) {
     test_a_spec_parses_into_its_policy();
     test_a_bare_spec_takes_the_defaults();
@@ -305,6 +353,8 @@ int main(void) {
     test_a_critical_unit_is_never_restarted();
     test_a_refused_spawn_is_a_failure();
     test_stale_events_are_ignored();
+    test_the_list_reports_each_held_unit();
+    test_a_short_list_reports_the_total();
     if (g_failures != 0) {
         printf("test_supervisor_unit: %d failure(s)\n", g_failures);
         return 1;

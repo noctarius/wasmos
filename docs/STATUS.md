@@ -275,18 +275,29 @@ linked feature documents for rationale and rollout plans.
   10 s; the fifth end within a sliding 60 s window gives the unit up (one
   `[supervisor] <unit> failed ...` line). Under `restart=always` a clean exit
   restarts too and counts toward the window. A critical unit is never restarted:
-  its first end logs `[supervisor] critical unit <unit> died (...)` and runs the
-  orderly halt. All times scale by kenv `supervisor.timescale` (1-100, default
-  1). The policy is `supervisor_unit.c`, host-tested in `test_supervisor_unit`.
+  its first end logs `[supervisor] critical unit <unit> died (...)`, dumps the
+  unit table to the kernel log, and runs the orderly shutdown sequence, then
+  powers off, or reboots under kenv `supervisor.on_critical=reboot` (no
+  reboot-loop guard yet). `SUPERVISOR_IPC_LIST_REQ` reports the table, one
+  `wasmos_supervisor_unit_record_t` per unit, into a buffer the caller owns and
+  lends READ|WRITE. All times scale by kenv `supervisor.timescale` (1-100,
+  default 1). The policy is `supervisor_unit.c`, host-tested in
+  `test_supervisor_unit`.
+- The supervisor is a critical process: kernel init marks it with
+  `process_set_critical` once spawned, and any exit of a critical process logs
+  `[kernel] critical process <name> (pid N) ended (...)` and panics with
+  `critical_process_ended`. A supervisor that cannot set itself up exits, and so
+  panics. kenv `supervisor.fault=trap` (via `kernel.cmdline`) makes it trap on
+  its first submission, which is how `tests/test_supervisor.py` checks that.
 - `sysinit.rc` hands vt, logger, fontsvc, gfxcomp and the console shell
   (`cli@tty1`, `restart=always`, pinned to slot 1) to the supervisor with the
   script engine's `service` line; sysinit finds the supervisor by name watch and
   continues once a unit is accepted, not once it is up. Apps (chardevc, the gfx
   apps) are still plain `spawn`s, and device-manager still spawns drivers
-  itself. `svc submit <spec>` submits from the shell; `sv_probe` is the test
-  unit that crashes on demand. Not yet: the unit-table dump and `on_critical`
-  reboot mode, the kernel panic on the supervisor's own death, liveness probes,
-  a boot-complete milestone, and any operator command beyond submit.
+  itself. `svc submit <spec>` submits from the shell, `svc list` prints the unit
+  table and `svc status <unit>` one unit; `sv_probe` is the test unit that
+  crashes on demand. Not yet: liveness probes, a boot-complete milestone, and
+  operator commands that change a unit (stop, start, restart).
 - `process_set_ready` and `process_set_running` refuse a transition whose owner
   is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
   (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`

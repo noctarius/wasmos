@@ -471,3 +471,43 @@ groups:
       - { symbol: SUPERVISOR_SUBMIT_DESC_VERSION, value: 1, doc: "Current wasmos_supervisor_submit_desc_t layout." }
       - { symbol: SUPERVISOR_SPEC_MAX, value: 255, doc: "Longest unit spec a submission carries, NUL excluded." }
       - { symbol: SUPERVISOR_UNIT_NAME_MAX, value: 35, doc: "Longest unit name (template@instance), NUL excluded: a service name's ceiling." }
+
+  - name: supervisor_list_desc
+    doc: |
+      Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a
+      wasmos_supervisor_list_desc_t followed by `capacity`
+      wasmos_supervisor_unit_record_t, both declared in
+      src/drivers/include/wasmos_driver_abi.h.
+
+      A reader MUST reject a descriptor whose version it does not know.
+    constants:
+      - { symbol: SUPERVISOR_LIST_DESC_VERSION, value: 1, doc: "Current wasmos_supervisor_list_desc_t and record layout." }
+      - { symbol: SUPERVISOR_UNITS_MAX, value: 32, doc: "Units the supervisor's table holds: a list sized for this many records is never short." }
+
+  - name: supervisor_unit_state
+    doc: |
+      Where a supervised unit is in its lifecycle, as a
+      wasmos_supervisor_unit_record_t reports it.
+    constants:
+      - { symbol: SUPERVISOR_UNIT_STATE_SPAWN_DUE, value: 1, doc: "Waiting to be spawned: a first start, or a restart's backoff." }
+      - { symbol: SUPERVISOR_UNIT_STATE_SPAWNING, value: 2, doc: "Spawn request in flight; no pid yet." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STARTING, value: 3, doc: "Spawned; READY not yet sent." }
+      - { symbol: SUPERVISOR_UNIT_STATE_RUNNING, value: 4, doc: "READY; not yet up long enough to count as stable." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STABLE, value: 5, doc: "READY and up long enough that its restart backoff was reset." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STOPPING, value: 6, doc: "Killed by the supervisor for missing READY; its exit is due." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STOPPED, value: 7, doc: "Ended and, by its restart policy, not restarted." }
+      - { symbol: SUPERVISOR_UNIT_STATE_FAILED, value: 8, doc: "Given up on: the restart limit tripped, or a critical unit died." }
+
+  - name: supervisor_restart
+    doc: The restart= policy of a supervised unit.
+    constants:
+      - { symbol: SUPERVISOR_RESTART_NEVER, value: 0, doc: "Never restarted." }
+      - { symbol: SUPERVISOR_RESTART_ON_FAILURE, value: 1, doc: "Restarted unless it exited cleanly with status 0." }
+      - { symbol: SUPERVISOR_RESTART_ALWAYS, value: 2, doc: "Restarted whenever it ends." }
+
+  - name: supervisor_class
+    doc: The class= of a supervised unit, what its death costs the system.
+    constants:
+      - { symbol: SUPERVISOR_CLASS_OPTIONAL, value: 0, doc: "Given up on alone." }
+      - { symbol: SUPERVISOR_CLASS_REQUIRED, value: 1, doc: "Given up on; the system runs degraded." }
+      - { symbol: SUPERVISOR_CLASS_CRITICAL, value: 2, doc: "Never restarted: its first death takes the system down." }

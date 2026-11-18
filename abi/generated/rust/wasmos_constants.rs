@@ -282,6 +282,26 @@ pub const PROC_STATUS_ZOMBIE: i32 = 2;
 /// Alive and announced ready.
 pub const PROC_STATUS_READY: i32 = 3;
 
+// spawn_watch_desc
+/// Version and size ceilings of wasmos_spawn_watch_desc_t, the request and
+/// reply record of PROC_IPC_SPAWN_WATCHED. The struct is declared in
+/// src/drivers/include/wasmos_driver_abi.h; path and args bytes follow it in
+/// the caller's buffer at the offsets it names.
+///
+/// A reader MUST reject a descriptor whose version it does not know.
+/// Current wasmos_spawn_watch_desc_t layout.
+pub const SPAWN_WATCH_DESC_VERSION: i32 = 1;
+/// Dependency records the reply can carry, the same ceiling as a .wap
+/// v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off.
+pub const SPAWN_WATCH_DEPS_MAX: i32 = 16;
+/// Bytes reserved per dependency name, NUL included: the longest
+/// service name is 35 bytes.
+pub const SPAWN_WATCH_DEP_NAME_MAX: i32 = 36;
+/// Longest path a watched spawn accepts, NUL excluded.
+pub const SPAWN_WATCH_PATH_MAX: i32 = 255;
+/// Longest argument string a watched spawn accepts, NUL excluded.
+pub const SPAWN_WATCH_ARGS_MAX: i32 = 255;
+
 // proc_exit_reason
 /// Why a process ended, carried beside its exit status: arg2 of the
 /// PROC_IPC_WAIT reply and arg3 of a PROC_IPC_STATUS reply for a ZOMBIE.

@@ -193,6 +193,10 @@ notification endpoint: both blocking waits require a MESSAGE endpoint, and
 
 #### Peer Hangup
 
+A hangup is one case of an **owed kernel message** (`ipc_owed_t`): a message
+whose record is allocated when the obligation arises, so delivering it needs no
+memory and no queue space. The watched-spawn events above are the other.
+
 When a process is reaped, `ipc_endpoints_release_owner` sends
 `WASMOS_IPC_HANGUP` to every endpoint that process's endpoints had sent to:
 `arg0` names the endpoint that was the peer, `arg1` the context that ended. It
@@ -500,6 +504,9 @@ The process manager (PM) runs as a kernel-native C++ service.
 | `PROC_IPC_STATUS`               | `0x203` | request      | Query process state (incl. READY)     |
 | `PROC_IPC_SPAWN_PATH`           | `0x209` | request      | Spawn by filesystem path              |
 | `PROC_IPC_SPAWN_PATH_SYNC`      | `0x20E` | request      | SPAWN_PATH; wait for NOTIFY_READY     |
+| `PROC_IPC_SPAWN_WATCHED`        | `0x213` | request      | Spawn by path; spawner watches child  |
+| `PROC_IPC_CHILD_READY`          | `0x214` | notification | Watched child latched READY (kernel)  |
+| `PROC_IPC_CHILD_EXITED`         | `0x215` | notification | Watched child ended (kernel)          |
 | `PROC_IPC_NOTIFY_READY`         | `0x20C` | notification | Child signals it is ready             |
 | `PROC_IPC_DMA_MAP_BORROW_REQ`   | `0x230` | request      | Map a borrow handle for DMA           |
 | `PROC_IPC_DMA_SYNC_BORROW_REQ`  | `0x231` | request      | Sync a mapped borrow handle           |
@@ -548,6 +555,35 @@ arg3=reason`, without reaping.
 
 `PROC_IPC_STATUS` reports `PROC_STATUS_READY` for a live process whose READY
 latch is set and `PROC_STATUS_RUNNING` for one that has not announced itself.
+
+#### Watched Spawn
+
+`PROC_IPC_SPAWN_WATCHED` spawns from a path and gives the spawner the child's
+lifecycle as events instead of a wait. The request is a
+`wasmos_spawn_watch_desc_t` in a transfer buffer the spawner owns
+(`arg0=buffer_id arg1=offset arg2=size`); it names the path, the arguments, a
+tty pin and a **notify endpoint the spawner must own** — only the spawner may
+watch its child. On success the PM writes the child's pid, app flags and its
+`.wap` `[deps]` back into the descriptor and replies `arg0=pid arg1=app_flags`,
+so the spawner never reads an image.
+
+The watch exists from the child's first instant: both events are reserved
+(`ipc_owed_reserve`) before the child is created and attached to it while it is
+still parked, and the reply is sent before the child is unparked, so on any one
+endpoint the reply precedes every event of the child. No reservation, no child.
+
+- `PROC_IPC_CHILD_READY` (`arg0=pid`) is posted by the first READY latch
+  (`process_notify_ready`), at most once, and not for a child already exiting.
+  A receiver ignores one for a pid it has already seen exit.
+- `PROC_IPC_CHILD_EXITED` (`arg0=pid arg1=status arg2=reason`) is posted from
+  the reap path beside the context's hangups. The child is auto-reaped, so the
+  reap follows its exit at once; `PROC_IPC_WAIT` does not apply to it.
+
+Both come from the PM's `proc` endpoint, only the kernel can send them
+(`ipc_send_from` refuses either type from a guest), and both are delivered with
+the hangup guarantee below: an owed message is never refused by a full queue
+and arrives behind everything queued before it. One reserved for an endpoint
+that is gone, or whose id now belongs to another context, is dropped.
 
 #### Service Registry
 

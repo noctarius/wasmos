@@ -85,6 +85,29 @@ pub const PROC_IPC_SUBSYSTEM_REGISTER_BROKER: i32 = 0x210;
 /// arg0=offset(0) arg1=byte_len(sizeof(desc)+node_bytes)
 /// arg2=reserved(0) arg3=reserved(0).
 pub const PROC_IPC_EXEC_HANDLER_REGISTER: i32 = 0x211;
+/// Spawn from a path and watch the child from its first instant. The
+/// request is a wasmos_spawn_watch_desc_t in a transfer buffer the caller
+/// owns: arg0=buffer_id arg1=offset arg2=size of the region the PM may
+/// read and write. The descriptor names a notify endpoint the caller must
+/// own; only the spawner may watch.
+/// On success: PROC_IPC_RESP, arg0=child_pid arg1=app_flags, with pid,
+/// app_flags and the child's [deps] written back into the descriptor.
+/// The reply is sent before the child first runs, so on that endpoint it
+/// precedes every event of the child. The child is reaped as soon as it
+/// exits; PROC_IPC_WAIT does not apply to it.
+/// On failure: PROC_IPC_ERROR, arg1=WASMOS_ERR_PROC_SPAWN_*.
+pub const PROC_IPC_SPAWN_WATCHED: i32 = 0x213;
+/// A watched child latched READY (see PROC_STATUS_READY). Sent once, from
+/// the PM's proc endpoint to the spawn's notify endpoint: arg0=child_pid.
+/// Never sent for a child that dies first. Only the kernel sends it; a
+/// guest send of this type is refused.
+pub const PROC_IPC_CHILD_READY: i32 = 0x214;
+/// A watched child ended and was reaped. Sent once, from the PM's proc
+/// endpoint to the spawn's notify endpoint, with the hangup delivery
+/// guarantee (never refused by a full queue):
+/// arg0=child_pid arg1=exit status arg2=PROC_EXIT_REASON_*.
+/// Only the kernel sends it; a guest send of this type is refused.
+pub const PROC_IPC_CHILD_EXITED: i32 = 0x215;
 pub const PROC_IPC_RESP: i32 = 0x280;
 pub const PROC_IPC_ERROR: i32 = 0x2FF;
 

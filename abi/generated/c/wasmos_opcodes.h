@@ -106,6 +106,32 @@ enum {
      * arg2=reserved(0) arg3=reserved(0).
      */
     PROC_IPC_EXEC_HANDLER_REGISTER = 0x211,
+    /* Spawn from a path and watch the child from its first instant. The
+     * request is a wasmos_spawn_watch_desc_t in a transfer buffer the caller
+     * owns: arg0=buffer_id arg1=offset arg2=size of the region the PM may
+     * read and write. The descriptor names a notify endpoint the caller must
+     * own; only the spawner may watch.
+     * On success: PROC_IPC_RESP, arg0=child_pid arg1=app_flags, with pid,
+     * app_flags and the child's [deps] written back into the descriptor.
+     * The reply is sent before the child first runs, so on that endpoint it
+     * precedes every event of the child. The child is reaped as soon as it
+     * exits; PROC_IPC_WAIT does not apply to it.
+     * On failure: PROC_IPC_ERROR, arg1=WASMOS_ERR_PROC_SPAWN_*.
+     */
+    PROC_IPC_SPAWN_WATCHED = 0x213,
+    /* A watched child latched READY (see PROC_STATUS_READY). Sent once, from
+     * the PM's proc endpoint to the spawn's notify endpoint: arg0=child_pid.
+     * Never sent for a child that dies first. Only the kernel sends it; a
+     * guest send of this type is refused.
+     */
+    PROC_IPC_CHILD_READY = 0x214,
+    /* A watched child ended and was reaped. Sent once, from the PM's proc
+     * endpoint to the spawn's notify endpoint, with the hangup delivery
+     * guarantee (never refused by a full queue):
+     * arg0=child_pid arg1=exit status arg2=PROC_EXIT_REASON_*.
+     * Only the kernel sends it; a guest send of this type is refused.
+     */
+    PROC_IPC_CHILD_EXITED = 0x215,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF,
 };
@@ -1220,6 +1246,9 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x20F: return "PROC_IPC_SPAWN_PATH_CAPS_SYNC";
         case 0x210: return "PROC_IPC_SUBSYSTEM_REGISTER_BROKER";
         case 0x211: return "PROC_IPC_EXEC_HANDLER_REGISTER";
+        case 0x213: return "PROC_IPC_SPAWN_WATCHED";
+        case 0x214: return "PROC_IPC_CHILD_READY";
+        case 0x215: return "PROC_IPC_CHILD_EXITED";
         case 0x280: return "PROC_IPC_RESP";
         case 0x2FF: return "PROC_IPC_ERROR";
         default: return "UNKNOWN";

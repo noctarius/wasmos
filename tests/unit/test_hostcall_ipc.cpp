@@ -139,6 +139,13 @@ uint32_t process_current_pid(void) {
 process_t* process_get(uint32_t pid) {
     return (g_have_process && pid == CALLER_PID) ? &g_proc : nullptr;
 }
+/* The implicit READY a first blocking receive latches. Only the flag is
+ * modelled: no case here is a watched child, so there is no event to post. */
+void process_notify_ready(process_t* process) {
+    if (process) {
+        process->ready = 1;
+    }
+}
 /* Link-time no-ops: neither preemption nor the serial log is part of what a
  * shim's return value depends on. */
 void preempt_safepoint(void) {}

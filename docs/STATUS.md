@@ -257,6 +257,14 @@ linked feature documents for rationale and rollout plans.
   but had not completed. A native module's entry runs inside its start hook, so
   a native driver that returns non-zero is reported `START_FAILED` (TODO in
   `pm_app_entry`). Nothing consumes the reason yet; the supervisor will.
+- `PROC_IPC_SPAWN_WATCHED` spawns from a path with the spawner watching:
+  `PROC_IPC_CHILD_READY` / `PROC_IPC_CHILD_EXITED` (pid, status, reason) go to a
+  notify endpoint the spawner owns, reserved before the child exists and
+  delivered with the hangup guarantee (`ipc_owed_t`, the generalised hangup
+  record). The child's `[deps]` come back in the request descriptor, and the
+  child is auto-reaped. Host-tested in `test_ipc` (O1-O6) and
+  `test_process_lifecycle`; the PM handler itself has no in-tree caller or test
+  until the supervisor uses it.
 - `process_set_ready` and `process_set_running` refuse a transition whose owner
   is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
   (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`

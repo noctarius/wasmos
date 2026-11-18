@@ -265,6 +265,13 @@ typedef struct process {
     /* PROC_EXIT_REASON_* (abi/constants.yaml) paired with exit_status: staged
      * with it while the process runs, final from ZOMBIE onward. */
     uint8_t exit_reason;
+    /* The spawner's watch (PROC_IPC_SPAWN_WATCHED): reserved PROC_IPC_CHILD_READY
+     * and _EXITED messages, each taken by an atomic exchange so it is posted at
+     * most once. watch_ready is posted by the first process_notify_ready and
+     * cancelled at reap if still held; watch_exit is posted at reap. NULL for an
+     * unwatched process. */
+    struct ipc_owed* watch_ready;
+    struct ipc_owed* watch_exit;
     char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1]; /* "KERNEL", "WARP", ... */
     /* Template context filled at spawn and copied into the main thread; also
      * refreshed from the interrupted frame on preemption. The context the
@@ -452,6 +459,14 @@ void process_block_on_ipc(process_t* process);
  * iteration picks it up. */
 void process_notify_ready(process_t* process);
 void process_set_require_explicit_ready(process_t* process);
+/* Attach a spawner's watch to `pid`, taking ownership of both reserved
+ * messages: on_ready is posted (arg0 = pid) the first time the process latches
+ * READY, on_exit (arg0 = pid, arg1 = exit status, arg2 = PROC_EXIT_REASON_*) when
+ * it is reaped. Must be called before the process first runs; the caller sets
+ * auto-reap after it so the exit is reported as soon as it happens. Returns 0,
+ * or -1 for an unknown pid or a process already watched, in which case the
+ * caller keeps both records. */
+int process_set_watch(uint32_t pid, struct ipc_owed* on_ready, struct ipc_owed* on_exit);
 /*
  * Wait for a child to exit. TRI-STATE, not 0-on-success:
  *   0  the child was already a zombie; *out_exit_status is set and the child

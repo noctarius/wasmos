@@ -318,6 +318,30 @@ enum {
     PROC_STATUS_READY = 3,
 };
 
+/* Version and size ceilings of wasmos_spawn_watch_desc_t, the request and
+ * reply record of PROC_IPC_SPAWN_WATCHED. The struct is declared in
+ * src/drivers/include/wasmos_driver_abi.h; path and args bytes follow it in
+ * the caller's buffer at the offsets it names.
+ *
+ * A reader MUST reject a descriptor whose version it does not know.
+ */
+enum {
+    /* Current wasmos_spawn_watch_desc_t layout. */
+    SPAWN_WATCH_DESC_VERSION = 1,
+    /* Dependency records the reply can carry, the same ceiling as a .wap
+     * v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off.
+     */
+    SPAWN_WATCH_DEPS_MAX = 16,
+    /* Bytes reserved per dependency name, NUL included: the longest
+     * service name is 35 bytes.
+     */
+    SPAWN_WATCH_DEP_NAME_MAX = 36,
+    /* Longest path a watched spawn accepts, NUL excluded. */
+    SPAWN_WATCH_PATH_MAX = 255,
+    /* Longest argument string a watched spawn accepts, NUL excluded. */
+    SPAWN_WATCH_ARGS_MAX = 255,
+};
+
 /* Why a process ended, carried beside its exit status: arg2 of the
  * PROC_IPC_WAIT reply and arg3 of a PROC_IPC_STATUS reply for a ZOMBIE.
  *

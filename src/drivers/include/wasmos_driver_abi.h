@@ -589,6 +589,53 @@ typedef struct __attribute__((packed)) {
     wasmos_region_desc_t regions[WASMOS_MODULE_META_MAX_REGIONS];
 } wasmos_module_meta_desc_t;
 
+/* One [deps] record of a spawned package as PROC_IPC_SPAWN_WATCHED reports it:
+ * strength and kind are WASMOS_APP_DEP_* (src/kernel/include/wasmos_app.h,
+ * docs/architecture/13-runtime-and-packaging.md); name is NUL-terminated
+ * within its field. */
+typedef struct {
+    uint8_t strength;
+    uint8_t kind;
+    uint8_t name_len;
+    uint8_t reserved0;
+    char name[SPAWN_WATCH_DEP_NAME_MAX];
+} wasmos_spawn_watch_dep_t;
+
+/* Request and reply record of PROC_IPC_SPAWN_WATCHED, at the start of the
+ * region the caller names in a transfer buffer it owns. The caller fills the
+ * request fields; the PM fills the reply fields on success and leaves them
+ * untouched on failure. path and args are byte strings in the same region at
+ * the given offsets from the descriptor, not NUL-terminated; args_len 0 means
+ * no arguments.
+ *
+ * notify_endpoint must be an endpoint the caller owns. CHILD_READY and
+ * CHILD_EXITED for this child go there, and nowhere else.
+ *
+ * tty pins a wants_tty child to a text slot, encoded as slot + 1; 0 lets the PM
+ * pick, as PROC_SPAWN_PATH_TTY does. */
+typedef struct {
+    /* request */
+    uint32_t version; /* = SPAWN_WATCH_DESC_VERSION */
+    uint32_t notify_endpoint;
+    uint32_t tty;
+    uint32_t path_off;
+    uint32_t path_len;
+    uint32_t args_off;
+    uint32_t args_len;
+    uint32_t reserved0;
+    /* reply */
+    uint32_t pid;
+    uint32_t app_flags;
+    uint32_t dep_count;
+    uint32_t reserved1;
+    wasmos_spawn_watch_dep_t deps[SPAWN_WATCH_DEPS_MAX];
+} wasmos_spawn_watch_desc_t;
+_Static_assert(sizeof(wasmos_spawn_watch_dep_t) == 4u + SPAWN_WATCH_DEP_NAME_MAX,
+               "wasmos_spawn_watch_dep_t is part of the PROC_IPC_SPAWN_WATCHED ABI");
+_Static_assert(sizeof(wasmos_spawn_watch_desc_t) ==
+                   48u + SPAWN_WATCH_DEPS_MAX * sizeof(wasmos_spawn_watch_dep_t),
+               "wasmos_spawn_watch_desc_t is part of the PROC_IPC_SPAWN_WATCHED ABI");
+
 /* --- PCI device descriptor -------------------------------------------------
  *
  * What pci-bus publishes about one enumerated function. A descriptor in a

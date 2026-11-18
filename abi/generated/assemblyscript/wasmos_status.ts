@@ -58,6 +58,9 @@ export const WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: i32 = -0x00010008; // process c
 export const WASMOS_ERR_PROC_SPAWN_BROKER_IPC: i32 = -0x00010009; // broker plan IPC transport/reply failed
 export const WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: i32 = -0x0001000A; // broker replied with malformed/unsupported plan
 export const WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: i32 = -0x0001000B; // valid broker plan returned; PM launch step deferred
+export const WASMOS_ERR_PROC_SPAWN_BAD_DESC: i32 = -0x0001000C; // a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names
+export const WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: i32 = -0x0001000D; // the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child
+export const WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: i32 = -0x0001000E; // the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch
 export const WASMOS_ERR_PROC_PM_BUSY: i32 = -0x00020001; // PM already has an incompatible in-flight operation
 export const WASMOS_ERR_PROC_PM_BAD_ENDPOINT: i32 = -0x00020002; // source endpoint owner lookup failed
 export const WASMOS_ERR_PROC_PM_NO_CALLER: i32 = -0x00020003; // source endpoint owner has no live process
@@ -359,6 +362,9 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_SPAWN_BROKER_IPC: return "broker plan IPC transport/reply failed";
     case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: return "broker replied with malformed/unsupported plan";
     case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: return "valid broker plan returned; PM launch step deferred";
+    case WASMOS_ERR_PROC_SPAWN_BAD_DESC: return "a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names";
+    case WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: return "the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child";
+    case WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: return "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch";
     case WASMOS_ERR_PROC_PM_BUSY: return "PM already has an incompatible in-flight operation";
     case WASMOS_ERR_PROC_PM_BAD_ENDPOINT: return "source endpoint owner lookup failed";
     case WASMOS_ERR_PROC_PM_NO_CALLER: return "source endpoint owner has no live process";

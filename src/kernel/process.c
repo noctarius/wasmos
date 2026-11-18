@@ -908,6 +908,8 @@ static void process_reset_slot(process_t* proc) {
     proc->wait_target_pid = 0;
     proc->exit_status = 0;
     proc->exit_reason = PROC_EXIT_REASON_NONE;
+    proc->watch_ready = 0;
+    proc->watch_exit = 0;
     proc->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     proc->ticks_remaining = 0;
     proc->ticks_total = 0;
@@ -1287,6 +1289,14 @@ static void process_reap(process_t* proc) {
                                              proc->stack_pages);
         pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
     }
+    /* The spawner learns of the exit here, beside the hangups the context owes,
+     * with the same delivery guarantee. A READY still held was never earned. */
+    ipc_owed_cancel(__atomic_exchange_n(&proc->watch_ready, NULL, __ATOMIC_ACQ_REL));
+    ipc_owed_post(__atomic_exchange_n(&proc->watch_exit, NULL, __ATOMIC_ACQ_REL),
+                  proc->pid,
+                  (uint32_t)proc->exit_status,
+                  proc->exit_reason,
+                  0);
     if (proc->context_id != 0) {
         wasmos_subsystem_registry_drop_owner(proc->context_id);
         irq_release_context(proc->context_id);
@@ -1493,6 +1503,8 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->ctty = parent ? parent->ctty : 0;
     slot->exit_status = 0;
     slot->exit_reason = PROC_EXIT_REASON_NONE;
+    slot->watch_ready = 0;
+    slot->watch_exit = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -1699,6 +1711,8 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->ctty = 0;
     slot->exit_status = 0;
     slot->exit_reason = PROC_EXIT_REASON_NONE;
+    slot->watch_ready = 0;
+    slot->watch_exit = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -2118,8 +2132,9 @@ void process_block_on_ipc(process_t* process) {
 
 /* Latches the "child has announced itself" flag the sync-spawn poll waits on.
  * A latch, not an event: setting it twice is harmless and it is never cleared
- * for the life of the slot.  Does not wake or unblock anything by itself —
- * pm_poll_sync_spawn observes it on its next PM dispatch.
+ * for the life of the slot.  pm_poll_sync_spawn observes it on its next PM
+ * dispatch.  The one message it sends is the spawner's PROC_IPC_CHILD_READY for
+ * a watched child, on the first latch only: one targeted send to one endpoint.
  *
  * Deliberately does NOT broadcast. A waiter for "some named service is up" would
  * be woken by one, and that was tried: it puts cross-CPU wake traffic on a path
@@ -2132,6 +2147,23 @@ void process_notify_ready(process_t* process) {
         return;
     }
     process->ready = 1;
+    /* A process already exiting has not earned READY; its watch_ready is
+     * cancelled at reap instead. */
+    if (__atomic_load_n(&process->exiting, __ATOMIC_ACQUIRE)) {
+        return;
+    }
+    ipc_owed_post(
+        __atomic_exchange_n(&process->watch_ready, NULL, __ATOMIC_ACQ_REL), process->pid, 0, 0, 0);
+}
+
+int process_set_watch(uint32_t pid, struct ipc_owed* on_ready, struct ipc_owed* on_exit) {
+    process_t* proc = process_find_by_pid(pid);
+    if (!proc || proc->state == PROCESS_STATE_UNUSED || proc->watch_ready || proc->watch_exit) {
+        return -1;
+    }
+    proc->watch_ready = on_ready;
+    proc->watch_exit = on_exit;
+    return 0;
 }
 
 /* One step of a parent's wait for `target_pid`.  Tri-state, and the caller loops

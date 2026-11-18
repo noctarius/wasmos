@@ -337,6 +337,7 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg);

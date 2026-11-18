@@ -40,6 +40,9 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_SPAWN_BROKER_IPC` | -0x00010009 | broker plan IPC transport/reply failed |
 | `WASMOS_ERR_PROC_SPAWN_BROKER_PLAN` | -0x0001000A | broker replied with malformed/unsupported plan |
 | `WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED` | -0x0001000B | valid broker plan returned; PM launch step deferred |
+| `WASMOS_ERR_PROC_SPAWN_BAD_DESC` | -0x0001000C | a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names |
+| `WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED` | -0x0001000D | the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child |
+| `WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE` | -0x0001000E | the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch |
 
 ### `proc_pm` (domain 2) — non-path process-manager IPC failures (was PROC_PM_ERR_*)
 

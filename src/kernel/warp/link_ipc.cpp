@@ -91,7 +91,7 @@ uint32_t warp_ipc_select_one(uint32_t endpoint, void* ctx_) {
     for (;;) {
         process->block_reason = PROCESS_BLOCK_IPC;
         if (!process->ready && !process->require_explicit_ready) {
-            process->ready = 1;
+            process_notify_ready(process);
         }
 
         int rc = ipc_recv_blocking_for(context_id, endpoint, &slot->message);

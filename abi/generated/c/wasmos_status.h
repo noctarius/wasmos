@@ -79,6 +79,9 @@ enum {
     WASMOS_ERR_PROC_SPAWN_BROKER_IPC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 9), /* broker plan IPC transport/reply failed */
     WASMOS_ERR_PROC_SPAWN_BROKER_PLAN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 10), /* broker replied with malformed/unsupported plan */
     WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 11), /* valid broker plan returned; PM launch step deferred */
+    WASMOS_ERR_PROC_SPAWN_BAD_DESC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 12), /* a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names */
+    WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 13), /* the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child */
+    WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 14), /* the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch */
     WASMOS_ERR_PROC_PM_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 1), /* PM already has an incompatible in-flight operation */
     WASMOS_ERR_PROC_PM_BAD_ENDPOINT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 2), /* source endpoint owner lookup failed */
     WASMOS_ERR_PROC_PM_NO_CALLER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 3), /* source endpoint owner has no live process */
@@ -396,6 +399,9 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_SPAWN_BROKER_IPC: return "proc_spawn.BROKER_IPC";
     case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: return "proc_spawn.BROKER_PLAN";
     case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: return "proc_spawn.BROKER_DEFERRED";
+    case WASMOS_ERR_PROC_SPAWN_BAD_DESC: return "proc_spawn.BAD_DESC";
+    case WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: return "proc_spawn.NOTIFY_NOT_OWNED";
+    case WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: return "proc_spawn.WATCH_NO_SPACE";
     case WASMOS_ERR_PROC_PM_BUSY: return "proc_pm.BUSY";
     case WASMOS_ERR_PROC_PM_BAD_ENDPOINT: return "proc_pm.BAD_ENDPOINT";
     case WASMOS_ERR_PROC_PM_NO_CALLER: return "proc_pm.NO_CALLER";
@@ -647,6 +653,9 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_SPAWN_BROKER_IPC: return "broker plan IPC transport/reply failed";
     case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: return "broker replied with malformed/unsupported plan";
     case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: return "valid broker plan returned; PM launch step deferred";
+    case WASMOS_ERR_PROC_SPAWN_BAD_DESC: return "a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names";
+    case WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: return "the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child";
+    case WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: return "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch";
     case WASMOS_ERR_PROC_PM_BUSY: return "PM already has an incompatible in-flight operation";
     case WASMOS_ERR_PROC_PM_BAD_ENDPOINT: return "source endpoint owner lookup failed";
     case WASMOS_ERR_PROC_PM_NO_CALLER: return "source endpoint owner has no live process";

@@ -55,6 +55,10 @@ domains:
       - { name: BROKER_IPC,      description: "broker plan IPC transport/reply failed" }
       - { name: BROKER_PLAN,     description: "broker replied with malformed/unsupported plan" }
       - { name: BROKER_DEFERRED, description: "valid broker plan returned; PM launch step deferred" }
+      # Appended, never inserted: a code's value is its position.
+      - { name: BAD_DESC,         description: "a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names" }
+      - { name: NOTIFY_NOT_OWNED, description: "the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child" }
+      - { name: WATCH_NO_SPACE,   description: "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch" }
 
   proc_pm:
     id: 2

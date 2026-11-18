@@ -80,6 +80,7 @@
 #include "thread.h"
 #include "sched.h"
 #include "arch/x86_64/smp.h"
+#include "stubs_process_platform.h"
 
 /* ------------------------------------------------------------------ harness */
 
@@ -1447,7 +1448,6 @@ static void s_a_child_takes_its_parents_slot_at_spawn(void) {
  * These cases end the process through the dispatcher's real EXITED branch
  * (g_stub_exit_on_dispatch_pid), which is where a staged reason has to survive
  * process_mark_exited, and through process_kill. */
-extern uint32_t g_stub_exit_on_dispatch_pid;
 
 /* Dispatches on every CPU until `pid` is a zombie. Returns 1 once it is. */
 static int dispatch_until_zombie(uint32_t pid) {
@@ -1559,6 +1559,94 @@ static void s_a_kill_overrides_a_staged_exit_but_not_a_finished_one(void) {
     CHECK(process_get_exit_info(pid, &status, &reason) == -1, "a reaped pid has no exit info");
 }
 
+/* A watched spawn (PROC_IPC_SPAWN_WATCHED) hands process.c two reserved
+ * messages. What the spawner receives is decided here: CHILD_READY once, from
+ * the READY latch, and never for a child that ended first; CHILD_EXITED at reap,
+ * with the status and reason; nothing twice. The stub records each post and
+ * cancel (stubs_process_platform.h); the records are made-up tokens. */
+static char g_tok_ready;
+static char g_tok_exit;
+#define TOK_READY ((struct ipc_owed*)(void*)&g_tok_ready)
+#define TOK_EXIT ((struct ipc_owed*)(void*)&g_tok_exit)
+
+static uint32_t spawn_watched(const char* name) {
+    uint32_t pid = 0;
+    be_cpu(0);
+    if (process_spawn(name, idle_main, 0, &pid) != 0) {
+        return 0;
+    }
+    g_stub_owed_count = 0;
+    if (process_set_watch(pid, TOK_READY, TOK_EXIT) != 0) {
+        drop_transition_target(pid);
+        return 0;
+    }
+    return pid;
+}
+
+static void s_a_watched_child_reports_ready_once_then_its_exit(void) {
+    uint32_t pid = spawn_watched("watch-ready");
+    CHECK(pid != 0, "spawned a watched child");
+    if (!pid) {
+        return;
+    }
+    CHECK(process_set_watch(pid, TOK_READY, TOK_EXIT) != 0, "a second watch is refused");
+
+    process_notify_ready(process_get(pid));
+    process_notify_ready(process_get(pid));
+    CHECK(g_stub_owed_count == 1, "READY was posted exactly once");
+    CHECK(g_stub_owed_log[0].owed == TOK_READY && g_stub_owed_log[0].posted &&
+              g_stub_owed_log[0].arg0 == pid,
+          "READY names the child");
+
+    CHECK(process_kill(pid, 5) == 0, "the watched child was killed");
+    drop_transition_target(pid);
+    CHECK(g_stub_owed_count == 2, "the reap posted one more message");
+    CHECK(g_stub_owed_log[1].owed == TOK_EXIT && g_stub_owed_log[1].posted &&
+              g_stub_owed_log[1].arg0 == pid && g_stub_owed_log[1].arg1 == 5u &&
+              g_stub_owed_log[1].arg2 == PROC_EXIT_REASON_KILLED,
+          "EXITED carries pid, status and reason");
+}
+
+/* The child dies before it ever latches READY: the spawner hears only of the
+ * exit, and the READY record is given back rather than leaked. */
+static void s_a_child_that_dies_first_reports_only_its_exit(void) {
+    uint32_t pid = spawn_watched("watch-dies");
+    CHECK(pid != 0, "spawned a watched child");
+    if (!pid) {
+        return;
+    }
+    process_set_exit(process_get(pid), -11, PROC_EXIT_REASON_FAULTED);
+    g_stub_exit_on_dispatch_pid = pid;
+    CHECK(dispatch_until_zombie(pid), "the child exited");
+    g_stub_exit_on_dispatch_pid = 0;
+    /* A READY that arrives once the process is dying is not earned. */
+    process_notify_ready(process_get(pid));
+    CHECK(g_stub_owed_count == 0, "nothing is posted before the reap");
+
+    drop_transition_target(pid);
+    CHECK(g_stub_owed_count == 2, "the reap settled both records");
+    CHECK(g_stub_owed_log[0].owed == TOK_READY && !g_stub_owed_log[0].posted,
+          "the unearned READY was cancelled");
+    CHECK(g_stub_owed_log[1].owed == TOK_EXIT && g_stub_owed_log[1].posted &&
+              g_stub_owed_log[1].arg1 == (uint32_t)-11 &&
+              g_stub_owed_log[1].arg2 == PROC_EXIT_REASON_FAULTED,
+          "EXITED carries the fault");
+}
+
+/* An unwatched process posts and cancels nothing. */
+static void s_an_unwatched_process_owes_nothing(void) {
+    uint32_t pid = 0;
+    be_cpu(0);
+    if (process_spawn("watch-none", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned an unwatched process");
+        return;
+    }
+    g_stub_owed_count = 0;
+    process_notify_ready(process_get(pid));
+    drop_transition_target(pid);
+    CHECK(g_stub_owed_count == 0, "an unwatched process owes no message");
+}
+
 int main(void) {
     harness_init();
 
@@ -1579,6 +1667,9 @@ int main(void) {
     s_an_exit_publishes_the_reason_it_staged();
     s_an_exit_with_nothing_staged_is_exited();
     s_a_kill_overrides_a_staged_exit_but_not_a_finished_one();
+    s_a_watched_child_reports_ready_once_then_its_exit();
+    s_a_child_that_dies_first_reports_only_its_exit();
+    s_an_unwatched_process_owes_nothing();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

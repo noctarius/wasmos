@@ -114,7 +114,7 @@ m3ApiRawFunction(wasmos_ipc_select_one) {
          * first blocking IPC wait marks the process ready unless it requires
          * an explicit PROC_IPC_NOTIFY_READY handshake. */
         if (!process->ready && !process->require_explicit_ready) {
-            process->ready = 1;
+            process_notify_ready(process);
         }
         /* Use the blocking variant: sleeps in sched_event_wait until a message
          * arrives, then dequeues and returns IPC_OK.  Returns IPC_EMPTY only

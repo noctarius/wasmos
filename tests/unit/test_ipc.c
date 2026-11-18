@@ -2940,6 +2940,148 @@ static void test_a_pending_hangup_dies_with_its_destination(void) {
     ipc_endpoints_release_owner(service_ctx);
 }
 
+/* ---- Owed kernel messages (ipc_owed_*) ------------------------------------ *
+ * A watched spawn's CHILD_READY / CHILD_EXITED are reserved before the child
+ * exists and posted later, with the hangup guarantee: a supervisor that misses
+ * a child's exit never restarts it, and a supervisor is exactly the receiver
+ * most likely to be backed up when units die together. */
+
+static void test_an_owed_message_arrives_as_reserved_behind_earlier_traffic(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t ep = 0;
+    ipc_owed_t* owed = 0;
+    ipc_message_t m;
+
+    CHECK(ipc_endpoint_create(ctx, &ep) == IPC_OK, "the notify endpoint exists");
+    CHECK(ipc_owed_reserve(ep, 0x1234u, PROC_IPC_CHILD_EXITED, &owed) == IPC_OK && owed,
+          "a message is reserved");
+    CHECK(count_of(ep) == 0, "reserving queues nothing");
+    CHECK(ksend(ep, 1u) == IPC_OK, "ordinary traffic arrives first");
+    ipc_owed_post(owed, 7u, 8u, 9u, 10u);
+
+    CHECK(ipc_recv(ep, &m) == IPC_OK && m.type == 7u, "the earlier message comes first");
+    CHECK(ipc_recv(ep, &m) == IPC_OK && m.type == PROC_IPC_CHILD_EXITED, "then the owed one");
+    CHECK(m.source == 0x1234u && m.destination == ep && m.request_id == 0u,
+          "from the reserved source, to the reserved destination");
+    CHECK(m.arg0 == 7u && m.arg1 == 8u && m.arg2 == 9u && m.arg3 == 10u,
+          "carrying the posted arguments");
+    ipc_endpoints_release_owner(ctx);
+}
+
+static void test_every_owed_message_survives_a_full_queue(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t ep = 0;
+    ipc_owed_t* first = 0;
+    ipc_owed_t* second = 0;
+    ipc_message_t m;
+    uint32_t ordinary = 0, owed = 0, i;
+
+    CHECK(ipc_endpoint_create(ctx, &ep) == IPC_OK, "the notify endpoint exists");
+    CHECK(ipc_owed_reserve(ep, IPC_ENDPOINT_NONE, PROC_IPC_CHILD_READY, &first) == IPC_OK,
+          "the first message is reserved");
+    CHECK(ipc_owed_reserve(ep, IPC_ENDPOINT_NONE, PROC_IPC_CHILD_EXITED, &second) == IPC_OK,
+          "the second message is reserved");
+    for (i = 0; i < IPC_QUEUE_DEPTH; ++i) {
+        CHECK(ksend(ep, i) == IPC_OK, "the queue fills");
+    }
+    CHECK(ksend(ep, 99u) == IPC_ERR_FULL, "and refuses an ordinary sender");
+
+    ipc_owed_post(first, 1u, 0u, 0u, 0u);
+    ipc_owed_post(second, 2u, 0u, 0u, 0u);
+    while (ipc_recv(ep, &m) == IPC_OK) {
+        if (m.type == PROC_IPC_CHILD_READY || m.type == PROC_IPC_CHILD_EXITED) {
+            CHECK(m.arg0 == owed + 1u, "owed messages keep the order they were posted in");
+            owed++;
+            continue;
+        }
+        CHECK(owed == 0u, "an owed message never overtakes traffic queued before it");
+        ordinary++;
+    }
+    CHECK(ordinary == IPC_QUEUE_DEPTH, "every ordinary message is delivered");
+    CHECK(owed == 2u, "both owed messages arrive past the full queue");
+    ipc_endpoints_release_owner(ctx);
+}
+
+/* The spawner died before its child: the record is dropped, and nothing is owed
+ * to a fresh endpoint of the same context. */
+static void test_an_owed_message_to_a_dead_destination_is_dropped(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t ep = 0, fresh = 0;
+    ipc_owed_t* owed = 0;
+
+    CHECK(ipc_endpoint_create(ctx, &ep) == IPC_OK, "the notify endpoint exists");
+    CHECK(ipc_owed_reserve(ep, IPC_ENDPOINT_NONE, PROC_IPC_CHILD_EXITED, &owed) == IPC_OK,
+          "a message is reserved");
+    ipc_endpoints_release_owner(ctx);
+    ipc_owed_post(owed, 1u, 0u, 0u, 0u);
+    CHECK(ipc_endpoint_create(ctx, &fresh) == IPC_OK, "the context makes a new endpoint");
+    CHECK(count_of(fresh) == 0, "which is owed nothing");
+    ipc_endpoints_release_owner(ctx);
+}
+
+/* An endpoint id outlives its owner only as a number. If it is issued again to
+ * another context, the message reserved for the first must not reach the second:
+ * a stranger would read another supervisor's child dying. */
+static void test_an_owed_message_never_reaches_a_recycled_id(void) {
+    uint32_t spawner = fresh_ctx();
+    uint32_t stranger = fresh_ctx();
+    uint32_t ep = 0, again = 0;
+    ipc_owed_t* owed = 0;
+
+    CHECK(ipc_endpoint_create(spawner, &ep) == IPC_OK, "the notify endpoint exists");
+    CHECK(ipc_owed_reserve(ep, IPC_ENDPOINT_NONE, PROC_IPC_CHILD_EXITED, &owed) == IPC_OK,
+          "a message is reserved");
+    ipc_endpoints_release_owner(spawner);
+    ipc_test_set_next_endpoint_id(ep, 1);
+    CHECK(ipc_endpoint_create(stranger, &again) == IPC_OK && again == ep,
+          "another context is issued the same id");
+    ipc_owed_post(owed, 1u, 0u, 0u, 0u);
+    CHECK(count_of(again) == 0, "and receives nothing reserved for the first owner");
+    ipc_endpoints_release_owner(stranger);
+}
+
+static void test_owed_reservation_validates_its_destination(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t note = 0;
+    ipc_owed_t* owed = (ipc_owed_t*)(uintptr_t)1u;
+
+    CHECK(ipc_owed_reserve(IPC_ENDPOINT_NONE, 0u, PROC_IPC_CHILD_READY, &owed) == IPC_ERR_INVALID,
+          "no endpoint is refused");
+    CHECK(owed == 0, "and leaves no record");
+    CHECK(ipc_owed_reserve(0x7FFFFF00u, 0u, PROC_IPC_CHILD_READY, &owed) == IPC_ERR_NOENT,
+          "an unknown endpoint is refused");
+    CHECK(ipc_notification_create(ctx, &note) == IPC_OK, "a notification endpoint exists");
+    CHECK(ipc_owed_reserve(note, 0u, PROC_IPC_CHILD_READY, &owed) == IPC_ERR_UNSUPPORTED,
+          "a notification endpoint cannot carry a message");
+    CHECK(ipc_owed_reserve(note, 0u, PROC_IPC_CHILD_READY, 0) == IPC_ERR_INVALID,
+          "a NULL out param is refused");
+    ipc_owed_post(0, 1u, 2u, 3u, 4u);
+    ipc_owed_cancel(0);
+    ipc_endpoints_release_owner(ctx);
+}
+
+/* A supervisor restarts or gives up on a unit when it reads CHILD_EXITED, and
+ * counts it up on CHILD_READY. Either from a guest would let any process stop
+ * or restart a live service. */
+static void test_a_guest_cannot_send_a_child_event(void) {
+    uint32_t forger = fresh_ctx();
+    uint32_t svc = fresh_ctx();
+    uint32_t forger_ep = 0, svc_ep = 0;
+    ipc_message_t msg;
+
+    CHECK(ipc_endpoint_create(forger, &forger_ep) == IPC_OK, "the forger's endpoint exists");
+    CHECK(ipc_endpoint_create(svc, &svc_ep) == IPC_OK, "the supervisor's endpoint exists");
+    memset(&msg, 0, sizeof(msg));
+    msg.source = forger_ep;
+    msg.type = PROC_IPC_CHILD_EXITED;
+    CHECK(ipc_send_from(forger, svc_ep, &msg) == IPC_ERR_PERM, "a forged CHILD_EXITED is refused");
+    msg.type = PROC_IPC_CHILD_READY;
+    CHECK(ipc_send_from(forger, svc_ep, &msg) == IPC_ERR_PERM, "a forged CHILD_READY is refused");
+    CHECK(count_of(svc_ep) == 0, "and the supervisor sees neither");
+    ipc_endpoints_release_owner(forger);
+    ipc_endpoints_release_owner(svc);
+}
+
 static void test_error_code_contract(void) {
     struct {
         const char* what;
@@ -3213,6 +3355,17 @@ int main(void) {
         {"H7 a pending hangup dies with its destination",
          test_a_pending_hangup_dies_with_its_destination},
         {"H8 a hangup wakes a parked receiver", test_a_hangup_wakes_a_parked_receiver},
+        {"O1 an owed message arrives as reserved, behind earlier traffic",
+         test_an_owed_message_arrives_as_reserved_behind_earlier_traffic},
+        {"O2 every owed message survives a full queue",
+         test_every_owed_message_survives_a_full_queue},
+        {"O3 an owed message to a dead destination is dropped",
+         test_an_owed_message_to_a_dead_destination_is_dropped},
+        {"O4 an owed message never reaches a recycled id",
+         test_an_owed_message_never_reaches_a_recycled_id},
+        {"O5 owed reservation validates its destination",
+         test_owed_reservation_validates_its_destination},
+        {"O6 a guest cannot send a child event", test_a_guest_cannot_send_a_child_event},
     };
 
     ipc_init();

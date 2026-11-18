@@ -66,6 +66,9 @@ const (
 	WASMOS_ERR_PROC_SPAWN_BROKER_IPC int32 = -0x00010009 // broker plan IPC transport/reply failed
 	WASMOS_ERR_PROC_SPAWN_BROKER_PLAN int32 = -0x0001000A // broker replied with malformed/unsupported plan
 	WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED int32 = -0x0001000B // valid broker plan returned; PM launch step deferred
+	WASMOS_ERR_PROC_SPAWN_BAD_DESC int32 = -0x0001000C // a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names
+	WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED int32 = -0x0001000D // the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child
+	WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE int32 = -0x0001000E // the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch
 	WASMOS_ERR_PROC_PM_BUSY int32 = -0x00020001 // PM already has an incompatible in-flight operation
 	WASMOS_ERR_PROC_PM_BAD_ENDPOINT int32 = -0x00020002 // source endpoint owner lookup failed
 	WASMOS_ERR_PROC_PM_NO_CALLER int32 = -0x00020003 // source endpoint owner has no live process
@@ -425,6 +428,12 @@ func WasmosStrerror(c int32) string {
 		return "broker replied with malformed/unsupported plan"
 	case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED:
 		return "valid broker plan returned; PM launch step deferred"
+	case WASMOS_ERR_PROC_SPAWN_BAD_DESC:
+		return "a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names"
+	case WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED:
+		return "the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child"
+	case WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE:
+		return "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch"
 	case WASMOS_ERR_PROC_PM_BUSY:
 		return "PM already has an incompatible in-flight operation"
 	case WASMOS_ERR_PROC_PM_BAD_ENDPOINT:

@@ -93,6 +93,20 @@ static uint8_t g_idle_wait_failed = 0;
  * wanted, which loses VT_IPC_INPUT_NOTIFY pushes and replies carrying typed
  * characters. */
 static wasmos_sys_event_loop_t g_loop;
+/* Peers the shell needs before its first prompt (fs.vfs, devmgr.query, vt),
+ * awaited by name subscription so the shell may start before them. One that is
+ * not registered within CLI_PEER_AWAIT_MS stays unresolved (-1): fs and device
+ * commands then fail, and without vt the shell runs on serial. */
+#define CLI_PEER_AWAIT_MS 30000
+/* Park bound while awaiting, and so the precision of the await deadlines. */
+#define CLI_PEER_WAIT_MS 100
+static wasmos_sys_svc_watch_set_t g_watch_set;
+static wasmos_sys_svc_await_t g_await_fs;
+static wasmos_sys_svc_await_t g_await_devmgr;
+static wasmos_sys_svc_await_t g_await_vt;
+static wasmos_future_t* g_await_fs_future;
+static wasmos_future_t* g_await_devmgr_future;
+static wasmos_future_t* g_await_vt_future;
 /* Set by the INPUT_NOTIFY handler; the read path consumes it. */
 static int32_t g_input_notified = 0;
 static int32_t g_pending_req = -1;
@@ -2069,6 +2083,12 @@ static int cli_handle_line(void) {
     return 1;
 }
 
+/* Consumes the process manager's acknowledgement of NOTIFY_READY. */
+static void cli_on_ready_ack(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    (void)msg;
+}
+
 static void cli_fail_and_stall(const char* msg) {
     g_phase = CLI_PHASE_FAILED;
     console_write(msg);
@@ -2109,18 +2129,75 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
         (void)wasmos_ipc_select_add(g_idle_select, g_reply_endpoint);
         (void)wasmos_ipc_select_add(g_idle_select, g_vt_client_endpoint);
     }
-    g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "fs.vfs", 1, 64);
-    if (g_fs_endpoint < 0) {
-        g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "fs", 1, 64);
-    }
-    g_devmgr_endpoint =
-        wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "devmgr.query", 1, 64);
-    g_vt_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "vt", 2, 64);
     if (home_tty_arg >= 1 && home_tty_arg <= 3) {
         g_home_tty = home_tty_arg;
     } else {
         g_home_tty = 1;
     }
+    /* READY means the shell's endpoints exist; it is sent before any peer is
+     * awaited, because a spawner that waits for it (sysinit `start`) may be
+     * what is about to start that peer. */
+    if (wasmos_sys_intent_send(&g_loop,
+                               g_proc_endpoint,
+                               g_vt_client_endpoint,
+                               PROC_IPC_NOTIFY_READY,
+                               0,
+                               0,
+                               0,
+                               0,
+                               cli_on_ready_ack,
+                               0,
+                               0) != 0) {
+        console_write("[cli] ready notification failed\n");
+    }
+    if (wasmos_sys_svc_watch_set_init(&g_watch_set, &g_loop, g_proc_endpoint) != 0) {
+        cli_fail_and_stall("[cli] failed to set up peer awaits\n");
+    }
+    /* The loop parks on its own select set when its queue is empty; bounded
+     * while awaiting, so the await deadlines are checked even if no peer ever
+     * registers. */
+    g_loop.poll_timeout_ms = CLI_PEER_WAIT_MS;
+    g_await_fs_future =
+        wasmos_sys_svc_await_start(&g_watch_set, &g_await_fs, "fs.vfs", CLI_PEER_AWAIT_MS);
+    g_await_devmgr_future = wasmos_sys_svc_await_start(
+        &g_watch_set, &g_await_devmgr, "devmgr.query", CLI_PEER_AWAIT_MS);
+    g_await_vt_future =
+        wasmos_sys_svc_await_start(&g_watch_set, &g_await_vt, "vt", CLI_PEER_AWAIT_MS);
+    g_phase = CLI_PHASE_AWAIT_PEERS;
+}
+
+/* Settled endpoint of a peer await: the endpoint, or -1 (logged) when the name
+ * was not registered in time or the await could not be started. */
+static int32_t cli_peer_endpoint(const wasmos_future_t* future, const char* name) {
+    int32_t status = -1;
+    uintptr_t value = 0;
+    if (future && wasmos_future_poll(future, &status, &value) && status == 0) {
+        return (int32_t)value;
+    }
+    printf("[cli] %s unavailable (%d)\n", name, (int)status);
+    return -1;
+}
+
+static int cli_peer_settled(const wasmos_future_t* future) {
+    int32_t status = 0;
+    uintptr_t value = 0;
+    return !future || wasmos_future_poll(future, &status, &value);
+}
+
+/* Wait for the peer awaits, then finish bring-up and show the first prompt.
+ * Each step dispatches what arrived (the poll parks for at most
+ * CLI_PEER_WAIT_MS on an empty queue) and expires awaits past their deadline. */
+static void cli_phase_await_peers_step(void) {
+    if (!cli_peer_settled(g_await_fs_future) || !cli_peer_settled(g_await_devmgr_future) ||
+        !cli_peer_settled(g_await_vt_future)) {
+        (void)wasmos_sys_event_loop_poll(&g_loop, 4);
+        wasmos_sys_svc_watch_set_expire(&g_watch_set);
+        return;
+    }
+    g_loop.poll_timeout_ms = 0;
+    g_fs_endpoint = cli_peer_endpoint(g_await_fs_future, "fs.vfs");
+    g_devmgr_endpoint = cli_peer_endpoint(g_await_devmgr_future, "devmgr.query");
+    g_vt_endpoint = cli_peer_endpoint(g_await_vt_future, "vt");
     if (g_vt_endpoint >= 0 && cli_register_vt_writer() != 0) {
         console_write("[cli] vt writer register failed; serial fallback\n");
         g_vt_endpoint = -1;
@@ -2142,7 +2219,6 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
                   "<file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, "
                   "echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, tty -s <1-3>, halt, "
                   "reboot\n");
-    wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;
 }
 
@@ -2442,6 +2518,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     for (;;) {
         if (g_phase == CLI_PHASE_INIT) {
             cli_phase_init_step(proc_endpoint, home_tty_arg);
+            continue;
+        }
+
+        if (g_phase == CLI_PHASE_AWAIT_PEERS) {
+            cli_phase_await_peers_step();
             continue;
         }
 

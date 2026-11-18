@@ -7,6 +7,7 @@
 /* State-machine phases of the interactive CLI event loop. */
 typedef enum {
     CLI_PHASE_INIT = 0,
+    CLI_PHASE_AWAIT_PEERS, /* READY sent; waiting for fs.vfs, devmgr.query and vt */
     CLI_PHASE_PROMPT,
     CLI_PHASE_READ,
     CLI_PHASE_WAIT_IPC, /* blocked waiting for an IPC response */

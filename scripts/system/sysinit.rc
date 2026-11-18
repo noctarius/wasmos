@@ -14,8 +14,11 @@ if -f /boot/system/services/logger.wap then
     spawn /boot/system/services/logger.wap
 endif
 
+# gfxcomp, vt and cli follow their peers by name, so the services above and
+# below may start in any order.  The gfx apps still resolve "gfx" with a
+# one-shot retry loop of their own, hence the wait before them.
 if -f /boot/system/services/fontsvc.wap then
-    start /boot/system/services/fontsvc.wap
+    spawn /boot/system/services/fontsvc.wap
 endif
 
 spawn /boot/system/services/gfxcomp.wap

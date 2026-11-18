@@ -79,6 +79,7 @@ const c = @cImport({
     @cInclude("gfx_compositor_imports.h");
 });
 const sys = @import("libsys");
+const std = @import("std");
 
 // Native-ABI return codes and the sentinel for "no endpoint", mirroring the C
 // side; an endpoint field equal to IPC_ENDPOINT_NONE means unset, not endpoint 0.
@@ -88,9 +89,10 @@ const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
 // Seed for request ids this service originates.  Distinct per service so a
 // stray reply is attributable to its originator rather than being ambiguous.
 const GFX_REQUEST_BASE: u32 = 0x7000;
-// Yield-and-retry rounds spent looking up the "fb" service at startup; the
-// framebuffer driver may still be coming up.  Exhausting it is not fatal.
-const GFX_FB_LOOKUP_RETRIES: u32 = 2048;
+// Offset above GFX_REQUEST_BASE of the fixed request ids this service sends
+// synchronously (mode-switch queries); the loop's own intents draw from
+// GFX_REQUEST_BASE + 0x8000.
+const GFX_FIXED_REQ_OFFSET: u32 = 2048;
 // Fixed table sizes; each is a statically allocated array, so these are the hard
 // ceilings on the service.  Windows and buffers are separate objects with
 // separate lifetimes, which is why there are twice as many buffer slots as
@@ -115,10 +117,10 @@ const GFX_MAX_EVENTS: usize = 128;
 const GFX_MAX_GLYPH_CACHE: usize = 64;
 const GFX_MAX_GLYPH_BYTES: usize = 4096;
 const GFX_MAX_TITLE_LABEL: usize = 24;
-// The font service may not exist yet when the compositor starts, so title-font
-// setup is retried lazily from the idle path — but only on idle passes where the
-// housekeeping counter clears FONT_INIT_RETRY_MASK, i.e. one attempt per 64 idle
-// passes, and only while at least one window exists.  Retrying stops on the
+// The title font is opened lazily from the idle path once the font watch has
+// reported a provider, and again after a provider change — but only on idle
+// passes where the housekeeping counter clears FONT_INIT_RETRY_MASK, i.e. one
+// attempt per 64 idle passes, and only while at least one window exists.  Retrying stops on the
 // first success or on a hard failure, which leaves windows with untitled chrome.
 const FONT_INIT_RETRY_MASK: u32 = 0x3F;
 const TITLE_GLYPHS: []const u8 = "win 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ -_.";
@@ -210,9 +212,7 @@ var g_rng_state: u32 = 0xA5A5_5A5A;
 var g_damage_marker_logged: bool = false;
 var g_window_owner_deny_logged: bool = false;
 var g_buffer_owner_deny_logged: bool = false;
-var g_mouse_subscribed: bool = false;
 var g_idle_housekeeping_counter: u32 = 0;
-var g_total_handled_counter: u32 = 0;
 var g_runtime_lookup_req_id: u32 = GFX_REQUEST_BASE + 0x4000;
 var g_title_dbg_open_fail_logged: bool = false;
 var g_title_dbg_prime_fail_logged: bool = false;
@@ -353,6 +353,31 @@ var g_font_mask_cap: usize = 0;
 var g_event_head: usize = 0;
 var g_event_tail: usize = 0;
 var g_ipc_loop: sys.NativeEventLoop = undefined;
+// Peers are followed by name ("service-name watches" in wasmos/libsys.h): each
+// is used from the moment it registers, and again when a restarted provider
+// registers anew.  A peer's WASMOS_IPC_HANGUP drops its endpoint and forgets the
+// watch's last report, because a restarted provider can come back on its
+// predecessor's endpoint id.  Watch records are zero before their first start.
+var g_watch_set: sys.NativeSvcWatchSet = std.mem.zeroes(sys.NativeSvcWatchSet);
+var g_watch_fb: sys.NativeSvcWatch = std.mem.zeroes(sys.NativeSvcWatch);
+var g_watch_vt: sys.NativeSvcWatch = std.mem.zeroes(sys.NativeSvcWatch);
+var g_watch_mouse: sys.NativeSvcWatch = std.mem.zeroes(sys.NativeSvcWatch);
+var g_watch_font: sys.NativeSvcWatch = std.mem.zeroes(sys.NativeSvcWatch);
+// Request in flight to the fb (probe chain) and to the mouse (subscribe), 0 for
+// none; cancelled when that peer goes away so its intent slot is not stranded.
+var g_fb_request: u32 = 0;
+var g_mouse_request: u32 = 0;
+var g_mode_probe_next: u32 = 0;
+var g_mode_probe_count: u32 = 0;
+// A font provider change (bind or hangup) waits here for apply_font_peer_change
+// at the top of the main loop.  A bind can be dispatched inside the nested
+// reply wait of a synchronous font call, and swapping the endpoint or releasing
+// the lent buffers there would pull them from under that call.
+var g_font_change_pending: bool = false;
+var g_font_next_endpoint: u32 = IPC_ENDPOINT_NONE;
+// Set when the process manager refuses the "gfx" registration; the main loop
+// then returns -1.
+var g_register_failed: bool = false;
 
 fn api() *c.wasmos_driver_api_t {
     return g_api.?;
@@ -457,32 +482,226 @@ fn rand_u32() u32 {
     return x;
 }
 
-fn svc_register(name: []const u8, request_id: u32) i32 {
-    return sys.svcRegister(api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
+fn ipc_msg(raw: ?*const anyopaque) *const c.nd_ipc_message_t {
+    return @ptrCast(@alignCast(raw.?));
 }
 
-fn svc_lookup(name: []const u8, request_id: u32) i32 {
-    return sys.svcLookup(api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
+/// Send a request whose reply `on_reply` receives from the main loop.  Returns
+/// the request id, or 0 when the intent table is full or the send fails.
+fn send_intent(destination: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, on_reply: *const fn (?*anyopaque, ?*const anyopaque) callconv(.c) void) u32 {
+    var request_id: u32 = 0;
+    if (sys.intentSend(&g_ipc_loop, destination, g_gfx_endpoint, msg_type, arg0, arg1, arg2, arg3, on_reply, null, &request_id) != 0) {
+        return 0;
+    }
+    return request_id;
 }
 
-fn lookup_fb_endpoint() i32 {
-    g_fb_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "fb", GFX_REQUEST_BASE, GFX_FB_LOOKUP_RETRIES) orelse return -1;
-    return 0;
+/// Send a request whose reply this service does not use.  The reply matches no
+/// intent and no handler, so the loop drops it.  A full peer mailbox loses the
+/// request; each caller repeats it on the peer's next bind.
+fn send_oneway(destination: u32, msg_type: u32, arg0: u32) void {
+    var m: c.nd_ipc_message_t = undefined;
+    m.type = msg_type;
+    m.source = g_gfx_endpoint;
+    m.destination = destination;
+    m.request_id = g_runtime_lookup_req_id;
+    g_runtime_lookup_req_id +%= 1;
+    m.arg0 = arg0;
+    m.arg1 = 0;
+    m.arg2 = 0;
+    m.arg3 = 0;
+    if (api().ipc_send.?(ctxId(), destination, &m) != 0) {
+        logMsg("[gfx] peer request dropped\n");
+    }
 }
 
-fn lookup_vt_endpoint() i32 {
-    g_vt_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "vt", GFX_REQUEST_BASE + 0x100, GFX_FB_LOOKUP_RETRIES) orelse return -1;
-    return 0;
+fn cancel_intent(request_id: *u32) void {
+    if (request_id.* != 0) {
+        sys.intentCancel(&g_ipc_loop, request_id.*);
+        request_id.* = 0;
+    }
 }
 
-fn lookup_mouse_endpoint() i32 {
-    g_mouse_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "mouse", GFX_REQUEST_BASE + 0x1C0, GFX_FB_LOOKUP_RETRIES) orelse return -1;
-    return 0;
+fn on_register_reply(user: ?*anyopaque, raw: ?*const anyopaque) callconv(.c) void {
+    _ = user;
+    const msg = ipc_msg(raw);
+    if (msg.type != c.SVC_IPC_REGISTER_RESP or msg.arg0 != 0) {
+        logMsg("[gfx] register failed\n");
+        g_register_failed = true;
+        return;
+    }
+    // Ready only once "gfx" is registered, so a client the ready signal wakes
+    // can resolve the name.
+    api().proc_notify_ready.?();
 }
 
-fn lookup_font_endpoint() i32 {
-    g_font_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "font", GFX_REQUEST_BASE + 0x240, GFX_FB_LOOKUP_RETRIES) orelse return -1;
-    return 0;
+fn register_gfx_name() bool {
+    var args: [4]u32 = undefined;
+    sys.packName16("gfx", &args);
+    return send_intent(g_proc_endpoint, c.SVC_IPC_REGISTER_REQ, args[0], args[1], args[2], args[3], &on_register_reply) != 0;
+}
+
+// fb probes run as one chain (geometry, capabilities, then each mode in turn);
+// g_fb_request is the step in flight, cancelled when the fb goes away.
+fn on_fb_geometry(user: ?*anyopaque, raw: ?*const anyopaque) callconv(.c) void {
+    _ = user;
+    g_fb_request = 0;
+    if (ipc_msg(raw).type == c.FBTEXT_IPC_RESP) {
+        logMsg("[gfx] fb geometry cols/rows ok\n");
+    } else {
+        logMsg("[gfx] fb geometry probe failed\n");
+    }
+    g_fb_request = send_intent(g_fb_endpoint, c.FBTEXT_IPC_QUERY_CAPS_REQ, 0, 0, 0, 0, &on_fb_caps);
+}
+
+fn on_fb_caps(user: ?*anyopaque, raw: ?*const anyopaque) callconv(.c) void {
+    _ = user;
+    g_fb_request = 0;
+    logMsg("[test] gfx compositor handshake ok\n");
+    const msg = ipc_msg(raw);
+    if (msg.type != c.FBTEXT_IPC_RESP) return;
+    if ((msg.arg0 & c.FBTEXT_CAP_SET_RESOLUTION) == 0 or
+        (msg.arg0 & c.FBTEXT_CAP_QUERY_MODES) == 0 or
+        msg.arg1 == 0)
+    {
+        return;
+    }
+    logMsg("[gfx] fb mode-switch ipc available\n");
+    logHex32("[gfx] fb mode count=", msg.arg1);
+    g_mode_probe_count = if (msg.arg1 > 256) 256 else msg.arg1;
+    g_mode_probe_next = 0;
+    probe_next_fb_mode();
+}
+
+fn probe_next_fb_mode() void {
+    if (g_mode_probe_next >= g_mode_probe_count) return;
+    g_fb_request = send_intent(g_fb_endpoint, c.FBTEXT_IPC_QUERY_MODES_REQ, g_mode_probe_next, 0, 0, 0, &on_fb_mode);
+}
+
+fn on_fb_mode(user: ?*anyopaque, raw: ?*const anyopaque) callconv(.c) void {
+    _ = user;
+    g_fb_request = 0;
+    const msg = ipc_msg(raw);
+    if (msg.type != c.FBTEXT_IPC_RESP) return;
+    logModeResolution(msg.arg0, msg.arg1);
+    g_mode_probe_next += 1;
+    probe_next_fb_mode();
+}
+
+fn on_fb_bound(user: ?*anyopaque, watch: [*c]sys.NativeSvcWatch, endpoint: u32) callconv(.c) void {
+    _ = user;
+    _ = watch;
+    cancel_intent(&g_fb_request);
+    g_fb_endpoint = endpoint;
+    g_fb_request = send_intent(endpoint, c.FBTEXT_IPC_GEOMETRY_REQ, 0, 0, 0, 0, &on_fb_geometry);
+    if (g_fb_request == 0) logMsg("[gfx] fb geometry probe failed\n");
+    // A restarted fb starts with the overlay unlocked; claim it back while the
+    // compositor's slot is the visible one.
+    if (g_overlay_locked) fb_set_overlay_lock(true);
+}
+
+fn on_vt_bound(user: ?*anyopaque, watch: [*c]sys.NativeSvcWatch, endpoint: u32) callconv(.c) void {
+    _ = user;
+    _ = watch;
+    g_vt_endpoint = endpoint;
+    // A restarted vt has no slot-0 sink; once the compositor has claimed slot 0
+    // it claims it again from the new vt.
+    if (g_did_startup_switch) try_switch_to_gfx_tty();
+}
+
+fn on_mouse_subscribed(user: ?*anyopaque, raw: ?*const anyopaque) callconv(.c) void {
+    _ = user;
+    g_mouse_request = 0;
+    const msg = ipc_msg(raw);
+    if (msg.type != c.MOUSE_IPC_SUBSCRIBE_RESP or msg.arg0 != 0) {
+        logMsg("[gfx] mouse subscribe failed\n");
+    }
+}
+
+fn on_mouse_bound(user: ?*anyopaque, watch: [*c]sys.NativeSvcWatch, endpoint: u32) callconv(.c) void {
+    _ = user;
+    _ = watch;
+    cancel_intent(&g_mouse_request);
+    g_mouse_endpoint = endpoint;
+    g_mouse_request = send_intent(endpoint, c.MOUSE_IPC_SUBSCRIBE_REQ, 0, 0, 0, 0, &on_mouse_subscribed);
+    if (g_mouse_request == 0) logMsg("[gfx] mouse subscribe failed\n");
+}
+
+fn on_font_bound(user: ?*anyopaque, watch: [*c]sys.NativeSvcWatch, endpoint: u32) callconv(.c) void {
+    _ = user;
+    _ = watch;
+    g_font_next_endpoint = endpoint;
+    g_font_change_pending = true;
+}
+
+fn on_peer_watch_failed(user: ?*anyopaque, watch: [*c]sys.NativeSvcWatch, status: i32) callconv(.c) void {
+    _ = user;
+    _ = watch;
+    logHex32("[gfx] peer watch failed status=", @bitCast(status));
+}
+
+fn start_peer_watch(watch: *sys.NativeSvcWatch, name: [*:0]const u8, on_bind: sys.NativeSvcBindFn) void {
+    if (sys.svcWatchStart(&g_watch_set, watch, name, 0, on_bind, &on_peer_watch_failed, null) != 0) {
+        logMsg("[gfx] peer watch start failed\n");
+    }
+}
+
+/// WASMOS_IPC_HANGUP: `arg0` is the endpoint of a process that ended after
+/// sending to this service.  A peer's endpoint is dropped, its step in flight
+/// cancelled, and its watch told to report the next bind even on the same
+/// endpoint id.  The font provider change is deferred like a bind
+/// (apply_font_peer_change).  Client endpoints are left to
+/// cleanup_orphaned_state.
+fn handle_peer_hangup(msg: *const c.nd_ipc_message_t) void {
+    const ep = msg.arg0;
+    if (ep == IPC_ENDPOINT_NONE) return;
+    if (ep == g_fb_endpoint) {
+        cancel_intent(&g_fb_request);
+        g_fb_endpoint = IPC_ENDPOINT_NONE;
+        sys.svcWatchForget(&g_watch_fb);
+    }
+    if (ep == g_vt_endpoint) {
+        g_vt_endpoint = IPC_ENDPOINT_NONE;
+        sys.svcWatchForget(&g_watch_vt);
+    }
+    if (ep == g_mouse_endpoint) {
+        cancel_intent(&g_mouse_request);
+        g_mouse_endpoint = IPC_ENDPOINT_NONE;
+        sys.svcWatchForget(&g_watch_mouse);
+    }
+    if (ep == g_font_endpoint or ep == g_font_next_endpoint) {
+        if (!g_font_change_pending or g_font_next_endpoint == ep) {
+            g_font_next_endpoint = IPC_ENDPOINT_NONE;
+        }
+        g_font_change_pending = true;
+        sys.svcWatchForget(&g_watch_font);
+    }
+}
+
+fn release_font_buffers() void {
+    if (g_font_text_buffer_id != 0) _ = api().xfer_buffer_release.?(g_font_text_buffer_id);
+    g_font_text_buffer_id = 0;
+    g_font_text_borrow_id = 0;
+    g_font_text_ptr = null;
+    g_font_text_cap = 0;
+    if (g_font_mask_buffer_id != 0) _ = api().xfer_buffer_release.?(g_font_mask_buffer_id);
+    g_font_mask_buffer_id = 0;
+    g_font_mask_borrow_id = 0;
+    g_font_mask_ptr = null;
+    g_font_mask_cap = 0;
+}
+
+/// Switch to the font provider recorded by the last bind or hangup.  The lent
+/// buffers are granted to the old provider, so they are released (which revokes
+/// the grants) and re-lent to the new one on first use; the title font is
+/// reopened lazily by ensure_font_title_ready_lazy.
+fn apply_font_peer_change() void {
+    if (!g_font_change_pending) return;
+    g_font_change_pending = false;
+    release_font_buffers();
+    g_font_title_handle = 0;
+    g_font_endpoint = g_font_next_endpoint;
+    request_repaint_full();
 }
 
 fn open_title_font_handle() i32 {
@@ -502,14 +721,9 @@ fn open_title_font_handle() i32 {
 
 fn ensure_font_title_ready_lazy() void {
     if (g_font_title_handle != 0 or g_font_init_failed) return;
+    if (g_font_endpoint == IPC_ENDPOINT_NONE) return;
     if (active_window_count() == 0) return;
     if ((g_idle_housekeeping_counter & FONT_INIT_RETRY_MASK) != 0) return;
-    if (g_font_endpoint == IPC_ENDPOINT_NONE) {
-        const ep = svc_lookup("font", g_runtime_lookup_req_id);
-        g_runtime_lookup_req_id +%= 1;
-        if (ep < 0) return;
-        g_font_endpoint = @bitCast(ep);
-    }
     if (open_title_font_handle() != 0) {
         if (!g_title_dbg_open_fail_logged) {
             g_title_dbg_open_fail_logged = true;
@@ -519,21 +733,6 @@ fn ensure_font_title_ready_lazy() void {
     }
     request_repaint_full();
 }
-
-fn subscribe_mouse() i32 {
-    if (g_mouse_endpoint == IPC_ENDPOINT_NONE) return -1;
-    var reply: c.nd_ipc_message_t = undefined;
-    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 4;
-    if (ipc_call(g_mouse_endpoint, req_id, c.MOUSE_IPC_SUBSCRIBE_REQ, 0, 0, 0, 0, &reply) != 0) {
-        return -1;
-    }
-    if (reply.type != c.MOUSE_IPC_SUBSCRIBE_RESP or @as(i32, @bitCast(reply.arg0)) != 0) {
-        return -1;
-    }
-    g_mouse_subscribed = true;
-    return 0;
-}
-
 fn endpoint_alive(endpoint: u32) bool {
     if (endpoint == IPC_ENDPOINT_NONE) return false;
     if (api().ipc_endpoint_owner == null) return true;
@@ -592,24 +791,12 @@ fn cleanup_orphaned_state() void {
     }
 }
 
-fn refresh_input_subscriptions_runtime() void {
-    if (g_mouse_subscribed and !endpoint_alive(g_mouse_endpoint)) {
-        g_mouse_subscribed = false;
-        g_mouse_endpoint = IPC_ENDPOINT_NONE;
-    }
-
-    if (!g_mouse_subscribed) {
-        if (g_mouse_endpoint == IPC_ENDPOINT_NONE or !endpoint_alive(g_mouse_endpoint)) {
-            const ep = svc_lookup("mouse", g_runtime_lookup_req_id);
-            g_runtime_lookup_req_id +%= 1;
-            if (ep >= 0) g_mouse_endpoint = @bitCast(ep);
-        }
-        if (g_mouse_endpoint != IPC_ENDPOINT_NONE and subscribe_mouse() != 0) {
-            g_mouse_subscribed = false;
-        }
-    }
-}
-
+// TODO: the remaining synchronous request/reply sites (AGENTS.md) are the font
+// calls (open_title_font_handle, the measure/raster pairs behind the title
+// cache) and the display-mode switch (caps query + FBTEXT_IPC_SET_RESOLUTION_REQ
+// in the GFX_IPC_SET_DISPLAY_MODE handler).  Each waits here in a nested poll
+// that dispatches other messages re-entrantly, and a dead peer costs the full
+// ~5 s wait.  They belong in deferred replies driven from the main loop.
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
     return ipc_call_budgeted(destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, 1024);
 }
@@ -674,48 +861,6 @@ fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32
 
 fn font_ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
     return ipc_call_budgeted(destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, max_empty_polls);
-}
-
-fn log_fb_geometry_probe() void {
-    var reply: c.nd_ipc_message_t = undefined;
-    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 1;
-    if (ipc_call(g_fb_endpoint, req_id, c.FBTEXT_IPC_GEOMETRY_REQ, 0, 0, 0, 0, &reply) != 0) {
-        logMsg("[gfx] fb geometry probe failed\n");
-        return;
-    }
-    if (reply.type == c.FBTEXT_IPC_RESP) {
-        logMsg("[gfx] fb geometry cols/rows ok\n");
-    }
-}
-
-fn log_fb_capabilities_probe() void {
-    var reply: c.nd_ipc_message_t = undefined;
-    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 10;
-    if (ipc_call(g_fb_endpoint, req_id, c.FBTEXT_IPC_QUERY_CAPS_REQ, 0, 0, 0, 0, &reply) != 0) {
-        return;
-    }
-    if (reply.type != c.FBTEXT_IPC_RESP) {
-        return;
-    }
-    if ((reply.arg0 & c.FBTEXT_CAP_SET_RESOLUTION) != 0 and
-        (reply.arg0 & c.FBTEXT_CAP_QUERY_MODES) != 0 and
-        reply.arg1 != 0)
-    {
-        logMsg("[gfx] fb mode-switch ipc available\n");
-        logHex32("[gfx] fb mode count=", reply.arg1);
-        var idx: u32 = 0;
-        const mode_count = if (reply.arg1 > 256) 256 else reply.arg1;
-        while (idx < mode_count) : (idx += 1) {
-            var mode_reply: c.nd_ipc_message_t = undefined;
-            const mode_req_id: u32 = (GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 0x100) + idx;
-            if (ipc_call(g_fb_endpoint, mode_req_id, c.FBTEXT_IPC_QUERY_MODES_REQ, idx, 0, 0, 0, &mode_reply) != 0 or
-                mode_reply.type != c.FBTEXT_IPC_RESP)
-            {
-                break;
-            }
-            logModeResolution(mode_reply.arg0, mode_reply.arg1);
-        }
-    }
 }
 
 fn clamp_runtime_state_to_framebuffer() void {
@@ -795,15 +940,11 @@ fn ensure_backbuffer_capacity(required_bytes: u32) i32 {
     return c.WASMOS_ERR_NONE;
 }
 
+/// Ask the vt to show slot 0.  The first client to do so becomes slot 0's
+/// key/visibility sink (vt_types.h, "The tty slot model").
 fn try_switch_to_gfx_tty() void {
     if (g_vt_endpoint == IPC_ENDPOINT_NONE) return;
-    var reply: c.nd_ipc_message_t = undefined;
-    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 2;
-    if (ipc_call(g_vt_endpoint, req_id, c.VT_IPC_SWITCH_TTY, 0, 0, 0, 0, &reply) == 0 and
-        reply.type == c.VT_IPC_RESP)
-    {
-        logMsg("[gfx] switched to tty0 for compositor output\n");
-    }
+    send_oneway(g_vt_endpoint, c.VT_IPC_SWITCH_TTY, 0);
 }
 
 fn active_window_count() usize {
@@ -1504,9 +1645,7 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
 
 fn fb_set_overlay_lock(lock: bool) void {
     if (g_fb_endpoint == IPC_ENDPOINT_NONE) return;
-    var reply: c.nd_ipc_message_t = undefined;
-    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 9;
-    _ = ipc_call(g_fb_endpoint, req_id, c.FBTEXT_IPC_GFX_OVERLAY_REQ, if (lock) 1 else 0, 0, 0, 0, &reply);
+    send_oneway(g_fb_endpoint, c.FBTEXT_IPC_GFX_OVERLAY_REQ, if (lock) 1 else 0);
 }
 
 fn sync_console_mode_for_windows() void {
@@ -2242,15 +2381,6 @@ fn prime_title_glyph_step() void {
     _ = TITLE_GLYPHS;
 }
 
-fn init_title_glyph_cache_startup() void {
-    if (!GFX_TITLE_TEXT_ENABLED) return;
-    const ep = svc_lookup("font", g_runtime_lookup_req_id);
-    g_runtime_lookup_req_id +%= 1;
-    if (ep < 0) return;
-    g_font_endpoint = @bitCast(ep);
-    _ = open_title_font_handle();
-}
-
 fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
     _ = clip;
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return;
@@ -2829,7 +2959,7 @@ fn handle_set_display_mode(msg: *const c.nd_ipc_message_t) void {
     }
 
     var caps_reply: c.nd_ipc_message_t = undefined;
-    const caps_req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 11;
+    const caps_req_id: u32 = GFX_REQUEST_BASE + GFX_FIXED_REQ_OFFSET + 11;
     if (ipc_call(g_fb_endpoint, caps_req_id, c.FBTEXT_IPC_QUERY_CAPS_REQ, 0, 0, 0, 0, &caps_reply) != 0 or
         caps_reply.type != c.FBTEXT_IPC_RESP)
     {
@@ -2842,7 +2972,7 @@ fn handle_set_display_mode(msg: *const c.nd_ipc_message_t) void {
     }
 
     var mode_reply: c.nd_ipc_message_t = undefined;
-    const mode_req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 12;
+    const mode_req_id: u32 = GFX_REQUEST_BASE + GFX_FIXED_REQ_OFFSET + 12;
     if (ipc_call(g_fb_endpoint, mode_req_id, c.FBTEXT_IPC_SET_RESOLUTION_REQ, width, height, 0, 0, &mode_reply) != 0) {
         reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
@@ -3135,6 +3265,13 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_MOVE_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_WINDOW_TITLE, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_GET_WINDOW_TITLE, cb, null) != 0) return -1;
+    const hangup = struct {
+        fn onHangup(user: ?*anyopaque, msg_raw: ?*const anyopaque) callconv(.c) void {
+            _ = user;
+            handle_peer_hangup(ipc_msg(msg_raw));
+        }
+    }.onHangup;
+    if (sys.eventRegister(&g_ipc_loop, c.WASMOS_IPC_HANGUP, hangup, null) != 0) return -1;
     return 0;
 }
 
@@ -3146,18 +3283,21 @@ fn register_ipc_handlers() i32 {
 /// nothing — the proc endpoint comes from the spawn-info contract instead.
 ///
 /// Startup order: validate the ABI table, read spawn info, create the service
-/// endpoint and register its IPC handlers, publish the name "gfx", then look up
-/// the fb/vt/mouse peers, map the framebuffer, allocate the backbuffer, and
-/// finally signal readiness.  Registering "gfx" before proc_notify_ready is what
-/// makes a client woken by the ready signal able to find the service.  Missing
-/// peers are not fatal: without a framebuffer the compositor still serves
-/// requests, it just cannot draw.
+/// endpoint and register its IPC handlers, send the "gfx" registration, start
+/// the fb/vt/mouse/font watches, map the framebuffer and allocate the
+/// backbuffer, then run the loop.  Readiness is signalled from the
+/// registration's reply (on_register_reply), so a client woken by it can
+/// resolve "gfx".  No peer is awaited: each is used from its bind on, in any
+/// order, and the framebuffer mapping comes from the kernel, not from the fb
+/// driver.  Without a framebuffer the compositor still serves requests, it
+/// just cannot draw.
 ///
 /// Does not return in normal operation — it runs the event loop forever,
 /// blocking in ipc_wait when idle rather than spinning.  Returns -2 if the
 /// native ABI table does not match this build, and -1 for any other startup
 /// failure (no spawn info, endpoint or handler registration failure, name
-/// registration refused, backbuffer allocation failure) or an event-loop error.
+/// registration not sent or refused, backbuffer allocation failure) or an
+/// event-loop error.
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t) c_int {
     g_api = driver_api;
     if (driver_api.abi_magic != c.WASMOS_NATIVE_ABI_MAGIC or
@@ -3178,24 +3318,17 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t) c_int {
     sys.eventLoopInit(&g_ipc_loop, api(), g_gfx_endpoint, GFX_REQUEST_BASE + 0x8000);
     if (register_ipc_handlers() != 0) return -1;
 
-    if (svc_register("gfx", 1) != 0) {
+    if (sys.svcWatchSetInit(&g_watch_set, &g_ipc_loop, g_proc_endpoint) != 0) return -1;
+    if (!register_gfx_name()) {
         logMsg("[gfx] register failed\n");
         return -1;
     }
-
-    if (lookup_fb_endpoint() != 0) {
-        logMsg("[gfx] fb endpoint unavailable\n");
-    } else {
-        _ = lookup_vt_endpoint();
-        // Keyboard is routed through the vt (the compositor is the vt-0 key sink,
-        // registered when it takes vt-0); no direct keyboard-driver subscription.
-        if (lookup_mouse_endpoint() == 0) {
-            _ = subscribe_mouse();
-        }
-        log_fb_geometry_probe();
-        log_fb_capabilities_probe();
-        logMsg("[test] gfx compositor handshake ok\n");
-    }
+    start_peer_watch(&g_watch_fb, "fb", &on_fb_bound);
+    // Keyboard input is routed through the vt (the compositor is the slot-0 key
+    // sink once it takes slot 0); there is no keyboard-driver subscription.
+    start_peer_watch(&g_watch_vt, "vt", &on_vt_bound);
+    start_peer_watch(&g_watch_mouse, "mouse", &on_mouse_bound);
+    start_peer_watch(&g_watch_font, "font", &on_font_bound);
 
     if (refresh_framebuffer_mapping() == c.WASMOS_ERR_NONE) {
         const fb_bytes_u64: u64 = @as(u64, g_fb_info.framebuffer_stride) * @as(u64, g_fb_info.framebuffer_height) * 4;
@@ -3210,8 +3343,6 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t) c_int {
     } else {
         logMsg("[gfx] framebuffer borrow failed\n");
     }
-    init_title_glyph_cache_startup();
-    _ = api().proc_notify_ready.?();
 
     // Idle sleep bound: input notifies and client requests wake the wait
     // immediately; this only caps the sleep with nothing to do, so periodic
@@ -3219,16 +3350,11 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t) c_int {
     const GFX_IDLE_WAIT_MS: u32 = 100;
     while (true) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 32);
-        if (handled < 0) return -1;
+        if (handled < 0 or g_register_failed) return -1;
+        apply_font_peer_change();
         // Deliver any events the dispatched messages queued (input, focus,
         // resize, close) to their owner endpoints as GFX_IPC_PUSH_EVENT.
         flush_events();
-        if (handled > 0) {
-            g_total_handled_counter +%= @intCast(handled);
-            if ((g_total_handled_counter & 0xFF) == 0) {
-                refresh_input_subscriptions_runtime();
-            }
-        }
         if (handled == 0) {
             if (GFX_TITLE_TEXT_ENABLED) {
                 ensure_font_title_ready_lazy();

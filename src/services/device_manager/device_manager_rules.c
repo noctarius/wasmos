@@ -974,10 +974,14 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
             }
             continue;
         }
-        /* The supervisor's policy names, verbatim (SUPERVISOR_IPC_SUBMIT_REQ). */
-        if (extract_op_value(tok, "ENV{RESTART}", "=", restart, sizeof(restart)) == 0) {
-            if (strcmp(restart, "never") != 0 && strcmp(restart, "on-failure") != 0 &&
-                strcmp(restart, "always") != 0) {
+        /* The supervisor's policy names, verbatim (SUPERVISOR_IPC_SUBMIT_REQ). The
+         * key is recognised before its value is extracted, so a value that does
+         * not extract (unquoted, or longer than any policy name) rejects the
+         * line instead of leaving the driver unsupervised. */
+        if (strncmp(tok, "ENV{RESTART}", 12) == 0) {
+            if (extract_op_value(tok, "ENV{RESTART}", "=", restart, sizeof(restart)) != 0 ||
+                (strcmp(restart, "never") != 0 && strcmp(restart, "on-failure") != 0 &&
+                 strcmp(restart, "always") != 0)) {
                 return -1;
             }
             continue;

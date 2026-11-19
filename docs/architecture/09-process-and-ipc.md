@@ -39,6 +39,14 @@ called, or when a `WASMOS_SYSCALL_EXIT` syscall fires.  Zombie processes are
 explicitly reaped by a waiting parent (`process_wait`) or auto-reaped
 (`auto_reap = 1`) when no waiter exists.
 
+A process the system cannot run without is marked **critical**
+(`process_set_critical`). Its end, for any reason, logs `[kernel] critical
+process <name> (pid N) ended (...)` and panics with `critical_process_ended`
+from the exit path itself, so it does not depend on any other process running.
+Kernel init marks the supervisor, the one process whose death leaves nobody to
+act on a death ([Drivers and Services](15-drivers-and-services.md)). Critical
+*units* are the supervisor's policy, not this flag.
+
 ---
 
 ### Process Identity
@@ -60,8 +68,9 @@ process share the same `context_id` and address space.
 ### Process Ownership and Trust
 
 The kernel-owned `init` task (spawned by `kmain`) is the root parent for the
-first generation of kernel-started processes.  It spawns `device-manager` and
-waits for FAT readiness before loading `sysinit`.
+first generation of kernel-started processes.  It spawns the supervisor,
+fs-manager, fs-tmpfs, fs-init and device-manager from the initfs, then waits
+for fs-manager to report `/boot` mounted before loading `sysinit` from it.
 
 The process manager (`proc` endpoint) is the privileged mediator for all
 further process lifecycle operations.  It:
@@ -70,7 +79,9 @@ further process lifecycle operations.  It:
 - Assigns `io.port`, `irq.route`, `mmio.map`, `dma.buffer`, `system.control`
   grants per declared profile
 - Maintains the service registry (name → endpoint)
-- Enforces owner-context restrictions on wait, kill, and status
+- Enforces owner-context restrictions on wait, kill, and status. A
+  `PROC_IPC_KILL` is judged against its sender (`process_kill_for`), not the
+  PM: a parent may kill its own child, and nothing else
 
 ---
 
@@ -513,6 +524,10 @@ The process manager (PM) runs as a kernel-native C++ service.
 | `PROC_IPC_DMA_UNMAP_BORROW_REQ` | `0x232` | request      | Unmap a borrow handle                 |
 | `SVC_IPC_REGISTER_REQ`          | `0x220` | request      | Register a named service endpoint     |
 | `SVC_IPC_LOOKUP_REQ`            | `0x221` | request      | Look up a named service endpoint      |
+| `SVC_IPC_SUBSCRIBE_NAME_REQ`    | `0x226` | request      | Watch one service name for binds      |
+| `SVC_IPC_UNSUBSCRIBE_NAME_REQ`  | `0x227` | request      | Drop a name watch                     |
+| `SVC_IPC_UNSUBSCRIBE_CLASS_REQ` | `0x228` | request      | Drop a class subscription             |
+| `SVC_IPC_NAME_EVENT`            | `0x2A9` | notification | A watched name was bound              |
 | `PROC_IPC_RESP`                 | `0x280` | response     | Success response                      |
 | `PROC_IPC_ERROR`                | `0x2FF` | response     | General PM error                      |
 
@@ -593,6 +608,31 @@ that is gone, or whose id now belongs to another context, is dropped.
 The PM maintains a flat list of named services.  Names are capped at 16
 characters.  `SVC_IPC_REGISTER_REQ` / `SVC_IPC_LOOKUP_REQ` (opcodes
 `0x220`/`0x221`) register and resolve service endpoint IDs.
+
+##### Name Watches: await a dependency, never poll for it
+
+A service that needs another resolves it by **watching its name**, not by
+retrying a lookup. `SVC_IPC_SUBSCRIBE_NAME_REQ` takes a
+`svc_name_subscribe_desc_t` (notify endpoint, cookie, name) in the caller's own
+transfer buffer; from then on the PM pushes `SVC_IPC_NAME_EVENT` (`arg1=cookie
+arg2=endpoint arg3=pid`) to the notify endpoint whenever the name is *bound*:
+first registered, re-pointed by its owner, or claimed by a new owner after the
+previous one died. Subscribing does not replay an existing binding, so a watcher
+subscribes FIRST and looks the name up SECOND; the reverse order loses a
+registration that lands between the two. There is no unbind event: names are
+not removed, and a provider's death reaches the clients talking to it as
+`WASMOS_IPC_HANGUP`. The PM keeps no waiter table and no timers -- a dead
+subscriber's record is reclaimed when a bind would address it.
+
+libsys builds the client half on this (`wasmos_sys_svc_watch_*`,
+`wasmos_sys_svc_await_start`; native and Zig mirrors,
+[libsys](14-libsys-and-service-runtime.md)): a persistent watch per peer,
+deduplicated by endpoint, which a client keeps across a provider's restart and
+re-arms with `wasmos_sys_svc_watch_forget` on hangup, and a one-shot await with
+a timeout on top, failing with `WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT`. Because a
+dependency is awaited, a service registers and sends READY as soon as its own
+endpoint is live, and the order in which services start is not a correctness
+property: a request that needs a missing peer gets a deferred reply.
 
 ##### Class-Based Discovery (planned)
 

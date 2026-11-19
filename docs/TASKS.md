@@ -438,8 +438,6 @@ and `architecture/33-completion-ports.md`.
   capability-gated shutdown/cancel, acknowledgement, deadline-based escalation
   to `process_kill`, and event-loop safe points. No POSIX signal handlers or
   arbitrary asynchronous thread interruption.
-- [ ] [FEATURE][P2] Add asynchronous, capability-gated process-death watches for supervisors
-  and integrate them with the lifecycle-control event path.
 - [ ] [ENHANCEMENT][P2] Normalize request-id validity across WASM and native `libsys` (signed vs
   unsigned wire representation and the reserved invalid value).
 - [ ] [BUG][P1] Make console-backed libc `read`/`write` reject or chunk counts beyond the
@@ -548,6 +546,13 @@ and `architecture/33-completion-ports.md`.
      - fs_manager's nested synchronous `DEVMGR_QUERY_MOUNT_REQ` round-trip can
        deadlock (`src/services/fs_manager/fs_manager.c:608`; `architecture/09`
        synchronous-IPC section).
+     - fs_manager calls a backend synchronously as soon as it registers --
+       `fsmgr_pull_backend` (`fs_manager.c:883`), `fsmgr_ensure_mount_points`
+       (`:706`), `forward_request` (`:290`) -- while the PM reads every module it
+       spawns through fs-manager. Two cycles of this class have already hung a
+       boot (a mount reply that pulled the PM, an MKDIR into a backend still in a
+       synchronous READY); fs-fat and fs-wfs send READY without waiting since,
+       but fs-tmpfs still waits on it (`src/drivers/fs_tmpfs/fs_tmpfs.zig:879`).
      - the CLI's PM/FS/spawn paths still block on
        `wasmos_ipc_select_one(g_reply_endpoint)` (`cli.c` ~1111, ~1381, ~1404,
        ~2076), and `cli_register_vt_writer` / `cli_set_vt_mode` drain the VT
@@ -641,8 +646,72 @@ Source: `architecture/13-runtime-and-packaging.md`,
 - [ ] [FEATURE][P2] Finish service-class discovery lifecycle: enumeration,
   add/remove/death notifications, capability-gated registration, and consumer
   migration where class lookup removes hardwired provider names.
-- [ ] [FEATURE][P2] Add driver/service supervision, restart/reincarnation, and controlled
-  capability revoke/reissue on restart.
+- [ ] [FEATURE][P1] Quiesce a DMA-capable device before its driver is restarted, so
+  PCI and DMA drivers can be supervised (`architecture/15`, "Device-Manager
+  Design Direction"). A crashed driver may leave its device bus-mastering into
+  frames that are then recycled; before a replacement starts, Bus Master Enable
+  must be cleared through pci-bus, MSI/MSI-X vectors reclaimed
+  (`msi_vectors.c`), INTx unbound and DMA borrows revoked
+  (`architecture/12`). Until then the supervisor refuses DMA caps
+  (`WASMOS_ERR_SUPERVISOR_DMA_CAPS`) and virtio-rng, virtio-blk, virtio-net
+  and ata stay device-manager-spawned and unrestarted.
+- [ ] [FEATURE][P2] Operator stop, start and restart for supervised units. `svc kill`
+  is the only action, and its end counts as a failure. A stop must end a unit
+  without a restart and without counting it; a start or restart must clear a
+  `failed` unit and its intensity window, so an operator can bring back a unit
+  that gave up.
+- [ ] [FEATURE][P2] Tie a unit's lifetime to its submitter: retract a submitter's
+  units when it dies, and device-manager's when the device goes away (a
+  retraction is a stop, not a failure). Then carry `parent=<instance>` in a
+  submission, restart or notify dependents along `[deps]` `needs` when a unit
+  restarts, and mark the dependents of a `required` unit that gave up as
+  degraded rather than restarting them in a loop behind it.
+- [ ] [FEATURE][P2] Move the boot chain into the supervisor. Kernel init still spawns
+  fs-manager, fs-tmpfs, fs-init and device-manager itself
+  (`src/kernel/kernel_init_runtime.c`), so their deaths are unnamed: nothing
+  logs a critical unit or dumps the table. The supervisor should spawn them
+  from the initfs by module index as `critical` units, and kernel init shrink
+  to the PM and the supervisor.
+- [ ] [ENHANCEMENT][P2] Defer an `ENV{RESTART}` rule until the supervisor is bound
+  instead of spawning the driver directly and unsupervised
+  (`src/services/device_manager/device_manager.c:3439` `TODO`). The supervisor is
+  spawned before device-manager, so the fallback does not run on a normal boot,
+  but a driver that takes it is never restarted.
+- [ ] [ENHANCEMENT][P3] Opt the boot services into liveness probes. The mechanism is
+  in place (`PROC_READY_FLAG_LIVENESS`, the event loop answers), but no boot
+  service sends the flag, so a hung vt, logger or cli is never detected. Decide
+  per service; the risk is a false kill under MTTCG or a 1-CPU config, which is
+  what `supervisor.timescale` and `probe=` exist for.
+- [ ] [ENHANCEMENT][P3] Bound reboot loops under `supervisor.on_critical=reboot`: a
+  critical unit that dies on every boot reboots forever
+  (`src/services/supervisor/supervisor.c:223` `TODO`). Needs a boot counter that
+  survives the reboot, on the ESP or a WFS volume.
+- [ ] [TEST][P2] Exercise a keyboard and a mouse driver restart end to end. `svc
+  kill` of `rtc@acpi:0070` is covered (`tests/test_supervisor.py`), but the
+  harness types over serial, so the vt's and the compositor's rebind to a
+  restarted `kbd` / `mouse` provider is verified by reading the code only. Needs
+  PS/2 input injection through QEMU's monitor (`sendkey`) after the kill.
+- [ ] [TEST][P2] Boot with the start order permuted. Add a debug knob that reverses
+  or shuffles the non-critical spawns (the `service` lines of `sysinit.rc`, the
+  order of device-manager rules) and a battery that boots N times with different
+  seeds, asserting `[supervisor] boot complete` each time. Start order is not
+  supposed to be a correctness property (`architecture/03`, invariant 5); this
+  is the test that would show where it still is.
+- [ ] [CLEANUP][P2] Replace the remaining startup lookups that poll with name watches
+  (`wasmos_sys_svc_watch_*`, `architecture/09` "Name Watches"):
+  `wasmos_sys_svc_lookup_retry` and hand-rolled retry loops in font_service,
+  virtio_net, virtio_rng, virtio_blk, acpi_bus, pci_bus, ata, partition_manager,
+  volume_manager and the gfx apps (gfx_smoke, libui, calculator). Their bound is
+  a yield count, so how long they wait depends on CPU speed, and a provider that
+  registers late or restarts is missed. Once the gfx apps await `gfx`, drop the
+  `wait-svc gfx` line from `sysinit.rc`.
+- [ ] [CLEANUP][P2] Retire device-manager's READY-gated driver spawns
+  (`dm_spawn_sync_call`, `PROC_IPC_SPAWN_*_SYNC`) for watched spawns. They bring
+  drivers up one at a time, each blocking device-manager until the driver's
+  READY, and they are what keeps the PM's single sync-spawn slot in use.
+- [ ] [FEATURE][P3] Warn when a service looks up or awaits a name its `[deps]` do not
+  declare, so the declared graph stays honest. Route it to the kernel log, not
+  the serial console, which CLI tests read.
 
 
 - [ ] [BUG][P1] Bound `argc` in `wasm_driver_call` before marshalling. The wasm3 backend
@@ -1467,7 +1536,7 @@ tail.
 
 - [ ] [FEATURE][P3] Widen the orderly shutdown beyond WFS. The mechanism is in
   place -- `WASMOS_IPC_SHUTDOWN_REQ` / `_DONE`, the process manager's sequence in
-  reverse spawn order, the halt/reboot host calls in both runtimes -- and
+  `[deps]` order, the halt/reboot host calls in both runtimes -- and
   `fs-wfs` uses it to record `WFS_STATE_CLEAN`. What remains is other
   participants declaring `WASMOS_SVC_FLAG_WANTS_SHUTDOWN` when they gain state
   worth flushing: `fs-fat`'s dirty sectors and FSInfo free count are the known
@@ -2070,6 +2139,12 @@ Source: `architecture/25-diagnostics-status.md`,
 
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
+- [ ] [BUG][P2] Find why `test_app_churn` failed once on WARP SMP in a full CLI
+  battery: "run 11: date produced no result", with `date` parked on a private
+  endpoint after a PM `0x2a1` (`SVC_IPC_LOOKUP_RESP`). It passed 3/3 alone and
+  in later batteries. Not yet checked against `main`, so it is not attributed
+  to the supervisor work it was seen during; reproduce by looping the test on
+  `warp_smp` before changing anything.
 - [ ] [FEATURE][P2] Finish the toolchain SDK's remaining Stage 1 milestones
   (`docs/toolchain.md`): build `compiler-rt` builtins for wasm32 if a guest ever
   needs `__int128` — measured to be the ONLY shape that needs them, reaching eight

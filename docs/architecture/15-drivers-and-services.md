@@ -337,8 +337,8 @@ ready-wait even for service/driver kinds.
 - **Entry bindings:** `proc.endpoint`, `module.count`
 - **Resources:** 64 stack pages, 64 heap pages
 
-Coordinates early hardware startup in user space. Spawned first by the kernel
-`init` path. Manages four event loops:
+Coordinates early hardware startup in user space. Spawned by kernel init after
+fs-manager, fs-tmpfs and fs-init. Manages four event loops:
 
 | Event loop            | Endpoint variable          | Purpose                 |
 |-----------------------|----------------------------|-------------------------|
@@ -527,30 +527,154 @@ VT IPC opcodes:
 Input mode flags: `VT_INPUT_MODE_RAW=0`, `VT_INPUT_MODE_CANONICAL=1<<0`,
 `VT_INPUT_MODE_ECHO=1<<1`.
 
+#### `supervisor` — Service Supervisor
+
+- **Kind:** WASM service on the libsys event loop (`src/services/supervisor`)
+- **Registers:** `supervisor`
+- **Spawned by:** kernel init, from the initfs, right after the process manager
+- **Critical:** its own end is a kernel panic (see below)
+
+The supervisor owns one fact for every unit handed to it: *it should be
+running*. It spawns the unit, watches it, and restarts it or gives up on it by
+the unit's policy. Nobody else restarts anything: device-manager keeps matching
+devices to drivers and sysinit keeps reading its script, and both hand the
+result to the supervisor instead of growing restart logic of their own. Policy
+lives here, in user space; the kernel and the process manager supply only the
+mechanism -- watched spawns, exit reasons, kill (see
+[Process Model and IPC](09-process-and-ipc.md), "Watched Spawn").
+
+**It is a separate service, not sysinit**, for three reasons. It must exist
+before the first thing it supervises, and sysinit is read from `/boot` long
+after device-manager has started drivers. It must never block, and sysinit is
+a script runner whose commands wait. And sysinit is not a second bootstrap
+coordinator (doc 03, invariant 1): it stays a client that turns `sysinit.rc`
+into submissions.
+
+**Units.** A unit is submitted with `SUPERVISOR_IPC_SUBMIT_REQ` as one spec
+line, in a descriptor the submitter owns and lends READ:
+
+```
+<unit> <path> [restart=never|on-failure|always] [class=optional|required|critical]
+              [tty=<slot>] [probe=<seconds>] [-- <args>]
+```
+
+A unit name is `template` or `template@instance`. The instance key names what
+the unit serves -- a tty (`cli@tty1`), a device (`rtc@acpi:0070`) -- and is
+derived from it, never allocated, so a restarted instance keeps its name. The
+descriptor may carry a capability descriptor (I/O windows, IRQ lines), which
+every spawn of the unit carries. A unit that asks for DMA is refused
+(`WASMOS_ERR_SUPERVISOR_DMA_CAPS`): a crashed driver may leave its device
+bus-mastering into frames that are recycled, and nothing quiesces the device
+before a restart. The table holds `SUPERVISOR_UNITS_MAX` units.
+
+**Lifecycle.** Every spawn is a `PROC_IPC_SPAWN_WATCHED` whose notify
+endpoint is the supervisor's own, one in flight at a time, so the spawn reply
+precedes every event of the child. A unit moves through
+
+```
+spawn-due -> spawning -> starting --READY--> running --stable--> stable
+                            |                    |                  |
+                            +------ end ---------+------------------+--> by policy:
+                                                                        spawn-due (restart)
+                                                                        stopped | failed
+```
+
+and `stopping` once the supervisor has killed it. The policy
+(`supervisor_unit.c`, host-tested) is plain data and decides every transition:
+
+- **Failure** is any end other than a clean exit with status 0, judged by the
+  exit reason (`PROC_EXIT_REASON_*`), and any end of an instance the
+  supervisor killed. `on-failure` (the default) restarts failures only,
+  `always` restarts every end, `never` none.
+- **READY** means the unit's endpoint is live, nothing more. A unit with no
+  READY within `ready_timeout_ms` (10 s) is killed, as a failure.
+- **Stable** is READY plus `stable_ms` (10 s) survived, plus one liveness probe
+  answered when the unit is probed. Only a stable run resets the backoff.
+- **Backoff** before a restart starts at 250 ms, doubles, and is capped at
+  30 s.
+- **Restart intensity** is a sliding window: the fifth counted end within
+  60 s gives up and the unit is `failed`, with one log line naming it and its
+  last end. A stable run does not wipe the window; old ends age out of it.
+- Every number is multiplied by kenv `supervisor.timescale` (1-100), which
+  slow configurations raise instead of tuning each timeout.
+
+**Liveness.** A unit opts in by naming its event-loop endpoint in its READY
+(`PROC_READY_FLAG_LIVENESS`). The supervisor sends `WASMOS_IPC_HEALTH_REQ` to it
+every probe period (`probe=<s>`, default 10 s), one at a time, and the event loop
+itself answers ([libsys](14-libsys-and-service-runtime.md)), so a loop parked in
+a nested receive or stuck in a handler does not. A probe still unanswered when
+the next one is due is a miss; three in a row and the unit is killed, a failure
+like any other. Liveness is only "the loop turns": a unit waiting for its
+dependencies is healthy, and is never killed for it.
+
+**Classes.** `optional` (the default) and `required` units are restarted by
+their policy; a required one also holds the boot milestone. A `critical` unit
+is never restarted: its first end logs `[supervisor] critical unit <unit> died
+(...)`, dumps the unit table to the kernel log, and runs the orderly shutdown,
+then halts -- or reboots, with kenv `supervisor.on_critical=reboot`. A halt is
+the default because it keeps the evidence. The supervisor itself is a critical
+process in the kernel's sense (`process_set_critical`, set by kernel init): its
+end is a kernel panic naming it, since nobody is left to run a shutdown.
+
+**Boot milestone.** sysinit sends `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` when its
+script has run; the units held then are the boot set. When every required or
+critical one is *up* -- READY, and a probe answered when probed; not stable,
+which would add 10 s to every boot -- the supervisor logs `[supervisor] boot
+complete at <ms> ms: <n> required units up` once, or `[supervisor] boot
+failed: required unit <unit> ...` when one fails first. This line, not "the
+shell printed a prompt", is what the test harness waits for.
+
+**Operator view.** `SUPERVISOR_IPC_LIST_REQ` writes one
+`wasmos_supervisor_unit_record_t` per unit into a buffer the caller owns.
+`SUPERVISOR_IPC_KILL_REQ` kills a unit's running instance by name; the end is
+a failure and the policy applies. The `svc` utility wraps them: `svc submit
+<spec>`, `svc list`, `svc status <unit>`, `svc kill <unit>`.
+
+**Clients rebind; endpoints are not preserved.** A restarted unit is a new
+process with a new endpoint, registered under the same name. Its clients see
+`WASMOS_IPC_HANGUP` from the old one and rebind through a name watch (the vt
+for `kbd`, the compositor for `mouse`), or look the name up per request (`date`
+for the clock). Endpoint identity across a restart would preserve nothing a
+client could use: open files, borrows and sessions are gone with the old
+process either way.
+
+| Opcode | Value | Meaning |
+|---|---|---|
+| `SUPERVISOR_IPC_SUBMIT_REQ` | `0x1000` | Hand a unit over; answered once recorded, before it is spawned |
+| `SUPERVISOR_IPC_LIST_REQ` | `0x1001` | Write the unit table into the caller's buffer |
+| `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` | `0x1002` | The boot set is complete |
+| `SUPERVISOR_IPC_KILL_REQ` | `0x1003` | Kill a unit's instance; its end is a failure |
+
+Not built: operator stop/start/restart that does not count as a failure;
+retraction of a submitter's units when it dies; restart cascade along `[deps]`
+`needs`; liveness for the boot services; quiescing a DMA device so a DMA
+driver can be supervised; a guard against reboot loops under
+`on_critical=reboot`. They are tracked in `docs/TASKS.md`.
+
 #### `sysinit` — Late-Boot Service Launcher
 
-- **Kind:** WASM service
+- **Kind:** WASM service on the libsys event loop
 - **Entry bindings:** `proc.endpoint`
 
-Intentionally narrow: reads and executes `/boot/system/sysinit.rc`, a simple
-script interpreted by the `wasmos_script` engine. Current script:
+Intentionally narrow: reads `/boot/system/sysinit.rc` and runs it with the
+`wasmos_script` engine, resumably, from its event loop. The script hands the
+long-running services to the supervisor:
 
 ```
-spawn /boot/apps/chardevc.wap
-start /boot/system/services/vt.wap
-exec /boot/system/utils/mkdir.wap -p /var/log
-if -f /boot/system/services/logger.wap then
-    spawn /boot/system/services/logger.wap
-endif
-if -f /boot/system/services/fontsvc.wap then
-    start /boot/system/services/fontsvc.wap
-endif
-spawn /boot/system/services/gfxcomp.wap
-start /boot/system/services/cli.wap
+service <unit> <path> [restart=...] [class=...] [tty=<slot>] [-- args]
 ```
 
-`start` spawns synchronously (waits for `PROC_IPC_NOTIFY_READY` or 30-second
-timeout). `spawn` spawns asynchronously (no wait).
+finds the supervisor by name watch, and continues once the unit is accepted --
+not once it is up -- so no line waits for a service. `spawn` starts a process
+without supervising it (the gfx apps, chardevc), `exec` runs one to its end
+(`mkdir -p /var/log`), and `wait-svc <name>` waits, bounded, for a name to be
+registered. At the end of the script sysinit sends
+`SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` and stays parked on its event loop.
+
+Every service the script starts follows its peers by name, so the order of the
+`service` lines is not a correctness property. Kernel init spawns sysinit once
+fs-manager reports `/boot` mounted (`FSMGR_IPC_MOUNT_WAIT_REQ`), the one real
+precondition: its image lives there.
 
 #### `logger` — Kernel Log to `/var/log/messages`
 
@@ -632,10 +756,20 @@ Recognized keys:
 | `ATTR{function}` | pci        | Function number (hex)                  |
 | `ATTR{unit}`     | block      | Unit number (decimal) or `"any"`       |
 | `ENV{MOUNT}`     | block      | Mount alias for filesystem rule        |
+| `ENV{RESTART}`   | acpi       | `never`, `on-failure` or `always`: hand the driver to the supervisor |
 | `RUN+=`          | All        | Driver/service path to spawn           |
 
 Wildcards: `ATTR{class}` etc. that are absent default to `MATCH_ANY_U8=0xFF`
 or `MATCH_ANY_U16=0xFFFF`. Unknown or malformed lines are skipped silently.
+
+An ACPI rule with `ENV{RESTART}` is not spawned by device-manager: it is
+submitted to the supervisor as the unit `<template>@acpi:<io base>`
+(`rtc@acpi:0070`), with the rule's arguments and the I/O and IRQ grants a
+direct spawn would carry, and the supervisor's reply retires the rule. Any
+other value rejects the line rather than running the driver unsupervised. The
+shipped rules set `on-failure` for rtc, keyboard and mouse, which hold no state
+a restart loses and use no DMA. A rule without the key spawns directly, as
+does one whose submission cannot be sent because no supervisor is bound yet.
 
 #### Shipped Rule Files
 
@@ -663,36 +797,31 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", RUN+="system/d
 ### Bootstrap Startup Chain
 
 ```
-kernel init
-  └─ spawn device-manager (initfs module index)
-       ├─ spawn pci-bus   (initfs module, io.port 0xCF8–0xCFF)
-       │    └─ publishes PCI device records → device-manager.inventory
-       │    └─ DEVMGR_PCI_SCAN_DONE
-       ├─ spawn acpi-bus  (initfs module, mmio.map)
-       │    └─ publishes ISA/PNP device records → device-manager.inventory
-       │    └─ DEVMGR_ACPI_SCAN_DONE
-       ├─ [pci match rule] spawn ata  (PCI class 0x01/0x01)
-       │    └─ registers "block" endpoint
-       │    └─ DEVMGR_PUBLISH_BLOCK_DEVICE → device-manager.inventory
-       ├─ [block rule, unit=0] spawn fs-fat  (mount=/boot)
-       │    └─ boot_mount_ready = 1
-       │    └─ queues boot-FAT "always-spawn" rules
-       ├─ [boot-FAT rules loaded] spawn fs-manager
-       │    └─ registers "fs.vfs" endpoint
-       ├─ [boot-FAT rules] spawn framebuffer_pci, serial, keyboard, mouse, rtc, virtio-serial, virtio-rng
-       └─ PROC_IPC_NOTIFY_READY (to kernel, once boot_mount_ready + rules_boot_loaded)
+kernel init (initfs module indexes)
+  ├─ process-manager            (kernel-hosted)
+  ├─ supervisor                 (marked critical)
+  ├─ fs-manager                 registers "fs.vfs"
+  ├─ fs-tmpfs                   the tmpfs root; mount points are its directories
+  ├─ fs-init                    the initfs listing
+  └─ device-manager
+       ├─ pci-bus, acpi-bus     publish device records -> devmgr.inv
+       ├─ initfs rules          ata, fs-fat mount=/boot, net-stack, ...
+       └─ /boot rules           drivers spawned directly, or (ENV{RESTART})
+                                submitted to the supervisor as units
 
-kernel init (after device-manager NOTIFY_READY)
-  └─ spawn sysinit  (from /boot via fs.vfs)
-       └─ executes /boot/system/sysinit.rc
-            ├─ spawn  chardevc.wap
-            ├─ start  vt.wap
-            ├─ exec   mkdir.wap -p /var/log
-            ├─ spawn  logger.wap   (if present)
-            ├─ start  fontsvc.wap  (if present)
-            ├─ spawn  gfxcomp.wap
-            └─ start  cli.wap
+kernel init (once fs-manager answers FSMGR_IPC_MOUNT_WAIT_REQ for /boot)
+  └─ sysinit                    from /boot
+       └─ /boot/system/sysinit.rc
+            ├─ service vt, logger, fontsvc, gfxcomp, cli@tty1  -> supervisor
+            ├─ spawn chardevc and the gfx apps; exec mkdir -p /var/log
+            └─ SUPERVISOR_IPC_BOOT_SUBMITTED_REQ  -> "[supervisor] boot complete"
 ```
+
+Kernel init waits for exactly one thing: `/boot` mounted, because sysinit's
+image is on it. It subscribes to `fs.vfs`, sends the mount wait to fs-manager,
+and panics with `init_no_boot_mount` if no answer comes within 60 s of
+device-manager's spawn. device-manager's READY says its rules were loaded; it
+is not a milestone anyone waits on.
 
 ---
 
@@ -710,6 +839,7 @@ kernel init (after device-manager NOTIFY_READY)
 | `font`          | `font-service`   | Font rasterization                         |
 | `gfx`           | `gfx-compositor` | Graphics compositor                        |
 | `vt`            | `vt`             | Virtual terminal multiplexer               |
+| `supervisor`    | `supervisor`     | Unit submission, list and kill             |
 
 ---
 
@@ -721,17 +851,22 @@ rule-engine and in-memory device registry. The planned direction (from
 
 - **Bus-agnostic discovery.** PCI and ACPI already publish normalized records.
   USB and virtual providers follow the same contract.
-- **Supervised driver lifecycle.** Crashed drivers should be detected, stale
-  endpoints revoked, and replacements spawned. Endpoint identity preservation
-  across restart is the required primitive.
+- **Supervised driver lifecycle.** device-manager matches; the supervisor
+  restarts. A rule names a restart policy and device-manager submits the
+  driver as a unit (see "Rule Syntax", `ENV{RESTART}`). Clients rebind by name
+  on hangup; endpoint identity is not preserved across a restart (see the
+  supervisor). DMA-capable drivers need a quiesce step -- Bus Master Enable
+  cleared, MSI/MSI-X vectors reclaimed, INTx unbound, DMA borrows revoked --
+  before a replacement may start, and until it exists they stay
+  device-manager-spawned.
 - **Dynamic mount policy.** Mount assignments as rule outcomes, not
   compile-time constants. `fs-manager` remains the namespace router.
 - **Unified block-device identity.** All transports normalize to
   `block:<parent-address>:<unit>` canonical IDs.
 
-What is **not yet implemented**: driver liveness monitoring and restart,
-hotplug event pipeline, endpoint identity preservation across restarts,
-IRQ bind/unbind delegation to driver endpoints.
+What is **not yet implemented**: supervision of PCI and DMA drivers (the
+quiesce step), liveness probes for drivers, retraction of a unit on device
+removal (hotplug), IRQ bind/unbind delegation to driver endpoints.
 
 DMA-specific design details are tracked in `docs/architecture/12-dma-transfers.md`.
 
@@ -763,13 +898,17 @@ dependencies alive while it quiesces: `fs-wfs` writes its superblock through the
 block driver, which needs the ATA driver. Shutdown therefore runs in reverse
 dependency order.
 
-- **Reverse spawn order** supplies that order at no cost and is correct by
-  construction wherever startup order is a valid dependency order. `pid` is
-  monotonic and never reused within a boot, so descending pid IS reverse spawn
-  order. It brings `fs-wfs` down before the block driver beneath it.
-- **Declared dependencies** in `linker.metadata` are the eventual replacement,
-  and are what a supervised lifecycle (see the device-manager direction above)
-  needs anyway. Nothing requires them yet.
+- **Declared dependencies** decide it. Each participant comes before every
+  participant it needs, directly or through processes that are not
+  participants themselves. "Needs" are the `[deps]` `needs` records in each
+  `.wap` ([Runtime and Packaging](13-runtime-and-packaging.md)), resolved to the
+  processes holding the named service or class (`shutdown_order.c`,
+  host-tested). The PM logs the result, `[pm] shutdown: order N: <name> (pid)`.
+- **Reverse spawn order** breaks ties: among participants free to go next the
+  highest pid goes first, and a cycle of needs is broken the same way. `pid` is
+  monotonic and never reused within a boot, so descending pid is reverse spawn
+  order. Start order is not a dependency order once units start concurrently,
+  which is why it is only the tie-break.
 
 **Participation is opt-in**, declared as `WASMOS_SVC_FLAG_WANTS_SHUTDOWN` in the
 `flags` field of `svc_register_desc_t`. The service registry supplies both the
@@ -815,8 +954,8 @@ Per-participant obligations:
 | `fs-fat` | flush any dirty sector and the FSInfo free count -- not declared yet, tracked in `docs/TASKS.md` |
 | everything else | does not declare the flag, and is not notified |
 
-The block drivers beneath `fs-wfs` need no obligation: reverse spawn order brings
-the filesystem down first, and its last write has completed before it answers, so
+The block drivers beneath `fs-wfs` need no obligation: the filesystem goes
+down first, and its last write has completed before it answers, so
 there is nothing in flight by the time the drivers would be asked.
 
 The WFS obligation subsumes what was a separate gap: the superblock's

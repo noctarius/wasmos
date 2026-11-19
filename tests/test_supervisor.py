@@ -294,6 +294,47 @@ class SupervisorTests(unittest.TestCase):
         out = _svc(self, self.session, "kill no-such-unit")
         self.assertIn("svc: no unit of that name", out)
 
+    def test_9b_a_killed_vt_brings_the_shell_back(self):
+        # Runs last in this session: the vt carries the console the harness
+        # types into, so everything after it runs against the restarted pair.
+        #
+        # Regression: 2026-11-19-cli-keeps-a-dead-vt -- the shell awaited "vt"
+        # once and kept its endpoint, so after the supervisor restarted the vt
+        # the console shell wrote to and read from an endpoint nobody served:
+        # no prompt, no input, until reboot.
+        # The vt carries svc's own output, so its answer and the old shell's
+        # next prompt may never reach the console; the kernel log tells.
+        # Every prompt after the command's echo is the restarted shell's.
+        mark = self.session.send_command("svc kill vt", timeout_s=20)
+        steps = [
+            "[supervisor] vt kill requested; killing pid",
+            "[supervisor] vt ended (killed",
+            "[supervisor] cli@tty1 ended",
+        ]
+        log = _syslog_wait(self.session, steps[-1], 30)
+        self.assertTrue(
+            log,
+            "the console shell did not end with its vt.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        at = [log.find(step) for step in steps]
+        self.assertNotIn(-1, at, f"a step is missing: {dict(zip(steps, at))}")
+        self.assertEqual(at, sorted(at), f"out of order: {dict(zip(steps, at))}")
+
+        # The restarted shell answers through the restarted vt.
+        self.assertTrue(
+            self.session.expect_from(mark, b"wamos> ", timeout_s=60),
+            f"no prompt after the vt restart.\n--- tail ---\n{self.session.tail()}\n",
+        )
+        start = self.session.send_command("echo vt-came-back", timeout_s=20)
+        self.assertTrue(
+            self.session.expect_from(start, b"vt-came-back", timeout_s=30),
+            f"the restarted shell did not answer.\n--- tail ---\n{self.session.tail()}\n",
+        )
+        out = _svc(self, self.session, "status vt")
+        self.assertRegex(out, r"vt: (running|stable), pid [1-9][0-9]*")
+        self.assertIn("restarts: 1", out)
+
     def test_4_a_duplicate_unit_is_refused(self):
         start = self.session.send_command(
             f"svc submit probe-once {PROBE} -- crash probe-dup", timeout_s=20

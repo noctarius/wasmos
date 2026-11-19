@@ -684,6 +684,20 @@ static void cli_on_input_notify(void* user, const wasmos_ipc_message_t* msg) {
     g_input_notified = 1;
 }
 
+/* The vt this shell writes to and reads from has ended. Its session -- the writer
+ * registration, raw input mode -- went with it, and the shell holds no way to
+ * rebuild it in place, so it exits, as a failure: the supervisor (cli@tty1,
+ * restart=always) or the vt that spawned it starts a fresh shell, which awaits
+ * the vt's successor like any shell at bring-up. A hangup from any other peer is
+ * not the terminal's and changes nothing here. */
+static void cli_on_hangup(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (!msg || g_vt_endpoint < 0 || msg->arg0 != g_vt_endpoint) {
+        return;
+    }
+    (void)wasmos_proc_exit(WASMOS_PEER_GONE);
+}
+
 /* Anything the pump cannot match to a pending request or a registered push is
  * reported rather than dropped, so lost input is visible instead of silent.
  * One line per message, and only the first 8 are printed. */
@@ -2119,6 +2133,7 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
      * pump; sharing before then would move the input loss into them. */
     wasmos_sys_event_loop_init(&g_loop, g_vt_client_endpoint, 0xC000);
     (void)wasmos_sys_event_register(&g_loop, VT_IPC_INPUT_NOTIFY, cli_on_input_notify, 0);
+    (void)wasmos_sys_event_register(&g_loop, WASMOS_IPC_HANGUP, cli_on_hangup, 0);
     (void)wasmos_sys_event_set_default(&g_loop, cli_on_unclaimed, 0);
     g_proc_endpoint = proc_endpoint;
     /* Idle park over both endpoints.  The park keeps its timeout as a
@@ -2225,10 +2240,25 @@ static void cli_phase_await_peers_step(void) {
 /* Block until input (a VT_IPC_INPUT_NOTIFY push) or a reply arrives on one of
  * the CLI's endpoints, or CLI_IDLE_WAIT_MS elapses.  The caller must not treat
  * this as a poll: on the normal path it parks the thread. */
+/* Dispatches the pushes queued on the vt endpoint -- VT_IPC_INPUT_NOTIFY, and
+ * the vt's WASMOS_IPC_HANGUP, which ends the shell. Only a vt request pumps the
+ * loop otherwise, and once the vt is gone no request gets as far as the pump:
+ * the hangup would stay queued, keep the idle wait from parking, and the read
+ * step would spin on it. Bounded to 1 ms, because the loop's own park is
+ * untimed after bring-up and an empty queue would otherwise stop the shell
+ * there. */
+static void cli_pump_pushes(void) {
+    int32_t saved = g_loop.poll_timeout_ms;
+    g_loop.poll_timeout_ms = 1;
+    (void)wasmos_sys_event_loop_poll(&g_loop, 4);
+    g_loop.poll_timeout_ms = saved;
+}
+
 static void cli_idle_wait(void) {
     if (g_idle_select >= 0) {
         int32_t rc = wasmos_ipc_select_wait_timeout(g_idle_select, CLI_IDLE_WAIT_MS);
         if (wasmos_sys_wait_parked(rc)) {
+            cli_pump_pushes();
             return;
         }
         /* Said once, not per iteration: a wait that cannot be performed does not

@@ -1318,6 +1318,9 @@ static void process_reap(process_t* proc) {
         msi_release_context(proc->context_id);
         ipc_endpoints_release_owner(proc->context_id);
         native_driver_release_owner(proc->context_id);
+        /* Before the buffers go: the kernel writes into the console ring by
+         * physical address, and the ring is one of them. */
+        klog_release_ring(proc->context_id);
         xfer_buffer_drop_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);
     }

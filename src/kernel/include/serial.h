@@ -128,6 +128,13 @@ void* serial_console_ring_ptr(void);
  * success or a packed error (see the definition in serial.c). */
 int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_endpoint);
 
+/* Drops the console ring registration when owner_context_id is its owner; any
+ * other context changes nothing. The kernel holds the ring by physical address
+ * without a pin, so the owner's teardown calls this BEFORE its transfer buffers
+ * are released: afterwards console text goes straight to COM1, as before any vt
+ * registered, until a successor registers a ring of its own. */
+void klog_release_ring(uint32_t owner_context_id);
+
 /* Deliver a pending klog doorbell, if any.  Runs from the scheduler loop, not
  * from the logging path: serial_write can run under a lock, in interrupt context
  * and during a panic, so it may not send IPC.  A no-op when no ring, no doorbell

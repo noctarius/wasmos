@@ -643,7 +643,10 @@ is device-manager); this is tracked in `docs/TASKS.md` as a P1.
 process with a new endpoint, registered under the same name. Its clients see
 `WASMOS_IPC_HANGUP` from the old one and rebind through a name watch (the vt
 for `kbd`, the compositor for `mouse`), or look the name up per request (`date`
-for the clock). Endpoint identity across a restart would preserve nothing a
+for the clock). A client whose session cannot be rebuilt in place ends with
+its provider instead: a shell whose vt hangs up exits with `WASMOS_PEER_GONE`,
+and the supervisor (`cli@tty1`, `restart=always`) or the new vt starts a fresh
+one. Endpoint identity across a restart would preserve nothing a
 client could use: open files, borrows and sessions are gone with the old
 process either way.
 

@@ -338,6 +338,18 @@ linked feature documents for rationale and rollout plans.
   their own (vt and gfxcomp through name watches on hangup; `date` per run).
   `tests/test_supervisor.py` kills `rtc@acpi:0070` with `svc kill`, sees a new
   instance come up with its I/O grant, and reads the clock through it.
+- The vt is restartable: `svc kill vt` brings back the vt and, behind it, the
+  console shell. The kernel drops the console-ring registration when its owner
+  is reaped (`klog_release_ring`); it used to keep writing console text into
+  the dead vt's freed transfer-buffer frames. A shell exits with
+  `WASMOS_PEER_GONE` on its vt's hangup and is restarted, and it dispatches
+  pushes from its idle wait, so a queued hangup no longer leaves it spinning
+  on its read step. A name bind a subscriber's full queue refused is retried
+  on each PM dispatch (`service_name_watch_retry_pending`), and an
+  `ENV{RESTART}` value that does not extract rejects its rule. Shutdown
+  ordering asks the class registry about each process
+  (`service_class_registry_provided_by`) instead of copying the first eight
+  providers.
 - Boot milestone: when sysinit.rc has run to its end, sysinit sends
   `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` (finding the supervisor by name if no
   `service` line did), and the units the supervisor then holds are the boot

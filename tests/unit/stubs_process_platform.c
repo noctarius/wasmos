@@ -14,8 +14,9 @@
  *   - Paging/mm/pfa: report success and hand back plausible non-zero values, so
  *     a spawn does not fail for want of an address space. Nothing here records
  *     mappings, so no test may assert on them.
- *   - Runtime teardown hooks (warp/wasm3/xfer_buffer/msi/irq/subsystem): a reap
- *     calls all of them; none has state a lifecycle test observes.
+ *   - Runtime teardown hooks (warp/wasm3/xfer_buffer/msi/irq/subsystem/the
+ *     console ring): a reap calls all of them; none has state a lifecycle test
+ *     observes.
  *   - The owed-message calls (ipc_owed_post / _cancel) and a pid the inert
  *     context switch reports as exited are recorded instead; see
  *     stubs_process_platform.h.
@@ -187,6 +188,9 @@ void xfer_buffer_drop_context(uint32_t context_id) {
 }
 void native_driver_release_owner(uint32_t context_id) {
     (void)context_id;
+}
+void klog_release_ring(uint32_t owner_context_id) {
+    (void)owner_context_id;
 }
 void wasmos_subsystem_registry_drop_owner(uint32_t context_id) {
     (void)context_id;

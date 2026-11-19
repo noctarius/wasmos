@@ -915,10 +915,13 @@ pub const PCI_IPC_ERROR: i32 = 0xDFF;
 // system (0xFF02..0xFF85)
 /// The system is going down; quiesce and answer WASMOS_IPC_SHUTDOWN_DONE.
 /// arg0 = reason (0 = halt, 1 = reboot), arg1..arg3 reserved (0).
-/// Sent by the process manager to every registered driver and service in
-/// REVERSE spawn order, so a participant still has the services beneath it
-/// while it quiesces (docs/architecture/15-drivers-and-services.md,
-/// "Orderly Shutdown Design Direction").
+/// Sent by the process manager, one at a time, to every registered driver
+/// and service that declared WASMOS_SVC_FLAG_WANTS_SHUTDOWN: each before
+/// everything it NEEDS by its manifest's [deps], directly or through
+/// processes that are not participants, so a participant still has the
+/// services beneath it while it quiesces; otherwise in reverse spawn order
+/// (docs/architecture/15-drivers-and-services.md, "Orderly Shutdown
+/// Design Direction"; src/kernel/include/shutdown_order.h).
 /// A participant that does not answer within the deadline is passed over
 /// and the machine still goes down, which is safe because of what the
 /// notification exists to do: a filesystem that misses it mounts read-only

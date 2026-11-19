@@ -3909,6 +3909,7 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           -iquote ${DRIVER_WASM_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
           ${KERNEL_DIR}/process_manager_shutdown.c
+          ${KERNEL_DIR}/shutdown_order.c
           -o ${BUILD_DIR}/test_pm_shutdown
   COMMAND ${BUILD_DIR}/test_pm_shutdown
   # Filling a caller-supplied name buffer: the clamp, and which length is
@@ -4192,6 +4193,14 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_service_name_watch
   COMMAND ${BUILD_DIR}/test_service_name_watch
+  # The orderly shutdown's notification order: pure, over a needs graph.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_shutdown_order.c
+          ${KERNEL_DIR}/shutdown_order.c
+          -o ${BUILD_DIR}/test_shutdown_order
+  COMMAND ${BUILD_DIR}/test_shutdown_order
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running host kernel unit tests"
   VERBATIM

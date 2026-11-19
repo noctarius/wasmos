@@ -13,8 +13,9 @@
  * "[pm] shutdown: begin" (COM2, written directly, showed "[fs-wfs] unmounted
  * clean" and "complete"), and test_wfs_clean_unmount failed on 6 of 10 CI runs.
  *
- * process_manager_shutdown.c is linked alone; the timer, IPC, process table,
- * service list, klog, power control and the console-ring query are fakes here.
+ * process_manager_shutdown.c is linked with shutdown_order.c only; the timer,
+ * IPC, process table, service list, class registry, app parser, klog, power
+ * control and the console-ring query are fakes here.
  */
 
 #include <setjmp.h>
@@ -26,6 +27,8 @@
 #include "ipc.h"
 #include "process.h"
 #include "process_manager_internal.h"
+#include "service_class_registry.h"
+#include "wasmos_app.h"
 #include "system_control.h"
 
 static int g_failures;
@@ -105,6 +108,32 @@ void* list_first(list_t* list, list_iter_t* iter) {
 void* list_next(list_iter_t* iter) {
     (void)iter;
     return 0;
+}
+
+/* Nothing the dependency order reads exists here: no app slots, no class
+ * providers, no image to parse. With no participants it orders nothing. */
+process_t* process_get(uint32_t pid) {
+    (void)pid;
+    return 0;
+}
+
+uint32_t service_class_registry_lookup(const char* class_name, service_class_provider_t* out,
+                                       uint32_t max) {
+    (void)class_name;
+    (void)out;
+    (void)max;
+    return 0;
+}
+
+int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t* out_desc) {
+    (void)blob;
+    (void)blob_size;
+    (void)out_desc;
+    return -1;
+}
+
+void klog_printf(const char* fmt, ...) {
+    (void)fmt;
 }
 
 __attribute__((noreturn)) void kernel_system_poweroff(void) {

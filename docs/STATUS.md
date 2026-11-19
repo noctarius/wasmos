@@ -1747,7 +1747,12 @@ linked feature documents for rationale and rollout plans.
   mount its log holds nothing to replay (§15). Without it every volume ever
   written stayed DIRTY for life and walked an empty log on every later mount.
   The mechanism is `WASMOS_IPC_SHUTDOWN_REQ` / `_DONE` and a process-manager
-  sequence in reverse spawn order; participation is opt-in via
+  sequence that tells each participant before everything it NEEDS by its
+  manifest's `[deps]` -- resolved through the name and class registries, and
+  through processes that are not participants -- and otherwise in reverse spawn
+  order (`shutdown_order.c`, host-tested in `test_shutdown_order`; the needs are
+  read from the image each app slot keeps until reap). The order is logged as
+  `[pm] shutdown: order <n>: <name> (pid N)`. Participation is opt-in via
   `WASMOS_SVC_FLAG_WANTS_SHUTDOWN`, because the sequence is sequential and a
   participant with nothing to persist would spend a deadline saying so. See
   `docs/architecture/15-drivers-and-services.md`, "Orderly Shutdown".

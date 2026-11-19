@@ -630,6 +630,15 @@ shell printed a prompt", is what the test harness waits for.
 a failure and the policy applies. The `svc` utility wraps them: `svc submit
 <spec>`, `svc list`, `svc status <unit>`, `svc kill <unit>`.
 
+**Access is not checked yet.** Any process can submit a unit or kill one: the
+supervisor does not look at who sends a request. A submission's I/O and IRQ
+grants reach the process manager as the supervisor's own watched spawn, and the
+process manager does not check the requester of any caps-carrying spawn
+either -- the window narrows what the module's manifest declares, but whoever
+asks chooses the window. Submitting and killing must become capability-gated,
+and grants must be accepted only from a submitter entitled to them (today that
+is device-manager); this is tracked in `docs/TASKS.md` as a P1.
+
 **Clients rebind; endpoints are not preserved.** A restarted unit is a new
 process with a new endpoint, registered under the same name. Its clients see
 `WASMOS_IPC_HANGUP` from the old one and rebind through a name watch (the vt

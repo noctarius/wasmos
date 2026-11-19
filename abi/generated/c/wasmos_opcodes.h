@@ -430,7 +430,7 @@ enum {
     FS_IPC_ERROR = 0x4FF,
 };
 
-/* fs_manager (0x420..0x4A4) */
+/* fs_manager (0x420..0x4A5) */
 enum {
     /* fs-manager -> backend pull: report kind/fs-type/mount/device into a
      * buffer the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
@@ -556,11 +556,34 @@ enum {
      * appears when the backend registers.
      */
     FSMGR_IPC_MOUNT_REQ = 0x424,
+    /* Answer once a mount exists at a path: a milestone from the owner of
+     * the mount table. The request is a wasmos_fsmgr_mount_wait_desc_t in a
+     * transfer buffer the caller owns and has lent READ to fs-manager:
+     * arg0=buffer_id arg1=offset arg2=size. fs-manager copies the path out
+     * at once, so the caller may release the buffer after the reply.
+     *
+     * The reply, FSMGR_IPC_MOUNT_WAIT_RESP arg0=0, is DEFERRED: it is sent
+     * when a backend serving exactly that mount path registers, or at once
+     * if one already has. A mount exists from the moment its backend
+     * registers, whoever started it -- a device-manager rule (the boot
+     * volume) or FSMGR_IPC_MOUNT_REQ. There is no timeout here: the caller
+     * bounds its own wait. A waiter whose endpoint's process ends is
+     * dropped.
+     *
+     * Refusals (FS_IPC_ERROR): WASMOS_ERR_FS_BUFFER when the descriptor
+     * cannot be read, WASMOS_ERR_FS_BAD_ARGS for a wrong version or a path
+     * length past FSMGR_MOUNT_WAIT_PATH_MAX, WASMOS_ERR_FS_NOT_ABSOLUTE for
+     * a relative path, WASMOS_ERR_FS_NO_CLIENT_SLOT when every waiter slot
+     * is taken.
+     */
+    FSMGR_IPC_MOUNT_WAIT_REQ = 0x425,
     FSMGR_IPC_BACKEND_INFO_RESP = 0x4A0,
     FSMGR_IPC_CLONE_CWD_RESP = 0x4A1,
     FSMGR_IPC_QUERY_MOUNTS_RESP = 0x4A2,
     FSMGR_IPC_UNMOUNT_RESP = 0x4A3,
     FSMGR_IPC_MOUNT_RESP = 0x4A4,
+    /* arg0 = 0: a mount exists at the path that was waited for. */
+    FSMGR_IPC_MOUNT_WAIT_RESP = 0x4A5,
 };
 
 /* fbtext (0x600..0x6FF) */
@@ -1410,11 +1433,13 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x422: return "FSMGR_IPC_QUERY_MOUNTS_REQ";
         case 0x423: return "FSMGR_IPC_UNMOUNT_REQ";
         case 0x424: return "FSMGR_IPC_MOUNT_REQ";
+        case 0x425: return "FSMGR_IPC_MOUNT_WAIT_REQ";
         case 0x4A0: return "FSMGR_IPC_BACKEND_INFO_RESP";
         case 0x4A1: return "FSMGR_IPC_CLONE_CWD_RESP";
         case 0x4A2: return "FSMGR_IPC_QUERY_MOUNTS_RESP";
         case 0x4A3: return "FSMGR_IPC_UNMOUNT_RESP";
         case 0x4A4: return "FSMGR_IPC_MOUNT_RESP";
+        case 0x4A5: return "FSMGR_IPC_MOUNT_WAIT_RESP";
         default: return "UNKNOWN";
         }
     case WASMOS_OPCODE_SUBSYS_FBTEXT:

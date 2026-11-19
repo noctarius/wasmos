@@ -90,6 +90,18 @@ class SupervisorTests(unittest.TestCase):
             log, r"\[supervisor\] boot complete at \d+ ms: 3 required units up"
         )
         self.assertEqual(log.count("[supervisor] boot complete"), 1)
+        # Kernel init spawns sysinit on fs-manager's word that /boot is
+        # mounted, so the one spawn reads it: no failed read, no retry.
+        #
+        # Regression: 2026-11-19-fsmgr-mount-reply-pulls-pm -- with sysinit no
+        # longer waiting for device-manager, its spawns overlap the mounts
+        # device-manager still makes, and a read timed out after 15 s: on a
+        # mount driver's spawn reply fs-manager asked the PM, synchronously,
+        # for the backend class, while the PM was waiting for fs-manager to
+        # answer its read of the next module. Each waited on the other until
+        # the PM gave up, and gfx_smoke never started.
+        self.assertEqual(log.count("[init] /boot is mounted; spawning sysinit"), 1)
+        self.assertNotIn("[pm] spawn_path fs read failed", log)
         for line in log.splitlines():
             if line.startswith("[supervisor] boot complete"):
                 continue

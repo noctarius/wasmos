@@ -379,7 +379,7 @@ pub const FS_IPC_RESP: i32 = 0x480;
 pub const FS_IPC_STREAM: i32 = 0x481;
 pub const FS_IPC_ERROR: i32 = 0x4FF;
 
-// fs_manager (0x420..0x4A4)
+// fs_manager (0x420..0x4A5)
 /// fs-manager -> backend pull: report kind/fs-type/mount/device into a
 /// buffer the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
 /// arg1=fs_type, arg2=mount_name_len, arg3=device_id_len. Backends are
@@ -501,11 +501,33 @@ pub const FSMGR_IPC_UNMOUNT_REQ: i32 = 0x423;
 /// nothing is left in the table in that case, because the entry only
 /// appears when the backend registers.
 pub const FSMGR_IPC_MOUNT_REQ: i32 = 0x424;
+/// Answer once a mount exists at a path: a milestone from the owner of
+/// the mount table. The request is a wasmos_fsmgr_mount_wait_desc_t in a
+/// transfer buffer the caller owns and has lent READ to fs-manager:
+/// arg0=buffer_id arg1=offset arg2=size. fs-manager copies the path out
+/// at once, so the caller may release the buffer after the reply.
+///
+/// The reply, FSMGR_IPC_MOUNT_WAIT_RESP arg0=0, is DEFERRED: it is sent
+/// when a backend serving exactly that mount path registers, or at once
+/// if one already has. A mount exists from the moment its backend
+/// registers, whoever started it -- a device-manager rule (the boot
+/// volume) or FSMGR_IPC_MOUNT_REQ. There is no timeout here: the caller
+/// bounds its own wait. A waiter whose endpoint's process ends is
+/// dropped.
+///
+/// Refusals (FS_IPC_ERROR): WASMOS_ERR_FS_BUFFER when the descriptor
+/// cannot be read, WASMOS_ERR_FS_BAD_ARGS for a wrong version or a path
+/// length past FSMGR_MOUNT_WAIT_PATH_MAX, WASMOS_ERR_FS_NOT_ABSOLUTE for
+/// a relative path, WASMOS_ERR_FS_NO_CLIENT_SLOT when every waiter slot
+/// is taken.
+pub const FSMGR_IPC_MOUNT_WAIT_REQ: i32 = 0x425;
 pub const FSMGR_IPC_BACKEND_INFO_RESP: i32 = 0x4A0;
 pub const FSMGR_IPC_CLONE_CWD_RESP: i32 = 0x4A1;
 pub const FSMGR_IPC_QUERY_MOUNTS_RESP: i32 = 0x4A2;
 pub const FSMGR_IPC_UNMOUNT_RESP: i32 = 0x4A3;
 pub const FSMGR_IPC_MOUNT_RESP: i32 = 0x4A4;
+/// arg0 = 0: a mount exists at the path that was waited for.
+pub const FSMGR_IPC_MOUNT_WAIT_RESP: i32 = 0x4A5;
 
 // fbtext (0x600..0x6FF)
 pub const FBTEXT_IPC_CELL_WRITE_REQ: i32 = 0x600;

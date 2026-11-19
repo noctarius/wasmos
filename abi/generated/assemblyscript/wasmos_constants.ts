@@ -408,6 +408,15 @@ export const NET_IFADDR_FLAG_ADMIN_UP: i32 = 2;
 // Address is (or is being) assigned by DHCP.
 export const NET_IFADDR_FLAG_DHCP: i32 = 4;
 
+// fsmgr_mount_wait_desc
+// Version and path ceiling of wasmos_fsmgr_mount_wait_desc_t, the request
+// record of FSMGR_IPC_MOUNT_WAIT_REQ, declared in
+// src/drivers/include/wasmos_driver_abi.h.
+// Current wasmos_fsmgr_mount_wait_desc_t layout.
+export const FSMGR_MOUNT_WAIT_DESC_VERSION: i32 = 1;
+// Longest mount path a wait names, NUL excluded: fs-manager's mount-path ceiling.
+export const FSMGR_MOUNT_WAIT_PATH_MAX: i32 = 63;
+
 // supervisor_submit_desc
 // Version and size ceiling of wasmos_supervisor_submit_desc_t, the request
 // record of SUPERVISOR_IPC_SUBMIT_REQ, declared in

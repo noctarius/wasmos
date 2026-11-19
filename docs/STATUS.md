@@ -330,8 +330,27 @@ linked feature documents for rationale and rollout plans.
   failed: required unit <unit> ...` instead. The harness's `require_prompt`
   waits for the line after the prompt (`await_boot_complete`, host-tested in
   `tests/test_boot_diagnosis.py`) and raises naming the unit on a failed boot;
-  `boot_complete=False` skips it. Kernel init still spawns sysinit once
-  device-manager is READY.
+  `boot_complete=False` skips it.
+- Kernel init spawns sysinit once fs-manager says /boot is mounted, not once
+  device-manager is READY (which says its rules were loaded, not that any
+  volume is mounted). It subscribes to the name `fs.vfs`, looks it up, then
+  sends `FSMGR_IPC_MOUNT_WAIT_REQ` for `/boot` in a buffer it owns and lends
+  READ to fs-manager; fs-manager answers when a backend serving exactly that
+  path registers, or at once if one has (`wasmos_fsmgr_mount_wait_desc_t`, a
+  4-slot waiter table, waiters dropped on hangup). One sysinit spawn then
+  reads its module; `[init] /boot is mounted; spawning sysinit` is logged
+  once. If fs-manager has not answered within 60 s of device-manager's spawn,
+  the boot panics with `init_no_boot_mount`. Starting sysinit this early
+  overlaps its spawns with the mounts device-manager still makes, which
+  exposed a PM <-> fs-manager wait cycle: fs-manager answered a mount
+  request's spawn reply by pulling the backend class from the PM
+  synchronously, while the PM waited on fs-manager for a module read. The
+  mount reply now waits for the backend's class event instead. A second cycle
+  of the same kind ran through a backend: fs-manager creates mount points in a
+  backend synchronously as soon as it registers (`/nested` in `/wfs`), while
+  fs-wfs sat in the synchronous `wasmos_sys_notify_ready`, waiting for the PM.
+  fs-fat and fs-wfs now send READY with `wasmos_sys_notify_ready_nowait` and
+  do not wait for the ack.
 - `process_set_ready` and `process_set_running` refuse a transition whose owner
   is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
   (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`

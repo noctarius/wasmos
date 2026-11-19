@@ -6,9 +6,12 @@
 #include "memory.h"
 #include "paging.h"
 #include "process_manager.h"
+#include "process_manager_internal.h"
 #include "serial.h"
 #include "wasmos_app.h"
 #include "string.h"
+#include "timer.h"
+#include "xfer_buffer.h"
 
 static const uint8_t g_skip_wasm_boot = 0;
 
@@ -20,20 +23,25 @@ static const uint8_t g_skip_wasm_boot = 0;
 
 /* How many times init re-asks PM to spawn sysinit by path before giving up.
  *
- * The retry is legitimate: sysinit ships on the ESP rather than in the initfs,
- * so it cannot be read until device enumeration has mounted /boot. A HEALTHY
- * boot needs none of these -- `[pm] spawn_path fs read failed` appears zero
- * times in local boots and in a passing CI session -- so a retry at all means
- * something is already wrong, and this bound only decides how long the system
- * waits to find out.
- *
- * Generous rather than tight, because the measurement above is of healthy boots
- * and a loaded runner is entitled to be slower: at the observed retry rate of
- * roughly 20 per second this is about 25 seconds. Before it existed the retry
- * was unbounded, and a boot that never got /boot retried 17,081 times over 14
- * minutes, logging each one, pegging a CPU and reaching no prompt
+ * sysinit ships on the ESP rather than in the initfs and is spawned only once
+ * fs-manager has reported /boot mounted, so a healthy boot needs exactly one
+ * attempt; a retry means the read failed with the volume mounted, and this
+ * bound only decides how long the system waits to find out. Before it existed
+ * the retry was unbounded, and a boot that never got /boot retried 17,081 times
+ * over 14 minutes, logging each one, pegging a CPU and reaching no prompt
  * (docs/TASKS.md `[BUG][P0]`). */
 #define INIT_SYSINIT_MAX_ATTEMPTS 512u
+
+/* How long init waits, from device-manager's spawn, for fs-manager to report
+ * /boot mounted. Enumeration, the boot volume's driver and its registration
+ * all fall inside it; a loaded CI runner is entitled to be slow, so it is
+ * generous. Past it the boot panics naming the missing mount, because sysinit
+ * -- and so every service -- lives on that volume. */
+#define INIT_BOOT_MOUNT_TIMEOUT_MS 60000u
+/* The longest init parks between looks at its deadline while it waits. */
+#define INIT_WAIT_SLICE_MS 100u
+/* init's tag on its "fs.vfs" name subscription (SVC_IPC_NAME_EVENT arg1). */
+#define INIT_FSVFS_COOKIE 0x1B007u
 
 /* Puts an init_state_t into its pre-boot state: phase 0, nothing started, no
  * request in flight, and every boot-module index set to the 0xFFFFFFFF "not
@@ -65,7 +73,11 @@ void kernel_init_state_reset(init_state_t* state, const boot_info_t* boot_info) 
     state->fs_tmpfs_index = 0xFFFFFFFFu;
     state->fs_init_index = 0xFFFFFFFFu;
     state->device_manager_index = 0xFFFFFFFFu;
-    state->dm_pid = 0;
+    state->sysinit_attempts = 0;
+    state->boot_mount_deadline = 0;
+    state->fsmgr_endpoint = IPC_ENDPOINT_NONE;
+    memset(&state->name_sub_buf, 0, sizeof(state->name_sub_buf));
+    memset(&state->mount_wait_buf, 0, sizeof(state->mount_wait_buf));
 }
 
 static uint32_t boot_module_index_by_app_name(const boot_info_t* info, const char* name) {
@@ -182,6 +194,155 @@ static int init_send_spawn_path(process_t* process, init_state_t* state, const c
     return 0;
 }
 
+/* ------------------------------------------------------------ /boot wait */
+
+/* The wait for /boot cannot finish, so neither can the boot: sysinit and every
+ * service live on that volume. A named panic, like init_no_sysinit, rather than
+ * a kernel parked with nothing on top. */
+__attribute__((noreturn)) static void init_boot_mount_failed(const char* why) {
+    klog_printf("[init] waiting for /boot: %s\n"
+                "[init] sysinit lives on /boot, so this system has no userspace and no "
+                "prompt is coming.\n",
+                why);
+    kpanic("init_no_boot_mount", 0, 0);
+}
+
+/* Takes the next message for init's reply endpoint. Returns 1 with *out
+ * filled; 0 when nothing came within INIT_WAIT_SLICE_MS, and the caller yields
+ * and asks again. Past the /boot deadline it panics. */
+static int init_take(process_t* process, init_state_t* state, ipc_message_t* out) {
+    if (ipc_recv_for(process->context_id, state->reply_endpoint, out) == IPC_OK) {
+        return 1;
+    }
+    if ((int64_t)(timer_ticks() - state->boot_mount_deadline) >= 0) {
+        init_boot_mount_failed("fs-manager did not report /boot mounted in time");
+    }
+    (void)ipc_endpoint_wait_for(process->context_id, state->reply_endpoint, INIT_WAIT_SLICE_MS);
+    return 0;
+}
+
+/* Acquires a transfer buffer init owns and returns its kernel mapping, or NULL
+ * with nothing held. */
+static uint8_t* init_buffer(process_t* process, uint32_t size, xfer_buffer_owner_t* out) {
+    uint64_t phys;
+    memset(out, 0, sizeof(*out));
+    if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, process->context_id, size, out) !=
+        WASMOS_ERR_NONE) {
+        return 0;
+    }
+    phys = xfer_buffer_object_phys(&out->buffer);
+    if (phys == 0u) {
+        (void)xfer_buffer_release_owned(out);
+        return 0;
+    }
+    return ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
+}
+
+static int init_send(process_t* process, uint32_t endpoint, ipc_message_t* msg) {
+    msg->destination = endpoint;
+    return ipc_send_from(process->context_id, endpoint, msg) == IPC_OK ? 0 : -1;
+}
+
+/* SVC_IPC_SUBSCRIBE_NAME_REQ for "fs.vfs", bind events to init's reply
+ * endpoint. The PM reads the descriptor from init's buffer while handling it;
+ * init releases the buffer on the answer. */
+static int init_send_name_subscribe(process_t* process, init_state_t* state) {
+    svc_name_subscribe_desc_t* desc;
+    ipc_message_t msg;
+    uint8_t* p = init_buffer(process, (uint32_t)sizeof(*desc), &state->name_sub_buf);
+    if (!p) {
+        return -1;
+    }
+    desc = (svc_name_subscribe_desc_t*)p;
+    memset(desc, 0, sizeof(*desc));
+    desc->version = WASMOS_SVC_NAME_SUBSCRIBE_DESC_VERSION;
+    desc->notify_endpoint = state->reply_endpoint;
+    desc->cookie = INIT_FSVFS_COOKIE;
+    memcpy(desc->name, "fs.vfs", sizeof("fs.vfs"));
+    msg.type = SVC_IPC_SUBSCRIBE_NAME_REQ;
+    msg.source = state->reply_endpoint;
+    msg.request_id = state->request_id;
+    msg.arg0 = state->name_sub_buf.buffer.buffer_id;
+    msg.arg1 = 0;
+    msg.arg2 = (uint32_t)sizeof(*desc);
+    msg.arg3 = 0;
+    if (init_send(process, process_manager_endpoint(), &msg) != 0) {
+        (void)xfer_buffer_release_owned(&state->name_sub_buf);
+        return -1;
+    }
+    return 0;
+}
+
+/* SVC_IPC_LOOKUP_REQ for "fs.vfs": the binding that may predate the
+ * subscription. */
+static int init_send_lookup_fsvfs(process_t* process, init_state_t* state) {
+    uint32_t name[4];
+    ipc_message_t msg;
+    pm_pack_name_args("fs.vfs", name);
+    msg.type = SVC_IPC_LOOKUP_REQ;
+    msg.source = state->reply_endpoint;
+    msg.request_id = state->request_id;
+    msg.arg0 = name[0];
+    msg.arg1 = name[1];
+    msg.arg2 = name[2];
+    msg.arg3 = name[3];
+    return init_send(process, process_manager_endpoint(), &msg);
+}
+
+/* Drops the "fs.vfs" subscription once fs-manager is found. The answer is not
+ * waited for; whatever of it arrives later is a straggler the phases skip. */
+static void init_send_name_unsubscribe(process_t* process, init_state_t* state) {
+    ipc_message_t msg;
+    msg.type = SVC_IPC_UNSUBSCRIBE_NAME_REQ;
+    msg.source = state->reply_endpoint;
+    msg.request_id = 0;
+    msg.arg0 = state->reply_endpoint;
+    msg.arg1 = INIT_FSVFS_COOKIE;
+    msg.arg2 = 0;
+    msg.arg3 = 0;
+    (void)init_send(process, process_manager_endpoint(), &msg);
+}
+
+/* FSMGR_IPC_MOUNT_WAIT_REQ for `path`, in a buffer init owns and lends READ to
+ * fs-manager's context. The reply is deferred until the mount exists; init
+ * releases the buffer then, which revokes the loan. */
+static int init_send_mount_wait(process_t* process, init_state_t* state, const char* path) {
+    wasmos_fsmgr_mount_wait_desc_t* desc;
+    xfer_buffer_borrow_t borrow;
+    uint32_t fsmgr_context = 0;
+    uint32_t len = (uint32_t)strlen(path);
+    ipc_message_t msg;
+    uint8_t* p;
+
+    if (len == 0u || len > FSMGR_MOUNT_WAIT_PATH_MAX ||
+        ipc_endpoint_owner(state->fsmgr_endpoint, &fsmgr_context) != IPC_OK) {
+        return -1;
+    }
+    p = init_buffer(process, (uint32_t)sizeof(*desc), &state->mount_wait_buf);
+    if (!p) {
+        return -1;
+    }
+    desc = (wasmos_fsmgr_mount_wait_desc_t*)p;
+    memset(desc, 0, sizeof(*desc));
+    desc->version = FSMGR_MOUNT_WAIT_DESC_VERSION;
+    desc->path_len = len;
+    memcpy(desc->path, path, len);
+    msg.type = FSMGR_IPC_MOUNT_WAIT_REQ;
+    msg.source = state->reply_endpoint;
+    msg.request_id = state->request_id;
+    msg.arg0 = state->mount_wait_buf.buffer.buffer_id;
+    msg.arg1 = 0;
+    msg.arg2 = (uint32_t)sizeof(*desc);
+    msg.arg3 = 0;
+    if (xfer_buffer_borrow(&state->mount_wait_buf, fsmgr_context, BUFFER_BORROW_READ, &borrow) !=
+            WASMOS_ERR_NONE ||
+        init_send(process, state->fsmgr_endpoint, &msg) != 0) {
+        (void)xfer_buffer_release_owned(&state->mount_wait_buf);
+        return -1;
+    }
+    return 0;
+}
+
 /* Scheduler entry point for the init process, driving the userspace boot chain
  * as a resumable state machine.
  *
@@ -189,9 +350,9 @@ static int init_send_spawn_path(process_t* process, init_state_t* state, const c
  * mutated across dispatches; `phase` is where the sequence stands.  Each call
  * advances at most one step and yields, so the whole boot chain — spawning the
  * process manager, resolving boot modules, spawning the supervisor, fs-manager,
- * fs-tmpfs, fs-init and device-manager, then sysinit by path once a filesystem
- * exists — plays out over many dispatches.  Steps that depend on a service that is not up
- * yet simply yield and retry on the next dispatch.
+ * fs-tmpfs, fs-init and device-manager, then sysinit by path once fs-manager
+ * reports /boot mounted — plays out over many dispatches.  Steps that depend on a service that is
+ * not up yet simply yield and retry on the next dispatch.
  *
  * Returns PROCESS_RUN_YIELDED for "call me again", PROCESS_RUN_IDLE for a NULL
  * process, state or boot_info, and PROCESS_RUN_EXITED with a non-zero exit
@@ -459,14 +620,8 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         } else {
             trace_write("[init] device-manager spawn ok\n");
             state->device_manager_index = 0xFFFFFFFFu;
-            state->dm_pid = (uint32_t)msg.arg0;
-            /* DM may have already set ready=1 implicitly (first IPC block).
-             * Reset it and require explicit notify_ready before init proceeds. */
-            process_t* dm = process_get(state->dm_pid);
-            if (dm) {
-                dm->ready = 0;
-                process_set_require_explicit_ready(dm);
-            }
+            state->boot_mount_deadline =
+                timer_ticks() + timer_ms_to_ticks(INIT_BOOT_MOUNT_TIMEOUT_MS);
             state->request_id++;
             state->pending_kind = 0;
             state->phase = 6;
@@ -478,23 +633,94 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         return PROCESS_RUN_YIELDED;
     }
 
+    /* Phases 6-9 wait for /boot, the volume sysinit lives on. The milestone is
+     * fs-manager's: it owns the mount table, and it answers
+     * FSMGR_IPC_MOUNT_WAIT_REQ once a backend serving /boot has registered.
+     * Device-manager's READY is not that signal -- it says its rules were
+     * loaded, not that any volume is mounted. fs-manager is found by its name,
+     * subscribed to before it is looked up so a registration in between is not
+     * lost (SVC_IPC_SUBSCRIBE_NAME_REQ). */
     if (state->phase == 6) {
-        process_t* dm = state->dm_pid ? process_get(state->dm_pid) : 0;
-        if (!dm || !dm->ready) {
+        if (init_send_name_subscribe(process, state) != 0) {
+            init_boot_mount_failed("cannot subscribe to the name fs.vfs");
+        }
+        state->phase = 7;
+        return PROCESS_RUN_YIELDED;
+    }
+
+    if (state->phase == 7) {
+        if (!init_take(process, state, &msg)) {
             return PROCESS_RUN_YIELDED;
         }
-        trace_write("[init] device-manager ready\n");
+        if (msg.request_id != state->request_id) {
+            return PROCESS_RUN_YIELDED;
+        }
+        (void)xfer_buffer_release_owned(&state->name_sub_buf);
+        if (msg.type != SVC_IPC_SUBSCRIBE_NAME_RESP) {
+            init_boot_mount_failed("the subscription to the name fs.vfs was refused");
+        }
+        state->request_id++;
+        if (init_send_lookup_fsvfs(process, state) != 0) {
+            init_boot_mount_failed("cannot look up fs.vfs");
+        }
+        state->phase = 8;
+        return PROCESS_RUN_YIELDED;
+    }
+
+    if (state->phase == 8) {
+        uint32_t endpoint = IPC_ENDPOINT_NONE;
+        if (!init_take(process, state, &msg)) {
+            return PROCESS_RUN_YIELDED;
+        }
+        /* The lookup's answer and the bind event can come in either order;
+         * whichever names fs-manager first decides. */
+        if (msg.type == SVC_IPC_LOOKUP_RESP && msg.request_id == state->request_id &&
+            msg.arg0 != (uint32_t)-1) {
+            endpoint = msg.arg0;
+        } else if (msg.type == SVC_IPC_NAME_EVENT && msg.arg1 == INIT_FSVFS_COOKIE) {
+            endpoint = msg.arg2;
+        }
+        if (endpoint == IPC_ENDPOINT_NONE) {
+            return PROCESS_RUN_YIELDED;
+        }
+        state->fsmgr_endpoint = endpoint;
+        state->request_id++;
+        init_send_name_unsubscribe(process, state);
+        if (init_send_mount_wait(process, state, "/boot") != 0) {
+            init_boot_mount_failed("cannot ask fs-manager to wait for /boot");
+        }
+        state->phase = 9;
+        return PROCESS_RUN_YIELDED;
+    }
+
+    if (state->phase == 9) {
+        if (!init_take(process, state, &msg)) {
+            return PROCESS_RUN_YIELDED;
+        }
+        /* Stragglers of phase 8 -- the other of lookup and bind, the
+         * unsubscribe's answer -- carry other ids or none. */
+        if (msg.request_id != state->request_id ||
+            (msg.type != FSMGR_IPC_MOUNT_WAIT_RESP && msg.type != FS_IPC_ERROR)) {
+            return PROCESS_RUN_YIELDED;
+        }
+        (void)xfer_buffer_release_owned(&state->mount_wait_buf);
+        if (msg.type != FSMGR_IPC_MOUNT_WAIT_RESP) {
+            init_boot_mount_failed("fs-manager refused the wait for /boot");
+        }
+        klog_write("[init] /boot is mounted; spawning sysinit\n");
+        state->request_id++;
+        state->phase = 10;
+    }
+
+    if (state->phase == 10) {
         /* sysinit is not a boot-volume prerequisite, so it is NOT in the initfs
          * (which holds only what's needed to mount the boot volume). It ships on
-         * the ESP and is spawned by path from the "boot" FAT mount once device
-         * enumeration has brought fs-fat up, so the spawn RETRIES until then.
+         * the ESP and is spawned by path once /boot is mounted.
          *
          * Bounded, because a boot where that read never succeeds used to retry
          * forever: 17,081 attempts over 14 minutes in one CI capture, a log line
          * each, a pegged CPU and no prompt -- `[BUG][P0]`. Giving up turns that
-         * silent hang into a named boot failure. The bound is generous: a
-         * healthy boot needs a handful of attempts, and the retry yields between
-         * them rather than spinning. */
+         * silent hang into a named boot failure. */
         if (state->sysinit_attempts >= INIT_SYSINIT_MAX_ATTEMPTS) {
             /* PANIC rather than park. sysinit is this system's pid 1: it reads
              * sysinit.rc and starts every service, so a boot that cannot spawn
@@ -507,8 +733,8 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
                         "attempts\n"
                         "[init] sysinit starts every service, so this system has no userspace "
                         "and no prompt is coming.\n"
-                        "[init] /boot never became readable: the last [pm] spawn_path line "
-                        "above says why the read failed.\n",
+                        "[init] /boot is mounted but sysinit could not be read: the last "
+                        "[pm] spawn_path line above says why.\n",
                         (unsigned)INIT_SYSINIT_MAX_ATTEMPTS);
             kpanic("init_no_sysinit", (uintptr_t)state->sysinit_attempts, 0);
         }
@@ -528,13 +754,18 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         if (recv_rc != IPC_OK) {
             return PROCESS_RUN_YIELDED;
         }
+        /* A straggler of the /boot wait (a lookup answer, a name bind, the
+         * unsubscribe's answer) is not the spawn's reply. */
+        if (msg.type != PROC_IPC_RESP && msg.type != PROC_IPC_ERROR) {
+            return PROCESS_RUN_YIELDED;
+        }
         if (msg.request_id != state->request_id) {
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
         if (msg.type == PROC_IPC_ERROR) {
             state->request_id++;
-            state->phase = 6;
+            state->phase = 10;
             return PROCESS_RUN_YIELDED;
         }
         trace_write("[init] sysinit spawn ok\n");
@@ -551,6 +782,12 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
      * process.c) — a spin that keeps the run queue non-empty, so the idle
      * thread's sti;hlt never runs and the host vCPU sits at full load.  The
      * timeout keeps a low-rate heartbeat. */
+    /* Anything still queued -- a late answer from the /boot wait, a bind of
+     * fs.vfs after a restart -- is dropped first: the wait returns at once on a
+     * non-empty endpoint, so a message left there would turn the park into a
+     * spin. */
+    while (ipc_recv_for(process->context_id, state->reply_endpoint, &msg) == IPC_OK) {
+    }
     (void)ipc_endpoint_wait_for(
         process->context_id, state->reply_endpoint, KERNEL_INIT_IDLE_WAIT_MS);
     return PROCESS_RUN_YIELDED;

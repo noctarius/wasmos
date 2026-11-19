@@ -468,6 +468,15 @@ groups:
         value: 0x4
         doc: Address is (or is being) assigned by DHCP.
 
+  - name: fsmgr_mount_wait_desc
+    doc: |
+      Version and path ceiling of wasmos_fsmgr_mount_wait_desc_t, the request
+      record of FSMGR_IPC_MOUNT_WAIT_REQ, declared in
+      src/drivers/include/wasmos_driver_abi.h.
+    constants:
+      - { symbol: FSMGR_MOUNT_WAIT_DESC_VERSION, value: 1, doc: "Current wasmos_fsmgr_mount_wait_desc_t layout." }
+      - { symbol: FSMGR_MOUNT_WAIT_PATH_MAX, value: 63, doc: "Longest mount path a wait names, NUL excluded: fs-manager's mount-path ceiling." }
+
   - name: supervisor_submit_desc
     doc: |
       Version and size ceiling of wasmos_supervisor_submit_desc_t, the request

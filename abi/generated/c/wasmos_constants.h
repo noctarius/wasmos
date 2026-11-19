@@ -469,6 +469,17 @@ enum {
     NET_IFADDR_FLAG_DHCP = 4,
 };
 
+/* Version and path ceiling of wasmos_fsmgr_mount_wait_desc_t, the request
+ * record of FSMGR_IPC_MOUNT_WAIT_REQ, declared in
+ * src/drivers/include/wasmos_driver_abi.h.
+ */
+enum {
+    /* Current wasmos_fsmgr_mount_wait_desc_t layout. */
+    FSMGR_MOUNT_WAIT_DESC_VERSION = 1,
+    /* Longest mount path a wait names, NUL excluded: fs-manager's mount-path ceiling. */
+    FSMGR_MOUNT_WAIT_PATH_MAX = 63,
+};
+
 /* Version and size ceiling of wasmos_supervisor_submit_desc_t, the request
  * record of SUPERVISOR_IPC_SUBMIT_REQ, declared in
  * src/drivers/include/wasmos_driver_abi.h.

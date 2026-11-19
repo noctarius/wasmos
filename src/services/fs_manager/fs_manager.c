@@ -787,6 +787,99 @@ static void fsmgr_ensure_mount_points(void) {
  *
  * A backend that names no mount is not registered: nothing else knows where it
  * belongs, so there is no default to fall back to. */
+/* ------------------------------------------------------------ mount waits */
+
+/* FSMGR_IPC_MOUNT_WAIT_REQ callers whose mount does not exist yet. Kernel init
+ * is the one boot caller; the table is small because a wait is a milestone, not
+ * a per-request resource. */
+#define FSMGR_MOUNT_WAITS_CAP 4u
+
+_Static_assert(FSMGR_MOUNT_WAIT_PATH_MAX + 1u == FSMGR_MOUNT_PATH_MAX,
+               "a mount wait names a path the mount table can hold");
+
+typedef struct {
+    uint8_t in_use;
+    int32_t source; /* the endpoint the deferred reply goes to */
+    int32_t request_id;
+    char path[FSMGR_MOUNT_PATH_MAX];
+} fsmgr_mount_wait_t;
+
+static fsmgr_mount_wait_t g_mount_waits[FSMGR_MOUNT_WAITS_CAP];
+
+static void fsmgr_mount_pending_complete(void);
+
+static int fsmgr_mount_exists(const char* path) {
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        if (g_backends[i].in_use && strcmp(g_backends[i].mount_path, path) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Answers every wait whose mount now exists. Run after each registration. */
+static void fsmgr_mount_waits_fire(void) {
+    for (uint32_t i = 0; i < FSMGR_MOUNT_WAITS_CAP; ++i) {
+        fsmgr_mount_wait_t* w = &g_mount_waits[i];
+        if (w->in_use && fsmgr_mount_exists(w->path)) {
+            w->in_use = 0;
+            (void)reply_to_client(w->source, FSMGR_IPC_MOUNT_WAIT_RESP, w->request_id, 0, 0, 0, 0);
+        }
+    }
+}
+
+/* A waiter's process ended: nobody is left to answer. */
+static void fsmgr_mount_waits_drop(int32_t dead_endpoint) {
+    for (uint32_t i = 0; i < FSMGR_MOUNT_WAITS_CAP; ++i) {
+        if (g_mount_waits[i].in_use && g_mount_waits[i].source == dead_endpoint) {
+            g_mount_waits[i].in_use = 0;
+        }
+    }
+}
+
+/* FSMGR_IPC_MOUNT_WAIT_REQ: arg0=buffer_id arg1=offset arg2=size of a
+ * wasmos_fsmgr_mount_wait_desc_t the caller lent READ. The path is copied out
+ * here; the reply is deferred until the mount exists (fsmgr_mount_waits_fire). */
+static void handle_mount_wait_req(int32_t source, int32_t request_id, int32_t buffer_id,
+                                  int32_t offset, int32_t size) {
+    wasmos_fsmgr_mount_wait_desc_t desc;
+    fsmgr_mount_wait_t* slot = 0;
+
+    if (size < (int32_t)sizeof(desc) || offset < 0 ||
+        wasmos_xfer_buffer_read(buffer_id, &desc, (int32_t)sizeof(desc), offset) != 0) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BUFFER);
+        return;
+    }
+    if (desc.version != FSMGR_MOUNT_WAIT_DESC_VERSION || desc.path_len == 0u ||
+        desc.path_len > FSMGR_MOUNT_WAIT_PATH_MAX) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BAD_ARGS);
+        return;
+    }
+    desc.path[desc.path_len] = '\0';
+    if (desc.path[0] != '/') {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_ABSOLUTE);
+        return;
+    }
+    if (fsmgr_mount_exists(desc.path)) {
+        (void)reply_to_client(source, FSMGR_IPC_MOUNT_WAIT_RESP, request_id, 0, 0, 0, 0);
+        return;
+    }
+    for (uint32_t i = 0; i < FSMGR_MOUNT_WAITS_CAP; ++i) {
+        if (!g_mount_waits[i].in_use) {
+            slot = &g_mount_waits[i];
+            break;
+        }
+    }
+    if (!slot) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NO_CLIENT_SLOT);
+        return;
+    }
+    slot->in_use = 1;
+    slot->source = source;
+    slot->request_id = request_id;
+    memcpy(slot->path, desc.path, desc.path_len + 1u);
+}
+
 static void fsmgr_pull_backend(int32_t backend_endpoint) {
     char reported_mount[FSMGR_MOUNT_PATH_MAX];
     char reported_source[BLOCK_DESCRIPTOR_ID_MAX];
@@ -840,6 +933,8 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
      * own point did not exist before now, and an earlier backend's point could
      * not be created until the filesystem covering it registered. */
     fsmgr_ensure_mount_points();
+    fsmgr_mount_waits_fire();
+    fsmgr_mount_pending_complete();
 }
 
 /* Send closes for the files ended clients left open, as many as the cap allows.
@@ -1035,14 +1130,14 @@ static void fsmgr_backend_remove(int32_t backend_endpoint) {
  * backend registering between here and the lookup still fires an event; the
  * lookup then captures the current set (and rebuilds it after an fs-manager
  * restart). backend_register is idempotent, so an overlap is harmless. */
-/* Enumerate FSMGR_BACKEND_CLASS and pull every provider's identity.
+/* Enumerate FSMGR_BACKEND_CLASS and pull every provider's identity. Run once,
+ * at start. Pulling a provider already registered is harmless --
+ * backend_register keys on the endpoint and updates the entry in place -- so a
+ * backend seen both here and by its class event is registered once.
  *
- * Separate from the subscription: this runs again after a mount request spawns a
- * driver, so the mount is in the table before the request is answered rather than
- * whenever the class event happens to be dispatched. Pulling a provider already
- * registered is harmless -- backend_register keys on the endpoint and updates the
- * entry in place -- which is what makes calling this twice for the same backend
- * (once here, once from the class event) correct rather than duplicating it. */
+ * TODO: this is a synchronous call to the process manager, which reads modules
+ * THROUGH fs-manager; it is safe only because nothing spawns by path before
+ * fs-manager has started. It should be the class event's work alone. */
 static void fsmgr_pull_all_backends(void) {
     svc_class_entry_t backends[8];
     int32_t n;
@@ -1571,6 +1666,9 @@ typedef struct {
     const char* module;
     char mount[FSMGR_MOUNT_PATH_MAX];
     char args[FSMGR_MOUNT_DESC_MAX];
+    /* The driver is READY; the reply waits for its backend to register. */
+    int32_t awaiting_backend;
+    int32_t pid;
 } fsmgr_pending_mount_t;
 
 static fsmgr_pending_mount_t g_pending_mount;
@@ -1652,6 +1750,20 @@ static void fsmgr_mount_pending_fail(wasmos_error_code_t code) {
     send_fs_error(client, request_id, code);
 }
 
+/* Answers the pending mount once its backend is in the table; called on the
+ * spawn's reply and after every registration. */
+static void fsmgr_mount_pending_complete(void) {
+    int32_t client = g_pending_mount.client;
+    int32_t request_id = g_pending_mount.request_id;
+    int32_t pid = g_pending_mount.pid;
+    if (!g_pending_mount.in_use || !g_pending_mount.awaiting_backend ||
+        !fsmgr_mount_exists(g_pending_mount.mount)) {
+        return;
+    }
+    fsmgr_mount_pending_clear();
+    (void)reply_to_client(client, FSMGR_IPC_MOUNT_RESP, request_id, 0, pid, 0, 0);
+}
+
 /* The process manager answered the spawn a pending mount is waiting on.
  *
  * A refusal is FINAL. The module root is declared per filesystem type rather
@@ -1659,14 +1771,16 @@ static void fsmgr_mount_pending_fail(wasmos_error_code_t code) {
  * slot, no memory, a module that will not load -- and retrying it under another
  * root would only replace that reason with a misleading one.
  *
- * On success the child has reported READY, so its backend has registered — but
- * the registration arrives as a class event this loop has not necessarily
- * dispatched yet, so the class is pulled here rather than waited for. A backend
- * pulled twice is registered once (backend_register keys on the endpoint). */
+ * On success the child has reported READY, so its backend has registered, and
+ * the registration reaches this loop as the class event (fsmgr_pull_backend),
+ * which completes the reply. The class is NOT pulled from the process manager
+ * here: that is a synchronous call to the PM, and the PM may at this moment be
+ * waiting for fs-manager to answer one of its module reads -- each would wait
+ * on the other until the PM's read timed out.
+ *
+ * TODO: a driver that reports READY and never registers leaves the request
+ * pending; fs-manager has no clock to bound it with. */
 static void fsmgr_mount_handle_spawn_reply(int32_t type, int32_t pid) {
-    int32_t client;
-    int32_t request_id;
-
     if (!g_pending_mount.in_use) {
         return;
     }
@@ -1679,22 +1793,9 @@ static void fsmgr_mount_handle_spawn_reply(int32_t type, int32_t pid) {
         return;
     }
 
-    fsmgr_pull_all_backends();
-    client = g_pending_mount.client;
-    request_id = g_pending_mount.request_id;
-    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
-        if (g_backends[i].in_use && strcmp(g_backends[i].mount_path, g_pending_mount.mount) == 0) {
-            fsmgr_mount_pending_clear();
-            (void)reply_to_client(client, FSMGR_IPC_MOUNT_RESP, request_id, 0, pid, 0, 0);
-            return;
-        }
-    }
-    /* Ready, but no backend registered at the path it was given: the driver
-     * registered nothing, or reported a different mount. Nothing was added, so
-     * there is nothing to undo — the process is left running, the same gap
-     * unmount has. */
-    log_msg("[fs-manager] mount: backend started but registered no mount\n");
-    fsmgr_mount_pending_fail(WASMOS_ERR_FS_NOT_READY);
+    g_pending_mount.awaiting_backend = 1;
+    g_pending_mount.pid = pid;
+    fsmgr_mount_pending_complete();
 }
 
 /* FS_IPC_READDIR_REQ: list the client's working directory.
@@ -1851,6 +1952,8 @@ static void handle_mount_req(fs_client_state_t* state, int32_t source, int32_t r
     g_pending_mount.client = source;
     g_pending_mount.request_id = request_id;
     g_pending_mount.buffer_id = -1;
+    g_pending_mount.awaiting_backend = 0;
+    g_pending_mount.pid = 0;
     g_pending_mount.module = fstype->module;
     str_copy(g_pending_mount.mount, sizeof(g_pending_mount.mount), mount);
     /* Built in the order the drivers document: `id=` then `mount=`. */
@@ -2085,6 +2188,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
          * had actually sent to, so the client's own requests are what registered
          * it for notification. */
         if (type == WASMOS_IPC_HANGUP) {
+            fsmgr_mount_waits_drop(arg0);
             fsmgr_release_client(arg1f);
             continue;
         }
@@ -2102,6 +2206,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
         if (type == FSMGR_IPC_CLONE_CWD_REQ) {
             (void)handle_clone_cwd_req(source, source_owner, request_id, arg0, arg1f);
+            continue;
+        }
+        if (type == FSMGR_IPC_MOUNT_WAIT_REQ) {
+            handle_mount_wait_req(source, request_id, arg0, arg1f, arg2f);
             continue;
         }
         if (type == FSMGR_IPC_QUERY_MOUNTS_REQ) {

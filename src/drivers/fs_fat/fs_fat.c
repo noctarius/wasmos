@@ -783,7 +783,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             break;
         }
     }
-    wasmos_sys_notify_ready(g_proc_endpoint, reply_endpoint);
+    /* Not waited for: fs-manager may already be calling into this backend
+     * (mount points), with the PM waiting on fs-manager. See
+     * wasmos_sys_notify_ready_nowait. */
+    if (wasmos_sys_notify_ready_nowait(g_proc_endpoint) != 0) {
+        fat_log("ready notification failed\n");
+    }
 
     /* Reactor: select on the service endpoint + the block reply endpoint. */
     sel = wasmos_ipc_select_create();

@@ -636,6 +636,17 @@ _Static_assert(sizeof(wasmos_spawn_watch_desc_t) ==
                    48u + SPAWN_WATCH_DEPS_MAX * sizeof(wasmos_spawn_watch_dep_t),
                "wasmos_spawn_watch_desc_t is part of the PROC_IPC_SPAWN_WATCHED ABI");
 
+/* FSMGR_IPC_MOUNT_WAIT_REQ request record (abi/opcodes.yaml), in a transfer
+ * buffer the caller owns and lends READ to fs-manager. `path` is the absolute
+ * mount path, NUL-terminated; path_len counts its bytes without the NUL. */
+typedef struct {
+    uint32_t version; /* FSMGR_MOUNT_WAIT_DESC_VERSION */
+    uint32_t path_len;
+    char path[FSMGR_MOUNT_WAIT_PATH_MAX + 1];
+} wasmos_fsmgr_mount_wait_desc_t;
+_Static_assert(sizeof(wasmos_fsmgr_mount_wait_desc_t) == 8u + FSMGR_MOUNT_WAIT_PATH_MAX + 1u,
+               "wasmos_fsmgr_mount_wait_desc_t is part of the FSMGR_IPC_MOUNT_WAIT_REQ ABI");
+
 /* SUPERVISOR_IPC_SUBMIT_REQ request record (abi/opcodes.yaml), in a transfer
  * buffer the submitter owns and lends READ to the supervisor. `spec` is one
  * NUL-terminated unit line whose grammar the opcode documents; spec_len counts

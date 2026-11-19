@@ -387,6 +387,17 @@ Interface address records, as reported by NET_IPC_IFADDR_LIST.
 | `NET_IFADDR_FLAG_ADMIN_UP` | 2 | The interface is administratively enabled. |
 | `NET_IFADDR_FLAG_DHCP` | 4 | Address is (or is being) assigned by DHCP. |
 
+## fsmgr_mount_wait_desc
+
+Version and path ceiling of wasmos_fsmgr_mount_wait_desc_t, the request
+record of FSMGR_IPC_MOUNT_WAIT_REQ, declared in
+src/drivers/include/wasmos_driver_abi.h.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `FSMGR_MOUNT_WAIT_DESC_VERSION` | 1 | Current wasmos_fsmgr_mount_wait_desc_t layout. |
+| `FSMGR_MOUNT_WAIT_PATH_MAX` | 63 | Longest mount path a wait names, NUL excluded: fs-manager's mount-path ceiling. |
+
 ## supervisor_submit_desc
 
 Version and size ceiling of wasmos_supervisor_submit_desc_t, the request

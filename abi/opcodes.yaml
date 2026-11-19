@@ -645,11 +645,35 @@ subsystems:
           nothing is left in the table in that case, because the entry only
           appears when the backend registers.
 
+      - symbol: FSMGR_IPC_MOUNT_WAIT_REQ
+        value: 0x425
+        kind: req
+        doc: |
+          Answer once a mount exists at a path: a milestone from the owner of
+          the mount table. The request is a wasmos_fsmgr_mount_wait_desc_t in a
+          transfer buffer the caller owns and has lent READ to fs-manager:
+          arg0=buffer_id arg1=offset arg2=size. fs-manager copies the path out
+          at once, so the caller may release the buffer after the reply.
+
+          The reply, FSMGR_IPC_MOUNT_WAIT_RESP arg0=0, is DEFERRED: it is sent
+          when a backend serving exactly that mount path registers, or at once
+          if one already has. A mount exists from the moment its backend
+          registers, whoever started it -- a device-manager rule (the boot
+          volume) or FSMGR_IPC_MOUNT_REQ. There is no timeout here: the caller
+          bounds its own wait. A waiter whose endpoint's process ends is
+          dropped.
+
+          Refusals (FS_IPC_ERROR): WASMOS_ERR_FS_BUFFER when the descriptor
+          cannot be read, WASMOS_ERR_FS_BAD_ARGS for a wrong version or a path
+          length past FSMGR_MOUNT_WAIT_PATH_MAX, WASMOS_ERR_FS_NOT_ABSOLUTE for
+          a relative path, WASMOS_ERR_FS_NO_CLIENT_SLOT when every waiter slot
+          is taken.
       - { symbol: FSMGR_IPC_BACKEND_INFO_RESP, value: 0x4a0, kind: resp }
       - { symbol: FSMGR_IPC_CLONE_CWD_RESP, value: 0x4a1, kind: resp }
       - { symbol: FSMGR_IPC_QUERY_MOUNTS_RESP, value: 0x4a2, kind: resp }
       - { symbol: FSMGR_IPC_UNMOUNT_RESP, value: 0x4a3, kind: resp }
       - { symbol: FSMGR_IPC_MOUNT_RESP, value: 0x4a4, kind: resp }
+      - { symbol: FSMGR_IPC_MOUNT_WAIT_RESP, value: 0x4a5, kind: resp, doc: "arg0 = 0: a mount exists at the path that was waited for." }
 
   - name: fbtext
     id: 7

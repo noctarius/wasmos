@@ -807,6 +807,27 @@ static inline void wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source
         proc_endpoint, s_ready_reply_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0, &reply);
 }
 
+/* Send PROC_IPC_NOTIFY_READY WITHOUT waiting for the PM's ack: for a
+ * long-lived service, which keeps running whether or not the ack has come and
+ * so has nothing to wait for. Returns 0, or the send's error.
+ *
+ * Waiting can close a cycle. The PM reads every module it spawns THROUGH
+ * fs-manager and waits for the answer; fs-manager calls a filesystem backend
+ * synchronously the moment it registers (to create mount points in it); a
+ * backend in wasmos_sys_notify_ready waits for the PM. Each waits on the next
+ * until the PM's read times out. A one-shot service that exits after READY
+ * still needs wasmos_sys_notify_ready.
+ *
+ * The ack is sent to a process-private endpoint created here and never read,
+ * so it can collide with nothing; one ack fits its queue. */
+static inline int32_t wasmos_sys_notify_ready_nowait(int32_t proc_endpoint) {
+    int32_t ep = wasmos_ipc_create_endpoint();
+    if (ep < 0) {
+        return ep;
+    }
+    return wasmos_ipc_send(proc_endpoint, ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
+}
+
 /* Spawn a module by index and block until the child signals ready or until
  * timeout_ms milliseconds have elapsed (0 = wait forever).  Returns the child
  * PID, or -1 if the call fails or PM answers anything other than

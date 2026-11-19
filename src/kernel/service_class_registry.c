@@ -227,6 +227,22 @@ uint32_t service_class_registry_lookup(const char* class_name, service_class_pro
     return total;
 }
 
+int service_class_registry_provided_by(const char* class_name, uint32_t pid) {
+    list_iter_t it;
+    provider_t* p;
+
+    scr_ensure_init();
+    if (class_name == 0 || class_name[0] == '\0' || pid == 0) {
+        return 0;
+    }
+    for (p = (provider_t*)list_first(&g_providers, &it); p; p = (provider_t*)list_next(&it)) {
+        if (p->pid == pid && scr_streq(p->class_name, class_name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Registers interest in a class, so future ADD and REMOVE events for it are
  * delivered to notify_endpoint through the event sink.  Subscribing does NOT
  * replay the providers already registered; combine it with

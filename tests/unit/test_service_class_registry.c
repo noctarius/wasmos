@@ -155,6 +155,31 @@ static int test_lookup_truncates_but_reports_total(void) {
     return 0;
 }
 
+static int test_provided_by_sees_every_provider(void) {
+    fresh();
+    /* Twelve instances held by one process, then one by another: the second is
+     * past any fixed lookup buffer, and the predicate still finds it. */
+    for (uint32_t i = 0; i < 12; ++i) {
+        if (service_class_registry_add("blk", i, 200 + i, 1, 40) != 0)
+            return __LINE__;
+    }
+    if (service_class_registry_add("blk", 12, 300, 2, 41) != 0)
+        return __LINE__;
+    if (service_class_registry_provided_by("blk", 40) != 1)
+        return __LINE__;
+    if (service_class_registry_provided_by("blk", 41) != 1)
+        return __LINE__;
+    if (service_class_registry_provided_by("blk", 42) != 0)
+        return __LINE__; /* holds nothing */
+    if (service_class_registry_provided_by("net.ifc", 40) != 0)
+        return __LINE__; /* another class */
+    if (service_class_registry_provided_by("", 40) != 0 ||
+        service_class_registry_provided_by(0, 40) != 0 ||
+        service_class_registry_provided_by("blk", 0) != 0)
+        return __LINE__;
+    return 0;
+}
+
 static int test_reregister_updates_no_event(void) {
     fresh();
     if (service_class_registry_subscribe("net.ifc", 999, 5) != 0)
@@ -607,6 +632,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_add_and_lookup),
         WASMOS_TEST_CASE(test_lookup_unknown_and_empty),
         WASMOS_TEST_CASE(test_lookup_truncates_but_reports_total),
+        WASMOS_TEST_CASE(test_provided_by_sees_every_provider),
         WASMOS_TEST_CASE(test_reregister_updates_no_event),
         WASMOS_TEST_CASE(test_antispoof),
         WASMOS_TEST_CASE(test_classes_independent),

@@ -69,6 +69,11 @@ int service_class_registry_remove(const char* class_name, uint32_t instance, uin
 uint32_t service_class_registry_lookup(const char* class_name, service_class_provider_t* out,
                                        uint32_t max);
 
+/* 1 when `pid` holds at least one provider of class_name, 0 otherwise -- a
+ * predicate, not a status. Unlike lookup it needs no room for the providers, so
+ * a caller asking about a known process misses none of them. */
+int service_class_registry_provided_by(const char* class_name, uint32_t pid);
+
 /* Subscribe notify_endpoint to class_name events. Idempotent per
  * (class_name, notify_endpoint). Returns 0 or negative on error. */
 int service_class_registry_subscribe(const char* class_name, uint32_t notify_endpoint,

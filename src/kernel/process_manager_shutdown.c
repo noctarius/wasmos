@@ -97,22 +97,20 @@ static int32_t pm_order_node_for_pid(uint32_t n, uint32_t pid) {
 /* Marks node `from` as needing every live holder of the dependency `dep`: the
  * owner of the registered name, or each provider of the class. A holder that is
  * not a node -- the kernel's own services, an unslotted process -- declares no
- * [deps], so no chain runs through it and it is left out. */
+ * [deps], so no chain runs through it and it is left out. A class is asked about
+ * each node rather than listed, so no number of providers drops an edge. */
 static void pm_order_mark_needs(uint32_t n, uint32_t from, const wasmos_app_dep_t* dep) {
     if (dep->kind == WASMOS_APP_DEP_KIND_CLASS) {
         char class_name[SVC_CLASS_NAME_MAX];
-        service_class_provider_t providers[8];
-        uint32_t count;
         if (dep->name_len == 0u || dep->name_len >= sizeof(class_name)) {
             return;
         }
         memcpy(class_name, dep->name, dep->name_len);
         class_name[dep->name_len] = '\0';
-        count = service_class_registry_lookup(class_name, providers, 8u);
-        for (uint32_t i = 0; i < count && i < 8u; ++i) {
-            int32_t to = pm_order_node_for_pid(n, providers[i].pid);
-            if (to >= 0 && (uint32_t)to != from) {
-                g_order_needs[from * n + (uint32_t)to] = 1u;
+        for (uint32_t to = 0; to < n; ++to) {
+            if (to != from &&
+                service_class_registry_provided_by(class_name, g_order_nodes[to].pid)) {
+                g_order_needs[from * n + to] = 1u;
             }
         }
         return;

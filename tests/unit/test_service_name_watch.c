@@ -31,11 +31,24 @@ typedef struct {
 static ev_t g_ev[64];
 static int g_ev_n;
 
-static void cap_event(void* user, uint32_t notify, uint32_t event, uint32_t cookie,
-                      uint32_t endpoint, uint32_t pid) {
+/* While set, the sink answers as a subscriber whose queue is full (or, with
+ * g_sink_gone, one whose endpoint is gone) and logs nothing. */
+static int g_sink_full;
+static int g_sink_gone;
+static int g_sink_calls;
+
+static int cap_event(void* user, uint32_t notify, uint32_t event, uint32_t cookie,
+                     uint32_t endpoint, uint32_t pid) {
     (void)user;
+    g_sink_calls++;
+    if (g_sink_gone) {
+        return SERVICE_NAME_WATCH_DROPPED;
+    }
+    if (g_sink_full) {
+        return SERVICE_NAME_WATCH_RETRY;
+    }
     if (g_ev_n >= (int)(sizeof(g_ev) / sizeof(g_ev[0]))) {
-        return;
+        return SERVICE_NAME_WATCH_DELIVERED;
     }
     ev_t* e = &g_ev[g_ev_n++];
     e->notify = notify;
@@ -43,6 +56,7 @@ static void cap_event(void* user, uint32_t notify, uint32_t event, uint32_t cook
     e->cookie = cookie;
     e->endpoint = endpoint;
     e->pid = pid;
+    return SERVICE_NAME_WATCH_DELIVERED;
 }
 
 /* Owner contexts a case has declared dead. Empty means everything is alive. */
@@ -70,6 +84,78 @@ static void fresh(void) {
     service_name_watch_set_event_sink(cap_event, 0);
     g_ev_n = 0;
     g_dead_n = 0;
+    g_sink_full = 0;
+    g_sink_gone = 0;
+    g_sink_calls = 0;
+}
+
+/* Regression: 2026-11-19-name-bind-lost-to-full-queue -- a bind that found the
+ * subscriber's queue full was sent once and dropped. A watcher looks the name up
+ * only before the first bind, so it stayed unbound for good: a client of a
+ * restarted provider (vt for kbd, gfxcomp for mouse) never rebound if its queue
+ * was full at the moment the provider registered. */
+static int test_a_bind_the_queue_could_not_take_is_retried(void) {
+    fresh();
+    if (service_name_watch_subscribe("kbd", 500, 9, 5) != 0)
+        return __LINE__;
+    g_sink_full = 1;
+    service_name_watch_bound("kbd", 42, 7, alive_cb, 0);
+    if (g_ev_n != 0)
+        return __LINE__;
+    g_sink_full = 0;
+    service_name_watch_retry_pending();
+    if (g_ev_n != 1 || g_ev[0].notify != 500 || g_ev[0].cookie != 9 || g_ev[0].endpoint != 42 ||
+        g_ev[0].pid != 7)
+        return __LINE__;
+    service_name_watch_retry_pending();
+    if (g_ev_n != 1)
+        return __LINE__; /* delivered once */
+    return 0;
+}
+
+/* Only the latest undelivered bind is kept: a watcher with a full queue is told
+ * the current provider, not one that has since been replaced. */
+static int test_a_newer_bind_replaces_a_pending_one(void) {
+    fresh();
+    if (service_name_watch_subscribe("kbd", 500, 9, 5) != 0)
+        return __LINE__;
+    g_sink_full = 1;
+    service_name_watch_bound("kbd", 42, 7, alive_cb, 0);
+    service_name_watch_bound("kbd", 43, 8, alive_cb, 0);
+    service_name_watch_retry_pending(); /* still full: nothing delivered */
+    if (g_ev_n != 0)
+        return __LINE__;
+    g_sink_full = 0;
+    service_name_watch_retry_pending();
+    if (g_ev_n != 1 || g_ev[0].endpoint != 43 || g_ev[0].pid != 8)
+        return __LINE__;
+    return 0;
+}
+
+/* A pending bind leaves with its subscription, and one that can never be
+ * delivered is not retried. */
+static int test_a_dropped_or_unsubscribed_bind_is_not_retried(void) {
+    fresh();
+    if (service_name_watch_subscribe("kbd", 500, 9, 5) != 0)
+        return __LINE__;
+    g_sink_full = 1;
+    service_name_watch_bound("kbd", 42, 7, alive_cb, 0);
+    service_name_watch_unsubscribe(500, 9);
+    g_sink_full = 0;
+    service_name_watch_retry_pending();
+    if (g_ev_n != 0)
+        return __LINE__;
+
+    if (service_name_watch_subscribe("kbd", 501, 9, 5) != 0)
+        return __LINE__;
+    g_sink_gone = 1;
+    service_name_watch_bound("kbd", 44, 9, alive_cb, 0);
+    g_sink_gone = 0;
+    g_sink_calls = 0;
+    service_name_watch_retry_pending();
+    if (g_sink_calls != 0 || g_ev_n != 0)
+        return __LINE__;
+    return 0;
 }
 
 /* A bind reaches the subscriber with the subscriber's own cookie and the
@@ -286,6 +372,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_bad_names_are_refused),
         WASMOS_TEST_CASE(test_no_event_sink),
         WASMOS_TEST_CASE(test_dynamic_growth),
+        WASMOS_TEST_CASE(test_a_bind_the_queue_could_not_take_is_retried),
+        WASMOS_TEST_CASE(test_a_newer_bind_replaces_a_pending_one),
+        WASMOS_TEST_CASE(test_a_dropped_or_unsubscribed_bind_is_not_retried),
     };
     const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
     if (wasmos_test_run_all(cases, groups) != 0) {

@@ -622,7 +622,11 @@ subscribes FIRST and looks the name up SECOND; the reverse order loses a
 registration that lands between the two. There is no unbind event: names are
 not removed, and a provider's death reaches the clients talking to it as
 `WASMOS_IPC_HANGUP`. The PM keeps no waiter table and no timers -- a dead
-subscriber's record is reclaimed when a bind would address it.
+subscriber's record is reclaimed when a bind would address it. A bind is never
+lost to a full queue: a subscriber that cannot take the event keeps its latest
+undelivered bind, and the PM offers it again on each dispatch until it is
+delivered or replaced by a newer one, so the watcher learns the current
+binding, never a stale one.
 
 libsys builds the client half on this (`wasmos_sys_svc_watch_*`,
 `wasmos_sys_svc_await_start`; native and Zig mirrors,

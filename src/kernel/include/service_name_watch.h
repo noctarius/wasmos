@@ -17,9 +17,16 @@
 
 #define SVC_WATCH_NAME_MAX 36u /* incl. NUL; keep == WASMOS_SVC_NAME_MAX */
 
-/* Delivers one event. The PM pushes an SVC_IPC_NAME_EVENT to notify_endpoint. */
-typedef void (*service_name_watch_event_fn)(void* user, uint32_t notify_endpoint, uint32_t event,
-                                            uint32_t cookie, uint32_t endpoint, uint32_t pid);
+/* Delivers one event. The PM pushes an SVC_IPC_NAME_EVENT to notify_endpoint.
+ * Returns SERVICE_NAME_WATCH_DELIVERED, SERVICE_NAME_WATCH_RETRY when the
+ * subscriber cannot take it now (its queue is full) and the bind must be kept
+ * for service_name_watch_retry_pending, or SERVICE_NAME_WATCH_DROPPED when it
+ * can never be delivered (the endpoint is gone). */
+#define SERVICE_NAME_WATCH_DELIVERED 0
+#define SERVICE_NAME_WATCH_RETRY 1
+#define SERVICE_NAME_WATCH_DROPPED (-1)
+typedef int (*service_name_watch_event_fn)(void* user, uint32_t notify_endpoint, uint32_t event,
+                                           uint32_t cookie, uint32_t endpoint, uint32_t pid);
 
 /* Nonzero iff owner_ctx still has a live process. */
 typedef int (*service_name_watch_alive_fn)(void* user, uint32_t owner_ctx);
@@ -60,6 +67,15 @@ void service_name_watch_unsubscribe(uint32_t notify_endpoint, uint32_t cookie);
  * dispatch. A NULL `alive` treats every subscriber as alive. */
 void service_name_watch_bound(const char* name, uint32_t endpoint, uint32_t pid,
                               service_name_watch_alive_fn alive, void* user);
+
+/* Delivers every bind a subscriber could not take when it happened (the sink
+ * said SERVICE_NAME_WATCH_RETRY). A subscription keeps only its latest such
+ * bind -- a newer one replaces it, and a delivered one clears it -- so a watcher
+ * whose queue was full is told the CURRENT binding once it has room, never a
+ * stale one. A watcher looks the name up only before the first bind, so without
+ * this a bind lost to a full queue would leave it unbound for good. Cheap when
+ * nothing is pending; the PM calls it on every dispatch. */
+void service_name_watch_retry_pending(void);
 
 /* Number of recorded subscriptions, dead owners included until a bind of their
  * name reclaims them. */

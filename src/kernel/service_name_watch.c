@@ -10,10 +10,17 @@ typedef struct {
     uint32_t notify_endpoint;
     uint32_t cookie;
     uint32_t owner_ctx;
+    /* The latest bind the subscriber could not take, kept for
+     * service_name_watch_retry_pending. */
+    uint8_t pending;
+    uint32_t pending_endpoint;
+    uint32_t pending_pid;
 } watch_t;
 
 static list_t g_watches;
 static uint8_t g_inited;
+/* Watches with a pending bind; lets retry_pending return at once when zero. */
+static uint32_t g_pending;
 static service_name_watch_event_fn g_event_fn;
 static void* g_event_user;
 
@@ -34,6 +41,30 @@ static int snw_copy_name(char* dst, const char* src) {
     return str_copy_bytes(dst, SVC_WATCH_NAME_MAX, (const uint8_t*)src, strlen(src));
 }
 
+static void snw_clear_pending(watch_t* w) {
+    if (w->pending) {
+        w->pending = 0;
+        g_pending--;
+    }
+}
+
+/* Offers the bind to the subscriber; keeps it only when the sink asks for a
+ * retry, replacing any older one. */
+static void snw_deliver(watch_t* w, uint32_t endpoint, uint32_t pid) {
+    int rc =
+        g_event_fn(g_event_user, w->notify_endpoint, SVC_NAME_EVENT_BIND, w->cookie, endpoint, pid);
+    if (rc != SERVICE_NAME_WATCH_RETRY) {
+        snw_clear_pending(w);
+        return;
+    }
+    if (!w->pending) {
+        w->pending = 1;
+        g_pending++;
+    }
+    w->pending_endpoint = endpoint;
+    w->pending_pid = pid;
+}
+
 static watch_t* snw_find(uint32_t notify_endpoint, uint32_t cookie) {
     list_iter_t it;
     watch_t* w;
@@ -52,6 +83,7 @@ void service_name_watch_reset(void) {
     while ((e = list_first(&g_watches, &it)) != 0) {
         list_remove(&g_watches, e);
     }
+    g_pending = 0;
     g_event_fn = 0;
     g_event_user = 0;
 }
@@ -78,7 +110,10 @@ int service_name_watch_subscribe(const char* name, uint32_t notify_endpoint, uin
         }
         w->notify_endpoint = notify_endpoint;
         w->cookie = cookie;
+        w->pending = 0;
     }
+    /* A bind kept for the old name means nothing to the new one. */
+    snw_clear_pending(w);
     (void)snw_copy_name(w->name, norm);
     w->owner_ctx = owner_ctx;
     return 0;
@@ -89,6 +124,7 @@ void service_name_watch_unsubscribe(uint32_t notify_endpoint, uint32_t cookie) {
     snw_ensure_init();
     w = snw_find(notify_endpoint, cookie);
     if (w) {
+        snw_clear_pending(w);
         list_remove(&g_watches, w);
     }
 }
@@ -117,6 +153,7 @@ void service_name_watch_bound(const char* name, uint32_t endpoint, uint32_t pid,
             if (!dead) {
                 break;
             }
+            snw_clear_pending(dead);
             list_remove(&g_watches, dead);
         }
     }
@@ -125,8 +162,22 @@ void service_name_watch_bound(const char* name, uint32_t endpoint, uint32_t pid,
     }
     for (w = (watch_t*)list_first(&g_watches, &it); w; w = (watch_t*)list_next(&it)) {
         if (strcmp(w->name, name) == 0) {
-            g_event_fn(
-                g_event_user, w->notify_endpoint, SVC_NAME_EVENT_BIND, w->cookie, endpoint, pid);
+            snw_deliver(w, endpoint, pid);
+        }
+    }
+}
+
+void service_name_watch_retry_pending(void) {
+    list_iter_t it;
+    watch_t* w;
+
+    snw_ensure_init();
+    if (g_pending == 0 || g_event_fn == 0) {
+        return;
+    }
+    for (w = (watch_t*)list_first(&g_watches, &it); w; w = (watch_t*)list_next(&it)) {
+        if (w->pending) {
+            snw_deliver(w, w->pending_endpoint, w->pending_pid);
         }
     }
 }

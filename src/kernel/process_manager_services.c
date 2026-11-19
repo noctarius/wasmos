@@ -49,9 +49,11 @@ static int pm_service_class_alive(void* user, uint32_t owner_ctx) {
     return process_get_exit_status(p->pid, &status) != 0;
 }
 
-/* Push an SVC_IPC_NAME_EVENT to a name subscriber's notify endpoint. */
-static void pm_service_name_event_sink(void* user, uint32_t notify_endpoint, uint32_t event,
-                                       uint32_t cookie, uint32_t endpoint, uint32_t pid) {
+/* Push an SVC_IPC_NAME_EVENT to a name subscriber's notify endpoint. A full
+ * queue asks for a retry: the watcher learns the binding from this event alone. */
+static int pm_service_name_event_sink(void* user, uint32_t notify_endpoint, uint32_t event,
+                                      uint32_t cookie, uint32_t endpoint, uint32_t pid) {
+    int rc;
     ipc_message_t ev;
     (void)user;
     ev.type = SVC_IPC_NAME_EVENT;
@@ -62,7 +64,11 @@ static void pm_service_name_event_sink(void* user, uint32_t notify_endpoint, uin
     ev.arg1 = cookie;
     ev.arg2 = endpoint;
     ev.arg3 = pid;
-    (void)ipc_send_from(g_svc_class_ctx, notify_endpoint, &ev);
+    rc = ipc_send_from(g_svc_class_ctx, notify_endpoint, &ev);
+    if (rc == IPC_OK) {
+        return SERVICE_NAME_WATCH_DELIVERED;
+    }
+    return rc == IPC_ERR_FULL ? SERVICE_NAME_WATCH_RETRY : SERVICE_NAME_WATCH_DROPPED;
 }
 
 static void pm_service_class_ensure(uint32_t pm_context_id) {
@@ -102,6 +108,7 @@ static void pm_service_name_bound(const char* name, uint32_t endpoint, uint32_t 
 void pm_services_reap(uint32_t pm_context_id) {
     pm_service_class_ensure(pm_context_id);
     service_class_registry_reap_dead(pm_service_class_alive, 0);
+    service_name_watch_retry_pending();
 }
 
 /* Inverse of pm_pack_name_args: reassembles up to 16 bytes of name from four IPC

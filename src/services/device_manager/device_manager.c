@@ -15,6 +15,7 @@
 #include "wasmos_driver_abi.h"
 #include "device_manager_types.h"
 #include "device_manager_rules.h"
+#include "device_manager_unit.h"
 
 static device_manager_state_t g_dm = {
     .phase = HW_PHASE_INIT,
@@ -51,6 +52,9 @@ static device_manager_state_t g_dm = {
     .mount_req_pending = 0,
     .mount_req_id = -1,
     .mount_req_bid = -1,
+    .submit_req_bid = -1,
+    .sv_endpoint = -1,
+    .supervisor_endpoint = -1,
     .active_rule_spawn_kind = 0,
     .active_rule_spawn_index = -1,
     .active_rule_spawn_device_index = -1,
@@ -102,6 +106,11 @@ static dm_rules_wait_t g_dm_rules_wait = {0};
  * rules one: both are answered by fs-manager and both can carry FS_IPC_ERROR, so
  * one slot would let a failed rules read retire a mount. */
 static dm_rules_wait_t g_dm_mount_wait = {0};
+/* Pumped from the IDLE phase without blocking: it has no select-set of its own,
+ * and its endpoint is in the idle select set instead (see dm_supervisor_init). */
+static wasmos_sys_event_loop_t g_dm_sv_loop;
+static wasmos_sys_svc_watch_set_t g_dm_sv_watches;
+static wasmos_sys_svc_watch_t g_dm_sv_watch;
 
 #define RULE_SPAWN_KIND_NONE 0u
 #define RULE_SPAWN_KIND_ALWAYS 1u
@@ -808,42 +817,9 @@ static uint8_t g_dm_caps_payload[sizeof(wasmos_spawn_caps_v2_t) +
  * argument slots, so a driver needing more than one goes through the descriptor
  * form, with arg3 asking for the same sync ready-wait. */
 static int hw_spawn_driver_index_caps_v2(int32_t index, const spawn_caps_t* caps) {
-    wasmos_spawn_caps_v2_t header;
-    wasmos_dma_window_t window;
-    uint32_t window_count = 0;
-    uint32_t offset = 0;
-    uint32_t payload_size = 0;
-
-    memset(&header, 0, sizeof(header));
-    header.cap_flags = caps->cap_flags;
-    header.irq_mask = caps->irq_mask;
-    header.io_range_count = (uint16_t)caps->io_range_count;
-
-    /* The packed opcodes let PM synthesise a default DMA grant when only the DMA
-     * bit is set; a descriptor is explicit by design, so state the same defaults
-     * here rather than have PM guess for one caller and not the other. */
-    memset(&window, 0, sizeof(window));
-    if ((caps->cap_flags & DEVMGR_CAP_DMA) != 0) {
-        header.dma.direction_flags = WASMOS_DMA_DIR_BIDIR;
-        header.dma.max_bytes = 4096u;
-        header.dma.window_count = 1u;
-        window.base = 0;
-        window.length = 0x80000000ull;
-        window_count = 1u;
-    }
-
-    payload_size = WASMOS_SPAWN_CAPS_V2_SIZE(caps->io_range_count, window_count);
-    if (payload_size > sizeof(g_dm_caps_payload)) {
+    int32_t payload_size = dm_caps_v2_encode(caps, g_dm_caps_payload, sizeof(g_dm_caps_payload));
+    if (payload_size < 0) {
         return -1;
-    }
-    memcpy(g_dm_caps_payload, &header, sizeof(header));
-    offset = (uint32_t)sizeof(header);
-    memcpy(g_dm_caps_payload + offset,
-           caps->io_ranges,
-           caps->io_range_count * sizeof(wasmos_io_range_t));
-    offset += caps->io_range_count * (uint32_t)sizeof(wasmos_io_range_t);
-    if (window_count > 0) {
-        memcpy(g_dm_caps_payload + offset, &window, sizeof(window));
     }
     if (dm_pm_buffer() < 0 ||
         wasmos_xfer_buffer_write(g_dm_meta_bid, g_dm_caps_payload, (int32_t)payload_size, 0) != 0) {
@@ -2794,6 +2770,124 @@ static int dm_mount_request_send(const char* fstype, const char* mount, const ch
     return 0;
 }
 
+static void dm_on_supervisor_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
+    (void)user;
+    (void)watch;
+    g_dm.supervisor_endpoint = endpoint;
+}
+
+/* The supervisor's answer to the armed rule's submission retires the rule: an
+ * accepted unit is the supervisor's to spawn, watch and restart from here on,
+ * and a refused one goes through the rule's retry policy like a failed spawn.
+ * The supervisor has copied the descriptor before it answers, so the buffer is
+ * released here, which also revokes its loan. */
+static void dm_on_submit_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    g_dm.submit_req_pending = 0;
+    if (g_dm.submit_req_bid >= 0) {
+        (void)wasmos_xfer_buffer_release(g_dm.submit_req_bid);
+        g_dm.submit_req_bid = -1;
+    }
+    if (msg->type != SUPERVISOR_IPC_RESP) {
+        console_write("[device-manager] the supervisor refused ");
+        console_write(g_dm.rule_spawn_path);
+        console_write("\n");
+        rule_spawn_complete(0);
+        return;
+    }
+    rule_spawn_complete(1);
+}
+
+/* Hands the armed ACPI rule's driver to the supervisor under the rule's restart
+ * policy: the unit is named for the device, and carries the startup args and
+ * the grants a direct spawn would. Returns 0 with the submission in flight, or
+ * -1 with nothing sent -- the supervisor is not bound yet, or the spec or the
+ * caps do not fit. */
+static int dm_submit_acpi_rule(const char* args) {
+    static wasmos_supervisor_submit_desc_t desc;
+    const acpi_match_rule_t* rule;
+    const pci_device_record_t* rec;
+    int32_t spec_len;
+    int32_t caps_len;
+    int32_t bid;
+
+    if (g_dm.supervisor_endpoint < 0 || g_dm.active_rule_spawn_index < 0 ||
+        g_dm.active_rule_spawn_index >= (int32_t)g_dm.acpi_match_rule_count ||
+        g_dm.active_rule_spawn_device_index < 0 ||
+        g_dm.active_rule_spawn_device_index >= (int32_t)g_dm.registry_count) {
+        return -1;
+    }
+    rule = &g_dm.acpi_match_rules[g_dm.active_rule_spawn_index];
+    rec = &g_dm.registry[g_dm.active_rule_spawn_device_index];
+    memset(&desc, 0, sizeof(desc));
+    desc.version = SUPERVISOR_SUBMIT_DESC_VERSION;
+    spec_len = dm_unit_spec(g_dm.rule_spawn_path,
+                            (uint16_t)rec->device_id,
+                            rule->restart,
+                            args,
+                            desc.spec,
+                            (uint32_t)sizeof(desc.spec));
+    caps_len =
+        dm_caps_v2_encode(&g_dm.active_rule_spawn_caps, desc.caps, (uint32_t)sizeof(desc.caps));
+    if (spec_len <= 0 || caps_len <= 0) {
+        return -1;
+    }
+    desc.spec_len = (uint32_t)spec_len;
+    desc.caps_len = (uint32_t)caps_len;
+    bid = wasmos_xfer_stage(&desc, (int32_t)sizeof(desc));
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_borrow(g_dm.supervisor_endpoint, bid, WASMOS_BUFFER_GRANT_READ) < 0 ||
+        wasmos_sys_intent_send(&g_dm_sv_loop,
+                               g_dm.supervisor_endpoint,
+                               g_dm.sv_endpoint,
+                               SUPERVISOR_IPC_SUBMIT_REQ,
+                               bid,
+                               0,
+                               (int32_t)sizeof(desc),
+                               0,
+                               dm_on_submit_reply,
+                               0,
+                               0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    g_dm.submit_req_bid = bid;
+    g_dm.submit_req_pending = 1;
+    console_write("[device-manager] handed to the supervisor: ");
+    console_write(desc.spec);
+    console_write("\n");
+    return 0;
+}
+
+/* Follows the "supervisor" name on a loop of its own. The loop's endpoint joins
+ * the IDLE select set and the loop drops the select-set its init made, so the
+ * IDLE phase pumps it without parking on it (wasmos_sys_event_loop_poll). A
+ * failure here leaves supervisor_endpoint at -1, and every rule then spawns its
+ * driver directly. */
+static void dm_supervisor_init(void) {
+    g_dm.sv_endpoint = wasmos_ipc_create_endpoint();
+    if (g_dm.sv_endpoint < 0) {
+        console_write("[device-manager] supervisor endpoint create failed\n");
+        return;
+    }
+    wasmos_sys_event_loop_init(&g_dm_sv_loop, g_dm.sv_endpoint, 0xE300);
+    if (g_dm_sv_loop.select_id >= 0) {
+        (void)wasmos_ipc_select_destroy(g_dm_sv_loop.select_id);
+        g_dm_sv_loop.select_id = -1;
+    }
+    memset(&g_dm_sv_watch, 0, sizeof(g_dm_sv_watch));
+    if ((g_dm_idle_select_id >= 0 &&
+         wasmos_ipc_select_add(g_dm_idle_select_id, g_dm.sv_endpoint) != 0) ||
+        wasmos_sys_event_set_default(&g_dm_sv_loop, dm_handle_ipc_default, 0) != 0 ||
+        wasmos_sys_svc_watch_set_init(&g_dm_sv_watches, &g_dm_sv_loop, g_dm.proc_endpoint) != 0 ||
+        wasmos_sys_svc_watch_start(
+            &g_dm_sv_watches, &g_dm_sv_watch, "supervisor", 0, dm_on_supervisor_bound, 0, 0) != 0) {
+        console_write("[device-manager] supervisor watch failed; drivers spawn directly\n");
+    }
+}
+
 static hw_spawn_target_t next_spawn_target(void) {
     if (g_dm.need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
@@ -2804,7 +2898,7 @@ static hw_spawn_target_t next_spawn_target(void) {
     /* A mount request is in flight for the armed rule, which stays armed until
      * fs-manager answers. Re-entering the spawn phase here would send it a
      * second time. */
-    if (g_dm.mount_req_pending) {
+    if (g_dm.mount_req_pending || g_dm.submit_req_pending) {
         return HW_SPAWN_NONE;
     }
     if (g_dm.rule_spawn_pending &&
@@ -3107,6 +3201,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         console_write("[device-manager] mount handler registration failed\n");
         wasmos_sys_ipc_recv_loop();
     }
+    dm_supervisor_init();
     log_rule_roots_once();
     load_rules_if_available();
     hw_scan_acpi();
@@ -3328,6 +3423,26 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                      * TODO: a descriptor-carrying path spawn would remove this
                      * either/or; a driver needing both declared windows AND
                      * startup args cannot be expressed today. */
+                    /* A rule naming a restart policy hands its driver to the
+                     * supervisor, which spawns it with these args and grants
+                     * and restarts it by that policy. The reply is DEFERRED,
+                     * as for a mount: dm_on_submit_reply retires the rule. */
+                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
+                        g_dm.active_rule_spawn_index >= 0 &&
+                        g_dm.active_rule_spawn_index < (int32_t)g_dm.acpi_match_rule_count &&
+                        g_dm.acpi_match_rules[g_dm.active_rule_spawn_index].restart[0] != '\0') {
+                        if (dm_submit_acpi_rule(args) == 0) {
+                            g_dm.pending = HW_SPAWN_NONE;
+                            g_dm.phase = HW_PHASE_SPAWN;
+                            continue;
+                        }
+                        /* TODO: a driver whose rule names a restart policy is
+                         * spawned unsupervised when the supervisor is not bound
+                         * yet, and is then never restarted. */
+                        console_write("[device-manager] supervisor not reachable; spawning ");
+                        console_write(g_dm.rule_spawn_path);
+                        console_write(" directly\n");
+                    }
                     int32_t spawn_module_index = -1;
                     if (g_dm.active_rule_spawn_caps.io_range_count > 0u) {
                         spawn_module_index = rule_module_index(g_dm.rule_spawn_path);
@@ -3387,6 +3502,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         if (g_dm.phase == HW_PHASE_IDLE) {
             load_rules_if_available();
             poll_mount_request_async();
+            (void)wasmos_sys_event_loop_poll(&g_dm_sv_loop, 8);
             consume_inventory_events_nonblocking();
             drain_reply_endpoint_nonblocking(4);
             if (next_spawn_target() != HW_SPAWN_NONE) {
@@ -3411,7 +3527,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
              * it. The timed wait polls poll_mount_request_async instead. */
             int32_t settled = g_dm.rules_init_loaded && g_dm.rules_boot_loaded &&
                               g_dm.ready_notified && !g_dm.rules_boot_request_pending &&
-                              !g_dm.mount_req_pending;
+                              !g_dm.mount_req_pending && !g_dm.submit_req_pending;
             if (g_dm_idle_select_id >= 0) {
                 if (settled) {
                     (void)wasmos_ipc_select_wait(g_dm_idle_select_id);

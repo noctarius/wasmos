@@ -28,6 +28,9 @@
  *   - `ENV{MOUNT}="..."` says where the filesystem goes.  It is mandatory beside
  *     `ENV{FSTYPE}`, optional beside `RUN+=` on a boot rule, and defaults to "/"
  *     on a block rule.
+ *   - `ENV{RESTART}="never|on-failure|always"` on an acpi rule hands the driver
+ *     to the supervisor under that restart policy instead of spawning it
+ *     directly (SUPERVISOR_IPC_SUBMIT_REQ); any other value rejects the line.
  *   - Unrecognised fields are ignored rather than rejected.
  *
  * Limits, all of which drop input silently: a line longer than 255 characters is

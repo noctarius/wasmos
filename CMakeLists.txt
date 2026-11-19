@@ -240,6 +240,7 @@ set(WASM_CLI_APP ${BUILD_DIR}/cli.wap)
 set(WASM_DEVICE_MANAGER_SOURCES
   ${SERVICES_DIR}/device_manager/device_manager.c
   ${SERVICES_DIR}/device_manager/device_manager_rules.c
+  ${SERVICES_DIR}/device_manager/device_manager_unit.c
 )
 set(WASM_DEVICE_MANAGER_WASM ${BUILD_DIR}/device_manager.wasm)
 set(WASM_DEVICE_MANAGER_APP ${BUILD_DIR}/device_manager.wap)
@@ -2639,6 +2640,18 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_device_manager_rules
   COMMAND ${BUILD_DIR}/test_device_manager_rules
+  # The unit spec and capability descriptor the device manager submits to the
+  # supervisor for a driver whose rule names ENV{RESTART}.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${SERVICES_DIR}/device_manager
+          -I${LIBSYS_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_unit.c
+          ${SERVICES_DIR}/device_manager/device_manager_unit.c
+          -o ${BUILD_DIR}/test_device_manager_unit
+  COMMAND ${BUILD_DIR}/test_device_manager_unit
   # The block descriptor ABI and its class-instance fingerprint. Header-only:
   # wasmos_driver_abi.h carries both, and the generated constants it includes
   # supply the version and the field capacities.

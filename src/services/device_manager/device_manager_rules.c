@@ -931,6 +931,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     char* tok = 0;
     char sub[32];
     char tmp[64];
+    char restart[12];
     uint8_t class_code = MATCH_ANY_U8;
     uint8_t subclass = MATCH_ANY_U8;
     uint16_t io_base = 0;
@@ -945,6 +946,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     }
     path[0] = '\0';
     sub[0] = '\0';
+    restart[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
         tok = (char*)wasmos_sys_trim_left(tok);
@@ -972,6 +974,14 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
             }
             continue;
         }
+        /* The supervisor's policy names, verbatim (SUPERVISOR_IPC_SUBMIT_REQ). */
+        if (extract_op_value(tok, "ENV{RESTART}", "=", restart, sizeof(restart)) == 0) {
+            if (strcmp(restart, "never") != 0 && strcmp(restart, "on-failure") != 0 &&
+                strcmp(restart, "always") != 0) {
+                return -1;
+            }
+            continue;
+        }
     }
     if (strcmp(sub, "acpi") != 0 || path[0] == '\0') {
         return -1;
@@ -983,6 +993,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     out_rule->spawned_device_mask = 0;
     out_rule->given_up_device_mask = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    str_copy(out_rule->restart, sizeof(out_rule->restart), restart);
     return 0;
 }
 

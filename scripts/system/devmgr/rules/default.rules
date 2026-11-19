@@ -62,9 +62,14 @@ SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0
 # same UART. Without the ATTR{io} match every 16550 gets an instance of its own,
 # on the port and IRQ it was spawned for (tests/test_serial_second_uart.py).
 SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{io}=="0x3F8", RUN+="system/drivers/serial.wap"
-SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"
-SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", RUN+="system/drivers/mouse.wap"
-SUBSYSTEM=="acpi", ATTR{class}=="0x08", ATTR{subclass}=="0x03", RUN+="system/drivers/rtc.wap"
+# The legacy input and clock drivers hold no state a restart loses and drive no
+# DMA, so their rules hand them to the supervisor (ENV{RESTART}): a driver that
+# dies is spawned again for the same device, and its clients rebind to the name
+# it registers anew. A DMA-capable driver is not handed over -- nothing quiesces
+# its device before a restart.
+SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", ENV{RESTART}="on-failure", RUN+="system/drivers/keyboard.wap"
+SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", ENV{RESTART}="on-failure", RUN+="system/drivers/mouse.wap"
+SUBSYSTEM=="acpi", ATTR{class}=="0x08", ATTR{subclass}=="0x03", ENV{RESTART}="on-failure", RUN+="system/drivers/rtc.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_net.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_serial.wap"
 # virtio-rng presents PCI class 0x00 / subclass 0xFF; 0xFF reads as the matcher's

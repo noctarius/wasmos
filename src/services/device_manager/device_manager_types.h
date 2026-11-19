@@ -344,6 +344,10 @@ typedef struct {
     uint64_t spawned_device_mask;  /* registry entry index bits already spawned */
     uint64_t given_up_device_mask; /* as on pci_match_rule_t */
     char spawn_path[96];
+    /* ENV{RESTART}: the supervisor's restart policy (never, on-failure or
+     * always) for a driver the rule hands to it; empty when the device manager
+     * spawns the driver itself. */
+    char restart[12];
 } acpi_match_rule_t;
 
 /* Full service state for the device-manager; single static instance. */
@@ -415,9 +419,15 @@ typedef struct {
      * re-drive the same rule while this is set. */
     uint8_t mount_req_pending;
     int32_t mount_req_id;
-    int32_t mount_req_bid;                  /* owner-push xfer buffer_id holding the descriptor */
-    uint8_t active_rule_spawn_kind;         /* which rule kind is driving the spawn */
-    int32_t active_rule_spawn_index;        /* index into the corresponding rule array */
+    int32_t mount_req_bid; /* owner-push xfer buffer_id holding the descriptor */
+    /* One SUPERVISOR_IPC_SUBMIT_REQ in flight for the armed rule, held like
+     * mount_req_pending: the rule is retired when the supervisor answers. */
+    uint8_t submit_req_pending;
+    int32_t submit_req_bid;          /* owner-push buffer lent READ to the supervisor */
+    int32_t sv_endpoint;             /* receives the submit reply and the name watch's events */
+    int32_t supervisor_endpoint;     /* bound by the "supervisor" name watch; -1 until then */
+    uint8_t active_rule_spawn_kind;  /* which rule kind is driving the spawn */
+    int32_t active_rule_spawn_index; /* index into the corresponding rule array */
     int32_t active_rule_spawn_device_index; /* device registry index for pci/acpi */
     always_spawn_rule_t always_spawn_rules[ALWAYS_SPAWN_RULE_CAP];
     uint32_t always_spawn_rule_count;

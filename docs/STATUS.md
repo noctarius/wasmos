@@ -314,12 +314,23 @@ linked feature documents for rationale and rollout plans.
   (`cli@tty1`, `restart=always`, pinned to slot 1) to the supervisor with the
   script engine's `service` line; sysinit finds the supervisor by name watch and
   continues once a unit is accepted, not once it is up. Apps (chardevc, the gfx
-  apps) are still plain `spawn`s, and device-manager still spawns drivers
-  itself. `svc submit <spec>` submits from the shell, `svc list` prints the unit
+  apps) are still plain `spawn`s, and device-manager spawns the drivers whose
+  rule names no restart policy itself. `svc submit <spec>` submits from the shell, `svc list` prints the unit
   table and `svc status <unit>` one unit, including its liveness record;
   `sv_probe` is the test unit that crashes, hangs or stays busy on demand. Not
   yet: liveness for the boot services, and operator commands that change a
   unit (stop, start, restart).
+- An ACPI rule with `ENV{RESTART}="never|on-failure|always"` makes
+  device-manager submit the driver to the supervisor instead of spawning it:
+  the unit is `<template>@acpi:<io base>` (`rtc@acpi:0070`), carries the rule's
+  args and the I/O/IRQ caps a direct spawn would, and is logged as
+  `[device-manager] handed to the supervisor: <spec>`. The supervisor is found
+  by name watch and the submit is an intent on a loop device-manager pumps from
+  IDLE; the reply retires the rule. A submission that cannot be sent (no
+  supervisor bound yet) spawns the driver directly. `default.rules` sets
+  `on-failure` for rtc, keyboard and mouse; DMA-capable drivers stay
+  device-manager-spawned (the supervisor refuses DMA caps). Clients rebind on
+  their own (vt and gfxcomp through name watches on hangup; `date` per run).
 - Boot milestone: when sysinit.rc has run to its end, sysinit sends
   `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` (finding the supervisor by name if no
   `service` line did), and the units the supervisor then holds are the boot

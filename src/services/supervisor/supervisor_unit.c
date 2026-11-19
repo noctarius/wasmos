@@ -113,6 +113,27 @@ static int sv_parse_option(sv_unit_t* unit, const char* tok, uint32_t len) {
     return -1;
 }
 
+int32_t sv_unit_set_caps(sv_unit_t* unit, const uint8_t* caps, uint32_t len) {
+    wasmos_spawn_caps_v2_t hdr;
+    if (!unit) {
+        return WASMOS_ERR_SUPERVISOR_BAD_DESC;
+    }
+    if (len == 0u) {
+        unit->caps_len = 0;
+        return 0;
+    }
+    if (!caps || len < (uint32_t)sizeof(hdr) || len > SUPERVISOR_CAPS_MAX) {
+        return WASMOS_ERR_SUPERVISOR_BAD_DESC;
+    }
+    memcpy(&hdr, caps, sizeof(hdr));
+    if ((hdr.cap_flags & DEVMGR_CAP_DMA) != 0u) {
+        return WASMOS_ERR_SUPERVISOR_DMA_CAPS;
+    }
+    memcpy(unit->caps, caps, len);
+    unit->caps_len = len;
+    return 0;
+}
+
 int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now, sv_unit_t* out) {
     sv_unit_t unit;
     const char* p;

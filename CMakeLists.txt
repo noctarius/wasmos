@@ -3912,6 +3912,19 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${KERNEL_DIR}/shutdown_order.c
           -o ${BUILD_DIR}/test_pm_shutdown
   COMMAND ${BUILD_DIR}/test_pm_shutdown
+  # The spawn capability descriptor (wasmos_spawn_caps_v2_t) as the process
+  # manager parses it for PROC_IPC_SPAWN_CAPS_V2 and PROC_IPC_SPAWN_WATCHED.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_caps.c
+          ${KERNEL_DIR}/process_manager_caps.c
+          -o ${BUILD_DIR}/test_pm_caps
+  COMMAND ${BUILD_DIR}/test_pm_caps
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -4772,6 +4785,12 @@ wasmos_ide_index(wasmos_ide_unit_pm_shutdown
   IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
          ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
   DEFINES WASMOS_HOST_TEST_SMP=1)
+# test_pm_caps.c reaches the same header; same set as test_pm_shutdown.
+wasmos_ide_index(wasmos_ide_unit_pm_caps
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_caps.c
+  IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
+  DEFINES WASMOS_HOST_TEST_SMP=1)
 
 # test_process_lifecycle.c and its platform stubs link the real process.c, so
 # they take the real kernel headers and the WASMOS_PROCESS_TEST_SEAMS define its
@@ -4830,6 +4849,7 @@ wasmos_ide_index(wasmos_ide_unit
           ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_caps.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include

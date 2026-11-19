@@ -289,8 +289,8 @@ pub const PROC_STATUS_READY: i32 = 3;
 /// the caller's buffer at the offsets it names.
 ///
 /// A reader MUST reject a descriptor whose version it does not know.
-/// Current wasmos_spawn_watch_desc_t layout.
-pub const SPAWN_WATCH_DESC_VERSION: i32 = 1;
+/// Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len).
+pub const SPAWN_WATCH_DESC_VERSION: i32 = 2;
 /// Dependency records the reply can carry, the same ceiling as a .wap
 /// v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off.
 pub const SPAWN_WATCH_DEPS_MAX: i32 = 16;
@@ -424,8 +424,12 @@ pub const FSMGR_MOUNT_WAIT_PATH_MAX: i32 = 63;
 /// src/drivers/include/wasmos_driver_abi.h.
 ///
 /// A reader MUST reject a descriptor whose version it does not know.
-/// Current wasmos_supervisor_submit_desc_t layout.
-pub const SUPERVISOR_SUBMIT_DESC_VERSION: i32 = 1;
+/// Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps).
+pub const SUPERVISOR_SUBMIT_DESC_VERSION: i32 = 2;
+/// Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t
+/// and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT
+/// ranges fit, DMA windows are refused.
+pub const SUPERVISOR_CAPS_MAX: i32 = 64;
 /// Longest unit spec a submission carries, NUL excluded.
 pub const SUPERVISOR_SPEC_MAX: i32 = 255;
 /// Longest unit name (template@instance), NUL excluded: a service name's ceiling.

@@ -83,8 +83,10 @@ typedef struct {
     char name[SV_UNIT_NAME_MAX];
     char path[SV_PATH_MAX];
     char args[SV_ARGS_MAX];
-    uint32_t pid;      /* the running instance; 0 when none */
-    uint32_t deadline; /* meaning depends on state (see sv_state_t) */
+    uint32_t caps_len;                 /* 0 = no hardware access */
+    uint8_t caps[SUPERVISOR_CAPS_MAX]; /* wasmos_spawn_caps_v2_t + I/O ranges */
+    uint32_t pid;                      /* the running instance; 0 when none */
+    uint32_t deadline;                 /* meaning depends on state (see sv_state_t) */
     uint32_t backoff_ms;
     uint32_t ends_at[SV_INTENSITY_SLOTS]; /* ring of recent counted ends */
     uint32_t ends_head;                   /* next slot of ends_at */
@@ -122,6 +124,14 @@ typedef enum {
  * class=optional, no tty pin, the default probe period, no args. Returns 0, or
  * WASMOS_ERR_SUPERVISOR_BAD_SPEC with *out unchanged. */
 int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now, sv_unit_t* out);
+
+/* Gives the unit the capability descriptor a submission carried (len bytes of
+ * wasmos_spawn_caps_v2_t and its I/O ranges), which every spawn of it passes to
+ * the PM; len 0 leaves it without hardware access. The PM validates the
+ * descriptor itself. Returns 0, WASMOS_ERR_SUPERVISOR_BAD_DESC for a length
+ * outside the header..SUPERVISOR_CAPS_MAX, or WASMOS_ERR_SUPERVISOR_DMA_CAPS for
+ * a DMA request, with the unit unchanged. */
+int32_t sv_unit_set_caps(sv_unit_t* unit, const uint8_t* caps, uint32_t len);
 
 /* The spawn request was sent. */
 void sv_unit_spawn_sent(sv_unit_t* unit);

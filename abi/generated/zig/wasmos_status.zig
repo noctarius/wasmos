@@ -62,6 +62,8 @@ pub const WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: i32 = -0x0001000B; // valid bro
 pub const WASMOS_ERR_PROC_SPAWN_BAD_DESC: i32 = -0x0001000C; // a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names
 pub const WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: i32 = -0x0001000D; // the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child
 pub const WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: i32 = -0x0001000E; // the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch
+pub const WASMOS_ERR_PROC_SPAWN_BAD_CAPS: i32 = -0x0001000F; // the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created
+pub const WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: i32 = -0x00010010; // the kernel refused the parsed capability profile for the new child, which was killed before it ran
 pub const WASMOS_ERR_PROC_PM_BUSY: i32 = -0x00020001; // PM already has an incompatible in-flight operation
 pub const WASMOS_ERR_PROC_PM_BAD_ENDPOINT: i32 = -0x00020002; // source endpoint owner lookup failed
 pub const WASMOS_ERR_PROC_PM_NO_CALLER: i32 = -0x00020003; // source endpoint owner has no live process
@@ -299,6 +301,7 @@ pub const WASMOS_ERR_SUPERVISOR_BAD_DESC: i32 = -0x001A0001; // the submission d
 pub const WASMOS_ERR_SUPERVISOR_BAD_SPEC: i32 = -0x001A0002; // the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option
 pub const WASMOS_ERR_SUPERVISOR_EXISTS: i32 = -0x001A0003; // a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed
 pub const WASMOS_ERR_SUPERVISOR_NO_SPACE: i32 = -0x001A0004; // the supervisor's unit table is full
+pub const WASMOS_ERR_SUPERVISOR_DMA_CAPS: i32 = -0x001A0005; // the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit
 
 pub fn errMake(dom: u16, code: u16) i32 {
     return -@as(i32, @intCast((@as(u32, dom) << 16) | @as(u32, code)));
@@ -376,6 +379,8 @@ pub fn strerror(c: i32) []const u8 {
         WASMOS_ERR_PROC_SPAWN_BAD_DESC => "a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names",
         WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED => "the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child",
         WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE => "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch",
+        WASMOS_ERR_PROC_SPAWN_BAD_CAPS => "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created",
+        WASMOS_ERR_PROC_SPAWN_CAPS_APPLY => "the kernel refused the parsed capability profile for the new child, which was killed before it ran",
         WASMOS_ERR_PROC_PM_BUSY => "PM already has an incompatible in-flight operation",
         WASMOS_ERR_PROC_PM_BAD_ENDPOINT => "source endpoint owner lookup failed",
         WASMOS_ERR_PROC_PM_NO_CALLER => "source endpoint owner has no live process",
@@ -613,6 +618,7 @@ pub fn strerror(c: i32) []const u8 {
         WASMOS_ERR_SUPERVISOR_BAD_SPEC => "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option",
         WASMOS_ERR_SUPERVISOR_EXISTS => "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed",
         WASMOS_ERR_SUPERVISOR_NO_SPACE => "the supervisor's unit table is full",
+        WASMOS_ERR_SUPERVISOR_DMA_CAPS => "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit",
         else => "unknown error",
     };
 }

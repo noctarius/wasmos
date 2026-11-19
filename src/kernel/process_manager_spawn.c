@@ -270,24 +270,6 @@ static pm_app_state_t* pm_find_app_slot(void) {
     return (pm_app_state_t*)list_alloc(&g_pm.apps);
 }
 
-/* The packed-arg spawn opcodes each describe exactly one I/O window; the
- * descriptor path (pm_handle_spawn_caps_v2) may carry several. Centralised so
- * the "no io.port capability means no windows at all" rule cannot drift between
- * the five call sites. Returns 0, or BAD_CAPS for an inverted window. */
-static int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last) {
-    caps->io_range_count = 0;
-    if ((caps->cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
-        return 0;
-    }
-    if (first > last) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    caps->io_ranges[0].first = first;
-    caps->io_ranges[0].last = last;
-    caps->io_range_count = 1;
-    return 0;
-}
-
 /* Startup values reach the child through the spawn-info contract (see
  * wasmos_spawn_info.h and the buffer pm_app_entry builds), and service endpoints
  * through svc_lookup -- not through entry arguments.  Guest entry points
@@ -1885,18 +1867,13 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
  * io_port_min/max pair. */
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
-    wasmos_spawn_caps_v2_t in_caps;
     uint32_t owner_context = 0;
     process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
-    uint32_t known_cap_mask =
-        DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ | DEVMGR_CAP_DMA;
     uint32_t payload_size = 0;
-    uint32_t expected_size = 0;
     const uint8_t* caps_payload = 0;
     uint32_t caps_buffer_size = 0;
-    uint64_t win_end = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
@@ -1913,81 +1890,16 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
      * unrelated memory instead of failing.  The xfer-buffer object resolves
      * through its backing pages, which is what every descriptor path here uses. */
     payload_size = (uint32_t)msg->arg2;
-    if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(in_caps)) {
+    if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(wasmos_spawn_caps_v2_t)) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     caps_payload = pm_foreign_xfer_ptr((uint32_t)msg->arg1, owner_context, &caps_buffer_size);
     if (!caps_payload || payload_size > caps_buffer_size) {
         return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
-    __builtin_memcpy(&in_caps, caps_payload, sizeof(in_caps));
-
-    if ((in_caps.cap_flags & ~known_cap_mask) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if ((in_caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0 && in_caps.io_range_count == 0 &&
-        in_caps.io_port_min > in_caps.io_port_max) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if (in_caps.io_range_count > WASMOS_IO_RANGE_LIMIT) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-
-    caps.valid = 1;
-    caps.cap_flags = in_caps.cap_flags;
-    caps.irq_mask = in_caps.irq_mask;
-    caps.dma_direction_flags = 0;
-    caps.dma_max_bytes = 0;
-    caps.dma_window_count = 0;
-
-    /* A non-zero io_range_count supersedes the single io_port_min/max window;
-     * the ranges follow the fixed header, ahead of the DMA windows. */
-    if (in_caps.io_range_count > 0) {
-        expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.io_range_count, 0);
-        if (payload_size < expected_size) {
-            return WASMOS_ERR_PROC_PM_BAD_CAPS;
-        }
-        __builtin_memcpy(caps.io_ranges,
-                         caps_payload + sizeof(in_caps),
-                         (size_t)in_caps.io_range_count * sizeof(wasmos_io_range_t));
-        caps.io_range_count =
-            ((caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0) ? (uint32_t)in_caps.io_range_count : 0u;
-        for (uint32_t i = 0; i < caps.io_range_count; ++i) {
-            if (caps.io_ranges[i].first > caps.io_ranges[i].last) {
-                return WASMOS_ERR_PROC_PM_BAD_CAPS;
-            }
-        }
-    } else if (pm_caps_set_io_window(&caps, in_caps.io_port_min, in_caps.io_port_max) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
-        if ((in_caps.dma.direction_flags & ~WASMOS_DMA_DIR_BIDIR) != 0 ||
-            in_caps.dma.direction_flags == 0 || in_caps.dma.max_bytes == 0 ||
-            in_caps.dma.window_count == 0 || in_caps.dma.window_count > PM_DMA_WINDOW_LIMIT) {
-            return WASMOS_ERR_PROC_PM_BAD_CAPS;
-        }
-        expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.io_range_count, in_caps.dma.window_count);
-        if (payload_size != expected_size) {
-            return WASMOS_ERR_PROC_PM_BAD_CAPS;
-        }
-        __builtin_memcpy(caps.dma_windows,
-                         caps_payload + sizeof(in_caps) +
-                             (size_t)in_caps.io_range_count * sizeof(wasmos_io_range_t),
-                         (size_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t));
-        for (uint32_t i = 0; i < in_caps.dma.window_count; ++i) {
-            if (caps.dma_windows[i].length == 0) {
-                return WASMOS_ERR_PROC_PM_BAD_CAPS;
-            }
-            win_end = caps.dma_windows[i].base + caps.dma_windows[i].length;
-            if (win_end < caps.dma_windows[i].base) {
-                return WASMOS_ERR_PROC_PM_BAD_CAPS;
-            }
-        }
-        caps.dma_direction_flags = in_caps.dma.direction_flags;
-        caps.dma_max_bytes = in_caps.dma.max_bytes;
-        caps.dma_window_count = in_caps.dma.window_count;
-    } else if (payload_size != (uint32_t)sizeof(in_caps)) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
+    int caps_rc = pm_caps_from_v2(caps_payload, payload_size, &caps);
+    if (caps_rc != 0) {
+        return caps_rc;
     }
 
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
@@ -2226,6 +2138,8 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
     wasmos_spawn_watch_desc_t req;
     char path[SPAWN_WATCH_PATH_MAX + 1];
     char cli_args[SPAWN_WATCH_ARGS_MAX + 1];
+    uint8_t caps_bytes[WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_IO_RANGE_LIMIT, PM_DMA_WINDOW_LIMIT)];
+    pm_spawn_caps_t caps = {0};
     ipc_owed_t* on_ready = 0;
     ipc_owed_t* on_exit = 0;
     pm_resolved_spawn_path_t resolved;
@@ -2256,8 +2170,15 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
     if (req.version != SPAWN_WATCH_DESC_VERSION || req.path_len == 0 ||
         req.path_len > SPAWN_WATCH_PATH_MAX || req.args_len > SPAWN_WATCH_ARGS_MAX ||
         (uint64_t)req.path_off + req.path_len > region_size ||
-        (uint64_t)req.args_off + req.args_len > region_size) {
+        (uint64_t)req.args_off + req.args_len > region_size || req.caps_len > sizeof(caps_bytes) ||
+        (uint64_t)req.caps_off + req.caps_len > region_size) {
         return WASMOS_ERR_PROC_SPAWN_BAD_DESC;
+    }
+    if (req.caps_len > 0u) {
+        __builtin_memcpy(caps_bytes, region + req.caps_off, req.caps_len);
+        if (pm_caps_from_v2(caps_bytes, req.caps_len, &caps) != 0) {
+            return WASMOS_ERR_PROC_SPAWN_BAD_CAPS;
+        }
     }
     __builtin_memcpy(path, region + req.path_off, req.path_len);
     path[req.path_len] = '\0';
@@ -2309,6 +2230,15 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
         ipc_owed_cancel(on_ready);
         ipc_owed_cancel(on_exit);
         return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
+    }
+
+    if (pm_apply_spawn_caps(pid, &caps) != 0) {
+        pm_xfer_release(&pmbuf);
+        ipc_owed_cancel(on_ready);
+        ipc_owed_cancel(on_exit);
+        (void)process_kill(pid, -1);
+        (void)process_set_auto_reap(pid, 1);
+        return WASMOS_ERR_PROC_SPAWN_CAPS_APPLY;
     }
 
     /* The reply fields, while desc still points into the blob. */

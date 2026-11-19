@@ -319,7 +319,7 @@ groups:
 
       A reader MUST reject a descriptor whose version it does not know.
     constants:
-      - { symbol: SPAWN_WATCH_DESC_VERSION, value: 1, doc: "Current wasmos_spawn_watch_desc_t layout." }
+      - { symbol: SPAWN_WATCH_DESC_VERSION, value: 2, doc: "Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len)." }
       - symbol: SPAWN_WATCH_DEPS_MAX
         value: 16
         doc: |
@@ -485,7 +485,13 @@ groups:
 
       A reader MUST reject a descriptor whose version it does not know.
     constants:
-      - { symbol: SUPERVISOR_SUBMIT_DESC_VERSION, value: 1, doc: "Current wasmos_supervisor_submit_desc_t layout." }
+      - { symbol: SUPERVISOR_SUBMIT_DESC_VERSION, value: 2, doc: "Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps)." }
+      - symbol: SUPERVISOR_CAPS_MAX
+        value: 64
+        doc: |
+          Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t
+          and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT
+          ranges fit, DMA windows are refused.
       - { symbol: SUPERVISOR_SPEC_MAX, value: 255, doc: "Longest unit spec a submission carries, NUL excluded." }
       - { symbol: SUPERVISOR_UNIT_NAME_MAX, value: 35, doc: "Longest unit name (template@instance), NUL excluded: a service name's ceiling." }
 

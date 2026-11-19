@@ -43,6 +43,8 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_SPAWN_BAD_DESC` | -0x0001000C | a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names |
 | `WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED` | -0x0001000D | the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child |
 | `WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE` | -0x0001000E | the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch |
+| `WASMOS_ERR_PROC_SPAWN_BAD_CAPS` | -0x0001000F | the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created |
+| `WASMOS_ERR_PROC_SPAWN_CAPS_APPLY` | -0x00010010 | the kernel refused the parsed capability profile for the new child, which was killed before it ran |
 
 ### `proc_pm` (domain 2) — non-path process-manager IPC failures (was PROC_PM_ERR_*)
 
@@ -406,3 +408,4 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_SUPERVISOR_BAD_SPEC` | -0x001A0002 | the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option |
 | `WASMOS_ERR_SUPERVISOR_EXISTS` | -0x001A0003 | a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed |
 | `WASMOS_ERR_SUPERVISOR_NO_SPACE` | -0x001A0004 | the supervisor's unit table is full |
+| `WASMOS_ERR_SUPERVISOR_DMA_CAPS` | -0x001A0005 | the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit |

@@ -54,7 +54,8 @@ _Static_assert(1000u % WASMOS_SCHED_TICK_HZ == 0u, "a tick must be a whole numbe
  * descriptor, then the path and the args at the offsets it names. */
 #define SV_SPAWN_PATH_OFF ((uint32_t)sizeof(wasmos_spawn_watch_desc_t))
 #define SV_SPAWN_ARGS_OFF (SV_SPAWN_PATH_OFF + SV_PATH_MAX)
-#define SV_SPAWN_REGION (SV_SPAWN_ARGS_OFF + SV_ARGS_MAX)
+#define SV_SPAWN_CAPS_OFF (SV_SPAWN_ARGS_OFF + SV_ARGS_MAX)
+#define SV_SPAWN_REGION (SV_SPAWN_CAPS_OFF + SUPERVISOR_CAPS_MAX)
 
 /* Default policy numbers, multiplied by the kenv timescale. */
 static const sv_timing_t k_base_timing = {
@@ -323,12 +324,17 @@ static int sv_spawn_send(int32_t index) {
     desc.path_len = path_len;
     desc.args_off = SV_SPAWN_ARGS_OFF;
     desc.args_len = args_len;
+    desc.caps_off = SV_SPAWN_CAPS_OFF;
+    desc.caps_len = u->caps_len;
     if (wasmos_xfer_buffer_write(g_spawn_bid, &desc, (int32_t)sizeof(desc), 0) != 0 ||
         wasmos_xfer_buffer_write(
             g_spawn_bid, u->path, (int32_t)path_len, (int32_t)SV_SPAWN_PATH_OFF) != 0 ||
         (args_len > 0 &&
          wasmos_xfer_buffer_write(
-             g_spawn_bid, u->args, (int32_t)args_len, (int32_t)SV_SPAWN_ARGS_OFF) != 0)) {
+             g_spawn_bid, u->args, (int32_t)args_len, (int32_t)SV_SPAWN_ARGS_OFF) != 0) ||
+        (u->caps_len > 0 &&
+         wasmos_xfer_buffer_write(
+             g_spawn_bid, u->caps, (int32_t)u->caps_len, (int32_t)SV_SPAWN_CAPS_OFF) != 0)) {
         return -1;
     }
     if (wasmos_sys_intent_send(&g_loop,
@@ -527,6 +533,9 @@ static void sv_on_submit(void* user, const wasmos_ipc_message_t* msg) {
     }
     sv_load_timing();
     rc = sv_spec_parse(desc.spec, &g_timing, sv_now(), &unit);
+    if (rc == 0) {
+        rc = sv_unit_set_caps(&unit, desc.caps, desc.caps_len);
+    }
     if (rc != 0) {
         sv_reply(msg, rc);
         return;

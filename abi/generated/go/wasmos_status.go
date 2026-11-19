@@ -70,6 +70,8 @@ const (
 	WASMOS_ERR_PROC_SPAWN_BAD_DESC int32 = -0x0001000C // a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names
 	WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED int32 = -0x0001000D // the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child
 	WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE int32 = -0x0001000E // the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch
+	WASMOS_ERR_PROC_SPAWN_BAD_CAPS int32 = -0x0001000F // the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created
+	WASMOS_ERR_PROC_SPAWN_CAPS_APPLY int32 = -0x00010010 // the kernel refused the parsed capability profile for the new child, which was killed before it ran
 	WASMOS_ERR_PROC_PM_BUSY int32 = -0x00020001 // PM already has an incompatible in-flight operation
 	WASMOS_ERR_PROC_PM_BAD_ENDPOINT int32 = -0x00020002 // source endpoint owner lookup failed
 	WASMOS_ERR_PROC_PM_NO_CALLER int32 = -0x00020003 // source endpoint owner has no live process
@@ -307,6 +309,7 @@ const (
 	WASMOS_ERR_SUPERVISOR_BAD_SPEC int32 = -0x001A0002 // the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option
 	WASMOS_ERR_SUPERVISOR_EXISTS int32 = -0x001A0003 // a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed
 	WASMOS_ERR_SUPERVISOR_NO_SPACE int32 = -0x001A0004 // the supervisor's unit table is full
+	WASMOS_ERR_SUPERVISOR_DMA_CAPS int32 = -0x001A0005 // the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -442,6 +445,10 @@ func WasmosStrerror(c int32) string {
 		return "the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child"
 	case WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE:
 		return "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch"
+	case WASMOS_ERR_PROC_SPAWN_BAD_CAPS:
+		return "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created"
+	case WASMOS_ERR_PROC_SPAWN_CAPS_APPLY:
+		return "the kernel refused the parsed capability profile for the new child, which was killed before it ran"
 	case WASMOS_ERR_PROC_PM_BUSY:
 		return "PM already has an incompatible in-flight operation"
 	case WASMOS_ERR_PROC_PM_BAD_ENDPOINT:
@@ -916,6 +923,8 @@ func WasmosStrerror(c int32) string {
 		return "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed"
 	case WASMOS_ERR_SUPERVISOR_NO_SPACE:
 		return "the supervisor's unit table is full"
+	case WASMOS_ERR_SUPERVISOR_DMA_CAPS:
+		return "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit"
 	default:
 		return "unknown error"
 	}

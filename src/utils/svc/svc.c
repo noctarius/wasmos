@@ -53,6 +53,8 @@ static const char* svc_reason(int32_t code) {
         return "a unit of that name exists";
     case WASMOS_ERR_SUPERVISOR_NO_SPACE:
         return "the supervisor's unit table is full";
+    case WASMOS_ERR_SUPERVISOR_DMA_CAPS:
+        return "a DMA unit cannot be restarted safely";
     case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT:
         return "no supervisor is running";
     default:

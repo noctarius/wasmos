@@ -132,6 +132,19 @@ typedef struct {
     wasmos_dma_window_t dma_windows[PM_DMA_WINDOW_LIMIT];
 } pm_spawn_caps_t;
 
+/* Fills caps with exactly one I/O window [first, last], or none when caps lacks
+ * DEVMGR_CAP_IO_PORT. caps->cap_flags must already be set. Returns 0, or
+ * WASMOS_ERR_PROC_PM_BAD_CAPS for an inverted window. */
+int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last);
+
+/* Parses a wasmos_spawn_caps_v2_t and its tail arrays (wasmos_driver_abi.h)
+ * from payload_size bytes the caller has already copied out of, or validated
+ * inside, the requester's buffer. The size must be exactly what the counts in
+ * the header imply. Refuses unknown cap bits, inverted or excess I/O ranges and
+ * an incomplete DMA request. Returns 0 with caps valid, or
+ * WASMOS_ERR_PROC_PM_BAD_CAPS. */
+int pm_caps_from_v2(const uint8_t* payload, uint32_t payload_size, pm_spawn_caps_t* caps);
+
 /* One entry of the flat name -> endpoint service table.
  *
  * `name` is sized for the LONGEST name any registration path accepts, which is

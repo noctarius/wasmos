@@ -577,6 +577,48 @@ static void test_a_restarting_required_unit_holds_the_boot(void) {
     CHECK(sv_boot_check(units, 4, 0, 0) == SV_BOOT_PENDING, "boot waits for it to come back");
 }
 
+/* Writes a wasmos_spawn_caps_v2_t with `ranges` I/O ranges into buf. */
+static uint32_t caps_v2(uint8_t* buf, uint32_t flags, uint16_t ranges) {
+    wasmos_spawn_caps_v2_t hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.cap_flags = flags;
+    hdr.io_range_count = ranges;
+    memset(buf, 0, SUPERVISOR_CAPS_MAX);
+    memcpy(buf, &hdr, sizeof(hdr));
+    return WASMOS_SPAWN_CAPS_V2_SIZE(ranges, 0);
+}
+
+static void test_a_unit_keeps_the_caps_it_was_submitted_with(void) {
+    uint8_t buf[SUPERVISOR_CAPS_MAX];
+    sv_unit_t u = parse_ok("kbd@acpi:0 /boot/system/drivers/keyboard.wap", 0);
+    uint32_t len = caps_v2(buf, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ, WASMOS_IO_RANGE_LIMIT);
+    CHECK(u.caps_len == 0u, "a parsed unit has no caps");
+    CHECK(sv_unit_set_caps(&u, buf, len) == 0, "I/O and IRQ caps are taken");
+    CHECK(u.caps_len == len && memcmp(u.caps, buf, len) == 0, "the caps are kept verbatim");
+    CHECK(sv_unit_set_caps(&u, buf, 0) == 0 && u.caps_len == 0u, "len 0 clears them");
+}
+
+static void test_dma_caps_are_refused(void) {
+    uint8_t buf[SUPERVISOR_CAPS_MAX];
+    sv_unit_t u = parse_ok("rng@pci:0 /p", 0);
+    uint32_t len = caps_v2(buf, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_DMA, 0);
+    CHECK(sv_unit_set_caps(&u, buf, len) == WASMOS_ERR_SUPERVISOR_DMA_CAPS,
+          "a DMA unit cannot be restarted safely, so it is not taken");
+    CHECK(u.caps_len == 0u, "a refused descriptor leaves the unit unchanged");
+}
+
+static void test_a_caps_length_outside_its_bounds_is_refused(void) {
+    uint8_t buf[SUPERVISOR_CAPS_MAX + 1];
+    sv_unit_t u = parse_ok("n /p", 0);
+    (void)caps_v2(buf, DEVMGR_CAP_IO_PORT, 0);
+    CHECK(sv_unit_set_caps(&u, buf, (uint32_t)sizeof(wasmos_spawn_caps_v2_t) - 1u) ==
+              WASMOS_ERR_SUPERVISOR_BAD_DESC,
+          "shorter than the header");
+    CHECK(sv_unit_set_caps(&u, buf, SUPERVISOR_CAPS_MAX + 1u) == WASMOS_ERR_SUPERVISOR_BAD_DESC,
+          "longer than SUPERVISOR_CAPS_MAX");
+    CHECK(u.caps_len == 0u, "unchanged");
+}
+
 int main(void) {
     test_a_spec_parses_into_its_policy();
     test_a_bare_spec_takes_the_defaults();
@@ -611,6 +653,9 @@ int main(void) {
     test_a_required_unit_that_gives_up_fails_the_boot();
     test_an_optional_or_late_unit_does_not_hold_the_boot();
     test_a_restarting_required_unit_holds_the_boot();
+    test_a_unit_keeps_the_caps_it_was_submitted_with();
+    test_dma_caps_are_refused();
+    test_a_caps_length_outside_its_bounds_is_refused();
     if (g_failures != 0) {
         printf("test_supervisor_unit: %d failure(s)\n", g_failures);
         return 1;

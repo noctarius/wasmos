@@ -565,7 +565,10 @@ lifecycle as events instead of a wait. The request is a
 tty pin and a **notify endpoint the spawner must own** — only the spawner may
 watch its child. On success the PM writes the child's pid, app flags and its
 `.wap` `[deps]` back into the descriptor and replies `arg0=pid arg1=app_flags`,
-so the spawner never reads an image.
+so the spawner never reads an image. The descriptor may also carry a
+`wasmos_spawn_caps_v2_t` (I/O windows, IRQ lines, DMA), applied while the child
+is parked, so a driver holds its hardware access from its first instruction; a
+descriptor that does not parse spawns nothing.
 
 The watch exists from the child's first instant: both events are reserved
 (`ipc_owed_reserve`) before the child is created and attached to it while it is

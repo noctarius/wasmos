@@ -98,7 +98,9 @@ pub const PROC_IPC_EXEC_HANDLER_REGISTER: i32 = 0x211;
 /// request is a wasmos_spawn_watch_desc_t in a transfer buffer the caller
 /// owns: arg0=buffer_id arg1=offset arg2=size of the region the PM may
 /// read and write. The descriptor names a notify endpoint the caller must
-/// own; only the spawner may watch.
+/// own; only the spawner may watch. A non-zero caps_len names a
+/// wasmos_spawn_caps_v2_t in the same region; the child holds those
+/// capabilities from its first instruction.
 /// On success: PROC_IPC_RESP, arg0=child_pid arg1=app_flags, with pid,
 /// app_flags and the child's [deps] written back into the descriptor.
 /// The reply is sent before the child first runs, so on that endpoint it
@@ -1125,6 +1127,11 @@ pub const PARTITION_IPC_ERROR: i32 = 0xFFF;
 /// instance whose READY names its event-loop endpoint
 /// (PROC_READY_FLAG_LIVENESS); three probes unanswered in a row and the
 /// supervisor kills the instance as a failure.
+/// The descriptor may also carry a capability descriptor
+/// (wasmos_spawn_caps_v2_t, I/O windows and IRQ lines), which every spawn
+/// of the unit carries; a unit asking for DMA is refused
+/// (WASMOS_ERR_SUPERVISOR_DMA_CAPS), since nothing quiesces its device
+/// before a restart.
 /// Answered once the unit is accepted, before it is spawned: a spawn
 /// that fails later is the unit's failure, handled by its policy.
 pub const SUPERVISOR_IPC_SUBMIT_REQ: i32 = 0x1000;

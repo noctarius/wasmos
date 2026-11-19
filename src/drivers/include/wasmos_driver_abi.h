@@ -612,7 +612,12 @@ typedef struct {
  * CHILD_EXITED for this child go there, and nowhere else.
  *
  * tty pins a wants_tty child to a text slot, encoded as slot + 1; 0 lets the PM
- * pick, as PROC_SPAWN_PATH_TTY does. */
+ * pick, as PROC_SPAWN_PATH_TTY does.
+ *
+ * caps_len 0 spawns without hardware access. Otherwise caps_off names a
+ * wasmos_spawn_caps_v2_t and its tail arrays in the same region, caps_len bytes
+ * exactly, which the child holds from its first instruction; a descriptor that
+ * does not parse is WASMOS_ERR_PROC_SPAWN_BAD_CAPS and no child. */
 typedef struct {
     /* request */
     uint32_t version; /* = SPAWN_WATCH_DESC_VERSION */
@@ -622,6 +627,8 @@ typedef struct {
     uint32_t path_len;
     uint32_t args_off;
     uint32_t args_len;
+    uint32_t caps_off;
+    uint32_t caps_len;
     uint32_t reserved0;
     /* reply */
     uint32_t pid;
@@ -633,7 +640,7 @@ typedef struct {
 _Static_assert(sizeof(wasmos_spawn_watch_dep_t) == 4u + SPAWN_WATCH_DEP_NAME_MAX,
                "wasmos_spawn_watch_dep_t is part of the PROC_IPC_SPAWN_WATCHED ABI");
 _Static_assert(sizeof(wasmos_spawn_watch_desc_t) ==
-                   48u + SPAWN_WATCH_DEPS_MAX * sizeof(wasmos_spawn_watch_dep_t),
+                   56u + SPAWN_WATCH_DEPS_MAX * sizeof(wasmos_spawn_watch_dep_t),
                "wasmos_spawn_watch_desc_t is part of the PROC_IPC_SPAWN_WATCHED ABI");
 
 /* FSMGR_IPC_MOUNT_WAIT_REQ request record (abi/opcodes.yaml), in a transfer
@@ -650,13 +657,22 @@ _Static_assert(sizeof(wasmos_fsmgr_mount_wait_desc_t) == 8u + FSMGR_MOUNT_WAIT_P
 /* SUPERVISOR_IPC_SUBMIT_REQ request record (abi/opcodes.yaml), in a transfer
  * buffer the submitter owns and lends READ to the supervisor. `spec` is one
  * NUL-terminated unit line whose grammar the opcode documents; spec_len counts
- * its bytes without the NUL. */
+ * its bytes without the NUL.
+ *
+ * caps_len 0 means the unit runs without hardware access. Otherwise `caps`
+ * holds caps_len bytes of wasmos_spawn_caps_v2_t and its I/O ranges, which every
+ * spawn of the unit carries (wasmos_spawn_watch_desc_t). A request for DMA is
+ * refused with WASMOS_ERR_SUPERVISOR_DMA_CAPS. */
 typedef struct {
     uint32_t version; /* SUPERVISOR_SUBMIT_DESC_VERSION */
     uint32_t spec_len;
     char spec[SUPERVISOR_SPEC_MAX + 1];
+    uint32_t caps_len;
+    uint32_t reserved0;
+    uint8_t caps[SUPERVISOR_CAPS_MAX];
 } wasmos_supervisor_submit_desc_t;
-_Static_assert(sizeof(wasmos_supervisor_submit_desc_t) == 8u + SUPERVISOR_SPEC_MAX + 1u,
+_Static_assert(sizeof(wasmos_supervisor_submit_desc_t) ==
+                   8u + SUPERVISOR_SPEC_MAX + 1u + 8u + SUPERVISOR_CAPS_MAX,
                "wasmos_supervisor_submit_desc_t is part of the SUPERVISOR_IPC_SUBMIT_REQ ABI");
 
 /* SUPERVISOR_IPC_LIST_REQ request record (abi/opcodes.yaml), in a transfer
@@ -1107,11 +1123,14 @@ typedef struct __attribute__((packed)) {
  * (io_range_count and dma.window_count), or the computed size will not describe
  * the actual layout. Both arguments are evaluated more than once only through
  * casts, so passing an expression with side effects is safe here, but the macro
- * is otherwise unparenthesised in the usual way -- pass simple values. */
+ * is otherwise unparenthesised in the usual way -- pass simple values. The
+ * result is a uint32_t, as every length field it is compared with is. */
 #define WASMOS_SPAWN_CAPS_V2_SIZE(io_range_count, window_count)                                    \
-    (sizeof(wasmos_spawn_caps_v2_t) +                                                              \
+    ((uint32_t)sizeof(wasmos_spawn_caps_v2_t) +                                                    \
      ((uint32_t)(io_range_count) * (uint32_t)sizeof(wasmos_io_range_t)) +                          \
      ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
+_Static_assert(WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_IO_RANGE_LIMIT, 0) <= SUPERVISOR_CAPS_MAX,
+               "a submission's caps must fit every I/O range a driver may declare");
 
 /* Stable indices naming the fields of an IPC message, for code that addresses
  * them positionally rather than by struct member. The order is NOT the struct's

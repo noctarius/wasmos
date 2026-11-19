@@ -326,8 +326,8 @@ enum {
  * A reader MUST reject a descriptor whose version it does not know.
  */
 enum {
-    /* Current wasmos_spawn_watch_desc_t layout. */
-    SPAWN_WATCH_DESC_VERSION = 1,
+    /* Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len). */
+    SPAWN_WATCH_DESC_VERSION = 2,
     /* Dependency records the reply can carry, the same ceiling as a .wap
      * v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off.
      */
@@ -487,8 +487,13 @@ enum {
  * A reader MUST reject a descriptor whose version it does not know.
  */
 enum {
-    /* Current wasmos_supervisor_submit_desc_t layout. */
-    SUPERVISOR_SUBMIT_DESC_VERSION = 1,
+    /* Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps). */
+    SUPERVISOR_SUBMIT_DESC_VERSION = 2,
+    /* Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t
+     * and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT
+     * ranges fit, DMA windows are refused.
+     */
+    SUPERVISOR_CAPS_MAX = 64,
     /* Longest unit spec a submission carries, NUL excluded. */
     SUPERVISOR_SPEC_MAX = 255,
     /* Longest unit name (template@instance), NUL excluded: a service name's ceiling. */

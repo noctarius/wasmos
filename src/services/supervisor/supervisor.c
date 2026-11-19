@@ -12,6 +12,11 @@
  * its loop answers by itself. Three unanswered probes in a row and the
  * supervisor kills it, and its restart policy applies as to any failure.
  *
+ * SUPERVISOR_IPC_BOOT_SUBMITTED_REQ, sent by sysinit when sysinit.rc has run,
+ * makes the units then held the boot set; the boot milestone is one line,
+ * "[supervisor] boot complete ..." once every required one of them is up, or
+ * "[supervisor] boot failed: ..." naming the one that will not come up.
+ *
  * A critical unit's end takes the system down: a line naming it, a dump of the
  * unit table to the kernel log, then the orderly shutdown sequence and a halt,
  * or a reboot when kenv supervisor.on_critical=reboot. The supervisor is itself
@@ -82,6 +87,9 @@ static int32_t g_spawn_unit = -1;
 static wasmos_supervisor_unit_record_t g_list[SV_UNITS_MAX];
 static int g_fault_trap;
 static uint32_t g_probe_next_id = SV_PROBE_ID_BASE;
+/* The boot set has been submitted; the milestone has been logged. */
+static int g_boot_submitted;
+static int g_boot_reported;
 
 static uint32_t sv_now(void) {
     return (uint32_t)wasmos_sched_ticks() * (1000u / WASMOS_SCHED_TICK_HZ);
@@ -432,6 +440,41 @@ static void sv_tick(void) {
     }
 }
 
+/* ------------------------------------------------------------- milestone */
+
+/* Logs the boot milestone the first time it is decided. */
+static void sv_boot_report(void) {
+    char line[160];
+    uint32_t count = 0;
+    uint32_t index = 0;
+    sv_boot_t boot;
+    if (!g_boot_submitted || g_boot_reported) {
+        return;
+    }
+    boot = sv_boot_check(g_units, SV_UNITS_MAX, &count, &index);
+    if (boot == SV_BOOT_PENDING) {
+        return;
+    }
+    g_boot_reported = 1;
+    if (boot == SV_BOOT_COMPLETE) {
+        (void)snprintf(line,
+                       sizeof(line),
+                       "[supervisor] boot complete at %u ms: %u required units up\n",
+                       sv_now(),
+                       count);
+    } else {
+        const sv_unit_t* u = &g_units[index];
+        (void)snprintf(line,
+                       sizeof(line),
+                       "[supervisor] boot failed: required unit %s %s (%s, status %d)\n",
+                       u->name,
+                       sv_state_name(u->state),
+                       sv_reason_name(u->last_reason),
+                       (int)u->last_status);
+    }
+    sv_log(line);
+}
+
 /* ---------------------------------------------------------------- events */
 
 static void sv_on_child_ready(void* user, const wasmos_ipc_message_t* msg) {
@@ -503,6 +546,18 @@ static void sv_on_submit(void* user, const wasmos_ipc_message_t* msg) {
         return;
     }
     g_units[free_slot] = unit;
+    sv_reply(msg, 0);
+}
+
+/* SUPERVISOR_IPC_BOOT_SUBMITTED_REQ: the units held now are the boot set. */
+static void sv_on_boot_submitted(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (!g_boot_submitted) {
+        g_boot_submitted = 1;
+        for (int32_t i = 0; i < SV_UNITS_MAX; ++i) {
+            g_units[i].boot = g_units[i].state != SV_UNIT_FREE;
+        }
+    }
     sv_reply(msg, 0);
 }
 
@@ -622,6 +677,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     (void)wasmos_sys_event_set_default(&g_loop, sv_on_unclaimed, 0);
     if (wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_SUBMIT_REQ, sv_on_submit, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_LIST_REQ, sv_on_list, 0) != 0 ||
+        wasmos_sys_event_register(
+            &g_loop, SUPERVISOR_IPC_BOOT_SUBMITTED_REQ, sv_on_boot_submitted, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, PROC_IPC_CHILD_READY, sv_on_child_ready, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, PROC_IPC_CHILD_EXITED, sv_on_child_exited, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, WASMOS_IPC_HEALTH_RESP, sv_on_health_resp, 0) != 0) {
@@ -638,5 +695,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     for (;;) {
         (void)wasmos_sys_event_loop_poll(&g_loop, 8);
         sv_tick();
+        sv_boot_report();
     }
 }

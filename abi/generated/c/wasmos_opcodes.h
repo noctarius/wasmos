@@ -1248,7 +1248,19 @@ enum {
      * SUPERVISOR_UNITS_MAX records are always enough.
      */
     SUPERVISOR_IPC_LIST_REQ = 0x1001,
-    /* arg0 = 0: the unit was accepted, or the list was written. */
+    /* Every unit of the boot set has been submitted: sent by sysinit when
+     * sysinit.rc has run to its end. arg0..arg3 reserved (0). The units the
+     * supervisor holds at that moment are the boot set, and the boot
+     * milestone is decided over them: once every required (or critical)
+     * one is up -- READY and, if probed, a probe answered -- the
+     * supervisor logs "[supervisor] boot complete at <ms> ms: <n> required
+     * units up" once; if one of them fails or stops first, it logs
+     * "[supervisor] boot failed: <unit> ..." once instead. A unit submitted
+     * later is not part of the boot set. Answered at once; a second one
+     * changes nothing.
+     */
+    SUPERVISOR_IPC_BOOT_SUBMITTED_REQ = 0x1002,
+    /* arg0 = 0: the unit was accepted, the list was written, or the boot set was recorded. */
     SUPERVISOR_IPC_RESP = 0x1080,
     /* arg0 = packed WASMOS_ERR_SUPERVISOR_* code. */
     SUPERVISOR_IPC_ERROR = 0x10FF,
@@ -1631,6 +1643,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         switch (type) {
         case 0x1000: return "SUPERVISOR_IPC_SUBMIT_REQ";
         case 0x1001: return "SUPERVISOR_IPC_LIST_REQ";
+        case 0x1002: return "SUPERVISOR_IPC_BOOT_SUBMITTED_REQ";
         case 0x1080: return "SUPERVISOR_IPC_RESP";
         case 0x10FF: return "SUPERVISOR_IPC_ERROR";
         default: return "UNKNOWN";

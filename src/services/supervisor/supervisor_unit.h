@@ -101,6 +101,7 @@ typedef struct {
     uint32_t probe_pending;   /* request id of the outstanding probe; 0 when none */
     uint32_t probes_answered; /* by the current or last instance */
     uint32_t probe_misses;    /* in a row, by the current or last instance */
+    uint8_t boot;             /* held when the boot set was submitted */
 } sv_unit_t;
 
 /* What the caller does next. */
@@ -182,6 +183,20 @@ int sv_exit_is_failure(int32_t status, uint32_t reason);
  * when `capacity` was short. */
 uint32_t sv_units_list(const sv_unit_t* units, uint32_t n, const sv_timing_t* timing,
                        wasmos_supervisor_unit_record_t* out, uint32_t capacity, uint32_t* total);
+
+/* Up: READY, and -- when probed -- a probe answered, which shows the loop
+ * runs. Unlike stable, up does not wait out stable_ms. */
+int sv_unit_is_up(const sv_unit_t* unit);
+
+/* Where the boot milestone stands over the boot units (`boot` set) that are
+ * required or critical. */
+typedef enum {
+    SV_BOOT_PENDING = 0,
+    SV_BOOT_COMPLETE, /* every one of them is up; *count gets how many */
+    SV_BOOT_FAILED,   /* one failed or stopped, so it will not come up; *index names it */
+} sv_boot_t;
+
+sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uint32_t* index);
 
 const char* sv_state_name(sv_state_t state);
 const char* sv_reason_name(uint32_t reason);

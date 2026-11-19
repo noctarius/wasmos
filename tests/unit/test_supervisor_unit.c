@@ -502,6 +502,81 @@ static void test_the_list_reports_liveness(void) {
           "an unprobed unit reports no period");
 }
 
+/* A boot table: vt and cli required, logger optional, all in the boot set. */
+static void boot_table(sv_unit_t units[4]) {
+    memset(units, 0, 4 * sizeof(units[0]));
+    units[0] = parse_ok("vt /vt.wap class=required", 0);
+    units[1] = parse_ok("logger /logger.wap", 0);
+    units[3] = parse_ok("cli@tty1 /cli.wap class=critical", 0);
+    for (int i = 0; i < 4; ++i) {
+        units[i].boot = units[i].state != SV_UNIT_FREE;
+    }
+    start(&units[0], 10, 0);
+    start(&units[1], 11, 0);
+    start(&units[3], 13, 0);
+}
+
+static void test_boot_completes_when_every_required_unit_is_up(void) {
+    sv_unit_t units[4];
+    uint32_t count = 99;
+    boot_table(units);
+    CHECK(sv_boot_check(units, 4, &count, 0) == SV_BOOT_PENDING, "nothing is up yet");
+    sv_unit_ready(&units[0], &k_timing, SV_PROBE_NONE, 5);
+    CHECK(sv_boot_check(units, 4, &count, 0) == SV_BOOT_PENDING, "cli is not up yet");
+    sv_unit_ready(&units[3], &k_timing, SV_PROBE_NONE, 6);
+    CHECK(sv_boot_check(units, 4, &count, 0) == SV_BOOT_COMPLETE && count == 2u,
+          "vt and cli are up; the optional logger does not count");
+    CHECK(units[0].state == SV_UNIT_RUNNING, "up does not wait to be stable");
+}
+
+static void test_a_probed_unit_is_up_once_it_answers(void) {
+    sv_unit_t units[4];
+    boot_table(units);
+    sv_unit_ready(&units[0], &k_timing, 44, 5);
+    sv_unit_ready(&units[3], &k_timing, SV_PROBE_NONE, 5);
+    CHECK(!sv_unit_is_up(&units[0]), "READY alone is not up for a probed unit");
+    CHECK(sv_boot_check(units, 4, 0, 0) == SV_BOOT_PENDING, "so boot waits for it");
+    probe(&units[0], 1, 5);
+    CHECK(sv_unit_probe_answered(&units[0], &k_timing, 1, 6) == 1, "it answers");
+    CHECK(sv_unit_is_up(&units[0]) && sv_boot_check(units, 4, 0, 0) == SV_BOOT_COMPLETE,
+          "and is up");
+}
+
+static void test_a_required_unit_that_gives_up_fails_the_boot(void) {
+    sv_unit_t units[4];
+    uint32_t index = 99;
+    boot_table(units);
+    sv_unit_ready(&units[3], &k_timing, SV_PROBE_NONE, 5);
+    units[0].restart = SV_RESTART_NEVER;
+    CHECK(sv_unit_exited(&units[0], &k_timing, 1, PROC_EXIT_REASON_TRAPPED, 7) == SV_VERDICT_FAILED,
+          "vt fails for good");
+    CHECK(sv_boot_check(units, 4, 0, &index) == SV_BOOT_FAILED && index == 0u,
+          "the boot fails, naming vt");
+}
+
+static void test_an_optional_or_late_unit_does_not_hold_the_boot(void) {
+    sv_unit_t units[4];
+    boot_table(units);
+    sv_unit_ready(&units[0], &k_timing, SV_PROBE_NONE, 5);
+    sv_unit_ready(&units[3], &k_timing, SV_PROBE_NONE, 5);
+    (void)sv_unit_exited(&units[1], &k_timing, 1, PROC_EXIT_REASON_TRAPPED, 6);
+    units[1].restart = SV_RESTART_NEVER;
+    units[2] = parse_ok("late /late.wap class=required", 0);
+    CHECK(sv_boot_check(units, 4, 0, 0) == SV_BOOT_COMPLETE,
+          "a crashing optional unit and a required unit submitted later do not count");
+}
+
+static void test_a_restarting_required_unit_holds_the_boot(void) {
+    sv_unit_t units[4];
+    boot_table(units);
+    sv_unit_ready(&units[3], &k_timing, SV_PROBE_NONE, 5);
+    sv_unit_ready(&units[0], &k_timing, SV_PROBE_NONE, 5);
+    CHECK(sv_unit_exited(&units[0], &k_timing, 1, PROC_EXIT_REASON_TRAPPED, 7) ==
+              SV_VERDICT_RESTART,
+          "vt crashed and is due again");
+    CHECK(sv_boot_check(units, 4, 0, 0) == SV_BOOT_PENDING, "boot waits for it to come back");
+}
+
 int main(void) {
     test_a_spec_parses_into_its_policy();
     test_a_bare_spec_takes_the_defaults();
@@ -531,6 +606,11 @@ int main(void) {
     test_stability_waits_for_the_first_answer();
     test_a_respawn_starts_the_probe_count_over();
     test_the_list_reports_liveness();
+    test_boot_completes_when_every_required_unit_is_up();
+    test_a_probed_unit_is_up_once_it_answers();
+    test_a_required_unit_that_gives_up_fails_the_boot();
+    test_an_optional_or_late_unit_does_not_hold_the_boot();
+    test_a_restarting_required_unit_holds_the_boot();
     if (g_failures != 0) {
         printf("test_supervisor_unit: %d failure(s)\n", g_failures);
         return 1;

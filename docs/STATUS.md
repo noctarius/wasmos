@@ -318,8 +318,20 @@ linked feature documents for rationale and rollout plans.
   itself. `svc submit <spec>` submits from the shell, `svc list` prints the unit
   table and `svc status <unit>` one unit, including its liveness record;
   `sv_probe` is the test unit that crashes, hangs or stays busy on demand. Not
-  yet: liveness for the boot services, a boot-complete milestone, and operator
-  commands that change a unit (stop, start, restart).
+  yet: liveness for the boot services, and operator commands that change a
+  unit (stop, start, restart).
+- Boot milestone: when sysinit.rc has run to its end, sysinit sends
+  `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` (finding the supervisor by name if no
+  `service` line did), and the units the supervisor then holds are the boot
+  set. Once every required or critical one is up -- READY and, if probed, a
+  probe answered; not `stable_ms`, which would add 10 s -- it logs
+  `[supervisor] boot complete at <ms> ms: <n> required units up` once; a
+  required boot unit that fails or stops first gives `[supervisor] boot
+  failed: required unit <unit> ...` instead. The harness's `require_prompt`
+  waits for the line after the prompt (`await_boot_complete`, host-tested in
+  `tests/test_boot_diagnosis.py`) and raises naming the unit on a failed boot;
+  `boot_complete=False` skips it. Kernel init still spawns sysinit once
+  device-manager is READY.
 - `process_set_ready` and `process_set_running` refuse a transition whose owner
   is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
   (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`

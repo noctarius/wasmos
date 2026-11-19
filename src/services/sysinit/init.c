@@ -537,6 +537,74 @@ static void sysinit_on_ready_ack(void* user, const wasmos_ipc_message_t* msg) {
     (void)msg;
 }
 
+/* ------------------------------------------------------------- boot set */
+
+/* Watch for the supervisor when no `service` line found it; zeroed before its
+ * first start, as a watch record must be. */
+static wasmos_sys_svc_watch_t g_boot_watch;
+
+static void sysinit_on_boot_submitted_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (msg->type != SUPERVISOR_IPC_RESP) {
+        sysinit_log_failure(
+            "boot set", "supervisor", msg->type == SUPERVISOR_IPC_ERROR ? msg->arg0 : 0);
+    }
+}
+
+/* Sends the announcement and stops the tick: nothing is left to expire. */
+static void sysinit_send_boot_submitted(void) {
+    g_loop.poll_timeout_ms = 0;
+    if (wasmos_sys_intent_send(&g_loop,
+                               g_supervisor_ep,
+                               g_state.reply_endpoint,
+                               SUPERVISOR_IPC_BOOT_SUBMITTED_REQ,
+                               0,
+                               0,
+                               0,
+                               0,
+                               sysinit_on_boot_submitted_reply,
+                               0,
+                               0) != 0) {
+        sysinit_log_failure("boot set", "supervisor", 0);
+    }
+}
+
+static void sysinit_on_boot_supervisor_bound(void* user, wasmos_sys_svc_watch_t* watch,
+                                             int32_t endpoint) {
+    (void)user;
+    wasmos_sys_svc_watch_stop(watch);
+    g_supervisor_ep = endpoint;
+    sysinit_send_boot_submitted();
+}
+
+static void sysinit_on_boot_supervisor_missing(void* user, wasmos_sys_svc_watch_t* watch,
+                                               int32_t status) {
+    (void)user;
+    (void)watch;
+    g_loop.poll_timeout_ms = 0;
+    sysinit_log_failure("boot set", "supervisor", status);
+}
+
+/* sysinit.rc has run to its end: tell the supervisor the boot set is complete,
+ * finding it first when no `service` line has. The boot milestone is the
+ * supervisor's to decide from here. */
+static void sysinit_submit_boot_set(void) {
+    if (g_supervisor_ep >= 0) {
+        sysinit_send_boot_submitted();
+        return;
+    }
+    if (wasmos_sys_svc_watch_start(&g_watches,
+                                   &g_boot_watch,
+                                   "supervisor",
+                                   SYSINIT_WAIT_SVC_TIMEOUT_MS,
+                                   sysinit_on_boot_supervisor_bound,
+                                   sysinit_on_boot_supervisor_missing,
+                                   0) != 0) {
+        g_loop.poll_timeout_ms = 0;
+        sysinit_log_failure("boot set", "supervisor", 0);
+    }
+}
+
 /* Service entry point. Reports ready first (sysinit has no readiness dependency
  * of its own), then interprets sysinit.rc, stepping the runner whenever it can
  * make progress and otherwise parking in the loop until a reply, an event or a
@@ -606,7 +674,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         }
         (void)wasmos_sys_event_loop_poll(&g_loop, 8);
     }
-    g_loop.poll_timeout_ms = 0;
+    /* The tick runs on until the announcement is sent: a watch for the
+     * supervisor may still have to expire. */
+    sysinit_submit_boot_set();
     for (;;) {
         (void)wasmos_sys_event_loop_poll(&g_loop, 8);
     }

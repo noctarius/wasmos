@@ -26,6 +26,7 @@ triages started from that sentence and had to be re-done from the raw log.
 
 import os
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -295,3 +296,42 @@ class CommandResolutionDiagnosisTest(unittest.TestCase):
         self.assertEqual(
             _why_the_command_produced_nothing(session, mark, "blkinfo"), ""
         )
+
+
+class BootMilestoneTest(unittest.TestCase):
+    """`await_boot_complete` reads the supervisor's milestone from the COM2
+    kernel log: the prompt alone is not a booted system, since the shell is one
+    boot unit among several and does not wait for the others."""
+
+    def _session(self, syslog: bytes, returncode=None) -> QemuSession:
+        fd, path = tempfile.mkstemp(prefix="wasmos-test-syslog-")
+        os.write(fd, syslog)
+        os.close(fd)
+        self.addCleanup(os.unlink, path)
+        session = _session(b"/ wamos> ", returncode=returncode)
+        session.syslog_path = path
+        return session
+
+    def test_the_complete_line_is_a_booted_system(self) -> None:
+        s = self._session(
+            b"[vt] ready\n[supervisor] boot complete at 2310 ms: 3 required units up\n"
+        )
+        self.assertEqual(s.await_boot_complete(timeout_s=0), "")
+
+    def test_a_failed_boot_is_named_by_the_supervisors_line(self) -> None:
+        s = self._session(
+            b"[supervisor] boot failed: required unit vt failed (trapped, status -1)\n"
+            b"[later] noise\n"
+        )
+        self.assertEqual(
+            s.await_boot_complete(timeout_s=0),
+            "[supervisor] boot failed: required unit vt failed (trapped, status -1)",
+        )
+
+    def test_a_guest_that_exited_is_not_a_missing_milestone(self) -> None:
+        s = self._session(b"[vt] ready\n", returncode=0)
+        self.assertIn("exited", s.await_boot_complete(timeout_s=0))
+
+    def test_no_line_by_the_deadline_says_so(self) -> None:
+        s = self._session(b"[vt] ready\n")
+        self.assertIn("no boot milestone", s.await_boot_complete(timeout_s=0))

@@ -84,7 +84,15 @@ class SupervisorTests(unittest.TestCase):
 
     def test_1_boot_services_came_up_without_a_failure(self):
         log = self.session.syslog_tail(1 << 20)
+        # require_prompt already waited for the milestone; it is said once,
+        # and it is the only thing the supervisor says on a clean boot.
+        self.assertRegex(
+            log, r"\[supervisor\] boot complete at \d+ ms: 3 required units up"
+        )
+        self.assertEqual(log.count("[supervisor] boot complete"), 1)
         for line in log.splitlines():
+            if line.startswith("[supervisor] boot complete"):
+                continue
             self.assertFalse(
                 line.startswith("[supervisor]"),
                 f"the supervisor reported on a clean boot: {line!r}\n"

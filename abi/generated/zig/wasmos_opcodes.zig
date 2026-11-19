@@ -1113,7 +1113,18 @@ pub const SUPERVISOR_IPC_SUBMIT_REQ: i32 = 0x1000;
 /// descriptor, and answers. count < total means the room was short;
 /// SUPERVISOR_UNITS_MAX records are always enough.
 pub const SUPERVISOR_IPC_LIST_REQ: i32 = 0x1001;
-/// arg0 = 0: the unit was accepted, or the list was written.
+/// Every unit of the boot set has been submitted: sent by sysinit when
+/// sysinit.rc has run to its end. arg0..arg3 reserved (0). The units the
+/// supervisor holds at that moment are the boot set, and the boot
+/// milestone is decided over them: once every required (or critical)
+/// one is up -- READY and, if probed, a probe answered -- the
+/// supervisor logs "[supervisor] boot complete at <ms> ms: <n> required
+/// units up" once; if one of them fails or stops first, it logs
+/// "[supervisor] boot failed: <unit> ..." once instead. A unit submitted
+/// later is not part of the boot set. Answered at once; a second one
+/// changes nothing.
+pub const SUPERVISOR_IPC_BOOT_SUBMITTED_REQ: i32 = 0x1002;
+/// arg0 = 0: the unit was accepted, the list was written, or the boot set was recorded.
 pub const SUPERVISOR_IPC_RESP: i32 = 0x1080;
 /// arg0 = packed WASMOS_ERR_SUPERVISOR_* code.
 pub const SUPERVISOR_IPC_ERROR: i32 = 0x10FF;

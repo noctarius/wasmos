@@ -406,6 +406,40 @@ uint32_t sv_units_list(const sv_unit_t* units, uint32_t n, const sv_timing_t* ti
     return written;
 }
 
+int sv_unit_is_up(const sv_unit_t* unit) {
+    return unit && (unit->state == SV_UNIT_RUNNING || unit->state == SV_UNIT_STABLE) &&
+           !sv_awaits_first_answer(unit);
+}
+
+sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uint32_t* index) {
+    uint32_t up = 0;
+    int pending = 0;
+    for (uint32_t i = 0; units && i < n; ++i) {
+        const sv_unit_t* u = &units[i];
+        if (u->state == SV_UNIT_FREE || !u->boot || u->cls == SV_CLASS_OPTIONAL) {
+            continue;
+        }
+        if (u->state == SV_UNIT_FAILED || u->state == SV_UNIT_STOPPED) {
+            if (index) {
+                *index = i;
+            }
+            return SV_BOOT_FAILED;
+        }
+        if (sv_unit_is_up(u)) {
+            up++;
+        } else {
+            pending = 1;
+        }
+    }
+    if (pending) {
+        return SV_BOOT_PENDING;
+    }
+    if (count) {
+        *count = up;
+    }
+    return SV_BOOT_COMPLETE;
+}
+
 int sv_exit_is_failure(int32_t status, uint32_t reason) {
     return !(reason == PROC_EXIT_REASON_EXITED && status == 0);
 }

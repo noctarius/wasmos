@@ -672,8 +672,11 @@ typedef struct {
     uint32_t restart_count;                  /* restarts over the unit's lifetime */
     uint32_t last_reason;                    /* PROC_EXIT_REASON_* of the last end; 0 before one */
     int32_t last_status;                     /* exit status of the last end, or a spawn's error */
+    uint32_t probe_interval_ms; /* liveness probe period of the running instance; 0 = not probed */
+    uint32_t probes_answered;   /* liveness probes the running instance answered */
+    uint32_t probe_misses;      /* liveness probes missed in a row */
 } wasmos_supervisor_unit_record_t;
-_Static_assert(sizeof(wasmos_supervisor_unit_record_t) == SUPERVISOR_UNIT_NAME_MAX + 1u + 32u,
+_Static_assert(sizeof(wasmos_supervisor_unit_record_t) == SUPERVISOR_UNIT_NAME_MAX + 1u + 44u,
                "wasmos_supervisor_unit_record_t is part of the SUPERVISOR_IPC_LIST_REQ ABI");
 
 /* --- PCI device descriptor -------------------------------------------------

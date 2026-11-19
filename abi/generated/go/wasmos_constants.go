@@ -302,6 +302,11 @@ const SPAWN_WATCH_PATH_MAX int32 = 255
 // Longest argument string a watched spawn accepts, NUL excluded.
 const SPAWN_WATCH_ARGS_MAX int32 = 255
 
+// proc_ready_flags
+// Flags of PROC_IPC_NOTIFY_READY, in arg1.
+// arg0 names the sender's event-loop endpoint, which answers WASMOS_IPC_HEALTH_REQ; a supervisor probes it.
+const PROC_READY_FLAG_LIVENESS int32 = 1
+
 // proc_exit_reason
 // Why a process ended, carried beside its exit status: arg2 of the
 // PROC_IPC_WAIT reply and arg3 of a PROC_IPC_STATUS reply for a ZOMBIE.
@@ -425,7 +430,7 @@ const SUPERVISOR_UNIT_NAME_MAX int32 = 35
 //
 // A reader MUST reject a descriptor whose version it does not know.
 // Current wasmos_supervisor_list_desc_t and record layout.
-const SUPERVISOR_LIST_DESC_VERSION int32 = 1
+const SUPERVISOR_LIST_DESC_VERSION int32 = 2
 // Units the supervisor's table holds: a list sized for this many records is never short.
 const SUPERVISOR_UNITS_MAX int32 = 32
 
@@ -442,7 +447,7 @@ const SUPERVISOR_UNIT_STATE_STARTING int32 = 3
 const SUPERVISOR_UNIT_STATE_RUNNING int32 = 4
 // READY and up long enough that its restart backoff was reset.
 const SUPERVISOR_UNIT_STATE_STABLE int32 = 5
-// Killed by the supervisor for missing READY; its exit is due.
+// Killed by the supervisor for missing READY or its liveness probes; its exit is due.
 const SUPERVISOR_UNIT_STATE_STOPPING int32 = 6
 // Ended and, by its restart policy, not restarted.
 const SUPERVISOR_UNIT_STATE_STOPPED int32 = 7

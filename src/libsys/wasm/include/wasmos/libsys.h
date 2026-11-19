@@ -640,9 +640,12 @@ int32_t wasmos_sys_wasm_fs_operation_finish(wasmos_sys_wasm_fs_operation_t* oper
                                             wasmos_ipc_message_t* out_reply);
 
 /* Deliver up to `budget` queued messages (0 is treated as 1) and return how
- * many were dispatched; 0 for a NULL loop. Each message goes to the matching
- * intent, else the handler for its type, else the default handler; a message
- * matching none of those is counted as handled and dropped. If nothing is
+ * many were dispatched; 0 for a NULL loop. A WASMOS_IPC_HEALTH_REQ liveness
+ * probe is answered here, with WASMOS_IPC_HEALTH_RESP from the loop's endpoint,
+ * and reaches no intent or handler: the answer means this loop is turning.
+ * Every other message goes to the matching intent, else the handler for its
+ * type, else the default handler; a message matching none of those is counted
+ * as handled and dropped. If nothing is
  * queued on the first iteration and the loop owns a select-set, this PARKS on
  * that set until the endpoint becomes ready, so a caller that loops on poll()
  * sleeps rather than spins. Without a select-set (init() could not create one)
@@ -685,6 +688,19 @@ static inline int32_t wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t* loop, 
         wasmos_ipc_message_read_last(&msg);
     wasmos_sys_event_loop_poll_handle:
         handled++;
+        /* Before the intents: a probe's request_id is the prober's and may equal
+         * one of this loop's own. */
+        if (msg.type == WASMOS_IPC_HEALTH_REQ) {
+            (void)wasmos_ipc_send(msg.source,
+                                  loop->receiver_endpoint,
+                                  WASMOS_IPC_HEALTH_RESP,
+                                  msg.request_id,
+                                  0,
+                                  0,
+                                  0,
+                                  0);
+            goto wasmos_sys_event_loop_poll_done_message;
+        }
         for (int32_t j = 0; j < WASMOS_SYS_INTENT_MAX; ++j) {
             if (loop->intents[j].in_use && loop->intents[j].request_id == msg.request_id) {
                 void (*cb)(void* user, const wasmos_ipc_message_t* msg) =

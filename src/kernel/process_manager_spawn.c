@@ -1594,10 +1594,15 @@ void pm_poll_spawn(uint32_t pm_context_id) {
     pm_poll_sync_spawn(pm_context_id);
 }
 
-/* A child announcing itself (PROC_IPC_NOTIFY_READY).  Latches the sender's ready
- * flag, completes an in-flight sync spawn if the sender IS that spawn's child,
- * then acks the sender so its blocking wasmos_sys_notify_ready() returns.
- * Returns 0, or a packed WASMOS_ERR_PROC_PM_* code.
+/* A child announcing itself (PROC_IPC_NOTIFY_READY).  Records the liveness
+ * endpoint it names (PROC_READY_FLAG_LIVENESS), latches the sender's ready flag,
+ * completes an in-flight sync spawn if the sender IS that spawn's child, then
+ * acks the sender so its blocking wasmos_sys_notify_ready() returns.  Returns 0,
+ * or a packed WASMOS_ERR_PROC_PM_* code.
+ *
+ * A liveness endpoint the sender does not own is not recorded -- a probe there
+ * would ask some other process -- and the ack carries
+ * WASMOS_ERR_PROC_PM_BAD_ENDPOINT in arg0; READY is latched regardless.
  *
  * The sender identifies itself implicitly, by the context owning msg->source —
  * there is no pid argument, so one process cannot report another as ready.  The
@@ -1608,6 +1613,7 @@ void pm_poll_spawn(uint32_t pm_context_id) {
 int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* sender = 0;
+    int32_t ack_code = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
@@ -1615,6 +1621,15 @@ int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     sender = process_find_by_context(owner_context);
     if (!sender) {
         return WASMOS_ERR_PROC_PM_NO_CALLER;
+    }
+    if (((uint32_t)msg->arg1 & PROC_READY_FLAG_LIVENESS) != 0u) {
+        uint32_t live_owner = 0;
+        if (ipc_endpoint_owner((uint32_t)msg->arg0, &live_owner) == IPC_OK &&
+            live_owner == owner_context) {
+            sender->live_endpoint = (uint32_t)msg->arg0;
+        } else {
+            ack_code = WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
+        }
     }
     process_notify_ready(sender);
 
@@ -1642,7 +1657,7 @@ int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     ack.source = g_pm.proc_endpoint;
     ack.destination = msg->source;
     ack.request_id = msg->request_id;
-    ack.arg0 = 0;
+    ack.arg0 = (uint32_t)ack_code;
     ack.arg1 = 0;
     ack.arg2 = 0;
     ack.arg3 = 0;

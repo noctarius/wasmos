@@ -97,6 +97,7 @@ pub const WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT: i32 = -0x00020020; // no provide
 pub const WASMOS_ERR_PROC_PM_SVC_WATCH_SEND: i32 = -0x00020021; // a service watch could not send its request to the process manager
 pub const WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: i32 = -0x00020022; // a service watch could not acquire or fill the transfer buffer for its subscription descriptor
 pub const WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: i32 = -0x00020023; // the process manager answered a service-watch request with neither its response nor a packed error
+pub const WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: i32 = -0x00020024; // the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself
 pub const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 pub const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 pub const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -413,6 +414,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_PROC_PM_SVC_WATCH_SEND => "a service watch could not send its request to the process manager",
         WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER => "a service watch could not acquire or fill the transfer buffer for its subscription descriptor",
         WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY => "the process manager answered a service-watch request with neither its response nor a packed error",
+        WASMOS_ERR_PROC_PM_KILL_NOT_CHILD => "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself",
         WASMOS_ERR_LINMEM_NO_WINDOW => "no free page-aligned window fits in linear memory",
         WASMOS_ERR_LINMEM_MAP => "paging/linear-memory mapping step failed",
         WASMOS_ERR_LINMEM_NO_BASE => "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it",

@@ -364,9 +364,11 @@ void wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t* loop, uint3
  * many ran, or -1 when the loop has no usable driver_api. Never blocks: unlike
  * the WASM variant it owns no select-set, so a service that must sleep at idle
  * does so in its idle hook.
- * Each message goes to the matching intent, else the handler for its type, else
- * the default handler; a message matching none of those is still counted as
- * handled and dropped. An empty queue ends the drain early. A receive error
+ * A WASMOS_IPC_HEALTH_REQ liveness probe is answered here with
+ * WASMOS_IPC_HEALTH_RESP and reaches no intent or handler. Every other message
+ * goes to the matching intent, else the handler for its type, else the default
+ * handler; a message matching none of those is still counted as handled and
+ * dropped. An empty queue ends the drain early. A receive error
  * mid-drain also returns -1, discarding the count of what was already
  * dispatched, so the return is a progress hint and not an exact tally. */
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t* loop, uint32_t budget);

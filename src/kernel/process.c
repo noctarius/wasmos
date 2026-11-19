@@ -1521,6 +1521,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->watch_ready = 0;
     slot->watch_exit = 0;
     slot->critical = 0;
+    slot->live_endpoint = IPC_ENDPOINT_NONE;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -1730,6 +1731,7 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->watch_ready = 0;
     slot->watch_exit = 0;
     slot->critical = 0;
+    slot->live_endpoint = IPC_ENDPOINT_NONE;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -2163,7 +2165,8 @@ void process_block_on_ipc(process_t* process) {
  * A latch, not an event: setting it twice is harmless and it is never cleared
  * for the life of the slot.  pm_poll_sync_spawn observes it on its next PM
  * dispatch.  The one message it sends is the spawner's PROC_IPC_CHILD_READY for
- * a watched child, on the first latch only: one targeted send to one endpoint.
+ * a watched child, on the first latch only: one targeted send to one endpoint,
+ * carrying live_endpoint, so a caller that records one sets it first.
  *
  * Deliberately does NOT broadcast. A waiter for "some named service is up" would
  * be woken by one, and that was tried: it puts cross-CPU wake traffic on a path
@@ -2181,8 +2184,11 @@ void process_notify_ready(process_t* process) {
     if (__atomic_load_n(&process->exiting, __ATOMIC_ACQUIRE)) {
         return;
     }
-    ipc_owed_post(
-        __atomic_exchange_n(&process->watch_ready, NULL, __ATOMIC_ACQ_REL), process->pid, 0, 0, 0);
+    ipc_owed_post(__atomic_exchange_n(&process->watch_ready, NULL, __ATOMIC_ACQ_REL),
+                  process->pid,
+                  process->live_endpoint,
+                  0,
+                  0);
 }
 
 int process_set_watch(uint32_t pid, struct ipc_owed* on_ready, struct ipc_owed* on_exit) {
@@ -2333,14 +2339,18 @@ int process_thread_detach(process_t* process, uint32_t target_tid) {
  * child they did not spawn.  Asynchronous: the target is not off-CPU on return,
  * a thread of it may still be finishing a timeslice on another CPU. */
 int process_kill(uint32_t pid, int32_t exit_status) {
+    return process_kill_for(cpu_local()->current_pid, pid, exit_status);
+}
+
+int process_kill_for(uint32_t requester_pid, uint32_t pid, int32_t exit_status) {
     process_t* target = process_find_by_pid(pid);
     if (!target) {
         return -1;
     }
-    if (pid == cpu_local()->current_pid) {
+    if (pid == cpu_local()->current_pid || pid == requester_pid) {
         return -1;
     }
-    if (cpu_local()->current_pid != 0 && target->parent_pid != cpu_local()->current_pid) {
+    if (requester_pid != 0 && target->parent_pid != requester_pid) {
         return -1;
     }
     if (target->state == PROCESS_STATE_ZOMBIE) {

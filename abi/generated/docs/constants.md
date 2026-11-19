@@ -274,6 +274,14 @@ A reader MUST reject a descriptor whose version it does not know.
 | `SPAWN_WATCH_PATH_MAX` | 255 | Longest path a watched spawn accepts, NUL excluded. |
 | `SPAWN_WATCH_ARGS_MAX` | 255 | Longest argument string a watched spawn accepts, NUL excluded. |
 
+## proc_ready_flags
+
+Flags of PROC_IPC_NOTIFY_READY, in arg1.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `PROC_READY_FLAG_LIVENESS` | 1 | arg0 names the sender's event-loop endpoint, which answers WASMOS_IPC_HEALTH_REQ; a supervisor probes it. |
+
 ## proc_exit_reason
 
 Why a process ended, carried beside its exit status: arg2 of the
@@ -404,7 +412,7 @@ A reader MUST reject a descriptor whose version it does not know.
 
 | Symbol | Value | Meaning |
 | --- | --- | --- |
-| `SUPERVISOR_LIST_DESC_VERSION` | 1 | Current wasmos_supervisor_list_desc_t and record layout. |
+| `SUPERVISOR_LIST_DESC_VERSION` | 2 | Current wasmos_supervisor_list_desc_t and record layout. |
 | `SUPERVISOR_UNITS_MAX` | 32 | Units the supervisor's table holds: a list sized for this many records is never short. |
 
 ## supervisor_unit_state
@@ -419,7 +427,7 @@ wasmos_supervisor_unit_record_t reports it.
 | `SUPERVISOR_UNIT_STATE_STARTING` | 3 | Spawned; READY not yet sent. |
 | `SUPERVISOR_UNIT_STATE_RUNNING` | 4 | READY; not yet up long enough to count as stable. |
 | `SUPERVISOR_UNIT_STATE_STABLE` | 5 | READY and up long enough that its restart backoff was reset. |
-| `SUPERVISOR_UNIT_STATE_STOPPING` | 6 | Killed by the supervisor for missing READY; its exit is due. |
+| `SUPERVISOR_UNIT_STATE_STOPPING` | 6 | Killed by the supervisor for missing READY or its liveness probes; its exit is due. |
 | `SUPERVISOR_UNIT_STATE_STOPPED` | 7 | Ended and, by its restart policy, not restarted. |
 | `SUPERVISOR_UNIT_STATE_FAILED` | 8 | Given up on: the restart limit tripped, or a critical unit died. |
 

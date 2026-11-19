@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import time
 import unittest
@@ -149,8 +150,70 @@ class SupervisorTests(unittest.TestCase):
         out = _svc(self, self.session, "status cli@tty1")
         self.assertRegex(out, r"cli@tty1: (running|stable), pid [1-9][0-9]*")
         self.assertIn("restart=always class=required tty=1", out)
+        # cli's READY names no loop endpoint, so it is not probed.
+        self.assertIn("liveness: not probed", out)
         out = _svc(self, self.session, "status no-such-unit")
         self.assertIn("svc: no unit named no-such-unit", out)
+
+    def test_7_a_hung_unit_is_killed_and_restarted(self):
+        # A hang never ends the process, so no exit tells the supervisor;
+        # only the unanswered probes do.
+        #
+        # Regression: 2026-11-19-pm-kill-judged-by-the-pm -- the supervisor
+        # logged the kill and the unit never ended: the PM checked that the
+        # sender of PROC_IPC_KILL was the parent, then called process_kill,
+        # which checked the PM's own pid instead, and the PM is nobody's
+        # parent. Every supervisor kill (missed READY, missed probes) was a
+        # no-op.
+        _submit(
+            self, self.session, f"probe-hang {PROBE} probe=1 -- hang-once probe-hang"
+        )
+        up = "[sv-probe] probe-hang up after a restart"
+        log = _syslog_wait(self.session, up, 60)
+        self.assertTrue(
+            log,
+            "the hung probe was not killed and restarted.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        steps = [
+            "[sv-probe] probe-hang hanging in a nested receive",
+            "[supervisor] probe-hang missed 3 liveness probes; killing pid",
+            "[supervisor] probe-hang ended (killed",
+            up,
+        ]
+        at = [log.find(step) for step in steps]
+        self.assertNotIn(-1, at, f"a step is missing: {dict(zip(steps, at))}")
+        self.assertEqual(
+            at, sorted(at), f"the steps are out of order: {dict(zip(steps, at))}"
+        )
+        out = _svc(self, self.session, "status probe-hang")
+        self.assertRegex(out, r"probe-hang: (running|stable), pid [1-9][0-9]*")
+        self.assertIn("restarts: 1", out)
+        self.assertIn("last end: killed", out)
+        self.assertIn("liveness: every 1000 ms", out)
+
+    def test_8_a_busy_unit_that_returns_to_its_loop_is_not_killed(self):
+        _submit(self, self.session, f"probe-busy {PROBE} probe=1 -- busy probe-busy")
+        log = _syslog_wait(self.session, "[sv-probe] probe-busy done being busy", 60)
+        self.assertTrue(
+            log,
+            "the busy probe never finished.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertNotIn(
+            "[supervisor] probe-busy",
+            log,
+            "the supervisor acted on a unit that kept answering",
+        )
+        out = _svc(self, self.session, "status probe-busy")
+        self.assertIn("restarts: 0", out)
+        answered = re.search(
+            r"liveness: every 1000 ms, (\d+) answered, 0 missed in a row", out
+        )
+        self.assertTrue(answered, f"svc status shows no clean probe record:\n{out}")
+        self.assertGreaterEqual(
+            int(answered.group(1)), 5, f"too few probes answered while busy:\n{out}"
+        )
 
     def test_4_a_duplicate_unit_is_refused(self):
         start = self.session.send_command(

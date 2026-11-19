@@ -83,6 +83,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_SVC_WATCH_SEND` | -0x00020021 | a service watch could not send its request to the process manager |
 | `WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER` | -0x00020022 | a service watch could not acquire or fill the transfer buffer for its subscription descriptor |
 | `WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY` | -0x00020023 | the process manager answered a service-watch request with neither its response nor a packed error |
+| `WASMOS_ERR_PROC_PM_KILL_NOT_CHILD` | -0x00020024 | the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 

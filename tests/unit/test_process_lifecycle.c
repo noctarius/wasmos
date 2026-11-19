@@ -1597,6 +1597,8 @@ static void s_a_watched_child_reports_ready_once_then_its_exit(void) {
     CHECK(g_stub_owed_log[0].owed == TOK_READY && g_stub_owed_log[0].posted &&
               g_stub_owed_log[0].arg0 == pid,
           "READY names the child");
+    CHECK(g_stub_owed_log[0].arg1 == IPC_ENDPOINT_NONE,
+          "a child that named no liveness endpoint is reported without one");
 
     CHECK(process_kill(pid, 5) == 0, "the watched child was killed");
     drop_transition_target(pid);
@@ -1605,6 +1607,57 @@ static void s_a_watched_child_reports_ready_once_then_its_exit(void) {
               g_stub_owed_log[1].arg0 == pid && g_stub_owed_log[1].arg1 == 5u &&
               g_stub_owed_log[1].arg2 == PROC_EXIT_REASON_KILLED,
           "EXITED carries pid, status and reason");
+}
+
+/* A liveness endpoint recorded before READY (PROC_READY_FLAG_LIVENESS, which the
+ * PM checks the child owns) travels in CHILD_READY's arg1 to the supervisor. */
+static void s_ready_carries_the_liveness_endpoint(void) {
+    uint32_t pid = spawn_watched("watch-live");
+    CHECK(pid != 0, "spawned a watched child");
+    if (!pid) {
+        return;
+    }
+    process_get(pid)->live_endpoint = 77u;
+    process_notify_ready(process_get(pid));
+    CHECK(g_stub_owed_count == 1 && g_stub_owed_log[0].owed == TOK_READY &&
+              g_stub_owed_log[0].arg0 == pid && g_stub_owed_log[0].arg1 == 77u,
+          "READY carries the endpoint to probe");
+    drop_transition_target(pid);
+}
+
+/* A kill the PM makes for the sender of PROC_IPC_KILL is judged by that
+ * sender, not by the PM, which is nobody's parent (see
+ * tests/test_supervisor.py, 2026-11-19-pm-kill-judged-by-the-pm). */
+static void s_a_kill_on_behalf_is_judged_by_its_requester(void) {
+    uint32_t parent = 0;
+    uint32_t other = 0;
+    uint32_t child = 0;
+    uint32_t saved = 0;
+    int32_t status = 0;
+    uint32_t reason = 0;
+
+    be_cpu(0);
+    if (process_spawn("kill-parent", idle_main, 0, &parent) != 0 ||
+        process_spawn("kill-other", idle_main, 0, &other) != 0 ||
+        process_spawn_as(parent, "kill-child", idle_main, 0, &child) != 0) {
+        CHECK(0, "spawned the parent, a bystander and the child");
+        return;
+    }
+    /* The current process is a third one, as the PM is when it serves the
+     * request. */
+    saved = cpu_local()->current_pid;
+    cpu_local()->current_pid = other + 1000u;
+    CHECK(process_kill_for(other, child, 3) == -1, "a bystander cannot kill the child");
+    CHECK(process_kill_for(child, child, 3) == -1, "nor can the child kill itself through it");
+    CHECK(process_get_exit_info(child, &status, &reason) == 1, "the child still runs");
+    CHECK(process_kill_for(parent, child, 3) == 0, "its parent can, through the PM");
+    cpu_local()->current_pid = saved;
+    CHECK(process_get_exit_info(child, &status, &reason) == 0 && status == 3 &&
+              reason == PROC_EXIT_REASON_KILLED,
+          "the child ended killed");
+    drop_transition_target(child);
+    drop_transition_target(other);
+    drop_transition_target(parent);
 }
 
 /* The child dies before it ever latches READY: the spawner hears only of the
@@ -1669,6 +1722,8 @@ int main(void) {
     s_a_kill_overrides_a_staged_exit_but_not_a_finished_one();
     s_a_watched_child_reports_ready_once_then_its_exit();
     s_a_child_that_dies_first_reports_only_its_exit();
+    s_ready_carries_the_liveness_endpoint();
+    s_a_kill_on_behalf_is_judged_by_its_requester();
     s_an_unwatched_process_owes_nothing();
 
     s_healthy_owner_still_runs_and_requeues();

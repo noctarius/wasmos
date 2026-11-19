@@ -342,6 +342,12 @@ enum {
     SPAWN_WATCH_ARGS_MAX = 255,
 };
 
+/* Flags of PROC_IPC_NOTIFY_READY, in arg1. */
+enum {
+    /* arg0 names the sender's event-loop endpoint, which answers WASMOS_IPC_HEALTH_REQ; a supervisor probes it. */
+    PROC_READY_FLAG_LIVENESS = 1,
+};
+
 /* Why a process ended, carried beside its exit status: arg2 of the
  * PROC_IPC_WAIT reply and arg3 of a PROC_IPC_STATUS reply for a ZOMBIE.
  *
@@ -487,7 +493,7 @@ enum {
  */
 enum {
     /* Current wasmos_supervisor_list_desc_t and record layout. */
-    SUPERVISOR_LIST_DESC_VERSION = 1,
+    SUPERVISOR_LIST_DESC_VERSION = 2,
     /* Units the supervisor's table holds: a list sized for this many records is never short. */
     SUPERVISOR_UNITS_MAX = 32,
 };
@@ -506,7 +512,7 @@ enum {
     SUPERVISOR_UNIT_STATE_RUNNING = 4,
     /* READY and up long enough that its restart backoff was reset. */
     SUPERVISOR_UNIT_STATE_STABLE = 5,
-    /* Killed by the supervisor for missing READY; its exit is due. */
+    /* Killed by the supervisor for missing READY or its liveness probes; its exit is due. */
     SUPERVISOR_UNIT_STATE_STOPPING = 6,
     /* Ended and, by its restart policy, not restarted. */
     SUPERVISOR_UNIT_STATE_STOPPED = 7,

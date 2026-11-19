@@ -265,6 +265,14 @@ static int svc_print_status(const char* name) {
             printf(" tty=%u", r->tty - 1u);
         }
         printf("\n  restarts: %u\n", r->restart_count);
+        if (r->probe_interval_ms == 0) {
+            printf("  liveness: not probed\n");
+        } else {
+            printf("  liveness: every %u ms, %u answered, %u missed in a row\n",
+                   r->probe_interval_ms,
+                   r->probes_answered,
+                   r->probe_misses);
+        }
         if (r->last_reason == 0) {
             printf("  last end: -\n");
         } else {
@@ -279,7 +287,8 @@ static int svc_print_status(const char* name) {
 
 static void svc_usage(void) {
     puts("usage: svc submit <unit> <path> [restart=never|on-failure|always]");
-    puts("                  [class=optional|required|critical] [tty=<slot>] [-- args]");
+    puts("                  [class=optional|required|critical] [tty=<slot>]");
+    puts("                  [probe=<seconds>] [-- args]");
     puts("       svc list");
     puts("       svc status <unit>");
 }

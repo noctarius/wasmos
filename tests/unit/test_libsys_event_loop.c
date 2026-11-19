@@ -687,6 +687,37 @@ static void test_a_timeout_without_a_handler_is_inert(void) {
     CHECK(g_select_wait_timeout_calls == 1, "and the bounded park still happened");
 }
 
+/* A liveness probe is answered by the loop itself: HEALTH_RESP back to the
+ * prober, from the loop's endpoint, with the probe's request id. It reaches no
+ * intent -- not even one whose request id it carries -- no handler for its
+ * type, and not the default; the intent it collided with stays pending. */
+static void test_a_health_probe_is_answered_by_the_loop(void) {
+    reset();
+    wasmos_sys_event_loop_t loop;
+    wasmos_sys_event_loop_init(&loop, 1, 700);
+    wasmos_sys_event_register(&loop, WASMOS_IPC_HEALTH_REQ, on_handler, (void*)"handler");
+    wasmos_sys_event_set_default(&loop, on_default, (void*)"default");
+    int32_t rid = 0;
+    CHECK(wasmos_sys_intent_send(
+              &loop, 9, 1, 0x4242, 0, 0, 0, 0, on_intent, (void*)"intent", &rid) == 0,
+          "an intent is pending");
+
+    inbox_push(WASMOS_IPC_HEALTH_REQ, rid, 0);
+    g_inbox[(g_inbox_head + g_inbox_count - 1) % INBOX_MAX].source = 9;
+    CHECK(wasmos_sys_event_loop_poll(&loop, 4) == 1, "the probe is handled");
+    CHECK(traced("intent") == 0 && traced("handler") == 0 && traced("default") == 0,
+          "and nobody else sees it");
+    CHECK(g_sent_count == 2, "one answer went out");
+    CHECK(g_sent[1].type == WASMOS_IPC_HEALTH_RESP && g_sent[1].destination == 9 &&
+              g_sent[1].source == 1 && g_sent[1].request_id == rid,
+          "HEALTH_RESP to the prober, from the loop's endpoint, with its request id");
+
+    reset();
+    inbox_push(0x4242, rid, 0x55);
+    CHECK(wasmos_sys_event_loop_poll(&loop, 4) == 1 && traced("intent") == 1,
+          "the intent the probe's id matched still resolves");
+}
+
 int main(void) {
     struct {
         const char* name;
@@ -713,6 +744,7 @@ int main(void) {
         {"L14 an elapsed window runs on_timeout", test_an_elapsed_window_runs_the_timeout_handler},
         {"L15 a message beats the timeout", test_a_message_during_the_window_beats_the_timeout},
         {"L16 a timeout with no handler is inert", test_a_timeout_without_a_handler_is_inert},
+        {"L17 a health probe is answered by the loop", test_a_health_probe_is_answered_by_the_loop},
     };
 
     /* Randomized order: a case that leaks state must not be able to make its

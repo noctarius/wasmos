@@ -7,6 +7,11 @@
  * unit's policy (supervisor_unit.c). SUPERVISOR_IPC_LIST_REQ reports the unit
  * table.
  *
+ * A unit whose READY names its event-loop endpoint (PROC_READY_FLAG_LIVENESS)
+ * is probed with WASMOS_IPC_HEALTH_REQ every period (probe=<s>, default 10 s);
+ * its loop answers by itself. Three unanswered probes in a row and the
+ * supervisor kills it, and its restart policy applies as to any failure.
+ *
  * A critical unit's end takes the system down: a line naming it, a dump of the
  * unit table to the kernel log, then the orderly shutdown sequence and a halt,
  * or a reboot when kenv supervisor.on_critical=reboot. The supervisor is itself
@@ -54,7 +59,14 @@ static const sv_timing_t k_base_timing = {
     .backoff_max_ms = 30000,
     .intensity_max = 5,
     .intensity_window_ms = 60000,
+    .probe_interval_ms = 10000,
+    .probe_misses_max = 3,
+    .scale = 1,
 };
+
+/* Liveness probe request ids, apart from the loop's intent ids
+ * (SV_LOOP_REQ_BASE up), which a HEALTH_RESP must never match. */
+#define SV_PROBE_ID_BASE 0x40000000u
 
 static wasmos_sys_event_loop_t g_loop;
 static int32_t g_ep = -1;
@@ -69,6 +81,7 @@ static int32_t g_spawn_unit = -1;
 /* SUPERVISOR_IPC_LIST_REQ records, staged here before they are written out. */
 static wasmos_supervisor_unit_record_t g_list[SV_UNITS_MAX];
 static int g_fault_trap;
+static uint32_t g_probe_next_id = SV_PROBE_ID_BASE;
 
 static uint32_t sv_now(void) {
     return (uint32_t)wasmos_sched_ticks() * (1000u / WASMOS_SCHED_TICK_HZ);
@@ -115,6 +128,8 @@ static void sv_load_timing(void) {
     g_timing.backoff_min_ms *= scale;
     g_timing.backoff_max_ms *= scale;
     g_timing.intensity_window_ms *= scale;
+    g_timing.probe_interval_ms *= scale;
+    g_timing.scale = scale;
 }
 
 static sv_unit_t* sv_unit_by_pid(uint32_t pid) {
@@ -234,12 +249,22 @@ static void sv_act(sv_unit_t* u, sv_verdict_t verdict) {
         sv_critical(u);
         break;
     case SV_VERDICT_KILL:
-        (void)snprintf(line,
-                       sizeof(line),
-                       "[supervisor] %s not ready after %u ms; killing pid %u\n",
-                       u->name,
-                       g_timing.ready_timeout_ms,
-                       u->pid);
+    case SV_VERDICT_HUNG:
+        if (verdict == SV_VERDICT_KILL) {
+            (void)snprintf(line,
+                           sizeof(line),
+                           "[supervisor] %s not ready after %u ms; killing pid %u\n",
+                           u->name,
+                           g_timing.ready_timeout_ms,
+                           u->pid);
+        } else {
+            (void)snprintf(line,
+                           sizeof(line),
+                           "[supervisor] %s missed %u liveness probes; killing pid %u\n",
+                           u->name,
+                           u->probe_misses,
+                           u->pid);
+        }
         sv_log(line);
         (void)wasmos_sys_intent_send(&g_loop,
                                      g_proc_ep,
@@ -333,6 +358,31 @@ static void sv_spawn_next(void) {
     }
 }
 
+/* -------------------------------------------------------------- liveness */
+
+/* Sends the unit's next probe. A send that fails is recorded as sent, so it
+ * counts as a miss like a probe that went unanswered. */
+static void sv_probe_send(sv_unit_t* u) {
+    uint32_t id = g_probe_next_id++;
+    if (g_probe_next_id < SV_PROBE_ID_BASE) {
+        g_probe_next_id = SV_PROBE_ID_BASE;
+    }
+    (void)wasmos_ipc_send(
+        (int32_t)u->probe_ep, g_ep, WASMOS_IPC_HEALTH_REQ, (int32_t)id, 0, 0, 0, 0);
+    sv_unit_probe_sent(u, &g_timing, id, sv_now());
+}
+
+static void sv_on_health_resp(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    for (int32_t i = 0; i < SV_UNITS_MAX; ++i) {
+        sv_unit_t* u = &g_units[i];
+        if (u->state != SV_UNIT_FREE && u->probe_ep == (uint32_t)msg->source &&
+            sv_unit_probe_answered(u, &g_timing, (uint32_t)msg->request_id, sv_now())) {
+            return;
+        }
+    }
+}
+
 /* -------------------------------------------------------------- deadlines */
 
 /* Runs every unit's due deadline, then starts the next spawn and bounds the
@@ -345,8 +395,16 @@ static void sv_tick(void) {
 
     for (int32_t i = 0; i < SV_UNITS_MAX; ++i) {
         sv_unit_t* u = &g_units[i];
-        if (u->state != SV_UNIT_FREE && u->state != SV_UNIT_SPAWN_DUE) {
-            sv_act(u, sv_unit_tick(u, &g_timing, now));
+        sv_verdict_t probe;
+        if (u->state == SV_UNIT_FREE || u->state == SV_UNIT_SPAWN_DUE) {
+            continue;
+        }
+        sv_act(u, sv_unit_tick(u, &g_timing, now));
+        probe = sv_unit_probe_tick(u, &g_timing, now);
+        if (probe == SV_VERDICT_PROBE) {
+            sv_probe_send(u);
+        } else {
+            sv_act(u, probe);
         }
     }
     sv_spawn_next();
@@ -380,7 +438,7 @@ static void sv_on_child_ready(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
     sv_unit_t* u = sv_unit_by_pid((uint32_t)msg->arg0);
     if (u) {
-        sv_unit_ready(u, &g_timing, sv_now());
+        sv_unit_ready(u, &g_timing, (uint32_t)msg->arg1, sv_now());
     }
 }
 
@@ -473,7 +531,7 @@ static void sv_on_list(void* user, const wasmos_ipc_message_t* msg) {
         return;
     }
     capacity = desc.capacity < SV_UNITS_MAX ? desc.capacity : SV_UNITS_MAX;
-    count = sv_units_list(g_units, SV_UNITS_MAX, g_list, capacity, &total);
+    count = sv_units_list(g_units, SV_UNITS_MAX, &g_timing, g_list, capacity, &total);
     desc.total = total;
     desc.count = count;
     if ((count > 0 &&
@@ -565,7 +623,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     if (wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_SUBMIT_REQ, sv_on_submit, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_LIST_REQ, sv_on_list, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, PROC_IPC_CHILD_READY, sv_on_child_ready, 0) != 0 ||
-        wasmos_sys_event_register(&g_loop, PROC_IPC_CHILD_EXITED, sv_on_child_exited, 0) != 0) {
+        wasmos_sys_event_register(&g_loop, PROC_IPC_CHILD_EXITED, sv_on_child_exited, 0) != 0 ||
+        wasmos_sys_event_register(&g_loop, WASMOS_IPC_HEALTH_RESP, sv_on_health_resp, 0) != 0) {
         sv_fatal("[supervisor] cannot register message handlers\n");
     }
     if (sv_register() != 0) {

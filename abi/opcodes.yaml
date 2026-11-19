@@ -33,7 +33,15 @@ subsystems:
           Wait for a child of the caller to exit: arg0=pid. The reply is
           deferred until it has: PROC_IPC_RESP, arg0=pid arg1=exit status
           arg2=PROC_EXIT_REASON_*. The child is reaped once the reply is sent.
-      - { symbol: PROC_IPC_KILL, value: 0x202, kind: req }
+      - symbol: PROC_IPC_KILL
+        value: 0x202
+        kind: req
+        doc: |
+          End a child: arg0=pid arg1=exit status. Only the target's parent may
+          kill it. On success PROC_IPC_RESP, arg0=pid arg1=status, and the child
+          ends with PROC_EXIT_REASON_KILLED. On failure PROC_IPC_ERROR,
+          arg1=WASMOS_ERR_PROC_PM_KILL_NOT_CHILD (not the caller's live child, or
+          the caller itself), _BAD_ENDPOINT or _NO_CALLER.
       - symbol: PROC_IPC_STATUS
         value: 0x203
         kind: req
@@ -98,8 +106,13 @@ subsystems:
         kind: notify
         doc: |
           Service sends this to proc_endpoint when it has finished initialising and
-          is ready to accept requests.  Fire-and-forget — no reply is sent back.
-          arg0..arg3 = reserved(0).
+          is ready to accept requests. The PM answers PROC_IPC_RESP, arg0 = 0, or
+          arg0 = WASMOS_ERR_PROC_PM_BAD_ENDPOINT for a liveness endpoint the sender
+          does not own; READY is latched either way.
+          arg1 = PROC_READY_FLAG_* flags, 0 for none. With PROC_READY_FLAG_LIVENESS,
+          arg0 is the endpoint of the sender's event loop, which answers
+          WASMOS_IPC_HEALTH_REQ; a supervising spawner probes it. Without the flag
+          arg0 is ignored. arg2..arg3 = reserved(0).
       - symbol: PROC_IPC_SPAWN_CAPS_SYNC
         value: 0x20d
         kind: req
@@ -152,7 +165,10 @@ subsystems:
         kind: notify
         doc: |
           A watched child latched READY (see PROC_STATUS_READY). Sent once, from
-          the PM's proc endpoint to the spawn's notify endpoint: arg0=child_pid.
+          the PM's proc endpoint to the spawn's notify endpoint: arg0=child_pid,
+          arg1=the endpoint the child named for liveness probes
+          (PROC_READY_FLAG_LIVENESS), or IPC_ENDPOINT_NONE (0xffffffff) when it
+          named none.
           Never sent for a child that dies first. Only the kernel sends it; a
           guest send of this type is refused.
       - symbol: PROC_IPC_CHILD_EXITED
@@ -1245,6 +1261,21 @@ subsystems:
           loop, never from the logging path, to the endpoint passed to
           kmsg_subscribe. In this band because it arrives on the SUBSCRIBER's own
           endpoint, like WASMOS_IPC_HANGUP.
+      - symbol: WASMOS_IPC_HEALTH_REQ
+        value: 0xff05
+        kind: req
+        doc: |
+          Liveness probe: is this event loop turning? Answered with
+          WASMOS_IPC_HEALTH_RESP and the request's request_id by the event loop
+          itself -- wasmos_sys_event_loop_poll, wasmos_sys_native_event_loop_poll
+          and the AssemblyScript EventLoop -- before intents and handlers, so
+          service code never sees it. arg0..arg3 reserved (0).
+          The answer proves exactly what a supervisor needs to know: a loop
+          parked in a nested receive, or stuck in a handler, does not answer.
+          A supervisor probes only a unit that named its loop endpoint in
+          PROC_IPC_NOTIFY_READY (PROC_READY_FLAG_LIVENESS); a service with a
+          hand-written receive loop does not answer and must not opt in.
+          In this band because it arrives on the unit's own endpoint.
       - symbol: WASMOS_IPC_SHUTDOWN_DONE
         value: 0xff82
         kind: resp
@@ -1252,6 +1283,12 @@ subsystems:
           Sent back to the process manager when a participant has quiesced.
           arg0..arg3 reserved (0). Answering does not mean the participant stops
           running; it means nothing it holds still needs to reach a device.
+      - symbol: WASMOS_IPC_HEALTH_RESP
+        value: 0xff85
+        kind: resp
+        doc: |
+          The answer to WASMOS_IPC_HEALTH_REQ, from the probed endpoint, with the
+          probe's request_id. arg0..arg3 = 0.
 
   - name: pci
     id: 21
@@ -1429,11 +1466,16 @@ subsystems:
           arg2=size. Its spec is one line of text:
             <unit> <path> [restart=never|on-failure|always]
                           [class=optional|required|critical] [tty=<slot>]
-                          [-- <args>]
+                          [probe=<seconds>] [-- <args>]
           <unit> is template or template@instance; the instance key names
           what the unit serves (a tty, a device) and survives a restart.
           tty pins a wants_tty unit to text slot 1 or above; slot 0 is the
           kernel log and is refused.
+          probe is the liveness probe period, 1-999 s (default 10 s), both
+          stretched by kenv supervisor.timescale. It applies only to an
+          instance whose READY names its event-loop endpoint
+          (PROC_READY_FLAG_LIVENESS); three probes unanswered in a row and the
+          supervisor kills the instance as a failure.
           Answered once the unit is accepted, before it is spawned: a spawn
           that fails later is the unit's failure, handled by its policy.
       - symbol: SUPERVISOR_IPC_LIST_REQ

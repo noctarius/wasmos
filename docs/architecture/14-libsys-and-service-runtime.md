@@ -82,6 +82,12 @@ request.
 `wasmos_sys_event_loop_poll(loop, budget)`:
 - Calls `wasmos_ipc_try_recv` (non-blocking) up to `budget` times.
 - For each received message:
+  0. A `WASMOS_IPC_HEALTH_REQ` liveness probe is answered with
+     `WASMOS_IPC_HEALTH_RESP` (same `request_id`, from the loop's endpoint) and
+     goes no further. The native loop and the AssemblyScript `EventLoop` do the
+     same, so the answer means "this loop is turning" for every service on
+     one; a supervisor probes the endpoint a unit names in its READY
+     (`PROC_READY_FLAG_LIVENESS`).
   1. Checks the intent table: if `msg.request_id` matches a pending intent,
      fires the one-shot callback and removes the entry.
   2. Otherwise checks the handler table by `msg.type`.

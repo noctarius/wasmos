@@ -37,6 +37,9 @@ static const sv_timing_t k_timing = {
     .backoff_max_ms = 30000,
     .intensity_max = 5,
     .intensity_window_ms = 60000,
+    .probe_interval_ms = 10000,
+    .probe_misses_max = 3,
+    .scale = 1,
 };
 
 static sv_unit_t parse_ok(const char* spec, uint32_t now) {
@@ -74,6 +77,9 @@ static void test_a_bare_spec_takes_the_defaults(void) {
     CHECK(u.cls == SV_CLASS_OPTIONAL, "default class is optional");
     CHECK(u.tty == 0u, "no tty pin");
     CHECK(u.args[0] == '\0', "no args");
+    CHECK(u.probe_s == 0u && sv_unit_probe_interval(&u, &k_timing) == k_timing.probe_interval_ms,
+          "the default probe period");
+    CHECK(u.probe_ep == SV_PROBE_NONE, "not probed before a READY names an endpoint");
 }
 
 static void test_a_bad_spec_is_refused_untouched(void) {
@@ -90,6 +96,9 @@ static void test_a_bad_spec_is_refused_untouched(void) {
         "name /p tty=1000",
         "name /p restart",
         "name /p bogus=1",
+        "name /p probe=0",
+        "name /p probe=x",
+        "name /p probe=1000",
         "a12345678901234567890123456789012345 /p", /* 36 bytes: one too long */
     };
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
@@ -120,7 +129,7 @@ static void test_a_crash_restarts_with_a_doubling_backoff(void) {
     uint32_t now = 0;
     uint32_t expect = 250;
     start(&u, 7, now);
-    sv_unit_ready(&u, &k_timing, now);
+    sv_unit_ready(&u, &k_timing, SV_PROBE_NONE, now);
     for (int i = 0; i < 3; ++i) {
         now += 1000;
         CHECK(sv_unit_exited(&u, &k_timing, -11, PROC_EXIT_REASON_FAULTED, now) ==
@@ -197,7 +206,7 @@ static void test_a_stable_run_resets_only_the_backoff(void) {
     now = u.deadline;
     start(&u, 4, now);
     CHECK(u.backoff_ms == 500u, "backoff doubled");
-    sv_unit_ready(&u, &k_timing, now);
+    sv_unit_ready(&u, &k_timing, SV_PROBE_NONE, now);
     CHECK(sv_unit_tick(&u, &k_timing, now + k_timing.stable_ms - 1u) == SV_VERDICT_NONE &&
               u.state == SV_UNIT_RUNNING,
           "not stable before stable_ms");
@@ -218,7 +227,7 @@ static void test_a_missed_ready_is_killed_and_counted(void) {
     CHECK(u.state == SV_UNIT_STOPPING && u.pid == 5u, "stopping, pid still known for the kill");
     CHECK(sv_unit_tick(&u, &k_timing, k_timing.ready_timeout_ms + 1u) == SV_VERDICT_NONE,
           "killed once");
-    sv_unit_ready(&u, &k_timing, k_timing.ready_timeout_ms + 1u);
+    sv_unit_ready(&u, &k_timing, SV_PROBE_NONE, k_timing.ready_timeout_ms + 1u);
     CHECK(u.state == SV_UNIT_STOPPING, "a READY after the kill changes nothing");
     /* A clean-looking exit of a unit killed for its deadline is still a failure. */
     CHECK(sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_EXITED, 10001) == SV_VERDICT_RESTART,
@@ -256,7 +265,7 @@ static void test_never_does_not_restart(void) {
 static void test_a_critical_unit_is_never_restarted(void) {
     sv_unit_t u = parse_ok("fsm /p class=critical restart=always", 0);
     start(&u, 5, 0);
-    sv_unit_ready(&u, &k_timing, 0);
+    sv_unit_ready(&u, &k_timing, SV_PROBE_NONE, 0);
     CHECK(sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_EXITED, 10) == SV_VERDICT_CRITICAL,
           "any end of a critical unit is critical");
     u = parse_ok("fsm /p class=critical", 0);
@@ -297,12 +306,13 @@ static void test_the_list_reports_each_held_unit(void) {
     memset(out, 0x5A, sizeof(out));
     units[1] = parse_ok("cli@tty1 /c.wap restart=always class=required tty=1", 0);
     start(&units[1], 12, 0);
-    sv_unit_ready(&units[1], &k_timing, 5);
+    sv_unit_ready(&units[1], &k_timing, SV_PROBE_NONE, 5);
     units[3] = parse_ok("probe /p.wap", 0);
     start(&units[3], 40, 0);
     (void)sv_unit_exited(&units[3], &k_timing, 7, PROC_EXIT_REASON_TRAPPED, 100);
 
-    CHECK(sv_units_list(units, 4, out, 4, &total) == 2, "two records, free slots skipped");
+    CHECK(sv_units_list(units, 4, &k_timing, out, 4, &total) == 2,
+          "two records, free slots skipped");
     CHECK(total == 2, "two units held");
     CHECK(strcmp(out[0].name, "cli@tty1") == 0, "table order: cli first");
     CHECK(out[0].state == SUPERVISOR_UNIT_STATE_RUNNING, "cli is running");
@@ -329,10 +339,167 @@ static void test_a_short_list_reports_the_total(void) {
         snprintf(spec, sizeof(spec), "u%d /u.wap", i);
         units[i] = parse_ok(spec, 0);
     }
-    CHECK(sv_units_list(units, 3, out, 1, &total) == 1, "one record fits");
+    CHECK(sv_units_list(units, 3, &k_timing, out, 1, &total) == 1, "one record fits");
     CHECK(total == 3, "the total says the room was short");
     CHECK(strcmp(out[0].name, "u0") == 0, "the first unit");
-    CHECK(sv_units_list(units, 3, 0, 0, &total) == 0 && total == 3, "a count-only call");
+    CHECK(sv_units_list(units, 3, &k_timing, 0, 0, &total) == 0 && total == 3, "a count-only call");
+}
+
+/* Brings a parsed unit to a READY instance with `pid` that named `ep` for
+ * probes, at `now`. */
+static void start_probed(sv_unit_t* u, uint32_t pid, uint32_t ep, uint32_t now) {
+    start(u, pid, now);
+    sv_unit_ready(u, &k_timing, ep, now);
+}
+
+/* Sends the due probe as `id` at `now`; checks that one was due. */
+static void probe(sv_unit_t* u, uint32_t id, uint32_t now) {
+    CHECK(sv_unit_probe_tick(u, &k_timing, now) == SV_VERDICT_PROBE, "a probe is due");
+    sv_unit_probe_sent(u, &k_timing, id, now);
+}
+
+static void test_a_spec_names_its_probe_period_in_scaled_seconds(void) {
+    sv_unit_t u = parse_ok("svc /p probe=2", 0);
+    sv_timing_t t = k_timing;
+    CHECK(u.probe_s == 2u && sv_unit_probe_interval(&u, &k_timing) == 2000u, "probe=2 is 2 s");
+    t.scale = 3;
+    CHECK(sv_unit_probe_interval(&u, &t) == 6000u, "and the timescale stretches it");
+}
+
+static void test_a_unit_that_names_no_endpoint_is_never_probed(void) {
+    sv_unit_t u = parse_ok("svc /p", 0);
+    uint32_t d = 0;
+    start(&u, 7, 0);
+    sv_unit_ready(&u, &k_timing, SV_PROBE_NONE, 0);
+    CHECK(sv_unit_probe_tick(&u, &k_timing, 0) == SV_VERDICT_NONE, "no probe at READY");
+    CHECK(sv_unit_probe_tick(&u, &k_timing, 1000000) == SV_VERDICT_NONE, "nor ever after");
+    CHECK(sv_unit_deadline(&u, &d) == 1 && d == k_timing.stable_ms, "only the stable deadline");
+    CHECK(sv_unit_tick(&u, &k_timing, k_timing.stable_ms) == SV_VERDICT_NONE &&
+              u.state == SV_UNIT_STABLE,
+          "and it becomes stable on time");
+}
+
+static void test_a_unit_that_answers_stays_up(void) {
+    sv_unit_t u = parse_ok("svc /p probe=1", 0);
+    uint32_t now = 0;
+    start_probed(&u, 7, 33, now);
+    for (uint32_t i = 1; i <= 20; ++i) {
+        probe(&u, i, now);
+        CHECK(sv_unit_probe_tick(&u, &k_timing, now + 999u) == SV_VERDICT_NONE,
+              "nothing before the period is up");
+        CHECK(sv_unit_probe_answered(&u, &k_timing, i, now + 500u) == 1, "the answer counts");
+        now += 1000u;
+    }
+    CHECK(u.probes_answered == 20u && u.probe_misses == 0u, "twenty answered, none missed");
+    CHECK(u.state == SV_UNIT_STABLE, "and it became stable along the way");
+}
+
+/* A hung unit never exits; its unanswered probes are the only sign. */
+static void test_three_misses_in_a_row_kill_the_unit(void) {
+    sv_unit_t u = parse_ok("svc /p probe=1", 0);
+    start_probed(&u, 7, 33, 0);
+    probe(&u, 1, 0);
+    CHECK(sv_unit_probe_answered(&u, &k_timing, 1, 10) == 1, "the first probe is answered");
+    probe(&u, 2, 1000);
+    probe(&u, 3, 2000);
+    CHECK(u.probe_misses == 1u, "one miss");
+    probe(&u, 4, 3000);
+    CHECK(u.probe_misses == 2u, "two misses");
+    CHECK(sv_unit_probe_tick(&u, &k_timing, 4000) == SV_VERDICT_HUNG, "the third kills it");
+    CHECK(u.state == SV_UNIT_STOPPING && u.pid == 7u, "stopping; the pid is still the one to kill");
+    CHECK(sv_unit_probe_tick(&u, &k_timing, 5000) == SV_VERDICT_NONE,
+          "a stopping unit is not probed");
+    CHECK(sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_KILLED, 4100) == SV_VERDICT_RESTART,
+          "its end is a failure and restarts it");
+    CHECK(u.probe_ep == SV_PROBE_NONE && u.probe_misses == 3u,
+          "the ended instance is not probed, and its misses are still reported");
+}
+
+static void test_an_answer_resets_the_misses(void) {
+    sv_unit_t u = parse_ok("svc /p probe=1", 0);
+    start_probed(&u, 7, 33, 0);
+    probe(&u, 1, 0);
+    probe(&u, 2, 1000);
+    probe(&u, 3, 2000);
+    CHECK(u.probe_misses == 2u, "two misses");
+    CHECK(sv_unit_probe_answered(&u, &k_timing, 3, 2500) == 1 && u.probe_misses == 0u,
+          "an answer clears them");
+    probe(&u, 4, 3000);
+    probe(&u, 5, 4000);
+    probe(&u, 6, 5000);
+    CHECK(sv_unit_probe_tick(&u, &k_timing, 6000) == SV_VERDICT_HUNG, "only misses in a row count");
+}
+
+static void test_a_late_answer_does_not_count(void) {
+    sv_unit_t u = parse_ok("svc /p probe=1", 0);
+    start_probed(&u, 7, 33, 0);
+    probe(&u, 1, 0);
+    probe(&u, 2, 1000);
+    CHECK(sv_unit_probe_answered(&u, &k_timing, 1, 1100) == 0, "the earlier probe's answer");
+    CHECK(u.probe_misses == 1u && u.probes_answered == 0u, "changes nothing");
+    CHECK(sv_unit_probe_answered(&u, &k_timing, 0, 1100) == 0, "nor does request id 0");
+}
+
+static void test_stability_waits_for_the_first_answer(void) {
+    sv_unit_t u = parse_ok("svc /p", 0);
+    uint32_t d = 0;
+    uint32_t now = k_timing.stable_ms;
+    start_probed(&u, 7, 33, 0);
+    probe(&u, 1, 0);
+    CHECK(sv_unit_tick(&u, &k_timing, now) == SV_VERDICT_NONE && u.state == SV_UNIT_RUNNING,
+          "READY alone is not stable");
+    CHECK(sv_unit_deadline(&u, &d) == 1 && d == k_timing.probe_interval_ms,
+          "and the passed stable deadline is not a deadline to wake for");
+    CHECK(sv_unit_probe_answered(&u, &k_timing, 1, now + 5u) == 1 && u.state == SV_UNIT_STABLE,
+          "the first answer after it makes the unit stable");
+
+    u = parse_ok("svc /p", 0);
+    start_probed(&u, 8, 33, 0);
+    probe(&u, 1, 0);
+    CHECK(sv_unit_probe_answered(&u, &k_timing, 1, 5) == 1 && u.state == SV_UNIT_RUNNING,
+          "an answer before the stable deadline");
+    CHECK(sv_unit_tick(&u, &k_timing, k_timing.stable_ms) == SV_VERDICT_NONE &&
+              u.state == SV_UNIT_STABLE,
+          "leaves the deadline to make it stable");
+}
+
+static void test_a_respawn_starts_the_probe_count_over(void) {
+    sv_unit_t u = parse_ok("svc /p probe=1", 0);
+    start_probed(&u, 7, 33, 0);
+    probe(&u, 1, 0);
+    (void)sv_unit_probe_answered(&u, &k_timing, 1, 10);
+    probe(&u, 2, 1000);
+    (void)sv_unit_exited(&u, &k_timing, 1, PROC_EXIT_REASON_TRAPPED, 1500);
+    CHECK(sv_unit_tick(&u, &k_timing, 1500 + k_timing.backoff_min_ms) == SV_VERDICT_SPAWN,
+          "the restart is due");
+    sv_unit_spawn_sent(&u);
+    sv_unit_spawned(&u, &k_timing, 9, 2000);
+    CHECK(u.probes_answered == 0u && u.probe_misses == 0u && u.probe_pending == 0u,
+          "a new instance starts with no probe history");
+    CHECK(sv_unit_probe_tick(&u, &k_timing, 2000) == SV_VERDICT_NONE,
+          "and is not probed before its own READY");
+}
+
+static void test_the_list_reports_liveness(void) {
+    sv_unit_t units[2];
+    wasmos_supervisor_unit_record_t out[2];
+    uint32_t total = 0;
+    memset(units, 0, sizeof(units));
+    units[0] = parse_ok("probed /p.wap probe=4", 0);
+    start_probed(&units[0], 12, 33, 0);
+    probe(&units[0], 1, 0);
+    (void)sv_unit_probe_answered(&units[0], &k_timing, 1, 1);
+    probe(&units[0], 2, 4000);
+    probe(&units[0], 3, 8000);
+    units[1] = parse_ok("plain /p.wap", 0);
+    start(&units[1], 13, 0);
+    sv_unit_ready(&units[1], &k_timing, SV_PROBE_NONE, 0);
+
+    CHECK(sv_units_list(units, 2, &k_timing, out, 2, &total) == 2, "two records");
+    CHECK(out[0].probe_interval_ms == 4000u, "the probed unit's period");
+    CHECK(out[0].probes_answered == 1u && out[0].probe_misses == 1u, "its answers and misses");
+    CHECK(out[1].probe_interval_ms == 0u && out[1].probes_answered == 0u,
+          "an unprobed unit reports no period");
 }
 
 int main(void) {
@@ -355,6 +522,15 @@ int main(void) {
     test_stale_events_are_ignored();
     test_the_list_reports_each_held_unit();
     test_a_short_list_reports_the_total();
+    test_a_spec_names_its_probe_period_in_scaled_seconds();
+    test_a_unit_that_names_no_endpoint_is_never_probed();
+    test_a_unit_that_answers_stays_up();
+    test_three_misses_in_a_row_kill_the_unit();
+    test_an_answer_resets_the_misses();
+    test_a_late_answer_does_not_count();
+    test_stability_waits_for_the_first_answer();
+    test_a_respawn_starts_the_probe_count_over();
+    test_the_list_reports_liveness();
     if (g_failures != 0) {
         printf("test_supervisor_unit: %d failure(s)\n", g_failures);
         return 1;

@@ -828,6 +828,39 @@ function testArmingTwiceKeepsTheWaiter(): i32 {
 }
 
 /** 0 if every case passed, else the failing case's marker. */
+// ---------------------------------------------------------------- health
+
+/**
+ * A liveness probe is answered by the loop and reaches nobody else -- not the
+ * intent whose request id it happens to carry, not a handler registered for its
+ * type, not the default. The answer goes back to the prober from the loop's
+ * endpoint with the probe's request id.
+ */
+function testHealthProbeIsAnswered(): i32 {
+    const loop = freshLoop();
+    const typed = new Recorder();
+    const fallback = new Recorder();
+    const reply = new Recorder();
+    loop.register(0xff05, typed);
+    loop.setDefault(fallback);
+    const requestId = loop.intentSend(PEER, SELF, TYPE_REQ, 0, 0, 0, 0, reply);
+    if (pending(PEER) != 1) return 1801;
+
+    plant(SELF, 0xff05, requestId, PEER, 0, 0, 0, 0);
+    if (loop.poll(2) != 1) return 1802;
+    if (typed.calls != 0 || fallback.calls != 0 || reply.calls != 0) return 1803;
+    if (pending(PEER) != 2) return 1804;
+    if (peek(PEER, 1, 0) != 0xff85) return 1805;
+    if (peek(PEER, 1, 1) != requestId) return 1806;
+    if (peek(PEER, 1, 4) != SELF) return 1807;
+
+    /* The intent the probe's request id matched is still pending. */
+    plant(SELF, TYPE_RESP, requestId, PEER, 5, 0, 0, 0);
+    if (loop.poll(2) != 1) return 1808;
+    if (reply.calls != 1 || reply.lastArg0 != 5) return 1809;
+    return 0;
+}
+
 export function runTests(): i32 {
     /* Randomized order: a case that leaks state must not be able to make
      * its neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -849,6 +882,7 @@ export function runTests(): i32 {
         testReceiveCannotPark,
         testMessageFuture,
         testArmingTwiceKeepsTheWaiter,
+        testHealthProbeIsAnswered,
     ];
     return runShuffled(cases);
 }

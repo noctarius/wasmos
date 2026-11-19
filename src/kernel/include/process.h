@@ -272,6 +272,11 @@ typedef struct process {
      * unwatched process. */
     struct ipc_owed* watch_ready;
     struct ipc_owed* watch_exit;
+    /* The endpoint the process named for liveness probes in PROC_IPC_NOTIFY_READY
+     * (PROC_READY_FLAG_LIVENESS), always one it owns; IPC_ENDPOINT_NONE when it
+     * named none. Read once, by process_notify_ready, into the spawner's
+     * PROC_IPC_CHILD_READY. */
+    uint32_t live_endpoint;
     /* Set by process_set_critical: a process the system cannot run without and
      * nobody restarts. Its exit, by any path, is a kernel panic. */
     uint8_t critical;
@@ -514,6 +519,12 @@ int process_thread_detach(process_t* process, uint32_t target_tid);
  * is a process that is not the target's parent. Kernel callers
  * (current_pid == 0) bypass the parent check. */
 int process_kill(uint32_t pid, int32_t exit_status);
+/* process_kill with the parent check made against `requester_pid` instead of
+ * the current process: for the process manager, which kills on behalf of the
+ * process that sent PROC_IPC_KILL and is itself nobody's parent there.
+ * requester_pid 0 skips the check. A process can still not kill itself, nor
+ * the current process be killed through this. */
+int process_kill_for(uint32_t requester_pid, uint32_t pid, int32_t exit_status);
 /* Read a terminated process's exit status. INVERTED-LOOKING but deliberate:
  * 0 means "it has exited and *out_exit_status is set", 1 means "still alive,
  * nothing written", -1 means no such pid or a NULL out pointer. Callers use

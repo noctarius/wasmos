@@ -333,6 +333,14 @@ groups:
       - { symbol: SPAWN_WATCH_PATH_MAX, value: 255, doc: "Longest path a watched spawn accepts, NUL excluded." }
       - { symbol: SPAWN_WATCH_ARGS_MAX, value: 255, doc: "Longest argument string a watched spawn accepts, NUL excluded." }
 
+  - name: proc_ready_flags
+    doc: |
+      Flags of PROC_IPC_NOTIFY_READY, in arg1.
+    constants:
+      - symbol: PROC_READY_FLAG_LIVENESS
+        value: 1
+        doc: "arg0 names the sender's event-loop endpoint, which answers WASMOS_IPC_HEALTH_REQ; a supervisor probes it."
+
   - name: proc_exit_reason
     doc: |
       Why a process ended, carried beside its exit status: arg2 of the
@@ -481,7 +489,7 @@ groups:
 
       A reader MUST reject a descriptor whose version it does not know.
     constants:
-      - { symbol: SUPERVISOR_LIST_DESC_VERSION, value: 1, doc: "Current wasmos_supervisor_list_desc_t and record layout." }
+      - { symbol: SUPERVISOR_LIST_DESC_VERSION, value: 2, doc: "Current wasmos_supervisor_list_desc_t and record layout." }
       - { symbol: SUPERVISOR_UNITS_MAX, value: 32, doc: "Units the supervisor's table holds: a list sized for this many records is never short." }
 
   - name: supervisor_unit_state
@@ -494,7 +502,7 @@ groups:
       - { symbol: SUPERVISOR_UNIT_STATE_STARTING, value: 3, doc: "Spawned; READY not yet sent." }
       - { symbol: SUPERVISOR_UNIT_STATE_RUNNING, value: 4, doc: "READY; not yet up long enough to count as stable." }
       - { symbol: SUPERVISOR_UNIT_STATE_STABLE, value: 5, doc: "READY and up long enough that its restart backoff was reset." }
-      - { symbol: SUPERVISOR_UNIT_STATE_STOPPING, value: 6, doc: "Killed by the supervisor for missing READY; its exit is due." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STOPPING, value: 6, doc: "Killed by the supervisor for missing READY or its liveness probes; its exit is due." }
       - { symbol: SUPERVISOR_UNIT_STATE_STOPPED, value: 7, doc: "Ended and, by its restart policy, not restarted." }
       - { symbol: SUPERVISOR_UNIT_STATE_FAILED, value: 8, doc: "Given up on: the restart limit tripped, or a critical unit died." }
 

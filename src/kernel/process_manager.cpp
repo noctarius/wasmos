@@ -161,13 +161,15 @@ class ProcessManager {
         return 0;
     }
 
+    /* PROC_IPC_KILL: arg0=pid arg1=exit status. Only the target's parent may
+     * kill it. The PM runs as a process of its own, so the parent check is made
+     * against the sender (process_kill_for), not against the PM. */
     int handle_kill(uint32_t pm_context_id, const ipc_message_t* msg) {
         uint32_t owner_context = 0;
         process_t* caller = 0;
-        process_t* target = 0;
 
         if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-            return -1;
+            return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
         }
         caller = process_find_by_context(owner_context);
         if (!caller) {
@@ -175,16 +177,11 @@ class ProcessManager {
                 g_pm_kill_owner_deny_logged = 1;
                 klog_write("[test] pm kill owner deny ok\n");
             }
-            return -1;
+            return WASMOS_ERR_PROC_PM_NO_CALLER;
         }
 
-        target = process_get(msg->arg0);
-        if (!target || target->parent_pid != caller->pid) {
-            return -1;
-        }
-
-        if (process_kill(msg->arg0, (int32_t)msg->arg1) != 0) {
-            return -1;
+        if (process_kill_for(caller->pid, msg->arg0, (int32_t)msg->arg1) != 0) {
+            return WASMOS_ERR_PROC_PM_KILL_NOT_CHILD;
         }
 
         ipc_message_t resp;
@@ -196,7 +193,9 @@ class ProcessManager {
         resp.arg1 = msg->arg1;
         resp.arg2 = 0;
         resp.arg3 = 0;
-        return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+        return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+                   ? 0
+                   : WASMOS_ERR_PROC_PM_REPLY_SEND;
     }
 
     int handle_status(uint32_t pm_context_id, const ipc_message_t* msg) {

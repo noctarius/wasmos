@@ -523,6 +523,25 @@ int32_t wasmos_sys_native_random_float_async(wasmos_sys_native_event_loop_t* loo
     return WASMOS_ERR_NONE;
 }
 
+/* Answers a WASMOS_IPC_HEALTH_REQ from the loop's endpoint with the probe's
+ * request_id. A send that fails is not retried: the prober counts a miss. */
+static void native_answer_health(wasmos_sys_native_event_loop_t* loop, uint32_t ctx_id,
+                                 const nd_ipc_message_t* probe) {
+    nd_ipc_message_t resp;
+    if (!loop->api->ipc_send) {
+        return;
+    }
+    resp.type = WASMOS_IPC_HEALTH_RESP;
+    resp.source = loop->receiver_endpoint;
+    resp.destination = probe->source;
+    resp.request_id = probe->request_id;
+    resp.arg0 = 0;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    (void)loop->api->ipc_send(ctx_id, probe->source, &resp);
+}
+
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t* loop, uint32_t budget) {
     uint32_t ctx_id = 0;
     uint32_t i = 0;
@@ -544,6 +563,12 @@ int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t* loop, 
             return -1;
         }
         handled++;
+        /* A liveness probe is answered by the loop itself, before the intents:
+         * its request_id is the prober's and may equal one of this loop's own. */
+        if (msg.type == WASMOS_IPC_HEALTH_REQ) {
+            native_answer_health(loop, ctx_id, &msg);
+            continue;
+        }
         wasmos_sys_native_intent_t* intent = native_intent_find(loop, msg.request_id);
         if (intent) {
             void (*cb)(void*, const nd_ipc_message_t*) = intent->on_resolve;

@@ -268,11 +268,12 @@ linked feature documents for rationale and rollout plans.
 - The `supervisor` service (initfs, spawned by kernel init right after the
   process manager) keeps submitted units running. A unit arrives as a one-line
   spec in `SUPERVISOR_IPC_SUBMIT_REQ` (`<unit> <path> [restart=never|on-failure|
-  always] [class=optional|required|critical] [tty=<slot>] [-- args]`, defaults
-  on-failure / optional) and is spawned with `PROC_IPC_SPAWN_WATCHED`. A unit
-  with no READY within 10 s is killed and counts as failed; a restart waits a
-  backoff of 250 ms doubling to 30 s, reset once the unit has been READY for
-  10 s; the fifth end within a sliding 60 s window gives the unit up (one
+  always] [class=optional|required|critical] [tty=<slot>] [probe=<s>]
+  [-- args]`, defaults on-failure / optional / 10 s) and is spawned with
+  `PROC_IPC_SPAWN_WATCHED`. A unit with no READY within 10 s is killed and
+  counts as failed; a restart waits a backoff of 250 ms doubling to 30 s, reset
+  once the unit has been READY for 10 s (and, when probed, has answered a
+  probe); the fifth end within a sliding 60 s window gives the unit up (one
   `[supervisor] <unit> failed ...` line). Under `restart=always` a clean exit
   restarts too and counts toward the window. A critical unit is never restarted:
   its first end logs `[supervisor] critical unit <unit> died (...)`, dumps the
@@ -280,9 +281,29 @@ linked feature documents for rationale and rollout plans.
   powers off, or reboots under kenv `supervisor.on_critical=reboot` (no
   reboot-loop guard yet). `SUPERVISOR_IPC_LIST_REQ` reports the table, one
   `wasmos_supervisor_unit_record_t` per unit, into a buffer the caller owns and
-  lends READ|WRITE. All times scale by kenv `supervisor.timescale` (1-100,
-  default 1). The policy is `supervisor_unit.c`, host-tested in
-  `test_supervisor_unit`.
+  lends READ|WRITE (layout version 2, with the liveness fields). All times scale
+  by kenv `supervisor.timescale` (1-100, default 1). The policy is
+  `supervisor_unit.c`, host-tested in `test_supervisor_unit`.
+- Liveness: a unit whose `PROC_IPC_NOTIFY_READY` carries
+  `PROC_READY_FLAG_LIVENESS` names its event-loop endpoint in arg0; the PM
+  records it only when the sender owns it and passes it on in
+  `PROC_IPC_CHILD_READY`'s arg1. The supervisor sends that endpoint
+  `WASMOS_IPC_HEALTH_REQ` every probe period, one probe outstanding at a time;
+  three in a row unanswered when the next is due and it logs `[supervisor]
+  <unit> missed 3 liveness probes; killing pid N` and kills the unit, which
+  then counts as a failure under its restart policy. The answer
+  (`WASMOS_IPC_HEALTH_RESP`) comes from the event loop itself --
+  `wasmos_sys_event_loop_poll`, `wasmos_sys_native_event_loop_poll` and the
+  AssemblyScript `EventLoop` answer before intents and handlers -- so a loop
+  parked in a nested receive or stuck in a handler does not answer, and a busy
+  one that keeps returning to its loop does. No boot service opts in yet; only
+  `sv_probe`'s `hang-once` and `busy` modes do.
+- `PROC_IPC_KILL` is judged by its sender: the PM kills through
+  `process_kill_for(sender, ...)`, so a parent can kill its child. Before, the
+  parent check ran against the PM's own pid and refused every kill not of a PM
+  child, so the supervisor's kills (missed READY, missed probes) did nothing.
+  Failures answer `WASMOS_ERR_PROC_PM_KILL_NOT_CHILD` / `_BAD_ENDPOINT` /
+  `_NO_CALLER`.
 - The supervisor is a critical process: kernel init marks it with
   `process_set_critical` once spawned, and any exit of a critical process logs
   `[kernel] critical process <name> (pid N) ended (...)` and panics with
@@ -295,9 +316,10 @@ linked feature documents for rationale and rollout plans.
   continues once a unit is accepted, not once it is up. Apps (chardevc, the gfx
   apps) are still plain `spawn`s, and device-manager still spawns drivers
   itself. `svc submit <spec>` submits from the shell, `svc list` prints the unit
-  table and `svc status <unit>` one unit; `sv_probe` is the test unit that
-  crashes on demand. Not yet: liveness probes, a boot-complete milestone, and
-  operator commands that change a unit (stop, start, restart).
+  table and `svc status <unit>` one unit, including its liveness record;
+  `sv_probe` is the test unit that crashes, hangs or stays busy on demand. Not
+  yet: liveness for the boot services, a boot-complete milestone, and operator
+  commands that change a unit (stop, start, restart).
 - `process_set_ready` and `process_set_running` refuse a transition whose owner
   is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
   (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`

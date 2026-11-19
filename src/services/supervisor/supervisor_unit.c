@@ -102,6 +102,14 @@ static int sv_parse_option(sv_unit_t* unit, const char* tok, uint32_t len) {
         unit->tty = slot + 1u;
         return 0;
     }
+    if (sv_token_is(tok, key_len, "probe")) {
+        uint32_t seconds = 0;
+        if (sv_parse_small(val, val_len, &seconds) != 0 || seconds == 0u) {
+            return -1;
+        }
+        unit->probe_s = seconds;
+        return 0;
+    }
     return -1;
 }
 
@@ -155,6 +163,7 @@ int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now,
     unit.state = SV_UNIT_SPAWN_DUE;
     unit.deadline = now;
     unit.backoff_ms = timing->backoff_min_ms;
+    unit.probe_ep = SV_PROBE_NONE;
     *out = unit;
     return 0;
 }
@@ -169,6 +178,8 @@ static sv_verdict_t sv_unit_decide(sv_unit_t* unit, const sv_timing_t* timing, i
     uint32_t in_window = 0;
 
     unit->pid = 0;
+    unit->probe_ep = SV_PROBE_NONE;
+    unit->probe_pending = 0;
     if (unit->cls == SV_CLASS_CRITICAL) {
         unit->state = SV_UNIT_FAILED;
         return SV_VERDICT_CRITICAL;
@@ -214,6 +225,10 @@ void sv_unit_spawned(sv_unit_t* unit, const sv_timing_t* timing, uint32_t pid, u
     unit->pid = pid;
     unit->state = SV_UNIT_STARTING;
     unit->deadline = now + timing->ready_timeout_ms;
+    unit->probe_ep = SV_PROBE_NONE;
+    unit->probe_pending = 0;
+    unit->probes_answered = 0;
+    unit->probe_misses = 0;
 }
 
 sv_verdict_t sv_unit_spawn_failed(sv_unit_t* unit, const sv_timing_t* timing, int32_t code,
@@ -226,12 +241,71 @@ sv_verdict_t sv_unit_spawn_failed(sv_unit_t* unit, const sv_timing_t* timing, in
     return sv_unit_decide(unit, timing, 1, now);
 }
 
-void sv_unit_ready(sv_unit_t* unit, const sv_timing_t* timing, uint32_t now) {
+void sv_unit_ready(sv_unit_t* unit, const sv_timing_t* timing, uint32_t probe_ep, uint32_t now) {
     if (!unit || !timing || unit->state != SV_UNIT_STARTING) {
         return;
     }
     unit->state = SV_UNIT_RUNNING;
     unit->deadline = now + timing->stable_ms;
+    unit->probe_ep = probe_ep;
+    unit->probe_due = now;
+}
+
+/* Probed and not yet answered once: READY alone does not show the loop runs. */
+static int sv_awaits_first_answer(const sv_unit_t* unit) {
+    return unit->probe_ep != SV_PROBE_NONE && unit->probes_answered == 0;
+}
+
+static int sv_is_probed(const sv_unit_t* unit) {
+    return unit->probe_ep != SV_PROBE_NONE &&
+           (unit->state == SV_UNIT_RUNNING || unit->state == SV_UNIT_STABLE);
+}
+
+uint32_t sv_unit_probe_interval(const sv_unit_t* unit, const sv_timing_t* timing) {
+    if (!unit || !timing) {
+        return 0;
+    }
+    return unit->probe_s != 0u ? unit->probe_s * 1000u * timing->scale : timing->probe_interval_ms;
+}
+
+sv_verdict_t sv_unit_probe_tick(sv_unit_t* unit, const sv_timing_t* timing, uint32_t now) {
+    if (!unit || !timing || !sv_is_probed(unit) || !sv_due(unit->probe_due, now)) {
+        return SV_VERDICT_NONE;
+    }
+    if (unit->probe_pending != 0u) {
+        unit->probe_pending = 0;
+        unit->probe_misses++;
+        if (unit->probe_misses >= timing->probe_misses_max) {
+            unit->state = SV_UNIT_STOPPING;
+            return SV_VERDICT_HUNG;
+        }
+    }
+    return SV_VERDICT_PROBE;
+}
+
+void sv_unit_probe_sent(sv_unit_t* unit, const sv_timing_t* timing, uint32_t request_id,
+                        uint32_t now) {
+    if (!unit || !timing || !sv_is_probed(unit)) {
+        return;
+    }
+    unit->probe_pending = request_id;
+    unit->probe_due = now + sv_unit_probe_interval(unit, timing);
+}
+
+int sv_unit_probe_answered(sv_unit_t* unit, const sv_timing_t* timing, uint32_t request_id,
+                           uint32_t now) {
+    if (!unit || !timing || !sv_is_probed(unit) || request_id == 0u ||
+        unit->probe_pending != request_id) {
+        return 0;
+    }
+    unit->probe_pending = 0;
+    unit->probe_misses = 0;
+    unit->probes_answered++;
+    if (unit->state == SV_UNIT_RUNNING && sv_due(unit->deadline, now)) {
+        unit->state = SV_UNIT_STABLE;
+        unit->backoff_ms = timing->backoff_min_ms;
+    }
+    return 1;
 }
 
 sv_verdict_t sv_unit_exited(sv_unit_t* unit, const sv_timing_t* timing, int32_t status,
@@ -263,6 +337,9 @@ sv_verdict_t sv_unit_tick(sv_unit_t* unit, const sv_timing_t* timing, uint32_t n
         unit->state = SV_UNIT_STOPPING;
         return SV_VERDICT_KILL;
     case SV_UNIT_RUNNING:
+        if (sv_awaits_first_answer(unit)) {
+            return SV_VERDICT_NONE;
+        }
         unit->state = SV_UNIT_STABLE;
         unit->backoff_ms = timing->backoff_min_ms;
         return SV_VERDICT_NONE;
@@ -272,21 +349,30 @@ sv_verdict_t sv_unit_tick(sv_unit_t* unit, const sv_timing_t* timing, uint32_t n
 }
 
 int sv_unit_deadline(const sv_unit_t* unit, uint32_t* out) {
+    uint32_t earliest = 0;
+    int have = 0;
     if (!unit) {
         return 0;
     }
+    /* A running unit's stable deadline waits for its first answer instead,
+     * which promotes it (sv_unit_probe_answered). */
     if (unit->state == SV_UNIT_SPAWN_DUE || unit->state == SV_UNIT_STARTING ||
-        unit->state == SV_UNIT_RUNNING) {
-        if (out) {
-            *out = unit->deadline;
-        }
-        return 1;
+        (unit->state == SV_UNIT_RUNNING && !sv_awaits_first_answer(unit))) {
+        earliest = unit->deadline;
+        have = 1;
     }
-    return 0;
+    if (sv_is_probed(unit) && (!have || (int32_t)(unit->probe_due - earliest) < 0)) {
+        earliest = unit->probe_due;
+        have = 1;
+    }
+    if (have && out) {
+        *out = earliest;
+    }
+    return have;
 }
 
-uint32_t sv_units_list(const sv_unit_t* units, uint32_t n, wasmos_supervisor_unit_record_t* out,
-                       uint32_t capacity, uint32_t* total) {
+uint32_t sv_units_list(const sv_unit_t* units, uint32_t n, const sv_timing_t* timing,
+                       wasmos_supervisor_unit_record_t* out, uint32_t capacity, uint32_t* total) {
     uint32_t held = 0;
     uint32_t written = 0;
     for (uint32_t i = 0; units && i < n; ++i) {
@@ -310,6 +396,9 @@ uint32_t sv_units_list(const sv_unit_t* units, uint32_t n, wasmos_supervisor_uni
         r->restart_count = u->restart_count;
         r->last_reason = u->last_reason;
         r->last_status = u->last_status;
+        r->probe_interval_ms = sv_is_probed(u) ? sv_unit_probe_interval(u, timing) : 0u;
+        r->probes_answered = u->probes_answered;
+        r->probe_misses = u->probe_misses;
     }
     if (total) {
         *total = held;

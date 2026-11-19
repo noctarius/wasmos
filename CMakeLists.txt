@@ -3552,8 +3552,11 @@ add_custom_target(run-kernel-unit-tests
           -o ${BUILD_DIR}/test_libsys_event_loop
   COMMAND ${BUILD_DIR}/test_libsys_event_loop
   # The .rc script runner (step API and the synchronous run over it), reading
-  # real files the test writes under /tmp.
+  # real files the test writes under /tmp. script.c is written against the guest
+  # libc's <sys/stat.h>; glibc hides S_IFMT / S_IFDIR under strict -std=c11
+  # unless _DEFAULT_SOURCE asks for them.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -D_DEFAULT_SOURCE
           -iquote ${LIBC_DIR}/include
           -iquote ${CMAKE_SOURCE_DIR}/tests/unit
           ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_script_runner.c

@@ -56,7 +56,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
     WASMOS_ERR_DOMAIN_DEVMGR = 10, /* device-manager query failures */
     WASMOS_ERR_DOMAIN_VIRTIO_BLK = 24, /* virtio-blk block-device server failures. Distinct from `block`, which describes the staging buffer a transfer moves through: these describe the device and the request, and are what a BLOCK_IPC_ERROR reply carries in arg0. */
     WASMOS_ERR_DOMAIN_BLOCK_DEV = 25, /* Block-device SERVER failures, as a BLOCK_IPC_ERROR reply's arg0. Distinct from `block`, which describes the staging buffer a transfer moves through, and shared by every backend rather than per-driver: a client that reaches a disk through the `block` class should read one vocabulary whichever driver answers it. */
-    WASMOS_ERR_DOMAIN_SUPERVISOR = 26, /* Supervisor refusals of a unit submission, as a SUPERVISOR_IPC_ERROR reply's arg0. A refused unit was not recorded and nothing was spawned. */
+    WASMOS_ERR_DOMAIN_SUPERVISOR = 26, /* Supervisor refusals of a request, as a SUPERVISOR_IPC_ERROR reply's arg0. A refused submission recorded no unit and spawned nothing; a refused kill killed nothing. */
 };
 
 /* A domain error is the negative of (domain << 16) | local_code. */
@@ -323,6 +323,8 @@ enum {
     WASMOS_ERR_SUPERVISOR_EXISTS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 3), /* a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed */
     WASMOS_ERR_SUPERVISOR_NO_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 4), /* the supervisor's unit table is full */
     WASMOS_ERR_SUPERVISOR_DMA_CAPS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 5), /* the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit */
+    WASMOS_ERR_SUPERVISOR_NO_UNIT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 6), /* no unit of the name the request gives is recorded */
+    WASMOS_ERR_SUPERVISOR_NOT_RUNNING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 7), /* the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -652,6 +654,8 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_EXISTS: return "supervisor.EXISTS";
     case WASMOS_ERR_SUPERVISOR_NO_SPACE: return "supervisor.NO_SPACE";
     case WASMOS_ERR_SUPERVISOR_DMA_CAPS: return "supervisor.DMA_CAPS";
+    case WASMOS_ERR_SUPERVISOR_NO_UNIT: return "supervisor.NO_UNIT";
+    case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "supervisor.NOT_RUNNING";
     default: return "unknown";
     }
 }
@@ -914,6 +918,8 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_EXISTS: return "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed";
     case WASMOS_ERR_SUPERVISOR_NO_SPACE: return "the supervisor's unit table is full";
     case WASMOS_ERR_SUPERVISOR_DMA_CAPS: return "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit";
+    case WASMOS_ERR_SUPERVISOR_NO_UNIT: return "no unit of the name the request gives is recorded";
+    case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed";
     default: return "unknown error";
     }
 }

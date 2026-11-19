@@ -435,6 +435,15 @@ pub const SUPERVISOR_SPEC_MAX: i32 = 255;
 /// Longest unit name (template@instance), NUL excluded: a service name's ceiling.
 pub const SUPERVISOR_UNIT_NAME_MAX: i32 = 35;
 
+// supervisor_unit_desc
+/// Version of wasmos_supervisor_unit_desc_t, the record that names one unit
+/// in a request about it (SUPERVISOR_IPC_KILL_REQ), declared in
+/// src/drivers/include/wasmos_driver_abi.h.
+///
+/// A reader MUST reject a descriptor whose version it does not know.
+/// Current wasmos_supervisor_unit_desc_t layout.
+pub const SUPERVISOR_UNIT_DESC_VERSION: i32 = 1;
+
 // supervisor_list_desc
 /// Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a
 /// wasmos_supervisor_list_desc_t followed by `capacity`

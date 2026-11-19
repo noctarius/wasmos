@@ -341,10 +341,18 @@ sv_verdict_t sv_unit_exited(sv_unit_t* unit, const sv_timing_t* timing, int32_t 
     }
     unit->last_status = status;
     unit->last_reason = reason;
-    /* A unit the supervisor killed for missing READY failed, whatever its
-     * exit says. */
+    /* A unit the supervisor killed failed, whatever its exit says. */
     failure = unit->state == SV_UNIT_STOPPING || sv_exit_is_failure(status, reason);
     return sv_unit_decide(unit, timing, failure, now);
+}
+
+int32_t sv_unit_kill(sv_unit_t* unit) {
+    if (!unit || (unit->state != SV_UNIT_STARTING && unit->state != SV_UNIT_RUNNING &&
+                  unit->state != SV_UNIT_STABLE)) {
+        return WASMOS_ERR_SUPERVISOR_NOT_RUNNING;
+    }
+    unit->state = SV_UNIT_STOPPING;
+    return 0;
 }
 
 sv_verdict_t sv_unit_tick(sv_unit_t* unit, const sv_timing_t* timing, uint32_t now) {

@@ -1157,7 +1157,20 @@ const SUPERVISOR_IPC_LIST_REQ int32 = 0x1001
 // later is not part of the boot set. Answered at once; a second one
 // changes nothing.
 const SUPERVISOR_IPC_BOOT_SUBMITTED_REQ int32 = 0x1002
-// arg0 = 0: the unit was accepted, the list was written, or the boot set was recorded.
+// Kill a unit's running instance. The request is a
+// wasmos_supervisor_unit_desc_t naming the unit, in a transfer buffer
+// the caller owns and has lent READ to the supervisor: arg0=buffer_id
+// arg1=offset arg2=size. The instance must be spawned and not already
+// being killed (starting, running or stable); otherwise the request is
+// refused with WASMOS_ERR_SUPERVISOR_NOT_RUNNING, and with
+// WASMOS_ERR_SUPERVISOR_NO_UNIT when no unit has that name. The end of
+// a killed instance is a failure, handled by the unit's policy like any
+// other: an on-failure or always unit is restarted, a never unit is
+// given up, and a critical unit's end takes the system down. Answered
+// once the kill is sent to the process manager, before the instance
+// has ended; arg1 of the reply is the pid killed.
+const SUPERVISOR_IPC_KILL_REQ int32 = 0x1003
+// arg0 = 0: the unit was accepted, the list was written, the boot set was recorded, or the kill was sent (arg1 = the pid).
 const SUPERVISOR_IPC_RESP int32 = 0x1080
 // arg0 = packed WASMOS_ERR_SUPERVISOR_* code.
 const SUPERVISOR_IPC_ERROR int32 = 0x10FF

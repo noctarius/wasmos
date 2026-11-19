@@ -400,7 +400,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR` | -0x0019000A | the device has no descriptor to report, so it cannot be identified |
 | `WASMOS_ERR_BLOCK_DEV_QUEUE_FULL` | -0x0019000B | a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it |
 
-### `supervisor` (domain 26) — Supervisor refusals of a unit submission, as a SUPERVISOR_IPC_ERROR reply's arg0. A refused unit was not recorded and nothing was spawned.
+### `supervisor` (domain 26) — Supervisor refusals of a request, as a SUPERVISOR_IPC_ERROR reply's arg0. A refused submission recorded no unit and spawned nothing; a refused kill killed nothing.
 
 | Code | Value | Description |
 |---|---|---|
@@ -409,3 +409,5 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_SUPERVISOR_EXISTS` | -0x001A0003 | a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed |
 | `WASMOS_ERR_SUPERVISOR_NO_SPACE` | -0x001A0004 | the supervisor's unit table is full |
 | `WASMOS_ERR_SUPERVISOR_DMA_CAPS` | -0x001A0005 | the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit |
+| `WASMOS_ERR_SUPERVISOR_NO_UNIT` | -0x001A0006 | no unit of the name the request gives is recorded |
+| `WASMOS_ERR_SUPERVISOR_NOT_RUNNING` | -0x001A0007 | the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed |

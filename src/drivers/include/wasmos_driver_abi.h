@@ -675,6 +675,18 @@ _Static_assert(sizeof(wasmos_supervisor_submit_desc_t) ==
                    8u + SUPERVISOR_SPEC_MAX + 1u + 8u + SUPERVISOR_CAPS_MAX,
                "wasmos_supervisor_submit_desc_t is part of the SUPERVISOR_IPC_SUBMIT_REQ ABI");
 
+/* Names one unit in a request about it (SUPERVISOR_IPC_KILL_REQ,
+ * abi/opcodes.yaml), in a transfer buffer the caller owns and lends READ to the
+ * supervisor. `name` is NUL-terminated; name_len counts its bytes without the
+ * NUL. */
+typedef struct {
+    uint32_t version; /* SUPERVISOR_UNIT_DESC_VERSION */
+    uint32_t name_len;
+    char name[SUPERVISOR_UNIT_NAME_MAX + 1];
+} wasmos_supervisor_unit_desc_t;
+_Static_assert(sizeof(wasmos_supervisor_unit_desc_t) == 8u + SUPERVISOR_UNIT_NAME_MAX + 1u,
+               "wasmos_supervisor_unit_desc_t is part of the SUPERVISOR_IPC_KILL_REQ ABI");
+
 /* SUPERVISOR_IPC_LIST_REQ request record (abi/opcodes.yaml), in a transfer
  * buffer the caller owns and lends READ|WRITE to the supervisor, followed
  * directly by room for `capacity` wasmos_supervisor_unit_record_t. The caller

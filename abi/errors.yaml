@@ -454,8 +454,9 @@ domains:
   supervisor:
     id: 26
     description: >-
-      Supervisor refusals of a unit submission, as a SUPERVISOR_IPC_ERROR
-      reply's arg0. A refused unit was not recorded and nothing was spawned.
+      Supervisor refusals of a request, as a SUPERVISOR_IPC_ERROR reply's
+      arg0. A refused submission recorded no unit and spawned nothing; a
+      refused kill killed nothing.
     codes:
       - { name: BAD_DESC,  description: "the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor" }
       - { name: BAD_SPEC,  description: "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option" }
@@ -463,3 +464,5 @@ domains:
       - { name: NO_SPACE,  description: "the supervisor's unit table is full" }
       # Appended, never inserted: a code's value is its position.
       - { name: DMA_CAPS,  description: "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit" }
+      - { name: NO_UNIT,     description: "no unit of the name the request gives is recorded" }
+      - { name: NOT_RUNNING, description: "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed" }

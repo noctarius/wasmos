@@ -235,6 +235,65 @@ class SupervisorTests(unittest.TestCase):
             int(answered.group(1)), 5, f"too few probes answered while busy:\n{out}"
         )
 
+    def test_9_a_killed_driver_is_restarted_and_serves_again(self):
+        # device-manager hands rtc to the supervisor (default.rules,
+        # ENV{RESTART}="on-failure"), so a kill on request is a failure the
+        # supervisor restarts it from, and date reaches the new instance.
+        unit = "rtc@acpi:0070"
+        before = _list_rows(self, self.session)
+        self.assertIn(unit, before, f"rtc is not a supervised unit: {sorted(before)}")
+        self.assertIn(before[unit][0], ("running", "stable"))
+        old_pid = before[unit][1]
+        restarts = int(before[unit][2])
+
+        out = _svc(self, self.session, f"kill {unit}")
+        self.assertIn(f"svc: killing {unit} (pid {old_pid})", out)
+        requested = f"[supervisor] {unit} kill requested; killing pid {old_pid}"
+        ended = f"[supervisor] {unit} ended (killed"
+        log = _syslog_wait(self.session, ended, 30)
+        self.assertTrue(
+            log,
+            f"{unit} did not end.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertIn(requested, log)
+        self.assertLess(log.find(requested), log.find(ended))
+        # The kill is a failure, so the on-failure unit is restarted.
+        self.assertRegex(
+            log,
+            re.escape(ended) + rf", status -?\d+\); restart {restarts + 1} in ",
+        )
+
+        deadline = time.time() + 30
+        row = []
+        while time.time() < deadline:
+            row = _list_rows(self, self.session).get(unit, [])
+            if row and row[0] in ("running", "stable") and row[1] != old_pid:
+                break
+            time.sleep(0.5)
+        self.assertTrue(
+            row and row[0] in ("running", "stable") and row[1] != old_pid,
+            f"{unit} did not come back as a new instance: {row}",
+        )
+        self.assertEqual(int(row[2]), restarts + 1)
+
+        out = _svc(self, self.session, "status " + unit)
+        self.assertIn("last end: killed", out)
+        start = self.session.send_command("date", timeout_s=20)
+        self.assertTrue(
+            self.session.expect_from(start, b"wamos> ", timeout_s=30),
+            f"no prompt after date.\n--- tail ---\n{self.session.tail()}\n",
+        )
+        out = self.session.buf[start:].decode("utf-8", errors="replace")
+        self.assertRegex(
+            out,
+            r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+            f"date did not reach the restarted rtc:\n{out}",
+        )
+
+        out = _svc(self, self.session, "kill no-such-unit")
+        self.assertIn("svc: no unit of that name", out)
+
     def test_4_a_duplicate_unit_is_refused(self):
         start = self.session.send_command(
             f"svc submit probe-once {PROBE} -- crash probe-dup", timeout_s=20

@@ -153,6 +153,12 @@ void sv_unit_ready(sv_unit_t* unit, const sv_timing_t* timing, uint32_t probe_ep
 sv_verdict_t sv_unit_exited(sv_unit_t* unit, const sv_timing_t* timing, int32_t status,
                             uint32_t reason, uint32_t now);
 
+/* Kill on request (SUPERVISOR_IPC_KILL_REQ): a unit with a spawned instance --
+ * starting, running or stable -- moves to STOPPING, and the caller kills `pid`;
+ * the instance's end is then a failure, as for a missed READY. Returns 0, or
+ * WASMOS_ERR_SUPERVISOR_NOT_RUNNING with the unit unchanged. */
+int32_t sv_unit_kill(sv_unit_t* unit);
+
 /* Runs the unit's deadline if it has passed: a due spawn (SPAWN), a missed
  * READY (KILL, the unit moves to STOPPING), or a run that became stable (the
  * backoff resets, NONE). */
@@ -183,7 +189,8 @@ uint32_t sv_unit_probe_interval(const sv_unit_t* unit, const sv_timing_t* timing
 int sv_unit_deadline(const sv_unit_t* unit, uint32_t* out);
 
 /* A failure is any end other than a clean exit with status 0. An instance the
- * supervisor killed -- a missed READY or missed probes -- failed whatever its
+ * supervisor killed -- a missed READY, missed probes, or a kill on request --
+ * failed whatever its
  * exit says; sv_unit_exited knows it by the STOPPING state, not this. */
 int sv_exit_is_failure(int32_t status, uint32_t reason);
 

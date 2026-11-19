@@ -495,6 +495,16 @@ groups:
       - { symbol: SUPERVISOR_SPEC_MAX, value: 255, doc: "Longest unit spec a submission carries, NUL excluded." }
       - { symbol: SUPERVISOR_UNIT_NAME_MAX, value: 35, doc: "Longest unit name (template@instance), NUL excluded: a service name's ceiling." }
 
+  - name: supervisor_unit_desc
+    doc: |
+      Version of wasmos_supervisor_unit_desc_t, the record that names one unit
+      in a request about it (SUPERVISOR_IPC_KILL_REQ), declared in
+      src/drivers/include/wasmos_driver_abi.h.
+
+      A reader MUST reject a descriptor whose version it does not know.
+    constants:
+      - { symbol: SUPERVISOR_UNIT_DESC_VERSION, value: 1, doc: "Current wasmos_supervisor_unit_desc_t layout." }
+
   - name: supervisor_list_desc
     doc: |
       Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a

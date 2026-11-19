@@ -6,7 +6,8 @@
  * unit is restarted by its policy with a doubling backoff, gives up after too
  * many ends inside the sliding window, resets its backoff only after a stable
  * run, is killed when it misses its READY deadline, and a critical unit's
- * first end is reported as such instead of restarted. What the supervisor
+ * first end is reported as such instead of restarted. A kill on request is
+ * refused unless an instance runs, and its end is a failure. What the supervisor
  * reports of its table over SUPERVISOR_IPC_LIST_REQ is each held unit's own
  * state, in ABI values, and never more records than the caller made room for.
  *
@@ -619,6 +620,39 @@ static void test_a_caps_length_outside_its_bounds_is_refused(void) {
     CHECK(u.caps_len == 0u, "unchanged");
 }
 
+static void test_a_kill_on_request_is_a_failure(void) {
+    sv_unit_t u = parse_ok("rtc@acpi:0070 /p", 0);
+    start(&u, 5, 0);
+    sv_unit_ready(&u, &k_timing, SV_PROBE_NONE, 10);
+    CHECK(sv_unit_kill(&u) == 0, "a running unit can be killed");
+    CHECK(u.state == SV_UNIT_STOPPING && u.pid == 5u, "stopping; the pid is the one to kill");
+    CHECK(sv_unit_kill(&u) == WASMOS_ERR_SUPERVISOR_NOT_RUNNING, "not killed twice");
+    CHECK(sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_EXITED, 20) == SV_VERDICT_RESTART,
+          "its end restarts an on-failure unit, whatever the exit says");
+    CHECK(u.restart_count == 1u && u.ends_recorded == 1u, "and counts as an end");
+
+    u = parse_ok("svc /p restart=never", 0);
+    start(&u, 5, 0);
+    CHECK(sv_unit_kill(&u) == 0, "a starting unit can be killed");
+    CHECK(sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_KILLED, 10) == SV_VERDICT_FAILED,
+          "a killed never-unit is given up as failed, not stopped");
+}
+
+static void test_a_unit_without_an_instance_is_not_killed(void) {
+    sv_unit_t u = parse_ok("svc /p", 0);
+    CHECK(sv_unit_kill(&u) == WASMOS_ERR_SUPERVISOR_NOT_RUNNING, "a due unit has no instance");
+    CHECK(u.state == SV_UNIT_SPAWN_DUE, "and is left due");
+    CHECK(sv_unit_tick(&u, &k_timing, 0) == SV_VERDICT_SPAWN, "spawn");
+    sv_unit_spawn_sent(&u);
+    CHECK(sv_unit_kill(&u) == WASMOS_ERR_SUPERVISOR_NOT_RUNNING, "nor has a spawning one");
+    CHECK(u.state == SV_UNIT_SPAWNING, "which stays spawning");
+    sv_unit_spawned(&u, &k_timing, 5, 0);
+    (void)sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_EXITED, 10);
+    CHECK(u.state == SV_UNIT_STOPPED, "stopped");
+    CHECK(sv_unit_kill(&u) == WASMOS_ERR_SUPERVISOR_NOT_RUNNING, "nor has a stopped one");
+    CHECK(u.state == SV_UNIT_STOPPED && u.pid == 0u, "which stays stopped");
+}
+
 int main(void) {
     test_a_spec_parses_into_its_policy();
     test_a_bare_spec_takes_the_defaults();
@@ -656,6 +690,8 @@ int main(void) {
     test_a_unit_keeps_the_caps_it_was_submitted_with();
     test_dma_caps_are_refused();
     test_a_caps_length_outside_its_bounds_is_refused();
+    test_a_kill_on_request_is_a_failure();
+    test_a_unit_without_an_instance_is_not_killed();
     if (g_failures != 0) {
         printf("test_supervisor_unit: %d failure(s)\n", g_failures);
         return 1;

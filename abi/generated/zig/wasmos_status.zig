@@ -302,6 +302,8 @@ pub const WASMOS_ERR_SUPERVISOR_BAD_SPEC: i32 = -0x001A0002; // the unit spec do
 pub const WASMOS_ERR_SUPERVISOR_EXISTS: i32 = -0x001A0003; // a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed
 pub const WASMOS_ERR_SUPERVISOR_NO_SPACE: i32 = -0x001A0004; // the supervisor's unit table is full
 pub const WASMOS_ERR_SUPERVISOR_DMA_CAPS: i32 = -0x001A0005; // the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit
+pub const WASMOS_ERR_SUPERVISOR_NO_UNIT: i32 = -0x001A0006; // no unit of the name the request gives is recorded
+pub const WASMOS_ERR_SUPERVISOR_NOT_RUNNING: i32 = -0x001A0007; // the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed
 
 pub fn errMake(dom: u16, code: u16) i32 {
     return -@as(i32, @intCast((@as(u32, dom) << 16) | @as(u32, code)));
@@ -619,6 +621,8 @@ pub fn strerror(c: i32) []const u8 {
         WASMOS_ERR_SUPERVISOR_EXISTS => "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed",
         WASMOS_ERR_SUPERVISOR_NO_SPACE => "the supervisor's unit table is full",
         WASMOS_ERR_SUPERVISOR_DMA_CAPS => "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit",
+        WASMOS_ERR_SUPERVISOR_NO_UNIT => "no unit of the name the request gives is recorded",
+        WASMOS_ERR_SUPERVISOR_NOT_RUNNING => "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed",
         else => "unknown error",
     };
 }

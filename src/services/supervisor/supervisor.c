@@ -5,7 +5,8 @@
  * the unit with PROC_IPC_SPAWN_WATCHED, learns of its READY and its end from
  * PROC_IPC_CHILD_READY / PROC_IPC_CHILD_EXITED, and restarts or gives up by the
  * unit's policy (supervisor_unit.c). SUPERVISOR_IPC_LIST_REQ reports the unit
- * table.
+ * table. SUPERVISOR_IPC_KILL_REQ kills a unit's instance on request; its end is
+ * a failure like any kill of the supervisor's own.
  *
  * A unit whose READY names its event-loop endpoint (PROC_READY_FLAG_LIVENESS)
  * is probed with WASMOS_IPC_HEALTH_REQ every period (probe=<s>, default 10 s);
@@ -232,6 +233,23 @@ static void sv_critical(const sv_unit_t* u) {
     }
 }
 
+/* Asks the PM to kill the unit's instance. The end arrives as
+ * PROC_IPC_CHILD_EXITED and is judged there, so the kill's own reply carries
+ * nothing. */
+static void sv_kill(const sv_unit_t* u) {
+    (void)wasmos_sys_intent_send(&g_loop,
+                                 g_proc_ep,
+                                 g_ep,
+                                 PROC_IPC_KILL,
+                                 (int32_t)u->pid,
+                                 -1,
+                                 0,
+                                 0,
+                                 sv_on_ignored_reply,
+                                 0,
+                                 0);
+}
+
 /* Logs a verdict and carries out the parts that are not the next spawn. */
 static void sv_act(sv_unit_t* u, sv_verdict_t verdict) {
     char line[160];
@@ -275,17 +293,7 @@ static void sv_act(sv_unit_t* u, sv_verdict_t verdict) {
                            u->pid);
         }
         sv_log(line);
-        (void)wasmos_sys_intent_send(&g_loop,
-                                     g_proc_ep,
-                                     g_ep,
-                                     PROC_IPC_KILL,
-                                     (int32_t)u->pid,
-                                     -1,
-                                     0,
-                                     0,
-                                     sv_on_ignored_reply,
-                                     0,
-                                     0);
+        sv_kill(u);
         break;
     default:
         break;
@@ -499,15 +507,20 @@ static void sv_on_child_exited(void* user, const wasmos_ipc_message_t* msg) {
     }
 }
 
-static void sv_reply(const wasmos_ipc_message_t* msg, int32_t code) {
+/* arg1 rides along on a SUPERVISOR_IPC_RESP only. */
+static void sv_reply_arg(const wasmos_ipc_message_t* msg, int32_t code, int32_t arg1) {
     (void)wasmos_ipc_send(msg->source,
                           g_ep,
                           code == 0 ? SUPERVISOR_IPC_RESP : SUPERVISOR_IPC_ERROR,
                           msg->request_id,
                           code,
-                          0,
+                          code == 0 ? arg1 : 0,
                           0,
                           0);
+}
+
+static void sv_reply(const wasmos_ipc_message_t* msg, int32_t code) {
+    sv_reply_arg(msg, code, 0);
 }
 
 /* SUPERVISOR_IPC_SUBMIT_REQ: arg0=buffer_id arg1=offset arg2=size of a
@@ -568,6 +581,45 @@ static void sv_on_boot_submitted(void* user, const wasmos_ipc_message_t* msg) {
         }
     }
     sv_reply(msg, 0);
+}
+
+/* SUPERVISOR_IPC_KILL_REQ: arg0=buffer_id arg1=offset arg2=size of a
+ * wasmos_supervisor_unit_desc_t the caller lent READ. Answered once the kill is
+ * sent, with the pid in arg1; the end is judged when it arrives. */
+static void sv_on_kill(void* user, const wasmos_ipc_message_t* msg) {
+    wasmos_supervisor_unit_desc_t desc;
+    char line[160];
+    (void)user;
+
+    if (msg->arg2 < (int32_t)sizeof(desc) || msg->arg1 < 0 ||
+        wasmos_xfer_buffer_read(msg->arg0, &desc, (int32_t)sizeof(desc), msg->arg1) != 0 ||
+        desc.version != SUPERVISOR_UNIT_DESC_VERSION || desc.name_len > SUPERVISOR_UNIT_NAME_MAX ||
+        desc.name[desc.name_len] != '\0') {
+        sv_reply(msg, WASMOS_ERR_SUPERVISOR_BAD_DESC);
+        return;
+    }
+    for (int32_t i = 0; i < SV_UNITS_MAX; ++i) {
+        sv_unit_t* u = &g_units[i];
+        int32_t rc;
+        if (u->state == SV_UNIT_FREE || strcmp(u->name, desc.name) != 0) {
+            continue;
+        }
+        rc = sv_unit_kill(u);
+        if (rc != 0) {
+            sv_reply(msg, rc);
+            return;
+        }
+        (void)snprintf(line,
+                       sizeof(line),
+                       "[supervisor] %s kill requested; killing pid %u\n",
+                       u->name,
+                       u->pid);
+        sv_log(line);
+        sv_kill(u);
+        sv_reply_arg(msg, 0, (int32_t)u->pid);
+        return;
+    }
+    sv_reply(msg, WASMOS_ERR_SUPERVISOR_NO_UNIT);
 }
 
 /* SUPERVISOR_IPC_LIST_REQ: arg0=buffer_id arg1=offset arg2=size of a
@@ -686,6 +738,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     (void)wasmos_sys_event_set_default(&g_loop, sv_on_unclaimed, 0);
     if (wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_SUBMIT_REQ, sv_on_submit, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_LIST_REQ, sv_on_list, 0) != 0 ||
+        wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_KILL_REQ, sv_on_kill, 0) != 0 ||
         wasmos_sys_event_register(
             &g_loop, SUPERVISOR_IPC_BOOT_SUBMITTED_REQ, sv_on_boot_submitted, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, PROC_IPC_CHILD_READY, sv_on_child_ready, 0) != 0 ||

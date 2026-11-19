@@ -1539,5 +1539,21 @@ subsystems:
           "[supervisor] boot failed: <unit> ..." once instead. A unit submitted
           later is not part of the boot set. Answered at once; a second one
           changes nothing.
-      - { symbol: SUPERVISOR_IPC_RESP, value: 0x1080, kind: resp, doc: "arg0 = 0: the unit was accepted, the list was written, or the boot set was recorded." }
+      - symbol: SUPERVISOR_IPC_KILL_REQ
+        value: 0x1003
+        kind: req
+        doc: |
+          Kill a unit's running instance. The request is a
+          wasmos_supervisor_unit_desc_t naming the unit, in a transfer buffer
+          the caller owns and has lent READ to the supervisor: arg0=buffer_id
+          arg1=offset arg2=size. The instance must be spawned and not already
+          being killed (starting, running or stable); otherwise the request is
+          refused with WASMOS_ERR_SUPERVISOR_NOT_RUNNING, and with
+          WASMOS_ERR_SUPERVISOR_NO_UNIT when no unit has that name. The end of
+          a killed instance is a failure, handled by the unit's policy like any
+          other: an on-failure or always unit is restarted, a never unit is
+          given up, and a critical unit's end takes the system down. Answered
+          once the kill is sent to the process manager, before the instance
+          has ended; arg1 of the reply is the pid killed.
+      - { symbol: SUPERVISOR_IPC_RESP, value: 0x1080, kind: resp, doc: "arg0 = 0: the unit was accepted, the list was written, the boot set was recorded, or the kill was sent (arg1 = the pid)." }
       - { symbol: SUPERVISOR_IPC_ERROR, value: 0x10ff, kind: error, doc: "arg0 = packed WASMOS_ERR_SUPERVISOR_* code." }

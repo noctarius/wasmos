@@ -3,11 +3,14 @@
  *   svc submit <unit> <path> [restart=...] [class=...] [tty=<slot>] [-- args]
  *   svc list
  *   svc status <unit>
+ *   svc kill <unit>
  *
  * submit passes the spec through unchanged; its grammar is
  * SUPERVISOR_IPC_SUBMIT_REQ's (abi/opcodes.yaml). It prints "svc: <unit>
  * accepted" once the supervisor has recorded the unit. list prints one line
- * per unit; status prints one unit's policy and last end. Each exits 0, or
+ * per unit; status prints one unit's policy and last end. kill prints "svc:
+ * killing <unit> (pid N)" once the supervisor has sent the kill; the unit's
+ * policy then judges the end as a failure. Each exits 0, or
  * prints "svc: <reason>" and exits 1.
  *
  * Runs on an event loop like a service: the supervisor is found by a name
@@ -29,13 +32,15 @@
     ((int32_t)(sizeof(wasmos_supervisor_list_desc_t) +                                             \
                SUPERVISOR_UNITS_MAX * sizeof(wasmos_supervisor_unit_record_t)))
 
-typedef enum { SVC_SUBMIT, SVC_LIST, SVC_STATUS } svc_cmd_t;
+typedef enum { SVC_SUBMIT, SVC_LIST, SVC_STATUS, SVC_KILL } svc_cmd_t;
 
 static wasmos_sys_event_loop_t g_loop;
 static wasmos_sys_svc_watch_set_t g_watches;
 static wasmos_sys_svc_watch_t g_watch;
 static svc_cmd_t g_cmd;
 static wasmos_supervisor_submit_desc_t g_desc;
+static wasmos_supervisor_unit_desc_t g_unit_desc;
+static int32_t g_killed_pid;
 static wasmos_supervisor_list_desc_t g_list_desc;
 static wasmos_supervisor_unit_record_t g_records[SUPERVISOR_UNITS_MAX];
 static int32_t g_ep = -1;
@@ -55,6 +60,10 @@ static const char* svc_reason(int32_t code) {
         return "the supervisor's unit table is full";
     case WASMOS_ERR_SUPERVISOR_DMA_CAPS:
         return "a DMA unit cannot be restarted safely";
+    case WASMOS_ERR_SUPERVISOR_NO_UNIT:
+        return "no unit of that name";
+    case WASMOS_ERR_SUPERVISOR_NOT_RUNNING:
+        return "the unit has no running instance";
     case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT:
         return "no supervisor is running";
     default:
@@ -78,7 +87,9 @@ static void svc_on_reply(void* user, const wasmos_ipc_message_t* msg) {
         svc_finish(msg->type == SUPERVISOR_IPC_ERROR ? msg->arg0 : -1);
         return;
     }
-    if (g_cmd != SVC_SUBMIT) {
+    if (g_cmd == SVC_KILL) {
+        g_killed_pid = msg->arg1;
+    } else if (g_cmd != SVC_SUBMIT) {
         if (wasmos_xfer_buffer_read(g_bid, &g_list_desc, (int32_t)sizeof(g_list_desc), 0) != 0 ||
             g_list_desc.count > SUPERVISOR_UNITS_MAX ||
             (g_list_desc.count > 0 &&
@@ -94,8 +105,8 @@ static void svc_on_reply(void* user, const wasmos_ipc_message_t* msg) {
     svc_finish(0);
 }
 
-/* submit lends its descriptor READ; list and status lend the descriptor and
- * the room for the records READ|WRITE. Releasing the buffer after the reply
+/* submit and kill lend their descriptor READ; list and status lend the
+ * descriptor and the room for the records READ|WRITE. Releasing the buffer after the reply
  * revokes the loan. */
 static void svc_on_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
     int32_t region;
@@ -108,6 +119,11 @@ static void svc_on_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endp
         rights = WASMOS_BUFFER_GRANT_READ;
         op = SUPERVISOR_IPC_SUBMIT_REQ;
         g_bid = wasmos_xfer_stage(&g_desc, region);
+    } else if (g_cmd == SVC_KILL) {
+        region = (int32_t)sizeof(g_unit_desc);
+        rights = WASMOS_BUFFER_GRANT_READ;
+        op = SUPERVISOR_IPC_KILL_REQ;
+        g_bid = wasmos_xfer_stage(&g_unit_desc, region);
     } else {
         region = SVC_LIST_REGION;
         rights = WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE;
@@ -293,6 +309,7 @@ static void svc_usage(void) {
     puts("                  [probe=<seconds>] [-- args]");
     puts("       svc list");
     puts("       svc status <unit>");
+    puts("       svc kill <unit>");
 }
 
 static const char* svc_skip_spaces(const char* s) {
@@ -335,6 +352,22 @@ int main(void) {
         memset(&g_list_desc, 0, sizeof(g_list_desc));
         g_list_desc.version = SUPERVISOR_LIST_DESC_VERSION;
         g_list_desc.capacity = SUPERVISOR_UNITS_MAX;
+    } else if (strncmp(args, "kill ", 5) == 0) {
+        g_cmd = SVC_KILL;
+        spec = svc_skip_spaces(args + 5);
+        len = (uint32_t)strlen(spec);
+        if (len == 0) {
+            svc_usage();
+            return 2;
+        }
+        if (len > SUPERVISOR_UNIT_NAME_MAX) {
+            printf("svc: %s\n", svc_reason(WASMOS_ERR_SUPERVISOR_NO_UNIT));
+            return 1;
+        }
+        memset(&g_unit_desc, 0, sizeof(g_unit_desc));
+        g_unit_desc.version = SUPERVISOR_UNIT_DESC_VERSION;
+        g_unit_desc.name_len = len;
+        memcpy(g_unit_desc.name, spec, len + 1u);
     } else {
         svc_usage();
         return 2;
@@ -373,6 +406,10 @@ int main(void) {
     }
     if (g_cmd == SVC_STATUS) {
         return svc_print_status(spec);
+    }
+    if (g_cmd == SVC_KILL) {
+        printf("svc: killing %s (pid %d)\n", spec, (int)g_killed_pid);
+        return 0;
     }
     while (n < SUPERVISOR_UNIT_NAME_MAX && spec[n] != '\0' && spec[n] != ' ' && spec[n] != '\t') {
         unit[n] = spec[n];

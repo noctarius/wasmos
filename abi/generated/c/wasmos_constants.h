@@ -500,6 +500,17 @@ enum {
     SUPERVISOR_UNIT_NAME_MAX = 35,
 };
 
+/* Version of wasmos_supervisor_unit_desc_t, the record that names one unit
+ * in a request about it (SUPERVISOR_IPC_KILL_REQ), declared in
+ * src/drivers/include/wasmos_driver_abi.h.
+ *
+ * A reader MUST reject a descriptor whose version it does not know.
+ */
+enum {
+    /* Current wasmos_supervisor_unit_desc_t layout. */
+    SUPERVISOR_UNIT_DESC_VERSION = 1,
+};
+
 /* Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a
  * wasmos_supervisor_list_desc_t followed by `capacity`
  * wasmos_supervisor_unit_record_t, both declared in

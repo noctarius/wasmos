@@ -315,11 +315,16 @@ linked feature documents for rationale and rollout plans.
   script engine's `service` line; sysinit finds the supervisor by name watch and
   continues once a unit is accepted, not once it is up. Apps (chardevc, the gfx
   apps) are still plain `spawn`s, and device-manager spawns the drivers whose
-  rule names no restart policy itself. `svc submit <spec>` submits from the shell, `svc list` prints the unit
-  table and `svc status <unit>` one unit, including its liveness record;
-  `sv_probe` is the test unit that crashes, hangs or stays busy on demand. Not
-  yet: liveness for the boot services, and operator commands that change a
-  unit (stop, start, restart).
+  rule names no restart policy itself. `svc submit <spec>` submits from the
+  shell, `svc list` prints the unit table and `svc status <unit>` one unit,
+  including its liveness record; `svc kill <unit>` kills a unit's running
+  instance (`SUPERVISOR_IPC_KILL_REQ`, a `wasmos_supervisor_unit_desc_t`
+  naming it), logged as `[supervisor] <unit> kill requested; killing pid N`,
+  and the end counts as a failure under the unit's policy. It is refused with
+  `WASMOS_ERR_SUPERVISOR_NO_UNIT` or `_NOT_RUNNING`. `sv_probe` is the test
+  unit that crashes, hangs or stays busy on demand. Not yet: liveness for the
+  boot services, and operator commands that stop, start or restart a unit
+  without the end counting as a failure.
 - An ACPI rule with `ENV{RESTART}="never|on-failure|always"` makes
   device-manager submit the driver to the supervisor instead of spawning it:
   the unit is `<template>@acpi:<io base>` (`rtc@acpi:0070`), carries the rule's
@@ -331,6 +336,8 @@ linked feature documents for rationale and rollout plans.
   `on-failure` for rtc, keyboard and mouse; DMA-capable drivers stay
   device-manager-spawned (the supervisor refuses DMA caps). Clients rebind on
   their own (vt and gfxcomp through name watches on hangup; `date` per run).
+  `tests/test_supervisor.py` kills `rtc@acpi:0070` with `svc kill`, sees a new
+  instance come up with its I/O grant, and reads the clock through it.
 - Boot milestone: when sysinit.rc has run to its end, sysinit sends
   `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` (finding the supervisor by name if no
   `service` line did), and the units the supervisor then holds are the boot

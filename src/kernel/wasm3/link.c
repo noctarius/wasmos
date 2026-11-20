@@ -3592,7 +3592,7 @@ m3ApiRawFunction(wasmos_env_abort) {
 
     process_t* proc = process_get(process_current_pid());
     if (proc) {
-        process_set_exit_status(proc, -1);
+        process_set_exit(proc, -1, PROC_EXIT_REASON_TRAPPED);
         process_yield(PROCESS_RUN_EXITED);
     }
     m3ApiSuccess();

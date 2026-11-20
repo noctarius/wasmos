@@ -3,6 +3,7 @@
 #define WASMOS_SCRIPT_H
 
 #include <stdint.h>
+#include <stdio.h>
 
 /* Interpreter limits. IF_DEPTH bounds only the else-once bookkeeping array (see
  * seen_else below), not how deep if-blocks may nest. The two ENV maxima and
@@ -54,7 +55,15 @@ typedef struct {
  * can appear in the scripts it runs. on_export is optional. on_echo_ex takes
  * precedence over on_echo when both are set, and only on_echo_ex is told whether
  * a trailing newline was requested. All the string arguments are borrowed stack
- * buffers valid only for the duration of the call. */
+ * buffers valid only for the duration of the call -- a hook that completes later
+ * must copy what it needs.
+ *
+ * on_start, on_spawn, on_exec and on_wait_svc may instead return
+ * WASMOS_SCRIPT_HOOK_PENDING: the command has been started and will be
+ * finished by wasmos_script_runner_complete(). Only a host driving a runner
+ * (wasmos_script_runner_step) may do that; wasmos_script_run fails the script
+ * when a hook goes pending, because nothing could complete it. An on_exec that
+ * goes pending reports its exit code through complete(), not *out_exit_code. */
 typedef struct {
     /* start <path> — spawn + wait for notify_ready. Return 0 on ok, -1 on fatal */
     int (*on_start)(void* user, const char* path);
@@ -64,6 +73,11 @@ typedef struct {
     int (*on_exec)(void* user, const char* path, const char* args, int32_t* out_exit_code);
     /* wait-svc <name> — block until endpoint registered. Return 0 or -1 */
     int (*on_wait_svc)(void* user, const char* name);
+    /* service <unit spec> — hand a unit to the supervisor (the spec grammar is
+     * SUPERVISOR_IPC_SUBMIT_REQ's, abi/opcodes.yaml). Optional: a host without
+     * it ignores the line. A failure does not fail the script. Return 0, -1 or
+     * WASMOS_SCRIPT_HOOK_PENDING. */
+    int (*on_service)(void* user, const char* spec);
     /* echo <text> — print expanded text */
     void (*on_echo)(void* user, const char* text);
     /* echo extended: print expanded text, newline=1 appends trailing newline */
@@ -100,6 +114,66 @@ void wasmos_script_state_dispose(wasmos_script_state_t* state);
  * the child; the child must later be disposed. */
 void wasmos_script_state_init_child(wasmos_script_state_t* child,
                                     const wasmos_script_state_t* parent);
+/* Returned by a hook whose command completes later; see wasmos_script_ops_t. */
+#define WASMOS_SCRIPT_HOOK_PENDING 1
+
+/* Deepest nesting of `script` / `source` / `.` files; a deeper one fails the
+ * script. */
+#define WASMOS_SCRIPT_NEST_MAX 8
+
+/* Results of wasmos_script_runner_step(). */
+enum {
+    WASMOS_SCRIPT_STEP_ERROR = -1,  /* the script failed; the runner is aborted */
+    WASMOS_SCRIPT_STEP_DONE = 0,    /* the top-level file ended; the runner is idle */
+    WASMOS_SCRIPT_STEP_PENDING = 1, /* a hook went pending; complete() it first */
+    WASMOS_SCRIPT_STEP_MORE = 2,    /* one line ran; step again */
+};
+
+/* One open file. A `script` frame runs on its own child state (`child`); a
+ * `source` / `.` frame runs on its parent's, so `state` points either at
+ * `child` or at the state of the frame below. */
+typedef struct {
+    FILE* file;
+    wasmos_script_state_t* state;
+    wasmos_script_state_t child;
+    uint8_t owns_child;
+} wasmos_script_frame_t;
+
+/* A script interpreted one line per step, so a host can wait for a command
+ * without blocking: the recursion of nested files is an explicit frame stack.
+ * Caller-owned and large (one state per frame), so it belongs in static
+ * storage rather than on a small stack. Runtime state; set up by
+ * wasmos_script_runner_start(). `pending` is the command (an internal tag)
+ * awaiting wasmos_script_runner_complete(), 0 when none; `failed` records a
+ * completion that fails the script, reported by the next step. */
+typedef struct {
+    const wasmos_script_ops_t* ops;
+    wasmos_script_frame_t frames[WASMOS_SCRIPT_NEST_MAX];
+    int32_t depth;
+    int32_t pending;
+    uint8_t failed;
+} wasmos_script_runner_t;
+
+/* Open `path` as the top-level file, run on `state`. Returns 0, or -1 when the
+ * file cannot be opened or an argument is NULL. */
+int wasmos_script_runner_start(wasmos_script_runner_t* runner, wasmos_script_state_t* state,
+                               const wasmos_script_ops_t* ops, const char* path);
+
+/* Run the next line. Returns a WASMOS_SCRIPT_STEP_* value. Stepping a runner
+ * that is PENDING returns PENDING again without running anything; stepping an
+ * idle one returns DONE. */
+int wasmos_script_runner_step(wasmos_script_runner_t* runner);
+
+/* Finish the pending command: `rc` is what its hook would have returned
+ * synchronously (0, or -1 for a failed `start`, which fails the script on the
+ * next step) and `exit_code` an `exec`'s exit status (ignored for the other
+ * commands). A runner with nothing pending ignores the call. */
+void wasmos_script_runner_complete(wasmos_script_runner_t* runner, int32_t rc, int32_t exit_code);
+
+/* Close every open file and dispose every child state, leaving the runner
+ * idle. Idempotent. */
+void wasmos_script_runner_abort(wasmos_script_runner_t* runner);
+
 /* Read and interpret the .rc file at path; returns 0 on success, -1 on error.
  *
  * Lines are trimmed, blank lines and #-comments skipped, and each remaining line
@@ -107,8 +181,9 @@ void wasmos_script_state_init_child(wasmos_script_state_t* child,
  * an error. -1 means the file could not be opened or a command reported a fatal
  * failure (a failing `start`, or a nested `script`/`source`), and interpretation
  * stops there. Most other command failures only set last_exit_code. `if` blocks
- * left unclosed at end of file are not reported. Runs synchronously and blocks
- * for as long as the host's hooks do. */
+ * left unclosed at end of file are not reported. Runs synchronously over a
+ * runner and blocks for as long as the host's hooks do; a hook returning
+ * WASMOS_SCRIPT_HOOK_PENDING fails the run. */
 int wasmos_script_run(wasmos_script_state_t* state, const wasmos_script_ops_t* ops,
                       const char* path);
 

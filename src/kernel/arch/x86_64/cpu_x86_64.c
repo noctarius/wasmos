@@ -621,7 +621,7 @@ int x86_user_exception_handler(uint64_t vector, const uint64_t* frame) {
     if (proc->name && strcmp(proc->name, "ring3-fault-gp") == 0 && vector == 13) {
         serial_write("[test] ring3 fault gp reason ok\n");
     }
-    process_set_exit_status(proc, -11);
+    process_set_exit(proc, -11, PROC_EXIT_REASON_FAULTED);
     process_yield(PROCESS_RUN_EXITED);
     return 0;
 }
@@ -714,7 +714,7 @@ int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
                 reason == PF_REASON_USER_TO_KERNEL) {
                 serial_write("[test] ring3 fault ss reason ok\n");
             }
-            process_set_exit_status(proc, -11);
+            process_set_exit(proc, -11, PROC_EXIT_REASON_FAULTED);
             process_yield(PROCESS_RUN_EXITED);
             return 0;
         }

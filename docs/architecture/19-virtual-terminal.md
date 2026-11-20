@@ -145,7 +145,8 @@ Source: `src/services/vt/linker.metadata`
 | `native`                 | `false` (WASM)      |
 | `stack_pages`            | 16 (64 KB)          |
 | `heap_pages`             | 16 (64 KB)          |
-| `required_endpoint_name` | `proc`              |
+| `[deps] wants`           | `fb`, `kbd`, `sin`, `fs.vfs` |
+| `[deps] provides`        | `vt`                |
 | Capability               | `ipc.basic`         |
 
 ---
@@ -380,7 +381,10 @@ the IRQ→VT path and make the CLI event-driven.
   and maps the buffer, `wasmos_ringbuf_init`s it, and registers its id with the
   kernel (`klog_register_ring`), which requires the `console.owner` capability
   (only the vt's manifest declares it; a later registration replaces the
-  earlier one). The kernel then publishes into it, as
+  earlier one). The kernel holds the ring by physical address without a pin,
+  so the registration ends with its owner: the reap path drops it
+  (`klog_release_ring`) before the owner's transfer buffers are freed. Until a
+  restarted vt registers its own ring, console text goes straight to COM1. The kernel then publishes into it, as
   length-prefixed records of one slot byte plus up to 255 bytes of text
   (`VT_CONSOLE_SLOT_KLOG`, `wasmos_driver_abi.h`):
   - kernel log (`serial_write`, `klog_write`) as slot `VT_CONSOLE_SLOT_KLOG` (0),

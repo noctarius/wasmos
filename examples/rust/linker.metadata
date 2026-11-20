@@ -16,10 +16,6 @@ heap_pages = 16
 initial_memory = 2097152
 max_memory = 2097152
 
-[ipc]
-required_endpoint_name = "-"
-required_endpoint_rights = 0
-
 [[capabilities]]
 name = "ipc.basic"
 flags = 0

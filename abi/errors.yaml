@@ -55,6 +55,12 @@ domains:
       - { name: BROKER_IPC,      description: "broker plan IPC transport/reply failed" }
       - { name: BROKER_PLAN,     description: "broker replied with malformed/unsupported plan" }
       - { name: BROKER_DEFERRED, description: "valid broker plan returned; PM launch step deferred" }
+      # Appended, never inserted: a code's value is its position.
+      - { name: BAD_DESC,         description: "a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names" }
+      - { name: NOTIFY_NOT_OWNED, description: "the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child" }
+      - { name: WATCH_NO_SPACE,   description: "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch" }
+      - { name: BAD_CAPS,         description: "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created" }
+      - { name: CAPS_APPLY,       description: "the kernel refused the parsed capability profile for the new child, which was killed before it ran" }
 
   proc_pm:
     id: 2
@@ -91,6 +97,13 @@ domains:
       - { name: SVC_NAME_TAKEN,  description: "that service name is held by another live process" }
       - { name: SVC_CLASS_TAKEN, description: "that (class, instance) is held by another live process" }
       - { name: SVC_CLASS_NOT_OWNED,  description: "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on" }
+      - { name: SVC_SUB_NO_SPACE,   description: "the service-subscription table could not grow to hold another subscription" }
+      - { name: SVC_SUB_BAD_DESC,   description: "a name-subscription descriptor was short, of an unknown version, or named no service" }
+      - { name: SVC_AWAIT_TIMEOUT,  description: "no provider bound the awaited service name within the caller's window" }
+      - { name: SVC_WATCH_SEND,      description: "a service watch could not send its request to the process manager" }
+      - { name: SVC_WATCH_NO_BUFFER, description: "a service watch could not acquire or fill the transfer buffer for its subscription descriptor" }
+      - { name: SVC_WATCH_BAD_REPLY, description: "the process manager answered a service-watch request with neither its response nor a packed error" }
+      - { name: KILL_NOT_CHILD,      description: "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself" }
 
   linmem:
     id: 3
@@ -437,3 +450,19 @@ domains:
       - { name: DESCRIPTOR_MALFORMED, description: "a block record is short, unterminated, or names a length outside the transfer buffer" }
       - { name: NO_DESCRIPTOR,       description: "the device has no descriptor to report, so it cannot be identified" }
       - { name: QUEUE_FULL,         description: "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it" }
+
+  supervisor:
+    id: 26
+    description: >-
+      Supervisor refusals of a request, as a SUPERVISOR_IPC_ERROR reply's
+      arg0. A refused submission recorded no unit and spawned nothing; a
+      refused kill killed nothing.
+    codes:
+      - { name: BAD_DESC,  description: "the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor" }
+      - { name: BAD_SPEC,  description: "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option" }
+      - { name: EXISTS,    description: "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed" }
+      - { name: NO_SPACE,  description: "the supervisor's unit table is full" }
+      # Appended, never inserted: a code's value is its position.
+      - { name: DMA_CAPS,  description: "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit" }
+      - { name: NO_UNIT,     description: "no unit of the name the request gives is recorded" }
+      - { name: NOT_RUNNING, description: "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed" }

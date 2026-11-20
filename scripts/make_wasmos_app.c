@@ -6,9 +6,9 @@
 
 /* Container identity. MAGIC is the 8-byte signature, compared byte-for-byte and
  * NOT NUL-terminated in the file. VERSION selects which header layout the parser
- * applies; this packer emits 9, and src/kernel/wasmos_app.c accepts only 9. */
+ * applies; this packer emits 10, and src/kernel/wasmos_app.c accepts only 10. */
 #define MAGIC "WASMOSAP"
-#define VERSION 9u
+#define VERSION 10u
 
 /* Header flags, mirroring WASMOS_APP_FLAG_* in src/kernel/include/wasmos_app.h.
  * DRIVER/SERVICE/APP are the package kind and exactly one is set, derived from
@@ -38,6 +38,18 @@
 #define WASMOS_APP_REGION_IO 0u
 #define WASMOS_APP_REGION_BAR 1u
 #define WASMOS_APP_MAX_REGIONS 4u
+/* Dependency records, mirroring WASMOS_APP_DEP_* and WASMOS_APP_MAX_DEPS in
+ * src/kernel/include/wasmos_app.h (see the [deps] contract there). The name
+ * limits are the registry's: WASMOS_SVC_NAME_MAX / WASMOS_SVC_CLASS_MAX minus the
+ * terminator. */
+#define DEP_NEEDS 1u
+#define DEP_WANTS 2u
+#define DEP_PROVIDES 3u
+#define DEP_KIND_NAME 1u
+#define DEP_KIND_CLASS 2u
+#define DEP_NAME_MAX 35u
+#define DEP_CLASS_MAX 15u
+#define MAX_DEPS 16u
 
 /* Fixed head of a .wap package. It must stay byte-identical to
  * wasmos_app_header_t in src/kernel/wasmos_app.c, which rejects the package
@@ -45,7 +57,7 @@
  *
  * A package is this header followed by variable-length sections in exactly the
  * order wasmos_app_parse() walks them:
- *   header, name, entry, req_ep_count x (wasmos_req_endpoint_t + name bytes),
+ *   header, name, entry, dep_count x (wasmos_dep_record_t + name bytes),
  *   cap_count x (wasmos_cap_request_t + name bytes),
  *   region_count x wasmos_region_entry_t,
  *   mem_hint_count x wasmos_mem_hint_t (stack then heap),
@@ -55,7 +67,7 @@
  *
  * Fields, all little-endian (the format is not byte-order portable):
  *   magic[8]                 "WASMOSAP", not NUL-terminated.
- *   version                  Always 9 from this packer.
+ *   version                  Always 10 from this packer.
  *   header_size              sizeof(this struct); the parser compares it against
  *                            its own and also uses it as the offset of the first
  *                            section, so name bytes start exactly here.
@@ -67,8 +79,8 @@
  *   wasm_size                Byte length of the payload, which is WASM bytecode
  *                            unless the NATIVE flag is set, in which case it is
  *                            an ELF image.
- *   req_ep_count             Number of required-endpoint records; 0 or 1 here,
- *                            0 when the manifest's name is "-".
+ *   dep_count                Number of dependency records (max MAX_DEPS), from
+ *                            the manifest's [deps] table; 0 without one.
  *   cap_count                Number of capability-request records (max 8).
  *   mem_hint_count           Number of memory-hint records; always 2.
  *   compiled_size            Byte length of the WARP AOT binary appended after
@@ -86,7 +98,7 @@ typedef struct __attribute__((packed)) {
     uint32_t name_len;
     uint32_t entry_len;
     uint32_t wasm_size;
-    uint32_t req_ep_count;
+    uint32_t dep_count;
     uint32_t cap_count;
     uint32_t mem_hint_count;
     uint32_t compiled_size; /* size of the WARP AOT binary appended after WASM; 0 if absent */
@@ -107,12 +119,13 @@ typedef struct __attribute__((packed)) {
     uint16_t last;
 } wasmos_region_entry_t;
 
-/* Required-endpoint record, followed immediately by name_len raw name bytes with
- * no terminator. rights is an opaque bitmask handed to the kernel unchanged. */
+/* Dependency record, followed immediately by name_len raw name bytes with no
+ * terminator. */
 typedef struct __attribute__((packed)) {
-    uint32_t name_len;
-    uint32_t rights;
-} wasmos_req_endpoint_t;
+    uint8_t strength; /* DEP_NEEDS / DEP_WANTS / DEP_PROVIDES */
+    uint8_t kind;     /* DEP_KIND_NAME / DEP_KIND_CLASS */
+    uint16_t name_len;
+} wasmos_dep_record_t;
 
 /* Capability-request record, followed immediately by name_len raw name bytes
  * with no terminator. The name must be one capability_name_supported() accepts,
@@ -188,12 +201,19 @@ typedef struct {
     uint16_t last;
 } manifest_region_t;
 
+/* One [deps] entry. `name` is NUL-terminated here and written without the
+ * terminator. */
+typedef struct {
+    uint8_t strength; /* DEP_* */
+    uint8_t kind;     /* DEP_KIND_* */
+    char name[DEP_NAME_MAX + 1];
+} manifest_dep_t;
+
 /* Parsed form of a linker manifest: the packer's whole input apart from the
  * payload bytes. Fixed-capacity throughout, and parse_linker_manifest() fails
  * rather than truncating when a table overflows. `kind` is the manifest's kind
  * string ("driver"/"service"/anything else meaning app) and is mapped to a
- * FLAG_* bit in main(); `req_ep_name` holds "-" when no endpoint is required.
- * Strings are NUL-terminated here but are written to the package as raw bytes
+ * FLAG_* bit in main(). Strings are NUL-terminated here but are written to the package as raw bytes
  * with an explicit length. */
 typedef struct {
     char name[64];
@@ -205,8 +225,8 @@ typedef struct {
     uint8_t wants_tty;
     uint32_t stack_pages;
     uint32_t heap_pages;
-    char req_ep_name[64];
-    uint32_t req_ep_rights;
+    manifest_dep_t deps[MAX_DEPS];
+    uint32_t dep_count;
     manifest_cap_t caps[8];
     uint32_t cap_count;
     manifest_region_t regions[WASMOS_APP_MAX_REGIONS];
@@ -274,23 +294,123 @@ static void strip_quotes(char* s) {
     }
 }
 
+/* Parse one [deps] value, a single-line array of double-quoted strings such as
+ * ["fs.vfs", "class:block"], appending each entry to out->deps with `strength`.
+ * A "class:" prefix makes the entry a class; anything else is a service name.
+ * Names use [a-z0-9._-] and must fit their kind's limit (DEP_NAME_MAX /
+ * DEP_CLASS_MAX). Returns 0, or -1 with a message on stderr for a malformed
+ * array, an invalid or duplicate entry, or more than MAX_DEPS entries in total. */
+static int parse_dep_list(const char* path, const char* val, uint8_t strength,
+                          linker_manifest_t* out) {
+    const char* p = val;
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    if (*p != '[') {
+        fprintf(stderr, "%s: [deps] value must be an array of strings\n", path);
+        return -1;
+    }
+    p++;
+    for (;;) {
+        while (isspace((unsigned char)*p) || *p == ',') {
+            p++;
+        }
+        if (*p == ']') {
+            p++;
+            break;
+        }
+        if (*p != '"') {
+            fprintf(stderr, "%s: [deps] entries must be double-quoted strings\n", path);
+            return -1;
+        }
+        const char* start = ++p;
+        while (*p && *p != '"') {
+            p++;
+        }
+        if (*p != '"') {
+            fprintf(stderr, "%s: unterminated [deps] entry\n", path);
+            return -1;
+        }
+        size_t len = (size_t)(p - start);
+        p++;
+        uint8_t kind = DEP_KIND_NAME;
+        size_t max_len = DEP_NAME_MAX;
+        if (len > 6 && strncmp(start, "class:", 6) == 0) {
+            kind = DEP_KIND_CLASS;
+            max_len = DEP_CLASS_MAX;
+            start += 6;
+            len -= 6;
+        }
+        if (len == 0 || len > max_len) {
+            fprintf(stderr,
+                    "%s: [deps] entry '%.*s' is empty or longer than %zu\n",
+                    path,
+                    (int)len,
+                    start,
+                    max_len);
+            return -1;
+        }
+        for (size_t i = 0; i < len; ++i) {
+            char c = start[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+                  c == '-')) {
+                fprintf(stderr,
+                        "%s: [deps] entry '%.*s' has a character outside [a-z0-9._-]\n",
+                        path,
+                        (int)len,
+                        start);
+                return -1;
+            }
+        }
+        for (uint32_t i = 0; i < out->dep_count; ++i) {
+            const manifest_dep_t* d = &out->deps[i];
+            if (d->strength == strength && d->kind == kind && strlen(d->name) == len &&
+                memcmp(d->name, start, len) == 0) {
+                fprintf(stderr, "%s: duplicate [deps] entry '%.*s'\n", path, (int)len, start);
+                return -1;
+            }
+        }
+        if (out->dep_count >= MAX_DEPS) {
+            fprintf(stderr, "%s: more than %u [deps] entries\n", path, MAX_DEPS);
+            return -1;
+        }
+        manifest_dep_t* d = &out->deps[out->dep_count++];
+        d->strength = strength;
+        d->kind = kind;
+        memcpy(d->name, start, len);
+        d->name[len] = '\0';
+    }
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    if (*p != '\0') {
+        fprintf(stderr, "%s: trailing text after a [deps] array\n", path);
+        return -1;
+    }
+    return 0;
+}
+
 /* Read a TOML-ish linker manifest into *out. The accepted grammar is a small
  * subset: '#' starts a comment to end of line, blank lines are skipped, section
- * headers are [package], [resources], [ipc], [link] and the repeatable
+ * headers are [package], [resources], [deps], [link] and the repeatable
  * [[capabilities]] and [[regions]], and everything else must be a key = value
  * line whose value may be double-quoted. Keys outside a known section, and
- * unknown keys inside one, are ignored silently. [link] is recognized and wholly
+ * unknown keys inside one, are ignored silently. [deps] takes needs, wants and
+ * provides, each a single-line array (parse_dep_list); an unknown key there is
+ * an error, since a misspelt dependency would otherwise vanish. The [ipc] table
+ * of .wap v9 and earlier is refused with a pointer to [deps]. [link] is recognized and wholly
  * ignored: it holds link-time memory sizes the toolchain driver reads, and
  * recognizing it keeps its keys from being read as keys of the section above.
  *
- * Defaults applied before parsing: kind "app" and required_endpoint_name "-"
- * (meaning none). Each [[regions]] block starts as an I/O region with an empty
+ * Defaults applied before parsing: kind "app" and no dependencies. Each
+ * [[regions]] block starts as an I/O region with an empty
  * range. A missing
  * subsystem is filled in from the native flag as "NATIVE" or "WASM".
  *
  * Returns 0 on success, -1 on any failure: unreadable file, a malformed numeric
  * or boolean value, an unknown region kind, a table exceeding its capacity (8
- * capabilities, WASMOS_APP_MAX_REGIONS regions), a missing name or entry, or an
+ * capabilities, WASMOS_APP_MAX_REGIONS regions, MAX_DEPS dependencies), an
+ * invalid [deps] entry, an [ipc] table, a missing name or entry, or an
  * invalid subsystem tag. *out is fully overwritten either way and holds partial data on
  * failure. */
 static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
@@ -299,7 +419,6 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
     }
     memset(out, 0, sizeof(*out));
     strcpy(out->kind, "app");
-    strcpy(out->req_ep_name, "-");
     FILE* f = fopen(path, "rb");
     if (!f) {
         return -1;
@@ -308,7 +427,7 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
         SEC_NONE,
         SEC_PACKAGE,
         SEC_RESOURCES,
-        SEC_IPC,
+        SEC_DEPS,
         SEC_LINK,
         SEC_CAP,
         SEC_REGION
@@ -337,9 +456,17 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
             sec = SEC_RESOURCES;
             continue;
         }
-        if (strcmp(s, "[ipc]") == 0) {
-            sec = SEC_IPC;
+        if (strcmp(s, "[deps]") == 0) {
+            sec = SEC_DEPS;
             continue;
+        }
+        if (strcmp(s, "[ipc]") == 0) {
+            fprintf(stderr,
+                    "%s: the [ipc] table (required_endpoint_name) was removed in .wap v10; "
+                    "declare peers in [deps] instead\n",
+                    path);
+            fclose(f);
+            return -1;
         }
         /* [link] carries link-time memory sizes for the toolchain driver
          * (wasmos-clang) and nothing the container needs.  It is recognized so
@@ -379,6 +506,25 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
         *eq = '\0';
         char* key = trim(s);
         char* val = trim(eq + 1);
+        if (sec == SEC_DEPS) {
+            uint8_t strength = 0;
+            if (strcmp(key, "needs") == 0) {
+                strength = DEP_NEEDS;
+            } else if (strcmp(key, "wants") == 0) {
+                strength = DEP_WANTS;
+            } else if (strcmp(key, "provides") == 0) {
+                strength = DEP_PROVIDES;
+            } else {
+                fprintf(stderr, "%s: unknown [deps] key '%s'\n", path, key);
+                fclose(f);
+                return -1;
+            }
+            if (parse_dep_list(path, val, strength, out) != 0) {
+                fclose(f);
+                return -1;
+            }
+            continue;
+        }
         strip_quotes(val);
 
         if (sec == SEC_PACKAGE) {
@@ -453,15 +599,6 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
                     return -1;
                 }
             }
-        } else if (sec == SEC_IPC) {
-            if (strcmp(key, "required_endpoint_name") == 0) {
-                snprintf(out->req_ep_name, sizeof(out->req_ep_name), "%s", val);
-            } else if (strcmp(key, "required_endpoint_rights") == 0) {
-                if (parse_u32_auto(val, &out->req_ep_rights) != 0) {
-                    fclose(f);
-                    return -1;
-                }
-            }
         } else if (sec == SEC_CAP && cap_idx >= 0) {
             if (strcmp(key, "name") == 0) {
                 snprintf(out->caps[cap_idx].name, sizeof(out->caps[cap_idx].name), "%s", val);
@@ -486,18 +623,138 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
     return 0;
 }
 
-/* Pack one payload into a .wap package. Two mutually exclusive command lines:
+/* State of the --check-deps walk: one unit per manifest, and per unit the DFS
+ * colour (0 unvisited, 1 on the current path, 2 finished). */
+typedef struct {
+    const char* path;
+    linker_manifest_t manifest;
+    uint8_t colour;
+} dep_unit_t;
+
+static int dep_provides(const linker_manifest_t* m, const manifest_dep_t* need) {
+    for (uint32_t i = 0; i < m->dep_count; ++i) {
+        const manifest_dep_t* d = &m->deps[i];
+        if (d->strength == DEP_PROVIDES && d->kind == need->kind &&
+            strcmp(d->name, need->name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Depth-first walk over NEEDS edges from units[u]. path[] holds the units on
+ * the current path (depth entries). Returns 1 after printing the first cycle
+ * found, 0 when none is reachable from u. */
+static int dep_walk(dep_unit_t* units, size_t count, size_t u, size_t* path, size_t depth) {
+    units[u].colour = 1;
+    path[depth] = u;
+    const linker_manifest_t* m = &units[u].manifest;
+    for (uint32_t i = 0; i < m->dep_count; ++i) {
+        const manifest_dep_t* need = &m->deps[i];
+        if (need->strength != DEP_NEEDS) {
+            continue;
+        }
+        for (size_t v = 0; v < count; ++v) {
+            if (v == u || !dep_provides(&units[v].manifest, need)) {
+                continue;
+            }
+            if (units[v].colour == 1) {
+                fprintf(stderr, "dependency cycle over [deps] needs:");
+                size_t start = 0;
+                while (path[start] != v) {
+                    start++;
+                }
+                for (size_t k = start; k <= depth; ++k) {
+                    fprintf(stderr, " %s ->", units[path[k]].manifest.name);
+                }
+                fprintf(stderr,
+                        " %s (closed by '%s%s' in %s)\n",
+                        units[v].manifest.name,
+                        need->kind == DEP_KIND_CLASS ? "class:" : "",
+                        need->name,
+                        units[u].path);
+                return 1;
+            }
+            if (units[v].colour == 0 && dep_walk(units, count, v, path, depth + 1)) {
+                return 1;
+            }
+        }
+    }
+    units[u].colour = 2;
+    return 0;
+}
+
+/* --check-deps: parse every manifest with the packer's own rules and fail when
+ * the NEEDS edges form a cycle. An edge runs from a unit to every OTHER unit
+ * that provides the needed name or class, so a unit that both provides and
+ * needs a class (a partition driver over disks) has no self-edge, and a class
+ * need is conservatively an edge to each provider. WANTS never forms an edge:
+ * a soft dependency may be circular. A NEEDS entry no manifest provides is
+ * reported as a note and does not fail the check, since a provider may live
+ * out of tree. Returns 0, or 1 on a parse failure or a cycle. */
+static int check_deps(int count, char** paths) {
+    if (count <= 0) {
+        fprintf(stderr, "--check-deps needs at least one manifest\n");
+        return 1;
+    }
+    dep_unit_t* units = (dep_unit_t*)calloc((size_t)count, sizeof(dep_unit_t));
+    size_t* path = (size_t*)calloc((size_t)count + 1u, sizeof(size_t));
+    if (!units || !path) {
+        free(units);
+        free(path);
+        return 1;
+    }
+    int rc = 0;
+    for (int i = 0; i < count; ++i) {
+        units[i].path = paths[i];
+        if (parse_linker_manifest(paths[i], &units[i].manifest) != 0) {
+            fprintf(stderr, "failed to parse linker manifest: %s\n", paths[i]);
+            rc = 1;
+        }
+    }
+    for (int i = 0; rc == 0 && i < count; ++i) {
+        const linker_manifest_t* m = &units[i].manifest;
+        for (uint32_t d = 0; d < m->dep_count; ++d) {
+            if (m->deps[d].strength != DEP_NEEDS) {
+                continue;
+            }
+            int found = 0;
+            for (int j = 0; j < count && !found; ++j) {
+                found = j != i && dep_provides(&units[j].manifest, &m->deps[d]);
+            }
+            if (!found) {
+                fprintf(stderr,
+                        "note: %s needs '%s%s', which no checked manifest provides\n",
+                        m->name,
+                        m->deps[d].kind == DEP_KIND_CLASS ? "class:" : "",
+                        m->deps[d].name);
+            }
+        }
+    }
+    for (int i = 0; rc == 0 && i < count; ++i) {
+        if (units[i].colour == 0 && dep_walk(units, (size_t)count, (size_t)i, path, 0)) {
+            rc = 1;
+        }
+    }
+    free(path);
+    free(units);
+    return rc;
+}
+
+/* Pack one payload into a .wap package, or check dependencies. Three mutually
+ * exclusive command lines:
  *
  *   --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled <in.warpbin>]
  *       Preferred form. Everything except the payload comes from the linker
  *       manifest, and --compiled appends a pre-built WARP AOT binary.
  *
+ *   --check-deps <manifest>...
+ *       Writes nothing; fails on a cycle of [deps] needs edges (check_deps).
+ *
  *   <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags>
- *   <req_ep_name|-> <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...
- *       Positional form, kept for callers that have no manifest. A 12-argument
- *       invocation whose 10th argument is not a number is instead read as the
- *       older single-<cap_name> <cap_flags> layout. This form emits no AOT
- *       binary and no region records.
+ *   <cap_count> [<cap_name> <cap_flags>]...
+ *       Positional form, kept for callers that have no manifest. This form
+ *       emits no AOT binary, no region records and no dependencies.
  *
  * Writes the header and sections in the exact order src/kernel/wasmos_app.c
  * parses them, then the payload, then the AOT binary if present. Returns 0 on
@@ -506,6 +763,9 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
  * file, or a short write. A failed run may leave a truncated output file behind,
  * because errors after fopen do not remove it. */
 int main(int argc, char** argv) {
+    if (argc >= 2 && strcmp(argv[1], "--check-deps") == 0) {
+        return check_deps(argc - 2, argv + 2);
+    }
     if (argc >= 6 && strcmp(argv[1], "--manifest") == 0) {
         const char* manifest_path = argv[2];
         const char* in_path = NULL;
@@ -655,7 +915,7 @@ int main(int argc, char** argv) {
         hdr.name_len = (uint32_t)strlen(lm.name);
         hdr.entry_len = (uint32_t)strlen(lm.entry);
         hdr.wasm_size = (uint32_t)in_size;
-        hdr.req_ep_count = (lm.req_ep_name[0] == '-' && lm.req_ep_name[1] == '\0') ? 0u : 1u;
+        hdr.dep_count = lm.dep_count;
         hdr.cap_count = cap_count;
         hdr.mem_hint_count = 2;
         hdr.compiled_size = (uint32_t)compiled_data_size;
@@ -664,15 +924,18 @@ int main(int argc, char** argv) {
 
         wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, lm.stack_pages, 0};
         wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, lm.heap_pages, 0};
-        wasmos_req_endpoint_t req_ep = {(uint32_t)strlen(lm.req_ep_name), lm.req_ep_rights};
 
         int ok = 1;
         ok &= fwrite(&hdr, sizeof(hdr), 1, outf) == 1;
         ok &= fwrite(lm.name, 1, hdr.name_len, outf) == hdr.name_len;
         ok &= fwrite(lm.entry, 1, hdr.entry_len, outf) == hdr.entry_len;
-        if (hdr.req_ep_count == 1u) {
-            ok &= fwrite(&req_ep, sizeof(req_ep), 1, outf) == 1;
-            ok &= fwrite(lm.req_ep_name, 1, req_ep.name_len, outf) == req_ep.name_len;
+        for (uint32_t i = 0; i < lm.dep_count; ++i) {
+            wasmos_dep_record_t rec;
+            rec.strength = lm.deps[i].strength;
+            rec.kind = lm.deps[i].kind;
+            rec.name_len = (uint16_t)strlen(lm.deps[i].name);
+            ok &= fwrite(&rec, sizeof(rec), 1, outf) == 1;
+            ok &= fwrite(lm.deps[i].name, 1, rec.name_len, outf) == rec.name_len;
         }
         for (uint32_t i = 0; i < cap_count; ++i) {
             ok &= fwrite(&caps[i], sizeof(caps[i]), 1, outf) == 1;
@@ -698,14 +961,15 @@ int main(int argc, char** argv) {
         fclose(outf);
         return ok ? 0 : 1;
     }
-    if (argc < 11) {
+    if (argc < 9) {
         fprintf(stderr,
                 "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> "
-                "<req_ep_name|- > <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...\n",
-                argv[0]);
-        fprintf(stderr,
-                "legacy: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> "
-                "<req_ep_name|- > <req_ep_rights> <cap_name|- > <cap_flags>\n",
+                "<cap_count> [<cap_name> <cap_flags>]...\n"
+                "       %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled "
+                "<in.warpbin>]\n"
+                "       %s --check-deps <manifest>...\n",
+                argv[0],
+                argv[0],
                 argv[0]);
         return 1;
     }
@@ -714,11 +978,9 @@ int main(int argc, char** argv) {
     const char* out_path = argv[2];
     const char* name = argv[3];
     const char* entry = argv[4];
-    const char* req_ep_name = argv[8];
     uint32_t stack_pages = 0;
     uint32_t heap_pages = 0;
     uint32_t flags = 0;
-    uint32_t req_ep_rights = 0;
     uint32_t cap_count = 0;
     const uint32_t cap_max = 8;
     const char* cap_names[8];
@@ -727,81 +989,47 @@ int main(int argc, char** argv) {
         fprintf(stderr, "invalid stack/heap page value\n");
         return 1;
     }
-    if (parse_u32(argv[7], &flags) != 0 || parse_u32(argv[9], &req_ep_rights) != 0) {
-        fprintf(stderr, "invalid flags/req_ep_rights value\n");
+    if (parse_u32(argv[7], &flags) != 0) {
+        fprintf(stderr, "invalid flags value\n");
         return 1;
     }
-    int has_req_ep = !(req_ep_name[0] == '-' && req_ep_name[1] == '\0');
-
-    int legacy_mode = 0;
-    if (parse_u32(argv[10], &cap_count) == 0) {
-        int min_tail = (int)(11u + (cap_count * 2u));
-        if (argc < min_tail) {
-            fprintf(stderr, "invalid capability argument layout\n");
-            return 1;
-        }
-        if (cap_count > cap_max) {
-            fprintf(stderr, "cap_count exceeds max supported entries (%u)\n", cap_max);
-            return 1;
-        }
-        for (uint32_t i = 0; i < cap_count; ++i) {
-            const char* cap_name = argv[11 + (i * 2u)];
-            uint32_t cap_flags = 0;
-            if (!cap_name || cap_name[0] == '\0' || (cap_name[0] == '-' && cap_name[1] == '\0') ||
-                parse_u32(argv[12 + (i * 2u)], &cap_flags) != 0) {
-                fprintf(stderr, "invalid capability entry at index %u\n", i);
-                return 1;
-            }
-            if (!capability_name_supported(cap_name)) {
-                fprintf(stderr, "unknown capability '%s' at index %u\n", cap_name, i);
-                return 1;
-            }
-            if (cap_flags != 0) {
-                fprintf(stderr, "unsupported capability flags for '%s' at index %u\n", cap_name, i);
-                return 1;
-            }
-            cap_names[i] = cap_name;
-            caps[i].name_len = (uint32_t)strlen(cap_name);
-            caps[i].flags = cap_flags;
-        }
-        /* The positional form takes no trailing options: everything past the
-         * capability pairs would have to be a flag, and none remain. */
-        if (argc > min_tail) {
-            fprintf(stderr, "unknown trailing argument '%s'\n", argv[min_tail]);
-            return 1;
-        }
-    } else if (argc == 12) {
-        /* Backward compatibility mode: one optional capability pair. */
-        legacy_mode = 1;
-        const char* cap_name = argv[10];
-        uint32_t cap_flags = 0;
-        if (parse_u32(argv[11], &cap_flags) != 0) {
-            fprintf(stderr, "invalid legacy cap_flags value\n");
-            return 1;
-        }
-        if (!(cap_name[0] == '-' && cap_name[1] == '\0')) {
-            if (!capability_name_supported(cap_name)) {
-                fprintf(stderr, "unknown legacy capability '%s'\n", cap_name);
-                return 1;
-            }
-            if (cap_flags != 0) {
-                fprintf(stderr, "unsupported legacy capability flags for '%s'\n", cap_name);
-                return 1;
-            }
-            cap_count = 1;
-            cap_names[0] = cap_name;
-            caps[0].name_len = (uint32_t)strlen(cap_name);
-            caps[0].flags = cap_flags;
-        }
-    } else {
+    if (parse_u32(argv[8], &cap_count) != 0) {
+        fprintf(stderr, "invalid cap_count value\n");
+        return 1;
+    }
+    int min_tail = (int)(9u + (cap_count * 2u));
+    if (argc < min_tail) {
         fprintf(stderr, "invalid capability argument layout\n");
-        if (!legacy_mode) {
-            fprintf(
-                stderr,
-                "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> "
-                "<req_ep_name|- > <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...\n",
-                argv[0]);
+        return 1;
+    }
+    if (cap_count > cap_max) {
+        fprintf(stderr, "cap_count exceeds max supported entries (%u)\n", cap_max);
+        return 1;
+    }
+    for (uint32_t i = 0; i < cap_count; ++i) {
+        const char* cap_name = argv[9 + (i * 2u)];
+        uint32_t cap_flags = 0;
+        if (!cap_name || cap_name[0] == '\0' || (cap_name[0] == '-' && cap_name[1] == '\0') ||
+            parse_u32(argv[10 + (i * 2u)], &cap_flags) != 0) {
+            fprintf(stderr, "invalid capability entry at index %u\n", i);
+            return 1;
         }
+        if (!capability_name_supported(cap_name)) {
+            fprintf(stderr, "unknown capability '%s' at index %u\n", cap_name, i);
+            return 1;
+        }
+        if (cap_flags != 0) {
+            fprintf(stderr, "unsupported capability flags for '%s' at index %u\n", cap_name, i);
+            return 1;
+        }
+        cap_names[i] = cap_name;
+        caps[i].name_len = (uint32_t)strlen(cap_name);
+        caps[i].flags = cap_flags;
+    }
+    /* The positional form takes no trailing options: everything past the
+     * capability pairs would have to be a flag, and none remain. */
+    if (argc > min_tail) {
+        fprintf(stderr, "unknown trailing argument '%s'\n", argv[min_tail]);
         return 1;
     }
 
@@ -856,7 +1084,7 @@ int main(int argc, char** argv) {
     hdr.name_len = (uint32_t)strlen(name);
     hdr.entry_len = (uint32_t)strlen(entry);
     hdr.wasm_size = (uint32_t)in_size;
-    hdr.req_ep_count = has_req_ep ? 1u : 0u;
+    hdr.dep_count = 0; /* dependencies need the manifest's [deps] table */
     hdr.cap_count = cap_count;
     hdr.mem_hint_count = 2;
     hdr.compiled_size = 0; /* positional path emits no AOT binary; use --manifest --compiled */
@@ -870,16 +1098,11 @@ int main(int argc, char** argv) {
 
     wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, stack_pages, 0};
     wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, heap_pages, 0};
-    wasmos_req_endpoint_t req_ep = {(uint32_t)strlen(req_ep_name), req_ep_rights};
 
     int ok = 1;
     ok &= fwrite(&hdr, sizeof(hdr), 1, out) == 1;
     ok &= fwrite(name, 1, hdr.name_len, out) == hdr.name_len;
     ok &= fwrite(entry, 1, hdr.entry_len, out) == hdr.entry_len;
-    if (has_req_ep) {
-        ok &= fwrite(&req_ep, sizeof(req_ep), 1, out) == 1;
-        ok &= fwrite(req_ep_name, 1, req_ep.name_len, out) == req_ep.name_len;
-    }
     for (uint32_t i = 0; i < cap_count; ++i) {
         ok &= fwrite(&caps[i], sizeof(caps[i]), 1, out) == 1;
         ok &= fwrite(cap_names[i], 1, caps[i].name_len, out) == caps[i].name_len;

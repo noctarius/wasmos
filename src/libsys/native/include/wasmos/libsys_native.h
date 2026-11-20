@@ -364,12 +364,76 @@ void wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t* loop, uint3
  * many ran, or -1 when the loop has no usable driver_api. Never blocks: unlike
  * the WASM variant it owns no select-set, so a service that must sleep at idle
  * does so in its idle hook.
- * Each message goes to the matching intent, else the handler for its type, else
- * the default handler; a message matching none of those is still counted as
- * handled and dropped. An empty queue ends the drain early. A receive error
+ * A WASMOS_IPC_HEALTH_REQ liveness probe is answered here with
+ * WASMOS_IPC_HEALTH_RESP and reaches no intent or handler. Every other message
+ * goes to the matching intent, else the handler for its type, else the default
+ * handler; a message matching none of those is still counted as handled and
+ * dropped. An empty queue ends the drain early. A receive error
  * mid-drain also returns -1, discarding the count of what was already
  * dispatched, so the return is a progress hint and not an exact tally. */
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t* loop, uint32_t budget);
+
+/* ---------------------------------------------------- service-name watches
+ *
+ * The native variant of the WASM watches in wasmos/libsys.h ("service-name
+ * watches"): same contract, same subscribe-then-lookup order, same status codes,
+ * over a native event loop and api->sched_ticks. Implemented in
+ * svc_watch_native.c. */
+
+typedef struct wasmos_sys_native_svc_watch wasmos_sys_native_svc_watch_t;
+typedef void (*wasmos_sys_native_svc_bind_fn)(void* user, wasmos_sys_native_svc_watch_t* watch,
+                                              uint32_t endpoint);
+typedef void (*wasmos_sys_native_svc_fail_fn)(void* user, wasmos_sys_native_svc_watch_t* watch,
+                                              int32_t status);
+
+typedef struct {
+    wasmos_sys_native_event_loop_t* loop;
+    uint32_t proc_endpoint;
+    uint32_t next_cookie;
+    wasmos_sys_native_svc_watch_t* head;
+} wasmos_sys_native_svc_watch_set_t;
+
+/* ZERO before the first start. `endpoint` is the last endpoint reported,
+ * meaningful iff `bound`. */
+struct wasmos_sys_native_svc_watch {
+    wasmos_sys_native_svc_watch_set_t* set;
+    wasmos_sys_native_svc_watch_t* next;
+    wasmos_sys_native_svc_bind_fn on_bind;
+    wasmos_sys_native_svc_fail_fn on_fail;
+    void* user;
+    uint32_t endpoint;
+    uint32_t buffer_id;
+    uint32_t subscribe_request;
+    uint32_t lookup_request;
+    uint32_t cookie;
+    uint32_t deadline_tick;
+    uint8_t bound;
+    uint8_t has_buffer;
+    uint8_t has_deadline;
+    uint8_t active;
+    char name[WASMOS_SVC_NAME_MAX];
+};
+
+typedef struct {
+    wasmos_sys_native_svc_watch_t watch;
+    wasmos_future_t future;
+    wasmos_promise_t promise;
+} wasmos_sys_native_svc_await_t;
+
+int32_t wasmos_sys_native_svc_watch_set_init(wasmos_sys_native_svc_watch_set_t* set,
+                                             wasmos_sys_native_event_loop_t* loop,
+                                             uint32_t proc_endpoint);
+int32_t wasmos_sys_native_svc_watch_start(wasmos_sys_native_svc_watch_set_t* set,
+                                          wasmos_sys_native_svc_watch_t* watch, const char* name,
+                                          int32_t timeout_ms, wasmos_sys_native_svc_bind_fn on_bind,
+                                          wasmos_sys_native_svc_fail_fn on_fail, void* user);
+void wasmos_sys_native_svc_watch_stop(wasmos_sys_native_svc_watch_t* watch);
+void wasmos_sys_native_svc_watch_forget(wasmos_sys_native_svc_watch_t* watch);
+void wasmos_sys_native_svc_watch_set_expire(wasmos_sys_native_svc_watch_set_t* set);
+wasmos_future_t* wasmos_sys_native_svc_await_start(wasmos_sys_native_svc_watch_set_t* set,
+                                                   wasmos_sys_native_svc_await_t* await,
+                                                   const char* name, int32_t timeout_ms);
+
 /* Zero the record and put its future back in the pending state, with
  * `reply_status` (optional; NULL accepts every reply) as the resolve/reject
  * decision. Required before the first send and before every reuse. */

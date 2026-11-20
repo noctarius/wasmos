@@ -24,9 +24,10 @@ heap_pages = 512
 initial_memory = 4194304
 max_memory = 4194304
 
-[ipc]
-required_endpoint_name = "-"
-required_endpoint_rights = 0
+[deps]
+needs = ["devmgr.inv", "class:block"]
+wants = ["fs.vfs"]
+provides = ["class:block"]
 
 # The only two capabilities a block CLIENT needs, which is all this is: IPC to
 # reach the disks and the process manager, and svc.class to claim a `block`

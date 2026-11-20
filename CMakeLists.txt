@@ -92,6 +92,9 @@ set(WASM_LINMEM_HOLD_APP ${BUILD_DIR}/linmem_hold.wap)
 set(WASM_CONSOLE_CLAIM_DENY_SRC ${EXAMPLES_C_DIR}/console_claim_deny/console_claim_deny.c)
 set(WASM_CONSOLE_CLAIM_DENY_WASM ${BUILD_DIR}/console_claim_deny.wasm)
 set(WASM_CONSOLE_CLAIM_DENY_APP ${BUILD_DIR}/console_claim_deny.wap)
+set(WASM_SV_PROBE_SRC ${EXAMPLES_C_DIR}/sv_probe/sv_probe.c)
+set(WASM_SV_PROBE_WASM ${BUILD_DIR}/sv_probe.wasm)
+set(WASM_SV_PROBE_APP ${BUILD_DIR}/sv_probe.wap)
 set(WASM_WFS_WRITE_SMOKE_WASM ${BUILD_DIR}/wfs_write_smoke.wasm)
 set(WASM_WFS_WRITE_SMOKE_APP ${BUILD_DIR}/wfs_write_smoke.wap)
 set(WASM_NATIVE_CALL_MIN_SRC ${EXAMPLES_C_DIR}/native_call_min/native_call_min.c)
@@ -237,6 +240,7 @@ set(WASM_CLI_APP ${BUILD_DIR}/cli.wap)
 set(WASM_DEVICE_MANAGER_SOURCES
   ${SERVICES_DIR}/device_manager/device_manager.c
   ${SERVICES_DIR}/device_manager/device_manager_rules.c
+  ${SERVICES_DIR}/device_manager/device_manager_unit.c
 )
 set(WASM_DEVICE_MANAGER_WASM ${BUILD_DIR}/device_manager.wasm)
 set(WASM_DEVICE_MANAGER_APP ${BUILD_DIR}/device_manager.wap)
@@ -255,6 +259,9 @@ set(WASM_VT_APP ${BUILD_DIR}/vt.wap)
 set(WASM_LOGGER_SRC ${CMAKE_SOURCE_DIR}/src/services/logger/logger.c)
 set(WASM_LOGGER_WASM ${BUILD_DIR}/logger.wasm)
 set(WASM_LOGGER_APP ${BUILD_DIR}/logger.wap)
+set(WASM_SUPERVISOR_SRC ${SERVICES_DIR}/supervisor/supervisor.c)
+set(WASM_SUPERVISOR_WASM ${BUILD_DIR}/supervisor.wasm)
+set(WASM_SUPERVISOR_APP ${BUILD_DIR}/supervisor.wap)
 set(WASM_GFX_COMPOSITOR_SRC ${SERVICES_DIR}/gfx_compositor/gfx_compositor.zig)
 set(WASM_GFX_COMPOSITOR_WASM ${BUILD_DIR}/gfx_compositor.elf)
 set(WASM_GFX_COMPOSITOR_APP ${BUILD_DIR}/gfx_compositor.wap)
@@ -318,6 +325,9 @@ set(WASM_UMOUNT_APP ${BUILD_DIR}/umount.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
+set(WASM_SVC_SRC ${CMAKE_SOURCE_DIR}/src/utils/svc/svc.c)
+set(WASM_SVC_WASM ${BUILD_DIR}/svc.wasm)
+set(WASM_SVC_APP ${BUILD_DIR}/svc.wap)
 set(WASM_MKFS_WFS_SRC ${CMAKE_SOURCE_DIR}/src/utils/mkfs_wfs/mkfs_wfs.c)
 set(WASM_MKFS_WFS_WASM ${BUILD_DIR}/mkfs_wfs.wasm)
 set(WASM_MKFS_WFS_APP ${BUILD_DIR}/mkfs_wfs.wap)
@@ -1621,8 +1631,27 @@ get_property(WASMOS_KERNEL_BLOB_TARGETS GLOBAL PROPERTY WASMOS_KERNEL_BLOB_TARGE
 foreach (_wasm_target IN LISTS WASMOS_WASM_APP_TARGETS WASMOS_KERNEL_BLOB_TARGETS)
   add_dependencies(${_wasm_target} make_wasmos_app wasmos-sdk)
 endforeach ()
+# Build-time dependency check: every manifest's [deps] needs edges, parsed by the
+# packer itself (`make_wasmos_app --check-deps`), must not form a cycle. A
+# dependency cycle between services is a boot that can only come up by luck, so it
+# fails the build here, before any image is produced, rather than as a hang in
+# QEMU. The kernel depends on it through wasm_driver_blobs.
+file(GLOB_RECURSE WASMOS_LINKER_MANIFESTS CONFIGURE_DEPENDS
+  ${CMAKE_SOURCE_DIR}/src/linker.metadata
+  ${CMAKE_SOURCE_DIR}/examples/linker.metadata)
+set(WASMOS_DEPS_CHECK_STAMP ${BUILD_DIR}/deps-check.stamp)
+add_custom_command(
+  OUTPUT ${WASMOS_DEPS_CHECK_STAMP}
+  COMMAND $<TARGET_FILE:make_wasmos_app> --check-deps ${WASMOS_LINKER_MANIFESTS}
+  COMMAND ${CMAKE_COMMAND} -E touch ${WASMOS_DEPS_CHECK_STAMP}
+  DEPENDS make_wasmos_app ${WASMOS_LINKER_MANIFESTS}
+  COMMENT "Checking [deps] needs edges of every linker.metadata for cycles"
+  VERBATIM
+)
+add_custom_target(check-deps DEPENDS ${WASMOS_DEPS_CHECK_STAMP})
+
 set(WASM_DRIVER_BLOB_DEPS "")
-list(APPEND WASM_DRIVER_BLOB_DEPS make_wasmos_app)
+list(APPEND WASM_DRIVER_BLOB_DEPS make_wasmos_app check-deps)
 if (WASMOS_WASM_APP_TARGETS)
   list(APPEND WASM_DRIVER_BLOB_DEPS ${WASMOS_WASM_APP_TARGETS})
 endif ()
@@ -1769,6 +1798,7 @@ endif ()
 if (TARGET host_util)
   set(HOST_UTIL_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SVC_APP} ${BUILD_DIR}/esp/system/utils/svc.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MKDIR_APP} ${BUILD_DIR}/esp/system/utils/mkdir.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUNT_APP} ${BUILD_DIR}/esp/system/utils/mount.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_UMOUNT_APP} ${BUILD_DIR}/esp/system/utils/umount.wap
@@ -1805,6 +1835,7 @@ set(FS_LEAVE_OPEN_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_LEAVE_OPEN_APP} ${BUILD_DIR}/esp/apps/fs_leave_open.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_LINMEM_HOLD_APP} ${BUILD_DIR}/esp/apps/linmem_hold.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CONSOLE_CLAIM_DENY_APP} ${BUILD_DIR}/esp/apps/console_claim_deny.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SV_PROBE_APP} ${BUILD_DIR}/esp/apps/sv_probe.wap
 )
 set(FS_WRITE_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_WRITE_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_write_smoke.wap
@@ -2574,6 +2605,24 @@ add_custom_target(run-kernel-unit-tests
           -o ${BUILD_DIR}/test_wasmos_exec_format
   COMMAND ${BUILD_DIR}/test_wasmos_exec_format
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${CMAKE_SOURCE_DIR}/src/drivers/include
+          -I${KERNEL_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          -I${WASM3_DIR}/source
+          -iquote ${LIBC_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wasmos_app_deps.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_app_runtime.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          ${KERNEL_DIR}/wasmos_app.c
+          ${KERNEL_DIR}/subsystem_registry.c
+          ${KERNEL_DIR}/hashmap.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_wasmos_app_deps
+  COMMAND ${BUILD_DIR}/test_wasmos_app_deps
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${SERVICES_DIR}/device_manager
           -I${LIBSYS_WASM_DIR}/include
           # Route quote-includes ("string.h"/"ctype.h") to our libc headers,
@@ -2591,6 +2640,18 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_device_manager_rules
   COMMAND ${BUILD_DIR}/test_device_manager_rules
+  # The unit spec and capability descriptor the device manager submits to the
+  # supervisor for a driver whose rule names ENV{RESTART}.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${SERVICES_DIR}/device_manager
+          -I${LIBSYS_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_unit.c
+          ${SERVICES_DIR}/device_manager/device_manager_unit.c
+          -o ${BUILD_DIR}/test_device_manager_unit
+  COMMAND ${BUILD_DIR}/test_device_manager_unit
   # The block descriptor ABI and its class-instance fingerprint. Header-only:
   # wasmos_driver_abi.h carries both, and the generated constants it includes
   # supply the version and the field capacities.
@@ -2693,6 +2754,14 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/logger/logger_stage.c
           -o ${BUILD_DIR}/test_logger_stage
   COMMAND ${BUILD_DIR}/test_logger_stage
+  # The supervisor's per-unit policy: spec parsing, restart, backoff, the
+  # intensity window, READY deadlines. No IPC and no clock, like logger_stage.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${SERVICES_DIR}/supervisor
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_supervisor_unit.c
+          ${SERVICES_DIR}/supervisor/supervisor_unit.c
+          -o ${BUILD_DIR}/test_supervisor_unit
+  COMMAND ${BUILD_DIR}/test_supervisor_unit
   # FAT directory scanning over a cluster chain. The test supplies its own block
   # layer (a RAM image served synchronously), so fat_block.c is deliberately NOT
   # linked; fat_util.c is, because fat_geom.c logs through it.
@@ -3482,6 +3551,30 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_event_loop.c
           -o ${BUILD_DIR}/test_libsys_event_loop
   COMMAND ${BUILD_DIR}/test_libsys_event_loop
+  # The .rc script runner (step API and the synchronous run over it), reading
+  # real files the test writes under /tmp. script.c is written against the guest
+  # libc's <sys/stat.h>; glibc hides S_IFMT / S_IFDIR under strict -std=c11
+  # unless _DEFAULT_SOURCE asks for them.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -D_DEFAULT_SOURCE
+          -iquote ${LIBC_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_script_runner.c
+          ${LIBC_DIR}/src/script.c
+          -o ${BUILD_DIR}/test_libc_script_runner
+  COMMAND ${BUILD_DIR}/test_libc_script_runner
+  # Service-name watches and awaits over that loop, with the real future core;
+  # the process manager is a scripted inbox.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${LIBSYS_WASM_DIR}/include
+          -iquote ${LIBC_DIR}/include
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_svc_watch.c
+          ${LIBSYS_WASM_DIR}/svc_watch_wasm.c
+          ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+          -o ${BUILD_DIR}/test_libsys_svc_watch
+  COMMAND ${BUILD_DIR}/test_libsys_svc_watch
   # The IPC host-call shims, BOTH runtimes in one binary so every scenario runs
   # through each and the results are compared. wasm3's raw-call ABI is stack
   # marshalling and WARP's takes an unused context pointer, so neither needs a
@@ -3832,8 +3925,22 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           -iquote ${DRIVER_WASM_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
           ${KERNEL_DIR}/process_manager_shutdown.c
+          ${KERNEL_DIR}/shutdown_order.c
           -o ${BUILD_DIR}/test_pm_shutdown
   COMMAND ${BUILD_DIR}/test_pm_shutdown
+  # The spawn capability descriptor (wasmos_spawn_caps_v2_t) as the process
+  # manager parses it for PROC_IPC_SPAWN_CAPS_V2 and PROC_IPC_SPAWN_WATCHED.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_caps.c
+          ${KERNEL_DIR}/process_manager_caps.c
+          -o ${BUILD_DIR}/test_pm_caps
+  COMMAND ${BUILD_DIR}/test_pm_caps
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -4102,6 +4209,27 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_service_class_registry
   COMMAND ${BUILD_DIR}/test_service_class_registry
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          -iquote ${LIBC_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_service_name_watch.c
+          ${KERNEL_DIR}/service_name_watch.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_service_name_watch
+  COMMAND ${BUILD_DIR}/test_service_name_watch
+  # The orderly shutdown's notification order: pure, over a needs graph.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_shutdown_order.c
+          ${KERNEL_DIR}/shutdown_order.c
+          -o ${BUILD_DIR}/test_shutdown_order
+  COMMAND ${BUILD_DIR}/test_shutdown_order
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running host kernel unit tests"
   VERBATIM
@@ -4320,6 +4448,21 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
             -o ${BUILD_DIR}/test_native_ipc_future
     COMMAND ${BUILD_DIR}/test_native_ipc_future
     COMMENT "Running native ${NATIVE_COROUTINE_HOST_LABEL} IPC future unit tests"
+    VERBATIM)
+  add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+    COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+            -I${LIBSYS_NATIVE_DIR}/include
+            -I${DRIVER_WASM_DIR}/include
+            -I${LIBC_DIR}/include
+            ${CMAKE_SOURCE_DIR}/tests/unit/test_native_svc_watch.c
+            ${CMAKE_SOURCE_DIR}/tests/unit/stubs_native_libsys.c
+            ${LIBSYS_NATIVE_DIR}/coroutine_native.c
+            ${LIBSYS_NATIVE_DIR}/svc_watch_native.c
+            ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
+            ${NATIVE_COROUTINE_HOST_ASM}
+            -o ${BUILD_DIR}/test_native_svc_watch
+    COMMAND ${BUILD_DIR}/test_native_svc_watch
+    COMMENT "Running native ${NATIVE_COROUTINE_HOST_LABEL} service-watch unit tests"
     VERBATIM)
   if (ZIG_AVAILABLE)
     add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
@@ -4658,6 +4801,12 @@ wasmos_ide_index(wasmos_ide_unit_pm_shutdown
   IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
          ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
   DEFINES WASMOS_HOST_TEST_SMP=1)
+# test_pm_caps.c reaches the same header; same set as test_pm_shutdown.
+wasmos_ide_index(wasmos_ide_unit_pm_caps
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_caps.c
+  IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
+  DEFINES WASMOS_HOST_TEST_SMP=1)
 
 # test_process_lifecycle.c and its platform stubs link the real process.c, so
 # they take the real kernel headers and the WASMOS_PROCESS_TEST_SEAMS define its
@@ -4716,6 +4865,7 @@ wasmos_ide_index(wasmos_ide_unit
           ${CMAKE_SOURCE_DIR}/tests/unit/test_process_lifecycle.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_caps.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include
@@ -4724,7 +4874,7 @@ wasmos_ide_index(wasmos_ide_unit
          ${CMAKE_SOURCE_DIR}/abi/generated/c
          ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
          ${SERVICES_DIR}/net_stack ${SERVICES_DIR}/cli ${SERVICES_DIR}/vt
-         ${SERVICES_DIR}/logger
+         ${SERVICES_DIR}/logger ${SERVICES_DIR}/supervisor
          ${DRIVER_WASM_DIR}/fs_fat ${DRIVER_WASM_DIR}/fs_wfs
          ${CMAKE_SOURCE_DIR}/src/tools/mkfs_wfs
          ${WASM3_DIR} ${WASM3_DIR}/source)

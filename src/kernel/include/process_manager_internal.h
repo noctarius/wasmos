@@ -132,6 +132,19 @@ typedef struct {
     wasmos_dma_window_t dma_windows[PM_DMA_WINDOW_LIMIT];
 } pm_spawn_caps_t;
 
+/* Fills caps with exactly one I/O window [first, last], or none when caps lacks
+ * DEVMGR_CAP_IO_PORT. caps->cap_flags must already be set. Returns 0, or
+ * WASMOS_ERR_PROC_PM_BAD_CAPS for an inverted window. */
+int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last);
+
+/* Parses a wasmos_spawn_caps_v2_t and its tail arrays (wasmos_driver_abi.h)
+ * from payload_size bytes the caller has already copied out of, or validated
+ * inside, the requester's buffer. The size must be exactly what the counts in
+ * the header imply. Refuses unknown cap bits, inverted or excess I/O ranges and
+ * an incomplete DMA request. Returns 0 with caps valid, or
+ * WASMOS_ERR_PROC_PM_BAD_CAPS. */
+int pm_caps_from_v2(const uint8_t* payload, uint32_t payload_size, pm_spawn_caps_t* caps);
+
 /* One entry of the flat name -> endpoint service table.
  *
  * `name` is sized for the LONGEST name any registration path accepts, which is
@@ -175,7 +188,7 @@ typedef struct {
     uint64_t deadline_ticks;
     uint8_t draining; /* every participant is done; waiting on the console */
     uint64_t drain_deadline_ticks;
-    uint32_t pids[WASMOS_PM_SHUTDOWN_MAX]; /* descending: reverse spawn order */
+    uint32_t pids[WASMOS_PM_SHUTDOWN_MAX]; /* notification order (shutdown_order.h) */
     uint32_t endpoints[WASMOS_PM_SHUTDOWN_MAX];
     uint32_t context_ids[WASMOS_PM_SHUTDOWN_MAX];
 } pm_shutdown_state_t;
@@ -299,7 +312,10 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
 int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_class_unsubscribe(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_class_unregister(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_name_subscribe(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_name_unsubscribe(uint32_t pm_context_id, const ipc_message_t* msg);
 /* Periodic exit-driven sweep over both service tables: drop class providers and
  * subscribers whose owner has died (firing REMOVE events) and free the flat-table
  * names those owners held. Called from the PM run loop, so a name or instance is
@@ -334,6 +350,7 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg);

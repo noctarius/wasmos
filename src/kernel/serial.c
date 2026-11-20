@@ -683,6 +683,22 @@ int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_e
     return 0;
 }
 
+void klog_release_ring(uint32_t owner_context_id) {
+    if (owner_context_id == 0 || *serial_klog_ring_owner_slot() != owner_context_id) {
+        return;
+    }
+    /* Under the serial lock: console_ring_publish runs under it, so no publish
+     * is still writing into the ring once this returns. phys goes first, which
+     * is what every reader checks. */
+    ksync_spinlock_lock(serial_lock_ptr());
+    preempt_disable();
+    *serial_klog_ring_phys_slot() = 0;
+    *serial_klog_notify_endpoint_slot() = 0;
+    *serial_klog_ring_owner_slot() = 0;
+    preempt_enable();
+    ksync_spinlock_unlock(serial_lock_ptr());
+}
+
 static void serial_transmit(char c) {
     /* Always use the direct driver for output.  Per-character IPC to the
      * remote serial service overflows the depth-32 endpoint queue for any

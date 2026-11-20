@@ -633,8 +633,65 @@ static void parse_name_value(const char* line, char* name, int name_cap, char* v
     value[vlen] = '\0';
 }
 
-static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_ops_t* ops,
+/* The command a runner is waiting on (wasmos_script_runner_t.pending). */
+enum {
+    SCRIPT_PENDING_NONE = 0,
+    SCRIPT_PENDING_START,
+    SCRIPT_PENDING_SPAWN,
+    SCRIPT_PENDING_EXEC,
+    SCRIPT_PENDING_WAIT_SVC,
+    SCRIPT_PENDING_SERVICE,
+};
+
+/* What script_exec_line reports besides 0 (done) and -1 (fail the script). */
+#define SCRIPT_LINE_PENDING 1
+
+/* Opens `path` as a new top frame. A `script` frame (own_child) runs on a child
+ * of `state`; a `source` frame runs on `state` itself. Returns 0, or -1 when the
+ * nesting limit is reached or the file cannot be opened. */
+static int script_push_frame(wasmos_script_runner_t* runner, wasmos_script_state_t* state,
+                             const char* path, int own_child) {
+    wasmos_script_frame_t* frame;
+    FILE* f;
+    if (runner->depth >= WASMOS_SCRIPT_NEST_MAX) {
+        return -1;
+    }
+    f = fopen(path, "r");
+    if (!f) {
+        return -1;
+    }
+    frame = &runner->frames[runner->depth];
+    frame->file = f;
+    frame->owns_child = own_child ? 1u : 0u;
+    if (own_child) {
+        wasmos_script_state_init_child(&frame->child, state);
+        frame->state = &frame->child;
+    } else {
+        frame->state = state;
+    }
+    runner->depth++;
+    return 0;
+}
+
+/* Closes the top frame. A `script` frame hands its exit code to the state
+ * below and frees its child state. */
+static void script_pop_frame(wasmos_script_runner_t* runner) {
+    wasmos_script_frame_t* frame = &runner->frames[runner->depth - 1];
+    fclose(frame->file);
+    frame->file = 0;
+    runner->depth--;
+    if (frame->owns_child) {
+        if (runner->depth > 0) {
+            runner->frames[runner->depth - 1].state->last_exit_code = frame->child.last_exit_code;
+        }
+        wasmos_script_state_dispose(&frame->child);
+        frame->owns_child = 0;
+    }
+}
+
+static int script_exec_line(wasmos_script_runner_t* runner, wasmos_script_state_t* state,
                             const char* line) {
+    const wasmos_script_ops_t* ops = runner->ops;
     int executing = (state->exec_depth == state->total_depth);
 
     /* Handle structural keywords regardless of executing state */
@@ -729,6 +786,10 @@ static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_op
             return -1;
         }
         int rc = ops->on_start(ops->user, expanded);
+        if (rc == WASMOS_SCRIPT_HOOK_PENDING) {
+            runner->pending = SCRIPT_PENDING_START;
+            return SCRIPT_LINE_PENDING;
+        }
         if (rc != 0) {
             return -1;
         }
@@ -745,7 +806,10 @@ static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_op
         if (script_expand(state, path, expanded, (int)sizeof(expanded)) != 0) {
             return 0;
         }
-        ops->on_spawn(ops->user, expanded);
+        if (ops->on_spawn(ops->user, expanded) == WASMOS_SCRIPT_HOOK_PENDING) {
+            runner->pending = SCRIPT_PENDING_SPAWN;
+            return SCRIPT_LINE_PENDING;
+        }
         return 0;
     }
 
@@ -783,7 +847,12 @@ static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_op
             }
         }
         int32_t exit_code = 0;
-        ops->on_exec(ops->user, expanded_path, expanded_args[0] ? expanded_args : 0, &exit_code);
+        if (ops->on_exec(
+                ops->user, expanded_path, expanded_args[0] ? expanded_args : 0, &exit_code) ==
+            WASMOS_SCRIPT_HOOK_PENDING) {
+            runner->pending = SCRIPT_PENDING_EXEC;
+            return SCRIPT_LINE_PENDING;
+        }
         state->last_exit_code = exit_code;
         return 0;
     }
@@ -798,7 +867,26 @@ static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_op
         if (script_expand(state, name, expanded, (int)sizeof(expanded)) != 0) {
             return 0;
         }
-        ops->on_wait_svc(ops->user, expanded);
+        if (ops->on_wait_svc(ops->user, expanded) == WASMOS_SCRIPT_HOOK_PENDING) {
+            runner->pending = SCRIPT_PENDING_WAIT_SVC;
+            return SCRIPT_LINE_PENDING;
+        }
+        return 0;
+    }
+
+    if (strncmp(line, "service", 7) == 0 && (line[7] == ' ' || line[7] == '\t')) {
+        const char* spec = &line[8];
+        while (*spec == ' ' || *spec == '\t') {
+            spec++;
+        }
+        char expanded[WASMOS_SCRIPT_LINE_MAX];
+        if (!ops->on_service || script_expand(state, spec, expanded, (int)sizeof(expanded)) != 0) {
+            return 0;
+        }
+        if (ops->on_service(ops->user, expanded) == WASMOS_SCRIPT_HOOK_PENDING) {
+            runner->pending = SCRIPT_PENDING_SERVICE;
+            return SCRIPT_LINE_PENDING;
+        }
         return 0;
     }
 
@@ -854,15 +942,10 @@ static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_op
         if (script_expand(state, path, expanded, (int)sizeof(expanded)) != 0) {
             return -1;
         }
-        wasmos_script_state_t child;
-        wasmos_script_state_init_child(&child, state);
-        if (wasmos_script_run(&child, ops, expanded) != 0) {
-            wasmos_script_state_dispose(&child);
+        if (script_push_frame(runner, state, expanded, 1) != 0) {
             state->last_exit_code = -1;
             return -1;
         }
-        state->last_exit_code = child.last_exit_code;
-        wasmos_script_state_dispose(&child);
         return 0;
     }
 
@@ -876,7 +959,7 @@ static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_op
         if (script_expand(state, path, expanded, (int)sizeof(expanded)) != 0) {
             return -1;
         }
-        if (wasmos_script_run(state, ops, expanded) != 0) {
+        if (script_push_frame(runner, state, expanded, 0) != 0) {
             state->last_exit_code = -1;
             return -1;
         }
@@ -892,7 +975,7 @@ static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_op
         if (script_expand(state, path, expanded, (int)sizeof(expanded)) != 0) {
             return -1;
         }
-        if (wasmos_script_run(state, ops, expanded) != 0) {
+        if (script_push_frame(runner, state, expanded, 0) != 0) {
             state->last_exit_code = -1;
             return -1;
         }
@@ -923,16 +1006,73 @@ static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_op
     return 0;
 }
 
-int wasmos_script_run(wasmos_script_state_t* state, const wasmos_script_ops_t* ops,
-                      const char* path) {
-    FILE* f = fopen(path, "r");
-    if (!f) {
+int wasmos_script_runner_start(wasmos_script_runner_t* runner, wasmos_script_state_t* state,
+                               const wasmos_script_ops_t* ops, const char* path) {
+    if (!runner || !state || !ops || !path) {
         return -1;
     }
+    memset(runner, 0, sizeof(*runner));
+    runner->ops = ops;
+    return script_push_frame(runner, state, path, 0);
+}
+
+void wasmos_script_runner_abort(wasmos_script_runner_t* runner) {
+    if (!runner) {
+        return;
+    }
+    while (runner->depth > 0) {
+        script_pop_frame(runner);
+    }
+    runner->pending = SCRIPT_PENDING_NONE;
+    runner->failed = 0;
+}
+
+void wasmos_script_runner_complete(wasmos_script_runner_t* runner, int32_t rc, int32_t exit_code) {
+    if (!runner || runner->pending == SCRIPT_PENDING_NONE || runner->depth <= 0) {
+        return;
+    }
+    switch (runner->pending) {
+    case SCRIPT_PENDING_START:
+        if (rc != 0) {
+            runner->failed = 1;
+        }
+        break;
+    case SCRIPT_PENDING_EXEC:
+        runner->frames[runner->depth - 1].state->last_exit_code = exit_code;
+        break;
+    default:
+        /* spawn, wait-svc and service results do not affect the script, as in
+         * the synchronous path. */
+        break;
+    }
+    runner->pending = SCRIPT_PENDING_NONE;
+}
+
+/* Reads lines from the top frame until one runs, popping frames that end. A
+ * frame's end is a step of its own (MORE) unless it was the last. */
+int wasmos_script_runner_step(wasmos_script_runner_t* runner) {
     char line[WASMOS_SCRIPT_LINE_MAX];
+    if (!runner) {
+        return WASMOS_SCRIPT_STEP_ERROR;
+    }
+    if (runner->failed) {
+        wasmos_script_runner_abort(runner);
+        return WASMOS_SCRIPT_STEP_ERROR;
+    }
+    if (runner->pending != SCRIPT_PENDING_NONE) {
+        return WASMOS_SCRIPT_STEP_PENDING;
+    }
     for (;;) {
-        if (!fgets(line, (int)sizeof(line), f)) {
-            break;
+        wasmos_script_frame_t* frame;
+        if (runner->depth == 0) {
+            return WASMOS_SCRIPT_STEP_DONE;
+        }
+        frame = &runner->frames[runner->depth - 1];
+        if (!fgets(line, (int)sizeof(line), frame->file)) {
+            /* TODO: an `if` left unclosed at end of file is neither reported nor
+             * reset, so a `source`d script leaks its open depth into the parent. */
+            script_pop_frame(runner);
+            return runner->depth == 0 ? WASMOS_SCRIPT_STEP_DONE : WASMOS_SCRIPT_STEP_MORE;
         }
         /* Trim leading whitespace */
         int start = 0;
@@ -952,16 +1092,33 @@ int wasmos_script_run(wasmos_script_state_t* state, const wasmos_script_ops_t* o
         if (line[start] == '\0' || line[start] == '#') {
             continue;
         }
-        int rc = script_exec_line(state, ops, &line[start]);
+        int rc = script_exec_line(runner, frame->state, &line[start]);
         if (rc == -1) {
-            fclose(f);
+            wasmos_script_runner_abort(runner);
+            return WASMOS_SCRIPT_STEP_ERROR;
+        }
+        return rc == SCRIPT_LINE_PENDING ? WASMOS_SCRIPT_STEP_PENDING : WASMOS_SCRIPT_STEP_MORE;
+    }
+}
+
+int wasmos_script_run(wasmos_script_state_t* state, const wasmos_script_ops_t* ops,
+                      const char* path) {
+    wasmos_script_runner_t runner;
+    if (wasmos_script_runner_start(&runner, state, ops, path) != 0) {
+        return -1;
+    }
+    for (;;) {
+        int step = wasmos_script_runner_step(&runner);
+        if (step == WASMOS_SCRIPT_STEP_DONE) {
+            return 0;
+        }
+        if (step == WASMOS_SCRIPT_STEP_ERROR) {
+            return -1;
+        }
+        if (step == WASMOS_SCRIPT_STEP_PENDING) {
+            /* Nothing on this path can complete a pending command. */
+            wasmos_script_runner_abort(&runner);
             return -1;
         }
     }
-    if (state->total_depth > 0) {
-        /* TODO: an `if` left unclosed at end of file is neither reported nor
-         * reset, so a `source`d script leaks its open depth into the parent. */
-    }
-    fclose(f);
-    return 0;
 }

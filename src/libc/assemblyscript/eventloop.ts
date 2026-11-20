@@ -33,6 +33,11 @@ import {
 } from "./wasmos_imports";
 import {Box, Coroutine, Future, FutureState, Promise, Runtime, Task} from "./coroutine";
 
+/* abi/opcodes.yaml, system band. Spelled out because the AS libc stage holds
+ * no generated opcode file. */
+const WASMOS_IPC_HEALTH_REQ: i32 = 0xff05;
+const WASMOS_IPC_HEALTH_RESP: i32 = 0xff85;
+
 const IPC_FIELD_TYPE: i32 = 0;
 const IPC_FIELD_REQUEST_ID: i32 = 1;
 const IPC_FIELD_ARG0: i32 = 2;
@@ -351,6 +356,22 @@ export class EventLoop {
     }
 
     private dispatch(msg: IpcMessage): void {
+        /* A liveness probe is answered by the loop itself, ahead of the
+         * intents: its request id is the prober's and may equal one of ours.
+         * The answer means this loop is turning; no handler sees the probe. */
+        if (msg.type == WASMOS_IPC_HEALTH_REQ) {
+            ipc_send(
+                msg.source,
+                this.receiverEndpoint,
+                WASMOS_IPC_HEALTH_RESP,
+                msg.requestId,
+                0,
+                0,
+                0,
+                0,
+            );
+            return;
+        }
         for (let i = 0; i < INTENT_MAX; ++i) {
             const intent = unchecked(this.intents[i]);
             if (intent.inUse && intent.requestId == msg.requestId) {

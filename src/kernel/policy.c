@@ -91,7 +91,7 @@ int policy_require(uint32_t context_id, policy_action_t action, uint32_t arg0) {
     serial_write(proc && proc->name ? proc->name : "?");
     serial_write(" — killing process\n");
     if (proc) {
-        process_set_exit_status(proc, -1);
+        process_set_exit(proc, -1, PROC_EXIT_REASON_KILLED);
         process_yield(PROCESS_RUN_EXITED);
     }
     return -1; /* only reached if process could not be killed */

@@ -277,6 +277,110 @@ groups:
       - { symbol: SVC_CLASS_EVENT_ADD, value: 1, doc: "A provider registered under the class." }
       - { symbol: SVC_CLASS_EVENT_REMOVE, value: 2, doc: "A provider unregistered, or its process died and was reaped." }
 
+  - name: svc_name_event
+    doc: |
+      Which existence event SVC_IPC_NAME_EVENT reports, carried in its arg0.
+      The rest of the message: arg1=the subscriber's cookie, arg2=endpoint,
+      arg3=pid.
+
+      BIND only. A name is reported when it becomes bound to an endpoint, which
+      is the one transition a waiting or rebinding client needs. There is no
+      unbind event: the name table never removes an entry (a dead owner's name is
+      reclaimed only when a new owner registers it, which IS a bind), and a
+      client that was talking to the provider already learns of its death from
+      WASMOS_IPC_HANGUP (docs/architecture/09-process-and-ipc.md, "Peer Hangup").
+    constants:
+      - { symbol: SVC_NAME_EVENT_BIND, value: 1, doc: "The name was bound to the endpoint in arg2." }
+
+  - name: proc_status
+    doc: |
+      Liveness of a process as PROC_IPC_STATUS reports it in the reply's arg1.
+      For ZOMBIE the reply also carries the exit status in arg2 and the
+      PROC_EXIT_REASON_* in arg3.
+
+      UNKNOWN covers both "never existed" and "already reaped", which are
+      indistinguishable once the slot is gone. READY is RUNNING plus the
+      process having announced its endpoint live (PROC_IPC_NOTIFY_READY), or,
+      for a wasm process that is not required to announce, having entered its
+      first blocking IPC receive. It says nothing about the process's own
+      dependencies.
+    constants:
+      - { symbol: PROC_STATUS_UNKNOWN, value: 0, doc: "No such process, or already reaped." }
+      - { symbol: PROC_STATUS_RUNNING, value: 1, doc: "Alive and not yet announced ready." }
+      - { symbol: PROC_STATUS_ZOMBIE, value: 2, doc: "Exited; slot held until its status is collected." }
+      - { symbol: PROC_STATUS_READY, value: 3, doc: "Alive and announced ready." }
+
+  - name: spawn_watch_desc
+    doc: |
+      Version and size ceilings of wasmos_spawn_watch_desc_t, the request and
+      reply record of PROC_IPC_SPAWN_WATCHED. The struct is declared in
+      src/drivers/include/wasmos_driver_abi.h; path and args bytes follow it in
+      the caller's buffer at the offsets it names.
+
+      A reader MUST reject a descriptor whose version it does not know.
+    constants:
+      - { symbol: SPAWN_WATCH_DESC_VERSION, value: 2, doc: "Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len)." }
+      - symbol: SPAWN_WATCH_DEPS_MAX
+        value: 16
+        doc: |
+          Dependency records the reply can carry, the same ceiling as a .wap
+          v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off.
+      - symbol: SPAWN_WATCH_DEP_NAME_MAX
+        value: 36
+        doc: |
+          Bytes reserved per dependency name, NUL included: the longest
+          service name is 35 bytes.
+      - { symbol: SPAWN_WATCH_PATH_MAX, value: 255, doc: "Longest path a watched spawn accepts, NUL excluded." }
+      - { symbol: SPAWN_WATCH_ARGS_MAX, value: 255, doc: "Longest argument string a watched spawn accepts, NUL excluded." }
+
+  - name: proc_ready_flags
+    doc: |
+      Flags of PROC_IPC_NOTIFY_READY, in arg1.
+    constants:
+      - symbol: PROC_READY_FLAG_LIVENESS
+        value: 1
+        doc: "arg0 names the sender's event-loop endpoint, which answers WASMOS_IPC_HEALTH_REQ; a supervisor probes it."
+
+  - name: proc_exit_reason
+    doc: |
+      Why a process ended, carried beside its exit status: arg2 of the
+      PROC_IPC_WAIT reply and arg3 of a PROC_IPC_STATUS reply for a ZOMBIE.
+
+      The status alone cannot tell a crash from a deliberate exit: a guest may
+      exit with any value, including the -1 and -11 the kernel uses for its own
+      terminations. The reason is recorded by whoever ends the process, at the
+      point it does so, and a kill overrides an exit the process staged but had
+      not yet completed.
+    constants:
+      - { symbol: PROC_EXIT_REASON_NONE, value: 0, doc: "No exit recorded; the process has not ended." }
+      - symbol: PROC_EXIT_REASON_EXITED
+        value: 1
+        doc: |
+          The process ended itself: an exit call, or its entry returned. The
+          status is the one it chose; 0 is a clean stop.
+      - { symbol: PROC_EXIT_REASON_TRAPPED, value: 2, doc: "The guest trapped or aborted inside its runtime." }
+      - { symbol: PROC_EXIT_REASON_FAULTED, value: 3, doc: "A CPU exception in the process's own code ended it." }
+      - symbol: PROC_EXIT_REASON_KILLED
+        value: 4
+        doc: |
+          Another party ended it: its parent (PROC_IPC_KILL), the process
+          manager cleaning up a failed spawn, or the kernel's permission policy.
+      - symbol: PROC_EXIT_REASON_START_FAILED
+        value: 5
+        doc: |
+          The process never reached its entry: the package did not parse, its
+          start-up state could not be allocated, or its runtime refused it.
+
+  - name: sched_clock
+    doc: |
+      The rate of the scheduler tick that the sched_ticks host call counts. The
+      kernel programs its timer at exactly this rate (src/kernel/kernel.c), and
+      a guest converts a millisecond window to ticks with it, since sched_ticks
+      is the only monotonic clock a guest can read. One tick is 1000/HZ ms, so
+      every tick-based deadline is quantized to that.
+    constants:
+      - { symbol: WASMOS_SCHED_TICK_HZ, value: 250, doc: "Scheduler timer interrupts per second." }
+
   - name: net_socket_family
     doc: |
       Address family of a socket: which layer it addresses and therefore what an
@@ -363,3 +467,80 @@ groups:
       - symbol: NET_IFADDR_FLAG_DHCP
         value: 0x4
         doc: Address is (or is being) assigned by DHCP.
+
+  - name: fsmgr_mount_wait_desc
+    doc: |
+      Version and path ceiling of wasmos_fsmgr_mount_wait_desc_t, the request
+      record of FSMGR_IPC_MOUNT_WAIT_REQ, declared in
+      src/drivers/include/wasmos_driver_abi.h.
+    constants:
+      - { symbol: FSMGR_MOUNT_WAIT_DESC_VERSION, value: 1, doc: "Current wasmos_fsmgr_mount_wait_desc_t layout." }
+      - { symbol: FSMGR_MOUNT_WAIT_PATH_MAX, value: 63, doc: "Longest mount path a wait names, NUL excluded: fs-manager's mount-path ceiling." }
+
+  - name: supervisor_submit_desc
+    doc: |
+      Version and size ceiling of wasmos_supervisor_submit_desc_t, the request
+      record of SUPERVISOR_IPC_SUBMIT_REQ, declared in
+      src/drivers/include/wasmos_driver_abi.h.
+
+      A reader MUST reject a descriptor whose version it does not know.
+    constants:
+      - { symbol: SUPERVISOR_SUBMIT_DESC_VERSION, value: 2, doc: "Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps)." }
+      - symbol: SUPERVISOR_CAPS_MAX
+        value: 64
+        doc: |
+          Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t
+          and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT
+          ranges fit, DMA windows are refused.
+      - { symbol: SUPERVISOR_SPEC_MAX, value: 255, doc: "Longest unit spec a submission carries, NUL excluded." }
+      - { symbol: SUPERVISOR_UNIT_NAME_MAX, value: 35, doc: "Longest unit name (template@instance), NUL excluded: a service name's ceiling." }
+
+  - name: supervisor_unit_desc
+    doc: |
+      Version of wasmos_supervisor_unit_desc_t, the record that names one unit
+      in a request about it (SUPERVISOR_IPC_KILL_REQ), declared in
+      src/drivers/include/wasmos_driver_abi.h.
+
+      A reader MUST reject a descriptor whose version it does not know.
+    constants:
+      - { symbol: SUPERVISOR_UNIT_DESC_VERSION, value: 1, doc: "Current wasmos_supervisor_unit_desc_t layout." }
+
+  - name: supervisor_list_desc
+    doc: |
+      Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a
+      wasmos_supervisor_list_desc_t followed by `capacity`
+      wasmos_supervisor_unit_record_t, both declared in
+      src/drivers/include/wasmos_driver_abi.h.
+
+      A reader MUST reject a descriptor whose version it does not know.
+    constants:
+      - { symbol: SUPERVISOR_LIST_DESC_VERSION, value: 2, doc: "Current wasmos_supervisor_list_desc_t and record layout." }
+      - { symbol: SUPERVISOR_UNITS_MAX, value: 32, doc: "Units the supervisor's table holds: a list sized for this many records is never short." }
+
+  - name: supervisor_unit_state
+    doc: |
+      Where a supervised unit is in its lifecycle, as a
+      wasmos_supervisor_unit_record_t reports it.
+    constants:
+      - { symbol: SUPERVISOR_UNIT_STATE_SPAWN_DUE, value: 1, doc: "Waiting to be spawned: a first start, or a restart's backoff." }
+      - { symbol: SUPERVISOR_UNIT_STATE_SPAWNING, value: 2, doc: "Spawn request in flight; no pid yet." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STARTING, value: 3, doc: "Spawned; READY not yet sent." }
+      - { symbol: SUPERVISOR_UNIT_STATE_RUNNING, value: 4, doc: "READY; not yet up long enough to count as stable." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STABLE, value: 5, doc: "READY and up long enough that its restart backoff was reset." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STOPPING, value: 6, doc: "Killed by the supervisor for missing READY or its liveness probes; its exit is due." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STOPPED, value: 7, doc: "Ended and, by its restart policy, not restarted." }
+      - { symbol: SUPERVISOR_UNIT_STATE_FAILED, value: 8, doc: "Given up on: the restart limit tripped, or a critical unit died." }
+
+  - name: supervisor_restart
+    doc: The restart= policy of a supervised unit.
+    constants:
+      - { symbol: SUPERVISOR_RESTART_NEVER, value: 0, doc: "Never restarted." }
+      - { symbol: SUPERVISOR_RESTART_ON_FAILURE, value: 1, doc: "Restarted unless it exited cleanly with status 0." }
+      - { symbol: SUPERVISOR_RESTART_ALWAYS, value: 2, doc: "Restarted whenever it ends." }
+
+  - name: supervisor_class
+    doc: The class= of a supervised unit, what its death costs the system.
+    constants:
+      - { symbol: SUPERVISOR_CLASS_OPTIONAL, value: 0, doc: "Given up on alone." }
+      - { symbol: SUPERVISOR_CLASS_REQUIRED, value: 1, doc: "Given up on; the system runs degraded." }
+      - { symbol: SUPERVISOR_CLASS_CRITICAL, value: 2, doc: "Never restarted: its first death takes the system down." }

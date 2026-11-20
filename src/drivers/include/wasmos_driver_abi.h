@@ -278,6 +278,19 @@ typedef struct {
     char class_name[WASMOS_SVC_CLASS_MAX]; /* NUL-term; "" = no class */
 } svc_register_desc_t;
 
+/* Name-subscription descriptor for SVC_IPC_SUBSCRIBE_NAME_REQ, written by the
+ * subscriber into its own transfer buffer. (notify_endpoint, cookie) is the
+ * subscription's key and the cookie comes back in every SVC_IPC_NAME_EVENT;
+ * notify_endpoint must belong to the subscriber. Extensible: bump the version
+ * and append fields. */
+#define WASMOS_SVC_NAME_SUBSCRIBE_DESC_VERSION 1u
+typedef struct {
+    uint32_t version;               /* = WASMOS_SVC_NAME_SUBSCRIBE_DESC_VERSION */
+    uint32_t notify_endpoint;       /* where SVC_IPC_NAME_EVENT is delivered */
+    uint32_t cookie;                /* subscriber's tag, echoed in event arg1 */
+    char name[WASMOS_SVC_NAME_MAX]; /* NUL-terminated service name */
+} svc_name_subscribe_desc_t;
+
 /* svc_register_desc_t::flags. Unknown bits are masked off by the process
  * manager rather than refused, so an older kernel accepts a descriptor from a
  * newer service.
@@ -302,12 +315,6 @@ typedef struct {
     uint32_t endpoint;
     uint32_t pid;
 } svc_class_entry_t;
-
-/* Process liveness reported by the process manager. ZOMBIE means the process has
- * exited but its slot is still held so a waiter can collect the exit status;
- * UNKNOWN covers both "never existed" and "already reaped", which are
- * indistinguishable once the slot is gone. */
-enum { PROC_STATUS_UNKNOWN = 0, PROC_STATUS_RUNNING = 1, PROC_STATUS_ZOMBIE = 2 };
 
 /* Virtual class FS backends register under. Class instances must be unique per
  * provider, so backends encode (kind, unit) into the registry instance while
@@ -581,6 +588,135 @@ typedef struct __attribute__((packed)) {
     uint32_t region_count;
     wasmos_region_desc_t regions[WASMOS_MODULE_META_MAX_REGIONS];
 } wasmos_module_meta_desc_t;
+
+/* One [deps] record of a spawned package as PROC_IPC_SPAWN_WATCHED reports it:
+ * strength and kind are WASMOS_APP_DEP_* (src/kernel/include/wasmos_app.h,
+ * docs/architecture/13-runtime-and-packaging.md); name is NUL-terminated
+ * within its field. */
+typedef struct {
+    uint8_t strength;
+    uint8_t kind;
+    uint8_t name_len;
+    uint8_t reserved0;
+    char name[SPAWN_WATCH_DEP_NAME_MAX];
+} wasmos_spawn_watch_dep_t;
+
+/* Request and reply record of PROC_IPC_SPAWN_WATCHED, at the start of the
+ * region the caller names in a transfer buffer it owns. The caller fills the
+ * request fields; the PM fills the reply fields on success and leaves them
+ * untouched on failure. path and args are byte strings in the same region at
+ * the given offsets from the descriptor, not NUL-terminated; args_len 0 means
+ * no arguments.
+ *
+ * notify_endpoint must be an endpoint the caller owns. CHILD_READY and
+ * CHILD_EXITED for this child go there, and nowhere else.
+ *
+ * tty pins a wants_tty child to a text slot, encoded as slot + 1; 0 lets the PM
+ * pick, as PROC_SPAWN_PATH_TTY does.
+ *
+ * caps_len 0 spawns without hardware access. Otherwise caps_off names a
+ * wasmos_spawn_caps_v2_t and its tail arrays in the same region, caps_len bytes
+ * exactly, which the child holds from its first instruction; a descriptor that
+ * does not parse is WASMOS_ERR_PROC_SPAWN_BAD_CAPS and no child. */
+typedef struct {
+    /* request */
+    uint32_t version; /* = SPAWN_WATCH_DESC_VERSION */
+    uint32_t notify_endpoint;
+    uint32_t tty;
+    uint32_t path_off;
+    uint32_t path_len;
+    uint32_t args_off;
+    uint32_t args_len;
+    uint32_t caps_off;
+    uint32_t caps_len;
+    uint32_t reserved0;
+    /* reply */
+    uint32_t pid;
+    uint32_t app_flags;
+    uint32_t dep_count;
+    uint32_t reserved1;
+    wasmos_spawn_watch_dep_t deps[SPAWN_WATCH_DEPS_MAX];
+} wasmos_spawn_watch_desc_t;
+_Static_assert(sizeof(wasmos_spawn_watch_dep_t) == 4u + SPAWN_WATCH_DEP_NAME_MAX,
+               "wasmos_spawn_watch_dep_t is part of the PROC_IPC_SPAWN_WATCHED ABI");
+_Static_assert(sizeof(wasmos_spawn_watch_desc_t) ==
+                   56u + SPAWN_WATCH_DEPS_MAX * sizeof(wasmos_spawn_watch_dep_t),
+               "wasmos_spawn_watch_desc_t is part of the PROC_IPC_SPAWN_WATCHED ABI");
+
+/* FSMGR_IPC_MOUNT_WAIT_REQ request record (abi/opcodes.yaml), in a transfer
+ * buffer the caller owns and lends READ to fs-manager. `path` is the absolute
+ * mount path, NUL-terminated; path_len counts its bytes without the NUL. */
+typedef struct {
+    uint32_t version; /* FSMGR_MOUNT_WAIT_DESC_VERSION */
+    uint32_t path_len;
+    char path[FSMGR_MOUNT_WAIT_PATH_MAX + 1];
+} wasmos_fsmgr_mount_wait_desc_t;
+_Static_assert(sizeof(wasmos_fsmgr_mount_wait_desc_t) == 8u + FSMGR_MOUNT_WAIT_PATH_MAX + 1u,
+               "wasmos_fsmgr_mount_wait_desc_t is part of the FSMGR_IPC_MOUNT_WAIT_REQ ABI");
+
+/* SUPERVISOR_IPC_SUBMIT_REQ request record (abi/opcodes.yaml), in a transfer
+ * buffer the submitter owns and lends READ to the supervisor. `spec` is one
+ * NUL-terminated unit line whose grammar the opcode documents; spec_len counts
+ * its bytes without the NUL.
+ *
+ * caps_len 0 means the unit runs without hardware access. Otherwise `caps`
+ * holds caps_len bytes of wasmos_spawn_caps_v2_t and its I/O ranges, which every
+ * spawn of the unit carries (wasmos_spawn_watch_desc_t). A request for DMA is
+ * refused with WASMOS_ERR_SUPERVISOR_DMA_CAPS. */
+typedef struct {
+    uint32_t version; /* SUPERVISOR_SUBMIT_DESC_VERSION */
+    uint32_t spec_len;
+    char spec[SUPERVISOR_SPEC_MAX + 1];
+    uint32_t caps_len;
+    uint32_t reserved0;
+    uint8_t caps[SUPERVISOR_CAPS_MAX];
+} wasmos_supervisor_submit_desc_t;
+_Static_assert(sizeof(wasmos_supervisor_submit_desc_t) ==
+                   8u + SUPERVISOR_SPEC_MAX + 1u + 8u + SUPERVISOR_CAPS_MAX,
+               "wasmos_supervisor_submit_desc_t is part of the SUPERVISOR_IPC_SUBMIT_REQ ABI");
+
+/* Names one unit in a request about it (SUPERVISOR_IPC_KILL_REQ,
+ * abi/opcodes.yaml), in a transfer buffer the caller owns and lends READ to the
+ * supervisor. `name` is NUL-terminated; name_len counts its bytes without the
+ * NUL. */
+typedef struct {
+    uint32_t version; /* SUPERVISOR_UNIT_DESC_VERSION */
+    uint32_t name_len;
+    char name[SUPERVISOR_UNIT_NAME_MAX + 1];
+} wasmos_supervisor_unit_desc_t;
+_Static_assert(sizeof(wasmos_supervisor_unit_desc_t) == 8u + SUPERVISOR_UNIT_NAME_MAX + 1u,
+               "wasmos_supervisor_unit_desc_t is part of the SUPERVISOR_IPC_KILL_REQ ABI");
+
+/* SUPERVISOR_IPC_LIST_REQ request record (abi/opcodes.yaml), in a transfer
+ * buffer the caller owns and lends READ|WRITE to the supervisor, followed
+ * directly by room for `capacity` wasmos_supervisor_unit_record_t. The caller
+ * fills version and capacity; the supervisor fills total and count. */
+typedef struct {
+    uint32_t version;  /* SUPERVISOR_LIST_DESC_VERSION */
+    uint32_t capacity; /* records the region after this header holds */
+    uint32_t total;    /* reply: units the supervisor holds */
+    uint32_t count;    /* reply: records written, min(total, capacity) */
+} wasmos_supervisor_list_desc_t;
+_Static_assert(sizeof(wasmos_supervisor_list_desc_t) == 16u,
+               "wasmos_supervisor_list_desc_t is part of the SUPERVISOR_IPC_LIST_REQ ABI");
+
+/* One unit as SUPERVISOR_IPC_LIST_REQ reports it. */
+typedef struct {
+    char name[SUPERVISOR_UNIT_NAME_MAX + 1]; /* NUL-terminated */
+    uint32_t state;                          /* SUPERVISOR_UNIT_STATE_* */
+    uint32_t restart;                        /* SUPERVISOR_RESTART_* */
+    uint32_t cls;                            /* SUPERVISOR_CLASS_* */
+    uint32_t tty;                            /* pinned text slot + 1; 0 when unpinned */
+    uint32_t pid;                            /* the running instance; 0 when none */
+    uint32_t restart_count;                  /* restarts over the unit's lifetime */
+    uint32_t last_reason;                    /* PROC_EXIT_REASON_* of the last end; 0 before one */
+    int32_t last_status;                     /* exit status of the last end, or a spawn's error */
+    uint32_t probe_interval_ms; /* liveness probe period of the running instance; 0 = not probed */
+    uint32_t probes_answered;   /* liveness probes the running instance answered */
+    uint32_t probe_misses;      /* liveness probes missed in a row */
+} wasmos_supervisor_unit_record_t;
+_Static_assert(sizeof(wasmos_supervisor_unit_record_t) == SUPERVISOR_UNIT_NAME_MAX + 1u + 44u,
+               "wasmos_supervisor_unit_record_t is part of the SUPERVISOR_IPC_LIST_REQ ABI");
 
 /* --- PCI device descriptor -------------------------------------------------
  *
@@ -999,11 +1135,14 @@ typedef struct __attribute__((packed)) {
  * (io_range_count and dma.window_count), or the computed size will not describe
  * the actual layout. Both arguments are evaluated more than once only through
  * casts, so passing an expression with side effects is safe here, but the macro
- * is otherwise unparenthesised in the usual way -- pass simple values. */
+ * is otherwise unparenthesised in the usual way -- pass simple values. The
+ * result is a uint32_t, as every length field it is compared with is. */
 #define WASMOS_SPAWN_CAPS_V2_SIZE(io_range_count, window_count)                                    \
-    (sizeof(wasmos_spawn_caps_v2_t) +                                                              \
+    ((uint32_t)sizeof(wasmos_spawn_caps_v2_t) +                                                    \
      ((uint32_t)(io_range_count) * (uint32_t)sizeof(wasmos_io_range_t)) +                          \
      ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
+_Static_assert(WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_IO_RANGE_LIMIT, 0) <= SUPERVISOR_CAPS_MAX,
+               "a submission's caps must fit every I/O range a driver may declare");
 
 /* Stable indices naming the fields of an IPC message, for code that addresses
  * them positionally rather than by struct member. The order is NOT the struct's

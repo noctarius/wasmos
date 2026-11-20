@@ -907,6 +907,9 @@ static void process_reset_slot(process_t* proc) {
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
     proc->exit_status = 0;
+    proc->exit_reason = PROC_EXIT_REASON_NONE;
+    proc->watch_ready = 0;
+    proc->watch_exit = 0;
     proc->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     proc->ticks_remaining = 0;
     proc->ticks_total = 0;
@@ -1123,11 +1126,30 @@ static void process_wake_waiters(uint32_t target_pid) {
     }
 }
 
-static void process_mark_exited(process_t* proc, int32_t exit_status) {
+/* A critical process ended: nobody is left to act on it, so the kernel stops
+ * here, before the exit is published. The line names the process and how it
+ * ended; the panic carries the pid and the PROC_EXIT_REASON_*. */
+__attribute__((noreturn)) static void process_critical_ended(const process_t* proc) {
+    klog_printf("[kernel] critical process %s (pid %u) ended (reason %u, status %d)\n",
+                proc->name ? proc->name : "?",
+                (unsigned)proc->pid,
+                (unsigned)proc->exit_reason,
+                (int)proc->exit_status);
+    kpanic("critical_process_ended", proc->pid, proc->exit_reason);
+}
+
+/* A reason of PROC_EXIT_REASON_NONE is recorded as EXITED: an exit path that
+ * staged nothing is a process ending on its own. */
+static void process_mark_exited(process_t* proc, int32_t exit_status, uint32_t reason) {
     if (!proc || proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_DEAD) {
         return;
     }
     proc->exit_status = exit_status;
+    proc->exit_reason =
+        (uint8_t)(reason == PROC_EXIT_REASON_NONE ? PROC_EXIT_REASON_EXITED : reason);
+    if (proc->critical) {
+        process_critical_ended(proc);
+    }
     __atomic_store_n(&proc->exiting, 1u, __ATOMIC_RELEASE);
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
@@ -1282,12 +1304,23 @@ static void process_reap(process_t* proc) {
                                              proc->stack_pages);
         pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
     }
+    /* The spawner learns of the exit here, beside the hangups the context owes,
+     * with the same delivery guarantee. A READY still held was never earned. */
+    ipc_owed_cancel(__atomic_exchange_n(&proc->watch_ready, NULL, __ATOMIC_ACQ_REL));
+    ipc_owed_post(__atomic_exchange_n(&proc->watch_exit, NULL, __ATOMIC_ACQ_REL),
+                  proc->pid,
+                  (uint32_t)proc->exit_status,
+                  proc->exit_reason,
+                  0);
     if (proc->context_id != 0) {
         wasmos_subsystem_registry_drop_owner(proc->context_id);
         irq_release_context(proc->context_id);
         msi_release_context(proc->context_id);
         ipc_endpoints_release_owner(proc->context_id);
         native_driver_release_owner(proc->context_id);
+        /* Before the buffers go: the kernel writes into the console ring by
+         * physical address, and the ring is one of them. */
+        klog_release_ring(proc->context_id);
         xfer_buffer_drop_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);
     }
@@ -1487,6 +1520,11 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     process_t* parent = process_find_by_pid(parent_pid);
     slot->ctty = parent ? parent->ctty : 0;
     slot->exit_status = 0;
+    slot->exit_reason = PROC_EXIT_REASON_NONE;
+    slot->watch_ready = 0;
+    slot->watch_exit = 0;
+    slot->critical = 0;
+    slot->live_endpoint = IPC_ENDPOINT_NONE;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -1692,6 +1730,11 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->wait_target_pid = 0;
     slot->ctty = 0;
     slot->exit_status = 0;
+    slot->exit_reason = PROC_EXIT_REASON_NONE;
+    slot->watch_ready = 0;
+    slot->watch_exit = 0;
+    slot->critical = 0;
+    slot->live_endpoint = IPC_ENDPOINT_NONE;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -2040,15 +2083,33 @@ uint32_t process_current_ctty(void) {
     return process ? (uint32_t)process->ctty : 0u;
 }
 
-/* Stages the status a process will exit with.  Records it only — the process
- * keeps running, and the exit paths (process_mark_exited, the EXITED branch of
- * the dispatch loop) read it back when the timeslice ends.  This is how a
- * ring-3 exit syscall communicates its status before yielding EXITED. */
-void process_set_exit_status(process_t* process, int32_t exit_status) {
+void process_set_critical(uint32_t pid) {
+    process_t* proc = process_get(pid);
+    if (!proc) {
+        klog_printf("[kernel] critical process pid %u ended before it was marked\n", (unsigned)pid);
+        kpanic("critical_process_ended", pid, 0);
+    }
+    proc->critical = 1;
+    if (__atomic_load_n(&proc->exiting, __ATOMIC_ACQUIRE) != 0u) {
+        process_critical_ended(proc);
+    }
+}
+
+/* Stages the status and reason a process will exit with.  Records them only —
+ * the process keeps running, and the exit paths (process_mark_exited, the EXITED
+ * branch of the dispatch loop) read them back when the timeslice ends.  This is
+ * how an exit host call, a trap or a fault handler communicates why before
+ * yielding EXITED. */
+void process_set_exit(process_t* process, int32_t exit_status, uint32_t reason) {
     if (!process) {
         return;
     }
     process->exit_status = exit_status;
+    process->exit_reason = (uint8_t)reason;
+}
+
+void process_set_exit_status(process_t* process, int32_t exit_status) {
+    process_set_exit(process, exit_status, PROC_EXIT_REASON_EXITED);
 }
 
 /* Switches out of the running thread and back into this CPU's scheduler context,
@@ -2105,8 +2166,10 @@ void process_block_on_ipc(process_t* process) {
 
 /* Latches the "child has announced itself" flag the sync-spawn poll waits on.
  * A latch, not an event: setting it twice is harmless and it is never cleared
- * for the life of the slot.  Does not wake or unblock anything by itself —
- * pm_poll_sync_spawn observes it on its next PM dispatch.
+ * for the life of the slot.  pm_poll_sync_spawn observes it on its next PM
+ * dispatch.  The one message it sends is the spawner's PROC_IPC_CHILD_READY for
+ * a watched child, on the first latch only: one targeted send to one endpoint,
+ * carrying live_endpoint, so a caller that records one sets it first.
  *
  * Deliberately does NOT broadcast. A waiter for "some named service is up" would
  * be woken by one, and that was tried: it puts cross-CPU wake traffic on a path
@@ -2119,6 +2182,26 @@ void process_notify_ready(process_t* process) {
         return;
     }
     process->ready = 1;
+    /* A process already exiting has not earned READY; its watch_ready is
+     * cancelled at reap instead. */
+    if (__atomic_load_n(&process->exiting, __ATOMIC_ACQUIRE)) {
+        return;
+    }
+    ipc_owed_post(__atomic_exchange_n(&process->watch_ready, NULL, __ATOMIC_ACQ_REL),
+                  process->pid,
+                  process->live_endpoint,
+                  0,
+                  0);
+}
+
+int process_set_watch(uint32_t pid, struct ipc_owed* on_ready, struct ipc_owed* on_exit) {
+    process_t* proc = process_find_by_pid(pid);
+    if (!proc || proc->state == PROCESS_STATE_UNUSED || proc->watch_ready || proc->watch_exit) {
+        return -1;
+    }
+    proc->watch_ready = on_ready;
+    proc->watch_exit = on_exit;
+    return 0;
 }
 
 /* One step of a parent's wait for `target_pid`.  Tri-state, and the caller loops
@@ -2259,20 +2342,24 @@ int process_thread_detach(process_t* process, uint32_t target_tid) {
  * child they did not spawn.  Asynchronous: the target is not off-CPU on return,
  * a thread of it may still be finishing a timeslice on another CPU. */
 int process_kill(uint32_t pid, int32_t exit_status) {
+    return process_kill_for(cpu_local()->current_pid, pid, exit_status);
+}
+
+int process_kill_for(uint32_t requester_pid, uint32_t pid, int32_t exit_status) {
     process_t* target = process_find_by_pid(pid);
     if (!target) {
         return -1;
     }
-    if (pid == cpu_local()->current_pid) {
+    if (pid == cpu_local()->current_pid || pid == requester_pid) {
         return -1;
     }
-    if (cpu_local()->current_pid != 0 && target->parent_pid != cpu_local()->current_pid) {
+    if (requester_pid != 0 && target->parent_pid != requester_pid) {
         return -1;
     }
     if (target->state == PROCESS_STATE_ZOMBIE) {
         return 0;
     }
-    process_mark_exited(target, exit_status);
+    process_mark_exited(target, exit_status, PROC_EXIT_REASON_KILLED);
     process_try_auto_reap(target);
     return 0;
 }
@@ -2306,14 +2393,20 @@ int process_set_auto_reap(uint32_t pid, uint8_t enabled) {
  * Non-destructive: the zombie is left for a wait or a reap to collect, so this
  * can be polled. */
 int process_get_exit_status(uint32_t pid, int32_t* out_exit_status) {
+    uint32_t reason = 0;
+    return process_get_exit_info(pid, out_exit_status, &reason);
+}
+
+int process_get_exit_info(uint32_t pid, int32_t* out_exit_status, uint32_t* out_reason) {
     process_t* proc = process_find_by_pid(pid);
-    if (!proc || !out_exit_status) {
+    if (!proc || !out_exit_status || !out_reason) {
         return -1;
     }
     if (proc->state != PROCESS_STATE_ZOMBIE) {
         return 1;
     }
     *out_exit_status = proc->exit_status;
+    *out_reason = proc->exit_reason;
     return 0;
 }
 
@@ -2824,7 +2917,7 @@ static int process_schedule_once_impl(void) {
                 }
             }
         } else {
-            process_mark_exited(proc, proc->exit_status);
+            process_mark_exited(proc, proc->exit_status, proc->exit_reason);
         }
         if (reap_detached) {
             /* Deferred to dispatch_done: exited_tid is the thread this dispatch
@@ -2843,7 +2936,7 @@ static int process_schedule_once_impl(void) {
         reap_detached = thread->detached;
         process_count_dec(&proc->live_thread_count);
         if (__atomic_load_n(&proc->live_thread_count, __ATOMIC_ACQUIRE) == 0) {
-            process_mark_exited(proc, proc->exit_status);
+            process_mark_exited(proc, proc->exit_status, proc->exit_reason);
         } else {
             next = process_first_owner_ready_thread(proc);
             if (next) {

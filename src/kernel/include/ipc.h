@@ -269,6 +269,27 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id);
  * state the hangup would have released. */
 int ipc_context_watch(uint32_t context_id, uint32_t destination);
 
+/* A kernel message reserved for one destination and delivered later with the
+ * hangup guarantee: never refused by a full queue, never lost for want of
+ * memory, and queued behind everything sent before it. The child lifecycle
+ * events of a watched spawn (PROC_IPC_CHILD_READY / _EXITED) travel this way. */
+typedef struct ipc_owed ipc_owed_t;
+/* Reserve a message of `type` from `source` to `destination`, recording the
+ * context that owns `destination` now; delivery is dropped if it later belongs
+ * to anyone else. `source` is not checked: the caller is kernel code naming an
+ * endpoint it speaks for. *out_owed is NULL on every refusal. Returns IPC_OK
+ * with *out_owed set, IPC_ERR_INVALID,
+ * IPC_ERR_NOENT or IPC_ERR_UNSUPPORTED for a destination that is not a live
+ * message endpoint, or IPC_ERR_FULL when the record cannot be allocated.
+ * Kernel-internal. */
+int ipc_owed_reserve(uint32_t destination, uint32_t source, uint32_t type, ipc_owed_t** out_owed);
+/* Deliver a reserved message with these arguments and give up the record. Cannot
+ * fail; a destination that is gone or changed owner drops it. Call with no IPC
+ * lock held. A NULL record is ignored. */
+void ipc_owed_post(ipc_owed_t* owed, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3);
+/* Give up a reserved message without delivering it. A NULL record is ignored. */
+void ipc_owed_cancel(ipc_owed_t* owed);
+
 /*
  * Select-set API — multi-endpoint blocking wait.
  *

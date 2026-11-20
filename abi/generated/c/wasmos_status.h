@@ -56,6 +56,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
     WASMOS_ERR_DOMAIN_DEVMGR = 10, /* device-manager query failures */
     WASMOS_ERR_DOMAIN_VIRTIO_BLK = 24, /* virtio-blk block-device server failures. Distinct from `block`, which describes the staging buffer a transfer moves through: these describe the device and the request, and are what a BLOCK_IPC_ERROR reply carries in arg0. */
     WASMOS_ERR_DOMAIN_BLOCK_DEV = 25, /* Block-device SERVER failures, as a BLOCK_IPC_ERROR reply's arg0. Distinct from `block`, which describes the staging buffer a transfer moves through, and shared by every backend rather than per-driver: a client that reaches a disk through the `block` class should read one vocabulary whichever driver answers it. */
+    WASMOS_ERR_DOMAIN_SUPERVISOR = 26, /* Supervisor refusals of a request, as a SUPERVISOR_IPC_ERROR reply's arg0. A refused submission recorded no unit and spawned nothing; a refused kill killed nothing. */
 };
 
 /* A domain error is the negative of (domain << 16) | local_code. */
@@ -79,6 +80,11 @@ enum {
     WASMOS_ERR_PROC_SPAWN_BROKER_IPC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 9), /* broker plan IPC transport/reply failed */
     WASMOS_ERR_PROC_SPAWN_BROKER_PLAN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 10), /* broker replied with malformed/unsupported plan */
     WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 11), /* valid broker plan returned; PM launch step deferred */
+    WASMOS_ERR_PROC_SPAWN_BAD_DESC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 12), /* a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names */
+    WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 13), /* the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child */
+    WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 14), /* the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch */
+    WASMOS_ERR_PROC_SPAWN_BAD_CAPS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 15), /* the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created */
+    WASMOS_ERR_PROC_SPAWN_CAPS_APPLY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 16), /* the kernel refused the parsed capability profile for the new child, which was killed before it ran */
     WASMOS_ERR_PROC_PM_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 1), /* PM already has an incompatible in-flight operation */
     WASMOS_ERR_PROC_PM_BAD_ENDPOINT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 2), /* source endpoint owner lookup failed */
     WASMOS_ERR_PROC_PM_NO_CALLER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 3), /* source endpoint owner has no live process */
@@ -108,6 +114,13 @@ enum {
     WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 27), /* that service name is held by another live process */
     WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 28), /* that (class, instance) is held by another live process */
     WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 29), /* the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on */
+    WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 30), /* the service-subscription table could not grow to hold another subscription */
+    WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 31), /* a name-subscription descriptor was short, of an unknown version, or named no service */
+    WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 32), /* no provider bound the awaited service name within the caller's window */
+    WASMOS_ERR_PROC_PM_SVC_WATCH_SEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 33), /* a service watch could not send its request to the process manager */
+    WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 34), /* a service watch could not acquire or fill the transfer buffer for its subscription descriptor */
+    WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 35), /* the process manager answered a service-watch request with neither its response nor a packed error */
+    WASMOS_ERR_PROC_PM_KILL_NOT_CHILD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 36), /* the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself */
     WASMOS_ERR_LINMEM_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 1), /* no free page-aligned window fits in linear memory */
     WASMOS_ERR_LINMEM_MAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 2), /* paging/linear-memory mapping step failed */
     WASMOS_ERR_LINMEM_NO_BASE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 3), /* the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it */
@@ -305,6 +318,13 @@ enum {
     WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 9), /* a block record is short, unterminated, or names a length outside the transfer buffer */
     WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 10), /* the device has no descriptor to report, so it cannot be identified */
     WASMOS_ERR_BLOCK_DEV_QUEUE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 11), /* a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it */
+    WASMOS_ERR_SUPERVISOR_BAD_DESC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 1), /* the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor */
+    WASMOS_ERR_SUPERVISOR_BAD_SPEC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 2), /* the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option */
+    WASMOS_ERR_SUPERVISOR_EXISTS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 3), /* a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed */
+    WASMOS_ERR_SUPERVISOR_NO_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 4), /* the supervisor's unit table is full */
+    WASMOS_ERR_SUPERVISOR_DMA_CAPS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 5), /* the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit */
+    WASMOS_ERR_SUPERVISOR_NO_UNIT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 6), /* no unit of the name the request gives is recorded */
+    WASMOS_ERR_SUPERVISOR_NOT_RUNNING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 7), /* the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -371,6 +391,7 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
     case WASMOS_ERR_DOMAIN_VIRTIO_BLK: return "virtio_blk";
     case WASMOS_ERR_DOMAIN_BLOCK_DEV: return "block_dev";
+    case WASMOS_ERR_DOMAIN_SUPERVISOR: return "supervisor";
     default: return "unknown";
     }
 }
@@ -390,6 +411,11 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_SPAWN_BROKER_IPC: return "proc_spawn.BROKER_IPC";
     case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: return "proc_spawn.BROKER_PLAN";
     case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: return "proc_spawn.BROKER_DEFERRED";
+    case WASMOS_ERR_PROC_SPAWN_BAD_DESC: return "proc_spawn.BAD_DESC";
+    case WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: return "proc_spawn.NOTIFY_NOT_OWNED";
+    case WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: return "proc_spawn.WATCH_NO_SPACE";
+    case WASMOS_ERR_PROC_SPAWN_BAD_CAPS: return "proc_spawn.BAD_CAPS";
+    case WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: return "proc_spawn.CAPS_APPLY";
     case WASMOS_ERR_PROC_PM_BUSY: return "proc_pm.BUSY";
     case WASMOS_ERR_PROC_PM_BAD_ENDPOINT: return "proc_pm.BAD_ENDPOINT";
     case WASMOS_ERR_PROC_PM_NO_CALLER: return "proc_pm.NO_CALLER";
@@ -419,6 +445,13 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "proc_pm.SVC_NAME_TAKEN";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "proc_pm.SVC_CLASS_TAKEN";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: return "proc_pm.SVC_CLASS_NOT_OWNED";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE: return "proc_pm.SVC_SUB_NO_SPACE";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC: return "proc_pm.SVC_SUB_BAD_DESC";
+    case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT: return "proc_pm.SVC_AWAIT_TIMEOUT";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_SEND: return "proc_pm.SVC_WATCH_SEND";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: return "proc_pm.SVC_WATCH_NO_BUFFER";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: return "proc_pm.SVC_WATCH_BAD_REPLY";
+    case WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: return "proc_pm.KILL_NOT_CHILD";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "linmem.NO_WINDOW";
     case WASMOS_ERR_LINMEM_MAP: return "linmem.MAP";
     case WASMOS_ERR_LINMEM_NO_BASE: return "linmem.NO_BASE";
@@ -616,6 +649,13 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "block_dev.DESCRIPTOR_MALFORMED";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "block_dev.NO_DESCRIPTOR";
     case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "block_dev.QUEUE_FULL";
+    case WASMOS_ERR_SUPERVISOR_BAD_DESC: return "supervisor.BAD_DESC";
+    case WASMOS_ERR_SUPERVISOR_BAD_SPEC: return "supervisor.BAD_SPEC";
+    case WASMOS_ERR_SUPERVISOR_EXISTS: return "supervisor.EXISTS";
+    case WASMOS_ERR_SUPERVISOR_NO_SPACE: return "supervisor.NO_SPACE";
+    case WASMOS_ERR_SUPERVISOR_DMA_CAPS: return "supervisor.DMA_CAPS";
+    case WASMOS_ERR_SUPERVISOR_NO_UNIT: return "supervisor.NO_UNIT";
+    case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "supervisor.NOT_RUNNING";
     default: return "unknown";
     }
 }
@@ -635,6 +675,11 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_SPAWN_BROKER_IPC: return "broker plan IPC transport/reply failed";
     case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: return "broker replied with malformed/unsupported plan";
     case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: return "valid broker plan returned; PM launch step deferred";
+    case WASMOS_ERR_PROC_SPAWN_BAD_DESC: return "a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names";
+    case WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: return "the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child";
+    case WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: return "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch";
+    case WASMOS_ERR_PROC_SPAWN_BAD_CAPS: return "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created";
+    case WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: return "the kernel refused the parsed capability profile for the new child, which was killed before it ran";
     case WASMOS_ERR_PROC_PM_BUSY: return "PM already has an incompatible in-flight operation";
     case WASMOS_ERR_PROC_PM_BAD_ENDPOINT: return "source endpoint owner lookup failed";
     case WASMOS_ERR_PROC_PM_NO_CALLER: return "source endpoint owner has no live process";
@@ -664,6 +709,13 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "that service name is held by another live process";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "that (class, instance) is held by another live process";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: return "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE: return "the service-subscription table could not grow to hold another subscription";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC: return "a name-subscription descriptor was short, of an unknown version, or named no service";
+    case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT: return "no provider bound the awaited service name within the caller's window";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_SEND: return "a service watch could not send its request to the process manager";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: return "a service watch could not acquire or fill the transfer buffer for its subscription descriptor";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: return "the process manager answered a service-watch request with neither its response nor a packed error";
+    case WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: return "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";
@@ -861,6 +913,13 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "a block record is short, unterminated, or names a length outside the transfer buffer";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "the device has no descriptor to report, so it cannot be identified";
     case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it";
+    case WASMOS_ERR_SUPERVISOR_BAD_DESC: return "the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor";
+    case WASMOS_ERR_SUPERVISOR_BAD_SPEC: return "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option";
+    case WASMOS_ERR_SUPERVISOR_EXISTS: return "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed";
+    case WASMOS_ERR_SUPERVISOR_NO_SPACE: return "the supervisor's unit table is full";
+    case WASMOS_ERR_SUPERVISOR_DMA_CAPS: return "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit";
+    case WASMOS_ERR_SUPERVISOR_NO_UNIT: return "no unit of the name the request gives is recorded";
+    case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed";
     default: return "unknown error";
     }
 }

@@ -151,6 +151,47 @@ static void test_acpi_rule_without_io_matches_any_instance(void) {
     assert(!dm_acpi_rule_matches(&state.acpi_match_rules[0], &uart));
 }
 
+/* ENV{RESTART} hands the driver to the supervisor under that restart policy;
+ * without it the device manager spawns the driver itself. An unknown policy
+ * rejects the line rather than spawning the driver unsupervised. */
+static void test_acpi_rule_env_restart_names_a_policy(void) {
+    device_manager_state_t state;
+    const char* rules = "SUBSYSTEM==\"acpi\", ATTR{class}==\"0x08\", ATTR{subclass}==\"0x03\", "
+                        "ENV{RESTART}=\"on-failure\", RUN+=\"system/drivers/rtc.wap\"\n"
+                        "SUBSYSTEM==\"acpi\", ATTR{class}==\"0x09\", ATTR{subclass}==\"0x00\", "
+                        "RUN+=\"system/drivers/keyboard.wap\"\n"
+                        "SUBSYSTEM==\"acpi\", ATTR{class}==\"0x09\", ATTR{subclass}==\"0x02\", "
+                        "ENV{RESTART}=\"sometimes\", RUN+=\"system/drivers/mouse.wap\"\n";
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_acpi_match(&state, rules);
+    assert(state.acpi_match_rule_count == 2u);
+    assert(strcmp(state.acpi_match_rules[0].restart, "on-failure") == 0);
+    assert(state.acpi_match_rules[1].restart[0] == '\0');
+    assert(strcmp(state.acpi_match_rules[1].spawn_path, "system/drivers/keyboard.wap") == 0);
+}
+
+/* A RESTART value that cannot be extracted at all -- longer than any policy
+ * name, or unquoted -- rejects the line too, not only a well-formed unknown one.
+ *
+ * Regression: 2026-11-19-env-restart-unextractable-accepted -- the parser
+ * matched ENV{RESTART} only through a successful extraction, so a value that
+ * overflowed the 12-byte field ("on-failure-typo") or lacked its quotes made
+ * the token fall through as unrecognised and the rule loaded with no policy:
+ * the driver a rule asked to supervise was spawned unsupervised, silently. */
+static void test_acpi_rule_env_restart_unextractable_rejects_the_line(void) {
+    device_manager_state_t state;
+    const char* rules = "SUBSYSTEM==\"acpi\", ATTR{class}==\"0x08\", ATTR{subclass}==\"0x03\", "
+                        "ENV{RESTART}=\"on-failure-typo\", RUN+=\"system/drivers/rtc.wap\"\n"
+                        "SUBSYSTEM==\"acpi\", ATTR{class}==\"0x09\", ATTR{subclass}==\"0x02\", "
+                        "ENV{RESTART}=always, RUN+=\"system/drivers/mouse.wap\"\n"
+                        "SUBSYSTEM==\"acpi\", ATTR{class}==\"0x09\", ATTR{subclass}==\"0x00\", "
+                        "RUN+=\"system/drivers/keyboard.wap\"\n";
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_acpi_match(&state, rules);
+    assert(state.acpi_match_rule_count == 1u);
+    assert(strcmp(state.acpi_match_rules[0].spawn_path, "system/drivers/keyboard.wap") == 0);
+}
+
 /* ENV{FSTYPE} names a filesystem TYPE for fs-manager to mount, in place of the
  * RUN+= module the device manager would spawn itself. The two are alternatives:
  * a mount rule carries no spawn path at all, which is what keeps `which module
@@ -227,6 +268,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_legacy_rule_is_rejected),
         WASMOS_TEST_CASE(test_acpi_rule_io_attr_selects_one_uart),
         WASMOS_TEST_CASE(test_acpi_rule_without_io_matches_any_instance),
+        WASMOS_TEST_CASE(test_acpi_rule_env_restart_names_a_policy),
+        WASMOS_TEST_CASE(test_acpi_rule_env_restart_unextractable_rejects_the_line),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_device_manager_rules: ok\n");

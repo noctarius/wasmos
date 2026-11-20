@@ -72,6 +72,23 @@ static uint32_t g_active_tty = VT_KLOG_TTY;
 static uint32_t g_serial_tty = VT_KLOG_TTY;
 static int32_t g_serial_in_ep = -1;
 static int32_t g_fs_ep = -1;
+
+/* The vt's one receive pump: a libsys event loop on g_vt_ep. Replies to the
+ * vt's own requests are loop intents, and the four peers it depends on are
+ * service-name watches (fb, kbd, sin, fs.vfs) that report each peer when it
+ * registers and again when a restarted one registers anew. Everything else is
+ * client traffic, handled by vt_on_message as the loop's default.
+ *
+ * Intent request ids start at VT_LOOP_REQ_BASE because clients' requests share
+ * this endpoint and are matched against pending intents first; the base keeps
+ * the two id spaces apart. */
+#define VT_LOOP_REQ_BASE 0x7E000000
+static wasmos_sys_event_loop_t g_loop;
+static wasmos_sys_svc_watch_set_t g_watches;
+static wasmos_sys_svc_watch_t g_watch_fb;
+static wasmos_sys_svc_watch_t g_watch_kbd;
+static wasmos_sys_svc_watch_t g_watch_sin;
+static wasmos_sys_svc_watch_t g_watch_fs;
 static int32_t g_tty_reader_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
 static int32_t g_tty_writer_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
 static uint32_t g_switch_generation = 1;
@@ -92,9 +109,9 @@ static int32_t g_alloc_failure = 0;
 /* Console ring: the VT owns an SPSC ring overlaid on an xfer buffer, and the
  * kernel publishes into it, as slot-tagged records, both the kernel log
  * (VT_CONSOLE_SLOT_KLOG, drained into VT_KLOG_TTY) and every process's console
- * output (tagged with its controlling slot).  The main loop drains after each
- * blocking wasmos_ipc_select_one, and the kernel's VT_IPC_KLOG_NOTIFY doorbell is
- * one such wake, so pending output is drained even when nothing else happens.
+ * output (tagged with its controlling slot).  The main loop drains after every
+ * wake of the event loop, and the kernel's VT_IPC_KLOG_NOTIFY doorbell is one
+ * such wake, so pending output is drained even when nothing else happens.
  *
  * Registering the ring also hands COM1 to the VT: the kernel stops transmitting
  * what it publishes, and the VT writes the serial-bound slot's output stream
@@ -124,6 +141,7 @@ static uint32_t g_serial_out_len = 0;
 #define VT_BLIT_MAX_CELLS ((uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS)
 static fbtext_blit_cell_t* g_blit_grid = 0; /* VT-side mapped write pointer */
 static int32_t g_blit_ready = 0;
+static int32_t g_blit_bid = -1; /* the buffer behind g_blit_grid, -1 when none */
 _Static_assert(sizeof(fbtext_blit_cell_t) == sizeof(vt_cell_t),
                "blit cell must match vt_cell_t so the grid copies without conversion");
 
@@ -207,14 +225,12 @@ static void vt_reset_tty_cells(void) {
     }
 }
 
-/* Allocate one cell grid per TTY from the bump heap; sets cells pointer. */
+/* Allocate one cell grid per TTY from the bump heap; sets cells pointer. Each is
+ * sized for the MAXIMUM geometry, because the framebuffer may report its real
+ * one only after the vt is serving -- it can come up later, or restart -- and the
+ * bump heap cannot reallocate; vt_regrid then only changes the stride. */
 static int vt_alloc_tty_cells(void) {
-    uint32_t cells = vt_cell_capacity();
-    if (cells == 0u || cells > (uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS) {
-        g_alloc_failure = VT_ALLOC_FAIL_CAPACITY;
-        return -1;
-    }
-    uint32_t bytes = cells * (uint32_t)sizeof(vt_cell_t);
+    uint32_t bytes = (uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS * (uint32_t)sizeof(vt_cell_t);
     for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
         vt_cell_t* buf = (vt_cell_t*)vt_alloc(bytes, 8u);
         if (!buf) {
@@ -369,41 +385,53 @@ static int vt_ipc_reply_retry(int32_t reply_endpoint, int32_t type, int32_t requ
     }
 }
 
-static void vt_query_geometry(void) {
-    if (g_fb_ep < 0 || g_vt_ep < 0) {
+/* Re-lay every slot's grid out for a new geometry, in place. The grids are
+ * allocated at VT_MAX_COLS x VT_MAX_ROWS capacity, so only the row stride
+ * changes: the top-left min(rows) x min(cols) of each slot is kept, the rest is
+ * blank, and cursors are clamped. A narrower stride copies forward (every
+ * destination index is at or below its source), a wider one backward (at or
+ * above), so no cell is overwritten before it is read. */
+static void vt_regrid(uint16_t cols, uint16_t rows) {
+    uint16_t old_cols = g_vt_cols;
+    uint16_t keep_rows = rows < g_vt_rows ? rows : g_vt_rows;
+    uint16_t keep_cols = cols < old_cols ? cols : old_cols;
+    vt_cell_t blank = {.ch = 0u, .fg = 15u, .bg = 0u, .attr = 0u, ._pad = 0u};
+
+    if (cols == g_vt_cols && rows == g_vt_rows) {
         return;
     }
-    int32_t req_id = 0x5647; /* fixed local request id */
-    if (wasmos_ipc_send(g_fb_ep, g_vt_ep, FBTEXT_IPC_GEOMETRY_REQ, req_id, 0, 0, 0, 0) != 0) {
-        return;
-    }
-    for (int tries = 0; tries < VT_GEOMETRY_QUERY_RETRIES; ++tries) {
-        int32_t rc = wasmos_ipc_drain(g_vt_ep);
-        if (rc < 0) {
-            return;
-        }
-        if (rc == 0) {
-            (void)wasmos_sched_yield();
+    for (uint32_t t = 0; t < VT_MAX_TTYS; ++t) {
+        vt_tty_t* tty = &g_ttys[t];
+        vt_cell_t* cells = tty->cells;
+        if (!cells) {
             continue;
         }
-        int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t rid = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        if (rid != req_id) {
-            continue;
+        if (cols <= old_cols) {
+            for (uint32_t r = 0; r < keep_rows; ++r) {
+                for (uint32_t c = 0; c < cols; ++c) {
+                    cells[r * cols + c] = cells[r * old_cols + c];
+                }
+            }
+        } else {
+            for (uint32_t r = keep_rows; r-- > 0;) {
+                for (uint32_t c = cols; c-- > 0;) {
+                    cells[r * cols + c] = c < keep_cols ? cells[r * old_cols + c] : blank;
+                }
+            }
         }
-        if (type != FBTEXT_IPC_RESP) {
-            return;
+        for (uint32_t i = (uint32_t)keep_rows * cols; i < (uint32_t)rows * cols; ++i) {
+            cells[i] = blank;
         }
-        int32_t cols = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        int32_t rows = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-        if (cols >= 40 && cols <= (int32_t)VT_MAX_COLS) {
-            g_vt_cols = (uint16_t)cols;
+        if (tty->cursor_row >= rows) {
+            tty->cursor_row = (uint16_t)(rows - 1u);
         }
-        if (rows >= 16 && rows <= (int32_t)VT_MAX_ROWS) {
-            g_vt_rows = (uint16_t)rows;
+        if (tty->cursor_col >= cols) {
+            tty->cursor_col = (uint16_t)(cols - 1u);
         }
-        return;
+        tty->cursor_saved_valid = 0;
     }
+    g_vt_cols = cols;
+    g_vt_rows = rows;
 }
 
 static void vt_fb_set_cursor(const vt_tty_t* tty) {
@@ -1140,14 +1168,6 @@ static uint8_t vt_keymap_decode(uint32_t sc) {
     return g_shift_down ? g_km_shift[sc] : g_km_plain[sc];
 }
 
-static uint32_t vt_strlen(const char* s) {
-    uint32_t n = 0;
-    while (s[n] != 0) {
-        n++;
-    }
-    return n;
-}
-
 /* Parse one "0xNN" token starting at *p (skipping leading spaces/tabs). */
 static int vt_parse_hex(const char** p, const char* end, uint32_t* out) {
     const char* q = *p;
@@ -1225,74 +1245,85 @@ static int vt_parse_keymap(const char* data, uint32_t len) {
     return rows;
 }
 
-/* Read a file by path through the fs (owner-push: acquire a buffer, stage the
- * path, grant fs RW, fs writes the contents back).  Runs during init, before
- * the keyboard/serial subscriptions, so no stray messages contend for g_vt_ep. */
-static int vt_read_keymap_file(const char* path, char* out, uint32_t out_cap, uint32_t* out_len) {
-    if (g_fs_ep < 0) {
-        return -1;
+/* The active layout, read from the filesystem once fs.vfs is first reported.
+ * Until then, and for good if the read fails, the built-in US layout decodes, so
+ * keyboard input always works. */
+#define VT_KEYMAP_PATH "/boot/system/keymaps/de-nodeadkeys.kmap"
+#define VT_KEYMAP_MAX 4096u
+
+/* Keymap read state: the transfer buffer the filesystem writes the file into,
+ * held from the request until its reply, and whether a read has been started
+ * (the layout is loaded once; a restarted filesystem does not reload it). */
+static int32_t g_keymap_bid = -1;
+static int32_t g_keymap_req = 0; /* the read's intent id while it is in flight */
+static uint8_t g_keymap_started = 0;
+
+static void vt_keymap_read_done(void* user, const wasmos_ipc_message_t* msg) {
+    static char km_buf[VT_KEYMAP_MAX];
+    int32_t total = msg->type == FS_IPC_RESP ? msg->arg0 : -1;
+    (void)user;
+    if (total <= 0 || (uint32_t)total > sizeof(km_buf) ||
+        wasmos_xfer_buffer_read(g_keymap_bid, km_buf, total, 0) != 0) {
+        printf("[vt] keymap load failed (%s); using built-in US\n", VT_KEYMAP_PATH);
+    } else {
+        int rows = vt_parse_keymap(km_buf, (uint32_t)total);
+        printf("[vt] keymap loaded: %s (%d rows)\n", VT_KEYMAP_PATH, rows);
     }
-    uint32_t plen = vt_strlen(path);
-    if (plen == 0 || plen >= out_cap) {
-        return -1;
-    }
-    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)out_cap);
-    if (bid < 0) {
-        return -1;
-    }
-    if (wasmos_xfer_buffer_write(bid, path, (int32_t)plen, 0) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    int32_t b1 = wasmos_xfer_buffer_borrow(
-        g_fs_ep, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
-    if (b1 < 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    int32_t req = 0x4B4D; /* "KM" */
-    if (wasmos_ipc_send(g_fs_ep, g_vt_ep, FS_IPC_READ_PATH_REQ, req, (int32_t)plen, 0, bid, b1) !=
-        0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    int32_t total = -1;
-    for (int i = 0; i < 64; ++i) {
-        if (wasmos_ipc_select_one(g_vt_ep) < 0) {
-            break;
-        }
-        if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req) {
-            continue;
-        }
-        if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FS_IPC_RESP) {
-            total = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        }
-        break;
-    }
-    if (total <= 0 || (uint32_t)total > out_cap) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    if (wasmos_xfer_buffer_read(bid, out, total, 0) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    (void)wasmos_xfer_buffer_release(bid);
-    *out_len = (uint32_t)total;
-    return 0;
+    (void)wasmos_xfer_buffer_release(g_keymap_bid);
+    g_keymap_bid = -1;
+    g_keymap_req = 0;
 }
 
-/* Load the active layout from /boot/system/keymaps; keep the built-in US on
- * failure so keyboard input always works. */
-static void vt_load_keymap(const char* path) {
-    static char km_buf[4096];
-    uint32_t len = 0;
-    if (vt_read_keymap_file(path, km_buf, sizeof(km_buf), &len) != 0) {
-        printf("[vt] keymap load failed (%s); using built-in US\n", path);
+/* The filesystem ended with the read in flight: drop it, and read again from
+ * the next filesystem the watch reports. */
+static void vt_keymap_read_abandon(void) {
+    if (g_keymap_bid < 0) {
         return;
     }
-    int rows = vt_parse_keymap(km_buf, len);
-    printf("[vt] keymap loaded: %s (%d rows)\n", path, rows);
+    wasmos_sys_intent_cancel(&g_loop, g_keymap_req);
+    (void)wasmos_xfer_buffer_release(g_keymap_bid);
+    g_keymap_bid = -1;
+    g_keymap_req = 0;
+    g_keymap_started = 0;
+}
+
+/* Start reading the layout file through the filesystem: the vt owns the buffer
+ * (path at offset 0) and grants the filesystem read+write; the filesystem writes
+ * the contents back and replies. Releasing the buffer on the reply revokes the
+ * grant. */
+static void vt_keymap_read_start(void) {
+    static const char path[] = VT_KEYMAP_PATH;
+    uint32_t plen = (uint32_t)sizeof(path) - 1u;
+    int32_t grant;
+
+    if (g_keymap_started || g_fs_ep < 0) {
+        return;
+    }
+    g_keymap_started = 1;
+    g_keymap_bid = wasmos_xfer_buffer_acquire((int32_t)VT_KEYMAP_MAX);
+    if (g_keymap_bid < 0) {
+        g_keymap_bid = -1;
+        printf("[vt] keymap load failed (%s); using built-in US\n", VT_KEYMAP_PATH);
+        return;
+    }
+    grant = wasmos_xfer_buffer_borrow(
+        g_fs_ep, g_keymap_bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    if (wasmos_xfer_buffer_write(g_keymap_bid, path, (int32_t)plen, 0) != 0 || grant < 0 ||
+        wasmos_sys_intent_send(&g_loop,
+                               g_fs_ep,
+                               g_vt_ep,
+                               FS_IPC_READ_PATH_REQ,
+                               (int32_t)plen,
+                               0,
+                               g_keymap_bid,
+                               grant,
+                               vt_keymap_read_done,
+                               0,
+                               &g_keymap_req) != 0) {
+        (void)wasmos_xfer_buffer_release(g_keymap_bid);
+        g_keymap_bid = -1;
+        printf("[vt] keymap load failed (%s); using built-in US\n", VT_KEYMAP_PATH);
+    }
 }
 
 /* Echo a typed byte into its slot (VT_INPUT_MODE_ECHO).  It is writer output of
@@ -1737,26 +1768,37 @@ static void vt_drain_klog_ring(void) {
  * access, and hand it the buffer/borrow ids so it can map and render from it.
  * Best-effort: on failure g_blit_ready stays 0 and vt_replay_tty falls back to
  * per-cell writes. */
+static void vt_blit_release(void) {
+    g_blit_ready = 0;
+    g_blit_grid = 0;
+    if (g_blit_bid >= 0) {
+        /* Releasing revokes the grant the previous framebuffer held. */
+        (void)wasmos_xfer_buffer_release(g_blit_bid);
+        g_blit_bid = -1;
+    }
+}
+
 static void vt_blit_init(void) {
+    vt_blit_release();
     if (g_fb_ep < 0) {
         return;
     }
     uint32_t bytes = VT_BLIT_MAX_CELLS * (uint32_t)sizeof(fbtext_blit_cell_t);
-    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)bytes);
-    if (bid <= 0) {
+    g_blit_bid = wasmos_xfer_buffer_acquire((int32_t)bytes);
+    if (g_blit_bid <= 0) {
+        g_blit_bid = -1;
         return;
     }
-    int32_t off = wasmos_xfer_buffer_map(bid);
-    if (off < 0) {
-        return;
-    }
-    int32_t grant = wasmos_xfer_buffer_borrow(g_fb_ep, bid, WASMOS_BUFFER_GRANT_READ);
-    if (grant < 0) {
-        return;
-    }
+    int32_t off = wasmos_xfer_buffer_map(g_blit_bid);
+    int32_t grant =
+        off < 0 ? -1 : wasmos_xfer_buffer_borrow(g_fb_ep, g_blit_bid, WASMOS_BUFFER_GRANT_READ);
     /* Hand the driver the ids to map; it renders on FBTEXT_IPC_BLIT_GRID_REQ. */
-    if (vt_fb_send_switch(
-            FBTEXT_IPC_BLIT_ATTACH_REQ, bid, grant, (int32_t)g_vt_cols, (int32_t)g_vt_rows) != 0) {
+    if (grant < 0 || vt_fb_send_switch(FBTEXT_IPC_BLIT_ATTACH_REQ,
+                                       g_blit_bid,
+                                       grant,
+                                       (int32_t)g_vt_cols,
+                                       (int32_t)g_vt_rows) != 0) {
+        vt_blit_release();
         return;
     }
     g_blit_grid = ptr_cast(fbtext_blit_cell_t, (uint32_t)off);
@@ -1781,11 +1823,20 @@ static uint8_t g_tty_cli_spawned[VT_MAX_TTYS] = {0};
  * reply lands.  One spawn at a time: they are triggered by user-visible events
  * (a switch, a serial rebind) and never arrive in bursts. */
 static int32_t g_spawn_path_bid = -1;
-/* Request id of that spawn, so the reply that frees the buffer is matched rather
- * than assumed: any PROC_IPC_RESP would otherwise release a buffer PM may still
- * be reading. */
-static int32_t g_spawn_req_id = 0;
-#define VT_SPAWN_REQ_BASE 0x5100
+
+/* Release the path buffer once PM answers the spawn that named it; the reply is
+ * matched to the request by the loop's intent, so no other PROC_IPC_RESP can
+ * release a buffer PM may still be reading. */
+static void vt_spawn_reply_done(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (msg->type == PROC_IPC_ERROR) {
+        printf("[vt] cli spawn failed: %d\n", (int)msg->arg1);
+    }
+    if (g_spawn_path_bid >= 0) {
+        (void)wasmos_xfer_buffer_release(g_spawn_path_bid);
+        g_spawn_path_bid = -1;
+    }
+}
 
 /* Ask process-manager for a CLI pinned to `slot`.  Fire-and-forget with DETACH:
  * the vt must keep serving IPC while the child comes up, and a ready-gated spawn
@@ -1817,39 +1868,429 @@ static void vt_spawn_cli_for_slot(uint32_t slot) {
      * release below clears it, and a double spawn would give one slot two shells
      * competing for its input. */
     g_tty_cli_spawned[slot] = 1;
-    int32_t req_id = VT_SPAWN_REQ_BASE + (int32_t)slot;
-    int32_t rc = wasmos_ipc_send(g_proc_ep,
-                                 g_vt_ep,
-                                 PROC_IPC_SPAWN_PATH,
-                                 req_id,
-                                 (int32_t)(PROC_SPAWN_PATH_FLAG_DETACH | PROC_SPAWN_PATH_TTY(slot)),
-                                 (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                                 0,
-                                 0);
-    if (rc != 0) {
-        g_tty_cli_spawned[slot] = 0;
-        (void)wasmos_xfer_buffer_release(bid);
-        return;
-    }
     g_spawn_path_bid = bid;
-    g_spawn_req_id = req_id;
+    if (wasmos_sys_intent_send(&g_loop,
+                               g_proc_ep,
+                               g_vt_ep,
+                               PROC_IPC_SPAWN_PATH,
+                               (int32_t)(PROC_SPAWN_PATH_FLAG_DETACH | PROC_SPAWN_PATH_TTY(slot)),
+                               (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                               0,
+                               0,
+                               vt_spawn_reply_done,
+                               0,
+                               0) != 0) {
+        g_tty_cli_spawned[slot] = 0;
+        g_spawn_path_bid = -1;
+        (void)wasmos_xfer_buffer_release(bid);
+    }
 }
 
-/* Release the path buffer once PM answers the request that named it. */
-static void vt_spawn_reply_done(int32_t request_id) {
-    if (g_spawn_path_bid < 0 || request_id != g_spawn_req_id) {
+/* ------------------------------------------------------------------ peers
+ *
+ * The four services the vt uses are followed by service-name watches, not looked
+ * up once: each is used from the moment it registers, and again when a
+ * restarted one registers anew, whatever order the system came up in. A peer's
+ * WASMOS_IPC_HANGUP drops it (vt_on_peer_gone) until its watch reports the
+ * next one. */
+
+/* Repaint the visible text slot on a framebuffer that has just been attached or
+ * re-laid out. vt-0 belongs to the compositor and is never repainted here. */
+static void vt_fb_repaint(void) {
+    if (g_fb_ep < 0 || g_active_tty == 0u) {
         return;
     }
-    (void)wasmos_xfer_buffer_release(g_spawn_path_bid);
-    g_spawn_path_bid = -1;
-    g_spawn_req_id = 0;
+    if (vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) == 0) {
+        (void)vt_replay_tty(g_active_tty, 1);
+    }
 }
 
-/* Service entry point.  Registers "vt", looks up "fb"/"kbd"/"fs.vfs", allocates
- * the per-slot cell grids (falling back to the default geometry if the queried
- * one does not fit), loads the keymap, subscribes to keyboard and serial input,
- * attaches the blit grid and klog ring, signals readiness, then serves IPC
- * forever.  Never returns except on an init failure (-1).
+/* The framebuffer's geometry reply: re-lay the grids out for it (keeping the
+ * current geometry when the query failed or reports one out of range), attach
+ * the blit grid, repaint. */
+static int32_t g_geometry_req = 0; /* the query's intent id while it is in flight */
+
+static void vt_on_geometry(void* user, const wasmos_ipc_message_t* msg) {
+    uint16_t cols = g_vt_cols;
+    uint16_t rows = g_vt_rows;
+    (void)user;
+    g_geometry_req = 0;
+    if (msg->type == FBTEXT_IPC_RESP) {
+        if (msg->arg0 >= 40 && msg->arg0 <= (int32_t)VT_MAX_COLS) {
+            cols = (uint16_t)msg->arg0;
+        }
+        if (msg->arg1 >= 16 && msg->arg1 <= (int32_t)VT_MAX_ROWS) {
+            rows = (uint16_t)msg->arg1;
+        }
+    }
+    vt_regrid(cols, rows);
+    vt_blit_init();
+    vt_fb_repaint();
+}
+
+static void vt_on_fb_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
+    (void)user;
+    (void)watch;
+    vt_blit_release();
+    g_fb_ep = endpoint;
+    if (wasmos_sys_intent_send(&g_loop,
+                               g_fb_ep,
+                               g_vt_ep,
+                               FBTEXT_IPC_GEOMETRY_REQ,
+                               0,
+                               0,
+                               0,
+                               0,
+                               vt_on_geometry,
+                               0,
+                               &g_geometry_req) != 0) {
+        vt_blit_init();
+        vt_fb_repaint();
+    }
+}
+
+static void vt_on_kbd_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
+    (void)user;
+    (void)watch;
+    g_kbd_ep = endpoint;
+    (void)wasmos_ipc_send(g_kbd_ep, g_vt_ep, KBD_IPC_SUBSCRIBE_REQ, 1, 0, 0, 0, 0);
+}
+
+/* COM1 RX arrives from the serial driver as VT_IPC_SERIAL_INPUT_REQ pushes into
+ * the serial-bound slot once the vt has subscribed. */
+static void vt_on_sin_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
+    (void)user;
+    (void)watch;
+    g_serial_in_ep = endpoint;
+    (void)wasmos_ipc_send(g_serial_in_ep, g_vt_ep, SERIAL_IPC_SUBSCRIBE_REQ, 1, 0, 0, 0, 0);
+}
+
+static void vt_on_fs_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
+    (void)user;
+    (void)watch;
+    g_fs_ep = endpoint;
+    vt_keymap_read_start();
+}
+
+/* A watch ends on its own only when the process manager refuses a request; the
+ * vt then runs without that peer, as it does before the peer registers. */
+static void vt_on_watch_failed(void* user, wasmos_sys_svc_watch_t* watch, int32_t status) {
+    (void)user;
+    printf("[vt] watching %s failed: %d\n", watch->name, (int)status);
+}
+
+static void vt_start_watch(wasmos_sys_svc_watch_t* watch, const char* name,
+                           wasmos_sys_svc_bind_fn on_bind) {
+    int32_t rc =
+        wasmos_sys_svc_watch_start(&g_watches, watch, name, 0, on_bind, vt_on_watch_failed, 0);
+    if (rc != 0) {
+        printf("[vt] cannot watch %s: %d\n", name, (int)rc);
+    }
+}
+
+/* A peer's process ended. Forget its endpoint, so the vt stops addressing it and
+ * the watch reports a restarted provider even when it gets the same endpoint
+ * id. */
+static void vt_on_peer_gone(int32_t endpoint) {
+    if (endpoint < 0) {
+        return;
+    }
+    if (endpoint == g_fb_ep) {
+        g_fb_ep = -1;
+        if (g_geometry_req > 0) {
+            wasmos_sys_intent_cancel(&g_loop, g_geometry_req);
+            g_geometry_req = 0;
+        }
+        vt_blit_release();
+        wasmos_sys_svc_watch_forget(&g_watch_fb);
+    }
+    if (endpoint == g_kbd_ep) {
+        g_kbd_ep = -1;
+        wasmos_sys_svc_watch_forget(&g_watch_kbd);
+    }
+    if (endpoint == g_serial_in_ep) {
+        g_serial_in_ep = -1;
+        wasmos_sys_svc_watch_forget(&g_watch_sin);
+    }
+    if (endpoint == g_fs_ep) {
+        g_fs_ep = -1;
+        vt_keymap_read_abandon();
+        wasmos_sys_svc_watch_forget(&g_watch_fs);
+    }
+}
+
+/* ---------------------------------------------------------- registration */
+
+static int32_t g_register_bid = -1;
+
+static void vt_on_registered(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (g_register_bid >= 0) {
+        (void)wasmos_xfer_buffer_release(g_register_bid);
+        g_register_bid = -1;
+    }
+    if (msg->type != SVC_IPC_REGISTER_RESP) {
+        printf("[vt] registering \"vt\" failed: %d/%d\n", (int)msg->arg0, (int)msg->arg1);
+    }
+}
+
+/* Register g_vt_ep as "vt". The descriptor travels in a buffer the vt owns,
+ * released on the reply, which the loop matches by request id on the service
+ * endpoint itself. */
+static int vt_register(int32_t proc_endpoint) {
+    svc_register_desc_t desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.version = WASMOS_SVC_REGISTER_DESC_VERSION;
+    desc.service_endpoint = (uint32_t)g_vt_ep;
+    memcpy(desc.name, "vt", 3);
+    g_register_bid = wasmos_xfer_stage(&desc, (int32_t)sizeof(desc));
+    if (g_register_bid < 0) {
+        g_register_bid = -1;
+        return -1;
+    }
+    if (wasmos_sys_intent_send(&g_loop,
+                               proc_endpoint,
+                               g_vt_ep,
+                               SVC_IPC_REGISTER_DESC_REQ,
+                               0,
+                               (int32_t)sizeof(desc),
+                               g_register_bid,
+                               0,
+                               vt_on_registered,
+                               0,
+                               0) != 0) {
+        (void)wasmos_xfer_buffer_release(g_register_bid);
+        g_register_bid = -1;
+        return -1;
+    }
+    return 0;
+}
+
+/* Consumes the process manager's acknowledgement of NOTIFY_READY. */
+static void vt_on_ready_ack(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    (void)msg;
+}
+
+/* ------------------------------------------------------- client traffic */
+
+/* Every message no intent or watch claims: client requests and notifications.
+ * The console ring is drained first, so kernel output that preceded a message is
+ * rendered before whatever the message produces. */
+static void vt_on_message(void* user, const wasmos_ipc_message_t* message) {
+    wasmos_ipc_message_t msg = *message;
+    (void)user;
+    vt_drain_klog_ring();
+    switch ((uint32_t)msg.type) {
+    case VT_IPC_SERIAL_INPUT_REQ: {
+        /* COM1 RX from the serial driver -> the serial-bound slot's input
+         * queue (line discipline), regardless of which slot is visible.
+         * arg0[27:24] = byte count (1-4), argN[7:0] = the bytes. */
+        int32_t args[4] = {msg.arg0, msg.arg1, msg.arg2, msg.arg3};
+        int count = (args[0] >> 24) & 0xF;
+        if (count > 4)
+            count = 4;
+        args[0] &= 0xFF;
+        for (int i = 0; i < count; ++i) {
+            vt_input_handle_char(g_serial_tty, (uint8_t)(args[i] & 0xFF));
+        }
+        break;
+    }
+
+    case SERIAL_IPC_SUBSCRIBE_RESP:
+        /* Ack of the VT's serial subscription; nothing to do. */
+        break;
+
+    case VT_IPC_SET_ATTR_REQ: {
+        int32_t tty_index = vt_tty_index_for_source(msg.source);
+        if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
+            if (msg.source >= 0 && msg.request_id != 0) {
+                (void)vt_ipc_reply_retry(
+                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_NO_TTY_FOR_SOURCE, 0);
+            }
+            break;
+        }
+        vt_tty_t* tty = &g_ttys[(uint32_t)tty_index];
+        uint8_t fg = (uint8_t)(msg.arg0 & 0xFF);
+        uint8_t bg = (uint8_t)(msg.arg1 & 0xFF);
+        uint8_t attr = (uint8_t)(msg.arg2 & 0xFF);
+        if (fg <= 15u) {
+            tty->fg = fg;
+        }
+        if (bg <= 15u) {
+            tty->bg = bg;
+        }
+        tty->attr = attr;
+        if (msg.source >= 0 && msg.request_id != 0) {
+            (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, 0, 0);
+        }
+        break;
+    }
+
+    case VT_IPC_SWITCH_TTY: {
+        if (msg.arg0 == 0 && msg.source >= 0 && g_tty_reader_ep[0] < 0) {
+            /* The first client to take vt-0 (the compositor, at startup)
+             * becomes its key/visibility sink; the vt forwards decoded keys
+             * (VT_IPC_KEY_FORWARD) and visibility (VT_IPC_VIS_NOTIFY) there.
+             * A later `tty 0` (e.g. from a CLI switching the visible slot
+             * back) must NOT reclaim it, or those notifies would misroute. */
+            g_tty_reader_ep[0] = msg.source;
+        }
+        int32_t sw = vt_switch_tty((uint32_t)msg.arg0);
+        if (sw == 0 && msg.arg0 > 0) {
+            /* A text slot the user just made visible needs a shell to type
+             * into; the first switch to it is what creates one. */
+            vt_spawn_cli_for_slot((uint32_t)msg.arg0);
+        }
+        if (msg.source >= 0 && msg.request_id != 0) {
+            (void)vt_ipc_reply_retry(msg.source,
+                                     (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
+                                     msg.request_id,
+                                     (sw == 0) ? (int32_t)g_switch_generation : sw,
+                                     (int32_t)g_active_tty);
+        }
+        break;
+    }
+
+    case VT_IPC_BIND_SERIAL_REQ: {
+        /* The serial-bound slot is independent of the visible one: serial RX
+         * reaches this slot no matter what is on screen (see doc 19, "two
+         * independent selectors"). */
+        int32_t tty_id = msg.arg0;
+        int32_t rc = 0;
+        if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
+            rc = WASMOS_ERR_VT_BAD_TTY_ID;
+        } else if (tty_id == 0) {
+            /* vt-0 is the compositor's; a serial line cannot render it. */
+            rc = WASMOS_ERR_VT_SERIAL_SLOT_GUI;
+        } else {
+            g_serial_tty = (uint32_t)tty_id;
+            /* Same reason as a switch: a serial line bound to a slot with no
+             * shell has nothing to answer it. */
+            vt_spawn_cli_for_slot(g_serial_tty);
+        }
+        if (msg.source >= 0 && msg.request_id != 0) {
+            (void)vt_ipc_reply_retry(msg.source,
+                                     (rc == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
+                                     msg.request_id,
+                                     (rc == 0) ? (int32_t)g_serial_tty : rc,
+                                     0);
+        }
+        break;
+    }
+
+    case VT_IPC_GET_ACTIVE_TTY:
+        if (msg.source >= 0 && msg.request_id != 0) {
+            (void)vt_ipc_reply_retry(msg.source,
+                                     VT_IPC_RESP,
+                                     msg.request_id,
+                                     (int32_t)g_switch_generation,
+                                     (int32_t)g_active_tty);
+        }
+        break;
+
+    case VT_IPC_REGISTER_WRITER: {
+        if (msg.source < 0 || msg.request_id == 0) {
+            break;
+        }
+        int32_t tty_id = msg.arg0;
+        if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
+            (void)vt_ipc_reply_retry(
+                msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_BAD_TTY_ID, 0);
+            break;
+        }
+        uint32_t idx = (uint32_t)tty_id;
+        if (g_tty_writer_ep[idx] >= 0 && g_tty_writer_ep[idx] != msg.source) {
+            vt_trace_mark(VT_TRACE_WRITER_CONFLICT,
+                          (uint16_t)(idx & 0x0FFFu),
+                          (uint16_t)((uint32_t)msg.source & 0x0FFFu));
+            /* Replace stale/previous writer ownership instead of rejecting
+             * new registrations. This keeps CLI recovery robust when a
+             * prior writer process exited without an explicit unregister. */
+        }
+        g_tty_writer_ep[idx] = msg.source;
+        vt_trace_mark(VT_TRACE_WRITER_OK,
+                      (uint16_t)(idx & 0x0FFFu),
+                      (uint16_t)((uint32_t)msg.source & 0x0FFFu));
+        (void)vt_ipc_reply_retry(
+            msg.source, VT_IPC_RESP, msg.request_id, (int32_t)g_switch_generation, tty_id);
+        break;
+    }
+
+    case VT_IPC_READ_REQ: {
+        if (msg.source < 0 || msg.request_id == 0) {
+            break;
+        }
+        int32_t tty_id = msg.arg0;
+        if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
+            (void)vt_ipc_reply_retry(
+                msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_BAD_TTY_ID, 0);
+            break;
+        }
+        if (g_tty_reader_ep[(uint32_t)tty_id] < 0) {
+            g_tty_reader_ep[(uint32_t)tty_id] = msg.source;
+        } else if (g_tty_reader_ep[(uint32_t)tty_id] != msg.source) {
+            (void)vt_ipc_reply_retry(
+                msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_READER_BUSY, 0);
+            break;
+        }
+        uint8_t ch = 0;
+        if (vt_input_q_pop(&g_ttys[(uint32_t)tty_id], &ch) == 0) {
+            (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, 0, (int32_t)ch);
+        } else {
+            (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, 1, 0);
+        }
+        break;
+    }
+
+    case VT_IPC_SET_MODE_REQ: {
+        if (msg.source < 0 || msg.request_id == 0) {
+            break;
+        }
+        int32_t tty_index = vt_tty_index_for_source(msg.source);
+        if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
+            (void)vt_ipc_reply_retry(
+                msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_NO_TTY_FOR_SOURCE, 0);
+            break;
+        }
+        uint8_t mode = (uint8_t)(msg.arg0 & (VT_INPUT_MODE_CANONICAL | VT_INPUT_MODE_ECHO));
+        vt_set_input_mode(&g_ttys[(uint32_t)tty_index], mode);
+        (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, (int32_t)mode, tty_index);
+        break;
+    }
+
+    case VT_IPC_KLOG_NOTIFY:
+        /* The kernel's console-ring doorbell.  Waking the loop is its entire
+         * purpose -- the ring was drained above -- so there is nothing to do
+         * here and nothing to reply to. */
+        break;
+
+    case KBD_IPC_KEY_NOTIFY:
+        vt_handle_key_notify(msg.arg0, msg.arg1, msg.arg2);
+        break;
+
+    case KBD_IPC_SUBSCRIBE_RESP:
+        break;
+
+    case WASMOS_IPC_HANGUP:
+        /* Sent by the kernel only; arg0 names the peer endpoint whose
+         * process ended. */
+        vt_on_peer_gone(msg.arg0);
+        break;
+
+    default:
+        if (msg.source >= 0 && msg.request_id != 0) {
+            (void)vt_ipc_reply_retry(
+                msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_UNSUPPORTED_REQUEST, 0);
+        }
+        break;
+    }
+}
+
+/* Service entry point.  Allocates the per-slot cell grids, registers "vt",
+ * starts watching its peers, attaches the klog ring, signals readiness, then
+ * serves IPC forever from the event loop.  Never returns except on an init
+ * failure (-1).
  * g_switch_generation is a monotonic counter bumped on every TTY switch; writes
  * whose request_id carries a stale generation are dropped. */
 WASMOS_WASM_EXPORT int32_t initialize(void) {
@@ -1861,299 +2302,54 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     if (g_vt_ep < 0) {
         return -1;
     }
-    if (wasmos_svc_register(proc_endpoint, g_vt_ep, "vt", 1) != 0) {
-        return -1;
-    }
-    g_fb_ep = wasmos_svc_lookup(proc_endpoint, g_vt_ep, "fb", 2);
-    g_kbd_ep = wasmos_svc_lookup(proc_endpoint, g_vt_ep, "kbd", 3);
+    wasmos_sys_event_loop_init(&g_loop, g_vt_ep, VT_LOOP_REQ_BASE);
+    (void)wasmos_sys_event_set_default(&g_loop, vt_on_message, 0);
 
-    vt_query_geometry();
+    /* Grids first, at the default geometry: output can arrive before the
+     * framebuffer reports its own. */
     vt_reset_tty_cells();
     vt_heap_init();
     if (vt_alloc_tty_cells() != 0) {
-        vt_log_alloc_failure("runtime-grid", g_alloc_failure);
-        /* Fallback if large-grid allocation fails under tight memory. */
-        g_vt_cols = VT_COLS_DEFAULT;
-        g_vt_rows = VT_ROWS_DEFAULT;
-        vt_reset_tty_cells();
-        if (vt_alloc_tty_cells() != 0) {
-            vt_log_alloc_failure("default-grid", g_alloc_failure);
-            return -1;
-        }
+        vt_log_alloc_failure("grid", g_alloc_failure);
+        return -1;
     }
     vt_init_ttys();
 
-    /* Load the active keyboard layout from the FS before subscribing to input,
-     * so the FS reply is the only traffic on g_vt_ep during the synchronous
-     * read.  Falls back to the built-in US keymap if the FS or file is
-     * unavailable. */
-    g_fs_ep = wasmos_sys_svc_lookup_retry(proc_endpoint, g_vt_ep, "fs.vfs", 4, 64);
-    vt_load_keymap("/boot/system/keymaps/de-nodeadkeys.kmap");
-
-    if (g_kbd_ep != -1) {
-        (void)wasmos_ipc_send(g_kbd_ep, g_vt_ep, KBD_IPC_SUBSCRIBE_REQ, 1, 0, 0, 0, 0);
+    if (vt_register(proc_endpoint) != 0) {
+        printf("[vt] cannot register \"vt\"\n");
+        return -1;
     }
-
-    /* Subscribe to the serial driver so COM1 RX is delivered as
-     * VT_IPC_SERIAL_INPUT_REQ pushes into the serial-bound slot.  The serial
-     * driver comes up before the vt, but retry a few times to cover boot skew. */
-    for (int attempt = 0; attempt < 8 && g_serial_in_ep < 0; ++attempt) {
-        g_serial_in_ep = wasmos_svc_lookup(proc_endpoint, g_vt_ep, "sin", 4);
-        if (g_serial_in_ep < 0) {
-            wasmos_sched_yield();
-        }
+    if (wasmos_sys_svc_watch_set_init(&g_watches, &g_loop, proc_endpoint) != 0) {
+        printf("[vt] cannot set up service watches\n");
+        return -1;
     }
-    if (g_serial_in_ep >= 0) {
-        (void)wasmos_ipc_send(g_serial_in_ep, g_vt_ep, SERIAL_IPC_SUBSCRIBE_REQ, 1, 0, 0, 0, 0);
-    }
-
-    if (g_fb_ep != -1) {
-        /* Share the cell-grid blit buffer with the framebuffer driver so tty
-         * switches repaint in one IPC instead of a per-cell storm. */
-        vt_blit_init();
-    }
+    vt_start_watch(&g_watch_fb, "fb", vt_on_fb_bound);
+    vt_start_watch(&g_watch_kbd, "kbd", vt_on_kbd_bound);
+    vt_start_watch(&g_watch_sin, "sin", vt_on_sin_bound);
+    vt_start_watch(&g_watch_fs, "fs.vfs", vt_on_fs_bound);
 
     /* Bring up the VT-owned console ring (small, cheap overlay — see
-     * vt_klog_ring_init).  The VT drains it on every wake below: it blocks on
-     * g_vt_ep with wasmos_ipc_select_one (a timed select set strands serial
-     * input under WARP), and the kernel's VT_IPC_KLOG_NOTIFY doorbell is itself
-     * such a wake, so pending output reaches its slot and serial without
-     * polling. */
+     * vt_klog_ring_init).  The loop below drains it after every wake, and the
+     * kernel's VT_IPC_KLOG_NOTIFY doorbell is itself such a wake, so pending
+     * output reaches its slot and serial without polling. */
     vt_klog_ring_init();
 
-    wasmos_sys_notify_ready(proc_endpoint, g_vt_ep);
+    /* Sent after the registration: the process manager serves one sender in
+     * order, so "vt" is registered by the time anyone sees the vt ready. */
+    (void)wasmos_sys_intent_send(
+        &g_loop, proc_endpoint, g_vt_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, vt_on_ready_ack, 0, 0);
 
-    /* Kept for the lazy per-slot shells below; the console slot's shell comes
-     * from sysinit. */
+    /* Kept for the lazy per-slot shells; the console slot's shell comes from
+     * sysinit. */
     g_proc_ep = proc_endpoint;
 
+    /* One message per poll, so echo produced while handling it, and whatever the
+     * drain left under a full buffer, reaches serial before the VT parks again.
+     * The poll parks untimed: a timed select set strands serial input under
+     * WARP. */
     for (;;) {
-        int32_t rc = wasmos_ipc_select_one(g_vt_ep);
-        if (rc < 0) {
-            wasmos_sched_yield();
-            continue;
-        }
+        (void)wasmos_sys_event_loop_poll(&g_loop, 1);
         vt_drain_klog_ring();
-
-        wasmos_ipc_message_t msg;
-        wasmos_ipc_message_read_last(&msg);
-
-        switch ((uint32_t)msg.type) {
-        case VT_IPC_SERIAL_INPUT_REQ: {
-            /* COM1 RX from the serial driver -> the serial-bound slot's input
-             * queue (line discipline), regardless of which slot is visible.
-             * arg0[27:24] = byte count (1-4), argN[7:0] = the bytes. */
-            int32_t args[4] = {msg.arg0, msg.arg1, msg.arg2, msg.arg3};
-            int count = (args[0] >> 24) & 0xF;
-            if (count > 4)
-                count = 4;
-            args[0] &= 0xFF;
-            for (int i = 0; i < count; ++i) {
-                vt_input_handle_char(g_serial_tty, (uint8_t)(args[i] & 0xFF));
-            }
-            break;
-        }
-
-        case SERIAL_IPC_SUBSCRIBE_RESP:
-            /* Ack of the VT's serial subscription; nothing to do. */
-            break;
-
-        case VT_IPC_SET_ATTR_REQ: {
-            int32_t tty_index = vt_tty_index_for_source(msg.source);
-            if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                if (msg.source >= 0 && msg.request_id != 0) {
-                    (void)vt_ipc_reply_retry(msg.source,
-                                             VT_IPC_ERROR,
-                                             msg.request_id,
-                                             WASMOS_ERR_VT_NO_TTY_FOR_SOURCE,
-                                             0);
-                }
-                break;
-            }
-            vt_tty_t* tty = &g_ttys[(uint32_t)tty_index];
-            uint8_t fg = (uint8_t)(msg.arg0 & 0xFF);
-            uint8_t bg = (uint8_t)(msg.arg1 & 0xFF);
-            uint8_t attr = (uint8_t)(msg.arg2 & 0xFF);
-            if (fg <= 15u) {
-                tty->fg = fg;
-            }
-            if (bg <= 15u) {
-                tty->bg = bg;
-            }
-            tty->attr = attr;
-            if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, 0, 0);
-            }
-            break;
-        }
-
-        case VT_IPC_SWITCH_TTY: {
-            if (msg.arg0 == 0 && msg.source >= 0 && g_tty_reader_ep[0] < 0) {
-                /* The first client to take vt-0 (the compositor, at startup)
-                 * becomes its key/visibility sink; the vt forwards decoded keys
-                 * (VT_IPC_KEY_FORWARD) and visibility (VT_IPC_VIS_NOTIFY) there.
-                 * A later `tty 0` (e.g. from a CLI switching the visible slot
-                 * back) must NOT reclaim it, or those notifies would misroute. */
-                g_tty_reader_ep[0] = msg.source;
-            }
-            int32_t sw = vt_switch_tty((uint32_t)msg.arg0);
-            if (sw == 0 && msg.arg0 > 0) {
-                /* A text slot the user just made visible needs a shell to type
-                 * into; the first switch to it is what creates one. */
-                vt_spawn_cli_for_slot((uint32_t)msg.arg0);
-            }
-            if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
-                                         msg.request_id,
-                                         (sw == 0) ? (int32_t)g_switch_generation : sw,
-                                         (int32_t)g_active_tty);
-            }
-            break;
-        }
-
-        case VT_IPC_BIND_SERIAL_REQ: {
-            /* The serial-bound slot is independent of the visible one: serial RX
-             * reaches this slot no matter what is on screen (see doc 19, "two
-             * independent selectors"). */
-            int32_t tty_id = msg.arg0;
-            int32_t rc = 0;
-            if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                rc = WASMOS_ERR_VT_BAD_TTY_ID;
-            } else if (tty_id == 0) {
-                /* vt-0 is the compositor's; a serial line cannot render it. */
-                rc = WASMOS_ERR_VT_SERIAL_SLOT_GUI;
-            } else {
-                g_serial_tty = (uint32_t)tty_id;
-                /* Same reason as a switch: a serial line bound to a slot with no
-                 * shell has nothing to answer it. */
-                vt_spawn_cli_for_slot(g_serial_tty);
-            }
-            if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         (rc == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
-                                         msg.request_id,
-                                         (rc == 0) ? (int32_t)g_serial_tty : rc,
-                                         0);
-            }
-            break;
-        }
-
-        case VT_IPC_GET_ACTIVE_TTY:
-            if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_RESP,
-                                         msg.request_id,
-                                         (int32_t)g_switch_generation,
-                                         (int32_t)g_active_tty);
-            }
-            break;
-
-        case VT_IPC_REGISTER_WRITER: {
-            if (msg.source < 0 || msg.request_id == 0) {
-                break;
-            }
-            int32_t tty_id = msg.arg0;
-            if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(
-                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_BAD_TTY_ID, 0);
-                break;
-            }
-            uint32_t idx = (uint32_t)tty_id;
-            if (g_tty_writer_ep[idx] >= 0 && g_tty_writer_ep[idx] != msg.source) {
-                vt_trace_mark(VT_TRACE_WRITER_CONFLICT,
-                              (uint16_t)(idx & 0x0FFFu),
-                              (uint16_t)((uint32_t)msg.source & 0x0FFFu));
-                /* Replace stale/previous writer ownership instead of rejecting
-                 * new registrations. This keeps CLI recovery robust when a
-                 * prior writer process exited without an explicit unregister. */
-            }
-            g_tty_writer_ep[idx] = msg.source;
-            vt_trace_mark(VT_TRACE_WRITER_OK,
-                          (uint16_t)(idx & 0x0FFFu),
-                          (uint16_t)((uint32_t)msg.source & 0x0FFFu));
-            (void)vt_ipc_reply_retry(
-                msg.source, VT_IPC_RESP, msg.request_id, (int32_t)g_switch_generation, tty_id);
-            break;
-        }
-
-        case VT_IPC_READ_REQ: {
-            if (msg.source < 0 || msg.request_id == 0) {
-                break;
-            }
-            int32_t tty_id = msg.arg0;
-            if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(
-                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_BAD_TTY_ID, 0);
-                break;
-            }
-            if (g_tty_reader_ep[(uint32_t)tty_id] < 0) {
-                g_tty_reader_ep[(uint32_t)tty_id] = msg.source;
-            } else if (g_tty_reader_ep[(uint32_t)tty_id] != msg.source) {
-                (void)vt_ipc_reply_retry(
-                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_READER_BUSY, 0);
-                break;
-            }
-            uint8_t ch = 0;
-            if (vt_input_q_pop(&g_ttys[(uint32_t)tty_id], &ch) == 0) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, 0, (int32_t)ch);
-            } else {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, 1, 0);
-            }
-            break;
-        }
-
-        case VT_IPC_SET_MODE_REQ: {
-            if (msg.source < 0 || msg.request_id == 0) {
-                break;
-            }
-            int32_t tty_index = vt_tty_index_for_source(msg.source);
-            if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(
-                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_NO_TTY_FOR_SOURCE, 0);
-                break;
-            }
-            uint8_t mode = (uint8_t)(msg.arg0 & (VT_INPUT_MODE_CANONICAL | VT_INPUT_MODE_ECHO));
-            vt_set_input_mode(&g_ttys[(uint32_t)tty_index], mode);
-            (void)vt_ipc_reply_retry(
-                msg.source, VT_IPC_RESP, msg.request_id, (int32_t)mode, tty_index);
-            break;
-        }
-
-        case PROC_IPC_RESP:
-            /* Reply to the vt's own spawn request. */
-            vt_spawn_reply_done(msg.request_id);
-            break;
-
-        case PROC_IPC_ERROR:
-            vt_spawn_reply_done(msg.request_id);
-            printf("[vt] cli spawn failed: %d\n", (int)msg.arg1);
-            break;
-
-        case VT_IPC_KLOG_NOTIFY:
-            /* The kernel's console-ring doorbell.  Waking the select above is its
-             * entire purpose — vt_drain_klog_ring already ran for this wake — so
-             * there is nothing to do here and nothing to reply to. */
-            break;
-
-        case KBD_IPC_KEY_NOTIFY:
-            vt_handle_key_notify(msg.arg0, msg.arg1, msg.arg2);
-            break;
-
-        case KBD_IPC_SUBSCRIBE_RESP:
-            break;
-
-        default:
-            if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(
-                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_UNSUPPORTED_REQUEST, 0);
-            }
-            break;
-        }
-        /* Echo produced while handling the message, and whatever the drain left
-         * under a full buffer, reaches serial before the VT parks again. */
         vt_serial_flush();
     }
-
-    return 0;
 }

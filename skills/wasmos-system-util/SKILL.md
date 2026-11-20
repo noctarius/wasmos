@@ -74,8 +74,6 @@ aot = true
 [resources]
 stack_pages = 16
 heap_pages  = 16          # utils are small and short-lived; keep these modest
-[ipc]
-required_endpoint_name  = "proc"
 [[capabilities]]
 name  = "ipc.basic"       # add more only if the tool needs them
 flags = 0

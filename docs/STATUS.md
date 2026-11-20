@@ -249,6 +249,138 @@ linked feature documents for rationale and rollout plans.
 
 ### Process Lifecycle
 
+- Every process ends with a `PROC_EXIT_REASON_*` beside its exit status
+  (`EXITED`, `TRAPPED`, `FAULTED`, `KILLED`, `START_FAILED`), recorded at the
+  exit site and returned in the `PROC_IPC_WAIT` reply's `arg2` and, for a zombie,
+  `PROC_IPC_STATUS`'s `arg3`. `PROC_IPC_STATUS` also distinguishes
+  `PROC_STATUS_READY` from `RUNNING`. A kill replaces an exit the process staged
+  but had not completed. A native module's entry runs inside its start hook, so
+  a native driver that returns non-zero is reported `START_FAILED` (TODO in
+  `pm_app_entry`). The supervisor reads it from `PROC_IPC_CHILD_EXITED`.
+- `PROC_IPC_SPAWN_WATCHED` spawns from a path with the spawner watching:
+  `PROC_IPC_CHILD_READY` / `PROC_IPC_CHILD_EXITED` (pid, status, reason) go to a
+  notify endpoint the spawner owns, reserved before the child exists and
+  delivered with the hangup guarantee (`ipc_owed_t`, the generalised hangup
+  record). The child's `[deps]` come back in the request descriptor, and the
+  child is auto-reaped. Host-tested in `test_ipc` (O1-O6) and
+  `test_process_lifecycle`; the PM handler is exercised end to end by the
+  supervisor (`tests/test_supervisor.py`).
+- The `supervisor` service (initfs, spawned by kernel init right after the
+  process manager) keeps submitted units running. A unit arrives as a one-line
+  spec in `SUPERVISOR_IPC_SUBMIT_REQ` (`<unit> <path> [restart=never|on-failure|
+  always] [class=optional|required|critical] [tty=<slot>] [probe=<s>]
+  [-- args]`, defaults on-failure / optional / 10 s) and is spawned with
+  `PROC_IPC_SPAWN_WATCHED`. A unit with no READY within 10 s is killed and
+  counts as failed; a restart waits a backoff of 250 ms doubling to 30 s, reset
+  once the unit has been READY for 10 s (and, when probed, has answered a
+  probe); the fifth end within a sliding 60 s window gives the unit up (one
+  `[supervisor] <unit> failed ...` line). Under `restart=always` a clean exit
+  restarts too and counts toward the window. A critical unit is never restarted:
+  its first end logs `[supervisor] critical unit <unit> died (...)`, dumps the
+  unit table to the kernel log, and runs the orderly shutdown sequence, then
+  powers off, or reboots under kenv `supervisor.on_critical=reboot` (no
+  reboot-loop guard yet). `SUPERVISOR_IPC_LIST_REQ` reports the table, one
+  `wasmos_supervisor_unit_record_t` per unit, into a buffer the caller owns and
+  lends READ|WRITE (layout version 2, with the liveness fields). All times scale
+  by kenv `supervisor.timescale` (1-100, default 1). The policy is
+  `supervisor_unit.c`, host-tested in `test_supervisor_unit`.
+- Liveness: a unit whose `PROC_IPC_NOTIFY_READY` carries
+  `PROC_READY_FLAG_LIVENESS` names its event-loop endpoint in arg0; the PM
+  records it only when the sender owns it and passes it on in
+  `PROC_IPC_CHILD_READY`'s arg1. The supervisor sends that endpoint
+  `WASMOS_IPC_HEALTH_REQ` every probe period, one probe outstanding at a time;
+  three in a row unanswered when the next is due and it logs `[supervisor]
+  <unit> missed 3 liveness probes; killing pid N` and kills the unit, which
+  then counts as a failure under its restart policy. The answer
+  (`WASMOS_IPC_HEALTH_RESP`) comes from the event loop itself --
+  `wasmos_sys_event_loop_poll`, `wasmos_sys_native_event_loop_poll` and the
+  AssemblyScript `EventLoop` answer before intents and handlers -- so a loop
+  parked in a nested receive or stuck in a handler does not answer, and a busy
+  one that keeps returning to its loop does. No boot service opts in yet; only
+  `sv_probe`'s `hang-once` and `busy` modes do.
+- `PROC_IPC_KILL` is judged by its sender: the PM kills through
+  `process_kill_for(sender, ...)`, so a parent can kill its child. Before, the
+  parent check ran against the PM's own pid and refused every kill not of a PM
+  child, so the supervisor's kills (missed READY, missed probes) did nothing.
+  Failures answer `WASMOS_ERR_PROC_PM_KILL_NOT_CHILD` / `_BAD_ENDPOINT` /
+  `_NO_CALLER`.
+- The supervisor is a critical process: kernel init marks it with
+  `process_set_critical` once spawned, and any exit of a critical process logs
+  `[kernel] critical process <name> (pid N) ended (...)` and panics with
+  `critical_process_ended`. A supervisor that cannot set itself up exits, and so
+  panics. kenv `supervisor.fault=trap` (via `kernel.cmdline`) makes it trap on
+  its first submission, which is how `tests/test_supervisor.py` checks that.
+- `sysinit.rc` hands vt, logger, fontsvc, gfxcomp and the console shell
+  (`cli@tty1`, `restart=always`, pinned to slot 1) to the supervisor with the
+  script engine's `service` line; sysinit finds the supervisor by name watch and
+  continues once a unit is accepted, not once it is up. Apps (chardevc, the gfx
+  apps) are still plain `spawn`s, and device-manager spawns the drivers whose
+  rule names no restart policy itself. `svc submit <spec>` submits from the
+  shell, `svc list` prints the unit table and `svc status <unit>` one unit,
+  including its liveness record; `svc kill <unit>` kills a unit's running
+  instance (`SUPERVISOR_IPC_KILL_REQ`, a `wasmos_supervisor_unit_desc_t`
+  naming it), logged as `[supervisor] <unit> kill requested; killing pid N`,
+  and the end counts as a failure under the unit's policy. It is refused with
+  `WASMOS_ERR_SUPERVISOR_NO_UNIT` or `_NOT_RUNNING`. `sv_probe` is the test
+  unit that crashes, hangs or stays busy on demand. Not yet: liveness for the
+  boot services, and operator commands that stop, start or restart a unit
+  without the end counting as a failure.
+- An ACPI rule with `ENV{RESTART}="never|on-failure|always"` makes
+  device-manager submit the driver to the supervisor instead of spawning it:
+  the unit is `<template>@acpi:<io base>` (`rtc@acpi:0070`), carries the rule's
+  args and the I/O/IRQ caps a direct spawn would, and is logged as
+  `[device-manager] handed to the supervisor: <spec>`. The supervisor is found
+  by name watch and the submit is an intent on a loop device-manager pumps from
+  IDLE; the reply retires the rule. A submission that cannot be sent (no
+  supervisor bound yet) spawns the driver directly. `default.rules` sets
+  `on-failure` for rtc, keyboard and mouse; DMA-capable drivers stay
+  device-manager-spawned (the supervisor refuses DMA caps). Clients rebind on
+  their own (vt and gfxcomp through name watches on hangup; `date` per run).
+  `tests/test_supervisor.py` kills `rtc@acpi:0070` with `svc kill`, sees a new
+  instance come up with its I/O grant, and reads the clock through it.
+- The vt is restartable: `svc kill vt` brings back the vt and, behind it, the
+  console shell. The kernel drops the console-ring registration when its owner
+  is reaped (`klog_release_ring`); it used to keep writing console text into
+  the dead vt's freed transfer-buffer frames. A shell exits with
+  `WASMOS_PEER_GONE` on its vt's hangup and is restarted, and it dispatches
+  pushes from its idle wait, so a queued hangup no longer leaves it spinning
+  on its read step. A name bind a subscriber's full queue refused is retried
+  on each PM dispatch (`service_name_watch_retry_pending`), and an
+  `ENV{RESTART}` value that does not extract rejects its rule. Shutdown
+  ordering asks the class registry about each process
+  (`service_class_registry_provided_by`) instead of copying the first eight
+  providers.
+- Boot milestone: when sysinit.rc has run to its end, sysinit sends
+  `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` (finding the supervisor by name if no
+  `service` line did), and the units the supervisor then holds are the boot
+  set. Once every required or critical one is up -- READY and, if probed, a
+  probe answered; not `stable_ms`, which would add 10 s -- it logs
+  `[supervisor] boot complete at <ms> ms: <n> required units up` once; a
+  required boot unit that fails or stops first gives `[supervisor] boot
+  failed: required unit <unit> ...` instead. The harness's `require_prompt`
+  waits for the line after the prompt (`await_boot_complete`, host-tested in
+  `tests/test_boot_diagnosis.py`) and raises naming the unit on a failed boot;
+  `boot_complete=False` skips it.
+- Kernel init spawns sysinit once fs-manager says /boot is mounted, not once
+  device-manager is READY (which says its rules were loaded, not that any
+  volume is mounted). It subscribes to the name `fs.vfs`, looks it up, then
+  sends `FSMGR_IPC_MOUNT_WAIT_REQ` for `/boot` in a buffer it owns and lends
+  READ to fs-manager; fs-manager answers when a backend serving exactly that
+  path registers, or at once if one has (`wasmos_fsmgr_mount_wait_desc_t`, a
+  4-slot waiter table, waiters dropped on hangup). One sysinit spawn then
+  reads its module; `[init] /boot is mounted; spawning sysinit` is logged
+  once. If fs-manager has not answered within 60 s of device-manager's spawn,
+  the boot panics with `init_no_boot_mount`. Starting sysinit this early
+  overlaps its spawns with the mounts device-manager still makes, which
+  exposed a PM <-> fs-manager wait cycle: fs-manager answered a mount
+  request's spawn reply by pulling the backend class from the PM
+  synchronously, while the PM waited on fs-manager for a module read. The
+  mount reply now waits for the backend's class event instead. A second cycle
+  of the same kind ran through a backend: fs-manager creates mount points in a
+  backend synchronously as soon as it registers (`/nested` in `/wfs`), while
+  fs-wfs sat in the synchronous `wasmos_sys_notify_ready`, waiting for the PM.
+  fs-fat and fs-wfs now send READY with `wasmos_sys_notify_ready_nowait` and
+  do not wait for the ack.
 - `process_set_ready` and `process_set_running` refuse a transition whose owner
   is already `exiting` or ZOMBIE; they do not panic on it. Both return a status
   (1 = transitioned, 0 = raced), every caller gates its `sched_enqueue_thread`
@@ -1645,7 +1777,12 @@ linked feature documents for rationale and rollout plans.
   mount its log holds nothing to replay (§15). Without it every volume ever
   written stayed DIRTY for life and walked an empty log on every later mount.
   The mechanism is `WASMOS_IPC_SHUTDOWN_REQ` / `_DONE` and a process-manager
-  sequence in reverse spawn order; participation is opt-in via
+  sequence that tells each participant before everything it NEEDS by its
+  manifest's `[deps]` -- resolved through the name and class registries, and
+  through processes that are not participants -- and otherwise in reverse spawn
+  order (`shutdown_order.c`, host-tested in `test_shutdown_order`; the needs are
+  read from the image each app slot keeps until reap). The order is logged as
+  `[pm] shutdown: order <n>: <name> (pid N)`. Participation is opt-in via
   `WASMOS_SVC_FLAG_WANTS_SHUTDOWN`, because the sequence is sequential and a
   participant with nothing to persist would spend a deadline saying so. See
   `docs/architecture/15-drivers-and-services.md`, "Orderly Shutdown".

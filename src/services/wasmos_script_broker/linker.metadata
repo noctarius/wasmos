@@ -11,10 +11,6 @@ native = false
 stack_pages = 8
 heap_pages = 8
 
-[ipc]
-required_endpoint_name = "proc"
-required_endpoint_rights = 1
-
 [[capabilities]]
 name = "subsystem.register"
 flags = 0

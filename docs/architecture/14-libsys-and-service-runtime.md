@@ -82,6 +82,12 @@ request.
 `wasmos_sys_event_loop_poll(loop, budget)`:
 - Calls `wasmos_ipc_try_recv` (non-blocking) up to `budget` times.
 - For each received message:
+  0. A `WASMOS_IPC_HEALTH_REQ` liveness probe is answered with
+     `WASMOS_IPC_HEALTH_RESP` (same `request_id`, from the loop's endpoint) and
+     goes no further. The native loop and the AssemblyScript `EventLoop` do the
+     same, so the answer means "this loop is turning" for every service on
+     one; a supervisor probes the endpoint a unit names in its READY
+     (`PROC_READY_FLAG_LIVENESS`).
   1. Checks the intent table: if `msg.request_id` matches a pending intent,
      fires the one-shot callback and removes the entry.
   2. Otherwise checks the handler table by `msg.type`.
@@ -108,17 +114,33 @@ message if available).
 
 `wasmos_sys_notify_ready(proc_endpoint, source_endpoint)`:
 - Sends `PROC_IPC_NOTIFY_READY (0x20C)` to the process manager.
-- Called after a service has completed initialization and is ready to serve
-  requests.
-- Absent this call, the sysinit `start` command blocks indefinitely waiting
-  for the service to become ready.
+- READY means the service's endpoint is live and accepts requests. It is sent
+  as early as that is true, before any dependency is resolved; it is never a
+  milestone of the system or of the service's peers. A supervisor waits for it
+  within a deadline and kills a unit that does not send it.
+
+`wasmos_sys_svc_watch_*` and `wasmos_sys_svc_await_start` -- name watches
+([Process Model and IPC](09-process-and-ipc.md), "Name Watches"):
+- A watch set binds to one event loop and installs its `SVC_IPC_NAME_EVENT`
+  handler there; each watch follows one name, subscribing first and looking up
+  second, and reports every bind to a different endpoint through `on_bind`.
+- A watch outlives its provider: on `WASMOS_IPC_HANGUP` from it the client
+  drops the peer and calls `wasmos_sys_svc_watch_forget`, because a restarted
+  provider may come back on a reused endpoint id, and the next bind rebinds it.
+- `wasmos_sys_svc_await_start` is the one-shot form, a future that resolves
+  with the endpoint or rejects with `WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT`.
+  Deadlines are enforced by `wasmos_sys_svc_watch_set_expire`, which the
+  owner calls from its loop: a loop has one timeout hook, and it is the
+  owner's.
+- The native C runtime (`svc_watch_native.c`) and `libsys.zig`
+  (`svcWatch*`, `svcAwaitStart`) carry the same contract.
 
 `wasmos_sys_svc_lookup_retry(proc_endpoint, src_endpoint, name, request_id, retries)`:
-- Sends `SVC_IPC_LOOKUP_REQ (0x221)` for the named service.
-- Retries up to `retries` times with `sched_yield()` between attempts.
-- Returns the endpoint ID on success, -1 on timeout.
-- Used at service startup to locate dependent services that may not yet be
-  registered.
+- Sends `SVC_IPC_LOOKUP_REQ (0x221)` for the named service, retrying up to
+  `retries` times with `sched_yield()` between attempts; -1 when none answers.
+- Superseded by name watches for new code: its bound is a yield count, so how
+  long it waits depends on CPU speed, and a provider that registers late or
+  restarts is missed. The remaining callers are tracked in `docs/TASKS.md`.
 
 ---
 

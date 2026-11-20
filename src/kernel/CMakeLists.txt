@@ -140,6 +140,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/hashmap.o
   ${BUILD_DIR}/subsystem_registry.o
   ${BUILD_DIR}/service_class_registry.o
+  ${BUILD_DIR}/service_name_watch.o
   ${BUILD_DIR}/wasmos_exec_format.o
   ${BUILD_DIR}/paging.o
   ${BUILD_DIR}/linmem_slots.o
@@ -179,7 +180,9 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/warp_driver_ring3_call_policy.o
   ${BUILD_DIR}/process_manager_services.o
   ${BUILD_DIR}/process_manager_spawn.o
+  ${BUILD_DIR}/process_manager_caps.o
   ${BUILD_DIR}/process_manager_shutdown.o
+  ${BUILD_DIR}/shutdown_order.o
   ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasmos_app_meta.o
   ${BUILD_DIR}/native_driver.o
@@ -293,6 +296,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/hashmap.c
   ${KERNEL_DIR}/subsystem_registry.c
   ${KERNEL_DIR}/service_class_registry.c
+  ${KERNEL_DIR}/service_name_watch.c
   ${KERNEL_DIR}/wasmos_exec_format.c
   ${KERNEL_DIR}/physmem.c
   ${KERNEL_DIR}/runtime_context.c
@@ -330,7 +334,9 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/warp_driver_ring3_call_policy.c
   ${KERNEL_DIR}/process_manager_services.c
   ${KERNEL_DIR}/process_manager_spawn.c
+  ${KERNEL_DIR}/process_manager_caps.c
   ${KERNEL_DIR}/process_manager_shutdown.c
+  ${KERNEL_DIR}/shutdown_order.c
   ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasmos_app_meta.c
   ${KERNEL_DIR}/native_driver.c
@@ -638,6 +644,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/hashmap.c -o ${BUILD_DIR}/hashmap.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/subsystem_registry.c -o ${BUILD_DIR}/subsystem_registry.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/service_class_registry.c -o ${BUILD_DIR}/service_class_registry.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/service_name_watch.c -o ${BUILD_DIR}/service_name_watch.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_exec_format.c -o ${BUILD_DIR}/wasmos_exec_format.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
@@ -678,7 +685,9 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/warp_driver_ring3_call_policy.c -o ${BUILD_DIR}/warp_driver_ring3_call_policy.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_services.c -o ${BUILD_DIR}/process_manager_services.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_spawn.c -o ${BUILD_DIR}/process_manager_spawn.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_caps.c -o ${BUILD_DIR}/process_manager_caps.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_shutdown.c -o ${BUILD_DIR}/process_manager_shutdown.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/shutdown_order.c -o ${BUILD_DIR}/shutdown_order.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app_meta.c -o ${BUILD_DIR}/wasmos_app_meta.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/native_driver.c -o ${BUILD_DIR}/native_driver.o

@@ -44,6 +44,7 @@ export const WASMOS_ERR_DOMAIN_FRAMEBUFFER: u16 = 23;
 export const WASMOS_ERR_DOMAIN_DEVMGR: u16 = 10;
 export const WASMOS_ERR_DOMAIN_VIRTIO_BLK: u16 = 24;
 export const WASMOS_ERR_DOMAIN_BLOCK_DEV: u16 = 25;
+export const WASMOS_ERR_DOMAIN_SUPERVISOR: u16 = 26;
 
 export const WASMOS_ERR_NONE: i32 = 0;
 // A domain error is the negative of (domain << 16) | local_code.
@@ -58,6 +59,11 @@ export const WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: i32 = -0x00010008; // process c
 export const WASMOS_ERR_PROC_SPAWN_BROKER_IPC: i32 = -0x00010009; // broker plan IPC transport/reply failed
 export const WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: i32 = -0x0001000A; // broker replied with malformed/unsupported plan
 export const WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: i32 = -0x0001000B; // valid broker plan returned; PM launch step deferred
+export const WASMOS_ERR_PROC_SPAWN_BAD_DESC: i32 = -0x0001000C; // a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names
+export const WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: i32 = -0x0001000D; // the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child
+export const WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: i32 = -0x0001000E; // the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch
+export const WASMOS_ERR_PROC_SPAWN_BAD_CAPS: i32 = -0x0001000F; // the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created
+export const WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: i32 = -0x00010010; // the kernel refused the parsed capability profile for the new child, which was killed before it ran
 export const WASMOS_ERR_PROC_PM_BUSY: i32 = -0x00020001; // PM already has an incompatible in-flight operation
 export const WASMOS_ERR_PROC_PM_BAD_ENDPOINT: i32 = -0x00020002; // source endpoint owner lookup failed
 export const WASMOS_ERR_PROC_PM_NO_CALLER: i32 = -0x00020003; // source endpoint owner has no live process
@@ -87,6 +93,13 @@ export const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001A; // PM could not 
 export const WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: i32 = -0x0002001B; // that service name is held by another live process
 export const WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: i32 = -0x0002001C; // that (class, instance) is held by another live process
 export const WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: i32 = -0x0002001D; // the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on
+export const WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE: i32 = -0x0002001E; // the service-subscription table could not grow to hold another subscription
+export const WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC: i32 = -0x0002001F; // a name-subscription descriptor was short, of an unknown version, or named no service
+export const WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT: i32 = -0x00020020; // no provider bound the awaited service name within the caller's window
+export const WASMOS_ERR_PROC_PM_SVC_WATCH_SEND: i32 = -0x00020021; // a service watch could not send its request to the process manager
+export const WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: i32 = -0x00020022; // a service watch could not acquire or fill the transfer buffer for its subscription descriptor
+export const WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: i32 = -0x00020023; // the process manager answered a service-watch request with neither its response nor a packed error
+export const WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: i32 = -0x00020024; // the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself
 export const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 export const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 export const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -284,6 +297,13 @@ export const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION: i32 = -0x00190008; // a bl
 export const WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: i32 = -0x00190009; // a block record is short, unterminated, or names a length outside the transfer buffer
 export const WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: i32 = -0x0019000A; // the device has no descriptor to report, so it cannot be identified
 export const WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: i32 = -0x0019000B; // a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it
+export const WASMOS_ERR_SUPERVISOR_BAD_DESC: i32 = -0x001A0001; // the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor
+export const WASMOS_ERR_SUPERVISOR_BAD_SPEC: i32 = -0x001A0002; // the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option
+export const WASMOS_ERR_SUPERVISOR_EXISTS: i32 = -0x001A0003; // a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed
+export const WASMOS_ERR_SUPERVISOR_NO_SPACE: i32 = -0x001A0004; // the supervisor's unit table is full
+export const WASMOS_ERR_SUPERVISOR_DMA_CAPS: i32 = -0x001A0005; // the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit
+export const WASMOS_ERR_SUPERVISOR_NO_UNIT: i32 = -0x001A0006; // no unit of the name the request gives is recorded
+export const WASMOS_ERR_SUPERVISOR_NOT_RUNNING: i32 = -0x001A0007; // the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed
 
 export function errMake(dom: u16, code: u16): i32 {
   return -(<i32>(((<u32>dom) << 16) | (<u32>code)));
@@ -335,6 +355,7 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
     case WASMOS_ERR_DOMAIN_VIRTIO_BLK: return "virtio_blk";
     case WASMOS_ERR_DOMAIN_BLOCK_DEV: return "block_dev";
+    case WASMOS_ERR_DOMAIN_SUPERVISOR: return "supervisor";
     default: return "unknown";
   }
 }
@@ -353,6 +374,11 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_SPAWN_BROKER_IPC: return "broker plan IPC transport/reply failed";
     case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: return "broker replied with malformed/unsupported plan";
     case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: return "valid broker plan returned; PM launch step deferred";
+    case WASMOS_ERR_PROC_SPAWN_BAD_DESC: return "a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names";
+    case WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: return "the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child";
+    case WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: return "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch";
+    case WASMOS_ERR_PROC_SPAWN_BAD_CAPS: return "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created";
+    case WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: return "the kernel refused the parsed capability profile for the new child, which was killed before it ran";
     case WASMOS_ERR_PROC_PM_BUSY: return "PM already has an incompatible in-flight operation";
     case WASMOS_ERR_PROC_PM_BAD_ENDPOINT: return "source endpoint owner lookup failed";
     case WASMOS_ERR_PROC_PM_NO_CALLER: return "source endpoint owner has no live process";
@@ -382,6 +408,13 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN: return "that service name is held by another live process";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN: return "that (class, instance) is held by another live process";
     case WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED: return "the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE: return "the service-subscription table could not grow to hold another subscription";
+    case WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC: return "a name-subscription descriptor was short, of an unknown version, or named no service";
+    case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT: return "no provider bound the awaited service name within the caller's window";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_SEND: return "a service watch could not send its request to the process manager";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: return "a service watch could not acquire or fill the transfer buffer for its subscription descriptor";
+    case WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: return "the process manager answered a service-watch request with neither its response nor a packed error";
+    case WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: return "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";
@@ -579,6 +612,13 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "a block record is short, unterminated, or names a length outside the transfer buffer";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "the device has no descriptor to report, so it cannot be identified";
     case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it";
+    case WASMOS_ERR_SUPERVISOR_BAD_DESC: return "the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor";
+    case WASMOS_ERR_SUPERVISOR_BAD_SPEC: return "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option";
+    case WASMOS_ERR_SUPERVISOR_EXISTS: return "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed";
+    case WASMOS_ERR_SUPERVISOR_NO_SPACE: return "the supervisor's unit table is full";
+    case WASMOS_ERR_SUPERVISOR_DMA_CAPS: return "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit";
+    case WASMOS_ERR_SUPERVISOR_NO_UNIT: return "no unit of the name the request gives is recorded";
+    case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed";
     default: return "unknown error";
   }
 }

@@ -17,11 +17,8 @@ stack_pages = 16
 # 512 pages (2 MiB) to leave headroom for the netif/ICMP step without a reflow.
 heap_pages = 512
 
-[ipc]
-# Minimum a service needs to be admitted by the loader: a bound "proc" endpoint,
-# mirroring gfx_compositor. net-stack does not use it yet in this milestone.
-required_endpoint_name = "proc"
-required_endpoint_rights = 1
+[deps]
+wants = ["fs.vfs", "class:net.ifc"]
 
 [[capabilities]]
 name = "ipc.basic"

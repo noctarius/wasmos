@@ -89,6 +89,54 @@ add_custom_command(
   VERBATIM
 )
 
+# Service-name watches (svc_watch_native.c) and the future runtime their await
+# form resolves through (coroutine_native.c + its context switch).
+set(GFX_COMPOSITOR_LIBSYS_RUNTIME_OBJS)
+set(GFX_COMPOSITOR_COROUTINE_SWITCH_OBJ ${BUILD_DIR}/gfx_compositor_coroutine_native_x86_64.o)
+foreach (gfx_libsys_src svc_watch_native coroutine_native)
+  set(gfx_libsys_obj ${BUILD_DIR}/gfx_compositor_${gfx_libsys_src}.o)
+  list(APPEND GFX_COMPOSITOR_LIBSYS_RUNTIME_OBJS ${gfx_libsys_obj})
+  add_custom_command(
+    OUTPUT ${gfx_libsys_obj}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${CLANG}
+            -target ${KERNEL_TARGET_TRIPLE}
+            -ffreestanding
+            -fno-stack-protector
+            -fno-pic
+            -fno-pie
+            -fno-builtin
+            -nostdlib
+            -O2
+            -I ${DRIVER_WASM_DIR}/include
+            -I ${LIBC_DIR}/include
+            -I ${LIBSYS_NATIVE_DIR}/include
+            -c ${LIBSYS_NATIVE_DIR}/${gfx_libsys_src}.c
+            -o ${gfx_libsys_obj}
+    DEPENDS ${LIBSYS_NATIVE_DIR}/${gfx_libsys_src}.c
+            ${LIBSYS_NATIVE_DIR}/include/wasmos/libsys_native.h
+            ${LIBSYS_NATIVE_DIR}/include/wasmos/coroutine_native.h
+            ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
+            ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Building gfx-compositor ${gfx_libsys_src} object"
+    VERBATIM
+  )
+endforeach ()
+
+add_custom_command(
+  OUTPUT ${GFX_COMPOSITOR_COROUTINE_SWITCH_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} -target ${KERNEL_TARGET_TRIPLE}
+          -c ${LIBSYS_NATIVE_DIR}/coroutine_native_x86_64.S
+          -o ${GFX_COMPOSITOR_COROUTINE_SWITCH_OBJ}
+  DEPENDS ${LIBSYS_NATIVE_DIR}/coroutine_native_x86_64.S
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/coroutine_native.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building gfx-compositor coroutine context switch object"
+  VERBATIM
+)
+
 add_custom_command(
   OUTPUT ${GFX_COMPOSITOR_LIBC_CTYPE_OBJ}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
@@ -140,11 +188,15 @@ add_custom_command(
           ${GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ}
           ${GFX_COMPOSITOR_LIBC_CTYPE_OBJ}
           ${GFX_COMPOSITOR_LIBC_STRING_OBJ}
+          ${GFX_COMPOSITOR_LIBSYS_RUNTIME_OBJS}
+          ${GFX_COMPOSITOR_COROUTINE_SWITCH_OBJ}
           -o ${GFX_COMPOSITOR_ELF}
   DEPENDS ${GFX_COMPOSITOR_ZIG_OBJ}
           ${GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ}
           ${GFX_COMPOSITOR_LIBC_CTYPE_OBJ}
           ${GFX_COMPOSITOR_LIBC_STRING_OBJ}
+          ${GFX_COMPOSITOR_LIBSYS_RUNTIME_OBJS}
+          ${GFX_COMPOSITOR_COROUTINE_SWITCH_OBJ}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Linking native Zig gfx-compositor service"
   VERBATIM

@@ -161,13 +161,15 @@ class ProcessManager {
         return 0;
     }
 
+    /* PROC_IPC_KILL: arg0=pid arg1=exit status. Only the target's parent may
+     * kill it. The PM runs as a process of its own, so the parent check is made
+     * against the sender (process_kill_for), not against the PM. */
     int handle_kill(uint32_t pm_context_id, const ipc_message_t* msg) {
         uint32_t owner_context = 0;
         process_t* caller = 0;
-        process_t* target = 0;
 
         if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-            return -1;
+            return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
         }
         caller = process_find_by_context(owner_context);
         if (!caller) {
@@ -175,16 +177,11 @@ class ProcessManager {
                 g_pm_kill_owner_deny_logged = 1;
                 klog_write("[test] pm kill owner deny ok\n");
             }
-            return -1;
+            return WASMOS_ERR_PROC_PM_NO_CALLER;
         }
 
-        target = process_get(msg->arg0);
-        if (!target || target->parent_pid != caller->pid) {
-            return -1;
-        }
-
-        if (process_kill(msg->arg0, (int32_t)msg->arg1) != 0) {
-            return -1;
+        if (process_kill_for(caller->pid, msg->arg0, (int32_t)msg->arg1) != 0) {
+            return WASMOS_ERR_PROC_PM_KILL_NOT_CHILD;
         }
 
         ipc_message_t resp;
@@ -196,7 +193,9 @@ class ProcessManager {
         resp.arg1 = msg->arg1;
         resp.arg2 = 0;
         resp.arg3 = 0;
-        return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+        return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+                   ? 0
+                   : WASMOS_ERR_PROC_PM_REPLY_SEND;
     }
 
     int handle_status(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -230,8 +229,9 @@ class ProcessManager {
             if (target->state == PROCESS_STATE_ZOMBIE) {
                 resp.arg1 = PROC_STATUS_ZOMBIE;
                 resp.arg2 = (uint32_t)target->exit_status;
+                resp.arg3 = target->exit_reason;
             } else if (target->state != PROCESS_STATE_UNUSED) {
-                resp.arg1 = PROC_STATUS_RUNNING;
+                resp.arg1 = target->ready ? PROC_STATUS_READY : PROC_STATUS_RUNNING;
             }
         }
 
@@ -243,6 +243,7 @@ class ProcessManager {
         process_t* caller = 0;
         process_t* target = 0;
         int32_t exit_status = 0;
+        uint32_t exit_reason = 0;
 
         if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
             return -1;
@@ -257,7 +258,7 @@ class ProcessManager {
             return -1;
         }
 
-        if (process_get_exit_status(msg->arg0, &exit_status) == 0) {
+        if (process_get_exit_info(msg->arg0, &exit_status, &exit_reason) == 0) {
             ipc_message_t resp;
             resp.type = PROC_IPC_RESP;
             resp.source = g_pm.proc_endpoint;
@@ -265,7 +266,7 @@ class ProcessManager {
             resp.request_id = msg->request_id;
             resp.arg0 = msg->arg0;
             resp.arg1 = (uint32_t)exit_status;
-            resp.arg2 = 0;
+            resp.arg2 = exit_reason;
             resp.arg3 = 0;
             int rc = ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
             /* Status delivered — reap the zombie now so its process slot is
@@ -393,6 +394,9 @@ class ProcessManager {
         case PROC_IPC_SPAWN_PATH:
             rc = pm_handle_spawn_path(process->context_id, &msg);
             break;
+        case PROC_IPC_SPAWN_WATCHED:
+            rc = pm_handle_spawn_watched(process->context_id, &msg);
+            break;
         case PROC_IPC_SPAWN_PATH_CAPS:
             rc = pm_handle_spawn_path_caps(process->context_id, &msg);
             break;
@@ -450,6 +454,15 @@ class ProcessManager {
         case SVC_IPC_UNREGISTER_CLASS_REQ:
             rc = pm_handle_class_unregister(process->context_id, &msg);
             break;
+        case SVC_IPC_UNSUBSCRIBE_CLASS_REQ:
+            rc = pm_handle_class_unsubscribe(process->context_id, &msg);
+            break;
+        case SVC_IPC_SUBSCRIBE_NAME_REQ:
+            rc = pm_handle_name_subscribe(process->context_id, &msg);
+            break;
+        case SVC_IPC_UNSUBSCRIBE_NAME_REQ:
+            rc = pm_handle_name_unsubscribe(process->context_id, &msg);
+            break;
         default:
             /* Unknown/unsolicited type — almost always a stray reply (a *_RESP
              * or *_ERROR) that got misrouted to PM's well-known proc endpoint.
@@ -464,7 +477,10 @@ class ProcessManager {
             if (msg.type == SVC_IPC_REGISTER_REQ || msg.type == SVC_IPC_REGISTER_DESC_REQ ||
                 msg.type == SVC_IPC_LOOKUP_REQ || msg.type == SVC_IPC_LOOKUP_CLASS_REQ ||
                 msg.type == SVC_IPC_SUBSCRIBE_CLASS_REQ ||
-                msg.type == SVC_IPC_UNREGISTER_CLASS_REQ) {
+                msg.type == SVC_IPC_UNREGISTER_CLASS_REQ ||
+                msg.type == SVC_IPC_UNSUBSCRIBE_CLASS_REQ ||
+                msg.type == SVC_IPC_SUBSCRIBE_NAME_REQ ||
+                msg.type == SVC_IPC_UNSUBSCRIBE_NAME_REQ) {
                 resp.type = SVC_IPC_ERROR;
             } else {
                 resp.type = PROC_IPC_ERROR;

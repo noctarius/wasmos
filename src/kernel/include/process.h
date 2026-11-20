@@ -7,6 +7,7 @@
 #include "sync/spinlock.h"
 #include "sched_event.h"
 #include "wasmos_app.h"
+#include "../../../abi/generated/c/wasmos_constants.h" /* PROC_EXIT_REASON_* */
 
 /* Fixed g_processes[] slot count; a spawn past it fails.
  *
@@ -261,6 +262,24 @@ typedef struct process {
     uint8_t needs_runtime_lock;     /* take runtime_lock around every entry call */
     uint8_t ready;                  /* the child has announced readiness (notify_ready) */
     uint8_t require_explicit_ready; /* PM must not treat spawn alone as ready */
+    /* PROC_EXIT_REASON_* (abi/constants.yaml) paired with exit_status: staged
+     * with it while the process runs, final from ZOMBIE onward. */
+    uint8_t exit_reason;
+    /* The spawner's watch (PROC_IPC_SPAWN_WATCHED): reserved PROC_IPC_CHILD_READY
+     * and _EXITED messages, each taken by an atomic exchange so it is posted at
+     * most once. watch_ready is posted by the first process_notify_ready and
+     * cancelled at reap if still held; watch_exit is posted at reap. NULL for an
+     * unwatched process. */
+    struct ipc_owed* watch_ready;
+    struct ipc_owed* watch_exit;
+    /* The endpoint the process named for liveness probes in PROC_IPC_NOTIFY_READY
+     * (PROC_READY_FLAG_LIVENESS), always one it owns; IPC_ENDPOINT_NONE when it
+     * named none. Read once, by process_notify_ready, into the spawner's
+     * PROC_IPC_CHILD_READY. */
+    uint32_t live_endpoint;
+    /* Set by process_set_critical: a process the system cannot run without and
+     * nobody restarts. Its exit, by any path, is a kernel panic. */
+    uint8_t critical;
     char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1]; /* "KERNEL", "WARP", ... */
     /* Template context filled at spawn and copied into the main thread; also
      * refreshed from the interrupted frame on preemption. The context the
@@ -433,9 +452,16 @@ uint32_t process_current_pid(void);
 /* Controlling text slot (process_t.ctty) of the process dispatched on the calling
  * CPU, or 0 when it has none or nothing is dispatched. */
 uint32_t process_current_ctty(void);
-/* Record the status a later exit will publish. Does not itself exit or wake
- * anything; the value is read when the process is marked exited. */
+/* Record the status and PROC_EXIT_REASON_* a later exit will publish. Does not
+ * itself exit or wake anything; both are read when the process is marked
+ * exited. A process_kill before that point replaces them. */
+void process_set_exit(process_t* process, int32_t exit_status, uint32_t reason);
+/* process_set_exit with PROC_EXIT_REASON_EXITED: the process ends itself. */
 void process_set_exit_status(process_t* process, int32_t exit_status);
+/* Mark `pid` critical: from now on its exit panics the kernel, naming it. A
+ * process that has already ended panics here, so a death between its spawn
+ * and this call is not missed. */
+void process_set_critical(uint32_t pid);
 /* No-op. Blocking is a per-thread concern now and lives in sched_event_wait;
  * this does nothing and a caller relying on it to block will spin instead.
  * TODO: delete once the remaining call sites stop calling it. */
@@ -445,6 +471,14 @@ void process_block_on_ipc(process_t* process);
  * iteration picks it up. */
 void process_notify_ready(process_t* process);
 void process_set_require_explicit_ready(process_t* process);
+/* Attach a spawner's watch to `pid`, taking ownership of both reserved
+ * messages: on_ready is posted (arg0 = pid) the first time the process latches
+ * READY, on_exit (arg0 = pid, arg1 = exit status, arg2 = PROC_EXIT_REASON_*) when
+ * it is reaped. Must be called before the process first runs; the caller sets
+ * auto-reap after it so the exit is reported as soon as it happens. Returns 0,
+ * or -1 for an unknown pid or a process already watched, in which case the
+ * caller keeps both records. */
+int process_set_watch(uint32_t pid, struct ipc_owed* on_ready, struct ipc_owed* on_exit);
 /*
  * Wait for a child to exit. TRI-STATE, not 0-on-success:
  *   0  the child was already a zombie; *out_exit_status is set and the child
@@ -477,18 +511,28 @@ int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_ex
  * same packed codes as process_thread_join for a bad tid, a foreign owner, or a
  * thread someone else is already joining. */
 int process_thread_detach(process_t* process, uint32_t target_tid);
-/* Terminate a process: publishes the exit status, tombstones its threads, wakes
+/* Terminate a process: publishes the exit status with PROC_EXIT_REASON_KILLED,
+ * replacing any exit the target staged, tombstones its threads, wakes
  * its waiters, and auto-reaps if that was requested. Returns 0 on success and
  * also when the target was ALREADY a zombie; -1 if there is no such pid, if it
  * is the caller's own pid (a process cannot kill itself here), or if the caller
  * is a process that is not the target's parent. Kernel callers
  * (current_pid == 0) bypass the parent check. */
 int process_kill(uint32_t pid, int32_t exit_status);
+/* process_kill with the parent check made against `requester_pid` instead of
+ * the current process: for the process manager, which kills on behalf of the
+ * process that sent PROC_IPC_KILL and is itself nobody's parent there.
+ * requester_pid 0 skips the check. A process can still not kill itself, nor
+ * the current process be killed through this. */
+int process_kill_for(uint32_t requester_pid, uint32_t pid, int32_t exit_status);
 /* Read a terminated process's exit status. INVERTED-LOOKING but deliberate:
  * 0 means "it has exited and *out_exit_status is set", 1 means "still alive,
  * nothing written", -1 means no such pid or a NULL out pointer. Callers use
  * != 0 as the liveness predicate. */
 int process_get_exit_status(uint32_t pid, int32_t* out_exit_status);
+/* process_get_exit_status that also reports the PROC_EXIT_REASON_* into
+ * *out_reason. Same return values; both outputs are required. */
+int process_get_exit_info(uint32_t pid, int32_t* out_exit_status, uint32_t* out_reason);
 /* Enable/disable auto-reap, then try it immediately: a process that is already
  * a zombie with no waiter is reaped before this returns, invalidating its slot.
  * Returns 0, or -1 for an unknown/free pid. */

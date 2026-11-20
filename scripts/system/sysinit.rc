@@ -5,20 +5,29 @@ echo "Starting system services..."
 
 spawn /boot/apps/chardevc.wap
 
-start /boot/system/services/vt.wap
+# Long-running services are handed to the supervisor, which spawns them, watches
+# them and restarts them by their policy:
+#   service <unit> <path> [restart=never|on-failure|always]
+#                         [class=optional|required|critical] [tty=<slot>] [-- args]
+# The line continues once the supervisor has accepted the unit, not once the
+# unit is up; every service here follows its peers by name, so none of them
+# depends on the order of these lines.
+service vt /boot/system/services/vt.wap class=required
 
 # The kernel log, appended to /var/log/messages on the tmpfs root from the first
 # boot line on (the logger reads the kernel's ring from its oldest byte).
 exec /boot/system/utils/mkdir.wap -p /var/log
 if -f /boot/system/services/logger.wap then
-    spawn /boot/system/services/logger.wap
+    service logger /boot/system/services/logger.wap
 endif
 
+# The gfx apps still resolve "gfx" with a one-shot retry loop of their own,
+# hence the wait before them.
 if -f /boot/system/services/fontsvc.wap then
-    start /boot/system/services/fontsvc.wap
+    service fontsvc /boot/system/services/fontsvc.wap
 endif
 
-spawn /boot/system/services/gfxcomp.wap
+service gfxcomp /boot/system/services/gfxcomp.wap class=required
 wait-svc gfx
 
 if -f /boot/apps/menu_bar.wap then
@@ -33,8 +42,9 @@ if -f /boot/apps/calculator.wap then
     spawn /boot/apps/calculator.wap
 endif
 
-# The console slot's shell, started last so the first prompt still means the
-# system is up.  Shells for the other slots are not started here: the vt creates
-# one on demand when a slot is first switched to or bound to serial, pinned to
-# that slot.
-start /boot/system/services/cli.wap
+# The console slot's shell, submitted last so the first prompt still means the
+# system is up, and pinned to slot 1 so a restarted shell returns to it; it is
+# restarted whenever it ends, a clean exit included.  Shells for the other slots
+# are not started here: the vt creates one on demand when a slot is first
+# switched to or bound to serial, pinned to that slot.
+service cli@tty1 /boot/system/services/cli.wap restart=always class=required tty=1

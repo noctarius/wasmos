@@ -25,9 +25,9 @@ heap_pages = 256
 initial_memory = 1572864
 max_memory = 4194304
 
-[ipc]
-required_endpoint_name = "proc"
-required_endpoint_rights = 1
+[deps]
+wants = ["fb", "kbd", "sin", "fs.vfs"]
+provides = ["vt"]
 
 [[capabilities]]
 name = "ipc.basic"

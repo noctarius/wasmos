@@ -14,8 +14,12 @@
  *   - Paging/mm/pfa: report success and hand back plausible non-zero values, so
  *     a spawn does not fail for want of an address space. Nothing here records
  *     mappings, so no test may assert on them.
- *   - Runtime teardown hooks (warp/wasm3/xfer_buffer/msi/irq/subsystem): a reap
- *     calls all of them; none has state a lifecycle test observes.
+ *   - Runtime teardown hooks (warp/wasm3/xfer_buffer/msi/irq/subsystem/the
+ *     console ring): a reap calls all of them; none has state a lifecycle test
+ *     observes.
+ *   - The owed-message calls (ipc_owed_post / _cancel) and a pid the inert
+ *     context switch reports as exited are recorded instead; see
+ *     stubs_process_platform.h.
  *   - context_switch: never reached. The WASMOS_PROCESS_TEST_SEAMS arm of
  *     process_run_worker_on_stack calls a worker entry directly instead of
  *     switching stacks, so a test drives worker threads without a context
@@ -30,7 +34,9 @@
 
 #include "memory.h"
 #include "process.h"
+#include "ipc.h"
 #include "arch/x86_64/smp.h"
+#include "stubs_process_platform.h"
 
 /* process.c and its neighbours each define this locally; there is no header to
  * take it from. Only the alignment of the stub allocator depends on it. */
@@ -183,11 +189,32 @@ void xfer_buffer_drop_context(uint32_t context_id) {
 void native_driver_release_owner(uint32_t context_id) {
     (void)context_id;
 }
+void klog_release_ring(uint32_t owner_context_id) {
+    (void)owner_context_id;
+}
 void wasmos_subsystem_registry_drop_owner(uint32_t context_id) {
     (void)context_id;
 }
 void ipc_endpoints_release_owner(uint32_t context_id) {
     (void)context_id;
+}
+
+stub_owed_event_t g_stub_owed_log[STUB_OWED_LOG_MAX];
+uint32_t g_stub_owed_count;
+
+static void stub_owed_note(const ipc_owed_t* owed, uint32_t posted, uint32_t arg0, uint32_t arg1,
+                           uint32_t arg2) {
+    if (!owed || g_stub_owed_count >= STUB_OWED_LOG_MAX) {
+        return;
+    }
+    g_stub_owed_log[g_stub_owed_count++] = (stub_owed_event_t){owed, posted, arg0, arg1, arg2};
+}
+void ipc_owed_post(ipc_owed_t* owed, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3) {
+    (void)arg3;
+    stub_owed_note(owed, 1u, arg0, arg1, arg2);
+}
+void ipc_owed_cancel(ipc_owed_t* owed) {
+    stub_owed_note(owed, 0u, 0u, 0u, 0u);
 }
 void warp_release_pid(uint32_t pid) {
     (void)pid;
@@ -237,12 +264,20 @@ void process_preempt_trampoline(void) {}
  * returns to decide what happened to the thread, and a stale value from a
  * previous dispatch -- THREAD_EXITED, say -- would drive a transition the
  * thread never asked for. */
+uint32_t g_stub_exit_on_dispatch_pid;
+
+static process_run_result_t stub_switch_result(void) {
+    uint32_t pid = g_stub_exit_on_dispatch_pid;
+    return (pid != 0u && cpu_local()->current_pid == pid) ? PROCESS_RUN_EXITED
+                                                          : PROCESS_RUN_YIELDED;
+}
+
 void context_switch(process_context_t* out, process_context_t* in) {
     (void)out;
     (void)in;
-    cpu_local()->last_run_result = PROCESS_RUN_YIELDED;
+    cpu_local()->last_run_result = stub_switch_result();
 }
 void context_switch_to(process_context_t* in) {
     (void)in;
-    cpu_local()->last_run_result = PROCESS_RUN_YIELDED;
+    cpu_local()->last_run_result = stub_switch_result();
 }

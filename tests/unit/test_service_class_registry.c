@@ -155,6 +155,31 @@ static int test_lookup_truncates_but_reports_total(void) {
     return 0;
 }
 
+static int test_provided_by_sees_every_provider(void) {
+    fresh();
+    /* Twelve instances held by one process, then one by another: the second is
+     * past any fixed lookup buffer, and the predicate still finds it. */
+    for (uint32_t i = 0; i < 12; ++i) {
+        if (service_class_registry_add("blk", i, 200 + i, 1, 40) != 0)
+            return __LINE__;
+    }
+    if (service_class_registry_add("blk", 12, 300, 2, 41) != 0)
+        return __LINE__;
+    if (service_class_registry_provided_by("blk", 40) != 1)
+        return __LINE__;
+    if (service_class_registry_provided_by("blk", 41) != 1)
+        return __LINE__;
+    if (service_class_registry_provided_by("blk", 42) != 0)
+        return __LINE__; /* holds nothing */
+    if (service_class_registry_provided_by("net.ifc", 40) != 0)
+        return __LINE__; /* another class */
+    if (service_class_registry_provided_by("", 40) != 0 ||
+        service_class_registry_provided_by(0, 40) != 0 ||
+        service_class_registry_provided_by("blk", 0) != 0)
+        return __LINE__;
+    return 0;
+}
+
 static int test_reregister_updates_no_event(void) {
     fresh();
     if (service_class_registry_subscribe("net.ifc", 999, 5) != 0)
@@ -543,6 +568,63 @@ static int test_reset_clears(void) {
     return 0;
 }
 
+/* An unsubscribed endpoint receives nothing for the class, while another
+ * subscriber of the same class keeps receiving. */
+static int test_unsubscribe_stops_events_for_that_endpoint_only(void) {
+    fresh();
+    if (service_class_registry_subscribe("net.ifc", 500, 5) != 0)
+        return __LINE__;
+    if (service_class_registry_subscribe("net.ifc", 501, 6) != 0)
+        return __LINE__;
+    if (service_class_registry_unsubscribe("net.ifc", 500) != 0)
+        return __LINE__;
+    if (service_class_registry_add("net.ifc", 0, 100, 7, 70) != 0)
+        return __LINE__;
+    if (g_ev_n != 1 || g_ev[0].notify != 501 || g_ev[0].event != SVC_CLASS_EVENT_ADD)
+        return __LINE__;
+    return 0;
+}
+
+/* Unsubscribing is scoped to the class: the same endpoint's subscription to a
+ * different class survives. */
+static int test_unsubscribe_is_scoped_to_its_class(void) {
+    fresh();
+    if (service_class_registry_subscribe("net.ifc", 500, 5) != 0)
+        return __LINE__;
+    if (service_class_registry_subscribe("block", 500, 5) != 0)
+        return __LINE__;
+    if (service_class_registry_unsubscribe("net.ifc", 500) != 0)
+        return __LINE__;
+    if (service_class_registry_add("net.ifc", 0, 100, 7, 70) != 0)
+        return __LINE__;
+    if (service_class_registry_add("block", 0, 200, 8, 80) != 0)
+        return __LINE__;
+    if (g_ev_n != 1 || g_ev[0].endpoint != 200)
+        return __LINE__;
+    return 0;
+}
+
+/* Dropping a subscription that does not exist succeeds, so a caller tearing down
+ * after a lost reply cannot fail; a malformed class name is still refused. */
+static int test_unsubscribe_is_idempotent_and_rejects_bad_names(void) {
+    fresh();
+    if (service_class_registry_unsubscribe("net.ifc", 500) != 0)
+        return __LINE__;
+    if (service_class_registry_subscribe("net.ifc", 500, 5) != 0)
+        return __LINE__;
+    if (service_class_registry_unsubscribe("net.ifc", 500) != 0)
+        return __LINE__;
+    if (service_class_registry_unsubscribe("net.ifc", 500) != 0)
+        return __LINE__;
+    if (service_class_registry_unsubscribe("", 500) >= 0)
+        return __LINE__;
+    if (service_class_registry_unsubscribe(0, 500) >= 0)
+        return __LINE__;
+    if (service_class_registry_unsubscribe("0123456789abcdefXYZ", 500) >= 0)
+        return __LINE__;
+    return 0;
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -550,6 +632,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_add_and_lookup),
         WASMOS_TEST_CASE(test_lookup_unknown_and_empty),
         WASMOS_TEST_CASE(test_lookup_truncates_but_reports_total),
+        WASMOS_TEST_CASE(test_provided_by_sees_every_provider),
         WASMOS_TEST_CASE(test_reregister_updates_no_event),
         WASMOS_TEST_CASE(test_antispoof),
         WASMOS_TEST_CASE(test_classes_independent),
@@ -569,6 +652,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_no_event_sink),
         WASMOS_TEST_CASE(test_dynamic_growth),
         WASMOS_TEST_CASE(test_reset_clears),
+        WASMOS_TEST_CASE(test_unsubscribe_stops_events_for_that_endpoint_only),
+        WASMOS_TEST_CASE(test_unsubscribe_is_scoped_to_its_class),
+        WASMOS_TEST_CASE(test_unsubscribe_is_idempotent_and_rejects_bad_names),
     };
     const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
     if (wasmos_test_run_all(cases, groups) != 0) {

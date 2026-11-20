@@ -39,6 +39,14 @@ called, or when a `WASMOS_SYSCALL_EXIT` syscall fires.  Zombie processes are
 explicitly reaped by a waiting parent (`process_wait`) or auto-reaped
 (`auto_reap = 1`) when no waiter exists.
 
+A process the system cannot run without is marked **critical**
+(`process_set_critical`). Its end, for any reason, logs `[kernel] critical
+process <name> (pid N) ended (...)` and panics with `critical_process_ended`
+from the exit path itself, so it does not depend on any other process running.
+Kernel init marks the supervisor, the one process whose death leaves nobody to
+act on a death ([Drivers and Services](15-drivers-and-services.md)). Critical
+*units* are the supervisor's policy, not this flag.
+
 ---
 
 ### Process Identity
@@ -60,8 +68,9 @@ process share the same `context_id` and address space.
 ### Process Ownership and Trust
 
 The kernel-owned `init` task (spawned by `kmain`) is the root parent for the
-first generation of kernel-started processes.  It spawns `device-manager` and
-waits for FAT readiness before loading `sysinit`.
+first generation of kernel-started processes.  It spawns the supervisor,
+fs-manager, fs-tmpfs, fs-init and device-manager from the initfs, then waits
+for fs-manager to report `/boot` mounted before loading `sysinit` from it.
 
 The process manager (`proc` endpoint) is the privileged mediator for all
 further process lifecycle operations.  It:
@@ -70,7 +79,9 @@ further process lifecycle operations.  It:
 - Assigns `io.port`, `irq.route`, `mmio.map`, `dma.buffer`, `system.control`
   grants per declared profile
 - Maintains the service registry (name → endpoint)
-- Enforces owner-context restrictions on wait, kill, and status
+- Enforces owner-context restrictions on wait, kill, and status. A
+  `PROC_IPC_KILL` is judged against its sender (`process_kill_for`), not the
+  PM: a parent may kill its own child, and nothing else
 
 ---
 
@@ -192,6 +203,10 @@ notification endpoint: both blocking waits require a MESSAGE endpoint, and
 `ipc_endpoints_release_owner` freeing the hub.
 
 #### Peer Hangup
+
+A hangup is one case of an **owed kernel message** (`ipc_owed_t`): a message
+whose record is allocated when the obligation arises, so delivering it needs no
+memory and no queue space. The watched-spawn events above are the other.
 
 When a process is reaped, `ipc_endpoints_release_owner` sends
 `WASMOS_IPC_HANGUP` to every endpoint that process's endpoints had sent to:
@@ -495,17 +510,24 @@ The process manager (PM) runs as a kernel-native C++ service.
 | Opcode                          | Value   | Direction    | Description                           |
 |---------------------------------|---------|--------------|---------------------------------------|
 | `PROC_IPC_SPAWN`                | `0x200` | request      | Spawn by module index                 |
-| `PROC_IPC_WAIT`                 | `0x201` | request      | Wait for child exit                   |
+| `PROC_IPC_WAIT`                 | `0x201` | request      | Wait for child exit (status + reason) |
 | `PROC_IPC_KILL`                 | `0x202` | request      | Kill child                            |
-| `PROC_IPC_STATUS`               | `0x203` | request      | Query child state                     |
+| `PROC_IPC_STATUS`               | `0x203` | request      | Query process state (incl. READY)     |
 | `PROC_IPC_SPAWN_PATH`           | `0x209` | request      | Spawn by filesystem path              |
 | `PROC_IPC_SPAWN_PATH_SYNC`      | `0x20E` | request      | SPAWN_PATH; wait for NOTIFY_READY     |
+| `PROC_IPC_SPAWN_WATCHED`        | `0x213` | request      | Spawn by path; spawner watches child  |
+| `PROC_IPC_CHILD_READY`          | `0x214` | notification | Watched child latched READY (kernel)  |
+| `PROC_IPC_CHILD_EXITED`         | `0x215` | notification | Watched child ended (kernel)          |
 | `PROC_IPC_NOTIFY_READY`         | `0x20C` | notification | Child signals it is ready             |
 | `PROC_IPC_DMA_MAP_BORROW_REQ`   | `0x230` | request      | Map a borrow handle for DMA           |
 | `PROC_IPC_DMA_SYNC_BORROW_REQ`  | `0x231` | request      | Sync a mapped borrow handle           |
 | `PROC_IPC_DMA_UNMAP_BORROW_REQ` | `0x232` | request      | Unmap a borrow handle                 |
 | `SVC_IPC_REGISTER_REQ`          | `0x220` | request      | Register a named service endpoint     |
 | `SVC_IPC_LOOKUP_REQ`            | `0x221` | request      | Look up a named service endpoint      |
+| `SVC_IPC_SUBSCRIBE_NAME_REQ`    | `0x226` | request      | Watch one service name for binds      |
+| `SVC_IPC_UNSUBSCRIBE_NAME_REQ`  | `0x227` | request      | Drop a name watch                     |
+| `SVC_IPC_UNSUBSCRIBE_CLASS_REQ` | `0x228` | request      | Drop a class subscription             |
+| `SVC_IPC_NAME_EVENT`            | `0x2A9` | notification | A watched name was bound              |
 | `PROC_IPC_RESP`                 | `0x280` | response     | Success response                      |
 | `PROC_IPC_ERROR`                | `0x2FF` | response     | General PM error                      |
 
@@ -523,11 +545,98 @@ prompt without waiting for process exit.
 `proc->ready = 1` without sending an IPC.  `wasmos_sys_notify_ready()` (libsys)
 sends an IPC to PM's `proc` endpoint.
 
+#### Exit Status and Exit Reason
+
+A process ends with an exit status and a **reason** (`PROC_EXIT_REASON_*`,
+`abi/constants.yaml`). The status alone cannot separate a crash from a
+deliberate exit, because a guest may exit with any value, including the `-1`
+and `-11` the kernel uses for its own terminations. The reason is recorded by
+whoever ends the process, at the point it does so:
+
+| Reason         | Recorded by                                                        |
+|----------------|--------------------------------------------------------------------|
+| `EXITED`       | an exit host call or syscall, or the entry returning               |
+| `TRAPPED`      | a guest trap (the entry call fails) or a runtime `abort`           |
+| `FAULTED`      | the CPU exception handlers, for a fault in the process's own code  |
+| `KILLED`       | `process_kill` (`PROC_IPC_KILL`, PM spawn cleanup) and the permission policy |
+| `START_FAILED` | the PM, when a package never reaches its entry                     |
+
+A process stages its status and reason (`process_set_exit`) before it yields
+`EXITED`; a kill that lands before that yield replaces them, and a kill of an
+already exited process changes nothing. Both are collected together:
+`PROC_IPC_WAIT` replies `arg0=pid arg1=status arg2=reason` and reaps the child;
+`PROC_IPC_STATUS` reports `arg1=PROC_STATUS_*` and, for a zombie, `arg2=status
+arg3=reason`, without reaping.
+
+`PROC_IPC_STATUS` reports `PROC_STATUS_READY` for a live process whose READY
+latch is set and `PROC_STATUS_RUNNING` for one that has not announced itself.
+
+#### Watched Spawn
+
+`PROC_IPC_SPAWN_WATCHED` spawns from a path and gives the spawner the child's
+lifecycle as events instead of a wait. The request is a
+`wasmos_spawn_watch_desc_t` in a transfer buffer the spawner owns
+(`arg0=buffer_id arg1=offset arg2=size`); it names the path, the arguments, a
+tty pin and a **notify endpoint the spawner must own** — only the spawner may
+watch its child. On success the PM writes the child's pid, app flags and its
+`.wap` `[deps]` back into the descriptor and replies `arg0=pid arg1=app_flags`,
+so the spawner never reads an image. The descriptor may also carry a
+`wasmos_spawn_caps_v2_t` (I/O windows, IRQ lines, DMA), applied while the child
+is parked, so a driver holds its hardware access from its first instruction; a
+descriptor that does not parse spawns nothing.
+
+The watch exists from the child's first instant: both events are reserved
+(`ipc_owed_reserve`) before the child is created and attached to it while it is
+still parked, and the reply is sent before the child is unparked, so on any one
+endpoint the reply precedes every event of the child. No reservation, no child.
+
+- `PROC_IPC_CHILD_READY` (`arg0=pid`) is posted by the first READY latch
+  (`process_notify_ready`), at most once, and not for a child already exiting.
+  A receiver ignores one for a pid it has already seen exit.
+- `PROC_IPC_CHILD_EXITED` (`arg0=pid arg1=status arg2=reason`) is posted from
+  the reap path beside the context's hangups. The child is auto-reaped, so the
+  reap follows its exit at once; `PROC_IPC_WAIT` does not apply to it.
+
+Both come from the PM's `proc` endpoint, only the kernel can send them
+(`ipc_send_from` refuses either type from a guest), and both are delivered with
+the hangup guarantee below: an owed message is never refused by a full queue
+and arrives behind everything queued before it. One reserved for an endpoint
+that is gone, or whose id now belongs to another context, is dropped.
+
 #### Service Registry
 
 The PM maintains a flat list of named services.  Names are capped at 16
 characters.  `SVC_IPC_REGISTER_REQ` / `SVC_IPC_LOOKUP_REQ` (opcodes
 `0x220`/`0x221`) register and resolve service endpoint IDs.
+
+##### Name Watches: await a dependency, never poll for it
+
+A service that needs another resolves it by **watching its name**, not by
+retrying a lookup. `SVC_IPC_SUBSCRIBE_NAME_REQ` takes a
+`svc_name_subscribe_desc_t` (notify endpoint, cookie, name) in the caller's own
+transfer buffer; from then on the PM pushes `SVC_IPC_NAME_EVENT` (`arg1=cookie
+arg2=endpoint arg3=pid`) to the notify endpoint whenever the name is *bound*:
+first registered, re-pointed by its owner, or claimed by a new owner after the
+previous one died. Subscribing does not replay an existing binding, so a watcher
+subscribes FIRST and looks the name up SECOND; the reverse order loses a
+registration that lands between the two. There is no unbind event: names are
+not removed, and a provider's death reaches the clients talking to it as
+`WASMOS_IPC_HANGUP`. The PM keeps no waiter table and no timers -- a dead
+subscriber's record is reclaimed when a bind would address it. A bind is never
+lost to a full queue: a subscriber that cannot take the event keeps its latest
+undelivered bind, and the PM offers it again on each dispatch until it is
+delivered or replaced by a newer one, so the watcher learns the current
+binding, never a stale one.
+
+libsys builds the client half on this (`wasmos_sys_svc_watch_*`,
+`wasmos_sys_svc_await_start`; native and Zig mirrors,
+[libsys](14-libsys-and-service-runtime.md)): a persistent watch per peer,
+deduplicated by endpoint, which a client keeps across a provider's restart and
+re-arms with `wasmos_sys_svc_watch_forget` on hangup, and a one-shot await with
+a timeout on top, failing with `WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT`. Because a
+dependency is awaited, a service registers and sends READY as soon as its own
+endpoint is live, and the order in which services start is not a correctness
+property: a request that needs a missing peer gets a deferred reply.
 
 ##### Class-Based Discovery (planned)
 

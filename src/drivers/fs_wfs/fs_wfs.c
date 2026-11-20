@@ -1315,7 +1315,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             break;
         }
     }
-    wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
+    /* Not waited for: fs-manager may already be calling into this backend
+     * (mount points), with the PM waiting on fs-manager. See
+     * wasmos_sys_notify_ready_nowait. */
+    if (wasmos_sys_notify_ready_nowait(g_proc_endpoint) != 0) {
+        wfs_log("[fs-wfs] ready notification failed\n");
+    }
     wfs_log("[fs-wfs] ready\n");
 
     /* Serve. Blocks on the endpoint at idle rather than polling it. */

@@ -33,6 +33,7 @@
 #include "kernel_ring3_smoke_runtime.h"
 #include "kernel_ring3_suite_runtime.h"
 #include "kpanic.h"
+#include "../../abi/generated/c/wasmos_constants.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -178,35 +179,6 @@ uint8_t kernel_ring3_smoke_enabled(void) {
 static const uint8_t g_ring3_fault_churn_rounds = 6;
 
 static init_state_t g_init_state;
-
-static int wasmos_endpoint_resolve(uint32_t owner_context_id, const uint8_t* name,
-                                   uint32_t name_len, uint32_t rights, uint32_t* out_endpoint) {
-    if (!out_endpoint) {
-        return -1;
-    }
-    if (str_eq_bytes(name, name_len, "proc")) {
-        uint32_t proc_ep = process_manager_endpoint();
-        if (proc_ep != IPC_ENDPOINT_NONE) {
-            *out_endpoint = proc_ep;
-            return 0;
-        }
-    }
-    if (str_eq_bytes(name, name_len, "block")) {
-        uint32_t block_ep = process_manager_block_endpoint();
-        if (block_ep != IPC_ENDPOINT_NONE) {
-            *out_endpoint = block_ep;
-            return 0;
-        }
-    }
-    if (str_eq_bytes(name, name_len, "fs")) {
-        uint32_t fs_ep = process_manager_fs_endpoint();
-        if (fs_ep != IPC_ENDPOINT_NONE) {
-            *out_endpoint = fs_ep;
-            return 0;
-        }
-    }
-    return -1;
-}
 
 static int wasmos_capability_grant(uint32_t owner_context_id, const uint8_t* name,
                                    uint32_t name_len, uint32_t flags) {
@@ -384,7 +356,7 @@ void kmain(boot_info_t* boot_info) {
     memory_service_register(mem_service_proc->context_id, mem_service_endpoint, mem_reply_endpoint);
     klog_write("[kernel] mem service ready\n");
 
-    wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
+    wasmos_app_set_policy_hooks(wasmos_capability_grant);
 
     if (kernel_sched_selftest_run() != 0) {
         kpanic("kernel_sched_selftest_run_failed", 0ULL, 0ULL);
@@ -407,7 +379,8 @@ void kmain(boot_info_t* boot_info) {
     }
     kernel_boot_run_low_slot_sweep_diagnostic();
 
-    timer_init(250);
+    /* The rate is ABI: guests convert milliseconds to sched_ticks with it. */
+    timer_init(WASMOS_SCHED_TICK_HZ);
     irq_late_init(boot_info);
     smp_init();
     klog_write("[kernel] interrupts on\n");

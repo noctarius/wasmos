@@ -1765,11 +1765,43 @@ class QemuSession:
             )
         return detail
 
+    # The supervisor's boot milestone on COM2 (abi/opcodes.yaml,
+    # SUPERVISOR_IPC_BOOT_SUBMITTED_REQ): one of the two lines, logged once.
+    BOOT_COMPLETE = "[supervisor] boot complete"
+    BOOT_FAILED = re.compile(r"\[supervisor\] boot failed: [^\r\n]*")
+
+    def await_boot_complete(self, timeout_s: Optional[float] = None) -> str:
+        """Wait for the supervisor's boot milestone in the kernel log.
+
+        Returns "" once boot is complete, else a sentence naming why not: the
+        supervisor's own "boot failed" line, a guest that went away, or the
+        deadline. The prompt is not the milestone -- the shell is one boot unit
+        among several, and comes up without waiting for the others.
+        """
+        limit = timeout_s if timeout_s is not None else self.timeout_s
+        deadline = time.time() + limit * _TIMEOUT_SCALE
+        while True:
+            log = self.syslog_tail(1 << 22)
+            if self.BOOT_COMPLETE in log:
+                return ""
+            failed = self.BOOT_FAILED.search(log)
+            if failed:
+                return failed.group(0)
+            if self.proc is not None and self.proc.poll() is not None:
+                return "the guest exited before the boot milestone"
+            if time.time() >= deadline:
+                return (
+                    "no boot milestone: the supervisor logged neither "
+                    f"{self.BOOT_COMPLETE!r} nor 'boot failed' within {limit} s"
+                )
+            self._pump(0.25)
+
     def require_prompt(
         self,
         prompt: bytes = b"wamos> ",
         timeout_s: Optional[float] = None,
         close_on_failure: bool = True,
+        boot_complete: bool = True,
     ) -> None:
         """Wait for `prompt`, or raise naming what went wrong instead.
 
@@ -1782,9 +1814,22 @@ class QemuSession:
         from setUpClass, and a setUpClass that raises never reaches
         tearDownClass, so anything else leaks the QEMU process for the rest of
         the run. Pass close_on_failure=False when the caller keeps the session.
+
+        With boot_complete (the default) the supervisor's boot milestone must
+        follow, and a boot it reports as failed raises naming the unit. Pass
+        False for a prompt after the boot one, or a boot that has no
+        supervisor.
         """
         if self.expect(prompt, timeout_s=timeout_s):
-            return
+            if not boot_complete:
+                return
+            failure = self.await_boot_complete(timeout_s)
+            if not failure:
+                return
+            message = f"{failure}\n--- syslog ---\n{self.syslog_tail()}\n"
+            if close_on_failure:
+                self.close()
+            raise RuntimeError(message)
         diagnosis = self.boot_diagnosis()
         dump = ""
         if "panicked" not in diagnosis:

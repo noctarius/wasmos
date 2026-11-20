@@ -270,24 +270,6 @@ static pm_app_state_t* pm_find_app_slot(void) {
     return (pm_app_state_t*)list_alloc(&g_pm.apps);
 }
 
-/* The packed-arg spawn opcodes each describe exactly one I/O window; the
- * descriptor path (pm_handle_spawn_caps_v2) may carry several. Centralised so
- * the "no io.port capability means no windows at all" rule cannot drift between
- * the five call sites. Returns 0, or BAD_CAPS for an inverted window. */
-static int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last) {
-    caps->io_range_count = 0;
-    if ((caps->cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
-        return 0;
-    }
-    if (first > last) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    caps->io_ranges[0].first = first;
-    caps->io_ranges[0].last = last;
-    caps->io_range_count = 1;
-    return 0;
-}
-
 /* Startup values reach the child through the spawn-info contract (see
  * wasmos_spawn_info.h and the buffer pm_app_entry builds), and service endpoints
  * through svc_lookup -- not through entry arguments.  Guest entry points
@@ -326,7 +308,7 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         wasmos_app_desc_t desc;
         if (wasmos_app_parse(state->blob, state->blob_size, &desc) != 0) {
             klog_write("[pm] app parse failed\n");
-            process_set_exit_status(process, -1);
+            process_set_exit(process, -1, PROC_EXIT_REASON_START_FAILED);
             pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
@@ -353,7 +335,7 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
                 WASMOS_ERR_NONE ||
             (si_phys = xfer_buffer_object_phys(&si_xfer.buffer)) == 0u) {
             klog_write("[pm] spawn info alloc failed\n");
-            process_set_exit_status(process, -1);
+            process_set_exit(process, -1, PROC_EXIT_REASON_START_FAILED);
             pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
@@ -406,10 +388,13 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         process_clear_resched();
 #endif
 
+        /* TODO: a native module runs its whole entry inside the start hook, so
+         * a native driver that returns a non-zero status after running is
+         * reported as START_FAILED here instead of EXITED with its status. */
         if (wasmos_app_start(
                 &state->app, &desc, process->context_id, init_args, state->entry_argc) != 0) {
             klog_write("[pm] app start failed\n");
-            process_set_exit_status(process, -1);
+            process_set_exit(process, -1, PROC_EXIT_REASON_START_FAILED);
             pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
@@ -425,7 +410,7 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         klog_write("[pm] app entry rc=");
         serial_write_hex64((uint64_t)(int64_t)entry_rc);
         klog_write("\n");
-        process_set_exit_status(process, -1);
+        process_set_exit(process, -1, PROC_EXIT_REASON_TRAPPED);
     } else {
         process_set_exit_status(process, 0);
     }
@@ -1591,10 +1576,15 @@ void pm_poll_spawn(uint32_t pm_context_id) {
     pm_poll_sync_spawn(pm_context_id);
 }
 
-/* A child announcing itself (PROC_IPC_NOTIFY_READY).  Latches the sender's ready
- * flag, completes an in-flight sync spawn if the sender IS that spawn's child,
- * then acks the sender so its blocking wasmos_sys_notify_ready() returns.
- * Returns 0, or a packed WASMOS_ERR_PROC_PM_* code.
+/* A child announcing itself (PROC_IPC_NOTIFY_READY).  Records the liveness
+ * endpoint it names (PROC_READY_FLAG_LIVENESS), latches the sender's ready flag,
+ * completes an in-flight sync spawn if the sender IS that spawn's child, then
+ * acks the sender so its blocking wasmos_sys_notify_ready() returns.  Returns 0,
+ * or a packed WASMOS_ERR_PROC_PM_* code.
+ *
+ * A liveness endpoint the sender does not own is not recorded -- a probe there
+ * would ask some other process -- and the ack carries
+ * WASMOS_ERR_PROC_PM_BAD_ENDPOINT in arg0; READY is latched regardless.
  *
  * The sender identifies itself implicitly, by the context owning msg->source —
  * there is no pid argument, so one process cannot report another as ready.  The
@@ -1605,6 +1595,7 @@ void pm_poll_spawn(uint32_t pm_context_id) {
 int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* sender = 0;
+    int32_t ack_code = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
@@ -1612,6 +1603,15 @@ int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     sender = process_find_by_context(owner_context);
     if (!sender) {
         return WASMOS_ERR_PROC_PM_NO_CALLER;
+    }
+    if (((uint32_t)msg->arg1 & PROC_READY_FLAG_LIVENESS) != 0u) {
+        uint32_t live_owner = 0;
+        if (ipc_endpoint_owner((uint32_t)msg->arg0, &live_owner) == IPC_OK &&
+            live_owner == owner_context) {
+            sender->live_endpoint = (uint32_t)msg->arg0;
+        } else {
+            ack_code = WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
+        }
     }
     process_notify_ready(sender);
 
@@ -1639,7 +1639,7 @@ int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     ack.source = g_pm.proc_endpoint;
     ack.destination = msg->source;
     ack.request_id = msg->request_id;
-    ack.arg0 = 0;
+    ack.arg0 = (uint32_t)ack_code;
     ack.arg1 = 0;
     ack.arg2 = 0;
     ack.arg3 = 0;
@@ -1678,7 +1678,8 @@ void pm_check_waits(uint32_t pm_context_id) {
             continue;
         }
         int32_t exit_status = 0;
-        int rc = process_get_exit_status(waiter->pid, &exit_status);
+        uint32_t exit_reason = 0;
+        int rc = process_get_exit_info(waiter->pid, &exit_status, &exit_reason);
         if (rc != 0) {
             waiter = (pm_wait_state_t*)list_next(&it);
             continue;
@@ -1691,7 +1692,7 @@ void pm_check_waits(uint32_t pm_context_id) {
         resp.request_id = waiter->request_id;
         resp.arg0 = waiter->pid;
         resp.arg1 = (uint32_t)exit_status;
-        resp.arg2 = 0;
+        resp.arg2 = exit_reason;
         resp.arg3 = 0;
         ipc_send_from(pm_context_id, waiter->reply_endpoint, &resp);
         waiter->in_use = 0;
@@ -1866,18 +1867,13 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
  * io_port_min/max pair. */
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
-    wasmos_spawn_caps_v2_t in_caps;
     uint32_t owner_context = 0;
     process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
-    uint32_t known_cap_mask =
-        DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ | DEVMGR_CAP_DMA;
     uint32_t payload_size = 0;
-    uint32_t expected_size = 0;
     const uint8_t* caps_payload = 0;
     uint32_t caps_buffer_size = 0;
-    uint64_t win_end = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
@@ -1894,81 +1890,16 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
      * unrelated memory instead of failing.  The xfer-buffer object resolves
      * through its backing pages, which is what every descriptor path here uses. */
     payload_size = (uint32_t)msg->arg2;
-    if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(in_caps)) {
+    if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(wasmos_spawn_caps_v2_t)) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     caps_payload = pm_foreign_xfer_ptr((uint32_t)msg->arg1, owner_context, &caps_buffer_size);
     if (!caps_payload || payload_size > caps_buffer_size) {
         return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
-    __builtin_memcpy(&in_caps, caps_payload, sizeof(in_caps));
-
-    if ((in_caps.cap_flags & ~known_cap_mask) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if ((in_caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0 && in_caps.io_range_count == 0 &&
-        in_caps.io_port_min > in_caps.io_port_max) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if (in_caps.io_range_count > WASMOS_IO_RANGE_LIMIT) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-
-    caps.valid = 1;
-    caps.cap_flags = in_caps.cap_flags;
-    caps.irq_mask = in_caps.irq_mask;
-    caps.dma_direction_flags = 0;
-    caps.dma_max_bytes = 0;
-    caps.dma_window_count = 0;
-
-    /* A non-zero io_range_count supersedes the single io_port_min/max window;
-     * the ranges follow the fixed header, ahead of the DMA windows. */
-    if (in_caps.io_range_count > 0) {
-        expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.io_range_count, 0);
-        if (payload_size < expected_size) {
-            return WASMOS_ERR_PROC_PM_BAD_CAPS;
-        }
-        __builtin_memcpy(caps.io_ranges,
-                         caps_payload + sizeof(in_caps),
-                         (size_t)in_caps.io_range_count * sizeof(wasmos_io_range_t));
-        caps.io_range_count =
-            ((caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0) ? (uint32_t)in_caps.io_range_count : 0u;
-        for (uint32_t i = 0; i < caps.io_range_count; ++i) {
-            if (caps.io_ranges[i].first > caps.io_ranges[i].last) {
-                return WASMOS_ERR_PROC_PM_BAD_CAPS;
-            }
-        }
-    } else if (pm_caps_set_io_window(&caps, in_caps.io_port_min, in_caps.io_port_max) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
-        if ((in_caps.dma.direction_flags & ~WASMOS_DMA_DIR_BIDIR) != 0 ||
-            in_caps.dma.direction_flags == 0 || in_caps.dma.max_bytes == 0 ||
-            in_caps.dma.window_count == 0 || in_caps.dma.window_count > PM_DMA_WINDOW_LIMIT) {
-            return WASMOS_ERR_PROC_PM_BAD_CAPS;
-        }
-        expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.io_range_count, in_caps.dma.window_count);
-        if (payload_size != expected_size) {
-            return WASMOS_ERR_PROC_PM_BAD_CAPS;
-        }
-        __builtin_memcpy(caps.dma_windows,
-                         caps_payload + sizeof(in_caps) +
-                             (size_t)in_caps.io_range_count * sizeof(wasmos_io_range_t),
-                         (size_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t));
-        for (uint32_t i = 0; i < in_caps.dma.window_count; ++i) {
-            if (caps.dma_windows[i].length == 0) {
-                return WASMOS_ERR_PROC_PM_BAD_CAPS;
-            }
-            win_end = caps.dma_windows[i].base + caps.dma_windows[i].length;
-            if (win_end < caps.dma_windows[i].base) {
-                return WASMOS_ERR_PROC_PM_BAD_CAPS;
-            }
-        }
-        caps.dma_direction_flags = in_caps.dma.direction_flags;
-        caps.dma_max_bytes = in_caps.dma.max_bytes;
-        caps.dma_window_count = in_caps.dma.window_count;
-    } else if (payload_size != (uint32_t)sizeof(in_caps)) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
+    int caps_rc = pm_caps_from_v2(caps_payload, payload_size, &caps);
+    if (caps_rc != 0) {
+        return caps_rc;
     }
 
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
@@ -2157,6 +2088,194 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
                ? 0
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
+}
+
+/* The reply carries every record a package can declare, each name with its NUL,
+ * so copying needs no truncation. */
+_Static_assert(WASMOS_APP_MAX_DEPS == SPAWN_WATCH_DEPS_MAX,
+               "a watched spawn reports the whole .wap dependency table");
+_Static_assert(WASMOS_APP_DEP_NAME_MAX < SPAWN_WATCH_DEP_NAME_MAX,
+               "a dependency name and its NUL fit wasmos_spawn_watch_dep_t.name");
+
+/* Copies the child's [deps] into a watched spawn's reply fields. */
+static void pm_watch_desc_fill_deps(wasmos_spawn_watch_desc_t* out, const wasmos_app_desc_t* desc) {
+    __builtin_memset(out->deps, 0, sizeof(out->deps));
+    for (uint32_t i = 0; i < desc->dep_count; ++i) {
+        const wasmos_app_dep_t* dep = &desc->deps[i];
+        wasmos_spawn_watch_dep_t* d = &out->deps[i];
+        d->strength = dep->strength;
+        d->kind = dep->kind;
+        d->name_len = (uint8_t)dep->name_len;
+        __builtin_memcpy(d->name, dep->name, dep->name_len);
+    }
+    out->dep_count = desc->dep_count;
+}
+
+/* Spawn from a path with the spawner watching (PROC_IPC_SPAWN_WATCHED):
+ * arg0 = buffer_id of a transfer buffer the caller owns, arg1 = offset of the
+ * wasmos_spawn_watch_desc_t in it, arg2 = size of the region the PM may use.
+ *
+ * Both lifecycle messages are reserved before the child exists and attached
+ * before it first runs, so neither can be lost: no reservation, no child
+ * (WATCH_NO_SPACE). The child is auto-reaped, which is what delivers
+ * CHILD_EXITED as soon as it exits. Never ready-gates and never touches the
+ * single g_pm.spawn slot.
+ *
+ * The reply is sent while the child is still parked, so on any endpoint it
+ * precedes the child's CHILD_READY. A reply that cannot be sent kills the
+ * parked child; the spawner then sees only its CHILD_EXITED, KILLED.
+ *
+ * Returns 0 once the reply is sent, or a packed WASMOS_ERR_PROC_SPAWN_* code
+ * with no child left behind. */
+int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t owner_context = 0;
+    uint32_t notify_owner = 0;
+    uint32_t buffer_size = 0;
+    uint32_t region_off = (uint32_t)msg->arg1;
+    uint32_t region_size = (uint32_t)msg->arg2;
+    process_t* caller = 0;
+    uint8_t* region = 0;
+    wasmos_spawn_watch_desc_t req;
+    char path[SPAWN_WATCH_PATH_MAX + 1];
+    char cli_args[SPAWN_WATCH_ARGS_MAX + 1];
+    uint8_t caps_bytes[WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_IO_RANGE_LIMIT, PM_DMA_WINDOW_LIMIT)];
+    pm_spawn_caps_t caps = {0};
+    ipc_owed_t* on_ready = 0;
+    ipc_owed_t* on_exit = 0;
+    pm_resolved_spawn_path_t resolved;
+    xfer_buffer_owner_t pmbuf = {0};
+    wasmos_app_desc_t desc;
+    uint32_t pid = 0;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return WASMOS_ERR_PROC_SPAWN_NO_CALLER;
+    }
+    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
+        return WASMOS_ERR_PROC_SPAWN_BAD_PATH;
+    }
+    region =
+        (uint8_t*)(uintptr_t)pm_foreign_xfer_ptr((uint32_t)msg->arg0, owner_context, &buffer_size);
+    if (!region || region_size < sizeof(req) ||
+        (uint64_t)region_off + region_size > (uint64_t)buffer_size) {
+        return WASMOS_ERR_PROC_SPAWN_BAD_DESC;
+    }
+    region += region_off;
+    /* One copy of the request: the caller can write its buffer at any time, so
+     * every check below is made on bytes it can no longer change. */
+    __builtin_memcpy(&req, region, sizeof(req));
+    if (req.version != SPAWN_WATCH_DESC_VERSION || req.path_len == 0 ||
+        req.path_len > SPAWN_WATCH_PATH_MAX || req.args_len > SPAWN_WATCH_ARGS_MAX ||
+        (uint64_t)req.path_off + req.path_len > region_size ||
+        (uint64_t)req.args_off + req.args_len > region_size || req.caps_len > sizeof(caps_bytes) ||
+        (uint64_t)req.caps_off + req.caps_len > region_size) {
+        return WASMOS_ERR_PROC_SPAWN_BAD_DESC;
+    }
+    if (req.caps_len > 0u) {
+        __builtin_memcpy(caps_bytes, region + req.caps_off, req.caps_len);
+        if (pm_caps_from_v2(caps_bytes, req.caps_len, &caps) != 0) {
+            return WASMOS_ERR_PROC_SPAWN_BAD_CAPS;
+        }
+    }
+    __builtin_memcpy(path, region + req.path_off, req.path_len);
+    path[req.path_len] = '\0';
+    __builtin_memcpy(cli_args, region + req.args_off, req.args_len);
+    cli_args[req.args_len] = '\0';
+
+    if (ipc_endpoint_owner(req.notify_endpoint, &notify_owner) != IPC_OK ||
+        notify_owner != owner_context) {
+        return WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED;
+    }
+    if (ipc_owed_reserve(
+            req.notify_endpoint, g_pm.proc_endpoint, PROC_IPC_CHILD_READY, &on_ready) != IPC_OK ||
+        ipc_owed_reserve(
+            req.notify_endpoint, g_pm.proc_endpoint, PROC_IPC_CHILD_EXITED, &on_exit) != IPC_OK) {
+        ipc_owed_cancel(on_ready);
+        return WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE;
+    }
+
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
+        WASMOS_ERR_NONE) {
+        ipc_owed_cancel(on_ready);
+        ipc_owed_cancel(on_exit);
+        return WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF;
+    }
+    int resolve_rc = pm_resolve_spawn_path(pm_context_id,
+                                           &pmbuf,
+                                           path,
+                                           req.path_len,
+                                           req.args_len > 0u ? cli_args : 0,
+                                           req.args_len,
+                                           0,
+                                           &resolved);
+    if (resolve_rc != 0) {
+        pm_xfer_release(&pmbuf);
+        ipc_owed_cancel(on_ready);
+        ipc_owed_cancel(on_exit);
+        return resolve_rc;
+    }
+    const uint8_t* blob = (const uint8_t*)pm_xfer_owner_ptr(&pmbuf);
+    if (wasmos_app_parse(blob, resolved.blob_size, &desc) != 0 ||
+        pm_spawn_from_buffer(caller->pid,
+                             blob,
+                             resolved.blob_size,
+                             resolved.args_len > 0u ? resolved.args : 0,
+                             resolved.args_len,
+                             req.tty,
+                             &pid) != 0) {
+        pm_xfer_release(&pmbuf);
+        ipc_owed_cancel(on_ready);
+        ipc_owed_cancel(on_exit);
+        return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
+    }
+
+    if (pm_apply_spawn_caps(pid, &caps) != 0) {
+        pm_xfer_release(&pmbuf);
+        ipc_owed_cancel(on_ready);
+        ipc_owed_cancel(on_exit);
+        (void)process_kill(pid, -1);
+        (void)process_set_auto_reap(pid, 1);
+        return WASMOS_ERR_PROC_SPAWN_CAPS_APPLY;
+    }
+
+    /* The reply fields, while desc still points into the blob. */
+    req.pid = pid;
+    req.app_flags = desc.flags;
+    req.reserved1 = 0;
+    pm_watch_desc_fill_deps(&req, &desc);
+    pm_xfer_release(&pmbuf);
+
+    if (process_set_watch(pid, on_ready, on_exit) != 0) {
+        ipc_owed_cancel(on_ready);
+        ipc_owed_cancel(on_exit);
+        (void)process_kill(pid, -1);
+        (void)process_set_auto_reap(pid, 1);
+        return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
+    }
+    (void)process_set_auto_reap(pid, 1);
+    (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
+    __builtin_memcpy(region + __builtin_offsetof(wasmos_spawn_watch_desc_t, pid),
+                     &req.pid,
+                     sizeof(req) - __builtin_offsetof(wasmos_spawn_watch_desc_t, pid));
+
+    ipc_message_t resp;
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = pid;
+    resp.arg1 = desc.flags;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    if (ipc_send_from(pm_context_id, msg->source, &resp) != IPC_OK) {
+        (void)process_kill(pid, -1);
+        return WASMOS_ERR_PROC_PM_REPLY_SEND;
+    }
+    process_unpark_pid(pid);
+    return 0;
 }
 
 /* Spawn from a path with capabilities, replying immediately

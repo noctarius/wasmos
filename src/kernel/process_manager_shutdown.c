@@ -18,8 +18,12 @@
 #include "process.h"
 #include "process_manager.h"
 #include "serial.h"
+#include "service_class_registry.h"
+#include "shutdown_order.h"
+#include "string.h"
 #include "system_control.h"
 #include "timer.h"
+#include "wasmos_app.h"
 
 /* Milliseconds a single participant is given before it is passed over.
  *
@@ -53,7 +57,8 @@
 #endif
 
 /* Collect the participants: every distinct context owning a registered service
- * endpoint that declared WASMOS_SVC_FLAG_WANTS_SHUTDOWN, newest first.
+ * endpoint that declared WASMOS_SVC_FLAG_WANTS_SHUTDOWN, newest first, then put
+ * them in dependency order (pm_shutdown_order_by_needs).
  *
  * Opt-in, because the sequence is sequential. A participant may need the
  * services beneath it while it quiesces, so they are notified one at a time and
@@ -63,13 +68,146 @@
  * it is also what supplies the endpoint to send to.
  *
  * `pid` is monotonic and never reused within a boot, so descending pid IS
- * reverse spawn order (§ the design doc): fs-wfs comes down before the block
- * driver beneath it. Sorted by insertion, which is O(n^2) over a table that
- * holds tens of entries and needs no allocation.
+ * reverse spawn order (§ the design doc), the order ties keep once the needs
+ * are applied. Sorted by insertion, which is O(n^2) over a table that holds
+ * tens of entries and needs no allocation.
  *
  * A context that registered several names -- a driver claiming both a name and a
  * class -- is collected once. Notifying it twice would have it quiesce, answer,
  * and then be told again. */
+/* The needs graph the order is computed over: participants, plus every live
+ * app the PM spawned, whose [deps] it can read from the image the slot keeps
+ * until reap. Static because it is 8 KiB and only the PM builds it. */
+static shutdown_node_t g_order_nodes[SHUTDOWN_ORDER_MAX];
+static uint32_t g_order_contexts[SHUTDOWN_ORDER_MAX];
+static const pm_app_state_t* g_order_slots[SHUTDOWN_ORDER_MAX];
+static uint8_t g_order_needs[SHUTDOWN_ORDER_MAX * SHUTDOWN_ORDER_MAX];
+static uint8_t g_order_reach[SHUTDOWN_ORDER_MAX * SHUTDOWN_ORDER_MAX];
+static uint32_t g_order_out[SHUTDOWN_ORDER_MAX];
+
+static int32_t pm_order_node_for_pid(uint32_t n, uint32_t pid) {
+    for (uint32_t i = 0; i < n; ++i) {
+        if (g_order_nodes[i].pid == pid) {
+            return (int32_t)i;
+        }
+    }
+    return -1;
+}
+
+/* Marks node `from` as needing every live holder of the dependency `dep`: the
+ * owner of the registered name, or each provider of the class. A holder that is
+ * not a node -- the kernel's own services, an unslotted process -- declares no
+ * [deps], so no chain runs through it and it is left out. A class is asked about
+ * each node rather than listed, so no number of providers drops an edge. */
+static void pm_order_mark_needs(uint32_t n, uint32_t from, const wasmos_app_dep_t* dep) {
+    if (dep->kind == WASMOS_APP_DEP_KIND_CLASS) {
+        char class_name[SVC_CLASS_NAME_MAX];
+        if (dep->name_len == 0u || dep->name_len >= sizeof(class_name)) {
+            return;
+        }
+        memcpy(class_name, dep->name, dep->name_len);
+        class_name[dep->name_len] = '\0';
+        for (uint32_t to = 0; to < n; ++to) {
+            if (to != from &&
+                service_class_registry_provided_by(class_name, g_order_nodes[to].pid)) {
+                g_order_needs[from * n + to] = 1u;
+            }
+        }
+        return;
+    }
+    list_iter_t it;
+    const pm_service_entry_t* entry = (const pm_service_entry_t*)list_first(&g_pm.services, &it);
+    while (entry) {
+        if (entry->in_use && strlen(entry->name) == dep->name_len &&
+            memcmp(entry->name, dep->name, dep->name_len) == 0) {
+            process_t* owner = process_find_by_context(entry->owner_context_id);
+            int32_t to = owner ? pm_order_node_for_pid(n, owner->pid) : -1;
+            if (to >= 0 && (uint32_t)to != from) {
+                g_order_needs[from * n + (uint32_t)to] = 1u;
+            }
+        }
+        entry = (const pm_service_entry_t*)list_next(&it);
+    }
+}
+
+/* Reorders the collected participants so each is told before everything it
+ * NEEDS (shutdown_order.h), through processes that are not participants too:
+ * fs-wfs must quiesce while the block driver beneath it still serves it, and a
+ * declared need says so where spawn order only usually does. Ties and cycles
+ * keep the descending-pid order the collection produced. Logs the order. */
+static void pm_shutdown_order_by_needs(void) {
+    uint32_t pids[WASMOS_PM_SHUTDOWN_MAX];
+    uint32_t endpoints[WASMOS_PM_SHUTDOWN_MAX];
+    uint32_t contexts[WASMOS_PM_SHUTDOWN_MAX];
+    uint32_t n = 0;
+    uint32_t ordered;
+    list_iter_t it;
+    const pm_app_state_t* app;
+
+    for (uint32_t i = 0; i < g_pm.shutdown.count && n < SHUTDOWN_ORDER_MAX; ++i) {
+        g_order_nodes[n].pid = g_pm.shutdown.pids[i];
+        g_order_nodes[n].participant = 1u;
+        g_order_contexts[n] = g_pm.shutdown.context_ids[i];
+        g_order_slots[n] = 0;
+        n++;
+    }
+    app = (const pm_app_state_t*)list_first(&g_pm.apps, &it);
+    while (app) {
+        process_t* proc = app->in_use && app->pid ? process_get(app->pid) : 0;
+        if (proc && proc->state != PROCESS_STATE_ZOMBIE && app->blob) {
+            int32_t at = pm_order_node_for_pid(n, app->pid);
+            if (at < 0 && n < SHUTDOWN_ORDER_MAX) {
+                at = (int32_t)n++;
+                g_order_nodes[at].pid = app->pid;
+                g_order_nodes[at].participant = 0u;
+                g_order_contexts[at] = 0;
+            }
+            if (at >= 0) {
+                g_order_slots[at] = app;
+            }
+        }
+        app = (const pm_app_state_t*)list_next(&it);
+    }
+    memset(g_order_needs, 0, (size_t)n * n);
+    for (uint32_t i = 0; i < n; ++i) {
+        wasmos_app_desc_t desc;
+        if (!g_order_slots[i] ||
+            wasmos_app_parse(g_order_slots[i]->blob, g_order_slots[i]->blob_size, &desc) != 0) {
+            continue;
+        }
+        for (uint32_t d = 0; d < desc.dep_count; ++d) {
+            if (desc.deps[d].strength == WASMOS_APP_DEP_NEEDS) {
+                pm_order_mark_needs(n, i, &desc.deps[d]);
+            }
+        }
+    }
+
+    ordered = shutdown_order(g_order_nodes, n, g_order_needs, g_order_reach, g_order_out);
+    if (ordered != g_pm.shutdown.count) {
+        return; /* more participants than the order holds: keep spawn order */
+    }
+    for (uint32_t i = 0; i < ordered; ++i) {
+        uint32_t node = g_order_out[i];
+        uint32_t from = 0;
+        while (g_pm.shutdown.context_ids[from] != g_order_contexts[node]) {
+            from++;
+        }
+        pids[i] = g_pm.shutdown.pids[from];
+        endpoints[i] = g_pm.shutdown.endpoints[from];
+        contexts[i] = g_pm.shutdown.context_ids[from];
+    }
+    for (uint32_t i = 0; i < ordered; ++i) {
+        process_t* proc = process_get(pids[i]);
+        g_pm.shutdown.pids[i] = pids[i];
+        g_pm.shutdown.endpoints[i] = endpoints[i];
+        g_pm.shutdown.context_ids[i] = contexts[i];
+        klog_printf("[pm] shutdown: order %u: %s (pid %u)\n",
+                    (unsigned)(i + 1u),
+                    proc && proc->name ? proc->name : "?",
+                    (unsigned)pids[i]);
+    }
+}
+
 static void pm_shutdown_collect(void) {
     list_iter_t it;
     const pm_service_entry_t* entry = (const pm_service_entry_t*)list_first(&g_pm.services, &it);
@@ -113,6 +251,7 @@ static void pm_shutdown_collect(void) {
         }
         entry = (const pm_service_entry_t*)list_next(&it);
     }
+    pm_shutdown_order_by_needs();
 }
 
 /* Notify the participant at `index` and arm its deadline.
@@ -158,8 +297,8 @@ void pm_shutdown_step(uint32_t pm_context_id) {
             return;
         }
         pm_atomic_store_u32(&g_pm.shutdown.active, 1u);
-        pm_shutdown_collect();
         klog_write("[pm] shutdown: begin\n");
+        pm_shutdown_collect();
     }
     if (g_pm.shutdown.pending) {
         if (timer_ticks() < g_pm.shutdown.deadline_ticks) {

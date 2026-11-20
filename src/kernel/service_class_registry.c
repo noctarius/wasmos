@@ -227,6 +227,22 @@ uint32_t service_class_registry_lookup(const char* class_name, service_class_pro
     return total;
 }
 
+int service_class_registry_provided_by(const char* class_name, uint32_t pid) {
+    list_iter_t it;
+    provider_t* p;
+
+    scr_ensure_init();
+    if (class_name == 0 || class_name[0] == '\0' || pid == 0) {
+        return 0;
+    }
+    for (p = (provider_t*)list_first(&g_providers, &it); p; p = (provider_t*)list_next(&it)) {
+        if (p->pid == pid && scr_streq(p->class_name, class_name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Registers interest in a class, so future ADD and REMOVE events for it are
  * delivered to notify_endpoint through the event sink.  Subscribing does NOT
  * replay the providers already registered; combine it with
@@ -260,6 +276,24 @@ int service_class_registry_subscribe(const char* class_name, uint32_t notify_end
     (void)scr_copy_class(s->class_name, norm);
     s->notify_endpoint = notify_endpoint;
     s->owner_ctx = owner_ctx;
+    return 0;
+}
+
+int service_class_registry_unsubscribe(const char* class_name, uint32_t notify_endpoint) {
+    char norm[SVC_CLASS_NAME_MAX];
+    list_iter_t it;
+    sub_t* s;
+
+    scr_ensure_init();
+    if (scr_copy_class(norm, class_name) != 0) {
+        return -1;
+    }
+    for (s = (sub_t*)list_first(&g_subs, &it); s; s = (sub_t*)list_next(&it)) {
+        if (s->notify_endpoint == notify_endpoint && scr_streq(s->class_name, norm)) {
+            list_remove(&g_subs, s);
+            return 0;
+        }
+    }
     return 0;
 }
 

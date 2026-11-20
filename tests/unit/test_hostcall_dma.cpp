@@ -95,9 +95,10 @@ process_t* process_find_by_context(uint32_t context_id) {
 
 /* Referenced by policy.c's policy_require path only, which nothing here takes:
  * the DMA action is decided by policy_authorize, which never kills a process. */
-void process_set_exit_status(process_t* proc, int32_t exit_status) {
+void process_set_exit(process_t* proc, int32_t exit_status, uint32_t reason) {
     (void)proc;
     (void)exit_status;
+    (void)reason;
 }
 void process_yield(process_run_result_t result) {
     (void)result;

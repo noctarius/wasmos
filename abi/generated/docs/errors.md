@@ -40,6 +40,11 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_SPAWN_BROKER_IPC` | -0x00010009 | broker plan IPC transport/reply failed |
 | `WASMOS_ERR_PROC_SPAWN_BROKER_PLAN` | -0x0001000A | broker replied with malformed/unsupported plan |
 | `WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED` | -0x0001000B | valid broker plan returned; PM launch step deferred |
+| `WASMOS_ERR_PROC_SPAWN_BAD_DESC` | -0x0001000C | a watched-spawn descriptor was short, of an unknown version, or its path or args fall outside the region it names |
+| `WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED` | -0x0001000D | the notify endpoint named for a watched spawn is not the caller's own; only the spawner may watch a child |
+| `WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE` | -0x0001000E | the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch |
+| `WASMOS_ERR_PROC_SPAWN_BAD_CAPS` | -0x0001000F | the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created |
+| `WASMOS_ERR_PROC_SPAWN_CAPS_APPLY` | -0x00010010 | the kernel refused the parsed capability profile for the new child, which was killed before it ran |
 
 ### `proc_pm` (domain 2) — non-path process-manager IPC failures (was PROC_PM_ERR_*)
 
@@ -74,6 +79,13 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_SVC_NAME_TAKEN` | -0x0002001B | that service name is held by another live process |
 | `WASMOS_ERR_PROC_PM_SVC_CLASS_TAKEN` | -0x0002001C | that (class, instance) is held by another live process |
 | `WASMOS_ERR_PROC_PM_SVC_CLASS_NOT_OWNED` | -0x0002001D | the (class, instance) named for retirement is not the caller's: either nobody holds it or another context does. One code for both, because from outside the registry they are the same answer -- it is not yours to retire -- and distinguishing them would tell a caller which other context holds a registration it has no claim on |
+| `WASMOS_ERR_PROC_PM_SVC_SUB_NO_SPACE` | -0x0002001E | the service-subscription table could not grow to hold another subscription |
+| `WASMOS_ERR_PROC_PM_SVC_SUB_BAD_DESC` | -0x0002001F | a name-subscription descriptor was short, of an unknown version, or named no service |
+| `WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT` | -0x00020020 | no provider bound the awaited service name within the caller's window |
+| `WASMOS_ERR_PROC_PM_SVC_WATCH_SEND` | -0x00020021 | a service watch could not send its request to the process manager |
+| `WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER` | -0x00020022 | a service watch could not acquire or fill the transfer buffer for its subscription descriptor |
+| `WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY` | -0x00020023 | the process manager answered a service-watch request with neither its response nor a packed error |
+| `WASMOS_ERR_PROC_PM_KILL_NOT_CHILD` | -0x00020024 | the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 
@@ -387,3 +399,15 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED` | -0x00190009 | a block record is short, unterminated, or names a length outside the transfer buffer |
 | `WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR` | -0x0019000A | the device has no descriptor to report, so it cannot be identified |
 | `WASMOS_ERR_BLOCK_DEV_QUEUE_FULL` | -0x0019000B | a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it |
+
+### `supervisor` (domain 26) — Supervisor refusals of a request, as a SUPERVISOR_IPC_ERROR reply's arg0. A refused submission recorded no unit and spawned nothing; a refused kill killed nothing.
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_SUPERVISOR_BAD_DESC` | -0x001A0001 | the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor |
+| `WASMOS_ERR_SUPERVISOR_BAD_SPEC` | -0x001A0002 | the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option |
+| `WASMOS_ERR_SUPERVISOR_EXISTS` | -0x001A0003 | a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed |
+| `WASMOS_ERR_SUPERVISOR_NO_SPACE` | -0x001A0004 | the supervisor's unit table is full |
+| `WASMOS_ERR_SUPERVISOR_DMA_CAPS` | -0x001A0005 | the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit |
+| `WASMOS_ERR_SUPERVISOR_NO_UNIT` | -0x001A0006 | no unit of the name the request gives is recorded |
+| `WASMOS_ERR_SUPERVISOR_NOT_RUNNING` | -0x001A0007 | the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed |

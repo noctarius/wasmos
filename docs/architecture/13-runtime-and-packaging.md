@@ -113,54 +113,42 @@ unregisters from the registry, and resets the driver struct.
 The WASMOS-APP file (`.wap`) is the deployment unit. Every driver, service, and
 application is packed into this format by `make_wasmos_app`.
 
-#### Format Versions
+#### Format Version
 
-The parser in `wasmos_app.c` supports five header versions:
+The parser in `wasmos_app.c` accepts exactly one version, `WASMOS_APP_VERSION`
+(currently **10**), with exactly one `header_size`. Every package is repacked from
+source on each build, so an older container is rejected, never reinterpreted:
+v10 reuses v9's header size and changes what one count means, which only the
+version tells apart. Out-of-tree packages have to be repacked after a bump.
 
-| Version     | Notes                                                                    |
-|-------------|--------------------------------------------------------------------------|
-| 1           | No entry-arg bindings, no driver matches table                           |
-| 2           | Adds entry-arg bindings; single inline driver-match in header            |
-| 3           | Adds `driver_match_count` and a separate per-match table                 |
-| 4           | Replaces `reserved` with `compiled_size` for appended WARP AOT binaries  |
-| 5 (current) | Adds an 8-byte subsystem tag for runtime dispatch and process reporting  |
+| Version      | Change                                                                  |
+|--------------|-------------------------------------------------------------------------|
+| 9            | Register-window (`[[regions]]`) table; driver-match table removed       |
+| 10 (current) | Dependency table (`[deps]`) replaces the required-endpoint table        |
 
-Version is checked before any pointer arithmetic. Unknown versions are parse
-errors.
-
-#### v5 Header Layout
+#### Header Layout
 
 ```c
 typedef struct __attribute__((packed)) {
-    char     magic[8];                  /* "WASMOSAP" */
-    uint16_t version;                   /* 5 */
-    uint16_t header_size;               /* sizeof(wasmos_app_header_v5_t) */
-    uint32_t flags;                     /* WASMOS_APP_FLAG_* bitmask */
+    char     magic[8];          /* "WASMOSAP", not NUL-terminated */
+    uint16_t version;           /* WASMOS_APP_VERSION */
+    uint16_t header_size;       /* sizeof(this struct) */
+    uint32_t flags;             /* WASMOS_APP_FLAG_* bitmask */
     uint32_t name_len;
     uint32_t entry_len;
-    uint32_t wasm_size;                 /* raw payload size in bytes */
-    uint32_t req_ep_count;              /* 0 or 1 */
-    uint32_t cap_count;                 /* up to 8 */
-    uint32_t entry_arg_binding_count;   /* up to 4 */
-    uint32_t mem_hint_count;            /* always 2: stack + heap */
-    uint8_t  driver_match_class;        /* legacy; superseded by match table */
-    uint8_t  driver_match_subclass;
-    uint8_t  driver_match_prog_if;
-    uint8_t  driver_match_reserved0;
-    uint16_t driver_match_vendor_id;
-    uint16_t driver_match_device_id;
-    uint16_t driver_io_port_min;
-    uint16_t driver_io_port_max;
-    uint32_t driver_match_count;        /* entries in the variable match table */
-    uint32_t compiled_size;             /* appended WARP AOT size; 0 if absent */
-    char     subsystem_tag[8];          /* ASCII, NUL-padded runtime tag */
-} wasmos_app_header_v5_t;
+    uint32_t wasm_size;         /* raw payload size in bytes */
+    uint32_t dep_count;         /* up to WASMOS_APP_MAX_DEPS (16) */
+    uint32_t cap_count;         /* up to 8 */
+    uint32_t mem_hint_count;    /* always 2: stack + heap */
+    uint32_t compiled_size;     /* appended WARP AOT size; 0 if absent */
+    char     subsystem_tag[8];  /* ASCII, NUL-padded runtime tag */
+    uint32_t region_count;      /* up to WASMOS_APP_MAX_REGIONS (4) */
+} wasmos_app_header_t;
 ```
 
-For compatibility, v1-v4 packages that do not carry a subsystem tag are mapped
-to `NATIVE` when `WASMOS_APP_FLAG_NATIVE` is set and to the generic `WASM`
-alias otherwise. The kernel resolves `WASM` to whichever built-in WASM backend
-that kernel was compiled with.
+The packer (`scripts/make_wasmos_app.c`) and the exec-format probe
+(`wasmos_exec_format.h`) each carry a copy; `wasmos_app.c` static-asserts the
+probe's version and size against it.
 
 #### Payload Layout (after header)
 
@@ -170,10 +158,9 @@ The parser walks the blob in this fixed order, same as the packer writes it:
 [header]
 [name bytes]
 [entry export bytes]
-[req_ep_count × (wasmos_req_endpoint_t + name bytes)]
+[dep_count × (wasmos_app_dep_record_t + name bytes)]
 [cap_count × (wasmos_cap_request_t + name bytes)]
-[entry_arg_binding_count × (wasmos_entry_arg_binding_t + name bytes)]
-[driver_match_count × wasmos_app_driver_match_t]
+[region_count × wasmos_app_region_t]
 [mem_hint_count × wasmos_mem_hint_t]
 [raw WASM or ELF bytes]
 [compiled WARP AOT bytes if compiled_size > 0]
@@ -195,25 +182,27 @@ arithmetic before any pointer access.
 
 `WASMOS_APP_FLAG_NATIVE` without `DRIVER` or `SERVICE` is a parse error.
 
-#### Driver Match Record
+#### Dependency Records
 
 ```c
-typedef struct {
-    uint8_t  class_code;     /* 0xFF = any */
-    uint8_t  subclass;       /* 0xFF = any */
-    uint8_t  prog_if;        /* 0xFF = any */
-    uint8_t  reserved0;
-    uint16_t vendor_id;      /* 0xFFFF = any */
-    uint16_t device_id;      /* 0xFFFF = any */
-    uint16_t io_port_min;
-    uint16_t io_port_max;
-    uint32_t priority;
-} wasmos_app_driver_match_t;
+typedef struct __attribute__((packed)) {
+    uint8_t  strength;   /* WASMOS_APP_DEP_NEEDS=1, _WANTS=2, _PROVIDES=3 */
+    uint8_t  kind;       /* WASMOS_APP_DEP_KIND_NAME=1, _CLASS=2 */
+    uint16_t name_len;   /* 1..35 for a name, 1..15 for a class */
+} wasmos_app_dep_record_t;  /* followed by name_len name bytes */
 ```
 
-Up to 8 match records per app (`WASMOS_APP_MAX_DRIVER_MATCHES`). The `device-manager`
-evaluates all records; higher `priority` wins when multiple drivers match the
-same device.
+A record names a peer by service NAME or service CLASS, never by binary.
+`needs` is a hard dependency (shutdown order and restart cascade belong to it,
+and a cycle of `needs` edges fails the build), `wants` a soft one, `provides`
+what the package registers itself. The table is data: the parser bounds-checks
+it into `wasmos_app_desc_t.deps`, and nothing gates a start on it — a package
+follows its peers at run time through service-name watches (see
+[Process and IPC](09-process-and-ipc.md)). The build runs
+`make_wasmos_app --check-deps` over every `linker.metadata` (target
+`check-deps`, a dependency of the kernel), which fails on a `needs` cycle. An
+edge runs to every OTHER unit providing the name or class, so a unit that both
+provides and needs a class (a partition driver over disks) has no self-edge.
 
 #### Memory Hints
 
@@ -297,9 +286,10 @@ storage_bootstrap = true   # sets FLAG_STORAGE_BOOTSTRAP
 stack_pages = 16
 heap_pages  = 16
 
-[ipc]
-required_endpoint_name    = "-"   # "-" means none
-required_endpoint_rights  = 0
+[deps]                     # optional; names or "class:<name>", never binaries
+needs    = ["devmgr.inv"]  # hard: shutdown order, restart cascade, cycle check
+wants    = []              # soft: used when present
+provides = ["class:block"] # what this package registers
 
 [[capabilities]]           # zero or more; each is a separate table
 name  = "io.port"
@@ -406,11 +396,10 @@ sequence is:
    boot through `wasmos_app_init_subsystems()` +
    `wasmos_subsystem_register(...)`, using the shared uint32-keyed hashmap as a
    hash index and re-checking full tags inside each collision bucket.
-3. Policy hooks set by `wasmos_app_set_policy_hooks()` resolve required endpoints
-   and grant declared capabilities (callbacks into the process manager).
+3. The policy hook set by `wasmos_app_set_policy_hooks()` grants declared
+   capabilities (a callback into the process manager).
 4. `wasmos_app_start(&instance, &desc, owner_context_id, init_argv, init_argc)`:
    - Uses the resolved subsystem handler returned by `wasmos_app_resolve_subsystem()`.
-   - Calls `g_endpoint_resolver` for each entry in `desc.req_eps`.
    - Calls `g_capability_granter` for each capability in `desc.caps`.
    - Translates memory hints to byte sizes (`pages * 4096`, 64 KB floor).
    - Dispatches through the subsystem's `start` handler.

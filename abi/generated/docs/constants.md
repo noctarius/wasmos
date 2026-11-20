@@ -220,6 +220,100 @@ only invite it to handle one case and not the other.
 | `SVC_CLASS_EVENT_ADD` | 1 | A provider registered under the class. |
 | `SVC_CLASS_EVENT_REMOVE` | 2 | A provider unregistered, or its process died and was reaped. |
 
+## svc_name_event
+
+Which existence event SVC_IPC_NAME_EVENT reports, carried in its arg0.
+The rest of the message: arg1=the subscriber's cookie, arg2=endpoint,
+arg3=pid.
+
+BIND only. A name is reported when it becomes bound to an endpoint, which
+is the one transition a waiting or rebinding client needs. There is no
+unbind event: the name table never removes an entry (a dead owner's name is
+reclaimed only when a new owner registers it, which IS a bind), and a
+client that was talking to the provider already learns of its death from
+WASMOS_IPC_HANGUP (docs/architecture/09-process-and-ipc.md, "Peer Hangup").
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SVC_NAME_EVENT_BIND` | 1 | The name was bound to the endpoint in arg2. |
+
+## proc_status
+
+Liveness of a process as PROC_IPC_STATUS reports it in the reply's arg1.
+For ZOMBIE the reply also carries the exit status in arg2 and the
+PROC_EXIT_REASON_* in arg3.
+
+UNKNOWN covers both "never existed" and "already reaped", which are
+indistinguishable once the slot is gone. READY is RUNNING plus the
+process having announced its endpoint live (PROC_IPC_NOTIFY_READY), or,
+for a wasm process that is not required to announce, having entered its
+first blocking IPC receive. It says nothing about the process's own
+dependencies.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `PROC_STATUS_UNKNOWN` | 0 | No such process, or already reaped. |
+| `PROC_STATUS_RUNNING` | 1 | Alive and not yet announced ready. |
+| `PROC_STATUS_ZOMBIE` | 2 | Exited; slot held until its status is collected. |
+| `PROC_STATUS_READY` | 3 | Alive and announced ready. |
+
+## spawn_watch_desc
+
+Version and size ceilings of wasmos_spawn_watch_desc_t, the request and
+reply record of PROC_IPC_SPAWN_WATCHED. The struct is declared in
+src/drivers/include/wasmos_driver_abi.h; path and args bytes follow it in
+the caller's buffer at the offsets it names.
+
+A reader MUST reject a descriptor whose version it does not know.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SPAWN_WATCH_DESC_VERSION` | 2 | Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len). |
+| `SPAWN_WATCH_DEPS_MAX` | 16 | Dependency records the reply can carry, the same ceiling as a .wap v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off. |
+| `SPAWN_WATCH_DEP_NAME_MAX` | 36 | Bytes reserved per dependency name, NUL included: the longest service name is 35 bytes. |
+| `SPAWN_WATCH_PATH_MAX` | 255 | Longest path a watched spawn accepts, NUL excluded. |
+| `SPAWN_WATCH_ARGS_MAX` | 255 | Longest argument string a watched spawn accepts, NUL excluded. |
+
+## proc_ready_flags
+
+Flags of PROC_IPC_NOTIFY_READY, in arg1.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `PROC_READY_FLAG_LIVENESS` | 1 | arg0 names the sender's event-loop endpoint, which answers WASMOS_IPC_HEALTH_REQ; a supervisor probes it. |
+
+## proc_exit_reason
+
+Why a process ended, carried beside its exit status: arg2 of the
+PROC_IPC_WAIT reply and arg3 of a PROC_IPC_STATUS reply for a ZOMBIE.
+
+The status alone cannot tell a crash from a deliberate exit: a guest may
+exit with any value, including the -1 and -11 the kernel uses for its own
+terminations. The reason is recorded by whoever ends the process, at the
+point it does so, and a kill overrides an exit the process staged but had
+not yet completed.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `PROC_EXIT_REASON_NONE` | 0 | No exit recorded; the process has not ended. |
+| `PROC_EXIT_REASON_EXITED` | 1 | The process ended itself: an exit call, or its entry returned. The status is the one it chose; 0 is a clean stop. |
+| `PROC_EXIT_REASON_TRAPPED` | 2 | The guest trapped or aborted inside its runtime. |
+| `PROC_EXIT_REASON_FAULTED` | 3 | A CPU exception in the process's own code ended it. |
+| `PROC_EXIT_REASON_KILLED` | 4 | Another party ended it: its parent (PROC_IPC_KILL), the process manager cleaning up a failed spawn, or the kernel's permission policy. |
+| `PROC_EXIT_REASON_START_FAILED` | 5 | The process never reached its entry: the package did not parse, its start-up state could not be allocated, or its runtime refused it. |
+
+## sched_clock
+
+The rate of the scheduler tick that the sched_ticks host call counts. The
+kernel programs its timer at exactly this rate (src/kernel/kernel.c), and
+a guest converts a millisecond window to ticks with it, since sched_ticks
+is the only monotonic clock a guest can read. One tick is 1000/HZ ms, so
+every tick-based deadline is quantized to that.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `WASMOS_SCHED_TICK_HZ` | 250 | Scheduler timer interrupts per second. |
+
 ## net_socket_family
 
 Address family of a socket: which layer it addresses and therefore what an
@@ -292,3 +386,91 @@ Interface address records, as reported by NET_IPC_IFADDR_LIST.
 | `NET_IFADDR_FLAG_LINK_UP` | 1 | The link itself is up (carrier present). |
 | `NET_IFADDR_FLAG_ADMIN_UP` | 2 | The interface is administratively enabled. |
 | `NET_IFADDR_FLAG_DHCP` | 4 | Address is (or is being) assigned by DHCP. |
+
+## fsmgr_mount_wait_desc
+
+Version and path ceiling of wasmos_fsmgr_mount_wait_desc_t, the request
+record of FSMGR_IPC_MOUNT_WAIT_REQ, declared in
+src/drivers/include/wasmos_driver_abi.h.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `FSMGR_MOUNT_WAIT_DESC_VERSION` | 1 | Current wasmos_fsmgr_mount_wait_desc_t layout. |
+| `FSMGR_MOUNT_WAIT_PATH_MAX` | 63 | Longest mount path a wait names, NUL excluded: fs-manager's mount-path ceiling. |
+
+## supervisor_submit_desc
+
+Version and size ceiling of wasmos_supervisor_submit_desc_t, the request
+record of SUPERVISOR_IPC_SUBMIT_REQ, declared in
+src/drivers/include/wasmos_driver_abi.h.
+
+A reader MUST reject a descriptor whose version it does not know.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_SUBMIT_DESC_VERSION` | 2 | Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps). |
+| `SUPERVISOR_CAPS_MAX` | 64 | Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT ranges fit, DMA windows are refused. |
+| `SUPERVISOR_SPEC_MAX` | 255 | Longest unit spec a submission carries, NUL excluded. |
+| `SUPERVISOR_UNIT_NAME_MAX` | 35 | Longest unit name (template@instance), NUL excluded: a service name's ceiling. |
+
+## supervisor_unit_desc
+
+Version of wasmos_supervisor_unit_desc_t, the record that names one unit
+in a request about it (SUPERVISOR_IPC_KILL_REQ), declared in
+src/drivers/include/wasmos_driver_abi.h.
+
+A reader MUST reject a descriptor whose version it does not know.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_UNIT_DESC_VERSION` | 1 | Current wasmos_supervisor_unit_desc_t layout. |
+
+## supervisor_list_desc
+
+Version and size of the SUPERVISOR_IPC_LIST_REQ exchange: a
+wasmos_supervisor_list_desc_t followed by `capacity`
+wasmos_supervisor_unit_record_t, both declared in
+src/drivers/include/wasmos_driver_abi.h.
+
+A reader MUST reject a descriptor whose version it does not know.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_LIST_DESC_VERSION` | 2 | Current wasmos_supervisor_list_desc_t and record layout. |
+| `SUPERVISOR_UNITS_MAX` | 32 | Units the supervisor's table holds: a list sized for this many records is never short. |
+
+## supervisor_unit_state
+
+Where a supervised unit is in its lifecycle, as a
+wasmos_supervisor_unit_record_t reports it.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_UNIT_STATE_SPAWN_DUE` | 1 | Waiting to be spawned: a first start, or a restart's backoff. |
+| `SUPERVISOR_UNIT_STATE_SPAWNING` | 2 | Spawn request in flight; no pid yet. |
+| `SUPERVISOR_UNIT_STATE_STARTING` | 3 | Spawned; READY not yet sent. |
+| `SUPERVISOR_UNIT_STATE_RUNNING` | 4 | READY; not yet up long enough to count as stable. |
+| `SUPERVISOR_UNIT_STATE_STABLE` | 5 | READY and up long enough that its restart backoff was reset. |
+| `SUPERVISOR_UNIT_STATE_STOPPING` | 6 | Killed by the supervisor for missing READY or its liveness probes; its exit is due. |
+| `SUPERVISOR_UNIT_STATE_STOPPED` | 7 | Ended and, by its restart policy, not restarted. |
+| `SUPERVISOR_UNIT_STATE_FAILED` | 8 | Given up on: the restart limit tripped, or a critical unit died. |
+
+## supervisor_restart
+
+The restart= policy of a supervised unit.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_RESTART_NEVER` | 0 | Never restarted. |
+| `SUPERVISOR_RESTART_ON_FAILURE` | 1 | Restarted unless it exited cleanly with status 0. |
+| `SUPERVISOR_RESTART_ALWAYS` | 2 | Restarted whenever it ends. |
+
+## supervisor_class
+
+The class= of a supervised unit, what its death costs the system.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `SUPERVISOR_CLASS_OPTIONAL` | 0 | Given up on alone. |
+| `SUPERVISOR_CLASS_REQUIRED` | 1 | Given up on; the system runs degraded. |
+| `SUPERVISOR_CLASS_CRITICAL` | 2 | Never restarted: its first death takes the system down. |

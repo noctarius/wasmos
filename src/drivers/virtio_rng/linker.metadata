@@ -21,9 +21,9 @@ heap_pages = 512
 initial_memory = 4194304
 max_memory = 4194304
 
-[ipc]
-required_endpoint_name = "-"
-required_endpoint_rights = 0
+[deps]
+needs = ["pci"]
+provides = ["hrng"]
 
 [[capabilities]]
 name = "io.port"

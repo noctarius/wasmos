@@ -20,21 +20,33 @@
  * counters. Higher-level protocols are built entirely in drivers and services.
  */
 
-/* A WASMOS_IPC_HANGUP owed to `destination`.
+/* A kernel message owed to `destination`: a WASMOS_IPC_HANGUP, or a child
+ * lifecycle event reserved with ipc_owed_reserve.
  *
  * Allocated when the obligation is created -- an endpoint's first send to a
- * destination, or ipc_context_watch -- and never at delivery, so a peer's death
- * cannot go unreported for want of memory or queue space. It lives on exactly
- * one list at a time: the dying side's (an endpoint's contacts, or the context
- * watches), then the teardown batch, then the destination's pending list if its
- * ring had no room. It is freed once its message is in a ring, or when the
- * destination itself is gone. */
-typedef struct ipc_hangup {
-    struct ipc_hangup* next;
+ * destination, ipc_context_watch, or ipc_owed_reserve -- and never at delivery,
+ * so the message cannot go undelivered for want of memory or queue space. It
+ * lives on exactly one list at a time: the owing side's (an endpoint's
+ * contacts, the context watches, or a process's watch slot), then the teardown
+ * batch, then the destination's pending list if its ring had no room. It is
+ * freed once its message is in a ring, or when the destination itself is gone
+ * or has changed owner. */
+struct ipc_owed {
+    struct ipc_owed* next;
     uint32_t destination;
-    uint32_t dead_endpoint; /* IPC_ENDPOINT_NONE for a context watch */
+    /* The context that must still own `destination` at delivery, so a recycled
+     * endpoint id never receives another owner's event. 0 accepts any owner. */
+    uint32_t destination_owner;
+    /* The context whose release delivers a hangup; context watches are matched
+     * on it. Unused by a reserved lifecycle event. */
     uint32_t owner_context_id;
-} ipc_hangup_t;
+    uint32_t type;
+    uint32_t source;
+    uint32_t arg0;
+    uint32_t arg1;
+    uint32_t arg2;
+    uint32_t arg3;
+};
 
 typedef struct {
     /* First, as idtable requires: id, owner_context_id and in_use live here. */
@@ -60,7 +72,7 @@ typedef struct {
      * sent to. Recording it under the DESTINATION's lock is impossible -- that
      * would need two endpoint locks -- so it is recorded under this endpoint's
      * own lock by ipc_endpoint_note_contact, after the send completes. */
-    ipc_hangup_t* contacts;
+    ipc_owed_t* contacts;
     uint32_t contact_count;
     /* Set when a destination could not be recorded: the list was full or its
      * record could not be allocated. Reported at teardown, because the
@@ -71,8 +83,8 @@ typedef struct {
      * Non-empty only while the ring holds IPC_QUEUE_SLOTS messages: each receive
      * moves the oldest into the slot it freed, so a pending hangup still arrives
      * after everything queued before it. */
-    ipc_hangup_t* pending_head;
-    ipc_hangup_t* pending_tail;
+    ipc_owed_t* pending_head;
+    ipc_owed_t* pending_tail;
 } ipc_endpoint_t;
 
 /* Select-set: watches up to IPC_SELECT_EPS_MAX endpoints simultaneously. */
@@ -105,7 +117,7 @@ static ksync_spinlock_t g_endpoint_table_lock;
 /* Hangups owed by contexts rather than by one of their endpoints
  * (ipc_context_watch). Protected by g_endpoint_table_lock, under which
  * ipc_endpoints_release_owner already runs. */
-static ipc_hangup_t* g_context_watches;
+static ipc_owed_t* g_context_watches;
 
 /* Describe the wait a blocked thread is sitting in, from its event alone.
  *
@@ -476,9 +488,28 @@ void ipc_diag_dump_requests_from(uint32_t source_endpoint, ipc_diag_name_fn name
     }
 }
 
+/* Fill `record` as the hangup `owner_context_id`'s end owes `destination`.
+ * It comes from no endpoint: the owning process is gone by delivery, so none of
+ * its endpoints can be the source, and the kernel sends it on nobody's behalf.
+ * arg0 names the endpoint that was the peer (IPC_ENDPOINT_NONE for a context
+ * watch), arg1 the context that ended. */
+static void ipc_owed_init_hangup(ipc_owed_t* record, uint32_t destination, uint32_t dead_endpoint,
+                                 uint32_t owner_context_id) {
+    record->next = 0;
+    record->destination = destination;
+    record->destination_owner = 0;
+    record->owner_context_id = owner_context_id;
+    record->type = WASMOS_IPC_HANGUP;
+    record->source = IPC_ENDPOINT_NONE;
+    record->arg0 = dead_endpoint;
+    record->arg1 = owner_context_id;
+    record->arg2 = 0;
+    record->arg3 = 0;
+}
+
 /* Whether `ep` already owes `destination` a hangup. Caller holds ep->lock. */
 static int ipc_endpoint_has_contact(const ipc_endpoint_t* ep, uint32_t destination) {
-    for (const ipc_hangup_t* h = ep->contacts; h; h = h->next) {
+    for (const ipc_owed_t* h = ep->contacts; h; h = h->next) {
         if (h->destination == destination) {
             return 1;
         }
@@ -504,7 +535,7 @@ static int ipc_endpoint_has_contact(const ipc_endpoint_t* ep, uint32_t destinati
 static void ipc_endpoint_note_contact(uint32_t source, uint32_t destination) {
     int rc = IPC_OK;
     ipc_endpoint_t* src = 0;
-    ipc_hangup_t* record = 0;
+    ipc_owed_t* record = 0;
 
     if (source == IPC_ENDPOINT_NONE || destination == IPC_ENDPOINT_NONE || source == destination) {
         return;
@@ -525,7 +556,7 @@ static void ipc_endpoint_note_contact(uint32_t source, uint32_t destination) {
     }
     ksync_spinlock_unlock(&src->lock);
 
-    record = (ipc_hangup_t*)kmem_alloc(sizeof(*record));
+    record = (ipc_owed_t*)kmem_alloc(sizeof(*record));
     src = ipc_endpoint_acquire(source, IPC_ENDPOINT_TYPE_MESSAGE, &rc);
     if (!src) {
         kmem_free(record);
@@ -544,9 +575,7 @@ static void ipc_endpoint_note_contact(uint32_t source, uint32_t destination) {
         kmem_free(record);
         return;
     }
-    record->destination = destination;
-    record->dead_endpoint = source;
-    record->owner_context_id = src->header.owner_context_id;
+    ipc_owed_init_hangup(record, destination, source, src->header.owner_context_id);
     record->next = src->contacts;
     src->contacts = record;
     src->contact_count++;
@@ -576,40 +605,38 @@ static void ipc_endpoint_enqueue_locked(ipc_endpoint_t* ep, const ipc_message_t*
     }
 }
 
-static void ipc_hangup_message(const ipc_hangup_t* record, ipc_message_t* out) {
-    out->type = WASMOS_IPC_HANGUP;
-    /* From no endpoint: the owning process is already gone, so none of its
-     * endpoints can be the source, and the kernel sends it on nobody's behalf. */
-    out->source = IPC_ENDPOINT_NONE;
+static void ipc_owed_message(const ipc_owed_t* record, ipc_message_t* out) {
+    out->type = record->type;
+    out->source = record->source;
     out->destination = record->destination;
     out->request_id = 0;
-    out->arg0 = record->dead_endpoint;
-    out->arg1 = record->owner_context_id;
-    out->arg2 = 0;
-    out->arg3 = 0;
+    out->arg0 = record->arg0;
+    out->arg1 = record->arg1;
+    out->arg2 = record->arg2;
+    out->arg3 = record->arg3;
 }
 
 /* Take the oldest message off `ep`'s ring. Caller holds ep->lock and has checked
  * the ring is not empty.
  *
- * The slot it frees goes to the oldest pending hangup, if any, which keeps a
- * pending hangup behind everything queued before it and keeps the ring readable
+ * The slot it frees goes to the oldest pending owed message, if any, which keeps
+ * it behind everything queued before it and keeps the ring readable
  * for as long as one is pending. The moved record is handed back through
  * `out_spent` to be freed once the caller has dropped ep->lock. */
 static void ipc_endpoint_dequeue_locked(ipc_endpoint_t* ep, ipc_message_t* out,
-                                        ipc_hangup_t** out_spent) {
+                                        ipc_owed_t** out_spent) {
     *out = ep->queue[ep->head];
     ep->head = (ep->head + 1u) % IPC_QUEUE_SLOTS;
     ep->count--;
     *out_spent = 0;
     if (ep->pending_head) {
-        ipc_hangup_t* record = ep->pending_head;
+        ipc_owed_t* record = ep->pending_head;
         ipc_message_t ev;
         ep->pending_head = record->next;
         if (!ep->pending_head) {
             ep->pending_tail = 0;
         }
-        ipc_hangup_message(record, &ev);
+        ipc_owed_message(record, &ev);
         ipc_endpoint_enqueue_locked(ep, &ev);
         *out_spent = record;
     }
@@ -635,6 +662,12 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
         if (message->type == WASMOS_IPC_HANGUP) {
             return IPC_ERR_PERM;
         }
+        /* Child lifecycle events are delivered only through ipc_owed_post. A
+         * supervisor restarts or gives up on a unit when it reads one, so one a
+         * guest could send would stop or restart a live service. */
+        if (message->type == PROC_IPC_CHILD_READY || message->type == PROC_IPC_CHILD_EXITED) {
+            return IPC_ERR_PERM;
+        }
         uint32_t src_owner = ipc_endpoint_owner_context(message->source);
         if (src_owner == 0 || src_owner != sender_context_id) {
             return IPC_ERR_PERM;
@@ -648,7 +681,7 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     }
 
     /* IPC_QUEUE_DEPTH, not IPC_QUEUE_SLOTS: the slot past it is filled only by
-     * hangups, which reach the ring through ipc_hangup_deliver. */
+     * owed kernel messages, which reach the ring through ipc_owed_deliver. */
     if (ep->count >= IPC_QUEUE_DEPTH) {
         /* Remember the refusal on the endpoint that refused it, under the lock
          * already held -- no ring, no atomics, nothing a reader can tear.  A
@@ -693,7 +726,7 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t*
         return IPC_EMPTY;
     }
 
-    ipc_hangup_t* spent = 0;
+    ipc_owed_t* spent = 0;
     ipc_endpoint_dequeue_locked(ep, out_message, &spent);
     ksync_spinlock_unlock(&ep->lock);
     kmem_free(spent);
@@ -729,7 +762,7 @@ int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
             return IPC_EMPTY; /* spurious wake; caller should retry */
         }
     }
-    ipc_hangup_t* spent = 0;
+    ipc_owed_t* spent = 0;
     ipc_endpoint_dequeue_locked(ep, out_message, &spent);
     ksync_spinlock_unlock(&ep->lock);
     kmem_free(spent);
@@ -840,9 +873,9 @@ int ipc_wait(uint32_t endpoint) {
  * fail. Passed to the callback through idtable's `user` pointer, so it is
  * per-pass and two CPUs tearing down two contexts cannot share it. */
 typedef struct {
-    ipc_hangup_t* deliver;
+    ipc_owed_t* deliver;
     /* Hangups that were owed TO a dying endpoint and are now owed to no one. */
-    ipc_hangup_t* discard;
+    ipc_owed_t* discard;
     /* Endpoints whose contact list overflowed, so peers keep their state. */
     uint32_t overflowed;
 } ipc_hangup_batch_t;
@@ -860,7 +893,7 @@ static void ipc_endpoint_teardown(void* elem, void* user) {
 
     ksync_spinlock_lock(&ep->lock);
     while (ep->contacts) {
-        ipc_hangup_t* record = ep->contacts;
+        ipc_owed_t* record = ep->contacts;
         ep->contacts = record->next;
         record->next = batch->deliver;
         batch->deliver = record;
@@ -886,29 +919,38 @@ static void ipc_endpoint_teardown(void* elem, void* user) {
     ksync_spinlock_unlock(&ep->lock);
 }
 
-/* Hand one owed hangup to its destination. Called with no lock held.
+/* Hand one owed message to its destination. Called with no lock held.
  *
- * It goes into the ring when the ring has room and no older hangup is waiting,
- * and otherwise joins the destination's pending list, where receives move it
- * into the ring in order. Neither can fail. A destination that no longer exists
- * holds nothing for anyone, so its record is simply freed.
+ * It goes into the ring when the ring has room and no older owed message is
+ * waiting, and otherwise joins the destination's pending list, where receives
+ * move it into the ring in order. Neither can fail. A destination that no longer
+ * exists, or now belongs to another context than the one recorded, holds nothing
+ * for anyone, so the record is simply freed.
  *
  * Runs on the reap path, which is one of: the process manager's thread, a
  * waiting parent's syscall, or the scheduler after a dispatch has released its
- * claim (process_schedule_once_impl). None holds a scheduler lock, and the wake
+ * claim (process_schedule_once_impl); and, for a child's READY event, from the
+ * child's own host call or the process manager's dispatch. None holds a
+ * scheduler lock, and the wake
  * it performs (ipc_endpoint_enqueue_locked -> sched_event_wake_one) is the same
  * cross-CPU wake every send performs; endpoint teardown aborts waiters from the
  * same place. */
-static void ipc_hangup_deliver(ipc_hangup_t* record) {
+static void ipc_owed_deliver(ipc_owed_t* record) {
     int rc = IPC_OK;
     ipc_endpoint_t* ep = ipc_endpoint_acquire(record->destination, IPC_ENDPOINT_TYPE_MESSAGE, &rc);
     if (!ep) {
         kmem_free(record);
         return;
     }
+    if (record->destination_owner != 0 &&
+        ep->header.owner_context_id != record->destination_owner) {
+        ksync_spinlock_unlock(&ep->lock);
+        kmem_free(record);
+        return;
+    }
     if (!ep->pending_head && ep->count < IPC_QUEUE_SLOTS) {
         ipc_message_t ev;
-        ipc_hangup_message(record, &ev);
+        ipc_owed_message(record, &ev);
         ipc_endpoint_enqueue_locked(ep, &ev);
         ksync_spinlock_unlock(&ep->lock);
         kmem_free(record);
@@ -940,8 +982,8 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id) {
     }
     ksync_spinlock_lock(&g_endpoint_table_lock);
     (void)idtable_release_owner(&g_endpoint_table, owner_context_id, ipc_endpoint_teardown, &batch);
-    for (ipc_hangup_t** link = &g_context_watches; *link;) {
-        ipc_hangup_t* record = *link;
+    for (ipc_owed_t** link = &g_context_watches; *link;) {
+        ipc_owed_t* record = *link;
         if (record->owner_context_id != owner_context_id) {
             link = &record->next;
             continue;
@@ -954,12 +996,12 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id) {
 
     /* Outside the lock: every delivery needs it to resolve its destination. */
     while (batch.deliver) {
-        ipc_hangup_t* record = batch.deliver;
+        ipc_owed_t* record = batch.deliver;
         batch.deliver = record->next;
-        ipc_hangup_deliver(record);
+        ipc_owed_deliver(record);
     }
     while (batch.discard) {
-        ipc_hangup_t* record = batch.discard;
+        ipc_owed_t* record = batch.discard;
         batch.discard = record->next;
         kmem_free(record);
     }
@@ -974,23 +1016,73 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id) {
 }
 
 int ipc_context_watch(uint32_t context_id, uint32_t destination) {
-    ipc_hangup_t* record = 0;
+    ipc_owed_t* record = 0;
 
     if (context_id == IPC_CONTEXT_KERNEL || destination == IPC_ENDPOINT_NONE) {
         return IPC_ERR_INVALID;
     }
-    record = (ipc_hangup_t*)kmem_alloc(sizeof(*record));
+    record = (ipc_owed_t*)kmem_alloc(sizeof(*record));
     if (!record) {
         return IPC_ERR_FULL;
     }
-    record->destination = destination;
-    record->dead_endpoint = IPC_ENDPOINT_NONE;
-    record->owner_context_id = context_id;
+    ipc_owed_init_hangup(record, destination, IPC_ENDPOINT_NONE, context_id);
     ksync_spinlock_lock(&g_endpoint_table_lock);
     record->next = g_context_watches;
     g_context_watches = record;
     ksync_spinlock_unlock(&g_endpoint_table_lock);
     return IPC_OK;
+}
+
+int ipc_owed_reserve(uint32_t destination, uint32_t source, uint32_t type, ipc_owed_t** out_owed) {
+    int rc = IPC_OK;
+    uint32_t owner = 0;
+    ipc_owed_t* record = 0;
+
+    if (!out_owed) {
+        return IPC_ERR_INVALID;
+    }
+    *out_owed = 0;
+    if (destination == IPC_ENDPOINT_NONE) {
+        return IPC_ERR_INVALID;
+    }
+    ipc_endpoint_t* ep = ipc_endpoint_acquire(destination, IPC_ENDPOINT_TYPE_MESSAGE, &rc);
+    if (!ep) {
+        return rc;
+    }
+    owner = ep->header.owner_context_id;
+    ksync_spinlock_unlock(&ep->lock);
+
+    record = (ipc_owed_t*)kmem_alloc(sizeof(*record));
+    if (!record) {
+        return IPC_ERR_FULL;
+    }
+    record->next = 0;
+    record->destination = destination;
+    record->destination_owner = owner;
+    record->owner_context_id = 0;
+    record->type = type;
+    record->source = source;
+    record->arg0 = 0;
+    record->arg1 = 0;
+    record->arg2 = 0;
+    record->arg3 = 0;
+    *out_owed = record;
+    return IPC_OK;
+}
+
+void ipc_owed_post(ipc_owed_t* owed, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3) {
+    if (!owed) {
+        return;
+    }
+    owed->arg0 = arg0;
+    owed->arg1 = arg1;
+    owed->arg2 = arg2;
+    owed->arg3 = arg3;
+    ipc_owed_deliver(owed);
+}
+
+void ipc_owed_cancel(ipc_owed_t* owed) {
+    kmem_free(owed);
 }
 
 /* -------------------------------------------------------------------------

@@ -167,11 +167,21 @@ capability profiles from device records. No hardcoded spawn order in the manager
 Bootstrap storage drivers (`ata`, `fs-fat`) are permanently owned by initfs rules
 and cannot be overridden by runtime rules.
 
-**Supervised driver lifecycle.**
-Drivers should be restartable without kernel reboot. A crashed driver is
-detected, its stale endpoints revoked, and a replacement spawned. Endpoint
-identity preservation across restart (so callers can rebind) and liveness
-tracking by the manager are the required primitives.
+**Supervised lifecycle, one supervisor.**
+Services and drivers are restartable without a reboot, and one user-space
+service, the `supervisor`, owns "should be running -> is running" for all of
+them. Launchers hand it units and keep their own policy: device-manager decides
+which driver serves which device, sysinit reads its script; neither restarts
+anything. The kernel and the process manager contribute mechanism only --
+watched spawns, exit reasons, kill -- so restart policy stays out of the kernel
+(see "Microkernel Split"). A restarted unit is a new process with a new
+endpoint under the same name; clients rebind through name watches on hangup.
+Endpoint identity is deliberately not preserved: the state a client held with
+the old process is gone either way. Liveness is a probe the event loop answers
+itself, so a hung loop is told apart from a busy one. A DMA-capable driver
+additionally needs its device quiesced before a replacement starts, and is not
+supervised until that step exists
+([Drivers and Services](15-drivers-and-services.md)).
 
 **Dynamic mount policy.**
 Filesystem mount assignments are rule outcomes, not compile-time constants. A
@@ -329,8 +339,8 @@ freely, but they must preserve these:
 
 1. **The boot chain embeds no driver logic.** `BOOTX64.EFI` loads files and
    fills `boot_info_t`. It does not start services or make policy decisions.
-   `sysinit` starts late user processes from boot config only — it is not a
-   second bootstrap coordinator.
+   `sysinit` turns boot config into submissions to the supervisor — it is not
+   a second bootstrap coordinator, and it does not supervise.
 
 2. **The kernel does not match drivers to devices.** `device-manager` owns
    that policy. The kernel knows about capabilities and endpoints; it does not
@@ -346,6 +356,17 @@ freely, but they must preserve these:
    profile. A driver cannot acquire new hardware capabilities after spawn
    without going through `device-manager`.
 
-5. **`run-qemu-test` is always green.** This is the single non-optional gate.
+5. **Start order is not a correctness property.** A service registers and
+   sends READY as soon as its own endpoint is live, awaits its dependencies by
+   name or class instead of polling for them, and answers a request that needs
+   a missing peer later rather than blocking on it. READY means "my endpoint is
+   live", never "my dependencies are up". The only start precondition is that a
+   module's image is reachable (`/boot` mounted before anything is read from
+   it). Declared dependencies (`[deps]`) order shutdown and are checked for
+   cycles at build time; they never gate a start, because gating starts on them
+   turns every dependency edge back into a wait, and a cycle of waits is a
+   deadlock.
+
+6. **`run-qemu-test` is always green.** This is the single non-optional gate.
    Every change that touches boot or service startup passes this target before
    commit.

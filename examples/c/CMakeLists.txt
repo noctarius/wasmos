@@ -118,6 +118,15 @@ wasmos_add_wasm_c_app_target(console_claim_deny
   PACK_COMMENT  "Packing wasm console-claim deny fixture as WASMOS-APP"
 )
 
+wasmos_add_wasm_c_app_target(sv_probe
+  SOURCE      ${WASM_SV_PROBE_SRC}
+  OUTPUT_WASM ${WASM_SV_PROBE_WASM}
+  OUTPUT_APP  ${WASM_SV_PROBE_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/sv_probe/linker.metadata
+  BUILD_COMMENT "Building wasm supervisor probe fixture"
+  PACK_COMMENT  "Packing wasm supervisor probe fixture as WASMOS-APP"
+)
+
 wasmos_add_wasm_c_app_target(native_call_min
   SOURCE      ${WASM_NATIVE_CALL_MIN_SRC}
   OUTPUT_WASM ${WASM_NATIVE_CALL_MIN_WASM}
@@ -212,7 +221,7 @@ wasmos_add_wasm_c_app_target(menu_bar
 add_custom_target(c_examples)
 add_dependencies(c_examples
   hello_c chardev_client chardev_preempt init_smoke
-  fs_open_smoke fs_write_smoke fs_leave_open linmem_hold console_claim_deny native_call_min native_call_smoke
+  fs_open_smoke fs_write_smoke fs_leave_open linmem_hold console_claim_deny sv_probe native_call_min native_call_smoke
   gfx_smoke irq_route_deny irq_route_allow
   menu_bar net_smoke net_udp_echo net_tcp_echo net_tcp_server
   xfer_map_alias surface_attach

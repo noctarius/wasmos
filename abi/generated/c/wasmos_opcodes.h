@@ -22,8 +22,22 @@ enum {
 /* proc_manager (0x200..0x2FF) */
 enum {
     PROC_IPC_SPAWN = 0x200,
+    /* Wait for a child of the caller to exit: arg0=pid. The reply is
+     * deferred until it has: PROC_IPC_RESP, arg0=pid arg1=exit status
+     * arg2=PROC_EXIT_REASON_*. The child is reaped once the reply is sent.
+     */
     PROC_IPC_WAIT = 0x201,
+    /* End a child: arg0=pid arg1=exit status. Only the target's parent may
+     * kill it. On success PROC_IPC_RESP, arg0=pid arg1=status, and the child
+     * ends with PROC_EXIT_REASON_KILLED. On failure PROC_IPC_ERROR,
+     * arg1=WASMOS_ERR_PROC_PM_KILL_NOT_CHILD (not the caller's live child, or
+     * the caller itself), _BAD_ENDPOINT or _NO_CALLER.
+     */
     PROC_IPC_KILL = 0x202,
+    /* Liveness of a process: arg0=pid. PROC_IPC_RESP, arg0=pid
+     * arg1=PROC_STATUS_*; for PROC_STATUS_ZOMBIE also arg2=exit status
+     * arg3=PROC_EXIT_REASON_*. Never reaps.
+     */
     PROC_IPC_STATUS = 0x203,
     PROC_IPC_SPAWN_NAME = 0x204,
     PROC_IPC_SPAWN_CAPS = 0x205,
@@ -68,8 +82,13 @@ enum {
      */
     PROC_IPC_SPAWN_SYNC = 0x20B,
     /* Service sends this to proc_endpoint when it has finished initialising and
-     * is ready to accept requests.  Fire-and-forget — no reply is sent back.
-     * arg0..arg3 = reserved(0).
+     * is ready to accept requests. The PM answers PROC_IPC_RESP, arg0 = 0, or
+     * arg0 = WASMOS_ERR_PROC_PM_BAD_ENDPOINT for a liveness endpoint the sender
+     * does not own; READY is latched either way.
+     * arg1 = PROC_READY_FLAG_* flags, 0 for none. With PROC_READY_FLAG_LIVENESS,
+     * arg0 is the endpoint of the sender's event loop, which answers
+     * WASMOS_IPC_HEALTH_REQ; a supervising spawner probes it. Without the flag
+     * arg0 is ignored. arg2..arg3 = reserved(0).
      */
     PROC_IPC_NOTIFY_READY = 0x20C,
     /* Sync variants of SPAWN_CAPS / SPAWN_PATH / SPAWN_PATH_CAPS.
@@ -98,6 +117,37 @@ enum {
      * arg2=reserved(0) arg3=reserved(0).
      */
     PROC_IPC_EXEC_HANDLER_REGISTER = 0x211,
+    /* Spawn from a path and watch the child from its first instant. The
+     * request is a wasmos_spawn_watch_desc_t in a transfer buffer the caller
+     * owns: arg0=buffer_id arg1=offset arg2=size of the region the PM may
+     * read and write. The descriptor names a notify endpoint the caller must
+     * own; only the spawner may watch. A non-zero caps_len names a
+     * wasmos_spawn_caps_v2_t in the same region; the child holds those
+     * capabilities from its first instruction.
+     * On success: PROC_IPC_RESP, arg0=child_pid arg1=app_flags, with pid,
+     * app_flags and the child's [deps] written back into the descriptor.
+     * The reply is sent before the child first runs, so on that endpoint it
+     * precedes every event of the child. The child is reaped as soon as it
+     * exits; PROC_IPC_WAIT does not apply to it.
+     * On failure: PROC_IPC_ERROR, arg1=WASMOS_ERR_PROC_SPAWN_*.
+     */
+    PROC_IPC_SPAWN_WATCHED = 0x213,
+    /* A watched child latched READY (see PROC_STATUS_READY). Sent once, from
+     * the PM's proc endpoint to the spawn's notify endpoint: arg0=child_pid,
+     * arg1=the endpoint the child named for liveness probes
+     * (PROC_READY_FLAG_LIVENESS), or IPC_ENDPOINT_NONE (0xffffffff) when it
+     * named none.
+     * Never sent for a child that dies first. Only the kernel sends it; a
+     * guest send of this type is refused.
+     */
+    PROC_IPC_CHILD_READY = 0x214,
+    /* A watched child ended and was reaped. Sent once, from the PM's proc
+     * endpoint to the spawn's notify endpoint, with the hangup delivery
+     * guarantee (never refused by a full queue):
+     * arg0=child_pid arg1=exit status arg2=PROC_EXIT_REASON_*.
+     * Only the kernel sends it; a guest send of this type is refused.
+     */
+    PROC_IPC_CHILD_EXITED = 0x215,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF,
 };
@@ -172,12 +222,59 @@ enum {
      * somebody else, fails the same way: it is not yours to retire.
      */
     SVC_IPC_UNREGISTER_CLASS_REQ = 0x225,
+    /* Receive existence events for one service NAME.
+     * req  arg0=buffer_id arg1=byte_offset arg2=size of a
+     * svc_name_subscribe_desc_t in the caller's own transfer buffer
+     * (notify_endpoint, cookie, name);
+     * resp SVC_IPC_SUBSCRIBE_NAME_RESP arg0=0.
+     *
+     * SVC_IPC_NAME_EVENT is then pushed to notify_endpoint whenever the name
+     * is BOUND: first registered, re-pointed at a different endpoint by its
+     * owner, or claimed by a new owner after the previous one died. A
+     * re-registration that changes nothing is not an event.
+     *
+     * Subscribing does not replay a binding that already exists. A caller
+     * that wants "the provider, now or when it appears" subscribes FIRST and
+     * looks the name up SECOND; the reverse order loses a registration that
+     * lands between the two.
+     *
+     * The subscription is keyed by (notify_endpoint, cookie), which must be
+     * the caller's: the cookie is the subscriber's own tag, echoed in every
+     * event, so one endpoint can watch several names and tell them apart.
+     * Subscribing an existing key again re-targets it at the new name.
+     * notify_endpoint must belong to the caller.
+     */
+    SVC_IPC_SUBSCRIBE_NAME_REQ = 0x226,
+    /* Drop a name subscription the caller made.
+     * req  arg0=notify_endpoint arg1=cookie;
+     * resp SVC_IPC_UNSUBSCRIBE_NAME_RESP arg0=0.
+     * Idempotent: dropping a key that is not subscribed succeeds, so a
+     * caller tearing down after a lost reply cannot fail. Only the owner of
+     * notify_endpoint may drop it.
+     */
+    SVC_IPC_UNSUBSCRIBE_NAME_REQ = 0x227,
+    /* Drop a class subscription the caller made.
+     * req  arg0=notify_endpoint arg1=buffer_id (class name NUL-terminated at
+     * offset 0), the same shape as SVC_IPC_SUBSCRIBE_CLASS_REQ;
+     * resp SVC_IPC_UNSUBSCRIBE_CLASS_RESP arg0=0.
+     * Idempotent, and owner-only, as for SVC_IPC_UNSUBSCRIBE_NAME_REQ.
+     */
+    SVC_IPC_UNSUBSCRIBE_CLASS_REQ = 0x228,
     SVC_IPC_REGISTER_RESP = 0x2A0,
     SVC_IPC_LOOKUP_RESP = 0x2A1,
     SVC_IPC_LOOKUP_CLASS_RESP = 0x2A2,
     SVC_IPC_SUBSCRIBE_CLASS_RESP = 0x2A3,
     SVC_IPC_UNREGISTER_CLASS_RESP = 0x2A5,
     SVC_IPC_CLASS_EVENT = 0x2A4,
+    SVC_IPC_SUBSCRIBE_NAME_RESP = 0x2A6,
+    SVC_IPC_UNSUBSCRIBE_NAME_RESP = 0x2A7,
+    SVC_IPC_UNSUBSCRIBE_CLASS_RESP = 0x2A8,
+    /* Pushed to a name subscriber's notify_endpoint:
+     * arg0=SVC_NAME_EVENT_* arg1=cookie (the subscriber's own tag)
+     * arg2=endpoint arg3=pid of the provider the name is now bound to.
+     * request_id is 0.
+     */
+    SVC_IPC_NAME_EVENT = 0x2A9,
     SVC_IPC_ERROR = 0x2AF,
 };
 
@@ -335,7 +432,7 @@ enum {
     FS_IPC_ERROR = 0x4FF,
 };
 
-/* fs_manager (0x420..0x4A4) */
+/* fs_manager (0x420..0x4A5) */
 enum {
     /* fs-manager -> backend pull: report kind/fs-type/mount/device into a
      * buffer the CALLER owns. arg0 = buffer_id. Reply RESP packs arg0=kind,
@@ -461,11 +558,34 @@ enum {
      * appears when the backend registers.
      */
     FSMGR_IPC_MOUNT_REQ = 0x424,
+    /* Answer once a mount exists at a path: a milestone from the owner of
+     * the mount table. The request is a wasmos_fsmgr_mount_wait_desc_t in a
+     * transfer buffer the caller owns and has lent READ to fs-manager:
+     * arg0=buffer_id arg1=offset arg2=size. fs-manager copies the path out
+     * at once, so the caller may release the buffer after the reply.
+     *
+     * The reply, FSMGR_IPC_MOUNT_WAIT_RESP arg0=0, is DEFERRED: it is sent
+     * when a backend serving exactly that mount path registers, or at once
+     * if one already has. A mount exists from the moment its backend
+     * registers, whoever started it -- a device-manager rule (the boot
+     * volume) or FSMGR_IPC_MOUNT_REQ. There is no timeout here: the caller
+     * bounds its own wait. A waiter whose endpoint's process ends is
+     * dropped.
+     *
+     * Refusals (FS_IPC_ERROR): WASMOS_ERR_FS_BUFFER when the descriptor
+     * cannot be read, WASMOS_ERR_FS_BAD_ARGS for a wrong version or a path
+     * length past FSMGR_MOUNT_WAIT_PATH_MAX, WASMOS_ERR_FS_NOT_ABSOLUTE for
+     * a relative path, WASMOS_ERR_FS_NO_CLIENT_SLOT when every waiter slot
+     * is taken.
+     */
+    FSMGR_IPC_MOUNT_WAIT_REQ = 0x425,
     FSMGR_IPC_BACKEND_INFO_RESP = 0x4A0,
     FSMGR_IPC_CLONE_CWD_RESP = 0x4A1,
     FSMGR_IPC_QUERY_MOUNTS_RESP = 0x4A2,
     FSMGR_IPC_UNMOUNT_RESP = 0x4A3,
     FSMGR_IPC_MOUNT_RESP = 0x4A4,
+    /* arg0 = 0: a mount exists at the path that was waited for. */
+    FSMGR_IPC_MOUNT_WAIT_RESP = 0x4A5,
 };
 
 /* fbtext (0x600..0x6FF) */
@@ -910,14 +1030,17 @@ enum {
     PCI_IPC_ERROR = 0xDFF,
 };
 
-/* system (0xFF02..0xFF82) */
+/* system (0xFF02..0xFF85) */
 enum {
     /* The system is going down; quiesce and answer WASMOS_IPC_SHUTDOWN_DONE.
      * arg0 = reason (0 = halt, 1 = reboot), arg1..arg3 reserved (0).
-     * Sent by the process manager to every registered driver and service in
-     * REVERSE spawn order, so a participant still has the services beneath it
-     * while it quiesces (docs/architecture/15-drivers-and-services.md,
-     * "Orderly Shutdown Design Direction").
+     * Sent by the process manager, one at a time, to every registered driver
+     * and service that declared WASMOS_SVC_FLAG_WANTS_SHUTDOWN: each before
+     * everything it NEEDS by its manifest's [deps], directly or through
+     * processes that are not participants, so a participant still has the
+     * services beneath it while it quiesces; otherwise in reverse spawn order
+     * (docs/architecture/15-drivers-and-services.md, "Orderly Shutdown
+     * Design Direction"; src/kernel/include/shutdown_order.h).
      * A participant that does not answer within the deadline is passed over
      * and the machine still goes down, which is safe because of what the
      * notification exists to do: a filesystem that misses it mounts read-only
@@ -976,11 +1099,28 @@ enum {
      * endpoint, like WASMOS_IPC_HANGUP.
      */
     WASMOS_IPC_KMSG_NOTIFY = 0xFF04,
+    /* Liveness probe: is this event loop turning? Answered with
+     * WASMOS_IPC_HEALTH_RESP and the request's request_id by the event loop
+     * itself -- wasmos_sys_event_loop_poll, wasmos_sys_native_event_loop_poll
+     * and the AssemblyScript EventLoop -- before intents and handlers, so
+     * service code never sees it. arg0..arg3 reserved (0).
+     * The answer proves exactly what a supervisor needs to know: a loop
+     * parked in a nested receive, or stuck in a handler, does not answer.
+     * A supervisor probes only a unit that named its loop endpoint in
+     * PROC_IPC_NOTIFY_READY (PROC_READY_FLAG_LIVENESS); a service with a
+     * hand-written receive loop does not answer and must not opt in.
+     * In this band because it arrives on the unit's own endpoint.
+     */
+    WASMOS_IPC_HEALTH_REQ = 0xFF05,
     /* Sent back to the process manager when a participant has quiesced.
      * arg0..arg3 reserved (0). Answering does not mean the participant stops
      * running; it means nothing it holds still needs to reach a device.
      */
     WASMOS_IPC_SHUTDOWN_DONE = 0xFF82,
+    /* The answer to WASMOS_IPC_HEALTH_REQ, from the probed endpoint, with the
+     * probe's request_id. arg0..arg3 = 0.
+     */
+    WASMOS_IPC_HEALTH_RESP = 0xFF85,
 };
 
 /* volume (0xE00..0xEFF) */
@@ -1102,6 +1242,77 @@ enum {
     PARTITION_IPC_ERROR = 0xFFF,
 };
 
+/* supervisor (0x1000..0x10FF) */
+enum {
+    /* Hand a unit to the supervisor, which spawns it, watches it and
+     * restarts it by its policy. The request is a
+     * wasmos_supervisor_submit_desc_t in a transfer buffer the caller owns
+     * and has lent READ to the supervisor: arg0=buffer_id arg1=offset
+     * arg2=size. Its spec is one line of text:
+     *   <unit> <path> [restart=never|on-failure|always]
+     *                 [class=optional|required|critical] [tty=<slot>]
+     *                 [probe=<seconds>] [-- <args>]
+     * <unit> is template or template@instance; the instance key names
+     * what the unit serves (a tty, a device) and survives a restart.
+     * tty pins a wants_tty unit to text slot 1 or above; slot 0 is the
+     * kernel log and is refused.
+     * probe is the liveness probe period, 1-999 s (default 10 s), both
+     * stretched by kenv supervisor.timescale. It applies only to an
+     * instance whose READY names its event-loop endpoint
+     * (PROC_READY_FLAG_LIVENESS); three probes unanswered in a row and the
+     * supervisor kills the instance as a failure.
+     * The descriptor may also carry a capability descriptor
+     * (wasmos_spawn_caps_v2_t, I/O windows and IRQ lines), which every spawn
+     * of the unit carries; a unit asking for DMA is refused
+     * (WASMOS_ERR_SUPERVISOR_DMA_CAPS), since nothing quiesces its device
+     * before a restart.
+     * Answered once the unit is accepted, before it is spawned: a spawn
+     * that fails later is the unit's failure, handled by its policy.
+     */
+    SUPERVISOR_IPC_SUBMIT_REQ = 0x1000,
+    /* Report every unit the supervisor holds. The request is a
+     * wasmos_supervisor_list_desc_t followed by room for `capacity`
+     * wasmos_supervisor_unit_record_t, in a transfer buffer the caller
+     * owns and has lent READ|WRITE to the supervisor: arg0=buffer_id
+     * arg1=offset arg2=size, where size covers the records. The
+     * supervisor writes up to `capacity` records in table order, then
+     * `total` (units held) and `count` (records written) into the
+     * descriptor, and answers. count < total means the room was short;
+     * SUPERVISOR_UNITS_MAX records are always enough.
+     */
+    SUPERVISOR_IPC_LIST_REQ = 0x1001,
+    /* Every unit of the boot set has been submitted: sent by sysinit when
+     * sysinit.rc has run to its end. arg0..arg3 reserved (0). The units the
+     * supervisor holds at that moment are the boot set, and the boot
+     * milestone is decided over them: once every required (or critical)
+     * one is up -- READY and, if probed, a probe answered -- the
+     * supervisor logs "[supervisor] boot complete at <ms> ms: <n> required
+     * units up" once; if one of them fails or stops first, it logs
+     * "[supervisor] boot failed: <unit> ..." once instead. A unit submitted
+     * later is not part of the boot set. Answered at once; a second one
+     * changes nothing.
+     */
+    SUPERVISOR_IPC_BOOT_SUBMITTED_REQ = 0x1002,
+    /* Kill a unit's running instance. The request is a
+     * wasmos_supervisor_unit_desc_t naming the unit, in a transfer buffer
+     * the caller owns and has lent READ to the supervisor: arg0=buffer_id
+     * arg1=offset arg2=size. The instance must be spawned and not already
+     * being killed (starting, running or stable); otherwise the request is
+     * refused with WASMOS_ERR_SUPERVISOR_NOT_RUNNING, and with
+     * WASMOS_ERR_SUPERVISOR_NO_UNIT when no unit has that name. The end of
+     * a killed instance is a failure, handled by the unit's policy like any
+     * other: an on-failure or always unit is restarted, a never unit is
+     * given up, and a critical unit's end takes the system down. Answered
+     * once the kill is sent to the process manager, before the instance
+     * has ended; arg1 of the reply is the pid killed.
+     */
+    SUPERVISOR_IPC_KILL_REQ = 0x1003,
+    /* arg0 = 0: the unit was accepted, the list was written, the boot set was recorded, or the kill was sent (arg1 = the pid). */
+    SUPERVISOR_IPC_RESP = 0x1080,
+    /* arg0 = packed WASMOS_ERR_SUPERVISOR_* code. */
+    SUPERVISOR_IPC_ERROR = 0x10FF,
+};
+
 /* Subsystem ids for wasmos_opcode_name(). */
 enum {
     WASMOS_OPCODE_SUBSYS_CHARDEV = 0,
@@ -1129,6 +1340,7 @@ enum {
     WASMOS_OPCODE_SUBSYS_SYSTEM = 22,
     WASMOS_OPCODE_SUBSYS_VOLUME = 23,
     WASMOS_OPCODE_SUBSYS_PARTITION = 24,
+    WASMOS_OPCODE_SUBSYS_SUPERVISOR = 25,
 };
 
 /* Opcode -> symbol name within a subsystem (diagnostics/logging). Pass the
@@ -1165,6 +1377,9 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x20F: return "PROC_IPC_SPAWN_PATH_CAPS_SYNC";
         case 0x210: return "PROC_IPC_SUBSYSTEM_REGISTER_BROKER";
         case 0x211: return "PROC_IPC_EXEC_HANDLER_REGISTER";
+        case 0x213: return "PROC_IPC_SPAWN_WATCHED";
+        case 0x214: return "PROC_IPC_CHILD_READY";
+        case 0x215: return "PROC_IPC_CHILD_EXITED";
         case 0x280: return "PROC_IPC_RESP";
         case 0x2FF: return "PROC_IPC_ERROR";
         default: return "UNKNOWN";
@@ -1184,12 +1399,19 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x223: return "SVC_IPC_LOOKUP_CLASS_REQ";
         case 0x224: return "SVC_IPC_SUBSCRIBE_CLASS_REQ";
         case 0x225: return "SVC_IPC_UNREGISTER_CLASS_REQ";
+        case 0x226: return "SVC_IPC_SUBSCRIBE_NAME_REQ";
+        case 0x227: return "SVC_IPC_UNSUBSCRIBE_NAME_REQ";
+        case 0x228: return "SVC_IPC_UNSUBSCRIBE_CLASS_REQ";
         case 0x2A0: return "SVC_IPC_REGISTER_RESP";
         case 0x2A1: return "SVC_IPC_LOOKUP_RESP";
         case 0x2A2: return "SVC_IPC_LOOKUP_CLASS_RESP";
         case 0x2A3: return "SVC_IPC_SUBSCRIBE_CLASS_RESP";
         case 0x2A5: return "SVC_IPC_UNREGISTER_CLASS_RESP";
         case 0x2A4: return "SVC_IPC_CLASS_EVENT";
+        case 0x2A6: return "SVC_IPC_SUBSCRIBE_NAME_RESP";
+        case 0x2A7: return "SVC_IPC_UNSUBSCRIBE_NAME_RESP";
+        case 0x2A8: return "SVC_IPC_UNSUBSCRIBE_CLASS_RESP";
+        case 0x2A9: return "SVC_IPC_NAME_EVENT";
         case 0x2AF: return "SVC_IPC_ERROR";
         default: return "UNKNOWN";
         }
@@ -1235,11 +1457,13 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x422: return "FSMGR_IPC_QUERY_MOUNTS_REQ";
         case 0x423: return "FSMGR_IPC_UNMOUNT_REQ";
         case 0x424: return "FSMGR_IPC_MOUNT_REQ";
+        case 0x425: return "FSMGR_IPC_MOUNT_WAIT_REQ";
         case 0x4A0: return "FSMGR_IPC_BACKEND_INFO_RESP";
         case 0x4A1: return "FSMGR_IPC_CLONE_CWD_RESP";
         case 0x4A2: return "FSMGR_IPC_QUERY_MOUNTS_RESP";
         case 0x4A3: return "FSMGR_IPC_UNMOUNT_RESP";
         case 0x4A4: return "FSMGR_IPC_MOUNT_RESP";
+        case 0x4A5: return "FSMGR_IPC_MOUNT_WAIT_RESP";
         default: return "UNKNOWN";
         }
     case WASMOS_OPCODE_SUBSYS_FBTEXT:
@@ -1442,7 +1666,9 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0xFF02: return "WASMOS_IPC_SHUTDOWN_REQ";
         case 0xFF03: return "WASMOS_IPC_HANGUP";
         case 0xFF04: return "WASMOS_IPC_KMSG_NOTIFY";
+        case 0xFF05: return "WASMOS_IPC_HEALTH_REQ";
         case 0xFF82: return "WASMOS_IPC_SHUTDOWN_DONE";
+        case 0xFF85: return "WASMOS_IPC_HEALTH_RESP";
         default: return "UNKNOWN";
         }
     case WASMOS_OPCODE_SUBSYS_VOLUME:
@@ -1460,6 +1686,16 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0xF00: return "PARTITION_IPC_RESCAN_REQ";
         case 0xF80: return "PARTITION_IPC_RESP";
         case 0xFFF: return "PARTITION_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_SUPERVISOR:
+        switch (type) {
+        case 0x1000: return "SUPERVISOR_IPC_SUBMIT_REQ";
+        case 0x1001: return "SUPERVISOR_IPC_LIST_REQ";
+        case 0x1002: return "SUPERVISOR_IPC_BOOT_SUBMITTED_REQ";
+        case 0x1003: return "SUPERVISOR_IPC_KILL_REQ";
+        case 0x1080: return "SUPERVISOR_IPC_RESP";
+        case 0x10FF: return "SUPERVISOR_IPC_ERROR";
         default: return "UNKNOWN";
         }
     default: return "UNKNOWN";

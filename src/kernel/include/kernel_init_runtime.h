@@ -1,7 +1,8 @@
 /* kernel_init_runtime.h - Kernel init process (PID 1) state and entry.
  *
  * The init process drives early system bring-up: spawning fs-manager, fs-tmpfs,
- * fs-init, and device-manager in sequence, then requesting sysinit from /boot.
+ * fs-init, and device-manager in sequence, then requesting sysinit from /boot
+ * once fs-manager reports /boot mounted.
  * init_state_t is the cooperative state machine persisted across yields. */
 #ifndef WASMOS_KERNEL_INIT_RUNTIME_H
 #define WASMOS_KERNEL_INIT_RUNTIME_H
@@ -9,6 +10,7 @@
 #include <stdint.h>
 #include "boot.h"
 #include "process.h"
+#include "xfer_buffer.h"
 
 /* Cooperative state machine state for the init bring-up sequence. */
 typedef struct {
@@ -31,20 +33,25 @@ typedef struct {
     uint32_t native_min_index;
     uint32_t native_smoke_index;
     uint32_t smoke_index;
+    uint32_t supervisor_index;
     uint32_t fs_manager_index;
     uint32_t fs_tmpfs_index;
     uint32_t fs_init_index;
     uint32_t device_manager_index;
-    uint32_t dm_pid; /* pid device-manager was spawned as; 0 before that phase completes */
-    /* Attempts made to spawn sysinit by path.
-     *
-     * The spawn legitimately retries: sysinit lives on the ESP, not in the
-     * initfs, so it cannot be read until device enumeration has brought fs-fat
-     * up and /boot is mounted. What the retry must not be is UNBOUNDED -- a
-     * boot where that read never succeeds retried it 17,081 times across 14
-     * minutes in one CI capture, logging every attempt, pegging a CPU and
-     * reaching no prompt, which is the whole of `[BUG][P0]`. */
+    /* Attempts made to spawn sysinit by path. It is spawned once fs-manager
+     * reports /boot mounted, so a healthy boot needs one; the bound only keeps
+     * a read that fails anyway from retrying forever, which once ran 17,081
+     * times across 14 minutes in a CI capture and reached no prompt
+     * (`[BUG][P0]`). */
     uint32_t sysinit_attempts;
+    /* The wait for /boot (phases 6-9): fs-manager is found by its name
+     * ("fs.vfs") and asked to answer once /boot is mounted. The deadline is in
+     * timer ticks; the endpoint is IPC_ENDPOINT_NONE until the name is bound.
+     * init owns both request buffers and releases each on its reply. */
+    uint64_t boot_mount_deadline;
+    uint32_t fsmgr_endpoint;
+    xfer_buffer_owner_t name_sub_buf;
+    xfer_buffer_owner_t mount_wait_buf;
 } init_state_t;
 
 /* Reset *state to the start of the bring-up sequence and bind it to boot_info, which is

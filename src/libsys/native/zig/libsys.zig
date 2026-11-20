@@ -190,6 +190,56 @@ pub fn ipcFutureCancel(operation: *NativeIpcFuture, status: i32) void {
     c.wasmos_sys_native_ipc_future_cancel(operation, status);
 }
 
+/// Watches of one event loop (`wasmos_sys_native_svc_watch_set_t`). Contract:
+/// "service-name watches" in wasmos/libsys.h; implemented by
+/// svc_watch_native.c, which a service using these must compile in.
+pub const NativeSvcWatchSet = c.wasmos_sys_native_svc_watch_set_t;
+/// One watch of a service name (`wasmos_sys_native_svc_watch_t`). Zero it
+/// before its first start.
+pub const NativeSvcWatch = c.wasmos_sys_native_svc_watch_t;
+/// One-shot await of a service name (`wasmos_sys_native_svc_await_t`).
+pub const NativeSvcAwait = c.wasmos_sys_native_svc_await_t;
+pub const NativeSvcBindFn = c.wasmos_sys_native_svc_bind_fn;
+pub const NativeSvcFailFn = c.wasmos_sys_native_svc_fail_fn;
+
+/// Bind `set` to an initialised loop and install its name-event handler.
+/// Returns 0, or -1 when the loop's handler table is full. Pass-through.
+pub fn svcWatchSetInit(set: *NativeSvcWatchSet, loop: *NativeEventLoop, proc_endpoint: u32) i32 {
+    return c.wasmos_sys_native_svc_watch_set_init(set, loop, proc_endpoint);
+}
+
+/// Start following `name` (at most 16 bytes, NUL-terminated). Returns 0, -1
+/// for invalid arguments, or a packed WASMOS_ERR_PROC_PM_SVC_WATCH_* code.
+/// Pass-through.
+pub fn svcWatchStart(set: *NativeSvcWatchSet, watch: *NativeSvcWatch, name: [*:0]const u8, timeout_ms: i32, on_bind: NativeSvcBindFn, on_fail: NativeSvcFailFn, user: ?*anyopaque) i32 {
+    return c.wasmos_sys_native_svc_watch_start(set, watch, name, timeout_ms, on_bind, on_fail, user);
+}
+
+/// Drop the subscription and stop the watch; no callback runs afterwards.
+/// Pass-through.
+pub fn svcWatchStop(watch: *NativeSvcWatch) void {
+    c.wasmos_sys_native_svc_watch_stop(watch);
+}
+
+/// Forget the last reported endpoint so a rebind to the same endpoint id is
+/// reported; call on the provider's hangup. Pass-through.
+pub fn svcWatchForget(watch: *NativeSvcWatch) void {
+    c.wasmos_sys_native_svc_watch_forget(watch);
+}
+
+/// Fail every watch whose deadline has passed. Call from the service's idle
+/// hook. Pass-through.
+pub fn svcWatchSetExpire(set: *NativeSvcWatchSet) void {
+    c.wasmos_sys_native_svc_watch_set_expire(set);
+}
+
+/// Start a one-shot await; the future resolves with the endpoint. Null for
+/// invalid arguments; a failed start returns the future already rejected.
+/// Pass-through.
+pub fn svcAwaitStart(set: *NativeSvcWatchSet, await_rec: *NativeSvcAwait, name: [*:0]const u8, timeout_ms: i32) ?*Future {
+    return c.wasmos_sys_native_svc_await_start(set, await_rec, name, timeout_ms);
+}
+
 /// Zero a service record and record `root_stack` as the root coroutine's stack.
 /// The slice is borrowed for the whole run. Passes it as the C pointer/length
 /// pair.

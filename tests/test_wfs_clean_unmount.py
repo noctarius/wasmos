@@ -85,6 +85,13 @@ def _boot(image: str, timeout_s: int = 150) -> QemuSession:
     session = QemuSession(cfg, timeout_s=timeout_s, echo=False)
     session.start()
     session.require_prompt()
+    # /wfs is a device-manager mount, not a boot unit: the prompt and the boot
+    # milestone can come before fs-wfs has registered its backend, and a write
+    # sent then fails its first open.
+    if not session.expect_from(0, b"[fs-wfs] ready", timeout_s=60):
+        raise AssertionError(
+            f"fs-wfs never became ready\n--- tail ---\n{session.tail(4096)}\n"
+        )
     return session
 
 
@@ -141,8 +148,13 @@ class WfsShutdownTestBase(unittest.TestCase):
         window is a size the test silently starts failing at.
         """
         for line in session.tail(max_bytes=len(session.buf)).splitlines():
-            if "[fs-wfs] mounted from" in line or "[fs-wfs] mounted after" in line:
-                return line.strip()
+            # From the tag on: the console can put another line's text or an
+            # erase-line sequence in front of it on the same row.
+            at = max(
+                line.find("[fs-wfs] mounted from"), line.find("[fs-wfs] mounted after")
+            )
+            if at >= 0:
+                return line[at:].strip()
         self.fail(f"no fs-wfs mount line\n--- tail ---\n{session.tail(4096)}\n")
         return ""
 
@@ -166,6 +178,13 @@ class WfsCleanUnmountTest(WfsShutdownTestBase):
             self.assertTrue(
                 first.expect_from(mark, b"[pm] shutdown: begin", timeout_s=30),
                 f"the shutdown sequence never ran\n--- tail ---\n{first.tail(4096)}\n",
+            )
+            # fs-wfs is the one participant, and the order names it.
+            self.assertTrue(
+                first.expect_from(
+                    mark, b"[pm] shutdown: order 1: fs-wfs", timeout_s=30
+                ),
+                f"the shutdown order was not logged\n--- tail ---\n{first.tail(4096)}\n",
             )
             # The COM2 kernel log is printed too: the kernel writes it straight to
             # the port, so it shows how far the sequence got when COM1 (drained

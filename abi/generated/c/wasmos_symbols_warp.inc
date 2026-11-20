@@ -122,4 +122,5 @@
     LINK("wasmos", "serial_owner_write", warp_serial_owner_write) , \
     LINK("wasmos", "kmsg_read", warp_kmsg_read) , \
     LINK("wasmos", "kmsg_subscribe", warp_kmsg_subscribe) , \
-    LINK("wasmos", "linmem_slots", warp_linmem_slots)
+    LINK("wasmos", "linmem_slots", warp_linmem_slots) , \
+    LINK("wasmos", "ipc_endpoint_has_cap", warp_ipc_endpoint_has_cap)

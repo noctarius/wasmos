@@ -20,3 +20,10 @@ provides = ["supervisor"]
 [[capabilities]]
 name = "system.control"
 flags = 0
+
+# spawn.grant: a unit's grants reach the process manager as the supervisor's
+# own watched spawn; sv_authorize relays them only from a submitter that holds
+# spawn.grant itself.
+[[capabilities]]
+name = "spawn.grant"
+flags = 0

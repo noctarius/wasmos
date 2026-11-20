@@ -544,3 +544,20 @@ groups:
       - { symbol: SUPERVISOR_CLASS_OPTIONAL, value: 0, doc: "Given up on alone." }
       - { symbol: SUPERVISOR_CLASS_REQUIRED, value: 1, doc: "Given up on; the system runs degraded." }
       - { symbol: SUPERVISOR_CLASS_CRITICAL, value: 2, doc: "Never restarted: its first death takes the system down." }
+
+  - name: capability
+    doc: |
+      Capability kinds, as ipc_endpoint_has_cap asks about them. Each is the kind
+      a manifest [[capabilities]] name grants (docs/architecture/10-capability-and-policy.md);
+      the kernel's capability_kind_t takes the same values.
+    constants:
+      - { symbol: WASMOS_CAP_IO_PORT, value: 0, doc: "io.port: x86 I/O port access." }
+      - { symbol: WASMOS_CAP_IRQ_ROUTE, value: 1, doc: "irq.route: route hardware IRQ lines to an endpoint." }
+      - { symbol: WASMOS_CAP_MMIO_MAP, value: 2, doc: "mmio.map: map MMIO regions." }
+      - { symbol: WASMOS_CAP_DMA_BUFFER, value: 3, doc: "dma.buffer: DMA buffer host calls." }
+      - { symbol: WASMOS_CAP_SYSTEM_CONTROL, value: 4, doc: "system.control: halt, reboot, power off." }
+      - { symbol: WASMOS_CAP_SUBSYSTEM_REGISTER, value: 5, doc: "subsystem.register: broker subsystems and exec-format handlers." }
+      - { symbol: WASMOS_CAP_SVC_CLASS_REGISTER, value: 6, doc: "svc.class: register under a virtual service class." }
+      - { symbol: WASMOS_CAP_CONSOLE_OWNER, value: 7, doc: "console.owner: register the console ring." }
+      - { symbol: WASMOS_CAP_SPAWN_GRANT, value: 8, doc: "spawn.grant: put hardware grants on a spawned child, directly or through the supervisor." }
+      - { symbol: WASMOS_CAP_SVC_CONTROL, value: 9, doc: "svc.control: submit, kill and declare the boot set at the supervisor." }

@@ -23,3 +23,13 @@ provides = ["devmgr.inv", "devmgr.query"]
 [[capabilities]]
 name = "ipc.basic"
 flags = 0
+
+# spawn.grant: driver spawns carry each driver's I/O windows, IRQ lines and DMA
+# windows. svc.control: ENV{RESTART} rules submit their driver to the supervisor.
+[[capabilities]]
+name = "spawn.grant"
+flags = 0
+
+[[capabilities]]
+name = "svc.control"
+flags = 0

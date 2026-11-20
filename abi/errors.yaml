@@ -61,6 +61,7 @@ domains:
       - { name: WATCH_NO_SPACE,   description: "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch" }
       - { name: BAD_CAPS,         description: "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created" }
       - { name: CAPS_APPLY,       description: "the kernel refused the parsed capability profile for the new child, which was killed before it ran" }
+      - { name: GRANT_NOT_AUTHORIZED, description: "the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created" }
 
   proc_pm:
     id: 2
@@ -104,6 +105,7 @@ domains:
       - { name: SVC_WATCH_NO_BUFFER, description: "a service watch could not acquire or fill the transfer buffer for its subscription descriptor" }
       - { name: SVC_WATCH_BAD_REPLY, description: "the process manager answered a service-watch request with neither its response nor a packed error" }
       - { name: KILL_NOT_CHILD,      description: "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself" }
+      - { name: GRANT_NOT_AUTHORIZED, description: "the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created" }
 
   linmem:
     id: 3
@@ -466,3 +468,5 @@ domains:
       - { name: DMA_CAPS,  description: "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit" }
       - { name: NO_UNIT,     description: "no unit of the name the request gives is recorded" }
       - { name: NOT_RUNNING, description: "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed" }
+      - { name: NOT_AUTHORIZED,       description: "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require" }
+      - { name: GRANT_NOT_AUTHORIZED, description: "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself" }

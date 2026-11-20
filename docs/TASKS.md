@@ -646,18 +646,6 @@ Source: `architecture/13-runtime-and-packaging.md`,
 - [ ] [FEATURE][P2] Finish service-class discovery lifecycle: enumeration,
   add/remove/death notifications, capability-gated registration, and consumer
   migration where class lookup removes hardwired provider names.
-- [ ] [BUG][P1] Gate who may hand out hardware grants and who may control units.
-  No caps-carrying spawn checks its requester: `pm_handle_spawn_watched` and the
-  `PROC_IPC_SPAWN_*CAPS*` handlers (`src/kernel/process_manager_spawn.c`) apply
-  any `wasmos_spawn_caps_v2_t` through `pm_apply_spawn_caps`, so any process can
-  start a module whose manifest declares `io.port` / `irq.route` with an I/O
-  window and IRQ lines of its own choosing. The supervisor widens the reach:
-  `SUPERVISOR_IPC_SUBMIT_REQ` carries grants and `SUPERVISOR_IPC_KILL_REQ`
-  kills any unit, and neither checks its sender
-  (`src/services/supervisor/supervisor.c`, `sv_on_submit`, `sv_on_kill`).
-  Make caps-carrying spawns require a capability of the requester (device-manager
-  and the supervisor hold it), have the supervisor accept grants only from a
-  submitter entitled to them, and gate submit and kill. A host test per refusal.
 - [ ] [FEATURE][P1] Quiesce a DMA-capable device before its driver is restarted, so
   PCI and DMA drivers can be supervised (`architecture/15`, "Device-Manager
   Design Direction"). A crashed driver may leave its device bus-mastering into

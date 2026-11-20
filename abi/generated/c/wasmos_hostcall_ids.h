@@ -125,7 +125,8 @@ typedef enum {
     HC_KMSG_READ = 115,
     HC_KMSG_SUBSCRIBE = 116,
     HC_LINMEM_SLOTS = 117,
-    HC_COUNT = 118,
+    HC_IPC_ENDPOINT_HAS_CAP = 118,
+    HC_COUNT = 119,
 } warp_hostcall_id_t;
 
 #endif /* WASMOS_HOSTCALL_IDS_H */

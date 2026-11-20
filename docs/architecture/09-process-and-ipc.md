@@ -583,7 +583,9 @@ watch its child. On success the PM writes the child's pid, app flags and its
 so the spawner never reads an image. The descriptor may also carry a
 `wasmos_spawn_caps_v2_t` (I/O windows, IRQ lines, DMA), applied while the child
 is parked, so a driver holds its hardware access from its first instruction; a
-descriptor that does not parse spawns nothing.
+descriptor that does not parse spawns nothing, and one that grants anything
+requires the spawner to hold `spawn.grant` (`GRANT_NOT_AUTHORIZED` otherwise;
+[Capability and Policy](10-capability-and-policy.md), "Requester Checks").
 
 The watch exists from the child's first instant: both events are reserved
 (`ipc_owed_reserve`) before the child is created and attached to it while it is

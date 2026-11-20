@@ -1,3 +1,4 @@
+#include "capability.h"
 #include "process_manager_internal.h"
 
 /* The packed-arg spawn opcodes each describe exactly one I/O window; the
@@ -96,4 +97,11 @@ int pm_caps_from_v2(const uint8_t* payload, uint32_t payload_size, pm_spawn_caps
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     return 0;
+}
+
+int pm_caps_grant_allowed(uint32_t requester_context, const pm_spawn_caps_t* caps) {
+    if (!caps || !caps->valid || caps->cap_flags == 0) {
+        return 1;
+    }
+    return capability_has(requester_context, CAP_SPAWN_GRANT) ? 1 : 0;
 }

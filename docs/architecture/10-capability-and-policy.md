@@ -2,9 +2,9 @@
 
 > **Documentation status: Implemented reference with deferred IOMMU work.**
 
-This document describes the kernel capability model: the seven capability kinds,
-per-context storage, the spawn profile, capability enforcement at each action
-site, and the IRQ-route policy table.
+This document describes the kernel capability model: the capability kinds,
+per-context storage, the spawn profile and who may request one, capability
+enforcement at each action site, and the IRQ-route policy table.
 
 **Sources**: `src/kernel/capability.c`, `src/kernel/policy.c`,
 `src/kernel/include/capability.h`, `src/kernel/include/policy.h`
@@ -43,9 +43,13 @@ typedef enum {
     CAP_SYSTEM_CONTROL    = 4,   // mask bit 4: system halt, reboot, power-off
     CAP_SUBSYSTEM_REGISTER= 5,   // mask bit 5: register broker subsystems + exec-format handlers
     CAP_SVC_CLASS_REGISTER= 6,   // mask bit 6: register a service under a virtual class
+    CAP_CONSOLE_OWNER     = 7,   // mask bit 7: register the console ring
+    CAP_SPAWN_GRANT       = 8,   // mask bit 8: put hardware grants on a spawned child
+    CAP_SVC_CONTROL       = 9,   // mask bit 9: submit, kill, declare the boot set (supervisor)
 } capability_kind_t;
 
-#define CAP_ALL_MASK  ((1u << 7) - 1u)   // 0x7F — all seven bits
+#define CAPABILITY_KIND_COUNT 10u
+#define CAP_ALL_MASK  ((1u << 10) - 1u)   // every kind
 #define CAPABILITY_DMA_WINDOW_LIMIT 16u
 ```
 
@@ -62,13 +66,20 @@ these kinds via `capability_grant_name`:
 | `"subsystem.register"` | `CAP_SUBSYSTEM_REGISTER` |
 | `"svc.class"`          | `CAP_SVC_CLASS_REGISTER` |
 | `"console.owner"`      | `CAP_CONSOLE_OWNER`      |
+| `"spawn.grant"`        | `CAP_SPAWN_GRANT`        |
+| `"svc.control"`        | `CAP_SVC_CONTROL`        |
 
-Any unrecognized name returns -1 and grants nothing. `CAP_SVC_CLASS_REGISTER`
+The kind values are ABI: `abi/constants.yaml` publishes them as `WASMOS_CAP_*`,
+and `capability.h` asserts that the enum matches. Any unrecognized name returns
+-1 and grants nothing. `CAP_SVC_CLASS_REGISTER`
 gates registering a service under a virtual class (class-based discovery,
 [Process and IPC](09-process-and-ipc.md)); the plain name registration path is
 ungated. `CAP_CONSOLE_OWNER` gates `klog_register_ring`: the console ring
 receives every tty's output and the kernel log, and its registrant owns COM1
 ([Virtual Terminal](19-virtual-terminal.md)); only the vt declares it.
+
+`CAP_SPAWN_GRANT` and `CAP_SVC_CONTROL` gate requests rather than hardware;
+see "Requester Checks" below.
 
 ---
 
@@ -116,6 +127,40 @@ stable for the lifetime of the process.
 - `cap_flags` bit 3: enable DMA direction/range restriction.
 - If DMA is enabled, `dma_window_count` must be `> 0` and `≤
   CAPABILITY_DMA_WINDOW_LIMIT`; the window array is copied in full.
+
+---
+
+### Requester Checks
+
+A spawn profile is authority the *requester* chooses: the manifest grants a
+kind, the profile picks the I/O windows, IRQ lines and DMA windows -- including
+DMA windows over arbitrary physical memory. So who may request one is checked:
+
+- **Process manager.** Every spawn that carries a profile
+  (`PROC_IPC_SPAWN_CAPS`, `_CAPS_V2`, `_CAPS_SYNC`, `_PATH_CAPS`,
+  `_PATH_CAPS_SYNC`, and `PROC_IPC_SPAWN_WATCHED` with a capability descriptor)
+  asks `pm_caps_grant_allowed` before the child is created. A profile with any
+  `cap_flags` bit set requires the requester to hold `spawn.grant`; otherwise
+  the request is refused with `GRANT_NOT_AUTHORIZED` (`proc_pm`, or
+  `proc_spawn` for a watched spawn) and nothing is spawned. A profile with no
+  bits set only narrows the child and is open to everyone. Holders:
+  device-manager and the supervisor.
+- **Supervisor.** Submitting a unit, killing one and declaring the boot set
+  require `svc.control` (`WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED`); listing is
+  open. A submission carrying a capability descriptor also requires
+  `spawn.grant` (`WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED`): the supervisor
+  spawns the unit under its own name, so it relays grants only from a submitter
+  the process manager would accept them from directly. Holders of
+  `svc.control`: sysinit, device-manager and the `svc` utility.
+
+A user-space server learns what a sender holds with the
+`ipc_endpoint_has_cap(endpoint, cap)` host call, asked about the request's
+source endpoint: the transport refuses a source the sender does not own, so its
+owner is the sender. The answer is about the owner when asked; a sender that
+has exited answers `WASMOS_NOENT`.
+
+A capability is held because the module's manifest declares it; the trust
+anchor is the image on `/boot` or in the initfs, not a runtime policy.
 
 ---
 
@@ -219,8 +264,8 @@ short-circuits to return 1).
 
 ### Structural Invariants
 
-1. **Kernel context is omnipotent.** Context id 0 holds all seven capability
-   bits at init and bypasses the IRQ policy table.
+1. **Kernel context is omnipotent.** Context id 0 holds every capability bit
+   at init and bypasses the IRQ policy table.
 
 2. **Spawn profile is optional but binding once set.** Without a profile,
    only capability presence is checked (permissive). Once set, the profile

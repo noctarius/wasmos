@@ -83,6 +83,10 @@ uint32_t warp_ipc_create_endpoint(void* ctx_);
  * handle, or IPC_ERR_NOENT for an unknown endpoint AND for a kernel-owned one — a
  * kernel endpoint reads as "not yours to see" rather than exposing owner 0. */
 uint32_t warp_ipc_endpoint_owner(uint32_t endpoint, void* ctx_);
+/* Whether the owner of `endpoint` holds capability `cap` (WASMOS_CAP_*): 1 or 0,
+ * IPC_ERR_INVALID for a negative handle or an unknown capability, IPC_ERR_NOENT for
+ * an unknown or kernel-owned endpoint. */
+uint32_t warp_ipc_endpoint_has_cap(uint32_t endpoint, uint32_t cap, void* ctx_);
 /* Send a message to `dest`, declaring `src` as the reply endpoint and carrying `type`,
  * `req_id` and the four payload words verbatim. `src` is not taken on trust: the
  * transport rejects it with IPC_ERR_PERM unless the calling context owns that endpoint,

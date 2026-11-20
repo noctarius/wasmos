@@ -8,6 +8,7 @@
  * and the return value are slots in _sp -- so nothing here needs a live wasm3
  * runtime, which is what makes the host test possible.
  */
+#include "capability.h"
 #include "ipc.h"
 #include "process.h"
 #include "thread.h"
@@ -51,6 +52,27 @@ m3ApiRawFunction(wasmos_ipc_endpoint_owner) {
     }
     preempt_safepoint();
     m3ApiReturn((int32_t)owner_context_id);
+}
+
+/* The answer is about the endpoint's owner at the time of the call; a kernel-owned
+ * endpoint answers NOENT, as for ipc_endpoint_owner, rather than "holds all". */
+m3ApiRawFunction(wasmos_ipc_endpoint_has_cap) {
+    m3ApiReturnType(int32_t);
+    m3ApiGetArg(int32_t, endpoint);
+    m3ApiGetArg(int32_t, cap);
+    uint32_t owner_context_id = 0;
+
+    if (endpoint < 0 || cap < 0 || (uint32_t)cap >= CAPABILITY_KIND_COUNT) {
+        m3ApiReturn(IPC_ERR_INVALID);
+    }
+    int owner_rc = ipc_endpoint_owner((uint32_t)endpoint, &owner_context_id);
+    if (owner_rc != IPC_OK) {
+        m3ApiReturn(owner_rc);
+    }
+    if (owner_context_id == 0) {
+        m3ApiReturn(IPC_ERR_NOENT);
+    }
+    m3ApiReturn(capability_has(owner_context_id, (capability_kind_t)cap) ? 1 : 0);
 }
 
 m3ApiRawFunction(wasmos_ipc_send) {

@@ -473,6 +473,19 @@ int sv_exit_is_failure(int32_t status, uint32_t reason) {
     return !(reason == PROC_EXIT_REASON_EXITED && status == 0);
 }
 
+int32_t sv_authorize(uint32_t type, uint32_t sender, uint32_t caps_len) {
+    if (type == SUPERVISOR_IPC_LIST_REQ) {
+        return 0;
+    }
+    if ((sender & SV_SENDER_CONTROL) == 0) {
+        return WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED;
+    }
+    if (type == SUPERVISOR_IPC_SUBMIT_REQ && caps_len > 0 && (sender & SV_SENDER_GRANT) == 0) {
+        return WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED;
+    }
+    return 0;
+}
+
 const char* sv_state_name(sv_state_t state) {
     switch (state) {
     case SV_UNIT_SPAWN_DUE:

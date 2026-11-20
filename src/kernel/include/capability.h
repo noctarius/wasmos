@@ -28,17 +28,38 @@ typedef enum {
     CAP_SYSTEM_CONTROL = 4,     /* privileged kernel control (reboot, power off, etc.) */
     CAP_SUBSYSTEM_REGISTER = 5, /* register broker subsystems + executable-format handlers */
     CAP_SVC_CLASS_REGISTER = 6, /* register a service under a virtual class (anti-spoof) */
-    CAP_CONSOLE_OWNER = 7       /* register the console ring: all tty output and COM1 */
+    CAP_CONSOLE_OWNER = 7,      /* register the console ring: all tty output and COM1 */
+    CAP_SPAWN_GRANT = 8,        /* put hardware grants (a spawn profile) on a spawned child */
+    CAP_SVC_CONTROL = 9         /* submit, kill and declare the boot set at the supervisor */
 } capability_kind_t;
+
+/* Kinds are numbered 0..CAPABILITY_KIND_COUNT-1. Their values are ABI: a guest
+ * names one to ipc_endpoint_has_cap as WASMOS_CAP_* (abi/constants.yaml). */
+#define CAPABILITY_KIND_COUNT 10u
+_Static_assert(CAP_IO_PORT == WASMOS_CAP_IO_PORT && CAP_IRQ_ROUTE == WASMOS_CAP_IRQ_ROUTE &&
+                   CAP_MMIO_MAP == WASMOS_CAP_MMIO_MAP && CAP_DMA_BUFFER == WASMOS_CAP_DMA_BUFFER &&
+                   CAP_SYSTEM_CONTROL == WASMOS_CAP_SYSTEM_CONTROL &&
+                   CAP_SUBSYSTEM_REGISTER == WASMOS_CAP_SUBSYSTEM_REGISTER &&
+                   CAP_SVC_CLASS_REGISTER == WASMOS_CAP_SVC_CLASS_REGISTER &&
+                   CAP_CONSOLE_OWNER == WASMOS_CAP_CONSOLE_OWNER &&
+                   CAP_SPAWN_GRANT == WASMOS_CAP_SPAWN_GRANT &&
+                   CAP_SVC_CONTROL == WASMOS_CAP_SVC_CONTROL,
+               "capability_kind_t is the WASMOS_CAP_* ABI");
 
 /* Initialize the capability table; called once during kernel startup.
  * Also seeds the record for context 0 (the kernel) with every capability set. */
 void capability_init(void);
 
+/* Maps a manifest capability name (an unterminated byte string) to its kind:
+ * "io.port", "irq.route", "mmio.map", "dma.buffer", "system.control",
+ * "subsystem.register", "svc.class", "console.owner", "spawn.grant",
+ * "svc.control". The match is exact. Returns 0 with *out_kind set, or -1 for a
+ * NULL or empty name or an unrecognised one. */
+int capability_kind_from_name(const uint8_t* name, uint32_t name_len, capability_kind_t* out_kind);
+
 /* Grant the named-endpoint capability to context_id (used for IPC access control).
- * `name`/`name_len` is a manifest capability name -- "io.port", "irq.route",
- * "mmio.map", "dma.buffer", "system.control", "subsystem.register",
- * "svc.class", "console.owner"; anything else is refused. Creates the context's record if
+ * `name`/`name_len` is a manifest capability name (capability_kind_from_name);
+ * anything else is refused. Creates the context's record if
  * absent, and ORs the bit in, so grants accumulate. `flags` is used only by
  * "dma.buffer", where it is the pinning budget IN PAGES and additionally
  * installs the platform-wide low-2-GiB DMA window (a spawn profile is what

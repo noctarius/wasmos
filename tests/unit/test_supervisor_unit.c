@@ -10,6 +10,8 @@
  * refused unless an instance runs, and its end is a failure. What the supervisor
  * reports of its table over SUPERVISOR_IPC_LIST_REQ is each held unit's own
  * state, in ABI values, and never more records than the caller made room for.
+ * Only a sender holding svc.control changes what runs, and only one also
+ * holding spawn.grant hands a unit hardware grants.
  *
  * Only supervisor_unit.c is linked; time is passed in explicitly.
  */
@@ -653,6 +655,58 @@ static void test_a_unit_without_an_instance_is_not_killed(void) {
     CHECK(u.state == SV_UNIT_STOPPED && u.pid == 0u, "which stays stopped");
 }
 
+/* Regression: 2026-11-20-unchecked-supervisor-requests -- the supervisor
+ * never looked at who sent a request, so any process could hand it a unit to
+ * run under its name and restart forever. */
+static void test_a_submit_without_svc_control_is_refused(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, 0, 0) == WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "a submit from a sender holding nothing is refused");
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, SV_SENDER_GRANT, 0) ==
+              WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "spawn.grant alone does not entitle a sender to submit");
+}
+
+/* Regression: 2026-11-20-unchecked-supervisor-requests -- a submission's
+ * capability descriptor reached the process manager as the supervisor's own
+ * watched spawn, so the supervisor relayed I/O and IRQ grants from any
+ * submitter, laundering them past the process manager's requester check. */
+static void test_grants_from_a_submitter_without_spawn_grant_are_refused(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, SV_SENDER_CONTROL, 16) ==
+              WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED,
+          "svc.control alone does not entitle a submitter to grants");
+}
+
+/* Regression: 2026-11-20-unchecked-supervisor-requests -- any process could
+ * kill any supervised unit, a crash on demand of the vt, a driver or the
+ * shell. */
+static void test_a_kill_without_svc_control_is_refused(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_KILL_REQ, 0, 0) == WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "a kill from a sender holding nothing is refused");
+}
+
+/* Regression: 2026-11-20-unchecked-supervisor-requests -- any process could
+ * declare the boot set before sysinit had submitted it, so the boot milestone
+ * was reported over a partial set. */
+static void test_a_boot_submitted_without_svc_control_is_refused(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_BOOT_SUBMITTED_REQ, 0, 0) ==
+              WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "declaring the boot set requires svc.control");
+}
+
+static void test_an_entitled_sender_is_accepted(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, SV_SENDER_CONTROL, 0) == 0,
+          "svc.control submits a unit without grants");
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, SV_SENDER_CONTROL | SV_SENDER_GRANT, 16) == 0,
+          "svc.control and spawn.grant submit a unit with grants");
+    CHECK(sv_authorize(SUPERVISOR_IPC_KILL_REQ, SV_SENDER_CONTROL, 0) == 0, "svc.control kills");
+    CHECK(sv_authorize(SUPERVISOR_IPC_BOOT_SUBMITTED_REQ, SV_SENDER_CONTROL, 0) == 0,
+          "svc.control declares the boot set");
+}
+
+static void test_listing_is_open_to_everyone(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_LIST_REQ, 0, 0) == 0, "anyone may list the units");
+}
+
 int main(void) {
     test_a_spec_parses_into_its_policy();
     test_a_bare_spec_takes_the_defaults();
@@ -692,6 +746,12 @@ int main(void) {
     test_a_caps_length_outside_its_bounds_is_refused();
     test_a_kill_on_request_is_a_failure();
     test_a_unit_without_an_instance_is_not_killed();
+    test_a_submit_without_svc_control_is_refused();
+    test_grants_from_a_submitter_without_spawn_grant_are_refused();
+    test_a_kill_without_svc_control_is_refused();
+    test_a_boot_submitted_without_svc_control_is_refused();
+    test_an_entitled_sender_is_accepted();
+    test_listing_is_open_to_everyone();
     if (g_failures != 0) {
         printf("test_supervisor_unit: %d failure(s)\n", g_failures);
         return 1;

@@ -145,6 +145,15 @@ int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last);
  * WASMOS_ERR_PROC_PM_BAD_CAPS. */
 int pm_caps_from_v2(const uint8_t* payload, uint32_t payload_size, pm_spawn_caps_t* caps);
 
+/* Whether the context requesting a spawn may put `caps` on the child. A profile
+ * with any cap_flags bit set chooses the child's I/O windows, IRQ lines and DMA
+ * windows, which its manifest alone does not, so it is authority the requester
+ * hands over: only a holder of spawn.grant (CAP_SPAWN_GRANT) may ask for one.
+ * No caps, or a profile with no bits set, only narrows the child and is open to
+ * every requester. Returns 1 when allowed, 0 when refused; checked before the
+ * child is created. */
+int pm_caps_grant_allowed(uint32_t requester_context, const pm_spawn_caps_t* caps);
+
 /* One entry of the flat name -> endpoint service table.
  *
  * `name` is sized for the LONGEST name any registration path accepts, which is

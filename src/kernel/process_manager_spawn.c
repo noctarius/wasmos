@@ -1230,6 +1230,9 @@ int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
         caps.dma_windows[0].base = 0;
         caps.dma_windows[0].length = 0x80000000ull;
     }
+    if (!pm_caps_grant_allowed(owner_context, &caps)) {
+        return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
+    }
 
     if (pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid) != 0) {
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
@@ -1410,6 +1413,9 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
         caps.dma_window_count = 1;
         caps.dma_windows[0].base = 0;
         caps.dma_windows[0].length = 0x80000000ull;
+    }
+    if (!pm_caps_grant_allowed(owner_context, &caps)) {
+        return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
     }
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
         return WASMOS_ERR_PROC_PM_BAD_PATH;
@@ -1828,6 +1834,9 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
         caps.dma_windows[0].base = 0;
         caps.dma_windows[0].length = 0x80000000ull;
     }
+    if (!pm_caps_grant_allowed(owner_context, &caps)) {
+        return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
+    }
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
         return WASMOS_ERR_PROC_PM_INVALID_MODULE;
     }
@@ -1900,6 +1909,9 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     int caps_rc = pm_caps_from_v2(caps_payload, payload_size, &caps);
     if (caps_rc != 0) {
         return caps_rc;
+    }
+    if (!pm_caps_grant_allowed(owner_context, &caps)) {
+        return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
     }
 
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
@@ -2180,6 +2192,9 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
             return WASMOS_ERR_PROC_SPAWN_BAD_CAPS;
         }
     }
+    if (!pm_caps_grant_allowed(owner_context, &caps)) {
+        return WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED;
+    }
     __builtin_memcpy(path, region + req.path_off, req.path_len);
     path[req.path_len] = '\0';
     __builtin_memcpy(cli_args, region + req.args_off, req.args_len);
@@ -2331,6 +2346,9 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
         caps.dma_window_count = 1;
         caps.dma_windows[0].base = 0;
         caps.dma_windows[0].length = 0x80000000ull;
+    }
+    if (!pm_caps_grant_allowed(owner_context, &caps)) {
+        return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
     }
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
         return WASMOS_ERR_PROC_PM_BAD_PATH;

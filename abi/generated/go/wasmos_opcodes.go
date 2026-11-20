@@ -53,6 +53,10 @@ const PROC_IPC_SPAWN_CAPS_V2 int32 = 0x208
 const PROC_IPC_SPAWN_PATH int32 = 0x209
 // Spawn from explicit app path with I/O-port + IRQ capabilities:
 // caller must place path bytes at xfer buffer offset 0.
+// Like every caps-carrying spawn (SPAWN_CAPS, SPAWN_CAPS_V2 and the
+// _SYNC forms), any cap_flags bit set requires the caller to hold
+// spawn.grant: PROC_IPC_ERROR, WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED
+// otherwise, before a child exists.
 // arg0=((irq_mask<<16)|(cap_flags&0xFFFF)) arg1=path_len
 // arg2=((io_port_max<<16)|io_port_min)     arg3=reserved.
 const PROC_IPC_SPAWN_PATH_CAPS int32 = 0x20A
@@ -101,7 +105,10 @@ const PROC_IPC_EXEC_HANDLER_REGISTER int32 = 0x211
 // read and write. The descriptor names a notify endpoint the caller must
 // own; only the spawner may watch. A non-zero caps_len names a
 // wasmos_spawn_caps_v2_t in the same region; the child holds those
-// capabilities from its first instruction.
+// capabilities from its first instruction. One with any cap bit set
+// requires the caller to hold spawn.grant
+// (WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED otherwise, nothing
+// spawned).
 // On success: PROC_IPC_RESP, arg0=child_pid arg1=app_flags, with pid,
 // app_flags and the child's [deps] written back into the descriptor.
 // The reply is sent before the child first runs, so on that endpoint it
@@ -1112,7 +1119,8 @@ const PARTITION_IPC_ERROR int32 = 0xFFF
 
 // supervisor (0x1000..0x10FF)
 // Hand a unit to the supervisor, which spawns it, watches it and
-// restarts it by its policy. The request is a
+// restarts it by its policy. The sender must hold svc.control
+// (WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED). The request is a
 // wasmos_supervisor_submit_desc_t in a transfer buffer the caller owns
 // and has lent READ to the supervisor: arg0=buffer_id arg1=offset
 // arg2=size. Its spec is one line of text:
@@ -1130,13 +1138,15 @@ const PARTITION_IPC_ERROR int32 = 0xFFF
 // supervisor kills the instance as a failure.
 // The descriptor may also carry a capability descriptor
 // (wasmos_spawn_caps_v2_t, I/O windows and IRQ lines), which every spawn
-// of the unit carries; a unit asking for DMA is refused
-// (WASMOS_ERR_SUPERVISOR_DMA_CAPS), since nothing quiesces its device
-// before a restart.
+// of the unit carries. Grants are relayed only from a submitter that
+// also holds spawn.grant (WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED);
+// a unit asking for DMA is refused (WASMOS_ERR_SUPERVISOR_DMA_CAPS),
+// since nothing quiesces its device before a restart.
 // Answered once the unit is accepted, before it is spawned: a spawn
 // that fails later is the unit's failure, handled by its policy.
 const SUPERVISOR_IPC_SUBMIT_REQ int32 = 0x1000
-// Report every unit the supervisor holds. The request is a
+// Report every unit the supervisor holds; open to every sender. The
+// request is a
 // wasmos_supervisor_list_desc_t followed by room for `capacity`
 // wasmos_supervisor_unit_record_t, in a transfer buffer the caller
 // owns and has lent READ|WRITE to the supervisor: arg0=buffer_id
@@ -1147,7 +1157,8 @@ const SUPERVISOR_IPC_SUBMIT_REQ int32 = 0x1000
 // SUPERVISOR_UNITS_MAX records are always enough.
 const SUPERVISOR_IPC_LIST_REQ int32 = 0x1001
 // Every unit of the boot set has been submitted: sent by sysinit when
-// sysinit.rc has run to its end. arg0..arg3 reserved (0). The units the
+// sysinit.rc has run to its end; the sender must hold svc.control
+// (WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED). arg0..arg3 reserved (0). The units the
 // supervisor holds at that moment are the boot set, and the boot
 // milestone is decided over them: once every required (or critical)
 // one is up -- READY and, if probed, a probe answered -- the
@@ -1157,7 +1168,8 @@ const SUPERVISOR_IPC_LIST_REQ int32 = 0x1001
 // later is not part of the boot set. Answered at once; a second one
 // changes nothing.
 const SUPERVISOR_IPC_BOOT_SUBMITTED_REQ int32 = 0x1002
-// Kill a unit's running instance. The request is a
+// Kill a unit's running instance. The sender must hold svc.control
+// (WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED). The request is a
 // wasmos_supervisor_unit_desc_t naming the unit, in a transfer buffer
 // the caller owns and has lent READ to the supervisor: arg0=buffer_id
 // arg1=offset arg2=size. The instance must be spawned and not already

@@ -8,6 +8,10 @@
  * table. SUPERVISOR_IPC_KILL_REQ kills a unit's instance on request; its end is
  * a failure like any kill of the supervisor's own.
  *
+ * Submitting, killing and declaring the boot set require the sender to hold
+ * svc.control; a submission that carries grants also requires spawn.grant
+ * (sv_authorize). Listing is open.
+ *
  * A unit whose READY names its event-loop endpoint (PROC_READY_FLAG_LIVENESS)
  * is probed with WASMOS_IPC_HEALTH_REQ every period (probe=<s>, default 10 s);
  * its loop answers by itself. Three unanswered probes in a row and the
@@ -523,12 +527,27 @@ static void sv_reply(const wasmos_ipc_message_t* msg, int32_t code) {
     sv_reply_arg(msg, code, 0);
 }
 
+/* What the sender of `msg` holds (SV_SENDER_*). The kernel refuses a message
+ * whose source endpoint the sender does not own, so the source's owner is the
+ * sender; a sender that has since exited holds nothing. */
+static uint32_t sv_sender(const wasmos_ipc_message_t* msg) {
+    uint32_t sender = 0;
+    if (wasmos_ipc_endpoint_has_cap(msg->source, WASMOS_CAP_SVC_CONTROL) == 1) {
+        sender |= SV_SENDER_CONTROL;
+    }
+    if (wasmos_ipc_endpoint_has_cap(msg->source, WASMOS_CAP_SPAWN_GRANT) == 1) {
+        sender |= SV_SENDER_GRANT;
+    }
+    return sender;
+}
+
 /* SUPERVISOR_IPC_SUBMIT_REQ: arg0=buffer_id arg1=offset arg2=size of a
  * wasmos_supervisor_submit_desc_t the submitter lent READ. The descriptor is
  * copied once; the unit is recorded and answered before it is spawned. */
 static void sv_on_submit(void* user, const wasmos_ipc_message_t* msg) {
     wasmos_supervisor_submit_desc_t desc;
     sv_unit_t unit;
+    uint32_t sender = sv_sender(msg);
     int32_t free_slot = -1;
     int32_t rc;
     (void)user;
@@ -537,11 +556,21 @@ static void sv_on_submit(void* user, const wasmos_ipc_message_t* msg) {
         sv_log("[supervisor] supervisor.fault=trap: trapping\n");
         __builtin_trap();
     }
+    rc = sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, sender, 0);
+    if (rc != 0) {
+        sv_reply(msg, rc);
+        return;
+    }
     if (msg->arg2 < (int32_t)sizeof(desc) || msg->arg1 < 0 ||
         wasmos_xfer_buffer_read(msg->arg0, &desc, (int32_t)sizeof(desc), msg->arg1) != 0 ||
         desc.version != SUPERVISOR_SUBMIT_DESC_VERSION || desc.spec_len > SUPERVISOR_SPEC_MAX ||
         desc.spec[desc.spec_len] != '\0') {
         sv_reply(msg, WASMOS_ERR_SUPERVISOR_BAD_DESC);
+        return;
+    }
+    rc = sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, sender, desc.caps_len);
+    if (rc != 0) {
+        sv_reply(msg, rc);
         return;
     }
     sv_load_timing();
@@ -573,7 +602,12 @@ static void sv_on_submit(void* user, const wasmos_ipc_message_t* msg) {
 
 /* SUPERVISOR_IPC_BOOT_SUBMITTED_REQ: the units held now are the boot set. */
 static void sv_on_boot_submitted(void* user, const wasmos_ipc_message_t* msg) {
+    int32_t rc = sv_authorize(SUPERVISOR_IPC_BOOT_SUBMITTED_REQ, sv_sender(msg), 0);
     (void)user;
+    if (rc != 0) {
+        sv_reply(msg, rc);
+        return;
+    }
     if (!g_boot_submitted) {
         g_boot_submitted = 1;
         for (int32_t i = 0; i < SV_UNITS_MAX; ++i) {
@@ -589,8 +623,13 @@ static void sv_on_boot_submitted(void* user, const wasmos_ipc_message_t* msg) {
 static void sv_on_kill(void* user, const wasmos_ipc_message_t* msg) {
     wasmos_supervisor_unit_desc_t desc;
     char line[160];
+    int32_t auth = sv_authorize(SUPERVISOR_IPC_KILL_REQ, sv_sender(msg), 0);
     (void)user;
 
+    if (auth != 0) {
+        sv_reply(msg, auth);
+        return;
+    }
     if (msg->arg2 < (int32_t)sizeof(desc) || msg->arg1 < 0 ||
         wasmos_xfer_buffer_read(msg->arg0, &desc, (int32_t)sizeof(desc), msg->arg1) != 0 ||
         desc.version != SUPERVISOR_UNIT_DESC_VERSION || desc.name_len > SUPERVISOR_UNIT_NAME_MAX ||

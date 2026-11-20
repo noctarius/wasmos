@@ -630,14 +630,15 @@ shell printed a prompt", is what the test harness waits for.
 a failure and the policy applies. The `svc` utility wraps them: `svc submit
 <spec>`, `svc list`, `svc status <unit>`, `svc kill <unit>`.
 
-**Access is not checked yet.** Any process can submit a unit or kill one: the
-supervisor does not look at who sends a request. A submission's I/O and IRQ
-grants reach the process manager as the supervisor's own watched spawn, and the
-process manager does not check the requester of any caps-carrying spawn
-either -- the window narrows what the module's manifest declares, but whoever
-asks chooses the window. Submitting and killing must become capability-gated,
-and grants must be accepted only from a submitter entitled to them (today that
-is device-manager); this is tracked in `docs/TASKS.md` as a P1.
+**Access.** Submitting, killing and declaring the boot set require the
+sender to hold `svc.control` (sysinit, device-manager, `svc`); listing is open.
+A submission that carries a capability descriptor also requires `spawn.grant`,
+because the grants reach the process manager as the supervisor's own watched
+spawn: the supervisor relays them only from a submitter the process manager
+would accept them from directly (device-manager). The supervisor learns what
+the sender holds from the kernel (`ipc_endpoint_has_cap` on the request's
+source endpoint); see [Capability and Policy](10-capability-and-policy.md),
+"Requester Checks".
 
 **Clients rebind; endpoints are not preserved.** A restarted unit is a new
 process with a new endpoint, registered under the same name. Its clients see

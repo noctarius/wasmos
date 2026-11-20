@@ -126,4 +126,5 @@
     LINK("wasmos", "serial_owner_write", stub_i2) , \
     LINK("wasmos", "kmsg_read", stub_i3) , \
     LINK("wasmos", "kmsg_subscribe", stub_i1) , \
-    LINK("wasmos", "linmem_slots", stub_i1)
+    LINK("wasmos", "linmem_slots", stub_i1) , \
+    LINK("wasmos", "ipc_endpoint_has_cap", stub_i2)

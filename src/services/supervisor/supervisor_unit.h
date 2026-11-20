@@ -215,6 +215,21 @@ typedef enum {
 
 sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uint32_t* index);
 
+/* What the sender of a request holds, as supervisor.c learns it from the
+ * kernel for the request's source endpoint. */
+#define SV_SENDER_CONTROL (1u << 0) /* svc.control */
+#define SV_SENDER_GRANT (1u << 1)   /* spawn.grant */
+
+/* Whether a sender holding `sender` (SV_SENDER_*) may make request `type`
+ * (SUPERVISOR_IPC_*_REQ). Submitting, killing and declaring the boot set change
+ * what runs, so they require svc.control; listing is open to everyone. A
+ * submission carrying a capability descriptor (`caps_len` > 0) also requires
+ * spawn.grant: the supervisor spawns the unit with those grants under its own
+ * name, so it relays them only from a submitter the process manager would accept
+ * them from directly. Returns 0, WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED, or
+ * WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED. */
+int32_t sv_authorize(uint32_t type, uint32_t sender, uint32_t caps_len);
+
 const char* sv_state_name(sv_state_t state);
 const char* sv_reason_name(uint32_t reason);
 

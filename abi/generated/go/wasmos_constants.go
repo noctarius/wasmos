@@ -493,3 +493,28 @@ const SUPERVISOR_CLASS_OPTIONAL int32 = 0
 const SUPERVISOR_CLASS_REQUIRED int32 = 1
 // Never restarted: its first death takes the system down.
 const SUPERVISOR_CLASS_CRITICAL int32 = 2
+
+// capability
+// Capability kinds, as ipc_endpoint_has_cap asks about them. Each is the kind
+// a manifest [[capabilities]] name grants (docs/architecture/10-capability-and-policy.md);
+// the kernel's capability_kind_t takes the same values.
+// io.port: x86 I/O port access.
+const WASMOS_CAP_IO_PORT int32 = 0
+// irq.route: route hardware IRQ lines to an endpoint.
+const WASMOS_CAP_IRQ_ROUTE int32 = 1
+// mmio.map: map MMIO regions.
+const WASMOS_CAP_MMIO_MAP int32 = 2
+// dma.buffer: DMA buffer host calls.
+const WASMOS_CAP_DMA_BUFFER int32 = 3
+// system.control: halt, reboot, power off.
+const WASMOS_CAP_SYSTEM_CONTROL int32 = 4
+// subsystem.register: broker subsystems and exec-format handlers.
+const WASMOS_CAP_SUBSYSTEM_REGISTER int32 = 5
+// svc.class: register under a virtual service class.
+const WASMOS_CAP_SVC_CLASS_REGISTER int32 = 6
+// console.owner: register the console ring.
+const WASMOS_CAP_CONSOLE_OWNER int32 = 7
+// spawn.grant: put hardware grants on a spawned child, directly or through the supervisor.
+const WASMOS_CAP_SPAWN_GRANT int32 = 8
+// svc.control: submit, kill and declare the boot set at the supervisor.
+const WASMOS_CAP_SVC_CONTROL int32 = 9

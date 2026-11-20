@@ -3614,6 +3614,7 @@ add_custom_target(run-kernel-unit-tests
           -x c++ ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
           -x none ${BUILD_DIR}/test_warp_link_ipc.o ${BUILD_DIR}/test_wasm3_link_ipc.o
           -x c ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/capability.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c

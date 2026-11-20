@@ -350,6 +350,19 @@ linked feature documents for rationale and rollout plans.
   ordering asks the class registry about each process
   (`service_class_registry_provided_by`) instead of copying the first eight
   providers.
+- Hardware grants and unit control are capability-gated
+  (`architecture/10`, "Requester Checks"). Every spawn whose profile sets a
+  `cap_flags` bit -- the five `PROC_IPC_SPAWN_*CAPS*` forms and a watched spawn
+  with a capability descriptor -- requires the requester to hold `spawn.grant`
+  (device-manager, supervisor) and is otherwise refused with
+  `GRANT_NOT_AUTHORIZED` before a child exists (`pm_caps_grant_allowed`).
+  The supervisor requires `svc.control` (sysinit, device-manager, `svc`) to
+  submit, kill or declare the boot set, and `spawn.grant` too for a submission
+  carrying a capability descriptor (`sv_authorize`); listing is open. It asks
+  the kernel what a sender holds with the `ipc_endpoint_has_cap` host call on
+  the request's source endpoint; capability kinds are ABI as `WASMOS_CAP_*`
+  (`abi/constants.yaml`). Host-tested in `test_pm_caps`,
+  `test_supervisor_unit` and, on both runtimes, `test_hostcall_ipc`.
 - Boot milestone: when sysinit.rc has run to its end, sysinit sends
   `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` (finding the supervisor by name if no
   `service` line did), and the units the supervisor then holds are the boot

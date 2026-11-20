@@ -64,6 +64,7 @@ pub const WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: i32 = -0x0001000D; // the noti
 pub const WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: i32 = -0x0001000E; // the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch
 pub const WASMOS_ERR_PROC_SPAWN_BAD_CAPS: i32 = -0x0001000F; // the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created
 pub const WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: i32 = -0x00010010; // the kernel refused the parsed capability profile for the new child, which was killed before it ran
+pub const WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED: i32 = -0x00010011; // the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created
 pub const WASMOS_ERR_PROC_PM_BUSY: i32 = -0x00020001; // PM already has an incompatible in-flight operation
 pub const WASMOS_ERR_PROC_PM_BAD_ENDPOINT: i32 = -0x00020002; // source endpoint owner lookup failed
 pub const WASMOS_ERR_PROC_PM_NO_CALLER: i32 = -0x00020003; // source endpoint owner has no live process
@@ -100,6 +101,7 @@ pub const WASMOS_ERR_PROC_PM_SVC_WATCH_SEND: i32 = -0x00020021; // a service wat
 pub const WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: i32 = -0x00020022; // a service watch could not acquire or fill the transfer buffer for its subscription descriptor
 pub const WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: i32 = -0x00020023; // the process manager answered a service-watch request with neither its response nor a packed error
 pub const WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: i32 = -0x00020024; // the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself
+pub const WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED: i32 = -0x00020025; // the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created
 pub const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 pub const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 pub const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -304,6 +306,8 @@ pub const WASMOS_ERR_SUPERVISOR_NO_SPACE: i32 = -0x001A0004; // the supervisor's
 pub const WASMOS_ERR_SUPERVISOR_DMA_CAPS: i32 = -0x001A0005; // the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit
 pub const WASMOS_ERR_SUPERVISOR_NO_UNIT: i32 = -0x001A0006; // no unit of the name the request gives is recorded
 pub const WASMOS_ERR_SUPERVISOR_NOT_RUNNING: i32 = -0x001A0007; // the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed
+pub const WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: i32 = -0x001A0008; // the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require
+pub const WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: i32 = -0x001A0009; // the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself
 
 #[inline]
 pub const fn wasmos_err_make(dom: u16, code: u16) -> i32 {
@@ -386,6 +390,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE => "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch",
         WASMOS_ERR_PROC_SPAWN_BAD_CAPS => "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created",
         WASMOS_ERR_PROC_SPAWN_CAPS_APPLY => "the kernel refused the parsed capability profile for the new child, which was killed before it ran",
+        WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED => "the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created",
         WASMOS_ERR_PROC_PM_BUSY => "PM already has an incompatible in-flight operation",
         WASMOS_ERR_PROC_PM_BAD_ENDPOINT => "source endpoint owner lookup failed",
         WASMOS_ERR_PROC_PM_NO_CALLER => "source endpoint owner has no live process",
@@ -422,6 +427,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER => "a service watch could not acquire or fill the transfer buffer for its subscription descriptor",
         WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY => "the process manager answered a service-watch request with neither its response nor a packed error",
         WASMOS_ERR_PROC_PM_KILL_NOT_CHILD => "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself",
+        WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED => "the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created",
         WASMOS_ERR_LINMEM_NO_WINDOW => "no free page-aligned window fits in linear memory",
         WASMOS_ERR_LINMEM_MAP => "paging/linear-memory mapping step failed",
         WASMOS_ERR_LINMEM_NO_BASE => "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it",
@@ -626,6 +632,8 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_SUPERVISOR_DMA_CAPS => "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit",
         WASMOS_ERR_SUPERVISOR_NO_UNIT => "no unit of the name the request gives is recorded",
         WASMOS_ERR_SUPERVISOR_NOT_RUNNING => "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed",
+        WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED => "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require",
+        WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED => "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself",
         _ => "unknown error",
     }
 }

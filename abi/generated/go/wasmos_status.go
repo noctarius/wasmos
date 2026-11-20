@@ -72,6 +72,7 @@ const (
 	WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE int32 = -0x0001000E // the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch
 	WASMOS_ERR_PROC_SPAWN_BAD_CAPS int32 = -0x0001000F // the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created
 	WASMOS_ERR_PROC_SPAWN_CAPS_APPLY int32 = -0x00010010 // the kernel refused the parsed capability profile for the new child, which was killed before it ran
+	WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED int32 = -0x00010011 // the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created
 	WASMOS_ERR_PROC_PM_BUSY int32 = -0x00020001 // PM already has an incompatible in-flight operation
 	WASMOS_ERR_PROC_PM_BAD_ENDPOINT int32 = -0x00020002 // source endpoint owner lookup failed
 	WASMOS_ERR_PROC_PM_NO_CALLER int32 = -0x00020003 // source endpoint owner has no live process
@@ -108,6 +109,7 @@ const (
 	WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER int32 = -0x00020022 // a service watch could not acquire or fill the transfer buffer for its subscription descriptor
 	WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY int32 = -0x00020023 // the process manager answered a service-watch request with neither its response nor a packed error
 	WASMOS_ERR_PROC_PM_KILL_NOT_CHILD int32 = -0x00020024 // the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself
+	WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED int32 = -0x00020025 // the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created
 	WASMOS_ERR_LINMEM_NO_WINDOW int32 = -0x00030001 // no free page-aligned window fits in linear memory
 	WASMOS_ERR_LINMEM_MAP int32 = -0x00030002 // paging/linear-memory mapping step failed
 	WASMOS_ERR_LINMEM_NO_BASE int32 = -0x00030003 // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -312,6 +314,8 @@ const (
 	WASMOS_ERR_SUPERVISOR_DMA_CAPS int32 = -0x001A0005 // the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit
 	WASMOS_ERR_SUPERVISOR_NO_UNIT int32 = -0x001A0006 // no unit of the name the request gives is recorded
 	WASMOS_ERR_SUPERVISOR_NOT_RUNNING int32 = -0x001A0007 // the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed
+	WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED int32 = -0x001A0008 // the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require
+	WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED int32 = -0x001A0009 // the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -451,6 +455,8 @@ func WasmosStrerror(c int32) string {
 		return "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created"
 	case WASMOS_ERR_PROC_SPAWN_CAPS_APPLY:
 		return "the kernel refused the parsed capability profile for the new child, which was killed before it ran"
+	case WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED:
+		return "the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created"
 	case WASMOS_ERR_PROC_PM_BUSY:
 		return "PM already has an incompatible in-flight operation"
 	case WASMOS_ERR_PROC_PM_BAD_ENDPOINT:
@@ -523,6 +529,8 @@ func WasmosStrerror(c int32) string {
 		return "the process manager answered a service-watch request with neither its response nor a packed error"
 	case WASMOS_ERR_PROC_PM_KILL_NOT_CHILD:
 		return "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself"
+	case WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED:
+		return "the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created"
 	case WASMOS_ERR_LINMEM_NO_WINDOW:
 		return "no free page-aligned window fits in linear memory"
 	case WASMOS_ERR_LINMEM_MAP:
@@ -931,6 +939,10 @@ func WasmosStrerror(c int32) string {
 		return "no unit of the name the request gives is recorded"
 	case WASMOS_ERR_SUPERVISOR_NOT_RUNNING:
 		return "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed"
+	case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED:
+		return "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require"
+	case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED:
+		return "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself"
 	default:
 		return "unknown error"
 	}

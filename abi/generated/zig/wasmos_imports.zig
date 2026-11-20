@@ -777,3 +777,11 @@ pub extern "wasmos" fn kmsg_subscribe(a0: i32) callconv(.c) i32;
 /// module. A snapshot: another process can take or free a slot at once. Returns
 /// 0, or WASMOS_ERR_KERNEL_BAD_POINTER when `out` is outside linear memory.
 pub extern "wasmos" fn linmem_slots(a0: i32) callconv(.c) i32;
+/// Whether the process that owns `endpoint` holds capability `cap`
+/// (WASMOS_CAP_*, abi/constants.yaml). A server asks this about a request's
+/// source endpoint, which the kernel has verified the sender owns, to
+/// authorize the request. The answer is about the endpoint's owner when
+/// asked. Returns 1 when the owner holds it, 0 when it does not, WASMOS_INVAL
+/// for a negative endpoint or an unknown capability, or WASMOS_NOENT for an
+/// endpoint with no live owner or one the kernel owns.
+pub extern "wasmos" fn ipc_endpoint_has_cap(a0: i32, a1: i32) callconv(.c) i32;

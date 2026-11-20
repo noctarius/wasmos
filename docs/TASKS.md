@@ -2147,7 +2147,9 @@ Source: `architecture/25-diagnostics-status.md`,
 - [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
   (`test_app_churn`: "run N: date produced no result"). Not a supervisor
   regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7
-  runs), as on `df536c7e` (1 in 15). Idle it is rare (0 in 20); saturating the
+  runs), as on `df536c7e` (1 in 15). Not WARP-only either: one full wasm3_smp
+  battery on `2ca66919` hit it at run 58 with the same signature (12/12 alone
+  afterwards). Idle it is rare (0 in 20 on WARP); saturating the
   host CPU with busy loops while looping the test is the reproducer. Both stall
   dumps agree: `date` got its `SVC_IPC_LOOKUP_RESP`, sent `RTC_IPC_READ_REQ`
   (`req=2`), and waits on its reply endpoint with nothing queued; the request

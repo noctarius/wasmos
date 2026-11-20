@@ -10,6 +10,8 @@
  * refused unless an instance runs, and its end is a failure. What the supervisor
  * reports of its table over SUPERVISOR_IPC_LIST_REQ is each held unit's own
  * state, in ABI values, and never more records than the caller made room for.
+ * Only a sender holding svc.control changes what runs, and only one also
+ * holding spawn.grant hands a unit hardware grants.
  *
  * Only supervisor_unit.c is linked; time is passed in explicitly.
  */
@@ -101,6 +103,10 @@ static void test_a_bad_spec_is_refused_untouched(void) {
         "name /p probe=x",
         "name /p probe=1000",
         "a12345678901234567890123456789012345 /p", /* 36 bytes: one too long */
+        "name module:",                            /* names no module */
+        "name modules:fs-manager",                 /* neither absolute nor the prefix */
+        "name module:fs-init -- -x",               /* a module takes no args */
+        "name module:fs-init tty=1",               /* nor a tty pin */
     };
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         sv_unit_t u;
@@ -118,6 +124,17 @@ static void test_a_path_too_long_is_refused(void) {
     longpath[sizeof(longpath) - 1] = '\0';
     CHECK(sv_spec_parse(longpath, &k_timing, 0, &u) == WASMOS_ERR_SUPERVISOR_BAD_SPEC,
           "a path past SV_PATH_MAX is refused");
+}
+
+/* A boot-chain unit names its boot module, not a file: the supervisor spawns
+ * it from the module image, before any filesystem exists to read one from. */
+static void test_a_module_unit_names_its_boot_module(void) {
+    sv_unit_t u = parse_ok("fs-manager module:fs-manager class=critical", 0);
+    CHECK(u.cls == SV_CLASS_CRITICAL, "class");
+    CHECK(sv_unit_module(&u) != 0 && strcmp(sv_unit_module(&u), "fs-manager") == 0,
+          "the module is the app name after the prefix");
+    sv_unit_t f = parse_ok("logger /boot/system/services/logger.wap", 0);
+    CHECK(sv_unit_module(&f) == 0, "a file unit names no module");
 }
 
 static void test_the_longest_name_fits(void) {
@@ -604,8 +621,18 @@ static void test_dma_caps_are_refused(void) {
     sv_unit_t u = parse_ok("rng@pci:0 /p", 0);
     uint32_t len = caps_v2(buf, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_DMA, 0);
     CHECK(sv_unit_set_caps(&u, buf, len) == WASMOS_ERR_SUPERVISOR_DMA_CAPS,
-          "a DMA unit cannot be restarted safely, so it is not taken");
+          "a DMA unit with no PCI function to quiesce cannot be restarted safely");
     CHECK(u.caps_len == 0u, "a refused descriptor leaves the unit unchanged");
+}
+
+/* The kernel quiesces the named function at the driver's end, before any of
+ * its frames is recycled, so such a DMA unit can be restarted. */
+static void test_dma_caps_naming_their_pci_function_are_taken(void) {
+    uint8_t buf[SUPERVISOR_CAPS_MAX];
+    sv_unit_t u = parse_ok("virtio_rng@pci:00:03.0 /p", 0);
+    uint32_t len = caps_v2(buf, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_DMA | DEVMGR_CAP_PCI_FUNCTION, 0);
+    CHECK(sv_unit_set_caps(&u, buf, len) == 0, "taken");
+    CHECK(u.caps_len == len, "kept");
 }
 
 static void test_a_caps_length_outside_its_bounds_is_refused(void) {
@@ -653,6 +680,58 @@ static void test_a_unit_without_an_instance_is_not_killed(void) {
     CHECK(u.state == SV_UNIT_STOPPED && u.pid == 0u, "which stays stopped");
 }
 
+/* Regression: 2026-11-20-unchecked-supervisor-requests -- the supervisor
+ * never looked at who sent a request, so any process could hand it a unit to
+ * run under its name and restart forever. */
+static void test_a_submit_without_svc_control_is_refused(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, 0, 0) == WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "a submit from a sender holding nothing is refused");
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, SV_SENDER_GRANT, 0) ==
+              WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "spawn.grant alone does not entitle a sender to submit");
+}
+
+/* Regression: 2026-11-20-unchecked-supervisor-requests -- a submission's
+ * capability descriptor reached the process manager as the supervisor's own
+ * watched spawn, so the supervisor relayed I/O and IRQ grants from any
+ * submitter, laundering them past the process manager's requester check. */
+static void test_grants_from_a_submitter_without_spawn_grant_are_refused(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, SV_SENDER_CONTROL, 16) ==
+              WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED,
+          "svc.control alone does not entitle a submitter to grants");
+}
+
+/* Regression: 2026-11-20-unchecked-supervisor-requests -- any process could
+ * kill any supervised unit, a crash on demand of the vt, a driver or the
+ * shell. */
+static void test_a_kill_without_svc_control_is_refused(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_KILL_REQ, 0, 0) == WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "a kill from a sender holding nothing is refused");
+}
+
+/* Regression: 2026-11-20-unchecked-supervisor-requests -- any process could
+ * declare the boot set before sysinit had submitted it, so the boot milestone
+ * was reported over a partial set. */
+static void test_a_boot_submitted_without_svc_control_is_refused(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_BOOT_SUBMITTED_REQ, 0, 0) ==
+              WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "declaring the boot set requires svc.control");
+}
+
+static void test_an_entitled_sender_is_accepted(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, SV_SENDER_CONTROL, 0) == 0,
+          "svc.control submits a unit without grants");
+    CHECK(sv_authorize(SUPERVISOR_IPC_SUBMIT_REQ, SV_SENDER_CONTROL | SV_SENDER_GRANT, 16) == 0,
+          "svc.control and spawn.grant submit a unit with grants");
+    CHECK(sv_authorize(SUPERVISOR_IPC_KILL_REQ, SV_SENDER_CONTROL, 0) == 0, "svc.control kills");
+    CHECK(sv_authorize(SUPERVISOR_IPC_BOOT_SUBMITTED_REQ, SV_SENDER_CONTROL, 0) == 0,
+          "svc.control declares the boot set");
+}
+
+static void test_listing_is_open_to_everyone(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_LIST_REQ, 0, 0) == 0, "anyone may list the units");
+}
+
 int main(void) {
     test_a_spec_parses_into_its_policy();
     test_a_bare_spec_takes_the_defaults();
@@ -689,9 +768,17 @@ int main(void) {
     test_a_restarting_required_unit_holds_the_boot();
     test_a_unit_keeps_the_caps_it_was_submitted_with();
     test_dma_caps_are_refused();
+    test_dma_caps_naming_their_pci_function_are_taken();
     test_a_caps_length_outside_its_bounds_is_refused();
     test_a_kill_on_request_is_a_failure();
     test_a_unit_without_an_instance_is_not_killed();
+    test_a_module_unit_names_its_boot_module();
+    test_a_submit_without_svc_control_is_refused();
+    test_grants_from_a_submitter_without_spawn_grant_are_refused();
+    test_a_kill_without_svc_control_is_refused();
+    test_a_boot_submitted_without_svc_control_is_refused();
+    test_an_entitled_sender_is_accepted();
+    test_listing_is_open_to_everyone();
     if (g_failures != 0) {
         printf("test_supervisor_unit: %d failure(s)\n", g_failures);
         return 1;

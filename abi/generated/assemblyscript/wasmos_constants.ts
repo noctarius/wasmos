@@ -288,8 +288,13 @@ export const PROC_STATUS_READY: i32 = 3;
 // the caller's buffer at the offsets it names.
 //
 // A reader MUST reject a descriptor whose version it does not know.
-// Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len).
-export const SPAWN_WATCH_DESC_VERSION: i32 = 2;
+// Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len; 3: flags).
+export const SPAWN_WATCH_DESC_VERSION: i32 = 3;
+// The path is the name of a boot module (the app name its .wap embeds),
+// spawned from its in-memory image rather than read through the
+// filesystem, so a watched spawn can start the services the filesystem
+// itself needs. Such a spawn carries no arguments and no tty pin.
+export const SPAWN_WATCH_FLAG_MODULE: i32 = 1;
 // Dependency records the reply can carry, the same ceiling as a .wap
 // v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off.
 export const SPAWN_WATCH_DEPS_MAX: i32 = 16;
@@ -425,9 +430,9 @@ export const FSMGR_MOUNT_WAIT_PATH_MAX: i32 = 63;
 // A reader MUST reject a descriptor whose version it does not know.
 // Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps).
 export const SUPERVISOR_SUBMIT_DESC_VERSION: i32 = 2;
-// Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t
-// and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT
-// ranges fit, DMA windows are refused.
+// Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t,
+// its I/O ranges and DMA window) may take: a header,
+// WASMOS_IO_RANGE_LIMIT ranges and one DMA window fit.
 export const SUPERVISOR_CAPS_MAX: i32 = 64;
 // Longest unit spec a submission carries, NUL excluded.
 export const SUPERVISOR_SPEC_MAX: i32 = 255;
@@ -492,3 +497,30 @@ export const SUPERVISOR_CLASS_OPTIONAL: i32 = 0;
 export const SUPERVISOR_CLASS_REQUIRED: i32 = 1;
 // Never restarted: its first death takes the system down.
 export const SUPERVISOR_CLASS_CRITICAL: i32 = 2;
+
+// capability
+// Capability kinds, as ipc_endpoint_has_cap asks about them. Each is the kind
+// a manifest [[capabilities]] name grants (docs/architecture/10-capability-and-policy.md);
+// the kernel's capability_kind_t takes the same values.
+// io.port: x86 I/O port access.
+export const WASMOS_CAP_IO_PORT: i32 = 0;
+// irq.route: route hardware IRQ lines to an endpoint.
+export const WASMOS_CAP_IRQ_ROUTE: i32 = 1;
+// mmio.map: map MMIO regions.
+export const WASMOS_CAP_MMIO_MAP: i32 = 2;
+// dma.buffer: DMA buffer host calls.
+export const WASMOS_CAP_DMA_BUFFER: i32 = 3;
+// system.control: halt, reboot, power off.
+export const WASMOS_CAP_SYSTEM_CONTROL: i32 = 4;
+// subsystem.register: broker subsystems and exec-format handlers.
+export const WASMOS_CAP_SUBSYSTEM_REGISTER: i32 = 5;
+// svc.class: register under a virtual service class.
+export const WASMOS_CAP_SVC_CLASS_REGISTER: i32 = 6;
+// console.owner: register the console ring.
+export const WASMOS_CAP_CONSOLE_OWNER: i32 = 7;
+// spawn.grant: put hardware grants on a spawned child, directly or through the supervisor.
+export const WASMOS_CAP_SPAWN_GRANT: i32 = 8;
+// svc.control: submit, kill and declare the boot set at the supervisor.
+export const WASMOS_CAP_SVC_CONTROL: i32 = 9;
+// pci.config: read and write PCI configuration space (pci_config_read/pci_config_write).
+export const WASMOS_CAP_PCI_CONFIG: i32 = 10;

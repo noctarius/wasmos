@@ -339,11 +339,14 @@ Three parties, each holding exactly the authority its half needs:
   binds the lowest free vector to an endpoint **the caller owns**, and returns
   the interrupt-controller address/data pair that raises it. It has no PCI
   knowledge and never touches a device.
-- **pci-bus** owns configuration space. It walks the capability list (`0x11`
-  MSI-X, `0x05` MSI), writes the address/data pair into the device, sets
-  `INTX_DISABLE` and bus-mastering. It is the only holder of the 0xCF8/0xCFC
-  window, because device-manager grants a driver an I/O-port range covering its
-  own BAR only.
+- **pci-bus** owns configuration space for drivers. It walks the capability
+  list (`0x11` MSI-X, `0x05` MSI), writes the address/data pair into the
+  device, sets `INTX_DISABLE` and bus-mastering. It reaches config space only
+  through the kernel (`pci_config_read` / `pci_config_write`, capability
+  `pci.config`), which serialises the 0xCF8/0xCFC port pair; device-manager
+  grants a driver an I/O-port range covering its own BAR only. The kernel
+  itself writes config space for one thing: quiescing a dead driver's function
+  ([Capability and Policy](10-capability-and-policy.md), "Device Quiesce").
 - **Driver** orchestrates: allocates its vectors, asks pci-bus to program them
   (`PCI_IPC_MSI_BIND`), then tells the device which vector serves which queue —
   a register write inside its own I/O window.

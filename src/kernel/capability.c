@@ -7,7 +7,7 @@
 #include "memory.h"
 #include "string.h"
 
-#define CAP_ALL_MASK ((1u << 8) - 1u)
+#define CAP_ALL_MASK ((1u << 11) - 1u)
 #define CAP_PAGE_SIZE 0x1000u
 
 typedef struct {
@@ -49,6 +49,12 @@ static uint32_t kind_to_mask(capability_kind_t kind) {
         return 1u << 6;
     case CAP_CONSOLE_OWNER:
         return 1u << 7;
+    case CAP_SPAWN_GRANT:
+        return 1u << 8;
+    case CAP_SVC_CONTROL:
+        return 1u << 9;
+    case CAP_PCI_CONFIG:
+        return 1u << 10;
     default:
         return 0;
     }
@@ -98,11 +104,41 @@ void capability_init(void) {
     kernel->mask = CAP_ALL_MASK;
 }
 
+/* The manifest name of every capability kind; the match is exact, so a prefix
+ * or a differently-cased name is unrecognised. */
+static const struct {
+    const char* name;
+    capability_kind_t kind;
+} k_capability_names[] = {
+    {"io.port", CAP_IO_PORT},
+    {"irq.route", CAP_IRQ_ROUTE},
+    {"mmio.map", CAP_MMIO_MAP},
+    {"dma.buffer", CAP_DMA_BUFFER},
+    {"system.control", CAP_SYSTEM_CONTROL},
+    {"subsystem.register", CAP_SUBSYSTEM_REGISTER},
+    {"svc.class", CAP_SVC_CLASS_REGISTER},
+    {"console.owner", CAP_CONSOLE_OWNER},
+    {"spawn.grant", CAP_SPAWN_GRANT},
+    {"svc.control", CAP_SVC_CONTROL},
+    {"pci.config", CAP_PCI_CONFIG},
+};
+
+int capability_kind_from_name(const uint8_t* name, uint32_t name_len, capability_kind_t* out_kind) {
+    if (!name || name_len == 0 || !out_kind) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < sizeof(k_capability_names) / sizeof(k_capability_names[0]); ++i) {
+        if (str_eq_bytes(name, name_len, k_capability_names[i].name)) {
+            *out_kind = k_capability_names[i].kind;
+            return 0;
+        }
+    }
+    return -1;
+}
+
 /* Grants one capability named by an unterminated byte string, creating the
- * context's record on first grant.  The accepted names are exactly "io.port",
- * "irq.route", "mmio.map", "dma.buffer", "system.control", "subsystem.register",
- * "svc.class" and "console.owner"; the match is exact, so a prefix or a differently-cased name
- * is refused.
+ * context's record on first grant.  The accepted names are those of
+ * capability_kind_from_name.
  *
  * Grants accumulate — bits are OR-ed in and there is no revoke.
  *
@@ -115,30 +151,11 @@ void capability_init(void) {
  * full record list. */
 int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t name_len,
                           uint32_t flags) {
-    if (!name || name_len == 0) {
+    capability_kind_t kind;
+    if (capability_kind_from_name(name, name_len, &kind) != 0) {
         return -1;
     }
-
-    uint32_t mask = 0;
-    if (str_eq_bytes(name, name_len, "io.port")) {
-        mask = kind_to_mask(CAP_IO_PORT);
-    } else if (str_eq_bytes(name, name_len, "irq.route")) {
-        mask = kind_to_mask(CAP_IRQ_ROUTE);
-    } else if (str_eq_bytes(name, name_len, "mmio.map")) {
-        mask = kind_to_mask(CAP_MMIO_MAP);
-    } else if (str_eq_bytes(name, name_len, "dma.buffer")) {
-        mask = kind_to_mask(CAP_DMA_BUFFER);
-    } else if (str_eq_bytes(name, name_len, "system.control")) {
-        mask = kind_to_mask(CAP_SYSTEM_CONTROL);
-    } else if (str_eq_bytes(name, name_len, "subsystem.register")) {
-        mask = kind_to_mask(CAP_SUBSYSTEM_REGISTER);
-    } else if (str_eq_bytes(name, name_len, "svc.class")) {
-        mask = kind_to_mask(CAP_SVC_CLASS_REGISTER);
-    } else if (str_eq_bytes(name, name_len, "console.owner")) {
-        mask = kind_to_mask(CAP_CONSOLE_OWNER);
-    } else {
-        return -1;
-    }
+    uint32_t mask = kind_to_mask(kind);
 
     capability_context_state_t* ctx = capability_state_for_context(context_id, 1);
     if (!ctx) {
@@ -463,4 +480,15 @@ void capability_dma_commit(uint32_t context_id, uint64_t bytes) {
         return;
     }
     ctx->dma_pinned_bytes += bytes;
+}
+
+void capability_release_context(uint32_t context_id) {
+    capability_context_state_t* ctx;
+    if (context_id == 0) {
+        return; /* the kernel context is never reaped */
+    }
+    ctx = capability_state_for_context(context_id, 0);
+    if (ctx) {
+        (void)list_remove(&g_cap_ctx, ctx);
+    }
 }

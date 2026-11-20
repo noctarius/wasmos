@@ -1440,6 +1440,42 @@ static void s_a_child_takes_its_parents_slot_at_spawn(void) {
     drop_transition_target(child);
 }
 
+/* Regression: 2026-11-20-reused-slot-keeps-ready-gate -- a process slot kept
+ * require_explicit_ready from a ready-gated occupant (a service) after its
+ * reap, so an app spawned into the slot never latched its implicit READY on
+ * its first receive. Under the supervisor that app was killed at its READY
+ * deadline on every restart: menu_bar, restarted after the font service, took
+ * the font service's slot. */
+static void s_a_reused_slot_does_not_keep_the_ready_gate(void) {
+    uint32_t parent = 0;
+    uint32_t gated = 0;
+    uint32_t plain = 0;
+
+    be_cpu(0);
+    if (process_spawn("gate-parent", idle_main, 0, &parent) != 0) {
+        CHECK(0, "spawned a parent");
+        return;
+    }
+    if (process_spawn_as_ready_gated_parked(parent, "gated", idle_main, 0, &gated) != 0) {
+        CHECK(0, "spawned a ready-gated child");
+        drop_transition_target(parent);
+        return;
+    }
+    process_t* slot = process_get(gated);
+    CHECK(slot && slot->require_explicit_ready, "the service waits for an explicit READY");
+    drop_transition_target(gated);
+    if (process_spawn_as_parked(parent, "plain", idle_main, 0, &plain) != 0) {
+        CHECK(0, "spawned a plain child");
+        drop_transition_target(parent);
+        return;
+    }
+    process_t* proc = process_get(plain);
+    CHECK(proc == slot, "the plain child reuses the service's slot");
+    CHECK(proc && !proc->require_explicit_ready, "and is not ready-gated");
+    drop_transition_target(plain);
+    drop_transition_target(parent);
+}
+
 /* The exit reason travels with the exit status from the point a process ends
  * to whoever collects it (the PROC_IPC_WAIT reply's arg2, PROC_IPC_STATUS's
  * arg3), so a supervisor can tell a crash from a clean stop: a guest may exit
@@ -1717,6 +1753,7 @@ int main(void) {
     s_a_consumer_that_declines_keeps_the_claim();
     s_entry_pointer_guard_rejects_what_is_not_in_the_image();
     s_a_child_takes_its_parents_slot_at_spawn();
+    s_a_reused_slot_does_not_keep_the_ready_gate();
     s_an_exit_publishes_the_reason_it_staged();
     s_an_exit_with_nothing_staged_is_exited();
     s_a_kill_overrides_a_staged_exit_but_not_a_finished_one();

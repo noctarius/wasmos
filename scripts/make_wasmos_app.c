@@ -154,7 +154,8 @@ static int capability_name_supported(const char* name) {
            strcmp(name, "irq.route") == 0 || strcmp(name, "mmio.map") == 0 ||
            strcmp(name, "dma.buffer") == 0 || strcmp(name, "system.control") == 0 ||
            strcmp(name, "subsystem.register") == 0 || strcmp(name, "svc.class") == 0 ||
-           strcmp(name, "console.owner") == 0;
+           strcmp(name, "console.owner") == 0 || strcmp(name, "spawn.grant") == 0 ||
+           strcmp(name, "svc.control") == 0 || strcmp(name, "pci.config") == 0;
 }
 
 static int subsystem_tag_has_valid_char(char c) {

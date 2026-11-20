@@ -24,6 +24,13 @@ int32_t wasmos_ipc_last_field(int32_t field) {
     return 0;
 }
 
+/* wasmos_ipc_call registers an await on its server before sending; every
+ * server here lives, so the await is always taken. */
+int32_t wasmos_ipc_peer_await(int32_t waiter, int32_t awaited) {
+    (void)waiter;
+    (void)awaited;
+    return 0;
+}
 int32_t wasmos_ipc_select_one(int32_t endpoint) {
     (void)endpoint;
     return -1;

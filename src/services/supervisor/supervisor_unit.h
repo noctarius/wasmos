@@ -18,6 +18,10 @@
 #define SV_UNIT_NAME_MAX 36u /* SUPERVISOR_UNIT_NAME_MAX + NUL */
 #define SV_PATH_MAX 256u     /* SPAWN_WATCH_PATH_MAX + NUL */
 #define SV_ARGS_MAX 256u     /* SPAWN_WATCH_ARGS_MAX + NUL */
+/* A unit path of this prefix names a boot module by app name instead of a file
+ * (SPAWN_WATCH_FLAG_MODULE): "module:fs-manager". */
+#define SV_MODULE_PREFIX "module:"
+#define SV_MODULE_PREFIX_LEN 7u
 /* Ends the intensity window can hold; the configured limit must not
  * exceed it. */
 #define SV_INTENSITY_SLOTS 16u
@@ -121,16 +125,23 @@ typedef enum {
 
 /* Parses a SUPERVISOR_IPC_SUBMIT_REQ spec into a fresh unit in state
  * SV_UNIT_SPAWN_DUE, due at `now`. Defaults: restart=on-failure,
- * class=optional, no tty pin, the default probe period, no args. Returns 0, or
- * WASMOS_ERR_SUPERVISOR_BAD_SPEC with *out unchanged. */
+ * class=optional, no tty pin, the default probe period, no args. The path is
+ * absolute, or SV_MODULE_PREFIX and a boot module's app name, which takes no
+ * args and no tty pin. Returns 0, or WASMOS_ERR_SUPERVISOR_BAD_SPEC with *out
+ * unchanged. */
 int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now, sv_unit_t* out);
+
+/* The boot module a unit names (the app name after SV_MODULE_PREFIX), or NULL
+ * for a unit spawned from a file. */
+const char* sv_unit_module(const sv_unit_t* unit);
 
 /* Gives the unit the capability descriptor a submission carried (len bytes of
  * wasmos_spawn_caps_v2_t and its I/O ranges), which every spawn of it passes to
  * the PM; len 0 leaves it without hardware access. The PM validates the
  * descriptor itself. Returns 0, WASMOS_ERR_SUPERVISOR_BAD_DESC for a length
  * outside the header..SUPERVISOR_CAPS_MAX, or WASMOS_ERR_SUPERVISOR_DMA_CAPS for
- * a DMA request, with the unit unchanged. */
+ * a DMA request that names no PCI function for the kernel to quiesce, with the
+ * unit unchanged. */
 int32_t sv_unit_set_caps(sv_unit_t* unit, const uint8_t* caps, uint32_t len);
 
 /* The spawn request was sent. */
@@ -214,6 +225,21 @@ typedef enum {
 } sv_boot_t;
 
 sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uint32_t* index);
+
+/* What the sender of a request holds, as supervisor.c learns it from the
+ * kernel for the request's source endpoint. */
+#define SV_SENDER_CONTROL (1u << 0) /* svc.control */
+#define SV_SENDER_GRANT (1u << 1)   /* spawn.grant */
+
+/* Whether a sender holding `sender` (SV_SENDER_*) may make request `type`
+ * (SUPERVISOR_IPC_*_REQ). Submitting, killing and declaring the boot set change
+ * what runs, so they require svc.control; listing is open to everyone. A
+ * submission carrying a capability descriptor (`caps_len` > 0) also requires
+ * spawn.grant: the supervisor spawns the unit with those grants under its own
+ * name, so it relays them only from a submitter the process manager would accept
+ * them from directly. Returns 0, WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED, or
+ * WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED. */
+int32_t sv_authorize(uint32_t type, uint32_t sender, uint32_t caps_len);
 
 const char* sv_state_name(sv_state_t state);
 const char* sv_reason_name(uint32_t reason);

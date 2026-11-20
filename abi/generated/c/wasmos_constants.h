@@ -326,8 +326,14 @@ enum {
  * A reader MUST reject a descriptor whose version it does not know.
  */
 enum {
-    /* Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len). */
-    SPAWN_WATCH_DESC_VERSION = 2,
+    /* Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len; 3: flags). */
+    SPAWN_WATCH_DESC_VERSION = 3,
+    /* The path is the name of a boot module (the app name its .wap embeds),
+     * spawned from its in-memory image rather than read through the
+     * filesystem, so a watched spawn can start the services the filesystem
+     * itself needs. Such a spawn carries no arguments and no tty pin.
+     */
+    SPAWN_WATCH_FLAG_MODULE = 1,
     /* Dependency records the reply can carry, the same ceiling as a .wap
      * v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off.
      */
@@ -489,9 +495,9 @@ enum {
 enum {
     /* Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps). */
     SUPERVISOR_SUBMIT_DESC_VERSION = 2,
-    /* Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t
-     * and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT
-     * ranges fit, DMA windows are refused.
+    /* Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t,
+     * its I/O ranges and DMA window) may take: a header,
+     * WASMOS_IO_RANGE_LIMIT ranges and one DMA window fit.
      */
     SUPERVISOR_CAPS_MAX = 64,
     /* Longest unit spec a submission carries, NUL excluded. */
@@ -565,6 +571,35 @@ enum {
     SUPERVISOR_CLASS_REQUIRED = 1,
     /* Never restarted: its first death takes the system down. */
     SUPERVISOR_CLASS_CRITICAL = 2,
+};
+
+/* Capability kinds, as ipc_endpoint_has_cap asks about them. Each is the kind
+ * a manifest [[capabilities]] name grants (docs/architecture/10-capability-and-policy.md);
+ * the kernel's capability_kind_t takes the same values.
+ */
+enum {
+    /* io.port: x86 I/O port access. */
+    WASMOS_CAP_IO_PORT = 0,
+    /* irq.route: route hardware IRQ lines to an endpoint. */
+    WASMOS_CAP_IRQ_ROUTE = 1,
+    /* mmio.map: map MMIO regions. */
+    WASMOS_CAP_MMIO_MAP = 2,
+    /* dma.buffer: DMA buffer host calls. */
+    WASMOS_CAP_DMA_BUFFER = 3,
+    /* system.control: halt, reboot, power off. */
+    WASMOS_CAP_SYSTEM_CONTROL = 4,
+    /* subsystem.register: broker subsystems and exec-format handlers. */
+    WASMOS_CAP_SUBSYSTEM_REGISTER = 5,
+    /* svc.class: register under a virtual service class. */
+    WASMOS_CAP_SVC_CLASS_REGISTER = 6,
+    /* console.owner: register the console ring. */
+    WASMOS_CAP_CONSOLE_OWNER = 7,
+    /* spawn.grant: put hardware grants on a spawned child, directly or through the supervisor. */
+    WASMOS_CAP_SPAWN_GRANT = 8,
+    /* svc.control: submit, kill and declare the boot set at the supervisor. */
+    WASMOS_CAP_SVC_CONTROL = 9,
+    /* pci.config: read and write PCI configuration space (pci_config_read/pci_config_write). */
+    WASMOS_CAP_PCI_CONFIG = 10,
 };
 
 #endif /* WASMOS_GENERATED_CONSTANTS_H */

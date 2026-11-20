@@ -772,3 +772,29 @@ void wasmos_app_stop(wasmos_app_instance_t* instance) {
 void wasmos_app_set_policy_hooks(wasmos_app_capability_granter_t capability_granter) {
     g_capability_granter = capability_granter;
 }
+
+uint32_t wasmos_app_boot_module_index(const boot_info_t* info, const char* name,
+                                      uint32_t name_len) {
+    if (!info || !name || name_len == 0 || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT) ||
+        !info->modules || info->module_entry_size < sizeof(boot_module_t)) {
+        return 0xFFFFFFFFu;
+    }
+    const uint8_t* mods = (const uint8_t*)(uintptr_t)info->modules;
+    for (uint32_t i = 0; i < info->module_count; ++i) {
+        const boot_module_t* mod =
+            (const boot_module_t*)(mods + (size_t)i * info->module_entry_size);
+        if (mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 || mod->size == 0 ||
+            mod->size > 0xFFFFFFFFULL) {
+            continue;
+        }
+        wasmos_app_desc_t desc;
+        if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) !=
+            0) {
+            continue;
+        }
+        if (desc.name_len == name_len && memcmp(desc.name, name, name_len) == 0) {
+            return i;
+        }
+    }
+    return 0xFFFFFFFFu;
+}

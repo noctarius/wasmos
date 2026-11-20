@@ -126,7 +126,10 @@ int32_t sv_unit_set_caps(sv_unit_t* unit, const uint8_t* caps, uint32_t len) {
         return WASMOS_ERR_SUPERVISOR_BAD_DESC;
     }
     memcpy(&hdr, caps, sizeof(hdr));
-    if ((hdr.cap_flags & DEVMGR_CAP_DMA) != 0u) {
+    /* A DMA device restarted under a new driver must not still be mastering
+     * into the old one's frames. The kernel stops it at the driver's end only
+     * when the descriptor names its PCI function (DEVMGR_CAP_PCI_FUNCTION). */
+    if ((hdr.cap_flags & DEVMGR_CAP_DMA) != 0u && (hdr.cap_flags & DEVMGR_CAP_PCI_FUNCTION) == 0u) {
         return WASMOS_ERR_SUPERVISOR_DMA_CAPS;
     }
     memcpy(unit->caps, caps, len);
@@ -155,7 +158,9 @@ int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now,
     p = sv_skip_space(p + len);
 
     len = sv_token_len(p);
-    if (len == 0 || len >= SV_PATH_MAX || p[0] != '/') {
+    if (len == 0 || len >= SV_PATH_MAX ||
+        (p[0] != '/' &&
+         (len <= SV_MODULE_PREFIX_LEN || memcmp(p, SV_MODULE_PREFIX, SV_MODULE_PREFIX_LEN) != 0))) {
         return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
     }
     memcpy(unit.path, p, len);
@@ -179,6 +184,11 @@ int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now,
             return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
         }
         p = sv_skip_space(p + len);
+    }
+    /* A boot module is spawned from its image, which takes neither arguments
+     * nor a tty pin (SPAWN_WATCH_FLAG_MODULE). */
+    if (sv_unit_module(&unit) && (unit.args[0] != '\0' || unit.tty != 0)) {
+        return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
     }
 
     unit.state = SV_UNIT_SPAWN_DUE;
@@ -471,6 +481,26 @@ sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uin
 
 int sv_exit_is_failure(int32_t status, uint32_t reason) {
     return !(reason == PROC_EXIT_REASON_EXITED && status == 0);
+}
+
+const char* sv_unit_module(const sv_unit_t* unit) {
+    if (memcmp(unit->path, SV_MODULE_PREFIX, SV_MODULE_PREFIX_LEN) != 0) {
+        return 0;
+    }
+    return unit->path + SV_MODULE_PREFIX_LEN;
+}
+
+int32_t sv_authorize(uint32_t type, uint32_t sender, uint32_t caps_len) {
+    if (type == SUPERVISOR_IPC_LIST_REQ) {
+        return 0;
+    }
+    if ((sender & SV_SENDER_CONTROL) == 0) {
+        return WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED;
+    }
+    if (type == SUPERVISOR_IPC_SUBMIT_REQ && caps_len > 0 && (sender & SV_SENDER_GRANT) == 0) {
+        return WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED;
+    }
+    return 0;
 }
 
 const char* sv_state_name(sv_state_t state) {

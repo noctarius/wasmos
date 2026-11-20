@@ -252,6 +252,18 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
         return warp_kmsg_subscribe((uint32_t)a0, reinterpret_cast<void*>(a1));
     case HC_LINMEM_SLOTS:
         return warp_linmem_slots((uint32_t)a0, reinterpret_cast<void*>(a1));
+    case HC_IPC_ENDPOINT_HAS_CAP:
+        return warp_ipc_endpoint_has_cap((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
+    case HC_PCI_CONFIG_READ:
+        return warp_pci_config_read((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
+    case HC_PCI_CONFIG_WRITE:
+        return warp_pci_config_write((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
+    case HC_PCI_FUNCTION_CHECK:
+        return warp_pci_function_check((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
+    case HC_PCI_CONFIG_WRITE_FOR:
+        return warp_pci_config_write_for((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, reinterpret_cast<void*>(a4));
+    case HC_IPC_PEER_AWAIT:
+        return warp_ipc_peer_await((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     default:
         return (uint32_t)-1;
     }

@@ -1,15 +1,10 @@
-/* pci_bus_types.h - PCI configuration-mechanism-1 I/O ports for the pci-bus
- * service.  Enumerated functions are published as wasmos_pci_device_desc_t
- * (wasmos_driver_abi.h); pci_device_record_t below is not referenced by any
- * translation unit. */
+/* pci_bus_types.h - types of the pci-bus service.  Enumerated functions are published as
+ * wasmos_pci_device_desc_t (wasmos_driver_abi.h); pci_device_record_t below is not referenced by
+ * any translation unit. */
 #ifndef WASMOS_PCI_BUS_TYPES_H
 #define WASMOS_PCI_BUS_TYPES_H
 
 #include <stdint.h>
-
-/* Standard x86 PCI configuration mechanism 1 I/O ports. */
-#define PCI_CFG_ADDR_PORT 0xCF8
-#define PCI_CFG_DATA_PORT 0xCFC
 
 /* One enumerated PCI function with the fields the device-manager needs. */
 typedef struct {

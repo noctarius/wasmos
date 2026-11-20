@@ -19,7 +19,8 @@
 typedef int32_t (*logger_read_fn)(void* user, uint8_t* dst, int32_t len, uint64_t* seq);
 
 typedef struct {
-    uint64_t seq; /* sequence number of the next kernel-log byte to read */
+    uint64_t seq;    /* sequence number of the next kernel-log byte to read */
+    uint8_t resumed; /* seq came from logger_stage_resume and was not read yet */
     char marker[LOGGER_MARKER_MAX];
     uint32_t marker_len; /* a marker line not yet written */
     uint8_t read_buf[LOGGER_CHUNK];
@@ -34,6 +35,17 @@ void logger_stage_truncated(logger_stage_t* st, const char* path, uint32_t limit
 /* Stages the next write into st->out. Returns the bytes staged, 0 when there is
  * nothing to write, or a negative status from `read`. */
 int32_t logger_stage_next(logger_stage_t* st, logger_read_fn read, void* user);
+
+/* The read position as `len` decimal digits at `saved`, which a restarted logger
+ * hands back from where logger_stage_save left it (kenv), so it continues the
+ * file instead of appending the ring's whole retained backlog to it again. A
+ * value that does not parse leaves the position at 0, and one the ring refuses
+ * on the first read is dropped for the oldest byte (logger_stage_next). */
+void logger_stage_resume(logger_stage_t* st, const char* saved, uint32_t len);
+
+/* Writes the read position as decimal digits into out[0..cap), NUL-terminated.
+ * Returns the digit count, or 0 when cap is too small. */
+uint32_t logger_stage_save(const logger_stage_t* st, char* out, uint32_t cap);
 
 /* 1 when an FS write completion of `written` bytes wrote all `staged` bytes. */
 int logger_stage_written(uint32_t staged, int32_t written);

@@ -1,11 +1,13 @@
 /* Host unit test for the process manager's spawn capability descriptor parser
  * (src/kernel/process_manager_caps.c): a wasmos_spawn_caps_v2_t header followed
  * by io_range_count I/O windows and then dma.window_count DMA windows, sized
- * exactly by its counts.
+ * exactly by its counts. Also who may put such grants on a child at all
+ * (pm_caps_grant_allowed), against a stubbed capability table.
  *
  * Each case returns 0 to pass or __LINE__ to fail, and wasmos_test_run_all stops
  * at the first failure (test_shuffle.h). */
 
+#include "capability.h"
 #include "process_manager_internal.h"
 
 #include <stdint.h>
@@ -144,6 +146,55 @@ static int test_ranges_need_the_io_bit(void) {
     return 0;
 }
 
+/* The context that holds spawn.grant in the stubbed capability table; every
+ * other context holds nothing. */
+#define GRANT_HOLDER 7u
+#define REQUESTER 9u
+
+int capability_has(uint32_t context_id, capability_kind_t kind) {
+    return context_id == GRANT_HOLDER && kind == CAP_SPAWN_GRANT;
+}
+
+/* Regression: 2026-11-20-unchecked-spawn-grants -- no caps-carrying spawn
+ * checked its requester, so any process could spawn a module with I/O windows,
+ * IRQ lines or a DMA window over physical memory of its choosing, authority the
+ * module's manifest alone does not give. Every grant-bearing bit is refused to
+ * a requester without spawn.grant. */
+static int test_a_grant_from_a_requester_without_spawn_grant_is_refused(void) {
+    const uint32_t bits[] = {
+        DEVMGR_CAP_IO_PORT, DEVMGR_CAP_IRQ, DEVMGR_CAP_MMIO_MAP, DEVMGR_CAP_DMA};
+    for (uint32_t i = 0; i < sizeof(bits) / sizeof(bits[0]); ++i) {
+        memset(&g_caps, 0, sizeof(g_caps));
+        g_caps.valid = 1;
+        g_caps.cap_flags = bits[i];
+        if (pm_caps_grant_allowed(REQUESTER, &g_caps) != 0) {
+            return __LINE__;
+        }
+    }
+    return 0;
+}
+
+static int test_a_holder_of_spawn_grant_may_grant(void) {
+    memset(&g_caps, 0, sizeof(g_caps));
+    g_caps.valid = 1;
+    g_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ | DEVMGR_CAP_DMA;
+    return pm_caps_grant_allowed(GRANT_HOLDER, &g_caps) == 1 ? 0 : __LINE__;
+}
+
+/* No caps, or a profile with no bits, only narrows the child: fs-manager spawns
+ * its backends with PROC_IPC_SPAWN_PATH_CAPS_SYNC and cap_flags 0. */
+static int test_a_spawn_without_grants_is_open_to_everyone(void) {
+    memset(&g_caps, 0, sizeof(g_caps));
+    if (pm_caps_grant_allowed(REQUESTER, &g_caps) != 1) {
+        return __LINE__;
+    }
+    g_caps.valid = 1;
+    if (pm_caps_grant_allowed(REQUESTER, &g_caps) != 1) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     static const wasmos_test_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_single_window_and_an_irq),
@@ -152,6 +203,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_the_size_must_match_the_counts),
         WASMOS_TEST_CASE(test_bad_grants_are_refused),
         WASMOS_TEST_CASE(test_ranges_need_the_io_bit),
+        WASMOS_TEST_CASE(test_a_grant_from_a_requester_without_spawn_grant_is_refused),
+        WASMOS_TEST_CASE(test_a_holder_of_spawn_grant_may_grant),
+        WASMOS_TEST_CASE(test_a_spawn_without_grants_is_open_to_everyone),
     };
     if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
         return 1;

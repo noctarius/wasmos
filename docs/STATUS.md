@@ -265,8 +265,16 @@ linked feature documents for rationale and rollout plans.
   child is auto-reaped. Host-tested in `test_ipc` (O1-O6) and
   `test_process_lifecycle`; the PM handler is exercised end to end by the
   supervisor (`tests/test_supervisor.py`).
-- The `supervisor` service (initfs, spawned by kernel init right after the
-  process manager) keeps submitted units running. A unit arrives as a one-line
+- The `supervisor` service (a boot module, spawned by kernel init right after
+  the process manager) keeps submitted units running, and owns the boot chain:
+  it records fs-manager, fs-tmpfs, fs-init and device-manager as `critical`
+  units (`k_boot_units`) and spawns them in that order from their boot modules
+  (`module:<app name>`, a watched spawn with `SPAWN_WATCH_FLAG_MODULE`,
+  descriptor v3), so their deaths are named and end the system (`svc kill
+  device-manager` halts it, `tests/test_supervisor.py`). Kernel init spawns
+  only the PM and the supervisor, then waits for /boot and spawns sysinit; the
+  boot milestone counts 7 required units. device-manager sends READY once
+  `devmgr.inv` and `devmgr.query` are registered, not after enumeration. A unit arrives as a one-line
   spec in `SUPERVISOR_IPC_SUBMIT_REQ` (`<unit> <path> [restart=never|on-failure|
   always] [class=optional|required|critical] [tty=<slot>] [probe=<s>]
   [-- args]`, defaults on-failure / optional / 10 s) and is spawned with
@@ -333,8 +341,9 @@ linked feature documents for rationale and rollout plans.
   by name watch and the submit is an intent on a loop device-manager pumps from
   IDLE; the reply retires the rule. A submission that cannot be sent (no
   supervisor bound yet) spawns the driver directly. `default.rules` sets
-  `on-failure` for rtc, keyboard and mouse; DMA-capable drivers stay
-  device-manager-spawned (the supervisor refuses DMA caps). Clients rebind on
+  `on-failure` for rtc, keyboard, mouse and virtio-rng; virtio-blk, ata and
+  virtio-net stay device-manager-spawned until their clients' rebind is
+  decided. Clients rebind on
   their own (vt and gfxcomp through name watches on hangup; `date` per run).
   `tests/test_supervisor.py` kills `rtc@acpi:0070` with `svc kill`, sees a new
   instance come up with its I/O grant, and reads the clock through it.
@@ -350,6 +359,51 @@ linked feature documents for rationale and rollout plans.
   ordering asks the class registry about each process
   (`service_class_registry_provided_by`) instead of copying the first eight
   providers.
+- Clients follow a restarted provider (`architecture/15`, the client table
+  under "Clients rebind"). `wasmos_ipc_call` and `wasmos_sys_ipc_call_native`
+  return `WASMOS_PEER_GONE` when the server hangs up before answering, instead
+  of waiting forever. libui (C, Zig, AssemblyScript) closes the window on the
+  compositor's hangup or the font service's end (`peer_gone`), and the app
+  exits with `WASMOS_PEER_GONE`. menu_bar is a supervised unit
+  (`restart=always`) that comes back after a gfxcomp or fontsvc restart, and
+  follows rtc by name watch. The logger keeps its kernel-log position in kenv
+  `logger.seq`, so a restarted logger does not append the ring again.
+  `tests/test_supervisor.py` (SupervisorClientTests) restarts logger, gfxcomp
+  and fontsvc under their clients.
+  A process slot no longer passes its last occupant's ready gate
+  (`require_explicit_ready`) to the next process spawned into it: an app that
+  reused a service's slot never latched its implicit READY, and the supervisor
+  killed it at its READY deadline on every restart.
+- A PCI DMA driver's device is quiesced by the kernel when the driver ends
+  (`src/kernel/pci_config.c`, `architecture/10` "Device Quiesce"): a spawn
+  profile with `DEVMGR_CAP_PCI_FUNCTION` names the function
+  (`wasmos_spawn_dma_caps_t.pci_function`), and the reap -- first, before the
+  spawner's `PROC_IPC_CHILD_EXITED` and before any DMA region or borrow is
+  released -- clears Bus Master Enable and MSI/MSI-X enable and sets INTx
+  Disable, logging `[pci] quiesced <bb>:<dd>.<f> ...`. Config space is the
+  kernel's: pci-bus uses `pci_config_read` / `pci_config_write` (capability
+  `pci.config`), serialised with the quiesce, and no longer holds the
+  0xCF8-0xCFF port window. pci-bus hands an MSI binding whose owner died to the
+  function's next driver. device-manager puts the function into a PCI
+  driver's descriptor grants and accepts `ENV{RESTART}` on PCI rules
+  (`<template>@pci:<bb>:<dd>.<f>`); the supervisor takes a DMA unit that names
+  its function. virtio-rng is supervised: `svc kill virtio_rng@pci:00:04.0`
+  quiesces it, the new instance rebinds MSI-X and serves entropy
+  (`sv_probe entropy`, `tests/test_supervisor.py`). Host-tested in
+  `test_pci_config`, `test_device_manager_unit`, `test_supervisor_unit`.
+- Hardware grants and unit control are capability-gated
+  (`architecture/10`, "Requester Checks"). Every spawn whose profile sets a
+  `cap_flags` bit -- the five `PROC_IPC_SPAWN_*CAPS*` forms and a watched spawn
+  with a capability descriptor -- requires the requester to hold `spawn.grant`
+  (device-manager, supervisor) and is otherwise refused with
+  `GRANT_NOT_AUTHORIZED` before a child exists (`pm_caps_grant_allowed`).
+  The supervisor requires `svc.control` (sysinit, device-manager, `svc`) to
+  submit, kill or declare the boot set, and `spawn.grant` too for a submission
+  carrying a capability descriptor (`sv_authorize`); listing is open. It asks
+  the kernel what a sender holds with the `ipc_endpoint_has_cap` host call on
+  the request's source endpoint; capability kinds are ABI as `WASMOS_CAP_*`
+  (`abi/constants.yaml`). Host-tested in `test_pm_caps`,
+  `test_supervisor_unit` and, on both runtimes, `test_hostcall_ipc`.
 - Boot milestone: when sysinit.rc has run to its end, sysinit sends
   `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` (finding the supervisor by name if no
   `service` line did), and the units the supervisor then holds are the boot
@@ -362,7 +416,7 @@ linked feature documents for rationale and rollout plans.
   `tests/test_boot_diagnosis.py`) and raises naming the unit on a failed boot;
   `boot_complete=False` skips it.
 - Kernel init spawns sysinit once fs-manager says /boot is mounted, not once
-  device-manager is READY (which says its rules were loaded, not that any
+  device-manager is READY (which says its endpoints are live, not that any
   volume is mounted). It subscribes to the name `fs.vfs`, looks it up, then
   sends `FSMGR_IPC_MOUNT_WAIT_REQ` for `/boot` in a buffer it owns and lends
   READ to fs-manager; fs-manager answers when a backend serving exactly that
@@ -1947,8 +2001,9 @@ linked feature documents for rationale and rollout plans.
   with `ui_key_char()` / `ui_key_scancode()` rather than using the packed code
   as a character; `tests/unit/test_libui_key_decode.c` pins that contract.
 - `gfx_smoke` exercises multiple windows, close-event teardown, and libui;
-  `menu_bar` exercises popup/window interactions. Both are spawned after the
-  compositor is ready when present in `sysinit`.
+  `menu_bar` exercises popup/window interactions. Both start after the
+  compositor is ready when present in `sysinit`: gfx_smoke spawned, menu_bar
+  as a supervised unit.
 
 ## Applications and Language Support
 

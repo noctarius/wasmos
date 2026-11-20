@@ -563,10 +563,10 @@ and `architecture/33-completion-ports.md`.
        (`INIT/PROMPT/READ/WAIT_IPC/FAILED`) machine with a coroutine per command.
        Do not collapse the endpoints first: sharing one endpoint while those
        blocking receives remain just moves the input loss into them.
-     - `examples/c/menu_bar/menu_bar.c` has one blocking `wasmos_ipc_call` at line
-       50 plus a `sched_yield` spin waiting for the rtc service to appear. The spin
-       is the more objectionable of the two under the project's no-busy-spin rule;
-       the service-discovery wait belongs on a class subscription or a bounded park.
+     - `examples/c/menu_bar/menu_bar.c` reads the clock with a blocking
+       `wasmos_ipc_call` on its UI loop (`update_clock`, TODO there); it finds rtc
+       through a name watch already, so the read can become an intent on that
+       loop.
   3. **Zig / Rust / Go**, small: font_service (a hand-rolled 50 ms x 200 poll, the
      one with a symptom to point at), gfx_compositor, `libc/rust/wasmos.rs`,
      tetris, `libc/go/wasmos.go`.
@@ -646,27 +646,43 @@ Source: `architecture/13-runtime-and-packaging.md`,
 - [ ] [FEATURE][P2] Finish service-class discovery lifecycle: enumeration,
   add/remove/death notifications, capability-gated registration, and consumer
   migration where class lookup removes hardwired provider names.
-- [ ] [BUG][P1] Gate who may hand out hardware grants and who may control units.
-  No caps-carrying spawn checks its requester: `pm_handle_spawn_watched` and the
-  `PROC_IPC_SPAWN_*CAPS*` handlers (`src/kernel/process_manager_spawn.c`) apply
-  any `wasmos_spawn_caps_v2_t` through `pm_apply_spawn_caps`, so any process can
-  start a module whose manifest declares `io.port` / `irq.route` with an I/O
-  window and IRQ lines of its own choosing. The supervisor widens the reach:
-  `SUPERVISOR_IPC_SUBMIT_REQ` carries grants and `SUPERVISOR_IPC_KILL_REQ`
-  kills any unit, and neither checks its sender
-  (`src/services/supervisor/supervisor.c`, `sv_on_submit`, `sv_on_kill`).
-  Make caps-carrying spawns require a capability of the requester (device-manager
-  and the supervisor hold it), have the supervisor accept grants only from a
-  submitter entitled to them, and gate submit and kill. A host test per refusal.
-- [ ] [FEATURE][P1] Quiesce a DMA-capable device before its driver is restarted, so
-  PCI and DMA drivers can be supervised (`architecture/15`, "Device-Manager
-  Design Direction"). A crashed driver may leave its device bus-mastering into
-  frames that are then recycled; before a replacement starts, Bus Master Enable
-  must be cleared through pci-bus, MSI/MSI-X vectors reclaimed
-  (`msi_vectors.c`), INTx unbound and DMA borrows revoked
-  (`architecture/12`). Until then the supervisor refuses DMA caps
-  (`WASMOS_ERR_SUPERVISOR_DMA_CAPS`) and virtio-rng, virtio-blk, virtio-net
-  and ata stay device-manager-spawned and unrestarted.
+- [ ] [BUG][P1] Stop a manifest from granting itself privileged capabilities.
+  `capability_grant_name` grants whatever a `.wap`'s `[[capabilities]]` names,
+  and `PROC_IPC_SPAWN_PATH` spawns an image from any path, writable volumes
+  included, for any requester. So any process can write and spawn an image that
+  declares `spawn.grant`, `svc.control`, `system.control` or `io.port`, and any
+  process can spawn a privileged utility as a deputy (`svc kill vt`,
+  `svc submit ...`). The requester checks of `architecture/10` ("Requester
+  Checks") hold only for processes that cannot do that. Needs a policy over
+  images -- signed or allow-listed packages, or privileged capabilities granted
+  only to images from the initfs or a read-only system volume -- and, for
+  deputies like `svc`, authentication of the invoking process.
+- [ ] [BUG][P1] Quiesce every PCI DMA driver's device at its end, not only a
+  supervised one. The kernel quiesces the function a spawn profile names
+  (`DEVMGR_CAP_PCI_FUNCTION`, `architecture/10` "Device Quiesce"), but only the
+  descriptor spawn forms carry it: a DMA driver device-manager spawns by path
+  (`PROC_IPC_SPAWN_PATH_CAPS_SYNC`; virtio-blk, virtio-net, ata) names none, so
+  when it dies its device may keep mastering into frames the reap recycles.
+  Spawning those drivers through a descriptor form -- or as supervised units
+  (H5) -- closes it (`device_manager.c`, the TODO at the direct spawn).
+- [ ] [FEATURE][P1] Supervise the storage and network chains, restarting a
+  chain as a whole. Decided: the `/boot` volume's block driver and fs-fat are
+  `critical` (their end is named and halts, like fs-manager); every other
+  block driver, filesystem backend and virtio-net is `required` and restarted.
+  A block driver restarted alone helps nothing -- the filesystem backend above
+  it keeps its mount bound to the dead endpoint, and applications keep file
+  descriptors into the backend -- so a restart restarts the chain: the block
+  driver, then each backend mounted on it (re-mounted when device-manager sees
+  the volume again), with clients seeing their open files fail. Needs: restart
+  along `[deps] needs` (F4), device-manager re-matching a re-added device and
+  volume, fs-manager's mounts as supervised units (fs-fat is spawned by
+  fs-manager's mount path, not by the supervisor), and net-stack's behaviour
+  when virtio-net restarts under its sockets.
+- [ ] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
+  interrupts and DMA back. The quiesce sets INTx Disable and clears Bus Master
+  Enable, and pci-bus turns them back only through an MSI bind
+  (`src/kernel/pci_config.c` TODO). Every in-tree DMA driver binds MSI-X under
+  QEMU, so none hits it today.
 - [ ] [FEATURE][P2] Operator stop, start and restart for supervised units. `svc kill`
   is the only action, and its end counts as a failure. A stop must end a unit
   without a restart and without counting it; a start or restart must clear a
@@ -678,12 +694,6 @@ Source: `architecture/13-runtime-and-packaging.md`,
   submission, restart or notify dependents along `[deps]` `needs` when a unit
   restarts, and mark the dependents of a `required` unit that gave up as
   degraded rather than restarting them in a loop behind it.
-- [ ] [FEATURE][P2] Move the boot chain into the supervisor. Kernel init still spawns
-  fs-manager, fs-tmpfs, fs-init and device-manager itself
-  (`src/kernel/kernel_init_runtime.c`), so their deaths are unnamed: nothing
-  logs a critical unit or dumps the table. The supervisor should spawn them
-  from the initfs by module index as `critical` units, and kernel init shrink
-  to the PM and the supervisor.
 - [ ] [ENHANCEMENT][P2] Defer an `ENV{RESTART}` rule until the supervisor is bound
   instead of spawning the driver directly and unsupervised
   (`src/services/device_manager/device_manager.c:3439` `TODO`). The supervisor is
@@ -2151,12 +2161,24 @@ Source: `architecture/25-diagnostics-status.md`,
 
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
-- [ ] [BUG][P2] Find why `test_app_churn` failed once on WARP SMP in a full CLI
-  battery: "run 11: date produced no result", with `date` parked on a private
-  endpoint after a PM `0x2a1` (`SVC_IPC_LOOKUP_RESP`). It passed 3/3 alone and
-  in later batteries. Not yet checked against `main`, so it is not attributed
-  to the supervisor work it was seen during; reproduce by looping the test on
-  `warp_smp` before changing anything.
+- [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
+  (`test_app_churn`: "run N: date produced no result"). Not a supervisor
+  regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7
+  runs), as on `df536c7e` (1 in 15). Not WARP-only either: wasm3_smp batteries
+  hit it twice in four runs on the supervisor branches (`2ca66919` run 58, the
+  F3 branch run 70), each time with the same signature, and it passed 12/12
+  alone afterwards. Idle it is rare (0 in 20 on WARP); saturating the
+  host CPU with busy loops while looping the test is the reproducer. Both stall
+  dumps agree: `date` got its `SVC_IPC_LOOKUP_RESP`, sent `RTC_IPC_READ_REQ`
+  (`req=2`), and waits on its reply endpoint with nothing queued; the request
+  sits ~29 slots back in the rtc endpoint's ring (the dump's `sent ->` scans
+  the ring, so it was enqueued and since consumed), and the rtc is idle in
+  `ipc_select_wait` having served ~29 later `RTC_IPC_READ_REQ`s from
+  `menu_bar`. So the loss is between the rtc's AssemblyScript event loop
+  dequeuing the request (`ipc_drain` + `IpcMessage.readLast`) and its reply
+  `ipc_send`, whose result `serveRequest` ignores. Suspects: the per-pid
+  last-message slot read by `ipc_last_field` racing on SMP, and the loop's
+  intent match by request id alone (`date` always uses `req=2`).
 - [ ] [FEATURE][P2] Finish the toolchain SDK's remaining Stage 1 milestones
   (`docs/toolchain.md`): build `compiler-rt` builtins for wasm32 if a guest ever
   needs `__int128` — measured to be the ONLY shape that needs them, reaching eight

@@ -17,3 +17,8 @@ wants = ["supervisor"]
 [[capabilities]]
 name = "ipc.basic"
 flags = 0
+
+# svc.control: `svc submit` and `svc kill`.
+[[capabilities]]
+name = "svc.control"
+flags = 0

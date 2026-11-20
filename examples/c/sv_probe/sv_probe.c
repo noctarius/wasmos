@@ -12,6 +12,9 @@
  *   busy        run an event loop that opts in to liveness probes and burn
  *               the CPU in SV_PROBE_BUSY_CHUNK_MS chunks between polls for
  *               SV_PROBE_BUSY_FOR_MS, then idle
+ *   entropy     find "virtio-rng" by name watch, ask it for SV_PROBE_ENTROPY_BYTES
+ *               (filled by the device's DMA), log "entropy ok" or "entropy
+ *               failed <status>", and exit
  * Log lines go to the kernel log, "[sv-probe] <tag> ...". */
 #include <stdint.h>
 
@@ -25,6 +28,8 @@
 #define SV_PROBE_HANG_AFTER_MS 1500u
 #define SV_PROBE_BUSY_FOR_MS 12000u
 #define SV_PROBE_BUSY_CHUNK_MS 100u
+#define SV_PROBE_ENTROPY_BYTES 16
+#define SV_PROBE_ENTROPY_FIND_MS 10000
 
 static wasmos_sys_event_loop_t g_loop;
 static volatile uint32_t g_sink;
@@ -80,6 +85,61 @@ static int probe_loop_start(void) {
                                   0);
 }
 
+static wasmos_sys_svc_watch_set_t g_watches;
+static wasmos_sys_svc_watch_t g_rng_watch;
+static wasmos_sys_random_request_t g_random;
+static uint8_t g_entropy[SV_PROBE_ENTROPY_BYTES];
+static int g_entropy_done;
+static int32_t g_entropy_status;
+
+static void probe_on_random(void* user, int32_t status) {
+    (void)user;
+    g_entropy_status = status;
+    g_entropy_done = 1;
+}
+
+static void probe_on_rng_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
+    (void)user;
+    wasmos_sys_svc_watch_stop(watch);
+    int32_t rc = wasmos_sys_random_bytes_async(
+        &g_loop, endpoint, g_entropy, SV_PROBE_ENTROPY_BYTES, &g_random, probe_on_random, 0);
+    if (rc != 0) {
+        probe_on_random(0, rc);
+    }
+}
+
+static void probe_on_rng_missing(void* user, wasmos_sys_svc_watch_t* watch, int32_t status) {
+    (void)user;
+    (void)watch;
+    probe_on_random(0, status);
+}
+
+/* One entropy request to "virtio-rng", on a loop of the probe's own. Returns
+ * the packed status of the request, 0 when the bytes arrived. */
+static int32_t probe_entropy(void) {
+    int32_t ep = wasmos_ipc_create_endpoint();
+    if (ep < 0) {
+        return ep;
+    }
+    wasmos_sys_event_loop_init(&g_loop, ep, 0x100);
+    g_loop.poll_timeout_ms = 100;
+    if (wasmos_sys_svc_watch_set_init(&g_watches, &g_loop, wasmos_startup_proc_endpoint()) != 0 ||
+        wasmos_sys_svc_watch_start(&g_watches,
+                                   &g_rng_watch,
+                                   "virtio-rng",
+                                   SV_PROBE_ENTROPY_FIND_MS,
+                                   probe_on_rng_bound,
+                                   probe_on_rng_missing,
+                                   0) != 0) {
+        return WASMOS_ERR_HRNG_NOT_READY;
+    }
+    while (!g_entropy_done) {
+        (void)wasmos_sys_event_loop_poll(&g_loop, 8);
+        wasmos_sys_svc_watch_set_expire(&g_watches);
+    }
+    return g_entropy_status;
+}
+
 /* Keeps the CPU busy for `ms` without returning to the loop. */
 static void probe_burn(uint32_t ms) {
     uint32_t start = probe_now();
@@ -99,7 +159,7 @@ int main(void) {
     (void)wasmos_startup_args(args, sizeof(args));
     tag = strchr(args, ' ');
     if (!tag) {
-        probe_log("?", "usage: sv_probe <crash|crash-once|hang-once|busy> <tag>");
+        probe_log("?", "usage: sv_probe <crash|crash-once|hang-once|busy|entropy> <tag>");
         return 2;
     }
     *tag++ = '\0';
@@ -165,6 +225,17 @@ int main(void) {
         for (;;) {
             (void)wasmos_sys_event_loop_poll(&g_loop, 8);
         }
+    }
+    if (strcmp(args, "entropy") == 0) {
+        int32_t rc = probe_entropy();
+        char what[40];
+        if (rc == 0) {
+            probe_log(tag, "entropy ok");
+            return 0;
+        }
+        (void)snprintf(what, sizeof(what), "entropy failed %d", (int)rc);
+        probe_log(tag, what);
+        return 1;
     }
     probe_log(tag, "unknown mode");
     return 2;

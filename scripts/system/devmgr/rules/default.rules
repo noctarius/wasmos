@@ -65,8 +65,7 @@ SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{io}=="0x3F8
 # The legacy input and clock drivers hold no state a restart loses and drive no
 # DMA, so their rules hand them to the supervisor (ENV{RESTART}): a driver that
 # dies is spawned again for the same device, and its clients rebind to the name
-# it registers anew. A DMA-capable driver is not handed over -- nothing quiesces
-# its device before a restart.
+# it registers anew.
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", ENV{RESTART}="on-failure", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", ENV{RESTART}="on-failure", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x08", ATTR{subclass}=="0x03", ENV{RESTART}="on-failure", RUN+="system/drivers/rtc.wap"
@@ -74,8 +73,14 @@ SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x
 SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_serial.wap"
 # virtio-rng presents PCI class 0x00 / subclass 0xFF; 0xFF reads as the matcher's
 # "any" wildcard, so match on vendor/device IDs (transitional 0x1005, modern 0x1044).
-SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", RUN+="system/drivers/virtio_rng.wap"
-SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", RUN+="system/drivers/virtio_rng.wap"
+# It drives DMA, and is supervised as virtio_rng@pci:<function>: the kernel
+# quiesces its function when it ends (bus mastering and MSI off), so no restart
+# finds the device still writing into the dead instance's frames. Its clients
+# hold no session with it -- each entropy request finds the "hrng" provider
+# anew. The other DMA drivers stay device-manager-spawned until their clients'
+# rebind is audited (fs mounts on virtio-blk and ata, sockets on virtio-net).
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_rng.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_rng.wap"
 # virtio-blk presents PCI class 0x01 / subclass 0x00, which the ATA rule's
 # 0x01/0x01 does not match; the vendor/device pair is matched anyway so a
 # non-virtio SCSI controller is not handed to this driver (transitional 0x1001,

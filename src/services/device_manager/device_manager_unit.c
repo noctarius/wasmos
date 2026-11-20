@@ -5,15 +5,16 @@
 
 #include "wasmos_driver_abi.h"
 
-int32_t dm_unit_spec(const char* rule_path, uint16_t io_base, const char* restart, const char* args,
-                     char* out, uint32_t out_cap) {
+int32_t dm_unit_spec(const char* rule_path, const char* instance, const char* path,
+                     const char* restart, const char* args, char* out, uint32_t out_cap) {
     const char* base;
     uint32_t base_len;
     char name[SUPERVISOR_UNIT_NAME_MAX + 1u];
     int n;
 
-    if (!rule_path || rule_path[0] == '\0' || rule_path[0] == '/' || !restart ||
-        restart[0] == '\0' || !out || out_cap == 0u) {
+    if (!rule_path || rule_path[0] == '\0' || rule_path[0] == '/' || !instance ||
+        instance[0] == '\0' || !path || path[0] != '/' || !restart || restart[0] == '\0' || !out ||
+        out_cap == 0u) {
         return -1;
     }
     base = strrchr(rule_path, '/');
@@ -30,14 +31,14 @@ int32_t dm_unit_spec(const char* rule_path, uint16_t io_base, const char* restar
         return -1;
     }
     memcpy(name, base, base_len);
-    n = snprintf(name + base_len, sizeof(name) - base_len, "@acpi:%04x", (unsigned)io_base);
+    n = snprintf(name + base_len, sizeof(name) - base_len, "@%s", instance);
     if (n <= 0 || (uint32_t)n >= sizeof(name) - base_len) {
         return -1;
     }
     if (args && args[0] != '\0') {
-        n = snprintf(out, out_cap, "%s /boot/%s restart=%s -- %s", name, rule_path, restart, args);
+        n = snprintf(out, out_cap, "%s %s restart=%s -- %s", name, path, restart, args);
     } else {
-        n = snprintf(out, out_cap, "%s /boot/%s restart=%s", name, rule_path, restart);
+        n = snprintf(out, out_cap, "%s %s restart=%s", name, path, restart);
     }
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
@@ -61,6 +62,10 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
     header.io_port_min = caps->io_port_min;
     header.io_port_max = caps->io_port_max;
     header.io_range_count = (uint16_t)caps->io_range_count;
+    if (caps->pci_function_valid) {
+        header.cap_flags |= DEVMGR_CAP_PCI_FUNCTION;
+        header.dma.pci_function = caps->pci_function;
+    }
     memset(&window, 0, sizeof(window));
     if ((caps->cap_flags & DEVMGR_CAP_DMA) != 0) {
         header.dma.direction_flags = WASMOS_DMA_DIR_BIDIR;

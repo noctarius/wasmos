@@ -337,8 +337,9 @@ ready-wait even for service/driver kinds.
 - **Entry bindings:** `proc.endpoint`, `module.count`
 - **Resources:** 64 stack pages, 64 heap pages
 
-Coordinates early hardware startup in user space. Spawned by kernel init after
-fs-manager, fs-tmpfs and fs-init. Manages four event loops:
+Coordinates early hardware startup in user space. A critical unit of the
+supervisor's boot chain, spawned from its boot module after fs-manager,
+fs-tmpfs and fs-init. Manages four event loops:
 
 | Event loop            | Endpoint variable          | Purpose                 |
 |-----------------------|----------------------------|-------------------------|
@@ -398,13 +399,13 @@ device published by `acpi-bus`; `arg2` carries the I/O base address.
 #### `pci-bus` — PCI Config-Space Enumerator
 
 - **Kind:** WASM service
-- **Capabilities:** `io.port` (0x0CF8–0x0CFF)
+- **Capabilities:** `pci.config`, `irq.route`, `mmio.map`
 - **Entry bindings:** (receives `proc_endpoint` as first arg)
 
-Performs a full PCI configuration space scan using the standard mechanism-1
-I/O ports:
-- `PCI_CFG_ADDR_PORT = 0x0CF8` — address register
-- `PCI_CFG_DATA_PORT = 0x0CFC` — data register
+Performs a full PCI configuration space scan through the kernel's
+`pci_config_read` / `pci_config_write` host calls, which hold a lock across the
+mechanism-1 address/data port pair (0x0CF8/0x0CFC) so no access interleaves
+with another, nor with the kernel's quiesce of a dead driver's function.
 
 Scan scope: 256 buses × 32 devices × 8 functions. For each valid device
 (vendor_id ≠ 0xFFFF), reads class/subclass/prog_if, vendor/device ID, BAR0
@@ -531,7 +532,7 @@ Input mode flags: `VT_INPUT_MODE_RAW=0`, `VT_INPUT_MODE_CANONICAL=1<<0`,
 
 - **Kind:** WASM service on the libsys event loop (`src/services/supervisor`)
 - **Registers:** `supervisor`
-- **Spawned by:** kernel init, from the initfs, right after the process manager
+- **Spawned by:** kernel init, from its boot module, right after the process manager
 - **Critical:** its own end is a kernel panic (see below)
 
 The supervisor owns one fact for every unit handed to it: *it should be
@@ -542,6 +543,16 @@ result to the supervisor instead of growing restart logic of their own. Policy
 lives here, in user space; the kernel and the process manager supply only the
 mechanism -- watched spawns, exit reasons, kill (see
 [Process Model and IPC](09-process-and-ipc.md), "Watched Spawn").
+
+**The boot chain is its own.** fs-manager, fs-tmpfs, fs-init and
+device-manager are units the supervisor records itself, as `critical`, before
+it takes any submission, and spawns in that order from their boot modules: the
+unit path `module:<app name>` is a watched spawn with
+`SPAWN_WATCH_FLAG_MODULE`, built from the in-memory image, since no filesystem
+exists to read one from yet. fs-tmpfs precedes fs-init and device-manager
+because mount points are its directories; nothing else depends on the order.
+Their death is named like any critical unit's and ends the system; nothing
+stands in for the filesystem or for device-manager.
 
 **It is a separate service, not sysinit**, for three reasons. It must exist
 before the first thing it supervises, and sysinit is read from `/boot` long
@@ -558,14 +569,20 @@ line, in a descriptor the submitter owns and lends READ:
               [tty=<slot>] [probe=<seconds>] [-- <args>]
 ```
 
+`<path>` is absolute, or `module:<app name>` for a boot module, which takes no
+args and no tty pin.
+
 A unit name is `template` or `template@instance`. The instance key names what
 the unit serves -- a tty (`cli@tty1`), a device (`rtc@acpi:0070`) -- and is
 derived from it, never allocated, so a restarted instance keeps its name. The
-descriptor may carry a capability descriptor (I/O windows, IRQ lines), which
-every spawn of the unit carries. A unit that asks for DMA is refused
+descriptor may carry a capability descriptor (I/O windows, IRQ lines, a DMA
+window), which every spawn of the unit carries. A unit that asks for DMA must
+name its PCI function (`DEVMGR_CAP_PCI_FUNCTION`) or it is refused
 (`WASMOS_ERR_SUPERVISOR_DMA_CAPS`): a crashed driver may leave its device
-bus-mastering into frames that are recycled, and nothing quiesces the device
-before a restart. The table holds `SUPERVISOR_UNITS_MAX` units.
+bus-mastering, and only a named function is quiesced by the kernel at the
+driver's end -- before its frames are recycled and before the supervisor hears
+of the exit ([Capability and Policy](10-capability-and-policy.md), "Device
+Quiesce"). The table holds `SUPERVISOR_UNITS_MAX` units.
 
 **Lifecycle.** Every spawn is a `PROC_IPC_SPAWN_WATCHED` whose notify
 endpoint is the supervisor's own, one in flight at a time, so the spawn reply
@@ -630,14 +647,15 @@ shell printed a prompt", is what the test harness waits for.
 a failure and the policy applies. The `svc` utility wraps them: `svc submit
 <spec>`, `svc list`, `svc status <unit>`, `svc kill <unit>`.
 
-**Access is not checked yet.** Any process can submit a unit or kill one: the
-supervisor does not look at who sends a request. A submission's I/O and IRQ
-grants reach the process manager as the supervisor's own watched spawn, and the
-process manager does not check the requester of any caps-carrying spawn
-either -- the window narrows what the module's manifest declares, but whoever
-asks chooses the window. Submitting and killing must become capability-gated,
-and grants must be accepted only from a submitter entitled to them (today that
-is device-manager); this is tracked in `docs/TASKS.md` as a P1.
+**Access.** Submitting, killing and declaring the boot set require the
+sender to hold `svc.control` (sysinit, device-manager, `svc`); listing is open.
+A submission that carries a capability descriptor also requires `spawn.grant`,
+because the grants reach the process manager as the supervisor's own watched
+spawn: the supervisor relays them only from a submitter the process manager
+would accept them from directly (device-manager). The supervisor learns what
+the sender holds from the kernel (`ipc_endpoint_has_cap` on the request's
+source endpoint); see [Capability and Policy](10-capability-and-policy.md),
+"Requester Checks".
 
 **Clients rebind; endpoints are not preserved.** A restarted unit is a new
 process with a new endpoint, registered under the same name. Its clients see
@@ -650,6 +668,34 @@ one. Endpoint identity across a restart would preserve nothing a
 client could use: open files, borrows and sessions are gone with the old
 process either way.
 
+A synchronous call whose server ends before answering returns
+`WASMOS_PEER_GONE` (`wasmos_ipc_call`, `wasmos_sys_ipc_call_native`, the
+AssemblyScript `ipc.call`): it registers an await on the server first
+(`ipc_peer_await`, [Process Model and IPC](09-process-and-ipc.md), "Peer
+Hangup"), so the server's end is reported on the reply endpoint even if it
+never answered, and the call stops on that hangup instead of discarding it
+with the other stray messages. A client of a restarted provider cannot hang on
+its last request.
+
+What each client of a supervised provider does when it restarts:
+
+| Provider | Client | On the provider's restart |
+|---|---|---|
+| `vt` | `cli@tty1` | exits `WASMOS_PEER_GONE`; restarted (`restart=always`) |
+| `keyboard`, `mouse` | vt, gfxcomp | rebind through name watches on `kbd` / `mouse` |
+| `fontsvc` | gfxcomp | rebinds through a name watch on `font` |
+| `fontsvc` | libui apps | the next text call fails `WASMOS_PEER_GONE`; the window closes (`ui_context_t.peer_gone`) and the app exits |
+| `gfxcomp` | libui apps | the hangup on the event endpoint closes the window; the app exits `WASMOS_PEER_GONE` |
+| `gfxcomp`, `fontsvc` | `menu_bar` | exits as above; a unit with `restart=always`, so it comes back |
+| `rtc` | `date` | looks it up per run |
+| `rtc` | `menu_bar` | follows `rtc` by name watch; a failed read drops the endpoint until the next binding |
+| `virtio_rng@pci:*` | entropy users | look up `virtio-rng` / `hrng` per request |
+| `logger` | (none) | a restart continues `/var/log/messages` from the position kept in kenv `logger.seq` |
+| boot chain | everyone | `critical`: never restarted, its end halts |
+
+calculator and gfx_smoke are demo and test apps started once with `spawn`; they
+exit with the compositor and are not started again.
+
 | Opcode | Value | Meaning |
 |---|---|---|
 | `SUPERVISOR_IPC_SUBMIT_REQ` | `0x1000` | Hand a unit over; answered once recorded, before it is spawned |
@@ -659,9 +705,9 @@ process either way.
 
 Not built: operator stop/start/restart that does not count as a failure;
 retraction of a submitter's units when it dies; restart cascade along `[deps]`
-`needs`; liveness for the boot services; quiescing a DMA device so a DMA
-driver can be supervised; a guard against reboot loops under
-`on_critical=reboot`. They are tracked in `docs/TASKS.md`.
+`needs`; liveness for the boot services; supervising the DMA drivers whose
+clients hold state a restart loses (virtio-blk, ata, virtio-net); a guard
+against reboot loops under `on_critical=reboot`. They are tracked in `docs/TASKS.md`.
 
 #### `sysinit` — Late-Boot Service Launcher
 
@@ -678,7 +724,7 @@ service <unit> <path> [restart=...] [class=...] [tty=<slot>] [-- args]
 
 finds the supervisor by name watch, and continues once the unit is accepted --
 not once it is up -- so no line waits for a service. `spawn` starts a process
-without supervising it (the gfx apps, chardevc), `exec` runs one to its end
+without supervising it (gfx_smoke, calculator, chardevc), `exec` runs one to its end
 (`mkdir -p /var/log`), and `wait-svc <name>` waits, bounded, for a name to be
 registered. At the end of the script sysinit sends
 `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` and stays parked on its event loop.
@@ -774,14 +820,18 @@ Recognized keys:
 Wildcards: `ATTR{class}` etc. that are absent default to `MATCH_ANY_U8=0xFF`
 or `MATCH_ANY_U16=0xFFFF`. Unknown or malformed lines are skipped silently.
 
-An ACPI rule with `ENV{RESTART}` is not spawned by device-manager: it is
-submitted to the supervisor as the unit `<template>@acpi:<io base>`
-(`rtc@acpi:0070`), with the rule's arguments and the I/O and IRQ grants a
-direct spawn would carry, and the supervisor's reply retires the rule. Any
-other value rejects the line rather than running the driver unsupervised. The
-shipped rules set `on-failure` for rtc, keyboard and mouse, which hold no state
-a restart loses and use no DMA. A rule without the key spawns directly, as
-does one whose submission cannot be sent because no supervisor is bound yet.
+An ACPI or PCI rule with `ENV{RESTART}` is not spawned by device-manager: it
+is submitted to the supervisor as the unit `<template>@acpi:<io base>`
+(`rtc@acpi:0070`) or `<template>@pci:<bus>:<device>.<function>`
+(`virtio_rng@pci:00:04.0`), with the rule's arguments and the grants a direct
+spawn would carry -- for a PCI driver including its function, which the kernel
+quiesces whenever the driver ends -- and the supervisor's reply retires the
+rule. Any other value rejects the line rather than running the driver
+unsupervised. The shipped rules set `on-failure` for rtc, keyboard, mouse and
+virtio-rng, whose clients hold no session a restart loses. A rule without the
+key spawns directly, as does one whose submission cannot be sent because no
+supervisor is bound yet; a PCI driver spawned directly by path is not quiesced
+at its end, because the packed path form cannot name its function.
 
 #### Shipped Rule Files
 
@@ -809,31 +859,31 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", RUN+="system/d
 ### Bootstrap Startup Chain
 
 ```
-kernel init (initfs module indexes)
+kernel init
   ├─ process-manager            (kernel-hosted)
-  ├─ supervisor                 (marked critical)
-  ├─ fs-manager                 registers "fs.vfs"
-  ├─ fs-tmpfs                   the tmpfs root; mount points are its directories
-  ├─ fs-init                    the initfs listing
-  └─ device-manager
-       ├─ pci-bus, acpi-bus     publish device records -> devmgr.inv
-       ├─ initfs rules          ata, fs-fat mount=/boot, net-stack, ...
-       └─ /boot rules           drivers spawned directly, or (ENV{RESTART})
-                                submitted to the supervisor as units
+  └─ supervisor                 (boot module; marked critical)
+       ├─ fs-manager            critical unit, from its boot module; "fs.vfs"
+       ├─ fs-tmpfs              critical; the tmpfs root, mount points are its directories
+       ├─ fs-init               critical; the initfs listing
+       └─ device-manager        critical
+            ├─ pci-bus, acpi-bus     publish device records -> devmgr.inv
+            ├─ initfs rules          ata, fs-fat mount=/boot, net-stack, ...
+            └─ /boot rules           drivers spawned directly, or (ENV{RESTART})
+                                     submitted to the supervisor as units
 
 kernel init (once fs-manager answers FSMGR_IPC_MOUNT_WAIT_REQ for /boot)
   └─ sysinit                    from /boot
        └─ /boot/system/sysinit.rc
-            ├─ service vt, logger, fontsvc, gfxcomp, cli@tty1  -> supervisor
-            ├─ spawn chardevc and the gfx apps; exec mkdir -p /var/log
+            ├─ service vt, logger, fontsvc, gfxcomp, menu_bar, cli@tty1  -> supervisor
+            ├─ spawn chardevc, gfx_smoke, calculator; exec mkdir -p /var/log
             └─ SUPERVISOR_IPC_BOOT_SUBMITTED_REQ  -> "[supervisor] boot complete"
 ```
 
 Kernel init waits for exactly one thing: `/boot` mounted, because sysinit's
 image is on it. It subscribes to `fs.vfs`, sends the mount wait to fs-manager,
-and panics with `init_no_boot_mount` if no answer comes within 60 s of
-device-manager's spawn. device-manager's READY says its rules were loaded; it
-is not a milestone anyone waits on.
+and panics with `init_no_boot_mount` if no answer comes within 60 s of the
+supervisor's spawn. device-manager's READY says its endpoints are live, like
+every service's; it is not a milestone anyone waits on.
 
 ---
 
@@ -867,17 +917,17 @@ rule-engine and in-memory device registry. The planned direction (from
   restarts. A rule names a restart policy and device-manager submits the
   driver as a unit (see "Rule Syntax", `ENV{RESTART}`). Clients rebind by name
   on hangup; endpoint identity is not preserved across a restart (see the
-  supervisor). DMA-capable drivers need a quiesce step -- Bus Master Enable
-  cleared, MSI/MSI-X vectors reclaimed, INTx unbound, DMA borrows revoked --
-  before a replacement may start, and until it exists they stay
-  device-manager-spawned.
+  supervisor). A DMA-capable PCI driver is supervised with its function in
+  its grants, which the kernel quiesces at the driver's end; virtio-rng is.
+  virtio-blk, ata and virtio-net stay device-manager-spawned until their
+  clients' rebind is decided (mounts, open files, sockets).
 - **Dynamic mount policy.** Mount assignments as rule outcomes, not
   compile-time constants. `fs-manager` remains the namespace router.
 - **Unified block-device identity.** All transports normalize to
   `block:<parent-address>:<unit>` canonical IDs.
 
-What is **not yet implemented**: supervision of PCI and DMA drivers (the
-quiesce step), liveness probes for drivers, retraction of a unit on device
+What is **not yet implemented**: supervision of the storage and network DMA
+drivers, liveness probes for drivers, retraction of a unit on device
 removal (hotplug), IRQ bind/unbind delegation to driver endpoints.
 
 DMA-specific design details are tracked in `docs/architecture/12-dma-transfers.md`.

@@ -20,3 +20,9 @@ stack_size = 16384
 [[capabilities]]
 name = "ipc.basic"
 flags = 0
+
+# svc.control: `service` lines submit units to the supervisor, and the end of
+# the script declares the boot set.
+[[capabilities]]
+name = "svc.control"
+flags = 0

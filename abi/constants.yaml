@@ -319,7 +319,14 @@ groups:
 
       A reader MUST reject a descriptor whose version it does not know.
     constants:
-      - { symbol: SPAWN_WATCH_DESC_VERSION, value: 2, doc: "Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len)." }
+      - { symbol: SPAWN_WATCH_DESC_VERSION, value: 3, doc: "Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len; 3: flags)." }
+      - symbol: SPAWN_WATCH_FLAG_MODULE
+        value: 0x1
+        doc: |
+          The path is the name of a boot module (the app name its .wap embeds),
+          spawned from its in-memory image rather than read through the
+          filesystem, so a watched spawn can start the services the filesystem
+          itself needs. Such a spawn carries no arguments and no tty pin.
       - symbol: SPAWN_WATCH_DEPS_MAX
         value: 16
         doc: |
@@ -489,9 +496,9 @@ groups:
       - symbol: SUPERVISOR_CAPS_MAX
         value: 64
         doc: |
-          Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t
-          and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT
-          ranges fit, DMA windows are refused.
+          Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t,
+          its I/O ranges and DMA window) may take: a header,
+          WASMOS_IO_RANGE_LIMIT ranges and one DMA window fit.
       - { symbol: SUPERVISOR_SPEC_MAX, value: 255, doc: "Longest unit spec a submission carries, NUL excluded." }
       - { symbol: SUPERVISOR_UNIT_NAME_MAX, value: 35, doc: "Longest unit name (template@instance), NUL excluded: a service name's ceiling." }
 
@@ -544,3 +551,21 @@ groups:
       - { symbol: SUPERVISOR_CLASS_OPTIONAL, value: 0, doc: "Given up on alone." }
       - { symbol: SUPERVISOR_CLASS_REQUIRED, value: 1, doc: "Given up on; the system runs degraded." }
       - { symbol: SUPERVISOR_CLASS_CRITICAL, value: 2, doc: "Never restarted: its first death takes the system down." }
+
+  - name: capability
+    doc: |
+      Capability kinds, as ipc_endpoint_has_cap asks about them. Each is the kind
+      a manifest [[capabilities]] name grants (docs/architecture/10-capability-and-policy.md);
+      the kernel's capability_kind_t takes the same values.
+    constants:
+      - { symbol: WASMOS_CAP_IO_PORT, value: 0, doc: "io.port: x86 I/O port access." }
+      - { symbol: WASMOS_CAP_IRQ_ROUTE, value: 1, doc: "irq.route: route hardware IRQ lines to an endpoint." }
+      - { symbol: WASMOS_CAP_MMIO_MAP, value: 2, doc: "mmio.map: map MMIO regions." }
+      - { symbol: WASMOS_CAP_DMA_BUFFER, value: 3, doc: "dma.buffer: DMA buffer host calls." }
+      - { symbol: WASMOS_CAP_SYSTEM_CONTROL, value: 4, doc: "system.control: halt, reboot, power off." }
+      - { symbol: WASMOS_CAP_SUBSYSTEM_REGISTER, value: 5, doc: "subsystem.register: broker subsystems and exec-format handlers." }
+      - { symbol: WASMOS_CAP_SVC_CLASS_REGISTER, value: 6, doc: "svc.class: register under a virtual service class." }
+      - { symbol: WASMOS_CAP_CONSOLE_OWNER, value: 7, doc: "console.owner: register the console ring." }
+      - { symbol: WASMOS_CAP_SPAWN_GRANT, value: 8, doc: "spawn.grant: put hardware grants on a spawned child, directly or through the supervisor." }
+      - { symbol: WASMOS_CAP_SVC_CONTROL, value: 9, doc: "svc.control: submit, kill and declare the boot set at the supervisor." }
+      - { symbol: WASMOS_CAP_PCI_CONFIG, value: 10, doc: "pci.config: read and write PCI configuration space (pci_config_read/pci_config_write)." }

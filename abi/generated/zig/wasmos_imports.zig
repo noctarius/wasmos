@@ -777,3 +777,55 @@ pub extern "wasmos" fn kmsg_subscribe(a0: i32) callconv(.c) i32;
 /// module. A snapshot: another process can take or free a slot at once. Returns
 /// 0, or WASMOS_ERR_KERNEL_BAD_POINTER when `out` is outside linear memory.
 pub extern "wasmos" fn linmem_slots(a0: i32) callconv(.c) i32;
+/// Whether the process that owns `endpoint` holds capability `cap`
+/// (WASMOS_CAP_*, abi/constants.yaml). A server asks this about a request's
+/// source endpoint, which the kernel has verified the sender owns, to
+/// authorize the request. The answer is about the endpoint's owner when
+/// asked. Returns 1 when the owner holds it, 0 when it does not, WASMOS_INVAL
+/// for a negative endpoint or an unknown capability, or WASMOS_NOENT for an
+/// endpoint with no live owner or one the kernel owns.
+pub extern "wasmos" fn ipc_endpoint_has_cap(a0: i32, a1: i32) callconv(.c) i32;
+/// Read the dword at register `reg` of PCI function `bdf` (bus << 8 |
+/// device << 3 | function) into `out`. The value comes back through `out`
+/// because a config read legitimately returns all-ones, for an absent
+/// function among others. The kernel serialises every config access, so the
+/// address/data port pair is never interleaved with another caller's or with
+/// the kernel's own quiesce of a dead driver's function. Requires the
+/// pci.config capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
+/// WASMOS_INVAL for a bdf above 0xFFFF or a register that is above 0xFC or
+/// not dword-aligned, or WASMOS_ERR_KERNEL_BAD_POINTER; `out` is left
+/// untouched on failure.
+pub extern "wasmos" fn pci_config_read(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
+/// Write `value` to the dword at register `reg` of PCI function `bdf`, under
+/// the same serialisation as pci_config_read. Requires the pci.config
+/// capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED, or WASMOS_INVAL
+/// for a bdf above 0xFFFF or a register that is above 0xFC or not
+/// dword-aligned.
+pub extern "wasmos" fn pci_config_write(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
+/// Whether the process that owns `endpoint` -- a request's source, which the
+/// transport has verified -- may drive PCI function `bdf`: 0 when no spawn
+/// profile ever named the function or this process's profile does, otherwise
+/// WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER (another process drives it, its driver
+/// ended and the kernel retired it, or the endpoint has no live owner).
+/// Requires the pci.config capability (WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
+/// WASMOS_INVAL for a negative endpoint or a bdf above 0xFFFF.
+pub extern "wasmos" fn pci_function_check(a0: i32, a1: i32) callconv(.c) i32;
+/// pci_config_write on behalf of the process that owns `endpoint`: written
+/// only when pci_function_check allows it, judged under the lock that also
+/// serialises the kernel's quiesce of a dead driver's function, so a request
+/// its driver sent before it ended cannot turn bus mastering or MSI back on.
+/// Returns 0, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER,
+/// WASMOS_ERR_KERNEL_NOT_AUTHORIZED without pci.config, or WASMOS_INVAL for a
+/// negative endpoint, a bdf above 0xFFFF or a register above 0xFC or not
+/// dword-aligned.
+pub extern "wasmos" fn pci_config_write_for(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
+/// Before waiting on `waiter` (an endpoint the caller owns) for an answer
+/// from `awaited`, ask to hear of awaited's end there: once the process that
+/// owns `awaited` now is reaped, `waiter` receives WASMOS_IPC_HANGUP with
+/// arg0 = awaited. A server that dies before ever sending to the waiter owes
+/// it no other hangup. One await per waiter; registering again replaces the
+/// last, so a caller registers before each call. Returns 0, WASMOS_NOENT when
+/// `awaited` has no live owner (its answer cannot come), WASMOS_DENIED for a
+/// waiter the caller does not own, WASMOS_INVAL for a negative handle or a
+/// waiter that is not a message endpoint, or WASMOS_FULL.
+pub extern "wasmos" fn ipc_peer_await(a0: i32, a1: i32) callconv(.c) i32;

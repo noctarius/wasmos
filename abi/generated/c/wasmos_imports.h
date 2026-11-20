@@ -889,5 +889,63 @@ extern int32_t wasmos_kmsg_subscribe(int32_t endpoint) WASMOS_WASM_IMPORT("wasmo
  * 0, or WASMOS_ERR_KERNEL_BAD_POINTER when `out` is outside linear memory.
  */
 extern int32_t wasmos_linmem_slots(wasmos_linmem_slot_stats_t* out) WASMOS_WASM_IMPORT("wasmos", "linmem_slots");
+/* Whether the process that owns `endpoint` holds capability `cap`
+ * (WASMOS_CAP_*, abi/constants.yaml). A server asks this about a request's
+ * source endpoint, which the kernel has verified the sender owns, to
+ * authorize the request. The answer is about the endpoint's owner when
+ * asked. Returns 1 when the owner holds it, 0 when it does not, WASMOS_INVAL
+ * for a negative endpoint or an unknown capability, or WASMOS_NOENT for an
+ * endpoint with no live owner or one the kernel owns.
+ */
+extern int32_t wasmos_ipc_endpoint_has_cap(int32_t endpoint, int32_t cap) WASMOS_WASM_IMPORT("wasmos", "ipc_endpoint_has_cap");
+/* Read the dword at register `reg` of PCI function `bdf` (bus << 8 |
+ * device << 3 | function) into `out`. The value comes back through `out`
+ * because a config read legitimately returns all-ones, for an absent
+ * function among others. The kernel serialises every config access, so the
+ * address/data port pair is never interleaved with another caller's or with
+ * the kernel's own quiesce of a dead driver's function. Requires the
+ * pci.config capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
+ * WASMOS_INVAL for a bdf above 0xFFFF or a register that is above 0xFC or
+ * not dword-aligned, or WASMOS_ERR_KERNEL_BAD_POINTER; `out` is left
+ * untouched on failure.
+ */
+extern int32_t wasmos_pci_config_read(int32_t bdf, int32_t reg, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "pci_config_read");
+/* Write `value` to the dword at register `reg` of PCI function `bdf`, under
+ * the same serialisation as pci_config_read. Requires the pci.config
+ * capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED, or WASMOS_INVAL
+ * for a bdf above 0xFFFF or a register that is above 0xFC or not
+ * dword-aligned.
+ */
+extern int32_t wasmos_pci_config_write(int32_t bdf, int32_t reg, int32_t value) WASMOS_WASM_IMPORT("wasmos", "pci_config_write");
+/* Whether the process that owns `endpoint` -- a request's source, which the
+ * transport has verified -- may drive PCI function `bdf`: 0 when no spawn
+ * profile ever named the function or this process's profile does, otherwise
+ * WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER (another process drives it, its driver
+ * ended and the kernel retired it, or the endpoint has no live owner).
+ * Requires the pci.config capability (WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
+ * WASMOS_INVAL for a negative endpoint or a bdf above 0xFFFF.
+ */
+extern int32_t wasmos_pci_function_check(int32_t endpoint, int32_t bdf) WASMOS_WASM_IMPORT("wasmos", "pci_function_check");
+/* pci_config_write on behalf of the process that owns `endpoint`: written
+ * only when pci_function_check allows it, judged under the lock that also
+ * serialises the kernel's quiesce of a dead driver's function, so a request
+ * its driver sent before it ended cannot turn bus mastering or MSI back on.
+ * Returns 0, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER,
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED without pci.config, or WASMOS_INVAL for a
+ * negative endpoint, a bdf above 0xFFFF or a register above 0xFC or not
+ * dword-aligned.
+ */
+extern int32_t wasmos_pci_config_write_for(int32_t endpoint, int32_t bdf, int32_t reg, int32_t value) WASMOS_WASM_IMPORT("wasmos", "pci_config_write_for");
+/* Before waiting on `waiter` (an endpoint the caller owns) for an answer
+ * from `awaited`, ask to hear of awaited's end there: once the process that
+ * owns `awaited` now is reaped, `waiter` receives WASMOS_IPC_HANGUP with
+ * arg0 = awaited. A server that dies before ever sending to the waiter owes
+ * it no other hangup. One await per waiter; registering again replaces the
+ * last, so a caller registers before each call. Returns 0, WASMOS_NOENT when
+ * `awaited` has no live owner (its answer cannot come), WASMOS_DENIED for a
+ * waiter the caller does not own, WASMOS_INVAL for a negative handle or a
+ * waiter that is not a message endpoint, or WASMOS_FULL.
+ */
+extern int32_t wasmos_ipc_peer_await(int32_t waiter, int32_t awaited) WASMOS_WASM_IMPORT("wasmos", "ipc_peer_await");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

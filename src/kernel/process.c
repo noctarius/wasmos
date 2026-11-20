@@ -9,7 +9,9 @@
 #include "wasm3/shim.h"
 #include "ipc.h"
 #include "irq.h"
+#include "capability.h"
 #include "msi.h"
+#include "pci_config.h"
 #include "timer.h"
 #include "thread.h"
 #include "process_manager.h"
@@ -919,6 +921,7 @@ static void process_reset_slot(process_t* proc) {
     proc->reap_requested = 0;
     proc->needs_runtime_lock = 0;
     proc->ready = 0;
+    proc->require_explicit_ready = 0;
     process_clear_runtime_tag(proc);
     proc->ctx = (process_context_t){0};
     proc->ctx_canary_pre = 0;
@@ -1304,6 +1307,14 @@ static void process_reap(process_t* proc) {
                                              proc->stack_pages);
         pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
     }
+    /* Before anything is released and before the spawner hears of the exit:
+     * until its function is quiesced the device may still master into the DMA
+     * regions and borrows released below, or raise a vector msi_release_context
+     * hands to someone else, and a supervisor starts the replacement on the
+     * exit event. */
+    if (proc->context_id != 0) {
+        pci_quiesce_context(proc->context_id, proc->pid);
+    }
     /* The spawner learns of the exit here, beside the hangups the context owes,
      * with the same delivery guarantee. A READY still held was never earned. */
     ipc_owed_cancel(__atomic_exchange_n(&proc->watch_ready, NULL, __ATOMIC_ACQ_REL));
@@ -1322,6 +1333,7 @@ static void process_reap(process_t* proc) {
          * physical address, and the ring is one of them. */
         klog_release_ring(proc->context_id);
         xfer_buffer_drop_context(proc->context_id);
+        capability_release_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);
     }
     if (proc->pid != 0) {
@@ -1525,6 +1537,10 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->watch_exit = 0;
     slot->critical = 0;
     slot->live_endpoint = IPC_ENDPOINT_NONE;
+    /* Set again only by the ready-gated spawn: a slot must not pass its last
+     * occupant's gate to an app, which latches READY on its first receive. */
+    slot->ready = 0;
+    slot->require_explicit_ready = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -1735,6 +1751,10 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->watch_exit = 0;
     slot->critical = 0;
     slot->live_endpoint = IPC_ENDPOINT_NONE;
+    /* Set again only by the ready-gated spawn: a slot must not pass its last
+     * occupant's gate to an app, which latches READY on its first receive. */
+    slot->ready = 0;
+    slot->require_explicit_ready = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;

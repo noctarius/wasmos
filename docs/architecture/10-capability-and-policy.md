@@ -2,9 +2,9 @@
 
 > **Documentation status: Implemented reference with deferred IOMMU work.**
 
-This document describes the kernel capability model: the seven capability kinds,
-per-context storage, the spawn profile, capability enforcement at each action
-site, and the IRQ-route policy table.
+This document describes the kernel capability model: the capability kinds,
+per-context storage, the spawn profile and who may request one, capability
+enforcement at each action site, and the IRQ-route policy table.
 
 **Sources**: `src/kernel/capability.c`, `src/kernel/policy.c`,
 `src/kernel/include/capability.h`, `src/kernel/include/policy.h`
@@ -43,9 +43,14 @@ typedef enum {
     CAP_SYSTEM_CONTROL    = 4,   // mask bit 4: system halt, reboot, power-off
     CAP_SUBSYSTEM_REGISTER= 5,   // mask bit 5: register broker subsystems + exec-format handlers
     CAP_SVC_CLASS_REGISTER= 6,   // mask bit 6: register a service under a virtual class
+    CAP_CONSOLE_OWNER     = 7,   // mask bit 7: register the console ring
+    CAP_SPAWN_GRANT       = 8,   // mask bit 8: put hardware grants on a spawned child
+    CAP_SVC_CONTROL       = 9,   // mask bit 9: submit, kill, declare the boot set (supervisor)
+    CAP_PCI_CONFIG        = 10,  // mask bit 10: PCI config space (pci_config_read/write)
 } capability_kind_t;
 
-#define CAP_ALL_MASK  ((1u << 7) - 1u)   // 0x7F — all seven bits
+#define CAPABILITY_KIND_COUNT 11u
+#define CAP_ALL_MASK  ((1u << 11) - 1u)   // every kind
 #define CAPABILITY_DMA_WINDOW_LIMIT 16u
 ```
 
@@ -62,13 +67,22 @@ these kinds via `capability_grant_name`:
 | `"subsystem.register"` | `CAP_SUBSYSTEM_REGISTER` |
 | `"svc.class"`          | `CAP_SVC_CLASS_REGISTER` |
 | `"console.owner"`      | `CAP_CONSOLE_OWNER`      |
+| `"spawn.grant"`        | `CAP_SPAWN_GRANT`        |
+| `"svc.control"`        | `CAP_SVC_CONTROL`        |
+| `"pci.config"`         | `CAP_PCI_CONFIG`         |
 
-Any unrecognized name returns -1 and grants nothing. `CAP_SVC_CLASS_REGISTER`
+The kind values are ABI: `abi/constants.yaml` publishes them as `WASMOS_CAP_*`,
+and `capability.h` asserts that the enum matches. Any unrecognized name returns
+-1 and grants nothing. `CAP_SVC_CLASS_REGISTER`
 gates registering a service under a virtual class (class-based discovery,
 [Process and IPC](09-process-and-ipc.md)); the plain name registration path is
 ungated. `CAP_CONSOLE_OWNER` gates `klog_register_ring`: the console ring
 receives every tty's output and the kernel log, and its registrant owns COM1
 ([Virtual Terminal](19-virtual-terminal.md)); only the vt declares it.
+
+`CAP_SPAWN_GRANT` and `CAP_SVC_CONTROL` gate requests rather than hardware;
+see "Requester Checks" below. `CAP_PCI_CONFIG` gates the
+`pci_config_read` / `pci_config_write` host calls; only pci-bus declares it.
 
 ---
 
@@ -116,6 +130,87 @@ stable for the lifetime of the process.
 - `cap_flags` bit 3: enable DMA direction/range restriction.
 - If DMA is enabled, `dma_window_count` must be `> 0` and `≤
   CAPABILITY_DMA_WINDOW_LIMIT`; the window array is copied in full.
+
+---
+
+### Requester Checks
+
+A spawn profile is authority the *requester* chooses: the manifest grants a
+kind, the profile picks the I/O windows, IRQ lines and DMA windows -- including
+DMA windows over arbitrary physical memory. So who may request one is checked:
+
+- **Process manager.** Every spawn that carries a profile
+  (`PROC_IPC_SPAWN_CAPS`, `_CAPS_V2`, `_CAPS_SYNC`, `_PATH_CAPS`,
+  `_PATH_CAPS_SYNC`, and `PROC_IPC_SPAWN_WATCHED` with a capability descriptor)
+  asks `pm_caps_grant_allowed` before the child is created. A profile with any
+  `cap_flags` bit set requires the requester to hold `spawn.grant`; otherwise
+  the request is refused with `GRANT_NOT_AUTHORIZED` (`proc_pm`, or
+  `proc_spawn` for a watched spawn) and nothing is spawned. A profile with no
+  bits set only narrows the child and is open to everyone. Holders:
+  device-manager and the supervisor.
+- **Supervisor.** Submitting a unit, killing one and declaring the boot set
+  require `svc.control` (`WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED`); listing is
+  open. A submission carrying a capability descriptor also requires
+  `spawn.grant` (`WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED`): the supervisor
+  spawns the unit under its own name, so it relays grants only from a submitter
+  the process manager would accept them from directly. Holders of
+  `svc.control`: sysinit, device-manager and the `svc` utility.
+
+A user-space server learns what a sender holds with the
+`ipc_endpoint_has_cap(endpoint, cap)` host call, asked about the request's
+source endpoint: the transport refuses a source the sender does not own, so its
+owner is the sender. The answer is about the owner when asked; a sender that
+has exited answers `WASMOS_NOENT`.
+
+A capability is held because the module's manifest declares it, and nothing
+checks that the image is entitled to declare it: any `.wap` on any path --
+`/boot`, `/user` and `/wfs` are writable -- can declare `spawn.grant`,
+`svc.control` or `system.control` and be spawned with them by any process. So
+the requester checks keep a process from exercising an authority it does not
+hold, but not from spawning an image that does: a privileged utility such as
+`svc` is a deputy any process can start with arguments of its choosing. Closing
+that needs a capability policy over images (`docs/TASKS.md`).
+
+---
+
+### Device Quiesce
+
+A spawn profile may name the PCI function its device sits at
+(`DEVMGR_CAP_PCI_FUNCTION`, `wasmos_spawn_dma_caps_t.pci_function`; only the
+descriptor forms can carry it, and the packed spawn forms refuse the bit).
+Naming one is a grant like any other cap bit, so it needs `spawn.grant`. The
+kernel records the process as the function's driver (`pci_function_attach`)
+and, when the process ends, quiesces that function (`pci_quiesce_context`, `src/kernel/pci_config.c`):
+Bus Master Enable cleared, INTx Disable set, the MSI and MSI-X enable bits
+cleared, then a read-back so the writes have reached the device. This runs
+first in the reap -- before the spawner's `PROC_IPC_CHILD_EXITED` is posted and
+before the context's IRQ routes, MSI vectors, DMA regions and borrows are
+released -- so no frame the device could still write is recycled while it can,
+and no supervisor restarts a driver for a device that is still mastering. It
+logs `[pci] quiesced <bb>:<dd>.<f>: bus mastering and MSI off for pid <n>`.
+
+The device's own state is not reset: its queues still name the old frames, so
+a new driver resets the device before it turns bus mastering on again (an MSI
+bind through pci-bus does that). A driver that falls back to INTx finds INTx
+disabled and bus mastering off, and nothing turns either back on for it yet.
+
+Config space is reached through the kernel only: `pci_config_read` /
+`pci_config_write` (`pci.config`) hold the same lock as the quiesce across the
+0xCF8/0xCFC address/data pair.
+
+A function is *unmanaged* until a spawn profile names it, *owned* by that
+process while it lives, and *retired* once its reap has quiesced it, until a
+new driver names it. pci-bus arms a function -- MSI and MSI-X enable, MSI
+address and data, bus mastering -- only on behalf of the requesting driver:
+`pci_function_check(endpoint, bdf)` before it touches the binding, and
+`pci_config_write_for(endpoint, bdf, ...)` for each arming write, which the
+kernel performs only while the endpoint's owner drives the function, judged
+under the quiesce's lock. A bind a driver sent before it died therefore cannot
+re-arm the device after the reap, and no other process can drive an owned
+function (`WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER`). A function no profile named
+stays open to its first claimant, as before. When a binding passes from a dead
+driver to its replacement, pci-bus masks the dead driver's MSI-X entries first,
+since their vectors went back to the kernel at its reap.
 
 ---
 
@@ -219,8 +314,8 @@ short-circuits to return 1).
 
 ### Structural Invariants
 
-1. **Kernel context is omnipotent.** Context id 0 holds all seven capability
-   bits at init and bypasses the IRQ policy table.
+1. **Kernel context is omnipotent.** Context id 0 holds every capability bit
+   at init and bypasses the IRQ policy table.
 
 2. **Spawn profile is optional but binding once set.** Without a profile,
    only capability presence is checked (permissive). Once set, the profile

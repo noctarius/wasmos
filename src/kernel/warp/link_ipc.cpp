@@ -7,6 +7,7 @@
 #include <cstdint>
 
 extern "C" {
+#include "capability.h"
 #include "ipc.h"
 #include "klog.h"
 #include "process.h"
@@ -40,6 +41,31 @@ uint32_t warp_ipc_endpoint_owner(uint32_t endpoint, void* ctx_) {
     if (!owner)
         return (uint32_t)IPC_ERR_NOENT; /* kernel-owned reads as "not yours to see" */
     return owner;
+}
+
+/* The answer is about the endpoint's owner at the time of the call; a kernel-owned
+ * endpoint answers NOENT, as for ipc_endpoint_owner, rather than "holds all". */
+uint32_t warp_ipc_endpoint_has_cap(uint32_t endpoint, uint32_t cap, void* ctx_) {
+    (void)ctx_;
+    uint32_t owner = 0;
+    if ((int32_t)endpoint < 0 || cap >= CAPABILITY_KIND_COUNT)
+        return (uint32_t)IPC_ERR_INVALID;
+    int owner_rc = ipc_endpoint_owner(endpoint, &owner);
+    if (owner_rc != IPC_OK)
+        return (uint32_t)owner_rc;
+    if (!owner)
+        return (uint32_t)IPC_ERR_NOENT;
+    return capability_has(owner, (capability_kind_t)cap) ? 1u : 0u;
+}
+
+uint32_t warp_ipc_peer_await(uint32_t waiter, uint32_t awaited, void* ctx_) {
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if ((int32_t)waiter < 0 || (int32_t)awaited < 0)
+        return (uint32_t)IPC_ERR_INVALID;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)IPC_ERR_NOENT;
+    return (uint32_t)ipc_peer_await(context_id, waiter, awaited);
 }
 
 /* Negative handles are rejected before the cast, matching wasm3. Casting first

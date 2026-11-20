@@ -17,12 +17,9 @@
  * pointer, checking the range is permitted, copying in and out. None of that
  * belongs to the store, and it is the only part that genuinely differs.
  *
- * The store is a fixed table of KENV_MAX_ENTRIES slots holding no lock; the
- * kernel never touches it from interrupt context.
- *
- * FIXME: nothing serializes two CPUs entering kenv_set/kenv_unset at the same
- * time, so concurrent host calls from different guests can both claim the same
- * free slot. Give the table a spinlock if a second guest ever writes it.
+ * The store is a fixed table of KENV_MAX_ENTRIES slots behind one spinlock,
+ * so guests on different CPUs may set, unset and read it at once; the kernel
+ * never touches it from interrupt context.
  */
 
 #define KENV_MAX_ENTRIES 64

@@ -83,7 +83,12 @@ transferable, not reborrowable).
   list; no DMA without `CAP_DMA_BUFFER` and a matching window.
 - **Deterministic teardown.** On process exit, `xfer_buffer_drop_context`
   force-revokes every borrow the context issued or holds (and their DMA), and
-  destroys objects it owned.
+  destroys objects it owned. Before any of that -- and before the spawner
+  hears of the exit -- the kernel quiesces the PCI function the context's spawn
+  profile names (bus mastering, MSI/MSI-X and INTx off; `pci_quiesce_context`),
+  so the device cannot write into frames that are about to be recycled. A
+  driver whose profile names no function gets no quiesce
+  ([Capability and Policy](10-capability-and-policy.md), "Device Quiesce").
 - **No IOMMU required.** The baseline uses physical addresses directly; a future
   IOMMU backend would return an IOVA from the DMA-map path while keeping the
   driver-facing ABI unchanged.

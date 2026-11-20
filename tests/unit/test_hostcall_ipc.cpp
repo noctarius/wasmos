@@ -12,8 +12,8 @@
  * nothing else; WARP's take an unused per-call context pointer. Neither needs a
  * live engine, module or instance.
  *
- * The kernel side is real: the tests link the actual ipc.c, poll.c and
- * sched_event.c, so a shim's return value is produced by the transport it
+ * The kernel side is real: the tests link the actual ipc.c, poll.c,
+ * sched_event.c and capability.c, so a shim's return value is produced by the transport it
  * really talks to. Only the process/thread environment is stubbed.
  */
 
@@ -25,6 +25,7 @@
 #include "test_shuffle.h"
 
 extern "C" {
+#include "capability.h"
 #include "ipc.h"
 #include "process.h"
 #include "sched.h"
@@ -204,6 +205,23 @@ int warp_current_context_id(uint32_t* out) {
     return current_process_context(out);
 }
 
+/* capability.c matches manifest capability names with this; the kernel's own
+ * definition lives in libc.c, which cannot be linked into a host binary. The
+ * contract is kernel/include/string.h's: 1 only when the lengths match. */
+int str_eq_bytes(const uint8_t* bytes, size_t bytes_len, const char* lit) {
+    size_t i = 0;
+    if (!bytes || !lit) {
+        return 0;
+    }
+    while (lit[i]) {
+        if (i >= bytes_len || bytes[i] != (uint8_t)lit[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return i == bytes_len;
+}
+
 } /* extern "C" */
 
 /* ------------------------------------------- wasm3 raw-call invocation */
@@ -299,6 +317,8 @@ struct Shims {
     const char* name;
     int32_t (*create_endpoint)(void);
     int32_t (*endpoint_owner)(int32_t ep);
+    int32_t (*endpoint_has_cap)(int32_t ep, int32_t cap);
+    int32_t (*peer_await)(int32_t waiter, int32_t awaited);
     int32_t (*send)(int32_t dst, int32_t src, int32_t type, int32_t rid, int32_t a0);
     int32_t (*drain)(int32_t ep);
     int32_t (*notify)(int32_t ep);
@@ -314,6 +334,12 @@ static int32_t w3_create_endpoint(void) {
 }
 static int32_t w3_endpoint_owner(int32_t ep) {
     return w3_call(wasmos_ipc_endpoint_owner, {ep});
+}
+static int32_t w3_endpoint_has_cap(int32_t ep, int32_t cap) {
+    return w3_call(wasmos_ipc_endpoint_has_cap, {ep, cap});
+}
+static int32_t w3_peer_await(int32_t waiter, int32_t awaited) {
+    return w3_call(wasmos_ipc_peer_await, {waiter, awaited});
 }
 static int32_t w3_send(int32_t d, int32_t s, int32_t t, int32_t r, int32_t a0) {
     return w3_call(wasmos_ipc_send, {d, s, t, r, a0, 0, 0, 0});
@@ -346,6 +372,12 @@ static int32_t wp_create_endpoint(void) {
 static int32_t wp_endpoint_owner(int32_t ep) {
     return (int32_t)warp_ipc_endpoint_owner((uint32_t)ep, nullptr);
 }
+static int32_t wp_endpoint_has_cap(int32_t ep, int32_t cap) {
+    return (int32_t)warp_ipc_endpoint_has_cap((uint32_t)ep, (uint32_t)cap, nullptr);
+}
+static int32_t wp_peer_await(int32_t waiter, int32_t awaited) {
+    return (int32_t)warp_ipc_peer_await((uint32_t)waiter, (uint32_t)awaited, nullptr);
+}
 static int32_t wp_send(int32_t d, int32_t s, int32_t t, int32_t r, int32_t a0) {
     return (int32_t)warp_ipc_send(
         (uint32_t)d, (uint32_t)s, (uint32_t)t, (uint32_t)r, (uint32_t)a0, 0, 0, 0, nullptr);
@@ -375,6 +407,8 @@ static int32_t wp_select_destroy(int32_t sel) {
 static const Shims k_wasm3 = {"wasm3",
                               w3_create_endpoint,
                               w3_endpoint_owner,
+                              w3_endpoint_has_cap,
+                              w3_peer_await,
                               w3_send,
                               w3_drain,
                               w3_notify,
@@ -386,6 +420,8 @@ static const Shims k_wasm3 = {"wasm3",
 static const Shims k_warp = {"WARP",
                              wp_create_endpoint,
                              wp_endpoint_owner,
+                             wp_endpoint_has_cap,
+                             wp_peer_await,
                              wp_send,
                              wp_drain,
                              wp_notify,
@@ -435,6 +471,38 @@ static int32_t s_owner_negative(const Shims& s) {
 }
 static int32_t s_owner_unknown(const Shims& s) {
     return s.endpoint_owner(0x7FFFFFFF);
+}
+/* OTHER_CTX holds svc.control (granted once in main) and nothing else;
+ * CALLER_CTX holds nothing. */
+static int32_t s_has_cap_held(const Shims& s) {
+    return s.endpoint_has_cap((int32_t)g_env.foreign_ep, WASMOS_CAP_SVC_CONTROL);
+}
+static int32_t s_has_cap_other_kind(const Shims& s) {
+    return s.endpoint_has_cap((int32_t)g_env.foreign_ep, WASMOS_CAP_SPAWN_GRANT);
+}
+static int32_t s_has_cap_not_held(const Shims& s) {
+    return s.endpoint_has_cap((int32_t)g_env.msg_ep, WASMOS_CAP_SVC_CONTROL);
+}
+static int32_t s_has_cap_negative(const Shims& s) {
+    return s.endpoint_has_cap(-1, WASMOS_CAP_SVC_CONTROL);
+}
+static int32_t s_has_cap_unknown_cap(const Shims& s) {
+    return s.endpoint_has_cap((int32_t)g_env.foreign_ep, (int32_t)CAPABILITY_KIND_COUNT);
+}
+static int32_t s_has_cap_unknown_endpoint(const Shims& s) {
+    return s.endpoint_has_cap(0x7FFFFFFF, WASMOS_CAP_SVC_CONTROL);
+}
+static int32_t s_peer_await_ok(const Shims& s) {
+    return s.peer_await((int32_t)g_env.msg_ep, (int32_t)g_env.foreign_ep);
+}
+static int32_t s_peer_await_negative(const Shims& s) {
+    return s.peer_await(-1, (int32_t)g_env.foreign_ep);
+}
+static int32_t s_peer_await_gone(const Shims& s) {
+    return s.peer_await((int32_t)g_env.msg_ep, 0x7FFFFFFF);
+}
+static int32_t s_peer_await_foreign_waiter(const Shims& s) {
+    return s.peer_await((int32_t)g_env.foreign_ep, (int32_t)g_env.msg_ep);
 }
 static int32_t s_send_ok(const Shims& s) {
     return s.send((int32_t)g_env.msg_ep, (int32_t)g_env.msg_ep, 7, 1, 42);
@@ -554,6 +622,16 @@ static const Scenario k_scenarios[] = {
     {"endpoint_owner(owned)", (int32_t)CALLER_CTX, (int32_t)CALLER_CTX, false, s_owner_ok, nullptr},
     {"endpoint_owner(negative handle)", -1, -1, false, s_owner_negative, nullptr},
     {"endpoint_owner(unknown)", -4, -4, false, s_owner_unknown, nullptr},
+    {"peer_await(own waiter, live awaited)", 0, 0, false, s_peer_await_ok, nullptr},
+    {"peer_await(negative handle)", -1, -1, false, s_peer_await_negative, nullptr},
+    {"peer_await(awaited has no owner)", -4, -4, false, s_peer_await_gone, nullptr},
+    {"peer_await(waiter not the caller's)", -2, -2, false, s_peer_await_foreign_waiter, nullptr},
+    {"endpoint_has_cap(owner holds it)", 1, 1, false, s_has_cap_held, nullptr},
+    {"endpoint_has_cap(owner holds another)", 0, 0, false, s_has_cap_other_kind, nullptr},
+    {"endpoint_has_cap(owner holds nothing)", 0, 0, false, s_has_cap_not_held, nullptr},
+    {"endpoint_has_cap(negative handle)", -1, -1, false, s_has_cap_negative, nullptr},
+    {"endpoint_has_cap(unknown capability)", -1, -1, false, s_has_cap_unknown_cap, nullptr},
+    {"endpoint_has_cap(unknown endpoint)", -4, -4, false, s_has_cap_unknown_endpoint, nullptr},
 
     {"send(valid)", 0, 0, false, s_send_ok, nullptr},
     {"send(negative destination)",
@@ -660,12 +738,14 @@ static const Scenario k_scenarios[] = {
 
 /* -------------------------------------------------------------------- main */
 
-/* Brings the real endpoint tables up once, then runs every scenario twice --
+/* Brings the real endpoint and capability tables up once, then runs every scenario twice --
  * once per runtime, each after its own reset() -- and makes three assertions per
  * row: the wasm3 value, the WARP value, and the relationship between them.
  * Returns 0 when g_failures is zero, 1 otherwise. */
 int main(void) {
     ipc_init();
+    capability_init();
+    (void)capability_grant_name(OTHER_CTX, (const uint8_t*)"svc.control", 11, 0);
     reset();
 
     int divergences = 0;

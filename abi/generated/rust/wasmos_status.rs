@@ -64,6 +64,8 @@ pub const WASMOS_ERR_PROC_SPAWN_NOTIFY_NOT_OWNED: i32 = -0x0001000D; // the noti
 pub const WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: i32 = -0x0001000E; // the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch
 pub const WASMOS_ERR_PROC_SPAWN_BAD_CAPS: i32 = -0x0001000F; // the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created
 pub const WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: i32 = -0x00010010; // the kernel refused the parsed capability profile for the new child, which was killed before it ran
+pub const WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED: i32 = -0x00010011; // the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created
+pub const WASMOS_ERR_PROC_SPAWN_NO_MODULE: i32 = -0x00010012; // the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created
 pub const WASMOS_ERR_PROC_PM_BUSY: i32 = -0x00020001; // PM already has an incompatible in-flight operation
 pub const WASMOS_ERR_PROC_PM_BAD_ENDPOINT: i32 = -0x00020002; // source endpoint owner lookup failed
 pub const WASMOS_ERR_PROC_PM_NO_CALLER: i32 = -0x00020003; // source endpoint owner has no live process
@@ -100,6 +102,7 @@ pub const WASMOS_ERR_PROC_PM_SVC_WATCH_SEND: i32 = -0x00020021; // a service wat
 pub const WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: i32 = -0x00020022; // a service watch could not acquire or fill the transfer buffer for its subscription descriptor
 pub const WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: i32 = -0x00020023; // the process manager answered a service-watch request with neither its response nor a packed error
 pub const WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: i32 = -0x00020024; // the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself
+pub const WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED: i32 = -0x00020025; // the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created
 pub const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 pub const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 pub const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -211,6 +214,7 @@ pub const WASMOS_ERR_MSI_NO_CAPABILITY: i32 = -0x00110008; // device exposes nei
 pub const WASMOS_ERR_MSI_BAD_ENTRY: i32 = -0x00110009; // table entry index is beyond the device's supported vector count
 pub const WASMOS_ERR_MSI_MAP_FAILED: i32 = -0x0011000A; // the MSI-X table BAR could not be mapped
 pub const WASMOS_ERR_MSI_NOT_DEVICE_OWNER: i32 = -0x0011000B; // another endpoint already programmed interrupts for this device
+pub const WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER: i32 = -0x0011000C; // the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it
 pub const WASMOS_ERR_IO_NOT_AUTHORIZED: i32 = -0x00120001; // caller has no io.port spawn profile, so it holds no I/O windows
 pub const WASMOS_ERR_IO_BAD_REGION: i32 = -0x00120002; // region index names no window this context was granted
 pub const WASMOS_ERR_IO_OUT_OF_WINDOW: i32 = -0x00120003; // offset falls outside the granted window's bounds
@@ -301,9 +305,11 @@ pub const WASMOS_ERR_SUPERVISOR_BAD_DESC: i32 = -0x001A0001; // the submission d
 pub const WASMOS_ERR_SUPERVISOR_BAD_SPEC: i32 = -0x001A0002; // the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option
 pub const WASMOS_ERR_SUPERVISOR_EXISTS: i32 = -0x001A0003; // a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed
 pub const WASMOS_ERR_SUPERVISOR_NO_SPACE: i32 = -0x001A0004; // the supervisor's unit table is full
-pub const WASMOS_ERR_SUPERVISOR_DMA_CAPS: i32 = -0x001A0005; // the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit
+pub const WASMOS_ERR_SUPERVISOR_DMA_CAPS: i32 = -0x001A0005; // the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance
 pub const WASMOS_ERR_SUPERVISOR_NO_UNIT: i32 = -0x001A0006; // no unit of the name the request gives is recorded
 pub const WASMOS_ERR_SUPERVISOR_NOT_RUNNING: i32 = -0x001A0007; // the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed
+pub const WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: i32 = -0x001A0008; // the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require
+pub const WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: i32 = -0x001A0009; // the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself
 
 #[inline]
 pub const fn wasmos_err_make(dom: u16, code: u16) -> i32 {
@@ -386,6 +392,8 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE => "the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch",
         WASMOS_ERR_PROC_SPAWN_BAD_CAPS => "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created",
         WASMOS_ERR_PROC_SPAWN_CAPS_APPLY => "the kernel refused the parsed capability profile for the new child, which was killed before it ran",
+        WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED => "the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created",
+        WASMOS_ERR_PROC_SPAWN_NO_MODULE => "the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created",
         WASMOS_ERR_PROC_PM_BUSY => "PM already has an incompatible in-flight operation",
         WASMOS_ERR_PROC_PM_BAD_ENDPOINT => "source endpoint owner lookup failed",
         WASMOS_ERR_PROC_PM_NO_CALLER => "source endpoint owner has no live process",
@@ -422,6 +430,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER => "a service watch could not acquire or fill the transfer buffer for its subscription descriptor",
         WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY => "the process manager answered a service-watch request with neither its response nor a packed error",
         WASMOS_ERR_PROC_PM_KILL_NOT_CHILD => "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself",
+        WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED => "the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created",
         WASMOS_ERR_LINMEM_NO_WINDOW => "no free page-aligned window fits in linear memory",
         WASMOS_ERR_LINMEM_MAP => "paging/linear-memory mapping step failed",
         WASMOS_ERR_LINMEM_NO_BASE => "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it",
@@ -533,6 +542,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_MSI_BAD_ENTRY => "table entry index is beyond the device's supported vector count",
         WASMOS_ERR_MSI_MAP_FAILED => "the MSI-X table BAR could not be mapped",
         WASMOS_ERR_MSI_NOT_DEVICE_OWNER => "another endpoint already programmed interrupts for this device",
+        WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER => "the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it",
         WASMOS_ERR_IO_NOT_AUTHORIZED => "caller has no io.port spawn profile, so it holds no I/O windows",
         WASMOS_ERR_IO_BAD_REGION => "region index names no window this context was granted",
         WASMOS_ERR_IO_OUT_OF_WINDOW => "offset falls outside the granted window's bounds",
@@ -623,9 +633,11 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_SUPERVISOR_BAD_SPEC => "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option",
         WASMOS_ERR_SUPERVISOR_EXISTS => "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed",
         WASMOS_ERR_SUPERVISOR_NO_SPACE => "the supervisor's unit table is full",
-        WASMOS_ERR_SUPERVISOR_DMA_CAPS => "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit",
+        WASMOS_ERR_SUPERVISOR_DMA_CAPS => "the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance",
         WASMOS_ERR_SUPERVISOR_NO_UNIT => "no unit of the name the request gives is recorded",
         WASMOS_ERR_SUPERVISOR_NOT_RUNNING => "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed",
+        WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED => "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require",
+        WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED => "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself",
         _ => "unknown error",
     }
 }

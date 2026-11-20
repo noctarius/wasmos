@@ -21,6 +21,7 @@
 #include "framebuffer.h"
 #include "irq.h"
 #include "msi.h"
+#include "pci_config.h"
 #include "mmio.h"
 #include "policy.h"
 #include "capability.h"
@@ -1912,6 +1913,84 @@ m3ApiRawFunction(wasmos_io_in32) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
     *out = (uint32_t)inl((uint16_t)port);
+    m3ApiReturn(0);
+}
+
+/* hostcalls.yaml `pci_config_read` / `pci_config_write`: config space through the kernel's
+ * serialised mechanism-1 access, for a holder of pci.config.  `out` is written through the
+ * interpreter's own pointer; a range outside linear memory TRAPS the module via
+ * m3ApiCheckMem.  WASMOS_INVAL for a bdf above 0xFFFF or a register above 0xFC or not
+ * dword-aligned. */
+static int32_t pci_config_guest_check(int32_t bdf, int32_t reg) {
+    uint32_t context_id = 0;
+    if (bdf < 0 || bdf > 0xFFFF || reg < 0 || reg > 0xFC || (reg & 3) != 0) {
+        return WASMOS_INVAL;
+    }
+    if (current_process_context(&context_id) != 0 || !capability_has(context_id, CAP_PCI_CONFIG)) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
+    return 0;
+}
+
+m3ApiRawFunction(wasmos_pci_config_read) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, bdf) m3ApiGetArg(int32_t, reg)
+        m3ApiGetArgMem(uint32_t*, out) m3ApiCheckMem(out, sizeof(uint32_t));
+    int32_t rc = pci_config_guest_check(bdf, reg);
+    if (rc != 0) {
+        m3ApiReturn(rc);
+    }
+    *out = pci_config_read32((uint16_t)bdf, (uint8_t)reg);
+    m3ApiReturn(0);
+}
+
+/* The context that owns `endpoint`, the driver a pci-bus request is made for;
+ * WASMOS_INVAL for a negative handle, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER when
+ * the endpoint has no live owner, which drives nothing. */
+static int32_t pci_requester_context(int32_t endpoint, uint32_t* out_context) {
+    if (endpoint < 0) {
+        return WASMOS_INVAL;
+    }
+    if (ipc_endpoint_owner((uint32_t)endpoint, out_context) != IPC_OK || *out_context == 0) {
+        return WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER;
+    }
+    return 0;
+}
+
+m3ApiRawFunction(wasmos_pci_function_check) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) m3ApiGetArg(int32_t, bdf);
+    uint32_t owner = 0;
+    int32_t rc = pci_config_guest_check(bdf, 0);
+    if (rc == 0) {
+        rc = pci_requester_context(endpoint, &owner);
+    }
+    if (rc == 0) {
+        rc = pci_function_check(owner, (uint16_t)bdf);
+    }
+    m3ApiReturn(rc);
+}
+
+m3ApiRawFunction(wasmos_pci_config_write_for) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) m3ApiGetArg(int32_t, bdf)
+        m3ApiGetArg(int32_t, reg) m3ApiGetArg(int32_t, value);
+    uint32_t owner = 0;
+    int32_t rc = pci_config_guest_check(bdf, reg);
+    if (rc == 0) {
+        rc = pci_requester_context(endpoint, &owner);
+    }
+    if (rc == 0) {
+        rc = pci_config_write_checked(owner, (uint16_t)bdf, (uint8_t)reg, (uint32_t)value);
+    }
+    m3ApiReturn(rc);
+}
+
+m3ApiRawFunction(wasmos_pci_config_write) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, bdf) m3ApiGetArg(int32_t, reg)
+        m3ApiGetArg(int32_t, value);
+    int32_t rc = pci_config_guest_check(bdf, reg);
+    if (rc != 0) {
+        m3ApiReturn(rc);
+    }
+    pci_config_write32((uint16_t)bdf, (uint8_t)reg, (uint32_t)value);
     m3ApiReturn(0);
 }
 

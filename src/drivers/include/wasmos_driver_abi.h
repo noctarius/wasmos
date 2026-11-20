@@ -390,7 +390,12 @@ enum {
     DEVMGR_CAP_IO_PORT = 1 << 0,
     DEVMGR_CAP_MMIO_MAP = 1 << 1,
     DEVMGR_CAP_IRQ = 1 << 2,
-    DEVMGR_CAP_DMA = 1 << 3
+    DEVMGR_CAP_DMA = 1 << 3,
+    /* Not an access kind: the profile names the PCI function its device sits
+     * at (wasmos_spawn_dma_caps_t.pci_function), which the kernel quiesces
+     * when the process ends -- bus mastering, MSI and INTx off -- before it
+     * recycles any frame the device could still write. */
+    DEVMGR_CAP_PCI_FUNCTION = 1 << 4
 };
 
 /* Generic hardware-RNG service protocol (virtual class "hrng"). Backend-neutral:
@@ -617,7 +622,10 @@ typedef struct {
  * caps_len 0 spawns without hardware access. Otherwise caps_off names a
  * wasmos_spawn_caps_v2_t and its tail arrays in the same region, caps_len bytes
  * exactly, which the child holds from its first instruction; a descriptor that
- * does not parse is WASMOS_ERR_PROC_SPAWN_BAD_CAPS and no child. */
+ * does not parse is WASMOS_ERR_PROC_SPAWN_BAD_CAPS and no child.
+ *
+ * flags is SPAWN_WATCH_FLAG_*. With SPAWN_WATCH_FLAG_MODULE the path is a boot
+ * module's app name, and args_len and tty must be 0. */
 typedef struct {
     /* request */
     uint32_t version; /* = SPAWN_WATCH_DESC_VERSION */
@@ -629,7 +637,7 @@ typedef struct {
     uint32_t args_len;
     uint32_t caps_off;
     uint32_t caps_len;
-    uint32_t reserved0;
+    uint32_t flags;
     /* reply */
     uint32_t pid;
     uint32_t app_flags;
@@ -1106,7 +1114,9 @@ typedef struct __attribute__((packed)) {
     uint32_t direction_flags;
     uint32_t max_bytes;
     uint32_t window_count;
-    uint32_t reserved0;
+    /* bus << 8 | device << 3 | function, valid with DEVMGR_CAP_PCI_FUNCTION and
+     * independent of DEVMGR_CAP_DMA; 0 otherwise. */
+    uint32_t pci_function;
 } wasmos_spawn_dma_caps_t;
 
 /* Descriptor-based spawn capabilities. Unlike the packed-arg spawn opcodes,
@@ -1141,8 +1151,9 @@ typedef struct __attribute__((packed)) {
     ((uint32_t)sizeof(wasmos_spawn_caps_v2_t) +                                                    \
      ((uint32_t)(io_range_count) * (uint32_t)sizeof(wasmos_io_range_t)) +                          \
      ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
-_Static_assert(WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_IO_RANGE_LIMIT, 0) <= SUPERVISOR_CAPS_MAX,
-               "a submission's caps must fit every I/O range a driver may declare");
+_Static_assert(WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_IO_RANGE_LIMIT, 1) <= SUPERVISOR_CAPS_MAX,
+               "a submission's caps must fit every I/O range a driver may declare and the "
+               "DMA window device-manager grants");
 
 /* Stable indices naming the fields of an IPC message, for code that addresses
  * them positionally rather than by struct member. The order is NOT the struct's

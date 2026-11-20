@@ -68,7 +68,6 @@ static device_manager_state_t g_dm = {
     .acpi_match_rule_count = 0,
     .boot_mount_ready = 0,
     .user_mount_ready = 0,
-    .ready_notified = 0,
 };
 
 static wasmos_sys_event_loop_t g_dm_ipc_loop;
@@ -1298,6 +1297,12 @@ static void queue_pci_match_rule_spawns(void) {
                 g_dm.active_rule_spawn_caps.irq_mask =
                     (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
             }
+            /* Carried only by the descriptor form; the kernel quiesces this
+             * function when the driver ends (DEVMGR_CAP_PCI_FUNCTION). */
+            g_dm.active_rule_spawn_caps.pci_function_valid = 1;
+            g_dm.active_rule_spawn_caps.pci_function =
+                (uint16_t)(((uint32_t)rec->bus << 8) | ((uint32_t)rec->device << 3) |
+                           (uint32_t)rec->function);
             str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
             g_dm.active_rule_fstype[0] = '\0';
             g_dm.rule_spawn_pending = 1;
@@ -1329,7 +1334,9 @@ static void queue_acpi_match_rule_spawns(void) {
                 continue;
             }
             /* Build caps from the device record: device_id = I/O base,
-             * irq_hint = IRQ line. */
+             * irq_hint = IRQ line. From zero: the previous rule's ranges and
+             * PCI function are not this device's. */
+            g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
             g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
             g_dm.active_rule_spawn_caps.io_port_min = rec->device_id;
             g_dm.active_rule_spawn_caps.io_port_max = (uint16_t)(rec->device_id + 7u);
@@ -2663,7 +2670,7 @@ static void rule_spawn_complete(int32_t ok) {
         g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
         g_dm.active_rule_spawn_index = -1;
         g_dm.active_rule_spawn_device_index = -1;
-        g_dm.active_rule_spawn_caps.cap_flags = 0;
+        g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
         g_dm.active_rule_fstype[0] = '\0';
         queue_block_fs_rule_spawns();
     } else {
@@ -2686,7 +2693,7 @@ static void rule_spawn_complete(int32_t ok) {
             g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
             g_dm.active_rule_spawn_index = -1;
             g_dm.active_rule_spawn_device_index = -1;
-            g_dm.active_rule_spawn_caps.cap_flags = 0;
+            g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
             g_dm.active_rule_fstype[0] = '\0';
             queue_block_fs_rule_spawns();
         }
@@ -2798,32 +2805,56 @@ static void dm_on_submit_reply(void* user, const wasmos_ipc_message_t* msg) {
     rule_spawn_complete(1);
 }
 
-/* Hands the armed ACPI rule's driver to the supervisor under the rule's restart
- * policy: the unit is named for the device, and carries the startup args and
- * the grants a direct spawn would. Returns 0 with the submission in flight, or
- * -1 with nothing sent -- the supervisor is not bound yet, or the spec or the
- * caps do not fit. */
-static int dm_submit_acpi_rule(const char* args) {
-    static wasmos_supervisor_submit_desc_t desc;
-    const acpi_match_rule_t* rule;
+/* The armed rule's ENV{RESTART} policy and the instance key of its device
+ * ("acpi:<io base>", "pci:<bus>:<device>.<function>"), or NULL when the rule
+ * names no policy and the device manager spawns the driver itself. */
+static const char* dm_armed_rule_restart(char* instance, uint32_t cap) {
     const pci_device_record_t* rec;
+    const char* restart = 0;
+    if (g_dm.active_rule_spawn_index < 0 || g_dm.active_rule_spawn_device_index < 0 ||
+        g_dm.active_rule_spawn_device_index >= (int32_t)g_dm.registry_count) {
+        return 0;
+    }
+    rec = &g_dm.registry[g_dm.active_rule_spawn_device_index];
+    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
+        g_dm.active_rule_spawn_index < (int32_t)g_dm.acpi_match_rule_count) {
+        restart = g_dm.acpi_match_rules[g_dm.active_rule_spawn_index].restart;
+        (void)snprintf(instance, cap, "acpi:%04x", (unsigned)(rec->device_id & 0xFFFFu));
+    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
+               g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_match_rule_count) {
+        restart = g_dm.pci_match_rules[g_dm.active_rule_spawn_index].restart;
+        (void)snprintf(instance,
+                       cap,
+                       "pci:%02x:%02x.%u",
+                       (unsigned)rec->bus,
+                       (unsigned)rec->device,
+                       (unsigned)rec->function);
+    }
+    return (restart && restart[0] != '\0') ? restart : 0;
+}
+
+/* Hands the armed ACPI or PCI rule's driver to the supervisor under the rule's
+ * restart policy: the unit is named for the device, and carries the startup
+ * args and the grants a direct spawn would -- for a PCI driver including its
+ * function, which the kernel quiesces whenever the driver ends. Returns 0 with
+ * the submission in flight, or -1 with nothing sent -- the supervisor is not
+ * bound yet, or the spec or the caps do not fit. */
+static int dm_submit_rule(const char* instance, const char* restart, const char* path,
+                          const char* args) {
+    static wasmos_supervisor_submit_desc_t desc;
     int32_t spec_len;
     int32_t caps_len;
     int32_t bid;
 
-    if (g_dm.supervisor_endpoint < 0 || g_dm.active_rule_spawn_index < 0 ||
-        g_dm.active_rule_spawn_index >= (int32_t)g_dm.acpi_match_rule_count ||
-        g_dm.active_rule_spawn_device_index < 0 ||
-        g_dm.active_rule_spawn_device_index >= (int32_t)g_dm.registry_count) {
+    if (g_dm.supervisor_endpoint < 0) {
         return -1;
     }
-    rule = &g_dm.acpi_match_rules[g_dm.active_rule_spawn_index];
-    rec = &g_dm.registry[g_dm.active_rule_spawn_device_index];
     memset(&desc, 0, sizeof(desc));
     desc.version = SUPERVISOR_SUBMIT_DESC_VERSION;
     spec_len = dm_unit_spec(g_dm.rule_spawn_path,
-                            (uint16_t)rec->device_id,
-                            rule->restart,
+                            instance,
+                            path,
+                            restart,
                             args,
                             desc.spec,
                             (uint32_t)sizeof(desc.spec));
@@ -3202,6 +3233,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wasmos_sys_ipc_recv_loop();
     }
     dm_supervisor_init();
+    /* READY once every endpoint and handler is set up -- a setup failure above
+     * parks before it, so the supervisor's READY deadline still catches it --
+     * and before rule loading and enumeration, which take as long as the boot
+     * volume does (docs/architecture/03, invariant 5: READY is not a
+     * milestone). */
+    wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
     log_rule_roots_once();
     load_rules_if_available();
     hw_scan_acpi();
@@ -3260,13 +3297,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
             if (target == HW_SPAWN_PCI_BUS) {
                 spawn_caps_t pci_caps = {0};
-                /* MMIO on top of the config ports: an MSI-X table lives in a
-                 * device BAR, so programming one is a memory write, not a
-                 * config-space write. wasmos_mmio_write32 refuses any address
-                 * overlapping system RAM, so this grants device access only. */
-                pci_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP;
-                pci_caps.io_port_min = 0x0CF8;
-                pci_caps.io_port_max = 0x0CFF;
+                /* MMIO only: config space is the kernel's (pci.config in
+                 * pci-bus's manifest), and an MSI-X table lives in a device
+                 * BAR, so programming one is a memory write.
+                 * wasmos_mmio_write32 refuses any address overlapping system
+                 * RAM, so this grants device access only. */
+                pci_caps.cap_flags = DEVMGR_CAP_MMIO_MAP;
                 pci_caps.irq_mask = 0;
                 if (hw_spawn_driver_index_caps(g_dm.pci_bus_index, &pci_caps) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
@@ -3422,16 +3458,19 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                      * driver that needs those instead.
                      * TODO: a descriptor-carrying path spawn would remove this
                      * either/or; a driver needing both declared windows AND
-                     * startup args cannot be expressed today. */
+                     * startup args cannot be expressed today. Nor can the path
+                     * form name a PCI driver's function, so a DMA driver
+                     * spawned that way is not quiesced when it ends: its
+                     * device may master into recycled frames. A rule with
+                     * ENV{RESTART} (a watched, descriptor spawn) is. */
                     /* A rule naming a restart policy hands its driver to the
                      * supervisor, which spawns it with these args and grants
                      * and restarts it by that policy. The reply is DEFERRED,
                      * as for a mount: dm_on_submit_reply retires the rule. */
-                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
-                        g_dm.active_rule_spawn_index >= 0 &&
-                        g_dm.active_rule_spawn_index < (int32_t)g_dm.acpi_match_rule_count &&
-                        g_dm.acpi_match_rules[g_dm.active_rule_spawn_index].restart[0] != '\0') {
-                        if (dm_submit_acpi_rule(args) == 0) {
+                    char instance[24];
+                    const char* restart = dm_armed_rule_restart(instance, sizeof(instance));
+                    if (restart) {
+                        if (dm_submit_rule(instance, restart, spawn_path, args) == 0) {
                             g_dm.pending = HW_SPAWN_NONE;
                             g_dm.phase = HW_PHASE_SPAWN;
                             continue;
@@ -3509,10 +3548,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;
             }
-            if (!g_dm.ready_notified && g_dm.boot_mount_ready && g_dm.rules_boot_loaded) {
-                g_dm.ready_notified = 1;
-                wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
-            }
             /* Block on real events instead of yield-spinning (which pegged a CPU
              * forever once idle).  While boot-time rule loading is still in
              * flight, wake periodically to retry FS reads and poll the async
@@ -3526,7 +3561,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
              * the idle select set, so an indefinite block here would never see
              * it. The timed wait polls poll_mount_request_async instead. */
             int32_t settled = g_dm.rules_init_loaded && g_dm.rules_boot_loaded &&
-                              g_dm.ready_notified && !g_dm.rules_boot_request_pending &&
+                              g_dm.boot_mount_ready && !g_dm.rules_boot_request_pending &&
                               !g_dm.mount_req_pending && !g_dm.submit_req_pending;
             if (g_dm_idle_select_id >= 0) {
                 if (settled) {

@@ -34,6 +34,9 @@ typedef struct {
 
 static int32_t ring_read(void* user, uint8_t* dst, int32_t len, uint64_t* seq) {
     ring_t* r = (ring_t*)user;
+    if (*seq > r->next) {
+        return -1; /* kmsg_read: a position the log never reached */
+    }
     uint64_t start = *seq < r->first ? r->first : *seq;
     uint64_t avail = r->next - start;
     int32_t n = avail < (uint64_t)len ? (int32_t)avail : len;
@@ -104,11 +107,62 @@ static void test_a_short_write_is_not_a_complete_one(void) {
     CHECK(!logger_stage_written(100, -1), "nor is a failed one");
 }
 
+/* Regression: 2026-11-20-logger-restart-duplicates -- a restarted logger read
+ * the kernel ring from its oldest retained byte again and appended it, so a
+ * restart under the supervisor put up to the ring's 64 KiB a second time into
+ * /var/log/messages. The position survives the restart as a saved string. */
+static void test_a_restarted_logger_continues_where_it_stopped(void) {
+    logger_stage_t first;
+    logger_stage_t second;
+    ring_t ring = {0, 100};
+    char saved[24];
+    memset(&first, 0, sizeof(first));
+    memset(&second, 0, sizeof(second));
+    CHECK(logger_stage_next(&first, ring_read, &ring) == 100, "the first instance wrote 100");
+    uint32_t n = logger_stage_save(&first, saved, sizeof(saved));
+    CHECK(n == 3 && strcmp(saved, "100") == 0, "its position is saved as text");
+    ring.next = 130;
+    logger_stage_resume(&second, saved, n);
+    CHECK(logger_stage_next(&second, ring_read, &ring) == 30, "the next instance writes the rest");
+    CHECK(second.out[0] == (char)('a' + 100 % 26), "from where the first stopped");
+}
+
+static void test_a_position_that_does_not_parse_starts_over(void) {
+    logger_stage_t st;
+    char big[24];
+    memset(&st, 0, sizeof(st));
+    logger_stage_resume(&st, "12x", 3);
+    CHECK(st.seq == 0, "not a number");
+    logger_stage_resume(&st, "", 0);
+    CHECK(st.seq == 0, "empty");
+    logger_stage_resume(&st, "99999999999999999999", 20);
+    CHECK(st.seq == 0, "does not fit 64 bits");
+    st.seq = 18446744073709551615ull;
+    CHECK(logger_stage_save(&st, big, sizeof(big)) == 20, "the largest position fits");
+    CHECK(logger_stage_save(&st, big, 20) == 0, "but not without room for the NUL");
+}
+
+/* Regression: 2026-11-20-logger-poisoned-position -- kenv is writable by any
+ * process, and a stored position past the ring's end made every kernel-log
+ * read fail, so each restarted logger exited at once. A position the ring
+ * refuses is not trusted: the logger starts over from the oldest byte. */
+static void test_a_position_the_ring_refuses_starts_over(void) {
+    logger_stage_t st;
+    ring_t ring = {0, 50};
+    memset(&st, 0, sizeof(st));
+    logger_stage_resume(&st, "18446744073709551615", 20);
+    CHECK(logger_stage_next(&st, ring_read, &ring) == 50, "the whole ring, not a failure");
+    CHECK(st.out[0] == 'a' && st.seq == 50, "from the oldest byte");
+}
+
 int main(void) {
     test_a_fresh_boot_is_staged_whole();
     test_bytes_lost_before_reading_are_reported();
     test_a_truncation_notice_survives_a_loss_during_the_reopen();
     test_a_short_write_is_not_a_complete_one();
+    test_a_restarted_logger_continues_where_it_stopped();
+    test_a_position_that_does_not_parse_starts_over();
+    test_a_position_the_ring_refuses_starts_over();
     if (g_failures != 0) {
         printf("test_logger_stage: %d failure(s)\n", g_failures);
         return 1;

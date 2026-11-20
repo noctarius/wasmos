@@ -20,8 +20,10 @@ stack_size = 16384
 needs = ["devmgr.inv"]
 provides = ["pci"]
 
+# pci.config: config space through the kernel, which serialises the
+# 0xCF8/0xCFC port pair (pci_config_read / pci_config_write).
 [[capabilities]]
-name = "io.port"
+name = "pci.config"
 flags = 0
 
 # pci-bus configures each PCI INTx line's trigger/polarity (level/active-low) in

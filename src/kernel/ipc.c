@@ -118,6 +118,10 @@ static ksync_spinlock_t g_endpoint_table_lock;
  * (ipc_context_watch). Protected by g_endpoint_table_lock, under which
  * ipc_endpoints_release_owner already runs. */
 static ipc_owed_t* g_context_watches;
+/* Callers' awaits (ipc_peer_await): one record per waiter endpoint, its
+ * destination the waiter and its owner_context_id the awaited endpoint's
+ * owner. Protected by g_endpoint_table_lock. */
+static ipc_owed_t* g_peer_awaits;
 
 /* Describe the wait a blocked thread is sitting in, from its event alone.
  *
@@ -992,6 +996,22 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id) {
         record->next = batch.deliver;
         batch.deliver = record;
     }
+    /* Awaits on the ended context are owed to their waiters; awaits whose
+     * waiter was one of its endpoints are owed to no one any more. */
+    for (ipc_owed_t** link = &g_peer_awaits; *link;) {
+        ipc_owed_t* record = *link;
+        if (record->owner_context_id == owner_context_id) {
+            *link = record->next;
+            record->next = batch.deliver;
+            batch.deliver = record;
+        } else if (record->destination_owner == owner_context_id) {
+            *link = record->next;
+            record->next = batch.discard;
+            batch.discard = record;
+        } else {
+            link = &record->next;
+        }
+    }
     ksync_spinlock_unlock(&g_endpoint_table_lock);
 
     /* Outside the lock: every delivery needs it to resolve its destination. */
@@ -1030,6 +1050,60 @@ int ipc_context_watch(uint32_t context_id, uint32_t destination) {
     record->next = g_context_watches;
     g_context_watches = record;
     ksync_spinlock_unlock(&g_endpoint_table_lock);
+    return IPC_OK;
+}
+
+int ipc_peer_await(uint32_t caller_context, uint32_t waiter, uint32_t awaited) {
+    ipc_owed_t* record = 0;
+    ipc_owed_t* previous = 0;
+    const ipc_endpoint_t* w = 0;
+    const ipc_endpoint_t* a = 0;
+    uint32_t owner = 0;
+
+    if (caller_context == IPC_CONTEXT_KERNEL || waiter == IPC_ENDPOINT_NONE ||
+        awaited == IPC_ENDPOINT_NONE) {
+        return IPC_ERR_INVALID;
+    }
+    record = (ipc_owed_t*)kmem_alloc(sizeof(*record));
+    if (!record) {
+        return IPC_ERR_FULL;
+    }
+    ksync_spinlock_lock(&g_endpoint_table_lock);
+    w = (const ipc_endpoint_t*)idtable_get(&g_endpoint_table, waiter);
+    a = (const ipc_endpoint_t*)idtable_get(&g_endpoint_table, awaited);
+    if (!w || w->type != IPC_ENDPOINT_TYPE_MESSAGE) {
+        ksync_spinlock_unlock(&g_endpoint_table_lock);
+        kmem_free(record);
+        return w ? IPC_ERR_INVALID : IPC_ERR_NOENT;
+    }
+    if (w->header.owner_context_id != caller_context) {
+        ksync_spinlock_unlock(&g_endpoint_table_lock);
+        kmem_free(record);
+        return IPC_ERR_PERM;
+    }
+    if (!a) {
+        ksync_spinlock_unlock(&g_endpoint_table_lock);
+        kmem_free(record);
+        return IPC_ERR_NOENT;
+    }
+    owner = a->header.owner_context_id;
+    for (ipc_owed_t** link = &g_peer_awaits; *link; link = &(*link)->next) {
+        if ((*link)->destination == waiter) {
+            previous = *link;
+            *link = previous->next;
+            break;
+        }
+    }
+    if (owner != IPC_CONTEXT_KERNEL) {
+        ipc_owed_init_hangup(record, waiter, awaited, owner);
+        record->destination_owner = caller_context;
+        record->next = g_peer_awaits;
+        g_peer_awaits = record;
+        record = 0;
+    }
+    ksync_spinlock_unlock(&g_endpoint_table_lock);
+    kmem_free(previous);
+    kmem_free(record);
     return IPC_OK;
 }
 

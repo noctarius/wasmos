@@ -3614,6 +3614,7 @@ add_custom_target(run-kernel-unit-tests
           -x c++ ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
           -x none ${BUILD_DIR}/test_warp_link_ipc.o ${BUILD_DIR}/test_wasm3_link_ipc.o
           -x c ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/capability.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -3885,11 +3886,12 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           -o ${BUILD_DIR}/test_hostcall_value
   COMMAND ${BUILD_DIR}/test_hostcall_value
   # The kernel environment store, shared by both runtimes.
-  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
           -iquote ${KERNEL_DIR}/include
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_kenv.c
           ${KERNEL_DIR}/kenv.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_kenv
   COMMAND ${BUILD_DIR}/test_kenv
   # The kernel log ring: sequence-numbered paging for dmesg, and the
@@ -3941,6 +3943,39 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${KERNEL_DIR}/process_manager_caps.c
           -o ${BUILD_DIR}/test_pm_caps
   COMMAND ${BUILD_DIR}/test_pm_caps
+  # Per-context capability records: a reaped context's record is dropped.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_capability.c
+          ${KERNEL_DIR}/capability.c ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_capability
+  COMMAND ${BUILD_DIR}/test_capability
+  # PCI configuration access and the quiesce of a dead driver's function, over
+  # an emulated config space: tests/unit/shadow_io stands in for io.h.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit/shadow_io
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit/include
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pci_config.c
+          ${KERNEL_DIR}/pci_config.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_pci_config
+  COMMAND ${BUILD_DIR}/test_pci_config
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -4108,6 +4143,16 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${CMAKE_SOURCE_DIR}/src/libui/zig/libui_shim.c
           -o ${BUILD_DIR}/test_libui_shim_alloc
   COMMAND ${BUILD_DIR}/test_libui_shim_alloc
+  # The guest libc's synchronous call over a scripted reply endpoint: which
+  # messages it takes as the reply, and that its server's hangup ends it.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -fno-builtin
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_ipc_call.c
+          -o ${BUILD_DIR}/test_libc_ipc_call
+  COMMAND ${BUILD_DIR}/test_libc_ipc_call
   # memcmp's argument guards and comparison sign. -fno-builtin for the same
   # reason as the math suite above: memcmp is a clang builtin and a folded call
   # never reaches string.c.
@@ -4701,6 +4746,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_string.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_shim_alloc.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_ipc_call.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c
     # Same reason as test_wasm_coroutine.c beside it: this suite includes
@@ -4807,6 +4853,15 @@ wasmos_ide_index(wasmos_ide_unit_pm_caps
   IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
          ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
   DEFINES WASMOS_HOST_TEST_SMP=1)
+# test_pci_config.c compiles pci_config.c against tests/unit/shadow_io's io.h,
+# which must come first: the real one is x86 inline assembly.
+wasmos_ide_index(wasmos_ide_unit_pci_config
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_pci_config.c
+  IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/shadow_io ${CMAKE_SOURCE_DIR}/tests/unit/include
+         ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
+         ${CMAKE_SOURCE_DIR}/tests/unit
+  DEFINES WASMOS_HOST_TEST_SMP=1)
 
 # test_process_lifecycle.c and its platform stubs link the real process.c, so
 # they take the real kernel headers and the WASMOS_PROCESS_TEST_SEAMS define its
@@ -4866,6 +4921,7 @@ wasmos_ide_index(wasmos_ide_unit
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_caps.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pci_config.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include

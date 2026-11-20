@@ -183,6 +183,13 @@ void irq_release_context(uint32_t context_id) {
 void msi_release_context(uint32_t context_id) {
     (void)context_id;
 }
+void capability_release_context(uint32_t context_id) {
+    (void)context_id;
+}
+void pci_quiesce_context(uint32_t context_id, uint32_t pid) {
+    (void)context_id;
+    (void)pid;
+}
 void xfer_buffer_drop_context(uint32_t context_id) {
     (void)context_id;
 }

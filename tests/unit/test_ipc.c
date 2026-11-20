@@ -2873,6 +2873,59 @@ static void test_a_watched_context_is_reported_without_any_endpoint(void) {
     ipc_endpoints_release_owner(bystander_ctx);
 }
 
+/* Regression: 2026-11-20-server-dies-before-first-reply -- a hangup went only
+ * to endpoints the dead process had sent to, so a server that died before it
+ * ever answered a client owed the client's reply endpoint nothing, and a
+ * synchronous call waited on it forever. The caller's await is what is owed
+ * instead. */
+static void test_an_await_hears_of_a_server_that_never_answered(void) {
+    const uint32_t client_ctx = 101u;
+    const uint32_t server_ctx = 102u;
+    uint32_t reply_ep = 0, server_ep = 0;
+    uint32_t dead_ep = 0, owner = 0;
+    ipc_message_t msg;
+
+    CHECK(ipc_endpoint_create(client_ctx, &reply_ep) == IPC_OK, "the client's reply endpoint");
+    CHECK(ipc_endpoint_create(server_ctx, &server_ep) == IPC_OK, "the server's endpoint");
+    CHECK(ipc_peer_await(client_ctx, reply_ep, server_ep) == IPC_OK, "the client awaits");
+    memset(&msg, 0, sizeof(msg));
+    msg.type = 0x400u;
+    msg.source = reply_ep;
+    CHECK(ipc_send_from(client_ctx, server_ep, &msg) == IPC_OK, "the request is sent");
+
+    ipc_endpoints_release_owner(server_ctx); /* dies before it answers */
+
+    CHECK(drain_hangups(reply_ep, &dead_ep, &owner) == 1u, "the waiting client hears of it");
+    CHECK(dead_ep == server_ep && owner == server_ctx, "naming the server it awaited");
+    CHECK(ipc_peer_await(client_ctx, reply_ep, server_ep) == IPC_ERR_NOENT,
+          "an endpoint with no owner is not awaited: its answer cannot come");
+    ipc_endpoints_release_owner(client_ctx);
+}
+
+/* An await is per waiter and replaced by the next one, and it goes with
+ * either side, so registering before every call accumulates nothing. */
+static void test_an_await_is_replaced_and_goes_with_either_side(void) {
+    const uint32_t client_ctx = 103u;
+    const uint32_t first_ctx = 104u;
+    const uint32_t second_ctx = 105u;
+    uint32_t reply_ep = 0, first_ep = 0, second_ep = 0, other_ep = 0;
+
+    CHECK(ipc_endpoint_create(client_ctx, &reply_ep) == IPC_OK, "the client");
+    CHECK(ipc_endpoint_create(first_ctx, &first_ep) == IPC_OK, "a first server");
+    CHECK(ipc_endpoint_create(second_ctx, &second_ep) == IPC_OK, "a second server");
+    CHECK(ipc_endpoint_create(second_ctx, &other_ep) == IPC_OK, "another endpoint");
+    CHECK(ipc_peer_await(client_ctx, reply_ep, first_ep) == IPC_OK, "awaits the first");
+    CHECK(ipc_peer_await(client_ctx, reply_ep, second_ep) == IPC_OK, "then the second");
+    ipc_endpoints_release_owner(first_ctx);
+    CHECK(drain_hangups(reply_ep, 0, 0) == 0u, "the replaced await is gone");
+    CHECK(ipc_peer_await(second_ctx, reply_ep, first_ep) == IPC_ERR_PERM,
+          "only the waiter's owner may register on it");
+
+    ipc_endpoints_release_owner(client_ctx); /* the waiter goes first */
+    ipc_endpoints_release_owner(second_ctx);
+    CHECK(drain_hangups(other_ep, 0, 0) == 0u, "nothing is owed to a released waiter");
+}
+
 /* A hangup is delivered on the reap path, which runs from the process manager,
  * from a waiting parent's syscall, or from the scheduler after a dispatch has
  * released its claim. Whichever it is, a service parked on its endpoint must be
@@ -3355,6 +3408,10 @@ int main(void) {
         {"H7 a pending hangup dies with its destination",
          test_a_pending_hangup_dies_with_its_destination},
         {"H8 a hangup wakes a parked receiver", test_a_hangup_wakes_a_parked_receiver},
+        {"H11 an await hears of a server that never answered",
+         test_an_await_hears_of_a_server_that_never_answered},
+        {"H12 an await is replaced and goes with either side",
+         test_an_await_is_replaced_and_goes_with_either_side},
         {"O1 an owed message arrives as reserved, behind earlier traffic",
          test_an_owed_message_arrives_as_reserved_behind_earlier_traffic},
         {"O2 every owed message survives a full queue",

@@ -112,7 +112,7 @@ Capability profile supplied at spawn (using `PROC_IPC_SPAWN_PATH_CAPS` /
 `PROC_IPC_SPAWN_PATH_CAPS_SYNC` / `PROC_IPC_SPAWN_CAPS_V2`):
 - `DEVMGR_CAP_IO_PORT`: the BAR0 I/O register window only
   (io_port_min=BAR0_base, io_port_max=BAR0_base+0x3F). PCI config access
-  (0xCF8–0xCFF) belongs to `pci-bus` and is not granted to the driver.
+  belongs to `pci-bus` (through the kernel) and is not granted to the driver.
 - `DEVMGR_CAP_IRQ`: IRQ line from PCI config 0x3C (typically 11 under QEMU)
 - `DEVMGR_CAP_DMA`: BIDIR, covers low memory window for virtqueue and packet
   buffers (initial: 0x100000–0x4000000, i.e., 1 MB–64 MB)

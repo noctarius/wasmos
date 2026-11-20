@@ -73,6 +73,10 @@ declare function ipc_send(
 @external("wasmos", "ipc_recv") declare function ipc_recv(endpoint: i32): i32;
 
 
+@external("wasmos", "ipc_peer_await")
+declare function ipc_peer_await(waiter: i32, awaited: i32): i32;
+
+
 @external("wasmos", "ipc_last_field") declare function ipc_last_field(field: i32): i32;
 
 
@@ -717,7 +721,19 @@ export class File {
  * until a message arrives; a component that must keep serving its own endpoint
  * while a request is outstanding uses the EventLoop in eventloop.ts instead.
  */
+/* abi/opcodes.yaml system band, abi/errors.yaml transport axis: spelled out
+ * because the AS libc stage holds no generated opcode or status file. */
+const WASMOS_IPC_HANGUP: i32 = 0xff03;
+const WASMOS_NOENT: i32 = -4;
+
 export namespace ipc {
+    let lastCallPeerGone: bool = false;
+
+    /** True when the last call() ended because its server was gone. */
+    export function peerGone(): bool {
+        return lastCallPeerGone;
+    }
+
     /**
      * A received message. The four argument words are protocol-defined; `source`
      * is the endpoint to address a reply to, `destination` the endpoint it
@@ -745,6 +761,9 @@ export namespace ipc {
     // request id arrives on the per-context managed reply endpoint. Anything
     // else that lands there meanwhile is consumed and DISCARDED; a component
     // that must not lose those messages uses the EventLoop in eventloop.ts.
+    // An await is registered first (ipc_peer_await), so a server that has no
+    // owner, or ends before it answers, ends the call with null and peerGone()
+    // true instead of leaving it waiting.
     export function call(
         server: i32,
         type: i32,
@@ -758,11 +777,23 @@ export namespace ipc {
             return null;
         }
         const requestId = nextIpcRequestId();
+        lastCallPeerGone = false;
+        if (ipc_peer_await(replyEndpoint, server) == WASMOS_NOENT) {
+            lastCallPeerGone = true;
+            return null;
+        }
         if (ipc_send(server, replyEndpoint, type, requestId, arg0, arg1, arg2, arg3) != 0) {
             return null;
         }
         while (true) {
             if (ipc_recv(replyEndpoint) < 0) {
+                return null;
+            }
+            if (
+                ipc_last_field(IPC_FIELD_TYPE) == WASMOS_IPC_HANGUP &&
+                ipc_last_field(IPC_FIELD_ARG0) == server
+            ) {
+                lastCallPeerGone = true;
                 return null;
             }
             if (ipc_last_field(IPC_FIELD_REQUEST_ID) != requestId) {

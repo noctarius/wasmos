@@ -45,6 +45,8 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE` | -0x0001000E | the kernel could not reserve the child's lifecycle events, so the child was not created: a watch whose events could be lost is not a watch |
 | `WASMOS_ERR_PROC_SPAWN_BAD_CAPS` | -0x0001000F | the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created |
 | `WASMOS_ERR_PROC_SPAWN_CAPS_APPLY` | -0x00010010 | the kernel refused the parsed capability profile for the new child, which was killed before it ran |
+| `WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED` | -0x00010011 | the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created |
+| `WASMOS_ERR_PROC_SPAWN_NO_MODULE` | -0x00010012 | the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created |
 
 ### `proc_pm` (domain 2) — non-path process-manager IPC failures (was PROC_PM_ERR_*)
 
@@ -86,6 +88,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER` | -0x00020022 | a service watch could not acquire or fill the transfer buffer for its subscription descriptor |
 | `WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY` | -0x00020023 | the process manager answered a service-watch request with neither its response nor a packed error |
 | `WASMOS_ERR_PROC_PM_KILL_NOT_CHILD` | -0x00020024 | the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself |
+| `WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED` | -0x00020025 | the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 
@@ -252,6 +255,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_MSI_BAD_ENTRY` | -0x00110009 | table entry index is beyond the device's supported vector count |
 | `WASMOS_ERR_MSI_MAP_FAILED` | -0x0011000A | the MSI-X table BAR could not be mapped |
 | `WASMOS_ERR_MSI_NOT_DEVICE_OWNER` | -0x0011000B | another endpoint already programmed interrupts for this device |
+| `WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER` | -0x0011000C | the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it |
 
 ### `io` (domain 18) — region-addressed I/O port access failures
 
@@ -408,6 +412,8 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_SUPERVISOR_BAD_SPEC` | -0x001A0002 | the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option |
 | `WASMOS_ERR_SUPERVISOR_EXISTS` | -0x001A0003 | a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed |
 | `WASMOS_ERR_SUPERVISOR_NO_SPACE` | -0x001A0004 | the supervisor's unit table is full |
-| `WASMOS_ERR_SUPERVISOR_DMA_CAPS` | -0x001A0005 | the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit |
+| `WASMOS_ERR_SUPERVISOR_DMA_CAPS` | -0x001A0005 | the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance |
 | `WASMOS_ERR_SUPERVISOR_NO_UNIT` | -0x001A0006 | no unit of the name the request gives is recorded |
 | `WASMOS_ERR_SUPERVISOR_NOT_RUNNING` | -0x001A0007 | the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed |
+| `WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED` | -0x001A0008 | the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require |
+| `WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED` | -0x001A0009 | the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself |

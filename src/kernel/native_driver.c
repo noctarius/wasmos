@@ -1168,6 +1168,7 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
     api.xfer_buffer_release = nd_xfer_buffer_release;
     api.vm_map = nd_vm_map;
     api.vm_unmap = nd_vm_unmap;
+    api.ipc_peer_await = ipc_peer_await;
 
     klog_write("[native-driver] calling initialize\n");
     /* The ELF is mapped only in the driver's address space (low VA, e.g.

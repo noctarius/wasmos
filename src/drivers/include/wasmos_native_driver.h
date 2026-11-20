@@ -264,6 +264,11 @@ typedef struct wasmos_driver_api {
      * malloc/free/calloc/realloc on top of these. */
     void* (*vm_map)(uint32_t size);
     void (*vm_unmap)(void* addr, uint32_t size);
+    /* ipc_peer_await (kernel ipc.h): before waiting on `waiter` for an answer
+     * from `awaited`, ask to hear of awaited's end there, so a server that dies
+     * before it first answers still ends the wait. IPC_ERR_NOENT when `awaited`
+     * has no live owner. */
+    int (*ipc_peer_await)(uint32_t caller_context_id, uint32_t waiter, uint32_t awaited);
 } wasmos_driver_api_t;
 
 /* `kind` argument to the xfer_buffer_* calls, naming what backs the object.

@@ -128,6 +128,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/cpu_x86_64.o
   ${BUILD_DIR}/memory.o
   ${BUILD_DIR}/capability.o
+  ${BUILD_DIR}/pci_config.o
   ${BUILD_DIR}/policy.o
   ${BUILD_DIR}/slab.o
   ${BUILD_DIR}/syscall.o
@@ -283,6 +284,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/libc.c
   ${KERNEL_DIR}/memory.c
   ${KERNEL_DIR}/capability.c
+  ${KERNEL_DIR}/pci_config.c
   ${KERNEL_DIR}/policy.c
   ${KERNEL_DIR}/slab.c
   ${KERNEL_DIR}/syscall.c
@@ -411,6 +413,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/ipc.h
   ${KERNEL_DIR}/include/memory.h
   ${KERNEL_DIR}/include/capability.h
+  ${KERNEL_DIR}/include/pci_config.h
   ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h
   ${KERNEL_DIR}/include/syscall.h
@@ -458,6 +461,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/ipc.h
   ${KERNEL_DIR}/include/memory.h
   ${KERNEL_DIR}/include/capability.h
+  ${KERNEL_DIR}/include/pci_config.h
   ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h
   ${KERNEL_DIR}/include/syscall.h
@@ -632,6 +636,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/cpu.c -o ${BUILD_DIR}/cpu.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_x86_64.c -o ${BUILD_DIR}/cpu_x86_64.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/capability.c -o ${BUILD_DIR}/capability.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/pci_config.c -o ${BUILD_DIR}/pci_config.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/policy.c -o ${BUILD_DIR}/policy.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/slab.c -o ${BUILD_DIR}/slab.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/syscall.c -o ${BUILD_DIR}/syscall.o

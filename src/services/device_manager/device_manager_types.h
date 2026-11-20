@@ -90,6 +90,11 @@ typedef struct {
      * form, the only one that can describe more than a single window. */
     uint32_t io_range_count;
     wasmos_io_range_t io_ranges[WASMOS_IO_RANGE_LIMIT];
+    /* The PCI function the device sits at, for a PCI driver. Only the
+     * descriptor form carries it (DEVMGR_CAP_PCI_FUNCTION, dm_caps_v2_encode):
+     * the kernel quiesces that function when the driver ends. */
+    uint8_t pci_function_valid;
+    uint16_t pci_function;
 } spawn_caps_t;
 
 /* One entry in the PCI device registry; populated from pci_bus scan messages. */
@@ -333,6 +338,8 @@ typedef struct {
     char spawn_path[96];
     uint8_t meta_valid;
     wasmos_module_meta_desc_t meta;
+    /* ENV{RESTART}, as on acpi_match_rule_t. */
+    char restart[12];
 } pci_match_rule_t;
 
 /* Rule: spawn a driver when an ACPI/ISA device with matching class is found. */

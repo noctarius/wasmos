@@ -898,5 +898,24 @@ extern int32_t wasmos_linmem_slots(wasmos_linmem_slot_stats_t* out) WASMOS_WASM_
  * endpoint with no live owner or one the kernel owns.
  */
 extern int32_t wasmos_ipc_endpoint_has_cap(int32_t endpoint, int32_t cap) WASMOS_WASM_IMPORT("wasmos", "ipc_endpoint_has_cap");
+/* Read the dword at register `reg` of PCI function `bdf` (bus << 8 |
+ * device << 3 | function) into `out`. The value comes back through `out`
+ * because a config read legitimately returns all-ones, for an absent
+ * function among others. The kernel serialises every config access, so the
+ * address/data port pair is never interleaved with another caller's or with
+ * the kernel's own quiesce of a dead driver's function. Requires the
+ * pci.config capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
+ * WASMOS_INVAL for a bdf above 0xFFFF or a register that is above 0xFC or
+ * not dword-aligned, or WASMOS_ERR_KERNEL_BAD_POINTER; `out` is left
+ * untouched on failure.
+ */
+extern int32_t wasmos_pci_config_read(int32_t bdf, int32_t reg, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "pci_config_read");
+/* Write `value` to the dword at register `reg` of PCI function `bdf`, under
+ * the same serialisation as pci_config_read. Requires the pci.config
+ * capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED, or WASMOS_INVAL
+ * for a bdf above 0xFFFF or a register that is above 0xFC or not
+ * dword-aligned.
+ */
+extern int32_t wasmos_pci_config_write(int32_t bdf, int32_t reg, int32_t value) WASMOS_WASM_IMPORT("wasmos", "pci_config_write");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

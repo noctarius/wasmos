@@ -533,6 +533,10 @@ static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
                                      caps->dma_windows) != 0) {
         return PM_SPAWN_INTERNAL_ERR_CAPS_APPLY;
     }
+    if ((caps->cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0 &&
+        capability_set_pci_function(proc->context_id, caps->pci_function) != 0) {
+        return PM_SPAWN_INTERNAL_ERR_CAPS_APPLY;
+    }
     return 0;
 }
 
@@ -1216,6 +1220,11 @@ int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
 
     caps.valid = 1;
     caps.cap_flags = (uint32_t)msg->arg1;
+    /* A packed form has no room for the function the flag would name, so
+     * it would name function 00:00.0 (pm_apply_spawn_caps). */
+    if ((caps.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0) {
+        return WASMOS_ERR_PROC_PM_BAD_CAPS;
+    }
     caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
     uint32_t timeout_ms = (uint32_t)msg->arg3 >> 16;
     if (pm_caps_set_io_window(&caps,
@@ -1384,6 +1393,11 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
 
     caps.valid = 1;
     caps.cap_flags = caps_arg0 & 0xFFFFu;
+    /* A packed form has no room for the function the flag would name, so
+     * it would name function 00:00.0 (pm_apply_spawn_caps). */
+    if ((caps.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0) {
+        return WASMOS_ERR_PROC_PM_BAD_CAPS;
+    }
     caps.irq_mask = (uint16_t)(caps_arg0 >> 16);
     caps.dma_direction_flags = 0;
     caps.dma_max_bytes = 0;
@@ -1815,6 +1829,11 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
     parent_pid = caller->pid;
     caps.valid = 1;
     caps.cap_flags = msg->arg1;
+    /* A packed form has no room for the function the flag would name, so
+     * it would name function 00:00.0 (pm_apply_spawn_caps). */
+    if ((caps.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0) {
+        return WASMOS_ERR_PROC_PM_BAD_CAPS;
+    }
     caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
     caps.dma_direction_flags = 0;
     caps.dma_max_bytes = 0;
@@ -2352,6 +2371,11 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
     uint32_t caps_arg2 = (uint32_t)msg->arg2;
     caps.valid = 1;
     caps.cap_flags = caps_arg0 & 0xFFFFu;
+    /* A packed form has no room for the function the flag would name, so
+     * it would name function 00:00.0 (pm_apply_spawn_caps). */
+    if ((caps.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0) {
+        return WASMOS_ERR_PROC_PM_BAD_CAPS;
+    }
     caps.irq_mask = (uint16_t)(caps_arg0 >> 16);
     caps.dma_direction_flags = 0;
     caps.dma_max_bytes = 0;

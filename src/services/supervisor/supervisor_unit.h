@@ -140,7 +140,8 @@ const char* sv_unit_module(const sv_unit_t* unit);
  * the PM; len 0 leaves it without hardware access. The PM validates the
  * descriptor itself. Returns 0, WASMOS_ERR_SUPERVISOR_BAD_DESC for a length
  * outside the header..SUPERVISOR_CAPS_MAX, or WASMOS_ERR_SUPERVISOR_DMA_CAPS for
- * a DMA request, with the unit unchanged. */
+ * a DMA request that names no PCI function for the kernel to quiesce, with the
+ * unit unchanged. */
 int32_t sv_unit_set_caps(sv_unit_t* unit, const uint8_t* caps, uint32_t len);
 
 /* The spawn request was sent. */

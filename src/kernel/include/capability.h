@@ -30,12 +30,13 @@ typedef enum {
     CAP_SVC_CLASS_REGISTER = 6, /* register a service under a virtual class (anti-spoof) */
     CAP_CONSOLE_OWNER = 7,      /* register the console ring: all tty output and COM1 */
     CAP_SPAWN_GRANT = 8,        /* put hardware grants (a spawn profile) on a spawned child */
-    CAP_SVC_CONTROL = 9         /* submit, kill and declare the boot set at the supervisor */
+    CAP_SVC_CONTROL = 9,        /* submit, kill and declare the boot set at the supervisor */
+    CAP_PCI_CONFIG = 10         /* read and write PCI configuration space */
 } capability_kind_t;
 
 /* Kinds are numbered 0..CAPABILITY_KIND_COUNT-1. Their values are ABI: a guest
  * names one to ipc_endpoint_has_cap as WASMOS_CAP_* (abi/constants.yaml). */
-#define CAPABILITY_KIND_COUNT 10u
+#define CAPABILITY_KIND_COUNT 11u
 _Static_assert(CAP_IO_PORT == WASMOS_CAP_IO_PORT && CAP_IRQ_ROUTE == WASMOS_CAP_IRQ_ROUTE &&
                    CAP_MMIO_MAP == WASMOS_CAP_MMIO_MAP && CAP_DMA_BUFFER == WASMOS_CAP_DMA_BUFFER &&
                    CAP_SYSTEM_CONTROL == WASMOS_CAP_SYSTEM_CONTROL &&
@@ -43,7 +44,8 @@ _Static_assert(CAP_IO_PORT == WASMOS_CAP_IO_PORT && CAP_IRQ_ROUTE == WASMOS_CAP_
                    CAP_SVC_CLASS_REGISTER == WASMOS_CAP_SVC_CLASS_REGISTER &&
                    CAP_CONSOLE_OWNER == WASMOS_CAP_CONSOLE_OWNER &&
                    CAP_SPAWN_GRANT == WASMOS_CAP_SPAWN_GRANT &&
-                   CAP_SVC_CONTROL == WASMOS_CAP_SVC_CONTROL,
+                   CAP_SVC_CONTROL == WASMOS_CAP_SVC_CONTROL &&
+                   CAP_PCI_CONFIG == WASMOS_CAP_PCI_CONFIG,
                "capability_kind_t is the WASMOS_CAP_* ABI");
 
 /* Initialize the capability table; called once during kernel startup.
@@ -53,7 +55,7 @@ void capability_init(void);
 /* Maps a manifest capability name (an unterminated byte string) to its kind:
  * "io.port", "irq.route", "mmio.map", "dma.buffer", "system.control",
  * "subsystem.register", "svc.class", "console.owner", "spawn.grant",
- * "svc.control". The match is exact. Returns 0 with *out_kind set, or -1 for a
+ * "svc.control", "pci.config". The match is exact. Returns 0 with *out_kind set, or -1 for a
  * NULL or empty name or an unrecognised one. */
 int capability_kind_from_name(const uint8_t* name, uint32_t name_len, capability_kind_t* out_kind);
 
@@ -98,6 +100,16 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32
                                  const wasmos_io_range_t* io_ranges, uint16_t irq_mask,
                                  uint32_t dma_direction_flags, uint32_t dma_max_bytes,
                                  uint32_t dma_window_count, const wasmos_dma_window_t* dma_windows);
+
+/* Records the PCI function (bus << 8 | device << 3 | function) context_id's
+ * device sits at, from its spawn profile (DEVMGR_CAP_PCI_FUNCTION). The reap
+ * path quiesces that function (pci_quiesce_context). Returns 0, or -1 when the
+ * record cannot be created. */
+int capability_set_pci_function(uint32_t context_id, uint16_t bdf);
+
+/* The PCI function recorded for context_id: 0 with *out_bdf set, or -1 when
+ * none was. */
+int capability_pci_function(uint32_t context_id, uint16_t* out_bdf);
 
 /* Return non-zero if a spawn profile (hardware limits) has been set for context_id. */
 int capability_spawn_profile_configured(uint32_t context_id);

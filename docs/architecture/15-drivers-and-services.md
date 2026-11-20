@@ -399,13 +399,13 @@ device published by `acpi-bus`; `arg2` carries the I/O base address.
 #### `pci-bus` — PCI Config-Space Enumerator
 
 - **Kind:** WASM service
-- **Capabilities:** `io.port` (0x0CF8–0x0CFF)
+- **Capabilities:** `pci.config`, `irq.route`, `mmio.map`
 - **Entry bindings:** (receives `proc_endpoint` as first arg)
 
-Performs a full PCI configuration space scan using the standard mechanism-1
-I/O ports:
-- `PCI_CFG_ADDR_PORT = 0x0CF8` — address register
-- `PCI_CFG_DATA_PORT = 0x0CFC` — data register
+Performs a full PCI configuration space scan through the kernel's
+`pci_config_read` / `pci_config_write` host calls, which hold a lock across the
+mechanism-1 address/data port pair (0x0CF8/0x0CFC) so no access interleaves
+with another, nor with the kernel's quiesce of a dead driver's function.
 
 Scan scope: 256 buses × 32 devices × 8 functions. For each valid device
 (vendor_id ≠ 0xFFFF), reads class/subclass/prog_if, vendor/device ID, BAR0
@@ -575,11 +575,14 @@ args and no tty pin.
 A unit name is `template` or `template@instance`. The instance key names what
 the unit serves -- a tty (`cli@tty1`), a device (`rtc@acpi:0070`) -- and is
 derived from it, never allocated, so a restarted instance keeps its name. The
-descriptor may carry a capability descriptor (I/O windows, IRQ lines), which
-every spawn of the unit carries. A unit that asks for DMA is refused
+descriptor may carry a capability descriptor (I/O windows, IRQ lines, a DMA
+window), which every spawn of the unit carries. A unit that asks for DMA must
+name its PCI function (`DEVMGR_CAP_PCI_FUNCTION`) or it is refused
 (`WASMOS_ERR_SUPERVISOR_DMA_CAPS`): a crashed driver may leave its device
-bus-mastering into frames that are recycled, and nothing quiesces the device
-before a restart. The table holds `SUPERVISOR_UNITS_MAX` units.
+bus-mastering, and only a named function is quiesced by the kernel at the
+driver's end -- before its frames are recycled and before the supervisor hears
+of the exit ([Capability and Policy](10-capability-and-policy.md), "Device
+Quiesce"). The table holds `SUPERVISOR_UNITS_MAX` units.
 
 **Lifecycle.** Every spawn is a `PROC_IPC_SPAWN_WATCHED` whose notify
 endpoint is the supervisor's own, one in flight at a time, so the spawn reply
@@ -674,9 +677,9 @@ process either way.
 
 Not built: operator stop/start/restart that does not count as a failure;
 retraction of a submitter's units when it dies; restart cascade along `[deps]`
-`needs`; liveness for the boot services; quiescing a DMA device so a DMA
-driver can be supervised; a guard against reboot loops under
-`on_critical=reboot`. They are tracked in `docs/TASKS.md`.
+`needs`; liveness for the boot services; supervising the DMA drivers whose
+clients hold state a restart loses (virtio-blk, ata, virtio-net); a guard
+against reboot loops under `on_critical=reboot`. They are tracked in `docs/TASKS.md`.
 
 #### `sysinit` — Late-Boot Service Launcher
 
@@ -789,14 +792,18 @@ Recognized keys:
 Wildcards: `ATTR{class}` etc. that are absent default to `MATCH_ANY_U8=0xFF`
 or `MATCH_ANY_U16=0xFFFF`. Unknown or malformed lines are skipped silently.
 
-An ACPI rule with `ENV{RESTART}` is not spawned by device-manager: it is
-submitted to the supervisor as the unit `<template>@acpi:<io base>`
-(`rtc@acpi:0070`), with the rule's arguments and the I/O and IRQ grants a
-direct spawn would carry, and the supervisor's reply retires the rule. Any
-other value rejects the line rather than running the driver unsupervised. The
-shipped rules set `on-failure` for rtc, keyboard and mouse, which hold no state
-a restart loses and use no DMA. A rule without the key spawns directly, as
-does one whose submission cannot be sent because no supervisor is bound yet.
+An ACPI or PCI rule with `ENV{RESTART}` is not spawned by device-manager: it
+is submitted to the supervisor as the unit `<template>@acpi:<io base>`
+(`rtc@acpi:0070`) or `<template>@pci:<bus>:<device>.<function>`
+(`virtio_rng@pci:00:04.0`), with the rule's arguments and the grants a direct
+spawn would carry -- for a PCI driver including its function, which the kernel
+quiesces whenever the driver ends -- and the supervisor's reply retires the
+rule. Any other value rejects the line rather than running the driver
+unsupervised. The shipped rules set `on-failure` for rtc, keyboard, mouse and
+virtio-rng, whose clients hold no session a restart loses. A rule without the
+key spawns directly, as does one whose submission cannot be sent because no
+supervisor is bound yet; a PCI driver spawned directly by path is not quiesced
+at its end, because the packed path form cannot name its function.
 
 #### Shipped Rule Files
 
@@ -882,17 +889,17 @@ rule-engine and in-memory device registry. The planned direction (from
   restarts. A rule names a restart policy and device-manager submits the
   driver as a unit (see "Rule Syntax", `ENV{RESTART}`). Clients rebind by name
   on hangup; endpoint identity is not preserved across a restart (see the
-  supervisor). DMA-capable drivers need a quiesce step -- Bus Master Enable
-  cleared, MSI/MSI-X vectors reclaimed, INTx unbound, DMA borrows revoked --
-  before a replacement may start, and until it exists they stay
-  device-manager-spawned.
+  supervisor). A DMA-capable PCI driver is supervised with its function in
+  its grants, which the kernel quiesces at the driver's end; virtio-rng is.
+  virtio-blk, ata and virtio-net stay device-manager-spawned until their
+  clients' rebind is decided (mounts, open files, sockets).
 - **Dynamic mount policy.** Mount assignments as rule outcomes, not
   compile-time constants. `fs-manager` remains the namespace router.
 - **Unified block-device identity.** All transports normalize to
   `block:<parent-address>:<unit>` canonical IDs.
 
-What is **not yet implemented**: supervision of PCI and DMA drivers (the
-quiesce step), liveness probes for drivers, retraction of a unit on device
+What is **not yet implemented**: supervision of the storage and network DMA
+drivers, liveness probes for drivers, retraction of a unit on device
 removal (hotplug), IRQ bind/unbind delegation to driver endpoints.
 
 DMA-specific design details are tracked in `docs/architecture/12-dma-transfers.md`.

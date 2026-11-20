@@ -178,10 +178,11 @@ watched spawns, exit reasons, kill -- so restart policy stays out of the kernel
 endpoint under the same name; clients rebind through name watches on hangup.
 Endpoint identity is deliberately not preserved: the state a client held with
 the old process is gone either way. Liveness is a probe the event loop answers
-itself, so a hung loop is told apart from a busy one. A DMA-capable driver
-additionally needs its device quiesced before a replacement starts, and is not
-supervised until that step exists
-([Drivers and Services](15-drivers-and-services.md)).
+itself, so a hung loop is told apart from a busy one. A DMA-capable driver's
+device is quiesced by the kernel at the driver's end -- bus mastering, MSI and
+INTx off -- before its frames are recycled and before anyone hears of the
+exit, so a replacement never finds it mastering into the dead instance's
+memory ([Capability and Policy](10-capability-and-policy.md)).
 
 **Dynamic mount policy.**
 Filesystem mount assignments are rule outcomes, not compile-time constants. A

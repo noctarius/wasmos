@@ -9,6 +9,10 @@
  * read/write access to every device on the bus, so the bus driver does it
  * instead.
  *
+ * Config space itself is reached through the kernel (pci_config_read/write,
+ * the pci.config capability), which serialises the 0xCF8/0xCFC port pair and
+ * also quiesces a dead driver's function on its own.
+ *
  * The split with the kernel: the kernel owns the interrupt vector namespace and
  * hands a driver an address/data pair (wasmos_msi_alloc); this service writes
  * that pair into the device. Neither side can do the other's half, which is what
@@ -118,23 +122,23 @@ static void log_desc(const wasmos_pci_device_desc_t* d) {
     }
 }
 
-/* Read a 32-bit register from PCI config space using mechanism 1.
- * Bit 31 of the address register is the enable bit. */
+/* A 32-bit config register, through the kernel (pci_config_read/write, which
+ * hold the pci.config capability's lock across the address/data port pair, so
+ * no access interleaves with another or with the kernel's quiesce of a dead
+ * driver's function). A read that fails reads as an absent device. */
 static uint32_t pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg) {
-    uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)device << 11) |
-                       ((uint32_t)function << 8) | ((uint32_t)reg & 0xFCu);
-    (void)wasmos_io_out32(PCI_CFG_ADDR_PORT, (int32_t)address);
-    uint32_t value = 0xFFFFFFFFu; /* an absent device reads back all-ones */
-    (void)wasmos_io_in32(PCI_CFG_DATA_PORT, &value);
+    uint32_t bdf = ((uint32_t)bus << 8) | ((uint32_t)device << 3) | (uint32_t)function;
+    uint32_t value = 0xFFFFFFFFu;
+    if (wasmos_pci_config_read((int32_t)bdf, (int32_t)(reg & 0xFCu), &value) != 0) {
+        return 0xFFFFFFFFu;
+    }
     return value;
 }
 
 static void pci_config_write32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg,
                                uint32_t value) {
-    uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)device << 11) |
-                       ((uint32_t)function << 8) | ((uint32_t)reg & 0xFCu);
-    (void)wasmos_io_out32(PCI_CFG_ADDR_PORT, (int32_t)address);
-    (void)wasmos_io_out32(PCI_CFG_DATA_PORT, (int32_t)value);
+    uint32_t bdf = ((uint32_t)bus << 8) | ((uint32_t)device << 3) | (uint32_t)function;
+    (void)wasmos_pci_config_write((int32_t)bdf, (int32_t)(reg & 0xFCu), (int32_t)value);
 }
 
 /* bdf packs the routing id the way the IPC opcodes carry it. */
@@ -331,8 +335,14 @@ static int32_t msi_bind(uint16_t bdf, uint32_t entry, uint32_t address_lo, uint3
     msi_binding_t* b = binding_find(bdf);
     if (b && b->owner_endpoint != requester) {
         /* One driver per function. Without this a driver could redirect another
-         * device's interrupts to its own endpoint. */
-        return WASMOS_ERR_MSI_NOT_DEVICE_OWNER;
+         * device's interrupts to its own endpoint. A binding whose owner is gone
+         * is the dead driver's: the kernel quiesced the function at its reap
+         * (MSI and MSI-X disabled), so its replacement starts over. */
+        if (wasmos_ipc_endpoint_owner(b->owner_endpoint) > 0) {
+            return WASMOS_ERR_MSI_NOT_DEVICE_OWNER;
+        }
+        b->owner_endpoint = requester;
+        b->bound_mask = 0;
     }
     if (!b) {
         uint32_t kind = 0;

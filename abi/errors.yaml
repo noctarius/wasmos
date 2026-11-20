@@ -466,7 +466,7 @@ domains:
       - { name: EXISTS,    description: "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed" }
       - { name: NO_SPACE,  description: "the supervisor's unit table is full" }
       # Appended, never inserted: a code's value is its position.
-      - { name: DMA_CAPS,  description: "the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit" }
+      - { name: DMA_CAPS,  description: "the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance" }
       - { name: NO_UNIT,     description: "no unit of the name the request gives is recorded" }
       - { name: NOT_RUNNING, description: "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed" }
       - { name: NOT_AUTHORIZED,       description: "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require" }

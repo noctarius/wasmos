@@ -495,9 +495,9 @@ enum {
 enum {
     /* Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps). */
     SUPERVISOR_SUBMIT_DESC_VERSION = 2,
-    /* Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t
-     * and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT
-     * ranges fit, DMA windows are refused.
+    /* Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t,
+     * its I/O ranges and DMA window) may take: a header,
+     * WASMOS_IO_RANGE_LIMIT ranges and one DMA window fit.
      */
     SUPERVISOR_CAPS_MAX = 64,
     /* Longest unit spec a submission carries, NUL excluded. */
@@ -598,6 +598,8 @@ enum {
     WASMOS_CAP_SPAWN_GRANT = 8,
     /* svc.control: submit, kill and declare the boot set at the supervisor. */
     WASMOS_CAP_SVC_CONTROL = 9,
+    /* pci.config: read and write PCI configuration space (pci_config_read/pci_config_write). */
+    WASMOS_CAP_PCI_CONFIG = 10,
 };
 
 #endif /* WASMOS_GENERATED_CONSTANTS_H */

@@ -1144,8 +1144,9 @@ const PARTITION_IPC_ERROR int32 = 0xFFF
 // (wasmos_spawn_caps_v2_t, I/O windows and IRQ lines), which every spawn
 // of the unit carries. Grants are relayed only from a submitter that
 // also holds spawn.grant (WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED);
-// a unit asking for DMA is refused (WASMOS_ERR_SUPERVISOR_DMA_CAPS),
-// since nothing quiesces its device before a restart.
+// a unit asking for DMA must name its PCI function
+// (DEVMGR_CAP_PCI_FUNCTION), which the kernel quiesces whenever the
+// instance ends, or it is refused (WASMOS_ERR_SUPERVISOR_DMA_CAPS).
 // Answered once the unit is accepted, before it is spawned: a spawn
 // that fails later is the unit's failure, handled by its policy.
 const SUPERVISOR_IPC_SUBMIT_REQ int32 = 0x1000

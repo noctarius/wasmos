@@ -785,3 +785,20 @@ pub extern "wasmos" fn linmem_slots(a0: i32) callconv(.c) i32;
 /// for a negative endpoint or an unknown capability, or WASMOS_NOENT for an
 /// endpoint with no live owner or one the kernel owns.
 pub extern "wasmos" fn ipc_endpoint_has_cap(a0: i32, a1: i32) callconv(.c) i32;
+/// Read the dword at register `reg` of PCI function `bdf` (bus << 8 |
+/// device << 3 | function) into `out`. The value comes back through `out`
+/// because a config read legitimately returns all-ones, for an absent
+/// function among others. The kernel serialises every config access, so the
+/// address/data port pair is never interleaved with another caller's or with
+/// the kernel's own quiesce of a dead driver's function. Requires the
+/// pci.config capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
+/// WASMOS_INVAL for a bdf above 0xFFFF or a register that is above 0xFC or
+/// not dword-aligned, or WASMOS_ERR_KERNEL_BAD_POINTER; `out` is left
+/// untouched on failure.
+pub extern "wasmos" fn pci_config_read(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
+/// Write `value` to the dword at register `reg` of PCI function `bdf`, under
+/// the same serialisation as pci_config_read. Requires the pci.config
+/// capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED, or WASMOS_INVAL
+/// for a bdf above 0xFFFF or a register that is above 0xFC or not
+/// dword-aligned.
+pub extern "wasmos" fn pci_config_write(a0: i32, a1: i32, a2: i32) callconv(.c) i32;

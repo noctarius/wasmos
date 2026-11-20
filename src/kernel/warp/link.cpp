@@ -50,6 +50,7 @@ extern "C" {
 #include "io.h"
 #include "irq.h"
 #include "msi.h"
+#include "pci_config.h"
 #include "mmio.h"
 #include "serial.h"
 #include "capability.h"
@@ -918,6 +919,39 @@ static uint32_t warp_io_in32(uint32_t port, uint32_t out_off, void* ctx_) {
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     }
     *out = (uint32_t)inl((uint16_t)port);
+    return 0;
+}
+
+/* hostcalls.yaml `pci_config_read` / `pci_config_write`: config space through the kernel's
+ * serialised mechanism-1 access, for a holder of pci.config.  WASMOS_INVAL for a bdf above
+ * 0xFFFF or a register above 0xFC or not dword-aligned. */
+static uint32_t warp_pci_config_check(uint32_t bdf, uint32_t reg) {
+    uint32_t context_id = 0;
+    if (bdf > 0xFFFFu || reg > 0xFCu || (reg & 3u) != 0u)
+        return (uint32_t)WASMOS_INVAL;
+    if (warp_current_context_id(&context_id) != 0 || !capability_has(context_id, CAP_PCI_CONFIG))
+        return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    return 0;
+}
+
+static uint32_t warp_pci_config_read(uint32_t bdf, uint32_t reg, uint32_t out_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    uint32_t rc = warp_pci_config_check(bdf, reg);
+    if (rc != 0)
+        return rc;
+    uint32_t* out = reinterpret_cast<uint32_t*>(warp_mem(ctx, out_off, sizeof(uint32_t)));
+    if (!out)
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    *out = pci_config_read32((uint16_t)bdf, (uint8_t)reg);
+    return 0;
+}
+
+static uint32_t warp_pci_config_write(uint32_t bdf, uint32_t reg, uint32_t value, void* ctx_) {
+    (void)ctx_;
+    uint32_t rc = warp_pci_config_check(bdf, reg);
+    if (rc != 0)
+        return rc;
+    pci_config_write32((uint16_t)bdf, (uint8_t)reg, value);
     return 0;
 }
 

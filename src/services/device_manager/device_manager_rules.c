@@ -786,6 +786,19 @@ void dm_rules_load_block_fs(device_manager_state_t* state, const char* text) {
     state->block_fs_rule_count = out_count;
 }
 
+/* ENV{RESTART}: the supervisor's policy names, verbatim (SUPERVISOR_IPC_SUBMIT_REQ).
+ * The caller recognises the key before this extracts its value, so a value that
+ * does not extract (unquoted, or longer than any policy name) rejects the line
+ * instead of leaving the driver unsupervised. Returns 0, or -1. */
+static int parse_restart(const char* tok, char* restart, uint32_t cap) {
+    if (extract_op_value(tok, "ENV{RESTART}", "=", restart, cap) != 0 ||
+        (strcmp(restart, "never") != 0 && strcmp(restart, "on-failure") != 0 &&
+         strcmp(restart, "always") != 0)) {
+        return -1;
+    }
+    return 0;
+}
+
 static int parse_pci_match_rule_line(const char* line, pci_match_rule_t* out_rule) {
     char line_buf[320];
     char path[96];
@@ -793,6 +806,7 @@ static int parse_pci_match_rule_line(const char* line, pci_match_rule_t* out_rul
     char* tok = 0;
     char sub[32];
     char tmp[64];
+    char restart[12];
     uint8_t class_code = MATCH_ANY_U8;
     uint8_t bus = MATCH_ANY_U8;
     uint8_t slot = MATCH_ANY_U8;
@@ -812,6 +826,7 @@ static int parse_pci_match_rule_line(const char* line, pci_match_rule_t* out_rul
     }
     path[0] = '\0';
     sub[0] = '\0';
+    restart[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
         tok = (char*)wasmos_sys_trim_left(tok);
@@ -869,6 +884,12 @@ static int parse_pci_match_rule_line(const char* line, pci_match_rule_t* out_rul
             }
             continue;
         }
+        if (strncmp(tok, "ENV{RESTART}", 12) == 0) {
+            if (parse_restart(tok, restart, sizeof(restart)) != 0) {
+                return -1;
+            }
+            continue;
+        }
     }
     if (strcmp(sub, "pci") != 0 || path[0] == '\0') {
         return -1;
@@ -885,6 +906,7 @@ static int parse_pci_match_rule_line(const char* line, pci_match_rule_t* out_rul
     out_rule->spawned_device_mask = 0;
     out_rule->given_up_device_mask = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    str_copy(out_rule->restart, sizeof(out_rule->restart), restart);
     return 0;
 }
 
@@ -974,14 +996,8 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
             }
             continue;
         }
-        /* The supervisor's policy names, verbatim (SUPERVISOR_IPC_SUBMIT_REQ). The
-         * key is recognised before its value is extracted, so a value that does
-         * not extract (unquoted, or longer than any policy name) rejects the
-         * line instead of leaving the driver unsupervised. */
         if (strncmp(tok, "ENV{RESTART}", 12) == 0) {
-            if (extract_op_value(tok, "ENV{RESTART}", "=", restart, sizeof(restart)) != 0 ||
-                (strcmp(restart, "never") != 0 && strcmp(restart, "on-failure") != 0 &&
-                 strcmp(restart, "always") != 0)) {
+            if (parse_restart(tok, restart, sizeof(restart)) != 0) {
                 return -1;
             }
             continue;

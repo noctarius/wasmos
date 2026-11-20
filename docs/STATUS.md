@@ -341,8 +341,9 @@ linked feature documents for rationale and rollout plans.
   by name watch and the submit is an intent on a loop device-manager pumps from
   IDLE; the reply retires the rule. A submission that cannot be sent (no
   supervisor bound yet) spawns the driver directly. `default.rules` sets
-  `on-failure` for rtc, keyboard and mouse; DMA-capable drivers stay
-  device-manager-spawned (the supervisor refuses DMA caps). Clients rebind on
+  `on-failure` for rtc, keyboard, mouse and virtio-rng; virtio-blk, ata and
+  virtio-net stay device-manager-spawned until their clients' rebind is
+  decided. Clients rebind on
   their own (vt and gfxcomp through name watches on hangup; `date` per run).
   `tests/test_supervisor.py` kills `rtc@acpi:0070` with `svc kill`, sees a new
   instance come up with its I/O grant, and reads the clock through it.
@@ -358,6 +359,23 @@ linked feature documents for rationale and rollout plans.
   ordering asks the class registry about each process
   (`service_class_registry_provided_by`) instead of copying the first eight
   providers.
+- A PCI DMA driver's device is quiesced by the kernel when the driver ends
+  (`src/kernel/pci_config.c`, `architecture/10` "Device Quiesce"): a spawn
+  profile with `DEVMGR_CAP_PCI_FUNCTION` names the function
+  (`wasmos_spawn_dma_caps_t.pci_function`), and the reap -- first, before the
+  spawner's `PROC_IPC_CHILD_EXITED` and before any DMA region or borrow is
+  released -- clears Bus Master Enable and MSI/MSI-X enable and sets INTx
+  Disable, logging `[pci] quiesced <bb>:<dd>.<f> ...`. Config space is the
+  kernel's: pci-bus uses `pci_config_read` / `pci_config_write` (capability
+  `pci.config`), serialised with the quiesce, and no longer holds the
+  0xCF8-0xCFF port window. pci-bus hands an MSI binding whose owner died to the
+  function's next driver. device-manager puts the function into a PCI
+  driver's descriptor grants and accepts `ENV{RESTART}` on PCI rules
+  (`<template>@pci:<bb>:<dd>.<f>`); the supervisor takes a DMA unit that names
+  its function. virtio-rng is supervised: `svc kill virtio_rng@pci:00:04.0`
+  quiesces it, the new instance rebinds MSI-X and serves entropy
+  (`sv_probe entropy`, `tests/test_supervisor.py`). Host-tested in
+  `test_pci_config`, `test_device_manager_unit`, `test_supervisor_unit`.
 - Hardware grants and unit control are capability-gated
   (`architecture/10`, "Requester Checks"). Every spawn whose profile sets a
   `cap_flags` bit -- the five `PROC_IPC_SPAWN_*CAPS*` forms and a watched spawn

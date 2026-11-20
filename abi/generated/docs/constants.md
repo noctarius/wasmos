@@ -410,7 +410,7 @@ A reader MUST reject a descriptor whose version it does not know.
 | Symbol | Value | Meaning |
 | --- | --- | --- |
 | `SUPERVISOR_SUBMIT_DESC_VERSION` | 2 | Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps). |
-| `SUPERVISOR_CAPS_MAX` | 64 | Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t and its I/O ranges) may take: a header and WASMOS_IO_RANGE_LIMIT ranges fit, DMA windows are refused. |
+| `SUPERVISOR_CAPS_MAX` | 64 | Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t, its I/O ranges and DMA window) may take: a header, WASMOS_IO_RANGE_LIMIT ranges and one DMA window fit. |
 | `SUPERVISOR_SPEC_MAX` | 255 | Longest unit spec a submission carries, NUL excluded. |
 | `SUPERVISOR_UNIT_NAME_MAX` | 35 | Longest unit name (template@instance), NUL excluded: a service name's ceiling. |
 
@@ -494,3 +494,4 @@ the kernel's capability_kind_t takes the same values.
 | `WASMOS_CAP_CONSOLE_OWNER` | 7 | console.owner: register the console ring. |
 | `WASMOS_CAP_SPAWN_GRANT` | 8 | spawn.grant: put hardware grants on a spawned child, directly or through the supervisor. |
 | `WASMOS_CAP_SVC_CONTROL` | 9 | svc.control: submit, kill and declare the boot set at the supervisor. |
+| `WASMOS_CAP_PCI_CONFIG` | 10 | pci.config: read and write PCI configuration space (pci_config_read/pci_config_write). |

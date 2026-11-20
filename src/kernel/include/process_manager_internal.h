@@ -130,6 +130,7 @@ typedef struct {
     uint32_t dma_max_bytes;       /* per-context pinning budget */
     uint32_t dma_window_count;
     wasmos_dma_window_t dma_windows[PM_DMA_WINDOW_LIMIT];
+    uint16_t pci_function; /* bdf, valid with DEVMGR_CAP_PCI_FUNCTION */
 } pm_spawn_caps_t;
 
 /* Fills caps with exactly one I/O window [first, last], or none when caps lacks

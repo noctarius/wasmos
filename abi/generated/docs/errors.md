@@ -411,7 +411,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_SUPERVISOR_BAD_SPEC` | -0x001A0002 | the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option |
 | `WASMOS_ERR_SUPERVISOR_EXISTS` | -0x001A0003 | a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed |
 | `WASMOS_ERR_SUPERVISOR_NO_SPACE` | -0x001A0004 | the supervisor's unit table is full |
-| `WASMOS_ERR_SUPERVISOR_DMA_CAPS` | -0x001A0005 | the unit asks for DMA access. A restart could hand a device that is still bus-mastering into recycled frames to a new instance, and the supervisor has no way to quiesce it first, so it does not take such a unit |
+| `WASMOS_ERR_SUPERVISOR_DMA_CAPS` | -0x001A0005 | the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance |
 | `WASMOS_ERR_SUPERVISOR_NO_UNIT` | -0x001A0006 | no unit of the name the request gives is recorded |
 | `WASMOS_ERR_SUPERVISOR_NOT_RUNNING` | -0x001A0007 | the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed |
 | `WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED` | -0x001A0008 | the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require |

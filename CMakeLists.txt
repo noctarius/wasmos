@@ -3958,6 +3958,23 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_capability
   COMMAND ${BUILD_DIR}/test_capability
+  # PCI configuration access and the quiesce of a dead driver's function, over
+  # an emulated config space: tests/unit/shadow_io stands in for io.h.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit/shadow_io
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit/include
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pci_config.c
+          ${KERNEL_DIR}/pci_config.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_pci_config
+  COMMAND ${BUILD_DIR}/test_pci_config
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -4824,6 +4841,15 @@ wasmos_ide_index(wasmos_ide_unit_pm_caps
   IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
          ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
   DEFINES WASMOS_HOST_TEST_SMP=1)
+# test_pci_config.c compiles pci_config.c against tests/unit/shadow_io's io.h,
+# which must come first: the real one is x86 inline assembly.
+wasmos_ide_index(wasmos_ide_unit_pci_config
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_pci_config.c
+  IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/shadow_io ${CMAKE_SOURCE_DIR}/tests/unit/include
+         ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
+         ${CMAKE_SOURCE_DIR}/tests/unit
+  DEFINES WASMOS_HOST_TEST_SMP=1)
 
 # test_process_lifecycle.c and its platform stubs link the real process.c, so
 # they take the real kernel headers and the WASMOS_PROCESS_TEST_SEAMS define its
@@ -4883,6 +4909,7 @@ wasmos_ide_index(wasmos_ide_unit
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_process_platform.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_shutdown.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_pm_caps.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_pci_config.c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include

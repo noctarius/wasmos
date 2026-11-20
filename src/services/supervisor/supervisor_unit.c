@@ -126,7 +126,10 @@ int32_t sv_unit_set_caps(sv_unit_t* unit, const uint8_t* caps, uint32_t len) {
         return WASMOS_ERR_SUPERVISOR_BAD_DESC;
     }
     memcpy(&hdr, caps, sizeof(hdr));
-    if ((hdr.cap_flags & DEVMGR_CAP_DMA) != 0u) {
+    /* A DMA device restarted under a new driver must not still be mastering
+     * into the old one's frames. The kernel stops it at the driver's end only
+     * when the descriptor names its PCI function (DEVMGR_CAP_PCI_FUNCTION). */
+    if ((hdr.cap_flags & DEVMGR_CAP_DMA) != 0u && (hdr.cap_flags & DEVMGR_CAP_PCI_FUNCTION) == 0u) {
         return WASMOS_ERR_SUPERVISOR_DMA_CAPS;
     }
     memcpy(unit->caps, caps, len);

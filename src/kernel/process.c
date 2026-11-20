@@ -11,6 +11,7 @@
 #include "irq.h"
 #include "capability.h"
 #include "msi.h"
+#include "pci_config.h"
 #include "timer.h"
 #include "thread.h"
 #include "process_manager.h"
@@ -1304,6 +1305,14 @@ static void process_reap(process_t* proc) {
         process_restore_stack_guard_mappings((uint64_t)proc->stack_alloc_base_phys,
                                              proc->stack_pages);
         pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
+    }
+    /* Before anything is released and before the spawner hears of the exit:
+     * until its function is quiesced the device may still master into the DMA
+     * regions and borrows released below, or raise a vector msi_release_context
+     * hands to someone else, and a supervisor starts the replacement on the
+     * exit event. */
+    if (proc->context_id != 0) {
+        pci_quiesce_context(proc->context_id, proc->pid);
     }
     /* The spawner learns of the exit here, beside the hangups the context owes,
      * with the same delivery guarantee. A READY still held was never earned. */

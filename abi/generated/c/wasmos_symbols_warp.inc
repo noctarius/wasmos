@@ -123,4 +123,6 @@
     LINK("wasmos", "kmsg_read", warp_kmsg_read) , \
     LINK("wasmos", "kmsg_subscribe", warp_kmsg_subscribe) , \
     LINK("wasmos", "linmem_slots", warp_linmem_slots) , \
-    LINK("wasmos", "ipc_endpoint_has_cap", warp_ipc_endpoint_has_cap)
+    LINK("wasmos", "ipc_endpoint_has_cap", warp_ipc_endpoint_has_cap) , \
+    LINK("wasmos", "pci_config_read", warp_pci_config_read) , \
+    LINK("wasmos", "pci_config_write", warp_pci_config_write)

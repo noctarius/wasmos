@@ -46,10 +46,11 @@ typedef enum {
     CAP_CONSOLE_OWNER     = 7,   // mask bit 7: register the console ring
     CAP_SPAWN_GRANT       = 8,   // mask bit 8: put hardware grants on a spawned child
     CAP_SVC_CONTROL       = 9,   // mask bit 9: submit, kill, declare the boot set (supervisor)
+    CAP_PCI_CONFIG        = 10,  // mask bit 10: PCI config space (pci_config_read/write)
 } capability_kind_t;
 
-#define CAPABILITY_KIND_COUNT 10u
-#define CAP_ALL_MASK  ((1u << 10) - 1u)   // every kind
+#define CAPABILITY_KIND_COUNT 11u
+#define CAP_ALL_MASK  ((1u << 11) - 1u)   // every kind
 #define CAPABILITY_DMA_WINDOW_LIMIT 16u
 ```
 
@@ -68,6 +69,7 @@ these kinds via `capability_grant_name`:
 | `"console.owner"`      | `CAP_CONSOLE_OWNER`      |
 | `"spawn.grant"`        | `CAP_SPAWN_GRANT`        |
 | `"svc.control"`        | `CAP_SVC_CONTROL`        |
+| `"pci.config"`         | `CAP_PCI_CONFIG`         |
 
 The kind values are ABI: `abi/constants.yaml` publishes them as `WASMOS_CAP_*`,
 and `capability.h` asserts that the enum matches. Any unrecognized name returns
@@ -79,7 +81,8 @@ receives every tty's output and the kernel log, and its registrant owns COM1
 ([Virtual Terminal](19-virtual-terminal.md)); only the vt declares it.
 
 `CAP_SPAWN_GRANT` and `CAP_SVC_CONTROL` gate requests rather than hardware;
-see "Requester Checks" below.
+see "Requester Checks" below. `CAP_PCI_CONFIG` gates the
+`pci_config_read` / `pci_config_write` host calls; only pci-bus declares it.
 
 ---
 
@@ -167,6 +170,33 @@ the requester checks keep a process from exercising an authority it does not
 hold, but not from spawning an image that does: a privileged utility such as
 `svc` is a deputy any process can start with arguments of its choosing. Closing
 that needs a capability policy over images (`docs/TASKS.md`).
+
+---
+
+### Device Quiesce
+
+A spawn profile may name the PCI function its device sits at
+(`DEVMGR_CAP_PCI_FUNCTION`, `wasmos_spawn_dma_caps_t.pci_function`; only the
+descriptor forms can carry it, and the packed spawn forms refuse the bit).
+Naming one is a grant like any other cap bit, so it needs `spawn.grant`. The
+kernel records it (`capability_set_pci_function`) and, when the process ends,
+quiesces that function (`pci_quiesce_context`, `src/kernel/pci_config.c`):
+Bus Master Enable cleared, INTx Disable set, the MSI and MSI-X enable bits
+cleared, then a read-back so the writes have reached the device. This runs
+first in the reap -- before the spawner's `PROC_IPC_CHILD_EXITED` is posted and
+before the context's IRQ routes, MSI vectors, DMA regions and borrows are
+released -- so no frame the device could still write is recycled while it can,
+and no supervisor restarts a driver for a device that is still mastering. It
+logs `[pci] quiesced <bb>:<dd>.<f>: bus mastering and MSI off for pid <n>`.
+
+The device's own state is not reset: its queues still name the old frames, so
+a new driver resets the device before it turns bus mastering on again (an MSI
+bind through pci-bus does that). A driver that falls back to INTx finds INTx
+disabled and bus mastering off, and nothing turns either back on for it yet.
+
+Config space is reached through the kernel only: `pci_config_read` /
+`pci_config_write` (`pci.config`) hold the same lock as the quiesce across the
+0xCF8/0xCFC address/data pair.
 
 ---
 

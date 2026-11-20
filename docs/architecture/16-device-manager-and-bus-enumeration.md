@@ -169,10 +169,14 @@ pci-bus does not exit after the scan. It registers the service name `"pci"`
 drivers, and a driver must never find the bus service missing — and then serves
 requests for the rest of the boot.
 
-It stays resident because it is the only holder of the 0xCF8/0xCFC configuration
-window: device-manager grants each driver an I/O-port range covering that
-device's own BAR, which excludes config space. Widening that grant would give
-every driver read/write access to every device on the bus.
+It stays resident because it is the only process that may write configuration
+space (the `pci.config` capability; the kernel serialises the 0xCF8/0xCFC port
+pair behind `pci_config_read` / `pci_config_write`): device-manager grants each
+driver an I/O-port range covering that device's own BAR, which excludes config
+space. Widening that grant would give every driver read/write access to every
+device on the bus. An MSI binding whose owner has died belongs to no one: the
+kernel disabled the function's MSI and MSI-X at the owner's reap, and the next
+driver to bind the function takes the binding over.
 
 Requests are served on a **dedicated endpoint**, separate from the one used for
 device-manager traffic: a reply-matching loop discards messages it did not ask

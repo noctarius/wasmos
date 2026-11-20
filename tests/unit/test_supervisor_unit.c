@@ -621,8 +621,18 @@ static void test_dma_caps_are_refused(void) {
     sv_unit_t u = parse_ok("rng@pci:0 /p", 0);
     uint32_t len = caps_v2(buf, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_DMA, 0);
     CHECK(sv_unit_set_caps(&u, buf, len) == WASMOS_ERR_SUPERVISOR_DMA_CAPS,
-          "a DMA unit cannot be restarted safely, so it is not taken");
+          "a DMA unit with no PCI function to quiesce cannot be restarted safely");
     CHECK(u.caps_len == 0u, "a refused descriptor leaves the unit unchanged");
+}
+
+/* The kernel quiesces the named function at the driver's end, before any of
+ * its frames is recycled, so such a DMA unit can be restarted. */
+static void test_dma_caps_naming_their_pci_function_are_taken(void) {
+    uint8_t buf[SUPERVISOR_CAPS_MAX];
+    sv_unit_t u = parse_ok("virtio_rng@pci:00:03.0 /p", 0);
+    uint32_t len = caps_v2(buf, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_DMA | DEVMGR_CAP_PCI_FUNCTION, 0);
+    CHECK(sv_unit_set_caps(&u, buf, len) == 0, "taken");
+    CHECK(u.caps_len == len, "kept");
 }
 
 static void test_a_caps_length_outside_its_bounds_is_refused(void) {
@@ -758,6 +768,7 @@ int main(void) {
     test_a_restarting_required_unit_holds_the_boot();
     test_a_unit_keeps_the_caps_it_was_submitted_with();
     test_dma_caps_are_refused();
+    test_dma_caps_naming_their_pci_function_are_taken();
     test_a_caps_length_outside_its_bounds_is_refused();
     test_a_kill_on_request_is_a_failure();
     test_a_unit_without_an_instance_is_not_killed();

@@ -657,15 +657,24 @@ Source: `architecture/13-runtime-and-packaging.md`,
   images -- signed or allow-listed packages, or privileged capabilities granted
   only to images from the initfs or a read-only system volume -- and, for
   deputies like `svc`, authentication of the invoking process.
-- [ ] [FEATURE][P1] Quiesce a DMA-capable device before its driver is restarted, so
-  PCI and DMA drivers can be supervised (`architecture/15`, "Device-Manager
-  Design Direction"). A crashed driver may leave its device bus-mastering into
-  frames that are then recycled; before a replacement starts, Bus Master Enable
-  must be cleared through pci-bus, MSI/MSI-X vectors reclaimed
-  (`msi_vectors.c`), INTx unbound and DMA borrows revoked
-  (`architecture/12`). Until then the supervisor refuses DMA caps
-  (`WASMOS_ERR_SUPERVISOR_DMA_CAPS`) and virtio-rng, virtio-blk, virtio-net
-  and ata stay device-manager-spawned and unrestarted.
+- [ ] [BUG][P1] Quiesce every PCI DMA driver's device at its end, not only a
+  supervised one. The kernel quiesces the function a spawn profile names
+  (`DEVMGR_CAP_PCI_FUNCTION`, `architecture/10` "Device Quiesce"), but only the
+  descriptor spawn forms carry it: a DMA driver device-manager spawns by path
+  (`PROC_IPC_SPAWN_PATH_CAPS_SYNC`; virtio-blk, virtio-net, ata) names none, so
+  when it dies its device may keep mastering into frames the reap recycles.
+  Spawning those drivers through a descriptor form -- or as supervised units
+  (H5) -- closes it (`device_manager.c`, the TODO at the direct spawn).
+- [ ] [FEATURE][P2] Supervise virtio-blk, ata and virtio-net. The device quiesce
+  makes their restart safe for memory; what is open is their clients: fs-fat
+  and fs-wfs hold mounts and open files on a block device, net-stack sockets on
+  virtio-net. Decide per driver whether the client rebinds or the unit is
+  `critical` (F3, client audit), then add `ENV{RESTART}` to its rule.
+- [ ] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
+  interrupts and DMA back. The quiesce sets INTx Disable and clears Bus Master
+  Enable, and pci-bus turns them back only through an MSI bind
+  (`src/kernel/pci_config.c` TODO). Every in-tree DMA driver binds MSI-X under
+  QEMU, so none hits it today.
 - [ ] [FEATURE][P2] Operator stop, start and restart for supervised units. `svc kill`
   is the only action, and its end counts as a failure. A stop must end a unit
   without a restart and without counting it; a start or restart must clear a

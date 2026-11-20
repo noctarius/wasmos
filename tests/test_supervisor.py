@@ -268,6 +268,17 @@ class SupervisorTests(unittest.TestCase):
         )
         self.assertIn(requested, log)
         self.assertLess(log.find(requested), log.find(ended))
+        # Regression: 2026-11-20-acpi-caps-inherit-pci-function -- device-manager
+        # built an ACPI rule's grants on top of the previous PCI rule's without
+        # clearing them, so rtc was spawned naming virtio-rng's PCI function,
+        # and killing rtc made the kernel quiesce virtio-rng's device: bus
+        # mastering and MSI-X off under a live driver, whose entropy requests
+        # then timed out.
+        self.assertNotRegex(
+            log,
+            rf"MSI off for pid {old_pid}\b",
+            "rtc's end quiesced a PCI function: its grants named one it does not drive",
+        )
         # The kill is a failure, so the on-failure unit is restarted.
         self.assertRegex(
             log,
@@ -303,6 +314,70 @@ class SupervisorTests(unittest.TestCase):
 
         out = _svc(self, self.session, "kill no-such-unit")
         self.assertIn("svc: no unit of that name", out)
+
+    def _entropy(self, tag: str) -> None:
+        """sv_probe asks the hrng provider for bytes its device DMAs in. Run
+        from the shell it has a tty, so its line is on the console, not in the
+        kernel log."""
+        start = self.session.send_command(f"sv_probe entropy {tag}", timeout_s=20)
+        needle = f"[sv-probe] {tag} entropy ".encode()
+        self.assertTrue(
+            self.session.expect_from(start, needle, timeout_s=30),
+            f"sv_probe did not report.\n--- tail ---\n{self.session.tail()}\n",
+        )
+        out = self.session.buf[start:].decode("utf-8", errors="replace")
+        self.assertIn(
+            f"[sv-probe] {tag} entropy ok", out, f"no entropy from virtio-rng:\n{out}"
+        )
+
+    def test_9a_a_killed_dma_driver_is_quiesced_and_restarted(self):
+        # virtio-rng drives DMA. Its rule hands it to the supervisor with its
+        # PCI function in the grants, so the kernel quiesces the function at
+        # its end -- bus mastering and MSI off before the reap recycles the
+        # frames the device writes -- and the restarted instance serves DMA'd
+        # entropy again.
+        before = _list_rows(self, self.session)
+        units = [u for u in before if u.startswith("virtio_rng@pci:")]
+        self.assertEqual(
+            len(units), 1, f"virtio-rng is not a supervised unit: {sorted(before)}"
+        )
+        unit = units[0]
+        self.assertIn(before[unit][0], ("running", "stable"))
+        old_pid = before[unit][1]
+        restarts = int(before[unit][2])
+        self._entropy("rng-before")
+
+        _svc(self, self.session, f"kill {unit}")
+        function = unit.split("@pci:", 1)[1]
+        quiesced = (
+            f"[pci] quiesced {function}: bus mastering and MSI off for pid {old_pid}"
+        )
+        log = _syslog_wait(self.session, quiesced, 30)
+        self.assertTrue(
+            log,
+            f"{unit}'s function was not quiesced.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+
+        deadline = time.time() + 30
+        row = []
+        while time.time() < deadline:
+            row = _list_rows(self, self.session).get(unit, [])
+            if row and row[0] in ("running", "stable") and row[1] != old_pid:
+                break
+            time.sleep(0.5)
+        self.assertTrue(
+            row and row[0] in ("running", "stable") and row[1] != old_pid,
+            f"{unit} did not come back as a new instance: {row}",
+        )
+        self.assertEqual(int(row[2]), restarts + 1)
+        log = self.session.syslog_tail(1 << 20)
+        self.assertGreater(
+            log.rfind("[virtio-rng] msix enabled"),
+            log.find(quiesced),
+            "the new instance did not bind its MSI-X vector after the quiesce",
+        )
+        self._entropy("rng-after")
 
     def test_9b_a_killed_vt_brings_the_shell_back(self):
         # Runs last in this session: the vt carries the console the harness

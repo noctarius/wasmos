@@ -1417,6 +1417,35 @@ hostcalls:
     params:
       - { name: endpoint, kind: handle }
       - { name: cap, kind: scalar }
+  - name: pci_config_read
+    returns: status
+    doc: |
+      Read the dword at register `reg` of PCI function `bdf` (bus << 8 |
+      device << 3 | function) into `out`. The value comes back through `out`
+      because a config read legitimately returns all-ones, for an absent
+      function among others. The kernel serialises every config access, so the
+      address/data port pair is never interleaved with another caller's or with
+      the kernel's own quiesce of a dead driver's function. Requires the
+      pci.config capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
+      WASMOS_INVAL for a bdf above 0xFFFF or a register that is above 0xFC or
+      not dword-aligned, or WASMOS_ERR_KERNEL_BAD_POINTER; `out` is left
+      untouched on failure.
+    params:
+      - { name: bdf, kind: scalar }
+      - { name: reg, kind: scalar }
+      - { name: out, kind: out, c_type: "uint32_t*" }
+  - name: pci_config_write
+    returns: status
+    doc: |
+      Write `value` to the dword at register `reg` of PCI function `bdf`, under
+      the same serialisation as pci_config_read. Requires the pci.config
+      capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED, or WASMOS_INVAL
+      for a bdf above 0xFFFF or a register that is above 0xFC or not
+      dword-aligned.
+    params:
+      - { name: bdf, kind: scalar }
+      - { name: reg, kind: scalar }
+      - { name: value, kind: scalar }
 
 # Extra links outside the ring-3/AOT id space (no `id`).
 extra:

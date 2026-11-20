@@ -21,8 +21,8 @@ int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last) 
 
 int pm_caps_from_v2(const uint8_t* payload, uint32_t payload_size, pm_spawn_caps_t* caps) {
     wasmos_spawn_caps_v2_t in_caps;
-    uint32_t known_cap_mask =
-        DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ | DEVMGR_CAP_DMA;
+    uint32_t known_cap_mask = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ |
+                              DEVMGR_CAP_DMA | DEVMGR_CAP_PCI_FUNCTION;
     uint32_t expected_size = 0;
     uint64_t win_end = 0;
 
@@ -46,6 +46,12 @@ int pm_caps_from_v2(const uint8_t* payload, uint32_t payload_size, pm_spawn_caps
     caps->valid = 1;
     caps->cap_flags = in_caps.cap_flags;
     caps->irq_mask = in_caps.irq_mask;
+    if ((caps->cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0) {
+        if (in_caps.dma.pci_function > 0xFFFFu) {
+            return WASMOS_ERR_PROC_PM_BAD_CAPS;
+        }
+        caps->pci_function = (uint16_t)in_caps.dma.pci_function;
+    }
 
     /* A non-zero io_range_count supersedes the single io_port_min/max window;
      * the ranges follow the fixed header, ahead of the DMA windows. */

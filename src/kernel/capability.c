@@ -7,7 +7,7 @@
 #include "memory.h"
 #include "string.h"
 
-#define CAP_ALL_MASK ((1u << 10) - 1u)
+#define CAP_ALL_MASK ((1u << 11) - 1u)
 #define CAP_PAGE_SIZE 0x1000u
 
 typedef struct {
@@ -24,6 +24,8 @@ typedef struct {
     uint32_t dma_window_count;
     wasmos_dma_window_t dma_windows[CAPABILITY_DMA_WINDOW_LIMIT];
     uint32_t mask;
+    uint8_t pci_function_valid;
+    uint16_t pci_function;
 } capability_context_state_t;
 
 /* TODO: The capability table has no lock, while grants (spawn/app load) and
@@ -53,6 +55,8 @@ static uint32_t kind_to_mask(capability_kind_t kind) {
         return 1u << 8;
     case CAP_SVC_CONTROL:
         return 1u << 9;
+    case CAP_PCI_CONFIG:
+        return 1u << 10;
     default:
         return 0;
     }
@@ -118,6 +122,7 @@ static const struct {
     {"console.owner", CAP_CONSOLE_OWNER},
     {"spawn.grant", CAP_SPAWN_GRANT},
     {"svc.control", CAP_SVC_CONTROL},
+    {"pci.config", CAP_PCI_CONFIG},
 };
 
 int capability_kind_from_name(const uint8_t* name, uint32_t name_len, capability_kind_t* out_kind) {
@@ -488,4 +493,23 @@ void capability_release_context(uint32_t context_id) {
     if (ctx) {
         (void)list_remove(&g_cap_ctx, ctx);
     }
+}
+
+int capability_set_pci_function(uint32_t context_id, uint16_t bdf) {
+    capability_context_state_t* ctx = capability_state_for_context(context_id, 1);
+    if (!ctx) {
+        return -1;
+    }
+    ctx->pci_function = bdf;
+    ctx->pci_function_valid = 1;
+    return 0;
+}
+
+int capability_pci_function(uint32_t context_id, uint16_t* out_bdf) {
+    capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    if (!ctx || !ctx->pci_function_valid || !out_bdf) {
+        return -1;
+    }
+    *out_bdf = ctx->pci_function;
+    return 0;
 }

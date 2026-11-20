@@ -439,7 +439,6 @@ typedef struct {
     uint32_t acpi_match_rule_count;
     uint8_t boot_mount_ready; /* non-zero once the boot FS mount is live */
     uint8_t user_mount_ready; /* non-zero once the user FS mount is live */
-    uint8_t ready_notified;   /* non-zero after wasmos_sys_notify_ready sent */
 } device_manager_state_t;
 
 #endif

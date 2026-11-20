@@ -289,8 +289,13 @@ const PROC_STATUS_READY int32 = 3
 // the caller's buffer at the offsets it names.
 //
 // A reader MUST reject a descriptor whose version it does not know.
-// Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len).
-const SPAWN_WATCH_DESC_VERSION int32 = 2
+// Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len; 3: flags).
+const SPAWN_WATCH_DESC_VERSION int32 = 3
+// The path is the name of a boot module (the app name its .wap embeds),
+// spawned from its in-memory image rather than read through the
+// filesystem, so a watched spawn can start the services the filesystem
+// itself needs. Such a spawn carries no arguments and no tty pin.
+const SPAWN_WATCH_FLAG_MODULE int32 = 1
 // Dependency records the reply can carry, the same ceiling as a .wap
 // v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off.
 const SPAWN_WATCH_DEPS_MAX int32 = 16

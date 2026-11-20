@@ -65,6 +65,7 @@ export const WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE: i32 = -0x0001000E; // the ker
 export const WASMOS_ERR_PROC_SPAWN_BAD_CAPS: i32 = -0x0001000F; // the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created
 export const WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: i32 = -0x00010010; // the kernel refused the parsed capability profile for the new child, which was killed before it ran
 export const WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED: i32 = -0x00010011; // the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created
+export const WASMOS_ERR_PROC_SPAWN_NO_MODULE: i32 = -0x00010012; // the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created
 export const WASMOS_ERR_PROC_PM_BUSY: i32 = -0x00020001; // PM already has an incompatible in-flight operation
 export const WASMOS_ERR_PROC_PM_BAD_ENDPOINT: i32 = -0x00020002; // source endpoint owner lookup failed
 export const WASMOS_ERR_PROC_PM_NO_CALLER: i32 = -0x00020003; // source endpoint owner has no live process
@@ -384,6 +385,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_SPAWN_BAD_CAPS: return "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created";
     case WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: return "the kernel refused the parsed capability profile for the new child, which was killed before it ran";
     case WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED: return "the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created";
+    case WASMOS_ERR_PROC_SPAWN_NO_MODULE: return "the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created";
     case WASMOS_ERR_PROC_PM_BUSY: return "PM already has an incompatible in-flight operation";
     case WASMOS_ERR_PROC_PM_BAD_ENDPOINT: return "source endpoint owner lookup failed";
     case WASMOS_ERR_PROC_PM_NO_CALLER: return "source endpoint owner has no live process";

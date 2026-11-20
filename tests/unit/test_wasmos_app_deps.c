@@ -240,6 +240,44 @@ static int test_v9_is_refused(void) {
     return 0;
 }
 
+/* The boot-module lookup the supervisor's boot chain is spawned through: by
+ * the app name the package embeds, skipping modules that are not apps or do
+ * not parse, and naming nothing when the table is absent. */
+static int test_a_boot_module_is_found_by_its_app_name(void) {
+    static uint8_t garbage[16] = "not a package";
+    uint32_t len = build(WASMOS_APP_VERSION, 0, 0, 0);
+    boot_module_t mods[3];
+    boot_info_t info;
+    memset(mods, 0, sizeof(mods));
+    memset(&info, 0, sizeof(info));
+    mods[0].type = 0; /* not an app */
+    mods[0].base = (uint64_t)(uintptr_t)g_blob;
+    mods[0].size = len;
+    mods[1].type = BOOT_MODULE_TYPE_WASMOS_APP;
+    mods[1].base = (uint64_t)(uintptr_t)garbage;
+    mods[1].size = sizeof(garbage);
+    mods[2].type = BOOT_MODULE_TYPE_WASMOS_APP;
+    mods[2].base = (uint64_t)(uintptr_t)g_blob;
+    mods[2].size = len;
+    info.flags = BOOT_INFO_FLAG_MODULES_PRESENT;
+    info.modules = mods;
+    info.module_count = 3;
+    info.module_entry_size = sizeof(boot_module_t);
+    if (wasmos_app_boot_module_index(&info, "t", 1) != 2u) {
+        return __LINE__;
+    }
+    if (wasmos_app_boot_module_index(&info, "tt", 2) != 0xFFFFFFFFu ||
+        wasmos_app_boot_module_index(&info, "x", 1) != 0xFFFFFFFFu ||
+        wasmos_app_boot_module_index(&info, "t", 0) != 0xFFFFFFFFu) {
+        return __LINE__;
+    }
+    info.flags = 0;
+    if (wasmos_app_boot_module_index(&info, "t", 1) != 0xFFFFFFFFu) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -252,6 +290,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_name_limits_follow_the_kind),
         WASMOS_TEST_CASE(test_unknown_strength_or_kind_is_refused),
         WASMOS_TEST_CASE(test_v9_is_refused),
+        WASMOS_TEST_CASE(test_a_boot_module_is_found_by_its_app_name),
     };
     const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
     if (wasmos_test_run_all(cases, groups) != 0) {

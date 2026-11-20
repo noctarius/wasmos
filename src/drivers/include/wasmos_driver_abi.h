@@ -617,7 +617,10 @@ typedef struct {
  * caps_len 0 spawns without hardware access. Otherwise caps_off names a
  * wasmos_spawn_caps_v2_t and its tail arrays in the same region, caps_len bytes
  * exactly, which the child holds from its first instruction; a descriptor that
- * does not parse is WASMOS_ERR_PROC_SPAWN_BAD_CAPS and no child. */
+ * does not parse is WASMOS_ERR_PROC_SPAWN_BAD_CAPS and no child.
+ *
+ * flags is SPAWN_WATCH_FLAG_*. With SPAWN_WATCH_FLAG_MODULE the path is a boot
+ * module's app name, and args_len and tty must be 0. */
 typedef struct {
     /* request */
     uint32_t version; /* = SPAWN_WATCH_DESC_VERSION */
@@ -629,7 +632,7 @@ typedef struct {
     uint32_t args_len;
     uint32_t caps_off;
     uint32_t caps_len;
-    uint32_t reserved0;
+    uint32_t flags;
     /* reply */
     uint32_t pid;
     uint32_t app_flags;

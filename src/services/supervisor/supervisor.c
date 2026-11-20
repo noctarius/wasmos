@@ -8,6 +8,11 @@
  * table. SUPERVISOR_IPC_KILL_REQ kills a unit's instance on request; its end is
  * a failure like any kill of the supervisor's own.
  *
+ * The boot chain -- fs-manager, fs-tmpfs, fs-init, device-manager -- is the
+ * supervisor's own: it records them as critical units before it takes any
+ * submission and spawns them from their boot modules (SPAWN_WATCH_FLAG_MODULE),
+ * since the filesystem cannot be read before they run.
+ *
  * Submitting, killing and declaring the boot set require the sender to hold
  * svc.control; a submission that carries grants also requires spawn.grant
  * (sv_authorize). Listing is open.
@@ -325,11 +330,14 @@ static void sv_on_spawn_reply(void* user, const wasmos_ipc_message_t* msg) {
 static int sv_spawn_send(int32_t index) {
     sv_unit_t* u = &g_units[index];
     wasmos_spawn_watch_desc_t desc;
-    uint32_t path_len = (uint32_t)strlen(u->path);
+    const char* module = sv_unit_module(u);
+    const char* path = module ? module : u->path;
+    uint32_t path_len = (uint32_t)strlen(path);
     uint32_t args_len = (uint32_t)strlen(u->args);
 
     memset(&desc, 0, sizeof(desc));
     desc.version = SPAWN_WATCH_DESC_VERSION;
+    desc.flags = module ? SPAWN_WATCH_FLAG_MODULE : 0u;
     desc.notify_endpoint = (uint32_t)g_ep;
     desc.tty = u->tty;
     desc.path_off = SV_SPAWN_PATH_OFF;
@@ -340,7 +348,7 @@ static int sv_spawn_send(int32_t index) {
     desc.caps_len = u->caps_len;
     if (wasmos_xfer_buffer_write(g_spawn_bid, &desc, (int32_t)sizeof(desc), 0) != 0 ||
         wasmos_xfer_buffer_write(
-            g_spawn_bid, u->path, (int32_t)path_len, (int32_t)SV_SPAWN_PATH_OFF) != 0 ||
+            g_spawn_bid, path, (int32_t)path_len, (int32_t)SV_SPAWN_PATH_OFF) != 0 ||
         (args_len > 0 &&
          wasmos_xfer_buffer_write(
              g_spawn_bid, u->args, (int32_t)args_len, (int32_t)SV_SPAWN_ARGS_OFF) != 0) ||
@@ -751,10 +759,32 @@ static int sv_register(void) {
 
 /* A supervisor that cannot set itself up exits: it is a critical process, so
  * the kernel panics naming it rather than running on with nothing supervised. */
+/* The boot chain, started from boot modules in this order: fs-tmpfs serves
+ * "/", the directory every mount point is made in, so it starts before fs-init
+ * and device-manager mount anything onto it. Start order is not a correctness
+ * property of the others (docs/architecture/03, invariant 5). Each is critical:
+ * nothing stands in for the filesystem or for device-manager, so the death of
+ * one ends the system with a line naming it. */
+static const char* const k_boot_units[] = {
+    "fs-manager module:fs-manager class=critical",
+    "fs-tmpfs module:fs-tmpfs class=critical",
+    "fs-init module:fs-init class=critical",
+    "device-manager module:device-manager class=critical",
+};
+
 static void sv_fatal(const char* msg) {
     sv_log(msg);
     (void)wasmos_proc_exit(1);
     __builtin_trap();
+}
+
+/* Records the boot chain as the first units, due at once. */
+static void sv_seed_boot_units(void) {
+    for (uint32_t i = 0; i < sizeof(k_boot_units) / sizeof(k_boot_units[0]); ++i) {
+        if (sv_spec_parse(k_boot_units[i], &g_timing, sv_now(), &g_units[i]) != 0) {
+            sv_fatal("[supervisor] a boot-chain unit spec does not parse\n");
+        }
+    }
 }
 
 WASMOS_WASM_EXPORT int32_t initialize(void) {
@@ -772,6 +802,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     }
     sv_load_timing();
     g_fault_trap = sv_fault_is_trap();
+    sv_seed_boot_units();
 
     wasmos_sys_event_loop_init(&g_loop, g_ep, SV_LOOP_REQ_BASE);
     (void)wasmos_sys_event_set_default(&g_loop, sv_on_unclaimed, 0);

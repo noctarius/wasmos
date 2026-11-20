@@ -62,6 +62,7 @@ domains:
       - { name: BAD_CAPS,         description: "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created" }
       - { name: CAPS_APPLY,       description: "the kernel refused the parsed capability profile for the new child, which was killed before it ran" }
       - { name: GRANT_NOT_AUTHORIZED, description: "the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created" }
+      - { name: NO_MODULE,        description: "the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created" }
 
   proc_pm:
     id: 2

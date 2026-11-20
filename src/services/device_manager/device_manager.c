@@ -68,7 +68,6 @@ static device_manager_state_t g_dm = {
     .acpi_match_rule_count = 0,
     .boot_mount_ready = 0,
     .user_mount_ready = 0,
-    .ready_notified = 0,
 };
 
 static wasmos_sys_event_loop_t g_dm_ipc_loop;
@@ -3163,6 +3162,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         console_write("[device-manager] query register failed\n");
         wasmos_sys_ipc_recv_loop();
     }
+    /* READY once both names are live (docs/architecture/03, invariant 5): it is
+     * not a milestone. Rule loading and enumeration follow and may take as long
+     * as the boot volume does; the supervisor holds device-manager to READY. */
+    wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
     g_dm_call_select_id = wasmos_ipc_select_create();
     if (g_dm_call_select_id < 0 ||
         wasmos_ipc_select_add(g_dm_call_select_id, g_dm.reply_endpoint) != 0 ||
@@ -3509,10 +3512,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;
             }
-            if (!g_dm.ready_notified && g_dm.boot_mount_ready && g_dm.rules_boot_loaded) {
-                g_dm.ready_notified = 1;
-                wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
-            }
             /* Block on real events instead of yield-spinning (which pegged a CPU
              * forever once idle).  While boot-time rule loading is still in
              * flight, wake periodically to retry FS reads and poll the async
@@ -3526,7 +3525,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
              * the idle select set, so an indefinite block here would never see
              * it. The timed wait polls poll_mount_request_async instead. */
             int32_t settled = g_dm.rules_init_loaded && g_dm.rules_boot_loaded &&
-                              g_dm.ready_notified && !g_dm.rules_boot_request_pending &&
+                              g_dm.boot_mount_ready && !g_dm.rules_boot_request_pending &&
                               !g_dm.mount_req_pending && !g_dm.submit_req_pending;
             if (g_dm_idle_select_id >= 0) {
                 if (settled) {

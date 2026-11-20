@@ -46,6 +46,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_SPAWN_BAD_CAPS` | -0x0001000F | the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created |
 | `WASMOS_ERR_PROC_SPAWN_CAPS_APPLY` | -0x00010010 | the kernel refused the parsed capability profile for the new child, which was killed before it ran |
 | `WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED` | -0x00010011 | the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created |
+| `WASMOS_ERR_PROC_SPAWN_NO_MODULE` | -0x00010012 | the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created |
 
 ### `proc_pm` (domain 2) — non-path process-manager IPC failures (was PROC_PM_ERR_*)
 

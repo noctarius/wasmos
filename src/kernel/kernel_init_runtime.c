@@ -32,9 +32,9 @@ static const uint8_t g_skip_wasm_boot = 0;
  * (docs/TASKS.md `[BUG][P0]`). */
 #define INIT_SYSINIT_MAX_ATTEMPTS 512u
 
-/* How long init waits, from device-manager's spawn, for fs-manager to report
- * /boot mounted. Enumeration, the boot volume's driver and its registration
- * all fall inside it; a loaded CI runner is entitled to be slow, so it is
+/* How long init waits, from the supervisor's spawn, for fs-manager to report
+ * /boot mounted. The boot chain's start, enumeration, the boot volume's driver
+ * and its registration all fall inside it; a loaded CI runner is entitled to be slow, so it is
  * generous. Past it the boot panics naming the missing mount, because sysinit
  * -- and so every service -- lives on that volume. */
 #define INIT_BOOT_MOUNT_TIMEOUT_MS 60000u
@@ -69,10 +69,6 @@ void kernel_init_state_reset(init_state_t* state, const boot_info_t* boot_info) 
     state->native_smoke_index = 0xFFFFFFFFu;
     state->smoke_index = 0xFFFFFFFFu;
     state->supervisor_index = 0xFFFFFFFFu;
-    state->fs_manager_index = 0xFFFFFFFFu;
-    state->fs_tmpfs_index = 0xFFFFFFFFu;
-    state->fs_init_index = 0xFFFFFFFFu;
-    state->device_manager_index = 0xFFFFFFFFu;
     state->sysinit_attempts = 0;
     state->boot_mount_deadline = 0;
     state->fsmgr_endpoint = IPC_ENDPOINT_NONE;
@@ -80,29 +76,8 @@ void kernel_init_state_reset(init_state_t* state, const boot_info_t* boot_info) 
     memset(&state->mount_wait_buf, 0, sizeof(state->mount_wait_buf));
 }
 
-static uint32_t boot_module_index_by_app_name(const boot_info_t* info, const char* name) {
-    if (!info || !name || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
-        return 0xFFFFFFFFu;
-    }
-    if (!info->modules || info->module_entry_size < sizeof(boot_module_t)) {
-        return 0xFFFFFFFFu;
-    }
-    const uint8_t* mods = (const uint8_t*)info->modules;
-    for (uint32_t i = 0; i < info->module_count; ++i) {
-        const boot_module_t* mod = (const boot_module_t*)(mods + i * info->module_entry_size);
-        if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 || mod->size == 0 ||
-            mod->size > 0xFFFFFFFFULL) {
-            continue;
-        }
-        wasmos_app_desc_t desc;
-        if (wasmos_app_parse(ptr_cast(uint8_t, mod->base), (uint32_t)mod->size, &desc) != 0) {
-            continue;
-        }
-        if (str_eq_bytes(desc.name, desc.name_len, name)) {
-            return i;
-        }
-    }
-    return 0xFFFFFFFFu;
+static uint32_t init_module_index(const init_state_t* state, const char* name) {
+    return wasmos_app_boot_module_index(state->boot_info, name, (uint32_t)strlen(name));
 }
 
 static int init_send_spawn_index(process_t* process, init_state_t* state, uint32_t module_index,
@@ -348,11 +323,11 @@ static int init_send_mount_wait(process_t* process, init_state_t* state, const c
  *
  * arg is the init_state_t prepared by kernel_init_state_reset, borrowed and
  * mutated across dispatches; `phase` is where the sequence stands.  Each call
- * advances at most one step and yields, so the whole boot chain — spawning the
- * process manager, resolving boot modules, spawning the supervisor, fs-manager,
- * fs-tmpfs, fs-init and device-manager, then sysinit by path once fs-manager
- * reports /boot mounted — plays out over many dispatches.  Steps that depend on a service that is
- * not up yet simply yield and retry on the next dispatch.
+ * advances at most one step and yields, so the whole sequence — spawning the
+ * process manager, resolving boot modules, spawning the supervisor (which starts
+ * fs-manager, fs-tmpfs, fs-init and device-manager itself), then sysinit by path
+ * once fs-manager reports /boot mounted — plays out over many dispatches.  Steps that depend on a
+ * service that is not up yet simply yield and retry on the next dispatch.
  *
  * Returns PROCESS_RUN_YIELDED for "call me again", PROCESS_RUN_IDLE for a NULL
  * process, state or boot_info, and PROCESS_RUN_EXITED with a non-zero exit
@@ -361,8 +336,8 @@ static int init_send_mount_wait(process_t* process, init_state_t* state, const c
  *
  * Once the chain completes, init has no work left and parks on its reply
  * endpoint with a bounded wait rather than returning PROCESS_RUN_BLOCKED, which
- * would not actually park it.  It stays alive as the parent of the boot
- * processes. */
+ * would not actually park it.  It stays alive as the parent of the supervisor
+ * and sysinit. */
 process_run_result_t kernel_init_entry(process_t* process, void* arg) {
     init_state_t* state = (init_state_t*)arg;
     uint32_t pm_pid = 0;
@@ -373,17 +348,10 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
     }
 
     if (!state->started) {
-        state->native_min_index =
-            boot_module_index_by_app_name(state->boot_info, "native-call-min");
-        state->native_smoke_index =
-            boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
-        state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
-        state->supervisor_index = boot_module_index_by_app_name(state->boot_info, "supervisor");
-        state->fs_manager_index = boot_module_index_by_app_name(state->boot_info, "fs-manager");
-        state->fs_tmpfs_index = boot_module_index_by_app_name(state->boot_info, "fs-tmpfs");
-        state->fs_init_index = boot_module_index_by_app_name(state->boot_info, "fs-init");
-        state->device_manager_index =
-            boot_module_index_by_app_name(state->boot_info, "device-manager");
+        state->native_min_index = init_module_index(state, "native-call-min");
+        state->native_smoke_index = init_module_index(state, "native-call-smoke");
+        state->smoke_index = init_module_index(state, "init-smoke");
+        state->supervisor_index = init_module_index(state, "supervisor");
         state->reply_endpoint = IPC_ENDPOINT_NONE;
         state->request_id = 1;
         state->pending_kind = 0;
@@ -409,32 +377,12 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         state->pm_kill_owner_test_injected = 0;
         state->pm_status_owner_test_injected = 0;
         state->pm_spawn_owner_test_injected = 0;
-        /* Every service sysinit starts is handed to the supervisor, so a boot
-         * without it would bring up no services at all. */
+        /* The supervisor starts the boot chain (fs-manager, fs-tmpfs, fs-init,
+         * device-manager) and every service sysinit submits, so a boot without
+         * it would bring up nothing at all. A missing boot-chain module is the
+         * supervisor's to report: it is a critical unit that fails to spawn. */
         if (state->supervisor_index == 0xFFFFFFFFu) {
             klog_write("[init] supervisor module not found\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        if (state->fs_manager_index == 0xFFFFFFFFu) {
-            klog_write("[init] fs-manager module not found\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        /* The root filesystem is not optional: with nothing mounted at "/", a
-         * path that names no other mount resolves to nothing. */
-        if (state->fs_tmpfs_index == 0xFFFFFFFFu) {
-            klog_write("[init] fs-tmpfs module not found\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        if (state->fs_init_index == 0xFFFFFFFFu) {
-            klog_write("[init] fs-init module not found\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        if (state->device_manager_index == 0xFFFFFFFFu) {
-            klog_write("[init] device-manager module not found\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -507,38 +455,6 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
-        } else if (state->fs_manager_index != 0xFFFFFFFFu) {
-            trace_write("[init] spawn fs-manager\n");
-            if (init_send_spawn_index(process, state, state->fs_manager_index, 4) != 0) {
-                klog_write("[init] fs-manager spawn request failed\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        } else if (state->fs_tmpfs_index != 0xFFFFFFFFu) {
-            /* Before fs-init and before device-manager, because a mount point is
-             * a directory in THIS filesystem: the root has to be mounted before
-             * anything mounts onto it. */
-            trace_write("[init] spawn fs-tmpfs\n");
-            if (init_send_spawn_index(process, state, state->fs_tmpfs_index, 7) != 0) {
-                klog_write("[init] fs-tmpfs spawn request failed\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        } else if (state->fs_init_index != 0xFFFFFFFFu) {
-            trace_write("[init] spawn fs-init\n");
-            if (init_send_spawn_index(process, state, state->fs_init_index, 5) != 0) {
-                klog_write("[init] fs-init spawn request failed\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        } else {
-            trace_write("[init] spawn device-manager\n");
-            if (init_send_spawn_index(process, state, state->device_manager_index, 6) != 0) {
-                klog_write("[init] device-manager spawn request failed\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-            state->pending_kind = 6;
         }
         return PROCESS_RUN_YIELDED;
     }
@@ -576,19 +492,8 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
                 klog_write("[init] native-call-smoke spawn failed\n");
             } else if (state->pending_kind == 3) {
                 klog_write("[init] init-smoke spawn failed\n");
-            } else if (state->pending_kind == 4) {
-                klog_write("[init] fs-manager spawn failed\n");
-            } else if (state->pending_kind == 7) {
-                klog_write("[init] fs-tmpfs spawn failed\n");
-            } else if (state->pending_kind == 8) {
-                klog_write("[init] supervisor spawn failed\n");
-            } else if (state->pending_kind == 5) {
-                /* FIXME: pending_kind 5 reaching phase 1 is the fs-init spawn
-                 * (init_send_spawn_path reuses 5 for sysinit, but that reply is
-                 * handled in phase 4), so this line names the wrong app. */
-                klog_write("[init] sysinit spawn failed\n");
             } else {
-                klog_write("[init] device-manager spawn failed\n");
+                klog_write("[init] supervisor spawn failed\n");
             }
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
@@ -602,24 +507,12 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         } else if (state->pending_kind == 3) {
             trace_write("[init] init-smoke spawn ok\n");
             state->smoke_index = 0xFFFFFFFFu;
-        } else if (state->pending_kind == 4) {
-            trace_write("[init] fs-manager spawn ok\n");
-            state->fs_manager_index = 0xFFFFFFFFu;
-        } else if (state->pending_kind == 7) {
-            trace_write("[init] fs-tmpfs spawn ok\n");
-            state->fs_tmpfs_index = 0xFFFFFFFFu;
-        } else if (state->pending_kind == 8) {
+        } else {
             trace_write("[init] supervisor spawn ok\n");
             state->supervisor_index = 0xFFFFFFFFu;
             /* Nobody restarts the supervisor and nobody else halts the system
              * when a critical unit dies, so its own death is a panic. */
             process_set_critical((uint32_t)msg.arg0);
-        } else if (state->pending_kind == 5) {
-            trace_write("[init] fs-init spawn ok\n");
-            state->fs_init_index = 0xFFFFFFFFu;
-        } else {
-            trace_write("[init] device-manager spawn ok\n");
-            state->device_manager_index = 0xFFFFFFFFu;
             state->boot_mount_deadline =
                 timer_ticks() + timer_ms_to_ticks(INIT_BOOT_MOUNT_TIMEOUT_MS);
             state->request_id++;
@@ -636,8 +529,8 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
     /* Phases 6-9 wait for /boot, the volume sysinit lives on. The milestone is
      * fs-manager's: it owns the mount table, and it answers
      * FSMGR_IPC_MOUNT_WAIT_REQ once a backend serving /boot has registered.
-     * Device-manager's READY is not that signal -- it says its rules were
-     * loaded, not that any volume is mounted. fs-manager is found by its name,
+     * Device-manager's READY is not that signal -- it says its endpoints are
+     * live, not that any volume is mounted. fs-manager is found by its name,
      * subscribed to before it is looked up so a registration in between is not
      * lost (SVC_IPC_SUBSCRIBE_NAME_REQ). */
     if (state->phase == 6) {

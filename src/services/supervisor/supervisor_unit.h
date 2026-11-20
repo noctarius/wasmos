@@ -18,6 +18,10 @@
 #define SV_UNIT_NAME_MAX 36u /* SUPERVISOR_UNIT_NAME_MAX + NUL */
 #define SV_PATH_MAX 256u     /* SPAWN_WATCH_PATH_MAX + NUL */
 #define SV_ARGS_MAX 256u     /* SPAWN_WATCH_ARGS_MAX + NUL */
+/* A unit path of this prefix names a boot module by app name instead of a file
+ * (SPAWN_WATCH_FLAG_MODULE): "module:fs-manager". */
+#define SV_MODULE_PREFIX "module:"
+#define SV_MODULE_PREFIX_LEN 7u
 /* Ends the intensity window can hold; the configured limit must not
  * exceed it. */
 #define SV_INTENSITY_SLOTS 16u
@@ -121,9 +125,15 @@ typedef enum {
 
 /* Parses a SUPERVISOR_IPC_SUBMIT_REQ spec into a fresh unit in state
  * SV_UNIT_SPAWN_DUE, due at `now`. Defaults: restart=on-failure,
- * class=optional, no tty pin, the default probe period, no args. Returns 0, or
- * WASMOS_ERR_SUPERVISOR_BAD_SPEC with *out unchanged. */
+ * class=optional, no tty pin, the default probe period, no args. The path is
+ * absolute, or SV_MODULE_PREFIX and a boot module's app name, which takes no
+ * args and no tty pin. Returns 0, or WASMOS_ERR_SUPERVISOR_BAD_SPEC with *out
+ * unchanged. */
 int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now, sv_unit_t* out);
+
+/* The boot module a unit names (the app name after SV_MODULE_PREFIX), or NULL
+ * for a unit spawned from a file. */
+const char* sv_unit_module(const sv_unit_t* unit);
 
 /* Gives the unit the capability descriptor a submission carried (len bytes of
  * wasmos_spawn_caps_v2_t and its I/O ranges), which every spawn of it passes to

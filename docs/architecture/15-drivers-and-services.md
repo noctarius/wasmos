@@ -337,8 +337,9 @@ ready-wait even for service/driver kinds.
 - **Entry bindings:** `proc.endpoint`, `module.count`
 - **Resources:** 64 stack pages, 64 heap pages
 
-Coordinates early hardware startup in user space. Spawned by kernel init after
-fs-manager, fs-tmpfs and fs-init. Manages four event loops:
+Coordinates early hardware startup in user space. A critical unit of the
+supervisor's boot chain, spawned from its boot module after fs-manager,
+fs-tmpfs and fs-init. Manages four event loops:
 
 | Event loop            | Endpoint variable          | Purpose                 |
 |-----------------------|----------------------------|-------------------------|
@@ -531,7 +532,7 @@ Input mode flags: `VT_INPUT_MODE_RAW=0`, `VT_INPUT_MODE_CANONICAL=1<<0`,
 
 - **Kind:** WASM service on the libsys event loop (`src/services/supervisor`)
 - **Registers:** `supervisor`
-- **Spawned by:** kernel init, from the initfs, right after the process manager
+- **Spawned by:** kernel init, from its boot module, right after the process manager
 - **Critical:** its own end is a kernel panic (see below)
 
 The supervisor owns one fact for every unit handed to it: *it should be
@@ -542,6 +543,16 @@ result to the supervisor instead of growing restart logic of their own. Policy
 lives here, in user space; the kernel and the process manager supply only the
 mechanism -- watched spawns, exit reasons, kill (see
 [Process Model and IPC](09-process-and-ipc.md), "Watched Spawn").
+
+**The boot chain is its own.** fs-manager, fs-tmpfs, fs-init and
+device-manager are units the supervisor records itself, as `critical`, before
+it takes any submission, and spawns in that order from their boot modules: the
+unit path `module:<app name>` is a watched spawn with
+`SPAWN_WATCH_FLAG_MODULE`, built from the in-memory image, since no filesystem
+exists to read one from yet. fs-tmpfs precedes fs-init and device-manager
+because mount points are its directories; nothing else depends on the order.
+Their death is named like any critical unit's and ends the system; nothing
+stands in for the filesystem or for device-manager.
 
 **It is a separate service, not sysinit**, for three reasons. It must exist
 before the first thing it supervises, and sysinit is read from `/boot` long
@@ -557,6 +568,9 @@ line, in a descriptor the submitter owns and lends READ:
 <unit> <path> [restart=never|on-failure|always] [class=optional|required|critical]
               [tty=<slot>] [probe=<seconds>] [-- <args>]
 ```
+
+`<path>` is absolute, or `module:<app name>` for a boot module, which takes no
+args and no tty pin.
 
 A unit name is `template` or `template@instance`. The instance key names what
 the unit serves -- a tty (`cli@tty1`), a device (`rtc@acpi:0070`) -- and is
@@ -810,17 +824,17 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", RUN+="system/d
 ### Bootstrap Startup Chain
 
 ```
-kernel init (initfs module indexes)
+kernel init
   ├─ process-manager            (kernel-hosted)
-  ├─ supervisor                 (marked critical)
-  ├─ fs-manager                 registers "fs.vfs"
-  ├─ fs-tmpfs                   the tmpfs root; mount points are its directories
-  ├─ fs-init                    the initfs listing
-  └─ device-manager
-       ├─ pci-bus, acpi-bus     publish device records -> devmgr.inv
-       ├─ initfs rules          ata, fs-fat mount=/boot, net-stack, ...
-       └─ /boot rules           drivers spawned directly, or (ENV{RESTART})
-                                submitted to the supervisor as units
+  └─ supervisor                 (boot module; marked critical)
+       ├─ fs-manager            critical unit, from its boot module; "fs.vfs"
+       ├─ fs-tmpfs              critical; the tmpfs root, mount points are its directories
+       ├─ fs-init               critical; the initfs listing
+       └─ device-manager        critical
+            ├─ pci-bus, acpi-bus     publish device records -> devmgr.inv
+            ├─ initfs rules          ata, fs-fat mount=/boot, net-stack, ...
+            └─ /boot rules           drivers spawned directly, or (ENV{RESTART})
+                                     submitted to the supervisor as units
 
 kernel init (once fs-manager answers FSMGR_IPC_MOUNT_WAIT_REQ for /boot)
   └─ sysinit                    from /boot
@@ -832,9 +846,9 @@ kernel init (once fs-manager answers FSMGR_IPC_MOUNT_WAIT_REQ for /boot)
 
 Kernel init waits for exactly one thing: `/boot` mounted, because sysinit's
 image is on it. It subscribes to `fs.vfs`, sends the mount wait to fs-manager,
-and panics with `init_no_boot_mount` if no answer comes within 60 s of
-device-manager's spawn. device-manager's READY says its rules were loaded; it
-is not a milestone anyone waits on.
+and panics with `init_no_boot_mount` if no answer comes within 60 s of the
+supervisor's spawn. device-manager's READY says its endpoints are live, like
+every service's; it is not a milestone anyone waits on.
 
 ---
 

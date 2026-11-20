@@ -677,12 +677,6 @@ Source: `architecture/13-runtime-and-packaging.md`,
   submission, restart or notify dependents along `[deps]` `needs` when a unit
   restarts, and mark the dependents of a `required` unit that gave up as
   degraded rather than restarting them in a loop behind it.
-- [ ] [FEATURE][P2] Move the boot chain into the supervisor. Kernel init still spawns
-  fs-manager, fs-tmpfs, fs-init and device-manager itself
-  (`src/kernel/kernel_init_runtime.c`), so their deaths are unnamed: nothing
-  logs a critical unit or dumps the table. The supervisor should spawn them
-  from the initfs by module index as `critical` units, and kernel init shrink
-  to the PM and the supervisor.
 - [ ] [ENHANCEMENT][P2] Defer an `ENV{RESTART}` rule until the supervisor is bound
   instead of spawning the driver directly and unsupervised
   (`src/services/device_manager/device_manager.c:3439` `TODO`). The supervisor is

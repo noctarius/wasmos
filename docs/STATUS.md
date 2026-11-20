@@ -265,8 +265,16 @@ linked feature documents for rationale and rollout plans.
   child is auto-reaped. Host-tested in `test_ipc` (O1-O6) and
   `test_process_lifecycle`; the PM handler is exercised end to end by the
   supervisor (`tests/test_supervisor.py`).
-- The `supervisor` service (initfs, spawned by kernel init right after the
-  process manager) keeps submitted units running. A unit arrives as a one-line
+- The `supervisor` service (a boot module, spawned by kernel init right after
+  the process manager) keeps submitted units running, and owns the boot chain:
+  it records fs-manager, fs-tmpfs, fs-init and device-manager as `critical`
+  units (`k_boot_units`) and spawns them in that order from their boot modules
+  (`module:<app name>`, a watched spawn with `SPAWN_WATCH_FLAG_MODULE`,
+  descriptor v3), so their deaths are named and end the system (`svc kill
+  device-manager` halts it, `tests/test_supervisor.py`). Kernel init spawns
+  only the PM and the supervisor, then waits for /boot and spawns sysinit; the
+  boot milestone counts 7 required units. device-manager sends READY once
+  `devmgr.inv` and `devmgr.query` are registered, not after enumeration. A unit arrives as a one-line
   spec in `SUPERVISOR_IPC_SUBMIT_REQ` (`<unit> <path> [restart=never|on-failure|
   always] [class=optional|required|critical] [tty=<slot>] [probe=<s>]
   [-- args]`, defaults on-failure / optional / 10 s) and is spawned with
@@ -375,7 +383,7 @@ linked feature documents for rationale and rollout plans.
   `tests/test_boot_diagnosis.py`) and raises naming the unit on a failed boot;
   `boot_complete=False` skips it.
 - Kernel init spawns sysinit once fs-manager says /boot is mounted, not once
-  device-manager is READY (which says its rules were loaded, not that any
+  device-manager is READY (which says its endpoints are live, not that any
   volume is mounted). It subscribes to the name `fs.vfs`, looks it up, then
   sends `FSMGR_IPC_MOUNT_WAIT_REQ` for `/boot` in a buffer it owns and lends
   READ to fs-manager; fs-manager answers when a backend serving exactly that

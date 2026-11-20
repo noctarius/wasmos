@@ -268,7 +268,8 @@ A reader MUST reject a descriptor whose version it does not know.
 
 | Symbol | Value | Meaning |
 | --- | --- | --- |
-| `SPAWN_WATCH_DESC_VERSION` | 2 | Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len). |
+| `SPAWN_WATCH_DESC_VERSION` | 3 | Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len; 3: flags). |
+| `SPAWN_WATCH_FLAG_MODULE` | 1 | The path is the name of a boot module (the app name its .wap embeds), spawned from its in-memory image rather than read through the filesystem, so a watched spawn can start the services the filesystem itself needs. Such a spawn carries no arguments and no tty pin. |
 | `SPAWN_WATCH_DEPS_MAX` | 16 | Dependency records the reply can carry, the same ceiling as a .wap v10 dependency table (WASMOS_APP_MAX_DEPS), so none is ever cut off. |
 | `SPAWN_WATCH_DEP_NAME_MAX` | 36 | Bytes reserved per dependency name, NUL included: the longest service name is 35 bytes. |
 | `SPAWN_WATCH_PATH_MAX` | 255 | Longest path a watched spawn accepts, NUL excluded. |

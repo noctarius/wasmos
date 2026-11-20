@@ -86,6 +86,7 @@ enum {
     WASMOS_ERR_PROC_SPAWN_BAD_CAPS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 15), /* the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created */
     WASMOS_ERR_PROC_SPAWN_CAPS_APPLY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 16), /* the kernel refused the parsed capability profile for the new child, which was killed before it ran */
     WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 17), /* the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created */
+    WASMOS_ERR_PROC_SPAWN_NO_MODULE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_SPAWN, 18), /* the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created */
     WASMOS_ERR_PROC_PM_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 1), /* PM already has an incompatible in-flight operation */
     WASMOS_ERR_PROC_PM_BAD_ENDPOINT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 2), /* source endpoint owner lookup failed */
     WASMOS_ERR_PROC_PM_NO_CALLER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 3), /* source endpoint owner has no live process */
@@ -421,6 +422,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_SPAWN_BAD_CAPS: return "proc_spawn.BAD_CAPS";
     case WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: return "proc_spawn.CAPS_APPLY";
     case WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED: return "proc_spawn.GRANT_NOT_AUTHORIZED";
+    case WASMOS_ERR_PROC_SPAWN_NO_MODULE: return "proc_spawn.NO_MODULE";
     case WASMOS_ERR_PROC_PM_BUSY: return "proc_pm.BUSY";
     case WASMOS_ERR_PROC_PM_BAD_ENDPOINT: return "proc_pm.BAD_ENDPOINT";
     case WASMOS_ERR_PROC_PM_NO_CALLER: return "proc_pm.NO_CALLER";
@@ -689,6 +691,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_SPAWN_BAD_CAPS: return "the capability descriptor a watched spawn carries does not parse (wasmos_spawn_caps_v2_t: unknown cap bits, an inverted or excess I/O range, an incomplete DMA request, or a length its counts do not imply), so no child was created";
     case WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: return "the kernel refused the parsed capability profile for the new child, which was killed before it ran";
     case WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED: return "the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created";
+    case WASMOS_ERR_PROC_SPAWN_NO_MODULE: return "the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created";
     case WASMOS_ERR_PROC_PM_BUSY: return "PM already has an incompatible in-flight operation";
     case WASMOS_ERR_PROC_PM_BAD_ENDPOINT: return "source endpoint owner lookup failed";
     case WASMOS_ERR_PROC_PM_NO_CALLER: return "source endpoint owner has no live process";

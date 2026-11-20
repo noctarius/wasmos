@@ -109,6 +109,10 @@ const PROC_IPC_EXEC_HANDLER_REGISTER int32 = 0x211
 // requires the caller to hold spawn.grant
 // (WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED otherwise, nothing
 // spawned).
+// With SPAWN_WATCH_FLAG_MODULE in flags the path is a boot module's
+// app name and the child is built from its in-memory image, without
+// the filesystem; args_len and tty must be 0
+// (WASMOS_ERR_PROC_SPAWN_NO_MODULE for a module the image lacks).
 // On success: PROC_IPC_RESP, arg0=child_pid arg1=app_flags, with pid,
 // app_flags and the child's [deps] written back into the descriptor.
 // The reply is sent before the child first runs, so on that endpoint it

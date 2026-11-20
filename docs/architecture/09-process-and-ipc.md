@@ -580,7 +580,11 @@ lifecycle as events instead of a wait. The request is a
 tty pin and a **notify endpoint the spawner must own** — only the spawner may
 watch its child. On success the PM writes the child's pid, app flags and its
 `.wap` `[deps]` back into the descriptor and replies `arg0=pid arg1=app_flags`,
-so the spawner never reads an image. The descriptor may also carry a
+so the spawner never reads an image. With `SPAWN_WATCH_FLAG_MODULE` the path
+is a boot module's app name and the child is built from the module's in-memory
+image, with no filesystem read, no arguments and no tty pin; that is how the
+supervisor starts the filesystem itself (`WASMOS_ERR_PROC_SPAWN_NO_MODULE` for a
+name the image does not carry). The descriptor may also carry a
 `wasmos_spawn_caps_v2_t` (I/O windows, IRQ lines, DMA), applied while the child
 is parked, so a driver holds its hardware access from its first instruction; a
 descriptor that does not parse spawns nothing, and one that grants anything

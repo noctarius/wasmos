@@ -14,6 +14,7 @@
 #define WASMOS_APP_H
 
 #include <stdint.h>
+#include "boot.h"
 #include "ipc.h"
 #include "subsystem_registry.h"
 #include "wasm_driver.h"
@@ -273,6 +274,12 @@ typedef struct {
  * inverted I/O window, a BAR index >= 6, or any section that runs past blob_size.
  * `blob` is borrowed: the descriptor's pointers dangle once the blob is freed or moved. */
 int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t* out_desc);
+
+/* Index into info's boot module table of the WASMOS-APP whose embedded app name
+ * is the name_len bytes at `name`, or 0xFFFFFFFF when the table holds none (or
+ * info carries no module table). A module that does not parse is skipped. The
+ * first match wins; app names in one boot image are unique by construction. */
+uint32_t wasmos_app_boot_module_index(const boot_info_t* info, const char* name, uint32_t name_len);
 
 /* Register the built-in subsystem handlers (NATIVE, the generic "WASM" tag, and the
  * concrete tag of the runtime this build uses).  Idempotent and internally locked, so

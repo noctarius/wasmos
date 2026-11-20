@@ -2126,6 +2126,8 @@ static void pm_watch_desc_fill_deps(wasmos_spawn_watch_desc_t* out, const wasmos
 /* Spawn from a path with the spawner watching (PROC_IPC_SPAWN_WATCHED):
  * arg0 = buffer_id of a transfer buffer the caller owns, arg1 = offset of the
  * wasmos_spawn_watch_desc_t in it, arg2 = size of the region the PM may use.
+ * With SPAWN_WATCH_FLAG_MODULE the path is a boot module's app name and the
+ * child is built from the module image, which needs no filesystem.
  *
  * Both lifecycle messages are reserved before the child exists and attached
  * before it first runs, so neither can be lost: no reservation, no child
@@ -2158,6 +2160,7 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
     xfer_buffer_owner_t pmbuf = {0};
     wasmos_app_desc_t desc;
     uint32_t pid = 0;
+    uint8_t from_module = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT;
@@ -2165,9 +2168,6 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
     caller = process_find_by_context(owner_context);
     if (!caller) {
         return WASMOS_ERR_PROC_SPAWN_NO_CALLER;
-    }
-    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
-        return WASMOS_ERR_PROC_SPAWN_BAD_PATH;
     }
     region =
         (uint8_t*)(uintptr_t)pm_foreign_xfer_ptr((uint32_t)msg->arg0, owner_context, &buffer_size);
@@ -2183,8 +2183,19 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
         req.path_len > SPAWN_WATCH_PATH_MAX || req.args_len > SPAWN_WATCH_ARGS_MAX ||
         (uint64_t)req.path_off + req.path_len > region_size ||
         (uint64_t)req.args_off + req.args_len > region_size || req.caps_len > sizeof(caps_bytes) ||
-        (uint64_t)req.caps_off + req.caps_len > region_size) {
+        (uint64_t)req.caps_off + req.caps_len > region_size ||
+        (req.flags & ~(uint32_t)SPAWN_WATCH_FLAG_MODULE) != 0u) {
         return WASMOS_ERR_PROC_SPAWN_BAD_DESC;
+    }
+    /* A boot module is spawned from its in-memory image, so it needs no
+     * filesystem: this is how the services the filesystem itself depends on are
+     * started. pm_spawn_module takes neither arguments nor a tty pin. */
+    from_module = (req.flags & SPAWN_WATCH_FLAG_MODULE) != 0u;
+    if (from_module && (req.args_len != 0u || req.tty != 0u)) {
+        return WASMOS_ERR_PROC_SPAWN_BAD_DESC;
+    }
+    if (!from_module && g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
+        return WASMOS_ERR_PROC_SPAWN_BAD_PATH;
     }
     if (req.caps_len > 0u) {
         __builtin_memcpy(caps_bytes, region + req.caps_off, req.caps_len);
@@ -2212,39 +2223,57 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
         return WASMOS_ERR_PROC_SPAWN_WATCH_NO_SPACE;
     }
 
-    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
-        WASMOS_ERR_NONE) {
-        ipc_owed_cancel(on_ready);
-        ipc_owed_cancel(on_exit);
-        return WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF;
-    }
-    int resolve_rc = pm_resolve_spawn_path(pm_context_id,
-                                           &pmbuf,
-                                           path,
-                                           req.path_len,
-                                           req.args_len > 0u ? cli_args : 0,
-                                           req.args_len,
-                                           0,
-                                           &resolved);
-    if (resolve_rc != 0) {
-        pm_xfer_release(&pmbuf);
-        ipc_owed_cancel(on_ready);
-        ipc_owed_cancel(on_exit);
-        return resolve_rc;
-    }
-    const uint8_t* blob = (const uint8_t*)pm_xfer_owner_ptr(&pmbuf);
-    if (wasmos_app_parse(blob, resolved.blob_size, &desc) != 0 ||
-        pm_spawn_from_buffer(caller->pid,
-                             blob,
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             req.tty,
-                             &pid) != 0) {
-        pm_xfer_release(&pmbuf);
-        ipc_owed_cancel(on_ready);
-        ipc_owed_cancel(on_exit);
-        return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
+    if (from_module) {
+        uint32_t index = wasmos_app_boot_module_index(g_pm.boot_info, path, req.path_len);
+        const boot_module_t* mod = pm_module_at(index);
+        if (!mod) {
+            ipc_owed_cancel(on_ready);
+            ipc_owed_cancel(on_exit);
+            return WASMOS_ERR_PROC_SPAWN_NO_MODULE;
+        }
+        /* desc points into the module image, which lives as long as the kernel. */
+        if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) !=
+                0 ||
+            pm_spawn_module(caller->pid, index, &pid) != 0) {
+            ipc_owed_cancel(on_ready);
+            ipc_owed_cancel(on_exit);
+            return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
+        }
+    } else {
+        if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
+            WASMOS_ERR_NONE) {
+            ipc_owed_cancel(on_ready);
+            ipc_owed_cancel(on_exit);
+            return WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF;
+        }
+        int resolve_rc = pm_resolve_spawn_path(pm_context_id,
+                                               &pmbuf,
+                                               path,
+                                               req.path_len,
+                                               req.args_len > 0u ? cli_args : 0,
+                                               req.args_len,
+                                               0,
+                                               &resolved);
+        if (resolve_rc != 0) {
+            pm_xfer_release(&pmbuf);
+            ipc_owed_cancel(on_ready);
+            ipc_owed_cancel(on_exit);
+            return resolve_rc;
+        }
+        const uint8_t* blob = (const uint8_t*)pm_xfer_owner_ptr(&pmbuf);
+        if (wasmos_app_parse(blob, resolved.blob_size, &desc) != 0 ||
+            pm_spawn_from_buffer(caller->pid,
+                                 blob,
+                                 resolved.blob_size,
+                                 resolved.args_len > 0u ? resolved.args : 0,
+                                 resolved.args_len,
+                                 req.tty,
+                                 &pid) != 0) {
+            pm_xfer_release(&pmbuf);
+            ipc_owed_cancel(on_ready);
+            ipc_owed_cancel(on_exit);
+            return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
+        }
     }
 
     if (pm_apply_spawn_caps(pid, &caps) != 0) {

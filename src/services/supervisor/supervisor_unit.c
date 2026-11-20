@@ -155,7 +155,9 @@ int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now,
     p = sv_skip_space(p + len);
 
     len = sv_token_len(p);
-    if (len == 0 || len >= SV_PATH_MAX || p[0] != '/') {
+    if (len == 0 || len >= SV_PATH_MAX ||
+        (p[0] != '/' &&
+         (len <= SV_MODULE_PREFIX_LEN || memcmp(p, SV_MODULE_PREFIX, SV_MODULE_PREFIX_LEN) != 0))) {
         return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
     }
     memcpy(unit.path, p, len);
@@ -179,6 +181,11 @@ int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now,
             return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
         }
         p = sv_skip_space(p + len);
+    }
+    /* A boot module is spawned from its image, which takes neither arguments
+     * nor a tty pin (SPAWN_WATCH_FLAG_MODULE). */
+    if (sv_unit_module(&unit) && (unit.args[0] != '\0' || unit.tty != 0)) {
+        return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
     }
 
     unit.state = SV_UNIT_SPAWN_DUE;
@@ -471,6 +478,13 @@ sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uin
 
 int sv_exit_is_failure(int32_t status, uint32_t reason) {
     return !(reason == PROC_EXIT_REASON_EXITED && status == 0);
+}
+
+const char* sv_unit_module(const sv_unit_t* unit) {
+    if (memcmp(unit->path, SV_MODULE_PREFIX, SV_MODULE_PREFIX_LEN) != 0) {
+        return 0;
+    }
+    return unit->path + SV_MODULE_PREFIX_LEN;
 }
 
 int32_t sv_authorize(uint32_t type, uint32_t sender, uint32_t caps_len) {

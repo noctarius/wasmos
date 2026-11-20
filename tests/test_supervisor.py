@@ -87,7 +87,7 @@ class SupervisorTests(unittest.TestCase):
         # require_prompt already waited for the milestone; it is said once,
         # and it is the only thing the supervisor says on a clean boot.
         self.assertRegex(
-            log, r"\[supervisor\] boot complete at \d+ ms: 3 required units up"
+            log, r"\[supervisor\] boot complete at \d+ ms: 7 required units up"
         )
         self.assertEqual(log.count("[supervisor] boot complete"), 1)
         # Kernel init spawns sysinit on fs-manager's word that /boot is
@@ -165,6 +165,16 @@ class SupervisorTests(unittest.TestCase):
             rows["probe-loop"][:3], ["failed", "0", "4"], rows["probe-loop"]
         )
         self.assertEqual(rows["probe-loop"][3], "trapped", rows["probe-loop"])
+
+    def test_5b_the_boot_chain_is_supervised(self):
+        # fs-manager, fs-tmpfs, fs-init and device-manager are the
+        # supervisor's own units, spawned from their boot modules before
+        # any filesystem exists, and critical: nothing stands in for them.
+        for unit in ("fs-manager", "fs-tmpfs", "fs-init", "device-manager"):
+            out = _svc(self, self.session, f"status {unit}")
+            self.assertRegex(out, rf"{unit}: (running|stable), pid [1-9][0-9]*", out)
+            self.assertIn("class=critical", out)
+            self.assertIn("restarts: 0", out)
 
     def test_6_svc_status_reports_one_unit(self):
         out = _svc(self, self.session, "status cli@tty1")
@@ -397,6 +407,40 @@ class SupervisorCriticalTests(unittest.TestCase):
                 "probe-crit up after a restart",
                 session.syslog_tail(1 << 20),
                 "a critical unit was restarted",
+            )
+        finally:
+            session.force_stop()
+            session.close()
+
+
+class SupervisorBootChainDeathTests(unittest.TestCase):
+    """A boot-chain unit's death is named and ends the system, like any
+    critical unit's, instead of leaving it running without the service."""
+
+    def test_device_managers_death_halts_naming_it(self):
+        session = QemuSession(default_config(), timeout_s=120, echo=True)
+        session.start()
+        try:
+            session.require_prompt()
+            # Not _svc: the halt may come before the prompt does.
+            session.send_command("svc kill device-manager", timeout_s=20)
+            log = _syslog_wait(
+                session, "[supervisor] critical unit device-manager died (killed", 30
+            )
+            self.assertTrue(
+                log,
+                "device-manager's death was not named.\n"
+                f"--- syslog ---\n{session.syslog_tail(4096)}\n",
+            )
+            self.assertIn("; halting", log)
+            self.assertTrue(
+                _syslog_wait(session, "[pm] shutdown: begin", 30),
+                "the orderly shutdown sequence did not run.\n"
+                f"--- syslog ---\n{session.syslog_tail(4096)}\n",
+            )
+            self.assertTrue(
+                session.wait_for_exit(60),
+                f"the system did not power off.\n--- syslog ---\n{session.syslog_tail(4096)}\n",
             )
         finally:
             session.force_stop()

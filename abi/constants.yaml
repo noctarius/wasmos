@@ -319,7 +319,14 @@ groups:
 
       A reader MUST reject a descriptor whose version it does not know.
     constants:
-      - { symbol: SPAWN_WATCH_DESC_VERSION, value: 2, doc: "Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len)." }
+      - { symbol: SPAWN_WATCH_DESC_VERSION, value: 3, doc: "Current wasmos_spawn_watch_desc_t layout (2: caps_off/caps_len; 3: flags)." }
+      - symbol: SPAWN_WATCH_FLAG_MODULE
+        value: 0x1
+        doc: |
+          The path is the name of a boot module (the app name its .wap embeds),
+          spawned from its in-memory image rather than read through the
+          filesystem, so a watched spawn can start the services the filesystem
+          itself needs. Such a spawn carries no arguments and no tty pin.
       - symbol: SPAWN_WATCH_DEPS_MAX
         value: 16
         doc: |

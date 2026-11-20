@@ -103,6 +103,10 @@ static void test_a_bad_spec_is_refused_untouched(void) {
         "name /p probe=x",
         "name /p probe=1000",
         "a12345678901234567890123456789012345 /p", /* 36 bytes: one too long */
+        "name module:",                            /* names no module */
+        "name modules:fs-manager",                 /* neither absolute nor the prefix */
+        "name module:fs-init -- -x",               /* a module takes no args */
+        "name module:fs-init tty=1",               /* nor a tty pin */
     };
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         sv_unit_t u;
@@ -120,6 +124,17 @@ static void test_a_path_too_long_is_refused(void) {
     longpath[sizeof(longpath) - 1] = '\0';
     CHECK(sv_spec_parse(longpath, &k_timing, 0, &u) == WASMOS_ERR_SUPERVISOR_BAD_SPEC,
           "a path past SV_PATH_MAX is refused");
+}
+
+/* A boot-chain unit names its boot module, not a file: the supervisor spawns
+ * it from the module image, before any filesystem exists to read one from. */
+static void test_a_module_unit_names_its_boot_module(void) {
+    sv_unit_t u = parse_ok("fs-manager module:fs-manager class=critical", 0);
+    CHECK(u.cls == SV_CLASS_CRITICAL, "class");
+    CHECK(sv_unit_module(&u) != 0 && strcmp(sv_unit_module(&u), "fs-manager") == 0,
+          "the module is the app name after the prefix");
+    sv_unit_t f = parse_ok("logger /boot/system/services/logger.wap", 0);
+    CHECK(sv_unit_module(&f) == 0, "a file unit names no module");
 }
 
 static void test_the_longest_name_fits(void) {
@@ -746,6 +761,7 @@ int main(void) {
     test_a_caps_length_outside_its_bounds_is_refused();
     test_a_kill_on_request_is_a_failure();
     test_a_unit_without_an_instance_is_not_killed();
+    test_a_module_unit_names_its_boot_module();
     test_a_submit_without_svc_control_is_refused();
     test_grants_from_a_submitter_without_spawn_grant_are_refused();
     test_a_kill_without_svc_control_is_refused();

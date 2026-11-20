@@ -359,6 +359,21 @@ linked feature documents for rationale and rollout plans.
   ordering asks the class registry about each process
   (`service_class_registry_provided_by`) instead of copying the first eight
   providers.
+- Clients follow a restarted provider (`architecture/15`, the client table
+  under "Clients rebind"). `wasmos_ipc_call` and `wasmos_sys_ipc_call_native`
+  return `WASMOS_PEER_GONE` when the server hangs up before answering, instead
+  of waiting forever. libui (C, Zig, AssemblyScript) closes the window on the
+  compositor's hangup or the font service's end (`peer_gone`), and the app
+  exits with `WASMOS_PEER_GONE`. menu_bar is a supervised unit
+  (`restart=always`) that comes back after a gfxcomp or fontsvc restart, and
+  follows rtc by name watch. The logger keeps its kernel-log position in kenv
+  `logger.seq`, so a restarted logger does not append the ring again.
+  `tests/test_supervisor.py` (SupervisorClientTests) restarts logger, gfxcomp
+  and fontsvc under their clients.
+  A process slot no longer passes its last occupant's ready gate
+  (`require_explicit_ready`) to the next process spawned into it: an app that
+  reused a service's slot never latched its implicit READY, and the supervisor
+  killed it at its READY deadline on every restart.
 - A PCI DMA driver's device is quiesced by the kernel when the driver ends
   (`src/kernel/pci_config.c`, `architecture/10` "Device Quiesce"): a spawn
   profile with `DEVMGR_CAP_PCI_FUNCTION` names the function
@@ -1986,8 +2001,9 @@ linked feature documents for rationale and rollout plans.
   with `ui_key_char()` / `ui_key_scancode()` rather than using the packed code
   as a character; `tests/unit/test_libui_key_decode.c` pins that contract.
 - `gfx_smoke` exercises multiple windows, close-event teardown, and libui;
-  `menu_bar` exercises popup/window interactions. Both are spawned after the
-  compositor is ready when present in `sysinit`.
+  `menu_bar` exercises popup/window interactions. Both start after the
+  compositor is ready when present in `sysinit`: gfx_smoke spawned, menu_bar
+  as a supervised unit.
 
 ## Applications and Language Support
 

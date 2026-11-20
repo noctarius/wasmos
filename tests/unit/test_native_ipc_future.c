@@ -19,6 +19,7 @@
  * the root coroutine itself, and the yield COUNT is what pins the loop's shape.
  */
 #include <stdint.h>
+#include <string.h>
 
 #include "test_shuffle.h"
 
@@ -33,6 +34,9 @@ static nd_ipc_message_t sent_message;
 static nd_ipc_message_t queued_reply;
 static int32_t send_status;
 static uint8_t reply_queued;
+/* Set by a case that must not wait: an empty endpoint then reports a transport
+ * error instead of "empty", so a caller that would park returns. */
+static uint8_t empty_is_error;
 static uint32_t service_steps;
 static uint32_t service_yields;
 
@@ -57,7 +61,7 @@ static int fake_ipc_recv(uint32_t receiver_context_id, uint32_t endpoint,
     (void)receiver_context_id;
     (void)endpoint;
     if (!reply_queued) {
-        return 1;
+        return empty_is_error ? -5 : 1;
     }
     *out_message = queued_reply;
     reply_queued = 0u;
@@ -259,6 +263,29 @@ static int test_a_health_probe_is_answered_by_the_loop(void) {
     return 0;
 }
 
+/* Regression: 2026-11-20-ipc-call-ignores-peer-hangup -- the native mirror of
+ * the libc call matched replies on the request id alone, so the server's
+ * WASMOS_IPC_HANGUP (request id 0) was dropped and the caller waited on for a
+ * reply that could no longer come. */
+static int test_a_call_whose_server_hangs_up_ends(void) {
+    wasmos_driver_api_t api = {0};
+    nd_ipc_message_t reply;
+    api.ipc_send = fake_ipc_send;
+    api.ipc_recv = fake_ipc_recv;
+    api.sched_current_pid = fake_current_pid;
+    api.sched_yield = fake_sched_yield;
+    send_status = 0;
+    memset(&queued_reply, 0, sizeof(queued_reply));
+    queued_reply.type = WASMOS_IPC_HANGUP;
+    queued_reply.arg0 = 40u;
+    reply_queued = 1u;
+    empty_is_error = 1u;
+    int32_t rc = wasmos_sys_ipc_call_native(&api, 50u, 40u, 7u, 0x100u, 0, 0, 0, 0, &reply);
+    empty_is_error = 0u;
+    reply_queued = 0u;
+    return rc == WASMOS_PEER_GONE ? 0 : __LINE__;
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -267,6 +294,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_reject_send_failure_and_cancel),
         WASMOS_TEST_CASE(test_service_root_runtime),
         WASMOS_TEST_CASE(test_a_health_probe_is_answered_by_the_loop),
+        WASMOS_TEST_CASE(test_a_call_whose_server_hangs_up_ends),
     };
     if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
         return 1;

@@ -29,6 +29,7 @@ extern fn libui_zig_ui_init(ctx: *anyopaque, proc_ep: i32, reply_ep: i32, w: i32
 extern fn libui_zig_ui_destroy(ctx: *anyopaque) callconv(.c) void;
 extern fn libui_zig_set_title(ctx: *anyopaque, title: [*:0]const u8) callconv(.c) void;
 extern fn libui_zig_close_requested(ctx: *const anyopaque) callconv(.c) i32;
+extern fn libui_zig_peer_gone(ctx: *const anyopaque) callconv(.c) i32;
 extern fn libui_zig_mark_dirty(ctx: *anyopaque) callconv(.c) void;
 extern fn libui_zig_drain(ctx: *anyopaque) callconv(.c) i32;
 extern fn libui_zig_poll_and_drain(ctx: *anyopaque) callconv(.c) void;
@@ -119,6 +120,13 @@ pub const Context = struct {
     /// only updated by event dispatch, so it changes across pollAndDrain.
     pub fn closeRequested(self: *const Context) bool {
         return libui_zig_close_requested(self.handle) != 0;
+    }
+
+    /// True once the compositor or the font service ended, taking the window
+    /// with it; closeRequested() is true then too. An app exits with
+    /// WASMOS_PEER_GONE, and a supervised one is started again.
+    pub fn peerGone(self: *const Context) bool {
+        return libui_zig_peer_gone(self.handle) != 0;
     }
 
     /// Mark the tree dirty so the next drain repaints. Required after any

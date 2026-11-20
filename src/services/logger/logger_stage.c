@@ -53,3 +53,44 @@ int32_t logger_stage_next(logger_stage_t* st, logger_read_fn read, void* user) {
 int logger_stage_written(uint32_t staged, int32_t written) {
     return written >= 0 && (uint32_t)written == staged;
 }
+
+void logger_stage_resume(logger_stage_t* st, const char* saved, uint32_t len) {
+    uint64_t seq = 0;
+    if (!st || !saved || len == 0u || len > 20u) {
+        return;
+    }
+    for (uint32_t i = 0; i < len; ++i) {
+        uint64_t digit;
+        if (saved[i] < '0' || saved[i] > '9') {
+            return;
+        }
+        digit = (uint64_t)(saved[i] - '0');
+        if (seq > (UINT64_MAX - digit) / 10u) {
+            return;
+        }
+        seq = seq * 10u + digit;
+    }
+    st->seq = seq;
+}
+
+uint32_t logger_stage_save(const logger_stage_t* st, char* out, uint32_t cap) {
+    char digits[20];
+    uint32_t n = 0;
+    uint64_t seq;
+    if (!st || !out) {
+        return 0;
+    }
+    seq = st->seq;
+    do {
+        digits[n++] = (char)('0' + (seq % 10u));
+        seq /= 10u;
+    } while (seq != 0u);
+    if (n + 1u > cap) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        out[i] = digits[n - 1u - i];
+    }
+    out[n] = '\0';
+    return n;
+}

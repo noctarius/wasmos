@@ -563,10 +563,10 @@ and `architecture/33-completion-ports.md`.
        (`INIT/PROMPT/READ/WAIT_IPC/FAILED`) machine with a coroutine per command.
        Do not collapse the endpoints first: sharing one endpoint while those
        blocking receives remain just moves the input loss into them.
-     - `examples/c/menu_bar/menu_bar.c` has one blocking `wasmos_ipc_call` at line
-       50 plus a `sched_yield` spin waiting for the rtc service to appear. The spin
-       is the more objectionable of the two under the project's no-busy-spin rule;
-       the service-discovery wait belongs on a class subscription or a bounded park.
+     - `examples/c/menu_bar/menu_bar.c` reads the clock with a blocking
+       `wasmos_ipc_call` on its UI loop (`update_clock`, TODO there); it finds rtc
+       through a name watch already, so the read can become an intent on that
+       loop.
   3. **Zig / Rust / Go**, small: font_service (a hand-rolled 50 ms x 200 poll, the
      one with a symptom to point at), gfx_compositor, `libc/rust/wasmos.rs`,
      tetris, `libc/go/wasmos.go`.
@@ -665,11 +665,19 @@ Source: `architecture/13-runtime-and-packaging.md`,
   when it dies its device may keep mastering into frames the reap recycles.
   Spawning those drivers through a descriptor form -- or as supervised units
   (H5) -- closes it (`device_manager.c`, the TODO at the direct spawn).
-- [ ] [FEATURE][P2] Supervise virtio-blk, ata and virtio-net. The device quiesce
-  makes their restart safe for memory; what is open is their clients: fs-fat
-  and fs-wfs hold mounts and open files on a block device, net-stack sockets on
-  virtio-net. Decide per driver whether the client rebinds or the unit is
-  `critical` (F3, client audit), then add `ENV{RESTART}` to its rule.
+- [ ] [FEATURE][P1] Supervise the storage and network chains, restarting a
+  chain as a whole. Decided: the `/boot` volume's block driver and fs-fat are
+  `critical` (their end is named and halts, like fs-manager); every other
+  block driver, filesystem backend and virtio-net is `required` and restarted.
+  A block driver restarted alone helps nothing -- the filesystem backend above
+  it keeps its mount bound to the dead endpoint, and applications keep file
+  descriptors into the backend -- so a restart restarts the chain: the block
+  driver, then each backend mounted on it (re-mounted when device-manager sees
+  the volume again), with clients seeing their open files fail. Needs: restart
+  along `[deps] needs` (F4), device-manager re-matching a re-added device and
+  volume, fs-manager's mounts as supervised units (fs-fat is spawned by
+  fs-manager's mount path, not by the supervisor), and net-stack's behaviour
+  when virtio-net restarts under its sockets.
 - [ ] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
   interrupts and DMA back. The quiesce sets INTx Disable and clears Bus Master
   Enable, and pci-bus turns them back only through an MSI bind
@@ -2156,9 +2164,10 @@ Source: `architecture/25-diagnostics-status.md`,
 - [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
   (`test_app_churn`: "run N: date produced no result"). Not a supervisor
   regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7
-  runs), as on `df536c7e` (1 in 15). Not WARP-only either: one full wasm3_smp
-  battery on `2ca66919` hit it at run 58 with the same signature (12/12 alone
-  afterwards). Idle it is rare (0 in 20 on WARP); saturating the
+  runs), as on `df536c7e` (1 in 15). Not WARP-only either: wasm3_smp batteries
+  hit it twice in four runs on the supervisor branches (`2ca66919` run 58, the
+  F3 branch run 70), each time with the same signature, and it passed 12/12
+  alone afterwards. Idle it is rare (0 in 20 on WARP); saturating the
   host CPU with busy loops while looping the test is the reproducer. Both stall
   dumps agree: `date` got its `SVC_IPC_LOOKUP_RESP`, sent `RTC_IPC_READ_REQ`
   (`req=2`), and waits on its reply endpoint with nothing queued; the request

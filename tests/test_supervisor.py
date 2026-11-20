@@ -433,6 +433,106 @@ class SupervisorTests(unittest.TestCase):
         self.session.expect_from(start, b"wamos> ", timeout_s=20)
 
 
+def _await_new_instance(
+    test, session, unit: str, old_pid: str, timeout_s: float = 30
+) -> list:
+    """The unit's `svc list` row once it runs as a different pid than old_pid."""
+    deadline = time.time() + timeout_s
+    row = []
+    while time.time() < deadline:
+        row = _list_rows(test, session).get(unit, [])
+        if row and row[0] in ("running", "stable") and row[1] != old_pid:
+            return row
+        time.sleep(0.5)
+    test.fail(f"{unit} did not come back as a new instance: {row}")
+    return row
+
+
+class SupervisorClientTests(unittest.TestCase):
+    """A restart helps only if the provider's clients follow it. These restart a
+    provider under its clients and check that each client either rebinds or
+    ends so that its own supervisor restarts it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.session = QemuSession(default_config(), timeout_s=120, echo=True)
+        cls.session.start()
+        cls.session.require_prompt()
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.session:
+            cls.session.send("halt")
+            cls.session.close()
+
+    def _cat_messages(self) -> str:
+        start = self.session.send_command("cat /var/log/messages", timeout_s=20)
+        self.assertTrue(
+            self.session.expect_from(start, b"wamos> ", timeout_s=60),
+            f"no prompt after cat.\n--- tail ---\n{self.session.tail()}\n",
+        )
+        return self.session.buf[start:].decode("utf-8", errors="replace")
+
+    def _kill(self, unit: str) -> str:
+        row = _list_rows(self, self.session).get(unit, [])
+        self.assertTrue(
+            row and row[0] in ("running", "stable"), f"{unit} is not up: {row}"
+        )
+        _svc(self, self.session, f"kill {unit}")
+        return row[1]
+
+    def test_1_a_restarted_logger_does_not_repeat_the_log(self):
+        # Regression: 2026-11-20-logger-restart-duplicates -- a restarted
+        # logger appended the kernel ring's whole retained backlog to
+        # /var/log/messages again. It continues from the position the last
+        # instance stored instead.
+        line = "[supervisor] boot complete at"
+        deadline = time.time() + 20
+        while line not in self._cat_messages():
+            self.assertLess(
+                time.time(), deadline, "the logger never wrote the boot milestone"
+            )
+            time.sleep(1)
+        old_pid = self._kill("logger")
+        _await_new_instance(self, self.session, "logger", old_pid)
+        ended = "[supervisor] logger ended (killed"
+        deadline = time.time() + 20
+        out = self._cat_messages()
+        while ended not in out:
+            self.assertLess(
+                time.time(), deadline, "the new logger never wrote the restart"
+            )
+            time.sleep(1)
+            out = self._cat_messages()
+        self.assertEqual(
+            out.count(line), 1, "the restarted logger wrote the backlog again"
+        )
+
+    def test_2_the_menu_bar_follows_a_restarted_compositor(self):
+        # The menu bar's window goes with the compositor. It ends with
+        # WASMOS_PEER_GONE on the compositor's hangup and, restart=always,
+        # comes back against the new one; it used to run on windowless.
+        bar = _list_rows(self, self.session).get("menu_bar", [])
+        self.assertTrue(bar, "menu_bar is not a supervised unit")
+        old_gfx = self._kill("gfxcomp")
+        _await_new_instance(self, self.session, "gfxcomp", old_gfx)
+        row = _await_new_instance(self, self.session, "menu_bar", bar[1])
+        self.assertGreaterEqual(int(row[2]), 1)
+        out = _svc(self, self.session, "status menu_bar")
+        self.assertIn("last end: exited (status -8)", out)
+
+    def test_3_the_menu_bar_follows_a_restarted_font_service(self):
+        # Text is rastered by the font service through an open font handle
+        # that ends with it. The menu bar's next raster fails with
+        # WASMOS_PEER_GONE (a call to a server that hung up no longer waits
+        # forever) and it comes back against the new font service.
+        bar = _list_rows(self, self.session).get("menu_bar", [])
+        self.assertTrue(bar, "menu_bar is not a supervised unit")
+        old_font = self._kill("fontsvc")
+        _await_new_instance(self, self.session, "fontsvc", old_font)
+        _await_new_instance(self, self.session, "menu_bar", bar[1])
+
+
 class SupervisorCriticalTests(unittest.TestCase):
     """A critical unit is never restarted: its death halts the system, through
     the orderly shutdown sequence, with a line naming the unit and a dump of

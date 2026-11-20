@@ -668,6 +668,31 @@ one. Endpoint identity across a restart would preserve nothing a
 client could use: open files, borrows and sessions are gone with the old
 process either way.
 
+A synchronous call whose server ends before answering returns
+`WASMOS_PEER_GONE` (`wasmos_ipc_call`, `wasmos_sys_ipc_call_native`): the
+server's hangup ends the wait instead of being discarded with the other
+stray messages on the reply endpoint, so a client of a restarted provider
+cannot hang on its last request.
+
+What each client of a supervised provider does when it restarts:
+
+| Provider | Client | On the provider's restart |
+|---|---|---|
+| `vt` | `cli@tty1` | exits `WASMOS_PEER_GONE`; restarted (`restart=always`) |
+| `keyboard`, `mouse` | vt, gfxcomp | rebind through name watches on `kbd` / `mouse` |
+| `fontsvc` | gfxcomp | rebinds through a name watch on `font` |
+| `fontsvc` | libui apps | the next text call fails `WASMOS_PEER_GONE`; the window closes (`ui_context_t.peer_gone`) and the app exits |
+| `gfxcomp` | libui apps | the hangup on the event endpoint closes the window; the app exits `WASMOS_PEER_GONE` |
+| `gfxcomp`, `fontsvc` | `menu_bar` | exits as above; a unit with `restart=always`, so it comes back |
+| `rtc` | `date` | looks it up per run |
+| `rtc` | `menu_bar` | follows `rtc` by name watch; a failed read drops the endpoint until the next binding |
+| `virtio_rng@pci:*` | entropy users | look up `virtio-rng` / `hrng` per request |
+| `logger` | (none) | a restart continues `/var/log/messages` from the position kept in kenv `logger.seq` |
+| boot chain | everyone | `critical`: never restarted, its end halts |
+
+calculator and gfx_smoke are demo and test apps started once with `spawn`; they
+exit with the compositor and are not started again.
+
 | Opcode | Value | Meaning |
 |---|---|---|
 | `SUPERVISOR_IPC_SUBMIT_REQ` | `0x1000` | Hand a unit over; answered once recorded, before it is spawned |
@@ -696,7 +721,7 @@ service <unit> <path> [restart=...] [class=...] [tty=<slot>] [-- args]
 
 finds the supervisor by name watch, and continues once the unit is accepted --
 not once it is up -- so no line waits for a service. `spawn` starts a process
-without supervising it (the gfx apps, chardevc), `exec` runs one to its end
+without supervising it (gfx_smoke, calculator, chardevc), `exec` runs one to its end
 (`mkdir -p /var/log`), and `wait-svc <name>` waits, bounded, for a name to be
 registered. At the end of the script sysinit sends
 `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` and stays parked on its event loop.
@@ -846,8 +871,8 @@ kernel init
 kernel init (once fs-manager answers FSMGR_IPC_MOUNT_WAIT_REQ for /boot)
   └─ sysinit                    from /boot
        └─ /boot/system/sysinit.rc
-            ├─ service vt, logger, fontsvc, gfxcomp, cli@tty1  -> supervisor
-            ├─ spawn chardevc and the gfx apps; exec mkdir -p /var/log
+            ├─ service vt, logger, fontsvc, gfxcomp, menu_bar, cli@tty1  -> supervisor
+            ├─ spawn chardevc, gfx_smoke, calculator; exec mkdir -p /var/log
             └─ SUPERVISOR_IPC_BOOT_SUBMITTED_REQ  -> "[supervisor] boot complete"
 ```
 

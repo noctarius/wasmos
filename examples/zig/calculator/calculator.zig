@@ -493,6 +493,9 @@ pub fn main() u8 {
         ui.pollAndDrain();
     }
 
+    // The compositor or the font service ended under the window: an exit
+    // status of its own (main returns u8, so not WASMOS_PEER_GONE itself).
+    const gone = ui.peerGone();
     ui.deinit();
-    return 0;
+    return if (gone) 1 else 0;
 }

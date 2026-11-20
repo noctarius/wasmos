@@ -12,6 +12,8 @@ const GFX_IPC_ATTACH_SURFACE: i32 = 0x0211;
 const GFX_IPC_DETACH_SURFACE: i32 = 0x0212;
 const GFX_IPC_PRESENT_WINDOW: i32 = 0x0205;
 const GFX_IPC_PUSH_EVENT: i32 = 0x0206;
+/* abi/opcodes.yaml, system band: the kernel's word that a peer ended. */
+const WASMOS_IPC_HANGUP: i32 = 0xff03;
 const GFX_IPC_DESTROY_WINDOW: i32 = 0x0201;
 const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x020e;
 
@@ -183,6 +185,7 @@ export class Context {
     private titleBorrowId: i32 = -1;
     private titlePtr: i32 = 0;
     private closeRequestedFlag: bool = false;
+    private peerGoneFlag: bool = false;
     private pointerXValue: i32 = 0;
     private pointerYValue: i32 = 0;
     private pointerButtonsValue: u32 = 0;
@@ -283,6 +286,13 @@ export class Context {
         return this.closeRequestedFlag;
     }
 
+    // True once the compositor ended, taking the window with it; shouldClose()
+    // is true then too. An app exits with WASMOS_PEER_GONE, and a supervised
+    // one is started again against the restarted compositor.
+    peerGone(): bool {
+        return this.peerGoneFlag;
+    }
+
     // Current window size in pixels. It changes when pump handles a resize
     // event, so a layout computed from it is only valid for the current frame.
     contentWidth(): i32 {
@@ -349,6 +359,13 @@ export class Context {
         let handled = 0;
         {
             const reply = ipc.recv(this.eventEndpoint);
+            // Only the compositor sends to the event endpoint, so the kernel's
+            // hangup there means the compositor ended.
+            if (reply != null && reply.type == WASMOS_IPC_HANGUP) {
+                this.peerGoneFlag = true;
+                this.closeRequestedFlag = true;
+                return 1;
+            }
             if (reply == null || reply.type != GFX_IPC_PUSH_EVENT) {
                 return 0;
             }

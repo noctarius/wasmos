@@ -143,8 +143,10 @@ static inline int32_t wasmos_ipc_call(int32_t destination_endpoint, int32_t sour
  * on a private reply endpoint, never on a live service endpoint.
  *
  * Returns 0 on a matched reply, the send status if the request could not be
- * queued, or the negative receive status. There is no timeout: a peer that never
- * answers blocks the caller indefinitely. */
+ * queued, WASMOS_PEER_GONE once the kernel reports that destination's end
+ * (WASMOS_IPC_HANGUP naming it in arg0), or the negative receive status. There
+ * is no timeout: a peer that lives and never answers blocks the caller
+ * indefinitely. */
 static inline int32_t wasmos_ipc_call_retry(int32_t destination_endpoint, int32_t source_endpoint,
                                             int32_t type, int32_t request_id, int32_t arg0,
                                             int32_t arg1, int32_t arg2, int32_t arg3,
@@ -174,6 +176,10 @@ static inline int32_t wasmos_ipc_call_retry(int32_t destination_endpoint, int32_
          * the request went to is accepted; anything else that lands on the
          * reply endpoint is consumed and discarded, so this call belongs on a
          * private reply endpoint and never on a live service endpoint. */
+        if (wasmos_ipc_last_field(0) == WASMOS_IPC_HANGUP &&
+            wasmos_ipc_last_field(2) == destination_endpoint) {
+            return WASMOS_PEER_GONE;
+        }
         response_request_id = wasmos_ipc_last_field(1);
         if (response_request_id != request_id) {
             continue;

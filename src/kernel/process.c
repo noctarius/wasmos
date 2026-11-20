@@ -921,6 +921,7 @@ static void process_reset_slot(process_t* proc) {
     proc->reap_requested = 0;
     proc->needs_runtime_lock = 0;
     proc->ready = 0;
+    proc->require_explicit_ready = 0;
     process_clear_runtime_tag(proc);
     proc->ctx = (process_context_t){0};
     proc->ctx_canary_pre = 0;
@@ -1536,6 +1537,10 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->watch_exit = 0;
     slot->critical = 0;
     slot->live_endpoint = IPC_ENDPOINT_NONE;
+    /* Set again only by the ready-gated spawn: a slot must not pass its last
+     * occupant's gate to an app, which latches READY on its first receive. */
+    slot->ready = 0;
+    slot->require_explicit_ready = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
@@ -1746,6 +1751,10 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->watch_exit = 0;
     slot->critical = 0;
     slot->live_endpoint = IPC_ENDPOINT_NONE;
+    /* Set again only by the ready-gated spawn: a slot must not pass its last
+     * occupant's gate to an app, which latches READY on its first receive. */
+    slot->ready = 0;
+    slot->require_explicit_ready = 0;
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;

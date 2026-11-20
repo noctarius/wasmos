@@ -24,6 +24,10 @@
  * with wasmos_sys_wasm_fs_rename_async the cap could move the file to
  * messages.1 instead of truncating it.
  *
+ * The position read so far is kept in kenv (LOGGER_SEQ_KEY) after every
+ * completed write, so an instance the supervisor restarts continues the file
+ * instead of appending the ring's retained backlog to it a second time.
+ *
  * The service's own output is kernel log too (it has no controlling tty), so it
  * prints only when it gives up, and exits then rather than retry: a write that
  * failed would fail again on the notify its own message raises.
@@ -32,6 +36,7 @@
 
 #include "fcntl.h"
 #include "stdio.h"
+#include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/libsys.h"
 #include "wasmos/service_runtime_wasm.h"
@@ -41,6 +46,10 @@
 
 #define LOGGER_PATH "/var/log/messages"
 #define LOGGER_FILE_MAX (1024u * 1024u)
+/* kenv key holding the kernel-log sequence number written so far, as decimal.
+ * kenv outlives the process, so an instance the supervisor restarts continues
+ * the file where the last one stopped instead of appending the ring again. */
+#define LOGGER_SEQ_KEY "logger.seq"
 
 typedef enum {
     LOGGER_START = 0,
@@ -93,6 +102,26 @@ static int32_t logger_read_ring(void* user, uint8_t* dst, int32_t len, uint64_t*
     return wasmos_kmsg_read(dst, len, seq);
 }
 
+/* Continues from the position an earlier instance stored (LOGGER_SEQ_KEY); a
+ * first start finds none and reads the ring from its oldest byte. */
+static void logger_position_load(logger_t* lg) {
+    char saved[24];
+    int32_t len = wasmos_env_get(
+        LOGGER_SEQ_KEY, (int32_t)strlen(LOGGER_SEQ_KEY), saved, (int32_t)sizeof(saved));
+    if (len > 0) {
+        logger_stage_resume(&lg->stage, saved, (uint32_t)len);
+    }
+}
+
+/* Records that everything before the stage's position is in the file. */
+static void logger_position_store(const logger_t* lg) {
+    char saved[24];
+    uint32_t len = logger_stage_save(&lg->stage, saved, sizeof(saved));
+    if (len > 0u) {
+        (void)wasmos_env_set(LOGGER_SEQ_KEY, (int32_t)strlen(LOGGER_SEQ_KEY), saved, (int32_t)len);
+    }
+}
+
 static int32_t logger_resume(void* user, uintptr_t* out_value) {
     logger_t* lg = (logger_t*)user;
     wasmos_sys_event_loop_t* loop = wasmos_sys_wasm_async_event_loop();
@@ -105,6 +134,7 @@ static int32_t logger_resume(void* user, uintptr_t* out_value) {
     for (;;) {
         switch (lg->state) {
         case LOGGER_START:
+            logger_position_load(lg);
             lg->fs_endpoint = wasmos_fs_endpoint();
             if (lg->fs_endpoint < 0) {
                 return logger_fail("no filesystem service", lg->fs_endpoint);
@@ -222,6 +252,7 @@ static int32_t logger_resume(void* user, uintptr_t* out_value) {
                 return logger_fail("short or failed write (filesystem full?)", written);
             }
             lg->file_bytes += lg->stage.out_len;
+            logger_position_store(lg);
             lg->state = LOGGER_DRAIN;
             break;
         case LOGGER_CLOSING:

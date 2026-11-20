@@ -4142,6 +4142,16 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${CMAKE_SOURCE_DIR}/src/libui/zig/libui_shim.c
           -o ${BUILD_DIR}/test_libui_shim_alloc
   COMMAND ${BUILD_DIR}/test_libui_shim_alloc
+  # The guest libc's synchronous call over a scripted reply endpoint: which
+  # messages it takes as the reply, and that its server's hangup ends it.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -fno-builtin
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_ipc_call.c
+          -o ${BUILD_DIR}/test_libc_ipc_call
+  COMMAND ${BUILD_DIR}/test_libc_ipc_call
   # memcmp's argument guards and comparison sign. -fno-builtin for the same
   # reason as the math suite above: memcmp is a clang builtin and a folded call
   # never reaches string.c.
@@ -4735,6 +4745,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_string.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_shim_alloc.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_ipc_call.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c
     # Same reason as test_wasm_coroutine.c beside it: this suite includes

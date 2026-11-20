@@ -466,6 +466,12 @@ int32_t libui_zig_close_requested(const void* ctx) {
     return ((const ui_context_t*)ctx)->close_requested;
 }
 
+/* Non-zero once the compositor or the font service the window depends on has
+ * ended (ui_context_t.peer_gone); close_requested is set then too. */
+int32_t libui_zig_peer_gone(const void* ctx) {
+    return ((const ui_context_t*)ctx)->peer_gone;
+}
+
 /* Request a repaint on the next drain. */
 void libui_zig_mark_dirty(void* ctx) {
     ui_mark_dirty((ui_context_t*)ctx);

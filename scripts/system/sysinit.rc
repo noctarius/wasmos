@@ -30,8 +30,11 @@ endif
 service gfxcomp /boot/system/services/gfxcomp.wap class=required
 wait-svc gfx
 
+# The menu bar is a unit, restarted whenever it ends: its window goes with the
+# compositor or the font service, and it exits then (WASMOS_PEER_GONE) to be
+# started against their replacements.
 if -f /boot/apps/menu_bar.wap then
-    spawn /boot/apps/menu_bar.wap
+    service menu_bar /boot/apps/menu_bar.wap restart=always
 endif
 
 if -f /boot/apps/gfx_smoke.wap then

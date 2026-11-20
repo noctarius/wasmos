@@ -354,8 +354,13 @@ typedef struct ui_context {
     uint32_t pointer_drag_button; /* button held during an in-progress drag, 0 when none */
     int32_t pointer_drag_x;       /* position of the previous drag sample */
     int32_t pointer_drag_y;
-    int32_t dirty;                /* non-zero asks the next ui_loop_drain() to repaint */
-    int32_t close_requested;      /* set once the compositor asks this window to close */
+    int32_t dirty;           /* non-zero asks the next ui_loop_drain() to repaint */
+    int32_t close_requested; /* set once the compositor asks this window to close */
+    /* Set, together with close_requested, once the compositor or the font
+     * service this window depends on has ended: the window and the open font
+     * went with it. An app then exits with WASMOS_PEER_GONE; supervised, it is
+     * started again against the restarted service. */
+    int32_t peer_gone;
     int32_t root_id;              /* component id of the tree root (PANEL, or MENU_BAR for a bar) */
     int32_t focused_component_id; /* keyboard target; TEXT_INPUT / DROPDOWN only, 0 for none */
     int32_t active_scroll_component_id; /* scroll target for the current drag, 0 when none */
@@ -381,6 +386,19 @@ typedef struct ui_context {
     int32_t component_count;    /* slots in use, including retired (in_use == 0) ones */
     int32_t component_capacity;
 } ui_context_t;
+
+/* Whether a font call's status says the font service ended: its hangup ended
+ * the call (WASMOS_PEER_GONE), or it had ended before the call and its endpoint
+ * no longer exists (WASMOS_NOENT from the send). */
+static inline int ui_font_peer_gone(int32_t rc) {
+    return rc == WASMOS_PEER_GONE || rc == WASMOS_NOENT;
+}
+
+/* The service behind this window ended (see ui_context_t.peer_gone). */
+static inline void ui_peer_gone(ui_context_t* ctx) {
+    ctx->peer_gone = 1;
+    ctx->close_requested = 1;
+}
 
 /* Field extractors for the packed 32-bit payloads the compositor sends.
  * u16_lo/u16_hi split a pair of unsigned halves (RESIZE carries width, height);
@@ -741,15 +759,19 @@ static inline int32_t ui_font_measure_text(ui_context_t* ctx, const char* text, 
     desc->mask_borrow_id = 0;
 
     wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(ctx->font_endpoint,
-                        ctx->font_reply_endpoint,
-                        FONT_IPC_MEASURE_GLYPH_REQ,
-                        ctx->req_id++,
-                        ctx->font_text_buffer_id,
-                        0,
-                        text_off + text_len + 1,
-                        ctx->font_text_borrow_id,
-                        &reply) != 0) {
+    int32_t rc = wasmos_ipc_call(ctx->font_endpoint,
+                                 ctx->font_reply_endpoint,
+                                 FONT_IPC_MEASURE_GLYPH_REQ,
+                                 ctx->req_id++,
+                                 ctx->font_text_buffer_id,
+                                 0,
+                                 text_off + text_len + 1,
+                                 ctx->font_text_borrow_id,
+                                 &reply);
+    if (rc != 0) {
+        if (ui_font_peer_gone(rc)) {
+            ui_peer_gone(ctx);
+        }
         return -1;
     }
     if (reply.type != FONT_IPC_RESP || reply.arg0 != WASMOS_ERR_NONE)
@@ -811,15 +833,19 @@ static inline int32_t ui_font_measure_and_raster_text(ui_context_t* ctx, const c
     desc->mask_borrow_id = ctx->font_mask_borrow_id;
 
     wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(ctx->font_endpoint,
-                        ctx->font_reply_endpoint,
-                        FONT_IPC_RASTER_GLYPH_INTO_REQ,
-                        ctx->req_id++,
-                        ctx->font_text_buffer_id,
-                        0,
-                        text_off + text_len + 1,
-                        ctx->font_text_borrow_id,
-                        &reply) != 0) {
+    int32_t rc = wasmos_ipc_call(ctx->font_endpoint,
+                                 ctx->font_reply_endpoint,
+                                 FONT_IPC_RASTER_GLYPH_INTO_REQ,
+                                 ctx->req_id++,
+                                 ctx->font_text_buffer_id,
+                                 0,
+                                 text_off + text_len + 1,
+                                 ctx->font_text_borrow_id,
+                                 &reply);
+    if (rc != 0) {
+        if (ui_font_peer_gone(rc)) {
+            ui_peer_gone(ctx);
+        }
         return -1;
     }
     if (reply.type != FONT_IPC_RESP || reply.arg0 != WASMOS_ERR_NONE)
@@ -2314,6 +2340,12 @@ static inline int32_t ui_loop_handle_ipc(ui_context_t* ctx, const wasmos_ipc_mes
     /* Events arrive as compositor-pushed GFX_IPC_PUSH_EVENT: arg1=event_type,
      * arg2=window_id, arg3=packed payload (decoded by the ui_ptr_evt_* /
      * ui_u16_* helpers per event type). */
+    /* Only the compositor sends to the event endpoint, so the kernel's hangup
+     * there means the compositor ended, and the window with it. */
+    if (msg->type == WASMOS_IPC_HANGUP) {
+        ui_peer_gone(ctx);
+        return UI_MSG_CONSUMED;
+    }
     if (msg->type != GFX_IPC_PUSH_EVENT)
         return UI_MSG_IGNORED;
     if (msg->arg1 == GFX_EVENT_NONE)

@@ -30,14 +30,18 @@
  * skipped while that menu is open — rebuilding under an open popup would
  * destroy the popup windows and drop focus.
  *
- * Preconditions: the "gfx" and "font" services must be running. The "rtc"
- * service is optional: without it the clock is simply not drawn. */
+ * Preconditions: the "gfx" and "font" services must be running; when either
+ * ends, the window goes with it and the menu bar exits with WASMOS_PEER_GONE
+ * for its supervisor to start it again. The "rtc" service is optional and
+ * followed by name: without it the clock is not drawn, and a restarted rtc is
+ * picked up when it registers. */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "wasmos/api.h"
 #include "wasmos/gfx_ipc.h"
 #include "wasmos/ipc.h"
+#include "wasmos/libsys.h"
 #include "wasmos/libui.h"
 #include "wasmos/proc.h"
 #include "wasmos/startup.h"
@@ -49,7 +53,42 @@
 #define TITLE_MAX 48
 
 static ui_context_t g_ctx;
+/* The clock's provider, followed by name: the watch reports every binding of
+ * "rtc", so a restarted rtc is picked up as soon as it registers. -1 between a
+ * failed read and the next binding. The watch's loop has no select set of its
+ * own: its endpoint is in the main loop's, which pumps it. */
 static int32_t g_rtc_endpoint = -1;
+static wasmos_sys_event_loop_t g_rtc_loop;
+static wasmos_sys_svc_watch_set_t g_rtc_watches;
+static wasmos_sys_svc_watch_t g_rtc_watch;
+
+static void on_rtc_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
+    (void)user;
+    (void)watch;
+    g_rtc_endpoint = endpoint;
+}
+
+/* Starts following "rtc", with the watch's endpoint added to `sel`. Returns 0,
+ * or -1 with the clock left blank. */
+static int rtc_watch_start(int32_t proc_ep, int32_t sel) {
+    int32_t ep = wasmos_ipc_create_endpoint();
+    if (ep < 0) {
+        return -1;
+    }
+    wasmos_sys_event_loop_init(&g_rtc_loop, ep, 0x4000);
+    if (g_rtc_loop.select_id >= 0) {
+        (void)wasmos_ipc_select_destroy(g_rtc_loop.select_id);
+        g_rtc_loop.select_id = -1;
+    }
+    memset(&g_rtc_watch, 0, sizeof(g_rtc_watch));
+    if (wasmos_ipc_select_add(sel, ep) != 0 ||
+        wasmos_sys_svc_watch_set_init(&g_rtc_watches, &g_rtc_loop, proc_ep) != 0 ||
+        wasmos_sys_svc_watch_start(&g_rtc_watches, &g_rtc_watch, "rtc", 0, on_rtc_bound, 0, 0) !=
+            0) {
+        return -1;
+    }
+    return 0;
+}
 
 /* ---- clock ---- */
 
@@ -77,6 +116,8 @@ static void format_clock(int32_t year, int32_t month, int32_t day, int32_t hour,
     buf[19] = '\0';
 }
 
+/* TODO: the read is a synchronous call on the UI loop (docs/TASKS.md, removal
+ * of sync request/reply); it should be an intent answered on g_rtc_loop. */
 static void update_clock(void) {
     if (g_rtc_endpoint < 0)
         return;
@@ -89,8 +130,11 @@ static void update_clock(void) {
                         0,
                         0,
                         0,
-                        &reply) != 0)
+                        &reply) != 0) {
+        /* That rtc is gone (or refused): wait for the watch's next binding. */
+        g_rtc_endpoint = -1;
         return;
+    }
     if (reply.type != RTC_IPC_READ_RESP)
         return;
     const int32_t a0 = reply.arg0, a1 = reply.arg1;
@@ -437,13 +481,6 @@ int main(int argc, char** argv) {
     if (ui_menu_bar_init(&g_ctx, proc_ep, reply_ep) != 0)
         return 1;
 
-    for (int32_t spins = 0; spins < 512; ++spins) {
-        g_rtc_endpoint = wasmos_svc_lookup(proc_ep, reply_ep, "rtc", g_ctx.req_id++);
-        if (g_rtc_endpoint >= 0)
-            break;
-        (void)wasmos_sched_yield();
-    }
-
     /* Title fetch buffer: owned here, borrowed WRITE to the compositor so it can
      * fill it in, mapped here so the reply needs no copy back. */
     g_title_buffer_id = wasmos_xfer_buffer_acquire(4096);
@@ -519,6 +556,7 @@ int main(int argc, char** argv) {
         ui_destroy(&g_ctx);
         return 1;
     }
+    (void)rtc_watch_start(proc_ep, sel);
 
     while (!g_ctx.close_requested) {
         (void)wasmos_ipc_select_wait_timeout(sel, MENU_BAR_TICK_MS);
@@ -527,6 +565,7 @@ int main(int argc, char** argv) {
             ui_loop_handle_ipc(&g_ctx, &msg);
         }
 
+        (void)wasmos_sys_event_loop_poll(&g_rtc_loop, 4);
         if (++clock_ctr >= CLOCK_WAKES) {
             clock_ctr = 0;
             update_clock();
@@ -539,6 +578,9 @@ int main(int argc, char** argv) {
         ui_loop_drain(&g_ctx);
     }
 
+    /* The compositor or the font service ended under the menu bar: its
+     * supervisor (sysinit.rc, restart=always) starts it again. */
+    const int32_t status = g_ctx.peer_gone ? WASMOS_PEER_GONE : 0;
     ui_destroy(&g_ctx);
-    return 0;
+    return status;
 }

@@ -2139,12 +2139,21 @@ Source: `architecture/25-diagnostics-status.md`,
 
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
-- [ ] [BUG][P2] Find why `test_app_churn` failed once on WARP SMP in a full CLI
-  battery: "run 11: date produced no result", with `date` parked on a private
-  endpoint after a PM `0x2a1` (`SVC_IPC_LOOKUP_RESP`). It passed 3/3 alone and
-  in later batteries. Not yet checked against `main`, so it is not attributed
-  to the supervisor work it was seen during; reproduce by looping the test on
-  `warp_smp` before changing anything.
+- [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
+  (`test_app_churn`: "run N: date produced no result"). Not a supervisor
+  regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7
+  runs), as on `df536c7e` (1 in 15). Idle it is rare (0 in 20); saturating the
+  host CPU with busy loops while looping the test is the reproducer. Both stall
+  dumps agree: `date` got its `SVC_IPC_LOOKUP_RESP`, sent `RTC_IPC_READ_REQ`
+  (`req=2`), and waits on its reply endpoint with nothing queued; the request
+  sits ~29 slots back in the rtc endpoint's ring (the dump's `sent ->` scans
+  the ring, so it was enqueued and since consumed), and the rtc is idle in
+  `ipc_select_wait` having served ~29 later `RTC_IPC_READ_REQ`s from
+  `menu_bar`. So the loss is between the rtc's AssemblyScript event loop
+  dequeuing the request (`ipc_drain` + `IpcMessage.readLast`) and its reply
+  `ipc_send`, whose result `serveRequest` ignores. Suspects: the per-pid
+  last-message slot read by `ipc_last_field` racing on SMP, and the loop's
+  intent match by request id alone (`date` always uses `req=2`).
 - [ ] [FEATURE][P2] Finish the toolchain SDK's remaining Stage 1 milestones
   (`docs/toolchain.md`): build `compiler-rt` builtins for wasm32 if a guest ever
   needs `__int128` — measured to be the ONLY shape that needs them, reaching eight

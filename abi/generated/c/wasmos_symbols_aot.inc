@@ -129,4 +129,6 @@
     LINK("wasmos", "linmem_slots", stub_i1) , \
     LINK("wasmos", "ipc_endpoint_has_cap", stub_i2) , \
     LINK("wasmos", "pci_config_read", stub_i3) , \
-    LINK("wasmos", "pci_config_write", stub_i3)
+    LINK("wasmos", "pci_config_write", stub_i3) , \
+    LINK("wasmos", "pci_function_check", stub_i2) , \
+    LINK("wasmos", "pci_config_write_for", stub_i4)

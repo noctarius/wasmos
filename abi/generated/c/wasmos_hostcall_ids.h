@@ -128,7 +128,9 @@ typedef enum {
     HC_IPC_ENDPOINT_HAS_CAP = 118,
     HC_PCI_CONFIG_READ = 119,
     HC_PCI_CONFIG_WRITE = 120,
-    HC_COUNT = 121,
+    HC_PCI_FUNCTION_CHECK = 121,
+    HC_PCI_CONFIG_WRITE_FOR = 122,
+    HC_COUNT = 123,
 } warp_hostcall_id_t;
 
 #endif /* WASMOS_HOSTCALL_IDS_H */

@@ -32,10 +32,33 @@ void pci_config_write32(uint16_t bdf, uint8_t reg, uint32_t value);
  * mastering back on (an MSI bind through pci-bus does). */
 int pci_quiesce_function(uint16_t bdf);
 
-/* Quiesces the PCI function context_id's spawn profile names
- * (capability_pci_function), if any, and logs it. The reap path calls this
- * before it releases the context's DMA regions and borrows, so no frame the
- * device could still write is recycled while it can. */
+/* The kernel's record of which process drives which function. A function is
+ * UNMANAGED until a spawn profile names it (DEVMGR_CAP_PCI_FUNCTION), OWNED by
+ * that process while it lives, and RETIRED once the reap has quiesced it, until
+ * a new driver names it. A function no profile ever named stays unmanaged:
+ * drivers spawned without a descriptor cannot name theirs, and are not refused.
+ *
+ * pci_function_attach records context_id as the function's driver, from its
+ * spawn profile. Returns 0, or -1 when the table is full. */
+int pci_function_attach(uint32_t context_id, uint16_t bdf);
+
+/* Quiesces the function context_id drives, if any, retires it and logs it --
+ * all under the config lock, so no checked write lands between the quiesce and
+ * the retirement. The reap path calls this before it releases the context's
+ * DMA regions and borrows, so no frame the device could still write is
+ * recycled while it can. */
 void pci_quiesce_context(uint32_t context_id, uint32_t pid);
+
+/* Whether context_id may drive `bdf`: 0 for an unmanaged function or one it
+ * owns, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER for one another process owns or one
+ * retired at its driver's reap. */
+int32_t pci_function_check(uint32_t context_id, uint16_t bdf);
+
+/* pci_config_write32 on behalf of context_id: performed only when
+ * pci_function_check allows it, judged under the same lock as the write and as
+ * the quiesce, so a request from a driver that has since been reaped cannot
+ * turn bus mastering or MSI back on. Returns 0 or pci_function_check's
+ * refusal. */
+int32_t pci_config_write_checked(uint32_t context_id, uint16_t bdf, uint8_t reg, uint32_t value);
 
 #endif

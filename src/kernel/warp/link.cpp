@@ -946,6 +946,40 @@ static uint32_t warp_pci_config_read(uint32_t bdf, uint32_t reg, uint32_t out_of
     return 0;
 }
 
+/* The context that owns `endpoint`, the driver a pci-bus request is made for;
+ * WASMOS_INVAL for a negative handle, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER when
+ * the endpoint has no live owner, which drives nothing. */
+static uint32_t warp_pci_requester_context(uint32_t endpoint, uint32_t* out_context) {
+    if ((int32_t)endpoint < 0)
+        return (uint32_t)WASMOS_INVAL;
+    if (ipc_endpoint_owner(endpoint, out_context) != IPC_OK || *out_context == 0)
+        return (uint32_t)WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER;
+    return 0;
+}
+
+static uint32_t warp_pci_function_check(uint32_t endpoint, uint32_t bdf, void* ctx_) {
+    (void)ctx_;
+    uint32_t owner = 0;
+    uint32_t rc = warp_pci_config_check(bdf, 0);
+    if (rc == 0)
+        rc = warp_pci_requester_context(endpoint, &owner);
+    if (rc == 0)
+        rc = (uint32_t)pci_function_check(owner, (uint16_t)bdf);
+    return rc;
+}
+
+static uint32_t warp_pci_config_write_for(uint32_t endpoint, uint32_t bdf, uint32_t reg,
+                                          uint32_t value, void* ctx_) {
+    (void)ctx_;
+    uint32_t owner = 0;
+    uint32_t rc = warp_pci_config_check(bdf, reg);
+    if (rc == 0)
+        rc = warp_pci_requester_context(endpoint, &owner);
+    if (rc == 0)
+        rc = (uint32_t)pci_config_write_checked(owner, (uint16_t)bdf, (uint8_t)reg, value);
+    return rc;
+}
+
 static uint32_t warp_pci_config_write(uint32_t bdf, uint32_t reg, uint32_t value, void* ctx_) {
     (void)ctx_;
     uint32_t rc = warp_pci_config_check(bdf, reg);

@@ -283,6 +283,8 @@ domains:
       - { name: BAD_ENTRY,        description: "table entry index is beyond the device's supported vector count" }
       - { name: MAP_FAILED,       description: "the MSI-X table BAR could not be mapped" }
       - { name: NOT_DEVICE_OWNER, description: "another endpoint already programmed interrupts for this device" }
+      # Appended, never inserted: a code's value is its position.
+      - { name: NOT_FUNCTION_DRIVER, description: "the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it" }
 
   io:
     id: 18

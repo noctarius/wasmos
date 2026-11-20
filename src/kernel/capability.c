@@ -24,8 +24,6 @@ typedef struct {
     uint32_t dma_window_count;
     wasmos_dma_window_t dma_windows[CAPABILITY_DMA_WINDOW_LIMIT];
     uint32_t mask;
-    uint8_t pci_function_valid;
-    uint16_t pci_function;
 } capability_context_state_t;
 
 /* TODO: The capability table has no lock, while grants (spawn/app load) and
@@ -493,23 +491,4 @@ void capability_release_context(uint32_t context_id) {
     if (ctx) {
         (void)list_remove(&g_cap_ctx, ctx);
     }
-}
-
-int capability_set_pci_function(uint32_t context_id, uint16_t bdf) {
-    capability_context_state_t* ctx = capability_state_for_context(context_id, 1);
-    if (!ctx) {
-        return -1;
-    }
-    ctx->pci_function = bdf;
-    ctx->pci_function_valid = 1;
-    return 0;
-}
-
-int capability_pci_function(uint32_t context_id, uint16_t* out_bdf) {
-    capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
-    if (!ctx || !ctx->pci_function_valid || !out_bdf) {
-        return -1;
-    }
-    *out_bdf = ctx->pci_function;
-    return 0;
 }

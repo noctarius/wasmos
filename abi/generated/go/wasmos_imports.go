@@ -1047,3 +1047,24 @@ func PciConfigRead(a0 int32, a1 int32, a2 int32) int32
 // dword-aligned.
 //go:wasmimport wasmos pci_config_write
 func PciConfigWrite(a0 int32, a1 int32, a2 int32) int32
+
+// Whether the process that owns `endpoint` -- a request's source, which the
+// transport has verified -- may drive PCI function `bdf`: 0 when no spawn
+// profile ever named the function or this process's profile does, otherwise
+// WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER (another process drives it, its driver
+// ended and the kernel retired it, or the endpoint has no live owner).
+// Requires the pci.config capability (WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
+// WASMOS_INVAL for a negative endpoint or a bdf above 0xFFFF.
+//go:wasmimport wasmos pci_function_check
+func PciFunctionCheck(a0 int32, a1 int32) int32
+
+// pci_config_write on behalf of the process that owns `endpoint`: written
+// only when pci_function_check allows it, judged under the lock that also
+// serialises the kernel's quiesce of a dead driver's function, so a request
+// its driver sent before it ended cannot turn bus mastering or MSI back on.
+// Returns 0, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER,
+// WASMOS_ERR_KERNEL_NOT_AUTHORIZED without pci.config, or WASMOS_INVAL for a
+// negative endpoint, a bdf above 0xFFFF or a register above 0xFC or not
+// dword-aligned.
+//go:wasmimport wasmos pci_config_write_for
+func PciConfigWriteFor(a0 int32, a1 int32, a2 int32, a3 int32) int32

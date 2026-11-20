@@ -255,6 +255,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_MSI_BAD_ENTRY` | -0x00110009 | table entry index is beyond the device's supported vector count |
 | `WASMOS_ERR_MSI_MAP_FAILED` | -0x0011000A | the MSI-X table BAR could not be mapped |
 | `WASMOS_ERR_MSI_NOT_DEVICE_OWNER` | -0x0011000B | another endpoint already programmed interrupts for this device |
+| `WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER` | -0x0011000C | the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it |
 
 ### `io` (domain 18) — region-addressed I/O port access failures
 

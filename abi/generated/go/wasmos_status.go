@@ -222,6 +222,7 @@ const (
 	WASMOS_ERR_MSI_BAD_ENTRY int32 = -0x00110009 // table entry index is beyond the device's supported vector count
 	WASMOS_ERR_MSI_MAP_FAILED int32 = -0x0011000A // the MSI-X table BAR could not be mapped
 	WASMOS_ERR_MSI_NOT_DEVICE_OWNER int32 = -0x0011000B // another endpoint already programmed interrupts for this device
+	WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER int32 = -0x0011000C // the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it
 	WASMOS_ERR_IO_NOT_AUTHORIZED int32 = -0x00120001 // caller has no io.port spawn profile, so it holds no I/O windows
 	WASMOS_ERR_IO_BAD_REGION int32 = -0x00120002 // region index names no window this context was granted
 	WASMOS_ERR_IO_OUT_OF_WINDOW int32 = -0x00120003 // offset falls outside the granted window's bounds
@@ -756,6 +757,8 @@ func WasmosStrerror(c int32) string {
 		return "the MSI-X table BAR could not be mapped"
 	case WASMOS_ERR_MSI_NOT_DEVICE_OWNER:
 		return "another endpoint already programmed interrupts for this device"
+	case WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER:
+		return "the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it"
 	case WASMOS_ERR_IO_NOT_AUTHORIZED:
 		return "caller has no io.port spawn profile, so it holds no I/O windows"
 	case WASMOS_ERR_IO_BAD_REGION:

@@ -192,6 +192,22 @@ static void cap_control_write(uint16_t bdf, uint8_t cap, uint16_t control) {
     cfg_write(bdf, cap, (dword & 0x0000FFFFu) | ((uint32_t)control << 16));
 }
 
+/* A config write on behalf of the driver behind `requester`, for the writes
+ * that arm a function: the kernel performs it only while that driver drives
+ * the function (pci_config_write_for), so a request a driver sent before it
+ * ended cannot re-arm a function the kernel quiesced at its reap. Returns 0 or
+ * WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER. */
+static int32_t cfg_write_for(int32_t requester, uint16_t bdf, uint8_t reg, uint32_t value) {
+    return wasmos_pci_config_write_for(
+        requester, (int32_t)bdf, (int32_t)(reg & 0xFCu), (int32_t)value);
+}
+
+static int32_t cap_control_write_for(int32_t requester, uint16_t bdf, uint8_t cap,
+                                     uint16_t control) {
+    uint32_t dword = cfg_read(bdf, cap);
+    return cfg_write_for(requester, bdf, cap, (dword & 0x0000FFFFu) | ((uint32_t)control << 16));
+}
+
 /* Physical base of a BAR, resolving the 64-bit form. Returns 0 if the BAR is an
  * I/O BAR or unassigned — neither can hold an MSI-X table. */
 static uint64_t pci_bar_phys(uint16_t bdf, uint8_t bir) {
@@ -284,7 +300,7 @@ static int32_t msi_query(uint16_t bdf, uint32_t* out_kind, uint32_t* out_vectors
 /* ------------------------------------------------------------------- MSI bind */
 
 static int32_t msix_bind(msi_binding_t* b, uint32_t entry, uint32_t address_lo, uint32_t address_hi,
-                         uint32_t data) {
+                         uint32_t data, int32_t requester) {
     uint16_t control = cap_control_read(b->bdf, b->cap_offset);
     if (entry > (control & MSIX_CTRL_TABLE_SIZE_MASK)) {
         return WASMOS_ERR_MSI_BAD_ENTRY;
@@ -303,28 +319,47 @@ static int32_t msix_bind(msi_binding_t* b, uint32_t entry, uint32_t address_lo, 
     }
     /* Enable the capability and lift the function-wide mask. */
     control = (uint16_t)((control | MSIX_CTRL_ENABLE) & ~(uint16_t)MSIX_CTRL_FUNCTION_MASK);
-    cap_control_write(b->bdf, b->cap_offset, control);
-    return 0;
+    return cap_control_write_for(requester, b->bdf, b->cap_offset, control);
+}
+
+/* Masks every MSI-X entry `mask` names, as a binding is taken over from a
+ * driver that ended: its vectors went back to the kernel at its reap, and an
+ * entry left armed would signal one that now belongs to someone else as soon
+ * as the replacement enables MSI-X. */
+static void msix_mask_entries(const msi_binding_t* b, uint32_t mask) {
+    for (uint32_t entry = 0; entry < 32u; ++entry) {
+        if ((mask & (1u << entry)) == 0u) {
+            continue;
+        }
+        uint64_t phys = msix_entry_phys(b->bdf, b->cap_offset, entry);
+        if (phys != 0) {
+            (void)mmio_write32(phys + MSIX_ENTRY_VECTOR_CONTROL, MSIX_VECTOR_CONTROL_MASKED);
+        }
+    }
 }
 
 static int32_t msi_bind_legacy(msi_binding_t* b, uint32_t entry, uint32_t address_lo,
-                               uint32_t address_hi, uint32_t data) {
+                               uint32_t address_hi, uint32_t data, int32_t requester) {
     if (entry != 0u) {
         return WASMOS_ERR_MSI_BAD_ENTRY;
     }
     uint16_t control = cap_control_read(b->bdf, b->cap_offset);
     uint8_t cap = b->cap_offset;
-    cfg_write(b->bdf, (uint8_t)(cap + MSI_REG_ADDRESS_LO), address_lo);
-    if ((control & MSI_CTRL_64BIT) != 0u) {
-        cfg_write(b->bdf, (uint8_t)(cap + 0x08u), address_hi);
-        cfg_write(b->bdf, (uint8_t)(cap + 0x0Cu), data & 0xFFFFu);
-    } else {
-        cfg_write(b->bdf, (uint8_t)(cap + 0x08u), data & 0xFFFFu);
+    int32_t rc = cfg_write_for(requester, b->bdf, (uint8_t)(cap + MSI_REG_ADDRESS_LO), address_lo);
+    if (rc == 0 && (control & MSI_CTRL_64BIT) != 0u) {
+        rc = cfg_write_for(requester, b->bdf, (uint8_t)(cap + 0x08u), address_hi);
+        if (rc == 0) {
+            rc = cfg_write_for(requester, b->bdf, (uint8_t)(cap + 0x0Cu), data & 0xFFFFu);
+        }
+    } else if (rc == 0) {
+        rc = cfg_write_for(requester, b->bdf, (uint8_t)(cap + 0x08u), data & 0xFFFFu);
+    }
+    if (rc != 0) {
+        return rc;
     }
     /* One message: multiple-message-enable stays 0. */
     control = (uint16_t)((control & ~(uint16_t)MSI_CTRL_MULTI_MSG_ENABLE_MASK) | MSI_CTRL_ENABLE);
-    cap_control_write(b->bdf, cap, control);
-    return 0;
+    return cap_control_write_for(requester, b->bdf, cap, control);
 }
 
 static int32_t msi_bind(uint16_t bdf, uint32_t entry, uint32_t address_lo, uint32_t address_hi,
@@ -332,14 +367,25 @@ static int32_t msi_bind(uint16_t bdf, uint32_t entry, uint32_t address_lo, uint3
     if (!bdf_present(bdf)) {
         return WASMOS_ERR_MSI_BAD_DEVICE;
     }
+    /* Only the function's driver may bind it, when the kernel knows the driver
+     * (a spawn profile named the function); otherwise the first claim below
+     * decides. */
+    int32_t entitled = wasmos_pci_function_check(requester, (int32_t)bdf);
+    if (entitled != 0) {
+        return entitled;
+    }
     msi_binding_t* b = binding_find(bdf);
     if (b && b->owner_endpoint != requester) {
         /* One driver per function. Without this a driver could redirect another
          * device's interrupts to its own endpoint. A binding whose owner is gone
          * is the dead driver's: the kernel quiesced the function at its reap
-         * (MSI and MSI-X disabled), so its replacement starts over. */
+         * (MSI and MSI-X disabled), and its entries are masked before the
+         * replacement arms any of its own. */
         if (wasmos_ipc_endpoint_owner(b->owner_endpoint) > 0) {
             return WASMOS_ERR_MSI_NOT_DEVICE_OWNER;
+        }
+        if (b->kind == WASMOS_PCI_MSI_KIND_MSIX) {
+            msix_mask_entries(b, b->bound_mask);
         }
         b->owner_endpoint = requester;
         b->bound_mask = 0;
@@ -363,8 +409,8 @@ static int32_t msi_bind(uint16_t bdf, uint32_t entry, uint32_t address_lo, uint3
     }
 
     int32_t rc = (b->kind == WASMOS_PCI_MSI_KIND_MSIX)
-                     ? msix_bind(b, entry, address_lo, address_hi, data)
-                     : msi_bind_legacy(b, entry, address_lo, address_hi, data);
+                     ? msix_bind(b, entry, address_lo, address_hi, data, requester)
+                     : msi_bind_legacy(b, entry, address_lo, address_hi, data, requester);
     if (rc != 0) {
         return rc;
     }
@@ -375,8 +421,8 @@ static int32_t msi_bind(uint16_t bdf, uint32_t entry, uint32_t address_lo, uint3
      * asserting its shared wire alongside the messages. Writing the status half
      * as zero leaves its write-1-to-clear bits alone. */
     uint32_t cmd = cfg_read(bdf, PCI_REG_COMMAND) & 0xFFFFu;
-    cfg_write(bdf, PCI_REG_COMMAND, cmd | PCI_CMD_BUS_MASTER | PCI_CMD_INTX_DISABLE);
-    return 0;
+    return cfg_write_for(
+        requester, bdf, PCI_REG_COMMAND, cmd | PCI_CMD_BUS_MASTER | PCI_CMD_INTX_DISABLE);
 }
 
 static int32_t msi_unbind(uint16_t bdf, uint32_t entry, int32_t requester) {

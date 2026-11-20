@@ -125,4 +125,6 @@
     LINK("wasmos", "linmem_slots", warp_linmem_slots) , \
     LINK("wasmos", "ipc_endpoint_has_cap", warp_ipc_endpoint_has_cap) , \
     LINK("wasmos", "pci_config_read", warp_pci_config_read) , \
-    LINK("wasmos", "pci_config_write", warp_pci_config_write)
+    LINK("wasmos", "pci_config_write", warp_pci_config_write) , \
+    LINK("wasmos", "pci_function_check", warp_pci_function_check) , \
+    LINK("wasmos", "pci_config_write_for", warp_pci_config_write_for)

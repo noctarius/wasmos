@@ -1943,6 +1943,46 @@ m3ApiRawFunction(wasmos_pci_config_read) {
     m3ApiReturn(0);
 }
 
+/* The context that owns `endpoint`, the driver a pci-bus request is made for;
+ * WASMOS_INVAL for a negative handle, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER when
+ * the endpoint has no live owner, which drives nothing. */
+static int32_t pci_requester_context(int32_t endpoint, uint32_t* out_context) {
+    if (endpoint < 0) {
+        return WASMOS_INVAL;
+    }
+    if (ipc_endpoint_owner((uint32_t)endpoint, out_context) != IPC_OK || *out_context == 0) {
+        return WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER;
+    }
+    return 0;
+}
+
+m3ApiRawFunction(wasmos_pci_function_check) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) m3ApiGetArg(int32_t, bdf);
+    uint32_t owner = 0;
+    int32_t rc = pci_config_guest_check(bdf, 0);
+    if (rc == 0) {
+        rc = pci_requester_context(endpoint, &owner);
+    }
+    if (rc == 0) {
+        rc = pci_function_check(owner, (uint16_t)bdf);
+    }
+    m3ApiReturn(rc);
+}
+
+m3ApiRawFunction(wasmos_pci_config_write_for) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) m3ApiGetArg(int32_t, bdf)
+        m3ApiGetArg(int32_t, reg) m3ApiGetArg(int32_t, value);
+    uint32_t owner = 0;
+    int32_t rc = pci_config_guest_check(bdf, reg);
+    if (rc == 0) {
+        rc = pci_requester_context(endpoint, &owner);
+    }
+    if (rc == 0) {
+        rc = pci_config_write_checked(owner, (uint16_t)bdf, (uint8_t)reg, (uint32_t)value);
+    }
+    m3ApiReturn(rc);
+}
+
 m3ApiRawFunction(wasmos_pci_config_write) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, bdf) m3ApiGetArg(int32_t, reg)
         m3ApiGetArg(int32_t, value);

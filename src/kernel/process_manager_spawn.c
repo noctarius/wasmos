@@ -8,6 +8,7 @@
 #include "serial.h"
 #include "process_manager.h"
 #include "capability.h"
+#include "pci_config.h"
 #include "memory.h"
 #include "paging.h"
 #include "physmem.h"
@@ -534,7 +535,7 @@ static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
         return PM_SPAWN_INTERNAL_ERR_CAPS_APPLY;
     }
     if ((caps->cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0 &&
-        capability_set_pci_function(proc->context_id, caps->pci_function) != 0) {
+        pci_function_attach(proc->context_id, caps->pci_function) != 0) {
         return PM_SPAWN_INTERNAL_ERR_CAPS_APPLY;
     }
     return 0;

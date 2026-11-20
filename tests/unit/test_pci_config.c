@@ -14,8 +14,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "capability.h"
 #include "test_shuffle.h"
+#include "wasmos_driver_abi.h"
 
 #define CFG_FUNCTIONS 2u
 #define BDF_DEV 0x0018u  /* 00:03.0 */
@@ -160,26 +160,88 @@ static int test_a_looping_capability_list_ends(void) {
     return 0;
 }
 
-/* Contexts whose spawn profile named a function, in the stubbed table. */
-#define CTX_WITH_DEVICE 7u
-#define CTX_WITHOUT 8u
+#define CTX_DRIVER 7u
+#define CTX_OTHER 8u
+#define CTX_REPLACEMENT 9u
 
-int capability_pci_function(uint32_t context_id, uint16_t* out_bdf) {
-    if (context_id != CTX_WITH_DEVICE || !out_bdf) {
-        return -1;
-    }
-    *out_bdf = BDF_DEV;
-    return 0;
-}
-
-static int test_the_reap_quiesces_only_a_profiled_context(void) {
+static int test_the_reap_quiesces_only_a_driving_context(void) {
     reset_devices();
-    pci_quiesce_context(CTX_WITHOUT, 40);
+    if (pci_function_attach(CTX_DRIVER, BDF_DEV) != 0) {
+        return __LINE__;
+    }
+    pci_quiesce_context(CTX_OTHER, 40);
     if (g_writes != 0u) {
         return __LINE__;
     }
-    pci_quiesce_context(CTX_WITH_DEVICE, 41);
+    pci_quiesce_context(CTX_DRIVER, 41);
     if ((get32(cfg_of(BDF_DEV), 0x04) & (1u << 2)) != 0u) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+/* Regression: 2026-11-20-late-msi-bind-undoes-quiesce -- a bind the driver
+ * sent before it died could be served by pci-bus after the reap had quiesced
+ * the function, turning bus mastering and MSI back on over the frames the reap
+ * had just recycled. The checked write is judged under the quiesce's lock, and
+ * a retired function refuses it. */
+static int test_a_reaped_drivers_write_is_refused(void) {
+    reset_devices();
+    if (pci_function_attach(CTX_DRIVER, BDF_DEV) != 0) {
+        return __LINE__;
+    }
+    pci_quiesce_context(CTX_DRIVER, 41);
+    uint32_t cmd = get32(cfg_of(BDF_DEV), 0x04) & 0xFFFFu;
+    if (pci_config_write_checked(CTX_DRIVER, BDF_DEV, 0x04, cmd | (1u << 2)) !=
+        WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER) {
+        return __LINE__;
+    }
+    if ((get32(cfg_of(BDF_DEV), 0x04) & (1u << 2)) != 0u) {
+        return __LINE__; /* still not mastering */
+    }
+    return 0;
+}
+
+/* Regression: 2026-11-20-anyone-takes-a-dead-drivers-msi -- pci-bus handed a
+ * dead driver's MSI binding to whoever asked next, so any process could aim a
+ * device's interrupts and turn its bus mastering on. A function a profile
+ * names is driven by that process alone. */
+static int test_another_process_cannot_drive_an_owned_function(void) {
+    reset_devices();
+    if (pci_function_attach(CTX_DRIVER, BDF_DEV) != 0) {
+        return __LINE__;
+    }
+    if (pci_function_check(CTX_OTHER, BDF_DEV) != WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER) {
+        return __LINE__;
+    }
+    if (pci_config_write_checked(CTX_OTHER, BDF_DEV, 0x3C, 0x0Bu) !=
+            WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER ||
+        get32(cfg_of(BDF_DEV), 0x3C) != 0u) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+static int test_the_owner_and_its_replacement_may_drive_it(void) {
+    reset_devices();
+    if (pci_function_attach(CTX_DRIVER, BDF_DEV) != 0 ||
+        pci_function_check(CTX_DRIVER, BDF_DEV) != 0) {
+        return __LINE__;
+    }
+    pci_quiesce_context(CTX_DRIVER, 41);
+    if (pci_function_attach(CTX_REPLACEMENT, BDF_DEV) != 0 ||
+        pci_config_write_checked(CTX_REPLACEMENT, BDF_DEV, 0x3C, 0x0Bu) != 0 ||
+        get32(cfg_of(BDF_DEV), 0x3C) != 0x0Bu) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+/* A function no profile named stays open: drivers spawned without a
+ * descriptor cannot name theirs. */
+static int test_an_unmanaged_function_is_not_refused(void) {
+    reset_devices();
+    if (pci_function_check(CTX_OTHER, BDF_BARE) != 0) {
         return __LINE__;
     }
     return 0;
@@ -192,7 +254,11 @@ int main(void) {
         WASMOS_TEST_CASE(test_a_function_without_capabilities_loses_only_mastering),
         WASMOS_TEST_CASE(test_an_absent_function_is_not_written),
         WASMOS_TEST_CASE(test_a_looping_capability_list_ends),
-        WASMOS_TEST_CASE(test_the_reap_quiesces_only_a_profiled_context),
+        WASMOS_TEST_CASE(test_the_reap_quiesces_only_a_driving_context),
+        WASMOS_TEST_CASE(test_a_reaped_drivers_write_is_refused),
+        WASMOS_TEST_CASE(test_another_process_cannot_drive_an_owned_function),
+        WASMOS_TEST_CASE(test_the_owner_and_its_replacement_may_drive_it),
+        WASMOS_TEST_CASE(test_an_unmanaged_function_is_not_refused),
     };
     if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
         return 1;

@@ -179,8 +179,8 @@ A spawn profile may name the PCI function its device sits at
 (`DEVMGR_CAP_PCI_FUNCTION`, `wasmos_spawn_dma_caps_t.pci_function`; only the
 descriptor forms can carry it, and the packed spawn forms refuse the bit).
 Naming one is a grant like any other cap bit, so it needs `spawn.grant`. The
-kernel records it (`capability_set_pci_function`) and, when the process ends,
-quiesces that function (`pci_quiesce_context`, `src/kernel/pci_config.c`):
+kernel records the process as the function's driver (`pci_function_attach`)
+and, when the process ends, quiesces that function (`pci_quiesce_context`, `src/kernel/pci_config.c`):
 Bus Master Enable cleared, INTx Disable set, the MSI and MSI-X enable bits
 cleared, then a read-back so the writes have reached the device. This runs
 first in the reap -- before the spawner's `PROC_IPC_CHILD_EXITED` is posted and
@@ -197,6 +197,20 @@ disabled and bus mastering off, and nothing turns either back on for it yet.
 Config space is reached through the kernel only: `pci_config_read` /
 `pci_config_write` (`pci.config`) hold the same lock as the quiesce across the
 0xCF8/0xCFC address/data pair.
+
+A function is *unmanaged* until a spawn profile names it, *owned* by that
+process while it lives, and *retired* once its reap has quiesced it, until a
+new driver names it. pci-bus arms a function -- MSI and MSI-X enable, MSI
+address and data, bus mastering -- only on behalf of the requesting driver:
+`pci_function_check(endpoint, bdf)` before it touches the binding, and
+`pci_config_write_for(endpoint, bdf, ...)` for each arming write, which the
+kernel performs only while the endpoint's owner drives the function, judged
+under the quiesce's lock. A bind a driver sent before it died therefore cannot
+re-arm the device after the reap, and no other process can drive an owned
+function (`WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER`). A function no profile named
+stays open to its first claimant, as before. When a binding passes from a dead
+driver to its replacement, pci-bus masks the dead driver's MSI-X entries first,
+since their vectors went back to the kernel at its reap.
 
 ---
 

@@ -101,16 +101,6 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32
                                  uint32_t dma_direction_flags, uint32_t dma_max_bytes,
                                  uint32_t dma_window_count, const wasmos_dma_window_t* dma_windows);
 
-/* Records the PCI function (bus << 8 | device << 3 | function) context_id's
- * device sits at, from its spawn profile (DEVMGR_CAP_PCI_FUNCTION). The reap
- * path quiesces that function (pci_quiesce_context). Returns 0, or -1 when the
- * record cannot be created. */
-int capability_set_pci_function(uint32_t context_id, uint16_t bdf);
-
-/* The PCI function recorded for context_id: 0 with *out_bdf set, or -1 when
- * none was. */
-int capability_pci_function(uint32_t context_id, uint16_t* out_bdf);
-
 /* Return non-zero if a spawn profile (hardware limits) has been set for context_id. */
 int capability_spawn_profile_configured(uint32_t context_id);
 

@@ -917,5 +917,24 @@ extern int32_t wasmos_pci_config_read(int32_t bdf, int32_t reg, uint32_t* out) W
  * dword-aligned.
  */
 extern int32_t wasmos_pci_config_write(int32_t bdf, int32_t reg, int32_t value) WASMOS_WASM_IMPORT("wasmos", "pci_config_write");
+/* Whether the process that owns `endpoint` -- a request's source, which the
+ * transport has verified -- may drive PCI function `bdf`: 0 when no spawn
+ * profile ever named the function or this process's profile does, otherwise
+ * WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER (another process drives it, its driver
+ * ended and the kernel retired it, or the endpoint has no live owner).
+ * Requires the pci.config capability (WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
+ * WASMOS_INVAL for a negative endpoint or a bdf above 0xFFFF.
+ */
+extern int32_t wasmos_pci_function_check(int32_t endpoint, int32_t bdf) WASMOS_WASM_IMPORT("wasmos", "pci_function_check");
+/* pci_config_write on behalf of the process that owns `endpoint`: written
+ * only when pci_function_check allows it, judged under the lock that also
+ * serialises the kernel's quiesce of a dead driver's function, so a request
+ * its driver sent before it ended cannot turn bus mastering or MSI back on.
+ * Returns 0, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER,
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED without pci.config, or WASMOS_INVAL for a
+ * negative endpoint, a bdf above 0xFFFF or a register above 0xFC or not
+ * dword-aligned.
+ */
+extern int32_t wasmos_pci_config_write_for(int32_t endpoint, int32_t bdf, int32_t reg, int32_t value) WASMOS_WASM_IMPORT("wasmos", "pci_config_write_for");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

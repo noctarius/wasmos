@@ -3162,10 +3162,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         console_write("[device-manager] query register failed\n");
         wasmos_sys_ipc_recv_loop();
     }
-    /* READY once both names are live (docs/architecture/03, invariant 5): it is
-     * not a milestone. Rule loading and enumeration follow and may take as long
-     * as the boot volume does; the supervisor holds device-manager to READY. */
-    wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
     g_dm_call_select_id = wasmos_ipc_select_create();
     if (g_dm_call_select_id < 0 ||
         wasmos_ipc_select_add(g_dm_call_select_id, g_dm.reply_endpoint) != 0 ||
@@ -3205,6 +3201,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wasmos_sys_ipc_recv_loop();
     }
     dm_supervisor_init();
+    /* READY once every endpoint and handler is set up -- a setup failure above
+     * parks before it, so the supervisor's READY deadline still catches it --
+     * and before rule loading and enumeration, which take as long as the boot
+     * volume does (docs/architecture/03, invariant 5: READY is not a
+     * milestone). */
+    wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
     log_rule_roots_once();
     load_rules_if_available();
     hw_scan_acpi();

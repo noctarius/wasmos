@@ -14,6 +14,7 @@
  * strcmp/strlen rather than the kernel's, which is a substitution of equals.
  */
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -203,6 +204,51 @@ static void test_table_full_is_reported(void) {
     CHECK(kenv_set("K0", "changed") == WASMOS_OK, "updating an existing key still works");
 }
 
+/* Writers of the table from several CPUs at once, each with keys of its own. */
+#define KENV_RACE_WRITERS 8
+#define KENV_RACE_KEYS (KENV_MAX_ENTRIES / KENV_RACE_WRITERS)
+#define KENV_RACE_ROUNDS 400
+
+/* Released together, so the writers enter kenv_set at the same time. */
+static int g_kenv_race_go;
+
+static void* kenv_race_writer(void* arg) {
+    const int writer = (int)(intptr_t)arg;
+    char key[16];
+    while (!__atomic_load_n(&g_kenv_race_go, __ATOMIC_ACQUIRE)) {
+    }
+    for (int k = 0; k < KENV_RACE_KEYS; ++k) {
+        (void)snprintf(key, sizeof(key), "w%d.k%d", writer, k);
+        (void)kenv_set(key, "1");
+    }
+    return 0;
+}
+
+/* Regression: 2026-11-20-kenv-concurrent-set -- kenv_set picked a free slot
+ * and filled it with no lock, so two guests setting new keys at once on
+ * different CPUs could claim the same slot and both report success, one of
+ * them losing its variable. The logger keeps its restart position there. */
+static void test_concurrent_writers_lose_no_key(void) {
+    int lost_rounds = 0;
+    for (int round = 0; round < KENV_RACE_ROUNDS; ++round) {
+        pthread_t threads[KENV_RACE_WRITERS];
+        kenv_reset();
+        __atomic_store_n(&g_kenv_race_go, 0, __ATOMIC_RELEASE);
+        for (int w = 0; w < KENV_RACE_WRITERS; ++w) {
+            (void)pthread_create(&threads[w], 0, kenv_race_writer, (void*)(intptr_t)w);
+        }
+        __atomic_store_n(&g_kenv_race_go, 1, __ATOMIC_RELEASE);
+        for (int w = 0; w < KENV_RACE_WRITERS; ++w) {
+            (void)pthread_join(threads[w], 0);
+        }
+        if (kenv_count() != KENV_MAX_ENTRIES) {
+            lost_rounds++;
+        }
+    }
+    kenv_reset();
+    CHECK(lost_rounds == 0, "every writer's keys are in the table after every round");
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_set_then_get_round_trips),
     WASMOS_TEST_CASE(test_missing_key_is_not_found),
@@ -216,6 +262,7 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_cmdline_bare_word_is_a_flag),
     WASMOS_TEST_CASE(test_cmdline_value_keeps_later_equals_signs),
     WASMOS_TEST_CASE(test_cmdline_skips_unusable_tokens),
+    WASMOS_TEST_CASE(test_concurrent_writers_lose_no_key),
 };
 
 int main(void) {

@@ -130,7 +130,8 @@ typedef enum {
     HC_PCI_CONFIG_WRITE = 120,
     HC_PCI_FUNCTION_CHECK = 121,
     HC_PCI_CONFIG_WRITE_FOR = 122,
-    HC_COUNT = 123,
+    HC_IPC_PEER_AWAIT = 123,
+    HC_COUNT = 124,
 } warp_hostcall_id_t;
 
 #endif /* WASMOS_HOSTCALL_IDS_H */

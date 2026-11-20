@@ -389,9 +389,12 @@ typedef struct ui_context {
 
 /* Whether a font call's status says the font service ended: its hangup ended
  * the call (WASMOS_PEER_GONE), or it had ended before the call and its endpoint
- * no longer exists (WASMOS_NOENT from the send). */
+ * no longer exists -- WASMOS_NOENT from the send, or
+ * WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT from lending it a buffer, since the
+ * lender here is alive and only the grantee can be missing. */
 static inline int ui_font_peer_gone(int32_t rc) {
-    return rc == WASMOS_PEER_GONE || rc == WASMOS_NOENT;
+    return rc == WASMOS_PEER_GONE || rc == WASMOS_NOENT ||
+           rc == WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
 }
 
 /* The service behind this window ended (see ui_context_t.peer_gone). */
@@ -668,7 +671,8 @@ static inline int32_t ui_utf8_prev_boundary(const char* s, int32_t len) {
  * whole UI_PAGE_SIZE pages) when the current one is absent or too small. This
  * client OWNS the buffer; the font service is a transient grantee. On success
  * the out-parameters describe it and 0 is returned; on failure they are left
- * untouched and -1 is returned. Growing replaces the buffer, so any pointer
+ * untouched and the lend's own code is returned when lending it failed (see
+ * ui_font_peer_gone), -1 otherwise. Growing replaces the buffer, so any pointer
  * previously read out of *mapped_ptr is stale and the old contents are gone. */
 static inline int32_t ui_font_ensure_buffer(int32_t font_endpoint, int32_t* buffer_id,
                                             int32_t* borrow_id, uint8_t** mapped_ptr, int32_t* cap,
@@ -685,7 +689,7 @@ static inline int32_t ui_font_ensure_buffer(int32_t font_endpoint, int32_t* buff
     const int32_t new_borrow = wasmos_xfer_buffer_borrow(font_endpoint, new_id, grant_flags);
     if (new_borrow <= 0) {
         (void)wasmos_xfer_buffer_release(new_id);
-        return -1;
+        return new_borrow < 0 ? new_borrow : -1;
     }
     const int32_t mapped = wasmos_xfer_buffer_map(new_id);
     if (mapped < 0) {
@@ -739,14 +743,19 @@ static inline int32_t ui_font_measure_text(ui_context_t* ctx, const char* text, 
     /* The run is preceded by a raster descriptor so one buffer serves both
      * calls; measure only needs the text, which starts at the same offset. */
     const int32_t text_off = (int32_t)sizeof(font_raster_request_t);
-    if (ui_font_ensure_buffer(ctx->font_endpoint,
-                              &ctx->font_text_buffer_id,
-                              &ctx->font_text_borrow_id,
-                              &ctx->font_text_ptr,
-                              &ctx->font_text_cap,
-                              text_off + text_len + 1,
-                              WASMOS_BUFFER_GRANT_READ) != 0)
+    int32_t lent = ui_font_ensure_buffer(ctx->font_endpoint,
+                                         &ctx->font_text_buffer_id,
+                                         &ctx->font_text_borrow_id,
+                                         &ctx->font_text_ptr,
+                                         &ctx->font_text_cap,
+                                         text_off + text_len + 1,
+                                         WASMOS_BUFFER_GRANT_READ);
+    if (lent != 0) {
+        if (ui_font_peer_gone(lent)) {
+            ui_peer_gone(ctx);
+        }
         return -1;
+    }
     memcpy(ctx->font_text_ptr + text_off, text, (size_t)text_len);
     ctx->font_text_ptr[text_off + text_len] = '\0';
     /* No write-back: the mapping IS the buffer's frames on both runtimes
@@ -816,14 +825,19 @@ static inline int32_t ui_font_measure_and_raster_text(ui_context_t* ctx, const c
     if (bytes <= 0)
         return -1;
     /* The mask is lent WRITE: the service fills it, this client reads it. */
-    if (ui_font_ensure_buffer(ctx->font_endpoint,
-                              &ctx->font_mask_buffer_id,
-                              &ctx->font_mask_borrow_id,
-                              &ctx->font_mask_ptr,
-                              &ctx->font_mask_cap,
-                              bytes,
-                              WASMOS_BUFFER_GRANT_WRITE) != 0)
+    int32_t lent = ui_font_ensure_buffer(ctx->font_endpoint,
+                                         &ctx->font_mask_buffer_id,
+                                         &ctx->font_mask_borrow_id,
+                                         &ctx->font_mask_ptr,
+                                         &ctx->font_mask_cap,
+                                         bytes,
+                                         WASMOS_BUFFER_GRANT_WRITE);
+    if (lent != 0) {
+        if (ui_font_peer_gone(lent)) {
+            ui_peer_gone(ctx);
+        }
         return -1;
+    }
 
     const int32_t text_off = (int32_t)sizeof(font_raster_request_t);
     font_raster_request_t* desc = (font_raster_request_t*)ctx->font_text_ptr;

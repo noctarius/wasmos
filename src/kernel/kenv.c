@@ -1,6 +1,7 @@
 #include "kenv.h"
 
 #include "string.h"
+#include "sync/spinlock.h"
 
 typedef struct {
     uint8_t in_use;
@@ -9,6 +10,10 @@ typedef struct {
 } kenv_entry_t;
 
 static kenv_entry_t g_kenv[KENV_MAX_ENTRIES];
+/* Serialises every lookup and change of g_kenv: guests on different CPUs set
+ * and read variables at the same time, and two new keys must not claim one
+ * free slot. Never taken from interrupt context. */
+static ksync_spinlock_t g_kenv_lock;
 
 static uint32_t kenv_strlen(const char* s) {
     uint32_t n = 0;
@@ -55,8 +60,10 @@ wasmos_error_code_t kenv_get(const char* key, char* out, uint32_t out_size, uint
         return WASMOS_ERR_ENV_TOO_LONG;
     }
 
+    ksync_spinlock_lock(&g_kenv_lock);
     int idx = kenv_find(key);
     if (idx < 0) {
+        ksync_spinlock_unlock(&g_kenv_lock);
         return WASMOS_ERR_ENV_NOT_FOUND;
     }
     uint32_t val_len = kenv_strlen(g_kenv[idx].value);
@@ -64,6 +71,7 @@ wasmos_error_code_t kenv_get(const char* key, char* out, uint32_t out_size, uint
         val_len = out_size - 1u;
     }
     memcpy(out, g_kenv[idx].value, val_len);
+    ksync_spinlock_unlock(&g_kenv_lock);
     out[val_len] = '\0';
     if (written) {
         *written = val_len;
@@ -89,6 +97,7 @@ wasmos_error_code_t kenv_set(const char* key, const char* value) {
         return WASMOS_ERR_ENV_TOO_LONG;
     }
 
+    ksync_spinlock_lock(&g_kenv_lock);
     int idx = kenv_find(key);
     if (idx < 0) {
         for (int i = 0; i < KENV_MAX_ENTRIES; i++) {
@@ -98,12 +107,14 @@ wasmos_error_code_t kenv_set(const char* key, const char* value) {
             }
         }
         if (idx < 0) {
+            ksync_spinlock_unlock(&g_kenv_lock);
             return WASMOS_ERR_ENV_TABLE_FULL;
         }
         g_kenv[idx].in_use = 1;
         memcpy(g_kenv[idx].key, key, key_len + 1u);
     }
     memcpy(g_kenv[idx].value, value, val_len + 1u);
+    ksync_spinlock_unlock(&g_kenv_lock);
     return WASMOS_OK;
 }
 
@@ -122,30 +133,35 @@ wasmos_error_code_t kenv_unset(const char* key) {
     if (key_len == 0 || key_len >= KENV_KEY_MAX) {
         return WASMOS_ERR_ENV_TOO_LONG;
     }
+    ksync_spinlock_lock(&g_kenv_lock);
     int idx = kenv_find(key);
     if (idx >= 0) {
         g_kenv[idx].in_use = 0;
     }
+    ksync_spinlock_unlock(&g_kenv_lock);
     return WASMOS_OK;
 }
 
 uint32_t kenv_count(void) {
     uint32_t n = 0;
+    ksync_spinlock_lock(&g_kenv_lock);
     for (int i = 0; i < KENV_MAX_ENTRIES; i++) {
         if (g_kenv[i].in_use) {
             n++;
         }
     }
+    ksync_spinlock_unlock(&g_kenv_lock);
     return n;
 }
 
 /* Drops every variable by clearing the in-use flags; the stored bytes are left
- * behind, as in kenv_unset.  Intended for test setup — there is no lock, so it
- * must not race a concurrent kenv_set. */
+ * behind, as in kenv_unset.  Intended for test setup. */
 void kenv_reset(void) {
+    ksync_spinlock_lock(&g_kenv_lock);
     for (int i = 0; i < KENV_MAX_ENTRIES; i++) {
         g_kenv[i].in_use = 0;
     }
+    ksync_spinlock_unlock(&g_kenv_lock);
 }
 
 uint32_t kenv_load_cmdline(const char* line) {

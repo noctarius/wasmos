@@ -58,6 +58,16 @@ uint32_t warp_ipc_endpoint_has_cap(uint32_t endpoint, uint32_t cap, void* ctx_) 
     return capability_has(owner, (capability_kind_t)cap) ? 1u : 0u;
 }
 
+uint32_t warp_ipc_peer_await(uint32_t waiter, uint32_t awaited, void* ctx_) {
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if ((int32_t)waiter < 0 || (int32_t)awaited < 0)
+        return (uint32_t)IPC_ERR_INVALID;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)IPC_ERR_NOENT;
+    return (uint32_t)ipc_peer_await(context_id, waiter, awaited);
+}
+
 /* Negative handles are rejected before the cast, matching wasm3. Casting first
  * turned a malformed argument into IPC_ENDPOINT_NONE and reported whatever the
  * transport then said about it -- a different code for the same guest mistake

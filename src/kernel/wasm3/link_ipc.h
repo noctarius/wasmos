@@ -57,6 +57,7 @@ int current_process_context(uint32_t* out_context_id);
 m3ApiRawFunction(wasmos_ipc_create_endpoint);
 m3ApiRawFunction(wasmos_ipc_endpoint_owner);
 m3ApiRawFunction(wasmos_ipc_endpoint_has_cap);
+m3ApiRawFunction(wasmos_ipc_peer_await);
 m3ApiRawFunction(wasmos_ipc_send);
 m3ApiRawFunction(wasmos_ipc_select_one);
 m3ApiRawFunction(wasmos_ipc_drain);

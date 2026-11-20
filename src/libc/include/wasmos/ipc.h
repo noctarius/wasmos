@@ -142,16 +142,23 @@ static inline int32_t wasmos_ipc_call(int32_t destination_endpoint, int32_t sour
  * `source_endpoint` meanwhile is consumed and DISCARDED, so this must be called
  * on a private reply endpoint, never on a live service endpoint.
  *
+ * Before sending, the call registers an await on the destination
+ * (wasmos_ipc_peer_await), so the kernel reports the destination's end on
+ * `source_endpoint` even if the server dies before it ever answers.
+ *
  * Returns 0 on a matched reply, the send status if the request could not be
- * queued, WASMOS_PEER_GONE once the kernel reports that destination's end
- * (WASMOS_IPC_HANGUP naming it in arg0), or the negative receive status. There
- * is no timeout: a peer that lives and never answers blocks the caller
- * indefinitely. */
+ * queued, WASMOS_PEER_GONE when the destination has no owner to answer or the
+ * kernel reports its end (WASMOS_IPC_HANGUP naming it in arg0), or the negative
+ * receive status. There is no timeout: a peer that lives and never answers
+ * blocks the caller indefinitely. */
 static inline int32_t wasmos_ipc_call_retry(int32_t destination_endpoint, int32_t source_endpoint,
                                             int32_t type, int32_t request_id, int32_t arg0,
                                             int32_t arg1, int32_t arg2, int32_t arg3,
                                             wasmos_ipc_message_t* out_reply,
                                             int32_t send_retry_limit) {
+    if (wasmos_ipc_peer_await(source_endpoint, destination_endpoint) == WASMOS_NOENT) {
+        return WASMOS_PEER_GONE;
+    }
     int32_t rc = wasmos_ipc_send_retry(destination_endpoint,
                                        source_endpoint,
                                        type,

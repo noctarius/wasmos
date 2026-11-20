@@ -131,4 +131,5 @@
     LINK("wasmos", "pci_config_read", stub_i3) , \
     LINK("wasmos", "pci_config_write", stub_i3) , \
     LINK("wasmos", "pci_function_check", stub_i2) , \
-    LINK("wasmos", "pci_config_write_for", stub_i4)
+    LINK("wasmos", "pci_config_write_for", stub_i4) , \
+    LINK("wasmos", "ipc_peer_await", stub_i2)

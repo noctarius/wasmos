@@ -67,10 +67,11 @@ typedef struct {
     logger_state_t state;
     int32_t fs_endpoint;
     int32_t fd;
-    uint32_t file_bytes; /* bytes this instance wrote to the open file */
-    uint8_t truncate;    /* the next open restarts the file */
-    uint8_t notified;    /* a KMSG_NOTIFY arrived since the last drain began */
-    uint8_t wake_armed;  /* the root task is parked on `wake` */
+    uint32_t file_bytes;   /* bytes this instance wrote to the open file */
+    uint8_t position_lost; /* the position could not be stored; reported once */
+    uint8_t truncate;      /* the next open restarts the file */
+    uint8_t notified;      /* a KMSG_NOTIFY arrived since the last drain began */
+    uint8_t wake_armed;    /* the root task is parked on `wake` */
     wasmos_sys_wasm_ipc_future_t ready;
     wasmos_sys_wasm_fs_operation_t op;
     wasmos_future_t* pending;
@@ -113,12 +114,22 @@ static void logger_position_load(logger_t* lg) {
     }
 }
 
-/* Records that everything before the stage's position is in the file. */
-static void logger_position_store(const logger_t* lg) {
+/* Records that everything before the stage's position is in the file. A
+ * position that cannot be kept (kenv full) is reported once: logging goes on,
+ * but a restarted logger would append the ring's backlog again. */
+static void logger_position_store(logger_t* lg) {
     char saved[24];
     uint32_t len = logger_stage_save(&lg->stage, saved, sizeof(saved));
-    if (len > 0u) {
-        (void)wasmos_env_set(LOGGER_SEQ_KEY, (int32_t)strlen(LOGGER_SEQ_KEY), saved, (int32_t)len);
+    int32_t rc =
+        len > 0u
+            ? wasmos_env_set(LOGGER_SEQ_KEY, (int32_t)strlen(LOGGER_SEQ_KEY), saved, (int32_t)len)
+            : -1;
+    if (rc < 0 && !lg->position_lost) {
+        lg->position_lost = 1;
+        printf("[logger] cannot keep the log position in kenv %s (%d); a restart repeats "
+               "the retained kernel log\n",
+               LOGGER_SEQ_KEY,
+               (int)rc);
     }
 }
 

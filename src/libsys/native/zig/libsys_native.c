@@ -664,9 +664,11 @@ int32_t wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t* api, uint32_t dest
 
 /* Synchronous send+recv: sends the request and waits on `source_endpoint` for
  * the reply carrying `request_id`, discarding anything else that lands there,
- * as wasmos_ipc_call does in the libc. Returns 0 on success, WASMOS_PEER_GONE
- * once the kernel reports the destination's end (WASMOS_IPC_HANGUP naming it
- * in arg0), or -1 on error. */
+ * as wasmos_ipc_call does in the libc, with an await registered first
+ * (api->ipc_peer_await) so a server that dies before it first answers ends the
+ * wait. Returns 0 on success, WASMOS_PEER_GONE when the destination has no
+ * owner or the kernel reports its end (WASMOS_IPC_HANGUP naming it in arg0), or
+ * -1 on error. */
 int32_t wasmos_sys_ipc_call_native(wasmos_driver_api_t* api, uint32_t source_endpoint,
                                    uint32_t destination, uint32_t request_id, uint32_t msg_type,
                                    uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3,
@@ -685,6 +687,10 @@ int32_t wasmos_sys_ipc_call_native(wasmos_driver_api_t* api, uint32_t source_end
     req.arg2 = arg2;
     req.arg3 = arg3;
     ctx_id = api->sched_current_pid();
+    if (api->ipc_peer_await &&
+        api->ipc_peer_await(ctx_id, source_endpoint, destination) == WASMOS_NOENT) {
+        return WASMOS_PEER_GONE;
+    }
     if (api->ipc_send(ctx_id, destination, &req) != 0 || !api->ipc_recv) {
         return -1;
     }

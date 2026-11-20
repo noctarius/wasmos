@@ -236,6 +236,16 @@ An endpoint records at most `IPC_ENDPOINT_CONTACTS_MAX` destinations; beyond
 that, or when a record cannot be allocated, the untracked peers are not told and
 the reap reports the overflow on the serial console.
 
+A server that ends before it ever sends to a client owes the client nothing by
+that rule, so a caller about to wait for an answer registers an **await**:
+`ipc_peer_await(waiter, awaited)` (host call of the same name) records that the
+end of whoever owns `awaited` now is owed to `waiter`, as a hangup naming
+`awaited` in `arg0`. It is one record per waiter, replaced by the next
+registration and dropped with either side, so registering before every call
+accumulates nothing; an `awaited` with no live owner is refused with
+`IPC_ERR_NOENT`, since its answer cannot come. The synchronous calls of every
+runtime register one before they send.
+
 #### IPC Result Codes
 
 Each code names one failure, and the values are the generated transport axis

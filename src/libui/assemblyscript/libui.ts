@@ -286,6 +286,15 @@ export class Context {
         return this.closeRequestedFlag;
     }
 
+    // Marks the window gone when the last ipc.call ended because the
+    // compositor was gone (ipc.peerGone), like the hangup in pump.
+    private notePeerGone(): void {
+        if (ipc.peerGone()) {
+            this.peerGoneFlag = true;
+            this.closeRequestedFlag = true;
+        }
+    }
+
     // True once the compositor ended, taking the window with it; shouldClose()
     // is true then too. An app exits with WASMOS_PEER_GONE, and a supervised
     // one is started again against the restarted compositor.
@@ -347,6 +356,7 @@ export class Context {
             0,
             0,
         );
+        this.notePeerGone();
         return reply != null && reply.type == 0x0280 && reply.arg0 == WASMOS_ERR_NONE;
     }
 
@@ -424,6 +434,7 @@ export class Context {
             this.titleBorrowId,
             len,
         );
+        this.notePeerGone();
         return reply != null && reply.type == 0x0280 && reply.arg0 == WASMOS_ERR_NONE;
     }
 
@@ -606,6 +617,7 @@ export class Context {
         this.releaseSurface();
 
         const spec = ipc.call(this.gfxEndpoint, GFX_IPC_GET_SURFACE_SPEC, this.windowId, 0, 0, 0);
+        this.notePeerGone();
         if (spec == null || spec.type != 0x0280 || spec.arg0 != WASMOS_ERR_NONE) {
             return false;
         }
@@ -636,6 +648,7 @@ export class Context {
             borrow,
             0,
         );
+        this.notePeerGone();
         if (attach == null || attach.type != 0x0280 || attach.arg0 != WASMOS_ERR_NONE) {
             let _unmap = xfer_buffer_unmap(bid);
             let _release = xfer_buffer_release(bid);

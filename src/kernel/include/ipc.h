@@ -269,6 +269,24 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id);
  * state the hangup would have released. */
 int ipc_context_watch(uint32_t context_id, uint32_t destination);
 
+/* A caller that is about to wait on `waiter` for an answer from `awaited` asks
+ * to hear of awaited's end there: once the context that owns `awaited` now is
+ * released, `waiter` receives WASMOS_IPC_HANGUP with arg0 = awaited and arg1 =
+ * that context. Without it a server that dies before ever sending to `waiter`
+ * owes it nothing -- a hangup goes only to endpoints the dead process had sent
+ * to -- and a synchronous call waits forever.
+ *
+ * One await per waiter: registering again replaces the previous one, so a
+ * caller registers before every call and nothing accumulates. The record goes
+ * when either side is released. An `awaited` the kernel owns is never released
+ * and needs none. caller_context must own `waiter`, a message endpoint.
+ *
+ * Returns IPC_OK; IPC_ERR_NOENT when `awaited` has no live owner -- the answer
+ * will never come, so the caller should not wait for it; IPC_ERR_PERM for a
+ * waiter the caller does not own; IPC_ERR_INVALID; or IPC_ERR_FULL when the
+ * record cannot be allocated. */
+int ipc_peer_await(uint32_t caller_context, uint32_t waiter, uint32_t awaited);
+
 /* A kernel message reserved for one destination and delivered later with the
  * hangup guarantee: never refused by a full queue, never lost for want of
  * memory, and queued behind everything sent before it. The child lifecycle

@@ -30,6 +30,10 @@ static uint32_t g_script_len;
 static uint32_t g_script_next;
 static const scripted_t* g_last;
 static int32_t g_sends;
+/* What wasmos_ipc_peer_await answers: 0, or WASMOS_NOENT for a destination
+ * that has no owner left. */
+static int32_t g_await_rc;
+static int32_t g_awaits;
 
 static void script_reset(void) {
     memset(g_script, 0, sizeof(g_script));
@@ -37,6 +41,8 @@ static void script_reset(void) {
     g_script_next = 0;
     g_last = 0;
     g_sends = 0;
+    g_await_rc = 0;
+    g_awaits = 0;
 }
 
 static void script_push(int32_t type, int32_t request_id, int32_t source, int32_t arg0) {
@@ -79,6 +85,13 @@ int32_t wasmos_ipc_last_field(int32_t field) {
 
 int32_t wasmos_sched_yield(void) {
     return 0;
+}
+
+int32_t wasmos_ipc_peer_await(int32_t waiter, int32_t awaited) {
+    (void)waiter;
+    (void)awaited;
+    g_awaits++;
+    return g_await_rc;
 }
 
 static int test_the_matching_reply_is_returned(void) {
@@ -125,11 +138,38 @@ static int test_another_peers_hangup_is_not_this_calls(void) {
     return 0;
 }
 
+/* A server that is already gone is not sent to and not waited for: the
+ * await finds no owner for the destination. */
+static int test_a_server_already_gone_is_not_waited_for(void) {
+    wasmos_ipc_message_t reply;
+    script_reset();
+    g_await_rc = WASMOS_NOENT;
+    if (wasmos_ipc_call(SERVER_EP, REPLY_EP, 0x100, 9, 0, 0, 0, 0, &reply) != WASMOS_PEER_GONE ||
+        g_sends != 0) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+/* The await is registered before the request goes out, so a server that dies
+ * before it first answers is reported on the reply endpoint too. */
+static int test_the_call_awaits_its_server_first(void) {
+    wasmos_ipc_message_t reply;
+    script_reset();
+    script_push(0x124, 9, SERVER_EP, 0);
+    if (wasmos_ipc_call(SERVER_EP, REPLY_EP, 0x100, 9, 0, 0, 0, 0, &reply) != 0 || g_awaits != 1) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     static const wasmos_test_case_t cases[] = {
         WASMOS_TEST_CASE(test_the_matching_reply_is_returned),
         WASMOS_TEST_CASE(test_a_hangup_from_the_server_ends_the_call),
         WASMOS_TEST_CASE(test_another_peers_hangup_is_not_this_calls),
+        WASMOS_TEST_CASE(test_a_server_already_gone_is_not_waited_for),
+        WASMOS_TEST_CASE(test_the_call_awaits_its_server_first),
     };
     if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
         return 1;

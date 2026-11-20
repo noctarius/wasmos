@@ -669,10 +669,13 @@ client could use: open files, borrows and sessions are gone with the old
 process either way.
 
 A synchronous call whose server ends before answering returns
-`WASMOS_PEER_GONE` (`wasmos_ipc_call`, `wasmos_sys_ipc_call_native`): the
-server's hangup ends the wait instead of being discarded with the other
-stray messages on the reply endpoint, so a client of a restarted provider
-cannot hang on its last request.
+`WASMOS_PEER_GONE` (`wasmos_ipc_call`, `wasmos_sys_ipc_call_native`, the
+AssemblyScript `ipc.call`): it registers an await on the server first
+(`ipc_peer_await`, [Process Model and IPC](09-process-and-ipc.md), "Peer
+Hangup"), so the server's end is reported on the reply endpoint even if it
+never answered, and the call stops on that hangup instead of discarding it
+with the other stray messages. A client of a restarted provider cannot hang on
+its last request.
 
 What each client of a supervised provider does when it restarts:
 

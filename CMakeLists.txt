@@ -3886,11 +3886,12 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           -o ${BUILD_DIR}/test_hostcall_value
   COMMAND ${BUILD_DIR}/test_hostcall_value
   # The kernel environment store, shared by both runtimes.
-  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
           -iquote ${KERNEL_DIR}/include
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_kenv.c
           ${KERNEL_DIR}/kenv.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_kenv
   COMMAND ${BUILD_DIR}/test_kenv
   # The kernel log ring: sequence-numbered paging for dmesg, and the

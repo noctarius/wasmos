@@ -823,4 +823,14 @@ unsafe extern "C" {
     /// negative endpoint, a bdf above 0xFFFF or a register above 0xFC or not
     /// dword-aligned.
     pub fn pci_config_write_for(a0: i32, a1: i32, a2: i32, a3: i32) -> i32;
+    /// Before waiting on `waiter` (an endpoint the caller owns) for an answer
+    /// from `awaited`, ask to hear of awaited's end there: once the process that
+    /// owns `awaited` now is reaped, `waiter` receives WASMOS_IPC_HANGUP with
+    /// arg0 = awaited. A server that dies before ever sending to the waiter owes
+    /// it no other hangup. One await per waiter; registering again replaces the
+    /// last, so a caller registers before each call. Returns 0, WASMOS_NOENT when
+    /// `awaited` has no live owner (its answer cannot come), WASMOS_DENIED for a
+    /// waiter the caller does not own, WASMOS_INVAL for a negative handle or a
+    /// waiter that is not a message endpoint, or WASMOS_FULL.
+    pub fn ipc_peer_await(a0: i32, a1: i32) -> i32;
 }

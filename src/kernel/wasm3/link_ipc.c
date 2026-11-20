@@ -75,6 +75,21 @@ m3ApiRawFunction(wasmos_ipc_endpoint_has_cap) {
     m3ApiReturn(capability_has(owner_context_id, (capability_kind_t)cap) ? 1 : 0);
 }
 
+m3ApiRawFunction(wasmos_ipc_peer_await) {
+    m3ApiReturnType(int32_t);
+    m3ApiGetArg(int32_t, waiter);
+    m3ApiGetArg(int32_t, awaited);
+    uint32_t context_id = 0;
+
+    if (waiter < 0 || awaited < 0) {
+        m3ApiReturn(IPC_ERR_INVALID);
+    }
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(IPC_ERR_NOENT);
+    }
+    m3ApiReturn(ipc_peer_await(context_id, (uint32_t)waiter, (uint32_t)awaited));
+}
+
 m3ApiRawFunction(wasmos_ipc_send) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, destination_endpoint)
         m3ApiGetArg(int32_t, source_endpoint) m3ApiGetArg(int32_t, type)

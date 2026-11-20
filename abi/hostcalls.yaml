@@ -1475,6 +1475,21 @@ hostcalls:
       - { name: bdf, kind: scalar }
       - { name: reg, kind: scalar }
       - { name: value, kind: scalar }
+  - name: ipc_peer_await
+    returns: status
+    doc: |
+      Before waiting on `waiter` (an endpoint the caller owns) for an answer
+      from `awaited`, ask to hear of awaited's end there: once the process that
+      owns `awaited` now is reaped, `waiter` receives WASMOS_IPC_HANGUP with
+      arg0 = awaited. A server that dies before ever sending to the waiter owes
+      it no other hangup. One await per waiter; registering again replaces the
+      last, so a caller registers before each call. Returns 0, WASMOS_NOENT when
+      `awaited` has no live owner (its answer cannot come), WASMOS_DENIED for a
+      waiter the caller does not own, WASMOS_INVAL for a negative handle or a
+      waiter that is not a message endpoint, or WASMOS_FULL.
+    params:
+      - { name: waiter, kind: handle }
+      - { name: awaited, kind: handle }
 
 # Extra links outside the ring-3/AOT id space (no `id`).
 extra:

@@ -478,3 +478,14 @@ void capability_dma_commit(uint32_t context_id, uint64_t bytes) {
     }
     ctx->dma_pinned_bytes += bytes;
 }
+
+void capability_release_context(uint32_t context_id) {
+    capability_context_state_t* ctx;
+    if (context_id == 0) {
+        return; /* the kernel context is never reaped */
+    }
+    ctx = capability_state_for_context(context_id, 0);
+    if (ctx) {
+        (void)list_remove(&g_cap_ctx, ctx);
+    }
+}

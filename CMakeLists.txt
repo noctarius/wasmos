@@ -3942,6 +3942,22 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${KERNEL_DIR}/process_manager_caps.c
           -o ${BUILD_DIR}/test_pm_caps
   COMMAND ${BUILD_DIR}/test_pm_caps
+  # Per-context capability records: a reaped context's record is dropped.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/tests/unit
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_capability.c
+          ${KERNEL_DIR}/capability.c ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_capability
+  COMMAND ${BUILD_DIR}/test_capability
   # Filling a caller-supplied name buffer: the clamp, and which length is
   # reported so truncation stays detectable.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

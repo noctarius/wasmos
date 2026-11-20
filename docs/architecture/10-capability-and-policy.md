@@ -159,8 +159,14 @@ source endpoint: the transport refuses a source the sender does not own, so its
 owner is the sender. The answer is about the owner when asked; a sender that
 has exited answers `WASMOS_NOENT`.
 
-A capability is held because the module's manifest declares it; the trust
-anchor is the image on `/boot` or in the initfs, not a runtime policy.
+A capability is held because the module's manifest declares it, and nothing
+checks that the image is entitled to declare it: any `.wap` on any path --
+`/boot`, `/user` and `/wfs` are writable -- can declare `spawn.grant`,
+`svc.control` or `system.control` and be spawned with them by any process. So
+the requester checks keep a process from exercising an authority it does not
+hold, but not from spawning an image that does: a privileged utility such as
+`svc` is a deputy any process can start with arguments of its choosing. Closing
+that needs a capability policy over images (`docs/TASKS.md`).
 
 ---
 

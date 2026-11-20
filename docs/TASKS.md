@@ -646,6 +646,17 @@ Source: `architecture/13-runtime-and-packaging.md`,
 - [ ] [FEATURE][P2] Finish service-class discovery lifecycle: enumeration,
   add/remove/death notifications, capability-gated registration, and consumer
   migration where class lookup removes hardwired provider names.
+- [ ] [BUG][P1] Stop a manifest from granting itself privileged capabilities.
+  `capability_grant_name` grants whatever a `.wap`'s `[[capabilities]]` names,
+  and `PROC_IPC_SPAWN_PATH` spawns an image from any path, writable volumes
+  included, for any requester. So any process can write and spawn an image that
+  declares `spawn.grant`, `svc.control`, `system.control` or `io.port`, and any
+  process can spawn a privileged utility as a deputy (`svc kill vt`,
+  `svc submit ...`). The requester checks of `architecture/10` ("Requester
+  Checks") hold only for processes that cannot do that. Needs a policy over
+  images -- signed or allow-listed packages, or privileged capabilities granted
+  only to images from the initfs or a read-only system volume -- and, for
+  deputies like `svc`, authentication of the invoking process.
 - [ ] [FEATURE][P1] Quiesce a DMA-capable device before its driver is restarted, so
   PCI and DMA drivers can be supervised (`architecture/15`, "Device-Manager
   Design Direction"). A crashed driver may leave its device bus-mastering into

@@ -183,6 +183,9 @@ void irq_release_context(uint32_t context_id) {
 void msi_release_context(uint32_t context_id) {
     (void)context_id;
 }
+void capability_release_context(uint32_t context_id) {
+    (void)context_id;
+}
 void xfer_buffer_drop_context(uint32_t context_id) {
     (void)context_id;
 }

@@ -74,6 +74,11 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
  * allowlist. Returns 0 for an unknown context. */
 int capability_has(uint32_t context_id, capability_kind_t kind);
 
+/* Drops context_id's record -- grants and spawn profile -- when its process is
+ * reaped, so records do not outlive their processes and every later lookup
+ * scans only live contexts. A context without a record is a no-op. */
+void capability_release_context(uint32_t context_id);
+
 /* Return non-zero if a capability record exists for context_id. */
 int capability_context_configured(uint32_t context_id);
 

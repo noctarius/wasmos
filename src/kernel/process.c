@@ -9,6 +9,7 @@
 #include "wasm3/shim.h"
 #include "ipc.h"
 #include "irq.h"
+#include "capability.h"
 #include "msi.h"
 #include "timer.h"
 #include "thread.h"
@@ -1322,6 +1323,7 @@ static void process_reap(process_t* proc) {
          * physical address, and the ring is one of them. */
         klog_release_ring(proc->context_id);
         xfer_buffer_drop_context(proc->context_id);
+        capability_release_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);
     }
     if (proc->pid != 0) {

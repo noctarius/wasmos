@@ -2,9 +2,9 @@
 .global context_switch
 .global context_switch_to
 # Byte offset of cpu_local_t.in_context_switch, reached through GS (the per-CPU
-# base), so each CPU tracks its own save/restore window. smp.h static-asserts the
+# base), so each CPU tracks its own save/restore window. cpu_local.h static-asserts the
 # value; if that assert fires this .set is what has to change.
-.set CPU_LOCAL_IN_CTX_SW_OFFSET, 17
+.set CPU_LOCAL_IN_CTX_SW_OFFSET, 13
 .extern g_in_scheduler
 .extern cpu_local_sched_ctx
 .extern g_ctxsw_last_out_ctx

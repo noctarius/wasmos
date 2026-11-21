@@ -1,6 +1,6 @@
 #include "arch/x86_64/spinlock.h"
 #include "process.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 
 /*
  * Interrupt-safe spinlock implementation for WASMOS.

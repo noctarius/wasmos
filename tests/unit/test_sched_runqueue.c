@@ -2,7 +2,7 @@
  *
  * This drives the ACTUAL scheduler source, not a model of it, with the host
  * standing in for the CPUs: cpu_local() resolves through g_host_cpu_local (see
- * the WASMOS_HOST_TEST_SMP arm in arch/x86_64/smp.h), so act_as(n) makes the
+ * the WASMOS_HOST_TEST_SMP arm in cpu_local.h), so act_as(n) makes the
  * following calls run "on CPU n".  That gives deterministic multi-CPU coverage
  * with no threads, which is what a unit gate wants -- every ordering here is
  * one the kernel can actually produce, just chosen rather than raced for.
@@ -22,13 +22,13 @@
 
 #include "sched.h"
 #include "thread.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 
 /* ------------------------------------------------------------------ harness */
 
 /* The CPU table the linked scheduler sees, and the three symbols it resolves it through.
  *
- * cpu_local() is the WASMOS_HOST_TEST_SMP arm in arch/x86_64/smp.h, which reads
+ * cpu_local() is the WASMOS_HOST_TEST_SMP arm in cpu_local.h, which reads
  * g_host_cpu_local -- a pointer into g_cpus[]. Everything here runs on one thread, so
  * act_as(n) simply re-points it and the following calls execute "on CPU n".
  *

@@ -10,7 +10,8 @@
 #include "irq.h"
 #include "io.h"
 #include "timer.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
+#include "smp.h"
 #include "wasmos_app.h"
 #if WASMOS_WASM_RUNTIME == 1
 #include "warp/link.h"

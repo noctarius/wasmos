@@ -100,7 +100,7 @@ typedef struct {
 ```
 
 One `cpu_sched_t` lives in the existing `cpu_local_t` struct (in
-`src/kernel/include/arch/x86_64/smp.h`), co-located with the fields already
+`src/kernel/include/cpu_local.h`), co-located with the fields already
 there (`current_process`, `current_thread`, etc.).
 
 **O(1) find-highest-ready:**

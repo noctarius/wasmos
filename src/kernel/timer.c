@@ -13,7 +13,7 @@
 #include "arch/x86_64/lapic.h"
 #endif
 #if WASMOS_SMP
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #endif
 
 /*

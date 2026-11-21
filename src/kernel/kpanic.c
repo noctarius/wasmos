@@ -10,7 +10,7 @@
 #include "process_manager_internal.h"
 #include "thread.h"
 #include "sched.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "arch/x86_64/lapic.h"
 
 extern char __kernel_start[];

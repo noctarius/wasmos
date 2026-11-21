@@ -35,7 +35,7 @@
 #include "memory.h"
 #include "process.h"
 #include "ipc.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "stubs_process_platform.h"
 
 /* process.c and its neighbours each define this locally; there is no header to

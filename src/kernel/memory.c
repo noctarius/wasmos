@@ -11,7 +11,7 @@
 #include "list.h"
 #include "sync/spinlock.h"
 #include "string.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 
 #define PAGE_SIZE 0x1000ULL
 #define MM_USER_LINEAR_BASE 0x0000008000000000ULL

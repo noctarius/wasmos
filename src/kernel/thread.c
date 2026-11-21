@@ -2,7 +2,7 @@
  * Each thread_t has its own kernel stack and saved process_context_t but shares
  * its owner process's address space.  THREAD_MAX_COUNT limits total live threads. */
 #include "thread.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "sched.h"
 #include "sync/spinlock.h"
 

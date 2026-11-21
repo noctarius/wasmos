@@ -63,7 +63,7 @@ extern "C" {
 #include "wasm_driver.h"
 #include "wasmos_driver_abi.h"
 #include "wasmos_status.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 }
 
 #include "src/WasmModule/WasmModule.hpp"

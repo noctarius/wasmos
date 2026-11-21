@@ -8,7 +8,7 @@
 #include "serial.h"
 #include "sync/spinlock.h"
 #if WASMOS_SMP
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "arch/x86_64/lapic.h"
 #endif
 
@@ -211,7 +211,7 @@ static void madt_parse(uint64_t xsdt_phys, uint64_t* out_ioapic_phys) {
                 const acpi_madt_processor_t* proc = (const acpi_madt_processor_t*)p;
                 if ((proc->flags & MADT_PROC_FLAG_ENABLED) &&
                     proc->apic_id != (uint8_t)bsp_apic_id && g_cpu_count < WASMOS_MAX_CPUS) {
-                    g_cpus[g_cpu_count].apic_id = proc->apic_id;
+                    g_cpus[g_cpu_count].arch.apic_id = proc->apic_id;
                     g_cpus[g_cpu_count].cpu_id = g_cpu_count;
                     g_cpu_count++;
                 }

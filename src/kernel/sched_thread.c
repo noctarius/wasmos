@@ -4,12 +4,12 @@
 #include "sync/spinlock.h"
 #include "serial.h"
 #include "string.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 
 /*
  * sched_thread.c — per-CPU O(1) priority scheduler.
  *
- * One cpu_sched_t per CPU, embedded in g_cpus[] (smp.h) and reached through
+ * One cpu_sched_t per CPU, embedded in g_cpus[] (cpu_local.h) and reached through
  * cpu_sched(); each is guarded by its own cs->lock.  Within a queue, ready
  * threads are held in SCHED_PRIO_MAX FIFO lists, one per priority, and
  * ready_bitmap tracks which lists are non-empty so the highest-ready lookup is

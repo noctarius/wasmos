@@ -194,7 +194,7 @@ typedef enum {
 ```
 
 A chain-depth counter is added to `cpu_sched_t` (in
-`src/kernel/include/arch/x86_64/smp.h`):
+`src/kernel/include/cpu_local.h`):
 
 ```c
 typedef struct {

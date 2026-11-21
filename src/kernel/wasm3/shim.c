@@ -14,7 +14,7 @@
 #include "shim.h"
 #include "linmem_slots.h"
 #include "sync/spinlock.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 
 /* Arena tuning, all per process.
  * DEFAULT_PAGES: chunk size used when wasm3_heap_configure is given 0 (4 MiB).

@@ -1,5 +1,5 @@
 #include "boot.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "klog.h"
 #include "block_buffer.h"
 #include "hostcall_value.h"

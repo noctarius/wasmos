@@ -1,4 +1,5 @@
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
+#include "smp.h"
 #include "process.h"
 #include "arch/x86_64/cpu_x86_64.h"
 #include "serial.h"
@@ -160,7 +161,7 @@ void smp_ap_c_entry(uint32_t cpu_id) {
 
 /*
  * smp_init() — called by the BSP after LAPIC and I/O APIC are live.
- * Records the BSP's hardware APIC ID into g_cpus[0].apic_id and logs
+ * Records the BSP's hardware APIC ID into g_cpus[0].arch.apic_id and logs
  * the number of CPUs discovered by MADT scanning in ioapic_init().
  *
  * Ordering: it must run after ioapic_init(), which is what populated g_cpus[1..]
@@ -168,8 +169,8 @@ void smp_ap_c_entry(uint32_t cpu_id) {
  * recorded there.  Starts no CPU itself.
  */
 void smp_init(void) {
-    g_cpus[0].apic_id = lapic_read_id();
-    serial_printf("[smp] bsp apic_id=%u cpu_count=%u\n", g_cpus[0].apic_id, g_cpu_count);
+    g_cpus[0].arch.apic_id = lapic_read_id();
+    serial_printf("[smp] bsp apic_id=%u cpu_count=%u\n", g_cpus[0].arch.apic_id, g_cpu_count);
 }
 
 /*
@@ -217,12 +218,12 @@ void smp_cpus_up(void) {
         /* Write trampoline data slots and copy code to 0x1000. */
         smp_trampoline_setup(ap, rsp0_top);
 
-        serial_printf("[smp] starting ap %u (apic_id=%u)\n", i, ap->apic_id);
+        serial_printf("[smp] starting ap %u (apic_id=%u)\n", i, ap->arch.apic_id);
 
         /* INIT IPI → delay → SIPI → delay → SIPI (Intel SDM §10.4.4.1). */
-        lapic_send_init_ipi(ap->apic_id);
-        lapic_send_sipi(ap->apic_id, TRAMP_SIPI_VECTOR);
-        lapic_send_sipi(ap->apic_id, TRAMP_SIPI_VECTOR);
+        lapic_send_init_ipi(ap->arch.apic_id);
+        lapic_send_sipi(ap->arch.apic_id, TRAMP_SIPI_VECTOR);
+        lapic_send_sipi(ap->arch.apic_id, TRAMP_SIPI_VECTOR);
 
         /* Wait for the AP to signal that it is fully initialised. The bound is a
          * spin count, not a duration: an AP that never arrives is reported and

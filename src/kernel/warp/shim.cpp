@@ -24,7 +24,7 @@ extern "C" {
 #include "process.h"
 #include "hashmap.h"
 #include "linmem_slots.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "sync/spinlock.h"
 }
 

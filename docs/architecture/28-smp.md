@@ -96,47 +96,52 @@ defines. For an SMP kernel, `scripts/system/BUILD.py` starts QEMU with
 
 ## Per-CPU data structure
 
-### `cpu_local_t`  (`src/kernel/include/arch/x86_64/smp.h`)
+### `cpu_local_t`  (`src/kernel/include/cpu_local.h`)
+
+`cpu_local_t` is arch-neutral. Architecture-private per-CPU state lives in an
+embedded `arch_cpu_t arch` member, defined by the target's
+`include/arch/<arch>/cpu_local_arch.h` and selected through
+`include/arch/cpu_local_arch.h`. Only code under `arch/` touches `arch`.
 
 ```c
 #define WASMOS_MAX_CPUS  16
 
 typedef struct cpu_local {
-    struct cpu_local    *self;              /* GS:0 — fast self-pointer */
+    struct cpu_local    *self;              /* offset 0: per-CPU register target */
     uint32_t             cpu_id;            /* logical index 0..N-1 */
-    uint32_t             apic_id;           /* hardware LAPIC ID from MADT */
     volatile uint8_t     started;           /* AP writes 1 when fully online */
+    volatile uint8_t     in_context_switch; /* offset asserted for context_switch.S */
+    arch_cpu_t           arch;              /* architecture-private, see below */
 
-    /* x86 per-CPU tables */
-    uint64_t    gdt[GDT_ENTRY_COUNT];
-    tss_t       tss;
-    uint8_t     ist_stack[IST_STACK_SIZE]   __attribute__((aligned(16)));
-    uint8_t     rsp0_stack[RSP0_STACK_SIZE] __attribute__((aligned(16)));
-
-    /* Scheduler state (previously global in process.c) */
+    /* Scheduler state */
     process_t         *current_process;
     thread_t          *current_thread;
+    cpu_sched_t        sched;
     process_context_t  sched_ctx;
-    uint32_t           preempt_disable_count;
-    volatile uint8_t   in_scheduler;
+    /* ... preemption, watchdog, idle-thread fields ... */
 } cpu_local_t;
+
+/* x86_64: include/arch/x86_64/cpu_local_arch.h */
+typedef struct {
+    uint32_t apic_id;               /* hardware LAPIC ID from MADT */
+    uint64_t gdt[GDT_ENTRY_COUNT];
+    tss_t    tss;                   /* rsp0 / ist1 point at per-CPU stacks */
+} arch_cpu_t;
 
 extern cpu_local_t  g_cpus[WASMOS_MAX_CPUS];
 extern uint32_t     g_cpu_count;   /* CPUs discovered in MADT, minimum 1 */
 ```
 
-`tss_t` and `GDT_ENTRY_COUNT` are moved from the private section of
-`cpu_x86_64.c` into `cpu_x86_64.h` so they can be used in the struct
-definition above.
+`tss_t` and `GDT_ENTRY_COUNT` live in `cpu_x86_64.h`. The SMP bring-up entry
+points (`smp_init`, `smp_cpus_up`, `smp_ap_c_entry`) are declared in the
+neutral `include/smp.h` and implemented in `arch/x86_64/smp.c`.
 
 ### `cpu_local()` accessor
 
 ```c
 #if WASMOS_SMP
 static inline cpu_local_t *cpu_local(void) {
-    cpu_local_t *p;
-    __asm__ volatile("mov %%gs:0, %0" : "=r"(p));
-    return p;
+    return arch_cpu_local_self();   /* x86_64: mov %gs:0 */
 }
 #else
 static inline cpu_local_t *cpu_local(void) { return &g_cpus[0]; }
@@ -505,7 +510,7 @@ does not exercise the AP bring-up path. CI runs `run-qemu-test` for all four
 | `Kconfig`                                     | Add `WASMOS_SMP` option (depends on `WASMOS_IRQ_IOAPIC`)                                         |
 | `scripts/buildgen/toolchains.py`              | Pass `-DWASMOS_SMP=0`/`1` in the `kernel` profile flags                                          |
 | `src/kernel/include/arch/x86_64/cpu_x86_64.h` | Expose `tss_t`, `GDT_ENTRY_COUNT`, stack size constants                                          |
-| `src/kernel/include/arch/x86_64/smp.h`        | New — `cpu_local_t`, `g_cpus[]`, `cpu_local()` accessor                                          |
+| `src/kernel/include/cpu_local.h`              | New — `cpu_local_t`, `g_cpus[]`, `cpu_local()` accessor                                          |
 | `src/kernel/arch/x86_64/smp.c`                | New — `g_cpus[]` definition, `smp_init()`, `smp_cpus_up()`, `smp_ap_c_entry()`, trampoline setup |
 | `src/kernel/arch/x86_64/smp_trampoline.S`     | New — 16→32→64-bit AP boot stub                                                                  |
 | `src/kernel/arch/x86_64/cpu_x86_64.c`         | Migrate to `g_cpus[0]`; GS base MSR setup; remove static GDT/TSS/stacks                          |

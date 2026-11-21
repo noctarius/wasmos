@@ -30,7 +30,7 @@
 extern "C" {
 #include "klog.h"
 #include "kpanic.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 }
 
 // ---------------------------------------------------------------------------

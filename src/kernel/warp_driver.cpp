@@ -30,7 +30,7 @@ extern "C" {
 #include "warp_driver_ring3_call_policy.h"
 #ifdef WASMOS_WASM_RUNTIME_WARP
 #include "warp_ring3.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #endif
 }
 

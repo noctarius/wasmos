@@ -23,7 +23,7 @@
 #include "sched.h"
 #include "sched_event.h"
 #include "futex.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 
 #ifdef WASMOS_WASM_RUNTIME_WARP
 extern int warp_sync_linmem_for_pid(uint32_t pid, uint64_t user_root);
@@ -46,7 +46,7 @@ static process_t g_processes[PROCESS_MAX_COUNT];
  * boot-safe list allocator path for early scheduler init/spawn. */
 static uint32_t g_next_pid;
 static ksync_spinlock_t g_process_table_lock;
-/* Scheduler state lives in cpu_local_t (per-CPU) — see smp.h. */
+/* Scheduler state lives in cpu_local_t (per-CPU) — see cpu_local.h. */
 static process_t* g_idle_process;
 /* in_context_switch is per-CPU (cpu_local_t), not global: a global flag would
  * let one CPU's context switch suppress preemption on every other CPU. */

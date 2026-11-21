@@ -18,7 +18,7 @@
 #include "user_mutex.h"
 #ifdef WASMOS_WASM_RUNTIME_WARP
 #include "warp_ring3.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 extern uint64_t warp_r3_memory_helper(uint64_t min_linmem_len, uint32_t basedata_len,
                                       uint64_t original_linmem_user_va);
 #endif

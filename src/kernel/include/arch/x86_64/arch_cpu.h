@@ -10,6 +10,10 @@
 
 #include <stdint.h>
 
+/* ELF e_machine of code this kernel can run natively (EM_X86_64): native
+ * drivers and ring-3 native images must carry it. */
+#define ARCH_ELF_MACHINE 62u
+
 /* Saved interrupt state as returned by arch_irq_save(): the full RFLAGS image.
  * Opaque to callers; only arch_irq_restore() interprets it. */
 typedef uint64_t arch_irq_flags_t;

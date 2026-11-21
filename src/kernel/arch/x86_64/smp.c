@@ -12,7 +12,7 @@
 /* Per-CPU data array.  g_cpus[0] is the BSP.  g_cpus[1..g_cpu_count-1] are
  * APs populated by MADT discovery (WASMOS_SMP builds only).
  *
- * Each slot is reached through that CPU's GS base once x86_cpu_init() or
+ * Each slot is reached through that CPU's GS base once cpu_init() or
  * x86_ap_cpu_init() has loaded it, so cpu_local() and &g_cpus[cpu_id] denote the
  * same object; the array is only indexed directly where the GS base is not yet
  * valid.  Slots are zero-initialised, and started stays 0 until the AP itself

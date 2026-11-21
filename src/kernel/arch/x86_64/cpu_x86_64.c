@@ -99,7 +99,7 @@ extern volatile uint64_t g_ctx_restore_rflags;
 static idt_entry_t g_idt[IDT_ENTRY_COUNT];
 
 /* GDT initial values, copied into every CPU's private gdt[] (BSP in
- * x86_cpu_init(), APs in x86_cpu_prepare_ap()).  Entries are null, kernel
+ * cpu_init(), APs in x86_cpu_prepare_ap()).  Entries are null, kernel
  * code/data (DPL 0), user code/data (DPL 3); slots [5..6] hold the 16-byte
  * 64-bit TSS descriptor and are filled in by gdt_set_tss_base(). */
 static const uint64_t k_gdt_template[GDT_ENTRY_COUNT] = {
@@ -763,9 +763,9 @@ int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
  *
  * Gate handler addresses go through x86_kernel_handler_addr(), so they are
  * higher-half aliases; the GDTR/IDTR bases, TSS stack tops and GS base are
- * installed as-is and x86_cpu_relocate_tables_high() rewrites them if they were
+ * installed as-is and cpu_relocate_tables_high() rewrites them if they were
  * still lower-half. Ends by calling irq_init(). */
-void x86_cpu_init(void) {
+void cpu_init(void) {
     uint64_t efer = x86_read_msr(IA32_EFER_MSR);
     if ((efer & IA32_EFER_NXE) == 0) {
         x86_write_msr(IA32_EFER_MSR, efer | IA32_EFER_NXE);
@@ -841,7 +841,7 @@ void x86_cpu_init(void) {
  * user-mode entry. Takes effect immediately: the CPU reads the TSS on each
  * privilege-changing interrupt, so it must not be called with a value that is
  * about to become invalid. */
-void x86_cpu_set_kernel_stack(uint64_t rsp0) {
+void cpu_set_kernel_stack(uint64_t rsp0) {
     if (rsp0 == 0) {
         return;
     }
@@ -854,7 +854,7 @@ void x86_cpu_set_kernel_stack(uint64_t rsp0) {
  * from its linked addresses.  BSP only, and only meaningful while the addresses
  * still are lower-half: x86_kernel_data_addr() leaves higher-half input
  * unchanged, so a second call is a no-op. */
-void x86_cpu_relocate_tables_high(void) {
+void cpu_relocate_tables_high(void) {
     cpu_local_t* cpu = cpu_local();
     descriptor_ptr_t gdtr;
     descriptor_ptr_t idtr;

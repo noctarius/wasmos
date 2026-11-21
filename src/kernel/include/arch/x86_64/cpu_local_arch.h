@@ -19,7 +19,7 @@ typedef struct {
     tss_t tss;
 } arch_cpu_t;
 
-/* The calling CPU's cpu_local_t, read from GS:0. Valid once x86_cpu_init()
+/* The calling CPU's cpu_local_t, read from GS:0. Valid once cpu_init()
  * (BSP) or x86_ap_cpu_init() (AP) has loaded the GS base; the self-pointer at
  * offset 0 of cpu_local_t is what GS:0 resolves to. */
 static inline struct cpu_local* arch_cpu_local_self(void) {

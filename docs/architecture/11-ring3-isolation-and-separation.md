@@ -63,7 +63,7 @@ as DS/SS. `(cs & 0x3u) == 0x3u` is the kernel's user-mode origin check.
   privilege-level changes at interrupt/trap entry
 - `g_irq0_ist_stack`: 16 KiB, pre-filled with `0xCC`, guarded by canary at
   bottom — IST1 for timer and critical interrupt vectors
-- `x86_cpu_set_kernel_stack(rsp0)` updates `g_tss.rsp0` on context switch
+- `cpu_set_kernel_stack(rsp0)` updates `g_tss.rsp0` on context switch
 
 ---
 

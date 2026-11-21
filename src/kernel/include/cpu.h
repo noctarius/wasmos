@@ -1,34 +1,27 @@
-/* cpu.h - x86_64 CPU setup and exception dispatch.
- * Covers GDT/TSS/IDT initialization, syscall gate, and exception handlers. */
+/* cpu.h - per-CPU processor setup. Implemented by the architecture (x86_64:
+ * arch/x86_64/cpu_x86_64.c). Every entry point acts on the CALLING CPU only. */
 #ifndef WASMOS_CPU_H
 #define WASMOS_CPU_H
 
 #include <stdint.h>
 
-#define X86_VECTOR_SYSCALL 0x80u /* int 0x80 is the WASMOS syscall vector */
-
-/* Program GDT, TSS, and IDT; called once on the BSP during kernel startup. */
+/* Bring the boot CPU's processor state up -- exception and interrupt entry,
+ * the per-CPU slot behind cpu_local(), and the early interrupt controller
+ * (irq_init) -- with interrupts still masked. Call once, early; cpu_local()
+ * must not be used before it returns. x86_64: NX in IA32_EFER, kernel SIMD,
+ * the BSP's GDT/TSS, the shared IDT and the GS base. */
 void cpu_init(void);
 
-/* Relocate GDT/TSS pointers to their higher-half VA aliases after paging is active. */
+/* Re-point every processor structure the boot CPU reaches by address at its
+ * higher-half alias, so none is reached through a low address once the low
+ * identity map goes away. Boot CPU only, and idempotent. x86_64: GDTR/IDTR,
+ * the TSS descriptor base, the TSS stack tops and the GS base. */
 void cpu_relocate_tables_high(void);
 
-/* Handle a CPU exception raised in ring-3. `frame` is the CPU's interrupt frame
- * (rip at [1], cs at [2]). There is no signal delivery: a claimed fault
- * terminates the process with exit status -11 and never returns to the faulting
- * instruction. Returns 0 when the process was terminated, -1 when the fault is
- * declined -- no current process, cs says the fault came from ring 0, or the
- * vector is not one of the classified user vectors -- leaving the caller to
- * escalate to a kernel panic. */
-int x86_user_exception_handler(uint64_t vector, const uint64_t* frame);
-
-/* Handle a page fault; may satisfy it by demand paging, by retrying a stale TLB
- * entry in the shared linmem window, or by killing the faulting process.
- * Returns 0 when the fault was resolved or absorbed, -1 when it was not and the
- * caller must panic. */
-int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame);
-
-/* Update TSS.RSP0 so the next ring-3 → ring-0 transition lands on the correct stack. */
+/* Set the kernel stack top the calling CPU switches to on the next user ->
+ * kernel transition. Called by the scheduler on every switch to a thread that
+ * can enter user mode. A zero value is ignored, leaving the previous stack in
+ * place. x86_64: TSS.rsp0. */
 void cpu_set_kernel_stack(uint64_t rsp0);
 
 #endif

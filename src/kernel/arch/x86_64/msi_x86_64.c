@@ -2,6 +2,7 @@
  * address/data encoding, the vector table's home, and dispatch from the ISR
  * stubs. The allocation rules live in the arch-neutral msi_vectors.c. */
 #include "msi.h"
+#include "arch/x86_64/irq_x86_64.h"
 #include "ipc.h"
 #include "serial.h"
 #include "sync/spinlock.h"

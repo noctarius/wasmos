@@ -3,6 +3,7 @@
  * profile and IPC endpoint, mirroring the WASM driver model but without the
  * wasm3 interpreter layer. */
 #include "native_driver.h"
+#include "arch/arch_cpu.h"
 #include "klog.h"
 #include "memory.h"
 #include "paging.h"
@@ -44,7 +45,6 @@ _Static_assert(sizeof(nd_ipc_message_t) == sizeof(ipc_message_t), "nd_ipc_messag
 #define ELFCLASS64 2
 #define ET_EXEC 2
 #define ET_DYN 3
-#define EM_X86_64 62
 #define PT_LOAD 1
 #define PF_W 2
 #define PF_X 1
@@ -864,7 +864,7 @@ static int elf_validate(const uint8_t* data, uint32_t size) {
     if (hdr->e_ident[4] != ELFCLASS64) {
         return -1;
     }
-    if (hdr->e_machine != EM_X86_64) {
+    if (hdr->e_machine != ARCH_ELF_MACHINE) {
         return -1;
     }
     if (hdr->e_type != ET_EXEC && hdr->e_type != ET_DYN) {

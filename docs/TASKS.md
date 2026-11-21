@@ -357,7 +357,7 @@ Source: `architecture/06-memory-management.md`,
   walks below it, so every root that went through
   `paging_clone_low_slot_in_root` leaks its lower tables; the clone's own error
   paths leak earlier iterations' PDs/PTs too (`src/kernel/arch/x86_64/paging.c`).
-- [ ] [BUG][P1] Serialize `x86_irq_mask`/`x86_irq_unmask`. They read-modify-write
+- [ ] [BUG][P1] Serialize `irq_mask`/`irq_unmask`. They read-modify-write
   `g_pic_mask1/2` with no lock, while only the `irq_sharing` ops path holds
   `g_irq_lines_lock` (`src/kernel/arch/x86_64/irq_x86_64.c`).
 - [ ] [ENHANCEMENT][P2] Pack `EFI_ADDRESS_SPACE_DESCRIPTOR`. Without
@@ -849,7 +849,7 @@ tail.
 - [ ] [BUG][P1] Replace the remaining bare `-1`/ad-hoc integers that cross a subsystem
   boundary with packed `abi/errors.yaml` codes: `PROC_IPC_ERROR` arg1 in
   `src/kernel/process_manager_spawn.c`, the PM spawn retry match in
-  `src/kernel/kernel_init_runtime.c`, `x86_irq_configure` (guest-reachable via
+  `src/kernel/kernel_init_runtime.c`, `irq_configure` (guest-reachable via
   the `irq_configure` host call, `src/kernel/arch/x86_64/irq_x86_64.c`),
   `framebuffer_map_high`/`framebuffer_fill`, `native_ipc_future_status`
   (`src/libsys/native/ipc_future_native.c`), the FAT zero-copy submit path

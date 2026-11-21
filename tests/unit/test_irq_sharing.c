@@ -62,7 +62,7 @@ static uint64_t g_now;
 /* Endpoint whose delivery fails, modelling a full endpoint queue. 0 = none. */
 static uint32_t g_deliver_fail_endpoint;
 
-/* Stand in for x86_irq_mask/x86_irq_unmask, which program the PIC or IO-APIC.
+/* Stand in for irq_mask/irq_unmask, which program the PIC or IO-APIC.
  * These only record, so a case observes the mask decision without any controller
  * state: nothing here prevents a mask that the hardware would reject. */
 static void fake_mask(uint32_t line) {

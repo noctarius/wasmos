@@ -68,7 +68,7 @@ the base, then sets `g_tss.rsp0` and `g_tss.ist1` to the top of their
 respective stacks. `iopb` is set to `sizeof(g_tss)` to deny I/O permission
 bitmap access to user mode.
 
-`x86_cpu_set_kernel_stack(rsp0)` updates `g_tss.rsp0` at context-switch time
+`cpu_set_kernel_stack(rsp0)` updates `g_tss.rsp0` at context-switch time
 to point to the per-process kernel stack.
 
 #### IDT
@@ -93,7 +93,7 @@ to point to the per-process kernel stack.
 
 #### Higher-Half Relocation
 
-`x86_cpu_relocate_tables_high()` is called after the kernel remaps to the
+`cpu_relocate_tables_high()` is called after the kernel remaps to the
 higher-half window. It adjusts all physical pointers in the GDT (TSS base),
 TSS (rsp0, ist1), and reloads GDTR/IDTR/TR with the high-alias addresses.
 
@@ -119,7 +119,7 @@ and the same IPC-based IRQ routing table. The default is `WASMOS_IRQ_IOAPIC`.
 
 **LAPIC-only mode limitation**: the 8259 PIC is fully masked and there is no
 I/O APIC, so external device IRQs (keyboard IRQ 1, mouse IRQ 12, etc.) have
-no delivery path to the CPU. `x86_irq_register` returns `-1` for any
+no delivery path to the CPU. `irq_register` returns `-1` for any
 `irq_line != 0` in this mode so that drivers fall back to polling rather than
 blocking forever on `ipc_recv`.
 
@@ -132,13 +132,13 @@ blocking forever on `ipc_recv`.
 
 #### Two-Phase Interrupt Init
 
-- **Phase 1** — `x86_irq_init()` (called from `x86_cpu_init` inside `kmain`):
+- **Phase 1** — `irq_init()` (called from `cpu_init` inside `kmain`):
   clears the IRQ route table. In PIC mode, also remaps PIC1 to base vector 32,
   PIC2 to base 40, and masks all IRQs.
 
 - **Phase 2** — `irq_late_init(boot_info)` (called from `kmain` after
   `timer_init()`, which runs after `mm_init()`): dispatches to
-  `x86_irq_late_init(boot_info)`. In IOAPIC mode, this calls `ioapic_init()`,
+  `irq_late_init(boot_info)`. In IOAPIC mode, this calls `ioapic_init()`,
   which needs both `paging_map_4k()` (requires mm/paging up) and
   `boot_info->rsdp` for MADT discovery. In PIC and LAPIC modes this is a no-op.
 
@@ -148,7 +148,7 @@ enables the LAPIC, disables the 8259, and starts the periodic timer.
 
 #### PIC Mode (WASMOS_IRQ_MODE == 0)
 
-`x86_irq_init()` remaps the 8259:
+`irq_init()` remaps the 8259:
 1. PIC1 to base vector 32, PIC2 to base 40.
 2. Sets cascade (0x04/0x02) and 8086 mode.
 3. Restores saved IMR masks — all lines masked until `irq_unmask()` is called.
@@ -210,8 +210,8 @@ Builds on LAPIC mode (LAPIC timer and EOI are identical). `ioapic_init(boot_info
    queued bytes.
 
 Drivers unmask their IRQ line via the existing `irq_register()` → `irq_unmask()`
-→ `x86_irq_unmask()` → `ioapic_unmask_irq()` path, which clears bit 16 of the
-RTE's low word. Re-masking after dispatch (`x86_irq_mask()` → `ioapic_mask_irq()`)
+→ `irq_unmask()` → `ioapic_unmask_irq()` path, which clears bit 16 of the
+RTE's low word. Re-masking after dispatch (`irq_mask()` → `ioapic_mask_irq()`)
 prevents re-fire before the driver reads the device register; the driver
 re-enables via `irq_ack()`.
 
@@ -249,7 +249,7 @@ typedef struct {
 static irq_line_t g_irq_lines[IRQ_COUNT];
 ```
 
-`x86_irq_register(context_id, irq_line, endpoint)`:
+`irq_register(context_id, irq_line, endpoint)`:
 - Validates policy via `policy_authorize(POLICY_ACTION_IRQ_ROUTE, irq_line)`.
 - Verifies the endpoint is owned by `context_id`.
 - Re-registration by the same context updates its endpoint in place; a different
@@ -259,7 +259,7 @@ static irq_line_t g_irq_lines[IRQ_COUNT];
 - Unmasks only when no ack is outstanding, so a late registration cannot reopen a
   line an earlier sharer has not finished with.
 
-`x86_irq_ack(context_id, irq_line)`:
+`irq_ack(context_id, irq_line)`:
 - Reports that this sharer has looked at its device. Clears that sharer's
   `ack_pending` and unmasks **only when the last outstanding ack lands**.
   Unmasking on the first ack would re-fire the still-asserted line for the
@@ -267,12 +267,12 @@ static irq_line_t g_irq_lines[IRQ_COUNT];
 - Acking with nothing outstanding is a successful no-op: drivers may ack
   defensively, and a deadline expiry may already have cleared it.
 
-`x86_irq_unregister(context_id, irq_line)`:
+`irq_unregister(context_id, irq_line)`:
 - Drops that sharer and forgives any ack it owed, so a departing driver cannot
   leave the line masked for the others. Masks only when the last sharer leaves.
 - With `IPC_CONTEXT_KERNEL` it drops every sharer on the line.
 
-`x86_irq_release_context(context_id)` drops every route held by a dying context;
+`irq_release_context(context_id)` drops every route held by a dying context;
 process teardown calls it before releasing the context's endpoints. Without it a
 reaped driver left a slot pointing at a dead endpoint, and any ack it owed kept
 the line masked permanently.
@@ -469,7 +469,7 @@ native ring-3 ELF processes (see `ring3_native.ld`).
 
 ### NXE (No-Execute Enable)
 
-`x86_cpu_init()` reads `IA32_EFER_MSR (0xC0000080)` and sets the NXE bit
+`cpu_init()` reads `IA32_EFER_MSR (0xC0000080)` and sets the NXE bit
 `(1 << 11)` if not already set. This enables the NX bit in page table entries,
 which is used by the paging layer to mark non-executable regions.
 
@@ -480,7 +480,7 @@ which is used by the paging layer to mark non-executable regions.
 Called from `kmain()` after early serial and memory setup:
 
 ```
-x86_cpu_init()                              ← phase 1
+cpu_init()                              ← phase 1
   ├─ x86_write_msr(IA32_EFER, NXE enabled)
   ├─ tss_init()    ← fill IST stacks, write canary, install TSS in GDT
   ├─ gdt_install() ← lgdt, far-lretq to reload CS, ltr TSS
@@ -488,7 +488,7 @@ x86_cpu_init()                              ← phase 1
   ├─ install IRQ stubs 32–47 (IRQ0 on IST1)
   ├─ install syscall gate at vector 0x80 (DPL 3)
   ├─ [WASMOS_IRQ_MODE >= 1] install isr_lapic_spurious at vector 255
-  └─ irq_init() → x86_irq_init()
+  └─ irq_init() → irq_init()
        ├─ clear g_irq_routes[]
        └─ [mode 0] PIC remap + mask all lines
 
@@ -511,7 +511,7 @@ irq_late_init(boot_info)                    ← phase 2
 arch_irq_enable()                           ← sti
 ```
 
-After `x86_cpu_relocate_tables_high()`: GDTR, IDTR, and TR are reloaded with
+After `cpu_relocate_tables_high()`: GDTR, IDTR, and TR are reloaded with
 higher-half virtual addresses.
 
 The per-CPU control primitives are static inlines in
@@ -538,7 +538,7 @@ shadow), `arch_halt_forever()` (`cli; hlt` loop) and `arch_cpu_relax()`
    dispatching the IPC message). In LAPIC and IOAPIC modes, `lapic_eoi()` is
    sent by the kernel at the end of `x86_irq_handler`; no separate driver EOI
    is required. Non-timer IRQ lines are masked at dispatch time to prevent
-   re-fire; the driver re-enables via `irq_ack()` → `x86_irq_unmask()`.
+   re-fire; the driver re-enables via `irq_ack()` → `irq_unmask()`.
 
 4. **IST1 canary.** `g_irq0_ist_canary` is written at the bottom of the IST1
    stack. Overflow is detected in `x86_irq_handler` before dispatching.
@@ -548,10 +548,10 @@ shadow), `arch_halt_forever()` (`cli; hlt` loop) and `arch_cpu_relax()`
    loads the full TSS.
 
 6. **Higher-half relocation is done before `sti`.** Interrupts remain disabled
-   until after `x86_cpu_relocate_tables_high()` and `arch_irq_enable()`
+   until after `cpu_relocate_tables_high()` and `arch_irq_enable()`
    are called from `kmain`.
 
 7. **IOAPIC init deferred after `mm_init()`.** `paging_map_4k()` needs the
    physmem allocator for page-table pages. `ioapic_init()` (and `lapic_map()`)
-   are therefore called after `mm_init()`, not from the early `x86_cpu_init()`
+   are therefore called after `mm_init()`, not from the early `cpu_init()`
    path.

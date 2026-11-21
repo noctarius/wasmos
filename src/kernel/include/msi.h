@@ -54,9 +54,4 @@ int msi_free(uint32_t context_id, uint32_t vector);
 /* Drop every vector held by a dying context (called from process teardown). */
 void msi_release_context(uint32_t context_id);
 
-/* Called from the cpu_isr.S MSI stubs with the absolute IDT vector.  Dispatches the
- * event to the owning endpoint and issues the LAPIC EOI; a vector outside the MSI range
- * is ignored.  Runs in interrupt context and takes the vector-table spinlock. */
-void x86_msi_handler(uint64_t vector);
-
 #endif

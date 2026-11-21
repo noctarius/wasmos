@@ -149,13 +149,13 @@ static inline cpu_local_t *cpu_local(void) { return &g_cpus[0]; }
 ```
 
 GS base is written via MSR `0xC0000101` (`IA32_GS_BASE`) at the end of
-`x86_cpu_init()` for the BSP and at the start of `smp_ap_c_entry()` for each
+`cpu_init()` for the BSP and at the start of `smp_ap_c_entry()` for each
 AP. The self-pointer at `cpu_local_t.self` (offset 0) is set to
 `&g_cpus[cpu_id]` before GS is loaded, so `mov %%gs:0` immediately returns the
 correct pointer.
 
 The IDT is a single shared global loaded by all CPUs (`lidt` in both
-`x86_cpu_init()` and `smp_ap_c_entry()`). Each CPU has its own GDT and TSS.
+`cpu_init()` and `smp_ap_c_entry()`). Each CPU has its own GDT and TSS.
 
 ---
 

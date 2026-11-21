@@ -1,6 +1,6 @@
 /* arch_cpu.h - selects the target architecture's per-CPU control primitives.
- * Each architecture provides, as static inline functions acting on the calling
- * CPU:
+ * Each architecture provides ARCH_ELF_MACHINE (the ELF e_machine of its native
+ * code) and, as static inline functions acting on the calling CPU:
  *   arch_irq_flags_t, arch_irq_save(), arch_irq_restore()
  *   arch_irq_enable(), arch_irq_disable()
  *   arch_wait_for_interrupt()  unmask + wait, with no lost-wakeup window

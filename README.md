@@ -76,6 +76,7 @@ It defines repository workflow and documentation/update conventions.
 - `llvm-objcopy`
 - `cmake` 3.20+
 - `qemu-system-x86_64`
+- for the Ninja build: `ninja` 1.10+ and Python `kconfiglib`
 
 macOS note:
 - use Homebrew LLVM (`appleclang` is not sufficient for the UEFI target)
@@ -195,6 +196,23 @@ cmake --build build --target bootloader
 cmake --build build --target kernel
 cmake --build build --target make_wasmos_app
 ```
+
+### Ninja build (migration in progress)
+
+The build is moving from CMake to a Kconfig-driven Ninja generator. It
+currently builds the SDK sysroot, `kernel.elf` (both runtimes) and
+`BOOTX64.EFI`; the full ESP, the remaining guest modules and every run/test
+target still come from CMake.
+
+```sh
+./configure out/warp-smp configs/warp_smp_defconfig   # seeds out/warp-smp/.config once
+ninja -C out/warp-smp                                 # kernel + bootloader
+ninja -C out/warp-smp wasmos-sdk                      # staged SDK
+```
+
+After the first configure the build directory regenerates itself; edit
+`out/<dir>/.config` (or run a `menuconfig` against it) and run `ninja` again.
+See [docs/BUILD_SYSTEM.md](docs/BUILD_SYSTEM.md).
 
 ### Run
 ```sh

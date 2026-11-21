@@ -411,6 +411,20 @@ def generate(srcdir: Path, outdir: Path, tools: dict, argv_for_regen: list[str])
         + " ".join(_esc_path(p) for p in sorted(graph.regen_inputs))
         + f"\n  regen_cmd = {_esc_value(shell_join(argv_for_regen))}\n"
     )
+    # Interactive config editor on this directory's .config. It has no output
+    # file, so it always runs; the edited .config then triggers regeneration.
+    menuconfig = (
+        f"cd {shlex.quote(str(srcdir))} && "
+        f"KCONFIG_CONFIG={shlex.quote(str(dotconfig))} "
+        f"{shlex.quote(tools['python'])} -m menuconfig Kconfig"
+    )
+    lines.append(
+        "rule menuconfig\n"
+        f"  command = {_esc_value(menuconfig)}\n"
+        "  pool = console\n"
+        "  description = menuconfig\n"
+        "build menuconfig: menuconfig\n"
+    )
     lines.extend(e + "\n" for e in graph.edges)
     for name, targets in sorted(graph.aliases.items()):
         if name in graph.outputs:

@@ -102,6 +102,7 @@ in-kernel scheduler rather than an optional mode.
 - [Kernel Object Tables](architecture/35-kernel-object-tables.md) - the id-addressed, owner-scoped object table (`idtable_t`): the five obligations any table of id-referenced kernel objects owes its callers (grow on demand, never reuse a live id, never hand out a reserved one, bound each owner, release by owner), each of which has already cost a bug when written out by hand; and what the component deliberately leaves to its caller (locking, above all)
 
 ### Tooling and ABI
+- [Build System](BUILD_SYSTEM.md) - the CMake build that still produces the full ESP and drives every test target, and the Kconfig + Ninja generator (`./configure`, per-directory `BUILD.py` manifests, named toolchain profiles) that replaces it component by component; manifests describe what a component builds, profiles in `scripts/buildgen/toolchains.py` own the target class flags, which is where a new architecture is added
 - [ABI IDL, Code Generation, and Error Model](architecture/34-abi-idl-and-error-model.md) - proposed single-source-of-truth IDL that generates the WASM host-call, IPC opcode, and error-code surfaces across wasm3/WARP(JIT+AOT) and all language variants; Zircon/Mach-style layered error model with a generated domain registry
 
 ### Operations and Validation

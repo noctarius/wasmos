@@ -147,7 +147,8 @@ Six public headers include the generated ABI headers by a repo-relative path
 in-tree: the generated files live outside `src/` to stay out of format and lint
 scope, so no `-Iabi/generated/c` has to be threaded through every compile that
 pulls in libc. No sysroot can reproduce those depths, so
-`cmake/wasmos_sdk_stage.cmake` installs the generated headers under
+`cmake/wasmos_sdk_stage.cmake` (and its Ninja-build counterpart
+`scripts/sdk_stage.py`) installs the generated headers under
 `sysroot/include/wasmos/abi/` and rewrites **every** staged header, then asserts
 that none still carries one.
 
@@ -548,6 +549,10 @@ will not guarantee. `crt1.o` is named on the link line for the same reason.
 cmake -S . -B build
 cmake --build build --target wasmos-sdk
 ```
+
+With the Ninja build, `./configure out/<dir> <defconfig>` followed by
+`ninja -C out/<dir> wasmos-sdk` produces the same tree under
+`out/<dir>/wasmos-sdk` (`scripts/sdk/BUILD.py`, `scripts/sdk_stage.py`).
 
 The `wasmos-sdk` target stages the SDK tree; the archives and `crt1.o` inside it
 are built by the ordinary build, because every WASM target already depends on them.

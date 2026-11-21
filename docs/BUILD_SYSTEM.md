@@ -2,7 +2,10 @@
 
 This document covers the CMake build system: how it is structured, what every
 target type does, the helper functions available for adding new components, and
-how the whole graph fits together.
+how the whole graph fits together. Section 12 covers the Kconfig + Ninja
+generator that is replacing it component by component; until that migration
+completes, CMake remains the build that produces the full ESP and runs the
+tests.
 
 ---
 
@@ -19,6 +22,7 @@ how the whole graph fits together.
 9. [ESP Layout](#9-esp-layout)
 10. [Full Dependency Graph](#10-full-dependency-graph)
 11. [Adding a New App or Driver](#11-adding-a-new-app-or-driver)
+12. [Ninja Build (Kconfig + BUILD.py)](#12-ninja-build-kconfig--buildpy)
 
 ---
 
@@ -746,3 +750,99 @@ the same steps as the C app.
 Follow the pattern in the corresponding `examples/<lang>/CMakeLists.txt`. Each
 language has slightly different staging and compiler invocation, but the final
 `make_wasmos_app` packing step is the same.
+
+---
+
+## 12. Ninja Build (Kconfig + BUILD.py)
+
+`./configure` generates a Ninja build from Kconfig and per-directory `BUILD.py`
+manifests. It requires `ninja` 1.10+ and a Python with `kconfiglib`.
+
+```sh
+./configure out/wasm3-smp configs/wasm3_smp_defconfig
+ninja -C out/wasm3-smp                # default targets: kernel, bootloader
+ninja -C out/wasm3-smp wasmos-sdk     # staged SDK
+ninja -C out/wasm3-smp menuconfig     # edit out/wasm3-smp/.config
+```
+
+### Build directory
+
+A build directory is `.config` plus `build.ninja`. `configure` seeds `.config`
+once from the given defconfig (`configs/wasmos_defconfig` by default) and never
+re-reads the source tree's copy; `--reseed` replaces it. kconfiglib resolves
+the file against `Kconfig` on every generation, so defaults and dependencies
+(for example `WASMOS_SMP` requiring `WASMOS_IRQ_IOAPIC`) apply without any
+build-system logic, and the resolved file is written back.
+
+`build.ninja` regenerates itself when `.config`, a Kconfig file, a `BUILD.py`
+manifest, a directory a manifest globbed, `configure` or `scripts/buildgen/*.py`
+changes. Re-running `configure` is only needed to change tool paths, which are
+resolved once and stored in `buildgen-tools.json` (override with `--clang=`,
+`--ld.lld=`, `--lld-link=`, `--llvm-objcopy=`, and so on).
+
+Every compiled object is its own build edge with a compiler depfile, so header
+dependencies are exact and compiles run in parallel. `compile_commands.json` is
+written alongside `build.ninja` for clangd and clang-tidy.
+
+### Layout
+
+| Path | Role |
+|------|------|
+| `configure` | Entry point: seed `.config`, discover tools, generate |
+| `scripts/buildgen/buildgen.py` | Project-agnostic core: Kconfig view, ninja writer, manifest API |
+| `scripts/buildgen/toolchains.py` | Tool discovery and named toolchain profiles |
+| `scripts/buildgen/wasmos_rules.py` | WASMOS helpers: guest modules, kernel blobs |
+| `scripts/sdk_stage.py` | Stages the SDK headers, wrappers and `wasmos-sdk.conf` |
+| `BUILD.py` (root) | Host tools, then `b.subdir(...)` in dependency order |
+| `<component>/BUILD.py` | What one component builds |
+
+Objects land under `obj/<profile>/<source path relative to the repo>.o`, so equal
+basenames in different directories never collide. Final artifacts keep the
+CMake names at the build-directory root (`kernel.elf`, `BOOTX64.EFI`,
+`<module>.wasm`, `<module>.wap`).
+
+### Toolchain profiles
+
+A profile is one target class: compiler, the flags every object of that class
+shares, and linker. Manifests select one with `b.toolchain(name)` and add only
+component-specific flags.
+
+| Profile | Target | Used for |
+|---------|--------|----------|
+| `efi` | `x86_64-unknown-uefi`, lld-link | `BOOTX64.EFI` |
+| `kernel` | `KERNEL_TARGET_TRIPLE`, ld.lld | kernel C/C++/asm |
+| `kernel-warp` | as `kernel`, C++14 with exceptions and RTTI | WARP glue and vendored WARP |
+| `probe` | `x86_64-unknown-none-elf` | ring-3 native probe blobs |
+| `wasm32` | `wasm32-unknown-unknown` | sysroot libc/libsys |
+| `host` | host clang | `make_wasmos_app` |
+
+Every profile is x86_64 today. A new architecture adds its profiles here
+rather than editing manifests.
+
+### Manifest API
+
+A manifest defines `build(b)`. The `Builder` it receives is scoped to the
+manifest's directory:
+
+- `b.cfg.SYMBOL` — the resolved Kconfig value (bool, int or str); `b.cfg.flag(name)`
+  gives a bool as `0`/`1` for `-DNAME=` defines.
+- `b.src(path)` / `b.srcs(*paths)` — absolute source paths; `b.glob(pattern)`
+  globs at generation time and makes the directory a regeneration input.
+- `b.toolchain(name).compile(sources, flags=...)`, `.archive(out, objs)`,
+  `.link(out, objs, flags=...)`.
+- `b.command(outputs, argv, inputs=..., implicit=..., cwd=..., depfile=...)` — a
+  custom step; runs in the build directory unless `cwd` is given.
+- `b.alias(name, *targets, default=False)` — a phony target.
+- `b.exports` — values one manifest publishes for a later one (the packer,
+  the SDK driver and its dependencies, the kernel blob list). The root
+  manifest's `subdir` order is therefore the dependency order.
+- `b.subdir(*dirs)` — load child manifests.
+
+### Coverage
+
+The Ninja build currently produces the host packer, the wasm32 SDK sysroot and
+staged SDK, `chardev_client` (embedded in the kernel), `kernel.elf` for both
+runtimes and `BOOTX64.EFI`. The remaining guest modules, the WARP AOT tool, ESP
+and initfs staging, host unit tests, quality gates and QEMU targets are still
+CMake-only; `docs/TASKS.md` tracks the migration.
+

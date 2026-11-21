@@ -121,7 +121,10 @@ wasmos/
 │   ├── STATUS.md           Implementation snapshot
 │   ├── TASKS.md            Open work tracking
 │   └── architecture/       Per-topic doc files (01–33)
-└── CMakeLists.txt          Single top-level build file
+├── CMakeLists.txt          Top-level CMake build file
+├── configure               Ninja build entry point (seeds .config, generates build.ninja)
+├── BUILD.py                Top-level Ninja manifest; components carry their own BUILD.py
+└── scripts/buildgen/       Ninja generator core and toolchain profiles
 ```
 
 ---
@@ -166,6 +169,15 @@ cmake --build build --target make_wasmos_app   Build .wap packer tool
 cmake --build build --target make_initfs       Build initfs.img + initfs_config.bin
 cmake --build build --target run-qemu          Interactive QEMU boot
 cmake --build build --target run-qemu-debug    QEMU with serial debug output
+```
+
+The Ninja build (`docs/BUILD_SYSTEM.md` §12) builds the same `kernel.elf`,
+`BOOTX64.EFI` and SDK into its own directory; it does not stage an ESP yet:
+
+```
+./configure out/<dir> configs/<name>_defconfig   Configure (seeds out/<dir>/.config)
+ninja -C out/<dir>                               kernel.elf + BOOTX64.EFI
+ninja -C out/<dir> wasmos-sdk                    Staged SDK
 ```
 
 ---

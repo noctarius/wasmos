@@ -73,6 +73,7 @@ const pt = @import("partition_table.zig");
 const rc = @import("reconcile.zig");
 const mnt = @import("mounts.zig");
 const inf = @import("inflight.zig");
+const be = @import("backends.zig");
 
 /// Disks probed. Each costs a descriptor plus its partitions' records; the bound
 /// is this driver's own state, not a property of the system.
@@ -85,7 +86,10 @@ const Disk = struct {
     /// The raw disk's `block` class instance, which is what a request to it must
     /// name in `target`.
     instance: u32 = 0,
-    /// The backing driver's service endpoint.
+    /// The backing driver's service endpoint, or -1 while the disk has no live
+    /// driver. A supervised driver that ends comes back on a new endpoint under
+    /// the same instance, and the disk follows it (`diskRebind`): its content
+    /// did not change, so neither its table nor its partitions are touched.
     endpoint: i32 = -1,
     sector_count: u64 = 0,
     canonical_id: [driver.BLOCK_ID_MAX]u8 = [_]u8{0} ** driver.BLOCK_ID_MAX,
@@ -147,15 +151,15 @@ const LookupKind = enum { none, fsmgr, volmgr };
 var g_lookup_kind: LookupKind = .none;
 var g_lookup_id: i32 = 0;
 
-/// Backend endpoints this process has lent its probe buffers to.
+/// Backend endpoints this process has lent its probe and request buffers to.
 ///
 /// Grants are per PROCESS, not per endpoint or per device, so one entry covers
 /// every disk a backend serves and a second attempt would be refused as
-/// ALREADY_BORROWED. Kept for the life of the process rather than rebuilt per
+/// ALREADY_BORROWED. Kept while the backend lives rather than rebuilt per
 /// probe, because a late-arriving disk may be served by a backend already lent
-/// to -- an ATA controller publishing its second drive, say.
-var g_granted: [MAX_DISKS]i32 = [_]i32{-1} ** MAX_DISKS;
-var g_granted_count: usize = 0;
+/// to -- an ATA controller publishing its second drive, say -- and forgotten
+/// when it ends, because its successor is a new endpoint that needs its own.
+var g_backends: be.Table(MAX_DISKS) = .{};
 
 /// Disks that have registered under the `block` class but not yet been probed,
 /// and disks a RESCAN has asked to be read again.
@@ -428,7 +432,7 @@ fn idSlice(id: *const [driver.BLOCK_ID_MAX]u8) []const u8 {
 /// IDENTIFY a disk into `out`. Synchronous: bring-up has nothing else to do, and
 /// nothing can be published until every disk has been described.
 fn identifyDisk(disk_endpoint: i32, instance: u32, out: *driver.BlockDescriptor) bool {
-    if (g_probe_bid < 0) return false;
+    if (g_probe_bid < 0 or disk_endpoint < 0) return false;
     const req_id = nextRequestId();
     const reply = driver.call(
         disk_endpoint,
@@ -448,7 +452,7 @@ fn identifyDisk(disk_endpoint: i32, instance: u32, out: *driver.BlockDescriptor)
 /// Read `count` sectors from `lba` of `disk` into this process's block buffer,
 /// then copy them out into `out`. Synchronous, for the same reason as above.
 fn readSectors(disk: *const Disk, lba: u64, count: u32, out: []u8) bool {
-    if (g_probe_req_bid < 0 or g_block_phys == 0) return false;
+    if (g_probe_req_bid < 0 or g_block_phys == 0 or disk.endpoint < 0) return false;
     var req = driver.BlockRequest{};
     req.target = disk.instance;
     req.lba = lba;
@@ -1530,12 +1534,17 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
     const room = part.lba_count - req.lba;
     if (req.sector_count > room) req.sector_count = @intCast(room);
 
+    const disk = &g_disks[part.disk];
+    if (!diskLive(part.disk)) {
+        sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_GONE);
+        return;
+    }
+
     const slot = g_inflight.claim() orelse {
         sendError(msg.source, msg.request_id, status.WASMOS_ERR_BLOCK_DEV_NOT_READY);
         return;
     };
 
-    const disk = &g_disks[part.disk];
     req.target = disk.instance;
     req.lba += part.lba_start;
 
@@ -1588,6 +1597,7 @@ fn handleTransfer(msg: *const co.IpcMessage) void {
     slot.client_request_id = msg.request_id;
     slot.down_request_id = down_id;
     slot.down_borrow_id = down_borrow;
+    slot.server = disk.endpoint;
     slot.sectors = req.sector_count;
     slot.resp_type = if (msg.type == op.BLOCK_IPC_WRITE_REQ)
         op.BLOCK_IPC_WRITE_RESP
@@ -1630,16 +1640,95 @@ fn handleDownstreamReply(msg: *const co.IpcMessage) void {
 /// An existence event for the `block` class: arg0 names the kind, arg1 the
 /// instance, arg2 the provider's endpoint, arg3 its pid.
 ///
-/// REMOVE is deliberately not acted on. Retiring a disk means unregistering the
-/// partitions published from it and telling the device manager they are gone,
-/// which is a teardown path with no caller today -- no shipped driver
-/// unregisters. Dropping our record alone would be worse than doing nothing: the
-/// partitions would stay in the registry addressing a disk we could no longer
-/// reach.
-/// TODO: retire a disk's partitions when its provider goes away.
+/// For a disk already probed, the events follow its DRIVER, not the disk. One
+/// instance has one live provider, so a REMOVE naming the disk's endpoint is
+/// its driver ending, and an ADD naming another endpoint is a new instance of
+/// that driver serving the same disk. The disk's content did not change, so it
+/// is rebound rather than probed again, and its partitions -- and every mount
+/// on them -- stay as they are.
+///
+/// A disk whose driver is gone for good is not retired: retiring means
+/// unregistering the partitions published from it and telling the device
+/// manager they are gone, which is a teardown path with no caller today. Its
+/// partitions stay published and fail every transfer with
+/// WASMOS_ERR_BLOCK_DEV_GONE until a driver serves the disk again.
+/// TODO: retire a disk's partitions when its driver is gone for good -- a
+/// supervised unit that gave up, or a driver that unregistered without ending.
 fn handleClassEvent(msg: *const co.IpcMessage) void {
+    const instance: u32 = @bitCast(msg.arg1);
+    if (diskIndex(instance)) |index| {
+        if (msg.arg0 == @as(i32, @intCast(abi.SVC_CLASS_EVENT_REMOVE))) {
+            if (msg.arg2 == g_disks[index].endpoint) diskGone(index);
+        } else if (msg.arg0 == @as(i32, @intCast(abi.SVC_CLASS_EVENT_ADD)) and
+            msg.arg2 >= 0 and msg.arg2 != g_disks[index].endpoint)
+        {
+            diskRebind(index, msg.arg2);
+        }
+        return;
+    }
     if (msg.arg0 != @as(i32, @intCast(abi.SVC_CLASS_EVENT_ADD))) return;
-    noteArrival(@bitCast(msg.arg1), msg.arg2);
+    noteArrival(instance, msg.arg2);
+}
+
+/// WASMOS_IPC_HANGUP: arg0 names the endpoint whose owner ended. Owed for every
+/// disk driver this process has sent to, and for the one `diskLive` last
+/// awaited, so it usually lands before the registry's REMOVE does.
+fn handleHangup(msg: *const co.IpcMessage) void {
+    for (g_disks[0..g_disk_count], 0..) |*d, i| {
+        if (d.in_use and d.endpoint >= 0 and d.endpoint == msg.arg0) diskGone(i);
+    }
+    g_backends.forget(msg.arg0);
+}
+
+/// True when the disk at `index` has a live driver. The await registered here
+/// is refused with NOENT when the driver's endpoint has no live owner -- an end
+/// whose hangup is still queued behind this request -- and the disk is then
+/// marked gone at once, so nothing is sent to an endpoint id the next process
+/// may own.
+fn diskLive(index: usize) bool {
+    const disk = &g_disks[index];
+    if (disk.endpoint < 0) return false;
+    if (driver.peerAwait(endpoint(), disk.endpoint) == status.WASMOS_NOENT) {
+        diskGone(index);
+        return false;
+    }
+    return true;
+}
+
+/// The disk at `index` lost its driver. Every transfer forwarded to that driver
+/// fails with WASMOS_ERR_BLOCK_DEV_GONE, since nothing will ever answer it; a
+/// client blocked on one would otherwise hold fs-manager behind it, and with it
+/// the restarted driver's own module read from /boot. The disk keeps its
+/// partitions and waits for `diskRebind`.
+fn diskGone(index: usize) void {
+    const disk = &g_disks[index];
+    const server = disk.endpoint;
+    if (server < 0) return;
+    disk.endpoint = -1;
+    for (&g_inflight.entries) |*slot| {
+        if (!slot.in_use or slot.server != server) continue;
+        if (slot.down_borrow_id >= 0) driver.bufferUnborrow(slot.down_borrow_id);
+        sendError(slot.client, slot.client_request_id, status.WASMOS_ERR_BLOCK_DEV_GONE);
+        slot.in_use = false;
+    }
+    // The backend may still serve another disk, so its grants are forgotten
+    // only when none of ours is left on it; its end forgets them regardless.
+    for (g_disks[0..g_disk_count]) |*d| {
+        if (d.in_use and d.endpoint == server) return;
+    }
+    g_backends.forget(server);
+}
+
+/// A new instance of the disk's driver serves it at `ep`: lend it the request
+/// buffers and forward to it from now on.
+fn diskRebind(index: usize, ep: i32) void {
+    diskGone(index);
+    grantBackend(ep);
+    g_disks[index].endpoint = ep;
+    var line = driver.Line{};
+    _ = line.str("[partition-manager] disk id=").str(idSlice(&g_disks[index].canonical_id));
+    _ = line.str(" follows its restarted driver");
+    line.end();
 }
 
 /// Queue a re-read of one disk's table (PARTITION_IPC_RESCAN_REQ). arg0 is the
@@ -1671,6 +1760,7 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
         op.BLOCK_IPC_READ_REQ, op.BLOCK_IPC_WRITE_REQ => handleTransfer(msg),
         op.BLOCK_IPC_READ_RESP, op.BLOCK_IPC_WRITE_RESP, op.BLOCK_IPC_ERROR => handleDownstreamReply(msg),
         op.SVC_IPC_CLASS_EVENT => handleClassEvent(msg),
+        op.WASMOS_IPC_HANGUP => handleHangup(msg),
         op.PARTITION_IPC_RESCAN_REQ => handleRescan(msg),
         op.FSMGR_IPC_QUERY_MOUNTS_RESP => handleMountsReply(msg, true),
         op.FS_IPC_ERROR => handleMountsReply(msg, false),
@@ -1705,15 +1795,17 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
 /// one grant covers them and a second attempt would be refused as
 /// ALREADY_BORROWED. Deduplicating here keeps that from looking like a failure.
 fn grantBackend(ep: i32) void {
-    for (g_granted[0..g_granted_count]) |seen| {
-        if (seen == ep) return;
+    switch (g_backends.note(ep)) {
+        .lend => {},
+        .known => return,
+        .full => {
+            driver.log("[partition-manager] backend table full; a disk driver was not lent our buffers");
+            return;
+        },
     }
-    if (g_granted_count >= g_granted.len) return;
     _ = driver.bufferBorrow(ep, g_probe_bid, driver.BUFFER_GRANT_WRITE);
     _ = driver.bufferBorrow(ep, g_probe_req_bid, driver.BUFFER_GRANT_READ);
     _ = driver.bufferBorrow(ep, g_down_req_bid, driver.BUFFER_GRANT_READ);
-    g_granted[g_granted_count] = ep;
-    g_granted_count += 1;
 }
 
 /// Resolve the device manager's inventory endpoint and lend it the publish

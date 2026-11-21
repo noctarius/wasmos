@@ -47,6 +47,7 @@ const op = @import("wasmos_opcodes.zig");
 const status = @import("wasmos_status.zig");
 const abi = @import("wasmos_constants.zig");
 const rec = @import("recognise.zig");
+const be = @import("backends.zig");
 
 /// Volumes published. One per mountable device; the bound is this service's own
 /// state, not a property of the system.
@@ -76,9 +77,12 @@ var g_devmgr: i32 = -1;
 
 /// Backend endpoints this process has lent its probe buffers to. Grants are per
 /// PROCESS, so one entry covers every device a backend serves and a second
-/// attempt would be refused as ALREADY_BORROWED.
-var g_granted: [MAX_BACKENDS]i32 = [_]i32{-1} ** MAX_BACKENDS;
-var g_granted_count: usize = 0;
+/// attempt would be refused as ALREADY_BORROWED. An entry is forgotten when a
+/// device it serves is REMOVEd: a supervised driver comes back on a new
+/// endpoint that needs its own grant. A backend still serving another device is
+/// lent to again on its next probe, which the kernel refuses as
+/// ALREADY_BORROWED and leaves its grant as it was.
+var g_backends: be.Table(MAX_BACKENDS) = .{};
 
 /// Devices seen under `block` but not yet probed. Queued rather than probed in
 /// the handler: a probe is synchronous and a message handler must not block the
@@ -317,14 +321,16 @@ fn volumeSlotFor(backing: u32) ?usize {
 }
 
 fn grantBackend(ep: i32) void {
-    for (g_granted[0..g_granted_count]) |seen| {
-        if (seen == ep) return;
+    switch (g_backends.note(ep)) {
+        .lend => {},
+        .known => return,
+        .full => {
+            driver.log("[volume-manager] backend table full; a block driver was not lent our buffers");
+            return;
+        },
     }
-    if (g_granted_count >= g_granted.len) return;
     _ = driver.bufferBorrow(ep, g_ident_bid, driver.BUFFER_GRANT_WRITE);
     _ = driver.bufferBorrow(ep, g_req_bid, driver.BUFFER_GRANT_READ);
-    g_granted[g_granted_count] = ep;
-    g_granted_count += 1;
 }
 
 /// Probe one `block` device and publish a volume for it, unless it holds a
@@ -690,12 +696,18 @@ fn findBlockProvider(instance: u32) ?i32 {
 /// An existence event for the `block` class: arg0 names the kind, arg1 the
 /// instance, arg2 the provider's endpoint, arg3 its pid.
 ///
-/// REMOVE is not acted on, for the same reason the partition manager does not:
-/// retiring a volume means unregistering it and telling every consumer, which is
-/// a teardown path with no caller today. Dropping the record alone would leave
-/// the class advertising a volume nothing can reach.
-/// TODO: retire a volume when its backing device goes away.
+/// A REMOVE retires no volume: a volume is a record of what a device holds, and
+/// a supervised driver that ends comes back serving the same content under the
+/// same instance, so its volume stays as it was and the device's return finds
+/// it already recorded. REMOVE only forgets the backend's grants, which ended
+/// with it. Retiring a volume means unregistering it and telling every
+/// consumer, which is a teardown path with no caller today.
+/// TODO: retire a volume when its backing device is gone for good.
 fn handleClassEvent(msg: *const co.IpcMessage) void {
+    if (msg.arg0 == @as(i32, @intCast(abi.SVC_CLASS_EVENT_REMOVE))) {
+        g_backends.forget(msg.arg2);
+        return;
+    }
     if (msg.arg0 != @as(i32, @intCast(abi.SVC_CLASS_EVENT_ADD))) return;
     noteArrival(@bitCast(msg.arg1), msg.arg2);
 }

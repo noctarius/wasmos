@@ -297,13 +297,44 @@ solely at bring-up: a backend reads a request descriptor when it reaches the
 message, not when the message is sent, so a probe running alongside live traffic
 could overwrite a client's request in that window.
 
-`SVC_CLASS_EVENT_REMOVE` is received and ignored. Retiring a disk means
+#### Following a restarted disk driver
+
+For a disk already probed, the class events follow its DRIVER, not the disk. A
+supervised disk driver that ends comes back under the same instance — the
+instance is derived from the disk's identity, not allocated — on a new
+endpoint, and the disk's content did not change. So the disk is REBOUND rather
+than probed again, and its partitions, and every mount on them, stay as they
+are:
+
+- **Its driver ends.** A `WASMOS_IPC_HANGUP` naming the driver's endpoint, or a
+  REMOVE naming it, marks the disk as having no driver. Every transfer forwarded
+  to that driver is answered `WASMOS_ERR_BLOCK_DEV_GONE` at once, and so is every
+  transfer for one of its partitions until the disk is rebound. A transfer left
+  waiting would hold its filesystem client, and fs-manager's synchronous forward
+  behind it — and fs-manager is what reads the restarted driver's module from
+  `/boot`.
+- **A new instance registers.** An ADD naming the disk's instance and another
+  endpoint rebinds the disk to it: the new endpoint is lent the request
+  buffers, and forwarding resumes. The table is not read again.
+- **A request arrives before either event.** Each forwarded transfer first
+  registers an `ipc_peer_await` on the driver's endpoint; a refusal with
+  `NOENT` means the driver ended and its hangup is still queued, so the disk is
+  marked gone then, and nothing is sent to an endpoint id another process may
+  own next.
+
+The backends lent the request buffers are a table (`backends.zig`, shared with
+the volume manager) that FORGETS a backend when it ends. Grants are per process
+and the kernel revokes an ended process's borrows itself; a table that
+remembered every endpoint it had lent to filled after a few restarts, and the
+next instance was never lent the buffers its requests are read from.
+
+A disk whose driver is gone for good is not retired. Retiring a disk means
 unregistering the partitions published from it and telling the device manager
-they are gone; no shipped driver unregisters a DISK, so that path still has no
-caller. Dropping the local record alone would be worse than doing nothing — the
-partitions would stay in the registry addressing a disk nothing could reach. The
-retirement machinery itself exists now (below); what is missing is the event
-that should drive it.
+they are gone, and nothing yet says a driver will not come back — a supervised
+unit that gave up, or a driver that unregisters without ending. Its partitions
+stay published and fail every transfer with `WASMOS_ERR_BLOCK_DEV_GONE`. The
+retirement machinery itself exists (below); what is missing is the event that
+should drive it.
 
 #### Rescanning a table
 
@@ -777,6 +808,8 @@ way the virtio-blk build already is.
   rescan waiting on it, because the slot is released only by a reply and this
   driver has no timer to expire one on. The partition can then never be retired,
   and the caller waits forever.
+- A disk whose driver is gone for good keeps its partitions published, failing
+  every transfer, rather than being retired.
 - A late probe blocks the process for its duration, because a probe is
   synchronous and forwarding is not. Bounded (one IDENTIFY plus at most 34
   sector reads), but a disk arriving under load pauses transfers on the disks

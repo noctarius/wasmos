@@ -14,6 +14,7 @@ def build(b):
             b.src("reconcile.zig"),
             b.src("mounts.zig"),
             b.src("inflight.zig"),
+            b.src("backends.zig"),
             b.root / "src/libsys/wasm/coroutine_wasm.c",
             b.root / "src/libsys/wasm/ipc_future_wasm.c",
             b.root / "src/libsys/wasm/service_runtime_wasm.c",

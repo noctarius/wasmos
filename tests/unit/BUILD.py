@@ -533,12 +533,14 @@ def build(b):
             ("partition-reconcile", "reconcile", pm / "reconcile.zig"),
             ("partition-mounts", "mounts", pm / "mounts.zig"),
             ("partition-inflight", "inflight", pm / "inflight.zig"),
+            ("partition-backends", "backends", pm / "backends.zig"),
             ("fs-tmpfs", "fs_tmpfs_store", drivers / "fs_tmpfs/fs_tmpfs_store.zig"),
         ):
             test = {
                 "reconcile": "test_partition_reconcile.zig",
                 "mounts": "test_partition_mounts.zig",
                 "inflight": "test_partition_inflight.zig",
+                "backends": "test_partition_backends.zig",
                 "fs_tmpfs_store": "test_fs_tmpfs_store.zig",
             }[mod]
             steps.append(zig_test(b, label, {mod: src}, unit / test, deps=[mod]))

@@ -689,19 +689,24 @@ Source: `architecture/13-runtime-and-packaging.md`,
   cascade) is only for a client that cannot. A block driver's restart leaves the
   disk's content unchanged and a lost request is idempotent per LBA, and a NIC's
   leaves its MAC unchanged and a lost frame is packet loss, so both can be
-  rebound. Done: virtio-blk is supervised, and fs-wfs on a whole disk follows
-  its restart (`wfs_block.h`). Open:
+  rebound. Done: virtio-blk is supervised, fs-wfs on a whole disk follows its
+  restart (`wfs_block.h`), and partition-manager rebinds a disk to its
+  restarted driver, so a filesystem on a partition carries over too. Open:
   - Hold and resend a transfer across the driver's restart instead of failing it
     with `WASMOS_ERR_BLOCK_DEV_GONE`. Blocked on fs-manager answering clients by
     deferred reply: it forwards synchronously, and a held transfer keeps it from
     reading the restarted driver's module from /boot (a hold was tried: the
     restart's module read timed out behind it on WARP).
-  - partition-manager and volume-manager follow a restarted disk (both ignore
-    REMOVE, and drop a returning disk as `diskKnown`); until then a filesystem
-    on a partition of a virtio-blk disk loses its I/O on the driver's restart.
+  - partition-manager's failing of the transfers an ended driver held
+    (`diskGone`) has no test: no QEMU test can kill the driver while a transfer
+    is in flight, and the driver has no host harness. The rebind is covered by
+    `tests/test_partition_manager_disk_arrival.py`.
   - fs-fat on a whole disk follows its driver, as fs-wfs does.
-  - Supervise ata, which carries /boot: it stays device-manager-spawned until
-    partition-manager follows a restart.
+  - Supervise ata, which carries /boot. partition-manager follows a restart
+    now, but a restart of ata reads `ata.wap` from /boot, which only ata
+    serves: the respawn needs the driver it replaces. It needs the module from
+    somewhere ata does not serve (initfs, or a copy the PM keeps) first, and,
+    as for virtio-blk, nothing after its class registration may wait on the PM.
   - fs-manager submits its backends as supervised units (unmount through
     `SUPERVISOR_IPC_RETRACT_REQ`).
   - net-stack keeps the netif and its sockets across virtio-net's REMOVE and

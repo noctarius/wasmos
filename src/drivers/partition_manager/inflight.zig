@@ -25,6 +25,9 @@ pub const Inflight = struct {
     client_request_id: i32 = 0,
     /// The id we used downstream, which is what the reply carries back.
     down_request_id: i32 = 0,
+    /// The backing driver's endpoint the transfer went to. A driver that ends
+    /// answers none of its transfers, so they are failed by this.
+    server: i32 = -1,
     /// Sectors asked for after clamping, so a short transfer can be reported
     /// against what was actually requested.
     sectors: u32 = 0,

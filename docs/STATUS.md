@@ -353,6 +353,14 @@ linked feature documents for rationale and rollout plans.
   for the acknowledgement (`notifyReadyNowait` in the Zig driver shim), since a
   wait on the PM after the registration closed a cycle through
   partition-manager's synchronous probe.
+- partition-manager follows a restarted disk driver too: a hangup or REMOVE
+  for the disk's endpoint fails the transfers forwarded to it with
+  `WASMOS_ERR_BLOCK_DEV_GONE`, and the ADD of the new instance rebinds the disk
+  without re-reading its table, so its partitions and the mounts on them carry
+  over (`tests/test_partition_manager_disk_arrival.py`, three `svc kill`s under
+  a FAT mount on a virtio-blk partition). partition-manager and volume-manager
+  forget an ended backend's buffer grants (`backends.zig`), so each restart's
+  new endpoint is lent them.
 - Liveness: a unit whose `PROC_IPC_NOTIFY_READY` carries
   `PROC_READY_FLAG_LIVENESS` names its event-loop endpoint in arg0; the PM
   records it only when the sender owns it and passes it on in

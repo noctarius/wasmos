@@ -30,9 +30,10 @@ typedef struct {
      * the mount and its open files carry over, and a transfer the ended
      * instance held, or one begun before its successor registered, fails with
      * WASMOS_ERR_BLOCK_DEV_GONE.
-     * TODO: hold such a transfer and resend it to the successor instead, once
-     * fs-manager answers clients by deferred reply: it forwards synchronously,
-     * and the successor's own module is read through it. */
+     * TODO: hold such a transfer and resend it to the successor instead. The
+     * successor's own module is read through fs-manager, which no longer waits
+     * on this driver (docs/architecture/18-filesystem-stack.md, "Deferred
+     * Replies"), so a held transfer no longer stalls the restart. */
     int32_t block_endpoint;
     int32_t reply_endpoint;
     /* Where `block` class events and the subscription's answer arrive, or -1

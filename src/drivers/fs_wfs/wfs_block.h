@@ -16,13 +16,11 @@
  * reply forever.
  *
  * The transfer is not held for the next instance, although it is idempotent
- * per LBA and could be resent unchanged. fs-manager forwards to this driver
- * synchronously, and the restarted driver is read from /boot through
- * fs-manager: a held transfer would keep fs-manager from serving the very read
- * that brings the server back.
- * TODO: hold and resend once fs-manager answers its clients by deferred reply
- * (docs/TASKS.md, the synchronous request/reply removal); a restart is then
- * invisible above this layer.
+ * per LBA and could be resent unchanged.
+ * TODO: hold it and resend it to the successor. fs-manager no longer waits on
+ * this driver (docs/architecture/18-filesystem-stack.md, "Deferred Replies"),
+ * so a held transfer no longer keeps it from serving the restarted driver's
+ * module read; a restart is then invisible above this layer.
  *
  * A filesystem block is 4096..16384 bytes while the block protocol speaks
  * 512-byte sectors, so one filesystem block is several sectors. That conversion

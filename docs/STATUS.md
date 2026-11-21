@@ -347,8 +347,8 @@ linked feature documents for rationale and rollout plans.
   process carry over (`tests/test_wfs_virtio_blk.py`, `svc kill` of the driver
   under `/vwfs`). A transfer the dead instance held, or one begun before the new
   instance registered, fails with `WASMOS_ERR_BLOCK_DEV_GONE` rather than being
-  held: fs-manager forwards synchronously and reads the restarted driver's
-  module, so a held transfer would stall the restart. virtio-blk registers its
+  held; holding it is the open step now that fs-manager no longer waits on a
+  backend. virtio-blk registers its
   class only after resolving device-manager and sends READY without waiting
   for the acknowledgement (`notifyReadyNowait` in the Zig driver shim), since a
   wait on the PM after the registration closed a cycle through
@@ -1204,13 +1204,28 @@ linked feature documents for rationale and rollout plans.
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
+- fs-manager never waits on a backend. Every request it sends one -- a relayed
+  client request, the open/read/close of a `READ_PATH`, a `READDIR`, a chdir's
+  STAT, a mount point's MKDIR, a backend-identity pull, an unmount's quiesce --
+  is a record in `fs_manager_pending.h` under fs-manager's own request id, and
+  its answer, drained from the reply endpoint by the main loop, completes or
+  advances it. Requests to different backends, and from different clients, are
+  in flight together; a backend that holds one holds only that one, and the
+  process manager's module reads are served meanwhile. A backend's hangup or
+  class REMOVE fails the requests it held with `WASMOS_ERR_FS_BACKEND_IPC`; a
+  client's hangup leaves its requests to complete unanswered, closing a file
+  that was opened for it. 64 records; a client request that finds none free is
+  refused with `WASMOS_ERR_FS_BUSY`. The paths fs-manager supplies itself
+  travel in a buffer per record, not one shared buffer. Remaining synchronous:
+  the startup registration and class subscription and lookup at the PM.
 - FS backends hold NO working directory. `FS_IPC_READDIR` carries the directory
   to list, `FS_IPC_CHDIR` is client-to-fs-manager only, and fs-manager validates
   a chdir with `FS_IPC_STAT_REQ`. Removed from all four backends (fs-tmpfs,
   fs-wfs, fs-fat, fs-init) along with their per-client tables. This deletes a
   CHDIR round trip before every listing, and the cross-request ordering
   constraint that made a listing depend on the previous request -- which was the
-  one protocol obstacle to fs-manager ever serving requests concurrently.
+  one protocol obstacle to fs-manager serving requests concurrently, as it now
+  does.
 
   Two defects surfaced and were fixed with it, both pre-existing and both about
   the STAT reply's mode, which is now contractually required to carry the file

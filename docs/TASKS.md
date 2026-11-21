@@ -559,18 +559,14 @@ and `architecture/33-completion-ports.md`.
      it waits on the compositor.
   2. **C**, ~36 files and not uniform. cli, fs_manager, virtio_net, pci_bus and the
      net_tcp_* examples already touch futures, so they are partial conversions; the
-     utils and examples are shallow. fs_manager (6 sites), cli (5) and fs_fat (5)
-     are the bulk, and three sites carry a named hazard:
-     - fs_manager's nested synchronous `DEVMGR_QUERY_MOUNT_REQ` round-trip can
-       deadlock (`src/services/fs_manager/fs_manager.c:608`; `architecture/09`
-       synchronous-IPC section).
-     - fs_manager calls a backend synchronously as soon as it registers --
-       `fsmgr_pull_backend` (`fs_manager.c:883`), `fsmgr_ensure_mount_points`
-       (`:706`), `forward_request` (`:290`) -- while the PM reads every module it
-       spawns through fs-manager. Two cycles of this class have already hung a
-       boot (a mount reply that pulled the PM, an MKDIR into a backend still in a
-       synchronous READY); fs-fat and fs-wfs send READY without waiting since,
-       but fs-tmpfs still waits on it (`src/drivers/fs_tmpfs/fs_tmpfs.zig:879`).
+     utils and examples are shallow. cli (5) and fs_fat (5) are the bulk, and
+     two sites carry a named hazard:
+     - fs_manager no longer waits on a backend (every request is a record in
+       `fs_manager_pending.h`, completed from the reply endpoint), but still makes
+       its startup calls to the PM synchronously: the `fs.vfs` registration and
+       the `fs.backend` class subscription and lookup (`fsmgr_pull_all_backends`,
+       which carries the TODO). They are safe only because nothing spawns by path
+       before fs-manager has started.
      - the CLI's PM/FS/spawn paths still block on
        `wasmos_ipc_select_one(g_reply_endpoint)` (`cli.c` ~1111, ~1381, ~1404,
        ~2076), and `cli_register_vt_writer` / `cli_set_vt_mode` drain the VT
@@ -694,10 +690,12 @@ Source: `architecture/13-runtime-and-packaging.md`,
   partition-manager rebinds a disk to its restarted driver, so a filesystem on
   a partition carries over too. Open:
   - Hold and resend a transfer across the driver's restart instead of failing it
-    with `WASMOS_ERR_BLOCK_DEV_GONE`. Blocked on fs-manager answering clients by
-    deferred reply: it forwards synchronously, and a held transfer keeps it from
-    reading the restarted driver's module from /boot (a hold was tried: the
-    restart's module read timed out behind it on WARP).
+    with `WASMOS_ERR_BLOCK_DEV_GONE`. fs-manager no longer waits on a backend
+    (`fs_manager_pending.h`), so a held transfer holds only its own request and
+    the restart's module read is served meanwhile; what remains is the hold in
+    fs-fat, fs-wfs and partition-manager, and a test that holds across a
+    restart. (A hold tried while fs-manager still forwarded synchronously timed
+    the restart's module read out behind it on WARP.)
   - partition-manager's failing of the transfers an ended driver held
     (`diskGone`) has no test: no QEMU test can kill the driver while a transfer
     is in flight, and the driver has no host harness. The rebind is covered by

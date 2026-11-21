@@ -8,7 +8,7 @@
  *
  * The only other coverage is the klog string probes syscall.c fires for the
  * ring3-smoke image, which assert that a line was printed rather than that a
- * reply was rejected. This suite drives x86_syscall_handler directly with a
+ * reply was rejected. This suite drives syscall_dispatch directly with a
  * syscall_frame_t, against the REAL ipc.c, and asserts on the returned frame.
  *
  * The service side is genuine: a yield hook plays the role of the peer, reading
@@ -397,7 +397,7 @@ static uint64_t call_with(reply_mode_t mode, syscall_frame_t* out_frame, uint32_
     syscall_frame_t f = make_call(g_dest_ep, type, a0, 0, 0, 0);
     g_reply_mode = mode;
     g_yield_hook = service_reply;
-    uint64_t rc = x86_syscall_handler(&f);
+    uint64_t rc = syscall_dispatch(&f);
     if (out_frame) {
         *out_frame = f;
     }
@@ -537,7 +537,7 @@ static void test_a_reply_for_a_future_id_is_refused(void) {
     g_yield_hook = 0;
     syscall_frame_t g = make_call(g_dest_ep, 1u, 0xAAu, 0, 0, 0);
     g.rdx = 0xD00Du;
-    rc = x86_syscall_handler(&g);
+    rc = syscall_dispatch(&g);
     CHECK(rc != (uint64_t)IPC_OK, "the next call is not resolved by the planted reply");
     CHECK(g.rdx != (uint64_t)(0x99u ^ 0xF0F0u), "and never sees the previous call's payload");
 }
@@ -629,7 +629,7 @@ static void test_arguments_must_be_32_bit_clean(void) {
             break;
         }
         f.rdx = (cases[i].field == 2) ? dirty : f.rdx;
-        uint64_t rc = x86_syscall_handler(&f);
+        uint64_t rc = syscall_dispatch(&f);
         CHECK(rc == (uint64_t)(int64_t)IPC_ERR_INVALID,
               "a syscall argument with bits above 32 is refused");
         CHECK(f.rdx == 0, "and RDX is cleared on the error path");
@@ -641,7 +641,7 @@ static void test_an_unknown_destination_is_refused(void) {
     reset();
     syscall_frame_t f = make_call(0x7FFFFFFFu, 1u, 1u, 0, 0, 0);
     f.rdx = 0xDEADBEEFu; /* stale register content the caller must not observe */
-    uint64_t rc = x86_syscall_handler(&f);
+    uint64_t rc = syscall_dispatch(&f);
     CHECK(rc == (uint64_t)(int64_t)IPC_ERR_NOENT,
           "an unknown destination reports NOENT, distinct from a malformed argument");
     CHECK(f.rdx == 0, "and the stale secondary return is cleared");
@@ -656,7 +656,7 @@ static void test_kernel_owned_destinations_are_refused(void) {
     (void)ipc_endpoint_create(IPC_CONTEXT_KERNEL, &kernel_ep);
 
     syscall_frame_t f = make_call(kernel_ep, 1u, 1u, 0, 0, 0);
-    uint64_t rc = x86_syscall_handler(&f);
+    uint64_t rc = syscall_dispatch(&f);
     CHECK(rc == (uint64_t)(int64_t)IPC_ERR_PERM, "a kernel-owned destination is PERM");
     CHECK(f.rdx == 0, "RDX stays clear");
 
@@ -664,13 +664,13 @@ static void test_kernel_owned_destinations_are_refused(void) {
      * again takes the permission back. */
     syscall_set_ipc_call_echo_endpoint(kernel_ep);
     f = make_call(kernel_ep, 0x1111u, 0x77u, 0, 0, 0);
-    rc = x86_syscall_handler(&f);
+    rc = syscall_dispatch(&f);
     CHECK(rc == (uint64_t)IPC_OK, "the designated echo endpoint answers");
     CHECK(f.rdx == 0x77u, "echoing arg0 back through RDX");
 
     syscall_set_ipc_call_echo_endpoint(IPC_ENDPOINT_NONE);
     f = make_call(kernel_ep, 1u, 1u, 0, 0, 0);
-    rc = x86_syscall_handler(&f);
+    rc = syscall_dispatch(&f);
     CHECK(rc == (uint64_t)(int64_t)IPC_ERR_PERM, "and closing it restores the refusal");
 }
 
@@ -678,7 +678,7 @@ static void test_a_denied_control_endpoint_is_refused(void) {
     reset();
     syscall_set_ipc_call_control_deny_endpoint(g_dest_ep);
     syscall_frame_t f = make_call(g_dest_ep, 1u, 1u, 0, 0, 0);
-    uint64_t rc = x86_syscall_handler(&f);
+    uint64_t rc = syscall_dispatch(&f);
     CHECK(rc == (uint64_t)(int64_t)IPC_ERR_PERM, "a denied control endpoint is refused");
     CHECK(f.rdx == 0, "RDX stays clear");
     syscall_set_ipc_call_control_deny_endpoint(IPC_ENDPOINT_NONE);
@@ -686,7 +686,7 @@ static void test_a_denied_control_endpoint_is_refused(void) {
     f = make_call(g_dest_ep, 1u, 1u, 0, 0, 0);
     g_reply_mode = REPLY_GOOD;
     g_yield_hook = service_reply;
-    rc = x86_syscall_handler(&f);
+    rc = syscall_dispatch(&f);
     CHECK(rc == (uint64_t)IPC_OK, "and lifting the denial restores it");
 }
 
@@ -716,26 +716,26 @@ static void test_notify_passes_the_transport_result_through(void) {
     f.rax = WASMOS_SYSCALL_IPC_NOTIFY;
     f.cs = 0x1Bu;
     f.rdi = note;
-    CHECK(x86_syscall_handler(&f) == (uint64_t)IPC_OK, "the owner may notify its endpoint");
+    CHECK(syscall_dispatch(&f) == (uint64_t)IPC_OK, "the owner may notify its endpoint");
     CHECK(ipc_wait_for(CALLER_CTX, note) == IPC_OK, "and the signal really landed");
 
     f.rdi = 0x7FFFFFFFu;
-    CHECK(x86_syscall_handler(&f) == (uint64_t)(int64_t)IPC_ERR_NOENT,
+    CHECK(syscall_dispatch(&f) == (uint64_t)(int64_t)IPC_ERR_NOENT,
           "an unknown endpoint reports NOENT");
 
     uint32_t foreign = 0;
     (void)ipc_notification_create(SERVICE_CTX, &foreign);
     f.rdi = foreign;
-    CHECK(x86_syscall_handler(&f) == (uint64_t)(int64_t)IPC_ERR_PERM,
+    CHECK(syscall_dispatch(&f) == (uint64_t)(int64_t)IPC_ERR_PERM,
           "another context's notification endpoint is PERM");
 
     f.rdi = 0x100000001ull;
-    CHECK(x86_syscall_handler(&f) == (uint64_t)(int64_t)IPC_ERR_INVALID,
+    CHECK(syscall_dispatch(&f) == (uint64_t)(int64_t)IPC_ERR_INVALID,
           "an endpoint id with bits above 32 is refused");
 
     syscall_set_ipc_notify_control_deny_endpoint(note);
     f.rdi = note;
-    CHECK(x86_syscall_handler(&f) == (uint64_t)IPC_OK,
+    CHECK(syscall_dispatch(&f) == (uint64_t)IPC_OK,
           "the notify deny endpoint is a trace hook, not a gate");
     syscall_set_ipc_notify_control_deny_endpoint(IPC_ENDPOINT_NONE);
 }

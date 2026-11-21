@@ -88,7 +88,7 @@ further process lifecycle operations.  It:
 ### `int 0x80` Syscall ABI
 
 Ring3 user processes communicate with the kernel through `int 0x80` (DPL3 gate).
-The dispatcher is `x86_syscall_handler(syscall_frame_t *frame)`.
+The dispatcher is `syscall_dispatch(syscall_frame_t *frame)`.
 
 **Register convention:**
 

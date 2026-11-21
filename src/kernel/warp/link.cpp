@@ -2980,13 +2980,13 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void) {
 // ---------------------------------------------------------------------------
 // Ring-3 hostcall dispatch
 //
-// Called from x86_syscall_handler when a ring-3 int 0x80 fires with
+// Called from syscall_dispatch when a ring-3 int 0x80 fires with
 // RAX in [WARP_HC_SYSCALL_BASE, WARP_HC_SYSCALL_BASE + WARP_HC_MAX).
 // hc_id = RAX - WARP_HC_SYSCALL_BASE (== HC index in WASMOS_SYMBOLS order).
 //
 // Arguments from ring-3 registers (SysV: RDI, RSI, RDX, RCX, R8, R9) are
 // in the saved syscall_frame_t.  For HC_IPC_SEND (9 args), extra args come
-// from the user stack at frame+sizeof(syscall_frame_t).
+// from the user stack (arch_syscall_user_sp).
 // ctx_ is always the last argument, passed by the JIT from the DYNAMIC_LINK
 // basedata slot (which holds the kernel WarpCallContext* set by warp_bind_module).
 // ---------------------------------------------------------------------------
@@ -2996,13 +2996,18 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void) {
 #include "wasmos_ring3_dispatch.inc"
 
 extern "C" uint32_t warp_ring3_dispatch(uint32_t hc_id, void* frame_ptr) {
-    syscall_frame_t* frame = static_cast<syscall_frame_t*>(frame_ptr);
-    /* user_rsp sits just past syscall_frame_t (pushed by the CPU on the
-     * ring-3 -> ring-0 INT transition); stack args live past [user_rsp+0]. */
-    uint64_t user_rsp =
-        *reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(frame) + sizeof(syscall_frame_t));
-    return warp_ring3_dispatch_table(
-        hc_id, frame->rdi, frame->rsi, frame->rdx, frame->rcx, frame->r8, frame->r9, user_rsp);
+    const syscall_frame_t* frame = static_cast<const syscall_frame_t*>(frame_ptr);
+    /* Arguments past the sixth live on the caller's user stack, past
+     * [user_sp+0]. */
+    uint64_t user_rsp = arch_syscall_user_sp(frame);
+    return warp_ring3_dispatch_table(hc_id,
+                                     arch_syscall_arg(frame, 0),
+                                     arch_syscall_arg(frame, 1),
+                                     arch_syscall_arg(frame, 2),
+                                     arch_syscall_arg(frame, 3),
+                                     arch_syscall_arg(frame, 4),
+                                     arch_syscall_arg(frame, 5),
+                                     user_rsp);
 }
 #endif /* WASMOS_WASM_RUNTIME_WARP */
 

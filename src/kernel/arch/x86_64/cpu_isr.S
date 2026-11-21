@@ -21,7 +21,7 @@
 .extern x86_exception_panic_frame
 .extern x86_page_fault_handler
 .extern x86_user_exception_handler
-.extern x86_syscall_handler
+.extern syscall_dispatch
 .extern x86_irq_handler
 .extern x86_timer_irq_handler
 .extern x86_irq_iret_corrupt
@@ -515,7 +515,7 @@ isr_syscall_128:
     # saved register frame and returns the syscall result in RAX.
     PUSH_REGS
     mov %rsp, %rdi
-    CALL_C_ALIGNED x86_syscall_handler
+    CALL_C_ALIGNED syscall_dispatch
     movq %rax, 112(%rsp)
     POP_REGS
     iretq

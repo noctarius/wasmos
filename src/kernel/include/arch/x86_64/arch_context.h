@@ -293,3 +293,118 @@ static inline void arch_irq_frame_redirect_kernel(irq_frame_t* frame, uint64_t p
     frame->user_ss = X86_SEL_KERNEL_DS;
     frame->user_rsp = sp;
 }
+
+/* int 0x80 syscall register convention (the slots syscall.h names):
+ *   number  RAX
+ *   arg0..5 RDI, RSI, RDX, RCX, R8, R9
+ *   result  RAX (the handler's return value; the stub stores it over the saved
+ *           RAX before restoring the frame)
+ *   result2 RDX, written into the frame and restored with it
+ * RDX is both arg2 and result2: a handler that sets result2 reads arg2 first. */
+/* The register frame isr_syscall_128 builds on the kernel stack: the GPRs it
+ * pushed, then the rip/cs/rflags the CPU pushed. Layout is fixed by that stub.
+ * The handler MUTATES this frame -- it writes rdx for the calls with a
+ * secondary return value -- and the stub restores from it, so a caller must not
+ * assume the frame it passed is unchanged. On entry from ring 3 the CPU-pushed
+ * user rsp and ss follow the struct directly (see arch_syscall_user_sp). */
+typedef struct {
+    uint64_t r15;
+    uint64_t r14;
+    uint64_t r13;
+    uint64_t r12;
+    uint64_t r11;
+    uint64_t r10;
+    uint64_t r9;
+    uint64_t r8;
+    uint64_t rdi;
+    uint64_t rsi;
+    uint64_t rbp;
+    uint64_t rdx;
+    uint64_t rcx;
+    uint64_t rbx;
+    uint64_t rax;
+    uint64_t rip;
+    uint64_t cs;
+    uint64_t rflags;
+} syscall_frame_t;
+
+static inline uint64_t arch_syscall_number(const syscall_frame_t* frame) {
+    return frame->rax;
+}
+
+/* Syscall argument `index` (0..5). An out-of-range index reads as 0. */
+static inline uint64_t arch_syscall_arg(const syscall_frame_t* frame, unsigned index) {
+    switch (index) {
+    case 0:
+        return frame->rdi;
+    case 1:
+        return frame->rsi;
+    case 2:
+        return frame->rdx;
+    case 3:
+        return frame->rcx;
+    case 4:
+        return frame->r8;
+    case 5:
+        return frame->r9;
+    default:
+        return 0;
+    }
+}
+
+/* Primary result slot in the frame. The dispatcher's return value is what the
+ * entry stub finally loads, so writing it here matters only on paths that
+ * return it from the frame. */
+static inline void arch_syscall_set_result(syscall_frame_t* frame, uint64_t value) {
+    frame->rax = value;
+}
+
+static inline uint64_t arch_syscall_result(const syscall_frame_t* frame) {
+    return frame->rax;
+}
+
+/* Secondary result slot; aliases arg2 (see the convention above). */
+static inline void arch_syscall_set_result2(syscall_frame_t* frame, uint64_t value) {
+    frame->rdx = value;
+}
+
+static inline uint64_t arch_syscall_result2(const syscall_frame_t* frame) {
+    return frame->rdx;
+}
+
+/* Non-zero when the syscall was entered from user mode. */
+static inline int arch_syscall_from_user(const syscall_frame_t* frame) {
+    return (frame->cs & 0x3u) == 0x3u;
+}
+
+/* The caller's user stack pointer: the rsp the CPU pushed directly after the
+ * frame on the ring-3 -> ring-0 transition. Valid only when
+ * arch_syscall_from_user(frame). */
+static inline uint64_t arch_syscall_user_sp(const syscall_frame_t* frame) {
+    return *(const uint64_t*)(const void*)(frame + 1);
+}
+
+/* Copy a user-mode syscall frame into `ctx`, so a syscall that blocks resumes
+ * at the instruction after the trap. Copies the GPRs, cs, rip and rflags; the
+ * context's stacks, ss and root_table are left as they were. */
+static inline void arch_context_save_syscall_frame(process_context_t* ctx,
+                                                   const syscall_frame_t* frame) {
+    ctx->rax = frame->rax;
+    ctx->rbx = frame->rbx;
+    ctx->rcx = frame->rcx;
+    ctx->rdx = frame->rdx;
+    ctx->rbp = frame->rbp;
+    ctx->rsi = frame->rsi;
+    ctx->rdi = frame->rdi;
+    ctx->r8 = frame->r8;
+    ctx->r9 = frame->r9;
+    ctx->r10 = frame->r10;
+    ctx->r11 = frame->r11;
+    ctx->r12 = frame->r12;
+    ctx->r13 = frame->r13;
+    ctx->r14 = frame->r14;
+    ctx->r15 = frame->r15;
+    ctx->cs = frame->cs;
+    ctx->rip = frame->rip;
+    ctx->rflags = frame->rflags;
+}

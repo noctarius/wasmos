@@ -1,13 +1,14 @@
 /* syscall.h - Ring-3 to kernel syscall ABI.
  *
- * Syscalls use int 0x80 with the id in RAX.  The isr_syscall_128 stub saves the
- * full register frame as a syscall_frame_t and calls x86_syscall_handler().
+ * The architecture's syscall entry (int 0x80 on x86_64: isr_syscall_128) saves
+ * the register frame as a syscall_frame_t and calls syscall_dispatch().
  * All pointer and numeric arguments from user space are validated before use.
  * See the detailed per-syscall contract in the block comment below. */
 #ifndef WASMOS_SYSCALL_H
 #define WASMOS_SYSCALL_H
 
 #include <stdint.h>
+#include "arch/arch_context.h"
 
 typedef enum {
     WASMOS_SYSCALL_NOP = 0,
@@ -32,89 +33,67 @@ typedef enum {
     WASMOS_SYSCALL_WARP_MEMORY_HELPER = 17
 } wasmos_syscall_id_t;
 
-/* int 0x80 syscall ABI (current minimal contract):
- * - syscall id: RAX (see wasmos_syscall_id_t)
- * - args: RDI, RSI, RDX, RCX, R8, R9 (syscall-specific)
+/* Syscall ABI (current minimal contract), in architecture-neutral slots. The
+ * architecture maps them onto registers (x86_64 int 0x80: see
+ * include/arch/x86_64/arch_context.h) and the handler reads them through
+ * arch_syscall_number / arch_syscall_arg / arch_syscall_set_result /
+ * arch_syscall_set_result2.
+ * - number: the syscall id (see wasmos_syscall_id_t)
+ * - arg0..arg5: syscall-specific arguments
  * - return:
- *   - RAX: primary return value (0 or positive success value, negative error)
- *   - RDX: secondary value for the calls that need one, because a full-range
- *     32-bit result cannot share RAX with a negative error code (IPC_CALL reply
+ *   - result: primary return value (0 or positive success value, negative error)
+ *   - result2: secondary value for the calls that need one, because a full-range
+ *     32-bit result cannot share result with a negative error code (IPC_CALL reply
  *     arg0, THREAD_JOIN exit status). Cleared before every such call, so an
  *     error return never leaves a stale value there.
  *
  * Current syscall argument/return contract:
- * - NOP:            RAX=0
- * - GETPID:         RAX=pid
- * - EXIT:           RDI=exit_status; does not return to caller path
- * - YIELD:          RAX=0
- * - WAIT:           RDI=child_pid; RAX=child_exit_status or -1
- * - IPC_NOTIFY:     RDI=endpoint(32-bit clean); RAX=ipc_result_t
- * - IPC_CALL:       RDI=endpoint, RSI=type, RDX/RCX/R8/R9=arg0..arg3
+ * - NOP:            result=0
+ * - GETPID:         result=pid
+ * - EXIT:           arg0=exit_status; does not return to caller path
+ * - YIELD:          result=0
+ * - WAIT:           arg0=child_pid; result=child_exit_status or -1
+ * - IPC_NOTIFY:     arg0=endpoint(32-bit clean); result=ipc_result_t
+ * - IPC_CALL:       arg0=endpoint, arg1=type, arg2..arg5=message arg0..arg3
  *                   all IPC_CALL fields are validated as 32-bit-clean
- *                   RAX=ipc_result_t (0 on success), RDX=reply arg0 on success
- *                   RDX=0 on error
+ *                   result=ipc_result_t (0 on success), result2=reply arg0 on success
+ *                   result2=0 on error
  *                   current behavior blocks by yielding until a reply with a
  *                   matching request_id is received
  *                   current reply ABI returns arg0 only (arg1..arg3 ignored)
- * - GETTID:         RAX=tid
- * - THREAD_YIELD:   RAX=0
- * - THREAD_EXIT:    RDI=exit_status; exits the current thread. If it is the
+ * - GETTID:         result=tid
+ * - THREAD_YIELD:   result=0
+ * - THREAD_EXIT:    arg0=exit_status; exits the current thread. If it is the
  *                   final live thread in the process, process exit follows.
- * - THREAD_CREATE:  RDI=entry_rip, RSI=user_stack_top; RAX=tid on success.
+ * - THREAD_CREATE:  arg0=entry_pc, arg1=user_stack_top; result=tid on success.
  *                   New thread is created in the caller process with user-mode
- *                   RIP/RSP/CS/SS/root-table context initialized per-thread.
- * - THREAD_JOIN:    RDI=target_tid; RAX=0 and RDX=target_exit_status on success,
- *                   RAX=a negative packed WASMOS_ERR_* / WASMOS_INVAL on error
- *                   with RDX=0. The exit status is guest-chosen and spans the
- *                   full 32-bit range, so it cannot share RAX with the outcome:
+ *                   user entry/stack/mode/root-table context initialized per-thread.
+ * - THREAD_JOIN:    arg0=target_tid; result=0 and result2=target_exit_status on success,
+ *                   result=a negative packed WASMOS_ERR_* / WASMOS_INVAL on error
+ *                   with result2=0. The exit status is guest-chosen and spans the
+ *                   full 32-bit range, so it cannot share result with the outcome:
  *                   a thread exiting -1 would be indistinguishable from a failed
  *                   join. Calling thread blocks until target exits.
- * - THREAD_DETACH:  RDI=target_tid; RAX=0 on success, -1 on error. Detached
+ * - THREAD_DETACH:  arg0=target_tid; result=0 on success, -1 on error. Detached
  *                   threads are not joinable and are reaped automatically.
- * - NOTIFY_READY:   no args; RAX=0. Marks the calling process as ready so that
+ * - NOTIFY_READY:   no args; result=0. Marks the calling process as ready so that
  *                   a parent blocked in PROC_IPC_SPAWN_SYNC is unblocked.
  *                   If no parent is waiting the flag is stored and checked on
  *                   the next pm_poll_spawn iteration.
- * - MUTEX_TRY_LOCK: RDI=user_mutex_ptr; RAX=0 on acquire, 1 if busy, -1 on
+ * - MUTEX_TRY_LOCK: arg0=user_mutex_ptr; result=0 on acquire, 1 if busy, -1 on
  *                   invalid pointer/state. The mutex object is process-local
  *                   and reentrant for the current thread ID.
- * - MUTEX_UNLOCK:   RDI=user_mutex_ptr; RAX=0 on success, -1 on invalid
+ * - MUTEX_UNLOCK:   arg0=user_mutex_ptr; result=0 on success, -1 on invalid
  *                   pointer or non-owner unlock.
  */
-/* The register frame isr_syscall_128 builds on the kernel stack: the GPRs it
- * pushed, then the rip/cs/rflags the CPU pushed. Layout is fixed by that stub.
- * The handler MUTATES this frame -- it writes rdx for the calls with a
- * secondary return value -- and the stub restores from it, so a caller must not
- * assume the frame it passed is unchanged. */
-typedef struct {
-    uint64_t r15;
-    uint64_t r14;
-    uint64_t r13;
-    uint64_t r12;
-    uint64_t r11;
-    uint64_t r10;
-    uint64_t r9;
-    uint64_t r8;
-    uint64_t rdi;
-    uint64_t rsi;
-    uint64_t rbp;
-    uint64_t rdx;
-    uint64_t rcx;
-    uint64_t rbx;
-    uint64_t rax;
-    uint64_t rip;
-    uint64_t cs;
-    uint64_t rflags;
-} syscall_frame_t;
-
-/* Dispatch one int 0x80. Returns the value the stub loads into RAX (the
- * per-syscall contract above), or (uint64_t)-1 for a NULL frame. Blocks for as
+/* Dispatch one syscall. Returns the value the arch entry stub hands back as
+ * `result` (the per-syscall contract above), or (uint64_t)-1 for a NULL frame. Blocks for as
  * long as the requested operation does -- WAIT, IPC_CALL and THREAD_JOIN all
  * park the calling thread -- and EXIT/THREAD_EXIT may not return through the
  * caller's path at all. On entry from ring 3 it first snapshots the frame into
  * the current thread's saved context so a blocking syscall resumes at the right
- * post-syscall RIP, possibly on another CPU. */
-uint64_t x86_syscall_handler(syscall_frame_t* frame);
+ * post-syscall instruction, possibly on another CPU. */
+uint64_t syscall_dispatch(syscall_frame_t* frame);
 /* Test-only wiring for the ring-3 syscall suites, honoured by the IPC_CALL and
  * IPC_NOTIFY paths and unset (IPC_ENDPOINT_NONE) in a normal boot.
  *
@@ -131,7 +110,7 @@ void syscall_set_ipc_notify_control_deny_endpoint(uint32_t endpoint);
 #ifdef WASMOS_SYSCALL_TEST_SEAMS
 /* The per-process pending reply ring, so a test can exercise its retention
  * directly; see the definitions in syscall.c for why that is not reachable
- * through x86_syscall_handler alone. */
+ * through syscall_dispatch alone. */
 #include "ipc.h"
 /* Park a reply in pid's ring. Returns 0, or -1 when no slot could be obtained
  * or msg->request_id has not been issued yet -- the ring deliberately refuses

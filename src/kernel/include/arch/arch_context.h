@@ -22,6 +22,12 @@
  *   irq_frame_t         register frame an interrupt stub builds; classified by
  *                       arch_irq_frame_origin, logged by arch_irq_frame_log,
  *                       redirected by arch_irq_frame_redirect_kernel.
+ *   syscall_frame_t     register frame the syscall entry builds; read through
+ *                       arch_syscall_number, _arg, _result, _result2,
+ *                       _from_user, _user_sp; written through
+ *                       arch_syscall_set_result, _set_result2; copied into a
+ *                       thread by arch_context_save_syscall_frame. The slot
+ *                       names are the ones syscall.h's contract uses.
  *
  * Accessors are static inline unless documented otherwise; their contracts are
  * documented at the x86_64 implementation.

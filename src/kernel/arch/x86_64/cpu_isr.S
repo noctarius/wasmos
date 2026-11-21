@@ -4,8 +4,8 @@
 # that may resume the faulting context; IRQ stubs save the register set and
 # delegate to C.
 #
-# Register-frame contract shared with the C side (irq_frame_t in
-# include/arch/x86_64/arch_context.h, x86_exception_panic_common in
+# Register-frame contract shared with the C side (irq_frame_t in the x86_64
+# arch_context.h under include/arch, x86_exception_panic_common in
 # cpu_x86_64.c). PUSH_REGS leaves 15 quadwords
 # directly below the CPU-pushed frame: r15 at +0 rising to rax at +112. The CPU
 # frame therefore starts at +120 and is, in long mode, always five slots wide —

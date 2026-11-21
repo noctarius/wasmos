@@ -2,6 +2,7 @@
 #include "arch/x86_64/msr.h"
 #include "irq.h"
 #include "paging.h"
+#include "memory.h"
 #include "serial.h"
 
 #include <stdint.h>
@@ -44,12 +45,6 @@
 
 /* Divide-by-16: DCR value 0x3. */
 #define LAPIC_TIMER_DIVIDE_16 0x3u
-
-/* PT_FLAG_PCD (bit 4): cache-disable, required for MMIO mappings. */
-#define PT_FLAG_PRESENT (1ULL << 0)
-#define PT_FLAG_WRITE (1ULL << 1)
-#define PT_FLAG_PCD (1ULL << 4)
-#define PT_FLAG_NX (1ULL << 63)
 
 /*
  * Reserved kernel virtual address for the LAPIC MMIO page.
@@ -97,7 +92,7 @@ static inline void lapic_write(uint32_t reg, uint32_t val) {
 static void lapic_map(void) {
     uint64_t apic_base_msr = x86_read_msr(IA32_APIC_BASE_MSR);
     uint64_t lapic_phys = apic_base_msr & IA32_APIC_BASE_MASK;
-    uint64_t flags = PT_FLAG_PRESENT | PT_FLAG_WRITE | PT_FLAG_PCD | PT_FLAG_NX;
+    uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_DEVICE;
 
     int rc = paging_map_4k(LAPIC_VIRT_BASE, lapic_phys, flags);
     if (rc != 0) {

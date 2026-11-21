@@ -45,6 +45,11 @@ typedef enum {
 #define MEM_REGION_FLAG_EXEC (1u << 2)
 /* Region is intended to be user-accessible once ring3 mappings are active. */
 #define MEM_REGION_FLAG_USER (1u << 3)
+/* Device memory: uncached and strongly ordered, for device registers. Every
+ * read and write reaches the device in program order. x86_64 encodes it as
+ * PCD|PWT (UC under the default PAT); an arm64 port as a Device-nGnRE
+ * attribute. */
+#define MEM_REGION_FLAG_DEVICE (1u << 4)
 /* Physical backing is owned by another subsystem and must not be freed by
  * mm_context_destroy(). Set by mm_context_rebind_wasm_linear once the
  * placeholder region has been rebound to a runtime-owned allocation. */

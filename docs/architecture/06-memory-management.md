@@ -126,8 +126,14 @@ the kernel's shared mapping. Stack and page-table allocations must use
 | `PT_FLAG_PRESENT`    | 0   | Page is mapped              |
 | `PT_FLAG_WRITE`      | 1   | Writable                    |
 | `PT_FLAG_USER`       | 2   | CPL3-accessible             |
+| `PT_FLAG_PWT`        | 3   | Write-through (with PCD: UC)|
+| `PT_FLAG_PCD`        | 4   | Cache-disable               |
 | `PT_FLAG_LARGE_PAGE` | 7   | 2 MB large page (PDE level) |
 | `PT_FLAG_NX`         | 63  | No-execute                  |
+
+Callers pass `MEM_REGION_FLAG_*`, never these bits. `MEM_REGION_FLAG_DEVICE`
+selects device memory: PCD|PWT, which is UC under the power-on PAT (the kernel
+does not reprogram the PAT). The LAPIC, IOAPIC and MMIO scratch windows use it.
 
 #### Per-Process CR3
 

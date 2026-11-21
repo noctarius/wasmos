@@ -15,6 +15,8 @@
 #define PT_FLAG_PRESENT (1ULL << 0)
 #define PT_FLAG_WRITE (1ULL << 1)
 #define PT_FLAG_USER (1ULL << 2)
+#define PT_FLAG_PWT (1ULL << 3)
+#define PT_FLAG_PCD (1ULL << 4)
 #define PT_FLAG_LARGE_PAGE (1ULL << 7)
 #define PT_FLAG_NX (1ULL << 63)
 
@@ -696,6 +698,11 @@ int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uin
     }
     if (!(flags & MEM_REGION_FLAG_EXEC)) {
         map_flags |= PT_FLAG_NX;
+    }
+    if (flags & MEM_REGION_FLAG_DEVICE) {
+        /* PAT index 3 (PCD|PWT) is UC in the power-on PAT, which the kernel
+         * does not reprogram. */
+        map_flags |= PT_FLAG_PCD | PT_FLAG_PWT;
     }
     if (pt[pt_idx] & PT_FLAG_PRESENT) {
         /* Allow explicit remap updates (e.g. shared-memory overlays on wasm

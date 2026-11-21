@@ -204,8 +204,9 @@ Source: `architecture/06-memory-management.md`,
   loader pattern in `src/kernel/kernel_ring3_probe_runtime.c`.
 
   A second compile of `libs/wasm3` is unavoidable and is the right shape:
-  today its objects use `CFLAGS_WASM3 = CFLAGS_KERNEL + ...`
-  (`src/kernel/CMakeLists.txt:16`), which carries `-mcmodel=kernel` (top-2 GiB
+  today its objects compile through the `kernel` toolchain profile
+  (`src/kernel/BUILD.py` `WASM3_LIB`, flags in `scripts/buildgen/toolchains.py`),
+  which carries `-mcmodel=kernel` (top-2 GiB
   addressing, wrong for a user VA) and links against kernel symbols. A separate
   link unit makes "no kernel symbols" a **link error** instead of a runtime #GP.
 
@@ -818,7 +819,7 @@ tail.
 - [ ] [BUG][P2] Make the ABI re-gen check fail loudly when PyYAML is missing rather
   than skipping. `scripts/gen_abi_*.py --check` prints
   `skipping (PyYAML is required ...)` and exits 0, so on a machine without
-  PyYAML `cmake --build build --target lint` reports success while verifying
+  PyYAML `ninja -C out/<dir> lint` reports success while verifying
   none of the generated ABI. That is not hypothetical: a `clang-format -i` sweep
   re-wrapped `abi/generated/c/wasmos_imports.h` and `wasmos_opcodes.h`, the
   local gate passed, and CI caught it only because its runners have PyYAML.
@@ -2161,6 +2162,18 @@ Source: `architecture/25-diagnostics-status.md`,
 
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
+- [ ] [CLEANUP][P2] Reconcile the diverged duplicate headers
+  `src/libc/include/wasmos/{mutex,rtc_ipc}.h` and
+  `src/libsys/wasm/include/wasmos/{mutex,rtc_ipc}.h`. The SDK sysroot ships
+  libc's copy (include-search order; `scripts/sdk_stage.py` TODO), so a libsys
+  object and an SDK app can see different declarations under one name.
+- [ ] [FEATURE][P2] Add an `ARCH` Kconfig choice for the arm64 port: per-arch
+  toolchain profiles in `scripts/buildgen/toolchains.py` (UEFI and kernel
+  triples, code model, red-zone flags), `src/kernel/arch/<arch>/BUILD.py` for the
+  arch sources and linker scripts now named directly in `src/kernel/BUILD.py`,
+  the blob output format in `wasmos_rules.kernel_blob` (`elf64-x86-64` today),
+  and the loader name (`BOOTX64.EFI` / `BOOTAA64.EFI`) in `src/boot/BUILD.py`
+  and the ESP plan.
 - [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
   (`test_app_churn`: "run N: date produced no result"). Not a supervisor
   regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7
@@ -2235,20 +2248,8 @@ Source: `architecture/25-diagnostics-status.md`,
   and new DMA paths.
 - [ ] [TEST][P2] Add graphical input-injection tests only after virtio-serial transport is
   usable; use distinct sockets and never run QEMU sessions in parallel.
-- [ ] [ENHANCEMENT][P2] Extend `scripts/kconfig_to_cmake.py:37` symbol map as more CMake cache
-  settings migrate to Kconfig, and make `scripts/quality.sh:133` clang-tidy lint
-  C++ sources (missing `--extra-arg` flags).
-- [ ] [BUG][P2] Make `wasmos_ide_libc` and `wasmos_ide_tools` compile. Both emit
-  compile-DB entries whose flags cannot parse, so CLion indexes those files with
-  errors: `wasmos_ide_libc` builds `src/libc` for the host, where
-  `__builtin_wasm_memory_size`/`_grow` do not exist (`src/libc/src/stdlib.c:30`;
-  the real build passes `--target=wasm32`), and `wasmos_ide_tools` builds the
-  host tools with no sysroot, so libc++'s `<cstring>`/`<cstdlib>` cannot find
-  their C headers — the top-level `CMakeLists.txt` blanks `CMAKE_OSX_SYSROOT` for
-  the freestanding targets. `scripts/quality.sh lint` is green regardless,
-  because it rewrites the DB: it injects `--target=wasm32` for `src/libc` and
-  drops `src/tools` from clang-tidy entirely. The fix is a target-triple and a
-  sysroot option on `wasmos_add_ide_c_target` (`skills/wasmos-ide-targets`).
+- [ ] [ENHANCEMENT][P2] Make `scripts/quality.sh:235` clang-tidy lint C++ sources
+  (missing `--extra-arg` flags).
 - [ ] [DOCS][P2] Keep architecture documents authoritative for design, `STATUS.md` concise
   for current behavior, and this file limited to unfinished work.
 
@@ -2306,7 +2307,7 @@ Source: `architecture/25-diagnostics-status.md`,
   The cause is structural, not luck. The ring is a strict hand-off: each
   `ipc_send_from` wakes the next worker, and `sched_wake_thread` enqueues a woken
   thread on the **waking** CPU's queue (`src/kernel/sched_thread.c:634`), with
-  `WASMOS_SCHED_CALLER_CPU_BIAS` (ON by default, `CMakeLists.txt:848`) also
+  `WASMOS_SCHED_CALLER_CPU_BIAS` (Kconfig, `default y`, `Kconfig:73`) also
   rewriting `last_cpu` to the waker's CPU. A token therefore follows whichever
   CPU currently holds it, and only work stealing moves it. With
   `SMP_STRESS_TOKENS` (4) at most equal to the core count, the ring can sit
@@ -2352,9 +2353,9 @@ Source: `architecture/25-diagnostics-status.md`,
   Reproducing needs a Linux x86 runner; MTTCG on Apple Silicon masks it. Force
   TCG (`WASMOS_QEMU_ACCEL=tcg`) and reset the OVMF vars file between boots:
 
-      cmake -S . -B build-warp_smp -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig \
-            -DWASMOS_SCHED_SMP_STRESS=ON
-      cmake --build build-warp_smp --target run-qemu-sched-stress-test
+      ./configure out/warp_smp configs/warp_smp_defconfig \
+            --set WASMOS_SCHED_SMP_STRESS=y
+      ninja -C out/warp_smp run-qemu-sched-stress-test
 
   A `[sched] claim lost` line means the race fired and the claim resolved it.
 
@@ -2914,8 +2915,8 @@ Source: `architecture/25-diagnostics-status.md`,
      boot roughly six print. "Never printed" was never "never happened", and a
      victim-specific hit is unlikely to be among the six. `SCHED_R_STALE` was
      "ruled out" on exactly this basis and is NOT ruled out.
-  2. The kernel is built with NO `-O` flag, i.e. -O0 (`CMakeLists.txt`,
-     `CFLAGS_COMMON`), so nothing is inlined and every static function has its own
+  2. The kernel is built with NO `-O` flag, i.e. -O0 (`scripts/buildgen/toolchains.py`,
+     the `common` flags of the `kernel` profile), so nothing is inlined and every static function has its own
      out-of-line symbol. The hedge that a promoter was "consistent with either
      after inlining" was false. Worse, FIVE distinct READY-promotion sites live
      inside `process_schedule_once_impl` and symbolize to that one name; the
@@ -3336,18 +3337,3 @@ Source: `architecture/25-diagnostics-status.md`,
   order- or timing-dependent rather than broken. Uninvestigated; the value is in
   finding out whether it shares a cause with the other intermittent CLI-suite
   failures rather than in the case itself.
-
-- [ ] [BUG][P1] Make the kernel build track header dependencies. The kernel objects
-  are produced by hand-written `clang -c` commands whose DEPENDS list names only the
-  source file, so editing a header -- or even touching the `.c` -- does not trigger a
-  rebuild. Every compile-time guarantee in the kernel is therefore only evaluated on
-  a clean build: `_Static_assert`s added to couple two constants pass locally while
-  the object is stale, and a changed struct layout can link against callers compiled
-  against the old one.
-
-  This is the same defect class as the AOT symbol-table staleness already fixed at
-  `CMakeLists.txt:1147`, where `warp_aot.cpp` depended only on its own source while
-  including a generated table named by arity. That one was found only after it
-  produced an "Imported symbol could not be found" that was mistaken for a WARP
-  quirk for a whole session; the kernel rule has the same shape and has not
-  produced a visible symptom yet.

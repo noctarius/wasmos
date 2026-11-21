@@ -1280,7 +1280,7 @@ Done gate:
 
 ### Validation Matrix
 - Baseline boot regression:
-  - `cmake --build build --target run-qemu-test`
+  - `ninja -C out/<dir> run-qemu-test`
 - Networking smoke (new target, sequential with existing QEMU tests):
   - boot + NIC detect + MAC marker + net-stack register + ICMP echo + UDP echo
 - TCP smoke:

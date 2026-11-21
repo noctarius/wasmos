@@ -1,748 +1,379 @@
 # WASMOS Build System
 
-This document covers the CMake build system: how it is structured, what every
-target type does, the helper functions available for adding new components, and
-how the whole graph fits together.
+`./configure` generates a Ninja build from Kconfig and per-directory `BUILD.py`
+manifests. This document covers the build directory model, tool discovery,
+configuration, the manifest API, every kind of artifact the build produces, the
+run and test targets, and how to add a component.
 
 ---
 
 ## Contents
 
-1. [Requirements and Tool Detection](#1-requirements-and-tool-detection)
-2. [Configuration Variables and Options](#2-configuration-variables-and-options)
-3. [Source Directory Variables](#3-source-directory-variables)
-4. [CMake Helper Functions](#4-cmake-helper-functions)
-5. [Target Types](#5-target-types)
-6. [Infrastructure Targets](#6-infrastructure-targets)
-7. [QEMU and Test Targets](#7-qemu-and-test-targets)
-8. [Global Property Tracking](#8-global-property-tracking)
-9. [ESP Layout](#9-esp-layout)
-10. [Full Dependency Graph](#10-full-dependency-graph)
-11. [Adding a New App or Driver](#11-adding-a-new-app-or-driver)
+1. [Quick Reference](#1-quick-reference)
+2. [Build Directory](#2-build-directory)
+3. [Requirements and Tool Discovery](#3-requirements-and-tool-discovery)
+4. [Configuration (Kconfig)](#4-configuration-kconfig)
+5. [Layout](#5-layout)
+6. [Toolchain Profiles](#6-toolchain-profiles)
+7. [Manifest API](#7-manifest-api)
+8. [Artifacts](#8-artifacts)
+9. [Run and Test Targets](#9-run-and-test-targets)
+10. [Quality Gates and the Compile Database](#10-quality-gates-and-the-compile-database)
+11. [ESP Layout](#11-esp-layout)
+12. [Adding a Component](#12-adding-a-component)
 
 ---
 
-## 1. Requirements and Tool Detection
+## 1. Quick Reference
 
-The root `CMakeLists.txt` detects all required tools at configure time and
-errors out immediately if a required tool is missing.
-
-| Tool                           | Purpose                                        | Override Variable               |
-|--------------------------------|------------------------------------------------|---------------------------------|
-| `clang` (LLVM, not AppleClang) | C compiler for UEFI, kernel, and WASM targets  | `-DCLANG=`                      |
-| `clang++`                      | C++ compiler for WASM C++ modules              | auto-discovered next to `clang` |
-| `ld.lld` / `lld`               | Linker for UEFI and kernel ELF                 | `-DLLD=`                        |
-| `lld-link`                     | COFF linker for UEFI on macOS                  | `-DLLD_LINK=`                   |
-| `llvm-objcopy`                 | Binary conversion (ELF → raw blob)             | `-DOBJCOPY=`                    |
-| `python3`                      | `make_initfs.py`, Kconfig bridge, test runners | CMake `find_package(Python3)`   |
-| `qemu-system-x86_64`           | QEMU test runner                               | must be on `PATH`               |
-| OVMF firmware                  | UEFI firmware image for QEMU                   | `-DOVMF_CODE=`, `-DOVMF_VARS=`  |
-| `rustc`                        | Rust → WASM32 (optional)                       | enabled by `RUST_ENABLE`        |
-| `tinygo`                       | Go → WASM (optional)                           | enabled by `GO_ENABLE`          |
-| `zig`                          | Zig → WASM32 or native ELF (optional)          | enabled by `ZIG_ENABLE`         |
-| `asc`                          | AssemblyScript → WASM32 (optional)             | enabled by `AS_ENABLE`          |
-
-AppleClang is explicitly rejected at configure time. On macOS, install LLVM via
-Homebrew:
 ```sh
-brew install llvm lld qemu
-cmake -S . -B build -DCLANG=/opt/homebrew/opt/llvm/bin/clang
+./configure out/wasm3-smp configs/wasm3_smp_defconfig   # once per build directory
+ninja -C out/wasm3-smp                    # everything: kernel, loader, modules, ESP, images
+ninja -C out/wasm3-smp kernel             # one piece (bootloader, modules, esp, wasmos-sdk, ...)
+ninja -C out/wasm3-smp run-qemu-test      # boot + halt gate
+ninja -C out/wasm3-smp run-kernel-unit-tests
+ninja -C out/wasm3-smp fmt-check lint     # quality gates
+ninja -C out/wasm3-smp menuconfig         # edit out/wasm3-smp/.config
 ```
 
-OVMF/EDK2 firmware candidates are searched automatically in common Homebrew and
-system paths. Supply the path manually if auto-detection fails:
-```sh
-cmake -S . -B build -DOVMF_CODE=/path/to/edk2-x86_64-code.fd
-```
+`scripts/run_config.sh <config> [target]` configures `out/<config>` from
+`configs/<config>_defconfig` on first use and builds the target.
 
 ---
 
-## 2. Configuration Variables and Options
+## 2. Build Directory
 
-All options can be set on the `cmake` configure command line (`-DNAME=VALUE`)
-or via the Kconfig flow (see README.md).
+A build directory is `.config` plus `build.ninja`. `configure` seeds `.config`
+once from the given defconfig (`configs/wasmos_defconfig` by default) and never
+re-reads the source tree's copy; `--reseed` replaces it, and `--set
+SYMBOL=VALUE` (repeatable; `y`/`n` for bools) overrides individual symbols.
+kconfiglib resolves the file against `Kconfig` on every generation, so defaults
+and dependencies (for example `WASMOS_SMP` requiring `WASMOS_IRQ_IOAPIC`) apply
+without any build-system logic, and the resolved file is written back.
 
-### Language Example Toggles
+`build.ninja` regenerates itself when `.config`, a Kconfig file, a `BUILD.py`
+manifest, a directory a manifest globbed, `configure` or
+`scripts/buildgen/*.py` changes. Re-running `configure` is needed only to change
+tool paths.
 
-| Option        | Default | Description                   |
-|---------------|---------|-------------------------------|
-| `AS_ENABLE`   | `ON`    | Build AssemblyScript examples |
-| `RUST_ENABLE` | `ON`    | Build Rust examples           |
-| `GO_ENABLE`   | `ON`    | Build Go (TinyGo) examples    |
-| `ZIG_ENABLE`  | `ON`    | Build Zig examples            |
+One build directory holds one configuration. Two configurations (wasm3 and
+WARP, single and SMP) are two directories; nothing in one can influence the
+other.
 
-Go and Zig are only built if the corresponding compiler is found at configure
-time. The booleans `GO_AVAILABLE` and `ZIG_AVAILABLE` reflect this.
-
-### Kernel Feature Flags
-
-| Option                                | Default | Description                                                          |
-|---------------------------------------|---------|----------------------------------------------------------------------|
-| `WASMOS_TRACE`                        | `OFF`   | Enable verbose kernel and userland tracing (`WASMOS_TRACE=1` define) |
-| `WASMOS_RING3_SMOKE`                  | `OFF`   | Spawn the ring-3 smoke probe process by default                      |
-| `WASMOS_RING3_THREAD_LIFECYCLE_SMOKE` | `OFF`   | Spawn the thread lifecycle helper probe by default                   |
-| `WASMOS_PM_TEST_HOOKS`                | `OFF`   | Enable process-manager test injection hooks                          |
-
-When `WASMOS_WASM_RUNTIME_WARP=ON` is selected, the build now always enables
-the WARP ring-3 execution path internally. There is no separate user-facing
-toggle for WARP ring-3 versus ring-0 execution anymore.
-
-### Process-Manager List Backend
-
-| Option                           | Default | Description                                   |
-|----------------------------------|---------|-----------------------------------------------|
-| `WASMOS_PM_LIST_LINKED`          | `ON`    | Use linked-list backend for PM dynamic lists  |
-| `WASMOS_PM_LIST_ARRAY_CHUNK`     | `OFF`   | Use array-chunk backend instead               |
-| `WASMOS_PM_LIST_ARRAY_CHUNK_CAP` | `16`    | Capacity per chunk when array-chunk is active |
-
-### Compiler and Linker Overrides
-
-| Variable               | Default          | Description                        |
-|------------------------|------------------|------------------------------------|
-| `CLANG`                | `clang`          | C compiler path                    |
-| `LLD`                  | `lld` / `ld.lld` | Linker path                        |
-| `LLD_LINK`             | `lld-link`       | COFF linker for UEFI on macOS      |
-| `OBJCOPY`              | `llvm-objcopy`   | Objcopy tool                       |
-| `OVMF_CODE`            | auto             | Path to `OVMF_CODE.fd`             |
-| `OVMF_VARS`            | auto             | Path to `OVMF_VARS.fd` (optional)  |
-| `KERNEL_TARGET_TRIPLE` | `x86_64-elf`     | Clang target triple for kernel     |
-| `QEMU_GDB_PORT`        | `1234`           | GDB stub port for `run-qemu-debug` |
+Every compiled object is its own build edge with a compiler depfile, so header
+dependencies are exact and compiles run in parallel. Final artifacts sit at the
+build-directory root (`kernel.elf`, `BOOTX64.EFI`, `<module>.wasm`,
+`<module>.wap`, `initfs.img`, `wfs.img`, ...); objects under
+`obj/<profile>/<source path relative to the repo>.o`, so equal basenames in
+different directories never collide.
 
 ---
 
-## 3. Source Directory Variables
+## 3. Requirements and Tool Discovery
 
-These CMake variables are set in the root `CMakeLists.txt` and used throughout
-all sub-`CMakeLists.txt` files.
+`configure` resolves every external tool once and records it in
+`<dir>/buildgen-tools.json`; regeneration reuses that record, so a build
+directory keeps the toolchain it was configured with.
 
-| Variable            | Source path               |
-|---------------------|---------------------------|
-| `BUILD_DIR`         | `${CMAKE_BINARY_DIR}`     |
-| `BOOT_DIR`          | `src/boot`                |
-| `KERNEL_DIR`        | `src/kernel`              |
-| `LIBC_DIR`          | `src/libc`                |
-| `LIBSYS_DIR`        | `src/libsys`              |
-| `LIBSYS_WASM_DIR`   | `src/libsys/wasm`         |
-| `LIBSYS_NATIVE_DIR` | `src/libsys/native`       |
-| `WASM3_DIR`         | `libs/wasm3`              |
-| `DRIVER_WASM_DIR`   | `src/drivers`             |
-| `EXAMPLES_C_DIR`    | `examples/c`              |
-| `EXAMPLES_RUST_DIR` | `examples/rust`           |
-| `EXAMPLES_AS_DIR`   | `examples/assemblyscript` |
-| `EXAMPLES_ZIG_DIR`  | `examples/zig`            |
-| `EXAMPLES_GO_DIR`   | `examples/go`             |
-| `SERVICES_DIR`      | `src/services`            |
-| `USERFS_DIR`        | `userfs`                  |
+| Tool | Purpose | Override |
+|------|---------|----------|
+| `clang`, `clang++` (LLVM, not AppleClang) | UEFI, kernel, native, wasm32 and host compiles | `--clang=`, `--clangxx=` |
+| `ld.lld`, `lld-link` | kernel/native ELF links; UEFI PE/COFF link | `--ld.lld=`, `--lld-link=` |
+| `llvm-objcopy`, `llvm-nm`, `llvm-ar` | blobs, kallsyms, archives | `--llvm-objcopy=` etc. |
+| `wasm-ld` | recorded for the SDK's `wasmos-ld` face | `--wasm-ld=` |
+| Python 3 + `kconfiglib` | the generator, Kconfig, staging scripts, test runners | run `configure` with that Python |
+| `ninja` 1.10+ | executes the build | on `PATH` |
+| `zig`, `asc`, `rustc`, `tinygo` + `wasm-opt` | optional guest languages | `--zig=`, `--asc=`, `--rustc=`, `--tinygo=`, `--wasm-opt=` |
+| `qemu-system-x86_64`, OVMF firmware | run and test targets | `--qemu=`, `--ovmf-code=`, `--ovmf-vars=` |
+| `clang-format`, `clang-tidy`, `llvm-config`, `black`, `ruff`, `gofmt`, `go`, `rustfmt` | quality gates | `CLANG_FORMAT` pins the formatter |
 
----
-
-## 4. CMake Helper Functions
-
-All helper functions are defined in the root `CMakeLists.txt`. No separate
-`.cmake` module files are used.
+AppleClang is rejected. On macOS: `brew install llvm lld qemu ninja` and
+`python3 -m pip install kconfiglib`. OVMF candidates are searched in the common
+Homebrew and distribution paths; an i386 vars store beside x86_64 firmware is
+dropped because it hangs the boot. `WASMOS_CLANG_TIDY_INCLUDE_DIR` (or
+`--clang-tidy-include=`) supplies `clang-tidy/*.h` when the LLVM install lacks
+them.
 
 ---
 
-### `wasmos_add_ide_c_target(target_name)`
+## 4. Configuration (Kconfig)
 
-Creates an OBJECT library that is excluded from all normal builds
-(`EXCLUDE_FROM_ALL`). Its sole purpose is to give IDEs (CLion, etc.) a
-compilation unit to index for code completion and error highlighting.
+Every build option is a Kconfig symbol (`Kconfig` at the repository root). The
+tracked defconfigs in `configs/` pin the WASM runtime and the CPU topology.
 
-Every call to `wasmos_add_wasm_c_app_target` and
-`wasmos_add_native_c_app_target` automatically creates a matching `_ide` target.
+| Symbol | Default | Effect |
+|--------|---------|--------|
+| `WASMOS_WASM_RUNTIME_WASM3` / `_WARP` | choice | kernel runtime; WARP adds the WARP sources, `warp_aot` and AOT packing |
+| `WASMOS_IRQ_PIC` / `_LAPIC` / `_IOAPIC` | `IOAPIC` | `-DWASMOS_IRQ_MODE=0/1/2` |
+| `WASMOS_SMP` | `n` (depends on `IOAPIC`) | `-DWASMOS_SMP`; QEMU runs with 4 CPUs |
+| `WASMOS_SCHED_CALLER_CPU_BIAS` | `y` | `-DWASMOS_SCHED_CALLER_CPU_BIAS` |
+| `WASMOS_SCHED_SMP_STRESS` | `n` | `-DWASMOS_SCHED_SMP_STRESS=1` (for `run-qemu-sched-stress-test`) |
+| `WASMOS_WARP_RUNTIME_LOAD_AOT` | `y` | load bundled AOT binaries at runtime |
+| `WASMOS_TRACE` | `n` | `-DWASMOS_TRACE` for kernel and guests; gfx-compositor's `gfx_trace` |
+| `WASMOS_RING3_SMOKE`, `WASMOS_RING3_THREAD_LIFECYCLE_SMOKE` | `n` | ring-3 probe spawn defaults |
+| `WASMOS_PM_TEST_HOOKS` | `n` | process-manager test injection hooks |
+| `WASMOS_PM_LIST_LINKED` / `_ARRAY_CHUNK`, `WASMOS_PM_LIST_ARRAY_CHUNK_CAP` | linked, 16 | PM list backend |
+| `AS_ENABLE`, `RUST_ENABLE`, `GO_ENABLE`, `ZIG_ENABLE` | `y` | build that language's modules (also needs the tool) |
+| `KERNEL_TARGET_TRIPLE` | `x86_64-elf` | kernel and native target |
+| `QEMU_GDB_PORT` | 1234 | `run-qemu-debug` |
 
-**Parameters:**
-
-| Name       | Type        | Required | Description               |
-|------------|-------------|----------|---------------------------|
-| `SOURCES`  | multi-value | yes      | Source files for indexing |
-| `INCLUDES` | multi-value | no       | Include directories       |
-
----
-
-### `wasmos_add_wasm_c_app_target(target_name)`
-
-Compiles C sources to a WASM32 binary and packs it into a `.wap` WASMOS-APP
-package. This is the primary helper for WASM drivers, services, and apps written
-in C.
-
-**Parameters:**
-
-| Name             | Type        | Required              | Default | Description                              |
-|------------------|-------------|-----------------------|---------|------------------------------------------|
-| `SOURCE`         | single      | one of SOURCE/SOURCES | —       | Single C source file                     |
-| `SOURCES`        | multi-value | one of SOURCE/SOURCES | —       | Multiple C source files                  |
-| `OUTPUT_WASM`    | single      | yes                   | —       | Output `.wasm` path                      |
-| `OUTPUT_APP`     | single      | yes                   | —       | Output `.wap` path                       |
-| `MANIFEST`       | single      | yes                   | —       | Metadata manifest file                   |
-| `EXPORT`         | single      | yes                   | —       | WASM export symbol (e.g. `wasmos_main`)  |
-| `STACK_SIZE`     | single      | no                    | `4096`  | Stack size in bytes                      |
-| `INITIAL_MEMORY` | single      | no                    | `65536` | Initial WASM memory in bytes             |
-| `MAX_MEMORY`     | single      | no                    | `65536` | Maximum WASM memory in bytes             |
-| `NO_BUILTIN`     | flag        | no                    | off     | Add `-fno-builtin` to the compiler flags |
-| `BUILD_COMMENT`  | single      | no                    | —       | Custom status message while compiling    |
-| `PACK_COMMENT`   | single      | no                    | —       | Custom status message while packing      |
-
-**Compile flags applied:**
-
-```
---target=wasm32 -Oz -nostdlib
--Wl,--no-entry -Wl,--strip-all
--Wl,-z,stack-size=<STACK_SIZE>
--Wl,--initial-memory=<INITIAL_MEMORY>
--Wl,--max-memory=<MAX_MEMORY>
--Wl,--allow-undefined
--Wl,--export=<EXPORT>
--I${LIBC_DIR}/include -I${LIBSYS_WASM_DIR}/include -I${DRIVER_WASM_DIR}/include
-```
-
-libc sources (`src/libc/src/*.c`) are compiled together with the app sources
-in a single clang invocation.
-
-**Side effects:**
-
-- Appends `OUTPUT_APP` to the global property `WASMOS_WASM_APPS`.
-- Appends `target_name` to the global property `WASMOS_WASM_APP_TARGETS`.
-- Creates a companion `${target_name}_ide` OBJECT library.
-
-**Example:**
-
-```cmake
-wasmos_add_wasm_c_app_target(my_driver
-  SOURCE ${CMAKE_SOURCE_DIR}/src/drivers/my_driver/my_driver.c
-  OUTPUT_WASM ${BUILD_DIR}/my_driver.wasm
-  OUTPUT_APP  ${BUILD_DIR}/my_driver.wap
-  MANIFEST    ${CMAKE_SOURCE_DIR}/src/drivers/my_driver/linker.metadata
-  EXPORT      wasmos_main
-  STACK_SIZE  8192
-)
-```
+The mapping from symbols to compile flags lives in one place,
+`scripts/buildgen/toolchains.py`.
 
 ---
 
-### `wasmos_add_wasm_cpp_app_target(target_name)`
+## 5. Layout
 
-Identical to `wasmos_add_wasm_c_app_target` but uses `clang++` and applies the
-following additional C++ flags to suppress runtime-heavy features:
+| Path | Role |
+|------|------|
+| `configure` | Entry point: seed `.config`, discover tools, generate |
+| `scripts/buildgen/buildgen.py` | Project-agnostic core: Kconfig view, ninja writer, manifest API |
+| `scripts/buildgen/toolchains.py` | Tool discovery and named toolchain profiles |
+| `scripts/buildgen/wasmos_rules.py` | WASMOS helpers: guest and native modules, packing/AOT, ESP install, kernel blobs |
+| `BUILD.py` (root) | Host packer, `[deps]` check, `b.subdir(...)` in dependency order, quality targets |
+| `<component>/BUILD.py` | What one component builds |
+| `scripts/sdk/BUILD.py`, `scripts/sdk_stage.py` | The staged SDK |
+| `scripts/system/BUILD.py`, `scripts/stage_esp.py` | initfs, ESP, disk images, `run-qemu*` targets (loaded after every component) |
+| `tests/unit/BUILD.py` | Host unit tests |
+| `tools/clang_tidy_wasmos/BUILD.py` | The wasmos clang-tidy plugin |
 
-```
--fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit
-```
-
-Takes a single `SOURCE` (not `SOURCES`) argument. All other parameters and side
-effects are identical to the C variant.
-
-**Example:**
-
-```cmake
-wasmos_add_wasm_cpp_app_target(my_cpp_app
-  SOURCE      ${CMAKE_SOURCE_DIR}/examples/cpp/my_app.cpp
-  OUTPUT_WASM ${BUILD_DIR}/my_app.wasm
-  OUTPUT_APP  ${BUILD_DIR}/my_app.wap
-  MANIFEST    ${CMAKE_SOURCE_DIR}/examples/cpp/my_app.manifest.toml
-  EXPORT      wasmos_main
-)
-```
+Exports flow downward: a manifest reads what an earlier one published in
+`b.exports`, so the root manifest's `subdir` order is the dependency order.
 
 ---
 
-### `wasmos_add_native_c_app_target(target_name)`
+## 6. Toolchain Profiles
 
-Compiles C sources to x86-64 ELF and packs it into a `.wap` WASMOS-APP package.
-Used for drivers or services that need direct hardware access (ring-0 native
-execution rather than WASM sandbox execution).
+A profile is one target class: compiler, the flags every object of that class
+shares, and linker. Manifests select one with `b.toolchain(name)` and add only
+component-specific flags.
 
-Each source file is compiled to its own `.o` object in a separate
-`add_custom_command`, then all objects are linked in a second step.
+| Profile | Target | Used for |
+|---------|--------|----------|
+| `efi` | `x86_64-unknown-uefi`, lld-link | `BOOTX64.EFI` |
+| `kernel` | `KERNEL_TARGET_TRIPLE`, ld.lld | kernel C/C++/asm |
+| `kernel-warp` | as `kernel`, C++14 with exceptions and RTTI | WARP glue and vendored WARP |
+| `probe` | `x86_64-unknown-none-elf` | ring-3 native probe blobs |
+| `native` | `KERNEL_TARGET_TRIPLE`, flags per module | native ring-3 drivers and services |
+| `wasm32` | `wasm32-unknown-unknown` | sysroot libc/libsys |
+| `host` | host clang | `make_wasmos_app`, `mkfs_wfs`, `warp_aot` |
 
-**Parameters:**
-
-| Name              | Type        | Required | Default | Description                            |
-|-------------------|-------------|----------|---------|----------------------------------------|
-| `SOURCES`         | multi-value | yes      | —       | C source files                         |
-| `INCLUDES`        | multi-value | no       | —       | Include directories (added as `-I`)    |
-| `COMPILE_FLAGS`   | multi-value | no       | —       | Extra compiler flags per source        |
-| `HEADER_DEPS`     | multi-value | no       | —       | Header files that trigger a recompile  |
-| `LINK_FLAGS`      | multi-value | no       | —       | Extra linker flags                     |
-| `OUTPUT_ELF`      | single      | yes      | —       | Output ELF path                        |
-| `OUTPUT_APP`      | single      | yes      | —       | Output `.wap` path                     |
-| `MANIFEST`        | single      | yes      | —       | Metadata manifest file                 |
-| `ENTRYPOINT`      | single      | yes      | —       | ELF entry point symbol                 |
-| `IMAGE_BASE`      | single      | no       | —       | Optional `--image-base` for the linker |
-| `COMPILE_COMMENT` | single      | no       | —       | Custom compile status message          |
-| `LINK_COMMENT`    | single      | no       | —       | Custom link status message             |
-| `PACK_COMMENT`    | single      | no       | —       | Custom pack status message             |
-
-The linker is invoked directly (`lld`) with `-static -e <ENTRYPOINT>`.
-
-**Side effects:** identical to `wasmos_add_wasm_c_app_target`.
+Every profile is x86_64 today. A new architecture adds its profiles here rather
+than editing manifests. `b.toolchain(name, overrides={...})` evaluates the
+profiles as if some Kconfig symbols had other values; the kernel uses it to
+index the other runtime's glue.
 
 ---
 
-## 5. Target Types
+## 7. Manifest API
 
-### 5.1 Bootloader (`bootloader`)
+A manifest defines `build(b)`. The `Builder` it receives is scoped to the
+manifest's directory (`scripts/buildgen/buildgen.py`):
 
-**Source:** `src/boot/CMakeLists.txt`  
-**Output:** `build/BOOTX64.EFI`  
-**Target triple:** `x86_64-unknown-uefi`
+- `b.cfg.SYMBOL` — the resolved Kconfig value (bool, int or str);
+  `b.cfg.flag(name)` gives a bool as `0`/`1` for `-DNAME=` defines.
+- `b.src(path)` / `b.srcs(*paths)` — absolute source paths; `b.glob(pattern,
+  root=...)` globs at generation time (`**` recurses) and makes every matched
+  directory a regeneration input.
+- `b.toolchain(name).compile(sources, flags=..., cflags=..., cxxflags=...,
+  subdir=...)`, `.archive(out, objs)`, `.link(out, objs, flags=...)`.
+- `b.command(outputs, argv, inputs=..., implicit=..., cwd=..., depfile=...)` —
+  a custom step (an argv, or a list of argvs run in sequence); runs in the build
+  directory unless `cwd` is given.
+- `b.run_target(name, argv, deps=..., env=..., cwd=...)` — an always-run target
+  with the terminal attached (QEMU sessions, test runners).
+- `b.write_file(path, text)` — a generated input written at generation time,
+  touched only when its content changes.
+- `b.index(source, argv)` — a `compile_commands.json` entry without a build edge
+  (Section 10).
+- `b.alias(name, *targets, default=False)` — a phony target; `b.exports` — the
+  shared namespace; `b.subdir(*dirs)` — load child manifests.
 
-The bootloader is compiled in a single clang invocation targeting the UEFI PE
-format. It loads `kernel.elf` and `initfs.img` from the ESP, collects the UEFI
-memory map, exits boot services, and jumps to `_start` in the kernel.
+`scripts/buildgen/wasmos_rules.py` adds the WASMOS-specific steps:
 
-Compiler flags (`CFLAGS_EFI`):
-```
--ffreestanding -fno-stack-protector -fno-builtin
--target x86_64-unknown-uefi -fshort-wchar -mno-red-zone
-```
-
-Linker flags (`LDFLAGS_EFI`): COFF subsystem `efi_application`, entry `efi_main`
-(uses `lld-link` on macOS, `lld` with `--flavor link` on other platforms).
-
----
-
-### 5.2 Kernel (`kernel`)
-
-**Source:** `src/kernel/CMakeLists.txt`  
-**Output:** `build/kernel.elf`  
-**Target triple:** `x86_64-elf` (overridable via `KERNEL_TARGET_TRIPLE`)
-
-Each kernel source file is compiled individually to a `.o` object, then all
-objects are linked by `ld.lld` against `src/kernel/arch/x86_64/linker.ld`.
-
-Compiler flags (`CFLAGS_KERNEL`):
-```
--ffreestanding -fno-stack-protector -fno-builtin
--target x86_64-elf -mno-red-zone -mcmodel=kernel -m64 -fno-jump-tables
--DWASMOS_ENABLE_PREEMPT_GUARD=1 -DWASMOS_ENABLE_SAFEPOINT=1
-```
-
-The kernel also embeds several **blob objects** that are compiled separately and
-linked in as raw binary data:
-
-- `ring3_native_probe_blob.o` — a minimal ring-3 ELF probe for isolation testing
-- `ring3_thread_lifecycle_probe_blob.o` — ring-3 ELF probe for thread lifecycle
-  testing
-
-Each blob is produced by compiling a standalone C/ELF target, converting it to a
-raw binary with `llvm-objcopy`, then wrapping the binary in a linkable `.o`
-object file.
-
-The WASM3 interpreter sources (`libs/wasm3/source/m3_*.c`) are compiled with
-kernel-specific flags and linked in directly. The `libs/wasm3` subtree must
-never be modified.
+- `guest(b, name, sources, manifest=None, lang="c", flags=(), wasm=None,
+  cxx=False)` — build a module with the staged SDK driver for its language
+  (`c`, `zig`, `as`, `rust`, `go`) and pack it into `<name>.wap`; `manifest`
+  defaults to the directory's `linker.metadata`. C sources compile one object
+  each with a depfile and link in the listed order, which is part of the image.
+  A language whose Kconfig switch is off or whose tool is missing returns
+  `None` and builds nothing.
+- `pack(b, name, image, manifest)` — under WARP, a wasm module whose manifest
+  says `aot = true` is compiled by `warp_aot` and bundled with its `.warpbin`.
+- `native(b, name, objs, entry, image_base=None, elf=None)` and
+  `zig_object(b, out, root, includes, modules)` — native ring-3 modules: static
+  ELF, packed without AOT.
+- `asc_tool(b, name, source, wasm)` — a single-file AssemblyScript tool built
+  with `asc` directly (`date`, `sched_info`).
+- `install(b, dest, path)` — stage a file at `dest` on the ESP (`None` stages
+  nothing); `kernel_blob(b, payload)` — wrap a build output as an ELF object
+  for the kernel link.
 
 ---
 
-### 5.3 WASM C App (via `wasmos_add_wasm_c_app_target`)
+## 8. Artifacts
 
-**Output:** `.wasm` → `.wap`  
-**Runtime:** executed by wasm3 inside the process manager
+**Kernel** (`src/kernel/BUILD.py`): `CORE` plus the runtime's sources (wasm3
+glue and vendored wasm3, or WARP glue and vendored WARP), embedded blobs
+(`chardev_client.wasm` and the ring-3 native probes), linked twice: the first
+link's symbols feed `scripts/gen_kernel_kallsyms.py`, whose output links into
+the final `kernel.elf`. The source lists are in link order; the image layout
+follows it.
 
-Applies to: most drivers in `src/drivers/`, all services in `src/services/`
-(except the native Zig ones), and all C examples in `examples/c/`.
+**Bootloader** (`src/boot/BUILD.py`): `boot.c` compiled with the `efi` profile
+and linked by lld-link into `BOOTX64.EFI`.
 
-The `.wasm` binary must export the `wasmos_main` symbol (or another symbol
-specified by `EXPORT`). The process manager calls this export to start the
-component.
+**SDK** (`src/libc/BUILD.py`, `src/libsys/BUILD.py`, `scripts/sdk/BUILD.py`):
+`libc.a`, `libsys.a` and `crt1.o` in
+`wasmos-sdk/sysroot/lib/wasm32-unknown-wasmos`, then `scripts/sdk_stage.py`
+stages headers, the `wasmos-*` drivers, libexec, `share/` (including the CMake
+toolchain file for out-of-tree app builds) and `wasmos-sdk.conf`
+(`ninja -C <dir> wasmos-sdk`). Every guest module depends on the staged SDK.
+`docs/toolchain.md` documents the SDK.
 
-Memory layout is fixed at configure time via `INITIAL_MEMORY` / `MAX_MEMORY`.
-Default is 64 KiB (one WASM page). Graphics-heavy apps use 8 MiB.
+**Guest modules** (`guest()`): drivers, services, utilities and examples in C,
+Zig, AssemblyScript, Rust and Go. Rust and TinyGo embed the path their driver
+staged sources at (beside the `-o` output), so those modules are not
+byte-identical between two build directories; every other artifact is.
+
+**Native modules** (`native()`): framebuffer and framebuffer-pci drivers (C),
+gfx-compositor and font-service (Zig + C), net-stack (C with vendored lwIP and
+mbedTLS).
+
+**Host tools**: `make_wasmos_app` (the packer), `mkfs_wfs` (WFS formatter,
+built from the driver's own layout sources), `warp_aot` (WARP trees only).
+
+**System image** (`scripts/system/BUILD.py`): `initfs.img` and
+`initfs_config.bin` from `scripts/initfs.toml` (payloads are found by name in
+the build directory), `esp/` (Section 11), `wfs.img` and `wfs_virtio.img`
+(`mkfs_wfs --populate scripts/wfs`), `user.img` (`make_gpt_image.py` over
+`userfs/`), and `run/` copies of the three images that interactive sessions
+boot, so a session never mutates the fixtures the tests expect.
+
+**Checks**: `deps-check.stamp` runs `make_wasmos_app --check-deps` over every
+`linker.metadata`; a cycle in `[deps]` fails the build.
+
+Default targets: `kernel`, `bootloader`, `modules` (every packed module),
+`esp`, `images`, `check-deps`.
 
 ---
 
-### 5.4 WASM C++ App (via `wasmos_add_wasm_cpp_app_target`)
+## 9. Run and Test Targets
 
-Same runtime model as the C variant. The only differences are:
+Every run target passes the tree's own paths to the harness (`WASMOS_ESP`,
+`WASMOS_KERNEL`, `WASMOS_USERFS_IMAGE`, `WASMOS_WFS_IMAGE`,
+`WASMOS_WFS_VIRTIO_IMAGE`, `WASMOS_OVMF_CODE`, `WASMOS_OVMF_VARS`,
+`WASMOS_QEMU_SMP_COUNT`), so a suite tests the tree that launched it. QEMU
+targets share the tree's `esp/`; never run two at once.
 
-- `clang++` is used instead of `clang`.
-- C++ runtime features that require dynamic allocation or global constructors
-  are disabled: `-fno-exceptions -fno-rtti -fno-threadsafe-statics
-  -fno-use-cxa-atexit`.
-- Accepts only a single `SOURCE` argument.
+| Target | What it runs |
+|--------|--------------|
+| `run-qemu` / `run-qemu-ui` | interactive boot, serial / display, on the `run/` image copies; COM2 to `syslog.log` |
+| `run-qemu-debug` | as `run-qemu`, paused with a gdb stub on `QEMU_GDB_PORT` |
+| `run-qemu-test` | `scripts/qemu_halt_test.py`: boot to the CLI and halt (the pre-commit gate); `WASMOS_QEMU_TEST_TIMEOUT` sets its budget (default 120 s) |
+| `run-qemu-cli-test` | `scripts/run_unittest_suite.py --start-dir tests` with an isolated ESP per session; `WASMOS_TEST_BATTERY` selects one battery of `tests/batteries.json` |
+| `run-qemu-ui-test` | `scripts/qemu_ui_test.py` |
+| `run-qemu-sched-stress-test` | `scripts/qemu_sched_stress_test.py`; needs `WASMOS_SCHED_SMP_STRESS=y` |
+| `run-qemu-ring3-check`, `-ring3-threading-check`, `-ring3-fault-storm-check` | ring-3 marker tests in a tree configured with the probes |
+| `run-qemu-ring3-test`, `-ring3-threading-test`, `-ring3-fault-storm-test` | configure `<dir>/ring3*` (wasm3, `WASMOS_RING3_SMOKE`, `WASMOS_PM_TEST_HOOKS`, the parent's `WASMOS_TRACE`) and run its check |
+| `strict-ring3` | `run-qemu-test` then `run-qemu-ring3-test` |
+| `run-kernel-unit-tests` | every host unit suite (`tests/unit/BUILD.py`), in order, from the build directory |
+| `run-fat-image-tests` | `scripts/run_fat_image_test.sh` against formatter-built FAT images (skips without a formatter) |
+
+Host unit tests: C/C++ test binaries are build edges (`unit-test-binaries`),
+so they compile in parallel and rebuild only when an input changes; the run
+target executes them, then the AssemblyScript, Go, Rust and Zig suites, and
+stops at the first failure. Sanitizer builds use the platform SDK's clang on
+macOS. The WARP host coroutine test builds on x86_64 hosts of a WARP tree.
 
 ---
 
-### 5.5 Native C App (via `wasmos_add_native_c_app_target`)
+## 10. Quality Gates and the Compile Database
 
-**Output:** `.elf` → `.wap`  
-**Runtime:** loaded and executed directly as ring-0 code (no WASM sandbox)
+`fmt`, `fmt-check`, `lint` and `quality` run `scripts/quality.sh` with the
+tools the tree resolved and `QUALITY_BUILD_DIR` set to the tree; `lint` builds
+the wasmos clang-tidy plugin first. Run directly, the script reads the same tool
+paths from `$QUALITY_BUILD_DIR/buildgen-tools.json` (default `out/default`).
 
-Used for drivers that need direct hardware access (`framebuffer`,
-`framebuffer_pci`, `virtio_net`, `virtio_rng`) and for the native C
-`net_stack` service (registered as `net_stack_app`,
-`src/services/net_stack/CMakeLists.txt`), which links the lwIP core the same
-way. The ELF is a static freestanding binary. The process manager identifies it
-as a native payload through the manifest metadata and maps it directly rather
-than passing it to wasm3.
+`compile_commands.json` carries every first-party source with the flags of the
+build step that compiles it. Real compile edges record themselves; `b.index`
+adds entries where the real compile is not a plain clang command a tool can
+replay or happens only in another configuration: guest C sources (indexed with
+the `wasm32` flags against the in-tree headers), C sources a Zig/Rust/Go driver
+compiles, each source of a multi-source unit test (with that test's flags), the
+other runtime's kernel glue (with that runtime's flags), libsys entry shims, the
+SDK hello app, `warp_aot` in a wasm3 tree, the WARP host test and the plugin.
+`skills/wasmos-ide-targets` covers auditing and fixing coverage; CLion opens the
+tree as a compilation-database project.
 
 ---
 
-### 5.6 AssemblyScript App
+## 11. ESP Layout
 
-**Source:** `examples/assemblyscript/CMakeLists.txt`, `src/drivers/serial/`,
-`keyboard/`, `mouse/`, `rtc/`  
-**Tool:** `asc` (AssemblyScript compiler, installed via npm)  
-**Output:** `.wasm` → `.wap`
-
-The app's TypeScript source and a shared `runtime.ts` are staged into a
-temporary build directory and compiled with:
+`scripts/system/BUILD.py` writes `esp-plan.json` (every `install()` destination
+plus the fixed files below) and `scripts/stage_esp.py` populates `esp/` from it,
+copying only files whose content changed. Entries outside the plan are left
+alone: QEMU's `fat:rw:` backend writes `NvVars`, and tests write fixtures.
 
 ```
-asc entry.ts --target release -Osize --runtime stub --noAssert
-```
-
-The packing step is the same as for C WASM apps.
-
----
-
-### 5.7 Rust App
-
-**Source:** `examples/rust/CMakeLists.txt`  
-**Tool:** `rustc` (not Cargo)  
-**Output:** `.wasm` → `.wap`
-
-Compiled directly with `rustc`:
-
-```
-rustc --target=wasm32-unknown-unknown -O -C opt-level=z
-      -C panic=abort -C codegen-units=1
-      -C link-arg=--no-entry -C link-arg=--export=wasmos_main
-      -C link-arg=--strip-all
-      -C link-arg=--initial-memory=2097152
-      -C link-arg=--max-memory=2097152
-      --crate-type=cdylib
-```
-
-Each Rust example links against `wasmos.rs` (the Rust runtime shim).
-
----
-
-### 5.8 Go App (TinyGo)
-
-**Source:** `examples/go/CMakeLists.txt`  
-**Tool:** `tinygo`  
-**Output:** `.wasm` → `.wap`
-
-TinyGo is only used if it is found at configure time (`GO_AVAILABLE`).
-Sources are staged to the build directory and compiled with:
-
-```
-tinygo build -target=wasm -opt=z -no-debug -panic=trap
-             -scheduler=none -gc=leaking
-```
-
-`GO111MODULE=off` is set to avoid module resolution in the staged directory.
-
----
-
-### 5.9 Zig WASM App
-
-**Source:** `examples/zig/CMakeLists.txt`  
-**Tool:** `zig`  
-**Output:** `.wasm` → `.wap`
-
-Zig is only used if it is found at configure time (`ZIG_AVAILABLE`).
-Sources are staged to an isolated directory (separate `--cache-dir` and
-`--global-cache-dir`) and compiled with:
-
-```
-zig build-exe -target wasm32-freestanding -O ReleaseSmall
-              -fno-entry -fstrip --export=wasmos_main
-```
-
----
-
-### 5.10 Zig Native Service
-
-**Source:** `src/services/gfx_compositor/`, `src/services/font_service/`  
-**Tool:** `zig` + `lld`  
-**Output:** `.elf` → `.wap`
-
-These services use Zig targeting `x86_64-freestanding` and link against the
-native `libsys` shim. The build is four steps:
-
-1. **Compile Zig to object** — `zig build-obj -target x86_64-freestanding`
-2. **Compile `libsys_native.c` to object** — exposes the `libsys` host-call
-   ABI at the C level
-3. **Link both objects to ELF** — `lld -e initialize -static`
-4. **Pack ELF into `.wap`** — `make_wasmos_app --manifest ...`
-
-The ELF entrypoint is `initialize` (not `main`). The process manager loads it
-as a native payload, identical to native C apps.
-
----
-
-## 6. Infrastructure Targets
-
-### `make_wasmos_app`
-
-A host-native C executable built from `scripts/make_wasmos_app.c`. It packs a
-raw WASM binary or ELF file together with a manifest file into the `.wap`
-WASMOS-APP container format.
-
-```
-make_wasmos_app --manifest <file> --in <binary> --out <file.wap>
-```
-
-All app and driver build targets depend on this tool.
-
----
-
-### `make_initfs`
-
-Builds `build/initfs.img` — the initial RAM filesystem that the bootloader loads
-alongside the kernel. It contains drivers, services, and smoke apps that must be
-available before the FAT filesystem is mounted.
-
-The image is assembled by `scripts/make_initfs.py` from the manifest
-`scripts/initfs.toml`. `make_initfs` depends on all C example targets, all
-driver targets, and all service targets.
-
----
-
-### `wasm_driver_blobs`
-
-An aggregate target that depends on all kernel-embedded blob targets
-(`ring3_native_probe_blob`, `ring3_thread_lifecycle_probe_blob`). The `kernel`
-target depends on `wasm_driver_blobs` to ensure blobs are ready before linking.
-
----
-
-### `kconfig-defconfig`
-
-Seeds `build/.config` from `configs/wasmos_defconfig` and imports it into the
-CMake cache via `scripts/kconfig_to_cmake.py`.
-
----
-
-### `menuconfig` / `kconfiglib-menuconfig`
-
-Opens an interactive Kconfig editor. `menuconfig` prefers a system-installed
-binary (`menuconfig`, `nconfig`, `kconfig-mconf`, `mconf`) and falls back to
-the Python `kconfiglib` editor if none are found.
-`kconfiglib-menuconfig` always uses the Python editor.
-
----
-
-### `run-kernel-unit-tests`
-
-Compiles and runs host-native unit tests from `tests/unit/` using the system C
-compiler. Current suites:
-
-- `test_list` — kernel list data-structure correctness
-- `test_hashmap` — hashmap correctness
-- `test_device_manager_rules` — device manager rule matching
-- `test_fs_manager_path` — VFS path resolution
-- `test_subsystem_registry` — subsystem registry behavior
-- `test_service_class_registry` — service class registry behavior
-- `test_wasmos_exec_format` — WASMOS-APP exec-format parsing
-- `test_user_mutex` — user-space mutex behavior
-- `test_libc_stdio` — libc stdio surface
-- `test_libc_stdlib` — libc stdlib surface
-- `test_vring` — virtio vring transport
-- `test_ringbuf` — SPSC byte-ring transport
-- `test_heap_native` — native-service heap slab allocator
-- `test_net_socket` — net-stack socket state/ring core
-- `test_net_ifcfg` — net interface configuration
-- `test_xfer_buffer_object` — xfer-buffer owner/relay routing, borrow/release/DMA
-  state transitions, and multi-grant borrow contract (a single binary; not the
-  earlier per-aspect split)
-- `test_kernel_sync_primitives` — kernel mutex/semaphore primitive behavior with host scheduler/thread stubs
-- `test_warp_driver_ring3_call_policy` — WARP ring3 driver-ring call policy
-- native/WASM coroutine and IPC-future suites (`test_native_coroutine`,
-  `test_native_ipc_future`, `test_wasm_coroutine`, `test_wasm_coroutine_rust`)
-
-These tests run on the host (no QEMU) and do not depend on `bootloader` or
-`kernel`.
-
----
-
-## 7. QEMU and Test Targets
-
-All QEMU targets share a common setup: they copy `BOOTX64.EFI`, `kernel.elf`,
-`initfs.img`, drivers, services, and app `.wap` files to `build/esp/`, then
-invoke a Python test runner or QEMU directly.
-
-QEMU targets that require OVMF are only defined when both `OVMF_CODE` and
-`OVMF_VARS` are found. QEMU targets that use a ring-3 shadow tree (see below)
-are always defined.
-
-**Do not run integration QEMU targets in parallel.** They share the mutable
-`build/esp/` directory and parallel runs cause file-copy conflicts.
-
-| Target                            | Needs OVMF_VARS | Description                                                        |
-|-----------------------------------|-----------------|--------------------------------------------------------------------|
-| `run-qemu`                        | yes             | Interactive QEMU with serial console (nographic)                   |
-| `run-qemu-debug`                  | yes             | Paused QEMU with GDB stub on `QEMU_GDB_PORT`                       |
-| `run-qemu-ui`                     | yes             | Interactive QEMU with graphics window                              |
-| `run-qemu-test`                   | yes             | Automated halt smoke test (`qemu_halt_test.py`)                    |
-| `run-qemu-cli-test`               | yes             | Full CLI integration suite (`run_unittest_suite.py`)               |
-| `run-qemu-ui-test`                | optional        | Graphics UI smoke test (`qemu_ui_test.py`)                         |
-| `run-qemu-ring3-test`             | yes             | Ring-3 isolation marker test (shadow build tree)                   |
-| `run-qemu-ring3-threading-test`   | yes             | Ring-3 thread lifecycle marker test (shadow tree)                  |
-| `run-qemu-ring3-fault-storm-test` | yes             | Ring-3 multi-process fault-storm test (shadow tree)                |
-| `strict-ring3`                    | yes             | Gate profile: `run-qemu-test` + `run-qemu-ring3-test` sequentially |
-| `run-kernel-unit-tests`           | no              | Host-native unit tests (no QEMU)                                   |
-
-### Shadow Build Trees for Ring-3 Tests
-
-Ring-3 tests (`run-qemu-ring3-test`, `run-qemu-ring3-threading-test`,
-`run-qemu-ring3-fault-storm-test`) configure and build a second, independent
-CMake tree under `build/ring3/`, `build/ring3-threading/`, or
-`build/ring3-fault-storm/` with specific feature flags enabled
-(`-DWASMOS_RING3_SMOKE=ON -DWASMOS_PM_TEST_HOOKS=ON`). This avoids polluting
-the main build tree and ensures the tested kernel binary has the probe enabled.
-
----
-
-## 8. Global Property Tracking
-
-CMake global properties are used to aggregate targets across subdirectories
-without requiring each subdirectory to know about its siblings.
-
-| Property                     | Content                                              |
-|------------------------------|------------------------------------------------------|
-| `WASMOS_WASM_APPS`           | List of all `.wap` output file paths                 |
-| `WASMOS_WASM_APP_TARGETS`    | List of all custom targets that produce `.wap` files |
-| `WASMOS_KERNEL_BLOBS`        | List of embedded blob `.o` output file paths         |
-| `WASMOS_KERNEL_BLOB_TARGETS` | List of custom targets that produce kernel blobs     |
-
-After all `add_subdirectory()` calls, the root reads these properties and
-establishes the necessary `add_dependencies()` edges:
-
-- All `WASMOS_WASM_APP_TARGETS` depend on `make_wasmos_app`.
-- `wasm_driver_blobs` depends on all `WASMOS_WASM_APP_TARGETS` and
-  `WASMOS_KERNEL_BLOB_TARGETS`.
-- `kernel` depends on `wasm_driver_blobs`.
-
----
-
-## 9. ESP Layout
-
-QEMU targets populate `build/esp/` as a FAT filesystem image:
-
-```
-build/esp/
+<dir>/esp/
 ├── EFI/BOOT/BOOTX64.EFI       # UEFI bootloader
-├── kernel.elf                 # Kernel ELF binary
-├── initfs.img                 # Initial RAM filesystem
+├── kernel.elf                 # kernel
+├── kernel.cmdline             # kernel command line (scripts/system/kernel.cmdline)
+├── initfs.img                 # boot-phase drivers and services
 ├── startup.nsh                # UEFI shell startup script
-├── apps/                      # User-facing applications
-│   ├── hello_c.wap
-│   ├── hello_rust.wap
-│   ├── hello_as.wap
-│   ├── hello_zig.wap
-│   ├── hello_go.wap
-│   ├── sysinit.wap
-│   ├── cli.wap
-│   ├── vt.wap
-│   └── ...smoke test apps...
-├── system/
-│   ├── drivers/               # Hardware drivers loaded by device-manager
-│   │   ├── serial.wap
-│   │   ├── keyboard.wap
-│   │   ├── mouse.wap
-│   │   ├── rtc.wap
-│   │   ├── ata.wap
-│   │   ├── fs_fat.wap
-│   │   ├── framebuf.wap
-│   │   └── framebuf_pci.wap
-│   ├── services/              # System services
-│   │   ├── sysinit.wap
-│   │   ├── cli.wap
-│   │   ├── vt.wap
-│   │   ├── device_manager.wap
-│   │   ├── pci_bus.wap
-│   │   ├── acpi_bus.wap
-│   │   ├── gfxcomp.wap
-│   │   └── fontsvc.wap
-│   ├── devmgr/rules/          # Runtime device-manager policy rules
-│   ├── fonts/                 # TTF fonts for the font service
-│   └── utils/                 # System utility apps (date.wap, etc.)
-└── large_read.txt             # Test fixture for large-read smoke test
+├── large_read.txt, write_smoke.txt   # test fixtures
+├── apps/                      # applications and smoke-test apps
+└── system/
+    ├── drivers/               # hardware drivers loaded by device-manager
+    ├── services/              # system services
+    ├── utils/                 # /system/utils tools
+    ├── devmgr/rules/          # device-manager policy (scripts/system/devmgr/rules)
+    ├── keymaps/               # scripts/system/keymaps
+    ├── fonts/                 # TTF fonts for the font service
+    ├── net/interfaces, net/certificates/ca-certs.pem
+    └── sysinit.rc
 ```
 
-`initfs.img` contains drivers and services needed before the FAT filesystem is
-available (boot phase). Hardware drivers live on the ESP and are loaded by
-`device-manager` after `fs-fat` mounts `/boot`.
+`initfs.img` holds the drivers and services needed before `/boot` is mounted
+(`scripts/initfs.toml`); hardware drivers live on the ESP and are loaded by
+device-manager afterwards. The TLS trust store is fetched on demand
+(`scripts/fetch-ca-certs.sh`); without it the ESP carries an empty placeholder
+and the build stays offline.
 
 ---
 
-## 10. Full Dependency Graph
+## 12. Adding a Component
 
-```
-make_wasmos_app (host executable, built first)
-    │
-    ├── wasmos_add_wasm_c_app_target targets
-    │       (drivers, services, C examples → *.wap)
-    ├── wasmos_add_native_c_app_target targets
-    │       (framebuffer driver → *.wap)
-    ├── AssemblyScript / Rust / Go / Zig example targets
-    │       (*.wap)
-    └── kernel blob targets
-            (ring3_probe blobs)
+A component is a `BUILD.py` in its directory plus that directory in the
+parent's `b.subdir(...)`:
 
-wasm_driver_blobs
-    └── depends on: all *.wap targets + all blob targets
+```python
+"""ata: driver guest module."""
 
-bootloader → build/BOOTX64.EFI
+from wasmos_rules import guest, install
 
-kernel
-    └── depends on: wasm_driver_blobs
-    └── output: build/kernel.elf
 
-make_initfs
-    └── depends on: c_examples, drivers, services
-    └── output: build/initfs.img
-
-run-qemu / run-qemu-test / run-qemu-cli-test / run-qemu-debug
-    └── depends on: bootloader, kernel, make_initfs,
-                    c_examples, services, drivers,
-                    [assemblyscript_examples], [rust_examples],
-                    [go_examples], [zig_examples],
-                    [system_utils]
+def build(b):
+    wap = guest(b, "ata", [b.src("ata.c")])
+    install(b, "system/drivers/ata.wap", wap)
 ```
 
----
+- **Multi-file module:** list every source, in link order, in `guest()`.
+  Sources outside the directory are `b.root / "path"`; extra include
+  directories go in `flags=[f"-I{...}"]`.
+- **Async service or driver:** list `src/libsys/wasm/service_async_entry_wasm.c`
+  first (see `src/services/logger/BUILD.py`).
+- **Zig, AssemblyScript, Rust, Go:** `guest(..., lang="zig")` etc., listing the
+  module's own sources and the `.c` shims it links
+  (`src/drivers/virtio_blk/BUILD.py`).
+- **Native ring-3 module:** compile with `b.toolchain("native")` and link with
+  `native()` (`src/drivers/framebuffer/BUILD.py`,
+  `src/services/gfx_compositor/BUILD.py`).
+- **Boot-phase module:** name its `.wap` in `scripts/initfs.toml` instead of
+  installing it; initfs finds it by name in the build directory.
+- **Host unit test:** add an entry pair to `TESTS` in `tests/unit/BUILD.py` —
+  `(CC, "test_x", [*C11, ..., sources])` and `(RUN, "test_x", [])` — see
+  `skills/wasmos-regression-test`.
 
-## 11. Adding a New App or Driver
-
-### WASM C App or Driver
-
-1. Create `src/drivers/my_driver/` (or `src/services/`, `examples/c/`) with
-   your `.c` source and a `linker.metadata` manifest.
-2. Add a `CMakeLists.txt` (or extend an existing one) calling:
-
-   ```cmake
-   wasmos_add_wasm_c_app_target(my_driver
-     SOURCE  ${CMAKE_SOURCE_DIR}/src/drivers/my_driver/my_driver.c
-     OUTPUT_WASM ${BUILD_DIR}/my_driver.wasm
-     OUTPUT_APP  ${BUILD_DIR}/my_driver.wap
-     MANIFEST    ${CMAKE_SOURCE_DIR}/src/drivers/my_driver/linker.metadata
-     EXPORT      wasmos_main
-   )
-   ```
-3. If it is a new subdirectory, add `add_subdirectory(src/drivers/my_driver)`
-   to `src/drivers/CMakeLists.txt`.
-4. Reference the `OUTPUT_APP` variable in the relevant QEMU target copy
-   commands in the root `CMakeLists.txt` and add it to `initfs.toml` if it
-   needs to be available before the FAT filesystem mounts.
-
-### Native C Driver
-
-Same as above, but use `wasmos_add_native_c_app_target` and set `ENTRYPOINT`
-to your driver's entry function.
-
-### WASM C++ Module
-
-Use `wasmos_add_wasm_cpp_app_target`. Provide a single `SOURCE` file. Follow
-the same steps as the C app.
-
-### AssemblyScript, Rust, Go, or Zig App
-
-Follow the pattern in the corresponding `examples/<lang>/CMakeLists.txt`. Each
-language has slightly different staging and compiler invocation, but the final
-`make_wasmos_app` packing step is the same.
+The next `ninja` regenerates the build, compiles the module, and stages it.

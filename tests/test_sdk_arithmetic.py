@@ -19,10 +19,18 @@ import os
 import re
 import subprocess
 import tempfile
+import sys
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-BUILD_DIR = os.environ.get("WASMOS_BUILD_DIR", os.path.join(ROOT, "build"))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from scripts.qemu_test_framework import default_build_dir  # noqa: E402
+
+BUILD_DIR = os.environ.get(
+    "WASMOS_BUILD_DIR", default_build_dir(os.path.join(ROOT, "out", "default"))
+)
 WASMOS_CLANG = os.path.join(BUILD_DIR, "wasmos-sdk", "bin", "wasmos-clang")
 
 # Every builtin a wasm32 module can end up needing, measured by compiling each
@@ -67,7 +75,7 @@ int main(void) { return (int)((a / b) * b); }
 
 @unittest.skipUnless(
     os.access(WASMOS_CLANG, os.X_OK),
-    "SDK not staged (cmake --build build --target wasmos-sdk)",
+    "SDK not staged (ninja -C <build-dir> wasmos-sdk)",
 )
 class SdkArithmeticTest(unittest.TestCase):
     def _compile(self, source: str, name: str) -> subprocess.CompletedProcess:

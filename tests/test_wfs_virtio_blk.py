@@ -12,8 +12,8 @@ A SECOND IMAGE, NOT THE SAME ONE TWICE
 Both volumes are now selected by mount rules that name them by uuid, and one
 file attached twice carries one uuid -- so the two mounts would be indis-
 tinguishable to policy and /wfs would bind to whichever volume the boot happened
-to recognise first. mkfs_wfs pins a different uuid for each image (WFS_IMAGE_UUID
-and WFS_VIRTIO_IMAGE_UUID in CMakeLists.txt), which is what makes the two rules
+to recognise first. mkfs_wfs pins a different uuid for each image (WFS_UUID
+and WFS_VIRTIO_UUID in scripts/system/BUILD.py), which is what makes the two rules
 deterministic.
 
 It also puts a THIRD block_fs rule in the boot rule set. Rules after the first

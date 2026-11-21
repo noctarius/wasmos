@@ -127,7 +127,7 @@ const TITLE_GLYPHS: []const u8 = "win 0123456789abcdefghijklmnopqrstuvwxyzABCDEF
 const GFX_TITLE_TEXT_ENABLED: bool = true;
 const build_options = @import("build_options");
 /// Enable per-event serial traces for click/pointer/present debugging.
-/// Controlled by cmake -DWASMOS_TRACE=ON (mirrors the C-side WASMOS_TRACE flag).
+/// Controlled by the WASMOS_TRACE Kconfig option (mirrors the C-side WASMOS_TRACE flag).
 const GFX_TRACE: bool = build_options.gfx_trace;
 // Accepted range for a window's (and a shared buffer's) content dimensions, in
 // pixels.  Both create and resize validate against these and answer

@@ -1,16 +1,13 @@
 """Every built module's memory limits match its manifest's [link] section.
 
-The linker's memory configuration used to live in CMake arguments -- four
-different spellings across four language helpers -- while the kernel's resource
-hints lived in the manifest. Two places, neither next to the other, for values that
-are load-bearing rather than stylistic: an app that maps shared memory, a
-framebuffer or socket rings has to reserve linear memory up front, because those
-windows are placed above a 2 MiB floor and above live data. `[link]` moved them into
-the manifest, in bytes whatever the language, and every helper reads them at
-configure time.
+A module's linear-memory sizes are load-bearing rather than stylistic: an app that
+maps shared memory, a framebuffer or socket rings has to reserve linear memory up
+front, because those windows are placed above a 2 MiB floor and above live data.
+They live in the manifest's `[link]` section, in bytes whatever the language,
+beside the kernel's resource hints, and every SDK driver reads them at link time.
 
-Reading them at configure time is exactly what makes this test worth having. A
-manifest edit that CMake does not notice, a section-parsing slip that finds
+Reading them at link time is exactly what makes this test worth having. A
+manifest edit the build does not notice, a section-parsing slip that finds
 [resources]'s stack_pages instead of [link]'s stack_size, or a default that drifts
 from the one the helper applies, all produce a module that links fine and is sized
 wrong -- and a module sized wrong does not fail at the link step. It traps later,
@@ -27,11 +24,11 @@ import unittest
 from scripts.qemu_test_framework import default_build_dir
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-# The tree the suite was started from (WASMOS_KERNEL, set by every CMake test
-# target), not a fixed "build": a stale sibling tree holds packages of an older
+# The tree the suite was started from (WASMOS_KERNEL, set by every run target),
+# not a fixed directory: a stale sibling tree holds packages of an older
 # .wap version that this checkout's reader rightly refuses.
 BUILD_DIR = os.environ.get(
-    "WASMOS_BUILD_DIR", default_build_dir(os.path.join(ROOT, "build"))
+    "WASMOS_BUILD_DIR", default_build_dir(os.path.join(ROOT, "out", "default"))
 )
 
 WASM_PAGE = 65536
@@ -72,7 +69,7 @@ def module_memory_limits(data: bytes) -> tuple[int, int | None]:
 
 
 def manifest_link_values(path: str) -> dict[str, int]:
-    """The [link] section's integer keys. Section-aware, like the CMake reader."""
+    """The [link] section's integer keys. Section-aware, like the SDK drivers' reader."""
     values: dict[str, int] = {}
     section = ""
     with open(path, encoding="utf-8") as handle:

@@ -87,7 +87,7 @@ config WASMOS_PM_LIST_ARRAY_CHUNK_CAP
 
 choice
     prompt "WASM runtime backend"
-    default WASMOS_WASM_RUNTIME_WASM3
+    default WASMOS_WASM_RUNTIME_WARP
 
 config WASMOS_WASM_RUNTIME_WASM3
     bool "wasm3 (interpreter)"
@@ -101,6 +101,21 @@ config WASMOS_WASM_RUNTIME_WARP
       Requires the freestanding C++ ABI shim in the kernel (warp_shim.cpp).
 
 endchoice
+
+config WASMOS_WARP_RUNTIME_LOAD_AOT
+    bool "Load bundled AOT binaries at runtime"
+    default y
+    help
+      When disabled, every WARP app takes the JIT path (initFromBytecode)
+      without changing any packed artifact, so an AOT build and a JIT build
+      differ only in the kernel.
+
+config WASMOS_SCHED_SMP_STRESS
+    bool "Run the standalone SMP scheduler stress test"
+    default n
+    help
+      Spawn a cross-CPU token-ring stress and invariant test before the
+      scheduler loop starts (kernel_sched_smp_stress_runtime.c).
 
 config KERNEL_TARGET_TRIPLE
     string "Kernel target triple"

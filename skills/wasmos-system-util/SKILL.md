@@ -1,6 +1,6 @@
 ---
 name: wasmos-system-util
-description: Create, wire, and validate a new WASMOS system utility — a one-shot CLI tool (`.wap`, kind="app") under src/utils/ that reads an argument string, does its work via libc (stdio/FS) and service IPC, then exits. Covers the main()/STARTUP_SHIM entry, arg parsing, service-client IPC, linker.metadata, build via wasmos_add_wasm_c_app_target, ESP placement under /boot/system/utils, and CLI PATH resolution. Use when adding a tool under src/utils/ (cat, ip, host, ps, curl, …).
+description: Create, wire, and validate a new WASMOS system utility — a one-shot CLI tool (`.wap`, kind="app") under src/utils/ that reads an argument string, does its work via libc (stdio/FS) and service IPC, then exits. Covers the main()/crt1.o entry, arg parsing, service-client IPC, linker.metadata, build via a BUILD.py manifest (guest() + install()), ESP placement under /boot/system/utils, and CLI PATH resolution. Use when adding a tool under src/utils/ (cat, ip, host, ps, curl, …).
 ---
 
 # WASMOS System Utility
@@ -23,15 +23,16 @@ unregistered, `int main()`.
 1. Author `src/utils/<name>/<name>.c` as an ordinary `int main(void)`.
 2. Read args, do work via libc (stdio/FS) and — if needed — service IPC as a client; return an exit code.
 3. Declare `linker.metadata` (`kind = "app"`, `entry = "wasmos_main"`).
-4. Add `CMakeLists.txt` with `wasmos_add_wasm_c_app_target(... STARTUP_SHIM)`; register it.
-5. Copy the `.wap` to `esp/system/utils/` and attach it to the `system_utils` target.
+4. Add a `BUILD.py` with `guest(...)`; list the dir in `src/utils/BUILD.py`.
+5. `install(...)` the `.wap` at `system/utils/<name>.wap` on the ESP.
 6. Run it from the CLI (typed by name via PATH); verify in QEMU.
 
 ## Step 1: Author `main()`
 
-Write an ordinary C program with `int main(void)`. The build's `STARTUP_SHIM`
-supplies the actual `wasmos_main` export (`src/libc/src/startup.c`), which calls
-`main()` and `proc_exit`s with its return value — so you never write
+Write an ordinary C program with `int main(void)`. The SDK driver
+(`wasmos-clang`) links `crt1.o` (built from `src/libc/src/startup.c`) into every
+package whose manifest `entry` is `wasmos_main`; it supplies the actual
+`wasmos_main` export, which calls `main()` and `proc_exit`s with its return value — so you never write
 `wasmos_main` or `proc_exit` yourself. Real example `src/utils/host/host.c:58`:
 
 ```c
@@ -43,7 +44,7 @@ int main(void) {
     (void)wasmos_startup_args(args, sizeof(args));   // host.c:70 — the argument string
     /* parse args, do work, print, return an exit code */
     puts("...");           // libc stdio → stdout (routed to the CLI/VT)
-    return 0;              // STARTUP_SHIM turns this into proc_exit(0)
+    return 0;              // crt1.o turns this into proc_exit(0)
 }
 ```
 
@@ -67,7 +68,7 @@ Real example (`src/utils/host/linker.metadata`) — note `kind = "app"`:
 version = 1
 [package]
 name  = "host"
-entry = "wasmos_main"     # provided by the STARTUP_SHIM
+entry = "wasmos_main"     # provided by crt1.o
 kind  = "app"
 native = false
 aot = true
@@ -80,36 +81,33 @@ flags = 0
 ```
 Most utils need only `ipc.basic` (they reach hardware indirectly, via a service).
 
-## Step 4: Build (CMake)
+## Step 4: Build (BUILD.py)
 
-Per-util `CMakeLists.txt`, using the shared helper with `EXPORT wasmos_main` +
-`STARTUP_SHIM` (`src/utils/host/CMakeLists.txt`):
-```cmake
-wasmos_add_wasm_c_app_target(host_util
-  SOURCE      ${WASM_HOST_SRC}
-  OUTPUT_WASM ${WASM_HOST_WASM}
-  OUTPUT_APP  ${WASM_HOST_APP}
-  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
-)
+Per-util `BUILD.py` manifest using `guest()` from
+`scripts/buildgen/wasmos_rules.py` (`src/utils/host/BUILD.py`):
+```python
+from wasmos_rules import guest, install
+
+
+def build(b):
+    wap = guest(b, "host", [b.src("host.c")])
+    install(b, "system/utils/host.wap", wap)
 ```
-The helper (root `CMakeLists.txt:476`) compiles the wasm, packs the `.wap`, and
-appends to `WASMOS_WASM_APPS` / `WASMOS_WASM_APP_TARGETS`. Add
-`add_subdirectory(<name>)` in `src/utils/CMakeLists.txt`, and attach the target to
-the `system_utils` aggregate there (the `foreach(_util …)` list) so the run
-targets rebuild it. (Zig/AssemblyScript utils exist too, e.g. `date`; mirror the
-driver/service skills' non-C helpers.)
+`guest()` compiles through the staged SDK driver, links with the directory's
+`linker.metadata` (entry, `[link]` memory sizes), and packs `<name>.wap`; under
+WARP an `aot = true` manifest is AOT-compiled and bundled. Add the directory name
+to `b.subdir(...)` in `src/utils/BUILD.py`; `build.ninja` regenerates on the
+next `ninja` run. Non-C utils pass `lang=` (`"zig"`, `"rust"`, `"go"`, `"as"`);
+a single-file AssemblyScript tool uses `asc_tool(b, name, source, wasm)`
+(`src/utils/date/BUILD.py`).
 
 ## Step 5: Place the `.wap` on the ESP
 
-Utilities live at `/boot/system/utils/<name>.wap`. Add a copy step in the root
-`CMakeLists.txt` alongside the others (`CMakeLists.txt:1363+`):
-```cmake
-COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
-```
-(No `sysinit.rc` entry — utilities are on-demand, not boot-started.)
+Utilities live at `/boot/system/utils/<name>.wap`. The `install(b,
+"system/utils/<name>.wap", wap)` call in Step 4 stages it; the `esp` target
+(part of the default `ninja -C out/<dir>` build) copies it to
+`out/<dir>/esp/system/utils/`. (No `sysinit.rc` entry — utilities are on-demand,
+not boot-started.)
 
 ## Step 6: Run + verify
 
@@ -118,7 +116,9 @@ The CLI resolves a bare command name through its `PATH`
 `src/services/cli/cli.c:237`) and path-spawns the `.wap` with the typed argument
 string. So:
 ```sh
-cmake -S . -B build && cmake --build build --target run-qemu-test
+./configure out/wasm3-smp configs/wasm3_smp_defconfig
+ninja -C out/wasm3-smp run-qemu-test   # boot gate
+ninja -C out/wasm3-smp run-qemu        # interactive session
 # then in the guest CLI:
 #   host example.com
 #   cat /boot/system/net/interfaces

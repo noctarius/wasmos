@@ -10,12 +10,14 @@ format, the `make_wasmos_app` packaging tool, and the language-shim ABI that
 lets C, Rust, Go, Zig, and AssemblyScript programs share a single
 kernel-facing entry point.
 
-Two WASM runtime backends are available, selected at CMake configure time:
+Two WASM runtime backends are available, selected by the Kconfig choice in a
+build directory's `.config` (seeded from a defconfig, e.g.
+`configs/warp_smp_defconfig`):
 
-| Backend             | CMake flag                      | Character                                           |
-|---------------------|---------------------------------|-----------------------------------------------------|
-| **wasm3** (default) | *(none)*                        | Tree-walking interpreter; pure C; minimal footprint |
-| **WARP**            | `-DWASMOS_WASM_RUNTIME_WARP=ON` | Single-pass x86_64 JIT compiler; near-native speed  |
+| Backend             | Kconfig symbol                    | Character                                           |
+|---------------------|-----------------------------------|-----------------------------------------------------|
+| **wasm3** (default) | `WASMOS_WASM_RUNTIME_WASM3=y`     | Tree-walking interpreter; pure C; minimal footprint |
+| **WARP**            | `WASMOS_WASM_RUNTIME_WARP=y`      | Single-pass x86_64 JIT compiler; near-native speed  |
 
 Both backends implement the same `wasm_driver_t` API and pass `run-qemu-test`.
 
@@ -319,9 +321,12 @@ package ABI. Current in-tree tags:
 used by the build system.
 
 **Build targets:**
-- `cmake --build build --target make_wasmos_app` builds the packer
-- Each `CMakeLists.txt` component invokes `make_wasmos_app --manifest` as a
-  post-build step to produce the `.wap` artifact
+- `ninja -C out/<dir> make_wasmos_app` builds the packer (root `BUILD.py`)
+- Each component's `BUILD.py` packs its module through `guest()` / `pack()` /
+  `native()` in `scripts/buildgen/wasmos_rules.py`, which run
+  `make_wasmos_app --manifest <linker.metadata> --in <image>` as a build edge
+  to produce the `.wap` artifact; under WARP a module whose manifest says
+  `aot = true` is compiled by `warp_aot` first and bundled with its `.warpbin`
 
 ---
 

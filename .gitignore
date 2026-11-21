@@ -1,6 +1,5 @@
 build/
 build-*/
-cmake-build-debug/
 .idea/
 __pycache__/
 .zig-cache/
@@ -21,3 +20,4 @@ HANDOVER-*.md
 
 # Fetched CA trust bundle (produced by scripts/fetch-ca-certs.sh; not vendored).
 scripts/system/net/certificates/ca-certs.pem
+/out/

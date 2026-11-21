@@ -146,7 +146,10 @@ for non-trace kernel messages.
 #endif
 ```
 
-Enable with CMake: `cmake -S . -B build -DWASMOS_TRACE=ON`.
+Enable with the Kconfig symbol `WASMOS_TRACE`:
+`./configure out/<dir> --set WASMOS_TRACE=y` (or `ninja -C out/<dir> menuconfig`).
+The `kernel` toolchain profile (`scripts/buildgen/toolchains.py`) passes it as
+`-DWASMOS_TRACE=<0|1>`.
 
 When `WASMOS_TRACE=1`:
 - `[init]` process manager spawn, wasm3 probe results
@@ -273,7 +276,7 @@ names, but a developer wants source file and line information. The helper:
 
 - reads a panic log from stdin or a file
 - extracts panic `rip=` and backtrace `ret=` addresses
-- runs `llvm-addr2line -e build/kernel.elf -f -C -p ...`
+- runs `llvm-addr2line -e <kernel.elf> -f -C -p ...`
 - prints a compact `cpuN frame[M] <addr> -> function at file:line` summary
 
 This keeps the in-kernel panic path limited to frame-pointer walking plus a
@@ -294,11 +297,13 @@ Options and defaults:
 - `input` is optional and defaults to `-`, which means read the panic log from
   stdin.
 - `--kernel` overrides the ELF used for symbol and DWARF lookup. The default is
-  `build/kernel.elf`.
+  `$WASMOS_KERNEL`, falling back to `out/default/kernel.elf`; pass `--kernel`
+  for another tree.
 - `--addr2line` overrides the host-side decoder binary. If it is not provided,
-  the script first checks `LLVM_ADDR2LINE`, then tries to infer
-  `llvm-addr2line` from the `CLANG` entry in `build/CMakeCache.txt`, and then
-  falls back to common local LLVM install paths such as Homebrew locations.
+  the script first checks `LLVM_ADDR2LINE`, then looks for `llvm-addr2line`
+  beside the `clang` recorded in the kernel's build directory
+  (`buildgen-tools.json`), and then falls back to common local LLVM install
+  paths such as Homebrew locations.
 
 This is intended for post-mortem decoding after either the single-CPU panic
 screen or the full multi-CPU serial panic dump has already captured return
@@ -465,8 +470,13 @@ qemu-system-x86_64
   [-drive format=raw,file=fat:rw:<userfs_dir>]
 ```
 
-OVMF path comes from `WASMOS_OVMF_CODE` env var or `CMakeCache.txt`.
-ESP path comes from `WASMOS_ESP` env var or `build/esp`.
+The `run-qemu*` targets (`scripts/system/BUILD.py`) export the paths the build
+directory resolved: `WASMOS_OVMF_CODE`/`WASMOS_OVMF_VARS` (from
+`out/<dir>/buildgen-tools.json`), `WASMOS_ESP` (`out/<dir>/esp`),
+`WASMOS_KERNEL`, `WASMOS_USERFS_IMAGE`, `WASMOS_WFS_IMAGE`,
+`WASMOS_WFS_VIRTIO_IMAGE` and `WASMOS_QEMU_SMP_COUNT`. A script run outside a
+target falls back to `out/default` (its ESP, and the OVMF paths in its
+`buildgen-tools.json`) and fails when no firmware is found.
 
 `WASMOS_QEMU_ISOLATE_ESP=1` copies the ESP to a temp directory before launch
 so test-written FAT files do not persist across runs.
@@ -475,20 +485,29 @@ so test-written FAT files do not persist across runs.
 
 ### Test Targets
 
-Tests must NOT be run in parallel — they share `build/esp` artifacts.
+Tests must NOT be run in parallel — the targets of one build directory share
+its `out/<dir>/esp` artifacts. All targets are run as `ninja -C out/<dir> <target>`.
 
-| CMake target                       | Script                                        | Pass condition                                            |
+| Ninja target                       | Script                                        | Pass condition                                            |
 |------------------------------------|-----------------------------------------------|-----------------------------------------------------------|
 | `run-qemu-test`                    | `qemu_halt_test.py`                           | `wamos>` prompt appears; `halt` accepted                  |
 | `run-qemu-cli-test`                | `run_unittest_suite.py --start-dir tests`     | Same (CLI smoke)                                          |
 | `run-qemu-ring3-check`             | `qemu_ring3_halt_test.py`                     | All ring3 markers appear in order (see below)             |
 | `run-qemu-ring3-threading-check`   | `qemu_ring3_halt_test.py --require-threading` | Ring3 markers + threading markers                         |
 | `run-qemu-ring3-fault-storm-check` | `qemu_ring3_fault_storm_test.py`              | Fault-storm markers + ud/gp count ≥ 2 each; up to 3 tries |
-| `run-qemu-ring3-test`              | wrapper                                       | ring3-check in isolated build tree                        |
-| `run-qemu-ring3-threading-test`    | wrapper                                       | ring3-threading-check in isolated build tree              |
-| `run-qemu-ring3-fault-storm-test`  | wrapper                                       | fault-storm-check in isolated build tree                  |
+| `run-qemu-ring3-test`              | wrapper                                       | ring3-check in the `out/<dir>/ring3` tree                 |
+| `run-qemu-ring3-threading-test`    | wrapper                                       | ring3-threading-check in `out/<dir>/ring3-threading`      |
+| `run-qemu-ring3-fault-storm-test`  | wrapper                                       | fault-storm-check in `out/<dir>/ring3-fault-storm`        |
 | `run-qemu-ui-test`                 | `qemu_ui_test.py`                             | Ring3 markers + native-call-smoke + UI display            |
-| `run-qemu-ring3-gate`              | wrapper                                       | run-qemu-test + run-qemu-ring3-test                       |
+| `strict-ring3`                     | wrapper                                       | run-qemu-test + run-qemu-ring3-test                       |
+
+The `*-check` targets assert markers only a ring-3 test configuration emits
+(`WASMOS_RING3_SMOKE`, `WASMOS_PM_TEST_HOOKS`). The `*-test` wrappers configure
+a wasm3 tree beside the current one (`configure --reseed` from
+`configs/wasmos_defconfig` with `--set WASMOS_WASM_RUNTIME_WASM3=y`,
+`WASMOS_RING3_SMOKE=y`, `WASMOS_PM_TEST_HOOKS=y`, the current `WASMOS_TRACE`,
+and `WASMOS_RING3_THREAD_LIFECYCLE_SMOKE=y` for the threading tree) and run the
+matching check there.
 
 #### Ring3 Halt Test Markers
 
@@ -540,12 +559,12 @@ native-call-smoke: ipc-call ok
 Per `AGENTS.md`, always run before staging changes that affect runtime behavior:
 
 ```
-cmake --build build --target run-qemu-test
+ninja -C out/<dir> run-qemu-test
 ```
 
 For ring-3 changes, also run:
 ```
-cmake --build build --target run-qemu-ring3-test
+ninja -C out/<dir> run-qemu-ring3-test
 ```
 
 Documentation-only changes (no runtime behavior change) do not require test execution.

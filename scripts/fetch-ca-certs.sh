@@ -4,7 +4,7 @@
 # Downloads a PINNED, dated curl.se cacert.pem (Mozilla CA bundle) and verifies
 # its SHA-256 against a pinned constant. The verified bundle is written to
 #   scripts/system/net/certificates/ca-certs.pem   (default OUT below)
-# from where the top-level CMakeLists.txt copies it into the ESP at guest path
+# from where the ESP staging (scripts/system/BUILD.py) copies it into the ESP at guest path
 #   /system/net/certificates/ca-certs.pem
 # and net-stack loads it as its TLS trust store (milestone C, VERIFY_REQUIRED).
 #

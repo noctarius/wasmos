@@ -1,5 +1,5 @@
 # Conservative clang-tidy policy for first-party C/C++ sources, used by the
-# `lint` CMake target (scripts/quality.sh). The focus is correctness and real
+# `lint` ninja target (scripts/quality.sh). The focus is correctness and real
 # bug patterns (static analyzer + bugprone); style, readability, and
 # portability opinions are intentionally left out to keep signal high on a
 # hand-written, minimalist codebase. Two bugprone sub-checks are disabled as

@@ -14,7 +14,7 @@
 # --stack and then runs the layout check, which is how a stack that failed to take
 # effect is caught. (That check was long documented as a pointer-validity rule --
 # a fixed 64 KiB user-VA mirror region bounding every host-call pointer. It is not:
-# see cmake/WasmosZigApp.cmake for the measurement.) And Zig resolves
+# see scripts/sdk/BUILD.py for the measurement.) And Zig resolves
 # @import("wasmos.zig") beside the importing file, so the runtime shims are staged
 # flat next to a copy of the app rather than passed by path.
 #

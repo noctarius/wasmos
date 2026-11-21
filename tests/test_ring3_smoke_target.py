@@ -17,7 +17,7 @@ class Ring3SmokeTargetTests(unittest.TestCase):
         # defect default_kernel_path and default_host_tool_path already fixed for
         # the kernel and the host tools.
         build_dir = os.path.relpath(default_build_dir(), root)
-        cmd = ["cmake", "--build", build_dir, "--target", "run-qemu-ring3-test"]
+        cmd = ["ninja", "-C", build_dir, "run-qemu-ring3-test"]
         proc = subprocess.run(
             cmd,
             cwd=root,

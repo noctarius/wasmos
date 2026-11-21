@@ -1,118 +1,108 @@
 ---
 name: wasmos-build-and-run
-description: Build and run WASMOS QEMU/test targets correctly with respect to runtime selection (wasm3 vs WARP) via Kconfig .config / configs/*_defconfig. Explains how the runtime is pinned at configure time, why a warm build dir or a leftover local .config silently overrides -D flags, the one-build-dir-per-config rule, how to tell what a build dir is configured as, and the full run-target list. Use before running run-qemu-test / run-qemu-cli-test / run-kernel-unit-tests or when a build boots the wrong runtime.
+description: Configure, build and run WASMOS QEMU/test targets with the right runtime (wasm3 vs WARP) via configs/*_defconfig and a build directory's .config. Explains the one-build-dir-per-config rule, how a build directory is seeded and edited, how to tell what a tree is configured as and what it actually booted, and the full run-target list. Use before running run-qemu-test / run-qemu-cli-test / run-kernel-unit-tests or when a build boots the wrong runtime.
 ---
 
 # WASMOS: Build & Run Targets (runtime selection)
 
 ## Why this exists
 
-The WASM runtime (wasm3 interpreter vs WARP JIT/AOT) is chosen **at configure
-time** and baked into a build directory. Three things override each other, which
-causes "why did my build boot WARP when I asked for wasm3?" confusion:
+The WASM runtime (wasm3 interpreter vs WARP JIT/AOT) is a Kconfig choice
+(`WASMOS_WASM_RUNTIME_WASM3` / `WASMOS_WASM_RUNTIME_WARP`) baked into a build
+directory's `.config`. WARP is the Kconfig default because its guests run at
+CPL=3 and are preempted like any other thread, while the wasm3 interpreter --
+the only runtime component at CPL=0 -- executes its guest in a kernel-mode
+frame, so a wasm3 guest is never timer-preempted (see `docs/architecture/11`).
 
-1. **Code default** (fresh cache, no `.config`): **WARP**. A one-time guard
-   (`WASMOS_WASM_RUNTIME_DEFAULT_INITIALIZED`) sets `WARP=ON`/`WASM3=OFF` on the
-   first configure of a new build dir. WARP is the default because its guests
-   run at CPL=3 and are preemptible, while the wasm3 interpreter — the only
-   runtime component at CPL=0 — executes its guest in a kernel-mode frame, so a
-   wasm3 guest is never timer-preempted (see `docs/architecture/11`).
-2. **`WASMOS_DOTCONFIG`** (default `<repo>/.config`, which is **gitignored /
-   local**): if that file exists it is imported every configure and **FORCE**s
-   the runtime — so a leftover local `.config` silently overrides a
-   `-DWASMOS_WASM_RUNTIME_WARP=...` on the command line.
-3. **The tracked defconfigs** `configs/{wasm3,warp}_{single,smp}_defconfig`
-   (plus `configs/wasmos_defconfig`): the source-of-truth configs. Select one
-   with `-DWASMOS_DOTCONFIG=configs/<name>_defconfig`. This is what CI's matrix
-   uses.
-
-Consequence: **`-DWASMOS_WASM_RUNTIME_WARP=ON/OFF` alone is unreliable** across a
-warm cache or a leftover `.config`. Drive the runtime with a **defconfig on a
-fresh build dir** instead.
+`./configure <dir> <defconfig>` copies the defconfig to `<dir>/.config` once.
+After that the directory's `.config` is the only input: re-running `configure`
+with a different defconfig keeps the existing file (it says so) unless
+`--reseed` is given. The tracked defconfigs `configs/{wasm3,warp}_{single,smp}_defconfig`
+are the source-of-truth configurations CI's matrix uses.
 
 ## The rule: one build dir per configuration
 
-Do **not** reconfigure an existing build dir to flip runtimes — a warm cache and
-any local `.config` fight the new `-D`, and the dir can stay on the old runtime.
-Use a dedicated dir per config, mirroring CI:
+Give each configuration its own directory, mirroring CI:
 
 ```sh
 # wasm3 (interpreter)
-cmake -S . -B build-wasm3 -DWASMOS_DOTCONFIG=configs/wasm3_smp_defconfig
-cmake --build build-wasm3 --target run-qemu-test
+./configure out/wasm3-smp configs/wasm3_smp_defconfig
+ninja -C out/wasm3-smp run-qemu-test
 
 # WARP (JIT/AOT)
-cmake -S . -B build-warp  -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig
-cmake --build build-warp  --target run-qemu-test
+./configure out/warp-smp configs/warp_smp_defconfig
+ninja -C out/warp-smp run-qemu-test
 ```
 
 `*_single` vs `*_smp` selects UP vs SMP (SMP is where scheduler/IPC races
-surface — prefer it for boot smokes). `build/` is just your personal working
-dir; treat its runtime as "whatever it was last configured as", not a default.
+surface — prefer it for boot smokes). `scripts/run_config.sh <config> [target]`
+does both steps with `out/<config>`.
 
-## Which runtime is a build dir? 
+## Which runtime is a build dir?
 
 ```sh
-grep WASMOS_WASM_RUNTIME_WARP: <dir>/CMakeCache.txt   # :BOOL=ON → WARP, OFF → wasm3
+grep RUNTIME <dir>/.config     # CONFIG_WASMOS_WASM_RUNTIME_WARP=y → WARP
 ```
 At boot the log also tells you: `[warp-driver] ... using AOT binary` ⇒ WARP; no
-AOT/`warp-driver` lines ⇒ wasm3. If a dir is not the runtime you expect, look for
-a stray `<repo>/.config` (it is local + gitignored) — that is usually the cause.
+AOT/`warp-driver` lines ⇒ wasm3.
 
 The load-bearing marker is `[subsystem] register request=WASM runtime=WASM3|WARP`.
 Prefer it over the driver prefixes: it names the runtime the kernel actually
 registered, so it distinguishes a mis-configured tree from a correctly
 configured one that booted somebody else's kernel image.
 
-Do not trust the CMakeCache alone when the question is "what did I just boot?" —
-the cache describes what was CONFIGURED, and the ESP is what was BOOTED. Compare
+`.config` describes what was CONFIGURED; the ESP is what was BOOTED. Compare
 them directly when it matters:
 
 ```sh
 nm <dir>/kernel.elf     | grep -c warp_   # the tree's own kernel
 nm <dir>/esp/kernel.elf | grep -c warp_   # what actually boots
 ```
-Those two disagreeing means something staged the wrong image. It used to happen
-by default: the QEMU tests resolved the kernel as the literal `build/kernel.elf`
-and copied it over the ESP, so a suite run from any non-default tree silently
-booted `build/`'s kernel and passed. The targets now export `WASMOS_KERNEL`
-alongside `WASMOS_ESP` and the tests honour it, so a defconfig tree tests itself
-— but the two-`nm` check is still how you prove it.
+The run targets pass `WASMOS_ESP` and `WASMOS_KERNEL` for their own tree to the
+harness, so a suite started through a target tests that tree; the two-`nm`
+check is how you prove it.
+
+## Editing a configuration
+
+- `ninja -C <dir> menuconfig` — interactive editor on `<dir>/.config`.
+- `./configure <dir> --set SYMBOL=VALUE` — set one symbol (`y`/`n` for bools),
+  e.g. `--set WASMOS_SCHED_SMP_STRESS=y`.
+- `./configure <dir> configs/<name>_defconfig --reseed` — back to a defconfig.
+- Editing `<dir>/.config` by hand works too.
+
+kconfiglib resolves `.config` against `Kconfig` on every regeneration, so a
+symbol whose dependency is unmet (SMP without IOAPIC) is dropped rather than
+half-applied. The next `ninja` regenerates and rebuilds what the change touches.
 
 ## Run / test targets
 
 Host, no QEMU:
-- `run-kernel-unit-tests` — host-native unit tests. Runtime-independent; CI runs
-  it under a plain `cmake -S . -B build`.
+- `run-kernel-unit-tests` — host-native unit tests (`tests/unit/BUILD.py`).
+  Runtime-independent; any tree works (CI uses `./configure out/unit`).
+- `run-fat-image-tests` — fs_fat against formatter-built FAT images.
 
-QEMU (need OVMF; **never run two in parallel** — they share `build/esp/`):
+QEMU (need OVMF; **never run two in parallel** — they share `<dir>/esp/`):
 - `run-qemu-test` — compile + boot + halt smoke (the default pre-commit check).
-- `run-qemu-cli-test` — full CLI integration suite.
+- `run-qemu-cli-test` — full CLI integration suite;
+  `WASMOS_TEST_BATTERY=<name>` runs one battery of `tests/batteries.json`.
 - `run-qemu-ui-test` — graphics UI smoke.
 - `run-qemu` / `run-qemu-ui` — interactive serial / graphics boot.
 - `run-qemu-debug` — paused QEMU + GDB stub on `QEMU_GDB_PORT` (default 1234).
+- `run-qemu-sched-stress-test` — SMP scheduler stress; needs
+  `WASMOS_SCHED_SMP_STRESS=y`.
 - `run-qemu-ring3-test` / `-ring3-threading-test` / `-ring3-fault-storm-test` —
-  ring-3 marker tests. These build their **own shadow tree** under
-  `build/ring3*/` and **always use wasm3** regardless of the main runtime.
+  ring-3 marker tests. Each configures its **own tree** under `<dir>/ring3*/`
+  (wasm3, `WASMOS_RING3_SMOKE`, `WASMOS_PM_TEST_HOOKS`, the parent's
+  `WASMOS_TRACE`) and runs its `run-qemu-ring3*-check` there.
 - `strict-ring3` — `run-qemu-test` + `run-qemu-ring3-test` in sequence.
-
-## Kconfig frontend flow (optional)
-
-For interactive editing rather than a defconfig (README):
-- `cmake --build <dir> --target kconfig-defconfig` — seed `<dir>/.config` from
-  `configs/wasmos_defconfig`.
-- `cmake --build <dir> --target kconfiglib-menuconfig` — edit it (needs
-  `python3 -m pip install kconfiglib`).
 
 ## Pre-commit checklist for a runtime-affecting change
 
 Mirror the CI matrix — boot **both** runtimes, then the unit tests:
 ```sh
-cmake -S . -B build-wasm3 -DWASMOS_DOTCONFIG=configs/wasm3_smp_defconfig && \
-  cmake --build build-wasm3 --target run-qemu-test
-cmake -S . -B build-warp  -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig  && \
-  cmake --build build-warp  --target run-qemu-test
-cmake -S . -B build && cmake --build build --target run-kernel-unit-tests
+./configure out/wasm3-smp configs/wasm3_smp_defconfig && ninja -C out/wasm3-smp run-qemu-test
+./configure out/warp-smp  configs/warp_smp_defconfig  && ninja -C out/warp-smp  run-qemu-test
+ninja -C out/warp-smp run-kernel-unit-tests
 ```
 A client-side or docs-only change that cannot differ per runtime can be gated on
 one runtime; state which you ran.
@@ -123,10 +113,11 @@ one runtime; state which you ran.
   that misses `halt`/`[calculator] ready` before the timeout). Re-run once on the
   same dir before treating a single failure as a regression; capture the **full**
   log (don't pipe through `tail`, which truncates the QEMU output).
-- CI forces software emulation: `WASMOS_QEMU_ACCEL=tcg` and a long
-  `WASMOS_QEMU_TEST_TIMEOUT=600` (wasmos is only validated under TCG; KVM breaks
-  the bootloader→kernel handoff). Set these to reproduce CI locally.
-- ESP staleness: the Python runners boot `build/esp/kernel.elf`, staged by the
-  `run-*` targets. Rebuild via cmake (or restage) before running a Python test
-  binary directly.
-- Use LLVM `clang`, not AppleClang: `-DCLANG=/opt/homebrew/opt/llvm/bin/clang`.
+- CI forces software emulation: `WASMOS_QEMU_ACCEL=tcg` (wasmos is only
+  validated under TCG; KVM breaks the bootloader→kernel handoff), and
+  `WASMOS_QEMU_TEST_TIMEOUT` sets `run-qemu-test`'s budget. Set these to
+  reproduce CI locally.
+- ESP staleness: the Python runners boot `<dir>/esp/kernel.elf`, staged by the
+  build. Run `ninja -C <dir>` before running a Python test directly, and point
+  it at the tree with `WASMOS_ESP` / `WASMOS_KERNEL` (the targets set both).
+- Use LLVM `clang`, not AppleClang: `./configure <dir> ... --clang=/opt/homebrew/opt/llvm/bin/clang`.

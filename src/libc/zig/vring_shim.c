@@ -10,7 +10,7 @@
  * apart in how they drive a device.
  *
  * Compiled by Zig's built-in Clang for wasm32-freestanding alongside the Zig
- * root source, with the SDK sysroot on the include path (WasmosZigApp.cmake).
+ * root source, with the SDK sysroot on the include path (scripts/sdk/wasmos-zig).
  */
 
 #include <stdint.h>

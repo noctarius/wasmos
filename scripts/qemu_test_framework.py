@@ -84,11 +84,12 @@ class QemuConfig:
         # its dataclass default, which for a disk means the guest never sees it.
         if not self.wfs_image:
             self.wfs_image = os.environ.get(
-                "WASMOS_WFS_IMAGE", os.path.join("build", "wfs.img")
+                "WASMOS_WFS_IMAGE", os.path.join("out", "default", "wfs.img")
             )
         if not self.wfs_virtio_image:
             self.wfs_virtio_image = os.environ.get(
-                "WASMOS_WFS_VIRTIO_IMAGE", os.path.join("build", "wfs_virtio.img")
+                "WASMOS_WFS_VIRTIO_IMAGE",
+                os.path.join("out", "default", "wfs_virtio.img"),
             )
         if self.userfs_image:
             return
@@ -97,28 +98,21 @@ class QemuConfig:
             self.userfs_image = env_userfs
 
 
-def _read_cmake_cache(cache_path: str) -> dict:
-    data = {}
-    if not os.path.exists(cache_path):
-        return data
-    with open(cache_path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line or line.startswith("//") or line.startswith("#"):
-                continue
-            if ":" not in line or "=" not in line:
-                continue
-            key, rest = line.split(":", 1)
-            _, value = rest.split("=", 1)
-            data[key] = value
-    return data
+def _read_build_tools(build_dir: str) -> dict:
+    """The tool paths ./configure resolved for a build directory
+    (<build_dir>/buildgen-tools.json), or {} when it has none."""
+    path = os.path.join(build_dir, "buildgen-tools.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
-def default_kernel_path(build_dir: str = "build") -> str:
+def default_kernel_path(build_dir: str = "out/default") -> str:
     """Path to the kernel image the tests should boot.
 
-    Honours WASMOS_KERNEL, which the CMake test targets set to their own
-    ${BUILD_DIR}/kernel.elf. Without it every test resolved the literal "build"
+    Honours WASMOS_KERNEL, which the run targets set to their own
+    <build-dir>/kernel.elf. Without it every test resolved the literal "build"
     directory, so a suite launched from any other configuration's tree (a wasm3
     defconfig tree, say) copied the DEFAULT tree's kernel over its ESP and
     silently tested the wrong runtime -- while reporting a pass.
@@ -366,11 +360,11 @@ def default_userfs_image(esp_dir: str = "", explicit: str = "") -> str:
     return candidate if candidate and os.path.exists(candidate) else ""
 
 
-def default_build_dir(build_dir: str = "build") -> str:
+def default_build_dir(build_dir: str = "out/default") -> str:
     """The build tree a test belongs to.
 
     Derived from WASMOS_KERNEL rather than exported separately, because every
-    CMake test target already sets that to its own ${BUILD_DIR}/kernel.elf.
+    run target already sets that to its own <build-dir>/kernel.elf.
     """
     kernel = os.environ.get("WASMOS_KERNEL")
     if kernel:
@@ -378,20 +372,20 @@ def default_build_dir(build_dir: str = "build") -> str:
     return build_dir
 
 
-def default_host_tool_path(name: str, build_dir: str = "build") -> str:
+def default_host_tool_path(name: str, build_dir: str = "out/default") -> str:
     """Path to a host tool built by the tree under test.
 
     Same defect as default_kernel_path fixed, one tool later: a hardcoded
-    "build/<tool>" makes a suite launched from a defconfig tree look for a
+    "<dir>/<tool>" makes a suite launched from a defconfig tree look for a
     binary that tree never built, and fail on a path rather than on behaviour.
     """
     return os.path.join(default_build_dir(build_dir), name)
 
 
-def default_config(build_dir: str = "build") -> QemuConfig:
-    cache = _read_cmake_cache(os.path.join(build_dir, "CMakeCache.txt"))
-    ovmf_code = os.environ.get("WASMOS_OVMF_CODE", cache.get("OVMF_CODE", ""))
-    ovmf_vars = os.environ.get("WASMOS_OVMF_VARS", cache.get("OVMF_VARS", ""))
+def default_config(build_dir: str = "out/default") -> QemuConfig:
+    tools = _read_build_tools(build_dir)
+    ovmf_code = os.environ.get("WASMOS_OVMF_CODE", tools.get("ovmf-code", ""))
+    ovmf_vars = os.environ.get("WASMOS_OVMF_VARS", tools.get("ovmf-vars", ""))
     esp_dir = os.environ.get("WASMOS_ESP", os.path.join(build_dir, "esp"))
     userfs_image = default_userfs_image(esp_dir)
     wfs_image = os.environ.get("WASMOS_WFS_IMAGE", os.path.join(build_dir, "wfs.img"))
@@ -404,14 +398,12 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     enable_monitor = os.environ.get("WASMOS_QEMU_MONITOR", "1") != "0"
     monitor_socket = os.environ.get("WASMOS_QEMU_MONITOR_SOCK", "")
     smp_count = int(os.environ.get("WASMOS_QEMU_SMP_COUNT", "1"))
-    nic_model = os.environ.get(
-        "WASMOS_QEMU_NIC_MODEL", cache.get("WASMOS_QEMU_NIC_MODEL", "virtio-net-pci")
-    )
-    netdev = os.environ.get(
-        "WASMOS_QEMU_NETDEV", cache.get("WASMOS_QEMU_NETDEV", "user,id=net0")
-    )
+    nic_model = os.environ.get("WASMOS_QEMU_NIC_MODEL", "virtio-net-pci")
+    netdev = os.environ.get("WASMOS_QEMU_NETDEV", "user,id=net0")
     if not ovmf_code:
-        raise RuntimeError("OVMF_CODE not set (WASMOS_OVMF_CODE or CMakeCache.txt)")
+        raise RuntimeError(
+            "OVMF_CODE not set (WASMOS_OVMF_CODE or buildgen-tools.json)"
+        )
     return QemuConfig(
         ovmf_code=ovmf_code,
         ovmf_vars=ovmf_vars,

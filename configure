@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Configure a WASMOS build directory for Ninja.
+
+    ./configure out/wasm3-smp configs/wasm3_smp_defconfig
+    ninja -C out/wasm3-smp kernel bootloader
+
+The build directory owns its .config: it is seeded once from the given
+defconfig (default configs/wasmos_defconfig) and never re-read from the source
+tree. Re-running configure on an existing directory keeps its .config unless
+--reseed is given. After the first configure, build.ninja regenerates itself;
+running configure again is only needed to change tool paths.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import sys
+from pathlib import Path
+
+SRCDIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SRCDIR / "scripts/buildgen"))
+
+import buildgen  # noqa: E402
+import toolchains  # noqa: E402
+
+TOOL_OPTIONS = [
+    "clang",
+    "clangxx",
+    "ld.lld",
+    "lld-link",
+    "llvm-objcopy",
+    "llvm-nm",
+    "llvm-ar",
+    "wasm-ld",
+    "zig",
+    "asc",
+    "rustc",
+    "tinygo",
+    "wasm-opt",
+    "qemu",
+    "ovmf-code",
+    "ovmf-vars",
+    "clang-tidy-include",
+]
+
+
+def apply_overrides(dotconfig: Path, assignments: list[str]):
+    """Replace the given symbols' lines in .config; kconfiglib re-resolves the
+    file (defaults, dependencies) when the build is generated."""
+    lines = dotconfig.read_text().splitlines()
+    for assignment in assignments:
+        name, sep, value = assignment.partition("=")
+        if not sep:
+            raise SystemExit(
+                f"configure: --set expects SYMBOL=VALUE, got {assignment!r}"
+            )
+        name = name.removeprefix("CONFIG_")
+        lines = [
+            line
+            for line in lines
+            if not line.startswith(f"CONFIG_{name}=")
+            and line != f"# CONFIG_{name} is not set"
+        ]
+        lines.append(
+            f"# CONFIG_{name} is not set" if value == "n" else f"CONFIG_{name}={value}"
+        )
+    dotconfig.write_text("\n".join(lines) + "\n")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("builddir", type=Path)
+    ap.add_argument(
+        "defconfig",
+        type=Path,
+        nargs="?",
+        help="seed for <builddir>/.config (default: configs/wasmos_defconfig)",
+    )
+    ap.add_argument(
+        "--reseed",
+        action="store_true",
+        help="overwrite an existing <builddir>/.config from the defconfig",
+    )
+    ap.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="SYMBOL=VALUE",
+        help="override a Kconfig symbol in <builddir>/.config (repeatable; y/n for bools)",
+    )
+    ap.add_argument("--regen", action="store_true", help=argparse.SUPPRESS)
+    for t in TOOL_OPTIONS:
+        ap.add_argument(
+            f"--{t}", dest=t.replace(".", "_").replace("-", "_"), metavar="PATH"
+        )
+    args = ap.parse_args()
+
+    outdir = args.builddir.resolve()
+    outdir.mkdir(parents=True, exist_ok=True)
+    dotconfig = outdir / ".config"
+    tools_file = outdir / "buildgen-tools.json"
+
+    if args.regen:
+        tools = json.loads(tools_file.read_text())
+    else:
+        if not dotconfig.exists() or args.reseed:
+            seed = args.defconfig or SRCDIR / "configs/wasmos_defconfig"
+            if not seed.is_file():
+                ap.error(f"defconfig {seed} not found")
+            shutil.copyfile(seed, dotconfig)
+            print(f"configure: seeded {dotconfig} from {seed}")
+        elif args.defconfig:
+            print(
+                f"configure: keeping existing {dotconfig} (pass --reseed to replace it)"
+            )
+        if args.set:
+            apply_overrides(dotconfig, args.set)
+        # Tool overrides persist with the build directory: a later configure
+        # (say, --set to change one symbol) keeps the paths given earlier
+        # unless it names new ones.
+        overrides_file = outdir / "buildgen-overrides.json"
+        overrides = (
+            json.loads(overrides_file.read_text()) if overrides_file.exists() else {}
+        )
+        for t in TOOL_OPTIONS:
+            value = getattr(args, t.replace(".", "_").replace("-", "_"))
+            if value:
+                overrides[t] = value
+        overrides_file.write_text(
+            json.dumps(overrides, indent=1, sort_keys=True) + "\n"
+        )
+        tools = toolchains.discover(overrides, SRCDIR)
+        tools["python"] = sys.executable
+        tools_file.write_text(json.dumps(tools, indent=1, sort_keys=True) + "\n")
+
+    regen_argv = [tools["python"], str(SRCDIR / "configure"), "--regen", str(outdir)]
+    buildgen.generate(SRCDIR, outdir, tools, regen_argv)
+    if not args.regen:
+        print(
+            f"configure: wrote {outdir / 'build.ninja'}; build with: ninja -C {args.builddir}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

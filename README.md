@@ -72,31 +72,28 @@ It defines repository workflow and documentation/update conventions.
 ## Quick Start
 
 ### Requirements
-- `clang` + `lld`
-- `llvm-objcopy`
-- `cmake` 3.20+
-- `qemu-system-x86_64`
+- LLVM `clang` + `lld` (`ld.lld`, `lld-link`) and `llvm-objcopy`
+- `ninja` 1.10+ and Python 3 with `kconfiglib` (`python3 -m pip install kconfiglib`)
+- `qemu-system-x86_64` and OVMF/EDK2 firmware for the run and test targets
+- optional, per guest language: `zig`, `asc` (`npm install`), `rustc` with the
+  `wasm32-unknown-unknown` target, `tinygo` + `wasm-opt`
 
 macOS note:
 - use Homebrew LLVM (`appleclang` is not sufficient for the UEFI target)
-- install with: `brew install llvm lld qemu`
+- install with: `brew install llvm lld qemu ninja`
 
 ### Configure
 
-Pick the configuration the build directory should use. Each defconfig in
-`configs/` selects a WASM runtime and a CPU topology, and the choice is fixed
-for the lifetime of that directory:
+A build directory holds one configuration. Each defconfig in `configs/` selects
+a WASM runtime and a CPU topology; `./configure` seeds the directory's `.config`
+from it once, and that copy is authoritative afterwards:
 
 ```sh
-cmake -S . -B build -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig
+./configure out/warp-smp configs/warp_smp_defconfig
 ```
 
-Without `-DWASMOS_DOTCONFIG` the shared base `configs/wasmos_defconfig` applies,
-which selects no runtime and so leaves the default:
-
-```sh
-cmake -S . -B build
-```
+Without a defconfig the shared base `configs/wasmos_defconfig` applies, and the
+runtime takes the Kconfig default (WARP).
 
 #### Choosing a WASM runtime
 
@@ -107,69 +104,34 @@ cmake -S . -B build
 | `warp_single_defconfig`  | WARP    | single |
 | `warp_smp_defconfig`     | WARP    | SMP    |
 
-Give each configuration its own directory, so switching does not mean
+Give each configuration its own directory, so switching never means
 reconfiguring:
 
 ```sh
-cmake -S . -B build-warp-smp  -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig
-cmake -S . -B build-wasm3-smp -DWASMOS_DOTCONFIG=configs/wasm3_smp_defconfig
-cmake --build build-warp-smp --target run-qemu-test
+./configure out/warp-smp  configs/warp_smp_defconfig
+./configure out/wasm3-smp configs/wasm3_smp_defconfig
+ninja -C out/warp-smp run-qemu-test
 ```
 
 or via the helper, which derives the build directory from the config name:
 
 ```sh
-scripts/run_config.sh warp_smp                # boot WARP + SMP to the CLI
-scripts/run_config.sh wasm3_smp               # boot wasm3 + SMP
-scripts/run_config.sh wasm3_single kernel     # just build the kernel
+scripts/run_config.sh warp_smp run-qemu        # boot WARP + SMP to the CLI
+scripts/run_config.sh wasm3_smp                # boot + halt test, wasm3 + SMP
+scripts/run_config.sh wasm3_single kernel      # just build the kernel
 ```
 
-The chosen config is copied to `<build-dir>/.config` on first configure and that
-copy is authoritative afterwards, so directories cannot influence one another;
-delete it to re-seed, or run the `kconfig-defconfig` target to restore it.
-`-DWASMOS_WASM_RUNTIME_*` flags are not a reliable way to select the runtime,
-because the imported config is applied after them — use a defconfig.
-
-Optional Kconfig-style flow:
+Editing the configuration:
 ```sh
-cmake --build build --target kconfig-defconfig
-cmake --build build --target menuconfig
-cmake -S . -B build
+ninja -C out/warp-smp menuconfig                              # interactive editor
+./configure out/warp-smp --set WASMOS_TRACE=y                 # one symbol
+./configure out/warp-smp configs/warp_smp_defconfig --reseed  # back to the defconfig
 ```
 
-Notes:
-- `kconfig-defconfig` restores `<build-dir>/.config` from the defconfig that
-  directory was configured with (`configs/wasmos_defconfig` if none was given).
-- `menuconfig` auto-detects a frontend binary (`menuconfig`, `nconfig`,
-  `kconfig-mconf`, or `mconf`); if none are found, it falls back to the repo's
-  Python `kconfiglib` interactive editor.
-- `kconfiglib-menuconfig` runs the Python `kconfiglib` editor directly.
-- Python fallback requirement: `python3 -m pip install kconfiglib`.
-- If no frontend is installed, you can still edit `build/.config` directly and
-  re-run `cmake -S . -B build` to import the changes.
-- Current Kconfig symbols cover the core toggles already used by CMake:
-  language example switches, tracing/ring3 smoke flags, kernel target triple,
-  and QEMU GDB port.
-  It also includes `WASMOS_PM_TEST_HOOKS` for process-manager test injection hooks.
-
-If tool autodiscovery fails:
-```sh
-cmake -S . -B build \
-  -DCLANG=/path/to/llvm/bin/clang \
-  -DLLD_LINK=/path/to/lld-link
-```
-
-If OVMF autodiscovery fails:
-```sh
-cmake -S . -B build -DOVMF_CODE=/path/to/OVMF_CODE.fd
-```
-
-Optional vars image:
-```sh
-cmake -S . -B build \
-  -DOVMF_CODE=/path/to/OVMF_CODE.fd \
-  -DOVMF_VARS=/path/to/OVMF_VARS.fd
-```
+Every option is a Kconfig symbol (`Kconfig`); `docs/BUILD_SYSTEM.md` lists
+them. The build regenerates itself after any change to `.config`, so a plain
+`ninja` follows. If tool or firmware autodiscovery fails, pass the paths to
+`configure`, e.g. `--clang=/path/to/llvm/bin/clang --ovmf-code=/path/to/OVMF_CODE.fd`.
 
 ### C++ Usage
 - C++ is supported for higher-level kernel, driver, service, and app code.
@@ -178,55 +140,49 @@ cmake -S . -B build \
 - Keep kernel/syscall/hostcall interfaces C ABI stable (`extern "C"` at boundaries).
 - Prefer "C with classes" style and explicit ownership; avoid hidden runtime-heavy patterns.
 
-WASM C++ app target helper:
-```cmake
-wasmos_add_wasm_cpp_app_target(my_cpp_app
-  SOURCE ${CMAKE_SOURCE_DIR}/examples/cpp/my_app.cpp
-  OUTPUT_WASM ${BUILD_DIR}/my_app.wasm
-  OUTPUT_APP ${BUILD_DIR}/my_app.wap
-  MANIFEST ${CMAKE_SOURCE_DIR}/examples/cpp/my_app.manifest.toml
-  EXPORT wasmos_main
-)
+A WASM C++ module is a `guest()` call with `cxx=True` in its `BUILD.py`:
+```python
+wap = guest(b, "my_cpp_app", [b.src("my_app.cpp")], cxx=True)
+install(b, "apps/my_cpp_app.wap", wap)
 ```
 
 ### Build
 ```sh
-cmake --build build --target bootloader
-cmake --build build --target kernel
-cmake --build build --target make_wasmos_app
+ninja -C out/warp-smp                  # kernel, loader, every module, ESP, disk images
+ninja -C out/warp-smp kernel           # one piece: kernel, bootloader, modules, esp, wasmos-sdk
 ```
 
 ### Run
 ```sh
-cmake --build build --target run-qemu
-cmake --build build --target run-qemu-debug
-cmake --build build --target run-qemu-ui-test
+ninja -C out/warp-smp run-qemu         # serial console
+ninja -C out/warp-smp run-qemu-ui      # with a display
+ninja -C out/warp-smp run-qemu-debug   # paused for GDB on QEMU_GDB_PORT
 ```
 
 ### Test
 ```sh
-cmake --build build --target run-kernel-unit-tests
-cmake --build build --target run-qemu-test
-cmake --build build --target run-qemu-cli-test
-cmake --build build --target run-qemu-ring3-test
-cmake --build build --target run-qemu-ring3-threading-test
+ninja -C out/warp-smp run-kernel-unit-tests
+ninja -C out/warp-smp run-qemu-test
+ninja -C out/warp-smp run-qemu-cli-test
+ninja -C out/warp-smp run-qemu-ring3-test
+ninja -C out/warp-smp run-qemu-ring3-threading-test
 ```
 
 ### Developer Quality Targets
 ```sh
-cmake --build build --target fmt        # format in-scope sources in place
-cmake --build build --target fmt-check  # report formatting drift, no writes
-cmake --build build --target lint       # clang-tidy + per-language checks
-cmake --build build --target quality    # fmt then lint
+ninja -C out/warp-smp fmt        # format in-scope sources in place
+ninja -C out/warp-smp fmt-check  # report formatting drift, no writes
+ninja -C out/warp-smp lint       # clang-tidy + per-language checks
+ninja -C out/warp-smp quality    # fmt then lint
 ```
 
 Notes:
-- CMake discovers the toolchain during configure and passes the resolved
+- `configure` discovers the toolchain and the targets pass the resolved
   `clang-format` / `clang-tidy` / `zig` / `gofmt` / `go` / `rustfmt` / `rustc` /
-  `asc` / `black` / `ruff` paths to `scripts/quality.sh`; tools it cannot find
-  fall back to `PATH`. Each language is only required if it has in-scope sources.
-- `lint` uses `build/compile_commands.json`, exported automatically by a normal
-  `cmake -S . -B build` configure.
+  `asc` / `black` / `ruff` paths to `scripts/quality.sh`. Each language is only
+  required if it has in-scope sources.
+- `lint` uses the build directory's `compile_commands.json`, which `configure`
+  writes and every regeneration updates.
 - Scope is limited to first-party sources under `src/`, `tests/`, `examples/`,
   and `scripts/` (edit `allowed_roots` in `scripts/quality.sh`); vendored trees
   under `libs/`, dot-folders, and `others/` are never touched.
@@ -234,9 +190,9 @@ Notes:
 
 Kernel panic address decoding:
 ```sh
-python3 scripts/decode_kernel_panic.py /path/to/panic.log
+python3 scripts/decode_kernel_panic.py --kernel out/warp-smp/kernel.elf /path/to/panic.log
 ```
-It resolves `rip=` and `ret=` addresses against `build/kernel.elf` with
+It resolves `rip=` and `ret=` addresses against the kernel image with
 `llvm-addr2line`, so panic logs can be mapped back to source locations without
 embedding DWARF readers in the kernel.
 
@@ -250,7 +206,7 @@ Target summary:
 
 Two serial ports: COM1 (the terminal QEMU runs in) is the console of the
 serial-bound tty, owned by the `vt`; COM2 carries the kernel log alone, written
-by the kernel directly, and the run targets capture it in `build/syslog.log`.
+by the kernel directly, and the run targets capture it in `<build-dir>/syslog.log`.
 The COM2 log is switched on by `log.serial=com2` in `kernel.cmdline`, an
 optional file on the ESP root that the bootloader hands to the kernel.
 
@@ -285,7 +241,7 @@ Key policy/runtime notes:
 
 ## Documentation Index
 - `docs/ARCHITECTURE.md`: architecture index
-- `docs/BUILD_SYSTEM.md`: CMake build system — target types, helper functions, app types, QEMU targets, and how to add new components
+- `docs/BUILD_SYSTEM.md`: the Kconfig + Ninja build — build directories, configuration, the `BUILD.py` manifest API, artifacts, run/test targets, and how to add a component
 - `docs/toolchain.md`: the `wasmos-clang` SDK — building a WASMOS application from plain C/C++ with no target triple, sysroot, linker flag or packaging step to state
 - `docs/architecture/`: feature-level architecture docs
 - `docs/architecture/11-ring3-isolation-and-separation.md`: ring-3 isolation and kernel/user-space separation design
@@ -301,24 +257,24 @@ Key policy/runtime notes:
 
 ## WASM Runtime Backends
 
-Two backends are available, selected at CMake configure time:
+Two backends are available, selected per build directory:
 
-| Backend        | Pin with                                          | Character                                          |
-|----------------|---------------------------------------------------|----------------------------------------------------|
-| WARP (default) | `-DWASMOS_DOTCONFIG=configs/warp_smp_defconfig`   | Single-pass x86_64 JIT, ring-3 guests, preemptible |
-| wasm3          | `-DWASMOS_DOTCONFIG=configs/wasm3_smp_defconfig`  | Tree-walking interpreter, in-kernel, not preempted |
-
-The default is WARP.
+| Backend        | Pin with                          | Character                                          |
+|----------------|-----------------------------------|----------------------------------------------------|
+| WARP (default) | `configs/warp_smp_defconfig`      | Single-pass x86_64 JIT, ring-3 guests, preemptible |
+| wasm3          | `configs/wasm3_smp_defconfig`     | Tree-walking interpreter, in-kernel, not preempted |
 
 To build and run with WARP:
 ```sh
-cmake -S . -B build -DWASMOS_WASM_RUNTIME_WARP=ON
-cmake --build build --target run-qemu-test
+./configure out/warp-smp configs/warp_smp_defconfig
+ninja -C out/warp-smp run-qemu-test
 ```
 
 ## Running with Real Networking
 
-When running with real networking, QEMU needs to be configured accordingly. On macOS, you need to use the vmnet adapter
+When running with real networking, QEMU needs to be configured accordingly. The
+`run-qemu*` targets take the `-netdev` backend from `WASMOS_QEMU_NETDEV` (default
+`user,id=net0`), e.g. `WASMOS_QEMU_NETDEV=vmnet-shared,id=net0 ninja -C out/warp-smp run-qemu`. On macOS, you need to use the vmnet adapter
 and specify the network interface name for the `-netdev vmnet-bridged` option. The interface name depends on your system
 configuration.
 
@@ -335,8 +291,8 @@ interface name depends on your system configuration.
 sudo qemu-system-x86_64 -m 512M -serial mon:stdio \
   -drive if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-x86_64-code.fd \
   -nographic \
-  -drive format=raw,file=fat:rw:build/esp \
-  -drive format=raw,file=/Volumes/git/wasmos/build/user.img \
+  -drive format=raw,file=fat:rw:out/warp-smp/esp \
+  -drive format=raw,file=out/warp-smp/user.img \
   -netdev vmnet-bridged,id=net0,ifname=en0 \ # depends on your operating system
   -device virtio-net-pci,netdev=net0,id=nic0 \
   -device virtio-rng-pci

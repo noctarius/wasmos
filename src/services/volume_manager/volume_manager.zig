@@ -127,7 +127,7 @@ var g_publish_bid: i32 = -1;
 var g_block_phys: u32 = 0;
 
 /// The prefix every recogniser shares, read once per device. Static rather than
-/// a stack local: the Zig shadow stack is 8 KiB (see cmake/WasmosZigApp.cmake)
+/// a stack local: the Zig shadow stack is 8 KiB (see scripts/sdk/BUILD.py)
 /// and 4 KiB of it would leave no room for the descriptors beside it. Probing is
 /// single-threaded and non-reentrant, so one copy is enough.
 var g_prefix: [rec.PREFIX_BYTES]u8 = [_]u8{0} ** rec.PREFIX_BYTES;

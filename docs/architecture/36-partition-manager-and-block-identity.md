@@ -588,8 +588,8 @@ header-only C in `src/libc/include/wasmos/ipc.h`:
 - `reborrow` / `unborrow` wrappers over the generated externs, which exist in
   `abi/generated/zig/wasmos_imports.zig` but have no ergonomic form.
 
-Build wiring follows `src/drivers/virtio_blk/CMakeLists.txt`: `wasmos_add_zig_wasm_app`
-with the coroutine runtime, `service_async_entry_wasm.c` and the generated ABI
+Build wiring follows `src/drivers/virtio_blk/BUILD.py`: `guest(..., lang="zig")`
+(`scripts/buildgen/wasmos_rules.py`) with the coroutine runtime, `service_async_entry_wasm.c` and the generated ABI
 staged flat. The manifest needs `svc.class` (to claim `block` instances) and no
 hardware capabilities at all — the manager touches no device, only IPC.
 
@@ -605,8 +605,9 @@ registered anything and finds nothing, and every disk on the system is probed as
 its driver publishes it. The subscription was already required for a driver that
 had not probed yet; it now carries the whole load.
 
-This puts Zig on the critical build path: CMake derives the initfs payload list
-from every `source =` line in `scripts/initfs.toml`, so a Zig artifact there
+This puts Zig on the critical build path: `scripts/system/BUILD.py` derives the
+initfs payload list from every `source =` line in `scripts/initfs.toml` and
+makes each payload an input of `initfs.img`, so a Zig artifact there
 makes the boot image unbuildable without a Zig toolchain. That costs nothing in
 practice — the native gfx-compositor and font-service are Zig, so no
 configuration builds without one.
@@ -671,7 +672,7 @@ per-context rather than per-endpoint.
 #### Phase 2 — The partition manager (done)
 
 - `src/drivers/partition_manager/` — Zig service, `linker.metadata`,
-  `CMakeLists.txt`; staged on the ESP and spawned by absolute path from the boot
+  `BUILD.py`; staged on the ESP and spawned by absolute path from the boot
   rules (see above for why not initfs).
 - Pure Zig table parser: GPT with CRC32 and backup fallback, MBR, UTF-16LE →
   UTF-8, mixed-endian GUID handling.

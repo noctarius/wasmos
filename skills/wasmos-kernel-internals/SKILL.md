@@ -23,11 +23,16 @@ Before changing kernel/driver/service/build code, read the relevant
 - Existing names: `io.port`, `irq.route`, `mmio.map`, `dma.buffer`,
   `system.control`, `subsystem.register`, `svc.class`, `ipc.basic`.
 
-## Kernel build — THREE parallel lists (src/kernel/CMakeLists.txt)
-Adding a kernel `.c` requires updating all three or the link fails:
-1. `KERNEL_SOURCES` — dependency tracking (also drives the two-pass kallsyms relink).
-2. `KERNEL_OBJS` — the object list linked into `kernel.elf`.
-3. An explicit `COMMAND ${CLANG} ${CFLAGS_KERNEL} -c <src> -o <obj>` compile line.
+## Kernel build — one source list (src/kernel/BUILD.py)
+A kernel source appears once, in the list for the configuration that compiles it:
+- `CORE` — every configuration; the list order is the link order (keep
+  `arch/x86_64/entry.S` first, the image layout follows it).
+- `WARP_GLUE` / `WARP_LIB` — WARP only (`kernel-warp` toolchain profile).
+- `WASM3_GLUE_KERNEL` / `WASM3_GLUE` / `WASM3_SHIM` / `WASM3_LIB` — wasm3 only.
+Each object is its own Ninja edge with a compiler depfile; the two-pass kallsyms
+relink (`kernel.base.elf` → `scripts/gen_kernel_kallsyms.py` → `kernel.elf`) and
+the embedded blobs (`b.exports["kernel.blobs"]`, `RING3_PROBES`) are derived from
+the same manifest, so a new `.c` needs no other edit.
 
 ## Service discovery
 - Flat name table: `src/kernel/process_manager_services.c` (`g_pm.services`, a
@@ -43,29 +48,28 @@ Adding a kernel `.c` requires updating all three or the link fails:
   `src/libsys/native/zig/libsys_native.c`. Keep both sides in sync (AGENTS rule).
 - Design: `docs/architecture/09-process-and-ipc.md`.
 
-## IDE indexing (CLion / clangd) — how sources get a "project target"
+## IDE indexing (CLion / clangd) — compile_commands.json
 - CLion/clangd + clang-tidy index a file only if it has an entry in
-  `build/compile_commands.json` (exported by a normal configure). The real
-  kernel/app builds use `add_custom_command` (raw clang), which CMake does NOT
-  export — so coverage comes from parallel **`EXCLUDE_FROM_ALL` OBJECT targets**
-  (never linked; indexing only).
-- Apps/drivers/services/utils built via `wasmos_add_*_app_target` get a
-  `<name>_ide` target automatically from their `SOURCES`. The kernel derives
-  `kernel_ide` from `KERNEL_SOURCES`; `net_stack` declares its own (lwIP/mbedTLS
-  includes).
-- The shared support areas (`libc`, `libsys`, `libui`, `tests/unit`,
-  `src/tools`) are globbed by `wasmos_ide_index(...)` at the end of the root
-  `CMakeLists.txt` (`file(GLOB … CONFIGURE_DEPENDS)`), so a new file there is
-  picked up on the next configure with no CMake edit.
-- If you add a source in a NEW bespoke build area (not under those globs and not
-  via an app helper), add a `wasmos_ide_index(...)` call, or it will show up in
-  CLion as "not in a project target." Verify coverage: a file's realpath appears
-  in `build/compile_commands.json`.
+  `out/<dir>/compile_commands.json`, which the generator writes beside
+  `build.ninja` on every regeneration.
+- Every source compiled through a toolchain profile (`b.toolchain(...).compile`)
+  gets an entry automatically. Guest C sources built by `guest()` are indexed
+  against the in-tree headers the SDK sysroot is staged from; host unit-test
+  sources are indexed from their `TESTS` entry in `tests/unit/BUILD.py`; the
+  kernel indexes the other runtime's first-party glue so one lint pass covers
+  both runtimes.
+- A source compiled through a wrapper or a multi-source custom command
+  (`b.command`) has no automatic entry; the manifest adds one with
+  `b.index(source, [compiler, *flags])`, or the file shows up in CLion as "not in
+  a project target." Verify coverage: a file's realpath appears in
+  `out/<dir>/compile_commands.json`. See `skills/wasmos-ide-targets`.
 
 ## Host unit tests
-- Live in `tests/unit/`, wired into the `run-kernel-unit-tests` target in the root
-  `CMakeLists.txt` (one `COMMAND` per test: compile with `-I${KERNEL_DIR}/include`
-  or `-I${LIBSYS_WASM_DIR}/include`, then run the binary).
+- Live in `tests/unit/`, wired into the `run-kernel-unit-tests` target by the
+  `TESTS` table in `tests/unit/BUILD.py`: a `(CC, name, args)` entry builds the
+  binary (args carry `-I` paths such as `src/kernel/include` or
+  `src/libsys/wasm/include` plus the sources), and a `(RUN, name, args)` entry runs
+  it. `ninja -C out/<dir> run-kernel-unit-tests` runs every suite in order.
 - Modules using `list_t` link `list.c list_linked.c list_array_chunk.c kmem.c` +
   `tests/unit/stubs_slab.c` (see `test_subsystem_registry` / `test_service_class_registry`).
 - `-Isrc/kernel/include` shadows `<stdio.h>` with the kernel's; use `printf` (not
@@ -73,7 +77,8 @@ Adding a kernel `.c` requires updating all three or the link fails:
 
 ## Runtimes and packaging
 - Two WASM runtimes: wasm3 (default interpreter) and WARP
-  (`-DWASMOS_WASM_RUNTIME_WARP=ON`, single-pass JIT). Both run guests under
+  (Kconfig `WASMOS_WASM_RUNTIME_WARP=y`, e.g. `configs/warp_smp_defconfig`;
+  single-pass JIT). Both run guests under
   **ring-3 isolation** (the standard execution model — selecting WARP implies
   ring-3; non-ring3 is unsupported). `libs/wasm3`/`libs/warp` are git subtrees —
   never edit them.
@@ -87,10 +92,15 @@ Adding a kernel `.c` requires updating all three or the link fails:
   `linker.metadata`. Native services enter at `initialize(...)`; WASM apps export
   `initialize` / `wasmos_main`. Startup values arrive via the spawn-info buffer, not
   entry args (`docs/architecture/09` / `13`).
-- Build/run: `cmake -S . -B build`; targets `bootloader`, `kernel`, `run-qemu-test`
-  (compile+boot+halt smoke), `run-kernel-unit-tests`. ESP staleness: Python tests boot
-  `build/esp/kernel.elf`, staged by the `run-*` targets — rebuild via cmake or restage
-  `build/kernel.elf` before running a Python test directly.
+- Build/run: `./configure out/<dir> configs/<name>_defconfig`, then
+  `ninja -C out/<dir> <target>`; targets `bootloader`, `kernel`, `esp`,
+  `run-qemu-test` (compile+boot+halt smoke), `run-kernel-unit-tests`. ESP
+  staleness: Python tests boot `out/<dir>/esp/kernel.elf`, staged by the `esp`
+  target (a dependency of every `run-*` target and of the default build) — run
+  `ninja -C out/<dir>` before running a Python test directly. A test run outside
+  the `run-*` targets reads `WASMOS_ESP` / `WASMOS_KERNEL` (default `build/esp`,
+  `build/kernel.elf`, `scripts/qemu_test_framework.py`), so point them at
+  `out/<dir>`.
 
 ## FS subsystem topology (for reference)
 - `fs_manager` (WASM app, `src/services/fs_manager/`) is the VFS broker; backends

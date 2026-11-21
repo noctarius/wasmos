@@ -28,8 +28,8 @@ there.
 RUN IT UNDER BOTH RUNTIMES. A WARP-only pass proves nothing about wasm3, which
 is the runtime the question is actually about:
 
-    cmake -S . -B build-wasm3 -DWASMOS_DOTCONFIG=configs/wasm3_smp_defconfig
-    cmake -S . -B build-warp  -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig
+    ./configure out/wasm3-smp configs/wasm3_smp_defconfig
+    ./configure out/warp-smp  configs/warp_smp_defconfig
 """
 
 import os

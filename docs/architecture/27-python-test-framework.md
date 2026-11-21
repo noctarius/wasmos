@@ -45,15 +45,21 @@ class QemuConfig:
 
 #### Environment overrides
 
-`default_config(build_dir="build")` reads the CMake cache and then applies
-environment variable overrides:
+`default_config(build_dir="build")` builds the configuration from environment
+variables. Every `run-qemu*` Ninja target (`scripts/system/BUILD.py`) exports
+the paths its build directory resolved, so a test run through a target boots
+that tree's artifacts:
 
 | Variable                   | Field            | Notes                                     |
 |----------------------------|------------------|-------------------------------------------|
-| `WASMOS_OVMF_CODE`         | `ovmf_code`      | Overrides CMake cache `OVMF_CODE`         |
-| `WASMOS_OVMF_VARS`         | `ovmf_vars`      | Overrides CMake cache `OVMF_VARS`         |
+| `WASMOS_OVMF_CODE`         | `ovmf_code`      | Required; set from `buildgen-tools.json`  |
+| `WASMOS_OVMF_VARS`         | `ovmf_vars`      | Optional writable vars image              |
 | `WASMOS_ESP`               | `esp_dir`        | Default: `<build_dir>/esp`                |
-| `WASMOS_USERFS`            | `userfs_dir`     | Default: `<source_dir>/userfs`            |
+| `WASMOS_KERNEL`            | (build dir)      | Locates the tree's kernel and host tools  |
+| `WASMOS_USERFS_IMAGE`      | `userfs_image`   | Default: `user.img` beside the ESP        |
+| `WASMOS_WFS_IMAGE`         | `wfs_image`      | Default: `<build_dir>/wfs.img`            |
+| `WASMOS_WFS_VIRTIO_IMAGE`  | `wfs_virtio_image` | Default: `<build_dir>/wfs_virtio.img`   |
+| `WASMOS_QEMU_SMP_COUNT`    | `smp_count`      | `4` for an SMP kernel, else `1`           |
 | `WASMOS_QEMU_ISOLATE_ESP`  | `isolate_esp`    | Set to `1` to enable per-test ESP copies  |
 | `WASMOS_QEMU_MONITOR`      | `enable_monitor` | Set to `1` to enable the QMP socket       |
 | `WASMOS_QEMU_MONITOR_SOCK` | `monitor_socket` | Explicit socket path (implies monitor on) |
@@ -63,7 +69,7 @@ environment variable overrides:
 When `isolate_esp=True`, `QemuSession.start()` copies the ESP directory into a
 fresh temporary directory before launch.  This prevents one test's filesystem
 writes from affecting the next.  The copy is cleaned up via `atexit`.  The
-`run-qemu-cli-test` CMake target sets `WASMOS_QEMU_ISOLATE_ESP=1` so every
+`run-qemu-cli-test` Ninja target sets `WASMOS_QEMU_ISOLATE_ESP=1` so every
 unittest in `tests/` gets an isolated view.
 
 ---
@@ -330,8 +336,8 @@ class TestKeyboardInput(unittest.TestCase):
 
 ### Constraints
 
-**No parallel QEMU runs.**  All integration targets share `build/esp` (a mutable
-FAT image).  Running two QEMU tests concurrently causes `Error deleting` races
+**No parallel QEMU runs.**  All integration targets of a build directory share
+`out/<dir>/esp` (a mutable FAT image).  Running two QEMU tests concurrently causes `Error deleting` races
 and boot-config corruption.  Always run one target at a time.
 
 **Tests assert runtime behaviour only.**  Serial output markers, exit codes,

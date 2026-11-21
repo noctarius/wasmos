@@ -172,10 +172,10 @@ Opcodes drive all IPC, so a boot smoke exercises them. Use the per-runtime build
 dirs (see `skills/wasmos-build-and-run`):
 
 ```sh
-cmake -S . -B build-wasm3 -DWASMOS_DOTCONFIG=configs/wasm3_smp_defconfig && \
-  cmake --build build-wasm3 --target run-qemu-test
-cmake -S . -B build-warp  -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig  && \
-  cmake --build build-warp  --target run-qemu-test
+./configure out/wasm3-smp configs/wasm3_smp_defconfig && \
+  ninja -C out/wasm3-smp run-qemu-test
+./configure out/warp-smp  configs/warp_smp_defconfig  && \
+  ninja -C out/warp-smp  run-qemu-test
 ```
 
 ## Guardrails

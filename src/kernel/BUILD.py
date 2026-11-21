@@ -1,0 +1,262 @@
+"""Kernel: kernel.elf, linked twice so the final image embeds its own symbol
+table (scripts/gen_kernel_kallsyms.py reads the first link's symbols)."""
+
+# Link order. The image layout follows it, so keep entry.o first.
+CORE = [
+    "arch/x86_64/entry.S",
+    "arch/x86_64/context_switch.S",
+    "arch/x86_64/cpu_isr.S",
+    "arch/x86_64/smp_trampoline.S",
+    "kernel.c",
+    "kpanic.c",
+    "kallsyms.c",
+    "kernel_boot_runtime.c",
+    "kernel_init_runtime.c",
+    "kernel_selftest_runtime.c",
+    "kernel_sched_selftest_runtime.c",
+    "kernel_ring3_fault_runtime.c",
+    "kernel_ring3_probe_runtime.c",
+    "kernel_ring3_smoke_runtime.c",
+    "kernel_ring3_suite_runtime.c",
+    "kernel_threading_selftest_runtime.c",
+    "kernel_sched_smp_stress_runtime.c",
+    "cpu.c",
+    "arch/x86_64/cpu_x86_64.c",
+    "memory.c",
+    "capability.c",
+    "pci_config.c",
+    "policy.c",
+    "slab.c",
+    "syscall.c",
+    "libc.c",
+    "klog.c",
+    "kmem.c",
+    "list.c",
+    "list_linked.c",
+    "list_array_chunk.c",
+    "hashmap.c",
+    "subsystem_registry.c",
+    "service_class_registry.c",
+    "service_name_watch.c",
+    "wasmos_exec_format.c",
+    "paging.c",
+    "linmem_slots.c",
+    "physmem.c",
+    "runtime_context.c",
+    "ipc.c",
+    "idtable.c",
+    "block_buffer.c",
+    "hostcall_dma.c",
+    "hostcall_value.c",
+    "kenv.c",
+    "kmsg.c",
+    "hostcall_buffer.c",
+    "process.c",
+    "thread.c",
+    "sched_thread.c",
+    "sched_event.c",
+    "poll.c",
+    "futex.c",
+    "spinlock.c",
+    "sync_mutex.c",
+    "sync_semaphore.c",
+    "user_mutex.c",
+    "memory_service.c",
+    "irq.c",
+    "irq_sharing.c",
+    "arch/x86_64/irq_x86_64.c",
+    "msi_vectors.c",
+    "mmio.c",
+    "arch/x86_64/msi_x86_64.c",
+    "arch/x86_64/lapic.c",
+    "arch/x86_64/ioapic.c",
+    "arch/x86_64/smp.c",
+    "timer.c",
+    "process_manager.cpp",
+    "xfer_buffer/xfer_buffer.c",
+    "warp_driver_ring3_call_policy.c",
+    "process_manager_services.c",
+    "process_manager_spawn.c",
+    "process_manager_caps.c",
+    "process_manager_shutdown.c",
+    "shutdown_order.c",
+    "wasmos_app.c",
+    "wasmos_app_meta.c",
+    "native_driver.c",
+    "serial.c",
+    "framebuffer.c",
+]
+
+WARP_GLUE = [
+    "warp_driver.cpp",
+    "warp/shim.cpp",
+    "warp/link.cpp",
+    "warp/link_dma.cpp",
+    "warp/link_ipc.cpp",
+    "warp/cxx_abi.cpp",
+    "warp/posix_kernel.c",
+    "warp/mem_utils_kernel.cpp",
+    "warp/os_api_checker_kernel.cpp",
+    "warp/iostream_stubs.cpp",
+    "warp/ring3_trampolines.c",
+    "warp/linker_stubs.cpp",
+    "warp/sjlj_unwind.cpp",
+]
+
+# Vendored WARP sources (libs/warp is a git subtree; never edited here).
+WARP_LIB = [
+    "src/WasmModule/WasmModule.cpp",
+    "src/core/runtime/Runtime.cpp",
+    "src/core/runtime/ActiveMemoryManager.cpp",
+    "src/core/runtime/MemoryHelper.cpp",
+    "src/core/common/BinaryModule.cpp",
+    "src/core/common/VbExceptions.cpp",
+    "src/core/common/ExtendableMemory.cpp",
+    "src/utils/VirtualMemoryAllocator.cpp",
+    "src/core/compiler/Compiler.cpp",
+    "src/core/compiler/backend/BackendBase.cpp",
+    "src/core/compiler/backend/x86_64/x86_64_assembler.cpp",
+    "src/core/compiler/backend/x86_64/x86_64_backend.cpp",
+    "src/core/compiler/backend/x86_64/x86_64_call_dispatch.cpp",
+    "src/core/compiler/backend/x86_64/x86_64_cc.cpp",
+    "src/core/compiler/backend/x86_64/x86_64_instruction.cpp",
+    "src/core/compiler/backend/x86_64/x86_64_relpatchobj.cpp",
+    "src/core/compiler/common/Common.cpp",
+    "src/core/compiler/common/CommonRegsPos.cpp",
+    "src/core/compiler/common/MemWriter.cpp",
+    "src/core/compiler/common/ModuleInfo.cpp",
+    "src/core/compiler/common/Stack.cpp",
+    "src/core/compiler/frontend/BytecodeReader.cpp",
+    "src/core/compiler/frontend/Frontend.cpp",
+    "src/core/compiler/frontend/ValidationStack.cpp",
+]
+
+# Kernel-side wasm3 glue, compiled with the plain kernel flags.
+WASM3_GLUE_KERNEL = ["wasm_driver.c"]
+WASM3_GLUE = ["wasm3/link.c", "wasm3/link_dma.c", "wasm3/link_ipc.c"]
+WASM3_SHIM = ["wasm3/shim.c"]
+WASM3_LIB = [
+    "m3_code.c",
+    "m3_bind.c",
+    "m3_compile.c",
+    "m3_core.c",
+    "m3_env.c",
+    "m3_exec.c",
+    "m3_function.c",
+    "m3_info.c",
+    "m3_module.c",
+    "m3_parse.c",
+]
+
+RING3_PROBES = ["ring3_native_probe", "ring3_thread_lifecycle_probe"]
+
+
+def ring3_probe_blob(b, name):
+    """Compile a ring-3 native probe to a flat binary and wrap it as an ELF
+    object. llvm-objcopy derives the _binary_<file>_start/_end symbols the
+    kernel references from the input file NAME, so it runs in the build
+    directory on a bare filename."""
+    probe = b.toolchain("probe")
+    (obj,) = probe.compile([b.src(f"{name}.c")])
+    ldscript = b.src("arch/x86_64/ring3_native.ld")
+    elf = probe.link(
+        f"{name}.elf", [obj], flags=["-T", str(ldscript)], implicit=[ldscript]
+    )
+    objcopy = b.tools["llvm-objcopy"]
+    b.command(
+        [f"{name}.bin"],
+        [objcopy, "--output-target=binary", elf, f"{name}.bin"],
+        inputs=[elf],
+        description=f"OBJCOPY {name}.bin",
+    )
+    return b.command(
+        [f"{name}_blob.o"],
+        [
+            objcopy,
+            "--input-target=binary",
+            "--output-target=elf64-x86-64",
+            "--binary-architecture=i386:x86-64",
+            f"{name}.bin",
+            f"{name}_blob.o",
+        ],
+        inputs=[f"{name}.bin"],
+        description=f"BLOB {name}_blob.o",
+    )[0]
+
+
+def build(b):
+    cfg = b.cfg
+    kernel = b.toolchain("kernel")
+    warp = cfg.WASMOS_WASM_RUNTIME_WARP
+
+    if warp:
+        objs = kernel.compile(b.srcs(*CORE))
+        kwarp = b.toolchain("kernel-warp")
+        objs += kwarp.compile(b.srcs(*WARP_GLUE))
+        objs += kwarp.compile([b.root / "libs/warp" / s for s in WARP_LIB])
+    else:
+        wasm3_inc = [f"-I{b.root / 'libs/wasm3/source'}"]
+        wasm3_lib = ["-Wno-unused-variable"]
+        objs = kernel.compile(b.srcs(*CORE), flags=wasm3_inc)
+        objs += kernel.compile(b.srcs(*WASM3_GLUE_KERNEL), flags=wasm3_inc)
+        objs += kernel.compile(b.srcs(*WASM3_GLUE), flags=wasm3_inc + wasm3_lib)
+        objs += kernel.compile(b.srcs(*WASM3_SHIM), flags=wasm3_inc)
+        objs += kernel.compile(
+            [b.root / "libs/wasm3/source" / s for s in WASM3_LIB],
+            flags=wasm3_inc + wasm3_lib,
+        )
+
+    # Index the other runtime's first-party glue, with the flags a tree of that
+    # runtime compiles it with, so one lint pass covers both runtimes.
+    other = {"WASMOS_WASM_RUNTIME_WARP": not warp, "WASMOS_WASM_RUNTIME_WASM3": warp}
+    if warp:
+        tc = b.toolchain("kernel", overrides=other).tc
+        wasm3_inc = [f"-I{b.root / 'libs/wasm3/source'}"]
+        for src in b.srcs(*WASM3_GLUE_KERNEL, *WASM3_GLUE, *WASM3_SHIM):
+            b.index(src, [tc.cc, *tc.cflags, *wasm3_inc])
+    else:
+        tc = b.toolchain("kernel-warp", overrides=other).tc
+        for src in b.srcs(*WARP_GLUE):
+            cxx = src.suffix == ".cpp"
+            b.index(
+                src, [tc.cxx if cxx else tc.cc, *(tc.cxxflags if cxx else tc.cflags)]
+            )
+
+    # Embedded blobs: guest modules registered by other manifests first, then
+    # the native ring-3 probes.
+    blobs = list(b.exports.get("kernel.blobs", []))
+    blobs += [ring3_probe_blob(b, p) for p in RING3_PROBES]
+
+    ldscript = b.src("arch/x86_64/linker.ld")
+    ldflags = ["-T", str(ldscript)]
+    base = kernel.link(
+        "kernel.base.elf", objs + blobs, flags=ldflags, implicit=[ldscript]
+    )
+
+    gen = b.root / "scripts/gen_kernel_kallsyms.py"
+    b.command(
+        ["kernel_kallsyms_data.c"],
+        [
+            b.tools["python"],
+            gen,
+            "--nm",
+            b.tools["llvm-nm"],
+            "--input",
+            base,
+            "--output",
+            "kernel_kallsyms_data.c",
+        ],
+        inputs=[base],
+        implicit=[gen],
+        description="KALLSYMS kernel_kallsyms_data.c",
+    )
+    kallsyms = kernel.compile(
+        [b.out / "kernel_kallsyms_data.c"],
+        obj_names={b.out / "kernel_kallsyms_data.c": "kernel_kallsyms_data.o"},
+    )
+
+    elf = kernel.link(
+        "kernel.elf", objs + blobs + kallsyms, flags=ldflags, implicit=[ldscript]
+    )
+    b.alias("kernel", elf, default=True)
+    b.exports["kernel.elf"] = elf

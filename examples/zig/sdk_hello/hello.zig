@@ -1,7 +1,7 @@
 //! sdk_hello (Zig) - the Zig driver's own smoke app.
 //!
 //! Plain Zig against the `wasmos.zig` shim, built by the staged SDK
-//! (cmake/WasmosSdk.cmake) with no flags but -o and no linker.metadata of its
+//! (scripts/sdk/BUILD.py) with no flags but -o and no linker.metadata of its
 //! own. It exercises what a developer never sees on the Zig path: the shims
 //! staged flat so `@import("wasmos.zig")` resolves, the mandatory 8 KiB shadow
 //! stack, the layout check that refuses a module whose globals would sit above

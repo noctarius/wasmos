@@ -2,7 +2,7 @@
 //
 // A loadable clang-tidy module ("wasmos-*") holding project-specific checks.
 // Built against the LLVM the gate runs (see the wasmos_tidy_plugin target in
-// the top-level CMakeLists) and loaded via `clang-tidy --load`. Register new
+// tools/clang_tidy_wasmos/BUILD.py) and loaded via `clang-tidy --load`. Register new
 // checks in WasmosModule::addCheckFactories.
 //
 // Checks:

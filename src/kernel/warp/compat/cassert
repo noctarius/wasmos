@@ -10,7 +10,7 @@
  * spinning one CPU forever. The failing expression is the panic reason and the
  * source line is passed as the first context value.
  *
- * The WARP kernel flags (CFLAGS_WARP_CXX in src/kernel/CMakeLists.txt) do not
+ * The WARP kernel flags (the kernel-warp profile in scripts/buildgen/toolchains.py) do not
  * define NDEBUG, so the checking form below is the one that is compiled: every
  * WARP assert is live and every failure is a kernel panic rather than a
  * recoverable trap that unwinds to the WARP_CALL checkpoint. */

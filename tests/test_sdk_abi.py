@@ -7,7 +7,7 @@ symbol) that the linker was allowed to invent. The C toolchain does not need
 --allow-undefined, so an undeclared symbol is a link error rather than an import;
 this test is what notices if that stops being true.
 
-Runs against the artifact cmake/WasmosSdk.cmake already built, and skips when the
+Runs against the artifact the build already produced (scripts/sdk/BUILD.py), and skips when the
 SDK has not been staged, so it belongs to the host-tools battery and needs no QEMU.
 """
 
@@ -24,11 +24,11 @@ for path in (ROOT, SCRIPTS):
 import wasm_inspect
 from scripts.qemu_test_framework import default_build_dir
 
-# The tree the suite was started from (WASMOS_KERNEL, set by every CMake test
-# target), not a fixed "build": a stale sibling tree holds packages of an older
+# The tree the suite was started from (WASMOS_KERNEL, set by every run target),
+# not a fixed directory: a stale sibling tree holds packages of an older
 # .wap version that this checkout's reader rightly refuses.
 BUILD_DIR = os.environ.get(
-    "WASMOS_BUILD_DIR", default_build_dir(os.path.join(ROOT, "build"))
+    "WASMOS_BUILD_DIR", default_build_dir(os.path.join(ROOT, "out", "default"))
 )
 SDK_DIR = os.path.join(BUILD_DIR, "wasmos-sdk")
 SDK_HELLO_WAP = os.path.join(BUILD_DIR, "sdkhello.wap")
@@ -92,7 +92,7 @@ def module_imports(path: str) -> list[str]:
 
 @unittest.skipUnless(
     os.path.isfile(SDK_HELLO_WAP),
-    "SDK smoke app not built (cmake --build build --target sdk_hello_app)",
+    "SDK smoke app not built (ninja -C <build-dir> sdkhello.wap)",
 )
 class SdkAbiTest(unittest.TestCase):
     def test_imports_are_declared_hostcalls(self):
@@ -132,7 +132,7 @@ class SdkAbiTest(unittest.TestCase):
     def test_sysroot_headers_carry_no_repo_relative_abi_include(self):
         """api.h's in-tree include reaches outside src/; a sysroot cannot.
 
-        cmake/wasmos_sdk_stage.cmake rewrites it and fails loudly if it cannot, so
+        scripts/sdk_stage.py rewrites it and fails loudly if it cannot, so
         this asserts the installed result rather than the rewrite.
         """
         api = os.path.join(SDK_DIR, "sysroot", "include", "wasmos", "api.h")

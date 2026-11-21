@@ -493,6 +493,11 @@ def generate(srcdir: Path, outdir: Path, tools: dict, argv_for_regen: list[str])
         + " ".join(_esc_path(p) for p in sorted(graph.regen_inputs))
         + f"\n  regen_cmd = {_esc_value(shell_join(argv_for_regen))}\n"
     )
+    # A regeneration input can disappear (a deleted manifest, a removed
+    # directory a manifest globbed). Without a rule for it ninja refuses to
+    # regenerate; a phony edge makes the missing input out of date, which
+    # regenerates once, after which the input is no longer listed.
+    lines.extend(f"build {_esc_path(p)}: phony\n" for p in sorted(graph.regen_inputs))
     # Interactive config editor on this directory's .config. It has no output
     # file, so it always runs; the edited .config then triggers regeneration.
     menuconfig = (

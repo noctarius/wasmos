@@ -2162,6 +2162,13 @@ Source: `architecture/25-diagnostics-status.md`,
 
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
+- [ ] [BUG][P2] Stage `virtio_serial.wap` where device-manager looks for it.
+  `scripts/system/devmgr/rules/default.rules:73` spawns
+  `system/drivers/virtio_serial.wap` for a virtio-serial device, but neither
+  the ESP plan (`src/drivers/virtio_serial/BUILD.py` installs nothing) nor
+  `scripts/initfs.toml` carries it, so the driver cannot start. No QEMU
+  configuration attaches a virtio-serial device today, so nothing observes the
+  gap; the regression test boots with one and asserts the driver registers.
 - [ ] [CLEANUP][P2] Reconcile the diverged duplicate headers
   `src/libc/include/wasmos/{mutex,rtc_ipc}.h` and
   `src/libsys/wasm/include/wasmos/{mutex,rtc_ipc}.h`. The SDK sysroot ships

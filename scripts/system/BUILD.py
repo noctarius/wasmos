@@ -6,9 +6,29 @@ b.exports (kernel, loader, the packer, esp.files)."""
 
 import json
 import re
+from pathlib import Path
 
 WFS_UUID = "5746532d74654573742d766f6c756d65"
 WFS_VIRTIO_UUID = "5746532d76697274696f2d766f6c3031"
+# Tool paths a ring-3 shadow tree inherits from its parent (configure options).
+SHADOW_TOOLS = [
+    "clang",
+    "clangxx",
+    "ld.lld",
+    "lld-link",
+    "llvm-objcopy",
+    "llvm-nm",
+    "llvm-ar",
+    "wasm-ld",
+    "zig",
+    "asc",
+    "rustc",
+    "tinygo",
+    "wasm-opt",
+    "qemu",
+    "ovmf-code",
+    "ovmf-vars",
+]
 # The SMP topology QEMU emulates for an SMP kernel.
 SMP_CPUS = 4
 
@@ -149,6 +169,9 @@ def esp(b, initfs_img):
                 "files": [[d, path(s)] for d, s in files],
                 "trees": [[d, str(s)] for d, s in trees],
                 "optional": [[d, str(s)] for d, s in optional],
+                # Presence of each optional source: removing one changes the
+                # plan, which re-stages the placeholder.
+                "optional_present": [Path(s).is_file() for _, s in optional],
                 "dirs": dirs,
             },
             indent=1,
@@ -156,6 +179,11 @@ def esp(b, initfs_img):
         + "\n",
     )
     tree_inputs = [f for _, t in trees for f in b.glob("**/*", root=t)]
+    # The trust store may appear, change or vanish after a build; globbing its
+    # directory regenerates on creation/removal and tracks existing files.
+    tree_inputs += [
+        f for _, src in optional for f in b.glob("*", root=Path(src).parent)
+    ]
     stage = root / "scripts/stage_esp.py"
     b.command(
         ["esp.stamp"],
@@ -363,6 +391,9 @@ def run_targets(b, esp_stamp, images):
             [],
         ),
     ]
+    # The shadow tree builds and boots with exactly this tree's toolchain and
+    # firmware, including paths given to this tree's configure.
+    inherited = [f"--{key}={tools[key]}" for key in SHADOW_TOOLS if tools.get(key)]
     for target, subdir, check, extra in shadows:
         tree = out / subdir
         sets = [
@@ -377,7 +408,8 @@ def run_targets(b, esp_stamp, images):
             [
                 configure
                 + [tree, root / "configs/wasmos_defconfig", "--reseed"]
-                + [x for a in sets for x in ("--set", a)],
+                + [x for a in sets for x in ("--set", a)]
+                + inherited,
                 ["ninja", "-C", tree, check],
             ],
             description=f"{subdir} tree: {check}",

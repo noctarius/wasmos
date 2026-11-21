@@ -119,11 +119,21 @@ def main() -> int:
             )
         if args.set:
             apply_overrides(dotconfig, args.set)
-        overrides = {
-            t: getattr(args, t.replace(".", "_").replace("-", "_"))
-            for t in TOOL_OPTIONS
-        }
-        tools = toolchains.discover({k: v for k, v in overrides.items() if v}, SRCDIR)
+        # Tool overrides persist with the build directory: a later configure
+        # (say, --set to change one symbol) keeps the paths given earlier
+        # unless it names new ones.
+        overrides_file = outdir / "buildgen-overrides.json"
+        overrides = (
+            json.loads(overrides_file.read_text()) if overrides_file.exists() else {}
+        )
+        for t in TOOL_OPTIONS:
+            value = getattr(args, t.replace(".", "_").replace("-", "_"))
+            if value:
+                overrides[t] = value
+        overrides_file.write_text(
+            json.dumps(overrides, indent=1, sort_keys=True) + "\n"
+        )
+        tools = toolchains.discover(overrides, SRCDIR)
         tools["python"] = sys.executable
         tools_file.write_text(json.dumps(tools, indent=1, sort_keys=True) + "\n")
 

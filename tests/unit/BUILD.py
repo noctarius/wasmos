@@ -36,6 +36,9 @@ HOST_ASM = R(
     else "src/libsys/native/coroutine_native_x86_64.S"
 )
 
+# Linker flag that drops unreferenced sections (ld64 vs GNU/lld spelling).
+DEAD_STRIP = "-Wl,-dead_strip" if platform.system() == "Darwin" else "-Wl,--gc-sections"
+
 # Suites in run order.
 # fmt: off
 TESTS = [
@@ -59,7 +62,7 @@ TESTS = [
     (RUN, 'test_block_descriptor', []),
     (CC, 'test_svc_name_from_mount', [*C11, "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_svc_name_from_mount.c')]),
     (RUN, 'test_svc_name_from_mount', []),
-    (CC, 'test_device_manager_block_rules', [*C11, '-Wno-unused-function', '-ffunction-sections', '-fdata-sections', '-Wl,-dead_strip', '-iquote', R('src/services/device_manager'), '-iquote', R('src/libsys/wasm/include'), "-I" + R('src/libc/include'), '-iquote', R('src/drivers/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_device_manager_block_rules.c'), R('tests/unit/stubs_device_manager_host.c'), R('src/services/device_manager/device_manager_rules.c')]),
+    (CC, 'test_device_manager_block_rules', [*C11, '-Wno-unused-function', '-ffunction-sections', '-fdata-sections', DEAD_STRIP, '-iquote', R('src/services/device_manager'), '-iquote', R('src/libsys/wasm/include'), "-I" + R('src/libc/include'), '-iquote', R('src/drivers/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_device_manager_block_rules.c'), R('tests/unit/stubs_device_manager_host.c'), R('src/services/device_manager/device_manager_rules.c')]),
     (RUN, 'test_device_manager_block_rules', []),
     (CC, 'test_fs_manager_path', [*C11, "-I" + R('src/services/fs_manager'), R('tests/unit/test_fs_manager_path.c'), R('src/services/fs_manager/fs_manager_path.c')]),
     (RUN, 'test_fs_manager_path', []),

@@ -33,7 +33,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ninja-build python3-pip curl xz-utils git
-          python3 -m pip install --user kconfiglib
 
       - name: Install LLVM ${{ env.LLVM_VERSION }}
         run: |
@@ -83,7 +82,7 @@ jobs:
       - name: Install Python format/lint tools
         run: |
           pip install "black==${BLACK_VERSION}" "ruff==${RUFF_VERSION}" \
-            "PyYAML==${PYYAML_VERSION}"
+            "PyYAML==${PYYAML_VERSION}" kconfiglib
 
       # clang-format is pinned SEPARATELY from LLVM_VERSION, because formatting
       # is not stable across clang-format majors -- 20 arranges a short braced

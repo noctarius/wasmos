@@ -37,6 +37,9 @@ def build(b):
             *b.glob("zig/*.zig", root=libsys),
             *b.glob("*.h", root=drivers_inc),
             *b.glob("wasmos/*.h", root=libc_inc),
+            # Reached through wasmos_driver_abi.h and libsys/zig/c_abi.zig.
+            *b.glob("*.h", root=root / "abi/generated/c"),
+            *b.glob("include/wasmos/*.h", root=libsys),
         ],
     )
     tc = b.toolchain("native")

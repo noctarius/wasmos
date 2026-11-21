@@ -1,6 +1,8 @@
 """Stage the relocatable WASMOS SDK: sysroot headers, wrappers, libexec, share/
 and wasmos-sdk.conf (see scripts/sdk_stage.py and docs/toolchain.md)."""
 
+from wasmos_rules import install, lang_available
+
 SDK_VERSION = "0.1.0-spike"
 # Layout constants the Zig driver enforces; cmake/WasmosZigApp.cmake documents them.
 ZIG_STACK_SIZE = 8192
@@ -97,5 +99,33 @@ def build(b):
     )
 
     deps = [stamp, *b.exports["sdk.archives"]]
-    b.exports["sdk"] = {"clang": clang, "packer": packer, "deps": deps}
+    b.exports["sdk"] = {
+        "bin": f"{sdk_dir}/bin",
+        "clang": clang,
+        "packer": packer,
+        "deps": deps,
+    }
     b.alias("wasmos-sdk", *deps)
+
+    # SDK smoke apps: each wrapper driven end to end from source to .wap with
+    # the default manifest, the way an out-of-tree developer uses it.
+    hellos = [
+        ("c", "wasmos-clang", "examples/c/sdk_hello/hello.c", "sdkhello"),
+        ("zig", "wasmos-zig", "examples/zig/sdk_hello/hello.zig", "sdkzig"),
+        ("as", "wasmos-asc", "examples/assemblyscript/sdk_hello/hello.ts", "sdkas"),
+        ("rust", "wasmos-rustc", "examples/rust/sdk_hello/hello.rs", "sdkrust"),
+        ("go", "wasmos-tinygo", "examples/go/sdk_hello/hello.go", "sdkgo"),
+    ]
+    for lang, driver, source, name in hellos:
+        if not lang_available(b, lang):
+            continue
+        wap = f"{name}.wap"
+        b.command(
+            [wap],
+            [f"{sdk_dir}/bin/{driver}", root / source, "-o", wap],
+            inputs=[root / source],
+            implicit=deps,
+            description=f"SDK {wap}",
+        )
+        install(b, f"apps/{wap}", wap)
+        b.alias("modules", wap)

@@ -14,6 +14,15 @@ def build(b):
 
     b.exports["sdk.libdir"] = "wasmos-sdk/sysroot/lib/wasm32-unknown-wasmos"
     b.exports["sdk.archives"] = []
-    b.subdir("src/libc", "src/libsys", "scripts/sdk")
-    b.subdir("examples/c")
-    b.subdir("src/kernel", "src/boot")
+    b.subdir("src/libc", "src/libsys", "scripts/sdk", "src/tools/warp_aot")
+    b.subdir("src/drivers", "src/services", "src/utils")
+    b.subdir(
+        "examples/c",
+        "examples/assemblyscript",
+        "examples/rust",
+        "examples/go",
+        "examples/zig",
+    )
+    b.subdir("src/kernel", "src/boot", "src/tools/mkfs_wfs")
+    b.alias("modules", default=True)
+    b.subdir("scripts/system")

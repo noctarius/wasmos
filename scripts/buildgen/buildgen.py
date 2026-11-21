@@ -180,12 +180,22 @@ class Builder:
     def glob(self, pattern: str, root: Path | None = None) -> list[Path]:
         """Glob at configure time. The matched directories become regeneration
         inputs, so adding or removing a file re-runs the generator."""
-        base = root or self.dir
-        matches = sorted(Path(p).resolve() for p in globmod.glob(str(base / pattern)))
-        dirs = {str(Path(globmod.escape(str(base / pattern))).parent)}
+        base = Path(root or self.dir)
+        matches = sorted(
+            Path(p).resolve()
+            for p in globmod.glob(str(base / pattern), recursive=True)
+            if Path(p).is_file()
+        )
+        # Every directory the pattern can match in is a regeneration input: its
+        # mtime changes when an entry is added or removed.
+        fixed = Path(str(base / pattern).split("*", 1)[0])
+        top = fixed if fixed.is_dir() else fixed.parent
+        dirs = {top}
+        if "**" in pattern:
+            dirs |= {Path(d) for d, _, _ in os.walk(top)}
         for d in dirs:
-            if Path(d).is_dir():
-                self._g.regen_inputs.add(d)
+            if d.is_dir():
+                self._g.regen_inputs.add(str(d.resolve()))
         return matches
 
     def obj_path(self, source: Path, suffix: str = ".o", subdir: str = "obj") -> str:
@@ -251,10 +261,37 @@ class Builder:
         )
         return outs
 
+    def run_target(self, name, cmd, deps=(), env=None, cwd=None, description=None):
+        """An always-run target with the terminal attached (QEMU sessions, test
+        runners). `env` is set for the command only; `cwd` defaults to the
+        source root, where the test runners expect to start."""
+        argvs = cmd if cmd and isinstance(cmd[0], (list, tuple)) else [cmd]
+        prefix = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in (env or {}).items())
+        text = " && ".join(
+            (prefix + " " if prefix else "") + shell_join(a) for a in argvs
+        )
+        text = f"cd {shlex.quote(str(cwd or self.root))} && {text}"
+        self._g.edge(
+            "console",
+            [name],
+            [],
+            [self._g.rel(d) for d in deps],
+            variables={"cmd": text, "desc": description or name},
+        )
+
     def alias(self, name: str, *targets, default=False):
         self._g.aliases.setdefault(name, []).extend(self._g.rel(t) for t in targets)
         if default:
             self._g.defaults.append(name)
+
+    def write_file(self, path, text: str) -> str:
+        """Write a generated input at generation time, touching it only when its
+        content changes so dependents rebuild exactly when it does."""
+        out = self._g.outdir / path
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if not out.exists() or out.read_text() != text:
+            out.write_text(text)
+        return self._g.rel(out)
 
     def regen_on(self, *paths):
         for p in paths:
@@ -385,6 +422,11 @@ rule cmd_dep
   command = $cmd
   depfile = $depfile
   deps = gcc
+  description = $desc
+
+rule console
+  command = $cmd
+  pool = console
   description = $desc
 
 rule regen

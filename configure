@@ -39,6 +39,9 @@ TOOL_OPTIONS = [
     "rustc",
     "tinygo",
     "wasm-opt",
+    "qemu",
+    "ovmf-code",
+    "ovmf-vars",
 ]
 
 

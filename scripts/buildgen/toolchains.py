@@ -24,6 +24,40 @@ LLVM_HINTS = [
 LLD_HINTS = ["/opt/homebrew/opt/lld/bin", "/usr/local/opt/lld/bin"]
 
 
+OVMF_CODE_CANDIDATES = [
+    "/usr/share/OVMF/OVMF_CODE.fd",
+    "/opt/homebrew/share/OVMF/OVMF_CODE.fd",
+    "/usr/local/share/OVMF/OVMF_CODE.fd",
+    "/opt/homebrew/share/qemu/edk2-x86_64-code.fd",
+    "/opt/homebrew/share/qemu/edk2-i386-code.fd",
+    "/usr/local/share/qemu/edk2-x86_64-code.fd",
+    "/usr/local/share/qemu/edk2-i386-code.fd",
+    "/opt/homebrew/share/qemu/edk2-x86_64-secure-code.fd",
+    "/usr/local/share/qemu/edk2-x86_64-secure-code.fd",
+    "/opt/homebrew/share/edk2-ovmf/OVMF_CODE.fd",
+    "/usr/local/share/edk2-ovmf/OVMF_CODE.fd",
+    "/opt/homebrew/share/edk2/OVMF/OVMF_CODE.fd",
+    "/usr/local/share/edk2/OVMF/OVMF_CODE.fd",
+]
+OVMF_VARS_CANDIDATES = [
+    "/usr/share/OVMF/OVMF_VARS.fd",
+    "/opt/homebrew/share/OVMF/OVMF_VARS.fd",
+    "/usr/local/share/OVMF/OVMF_VARS.fd",
+    "/opt/homebrew/share/qemu/edk2-x86_64-vars.fd",
+    "/opt/homebrew/share/qemu/edk2-i386-vars.fd",
+    "/usr/local/share/qemu/edk2-x86_64-vars.fd",
+    "/usr/local/share/qemu/edk2-i386-vars.fd",
+    "/opt/homebrew/share/edk2-ovmf/OVMF_VARS.fd",
+    "/usr/local/share/edk2-ovmf/OVMF_VARS.fd",
+    "/opt/homebrew/share/edk2/OVMF/OVMF_VARS.fd",
+    "/usr/local/share/edk2/OVMF/OVMF_VARS.fd",
+]
+
+
+def _first_existing(candidates: list[str]) -> str:
+    return next((c for c in candidates if Path(c).is_file()), "")
+
+
 def _find(name: str, hints: list[str], required=True) -> str | None:
     for d in hints:
         p = Path(d) / name
@@ -104,6 +138,18 @@ def discover(overrides: dict[str, str], srcdir: Path) -> dict[str, str]:
         or ""
     )
     tools["host-os"] = platform.system()
+    tools["qemu"] = (
+        overrides.get("qemu") or _find("qemu-system-x86_64", [], required=False) or ""
+    )
+    tools["ovmf-code"] = overrides.get("ovmf-code") or _first_existing(
+        OVMF_CODE_CANDIDATES
+    )
+    tools["ovmf-vars"] = overrides.get("ovmf-vars") or _first_existing(
+        OVMF_VARS_CANDIDATES
+    )
+    # An i386 vars store beside x86_64 firmware hangs the boot; drop it.
+    if "i386" in tools["ovmf-vars"] and "x86_64" in tools["ovmf-code"]:
+        tools["ovmf-vars"] = ""
     return tools
 
 
@@ -292,6 +338,17 @@ def profiles(srcdir: Path, cfg, tools: dict) -> dict[str, Toolchain]:
             tools["llvm-ar"],
             cflags=kernel + [warp_compat],
             cxxflags=warp_cxx,
+        ),
+        # Native ring-3 modules (framebuffer drivers, Zig/C services). Their
+        # flag sets differ per module, so the profile carries only the target.
+        "native": Toolchain(
+            "native",
+            clang,
+            clangxx,
+            tools["ld.lld"],
+            tools["llvm-ar"],
+            cflags=["-target", cfg.get("KERNEL_TARGET_TRIPLE", "x86_64-elf")],
+            asflags=["-target", cfg.get("KERNEL_TARGET_TRIPLE", "x86_64-elf")],
         ),
         "probe": Toolchain(
             "probe",

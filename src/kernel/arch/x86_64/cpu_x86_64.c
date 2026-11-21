@@ -858,18 +858,6 @@ void x86_cpu_relocate_tables_high(void) {
     __asm__ volatile("ltr %0" : : "r"(tss_selector) : "memory");
 }
 
-/* Unconditional sti/cli on the calling CPU. Neither saves nor restores the
- * previous IF state, so they do not nest: a disable/enable pair around a region
- * enables interrupts even if they were already masked on entry. Code that needs
- * nesting uses the spinlock/critical-section helpers instead. */
-void x86_cpu_enable_interrupts(void) {
-    __asm__ volatile("sti");
-}
-
-void x86_cpu_disable_interrupts(void) {
-    __asm__ volatile("cli");
-}
-
 /* ----------------------------------------------------------------- SMP init */
 
 #if WASMOS_SMP

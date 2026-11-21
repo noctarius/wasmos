@@ -23,6 +23,7 @@
 
 #include "sched.h"
 #include "thread.h"
+#include "arch/arch_cpu.h"
 #include "cpu_local.h"
 
 /* ------------------------------------------------------------------ harness */
@@ -306,7 +307,7 @@ static void barrier_init(test_barrier_t* b, int n) {
 static void barrier_wait(test_barrier_t* b) {
     __atomic_fetch_add(&b->count, 1, __ATOMIC_ACQ_REL);
     while (__atomic_load_n(&b->count, __ATOMIC_ACQUIRE) < b->target) {
-        cpu_relax();
+        arch_cpu_relax();
     }
 }
 

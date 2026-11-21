@@ -21,11 +21,3 @@ void cpu_set_kernel_stack(uint64_t rsp0) {
 void cpu_relocate_tables_high(void) {
     x86_cpu_relocate_tables_high();
 }
-
-void cpu_enable_interrupts(void) {
-    x86_cpu_enable_interrupts();
-}
-
-void cpu_disable_interrupts(void) {
-    x86_cpu_disable_interrupts();
-}

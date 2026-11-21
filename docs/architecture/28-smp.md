@@ -311,7 +311,7 @@ void smp_ap_c_entry(uint32_t cpu_id)
     /* Signal the BSP that this AP is live. */
     __atomic_store_n(&cpu->started, 1, __ATOMIC_RELEASE);
 
-    x86_cpu_enable_interrupts();
+    arch_irq_enable();
 
     /* Join the scheduler. */
     while (1) {
@@ -399,11 +399,11 @@ Upgrade plan for `spinlock_acquire()`:
 
 ```c
 static inline void spinlock_acquire(spinlock_t *lock) {
-    x86_cpu_disable_interrupts();
+    arch_irq_disable();
     while (__atomic_exchange_n(&lock->locked, 1, __ATOMIC_ACQUIRE)) {
-        x86_cpu_enable_interrupts();
-        __asm__ volatile("pause");
-        x86_cpu_disable_interrupts();
+        arch_irq_enable();
+        arch_cpu_relax();
+        arch_irq_disable();
     }
 }
 ```

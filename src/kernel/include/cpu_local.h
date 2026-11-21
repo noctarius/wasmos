@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "arch/arch_cpu.h"
 #include "arch/cpu_local_arch.h"
 #include "sync/spinlock.h"
 #include "process.h"
@@ -53,7 +54,7 @@ typedef struct cpu_local {
 
     /* Per-CPU IRQ-disable nesting (moved from spinlock.c globals for SMP safety). */
     volatile uint32_t irq_disable_depth;
-    uint64_t irq_saved_flags;
+    arch_irq_flags_t irq_saved_flags;
 
     /* Per-CPU ready queues (one FIFO per priority level).
      * Threads are enqueued on the waking CPU's sched, giving IPC callers and

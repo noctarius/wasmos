@@ -23,6 +23,7 @@
 #include "sched.h"
 #include "sched_event.h"
 #include "futex.h"
+#include "arch/arch_cpu.h"
 #include "cpu_local.h"
 
 #ifdef WASMOS_WASM_RUNTIME_WARP
@@ -742,7 +743,7 @@ static void process_trampoline(void) {
          * restore normal interrupt delivery before calling their entry point so
          * timer ticks keep advancing while ring-0 process code runs. */
 #ifndef WASMOS_PROCESS_TEST_SEAMS
-        __asm__ volatile("sti" ::: "memory");
+        arch_irq_enable();
 #endif
         if (!cpu_local()->current_process || !cpu_local()->current_process->entry) {
             cpu_local()->last_run_result = PROCESS_RUN_IDLE;

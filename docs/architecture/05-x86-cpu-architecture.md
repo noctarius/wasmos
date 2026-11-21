@@ -508,14 +508,19 @@ irq_late_init(boot_info)                    ← phase 2
        ├─ ioapic_map()      ← paging_map_4k at 0xFFFFFFFF800FF000
        └─ ioapic_program_rtes() ← 16 RTEs, all masked, vectors 32–47
 
-cpu_enable_interrupts()                     ← sti
+arch_irq_enable()                           ← sti
 ```
 
 After `x86_cpu_relocate_tables_high()`: GDTR, IDTR, and TR are reloaded with
 higher-half virtual addresses.
 
-`x86_cpu_enable_interrupts()` / `x86_cpu_disable_interrupts()` wrap
-`sti` / `cli`.
+The per-CPU control primitives are static inlines in
+`include/arch/x86_64/arch_cpu.h`, reached through `include/arch/arch_cpu.h`:
+`arch_irq_enable()` / `arch_irq_disable()` (`sti` / `cli`),
+`arch_irq_save()` / `arch_irq_restore()` (RFLAGS save + `cli` / `popfq`),
+`arch_wait_for_interrupt()` (`sti; hlt`, relying on the `sti` interrupt
+shadow), `arch_halt_forever()` (`cli; hlt` loop) and `arch_cpu_relax()`
+(`pause`). Code outside `arch/` uses only these, never inline `cli`/`sti`/`hlt`.
 
 ---
 
@@ -543,7 +548,7 @@ higher-half virtual addresses.
    loads the full TSS.
 
 6. **Higher-half relocation is done before `sti`.** Interrupts remain disabled
-   until after `x86_cpu_relocate_tables_high()` and `x86_cpu_enable_interrupts()`
+   until after `x86_cpu_relocate_tables_high()` and `arch_irq_enable()`
    are called from `kmain`.
 
 7. **IOAPIC init deferred after `mm_init()`.** `paging_map_4k()` needs the

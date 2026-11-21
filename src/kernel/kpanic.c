@@ -10,6 +10,7 @@
 #include "process_manager_internal.h"
 #include "thread.h"
 #include "sched.h"
+#include "arch/arch_cpu.h"
 #include "cpu_local.h"
 #include "arch/x86_64/lapic.h"
 
@@ -499,9 +500,7 @@ void x86_nmi_handler(uint64_t* regs) {
         c->tid = cpu_local()->current_thread ? cpu_local()->current_thread->tid : 0u;
         __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
     }
-    for (;;) {
-        __asm__ volatile("cli; hlt");
-    }
+    arch_halt_forever();
 }
 
 /* Stops the machine and dumps every CPU's state.  Does not return under any
@@ -523,14 +522,12 @@ void x86_nmi_handler(uint64_t* regs) {
  * answers the NMI is reported as uncaptured rather than waited for
  * indefinitely. */
 __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b) {
-    __asm__ volatile("cli");
+    arch_irq_disable();
 
     /* First CPU to panic wins; any later panicker (including an NMI'd CPU that
      * then also called kpanic) just halts so the dump isn't interleaved. */
     if (__atomic_exchange_n(&g_panicking, 1u, __ATOMIC_ACQ_REL) != 0u) {
-        for (;;) {
-            __asm__ volatile("cli; hlt");
-        }
+        arch_halt_forever();
     }
 
     uint32_t self = cpu_local()->cpu_id;
@@ -575,7 +572,7 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
         if (all) {
             break;
         }
-        __asm__ volatile("pause");
+        arch_cpu_relax();
     }
 
     serial_printf_unlocked("\n================= KERNEL PANIC =================\n");
@@ -604,7 +601,5 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
     }
     serial_printf_unlocked("=============== END KERNEL PANIC ===============\n");
 
-    for (;;) {
-        __asm__ volatile("cli; hlt");
-    }
+    arch_halt_forever();
 }

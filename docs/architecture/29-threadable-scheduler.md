@@ -352,7 +352,7 @@ void sched_wake_thread(thread_t *t) {
      * must complete on the sleeping CPU before enqueueing elsewhere).
      * Mirrors ipc_recv_blocking_for's blocking_transition guard. */
     while (__atomic_load_n(&t->blocking_transition, __ATOMIC_ACQUIRE))
-        cpu_relax();
+        arch_cpu_relax();
 
     uint32_t target_cpu = t->last_cpu;   /* affinity hint */
     thread_set_state(t->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);

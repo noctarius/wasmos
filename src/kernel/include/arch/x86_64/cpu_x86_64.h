@@ -59,12 +59,6 @@ void x86_cpu_set_kernel_stack(uint64_t rsp0);
  * idempotent: addresses already in the higher half are left unchanged. */
 void x86_cpu_relocate_tables_high(void);
 
-/* STI / CLI on the calling CPU.  These do not nest — a disable followed by two enables
- * leaves interrupts on — so a region that must survive nesting needs the caller's own
- * saved-flags discipline. */
-void x86_cpu_enable_interrupts(void);
-void x86_cpu_disable_interrupts(void);
-
 #if WASMOS_SMP
 struct cpu_local;
 /* Initialise the AP cpu_local slot: copy GDT template, zero TSS, set stack

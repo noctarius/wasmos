@@ -10,6 +10,7 @@
 #include "irq.h"
 #include "io.h"
 #include "timer.h"
+#include "arch/arch_cpu.h"
 #include "cpu_local.h"
 #include "smp.h"
 #include "wasmos_app.h"
@@ -194,26 +195,19 @@ static int wasmos_capability_grant(uint32_t owner_context_id, const uint8_t* nam
 
 static process_run_result_t idle_entry(process_t* process, void* arg) {
     for (;;) {
-        /* Enable interrupts and halt ATOMICALLY: `sti` has a one-instruction
-         * shadow so an interrupt cannot be taken between `sti` and `hlt`.
-         * A bare `hlt` here is a liveness bug — if this thread is ever entered
-         * with IF=0 (e.g. RFLAGS restored by the context switch, or entry from
-         * an IRQ path), the CPU halts forever: maskable interrupts, including
-         * the periodic LAPIC timer that drives the scheduler and all timed
-         * waits, never wake it, so the whole (single-CPU) system wedges once it
-         * goes fully idle. `sti;hlt` guarantees IF=1 at the halt and closes the
-         * classic set-idle/became-runnable lost-wakeup race. */
-        __asm__ volatile("sti; hlt" ::: "memory");
-        /* Yield after each hlt so the scheduler can run on this CPU again
+        /* Unmask interrupts and wait ATOMICALLY (arch_wait_for_interrupt).
+         * A wait with interrupts left as found is a liveness bug — if this
+         * thread is ever entered with interrupts masked (e.g. flags restored by
+         * the context switch, or entry from an IRQ path), the CPU halts forever:
+         * maskable interrupts, including the periodic timer that drives the
+         * scheduler and all timed waits, never wake it, so the whole
+         * (single-CPU) system wedges once it goes fully idle. The atomic
+         * unmask-and-wait guarantees interrupts are on at the wait and closes
+         * the classic set-idle/became-runnable lost-wakeup race. */
+        arch_wait_for_interrupt();
+        /* Yield after each wait so the scheduler can run on this CPU again
          * and pick up any threads that became ready during the halt. */
         process_yield(PROCESS_RUN_YIELDED);
-    }
-}
-
-static void __attribute__((noreturn)) kernel_halt_forever(void) {
-    __asm__ volatile("cli");
-    for (;;) {
-        __asm__ volatile("hlt");
     }
 }
 
@@ -223,7 +217,7 @@ static void __attribute__((noreturn)) kernel_halt_forever(void) {
  * and only one of them will be listened to.  On hardware that answers none of
  * them the CPU ends up halted with interrupts off instead. */
 void kernel_system_poweroff(void) {
-    __asm__ volatile("cli");
+    arch_irq_disable();
 
     outw(0x604u, 0x2000u);
     io_wait();
@@ -232,7 +226,7 @@ void kernel_system_poweroff(void) {
     outw(0x4004u, 0x3400u);
     io_wait();
 
-    kernel_halt_forever();
+    arch_halt_forever();
 }
 
 /* Resets the machine and does not return.  Tries the keyboard-controller pulse
@@ -240,7 +234,7 @@ void kernel_system_poweroff(void) {
  * reason poweroff writes several ports.  Falls back to a halt with interrupts
  * masked when none of them takes effect. */
 void kernel_system_reboot(void) {
-    __asm__ volatile("cli");
+    arch_irq_disable();
 
     outb(0x64u, 0xFEu);
     io_wait();
@@ -249,7 +243,7 @@ void kernel_system_reboot(void) {
     outb(0xCF9u, 0x0Eu);
     io_wait();
 
-    kernel_halt_forever();
+    arch_halt_forever();
 }
 
 /* The kernel's C entry point, reached from the architecture start-up stub once a
@@ -385,7 +379,7 @@ void kmain(boot_info_t* boot_info) {
     irq_late_init(boot_info);
     smp_init();
     klog_write("[kernel] interrupts on\n");
-    cpu_enable_interrupts();
+    arch_irq_enable();
     smp_cpus_up();
 
     /* Each AP installs its own per-CPU idle thread in smp_ap_c_entry BEFORE it

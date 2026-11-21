@@ -1,5 +1,6 @@
-/* serial.c - COM1 UART serial driver and kernel console output.
- * Drives COM1 (0x3F8) at 115200 baud for early and runtime debug output.
+/* serial.c - console UART driver and kernel console output.
+ * Drives the platform's console UART (arch/arch_platform.h; COM1 on x86_64, which
+ * the comments below call it) for early and runtime debug output.
  * Every write also fans out to the console_ring_t shared-memory ring for
  * user-space readers, and kernel log is appended to the kernel log ring (kmsg.h)
  * that dmesg, the boot replays and the kernel-log port read.
@@ -28,11 +29,9 @@
 #include "wasmos/ringbuf.h"
 #include "wasmos_driver_abi.h"
 #include "wasmos_status.h"
+#include "arch/arch_platform.h"
 /* SERIAL_DRIVER_* opcodes come from the generated IPC opcode ABI (abi/opcodes.yaml). */
 #include "../../abi/generated/c/wasmos_opcodes.h"
-
-#define COM1_PORT 0x3F8
-#define COM1_STATUS (COM1_PORT + 5)
 
 #define SERIAL_READ_STATUS_CHAR 1
 #define SERIAL_READ_STATUS_EMPTY 0
@@ -57,16 +56,6 @@ static inline int serial_ptr_needs_kernel_alias(uintptr_t p) {
     uint64_t low_start = start - base;
     uint64_t low_end = end - base;
     return ((uint64_t)p >= low_start && (uint64_t)p < low_end) ? 1 : 0;
-}
-
-static inline void outb(uint16_t port, uint8_t value) {
-    __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
-}
-
-static inline uint8_t inb(uint16_t port) {
-    uint8_t ret;
-    __asm__ volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
 }
 
 /* The kernel log ring (kmsg.h): every kernel-log write since the first line of
@@ -96,11 +85,12 @@ static volatile uint8_t g_klog_doorbell_pending = 0;
 /* Context that registered the ring.  It drains every record and owns COM1 for
  * the text it was handed, so it is the only caller serial_owner_write accepts. */
 static uint32_t g_klog_ring_owner = 0;
-/* Kernel-log port: the I/O base of a second UART that carries the kernel log and
- * nothing else, written by the kernel directly on every kernel-log write --
- * whatever the vt is doing, whichever slot serial is bound to.  0 means none.
- * Set once from the `log.serial` boot option (serial_log_port_enable). */
-static uint16_t g_log_port = 0;
+/* Kernel-log port: set once the platform's kernel-log UART (arch_log_uart_*) is
+ * enabled; it carries the kernel log and nothing else, written by the kernel
+ * directly on every kernel-log write -- whatever the vt is doing, whichever slot
+ * serial is bound to.  Set once from the `log.serial` boot option
+ * (serial_log_port_enable). */
+static uint8_t g_log_port_enabled = 0;
 
 static inline ksync_spinlock_t* serial_lock_ptr(void) {
     uintptr_t addr = (uintptr_t)&g_serial_lock;
@@ -174,12 +164,12 @@ static inline uint32_t* serial_klog_ring_owner_slot(void) {
     return (uint32_t*)(void*)addr;
 }
 
-static inline uint16_t* serial_log_port_slot(void) {
-    uintptr_t addr = (uintptr_t)&g_log_port;
+static inline uint8_t* serial_log_port_slot(void) {
+    uintptr_t addr = (uintptr_t)&g_log_port_enabled;
     if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
         addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
-    return (uint16_t*)(void*)addr;
+    return (uint8_t*)(void*)addr;
 }
 
 static inline volatile uint8_t* serial_klog_doorbell_slot(void) {
@@ -206,47 +196,24 @@ static inline kmsg_notify_t* serial_kmsg_notify(void) {
     return (kmsg_notify_t*)(void*)addr;
 }
 
-static int serial_tx_ready(void) {
-    return (inb(COM1_STATUS) & 0x20) != 0;
-}
-
-static int serial_rx_ready(void) {
-    return (inb(COM1_STATUS) & 0x01) != 0;
-}
-
 static void com1_serial_init(void) {
-    outb(COM1_PORT + 1, 0x00); // Disable interrupts
-    outb(COM1_PORT + 3, 0x80); // Enable DLAB
-    outb(COM1_PORT + 0, 0x01); // Divisor low (115200 baud)
-    outb(COM1_PORT + 1, 0x00); // Divisor high
-    outb(COM1_PORT + 3, 0x03); // 8 bits, no parity, one stop
-    outb(COM1_PORT + 2, 0xC7); // Enable FIFO, clear, 14-byte threshold
-    outb(COM1_PORT + 4, 0x0B); // IRQs enabled, RTS/DSR set
-}
-
-/* One byte to the kernel-log port.  The wait for THR-empty is bounded: a UART
- * that stops draining drops log bytes rather than wedging every kernel-log
- * writer behind it. */
-static void log_port_put_char(uint16_t port, char c) {
-    for (uint32_t spin = 0; spin < 100000u && (inb((uint16_t)(port + 5)) & 0x20) == 0; ++spin) {
-    }
-    outb(port, (uint8_t)c);
+    arch_console_uart_init();
 }
 
 static void com1_serial_put_char(char c) {
-    while (!serial_tx_ready()) {
+    while (!arch_console_uart_tx_ready()) {
     }
-    outb(COM1_PORT, (uint8_t)c);
+    arch_console_uart_write((uint8_t)c);
 }
 
 static int com1_serial_read_char(uint8_t* out_char) {
     if (!out_char) {
         return -1;
     }
-    if (!serial_rx_ready()) {
+    if (!arch_console_uart_rx_ready()) {
         return 0;
     }
-    *out_char = inb(COM1_PORT);
+    *out_char = arch_console_uart_read();
     return 1;
 }
 
@@ -751,13 +718,12 @@ static void serial_emit(uint8_t slot, const char* s, int route) {
         kmsg_append(serial_kmsg(), s);
         kmsg_notify_mark(serial_kmsg_notify());
     }
-    uint16_t log_port = *serial_log_port_slot();
-    if (log_port != 0 && slot == VT_CONSOLE_SLOT_KLOG) {
+    if (*serial_log_port_slot() && slot == VT_CONSOLE_SLOT_KLOG) {
         for (const char* p = s; *p; ++p) {
             if (*p == '\n') {
-                log_port_put_char(log_port, '\r');
+                arch_log_uart_write('\r');
             }
-            log_port_put_char(log_port, *p);
+            arch_log_uart_write((uint8_t)*p);
         }
     }
     /* TODO: a slot writer's text that the full ring cannot take goes to COM1 here
@@ -910,34 +876,26 @@ void serial_write_unlocked(const char* s) {
     serial_emit(VT_CONSOLE_SLOT_KLOG, s, 0);
 }
 
-/* Programs the UART at I/O base `port` (115200 8N1, FIFO on, interrupts off) as
- * the kernel-log port and replays the kmsg ring into it, CR-expanded, so the port
- * starts with the boot output written before it existed.  From then on every
- * kernel-log write -- locked or unlocked, routed through the vt or not -- is also
- * transmitted there.  Console output of processes with a controlling slot is not.
+/* Enables the platform's kernel-log UART (arch_log_uart_enable: 115200 8N1, FIFO
+ * on, interrupts off) as the kernel-log port and replays the kmsg ring into it,
+ * CR-expanded, so the port starts with the boot output written before it existed.  From then on
+ * every kernel-log write -- locked or unlocked, routed through the vt or not -- is also transmitted
+ * there.  Console output of processes with a controlling slot is not.
  *
- * Returns 0, or WASMOS_NOENT when no UART answers at `port` (its scratch register
- * does not hold a written value), in which case nothing changes.  Call it once,
- * early, before other CPUs log. */
-int32_t serial_log_port_enable(uint16_t port) {
-    outb((uint16_t)(port + 7), 0x5A);
-    if (inb((uint16_t)(port + 7)) != 0x5A) {
-        return WASMOS_NOENT;
+ * Returns 0, or WASMOS_NOENT when no UART answers, in which case nothing changes.
+ * Call it once, early, before other CPUs log. */
+int32_t serial_log_port_enable(void) {
+    int32_t rc = arch_log_uart_enable();
+    if (rc != 0) {
+        return rc;
     }
-    outb((uint16_t)(port + 1), 0x00); /* interrupts off */
-    outb((uint16_t)(port + 3), 0x80); /* DLAB */
-    outb((uint16_t)(port + 0), 0x01); /* divisor low: 115200 baud */
-    outb((uint16_t)(port + 1), 0x00); /* divisor high */
-    outb((uint16_t)(port + 3), 0x03); /* 8N1 */
-    outb((uint16_t)(port + 2), 0xC7); /* FIFO on, cleared, 14-byte threshold */
-    outb((uint16_t)(port + 4), 0x03); /* DTR + RTS, OUT2 clear: no IRQ */
 
     ksync_spinlock_lock(serial_lock_ptr());
     kmsg_t* k = serial_kmsg();
     if (kmsg_first(k) != 0) {
         static const char k_lost[] = "[serial] log port: earlier boot output not retained\r\n";
         for (const char* p = k_lost; *p; ++p) {
-            log_port_put_char(port, *p);
+            arch_log_uart_write((uint8_t)*p);
         }
     }
     uint32_t count = kmsg_size(k);
@@ -947,12 +905,12 @@ int32_t serial_log_port_enable(uint16_t port) {
         kmsg_copy(k, chunk, off, n);
         for (uint32_t i = 0; i < n; ++i) {
             if (chunk[i] == '\n') {
-                log_port_put_char(port, '\r');
+                arch_log_uart_write('\r');
             }
-            log_port_put_char(port, (char)chunk[i]);
+            arch_log_uart_write(chunk[i]);
         }
     }
-    *serial_log_port_slot() = port;
+    *serial_log_port_slot() = 1;
     ksync_spinlock_unlock(serial_lock_ptr());
     return 0;
 }

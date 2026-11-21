@@ -1,12 +1,9 @@
 #include "pci_config.h"
 
-#include "io.h"
+#include "arch/arch_pci.h"
 #include "klog.h"
 #include "sync/spinlock.h"
 #include "wasmos_driver_abi.h"
-
-#define PCI_CFG_ADDR_PORT 0xCF8u
-#define PCI_CFG_DATA_PORT 0xCFCu
 
 /* PCI Local Bus 3.0 §6.2 (command/status), §6.7 (capability list), §6.8 (MSI,
  * MSI-X). */
@@ -55,18 +52,12 @@ static pci_function_t* pci_function_by_bdf_locked(uint16_t bdf) {
     return 0;
 }
 
-static uint32_t pci_cfg_address(uint16_t bdf, uint8_t reg) {
-    return 0x80000000u | ((uint32_t)bdf << 8) | ((uint32_t)reg & 0xFCu);
-}
-
 static uint32_t pci_cfg_read_locked(uint16_t bdf, uint8_t reg) {
-    outl((uint16_t)PCI_CFG_ADDR_PORT, pci_cfg_address(bdf, reg));
-    return inl((uint16_t)PCI_CFG_DATA_PORT);
+    return arch_pci_cfg_read32(bdf, reg);
 }
 
 static void pci_cfg_write_locked(uint16_t bdf, uint8_t reg, uint32_t value) {
-    outl((uint16_t)PCI_CFG_ADDR_PORT, pci_cfg_address(bdf, reg));
-    outl((uint16_t)PCI_CFG_DATA_PORT, value);
+    arch_pci_cfg_write32(bdf, reg, value);
 }
 
 uint32_t pci_config_read32(uint16_t bdf, uint8_t reg) {

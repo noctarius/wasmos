@@ -1,5 +1,6 @@
 /* Host unit test for the kernel's PCI configuration access and the quiesce of a
- * dead driver's function (src/kernel/pci_config.c), over an emulated
+ * dead driver's function (src/kernel/pci_config.c, with the x86_64 access
+ * mechanism in src/kernel/arch/x86_64/pci_cfg_x86_64.c), over an emulated
  * mechanism-1 config space: outl to 0xCF8 latches the address, the data port
  * then reaches that function's register.
  *

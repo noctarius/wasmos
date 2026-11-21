@@ -1,6 +1,7 @@
 /* mmio.c - Kernel-mediated MMIO register writes. See mmio.h for why this exists
  * and why it is scoped the way it is. */
 #include "mmio.h"
+#include "memory.h"
 #include "paging.h"
 #include "physmem.h"
 #include "sync/spinlock.h"
@@ -11,21 +12,14 @@
  * IOAPIC (0x...FF000) windows; see the LAPIC_VIRT_BASE rationale in lapic.c. */
 #define MMIO_SCRATCH_VIRT_BASE 0xFFFFFFFF800FD000ULL
 
-/* Raw x86_64 PTE bits.  paging_map_4k() does NOT take PTE bits — it takes
- * MEM_REGION_FLAG_* and builds the PTE itself — and the two encodings only
- * happen to agree on PRESENT/WRITE (bits 0 and 1 are READ/WRITE there).
- * FIXME: PT_FLAG_PCD is therefore dropped on the way in and the scratch PTE is
- * built without cache-disable, leaving the effective memory type of this device
- * page to the MTRRs alone. paging_map_4k needs a cache-disable flag to express
- * it. (PT_FLAG_NX is dropped too, but paging_map_4k sets NX for any non-EXEC
- * mapping, so that bit ends up correct anyway.) */
-#define PT_FLAG_PRESENT (1ULL << 0)
-#define PT_FLAG_WRITE (1ULL << 1)
-#define PT_FLAG_PCD (1ULL << 4)
-#define PT_FLAG_NX (1ULL << 63)
+/* FIXME: MEM_REGION_FLAG_* has no device/uncached memory type, so the scratch
+ * mapping is built as ordinary write-back memory and the effective memory type
+ * of this device page is left to the platform (the MTRRs on x86_64). paging
+ * needs a device-memory flag to express it; an arm64 port needs the same flag
+ * to select a Device-nGnRE attribute instead of Normal memory. */
 
 /* One scratch VA is shared by every caller, so the map/write/unmap sequence must
- * not interleave. The lock also holds IF=0, keeping the window from being seen
+ * not interleave. The lock also masks interrupts, keeping the window from being seen
  * by an interrupt that lands mid-sequence on this CPU. */
 static ksync_spinlock_t g_mmio_scratch_lock;
 static uint8_t g_mmio_scratch_ready;
@@ -60,7 +54,7 @@ int mmio_write32_phys(uint64_t phys, uint32_t value) {
 
     uint64_t page = phys & ~0xFFFULL;
     uint64_t offset = phys & 0xFFFULL;
-    uint64_t flags = PT_FLAG_PRESENT | PT_FLAG_WRITE | PT_FLAG_PCD | PT_FLAG_NX;
+    uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE;
 
     ksync_spinlock_lock(&g_mmio_scratch_lock);
     int rc = paging_map_4k(MMIO_SCRATCH_VIRT_BASE, page, flags);

@@ -987,18 +987,17 @@ int mm_copy_from_user(uint32_t context_id, void* dst, uint64_t user_src, uint64_
         return -1;
     }
 
-    /* Read the ACTUAL current CPU's CR3 rather than the global
-     * g_current_pml4_phys, which is last-writer-wins under SMP and can
-     * contain another CPU's page table.  Restoring the wrong root after the
-     * user-space copy would leave this CPU with a stripped identity map. */
-    uint64_t cur_cr3 = 0;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cur_cr3));
+    /* Read the ACTUAL current CPU's root rather than the global mirror kept by
+     * paging_switch_root, which is last-writer-wins under SMP and can contain
+     * another CPU's page table.  Restoring the wrong root after the user-space
+     * copy would leave this CPU with a stripped identity map. */
+    uint64_t cur_root = paging_get_current_root_table();
     mm_copy_from_user_args_t args = {
         .context_id = context_id,
         .user_addr = user_src,
         .size = size,
         .root_table = ctx->root_table,
-        .prev_root = cur_cr3,
+        .prev_root = cur_root,
         .kernel_ptr = (uint8_t*)dst,
     };
     return mm_run_on_copy_stack(mm_copy_from_user_impl, &args);
@@ -1104,15 +1103,14 @@ int mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void* src, uin
         return -1;
     }
 
-    /* Read the ACTUAL current CPU's CR3 — see mm_copy_from_user for rationale. */
-    uint64_t cur_cr3 = 0;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cur_cr3));
+    /* Read the ACTUAL current CPU's root — see mm_copy_from_user for rationale. */
+    uint64_t cur_root = paging_get_current_root_table();
     mm_copy_to_user_args_t args = {
         .context_id = context_id,
         .user_addr = user_dst,
         .size = size,
         .root_table = ctx->root_table,
-        .prev_root = cur_cr3,
+        .prev_root = cur_root,
         .kernel_ptr = (const uint8_t*)src,
     };
     return mm_run_on_copy_stack(mm_copy_to_user_impl, &args);

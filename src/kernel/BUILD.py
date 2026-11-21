@@ -39,7 +39,7 @@ CORE = [
     "service_class_registry.c",
     "service_name_watch.c",
     "wasmos_exec_format.c",
-    "paging.c",
+    "arch/x86_64/paging.c",
     "linmem_slots.c",
     "physmem.c",
     "runtime_context.c",

@@ -32,7 +32,7 @@ kernel and all other processes continue.
 | `0x0000008100000000+` (`MM_USER_STACK_BASE`)                        | user   | User stack allocation base                       |
 | `0xFFFFFFFF80000000+` (`KERNEL_HIGHER_HALF_BASE`)                   | kernel | pml4[511], kernel text/data/heap                 |
 
-Sources: `src/kernel/paging.c` (`USER_PML4_INDEX=1`),
+Sources: `src/kernel/arch/x86_64/paging.c` (`USER_PML4_INDEX=1`),
 `src/kernel/arch/x86_64/cpu_x86_64.c` (`USER_VA_MIN/MAX`),
 `src/kernel/memory.c` (`MM_USER_STACK_BASE`),
 `src/kernel/include/paging.h` (`KERNEL_HIGHER_HALF_BASE`).
@@ -151,7 +151,7 @@ CR3 of whichever CPU is running it, which the caller cannot observe.
 
 #### Low-Slot Policy
 
-`IDENTITY_PD_COUNT = 0` in `src/kernel/paging.c`. New user roots are created
+`IDENTITY_PD_COUNT = 0` in `src/kernel/arch/x86_64/paging.c`. New user roots are created
 with pml4[0]=0 unconditionally. The kernel root retains a bootstrap low slot for
 the initial CR3 handoff but this is stripped before any process goes to ring3.
 
@@ -159,7 +159,7 @@ the initial CR3 handoff but this is stripped before any process goes to ring3.
 
 ### Page Table Flag Model
 
-Source: `src/kernel/paging.c`, `src/kernel/arch/x86_64/cpu_x86_64.c`
+Source: `src/kernel/arch/x86_64/paging.c`, `src/kernel/arch/x86_64/cpu_x86_64.c`
 
 | Flag              | Bit    | Meaning                             |
 |-------------------|--------|-------------------------------------|

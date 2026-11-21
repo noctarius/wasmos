@@ -8,7 +8,7 @@ This document covers the WASMOS kernel memory subsystem in full implementation
 detail: the physical frame allocator, the paging layer, memory contexts,
 the user virtual address space layout, shared memory, user-pointer copy,
 and the slab allocator. The authoritative sources are `src/kernel/physmem.c`,
-`src/kernel/paging.c`, `src/kernel/memory.c`, `src/kernel/slab.c`,
+`src/kernel/arch/x86_64/paging.c`, `src/kernel/memory.c`, `src/kernel/slab.c`,
 `src/kernel/kmem.c`, and their headers.
 
 ---
@@ -84,7 +84,14 @@ The caller must check before use; no fallback or retry is performed.
 
 ### Paging Layer
 
-`src/kernel/paging.c` manages x86_64 4-level page tables and CR3 switching.
+`src/kernel/include/paging.h` is the architecture-neutral page-table interface:
+mapping flags are `MEM_REGION_FLAG_*`, never raw page-table bits, and a root
+table is an opaque physical address. `src/kernel/arch/x86_64/paging.c`
+implements it with x86_64 4-level page tables and CR3 switching. The kernel
+virtual layout constants (`KERNEL_HIGHER_HALF_BASE`, the MMIO and WARP linmem
+windows) live in `include/arch/x86_64/vm_layout.h`, selected through
+`include/arch/vm_layout.h`. `paging_sync_instruction_cache()` is the hook code
+loaders call after writing instructions; it is a no-op on x86_64.
 
 #### Address Space Layout
 

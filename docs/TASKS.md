@@ -240,7 +240,7 @@ Source: `architecture/06-memory-management.md`,
   assume a kernel-ish environment (`setjmp`/`longjmp`, allocator assumptions);
   and step 3, which is where the historical linmem aliasing bugs lived.
 - [ ] [ENHANCEMENT][P2] Finish ring-3 hardening TODOs: drop `PML4[0]` from the kernel root once
-  bootstrap no longer needs the low slot (`src/kernel/paging.c:338`
+  bootstrap no longer needs the low slot (`src/kernel/arch/x86_64/paging.c:338`
   `TODO(ring3-phase3)`); add process-local exception handling beyond the
   current `-11` kill (`src/kernel/arch/x86_64/cpu_x86_64.c:484`
   `TODO(ring3-phase5)`); handle stack allocations that can exceed the 512 MB
@@ -250,7 +250,7 @@ Source: `architecture/06-memory-management.md`,
   (`src/kernel/arch/x86_64/cpu_x86_64.c:578`).
 - [ ] [ENHANCEMENT][P2] Introduce allocation intents (`STACK`, `PGTABLE`, `DMA32`, `GENERIC`),
   then remove the low-memory DMA constraint from kernel stacks and page tables
-  (`src/kernel/paging.c:31`; `architecture/06`:455-497).
+  (`src/kernel/arch/x86_64/paging.c:31`; `architecture/06`:455-497).
 - [ ] [FEATURE][P2] Decide and implement kernel reachability beyond the current 512 MB low
   window: full physmap or a bounded `kmap` cache (`architecture/06`).
 - [ ] [ENHANCEMENT][P2] Route pointer-bearing syscall/IPC entry paths through
@@ -356,7 +356,7 @@ Source: `architecture/06-memory-management.md`,
   `paging_destroy_address_space` frees only the slot-0 PDPT frame and never
   walks below it, so every root that went through
   `paging_clone_low_slot_in_root` leaks its lower tables; the clone's own error
-  paths leak earlier iterations' PDs/PTs too (`src/kernel/paging.c`).
+  paths leak earlier iterations' PDs/PTs too (`src/kernel/arch/x86_64/paging.c`).
 - [ ] [BUG][P1] Serialize `x86_irq_mask`/`x86_irq_unmask`. They read-modify-write
   `g_pic_mask1/2` with no lock, while only the `irq_sharing` ops path holds
   `g_irq_lines_lock` (`src/kernel/arch/x86_64/irq_x86_64.c`).

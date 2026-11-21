@@ -497,14 +497,11 @@ int32_t setPermissionRW(uint8_t*, size_t) noexcept {
 
 void memcpyAndClearInstrCache(uint8_t* dest, uint8_t const* src, size_t n) noexcept {
     __builtin_memcpy(dest, src, n);
-    /* x86_64: instruction cache is coherent with data cache on all Intel/AMD
-     * CPUs; no explicit flush needed for self-modifying code from the same
-     * core.  A serialising instruction ensures visibility. */
-    __asm__ volatile("" ::: "memory");
+    paging_sync_instruction_cache(dest, n);
 }
 
-void clearInstructionCache(uint8_t*, size_t) noexcept {
-    /* x86_64: cache-coherent, no action needed. */
+void clearInstructionCache(uint8_t* addr, size_t n) noexcept {
+    paging_sync_instruction_cache(addr, n);
 }
 
 uint8_t* allocAlignedMemory(size_t size, size_t) {

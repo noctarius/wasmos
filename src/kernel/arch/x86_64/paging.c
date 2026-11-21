@@ -180,6 +180,14 @@ void paging_invalidate(uint64_t virt) {
     invlpg(virt);
 }
 
+/* x86_64 instruction fetch snoops data writes, so freshly written code needs no
+ * cache maintenance. The out-of-line call keeps the compiler from sinking the
+ * caller's code stores past it. */
+void paging_sync_instruction_cache(const void* addr, uint64_t len) {
+    (void)addr;
+    (void)len;
+}
+
 static uint64_t entry_phys(uint64_t entry) {
     return entry & ~0xFFFULL;
 }

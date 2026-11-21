@@ -657,7 +657,9 @@ linked feature documents for rationale and rollout plans.
   (`docs/BUILD_SYSTEM.md`). Measured against the previous CMake build on
   2026-11-21 (wasm3_smp, warp_smp): stripped kernels, every non-Rust/Go `.wap`
   including all 50 AOT payloads, initfs and the disk images byte-identical;
-  ESP trees identical; `run-qemu-test` green on both runtimes and the CLI suite
+  ESP trees identical (the Ninja ESP additionally stages
+  `system/drivers/virtio_serial.wap`, which the device-manager rules load and
+  the CMake build never staged); `run-qemu-test` green on both runtimes and the CLI suite
   green (279/280, the remaining test then still invoking CMake) on wasm3 SMP;
   `lint` covers a superset of the files the CMake index covered. The one
   intended difference: CMake compiled `src/kernel/process_manager.cpp` in WARP

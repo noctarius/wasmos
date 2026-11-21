@@ -59,6 +59,10 @@ void x86_cpu_set_kernel_stack(uint64_t rsp0);
  * idempotent: addresses already in the higher half are left unchanged. */
 void x86_cpu_relocate_tables_high(void);
 
+/* C side of the NMI vector (isr_nmi in cpu_isr.S): decodes the pushed register
+ * frame (PUSH_REGS order, then the CPU iret frame) and hands it to kpanic_nmi. */
+void x86_nmi_handler(uint64_t* regs);
+
 #if WASMOS_SMP
 struct cpu_local;
 /* Initialise the AP cpu_local slot: copy GDT template, zero TSS, set stack

@@ -77,6 +77,12 @@ static inline void arch_wait_for_interrupt(void) {
     __asm__ volatile("sti; hlt" ::: "memory");
 }
 
+/* Ask every other online CPU to stop: each takes a non-maskable interrupt
+ * (an NMI IPI on x86_64), which delivers its interrupted state to kpanic_nmi
+ * and halts it. Reaches CPUs spinning with interrupts masked. SMP builds only;
+ * implemented in arch/x86_64/smp.c. */
+void arch_stop_other_cpus(void);
+
 /* Mask interrupts and stop this CPU permanently. Maskable interrupts cannot
  * wake it; an NMI or SMI that returns lands back in the halt loop. */
 static inline __attribute__((noreturn)) void arch_halt_forever(void) {

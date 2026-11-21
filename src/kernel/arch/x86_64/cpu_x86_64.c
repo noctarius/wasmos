@@ -880,6 +880,27 @@ void x86_cpu_relocate_tables_high(void) {
     __asm__ volatile("ltr %0" : : "r"(tss_selector) : "memory");
 }
 
+/* Register-frame layout as pushed by isr_nmi (PUSH_REGS then the CPU iret
+ * frame). PUSH_REGS pushes rax,rbx,rcx,rdx,rbp,rsi,rdi,r8..r15 in that order,
+ * so from the lowest saved address (rsp on entry to the C handler): */
+enum {
+    NMI_REG_RBP = 10, /* PUSH_REGS pushed rbp 5th => 5th from the top       */
+    NMI_REG_RIP = 15, /* iret frame: rip                                    */
+    NMI_REG_CS = 16,
+    NMI_REG_RFLAGS = 17,
+    NMI_REG_RSP = 18,
+};
+
+/* C side of isr_nmi: decodes the pushed frame for kpanic_nmi. regs is borrowed
+ * for the call. Returns only when kpanic_nmi does (an NMI outside a panic). */
+void x86_nmi_handler(uint64_t* regs) {
+    kpanic_nmi(regs[NMI_REG_RIP],
+               regs[NMI_REG_RSP],
+               regs[NMI_REG_RBP],
+               regs[NMI_REG_RFLAGS],
+               regs[NMI_REG_CS]);
+}
+
 /* The invalid-trap-frame report's register lines; process_preempt_from_irq
  * prints the report counter after them. */
 void arch_irq_frame_log(const irq_frame_t* frame) {

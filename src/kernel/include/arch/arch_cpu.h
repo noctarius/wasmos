@@ -5,6 +5,8 @@
  *   arch_irq_enable(), arch_irq_disable()
  *   arch_wait_for_interrupt()  unmask + wait, with no lost-wakeup window
  *   arch_halt_forever()        mask + stop, never returns
+ *   arch_stop_other_cpus()     NMI-style stop of every other CPU (SMP only,
+ *                              out of line)
  *   arch_cpu_relax()           spin-wait hint
  * The contract of each is documented at the x86_64 implementation. This header
  * is the single selection point; x86_64 is the only target. */

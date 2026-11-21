@@ -10,6 +10,11 @@
  *       new stack (it must not longjmp or context-switch away for good).
  *   uintptr_t arch_read_sp(void)   the caller's current stack pointer
  *   uintptr_t arch_read_pc(void)   an address inside the caller's code
+ *   uintptr_t arch_read_fp(void)   the caller's frame pointer; [fp] is the
+ *                                  previous frame pointer, [fp + 8] the
+ *                                  return address
+ *   uint64_t arch_read_flags(void) the caller's processor flags (diagnostic)
+ *   The readers are always inlined, so they describe the caller's frame.
  *
  * Register state:
  *   process_context_t   saved state of a thread; resumed by the arch context
@@ -17,7 +22,7 @@
  *                       directly; everything else goes through accessors:
  *                       arch_context_clear, _init_kernel_entry,
  *                       _set_user_entry, _set_kernel_sp, _set_pc, _set_return,
- *                       _pc, _kernel_sp, _flags, _mode, _is_user,
+ *                       _pc, _kernel_sp, _fp, _flags, _mode, _is_user,
  *                       _snapshot_callee_saved, _save_irq_frame.
  *   irq_frame_t         register frame an interrupt stub builds; classified by
  *                       arch_irq_frame_origin, logged by arch_irq_frame_log,

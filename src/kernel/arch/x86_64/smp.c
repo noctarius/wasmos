@@ -241,4 +241,11 @@ void smp_cpus_up(void) {
     }
 }
 
+/* kpanic's stop request: an NMI to every other CPU. NMI ignores IF, so a CPU
+ * spinning with interrupts masked is still caught; isr_nmi delivers its frame
+ * to kpanic_nmi through x86_nmi_handler. */
+void arch_stop_other_cpus(void) {
+    lapic_send_nmi_allbutself();
+}
+
 #endif /* WASMOS_SMP */

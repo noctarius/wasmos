@@ -13,8 +13,12 @@ typedef void (*arch_stack_fn_t)(void);
 uint64_t arch_call_on_stack(uintptr_t stack_top, arch_stack_fn_t fn, uint64_t a0, uint64_t a1,
                             uint64_t a2);
 
+/* The register readers below are always inlined: the kernel builds without
+ * optimisation, and an out-of-line reader would report its own frame instead
+ * of the caller's. */
+
 /* Current stack pointer of the calling code. */
-static inline uintptr_t arch_read_sp(void) {
+static inline __attribute__((always_inline)) uintptr_t arch_read_sp(void) {
     uintptr_t sp;
     __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
     return sp;
@@ -22,10 +26,25 @@ static inline uintptr_t arch_read_sp(void) {
 
 /* Address of the instruction following this read in the calling code. Tells
  * which alias of the kernel image (identity or higher-half) is executing. */
-static inline uintptr_t arch_read_pc(void) {
+static inline __attribute__((always_inline)) uintptr_t arch_read_pc(void) {
     uintptr_t pc;
     __asm__ volatile("leaq 0f(%%rip), %0\n0:" : "=r"(pc));
     return pc;
+}
+
+/* Frame pointer (rbp) of the calling code: the head of its frame-record chain,
+ * where [fp] is the caller's frame pointer and [fp + 8] its return address. */
+static inline __attribute__((always_inline)) uintptr_t arch_read_fp(void) {
+    uintptr_t fp;
+    __asm__ volatile("mov %%rbp, %0" : "=r"(fp));
+    return fp;
+}
+
+/* Processor flags word (RFLAGS) of the calling code. Diagnostic only. */
+static inline __attribute__((always_inline)) uint64_t arch_read_flags(void) {
+    uint64_t flags;
+    __asm__ volatile("pushfq; pop %0" : "=r"(flags));
+    return flags;
 }
 
 /* Segment selectors as they appear in a saved CS/SS: the GDT index plus the
@@ -180,6 +199,12 @@ static inline uint64_t arch_context_pc(const process_context_t* ctx) {
  * enters on, not its user stack). */
 static inline uint64_t arch_context_kernel_sp(const process_context_t* ctx) {
     return ctx->rsp;
+}
+
+/* Frame pointer of the saved context (rbp): the head of its frame-record
+ * chain, for backtraces. Meaningful for a context saved by a context switch. */
+static inline uint64_t arch_context_fp(const process_context_t* ctx) {
+    return ctx->rbp;
 }
 
 /* Saved processor flags word (RFLAGS). Diagnostic only. */

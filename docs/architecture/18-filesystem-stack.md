@@ -354,8 +354,19 @@ the caller-owned object by ownership (`pm_foreign_xfer_ptr`).
 
 Implements FAT12/16 on a block device. FAT32 is detected at mount but its
 cluster read/write is unimplemented (`fat_fatent_read`/`fat_fatent_write`
-return `FS_ERR_CORRUPT`). The block device endpoint is provided at spawn time
-via the device manager's block-device registration mechanism.
+return `FS_ERR_CORRUPT`). Its block server is found through the `block` class,
+by the instance the `id=` it was spawned with fingerprints to.
+
+It follows that server across a restart (`fat_block.h`). It subscribes to the
+`block` class before looking the server up, so no event falls between the
+two. When the server ends, the kernel sends a hangup and the registry sends a
+REMOVE: a transfer the ended instance held fails with
+`WASMOS_ERR_BLOCK_DEV_GONE`. When a new instance registers under the same
+instance, its ADD rebinds the layer and lends the new endpoint the request
+buffer. Before each transfer an `ipc_peer_await` refuses an ended server's
+endpoint, and then the queued class events are read before the transfer
+fails, since they may name the successor. The mount, its open files and the
+fs-fat process carry over.
 
 - Supports `OPEN`, `READ`, `SEEK`, `CLOSE`, `STAT`, `READDIR`.
 - Write operations (`WRITE`, `MKDIR`, `UNLINK`, `RMDIR`) are implemented for

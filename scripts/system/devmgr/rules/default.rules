@@ -90,11 +90,10 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", ENV{RESTART}="
 # non-virtio SCSI controller is not handed to this driver (transitional 0x1001,
 # modern 0x1042).
 #
-# Supervised as virtio_blk@pci:<function>. A filesystem on a whole disk follows
-# the restarted driver, so its mount and open files survive the restart; I/O
-# that lands while the driver is down fails (fs-wfs, wfs_block.h).
-# TODO: partition-manager does not follow a restarted disk yet, so a filesystem
-# on a PARTITION of a virtio-blk disk loses its I/O when this driver restarts.
+# Supervised as virtio_blk@pci:<function>. Its clients follow the restarted
+# driver -- fs-wfs and fs-fat on a whole disk, and partition-manager for a
+# filesystem on a partition -- so mounts and open files survive the restart;
+# I/O that lands while the driver is down fails WASMOS_ERR_BLOCK_DEV_GONE.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1001", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_blk.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1042", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_blk.wap"
 

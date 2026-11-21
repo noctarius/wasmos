@@ -24,8 +24,26 @@
 #define FAT_BLOCK_NO_LBA 0xFFFFFFFFu /* loaded_lba sentinel: nothing staged */
 
 typedef struct {
+    /* The block server's endpoint, or -1 while no live instance serves the
+     * disk. A supervised driver that ends comes back on a new endpoint under
+     * the same `block` instance; the layer follows it (fat_block_follow), so
+     * the mount and its open files carry over, and a transfer the ended
+     * instance held, or one begun before its successor registered, fails with
+     * WASMOS_ERR_BLOCK_DEV_GONE.
+     * TODO: hold such a transfer and resend it to the successor instead, once
+     * fs-manager answers clients by deferred reply: it forwards synchronously,
+     * and the successor's own module is read through it. */
     int32_t block_endpoint;
     int32_t reply_endpoint;
+    /* Where `block` class events and the subscription's answer arrive, or -1
+     * when the layer does not follow its server. Kept apart from
+     * reply_endpoint, whose messages are matched by request id. */
+    int32_t follow_endpoint;
+    /* The class name staged for the subscription, released when it is
+     * answered; -1 otherwise. */
+    int32_t follow_bid;
+    /* The server's grant of req_bid, revoked when the layer rebinds. */
+    int32_t req_borrow;
     int32_t buf_phys; /* dedicated block buffer physical handle */
     int32_t next_req_id;
 
@@ -91,6 +109,19 @@ void fat_block_set_free_count(fat_block_t* blk, uint32_t count);
 /* Acquire the dedicated block-buffer physical handle.  Returns 0, or -1. */
 int fat_block_setup(fat_block_t* blk);
 
+/* Follow the server across a restart: subscribe to the `block` class with
+ * events delivered to `follow_endpoint`, which the caller watches and hands to
+ * fat_block_event. Not waited for; the answer arrives there too. Returns 0, or
+ * a negative packed code when the request could not be sent. */
+int32_t fat_block_follow(fat_block_t* blk, int32_t proc_endpoint, int32_t follow_endpoint);
+
+/* Consume one message from the follow endpoint. A REMOVE of the server, or the
+ * ADD of a successor on another endpoint, fails a transfer the ended instance
+ * held: the op to fail is returned with *out_ok = 0 and its err set to
+ * WASMOS_ERR_BLOCK_DEV_GONE. Returns NULL otherwise, including when nothing was
+ * queued. */
+fat_op_ctx_t* fat_block_event(fat_block_t* blk, int* out_ok);
+
 uint8_t* fat_block_sector(fat_block_t* blk); /* the metadata/bounce buffer */
 /* Endpoint of the block server, needed to reborrow a client buffer to it. */
 int32_t fat_block_server_endpoint(const fat_block_t* blk);
@@ -104,9 +135,10 @@ void fat_block_set_err(fat_block_t* blk, int32_t err);
 /* Op-facing, coroutine-driven I/O (return fat_r_t):
  *  fat_need_sector: ensure `lba` is staged in fat_block_sector(); FAT_R_DONE if
  *    already cached, FAT_R_WAIT if a read was submitted (resume on completion),
- *    FAT_R_ERR on a hard send failure (owner->err set to WASMOS_ERR_FS_IO).
+ *    FAT_R_ERR on a hard send failure (owner->err set to WASMOS_ERR_FS_IO, or
+ *    WASMOS_ERR_BLOCK_DEV_GONE when no live instance serves the disk).
  *  fat_block_write: push fat_block_sector() to `lba`; FAT_R_WAIT on submit,
- *    FAT_R_ERR on a hard send failure (owner->err set to WASMOS_ERR_FS_IO), and
+ *    FAT_R_ERR on a hard send failure (owner->err set as above), and
  *    FAT_R_DONE on the resume call the coroutine macro makes after completion. */
 fat_r_t fat_need_sector(fat_block_t* blk, uint32_t lba);
 fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba);
@@ -117,8 +149,8 @@ fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba);
  * reborrowed the buffer to the block server, and passes that `borrow_id` so a
  * bus-master server can map the destination instead of copying into it.
  * FAT_R_WAIT on submit, FAT_R_DONE on the resume call after completion, and
- * FAT_R_ERR on bad arguments or a hard send failure — unlike fat_need_sector /
- * fat_block_write this leaves owner->err untouched, so the caller must set it. */
+ * FAT_R_ERR on bad arguments or a hard send failure, with owner->err set as
+ * fat_need_sector sets it (WASMOS_ERR_FS_BAD_ARGS for bad arguments). */
 fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, int32_t buffer_id,
                               int32_t borrow_id, uint32_t dst_offset);
 
@@ -134,7 +166,9 @@ void fat_block_invalidate(fat_block_t* blk);
 void fat_block_release(fat_block_t* blk, fat_op_ctx_t* ctx);
 
 /* Drain one reply.  Returns the active op to resume, with *out_ok = 1 on success
- * or 0 on a block error.  Returns NULL for a spurious/unmatched reply. */
+ * or 0 on a block error.  Returns NULL for a spurious/unmatched reply.  The
+ * kernel's hangup for the server lands here too, and fails a transfer it held
+ * as fat_block_event does. */
 fat_op_ctx_t* fat_block_complete(fat_block_t* blk, int* out_ok);
 
 #endif /* FS_FAT_FAT_BLOCK_H */

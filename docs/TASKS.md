@@ -690,8 +690,9 @@ Source: `architecture/13-runtime-and-packaging.md`,
   disk's content unchanged and a lost request is idempotent per LBA, and a NIC's
   leaves its MAC unchanged and a lost frame is packet loss, so both can be
   rebound. Done: virtio-blk is supervised, fs-wfs on a whole disk follows its
-  restart (`wfs_block.h`), and partition-manager rebinds a disk to its
-  restarted driver, so a filesystem on a partition carries over too. Open:
+  restart (`wfs_block.h`), as does fs-fat (`fat_block.h`), and
+  partition-manager rebinds a disk to its restarted driver, so a filesystem on
+  a partition carries over too. Open:
   - Hold and resend a transfer across the driver's restart instead of failing it
     with `WASMOS_ERR_BLOCK_DEV_GONE`. Blocked on fs-manager answering clients by
     deferred reply: it forwards synchronously, and a held transfer keeps it from
@@ -701,7 +702,6 @@ Source: `architecture/13-runtime-and-packaging.md`,
     (`diskGone`) has no test: no QEMU test can kill the driver while a transfer
     is in flight, and the driver has no host harness. The rebind is covered by
     `tests/test_partition_manager_disk_arrival.py`.
-  - fs-fat on a whole disk follows its driver, as fs-wfs does.
   - Supervise ata, which carries /boot. partition-manager follows a restart
     now, but a restart of ata reads `ata.wap` from /boot, which only ata
     serves: the respawn needs the driver it replaces. It needs the module from

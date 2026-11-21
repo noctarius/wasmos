@@ -361,6 +361,11 @@ linked feature documents for rationale and rollout plans.
   a FAT mount on a virtio-blk partition). partition-manager and volume-manager
   forget an ended backend's buffer grants (`backends.zig`), so each restart's
   new endpoint is lent them.
+- fs-fat on a whole disk follows its driver the same way (`fat_block.h`):
+  subscribed to `block` before the server lookup, failing a transfer the ended
+  instance held with `WASMOS_ERR_BLOCK_DEV_GONE`, rebinding on the successor's
+  ADD (`tests/test_fat_virtio_blk.py`, three `svc kill`s under a whole-disk
+  FAT mount; `tests/unit/test_fat_block.c` for the in-flight cases).
 - Liveness: a unit whose `PROC_IPC_NOTIFY_READY` carries
   `PROC_READY_FLAG_LIVENESS` names its event-loop endpoint in arg0; the PM
   records it only when the sender owns it and passes it on in

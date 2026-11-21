@@ -725,6 +725,8 @@ What each client of a supervised provider does when it restarts:
 | `rtc` | `date` | looks it up per run |
 | `rtc` | `menu_bar` | follows `rtc` by name watch; a failed read drops the endpoint until the next binding |
 | `virtio_rng@pci:*` | entropy users | look up `virtio-rng` / `hrng` per request |
+| `virtio_blk@pci:*` | fs-wfs on a whole disk | follows the disk's `block` instance through class events and moves its request grant to the new instance; the mount, open files and fs-wfs itself carry over, and I/O that lands while the driver is down fails `WASMOS_ERR_BLOCK_DEV_GONE` |
+| `virtio_blk@pci:*` | partition-manager | does not follow it yet: a filesystem on a partition of a virtio-blk disk loses its I/O (TODO) |
 | `logger` | (none) | a restart continues `/var/log/messages` from the position kept in kenv `logger.seq` |
 | boot chain | everyone | `critical`: never restarted, its end halts |
 
@@ -741,8 +743,11 @@ exit with the compositor and are not started again.
 
 Not built: operator stop/start/restart that does not count as a failure (a
 degraded unit stays degraded until then); retraction of a submitter's units
-when it dies; liveness for the boot services; supervising the DMA drivers whose
-clients hold state a restart loses (virtio-blk, ata, virtio-net); a guard
+when it dies; liveness for the boot services; supervising ata and virtio-net,
+whose clients do not follow a restart yet; holding a block transfer across its
+driver's restart instead of failing it, which waits for fs-manager to stop
+forwarding synchronously (a held transfer would keep fs-manager from reading the
+restarted driver's module); a guard
 against reboot loops under `on_critical=reboot`. They are tracked in `docs/TASKS.md`.
 
 #### `sysinit` — Late-Boot Service Launcher

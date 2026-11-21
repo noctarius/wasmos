@@ -418,6 +418,30 @@ static int ensure_fs_endpoint(void) {
     return (g_dm.fs_endpoint >= 0) ? 0 : -1;
 }
 
+/* The rule file's text, for whichever of the two loaders runs; they never
+ * overlap. Static rather than on the stack: the guest stack is small, and the
+ * read needs one byte past the cap to tell a file that fits from one that does
+ * not, plus the NUL. */
+static char g_rule_text[DEVMGR_RULE_TEXT_CAP + 2];
+
+/* Cuts the text read from `path` to what can be parsed and says so when the
+ * file did not fit. Returns the parsed length; the text is NUL-terminated. */
+static uint32_t rules_text_take(const char* path, int32_t read_len) {
+    char msg[160];
+    int truncated = 0;
+    uint32_t len = dm_rules_text_usable(g_rule_text, read_len, DEVMGR_RULE_TEXT_CAP, &truncated);
+    if (truncated) {
+        snprintf(msg,
+                 sizeof(msg),
+                 "[device-manager] %s exceeds %u bytes; rules past byte %u are not loaded\n",
+                 path,
+                 (unsigned)DEVMGR_RULE_TEXT_CAP,
+                 (unsigned)len);
+        console_write(msg);
+    }
+    return len;
+}
+
 static void kick_boot_rules_read_async(void) {
     char path[96];
     int32_t path_len = 0;
@@ -448,7 +472,7 @@ static void kick_boot_rules_read_async(void) {
     /* Owner-push READ_PATH: one object holds the path (in) then the blob (out);
      * GRANT fs-manager R|W and ship buffer_id (arg2) + borrow_id (arg3). The
      * buffer_id is threaded to poll_boot_rules_async via g_dm.rules_boot_bid. */
-    int32_t buf_size = (int32_t)DEVMGR_RULE_TEXT_CAP;
+    int32_t buf_size = (int32_t)DEVMGR_RULE_TEXT_CAP + 1;
     if (buf_size < path_len) {
         buf_size = path_len;
     }
@@ -495,11 +519,6 @@ static void kick_boot_rules_read_async(void) {
     g_dm_rules_wait.pending = 1;
     g_dm_rules_wait.done = 0;
 }
-
-/* The rules file's text, for whichever of the two loaders runs; they never
- * overlap. Static rather than on the stack: the guest's C stack is small, and a
- * rules buffer on it traps the service at its first rules read. */
-static char g_rule_text[DEVMGR_RULE_TEXT_CAP];
 
 static void poll_boot_rules_async(void) {
     int32_t read_len = 0;
@@ -553,8 +572,8 @@ static void poll_boot_rules_async(void) {
         g_dm.rules_boot_retry_delay = 64;
         return;
     }
-    if (read_len >= (int32_t)DEVMGR_RULE_TEXT_CAP) {
-        read_len = (int32_t)DEVMGR_RULE_TEXT_CAP - 1;
+    if (read_len > (int32_t)DEVMGR_RULE_TEXT_CAP + 1) {
+        read_len = (int32_t)DEVMGR_RULE_TEXT_CAP + 1;
     }
     if (read_len > 0 && wasmos_xfer_buffer_read(bid, text, read_len, 0) != 0) {
         if (bid >= 0) {
@@ -576,7 +595,7 @@ static void poll_boot_rules_async(void) {
         (void)wasmos_xfer_buffer_release(bid);
     }
     g_dm.rules_boot_failures = 0;
-    text[read_len] = '\0';
+    (void)rules_text_take(DEVMGR_RULES_BOOT_ROOT "/" DEVMGR_RULE_FILE, read_len);
     dm_rules_load_always_spawn(&g_dm, text);
     dm_rules_load_block_fs(&g_dm, text);
     dm_rules_load_pci_match(&g_dm, text);
@@ -621,8 +640,9 @@ static void load_rules_if_available(void) {
         str_copy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
         wasmos_sys_str_append(path, sizeof(path), "/");
         wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
-        read_len = read_rules_file(path, text, DEVMGR_RULE_TEXT_CAP);
+        read_len = read_rules_file(path, text, DEVMGR_RULE_TEXT_CAP + 1u);
         if (read_len >= 0) {
+            (void)rules_text_take(path, read_len);
             g_dm.rules_init_loaded = 1;
             g_dm.rules_init_active = dm_rules_count_active(text);
             dm_rules_load_always_spawn(&g_dm, text);

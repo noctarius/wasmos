@@ -340,6 +340,19 @@ linked feature documents for rationale and rollout plans.
   a tree holding a critical unit. No in-tree unit sets `parent=` yet: the
   storage and network clients are to rebind to a restarted driver instead
   (`tests/test_supervisor.py` covers the mechanism with `sv_probe stay`).
+- virtio-blk is supervised (`virtio_blk@pci:<function>`, `restart=on-failure`).
+  fs-wfs follows its disk's `block` instance across a driver restart: a hangup
+  or class REMOVE unbinds it, the class ADD of the new instance rebinds it and
+  moves its request-buffer grant, and the mount, open files and the fs-wfs
+  process carry over (`tests/test_wfs_virtio_blk.py`, `svc kill` of the driver
+  under `/vwfs`). A transfer the dead instance held, or one begun before the new
+  instance registered, fails with `WASMOS_ERR_BLOCK_DEV_GONE` rather than being
+  held: fs-manager forwards synchronously and reads the restarted driver's
+  module, so a held transfer would stall the restart. virtio-blk registers its
+  class only after resolving device-manager and sends READY without waiting
+  for the acknowledgement (`notifyReadyNowait` in the Zig driver shim), since a
+  wait on the PM after the registration closed a cycle through
+  partition-manager's synchronous probe.
 - Liveness: a unit whose `PROC_IPC_NOTIFY_READY` carries
   `PROC_READY_FLAG_LIVENESS` names its event-loop endpoint in arg0; the PM
   records it only when the sender owns it and passes it on in

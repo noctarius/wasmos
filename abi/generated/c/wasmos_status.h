@@ -325,6 +325,7 @@ enum {
     WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 9), /* a block record is short, unterminated, or names a length outside the transfer buffer */
     WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 10), /* the device has no descriptor to report, so it cannot be identified */
     WASMOS_ERR_BLOCK_DEV_QUEUE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 11), /* a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it */
+    WASMOS_ERR_BLOCK_DEV_GONE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 12), /* the device's driver ended and no instance of it serves the device now: a request the dead instance held was never answered, and one begun before a new instance registered was not sent. A later request reaches the new instance once it has registered */
     WASMOS_ERR_SUPERVISOR_BAD_DESC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 1), /* the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor */
     WASMOS_ERR_SUPERVISOR_BAD_SPEC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 2), /* the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option */
     WASMOS_ERR_SUPERVISOR_EXISTS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 3), /* a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed */
@@ -667,6 +668,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "block_dev.DESCRIPTOR_MALFORMED";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "block_dev.NO_DESCRIPTOR";
     case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "block_dev.QUEUE_FULL";
+    case WASMOS_ERR_BLOCK_DEV_GONE: return "block_dev.GONE";
     case WASMOS_ERR_SUPERVISOR_BAD_DESC: return "supervisor.BAD_DESC";
     case WASMOS_ERR_SUPERVISOR_BAD_SPEC: return "supervisor.BAD_SPEC";
     case WASMOS_ERR_SUPERVISOR_EXISTS: return "supervisor.EXISTS";
@@ -942,6 +944,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "a block record is short, unterminated, or names a length outside the transfer buffer";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "the device has no descriptor to report, so it cannot be identified";
     case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it";
+    case WASMOS_ERR_BLOCK_DEV_GONE: return "the device's driver ended and no instance of it serves the device now: a request the dead instance held was never answered, and one begun before a new instance registered was not sent. A later request reaches the new instance once it has registered";
     case WASMOS_ERR_SUPERVISOR_BAD_DESC: return "the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor";
     case WASMOS_ERR_SUPERVISOR_BAD_SPEC: return "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option";
     case WASMOS_ERR_SUPERVISOR_EXISTS: return "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed";

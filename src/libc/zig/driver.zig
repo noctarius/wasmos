@@ -1155,6 +1155,24 @@ pub fn notifyReady(proc_endpoint: i32) void {
     _ = call(proc_endpoint, reply_ep, op.PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
 }
 
+/// Tell the process manager this driver is ready to serve, without waiting for
+/// the acknowledgement; the Zig form of wasmos_sys_notify_ready_nowait.
+///
+/// For a driver whose clients may already be calling it synchronously -- one
+/// whose class registration made a client probe it. Waiting for the ack closes
+/// a cycle: the process manager may be reading a module through fs-manager,
+/// whose backend waits on that client, which waits on this driver, which waits
+/// on the process manager. A parent that spawned it watched (the supervisor)
+/// learns of the READY from PROC_IPC_CHILD_READY and does not race it.
+///
+/// The ack goes to an endpoint created here and never read; one ack fits its
+/// queue. Returns the send's status, or the endpoint creation's failure.
+pub fn notifyReadyNowait(proc_endpoint: i32) i32 {
+    const ep = abi.ipc_create_endpoint();
+    if (ep < 0) return ep;
+    return send(proc_endpoint, ep, op.PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
+}
+
 // --- device resources ------------------------------------------------------
 
 /// A pinned, contiguous DMA region, mapped into this module's linear memory.

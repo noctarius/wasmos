@@ -36,7 +36,8 @@
  * Limits, all of which drop input silently: a line longer than 255 characters is
  * truncated, a RUN path of 96 bytes or more makes the line unparseable, and
  * rules past the per-kind cap (ALWAYS_SPAWN_RULE_CAP and friends) are not
- * stored.  The file itself is read into DEVMGR_RULE_TEXT_CAP bytes.
+ * stored.  The file itself is read into DEVMGR_RULE_TEXT_CAP bytes; a longer one
+ * is cut at its last whole line and reported (dm_rules_text_usable).
  *
  * `state` is borrowed for the call in every function below; `text` is a
  * NUL-terminated buffer the caller owns and is not modified.  Each loader first
@@ -83,5 +84,13 @@ void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text);
  * match.  ACPI records carry the I/O base in device_id.  Does not consult the
  * rule's spawned_device_mask. */
 int dm_acpi_rule_matches(const acpi_match_rule_t* rule, const pci_device_record_t* rec);
+
+/* What of a rule file read into `text` can be parsed. The caller gave the read
+ * cap + 1 bytes of room, so `read_len` > cap says the file holds more than cap
+ * bytes. Then *truncated is 1 and the text is cut after its last newline within
+ * the first cap bytes, so no rule is parsed from a line the cut split.
+ * Otherwise *truncated is 0 and all read_len bytes are kept. `text` is
+ * NUL-terminated at the returned length; a negative read_len keeps nothing. */
+uint32_t dm_rules_text_usable(char* text, int32_t read_len, uint32_t cap, int* truncated);
 
 #endif

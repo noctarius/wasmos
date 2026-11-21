@@ -689,16 +689,23 @@ Source: `architecture/13-runtime-and-packaging.md`,
   cascade) is only for a client that cannot. A block driver's restart leaves the
   disk's content unchanged and a lost request is idempotent per LBA, and a NIC's
   leaves its MAC unchanged and a lost frame is packet loss, so both can be
-  rebound. Steps: partition-manager and volume-manager hold a disk's requests
-  across its REMOVE and resend them to the new endpoint on its ADD (both ignore
-  REMOVE today, and drop a returning disk as `diskKnown`); fs-fat and fs-wfs on a
-  whole disk do the same; the virtio-blk and ata rules get `ENV{RESTART}`;
-  fs-manager's `forward_request` awaits the backend's hangup instead of hanging,
-  and fs-manager submits its backends as supervised units (unmount through
-  `SUPERVISOR_IPC_RETRACT_REQ`); net-stack keeps the netif and its sockets across
-  virtio-net's REMOVE and rebinds on ADD. The `/boot` volume's block driver and
-  fs-fat stay `critical` until the block rebind is proven, then become
-  `required`.
+  rebound. Done: virtio-blk is supervised, and fs-wfs on a whole disk follows
+  its restart (`wfs_block.h`). Open:
+  - Hold and resend a transfer across the driver's restart instead of failing it
+    with `WASMOS_ERR_BLOCK_DEV_GONE`. Blocked on fs-manager answering clients by
+    deferred reply: it forwards synchronously, and a held transfer keeps it from
+    reading the restarted driver's module from /boot (a hold was tried: the
+    restart's module read timed out behind it on WARP).
+  - partition-manager and volume-manager follow a restarted disk (both ignore
+    REMOVE, and drop a returning disk as `diskKnown`); until then a filesystem
+    on a partition of a virtio-blk disk loses its I/O on the driver's restart.
+  - fs-fat on a whole disk follows its driver, as fs-wfs does.
+  - Supervise ata, which carries /boot: it stays device-manager-spawned until
+    partition-manager follows a restart.
+  - fs-manager submits its backends as supervised units (unmount through
+    `SUPERVISOR_IPC_RETRACT_REQ`).
+  - net-stack keeps the netif and its sockets across virtio-net's REMOVE and
+    rebinds on ADD; then virtio-net gets `ENV{RESTART}`.
 - [ ] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
   interrupts and DMA back. The quiesce sets INTx Disable and clears Bus Master
   Enable, and pci-bus turns them back only through an MSI bind
@@ -1700,9 +1707,11 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
 - [ ] [CLEANUP][P3] Consolidate the per-file `#define PAGE_SIZE 0x1000` copies
   (physmem.c/process.c/memory.c/native_driver.c/capability.c/…) into one shared
   header.
-- [ ] [ENHANCEMENT][P2] Replace the fixed `DEVMGR_RULE_TEXT_CAP` rules-file read buffer (now 4096)
+- [ ] [ENHANCEMENT][P2] Replace the fixed `DEVMGR_RULE_TEXT_CAP` rules-file read buffer (now 16384)
   with an `FS_IPC_STAT_REQ`-sized (or streaming/chunked) read so the rules file
-  has no size limit; a fixed buffer silently truncates trailing rules.
+  has no size limit. A longer file is cut at its last whole line and the loss is
+  logged (`[device-manager] <path> exceeds ...`), but its trailing rules are not
+  loaded.
 - [ ] [FEATURE][P2] Add hotplug/event publication and future bus providers (USB/virtual)
   through the normalized device-record contract.
 

@@ -459,6 +459,7 @@ domains:
       - { name: DESCRIPTOR_MALFORMED, description: "a block record is short, unterminated, or names a length outside the transfer buffer" }
       - { name: NO_DESCRIPTOR,       description: "the device has no descriptor to report, so it cannot be identified" }
       - { name: QUEUE_FULL,         description: "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it" }
+      - { name: GONE,               description: "the device's driver ended and no instance of it serves the device now: a request the dead instance held was never answered, and one begun before a new instance registered was not sent. A later request reaches the new instance once it has registered" }
 
   supervisor:
     id: 26

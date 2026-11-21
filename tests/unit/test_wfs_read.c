@@ -482,6 +482,80 @@ static void test_a_name_resolves_all_the_way_to_bytes(void) {
 
 /* ---- runner -------------------------------------------------------------- */
 
+/* ---- a restarted block server ------------------------------------------- */
+
+/* Regression: 2026-11-21-wfs-hangs-on-a-dead-block-driver -- the block client
+ * sent each transfer once and waited for its reply. A driver that died holding
+ * it never answered, the hangup the kernel sent in its place matched nothing,
+ * and the read waited forever -- with fs-manager's synchronous forward waiting
+ * behind it, so every path under every mount stopped. A restarted driver was
+ * never used either: the endpoint was looked up once, at mount. */
+static void test_a_transfer_lost_with_its_server_fails_and_the_next_reaches_the_new_one(void) {
+    static uint8_t buf[BIG_SIZE + 16u];
+    uint32_t done = 0;
+
+    if (setup() != 0 || open_object(E_BIG) != 0) {
+        expect(0, "setup");
+        return;
+    }
+    wfs_stub_die_next = 1;
+    wfs_stub_replace = 1;
+    expect_rc((wasmos_error_code_t)do_read(0u, buf, BIG_SIZE, &done),
+              WASMOS_ERR_BLOCK_DEV_GONE,
+              "the read the dead server held fails, rather than waiting forever");
+    expect(do_read(0u, buf, BIG_SIZE, &done) == 0, "the next read reaches the new server");
+    expect(done == BIG_SIZE && matches(buf, BIG_SEED, 0u, BIG_SIZE, BIG_SIZE), "and is whole");
+    expect(wfs_stub_last_grant_endpoint == wfs_stub_live_endpoint,
+           "the request buffer was granted to the new server");
+
+    wfs_stub_teardown();
+}
+
+/* The death lands while nothing is in flight: its hangup and the successor's
+ * registration wait on the reply endpoint, unpolled, until the next operation
+ * -- which must read them rather than send to the dead endpoint, or to
+ * whoever owns that id next. */
+static void test_a_server_that_died_while_idle_is_found_again(void) {
+    static uint8_t buf[BIG_SIZE + 16u];
+    uint32_t done = 0;
+
+    if (setup() != 0 || open_object(E_BIG) != 0) {
+        expect(0, "setup");
+        return;
+    }
+    wfs_stub_kill_server(1);
+    expect(do_read(0u, buf, BIG_SIZE, &done) == 0, "the next read reaches the new server");
+    expect(done == BIG_SIZE && matches(buf, BIG_SEED, 0u, BIG_SIZE, BIG_SIZE), "and is whole");
+
+    wfs_stub_teardown();
+}
+
+/* A driver that is not back yet -- or never comes back, its supervisor having
+ * given up -- fails each transfer at once instead of holding the filesystem,
+ * and the client rebinds when the device returns. */
+static void test_reads_fail_while_no_server_runs_and_resume_when_one_does(void) {
+    static uint8_t buf[BIG_SIZE + 16u];
+    uint32_t done = 0;
+
+    if (setup() != 0 || open_object(E_BIG) != 0) {
+        expect(0, "setup");
+        return;
+    }
+    wfs_stub_die_next = 1;
+    expect_rc((wasmos_error_code_t)do_read(0u, buf, BIG_SIZE, &done),
+              WASMOS_ERR_BLOCK_DEV_GONE,
+              "the held transfer fails");
+    expect_rc((wasmos_error_code_t)do_read(0u, buf, BIG_SIZE, &done),
+              WASMOS_ERR_BLOCK_DEV_GONE,
+              "and so does the next, with no server to send it to");
+
+    wfs_stub_server_returns();
+    expect(do_read(0u, buf, BIG_SIZE, &done) == 0, "a later read reaches the returned device");
+    expect(done == BIG_SIZE && matches(buf, BIG_SEED, 0u, BIG_SIZE, BIG_SIZE), "and is whole");
+
+    wfs_stub_teardown();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_a_whole_multi_block_file_reads_back),
     WASMOS_TEST_CASE(test_partial_reads_slice_correctly),
@@ -493,6 +567,9 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_reading_a_directory_is_refused),
     WASMOS_TEST_CASE(test_a_device_error_fails_the_read),
     WASMOS_TEST_CASE(test_a_name_resolves_all_the_way_to_bytes),
+    WASMOS_TEST_CASE(test_a_transfer_lost_with_its_server_fails_and_the_next_reaches_the_new_one),
+    WASMOS_TEST_CASE(test_a_server_that_died_while_idle_is_found_again),
+    WASMOS_TEST_CASE(test_reads_fail_while_no_server_runs_and_resume_when_one_does),
 };
 
 int main(void) {

@@ -253,6 +253,43 @@ static void test_legacy_rule_is_rejected(void) {
     assert(state.block_fs_rule_count == 0u);
 }
 
+/* Regression: 2026-11-21-rule-file-silently-truncated -- device-manager read
+ * the boot rule file into DEVMGR_RULE_TEXT_CAP bytes and clamped whatever came
+ * back, so a file that grew past the buffer lost its tail without a word: a
+ * comment added near the top of default.rules dropped the /wfs/nested mount
+ * rule at its end, and the half rule the cut left was parsed as if whole. The
+ * read reports more than fits, and only whole lines are kept. */
+static void test_a_rule_file_past_the_buffer_keeps_only_whole_lines(void) {
+    char text[64];
+    const char* file = "SUBSYSTEM==\"boot\", ENV{MOUNT}=\"/a\", ENV{FSTYPE}=\"tmpfs\"\n"
+                       "SUBSYSTEM==\"boot\", ENV{MOUNT}=\"/b\"\n";
+    uint32_t len;
+    int truncated = 0;
+
+    /* The read was given cap + 1 bytes of room and filled them: more follows. */
+    memcpy(text, file, sizeof(text));
+    len =
+        dm_rules_text_usable(text, (int32_t)sizeof(text), (uint32_t)sizeof(text) - 1u, &truncated);
+    assert(truncated == 1);
+    assert(len > 0u && text[len - 1u] == '\n');
+    assert(len <= sizeof(text) - 1u);
+    assert(text[len] == '\0');
+    assert(memcmp(text, file, len) == 0);
+}
+
+static void test_a_rule_file_that_fits_is_kept_whole(void) {
+    char text[128];
+    const char* file = "SUBSYSTEM==\"boot\", ENV{MOUNT}=\"/a\", ENV{FSTYPE}=\"tmpfs\"\n"
+                       "SUBSYSTEM==\"boot\", ENV{MOUNT}=\"/b\", ENV{FSTYPE}=\"tmpfs\"";
+    uint32_t n = (uint32_t)strlen(file);
+    int truncated = 1;
+
+    memcpy(text, file, n);
+    assert(dm_rules_text_usable(text, (int32_t)n, (uint32_t)sizeof(text) - 1u, &truncated) == n);
+    assert(truncated == 0);
+    assert(strcmp(text, file) == 0);
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -266,6 +303,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_block_fs_rule),
         WASMOS_TEST_CASE(test_pci_match_rule),
         WASMOS_TEST_CASE(test_legacy_rule_is_rejected),
+        WASMOS_TEST_CASE(test_a_rule_file_past_the_buffer_keeps_only_whole_lines),
+        WASMOS_TEST_CASE(test_a_rule_file_that_fits_is_kept_whole),
         WASMOS_TEST_CASE(test_acpi_rule_io_attr_selects_one_uart),
         WASMOS_TEST_CASE(test_acpi_rule_without_io_matches_any_instance),
         WASMOS_TEST_CASE(test_acpi_rule_env_restart_names_a_policy),

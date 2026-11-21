@@ -60,6 +60,21 @@ extern int wfs_stub_send_status;
 /* Fail the next staging copy into the server's block buffer, so a write cannot
  * be sent. Cleared once it fires. */
 extern int wfs_stub_fail_stage;
+/* The server dies holding the next transfer, unanswered: the kernel's hangup and
+ * the registry's REMOVE land on the reply endpoint, followed by an ADD of a
+ * replacement on a new endpoint when wfs_stub_replace is set. Cleared once it
+ * fires. */
+extern int wfs_stub_die_next;
+extern int wfs_stub_replace;
+/* The endpoint a live server owns, -1 when none does; and the endpoint the
+ * request buffer was last granted to. */
+extern int32_t wfs_stub_live_endpoint;
+extern int32_t wfs_stub_last_grant_endpoint;
+
+/* The server dies while nothing is in flight, as above. */
+void wfs_stub_kill_server(int replace);
+/* A replacement for a server that died registers, announced by a class ADD. */
+void wfs_stub_server_returns(void);
 
 wfs_block_t* wfs_stub_block(void);
 

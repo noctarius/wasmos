@@ -21,10 +21,6 @@
 #define MM_USER_IPC_BASE 0x0000008300000000ULL
 #define MM_USER_DEVICE_BASE 0x0000008400000000ULL
 #define MM_COPY_STACK_BYTES 8192u
-static const uint64_t pf_err_present = 1ULL << 0;
-static const uint64_t pf_err_write = 1ULL << 1;
-static const uint64_t pf_err_user = 1ULL << 2;
-static const uint64_t pf_err_instr = 1ULL << 4;
 static const boot_info_t* g_boot_info;
 static list_t g_contexts;
 static ksync_spinlock_t g_contexts_lock;
@@ -406,14 +402,14 @@ int mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t si
  * *out_mapped_base when it is non-NULL, and -1 when the fault is not one this
  * function may resolve.  Runs in the fault handler and takes no lock beyond
  * mm_context_get's. */
-int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code,
+int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint32_t access,
                          uint64_t* out_mapped_base) {
     mm_context_t* ctx = mm_context_get(context_id);
     if (!ctx) {
         return -1;
     }
 
-    if (error_code & pf_err_present) {
+    if (access & MM_FAULT_PRESENT) {
         return -1;
     }
 
@@ -421,14 +417,14 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code
     if (!region) {
         return -1;
     }
-    if ((error_code & pf_err_user) && !(region->flags & MEM_REGION_FLAG_USER)) {
+    if ((access & MM_FAULT_USER) && !(region->flags & MEM_REGION_FLAG_USER)) {
         return -1;
     }
 
-    if ((error_code & pf_err_write) && !(region->flags & MEM_REGION_FLAG_WRITE)) {
+    if ((access & MM_FAULT_WRITE) && !(region->flags & MEM_REGION_FLAG_WRITE)) {
         return -1;
     }
-    if ((error_code & pf_err_instr) && !(region->flags & MEM_REGION_FLAG_EXEC)) {
+    if ((access & MM_FAULT_EXEC) && !(region->flags & MEM_REGION_FLAG_EXEC)) {
         return -1;
     }
 

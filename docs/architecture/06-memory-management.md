@@ -230,11 +230,16 @@ typedef struct {
 
 #### Demand Mapping and Page Fault Handling
 
-`mm_handle_page_fault(context_id, addr, error_code, out_mapped_base)`:
+`mm_handle_page_fault(context_id, addr, access, out_mapped_base)`:
 
-1. Rejects `pf_err_present` faults (protection violation, not absence).
+`access` is an `MM_FAULT_*` mask (`memory.h`): present, write, user, exec. The
+architecture's exception handler decodes it from its fault syndrome (x86_64: the
+`#PF` error code, in `x86_pf_access`); nothing above the arch layer sees the raw
+syndrome, and the memory service's `IPC_MEM_FAULT` carries the mask in `arg2`.
+
+1. Rejects `MM_FAULT_PRESENT` faults (protection violation, not absence).
 2. Finds the containing `mem_region_t` for `addr`.
-3. Checks user/write/instr bits against region flags.
+3. Checks the user/write/exec bits against region flags.
 4. Computes `phys_page = region->phys_base + (page_base − region->base)`.
 5. Calls `paging_map_4k_in_root(ctx->root_table, page_base, phys_page, flags)`.
 

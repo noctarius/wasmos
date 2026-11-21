@@ -10,6 +10,7 @@
 #include "serial.h"
 #include "klog.h"
 #include "process.h"
+#include "memory.h"
 #include "memory_service.h"
 #include "irq.h"
 #include "msi.h"
@@ -643,6 +644,26 @@ int x86_user_exception_handler(uint64_t vector, const uint64_t* frame) {
  * Despite the name, memory_service_handle_fault_ipc() resolves the fault in-line
  * rather than over IPC, so the only path that parks the caller is the ring-3
  * termination one. */
+/* #PF error-code bits (Intel SDM Vol. 3A, "Page-Fault Error Code"): P (bit 0),
+ * W/R (bit 1), U/S (bit 2), I/D (bit 4). The other bits (RSVD, PK, SS, SGX)
+ * carry no information the region checks use. */
+static uint32_t x86_pf_access(uint64_t error_code) {
+    uint32_t access = 0;
+    if (error_code & (1ULL << 0)) {
+        access |= MM_FAULT_PRESENT;
+    }
+    if (error_code & (1ULL << 1)) {
+        access |= MM_FAULT_WRITE;
+    }
+    if (error_code & (1ULL << 2)) {
+        access |= MM_FAULT_USER;
+    }
+    if (error_code & (1ULL << 4)) {
+        access |= MM_FAULT_EXEC;
+    }
+    return access;
+}
+
 int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
     uint64_t cr2 = 0;
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
@@ -674,7 +695,7 @@ int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
         return 0;
     }
 
-    if (memory_service_handle_fault_ipc(proc->context_id, cr2, error_code) != 0) {
+    if (memory_service_handle_fault_ipc(proc->context_id, cr2, x86_pf_access(error_code)) != 0) {
         if (from_user) {
             serial_printf("[fault] user-pf pid=%u reason=%s err=%016llx cr2=%016llx rip=%016llx\n",
                           pid,

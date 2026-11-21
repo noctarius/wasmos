@@ -50,8 +50,17 @@ typedef enum {
  * placeholder region has been rebound to a runtime-owned allocation. */
 #define MEM_REGION_FLAG_PHYS_EXTERNAL (1u << 31)
 
+/* What a page fault was, as an MM_FAULT_* mask: whether a translation existed and the
+ * access the faulting instruction made.  The architecture's exception handler decodes it
+ * from its fault syndrome (x86_64: the #PF error code); nothing above that layer sees
+ * the raw syndrome. */
+#define MM_FAULT_PRESENT (1u << 0) /* a translation existed: a protection violation */
+#define MM_FAULT_WRITE (1u << 1)   /* the access was a write */
+#define MM_FAULT_USER (1u << 2)    /* the access came from user mode */
+#define MM_FAULT_EXEC (1u << 3)    /* the access was an instruction fetch */
+
 /* IPC message types for the kernel memory-fault service.  A request packs the faulting
- * address into arg0 (low 32 bits) and arg1 (high 32 bits), the x86 page-fault error code
+ * address into arg0 (low 32 bits) and arg1 (high 32 bits), the MM_FAULT_* access mask
  * into arg2 and the faulting context id into arg3; the reply carries the handler status
  * in arg0 and the mapped page base split across arg1/arg2 the same way. */
 typedef enum { IPC_MEM_FAULT = 0x1000, IPC_MEM_FAULT_REPLY = 0x1001 } memory_ipc_type_t;
@@ -122,14 +131,14 @@ int mm_context_region_for_type(mm_context_t* ctx, mem_region_type_t type, mem_re
  * end — which is how callers enumerate a context's regions. */
 int mm_context_region_at(mm_context_t* ctx, uint32_t index, mem_region_t* out_region);
 
-/* Service a #PF for context_id at user VA `addr` with the raw x86 page-fault error code.
+/* Service a page fault for context_id at user VA `addr`; `access` is its MM_FAULT_* mask.
  * Wires the containing 4 KiB page to phys_base + (page VA - region base) in that
  * context's root, and reports the page-aligned VA in *out_mapped_base (optional).
  * Returns 0 when the page was mapped and -1 otherwise: unknown context, a
  * protection-violation fault (present bit set — this handler only fills in absent
  * pages), an address in no region, a user fault on a supervisor region, or an access the
  * region's flags do not permit.  A -1 means the fault is fatal to the faulting thread. */
-int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code,
+int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint32_t access,
                          uint64_t* out_mapped_base);
 
 /* Look up an existing context by id; returns NULL if not found.  Id 0 resolves to the

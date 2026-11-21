@@ -24,10 +24,10 @@ int memory_service_serve_one(void);
  * IPC is involved: it calls mm_handle_page_fault() inline. Round-tripping
  * through the service endpoint would race the mem-service worker thread, which
  * drains the same endpoint on another CPU and would swallow the request,
- * turning a recoverable demand fault into a panic. Returns 0 when the fault was
- * resolved, non-zero otherwise. */
+ * turning a recoverable demand fault into a panic. `access` is the MM_FAULT_*
+ * mask (memory.h). Returns 0 when the fault was resolved, non-zero otherwise. */
 int memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr,
-                                    uint64_t error_code);
+                                    uint32_t access);
 
 /* Kernel process entry point for the memory service loop.  Serves at most one request
  * per dispatch and returns PROCESS_RUN_YIELDED so the scheduler re-runs it; blocks

@@ -1,6 +1,6 @@
 ---
 name: wasmos-system-service
-description: Create, wire, and validate a new WASMOS system service (WASM or native) — the `.wap` model: an `initialize`/`async_initialize` entry that owns an event loop, service/class registration, capabilities in linker.metadata, build via the wasmos_add_*_app_target helpers, placement on the mounted FS, and startup via sysinit `.rc` (start/spawn/wait-svc) or a device-manager rule. Use when adding a service under src/services/.
+description: Create, wire, and validate a new WASMOS system service (WASM or native) — the `.wap` model: an `initialize`/`async_initialize` entry that owns an event loop, service/class registration, capabilities in linker.metadata, build via a per-directory BUILD.py manifest (guest()/native() + install()), placement on the mounted FS, and startup via sysinit `.rc` (start/spawn/wait-svc) or a device-manager rule. Use when adding a service under src/services/.
 ---
 
 # WASMOS System Service
@@ -28,7 +28,7 @@ Legacy patterns that are GONE — do not use them:
 1. Author the source + entry (WASM `initialize`, or native blocking/async).
 2. Register the service; run a blocking/event-loop (never busy-spin).
 3. Declare `linker.metadata` (package + capabilities + entry-arg bindings).
-4. Add `CMakeLists.txt` with a `wasmos_add_*_app_target` helper; register it.
+4. Add a `BUILD.py` (`guest(...)`/`native(...)`); list the dir in `src/services/BUILD.py`.
 5. Place the `.wap` on the FS (initfs.toml and/or ESP).
 6. Start it from `sysinit.rc` (or a device-manager rule); verify in QEMU.
 
@@ -110,35 +110,42 @@ name  = "ipc.basic"     # or "system.control" (cli, fs_manager)
 flags = 0
 ```
 
-## Step 4: Build (CMake)
+## Step 4: Build (BUILD.py)
 
-Per-service `CMakeLists.txt`, using the root-`CMakeLists.txt` helpers:
-- WASM/AOT: `wasmos_add_wasm_c_app_target(...)` (`CMakeLists.txt:476`); Zig via
-  `cmake/WasmosZigApp.cmake`.
-- Native C: `wasmos_add_native_c_app_target(...)` (`CMakeLists.txt:589`) — links
-  `ld.lld -e <entry> -static` and packs with the app packer. `net_stack` hand-rolls
-  the equivalent (`-e async_initialize`) and links the libsys native runtime objects
+Per-service `BUILD.py` manifest, using the helpers in
+`scripts/buildgen/wasmos_rules.py` (API reference: `docs/BUILD_SYSTEM.md` §12):
+- WASM (C, C++, Zig, Rust, Go, AssemblyScript): `guest(b, name, sources,
+  lang="c")` compiles through the staged SDK driver, links with the directory's
+  `linker.metadata` (entry, `[link]` memory sizes), and packs `<name>.wap`; under
+  WARP an `aot = true` manifest is AOT-compiled and bundled. An async WASM
+  service lists `src/libsys/wasm/service_async_entry_wasm.c` among its sources
+  (`src/services/logger/BUILD.py`).
+- Native C: compile with `b.toolchain("native").compile(...)`, then
+  `native(b, name, objs, entry=...)` links `ld.lld -e <entry> -static` and packs
+  without AOT. `src/services/net_stack/BUILD.py` links with
+  `entry="async_initialize"` and compiles the libsys native runtime objects
   (`coroutine_native.c`, `ipc_future_native.c`, `service_async_entry_native.c`,
-  `heap_native.c`, `coroutine_native_x86_64.S`).
-- Native Zig: hand-rolled (`font_service/CMakeLists.txt`, `zig build-obj -target
-  x86_64-freestanding`, link `-e initialize`).
+  `heap_native.c`, `coroutine_native_x86_64.S`) beside lwIP/mbedTLS.
+- Native Zig: `zig_object(...)` compiles the Zig root module to an x86_64
+  object, linked with the C objects through `native(..., entry="initialize")`
+  (`src/services/font_service/BUILD.py`, `src/services/gfx_compositor/BUILD.py`;
+  the latter writes a generated `build_options` Zig module from Kconfig with
+  `b.write_file`).
 
-Pack: `${WASMOS_APP_PACKER} --manifest linker.metadata --in <elf/wasm> --out
-<name>.wap` (`make_wasmos_app` builds the packer). Register into the build:
-```cmake
-set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS        <path>.wap)
-set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS <target>)
-```
-and add the dir in `src/services/CMakeLists.txt`.
+`install(b, "system/services/<name>.wap", wap)` stages the package on the ESP
+(Step 5). Add the directory name to `b.subdir(...)` in `src/services/BUILD.py`;
+`build.ninja` regenerates on the next `ninja` run.
 
 ## Step 5: Place the `.wap` on the FS
 
 Services load by absolute VFS path (no directory scan). Place via:
 - **initfs image** (early/RAM): add to `scripts/initfs.toml`
   (`path = "system/services/<name>.wap"`, `source = "<name>.wap"`); built into
-  `build/initfs.img`.
-- **ESP/FAT** (`/boot`): assembled into `build/esp/system/services/<name>.wap` by
-  the QEMU run targets.
+  `out/<dir>/initfs.img`. The initfs step finds `<name>.wap` by name in the
+  build directory, so an initfs-only service has no `install(...)` call.
+- **ESP/FAT** (`/boot`): `install(b, "system/services/<name>.wap", wap)` stages it;
+  the `esp` target (part of the default build) copies it to
+  `out/<dir>/esp/system/services/<name>.wap`.
 
 ## Step 6: Startup wiring
 
@@ -168,7 +175,8 @@ path-spawns only `sysinit` (`src/kernel/kernel_init_runtime.c:393`).
 ## Step 7: Verify
 
 ```sh
-cmake -S . -B build && cmake --build build --target run-qemu-test
+./configure out/wasm3-smp configs/wasm3_smp_defconfig
+ninja -C out/wasm3-smp run-qemu-test
 ```
 Confirm the service's ready log and endpoint registration; exercise its IPC from a
 client. Remove debug markers before committing.

@@ -99,6 +99,24 @@ class Config:
         return 1 if self.get(name, False) else 0
 
 
+class OverrideConfig:
+    """A Config view with some symbols replaced."""
+
+    def __init__(self, cfg: Config, overrides: dict):
+        self._cfg, self._overrides = cfg, overrides
+
+    def get(self, name: str, default=None):
+        return self._overrides.get(name, self._cfg.get(name, default))
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self.get(name, False)
+
+    def flag(self, name: str) -> int:
+        return 1 if self.get(name, False) else 0
+
+
 # --- build graph ------------------------------------------------------------
 
 
@@ -213,8 +231,16 @@ class Builder:
             load_manifest(self._g, (self.dir / d).resolve())
 
     # toolchains
-    def toolchain(self, name: str) -> "ToolchainHandle":
-        tc = self._g.toolchains.get(name)
+    def toolchain(self, name: str, overrides: dict | None = None) -> "ToolchainHandle":
+        """A toolchain profile; `overrides` evaluates the profiles as if those
+        Kconfig symbols had the given values (index-only use, e.g. the other
+        runtime's flags)."""
+        profiles = self._g.toolchains
+        if overrides:
+            profiles = toolchains.profiles(
+                self.root, OverrideConfig(self.cfg, overrides), self.tools
+            )
+        tc = profiles.get(name)
         if tc is None:
             raise SystemExit(
                 f"buildgen: {self.dir}/BUILD.py: unknown toolchain {name!r}"
@@ -277,6 +303,20 @@ class Builder:
             [],
             [self._g.rel(d) for d in deps],
             variables={"cmd": text, "desc": description or name},
+        )
+
+    def index(self, source, argv):
+        """Add a compile_commands.json entry without a build edge: for sources
+        compiled through a wrapper or a multi-source command, and for sources
+        only the other configuration compiles, so clangd and clang-tidy still
+        see them with real flags. `argv` is the compiler and its flags."""
+        source = str(source)
+        self._g.compile_db.append(
+            {
+                "directory": str(self._g.outdir),
+                "file": source,
+                "arguments": [str(a) for a in argv] + ["-c", source],
+            }
         )
 
     def alias(self, name: str, *targets, default=False):

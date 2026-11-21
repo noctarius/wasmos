@@ -23,7 +23,7 @@
 #include "wasmos_cast.h"
 
 /* Compile-time trace switch, defaulting to the build-wide WASMOS_TRACE (the
- * -DWASMOS_TRACE cmake flag). Define UI_TRACE=1 before including this header to
+ * WASMOS_TRACE Kconfig option). Define UI_TRACE=1 before including this header to
  * force libui tracing on without turning it on tree-wide. */
 #ifndef UI_TRACE
 #define UI_TRACE WASMOS_TRACE

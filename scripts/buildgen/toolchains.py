@@ -12,6 +12,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -123,7 +124,11 @@ def discover(overrides: dict[str, str], srcdir: Path) -> dict[str, str]:
         or _find("zig", [bindir, f"{home}/bin", f"{home}/.local/bin"], required=False)
         or ""
     )
-    tools["asc"] = overrides.get("asc") or _find("asc", [bindir], required=False) or ""
+    tools["asc"] = (
+        overrides.get("asc")
+        or _find("asc", [str(srcdir / "node_modules/.bin"), bindir], required=False)
+        or ""
+    )
     tools["rustc"] = (
         overrides.get("rustc")
         or _find("rustc", [f"{home}/.cargo/bin"], required=False)
@@ -137,6 +142,29 @@ def discover(overrides: dict[str, str], srcdir: Path) -> dict[str, str]:
         or _find("wasm-opt", [str(srcdir / "node_modules/.bin")], required=False)
         or ""
     )
+    # Quality-gate tools (scripts/quality.sh); each language's checks need only
+    # its own. CLANG_FORMAT in the environment pins the formatter version.
+    tools["clang-format"] = (
+        overrides.get("clang-format")
+        or os.environ.get("CLANG_FORMAT")
+        or _find("clang-format", hints, required=False)
+        or ""
+    )
+    # Directory providing clang-tidy/*.h when the LLVM install lacks them (CI
+    # fetches clang-tools-extra); the plugin build adds it to its includes.
+    tools["clang-tidy-include"] = overrides.get("clang-tidy-include") or os.environ.get(
+        "WASMOS_CLANG_TIDY_INCLUDE_DIR", ""
+    )
+    for t in ("clang-tidy", "llvm-config"):
+        tools[t] = overrides.get(t) or _find(t, hints, required=False) or ""
+    # black/ruff usually live beside the Python that runs configure (a venv).
+    pybin = str(Path(sys.executable).parent)
+    for t in ("gofmt", "go", "rustfmt", "black", "ruff"):
+        tools[t] = (
+            overrides.get(t)
+            or _find(t, [pybin, f"{home}/.cargo/bin"], required=False)
+            or ""
+        )
     tools["host-os"] = platform.system()
     tools["qemu"] = (
         overrides.get("qemu") or _find("qemu-system-x86_64", [], required=False) or ""

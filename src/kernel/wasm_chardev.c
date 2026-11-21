@@ -6,7 +6,7 @@
  * thread.
  *
  * FIXME(chardev-dead): this file is not in the kernel source list
- * (src/kernel/CMakeLists.txt), nothing calls wasm_chardev_init(), and no build
+ * (src/kernel/BUILD.py), nothing calls wasm_chardev_init(), and no build
  * rule emits the _binary_chardev_server_wasm_* symbols it links against.  Wire
  * it up or delete it; as it stands it cannot be built. */
 #include "wasm_chardev.h"

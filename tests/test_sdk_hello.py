@@ -1,7 +1,7 @@
 """The staged SDK's zero-configuration path, end to end in the guest, per driver.
 
 examples/c/sdk_hello/hello.c is plain C with no linker.metadata, built by
-cmake/WasmosSdk.cmake with the staged driver and no flags but -o. That link line
+scripts/sdk/BUILD.py with the staged driver and no flags but -o. That link line
 is not the in-tree one -- it goes through the sysroot, crt1.o and libc.a rather
 than recompiling libc into the module -- so the in-tree build being green says
 nothing about it. This is the test that says the SDK produces a program WASMOS
@@ -29,12 +29,14 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_build_dir, default_config
 
-# The SDK target is skipped when llvm-ar is absent (cmake/WasmosSdk.cmake returns
-# early), and then the app never reaches the ESP. Skip rather than fail: the
+# A language whose toolchain is missing builds no SDK smoke app
+# (wasmos_rules.lang_available), and then the app never reaches the ESP. Skip rather than fail: the
 # absence is a toolchain gap on the host, not a regression in the guest.
-BUILD_DIR = os.environ.get("WASMOS_BUILD_DIR", os.path.join(ROOT, "build"))
+BUILD_DIR = os.environ.get(
+    "WASMOS_BUILD_DIR", default_build_dir(os.path.join(ROOT, "out", "default"))
+)
 SDK_HELLO_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkhello.wap")
 SDK_ZIG_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkzig.wap")
 SDK_AS_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkas.wap")

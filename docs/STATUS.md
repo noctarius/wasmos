@@ -607,13 +607,14 @@ linked feature documents for rationale and rollout plans.
   its CPU until it returns (architecture/11, *Which Workloads Reach Ring 3*) --
   one heavy app stalls the desktop. wasm3
   remains fully supported and is the reference implementation the two runtimes
-  are read against. Pin a runtime with
-  `-DWASMOS_DOTCONFIG=configs/{wasm3,warp}_{single,smp}_defconfig`; a bare
-  `cmake -S . -B build` seeds from `configs/wasmos_defconfig`, which selects no
-  runtime and so falls to the code default. `-DWASMOS_WASM_RUNTIME_WARP=ON`
-  alone is unreliable (kconfig imports afterwards and FORCEs the cache) — see
-  `skills/wasmos-build-and-run`. SMP is separately gated by `WASMOS_SMP` and
-  requires IOAPIC.
+  are read against. Pin a runtime by seeding the build directory from
+  `configs/{wasm3,warp}_{single,smp}_defconfig`
+  (`./configure out/<dir> configs/<name>_defconfig`); a bare
+  `./configure out/<dir>` seeds from `configs/wasmos_defconfig`, whose runtime
+  choice falls to the Kconfig default (wasm3). The build directory's own
+  `.config` is authoritative after the first configure — see
+  `skills/wasmos-build-and-run`. SMP is separately gated by `WASMOS_SMP`, which
+  `depends on WASMOS_IRQ_IOAPIC` in `Kconfig`.
 - **There is no "ring-3 isolation" configuration.** The only ring-3 Kconfig
   options are `WASMOS_RING3_SMOKE` and `WASMOS_RING3_THREAD_LIFECYCLE_SMOKE`,
   both test probes and both `=n` in the shipped defconfigs. Ring 3 is entered
@@ -624,7 +625,7 @@ linked feature documents for rationale and rollout plans.
   `architecture/11` *Which Workloads Reach Ring 3* for the entry paths and what
   follows from them (notably that a wasm3 guest is never timer-preempted).
 - WARP QEMU CPU model: the run/test QEMU commands pass `-cpu max`
-  (`WASMOS_QEMU_CPU_ARGS` in CMake; also in `scripts/qemu_test_framework.py`).
+  (`scripts/system/BUILD.py` for `run-qemu*`; also in `scripts/qemu_test_framework.py`).
   WARP's single-pass JIT emits modern x86-64 instructions unconditionally (e.g.
   `POPCNT`/`LZCNT`/`TZCNT` for wasm `i32.popcnt`/`clz`/`ctz`) with no CPUID
   guard, so the default `qemu64` model faults them with `#UD`.
@@ -634,7 +635,7 @@ linked feature documents for rationale and rollout plans.
 - Primary regression gates: `run-kernel-unit-tests`, `run-qemu-test`,
   `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
-  parallel because they share `build/esp`.
+  parallel because they share `<build-dir>/esp`.
 - Every QEMU battery runs under both wasm runtimes (`runtimes` in
   `tests/batteries.json`), and each cell asserts the runtime it linked from the
   boot marker. The `filesystem` battery is green under `wasm3_smp` and
@@ -642,23 +643,27 @@ linked feature documents for rationale and rollout plans.
   a defect WARP cannot show: a driver whose entry export declares parameters
   starts under WARP and dies under wasm3, which validates entry arity — see the
   entry-arity rule in `architecture/13` *Language ABI*.
-- Developer checks: `fmt`, `fmt-check`, `lint`, and `quality` are CMake targets
-  backed by `scripts/quality.sh`; only first-party source roots are in scope.
-- Ninja build (prototype, alongside CMake): `./configure <dir> <defconfig>`
-  seeds `<dir>/.config` once and generates `<dir>/build.ninja` from Kconfig plus
-  per-directory `BUILD.py` manifests (`scripts/buildgen/`); build.ninja then
-  regenerates itself when `.config`, a Kconfig file, a manifest, a globbed
-  directory or the generator changes. It currently covers the host packer, the
-  wasm32 SDK sysroot (`scripts/sdk_stage.py`), `chardev_client`, `kernel.elf`
-  (both runtimes) and `BOOTX64.EFI`, with per-object compiles and compiler
-  depfiles, and writes `compile_commands.json`. Verified against CMake on
-  2026-11-21: the wasm3 SMP `kernel.elf` is identical after `--strip-debug`, the
-  sysroot archives' members and `chardev_client.wasm` are byte-identical, and
-  both the wasm3 SMP and WARP SMP ninja kernels pass `run-qemu-test` from a
-  CMake-staged ESP. The WARP kernel differs from CMake's only in
-  `process_manager.cpp` (see the `[BUG]` in `TASKS.md`). Everything else (other
-  guest modules, ESP/initfs staging, run/test targets, host unit tests, quality
-  gates) is still CMake-only.
+- Developer checks: `fmt`, `fmt-check`, `lint`, and `quality` are Ninja targets
+  (root `BUILD.py`) backed by `scripts/quality.sh`; only first-party source roots
+  are in scope.
+- Build: `./configure <dir> <defconfig>` seeds `<dir>/.config` once and
+  generates `<dir>/build.ninja` from Kconfig plus per-directory `BUILD.py`
+  manifests (`scripts/buildgen/`); build.ninja regenerates itself when `.config`,
+  a Kconfig file, a manifest, a globbed directory or the generator changes. It
+  builds the kernel (both runtimes), the loader, all guest and native modules,
+  WARP AOT payloads, initfs, the ESP, the WFS/GPT fixtures, the host tools and
+  the SDK, with per-object compiles and compiler depfiles; writes
+  `compile_commands.json`; and defines every run, test and quality target
+  (`docs/BUILD_SYSTEM.md`). Measured against the previous CMake build on
+  2026-11-21 (wasm3_smp, warp_smp): stripped kernels, every non-Rust/Go `.wap`
+  including all 50 AOT payloads, initfs and the disk images byte-identical;
+  ESP trees identical; `run-qemu-test` green on both runtimes and the CLI suite
+  green (279/280, the remaining test then still invoking CMake) on wasm3 SMP;
+  `lint` covers a superset of the files the CMake index covered. The one
+  intended difference: CMake compiled `src/kernel/process_manager.cpp` in WARP
+  builds without `-DWASMOS_WASM_RUNTIME_WARP`, so `ProcessManager::init` sized
+  `pm_app_state_t` 24 bytes short of what the WARP driver writes into each app
+  node; every kernel translation unit now sees the runtime define.
 
 ## Boot and Kernel
 
@@ -1296,7 +1301,7 @@ linked feature documents for rationale and rollout plans.
   covered too (create, mkdir, rmdir, chain append); file DATA read/write on
   FAT32 is not, because it runs through the client transfer-buffer path.
 - FAT interop is checked against real tools, not only against this repository's
-  own reading of the format. `cmake --build build --target run-fat-image-tests`
+  own reading of the format. `ninja -C out/<dir> run-fat-image-tests`
   formats FAT16, FAT16+LFN and FAT32 volumes with the platform's own
   `mkfs.vfat`/`newfs_msdos`, has the driver mount, read and MODIFY each, then
   runs `fsck.vfat`/`fsck_msdos` over the result and mounts it on the host to
@@ -1601,7 +1606,7 @@ linked feature documents for rationale and rollout plans.
   `log.serial=com2`: COM2 carries the kernel log only, written by the kernel
   directly (kmsg replay, then every kernel-log write, unlocked paths
   included). The QEMU harness captures COM2 per session and prints its tail on
-  every timeout; the run targets write it to `build/syslog.log`.
+  every timeout; the run targets write it to `<build-dir>/syslog.log`.
 - The kernel log ring (kmsg, 64 KiB, `src/kernel/kmsg.c`) holds kernel log
   only, LF line ends, with a 64-bit byte sequence number that never wraps. The
   `kmsg_read` host call pages it by sequence number and reports overwritten
@@ -1741,7 +1746,7 @@ linked feature documents for rationale and rollout plans.
   instance encoding the `(backend, unit)` from its `driver=`/`unit=` startup args,
   with no `required_endpoint_name` in its manifest.
 - A WFS volume mounts over virtio-blk as well as ATA, and the same image reads
-  identically through both. `tests/test_wfs_virtio_blk.py` attaches `build/wfs.img`
+  identically through both. `tests/test_wfs_virtio_blk.py` attaches `<build-dir>/wfs.img`
   a second time as a virtio-blk device pinned to PCI slot 6, so both mounts come
   up in one boot and are compared against each other rather than across runs. It
   is also a THIRD block_fs rule, which is more pressure on the rule-arming order
@@ -1790,7 +1795,7 @@ linked feature documents for rationale and rollout plans.
 - The interactive QEMU targets (`run-qemu`, `run-qemu-ui`, `run-qemu-debug`) boot
   with two WFS volumes: `/wfs` over ATA and `/vwfs` over virtio-blk, so one
   filesystem is reachable over both transports from the CLI. The virtio volume is
-  a SECOND image (`build/wfs_virtio.img`, its own UUID) rather than the same file
+  a SECOND image (`<build-dir>/wfs_virtio.img`, its own UUID) rather than the same file
   attached twice: both mounts are writable in an interactive run, and two writers
   on one backing file corrupt it. The test targets are unchanged and keep their
   single ATA volume; `tests/test_wfs_virtio_blk.py` covers the virtio path there
@@ -2060,7 +2065,7 @@ linked feature documents for rationale and rollout plans.
   guarantee). One behavioural consequence: a symbol defined by both an application
   and libc is no longer a duplicate-symbol error — the application's definition
   silently wins.
-- A staged SDK (`cmake --build build --target wasmos-sdk`) repackages the C
+- A staged SDK (`ninja -C out/<dir> wasmos-sdk`) repackages the C
   toolchain for use outside the repository: a relocatable sysroot with `crt1.o`,
   `libc.a` and `libsys.a`, and a `wasmos-clang` driver that supplies the triple,
   sysroot, wasm linker defaults and the `.wap` packaging step, so

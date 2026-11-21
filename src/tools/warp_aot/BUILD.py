@@ -50,8 +50,6 @@ TOOL_SOURCES = ["host_mem_utils.cpp", "host_shim.cpp", "warp_aot.cpp"]
 
 
 def build(b):
-    if not b.cfg.WASMOS_WASM_RUNTIME_WARP:
-        return
     warp = b.root / "libs/warp"
     flags = [
         "-std=c++14",
@@ -75,6 +73,11 @@ def build(b):
         "-Wno-#pragma-messages",
     ]
     host = b.toolchain("host")
+    if not b.cfg.WASMOS_WASM_RUNTIME_WARP:
+        # Only a WARP tree builds the tool; index its own sources regardless.
+        for src in b.srcs(*TOOL_SOURCES):
+            b.index(src, [host.tc.cxx, *host.tc.cxxflags, *flags])
+        return
     objs = host.compile(
         [warp / s for s in WARP_SOURCES] + b.srcs(*TOOL_SOURCES),
         cxxflags=flags,
@@ -88,4 +91,10 @@ def build(b):
         description=f"LINK[host] {tool}",
     )
     b.exports["warp_aot"] = tool
+    # The WARP host test (tests/unit) links the same runtime build.
+    b.exports["warp_host"] = {
+        "sources": [warp / s for s in WARP_SOURCES]
+        + b.srcs("host_mem_utils.cpp", "host_shim.cpp"),
+        "flags": flags,
+    }
     b.alias("warp_aot_tool", tool)

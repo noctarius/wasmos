@@ -12,7 +12,7 @@ locations, and the validation targets used to gate changes.
 ```
 wasmos/
 ├── src/
-│   ├── boot/               UEFI bootloader (single .c file + CMakeLists.txt)
+│   ├── boot/               UEFI bootloader (single .c file + BUILD.py)
 │   ├── kernel/             Kernel: scheduler, IPC, memory, wasm3 hosting
 │   │   ├── arch/x86_64/    CPU init, ISR stubs, context-switch, IRQ, syscall
 │   │   └── include/        All kernel headers (IPC, process, paging, wasm3, etc.)
@@ -121,8 +121,9 @@ wasmos/
 │   ├── STATUS.md           Implementation snapshot
 │   ├── TASKS.md            Open work tracking
 │   └── architecture/       Per-topic doc files (01–33)
-├── CMakeLists.txt          Top-level CMake build file
-├── configure               Ninja build entry point (seeds .config, generates build.ninja)
+├── Kconfig                 Build configuration symbols (resolved by kconfiglib)
+├── configs/                Defconfigs that seed a build directory's .config
+├── configure               Build entry point (seeds .config, generates build.ninja)
 ├── BUILD.py                Top-level Ninja manifest; components carry their own BUILD.py
 └── scripts/buildgen/       Ninja generator core and toolchain profiles
 ```
@@ -142,9 +143,12 @@ wasmos/
 | zig          | optional | Required for Zig example; skipped if missing                        |
 | asc          | optional | AssemblyScript compiler; install via `npm i -g assemblyscript`      |
 
-CMake locates clang with hints in `/opt/homebrew/opt/llvm/bin`,
-`/usr/local/opt/llvm/bin`, etc. Override: `-DCLANG=/path/to/llvm/bin/clang`.
-AppleClang fails at configure with a fatal error.
+`./configure` locates clang with hints in `/opt/homebrew/opt/llvm/bin`,
+`/usr/local/opt/llvm/bin`, etc. (`scripts/buildgen/toolchains.py`) and stores
+the resolved paths in `out/<dir>/buildgen-tools.json`. Override:
+`./configure out/<dir> --clang=/path/to/llvm/bin/clang`. AppleClang fails at
+configure with a fatal error. The build itself needs `ninja` 1.10+ and a Python
+with `kconfiglib`.
 
 #### Build Target Triples
 
@@ -161,33 +165,37 @@ AppleClang fails at configure with a fatal error.
 
 ### Primary Build Targets
 
-```
-cmake -S . -B build                 Configure
-cmake --build build --target bootloader        Build BOOTX64.EFI
-cmake --build build --target kernel            Build kernel.elf
-cmake --build build --target make_wasmos_app   Build .wap packer tool
-cmake --build build --target make_initfs       Build initfs.img + initfs_config.bin
-cmake --build build --target run-qemu          Interactive QEMU boot
-cmake --build build --target run-qemu-debug    QEMU with serial debug output
-```
-
-The Ninja build (`docs/BUILD_SYSTEM.md` §12) builds the same `kernel.elf`,
-`BOOTX64.EFI` and SDK into its own directory; it does not stage an ESP yet:
+The build is Kconfig + Ninja (`docs/BUILD_SYSTEM.md` §12). Every artifact,
+including the ESP tree and the disk images, lands in the build directory:
 
 ```
 ./configure out/<dir> configs/<name>_defconfig   Configure (seeds out/<dir>/.config)
-ninja -C out/<dir>                               kernel.elf + BOOTX64.EFI
-ninja -C out/<dir> wasmos-sdk                    Staged SDK
+ninja -C out/<dir>                               Kernel, loader, modules, initfs, ESP, images
+ninja -C out/<dir> bootloader                    Build BOOTX64.EFI
+ninja -C out/<dir> kernel                        Build kernel.elf
+ninja -C out/<dir> make_wasmos_app               Build .wap packer tool
+ninja -C out/<dir> initfs.img                    Build initfs.img + initfs_config.bin
+ninja -C out/<dir> modules / esp / images        Guest modules / ESP tree / disk images
+ninja -C out/<dir> run-qemu                      Interactive QEMU boot (serial console)
+ninja -C out/<dir> run-qemu-ui                   Interactive QEMU boot with a display
+ninja -C out/<dir> run-qemu-debug                QEMU paused for GDB (QEMU_GDB_PORT, default 1234)
+ninja -C out/<dir> menuconfig                    Edit out/<dir>/.config
 ```
+
+`build.ninja` regenerates itself when `.config`, a Kconfig file or a `BUILD.py`
+manifest changes. `./configure ... --reseed` replaces `.config` from the
+defconfig; `--set SYMBOL=VALUE` overrides single symbols.
 
 ---
 
 ### Build Artifact Layout
 
-After a full build, `build/esp/` is the QEMU FAT partition image:
+After a full build, `out/<dir>/esp/` is the QEMU FAT partition image
+(staged by `scripts/stage_esp.py` from the plan `scripts/system/BUILD.py`
+writes):
 
 ```
-build/esp/
+out/<dir>/esp/
 ├── EFI/BOOT/BOOTX64.EFI
 ├── kernel.elf
 ├── startup.nsh
@@ -225,14 +233,18 @@ build/esp/
 └── [smoke apps and test binaries as configured]
 ```
 
-`build/userfs/` (or the repo `userfs/` directory) is the optional secondary
-FAT drive, exposed to the VM as the `/user` mount point.
+`out/<dir>/user.img` is a GPT disk image built from the repo `userfs/`
+directory by `scripts/make_gpt_image.py`, exposed to the VM as the `/user`
+mount point. `out/<dir>/wfs.img` and `out/<dir>/wfs_virtio.img` are WFS volumes
+populated from `scripts/wfs/` by `mkfs_wfs`. Interactive `run-qemu*` sessions
+boot copies under `out/<dir>/run/`, so the fixtures the tests expect stay
+unmodified.
 
 ---
 
 ### Initfs Contents
 
-`build/initfs.img` is a flat binary embedded in kernel ELF as a data section.
+`out/<dir>/initfs.img` is a flat binary embedded in kernel ELF as a data section.
 Its manifest is `scripts/initfs.toml`:
 
 | Path in initfs                       | Bootstrap? | Module name       |
@@ -262,19 +274,20 @@ Non-bootstrap modules are available via initfs listing after `fs-init` starts.
 #### Pre-Commit Gate (required for runtime-affecting changes)
 
 ```
-cmake --build build --target run-qemu-test
+ninja -C out/<dir> run-qemu-test
 ```
 
 Runs `scripts/qemu_halt_test.py`: boots QEMU, waits for the `wamos>` prompt,
-sends `halt`. Passes when the prompt appears within 120 seconds.
+sends `halt`. Passes when the prompt appears within 120 seconds
+(`WASMOS_QEMU_TEST_TIMEOUT` raises the budget for slow TCG hosts).
 
 #### Full CLI Integration Suite
 
 ```
-cmake --build build --target run-qemu-cli-test
+ninja -C out/<dir> run-qemu-cli-test
 ```
 
-Copies all artifacts to `build/esp`, sets `WASMOS_QEMU_ISOLATE_ESP=1`, then
+Brings `out/<dir>/esp` and the disk images up to date, sets `WASMOS_QEMU_ISOLATE_ESP=1`, then
 runs `scripts/run_unittest_suite.py --start-dir tests`. This discovers and
 runs all `test_*.py` files in `tests/` as Python `unittest` cases, each
 driving a `QemuSession` against the fresh ESP copy.
@@ -282,16 +295,17 @@ driving a `QemuSession` against the fresh ESP copy.
 #### Host Kernel Unit Tests
 
 ```
-cmake --build build --target run-kernel-unit-tests
+ninja -C out/<dir> run-kernel-unit-tests
 ```
 
-Compiles and runs ~22 host-native test binaries. A representative subset:
+Compiles and runs the host-native test suites listed in `tests/unit/BUILD.py`,
+in order, from the build directory, stopping at the first failure. A representative subset:
 
-| Binary                            | Source file                              | Tests                             |
-|-----------------------------------|------------------------------------------|-----------------------------------|
-| `build/test_list`                 | `tests/unit/test_list.c`                 | Chunked + linked list correctness |
-| `build/test_device_manager_rules` | `tests/unit/test_device_manager_rules.c` | Rule parser all four families     |
-| `build/test_fs_manager_path`      | `tests/unit/test_fs_manager_path.c`      | Path normalization edge cases     |
+| Binary                                | Source file                              | Tests                             |
+|---------------------------------------|------------------------------------------|-----------------------------------|
+| `out/<dir>/test_list`                 | `tests/unit/test_list.c`                 | Chunked + linked list correctness |
+| `out/<dir>/test_device_manager_rules` | `tests/unit/test_device_manager_rules.c` | Rule parser all four families     |
+| `out/<dir>/test_fs_manager_path`      | `tests/unit/test_fs_manager_path.c`      | Path normalization edge cases     |
 
 The full suite is much larger, covering `test_hashmap`,
 `test_subsystem_registry`, `test_wasmos_exec_format`, `test_user_mutex`,
@@ -306,28 +320,31 @@ Built with `clang -std=c11 -Wall -Wextra -Werror`. No QEMU required.
 #### Ring3 Isolation Gate
 
 ```
-cmake --build build --target strict-ring3
+ninja -C out/<dir> strict-ring3
 ```
 
-Runs `run-qemu-test` followed by `run-qemu-ring3-test` (in a shadow build
-tree). The ring3 test asserts ~30 serial markers covering ABI correctness,
+Runs `run-qemu-test` followed by `run-qemu-ring3-test`. The ring3 test
+configures a wasm3 tree at `out/<dir>/ring3` (`configure --reseed` from
+`configs/wasmos_defconfig` with `--set WASMOS_RING3_SMOKE=y` and
+`--set WASMOS_PM_TEST_HOOKS=y`) and runs its marker check there. The ring3 test asserts ~30 serial markers covering ABI correctness,
 syscall enforcement, IPC ownership, fault isolation, and shared-memory
 permission checks. See `25-diagnostics-status.md` for the full marker list.
 
 #### Fault Storm Liveness
 
 ```
-cmake --build build --target run-qemu-ring3-fault-storm-test
+ninja -C out/<dir> run-qemu-ring3-fault-storm-test
 ```
 
-Runs `scripts/qemu_ring3_fault_storm_test.py` with up to 3 retry attempts.
+Configures a wasm3 test tree at `out/<dir>/ring3-fault-storm` the same way and
+runs `scripts/qemu_ring3_fault_storm_test.py` there with up to 3 retry attempts.
 Asserts scheduler liveness under sustained concurrent fault load and checks
 that no forbidden error markers appear.
 
 #### FAT Image Interop (skips without a formatter)
 
 ```
-cmake --build build --target run-fat-image-tests
+ninja -C out/<dir> run-fat-image-tests
 ```
 
 Builds FAT16, FAT16+LFN and FAT32 volumes with the platform's own formatter
@@ -348,7 +365,7 @@ Exits 77 and is treated as a pass when no formatter is installed.
 scripts/run_bochs.sh [--smp N] [--timeout SECONDS] [--quiet]
 ```
 
-Boots the existing `build/esp` tree under the vendored Bochs (`libs/bochs`)
+Boots an existing ESP tree (`WASMOS_ESP_DIR=out/<dir>/esp`) under the vendored Bochs (`libs/bochs`)
 instead of QEMU, exiting 0 once `WAMOS CLI` appears on the serial console.
 Bochs builds from a copy of the subtree, because SMP is a compile-time option
 there and a cached binary is only valid for the CPU count it was configured
@@ -370,7 +387,8 @@ what makes on-disk filesystem geometry observable — `WASMOS_BOCHS_IMG_MB` and
 
 ### Validation Constraints
 
-**Tests must not run in parallel.** The targets share `build/esp` artifacts.
+**Tests must not run in parallel.** The targets of one build directory share
+its `out/<dir>/esp` artifacts.
 Running `run-qemu-test` and `run-qemu-cli-test` concurrently causes FAT
 write conflicts and flaky failures. Always run one at a time.
 

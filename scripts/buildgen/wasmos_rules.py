@@ -22,7 +22,7 @@ DRIVERS = {
 
 # Kconfig switch and required tools per optional guest language. C is always
 # available; a language whose switch is off or whose tool is missing builds
-# nothing, as the CMake build does.
+# nothing.
 LANG_GATES = {
     "zig": ("ZIG_ENABLE", ["zig"]),
     "as": ("AS_ENABLE", ["asc"]),
@@ -121,6 +121,11 @@ def guest(
                 description=f"CC[guest] {obj}",
             )
             objs.append(obj)
+            # The driver is a wrapper over the staged sysroot. Index the same
+            # compile against the in-tree headers the sysroot is staged from, so
+            # tools resolve (and diagnose) the real files without a staged SDK.
+            wasm32 = b.toolchain("wasm32").tc
+            b.index(src, [wasm32.cxx if cxx else wasm32.cc, *wasm32.cflags, *cflags])
         b.command(
             [wasm],
             head + ["--emit-wasm", f"--wasmos-manifest={manifest}", *objs, "-o", wasm],
@@ -129,6 +134,12 @@ def guest(
             description=f"LINK[guest] {wasm}",
         )
     else:
+        # C sources a Zig/Rust/Go driver compiles internally, indexed against
+        # the in-tree headers.
+        wasm32 = b.toolchain("wasm32").tc
+        for src in sources:
+            if src.suffix == ".c":
+                b.index(src, [wasm32.cc, *wasm32.cflags, *flags])
         b.command(
             [wasm],
             head

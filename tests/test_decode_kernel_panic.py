@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import subprocess
@@ -86,7 +87,7 @@ class DecodeKernelPanicScriptTest(unittest.TestCase):
                 result.stdout,
             )
 
-    def test_discovers_addr2line_from_cmake_cache(self):
+    def test_discovers_addr2line_beside_configured_clang(self):
         script = Path("scripts/decode_kernel_panic.py")
         self.assertTrue(script.exists(), "decode_kernel_panic.py must exist")
 
@@ -100,8 +101,8 @@ class DecodeKernelPanicScriptTest(unittest.TestCase):
             kernel = td_path / "build" / "kernel.elf"
             kernel.parent.mkdir()
             kernel.write_bytes(b"present")
-            (kernel.parent / "CMakeCache.txt").write_text(
-                f"CLANG:STRING={llvm_bin / 'clang'}\n",
+            (kernel.parent / "buildgen-tools.json").write_text(
+                json.dumps({"clang": str(llvm_bin / "clang")}),
                 encoding="utf-8",
             )
             (llvm_bin / "clang").write_text("", encoding="utf-8")

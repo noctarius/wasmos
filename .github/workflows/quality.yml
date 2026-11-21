@@ -32,7 +32,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build python3-pip curl xz-utils git
+            ninja-build python3-pip curl xz-utils git
+          python3 -m pip install --user kconfiglib
 
       - name: Install LLVM ${{ env.LLVM_VERSION }}
         run: |
@@ -119,19 +120,19 @@ jobs:
           zig version; go version; rustc --version; node --version
           black --version; ruff --version; asc --version || true
 
-      # Discovers the toolchain, exports compile_commands.json, and sets up the
+      # Discovers the toolchain, writes compile_commands.json, and sets up the
       # clang-tidy plugin build (pointed at the fetched headers). Both targets
       # below depend on this.
       - name: Configure
-        run: cmake -S . -B build -DWASMOS_CLANG_TIDY_INCLUDE_DIR="$TIDY_INCLUDE"
+        run: ./configure out/quality --clang-tidy-include="$TIDY_INCLUDE"
 
       # Run the formatter in place; any resulting diff means something was not
       # formatted before commit -> fail with the offending files.
       - name: Format (fail if it changes anything)
         run: |
-          cmake --build build --target fmt
+          ninja -C out/quality fmt
           if ! git diff --quiet; then
-            echo "::error::Formatter produced changes. Run 'cmake --build build --target fmt' locally and commit the result."
+            echo "::error::Formatter produced changes. Run 'ninja -C <build-dir> fmt' locally and commit the result."
             git --no-pager diff
             exit 1
           fi
@@ -141,4 +142,4 @@ jobs:
       # fails the job. Runs even if the format step failed so a PR sees both.
       - name: Lint (fail on any error)
         if: ${{ !cancelled() }}
-        run: cmake --build build --target lint
+        run: ninja -C out/quality lint

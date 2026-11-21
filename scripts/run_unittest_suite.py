@@ -20,7 +20,7 @@ newly added test could belong to nothing and never run with no one the wiser.
 It boots nothing, so the quality gate can run it.
 
 WASMOS_TEST_BATTERY selects a battery when --battery is not passed, so the
-existing CMake targets can be driven per battery from the environment without
+existing ninja targets can be driven per battery from the environment without
 threading a new argument through them.
 """
 

@@ -1,7 +1,7 @@
 // sdk_hello (Go) - the Go driver's own smoke app.
 //
 // Plain Go against the wasmos binding, built by the staged SDK
-// (cmake/WasmosSdk.cmake) with no flags but -o and no linker.metadata of its own.
+// (scripts/sdk/BUILD.py) with no flags but -o and no linker.metadata of its own.
 //
 // What it exercises is the most involved staging of any driver. TinyGo is
 // configured by a target FILE rather than flags, and that file cannot be shipped

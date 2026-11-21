@@ -1,6 +1,6 @@
 ---
 name: wasmos-wasm-driver
-description: Create, wire, and validate a new WASMOS device driver (WASM or native) — the `.wap` package model: an `initialize` entry that owns an event loop, service/class registration, capabilities declared in linker.metadata, build via the wasmos_add_*_app_target helpers, and boot-time bring-up through device-manager rules. Use when adding a driver under src/drivers/.
+description: Create, wire, and validate a new WASMOS device driver (WASM or native) — the `.wap` package model: an `initialize` entry that owns an event loop, service/class registration, capabilities declared in linker.metadata, build via a per-directory BUILD.py manifest (guest()/native() + install()), and boot-time bring-up through device-manager rules. Use when adding a driver under src/drivers/.
 ---
 
 # WASMOS Device Driver
@@ -26,7 +26,7 @@ Legacy patterns that are GONE — do not use them:
 1. Choose runtime (WASM vs native) and create the source under `src/drivers/<name>/`.
 2. Export `initialize`; register a service; run a blocking/event-loop.
 3. Declare `linker.metadata` (package + capabilities + optional PCI match).
-4. Add `CMakeLists.txt` with a `wasmos_add_*_app_target` helper; register it.
+4. Add a `BUILD.py` (`guest(...)`/`native(...)` + `install(...)`); list the dir in `src/drivers/BUILD.py`.
 5. Add a device-manager rule that spawns the `.wap`.
 6. Build and boot in QEMU.
 
@@ -120,22 +120,43 @@ no match table in the package: the device it binds to is decided by a rule (Step
 Capability names in the tree: `io.port`, `irq.route`, `mmio.map`, `dma.buffer`,
 `system.control`, `subsystem.register`, `svc.class`, `ipc.basic`.
 
-## Step 4: Build (CMake)
+## Step 4: Build (BUILD.py)
 
-The `wasmos_add_*_app_target` helpers are defined in the **root `CMakeLists.txt`**:
-- WASM/C: `wasmos_add_wasm_c_app_target(...)` (`CMakeLists.txt:476`); real call at
-  `src/drivers/virtio_rng/CMakeLists.txt` (`SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST
-  EXPORT initialize STACK_SIZE INITIAL_MEMORY MAX_MEMORY`). It compiles with
-  `clang --target=wasm32 … --export=initialize`, packs via `make_wasmos_app`
-  (`wasmos_maybe_aot_pack`), and appends to the globals `WASMOS_WASM_APPS` +
-  `WASMOS_WASM_APP_TARGETS`.
-- WASM/C++: `wasmos_add_wasm_cpp_app_target`. Zig: `wasmos_add_zig_wasm_app`
-  (`cmake/WasmosZigApp.cmake`). Native C/Zig: `wasmos_add_native_c_app_target`
-  (`CMakeLists.txt:589`; e.g. `src/drivers/framebuffer_pci/CMakeLists.txt`).
-  AssemblyScript is bespoke — invoke `asc` then `wasmos_maybe_aot_pack` and append
-  to the two globals manually (`src/drivers/serial/CMakeLists.txt`).
-- Register the dir in `src/drivers/CMakeLists.txt` (`add_subdirectory` + the
-  `drivers` aggregate target). Output lands at `build/esp/system/drivers/<name>.wap`.
+Each driver directory has a `BUILD.py` manifest whose `build(b)` uses the
+helpers in `scripts/buildgen/wasmos_rules.py` (API reference:
+`docs/BUILD_SYSTEM.md` §12):
+- WASM (C, C++, Zig, Rust, Go, AssemblyScript): `guest(b, name, sources,
+  lang="c")` compiles through the staged SDK driver for the language
+  (`wasmos-clang`, `wasmos-zig`, `wasmos-asc`, …) and packs `<name>.wap` with
+  `make_wasmos_app`. The entry export comes from `[package] entry` in
+  `linker.metadata` (the default manifest), and the memory layout from its
+  `[link]` section (`stack_size`, `initial_memory`, `max_memory`). Under WARP, a
+  manifest with `aot = true` is AOT-compiled by `warp_aot` and bundled. C sources
+  link in the listed order. `cxx=True` selects C++. Examples:
+  `src/drivers/virtio_rng/BUILD.py` (C), `src/drivers/serial/BUILD.py`
+  (`lang="as"`).
+- Native C/Zig: compile with `b.toolchain("native").compile(...)` (and
+  `zig_object(...)` for a Zig root module), then `native(b, name, objs,
+  entry="initialize", image_base=...)` links a static ELF and packs it without
+  AOT (`src/drivers/framebuffer_pci/BUILD.py`).
+- `install(b, "system/drivers/<name>.wap", wap)` stages the package on the ESP
+  (`out/<dir>/esp/system/drivers/<name>.wap`). An initfs payload is not
+  installed; `scripts/initfs.toml` names it and the initfs step finds it by name
+  in the build directory.
+- Add the directory name to `b.subdir(...)` in `src/drivers/BUILD.py`.
+  `build.ninja` regenerates on the next `ninja` invocation; no re-configure is
+  needed.
+
+Minimal manifest (`src/drivers/ata/BUILD.py`):
+
+```python
+from wasmos_rules import guest, install
+
+
+def build(b):
+    wap = guest(b, "ata", [b.src("ata.c")])
+    install(b, "system/drivers/ata.wap", wap)
+```
 
 ## Step 5: Boot wiring — device-manager rules
 
@@ -161,11 +182,14 @@ from the manifest into startup args, which a PCI driver parses (e.g.
 ## Step 6: Verify
 
 ```sh
-cmake -S . -B build && cmake --build build --target run-qemu-test   # wasm3 (default)
-cmake -S . -B build -DWASMOS_WASM_RUNTIME_WARP=ON && \
-  cmake --build build --target run-qemu-test                        # WARP
-cmake -S . -B build   # leave the tree in the default config
+./configure out/wasm3-smp configs/wasm3_smp_defconfig && \
+  ninja -C out/wasm3-smp run-qemu-test                  # wasm3
+./configure out/warp-smp configs/warp_smp_defconfig && \
+  ninja -C out/warp-smp run-qemu-test                   # WARP
 ```
+
+Each configuration has its own build directory; the runtime is the
+`WASMOS_WASM_RUNTIME_*` choice in that directory's `.config`.
 
 Confirm the driver's ready log and exercise its IPC from a client. Remove debug
 markers before committing.

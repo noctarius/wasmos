@@ -16,10 +16,18 @@ It is a host-tools test: compiling is the whole check, so it needs no QEMU.
 
 import os
 import subprocess
+import sys
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-BUILD_DIR = os.environ.get("WASMOS_BUILD_DIR", os.path.join(ROOT, "build"))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from scripts.qemu_test_framework import default_build_dir  # noqa: E402
+
+BUILD_DIR = os.environ.get(
+    "WASMOS_BUILD_DIR", default_build_dir(os.path.join(ROOT, "out", "default"))
+)
 SDK_DIR = os.path.join(BUILD_DIR, "wasmos-sdk")
 WASMOS_CLANG = os.path.join(SDK_DIR, "bin", "wasmos-clang")
 INCLUDE_DIR = os.path.join(SDK_DIR, "sysroot", "include")
@@ -72,7 +80,7 @@ def public_headers() -> list[str]:
 
 @unittest.skipUnless(
     os.access(WASMOS_CLANG, os.X_OK),
-    "SDK not staged (cmake --build build --target wasmos-sdk)",
+    "SDK not staged (ninja -C <build-dir> wasmos-sdk)",
 )
 class SdkHeadersTest(unittest.TestCase):
     def test_fragment_umbrellas_exist_and_compile(self):

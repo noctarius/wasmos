@@ -43,7 +43,7 @@
 #include "wasmos/startup.h"
 #include "wasmo_mascot_rgba.h"
 
-/* Mirrors the WASMOS_TRACE cmake flag (-DWASMOS_TRACE=ON); can also be forced
+/* Mirrors the WASMOS_TRACE Kconfig option (CONFIG_WASMOS_TRACE); can also be forced
  * locally by defining GFX_SMOKE_TRACE=1 on the compiler command line. */
 #ifndef GFX_SMOKE_TRACE
 #define GFX_SMOKE_TRACE WASMOS_TRACE

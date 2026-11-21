@@ -4,7 +4,29 @@ and wasmos-sdk.conf (see scripts/sdk_stage.py and docs/toolchain.md)."""
 from wasmos_rules import install, lang_available
 
 SDK_VERSION = "0.1.0-spike"
-# Layout constants the Zig driver enforces; cmake/WasmosZigApp.cmake documents them.
+# Zig WASM layout, recorded in wasmos-sdk.conf for scripts/sdk/wasmos-zig.
+#
+# ZIG_STACK_SIZE is the shadow stack every Zig WASM app is built with
+# (--stack). Zig's default is 1 MiB and is placed FIRST, so a module's globals
+# land above 1 MiB and its declared linear memory must be at least 2 MiB. 8192
+# gives the layout a C module has (stack_ptr = 0x2000, globals just above it),
+# which lets a Zig app declare a single 64 KiB page like every C app. The reason
+# is module size, not correctness.
+#
+# It is NOT a pointer-validity constraint. MEM_REGION_WASM_LINEAR is not a fixed
+# 16-page user-VA mirror that a host-call pointer above 64 KiB falls outside of:
+# mm_context_rebind_wasm_linear and mm_context_bind_wasm_linear_scattered
+# (src/kernel/memory.c) repoint and resize that region to the guest's actual
+# linear memory. Measured on 2026-08-21: a Zig module built with
+# --stack 1048576 (data at 0x100000) executes console_write and reads its
+# spawn-info buffer through xfer_buffer_read, with pointers above 1 MiB, under
+# both runtimes; examples/rust/hello keeps its data at 0x100000 and passes its
+# guest test.
+#
+# ZIG_VA_LIMIT is the budget scripts/wasm_stack_check.py enforces on stack
+# pointer + data end. It checks that the small stack was applied -- a module
+# that reverted to the 1 MiB default trips it -- and is not a bound the kernel
+# imposes. See docs/TASKS.md before treating it as a safety property.
 ZIG_STACK_SIZE = 8192
 ZIG_VA_LIMIT = 32768
 AS_SOURCES = [
@@ -116,6 +138,8 @@ def build(b):
         ("rust", "wasmos-rustc", "examples/rust/sdk_hello/hello.rs", "sdkrust"),
         ("go", "wasmos-tinygo", "examples/go/sdk_hello/hello.go", "sdkgo"),
     ]
+    wasm32 = b.toolchain("wasm32").tc
+    b.index(root / "examples/c/sdk_hello/hello.c", [wasm32.cc, *wasm32.cflags])
     for lang, driver, source, name in hellos:
         if not lang_available(b, lang):
             continue

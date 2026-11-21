@@ -8,48 +8,49 @@ mode="${1:-}"
 shift || true
 
 check_mode=0
-build_dir="${QUALITY_BUILD_DIR:-build}"
+build_dir="${QUALITY_BUILD_DIR:-out/default}"
 
-# Adopt the toolchain CMake already resolved, when the caller did not supply one.
+# Adopt the toolchain the build directory already resolved, when the caller did
+# not supply one.
 #
 # The fmt/lint targets pass every tool path and the clang-tidy plugin through the
 # environment, so running this script through them and running it directly used
 # to be two different gates: a bare run fell back to PATH and, worse, loaded no
 # plugin -- which silently drops every wasmos-* check and reports success for a
 # weaker lint than CI runs. Reading the same values out of the build directory's
-# CMakeCache makes the two equivalent, whichever way the script is invoked.
-# An explicit environment override still wins; this only fills in blanks.
-cache_value() {
+# buildgen-tools.json (written by ./configure) makes the two equivalent,
+# whichever way the script is invoked. An explicit environment override still
+# wins; this only fills in blanks.
+tool_value() {
     local name="$1"
-    local cache="${build_dir}/CMakeCache.txt"
-    [[ -f "$cache" ]] || return 1
-    local line
-    line="$(grep -m1 "^${name}:" "$cache" 2>/dev/null)" || return 1
-    printf '%s\n' "${line#*=}"
+    local tools="${build_dir}/buildgen-tools.json"
+    [[ -f "$tools" ]] || return 1
+    python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))' \
+        "$tools" "$name" 2>/dev/null
 }
 
-adopt_cached_tool() {
+adopt_tool() {
     local env_name="$1"
-    local cache_name="$2"
+    local tool_name="$2"
     [[ -z "${!env_name:-}" ]] || return 0
     local value
-    value="$(cache_value "$cache_name")" || return 0
-    [[ -n "$value" && "$value" != *"-NOTFOUND" ]] || return 0
+    value="$(tool_value "$tool_name")" || return 0
+    [[ -n "$value" ]] || return 0
     export "${env_name}=${value}"
 }
 
-adopt_cached_tool CLANG_FORMAT QUALITY_CLANG_FORMAT
-adopt_cached_tool CLANG_TIDY QUALITY_CLANG_TIDY
-adopt_cached_tool ZIG QUALITY_ZIG
-adopt_cached_tool GOFMT QUALITY_GOFMT
-adopt_cached_tool GO QUALITY_GO
-adopt_cached_tool RUSTFMT QUALITY_RUSTFMT
-adopt_cached_tool RUSTC QUALITY_RUSTC
-adopt_cached_tool ASC QUALITY_ASC
-adopt_cached_tool BLACK QUALITY_BLACK
-adopt_cached_tool RUFF QUALITY_RUFF
+adopt_tool CLANG_FORMAT clang-format
+adopt_tool CLANG_TIDY clang-tidy
+adopt_tool ZIG zig
+adopt_tool GOFMT gofmt
+adopt_tool GO go
+adopt_tool RUSTFMT rustfmt
+adopt_tool RUSTC rustc
+adopt_tool ASC asc
+adopt_tool BLACK black
+adopt_tool RUFF ruff
 
-# The plugin is a build artifact rather than a cache entry, so find it by name.
+# The plugin is a build artifact rather than a configured tool, so find it by name.
 if [[ -z "${QUALITY_TIDY_PLUGIN:-}" ]]; then
     for _candidate in "${build_dir}/wasmos_tidy_plugin.dylib" \
                       "${build_dir}/wasmos_tidy_plugin.so"; do
@@ -74,15 +75,15 @@ Usage:
   ./scripts/quality.sh lint
 
 Tool paths and the clang-tidy plugin are taken from QUALITY_BUILD_DIR's
-CMakeCache when not set explicitly, so a direct run matches the `fmt-check` /
-`lint` / `quality` CMake targets AS LONG AS that directory is configured and its
-plugin built. Where the plugin is missing this warns and lints without the
+buildgen-tools.json when not set explicitly, so a direct run matches the
+`fmt-check` / `lint` / `quality` ninja targets AS LONG AS that directory is
+configured and its plugin built. Where the plugin is missing this warns and lints without the
 wasmos-* checks; the targets build it first, which is why they are the safer
 way in.
 
 Environment overrides:
   QUALITY_BUILD_DIR   Build directory used for clang-tidy and for tool
-                      discovery (default: build)
+                      discovery (default: out/default)
   CLANG_FORMAT        Path to clang-format
   CLANG_TIDY          Path to clang-tidy
   GO                  Path to go
@@ -429,29 +430,31 @@ run_clang_tidy() {
         clang-tidy /opt/homebrew/opt/llvm/bin/clang-tidy /usr/local/opt/llvm/bin/clang-tidy)"
 
     if [[ ! -f "$build_dir/compile_commands.json" ]]; then
-        printf 'error: %q/compile_commands.json is missing. Re-run: cmake -S . -B %q\n' \
+        printf 'error: %q/compile_commands.json is missing. Configure it: ./configure %q\n' \
             "$build_dir" "$build_dir" >&2
         exit 1
     fi
 
     step "Linting C sources (clang-tidy)..."
 
-    # The compile DB is populated by the *_ide helper targets, which compile
-    # every source for the host arch ("-arch arm64" on Apple Silicon) with no
-    # cross target. Replaying those flags makes clang-tidy analyze the x86_64
-    # kernel (and its inline asm) as arm64 and reject it, and it also conflicts
-    # with any injected --target ("-arch" is unsupported off Darwin). So write a
-    # sanitized DB into a temp dir: drop "-arch <x>" and inject the real per-file
-    # target derived from the component's linker.metadata. native=true (kernel-
+    # The compile DB holds every first-party source with the flags of the
+    # build step that compiles it (guest modules with the SDK driver's expanded
+    # flags, unit tests with their test's flags, the other runtime's kernel glue
+    # as index-only entries). A command that selects the host arch with
+    # "-arch <x>" would make clang-tidy analyze the x86_64 kernel (and its
+    # inline asm) as that arch and reject it, and "-arch" conflicts with any
+    # injected --target off Darwin. So write a sanitized DB into a temp dir:
+    # drop "-arch <x>" and inject the real per-file target derived from the
+    # component's linker.metadata. native=true (kernel-
     # native services/drivers) and sources with no linker.metadata (kernel, boot,
     # tools) are x86_64; everything else (WASM userland) is wasm32.
     local tidy_db
     tidy_db="$(mktemp -d "${TMPDIR:-/tmp}/wasmos-tidy-db.XXXXXX")"
     trap 'rm -rf "$tidy_db"' RETURN
 
-    # The top-level CMakeLists blanks CMAKE_OSX_SYSROOT so freestanding targets do
-    # not pick up the macOS SDK. The host-built unit tests do need it (they use
-    # <pthread.h>, <stdio.h>, ...), so pass it in for those entries only.
+    # Freestanding targets must not pick up the macOS SDK, so the build passes
+    # none. The host-built unit tests do need it (they use <pthread.h>,
+    # <stdio.h>, ...), so pass it in for those entries only.
     local host_sysroot=""
     if [[ "$(uname -s)" == "Darwin" ]]; then
         host_sysroot="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
@@ -459,15 +462,13 @@ run_clang_tidy() {
 
     python3 - "$build_dir/compile_commands.json" "$tidy_db/compile_commands.json" \
         "$repo_root" "$host_sysroot" <<'PY'
-import json, os, sys
+import json, os, shlex, sys
 
 src_db, out_db, root = sys.argv[1], sys.argv[2], os.path.abspath(sys.argv[3])
 host_sysroot = sys.argv[4] if len(sys.argv) > 4 else ""
 
-# Host build tools need a hosted libc, but the *_ide targets compile every
-# source freestanding (-nostdinc), so their DB commands can't resolve <stdio.h>
-# etc. They are build-time host tooling with little lint value, so exclude them
-# from clang-tidy entirely (dropped from the sanitized DB below). posix_kernel.c
+# Host build tools are build-time tooling with little lint value, so exclude
+# them from clang-tidy entirely (dropped from the sanitized DB below). posix_kernel.c
 # is a POSIX host shim that happens to live under src/kernel/warp; only the build
 # system knows it is host-side, hence the explicit entry.
 HOST_TOOLS = ("scripts/", "src/tools/", "src/kernel/warp/posix_kernel.c")
@@ -515,13 +516,20 @@ for e in json.load(open(src_db)):
     kind, extra = decide(e["file"])
     if kind is None:
         continue  # host tool: excluded from linting (see HOST_TOOLS)
-    cmd = e.get("command") or " ".join(e.get("arguments", []))
-    toks = cmd.split()
+    # Arguments stay a list end to end: re-joining and splitting on whitespace
+    # strips the quotes from values such as -DMBEDTLS_CONFIG_FILE="cfg.h".
+    toks = list(e["arguments"]) if "arguments" in e else shlex.split(e.get("command", ""))
     had_arch = "-arch" in toks
     res, i = [], 0
     while i < len(toks):
         if toks[i] == "-arch":  # strip host-arch selector (Apple driver)
             i += 2
+            continue
+        # The build's -Werror gates compile warnings; under clang-tidy it would
+        # turn a warning in a filtered-out header into a silent per-file failure.
+        # Lint failures come from .clang-tidy's WarningsAsErrors instead.
+        if toks[i] == "-Werror" or toks[i].startswith("-Werror="):
+            i += 1
             continue
         res.append(toks[i])
         i += 1
@@ -529,8 +537,8 @@ for e in json.load(open(src_db)):
         # Host-built unit tests. Exactly one libc may be visible in a TU: our
         # headers redeclare strcpy/memcpy/..., which does not parse once the
         # host's <string.h> has defined those names as _FORTIFY_SOURCE macros
-        # (macOS SDK). Which libc wins is a per-test property and the index
-        # targets already encode it — -I for the tests that compile against our
+        # (macOS SDK). Which libc wins is a per-test property and each test's
+        # own flags encode it — -I for the tests that compile against our
         # libc, -iquote for the ones that take the host's — so the command is
         # used as-is. Only the sysroot is added, and no target is injected: a
         # freestanding one hides <pthread.h> and <sched.h>, so the host arch and
@@ -538,11 +546,11 @@ for e in json.load(open(src_db)):
         if host_sysroot:
             res[1:1] = ["-isysroot", host_sysroot]
     elif kind == "wasm":
-        # WASM userland uses __builtin_wasm_*; the *_ide targets compile it for
-        # the host, so force the wasm32 target on every platform.
+        # WASM userland uses __builtin_wasm_*; force the wasm32 target on every
+        # platform, whatever the entry's command selected.
         res[1:1] = ["--target=wasm32-unknown-unknown"]
     else:
-        # Retarget only when the IDE command selected the host arch via -arch
+        # Retarget only when the command selected the host arch via -arch
         # (macOS: arm64), which can't parse x86_64 inline asm. Where the command
         # already targets the host correctly (no -arch, e.g. Linux x86_64),
         # leave the target alone so host header resolution keeps working (a bare
@@ -552,15 +560,15 @@ for e in json.load(open(src_db)):
         inject = (["--target=x86_64-unknown-none-elf"] if had_arch else []) + extra
         if inject:
             res[1:1] = inject
-    e["command"] = " ".join(res)
-    e.pop("arguments", None)
+    e["arguments"] = res
+    e.pop("command", None)
     out.append(e)
 json.dump(out, open(out_db, "w"))
 PY
 
     # clang-tidy can only analyze files that have an entry in the compile DB
-    # (the *_ide targets cover kernel/driver/service sources but not, e.g., the
-    # host unit tests or the WASM libc). Skip the rest silently.
+    # (sources nothing compiles, such as a file excluded from every build).
+    # Skip the rest silently.
     local -a tidy=()
     local f
     for f in "${c_tidy_files[@]}"; do
@@ -575,14 +583,14 @@ PY
     # Load the wasmos clang-tidy plugin so the wasmos-* checks run. Its absence
     # is reported rather than passed over: clang-tidy would simply not run those
     # checks and the gate would report success for a lint CI does not consider
-    # sufficient. `cmake --build <dir> --target lint` builds it as a dependency.
+    # sufficient. `ninja -C <dir> lint` builds it as a dependency.
     local -a load_args=()
     if [[ -n "${QUALITY_TIDY_PLUGIN:-}" && -f "$QUALITY_TIDY_PLUGIN" ]]; then
         load_args+=(--load "$QUALITY_TIDY_PLUGIN")
     else
         echo "warning: wasmos clang-tidy plugin not found under '${build_dir}';" >&2
         echo "         the wasmos-* checks are NOT running. Build it with:" >&2
-        printf '           cmake --build %q --target wasmos_tidy_plugin\n' "$build_dir" >&2
+        printf '           ninja -C %q wasmos_tidy_plugin\n' "$build_dir" >&2
     fi
 
     # Diagnose headers under the SAME roots the file allowlist uses, anchored at
@@ -721,8 +729,8 @@ run_assemblyscript_lint() {
 
         cp "$file" "$entry_file"
 
-        # Stage the whole AS libc, exactly as cmake/WasmosAssemblyScript.cmake
-        # does for the real builds. asc compiles only what the entry
+        # Stage the whole AS libc, exactly as the SDK's wasmos-asc does for the
+        # real builds. asc compiles only what the entry
         # transitively imports, so an unreferenced file costs nothing -- and
         # the alternative, a condition per module, means every new libc module
         # has to be remembered here as well as in the build.
@@ -737,8 +745,8 @@ run_assemblyscript_lint() {
         done
 
         # The module's own siblings: a driver split across files imports them as
-        # "./name", and the build stages them beside it (EXTRA_SOURCES in
-        # cmake/WasmosAssemblyScript.cmake). Unreferenced ones cost nothing.
+        # "./name", and the build stages them beside it (scripts/sdk/wasmos-asc).
+        # Unreferenced ones cost nothing.
         local sibling
         for sibling in "$(dirname "$file")"/*.ts; do
             if [[ "$sibling" != "$file" ]]; then
@@ -761,7 +769,7 @@ export function main(_args: Array<string>): i32 {
 EOF
         fi
 
-        # Same transform the real build applies (see cmake/WasmosAssemblyScript.cmake):
+        # Same transform the real build applies (see scripts/sdk/wasmos-asc):
         # without it a @coroutine function is compiled raw and the gate fails on
         # generated-code that was never meant to exist.
         "$asc" "$entry_file" \

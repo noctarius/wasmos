@@ -23,7 +23,7 @@ class NetStackDhcpE2ETest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cfg = default_config()
         # Self-contained ESP copy so we can rewrite the interfaces file without
-        # disturbing the shared build/esp tree used by other tests.
+        # disturbing the shared <build-dir>/esp tree used by other tests.
         cls._esp_tmp = tempfile.mkdtemp(prefix="wasmos-dhcp-esp-")
         esp_dir = os.path.join(cls._esp_tmp, "esp")
         shutil.copytree(cfg.esp_dir, esp_dir)

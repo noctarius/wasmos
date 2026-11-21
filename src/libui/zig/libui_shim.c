@@ -10,7 +10,7 @@
  *   3. libui_zig_* wrappers that expose libui as plain C functions with
  *      opaque context pointers so libui.zig needs no @cImport.
  *
- * Include-path ordering requirement (enforced by WasmosZigApp.cmake):
+ * Include-path ordering requirement (enforced by scripts/sdk/wasmos-zig):
  *   -I src/libc/zig/compat   ← intercepts <stdlib.h> / <string.h>
  *   -I src/libui/include     ← wasmos/libui.h
  *   -I src/libc/include      ← wasmos/api.h, wasmos/ipc.h, …

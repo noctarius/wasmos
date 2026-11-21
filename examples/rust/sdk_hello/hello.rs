@@ -1,7 +1,7 @@
 //! sdk_hello (Rust) - the Rust driver's own smoke app.
 //!
 //! Plain `#![no_std]` Rust against the `wasmos` binding, built by the staged SDK
-//! (cmake/WasmosSdk.cmake) with no flags but -o and no linker.metadata of its own.
+//! (scripts/sdk/BUILD.py) with no flags but -o and no linker.metadata of its own.
 //!
 //! `mod wasmos;` is the whole point: in tree an app reaches the binding with an
 //! `#[path = "../../../src/libc/rust/wasmos.rs"]` escape, which an out-of-tree app

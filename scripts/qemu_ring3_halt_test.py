@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Boot QEMU and assert the ring3 smoke markers appear before halt.
 
-The markers exist only in a kernel built with the `WASMOS_RING3_SMOKE=ON` CMake
-option, which compiles in the probe processes. This script does not set it:
-`run-qemu-ring3-test` configures a separate shadow tree with
-`--define WASMOS_RING3_SMOKE=ON` (`_ring3_shadow_cmd` in CMakeLists.txt) and
-points the script at that tree's ESP. Run that target.
+The markers exist only in a kernel configured with the `WASMOS_RING3_SMOKE`
+Kconfig option, which compiles in the probe processes. This script does not set
+it: `run-qemu-ring3-test` configures a separate tree with
+`--set WASMOS_RING3_SMOKE=y` (`scripts/system/BUILD.py`) and runs this script
+against that tree's ESP. Run that target.
 
 Reading a failure:
 

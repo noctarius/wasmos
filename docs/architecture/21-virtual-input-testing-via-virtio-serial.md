@@ -351,7 +351,7 @@ sockets are preferred for local test orchestration.
 **Test isolation requirements:**
 - Use per-test socket paths to avoid collisions.
 - Remove stale socket files before launch.
-- Do not run UI/QEMU integration tests in parallel (shared `build/esp`
+- Do not run UI/QEMU integration tests in parallel (shared `out/<dir>/esp`
   artifacts cause `Error deleting` races).
 
 #### Injection IPC Contracts
@@ -422,7 +422,7 @@ Validation:
 
 The virt-input service requires the virtio-serial data plane to be
 implemented before it can read host commands. The service should be started
-conditionally — either via a CMake feature toggle
+conditionally — either via a Kconfig feature toggle
 (`WASMOS_VIRTINPUT_TESTING`, default off) or a `sysinit.rc` condition
 checking for a device or configuration flag. It must not start in regular
 production boots.
@@ -490,6 +490,6 @@ expected state transitions in serial output.
    higher-level key abstraction in the current IPC path.
 
 6. **No parallel integration tests.** `run-qemu-test` and UI/virtinput
-   integration tests share mutable `build/esp` artifacts. Running them
+   integration tests share mutable `out/<dir>/esp` artifacts. Running them
    concurrently causes flaky build failures. All QEMU test targets must be
    run sequentially.

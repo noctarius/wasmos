@@ -206,6 +206,22 @@ def build(b):
             flags=wasm3_inc + wasm3_lib,
         )
 
+    # Index the other runtime's first-party glue, with the flags a tree of that
+    # runtime compiles it with, so one lint pass covers both runtimes.
+    other = {"WASMOS_WASM_RUNTIME_WARP": not warp, "WASMOS_WASM_RUNTIME_WASM3": warp}
+    if warp:
+        tc = b.toolchain("kernel", overrides=other).tc
+        wasm3_inc = [f"-I{b.root / 'libs/wasm3/source'}"]
+        for src in b.srcs(*WASM3_GLUE_KERNEL, *WASM3_GLUE, *WASM3_SHIM):
+            b.index(src, [tc.cc, *tc.cflags, *wasm3_inc])
+    else:
+        tc = b.toolchain("kernel-warp", overrides=other).tc
+        for src in b.srcs(*WARP_GLUE):
+            cxx = src.suffix == ".cpp"
+            b.index(
+                src, [tc.cxx if cxx else tc.cc, *(tc.cxxflags if cxx else tc.cflags)]
+            )
+
     # Embedded blobs: guest modules registered by other manifests first, then
     # the native ring-3 probes.
     blobs = list(b.exports.get("kernel.blobs", []))

@@ -357,7 +357,7 @@ var g_block_phys: u32 = 0;
 
 /// Probe scratch, deliberately STATIC rather than stack locals.
 ///
-/// The Zig shadow stack is 8 KiB (see cmake/WasmosZigApp.cmake, which explains
+/// The Zig shadow stack is 8 KiB (see scripts/sdk/BUILD.py, which explains
 /// why it must stay small), and these do not fit in it: a pt.Table holds 32
 /// partition records of roughly 200 bytes each, and a GptEntryScan embeds one
 /// plus a 512-byte reassembly buffer. Declaring them as locals traps the module

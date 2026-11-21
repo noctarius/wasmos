@@ -42,7 +42,7 @@ SUBSYSTEM=="volume", ATTR{uuid}=="49d6938d", ENV{MOUNT}="/user", ENV{FSTYPE}="fa
 # ATTR{fstype} alone would NOT do here, because there are two WFS volumes on this
 # system and a rule fires once: whichever was recognised first would take /wfs and
 # the ordering would decide which filesystem the path means. The uuid is the
-# volume's own identity, pinned by mkfs_wfs (WFS_IMAGE_UUID in CMakeLists.txt),
+# volume's own identity, pinned by mkfs_wfs (WFS_UUID in scripts/system/BUILD.py),
 # and it moves with the volume to any disk or transport.
 SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7465-4573-742d-766f6c756d65", ENV{MOUNT}="/wfs", ENV{FSTYPE}="wfs"
 # The second WFS volume, which the suite reaches over virtio-blk. Nothing here

@@ -18,7 +18,7 @@
 #   --quiet       suppress the live serial stream
 #
 # Flags win over the equivalent environment variables:
-#   WASMOS_ESP_DIR     ESP tree to boot            (default build/esp)
+#   WASMOS_ESP_DIR     ESP tree to boot            (default out/default/esp)
 #   WASMOS_BOCHS_WORK  build + image directory     (default build/bochs)
 #   WASMOS_BOCHS_SMP / WASMOS_BOCHS_TIMEOUT / WASMOS_BOCHS_QUIET
 #   WASMOS_BOCHS_IMG_MB   ESP image size in MiB       (default 128)
@@ -28,7 +28,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOCHS_SRC="$REPO_ROOT/libs/bochs/bochs"
-ESP_DIR="${WASMOS_ESP_DIR:-$REPO_ROOT/build/esp}"
+ESP_DIR="${WASMOS_ESP_DIR:-$REPO_ROOT/out/default/esp}"
 WORK="${WASMOS_BOCHS_WORK:-$REPO_ROOT/build/bochs}"
 # Captured before the assignment below shadows it, so a bare `SMP=4 run_bochs.sh`
 # can be reported rather than silently ignored.

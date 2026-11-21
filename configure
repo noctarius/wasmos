@@ -42,7 +42,31 @@ TOOL_OPTIONS = [
     "qemu",
     "ovmf-code",
     "ovmf-vars",
+    "clang-tidy-include",
 ]
+
+
+def apply_overrides(dotconfig: Path, assignments: list[str]):
+    """Replace the given symbols' lines in .config; kconfiglib re-resolves the
+    file (defaults, dependencies) when the build is generated."""
+    lines = dotconfig.read_text().splitlines()
+    for assignment in assignments:
+        name, sep, value = assignment.partition("=")
+        if not sep:
+            raise SystemExit(
+                f"configure: --set expects SYMBOL=VALUE, got {assignment!r}"
+            )
+        name = name.removeprefix("CONFIG_")
+        lines = [
+            line
+            for line in lines
+            if not line.startswith(f"CONFIG_{name}=")
+            and line != f"# CONFIG_{name} is not set"
+        ]
+        lines.append(
+            f"# CONFIG_{name} is not set" if value == "n" else f"CONFIG_{name}={value}"
+        )
+    dotconfig.write_text("\n".join(lines) + "\n")
 
 
 def main() -> int:
@@ -60,6 +84,13 @@ def main() -> int:
         "--reseed",
         action="store_true",
         help="overwrite an existing <builddir>/.config from the defconfig",
+    )
+    ap.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="SYMBOL=VALUE",
+        help="override a Kconfig symbol in <builddir>/.config (repeatable; y/n for bools)",
     )
     ap.add_argument("--regen", action="store_true", help=argparse.SUPPRESS)
     for t in TOOL_OPTIONS:
@@ -86,6 +117,8 @@ def main() -> int:
             print(
                 f"configure: keeping existing {dotconfig} (pass --reseed to replace it)"
             )
+        if args.set:
+            apply_overrides(dotconfig, args.set)
         overrides = {
             t: getattr(args, t.replace(".", "_").replace("-", "_"))
             for t in TOOL_OPTIONS

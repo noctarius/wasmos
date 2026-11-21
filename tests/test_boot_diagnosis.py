@@ -11,7 +11,7 @@ a serial log the harness already holds, and producing them from a real guest
 means arranging a panic, a reset and a wedge on demand.
 
 Nothing here calls `default_config()`. It resolves OVMF and the ESP out of the
-environment or a CMakeCache and RAISES when neither is there, which is exactly
+environment or a build directory's buildgen-tools.json and RAISES when neither is there, which is exactly
 the state the host-tools battery runs in -- it exists to cover what needs no
 QEMU. `boot_diagnosis` reads a buffer and a process handle and nothing else, so
 a config that names no real file is the honest input.

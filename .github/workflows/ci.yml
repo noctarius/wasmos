@@ -29,7 +29,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang lld llvm cmake ninja-build python3-pip curl xz-utils
+            clang lld llvm ninja-build python3-pip curl xz-utils
           python3 -m pip install --user kconfiglib
 
       - name: Install Zig
@@ -55,10 +55,10 @@ jobs:
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Configure
-        run: cmake -S . -B build
+        run: ./configure out/unit
 
       - name: Run kernel unit tests
-        run: cmake --build build --target run-kernel-unit-tests
+        run: ninja -C out/unit run-kernel-unit-tests
 
   defconfig:
     name: ${{ matrix.config }} (build + boot)
@@ -83,7 +83,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build python3-pip \
+            ninja-build python3-pip \
             qemu-system-x86 ovmf curl xz-utils
           python3 -m pip install --user kconfiglib
 
@@ -118,7 +118,7 @@ jobs:
 
       - name: Stage OVMF (writable vars copy)
         # Ubuntu's ovmf package ships OVMF_CODE_4M.fd / OVMF_VARS_4M.fd, which the
-        # CMake autodiscovery list does not know about, and the vars file must be
+        # firmware autodiscovery list does not know about, and the vars file must be
         # writable for QEMU. Copy a matched pair to a writable location.
         run: |
           mkdir -p "$RUNNER_TEMP/ovmf"
@@ -138,25 +138,23 @@ jobs:
 
       - name: Configure (${{ matrix.config }})
         run: |
-          cmake -S . -B "build-${{ matrix.config }}" \
-            -DWASMOS_DOTCONFIG="configs/${{ matrix.config }}_defconfig" \
-            -DWASMOS_QEMU_TEST_TIMEOUT="${WASMOS_QEMU_TEST_TIMEOUT}" \
-            -DOVMF_CODE="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
-            -DOVMF_VARS="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
+          ./configure "out/${{ matrix.config }}" "configs/${{ matrix.config }}_defconfig" \
+            --ovmf-code="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
+            --ovmf-vars="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
 
+      # WASMOS_QEMU_TEST_TIMEOUT (job env) sets the halt test's budget.
       - name: Build + boot test (${{ matrix.config }})
-        run: cmake --build "build-${{ matrix.config }}" --target run-qemu-test
+        run: ninja -C "out/${{ matrix.config }}" run-qemu-test
 
       # The only gate that exercises cross-CPU work stealing under load, so it
-      # runs on the SMP configs alone. WASMOS_SCHED_SMP_STRESS is a plain CMake
-      # option (not a Kconfig symbol), so flipping it on the tree that just
-      # booted rebuilds the kernel and nothing else; the boot test above has
-      # already run against the kernel without it.
+      # runs on the SMP configs alone. Turning WASMOS_SCHED_SMP_STRESS on in the
+      # tree that just booted rebuilds the kernel and nothing else; the boot test
+      # above has already run against the kernel without it.
       - name: SMP scheduler stress test (${{ matrix.config }})
         if: endsWith(matrix.config, '_smp')
         run: |
-          cmake -S . -B "build-${{ matrix.config }}" -DWASMOS_SCHED_SMP_STRESS=ON
-          cmake --build "build-${{ matrix.config }}" --target run-qemu-sched-stress-test
+          ./configure "out/${{ matrix.config }}" --set WASMOS_SCHED_SMP_STRESS=y
+          ninja -C "out/${{ matrix.config }}" run-qemu-sched-stress-test
 
   # The battery list comes from tests/batteries.json so the matrix and the test
   # runner share one source. Adding a battery there adds a runner here; nothing
@@ -190,18 +188,18 @@ jobs:
         battery: ${{ fromJSON(needs.batteries.outputs.host) }}
     steps:
       - uses: actions/checkout@v4
-      # Built with cc directly rather than through CMake. A full configure
-      # validates the CROSS toolchain -- it fails on llvm-objcopy before it ever
+      # Built with cc directly rather than through ./configure. A configure
+      # resolves the CROSS toolchain -- it fails on llvm-objcopy before it ever
       # reaches this tool -- and installing LLVM to compile one self-contained
       # host program would cost more than the battery saves.
       #
       # This holds only because scripts/make_wasmos_app.c includes nothing but
-      # libc. If it ever gains a project header, build it through CMake here and
-      # install the toolchain to match.
+      # libc. If it ever gains a project header, build it through ./configure
+      # and ninja here and install the toolchain to match.
       - name: Build the packer
         run: |
-          mkdir -p build
-          cc -O2 -o build/make_wasmos_app scripts/make_wasmos_app.c
+          mkdir -p out/default
+          cc -O2 -o out/default/make_wasmos_app scripts/make_wasmos_app.c
       - name: Run battery (${{ matrix.battery }})
         run: python3 scripts/run_unittest_suite.py --battery "${{ matrix.battery }}"
 
@@ -237,7 +235,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build python3-pip \
+            ninja-build python3-pip \
             qemu-system-x86 ovmf curl xz-utils
           python3 -m pip install --user kconfiglib
 
@@ -274,15 +272,13 @@ jobs:
           cp "$vars" "$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
           chmod u+w "$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
 
-      # The runtime is pinned by the defconfig, not by a -D flag: a stray
-      # <repo>/.config would FORCE-override the flag and the job would silently
-      # test the other runtime (skills/wasmos-build-and-run).
+      # The runtime is pinned by the defconfig the build directory is seeded
+      # from (skills/wasmos-build-and-run).
       - name: Configure (${{ matrix.runtime }})
         run: |
-          cmake -S . -B build \
-            -DWASMOS_DOTCONFIG="configs/${{ matrix.runtime }}_defconfig" \
-            -DOVMF_CODE="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
-            -DOVMF_VARS="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
+          ./configure out/build "configs/${{ matrix.runtime }}_defconfig" \
+            --ovmf-code="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
+            --ovmf-vars="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
 
       # QEMU itself has crashed with SIGSEGV mid-battery (docs/TASKS.md, the P0
       # "no CLI prompt" item, second face). Its core is the only evidence of
@@ -320,7 +316,7 @@ jobs:
         run: |
           set -o pipefail
           ulimit -c unlimited
-          cmake --build build --target run-qemu-cli-test 2>&1 | tee "$RUNNER_TEMP/battery.log"
+          ninja -C out/build run-qemu-cli-test 2>&1 | tee "$RUNNER_TEMP/battery.log"
 
       # Symbols come from Ubuntu's debuginfod, so the backtrace names QEMU's own
       # functions without a debug build. Only QEMU's cores are reported as QEMU
@@ -361,9 +357,9 @@ jobs:
 
       # A battery passes under whichever runtime the build actually linked, so
       # assert it is the one this cell claims. The marker comes from the BOOTED
-      # kernel, which is the only source that cannot be stale: a `-D` flag can be
-      # overridden by a stray .config, and an ESP can serve a kernel older than
-      # the tree it was built from.
+      # kernel, which is the only source that cannot be stale: a build directory
+      # can carry an edited .config, and an ESP can serve a kernel older than the
+      # tree it was built from.
       - name: Confirm the runtime under test
         run: |
           case "${{ matrix.runtime }}" in

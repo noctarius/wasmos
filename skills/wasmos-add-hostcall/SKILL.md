@@ -161,14 +161,17 @@ If so, add it in the libc header and keep the per-runtime libsys variants in syn
 ## Step 5: Build and boot both runtimes
 
 ```sh
-cmake -S . -B build && cmake --build build --target run-qemu-test          # wasm3 (default)
-cmake -S . -B build -DWASMOS_WASM_RUNTIME_WARP=ON && \
-  cmake --build build --target run-qemu-test                               # WARP
-cmake -S . -B build   # leave the tree in the default (wasm3) config
+./configure out/wasm3-smp configs/wasm3_smp_defconfig && \
+  ninja -C out/wasm3-smp run-qemu-test                  # wasm3
+./configure out/warp-smp configs/warp_smp_defconfig && \
+  ninja -C out/warp-smp run-qemu-test                   # WARP
 ```
 
+Each runtime has its own build directory; `configure` seeds `.config` once, so an
+existing directory keeps its runtime and the second run is just `ninja`.
+
 A boot-to-`halt` on both backends exercises the generated tables and dispatch.
-Also run `cmake --build build --target run-kernel-unit-tests`. Remove any debug
+Also run `ninja -C out/wasm3-smp run-kernel-unit-tests`. Remove any debug
 markers and commit the IDL + regenerated files + wrapper bodies together.
 
 ## Guardrails

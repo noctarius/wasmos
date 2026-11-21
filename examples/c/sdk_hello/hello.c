@@ -3,7 +3,7 @@
  *
  * Deliberately plain C -- stdio, argv, and open/read -- with no WASMOS-specific
  * call, and, unlike every other app in the tree, no linker.metadata beside it. It
- * is built by the staged SDK (cmake/WasmosSdk.cmake) with no flags but -o, so it
+ * is built by the staged SDK (scripts/sdk/BUILD.py) with no flags but -o, so it
  * exercises the parts a developer never sees: the sysroot, crt1.o, libc.a, the
  * wasm linker defaults, and the default manifest the driver falls back to when
  * the developer supplies none.

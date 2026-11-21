@@ -79,13 +79,18 @@ queues and work stealing.
 
 ---
 
-## Kconfig / CMake wiring
+## Kconfig / build wiring
 
-`scripts/kconfig_to_cmake.py` maps `WASMOS_SMP` to a CMake bool cache variable
-via the existing `BOOL_KEYS` table.
+`WASMOS_SMP` is a Kconfig bool (`Kconfig`) that `depends on WASMOS_IRQ_IOAPIC`;
+kconfiglib enforces the dependency when it resolves a build directory's
+`.config`. `configs/wasm3_smp_defconfig` and `configs/warp_smp_defconfig`
+select it.
 
-`CMakeLists.txt` translates it to `-DWASMOS_SMP=<0|1>` passed to the kernel
-compile flags alongside the other `WASMOS_*` defines.
+The `kernel` toolchain profile (`scripts/buildgen/toolchains.py`) passes it to
+every kernel object as `-DWASMOS_SMP=<0|1>` alongside the other `WASMOS_*`
+defines. For an SMP kernel, `scripts/system/BUILD.py` starts QEMU with
+`-smp 4` (`SMP_CPUS`) and exports the count to the test harness as
+`WASMOS_QEMU_SMP_COUNT`.
 
 ---
 
@@ -481,13 +486,15 @@ qemu-system-x86_64 ... -smp 2
 
 ### Regression targets
 
-| Target                                              | What it proves                                                                     |
-|-----------------------------------------------------|------------------------------------------------------------------------------------|
-| `cmake --build build --target run-qemu-test`        | Default `WASMOS_SMP=0` baseline is not regressed by the SMP infrastructure changes |
-| Manual SMP build with `-DWASMOS_SMP=1 -DQEMU_SMP=2` | AP comes online, scheduler dispatches on both CPUs                                 |
+| Target                                                              | What it proves                                                         |
+|---------------------------------------------------------------------|------------------------------------------------------------------------|
+| `ninja -C out/<dir> run-qemu-test` with a `*_single_defconfig` tree | The `WASMOS_SMP=0` baseline is not regressed by the SMP infrastructure |
+| `ninja -C out/<dir> run-qemu-test` with a `*_smp_defconfig` tree    | APs come online, scheduler dispatches across CPUs (`-smp 4`)           |
 
-The default `run-qemu-test` CI gate always runs with `WASMOS_SMP=0`. An explicit
-SMP-enabled build must be run manually to exercise the AP bring-up path.
+`configs/wasmos_defconfig` leaves `WASMOS_SMP` off, so a tree seeded from it
+does not exercise the AP bring-up path. CI runs `run-qemu-test` for all four
+`{wasm3,warp}_{single,smp}_defconfig` configurations
+(`.github/workflows/ci.yml`, `defconfig` job).
 
 ---
 
@@ -496,8 +503,7 @@ SMP-enabled build must be run manually to exercise the AP bring-up path.
 | File                                          | Change                                                                                           |
 |-----------------------------------------------|--------------------------------------------------------------------------------------------------|
 | `Kconfig`                                     | Add `WASMOS_SMP` option (depends on `WASMOS_IRQ_IOAPIC`)                                         |
-| `scripts/kconfig_to_cmake.py`                 | Add `"WASMOS_SMP"` to `BOOL_KEYS`                                                                |
-| `CMakeLists.txt`                              | Add option, value, define; pass to kernel CFLAGS                                                 |
+| `scripts/buildgen/toolchains.py`              | Pass `-DWASMOS_SMP=0`/`1` in the `kernel` profile flags                                          |
 | `src/kernel/include/arch/x86_64/cpu_x86_64.h` | Expose `tss_t`, `GDT_ENTRY_COUNT`, stack size constants                                          |
 | `src/kernel/include/arch/x86_64/smp.h`        | New — `cpu_local_t`, `g_cpus[]`, `cpu_local()` accessor                                          |
 | `src/kernel/arch/x86_64/smp.c`                | New — `g_cpus[]` definition, `smp_init()`, `smp_cpus_up()`, `smp_ap_c_entry()`, trampoline setup |

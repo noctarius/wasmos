@@ -1,6 +1,6 @@
 ---
 name: wasmos-regression-test
-description: Write and run a regression test for a bug, red-to-green. Covers the mandatory order (failing test first, fix second), the Regression marker every such test carries, what makes a test behavioral rather than a source-text assertion, how to build and run the host unit suites (run-kernel-unit-tests, individual binaries, seed replay, the ThreadSanitizer arms), how to register a new C/C++ suite in CMakeLists.txt, and what to do when a bug genuinely cannot be reproduced on the host. Use whenever fixing a bug, before writing the fix.
+description: Write and run a regression test for a bug, red-to-green. Covers the mandatory order (failing test first, fix second), the Regression marker every such test carries, what makes a test behavioral rather than a source-text assertion, how to build and run the host unit suites (run-kernel-unit-tests, individual binaries, seed replay, the ThreadSanitizer arms), how to register a new C/C++ suite in tests/unit/BUILD.py, and what to do when a bug genuinely cannot be reproduced on the host. Use whenever fixing a bug, before writing the fix.
 ---
 
 # WASMOS Regression Test
@@ -108,16 +108,20 @@ when the bug is in the interaction between processes.
 ## Running the host unit suites
 
 ```bash
-cmake --build build --target run-kernel-unit-tests
+./configure out/unit                      # once; any configuration works
+ninja -C out/unit run-kernel-unit-tests
 ```
 
-Every suite builds and runs in one target; the first failure stops it. Individual
-binaries land in the build directory and can be rerun directly, which is what you
-want while iterating:
+Every suite builds and runs in one target; C/C++ binaries are ordinary build
+edges, so they compile in parallel and rebuild only when an input changes, and the
+run steps execute in order from the build directory, stopping at the first
+failure. `ninja -C out/unit unit-test-binaries` builds them without running.
+Individual binaries land in the build directory and can be rebuilt and rerun
+directly, which is what you want while iterating:
 
 ```bash
-./build/test_sched_runqueue_bias_on
-./build/test_ipc_concurrency
+ninja -C out/unit test_sched_runqueue_bias_on && ./out/unit/test_sched_runqueue_bias_on
+./out/unit/test_ipc_concurrency_t4
 ```
 
 ### Order randomization and seed replay
@@ -140,16 +144,19 @@ with a message rather than overflowing the order array.
 ### The ThreadSanitizer arms
 
 `test_sched_concurrency` and `test_ipc_concurrency` also build with
-`-fsanitize=thread`. They are the gate for anything touching cross-CPU state: a
-data race there fails the target with `Error 66` and 20+ warnings. If you add a
+`-fsanitize=thread` (`test_*_concurrency_tsan`, `SAN` entries in
+`tests/unit/BUILD.py`). They are the gate for anything touching cross-CPU state:
+a data race there exits 66 with 20+ warnings and stops the target. If you add a
 field written by one CPU and read by another — including a diagnostic counter —
 these are the suites that will catch you.
 
 ### Adding a new C/C++ suite
 
-Register it in `CMakeLists.txt` next to the others: a `COMMAND ${CLANG} …` that
-compiles the test plus exactly the kernel translation units it needs, then a
-`COMMAND ${BUILD_DIR}/test_<name>` that runs it. Keep the source list minimal —
+Register it in the `TESTS` table in `tests/unit/BUILD.py`, in run order: a
+`(CC, "test_<name>", [...])` entry (`CXX` for C++, `SAN` for a sanitizer build)
+whose arguments are the flags (`*C11`, `-I` paths) plus the test source and
+exactly the kernel translation units it needs, then a `(RUN, "test_<name>", [])`
+entry that runs it. `build.ninja` regenerates on the next `ninja` run. Keep the source list minimal —
 each file you add drags in its dependencies and its stubs.
 
 Stubs available under `tests/unit/`:
@@ -166,13 +173,14 @@ The weak writers in `stubs_kpanic.c` let a suite define its own capturing
 versions — that is how a test asserts on what the kernel reported.
 
 After adding a suite, keep IDE/lint coverage in sync
-(`skills/wasmos-ide-targets`): `scripts/quality.sh lint` reads a rewritten
-compile database from the `*_ide` targets, and a file that is in no target is
-silently unlinted.
+(`skills/wasmos-ide-targets`): `scripts/quality.sh lint` reads
+`out/<dir>/compile_commands.json`, and a file with no entry there is silently
+unlinted. A `TESTS` entry indexes its sources automatically.
 
 Other languages: AssemblyScript suites under `tests/unit/as/` (run by
 `run_as_test.mjs`), Go under `tests/unit/go/` (TinyGo + node, skipped when
-TinyGo is absent), Rust as a cargo test. They hang off the same target.
+TinyGo is absent), Rust as a `rustc --test` binary, Zig as `zig test`. They are
+steps of the same target, added in `build(b)` in `tests/unit/BUILD.py`.
 
 ## The workflow
 
@@ -188,7 +196,7 @@ TinyGo is absent), Rust as a cargo test. They hang off the same target.
    end, plus `run-qemu-test`, plus the affected battery if the bug had one.
    Randomized order means your new case can expose an old leak; that is the
    feature working, and it is your commit's problem.
-7. **Gates before committing**: `cmake --build build --target fmt-check` and
+7. **Gates before committing**: `ninja -C out/<dir> fmt-check` and
    `lint` (through the targets — they build the clang-tidy plugin the `wasmos-*`
    checks live in).
 

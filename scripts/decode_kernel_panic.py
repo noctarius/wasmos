@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -118,24 +119,15 @@ def default_kernel_path() -> str:
     """Honours WASMOS_KERNEL like the test framework's namesake does, so a
     panic from a defconfig tree is decoded against that tree's symbols rather
     than whatever the literal "build" directory last held."""
-    return os.environ.get("WASMOS_KERNEL", os.path.join("build", "kernel.elf"))
+    return os.environ.get("WASMOS_KERNEL", os.path.join("out", "default", "kernel.elf"))
 
 
-def read_cmake_cache(cache_path: Path) -> dict[str, str]:
-    data: dict[str, str] = {}
-    if not cache_path.exists():
-        return data
-
-    for raw_line in cache_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("//") or line.startswith("#"):
-            continue
-        if ":" not in line or "=" not in line:
-            continue
-        key, rest = line.split(":", 1)
-        _kind, value = rest.split("=", 1)
-        data[key] = value
-    return data
+def read_build_tools(build_dir: Path) -> dict[str, str]:
+    """The tool paths ./configure resolved for a build directory, or {}."""
+    path = build_dir / "buildgen-tools.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def discover_addr2line(requested: str, kernel: str) -> str | None:
@@ -148,8 +140,7 @@ def discover_addr2line(requested: str, kernel: str) -> str | None:
 
     kernel_path = Path(kernel).resolve()
     build_dir = kernel_path.parent
-    cache = read_cmake_cache(build_dir / "CMakeCache.txt")
-    clang_path = cache.get("CLANG", "")
+    clang_path = read_build_tools(build_dir).get("clang", "")
 
     candidates: list[Path] = []
     if clang_path:
@@ -184,12 +175,12 @@ def main() -> int:
     parser.add_argument(
         "--kernel",
         default=default_kernel_path(),
-        help="path to the kernel ELF with debug info (default: build/kernel.elf)",
+        help="path to the kernel ELF with debug info (default: $WASMOS_KERNEL or out/default/kernel.elf)",
     )
     parser.add_argument(
         "--addr2line",
         default=os.environ.get("LLVM_ADDR2LINE", ""),
-        help="addr2line-compatible tool to use (default: auto-discover from CMakeCache/LLVM install)",
+        help="addr2line-compatible tool to use (default: beside the build directory's clang, then the LLVM install)",
     )
     args = parser.parse_args()
 

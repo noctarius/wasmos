@@ -349,8 +349,10 @@ Misuse checks (tested in `kernel_ring3_smoke_runtime.c`):
 
 #### `run-qemu-ring3-test` / `strict-ring3`
 
-Runs `scripts/qemu_ring3_probe_runtime.py` (via `cmake --build build --target
-strict-ring3`). Expected passing markers (in serial output):
+`run-qemu-ring3-test` configures a wasm3 test tree at `out/<dir>/ring3`
+(`WASMOS_RING3_SMOKE=y`, `WASMOS_PM_TEST_HOOKS=y`) and runs
+`scripts/qemu_ring3_halt_test.py` against it; `ninja -C out/<dir> strict-ring3`
+runs `run-qemu-test` and then `run-qemu-ring3-test` (`scripts/system/BUILD.py`). Expected passing markers (in serial output):
 
 **Syscall / basic isolation:**
 - `[test] ring3 syscall ok`

@@ -13,8 +13,8 @@ serial console. It lives in `tests/test_<name>.py`, uses `QemuSession` from
 `tests/batteries.json`.
 
 Unit tests are a different thing and live elsewhere: C kernel tests under
-`tests/unit/` run via `cmake --build build --target run-kernel-unit-tests` and
-boot nothing.
+`tests/unit/` run via `ninja -C out/<dir> run-kernel-unit-tests` and boot
+nothing.
 
 ## The battery system
 
@@ -51,8 +51,9 @@ under wasm3 passes a WARP-only run and fails nothing until someone boots the
 other runtime by hand. CI ran WARP only for a long time, which is exactly how
 that hid. A cell also ASSERTS the runtime it claims, by grepping the booted
 kernel's `[subsystem] register request=WASM runtime=...` marker rather than
-trusting the configure flag — a stray `<repo>/.config` overrides `-D` flags, and
-an ESP can serve a kernel older than the tree it was built from.
+trusting the configure step — a build directory's `.config` is seeded once and
+keeps whatever runtime it was seeded with (or later edited to), and an ESP can
+serve a kernel older than the tree it was built from.
 
 Batteries are **semantic, not duration-balanced** — `networking` is much the
 largest and sets the critical path, deliberately. A red job named `networking`
@@ -143,9 +144,9 @@ keeping the list sorted. If it fits no battery, add one — `name`, `description
 `needs_qemu`, `files` — and CI picks it up automatically.
 
 Set `needs_qemu: false` only if the test boots nothing. Those run on a fast job
-that installs nothing — no emulation toolchain, and no CMake configure either,
-since a full configure validates the cross toolchain and fails on `llvm-objcopy`
-long before it reaches a host tool. The `host-tools` job compiles what it needs
+that installs nothing — no emulation toolchain, and no `./configure` either,
+since `configure` resolves the cross toolchain and fails on `llvm-objcopy` long
+before it reaches a host tool. The `host-tools` job compiles what it needs
 with `cc` directly, which works only because `scripts/make_wasmos_app.c` includes
 nothing but libc. A host test whose tool needs the real build does not belong in
 that battery.
@@ -159,25 +160,29 @@ python3 scripts/run_unittest_suite.py --verify-batteries
 ## Step 3: Run it
 
 ```sh
-# one file, fastest iteration
-python3 -m unittest tests.test_my_feature
+# one file, fastest iteration (after `ninja -C out/<dir>` has staged the ESP)
+WASMOS_ESP=out/<dir>/esp WASMOS_KERNEL=out/<dir>/kernel.elf \
+  python3 -m unittest tests.test_my_feature
 
 # the battery it belongs to
-python3 scripts/run_unittest_suite.py --battery filesystem
+WASMOS_TEST_BATTERY=filesystem ninja -C out/<dir> run-qemu-cli-test
 
 # everything (what CI runs, split across runners)
-cmake --build build --target run-qemu-cli-test
+ninja -C out/<dir> run-qemu-cli-test
 ```
 
-The CMake target honours `WASMOS_TEST_BATTERY`, which is how CI runs one battery
-per runner without duplicating the ESP staging:
-
-```sh
-WASMOS_TEST_BATTERY=filesystem cmake --build build --target run-qemu-cli-test
-```
+`run-qemu-cli-test` brings `out/<dir>/esp` and the disk images up to date,
+exports the `WASMOS_ESP` / `WASMOS_KERNEL` / image / OVMF / SMP environment the
+framework reads (`scripts/system/BUILD.py`), and sets
+`WASMOS_QEMU_ISOLATE_ESP=1`. Run outside it, a test falls back to the
+`build/...` defaults in `scripts/qemu_test_framework.py`, so a direct
+`python3 -m unittest` or `python3 scripts/run_unittest_suite.py --battery <name>`
+needs those variables pointed at `out/<dir>`. The target honours
+`WASMOS_TEST_BATTERY`, which is how CI runs one battery per runner without
+duplicating the ESP staging.
 
 **Never run two QEMU integration targets at once.** They share a mutable
-`build/esp`, and parallel runs produce flaky failures like `Error deleting` and
+`out/<dir>/esp` and disk images, and parallel runs produce flaky failures like `Error deleting` and
 corrupted boot config. Batteries are safe in CI only because each runner has its
 own filesystem — that is a cross-machine property, not a licence to parallelise
 locally.
@@ -186,8 +191,8 @@ locally.
 
 ```sh
 python3 scripts/run_unittest_suite.py --verify-batteries
-python3 scripts/run_unittest_suite.py --battery <its battery>
-cmake --build build --target run-qemu-test   # boot gate, always
+WASMOS_TEST_BATTERY=<its battery> ninja -C out/<dir> run-qemu-cli-test
+ninja -C out/<dir> run-qemu-test   # boot gate, always
 ```
 
 ## Diagnosing a failure

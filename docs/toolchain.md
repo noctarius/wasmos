@@ -10,8 +10,8 @@ this repository can build a WASMOS application without knowing a target triple, 
 sysroot, a linker flag, or the container format:
 
 ```bash
-cmake --build build --target wasmos-sdk
-export PATH=$PWD/build/wasmos-sdk/bin:$PATH
+ninja -C out/<dir> wasmos-sdk
+export PATH=$PWD/out/<dir>/wasmos-sdk/bin:$PATH
 
 wasmos-clang hello.c -o hello        # -> hello.wap, runnable by WASMOS
 ```
@@ -31,8 +31,9 @@ Stage 1 deliberately requires no LLVM modification. `wasmos-clang
 --print-target-triple` already answers `wasm32-unknown-wasmos`, so build systems
 can key off the canonical name before LLVM knows it; the generated code is
 identical either way, which is what makes the migration a non-event. The
-`WASMOS_SDK_TARGET` / `WASMOS_SDK_TARGET_LLVM` split in
-`cmake/WasmosSdk.cmake` is where the two names diverge.
+`TARGET` / `TARGET_LLVM` entries `scripts/sdk/BUILD.py` writes into
+`wasmos-sdk.conf` (read by the wrappers as `WASMOS_SDK_TARGET` /
+`WASMOS_SDK_TARGET_LLVM`) are where the two names diverge.
 
 ---
 
@@ -103,7 +104,7 @@ POSIX feature macros are not: WASMOS satisfies none of those contracts.
 ## SDK layout
 
 ```text
-build/wasmos-sdk/
+out/<dir>/wasmos-sdk/
 ├── bin/            wasmos-clang, wasmos-clang++, wasmos-zig, wasmos-asc,
 │                   wasmos-rustc, wasmos-tinygo, wasmos-ld, wasmos-ar,
 │                   wasmos-nm, wasmos-ranlib, wasmos-strip, wasmos-objdump,
@@ -137,7 +138,7 @@ parse and run their argument handling, manifest reading and path resolution unde
 either macOS `sh` or CI's Ubuntu `dash`. What that does *not* cover is the
 compilers: a full Linux build of the five languages happens in CI's `defconfig`
 job, which installs zig, the Rust wasm target, TinyGo and AssemblyScript and builds
-`run-qemu-test` — and every SDK smoke app is a dependency of the kernel target, so a
+`run-qemu-test` — and every SDK smoke app is staged on the ESP that target boots, so a
 driver that breaks on Linux fails that job rather than going unnoticed.
 
 ### Why the sysroot rewrites headers on install
@@ -147,8 +148,7 @@ Six public headers include the generated ABI headers by a repo-relative path
 in-tree: the generated files live outside `src/` to stay out of format and lint
 scope, so no `-Iabi/generated/c` has to be threaded through every compile that
 pulls in libc. No sysroot can reproduce those depths, so
-`cmake/wasmos_sdk_stage.cmake` (and its Ninja-build counterpart
-`scripts/sdk_stage.py`) installs the generated headers under
+`scripts/sdk_stage.py` installs the generated headers under
 `sysroot/include/wasmos/abi/` and rewrites **every** staged header, then asserts
 that none still carries one.
 
@@ -213,8 +213,9 @@ A Zig guest's `main` returns `u8`, not `void` — the shim's `wasmos_main` expor
 casts it to the process exit status.
 
 Additional `.zig` files passed on the command line are staged alongside. Extra C
-objects (the coroutine and libui shims that `examples/zig/calculator` links) are
-not wired into the driver yet; that app is still built by the in-tree helper.
+sources (the coroutine and libui shims that `examples/zig/calculator` links) are
+passed the same way: the driver hands them to `zig build-exe` behind a `-cflags`
+block whose include path is `share/wasmos/zig/compat` and then the sysroot.
 
 ## AssemblyScript
 
@@ -439,9 +440,9 @@ flags = 0
 sizes the *module's* own linear memory and shadow stack.
 
 `[link]` is where an app's memory lives for the in-tree build too, not only for the
-SDK: `wasmos_add_wasm_c_app_target` reads it at configure time and passing
-`STACK_SIZE`/`INITIAL_MEMORY`/`MAX_MEMORY` to the helper is now a configure error
-naming the manifest to move them to. Omit a key to take the default; writing a
+SDK: `guest()` (`scripts/buildgen/wasmos_rules.py`) passes the module's
+`linker.metadata` to the driver as `--wasmos-manifest=` and makes it a build input,
+and takes no stack or memory parameters of its own. Omit a key to take the default; writing a
 default out explicitly is noise a test rejects, so a value present in a manifest is
 one somebody chose. `tests/test_link_memory_manifest.py` checks that what a
 manifest asks for is what the module declares — the failure it exists for is a
@@ -451,8 +452,8 @@ but later, inside a host call whose window did not fit.
 All four toolchains read `[link]` — C, Zig, AssemblyScript and Rust — so an app is
 sized in one file whatever it is written in. The section is in **bytes** in every
 language; `asc` wants pages, and the conversion happens in one place
-(`wasmos_manifest_link_pages`), where a value that is not a whole number of 64 KiB
-pages is an error rather than a silent round. Each helper keeps its own defaults for
+(`scripts/sdk/wasmos-asc`), where a value that is not a whole number of 64 KiB
+pages is an error rather than a silent round. Each driver keeps its own defaults for
 keys a manifest omits — the C one pins a maximum, the Zig and AssemblyScript ones
 leave the module without any — so only declared keys are checked.
 
@@ -473,11 +474,11 @@ app is staged as `sdkhello.wap`.
 ## One toolchain, not two
 
 **The in-tree build compiles through the SDK drivers — in every language.** No
-WASM target in this repository invokes a compiler directly: the C helper calls
-`wasmos-clang`, the Zig helper `wasmos-zig`, the AssemblyScript helper `wasmos-asc`,
-and the Rust and Go examples `wasmos-rustc` and `wasmos-tinygo`. Each helper
-supplies only what is genuinely its own — the sources, the output path and the
-manifest — and the driver owns the triple, the sysroot, the flags, the staging, the
+WASM target in this repository invokes a compiler directly: every guest module goes
+through `guest()` in `scripts/buildgen/wasmos_rules.py`, which calls `wasmos-clang`,
+`wasmos-zig`, `wasmos-asc`, `wasmos-rustc` or `wasmos-tinygo` from the staged SDK.
+`guest()` supplies only what is genuinely its own — the sources, the output path and
+the manifest — and the driver owns the triple, the sysroot, the flags, the staging, the
 crt or runtime shims and the link line.
 
 That is what makes the SDK the toolchain rather than a parallel copy of it. Before,
@@ -520,7 +521,7 @@ already carried each of them and a second spelling could only drift:
 | `ENTRY_NAME` | the entry convention follows from `[package] entry` | AssemblyScript |
 | `INITIAL_MEMORY_PAGES` | `[link] initial_memory`, in bytes | AssemblyScript |
 
-Passing any of them is a configure error naming the manifest. The same rule decides
+`guest()` accepts none of them. The same rule decides
 three different things from one field: an entry of `wasmos_main` means C links
 `crt1.o` and AssemblyScript stages the app behind `runtime.ts`; an entry of
 `initialize` means neither. All three were
@@ -546,25 +547,28 @@ will not guarantee. `crt1.o` is named on the link line for the same reason.
 ## Building the SDK
 
 ```bash
-cmake -S . -B build
-cmake --build build --target wasmos-sdk
+./configure out/<dir> configs/<name>_defconfig
+ninja -C out/<dir> wasmos-sdk
 ```
 
-With the Ninja build, `./configure out/<dir> <defconfig>` followed by
-`ninja -C out/<dir> wasmos-sdk` produces the same tree under
-`out/<dir>/wasmos-sdk` (`scripts/sdk/BUILD.py`, `scripts/sdk_stage.py`).
+The `wasmos-sdk` target produces the tree under `out/<dir>/wasmos-sdk`.
+`scripts/sdk/BUILD.py` runs `scripts/sdk_stage.py` to populate the header tree,
+the wrappers, `libexec/`, `share/` (including the CMake integration) and
+`wasmos-sdk.conf`; the archives and `crt1.o` inside it are ordinary build edges
+(`src/libc/BUILD.py`, `src/libsys/BUILD.py`), because every WASM target already
+depends on them.
 
-The `wasmos-sdk` target stages the SDK tree; the archives and `crt1.o` inside it
-are built by the ordinary build, because every WASM target already depends on them.
-
-`cmake/WasmosSdk.cmake` compiles the sysroot objects with the same flags
-`wasmos-clang` passes for application sources — they must match, or an archive
-object and its caller would disagree about, for example, `WASMOS_TRACE` — archives
-them with `llvm-ar`, and runs `cmake/wasmos_sdk_stage.cmake` to populate the
-header tree, the wrappers and the CMake integration. The target is skipped when
-`llvm-ar` is absent.
+The `wasm32` toolchain profile (`scripts/buildgen/toolchains.py`) compiles the
+sysroot objects with the same flags `wasmos-clang` passes for application
+sources — they must match, or an archive object and its caller would disagree
+about, for example, `WASMOS_TRACE` — and archives them with `llvm-ar`.
+`./configure` fails when `llvm-ar` is absent.
 
 ## CMake integration
+
+The staged SDK ships a CMake toolchain file for out-of-tree applications
+(`scripts/sdk/WASMOSToolchain.cmake` and `scripts/sdk/Platform/WASMOS.cmake`,
+staged under `share/cmake/WASMOS/`); the in-tree build does not use it.
 
 ```bash
 cmake -DCMAKE_TOOLCHAIN_FILE=$WASMOS_SDK/share/cmake/WASMOS/WASMOSToolchain.cmake ..
@@ -582,12 +586,11 @@ try to run what it builds.
 
 1. Declare it in the appropriate `src/libc/include` header and implement it in the
    matching `src/libc/src/*.c`. Do not add a POSIX surface WASMOS cannot honour.
-2. If the file is new, add it to `WASMOS_SDK_LIBC_SOURCES` in
-   `cmake/WasmosSdk.cmake` — the archive is now the only place libc is built, so
-   that is the only list. Archive membership costs nothing at link time: an object
-   no module references is not pulled in. `WASMOS_LIBC_C_SOURCES` in the root
-   `CMakeLists.txt` is for entry shims only, and a libc source added there would be
-   compiled into every module again.
+2. If the file is new, add it to `SOURCES` in `src/libc/BUILD.py` — the archive
+   is the only place libc is built, so that is the only list. Archive membership
+   costs nothing at link time: an object no module references is not pulled in.
+   Entry shims are listed in each module's own `guest()` sources; a libc source
+   added there would be compiled into that module again.
 3. Cover it with a host unit test under `tests/unit/` (`test_libc_*.c` are the
    precedents) and keep the other language bindings in sync where the API is shared
    (repo rule: libc and its wrappers change together).

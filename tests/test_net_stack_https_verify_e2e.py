@@ -178,7 +178,7 @@ class NetStackHttpsVerifyE2ETest(unittest.TestCase):
     matches 10.0.2.2, so curl prints the body. A rogue self-signed server
     (negative) does NOT chain to the bundled CA, so net-stack rejects the
     handshake and curl prints a failure and never the body. The test overwrites
-    the ESP trust store (build/esp/system/net/certificates/ca-certs.pem) with its
+    the ESP trust store (<build-dir>/esp/system/net/certificates/ca-certs.pem) with its
     own CA so the check is hermetic (no internet, no real bundle needed).
     """
 

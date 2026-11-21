@@ -23,8 +23,8 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   - `skills/wasmos-wasm-driver` — create and wire a new wasm device driver.
   - `skills/wasmos-system-service` — create and wire a new system service.
   - `skills/wasmos-system-util` — create a one-shot CLI utility under `src/utils/`.
-  - `skills/wasmos-ide-targets` — keep CLion/clangd IDE coverage in sync (audit +
-    fix "not in a project target").
+  - `skills/wasmos-ide-targets` — keep CLion/clangd coverage in sync with the
+    build's `compile_commands.json` (audit + fix "not in a project target").
   - `skills/wasmos-regression-test` — write and run the regression test for a
     bug (red before the fix, the `Regression:` marker, running/registering the
     host unit suites). Read it BEFORE writing any bug fix.
@@ -32,9 +32,10 @@ This repository uses Codex CLI to assist with development. Follow these conventi
     under `tests/` and assign it to a battery (`tests/batteries.json` is the
     single source for both the runner and the CI matrix; every test file must
     belong to exactly one battery).
-  - `skills/wasmos-build-and-run` — build/run QEMU + test targets with the right
-    runtime (wasm3 vs WARP) via Kconfig `.config` / `configs/*_defconfig`; the
-    one-build-dir-per-config rule and why `-D` runtime flags can be overridden.
+  - `skills/wasmos-build-and-run` — configure, build and run QEMU + test targets
+    with the right runtime (wasm3 vs WARP) via `configs/*_defconfig` and the
+    build directory's `.config`; the one-build-dir-per-config rule and how to
+    tell what a tree is configured as and what it booted.
   - `skills/wasmos-kernel-internals` — kernel internals reference.
   - `skills/wasmos-shared-primitives` — the ownership/lifetime contract of a
     shared primitive (transfer buffers and DMA borrows, IPC endpoints, service
@@ -59,9 +60,11 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   identify a real known gap or deferred issue that is intentionally left in
   place.
 - Make small, focused changes that preserve the project’s minimalism.
-- Prefer `rg` for searching and `cmake` for build orchestration.
+- Prefer `rg` for searching and `./configure` + `ninja` for build orchestration.
 - Use `clang`/`lld` for UEFI targets (AppleClang is insufficient).
-- Keep build logic in per-component `CMakeLists.txt` files (boot, kernel, drivers, services, and each example language).
+- Keep build logic in per-component `BUILD.py` manifests (boot, kernel, drivers,
+  services, utilities, and each example language); toolchain flags shared by a
+  target class belong in `scripts/buildgen/toolchains.py`, not in manifests.
 
 ## Never Do
 - Do not introduce large frameworks or heavy dependencies.
@@ -181,29 +184,34 @@ Do not:
 - `_start` prepares stack/BSS and calls `kmain(boot_info_t *)`.
 
 ## Build/Run Reminders
-- Configure: `cmake -S . -B build`
-- Build bootloader: `cmake --build build --target bootloader`
-- Build kernel: `cmake --build build --target kernel`
-- Build app packer: `cmake --build build --target make_wasmos_app`
-- Run QEMU: `cmake --build build --target run-qemu`
-- Run QEMU halt test: `cmake --build build --target run-qemu-test` (default compile+boot+halt check after changes)
-- Quality gates: `cmake --build build --target fmt-check` and
-  `cmake --build build --target lint` (or `quality` for both). Run them through
-  the targets: the targets resolve the toolchain, and they build the wasmos
-  clang-tidy plugin that the `wasmos-*` checks live in. `scripts/quality.sh`
-  invoked directly now reads the same paths out of the build directory's
-  CMakeCache, so it is equivalent when that directory is configured and built —
-  but it warns and runs a weaker lint when the plugin is missing, and a warning
-  is easy to miss. Prefer the targets.
+- Configure: `./configure out/default configs/<name>_defconfig` (seeds
+  `out/default/.config` once; one build directory per configuration — see
+  `skills/wasmos-build-and-run`). Any directory name works; `out/default` is
+  the one these reminders and `scripts/quality.sh` assume.
+- Build everything (kernel, loader, modules, ESP, disk images): `ninja -C out/default`
+- Build one piece: `ninja -C out/default kernel` (also `bootloader`, `modules`,
+  `esp`, `make_wasmos_app`, `wasmos-sdk`)
+- Run QEMU: `ninja -C out/default run-qemu`
+- Run QEMU halt test: `ninja -C out/default run-qemu-test` (default compile+boot+halt check after changes)
+- Host unit tests: `ninja -C out/default run-kernel-unit-tests`
+- Quality gates: `ninja -C out/default fmt-check` and `ninja -C out/default lint`
+  (or `quality` for both). Run them through the targets: the targets pass the
+  toolchain the tree resolved, and `lint` builds the wasmos clang-tidy plugin
+  that the `wasmos-*` checks live in. `scripts/quality.sh` invoked directly
+  reads the same tool paths from the build directory's `buildgen-tools.json`
+  (`QUALITY_BUILD_DIR`, default `out/default`), so it is equivalent when that
+  directory is configured and built — but it warns and runs a weaker lint when
+  the plugin is missing, and a warning is easy to miss. Prefer the targets.
 
 ## QEMU + GDB Debugging
 - Use this default flow for non-ring3/kernel bring-up debugging.
 - Prepare ESP + kernel artifacts:
-  `cmake --build build --target run-qemu-test`
+  `ninja -C out/default esp`
 - Launch QEMU paused with gdbstub (default boot tree):
-  `qemu-system-x86_64 -m 512M -serial mon:stdio -drive if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-x86_64-code.fd -nographic -drive format=raw,file=fat:rw:/Volumes/git/wasmos/build/esp -S -gdb tcp::1234`
+  `qemu-system-x86_64 -m 512M -serial mon:stdio -drive if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-x86_64-code.fd -nographic -drive format=raw,file=fat:rw:/Volumes/git/wasmos/out/default/esp -S -gdb tcp::1234`
+  (or `ninja -C out/default run-qemu-debug`, which also attaches the disk fixtures)
 - Attach GDB to symbols:
-  `gdb -q build/kernel.elf`
+  `gdb -q out/default/kernel.elf`
   then run:
   `target remote :1234`
 - Recommended early breakpoints (non-ring3):
@@ -226,12 +234,13 @@ Do not:
   `-no-reboot -d int,cpu_reset -D /tmp/qemu.log`
   then inspect `/tmp/qemu.log` for the first exception chain (for example `#PF -> #DF -> Triple fault`).
 - Ring3-specific debug flow (when needed):
-  - Prepare ring3 tree: `cmake --build build --target run-qemu-ring3-test`
-  - Use `build/ring3/esp` + `build/ring3/kernel.elf` in the same paused QEMU/GDB flow above.
+  - Prepare ring3 tree: `ninja -C out/default run-qemu-ring3-test` (configures
+    and builds `out/default/ring3`)
+  - Use `out/default/ring3/esp` + `out/default/ring3/kernel.elf` in the same paused QEMU/GDB flow above.
 
 ## Debug Playbook (High-Signal)
 - Prefer this order when debugging boot/runtime failures:
-  1. Reproduce with `cmake --build build --target run-qemu-test`
+  1. Reproduce with `ninja -C out/default run-qemu-test`
   2. Add minimal marker logs at one boundary only (caller or callee, not both everywhere)
   3. If cause is still unclear, switch to paused QEMU + GDB and inspect first failing transition
   4. Remove temporary debug logs after the fix is verified
@@ -284,16 +293,16 @@ Do not:
 
 ## Artifact/Path Sanity Checks
 - Verify expected files exist in ESP before deep debugging:
-  - `build/esp/system/drivers`
-  - `build/esp/system/services`
-  - `build/esp/apps`
+  - `out/default/esp/system/drivers`
+  - `out/default/esp/system/services`
+  - `out/default/esp/apps`
 - For path-based spawn failures, verify both:
   - path string used by caller
   - actual ESP file path and filename form (including 8.3 compatibility constraints where relevant)
 
 ## Regression-Proofing After Fix
 - After fixing, rerun:
-  - `cmake --build build --target run-qemu-test`
+  - `ninja -C out/default run-qemu-test`
 - Confirm both:
   - the original failure is gone
   - no new boot-stage regressions appear later in the startup chain
@@ -304,11 +313,11 @@ Do not:
 - `git add` and `git commit` are always allowed in this repository.
 - Commit messages must always be detailed (clear summary + meaningful body).
 - Commits created by agents must include a `Co-authored-by:` trailer.
-- ALWAYS run `cmake --build build --target run-qemu-test` before staging and committing changes.
+- ALWAYS run `ninja -C <build-dir> run-qemu-test` before staging and committing changes.
 - ALWAYS run unit tests, especially newly created tests, and also the full existing unit test suite, before declaring work complete.
 - Unit/integration test targets MUST NOT be started in parallel (for example,
   do not run `run-qemu-test` and `run-qemu-cli-test` at the same time). They
-  share mutable `build/esp` artifacts and parallel runs can cause flaky
+  share mutable `<build-dir>/esp` artifacts and parallel runs can cause flaky
   failures like `Error deleting` and boot-config corruption. CI runs the test
   batteries concurrently only because each runner has its own filesystem; that
   is a cross-machine property and does not make local parallel runs safe.

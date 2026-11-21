@@ -194,9 +194,14 @@ def run_targets(b, esp_stamp, images):
         "PYTHONDONTWRITEBYTECODE": 1,
     }
     py = tools["python"]
+    # The halt test's wall-clock budget: 120 s suits KVM/HVF; slow TCG hosts
+    # (CI runners) raise it with WASMOS_QEMU_TEST_TIMEOUT at run time.
     b.run_target(
         "run-qemu-test",
         [
+            "sh",
+            "-c",
+            'exec "$0" "$@" --timeout "${WASMOS_QEMU_TEST_TIMEOUT:-120}"',
             py,
             root / "scripts/qemu_halt_test.py",
             "--ovmf-code",
@@ -270,6 +275,121 @@ def run_targets(b, esp_stamp, images):
         "virtio-blk-pci,drive=vwfs0,id=vwfs,addr=0x6.0",
     ]
     b.run_target("run-qemu", qemu, deps=[esp_stamp, *run_images], description="QEMU")
+    display = [a for a in qemu if a != "-nographic"]
+    b.run_target(
+        "run-qemu-ui",
+        display,
+        deps=[esp_stamp, *run_images],
+        description="QEMU (display)",
+    )
+
+    # Marker tests a ring-3 test configuration answers (WASMOS_RING3_SMOKE,
+    # WASMOS_PM_TEST_HOOKS); run them in such a tree, or through the
+    # run-qemu-ring3-*-test wrappers below, which build one.
+    ring3 = [
+        py,
+        root / "scripts/qemu_ring3_halt_test.py",
+        "--ovmf-code",
+        ovmf_code,
+        *vars_arg,
+        "--esp",
+        out / "esp",
+    ]
+    b.run_target(
+        "run-qemu-ring3-check",
+        ring3,
+        deps=deps,
+        env=env,
+        description="QEMU ring3 smoke markers",
+    )
+    b.run_target(
+        "run-qemu-ring3-threading-check",
+        ring3 + ["--require-threading"],
+        deps=deps,
+        env=env,
+        description="QEMU ring3 threading markers",
+    )
+    b.run_target(
+        "run-qemu-ring3-fault-storm-check",
+        [
+            py,
+            root / "scripts/qemu_ring3_fault_storm_test.py",
+            "--ovmf-code",
+            ovmf_code,
+            *vars_arg,
+            "--esp",
+            out / "esp",
+        ],
+        deps=deps,
+        env=env,
+        description="QEMU ring3 fault-storm markers",
+    )
+    # Needs a kernel configured with WASMOS_SCHED_SMP_STRESS; without it the
+    # script refuses up front rather than timing out.
+    b.run_target(
+        "run-qemu-sched-stress-test",
+        [
+            py,
+            root / "scripts/qemu_sched_stress_test.py",
+            "--ovmf-code",
+            ovmf_code,
+            *vars_arg,
+            "--esp",
+            out / "esp",
+            "--smp",
+            smp,
+        ],
+        deps=deps,
+        env=env,
+        description="QEMU SMP scheduler stress",
+    )
+
+    # Ring-3 gates build their own wasm3 tree with the test probes enabled,
+    # beside this one, and run its marker check there.
+    configure = [py, root / "configure"]
+    trace = "y" if b.cfg.WASMOS_TRACE else "n"
+    shadows = [
+        ("run-qemu-ring3-test", "ring3", "run-qemu-ring3-check", []),
+        (
+            "run-qemu-ring3-threading-test",
+            "ring3-threading",
+            "run-qemu-ring3-threading-check",
+            ["WASMOS_RING3_THREAD_LIFECYCLE_SMOKE=y"],
+        ),
+        (
+            "run-qemu-ring3-fault-storm-test",
+            "ring3-fault-storm",
+            "run-qemu-ring3-fault-storm-check",
+            [],
+        ),
+    ]
+    for target, subdir, check, extra in shadows:
+        tree = out / subdir
+        sets = [
+            "WASMOS_WASM_RUNTIME_WASM3=y",
+            "WASMOS_RING3_SMOKE=y",
+            "WASMOS_PM_TEST_HOOKS=y",
+            f"WASMOS_TRACE={trace}",
+            *extra,
+        ]
+        b.run_target(
+            target,
+            [
+                configure
+                + [tree, root / "configs/wasmos_defconfig", "--reseed"]
+                + [x for a in sets for x in ("--set", a)],
+                ["ninja", "-C", tree, check],
+            ],
+            description=f"{subdir} tree: {check}",
+        )
+    b.run_target(
+        "strict-ring3",
+        [
+            ["ninja", "-C", out, "run-qemu-test"],
+            ["ninja", "-C", out, "run-qemu-ring3-test"],
+        ],
+        description="strict ring3 gate (run-qemu-test + run-qemu-ring3-test)",
+    )
     gdb_port = b.cfg.get("QEMU_GDB_PORT", 1234)
     b.run_target(
         "run-qemu-debug",

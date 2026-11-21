@@ -2161,6 +2161,31 @@ Source: `architecture/25-diagnostics-status.md`,
 
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
+- [ ] [BUG][P1] CMake WARP builds compile `src/kernel/process_manager.cpp`
+  without `-DWASMOS_WASM_RUNTIME_WARP`: `CXXFLAGS_KERNEL` is captured at
+  `src/kernel/CMakeLists.txt:15`, before line 211 appends the define to
+  `CFLAGS_KERNEL`. `wasm_driver_t` (`src/kernel/include/wasm_driver.h:48`)
+  gains three `r3_*` fields under that define, so `ProcessManager::init` sizes
+  `g_pm.apps` elements as 0x2a8 bytes while every C translation unit and
+  `warp_driver.cpp` treat `pm_app_state_t` as 0x2c0 (disassembly of
+  `process_manager.o`, 2026-11-21). With the linked backend each app node is
+  allocated 24 bytes short of what the WARP driver writes (`r3_linmem_base` and
+  neighbours). The Ninja prototype passes the define and boots WARP SMP; the
+  CMake fix is to derive `CXXFLAGS_KERNEL` after the runtime define is added.
+  A regression test owes the size contract (one `pm_app_state_t` size seen from
+  C and C++ in the same configuration).
+- [ ] [CLEANUP][P2] Reconcile the diverged duplicate headers
+  `src/libc/include/wasmos/{mutex,rtc_ipc}.h` and
+  `src/libsys/wasm/include/wasmos/{mutex,rtc_ipc}.h`. The SDK sysroot ships
+  libc's copy (include-search order; `scripts/sdk_stage.py` TODO), so a libsys
+  object and an SDK app can see different declarations under one name.
+- [ ] [ENHANCEMENT][P2] Finish the Ninja build migration (`./configure` +
+  `BUILD.py`, `scripts/buildgen/`): port the remaining guest modules (C, C++,
+  Zig, Rust, Go, AssemblyScript), the WARP AOT host tool, ESP/initfs staging,
+  the host unit tests and quality gates, move QEMU run/test orchestration into
+  `scripts/`, add an `ARCH` Kconfig choice with per-arch toolchain profiles for
+  the arm64 port, then retire CMake and rewrite `skills/wasmos-build-and-run`
+  and `skills/wasmos-ide-targets`.
 - [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
   (`test_app_churn`: "run N: date produced no result"). Not a supervisor
   regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7

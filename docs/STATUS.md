@@ -644,6 +644,21 @@ linked feature documents for rationale and rollout plans.
   entry-arity rule in `architecture/13` *Language ABI*.
 - Developer checks: `fmt`, `fmt-check`, `lint`, and `quality` are CMake targets
   backed by `scripts/quality.sh`; only first-party source roots are in scope.
+- Ninja build (prototype, alongside CMake): `./configure <dir> <defconfig>`
+  seeds `<dir>/.config` once and generates `<dir>/build.ninja` from Kconfig plus
+  per-directory `BUILD.py` manifests (`scripts/buildgen/`); build.ninja then
+  regenerates itself when `.config`, a Kconfig file, a manifest, a globbed
+  directory or the generator changes. It currently covers the host packer, the
+  wasm32 SDK sysroot (`scripts/sdk_stage.py`), `chardev_client`, `kernel.elf`
+  (both runtimes) and `BOOTX64.EFI`, with per-object compiles and compiler
+  depfiles, and writes `compile_commands.json`. Verified against CMake on
+  2026-11-21: the wasm3 SMP `kernel.elf` is identical after `--strip-debug`, the
+  sysroot archives' members and `chardev_client.wasm` are byte-identical, and
+  both the wasm3 SMP and WARP SMP ninja kernels pass `run-qemu-test` from a
+  CMake-staged ESP. The WARP kernel differs from CMake's only in
+  `process_manager.cpp` (see the `[BUG]` in `TASKS.md`). Everything else (other
+  guest modules, ESP/initfs staging, run/test targets, host unit tests, quality
+  gates) is still CMake-only.
 
 ## Boot and Kernel
 

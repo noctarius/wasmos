@@ -1,6 +1,7 @@
-/* timer.h - Kernel timer abstraction backed by the PIT (WASMOS_IRQ_MODE 0) or
- * the LAPIC timer (modes 1 and 2).  Drives the scheduler tick and provides a
- * monotonic tick counter. */
+/* timer.h - Kernel timer abstraction: drives the scheduler tick and provides a
+ * monotonic tick counter. The tick hardware is the architecture's
+ * (arch/arch_timer.h; x86_64: the PIT in WASMOS_IRQ_MODE 0, the LAPIC timer in
+ * modes 1 and 2). */
 #ifndef WASMOS_TIMER_H
 #define WASMOS_TIMER_H
 

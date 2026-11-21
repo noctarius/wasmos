@@ -70,6 +70,7 @@ CORE = [
     "arch/x86_64/ioapic.c",
     "arch/x86_64/smp.c",
     "timer.c",
+    "arch/x86_64/timer_x86_64.c",
     "process_manager.cpp",
     "xfer_buffer/xfer_buffer.c",
     "warp_driver_ring3_call_policy.c",

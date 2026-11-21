@@ -1,17 +1,12 @@
-/* timer.c - scheduler clock.  Programs the i8253 PIT channel 0
- * (WASMOS_IRQ_MODE == 0) or the LAPIC periodic timer (WASMOS_IRQ_MODE >= 1) at a
- * configurable hz rate.  timer_handle_irq() is called from that timer's
- * interrupt handler: the IRQ 0 handler in PIT mode, the LAPIC timer vector
- * otherwise. */
+/* timer.c - scheduler clock bookkeeping: the monotonic tick counter, the
+ * requested rate and millisecond conversion. The tick hardware is programmed by
+ * the architecture (arch_timer_start), whose interrupt handler calls
+ * timer_handle_irq() once per tick. */
 #include "timer.h"
+#include "arch/arch_timer.h"
 #include "klog.h"
-#include "irq.h"
-#include "io.h"
-#include "serial.h"
 #include "process.h"
-#if WASMOS_IRQ_MODE >= 1
-#include "arch/x86_64/lapic.h"
-#endif
+#include "serial.h" /* trace_write */
 #if WASMOS_SMP
 #include "cpu_local.h"
 #endif
@@ -21,11 +16,6 @@
  * heavy scheduling decision stays outside the raw IRQ context.
  */
 
-#define PIT_CMD_PORT 0x43
-#define PIT_CH0_PORT 0x40
-#define PIT_CMD_SQUARE_WAVE 0x36
-#define PIT_BASE_HZ 1193182u
-
 static volatile uint64_t g_timer_ticks;
 static volatile uint8_t g_timer_log_pending;
 static uint64_t g_timer_log_threshold;
@@ -33,10 +23,9 @@ static uint32_t g_timer_hz = 250;
 
 /* hz is the requested tick rate; 0 is replaced by the 250 Hz default rather than
  * refused, because a zero rate would make timer_ms_to_ticks() answer 0 for every
- * duration and turn every timed wait into a busy retry.  In PIT mode the divisor
- * is clamped to 1..0xFFFF, so the achieved rate saturates at roughly 18.2 Hz
- * (divisor 0xFFFF) and PIT_BASE_HZ (divisor 1); g_timer_hz keeps the REQUESTED
- * value either way, so tick conversions drift if the clamp engages. */
+ * duration and turn every timed wait into a busy retry.  g_timer_hz keeps the
+ * REQUESTED value even where the hardware cannot achieve it exactly (see
+ * arch_timer_start), so tick conversions drift by that error. */
 void timer_init(uint32_t hz) {
     if (hz == 0) {
         hz = 250;
@@ -46,33 +35,12 @@ void timer_init(uint32_t hz) {
     g_timer_log_pending = 0;
     g_timer_log_threshold = 100;
 
-#if WASMOS_IRQ_MODE == 0
-    uint32_t divisor = PIT_BASE_HZ / hz;
-    if (divisor == 0) {
-        divisor = 1;
-    }
-    if (divisor > 0xFFFFu) {
-        divisor = 0xFFFFu;
-    }
-
-    outb(PIT_CMD_PORT, PIT_CMD_SQUARE_WAVE);
-    outb(PIT_CH0_PORT, (uint8_t)(divisor & 0xFFu));
-    outb(PIT_CH0_PORT, (uint8_t)((divisor >> 8) & 0xFFu));
-
-    irq_unmask(0);
-    klog_write("[timer] pit init\n");
-#else
-    /* LAPIC/IOAPIC mode: map the LAPIC MMIO, disable the 8259 PIC, and
-     * configure the LAPIC periodic timer.  This must happen after mm_init()
-     * so that paging_map_4k() can allocate the intermediate page table. */
-    lapic_init(hz);
-    klog_write("[timer] lapic timer active\n");
-#endif
+    arch_timer_start(hz);
 }
 
 void timer_handle_irq(void) {
 #if WASMOS_SMP
-    /* On SMP each AP runs its own LAPIC timer at the same frequency as the BSP.
+    /* On SMP each AP runs its own tick at the same frequency as the BSP.
      * Only the BSP (cpu_id == 0) advances g_timer_ticks so that the global
      * monotonic tick counter increases at the configured hz rate, not N*hz.
      * All CPUs still call process_tick() for their own scheduling quantum. */

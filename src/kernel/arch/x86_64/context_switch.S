@@ -34,8 +34,9 @@
 # set plus RIP/RSP/RFLAGS. It also carries CS/SS/user-RSP metadata so ring3
 # contexts can resume via iretq while ring0 contexts keep the ret fast path.
 #
-# Every displacement below indexes process_context_t (process.h), which pins the
-# layout with _Static_asserts: r15 at 0 through rax at 112, then rsp 120,
+# Every displacement below indexes process_context_t
+# (include/arch/x86_64/arch_context.h), which pins the layout with
+# _Static_asserts: r15 at 0 through rax at 112, then rsp 120,
 # rip 128, rflags 136, cs 144, ss 152, user_rsp 160, root_table 168.
 
 # context_switch(process_context_t *out, process_context_t *in)

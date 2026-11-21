@@ -8,6 +8,7 @@
 #include "cpu_local.h"
 #include "kpanic.h"
 #include "serial.h"
+#include "klog.h"
 #include "process.h"
 #include "memory_service.h"
 #include "irq.h"
@@ -856,6 +857,19 @@ void x86_cpu_relocate_tables_high(void) {
     __asm__ volatile("lgdt %0" : : "m"(gdtr) : "memory");
     __asm__ volatile("lidt %0" : : "m"(idtr) : "memory");
     __asm__ volatile("ltr %0" : : "r"(tss_selector) : "memory");
+}
+
+/* The invalid-trap-frame report's register lines; process_preempt_from_irq
+ * prints the report counter after them. */
+void arch_irq_frame_log(const irq_frame_t* frame) {
+    klog_write("[watchdog] trap frame invalid cs=");
+    serial_write_hex64(frame->cs);
+    klog_write("[watchdog] rip=");
+    serial_write_hex64(frame->rip);
+    klog_write("[watchdog] user_ss=");
+    serial_write_hex64(frame->user_ss);
+    klog_write("[watchdog] user_rsp=");
+    serial_write_hex64(frame->user_rsp);
 }
 
 /* ----------------------------------------------------------------- SMP init */

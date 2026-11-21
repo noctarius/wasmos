@@ -2967,8 +2967,8 @@ m3ApiRawFunction(wasmos_debug_mark) {
  * WASMOS_ERR_KERNEL_NO_CALLER when the caller or its root table cannot be resolved.
  *
  * The ring-3 gate means the verification does not run for a wasm3-hosted process, whose
- * context keeps KERNEL_CS.  WARP's counterpart verifies unconditionally instead, because
- * its guests reach CPL=3 without proc->ctx.cs ever being written. */
+ * context stays a kernel-mode context.  WARP's counterpart verifies unconditionally
+ * instead, because its guests reach CPL=3 without proc->ctx ever being set to user mode. */
 m3ApiRawFunction(wasmos_kmap_dump) {
     m3ApiReturnType(int32_t) process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
@@ -2979,7 +2979,7 @@ m3ApiRawFunction(wasmos_kmap_dump) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     paging_dump_user_root_kernel_mappings(root);
-    if ((proc->ctx.cs & 0x3u) == 0x3u) {
+    if (arch_context_is_user(&proc->ctx)) {
         m3ApiReturn(paging_verify_user_root_no_low_slot(root, 1) == 0
                         ? 0
                         : WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT);
@@ -3033,7 +3033,7 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
         dumped++;
 
         paging_dump_user_root_kernel_mappings(root);
-        if ((proc->ctx.cs & 0x3u) == 0x3u) {
+        if (arch_context_is_user(&proc->ctx)) {
             if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
                 failures++;
             }

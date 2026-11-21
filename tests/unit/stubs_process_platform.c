@@ -175,6 +175,11 @@ void klog_printf(const char* fmt, ...) {
 void serial_write_hex64(uint64_t v) {
     (void)v;
 }
+/* The invalid-trap-frame report's register lines (cpu_x86_64.c on target),
+ * discarded with the rest of the log. */
+void arch_irq_frame_log(const irq_frame_t* frame) {
+    (void)frame;
+}
 
 /* Per-context teardown hooks a reap fans out to. */
 void irq_release_context(uint32_t context_id) {

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "arch/arch_context.h"
 #include "sync/spinlock.h"
 #include "sched_event.h"
 #include "wasmos_app.h"
@@ -42,92 +43,6 @@
  * runtime build provides a no-op so common code can call them unconditionally. */
 void warp_release_pid(uint32_t pid);
 void wasm3_release_pid(uint32_t pid);
-
-/* Saved execution state of one thread, written and read by context_switch /
- * context_switch_to in arch/x86_64/context_switch.S. The assembly addresses
- * every field by hard-coded byte displacement, which is why the asserts below
- * pin the layout: reordering a field silently reinterprets registers.
- *
- * `rsp` is the ring-0 (kernel) stack pointer; `user_rsp` is the ring-3 one and
- * matters only when cs says ring 3, in which case the resume goes through iretq
- * rather than the ret fast path. `root_table` is the physical CR3 value loaded
- * for this context; 0 means "not yet resolved" and the dispatcher fills it in
- * from the owning mm context. */
-typedef struct {
-    uint64_t r15;
-    uint64_t r14;
-    uint64_t r13;
-    uint64_t r12;
-    uint64_t r11;
-    uint64_t r10;
-    uint64_t r9;
-    uint64_t r8;
-    uint64_t rdi;
-    uint64_t rsi;
-    uint64_t rbp;
-    uint64_t rdx;
-    uint64_t rcx;
-    uint64_t rbx;
-    uint64_t rax;
-    uint64_t rsp;
-    uint64_t rip;
-    uint64_t rflags;
-    uint64_t cs;
-    uint64_t ss;
-    uint64_t user_rsp;
-    uint64_t root_table;
-} process_context_t;
-
-_Static_assert(offsetof(process_context_t, r15) == 0, "process_context_t r15 offset mismatch");
-_Static_assert(offsetof(process_context_t, rdi) == 64, "process_context_t rdi offset mismatch");
-_Static_assert(offsetof(process_context_t, rsp) == 120, "process_context_t rsp offset mismatch");
-_Static_assert(offsetof(process_context_t, rip) == 128, "process_context_t rip offset mismatch");
-_Static_assert(offsetof(process_context_t, rflags) == 136,
-               "process_context_t rflags offset mismatch");
-_Static_assert(offsetof(process_context_t, cs) == 144, "process_context_t cs offset mismatch");
-_Static_assert(offsetof(process_context_t, ss) == 152, "process_context_t ss offset mismatch");
-_Static_assert(offsetof(process_context_t, user_rsp) == 160,
-               "process_context_t user_rsp offset mismatch");
-_Static_assert(offsetof(process_context_t, root_table) == 168,
-               "process_context_t root_table offset mismatch");
-
-/* The register block an interrupt stub builds on the kernel stack: the GPRs it
- * pushed, followed by the five words the CPU itself pushed (rip, cs, rflags,
- * and — only on a privilege change — user_rsp/user_ss). Layout is pinned by the
- * asserts below because cpu_isr.S builds it by hand.
- *
- * process_preempt_from_irq both reads this frame (to snapshot the interrupted
- * thread) and REWRITES rip/cs/user_rsp/user_ss in place to redirect the iretq
- * into the scheduler trampoline. user_rsp/user_ss carry meaningful values only
- * when (cs & 3) == 3; a ring-0 interrupt leaves them as whatever the stub
- * captured, which is why the preempt path declines kernel-mode frames. */
-typedef struct {
-    uint64_t r15;
-    uint64_t r14;
-    uint64_t r13;
-    uint64_t r12;
-    uint64_t r11;
-    uint64_t r10;
-    uint64_t r9;
-    uint64_t r8;
-    uint64_t rdi;
-    uint64_t rsi;
-    uint64_t rbp;
-    uint64_t rdx;
-    uint64_t rcx;
-    uint64_t rbx;
-    uint64_t rax;
-    uint64_t rip;
-    uint64_t cs;
-    uint64_t rflags;
-    uint64_t user_rsp;
-    uint64_t user_ss;
-} irq_frame_t;
-
-_Static_assert(offsetof(irq_frame_t, r15) == 0, "irq_frame_t r15 offset mismatch");
-_Static_assert(offsetof(irq_frame_t, rax) == 112, "irq_frame_t rax offset mismatch");
-_Static_assert(offsetof(irq_frame_t, rip) == 120, "irq_frame_t rip offset mismatch");
-_Static_assert(offsetof(irq_frame_t, user_rsp) == 144, "irq_frame_t user_rsp offset mismatch");
 
 /* Process-slot lifecycle. Every write to process_t::state goes through the CAS
  * in process.c's process_transit, which rejects any edge not listed here:

@@ -11,6 +11,21 @@
  *   uintptr_t arch_read_sp(void)   the caller's current stack pointer
  *   uintptr_t arch_read_pc(void)   an address inside the caller's code
  *
+ * Register state:
+ *   process_context_t   saved state of a thread; resumed by the arch context
+ *                       switch. Has a `root_table` field neutral code uses
+ *                       directly; everything else goes through accessors:
+ *                       arch_context_clear, _init_kernel_entry,
+ *                       _set_user_entry, _set_kernel_sp, _set_pc, _set_return,
+ *                       _pc, _kernel_sp, _flags, _mode, _is_user,
+ *                       _snapshot_callee_saved, _save_irq_frame.
+ *   irq_frame_t         register frame an interrupt stub builds; classified by
+ *                       arch_irq_frame_origin, logged by arch_irq_frame_log,
+ *                       redirected by arch_irq_frame_redirect_kernel.
+ *
+ * Accessors are static inline unless documented otherwise; their contracts are
+ * documented at the x86_64 implementation.
+ *
  * This header is the single selection point; x86_64 is the only target. */
 #pragma once
 

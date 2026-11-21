@@ -23,6 +23,7 @@
 #include "sched.h"
 #include "sched_event.h"
 #include "futex.h"
+#include "arch/arch_context.h"
 #include "arch/arch_cpu.h"
 #include "cpu_local.h"
 
@@ -321,17 +322,11 @@ static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_
     (void)stack_top;
     rc = entry(proc, thread->tid, thread->worker_arg);
 #else
-    __asm__ volatile("mov %%rsp, %%r15\n"
-                     "mov %[stack_top], %%rsp\n"
-                     "call *%[entry]\n"
-                     "mov %%r15, %%rsp\n"
-                     : "=a"(rc)
-                     : [stack_top] "r"(stack_top),
-                       [entry] "r"(entry),
-                       "D"(proc),
-                       "S"(thread->tid),
-                       "d"(thread->worker_arg)
-                     : "r15", "rcx", "r8", "r9", "r10", "r11", "memory", "cc");
+    rc = (process_run_result_t)(int32_t)arch_call_on_stack(stack_top,
+                                                           (arch_stack_fn_t)entry,
+                                                           addr_cast(uint64_t, proc),
+                                                           thread->tid,
+                                                           addr_cast(uint64_t, thread->worker_arg));
 #endif
     return rc;
 }
@@ -415,13 +410,7 @@ static int process_run_on_sched_stack(int (*fn)(void)) {
     (void)stack_top;
     rc = fn();
 #else
-    __asm__ volatile("mov %%rsp, %%r15\n"
-                     "mov %[stack_top], %%rsp\n"
-                     "call *%[fn]\n"
-                     "mov %%r15, %%rsp\n"
-                     : "=a"(rc)
-                     : [stack_top] "r"(stack_top), [fn] "r"(fn)
-                     : "r15", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory", "cc");
+    rc = (int32_t)arch_call_on_stack(stack_top, (arch_stack_fn_t)fn, 0, 0, 0);
 #endif
     return rc;
 }
@@ -2479,8 +2468,8 @@ int process_schedule_once(void) {
     here = (uintptr_t)higher_half_base;
     rsp_cur = (uintptr_t)higher_half_base;
 #else
-    __asm__ volatile("leaq 0f(%%rip), %0\n0:" : "=r"(here));
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp_cur));
+    here = arch_read_pc();
+    rsp_cur = arch_read_sp();
 #endif
     if ((uint64_t)here < higher_half_base) {
         uintptr_t high_fn = (uintptr_t)&process_schedule_once;

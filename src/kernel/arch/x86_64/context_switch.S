@@ -334,3 +334,26 @@ process_preempt_trampoline:
     call cpu_local_sched_ctx
     movq %rax, %rdi
     jmp context_switch_to
+
+.global arch_call_on_stack
+# arch_call_on_stack(stack_top, fn, a0, a1, a2) - see include/arch/arch_context.h.
+#
+# Entry: rdi = stack_top (16-byte aligned), rsi = fn, rdx/rcx/r8 = a0/a1/a2.
+# Calls fn(a0, a1, a2) with rsp = stack_top, then returns fn's rax on the
+# caller's stack. An ordinary SysV call on both sides, so every caller-saved
+# register (GPRs and vector registers alike) is clobbered exactly as the ABI
+# says and no inline-asm clobber list has to enumerate them. rbp anchors the
+# caller's stack across the call and keeps the frame-pointer chain intact for
+# panic backtraces; it is callee-saved, so fn preserves it.
+arch_call_on_stack:
+    pushq %rbp
+    movq %rsp, %rbp
+    movq %rdi, %rsp
+    movq %rsi, %rax
+    movq %rdx, %rdi
+    movq %rcx, %rsi
+    movq %r8, %rdx
+    call *%rax
+    movq %rbp, %rsp
+    popq %rbp
+    ret

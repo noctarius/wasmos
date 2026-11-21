@@ -11,6 +11,7 @@
 #include "list.h"
 #include "sync/spinlock.h"
 #include "string.h"
+#include "arch/arch_context.h"
 #include "cpu_local.h"
 
 #define PAGE_SIZE 0x1000ULL
@@ -857,26 +858,16 @@ static int mm_run_on_copy_stack(mm_copy_work_fn fn, void* arg) {
         return -1;
     }
 
-    uint64_t rsp = 0;
     uint64_t higher_half_base = paging_get_higher_half_base();
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-    if (rsp >= higher_half_base) {
+    if (arch_read_sp() >= higher_half_base) {
         return fn(arg);
     }
 
     uintptr_t stack_top = mm_kernel_alias_addr(
         (uintptr_t)&g_mm_copy_stacks[cpu_local()->cpu_id][MM_COPY_STACK_BYTES]);
     stack_top &= ~(uintptr_t)0xFULL;
-    int rc = -1;
-    __asm__ volatile("mov %%rsp, %%r15\n"
-                     "mov %[stack_top], %%rsp\n"
-                     "mov %[arg], %%rdi\n"
-                     "call *%[fn]\n"
-                     "mov %%r15, %%rsp\n"
-                     : "=a"(rc)
-                     : [stack_top] "r"(stack_top), [fn] "r"(fn), [arg] "r"(arg)
-                     : "r15", "rdi", "rcx", "rdx", "rsi", "r8", "r9", "r10", "memory", "cc");
-    return rc;
+    return (int32_t)arch_call_on_stack(
+        stack_top, (arch_stack_fn_t)fn, addr_cast(uint64_t, arg), 0, 0);
 }
 
 static int mm_copy_from_user_impl(void* opaque) {

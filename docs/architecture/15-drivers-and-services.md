@@ -575,7 +575,7 @@ line, in a descriptor the submitter owns and lends READ:
 
 ```
 <unit> <path> [restart=never|on-failure|always] [class=optional|required|critical]
-              [tty=<slot>] [probe=<seconds>] [-- <args>]
+              [tty=<slot>] [probe=<seconds>] [parent=<unit>] [-- <args>]
 ```
 
 `<path>` is absolute, or `module:<app name>` for a boot module, which takes no
@@ -605,7 +605,8 @@ spawn-due -> spawning -> starting --READY--> running --stable--> stable
                                                                         stopped | failed
 ```
 
-and `stopping` once the supervisor has killed it. The policy
+and `stopping` once the supervisor has killed it; `degraded` holds a unit
+whose parent will not run again (below). The policy
 (`supervisor_unit.c`, host-tested) is plain data and decides every transition:
 
 - **Failure** is any end other than a clean exit with status 0, judged by the
@@ -623,6 +624,27 @@ and `stopping` once the supervisor has killed it. The policy
   last end. A stable run does not wipe the window; old ends age out of it.
 - Every number is multiplied by kenv `supervisor.timescale` (1-100), which
   slow configurations raise instead of tuning each timeout.
+
+**Parent links.** `parent=<unit>` binds a unit to a unit already held, for a
+unit whose state cannot outlive its parent's instance -- state derived from
+the parent that a new instance does not honour. When the parent's instance
+ends and another follows (a restart), the child's running instance is killed
+and respawned at once, without a backoff; when the parent stops or gives up,
+the child is stopped and held `degraded` instead of restarting in a loop
+behind it, and a unit submitted under a parent that is down starts degraded.
+Neither end counts against the child's restart limit -- the failure was the
+parent's -- and each travels one level per end: a child's own end tells its
+children. A child waiting to be spawned is not held back while its parent
+restarts: start order is still not a correctness property (doc 03, invariant
+5), and the link governs lifetime, not order. A `critical` child stopped this
+way ends the system like any end of it, so a chain is critical from the first
+critical link down.
+
+The link is the exception. A client that can rebind to a restarted provider
+-- find it again by name, resend what was in flight -- survives the restart
+with its sessions intact, and needs no parent; only a client that cannot is
+bound. The links form a forest: a parent must be held when its child is
+admitted (`WASMOS_ERR_SUPERVISOR_NO_PARENT` otherwise) and names are unique.
 
 **Liveness.** A unit opts in by naming its event-loop endpoint in its READY
 (`PROC_READY_FLAG_LIVENESS`). The supervisor sends `WASMOS_IPC_HEALTH_REQ` to it
@@ -653,10 +675,14 @@ shell printed a prompt", is what the test harness waits for.
 **Operator view.** `SUPERVISOR_IPC_LIST_REQ` writes one
 `wasmos_supervisor_unit_record_t` per unit into a buffer the caller owns.
 `SUPERVISOR_IPC_KILL_REQ` kills a unit's running instance by name; the end is
-a failure and the policy applies. The `svc` utility wraps them: `svc submit
-<spec>`, `svc list`, `svc status <unit>`, `svc kill <unit>`.
+a failure and the policy applies. `SUPERVISOR_IPC_RETRACT_REQ` withdraws a unit
+and every unit bound to it: their instances are killed, none is restarted, no
+end is a failure, and each slot is freed when its instance has ended. A tree
+holding a `critical` unit is refused whole (`WASMOS_ERR_SUPERVISOR_CRITICAL`).
+The `svc` utility wraps them: `svc submit <spec>`, `svc list`, `svc status
+<unit>`, `svc kill <unit>`, `svc retract <unit>`.
 
-**Access.** Submitting, killing and declaring the boot set require the
+**Access.** Submitting, killing, retracting and declaring the boot set require the
 sender to hold `svc.control` (sysinit, device-manager, `svc`); listing is open.
 A submission that carries a capability descriptor also requires `spawn.grant`,
 because the grants reach the process manager as the supervisor's own watched
@@ -711,10 +737,11 @@ exit with the compositor and are not started again.
 | `SUPERVISOR_IPC_LIST_REQ` | `0x1001` | Write the unit table into the caller's buffer |
 | `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` | `0x1002` | The boot set is complete |
 | `SUPERVISOR_IPC_KILL_REQ` | `0x1003` | Kill a unit's instance; its end is a failure |
+| `SUPERVISOR_IPC_RETRACT_REQ` | `0x1004` | Withdraw a unit and the units bound to it; nothing is restarted |
 
-Not built: operator stop/start/restart that does not count as a failure;
-retraction of a submitter's units when it dies; restart cascade along `[deps]`
-`needs`; liveness for the boot services; supervising the DMA drivers whose
+Not built: operator stop/start/restart that does not count as a failure (a
+degraded unit stays degraded until then); retraction of a submitter's units
+when it dies; liveness for the boot services; supervising the DMA drivers whose
 clients hold state a restart loses (virtio-blk, ata, virtio-net); a guard
 against reboot loops under `on_critical=reboot`. They are tracked in `docs/TASKS.md`.
 

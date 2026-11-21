@@ -311,8 +311,10 @@ export const WASMOS_ERR_SUPERVISOR_NO_SPACE: i32 = -0x001A0004; // the superviso
 export const WASMOS_ERR_SUPERVISOR_DMA_CAPS: i32 = -0x001A0005; // the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance
 export const WASMOS_ERR_SUPERVISOR_NO_UNIT: i32 = -0x001A0006; // no unit of the name the request gives is recorded
 export const WASMOS_ERR_SUPERVISOR_NOT_RUNNING: i32 = -0x001A0007; // the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed
-export const WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: i32 = -0x001A0008; // the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require
+export const WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: i32 = -0x001A0008; // the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require
 export const WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: i32 = -0x001A0009; // the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself
+export const WASMOS_ERR_SUPERVISOR_NO_PARENT: i32 = -0x001A000A; // the submission names a parent= unit that is not recorded, or that is being retracted
+export const WASMOS_ERR_SUPERVISOR_CRITICAL: i32 = -0x001A000B; // the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system
 
 export function errMake(dom: u16, code: u16): i32 {
   return -(<i32>(((<u32>dom) << 16) | (<u32>code)));
@@ -635,8 +637,10 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_SUPERVISOR_DMA_CAPS: return "the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance";
     case WASMOS_ERR_SUPERVISOR_NO_UNIT: return "no unit of the name the request gives is recorded";
     case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed";
-    case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require";
+    case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require";
     case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: return "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself";
+    case WASMOS_ERR_SUPERVISOR_NO_PARENT: return "the submission names a parent= unit that is not recorded, or that is being retracted";
+    case WASMOS_ERR_SUPERVISOR_CRITICAL: return "the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system";
     default: return "unknown error";
   }
 }

@@ -683,19 +683,22 @@ Source: `architecture/13-runtime-and-packaging.md`,
   when it dies its device may keep mastering into frames the reap recycles.
   Spawning those drivers through a descriptor form -- or as supervised units
   (H5) -- closes it (`device_manager.c`, the TODO at the direct spawn).
-- [ ] [FEATURE][P1] Supervise the storage and network chains, restarting a
-  chain as a whole. Decided: the `/boot` volume's block driver and fs-fat are
-  `critical` (their end is named and halts, like fs-manager); every other
-  block driver, filesystem backend and virtio-net is `required` and restarted.
-  A block driver restarted alone helps nothing -- the filesystem backend above
-  it keeps its mount bound to the dead endpoint, and applications keep file
-  descriptors into the backend -- so a restart restarts the chain: the block
-  driver, then each backend mounted on it (re-mounted when device-manager sees
-  the volume again), with clients seeing their open files fail. Needs: restart
-  along `[deps] needs` (F4), device-manager re-matching a re-added device and
-  volume, fs-manager's mounts as supervised units (fs-fat is spawned by
-  fs-manager's mount path, not by the supervisor), and net-stack's behaviour
-  when virtio-net restarts under its sockets.
+- [ ] [FEATURE][P1] Supervise the storage and network chains. Decided: clients
+  REBIND to a restarted driver where they can, so a restart costs a delay, not
+  the open files or sockets above it; `parent=` (the supervisor's restart
+  cascade) is only for a client that cannot. A block driver's restart leaves the
+  disk's content unchanged and a lost request is idempotent per LBA, and a NIC's
+  leaves its MAC unchanged and a lost frame is packet loss, so both can be
+  rebound. Steps: partition-manager and volume-manager hold a disk's requests
+  across its REMOVE and resend them to the new endpoint on its ADD (both ignore
+  REMOVE today, and drop a returning disk as `diskKnown`); fs-fat and fs-wfs on a
+  whole disk do the same; the virtio-blk and ata rules get `ENV{RESTART}`;
+  fs-manager's `forward_request` awaits the backend's hangup instead of hanging,
+  and fs-manager submits its backends as supervised units (unmount through
+  `SUPERVISOR_IPC_RETRACT_REQ`); net-stack keeps the netif and its sockets across
+  virtio-net's REMOVE and rebinds on ADD. The `/boot` volume's block driver and
+  fs-fat stay `critical` until the block rebind is proven, then become
+  `required`.
 - [ ] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
   interrupts and DMA back. The quiesce sets INTx Disable and clears Bus Master
   Enable, and pci-bus turns them back only through an MSI bind
@@ -706,12 +709,26 @@ Source: `architecture/13-runtime-and-packaging.md`,
   without a restart and without counting it; a start or restart must clear a
   `failed` unit and its intensity window, so an operator can bring back a unit
   that gave up.
-- [ ] [FEATURE][P2] Tie a unit's lifetime to its submitter: retract a submitter's
-  units when it dies, and device-manager's when the device goes away (a
-  retraction is a stop, not a failure). Then carry `parent=<instance>` in a
-  submission, restart or notify dependents along `[deps]` `needs` when a unit
-  restarts, and mark the dependents of a `required` unit that gave up as
-  degraded rather than restarting them in a loop behind it.
+- [ ] [TEST][P3] QEMU itself crashed once in CI: SIGSEGV in
+  `address_space_translate_for_iotlb` under MTTCG, run 44799393421, battery
+  `filesystem` on `warp_smp` (artifact `qemu-crash-filesystem-warp_smp`, with the
+  symbolized core). The rerun passed and it has not recurred. A crash inside
+  QEMU's softmmu TLB fill is QEMU's, not the guest's, unless the guest left a
+  page table pointing at an unbacked MMIO region; if it recurs, check the
+  faulting guest address in the core against the guest's last mappings before
+  filing it upstream.
+- [ ] [FEATURE][P3] Tie a unit's lifetime to its submitter, and device-manager's
+  units to their device. The mechanism exists: `SUPERVISOR_IPC_RETRACT_REQ`
+  withdraws a unit and its `parent=` subtree without a failure. Nothing calls
+  it on a submitter's death, because no submitter in the tree would use it:
+  sysinit exits cleanly after submitting (its units must outlive it), and
+  device-manager and fs-manager are critical, so their death ends the system.
+  It becomes needed with the first restartable submitter (an `svc.control`
+  holder that is not critical); the supervisor would record the submitter's
+  source endpoint per unit and await its hangup (`ipc_peer_await`). Device
+  removal has no trigger either: no hotplug, and
+  `DEVMGR_UNPUBLISH_BLOCK_DEVICE` only retires partition records. Wire the
+  retraction there when a removal path exists.
 - [ ] [ENHANCEMENT][P2] Defer an `ENV{RESTART}` rule until the supervisor is bound
   instead of spawning the driver directly and unsupervised
   (`src/services/device_manager/device_manager.c:3439` `TODO`). The supervisor is

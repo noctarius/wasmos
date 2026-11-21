@@ -327,9 +327,19 @@ linked feature documents for rationale and rollout plans.
   powers off, or reboots under kenv `supervisor.on_critical=reboot` (no
   reboot-loop guard yet). `SUPERVISOR_IPC_LIST_REQ` reports the table, one
   `wasmos_supervisor_unit_record_t` per unit, into a buffer the caller owns and
-  lends READ|WRITE (layout version 2, with the liveness fields). All times scale
-  by kenv `supervisor.timescale` (1-100, default 1). The policy is
-  `supervisor_unit.c`, host-tested in `test_supervisor_unit`.
+  lends READ|WRITE (layout version 3, with the liveness fields and the parent).
+  All times scale by kenv `supervisor.timescale` (1-100, default 1). The policy
+  is `supervisor_unit.c`, host-tested in `test_supervisor_unit`.
+- Parent links and retraction: a spec's `parent=<unit>` binds a unit to a unit
+  already held. A parent's restart kills and respawns the child at once
+  (`[supervisor] <child> stopping: its parent <p> restarts`, then `... ended
+  for its parent ...; restart N now`); a parent that stops or gives up holds
+  the child `degraded`. Neither counts against the child; a critical child so
+  stopped halts the system. `SUPERVISOR_IPC_RETRACT_REQ` (`svc retract`)
+  withdraws a unit and its subtree without a restart or a failure, refused for
+  a tree holding a critical unit. No in-tree unit sets `parent=` yet: the
+  storage and network clients are to rebind to a restarted driver instead
+  (`tests/test_supervisor.py` covers the mechanism with `sv_probe stay`).
 - Liveness: a unit whose `PROC_IPC_NOTIFY_READY` carries
   `PROC_READY_FLAG_LIVENESS` names its event-loop endpoint in arg0; the PM
   records it only when the sender owns it and passes it on in

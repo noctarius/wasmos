@@ -12,6 +12,7 @@
  *   busy        run an event loop that opts in to liveness probes and burn
  *               the CPU in SV_PROBE_BUSY_CHUNK_MS chunks between polls for
  *               SV_PROBE_BUSY_FOR_MS, then idle
+ *   stay        send READY, log "up", and stay up
  *   entropy     find "virtio-rng" by name watch, ask it for SV_PROBE_ENTROPY_BYTES
  *               (filled by the device's DMA), log "entropy ok" or "entropy
  *               failed <status>", and exit
@@ -159,7 +160,7 @@ int main(void) {
     (void)wasmos_startup_args(args, sizeof(args));
     tag = strchr(args, ' ');
     if (!tag) {
-        probe_log("?", "usage: sv_probe <crash|crash-once|hang-once|busy|entropy> <tag>");
+        probe_log("?", "usage: sv_probe <crash|crash-once|hang-once|busy|stay|entropy> <tag>");
         return 2;
     }
     *tag++ = '\0';
@@ -225,6 +226,11 @@ int main(void) {
         for (;;) {
             (void)wasmos_sys_event_loop_poll(&g_loop, 8);
         }
+    }
+    if (strcmp(args, "stay") == 0) {
+        probe_ready();
+        probe_log(tag, "up");
+        wasmos_sys_ipc_recv_loop();
     }
     if (strcmp(args, "entropy") == 0) {
         int32_t rc = probe_entropy();

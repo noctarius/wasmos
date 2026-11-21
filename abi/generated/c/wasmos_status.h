@@ -332,8 +332,10 @@ enum {
     WASMOS_ERR_SUPERVISOR_DMA_CAPS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 5), /* the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance */
     WASMOS_ERR_SUPERVISOR_NO_UNIT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 6), /* no unit of the name the request gives is recorded */
     WASMOS_ERR_SUPERVISOR_NOT_RUNNING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 7), /* the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed */
-    WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 8), /* the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require */
+    WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 8), /* the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require */
     WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 9), /* the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself */
+    WASMOS_ERR_SUPERVISOR_NO_PARENT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 10), /* the submission names a parent= unit that is not recorded, or that is being retracted */
+    WASMOS_ERR_SUPERVISOR_CRITICAL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 11), /* the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -674,6 +676,8 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "supervisor.NOT_RUNNING";
     case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "supervisor.NOT_AUTHORIZED";
     case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: return "supervisor.GRANT_NOT_AUTHORIZED";
+    case WASMOS_ERR_SUPERVISOR_NO_PARENT: return "supervisor.NO_PARENT";
+    case WASMOS_ERR_SUPERVISOR_CRITICAL: return "supervisor.CRITICAL";
     default: return "unknown";
     }
 }
@@ -945,8 +949,10 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_DMA_CAPS: return "the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance";
     case WASMOS_ERR_SUPERVISOR_NO_UNIT: return "no unit of the name the request gives is recorded";
     case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed";
-    case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require";
+    case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require";
     case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: return "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself";
+    case WASMOS_ERR_SUPERVISOR_NO_PARENT: return "the submission names a parent= unit that is not recorded, or that is being retracted";
+    case WASMOS_ERR_SUPERVISOR_CRITICAL: return "the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system";
     default: return "unknown error";
     }
 }

@@ -27,6 +27,17 @@ def _syslog_wait(session, needle: str, timeout_s: float) -> str:
     return ""
 
 
+def _syslog_wait_count(session, needle: str, count: int, timeout_s: float) -> str:
+    """The COM2 kernel log once `needle` occurs `count` times, or ''."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        log = session.syslog_tail(1 << 20)
+        if log.count(needle) >= count:
+            return log
+        time.sleep(0.25)
+    return ""
+
+
 def _svc(test, session, args: str) -> str:
     """Runs `svc <args>` and returns what it printed before the next prompt."""
     start = session.send_command(f"svc {args}", timeout_s=20)
@@ -244,6 +255,106 @@ class SupervisorTests(unittest.TestCase):
         self.assertGreaterEqual(
             int(answered.group(1)), 5, f"too few probes answered while busy:\n{out}"
         )
+
+    def test_8a_a_child_follows_its_restarted_parent(self):
+        """parent= binds a unit to its parent's instance: a new parent instance
+        means a new child instance, and the child's restart budget is not spent
+        on its parent's ends. Retracting the parent takes the child with it."""
+        _submit(self, self.session, f"sv-par {PROBE} restart=always -- stay sv-par")
+        _submit(self, self.session, f"sv-kid {PROBE} parent=sv-par -- stay sv-kid")
+        for tag in ("sv-par", "sv-kid"):
+            self.assertTrue(
+                _syslog_wait(self.session, f"[sv-probe] {tag} up", 30),
+                f"{tag} did not come up.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        out = _svc(self, self.session, "status sv-kid")
+        self.assertIn("parent=sv-par", out)
+
+        _svc(self, self.session, "kill sv-par")
+        steps = [
+            "[supervisor] sv-par ended (killed",
+            "[supervisor] sv-kid stopping: its parent sv-par restarts; killing pid",
+            "[supervisor] sv-kid ended for its parent (killed",
+        ]
+        log = _syslog_wait(self.session, steps[-1], 30)
+        self.assertTrue(
+            log,
+            "the child was not stopped with its parent.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        at = [log.find(step) for step in steps]
+        self.assertNotIn(-1, at, f"a step is missing: {dict(zip(steps, at))}")
+        self.assertEqual(at, sorted(at), f"out of order: {dict(zip(steps, at))}")
+        for tag in ("sv-par", "sv-kid"):
+            self.assertTrue(
+                _syslog_wait_count(self.session, f"[sv-probe] {tag} up", 2, 30),
+                f"{tag} did not come back.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        rows = _list_rows(self, self.session)
+        self.assertIn(rows["sv-kid"][0], ("starting", "running", "stable"))
+        self.assertEqual(
+            rows["sv-kid"][2], "1", f"the child's restarts: {rows['sv-kid']}"
+        )
+        self.assertNotIn("sv-kid failed", self.session.syslog_tail(1 << 20))
+
+        out = _svc(self, self.session, "retract sv-par")
+        self.assertRegex(out, r"svc: retracting sv-par \(pid [1-9][0-9]*\)")
+        # The line after the instance's end, not the one announcing the kill.
+        self.assertTrue(
+            _syslog_wait(self.session, "[supervisor] sv-par retracted\n", 30)
+            or _syslog_wait(self.session, "[supervisor] sv-par retracted\r\n", 1),
+            f"the parent was not freed.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        log = self.session.syslog_tail(1 << 20)
+        self.assertIn("[supervisor] sv-kid retracted", log)
+        rows = _list_rows(self, self.session)
+        self.assertNotIn("sv-par", rows)
+        self.assertNotIn("sv-kid", rows)
+        # Retraction is not a failure, so nothing was restarted for it.
+        self.assertEqual(log.count("[sv-probe] sv-par up"), 2)
+
+    def test_8b_a_child_of_a_parent_that_gave_up_is_degraded(self):
+        _submit(self, self.session, f"sv-lone {PROBE} restart=never -- stay sv-lone")
+        _submit(self, self.session, f"sv-dep {PROBE} parent=sv-lone -- stay sv-dep")
+        self.assertTrue(
+            _syslog_wait(self.session, "[sv-probe] sv-dep up", 30),
+            f"sv-dep did not come up.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        _svc(self, self.session, "kill sv-lone")
+        log = _syslog_wait(
+            self.session, "[supervisor] sv-dep degraded: its parent sv-lone is down", 30
+        )
+        self.assertTrue(
+            log,
+            "the child of a parent that gave up was not degraded.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertIn("[supervisor] sv-lone failed (killed", log)
+        rows = _list_rows(self, self.session)
+        self.assertEqual(rows["sv-lone"][0], "failed")
+        self.assertEqual(rows["sv-dep"][0], "degraded")
+        self.assertEqual(
+            log.count("[sv-probe] sv-dep up"), 1, "a degraded child is not respawned"
+        )
+
+        # A unit submitted under a parent that is down is held, not spawned.
+        _submit(self, self.session, f"sv-late {PROBE} parent=sv-lone -- stay sv-late")
+        self.assertEqual(_list_rows(self, self.session)["sv-late"][0], "degraded")
+        out = _svc(
+            self, self.session, f"submit sv-orphan {PROBE} parent=nobody -- stay x"
+        )
+        self.assertIn("svc: no parent unit of that name", out)
+
+        out = _svc(self, self.session, "retract sv-lone")
+        self.assertIn("svc: sv-lone retracted", out)
+        rows = _list_rows(self, self.session)
+        for unit in ("sv-lone", "sv-dep", "sv-late"):
+            self.assertNotIn(unit, rows)
+        self.assertNotIn("[sv-probe] sv-late up", self.session.syslog_tail(1 << 20))
+
+        out = _svc(self, self.session, "retract fs-manager")
+        self.assertIn("svc: a critical unit cannot be retracted", out)
+        self.assertIn("fs-manager", _list_rows(self, self.session))
 
     def test_9_a_killed_driver_is_restarted_and_serves_again(self):
         # device-manager hands rtc to the supervisor (default.rules,

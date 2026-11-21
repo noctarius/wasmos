@@ -519,7 +519,7 @@ enum {
 };
 
 /* Version of wasmos_supervisor_unit_desc_t, the record that names one unit
- * in a request about it (SUPERVISOR_IPC_KILL_REQ), declared in
+ * in a request about it (SUPERVISOR_IPC_KILL_REQ, SUPERVISOR_IPC_RETRACT_REQ), declared in
  * src/drivers/include/wasmos_driver_abi.h.
  *
  * A reader MUST reject a descriptor whose version it does not know.
@@ -537,8 +537,8 @@ enum {
  * A reader MUST reject a descriptor whose version it does not know.
  */
 enum {
-    /* Current wasmos_supervisor_list_desc_t and record layout. */
-    SUPERVISOR_LIST_DESC_VERSION = 2,
+    /* Current wasmos_supervisor_list_desc_t and record layout (3: parent). */
+    SUPERVISOR_LIST_DESC_VERSION = 3,
     /* Units the supervisor's table holds: a list sized for this many records is never short. */
     SUPERVISOR_UNITS_MAX = 32,
 };
@@ -557,12 +557,14 @@ enum {
     SUPERVISOR_UNIT_STATE_RUNNING = 4,
     /* READY and up long enough that its restart backoff was reset. */
     SUPERVISOR_UNIT_STATE_STABLE = 5,
-    /* Killed by the supervisor for missing READY or its liveness probes; its exit is due. */
+    /* Killed by the supervisor -- for missing READY or its liveness probes, on request, for its parent, or retracted; its exit is due. */
     SUPERVISOR_UNIT_STATE_STOPPING = 6,
     /* Ended and, by its restart policy, not restarted. */
     SUPERVISOR_UNIT_STATE_STOPPED = 7,
     /* Given up on: the restart limit tripped, or a critical unit died. */
     SUPERVISOR_UNIT_STATE_FAILED = 8,
+    /* Held stopped because its parent= unit stopped, failed or is itself degraded. */
+    SUPERVISOR_UNIT_STATE_DEGRADED = 9,
 };
 
 /* The restart= policy of a supervised unit. */

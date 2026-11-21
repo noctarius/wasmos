@@ -64,7 +64,25 @@ typedef enum {
     SV_UNIT_STOPPED = SUPERVISOR_UNIT_STATE_STOPPED,
     /* given up on: restart limit reached, or a critical unit died */
     SV_UNIT_FAILED = SUPERVISOR_UNIT_STATE_FAILED,
+    /* held stopped because its parent stopped or was given up on */
+    SV_UNIT_DEGRADED = SUPERVISOR_UNIT_STATE_DEGRADED,
 } sv_state_t;
+
+/* Why the supervisor is ending a unit's instance for a reason other than the
+ * instance's own failure. Ordered: a later reason overrides an earlier one
+ * still pending, never the reverse. None of them counts against the unit. */
+typedef enum {
+    SV_STOP_NONE = 0,
+    SV_STOP_FOLLOW,  /* its parent ended and restarts: respawn at once */
+    SV_STOP_DEGRADE, /* its parent will not run again: hold it DEGRADED */
+    SV_STOP_RETRACT, /* withdrawn (SUPERVISOR_IPC_RETRACT_REQ): free the slot */
+} sv_stop_t;
+
+/* What happened to a unit's parent, as its children are told. */
+typedef enum {
+    SV_PARENT_RESTARTING = 0, /* its instance ended and another one follows */
+    SV_PARENT_GONE,           /* it stopped, failed or is degraded: no instance follows */
+} sv_parent_event_t;
 
 /* Policy numbers, in milliseconds; supervisor.c scales them. */
 typedef struct {
@@ -87,6 +105,11 @@ typedef struct {
     char name[SV_UNIT_NAME_MAX];
     char path[SV_PATH_MAX];
     char args[SV_ARGS_MAX];
+    /* The unit this one is bound to (spec parent=), empty when none. The
+     * parent was held when this unit was admitted, and a parent outlives its
+     * children: retracting it retracts them first. */
+    char parent[SV_UNIT_NAME_MAX];
+    sv_stop_t stop;                    /* pending stop of the instance, if any */
     uint32_t caps_len;                 /* 0 = no hardware access */
     uint8_t caps[SUPERVISOR_CAPS_MAX]; /* wasmos_spawn_caps_v2_t + region grants */
     uint32_t pid;                      /* the running instance; 0 when none */
@@ -113,19 +136,23 @@ typedef struct {
 /* What the caller does next. */
 typedef enum {
     SV_VERDICT_NONE = 0,
-    SV_VERDICT_SPAWN,    /* spawn the unit now */
-    SV_VERDICT_KILL,     /* kill `pid`: it missed its READY deadline */
-    SV_VERDICT_PROBE,    /* send a liveness probe to `probe_ep`, then sv_unit_probe_sent */
-    SV_VERDICT_HUNG,     /* kill `pid`: it missed probe_misses_max probes in a row */
-    SV_VERDICT_RESTART,  /* scheduled: spawn due at `deadline` */
-    SV_VERDICT_STOPPED,  /* ended for good by its policy; not a failure */
-    SV_VERDICT_FAILED,   /* given up on: log it once */
-    SV_VERDICT_CRITICAL, /* a critical unit ended: the system goes down */
+    SV_VERDICT_SPAWN,     /* spawn the unit now */
+    SV_VERDICT_KILL,      /* kill `pid`: it missed its READY deadline */
+    SV_VERDICT_PROBE,     /* send a liveness probe to `probe_ep`, then sv_unit_probe_sent */
+    SV_VERDICT_HUNG,      /* kill `pid`: it missed probe_misses_max probes in a row */
+    SV_VERDICT_RESTART,   /* scheduled: spawn due at `deadline` */
+    SV_VERDICT_STOPPED,   /* ended for good by its policy; not a failure */
+    SV_VERDICT_FAILED,    /* given up on: log it once */
+    SV_VERDICT_CRITICAL,  /* a critical unit ended: the system goes down */
+    SV_VERDICT_CASCADE,   /* kill `pid` for `stop`; its end is not counted against it */
+    SV_VERDICT_FOLLOW,    /* stopped for its parent's restart: spawn due now, not counted */
+    SV_VERDICT_DEGRADED,  /* held DEGRADED until its parent runs again */
+    SV_VERDICT_RETRACTED, /* withdrawn: the slot is FREE, the name still readable */
 } sv_verdict_t;
 
 /* Parses a SUPERVISOR_IPC_SUBMIT_REQ spec into a fresh unit in state
  * SV_UNIT_SPAWN_DUE, due at `now`. Defaults: restart=on-failure,
- * class=optional, no tty pin, the default probe period, no args. The path is
+ * class=optional, no tty pin, the default probe period, no parent, no args. The path is
  * absolute, or SV_MODULE_PREFIX and a boot module's app name, which takes no
  * args and no tty pin. Returns 0, or WASMOS_ERR_SUPERVISOR_BAD_SPEC with *out
  * unchanged. */
@@ -147,8 +174,11 @@ int32_t sv_unit_set_caps(sv_unit_t* unit, const uint8_t* caps, uint32_t len);
 /* The spawn request was sent. */
 void sv_unit_spawn_sent(sv_unit_t* unit);
 
-/* The spawn succeeded with `pid`; READY is due within ready_timeout_ms. */
-void sv_unit_spawned(sv_unit_t* unit, const sv_timing_t* timing, uint32_t pid, uint32_t now);
+/* The spawn succeeded with `pid`; READY is due within ready_timeout_ms. A stop
+ * that became pending while the spawn was in flight applies to the new
+ * instance at once: CASCADE, and the unit moves to STOPPING. NONE otherwise. */
+sv_verdict_t sv_unit_spawned(sv_unit_t* unit, const sv_timing_t* timing, uint32_t pid,
+                             uint32_t now);
 
 /* The spawn was refused with packed `code`: an exit that never started. */
 sv_verdict_t sv_unit_spawn_failed(sv_unit_t* unit, const sv_timing_t* timing, int32_t code,
@@ -169,6 +199,31 @@ sv_verdict_t sv_unit_exited(sv_unit_t* unit, const sv_timing_t* timing, int32_t 
  * the instance's end is then a failure, as for a missed READY. Returns 0, or
  * WASMOS_ERR_SUPERVISOR_NOT_RUNNING with the unit unchanged. */
 int32_t sv_unit_kill(sv_unit_t* unit);
+
+/* The unit's parent restarts or is gone (sv_verdict_parent_event). A running
+ * instance moves to STOPPING with the matching stop pending, and the caller
+ * kills `pid` (CASCADE); an instance being spawned or killed gets the stop
+ * pending and is settled when the spawn answers or the instance ends. A unit
+ * waiting to be spawned is left due when the parent restarts -- start order
+ * is not a correctness property (docs/architecture/03, invariant 5) -- and
+ * becomes DEGRADED when it is gone. A critical unit stopped this way ends the
+ * system as any end of it does (CRITICAL). Stopped, failed and degraded units
+ * are left as they are. */
+sv_verdict_t sv_unit_parent_event(sv_unit_t* unit, const sv_timing_t* timing,
+                                  sv_parent_event_t event, uint32_t now);
+
+/* Withdraws the unit (SUPERVISOR_IPC_RETRACT_REQ). A unit without an instance
+ * is freed at once (*verdict RETRACTED); a running one moves to STOPPING and
+ * the caller kills `pid` (CASCADE); one being spawned or killed is freed when
+ * that settles. Returns 0, WASMOS_ERR_SUPERVISOR_NO_UNIT for a free slot, or
+ * WASMOS_ERR_SUPERVISOR_CRITICAL for a critical unit, which is left
+ * unchanged. The caller retracts the unit's children
+ * first (sv_units_subtree_critical refuses the whole tree up front). */
+int32_t sv_unit_retract(sv_unit_t* unit, sv_verdict_t* verdict);
+
+/* What a unit's verdict means to its children: 1 with *event set when they
+ * are told (sv_unit_parent_event), 0 when the verdict leaves them alone. */
+int sv_verdict_parent_event(sv_verdict_t verdict, sv_parent_event_t* event);
 
 /* Runs the unit's deadline if it has passed: a due spawn (SPAWN), a missed
  * READY (KILL, the unit moves to STOPPING), or a run that became stable (the
@@ -212,6 +267,21 @@ int sv_exit_is_failure(int32_t status, uint32_t reason);
 uint32_t sv_units_list(const sv_unit_t* units, uint32_t n, const sv_timing_t* timing,
                        wasmos_supervisor_unit_record_t* out, uint32_t capacity, uint32_t* total);
 
+/* The index of the held unit named `name`, or -1. */
+int32_t sv_units_find(const sv_unit_t* units, uint32_t n, const char* name);
+
+/* Records a parsed `unit` in a free slot of units[0..n), *slot naming it.
+ * Refused with WASMOS_ERR_SUPERVISOR_EXISTS when its name is held,
+ * WASMOS_ERR_SUPERVISOR_NO_PARENT when it names a parent that is not held or
+ * is being retracted, and WASMOS_ERR_SUPERVISOR_NO_SPACE when no slot is
+ * free. A unit whose parent is stopped, failed or degraded is recorded
+ * DEGRADED instead of due. */
+int32_t sv_units_admit(sv_unit_t* units, uint32_t n, const sv_unit_t* unit, uint32_t* slot);
+
+/* 1 when units[index] or any unit bound to it through parent=, at any depth,
+ * is critical: retracting it would end the system. */
+int sv_units_subtree_critical(const sv_unit_t* units, uint32_t n, uint32_t index);
+
 /* Up: READY, and -- when probed -- a probe answered, which shows the loop
  * runs. Unlike stable, up does not wait out stable_ms. */
 int sv_unit_is_up(const sv_unit_t* unit);
@@ -232,8 +302,8 @@ sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uin
 #define SV_SENDER_GRANT (1u << 1)   /* spawn.grant */
 
 /* Whether a sender holding `sender` (SV_SENDER_*) may make request `type`
- * (SUPERVISOR_IPC_*_REQ). Submitting, killing and declaring the boot set change
- * what runs, so they require svc.control; listing is open to everyone. A
+ * (SUPERVISOR_IPC_*_REQ). Submitting, killing, retracting and declaring the
+ * boot set change what runs, so they require svc.control; listing is open to everyone. A
  * submission carrying a capability descriptor (`caps_len` > 0) also requires
  * spawn.grant: the supervisor spawns the unit with those grants under its own
  * name, so it relays them only from a submitter the process manager would accept

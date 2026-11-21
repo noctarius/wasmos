@@ -1145,9 +1145,18 @@ pub const PARTITION_IPC_ERROR: i32 = 0xFFF;
 /// arg2=size. Its spec is one line of text:
 ///   <unit> <path> [restart=never|on-failure|always]
 ///                 [class=optional|required|critical] [tty=<slot>]
-///                 [probe=<seconds>] [-- <args>]
+///                 [probe=<seconds>] [parent=<unit>] [-- <args>]
 /// <unit> is template or template@instance; the instance key names
 /// what the unit serves (a tty, a device) and survives a restart.
+/// parent binds the unit to a unit already held
+/// (WASMOS_ERR_SUPERVISOR_NO_PARENT otherwise), for a unit whose state
+/// cannot outlive its parent's instance: when the parent's instance
+/// ends and another follows, the unit's running instance is killed and
+/// respawned at once; when the parent stops or is given up on, the
+/// unit is stopped and held degraded. Neither end counts against the
+/// unit's restart limit; a critical unit stopped this way takes the
+/// system down. A unit that can rebind to a restarted peer needs no
+/// parent.
 /// tty pins a wants_tty unit to text slot 1 or above; slot 0 is the
 /// kernel log and is refused.
 /// probe is the liveness probe period, 1-999 s (default 10 s), both
@@ -1202,7 +1211,21 @@ pub const SUPERVISOR_IPC_BOOT_SUBMITTED_REQ: i32 = 0x1002;
 /// once the kill is sent to the process manager, before the instance
 /// has ended; arg1 of the reply is the pid killed.
 pub const SUPERVISOR_IPC_KILL_REQ: i32 = 0x1003;
-/// arg0 = 0: the unit was accepted, the list was written, the boot set was recorded, or the kill was sent (arg1 = the pid).
+/// Withdraw a unit, and every unit bound to it through parent=, from
+/// the supervisor: each running instance is killed, nothing is
+/// restarted, and no end counts as a failure. The sender must hold
+/// svc.control (WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED). The request is a
+/// wasmos_supervisor_unit_desc_t naming the unit, in a transfer buffer
+/// the caller owns and has lent READ to the supervisor: arg0=buffer_id
+/// arg1=offset arg2=size. Refused with WASMOS_ERR_SUPERVISOR_NO_UNIT
+/// when no unit has that name, and with WASMOS_ERR_SUPERVISOR_CRITICAL
+/// when the unit or one bound to it is critical. Answered once the
+/// kills are sent; arg1 of the reply is the pid killed for the named
+/// unit, 0 when it had no instance and was removed at once. A unit
+/// with an instance keeps its name until that instance has ended, so a
+/// submission of the same name is refused (EXISTS) until then.
+pub const SUPERVISOR_IPC_RETRACT_REQ: i32 = 0x1004;
+/// arg0 = 0: the unit was accepted, the list was written, the boot set was recorded, or the kill or retraction was sent (arg1 = the pid, 0 for a retracted unit without an instance).
 pub const SUPERVISOR_IPC_RESP: i32 = 0x1080;
 /// arg0 = packed WASMOS_ERR_SUPERVISOR_* code.
 pub const SUPERVISOR_IPC_ERROR: i32 = 0x10FF;

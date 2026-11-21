@@ -11,7 +11,10 @@
  * reports of its table over SUPERVISOR_IPC_LIST_REQ is each held unit's own
  * state, in ABI values, and never more records than the caller made room for.
  * Only a sender holding svc.control changes what runs, and only one also
- * holding spawn.grant hands a unit hardware grants.
+ * holding spawn.grant hands a unit hardware grants. A unit bound to a parent
+ * is killed and respawned, uncounted, when the parent's instance is replaced,
+ * held degraded when the parent will not run again, and a critical one so
+ * stopped ends the system; retraction frees a unit without a failure.
  *
  * Only supervisor_unit.c is linked; time is passed in explicitly.
  */
@@ -732,6 +735,251 @@ static void test_listing_is_open_to_everyone(void) {
     CHECK(sv_authorize(SUPERVISOR_IPC_LIST_REQ, 0, 0) == 0, "anyone may list the units");
 }
 
+/* ---------------------------------------------------------- parent links */
+
+/* A table of `n` parsed specs, each admitted in order. */
+static void admit_all(sv_unit_t* units, uint32_t cap, const char* const* specs, uint32_t n) {
+    memset(units, 0, cap * sizeof(*units));
+    for (uint32_t i = 0; i < n; ++i) {
+        sv_unit_t u = parse_ok(specs[i], 0);
+        uint32_t slot = 99;
+        CHECK(sv_units_admit(units, cap, &u, &slot) == 0, specs[i]);
+        CHECK(slot == i, "the first free slot");
+    }
+}
+
+static void test_a_spec_names_its_parent(void) {
+    sv_unit_t u =
+        parse_ok("fs-wfs@vda /boot/system/drivers/fs-wfs.wap parent=virtio-blk@pci:00:04.0", 0);
+    CHECK(strcmp(u.parent, "virtio-blk@pci:00:04.0") == 0, "parent");
+    CHECK(u.stop == SV_STOP_NONE, "nothing pending");
+    sv_unit_t b = parse_ok("b /p", 0);
+    CHECK(b.parent[0] == '\0', "no parent by default");
+    static const char* const bad[] = {
+        "c /p parent=",
+        "c /p parent=a12345678901234567890123456789012345", /* 36 bytes */
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        sv_unit_t x;
+        CHECK(sv_spec_parse(bad[i], &k_timing, 0, &x) == WASMOS_ERR_SUPERVISOR_BAD_SPEC, bad[i]);
+    }
+}
+
+static void test_a_unit_is_admitted_only_under_a_held_parent(void) {
+    sv_unit_t units[3];
+    uint32_t slot = 0;
+    static const char* const specs[] = {"p /p"};
+    admit_all(units, 3, specs, 1);
+    sv_unit_t orphan = parse_ok("c /c parent=nobody", 0);
+    CHECK(sv_units_admit(units, 3, &orphan, &slot) == WASMOS_ERR_SUPERVISOR_NO_PARENT,
+          "a parent that is not held is refused");
+    sv_unit_t dup = parse_ok("p /other", 0);
+    CHECK(sv_units_admit(units, 3, &dup, &slot) == WASMOS_ERR_SUPERVISOR_EXISTS, "a held name");
+    sv_unit_t child = parse_ok("c /c parent=p", 0);
+    CHECK(sv_units_admit(units, 3, &child, &slot) == 0 && slot == 1, "admitted under p");
+    CHECK(units[1].state == SV_UNIT_SPAWN_DUE, "due like any unit: start order is not gated");
+    sv_unit_t third = parse_ok("d /d", 0);
+    sv_unit_t fourth = parse_ok("e /e", 0);
+    CHECK(sv_units_admit(units, 3, &third, &slot) == 0, "the last slot");
+    CHECK(sv_units_admit(units, 3, &fourth, &slot) == WASMOS_ERR_SUPERVISOR_NO_SPACE, "full");
+    CHECK(sv_units_find(units, 3, "c") == 1 && sv_units_find(units, 3, "zz") == -1, "find");
+}
+
+static void test_a_unit_under_a_parent_that_is_down_is_held_degraded(void) {
+    sv_unit_t units[2];
+    uint32_t slot = 0;
+    static const char* const specs[] = {"p /p restart=never"};
+    admit_all(units, 2, specs, 1);
+    start(&units[0], 5, 0);
+    CHECK(sv_unit_exited(&units[0], &k_timing, 1, PROC_EXIT_REASON_TRAPPED, 10) ==
+              SV_VERDICT_FAILED,
+          "the parent gives up");
+    sv_unit_t child = parse_ok("c /c parent=p", 20);
+    CHECK(sv_units_admit(units, 2, &child, &slot) == 0, "admitted");
+    CHECK(units[slot].state == SV_UNIT_DEGRADED, "held, not spawned behind a parent that is down");
+}
+
+/* The point of a parent link: the child's state was built against the parent's
+ * instance, so a new parent instance means a new child instance -- without
+ * spending the child's restart budget on its parent's crashes. */
+static void test_a_parent_restart_restarts_the_child_without_counting_it(void) {
+    sv_unit_t c = parse_ok("c /c parent=p", 0);
+    sv_parent_event_t ev;
+    CHECK(sv_verdict_parent_event(SV_VERDICT_RESTART, &ev) && ev == SV_PARENT_RESTARTING,
+          "a parent's restart is told to its children");
+    start(&c, 6, 0);
+    for (uint32_t round = 0; round < 2u * k_timing.intensity_max; ++round) {
+        uint32_t now = 1000u + round;
+        CHECK(sv_unit_parent_event(&c, &k_timing, SV_PARENT_RESTARTING, now) ==
+                      SV_VERDICT_CASCADE &&
+                  c.state == SV_UNIT_STOPPING && c.pid == 6u,
+              "the child's instance is killed");
+        CHECK(sv_unit_exited(&c, &k_timing, 0, PROC_EXIT_REASON_KILLED, now) == SV_VERDICT_FOLLOW,
+              "its end follows the parent");
+        CHECK(c.state == SV_UNIT_SPAWN_DUE && c.deadline == now,
+              "respawned at once, without a backoff");
+        CHECK(c.ends_recorded == 0u, "and without counting against its window");
+        CHECK(c.restart_count == round + 1u, "but it is a restart");
+        start(&c, 6, now);
+    }
+    CHECK(c.state == SV_UNIT_STARTING, "more parent restarts than its own limit: never given up");
+}
+
+static void test_a_child_waiting_to_spawn_is_left_due(void) {
+    sv_unit_t c = parse_ok("c /c parent=p", 0);
+    CHECK(sv_unit_parent_event(&c, &k_timing, SV_PARENT_RESTARTING, 5) == SV_VERDICT_NONE &&
+              c.state == SV_UNIT_SPAWN_DUE,
+          "a due child spawns when it is due");
+}
+
+static void test_a_stop_during_a_spawn_applies_to_the_new_instance(void) {
+    sv_unit_t c = parse_ok("c /c parent=p", 0);
+    CHECK(sv_unit_tick(&c, &k_timing, 0) == SV_VERDICT_SPAWN, "due");
+    sv_unit_spawn_sent(&c);
+    CHECK(sv_unit_parent_event(&c, &k_timing, SV_PARENT_RESTARTING, 1) == SV_VERDICT_NONE,
+          "no pid to kill yet");
+    CHECK(sv_unit_spawned(&c, &k_timing, 8, 2) == SV_VERDICT_CASCADE &&
+              c.state == SV_UNIT_STOPPING && c.pid == 8u,
+          "the instance spawned against the old parent is killed");
+    CHECK(sv_unit_exited(&c, &k_timing, 0, PROC_EXIT_REASON_KILLED, 3) == SV_VERDICT_FOLLOW,
+          "and followed");
+
+    sv_unit_t d = parse_ok("d /d parent=p", 0);
+    (void)sv_unit_tick(&d, &k_timing, 0);
+    sv_unit_spawn_sent(&d);
+    (void)sv_unit_parent_event(&d, &k_timing, SV_PARENT_GONE, 1);
+    CHECK(sv_unit_spawn_failed(&d, &k_timing, WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED, 2) ==
+                  SV_VERDICT_DEGRADED &&
+              d.state == SV_UNIT_DEGRADED,
+          "a refused spawn settles the pending stop");
+}
+
+static void test_a_parent_that_is_gone_degrades_the_child(void) {
+    sv_unit_t c = parse_ok("c /c parent=p", 0);
+    sv_unit_t d = parse_ok("d /d parent=p", 0);
+    sv_parent_event_t ev;
+    start(&c, 6, 0);
+    CHECK(sv_unit_parent_event(&c, &k_timing, SV_PARENT_GONE, 10) == SV_VERDICT_CASCADE,
+          "a running child is killed");
+    CHECK(sv_unit_exited(&c, &k_timing, 0, PROC_EXIT_REASON_KILLED, 11) == SV_VERDICT_DEGRADED &&
+              c.state == SV_UNIT_DEGRADED && c.pid == 0u && c.ends_recorded == 0u,
+          "and held degraded, uncounted");
+    CHECK(sv_unit_parent_event(&d, &k_timing, SV_PARENT_GONE, 10) == SV_VERDICT_DEGRADED &&
+              d.state == SV_UNIT_DEGRADED,
+          "a due child is degraded at once");
+    CHECK(sv_unit_tick(&d, &k_timing, 1000000) == SV_VERDICT_NONE, "and never spawned");
+    CHECK(sv_unit_parent_event(&d, &k_timing, SV_PARENT_RESTARTING, 20) == SV_VERDICT_NONE &&
+              d.state == SV_UNIT_DEGRADED,
+          "a degraded child stays degraded");
+    CHECK(sv_verdict_parent_event(SV_VERDICT_FAILED, &ev) && ev == SV_PARENT_GONE, "failed");
+    CHECK(sv_verdict_parent_event(SV_VERDICT_STOPPED, &ev) && ev == SV_PARENT_GONE, "stopped");
+    CHECK(sv_verdict_parent_event(SV_VERDICT_DEGRADED, &ev) && ev == SV_PARENT_GONE,
+          "a degraded child degrades its own children");
+    CHECK(sv_verdict_parent_event(SV_VERDICT_FOLLOW, &ev) && ev == SV_PARENT_RESTARTING,
+          "a followed child restarts its own children");
+    CHECK(!sv_verdict_parent_event(SV_VERDICT_NONE, &ev) &&
+              !sv_verdict_parent_event(SV_VERDICT_CASCADE, &ev) &&
+              !sv_verdict_parent_event(SV_VERDICT_KILL, &ev),
+          "a pending kill tells nobody yet");
+}
+
+static void test_gone_overrides_a_pending_follow(void) {
+    sv_unit_t c = parse_ok("c /c parent=p", 0);
+    start(&c, 6, 0);
+    (void)sv_unit_parent_event(&c, &k_timing, SV_PARENT_RESTARTING, 1);
+    CHECK(sv_unit_parent_event(&c, &k_timing, SV_PARENT_GONE, 2) == SV_VERDICT_NONE,
+          "already being killed");
+    CHECK(sv_unit_exited(&c, &k_timing, 0, PROC_EXIT_REASON_KILLED, 3) == SV_VERDICT_DEGRADED,
+          "the parent gave up before the child ended: it is not respawned");
+}
+
+static void test_a_critical_child_stopped_for_its_parent_ends_the_system(void) {
+    sv_unit_t c = parse_ok("fs-fat@boot /p class=critical parent=ata", 0);
+    start(&c, 6, 0);
+    CHECK(sv_unit_parent_event(&c, &k_timing, SV_PARENT_RESTARTING, 1) == SV_VERDICT_CASCADE,
+          "killed like any child");
+    CHECK(sv_unit_exited(&c, &k_timing, 0, PROC_EXIT_REASON_KILLED, 2) == SV_VERDICT_CRITICAL,
+          "its end is a critical end");
+    sv_unit_t d = parse_ok("d /p class=critical parent=ata", 0);
+    CHECK(sv_unit_parent_event(&d, &k_timing, SV_PARENT_GONE, 1) == SV_VERDICT_CRITICAL,
+          "a critical unit that can no longer come up is a critical end too");
+}
+
+static void test_a_retracted_unit_is_freed_without_a_failure(void) {
+    sv_unit_t u = parse_ok("u /u restart=always", 0);
+    sv_verdict_t v = SV_VERDICT_NONE;
+    start(&u, 7, 0);
+    CHECK(sv_unit_retract(&u, &v) == 0 && v == SV_VERDICT_CASCADE && u.state == SV_UNIT_STOPPING,
+          "a running unit is killed");
+    CHECK(sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_KILLED, 5) == SV_VERDICT_RETRACTED &&
+              u.state == SV_UNIT_FREE && strcmp(u.name, "u") == 0,
+          "freed on its end, its name still readable for the log");
+
+    sv_unit_t w = parse_ok("w /w", 0);
+    CHECK(sv_unit_retract(&w, &v) == 0 && v == SV_VERDICT_RETRACTED && w.state == SV_UNIT_FREE,
+          "a unit without an instance is freed at once");
+
+    sv_unit_t x = parse_ok("x /x parent=p", 0);
+    start(&x, 9, 0);
+    (void)sv_unit_parent_event(&x, &k_timing, SV_PARENT_RESTARTING, 1);
+    CHECK(sv_unit_retract(&x, &v) == 0 && v == SV_VERDICT_NONE, "already being killed");
+    CHECK(sv_unit_exited(&x, &k_timing, 0, PROC_EXIT_REASON_KILLED, 2) == SV_VERDICT_RETRACTED,
+          "retraction overrides a pending follow");
+
+    sv_unit_t y = parse_ok("y /y", 0);
+    (void)sv_unit_tick(&y, &k_timing, 0);
+    sv_unit_spawn_sent(&y);
+    CHECK(sv_unit_retract(&y, &v) == 0 && v == SV_VERDICT_NONE && y.state == SV_UNIT_SPAWNING,
+          "a unit being spawned is freed when the spawn answers");
+    CHECK(sv_unit_spawned(&y, &k_timing, 4, 1) == SV_VERDICT_CASCADE, "its instance is killed");
+
+    sv_unit_t c = parse_ok("c /c class=critical", 0);
+    start(&c, 3, 0);
+    CHECK(sv_unit_retract(&c, &v) == WASMOS_ERR_SUPERVISOR_CRITICAL && c.state == SV_UNIT_STARTING,
+          "a critical unit is not retracted");
+}
+
+static void test_a_tree_with_a_critical_unit_is_not_retractable(void) {
+    sv_unit_t units[4];
+    static const char* const specs[] = {
+        "ata /a", "part /p parent=ata", "fat /f class=critical parent=part", "other /o"};
+    admit_all(units, 4, specs, 4);
+    CHECK(sv_units_subtree_critical(units, 4, 0), "a grandchild is critical");
+    CHECK(sv_units_subtree_critical(units, 4, 1), "a child is critical");
+    CHECK(!sv_units_subtree_critical(units, 4, 3), "an unrelated unit is not");
+}
+
+static void test_the_list_reports_the_parent_and_degraded(void) {
+    sv_unit_t units[2];
+    wasmos_supervisor_unit_record_t out[2];
+    uint32_t total = 0;
+    static const char* const specs[] = {"p /p", "c /c parent=p"};
+    admit_all(units, 2, specs, 2);
+    (void)sv_unit_parent_event(&units[1], &k_timing, SV_PARENT_GONE, 0);
+    CHECK(sv_units_list(units, 2, &k_timing, out, 2, &total) == 2u, "two records");
+    CHECK(out[0].parent[0] == '\0' && strcmp(out[1].parent, "p") == 0, "the parent");
+    CHECK(out[1].state == SUPERVISOR_UNIT_STATE_DEGRADED, "degraded, in its ABI value");
+    CHECK(strcmp(sv_state_name(SV_UNIT_DEGRADED), "degraded") == 0, "its name");
+}
+
+static void test_a_degraded_boot_unit_fails_the_boot(void) {
+    sv_unit_t units[1];
+    uint32_t index = 9;
+    static const char* const specs[] = {"c /c class=required"};
+    admit_all(units, 1, specs, 1);
+    units[0].boot = 1;
+    units[0].state = SV_UNIT_DEGRADED;
+    CHECK(sv_boot_check(units, 1, 0, &index) == SV_BOOT_FAILED && index == 0u,
+          "a degraded unit will not come up");
+}
+
+static void test_a_retract_without_svc_control_is_refused(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_RETRACT_REQ, 0, 0) == WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "retracting requires svc.control");
+    CHECK(sv_authorize(SUPERVISOR_IPC_RETRACT_REQ, SV_SENDER_CONTROL, 0) == 0,
+          "svc.control retracts");
+}
+
 int main(void) {
     test_a_spec_parses_into_its_policy();
     test_a_bare_spec_takes_the_defaults();
@@ -779,6 +1027,20 @@ int main(void) {
     test_a_boot_submitted_without_svc_control_is_refused();
     test_an_entitled_sender_is_accepted();
     test_listing_is_open_to_everyone();
+    test_a_spec_names_its_parent();
+    test_a_unit_is_admitted_only_under_a_held_parent();
+    test_a_unit_under_a_parent_that_is_down_is_held_degraded();
+    test_a_parent_restart_restarts_the_child_without_counting_it();
+    test_a_child_waiting_to_spawn_is_left_due();
+    test_a_stop_during_a_spawn_applies_to_the_new_instance();
+    test_a_parent_that_is_gone_degrades_the_child();
+    test_gone_overrides_a_pending_follow();
+    test_a_critical_child_stopped_for_its_parent_ends_the_system();
+    test_a_retracted_unit_is_freed_without_a_failure();
+    test_a_tree_with_a_critical_unit_is_not_retractable();
+    test_the_list_reports_the_parent_and_degraded();
+    test_a_degraded_boot_unit_fails_the_boot();
+    test_a_retract_without_svc_control_is_refused();
     if (g_failures != 0) {
         printf("test_supervisor_unit: %d failure(s)\n", g_failures);
         return 1;

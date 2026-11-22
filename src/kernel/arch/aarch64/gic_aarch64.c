@@ -24,7 +24,12 @@
 #define GICD_CTLR_ARE (1u << 4)
 #define GICD_CTLR_ENABLE_G1 (1u << 1)
 #define GICD_TYPER 0x0004u
+#define GICD_IGROUPR 0x0080u
+#define GICD_ISENABLER 0x0100u
 #define GICD_ICENABLER 0x0180u
+#define GICD_IPRIORITYR 0x0400u
+#define GICD_ICFGR 0x0C00u
+#define GICD_IROUTER 0x6000u
 
 #define GICR_CTLR 0x0000u
 #define GICR_CTLR_ENABLE_LPIS (1u << 0)
@@ -51,6 +56,9 @@
 #define GIC_DEFAULT_PRIORITY 0x80u
 #define GIC_PMR_ALL 0xF0u
 
+/* Interrupt lines the distributor implements (GICD_TYPER.ITLinesNumber). */
+static uint32_t g_gicd_lines;
+
 static void gicd_wait_rwp(void) {
     while (arch_mmio_read32((uintptr_t)(GICD_BASE + GICD_CTLR)) & GICD_CTLR_RWP) {
         arch_cpu_relax();
@@ -63,6 +71,7 @@ void gic_init(void) {
     arch_mmio_write32((uintptr_t)(GICD_BASE + GICD_CTLR), 0);
     gicd_wait_rwp();
     uint32_t lines = ((arch_mmio_read32((uintptr_t)(GICD_BASE + GICD_TYPER)) & 0x1Fu) + 1u) * 32u;
+    g_gicd_lines = lines;
     for (uint32_t i = 32; i < lines; i += 32) {
         arch_mmio_write32((uintptr_t)(GICD_BASE + GICD_ICENABLER + (uint64_t)(i / 32u) * 4u),
                           0xFFFFFFFFu);
@@ -97,6 +106,45 @@ void gic_init(void) {
 void gic_enable_ppi(uint32_t intid) {
     arch_mmio_write8((uintptr_t)(GICR_SGI_BASE + GICR_IPRIORITYR + intid), GIC_DEFAULT_PRIORITY);
     arch_mmio_write32((uintptr_t)(GICR_SGI_BASE + GICR_ISENABLER0), 1u << intid);
+}
+
+int gic_spi_valid(uint32_t intid) {
+    return intid >= GIC_SPI_FIRST && intid < GIC_SPI_END && intid < g_gicd_lines;
+}
+
+void gic_spi_configure(uint32_t intid, int level) {
+    uint64_t mpidr;
+    __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+    /* GICD_IROUTER<n>: Aff3 at 39:32, Aff2..Aff0 at 23:0, Interrupt_Routing_Mode
+     * 0 (this one PE). */
+    uint64_t route = ((mpidr >> 32) & 0xFFu) << 32 | (mpidr & 0xFFFFFFu);
+    uintptr_t router = (uintptr_t)(GICD_BASE + GICD_IROUTER + (uint64_t)intid * 8u);
+    arch_mmio_write32(router, (uint32_t)route);
+    arch_mmio_write32(router + 4u, (uint32_t)(route >> 32));
+    arch_mmio_write8((uintptr_t)(GICD_BASE + GICD_IPRIORITYR + intid), GIC_DEFAULT_PRIORITY);
+    uintptr_t group = (uintptr_t)(GICD_BASE + GICD_IGROUPR + (intid / 32u) * 4u);
+    arch_mmio_write32(group, arch_mmio_read32(group) | (1u << (intid % 32u)));
+    /* GICD_ICFGR: two bits per INTID, the upper one set for edge-triggered. */
+    uintptr_t cfg = (uintptr_t)(GICD_BASE + GICD_ICFGR + (intid / 16u) * 4u);
+    uint32_t edge = 2u << ((intid % 16u) * 2u);
+    uint32_t value = arch_mmio_read32(cfg);
+    arch_mmio_write32(cfg, level ? (value & ~edge) : (value | edge));
+}
+
+void gic_spi_enable(uint32_t intid) {
+    arch_mmio_write32((uintptr_t)(GICD_BASE + GICD_ISENABLER + (intid / 32u) * 4u),
+                      1u << (intid % 32u));
+}
+
+void gic_spi_disable(uint32_t intid) {
+    arch_mmio_write32((uintptr_t)(GICD_BASE + GICD_ICENABLER + (intid / 32u) * 4u),
+                      1u << (intid % 32u));
+    gicd_wait_rwp();
+}
+
+int gic_spi_enabled(uint32_t intid) {
+    uint32_t value = arch_mmio_read32((uintptr_t)(GICD_BASE + GICD_ISENABLER + (intid / 32u) * 4u));
+    return (value >> (intid % 32u)) & 1u;
 }
 
 static uint64_t gicr_read64(uint32_t reg) {

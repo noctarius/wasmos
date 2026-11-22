@@ -22,6 +22,25 @@ uint32_t gic_ack(void);
 /* Signal the end of an acknowledged interrupt. */
 void gic_eoi(uint32_t intid);
 
+/* SPI range (shared peripheral interrupts, GICv3 2.2.1). */
+#define GIC_SPI_FIRST 32u
+#define GIC_SPI_END 1020u
+
+/* Whether intid is an SPI the distributor implements. */
+int gic_spi_valid(uint32_t intid);
+
+/* Make SPI `intid` a Group 1 interrupt routed to the boot CPU at the default
+ * priority, level-sensitive (`level` non-zero) or edge-triggered, and leave it
+ * disabled. */
+void gic_spi_configure(uint32_t intid, int level);
+
+/* Enable / disable delivery of SPI `intid` at the distributor. */
+void gic_spi_enable(uint32_t intid);
+void gic_spi_disable(uint32_t intid);
+
+/* Whether SPI `intid` is enabled at the distributor. */
+int gic_spi_enabled(uint32_t intid);
+
 /* First LPI INTID (GICv3: 8192 and up are LPIs). */
 #define GIC_LPI_BASE 8192u
 

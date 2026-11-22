@@ -46,7 +46,6 @@ ARCH = {
             "arch/aarch64/its_aarch64.c",
             "arch/aarch64/msi_aarch64.c",
             "arch/aarch64/platform_aarch64.c",
-            "arch/aarch64/unimplemented_aarch64.c",
         ],
         "ldscript": "arch/aarch64/linker.ld",
         "core": True,
@@ -277,7 +276,9 @@ def build(b):
             )
 
     # Index the other architectures' C sources with their own kernel flags, so
-    # the same lint pass covers every arch directory.
+    # the same lint pass covers every arch directory. They take the include path
+    # this tree's core sources take, because they include the same headers.
+    core_inc = [] if warp else [f"-I{b.root / 'libs/wasm3/source'}"]
     for name, spec in ARCH.items():
         if name == arch(cfg).name:
             continue
@@ -287,7 +288,7 @@ def build(b):
         }
         tc = b.toolchain("kernel", overrides=sets).tc
         for src in b.srcs(*spec["sources"]):
-            b.index(src, [tc.cc, *tc.cflags])
+            b.index(src, [tc.cc, *tc.cflags, *core_inc])
 
     # Embedded blobs: guest modules registered by other manifests first, then
     # the native ring-3 probes.

@@ -267,6 +267,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_IO_OUT_OF_WINDOW` | -0x00120003 | offset falls outside the granted window's bounds |
 | `WASMOS_ERR_IO_BAD_PORT` | -0x00120004 | port number outside 0..0xFFFF |
 | `WASMOS_ERR_IO_MISALIGNED` | -0x00120005 | a memory-mapped window access whose offset is not a multiple of its width |
+| `WASMOS_ERR_IO_NO_PORT_SPACE` | -0x00120006 | the architecture has no I/O port space, so no port access or I/O-port window exists |
 
 ### `font` (domain 12) — font-rasterizer service failures (was FONT_STATUS_*)
 

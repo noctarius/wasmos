@@ -261,25 +261,29 @@ extern int32_t wasmos_io_in16(int32_t port, uint16_t* out) WASMOS_WASM_IMPORT("w
 extern int32_t wasmos_io_in32(int32_t port, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "io_in32");
 /* Write byte `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on success,
  * WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not fit in a
- * byte, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks
- * the io.port capability for that port.
+ * byte, WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks
+ * the io.port capability for that port, or WASMOS_ERR_IO_NO_PORT_SPACE on an
+ * architecture without I/O ports.
  */
 extern int32_t wasmos_io_out8(int32_t port, int32_t val) WASMOS_WASM_IMPORT("wasmos", "io_out8");
 /* Write 16-bit word `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
  * success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not
- * fit in a word, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context
- * or lacks the io.port capability for that port.
+ * fit in a word, WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context
+ * or lacks the io.port capability for that port, or
+ * WASMOS_ERR_IO_NO_PORT_SPACE on an architecture without I/O ports.
  */
 extern int32_t wasmos_io_out16(int32_t port, int32_t val) WASMOS_WASM_IMPORT("wasmos", "io_out16");
 /* Write 32-bit dword `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
- * success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range, or
+ * success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range,
  * WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks the
- * io.port capability for that port.
+ * io.port capability for that port, or WASMOS_ERR_IO_NO_PORT_SPACE on an
+ * architecture without I/O ports.
  */
 extern int32_t wasmos_io_out32(int32_t port, int32_t val) WASMOS_WASM_IMPORT("wasmos", "io_out32");
 /* Issue a short I/O-port delay (a dummy write to port 0x80). Returns 0 on
- * success, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or
- * lacks the io.port capability for port 0x80.
+ * success, WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or
+ * lacks the io.port capability for port 0x80, or WASMOS_ERR_IO_NO_PORT_SPACE
+ * on an architecture without I/O ports.
  */
 extern int32_t wasmos_io_wait(void) WASMOS_WASM_IMPORT("wasmos", "io_wait");
 /* Copy the ACPI RSDP blob into guest memory at out_off (bounded by max_len) and

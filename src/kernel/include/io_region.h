@@ -12,15 +12,19 @@
 
 /* Read `width` bytes (1, 2 or 4) at `offset` within region `region` of
  * context_id's spawn profile into *out_value, zero-extended. An I/O window is
- * read with one IN instruction, a memory-mapped one with one load of that
- * width. Returns 0, or the negative WASMOS_ERR_IO_* code
- * capability_region_resolve produced; *out_value is untouched on failure. */
+ * read with one port access (arch/arch_io.h), a memory-mapped one with one
+ * load of that width. Returns 0, the negative WASMOS_ERR_IO_* code
+ * capability_region_resolve produced, or WASMOS_ERR_IO_NO_PORT_SPACE for an
+ * I/O window on an architecture without ports; *out_value is untouched on
+ * failure. */
 int io_region_read(uint32_t context_id, uint32_t region, uint32_t offset, uint32_t width,
                    uint32_t* out_value);
 
 /* Write the low `width` bytes (1, 2 or 4) of `value` at `offset` within region
- * `region`; excess high bits are masked off, not refused. Returns 0, or the
- * negative WASMOS_ERR_IO_* code capability_region_resolve produced. */
+ * `region`; excess high bits are masked off, not refused. Returns 0, the
+ * negative WASMOS_ERR_IO_* code capability_region_resolve produced, or
+ * WASMOS_ERR_IO_NO_PORT_SPACE for an I/O window on an architecture without
+ * ports. */
 int io_region_write(uint32_t context_id, uint32_t region, uint32_t offset, uint32_t width,
                     uint32_t value);
 

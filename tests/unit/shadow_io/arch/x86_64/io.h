@@ -1,4 +1,4 @@
-/* Host shadow of src/kernel/include/io.h for tests/unit/test_pci_config.c: the
+/* Host shadow of src/kernel/include/arch/x86_64/io.h for tests/unit/test_pci_config.c: the
  * port accessors are plain functions the test defines over an emulated device,
  * instead of IN/OUT instructions. Only the widths arch/x86_64/pci_cfg_x86_64.c
  * uses exist. Kept

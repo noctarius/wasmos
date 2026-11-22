@@ -15,7 +15,7 @@
 #include "framebuffer.h"
 #include "idtable.h"
 #include "ipc.h"
-#include "io.h"
+#include "arch/arch_io.h"
 #include "list.h"
 #include "user_mutex.h"
 #include "policy.h"
@@ -667,8 +667,7 @@ static int nd_io_in8(uint16_t port, uint8_t* out) {
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
-    *out = inb(port);
-    return 0;
+    return arch_port_in8(port, out) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
 static int nd_io_in16(uint16_t port, uint16_t* out) {
@@ -679,8 +678,7 @@ static int nd_io_in16(uint16_t port, uint16_t* out) {
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
-    *out = inw(port);
-    return 0;
+    return arch_port_in16(port, out) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
 static int nd_io_out8(uint16_t port, uint8_t val) {
@@ -688,8 +686,7 @@ static int nd_io_out8(uint16_t port, uint8_t val) {
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
-    outb(port, val);
-    return 0;
+    return arch_port_out8(port, val) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
 static int nd_io_out16(uint16_t port, uint16_t val) {
@@ -697,8 +694,7 @@ static int nd_io_out16(uint16_t port, uint16_t val) {
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
-    outw(port, val);
-    return 0;
+    return arch_port_out16(port, val) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
 static uint32_t nd_ipc_create_endpoint(void) {

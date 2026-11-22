@@ -229,6 +229,7 @@ const (
 	WASMOS_ERR_IO_OUT_OF_WINDOW int32 = -0x00120003 // offset falls outside the granted window's bounds
 	WASMOS_ERR_IO_BAD_PORT int32 = -0x00120004 // port number outside 0..0xFFFF
 	WASMOS_ERR_IO_MISALIGNED int32 = -0x00120005 // a memory-mapped window access whose offset is not a multiple of its width
+	WASMOS_ERR_IO_NO_PORT_SPACE int32 = -0x00120006 // the architecture has no I/O port space, so no port access or I/O-port window exists
 	WASMOS_ERR_FONT_INVALID int32 = -0x000C0001 // invalid request arguments (font id, size, glyph, or buffer)
 	WASMOS_ERR_FONT_PERMISSION int32 = -0x000C0002 // caller is not permitted to use the requested font resource
 	WASMOS_ERR_FONT_UNSUPPORTED int32 = -0x000C0003 // unknown or unsupported request type
@@ -773,6 +774,8 @@ func WasmosStrerror(c int32) string {
 		return "port number outside 0..0xFFFF"
 	case WASMOS_ERR_IO_MISALIGNED:
 		return "a memory-mapped window access whose offset is not a multiple of its width"
+	case WASMOS_ERR_IO_NO_PORT_SPACE:
+		return "the architecture has no I/O port space, so no port access or I/O-port window exists"
 	case WASMOS_ERR_FONT_INVALID:
 		return "invalid request arguments (font id, size, glyph, or buffer)"
 	case WASMOS_ERR_FONT_PERMISSION:

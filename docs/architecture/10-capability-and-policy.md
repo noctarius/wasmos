@@ -162,6 +162,12 @@ installs the profile, and the host call reaches the register through that
 mapping, uncached; the driver holds no mapping of its own. An access to a
 memory-mapped window must be naturally aligned (`WASMOS_ERR_IO_MISALIGNED`).
 
+I/O ports are an x86 notion. Neutral kernel code reaches them only through
+`arch/arch_io.h`; on an architecture without a port space every port access --
+an I/O window, and the raw `io_in*` / `io_out*` / `io_wait` host calls -- is
+refused with `WASMOS_ERR_IO_NO_PORT_SPACE`, so a driver there is given
+memory-mapped windows only.
+
 `capability_region_resolve` is the single resolution point: it bounds-checks
 the WHOLE access against the window and answers the port or kernel VA, or a
 packed `WASMOS_ERR_IO_*` code naming the refusal (no windows, no such region,

@@ -1,5 +1,8 @@
-/* io.h - x86 I/O port access helpers (in/out byte/word/dword).
- * io_wait() issues a write to port 0x80 as a short delay after PIC/PIT operations. */
+/* arch/x86_64/io.h - x86 I/O port access helpers (in/out byte/word/dword).
+ * io_wait() issues a write to port 0x80 as a short delay after PIC/PIT operations.
+ * x86_64 code only; architecture-neutral code reaches ports through
+ * arch/arch_io.h, which an architecture without a port space implements as a
+ * refusal. */
 #ifndef WASMOS_IO_H
 #define WASMOS_IO_H
 

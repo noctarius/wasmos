@@ -4,7 +4,7 @@
  * dependencies so tests/unit/test_pci_config.c can compile it against an
  * emulated port space. */
 #include "arch/arch_pci.h"
-#include "io.h"
+#include "arch/x86_64/io.h"
 
 #define PCI_CFG_ADDR_PORT 0xCF8u
 #define PCI_CFG_DATA_PORT 0xCFCu

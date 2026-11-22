@@ -47,7 +47,7 @@ extern "C" {
 #include "thread.h"
 #include "futex.h"
 #include "klog.h"
-#include "io.h"
+#include "arch/arch_io.h"
 #include "irq.h"
 #include "msi.h"
 #include "pci_config.h"
@@ -871,7 +871,9 @@ static uint32_t warp_io_in8(uint32_t port, uint32_t out_off, void* ctx_) {
     if (!out) {
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     }
-    *out = inb((uint16_t)port);
+    if (arch_port_in8((uint16_t)port, out) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 static uint32_t warp_io_in16(uint32_t port, uint32_t out_off, void* ctx_) {
@@ -890,7 +892,9 @@ static uint32_t warp_io_in16(uint32_t port, uint32_t out_off, void* ctx_) {
     if (!out) {
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     }
-    *out = inw((uint16_t)port);
+    if (arch_port_in16((uint16_t)port, out) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 static uint32_t warp_io_in32(uint32_t port, uint32_t out_off, void* ctx_) {
@@ -909,7 +913,9 @@ static uint32_t warp_io_in32(uint32_t port, uint32_t out_off, void* ctx_) {
     if (!out) {
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     }
-    *out = (uint32_t)inl((uint16_t)port);
+    if (arch_port_in32((uint16_t)port, out) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 
@@ -999,7 +1005,9 @@ static uint32_t warp_io_out8(uint32_t port, uint32_t val, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    outb((uint16_t)port, (uint8_t)val);
+    if (arch_port_out8((uint16_t)port, (uint8_t)val) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 static uint32_t warp_io_out16(uint32_t port, uint32_t val, void* ctx_) {
@@ -1014,7 +1022,9 @@ static uint32_t warp_io_out16(uint32_t port, uint32_t val, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    outw((uint16_t)port, (uint16_t)val);
+    if (arch_port_out16((uint16_t)port, (uint16_t)val) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 static uint32_t warp_io_out32(uint32_t port, uint32_t val, void* ctx_) {
@@ -1029,7 +1039,9 @@ static uint32_t warp_io_out32(uint32_t port, uint32_t val, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    outl((uint16_t)port, (uint32_t)val);
+    if (arch_port_out32((uint16_t)port, (uint32_t)val) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 /* hostcalls.yaml `io_wait`: a short bus delay (a dummy access to port 0x80).  Gated on
@@ -1042,7 +1054,9 @@ static uint32_t warp_io_wait(void* ctx_) {
         warp_require_io_capability(context_id, 0x80u) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    io_wait();
+    if (arch_port_out8(0x80u, 0u) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 

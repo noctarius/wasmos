@@ -3,7 +3,7 @@
  * Implements arch/arch_platform.h and system_control.h. */
 #include "arch/arch_platform.h"
 #include "arch/arch_cpu.h"
-#include "io.h"
+#include "arch/x86_64/io.h"
 #include "system_control.h"
 #include "wasmos_status.h"
 

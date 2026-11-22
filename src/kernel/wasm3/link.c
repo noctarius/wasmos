@@ -6,7 +6,7 @@
 #include "kenv.h"
 #include "hostcall_buffer.h"
 #include "ipc.h"
-#include "io.h"
+#include "arch/arch_io.h"
 #include "physmem.h"
 #include "process.h"
 #include "process_manager.h"
@@ -1873,7 +1873,8 @@ m3ApiRawFunction(wasmos_io_region_out32) {
  * capability for that exact port, which is an allowlist, so a denial is an ordinary
  * probe-and-skip outcome rather than a fault.  `out` is a wasm32 linear-memory offset written
  * through the interpreter's own pointer, and a range outside linear memory TRAPS the module
- * via m3ApiCheckMem.  Returns 0, WASMOS_ERR_IO_BAD_PORT, or WASMOS_ERR_IO_NOT_AUTHORIZED,
+ * via m3ApiCheckMem.  Returns 0, WASMOS_ERR_IO_BAD_PORT, WASMOS_ERR_IO_NOT_AUTHORIZED, or
+ * WASMOS_ERR_IO_NO_PORT_SPACE (an architecture without ports, arch/arch_io.h),
  * leaving `out` untouched on failure. */
 m3ApiRawFunction(wasmos_io_in8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArgMem(uint8_t*, out)
@@ -1886,7 +1887,9 @@ m3ApiRawFunction(wasmos_io_in8) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    *out = inb((uint16_t)port);
+    if (arch_port_in8((uint16_t)port, out) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -1901,7 +1904,9 @@ m3ApiRawFunction(wasmos_io_in16) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    *out = inw((uint16_t)port);
+    if (arch_port_in16((uint16_t)port, out) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -1916,7 +1921,9 @@ m3ApiRawFunction(wasmos_io_in32) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    *out = (uint32_t)inl((uint16_t)port);
+    if (arch_port_in32((uint16_t)port, out) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -2006,8 +2013,8 @@ m3ApiRawFunction(wasmos_pci_config_write) {
 /* Write to an absolute x86 I/O port.  `port` must be 0..0xFFFF and the caller must hold the
  * io.port capability for that exact port (allowlist, so a probe-and-skip denial is normal).
  * out8/out16 also reject a `value` that does not fit the width; out32 does not range-check
- * `value` because all 32 bits are meaningful.  Returns 0, WASMOS_ERR_IO_BAD_PORT, or
- * WASMOS_ERR_IO_NOT_AUTHORIZED. */
+ * `value` because all 32 bits are meaningful.  Returns 0, WASMOS_ERR_IO_BAD_PORT,
+ * WASMOS_ERR_IO_NOT_AUTHORIZED, or WASMOS_ERR_IO_NO_PORT_SPACE. */
 m3ApiRawFunction(wasmos_io_out8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArg(int32_t, value)
         uint32_t context_id = 0;
@@ -2018,7 +2025,9 @@ m3ApiRawFunction(wasmos_io_out8) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    outb((uint16_t)port, (uint8_t)value);
+    if (arch_port_out8((uint16_t)port, (uint8_t)value) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -2032,7 +2041,9 @@ m3ApiRawFunction(wasmos_io_out16) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    outw((uint16_t)port, (uint16_t)value);
+    if (arch_port_out16((uint16_t)port, (uint16_t)value) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -2046,18 +2057,23 @@ m3ApiRawFunction(wasmos_io_out32) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    outl((uint16_t)port, (uint32_t)value);
+    if (arch_port_out32((uint16_t)port, (uint32_t)value) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
 /* Issue the conventional short I/O delay (a dummy write to port 0x80).  Gated on the io.port
- * capability for port 0x80 specifically.  Returns 0 or WASMOS_ERR_IO_NOT_AUTHORIZED. */
+ * capability for port 0x80 specifically.  Returns 0, WASMOS_ERR_IO_NOT_AUTHORIZED, or
+ * WASMOS_ERR_IO_NO_PORT_SPACE. */
 m3ApiRawFunction(wasmos_io_wait) {
     m3ApiReturnType(int32_t) uint32_t context_id = 0;
     if (current_process_context(&context_id) != 0 || require_io_capability(context_id, 0x80) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    io_wait();
+    if (arch_port_out8(0x80u, 0u) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 

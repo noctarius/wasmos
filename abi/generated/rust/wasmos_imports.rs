@@ -224,22 +224,26 @@ unsafe extern "C" {
     pub fn io_in32(a0: i32, a1: i32) -> i32;
     /// Write byte `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on success,
     /// WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not fit in a
-    /// byte, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks
-    /// the io.port capability for that port.
+    /// byte, WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks
+    /// the io.port capability for that port, or WASMOS_ERR_IO_NO_PORT_SPACE on an
+    /// architecture without I/O ports.
     pub fn io_out8(a0: i32, a1: i32) -> i32;
     /// Write 16-bit word `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
     /// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not
-    /// fit in a word, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context
-    /// or lacks the io.port capability for that port.
+    /// fit in a word, WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context
+    /// or lacks the io.port capability for that port, or
+    /// WASMOS_ERR_IO_NO_PORT_SPACE on an architecture without I/O ports.
     pub fn io_out16(a0: i32, a1: i32) -> i32;
     /// Write 32-bit dword `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
-    /// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range, or
+    /// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range,
     /// WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks the
-    /// io.port capability for that port.
+    /// io.port capability for that port, or WASMOS_ERR_IO_NO_PORT_SPACE on an
+    /// architecture without I/O ports.
     pub fn io_out32(a0: i32, a1: i32) -> i32;
     /// Issue a short I/O-port delay (a dummy write to port 0x80). Returns 0 on
-    /// success, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or
-    /// lacks the io.port capability for port 0x80.
+    /// success, WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or
+    /// lacks the io.port capability for port 0x80, or WASMOS_ERR_IO_NO_PORT_SPACE
+    /// on an architecture without I/O ports.
     pub fn io_wait() -> i32;
     /// Copy the ACPI RSDP blob into guest memory at out_off (bounded by max_len) and
     /// store its byte length at out_len_off. Returns 0 on success, WASMOS_INVAL if

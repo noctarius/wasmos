@@ -242,6 +242,7 @@ enum {
     WASMOS_ERR_IO_OUT_OF_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 3), /* offset falls outside the granted window's bounds */
     WASMOS_ERR_IO_BAD_PORT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 4), /* port number outside 0..0xFFFF */
     WASMOS_ERR_IO_MISALIGNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 5), /* a memory-mapped window access whose offset is not a multiple of its width */
+    WASMOS_ERR_IO_NO_PORT_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 6), /* the architecture has no I/O port space, so no port access or I/O-port window exists */
     WASMOS_ERR_FONT_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 1), /* invalid request arguments (font id, size, glyph, or buffer) */
     WASMOS_ERR_FONT_PERMISSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 2), /* caller is not permitted to use the requested font resource */
     WASMOS_ERR_FONT_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 3), /* unknown or unsupported request type */
@@ -581,6 +582,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_IO_OUT_OF_WINDOW: return "io.OUT_OF_WINDOW";
     case WASMOS_ERR_IO_BAD_PORT: return "io.BAD_PORT";
     case WASMOS_ERR_IO_MISALIGNED: return "io.MISALIGNED";
+    case WASMOS_ERR_IO_NO_PORT_SPACE: return "io.NO_PORT_SPACE";
     case WASMOS_ERR_FONT_INVALID: return "font.INVALID";
     case WASMOS_ERR_FONT_PERMISSION: return "font.PERMISSION";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "font.UNSUPPORTED";
@@ -853,6 +855,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_IO_OUT_OF_WINDOW: return "offset falls outside the granted window's bounds";
     case WASMOS_ERR_IO_BAD_PORT: return "port number outside 0..0xFFFF";
     case WASMOS_ERR_IO_MISALIGNED: return "a memory-mapped window access whose offset is not a multiple of its width";
+    case WASMOS_ERR_IO_NO_PORT_SPACE: return "the architecture has no I/O port space, so no port access or I/O-port window exists";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

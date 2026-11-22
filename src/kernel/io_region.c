@@ -3,7 +3,7 @@
 
 #include "arch/arch_mmio.h"
 #include "capability.h"
-#include "io.h"
+#include "arch/arch_io.h"
 #include "wasmos_status.h"
 
 int io_region_read(uint32_t context_id, uint32_t region, uint32_t offset, uint32_t width,
@@ -24,10 +24,18 @@ int io_region_read(uint32_t context_id, uint32_t region, uint32_t offset, uint32
         return 0;
     }
     uint16_t port = (uint16_t)access.where;
-    *out_value = (width == 1u)   ? (uint32_t)inb(port)
-                 : (width == 2u) ? (uint32_t)inw(port)
-                                 : inl(port);
-    return 0;
+    if (width == 1u) {
+        uint8_t v = 0;
+        rc = arch_port_in8(port, &v);
+        *out_value = v;
+    } else if (width == 2u) {
+        uint16_t v = 0;
+        rc = arch_port_in16(port, &v);
+        *out_value = v;
+    } else {
+        rc = arch_port_in32(port, out_value);
+    }
+    return rc == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
 int io_region_write(uint32_t context_id, uint32_t region, uint32_t offset, uint32_t width,
@@ -50,11 +58,11 @@ int io_region_write(uint32_t context_id, uint32_t region, uint32_t offset, uint3
     }
     uint16_t port = (uint16_t)access.where;
     if (width == 1u) {
-        outb(port, (uint8_t)(value & 0xFFu));
+        rc = arch_port_out8(port, (uint8_t)(value & 0xFFu));
     } else if (width == 2u) {
-        outw(port, (uint16_t)(value & 0xFFFFu));
+        rc = arch_port_out16(port, (uint16_t)(value & 0xFFFFu));
     } else {
-        outl(port, value);
+        rc = arch_port_out32(port, value);
     }
-    return 0;
+    return rc == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }

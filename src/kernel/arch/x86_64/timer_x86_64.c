@@ -4,7 +4,7 @@
 #include "arch/arch_timer.h"
 #include "klog.h"
 #if WASMOS_IRQ_MODE == 0
-#include "io.h"
+#include "arch/x86_64/io.h"
 #include "irq.h"
 #else
 #include "arch/x86_64/lapic.h"

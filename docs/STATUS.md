@@ -790,8 +790,10 @@ linked feature documents for rationale and rollout plans.
   (`cpu_set_kernel_stack`, the TSS.rsp0 counterpart), and native-code loaders
   sync the instruction cache; the C ring-3 probe passes its syscall checks
   (`[test] ring3 native abi ok`) on a `WASMOS_RING3_SMOKE` tree, whose x86-only
-  inline smoke and fault probes are skipped. Unimplemented interfaces fail by
-  name (`arch/aarch64/unimplemented_aarch64.c`: device IRQ routing, MSI, ECAM).
+  inline smoke and fault probes are skipped. Device interrupts are GIC SPIs
+  (the `irq_line` of `irq.h` is the INTID), routed through the arch-neutral
+  sharing layer by a slot table in `arch/aarch64/irq_aarch64.c`; no arm64
+  driver routes one yet, because every virtio device takes MSI-X.
   `run-qemu-bringup-test` (to `[test] preempt ok`) is its gate, in CI too
   (`bringup`). The native
   ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap

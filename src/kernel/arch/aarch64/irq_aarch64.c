@@ -51,7 +51,8 @@ void irq_init(void) {
 /* Record the firmware tables for the platform code that discovers devices
  * through them (MCFG for PCI configuration space), and bring the ITS up now
  * that the frame allocator can provide its tables.
- * TODO: take the GIC's addresses from the MADT here (arm64 port, Phase 3). */
+ * TODO: take the GIC's addresses from the MADT here; they are the QEMU virt
+ * fixed addresses until then (arm64 port). */
 void irq_late_init(const boot_info_t* boot_info) {
     acpi_init(boot_info);
     aarch64_msi_late_init();

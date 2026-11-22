@@ -60,8 +60,7 @@ in-kernel scheduler rather than an optional mode.
   kernel's `WASMOS_ARCH_<ARCH>` define; neutral code never includes an arch
   directory. Per-architecture build and QEMU values live in `ARCHES`
   (`scripts/buildgen/toolchains.py`). Targets: x86_64; aarch64 (QEMU `virt`)
-  under bring-up, whose missing interfaces fail by name
-  (`arch/aarch64/unimplemented_aarch64.c`).
+  under bring-up; its open work is the "arm64 Port" section of `TASKS.md`.
 - [Memory Management](architecture/06-memory-management.md)
 - [Scheduling and Preemption](architecture/07-scheduling-and-preemption.md)
 - [Threading and Lifecycle](architecture/08-threading-and-lifecycle.md)

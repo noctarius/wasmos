@@ -5,10 +5,7 @@
  * The syscall number goes in x8, arguments in x0..x5, and the results come
  * back in x0 and x1 (the Linux arm64 assignment; the kernel side decodes it in
  * arch/aarch64/arch_context.h). Every variant clobbers memory, so surrounding
- * loads and stores are not reordered across the trap.
- *
- * TODO: the kernel has no EL0 SVC entry yet (arm64 port, Phase 2); until then
- * these stubs only compile. */
+ * loads and stores are not reordered across the trap. */
 #ifndef WASMOS_LIBC_WASMOS_SYSCALL_AARCH64_H
 #ifndef WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H
 /* Included directly: syscall_native.h defines the records these stubs return

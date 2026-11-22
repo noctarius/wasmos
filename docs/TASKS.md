@@ -2188,6 +2188,50 @@ Other graphics/VT/UI:
   incompatible non-negative domains a caller cannot tell apart
   (`src/libui/include/wasmos/libui.h`).
 
+## arm64 Port
+
+The aarch64 port targets QEMU `virt` (GICv3 + ITS, PCIe ECAM, virtio) under
+HVF on Apple Silicon or TCG; bare-metal Apple Silicon is out of scope. It boots
+to the CLI on one core under wasm3; `run-qemu-test` stops at `halt` because no
+user-space console input exists yet. Read `docs/architecture/04-boot-and-handoff.md`,
+`06-memory-management.md` and `10-capability-and-policy.md` first.
+
+- [ ] [FEATURE][P1] PL011 console driver in user space, so the arm64 console
+  takes input and `run-qemu-test` passes (`halt` via PSCI). acpi-bus parses the
+  string `_HID` `ARMH0011` with its `_CRS` Memory32Fixed window and Extended
+  Interrupt (GSIV), published as a descriptor (the packed
+  `DEVMGR_PUBLISH_DEVICE` cannot carry an MMIO window or a GSIV above 255;
+  acpi-bus is its last user, so it retires); device-manager widens `irq_hint`
+  past 8 bits and grants the window as a region; the serial driver moves to
+  `io_region_in8`/`io_region_out8` with a 16550 or PL011 register layout chosen
+  by a spawn argument. It is also the first driver to route a GIC SPI, so it is
+  what exercises `irq_aarch64.c`'s SPI routing.
+- [ ] [BUG][P2] device-manager grants the x86 legacy interrupt default
+  (`caps_irqs_default`, lines 14 and 15) to a PCI driver whose device record
+  has no interrupt hint, on arm64 too, where those numbers are SGIs and name
+  nothing a driver may route. `irq_register` refuses them, so nothing is
+  reachable, but the grant is wrong: the default belongs to x86_64 only.
+- [ ] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
+  x86_64-only), PL031 RTC driver (the CMOS rtc stays x86_64-only), and a
+  framebuffer (ramfb or virtio-gpu; `src/boot/boot.c` TODO: no GOP on `virt`).
+- [ ] [FEATURE][P2] Discover the platform from firmware tables instead of the
+  QEMU `virt` fixed addresses: GIC distributor/redistributor and ITS from the
+  MADT (`gic_aarch64.c`, `its_aarch64.c`, `irq_aarch64.c` TODOs), the console
+  UART from the SPCR (`platform_aarch64.c`), the PSCI conduit from the FADT
+  (`cpu_aarch64.c`).
+- [ ] [FEATURE][P2] SMP: PSCI `CPU_ON` bring-up behind `smp.h` and
+  `arch_stop_other_cpus` through an SGI; then the weak-memory audit under
+  `-accel hvf -smp N` of the plain loads and stores used as synchronisation
+  (IPC, xfer-buffer rings, `ringbuf.h`, futex, run queues).
+- [ ] [ENHANCEMENT][P2] Per-root ASIDs, so a root switch keeps the other roots'
+  TLB entries (`arch/aarch64/paging.c` TODO); today every switch flushes.
+- [ ] [FEATURE][P2] WARP aarch64 backend in the kernel (code loading, ring-3
+  trampolines) and per-arch AOT artifacts in packaging.
+- [ ] [TEST][P2] aarch64 counterparts of the inline x86_64 ring-3 probes (the
+  smoke process and the fault probes with their policy verdict;
+  `kernel_ring3_suite_runtime.c` TODO), and an arm64 battery axis with a CI
+  runner beyond the bring-up test.
+
 ## Validation and Documentation
 
 Source: `architecture/25-diagnostics-status.md`,

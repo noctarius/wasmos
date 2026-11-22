@@ -5,10 +5,7 @@
  * Every frame stores the general registers x0..x30, the interrupted stack
  * pointer, ELR (the resume PC) and SPSR (the saved PSTATE). SPSR.M[3:0] is the
  * exception level and stack the context runs on: EL0t (0b0000) is user mode,
- * EL1h (0b0101) is kernel mode on SP_EL1; no other value is legitimate.
- *
- * TODO: the SVC entry that consumes syscall_frame_t does not exist yet (arm64
- * port, Phase 2). */
+ * EL1h (0b0101) is kernel mode on SP_EL1; no other value is legitimate. */
 #pragma once
 
 #include <stddef.h>

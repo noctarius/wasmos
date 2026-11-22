@@ -186,6 +186,14 @@ linked feature documents for rationale and rollout plans.
   register. Interrupt use is an optimisation, never a dependency: a
   routed-but-silent line is abandoned after a bounded number of empty sleeps and
   the driver reverts to polling.
+- `ata` is a supervised unit (`ata@pci:00:01.1`, `restart=on-failure` on its
+  initfs rule), respawned from the initfs. Killing it leaves `/boot`, `/user`
+  and `/wfs` mounted and reading the same bytes (`tests/test_ata_restart.py`).
+  It never assumes bus mastering: on every start it stops both bus-master
+  engines and asks pci-bus to turn bus mastering on (`PCI_IPC_BUS_MASTER_REQ`),
+  serving PIO until the answer, because the kernel cleared Bus Master Enable
+  when the previous instance ended and a bus-master read programmed then moves
+  no data.
 - `ata` reads use bus-master IDE DMA when a PRD table can be backed
   (`wasmos_block_buffer_phys`), and PIO otherwise; the choice is reported once at
   startup rather than per request, because a per-request "dma fallback" line read

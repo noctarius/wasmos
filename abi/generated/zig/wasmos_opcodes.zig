@@ -936,6 +936,17 @@ pub const PCI_IPC_MSI_BIND: i32 = 0xD01;
 /// On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR,
 /// arg1=packed msi domain code.
 pub const PCI_IPC_MSI_UNBIND: i32 = 0xD02;
+/// Turn bus mastering on for a PCI function, on behalf of its driver.
+/// arg0=bdf ((bus<<8)|(device<<3)|function) arg1..arg3=reserved(0).
+/// For a driver that takes no MSI: an MSI bind turns bus mastering on
+/// itself, and nothing else does once the kernel quiesced the function
+/// at a previous driver's end. The driver stops its own DMA engine
+/// before asking, since the device still names the previous driver's
+/// frames. Written through pci_config_write_for, so only the function's
+/// driver can arm it. On success: PCI_IPC_RESP, arg0=0. On failure:
+/// PCI_IPC_ERROR, arg1=WASMOS_ERR_MSI_BAD_DEVICE or
+/// WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER.
+pub const PCI_IPC_BUS_MASTER_REQ: i32 = 0xD03;
 pub const PCI_IPC_RESP: i32 = 0xD80;
 pub const PCI_IPC_ERROR: i32 = 0xDFF;
 

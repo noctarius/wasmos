@@ -233,8 +233,10 @@ logs `[pci] quiesced <bb>:<dd>.<f>: bus mastering and MSI off for pid <n>`.
 
 The device's own state is not reset: its queues still name the old frames, so
 a new driver resets the device before it turns bus mastering on again (an MSI
-bind through pci-bus does that). A driver that falls back to INTx finds INTx
-disabled and bus mastering off, and nothing turns either back on for it yet.
+bind through pci-bus does that). A driver that takes no MSI stops its own DMA
+engine and then asks pci-bus for bus mastering (`PCI_IPC_BUS_MASTER_REQ`; ata
+does). INTx stays disabled: a driver that falls back to INTx gets no
+interrupts on the function's pin, and nothing turns it back on for it yet.
 
 Config space is reached through the kernel only: `pci_config_read` /
 `pci_config_write` (`pci.config`) hold the same lock as the quiesce across the
@@ -243,7 +245,8 @@ Config space is reached through the kernel only: `pci_config_read` /
 A function is *unmanaged* until a spawn profile names it, *owned* by that
 process while it lives, and *retired* once its reap has quiesced it, until a
 new driver names it. pci-bus arms a function -- MSI and MSI-X enable, MSI
-address and data, bus mastering -- only on behalf of the requesting driver:
+address and data, bus mastering (with an MSI bind or `PCI_IPC_BUS_MASTER_REQ`)
+-- only on behalf of the requesting driver:
 `pci_function_check(endpoint, bdf)` before it touches the binding, and
 `pci_config_write_for(endpoint, bdf, ...)` for each arming write, which the
 kernel performs only while the endpoint's owner drives the function, judged

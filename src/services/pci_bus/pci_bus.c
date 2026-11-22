@@ -425,6 +425,18 @@ static int32_t msi_bind(uint16_t bdf, uint32_t entry, uint32_t address_lo, uint3
         requester, bdf, PCI_REG_COMMAND, cmd | PCI_CMD_BUS_MASTER | PCI_CMD_INTX_DISABLE);
 }
 
+/* Bus mastering for a driver that takes no MSI (PCI_IPC_BUS_MASTER_REQ). The
+ * kernel cleared it when the function's previous driver ended, and an MSI bind
+ * is otherwise the only thing that sets it. Written for the requester, so only
+ * the function's driver can arm it; INTx Disable is left as it is. */
+static int32_t bus_master_enable(uint16_t bdf, int32_t requester) {
+    if (!bdf_present(bdf)) {
+        return WASMOS_ERR_MSI_BAD_DEVICE;
+    }
+    uint32_t cmd = cfg_read(bdf, PCI_REG_COMMAND) & 0xFFFFu;
+    return cfg_write_for(requester, bdf, PCI_REG_COMMAND, cmd | PCI_CMD_BUS_MASTER);
+}
+
 static int32_t msi_unbind(uint16_t bdf, uint32_t entry, int32_t requester) {
     msi_binding_t* b = binding_find(bdf);
     if (!b) {
@@ -680,6 +692,8 @@ static void reply_error(int32_t dest, int32_t src, int32_t request_id, int32_t c
  *                       reply arg0 = entry
  *   PCI_IPC_MSI_UNBIND  arg0 = (bdf << 8) | entry
  *                       reply arg0 = entry
+ *   PCI_IPC_BUS_MASTER_REQ  arg0 = bdf
+ *                       reply arg0 = 0
  *
  * A failure answers PCI_IPC_ERROR with the packed code in arg1 (arg0 is 0).  A
  * message from a negative source, and any opcode not listed above, is dropped
@@ -735,6 +749,16 @@ static void handle_request(int32_t service_endpoint, const wasmos_ipc_message_t*
         }
         (void)wasmos_ipc_send(
             reply_to, service_endpoint, PCI_IPC_RESP, msg->request_id, (int32_t)entry, 0, 0, 0);
+        return;
+    }
+    case PCI_IPC_BUS_MASTER_REQ: {
+        int32_t rc = bus_master_enable((uint16_t)(arg0 & 0xFFFFu), reply_to);
+        if (rc != 0) {
+            reply_error(reply_to, service_endpoint, msg->request_id, rc);
+            return;
+        }
+        (void)wasmos_ipc_send(
+            reply_to, service_endpoint, PCI_IPC_RESP, msg->request_id, 0, 0, 0, 0);
         return;
     }
     default:

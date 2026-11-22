@@ -1053,6 +1053,18 @@ enum {
      * arg1=packed msi domain code.
      */
     PCI_IPC_MSI_UNBIND = 0xD02,
+    /* Turn bus mastering on for a PCI function, on behalf of its driver.
+     * arg0=bdf ((bus<<8)|(device<<3)|function) arg1..arg3=reserved(0).
+     * For a driver that takes no MSI: an MSI bind turns bus mastering on
+     * itself, and nothing else does once the kernel quiesced the function
+     * at a previous driver's end. The driver stops its own DMA engine
+     * before asking, since the device still names the previous driver's
+     * frames. Written through pci_config_write_for, so only the function's
+     * driver can arm it. On success: PCI_IPC_RESP, arg0=0. On failure:
+     * PCI_IPC_ERROR, arg1=WASMOS_ERR_MSI_BAD_DEVICE or
+     * WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER.
+     */
+    PCI_IPC_BUS_MASTER_REQ = 0xD03,
     PCI_IPC_RESP = 0xD80,
     PCI_IPC_ERROR = 0xDFF,
 };
@@ -1715,6 +1727,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0xD00: return "PCI_IPC_MSI_QUERY";
         case 0xD01: return "PCI_IPC_MSI_BIND";
         case 0xD02: return "PCI_IPC_MSI_UNBIND";
+        case 0xD03: return "PCI_IPC_BUS_MASTER_REQ";
         case 0xD80: return "PCI_IPC_RESP";
         case 0xDFF: return "PCI_IPC_ERROR";
         default: return "UNKNOWN";

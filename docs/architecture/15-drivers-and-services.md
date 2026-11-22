@@ -68,12 +68,24 @@ register de-asserts INTRQ at the drive, and `irq_ack` reopens the line the
 kernel masked on dispatch. An event that arrives and is never acked leaves the
 line masked permanently.
 
-Real DMA is **not** implemented: there is no bus-master IDE (BMIDE/PRD)
-programming, and the sector loop is PIO on every path. The `dma_map_borrow`
-zero-copy borrow fast path is separately disabled pending a block protocol that
-carries the buffer grant (`TODO(xfer-buffer owner-push)` in `ata.c`); the driver
-reports its transfer mode once at startup rather than logging a per-request
-"fallback", which used to read like an intermittent failure.
+**Reads are bus-master DMA once bus mastering is on.** The driver programs the
+bus-master IDE engine (BMIDE, a PRD table in its block buffer) into a physical
+destination or a client's borrowed buffer, and falls back to PIO for anything
+it cannot map. It never assumes bus mastering: when a previous driver of the
+function ended, the kernel cleared Bus Master Enable ([Capability and
+Policy](10-capability-and-policy.md), "Device Quiesce"), and a bus-master
+transfer programmed then completes at the drive without moving a byte. So on
+every start the driver stops both engines and asks pci-bus for bus mastering
+(`PCI_IPC_BUS_MASTER_REQ`, its function from the `pci=` startup argument),
+without waiting; it serves PIO until pci-bus answers. The driver reports its
+transfer mode once at startup rather than logging a per-request "fallback",
+which used to read like an intermittent failure.
+
+**ata is a supervised unit** (`ata@pci:<bb>:<dd>.<f>`, `restart=on-failure`
+on its initfs rule) and is respawned from the initfs, which it does not serve.
+The partition manager follows it for `/boot` and `/user`, and fs-wfs for
+`/wfs` on its whole disk; a transfer in flight is held and resent to the
+successor (`tests/test_ata_restart.py`).
 
 Block IPC opcodes:
 
@@ -745,13 +757,9 @@ exit with the compositor and are not started again.
 
 Not built: operator stop/start/restart that does not count as a failure (a
 degraded unit stays degraded until then); retraction of a submitter's units
-when it dies; liveness for the boot services; supervising ata, whose restart
-would read its own module from the `/boot` disk only it serves, and virtio-net,
-whose clients do not follow a restart yet; holding a block transfer across its
-driver's restart instead of failing it, which waits for fs-manager to stop
-forwarding synchronously (a held transfer would keep fs-manager from reading the
-restarted driver's module); a guard
-against reboot loops under `on_critical=reboot`. They are tracked in `docs/TASKS.md`.
+when it dies; liveness for the boot services; supervising virtio-net, whose
+clients do not follow a restart yet; a guard against reboot loops under
+`on_critical=reboot`. They are tracked in `docs/TASKS.md`.
 
 #### `sysinit` — Late-Boot Service Launcher
 
@@ -872,16 +880,20 @@ spawn would carry -- for a PCI driver including its function, which the kernel
 quiesces whenever the driver ends -- and the supervisor's reply retires the
 rule. Any other value rejects the line rather than running the driver
 unsupervised. The shipped rules set `on-failure` for rtc, keyboard, mouse and
-virtio-rng, whose clients hold no session a restart loses. A rule without the
-key spawns directly, as does one whose submission cannot be sent because no
-supervisor is bound yet; a PCI driver spawned directly by path is not quiesced
-at its end, because the packed path form cannot name its function.
+virtio-rng, whose clients hold no session a restart loses, and for virtio-blk
+and ata, whose clients follow a restart and hold a transfer across it. While
+device-manager follows the supervisor, a rule with the key waits for the
+supervisor's name to bind; that matters for the bootstrap rules, which fire
+before it has. A rule without the key spawns directly, as does one whose
+submission cannot be sent, or every such rule when device-manager could not
+start following the supervisor; a PCI driver spawned directly by path is not
+quiesced at its end, because the packed path form cannot name its function.
 
 #### Shipped Rule Files
 
 **`/init/devmgr/rules/default.rules`** (bootstrap rules):
 ```
-SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", RUN+="system/drivers/ata.wap"
+SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", ENV{RESTART}="on-failure", RUN+="system/drivers/ata.wap"
 SUBSYSTEM=="block", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"
 ```
 
@@ -975,9 +987,9 @@ rule-engine and in-memory device registry. The planned direction (from
   driver as a unit (see "Rule Syntax", `ENV{RESTART}`). Clients rebind by name
   on hangup; endpoint identity is not preserved across a restart (see the
   supervisor). A DMA-capable PCI driver is supervised with its function in
-  its grants, which the kernel quiesces at the driver's end; virtio-rng is.
-  virtio-blk, ata and virtio-net stay device-manager-spawned until their
-  clients' rebind is decided (mounts, open files, sockets).
+  its grants, which the kernel quiesces at the driver's end; virtio-rng,
+  virtio-blk and ata are. virtio-net stays device-manager-spawned until
+  net-stack keeps its sockets across a restart.
 - **Dynamic mount policy.** Mount assignments as rule outcomes, not
   compile-time constants. `fs-manager` remains the namespace router.
 - **Unified block-device identity.** All transports normalize to

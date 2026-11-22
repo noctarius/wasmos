@@ -685,7 +685,8 @@ Source: `architecture/13-runtime-and-packaging.md`,
   cascade) is only for a client that cannot. A block driver's restart leaves the
   disk's content unchanged and a lost request is idempotent per LBA, and a NIC's
   leaves its MAC unchanged and a lost frame is packet loss, so both can be
-  rebound. Done: virtio-blk is supervised, fs-wfs on a whole disk follows its
+  rebound. Done: virtio-blk and ata are supervised (ata respawns from the
+  initfs, which it does not serve), fs-wfs on a whole disk follows its
   restart (`wfs_block.h`), as does fs-fat (`fat_block.h`), and
   partition-manager rebinds a disk to its restarted driver, so a filesystem on
   a partition carries over too. All three hold a transfer across the restart
@@ -695,20 +696,16 @@ Source: `architecture/13-runtime-and-packaging.md`,
     `svc kill` and cannot choose whether its read is in flight at the kill or
     begun after it, and the driver has no host harness.
     `test_partition_inflight.zig` covers the table's side of it.
-  - Supervise ata, which carries /boot. partition-manager follows a restart
-    now, but a restart of ata reads `ata.wap` from /boot, which only ata
-    serves: the respawn needs the driver it replaces. It needs the module from
-    somewhere ata does not serve (initfs, or a copy the PM keeps) first, and,
-    as for virtio-blk, nothing after its class registration may wait on the PM.
   - fs-manager submits its backends as supervised units (unmount through
     `SUPERVISOR_IPC_RETRACT_REQ`).
   - net-stack keeps the netif and its sockets across virtio-net's REMOVE and
     rebinds on ADD; then virtio-net gets `ENV{RESTART}`.
 - [ ] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
-  interrupts and DMA back. The quiesce sets INTx Disable and clears Bus Master
-  Enable, and pci-bus turns them back only through an MSI bind
-  (`src/kernel/pci_config.c` TODO). Every in-tree DMA driver binds MSI-X under
-  QEMU, so none hits it today.
+  interrupts back. The quiesce sets INTx Disable, and pci-bus clears it for no
+  one (`src/kernel/pci_config.c` TODO). Bus mastering is restorable without an
+  MSI bind (`PCI_IPC_BUS_MASTER_REQ`, which ata uses); INTx is not. ata takes
+  the legacy IDE lines 14/15, which INTx Disable does not gate, and every other
+  in-tree PCI driver binds MSI-X under QEMU, so none hits it today.
 - [ ] [FEATURE][P2] Operator stop, start and restart for supervised units. `svc kill`
   is the only action, and its end counts as a failure. A stop must end a unit
   without a restart and without counting it; a start or restart must clear a

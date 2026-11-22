@@ -199,6 +199,7 @@ for, which is how a driver's request would otherwise vanish during a lookup.
 | `PCI_IPC_MSI_QUERY`   | 0xd00 | `arg0 = bdf` → `arg0 = WASMOS_PCI_MSI_KIND_*`, `arg1 = vector count` |
 | `PCI_IPC_MSI_BIND`    | 0xd01 | `arg0 = (bdf << 8) \| entry`, `arg1/arg2 = address`, `arg3 = data` |
 | `PCI_IPC_MSI_UNBIND`  | 0xd02 | `arg0 = (bdf << 8) \| entry` |
+| `PCI_IPC_BUS_MASTER_REQ` | 0xd03 | `arg0 = bdf` → bus mastering on, for a driver that takes no MSI |
 
 `MSI_BIND` walks the capability list (`0x11` MSI-X, preferred; `0x05` MSI),
 writes the address/data pair the caller obtained from `wasmos_msi_alloc` into the

@@ -10,7 +10,10 @@ SUBSYSTEM=="boot", RUN+="system/drivers/chardev_server.wap"
 # spawning them before any disk has registered is correct and not a race.
 SUBSYSTEM=="boot", RUN+="system/drivers/partition_manager.wap"
 SUBSYSTEM=="boot", RUN+="system/services/volume_manager.wap"
-SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", RUN+="system/drivers/ata.wap"
+# ata carries /boot and is supervised: a rule here is spawned from the initfs, so
+# its restart reads the module from a filesystem ata does not serve. The
+# partition manager and fs-wfs follow the restarted instance.
+SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", ENV{RESTART}="on-failure", RUN+="system/drivers/ata.wap"
 # /boot is the volume this system was LOADED FROM, whichever disk that is.
 #
 # ATTR{boot} is the only matcher that can say so. Every volume on the boot disk

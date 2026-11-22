@@ -112,7 +112,9 @@ static virtio_net_device_t g_dev;
  * PCI_IPC_INTX_ENABLE_REQ. The request goes out from g_endpoint before the
  * service registers, and its answer is consumed by the request loop. Until then
  * a TX_FRAME is refused with WASMOS_ERR_NET_NOT_READY, which net-stack drops
- * like any frame it cannot send. */
+ * like any frame it cannot send. A request that cannot be sent, or that pci-bus
+ * refuses, ends the driver: the function cannot be armed, and the supervisor's
+ * restart is the retry. */
 #define NET_INTX_ENABLE_REQ_ID 0x7B30
 static uint8_t g_function_armed = 1u;
 static netdrv_stats_t g_stats;
@@ -1000,13 +1002,15 @@ static void handle_tx_frame(int32_t source, int32_t request_id, int32_t frame_le
  * waiting. The kernel quiesced the function when a previous driver of it ended,
  * and only an MSI bind or this request undoes that. initialize_device reset the
  * device first, so it names none of the previous driver's frames once it can
- * master again. */
-static void net_request_intx_enable(void) {
+ * master again. Returns 0, or -1 when the request could not be sent. Without a
+ * pci service nothing can be asked, and the function keeps the firmware's
+ * state. */
+static int net_request_intx_enable(void) {
     uint32_t bdf =
         ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
     if (g_pci_endpoint < 0) {
         (void)printf("[virtio-net] no pci service; intx left as the firmware set it\n");
-        return;
+        return 0;
     }
     if (wasmos_ipc_send(g_pci_endpoint,
                         g_endpoint,
@@ -1017,25 +1021,28 @@ static void net_request_intx_enable(void) {
                         0,
                         0) != 0) {
         (void)printf("[virtio-net] intx enable request could not be sent\n");
-        return;
+        return -1;
     }
     g_function_armed = 0u;
+    return 0;
 }
 
-/* Consume pci-bus's answer to PCI_IPC_INTX_ENABLE_REQ. Returns 1 when `msg` was
- * it. A refusal still arms the driver: the function keeps whatever state it
- * has, which on a first start is the firmware's. The ARP self-probe held back
- * for the answer is sent now. */
+/* Consume pci-bus's answer to PCI_IPC_INTX_ENABLE_REQ. Returns 0 when `msg` is
+ * not it, 1 when the function is armed -- the ARP self-probe held back for the
+ * answer is sent then -- and -1 when pci-bus refused, after resetting the
+ * device so it holds none of this driver's frames when the driver ends. */
 static int net_intx_enable_event(const wasmos_ipc_message_t* msg) {
     if ((msg->type != PCI_IPC_RESP && msg->type != PCI_IPC_ERROR) ||
         msg->request_id != NET_INTX_ENABLE_REQ_ID || msg->source != g_pci_endpoint) {
         return 0;
     }
-    if (msg->type == PCI_IPC_RESP) {
-        (void)printf("[virtio-net] function armed for intx\n");
-    } else {
-        (void)printf("[virtio-net] pci-bus refused intx enable status=%d\n", (int)msg->arg1);
+    if (msg->type != PCI_IPC_RESP) {
+        (void)printf("[virtio-net] pci-bus refused intx enable status=%d; ending\n",
+                     (int)msg->arg1);
+        (void)virtio_modern_reset(&g_dev.vm);
+        return -1;
     }
+    (void)printf("[virtio-net] function armed for intx\n");
     g_function_armed = 1u;
     net_probe_send();
     return 1;
@@ -1096,7 +1103,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * driver to other devices' interrupts. Route it only on the fallback path,
      * where the function is first armed for its pin. */
     if (!g_dev.msix_enabled) {
-        net_request_intx_enable();
+        if (net_request_intx_enable() != 0) {
+            (void)virtio_modern_reset(&g_dev.vm);
+            return WASMOS_ERR_DRIVER_DEVICE_INIT;
+        }
         if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_endpoint) == 0) {
             (void)printf("[virtio-net] irq routed line=%u\n", (unsigned)g_dev.irq);
         } else {
@@ -1158,7 +1168,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             if (msg.source < 0) {
                 continue;
             }
-            if (net_intx_enable_event(&msg)) {
+            int armed = net_intx_enable_event(&msg);
+            if (armed < 0) {
+                return WASMOS_ERR_DRIVER_DEVICE_INIT;
+            }
+            if (armed > 0) {
                 continue;
             }
             /* FIXME(owner-push): net protocol must carry the client buffer_id/grant;

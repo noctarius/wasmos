@@ -188,14 +188,9 @@ static uint8_t g_netifc_subscribed = 0u;
  * process-manager with SVC_IPC_LOOKUP(_CLASS)_REQ traffic while no interface
  * exists. */
 static uint8_t g_netifc_lookup_kicked = 0u;
-static uint8_t g_netdrv_lookup_kicked = 0u;
 static uint8_t g_registered = 0u;
 static uint8_t g_register_pending = 0u;
-static uint8_t g_netdrv_lookup_pending = 0u;
 static wasmos_native_coroutine_runtime_t* g_control_runtime = NULL;
-static wasmos_native_coroutine_t g_netdrv_lookup_coroutine;
-static wasmos_sys_native_ipc_future_t g_netdrv_lookup_future;
-static uint8_t g_netdrv_lookup_stack[4096] __attribute__((aligned(16)));
 static uint8_t g_service_root_stack[8192] __attribute__((aligned(16)));
 int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
                           wasmos_native_coroutine_runtime_t* runtime, void* user);
@@ -299,7 +294,7 @@ static err_t net_stack_tx_frame_raw(net_interface_slot_t* interface, const uint8
                                     uint32_t len);
 static void net_stack_start_rx_poll(net_interface_slot_t* interface, uint8_t immediate);
 static void net_stack_begin_registration(void);
-static void net_stack_try_bind_virtio(void);
+static void net_stack_try_bind_interfaces(void);
 static void net_stack_try_bind_interface(net_interface_slot_t* slot);
 static void net_stack_try_discover_interfaces(void);
 static void net_stack_unbind_interface(uint32_t endpoint);
@@ -1305,34 +1300,9 @@ static void net_stack_try_load_ca(void) {
     g_ca_read_pending = 1u;
 }
 
-static int32_t net_stack_lookup_reply_status(void* user, const nd_ipc_message_t* reply) {
-    (void)user;
-    if (reply == NULL || reply->type != SVC_IPC_LOOKUP_RESP || reply->arg0 == 0xFFFFFFFFu) {
-        return -1;
-    }
-    return 0;
-}
-
 static int32_t net_stack_link_get_reply_status(void* user, const nd_ipc_message_t* reply) {
     (void)user;
     return reply != NULL && reply->type == NETDRV_IPC_RESP ? 0 : -1;
-}
-
-static void net_stack_lookup_coroutine(void* arg) {
-    uintptr_t value = 0u;
-    nd_ipc_message_t* reply;
-
-    (void)arg;
-    if (wasmos_future_await(&g_netdrv_lookup_future.future, &value) != 0 || value == 0u) {
-        g_netdrv_lookup_pending = 0u;
-        return;
-    }
-    reply = (nd_ipc_message_t*)value;
-    g_netdrv_endpoint = reply->arg0;
-    if (g_active_ifc == NULL) {
-        g_active_ifc = net_stack_interface_slot(reply->arg0, 0u, 1u);
-    }
-    g_netdrv_lookup_pending = 0u;
 }
 
 static void net_stack_link_get_coroutine(void* arg) {
@@ -1348,38 +1318,6 @@ static void net_stack_link_get_coroutine(void* arg) {
     reply = (nd_ipc_message_t*)value;
     slot->link_get_pending = 0u;
     net_stack_finish_bind(slot, reply->arg0 != 0u);
-}
-
-static void net_stack_start_lookup_coroutine(void) {
-    uint32_t args[4];
-
-    if (g_netdrv_lookup_pending) {
-        return;
-    }
-    wasmos_sys_ipc_pack_name16_native((const uint8_t*)"virtio.net", 10u, args);
-    wasmos_sys_native_ipc_future_init(&g_netdrv_lookup_future, net_stack_lookup_reply_status, NULL);
-    if (!wasmos_sys_native_ipc_future_send(&g_control_loop,
-                                           &g_netdrv_lookup_future,
-                                           g_proc_endpoint,
-                                           g_control_endpoint,
-                                           SVC_IPC_LOOKUP_REQ,
-                                           args[0],
-                                           args[1],
-                                           args[2],
-                                           args[3],
-                                           NULL)) {
-        return;
-    }
-    g_netdrv_lookup_pending = 1u;
-    if (!g_control_runtime || !wasmos_async_start(g_control_runtime,
-                                                  &g_netdrv_lookup_coroutine,
-                                                  g_netdrv_lookup_stack,
-                                                  sizeof(g_netdrv_lookup_stack),
-                                                  net_stack_lookup_coroutine,
-                                                  NULL)) {
-        wasmos_sys_native_ipc_future_cancel(&g_netdrv_lookup_future, -1);
-        g_netdrv_lookup_pending = 0u;
-    }
 }
 
 static void net_stack_class_lookup_reply(void* user, const nd_ipc_message_t* reply) {
@@ -1746,19 +1684,10 @@ static void net_stack_try_bind_interface(net_interface_slot_t* slot) {
     }
 }
 
-static void net_stack_try_bind_virtio(void) {
-    if (g_netdrv_endpoint == 0u) {
-        /* Legacy name-based fallback for drivers that predate net.ifc class
-         * registration.  Fire it once, not every loop: modern drivers (e.g.
-         * virtio.net) register the net.ifc class and are discovered via the
-         * class event above, so re-polling this name lookup only spammed PM. */
-        if (!g_netdrv_lookup_kicked && !g_netdrv_lookup_pending) {
-            net_stack_start_lookup_coroutine();
-            if (g_netdrv_lookup_pending)
-                g_netdrv_lookup_kicked = 1u;
-        }
-        return;
-    }
+/* Interfaces are discovered only through the net.ifc class -- its lookup and
+ * its ADD events -- because both carry the provider's class instance, which is
+ * what a detached interface is matched to its driver's successor by. */
+static void net_stack_try_bind_interfaces(void) {
     for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
         if (g_interfaces[i].in_use && !g_interfaces[i].link_get_retire) {
             net_stack_try_bind_interface(&g_interfaces[i]);
@@ -2979,9 +2908,7 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
         net_stack_begin_registration();
         net_stack_try_seed_random();
         net_stack_try_discover_interfaces();
-        /* Keep the old name lookup below as a compatibility fallback for
-         * drivers that predate the net.ifc class registration. */
-        net_stack_try_bind_virtio();
+        net_stack_try_bind_interfaces();
         net_stack_try_load_ifcfg();
         net_stack_try_load_ca();
         sys_check_timeouts();

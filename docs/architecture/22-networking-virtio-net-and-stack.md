@@ -57,7 +57,8 @@ Out of scope for initial rollout:
   smoke exchange through QEMU SLIRP, and offers pull plus notification-hinted
   RX delivery.
 - `net-stack` is a native lwIP baseline. It enumerates and subscribes to the
-  `net.ifc` class (retaining `virtio.net` lookup as a compatibility fallback), reads its
+  `net.ifc` class -- its only discovery path, since both carry the provider's
+  class instance -- reads its
   MAC/link state, and installs `eth0` with static SLIRP addressing
   `10.0.2.15/24` (gateway `10.0.2.2`). Its linkoutput flattens pbuf chains into
   a driver-granted transfer buffer; RX polling/notifications feed

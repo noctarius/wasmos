@@ -6,16 +6,28 @@
  * PROC_IPC_CHILD_READY / PROC_IPC_CHILD_EXITED, and restarts or gives up by the
  * unit's policy (supervisor_unit.c). SUPERVISOR_IPC_LIST_REQ reports the unit
  * table. SUPERVISOR_IPC_KILL_REQ kills a unit's instance on request; its end is
- * a failure like any kill of the supervisor's own.
+ * a failure like any kill of the supervisor's own. SUPERVISOR_IPC_RETRACT_REQ
+ * withdraws a unit and the units bound to it: they are killed, not restarted,
+ * and freed. SUPERVISOR_IPC_STOP_REQ ends a unit without a restart and without
+ * counting the end, and holds it stopped; SUPERVISOR_IPC_START_REQ brings a
+ * stopped, failed or degraded unit back with its intensity window cleared.
+ *
+ * A unit submitted with parent=<unit> is bound to that unit's instance. When
+ * the parent's instance ends and another follows, the child's instance is
+ * killed and respawned at once; when the parent will not run again, the child
+ * is stopped and held degraded. Neither counts against the child, and the
+ * change travels down the tree one level per end: a child's own end tells its
+ * children. The link is for a unit that cannot rebind to a restarted peer; one
+ * that can needs none.
  *
  * The boot chain -- fs-manager, fs-tmpfs, fs-init, device-manager -- is the
  * supervisor's own: it records them as critical units before it takes any
  * submission and spawns them from their boot modules (SPAWN_WATCH_FLAG_MODULE),
  * since the filesystem cannot be read before they run.
  *
- * Submitting, killing and declaring the boot set require the sender to hold
- * svc.control; a submission that carries grants also requires spawn.grant
- * (sv_authorize). Listing is open.
+ * Submitting, killing, retracting, stopping, starting and declaring the boot
+ * set require the sender to hold svc.control; a submission that carries grants also requires
+ * spawn.grant (sv_authorize). Listing is open.
  *
  * A unit whose READY names its event-loop endpoint (PROC_READY_FLAG_LIVENESS)
  * is probed with WASMOS_IPC_HEALTH_REQ every period (probe=<s>, default 10 s);
@@ -259,10 +271,73 @@ static void sv_kill(const sv_unit_t* u) {
                                  0);
 }
 
-/* Logs a verdict and carries out the parts that are not the next spawn. */
+static void sv_act(sv_unit_t* u, sv_verdict_t verdict);
+
+/* Tells the units bound to `parent` what its verdict means for them, each of
+ * whose own verdict tells theirs in turn. */
+static void sv_cascade(const sv_unit_t* parent, sv_verdict_t verdict) {
+    sv_parent_event_t event;
+    if (!sv_verdict_parent_event(verdict, &event)) {
+        return;
+    }
+    for (int32_t i = 0; i < SV_UNITS_MAX; ++i) {
+        sv_unit_t* c = &g_units[i];
+        if (c->state != SV_UNIT_FREE && c != parent && strcmp(c->parent, parent->name) == 0) {
+            sv_act(c, sv_unit_parent_event(c, &g_timing, event, sv_now()));
+        }
+    }
+}
+
+/* Logs a verdict and carries out the parts that are not the next spawn, then
+ * tells the unit's children. A retracted unit's slot is cleared last: its name
+ * is what the log line and the children's lookup read. */
 static void sv_act(sv_unit_t* u, sv_verdict_t verdict) {
     char line[160];
     switch (verdict) {
+    case SV_VERDICT_CASCADE:
+        if (u->stop == SV_STOP_RETRACT) {
+            (void)snprintf(
+                line, sizeof(line), "[supervisor] %s retracted; killing pid %u\n", u->name, u->pid);
+        } else if (u->stop == SV_STOP_STOP) {
+            (void)snprintf(line,
+                           sizeof(line),
+                           "[supervisor] %s stop requested; killing pid %u\n",
+                           u->name,
+                           u->pid);
+        } else {
+            (void)snprintf(line,
+                           sizeof(line),
+                           "[supervisor] %s stopping: its parent %s %s; killing pid %u\n",
+                           u->name,
+                           u->parent,
+                           u->stop == SV_STOP_FOLLOW ? "restarts" : "is down",
+                           u->pid);
+        }
+        sv_log(line);
+        sv_kill(u);
+        break;
+    case SV_VERDICT_FOLLOW:
+        sv_log_end(u, "ended for its parent");
+        (void)snprintf(line, sizeof(line), "; restart %u now\n", u->restart_count);
+        sv_log(line);
+        break;
+    case SV_VERDICT_DEGRADED:
+        (void)snprintf(line,
+                       sizeof(line),
+                       "[supervisor] %s degraded: its parent %s is down\n",
+                       u->name,
+                       u->parent);
+        sv_log(line);
+        break;
+    case SV_VERDICT_START:
+        (void)snprintf(line, sizeof(line), "[supervisor] %s starting\n", u->name);
+        sv_log(line);
+        break;
+    case SV_VERDICT_RETRACTED:
+        (void)snprintf(line, sizeof(line), "[supervisor] %s retracted\n", u->name);
+        sv_log(line);
+        memset(u, 0, sizeof(*u));
+        return;
     case SV_VERDICT_RESTART:
         sv_log_end(u, "ended");
         (void)snprintf(line,
@@ -307,6 +382,7 @@ static void sv_act(sv_unit_t* u, sv_verdict_t verdict) {
     default:
         break;
     }
+    sv_cascade(u, verdict);
 }
 
 /* ----------------------------------------------------------------- spawn */
@@ -317,7 +393,7 @@ static void sv_on_spawn_reply(void* user, const wasmos_ipc_message_t* msg) {
     sv_unit_t* u = &g_units[(int32_t)(intptr_t)user];
     g_spawn_unit = -1;
     if (msg->type == PROC_IPC_RESP && msg->arg0 > 0) {
-        sv_unit_spawned(u, &g_timing, (uint32_t)msg->arg0, sv_now());
+        sv_act(u, sv_unit_spawned(u, &g_timing, (uint32_t)msg->arg0, sv_now()));
     } else {
         int32_t code = msg->type == PROC_IPC_ERROR ? msg->arg1 : WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
         sv_act(u, sv_unit_spawn_failed(u, &g_timing, code, sv_now()));
@@ -556,7 +632,7 @@ static void sv_on_submit(void* user, const wasmos_ipc_message_t* msg) {
     wasmos_supervisor_submit_desc_t desc;
     sv_unit_t unit;
     uint32_t sender = sv_sender(msg);
-    int32_t free_slot = -1;
+    uint32_t slot = 0;
     int32_t rc;
     (void)user;
 
@@ -590,22 +666,11 @@ static void sv_on_submit(void* user, const wasmos_ipc_message_t* msg) {
         sv_reply(msg, rc);
         return;
     }
-    for (int32_t i = 0; i < SV_UNITS_MAX; ++i) {
-        if (g_units[i].state == SV_UNIT_FREE) {
-            if (free_slot < 0) {
-                free_slot = i;
-            }
-        } else if (strcmp(g_units[i].name, unit.name) == 0) {
-            sv_reply(msg, WASMOS_ERR_SUPERVISOR_EXISTS);
-            return;
-        }
+    rc = sv_units_admit(g_units, SV_UNITS_MAX, &unit, &slot);
+    if (rc == 0 && g_units[slot].state == SV_UNIT_DEGRADED) {
+        sv_act(&g_units[slot], SV_VERDICT_DEGRADED);
     }
-    if (free_slot < 0) {
-        sv_reply(msg, WASMOS_ERR_SUPERVISOR_NO_SPACE);
-        return;
-    }
-    g_units[free_slot] = unit;
-    sv_reply(msg, 0);
+    sv_reply(msg, rc);
 }
 
 /* SUPERVISOR_IPC_BOOT_SUBMITTED_REQ: the units held now are the boot set. */
@@ -625,6 +690,20 @@ static void sv_on_boot_submitted(void* user, const wasmos_ipc_message_t* msg) {
     sv_reply(msg, 0);
 }
 
+/* Reads the wasmos_supervisor_unit_desc_t a request about one unit lent READ
+ * (arg0=buffer_id arg1=offset arg2=size). Returns 0, or
+ * WASMOS_ERR_SUPERVISOR_BAD_DESC. */
+static int32_t sv_read_unit_desc(const wasmos_ipc_message_t* msg,
+                                 wasmos_supervisor_unit_desc_t* desc) {
+    if (msg->arg2 < (int32_t)sizeof(*desc) || msg->arg1 < 0 ||
+        wasmos_xfer_buffer_read(msg->arg0, desc, (int32_t)sizeof(*desc), msg->arg1) != 0 ||
+        desc->version != SUPERVISOR_UNIT_DESC_VERSION ||
+        desc->name_len > SUPERVISOR_UNIT_NAME_MAX || desc->name[desc->name_len] != '\0') {
+        return WASMOS_ERR_SUPERVISOR_BAD_DESC;
+    }
+    return 0;
+}
+
 /* SUPERVISOR_IPC_KILL_REQ: arg0=buffer_id arg1=offset arg2=size of a
  * wasmos_supervisor_unit_desc_t the caller lent READ. Answered once the kill is
  * sent, with the pid in arg1; the end is judged when it arrives. */
@@ -638,11 +717,9 @@ static void sv_on_kill(void* user, const wasmos_ipc_message_t* msg) {
         sv_reply(msg, auth);
         return;
     }
-    if (msg->arg2 < (int32_t)sizeof(desc) || msg->arg1 < 0 ||
-        wasmos_xfer_buffer_read(msg->arg0, &desc, (int32_t)sizeof(desc), msg->arg1) != 0 ||
-        desc.version != SUPERVISOR_UNIT_DESC_VERSION || desc.name_len > SUPERVISOR_UNIT_NAME_MAX ||
-        desc.name[desc.name_len] != '\0') {
-        sv_reply(msg, WASMOS_ERR_SUPERVISOR_BAD_DESC);
+    auth = sv_read_unit_desc(msg, &desc);
+    if (auth != 0) {
+        sv_reply(msg, auth);
         return;
     }
     for (int32_t i = 0; i < SV_UNITS_MAX; ++i) {
@@ -667,6 +744,131 @@ static void sv_on_kill(void* user, const wasmos_ipc_message_t* msg) {
         return;
     }
     sv_reply(msg, WASMOS_ERR_SUPERVISOR_NO_UNIT);
+}
+
+/* Retracts units[index] after the units bound to it, deepest first, so no
+ * child outlives its parent's slot. */
+static void sv_retract_tree(int32_t index, uint32_t depth) {
+    sv_unit_t* u = &g_units[index];
+    sv_verdict_t verdict = SV_VERDICT_NONE;
+    for (int32_t i = 0; depth < SV_UNITS_MAX && i < SV_UNITS_MAX; ++i) {
+        if (i != index && g_units[i].state != SV_UNIT_FREE &&
+            strcmp(g_units[i].parent, u->name) == 0) {
+            sv_retract_tree(i, depth + 1u);
+        }
+    }
+    if (sv_unit_retract(u, &verdict) == 0) {
+        sv_act(u, verdict);
+    }
+}
+
+/* SUPERVISOR_IPC_RETRACT_REQ: arg0=buffer_id arg1=offset arg2=size of a
+ * wasmos_supervisor_unit_desc_t the caller lent READ. The whole tree is
+ * refused when any unit of it is critical; otherwise every unit of it is
+ * retracted and the request is answered once the kills are sent, with the
+ * named unit's pid in arg1 (0 when it had no instance). */
+static void sv_on_retract(void* user, const wasmos_ipc_message_t* msg) {
+    wasmos_supervisor_unit_desc_t desc;
+    int32_t rc = sv_authorize(SUPERVISOR_IPC_RETRACT_REQ, sv_sender(msg), 0);
+    int32_t index;
+    uint32_t pid;
+    (void)user;
+
+    if (rc == 0) {
+        rc = sv_read_unit_desc(msg, &desc);
+    }
+    if (rc != 0) {
+        sv_reply(msg, rc);
+        return;
+    }
+    index = sv_units_find(g_units, SV_UNITS_MAX, desc.name);
+    if (index < 0) {
+        sv_reply(msg, WASMOS_ERR_SUPERVISOR_NO_UNIT);
+        return;
+    }
+    if (sv_units_subtree_critical(g_units, SV_UNITS_MAX, (uint32_t)index)) {
+        sv_reply(msg, WASMOS_ERR_SUPERVISOR_CRITICAL);
+        return;
+    }
+    pid = g_units[index].pid;
+    sv_retract_tree(index, 0);
+    sv_reply_arg(msg, 0, (int32_t)pid);
+}
+
+/* SUPERVISOR_IPC_STOP_REQ: arg0=buffer_id arg1=offset arg2=size of a
+ * wasmos_supervisor_unit_desc_t the caller lent READ. A unit with a critical
+ * descendant is refused: stopping it degrades them. Answered once the kill is
+ * sent, with the pid in arg1 (0 when the unit had no running instance). */
+static void sv_on_stop(void* user, const wasmos_ipc_message_t* msg) {
+    wasmos_supervisor_unit_desc_t desc;
+    sv_verdict_t verdict = SV_VERDICT_NONE;
+    int32_t rc = sv_authorize(SUPERVISOR_IPC_STOP_REQ, sv_sender(msg), 0);
+    int32_t index;
+    sv_unit_t* u;
+    uint32_t pid;
+    (void)user;
+
+    if (rc == 0) {
+        rc = sv_read_unit_desc(msg, &desc);
+    }
+    if (rc != 0) {
+        sv_reply(msg, rc);
+        return;
+    }
+    index = sv_units_find(g_units, SV_UNITS_MAX, desc.name);
+    if (index < 0) {
+        sv_reply(msg, WASMOS_ERR_SUPERVISOR_NO_UNIT);
+        return;
+    }
+    if (sv_units_subtree_critical(g_units, SV_UNITS_MAX, (uint32_t)index)) {
+        sv_reply(msg, WASMOS_ERR_SUPERVISOR_CRITICAL);
+        return;
+    }
+    u = &g_units[index];
+    rc = sv_unit_stop(u, &verdict);
+    if (rc != 0) {
+        sv_reply(msg, rc);
+        return;
+    }
+    pid = verdict == SV_VERDICT_CASCADE ? u->pid : 0u;
+    sv_act(u, verdict);
+    sv_reply_arg(msg, 0, (int32_t)pid);
+}
+
+/* SUPERVISOR_IPC_START_REQ: arg0=buffer_id arg1=offset arg2=size of a
+ * wasmos_supervisor_unit_desc_t the caller lent READ. Answered once the unit
+ * and its degraded children are due; the next tick spawns them. */
+static void sv_on_start(void* user, const wasmos_ipc_message_t* msg) {
+    wasmos_supervisor_unit_desc_t desc;
+    int32_t rc = sv_authorize(SUPERVISOR_IPC_START_REQ, sv_sender(msg), 0);
+    int32_t index;
+    int32_t parent = -1;
+    sv_unit_t* u;
+    (void)user;
+
+    if (rc == 0) {
+        rc = sv_read_unit_desc(msg, &desc);
+    }
+    if (rc != 0) {
+        sv_reply(msg, rc);
+        return;
+    }
+    index = sv_units_find(g_units, SV_UNITS_MAX, desc.name);
+    if (index < 0) {
+        sv_reply(msg, WASMOS_ERR_SUPERVISOR_NO_UNIT);
+        return;
+    }
+    u = &g_units[index];
+    if (u->parent[0] != '\0') {
+        parent = sv_units_find(g_units, SV_UNITS_MAX, u->parent);
+    }
+    rc = sv_unit_start(u, parent >= 0 ? &g_units[parent] : 0, &g_timing, sv_now());
+    if (rc != 0) {
+        sv_reply(msg, rc);
+        return;
+    }
+    sv_act(u, SV_VERDICT_START);
+    sv_reply(msg, 0);
 }
 
 /* SUPERVISOR_IPC_LIST_REQ: arg0=buffer_id arg1=offset arg2=size of a
@@ -809,6 +1011,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     if (wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_SUBMIT_REQ, sv_on_submit, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_LIST_REQ, sv_on_list, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_KILL_REQ, sv_on_kill, 0) != 0 ||
+        wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_RETRACT_REQ, sv_on_retract, 0) != 0 ||
+        wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_STOP_REQ, sv_on_stop, 0) != 0 ||
+        wasmos_sys_event_register(&g_loop, SUPERVISOR_IPC_START_REQ, sv_on_start, 0) != 0 ||
         wasmos_sys_event_register(
             &g_loop, SUPERVISOR_IPC_BOOT_SUBMITTED_REQ, sv_on_boot_submitted, 0) != 0 ||
         wasmos_sys_event_register(&g_loop, PROC_IPC_CHILD_READY, sv_on_child_ready, 0) != 0 ||

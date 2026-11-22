@@ -550,6 +550,17 @@ pub fn send(dest: i32, src: i32, msg_type: i32, request_id: i32, arg0: i32, arg1
     }
 }
 
+/// Register that the end of whoever owns `awaited` now is owed to `waiter`, as a
+/// WASMOS_IPC_HANGUP naming `awaited` in arg0 (docs/architecture/09, "Peer
+/// Hangup"). One record per waiter, replaced by the next registration. Returns
+/// 0, or WASMOS_NOENT when `awaited` has no live owner -- an end whose hangup
+/// may still be queued -- so a caller learns the peer is gone before it sends to
+/// an endpoint id someone else may own next. The `ipc_peer_await` host call,
+/// which C reaches as `wasmos_ipc_peer_await`.
+pub fn peerAwait(waiter: i32, awaited: i32) i32 {
+    return abi.ipc_peer_await(waiter, awaited);
+}
+
 /// Synchronous request/reply, for BRING-UP ONLY: send from `reply_ep` to
 /// `dest`, then BLOCK on `reply_ep` until the matching reply arrives.
 ///
@@ -1153,6 +1164,24 @@ pub fn notifyReady(proc_endpoint: i32) void {
     const reply_ep = registryReplyEndpoint();
     if (reply_ep < 0) return;
     _ = call(proc_endpoint, reply_ep, op.PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
+}
+
+/// Tell the process manager this driver is ready to serve, without waiting for
+/// the acknowledgement; the Zig form of wasmos_sys_notify_ready_nowait.
+///
+/// For a driver whose clients may already be calling it synchronously -- one
+/// whose class registration made a client probe it. Waiting for the ack closes
+/// a cycle: the process manager may be reading a module through fs-manager,
+/// whose backend waits on that client, which waits on this driver, which waits
+/// on the process manager. A parent that spawned it watched (the supervisor)
+/// learns of the READY from PROC_IPC_CHILD_READY and does not race it.
+///
+/// The ack goes to an endpoint created here and never read; one ack fits its
+/// queue. Returns the send's status, or the endpoint creation's failure.
+pub fn notifyReadyNowait(proc_endpoint: i32) i32 {
+    const ep = abi.ipc_create_endpoint();
+    if (ep < 0) return ep;
+    return send(proc_endpoint, ep, op.PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
 }
 
 // --- device resources ------------------------------------------------------

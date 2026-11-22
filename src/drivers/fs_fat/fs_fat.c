@@ -95,7 +95,7 @@ static fat_op_ctx_t* g_active = 0;
  * waits on a private endpoint nobody sends to, keeping the process alive instead
  * of exiting.  Only when the endpoint itself cannot be created does the loop
  * degenerate into a spin. */
-static void fat_stall(void) {
+static _Noreturn void fat_stall(void) {
     int32_t ep = wasmos_ipc_create_endpoint();
     for (;;) {
         if (ep >= 0) {
@@ -595,6 +595,29 @@ static void fat_drive_active(void) {
     g_active = 0;
 }
 
+/* How often the reactor wakes to age a held block transfer. The hold window is
+ * WASMOS_BLOCK_HOLD_MS, so this bounds how far past it a held op is failed. */
+#define FAT_HOLD_POLL_MS 500
+
+/* Act on what the block layer returned for the active op: resume it on a
+ * completed transfer, or answer and free it on a failed one. Anything else --
+ * no op, or one that is not active -- needs nothing. */
+static void fat_settle_block(fat_op_ctx_t* o, int ok) {
+    if (!o || o != g_active) {
+        return;
+    }
+    if (ok) {
+        fat_drive_active();
+        return;
+    }
+    if (!g_active->err) {
+        g_active->err = WASMOS_ERR_FS_IO;
+    }
+    fat_send_response(g_active, FAT_R_ERR);
+    fat_op_free(g_active);
+    g_active = 0;
+}
+
 /* Pull the next queued op into the active slot and drive it, repeating while ops
  * complete synchronously (no I/O) so the FIFO drains promptly. */
 static void fat_activate_next(void) {
@@ -627,6 +650,14 @@ static void fat_mount_bringup(void) {
         for (;;) {
             int ok = 0;
             if (fat_block_complete(&g_blk, &ok) != &boot) {
+                /* A transfer held for a restarting disk driver waits on the
+                 * follow endpoint, which nothing reads before the reactor
+                 * runs; the volume is not mounted, so nothing is lost by
+                 * stopping. */
+                if (fat_block_holding(&g_blk)) {
+                    fat_log("disk driver ended during mount\n");
+                    fat_stall();
+                }
                 continue; /* spurious / unmatched reply */
             }
             if (!ok) {
@@ -654,6 +685,7 @@ static void fat_mount_bringup(void) {
 WASMOS_WASM_EXPORT int32_t initialize(void) {
     int32_t block_endpoint;
     int32_t reply_endpoint;
+    int32_t follow_endpoint;
     int32_t sel;
     char mount_alias[32];
     /* The registry's own capacity, NUL included. A longer name is truncated
@@ -668,8 +700,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
     g_fs_endpoint = wasmos_ipc_create_endpoint();
     reply_endpoint = wasmos_ipc_create_endpoint();
+    follow_endpoint = wasmos_ipc_create_endpoint();
     g_reply_endpoint = reply_endpoint;
-    if (g_fs_endpoint < 0 || reply_endpoint < 0) {
+    if (g_fs_endpoint < 0 || reply_endpoint < 0 || follow_endpoint < 0) {
         fat_log("endpoint create failed\n");
         fat_stall();
     }
@@ -692,6 +725,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         fat_stall();
     }
     const uint32_t instance = g_requested_instance;
+    /* Subscribed BEFORE the server is looked up, so a server that ends and is
+     * replaced after the lookup is announced on follow_endpoint rather than
+     * lost in between. The events queue there until the reactor reads them;
+     * an ADD naming the server already bound changes nothing. */
+    fat_block_configure(&g_blk, -1, reply_endpoint, instance);
+    if (fat_block_follow(&g_blk, g_proc_endpoint, follow_endpoint) != 0) {
+        fat_log("block class subscription failed; a restarted disk driver is not followed\n");
+    }
     for (int32_t attempt = 0;; ++attempt) {
         block_endpoint = fat_lookup_block_server(reply_endpoint, instance, 1 + attempt);
         if (block_endpoint > 0) {
@@ -700,7 +741,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         (void)wasmos_sched_yield();
     }
 
-    fat_block_configure(&g_blk, block_endpoint, reply_endpoint, g_requested_instance);
+    g_blk.block_endpoint = block_endpoint;
     if (fat_block_setup(&g_blk) != 0) {
         fat_log("block buffer missing\n");
         fat_stall();
@@ -790,10 +831,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         fat_log("ready notification failed\n");
     }
 
-    /* Reactor: select on the service endpoint + the block reply endpoint. */
+    /* Reactor: select on the service endpoint, the block reply endpoint and the
+     * endpoint `block` class events arrive on. */
     sel = wasmos_ipc_select_create();
     if (sel < 0 || wasmos_ipc_select_add(sel, g_fs_endpoint) != 0 ||
-        wasmos_ipc_select_add(sel, reply_endpoint) != 0) {
+        wasmos_ipc_select_add(sel, reply_endpoint) != 0 ||
+        wasmos_ipc_select_add(sel, follow_endpoint) != 0) {
         fat_log("select setup failed\n");
         fat_stall();
     }
@@ -801,25 +844,24 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     for (;;) {
         int32_t ready;
         fat_activate_next();
-        ready = wasmos_ipc_select_wait(sel);
+        /* A held transfer has a deadline (fat_block_expire), so the wait is
+         * bounded while one is held and checked after every wake: traffic on
+         * the service endpoint must not keep a held op past its window. */
+        if (fat_block_holding(&g_blk)) {
+            int ok = 0;
+            ready = wasmos_ipc_select_wait_timeout(sel, FAT_HOLD_POLL_MS);
+            fat_settle_block(fat_block_expire(&g_blk, &ok), ok);
+        } else {
+            ready = wasmos_ipc_select_wait(sel);
+        }
         if (ready < 0) {
             continue;
         }
-        if (ready == reply_endpoint) {
+        if (ready == reply_endpoint || ready == follow_endpoint) {
             int ok = 0;
-            fat_op_ctx_t* o = fat_block_complete(&g_blk, &ok);
-            if (o && o == g_active) {
-                if (!ok) {
-                    if (!g_active->err) {
-                        g_active->err = WASMOS_ERR_FS_IO;
-                    }
-                    fat_send_response(g_active, FAT_R_ERR);
-                    fat_op_free(g_active);
-                    g_active = 0;
-                } else {
-                    fat_drive_active();
-                }
-            }
+            fat_op_ctx_t* o = ready == reply_endpoint ? fat_block_complete(&g_blk, &ok)
+                                                      : fat_block_event(&g_blk, &ok);
+            fat_settle_block(o, ok);
             continue;
         }
         if (ready == g_fs_endpoint) {

@@ -122,6 +122,27 @@ groups:
           bytes around it that the caller did not ask for, so callers stage head
           and tail remainders through a block-buffer destination.
 
+  - name: block_hold
+    doc: |
+      How long a block client keeps the transfers of a disk whose driver ended.
+
+      A supervised disk driver comes back as a new process under the same
+      `block` class instance. A client that follows it -- fs-fat, fs-wfs, the
+      partition manager -- holds every transfer the ended instance never
+      answered, and every transfer asked of the disk meanwhile, and resends
+      them to the successor, so a restart is invisible above the client. A
+      transfer is idempotent per LBA, so a resend of one the ended instance
+      had half done is safe.
+
+      The window is counted from the driver's end. It covers a restart on the
+      supervisor's default policy -- a backoff of 250 ms to 2 s, the spawn, and
+      the 10 s READY deadline (docs/architecture/15-drivers-and-services.md).
+      A driver not back when it closes is taken to be gone: what is held fails
+      with WASMOS_ERR_BLOCK_DEV_GONE, and so does every later transfer to the
+      disk, at once, until a driver serves it again.
+    constants:
+      - { symbol: WASMOS_BLOCK_HOLD_MS, value: 30000, doc: "Milliseconds a client holds a disk's transfers after its driver ends." }
+
   - name: partition_scheme
     doc: |
       Which partition table a disk carries, reported in the `scheme` field of
@@ -516,7 +537,7 @@ groups:
   - name: supervisor_unit_desc
     doc: |
       Version of wasmos_supervisor_unit_desc_t, the record that names one unit
-      in a request about it (SUPERVISOR_IPC_KILL_REQ), declared in
+      in a request about it (SUPERVISOR_IPC_KILL_REQ, SUPERVISOR_IPC_RETRACT_REQ), declared in
       src/drivers/include/wasmos_driver_abi.h.
 
       A reader MUST reject a descriptor whose version it does not know.
@@ -532,7 +553,7 @@ groups:
 
       A reader MUST reject a descriptor whose version it does not know.
     constants:
-      - { symbol: SUPERVISOR_LIST_DESC_VERSION, value: 2, doc: "Current wasmos_supervisor_list_desc_t and record layout." }
+      - { symbol: SUPERVISOR_LIST_DESC_VERSION, value: 3, doc: "Current wasmos_supervisor_list_desc_t and record layout (3: parent)." }
       - { symbol: SUPERVISOR_UNITS_MAX, value: 32, doc: "Units the supervisor's table holds: a list sized for this many records is never short." }
 
   - name: supervisor_unit_state
@@ -545,9 +566,10 @@ groups:
       - { symbol: SUPERVISOR_UNIT_STATE_STARTING, value: 3, doc: "Spawned; READY not yet sent." }
       - { symbol: SUPERVISOR_UNIT_STATE_RUNNING, value: 4, doc: "READY; not yet up long enough to count as stable." }
       - { symbol: SUPERVISOR_UNIT_STATE_STABLE, value: 5, doc: "READY and up long enough that its restart backoff was reset." }
-      - { symbol: SUPERVISOR_UNIT_STATE_STOPPING, value: 6, doc: "Killed by the supervisor for missing READY or its liveness probes; its exit is due." }
+      - { symbol: SUPERVISOR_UNIT_STATE_STOPPING, value: 6, doc: "Killed by the supervisor -- for missing READY or its liveness probes, on request, for its parent, or retracted; its exit is due." }
       - { symbol: SUPERVISOR_UNIT_STATE_STOPPED, value: 7, doc: "Ended and, by its restart policy, not restarted." }
       - { symbol: SUPERVISOR_UNIT_STATE_FAILED, value: 8, doc: "Given up on: the restart limit tripped, or a critical unit died." }
+      - { symbol: SUPERVISOR_UNIT_STATE_DEGRADED, value: 9, doc: "Held stopped because its parent= unit stopped, failed or is itself degraded." }
 
   - name: supervisor_restart
     doc: The restart= policy of a supervised unit.

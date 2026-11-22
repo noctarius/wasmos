@@ -42,6 +42,12 @@ from qemu_test_framework import QemuSession, default_config
 # extent path, and the two together cover both read shapes over the new
 # transport.
 HELLO_TEXT = b"hello from the WFS volume"
+# scripts/wfs/a-directory-name-past-fifteen-bytes/nested/deeper/deep.txt, read
+# only while the disk driver is stopped: its directories and data are not in
+# fs-wfs's staged block.
+HELD_TEXT = b"reached three levels down"
+# fs-wfs's word that a transfer waits for the disk's next driver.
+WFS_HOLD_LINE = "[fs-wfs] holding a block transfer until the disk driver returns"
 
 # PCI slot 6 function 0. A virtio-blk unit is (slot << 3) | function, so this
 # disk is unit 48 -- the unit the /vwfs device-manager rule names. The slot is
@@ -141,6 +147,23 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
                     + (" — it reported 'fs failed'" if failed else "")
                     + f"\n--- tail ---\n{self.session.tail()}\n"
                 )
+
+    def test_the_boot_did_not_wait_on_the_disk_probe(self):
+        """Regression: 2026-11-21-virtio-blk-ready-cycle -- virtio-blk
+        registered its `block` class and then waited on the process manager
+        (the device-manager lookup, then READY's acknowledgement). The
+        registration makes partition-manager probe the disk synchronously, and
+        the driver answers only once its startup returns, while the process
+        manager was reading a module through fs-manager -> fs-fat ->
+        partition-manager. Each waited on the next until the module read timed
+        out after 15 s; under the supervisor the driver also missed its READY
+        deadline and was killed and respawned into the same cycle, and the
+        keyboard, mouse and rtc never started.
+        """
+        log = self.session.syslog_tail(1 << 20)
+        self.assertNotIn("[pm] fs reply timed out", log)
+        self.assertNotRegex(log, r"\[supervisor\] virtio_blk@\S+ not ready")
+        self.assertRegex(log, r"\[supervisor\] boot complete at \d+ ms")
 
     def test_the_driver_claims_the_disk_as_its_own_identity(self):
         """The virtio disk registers under its own canonical id, distinct from ATA's.
@@ -278,6 +301,113 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
         self._cmd("cd /", [])
         self._cat(
             "cat /vwfs/docs/big.txt", [b"line 0000:", b"line 0199:"], timeout_s=60
+        )
+
+    def test_z_the_mount_survives_a_restart_of_its_disk_driver(self):
+        """Runs last: it restarts the driver under /vwfs.
+
+        Regression: 2026-11-21-wfs-hangs-on-a-dead-block-driver -- fs-wfs
+        looked its disk's driver up once, at mount, and a driver that ended
+        left every later read of the mount waiting on an endpoint nobody owned,
+        with fs-manager's forward waiting behind it. The driver is supervised
+        now, and the filesystem follows the new instance: the same mount,
+        served by the same fs-wfs, reads the same bytes afterwards.
+
+        Regression: 2026-11-22-block-transfer-lost-across-a-driver-restart --
+        a read made while the driver was down, or held by it when it ended,
+        failed with WASMOS_ERR_BLOCK_DEV_GONE, although the successor served
+        the same disk a moment later.
+        """
+        self._cmd("cd /", [])
+        self._cat(
+            "cat /vwfs/docs/big.txt", [b"line 0000:", b"line 0199:"], timeout_s=60
+        )
+
+        start = self.session.send_command("svc list", timeout_s=20)
+        self.assertTrue(self.session.expect_from(start, b"wamos> ", timeout_s=30))
+        listing = self.session.buf[start:].decode("utf-8", errors="replace")
+        units = [
+            line.split()[0]
+            for line in listing.splitlines()
+            if line.startswith("virtio_blk@")
+        ]
+        self.assertEqual(len(units), 1, f"one supervised virtio-blk driver:\n{listing}")
+        unit = units[0]
+        fs_pid_before = self._pid_of("fs-wfs")
+        self.assertTrue(fs_pid_before, "ps lists the fs-wfs backends")
+
+        # Three restarts fit the supervisor's default intensity (5 ends in
+        # 60 s). Each is followed at once by a read, which may catch the
+        # driver down -- fs-wfs then holds the transfer and resends it to the
+        # successor -- or reach the successor. The read is whole, from the
+        # same fs-wfs, so nothing remounted.
+        for n in range(1, 4):
+            published = self.session.syslog_tail(1 << 20).count(
+                "[virtio-blk] published id="
+            )
+            start = self.session.send_command(f"svc kill {unit}", timeout_s=20)
+            self.assertTrue(
+                self.session.expect_from(
+                    start, f"svc: killing {unit}".encode(), timeout_s=30
+                ),
+                f"the kill was not sent.\n--- tail ---\n{self.session.tail()}\n",
+            )
+            self.assertTrue(self.session.expect_from(start, b"wamos> ", timeout_s=30))
+            self._cat(
+                "cat /vwfs/docs/big.txt", [b"line 0000:", b"line 0199:"], timeout_s=60
+            )
+            log = self.session.syslog_tail(1 << 20)
+            self.assertGreater(
+                log.count("[virtio-blk] published id="),
+                published,
+                f"the read completed, but not on a restarted driver ({n})",
+            )
+        # A read made while the driver is stopped -- certainly down, where a
+        # read after a kill races the restart -- is held, and completes once
+        # the driver is started again.
+        log = self.session.syslog_tail(1 << 20)
+        holds = log.count(WFS_HOLD_LINE)
+        self._cmd(f"svc stop {unit}", [f"svc: stopping {unit}".encode()])
+        self.assertTrue(
+            self.session.syslog_wait_count(f"[supervisor] {unit} stopped", 1, 30),
+            f"the driver did not stop.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        start = self.session.send_command(
+            "spawn cat /vwfs/a-directory-name-past-fifteen-bytes/nested/deeper/deep.txt",
+            timeout_s=20,
+        )
+        log = self.session.syslog_wait_count(WFS_HOLD_LINE, holds + 1, 30)
+        self.assertTrue(
+            log,
+            f"the read was not held.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertNotIn(
+            HELD_TEXT,
+            bytes(self.session.buf[start:]),
+            "the read completed with no driver",
+        )
+        self._cmd(f"svc start {unit}", [f"svc: starting {unit}".encode()])
+        self.assertTrue(
+            self.session.expect_from(start, HELD_TEXT, timeout_s=60),
+            f"the held read did not complete on the started driver\n"
+            f"--- tail ---\n{self.session.tail()}\n",
+        )
+        self._cat("cat /vwfs/hello.txt", [HELLO_TEXT])
+        self.assertEqual(self._pid_of("fs-wfs"), fs_pid_before)
+        log = self.session.syslog_tail(1 << 20)
+        self.assertNotIn(f"[supervisor] {unit} failed", log)
+        self.assertNotIn("[supervisor] critical unit", log)
+
+    def _pid_of(self, prefix: str) -> list:
+        """The pids of the processes whose name starts with `prefix`, sorted."""
+        start = self.session.send_command("ps", timeout_s=20)
+        self.assertTrue(self.session.expect_from(start, b"wamos> ", timeout_s=30))
+        out = self.session.buf[start:].decode("utf-8", errors="replace")
+        return sorted(
+            line.split()[0]
+            for line in out.splitlines()
+            if len(line.split()) > 1
+            and any(c.startswith(prefix) for c in line.split()[1:])
         )
 
 

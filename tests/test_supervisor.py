@@ -27,6 +27,17 @@ def _syslog_wait(session, needle: str, timeout_s: float) -> str:
     return ""
 
 
+def _syslog_wait_count(session, needle: str, count: int, timeout_s: float) -> str:
+    """The COM2 kernel log once `needle` occurs `count` times, or ''."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        log = session.syslog_tail(1 << 20)
+        if log.count(needle) >= count:
+            return log
+        time.sleep(0.25)
+    return ""
+
+
 def _svc(test, session, args: str) -> str:
     """Runs `svc <args>` and returns what it printed before the next prompt."""
     start = session.send_command(f"svc {args}", timeout_s=20)
@@ -166,6 +177,27 @@ class SupervisorTests(unittest.TestCase):
         )
         self.assertEqual(rows["probe-loop"][3], "trapped", rows["probe-loop"])
 
+    def test_5a_svc_list_columns_line_up(self):
+        # Regression: 2026-11-22-svc-list-fixed-columns -- the columns sat at
+        # fixed offsets sized for a 19-character unit name, so a longer one
+        # (virtio_rng@pci:00:04.0, 22) pushed its row's STATE, PID, RESTARTS
+        # and LAST out from under their headings.
+        out = _svc(self, self.session, "list")
+        table = out[out.index("UNIT") :].splitlines()
+        header = table[0]
+        starts = [header.index(h) for h in ("STATE", "PID", "RESTARTS", "LAST")]
+        rows = [line for line in table[1:] if len(line.split()) >= 5]
+        self.assertTrue(
+            any(len(line.split()[0]) > 19 for line in rows),
+            f"no unit name long enough to test the layout:\n{out}",
+        )
+        for line in rows:
+            for start in starts:
+                self.assertTrue(
+                    start < len(line) and line[start - 1] == " " and line[start] != " ",
+                    f"a column is not under its heading at {start}:\n{header}\n{line}",
+                )
+
     def test_5b_the_boot_chain_is_supervised(self):
         # fs-manager, fs-tmpfs, fs-init and device-manager are the
         # supervisor's own units, spawned from their boot modules before
@@ -243,6 +275,213 @@ class SupervisorTests(unittest.TestCase):
         self.assertTrue(answered, f"svc status shows no clean probe record:\n{out}")
         self.assertGreaterEqual(
             int(answered.group(1)), 5, f"too few probes answered while busy:\n{out}"
+        )
+
+    def test_8a_a_child_follows_its_restarted_parent(self):
+        """parent= binds a unit to its parent's instance: a new parent instance
+        means a new child instance, and the child's restart budget is not spent
+        on its parent's ends. Retracting the parent takes the child with it."""
+        _submit(self, self.session, f"sv-par {PROBE} restart=always -- stay sv-par")
+        _submit(self, self.session, f"sv-kid {PROBE} parent=sv-par -- stay sv-kid")
+        for tag in ("sv-par", "sv-kid"):
+            self.assertTrue(
+                _syslog_wait(self.session, f"[sv-probe] {tag} up", 30),
+                f"{tag} did not come up.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        out = _svc(self, self.session, "status sv-kid")
+        self.assertIn("parent=sv-par", out)
+
+        _svc(self, self.session, "kill sv-par")
+        steps = [
+            "[supervisor] sv-par ended (killed",
+            "[supervisor] sv-kid stopping: its parent sv-par restarts; killing pid",
+            "[supervisor] sv-kid ended for its parent (killed",
+        ]
+        log = _syslog_wait(self.session, steps[-1], 30)
+        self.assertTrue(
+            log,
+            "the child was not stopped with its parent.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        at = [log.find(step) for step in steps]
+        self.assertNotIn(-1, at, f"a step is missing: {dict(zip(steps, at))}")
+        self.assertEqual(at, sorted(at), f"out of order: {dict(zip(steps, at))}")
+        for tag in ("sv-par", "sv-kid"):
+            self.assertTrue(
+                _syslog_wait_count(self.session, f"[sv-probe] {tag} up", 2, 30),
+                f"{tag} did not come back.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        rows = _list_rows(self, self.session)
+        self.assertIn(rows["sv-kid"][0], ("starting", "running", "stable"))
+        self.assertEqual(
+            rows["sv-kid"][2], "1", f"the child's restarts: {rows['sv-kid']}"
+        )
+        self.assertNotIn("sv-kid failed", self.session.syslog_tail(1 << 20))
+
+        out = _svc(self, self.session, "retract sv-par")
+        self.assertRegex(out, r"svc: retracting sv-par \(pid [1-9][0-9]*\)")
+        # The line after the instance's end, not the one announcing the kill.
+        self.assertTrue(
+            _syslog_wait(self.session, "[supervisor] sv-par retracted\n", 30)
+            or _syslog_wait(self.session, "[supervisor] sv-par retracted\r\n", 1),
+            f"the parent was not freed.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        # The two kills complete in either order on SMP, so the parent's line
+        # says nothing about the child's: wait for the child's own completed
+        # retraction, not the "retracted; killing" announcement, before reading
+        # the table.
+        self.assertTrue(
+            _syslog_wait(self.session, "[supervisor] sv-kid retracted\n", 30)
+            or _syslog_wait(self.session, "[supervisor] sv-kid retracted\r\n", 1),
+            f"the child was not freed.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        log = self.session.syslog_tail(1 << 20)
+        rows = _list_rows(self, self.session)
+        self.assertNotIn("sv-par", rows)
+        self.assertNotIn("sv-kid", rows)
+        # Retraction is not a failure, so nothing was restarted for it.
+        self.assertEqual(log.count("[sv-probe] sv-par up"), 2)
+
+    def test_8b_a_child_of_a_parent_that_gave_up_is_degraded(self):
+        _submit(self, self.session, f"sv-lone {PROBE} restart=never -- stay sv-lone")
+        _submit(self, self.session, f"sv-dep {PROBE} parent=sv-lone -- stay sv-dep")
+        self.assertTrue(
+            _syslog_wait(self.session, "[sv-probe] sv-dep up", 30),
+            f"sv-dep did not come up.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        _svc(self, self.session, "kill sv-lone")
+        log = _syslog_wait(
+            self.session, "[supervisor] sv-dep degraded: its parent sv-lone is down", 30
+        )
+        self.assertTrue(
+            log,
+            "the child of a parent that gave up was not degraded.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertIn("[supervisor] sv-lone failed (killed", log)
+        rows = _list_rows(self, self.session)
+        self.assertEqual(rows["sv-lone"][0], "failed")
+        self.assertEqual(rows["sv-dep"][0], "degraded")
+        self.assertEqual(
+            log.count("[sv-probe] sv-dep up"), 1, "a degraded child is not respawned"
+        )
+
+        # A unit submitted under a parent that is down is held, not spawned.
+        _submit(self, self.session, f"sv-late {PROBE} parent=sv-lone -- stay sv-late")
+        self.assertEqual(_list_rows(self, self.session)["sv-late"][0], "degraded")
+        out = _svc(
+            self, self.session, f"submit sv-orphan {PROBE} parent=nobody -- stay x"
+        )
+        self.assertIn("svc: no parent unit of that name", out)
+
+        out = _svc(self, self.session, "retract sv-lone")
+        self.assertIn("svc: sv-lone retracted", out)
+        rows = _list_rows(self, self.session)
+        for unit in ("sv-lone", "sv-dep", "sv-late"):
+            self.assertNotIn(unit, rows)
+        self.assertNotIn("[sv-probe] sv-late up", self.session.syslog_tail(1 << 20))
+
+        out = _svc(self, self.session, "retract fs-manager")
+        self.assertIn("svc: the unit or one bound to it is critical", out)
+        self.assertIn("fs-manager", _list_rows(self, self.session))
+
+    def test_8c_a_stopped_unit_stays_down_until_it_is_started(self):
+        # A stop is the operator's, not a failure: an always unit is not
+        # restarted and nothing is counted, its children are held degraded,
+        # and a start brings back the unit and its children together.
+        _submit(self, self.session, f"sv-sp {PROBE} restart=always -- stay sv-sp")
+        _submit(self, self.session, f"sv-sc {PROBE} parent=sv-sp -- stay sv-sc")
+        for tag in ("sv-sp", "sv-sc"):
+            self.assertTrue(
+                _syslog_wait(self.session, f"[sv-probe] {tag} up", 30),
+                f"{tag} did not come up.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        out = _svc(self, self.session, "stop sv-sp")
+        self.assertRegex(out, r"svc: stopping sv-sp \(pid [1-9][0-9]*\)")
+        for line in (
+            "[supervisor] sv-sp stopped (killed",
+            "[supervisor] sv-sc degraded: its parent sv-sp is down",
+        ):
+            self.assertTrue(
+                _syslog_wait(self.session, line, 30),
+                f"missing {line!r}.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        rows = _list_rows(self, self.session)
+        self.assertEqual(rows["sv-sp"][0], "stopped")
+        self.assertEqual(rows["sv-sp"][2], "0", "a stop is not a restart")
+        self.assertEqual(rows["sv-sc"][0], "degraded")
+        log = self.session.syslog_tail(1 << 20)
+        self.assertNotIn("[supervisor] sv-sp ended", log)
+        self.assertEqual(
+            log.count("[sv-probe] sv-sp up"), 1, "a stopped unit is not restarted"
+        )
+
+        out = _svc(self, self.session, "stop sv-sp")
+        self.assertIn("svc: the unit has no running instance", out)
+        out = _svc(self, self.session, "start sv-sc")
+        self.assertIn("svc: the unit's parent is down; start the parent", out)
+        out = _svc(self, self.session, "start sv-sp")
+        self.assertIn("svc: starting sv-sp", out)
+        for tag in ("sv-sp", "sv-sc"):
+            self.assertTrue(
+                _syslog_wait_count(self.session, f"[sv-probe] {tag} up", 2, 30),
+                f"{tag} did not come back.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        rows = _list_rows(self, self.session)
+        self.assertIn(rows["sv-sp"][0], ("starting", "running", "stable"))
+        self.assertIn(rows["sv-sc"][0], ("starting", "running", "stable"))
+        self.assertEqual(rows["sv-sp"][2], "0", "a start is not a restart")
+        out = _svc(self, self.session, "start sv-sp")
+        self.assertIn("svc: the unit is not stopped, failed or degraded", out)
+
+        # A stopped unit is removed with retract, its degraded child with it.
+        out = _svc(self, self.session, "stop sv-sp")
+        self.assertRegex(out, r"svc: stopping sv-sp \(pid [1-9][0-9]*\)")
+        self.assertTrue(
+            _syslog_wait_count(
+                self.session, "[supervisor] sv-sp stopped (killed", 2, 30
+            ),
+            f"sv-sp did not stop.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertTrue(
+            _syslog_wait_count(
+                self.session,
+                "[supervisor] sv-sc degraded: its parent sv-sp is down",
+                2,
+                30,
+            ),
+            f"sv-sc was not degraded.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        out = _svc(self, self.session, "retract sv-sp")
+        self.assertIn("svc: sv-sp retracted", out)
+        rows = _list_rows(self, self.session)
+        self.assertNotIn("sv-sp", rows)
+        self.assertNotIn("sv-sc", rows)
+
+        out = _svc(self, self.session, "stop fs-manager")
+        self.assertIn("svc: the unit or one bound to it is critical", out)
+        self.assertIn(
+            _list_rows(self, self.session)["fs-manager"][0], ("running", "stable")
+        )
+
+    def test_8d_a_unit_that_gave_up_can_be_started_again(self):
+        # test_3 left probe-loop failed after five crashes. A start clears its
+        # intensity window, so it gets five more ends before it gives up again.
+        self.assertEqual(_list_rows(self, self.session)["probe-loop"][0], "failed")
+        out = _svc(self, self.session, "start probe-loop")
+        self.assertIn("svc: starting probe-loop", out)
+        needle = "[supervisor] probe-loop failed (trapped"
+        log = _syslog_wait_count(self.session, needle, 2, 60)
+        self.assertTrue(
+            log,
+            "the started probe was never given up on again.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertIn("after 8 restarts; giving up", log)
+        self.assertEqual(
+            log.count("[sv-probe] probe-loop crashing before READY"),
+            10,
+            "the start did not give the unit a fresh window of five ends",
         )
 
     def test_9_a_killed_driver_is_restarted_and_serves_again(self):

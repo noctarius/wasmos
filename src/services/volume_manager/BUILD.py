@@ -14,6 +14,7 @@ def build(b):
             b.src("recognise_fat.zig"),
             b.src("recognise_wfs.zig"),
             b.root / "src/drivers/partition_manager/partition_table.zig",
+            b.root / "src/drivers/partition_manager/backends.zig",
             b.root / "src/libsys/wasm/coroutine_wasm.c",
             b.root / "src/libsys/wasm/ipc_future_wasm.c",
             b.root / "src/libsys/wasm/service_runtime_wasm.c",

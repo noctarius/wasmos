@@ -10,6 +10,11 @@
 //! descriptor slot in the one downstream request buffer, at `req_offset`, for
 //! the whole life of the table.
 //!
+//! An entry outlives the driver it was forwarded to. When a disk's driver ends,
+//! its entries are HELD -- the descriptor stays staged, nothing is on the wire
+//! -- and resent to the successor that serves the same disk, so a restart is
+//! invisible to the client (abi/constants.yaml, block_hold).
+//!
 //! Pure and separate from the driver so that contract can be tested on the
 //! host: staging one transfer must never alter the bytes another live transfer's
 //! message points at.
@@ -23,8 +28,24 @@ pub const Inflight = struct {
     /// reply against. Both belong to the client, not to us.
     client: i32 = -1,
     client_request_id: i32 = 0,
-    /// The id we used downstream, which is what the reply carries back.
+    /// The id we used downstream, which is what the reply carries back; 0
+    /// while the transfer is held, since nothing is on the wire.
     down_request_id: i32 = 0,
+    /// The disk the transfer is for, as an index into the driver's disk table.
+    /// A held transfer is resent to whatever serves this disk next.
+    disk: usize = 0,
+    /// BLOCK_IPC_READ_REQ or BLOCK_IPC_WRITE_REQ, as the client sent it.
+    req_type: i32 = 0,
+    /// The client's grant of a zero-copy destination to this driver, or -1 for
+    /// a block-buffer destination. Each forward reborrows it to the disk's
+    /// current driver, so a resend reaches the client's pages too.
+    up_borrow_id: i32 = -1,
+    /// Waiting for the disk's next driver: staged, not sent, and answered by
+    /// nothing until it is resent.
+    held: bool = false,
+    /// The backing driver's endpoint the transfer went to. A driver that ends
+    /// answers none of its transfers, so they are failed by this.
+    server: i32 = -1,
     /// Sectors asked for after clamping, so a short transfer can be reported
     /// against what was actually requested.
     sectors: u32 = 0,
@@ -71,10 +92,39 @@ pub const Table = struct {
         return null;
     }
 
+    /// The transfer on the wire under `request_id`. A held transfer is on no
+    /// wire, so a late reply from the driver that ended matches nothing.
     pub fn findByDownId(self: *Table, request_id: i32) ?*Inflight {
         for (&self.entries) |*e| {
-            if (e.in_use and e.down_request_id == request_id) return e;
+            if (e.in_use and !e.held and e.down_request_id == request_id) return e;
         }
         return null;
+    }
+
+    /// Park `e` until its disk is served again. The caller has dropped its
+    /// downstream borrow already.
+    pub fn hold(e: *Inflight) void {
+        e.held = true;
+        e.down_request_id = 0;
+        e.down_borrow_id = -1;
+        e.server = -1;
+    }
+
+    /// The first transfer held for `disk`, or null. A caller resending or
+    /// failing every one either clears `held` or frees the entry before asking
+    /// again.
+    pub fn nextHeld(self: *Table, disk: usize) ?*Inflight {
+        for (&self.entries) |*e| {
+            if (e.in_use and e.held and e.disk == disk) return e;
+        }
+        return null;
+    }
+
+    /// True while any transfer is held, for any disk.
+    pub fn anyHeld(self: *const Table) bool {
+        for (&self.entries) |*e| {
+            if (e.in_use and e.held) return true;
+        }
+        return false;
     }
 };

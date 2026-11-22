@@ -406,6 +406,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED` | -0x00190009 | a block record is short, unterminated, or names a length outside the transfer buffer |
 | `WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR` | -0x0019000A | the device has no descriptor to report, so it cannot be identified |
 | `WASMOS_ERR_BLOCK_DEV_QUEUE_FULL` | -0x0019000B | a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it |
+| `WASMOS_ERR_BLOCK_DEV_GONE` | -0x0019000C | the device's driver ended and no instance of it serves the device now: a request the dead instance held was never answered, and one begun before a new instance registered was not sent. A later request reaches the new instance once it has registered |
 
 ### `supervisor` (domain 26) — Supervisor refusals of a request, as a SUPERVISOR_IPC_ERROR reply's arg0. A refused submission recorded no unit and spawned nothing; a refused kill killed nothing.
 
@@ -418,5 +419,9 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_SUPERVISOR_DMA_CAPS` | -0x001A0005 | the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance |
 | `WASMOS_ERR_SUPERVISOR_NO_UNIT` | -0x001A0006 | no unit of the name the request gives is recorded |
 | `WASMOS_ERR_SUPERVISOR_NOT_RUNNING` | -0x001A0007 | the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed |
-| `WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED` | -0x001A0008 | the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require |
+| `WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED` | -0x001A0008 | the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require |
 | `WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED` | -0x001A0009 | the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself |
+| `WASMOS_ERR_SUPERVISOR_NO_PARENT` | -0x001A000A | the submission names a parent= unit that is not recorded, or that is being retracted |
+| `WASMOS_ERR_SUPERVISOR_CRITICAL` | -0x001A000B | the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system |
+| `WASMOS_ERR_SUPERVISOR_RUNNING` | -0x001A000C | the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart |
+| `WASMOS_ERR_SUPERVISOR_PARENT_DOWN` | -0x001A000D | the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too |

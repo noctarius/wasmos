@@ -1067,3 +1067,17 @@ int dm_acpi_rule_matches(const acpi_match_rule_t* rule, const pci_device_record_
     }
     return 1;
 }
+
+uint32_t dm_rules_text_usable(char* text, int32_t read_len, uint32_t cap, int* truncated) {
+    uint32_t len = read_len < 0 ? 0u : (uint32_t)read_len;
+    *truncated = 0;
+    if (len > cap) {
+        *truncated = 1;
+        len = cap;
+        while (len > 0u && text[len - 1u] != '\n') {
+            len--;
+        }
+    }
+    text[len] = '\0';
+    return len;
+}

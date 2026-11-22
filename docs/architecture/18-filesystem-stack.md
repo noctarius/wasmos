@@ -35,7 +35,8 @@ WASM service (client)
 
 All inter-layer communication uses the same FS IPC opcode set. `fs_manager`
 acts as a transparent proxy: it receives a request from a client, determines
-which backend owns the path, forwards the request, and relays the reply.
+which backend owns the path, forwards the request, and relays the reply. It
+never waits for that reply (see Deferred Replies below).
 
 ---
 
@@ -255,6 +256,56 @@ queue. That works because a backend keys an open file by the sender's CONTEXT,
 not by the endpoint the open arrived on: every endpoint of `fs_manager` may name
 a file `fs_manager` opened.
 
+#### Deferred Replies
+
+`fs_manager` never waits for a backend. It is below everything that needs a
+file: the process manager reads every module it spawns through it, a restarted
+driver's included. A wait on a backend is therefore a wait on whoever needs
+`fs_manager` to answer -- and a backend can legitimately take arbitrarily long,
+as one does that holds a transfer while its disk driver restarts and the
+restart's own module read comes through `fs_manager`.
+
+So every request `fs_manager` sends a backend is a RECORD
+(`fs_manager_pending.h`), and the service returns to its loop:
+
+- The request goes out from the reply endpoint under `fs_manager`'s OWN request
+  id. Two clients may use one id at one backend, and their replies would be
+  indistinguishable; the client's id is kept in the record and is what the
+  client is answered with.
+- The main loop parks on the service, reply and release endpoints together and
+  drains the reply endpoint each turn. An answer is matched to its record by id
+  and completes it: the client is answered, an OPEN's backend fd becomes a client
+  fd, a CLOSE releases one. `FS_IPC_STREAM` frames are relayed to the client as
+  they arrive and leave the record in flight.
+- A request of several steps is one record that advances on each answer:
+  `READ_PATH` is an open, a read and a close, and the record carries the backend
+  fd and the outcome between them. Each step gets a fresh id, so a late answer
+  to one step is never read as the next.
+- What `fs_manager` lends or owns for a request belongs to its record and is
+  given back when the record ends, BEFORE the client is answered: the reborrow
+  of the client's grant is unborrowed, and the buffer `fs_manager` supplies a
+  path in (READDIR's directory, a chdir target, a mount point) is released. That
+  buffer is one per record, since several such requests are in flight at once.
+- A backend's `WASMOS_IPC_HANGUP` on the reply endpoint, or its class REMOVE,
+  fails every record it held with `WASMOS_ERR_FS_BACKEND_IPC`; an unmount's
+  quiesce is answered as done regardless, since the mount is gone either way.
+  A client's hangup leaves its records in flight, because their answers still
+  arrive and their grants are still lent, but answers nobody; a file opened for
+  an ended client is closed again.
+- The table holds 64 records. A client request that finds none free is refused
+  with `WASMOS_ERR_FS_BUSY`, which is retryable.
+
+Requests `fs_manager` makes of its own accord -- a backend's identity on
+registration, the mount points after one -- are records too, answered to
+nobody. They need no ordering of their own: a backend serves one sender's
+requests in the order sent, and every request that could observe a mount point
+(an ancestor's MKDIR, a listing of its parent) goes to the backend covering that
+parent from the same reply endpoint.
+
+The startup registration of `fs.vfs` and the class subscription and lookup are
+the remaining synchronous calls, to the process manager. They precede any spawn
+by path, so nothing can yet be waiting on `fs_manager`.
+
 ---
 
 ### FS IPC Opcode Table
@@ -354,8 +405,31 @@ the caller-owned object by ownership (`pm_foreign_xfer_ptr`).
 
 Implements FAT12/16 on a block device. FAT32 is detected at mount but its
 cluster read/write is unimplemented (`fat_fatent_read`/`fat_fatent_write`
-return `FS_ERR_CORRUPT`). The block device endpoint is provided at spawn time
-via the device manager's block-device registration mechanism.
+return `FS_ERR_CORRUPT`). Its block server is found through the `block` class,
+by the instance the `id=` it was spawned with fingerprints to.
+
+It follows that server across a restart (`fat_block.h`). It subscribes to the
+`block` class before looking the server up, so no event falls between the
+two. When the server ends, the kernel sends a hangup and the registry sends a
+REMOVE. When a new instance registers under the same instance, its ADD rebinds
+the layer and lends the new endpoint the request buffer. Before each transfer
+an `ipc_peer_await` refuses an ended server's endpoint, and then the queued
+class events are read, since they may name the successor. The mount, its open
+files and the fs-fat process carry over.
+
+A transfer the ended instance never answered, and one begun while no instance
+serves the disk, is **held** and resent to the successor, so a restart is
+invisible to the clients of the mount; a transfer is idempotent per LBA, so a
+resend of one the ended instance had half done is safe. A held transfer takes
+a fresh request id, so a late reply from the ended instance completes nothing,
+and a zero-copy read is resent with the client's buffer reborrowed to the
+successor. The hold lasts `WASMOS_BLOCK_HOLD_MS` from the server's end
+(`abi/constants.yaml`, `block_hold`); a server not back by then is taken to be
+gone, and every transfer fails with `WASMOS_ERR_BLOCK_DEV_GONE` until one
+registers. fs-wfs (`wfs_block.h`) and the partition manager
+([36](36-partition-manager-and-block-identity.md)) hold the same way. Holding
+stalls nothing else: fs-manager never waits on a backend (Deferred Replies),
+so the restarted driver's own module is read through it meanwhile.
 
 - Supports `OPEN`, `READ`, `SEEK`, `CLOSE`, `STAT`, `READDIR`.
 - Write operations (`WRITE`, `MKDIR`, `UNLINK`, `RMDIR`) are implemented for
@@ -547,13 +621,17 @@ own transfer buffer for that, since such a request supplies none.
 
 ### Structural Invariants
 
-1. **Backend discovery is dynamic and PULL-based.** `fs_manager` subscribes to
+1. **`fs_manager` never waits on a backend.** Every request to one is a record
+   completed by its answer (Deferred Replies); the service loop is always free to
+   serve the next request, the process manager's module reads included.
+
+2. **Backend discovery is dynamic and PULL-based.** `fs_manager` subscribes to
    the `fs.backend` class and enumerates it, then pulls each provider's identity.
    It registers its own name and signals readiness BEFORE discovery, because the
    providers are peers that may still be starting and blocking readiness on them
    would deadlock the boot sequence.
 
-2. **Path routing is longest-prefix over mount PATHS, on whole segments**
+3. **Path routing is longest-prefix over mount PATHS, on whole segments**
    (`fsmgr_route_path_for_mounts`). A mount is an absolute canonical path, the
    owner of a request is the longest such path prefixing it, and a match must end
    at a segment boundary so `/wfs` does not own `/wfsx`. `/` prefixes everything,
@@ -561,16 +639,16 @@ own transfer buffer for that, since such a request supplies none.
    own, and a mount at `/mnt/usb` needs no special handling — it simply outranks
    `/mnt`.
 
-3. **`FS_IPC_READ_APP` is retired.** PM spawn now reads app blobs via
+4. **`FS_IPC_READ_APP` is retired.** PM spawn now reads app blobs via
    `FS_IPC_READ_PATH` (see `process_manager_spawn.c`); `FS_IPC_READ_APP_REQ`
    (0x413) survives only as a range sentinel and has no live handler.
 
-4. **`fs_manager` is the sole client-facing endpoint.** Services never talk
+5. **`fs_manager` is the sole client-facing endpoint.** Services never talk
    directly to `fs_fat` or `fs_init`. All FS traffic goes through
    `fs_manager`, which provides uniform path normalization and backend
    multiplexing regardless of which physical volume holds the file.
 
-5. **Stream messages carry partial data; RESP signals end.** A client reading
+6. **Stream messages carry partial data; RESP signals end.** A client reading
    a large file will receive zero or more `FS_IPC_STREAM (0x481)` messages
    followed by exactly one `FS_IPC_RESP (0x480)`. The client must buffer all
    stream chunks before the final response arrives.

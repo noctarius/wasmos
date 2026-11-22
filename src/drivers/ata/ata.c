@@ -205,6 +205,21 @@ static int32_t g_prd_phys = -1;
 static uint8_t g_dma_ready;
 static uint8_t g_dma_logged;
 
+/* Bus mastering is not assumed. When a previous driver of this function ended,
+ * the kernel cleared Bus Master Enable (docs/architecture/10-capability-and-
+ * policy.md, "Device Quiesce"); a bus-master transfer programmed then completes
+ * on the drive's side without moving a byte, so a read returns whatever the
+ * destination already held. The driver therefore stops both engines and asks
+ * pci-bus to turn bus mastering on (PCI_IPC_BUS_MASTER_REQ), on every start,
+ * and serves PIO until pci-bus answers. Neither request is waited for: the
+ * lookup and its answer pass through the request loop, keyed by these ids.
+ * g_pci_bdf is the function from the `pci=` startup argument, or -1. */
+#define ATA_PCI_LOOKUP_REQ_ID 0x7A70
+#define ATA_BUS_MASTER_REQ_ID 0x7A71
+static int32_t g_pci_bdf = -1;
+static int32_t g_pci_endpoint = -1;
+static uint8_t g_dma_capable; /* bus-master window and PRD table are in place */
+
 /* Interrupt state. Events land on their own endpoint so draining them cannot
  * discard a queued block request; a queue belongs to an endpoint, and nothing
  * else sends to this one. g_irq_active means both halves are live for a channel:
@@ -906,7 +921,117 @@ static void ata_dma_setup(void) {
         (void)printf("[ata] no prd table backing; PIO only\n");
         return;
     }
-    g_dma_ready = 1u;
+    /* Stop whatever a previous driver left started and clear its completion
+     * bits, before bus mastering can come back on (the device still names the
+     * previous driver's PRD table). */
+    for (uint32_t ch = 0; ch < ATA_CHANNEL_COUNT; ++ch) {
+        g_channel = ch;
+        (void)ata_bm_write8(ATA_BM_COMMAND, 0u);
+        (void)ata_bm_write8(ATA_BM_STATUS, ATA_BM_STATUS_ERROR | ATA_BM_STATUS_IRQ);
+    }
+    g_channel = 0u;
+    g_dma_capable = 1u;
+}
+
+/* The PCI function from the `pci=<bb>:<dd>.<ff>` startup argument
+ * device-manager passes (hex), as (bus << 8) | (device << 3) | function;
+ * -1 when there is none. */
+static int32_t ata_pci_bdf_from_args(void) {
+    char args[128];
+    uint32_t field[3] = {0u, 0u, 0u};
+    uint32_t len = wasmos_startup_args(args, sizeof(args));
+    const char* p = 0;
+    for (uint32_t i = 0; i + 4u <= len; ++i) {
+        if ((i == 0u || args[i - 1u] == ' ') && args[i] == 'p' && args[i + 1u] == 'c' &&
+            args[i + 2u] == 'i' && args[i + 3u] == '=') {
+            p = args + i + 4u;
+            break;
+        }
+    }
+    if (!p) {
+        return -1;
+    }
+    for (uint32_t f = 0; f < 3u; ++f) {
+        for (uint32_t d = 0; d < 2u; ++d, ++p) {
+            char c = *p;
+            uint32_t v;
+            if (c >= '0' && c <= '9') {
+                v = (uint32_t)(c - '0');
+            } else if (c >= 'a' && c <= 'f') {
+                v = (uint32_t)(c - 'a' + 10);
+            } else if (c >= 'A' && c <= 'F') {
+                v = (uint32_t)(c - 'A' + 10);
+            } else {
+                return -1;
+            }
+            field[f] = (field[f] << 4) | v;
+        }
+        if (f < 2u && *p++ != (f == 0u ? ':' : '.')) {
+            return -1;
+        }
+    }
+    if (field[1] > 0x1Fu || field[2] > 0x7u) {
+        return -1;
+    }
+    return (int32_t)((field[0] << 8) | (field[1] << 3) | field[2]);
+}
+
+/* Start the bus-mastering request: look pci-bus up, without waiting. The
+ * answer arrives on the request loop (ata_bus_master_event). */
+static void ata_bus_master_begin(void) {
+    int32_t name[4];
+    if (!g_dma_capable) {
+        return;
+    }
+    g_pci_bdf = ata_pci_bdf_from_args();
+    if (g_pci_bdf < 0) {
+        (void)printf("[ata] no pci function named; PIO only\n");
+        return;
+    }
+    wasmos_ipc_pack_name16("pci", name);
+    if (wasmos_ipc_send(g_proc_endpoint_cached,
+                        g_block_endpoint,
+                        SVC_IPC_LOOKUP_REQ,
+                        ATA_PCI_LOOKUP_REQ_ID,
+                        name[0],
+                        name[1],
+                        name[2],
+                        name[3]) != 0) {
+        (void)printf("[ata] pci lookup could not be sent; PIO only\n");
+    }
+}
+
+/* Consume one answer of the bus-mastering exchange. Returns 1 when the
+ * message was one, 0 when it belongs to the block protocol. */
+static int ata_bus_master_event(int32_t type, int32_t source, int32_t req_id, int32_t arg0,
+                                int32_t arg1) {
+    if (type == SVC_IPC_LOOKUP_RESP && req_id == ATA_PCI_LOOKUP_REQ_ID &&
+        source == g_proc_endpoint_cached) {
+        if ((uint32_t)arg0 == 0xFFFFFFFFu || wasmos_ipc_send(arg0,
+                                                             g_block_endpoint,
+                                                             PCI_IPC_BUS_MASTER_REQ,
+                                                             ATA_BUS_MASTER_REQ_ID,
+                                                             g_pci_bdf,
+                                                             0,
+                                                             0,
+                                                             0) != 0) {
+            (void)printf("[ata] pci service unavailable; PIO only\n");
+            return 1;
+        }
+        g_pci_endpoint = arg0;
+        return 1;
+    }
+    if ((type == PCI_IPC_RESP || type == PCI_IPC_ERROR) && req_id == ATA_BUS_MASTER_REQ_ID &&
+        g_pci_endpoint >= 0 && source == g_pci_endpoint) {
+        if (type == PCI_IPC_RESP) {
+            g_dma_ready = 1u;
+            (void)printf("[ata] bus mastering on; bus-master DMA from here\n");
+        } else {
+            (void)printf("[ata] pci-bus refused bus mastering (%d); PIO only\n", (int)arg1);
+        }
+        return 1;
+    }
+    return 0;
 }
 
 /* Record which unit a client means, without claiming it.
@@ -954,8 +1079,9 @@ static uint8_t ata_unit_for_instance(uint32_t instance) {
  * intermittent nor a failure — see ata_dma_prepare. */
 static void ata_log_transfer_mode(void) {
     (void)printf("[ata] transfers: %s\n",
-                 g_dma_ready ? "bus-master DMA into physical or borrowed destinations, else PIO"
-                             : "PIO only");
+                 g_dma_capable ? "bus-master DMA into physical or borrowed destinations once "
+                                 "bus mastering is on, else PIO"
+                               : "PIO only");
 }
 
 /* TODO(zero-copy writes): the read direction maps the client's borrow and lets
@@ -1267,6 +1393,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                  (unsigned)ATA_IRQ_LINE_SECONDARY);
     ata_dma_setup();
     ata_log_transfer_mode();
+    ata_bus_master_begin();
 
     /* Identify ran polled above; from here transfers can be interrupt-driven.
      * Both halves are needed and in this order: route the line first so an
@@ -1325,6 +1452,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
          * the line stays masked until someone acks it. */
         (void)ata_service_irq();
 
+        if (ata_bus_master_event(req_type, source, req_id, arg0, arg1)) {
+            continue;
+        }
         ata_handle_ipc(req_type, source, req_id, arg0, arg1, arg2, arg3);
     }
     return 0;

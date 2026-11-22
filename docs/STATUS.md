@@ -186,6 +186,14 @@ linked feature documents for rationale and rollout plans.
   register. Interrupt use is an optimisation, never a dependency: a
   routed-but-silent line is abandoned after a bounded number of empty sleeps and
   the driver reverts to polling.
+- `ata` is a supervised unit (`ata@pci:00:01.1`, `restart=on-failure` on its
+  initfs rule), respawned from the initfs. Killing it leaves `/boot`, `/user`
+  and `/wfs` mounted and reading the same bytes (`tests/test_ata_restart.py`).
+  It never assumes bus mastering: on every start it stops both bus-master
+  engines and asks pci-bus to turn bus mastering on (`PCI_IPC_BUS_MASTER_REQ`),
+  serving PIO until the answer, because the kernel cleared Bus Master Enable
+  when the previous instance ended and a bus-master read programmed then moves
+  no data.
 - `ata` reads use bus-master IDE DMA when a PRD table can be backed
   (`wasmos_block_buffer_phys`), and PIO otherwise; the choice is reported once at
   startup rather than per request, because a per-request "dma fallback" line read
@@ -327,9 +335,59 @@ linked feature documents for rationale and rollout plans.
   powers off, or reboots under kenv `supervisor.on_critical=reboot` (no
   reboot-loop guard yet). `SUPERVISOR_IPC_LIST_REQ` reports the table, one
   `wasmos_supervisor_unit_record_t` per unit, into a buffer the caller owns and
-  lends READ|WRITE (layout version 2, with the liveness fields). All times scale
-  by kenv `supervisor.timescale` (1-100, default 1). The policy is
-  `supervisor_unit.c`, host-tested in `test_supervisor_unit`.
+  lends READ|WRITE (layout version 3, with the liveness fields and the parent).
+  All times scale by kenv `supervisor.timescale` (1-100, default 1). The policy
+  is `supervisor_unit.c`, host-tested in `test_supervisor_unit`.
+- Parent links and retraction: a spec's `parent=<unit>` binds a unit to a unit
+  already held. A parent's restart kills and respawns the child at once
+  (`[supervisor] <child> stopping: its parent <p> restarts`, then `... ended
+  for its parent ...; restart N now`); a parent that stops or gives up holds
+  the child `degraded`. Neither counts against the child; a critical child so
+  stopped halts the system. `SUPERVISOR_IPC_RETRACT_REQ` (`svc retract`)
+  withdraws a unit and its subtree without a restart or a failure, refused for
+  a tree holding a critical unit. `SUPERVISOR_IPC_STOP_REQ` (`svc stop`) ends a
+  unit without a restart or a counted end (`[supervisor] <unit> stop
+  requested; killing pid N`, then `... stopped (...)`) and degrades its
+  children; `SUPERVISOR_IPC_START_REQ` (`svc start`) brings a stopped, failed
+  or degraded unit back with its intensity window cleared, and its degraded
+  children with it (`[supervisor] <unit> starting`). No in-tree unit sets `parent=` yet: the
+  storage and network clients are to rebind to a restarted driver instead
+  (`tests/test_supervisor.py` covers the mechanism with `sv_probe stay`).
+- virtio-blk is supervised (`virtio_blk@pci:<function>`, `restart=on-failure`).
+  fs-wfs follows its disk's `block` instance across a driver restart: a hangup
+  or class REMOVE unbinds it, the class ADD of the new instance rebinds it and
+  moves its request-buffer grant, and the mount, open files and the fs-wfs
+  process carry over (`tests/test_wfs_virtio_blk.py`, `svc kill` of the driver
+  under `/vwfs`). virtio-blk registers its
+  class only after resolving device-manager and sends READY without waiting
+  for the acknowledgement (`notifyReadyNowait` in the Zig driver shim), since a
+  wait on the PM after the registration closed a cycle through
+  partition-manager's synchronous probe.
+- partition-manager follows a restarted disk driver too: a hangup or REMOVE
+  for the disk's endpoint unbinds the disk, and the ADD of the new instance
+  rebinds it without re-reading its table, so its partitions and the mounts on
+  them carry over (`tests/test_partition_manager_disk_arrival.py`, three `svc kill`s under
+  a FAT mount on a virtio-blk partition). partition-manager and volume-manager
+  forget an ended backend's buffer grants (`backends.zig`), so each restart's
+  new endpoint is lent them.
+- fs-fat on a whole disk follows its driver the same way (`fat_block.h`):
+  subscribed to `block` before the server lookup, rebinding on the successor's
+  ADD (`tests/test_fat_virtio_blk.py`, three `svc kill`s under a whole-disk
+  FAT mount; `tests/unit/test_fat_block.c` for the in-flight cases).
+- A disk driver's restart is invisible above its block clients. fs-fat,
+  fs-wfs and partition-manager HOLD a transfer the ended driver never
+  answered, and one asked for while no driver serves the disk, and resend it
+  to the successor under a new request id (a zero-copy destination
+  reborrowed to it). The hold lasts `WASMOS_BLOCK_HOLD_MS` (30 s,
+  `abi/constants.yaml` `block_hold`) from the driver's end; a driver not back
+  by then is taken to be gone, and transfers fail with
+  `WASMOS_ERR_BLOCK_DEV_GONE` until one returns. The three restart tests read
+  right after each `svc kill`, then `svc stop` the driver, start a detached
+  `cat` of a file not read before, require the hold line
+  (`[fat]`/`[fs-wfs]`/`[partition-manager] ... hold...`) and no content, and
+  `svc start` the driver, after which the content must arrive; host cases in
+  `test_fat_block.c`, `test_wfs_read.c` (the WFS stub now has a clock) and
+  `test_partition_inflight.zig`.
 - Liveness: a unit whose `PROC_IPC_NOTIFY_READY` carries
   `PROC_READY_FLAG_LIVENESS` names its event-loop endpoint in arg0; the PM
   records it only when the sender owns it and passes it on in
@@ -436,7 +494,7 @@ linked feature documents for rationale and rollout plans.
   (device-manager, supervisor) and is otherwise refused with
   `GRANT_NOT_AUTHORIZED` before a child exists (`pm_caps_grant_allowed`).
   The supervisor requires `svc.control` (sysinit, device-manager, `svc`) to
-  submit, kill or declare the boot set, and `spawn.grant` too for a submission
+  submit, kill, retract, stop or start a unit or declare the boot set, and `spawn.grant` too for a submission
   carrying a capability descriptor (`sv_authorize`); listing is open. It asks
   the kernel what a sender holds with the `ipc_endpoint_has_cap` host call on
   the request's source endpoint; capability kinds are ABI as `WASMOS_CAP_*`
@@ -1168,13 +1226,28 @@ linked feature documents for rationale and rollout plans.
 - `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
   `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
   optional `/user`.
+- fs-manager never waits on a backend. Every request it sends one -- a relayed
+  client request, the open/read/close of a `READ_PATH`, a `READDIR`, a chdir's
+  STAT, a mount point's MKDIR, a backend-identity pull, an unmount's quiesce --
+  is a record in `fs_manager_pending.h` under fs-manager's own request id, and
+  its answer, drained from the reply endpoint by the main loop, completes or
+  advances it. Requests to different backends, and from different clients, are
+  in flight together; a backend that holds one holds only that one, and the
+  process manager's module reads are served meanwhile. A backend's hangup or
+  class REMOVE fails the requests it held with `WASMOS_ERR_FS_BACKEND_IPC`; a
+  client's hangup leaves its requests to complete unanswered, closing a file
+  that was opened for it. 64 records; a client request that finds none free is
+  refused with `WASMOS_ERR_FS_BUSY`. The paths fs-manager supplies itself
+  travel in a buffer per record, not one shared buffer. Remaining synchronous:
+  the startup registration and class subscription and lookup at the PM.
 - FS backends hold NO working directory. `FS_IPC_READDIR` carries the directory
   to list, `FS_IPC_CHDIR` is client-to-fs-manager only, and fs-manager validates
   a chdir with `FS_IPC_STAT_REQ`. Removed from all four backends (fs-tmpfs,
   fs-wfs, fs-fat, fs-init) along with their per-client tables. This deletes a
   CHDIR round trip before every listing, and the cross-request ordering
   constraint that made a listing depend on the previous request -- which was the
-  one protocol obstacle to fs-manager ever serving requests concurrently.
+  one protocol obstacle to fs-manager serving requests concurrently, as it now
+  does.
 
   Two defects surfaced and were fixed with it, both pre-existing and both about
   the STAT reply's mode, which is now contractually required to carry the file

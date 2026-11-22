@@ -110,6 +110,14 @@ static int sv_parse_option(sv_unit_t* unit, const char* tok, uint32_t len) {
         unit->probe_s = seconds;
         return 0;
     }
+    if (sv_token_is(tok, key_len, "parent")) {
+        if (val_len == 0 || val_len >= SV_UNIT_NAME_MAX) {
+            return -1;
+        }
+        memcpy(unit->parent, val, val_len);
+        unit->parent[val_len] = '\0';
+        return 0;
+    }
     return -1;
 }
 
@@ -199,6 +207,52 @@ int32_t sv_spec_parse(const char* spec, const sv_timing_t* timing, uint32_t now,
     return 0;
 }
 
+static sv_verdict_t sv_unit_decide(sv_unit_t* unit, const sv_timing_t* timing, int failure,
+                                   uint32_t now);
+
+/* The instance ended, or its spawn answered, while a stop of the
+ * supervisor's own was pending: the end is the stop's, not the instance's, and
+ * nothing is counted against the unit. A critical unit's end is critical
+ * whatever caused it. */
+static sv_verdict_t sv_unit_settle(sv_unit_t* unit, const sv_timing_t* timing, uint32_t now) {
+    sv_stop_t stop = unit->stop;
+    unit->stop = SV_STOP_NONE;
+    if (unit->cls == SV_CLASS_CRITICAL) {
+        return sv_unit_decide(unit, timing, 1, now);
+    }
+    unit->pid = 0;
+    unit->probe_ep = SV_PROBE_NONE;
+    unit->probe_pending = 0;
+    switch (stop) {
+    case SV_STOP_FOLLOW:
+        unit->state = SV_UNIT_SPAWN_DUE;
+        unit->deadline = now;
+        unit->restart_count++;
+        return SV_VERDICT_FOLLOW;
+    case SV_STOP_DEGRADE:
+        unit->state = SV_UNIT_DEGRADED;
+        return SV_VERDICT_DEGRADED;
+    case SV_STOP_STOP:
+        unit->state = SV_UNIT_STOPPED;
+        return SV_VERDICT_STOPPED;
+    default:
+        unit->state = SV_UNIT_FREE;
+        return SV_VERDICT_RETRACTED;
+    }
+}
+
+/* Makes `stop` pending unless a stronger one already is (sv_stop_t order). */
+static void sv_unit_pend(sv_unit_t* unit, sv_stop_t stop) {
+    if (stop > unit->stop) {
+        unit->stop = stop;
+    }
+}
+
+static int sv_has_instance(const sv_unit_t* unit) {
+    return unit->state == SV_UNIT_STARTING || unit->state == SV_UNIT_RUNNING ||
+           unit->state == SV_UNIT_STABLE;
+}
+
 /* The unit ended (or never started). `failure` says whether the end counts
  * against it; the restart policy and the intensity window decide the rest.
  * Every end that would restart the unit is recorded in the window, clean ends
@@ -249,9 +303,10 @@ void sv_unit_spawn_sent(sv_unit_t* unit) {
     }
 }
 
-void sv_unit_spawned(sv_unit_t* unit, const sv_timing_t* timing, uint32_t pid, uint32_t now) {
+sv_verdict_t sv_unit_spawned(sv_unit_t* unit, const sv_timing_t* timing, uint32_t pid,
+                             uint32_t now) {
     if (!unit || !timing || unit->state != SV_UNIT_SPAWNING) {
-        return;
+        return SV_VERDICT_NONE;
     }
     unit->pid = pid;
     unit->state = SV_UNIT_STARTING;
@@ -260,6 +315,11 @@ void sv_unit_spawned(sv_unit_t* unit, const sv_timing_t* timing, uint32_t pid, u
     unit->probe_pending = 0;
     unit->probes_answered = 0;
     unit->probe_misses = 0;
+    if (unit->stop != SV_STOP_NONE) {
+        unit->state = SV_UNIT_STOPPING;
+        return SV_VERDICT_CASCADE;
+    }
+    return SV_VERDICT_NONE;
 }
 
 sv_verdict_t sv_unit_spawn_failed(sv_unit_t* unit, const sv_timing_t* timing, int32_t code,
@@ -269,6 +329,9 @@ sv_verdict_t sv_unit_spawn_failed(sv_unit_t* unit, const sv_timing_t* timing, in
     }
     unit->last_status = code;
     unit->last_reason = PROC_EXIT_REASON_START_FAILED;
+    if (unit->stop != SV_STOP_NONE) {
+        return sv_unit_settle(unit, timing, now);
+    }
     return sv_unit_decide(unit, timing, 1, now);
 }
 
@@ -351,18 +414,164 @@ sv_verdict_t sv_unit_exited(sv_unit_t* unit, const sv_timing_t* timing, int32_t 
     }
     unit->last_status = status;
     unit->last_reason = reason;
+    if (unit->stop != SV_STOP_NONE) {
+        return sv_unit_settle(unit, timing, now);
+    }
     /* A unit the supervisor killed failed, whatever its exit says. */
     failure = unit->state == SV_UNIT_STOPPING || sv_exit_is_failure(status, reason);
     return sv_unit_decide(unit, timing, failure, now);
 }
 
 int32_t sv_unit_kill(sv_unit_t* unit) {
-    if (!unit || (unit->state != SV_UNIT_STARTING && unit->state != SV_UNIT_RUNNING &&
-                  unit->state != SV_UNIT_STABLE)) {
+    if (!unit || !sv_has_instance(unit)) {
         return WASMOS_ERR_SUPERVISOR_NOT_RUNNING;
     }
     unit->state = SV_UNIT_STOPPING;
     return 0;
+}
+
+/* Makes a stopped, failed or degraded unit due at `now`, as a fresh
+ * submission is. */
+static void sv_unit_rearm(sv_unit_t* unit, const sv_timing_t* timing, uint32_t now) {
+    unit->state = SV_UNIT_SPAWN_DUE;
+    unit->deadline = now;
+    unit->stop = SV_STOP_NONE;
+    unit->backoff_ms = timing->backoff_min_ms;
+    unit->ends_head = 0;
+    unit->ends_recorded = 0;
+}
+
+static int sv_is_down(const sv_unit_t* unit) {
+    return unit->state == SV_UNIT_STOPPED || unit->state == SV_UNIT_FAILED ||
+           unit->state == SV_UNIT_DEGRADED;
+}
+
+sv_verdict_t sv_unit_parent_event(sv_unit_t* unit, const sv_timing_t* timing,
+                                  sv_parent_event_t event, uint32_t now) {
+    sv_stop_t stop = event == SV_PARENT_RESTARTING ? SV_STOP_FOLLOW : SV_STOP_DEGRADE;
+    if (!unit || !timing) {
+        return SV_VERDICT_NONE;
+    }
+    if (event == SV_PARENT_STARTING) {
+        if (unit->state != SV_UNIT_DEGRADED) {
+            return SV_VERDICT_NONE;
+        }
+        sv_unit_rearm(unit, timing, now);
+        return SV_VERDICT_START;
+    }
+    if (sv_has_instance(unit)) {
+        sv_unit_pend(unit, stop);
+        unit->state = SV_UNIT_STOPPING;
+        return SV_VERDICT_CASCADE;
+    }
+    switch (unit->state) {
+    case SV_UNIT_SPAWNING:
+    case SV_UNIT_STOPPING:
+        sv_unit_pend(unit, stop);
+        return SV_VERDICT_NONE;
+    case SV_UNIT_SPAWN_DUE:
+        if (event == SV_PARENT_RESTARTING) {
+            return SV_VERDICT_NONE;
+        }
+        unit->stop = SV_STOP_DEGRADE;
+        return sv_unit_settle(unit, timing, now);
+    default:
+        return SV_VERDICT_NONE;
+    }
+}
+
+int32_t sv_unit_retract(sv_unit_t* unit, sv_verdict_t* verdict) {
+    sv_verdict_t v = SV_VERDICT_NONE;
+    if (!unit || unit->state == SV_UNIT_FREE) {
+        return WASMOS_ERR_SUPERVISOR_NO_UNIT;
+    }
+    if (unit->cls == SV_CLASS_CRITICAL) {
+        return WASMOS_ERR_SUPERVISOR_CRITICAL;
+    }
+    if (sv_has_instance(unit)) {
+        unit->stop = SV_STOP_RETRACT;
+        unit->state = SV_UNIT_STOPPING;
+        v = SV_VERDICT_CASCADE;
+    } else if (unit->state == SV_UNIT_SPAWNING || unit->state == SV_UNIT_STOPPING) {
+        unit->stop = SV_STOP_RETRACT;
+    } else {
+        unit->stop = SV_STOP_NONE;
+        unit->pid = 0;
+        unit->state = SV_UNIT_FREE;
+        v = SV_VERDICT_RETRACTED;
+    }
+    if (verdict) {
+        *verdict = v;
+    }
+    return 0;
+}
+
+int32_t sv_unit_stop(sv_unit_t* unit, sv_verdict_t* verdict) {
+    sv_verdict_t v = SV_VERDICT_NONE;
+    if (!unit || unit->state == SV_UNIT_FREE) {
+        return WASMOS_ERR_SUPERVISOR_NO_UNIT;
+    }
+    if (unit->cls == SV_CLASS_CRITICAL) {
+        return WASMOS_ERR_SUPERVISOR_CRITICAL;
+    }
+    if (sv_is_down(unit)) {
+        return WASMOS_ERR_SUPERVISOR_NOT_RUNNING;
+    }
+    if (sv_has_instance(unit)) {
+        sv_unit_pend(unit, SV_STOP_STOP);
+        unit->state = SV_UNIT_STOPPING;
+        v = SV_VERDICT_CASCADE;
+    } else if (unit->state == SV_UNIT_SPAWNING || unit->state == SV_UNIT_STOPPING) {
+        sv_unit_pend(unit, SV_STOP_STOP);
+    } else {
+        unit->stop = SV_STOP_NONE;
+        unit->pid = 0;
+        unit->state = SV_UNIT_STOPPED;
+        v = SV_VERDICT_STOPPED;
+    }
+    if (verdict) {
+        *verdict = v;
+    }
+    return 0;
+}
+
+int32_t sv_unit_start(sv_unit_t* unit, const sv_unit_t* parent, const sv_timing_t* timing,
+                      uint32_t now) {
+    if (!unit || !timing || unit->state == SV_UNIT_FREE) {
+        return WASMOS_ERR_SUPERVISOR_NO_UNIT;
+    }
+    if (!sv_is_down(unit)) {
+        return WASMOS_ERR_SUPERVISOR_RUNNING;
+    }
+    if (parent && sv_is_down(parent)) {
+        return WASMOS_ERR_SUPERVISOR_PARENT_DOWN;
+    }
+    sv_unit_rearm(unit, timing, now);
+    return 0;
+}
+
+int sv_verdict_parent_event(sv_verdict_t verdict, sv_parent_event_t* event) {
+    sv_parent_event_t ev;
+    switch (verdict) {
+    case SV_VERDICT_RESTART:
+    case SV_VERDICT_FOLLOW:
+        ev = SV_PARENT_RESTARTING;
+        break;
+    case SV_VERDICT_STOPPED:
+    case SV_VERDICT_FAILED:
+    case SV_VERDICT_DEGRADED:
+        ev = SV_PARENT_GONE;
+        break;
+    case SV_VERDICT_START:
+        ev = SV_PARENT_STARTING;
+        break;
+    default:
+        return 0;
+    }
+    if (event) {
+        *event = ev;
+    }
+    return 1;
 }
 
 sv_verdict_t sv_unit_tick(sv_unit_t* unit, const sv_timing_t* timing, uint32_t now) {
@@ -438,6 +647,7 @@ uint32_t sv_units_list(const sv_unit_t* units, uint32_t n, const sv_timing_t* ti
         r->probe_interval_ms = sv_is_probed(u) ? sv_unit_probe_interval(u, timing) : 0u;
         r->probes_answered = u->probes_answered;
         r->probe_misses = u->probe_misses;
+        memcpy(r->parent, u->parent, sizeof(u->parent));
     }
     if (total) {
         *total = held;
@@ -450,6 +660,76 @@ int sv_unit_is_up(const sv_unit_t* unit) {
            !sv_awaits_first_answer(unit);
 }
 
+int32_t sv_units_find(const sv_unit_t* units, uint32_t n, const char* name) {
+    for (uint32_t i = 0; units && name && i < n; ++i) {
+        if (units[i].state != SV_UNIT_FREE && strcmp(units[i].name, name) == 0) {
+            return (int32_t)i;
+        }
+    }
+    return -1;
+}
+
+int32_t sv_units_admit(sv_unit_t* units, uint32_t n, const sv_unit_t* unit, uint32_t* slot) {
+    int32_t free_slot = -1;
+    int32_t parent = -1;
+    if (!units || !unit || !slot) {
+        return WASMOS_ERR_SUPERVISOR_BAD_SPEC;
+    }
+    if (sv_units_find(units, n, unit->name) >= 0) {
+        return WASMOS_ERR_SUPERVISOR_EXISTS;
+    }
+    if (unit->parent[0] != '\0') {
+        parent = sv_units_find(units, n, unit->parent);
+        if (parent < 0 || units[parent].stop == SV_STOP_RETRACT) {
+            return WASMOS_ERR_SUPERVISOR_NO_PARENT;
+        }
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        if (units[i].state == SV_UNIT_FREE) {
+            free_slot = (int32_t)i;
+            break;
+        }
+    }
+    if (free_slot < 0) {
+        return WASMOS_ERR_SUPERVISOR_NO_SPACE;
+    }
+    units[free_slot] = *unit;
+    if (parent >= 0) {
+        sv_state_t ps = units[parent].state;
+        if (ps == SV_UNIT_STOPPED || ps == SV_UNIT_FAILED || ps == SV_UNIT_DEGRADED) {
+            units[free_slot].state = SV_UNIT_DEGRADED;
+        }
+    }
+    *slot = (uint32_t)free_slot;
+    return 0;
+}
+
+/* Units are admitted only under a parent already held and names are unique,
+ * so the parent links form a forest; `depth` bounds the walk regardless. */
+static int sv_subtree_critical(const sv_unit_t* units, uint32_t n, uint32_t index, uint32_t depth) {
+    if (units[index].cls == SV_CLASS_CRITICAL) {
+        return 1;
+    }
+    if (depth >= n) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        if (units[i].state != SV_UNIT_FREE && i != index &&
+            strcmp(units[i].parent, units[index].name) == 0 &&
+            sv_subtree_critical(units, n, i, depth + 1u)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int sv_units_subtree_critical(const sv_unit_t* units, uint32_t n, uint32_t index) {
+    if (!units || index >= n || units[index].state == SV_UNIT_FREE) {
+        return 0;
+    }
+    return sv_subtree_critical(units, n, index, 0);
+}
+
 sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uint32_t* index) {
     uint32_t up = 0;
     int pending = 0;
@@ -458,7 +738,8 @@ sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uin
         if (u->state == SV_UNIT_FREE || !u->boot || u->cls == SV_CLASS_OPTIONAL) {
             continue;
         }
-        if (u->state == SV_UNIT_FAILED || u->state == SV_UNIT_STOPPED) {
+        if (u->state == SV_UNIT_FAILED || u->state == SV_UNIT_STOPPED ||
+            u->state == SV_UNIT_DEGRADED) {
             if (index) {
                 *index = i;
             }
@@ -521,6 +802,8 @@ const char* sv_state_name(sv_state_t state) {
         return "stopped";
     case SV_UNIT_FAILED:
         return "failed";
+    case SV_UNIT_DEGRADED:
+        return "degraded";
     default:
         return "free";
     }

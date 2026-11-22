@@ -30,14 +30,13 @@
 #define DEVMGR_RULES_INIT_ROOT "/init/devmgr/rules"
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"
-/* Fixed read/parse buffer for the rules file. Sized for the partition matchers
- * -- a rule naming a type GUID and a label runs to roughly twice the length of
- * one naming a driver and a unit -- and for the shipped boot rules, which are
- * over 8 KiB; a rule past the cap is lost to the truncation below. The buffer
- * is static (g_rule_text): the guest's C stack cannot hold it.
- * TODO: a rules file larger than this is silently truncated, dropping its
- * trailing rules with no diagnostic — raising the cap postpones that rather than
- * fixing it. Size the read from FS_IPC_STAT_REQ, or stream it, so the file has
+/* Fixed read/parse buffer for the rules file. Sized for the partition matchers:
+ * a rule naming a type GUID and a label runs to roughly twice the length of one
+ * naming a driver and a unit, and for the rule files' comments, which explain
+ * each rule in place.
+ * TODO: a rules file larger than this loses the rules past its last whole line
+ * within the cap; the loss is logged (dm_rules_text_usable) but the rules stay
+ * unloaded. Size the read from FS_IPC_STAT_REQ, or stream it, so the file has
  * no size limit (see docs/TASKS.md). */
 #define DEVMGR_RULE_TEXT_CAP 16384
 #define ALWAYS_SPAWN_RULE_CAP 8
@@ -450,7 +449,8 @@ typedef struct {
      * mount_req_pending: the rule is retired when the supervisor answers. */
     uint8_t submit_req_pending;
     int32_t submit_req_bid;      /* owner-push buffer lent READ to the supervisor */
-    int32_t sv_endpoint;         /* receives the submit reply and the name watch's events */
+    int32_t sv_endpoint;         /* receives the submit reply and the name watch's events;
+                                  * -1 when the supervisor is not followed */
     int32_t supervisor_endpoint; /* bound by the "supervisor" name watch; -1 until then */
     /* One PROC_IPC_SPAWN_WATCHED in flight for the armed PCI or ACPI rule, held
      * like submit_req_pending: the rule is retired when its child latches READY

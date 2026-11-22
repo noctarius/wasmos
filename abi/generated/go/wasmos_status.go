@@ -312,6 +312,7 @@ const (
 	WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED int32 = -0x00190009 // a block record is short, unterminated, or names a length outside the transfer buffer
 	WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR int32 = -0x0019000A // the device has no descriptor to report, so it cannot be identified
 	WASMOS_ERR_BLOCK_DEV_QUEUE_FULL int32 = -0x0019000B // a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it
+	WASMOS_ERR_BLOCK_DEV_GONE int32 = -0x0019000C // the device's driver ended and no instance of it serves the device now: a request the dead instance held was never answered, and one begun before a new instance registered was not sent. A later request reaches the new instance once it has registered
 	WASMOS_ERR_SUPERVISOR_BAD_DESC int32 = -0x001A0001 // the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor
 	WASMOS_ERR_SUPERVISOR_BAD_SPEC int32 = -0x001A0002 // the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option
 	WASMOS_ERR_SUPERVISOR_EXISTS int32 = -0x001A0003 // a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed
@@ -319,8 +320,12 @@ const (
 	WASMOS_ERR_SUPERVISOR_DMA_CAPS int32 = -0x001A0005 // the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance
 	WASMOS_ERR_SUPERVISOR_NO_UNIT int32 = -0x001A0006 // no unit of the name the request gives is recorded
 	WASMOS_ERR_SUPERVISOR_NOT_RUNNING int32 = -0x001A0007 // the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed
-	WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED int32 = -0x001A0008 // the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require
+	WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED int32 = -0x001A0008 // the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require
 	WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED int32 = -0x001A0009 // the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself
+	WASMOS_ERR_SUPERVISOR_NO_PARENT int32 = -0x001A000A // the submission names a parent= unit that is not recorded, or that is being retracted
+	WASMOS_ERR_SUPERVISOR_CRITICAL int32 = -0x001A000B // the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system
+	WASMOS_ERR_SUPERVISOR_RUNNING int32 = -0x001A000C // the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart
+	WASMOS_ERR_SUPERVISOR_PARENT_DOWN int32 = -0x001A000D // the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -940,6 +945,8 @@ func WasmosStrerror(c int32) string {
 		return "the device has no descriptor to report, so it cannot be identified"
 	case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL:
 		return "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it"
+	case WASMOS_ERR_BLOCK_DEV_GONE:
+		return "the device's driver ended and no instance of it serves the device now: a request the dead instance held was never answered, and one begun before a new instance registered was not sent. A later request reaches the new instance once it has registered"
 	case WASMOS_ERR_SUPERVISOR_BAD_DESC:
 		return "the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor"
 	case WASMOS_ERR_SUPERVISOR_BAD_SPEC:
@@ -955,9 +962,17 @@ func WasmosStrerror(c int32) string {
 	case WASMOS_ERR_SUPERVISOR_NOT_RUNNING:
 		return "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed"
 	case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED:
-		return "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require"
+		return "the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require"
 	case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED:
 		return "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself"
+	case WASMOS_ERR_SUPERVISOR_NO_PARENT:
+		return "the submission names a parent= unit that is not recorded, or that is being retracted"
+	case WASMOS_ERR_SUPERVISOR_CRITICAL:
+		return "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system"
+	case WASMOS_ERR_SUPERVISOR_RUNNING:
+		return "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart"
+	case WASMOS_ERR_SUPERVISOR_PARENT_DOWN:
+		return "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too"
 	default:
 		return "unknown error"
 	}

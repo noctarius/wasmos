@@ -16,6 +16,7 @@
 #include "fs_manager_path.h"
 #include "fs_manager_backends.h"
 #include "fs_manager_clients.h"
+#include "fs_manager_pending.h"
 
 /* Retries a reply gets before this service gives up on a client whose endpoint
  * stays full. Generous on purpose: the failure it guards against is permanent
@@ -24,8 +25,8 @@
 #define FSMGR_REPLY_SEND_RETRIES 8192
 /* Closes for ended clients that may be in flight at once; the rest wait in their
  * releasing slots. Half the IPC queue depth (32): a backend replying to a full
- * g_release_endpoint would retry instead of serving the next request, and
- * fs-manager may be blocked in forward_request on that very backend. */
+ * g_release_endpoint retries instead of serving the next request, and leaves room
+ * in its own queue for the requests fs-manager relays to it. */
 #define FSMGR_RELEASE_CLOSES_MAX 16u
 /* How long the main loop parks before retrying a close that could not be sent
  * or that a backend refused as busy, when nothing else would wake it. */
@@ -33,25 +34,26 @@
 
 #define FSMGR_PATH_SCRATCH_SIZE 256
 
-/* fs-manager's own path buffer, used to tell a backend which directory a
- * path-less request (READDIR) refers to. The client's buffer cannot serve: a
- * READDIR carries none. Acquired once at startup and never released. */
-static int32_t g_cwd_bid = -1;
-
 static int32_t g_proc_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
+/* Source of every request fs-manager sends a backend, and where the answers
+ * land. Nothing waits on it: the main loop drains it (fsmgr_reply_drain) and
+ * matches each answer to its record in g_pending by request id. The process
+ * manager's answers to the class subscription and lookup at startup also land
+ * here, awaited before the loop runs and before any backend request is sent. */
 static int32_t g_reply_endpoint = -1;
 /* Source of the closes fs-manager sends on behalf of an ended client, and where
- * their replies land. Separate from g_reply_endpoint because every blocking wait
- * on that one expects only its own answer next; nothing waits on this one, and
- * the main loop drains it (fsmgr_release_drain). */
+ * their replies land. Separate from g_reply_endpoint because those replies are
+ * matched against the client table's close records, not against g_pending; the
+ * main loop drains it (fsmgr_release_drain). */
 static int32_t g_release_endpoint = -1;
-/* g_fs_endpoint and g_release_endpoint, so the main loop parks on both. -1 when
- * the set could not be created; the loop then waits on g_fs_endpoint alone and
- * sends no closes at all, because a reply nothing would wake it to drain could
- * fill g_release_endpoint. Ended clients' files then stay recorded, and open on
- * their backends, until the service restarts. */
+/* g_fs_endpoint, g_reply_endpoint and g_release_endpoint, so the main loop parks
+ * on all three. Required: a service that cannot wait for a backend's answer
+ * alongside its clients' requests cannot defer, so fs-manager parks for good
+ * when the set cannot be created. */
 static int32_t g_main_select = -1;
+/* Requests in flight to backends (fs_manager_pending.h). */
+static fsmgr_pending_table_t g_pending;
 /* Request id of the last close fsmgr_release_pump sent. Positive and unique
  * among outstanding closes; a reply is matched to its file by it. */
 static int32_t g_release_request_id = 0;
@@ -213,8 +215,7 @@ static fs_backend_t* backend_register(uint8_t kind, int32_t endpoint) {
  * momentarily full -- which a READDIR makes likely, since the stream frames just
  * filled it and the terminating reply follows immediately -- hangs that client
  * forever, and behind it everything waiting on that client. The STREAM relay in
- * forward_request has retried for exactly this reason; the terminators it hands
- * back had not.
+ * fsmgr_reply_drain retries for the same reason.
  *
  * Returns 0 on success, or the send's status (IPC_ERR_FULL once the retries are
  * spent, which means the client is stranded and there is nothing further this
@@ -284,71 +285,114 @@ static wasmos_error_code_t fsmgr_emit_mounts(int32_t source, int32_t req_id, int
     return WASMOS_ERR_NONE;
 }
 
-/* Forward an IPC request to a backend, relaying FS_IPC_STREAM chunks back to
- * source immediately as they arrive, then returning the final reply fields.
- * Blocks until a non-STREAM response with the matching request_id is received. */
-static int forward_request(int32_t backend_endpoint, int32_t type, int32_t req_id, int32_t arg0,
-                           int32_t arg1, int32_t arg2, int32_t arg3, int32_t source,
-                           int32_t* out_resp_type, int32_t* out_r0, int32_t* out_r1,
-                           int32_t* out_r2, int32_t* out_r3) {
-    if (backend_endpoint < 0)
-        return -1;
-    if (wasmos_ipc_send(backend_endpoint, g_reply_endpoint, type, req_id, arg0, arg1, arg2, arg3) !=
-        0) {
-        return -1;
-    }
-    for (;;) {
-        wasmos_ipc_message_t reply;
-        /* Anything arriving here that is not this reply is consumed, so it must
-         * be reported: if it was a reply someone else awaits, that side blocks
-         * forever and the loss is otherwise invisible.  fs-manager is a relay
-         * with one request in flight, so a non-matching id means a stale reply
-         * to a request already abandoned -- worth seeing, never expected. */
-        if (wasmos_sys_ipc_await_reply(
-                g_reply_endpoint, req_id, &reply, 0, 0, "fs-manager/forward", 0) != 0) {
-            return -1;
-        }
-        int32_t resp_type = (int32_t)reply.type;
-        int32_t rr0 = reply.arg0;
-        int32_t rr1 = reply.arg1;
-        int32_t rr2 = reply.arg2;
-        int32_t rr3 = reply.arg3;
-        if (resp_type == FS_IPC_STREAM) {
-            /* Retry with yield: the client may be in a slow output loop (e.g.
-             * VT-write retries) and temporarily unable to drain its endpoint.
-             * A bare non-retrying send would fill the 32-slot queue, abort the
-             * relay, drop the error notification (send_fs_error also fails on a
-             * full queue), and leave the client blocked in select_one forever. */
-            if (wasmos_sys_ipc_send_retry(source,
-                                          g_fs_endpoint,
-                                          resp_type,
-                                          req_id,
-                                          rr0,
-                                          rr1,
-                                          rr2,
-                                          rr3,
-                                          FSMGR_REPLY_SEND_RETRIES) != 0) {
-                return -1;
-            }
-            continue;
-        }
-        *out_resp_type = resp_type;
-        *out_r0 = rr0;
-        *out_r1 = rr1;
-        *out_r2 = rr2;
-        *out_r3 = rr3;
-        return 0;
-    }
-}
-
 /* `reason` is a packed WASMOS_ERR_FS_* code, or a code relayed unchanged from a
  * backend reply. */
 static void send_fs_error(int32_t source, int32_t request_id, wasmos_error_code_t reason) {
-    /* Retry with yield for the same reason as forward_request's STREAM relay:
-     * dropping the error notification because the client's endpoint is
-     * transiently full hangs that client forever in select_one. */
+    /* Retry with yield for the same reason as reply_to_client: dropping the
+     * error notification because the client's endpoint is transiently full hangs
+     * that client forever in select_one. */
     (void)wasmos_sys_ipc_send_retry(
         source, g_fs_endpoint, FS_IPC_ERROR, request_id, reason, 0, 0, 0, FSMGR_REPLY_SEND_RETRIES);
+}
+
+/* Send `type` to the record's backend under the record's id, from the reply
+ * endpoint, where the answer lands for fsmgr_reply_drain. Never waits for it.
+ * Returns 0, or WASMOS_ERR_FS_BACKEND_IPC when the request could not be
+ * delivered. */
+static int32_t pending_send(const fsmgr_pending_t* entry, int32_t type, int32_t a0, int32_t a1,
+                            int32_t a2, int32_t a3) {
+    if (entry->backend < 0 ||
+        wasmos_ipc_send(entry->backend, g_reply_endpoint, type, entry->id, a0, a1, a2, a3) != 0) {
+        return WASMOS_ERR_FS_BACKEND_IPC;
+    }
+    return 0;
+}
+
+/* End a record: take back the grant fs-manager lent for it, release the buffer it
+ * owns for it, and free it. Done BEFORE the client is answered, so a client that
+ * releases its buffer on the answer finds no grant of fs-manager's beneath it. */
+static void pending_end(fsmgr_pending_t* entry) {
+    if (entry->borrow >= 0) {
+        (void)wasmos_xfer_buffer_unborrow(entry->borrow);
+    }
+    if (entry->buffer >= 0) {
+        (void)wasmos_xfer_buffer_release(entry->buffer);
+    }
+    fsmgr_pending_free(entry);
+}
+
+/* End a record and answer its client, if it still has one, with `code`. */
+static void pending_abort(fsmgr_pending_t* entry, wasmos_error_code_t code) {
+    int32_t client = entry->client;
+    int32_t request_id = entry->client_request_id;
+    pending_end(entry);
+    if (client >= 0) {
+        send_fs_error(client, request_id, code);
+    }
+}
+
+/* Claim a record answering request `request_id` of `source`, whose state is
+ * keyed by `context`. A full table refuses the request with WASMOS_ERR_FS_BUSY,
+ * which is retryable, and returns NULL. */
+static fsmgr_pending_t* pending_for_client(fsmgr_step_t step, int32_t backend, int32_t source,
+                                           int32_t request_id, int32_t context) {
+    fsmgr_pending_t* entry = fsmgr_pending_alloc(&g_pending, step, backend);
+    if (!entry) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BUSY);
+        return 0;
+    }
+    entry->client = source;
+    entry->client_request_id = request_id;
+    entry->context = context;
+    return entry;
+}
+
+/* Give `entry` a buffer of its own holding `path` and lend its backend READ on
+ * it: the path of a request fs-manager supplies itself (READDIR's directory, a
+ * CHDIR target, a mount point), which no client buffer carries. A buffer per
+ * record, because several such requests may be in flight at once; released when
+ * the record ends, which revokes the grant with it.
+ *
+ * Returns the grant, or a negative packed code. */
+static int32_t pending_lend_path(fsmgr_pending_t* entry, const char* path, int32_t* out_len) {
+    int32_t len;
+    int32_t borrow;
+
+    if (!path || path[0] != '/') {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    len = (int32_t)strlen(path);
+    if (len >= wasmos_xfer_buffer_size()) {
+        return WASMOS_ERR_FS_PATH_TOO_LONG;
+    }
+    entry->buffer = wasmos_xfer_buffer_acquire(len);
+    if (entry->buffer < 0) {
+        entry->buffer = -1;
+        return WASMOS_ERR_FS_BUFFER;
+    }
+    if (wasmos_xfer_buffer_write(entry->buffer, (const uint8_t*)path, len, 0) != 0) {
+        return WASMOS_ERR_FS_BUFFER;
+    }
+    borrow = wasmos_xfer_buffer_borrow(entry->backend, entry->buffer, WASMOS_BUFFER_GRANT_READ);
+    if (borrow < 0) {
+        return WASMOS_ERR_FS_REBORROW;
+    }
+    *out_len = len;
+    return borrow;
+}
+
+/* A close of `backend_fd` that no client asked for: the file of an OPEN whose
+ * client ended, or had no fd left, before the answer arrived. A close lost to a
+ * full table leaves the file open on its backend, which says so. */
+static void pending_discard_close(int32_t backend, int32_t backend_fd) {
+    fsmgr_pending_t* entry = fsmgr_pending_alloc(&g_pending, FSMGR_STEP_DISCARD_CLOSE, backend);
+    if (!entry) {
+        printf("[fs-manager] no record free to close backend fd %d\n", (int)backend_fd);
+        return;
+    }
+    if (pending_send(entry, FS_IPC_CLOSE_REQ, backend_fd, 0, 0, 0) != 0) {
+        pending_end(entry);
+    }
 }
 
 /* Defined below, next to the rest of the routing; declared here because the
@@ -364,8 +408,8 @@ static int32_t route_absolute_path(const char* path, char* out_path, int32_t out
  * working directory, which is where the answer comes from in the first place.
  *
  * Regression: 2026-08-31-readdir-without-chdir. Trusting the cache made `ls` fail
- * with BACKEND_IPC as the first command of a session -- forward_request refuses a
- * negative endpoint -- and it was invisible while "/" was not a mount, because
+ * with BACKEND_IPC as the first command of a session -- a request cannot be sent
+ * to a negative endpoint -- and it was invisible while "/" was not a mount, because
  * READDIR at the root was short-circuited into the virtual mount-table listing
  * and never reached the forward path.
  *
@@ -632,57 +676,26 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
 
 /* Create one directory in `backend`, under the path that backend sees.
  *
- * fs-manager owns the buffer the path travels in (g_cwd_bid), because a
- * registration supplies none -- the same reason backend_lend_path owns one. An
- * EXISTS reply is success: this runs on every registration and a mount point that
- * is already there is the expected case, not a conflict.
- *
- * Returns 0 when the directory exists afterwards, whether this call made it. */
-static int fsmgr_backend_mkdir(int32_t backend, const char* path, int32_t request_id) {
-    int32_t rr_t = FS_IPC_ERROR, rr0 = -1, rr1 = 0, rr2 = 0, rr3 = 0;
-    int32_t len;
+ * Not waited for, and nobody is answered: an EXISTS reply is the expected case,
+ * since this runs on every registration, and a refusal costs the mount point's
+ * entry in a listing, not the mount (fsmgr_ensure_mount_points). */
+static void fsmgr_backend_mkdir(int32_t backend, const char* path) {
+    fsmgr_pending_t* entry;
+    int32_t len = 0;
     int32_t borrow;
-    int32_t rc;
 
-    if (backend < 0 || !path || path[0] != '/' || path[1] == '\0' || g_cwd_bid < 0) {
-        return -1;
+    if (backend < 0 || !path || path[0] != '/' || path[1] == '\0') {
+        return;
     }
-    len = (int32_t)strlen(path);
-    if (len >= wasmos_xfer_buffer_size()) {
-        return -1;
+    entry = fsmgr_pending_alloc(&g_pending, FSMGR_STEP_MKDIR, backend);
+    if (!entry) {
+        printf("[fs-manager] no record free to create mount point %s\n", path);
+        return;
     }
-    if (wasmos_xfer_buffer_write(g_cwd_bid, (const uint8_t*)path, len, 0) != 0) {
-        return -1;
+    borrow = pending_lend_path(entry, path, &len);
+    if (borrow < 0 || pending_send(entry, FS_IPC_MKDIR_REQ, len, 0, entry->buffer, borrow) != 0) {
+        pending_end(entry);
     }
-    borrow = wasmos_xfer_buffer_borrow(backend, g_cwd_bid, WASMOS_BUFFER_GRANT_READ);
-    if (borrow < 0) {
-        return -1;
-    }
-    rc = forward_request(backend,
-                         FS_IPC_MKDIR_REQ,
-                         request_id,
-                         len,
-                         0,
-                         g_cwd_bid,
-                         borrow,
-                         /* No client is waiting on this, so there is nobody to
-                          * relay a STREAM frame to. MKDIR never sends one; if it
-                          * ever did, the relay's send fails and the call reports
-                          * failure rather than answering a stranger. */
-                         -1,
-                         &rr_t,
-                         &rr0,
-                         &rr1,
-                         &rr2,
-                         &rr3);
-    (void)wasmos_xfer_buffer_unborrow(borrow);
-    if (rc != 0) {
-        return -1;
-    }
-    if (rr_t == FS_IPC_RESP && rr0 == 0) {
-        return 0;
-    }
-    return rr0 == WASMOS_ERR_FS_EXISTS ? 0 : -1;
 }
 
 /* Make every registered mount PATH exist as a directory in the filesystem that
@@ -702,10 +715,16 @@ static int fsmgr_backend_mkdir(int32_t backend, const char* path, int32_t reques
  * filesystem does, and its mount point has to appear once the root arrives.
  * Failures are ignored -- a read-only backend refuses MKDIR, and a mount under
  * one is simply not visible in its listing, which is a cosmetic loss and not a
- * routing one. */
+ * routing one.
+ *
+ * The MKDIRs are not waited for, and need not be for their order to hold. A
+ * backend serves the requests from one sender in the order they were sent, and
+ * every request that could observe a mount point -- an ancestor's MKDIR, a
+ * listing of its parent -- goes to the backend that covers that parent, which is
+ * the backend the MKDIR went to, and from the same reply endpoint. So `/mnt` is
+ * made before `/mnt/usb`, and a client told a mount exists lists its point. */
 static void fsmgr_ensure_mount_points(void) {
     uint32_t i;
-    int32_t request_id = 8;
 
     for (i = 0; i < FS_BACKEND_CAP; ++i) {
         const char* mount;
@@ -763,7 +782,7 @@ static void fsmgr_ensure_mount_points(void) {
                 } else {
                     (void)snprintf(target, sizeof(target), "%s/%s", tail, leaf);
                 }
-                (void)fsmgr_backend_mkdir(backend, target, request_id++);
+                fsmgr_backend_mkdir(backend, target);
             }
             if (mount[seg_end] == '\0') {
                 break;
@@ -773,20 +792,6 @@ static void fsmgr_ensure_mount_points(void) {
     }
 }
 
-/* Pull a discovered backend's info over FSMGR_IPC_BACKEND_INFO and register it.
- * Synchronous round-trip on the reply endpoint; the backend answers without any
- * dependency on fs-manager, so this cannot deadlock.
- *
- * fs-manager is the CLIENT of this exchange and therefore owns the buffer the
- * backend writes its mount name into: acquired here, borrowed to the backend
- * WRITE, released on every path including the failures. `release`
- * cascade-revokes the grant, so there is nothing else to clean up
- * (docs/architecture/12-dma-transfers.md). A backend lending its own buffer
- * instead is refused ALREADY_BORROWED on the second pull, and each backend is
- * pulled more than once -- the class lookup and the ADD event both land here.
- *
- * A backend that names no mount is not registered: nothing else knows where it
- * belongs, so there is no default to fall back to. */
 /* ------------------------------------------------------------ mount waits */
 
 /* FSMGR_IPC_MOUNT_WAIT_REQ callers whose mount does not exist yet. Kernel init
@@ -880,38 +885,65 @@ static void handle_mount_wait_req(int32_t source, int32_t request_id, int32_t bu
     memcpy(slot->path, desc.path, desc.path_len + 1u);
 }
 
+/* Ask a discovered backend for its identity over FSMGR_IPC_BACKEND_INFO; the
+ * answer registers it (fsmgr_backend_info_done). Not waited for.
+ *
+ * fs-manager is the CLIENT of this exchange and therefore owns the buffer the
+ * backend writes its mount name into: acquired here, borrowed to the backend
+ * WRITE, released when the record ends on every path including the failures.
+ * `release` cascade-revokes the grant, so there is nothing else to clean up
+ * (docs/architecture/12-dma-transfers.md). A backend lending its own buffer
+ * instead is refused ALREADY_BORROWED on the second pull, and each backend is
+ * pulled more than once -- the class lookup and the ADD event both land here;
+ * each pull has a buffer of its own. */
 static void fsmgr_pull_backend(int32_t backend_endpoint) {
-    char reported_mount[FSMGR_MOUNT_PATH_MAX];
-    char reported_source[BLOCK_DESCRIPTOR_ID_MAX];
     /* Both strings ride one buffer: the mount at offset 0 and the device id
      * immediately after it, lengths in arg2 and arg3. Neither is terminated in
      * the buffer -- the lengths delimit them -- so the capacity is exactly the
      * two fields. */
     const int32_t info_cap = (int32_t)(FSMGR_MOUNT_PATH_MAX + BLOCK_DESCRIPTOR_ID_MAX);
-    int32_t bid;
-    int32_t name_len;
-    int32_t source_len;
+    fsmgr_pending_t* entry;
+
     if (backend_endpoint < 0) {
         return;
     }
-    bid = wasmos_xfer_buffer_acquire(info_cap);
-    if (bid < 0) {
+    entry = fsmgr_pending_alloc(&g_pending, FSMGR_STEP_BACKEND_INFO, backend_endpoint);
+    if (!entry) {
+        printf("[fs-manager] no record free to pull backend %d; not registered\n",
+               (int)backend_endpoint);
         return;
     }
-    if (wasmos_xfer_buffer_borrow(backend_endpoint, bid, WASMOS_BUFFER_GRANT_WRITE) < 0 ||
-        wasmos_ipc_send(
-            backend_endpoint, g_reply_endpoint, FSMGR_IPC_BACKEND_INFO_REQ, 1, bid, 0, 0, 0) != 0 ||
-        wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != FSMGR_IPC_BACKEND_INFO_RESP) {
-        (void)wasmos_xfer_buffer_release(bid);
+    entry->buffer = wasmos_xfer_buffer_acquire(info_cap);
+    if (entry->buffer < 0) {
+        entry->buffer = -1;
+        pending_end(entry);
         return;
     }
-    name_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    source_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+    if (wasmos_xfer_buffer_borrow(backend_endpoint, entry->buffer, WASMOS_BUFFER_GRANT_WRITE) < 0 ||
+        pending_send(entry, FSMGR_IPC_BACKEND_INFO_REQ, entry->buffer, 0, 0, 0) != 0) {
+        pending_end(entry);
+    }
+}
+
+/* The answer to fsmgr_pull_backend: arg0 = kind, arg1 = FS_TYPE_*, arg2 and arg3
+ * the lengths of the mount path and device id in the record's buffer.
+ *
+ * A backend that names no mount is not registered: nothing else knows where it
+ * belongs, so there is no default to fall back to. */
+static void fsmgr_backend_info_done(fsmgr_pending_t* entry, int32_t type, int32_t kind,
+                                    int32_t fs_type, int32_t name_len, int32_t source_len) {
+    char reported_mount[FSMGR_MOUNT_PATH_MAX];
+    char reported_source[BLOCK_DESCRIPTOR_ID_MAX];
+    int32_t backend_endpoint = entry->backend;
+
+    if (type != FSMGR_IPC_BACKEND_INFO_RESP) {
+        pending_end(entry);
+        return;
+    }
     if (name_len <= 0 || name_len >= (int32_t)sizeof(reported_mount) ||
-        wasmos_sys_buffer_read(bid, reported_mount, name_len, 0) != 0) {
+        wasmos_sys_buffer_read(entry->buffer, reported_mount, name_len, 0) != 0) {
         printf("[fs-manager] backend named no mount; not registered\n");
-        (void)wasmos_xfer_buffer_release(bid);
+        pending_end(entry);
         return;
     }
     reported_mount[name_len] = '\0';
@@ -920,15 +952,11 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
      * is diagnostic: losing it costs a column in `mount`, not a mount. */
     reported_source[0] = '\0';
     if (source_len > 0 && source_len < (int32_t)sizeof(reported_source) &&
-        wasmos_sys_buffer_read(bid, reported_source, source_len, name_len) == 0) {
+        wasmos_sys_buffer_read(entry->buffer, reported_source, source_len, name_len) == 0) {
         reported_source[source_len] = '\0';
     }
-    fsmgr_apply_backend_info(backend_endpoint,
-                             wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
-                             wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
-                             reported_mount,
-                             reported_source);
-    (void)wasmos_xfer_buffer_release(bid);
+    pending_end(entry);
+    fsmgr_apply_backend_info(backend_endpoint, kind, fs_type, reported_mount, reported_source);
     /* The table changed, so the mount points may be incomplete: this backend's
      * own point did not exist before now, and an earlier backend's point could
      * not be created until the filesystem covering it registered. */
@@ -1116,7 +1144,12 @@ static wasmos_error_code_t fsmgr_mount_busy_reason(const fs_backend_t* mount) {
     return WASMOS_ERR_NONE;
 }
 
-/* Drop a backend that left its class (provider died / unregistered). */
+/* Defined with the rest of the deferred-reply handling, below the request
+ * handlers whose records it completes. */
+static void fsmgr_pending_fail_backend(int32_t backend);
+
+/* Drop a backend that left its class (provider died / unregistered), and fail
+ * the requests it held: nothing will answer them. */
 static void fsmgr_backend_remove(int32_t backend_endpoint) {
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
         if (g_backends[i].in_use && g_backends[i].endpoint == backend_endpoint) {
@@ -1124,6 +1157,7 @@ static void fsmgr_backend_remove(int32_t backend_endpoint) {
         }
     }
     fsmgr_forget_backend_in_clients(backend_endpoint);
+    fsmgr_pending_fail_backend(backend_endpoint);
 }
 
 /* Discover the current FS backends by class and pull each. Subscribe first so a
@@ -1197,23 +1231,23 @@ static int handle_clone_cwd_req(int32_t source, int32_t source_owner, int32_t re
  * Owner-push: the client owns buffer_id and granted fs-manager R|W (client_borrow
  * = arg3). fs-manager reads/routes the path by buffer_id (its grant), reborrows
  * to the backend so the backend can read the path and write the blob directly,
- * then unborrows client_borrow (cascade-revoking the reborrow) before replying so
- * the client's release() succeeds. `capacity` bounds the read to the client
- * buffer size (0 = full transfer size). No relay copy. */
+ * and unborrows that reborrow before replying so the client's release()
+ * succeeds. `capacity` bounds the read to the client buffer size (0 = full
+ * transfer size). No relay copy.
+ *
+ * This is how the process manager reads every module it spawns, a restarted
+ * driver's included, so it must never wait behind a backend: the open is sent
+ * here, and each answer sends the next step (fsmgr_read_path_step). */
 static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_t request_id,
                                 int32_t path_len, int32_t capacity, int32_t buffer_id,
                                 int32_t client_borrow) {
     int32_t backend = state ? state->backend_endpoint : -1;
-    int32_t open_t = FS_IPC_ERROR, open0 = -1, open1 = 0, open2 = 0, open3 = 0;
-    int32_t read_t = FS_IPC_ERROR, read0 = -1, read1 = 0, read2 = 0, read3 = 0;
-    int32_t close_t = FS_IPC_ERROR, close0 = -1, close1 = 0, close2 = 0, close3 = 0;
-    int32_t fd = -1;
+    fsmgr_pending_t* entry;
     int32_t fs_buf_size = wasmos_xfer_buffer_size();
     int32_t read_cap = (capacity > 0 && capacity < fs_buf_size) ? capacity : fs_buf_size;
     uint8_t path_scratch[FSMGR_PATH_SCRATCH_SIZE];
     char abs_path[FSMGR_CWD_MAX + FSMGR_PATH_SCRATCH_SIZE];
     int32_t open_path_len = 0;
-    int32_t backend_borrow = -1;
 
     if (buffer_id <= 0 || path_len <= 0) {
         send_fs_error(source, request_id, WASMOS_ERR_FS_BAD_ARGS);
@@ -1261,191 +1295,95 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
         send_fs_error(source, request_id, WASMOS_ERR_FS_BUFFER);
         return 1;
     }
+    entry = pending_for_client(
+        FSMGR_STEP_READ_PATH_OPEN, backend, source, request_id, state ? state->context_id : -1);
+    if (!entry) {
+        return 1;
+    }
+    entry->client_buffer = buffer_id;
+    entry->read_cap = read_cap;
     /* Reborrow to the backend (R|W: reads the path, writes the blob). */
-    backend_borrow = wasmos_xfer_buffer_reborrow(
+    entry->borrow = wasmos_xfer_buffer_reborrow(
         backend, client_borrow, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
-    if (backend_borrow < 0) {
-        send_fs_error(source, request_id, WASMOS_ERR_FS_REBORROW);
+    if (entry->borrow < 0) {
+        entry->borrow = -1;
+        pending_abort(entry, WASMOS_ERR_FS_REBORROW);
         return 1;
     }
-
-    int32_t open_rc = forward_request(backend,
-                                      FS_IPC_OPEN_REQ,
-                                      request_id,
-                                      open_path_len,
-                                      0,
-                                      buffer_id,
-                                      backend_borrow,
-                                      source,
-                                      &open_t,
-                                      &open0,
-                                      &open1,
-                                      &open2,
-                                      &open3);
-    if (open_rc != 0 || open_t != FS_IPC_RESP || open0 < 0) {
-        /* Relay the backend's own reason when it sent one — it names the failure
-         * better than anything this relay could substitute. */
-        wasmos_error_code_t open_err =
-            (open_rc == 0 && open0 < 0) ? open0 : WASMOS_ERR_FS_BACKEND_IPC;
-        (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-        send_fs_error(source, request_id, open_err);
-        return 1;
+    if (pending_send(entry, FS_IPC_OPEN_REQ, open_path_len, 0, buffer_id, entry->borrow) != 0) {
+        pending_abort(entry, WASMOS_ERR_FS_BACKEND_IPC);
     }
-
-    fd = open0;
-    int32_t read_rc = forward_request(backend,
-                                      FS_IPC_READ_REQ,
-                                      request_id,
-                                      fd,
-                                      read_cap,
-                                      buffer_id,
-                                      backend_borrow,
-                                      source,
-                                      &read_t,
-                                      &read0,
-                                      &read1,
-                                      &read2,
-                                      &read3);
-    wasmos_error_code_t read_err = WASMOS_ERR_NONE;
-    if (read_rc != 0) {
-        read_err = WASMOS_ERR_FS_BACKEND_IPC;
-    } else if (read_t != FS_IPC_RESP || read0 < 0) {
-        read_err = (read0 < 0) ? read0 : WASMOS_ERR_FS_BACKEND_IPC;
-    } else if (read0 == 0 || read0 > read_cap) {
-        /* Backend reported a length outside the requested capacity. */
-        read_err = WASMOS_ERR_FS_RANGE;
-    }
-    if (read_err != WASMOS_ERR_NONE) {
-        (void)forward_request(backend,
-                              FS_IPC_CLOSE_REQ,
-                              request_id,
-                              fd,
-                              0,
-                              0,
-                              0,
-                              source,
-                              &close_t,
-                              &close0,
-                              &close1,
-                              &close2,
-                              &close3);
-        (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-        send_fs_error(source, request_id, read_err);
-        return 1;
-    }
-    (void)forward_request(backend,
-                          FS_IPC_CLOSE_REQ,
-                          request_id,
-                          fd,
-                          0,
-                          0,
-                          0,
-                          source,
-                          &close_t,
-                          &close0,
-                          &close1,
-                          &close2,
-                          &close3);
-    /* Drop fs-manager's reborrow (cascade-safe) before replying; the client's
-     * grant b1 stays until the client releases the buffer. */
-    (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-    (void)reply_to_client(source, FS_IPC_RESP, request_id, read0, 0, 0, 0);
     return 1;
 }
 
-/* Count segments below the mount root in a canonical absolute VFS path, so
- * "/wfs" is 0 and "/wfs/docs" is 1. */
-/* Tell `backend` which directory subsequent path-less operations refer to.
- *
- * READDIR carries no path, so the backend has to hold a current directory of its
- * own, and fs-manager is the only party that knows whose directory it should be:
- * backends see every client through fs-manager's single reply endpoint and
- * cannot tell two clients apart. Re-asserting the directory before a path-less
- * operation is what keeps one client's chdir from deciding another client's
- * listing.
- *
- * `mount_tail` is the directory relative to the mount root ("/" at the mount
- * root, "/docs/notes" below it) and travels as a path in fs-manager's own
- * transfer buffer, so its depth and its component lengths are bounded only by
- * that buffer -- not by what fits in the request arguments. Returns 0 once the
- * backend stands in that directory. */
-/* Write `mount_tail` into fs-manager's own path buffer and lend the backend a
- * READ grant on it.
- *
- * fs-manager supplies the path for the requests a client names no path in, so it
- * owns the buffer they travel in: the client's own buffer holds the client's
- * data, and a request fs-manager originates is fs-manager's to carry. One buffer
- * serves all of them because the service loop has one request in flight.
- *
- * Returns the borrow handle, or a negative packed code. The caller unborrows. */
-static int32_t backend_lend_path(int32_t backend, const char* mount_tail, int32_t* out_len) {
-    int32_t tail_len;
-    int32_t borrow;
+/* Answer a READ_PATH with the outcome its record carries: the bytes read, or the
+ * packed reason it failed. */
+static void fsmgr_read_path_finish(fsmgr_pending_t* entry) {
+    int32_t client = entry->client;
+    int32_t request_id = entry->client_request_id;
+    int32_t result = entry->result;
 
-    if (backend < 0 || !mount_tail || mount_tail[0] != '/' || g_cwd_bid < 0) {
-        return WASMOS_ERR_FS_BAD_ARGS;
+    /* The reborrow is dropped before replying; the client's own grant stays until
+     * the client releases the buffer. */
+    pending_end(entry);
+    if (client < 0) {
+        return;
     }
-    tail_len = (int32_t)strlen(mount_tail);
-    if (tail_len >= wasmos_xfer_buffer_size()) {
-        return WASMOS_ERR_FS_PATH_TOO_LONG;
+    if (result > 0) {
+        (void)reply_to_client(client, FS_IPC_RESP, request_id, result, 0, 0, 0);
+    } else {
+        send_fs_error(client, request_id, (wasmos_error_code_t)result);
     }
-    if (wasmos_xfer_buffer_write(g_cwd_bid, (const uint8_t*)mount_tail, tail_len, 0) != 0) {
-        return WASMOS_ERR_FS_BUFFER;
-    }
-    borrow = wasmos_xfer_buffer_borrow(backend, g_cwd_bid, WASMOS_BUFFER_GRANT_READ);
-    if (borrow < 0) {
-        return WASMOS_ERR_FS_REBORROW;
-    }
-    if (out_len) {
-        *out_len = tail_len;
-    }
-    return borrow;
 }
 
-/* Whether `mount_tail` names an existing DIRECTORY in `backend`.
- *
- * This is the whole of what a chdir needs to know, and STAT answers it without
- * moving anything. fs-manager previously asked by sending the backend a CHDIR,
- * which made the answer a side effect of changing state that fs-manager already
- * owns -- and left the backend holding a position that only the next request to
- * re-assert it could correct.
- *
- * Returns 0 when it is a directory, or the packed reason it is not. */
-static wasmos_error_code_t backend_stat_dir(int32_t backend, int32_t request_id,
-                                            const char* mount_tail, int32_t reply_to) {
-    int32_t rr_t = FS_IPC_ERROR, rr0 = 0, rr1 = 0, rr2 = 0, rr3 = 0;
-    int32_t tail_len = 0;
-    int32_t borrow = backend_lend_path(backend, mount_tail, &tail_len);
-    int32_t rc;
+/* Close the file a READ_PATH opened, whatever its read came to: the outcome is
+ * already in the record and is answered once the close is. A close that cannot be
+ * sent is answered at once. */
+static void fsmgr_read_path_close(fsmgr_pending_t* entry) {
+    entry->step = FSMGR_STEP_READ_PATH_CLOSE;
+    (void)fsmgr_pending_renew(&g_pending, entry);
+    if (pending_send(entry, FS_IPC_CLOSE_REQ, entry->fd, 0, 0, 0) != 0) {
+        fsmgr_read_path_finish(entry);
+    }
+}
 
-    if (borrow < 0) {
-        return (wasmos_error_code_t)borrow;
+/* Advance a READ_PATH on the answer to its current step. */
+static void fsmgr_read_path_step(fsmgr_pending_t* entry, int32_t type, int32_t r0) {
+    if (entry->step == FSMGR_STEP_READ_PATH_OPEN) {
+        if (type != FS_IPC_RESP || r0 < 0) {
+            /* Relay the backend's own reason when it sent one -- it names the
+             * failure better than anything this relay could substitute. */
+            pending_abort(entry, r0 < 0 ? (wasmos_error_code_t)r0 : WASMOS_ERR_FS_BACKEND_IPC);
+            return;
+        }
+        entry->fd = r0;
+        entry->step = FSMGR_STEP_READ_PATH_READ;
+        (void)fsmgr_pending_renew(&g_pending, entry);
+        if (pending_send(entry,
+                         FS_IPC_READ_REQ,
+                         entry->fd,
+                         entry->read_cap,
+                         entry->client_buffer,
+                         entry->borrow) != 0) {
+            entry->result = WASMOS_ERR_FS_BACKEND_IPC;
+            fsmgr_read_path_close(entry);
+        }
+        return;
     }
-    rc = forward_request(backend,
-                         FS_IPC_STAT_REQ,
-                         request_id,
-                         tail_len,
-                         0,
-                         g_cwd_bid,
-                         borrow,
-                         reply_to,
-                         &rr_t,
-                         &rr0,
-                         &rr1,
-                         &rr2,
-                         &rr3);
-    (void)wasmos_xfer_buffer_unborrow(borrow);
-    if (rc != 0 || rr_t != FS_IPC_RESP) {
-        /* The backend's own reason when it sent one: NOT_FOUND reads very
-         * differently from a backend that never answered. */
-        return (rc == 0 && rr0 < 0) ? (wasmos_error_code_t)rr0 : WASMOS_ERR_FS_BACKEND_IPC;
+    if (entry->step == FSMGR_STEP_READ_PATH_READ) {
+        if (type != FS_IPC_RESP || r0 < 0) {
+            entry->result = r0 < 0 ? r0 : WASMOS_ERR_FS_BACKEND_IPC;
+        } else if (r0 == 0 || r0 > entry->read_cap) {
+            /* Backend reported a length outside the requested capacity. */
+            entry->result = WASMOS_ERR_FS_RANGE;
+        } else {
+            entry->result = r0;
+        }
+        fsmgr_read_path_close(entry);
+        return;
     }
-    /* arg1 is the mode; the type field is what distinguishes a directory from a
-     * file that happens to exist at that path. */
-    if (((uint32_t)rr1 & S_IFMT) != S_IFDIR) {
-        return WASMOS_ERR_FS_NOT_DIR;
-    }
-    return WASMOS_ERR_NONE;
+    /* The close's own answer changes nothing: the file was read, or was not. */
+    fsmgr_read_path_finish(entry);
 }
 
 /* Write the client's resulting working directory back into the buffer it
@@ -1478,6 +1416,10 @@ static int32_t chdir_report_cwd(const fs_client_state_t* state, int32_t buffer_i
  * to a mount. Nothing is committed until the backend confirms the directory
  * exists, so a failed chdir leaves the client exactly where it was.
  *
+ * The backend is asked with FS_IPC_STAT_REQ, which is the whole of what a chdir
+ * needs to know and moves nothing; the target is committed when the answer
+ * arrives (fsmgr_chdir_done), not here.
+ *
  * `/` is an ordinary mount now, so it needs no case of its own: it routes to the
  * root filesystem like any other path. The one exception is a system with NO root
  * filesystem mounted, where `cd /` still has to work -- a client must be able to
@@ -1492,7 +1434,8 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
     char tail[FSMGR_CWD_MAX];
     int32_t tail_len = 0;
     int32_t backend = -1;
-    int32_t synced;
+    int32_t borrow;
+    fsmgr_pending_t* entry;
 
     if (buffer_id <= 0 || path_len < 0 || path_len >= (int32_t)sizeof(requested) ||
         path_len >= wasmos_xfer_buffer_size()) {
@@ -1532,21 +1475,58 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
             source, FS_IPC_RESP, request_id, 0, chdir_report_cwd(state, buffer_id), 0, 0);
         return 1;
     }
-    synced = (int32_t)backend_stat_dir(backend, request_id, tail, source);
-    if (synced != (int32_t)WASMOS_ERR_NONE) {
-        /* The backend's reason, not a substituted one: NOT_DIR for a file the
-         * client tried to stand in is the answer, and NOT_FOUND would be wrong. */
-        send_fs_error(source, request_id, (wasmos_error_code_t)synced);
+    entry =
+        pending_for_client(FSMGR_STEP_CHDIR_STAT, backend, source, request_id, state->context_id);
+    if (!entry) {
         return 1;
+    }
+    entry->client_buffer = buffer_id;
+    str_copy(entry->path, sizeof(entry->path), target);
+    borrow = pending_lend_path(entry, tail, &tail_len);
+    if (borrow < 0) {
+        pending_abort(entry, (wasmos_error_code_t)borrow);
+        return 1;
+    }
+    if (pending_send(entry, FS_IPC_STAT_REQ, tail_len, 0, entry->buffer, borrow) != 0) {
+        pending_abort(entry, WASMOS_ERR_FS_BACKEND_IPC);
+    }
+    return 1;
+}
+
+/* The STAT a CHDIR sent was answered: commit the target if it is a directory.
+ * A client that ended meanwhile has no state left to commit it to. */
+static void fsmgr_chdir_done(fsmgr_pending_t* entry, int32_t type, int32_t r0, int32_t mode) {
+    fs_client_state_t* state;
+    int32_t client = entry->client;
+    int32_t request_id = entry->client_request_id;
+    int32_t reported;
+
+    if (type != FS_IPC_RESP) {
+        /* The backend's reason, not a substituted one: NOT_FOUND reads very
+         * differently from a backend that never answered. */
+        pending_abort(entry, r0 < 0 ? (wasmos_error_code_t)r0 : WASMOS_ERR_FS_BACKEND_IPC);
+        return;
+    }
+    /* The mode's type field is what distinguishes a directory from a file that
+     * happens to exist at that path; NOT_DIR for a file the client tried to
+     * stand in is the answer, and NOT_FOUND would be wrong. */
+    if (((uint32_t)mode & S_IFMT) != S_IFDIR) {
+        pending_abort(entry, WASMOS_ERR_FS_NOT_DIR);
+        return;
+    }
+    state = entry->context >= 0 ? fsmgr_client_lookup(&g_clients, entry->context) : 0;
+    if (!state || client < 0) {
+        pending_end(entry);
+        return;
     }
     /* Committed only now: a refused chdir leaves the client exactly where it
      * was, rather than somewhere the backend never confirmed. */
-    str_copy(state->cwd, sizeof(state->cwd), target);
+    str_copy(state->cwd, sizeof(state->cwd), entry->path);
     state->mount = FS_MOUNT_BACKEND;
-    state->backend_endpoint = backend;
-    (void)reply_to_client(
-        source, FS_IPC_RESP, request_id, 0, chdir_report_cwd(state, buffer_id), 0, 0);
-    return 1;
+    state->backend_endpoint = entry->backend;
+    reported = chdir_report_cwd(state, entry->client_buffer);
+    pending_end(entry);
+    (void)reply_to_client(client, FS_IPC_RESP, request_id, 0, reported, 0, 0);
 }
 
 /* Filesystem types fs-manager can place, and the driver implementing each.
@@ -1580,9 +1560,9 @@ static const fsmgr_fstype_t g_fstypes[] = {
     {"wfs", "/boot/system/drivers/fs_wfs.wap", 1},
 };
 
-/* Request ids for the nested spawn calls a mount makes. Separate from any client
- * request id: these travel on fs-manager's own reply endpoint, and reusing a
- * client's id would let a stale client reply satisfy a spawn await. */
+/* Request ids for the spawn requests a mount makes. They are sent from the
+ * service endpoint, so they share no id space with the records in g_pending,
+ * whose answers land on the reply endpoint. */
 static int32_t g_mount_request_id = 1;
 
 /* Longest mount descriptor accepted. The process manager truncates startup
@@ -1681,8 +1661,8 @@ static fsmgr_pending_mount_t g_pending_mount;
  * on the reply would be the one service unable to answer, and the spawn would
  * fail with "the filesystem never answered" — a mutual wait, not a slow path. By
  * returning to the main loop, fs-manager serves that read like any other, and the
- * spawn's own reply arrives there too (the reply endpoint is the SERVICE endpoint,
- * not the private one used for nested calls).
+ * spawn's own reply arrives there too (it is sent from the SERVICE endpoint, so
+ * the answer comes back to it).
  *
  * The SYNC spawn opcode is used precisely because its reply is deferred until the
  * child reports READY: the backend has registered by then, so the mount is in the
@@ -1813,49 +1793,32 @@ static void fsmgr_mount_handle_spawn_reply(int32_t type, int32_t pid) {
  * correctness argument that only held because this service handles one request
  * at a time. A path in the request needs neither.
  *
- * Entries come back as FS_IPC_STREAM frames, which forward_request relays to the
- * client as they arrive; the terminating FS_IPC_RESP is what this returns on. */
+ * Entries come back as FS_IPC_STREAM frames, which fsmgr_reply_drain relays to
+ * the client as they arrive; the terminating FS_IPC_RESP completes the record
+ * (fsmgr_relay_done). */
 static void handle_readdir_req(fs_client_state_t* state, int32_t source, int32_t request_id) {
     char tail[FSMGR_CWD_MAX];
     int32_t tail_len = 0;
     int32_t backend = -1;
     int32_t borrow;
-    int32_t rr_t = FS_IPC_ERROR, rr0 = 0, rr1 = 0, rr2 = 0, rr3 = 0;
-    int32_t rc;
+    fsmgr_pending_t* entry;
 
     if (!route_absolute_path(state->cwd, tail, (int32_t)sizeof(tail), &tail_len, &backend)) {
         send_fs_error(source, request_id, WASMOS_ERR_FS_NO_BACKEND);
         return;
     }
-    borrow = backend_lend_path(backend, tail, &tail_len);
+    entry = pending_for_client(FSMGR_STEP_READDIR, backend, source, request_id, state->context_id);
+    if (!entry) {
+        return;
+    }
+    borrow = pending_lend_path(entry, tail, &tail_len);
     if (borrow < 0) {
-        send_fs_error(source, request_id, (wasmos_error_code_t)borrow);
+        pending_abort(entry, (wasmos_error_code_t)borrow);
         return;
     }
-    rc = forward_request(backend,
-                         FS_IPC_READDIR_REQ,
-                         request_id,
-                         tail_len,
-                         0,
-                         g_cwd_bid,
-                         borrow,
-                         source,
-                         &rr_t,
-                         &rr0,
-                         &rr1,
-                         &rr2,
-                         &rr3);
-    (void)wasmos_xfer_buffer_unborrow(borrow);
-    if (rc != 0) {
-        send_fs_error(source, request_id, WASMOS_ERR_FS_BACKEND_IPC);
-        return;
+    if (pending_send(entry, FS_IPC_READDIR_REQ, tail_len, 0, entry->buffer, borrow) != 0) {
+        pending_abort(entry, WASMOS_ERR_FS_BACKEND_IPC);
     }
-    if (rr_t != FS_IPC_RESP) {
-        send_fs_error(
-            source, request_id, rr0 < 0 ? (wasmos_error_code_t)rr0 : WASMOS_ERR_FS_BACKEND_IPC);
-        return;
-    }
-    (void)reply_to_client(source, FS_IPC_RESP, request_id, rr0, rr1, rr2, rr3);
 }
 
 /* FSMGR_IPC_MOUNT_REQ: establish a mount.
@@ -2009,6 +1972,8 @@ static void handle_mount_req(fs_client_state_t* state, int32_t source, int32_t r
  * re-adds on an ADD event) but it still occupies a process slot, so repeated
  * mount/unmount cycles leak slots. Exiting needs a process-exit path a driver
  * can call after answering DONE, which no driver has today. */
+static void fsmgr_unmount_done(fsmgr_pending_t* entry, int32_t type);
+
 static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t request_id,
                                int32_t path_len, int32_t buffer_id) {
     uint8_t requested[FSMGR_CWD_MAX];
@@ -2016,8 +1981,7 @@ static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t
     char mount[FSMGR_MOUNT_PATH_MAX];
     fs_backend_t* victim = 0;
     wasmos_error_code_t busy;
-    int32_t endpoint;
-    int32_t rr_t = FS_IPC_ERROR, rr0 = 0, rr1 = 0, rr2 = 0, rr3 = 0;
+    fsmgr_pending_t* entry;
 
     if (buffer_id <= 0 || path_len <= 0 || path_len >= (int32_t)sizeof(requested) ||
         path_len >= wasmos_xfer_buffer_size()) {
@@ -2053,39 +2017,192 @@ static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t
         return;
     }
 
-    endpoint = victim->endpoint;
-    /* The table entry goes first. The quiesce below blocks on a reply, and while
-     * it does, this loop is not serving anyone -- but a backend that answers by
-     * issuing work of its own must not find its own mount still routable. */
-    victim->in_use = 0;
-    fsmgr_forget_backend_in_clients(endpoint);
-
-    if (forward_request(endpoint,
-                        WASMOS_IPC_SHUTDOWN_REQ,
-                        request_id,
-                        WASMOS_SHUTDOWN_REASON_UNMOUNT,
-                        0,
-                        0,
-                        0,
-                        source,
-                        &rr_t,
-                        &rr0,
-                        &rr1,
-                        &rr2,
-                        &rr3) != 0 ||
-        rr_t != (int32_t)WASMOS_IPC_SHUTDOWN_DONE) {
-        /* Reported, not returned: the mount IS gone, so answering the client
-         * with an error would describe a failure that did not happen. What the
-         * backend failed to flush is the backend's loss to record. */
-        log_msg("[fs-manager] unmount: backend did not quiesce\n");
+    /* Claimed before anything changes, so a full table refuses the unmount
+     * whole rather than dropping a mount it cannot quiesce. */
+    entry = pending_for_client(
+        FSMGR_STEP_UNMOUNT, victim->endpoint, source, request_id, state->context_id);
+    if (!entry) {
+        return;
     }
-    (void)reply_to_client(source, FSMGR_IPC_UNMOUNT_RESP, request_id, 0, 0, 0, 0);
+    /* The table entry goes first: no request routed after this one may reach
+     * the backend being quiesced. The client is answered once the backend
+     * confirms (fsmgr_unmount_done). */
+    victim->in_use = 0;
+    fsmgr_forget_backend_in_clients(entry->backend);
+    if (pending_send(entry, WASMOS_IPC_SHUTDOWN_REQ, WASMOS_SHUTDOWN_REASON_UNMOUNT, 0, 0, 0) !=
+        0) {
+        fsmgr_unmount_done(entry, FS_IPC_ERROR);
+    }
 }
 
-/* Service entry point.  Brings up the bump heap and the two endpoints (a service
- * endpoint published as "fs.vfs" and a private reply endpoint used for nested
- * calls to backends), registers the service name, signals readiness, then
- * discovers the FS backends and serves requests forever.
+/* The quiesce an unmount sent was answered, or its backend ended first.
+ *
+ * Either way the client is told the mount is gone, because it is: answering with
+ * an error would describe a failure that did not happen. What the backend failed
+ * to flush is the backend's loss to record, so it is reported, not returned. */
+static void fsmgr_unmount_done(fsmgr_pending_t* entry, int32_t type) {
+    int32_t client = entry->client;
+    int32_t request_id = entry->client_request_id;
+
+    if (type != (int32_t)WASMOS_IPC_SHUTDOWN_DONE) {
+        log_msg("[fs-manager] unmount: backend did not quiesce\n");
+    }
+    pending_end(entry);
+    if (client >= 0) {
+        (void)reply_to_client(client, FSMGR_IPC_UNMOUNT_RESP, request_id, 0, 0, 0, 0);
+    }
+}
+
+/* ---------------------------------------------------------- deferred replies */
+
+/* The answer to a relayed request: a FORWARD, or a READDIR whose entries went to
+ * the client as FS_IPC_STREAM frames ahead of it. An OPEN's answer allocates the
+ * client fd, a CLOSE's releases it. */
+static void fsmgr_relay_done(fsmgr_pending_t* entry, int32_t type, int32_t r0, int32_t r1,
+                             int32_t r2, int32_t r3) {
+    int32_t client = entry->client;
+    int32_t request_id = entry->client_request_id;
+    fs_client_state_t* state =
+        entry->context >= 0 ? fsmgr_client_lookup(&g_clients, entry->context) : 0;
+
+    if (entry->step == FSMGR_STEP_READDIR && type != FS_IPC_RESP) {
+        pending_abort(entry, r0 < 0 ? (wasmos_error_code_t)r0 : WASMOS_ERR_FS_BACKEND_IPC);
+        return;
+    }
+    if (entry->type == FS_IPC_OPEN_REQ && type == FS_IPC_RESP && r0 >= 0) {
+        int32_t backend = entry->backend;
+        int32_t backend_fd = r0;
+        /* A client that ended meanwhile, or has no fd left, cannot hold the
+         * file, so it is closed again on the backend. */
+        if (!state || client < 0 || fsmgr_fd_alloc(state, backend, backend_fd, &r0) != 0) {
+            pending_abort(entry, WASMOS_ERR_FS_NO_FD);
+            pending_discard_close(backend, backend_fd);
+            return;
+        }
+    }
+    if (entry->type == FS_IPC_CLOSE_REQ && type == FS_IPC_RESP && r0 == 0 &&
+        entry->client_fd >= 0 && state) {
+        fsmgr_fd_release(state, entry->client_fd);
+    }
+    pending_end(entry);
+    if (client >= 0) {
+        (void)reply_to_client(client, type, request_id, r0, r1, r2, r3);
+    }
+}
+
+/* A record whose backend will never answer it: the backend ended, or left its
+ * class. Ends the record on every path, which is what lets
+ * fsmgr_pending_fail_backend walk the table by repeated lookup. */
+static void fsmgr_pending_fail(fsmgr_pending_t* entry, wasmos_error_code_t code) {
+    switch ((fsmgr_step_t)entry->step) {
+    case FSMGR_STEP_READ_PATH_CLOSE:
+        /* The file was read, or was not, before the close went out. */
+        fsmgr_read_path_finish(entry);
+        return;
+    case FSMGR_STEP_UNMOUNT:
+        fsmgr_unmount_done(entry, FS_IPC_ERROR);
+        return;
+    default:
+        pending_abort(entry, code);
+        return;
+    }
+}
+
+/* `backend` ended or left its class: fail every request it held. */
+static void fsmgr_pending_fail_backend(int32_t backend) {
+    fsmgr_pending_t* entry;
+    if (backend < 0) {
+        return;
+    }
+    while ((entry = fsmgr_pending_next_for_backend(&g_pending, backend)) != 0) {
+        fsmgr_pending_fail(entry, WASMOS_ERR_FS_BACKEND_IPC);
+    }
+}
+
+static void fsmgr_pending_complete(fsmgr_pending_t* entry, int32_t type, int32_t r0, int32_t r1,
+                                   int32_t r2, int32_t r3) {
+    switch ((fsmgr_step_t)entry->step) {
+    case FSMGR_STEP_FORWARD:
+    case FSMGR_STEP_READDIR:
+        fsmgr_relay_done(entry, type, r0, r1, r2, r3);
+        return;
+    case FSMGR_STEP_READ_PATH_OPEN:
+    case FSMGR_STEP_READ_PATH_READ:
+    case FSMGR_STEP_READ_PATH_CLOSE:
+        fsmgr_read_path_step(entry, type, r0);
+        return;
+    case FSMGR_STEP_CHDIR_STAT:
+        fsmgr_chdir_done(entry, type, r0, r1);
+        return;
+    case FSMGR_STEP_BACKEND_INFO:
+        fsmgr_backend_info_done(entry, type, r0, r1, r2, r3);
+        return;
+    case FSMGR_STEP_UNMOUNT:
+        fsmgr_unmount_done(entry, type);
+        return;
+    case FSMGR_STEP_DISCARD_CLOSE:
+    case FSMGR_STEP_MKDIR:
+    default:
+        pending_end(entry);
+        return;
+    }
+}
+
+/* Take every answer off the reply endpoint and complete the record it belongs to.
+ *
+ * FS_IPC_STREAM frames are relayed to the record's client as they arrive and
+ * leave the record in flight; the terminating answer completes it. An answer no
+ * record claims belongs to a request already failed -- its backend left its
+ * class first -- and is reported, never expected. */
+static void fsmgr_reply_drain(void) {
+    while (wasmos_ipc_drain(g_reply_endpoint) > 0) {
+        int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        int32_t a0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        int32_t a1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        int32_t a2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+        int32_t a3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+        fsmgr_pending_t* entry;
+
+        /* A backend ended. The kernel tells every endpoint it had sent to, and
+         * it sent its answers here; arg0 is the endpoint that ended. */
+        if (type == WASMOS_IPC_HANGUP) {
+            fsmgr_pending_fail_backend(a0);
+            continue;
+        }
+        entry = fsmgr_pending_find(&g_pending, id);
+        if (!entry) {
+            printf("[fs-manager] dropped an answer nothing awaits: type=0x%x id=%d\n",
+                   (unsigned)type,
+                   (int)id);
+            continue;
+        }
+        if (type == FS_IPC_STREAM) {
+            /* Retried for the same reason as reply_to_client. A client still
+             * full after every retry is stranded, and the rest of its answer
+             * goes nowhere. */
+            if (entry->client >= 0 && wasmos_sys_ipc_send_retry(entry->client,
+                                                                g_fs_endpoint,
+                                                                type,
+                                                                entry->client_request_id,
+                                                                a0,
+                                                                a1,
+                                                                a2,
+                                                                a3,
+                                                                FSMGR_REPLY_SEND_RETRIES) != 0) {
+                entry->client = -1;
+                entry->context = -1;
+            }
+            continue;
+        }
+        fsmgr_pending_complete(entry, type, a0, a1, a2, a3);
+    }
+}
+
+/* Service entry point.  Brings up the bump heap and the endpoints (a service
+ * endpoint published as "fs.vfs", a reply endpoint every request to a backend is
+ * sent from, and the release endpoint), registers the service name, signals
+ * readiness, then discovers the FS backends and serves requests forever.
  *
  * Lifecycle ordering is load-bearing: the name must be registered before
  * notify_ready, or a client woken by the ready signal can look up "fs.vfs" and
@@ -2098,12 +2215,19 @@ static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t
  * SVC_IPC_CLASS_EVENT adds and removes into the main loop.
  *
  * Every request is answered on the service endpoint, and the loop parks in
- * wasmos_ipc_select_one rather than spinning.  Client identity is the owning
+ * wasmos_ipc_select_wait rather than spinning.  Client identity is the owning
  * context of the sending endpoint, not the endpoint itself, so all of a
  * process's endpoints share one cwd.
  *
- * Does not return: a failure to create an endpoint or to register the name
- * parks the process in wasmos_sys_ipc_recv_loop instead of exiting, so the
+ * The loop never waits for a backend. A request that needs one is recorded in
+ * g_pending and sent, and the answer, drained from the reply endpoint, completes
+ * it; a backend that holds a request holds only that request. fs-manager is below
+ * everything that needs a file -- the process manager reads every module it
+ * spawns through it -- so a wait here is a wait for whoever needs it to answer
+ * (docs/architecture/18-filesystem-stack.md, "Deferred Replies").
+ *
+ * Does not return: a failure to create an endpoint or the select set, or to
+ * register the name, parks the process in wasmos_sys_ipc_recv_loop instead of exiting, so the
  * declared int32_t result is never produced.  arg1..arg3 are ignored and
  * proc_endpoint is overwritten from the spawn-info contract. */
 WASMOS_WASM_EXPORT int32_t initialize(void) {
@@ -2116,49 +2240,43 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     g_reply_endpoint = wasmos_ipc_create_endpoint();
     g_fs_endpoint = wasmos_ipc_create_endpoint();
     g_release_endpoint = wasmos_ipc_create_endpoint();
-    g_cwd_bid = wasmos_xfer_buffer_acquire(FSMGR_CWD_MAX);
     log_msg("[fs-manager] init start\n");
     if (g_proc_endpoint < 0 || g_reply_endpoint < 0 || g_fs_endpoint < 0 ||
-        g_release_endpoint < 0 || g_cwd_bid < 0) {
+        g_release_endpoint < 0) {
         log_msg("[fs-manager] endpoint init failed\n");
+        wasmos_sys_ipc_recv_loop();
+    }
+    g_main_select = wasmos_ipc_select_create();
+    if (g_main_select <= 0 || wasmos_ipc_select_add(g_main_select, g_fs_endpoint) != 0 ||
+        wasmos_ipc_select_add(g_main_select, g_reply_endpoint) != 0 ||
+        wasmos_ipc_select_add(g_main_select, g_release_endpoint) != 0) {
+        log_msg("[fs-manager] select set init failed\n");
         wasmos_sys_ipc_recv_loop();
     }
     if (wasmos_svc_register(g_proc_endpoint, g_fs_endpoint, "fs.vfs", 1) != 0) {
         log_msg("[fs-manager] register fs.vfs failed\n");
         wasmos_sys_ipc_recv_loop();
     }
-    g_main_select = wasmos_ipc_select_create();
-    if (g_main_select <= 0) {
-        g_main_select = -1;
-    } else if (wasmos_ipc_select_add(g_main_select, g_fs_endpoint) != 0 ||
-               wasmos_ipc_select_add(g_main_select, g_release_endpoint) != 0) {
-        (void)wasmos_ipc_select_destroy(g_main_select);
-        g_main_select = -1;
-    }
     log_msg("[fs-manager] services registered\n");
     wasmos_sys_notify_ready(g_proc_endpoint, g_fs_endpoint);
     fsmgr_discover_backends();
 
     for (;;) {
-        /* Release replies first: draining them is what lets the pump send the
-         * next closes, and it reads into the same last-message slot the request
-         * below is read from. */
+        /* Answers first: draining them is what completes the records in flight
+         * and lets the pump send the next closes, and each drain reads into the
+         * same last-message slot the request below is read from. */
         fsmgr_release_drain();
+        fsmgr_reply_drain();
         int release_retry = fsmgr_release_pump();
-        if (g_main_select >= 0) {
-            /* Park until either endpoint has something; a message that arrived
-             * since the drain wakes the wait at once. A close still to be resent
-             * bounds the wait, since its backend's queue draining wakes nobody
-             * here. */
-            if (wasmos_ipc_drain(g_fs_endpoint) <= 0) {
-                if (release_retry) {
-                    (void)wasmos_ipc_select_wait_timeout(g_main_select, FSMGR_RELEASE_RETRY_MS);
-                } else {
-                    (void)wasmos_ipc_select_wait(g_main_select);
-                }
-                continue;
+        /* Park until any endpoint has something; a message that arrived since
+         * the drains wakes the wait at once. A close still to be resent bounds
+         * the wait, since its backend's queue draining wakes nobody here. */
+        if (wasmos_ipc_drain(g_fs_endpoint) <= 0) {
+            if (release_retry) {
+                (void)wasmos_ipc_select_wait_timeout(g_main_select, FSMGR_RELEASE_RETRY_MS);
+            } else {
+                (void)wasmos_ipc_select_wait(g_main_select);
             }
-        } else if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {
             continue;
         }
 
@@ -2172,9 +2290,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         int32_t arg2f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t arg3f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
 
-        /* The process manager's answer to a mount's spawn. It arrives on the
-         * SERVICE endpoint rather than the private reply endpoint precisely
-         * because fs-manager must not be blocked waiting for it. */
+        /* The process manager's answer to a mount's spawn, which was sent from
+         * this endpoint (fsmgr_mount_send_spawn). */
         if (type == PROC_IPC_RESP || type == PROC_IPC_ERROR) {
             fsmgr_mount_handle_spawn_reply(type, arg0);
             continue;
@@ -2189,6 +2306,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
          * it for notification. */
         if (type == WASMOS_IPC_HANGUP) {
             fsmgr_mount_waits_drop(arg0);
+            (void)fsmgr_pending_orphan_client(&g_pending, arg0);
             fsmgr_release_client(arg1f);
             continue;
         }
@@ -2264,8 +2382,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
         int32_t req_arg0 = arg0;
         int32_t backend = resolve_backend_for_state(state);
-        int32_t resp_type = FS_IPC_ERROR;
-        int32_t r0 = -1, r1 = 0, r2 = 0, r3 = 0;
         int32_t client_fd = -1;
         /* Buffer-carrying ops arrive as arg2 = client buffer_id, arg3 = the
          * client's grant to fs-manager (client_borrow; fs-manager is its
@@ -2276,8 +2392,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
          * which packs name bytes into arg2/arg3) keep their args and take none. */
         int32_t uses_buf = type_uses_client_buffer(type);
         int32_t client_borrow = uses_buf ? arg3f : 0;
-        int32_t backend_borrow = -1;
         int32_t fwd_arg3 = arg3f;
+        fsmgr_pending_t* entry;
         if (is_path_op_type(type)) {
             if (route_root_path_request(state, arg2f, type, &req_arg0, &backend) < 0) {
                 send_fs_error(source, request_id, WASMOS_ERR_FS_TRANSLATE);
@@ -2300,65 +2416,27 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             req_arg0 = fd_entry->backend_fd;
             backend = fd_entry->backend_endpoint;
         }
-        if (uses_buf) {
-            backend_borrow = wasmos_xfer_buffer_reborrow(
-                backend, client_borrow, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
-            if (backend_borrow < 0) {
-                send_fs_error(source, request_id, WASMOS_ERR_FS_REBORROW);
-                continue;
-            }
-            fwd_arg3 = backend_borrow;
-        }
-        if (forward_request(backend,
-                            type,
-                            request_id,
-                            req_arg0,
-                            arg1f,
-                            arg2f,
-                            fwd_arg3,
-                            source,
-                            &resp_type,
-                            &r0,
-                            &r1,
-                            &r2,
-                            &r3) != 0) {
-            if (backend_borrow >= 0) {
-                (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-            }
-            send_fs_error(source, request_id, WASMOS_ERR_FS_BACKEND_IPC);
+        /* Relayed, not waited for: the answer completes the record
+         * (fsmgr_relay_done), and this loop goes on serving meanwhile. */
+        entry =
+            pending_for_client(FSMGR_STEP_FORWARD, backend, source, request_id, state->context_id);
+        if (!entry) {
             continue;
         }
-        if (type == FS_IPC_OPEN_REQ && resp_type == FS_IPC_RESP && r0 >= 0) {
-            int32_t backend_fd = r0;
-            if (fsmgr_fd_alloc(state, backend, backend_fd, &r0) != 0) {
-                int32_t close_t = FS_IPC_ERROR;
-                int32_t close0 = -1, close1 = 0, close2 = 0, close3 = 0;
-                (void)forward_request(backend,
-                                      FS_IPC_CLOSE_REQ,
-                                      request_id,
-                                      backend_fd,
-                                      0,
-                                      0,
-                                      0,
-                                      source,
-                                      &close_t,
-                                      &close0,
-                                      &close1,
-                                      &close2,
-                                      &close3);
-                if (backend_borrow >= 0) {
-                    (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-                }
-                send_fs_error(source, request_id, WASMOS_ERR_FS_NO_FD);
+        entry->type = type;
+        entry->client_fd = client_fd;
+        if (uses_buf) {
+            entry->borrow = wasmos_xfer_buffer_reborrow(
+                backend, client_borrow, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+            if (entry->borrow < 0) {
+                entry->borrow = -1;
+                pending_abort(entry, WASMOS_ERR_FS_REBORROW);
                 continue;
             }
+            fwd_arg3 = entry->borrow;
         }
-        if (type == FS_IPC_CLOSE_REQ && resp_type == FS_IPC_RESP && r0 == 0 && client_fd >= 0) {
-            fsmgr_fd_release(state, client_fd);
+        if (pending_send(entry, type, req_arg0, arg1f, arg2f, fwd_arg3) != 0) {
+            pending_abort(entry, WASMOS_ERR_FS_BACKEND_IPC);
         }
-        if (backend_borrow >= 0) {
-            (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-        }
-        (void)reply_to_client(source, resp_type, request_id, r0, r1, r2, r3);
     }
 }

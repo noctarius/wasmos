@@ -1,16 +1,28 @@
 /* wfs_block.h - block client for the WFS driver.
  *
- * fs_wfs stages one filesystem block and asks a block server to fill it.
- * Requests ride the SYSTEM IPC-future bridge (wasmos_sys_wasm_ipc_future_*,
- * docs/architecture/32): a request becomes a loop intent, its reply settles a
- * future, and the awaiting task is parked and resumed by the runtime. Nothing
- * here polls, retries, or schedules — that is all the runtime's.
+ * fs_wfs stages one filesystem block and asks a block server to fill it. A
+ * request is a loop intent whose reply settles a future the client owns, and
+ * the awaiting task is parked and resumed by the runtime (docs/architecture/32).
+ * Nothing here polls or schedules — that is all the runtime's. A device error
+ * reaches the caller as a rejection at its await.
  *
- * Using the bridge rather than a private request/reply protocol is what makes a
- * device error reach the caller: a failed send returns an already-rejected
- * future and a failed transfer rejects on reply, so the awaiting task observes
- * the failure at its await. A hand-rolled layer has to invent a flag for that
- * and gets it wrong the first time.
+ * The client follows a restarted server. The disk is the same disk after its
+ * driver restarts, so the volume, its open files and this process carry over:
+ * the kernel's hangup or the registry's REMOVE unbinds the client, and the
+ * registry's ADD of the disk's instance on a new endpoint binds it there. The
+ * client keeps its own promise, because the IPC-future bridge would wait on the
+ * dead instance's reply forever.
+ *
+ * A transfer the dead instance never answered, and one begun while no instance
+ * serves the disk, is HELD and resent to the successor unchanged -- a transfer
+ * is idempotent per LBA -- so a restart is invisible above this layer. The hold
+ * lasts WASMOS_BLOCK_HOLD_MS from the server's end (abi/constants.yaml,
+ * block_hold); a server not back by then is taken to be gone, and every
+ * transfer fails with WASMOS_ERR_BLOCK_DEV_GONE until one is. Holding does not
+ * stall the restart: the successor's module is read through fs-manager, which
+ * never waits on a backend (docs/architecture/18-filesystem-stack.md, "Deferred
+ * Replies"). Until wfs_block_follow has been sent no successor can be learned
+ * of, so nothing is held and such a transfer fails at once.
  *
  * A filesystem block is 4096..16384 bytes while the block protocol speaks
  * 512-byte sectors, so one filesystem block is several sectors. That conversion
@@ -43,7 +55,7 @@ typedef uint32_t (*wfs_block_redirect_fn)(void* user, uint32_t block);
 
 typedef struct {
     wasmos_sys_event_loop_t* loop;
-    int32_t block_endpoint;
+    int32_t block_endpoint; /* -1 while no instance of the server is known */
     int32_t reply_endpoint;
     int32_t buf_id; /* this process's block buffer, by PHYSICAL address */
 
@@ -69,8 +81,23 @@ typedef struct {
 
     /* The one in-flight request. The reactor drives one block operation at a
      * time, so a single record suffices; a second begin while one is in flight
-     * is refused rather than queued. */
-    wasmos_sys_wasm_ipc_future_t op;
+     * is refused rather than queued. Its descriptor stays in req_bid until it
+     * settles, which is what lets a held request be resent unchanged. */
+    wasmos_future_t future;
+    wasmos_promise_t promise;
+    wasmos_ipc_message_t reply;
+    int32_t intent_id; /* the request on the wire; 0 when none */
+    int32_t req_type;  /* BLOCK_IPC_*_REQ of the in-flight request */
+    /* The request buffer's grant to block_endpoint, revoked when the client
+     * moves to a new server; -1 when there is none. */
+    int32_t req_borrow;
+    uint8_t following;   /* wfs_block_follow was sent: a successor is announced */
+    uint8_t held;        /* the in-flight request waits for a server; none is sent */
+    uint8_t hold_logged; /* the hold of this outage has been reported */
+    /* The hold window of the current outage closed with no server back: the
+     * disk is taken to be gone until a server registers. */
+    uint8_t gone;
+    uint32_t hold_deadline; /* sched tick the window closes at, while no server runs */
     uint32_t pending_block;
     uint8_t in_flight;
     /* A write whose staging into the server's buffer failed, so no request was
@@ -92,10 +119,23 @@ static inline uint8_t* wfs_block_data(wfs_block_t* b) {
 /* Bind the client to a block endpoint and a disk. `buf_id` is this process's
  * block buffer by physical address; `target` is the disk's `block` class
  * instance. Acquires and borrows the request-descriptor buffer, so it may fail:
- * returns 0, or a packed code when that buffer could not be obtained. */
+ * returns 0, or a packed code when that buffer could not be obtained.
+ *
+ * Takes the loop's WASMOS_IPC_HANGUP and SVC_IPC_CLASS_EVENT handlers, which
+ * follow the server across a restart, and its timeout hook (on_timeout,
+ * timeout_user, poll_timeout_ms), which ages a held transfer; the loop's owner
+ * must not install its own. */
 wasmos_error_code_t wfs_block_configure(wfs_block_t* b, wasmos_sys_event_loop_t* loop,
                                         int32_t block_endpoint, int32_t reply_endpoint,
                                         int32_t buf_id, uint32_t target);
+
+/* Subscribe the reply endpoint to `block` class events through the process
+ * manager at `proc_endpoint`, as a loop intent, so a new instance of the
+ * server is seen when it registers. Returns 0 once the request is on its way,
+ * or a packed code. From then on a transfer is held across a restart; before
+ * it, a restart is noticed only through the kernel's hangup and every transfer
+ * fails with WASMOS_ERR_BLOCK_DEV_GONE. */
+wasmos_error_code_t wfs_block_follow(wfs_block_t* b, int32_t proc_endpoint);
 
 /* Adopt the volume's block size once the superblock has been read. Refuses
  * anything outside the three permitted sizes, leaving the previous value.

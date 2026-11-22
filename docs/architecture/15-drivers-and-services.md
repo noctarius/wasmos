@@ -68,12 +68,24 @@ register de-asserts INTRQ at the drive, and `irq_ack` reopens the line the
 kernel masked on dispatch. An event that arrives and is never acked leaves the
 line masked permanently.
 
-Real DMA is **not** implemented: there is no bus-master IDE (BMIDE/PRD)
-programming, and the sector loop is PIO on every path. The `dma_map_borrow`
-zero-copy borrow fast path is separately disabled pending a block protocol that
-carries the buffer grant (`TODO(xfer-buffer owner-push)` in `ata.c`); the driver
-reports its transfer mode once at startup rather than logging a per-request
-"fallback", which used to read like an intermittent failure.
+**Reads are bus-master DMA once bus mastering is on.** The driver programs the
+bus-master IDE engine (BMIDE, a PRD table in its block buffer) into a physical
+destination or a client's borrowed buffer, and falls back to PIO for anything
+it cannot map. It never assumes bus mastering: when a previous driver of the
+function ended, the kernel cleared Bus Master Enable ([Capability and
+Policy](10-capability-and-policy.md), "Device Quiesce"), and a bus-master
+transfer programmed then completes at the drive without moving a byte. So on
+every start the driver stops both engines and asks pci-bus for bus mastering
+(`PCI_IPC_BUS_MASTER_REQ`, its function from the `pci=` startup argument),
+without waiting; it serves PIO until pci-bus answers. The driver reports its
+transfer mode once at startup rather than logging a per-request "fallback",
+which used to read like an intermittent failure.
+
+**ata is a supervised unit** (`ata@pci:<bb>:<dd>.<f>`, `restart=on-failure`
+on its initfs rule) and is respawned from the initfs, which it does not serve.
+The partition manager follows it for `/boot` and `/user`, and fs-wfs for
+`/wfs` on its whole disk; a transfer in flight is held and resent to the
+successor (`tests/test_ata_restart.py`).
 
 Block IPC opcodes:
 
@@ -575,7 +587,7 @@ line, in a descriptor the submitter owns and lends READ:
 
 ```
 <unit> <path> [restart=never|on-failure|always] [class=optional|required|critical]
-              [tty=<slot>] [probe=<seconds>] [-- <args>]
+              [tty=<slot>] [probe=<seconds>] [parent=<unit>] [-- <args>]
 ```
 
 `<path>` is absolute, or `module:<app name>` for a boot module, which takes no
@@ -605,7 +617,8 @@ spawn-due -> spawning -> starting --READY--> running --stable--> stable
                                                                         stopped | failed
 ```
 
-and `stopping` once the supervisor has killed it. The policy
+and `stopping` once the supervisor has killed it; `degraded` holds a unit
+whose parent will not run again (below). The policy
 (`supervisor_unit.c`, host-tested) is plain data and decides every transition:
 
 - **Failure** is any end other than a clean exit with status 0, judged by the
@@ -623,6 +636,27 @@ and `stopping` once the supervisor has killed it. The policy
   last end. A stable run does not wipe the window; old ends age out of it.
 - Every number is multiplied by kenv `supervisor.timescale` (1-100), which
   slow configurations raise instead of tuning each timeout.
+
+**Parent links.** `parent=<unit>` binds a unit to a unit already held, for a
+unit whose state cannot outlive its parent's instance -- state derived from
+the parent that a new instance does not honour. When the parent's instance
+ends and another follows (a restart), the child's running instance is killed
+and respawned at once, without a backoff; when the parent stops or gives up,
+the child is stopped and held `degraded` instead of restarting in a loop
+behind it, and a unit submitted under a parent that is down starts degraded.
+Neither end counts against the child's restart limit -- the failure was the
+parent's -- and each travels one level per end: a child's own end tells its
+children. A child waiting to be spawned is not held back while its parent
+restarts: start order is still not a correctness property (doc 03, invariant
+5), and the link governs lifetime, not order. A `critical` child stopped this
+way ends the system like any end of it, so a chain is critical from the first
+critical link down.
+
+The link is the exception. A client that can rebind to a restarted provider
+-- find it again by name, resend what was in flight -- survives the restart
+with its sessions intact, and needs no parent; only a client that cannot is
+bound. The links form a forest: a parent must be held when its child is
+admitted (`WASMOS_ERR_SUPERVISOR_NO_PARENT` otherwise) and names are unique.
 
 **Liveness.** A unit opts in by naming its event-loop endpoint in its READY
 (`PROC_READY_FLAG_LIVENESS`). The supervisor sends `WASMOS_IPC_HEALTH_REQ` to it
@@ -653,11 +687,23 @@ shell printed a prompt", is what the test harness waits for.
 **Operator view.** `SUPERVISOR_IPC_LIST_REQ` writes one
 `wasmos_supervisor_unit_record_t` per unit into a buffer the caller owns.
 `SUPERVISOR_IPC_KILL_REQ` kills a unit's running instance by name; the end is
-a failure and the policy applies. The `svc` utility wraps them: `svc submit
-<spec>`, `svc list`, `svc status <unit>`, `svc kill <unit>`.
+a failure and the policy applies. `SUPERVISOR_IPC_RETRACT_REQ` withdraws a unit
+and every unit bound to it: their instances are killed, none is restarted, no
+end is a failure, and each slot is freed when its instance has ended. A tree
+holding a `critical` unit is refused whole (`WASMOS_ERR_SUPERVISOR_CRITICAL`).
+`SUPERVISOR_IPC_STOP_REQ` ends a unit's instance without a restart and without
+counting the end, and holds the unit `stopped`; its children are held
+`degraded`. `SUPERVISOR_IPC_START_REQ` brings a stopped, failed or degraded
+unit back as if newly submitted -- its backoff and intensity window cleared,
+its restart count kept -- and its degraded children with it; a child under a
+parent that is down is refused (`WASMOS_ERR_SUPERVISOR_PARENT_DOWN`). A stop,
+like a retraction, is refused for a tree holding a `critical` unit. A stopped
+unit stays recorded until it is started or retracted. The `svc` utility wraps
+them: `svc submit <spec>`, `svc list`, `svc status <unit>`, `svc kill <unit>`,
+`svc retract <unit>`, `svc stop <unit>`, `svc start <unit>`.
 
-**Access.** Submitting, killing and declaring the boot set require the
-sender to hold `svc.control` (sysinit, device-manager, `svc`); listing is open.
+**Access.** Submitting, killing, retracting, stopping, starting and declaring
+the boot set require the sender to hold `svc.control` (sysinit, device-manager, `svc`); listing is open.
 A submission that carries a capability descriptor also requires `spawn.grant`,
 because the grants reach the process manager as the supervisor's own watched
 spawn: the supervisor relays them only from a submitter the process manager
@@ -699,6 +745,10 @@ What each client of a supervised provider does when it restarts:
 | `rtc` | `date` | looks it up per run |
 | `rtc` | `menu_bar` | follows `rtc` by name watch; a failed read drops the endpoint until the next binding |
 | `virtio_rng@pci:*` | entropy users | look up `virtio-rng` / `hrng` per request |
+| `virtio_blk@pci:*` | fs-wfs on a whole disk | follows the disk's `block` instance through class events and moves its request grant to the new instance; the mount, open files and fs-wfs itself carry over, and I/O in flight or asked for while the driver is down is held and resent to the new instance (`WASMOS_ERR_BLOCK_DEV_GONE` only once `WASMOS_BLOCK_HOLD_MS` pass without one) |
+| `virtio_blk@pci:*` | fs-fat on a whole disk | as fs-wfs: follows the `block` instance and holds I/O across the restart (`fat_block.h`); the mount, open files and fs-fat itself carry over |
+| `virtio_blk@pci:*` | partition-manager | follows the disk's `block` instance through hangups and class events, holds the transfers the ended driver had and those asked for meanwhile, and rebinds the disk to the new instance and resends them there; its partitions and the mounts on them carry over |
+| `virtio_blk@pci:*` | volume-manager | probes only at arrival and rescan; forgets the ended instance's buffer grants on REMOVE |
 | `logger` | (none) | a restart continues `/var/log/messages` from the position kept in kenv `logger.seq` |
 | boot chain | everyone | `critical`: never restarted, its end halts |
 
@@ -711,12 +761,14 @@ exit with the compositor and are not started again.
 | `SUPERVISOR_IPC_LIST_REQ` | `0x1001` | Write the unit table into the caller's buffer |
 | `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` | `0x1002` | The boot set is complete |
 | `SUPERVISOR_IPC_KILL_REQ` | `0x1003` | Kill a unit's instance; its end is a failure |
+| `SUPERVISOR_IPC_RETRACT_REQ` | `0x1004` | Withdraw a unit and the units bound to it; nothing is restarted |
+| `SUPERVISOR_IPC_STOP_REQ` | `0x1005` | Stop a unit without a restart or a failure; its children are degraded |
+| `SUPERVISOR_IPC_START_REQ` | `0x1006` | Start a stopped, failed or degraded unit and its degraded children |
 
-Not built: operator stop/start/restart that does not count as a failure;
-retraction of a submitter's units when it dies; restart cascade along `[deps]`
-`needs`; liveness for the boot services; supervising the DMA drivers whose
-clients hold state a restart loses (virtio-blk, ata, virtio-net); a guard
-against reboot loops under `on_critical=reboot`. They are tracked in `docs/TASKS.md`.
+Not built: a one-step operator restart (stop, then start); retraction of a submitter's units
+when it dies; liveness for the boot services; supervising virtio-net, whose
+clients do not follow a restart yet; a guard against reboot loops under
+`on_critical=reboot`. They are tracked in `docs/TASKS.md`.
 
 #### `sysinit` — Late-Boot Service Launcher
 
@@ -837,16 +889,20 @@ spawn would carry -- for a PCI driver including its function, which the kernel
 quiesces whenever the driver ends -- and the supervisor's reply retires the
 rule. Any other value rejects the line rather than running the driver
 unsupervised. The shipped rules set `on-failure` for rtc, keyboard, mouse and
-virtio-rng, whose clients hold no session a restart loses. A rule without the
-key spawns directly, as does one whose submission cannot be sent because no
-supervisor is bound yet; a PCI driver spawned directly by path is not quiesced
-at its end, because the packed path form cannot name its function.
+virtio-rng, whose clients hold no session a restart loses, and for virtio-blk
+and ata, whose clients follow a restart and hold a transfer across it. While
+device-manager follows the supervisor, a rule with the key waits for the
+supervisor's name to bind; that matters for the bootstrap rules, which fire
+before it has. A rule without the key spawns directly, as does one whose
+submission cannot be sent, or every such rule when device-manager could not
+start following the supervisor; a PCI driver spawned directly by path is not
+quiesced at its end, because the packed path form cannot name its function.
 
 #### Shipped Rule Files
 
 **`/init/devmgr/rules/default.rules`** (bootstrap rules):
 ```
-SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", RUN+="system/drivers/ata.wap"
+SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", ENV{RESTART}="on-failure", RUN+="system/drivers/ata.wap"
 SUBSYSTEM=="block", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"
 ```
 
@@ -940,9 +996,9 @@ rule-engine and in-memory device registry. The planned direction (from
   driver as a unit (see "Rule Syntax", `ENV{RESTART}`). Clients rebind by name
   on hangup; endpoint identity is not preserved across a restart (see the
   supervisor). A DMA-capable PCI driver is supervised with its function in
-  its grants, which the kernel quiesces at the driver's end; virtio-rng is.
-  virtio-blk, ata and virtio-net stay device-manager-spawned until their
-  clients' rebind is decided (mounts, open files, sockets).
+  its grants, which the kernel quiesces at the driver's end; virtio-rng,
+  virtio-blk and ata are. virtio-net stays device-manager-spawned until
+  net-stack keeps its sockets across a restart.
 - **Dynamic mount policy.** Mount assignments as rule outcomes, not
   compile-time constants. `fs-manager` remains the namespace router.
 - **Unified block-device identity.** All transports normalize to

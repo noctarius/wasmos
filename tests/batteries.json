@@ -110,8 +110,10 @@
       "description": "Filesystem reads and writes through the FAT and WFS backends, and the block devices underneath them.",
       "needs_qemu": true,
       "files": [
+        "test_ata_restart.py",
         "test_fs_open_smoke.py",
         "test_init_sysinit_giveup.py",
+        "test_fat_virtio_blk.py",
         "test_fs_write_smoke.py",
         "test_fsck_wfs_claim.py",
         "test_mkfs_wfs.py",

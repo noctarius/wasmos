@@ -80,16 +80,22 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1043", RUN+="system/d
 # quiesces its function when it ends (bus mastering and MSI off), so no restart
 # finds the device still writing into the dead instance's frames. Its clients
 # hold no session with it -- each entropy request finds the "hrng" provider
-# anew. The other DMA drivers stay device-manager-spawned until their clients'
-# rebind is audited (fs mounts on virtio-blk and ata, sockets on virtio-net).
+# anew. ata and virtio-net stay device-manager-spawned until their clients
+# rebind: ata carries /boot, whose filesystem goes through partition-manager,
+# and net-stack keeps no interface across a NIC's restart yet.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_rng.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_rng.wap"
 # virtio-blk presents PCI class 0x01 / subclass 0x00, which the ATA rule's
 # 0x01/0x01 does not match; the vendor/device pair is matched anyway so a
 # non-virtio SCSI controller is not handed to this driver (transitional 0x1001,
 # modern 0x1042).
-SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1001", RUN+="system/drivers/virtio_blk.wap"
-SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1042", RUN+="system/drivers/virtio_blk.wap"
+#
+# Supervised as virtio_blk@pci:<function>. Its clients follow the restarted
+# driver -- fs-wfs and fs-fat on a whole disk, and partition-manager for a
+# filesystem on a partition -- so mounts and open files survive the restart;
+# I/O that lands while the driver is down fails WASMOS_ERR_BLOCK_DEV_GONE.
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1001", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_blk.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1042", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_blk.wap"
 
 # Two tmpfs instances placed by rule, which is what ENV{MOUNT} on a boot rule is
 # for: a filesystem with no backing device names no device, so nothing about it

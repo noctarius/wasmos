@@ -459,6 +459,7 @@ domains:
       - { name: DESCRIPTOR_MALFORMED, description: "a block record is short, unterminated, or names a length outside the transfer buffer" }
       - { name: NO_DESCRIPTOR,       description: "the device has no descriptor to report, so it cannot be identified" }
       - { name: QUEUE_FULL,         description: "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it" }
+      - { name: GONE,               description: "the device's driver ended and no instance of it serves the device now: a request the dead instance held was never answered, and one begun before a new instance registered was not sent. A later request reaches the new instance once it has registered" }
 
   supervisor:
     id: 26
@@ -475,5 +476,9 @@ domains:
       - { name: DMA_CAPS,  description: "the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance" }
       - { name: NO_UNIT,     description: "no unit of the name the request gives is recorded" }
       - { name: NOT_RUNNING, description: "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed" }
-      - { name: NOT_AUTHORIZED,       description: "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require" }
+      - { name: NOT_AUTHORIZED,       description: "the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require" }
       - { name: GRANT_NOT_AUTHORIZED, description: "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself" }
+      - { name: NO_PARENT, description: "the submission names a parent= unit that is not recorded, or that is being retracted" }
+      - { name: CRITICAL,  description: "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system" }
+      - { name: RUNNING,     description: "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart" }
+      - { name: PARENT_DOWN, description: "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too" }

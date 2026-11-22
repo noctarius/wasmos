@@ -1323,6 +1323,20 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     }
     wfs_log("[fs-wfs] ready\n");
 
+    /* Follow the block server across a restart (wfs_block.h). Subscribed last:
+     * every synchronous call above waits on g_reply_endpoint and discards what
+     * is not its own reply, which would drop the subscription's answer and the
+     * class events behind it. Events that arrive while the driver is idle wait
+     * there until the next operation polls the loop.
+     * TODO: a driver that dies and comes back between the lookup at the top of
+     * initialize and this subscription is seen only through its hangup: the
+     * new instance's ADD is never delivered, so every later transfer fails
+     * with WASMOS_ERR_BLOCK_DEV_GONE. Subscribing before the lookup needs the
+     * lookup to be a loop intent as well. */
+    if (wfs_block_follow(&g_blk, g_proc_endpoint) != WASMOS_ERR_NONE) {
+        wfs_log("[fs-wfs] cannot follow the block device; a driver restart fails I/O\n");
+    }
+
     /* Serve. Blocks on the endpoint at idle rather than polling it. */
     for (;;) {
         if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {

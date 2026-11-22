@@ -325,6 +325,7 @@ enum {
     WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 9), /* a block record is short, unterminated, or names a length outside the transfer buffer */
     WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 10), /* the device has no descriptor to report, so it cannot be identified */
     WASMOS_ERR_BLOCK_DEV_QUEUE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 11), /* a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it */
+    WASMOS_ERR_BLOCK_DEV_GONE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK_DEV, 12), /* the device's driver ended and no instance of it serves the device now: a request the dead instance held was never answered, and one begun before a new instance registered was not sent. A later request reaches the new instance once it has registered */
     WASMOS_ERR_SUPERVISOR_BAD_DESC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 1), /* the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor */
     WASMOS_ERR_SUPERVISOR_BAD_SPEC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 2), /* the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option */
     WASMOS_ERR_SUPERVISOR_EXISTS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 3), /* a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed */
@@ -332,8 +333,12 @@ enum {
     WASMOS_ERR_SUPERVISOR_DMA_CAPS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 5), /* the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance */
     WASMOS_ERR_SUPERVISOR_NO_UNIT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 6), /* no unit of the name the request gives is recorded */
     WASMOS_ERR_SUPERVISOR_NOT_RUNNING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 7), /* the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed */
-    WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 8), /* the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require */
+    WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 8), /* the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require */
     WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 9), /* the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself */
+    WASMOS_ERR_SUPERVISOR_NO_PARENT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 10), /* the submission names a parent= unit that is not recorded, or that is being retracted */
+    WASMOS_ERR_SUPERVISOR_CRITICAL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 11), /* the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system */
+    WASMOS_ERR_SUPERVISOR_RUNNING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 12), /* the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart */
+    WASMOS_ERR_SUPERVISOR_PARENT_DOWN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 13), /* the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -665,6 +670,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "block_dev.DESCRIPTOR_MALFORMED";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "block_dev.NO_DESCRIPTOR";
     case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "block_dev.QUEUE_FULL";
+    case WASMOS_ERR_BLOCK_DEV_GONE: return "block_dev.GONE";
     case WASMOS_ERR_SUPERVISOR_BAD_DESC: return "supervisor.BAD_DESC";
     case WASMOS_ERR_SUPERVISOR_BAD_SPEC: return "supervisor.BAD_SPEC";
     case WASMOS_ERR_SUPERVISOR_EXISTS: return "supervisor.EXISTS";
@@ -674,6 +680,10 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "supervisor.NOT_RUNNING";
     case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "supervisor.NOT_AUTHORIZED";
     case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: return "supervisor.GRANT_NOT_AUTHORIZED";
+    case WASMOS_ERR_SUPERVISOR_NO_PARENT: return "supervisor.NO_PARENT";
+    case WASMOS_ERR_SUPERVISOR_CRITICAL: return "supervisor.CRITICAL";
+    case WASMOS_ERR_SUPERVISOR_RUNNING: return "supervisor.RUNNING";
+    case WASMOS_ERR_SUPERVISOR_PARENT_DOWN: return "supervisor.PARENT_DOWN";
     default: return "unknown";
     }
 }
@@ -938,6 +948,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_MALFORMED: return "a block record is short, unterminated, or names a length outside the transfer buffer";
     case WASMOS_ERR_BLOCK_DEV_NO_DESCRIPTOR: return "the device has no descriptor to report, so it cannot be identified";
     case WASMOS_ERR_BLOCK_DEV_QUEUE_FULL: return "a service in front of the device has no free slot to accept this request; retryable once an in-flight one completes. Distinct from NOT_READY, which is about the device, and from UNIT_CLAIMED, which is about another client holding it";
+    case WASMOS_ERR_BLOCK_DEV_GONE: return "the device's driver ended and no instance of it serves the device now: a request the dead instance held was never answered, and one begun before a new instance registered was not sent. A later request reaches the new instance once it has registered";
     case WASMOS_ERR_SUPERVISOR_BAD_DESC: return "the submission descriptor was short, of an unknown version, or its spec is not NUL-terminated within the descriptor";
     case WASMOS_ERR_SUPERVISOR_BAD_SPEC: return "the unit spec does not parse: a missing unit name or path, a name or path too long, or an unknown or malformed option";
     case WASMOS_ERR_SUPERVISOR_EXISTS: return "a unit of that name is already recorded; a name stays taken while its unit runs, waits to restart, or has failed";
@@ -945,8 +956,12 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_DMA_CAPS: return "the unit asks for DMA access without naming its PCI function (DEVMGR_CAP_PCI_FUNCTION). The kernel quiesces a dead driver's device only through that function, so without it a restart could hand a device still bus-mastering into recycled frames to a new instance";
     case WASMOS_ERR_SUPERVISOR_NO_UNIT: return "no unit of the name the request gives is recorded";
     case WASMOS_ERR_SUPERVISOR_NOT_RUNNING: return "the unit has no instance to act on: it waits to be spawned or restarted, is being spawned, is already being killed, or has stopped or failed";
-    case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "the sender lacks the svc.control capability, which submitting, killing and declaring the boot set require";
+    case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require";
     case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: return "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself";
+    case WASMOS_ERR_SUPERVISOR_NO_PARENT: return "the submission names a parent= unit that is not recorded, or that is being retracted";
+    case WASMOS_ERR_SUPERVISOR_CRITICAL: return "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system";
+    case WASMOS_ERR_SUPERVISOR_RUNNING: return "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart";
+    case WASMOS_ERR_SUPERVISOR_PARENT_DOWN: return "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too";
     default: return "unknown error";
     }
 }

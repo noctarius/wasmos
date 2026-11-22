@@ -70,6 +70,8 @@ TESTS = [
     (RUN, 'test_fs_manager_backends', []),
     (CC, 'test_fs_manager_clients', [*C11, "-I" + R('src/services/fs_manager'), '-iquote', R('src/drivers/include'), '-iquote', R('abi/generated/c'), '-iquote', R('src/libsys/wasm/include'), R('tests/unit/test_fs_manager_clients.c'), R('src/services/fs_manager/fs_manager_clients.c')]),
     (RUN, 'test_fs_manager_clients', []),
+    (CC, 'test_fs_manager_pending', [*C11, "-I" + R('src/services/fs_manager'), '-iquote', R('src/drivers/include'), '-iquote', R('abi/generated/c'), '-iquote', R('src/libsys/wasm/include'), R('tests/unit/test_fs_manager_pending.c'), R('src/services/fs_manager/fs_manager_pending.c')]),
+    (RUN, 'test_fs_manager_pending', []),
     (CC, 'test_cli_ls_order', [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/services/cli'), R('tests/unit/test_cli_ls_order.c'), R('src/services/cli/cli_ls_order.c')]),
     (RUN, 'test_cli_ls_order', []),
     (CC, 'test_vt_outmux', [*C11, "-I" + R('src/services/vt'), R('tests/unit/test_vt_outmux.c'), R('src/services/vt/vt_outmux.c')]),
@@ -78,6 +80,8 @@ TESTS = [
     (RUN, 'test_logger_stage', []),
     (CC, 'test_supervisor_unit', [*C11, "-I" + R('src/services/supervisor'), R('tests/unit/test_supervisor_unit.c'), R('src/services/supervisor/supervisor_unit.c')]),
     (RUN, 'test_supervisor_unit', []),
+    (CC, 'test_fat_block', [*C11, "-I" + R('tests/unit'), "-I" + R('tests/unit/include'), "-I" + R('src/drivers/fs_fat'), "-I" + R('src/libsys/wasm/include'), "-I" + R('src/libc/include'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), '-include', R('src/libc/include/wasmos_cast.h'), R('tests/unit/test_fat_block.c'), R('src/drivers/fs_fat/fat_block.c'), R('src/libc/src/string.c')]),
+    (RUN, 'test_fat_block', []),
     (CC, 'test_fat_dir', [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/drivers/fs_fat'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), "-I" + R('src/libsys/wasm/include'), '-iquote', R('src/libc/include'), '-include', R('src/libc/include/wasmos_cast.h'), R('tests/unit/test_fat_dir.c'), R('src/drivers/fs_fat/fat_dir.c'), R('src/drivers/fs_fat/fat_geom.c'), R('src/drivers/fs_fat/fat_alloc.c'), R('src/drivers/fs_fat/fat_name.c'), R('src/drivers/fs_fat/fat_file.c'), R('src/drivers/fs_fat/fat_util.c'), R('src/libc/src/string.c')]),
     (RUN, 'test_fat_dir', []),
     (CC, 'test_fat_image', [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/drivers/fs_fat'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), "-I" + R('src/libsys/wasm/include'), '-iquote', R('src/libc/include'), '-include', R('src/libc/include/wasmos_cast.h'), R('tests/unit/test_fat_image.c'), R('src/drivers/fs_fat/fat_dir.c'), R('src/drivers/fs_fat/fat_geom.c'), R('src/drivers/fs_fat/fat_alloc.c'), R('src/drivers/fs_fat/fat_name.c'), R('src/drivers/fs_fat/fat_file.c'), R('src/drivers/fs_fat/fat_util.c'), R('src/libc/src/string.c')]),
@@ -533,12 +537,14 @@ def build(b):
             ("partition-reconcile", "reconcile", pm / "reconcile.zig"),
             ("partition-mounts", "mounts", pm / "mounts.zig"),
             ("partition-inflight", "inflight", pm / "inflight.zig"),
+            ("partition-backends", "backends", pm / "backends.zig"),
             ("fs-tmpfs", "fs_tmpfs_store", drivers / "fs_tmpfs/fs_tmpfs_store.zig"),
         ):
             test = {
                 "reconcile": "test_partition_reconcile.zig",
                 "mounts": "test_partition_mounts.zig",
                 "inflight": "test_partition_inflight.zig",
+                "backends": "test_partition_backends.zig",
                 "fs_tmpfs_store": "test_fs_tmpfs_store.zig",
             }[mod]
             steps.append(zig_test(b, label, {mod: src}, unit / test, deps=[mod]))

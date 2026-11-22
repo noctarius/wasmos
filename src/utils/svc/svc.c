@@ -4,13 +4,22 @@
  *   svc list
  *   svc status <unit>
  *   svc kill <unit>
+ *   svc retract <unit>
+ *   svc stop <unit>
+ *   svc start <unit>
  *
  * submit passes the spec through unchanged; its grammar is
  * SUPERVISOR_IPC_SUBMIT_REQ's (abi/opcodes.yaml). It prints "svc: <unit>
  * accepted" once the supervisor has recorded the unit. list prints one line
  * per unit; status prints one unit's policy and last end. kill prints "svc:
  * killing <unit> (pid N)" once the supervisor has sent the kill; the unit's
- * policy then judges the end as a failure. Each exits 0, or
+ * policy then judges the end as a failure. retract prints "svc: retracting
+ * <unit> (pid N)", or "svc: <unit> retracted" for a unit without an instance;
+ * the units bound to it through parent= go with it. stop prints "svc: stopping
+ * <unit> (pid N)", or "svc: <unit> stopped" for a unit without a running
+ * instance; it is not restarted and its end is not a failure. start prints
+ * "svc: starting <unit>" once a stopped, failed or degraded unit is due to be
+ * spawned. Each exits 0, or
  * prints "svc: <reason>" and exits 1.
  *
  * Runs on an event loop like a service: the supervisor is found by a name
@@ -32,12 +41,33 @@
     ((int32_t)(sizeof(wasmos_supervisor_list_desc_t) +                                             \
                SUPERVISOR_UNITS_MAX * sizeof(wasmos_supervisor_unit_record_t)))
 
-typedef enum { SVC_SUBMIT, SVC_LIST, SVC_STATUS, SVC_KILL } svc_cmd_t;
+typedef enum {
+    SVC_SUBMIT,
+    SVC_LIST,
+    SVC_STATUS,
+    SVC_KILL,
+    SVC_RETRACT,
+    SVC_STOP,
+    SVC_START,
+} svc_cmd_t;
+
+/* The commands that name one unit, and the request each sends. */
+static const struct {
+    const char* word;
+    svc_cmd_t cmd;
+    int32_t op;
+} k_unit_cmds[] = {
+    {"kill", SVC_KILL, SUPERVISOR_IPC_KILL_REQ},
+    {"retract", SVC_RETRACT, SUPERVISOR_IPC_RETRACT_REQ},
+    {"stop", SVC_STOP, SUPERVISOR_IPC_STOP_REQ},
+    {"start", SVC_START, SUPERVISOR_IPC_START_REQ},
+};
 
 static wasmos_sys_event_loop_t g_loop;
 static wasmos_sys_svc_watch_set_t g_watches;
 static wasmos_sys_svc_watch_t g_watch;
 static svc_cmd_t g_cmd;
+static int32_t g_unit_op; /* the request of a command that names one unit */
 static wasmos_supervisor_submit_desc_t g_desc;
 static wasmos_supervisor_unit_desc_t g_unit_desc;
 static int32_t g_killed_pid;
@@ -64,6 +94,16 @@ static const char* svc_reason(int32_t code) {
         return "no unit of that name";
     case WASMOS_ERR_SUPERVISOR_NOT_RUNNING:
         return "the unit has no running instance";
+    case WASMOS_ERR_SUPERVISOR_NO_PARENT:
+        return "no parent unit of that name";
+    case WASMOS_ERR_SUPERVISOR_CRITICAL:
+        return "the unit or one bound to it is critical";
+    case WASMOS_ERR_SUPERVISOR_RUNNING:
+        return "the unit is not stopped, failed or degraded";
+    case WASMOS_ERR_SUPERVISOR_PARENT_DOWN:
+        return "the unit's parent is down; start the parent";
+    case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED:
+        return "not authorized";
     case WASMOS_ERR_PROC_PM_SVC_AWAIT_TIMEOUT:
         return "no supervisor is running";
     default:
@@ -87,7 +127,7 @@ static void svc_on_reply(void* user, const wasmos_ipc_message_t* msg) {
         svc_finish(msg->type == SUPERVISOR_IPC_ERROR ? msg->arg0 : -1);
         return;
     }
-    if (g_cmd == SVC_KILL) {
+    if (g_unit_op != 0) {
         g_killed_pid = msg->arg1;
     } else if (g_cmd != SVC_SUBMIT) {
         if (wasmos_xfer_buffer_read(g_bid, &g_list_desc, (int32_t)sizeof(g_list_desc), 0) != 0 ||
@@ -105,7 +145,7 @@ static void svc_on_reply(void* user, const wasmos_ipc_message_t* msg) {
     svc_finish(0);
 }
 
-/* submit and kill lend their descriptor READ; list and status lend the
+/* submit and the commands that name one unit lend their descriptor READ; list and status lend the
  * descriptor and the room for the records READ|WRITE. Releasing the buffer after the reply
  * revokes the loan. */
 static void svc_on_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endpoint) {
@@ -119,10 +159,10 @@ static void svc_on_bound(void* user, wasmos_sys_svc_watch_t* watch, int32_t endp
         rights = WASMOS_BUFFER_GRANT_READ;
         op = SUPERVISOR_IPC_SUBMIT_REQ;
         g_bid = wasmos_xfer_stage(&g_desc, region);
-    } else if (g_cmd == SVC_KILL) {
+    } else if (g_unit_op != 0) {
         region = (int32_t)sizeof(g_unit_desc);
         rights = WASMOS_BUFFER_GRANT_READ;
-        op = SUPERVISOR_IPC_KILL_REQ;
+        op = g_unit_op;
         g_bid = wasmos_xfer_stage(&g_unit_desc, region);
     } else {
         region = SVC_LIST_REGION;
@@ -176,6 +216,8 @@ static const char* svc_state_name(uint32_t state) {
         return "stopped";
     case SUPERVISOR_UNIT_STATE_FAILED:
         return "failed";
+    case SUPERVISOR_UNIT_STATE_DEGRADED:
+        return "degraded";
     default:
         return "?";
     }
@@ -241,24 +283,52 @@ static void svc_column(char* line, uint32_t size, uint32_t* at, const char* s, u
     line[*at] = '\0';
 }
 
+/* Widens `*width` to hold `s` and the two-space gap after it. */
+static void svc_fit(uint32_t* width, const char* s) {
+    uint32_t n = (uint32_t)strlen(s) + 2u;
+    if (n > *width) {
+        *width = n;
+    }
+}
+
+/* Each column is as wide as its widest value, heading included, plus a
+ * two-space gap, so every value sits under its heading whatever the unit
+ * names are. */
 static void svc_print_list(void) {
     char line[128];
     char num[16];
+    uint32_t col[4] = {0u, 0u, 0u, 0u};
     uint32_t at = 0;
-    svc_column(line, sizeof(line), &at, "UNIT", 20);
-    svc_column(line, sizeof(line), &at, "STATE", 31);
-    svc_column(line, sizeof(line), &at, "PID", 37);
-    svc_column(line, sizeof(line), &at, "RESTARTS", 47);
+    svc_fit(&col[0], "UNIT");
+    svc_fit(&col[1], "STATE");
+    svc_fit(&col[2], "PID");
+    svc_fit(&col[3], "RESTARTS");
+    for (uint32_t i = 0; i < g_list_desc.count; ++i) {
+        const wasmos_supervisor_unit_record_t* r = &g_records[i];
+        svc_fit(&col[0], r->name);
+        svc_fit(&col[1], svc_state_name(r->state));
+        (void)snprintf(num, sizeof(num), "%u", r->pid);
+        svc_fit(&col[2], num);
+        (void)snprintf(num, sizeof(num), "%u", r->restart_count);
+        svc_fit(&col[3], num);
+    }
+    for (uint32_t c = 1; c < 4u; ++c) {
+        col[c] += col[c - 1u]; /* widths to the column each one ends at */
+    }
+    svc_column(line, sizeof(line), &at, "UNIT", col[0]);
+    svc_column(line, sizeof(line), &at, "STATE", col[1]);
+    svc_column(line, sizeof(line), &at, "PID", col[2]);
+    svc_column(line, sizeof(line), &at, "RESTARTS", col[3]);
     printf("%sLAST\n", line);
     for (uint32_t i = 0; i < g_list_desc.count; ++i) {
         const wasmos_supervisor_unit_record_t* r = &g_records[i];
         at = 0;
-        svc_column(line, sizeof(line), &at, r->name, 20);
-        svc_column(line, sizeof(line), &at, svc_state_name(r->state), 31);
+        svc_column(line, sizeof(line), &at, r->name, col[0]);
+        svc_column(line, sizeof(line), &at, svc_state_name(r->state), col[1]);
         (void)snprintf(num, sizeof(num), "%u", r->pid);
-        svc_column(line, sizeof(line), &at, num, 37);
+        svc_column(line, sizeof(line), &at, num, col[2]);
         (void)snprintf(num, sizeof(num), "%u", r->restart_count);
-        svc_column(line, sizeof(line), &at, num, 47);
+        svc_column(line, sizeof(line), &at, num, col[3]);
         if (r->last_reason == 0) {
             printf("%s-\n", line);
         } else {
@@ -281,6 +351,9 @@ static int svc_print_status(const char* name) {
         printf("  restart=%s class=%s", svc_restart_name(r->restart), svc_class_name(r->cls));
         if (r->tty != 0) {
             printf(" tty=%u", r->tty - 1u);
+        }
+        if (r->parent[0] != '\0') {
+            printf(" parent=%s", r->parent);
         }
         printf("\n  restarts: %u\n", r->restart_count);
         if (r->probe_interval_ms == 0) {
@@ -306,10 +379,13 @@ static int svc_print_status(const char* name) {
 static void svc_usage(void) {
     puts("usage: svc submit <unit> <path> [restart=never|on-failure|always]");
     puts("                  [class=optional|required|critical] [tty=<slot>]");
-    puts("                  [probe=<seconds>] [-- args]");
+    puts("                  [probe=<seconds>] [parent=<unit>] [-- args]");
     puts("       svc list");
     puts("       svc status <unit>");
     puts("       svc kill <unit>");
+    puts("       svc retract <unit>");
+    puts("       svc stop <unit>");
+    puts("       svc start <unit>");
 }
 
 static const char* svc_skip_spaces(const char* s) {
@@ -317,6 +393,21 @@ static const char* svc_skip_spaces(const char* s) {
         s++;
     }
     return s;
+}
+
+/* Recognizes "<word> <unit>" for a command of k_unit_cmds, setting g_cmd and
+ * g_unit_op and pointing *unit at the name. */
+static int svc_unit_cmd(const char* args, const char** unit) {
+    for (uint32_t i = 0; i < sizeof(k_unit_cmds) / sizeof(k_unit_cmds[0]); ++i) {
+        uint32_t n = (uint32_t)strlen(k_unit_cmds[i].word);
+        if (strncmp(args, k_unit_cmds[i].word, n) == 0 && args[n] == ' ') {
+            g_cmd = k_unit_cmds[i].cmd;
+            g_unit_op = k_unit_cmds[i].op;
+            *unit = svc_skip_spaces(args + n);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int main(void) {
@@ -352,9 +443,7 @@ int main(void) {
         memset(&g_list_desc, 0, sizeof(g_list_desc));
         g_list_desc.version = SUPERVISOR_LIST_DESC_VERSION;
         g_list_desc.capacity = SUPERVISOR_UNITS_MAX;
-    } else if (strncmp(args, "kill ", 5) == 0) {
-        g_cmd = SVC_KILL;
-        spec = svc_skip_spaces(args + 5);
+    } else if (svc_unit_cmd(args, &spec)) {
         len = (uint32_t)strlen(spec);
         if (len == 0) {
             svc_usage();
@@ -409,6 +498,26 @@ int main(void) {
     }
     if (g_cmd == SVC_KILL) {
         printf("svc: killing %s (pid %d)\n", spec, (int)g_killed_pid);
+        return 0;
+    }
+    if (g_cmd == SVC_RETRACT) {
+        if (g_killed_pid > 0) {
+            printf("svc: retracting %s (pid %d)\n", spec, (int)g_killed_pid);
+        } else {
+            printf("svc: %s retracted\n", spec);
+        }
+        return 0;
+    }
+    if (g_cmd == SVC_STOP) {
+        if (g_killed_pid > 0) {
+            printf("svc: stopping %s (pid %d)\n", spec, (int)g_killed_pid);
+        } else {
+            printf("svc: %s stopped\n", spec);
+        }
+        return 0;
+    }
+    if (g_cmd == SVC_START) {
+        printf("svc: starting %s\n", spec);
         return 0;
     }
     while (n < SUPERVISOR_UNIT_NAME_MAX && spec[n] != '\0' && spec[n] != ' ' && spec[n] != '\t') {

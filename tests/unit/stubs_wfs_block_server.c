@@ -11,6 +11,10 @@
 #define WFS_STUB_BUF_ID 7
 #define WFS_STUB_BLOCK_ENDPOINT 11
 #define WFS_STUB_REPLY_ENDPOINT 12
+/* The endpoint a replacement server registers on after a death. */
+#define WFS_STUB_BLOCK_ENDPOINT_2 13
+/* The process manager a subscription is sent to. */
+#define WFS_STUB_PROC_ENDPOINT 5
 
 uint8_t* wfs_stub_image;
 uint32_t wfs_stub_blocks;
@@ -23,15 +27,65 @@ int wfs_stub_fail_next;
 int wfs_stub_send_status;
 uint32_t wfs_stub_stop_after;
 uint32_t wfs_stub_flushes;
+int wfs_stub_die_next;
+int wfs_stub_replace;
+int32_t wfs_stub_live_endpoint = WFS_STUB_BLOCK_ENDPOINT;
+int32_t wfs_stub_last_grant_endpoint = -1;
 
 static wasmos_wasm_runtime_t g_runtime;
 static wasmos_sys_event_loop_t g_loop;
 static wfs_block_t g_blk;
 
-/* The one reply in flight, and the block it is for. */
+/* Messages waiting on the reply endpoint, in arrival order, and the one the
+ * last drain took. A reply is the usual entry; a server's death adds the
+ * kernel's hangup and the registry's class events behind it, in the order the
+ * kernel produces them at the reap. */
+#define WFS_STUB_QUEUE_MAX 8u
+static wasmos_ipc_message_t g_queue[WFS_STUB_QUEUE_MAX];
+static uint32_t g_queue_head;
+static uint32_t g_queue_len;
 static wasmos_ipc_message_t g_queued;
-static int g_queued_ready;
 static uint32_t g_serving_block;
+
+static void stub_push(const wasmos_ipc_message_t* msg) {
+    if (g_queue_len < WFS_STUB_QUEUE_MAX) {
+        g_queue[(g_queue_head + g_queue_len) % WFS_STUB_QUEUE_MAX] = *msg;
+        g_queue_len++;
+    }
+}
+
+static void stub_push_event(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2) {
+    wasmos_ipc_message_t m;
+    memset(&m, 0, sizeof(m));
+    m.type = type;
+    m.destination = WFS_STUB_REPLY_ENDPOINT;
+    m.arg0 = arg0;
+    m.arg1 = arg1;
+    m.arg2 = arg2;
+    stub_push(&m);
+}
+
+void wfs_stub_kill_server(int replace) {
+    int32_t dead = wfs_stub_live_endpoint;
+    /* Instance 0: the fixture's block client addresses target 0. */
+    stub_push_event(WASMOS_IPC_HANGUP, dead, 99, 0);
+    stub_push_event(SVC_IPC_CLASS_EVENT, SVC_CLASS_EVENT_REMOVE, 0, dead);
+    wfs_stub_live_endpoint = -1;
+    if (replace) {
+        stub_push_event(SVC_IPC_CLASS_EVENT, SVC_CLASS_EVENT_ADD, 0, WFS_STUB_BLOCK_ENDPOINT_2);
+        wfs_stub_live_endpoint = WFS_STUB_BLOCK_ENDPOINT_2;
+    }
+}
+
+void wfs_stub_server_returns(void) {
+    stub_push_event(SVC_IPC_CLASS_EVENT, SVC_CLASS_EVENT_ADD, 0, WFS_STUB_BLOCK_ENDPOINT_2);
+    wfs_stub_live_endpoint = WFS_STUB_BLOCK_ENDPOINT_2;
+}
+
+int32_t wasmos_ipc_peer_await(int32_t waiter, int32_t awaited) {
+    (void)waiter;
+    return awaited == wfs_stub_live_endpoint ? 0 : WASMOS_NOENT;
+}
 
 wfs_block_t* wfs_stub_block(void) {
     return &g_blk;
@@ -43,10 +97,14 @@ int32_t wasmos_xfer_buffer_acquire(int32_t size) {
     return size > 0 ? WFS_STUB_BUF_ID : -1;
 }
 int32_t wasmos_xfer_buffer_borrow(int32_t endpoint, int32_t buffer, int32_t flags) {
-    (void)endpoint;
     (void)buffer;
     (void)flags;
+    wfs_stub_last_grant_endpoint = endpoint;
     return 1;
+}
+int32_t wasmos_xfer_buffer_unborrow(int32_t borrow) {
+    (void)borrow;
+    return 0;
 }
 int32_t wasmos_xfer_buffer_release(int32_t buffer) {
     (void)buffer;
@@ -140,6 +198,21 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
     if (wfs_stub_send_status != 0) {
         return wfs_stub_send_status;
     }
+    if (type == BLOCK_IPC_FLUSH_REQ || type == BLOCK_IPC_READ_REQ || type == BLOCK_IPC_WRITE_REQ) {
+        /* A send to an endpoint nobody owns is refused, as the kernel refuses
+         * it. A server that dies with the request in hand never answers it. */
+        if (destination != wfs_stub_live_endpoint) {
+            return WASMOS_NOENT;
+        }
+        if (wfs_stub_last_grant_endpoint != destination) {
+            return -1; /* the request buffer was never granted to this server */
+        }
+        if (wfs_stub_die_next) {
+            wfs_stub_die_next = 0;
+            wfs_stub_kill_server(wfs_stub_replace);
+            return 0;
+        }
+    }
     if (type == BLOCK_IPC_FLUSH_REQ) {
         /* Recorded in the same sequence as the transfers, with a sentinel block,
          * so a case can assert WHERE a barrier fell relative to them -- which is
@@ -159,7 +232,7 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
         } else {
             g_queued.type = BLOCK_IPC_FLUSH_RESP;
         }
-        g_queued_ready = 1;
+        stub_push(&g_queued);
         return 0;
     }
     if (type != BLOCK_IPC_READ_REQ && type != BLOCK_IPC_WRITE_REQ) {
@@ -202,7 +275,7 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
         g_queued.destination = source;
         g_queued.type = BLOCK_IPC_ERROR;
         g_queued.arg0 = WASMOS_ERR_FS_IO;
-        g_queued_ready = 1;
+        stub_push(&g_queued);
         return 0;
     }
 
@@ -227,16 +300,18 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
         g_queued.type = BLOCK_IPC_READ_RESP;
         g_queued.arg1 = (int32_t)sectors;
     }
-    g_queued_ready = 1;
+    stub_push(&g_queued);
     return 0;
 }
 
 int32_t wasmos_ipc_drain(int32_t endpoint) {
     (void)endpoint;
-    if (!g_queued_ready) {
+    if (g_queue_len == 0u) {
         return 0;
     }
-    g_queued_ready = 0;
+    g_queued = g_queue[g_queue_head];
+    g_queue_head = (g_queue_head + 1u) % WFS_STUB_QUEUE_MAX;
+    g_queue_len--;
     return 1;
 }
 
@@ -263,15 +338,33 @@ int32_t wasmos_ipc_last_field(int32_t field) {
     }
 }
 
-/* No select set, so the loop never parks in wasmos_ipc_select_wait: the tests
- * drive poll() themselves. */
+/* ---- the clock and the park ---------------------------------------------- */
+
+/* Milliseconds since the fixture was built. Time passes only while the loop
+ * parks with nothing queued: a timed park lasts its whole window, since nothing
+ * else can arrive. */
+static uint64_t g_now_ms;
+uint32_t wfs_stub_return_at_ms;
+
+int32_t wasmos_sched_ticks(void) {
+    /* Offset so the tick count wraps a few seconds into every case: a deadline
+     * compared without wrap arithmetic fails. */
+    return (int32_t)(uint32_t)(0xFFFFF000u + g_now_ms * WASMOS_SCHED_TICK_HZ / 1000u);
+}
+
+uint64_t wfs_stub_now_ms(void) {
+    return g_now_ms;
+}
+
+/* A select set over the reply endpoint, so the loop parks -- which here returns
+ * at once, having let the time pass. The tests drive poll() themselves. */
 int32_t wasmos_ipc_select_create(void) {
-    return -1;
+    return 1;
 }
 int32_t wasmos_ipc_select_add(int32_t select_id, int32_t endpoint) {
     (void)select_id;
     (void)endpoint;
-    return -1;
+    return 0;
 }
 int32_t wasmos_ipc_select_wait(int32_t select_id) {
     (void)select_id;
@@ -279,8 +372,15 @@ int32_t wasmos_ipc_select_wait(int32_t select_id) {
 }
 int32_t wasmos_ipc_select_wait_timeout(int32_t select_id, int32_t timeout_ms) {
     (void)select_id;
-    (void)timeout_ms;
-    return -1;
+    if (timeout_ms > 0) {
+        g_now_ms += (uint64_t)timeout_ms;
+    }
+    if (wfs_stub_return_at_ms != 0u && g_now_ms >= wfs_stub_return_at_ms) {
+        wfs_stub_return_at_ms = 0u;
+        wfs_stub_server_returns();
+        return WFS_STUB_REPLY_ENDPOINT;
+    }
+    return WASMOS_TIMEOUT;
 }
 int32_t wasmos_ipc_select_destroy(int32_t select_id) {
     (void)select_id;
@@ -306,7 +406,12 @@ void wfs_stub_reset_counters(void) {
     wfs_stub_send_status = 0;
     wfs_stub_stop_after = 0;
     wfs_stub_flushes = 0;
-    g_queued_ready = 0;
+    wfs_stub_die_next = 0;
+    wfs_stub_replace = 0;
+    wfs_stub_return_at_ms = 0;
+    g_now_ms = 0;
+    g_queue_head = 0;
+    g_queue_len = 0;
 }
 
 int wfs_stub_build_volume(uint64_t size_bytes, uint32_t block_size,
@@ -340,10 +445,15 @@ int wfs_stub_build_volume(uint64_t size_bytes, uint32_t block_size,
 
     wasmos_wasm_runtime_init(&g_runtime);
     wasmos_sys_event_loop_init(&g_loop, WFS_STUB_REPLY_ENDPOINT, 0x1000);
+    wfs_stub_live_endpoint = WFS_STUB_BLOCK_ENDPOINT;
     /* Target 0: "the only device you serve", which is what a single-disk backend
      * may take as read (wasmos_block_request_t). The fixture serves one image. */
     (void)wfs_block_configure(
         &g_blk, &g_loop, WFS_STUB_BLOCK_ENDPOINT, WFS_STUB_REPLY_ENDPOINT, WFS_STUB_BUF_ID, 0u);
+    /* Following, as the driver is once mounted: a server that dies is waited
+     * for. The subscription goes to an endpoint the fake server does not
+     * answer, which leaves it pending, as harmless as a real answer. */
+    (void)wfs_block_follow(&g_blk, WFS_STUB_PROC_ENDPOINT);
     wfs_ops_bind(&g_runtime, &g_blk);
     wfs_stub_reset_counters();
     return 0;

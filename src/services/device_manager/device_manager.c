@@ -418,6 +418,30 @@ static int ensure_fs_endpoint(void) {
     return (g_dm.fs_endpoint >= 0) ? 0 : -1;
 }
 
+/* The rule file's text, for whichever of the two loaders runs; they never
+ * overlap. Static rather than on the stack: the guest stack is small, and the
+ * read needs one byte past the cap to tell a file that fits from one that does
+ * not, plus the NUL. */
+static char g_rule_text[DEVMGR_RULE_TEXT_CAP + 2];
+
+/* Cuts the text read from `path` to what can be parsed and says so when the
+ * file did not fit. Returns the parsed length; the text is NUL-terminated. */
+static uint32_t rules_text_take(const char* path, int32_t read_len) {
+    char msg[160];
+    int truncated = 0;
+    uint32_t len = dm_rules_text_usable(g_rule_text, read_len, DEVMGR_RULE_TEXT_CAP, &truncated);
+    if (truncated) {
+        snprintf(msg,
+                 sizeof(msg),
+                 "[device-manager] %s exceeds %u bytes; rules past byte %u are not loaded\n",
+                 path,
+                 (unsigned)DEVMGR_RULE_TEXT_CAP,
+                 (unsigned)len);
+        console_write(msg);
+    }
+    return len;
+}
+
 static void kick_boot_rules_read_async(void) {
     char path[96];
     int32_t path_len = 0;
@@ -448,7 +472,7 @@ static void kick_boot_rules_read_async(void) {
     /* Owner-push READ_PATH: one object holds the path (in) then the blob (out);
      * GRANT fs-manager R|W and ship buffer_id (arg2) + borrow_id (arg3). The
      * buffer_id is threaded to poll_boot_rules_async via g_dm.rules_boot_bid. */
-    int32_t buf_size = (int32_t)DEVMGR_RULE_TEXT_CAP;
+    int32_t buf_size = (int32_t)DEVMGR_RULE_TEXT_CAP + 1;
     if (buf_size < path_len) {
         buf_size = path_len;
     }
@@ -495,11 +519,6 @@ static void kick_boot_rules_read_async(void) {
     g_dm_rules_wait.pending = 1;
     g_dm_rules_wait.done = 0;
 }
-
-/* The rules file's text, for whichever of the two loaders runs; they never
- * overlap. Static rather than on the stack: the guest's C stack is small, and a
- * rules buffer on it traps the service at its first rules read. */
-static char g_rule_text[DEVMGR_RULE_TEXT_CAP];
 
 static void poll_boot_rules_async(void) {
     int32_t read_len = 0;
@@ -553,8 +572,8 @@ static void poll_boot_rules_async(void) {
         g_dm.rules_boot_retry_delay = 64;
         return;
     }
-    if (read_len >= (int32_t)DEVMGR_RULE_TEXT_CAP) {
-        read_len = (int32_t)DEVMGR_RULE_TEXT_CAP - 1;
+    if (read_len > (int32_t)DEVMGR_RULE_TEXT_CAP + 1) {
+        read_len = (int32_t)DEVMGR_RULE_TEXT_CAP + 1;
     }
     if (read_len > 0 && wasmos_xfer_buffer_read(bid, text, read_len, 0) != 0) {
         if (bid >= 0) {
@@ -576,7 +595,7 @@ static void poll_boot_rules_async(void) {
         (void)wasmos_xfer_buffer_release(bid);
     }
     g_dm.rules_boot_failures = 0;
-    text[read_len] = '\0';
+    (void)rules_text_take(DEVMGR_RULES_BOOT_ROOT "/" DEVMGR_RULE_FILE, read_len);
     dm_rules_load_always_spawn(&g_dm, text);
     dm_rules_load_block_fs(&g_dm, text);
     dm_rules_load_pci_match(&g_dm, text);
@@ -621,8 +640,12 @@ static void load_rules_if_available(void) {
         str_copy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
         wasmos_sys_str_append(path, sizeof(path), "/");
         wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
-        read_len = read_rules_file(path, text, DEVMGR_RULE_TEXT_CAP);
+        /* wasmos_sys_fs_read_path keeps one byte for the NUL and returns at
+         * most out_text_len - 1, so the probe byte past the cap that tells a
+         * file that fits from one that does not needs cap + 2. */
+        read_len = read_rules_file(path, text, DEVMGR_RULE_TEXT_CAP + 2u);
         if (read_len >= 0) {
+            (void)rules_text_take(path, read_len);
             g_dm.rules_init_loaded = 1;
             g_dm.rules_init_active = dm_rules_count_active(text);
             dm_rules_load_always_spawn(&g_dm, text);
@@ -3007,8 +3030,8 @@ static int dm_submit_rule(const char* instance, const char* restart, const char*
 /* Follows the "supervisor" name on a loop of its own. The loop's endpoint joins
  * the IDLE select set and the loop drops the select-set its init made, so the
  * IDLE phase pumps it without parking on it (wasmos_sys_event_loop_poll). A
- * failure here leaves supervisor_endpoint at -1, and every rule then spawns its
- * driver directly. */
+ * failure here leaves sv_endpoint and supervisor_endpoint at -1: nothing
+ * follows the supervisor, and every rule then spawns its driver directly. */
 static void dm_supervisor_init(void) {
     g_dm.sv_endpoint = wasmos_ipc_create_endpoint();
     if (g_dm.sv_endpoint < 0) {
@@ -3028,6 +3051,7 @@ static void dm_supervisor_init(void) {
         wasmos_sys_svc_watch_start(
             &g_dm_sv_watches, &g_dm_sv_watch, "supervisor", 0, dm_on_supervisor_bound, 0, 0) != 0) {
         console_write("[device-manager] supervisor watch failed; drivers spawn directly\n");
+        g_dm.sv_endpoint = -1;
     }
 }
 
@@ -3202,6 +3226,19 @@ static hw_spawn_target_t next_spawn_target(void) {
          * async rules fetch before transitioning back to HW_PHASE_SPAWN. */
         if (g_dm.boot_mount_ready && !g_dm.rules_boot_loaded) {
             return HW_SPAWN_NONE;
+        }
+        /* A rule naming a restart policy belongs to the supervisor. While the
+         * "supervisor" watch is live but has not bound, the rule waits in the
+         * idle phase, which pumps the watch; spawning it directly would leave
+         * its driver unrestarted for good. The bootstrap rules fire before the
+         * first idle, so without this wait the earliest supervised driver --
+         * the storage controller -- always ran unsupervised. The supervisor is
+         * critical (its end halts the system), so a live watch binds. */
+        if (g_dm.sv_endpoint >= 0 && g_dm.supervisor_endpoint < 0) {
+            char instance[24];
+            if (dm_armed_rule_restart(instance, sizeof(instance))) {
+                return HW_SPAWN_NONE;
+            }
         }
         return HW_SPAWN_RULE_PATH;
     }
@@ -3722,9 +3759,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                             g_dm.phase = HW_PHASE_SPAWN;
                             continue;
                         }
-                        /* TODO: a driver whose rule names a restart policy is
-                         * spawned unsupervised when the supervisor is not bound
-                         * yet, and is then never restarted. */
+                        /* Reached only when the supervisor is not followed
+                         * (next_spawn_target holds such a rule until the watch
+                         * binds) or the submission could not be sent: the
+                         * driver then runs, unrestarted. */
                         console_write("[device-manager] supervisor not reachable; spawning ");
                         console_write(g_dm.rule_spawn_path);
                         console_write(" directly\n");

@@ -1169,15 +1169,15 @@ fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
 /// and unit are attributes inside it rather than its name.
 ///
 /// Fire-and-forget, matching the ATA publisher: the inventory is a notification
-/// and the device manager owns what it does with it. A device manager that is
-/// not up yet simply never learns about this disk, which is why the lookup is
-/// retried rather than assumed.
-fn publishBlockDevice(proc_endpoint: i32) void {
+/// and the device manager owns what it does with it. `devmgr` was resolved
+/// before the class registration (see prepare); -1 means it could not be, and
+/// the disk is not published.
+fn publishBlockDevice(devmgr: i32) void {
     if (!g_dev.ready or g_publish_bid < 0) return;
-    const devmgr = driver.lookupService(proc_endpoint, "devmgr.inv", 32, 256) orelse {
+    if (devmgr < 0) {
         driver.log("[virtio-blk] devmgr inventory unavailable; disk not published");
         return;
-    };
+    }
     if (!g_desc_devmgr_granted) {
         if (driver.bufferBorrow(devmgr, g_publish_bid, driver.BUFFER_GRANT_READ) == null) {
             driver.log("[virtio-blk] descriptor borrow to device-manager failed");
@@ -1275,10 +1275,23 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
         driver.log("[virtio-blk] descriptor staging failed; disk not registered");
         return;
     }
+    // Nothing after the class registration may wait on the process manager.
+    // The registration makes partition-manager and volume-manager probe this
+    // disk synchronously, and this driver answers only once prepare returns to
+    // the loop -- while the process manager may be reading a module through
+    // fs-manager, whose backend waits on partition-manager. A wait on the
+    // process manager past this point closes that cycle until the module
+    // read times out. So the device-manager inventory is resolved first, and
+    // READY is sent without waiting for its acknowledgement.
+    // TODO: the pci, devmgr.inv and registration calls are still synchronous;
+    // an async prepare would make them loop intents.
+    const devmgr = driver.lookupService(proc_endpoint, "devmgr.inv", 32, 256) orelse -1;
     if (driver.registerService(proc_endpoint, endpoint(), "virtio-blk", "block", blockClassInstance(), 1) == null) {
         driver.log("[virtio-blk] service registration failed");
         return;
     }
-    publishBlockDevice(proc_endpoint);
-    driver.notifyReady(proc_endpoint);
+    publishBlockDevice(devmgr);
+    if (driver.notifyReadyNowait(proc_endpoint) != 0) {
+        driver.log("[virtio-blk] ready notification failed");
+    }
 }

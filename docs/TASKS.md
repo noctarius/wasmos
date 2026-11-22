@@ -559,18 +559,14 @@ and `architecture/33-completion-ports.md`.
      it waits on the compositor.
   2. **C**, ~36 files and not uniform. cli, fs_manager, virtio_net, pci_bus and the
      net_tcp_* examples already touch futures, so they are partial conversions; the
-     utils and examples are shallow. fs_manager (6 sites), cli (5) and fs_fat (5)
-     are the bulk, and three sites carry a named hazard:
-     - fs_manager's nested synchronous `DEVMGR_QUERY_MOUNT_REQ` round-trip can
-       deadlock (`src/services/fs_manager/fs_manager.c:608`; `architecture/09`
-       synchronous-IPC section).
-     - fs_manager calls a backend synchronously as soon as it registers --
-       `fsmgr_pull_backend` (`fs_manager.c:883`), `fsmgr_ensure_mount_points`
-       (`:706`), `forward_request` (`:290`) -- while the PM reads every module it
-       spawns through fs-manager. Two cycles of this class have already hung a
-       boot (a mount reply that pulled the PM, an MKDIR into a backend still in a
-       synchronous READY); fs-fat and fs-wfs send READY without waiting since,
-       but fs-tmpfs still waits on it (`src/drivers/fs_tmpfs/fs_tmpfs.zig:879`).
+     utils and examples are shallow. cli (5) and fs_fat (5) are the bulk, and
+     two sites carry a named hazard:
+     - fs_manager no longer waits on a backend (every request is a record in
+       `fs_manager_pending.h`, completed from the reply endpoint), but still makes
+       its startup calls to the PM synchronously: the `fs.vfs` registration and
+       the `fs.backend` class subscription and lookup (`fsmgr_pull_all_backends`,
+       which carries the TODO). They are safe only because nothing spawns by path
+       before fs-manager has started.
      - the CLI's PM/FS/spawn paths still block on
        `wasmos_ipc_select_one(g_reply_endpoint)` (`cli.c` ~1111, ~1381, ~1404,
        ~2076), and `cli_register_vt_writer` / `cli_set_vt_mode` drain the VT
@@ -683,40 +679,65 @@ Source: `architecture/13-runtime-and-packaging.md`,
   when it dies its device may keep mastering into frames the reap recycles.
   Spawning those drivers through a descriptor form -- or as supervised units
   (H5) -- closes it (`device_manager.c`, the TODO at the direct spawn).
-- [ ] [FEATURE][P1] Supervise the storage and network chains, restarting a
-  chain as a whole. Decided: the `/boot` volume's block driver and fs-fat are
-  `critical` (their end is named and halts, like fs-manager); every other
-  block driver, filesystem backend and virtio-net is `required` and restarted.
-  A block driver restarted alone helps nothing -- the filesystem backend above
-  it keeps its mount bound to the dead endpoint, and applications keep file
-  descriptors into the backend -- so a restart restarts the chain: the block
-  driver, then each backend mounted on it (re-mounted when device-manager sees
-  the volume again), with clients seeing their open files fail. Needs: restart
-  along `[deps] needs` (F4), device-manager re-matching a re-added device and
-  volume, fs-manager's mounts as supervised units (fs-fat is spawned by
-  fs-manager's mount path, not by the supervisor), and net-stack's behaviour
-  when virtio-net restarts under its sockets.
+- [ ] [FEATURE][P1] Supervise the storage and network chains. Decided: clients
+  REBIND to a restarted driver where they can, so a restart costs a delay, not
+  the open files or sockets above it; `parent=` (the supervisor's restart
+  cascade) is only for a client that cannot. A block driver's restart leaves the
+  disk's content unchanged and a lost request is idempotent per LBA, and a NIC's
+  leaves its MAC unchanged and a lost frame is packet loss, so both can be
+  rebound. Done: virtio-blk and ata are supervised (ata respawns from the
+  initfs, which it does not serve), fs-wfs on a whole disk follows its
+  restart (`wfs_block.h`), as does fs-fat (`fat_block.h`), and
+  partition-manager rebinds a disk to its restarted driver, so a filesystem on
+  a partition carries over too. All three hold a transfer across the restart
+  and resend it to the successor (`WASMOS_BLOCK_HOLD_MS`). Open:
+  - partition-manager's hold of a transfer that was ON THE WIRE when the driver
+    ended (`diskGone`) has no deterministic test: the QEMU test reads right after
+    `svc kill` and cannot choose whether its read is in flight at the kill or
+    begun after it, and the driver has no host harness.
+    `test_partition_inflight.zig` covers the table's side of it.
+  - fs-manager submits its backends as supervised units (unmount through
+    `SUPERVISOR_IPC_RETRACT_REQ`).
+  - net-stack keeps the netif and its sockets across virtio-net's REMOVE and
+    rebinds on ADD; then virtio-net gets `ENV{RESTART}`.
 - [ ] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
-  interrupts and DMA back. The quiesce sets INTx Disable and clears Bus Master
-  Enable, and pci-bus turns them back only through an MSI bind
-  (`src/kernel/pci_config.c` TODO). Every in-tree DMA driver binds MSI-X under
-  QEMU, so none hits it today.
-- [ ] [FEATURE][P2] Operator stop, start and restart for supervised units. `svc kill`
-  is the only action, and its end counts as a failure. A stop must end a unit
-  without a restart and without counting it; a start or restart must clear a
-  `failed` unit and its intensity window, so an operator can bring back a unit
-  that gave up.
-- [ ] [FEATURE][P2] Tie a unit's lifetime to its submitter: retract a submitter's
-  units when it dies, and device-manager's when the device goes away (a
-  retraction is a stop, not a failure). Then carry `parent=<instance>` in a
-  submission, restart or notify dependents along `[deps]` `needs` when a unit
-  restarts, and mark the dependents of a `required` unit that gave up as
-  degraded rather than restarting them in a loop behind it.
-- [ ] [ENHANCEMENT][P2] Defer an `ENV{RESTART}` rule until the supervisor is bound
-  instead of spawning the driver directly and unsupervised
-  (`src/services/device_manager/device_manager.c:3439` `TODO`). The supervisor is
-  spawned before device-manager, so the fallback does not run on a normal boot,
-  but a driver that takes it is never restarted.
+  interrupts back. The quiesce sets INTx Disable, and pci-bus clears it for no
+  one (`src/kernel/pci_config.c` TODO). Bus mastering is restorable without an
+  MSI bind (`PCI_IPC_BUS_MASTER_REQ`, which ata uses); INTx is not. ata takes
+  the legacy IDE lines 14/15, which INTx Disable does not gate, and every other
+  in-tree PCI driver binds MSI-X under QEMU, so none hits it today.
+- [ ] [FEATURE][P3] A one-step operator restart for supervised units (`svc
+  restart`). Stop and start exist (`SUPERVISOR_IPC_STOP_REQ`/`_START_REQ`); a
+  restart is the two in sequence, and a stop takes effect only when the
+  instance has ended, so the operator waits for the `stopped` line between
+  them. A restart request would kill the instance with a pending stop that
+  respawns it uncounted, as a parent's restart does for its children.
+- [ ] [TEST][P3] The shell stopped echoing input once, in the wasm3_smp CLI
+  suite, right after `svc retract sv-par` in `test_supervisor.test_8a` returned
+  to the prompt; the following four tests in that session failed on
+  "was never echoed". No panic was logged, and four further runs of
+  `test_supervisor` on wasm3_smp passed. If it recurs, capture the vt's and the
+  cli's state (`ps`, the syslog) before the session is torn down.
+- [ ] [TEST][P3] QEMU itself crashed once in CI: SIGSEGV in
+  `address_space_translate_for_iotlb` under MTTCG, run 44799393421, battery
+  `filesystem` on `warp_smp` (artifact `qemu-crash-filesystem-warp_smp`, with the
+  symbolized core). The rerun passed and it has not recurred. A crash inside
+  QEMU's softmmu TLB fill is QEMU's, not the guest's, unless the guest left a
+  page table pointing at an unbacked MMIO region; if it recurs, check the
+  faulting guest address in the core against the guest's last mappings before
+  filing it upstream.
+- [ ] [FEATURE][P3] Tie a unit's lifetime to its submitter, and device-manager's
+  units to their device. The mechanism exists: `SUPERVISOR_IPC_RETRACT_REQ`
+  withdraws a unit and its `parent=` subtree without a failure. Nothing calls
+  it on a submitter's death, because no submitter in the tree would use it:
+  sysinit exits cleanly after submitting (its units must outlive it), and
+  device-manager and fs-manager are critical, so their death ends the system.
+  It becomes needed with the first restartable submitter (an `svc.control`
+  holder that is not critical); the supervisor would record the submitter's
+  source endpoint per unit and await its hangup (`ipc_peer_await`). Device
+  removal has no trigger either: no hotplug, and
+  `DEVMGR_UNPUBLISH_BLOCK_DEVICE` only retires partition records. Wire the
+  retraction there when a removal path exists.
 - [ ] [ENHANCEMENT][P3] Opt the boot services into liveness probes. The mechanism is
   in place (`PROC_READY_FLAG_LIVENESS`, the event loop answers), but no boot
   service sends the flag, so a hung vt, logger or cli is never detected. Decide
@@ -1683,9 +1704,11 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
 - [ ] [CLEANUP][P3] Consolidate the per-file `#define PAGE_SIZE 0x1000` copies
   (physmem.c/process.c/memory.c/native_driver.c/capability.c/…) into one shared
   header.
-- [ ] [ENHANCEMENT][P2] Replace the fixed `DEVMGR_RULE_TEXT_CAP` rules-file read buffer (now 4096)
+- [ ] [ENHANCEMENT][P2] Replace the fixed `DEVMGR_RULE_TEXT_CAP` rules-file read buffer (now 16384)
   with an `FS_IPC_STAT_REQ`-sized (or streaming/chunked) read so the rules file
-  has no size limit; a fixed buffer silently truncates trailing rules.
+  has no size limit. A longer file is cut at its last whole line and the loss is
+  logged (`[device-manager] <path> exceeds ...`), but its trailing rules are not
+  loaded.
 - [ ] [FEATURE][P2] Add hotplug/event publication and future bus providers (USB/virtual)
   through the normalized device-record contract.
 

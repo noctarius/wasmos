@@ -104,6 +104,9 @@ int kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t* out_pid) {
     if (mm_copy_to_user(proc->context_id, linear.base, src, code_size) != 0) {
         return -1;
     }
+    /* Make the copied code visible to instruction fetch (a no-op on x86_64). */
+    paging_sync_instruction_cache(ptr_cast(void, (linear.phys_base | KERNEL_HIGHER_HALF_BASE)),
+                                  code_size);
     if (map_linear_pages(ctx->root_table,
                          linear.base,
                          linear.phys_base,
@@ -197,6 +200,9 @@ int kernel_ring3_spawn_thread_lifecycle_probe(uint32_t parent_pid, uint32_t* out
     if (mm_copy_to_user(proc->context_id, linear.base, src, code_size) != 0) {
         return -1;
     }
+    /* Make the copied code visible to instruction fetch (a no-op on x86_64). */
+    paging_sync_instruction_cache(ptr_cast(void, (linear.phys_base | KERNEL_HIGHER_HALF_BASE)),
+                                  code_size);
     if (map_linear_pages(ctx->root_table,
                          linear.base,
                          linear.phys_base,
@@ -278,6 +284,9 @@ static int spawn_ring3_fault_probe_named(uint32_t parent_pid, const char* name, 
     if (mm_copy_to_user(proc->context_id, linear.base, code, code_size) != 0) {
         return -1;
     }
+    /* Make the copied code visible to instruction fetch (a no-op on x86_64). */
+    paging_sync_instruction_cache(ptr_cast(void, (linear.phys_base | KERNEL_HIGHER_HALF_BASE)),
+                                  code_size);
     if (map_linear_pages(ctx->root_table,
                          linear.base,
                          linear.phys_base,

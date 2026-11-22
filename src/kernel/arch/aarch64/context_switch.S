@@ -12,6 +12,9 @@
  * A context is resumed with ERET, for kernel (EL1h) and user (EL0t) contexts
  * alike, so the saved DAIF mask comes back atomically with the jump. The
  * restore runs with every exception masked while ELR/SPSR hold the target.
+ * An EL0 context resumes with SP_EL1 at this CPU's kernel entry stack
+ * (aarch64_kernel_entry_sp, set by cpu_set_kernel_stack), where its next
+ * exception lands; its saved `sp` is used only when none is set.
  */
 .set CTX_SP, 248
 .set CTX_PC, 256
@@ -23,6 +26,9 @@
  * cpu_local.h asserts it. */
 .set CPU_LOCAL_IN_CTX_SW_OFFSET, 13
 .set SPSR_EL1H, 0x5
+.set SPSR_MODE_MASK, 0xf
+/* Offset of cpu_local_t.cpu_id; cpu_aarch64.c asserts it. */
+.set CPU_LOCAL_CPU_ID_OFFSET, 8
 .set OA_MASK_LO, 0xfffffffff000
 
 .section .text
@@ -34,9 +40,19 @@ restore_context:
     msr elr_el1, x1
     ldr x1, [x0, #CTX_PSTATE]
     msr spsr_el1, x1
+    and x3, x1, #SPSR_MODE_MASK
     ldr x1, [x0, #CTX_USER_SP]
     msr sp_el0, x1
     ldr x1, [x0, #CTX_SP]
+    cbnz x3, 2f
+    mrs x2, tpidr_el1
+    ldr w2, [x2, #CPU_LOCAL_CPU_ID_OFFSET]
+    adrp x4, aarch64_kernel_entry_sp
+    add x4, x4, :lo12:aarch64_kernel_entry_sp
+    ldr x2, [x4, x2, lsl #3]
+    cbz x2, 2f
+    mov x1, x2
+2:
     mov sp, x1
     /* A different TTBR0 table: switch and drop the old root's translations
      * (no ASIDs yet, as in paging_switch_root). */

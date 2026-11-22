@@ -1,5 +1,6 @@
 /* cpu_aarch64.c - aarch64 per-CPU setup and exception reporting. Implements
  * cpu.h and the per-CPU array of cpu_local.h. */
+#include <stddef.h>
 #include <stdint.h>
 
 #include "arch/arch_context.h"
@@ -12,6 +13,7 @@
 #include "memory.h"
 #include "memory_service.h"
 #include "process.h"
+#include "syscall.h"
 
 void aarch64_irq(irq_frame_t* frame);
 
@@ -46,11 +48,19 @@ void cpu_init(void) {
  * relocate. */
 void cpu_relocate_tables_high(void) {}
 
-/* The stack an exception from EL0 enters on.
- * TODO: record it for the EL0 entry path; until EL0 exists every exception is
- * taken on the current SP_EL1 (arm64 port, Phase 2). */
+/* Per-CPU kernel stack an exception from EL0 enters on, indexed by
+ * cpu_local_t.cpu_id. context_switch.S loads it into SP_EL1 whenever it
+ * resumes an EL0 context, which is the role TSS.rsp0 plays on x86_64. */
+uint64_t aarch64_kernel_entry_sp[WASMOS_MAX_CPUS];
+
+/* context_switch.S reads cpu_id at this offset through TPIDR_EL1. */
+_Static_assert(offsetof(cpu_local_t, cpu_id) == 8, "cpu_local_t cpu_id offset changed");
+
 void cpu_set_kernel_stack(uint64_t rsp0) {
-    (void)rsp0;
+    uint32_t cpu = cpu_local()->cpu_id;
+    if (cpu < WASMOS_MAX_CPUS) {
+        aarch64_kernel_entry_sp[cpu] = rsp0 & ~0xFULL;
+    }
 }
 
 void arch_irq_frame_log(const irq_frame_t* frame) {
@@ -75,6 +85,7 @@ void arch_irq_frame_log(const irq_frame_t* frame) {
 #define ESR_EC_IABT_SAME 0x21u
 #define ESR_EC_DABT_LOWER 0x24u
 #define ESR_EC_DABT_SAME 0x25u
+#define ESR_EC_SVC64 0x15u
 #define ESR_ISS_WNR (1u << 6)
 #define ESR_ISS_FSC(esr) ((esr) & 0x3Fu)
 /* Fault status codes 0b0010LL (access flag) and 0b0011LL (permission): a
@@ -131,9 +142,9 @@ static int handle_abort(uint64_t esr, uint64_t far, const irq_frame_t* frame) {
 }
 
 /* Called from vectors.S for every exception. `kind` is the vector index. IRQs
- * go to the GIC dispatch; instruction and data aborts to the memory service.
- * TODO: SVC into syscall_dispatch (arm64 port, Phase 2). Every other
- * exception is fatal. */
+ * go to the GIC dispatch, instruction and data aborts to the memory service,
+ * and an SVC from EL0 to syscall_dispatch, whose result returns in x0 (ELR
+ * already points past the SVC). Every other exception is fatal. */
 void aarch64_exception(irq_frame_t* frame, uint64_t kind) {
     if (kind == VECTOR_EL1_IRQ || kind == VECTOR_EL0_IRQ) {
         aarch64_irq(frame);
@@ -143,6 +154,10 @@ void aarch64_exception(irq_frame_t* frame, uint64_t kind) {
     uint64_t far;
     __asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
     __asm__ volatile("mrs %0, far_el1" : "=r"(far));
+    if (kind == VECTOR_EL0_SYNC && ESR_EC(esr) == ESR_EC_SVC64) {
+        arch_syscall_set_result(frame, syscall_dispatch(frame));
+        return;
+    }
     if (kind == VECTOR_EL1_SYNC || kind == VECTOR_EL0_SYNC) {
         uint32_t ec = (uint32_t)ESR_EC(esr);
         if ((ec == ESR_EC_IABT_LOWER || ec == ESR_EC_IABT_SAME || ec == ESR_EC_DABT_LOWER ||

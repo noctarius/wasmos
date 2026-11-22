@@ -891,6 +891,9 @@ static int copy_into_root(uint64_t root_table, uint64_t dst_virt, const void* sr
             return -1;
         }
         memcpy(ptr_cast(void, dst_cur), bounce, (size_t)n);
+        /* The bytes may be code the image runs; make them visible to
+         * instruction fetch while the target root still maps them. */
+        paging_sync_instruction_cache(ptr_cast(void, dst_cur), n);
         if (paging_switch_root(prev_root) != 0) {
             return -1;
         }

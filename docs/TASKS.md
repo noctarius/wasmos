@@ -2222,13 +2222,16 @@ Source: `architecture/25-diagnostics-status.md`,
   `src/libsys/wasm/include/wasmos/{mutex,rtc_ipc}.h`. The SDK sysroot ships
   libc's copy (include-search order; `scripts/sdk_stage.py` TODO), so a libsys
   object and an SDK app can see different declarations under one name.
-- [ ] [FEATURE][P2] Add an `ARCH` Kconfig choice for the arm64 port: per-arch
-  toolchain profiles in `scripts/buildgen/toolchains.py` (UEFI and kernel
-  triples, code model, red-zone flags), `src/kernel/arch/<arch>/BUILD.py` for the
-  arch sources and linker scripts now named directly in `src/kernel/BUILD.py`,
-  the blob output format in `wasmos_rules.kernel_blob` (`elf64-x86-64` today),
-  and the loader name (`BOOTX64.EFI` / `BOOTAA64.EFI`) in `src/boot/BUILD.py`
-  and the ESP plan.
+- [ ] [TEST][P2] The ring-3 thread-lifecycle probe never runs: its helper-thread
+  stacks are `.bss` (`src/kernel/ring3_thread_lifecycle_probe.c`), which the
+  flat binary omits, and `kernel_ring3_spawn_thread_lifecycle_probe` maps only
+  the code pages and marks the linear region R+X, so the first stack write
+  faults and the process is terminated (`user-pf ... reason=unmapped
+  cr2=...1170` on x86_64, the same at `...11b0` on aarch64).
+  `run-qemu-ring3-threading-test` passes anyway, on the `[test] ring3 thread
+  ...` markers the native probe emits; the lifecycle probe's own checks are
+  never observed. Fix with a regression test that requires a marker only the
+  lifecycle probe can produce.
 - [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
   (`test_app_churn`: "run N: date produced no result"). Not a supervisor
   regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7

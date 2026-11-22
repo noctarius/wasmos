@@ -58,6 +58,25 @@ int kernel_ring3_spawn_suite(uint32_t init_pid, uint8_t ring3_thread_lifecycle_s
     uint32_t ring3_fault_ss_pid = 0;
     uint32_t ring3_fault_ac_pid = 0;
 
+#if !defined(__x86_64__)
+    /* The smoke process and the fault probes are inline x86_64 machine code,
+     * and the fault probes provoke x86 exception classes (#UD, #GP, #DE, ...).
+     * Only the two C-compiled probes run on another architecture.
+     * TODO: aarch64 counterparts of the smoke process and of the fault probes
+     * and their policy verdict (arm64 port, Phase 2). */
+    (void)ring3_fault_churn_rounds;
+    if (kernel_ring3_spawn_native_probe(init_pid, &ring3_native_pid) != 0) {
+        klog_write("[kernel] ring3 native spawn failed\n");
+        return -1;
+    }
+    if (ring3_thread_lifecycle_smoke_enabled &&
+        kernel_ring3_spawn_thread_lifecycle_probe(init_pid, &ring3_threading_pid) != 0) {
+        klog_write("[kernel] ring3 threading spawn failed\n");
+        return -1;
+    }
+    return 0;
+#endif
+
     if (kernel_ring3_spawn_smoke_process(init_pid, &ring3_smoke_pid) != 0) {
         klog_write("[kernel] ring3 smoke spawn failed\n");
         return -1;

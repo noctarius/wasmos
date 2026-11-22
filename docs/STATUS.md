@@ -769,8 +769,13 @@ linked feature documents for rationale and rollout plans.
   broadcast TLBI; no ASIDs yet); vectors save the FP/SIMD state; aborts decode
   into the `MM_FAULT_*` memory-service path; GICv3 and the EL1 virtual timer
   drive the tick; `context_switch.S` resumes every context by ERET.
-  Unimplemented interfaces fail by name (`arch/aarch64/unimplemented_aarch64.c`:
-  device IRQ routing, MSI, ECAM); the EL0/SVC syscall entry is not there yet.
+  EL0 runs: an SVC from EL0 enters `syscall_dispatch` (number in x8, result in
+  x0), EL0 exceptions land on the per-CPU kernel entry stack
+  (`cpu_set_kernel_stack`, the TSS.rsp0 counterpart), and native-code loaders
+  sync the instruction cache; the C ring-3 probe passes its syscall checks
+  (`[test] ring3 native abi ok`) on a `WASMOS_RING3_SMOKE` tree, whose x86-only
+  inline smoke and fault probes are skipped. Unimplemented interfaces fail by
+  name (`arch/aarch64/unimplemented_aarch64.c`: device IRQ routing, MSI, ECAM).
   `run-qemu-bringup-test` (to `[test] preempt ok`) is its gate, in CI too
   (`bringup`). The native
   ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap

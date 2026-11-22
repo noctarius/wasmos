@@ -1,0 +1,163 @@
+# initfs manifest for aarch64 (QEMU virt). Kept separate from
+# initfs.x86_64.toml: the boot disk here is virtio-blk, so its driver is a
+# bootstrap payload in place of ata, and the platform drivers differ.
+version = 1
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/chardev_client.wap"
+source = "chardev_client.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/init_smoke.wap"
+source = "init_smoke.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/native_call_min.wap"
+source = "native_call_min.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/native_call_smoke.wap"
+source = "native_call_smoke.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/wamos_script.wap"
+source = "wamos_script.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/wamos_script_broker.wap"
+source = "wamos_script_broker.wap"
+
+[[entries]]
+kind = "data"
+flags = ["bootstrap"]
+path = "apps/hello.rc"
+source = "hello.rc"
+
+[[entries]]
+kind = "wasmos_app"
+path = "apps/surface_attach.wap"
+source = "surface_attach.wap"
+
+[[entries]]
+kind = "wasmos_app"
+path = "apps/net_smoke.wap"
+source = "net_smoke.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/pci_bus.wap"
+source = "pci_bus.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/acpi_bus.wap"
+source = "acpi_bus.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/virtio_blk.wap"
+source = "virtio_blk.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/chardev_server.wap"
+source = "chardev_server.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/fs_fat.wap"
+source = "fs_fat.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/fs_init.wap"
+source = "fs_init.wap"
+
+# The tmpfs that serves the VFS root. It is an initfs payload rather than an ESP
+# one because the kernel's init sequence spawns it by module name, before any
+# volume exists: a mount point is a directory in this filesystem, so it has to be
+# mounted before the mounts that land on it.
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/fs_tmpfs.wap"
+source = "fs_tmpfs.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/fbpci.wap"
+source = "framebuffer_pci.wap"
+
+# The supervisor is spawned by kernel init right after the process manager, so
+# it exists before anything it could supervise; only the initfs is readable then.
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/supervisor.wap"
+source = "supervisor.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/fs_manager.wap"
+source = "fs_manager.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/device_manager.wap"
+source = "device_manager.wap"
+
+# The partition and volume managers are in the INITFS, not on the ESP, because
+# /boot is mounted from a volume and a volume does not exist until they have run.
+# On the ESP they could only be spawned by the boot rules, which load after /boot
+# is already mounted -- the circle this placement breaks.
+#
+# Both are Zig, which the build already requires: the native gfx-compositor and
+# font-service are Zig too, so nothing configures without it.
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/partition_manager.wap"
+source = "partition_manager.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/volume_manager.wap"
+source = "volume_manager.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/net_stack.wap"
+source = "net_stack.wap"
+
+[[entries]]
+kind = "wasmos_app"
+path = "apps/net_udp_echo.wap"
+source = "net_udp_echo.wap"
+
+[[entries]]
+kind = "data"
+path = "devmgr/rules/default.rules"
+source = "devmgr_rules_init_default.rules"

@@ -148,6 +148,21 @@ static int32_t pci_function_check_locked(uint32_t context_id, uint16_t bdf) {
     return WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER;
 }
 
+int pci_function_of_context(uint32_t context_id, uint16_t* out_bdf) {
+    int rc = -1;
+    ksync_spinlock_lock(&g_pci_config_lock);
+    for (uint32_t i = 0; i < PCI_FUNCTIONS_MAX; ++i) {
+        const pci_function_t* fn = &g_pci_functions[i];
+        if (fn->state == PCI_FUNCTION_OWNED && fn->owner_context == context_id) {
+            *out_bdf = fn->bdf;
+            rc = 0;
+            break;
+        }
+    }
+    ksync_spinlock_unlock(&g_pci_config_lock);
+    return rc;
+}
+
 int32_t pci_function_check(uint32_t context_id, uint16_t bdf) {
     ksync_spinlock_lock(&g_pci_config_lock);
     int32_t rc = pci_function_check_locked(context_id, bdf);

@@ -62,15 +62,19 @@ def interactive_cpu_accel(machine, host_os):
 
 
 def initfs(b):
-    """initfs.img + initfs_config.bin from scripts/initfs.toml. Payloads are
-    resolved by file name from the build directory, so each one named in the
-    manifest is an input."""
+    """initfs.img + initfs_config.bin from the architecture's manifest
+    (scripts/initfs.<arch>.toml) and bootstrap rules
+    (scripts/initfs/devmgr/rules/default.<arch>.rules). Each architecture keeps
+    its own complete set: the boot disk's driver and the platform drivers
+    differ. Payloads are resolved by file name from the build directory, so
+    each one named in the manifest is an input."""
     root = b.root
-    toml = root / "scripts/initfs.toml"
+    name = arch(b.cfg).name
+    toml = root / f"scripts/initfs.{name}.toml"
     b.regen_on(toml)
     payloads = re.findall(r'^\s*source\s*=\s*"([^"]+)"', toml.read_text(), re.M)
     rules = "devmgr_rules_init_default.rules"
-    default_rules = root / "scripts/initfs/devmgr/rules/default.rules"
+    default_rules = root / f"scripts/initfs/devmgr/rules/default.{name}.rules"
     b.command(
         [rules],
         ["cp", default_rules, rules],
@@ -157,6 +161,12 @@ def esp(b, initfs_img):
         ("kernel.cmdline", system / "kernel.cmdline"),
         ("initfs.img", initfs_img),
         ("system/sysinit.rc", system / "sysinit.rc"),
+        # The boot rules, per architecture like the initfs set; installed under
+        # the one name the device manager reads.
+        (
+            "system/devmgr/rules/default.rules",
+            system / f"devmgr/rules/default.{arch(b.cfg).name}.rules",
+        ),
         ("system/net/interfaces", system / "net/interfaces"),
         ("system/fonts/roboto.ttf", system / "fonts/Roboto-Regular.ttf"),
         ("system/fonts/roboto_mono.ttf", system / "fonts/RobotoMono-Regular.ttf"),
@@ -167,7 +177,6 @@ def esp(b, initfs_img):
         *b.exports.get("esp.files", []),
     ]
     trees = [
-        ("system/devmgr/rules", system / "devmgr/rules"),
         ("system/keymaps", system / "keymaps"),
     ]
     # The TLS trust store is fetched on demand (scripts/fetch-ca-certs.sh); an

@@ -1197,7 +1197,7 @@ tail.
 
   Carrying the backend is NOT sufficient on its own. A partition reports the same
   backend AND the same unit as the disk beneath it (see the `SUBSYSTEM=="partition"`
-  note in `scripts/system/devmgr/rules/default.rules`), so a whole-disk backend and
+  note in `scripts/system/devmgr/rules/default.<arch>.rules`), so a whole-disk backend and
   a partition backend on that disk still derive one instance under the widened
   encoding. The instance has to be derived from the block device's CANONICAL ID --
   which already distinguishes `block:ata:1` from `block:ata:1p1` and is what

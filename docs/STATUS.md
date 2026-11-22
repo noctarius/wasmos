@@ -760,8 +760,24 @@ linked feature documents for rationale and rollout plans.
   `qemu-system-aarch64 -M virt,gic-version=3 -accel hvf` (TCG on CI) it boots
   through the scheduler self-tests, demand paging, threading, IPC and timer
   preemption, runs wasm3 guests (init, fs-manager, fs-tmpfs, fs-init,
-  device-manager), and stops by name at `arch_pci_cfg_read32` when pci-bus
-  first reads configuration space (ECAM is Phase 3). The kernel side: the
+  device-manager), enumerates PCI through ECAM (`arch/aarch64/pci_cfg_aarch64.c`,
+  base from the ACPI MCFG, each bus mapped on first use), parses the DSDT, runs
+  the native net-stack at EL0, spawns virtio-blk from the initfs for the boot
+  disk, mounts `/boot` from it, runs sysinit and reaches the WAMOS CLI prompt
+  (`supervisor] boot complete`), with virtio-net (DHCP lease), virtio-rng, the
+  font service and the calculator up; the menu bar exits for want of a
+  framebuffer (QEMU virt has no display device by default). MSIs go through
+  the GICv3 ITS (`arch/aarch64/its_aarch64.c`, `msi_aarch64.c`): slot `i` is
+  EventID `i` and LPI 8192+`i`, and the DeviceID is the requester id of the PCI
+  function the calling driver's spawn profile names
+  (`pci_function_of_context`), so `msi_alloc` keeps its ABI; a caller that
+  drives no function gets `msi.NO_FUNCTION`. initfs and the device-manager rules are per architecture
+  (`scripts/initfs.<arch>.toml`, `scripts/initfs/devmgr/rules/default.<arch>.rules`,
+  `scripts/system/devmgr/rules/default.<arch>.rules`): on aarch64 virtio-blk
+  carries `/boot`, so it is a bootstrap rule there, and the PS/2, CMOS, 16550 and
+  bochs rules are x86_64-only. pci-bus enables a function's I/O or memory decode
+  for the BARs it implements at an assigned address, which edk2 on aarch64 leaves
+  off. The kernel side: the
   bootstrap drops EL2 to EL1 and maps physical [0, 4 GiB) with 48-bit VAs;
   `arch/aarch64/paging.c` implements `paging.h` with the x86_64 slot geometry
   (TTBR0 slot 0 identity, slot 1 user; a shared TTBR1 direct map with RAM in

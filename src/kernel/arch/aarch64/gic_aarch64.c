@@ -14,8 +14,9 @@
 #include "arch/arch_mmio.h"
 #include "arch/vm_layout.h"
 
+#define GICR_PHYS 0x080A0000ULL
 #define GICD_BASE (KERNEL_HIGHER_HALF_BASE | 0x08000000ULL)
-#define GICR_BASE (KERNEL_HIGHER_HALF_BASE | 0x080A0000ULL)
+#define GICR_BASE (KERNEL_HIGHER_HALF_BASE | GICR_PHYS)
 #define GICR_SGI_BASE (GICR_BASE + 0x10000ULL)
 
 #define GICD_CTLR 0x0000u
@@ -25,6 +26,18 @@
 #define GICD_TYPER 0x0004u
 #define GICD_ICENABLER 0x0180u
 
+#define GICR_CTLR 0x0000u
+#define GICR_CTLR_ENABLE_LPIS (1u << 0)
+#define GICR_TYPER 0x0008u
+#define GICR_TYPER_PLPIS (1ULL << 0)
+#define GICR_PROPBASER 0x0070u
+#define GICR_PENDBASER 0x0078u
+/* Normal inner write-back read/write-allocate (0b111 at bits 9:7), inner
+ * shareable (0b01 at bits 11:10): the attributes the GIC reads the LPI tables
+ * with, matching the kernel's own mapping of them. */
+#define GICR_BASER_CACHE_WB (7ULL << 7)
+#define GICR_BASER_SHARE_INNER (1ULL << 10)
+#define GICR_PENDBASER_PTZ (1ULL << 62)
 #define GICR_WAKER 0x0014u
 #define GICR_WAKER_PROCESSOR_SLEEP (1u << 1)
 #define GICR_WAKER_CHILDREN_ASLEEP (1u << 2)
@@ -84,6 +97,38 @@ void gic_init(void) {
 void gic_enable_ppi(uint32_t intid) {
     arch_mmio_write8((uintptr_t)(GICR_SGI_BASE + GICR_IPRIORITYR + intid), GIC_DEFAULT_PRIORITY);
     arch_mmio_write32((uintptr_t)(GICR_SGI_BASE + GICR_ISENABLER0), 1u << intid);
+}
+
+static uint64_t gicr_read64(uint32_t reg) {
+    uint64_t lo = arch_mmio_read32((uintptr_t)(GICR_BASE + reg));
+    uint64_t hi = arch_mmio_read32((uintptr_t)(GICR_BASE + reg + 4u));
+    return lo | (hi << 32);
+}
+
+static void gicr_write64(uint32_t reg, uint64_t value) {
+    arch_mmio_write32((uintptr_t)(GICR_BASE + reg), (uint32_t)value);
+    arch_mmio_write32((uintptr_t)(GICR_BASE + reg + 4u), (uint32_t)(value >> 32));
+}
+
+uint64_t gic_redistributor_phys(void) {
+    return GICR_PHYS;
+}
+
+uint32_t gic_redistributor_processor_number(void) {
+    return (uint32_t)((gicr_read64(GICR_TYPER) >> 8) & 0xFFFFu);
+}
+
+int gic_lpi_enable(uint64_t prop_phys, uint32_t id_bits, uint64_t pend_phys) {
+    if (!(gicr_read64(GICR_TYPER) & GICR_TYPER_PLPIS)) {
+        return -1;
+    }
+    gicr_write64(GICR_PROPBASER,
+                 prop_phys | GICR_BASER_CACHE_WB | GICR_BASER_SHARE_INNER | (id_bits - 1u));
+    gicr_write64(GICR_PENDBASER,
+                 pend_phys | GICR_BASER_CACHE_WB | GICR_BASER_SHARE_INNER | GICR_PENDBASER_PTZ);
+    uint32_t ctlr = arch_mmio_read32((uintptr_t)(GICR_BASE + GICR_CTLR));
+    arch_mmio_write32((uintptr_t)(GICR_BASE + GICR_CTLR), ctlr | GICR_CTLR_ENABLE_LPIS);
+    return 0;
 }
 
 uint32_t gic_ack(void) {

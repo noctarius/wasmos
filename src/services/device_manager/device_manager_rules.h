@@ -1,7 +1,7 @@
 /* device_manager_rules.h - parser declarations for device-manager rule files.
  *
  * Rule-file format (a udev-flavoured subset; see
- * scripts/system/devmgr/rules/default.rules for a live example):
+ * scripts/system/devmgr/rules/default.x86_64.rules for a live example):
  *
  *   - Line oriented, one rule per line, no continuations.  A line whose first
  *     non-blank character is '#' is a comment; an unquoted '#' anywhere else

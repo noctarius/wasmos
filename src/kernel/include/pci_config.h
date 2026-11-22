@@ -49,6 +49,10 @@ int pci_function_attach(uint32_t context_id, uint16_t bdf);
  * recycled while it can. */
 void pci_quiesce_context(uint32_t context_id, uint32_t pid);
 
+/* The function context_id drives, from its spawn profile: 0 with *out_bdf set,
+ * or -1 when it drives none. Kernel-internal; callers report their own code. */
+int pci_function_of_context(uint32_t context_id, uint16_t* out_bdf);
+
 /* Whether context_id may drive `bdf`: 0 for an unmanaged function or one it
  * owns, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER for one another process owns or one
  * retired at its driver's reap. */

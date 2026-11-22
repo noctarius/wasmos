@@ -289,6 +289,7 @@ domains:
       - { name: NOT_DEVICE_OWNER, description: "another endpoint already programmed interrupts for this device" }
       # Appended, never inserted: a code's value is its position.
       - { name: NOT_FUNCTION_DRIVER, description: "the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it" }
+      - { name: NO_FUNCTION,      description: "the caller drives no PCI function, so the interrupt controller has no device identity to deliver a message for (an aarch64 GICv3 ITS keys every message by the device's requester id)" }
 
   io:
     id: 18

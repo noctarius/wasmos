@@ -139,7 +139,7 @@ Per-service `BUILD.py` manifest, using the helpers in
 ## Step 5: Place the `.wap` on the FS
 
 Services load by absolute VFS path (no directory scan). Place via:
-- **initfs image** (early/RAM): add to `scripts/initfs.toml`
+- **initfs image** (early/RAM): add to `scripts/initfs.<arch>.toml`
   (`path = "system/services/<name>.wap"`, `source = "<name>.wap"`); built into
   `out/<dir>/initfs.img`. The initfs step finds `<name>.wap` by name in the
   build directory, so an initfs-only service has no `install(...)` call.
@@ -168,7 +168,7 @@ start /boot/system/services/cli.wap
 ```
 
 For very-early bring-up (before sysinit), use a device-manager rule instead
-(`scripts/initfs/devmgr/rules/default.rules`, e.g.
+(`scripts/initfs/devmgr/rules/default.<arch>.rules`, e.g.
 `SUBSYSTEM=="boot", RUN+="system/services/net_stack.wap"`). The kernel itself
 path-spawns only `sysinit` (`src/kernel/kernel_init_runtime.c:393`).
 

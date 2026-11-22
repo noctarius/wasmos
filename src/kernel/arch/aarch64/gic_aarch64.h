@@ -21,3 +21,18 @@ uint32_t gic_ack(void);
 
 /* Signal the end of an acknowledged interrupt. */
 void gic_eoi(uint32_t intid);
+
+/* First LPI INTID (GICv3: 8192 and up are LPIs). */
+#define GIC_LPI_BASE 8192u
+
+/* Physical address of the boot CPU's redistributor (RD_base), and its
+ * GICR_TYPER.Processor_Number: the two forms an ITS collection target takes,
+ * selected by GITS_TYPER.PTA. */
+uint64_t gic_redistributor_phys(void);
+uint32_t gic_redistributor_processor_number(void);
+
+/* Enable LPIs on the boot CPU's redistributor, with the LPI configuration table
+ * at `prop_phys` covering INTIDs below 2^id_bits and the pending table at
+ * `pend_phys` (64 KiB aligned, zeroed). Returns 0, or -1 when the
+ * redistributor implements no LPIs. Call once, before any LPI is mapped. */
+int gic_lpi_enable(uint64_t prop_phys, uint32_t id_bits, uint64_t pend_phys);

@@ -149,7 +149,7 @@ helpers in `scripts/buildgen/wasmos_rules.py` (API reference:
   AOT (`src/drivers/framebuffer_pci/BUILD.py`).
 - `install(b, "system/drivers/<name>.wap", wap)` stages the package on the ESP
   (`out/<dir>/esp/system/drivers/<name>.wap`). An initfs payload is not
-  installed; `scripts/initfs.toml` names it and the initfs step finds it by name
+  installed; `scripts/initfs.<arch>.toml` names it and the initfs step finds it by name
   in the build directory.
 - Add the directory name to `b.subdir(...)` in `src/drivers/BUILD.py`.
   `build.ninja` regenerates on the next `ninja` invocation; no re-configure is
@@ -169,8 +169,8 @@ def build(b):
 ## Step 5: Boot wiring — device-manager rules
 
 The device manager spawns drivers from udev-style rules, two locations:
-`scripts/initfs/devmgr/rules/default.rules` (initfs bootstrap, boot-critical) and
-`scripts/system/devmgr/rules/default.rules` (boot-FAT, after storage is online).
+`scripts/initfs/devmgr/rules/default.<arch>.rules` (initfs bootstrap, boot-critical) and
+`scripts/system/devmgr/rules/default.<arch>.rules` (boot-FAT, after storage is online).
 
 ```
 SUBSYSTEM=="boot", RUN+="system/drivers/chardev_server.wap"

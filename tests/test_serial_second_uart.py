@@ -11,7 +11,7 @@ respawned it until the session timed out; after, the boot finished with console
 input routed to a driver polling a port it was never granted, so the prompt
 appeared and took no command.
 
-The shipped rule binds COM1 only (`scripts/system/devmgr/rules/default.rules`),
+The shipped rule binds COM1 only (`scripts/system/devmgr/rules/default.x86_64.rules`),
 so this boots a private copy of the ESP whose rule matches every 16550, which is
 the configuration a machine with a second serial port needs.
 """

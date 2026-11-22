@@ -4,7 +4,7 @@ from wasmos_rules import guest, install
 
 
 def build(b):
-    # device-manager spawns it from the ESP (scripts/system/devmgr/rules/default.rules).
+    # device-manager spawns it from the ESP (scripts/system/devmgr/rules/default.<arch>.rules).
     # logger_stage.c is the logger service's kernel-log ring follower; the
     # kernel-log port follows the same ring by the same rules.
     logger = b.root / "src/services/logger"

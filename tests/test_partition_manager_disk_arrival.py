@@ -37,7 +37,7 @@ from scripts.make_gpt_image import build_image
 from scripts.qemu_test_framework import QemuSession, default_config
 
 # The volume label. Deliberately not "user": that label has a rule in
-# `scripts/system/devmgr/rules/default.rules` that mounts it on /user, and a test
+# `scripts/system/devmgr/rules/default.x86_64.rules` that mounts it on /user, and a test
 # disk that mounts itself over the real one would be testing the rule engine by
 # accident. Nothing matches "spare", so the partition is published and left alone,
 # which is exactly the property under test.

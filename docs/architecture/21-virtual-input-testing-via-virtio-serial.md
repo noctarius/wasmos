@@ -16,7 +16,7 @@ on top of those contracts.
 | Component                                        | State           | Source                                           |
 |--------------------------------------------------|-----------------|--------------------------------------------------|
 | Virtio-serial kernel-log port (port 0 transmit)  | Implemented     | `src/drivers/virtio_serial/virtio_serial.c`      |
-| Device manager match rule for virtio-serial      | Implemented     | `scripts/system/devmgr/rules/default.rules`      |
+| Device manager match rule for virtio-serial      | Implemented     | `scripts/system/devmgr/rules/default.<arch>.rules`      |
 | PS/2 keyboard driver (IRQ-driven + polling)      | Implemented     | `src/drivers/keyboard/keyboard.ts`               |
 | PS/2 mouse driver (IRQ-driven + polling)         | Implemented     | `src/drivers/mouse/mouse.ts`                     |
 | Compositor keyboard + mouse subscription         | Implemented     | `src/services/gfx_compositor/gfx_compositor.zig` |

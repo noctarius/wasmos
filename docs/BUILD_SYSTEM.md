@@ -256,8 +256,11 @@ mbedTLS).
 built from the driver's own layout sources), `warp_aot` (WARP trees only).
 
 **System image** (`scripts/system/BUILD.py`): `initfs.img` and
-`initfs_config.bin` from `scripts/initfs.toml` (payloads are found by name in
-the build directory), `esp/` (Section 11), `wfs.img` and `wfs_virtio.img`
+`initfs_config.bin` from `scripts/initfs.<arch>.toml` and the bootstrap rules
+`scripts/initfs/devmgr/rules/default.<arch>.rules` (each architecture keeps a
+complete set of its own; payloads are found by name in the build directory),
+the boot rules `scripts/system/devmgr/rules/default.<arch>.rules` installed as
+`system/devmgr/rules/default.rules`, `esp/` (Section 11), `wfs.img` and `wfs_virtio.img`
 (`mkfs_wfs --populate scripts/wfs`), `user.img` (`make_gpt_image.py` over
 `userfs/`), and `run/` copies of the three images that interactive sessions
 boot, so a session never mutates the fixtures the tests expect.
@@ -378,7 +381,7 @@ alone: QEMU's `fat:rw:` backend writes `NvVars`, and tests write fixtures.
 ```
 
 `initfs.img` holds the drivers and services needed before `/boot` is mounted
-(`scripts/initfs.toml`); hardware drivers live on the ESP and are loaded by
+(`scripts/initfs.<arch>.toml`); hardware drivers live on the ESP and are loaded by
 device-manager afterwards. The TLS trust store is fetched on demand
 (`scripts/fetch-ca-certs.sh`); without it the ESP carries an empty placeholder
 and the build stays offline.
@@ -412,7 +415,7 @@ def build(b):
 - **Native ring-3 module:** compile with `b.toolchain("native")` and link with
   `native()` (`src/drivers/framebuffer/BUILD.py`,
   `src/services/gfx_compositor/BUILD.py`).
-- **Boot-phase module:** name its `.wap` in `scripts/initfs.toml` instead of
+- **Boot-phase module:** name its `.wap` in `scripts/initfs.<arch>.toml` instead of
   installing it; initfs finds it by name in the build directory.
 - **Host unit test:** add an entry pair to `TESTS` in `tests/unit/BUILD.py` —
   `(CC, "test_x", [*C11, ..., sources])` and `(RUN, "test_x", [])` — see

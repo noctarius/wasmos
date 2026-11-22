@@ -32,6 +32,11 @@
 #define KERNEL_MMIO_FB_VA 0xFFFFFFC000000000ULL
 #define KERNEL_MMIO_DEVICE_VA 0xFFFFFFC020000000ULL
 #define KERNEL_MMIO_DEVICE_BYTES (512ULL * 1024ULL * 1024ULL)
+/* Kernel VA span above the device windows where pci_cfg_aarch64.c maps the
+ * ECAM window, one bus (1 MiB) at a time: 256 buses. Device-nGnRE,
+ * supervisor-only. */
+#define KERNEL_ECAM_VA 0xFFFFFFC040000000ULL
+#define KERNEL_ECAM_BYTES (256ULL * 1024ULL * 1024ULL)
 
 /* Per-app linear-memory kernel-VA window (base + 128 GiB): 48 slots of 2 GiB.
  * WARP_LINMEM_PDPT_COUNT counts the window in 1 GiB units (level-1 entries of

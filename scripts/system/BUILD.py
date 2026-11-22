@@ -280,8 +280,17 @@ def run_targets(b, esp_stamp, images):
         "-nographic",
         "-serial",
         "mon:stdio",
-        "-serial",
-        f"file:{out / 'syslog.log'}",
+        # The kernel-log port: a virtio console the virtio_serial driver feeds
+        # from the kmsg ring, captured to syslog.log. Slot 0x1e keeps the other
+        # devices' slots, from which the virtio-blk disk identity is derived.
+        # Booting with log.serial=com2 moves the kernel log to COM2 instead
+        # (add `-serial file:...` to capture it).
+        "-device",
+        "virtio-serial-pci,id=klogbus,addr=0x1e",
+        "-chardev",
+        f"file,id=klog,path={out / 'syslog.log'}",
+        "-device",
+        "virtconsole,bus=klogbus.0,chardev=klog",
         "-netdev",
         "user,id=net0",
         "-device",

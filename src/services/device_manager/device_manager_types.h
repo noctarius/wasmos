@@ -30,14 +30,16 @@
 #define DEVMGR_RULES_INIT_ROOT "/init/devmgr/rules"
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"
-/* Fixed read/parse buffer for the rules file. Sized for the partition matchers:
- * a rule naming a type GUID and a label runs to roughly twice the length of one
- * naming a driver and a unit.
+/* Fixed read/parse buffer for the rules file. Sized for the partition matchers
+ * -- a rule naming a type GUID and a label runs to roughly twice the length of
+ * one naming a driver and a unit -- and for the shipped boot rules, which are
+ * over 8 KiB; a rule past the cap is lost to the truncation below. The buffer
+ * is static (g_rule_text): the guest's C stack cannot hold it.
  * TODO: a rules file larger than this is silently truncated, dropping its
  * trailing rules with no diagnostic — raising the cap postpones that rather than
  * fixing it. Size the read from FS_IPC_STAT_REQ, or stream it, so the file has
  * no size limit (see docs/TASKS.md). */
-#define DEVMGR_RULE_TEXT_CAP 8192
+#define DEVMGR_RULE_TEXT_CAP 16384
 #define ALWAYS_SPAWN_RULE_CAP 8
 #define BLOCK_FS_RULE_CAP 8
 #define PCI_MATCH_RULE_CAP 8

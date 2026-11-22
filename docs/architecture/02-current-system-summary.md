@@ -245,10 +245,9 @@ supervised driver restart, capability manifests) is tracked in
 - **`gfx-smoke`** app: manual compositor validation at `/boot/apps/gfx_smoke.wap`.
   Covers two concurrent windows, close-event teardown, and a `libui` component
   demo. Not auto-spawned by `sysinit`.
-- **`virtio-serial`** driver (WASM): PCI-matched driver for `virtio.serial`
-  (device IDs 0x1003/0x1043, vendor 0x1AF4). Provides PCI discovery and
-  register-access IPC. Serves as the transport pattern baseline for higher-level
-  virtio consumers (including `virtio-net`).
+- **`virtio-serial`** driver (WASM): the kernel-log port. Drives a virtio
+  console (device IDs 0x1003/0x1043, vendor 0x1AF4) over the virtio 1.x
+  transport and writes the kmsg ring to port 0, replayed from boot.
 - **`virtio-net`** driver (native C): PCI-matched virtio network driver
   (`src/drivers/virtio_net/`) with queue setup, IRQ-driven RX/TX, and an ARP
   smoke path.

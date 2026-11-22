@@ -12,9 +12,13 @@ stack_pages = 64
 heap_pages = 64
 
 # Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
-# Rule matching walks a nested match tree on the stack.
+# Rule matching walks a nested match tree on the stack. Two 64 KiB pages: the
+# static rules buffer (DEVMGR_RULE_TEXT_CAP, 16 KiB) does not fit the default
+# single page beside the stack and data.
 [link]
 stack_size = 16384
+initial_memory = 131072
+max_memory = 131072
 
 [deps]
 wants = ["fs.vfs"]

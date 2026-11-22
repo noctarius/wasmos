@@ -891,6 +891,12 @@ subsystems:
       - { symbol: RTC_IPC_SET_RESP, value: 0x8a1, kind: resp }
       - { symbol: RTC_IPC_ERROR, value: 0x8ff, kind: error }
 
+  # No driver serves these: virtio_serial is the kernel-log port and answers no
+  # requests, and the register requests addressed legacy I/O-BAR offsets the
+  # virtio 1.x transport does not have. The subsystem stays because ids are
+  # dense and positional; a virtio-serial service protocol
+  # (docs/architecture/21) replaces these entries rather than adding a
+  # subsystem.
   - name: virtio_serial
     id: 13
     range: [0x830, 0x8bf]

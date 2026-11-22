@@ -62,6 +62,11 @@ def main():
         )
     else:
         cfg = default_config()
+    # A kernel self-test tree: the kernel log goes to COM2, which the
+    # kernel writes itself, rather than to the virtio console a
+    # user-space driver feeds -- the self-tests run before (or without)
+    # that driver, and their failures are what the log must show.
+    cfg.klog_port = "com2"
 
     if stress_test_compiled_in(cfg.esp_dir) is False:
         sys.stderr.write(

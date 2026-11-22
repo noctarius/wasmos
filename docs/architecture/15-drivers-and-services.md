@@ -242,24 +242,25 @@ Services subscriber registration and delivers key events.
 | `RTC_IPC_SET_RESP`  | `0x8A1` | Set response      |
 | `RTC_IPC_ERROR`     | `0x8FF` | Error response    |
 
-#### `virtio-serial` — VirtIO Serial Driver
+#### `virtio-serial` — VirtIO Console Driver (kernel-log port)
 
 - **Kind:** WASM driver
-- **PCI match:** class `0x07`, subclass `0x00`, prog_if `0x00`, vendor `0x1AF4` (VirtIO)
-- **Capabilities:** `io.port`
-- **Registers:** `virtio.serial` service endpoint
+- **PCI match:** vendor `0x1AF4`, device `0x1003` (transitional) or `0x1043`
+  (modern)
+- **Capabilities:** `mmio.map`, `dma.buffer`
+- **Regions:** region 0 = BAR 4 (`kind = "bar"`), a memory-mapped window
+- **Registers:** nothing; it serves no requests
 - **Entry bindings:** `proc.endpoint`
 
-Used for virtual input testing from the host. Exposes register read/write over
-IPC.
-
-| Opcode                              | Value   | Meaning               |
-|-------------------------------------|---------|-----------------------|
-| `VIRTIO_SERIAL_IPC_QUERY_REQ`       | `0x830` | Query device presence |
-| `VIRTIO_SERIAL_IPC_READ_REG32_REQ`  | `0x831` | Read 32-bit register  |
-| `VIRTIO_SERIAL_IPC_WRITE_REG32_REQ` | `0x832` | Write 32-bit register |
-| `VIRTIO_SERIAL_IPC_RESP`            | `0x8B0` | Response              |
-| `VIRTIO_SERIAL_IPC_ERROR`           | `0x8BF` | Error                 |
+The kernel-log port ([Virtual Terminal](19-virtual-terminal.md)). The driver
+brings a virtio console up over the virtio 1.x transport with port 0's
+transmit queue only (no MULTIPORT, no interrupt), subscribes to the kmsg ring
+(`kmsg_subscribe`), replays it from the oldest retained byte and then writes
+every new record, using the logger's ring follower (`logger_stage.c`, tagged
+`[virtio-serial]`) so bytes the ring overwrote first are reported in place.
+It is not supervised: a restart would replay the whole retained ring onto a
+port that already carries it. The `VIRTIO_SERIAL_IPC_*` register-access
+opcodes are unserved (doc 21).
 
 #### `virtio-rng` — VirtIO Hardware Entropy Driver
 
@@ -857,7 +858,8 @@ SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", RUN+="system/dri
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x08", ATTR{subclass}=="0x03", RUN+="system/drivers/rtc.wap"
-SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_serial.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1043", RUN+="system/drivers/virtio_serial.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", RUN+="system/drivers/virtio_rng.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", RUN+="system/drivers/virtio_rng.wap"
 ```
@@ -917,7 +919,6 @@ every service's; it is not a milestone anyone waits on.
 | `devmgr.query`  | `device-manager` | Mount/block query endpoint for drivers     |
 | `fs.vfs`        | `fs-manager`     | Unified virtual filesystem namespace       |
 | `initfs.rules`  | `fs-init`        | Initfs listing (pre-FAT)                   |
-| `virtio.serial` | `virtio-serial`  | VirtIO serial register access              |
 | `virtio-rng`    | `virtio-rng`     | VirtIO hardware entropy provider           |
 | `font`          | `font-service`   | Font rasterization                         |
 | `gfx`           | `gfx-compositor` | Graphics compositor                        |

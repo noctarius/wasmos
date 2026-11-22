@@ -128,7 +128,7 @@ SUBSYSTEM=="acpi",  ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{io}=="0x3F
 SUBSYSTEM=="acpi",  ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="acpi",  ATTR{class}=="0x09", ATTR{subclass}=="0x02", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi",  ATTR{class}=="0x08", ATTR{subclass}=="0x03", RUN+="system/drivers/rtc.wap"
-SUBSYSTEM=="pci",   ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_serial.wap"
+SUBSYSTEM=="pci",   ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"
 ```
 
 Numeric attributes are parsed as hexadecimal (`parse_u8_hex`, `parse_u16_hex`)

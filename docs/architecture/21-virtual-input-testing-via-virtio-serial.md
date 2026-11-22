@@ -1,10 +1,10 @@
 ## Virtual Input Testing via Virtio-Serial
 
-> **Documentation status: Design proposal.** Existing keyboard, mouse, and
-> virtio-serial discovery behavior is reference material; virtio-serial data
-> transport and host-driven input injection are unimplemented.
+> **Documentation status: Design proposal.** Existing keyboard and mouse
+> behavior is reference material; the virtio-serial driver is the kernel-log
+> port, and a host-to-guest input channel over it is unimplemented.
 
-This document describes the implemented virtio-serial driver, the keyboard and
+This document describes what the virtio-serial driver is today, the keyboard and
 mouse driver IPC contracts, the compositor's input subscription model, and the
 design for the not-yet-implemented virtual input injection layer that would sit
 on top of those contracts.
@@ -15,13 +15,13 @@ on top of those contracts.
 
 | Component                                        | State           | Source                                           |
 |--------------------------------------------------|-----------------|--------------------------------------------------|
-| Virtio-serial PCI discovery and register access  | Implemented     | `src/drivers/virtio_serial/virtio_serial.c`      |
+| Virtio-serial kernel-log port (port 0 transmit)  | Implemented     | `src/drivers/virtio_serial/virtio_serial.c`      |
 | Device manager match rule for virtio-serial      | Implemented     | `scripts/system/devmgr/rules/default.rules`      |
 | PS/2 keyboard driver (IRQ-driven + polling)      | Implemented     | `src/drivers/keyboard/keyboard.ts`               |
 | PS/2 mouse driver (IRQ-driven + polling)         | Implemented     | `src/drivers/mouse/mouse.ts`                     |
 | Compositor keyboard + mouse subscription         | Implemented     | `src/services/gfx_compositor/gfx_compositor.zig` |
 | Python QEMU test framework                       | Implemented     | `scripts/qemu_test_framework.py`                 |
-| Virtio-serial queue setup and data plane         | **Deferred**    | See TODO in `virtio_serial.c:160`                |
+| Virtio-serial MULTIPORT, receive path, protocol  | **Not started** | —                                                |
 | Virt-input service (protocol parser + injection) | **Not started** | —                                                |
 
 ---
@@ -30,144 +30,20 @@ on top of those contracts.
 
 **Source**: `src/drivers/virtio_serial/virtio_serial.c`
 
-The driver is a WASM C application with 64 KiB of memory (stack 4096 bytes,
-initial and max memory 65536 bytes). It handles PCI enumeration, registers a
-named service, and exposes a register-access IPC interface to other drivers.
+The driver is the system's kernel-log port, not an input channel. It drives a
+virtio console (`1AF4:1003` transitional, `1AF4:1043` modern) over the virtio
+1.x transport, through its BAR 4 window, and uses port 0's transmit queue
+only: it follows the kmsg ring and writes the kernel log to the host
+([Virtual Terminal](19-virtual-terminal.md), kernel-log port). It accepts no
+features beyond VERSION_1, so the device has one port and no control queues,
+it reads nothing from the host, and it serves no IPC requests.
 
-#### PCI Scan
-
-```c
-#define PCI_CFG_ADDR_PORT         0xCF8
-#define PCI_CFG_DATA_PORT         0xCFC
-
-#define VIRTIO_PCI_VENDOR_ID      0x1AF4u
-#define VIRTIO_PCI_DEV_MIN        0x1000u
-#define VIRTIO_PCI_DEV_MAX        0x107Fu
-#define VIRTIO_SERIAL_DEV_LEGACY  0x1003u      // virtio-serial, legacy
-#define VIRTIO_SERIAL_DEV_TRANSITIONAL 0x1043u  // virtio-serial, transitional
-```
-
-`probe_virtio_serial()` performs a full BDF scan (bus 0–255, slot 0–31,
-function 0–7). For each candidate it verifies:
-1. Vendor ID `0x1AF4`.
-2. Device ID is `0x1003`, `0x1043`, or within `[0x1000, 0x107F]`.
-3. PCI class `0x07` (communications), subclass `0x00`.
-4. BAR0 is I/O-space (bit 0 = 1) and non-zero after masking bits [1:0].
-
-On success it records the device in `g_dev`:
-
-```c
-typedef struct {
-    uint8_t  present;
-    uint8_t  bus, slot, function, irq;
-    uint16_t io_base;
-    uint16_t vendor_id, device_id;
-} virtio_serial_device_t;
-```
-
-#### Service Registration and Log Markers
-
-After probing the device the driver registers as `"virtio.serial"` via
-`wasmos_svc_register` and then calls `wasmos_sys_notify_ready`.
-
-Log output:
-```
-[virtio-serial] ready io=0xXXXX irq=N dev=XXXX   // device found
-[virtio-serial] no device found                   // no match
-[virtio-serial] register failed                   // svc_register error
-```
-
-#### IPC Interface
-
-| Opcode  | Constant                            | Direction       |
-|---------|-------------------------------------|-----------------|
-| `0x830` | `VIRTIO_SERIAL_IPC_QUERY_REQ`       | Client → driver |
-| `0x831` | `VIRTIO_SERIAL_IPC_READ_REG32_REQ`  | Client → driver |
-| `0x832` | `VIRTIO_SERIAL_IPC_WRITE_REG32_REQ` | Client → driver |
-| `0x8B0` | `VIRTIO_SERIAL_IPC_RESP`            | Driver → client |
-| `0x8BF` | `VIRTIO_SERIAL_IPC_ERROR`           | Driver → client |
-
-**QUERY_REQ** — returns device presence and identity:
-
-| Field  | Content                                                 |
-|--------|---------------------------------------------------------|
-| `arg0` | `present` (0 or 1)                                      |
-| `arg1` | `(vendor_id << 16) \| device_id`                        |
-| `arg2` | `(bus << 24) \| (slot << 16) \| (function << 8) \| irq` |
-| `arg3` | `io_base`                                               |
-
-**READ_REG32_REQ** — `arg0 = offset` (must be in [0, 0x3C], 4-byte aligned):
-
-| Field  | Content             |
-|--------|---------------------|
-| `arg1` | register value read |
-| `arg2` | offset echoed       |
-
-**WRITE_REG32_REQ** — `arg0 = offset`, `arg1 = value`:
-
-| Field  | Content       |
-|--------|---------------|
-| `arg1` | offset echoed |
-| `arg2` | value echoed  |
-
-Error reply (`VIRTIO_SERIAL_IPC_ERROR`):
-- `arg0 = -2`: device not present.
-- `arg0 = -22`: invalid or misaligned offset (EINVAL).
-- `arg0 = -38`: unknown IPC type (ENOSYS).
-
-#### Deferred Work
-
-The driver does not yet set up VirtIO queues or expose a byte-stream
-interface. The transport layer is explicitly deferred:
-
-```c
-/* TODO(virtio-serial-transport): add queue setup and data/control-plane
- * operations; this initial slice is discovery + register access only. */
-```
-
-Until queue setup is implemented, the driver cannot transfer data to/from
-host-side chardevs. Named-port enumeration and the `wasmos.virtinput`
-channel depend on this foundation.
-
-#### Device Manager Match Rule
-
-```
-SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00",
-ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4",
-RUN+="system/drivers/virtio_serial.wap"
-```
-
-This is the last entry in `scripts/system/devmgr/rules/default.rules` and
-matches any VirtIO PCI communications device from vendor `0x1AF4`.
-
-#### Linker Metadata
-
-`src/drivers/virtio_serial/linker.metadata`:
-
-```toml
-[package]
-name    = "virtio-serial"
-kind    = "driver"
-native  = false
-entry   = "initialize"
-
-[resources]
-stack_pages = 16
-heap_pages  = 16
-
-[[capabilities]]
-name = "io.port"   # PCI config-space access at 0x0CF8–0x0CFF
-```
-
-No `irq.route` capability is declared; the driver does not handle interrupts.
-
-The device it binds to is named by a rule, not by the package:
-
-```
-SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00", \
-  ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", \
-  RUN+="system/drivers/virtio_serial.wap"
-```
+The virt-input channel below needs what that driver deliberately does not
+negotiate: VIRTIO_CONSOLE_F_MULTIPORT, for the named `wasmos.virtinput` port and
+the control queues that announce it, a receive queue, and a service protocol in
+the reserved `virtio_serial` opcode range (`abi/opcodes.yaml`, which still
+lists the retired register-access requests). The kernel-log port would stay
+port 0.
 
 ---
 
@@ -464,10 +340,10 @@ expected state transitions in serial output.
 
 ### Structural Invariants
 
-1. **Virtio-serial currently exposes discovery only.** Queue setup and the
-   data plane are not implemented. Any component that depends on reading bytes
-   from the host over virtio-serial (including the virt-input service) must
-   wait for the transport layer TODO to be resolved.
+1. **Virtio-serial carries the kernel log out, and nothing in.** It transmits
+   on port 0 only and negotiates no MULTIPORT. Any component that depends on
+   reading bytes from the host over virtio-serial (including the virt-input
+   service) needs the multiport receive path described above first.
 
 2. **Injected input uses the same IPC path as hardware input.** A virt-input
    service sends `KBD_IPC_KEY_NOTIFY` and `MOUSE_IPC_MOVE_NOTIFY` messages to

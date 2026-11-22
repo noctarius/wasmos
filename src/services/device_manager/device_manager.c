@@ -496,9 +496,14 @@ static void kick_boot_rules_read_async(void) {
     g_dm_rules_wait.done = 0;
 }
 
+/* The rules file's text, for whichever of the two loaders runs; they never
+ * overlap. Static rather than on the stack: the guest's C stack is small, and a
+ * rules buffer on it traps the service at its first rules read. */
+static char g_rule_text[DEVMGR_RULE_TEXT_CAP];
+
 static void poll_boot_rules_async(void) {
     int32_t read_len = 0;
-    char text[DEVMGR_RULE_TEXT_CAP];
+    char* text = g_rule_text;
     char msg[128];
     if (!g_dm.rules_boot_request_pending) {
         return;
@@ -548,8 +553,8 @@ static void poll_boot_rules_async(void) {
         g_dm.rules_boot_retry_delay = 64;
         return;
     }
-    if (read_len >= (int32_t)sizeof(text)) {
-        read_len = (int32_t)sizeof(text) - 1;
+    if (read_len >= (int32_t)DEVMGR_RULE_TEXT_CAP) {
+        read_len = (int32_t)DEVMGR_RULE_TEXT_CAP - 1;
     }
     if (read_len > 0 && wasmos_xfer_buffer_read(bid, text, read_len, 0) != 0) {
         if (bid >= 0) {
@@ -610,13 +615,13 @@ static void poll_boot_rules_async(void) {
 static void load_rules_if_available(void) {
     if (!g_dm.rules_init_loaded) {
         char path[96];
-        char text[DEVMGR_RULE_TEXT_CAP];
+        char* text = g_rule_text;
         int32_t read_len = -1;
         path[0] = '\0';
         str_copy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
         wasmos_sys_str_append(path, sizeof(path), "/");
         wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
-        read_len = read_rules_file(path, text, sizeof(text));
+        read_len = read_rules_file(path, text, DEVMGR_RULE_TEXT_CAP);
         if (read_len >= 0) {
             g_dm.rules_init_loaded = 1;
             g_dm.rules_init_active = dm_rules_count_active(text);

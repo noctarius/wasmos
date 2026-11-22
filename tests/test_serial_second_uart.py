@@ -57,7 +57,17 @@ class SerialSecondUartTest(unittest.TestCase):
         cfg = default_config()
         cls.work_dir = tempfile.mkdtemp(prefix="wasmos-second-uart-")
         esp = _esp_binding_every_uart(cfg.esp_dir, cls.work_dir)
-        cls.session = QemuSession(replace(cfg, esp_dir=esp), timeout_s=240)
+        # The second 16550 this test is about. Nothing else attaches one: the
+        # kernel log goes to the virtio console, so COM2 has no other user.
+        cls.session = QemuSession(
+            replace(
+                cfg,
+                esp_dir=esp,
+                klog_port="virtio",
+                extra_args=(*cfg.extra_args, "-serial", "null"),
+            ),
+            timeout_s=240,
+        )
         cls.session.start()
         cls.session.require_prompt(timeout_s=200)
 

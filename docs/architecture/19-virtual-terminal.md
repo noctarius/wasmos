@@ -407,13 +407,25 @@ the IRQ→VT path and make the CLI event-driven.
   before the ring is registered (early boot), text a full ring cannot take
   (reordered ahead of what the VT has yet to drain, never lost), and the
   unlocked panic/NMI path below.
-- **Kernel-log port (phase 5, Shipped):** with `log.serial=com2` on the kernel
-  command line (`\kernel.cmdline`, `boot.h`), the kernel also transmits every
-  kernel-log write on COM2 itself, from a replay of the kmsg ring
-  onward. COM2 bypasses the vt entirely, so it is the complete, in-order kernel
-  log whatever the vt is doing and whichever slot COM1 is bound to; it never
-  carries a process's slot output. A COM2 with no UART behind it is detected
-  (scratch-register probe) and ignored.
+- **Kernel-log port (phase 5, Shipped):** the kernel log alone, complete and in
+  order whatever the vt is doing and whichever slot COM1 is bound to, on a port
+  of its own; it never carries a process's slot output. Two ports provide it:
+  - **virtio console (default):** the `virtio-serial` driver
+    (doc 15) subscribes to the kmsg ring, replays it from the oldest retained
+    byte, and writes every new record to port 0 of a virtio console, which the
+    QEMU configuration connects to a host file. It needs no kernel support and
+    works the same on every architecture, but carries nothing the ring had
+    already overwritten when the driver started (reported by a
+    `[virtio-serial] ... not retained` line) and nothing after the driver is
+    gone: no panic, no end of a shutdown.
+  - **COM2 (x86_64):** with `log.serial=com2` on the kernel command line
+    (`\kernel.cmdline`, `boot.h`), the kernel transmits every kernel-log write
+    on the second UART itself, from a replay of the early log onward, through
+    a panic and with no driver involved; the port for a boot that never reaches
+    user space. A COM2 with no UART behind it is detected (scratch-register
+    probe) and ignored.
+  The shipped `\kernel.cmdline` selects neither, so the virtio console is the
+  port; the test harness captures whichever `QemuConfig.klog_port` names.
 - **Line merge (phase 5, Shipped):** a slot's writers produce partial lines — a
   prompt waits for input, the shell echoes one keystroke at a time — while the
   kernel log produces whole lines at arbitrary moments. `vt_outmux`

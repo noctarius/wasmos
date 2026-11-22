@@ -269,9 +269,16 @@ linked feature documents for rationale and rollout plans.
 - virtio-net and virtio-blk use the same transport. virtio-blk (Zig) reaches
   the C transport through `virtio_modern_shim.c`, as it reaches the virtqueue
   core through `vring_shim.c`, so the two languages share one implementation.
-  Under VERSION_1 the virtio-net header is 12 bytes. virtio-serial is still
-  the legacy discovery skeleton: no QEMU configuration attaches its device, and
-  it has no data plane to port.
+  Under VERSION_1 the virtio-net header is 12 bytes.
+- The kernel-log port is a virtio console by default: virtio-serial follows
+  the kmsg ring (the logger's `logger_stage.c`, tagged `[virtio-serial]`),
+  replays it from boot and writes it to port 0, which QEMU connects to a file
+  (`syslog.log` for the run targets, a per-session file in the harness). The
+  shipped `kernel.cmdline` is empty; `log.serial=com2` remains the x86_64
+  alternative, written by the kernel itself, and is what the kernel self-test
+  runners and the tests reading shutdown or panic output select
+  (`QemuConfig.klog_port = "com2"`). The virtio port carries nothing after its
+  driver is gone. The old register-access protocol is unserved.
 - Guest-visible capability behaviour must not depend on the engine. Where a
   difference is unavoidable, the scenario table carries an explicit `divergent`
   flag that asserts the two still differ, so converging them forces the row to

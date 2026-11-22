@@ -155,7 +155,23 @@ static void test_a_position_the_ring_refuses_starts_over(void) {
     CHECK(st.out[0] == 'a' && st.seq == 50, "from the oldest byte");
 }
 
+/* A second follower of the ring (the virtio-serial kernel-log port) stages with
+ * the same rules but names itself in its markers. */
+static void test_a_tagged_stage_names_its_owner(void) {
+    logger_stage_t st;
+    ring_t ring = {500, 600};
+    memset(&st, 0, sizeof(st));
+    st.tag = "[virtio-serial]";
+    CHECK(logger_stage_next(&st, ring_read, &ring) > 100, "the chunk and a marker are staged");
+    CHECK(staged_contains(&st,
+                          "[virtio-serial] 500 bytes of earlier kernel log were not "
+                          "retained\n"),
+          "the marker carries the stage's tag");
+    CHECK(!staged_contains(&st, "[logger]"), "and not the logger's");
+}
+
 int main(void) {
+    test_a_tagged_stage_names_its_owner();
     test_a_fresh_boot_is_staged_whole();
     test_bytes_lost_before_reading_are_reported();
     test_a_truncation_notice_survives_a_loss_during_the_reopen();

@@ -9,8 +9,33 @@ native = false
 
 [resources]
 stack_pages = 16
-heap_pages = 16
+# The transmit ring and buffer pool are region_alloc'd above live data, which
+# needs the 512-page (2 MiB) reserve the other DMA drivers carry to clear
+# map_auto's 2 MiB low guard. Paired with initial/max memory of 4 MiB below.
+heap_pages = 512
 
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
+[deps]
+needs = ["pci"]
+
+# The virtio-modern registers are device memory (BAR 4, region 0 below); the
+# driver touches no I/O port.
 [[capabilities]]
-name = "io.port"
+name = "mmio.map"
 flags = 0
+
+# flags = DMA budget in pages: the transmit ring (2) and 16 one-page buffers,
+# with headroom.
+[[capabilities]]
+name = "dma.buffer"
+flags = 20
+
+# Region 0: BAR 4, where the device places its virtio-modern structures (common
+# config, notify, ISR, device config). device-manager resolves it to a
+# memory-mapped window of the BAR's measured size.
+[[regions]]
+kind = "bar"
+index = 4

@@ -252,24 +252,52 @@ static void svc_column(char* line, uint32_t size, uint32_t* at, const char* s, u
     line[*at] = '\0';
 }
 
+/* Widens `*width` to hold `s` and the two-space gap after it. */
+static void svc_fit(uint32_t* width, const char* s) {
+    uint32_t n = (uint32_t)strlen(s) + 2u;
+    if (n > *width) {
+        *width = n;
+    }
+}
+
+/* Each column is as wide as its widest value, heading included, plus a
+ * two-space gap, so every value sits under its heading whatever the unit
+ * names are. */
 static void svc_print_list(void) {
     char line[128];
     char num[16];
+    uint32_t col[4] = {0u, 0u, 0u, 0u};
     uint32_t at = 0;
-    svc_column(line, sizeof(line), &at, "UNIT", 20);
-    svc_column(line, sizeof(line), &at, "STATE", 31);
-    svc_column(line, sizeof(line), &at, "PID", 37);
-    svc_column(line, sizeof(line), &at, "RESTARTS", 47);
+    svc_fit(&col[0], "UNIT");
+    svc_fit(&col[1], "STATE");
+    svc_fit(&col[2], "PID");
+    svc_fit(&col[3], "RESTARTS");
+    for (uint32_t i = 0; i < g_list_desc.count; ++i) {
+        const wasmos_supervisor_unit_record_t* r = &g_records[i];
+        svc_fit(&col[0], r->name);
+        svc_fit(&col[1], svc_state_name(r->state));
+        (void)snprintf(num, sizeof(num), "%u", r->pid);
+        svc_fit(&col[2], num);
+        (void)snprintf(num, sizeof(num), "%u", r->restart_count);
+        svc_fit(&col[3], num);
+    }
+    for (uint32_t c = 1; c < 4u; ++c) {
+        col[c] += col[c - 1u]; /* widths to the column each one ends at */
+    }
+    svc_column(line, sizeof(line), &at, "UNIT", col[0]);
+    svc_column(line, sizeof(line), &at, "STATE", col[1]);
+    svc_column(line, sizeof(line), &at, "PID", col[2]);
+    svc_column(line, sizeof(line), &at, "RESTARTS", col[3]);
     printf("%sLAST\n", line);
     for (uint32_t i = 0; i < g_list_desc.count; ++i) {
         const wasmos_supervisor_unit_record_t* r = &g_records[i];
         at = 0;
-        svc_column(line, sizeof(line), &at, r->name, 20);
-        svc_column(line, sizeof(line), &at, svc_state_name(r->state), 31);
+        svc_column(line, sizeof(line), &at, r->name, col[0]);
+        svc_column(line, sizeof(line), &at, svc_state_name(r->state), col[1]);
         (void)snprintf(num, sizeof(num), "%u", r->pid);
-        svc_column(line, sizeof(line), &at, num, 37);
+        svc_column(line, sizeof(line), &at, num, col[2]);
         (void)snprintf(num, sizeof(num), "%u", r->restart_count);
-        svc_column(line, sizeof(line), &at, num, 47);
+        svc_column(line, sizeof(line), &at, num, col[3]);
         if (r->last_reason == 0) {
             printf("%s-\n", line);
         } else {

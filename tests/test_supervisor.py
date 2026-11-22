@@ -177,6 +177,27 @@ class SupervisorTests(unittest.TestCase):
         )
         self.assertEqual(rows["probe-loop"][3], "trapped", rows["probe-loop"])
 
+    def test_5a_svc_list_columns_line_up(self):
+        # Regression: 2026-11-22-svc-list-fixed-columns -- the columns sat at
+        # fixed offsets sized for a 19-character unit name, so a longer one
+        # (virtio_rng@pci:00:04.0, 22) pushed its row's STATE, PID, RESTARTS
+        # and LAST out from under their headings.
+        out = _svc(self, self.session, "list")
+        table = out[out.index("UNIT") :].splitlines()
+        header = table[0]
+        starts = [header.index(h) for h in ("STATE", "PID", "RESTARTS", "LAST")]
+        rows = [line for line in table[1:] if len(line.split()) >= 5]
+        self.assertTrue(
+            any(len(line.split()[0]) > 19 for line in rows),
+            f"no unit name long enough to test the layout:\n{out}",
+        )
+        for line in rows:
+            for start in starts:
+                self.assertTrue(
+                    start < len(line) and line[start - 1] == " " and line[start] != " ",
+                    f"a column is not under its heading at {start}:\n{header}\n{line}",
+                )
+
     def test_5b_the_boot_chain_is_supervised(self):
         # fs-manager, fs-tmpfs, fs-init and device-manager are the
         # supervisor's own units, spawned from their boot modules before

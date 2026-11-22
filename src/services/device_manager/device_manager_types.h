@@ -449,7 +449,8 @@ typedef struct {
      * mount_req_pending: the rule is retired when the supervisor answers. */
     uint8_t submit_req_pending;
     int32_t submit_req_bid;      /* owner-push buffer lent READ to the supervisor */
-    int32_t sv_endpoint;         /* receives the submit reply and the name watch's events */
+    int32_t sv_endpoint;         /* receives the submit reply and the name watch's events;
+                                  * -1 when the supervisor is not followed */
     int32_t supervisor_endpoint; /* bound by the "supervisor" name watch; -1 until then */
     /* One PROC_IPC_SPAWN_WATCHED in flight for the armed PCI or ACPI rule, held
      * like submit_req_pending: the rule is retired when its child latches READY

@@ -3030,8 +3030,8 @@ static int dm_submit_rule(const char* instance, const char* restart, const char*
 /* Follows the "supervisor" name on a loop of its own. The loop's endpoint joins
  * the IDLE select set and the loop drops the select-set its init made, so the
  * IDLE phase pumps it without parking on it (wasmos_sys_event_loop_poll). A
- * failure here leaves supervisor_endpoint at -1, and every rule then spawns its
- * driver directly. */
+ * failure here leaves sv_endpoint and supervisor_endpoint at -1: nothing
+ * follows the supervisor, and every rule then spawns its driver directly. */
 static void dm_supervisor_init(void) {
     g_dm.sv_endpoint = wasmos_ipc_create_endpoint();
     if (g_dm.sv_endpoint < 0) {
@@ -3051,6 +3051,7 @@ static void dm_supervisor_init(void) {
         wasmos_sys_svc_watch_start(
             &g_dm_sv_watches, &g_dm_sv_watch, "supervisor", 0, dm_on_supervisor_bound, 0, 0) != 0) {
         console_write("[device-manager] supervisor watch failed; drivers spawn directly\n");
+        g_dm.sv_endpoint = -1;
     }
 }
 
@@ -3225,6 +3226,19 @@ static hw_spawn_target_t next_spawn_target(void) {
          * async rules fetch before transitioning back to HW_PHASE_SPAWN. */
         if (g_dm.boot_mount_ready && !g_dm.rules_boot_loaded) {
             return HW_SPAWN_NONE;
+        }
+        /* A rule naming a restart policy belongs to the supervisor. While the
+         * "supervisor" watch is live but has not bound, the rule waits in the
+         * idle phase, which pumps the watch; spawning it directly would leave
+         * its driver unrestarted for good. The bootstrap rules fire before the
+         * first idle, so without this wait the earliest supervised driver --
+         * the storage controller -- always ran unsupervised. The supervisor is
+         * critical (its end halts the system), so a live watch binds. */
+        if (g_dm.sv_endpoint >= 0 && g_dm.supervisor_endpoint < 0) {
+            char instance[24];
+            if (dm_armed_rule_restart(instance, sizeof(instance))) {
+                return HW_SPAWN_NONE;
+            }
         }
         return HW_SPAWN_RULE_PATH;
     }
@@ -3745,9 +3759,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                             g_dm.phase = HW_PHASE_SPAWN;
                             continue;
                         }
-                        /* TODO: a driver whose rule names a restart policy is
-                         * spawned unsupervised when the supervisor is not bound
-                         * yet, and is then never restarted. */
+                        /* Reached only when the supervisor is not followed
+                         * (next_spawn_target holds such a rule until the watch
+                         * binds) or the submission could not be sent: the
+                         * driver then runs, unrestarted. */
                         console_write("[device-manager] supervisor not reachable; spawning ");
                         console_write(g_dm.rule_spawn_path);
                         console_write(" directly\n");

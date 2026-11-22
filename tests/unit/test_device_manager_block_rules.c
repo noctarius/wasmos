@@ -1191,8 +1191,61 @@ static void an_oversized_bootstrap_rule_file_is_reported(void) {
     check(out_has("exceeds"), "a bootstrap rule file past the cap is reported as cut");
 }
 
+/* Regression: 2026-11-22-devmgr-supervised-rule-spawned-before-the-supervisor
+ * -- a rule naming a restart policy was handed to the supervisor only if the
+ * "supervisor" name watch had already bound it; otherwise the driver was
+ * spawned directly and never restarted. The watch is pumped from the idle
+ * phase, and the bootstrap rules fire before device-manager first idles, so
+ * the storage controller's rule (ENV{RESTART} on ata, which carries /boot)
+ * always lost the race and ata ran unsupervised.
+ *
+ * While device-manager follows the supervisor, such a rule waits for the
+ * binding; a rule without a policy does not. */
+static void a_supervised_rule_waits_for_the_supervisor(void) {
+    harness_reset();
+    g_dm.sv_endpoint = 5;          /* the name watch is live */
+    g_dm.supervisor_endpoint = -1; /* and has not bound yet */
+
+    pci_device_record_t* rec = &g_dm.registry[g_dm.registry_count++];
+    memset(rec, 0, sizeof(*rec));
+    rec->class_code = 0x01u;
+    rec->subclass = 0x01u;
+    rec->device = 1u;
+    rec->function = 1u;
+
+    pci_match_rule_t* ata = &g_dm.pci_match_rules[g_dm.pci_match_rule_count++];
+    memset(ata, 0, sizeof(*ata));
+    ata->active = 1;
+    ata->bus = ata->slot = ata->function = ata->prog_if = MATCH_ANY_U8;
+    ata->vendor_id = ata->device_id = MATCH_ANY_U16;
+    ata->class_code = 0x01u;
+    ata->subclass = 0x01u;
+    (void)snprintf(ata->spawn_path, sizeof(ata->spawn_path), "system/drivers/ata.wap");
+    (void)snprintf(ata->restart, sizeof(ata->restart), "on-failure");
+
+    queue_block_fs_rule_spawns();
+    check(g_dm.rule_spawn_pending && g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH,
+          "the supervised rule is armed");
+    check(next_spawn_target() == HW_SPAWN_NONE,
+          "it waits while the supervisor watch has not bound");
+
+    g_dm.supervisor_endpoint = 9;
+    check(next_spawn_target() == HW_SPAWN_RULE_PATH, "and is spawned once it binds");
+
+    g_dm.supervisor_endpoint = -1;
+    ata->restart[0] = '\0';
+    check(next_spawn_target() == HW_SPAWN_RULE_PATH,
+          "a rule without a restart policy never waits for the supervisor");
+
+    ata->restart[0] = 'o';
+    g_dm.sv_endpoint = -1; /* not following the supervisor at all */
+    check(next_spawn_target() == HW_SPAWN_RULE_PATH,
+          "without a supervisor watch a supervised rule is spawned directly");
+}
+
 int main(void) {
     a_pci_rule_waits_for_its_drivers_metadata();
+    a_supervised_rule_waits_for_the_supervisor();
     an_oversized_bootstrap_rule_file_is_reported();
     a_driver_that_never_comes_up_does_not_starve_the_queue();
     publish_after_rules_reports_the_match();

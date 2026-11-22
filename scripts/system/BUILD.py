@@ -346,7 +346,8 @@ def run_targets(b, esp_stamp, images):
         "-netdev",
         "user,id=net0",
         "-device",
-        "virtio-net-pci,netdev=net0",
+        "virtio-net-pci,netdev=net0"
+        + ("" if machine.qemu_nic_option_rom else ",romfile="),
         "-device",
         "virtio-rng-pci",
         "-drive",

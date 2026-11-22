@@ -576,11 +576,12 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.
         # The netdev backend defaults to user-mode SLIRP but can be overridden
         # (e.g. vmnet-bridged) via WASMOS_QEMU_NETDEV; it must keep id=net0.
+        rom = "" if arch.qemu_nic_option_rom else ",romfile="
         cmd += [
             "-netdev",
             cfg.netdev,
             "-device",
-            f"{cfg.nic_model},netdev=net0,id=nic0",
+            f"{cfg.nic_model},netdev=net0,id=nic0{rom}",
         ]
     cmd += ["-device", cfg.rng_device]
     cmd += list(cfg.extra_args)

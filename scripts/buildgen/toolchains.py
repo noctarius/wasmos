@@ -101,6 +101,10 @@ class Arch:
     qemu_machine: tuple
     # Whether the machine has an IDE controller (the ata driver's WFS unit).
     qemu_ide: bool
+    # Whether a virtio-net device keeps QEMU's option ROM. The ROM QEMU ships
+    # (efi-virtio.rom) is an x86 iPXE image: aarch64 firmware cannot run it,
+    # and a distribution QEMU without it refuses to start the device.
+    qemu_nic_option_rom: bool
 
 
 ARCHES = {
@@ -122,6 +126,7 @@ ARCHES = {
         firmware_vars_tool="ovmf-vars",
         qemu_machine=(),
         qemu_ide=True,
+        qemu_nic_option_rom=True,
     ),
     "aarch64": Arch(
         name="aarch64",
@@ -146,6 +151,7 @@ ARCHES = {
         firmware_vars_tool="aavmf-vars",
         qemu_machine=("-M", "virt"),
         qemu_ide=False,
+        qemu_nic_option_rom=False,
     ),
 }
 

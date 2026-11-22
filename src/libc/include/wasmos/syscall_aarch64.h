@@ -10,9 +10,16 @@
  * TODO: the kernel has no EL0 SVC entry yet (arm64 port, Phase 2); until then
  * these stubs only compile. */
 #ifndef WASMOS_LIBC_WASMOS_SYSCALL_AARCH64_H
+#ifndef WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H
+/* Included directly: syscall_native.h defines the records these stubs return
+ * and includes this header again at the point they are needed. */
+#include "wasmos/syscall_native.h"
+#else
 #define WASMOS_LIBC_WASMOS_SYSCALL_AARCH64_H
 
 #include <stdint.h>
+
+#if defined(__aarch64__) && !defined(__wasm__)
 
 static inline int64_t wasmos_syscall0(uint64_t id) {
     register uint64_t x8 __asm__("x8") = id;
@@ -55,4 +62,6 @@ static inline __attribute__((always_inline)) uintptr_t wasmos_native_read_sp(voi
     return sp;
 }
 
+#endif /* __aarch64__ && !__wasm__ */
+#endif /* WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H */
 #endif /* WASMOS_LIBC_WASMOS_SYSCALL_AARCH64_H */

@@ -2,9 +2,16 @@
  * (int 0x80). Included only through wasmos/syscall_native.h, which defines the
  * syscall numbers, the result records and the wrappers built on these. */
 #ifndef WASMOS_LIBC_WASMOS_SYSCALL_X86_64_H
+#ifndef WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H
+/* Included directly: syscall_native.h defines the records these stubs return
+ * and includes this header again at the point they are needed. */
+#include "wasmos/syscall_native.h"
+#else
 #define WASMOS_LIBC_WASMOS_SYSCALL_X86_64_H
 
 #include <stdint.h>
+
+#if defined(__x86_64__) && !defined(__wasm__)
 
 /* int-0x80 entry stubs. Arguments go in RDI, RSI, RDX, RCX, R8, R9 (RCX is
  * usable because this is a software interrupt, not SYSCALL) and the result comes
@@ -50,4 +57,6 @@ static inline __attribute__((always_inline)) uintptr_t wasmos_native_read_sp(voi
     return sp;
 }
 
+#endif /* __x86_64__ && !__wasm__ */
+#endif /* WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H */
 #endif /* WASMOS_LIBC_WASMOS_SYSCALL_X86_64_H */

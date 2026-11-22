@@ -25,6 +25,7 @@
 #include "mmio.h"
 #include "policy.h"
 #include "capability.h"
+#include "io_region.h"
 #include "system_control.h"
 #include "thread.h"
 #include "wasm_driver.h"
@@ -1780,83 +1781,86 @@ m3ApiRawFunction(wasmos_env_unset) {
     m3ApiReturn(kenv_unset(local_name));
 }
 
-/* Region-addressed I/O. The driver supplies (region, offset), never an absolute
- * port, so it cannot express an access outside the window its spawn profile
- * granted -- the kernel owns the base. `region` indexes those windows in
- * declaration order. Failures propagate the specific WASMOS_ERR_IO_* reason
- * rather than collapsing to one value: "no such region" and "offset past the
- * end" are different bugs. */
-static int io_region_port(uint32_t region, uint32_t offset, uint32_t width, uint16_t* out_port) {
-    uint32_t context_id = 0;
-    if (current_process_context(&context_id) != 0) {
-        return WASMOS_ERR_IO_NOT_AUTHORIZED;
-    }
-    return capability_io_region_port(context_id, region, offset, width, out_port);
+/* Region-addressed device register access. The driver supplies (region,
+ * offset), never an absolute port or address, so it cannot express an access
+ * outside the window its spawn profile granted -- the kernel owns the base.
+ * `region` indexes those windows in declaration order; io_region_read/write
+ * (io_region.h) resolve it and perform the port or memory-mapped access.
+ * Failures propagate the specific WASMOS_ERR_IO_* reason rather than
+ * collapsing to one value: "no such region" and "offset past the end" are
+ * different bugs. */
+static int io_region_context(uint32_t* out_context_id) {
+    return current_process_context(out_context_id) != 0 ? WASMOS_ERR_IO_NOT_AUTHORIZED : 0;
 }
 
-/* Reads return the datum through linear memory, not as the result: a 32-bit port
- * read can legitimately be 0xFFFFFFFF and must stay distinguishable from a
- * failure code.  `out` is a wasm32 linear-memory offset the kernel writes through the
- * interpreter's own pointer, and a range outside linear memory TRAPS the module via
- * m3ApiCheckMem.  The return is 0 on success, WASMOS_ERR_IO_BAD_REGION for a negative
- * region/offset, otherwise the specific WASMOS_ERR_IO_* code io_region_port produced; `out` is
- * left untouched on every failure. */
-#define WASMOS_IO_REGION_READ(width, width_expr)                                                   \
+/* Reads return the datum through linear memory, not as the result: a 32-bit
+ * register read can legitimately be 0xFFFFFFFF and must stay distinguishable
+ * from a failure code.  `out` is a wasm32 linear-memory offset the kernel writes
+ * through the interpreter's own pointer, and a range outside linear memory TRAPS
+ * the module via m3ApiCheckMem.  The return is 0 on success,
+ * WASMOS_ERR_IO_BAD_REGION for a negative region/offset, otherwise the specific
+ * WASMOS_ERR_IO_* code io_region_read produced; `out` is left untouched on every
+ * failure. */
+#define WASMOS_IO_REGION_READ(width)                                                               \
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
         m3ApiGetArgMem(uint32_t*, out) m3ApiCheckMem(out, sizeof(uint32_t));                       \
-    uint16_t port = 0;                                                                             \
+    uint32_t context_id = 0;                                                                       \
+    uint32_t value = 0;                                                                            \
     int rc = 0;                                                                                    \
     if (region < 0 || offset < 0) {                                                                \
         m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
     }                                                                                              \
-    rc = io_region_port((uint32_t)region, (uint32_t)offset, (width), &port);                       \
+    rc = io_region_context(&context_id);                                                           \
+    if (rc == 0) {                                                                                 \
+        rc = io_region_read(context_id, (uint32_t)region, (uint32_t)offset, (width), &value);      \
+    }                                                                                              \
     if (rc != 0) {                                                                                 \
         m3ApiReturn(rc);                                                                           \
     }                                                                                              \
-    *out = (width_expr);                                                                           \
+    *out = value;                                                                                  \
     m3ApiReturn(0)
 
 m3ApiRawFunction(wasmos_io_region_in8) {
-    WASMOS_IO_REGION_READ(1u, (uint32_t)inb(port));
+    WASMOS_IO_REGION_READ(1u);
 }
 
 m3ApiRawFunction(wasmos_io_region_in16) {
-    WASMOS_IO_REGION_READ(2u, (uint32_t)inw(port));
+    WASMOS_IO_REGION_READ(2u);
 }
 
 m3ApiRawFunction(wasmos_io_region_in32) {
-    WASMOS_IO_REGION_READ(4u, (uint32_t)inl(port));
+    WASMOS_IO_REGION_READ(4u);
 }
 
 /* Writes take the datum as an argument, so they need no out-parameter; the return is purely
  * the outcome: 0 on success, WASMOS_ERR_IO_BAD_REGION for a negative region/offset, otherwise
- * the specific WASMOS_ERR_IO_* code io_region_port produced.  A value wider than the access
+ * the specific WASMOS_ERR_IO_* code io_region_write produced.  A value wider than the access
  * is masked, not refused. */
-#define WASMOS_IO_REGION_WRITE(width, write_stmt)                                                  \
+#define WASMOS_IO_REGION_WRITE(width)                                                              \
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
         m3ApiGetArg(int32_t, value);                                                               \
-    uint16_t port = 0;                                                                             \
+    uint32_t context_id = 0;                                                                       \
     int rc = 0;                                                                                    \
     if (region < 0 || offset < 0) {                                                                \
         m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
     }                                                                                              \
-    rc = io_region_port((uint32_t)region, (uint32_t)offset, (width), &port);                       \
-    if (rc != 0) {                                                                                 \
-        m3ApiReturn(rc);                                                                           \
+    rc = io_region_context(&context_id);                                                           \
+    if (rc == 0) {                                                                                 \
+        rc = io_region_write(                                                                      \
+            context_id, (uint32_t)region, (uint32_t)offset, (width), (uint32_t)value);             \
     }                                                                                              \
-    write_stmt;                                                                                    \
-    m3ApiReturn(0)
+    m3ApiReturn(rc)
 
 m3ApiRawFunction(wasmos_io_region_out8) {
-    WASMOS_IO_REGION_WRITE(1u, outb(port, (uint8_t)((uint32_t)value & 0xFFu)));
+    WASMOS_IO_REGION_WRITE(1u);
 }
 
 m3ApiRawFunction(wasmos_io_region_out16) {
-    WASMOS_IO_REGION_WRITE(2u, outw(port, (uint16_t)((uint32_t)value & 0xFFFFu)));
+    WASMOS_IO_REGION_WRITE(2u);
 }
 
 m3ApiRawFunction(wasmos_io_region_out32) {
-    WASMOS_IO_REGION_WRITE(4u, outl(port, (uint32_t)value));
+    WASMOS_IO_REGION_WRITE(4u);
 }
 
 /* The whole port-read family reports its value through `out` and its outcome

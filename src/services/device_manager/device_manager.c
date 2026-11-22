@@ -147,8 +147,6 @@ static int ensure_fs_endpoint(void);
 static int query_module_meta_by_path(const char* path, uint32_t source, int32_t* out_index);
 static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_device_record_t* rec);
 static void load_pci_rule_metadata(void);
-static void resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
-                                     const pci_device_record_t* rec, spawn_caps_t* caps);
 static void kick_boot_rules_read_async(void);
 static void poll_boot_rules_async(void);
 static void queue_always_spawn_rules(void);
@@ -757,18 +755,27 @@ static void log_spawn_grant(int32_t index, const spawn_caps_t* caps) {
                  (int)index,
                  (unsigned)caps->irq_mask,
                  (unsigned)caps->cap_flags,
-                 (unsigned)(caps->io_range_count ? caps->io_range_count : 1u));
-    if (caps->io_range_count == 0u) {
+                 (unsigned)(caps->region_count ? caps->region_count : 1u));
+    if (caps->region_count == 0u) {
         (void)printf("[device-manager]   io[0] %04X-%04X\n",
                      (unsigned)caps->io_port_min,
                      (unsigned)caps->io_port_max);
         return;
     }
-    for (uint32_t i = 0; i < caps->io_range_count; ++i) {
-        (void)printf("[device-manager]   io[%u] %04X-%04X\n",
-                     (unsigned)i,
-                     (unsigned)caps->io_ranges[i].first,
-                     (unsigned)caps->io_ranges[i].last);
+    for (uint32_t i = 0; i < caps->region_count; ++i) {
+        const wasmos_region_grant_t* g = &caps->regions[i];
+        if (g->kind == WASMOS_REGION_GRANT_IO) {
+            (void)printf("[device-manager]   io[%u] %04X-%04X\n",
+                         (unsigned)i,
+                         (unsigned)g->base,
+                         (unsigned)(g->base + g->length - 1u));
+        } else {
+            (void)printf("[device-manager]   mmio[%u] %08X%08X+%X\n",
+                         (unsigned)i,
+                         (unsigned)(g->base >> 32),
+                         (unsigned)(g->base & 0xFFFFFFFFu),
+                         (unsigned)g->length);
+        }
     }
 }
 
@@ -805,11 +812,11 @@ static int32_t dm_pm_buffer(void) {
 /* Descriptor payload for a spawn carrying more than one window. A byte buffer
  * rather than a struct, because the trailing arrays are sized by their USED
  * counts: process-manager locates the DMA windows at
- * header + io_range_count * sizeof(range), so a fixed-size member array would
+ * header + region_count * sizeof(grant), so a fixed-size member array would
  * put them at the wrong offset. Static because PM reads it out of this process's
  * linear memory by pointer, after this function returns. */
 static uint8_t g_dm_caps_payload[sizeof(wasmos_spawn_caps_v2_t) +
-                                 (WASMOS_IO_RANGE_LIMIT * sizeof(wasmos_io_range_t)) +
+                                 (WASMOS_REGION_LIMIT * sizeof(wasmos_region_grant_t)) +
                                  sizeof(wasmos_dma_window_t)];
 
 /* Spawn with the windows the driver declared. The packed-arg opcodes are out of
@@ -841,7 +848,7 @@ static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
         return -1;
     }
     log_spawn_grant(index, caps);
-    if (caps->io_range_count > 0u) {
+    if (caps->region_count > 0u) {
         return hw_spawn_driver_index_caps_v2(index, caps);
     }
     io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
@@ -1289,7 +1296,18 @@ static void queue_pci_match_rule_spawns(void) {
                 if (rec->irq_hint < 16u) {
                     g_dm.active_rule_spawn_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
                 }
-                resolve_declared_regions(&rule->meta, rec, &g_dm.active_rule_spawn_caps);
+                if (dm_resolve_declared_regions(&rule->meta, rec, &g_dm.active_rule_spawn_caps) !=
+                    0) {
+                    /* A window the device cannot supply would leave the driver
+                     * addressing different regions than it declared; it is
+                     * not spawned for this device at all. */
+                    console_write("[device-manager] declared regions unresolvable; not spawning ");
+                    console_write(rule->spawn_path);
+                    console_write("\n");
+                    rule->given_up_device_mask |= (uint64_t)1u << di;
+                    g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
+                    continue;
+                }
             } else if (rec->io_port_base != 0u) {
                 g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
                 g_dm.active_rule_spawn_caps.io_port_min = rec->io_port_base;
@@ -2167,47 +2185,6 @@ static void registry_add_volume_from_desc(int32_t buffer_id, int32_t offset, int
 
 static void reset_selected_storage(void) {
     g_dm.selected_storage_has_record = 0;
-}
-
-/* Turn a driver's declared windows into the grant it actually gets. A static
- * range is taken verbatim; a BAR region is resolved against the device this
- * driver matched, using the base and length pci-bus measured -- which is the
- * whole point of the exercise, since a firmware-assigned window cannot be
- * written down in a manifest.
- *
- * Declaration order is preserved because it IS the region index the driver
- * addresses at runtime. A BAR the device does not implement is skipped rather
- * than granted as an empty window, so a driver asking for something absent gets
- * a refusal at first use instead of silently reading a neighbouring device. */
-static void resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
-                                     const pci_device_record_t* rec, spawn_caps_t* caps) {
-    if (!meta || !rec || !caps || meta->region_count == 0) {
-        return;
-    }
-    caps->io_range_count = 0;
-    for (uint32_t i = 0; i < meta->region_count && caps->io_range_count < WASMOS_IO_RANGE_LIMIT;
-         ++i) {
-        uint16_t first = 0;
-        uint16_t last = 0;
-        if (meta->regions[i].kind == WASMOS_APP_REGION_IO) {
-            first = meta->regions[i].first;
-            last = meta->regions[i].last;
-        } else {
-            uint8_t bi = meta->regions[i].bar_index;
-            if (bi >= WASMOS_PCI_BAR_COUNT || rec->bars[bi].kind != WASMOS_PCI_BAR_IO ||
-                rec->bars[bi].base == 0u || rec->bars[bi].size == 0u) {
-                continue;
-            }
-            first = (uint16_t)(rec->bars[bi].base & 0xFFFFu);
-            last = (uint16_t)((rec->bars[bi].base + rec->bars[bi].size - 1u) & 0xFFFFu);
-        }
-        if (first > last) {
-            continue;
-        }
-        caps->io_ranges[caps->io_range_count].first = first;
-        caps->io_ranges[caps->io_range_count].last = last;
-        caps->io_range_count++;
-    }
 }
 
 /* Query PROC_IPC_MODULE_META_DESC for one boot module.  The answer lands in a
@@ -3453,7 +3430,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                      * index: PROC_IPC_SPAWN_PATH_CAPS_SYNC packs one
                      * io_port_min/max pair and cannot describe more than a
                      * single window, while the index form escalates to the
-                     * descriptor variant when io_range_count > 0. The path form
+                     * descriptor variant when region_count > 0. The path form
                      * carries the startup args, so it stays in use for every
                      * driver that needs those instead.
                      * TODO: a descriptor-carrying path spawn would remove this
@@ -3483,7 +3460,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         console_write(" directly\n");
                     }
                     int32_t spawn_module_index = -1;
-                    if (g_dm.active_rule_spawn_caps.io_range_count > 0u) {
+                    if (g_dm.active_rule_spawn_caps.region_count > 0u) {
                         spawn_module_index = rule_module_index(g_dm.rule_spawn_path);
                     }
                     if (spawn_module_index >= 0) {

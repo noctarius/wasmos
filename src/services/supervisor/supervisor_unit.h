@@ -88,7 +88,7 @@ typedef struct {
     char path[SV_PATH_MAX];
     char args[SV_ARGS_MAX];
     uint32_t caps_len;                 /* 0 = no hardware access */
-    uint8_t caps[SUPERVISOR_CAPS_MAX]; /* wasmos_spawn_caps_v2_t + I/O ranges */
+    uint8_t caps[SUPERVISOR_CAPS_MAX]; /* wasmos_spawn_caps_v2_t + region grants */
     uint32_t pid;                      /* the running instance; 0 when none */
     uint32_t deadline;                 /* meaning depends on state (see sv_state_t) */
     uint32_t backoff_ms;

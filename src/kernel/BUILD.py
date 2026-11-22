@@ -65,6 +65,8 @@ CORE = [
     "arch/x86_64/irq_x86_64.c",
     "msi_vectors.c",
     "mmio.c",
+    "device_window.c",
+    "io_region.c",
     "arch/x86_64/msi_x86_64.c",
     "arch/x86_64/lapic.c",
     "arch/x86_64/ioapic.c",

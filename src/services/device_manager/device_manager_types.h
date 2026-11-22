@@ -87,9 +87,10 @@ typedef struct {
     /* Windows resolved from the driver's declared regions, in declaration order
      * (which is the region index it addresses at runtime). Non-zero count
      * supersedes io_port_min/max and routes the spawn through the descriptor
-     * form, the only one that can describe more than a single window. */
-    uint32_t io_range_count;
-    wasmos_io_range_t io_ranges[WASMOS_IO_RANGE_LIMIT];
+     * form, the only one that can describe more than a single window or a
+     * memory-mapped one. */
+    uint32_t region_count;
+    wasmos_region_grant_t regions[WASMOS_REGION_LIMIT];
     /* The PCI function the device sits at, for a PCI driver. Only the
      * descriptor form carries it (DEVMGR_CAP_PCI_FUNCTION, dm_caps_v2_encode):
      * the kernel quiesces that function when the driver ends. */

@@ -241,6 +241,16 @@ linked feature documents for rationale and rollout plans.
   outright. `test_hostcall_dma` runs 28 scenarios through both shims and asserts
   each value AND the two against each other, so a future check added to one side
   only fails the parity assertion.
+- A driver's register windows are kind-tagged (`wasmos_region_grant_t`): an
+  I/O-port window or a memory-mapped one, both addressed as `(region, offset)`
+  through the same `io_region_in*/out*` host calls, which resolve and perform
+  the access once in `io_region.c` for both runtimes. A memory-mapped window
+  is mapped uncached into the kernel MMIO slot at spawn (`device_window_map`);
+  the driver holds no mapping. Device-manager resolves a `"bar"` region to the
+  BAR's own kind, and a region it cannot supply refuses that device's spawn
+  instead of shifting every later region down one index. No in-tree driver
+  declares a memory BAR yet; the virtio drivers move to virtio-modern (memory
+  BARs) next.
 - Guest-visible capability behaviour must not depend on the engine. Where a
   difference is unavoidable, the scenario table carries an explicit `divergent`
   flag that asserts the two still differ, so converging them forces the row to

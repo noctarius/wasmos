@@ -31,6 +31,12 @@
  * KERNEL_MMIO_PDPT_INDEX slot.  Supervisor-only; the in-page offset of the GOP base is
  * re-added on top of this VA. */
 #define KERNEL_MMIO_FB_VA 0xFFFFFFFF40000000ULL
+/* Kernel VA span, in the upper half of the KERNEL_MMIO_PDPT_INDEX slot, where
+ * device_window_map maps the memory-mapped register windows drivers are
+ * granted. Supervisor-only and uncached; the lower half stays the
+ * framebuffer's. */
+#define KERNEL_MMIO_DEVICE_VA 0xFFFFFFFF60000000ULL
+#define KERNEL_MMIO_DEVICE_BYTES (512ULL * 1024ULL * 1024ULL)
 
 /* Dedicated per-app WARP linear-memory kernel-VA window, carved from free PDPT
  * slots in the shared higher-half (PML4[511]).  2 GiB (2 PDPT slots) per app,

@@ -7,7 +7,7 @@
 #include "wasmos_app.h"
 
 /* Translate the package's capability requests into the DEVMGR_CAP_* mask device-manager
- * uses, recognising "io.port", "irq.route" and "dma.buffer".  Any other requested
+ * uses, recognising "io.port", "mmio.map", "irq.route" and "dma.buffer".  Any other requested
  * capability contributes no bit, so the result is a device-manager view of the request
  * set and not a complete one.  A NULL descriptor yields 0. */
 uint32_t wasmos_app_driver_cap_flags(const wasmos_app_desc_t* desc);

@@ -54,6 +54,7 @@ extern "C" {
 #include "mmio.h"
 #include "serial.h"
 #include "capability.h"
+#include "io_region.h"
 #include "timer.h"
 #include "policy.h"
 #include "linmem_slots.h"
@@ -781,44 +782,50 @@ static uint32_t warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_
 // I/O port access
 // ---------------------------------------------------------------------------
 
-/* Region-addressed I/O. The driver supplies (region, offset), never an absolute
- * port, so it cannot express an access outside the window its spawn profile
- * granted -- the kernel owns the base. `region` indexes those windows in
- * declaration order. Failures propagate the specific WASMOS_ERR_IO_* reason
- * rather than collapsing to one value: "no such region" and "offset past the
- * end" are different bugs. */
-static int warp_io_region_port(uint32_t region, uint32_t offset, uint32_t width,
-                               uint16_t* out_port) {
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0)
-        return WASMOS_ERR_IO_NOT_AUTHORIZED;
-    return capability_io_region_port(context_id, region, offset, width, out_port);
-}
+/* Region-addressed device register access. The driver supplies (region,
+ * offset), never an absolute port or address, so it cannot express an access
+ * outside the window its spawn profile granted -- the kernel owns the base.
+ * `region` indexes those windows in declaration order; io_region_read/write
+ * (io_region.h) resolve it and perform the port or memory-mapped access.
+ * Failures propagate the specific WASMOS_ERR_IO_* reason rather than
+ * collapsing to one value: "no such region" and "offset past the end" are
+ * different bugs. */
 
 /* Reads return the datum through linear memory, not as the result: a 32-bit
- * port read can legitimately be 0xFFFFFFFF and must stay distinguishable from a
- * failure code. */
+ * register read can legitimately be 0xFFFFFFFF and must stay distinguishable
+ * from a failure code. */
 static uint32_t warp_io_region_read(uint32_t region, uint32_t offset, uint32_t out_off, void* ctx_,
                                     uint32_t width) {
     auto* ctx = warp_call_ctx(ctx_);
     uint8_t* raw = warp_mem(ctx, out_off, sizeof(uint32_t));
-    uint16_t port = 0;
+    uint32_t context_id = 0;
     uint32_t value = 0;
     int rc = 0;
     if (!raw)
         return (uint32_t)WASMOS_ERR_IO_OUT_OF_WINDOW;
-    rc = warp_io_region_port(region, offset, width, &port);
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
+    rc = io_region_read(context_id, region, offset, width, &value);
     if (rc != 0)
         return (uint32_t)rc;
-    value = (width == 1u) ? (uint32_t)inb(port) : (width == 2u) ? (uint32_t)inw(port) : inl(port);
     __builtin_memcpy(raw, &value, sizeof(value));
     return 0;
 }
 
-/* hostcalls.yaml `io_region_in8/16/32`: read from the caller's granted I/O window
- * `region` at `offset`, storing the datum at guest offset `out_off` (1, 2 and 4 bytes
- * respectively, all written through a 4-byte scratch).  Returns 0 on success, otherwise
- * a negative WASMOS_ERR_IO_* code. */
+/* Writes the low `width` bytes of `value`; excess high bits are masked off
+ * rather than refused. */
+static uint32_t warp_io_region_write(uint32_t region, uint32_t offset, uint32_t value,
+                                     uint32_t width) {
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
+    return (uint32_t)io_region_write(context_id, region, offset, width, value);
+}
+
+/* hostcalls.yaml `io_region_in8/16/32`: read from the caller's granted register
+ * window `region` at `offset`, storing the datum at guest offset `out_off` (1, 2
+ * and 4 bytes respectively, all written through a 4-byte scratch).  Returns 0 on
+ * success, otherwise a negative WASMOS_ERR_IO_* code. */
 static uint32_t warp_io_region_in8(uint32_t region, uint32_t offset, uint32_t out_off, void* ctx_) {
     return warp_io_region_read(region, offset, out_off, ctx_, 1u);
 }
@@ -831,35 +838,19 @@ static uint32_t warp_io_region_in32(uint32_t region, uint32_t offset, uint32_t o
     return warp_io_region_read(region, offset, out_off, ctx_, 4u);
 }
 /* hostcalls.yaml `io_region_out8/16/32`: write the low 8, 16 or 32 bits of `value` to
- * the caller's granted I/O window `region` at `offset`.  Returns 0 on success,
- * otherwise a negative WASMOS_ERR_IO_* code.  Excess high bits of `value` are masked
- * off rather than refused. */
+ * the caller's granted register window `region` at `offset`.  Returns 0 on success,
+ * otherwise a negative WASMOS_ERR_IO_* code. */
 static uint32_t warp_io_region_out8(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
-    uint16_t port = 0;
-    int rc = warp_io_region_port(region, offset, 1u, &port);
-    if (rc != 0)
-        return (uint32_t)rc;
-    outb(port, (uint8_t)(value & 0xFFu));
-    return 0;
+    return warp_io_region_write(region, offset, value, 1u);
 }
 static uint32_t warp_io_region_out16(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
-    uint16_t port = 0;
-    int rc = warp_io_region_port(region, offset, 2u, &port);
-    if (rc != 0)
-        return (uint32_t)rc;
-    outw(port, (uint16_t)(value & 0xFFFFu));
-    return 0;
+    return warp_io_region_write(region, offset, value, 2u);
 }
 static uint32_t warp_io_region_out32(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
-    uint16_t port = 0;
-    int rc = warp_io_region_port(region, offset, 4u, &port);
-    if (rc != 0)
-        return (uint32_t)rc;
-    outl(port, value);
-    return 0;
+    return warp_io_region_write(region, offset, value, 4u);
 }
 
 /* See the wasm3 shims: the whole port-read family reports its value through

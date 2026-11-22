@@ -409,8 +409,8 @@ A reader MUST reject a descriptor whose version it does not know.
 
 | Symbol | Value | Meaning |
 | --- | --- | --- |
-| `SUPERVISOR_SUBMIT_DESC_VERSION` | 2 | Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps). |
-| `SUPERVISOR_CAPS_MAX` | 64 | Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t, its I/O ranges and DMA window) may take: a header, WASMOS_IO_RANGE_LIMIT ranges and one DMA window fit. |
+| `SUPERVISOR_SUBMIT_DESC_VERSION` | 3 | Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps; 3: kind-tagged region grants, caps grows to 128 bytes). |
+| `SUPERVISOR_CAPS_MAX` | 128 | Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t, its region grants and DMA window) may take: a header, WASMOS_REGION_LIMIT region grants and one DMA window fit. |
 | `SUPERVISOR_SPEC_MAX` | 255 | Longest unit spec a submission carries, NUL excluded. |
 | `SUPERVISOR_UNIT_NAME_MAX` | 35 | Longest unit name (template@instance), NUL excluded: a service name's ceiling. |
 

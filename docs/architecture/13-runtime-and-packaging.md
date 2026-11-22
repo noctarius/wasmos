@@ -301,7 +301,19 @@ flags = 0
 kind  = "io"               # driver addresses them; position IS the region index
 first = 0x01F0
 last  = 0x03F7
+
+[[regions]]
+kind  = "bar"              # a BAR of the device the driver is bound to
+index = 4
 ```
+
+A `"bar"` region is resolved by device-manager against the device the driver is
+bound to, and becomes a grant of the BAR's own kind: an I/O BAR an I/O-port
+window, a memory BAR a memory-mapped window (which also needs the `mmio.map`
+capability, and must start and end on a page boundary). A region the device
+cannot supply refuses the spawn for that device, since skipping it would
+renumber every region after it. The driver addresses both kinds the same way,
+through the `io_region_*` host calls (doc 10, Register Windows).
 
 A manifest declares what a package needs, never which device it is given. Device
 binding is expressed in the device-manager rules

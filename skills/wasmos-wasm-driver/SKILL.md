@@ -111,7 +111,15 @@ flags = 0
 kind = "io"             # addresses them; declaration order IS the region index
 first = 0x01F0
 last = 0x03F7
+[[regions]]
+kind = "bar"            # a BAR of the bound device: I/O or memory-mapped by the
+index = 4               # BAR's own kind (a memory BAR also needs mmio.map)
 ```
+
+The driver reaches every region with `wasmos_io_region_in*/out*(region,
+offset, ...)`, whichever its kind; an access to a memory-mapped region must be
+naturally aligned. A region the device cannot supply keeps the driver from
+being spawned for that device at all.
 
 A manifest declares what the driver needs, never which device it gets. There is
 no match table in the package: the device it binds to is decided by a rule (Step

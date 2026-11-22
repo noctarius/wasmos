@@ -595,12 +595,12 @@ static void test_a_restarting_required_unit_holds_the_boot(void) {
     CHECK(sv_boot_check(units, 4, 0, 0) == SV_BOOT_PENDING, "boot waits for it to come back");
 }
 
-/* Writes a wasmos_spawn_caps_v2_t with `ranges` I/O ranges into buf. */
+/* Writes a wasmos_spawn_caps_v2_t with `ranges` region grants into buf. */
 static uint32_t caps_v2(uint8_t* buf, uint32_t flags, uint16_t ranges) {
     wasmos_spawn_caps_v2_t hdr;
     memset(&hdr, 0, sizeof(hdr));
     hdr.cap_flags = flags;
-    hdr.io_range_count = ranges;
+    hdr.region_count = ranges;
     memset(buf, 0, SUPERVISOR_CAPS_MAX);
     memcpy(buf, &hdr, sizeof(hdr));
     return WASMOS_SPAWN_CAPS_V2_SIZE(ranges, 0);
@@ -609,7 +609,7 @@ static uint32_t caps_v2(uint8_t* buf, uint32_t flags, uint16_t ranges) {
 static void test_a_unit_keeps_the_caps_it_was_submitted_with(void) {
     uint8_t buf[SUPERVISOR_CAPS_MAX];
     sv_unit_t u = parse_ok("kbd@acpi:0 /boot/system/drivers/keyboard.wap", 0);
-    uint32_t len = caps_v2(buf, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ, WASMOS_IO_RANGE_LIMIT);
+    uint32_t len = caps_v2(buf, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ, WASMOS_REGION_LIMIT);
     CHECK(u.caps_len == 0u, "a parsed unit has no caps");
     CHECK(sv_unit_set_caps(&u, buf, len) == 0, "I/O and IRQ caps are taken");
     CHECK(u.caps_len == len && memcmp(u.caps, buf, len) == 0, "the caps are kept verbatim");

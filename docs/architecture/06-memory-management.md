@@ -133,7 +133,27 @@ the kernel's shared mapping. Stack and page-table allocations must use
 
 Callers pass `MEM_REGION_FLAG_*`, never these bits. `MEM_REGION_FLAG_DEVICE`
 selects device memory: PCD|PWT, which is UC under the power-on PAT (the kernel
-does not reprogram the PAT). The LAPIC, IOAPIC and MMIO scratch windows use it.
+does not reprogram the PAT). The LAPIC, IOAPIC and MMIO scratch windows and the
+driver device windows use it.
+
+#### Kernel MMIO Slot
+
+PDPT slot 509 of the shared higher half (`KERNEL_MMIO_PDPT_INDEX`, 1 GiB at
+`0xFFFFFFFF40000000`) holds supervisor-only device mappings. Because the
+higher-half PDPT is one shared page, a mapping installed there appears under
+every CR3. Its lower half carries the GOP framebuffer (`KERNEL_MMIO_FB_VA`).
+Its upper half (`KERNEL_MMIO_DEVICE_VA`, 512 MiB) carries the memory-mapped
+register windows drivers are granted (doc 10, Register Windows), mapped by
+`device_window_map` (`src/kernel/device_window.c`):
+
+- A window is page-aligned, at most `DEVICE_WINDOW_MAX_BYTES` (2 MiB), outside
+  system RAM (`pfa_range_overlaps_ram`) and mapped uncached.
+- A window is mapped once and stays mapped for the life of the kernel; a range
+  inside a mapped window reuses it. A device's registers do not move once
+  enumerated, so a window VA's translation never changes, and a restarted
+  driver needs no cross-CPU TLB shootdown.
+- At most `DEVICE_WINDOW_LIMIT` (64) distinct windows are mapped; the table and
+  the VA span only grow.
 
 #### Per-Process CR3
 

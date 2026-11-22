@@ -172,8 +172,10 @@ requests for the rest of the boot.
 It stays resident because it is the only process that may write configuration
 space (the `pci.config` capability; the kernel serialises the 0xCF8/0xCFC port
 pair behind `pci_config_read` / `pci_config_write`): device-manager grants each
-driver an I/O-port range covering that device's own BAR, which excludes config
-space. Widening that grant would give every driver read/write access to every
+driver register windows covering that device's own BARs -- the `[[regions]]`
+the driver declared, each `"bar"` region resolved to an I/O-port or a
+memory-mapped window by the BAR's kind (`dm_resolve_declared_regions`) -- which
+excludes config space. Widening that grant would give every driver read/write access to every
 device on the bus. An MSI binding whose owner has died belongs to no one: the
 kernel disabled the function's MSI and MSI-X at the owner's reap, and the next
 driver to bind the function takes the binding over.

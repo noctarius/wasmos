@@ -215,10 +215,11 @@ export const WASMOS_ERR_MSI_BAD_ENTRY: i32 = -0x00110009; // table entry index i
 export const WASMOS_ERR_MSI_MAP_FAILED: i32 = -0x0011000A; // the MSI-X table BAR could not be mapped
 export const WASMOS_ERR_MSI_NOT_DEVICE_OWNER: i32 = -0x0011000B; // another endpoint already programmed interrupts for this device
 export const WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER: i32 = -0x0011000C; // the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it
-export const WASMOS_ERR_IO_NOT_AUTHORIZED: i32 = -0x00120001; // caller has no io.port spawn profile, so it holds no I/O windows
+export const WASMOS_ERR_IO_NOT_AUTHORIZED: i32 = -0x00120001; // caller has no spawn profile granting register windows
 export const WASMOS_ERR_IO_BAD_REGION: i32 = -0x00120002; // region index names no window this context was granted
 export const WASMOS_ERR_IO_OUT_OF_WINDOW: i32 = -0x00120003; // offset falls outside the granted window's bounds
 export const WASMOS_ERR_IO_BAD_PORT: i32 = -0x00120004; // port number outside 0..0xFFFF
+export const WASMOS_ERR_IO_MISALIGNED: i32 = -0x00120005; // a memory-mapped window access whose offset is not a multiple of its width
 export const WASMOS_ERR_FONT_INVALID: i32 = -0x000C0001; // invalid request arguments (font id, size, glyph, or buffer)
 export const WASMOS_ERR_FONT_PERMISSION: i32 = -0x000C0002; // caller is not permitted to use the requested font resource
 export const WASMOS_ERR_FONT_UNSUPPORTED: i32 = -0x000C0003; // unknown or unsupported request type
@@ -536,10 +537,11 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_MSI_MAP_FAILED: return "the MSI-X table BAR could not be mapped";
     case WASMOS_ERR_MSI_NOT_DEVICE_OWNER: return "another endpoint already programmed interrupts for this device";
     case WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER: return "the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it";
-    case WASMOS_ERR_IO_NOT_AUTHORIZED: return "caller has no io.port spawn profile, so it holds no I/O windows";
+    case WASMOS_ERR_IO_NOT_AUTHORIZED: return "caller has no spawn profile granting register windows";
     case WASMOS_ERR_IO_BAD_REGION: return "region index names no window this context was granted";
     case WASMOS_ERR_IO_OUT_OF_WINDOW: return "offset falls outside the granted window's bounds";
     case WASMOS_ERR_IO_BAD_PORT: return "port number outside 0..0xFFFF";
+    case WASMOS_ERR_IO_MISALIGNED: return "a memory-mapped window access whose offset is not a multiple of its width";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

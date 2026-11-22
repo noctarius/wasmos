@@ -288,12 +288,14 @@ domains:
 
   io:
     id: 18
-    description: "region-addressed I/O port access failures"
+    description: "region-addressed device register access failures (I/O-port and memory-mapped windows)"
     codes:
-      - { name: NOT_AUTHORIZED, description: "caller has no io.port spawn profile, so it holds no I/O windows" }
+      - { name: NOT_AUTHORIZED, description: "caller has no spawn profile granting register windows" }
       - { name: BAD_REGION,     description: "region index names no window this context was granted" }
       - { name: OUT_OF_WINDOW,  description: "offset falls outside the granted window's bounds" }
       - { name: BAD_PORT,       description: "port number outside 0..0xFFFF" }
+      # Appended, never inserted: a code's value is its position.
+      - { name: MISALIGNED,     description: "a memory-mapped window access whose offset is not a multiple of its width" }
 
   font:
     id: 12

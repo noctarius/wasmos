@@ -223,10 +223,11 @@ const (
 	WASMOS_ERR_MSI_MAP_FAILED int32 = -0x0011000A // the MSI-X table BAR could not be mapped
 	WASMOS_ERR_MSI_NOT_DEVICE_OWNER int32 = -0x0011000B // another endpoint already programmed interrupts for this device
 	WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER int32 = -0x0011000C // the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it
-	WASMOS_ERR_IO_NOT_AUTHORIZED int32 = -0x00120001 // caller has no io.port spawn profile, so it holds no I/O windows
+	WASMOS_ERR_IO_NOT_AUTHORIZED int32 = -0x00120001 // caller has no spawn profile granting register windows
 	WASMOS_ERR_IO_BAD_REGION int32 = -0x00120002 // region index names no window this context was granted
 	WASMOS_ERR_IO_OUT_OF_WINDOW int32 = -0x00120003 // offset falls outside the granted window's bounds
 	WASMOS_ERR_IO_BAD_PORT int32 = -0x00120004 // port number outside 0..0xFFFF
+	WASMOS_ERR_IO_MISALIGNED int32 = -0x00120005 // a memory-mapped window access whose offset is not a multiple of its width
 	WASMOS_ERR_FONT_INVALID int32 = -0x000C0001 // invalid request arguments (font id, size, glyph, or buffer)
 	WASMOS_ERR_FONT_PERMISSION int32 = -0x000C0002 // caller is not permitted to use the requested font resource
 	WASMOS_ERR_FONT_UNSUPPORTED int32 = -0x000C0003 // unknown or unsupported request type
@@ -760,13 +761,15 @@ func WasmosStrerror(c int32) string {
 	case WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER:
 		return "the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it"
 	case WASMOS_ERR_IO_NOT_AUTHORIZED:
-		return "caller has no io.port spawn profile, so it holds no I/O windows"
+		return "caller has no spawn profile granting register windows"
 	case WASMOS_ERR_IO_BAD_REGION:
 		return "region index names no window this context was granted"
 	case WASMOS_ERR_IO_OUT_OF_WINDOW:
 		return "offset falls outside the granted window's bounds"
 	case WASMOS_ERR_IO_BAD_PORT:
 		return "port number outside 0..0xFFFF"
+	case WASMOS_ERR_IO_MISALIGNED:
+		return "a memory-mapped window access whose offset is not a multiple of its width"
 	case WASMOS_ERR_FONT_INVALID:
 		return "invalid request arguments (font id, size, glyph, or buffer)"
 	case WASMOS_ERR_FONT_PERMISSION:

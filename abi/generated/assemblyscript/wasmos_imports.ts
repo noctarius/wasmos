@@ -782,61 +782,73 @@ export declare function msi_free(a0: i32): i32;
 // WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
 @external("wasmos", "mmio_write32")
 export declare function mmio_write32(a0: i32, a1: i32, a2: i32): i32;
-// Read a byte at `offset` within the caller's granted I/O region `region` -- an
-// index into the windows its spawn profile granted, in the order they were
-// declared -- and store it at `out`. The kernel adds the base and
-// bounds-checks the offset, so a driver never names an absolute port and
-// cannot reach outside the window it holds.
+// Read a byte at `offset` within the caller's granted register window `region`
+// -- an index into the windows its spawn profile granted, in the order they
+// were declared -- and store it at `out`. A window is either a range of I/O
+// ports or a range of device memory; the kernel adds the base, bounds-checks
+// the offset and performs one access of exactly this width, so a driver never
+// names an absolute port or address and cannot reach outside the window it
+// holds. An access to a memory-mapped window must be naturally aligned.
 //
 // The value is returned through `out` rather than as the result because a
-// port read is not a signed quantity: a 32-bit register can legitimately read
-// 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
-// on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
-// refused it. Requires the io.port capability.
+// register read is not a signed quantity: a 32-bit register can legitimately
+// read 0xFFFFFFFF, which would be indistinguishable from a failure code.
+// Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming which
+// check refused it. The window itself is the authority: the spawn profile
+// grants an I/O window only with io.port and a memory-mapped one only with
+// mmio.map.
 @external("wasmos", "io_region_in8")
 export declare function io_region_in8(a0: i32, a1: i32, a2: i32): i32;
-// Read a 16-bit word at `offset` within the caller's granted I/O region `region` -- an
-// index into the windows its spawn profile granted, in the order they were
-// declared -- and store it at `out`. The kernel adds the base and
-// bounds-checks the offset, so a driver never names an absolute port and
-// cannot reach outside the window it holds.
+// Read a 16-bit word at `offset` within the caller's granted register window `region`
+// -- an index into the windows its spawn profile granted, in the order they
+// were declared -- and store it at `out`. A window is either a range of I/O
+// ports or a range of device memory; the kernel adds the base, bounds-checks
+// the offset and performs one access of exactly this width, so a driver never
+// names an absolute port or address and cannot reach outside the window it
+// holds. An access to a memory-mapped window must be naturally aligned.
 //
 // The value is returned through `out` rather than as the result because a
-// port read is not a signed quantity: a 32-bit register can legitimately read
-// 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
-// on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
-// refused it. Requires the io.port capability.
+// register read is not a signed quantity: a 32-bit register can legitimately
+// read 0xFFFFFFFF, which would be indistinguishable from a failure code.
+// Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming which
+// check refused it. The window itself is the authority: the spawn profile
+// grants an I/O window only with io.port and a memory-mapped one only with
+// mmio.map.
 @external("wasmos", "io_region_in16")
 export declare function io_region_in16(a0: i32, a1: i32, a2: i32): i32;
-// Read a 32-bit word at `offset` within the caller's granted I/O region `region` -- an
-// index into the windows its spawn profile granted, in the order they were
-// declared -- and store it at `out`. The kernel adds the base and
-// bounds-checks the offset, so a driver never names an absolute port and
-// cannot reach outside the window it holds.
+// Read a 32-bit word at `offset` within the caller's granted register window `region`
+// -- an index into the windows its spawn profile granted, in the order they
+// were declared -- and store it at `out`. A window is either a range of I/O
+// ports or a range of device memory; the kernel adds the base, bounds-checks
+// the offset and performs one access of exactly this width, so a driver never
+// names an absolute port or address and cannot reach outside the window it
+// holds. An access to a memory-mapped window must be naturally aligned.
 //
 // The value is returned through `out` rather than as the result because a
-// port read is not a signed quantity: a 32-bit register can legitimately read
-// 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
-// on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
-// refused it. Requires the io.port capability.
+// register read is not a signed quantity: a 32-bit register can legitimately
+// read 0xFFFFFFFF, which would be indistinguishable from a failure code.
+// Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming which
+// check refused it. The window itself is the authority: the spawn profile
+// grants an I/O window only with io.port and a memory-mapped one only with
+// mmio.map.
 @external("wasmos", "io_region_in32")
 export declare function io_region_in32(a0: i32, a1: i32, a2: i32): i32;
-// Write a byte to `offset` within the caller's granted I/O region
-// `region` (see io_region_in8 for how a region is named). Returns 0, or a
-// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
-// io.port capability.
+// Write a byte to `offset` within the caller's granted register window
+// `region` (see io_region_in8 for how a window is named, and what it may
+// be). Returns 0, or a negative WASMOS_ERR_IO_* code naming which check
+// refused it.
 @external("wasmos", "io_region_out8")
 export declare function io_region_out8(a0: i32, a1: i32, a2: i32): i32;
-// Write a 16-bit word to `offset` within the caller's granted I/O region
-// `region` (see io_region_in8 for how a region is named). Returns 0, or a
-// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
-// io.port capability.
+// Write a 16-bit word to `offset` within the caller's granted register window
+// `region` (see io_region_in8 for how a window is named, and what it may
+// be). Returns 0, or a negative WASMOS_ERR_IO_* code naming which check
+// refused it.
 @external("wasmos", "io_region_out16")
 export declare function io_region_out16(a0: i32, a1: i32, a2: i32): i32;
-// Write a 32-bit word to `offset` within the caller's granted I/O region
-// `region` (see io_region_in8 for how a region is named). Returns 0, or a
-// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
-// io.port capability.
+// Write a 32-bit word to `offset` within the caller's granted register window
+// `region` (see io_region_in8 for how a window is named, and what it may
+// be). Returns 0, or a negative WASMOS_ERR_IO_* code naming which check
+// refused it.
 @external("wasmos", "io_region_out32")
 export declare function io_region_out32(a0: i32, a1: i32, a2: i32): i32;
 // Transmit len bytes from guest memory at buf_offset on COM1, '\n' expanded to

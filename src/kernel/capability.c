@@ -1,7 +1,7 @@
 /* capability.c - Per-context hardware access capability enforcement.
  * Stores one capability record per driver context_id.  The process manager
  * sets the spawn profile once at driver start; hardware hostcalls then call
- * capability_io_port_allowed / capability_irq_line_allowed / etc. before acting. */
+ * capability_region_resolve / capability_irq_line_allowed / etc. before acting. */
 #include "capability.h"
 #include "list.h"
 #include "memory.h"
@@ -14,9 +14,8 @@ typedef struct {
     uint32_t context_id;
     uint8_t configured;
     uint8_t spawn_profile_configured;
-    uint8_t io_port_range_valid;
-    uint32_t io_range_count;
-    wasmos_io_range_t io_ranges[CAPABILITY_IO_RANGE_LIMIT];
+    uint32_t region_count;
+    capability_region_t regions[CAPABILITY_REGION_LIMIT];
     uint16_t irq_mask;
     uint32_t dma_direction_flags;
     uint32_t dma_max_bytes;
@@ -203,27 +202,50 @@ int capability_context_configured(uint32_t context_id) {
     return ctx ? (ctx->configured != 0) : 0;
 }
 
+/* A region the profile can hold exactly as stated: of a known kind, with the
+ * capability bit that kind needs, non-empty, inside the 16-bit port space (IO)
+ * or already mapped (MMIO). */
+static int capability_region_valid(const capability_region_t* r, uint32_t cap_flags) {
+    if (r->length == 0u) {
+        return 0;
+    }
+    if (r->kind == WASMOS_REGION_GRANT_IO) {
+        return (cap_flags & DEVMGR_CAP_IO_PORT) != 0 && r->base <= 0xFFFFu &&
+               r->base + r->length - 1u <= 0xFFFFu;
+    }
+    if (r->kind == WASMOS_REGION_GRANT_MMIO) {
+        return (cap_flags & DEVMGR_CAP_MMIO_MAP) != 0 && r->kva != 0u;
+    }
+    return 0;
+}
+
 /* Installs the per-resource narrowing the process manager derives from a
  * driver's manifest at spawn.  It does NOT grant capability bits — those come
  * from capability_grant_name — but marking the profile configured is what turns
  * the capability_*_allowed checks from "capability alone suffices" into
  * "capability plus this window".
  *
- * cap_flags selects which sections of the argument list are honoured: bit 0 the
- * I/O ranges, bit 2 the IRQ mask, bit 3 the DMA windows and budget.  A section
+ * cap_flags (DEVMGR_CAP_*) selects which sections of the argument list are
+ * honoured: bit 2 the IRQ mask, bit 3 the DMA windows and budget.  A section
  * whose bit is clear is cleared to deny-all — except DMA, which keeps whatever a
- * dma.buffer grant already put there.  io_ranges and dma_windows are copied by
- * value, so the caller's arrays are borrowed for the call only.
+ * dma.buffer grant already put there.  Each region needs the bit of its own
+ * kind instead (bit 0 for an I/O window, bit 1 for a memory-mapped one).
+ * regions and dma_windows are copied by value, so the caller's arrays are
+ * borrowed for the call only.
  *
  * Over-declared or malformed input is REFUSED rather than truncated: more than
- * CAPABILITY_IO_RANGE_LIMIT ranges, an inverted [first, last] range, and — when
- * DMA is declared — a zero window count, a count above
- * CAPABILITY_DMA_WINDOW_LIMIT, or a NULL window array all return -1.  A -1 can
- * leave the record partially updated, so the context must not be started.
+ * CAPABILITY_REGION_LIMIT regions, a region capability_region_valid rejects,
+ * and — when DMA is declared — a zero window count, a count above
+ * CAPABILITY_DMA_WINDOW_LIMIT, or a NULL window array all return -1.  Dropping
+ * a region would leave the driver's region INDICES disagreeing with what the
+ * kernel recorded: every later region would resolve to a different window, far
+ * from the spawn that actually over-declared, and the driver has no way to learn
+ * that its window list was changed.  A -1 can leave the record partially
+ * updated, so the context must not be started.
  *
  * Also returns -1 when no record can be created.  Returns 0 on success. */
-int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t io_range_count,
-                                 const wasmos_io_range_t* io_ranges, uint16_t irq_mask,
+int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t region_count,
+                                 const capability_region_t* regions, uint16_t irq_mask,
                                  uint32_t dma_direction_flags, uint32_t dma_max_bytes,
                                  uint32_t dma_window_count,
                                  const wasmos_dma_window_t* dma_windows) {
@@ -232,24 +254,15 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32
         return -1;
     }
     ctx->spawn_profile_configured = 1;
-    ctx->io_port_range_valid = (cap_flags & (1u << 0)) ? 1u : 0u;
-    ctx->io_range_count = 0;
-    if (ctx->io_port_range_valid && io_ranges) {
-        /* Refuse rather than truncate, the same way dma_window_count is validated
-         * below.  Silently dropping the tail would leave the driver's region
-         * INDICES disagreeing with what the kernel recorded: every region past the
-         * limit resolves to WASMOS_ERR_IO_BAD_REGION at run time, far from the
-         * spawn that actually over-declared, and the driver has no way to learn
-         * that its window list was shortened. */
-        if (io_range_count > CAPABILITY_IO_RANGE_LIMIT) {
+    ctx->region_count = 0;
+    if (region_count > CAPABILITY_REGION_LIMIT || (region_count > 0 && !regions)) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < region_count; ++i) {
+        if (!capability_region_valid(&regions[i], cap_flags)) {
             return -1;
         }
-        for (uint32_t i = 0; i < io_range_count; ++i) {
-            if (io_ranges[i].first > io_ranges[i].last) {
-                return -1; /* an inverted window would silently allow nothing */
-            }
-            ctx->io_ranges[ctx->io_range_count++] = io_ranges[i];
-        }
+        ctx->regions[ctx->region_count++] = regions[i];
     }
     ctx->irq_mask = (cap_flags & (1u << 2)) ? irq_mask : 0;
     if ((cap_flags & (1u << 3)) != 0) {
@@ -285,64 +298,80 @@ int capability_spawn_profile_configured(uint32_t context_id) {
     return ctx ? (ctx->spawn_profile_configured != 0) : 0;
 }
 
-/* 1 when the port falls inside one of the context's granted I/O ranges, which
- * are inclusive of both endpoints.  0 for an unknown context, a context without
- * a spawn profile, and a profile that did not declare the I/O section — so this
- * answers the narrowing question only and does not check the CAP_IO_PORT bit.
- * It covers a single byte; use capability_io_region_port for a wider access. */
+/* 1 when the port falls inside one of the context's granted I/O windows.  0 for
+ * an unknown context, a context without a spawn profile, and a profile that
+ * granted no I/O window — so this answers the narrowing question only and does
+ * not check the CAP_IO_PORT bit.  It covers a single byte; use
+ * capability_region_resolve for a wider access. */
 int capability_io_port_allowed(uint32_t context_id, uint16_t port) {
     const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     if (!ctx) {
         return 0;
     }
-    if (!ctx->spawn_profile_configured || !ctx->io_port_range_valid) {
+    if (!ctx->spawn_profile_configured) {
         return 0;
     }
-    for (uint32_t i = 0; i < ctx->io_range_count; ++i) {
-        if (port >= ctx->io_ranges[i].first && port <= ctx->io_ranges[i].last) {
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        const capability_region_t* r = &ctx->regions[i];
+        if (r->kind == WASMOS_REGION_GRANT_IO && port >= r->base && port - r->base < r->length) {
             return 1;
         }
     }
     return 0;
 }
 
-/* Resolves a driver's (region index, offset) pair into an absolute I/O port,
+/* Resolves a driver's (region index, offset) pair into where the access lands,
  * checking that an access of access_width bytes fits entirely inside that
- * region.  This is the indirection that keeps a driver from naming raw ports:
- * region is an index into the profile's declared ranges, in declaration order.
+ * region.  This is the indirection that keeps a driver from naming raw ports or
+ * physical addresses: region is an index into the profile's declared windows,
+ * in declaration order.
  *
- * access_width is in bytes and must be 1..4.  Note the return convention differs
- * from the rest of this file: 0 on success with the port in *out_port, and a
- * packed error otherwise — WASMOS_ERR_IO_NOT_AUTHORIZED for a NULL out_port, an
- * unknown context, or no I/O profile; WASMOS_ERR_IO_BAD_REGION for an index past
- * the declared ranges; WASMOS_ERR_IO_OUT_OF_WINDOW for a bad width or an access
- * that would run past the region's last port. */
-int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t offset,
-                              uint32_t access_width, uint16_t* out_port) {
+ * access_width is in bytes and must be 1, 2 or 4.  Note the return convention
+ * differs from the rest of this file: 0 on success with *out filled, and a
+ * packed error otherwise — WASMOS_ERR_IO_NOT_AUTHORIZED for a NULL out, an
+ * unknown context, or a profile granting no windows; WASMOS_ERR_IO_BAD_REGION
+ * for an index past the declared windows; WASMOS_ERR_IO_OUT_OF_WINDOW for a bad
+ * width or an access that would run past the region's end;
+ * WASMOS_ERR_IO_MISALIGNED for a memory-mapped access whose offset is not a
+ * multiple of its width. */
+int capability_region_resolve(uint32_t context_id, uint32_t region, uint32_t offset,
+                              uint32_t access_width, capability_region_access_t* out) {
     const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
-    uint32_t span = 0;
-    if (!out_port) {
+    const capability_region_t* r = 0;
+    if (!out) {
         return WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    if (!ctx || !ctx->spawn_profile_configured || !ctx->io_port_range_valid) {
+    if (!ctx || !ctx->spawn_profile_configured || ctx->region_count == 0) {
         return WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    if (region >= ctx->io_range_count) {
+    if (region >= ctx->region_count) {
         return WASMOS_ERR_IO_BAD_REGION;
     }
-    if (access_width == 0u || access_width > 4u) {
+    if (access_width != 1u && access_width != 2u && access_width != 4u) {
         return WASMOS_ERR_IO_OUT_OF_WINDOW;
     }
-    span = (uint32_t)ctx->io_ranges[region].last - (uint32_t)ctx->io_ranges[region].first;
+    r = &ctx->regions[region];
     /* The WHOLE access must land inside the window, not just its first byte.  A
      * 16- or 32-bit access resolved from the last granted offset would otherwise
-     * have inw/inl touch 1 or 3 ports past `last` -- outside the capability, and
-     * quite possibly another device's registers.  Checked as a subtraction on the
-     * span so a large offset cannot overflow the addition. */
-    if (offset > span || (span - offset) < (access_width - 1u)) {
+     * touch 1 or 3 bytes past the end -- outside the capability, and quite
+     * possibly another device's registers.  Checked as a subtraction on the
+     * length so a large offset cannot overflow the addition. */
+    if (offset >= r->length || (r->length - offset) < access_width) {
         return WASMOS_ERR_IO_OUT_OF_WINDOW;
     }
-    *out_port = (uint16_t)(ctx->io_ranges[region].first + offset);
+    if (r->kind == WASMOS_REGION_GRANT_MMIO) {
+        /* A device register is accessed at its own width and alignment; a
+         * split or unaligned access is undefined for most devices, and arm64
+         * device memory faults on it outright. */
+        if ((offset & (access_width - 1u)) != 0u) {
+            return WASMOS_ERR_IO_MISALIGNED;
+        }
+        out->kind = WASMOS_REGION_GRANT_MMIO;
+        out->where = r->kva + offset;
+        return 0;
+    }
+    out->kind = WASMOS_REGION_GRANT_IO;
+    out->where = r->base + offset;
     return 0;
 }
 

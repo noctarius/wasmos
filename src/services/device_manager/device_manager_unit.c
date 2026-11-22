@@ -53,7 +53,7 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
     uint32_t size;
     uint32_t offset;
 
-    if (!caps || !out || caps->io_range_count > WASMOS_IO_RANGE_LIMIT) {
+    if (!caps || !out || caps->region_count > WASMOS_REGION_LIMIT) {
         return -1;
     }
     memset(&header, 0, sizeof(header));
@@ -61,7 +61,7 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
     header.irq_mask = caps->irq_mask;
     header.io_port_min = caps->io_port_min;
     header.io_port_max = caps->io_port_max;
-    header.io_range_count = (uint16_t)caps->io_range_count;
+    header.region_count = (uint16_t)caps->region_count;
     if (caps->pci_function_valid) {
         header.cap_flags |= DEVMGR_CAP_PCI_FUNCTION;
         header.dma.pci_function = caps->pci_function;
@@ -75,16 +75,71 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
         window.length = 0x80000000ull;
         window_count = 1u;
     }
-    size = WASMOS_SPAWN_CAPS_V2_SIZE(caps->io_range_count, window_count);
+    size = WASMOS_SPAWN_CAPS_V2_SIZE(caps->region_count, window_count);
     if (size > out_cap) {
         return -1;
     }
     memcpy(out, &header, sizeof(header));
     offset = (uint32_t)sizeof(header);
-    memcpy(out + offset, caps->io_ranges, caps->io_range_count * sizeof(wasmos_io_range_t));
-    offset += caps->io_range_count * (uint32_t)sizeof(wasmos_io_range_t);
+    memcpy(out + offset, caps->regions, caps->region_count * sizeof(wasmos_region_grant_t));
+    offset += caps->region_count * (uint32_t)sizeof(wasmos_region_grant_t);
     if (window_count > 0u) {
         memcpy(out + offset, &window, sizeof(window));
     }
     return (int32_t)size;
+}
+
+/* A BAR becomes a grant of its own kind: an I/O BAR a port window, a memory
+ * BAR a memory-mapped one. A memory window is mapped by whole pages, so a BAR
+ * that does not start and end on a page boundary would expose whatever shares
+ * its first or last page; it is refused instead. Returns 0, or -1 when the BAR
+ * is absent, unsized, or cannot be expressed as a grant. */
+static int dm_grant_from_bar(const wasmos_pci_bar_t* bar, wasmos_region_grant_t* out) {
+    if (bar->base == 0u || bar->size == 0u || bar->size > 0xFFFFFFFFull) {
+        return -1;
+    }
+    if (bar->kind == WASMOS_PCI_BAR_IO) {
+        if (bar->base + bar->size - 1u > 0xFFFFu) {
+            return -1;
+        }
+        out->kind = WASMOS_REGION_GRANT_IO;
+    } else if (bar->kind == WASMOS_PCI_BAR_MEM32 || bar->kind == WASMOS_PCI_BAR_MEM64) {
+        if ((bar->base & 0xFFFu) != 0u || (bar->size & 0xFFFu) != 0u) {
+            return -1;
+        }
+        out->kind = WASMOS_REGION_GRANT_MMIO;
+    } else {
+        return -1;
+    }
+    out->base = bar->base;
+    out->length = (uint32_t)bar->size;
+    return 0;
+}
+
+int dm_resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
+                                const pci_device_record_t* rec, spawn_caps_t* caps) {
+    if (!meta || !rec || !caps) {
+        return -1;
+    }
+    caps->region_count = 0;
+    if (meta->region_count > WASMOS_REGION_LIMIT) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < meta->region_count; ++i) {
+        const wasmos_region_desc_t* decl = &meta->regions[i];
+        wasmos_region_grant_t* grant = &caps->regions[i];
+        if (decl->kind == WASMOS_APP_REGION_IO) {
+            if (decl->first > decl->last) {
+                return -1;
+            }
+            grant->kind = WASMOS_REGION_GRANT_IO;
+            grant->base = decl->first;
+            grant->length = (uint32_t)decl->last - (uint32_t)decl->first + 1u;
+        } else if (decl->kind != WASMOS_APP_REGION_BAR || decl->bar_index >= WASMOS_PCI_BAR_COUNT ||
+                   dm_grant_from_bar(&rec->bars[decl->bar_index], grant) != 0) {
+            return -1;
+        }
+    }
+    caps->region_count = meta->region_count;
+    return 0;
 }

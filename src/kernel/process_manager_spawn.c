@@ -8,6 +8,7 @@
 #include "serial.h"
 #include "process_manager.h"
 #include "capability.h"
+#include "device_window.h"
 #include "pci_config.h"
 #include "memory.h"
 #include "paging.h"
@@ -514,19 +515,35 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t*
     return 0;
 }
 
+/* Installs caps as the child's spawn profile. Each memory-mapped window is
+ * mapped into the kernel first (device_window_map), since the io_region_* host
+ * calls reach it through that mapping; a window that cannot be mapped refuses
+ * the spawn like any other grant the kernel cannot honour. */
 static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
     process_t* proc = 0;
+    capability_region_t regions[WASMOS_REGION_LIMIT];
     if (!caps || !caps->valid) {
         return 0;
     }
     proc = process_get(pid);
-    if (!proc || proc->context_id == 0) {
+    if (!proc || proc->context_id == 0 || caps->region_count > WASMOS_REGION_LIMIT) {
         return PM_SPAWN_INTERNAL_ERR_BAD_PROCESS;
+    }
+    for (uint32_t i = 0; i < caps->region_count; ++i) {
+        regions[i].kind = caps->regions[i].kind;
+        regions[i].length = caps->regions[i].length;
+        regions[i].base = caps->regions[i].base;
+        regions[i].kva = 0;
+        if (caps->regions[i].kind == WASMOS_REGION_GRANT_MMIO &&
+            device_window_map(caps->regions[i].base, caps->regions[i].length, &regions[i].kva) !=
+                0) {
+            return PM_SPAWN_INTERNAL_ERR_CAPS_APPLY;
+        }
     }
     if (capability_set_spawn_profile(proc->context_id,
                                      caps->cap_flags,
-                                     caps->io_range_count,
-                                     caps->io_ranges,
+                                     caps->region_count,
+                                     regions,
                                      caps->irq_mask,
                                      caps->dma_direction_flags,
                                      caps->dma_max_bytes,
@@ -1883,17 +1900,17 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
 /* Spawn by boot-module index with a full capability DESCRIPTOR, replying
  * immediately (PROC_IPC_SPAWN_CAPS_V2).  arg0 = module index, arg1 = the
  * caller's transfer-buffer id holding a wasmos_spawn_caps_v2_t followed by
- * io_range_count I/O ranges and then dma.window_count DMA windows,
+ * region_count region grants and then dma.window_count DMA windows,
  * arg2 = the payload's byte length.
  *
- * The only spawn form that carries a real DMA policy and multiple I/O windows
- * instead of the fixed defaults the packed forms substitute.  Validation is
- * strict on purpose, since this grants device authority: unknown cap_flags bits,
- * an inverted or over-long range list, a DMA request with no direction, zero
- * max_bytes or too many windows, and a payload whose length does not match what
- * the counts imply are each refused with WASMOS_ERR_PROC_PM_BAD_CAPS before any
- * process is created.  A non-zero io_range_count supersedes the single
- * io_port_min/max pair. */
+ * The only spawn form that carries a real DMA policy and multiple or
+ * memory-mapped register windows instead of the fixed defaults the packed forms
+ * substitute.  Validation is strict on purpose, since this grants device
+ * authority: unknown cap_flags bits, a malformed or over-long grant list (see
+ * pm_caps_from_v2), a DMA request with no direction, zero max_bytes or too many
+ * windows, and a payload whose length does not match what the counts imply are
+ * each refused with WASMOS_ERR_PROC_PM_BAD_CAPS before any process is created.
+ * A non-zero region_count supersedes the single io_port_min/max pair. */
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
@@ -2172,7 +2189,7 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
     wasmos_spawn_watch_desc_t req;
     char path[SPAWN_WATCH_PATH_MAX + 1];
     char cli_args[SPAWN_WATCH_ARGS_MAX + 1];
-    uint8_t caps_bytes[WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_IO_RANGE_LIMIT, PM_DMA_WINDOW_LIMIT)];
+    uint8_t caps_bytes[WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_REGION_LIMIT, PM_DMA_WINDOW_LIMIT)];
     pm_spawn_caps_t caps = {0};
     ipc_owed_t* on_ready = 0;
     ipc_owed_t* on_exit = 0;

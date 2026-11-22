@@ -43,7 +43,11 @@ and neither enumerates any axis itself:
   one per host battery), and `--build-matrix` the build-only cells.
 - `.github/workflows/ci.yml` consumes exactly those outputs.
 
-Add a battery, a runtime or an architecture there and the runners appear;
+A third list, `hosts`, names the machines builds and host tests run ON
+(x86_64-linux, aarch64-linux, aarch64-darwin) with the CI runner for each;
+`--host-matrix` feeds CI's kernel unit-test job, which runs on every host.
+
+Add a battery, a runtime, an architecture or a host there and the runners appear;
 nothing else needs editing. The harness boots the architecture the tree was
 configured for (`WASMOS_ARCH`, set by the run targets); `QemuConfig.arch`
 overrides it, and `klog_port="com2"` is x86_64-only (QEMU virt has one UART).

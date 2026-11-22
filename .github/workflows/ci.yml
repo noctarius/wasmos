@@ -19,33 +19,64 @@ env:
   TINYGO_VERSION: "0.41.1"
 
 jobs:
+  # Every host of tests/batteries.json: the unit tests compile kernel headers
+  # natively, so an arm64 host exercises paths an x86_64 host never does.
   unit-tests:
-    name: Kernel unit tests
-    runs-on: ubuntu-24.04
+    name: Kernel unit tests (${{ matrix.name }})
+    needs: batteries
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.batteries.outputs.hosts) }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install host toolchain
+      - name: Install host toolchain (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang lld llvm ninja-build python3-pip curl xz-utils
           python3 -m pip install --user kconfiglib
+          echo "PYTHON=python3" >> "$GITHUB_ENV"
+
+      # Homebrew's Python is externally managed, so kconfiglib goes into a venv
+      # and configure runs with that interpreter. AppleClang cannot build the
+      # UEFI loader; configure is pointed at Homebrew LLVM.
+      - name: Install host toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm lld ninja
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install kconfiglib
+          echo "PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          echo "CONFIGURE_ARGS=--clang=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
 
       - name: Install Zig
         run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+          arch=$(uname -m); arch=${arch/arm64/aarch64}
+          os=$([ "$RUNNER_OS" = macOS ] && echo macos || echo linux)
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${arch}-${os}-${ZIG_VERSION}.tar.xz" \
             | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          echo "$PWD/zig-${arch}-${os}-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       # The Go coroutine test runs on wasm32 through TinyGo, because Go models
       # every record as an opaque blob sized for that target -- a host build
       # would exercise a different ABI. Without TinyGo the unit suite silently
       # loses the one test that catches Go binding drift.
-      - name: Install TinyGo
+      - name: Install TinyGo (Linux)
+        if: runner.os == 'Linux'
         run: |
-          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
-          sudo dpkg -i "tinygo_${TINYGO_VERSION}_amd64.deb"
+          deb="tinygo_${TINYGO_VERSION}_$(dpkg --print-architecture).deb"
+          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/${deb}"
+          sudo dpkg -i "$deb"
+
+      - name: Install TinyGo (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew tap tinygo-org/tools
+          brew install tinygo
 
       - name: Install AssemblyScript
         # asc is required at configure time (AssemblyScript serial driver);
@@ -55,7 +86,7 @@ jobs:
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Configure
-        run: ./configure out/unit
+        run: $PYTHON configure out/unit $CONFIGURE_ARGS
 
       - name: Run kernel unit tests
         run: ninja -C out/unit run-kernel-unit-tests
@@ -166,6 +197,7 @@ jobs:
       qemu: ${{ steps.resolve.outputs.qemu }}
       host: ${{ steps.resolve.outputs.host }}
       build: ${{ steps.resolve.outputs.build }}
+      hosts: ${{ steps.resolve.outputs.hosts }}
     steps:
       - uses: actions/checkout@v4
       # --matrix is the script's own view of tests/batteries.json, including the
@@ -177,16 +209,18 @@ jobs:
           echo "qemu=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c for c in json.load(sys.stdin) if c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
           echo "host=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c['battery'] for c in json.load(sys.stdin) if not c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
           echo "build=$(python3 scripts/run_unittest_suite.py --build-matrix)" >> "$GITHUB_OUTPUT"
+          echo "hosts=$(python3 scripts/run_unittest_suite.py --host-matrix)" >> "$GITHUB_OUTPUT"
 
   # Configurations of an architecture under bring-up: built in full (kernel,
   # loader, guest and native modules, ESP, images) but not booted, because the
   # kernel cannot run a battery yet. The list is build_only in
-  # tests/batteries.json.
+  # tests/batteries.json. Built on an aarch64-linux host, the host an arm64
+  # tree is most often built on outside a Mac.
   arch-build:
     name: ${{ matrix.config }} (build only)
     needs: batteries
     if: needs.batteries.outputs.build != '[]'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
       matrix:
@@ -208,17 +242,17 @@ jobs:
 
       - name: Install Zig
         run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-linux-${ZIG_VERSION}.tar.xz" \
             | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          echo "$PWD/zig-aarch64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
 
       - name: Install TinyGo
         run: |
-          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
-          sudo dpkg -i "tinygo_${TINYGO_VERSION}_amd64.deb"
+          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_arm64.deb"
+          sudo dpkg -i "tinygo_${TINYGO_VERSION}_arm64.deb"
 
       - name: Install AssemblyScript
         run: |

@@ -14,6 +14,8 @@ Modes:
     --build-matrix         print the build-only configurations as JSON: one
                            cell per (arch, defconfig) CI builds but does not
                            boot
+    --host-matrix          print the build/test hosts as JSON: one cell per
+                           host with its CI runner
     --verify-batteries     fail unless every discovered file is in exactly one
                            battery, and every listed file exists
 
@@ -60,6 +62,14 @@ def load_arches():
     return [
         {"name": "x86_64", "runtimes": manifest.get("runtimes", []), "build_only": []}
     ]
+
+
+def load_hosts():
+    """The machines builds and host tests run on, each with its CI runner. A
+    manifest without the axis means the one x86_64 Linux runner."""
+    return load_manifest().get(
+        "hosts", [{"name": "x86_64-linux", "runner": "ubuntu-24.04"}]
+    )
 
 
 def discovered_files(start_dir):
@@ -109,6 +119,7 @@ def main() -> int:
     parser.add_argument("--list-batteries", action="store_true")
     parser.add_argument("--matrix", action="store_true")
     parser.add_argument("--build-matrix", action="store_true")
+    parser.add_argument("--host-matrix", action="store_true")
     parser.add_argument("--verify-batteries", action="store_true")
     args = parser.parse_args()
 
@@ -143,6 +154,9 @@ def main() -> int:
                 ]
             )
         )
+        return 0
+    if args.host_matrix:
+        print(json.dumps(load_hosts()))
         return 0
     if args.verify_batteries:
         return verify(args.start_dir)

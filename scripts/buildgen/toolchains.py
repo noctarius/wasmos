@@ -27,6 +27,9 @@ LLD_HINTS = ["/opt/homebrew/opt/lld/bin", "/usr/local/opt/lld/bin"]
 
 OVMF_CODE_CANDIDATES = [
     "/usr/share/OVMF/OVMF_CODE.fd",
+    "/usr/share/OVMF/OVMF_CODE_4M.fd",
+    "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+    "/usr/share/edk2/x64/OVMF_CODE.4m.fd",
     "/opt/homebrew/share/OVMF/OVMF_CODE.fd",
     "/usr/local/share/OVMF/OVMF_CODE.fd",
     "/opt/homebrew/share/qemu/edk2-x86_64-code.fd",
@@ -62,6 +65,8 @@ AAVMF_CODE_CANDIDATES = [
     "/usr/local/share/qemu/edk2-aarch64-code.fd",
     "/usr/share/AAVMF/AAVMF_CODE.fd",
     "/usr/share/qemu/edk2-aarch64-code.fd",
+    "/usr/share/edk2/aarch64/QEMU_EFI-pflash.raw",
+    "/usr/share/edk2/aarch64/QEMU_CODE.fd",
 ]
 
 

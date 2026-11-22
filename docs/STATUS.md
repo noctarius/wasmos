@@ -345,27 +345,34 @@ linked feature documents for rationale and rollout plans.
   or class REMOVE unbinds it, the class ADD of the new instance rebinds it and
   moves its request-buffer grant, and the mount, open files and the fs-wfs
   process carry over (`tests/test_wfs_virtio_blk.py`, `svc kill` of the driver
-  under `/vwfs`). A transfer the dead instance held, or one begun before the new
-  instance registered, fails with `WASMOS_ERR_BLOCK_DEV_GONE` rather than being
-  held; holding it is the open step now that fs-manager no longer waits on a
-  backend. virtio-blk registers its
+  under `/vwfs`). virtio-blk registers its
   class only after resolving device-manager and sends READY without waiting
   for the acknowledgement (`notifyReadyNowait` in the Zig driver shim), since a
   wait on the PM after the registration closed a cycle through
   partition-manager's synchronous probe.
 - partition-manager follows a restarted disk driver too: a hangup or REMOVE
-  for the disk's endpoint fails the transfers forwarded to it with
-  `WASMOS_ERR_BLOCK_DEV_GONE`, and the ADD of the new instance rebinds the disk
-  without re-reading its table, so its partitions and the mounts on them carry
-  over (`tests/test_partition_manager_disk_arrival.py`, three `svc kill`s under
+  for the disk's endpoint unbinds the disk, and the ADD of the new instance
+  rebinds it without re-reading its table, so its partitions and the mounts on
+  them carry over (`tests/test_partition_manager_disk_arrival.py`, three `svc kill`s under
   a FAT mount on a virtio-blk partition). partition-manager and volume-manager
   forget an ended backend's buffer grants (`backends.zig`), so each restart's
   new endpoint is lent them.
 - fs-fat on a whole disk follows its driver the same way (`fat_block.h`):
-  subscribed to `block` before the server lookup, failing a transfer the ended
-  instance held with `WASMOS_ERR_BLOCK_DEV_GONE`, rebinding on the successor's
+  subscribed to `block` before the server lookup, rebinding on the successor's
   ADD (`tests/test_fat_virtio_blk.py`, three `svc kill`s under a whole-disk
   FAT mount; `tests/unit/test_fat_block.c` for the in-flight cases).
+- A disk driver's restart is invisible above its block clients. fs-fat,
+  fs-wfs and partition-manager HOLD a transfer the ended driver never
+  answered, and one asked for while no driver serves the disk, and resend it
+  to the successor under a new request id (a zero-copy destination
+  reborrowed to it). The hold lasts `WASMOS_BLOCK_HOLD_MS` (30 s,
+  `abi/constants.yaml` `block_hold`) from the driver's end; a driver not back
+  by then is taken to be gone, and transfers fail with
+  `WASMOS_ERR_BLOCK_DEV_GONE` until one returns. The three restart tests read
+  right after each `svc kill` and require a hold to have been logged
+  (`[fat]`/`[fs-wfs]`/`[partition-manager] ... hold...`); host cases in
+  `test_fat_block.c`, `test_wfs_read.c` (the WFS stub now has a clock) and
+  `test_partition_inflight.zig`.
 - Liveness: a unit whose `PROC_IPC_NOTIFY_READY` carries
   `PROC_READY_FLAG_LIVENESS` names its event-loop endpoint in arg0; the PM
   records it only when the sender owns it and passes it on in

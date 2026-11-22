@@ -688,18 +688,13 @@ Source: `architecture/13-runtime-and-packaging.md`,
   rebound. Done: virtio-blk is supervised, fs-wfs on a whole disk follows its
   restart (`wfs_block.h`), as does fs-fat (`fat_block.h`), and
   partition-manager rebinds a disk to its restarted driver, so a filesystem on
-  a partition carries over too. Open:
-  - Hold and resend a transfer across the driver's restart instead of failing it
-    with `WASMOS_ERR_BLOCK_DEV_GONE`. fs-manager no longer waits on a backend
-    (`fs_manager_pending.h`), so a held transfer holds only its own request and
-    the restart's module read is served meanwhile; what remains is the hold in
-    fs-fat, fs-wfs and partition-manager, and a test that holds across a
-    restart. (A hold tried while fs-manager still forwarded synchronously timed
-    the restart's module read out behind it on WARP.)
-  - partition-manager's failing of the transfers an ended driver held
-    (`diskGone`) has no test: no QEMU test can kill the driver while a transfer
-    is in flight, and the driver has no host harness. The rebind is covered by
-    `tests/test_partition_manager_disk_arrival.py`.
+  a partition carries over too. All three hold a transfer across the restart
+  and resend it to the successor (`WASMOS_BLOCK_HOLD_MS`). Open:
+  - partition-manager's hold of a transfer that was ON THE WIRE when the driver
+    ended (`diskGone`) has no deterministic test: the QEMU test reads right after
+    `svc kill` and cannot choose whether its read is in flight at the kill or
+    begun after it, and the driver has no host harness.
+    `test_partition_inflight.zig` covers the table's side of it.
   - Supervise ata, which carries /boot. partition-manager follows a restart
     now, but a restart of ata reads `ata.wap` from /boot, which only ata
     serves: the respawn needs the driver it replaces. It needs the module from

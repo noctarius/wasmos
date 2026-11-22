@@ -411,13 +411,25 @@ by the instance the `id=` it was spawned with fingerprints to.
 It follows that server across a restart (`fat_block.h`). It subscribes to the
 `block` class before looking the server up, so no event falls between the
 two. When the server ends, the kernel sends a hangup and the registry sends a
-REMOVE: a transfer the ended instance held fails with
-`WASMOS_ERR_BLOCK_DEV_GONE`. When a new instance registers under the same
-instance, its ADD rebinds the layer and lends the new endpoint the request
-buffer. Before each transfer an `ipc_peer_await` refuses an ended server's
-endpoint, and then the queued class events are read before the transfer
-fails, since they may name the successor. The mount, its open files and the
-fs-fat process carry over.
+REMOVE. When a new instance registers under the same instance, its ADD rebinds
+the layer and lends the new endpoint the request buffer. Before each transfer
+an `ipc_peer_await` refuses an ended server's endpoint, and then the queued
+class events are read, since they may name the successor. The mount, its open
+files and the fs-fat process carry over.
+
+A transfer the ended instance never answered, and one begun while no instance
+serves the disk, is **held** and resent to the successor, so a restart is
+invisible to the clients of the mount; a transfer is idempotent per LBA, so a
+resend of one the ended instance had half done is safe. A held transfer takes
+a fresh request id, so a late reply from the ended instance completes nothing,
+and a zero-copy read is resent with the client's buffer reborrowed to the
+successor. The hold lasts `WASMOS_BLOCK_HOLD_MS` from the server's end
+(`abi/constants.yaml`, `block_hold`); a server not back by then is taken to be
+gone, and every transfer fails with `WASMOS_ERR_BLOCK_DEV_GONE` until one
+registers. fs-wfs (`wfs_block.h`) and the partition manager
+([36](36-partition-manager-and-block-identity.md)) hold the same way. Holding
+stalls nothing else: fs-manager never waits on a backend (Deferred Replies),
+so the restarted driver's own module is read through it meanwhile.
 
 - Supports `OPEN`, `READ`, `SEEK`, `CLOSE`, `STAT`, `READDIR`.
 - Write operations (`WRITE`, `MKDIR`, `UNLINK`, `RMDIR`) are implemented for

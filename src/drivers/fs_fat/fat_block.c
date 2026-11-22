@@ -5,6 +5,9 @@
  * fat_block_read_direct moves more than a sector, and it lands in the client's
  * buffer without touching the cache. */
 #include "fat_block.h"
+
+#include <string.h>
+
 #include "wasmos/api.h"
 #include "wasmos/libsys.h" /* wasmos_sys_ipc_report_discard */
 #include "wasmos_driver_abi.h"
@@ -35,6 +38,12 @@ void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply
     blk->direct_sectors = 0;
     blk->write_pending = 0;
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
+    blk->cur_req_type = 0;
+    memset(&blk->cur_req, 0, sizeof(blk->cur_req));
+    blk->held = 0u;
+    blk->hold_logged = 0u;
+    blk->gone = 0u;
+    blk->hold_deadline = 0u;
     blk->owner = 0;
 }
 
@@ -62,24 +71,125 @@ int fat_block_setup(fat_block_t* blk) {
     return 0;
 }
 
-/* The server ended: nothing is sent to its endpoint again, and a transfer it
- * held fails. Returns the op that transfer belonged to, with its err set, or
- * NULL when none was outstanding. */
+/* fat_block_server_ready's answer when no server is there but the hold window
+ * is open: the transfer is staged and held rather than sent or failed. */
+#define FAT_BLOCK_HOLD 1
+
+/* Ticks in the hold window, rounded up as the kernel rounds a millisecond
+ * window, so the hold is never shorter than WASMOS_BLOCK_HOLD_MS. */
+static uint32_t fat_block_hold_ticks(void) {
+    return (uint32_t)(((uint64_t)WASMOS_BLOCK_HOLD_MS * WASMOS_SCHED_TICK_HZ + 999u) / 1000u);
+}
+
+/* 1 once the hold window of the current outage has closed. Compared as a
+ * signed difference, so it holds across the tick counter's wrap. */
+static int fat_block_window_closed(const fat_block_t* blk) {
+    return (int32_t)((uint32_t)wasmos_sched_ticks() - blk->hold_deadline) >= 0;
+}
+
+static int32_t fat_block_next_id(fat_block_t* blk) {
+    int32_t id = blk->next_req_id++;
+    if (blk->next_req_id < 1) {
+        blk->next_req_id = 1;
+    }
+    return id;
+}
+
+/* End the outstanding transfer as failed with `err`. Returns its op. */
+static fat_op_ctx_t* fat_block_fail_current(fat_block_t* blk, int32_t err) {
+    blk->cur_req_id = 0;
+    blk->held = 0u;
+    blk->direct_read = 0u;
+    blk->loaded_lba = FAT_BLOCK_NO_LBA;
+    fat_block_set_err(blk, err);
+    return blk->owner;
+}
+
+/* Park the outstanding transfer until a server is there. It takes a fresh id:
+ * the instance that ended may still have answered the old one, and that reply
+ * must not complete the resend. */
+static void fat_block_hold(fat_block_t* blk) {
+    blk->cur_req_id = fat_block_next_id(blk);
+    blk->held = 1u;
+    if (!blk->hold_logged) {
+        blk->hold_logged = 1u;
+        (void)printf("[fat] holding a block transfer until the disk driver returns\n");
+    }
+}
+
+/* Stage cur_req and hand its buffer to the server. Returns 0, or -1 when the
+ * request could not be written or sent. */
+static int fat_block_submit(fat_block_t* blk) {
+    if (blk->req_bid < 0 ||
+        wasmos_xfer_buffer_write(blk->req_bid, &blk->cur_req, (int32_t)sizeof(blk->cur_req), 0) !=
+            0) {
+        return -1;
+    }
+    return wasmos_ipc_send(blk->block_endpoint,
+                           blk->reply_endpoint,
+                           blk->cur_req_type,
+                           blk->cur_req_id,
+                           blk->req_bid,
+                           0,
+                           (int32_t)sizeof(blk->cur_req),
+                           0);
+}
+
+/* Send the held transfer to the server just bound. A direct read names a grant
+ * of the client's buffer, and the ended instance's grant ended with it, so the
+ * buffer is reborrowed to the successor first, and the op keeps the new grant
+ * for its later reads. Returns the op to fail when the resend could not be
+ * made, else NULL. */
+static fat_op_ctx_t* fat_block_resend(fat_block_t* blk) {
+    if (!blk->held || blk->block_endpoint < 0) {
+        return 0;
+    }
+    if (blk->direct_read) {
+        fat_op_ctx_t* op = blk->owner;
+        int32_t borrow;
+        if (!op || op->arg3 <= 0) {
+            return fat_block_fail_current(blk, WASMOS_ERR_FS_BUFFER);
+        }
+        if (op->zc_borrow > 0) {
+            (void)wasmos_xfer_buffer_unborrow(op->zc_borrow);
+        }
+        borrow =
+            wasmos_xfer_buffer_reborrow(blk->block_endpoint, op->arg3, WASMOS_BUFFER_GRANT_WRITE);
+        if (borrow <= 0) {
+            op->zc_borrow = -1;
+            return fat_block_fail_current(blk, WASMOS_ERR_FS_BUFFER);
+        }
+        op->zc_borrow = borrow;
+        blk->cur_req.dst_borrow_id = borrow;
+    }
+    blk->held = 0u;
+    if (fat_block_submit(blk) != 0) {
+        return fat_block_fail_current(blk, WASMOS_ERR_FS_IO);
+    }
+    return 0;
+}
+
+/* The server ended: nothing is sent to its endpoint again, and the hold window
+ * opens. A layer that follows its server holds a transfer the server never
+ * answered and returns NULL; one that does not fails it, returning its op with
+ * err set. NULL also when nothing was outstanding. */
 static fat_op_ctx_t* fat_block_server_gone(fat_block_t* blk) {
     if (blk->block_endpoint < 0) {
         return 0;
     }
     blk->block_endpoint = -1;
-    if (blk->cur_req_id == 0) {
+    blk->hold_deadline = (uint32_t)wasmos_sched_ticks() + fat_block_hold_ticks();
+    if (blk->cur_req_id == 0 || blk->held) {
         return 0;
     }
-    blk->cur_req_id = 0;
-    blk->direct_read = 0u;
     /* A read the server never answered may have half-landed in the block
      * buffer; nothing it holds is known good. */
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
-    fat_block_set_err(blk, WASMOS_ERR_BLOCK_DEV_GONE);
-    return blk->owner;
+    if (blk->follow_endpoint < 0) {
+        return fat_block_fail_current(blk, WASMOS_ERR_BLOCK_DEV_GONE);
+    }
+    fat_block_hold(blk);
+    return 0;
 }
 
 /* A new instance serves the disk at `endpoint`: lend it the request buffer. The
@@ -97,13 +207,15 @@ static void fat_block_rebind(fat_block_t* blk, int32_t endpoint) {
         return;
     }
     blk->block_endpoint = endpoint;
+    blk->gone = 0u;
+    blk->hold_logged = 0u;
 }
 
 /* Act on the follow-endpoint message just received. SVC_IPC_CLASS_EVENT for
  * `block`: arg0 the kind, arg1 the instance, arg2 the provider's endpoint. One
  * instance has one live provider, so an ADD naming another endpoint is a new
- * instance of the server. Returns the op a transfer the ended instance held
- * belonged to, or NULL. */
+ * instance of the server, and what the layer holds is resent to it. Returns
+ * the op of a transfer that could not be resent, or NULL. */
 static fat_op_ctx_t* fat_block_on_follow(fat_block_t* blk) {
     int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
     int32_t kind = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
@@ -132,11 +244,17 @@ static fat_op_ctx_t* fat_block_on_follow(fat_block_t* blk) {
     } else if (kind == SVC_CLASS_EVENT_ADD && provider >= 0 && provider != blk->block_endpoint) {
         failed = fat_block_server_gone(blk);
         fat_block_rebind(blk, provider);
+        if (!failed) {
+            failed = fat_block_resend(blk);
+        }
     }
     return failed;
 }
 
-/* 0 when a live instance serves the disk, else WASMOS_ERR_BLOCK_DEV_GONE.
+/* 0 when a live instance serves the disk; FAT_BLOCK_HOLD when none does but
+ * the layer follows its server and the hold window is open; otherwise
+ * WASMOS_ERR_BLOCK_DEV_GONE, which also marks the disk gone once the window has
+ * closed.
  *
  * The await registered here also makes the server's end reach reply_endpoint
  * if it never answers. Its refusal with NOENT says the endpoint has no live
@@ -154,7 +272,31 @@ static int32_t fat_block_server_ready(fat_block_t* blk) {
             (void)fat_block_on_follow(blk);
         }
     }
-    return blk->block_endpoint >= 0 ? 0 : WASMOS_ERR_BLOCK_DEV_GONE;
+    if (blk->block_endpoint >= 0) {
+        return 0;
+    }
+    if (blk->follow_endpoint < 0 || blk->gone) {
+        return WASMOS_ERR_BLOCK_DEV_GONE;
+    }
+    if (fat_block_window_closed(blk)) {
+        blk->gone = 1u;
+        return WASMOS_ERR_BLOCK_DEV_GONE;
+    }
+    return FAT_BLOCK_HOLD;
+}
+
+/* Send the request just staged in cur_req, or hold it when `ready` is
+ * FAT_BLOCK_HOLD. Returns 0, or WASMOS_ERR_FS_IO when it could not be sent. */
+static int32_t fat_block_dispatch(fat_block_t* blk, int32_t ready) {
+    if (ready == FAT_BLOCK_HOLD) {
+        fat_block_hold(blk);
+        return 0;
+    }
+    if (fat_block_submit(blk) != 0) {
+        blk->cur_req_id = 0;
+        return WASMOS_ERR_FS_IO;
+    }
+    return 0;
 }
 
 int32_t fat_block_follow(fat_block_t* blk, int32_t proc_endpoint, int32_t follow_endpoint) {
@@ -189,21 +331,19 @@ fat_op_ctx_t* fat_block_event(fat_block_t* blk, int* out_ok) {
     return fat_block_on_follow(blk);
 }
 
-/* Stage the outstanding request and hand its buffer to the server. Returns 0, or
- * -1 when the request could not be written or sent. */
-static int fat_block_submit(fat_block_t* blk, int32_t req_type, const wasmos_block_request_t* req) {
-    if (blk->req_bid < 0 ||
-        wasmos_xfer_buffer_write(blk->req_bid, req, (int32_t)sizeof(*req), 0) != 0) {
-        return -1;
+int fat_block_holding(const fat_block_t* blk) {
+    return blk->held;
+}
+
+fat_op_ctx_t* fat_block_expire(fat_block_t* blk, int* out_ok) {
+    if (out_ok) {
+        *out_ok = 0;
     }
-    return wasmos_ipc_send(blk->block_endpoint,
-                           blk->reply_endpoint,
-                           req_type,
-                           blk->cur_req_id,
-                           blk->req_bid,
-                           0,
-                           (int32_t)sizeof(*req),
-                           0);
+    if (!blk->held || blk->block_endpoint >= 0 || !fat_block_window_closed(blk)) {
+        return 0;
+    }
+    blk->gone = 1u;
+    return fat_block_fail_current(blk, WASMOS_ERR_BLOCK_DEV_GONE);
 }
 
 uint8_t* fat_block_sector(fat_block_t* blk) {
@@ -245,19 +385,19 @@ int fat_block_set_sector_bytes(fat_block_t* blk, uint32_t bytes) {
     return 0;
 }
 
-/* Submit one block transfer of blk->sector_bytes (count = 1).  Returns 0;
- * WASMOS_ERR_BLOCK_DEV_GONE when no live instance serves the disk; or
- * WASMOS_ERR_FS_IO when the layer is unconfigured, when staging the write into
- * the block buffer failed, or when the request could not be sent. */
+/* Submit one block transfer of blk->sector_bytes (count = 1), or hold it while
+ * the disk's driver restarts.  Returns 0; WASMOS_ERR_BLOCK_DEV_GONE when no
+ * instance serves the disk and none is waited for; or WASMOS_ERR_FS_IO when the
+ * layer is unconfigured, when staging the write into the block buffer failed,
+ * or when the request could not be sent. */
 static int32_t fat_block_start(fat_block_t* blk, uint32_t lba, int rw) {
-    int32_t req_type;
     int32_t rc;
 
     if (blk->reply_endpoint < 0 || blk->buf_phys < 0) {
         return WASMOS_ERR_FS_IO;
     }
     rc = fat_block_server_ready(blk);
-    if (rc != 0) {
+    if (rc < 0) {
         return rc;
     }
     if (rw == 1 /* write */ &&
@@ -266,27 +406,20 @@ static int32_t fat_block_start(fat_block_t* blk, uint32_t lba, int rw) {
         return WASMOS_ERR_FS_IO;
     }
 
-    blk->cur_req_id = blk->next_req_id++;
-    if (blk->next_req_id < 1) {
-        blk->next_req_id = 1;
-    }
+    blk->cur_req_id = fat_block_next_id(blk);
     blk->wait_lba = lba;
     blk->wait_resp_type = rw ? BLOCK_IPC_WRITE_RESP : BLOCK_IPC_READ_RESP;
     blk->copy_into_sector = rw ? 0u : 1u;
-    req_type = rw ? BLOCK_IPC_WRITE_REQ : BLOCK_IPC_READ_REQ;
+    blk->cur_req_type = rw ? BLOCK_IPC_WRITE_REQ : BLOCK_IPC_READ_REQ;
 
-    wasmos_block_request_t req = {0};
-    req.version = BLOCK_REQUEST_VERSION;
-    req.target = blk->target;
-    req.lba = lba;
-    req.sector_count = 1u;
-    req.dst_kind = BLOCK_DST_BLOCK_BUFFER;
-    req.dst_phys = (uint32_t)blk->buf_phys;
-    if (fat_block_submit(blk, req_type, &req) != 0) {
-        blk->cur_req_id = 0;
-        return WASMOS_ERR_FS_IO;
-    }
-    return 0;
+    memset(&blk->cur_req, 0, sizeof(blk->cur_req));
+    blk->cur_req.version = BLOCK_REQUEST_VERSION;
+    blk->cur_req.target = blk->target;
+    blk->cur_req.lba = lba;
+    blk->cur_req.sector_count = 1u;
+    blk->cur_req.dst_kind = BLOCK_DST_BLOCK_BUFFER;
+    blk->cur_req.dst_phys = (uint32_t)blk->buf_phys;
+    return fat_block_dispatch(blk, rc);
 }
 
 uint32_t fat_block_direct_sectors(const fat_block_t* blk) {
@@ -313,14 +446,11 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
         return FAT_R_ERR;
     }
     int32_t rc = fat_block_server_ready(blk);
-    if (rc != 0) {
+    if (rc < 0) {
         fat_block_set_err(blk, rc);
         return FAT_R_ERR;
     }
-    blk->cur_req_id = blk->next_req_id++;
-    if (blk->next_req_id < 1) {
-        blk->next_req_id = 1;
-    }
+    blk->cur_req_id = fat_block_next_id(blk);
     blk->wait_lba = lba;
     blk->wait_resp_type = BLOCK_IPC_READ_RESP;
     /* Nothing lands in the staged sector, so do not pull it on completion and do
@@ -331,17 +461,17 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
     /* Same opcode as a staged read; only the destination differs. The borrow is
      * carried so the server can map the destination for device DMA, and a server
      * that only copies ignores it. */
-    wasmos_block_request_t req = {0};
-    req.version = BLOCK_REQUEST_VERSION;
-    req.target = blk->target;
-    req.lba = lba;
-    req.sector_count = count;
-    req.dst_kind = BLOCK_DST_XFER_BUFFER;
-    req.dst_buffer_id = buffer_id;
-    req.dst_borrow_id = borrow_id;
-    req.dst_offset = dst_offset;
-    if (fat_block_submit(blk, BLOCK_IPC_READ_REQ, &req) != 0) {
-        blk->cur_req_id = 0;
+    blk->cur_req_type = BLOCK_IPC_READ_REQ;
+    memset(&blk->cur_req, 0, sizeof(blk->cur_req));
+    blk->cur_req.version = BLOCK_REQUEST_VERSION;
+    blk->cur_req.target = blk->target;
+    blk->cur_req.lba = lba;
+    blk->cur_req.sector_count = count;
+    blk->cur_req.dst_kind = BLOCK_DST_XFER_BUFFER;
+    blk->cur_req.dst_buffer_id = buffer_id;
+    blk->cur_req.dst_borrow_id = borrow_id;
+    blk->cur_req.dst_offset = dst_offset;
+    if (fat_block_dispatch(blk, rc) != 0) {
         blk->direct_read = 0u;
         fat_block_set_err(blk, WASMOS_ERR_FS_IO);
         return FAT_R_ERR;

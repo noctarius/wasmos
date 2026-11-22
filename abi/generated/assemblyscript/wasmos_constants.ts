@@ -92,6 +92,26 @@ export const BLOCK_DST_BLOCK_BUFFER: i32 = 0;
 // and tail remainders through a block-buffer destination.
 export const BLOCK_DST_XFER_BUFFER: i32 = 1;
 
+// block_hold
+// How long a block client keeps the transfers of a disk whose driver ended.
+//
+// A supervised disk driver comes back as a new process under the same
+// `block` class instance. A client that follows it -- fs-fat, fs-wfs, the
+// partition manager -- holds every transfer the ended instance never
+// answered, and every transfer asked of the disk meanwhile, and resends
+// them to the successor, so a restart is invisible above the client. A
+// transfer is idempotent per LBA, so a resend of one the ended instance
+// had half done is safe.
+//
+// The window is counted from the driver's end. It covers a restart on the
+// supervisor's default policy -- a backoff of 250 ms to 2 s, the spawn, and
+// the 10 s READY deadline (docs/architecture/15-drivers-and-services.md).
+// A driver not back when it closes is taken to be gone: what is held fails
+// with WASMOS_ERR_BLOCK_DEV_GONE, and so does every later transfer to the
+// disk, at once, until a driver serves it again.
+// Milliseconds a client holds a disk's transfers after its driver ends.
+export const WASMOS_BLOCK_HOLD_MS: i32 = 30000;
+
 // partition_scheme
 // Which partition table a disk carries, reported in the `scheme` field of
 // wasmos_block_descriptor_t.

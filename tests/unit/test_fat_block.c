@@ -174,10 +174,39 @@ int32_t wasmos_xfer_buffer_release(int32_t buffer) {
     return 0;
 }
 
+/* The descriptor last staged in the request buffer: what the server reads when
+ * it reaches the message. */
+static wasmos_block_request_t g_desc;
+
 int32_t wasmos_xfer_buffer_write(int32_t buffer, const void* ptr, int32_t len, int32_t offset) {
-    (void)buffer, (void)ptr, (void)len, (void)offset;
+    (void)buffer;
+    if (offset == 0 && len == (int32_t)sizeof(g_desc)) {
+        memcpy(&g_desc, ptr, sizeof(g_desc));
+    }
     return 0;
 }
+
+/* Reborrows of a client buffer, by grantee endpoint; each gets a fresh id. */
+static int32_t g_reborrow_grantee;
+static int g_reborrow_count;
+
+int32_t wasmos_xfer_buffer_reborrow(int32_t endpoint, int32_t borrow, int32_t flags) {
+    (void)borrow, (void)flags;
+    g_reborrow_grantee = endpoint;
+    g_reborrow_count++;
+    return 500 + g_reborrow_count;
+}
+
+/* The scheduler clock, advanced by the cases. */
+static uint32_t g_ticks;
+
+int32_t wasmos_sched_ticks(void) {
+    return (int32_t)g_ticks;
+}
+
+/* Ticks in the hold window, rounded up as the layer rounds it. */
+#define HOLD_TICKS                                                                                 \
+    ((uint32_t)(((uint64_t)WASMOS_BLOCK_HOLD_MS * WASMOS_SCHED_TICK_HZ + 999u) / 1000u))
 
 /* --- fixture --------------------------------------------------------------- */
 
@@ -190,6 +219,11 @@ static void fixture(void) {
     g_queued = 0;
     g_sent_count = 0;
     g_grant_count = 0;
+    g_reborrow_count = 0;
+    g_reborrow_grantee = -1;
+    memset(&g_desc, 0, sizeof(g_desc));
+    /* Near the wrap, so a deadline compared without wrap arithmetic fails. */
+    g_ticks = 0xFFFFFF00u;
     g_live_server = SERVER_EP;
     fat_block_configure(&g_blk, SERVER_EP, REPLY_EP, TARGET);
     expect(fat_block_setup(&g_blk) == 0, "the block layer sets up");
@@ -214,7 +248,10 @@ static void test_a_read_is_sent_to_the_server_and_completes(void) {
  * a read never answered it, and the kernel's hangup for it was dropped as an
  * unmatched reply, so the operation waiting on the read never finished: fs-fat
  * stopped serving, and fs-manager's synchronous forward stalled behind it --
- * the path a supervised driver's restart reads its own module through. */
+ * the path a supervised driver's restart reads its own module through.
+ *
+ * This layer does not follow its server, so no successor can be learned of and
+ * the read is failed rather than held. */
 static void test_a_read_in_flight_when_its_server_ends_fails_gone(void) {
     int ok = 1;
     fixture();
@@ -327,43 +364,165 @@ static void test_a_read_drains_queued_events_before_failing(void) {
            "...to the successor");
 }
 
-static void test_a_read_with_no_successor_yet_fails_gone(void) {
-    following_fixture();
-    server_ends(0);
-    expect(fat_need_sector(&g_blk, 5u) == FAT_R_ERR, "a read with no live server fails");
-    expect(g_op.err == WASMOS_ERR_BLOCK_DEV_GONE, "...naming the server's end");
-    expect(g_sent_count == 0, "...and is not sent");
+/* The reply to the transfer last sent, from `server`. */
+static void answer_last(int32_t type, int32_t server) {
+    queue(REPLY_EP, type, (int32_t)g_sent[g_sent_count - 1].request_id, server, 0, 1, 0);
 }
 
-static void test_a_remove_fails_a_read_in_flight(void) {
+/* Regression: 2026-11-22-block-transfer-lost-across-a-driver-restart -- a
+ * transfer the ended driver held, or one begun before its successor
+ * registered, failed with WASMOS_ERR_BLOCK_DEV_GONE although the disk was
+ * the same disk a moment later. Every restart of a supervised disk driver
+ * surfaced to the applications reading the volume as an I/O error. */
+static void test_a_read_in_flight_when_its_server_ends_is_resent_to_the_successor(void) {
+    int ok = 0;
+    following_fixture();
+    expect(fat_need_sector(&g_blk, 5u) == FAT_R_WAIT, "a read is submitted");
+    int32_t first = (int32_t)g_sent[0].request_id;
+    server_ends(1);
+    expect(fat_block_complete(&g_blk, &ok) == 0, "the hangup fails nothing");
+    expect(fat_block_event(&g_blk, &ok) == 0, "nor does the REMOVE behind it");
+    expect(!fat_block_idle(&g_blk), "the read is held");
+    expect(g_sent_count == 1, "...and not sent anywhere while no server runs");
+    successor_registers();
+    expect(fat_block_event(&g_blk, &ok) == 0, "the successor's ADD fails nothing");
+    expect(g_sent_count == 2 && (int32_t)g_sent[1].destination == SUCCESSOR_EP &&
+               g_sent[1].type == BLOCK_IPC_READ_REQ,
+           "the held read is resent to the successor");
+    expect((int32_t)g_sent[1].request_id != first, "...under a new request id");
+    expect(g_desc.lba == 5u && g_desc.target == TARGET, "...for the same sector of the same disk");
+    answer_last(BLOCK_IPC_READ_RESP, SUCCESSOR_EP);
+    expect(fat_block_complete(&g_blk, &ok) == &g_op && ok == 1, "its reply completes the op");
+    expect(fat_need_sector(&g_blk, 5u) == FAT_R_DONE, "and the sector is cached");
+}
+
+/* Regression: 2026-11-22-block-transfer-lost-across-a-driver-restart */
+static void test_a_read_with_no_successor_yet_is_held_until_one_registers(void) {
+    int ok = 0;
+    following_fixture();
+    server_ends(0);
+    expect(fat_need_sector(&g_blk, 5u) == FAT_R_WAIT, "a read with no live server waits");
+    expect(g_sent_count == 0, "...and is not sent");
+    successor_registers();
+    expect(fat_block_event(&g_blk, &ok) == 0, "the successor's ADD fails nothing");
+    expect(g_sent_count == 1 && (int32_t)g_sent[0].destination == SUCCESSOR_EP,
+           "the read is sent to the successor");
+    answer_last(BLOCK_IPC_READ_RESP, SUCCESSOR_EP);
+    expect(fat_block_complete(&g_blk, &ok) == &g_op && ok == 1, "its reply completes the op");
+}
+
+/* Regression: 2026-11-22-block-transfer-lost-across-a-driver-restart */
+static void test_a_remove_holds_a_read_in_flight(void) {
     int ok = 1;
     following_fixture();
     expect(fat_need_sector(&g_blk, 5u) == FAT_R_WAIT, "a read is submitted");
     server_ends(0);
-    expect(fat_block_event(&g_blk, &ok) == &g_op && ok == 0, "the REMOVE fails the read");
-    expect(g_op.err == WASMOS_ERR_BLOCK_DEV_GONE, "...naming the server's end");
-    expect(fat_block_idle(&g_blk), "nothing is left outstanding");
+    expect(fat_block_event(&g_blk, &ok) == 0, "the REMOVE fails nothing");
+    expect(!fat_block_idle(&g_blk), "the read is held");
+    expect(fat_block_holding(&g_blk), "...and the layer says so");
 }
 
-static void test_the_hangup_and_the_remove_fail_a_read_once(void) {
+static void test_the_hangup_and_the_remove_hold_a_read_once(void) {
     int ok = 1;
     following_fixture();
     expect(fat_need_sector(&g_blk, 5u) == FAT_R_WAIT, "a read is submitted");
     server_ends(1);
-    expect(fat_block_complete(&g_blk, &ok) == &g_op, "the hangup fails the read");
-    expect(fat_block_event(&g_blk, &ok) == 0, "the REMOVE behind it fails nothing more");
+    expect(fat_block_complete(&g_blk, &ok) == 0, "the hangup holds the read");
+    expect(fat_block_event(&g_blk, &ok) == 0, "the REMOVE behind it changes nothing");
+    successor_registers();
+    expect(fat_block_event(&g_blk, &ok) == 0, "the successor's ADD fails nothing");
+    expect(g_sent_count == 2, "the read is resent exactly once");
 }
 
+/* An ADD on another endpoint, with no REMOVE before it, is the successor too:
+ * the ended instance's transfer moves to it, and a late reply from the ended
+ * instance is not taken for the successor's. */
 static void test_a_stale_reply_after_a_rebind_is_dropped(void) {
     int ok = 1;
     following_fixture();
     expect(fat_need_sector(&g_blk, 5u) == FAT_R_WAIT, "a read is submitted");
     int32_t first = (int32_t)g_sent[0].request_id;
     successor_registers();
-    expect(fat_block_event(&g_blk, &ok) == &g_op && ok == 0,
-           "an ADD on another endpoint fails what the old instance held");
+    expect(fat_block_event(&g_blk, &ok) == 0, "an ADD on another endpoint fails nothing");
+    expect(g_sent_count == 2 && (int32_t)g_sent[1].destination == SUCCESSOR_EP,
+           "...and moves the read to the successor");
     queue(REPLY_EP, BLOCK_IPC_READ_RESP, first, SERVER_EP, 0, 1, 0);
-    expect(fat_block_complete(&g_blk, &ok) == 0, "a late reply to it completes nothing");
+    expect(fat_block_complete(&g_blk, &ok) == 0, "a late reply to the old send completes nothing");
+    answer_last(BLOCK_IPC_READ_RESP, SUCCESSOR_EP);
+    expect(fat_block_complete(&g_blk, &ok) == &g_op && ok == 1, "the successor's reply does");
+}
+
+/* Regression: 2026-11-22-block-transfer-lost-across-a-driver-restart -- a
+ * direct read names a grant of the client's buffer to the server. The ended
+ * instance's grant ended with it, so a resend must carry a grant to the
+ * successor, or the successor cannot write the client's pages. */
+static void test_a_held_direct_read_is_resent_with_a_grant_to_the_successor(void) {
+    int ok = 0;
+    following_fixture();
+    g_op.arg3 = 42; /* the borrow fs-manager lent this backend */
+    g_op.zc_borrow = 77;
+    expect(fat_block_read_direct(&g_blk, 8u, 4u, 9, 77, 0u) == FAT_R_WAIT,
+           "a direct read is submitted");
+    expect(g_desc.dst_borrow_id == 77, "...naming the grant to the server");
+    server_ends(1);
+    expect(fat_block_complete(&g_blk, &ok) == 0, "the hangup holds it");
+    expect(fat_block_event(&g_blk, &ok) == 0, "the REMOVE behind it fails nothing");
+    successor_registers();
+    expect(fat_block_event(&g_blk, &ok) == 0, "the successor's ADD fails nothing");
+    expect(g_reborrow_count == 1 && g_reborrow_grantee == SUCCESSOR_EP,
+           "the client's buffer is reborrowed to the successor");
+    expect(g_op.zc_borrow > 0 && g_op.zc_borrow != 77, "...and the op keeps the new grant");
+    expect(g_sent_count == 2 && (int32_t)g_sent[1].destination == SUCCESSOR_EP,
+           "the read is resent to the successor");
+    expect(g_desc.dst_kind == BLOCK_DST_XFER_BUFFER && g_desc.dst_borrow_id == g_op.zc_borrow &&
+               g_desc.lba == 8u && g_desc.sector_count == 4u,
+           "...naming the new grant, for the same sectors");
+    queue(REPLY_EP, BLOCK_IPC_READ_RESP, (int32_t)g_sent[1].request_id, SUCCESSOR_EP, 0, 4, 0);
+    expect(fat_block_complete(&g_blk, &ok) == &g_op && ok == 1, "its reply completes the op");
+    expect(fat_block_direct_sectors(&g_blk) == 4u, "...with what the successor moved");
+}
+
+/* Regression: 2026-11-22-block-transfer-lost-across-a-driver-restart */
+static void test_a_held_write_is_resent_and_completes_once(void) {
+    int ok = 0;
+    following_fixture();
+    expect(fat_block_write(&g_blk, 9u) == FAT_R_WAIT, "a write is submitted");
+    server_ends(1);
+    expect(fat_block_complete(&g_blk, &ok) == 0, "the hangup holds it");
+    expect(fat_block_event(&g_blk, &ok) == 0, "the REMOVE behind it fails nothing");
+    successor_registers();
+    expect(fat_block_event(&g_blk, &ok) == 0, "the successor's ADD fails nothing");
+    expect(g_sent_count == 2 && g_sent[1].type == BLOCK_IPC_WRITE_REQ &&
+               (int32_t)g_sent[1].destination == SUCCESSOR_EP && g_desc.lba == 9u,
+           "the write is resent to the successor");
+    answer_last(BLOCK_IPC_WRITE_RESP, SUCCESSOR_EP);
+    expect(fat_block_complete(&g_blk, &ok) == &g_op && ok == 1, "its reply completes the op");
+    expect(fat_block_write(&g_blk, 9u) == FAT_R_DONE, "the op's resume sees one completed write");
+}
+
+/* A driver that does not come back -- its supervisor gave up -- must not hold
+ * the filesystem for ever. Once the window closes the held transfer fails, and
+ * so does every later one at once, until a driver serves the disk again. */
+static void test_a_hold_with_no_successor_ends_gone(void) {
+    int ok = 1;
+    following_fixture();
+    expect(fat_need_sector(&g_blk, 5u) == FAT_R_WAIT, "a read is submitted");
+    server_ends(1);
+    expect(fat_block_complete(&g_blk, &ok) == 0, "the hangup holds it");
+    g_ticks += HOLD_TICKS - 1u;
+    expect(fat_block_expire(&g_blk, &ok) == 0, "inside the window nothing fails");
+    expect(fat_block_holding(&g_blk), "...and the read is still held");
+    g_ticks += 1u;
+    expect(fat_block_expire(&g_blk, &ok) == &g_op && ok == 0, "the closed window fails the read");
+    expect(g_op.err == WASMOS_ERR_BLOCK_DEV_GONE, "...naming the server's end");
+    expect(fat_block_idle(&g_blk) && !fat_block_holding(&g_blk), "nothing is left outstanding");
+    g_op.err = 0;
+    expect(fat_need_sector(&g_blk, 6u) == FAT_R_ERR, "a later read fails at once");
+    expect(g_op.err == WASMOS_ERR_BLOCK_DEV_GONE, "...naming the server's end");
+    successor_registers();
+    expect(fat_block_event(&g_blk, &ok) == 0, "a driver that returns after all fails nothing");
+    expect(fat_need_sector(&g_blk, 6u) == FAT_R_WAIT, "and the next read is submitted");
+    expect((int32_t)g_sent[g_sent_count - 1].destination == SUCCESSOR_EP, "...to it");
 }
 
 int main(void) {
@@ -373,10 +532,14 @@ int main(void) {
     test_a_failed_write_leaves_the_next_write_to_be_sent();
     test_the_successor_is_lent_the_request_buffer_and_served();
     test_a_read_drains_queued_events_before_failing();
-    test_a_read_with_no_successor_yet_fails_gone();
-    test_a_remove_fails_a_read_in_flight();
-    test_the_hangup_and_the_remove_fail_a_read_once();
+    test_a_read_in_flight_when_its_server_ends_is_resent_to_the_successor();
+    test_a_read_with_no_successor_yet_is_held_until_one_registers();
+    test_a_remove_holds_a_read_in_flight();
+    test_the_hangup_and_the_remove_hold_a_read_once();
     test_a_stale_reply_after_a_rebind_is_dropped();
+    test_a_held_direct_read_is_resent_with_a_grant_to_the_successor();
+    test_a_held_write_is_resent_and_completes_once();
+    test_a_hold_with_no_successor_ends_gone();
     printf("test_fat_block: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

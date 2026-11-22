@@ -725,9 +725,9 @@ What each client of a supervised provider does when it restarts:
 | `rtc` | `date` | looks it up per run |
 | `rtc` | `menu_bar` | follows `rtc` by name watch; a failed read drops the endpoint until the next binding |
 | `virtio_rng@pci:*` | entropy users | look up `virtio-rng` / `hrng` per request |
-| `virtio_blk@pci:*` | fs-wfs on a whole disk | follows the disk's `block` instance through class events and moves its request grant to the new instance; the mount, open files and fs-wfs itself carry over, and I/O that lands while the driver is down fails `WASMOS_ERR_BLOCK_DEV_GONE` |
-| `virtio_blk@pci:*` | fs-fat on a whole disk | as fs-wfs: follows the `block` instance (`fat_block.h`); the mount, open files and fs-fat itself carry over, and I/O while the driver is down fails `WASMOS_ERR_BLOCK_DEV_GONE` |
-| `virtio_blk@pci:*` | partition-manager | follows the disk's `block` instance through hangups and class events, fails the transfers the ended driver held with `WASMOS_ERR_BLOCK_DEV_GONE`, and rebinds the disk to the new instance; its partitions and the mounts on them carry over |
+| `virtio_blk@pci:*` | fs-wfs on a whole disk | follows the disk's `block` instance through class events and moves its request grant to the new instance; the mount, open files and fs-wfs itself carry over, and I/O in flight or asked for while the driver is down is held and resent to the new instance (`WASMOS_ERR_BLOCK_DEV_GONE` only once `WASMOS_BLOCK_HOLD_MS` pass without one) |
+| `virtio_blk@pci:*` | fs-fat on a whole disk | as fs-wfs: follows the `block` instance and holds I/O across the restart (`fat_block.h`); the mount, open files and fs-fat itself carry over |
+| `virtio_blk@pci:*` | partition-manager | follows the disk's `block` instance through hangups and class events, holds the transfers the ended driver had and those asked for meanwhile, and rebinds the disk to the new instance and resends them there; its partitions and the mounts on them carry over |
 | `virtio_blk@pci:*` | volume-manager | probes only at arrival and rescan; forgets the ended instance's buffer grants on REMOVE |
 | `logger` | (none) | a restart continues `/var/log/messages` from the position kept in kenv `logger.seq` |
 | boot chain | everyone | `critical`: never restarted, its end halts |

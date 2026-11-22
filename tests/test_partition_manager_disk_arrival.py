@@ -28,7 +28,6 @@ import re
 import shutil
 import sys
 import tempfile
-import time
 import unittest
 from dataclasses import replace
 
@@ -222,6 +221,11 @@ class PartitionManagerDiskArrivalTest(unittest.TestCase):
         partition to the endpoint of the driver that had ended. A filesystem on a
         partition of a supervised disk lost its I/O for good on the driver's
         first restart, though the disk's content never changed.
+
+        Regression: 2026-11-22-block-transfer-lost-across-a-driver-restart --
+        a transfer forwarded to the driver when it ended, or asked for before
+        its successor registered, failed with WASMOS_ERR_BLOCK_DEV_GONE,
+        although the successor served the same disk a moment later.
         """
         assert self.session is not None
         self.assertTrue(
@@ -249,24 +253,29 @@ class PartitionManagerDiskArrivalTest(unittest.TestCase):
             log = self.session.syslog_tail(1 << 20)
             published = log.count("[virtio-blk] published id=")
             self._run(f"svc kill {unit}", [f"svc: killing {unit}".encode()])
-            deadline = time.time() + 60
-            while time.time() < deadline:
-                log = self.session.syslog_tail(1 << 20)
-                if log.count("[virtio-blk] published id=") > published:
-                    break
-                time.sleep(0.25)
-            self.assertGreater(
-                log.count("[virtio-blk] published id="),
-                published,
-                f"the supervisor never brought the virtio-blk driver back ({n})",
-            )
-            # The partition, its mount and the fs-fat behind it are the same
-            # ones: nothing remounted, and the read reaches the new driver.
+            # Read at once, while the driver is down: the partition manager
+            # holds the transfer and resends it to the successor. The
+            # partition, its mount and the fs-fat behind it are the same ones:
+            # nothing remounted.
             self._run(
                 f"cat {MOUNT_POINT}/after{n}.txt",
                 [f"read after restart {n} of the disk driver".encode()],
+                timeout_s=60,
+            )
+            log = self.session.syslog_tail(1 << 20)
+            self.assertGreater(
+                log.count("[virtio-blk] published id="),
+                published,
+                f"the read completed, but not on a restarted driver ({n})",
             )
         log = self.session.syslog_tail(1 << 20)
+        # At least one read must have caught the driver down, or the reads
+        # above proved only what an idle restart does.
+        self.assertRegex(
+            log,
+            r"\[partition-manager\] disk id=\S+ holds a transfer until its driver returns",
+            "no read was held across a restart",
+        )
         self.assertNotIn(f"[supervisor] {unit} failed", log)
         self.assertNotIn("[supervisor] critical unit", log)
 

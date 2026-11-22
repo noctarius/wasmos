@@ -24,8 +24,44 @@ static int32_t block_reply_status(const wasmos_ipc_message_t* reply) {
     return 0;
 }
 
+/* How often the loop wakes to age a held transfer. The hold window is
+ * WASMOS_BLOCK_HOLD_MS, so this bounds how far past it a held one is failed. */
+#define WFS_BLOCK_HOLD_POLL_MS 500
+
+/* Ticks in the hold window, rounded up as the kernel rounds a millisecond
+ * window, so the hold is never shorter than WASMOS_BLOCK_HOLD_MS. */
+static uint32_t wfs_block_hold_ticks(void) {
+    return (uint32_t)(((uint64_t)WASMOS_BLOCK_HOLD_MS * WASMOS_SCHED_TICK_HZ + 999u) / 1000u);
+}
+
+/* 1 once the hold window of the current outage has closed. Compared as a
+ * signed difference, so it holds across the tick counter's wrap. */
+static int wfs_block_window_closed(const wfs_block_t* b) {
+    return (int32_t)((uint32_t)wasmos_sched_ticks() - b->hold_deadline) >= 0;
+}
+
+/* Park the in-flight request until a server is there. The loop wakes on a
+ * timer meanwhile, so the window is aged even when nothing arrives. */
+static void wfs_block_hold(wfs_block_t* b) {
+    b->intent_id = 0;
+    b->held = 1u;
+    b->loop->poll_timeout_ms = WFS_BLOCK_HOLD_POLL_MS;
+    if (!b->hold_logged) {
+        b->hold_logged = 1u;
+        (void)printf("[fs-wfs] holding a block transfer until the disk driver returns\n");
+    }
+}
+
+static void wfs_block_unhold(wfs_block_t* b) {
+    b->held = 0u;
+    b->loop->poll_timeout_ms = 0;
+}
+
 static void wfs_block_fail(wfs_block_t* b, int32_t code) {
     b->intent_id = 0;
+    if (b->held) {
+        wfs_block_unhold(b);
+    }
     (void)wasmos_promise_reject(&b->promise, code);
 }
 
@@ -54,29 +90,39 @@ static void wfs_block_drain(wfs_block_t* b) {
     b->loop->poll_timeout_ms = timeout;
 }
 
+static void wfs_block_server_gone(wfs_block_t* b);
+
 /* 1 when block_endpoint has a live owner. The await registered here also makes
  * the server's end reach the reply endpoint if it never answers; its refusal
  * with NOENT says the endpoint has no live owner already -- a death whose
  * hangup is still queued -- so nothing is sent to an endpoint id that anyone
- * may own next. */
+ * may own next. Called with nothing on the wire. */
 static int wfs_block_server_live(wfs_block_t* b) {
     if (b->block_endpoint >= 0 &&
         wasmos_ipc_peer_await(b->reply_endpoint, b->block_endpoint) == WASMOS_NOENT) {
-        b->block_endpoint = -1;
+        wfs_block_server_gone(b);
     }
     return b->block_endpoint >= 0;
 }
 
 /* Send the staged request to the server. With no live server, the queued
  * events are read first, since they may name its successor; with none still,
- * the request fails with WASMOS_ERR_BLOCK_DEV_GONE. */
+ * the request is held while the hold window is open, and fails with
+ * WASMOS_ERR_BLOCK_DEV_GONE otherwise. */
 static void wfs_block_transmit(wfs_block_t* b) {
     int32_t id = 0;
 
     if (!wfs_block_server_live(b)) {
         wfs_block_drain(b);
         if (!wfs_block_server_live(b)) {
-            wfs_block_fail(b, WASMOS_ERR_BLOCK_DEV_GONE);
+            if (b->following && !b->gone && wfs_block_window_closed(b)) {
+                b->gone = 1u;
+            }
+            if (b->following && !b->gone) {
+                wfs_block_hold(b);
+            } else {
+                wfs_block_fail(b, WASMOS_ERR_BLOCK_DEV_GONE);
+            }
             return;
         }
     }
@@ -97,21 +143,39 @@ static void wfs_block_transmit(wfs_block_t* b) {
     b->intent_id = id;
 }
 
-/* The server ended: a request it never answered fails. */
+/* The server ended: nothing is sent to its endpoint again, and the hold window
+ * opens. A request it never answered is held when the client follows its
+ * server, and fails otherwise. Its intent is cancelled either way, so a late
+ * reply from the dead instance settles nothing. */
 static void wfs_block_server_gone(wfs_block_t* b) {
     if (b->block_endpoint < 0) {
         return;
     }
     b->block_endpoint = -1;
+    b->hold_deadline = (uint32_t)wasmos_sched_ticks() + wfs_block_hold_ticks();
     if (b->intent_id != 0) {
         wasmos_sys_intent_cancel(b->loop, b->intent_id);
+        if (b->following) {
+            wfs_block_hold(b);
+        } else {
+            wfs_block_fail(b, WASMOS_ERR_BLOCK_DEV_GONE);
+        }
+    }
+}
+
+/* The loop's timeout: a held request whose window has closed fails, and the
+ * disk is taken to be gone until a server registers. */
+static void on_hold_timeout(void* user) {
+    wfs_block_t* b = (wfs_block_t*)user;
+    if (b->held && b->block_endpoint < 0 && wfs_block_window_closed(b)) {
+        b->gone = 1u;
         wfs_block_fail(b, WASMOS_ERR_BLOCK_DEV_GONE);
     }
 }
 
-/* A new instance serves the disk at `endpoint`: lend it the request buffer.
- * The previous grant is revoked first; a buffer is lent to one borrower at a
- * time. */
+/* A new instance serves the disk at `endpoint`: lend it the request buffer and
+ * resend what is held. The previous grant is revoked first; a buffer is lent to
+ * one borrower at a time. */
 static void wfs_block_rebind(wfs_block_t* b, int32_t endpoint) {
     if (b->req_borrow >= 0) {
         (void)wasmos_xfer_buffer_unborrow(b->req_borrow);
@@ -124,6 +188,12 @@ static void wfs_block_rebind(wfs_block_t* b, int32_t endpoint) {
         return;
     }
     b->block_endpoint = endpoint;
+    b->gone = 0u;
+    b->hold_logged = 0u;
+    if (b->held) {
+        wfs_block_unhold(b);
+        wfs_block_transmit(b);
+    }
 }
 
 /* WASMOS_IPC_HANGUP: arg0 names the endpoint that ended. */
@@ -178,6 +248,7 @@ wasmos_error_code_t wfs_block_follow(wfs_block_t* b, int32_t proc_endpoint) {
         (void)wasmos_xfer_buffer_release(bid);
         return WASMOS_ERR_FS_IO;
     }
+    b->following = 1u;
     return WASMOS_ERR_NONE;
 }
 
@@ -198,6 +269,11 @@ wasmos_error_code_t wfs_block_configure(wfs_block_t* b, wasmos_sys_event_loop_t*
     b->redirect_user = 0;
     b->intent_id = 0;
     b->req_borrow = -1;
+    b->following = 0u;
+    b->held = 0u;
+    b->hold_logged = 0u;
+    b->gone = 0u;
+    b->hold_deadline = 0u;
 
     /* The descriptor buffer is the CLIENT's and is borrowed to the server, which
      * is the direction docs/architecture/12-dma-transfers.md requires: the
@@ -222,6 +298,8 @@ wasmos_error_code_t wfs_block_configure(wfs_block_t* b, wasmos_sys_event_loop_t*
         wasmos_sys_event_register(loop, SVC_IPC_CLASS_EVENT, on_class_event, b) != 0) {
         return WASMOS_ERR_FS_BUFFER;
     }
+    loop->on_timeout = on_hold_timeout;
+    loop->timeout_user = b;
     return WASMOS_ERR_NONE;
 }
 

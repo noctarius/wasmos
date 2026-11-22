@@ -20,6 +20,7 @@
 
 #include <stdint.h>
 #include "fat_types.h"
+#include "wasmos_driver_abi.h"
 
 #define FAT_BLOCK_NO_LBA 0xFFFFFFFFu /* loaded_lba sentinel: nothing staged */
 
@@ -27,13 +28,18 @@ typedef struct {
     /* The block server's endpoint, or -1 while no live instance serves the
      * disk. A supervised driver that ends comes back on a new endpoint under
      * the same `block` instance; the layer follows it (fat_block_follow), so
-     * the mount and its open files carry over, and a transfer the ended
-     * instance held, or one begun before its successor registered, fails with
-     * WASMOS_ERR_BLOCK_DEV_GONE.
-     * TODO: hold such a transfer and resend it to the successor instead. The
-     * successor's own module is read through fs-manager, which no longer waits
-     * on this driver (docs/architecture/18-filesystem-stack.md, "Deferred
-     * Replies"), so a held transfer no longer stalls the restart. */
+     * the mount and its open files carry over.
+     *
+     * A transfer the ended instance never answered, and one begun before its
+     * successor registered, is HELD and resent to the successor, so a restart
+     * is invisible above this layer. The hold lasts WASMOS_BLOCK_HOLD_MS from
+     * the server's end (abi/constants.yaml, block_hold); a server not back by
+     * then is taken to be gone, and every transfer fails with
+     * WASMOS_ERR_BLOCK_DEV_GONE until one is. Holding does not stall the
+     * restart: the successor's module is read through fs-manager, which never
+     * waits on a backend (docs/architecture/18-filesystem-stack.md, "Deferred
+     * Replies"). A layer that does not follow its server cannot learn of a
+     * successor, holds nothing, and fails such a transfer at once. */
     int32_t block_endpoint;
     int32_t reply_endpoint;
     /* Where `block` class events and the subscription's answer arrive, or -1
@@ -60,7 +66,19 @@ typedef struct {
 
     /* Single outstanding request + staged sector (the buffer is a 1-sector
      * cache tagged by loaded_lba). */
-    int32_t cur_req_id;       /* outstanding block request id, 0 if idle */
+    int32_t cur_req_id; /* outstanding block request id, 0 if idle */
+    /* The outstanding request as staged: its type and descriptor, which a
+     * resend to a successor repeats. A held request has a fresh cur_req_id
+     * that was never sent, so a late reply from the ended instance matches
+     * nothing. */
+    int32_t cur_req_type;
+    wasmos_block_request_t cur_req;
+    uint8_t held;        /* cur_req waits for a server; nothing is on the wire */
+    uint8_t hold_logged; /* the hold of this outage has been reported */
+    /* The hold window of the current outage closed with no server back: the
+     * disk is taken to be gone until a server registers. */
+    uint8_t gone;
+    uint32_t hold_deadline;   /* sched tick the window closes at, while no server runs */
     uint32_t wait_lba;        /* lba of the outstanding request */
     int32_t wait_resp_type;   /* expected BLOCK_IPC_*_RESP */
     uint8_t copy_into_sector; /* pull phys->sector on completion (reads) */
@@ -116,12 +134,22 @@ int fat_block_setup(fat_block_t* blk);
  * a negative packed code when the request could not be sent. */
 int32_t fat_block_follow(fat_block_t* blk, int32_t proc_endpoint, int32_t follow_endpoint);
 
-/* Consume one message from the follow endpoint. A REMOVE of the server, or the
- * ADD of a successor on another endpoint, fails a transfer the ended instance
- * held: the op to fail is returned with *out_ok = 0 and its err set to
- * WASMOS_ERR_BLOCK_DEV_GONE. Returns NULL otherwise, including when nothing was
- * queued. */
+/* Consume one message from the follow endpoint. A REMOVE of the server holds a
+ * transfer it never answered; the ADD of a successor on another endpoint moves
+ * the layer there and resends what is held. Returns the op to fail, with
+ * *out_ok = 0 and its err set, only when that resend could not be made; NULL
+ * otherwise, including when nothing was queued. */
 fat_op_ctx_t* fat_block_event(fat_block_t* blk, int* out_ok);
+
+/* 1 while a transfer is held for a server that is not there. The caller then
+ * bounds its wait and calls fat_block_expire when it wakes, whatever woke it. */
+int fat_block_holding(const fat_block_t* blk);
+
+/* Close the hold window once WASMOS_BLOCK_HOLD_MS have passed since the server
+ * ended: the held transfer's op is returned with *out_ok = 0 and its err set to
+ * WASMOS_ERR_BLOCK_DEV_GONE, and later transfers fail at once until a server
+ * registers. Returns NULL while the window is open or nothing is held. */
+fat_op_ctx_t* fat_block_expire(fat_block_t* blk, int* out_ok);
 
 uint8_t* fat_block_sector(fat_block_t* blk); /* the metadata/bounce buffer */
 /* Endpoint of the block server, needed to reborrow a client buffer to it. */

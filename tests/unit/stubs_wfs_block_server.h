@@ -71,6 +71,13 @@ extern int wfs_stub_replace;
 extern int32_t wfs_stub_live_endpoint;
 extern int32_t wfs_stub_last_grant_endpoint;
 
+/* A server that died without a replacement registers again once the fixture's
+ * clock reaches this many milliseconds; 0 never. The clock advances only while
+ * the loop parks with nothing queued. Cleared once it fires. */
+extern uint32_t wfs_stub_return_at_ms;
+/* Milliseconds the fixture's clock has advanced since the volume was built. */
+uint64_t wfs_stub_now_ms(void);
+
 /* The server dies while nothing is in flight, as above. */
 void wfs_stub_kill_server(int replace);
 /* A replacement for a server that died registers, announced by a class ADD. */

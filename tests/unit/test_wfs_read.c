@@ -489,8 +489,14 @@ static void test_a_name_resolves_all_the_way_to_bytes(void) {
  * it never answered, the hangup the kernel sent in its place matched nothing,
  * and the read waited forever -- with fs-manager's synchronous forward waiting
  * behind it, so every path under every mount stopped. A restarted driver was
- * never used either: the endpoint was looked up once, at mount. */
-static void test_a_transfer_lost_with_its_server_fails_and_the_next_reaches_the_new_one(void) {
+ * never used either: the endpoint was looked up once, at mount.
+ *
+ * Regression: 2026-11-22-block-transfer-lost-across-a-driver-restart -- the
+ * transfer the dead driver held then failed with WASMOS_ERR_BLOCK_DEV_GONE,
+ * although the disk was the same disk once the successor registered: every
+ * restart of a supervised disk driver reached the applications reading the
+ * volume as an I/O error. */
+static void test_a_transfer_lost_with_its_server_is_resent_to_the_new_one(void) {
     static uint8_t buf[BIG_SIZE + 16u];
     uint32_t done = 0;
 
@@ -500,10 +506,8 @@ static void test_a_transfer_lost_with_its_server_fails_and_the_next_reaches_the_
     }
     wfs_stub_die_next = 1;
     wfs_stub_replace = 1;
-    expect_rc((wasmos_error_code_t)do_read(0u, buf, BIG_SIZE, &done),
-              WASMOS_ERR_BLOCK_DEV_GONE,
-              "the read the dead server held fails, rather than waiting forever");
-    expect(do_read(0u, buf, BIG_SIZE, &done) == 0, "the next read reaches the new server");
+    expect(do_read(0u, buf, BIG_SIZE, &done) == 0,
+           "the read the dead server held completes on the new one");
     expect(done == BIG_SIZE && matches(buf, BIG_SEED, 0u, BIG_SIZE, BIG_SIZE), "and is whole");
     expect(wfs_stub_last_grant_endpoint == wfs_stub_live_endpoint,
            "the request buffer was granted to the new server");
@@ -530,10 +534,11 @@ static void test_a_server_that_died_while_idle_is_found_again(void) {
     wfs_stub_teardown();
 }
 
-/* A driver that is not back yet -- or never comes back, its supervisor having
- * given up -- fails each transfer at once instead of holding the filesystem,
- * and the client rebinds when the device returns. */
-static void test_reads_fail_while_no_server_runs_and_resume_when_one_does(void) {
+/* Regression: 2026-11-22-block-transfer-lost-across-a-driver-restart -- the
+ * successor of a supervised driver registers some time after its predecessor
+ * ended (a backoff, a spawn, a probe of the device). A transfer asked for in
+ * between failed at once; it is held until the successor is there. */
+static void test_a_read_waits_out_the_restart_and_completes(void) {
     static uint8_t buf[BIG_SIZE + 16u];
     uint32_t done = 0;
 
@@ -542,12 +547,41 @@ static void test_reads_fail_while_no_server_runs_and_resume_when_one_does(void) 
         return;
     }
     wfs_stub_die_next = 1;
+    wfs_stub_return_at_ms = 2000u;
+    expect(do_read(0u, buf, BIG_SIZE, &done) == 0, "a read across a two-second restart completes");
+    expect(done == BIG_SIZE && matches(buf, BIG_SEED, 0u, BIG_SIZE, BIG_SIZE), "and is whole");
+    expect(wfs_stub_now_ms() >= 2000u, "...once the successor registered");
+    expect(wfs_stub_now_ms() < (uint64_t)WASMOS_BLOCK_HOLD_MS, "...inside the hold window");
+
+    wfs_stub_teardown();
+}
+
+/* A driver that never comes back -- its supervisor gave up -- does not hold
+ * the filesystem for ever: the held transfer fails once the window closes, and
+ * so does every later one, at once, until a driver serves the disk again. */
+static void test_a_hold_with_no_successor_ends_gone_until_one_returns(void) {
+    static uint8_t buf[BIG_SIZE + 16u];
+    uint32_t done = 0;
+    uint64_t closed;
+    uint32_t sent;
+
+    if (setup() != 0 || open_object(E_BIG) != 0) {
+        expect(0, "setup");
+        return;
+    }
+    wfs_stub_die_next = 1;
     expect_rc((wasmos_error_code_t)do_read(0u, buf, BIG_SIZE, &done),
               WASMOS_ERR_BLOCK_DEV_GONE,
-              "the held transfer fails");
+              "the held transfer fails when the window closes");
+    closed = wfs_stub_now_ms();
+    expect(closed >= (uint64_t)WASMOS_BLOCK_HOLD_MS, "...and not before");
+
+    sent = wfs_stub_req_count;
     expect_rc((wasmos_error_code_t)do_read(0u, buf, BIG_SIZE, &done),
               WASMOS_ERR_BLOCK_DEV_GONE,
-              "and so does the next, with no server to send it to");
+              "the next read fails too");
+    expect(wfs_stub_now_ms() - closed < 1000u, "...at once, not after another window");
+    expect(wfs_stub_req_count == sent, "...and nothing is sent");
 
     wfs_stub_server_returns();
     expect(do_read(0u, buf, BIG_SIZE, &done) == 0, "a later read reaches the returned device");
@@ -567,9 +601,10 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_reading_a_directory_is_refused),
     WASMOS_TEST_CASE(test_a_device_error_fails_the_read),
     WASMOS_TEST_CASE(test_a_name_resolves_all_the_way_to_bytes),
-    WASMOS_TEST_CASE(test_a_transfer_lost_with_its_server_fails_and_the_next_reaches_the_new_one),
+    WASMOS_TEST_CASE(test_a_transfer_lost_with_its_server_is_resent_to_the_new_one),
     WASMOS_TEST_CASE(test_a_server_that_died_while_idle_is_found_again),
-    WASMOS_TEST_CASE(test_reads_fail_while_no_server_runs_and_resume_when_one_does),
+    WASMOS_TEST_CASE(test_a_read_waits_out_the_restart_and_completes),
+    WASMOS_TEST_CASE(test_a_hold_with_no_successor_ends_gone_until_one_returns),
 };
 
 int main(void) {

@@ -13,6 +13,8 @@
 #define WFS_STUB_REPLY_ENDPOINT 12
 /* The endpoint a replacement server registers on after a death. */
 #define WFS_STUB_BLOCK_ENDPOINT_2 13
+/* The process manager a subscription is sent to. */
+#define WFS_STUB_PROC_ENDPOINT 5
 
 uint8_t* wfs_stub_image;
 uint32_t wfs_stub_blocks;
@@ -336,15 +338,33 @@ int32_t wasmos_ipc_last_field(int32_t field) {
     }
 }
 
-/* No select set, so the loop never parks in wasmos_ipc_select_wait: the tests
- * drive poll() themselves. */
+/* ---- the clock and the park ---------------------------------------------- */
+
+/* Milliseconds since the fixture was built. Time passes only while the loop
+ * parks with nothing queued: a timed park lasts its whole window, since nothing
+ * else can arrive. */
+static uint64_t g_now_ms;
+uint32_t wfs_stub_return_at_ms;
+
+int32_t wasmos_sched_ticks(void) {
+    /* Offset so the tick count wraps a few seconds into every case: a deadline
+     * compared without wrap arithmetic fails. */
+    return (int32_t)(uint32_t)(0xFFFFF000u + g_now_ms * WASMOS_SCHED_TICK_HZ / 1000u);
+}
+
+uint64_t wfs_stub_now_ms(void) {
+    return g_now_ms;
+}
+
+/* A select set over the reply endpoint, so the loop parks -- which here returns
+ * at once, having let the time pass. The tests drive poll() themselves. */
 int32_t wasmos_ipc_select_create(void) {
-    return -1;
+    return 1;
 }
 int32_t wasmos_ipc_select_add(int32_t select_id, int32_t endpoint) {
     (void)select_id;
     (void)endpoint;
-    return -1;
+    return 0;
 }
 int32_t wasmos_ipc_select_wait(int32_t select_id) {
     (void)select_id;
@@ -352,8 +372,15 @@ int32_t wasmos_ipc_select_wait(int32_t select_id) {
 }
 int32_t wasmos_ipc_select_wait_timeout(int32_t select_id, int32_t timeout_ms) {
     (void)select_id;
-    (void)timeout_ms;
-    return -1;
+    if (timeout_ms > 0) {
+        g_now_ms += (uint64_t)timeout_ms;
+    }
+    if (wfs_stub_return_at_ms != 0u && g_now_ms >= wfs_stub_return_at_ms) {
+        wfs_stub_return_at_ms = 0u;
+        wfs_stub_server_returns();
+        return WFS_STUB_REPLY_ENDPOINT;
+    }
+    return WASMOS_TIMEOUT;
 }
 int32_t wasmos_ipc_select_destroy(int32_t select_id) {
     (void)select_id;
@@ -381,6 +408,8 @@ void wfs_stub_reset_counters(void) {
     wfs_stub_flushes = 0;
     wfs_stub_die_next = 0;
     wfs_stub_replace = 0;
+    wfs_stub_return_at_ms = 0;
+    g_now_ms = 0;
     g_queue_head = 0;
     g_queue_len = 0;
 }
@@ -421,6 +450,10 @@ int wfs_stub_build_volume(uint64_t size_bytes, uint32_t block_size,
      * may take as read (wasmos_block_request_t). The fixture serves one image. */
     (void)wfs_block_configure(
         &g_blk, &g_loop, WFS_STUB_BLOCK_ENDPOINT, WFS_STUB_REPLY_ENDPOINT, WFS_STUB_BUF_ID, 0u);
+    /* Following, as the driver is once mounted: a server that dies is waited
+     * for. The subscription goes to an endpoint the fake server does not
+     * answer, which leaves it pending, as harmless as a real answer. */
+    (void)wfs_block_follow(&g_blk, WFS_STUB_PROC_ENDPOINT);
     wfs_ops_bind(&g_runtime, &g_blk);
     wfs_stub_reset_counters();
     return 0;

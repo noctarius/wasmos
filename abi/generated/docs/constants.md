@@ -72,6 +72,29 @@ transfer zero-copy.
 | `BLOCK_DST_BLOCK_BUFFER` | 0 | Destination is the caller's per-process block buffer, named by the physical address wasmos_block_buffer_phys() returns. The backend moves bytes straight there, so neither side copies. |
 | `BLOCK_DST_XFER_BUFFER` | 1 | Destination is a transfer buffer the caller owns and has reborrowed to the backend. The request names it TWICE because the two ways a backend can reach it are addressed differently: dst_buffer_id names the OBJECT, which xfer_buffer read/write take (the kernel admits the owner or any grantee), and dst_borrow_id names the GRANT, which dma_map_borrow takes, and which is what lets a bus-master device write the caller's pages directly. A backend that cannot do DMA ignores the borrow and writes through the object. Only WHOLE sectors may be requested: a partial sector would overwrite bytes around it that the caller did not ask for, so callers stage head and tail remainders through a block-buffer destination. |
 
+## block_hold
+
+How long a block client keeps the transfers of a disk whose driver ended.
+
+A supervised disk driver comes back as a new process under the same
+`block` class instance. A client that follows it -- fs-fat, fs-wfs, the
+partition manager -- holds every transfer the ended instance never
+answered, and every transfer asked of the disk meanwhile, and resends
+them to the successor, so a restart is invisible above the client. A
+transfer is idempotent per LBA, so a resend of one the ended instance
+had half done is safe.
+
+The window is counted from the driver's end. It covers a restart on the
+supervisor's default policy -- a backoff of 250 ms to 2 s, the spawn, and
+the 10 s READY deadline (docs/architecture/15-drivers-and-services.md).
+A driver not back when it closes is taken to be gone: what is held fails
+with WASMOS_ERR_BLOCK_DEV_GONE, and so does every later transfer to the
+disk, at once, until a driver serves it again.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `WASMOS_BLOCK_HOLD_MS` | 30000 | Milliseconds a client holds a disk's transfers after its driver ends. |
+
 ## partition_scheme
 
 Which partition table a disk carries, reported in the `scheme` field of

@@ -42,6 +42,12 @@ from qemu_test_framework import QemuSession, default_config
 # extent path, and the two together cover both read shapes over the new
 # transport.
 HELLO_TEXT = b"hello from the WFS volume"
+# scripts/wfs/a-directory-name-past-fifteen-bytes/nested/deeper/deep.txt, read
+# only while the disk driver is stopped: its directories and data are not in
+# fs-wfs's staged block.
+HELD_TEXT = b"reached three levels down"
+# fs-wfs's word that a transfer waits for the disk's next driver.
+WFS_HOLD_LINE = "[fs-wfs] holding a block transfer until the disk driver returns"
 
 # PCI slot 6 function 0. A virtio-blk unit is (slot << 3) | function, so this
 # disk is unit 48 -- the unit the /vwfs device-manager rule names. The slot is
@@ -331,9 +337,10 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
         self.assertTrue(fs_pid_before, "ps lists the fs-wfs backends")
 
         # Three restarts fit the supervisor's default intensity (5 ends in
-        # 60 s). Each is followed at once by a read, while the driver is down:
-        # fs-wfs holds the transfer and resends it to the successor. The read
-        # is whole, from the same fs-wfs, so nothing remounted.
+        # 60 s). Each is followed at once by a read, which may catch the
+        # driver down -- fs-wfs then holds the transfer and resends it to the
+        # successor -- or reach the successor. The read is whole, from the
+        # same fs-wfs, so nothing remounted.
         for n in range(1, 4):
             published = self.session.syslog_tail(1 << 20).count(
                 "[virtio-blk] published id="
@@ -355,12 +362,35 @@ class WfsOverVirtioBlkTest(unittest.TestCase):
                 published,
                 f"the read completed, but not on a restarted driver ({n})",
             )
-        # At least one read must have caught the driver down, or the reads
-        # above proved only what an idle restart does.
-        self.assertIn(
-            "[fs-wfs] holding a block transfer until the disk driver returns",
-            self.session.syslog_tail(1 << 20),
-            "no read was held across a restart",
+        # A read made while the driver is stopped -- certainly down, where a
+        # read after a kill races the restart -- is held, and completes once
+        # the driver is started again.
+        log = self.session.syslog_tail(1 << 20)
+        holds = log.count(WFS_HOLD_LINE)
+        self._cmd(f"svc stop {unit}", [f"svc: stopping {unit}".encode()])
+        self.assertTrue(
+            self.session.syslog_wait_count(f"[supervisor] {unit} stopped", 1, 30),
+            f"the driver did not stop.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        start = self.session.send_command(
+            "spawn cat /vwfs/a-directory-name-past-fifteen-bytes/nested/deeper/deep.txt",
+            timeout_s=20,
+        )
+        log = self.session.syslog_wait_count(WFS_HOLD_LINE, holds + 1, 30)
+        self.assertTrue(
+            log,
+            f"the read was not held.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertNotIn(
+            HELD_TEXT,
+            bytes(self.session.buf[start:]),
+            "the read completed with no driver",
+        )
+        self._cmd(f"svc start {unit}", [f"svc: starting {unit}".encode()])
+        self.assertTrue(
+            self.session.expect_from(start, HELD_TEXT, timeout_s=60),
+            f"the held read did not complete on the started driver\n"
+            f"--- tail ---\n{self.session.tail()}\n",
         )
         self._cat("cat /vwfs/hello.txt", [HELLO_TEXT])
         self.assertEqual(self._pid_of("fs-wfs"), fs_pid_before)

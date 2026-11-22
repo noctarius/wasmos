@@ -37,6 +37,9 @@ FILES = [("BEFORE.TXT", BEFORE_TEXT)] + [
     (f"AFTER{n}.TXT", f"read after restart {n} of the disk driver".encode())
     for n in range(1, RESTARTS + 1)
 ]
+# Read only while the disk driver is stopped.
+HELD_TEXT = b"read while the disk driver was stopped"
+FILES.append(("HELD.TXT", HELD_TEXT))
 
 DISK_RE = re.compile(rb"\[virtio-blk\] published id=(block:virtio-blk:\d+)")
 # fs-fat's word that a transfer is waiting for the disk's next driver.
@@ -123,7 +126,7 @@ class FatOverVirtioBlkRestartTest(unittest.TestCase):
             log = self.session.syslog_tail(1 << 20)
             published = log.count("[virtio-blk] published id=")
             self._run(f"svc kill {unit}", [f"svc: killing {unit}".encode()])
-            # Read at once, while the driver is down: the read is held and
+            # Read at once: a read that catches the driver down is held and
             # served by the successor. The same mount and the same fs-fat --
             # nothing remounted.
             self._run(
@@ -137,10 +140,36 @@ class FatOverVirtioBlkRestartTest(unittest.TestCase):
                 published,
                 f"the read completed, but not on a restarted driver ({n})",
             )
+        # A read made while the driver is stopped -- certainly down, where a
+        # read after a kill races the restart -- is held, and completes once
+        # the driver is started again.
         log = self.session.syslog_tail(1 << 20)
-        # At least one read must have caught the driver down, or the reads
-        # above proved only what an idle restart does.
-        self.assertIn(HOLD_LINE, log, "no read was held across a restart")
+        holds = log.count(HOLD_LINE)
+        self._run(f"svc stop {unit}", [f"svc: stopping {unit}".encode()])
+        self.assertTrue(
+            self.session.syslog_wait_count(f"[supervisor] {unit} stopped", 1, 30),
+            f"the driver did not stop.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        start = self.session.send_command(
+            f"spawn cat {MOUNT_POINT}/held.txt", timeout_s=20
+        )
+        log = self.session.syslog_wait_count(HOLD_LINE, holds + 1, 30)
+        self.assertTrue(
+            log,
+            f"the read was not held.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertNotIn(
+            HELD_TEXT,
+            bytes(self.session.buf[start:]),
+            "the read completed with no driver",
+        )
+        self._run(f"svc start {unit}", [f"svc: starting {unit}".encode()])
+        self.assertTrue(
+            self.session.expect_from(start, HELD_TEXT, timeout_s=60),
+            f"the held read did not complete on the started driver\n"
+            f"--- tail ---\n{self.session.tail()}\n",
+        )
+        log = self.session.syslog_tail(1 << 20)
         self.assertNotIn(f"[supervisor] {unit} failed", log)
         self.assertNotIn("[supervisor] critical unit", log)
 

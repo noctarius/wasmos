@@ -232,6 +232,9 @@ static sv_verdict_t sv_unit_settle(sv_unit_t* unit, const sv_timing_t* timing, u
     case SV_STOP_DEGRADE:
         unit->state = SV_UNIT_DEGRADED;
         return SV_VERDICT_DEGRADED;
+    case SV_STOP_STOP:
+        unit->state = SV_UNIT_STOPPED;
+        return SV_VERDICT_STOPPED;
     default:
         unit->state = SV_UNIT_FREE;
         return SV_VERDICT_RETRACTED;
@@ -427,11 +430,34 @@ int32_t sv_unit_kill(sv_unit_t* unit) {
     return 0;
 }
 
+/* Makes a stopped, failed or degraded unit due at `now`, as a fresh
+ * submission is. */
+static void sv_unit_rearm(sv_unit_t* unit, const sv_timing_t* timing, uint32_t now) {
+    unit->state = SV_UNIT_SPAWN_DUE;
+    unit->deadline = now;
+    unit->stop = SV_STOP_NONE;
+    unit->backoff_ms = timing->backoff_min_ms;
+    unit->ends_head = 0;
+    unit->ends_recorded = 0;
+}
+
+static int sv_is_down(const sv_unit_t* unit) {
+    return unit->state == SV_UNIT_STOPPED || unit->state == SV_UNIT_FAILED ||
+           unit->state == SV_UNIT_DEGRADED;
+}
+
 sv_verdict_t sv_unit_parent_event(sv_unit_t* unit, const sv_timing_t* timing,
                                   sv_parent_event_t event, uint32_t now) {
     sv_stop_t stop = event == SV_PARENT_RESTARTING ? SV_STOP_FOLLOW : SV_STOP_DEGRADE;
     if (!unit || !timing) {
         return SV_VERDICT_NONE;
+    }
+    if (event == SV_PARENT_STARTING) {
+        if (unit->state != SV_UNIT_DEGRADED) {
+            return SV_VERDICT_NONE;
+        }
+        sv_unit_rearm(unit, timing, now);
+        return SV_VERDICT_START;
     }
     if (sv_has_instance(unit)) {
         sv_unit_pend(unit, stop);
@@ -480,6 +506,50 @@ int32_t sv_unit_retract(sv_unit_t* unit, sv_verdict_t* verdict) {
     return 0;
 }
 
+int32_t sv_unit_stop(sv_unit_t* unit, sv_verdict_t* verdict) {
+    sv_verdict_t v = SV_VERDICT_NONE;
+    if (!unit || unit->state == SV_UNIT_FREE) {
+        return WASMOS_ERR_SUPERVISOR_NO_UNIT;
+    }
+    if (unit->cls == SV_CLASS_CRITICAL) {
+        return WASMOS_ERR_SUPERVISOR_CRITICAL;
+    }
+    if (sv_is_down(unit)) {
+        return WASMOS_ERR_SUPERVISOR_NOT_RUNNING;
+    }
+    if (sv_has_instance(unit)) {
+        sv_unit_pend(unit, SV_STOP_STOP);
+        unit->state = SV_UNIT_STOPPING;
+        v = SV_VERDICT_CASCADE;
+    } else if (unit->state == SV_UNIT_SPAWNING || unit->state == SV_UNIT_STOPPING) {
+        sv_unit_pend(unit, SV_STOP_STOP);
+    } else {
+        unit->stop = SV_STOP_NONE;
+        unit->pid = 0;
+        unit->state = SV_UNIT_STOPPED;
+        v = SV_VERDICT_STOPPED;
+    }
+    if (verdict) {
+        *verdict = v;
+    }
+    return 0;
+}
+
+int32_t sv_unit_start(sv_unit_t* unit, const sv_unit_t* parent, const sv_timing_t* timing,
+                      uint32_t now) {
+    if (!unit || !timing || unit->state == SV_UNIT_FREE) {
+        return WASMOS_ERR_SUPERVISOR_NO_UNIT;
+    }
+    if (!sv_is_down(unit)) {
+        return WASMOS_ERR_SUPERVISOR_RUNNING;
+    }
+    if (parent && sv_is_down(parent)) {
+        return WASMOS_ERR_SUPERVISOR_PARENT_DOWN;
+    }
+    sv_unit_rearm(unit, timing, now);
+    return 0;
+}
+
 int sv_verdict_parent_event(sv_verdict_t verdict, sv_parent_event_t* event) {
     sv_parent_event_t ev;
     switch (verdict) {
@@ -491,6 +561,9 @@ int sv_verdict_parent_event(sv_verdict_t verdict, sv_parent_event_t* event) {
     case SV_VERDICT_FAILED:
     case SV_VERDICT_DEGRADED:
         ev = SV_PARENT_GONE;
+        break;
+    case SV_VERDICT_START:
+        ev = SV_PARENT_STARTING;
         break;
     default:
         return 0;

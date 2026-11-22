@@ -14,7 +14,10 @@
  * holding spawn.grant hands a unit hardware grants. A unit bound to a parent
  * is killed and respawned, uncounted, when the parent's instance is replaced,
  * held degraded when the parent will not run again, and a critical one so
- * stopped ends the system; retraction frees a unit without a failure.
+ * stopped ends the system; retraction frees a unit without a failure. An
+ * operator stop ends a unit without a restart and without counting it, and
+ * degrades its children; a start brings back a stopped or failed unit with a
+ * clear intensity window, and its degraded children with it.
  *
  * Only supervisor_unit.c is linked; time is passed in explicitly.
  */
@@ -980,6 +983,173 @@ static void test_a_retract_without_svc_control_is_refused(void) {
           "svc.control retracts");
 }
 
+static void test_a_stopped_unit_is_neither_restarted_nor_counted(void) {
+    sv_unit_t u = parse_ok("u /u restart=always", 0);
+    sv_verdict_t v = SV_VERDICT_NONE;
+    sv_parent_event_t ev;
+    start(&u, 7, 0);
+    sv_unit_ready(&u, &k_timing, SV_PROBE_NONE, 10);
+    CHECK(sv_unit_stop(&u, &v) == 0 && v == SV_VERDICT_CASCADE && u.state == SV_UNIT_STOPPING &&
+              u.pid == 7u,
+          "a running unit is killed");
+    CHECK(sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_KILLED, 20) == SV_VERDICT_STOPPED &&
+              u.state == SV_UNIT_STOPPED && u.pid == 0u,
+          "its end stops it, even under restart=always");
+    CHECK(u.restart_count == 0u && u.ends_recorded == 0u, "and is not counted");
+    CHECK(sv_unit_tick(&u, &k_timing, 1000000) == SV_VERDICT_NONE, "it is never spawned again");
+    CHECK(sv_verdict_parent_event(SV_VERDICT_STOPPED, &ev) && ev == SV_PARENT_GONE,
+          "its children are told it is gone");
+    CHECK(sv_unit_stop(&u, &v) == WASMOS_ERR_SUPERVISOR_NOT_RUNNING && u.state == SV_UNIT_STOPPED,
+          "a stopped unit is not stopped twice");
+}
+
+static void test_a_stop_applies_in_every_state_with_a_future(void) {
+    sv_unit_t v_due = parse_ok("due /d", 0);
+    sv_verdict_t v = SV_VERDICT_NONE;
+    CHECK(sv_unit_stop(&v_due, &v) == 0 && v == SV_VERDICT_STOPPED &&
+              v_due.state == SV_UNIT_STOPPED,
+          "a unit waiting for its spawn stops at once");
+
+    sv_unit_t s = parse_ok("s /s", 0);
+    (void)sv_unit_tick(&s, &k_timing, 0);
+    sv_unit_spawn_sent(&s);
+    CHECK(sv_unit_stop(&s, &v) == 0 && v == SV_VERDICT_NONE && s.state == SV_UNIT_SPAWNING,
+          "a unit being spawned is stopped when the spawn answers");
+    CHECK(sv_unit_spawned(&s, &k_timing, 4, 1) == SV_VERDICT_CASCADE && s.pid == 4u,
+          "its new instance is killed");
+    CHECK(sv_unit_exited(&s, &k_timing, 0, PROC_EXIT_REASON_KILLED, 2) == SV_VERDICT_STOPPED,
+          "and the unit stops");
+
+    sv_unit_t f = parse_ok("f /f", 0);
+    (void)sv_unit_tick(&f, &k_timing, 0);
+    sv_unit_spawn_sent(&f);
+    (void)sv_unit_stop(&f, &v);
+    CHECK(sv_unit_spawn_failed(&f, &k_timing, WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED, 1) ==
+                  SV_VERDICT_STOPPED &&
+              f.state == SV_UNIT_STOPPED && f.ends_recorded == 0u,
+          "a refused spawn settles the stop, uncounted");
+
+    sv_unit_t k = parse_ok("k /k", 0);
+    start(&k, 5, 0);
+    CHECK(sv_unit_kill(&k) == 0, "killed on request");
+    CHECK(sv_unit_stop(&k, &v) == 0 && v == SV_VERDICT_NONE, "already being killed");
+    CHECK(sv_unit_exited(&k, &k_timing, 0, PROC_EXIT_REASON_KILLED, 1) == SV_VERDICT_STOPPED &&
+              k.ends_recorded == 0u,
+          "the stop decides the end, not the kill");
+
+    sv_unit_t c = parse_ok("c /c parent=p", 0);
+    start(&c, 6, 0);
+    (void)sv_unit_parent_event(&c, &k_timing, SV_PARENT_RESTARTING, 1);
+    CHECK(sv_unit_stop(&c, &v) == 0 && v == SV_VERDICT_NONE, "stopping for its parent");
+    CHECK(sv_unit_exited(&c, &k_timing, 0, PROC_EXIT_REASON_KILLED, 2) == SV_VERDICT_STOPPED,
+          "a stop overrides a pending follow");
+
+    sv_unit_t r = parse_ok("r /r", 0);
+    start(&r, 8, 0);
+    (void)sv_unit_retract(&r, &v);
+    (void)sv_unit_stop(&r, &v);
+    CHECK(sv_unit_exited(&r, &k_timing, 0, PROC_EXIT_REASON_KILLED, 1) == SV_VERDICT_RETRACTED,
+          "a stop does not override a retraction");
+
+    sv_unit_t d = parse_ok("d /d parent=p", 0);
+    (void)sv_unit_parent_event(&d, &k_timing, SV_PARENT_GONE, 0);
+    CHECK(sv_unit_stop(&d, &v) == WASMOS_ERR_SUPERVISOR_NOT_RUNNING && d.state == SV_UNIT_DEGRADED,
+          "a degraded unit has nothing to stop");
+
+    sv_unit_t x = parse_ok("x /x class=critical", 0);
+    start(&x, 3, 0);
+    CHECK(sv_unit_stop(&x, &v) == WASMOS_ERR_SUPERVISOR_CRITICAL && x.state == SV_UNIT_STARTING,
+          "a critical unit is not stopped");
+}
+
+static void test_a_start_brings_back_a_unit_that_gave_up(void) {
+    sv_unit_t u = parse_ok("svc /p", 0);
+    uint32_t now = 0;
+    for (int i = 0; i < 4; ++i) {
+        start(&u, 3, now);
+        now += 100;
+        (void)sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_TRAPPED, now);
+        now = u.deadline;
+    }
+    start(&u, 3, now);
+    CHECK(sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_TRAPPED, now + 1) == SV_VERDICT_FAILED,
+          "given up");
+    now += 10;
+    CHECK(sv_unit_start(&u, 0, &k_timing, now) == 0, "a failed unit can be started");
+    CHECK(u.state == SV_UNIT_SPAWN_DUE && u.deadline == now, "due at once");
+    CHECK(u.ends_recorded == 0u && u.backoff_ms == k_timing.backoff_min_ms,
+          "with its window and backoff cleared");
+    CHECK(u.restart_count == 4u, "its lifetime restart count kept");
+    start(&u, 9, now);
+    CHECK(sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_TRAPPED, now + 1) == SV_VERDICT_RESTART,
+          "its next end restarts it instead of giving up again");
+}
+
+static void test_a_start_is_refused_unless_the_unit_is_down(void) {
+    sv_unit_t u = parse_ok("u /u", 0);
+    sv_unit_t p = parse_ok("p /p", 0);
+    sv_unit_t c = parse_ok("c /c parent=p", 0);
+    sv_verdict_t v = SV_VERDICT_NONE;
+    CHECK(sv_unit_start(&u, 0, &k_timing, 0) == WASMOS_ERR_SUPERVISOR_RUNNING,
+          "a due unit is not started");
+    start(&u, 5, 0);
+    CHECK(sv_unit_start(&u, 0, &k_timing, 1) == WASMOS_ERR_SUPERVISOR_RUNNING &&
+              u.state == SV_UNIT_STARTING && u.pid == 5u,
+          "nor is a running one");
+    (void)sv_unit_stop(&u, &v);
+    CHECK(sv_unit_start(&u, 0, &k_timing, 2) == WASMOS_ERR_SUPERVISOR_RUNNING,
+          "nor one whose stop has not settled");
+    (void)sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_KILLED, 3);
+    CHECK(sv_unit_start(&u, 0, &k_timing, 4) == 0 && u.state == SV_UNIT_SPAWN_DUE,
+          "a stopped unit is started");
+
+    (void)sv_unit_stop(&p, &v);
+    (void)sv_unit_parent_event(&c, &k_timing, SV_PARENT_GONE, 0);
+    CHECK(sv_unit_start(&c, &p, &k_timing, 5) == WASMOS_ERR_SUPERVISOR_PARENT_DOWN &&
+              c.state == SV_UNIT_DEGRADED,
+          "a child is not started under a parent that is down");
+    CHECK(sv_unit_start(&p, 0, &k_timing, 6) == 0, "its parent is");
+    CHECK(sv_unit_start(&c, &p, &k_timing, 7) == 0 && c.state == SV_UNIT_SPAWN_DUE,
+          "and then the child can be");
+}
+
+static void test_a_started_parent_brings_back_its_degraded_children(void) {
+    sv_unit_t c = parse_ok("c /c parent=p", 0);
+    sv_unit_t r = parse_ok("r /r parent=p", 0);
+    sv_parent_event_t ev;
+    (void)sv_unit_parent_event(&c, &k_timing, SV_PARENT_GONE, 0);
+    CHECK(sv_verdict_parent_event(SV_VERDICT_START, &ev) && ev == SV_PARENT_STARTING,
+          "a start tells the children");
+    CHECK(sv_unit_parent_event(&c, &k_timing, SV_PARENT_STARTING, 10) == SV_VERDICT_START &&
+              c.state == SV_UNIT_SPAWN_DUE && c.deadline == 10u,
+          "a degraded child is due with its parent");
+    start(&r, 4, 0);
+    CHECK(sv_unit_parent_event(&r, &k_timing, SV_PARENT_STARTING, 10) == SV_VERDICT_NONE &&
+              r.state == SV_UNIT_STARTING && r.pid == 4u,
+          "a child with an instance is left alone");
+}
+
+static void test_a_stopped_unit_can_be_retracted(void) {
+    sv_unit_t u = parse_ok("u /u", 0);
+    sv_verdict_t v = SV_VERDICT_NONE;
+    start(&u, 5, 0);
+    (void)sv_unit_stop(&u, &v);
+    (void)sv_unit_exited(&u, &k_timing, 0, PROC_EXIT_REASON_KILLED, 1);
+    CHECK(sv_unit_retract(&u, &v) == 0 && v == SV_VERDICT_RETRACTED && u.state == SV_UNIT_FREE,
+          "a stopped unit is freed at once");
+}
+
+static void test_stop_and_start_require_svc_control(void) {
+    CHECK(sv_authorize(SUPERVISOR_IPC_STOP_REQ, 0, 0) == WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "stopping requires svc.control");
+    CHECK(sv_authorize(SUPERVISOR_IPC_START_REQ, SV_SENDER_GRANT, 0) ==
+              WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED,
+          "starting requires svc.control");
+    CHECK(sv_authorize(SUPERVISOR_IPC_STOP_REQ, SV_SENDER_CONTROL, 0) == 0 &&
+              sv_authorize(SUPERVISOR_IPC_START_REQ, SV_SENDER_CONTROL, 0) == 0,
+          "svc.control stops and starts");
+}
+
 int main(void) {
     test_a_spec_parses_into_its_policy();
     test_a_bare_spec_takes_the_defaults();
@@ -1041,6 +1211,13 @@ int main(void) {
     test_the_list_reports_the_parent_and_degraded();
     test_a_degraded_boot_unit_fails_the_boot();
     test_a_retract_without_svc_control_is_refused();
+    test_a_stopped_unit_is_neither_restarted_nor_counted();
+    test_a_stop_applies_in_every_state_with_a_future();
+    test_a_start_brings_back_a_unit_that_gave_up();
+    test_a_start_is_refused_unless_the_unit_is_down();
+    test_a_started_parent_brings_back_its_degraded_children();
+    test_a_stopped_unit_can_be_retracted();
+    test_stop_and_start_require_svc_control();
     if (g_failures != 0) {
         printf("test_supervisor_unit: %d failure(s)\n", g_failures);
         return 1;

@@ -336,7 +336,9 @@ enum {
     WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 8), /* the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require */
     WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 9), /* the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself */
     WASMOS_ERR_SUPERVISOR_NO_PARENT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 10), /* the submission names a parent= unit that is not recorded, or that is being retracted */
-    WASMOS_ERR_SUPERVISOR_CRITICAL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 11), /* the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system */
+    WASMOS_ERR_SUPERVISOR_CRITICAL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 11), /* the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system */
+    WASMOS_ERR_SUPERVISOR_RUNNING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 12), /* the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart */
+    WASMOS_ERR_SUPERVISOR_PARENT_DOWN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 13), /* the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -680,6 +682,8 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: return "supervisor.GRANT_NOT_AUTHORIZED";
     case WASMOS_ERR_SUPERVISOR_NO_PARENT: return "supervisor.NO_PARENT";
     case WASMOS_ERR_SUPERVISOR_CRITICAL: return "supervisor.CRITICAL";
+    case WASMOS_ERR_SUPERVISOR_RUNNING: return "supervisor.RUNNING";
+    case WASMOS_ERR_SUPERVISOR_PARENT_DOWN: return "supervisor.PARENT_DOWN";
     default: return "unknown";
     }
 }
@@ -955,7 +959,9 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require";
     case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: return "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself";
     case WASMOS_ERR_SUPERVISOR_NO_PARENT: return "the submission names a parent= unit that is not recorded, or that is being retracted";
-    case WASMOS_ERR_SUPERVISOR_CRITICAL: return "the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system";
+    case WASMOS_ERR_SUPERVISOR_CRITICAL: return "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system";
+    case WASMOS_ERR_SUPERVISOR_RUNNING: return "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart";
+    case WASMOS_ERR_SUPERVISOR_PARENT_DOWN: return "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too";
     default: return "unknown error";
     }
 }

@@ -706,11 +706,18 @@ Source: `architecture/13-runtime-and-packaging.md`,
   MSI bind (`PCI_IPC_BUS_MASTER_REQ`, which ata uses); INTx is not. ata takes
   the legacy IDE lines 14/15, which INTx Disable does not gate, and every other
   in-tree PCI driver binds MSI-X under QEMU, so none hits it today.
-- [ ] [FEATURE][P2] Operator stop, start and restart for supervised units. `svc kill`
-  is the only action, and its end counts as a failure. A stop must end a unit
-  without a restart and without counting it; a start or restart must clear a
-  `failed` unit and its intensity window, so an operator can bring back a unit
-  that gave up.
+- [ ] [FEATURE][P3] A one-step operator restart for supervised units (`svc
+  restart`). Stop and start exist (`SUPERVISOR_IPC_STOP_REQ`/`_START_REQ`); a
+  restart is the two in sequence, and a stop takes effect only when the
+  instance has ended, so the operator waits for the `stopped` line between
+  them. A restart request would kill the instance with a pending stop that
+  respawns it uncounted, as a parent's restart does for its children.
+- [ ] [TEST][P3] The shell stopped echoing input once, in the wasm3_smp CLI
+  suite, right after `svc retract sv-par` in `test_supervisor.test_8a` returned
+  to the prompt; the following four tests in that session failed on
+  "was never echoed". No panic was logged, and four further runs of
+  `test_supervisor` on wasm3_smp passed. If it recurs, capture the vt's and the
+  cli's state (`ps`, the syslog) before the session is torn down.
 - [ ] [TEST][P3] QEMU itself crashed once in CI: SIGSEGV in
   `address_space_translate_for_iotlb` under MTTCG, run 44799393421, battery
   `filesystem` on `warp_smp` (artifact `qemu-crash-filesystem-warp_smp`, with the
@@ -731,11 +738,6 @@ Source: `architecture/13-runtime-and-packaging.md`,
   removal has no trigger either: no hotplug, and
   `DEVMGR_UNPUBLISH_BLOCK_DEVICE` only retires partition records. Wire the
   retraction there when a removal path exists.
-- [ ] [ENHANCEMENT][P2] Defer an `ENV{RESTART}` rule until the supervisor is bound
-  instead of spawning the driver directly and unsupervised
-  (`src/services/device_manager/device_manager.c:3439` `TODO`). The supervisor is
-  spawned before device-manager, so the fallback does not run on a normal boot,
-  but a driver that takes it is never restarted.
 - [ ] [ENHANCEMENT][P3] Opt the boot services into liveness probes. The mechanism is
   in place (`PROC_READY_FLAG_LIVENESS`, the event loop answers), but no boot
   service sends the flag, so a hung vt, logger or cli is never detected. Decide

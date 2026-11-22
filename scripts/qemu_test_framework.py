@@ -1303,6 +1303,18 @@ class QemuSession:
         except OSError:
             return ""
 
+    def syslog_wait_count(self, needle: str, count: int, timeout_s: float) -> str:
+        """Polls the kernel log until `needle` occurs at least `count` times.
+        Returns the log then, or "" on timeout."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            log = self.syslog_tail(1 << 20)
+            if log.count(needle) >= count:
+                return log
+            if time.monotonic() >= deadline:
+                return ""
+            time.sleep(0.2)
+
     def _discard_unreported_syslog(self) -> None:
         """Delete a session-created COM2 capture that no timeout ever pointed at.
 

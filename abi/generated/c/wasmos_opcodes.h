@@ -1376,7 +1376,39 @@ enum {
      * submission of the same name is refused (EXISTS) until then.
      */
     SUPERVISOR_IPC_RETRACT_REQ = 0x1004,
-    /* arg0 = 0: the unit was accepted, the list was written, the boot set was recorded, or the kill or retraction was sent (arg1 = the pid, 0 for a retracted unit without an instance). */
+    /* Stop a unit: its instance is killed and not restarted, its end does
+     * not count as a failure, and the unit stays recorded as stopped until
+     * SUPERVISOR_IPC_START_REQ or SUPERVISOR_IPC_RETRACT_REQ. Units bound
+     * to it through parent= are stopped and held degraded. The sender must
+     * hold svc.control (WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED). The request
+     * is a wasmos_supervisor_unit_desc_t naming the unit, in a transfer
+     * buffer the caller owns and has lent READ to the supervisor:
+     * arg0=buffer_id arg1=offset arg2=size. A unit waiting for its spawn or
+     * restart is stopped at once; one being spawned or killed is stopped
+     * when that settles. Refused with WASMOS_ERR_SUPERVISOR_NO_UNIT when no
+     * unit has that name, WASMOS_ERR_SUPERVISOR_NOT_RUNNING when it is
+     * already stopped, failed or degraded, and
+     * WASMOS_ERR_SUPERVISOR_CRITICAL when it or a unit bound to it is
+     * critical. Answered once the kill is sent; arg1 of the reply is the
+     * pid killed, 0 when the unit had no running instance.
+     */
+    SUPERVISOR_IPC_STOP_REQ = 0x1005,
+    /* Start a stopped, failed or degraded unit: it is spawned as if newly
+     * submitted, with its backoff and its intensity window cleared, so a
+     * unit that gave up can be brought back. Its restart count is kept.
+     * Units bound to it through parent= and held degraded start with it.
+     * The sender must hold svc.control
+     * (WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED). The request is a
+     * wasmos_supervisor_unit_desc_t naming the unit, in a transfer buffer
+     * the caller owns and has lent READ to the supervisor: arg0=buffer_id
+     * arg1=offset arg2=size. Refused with WASMOS_ERR_SUPERVISOR_NO_UNIT
+     * when no unit has that name, WASMOS_ERR_SUPERVISOR_RUNNING when it is
+     * not stopped, failed or degraded, and
+     * WASMOS_ERR_SUPERVISOR_PARENT_DOWN when its parent is. Answered once
+     * the spawn is due, before the instance runs.
+     */
+    SUPERVISOR_IPC_START_REQ = 0x1006,
+    /* arg0 = 0: the unit was accepted, the list was written, the boot set was recorded, the kill, retraction or stop was sent (arg1 = the pid, 0 for a unit without an instance), or the start is due. */
     SUPERVISOR_IPC_RESP = 0x1080,
     /* arg0 = packed WASMOS_ERR_SUPERVISOR_* code. */
     SUPERVISOR_IPC_ERROR = 0x10FF,
@@ -1766,6 +1798,8 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x1002: return "SUPERVISOR_IPC_BOOT_SUBMITTED_REQ";
         case 0x1003: return "SUPERVISOR_IPC_KILL_REQ";
         case 0x1004: return "SUPERVISOR_IPC_RETRACT_REQ";
+        case 0x1005: return "SUPERVISOR_IPC_STOP_REQ";
+        case 0x1006: return "SUPERVISOR_IPC_START_REQ";
         case 0x1080: return "SUPERVISOR_IPC_RESP";
         case 0x10FF: return "SUPERVISOR_IPC_ERROR";
         default: return "UNKNOWN";

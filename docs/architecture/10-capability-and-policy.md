@@ -190,8 +190,8 @@ DMA windows over arbitrary physical memory. So who may request one is checked:
   `proc_spawn` for a watched spawn) and nothing is spawned. A profile with no
   bits set only narrows the child and is open to everyone. Holders:
   device-manager and the supervisor.
-- **Supervisor.** Submitting a unit, killing one and declaring the boot set
-  require `svc.control` (`WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED`); listing is
+- **Supervisor.** Submitting, killing, retracting, stopping and starting a unit
+  and declaring the boot set require `svc.control` (`WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED`); listing is
   open. A submission carrying a capability descriptor also requires
   `spawn.grant` (`WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED`): the supervisor
   spawns the unit under its own name, so it relays grants only from a submitter

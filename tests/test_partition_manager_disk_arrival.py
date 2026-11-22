@@ -55,6 +55,11 @@ SPARE_FILES = [("BEFORE.TXT", BEFORE_TEXT)] + [
     (f"AFTER{n}.TXT", f"read after restart {n} of the disk driver".encode())
     for n in range(1, RESTARTS + 1)
 ]
+# Read only while the disk driver is stopped.
+HELD_TEXT = b"read while the disk driver was stopped"
+SPARE_FILES.append(("HELD.TXT", HELD_TEXT))
+# The partition manager's word that a transfer waits for the disk's next driver.
+PM_HOLD_LINE = " holds a transfer until its driver returns"
 MOUNT_POINT = "/spare"
 
 # How many `block` providers a correct boot holds with this disk attached: ATA's
@@ -253,8 +258,8 @@ class PartitionManagerDiskArrivalTest(unittest.TestCase):
             log = self.session.syslog_tail(1 << 20)
             published = log.count("[virtio-blk] published id=")
             self._run(f"svc kill {unit}", [f"svc: killing {unit}".encode()])
-            # Read at once, while the driver is down: the partition manager
-            # holds the transfer and resends it to the successor. The
+            # Read at once: a transfer that catches the driver down is held by
+            # the partition manager and resent to the successor. The
             # partition, its mount and the fs-fat behind it are the same ones:
             # nothing remounted.
             self._run(
@@ -268,14 +273,36 @@ class PartitionManagerDiskArrivalTest(unittest.TestCase):
                 published,
                 f"the read completed, but not on a restarted driver ({n})",
             )
+        # A read made while the driver is stopped -- certainly down, where a
+        # read after a kill races the restart -- is held, and completes once
+        # the driver is started again.
         log = self.session.syslog_tail(1 << 20)
-        # At least one read must have caught the driver down, or the reads
-        # above proved only what an idle restart does.
-        self.assertRegex(
-            log,
-            r"\[partition-manager\] disk id=\S+ holds a transfer until its driver returns",
-            "no read was held across a restart",
+        holds = log.count(PM_HOLD_LINE)
+        self._run(f"svc stop {unit}", [f"svc: stopping {unit}".encode()])
+        self.assertTrue(
+            self.session.syslog_wait_count(f"[supervisor] {unit} stopped", 1, 30),
+            f"the driver did not stop.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
         )
+        start = self.session.send_command(
+            f"spawn cat {MOUNT_POINT}/held.txt", timeout_s=20
+        )
+        log = self.session.syslog_wait_count(PM_HOLD_LINE, holds + 1, 30)
+        self.assertTrue(
+            log,
+            f"the read was not held.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertNotIn(
+            HELD_TEXT,
+            bytes(self.session.buf[start:]),
+            "the read completed with no driver",
+        )
+        self._run(f"svc start {unit}", [f"svc: starting {unit}".encode()])
+        self.assertTrue(
+            self.session.expect_from(start, HELD_TEXT, timeout_s=60),
+            f"the held read did not complete on the started driver\n"
+            f"--- tail ---\n{self.session.tail()}\n",
+        )
+        log = self.session.syslog_tail(1 << 20)
         self.assertNotIn(f"[supervisor] {unit} failed", log)
         self.assertNotIn("[supervisor] critical unit", log)
 

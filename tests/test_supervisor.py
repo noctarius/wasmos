@@ -382,8 +382,107 @@ class SupervisorTests(unittest.TestCase):
         self.assertNotIn("[sv-probe] sv-late up", self.session.syslog_tail(1 << 20))
 
         out = _svc(self, self.session, "retract fs-manager")
-        self.assertIn("svc: a critical unit cannot be retracted", out)
+        self.assertIn("svc: the unit or one bound to it is critical", out)
         self.assertIn("fs-manager", _list_rows(self, self.session))
+
+    def test_8c_a_stopped_unit_stays_down_until_it_is_started(self):
+        # A stop is the operator's, not a failure: an always unit is not
+        # restarted and nothing is counted, its children are held degraded,
+        # and a start brings back the unit and its children together.
+        _submit(self, self.session, f"sv-sp {PROBE} restart=always -- stay sv-sp")
+        _submit(self, self.session, f"sv-sc {PROBE} parent=sv-sp -- stay sv-sc")
+        for tag in ("sv-sp", "sv-sc"):
+            self.assertTrue(
+                _syslog_wait(self.session, f"[sv-probe] {tag} up", 30),
+                f"{tag} did not come up.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        out = _svc(self, self.session, "stop sv-sp")
+        self.assertRegex(out, r"svc: stopping sv-sp \(pid [1-9][0-9]*\)")
+        for line in (
+            "[supervisor] sv-sp stopped (killed",
+            "[supervisor] sv-sc degraded: its parent sv-sp is down",
+        ):
+            self.assertTrue(
+                _syslog_wait(self.session, line, 30),
+                f"missing {line!r}.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        rows = _list_rows(self, self.session)
+        self.assertEqual(rows["sv-sp"][0], "stopped")
+        self.assertEqual(rows["sv-sp"][2], "0", "a stop is not a restart")
+        self.assertEqual(rows["sv-sc"][0], "degraded")
+        log = self.session.syslog_tail(1 << 20)
+        self.assertNotIn("[supervisor] sv-sp ended", log)
+        self.assertEqual(
+            log.count("[sv-probe] sv-sp up"), 1, "a stopped unit is not restarted"
+        )
+
+        out = _svc(self, self.session, "stop sv-sp")
+        self.assertIn("svc: the unit has no running instance", out)
+        out = _svc(self, self.session, "start sv-sc")
+        self.assertIn("svc: the unit's parent is down; start the parent", out)
+        out = _svc(self, self.session, "start sv-sp")
+        self.assertIn("svc: starting sv-sp", out)
+        for tag in ("sv-sp", "sv-sc"):
+            self.assertTrue(
+                _syslog_wait_count(self.session, f"[sv-probe] {tag} up", 2, 30),
+                f"{tag} did not come back.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+            )
+        rows = _list_rows(self, self.session)
+        self.assertIn(rows["sv-sp"][0], ("starting", "running", "stable"))
+        self.assertIn(rows["sv-sc"][0], ("starting", "running", "stable"))
+        self.assertEqual(rows["sv-sp"][2], "0", "a start is not a restart")
+        out = _svc(self, self.session, "start sv-sp")
+        self.assertIn("svc: the unit is not stopped, failed or degraded", out)
+
+        # A stopped unit is removed with retract, its degraded child with it.
+        out = _svc(self, self.session, "stop sv-sp")
+        self.assertRegex(out, r"svc: stopping sv-sp \(pid [1-9][0-9]*\)")
+        self.assertTrue(
+            _syslog_wait_count(
+                self.session, "[supervisor] sv-sp stopped (killed", 2, 30
+            ),
+            f"sv-sp did not stop.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertTrue(
+            _syslog_wait_count(
+                self.session,
+                "[supervisor] sv-sc degraded: its parent sv-sp is down",
+                2,
+                30,
+            ),
+            f"sv-sc was not degraded.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        out = _svc(self, self.session, "retract sv-sp")
+        self.assertIn("svc: sv-sp retracted", out)
+        rows = _list_rows(self, self.session)
+        self.assertNotIn("sv-sp", rows)
+        self.assertNotIn("sv-sc", rows)
+
+        out = _svc(self, self.session, "stop fs-manager")
+        self.assertIn("svc: the unit or one bound to it is critical", out)
+        self.assertIn(
+            _list_rows(self, self.session)["fs-manager"][0], ("running", "stable")
+        )
+
+    def test_8d_a_unit_that_gave_up_can_be_started_again(self):
+        # test_3 left probe-loop failed after five crashes. A start clears its
+        # intensity window, so it gets five more ends before it gives up again.
+        self.assertEqual(_list_rows(self, self.session)["probe-loop"][0], "failed")
+        out = _svc(self, self.session, "start probe-loop")
+        self.assertIn("svc: starting probe-loop", out)
+        needle = "[supervisor] probe-loop failed (trapped"
+        log = _syslog_wait_count(self.session, needle, 2, 60)
+        self.assertTrue(
+            log,
+            "the started probe was never given up on again.\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertIn("after 8 restarts; giving up", log)
+        self.assertEqual(
+            log.count("[sv-probe] probe-loop crashing before READY"),
+            10,
+            "the start did not give the unit a fresh window of five ends",
+        )
 
     def test_9_a_killed_driver_is_restarted_and_serves_again(self):
         # device-manager hands rtc to the supervisor (default.rules,

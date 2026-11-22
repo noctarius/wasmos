@@ -75,6 +75,7 @@ typedef enum {
     SV_STOP_NONE = 0,
     SV_STOP_FOLLOW,  /* its parent ended and restarts: respawn at once */
     SV_STOP_DEGRADE, /* its parent will not run again: hold it DEGRADED */
+    SV_STOP_STOP,    /* stopped on request (SUPERVISOR_IPC_STOP_REQ): hold it STOPPED */
     SV_STOP_RETRACT, /* withdrawn (SUPERVISOR_IPC_RETRACT_REQ): free the slot */
 } sv_stop_t;
 
@@ -82,6 +83,7 @@ typedef enum {
 typedef enum {
     SV_PARENT_RESTARTING = 0, /* its instance ended and another one follows */
     SV_PARENT_GONE,           /* it stopped, failed or is degraded: no instance follows */
+    SV_PARENT_STARTING,       /* it was started again after it was gone */
 } sv_parent_event_t;
 
 /* Policy numbers, in milliseconds; supervisor.c scales them. */
@@ -148,6 +150,7 @@ typedef enum {
     SV_VERDICT_FOLLOW,    /* stopped for its parent's restart: spawn due now, not counted */
     SV_VERDICT_DEGRADED,  /* held DEGRADED until its parent runs again */
     SV_VERDICT_RETRACTED, /* withdrawn: the slot is FREE, the name still readable */
+    SV_VERDICT_START,     /* started on request or with its parent: spawn due now */
 } sv_verdict_t;
 
 /* Parses a SUPERVISOR_IPC_SUBMIT_REQ spec into a fresh unit in state
@@ -208,7 +211,8 @@ int32_t sv_unit_kill(sv_unit_t* unit);
  * is not a correctness property (docs/architecture/03, invariant 5) -- and
  * becomes DEGRADED when it is gone. A critical unit stopped this way ends the
  * system as any end of it does (CRITICAL). Stopped, failed and degraded units
- * are left as they are. */
+ * are left as they are, except that a DEGRADED unit is due again at once
+ * (START) when its parent starts. Units in any other state ignore a start. */
 sv_verdict_t sv_unit_parent_event(sv_unit_t* unit, const sv_timing_t* timing,
                                   sv_parent_event_t event, uint32_t now);
 
@@ -220,6 +224,30 @@ sv_verdict_t sv_unit_parent_event(sv_unit_t* unit, const sv_timing_t* timing,
  * unchanged. The caller retracts the unit's children
  * first (sv_units_subtree_critical refuses the whole tree up front). */
 int32_t sv_unit_retract(sv_unit_t* unit, sv_verdict_t* verdict);
+
+/* Stops the unit on request (SUPERVISOR_IPC_STOP_REQ): it is not restarted
+ * and its end is not counted against it. A running instance moves to STOPPING
+ * and the caller kills `pid` (*verdict CASCADE); a unit waiting to be spawned
+ * stops at once (STOPPED); one being spawned or killed stops when that
+ * settles (NONE), unless it is being retracted. Returns 0,
+ * WASMOS_ERR_SUPERVISOR_NOT_RUNNING for a unit already stopped, failed or
+ * degraded, WASMOS_ERR_SUPERVISOR_NO_UNIT for a free slot, or
+ * WASMOS_ERR_SUPERVISOR_CRITICAL for a critical unit, each with the unit
+ * unchanged. The caller refuses a unit with a critical descendant up front
+ * (sv_units_subtree_critical): its children are degraded. */
+int32_t sv_unit_stop(sv_unit_t* unit, sv_verdict_t* verdict);
+
+/* Starts a stopped, failed or degraded unit (SUPERVISOR_IPC_START_REQ): it is
+ * due at `now` with its intensity window and backoff cleared, as if newly
+ * submitted; its restart count is kept. `parent` is the unit's parent= unit,
+ * or NULL when it names none. The caller then carries out SV_VERDICT_START,
+ * which brings back its degraded children. Returns 0,
+ * WASMOS_ERR_SUPERVISOR_RUNNING for a unit in any other state,
+ * WASMOS_ERR_SUPERVISOR_NO_UNIT for a free slot, or
+ * WASMOS_ERR_SUPERVISOR_PARENT_DOWN when the parent is stopped, failed or
+ * degraded, each with the unit unchanged. */
+int32_t sv_unit_start(sv_unit_t* unit, const sv_unit_t* parent, const sv_timing_t* timing,
+                      uint32_t now);
 
 /* What a unit's verdict means to its children: 1 with *event set when they
  * are told (sv_unit_parent_event), 0 when the verdict leaves them alone. */
@@ -302,8 +330,9 @@ sv_boot_t sv_boot_check(const sv_unit_t* units, uint32_t n, uint32_t* count, uin
 #define SV_SENDER_GRANT (1u << 1)   /* spawn.grant */
 
 /* Whether a sender holding `sender` (SV_SENDER_*) may make request `type`
- * (SUPERVISOR_IPC_*_REQ). Submitting, killing, retracting and declaring the
- * boot set change what runs, so they require svc.control; listing is open to everyone. A
+ * (SUPERVISOR_IPC_*_REQ). Submitting, killing, retracting, stopping,
+ * starting and declaring the boot set change what runs, so they require
+ * svc.control; listing is open to everyone. A
  * submission carrying a capability descriptor (`caps_len` > 0) also requires
  * spawn.grant: the supervisor spawns the unit with those grants under its own
  * name, so it relays them only from a submitter the process manager would accept

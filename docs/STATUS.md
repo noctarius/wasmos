@@ -345,7 +345,12 @@ linked feature documents for rationale and rollout plans.
   the child `degraded`. Neither counts against the child; a critical child so
   stopped halts the system. `SUPERVISOR_IPC_RETRACT_REQ` (`svc retract`)
   withdraws a unit and its subtree without a restart or a failure, refused for
-  a tree holding a critical unit. No in-tree unit sets `parent=` yet: the
+  a tree holding a critical unit. `SUPERVISOR_IPC_STOP_REQ` (`svc stop`) ends a
+  unit without a restart or a counted end (`[supervisor] <unit> stop
+  requested; killing pid N`, then `... stopped (...)`) and degrades its
+  children; `SUPERVISOR_IPC_START_REQ` (`svc start`) brings a stopped, failed
+  or degraded unit back with its intensity window cleared, and its degraded
+  children with it (`[supervisor] <unit> starting`). No in-tree unit sets `parent=` yet: the
   storage and network clients are to rebind to a restarted driver instead
   (`tests/test_supervisor.py` covers the mechanism with `sv_probe stay`).
 - virtio-blk is supervised (`virtio_blk@pci:<function>`, `restart=on-failure`).
@@ -377,8 +382,10 @@ linked feature documents for rationale and rollout plans.
   `abi/constants.yaml` `block_hold`) from the driver's end; a driver not back
   by then is taken to be gone, and transfers fail with
   `WASMOS_ERR_BLOCK_DEV_GONE` until one returns. The three restart tests read
-  right after each `svc kill` and require a hold to have been logged
-  (`[fat]`/`[fs-wfs]`/`[partition-manager] ... hold...`); host cases in
+  right after each `svc kill`, then `svc stop` the driver, start a detached
+  `cat` of a file not read before, require the hold line
+  (`[fat]`/`[fs-wfs]`/`[partition-manager] ... hold...`) and no content, and
+  `svc start` the driver, after which the content must arrive; host cases in
   `test_fat_block.c`, `test_wfs_read.c` (the WFS stub now has a clock) and
   `test_partition_inflight.zig`.
 - Liveness: a unit whose `PROC_IPC_NOTIFY_READY` carries
@@ -487,7 +494,7 @@ linked feature documents for rationale and rollout plans.
   (device-manager, supervisor) and is otherwise refused with
   `GRANT_NOT_AUTHORIZED` before a child exists (`pm_caps_grant_allowed`).
   The supervisor requires `svc.control` (sysinit, device-manager, `svc`) to
-  submit, kill or declare the boot set, and `spawn.grant` too for a submission
+  submit, kill, retract, stop or start a unit or declare the boot set, and `spawn.grant` too for a submission
   carrying a capability descriptor (`sv_authorize`); listing is open. It asks
   the kernel what a sender holds with the `ipc_endpoint_has_cap` host call on
   the request's source endpoint; capability kinds are ABI as `WASMOS_CAP_*`

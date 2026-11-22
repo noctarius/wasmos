@@ -691,11 +691,19 @@ a failure and the policy applies. `SUPERVISOR_IPC_RETRACT_REQ` withdraws a unit
 and every unit bound to it: their instances are killed, none is restarted, no
 end is a failure, and each slot is freed when its instance has ended. A tree
 holding a `critical` unit is refused whole (`WASMOS_ERR_SUPERVISOR_CRITICAL`).
-The `svc` utility wraps them: `svc submit <spec>`, `svc list`, `svc status
-<unit>`, `svc kill <unit>`, `svc retract <unit>`.
+`SUPERVISOR_IPC_STOP_REQ` ends a unit's instance without a restart and without
+counting the end, and holds the unit `stopped`; its children are held
+`degraded`. `SUPERVISOR_IPC_START_REQ` brings a stopped, failed or degraded
+unit back as if newly submitted -- its backoff and intensity window cleared,
+its restart count kept -- and its degraded children with it; a child under a
+parent that is down is refused (`WASMOS_ERR_SUPERVISOR_PARENT_DOWN`). A stop,
+like a retraction, is refused for a tree holding a `critical` unit. A stopped
+unit stays recorded until it is started or retracted. The `svc` utility wraps
+them: `svc submit <spec>`, `svc list`, `svc status <unit>`, `svc kill <unit>`,
+`svc retract <unit>`, `svc stop <unit>`, `svc start <unit>`.
 
-**Access.** Submitting, killing, retracting and declaring the boot set require the
-sender to hold `svc.control` (sysinit, device-manager, `svc`); listing is open.
+**Access.** Submitting, killing, retracting, stopping, starting and declaring
+the boot set require the sender to hold `svc.control` (sysinit, device-manager, `svc`); listing is open.
 A submission that carries a capability descriptor also requires `spawn.grant`,
 because the grants reach the process manager as the supervisor's own watched
 spawn: the supervisor relays them only from a submitter the process manager
@@ -754,9 +762,10 @@ exit with the compositor and are not started again.
 | `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` | `0x1002` | The boot set is complete |
 | `SUPERVISOR_IPC_KILL_REQ` | `0x1003` | Kill a unit's instance; its end is a failure |
 | `SUPERVISOR_IPC_RETRACT_REQ` | `0x1004` | Withdraw a unit and the units bound to it; nothing is restarted |
+| `SUPERVISOR_IPC_STOP_REQ` | `0x1005` | Stop a unit without a restart or a failure; its children are degraded |
+| `SUPERVISOR_IPC_START_REQ` | `0x1006` | Start a stopped, failed or degraded unit and its degraded children |
 
-Not built: operator stop/start/restart that does not count as a failure (a
-degraded unit stays degraded until then); retraction of a submitter's units
+Not built: a one-step operator restart (stop, then start); retraction of a submitter's units
 when it dies; liveness for the boot services; supervising virtio-net, whose
 clients do not follow a restart yet; a guard against reboot loops under
 `on_critical=reboot`. They are tracked in `docs/TASKS.md`.

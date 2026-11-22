@@ -323,7 +323,9 @@ const (
 	WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED int32 = -0x001A0008 // the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require
 	WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED int32 = -0x001A0009 // the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself
 	WASMOS_ERR_SUPERVISOR_NO_PARENT int32 = -0x001A000A // the submission names a parent= unit that is not recorded, or that is being retracted
-	WASMOS_ERR_SUPERVISOR_CRITICAL int32 = -0x001A000B // the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system
+	WASMOS_ERR_SUPERVISOR_CRITICAL int32 = -0x001A000B // the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system
+	WASMOS_ERR_SUPERVISOR_RUNNING int32 = -0x001A000C // the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart
+	WASMOS_ERR_SUPERVISOR_PARENT_DOWN int32 = -0x001A000D // the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -966,7 +968,11 @@ func WasmosStrerror(c int32) string {
 	case WASMOS_ERR_SUPERVISOR_NO_PARENT:
 		return "the submission names a parent= unit that is not recorded, or that is being retracted"
 	case WASMOS_ERR_SUPERVISOR_CRITICAL:
-		return "the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system"
+		return "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system"
+	case WASMOS_ERR_SUPERVISOR_RUNNING:
+		return "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart"
+	case WASMOS_ERR_SUPERVISOR_PARENT_DOWN:
+		return "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too"
 	default:
 		return "unknown error"
 	}

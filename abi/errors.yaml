@@ -479,4 +479,6 @@ domains:
       - { name: NOT_AUTHORIZED,       description: "the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require" }
       - { name: GRANT_NOT_AUTHORIZED, description: "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself" }
       - { name: NO_PARENT, description: "the submission names a parent= unit that is not recorded, or that is being retracted" }
-      - { name: CRITICAL,  description: "the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system" }
+      - { name: CRITICAL,  description: "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system" }
+      - { name: RUNNING,     description: "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart" }
+      - { name: PARENT_DOWN, description: "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too" }

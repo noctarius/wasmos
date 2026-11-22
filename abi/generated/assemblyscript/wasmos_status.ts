@@ -315,7 +315,9 @@ export const WASMOS_ERR_SUPERVISOR_NOT_RUNNING: i32 = -0x001A0007; // the unit h
 export const WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: i32 = -0x001A0008; // the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require
 export const WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: i32 = -0x001A0009; // the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself
 export const WASMOS_ERR_SUPERVISOR_NO_PARENT: i32 = -0x001A000A; // the submission names a parent= unit that is not recorded, or that is being retracted
-export const WASMOS_ERR_SUPERVISOR_CRITICAL: i32 = -0x001A000B; // the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system
+export const WASMOS_ERR_SUPERVISOR_CRITICAL: i32 = -0x001A000B; // the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system
+export const WASMOS_ERR_SUPERVISOR_RUNNING: i32 = -0x001A000C; // the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart
+export const WASMOS_ERR_SUPERVISOR_PARENT_DOWN: i32 = -0x001A000D; // the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too
 
 export function errMake(dom: u16, code: u16): i32 {
   return -(<i32>(((<u32>dom) << 16) | (<u32>code)));
@@ -642,7 +644,9 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED: return "the sender lacks the svc.control capability, which submitting, killing, retracting and declaring the boot set require";
     case WASMOS_ERR_SUPERVISOR_GRANT_NOT_AUTHORIZED: return "the submission carries a capability descriptor and the submitter lacks the spawn.grant capability: the supervisor relays grants only from a submitter entitled to make them itself";
     case WASMOS_ERR_SUPERVISOR_NO_PARENT: return "the submission names a parent= unit that is not recorded, or that is being retracted";
-    case WASMOS_ERR_SUPERVISOR_CRITICAL: return "the unit to retract, or a unit bound to it through parent=, is critical: removing it would end the system";
+    case WASMOS_ERR_SUPERVISOR_CRITICAL: return "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system";
+    case WASMOS_ERR_SUPERVISOR_RUNNING: return "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart";
+    case WASMOS_ERR_SUPERVISOR_PARENT_DOWN: return "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too";
     default: return "unknown error";
   }
 }

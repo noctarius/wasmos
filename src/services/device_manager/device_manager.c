@@ -640,7 +640,10 @@ static void load_rules_if_available(void) {
         str_copy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
         wasmos_sys_str_append(path, sizeof(path), "/");
         wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
-        read_len = read_rules_file(path, text, DEVMGR_RULE_TEXT_CAP + 1u);
+        /* wasmos_sys_fs_read_path keeps one byte for the NUL and returns at
+         * most out_text_len - 1, so the probe byte past the cap that tells a
+         * file that fits from one that does not needs cap + 2. */
+        read_len = read_rules_file(path, text, DEVMGR_RULE_TEXT_CAP + 2u);
         if (read_len >= 0) {
             (void)rules_text_take(path, read_len);
             g_dm.rules_init_loaded = 1;

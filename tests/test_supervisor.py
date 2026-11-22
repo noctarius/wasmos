@@ -305,8 +305,16 @@ class SupervisorTests(unittest.TestCase):
             or _syslog_wait(self.session, "[supervisor] sv-par retracted\r\n", 1),
             f"the parent was not freed.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
         )
+        # The two kills complete in either order on SMP, so the parent's line
+        # says nothing about the child's: wait for the child's own completed
+        # retraction, not the "retracted; killing" announcement, before reading
+        # the table.
+        self.assertTrue(
+            _syslog_wait(self.session, "[supervisor] sv-kid retracted\n", 30)
+            or _syslog_wait(self.session, "[supervisor] sv-kid retracted\r\n", 1),
+            f"the child was not freed.\n--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
         log = self.session.syslog_tail(1 << 20)
-        self.assertIn("[supervisor] sv-kid retracted", log)
         rows = _list_rows(self, self.session)
         self.assertNotIn("sv-par", rows)
         self.assertNotIn("sv-kid", rows)

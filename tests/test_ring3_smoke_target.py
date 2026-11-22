@@ -18,12 +18,17 @@ class Ring3SmokeTargetTests(unittest.TestCase):
         # the kernel and the host tools.
         build_dir = os.path.relpath(default_build_dir(), root)
         cmd = ["ninja", "-C", build_dir, "run-qemu-ring3-test"]
+        # The output carries the guest's serial console, which is not guaranteed
+        # to be UTF-8 (a corrupted or partially written byte reads as 0xFF);
+        # decoding strictly turned that into an error that hid the target's
+        # own result. Regression: 2026-11-22-ring3-target-output-not-utf8.
         proc = subprocess.run(
             cmd,
             cwd=root,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            errors="replace",
             check=False,
         )
         if proc.returncode != 0:

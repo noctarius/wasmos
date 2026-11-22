@@ -14,14 +14,33 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "wasmos_opcodes.h"
+
+/* One file a test serves as fs-manager would, or NULL for none. While it is
+ * set, the first FS_IPC_READ_PATH_REQ is answered with as much of it as the
+ * request's buffer holds -- fs-manager's own clamp -- and the reply is what the
+ * next receive returns. Unset, every call below stays inert. */
+const char* g_test_fs_file;
+int32_t g_test_fs_file_len;
+static int32_t g_fs_reply_id;
+static int32_t g_fs_reply_len = -1;
+
 int32_t wasmos_ipc_drain(int32_t endpoint) {
     (void)endpoint;
     return 0;
 }
 
 int32_t wasmos_ipc_last_field(int32_t field) {
-    (void)field;
-    return 0;
+    switch (field) {
+    case 0:
+        return g_fs_reply_len >= 0 ? (int32_t)FS_IPC_RESP : 0;
+    case 1:
+        return g_fs_reply_id;
+    case 2:
+        return g_fs_reply_len >= 0 ? g_fs_reply_len : 0;
+    default:
+        return 0;
+    }
 }
 
 /* wasmos_ipc_call registers an await on its server before sending; every
@@ -33,7 +52,7 @@ int32_t wasmos_ipc_peer_await(int32_t waiter, int32_t awaited) {
 }
 int32_t wasmos_ipc_select_one(int32_t endpoint) {
     (void)endpoint;
-    return -1;
+    return g_fs_reply_len >= 0 ? 0 : -1;
 }
 
 int32_t wasmos_ipc_select_wait(int32_t sel) {
@@ -51,12 +70,14 @@ int32_t wasmos_ipc_send(int32_t dest, int32_t src, int32_t type, int32_t request
                         int32_t arg1, int32_t arg2, int32_t arg3) {
     (void)dest;
     (void)src;
-    (void)type;
-    (void)request_id;
     (void)arg0;
-    (void)arg1;
     (void)arg2;
     (void)arg3;
+    if (g_test_fs_file && type == (int32_t)FS_IPC_READ_PATH_REQ) {
+        g_fs_reply_id = request_id;
+        g_fs_reply_len = g_test_fs_file_len < arg1 ? g_test_fs_file_len : arg1;
+        return 0;
+    }
     return -1;
 }
 
@@ -66,22 +87,29 @@ int32_t wasmos_sched_yield(void) {
 
 int32_t wasmos_xfer_buffer_acquire(int32_t minimum_size) {
     (void)minimum_size;
-    return -1;
+    return g_test_fs_file ? 1 : -1;
+}
+
+int32_t wasmos_xfer_buffer_size(void) {
+    return 65536;
 }
 
 int32_t wasmos_xfer_buffer_borrow(int32_t grantee, int32_t buffer_id, int32_t flags) {
     (void)grantee;
     (void)buffer_id;
     (void)flags;
-    return -1;
+    return g_test_fs_file ? 1 : -1;
 }
 
+/* Reads back the served file; the reply is consumed by the read. */
 int32_t wasmos_xfer_buffer_read(int32_t buffer_id, void* dst, int32_t len, int32_t offset) {
     (void)buffer_id;
-    (void)dst;
-    (void)len;
-    (void)offset;
-    return -1;
+    if (!g_test_fs_file || g_fs_reply_len < 0 || offset != 0 || len > g_fs_reply_len) {
+        return -1;
+    }
+    memcpy(dst, g_test_fs_file, (size_t)len);
+    g_fs_reply_len = -1;
+    return 0;
 }
 
 int32_t wasmos_xfer_buffer_release(int32_t buffer_id) {
@@ -141,4 +169,28 @@ int32_t wasmos_env_get(const char* name, int32_t name_len, char* buf, int32_t bu
     }
     buf[n] = '\0';
     return n;
+}
+
+/* Reached by the module-descriptor refetch (load_pci_rule_metadata), which a
+ * rules load schedules. No module resolves here, so a refetched rule is left
+ * without declared windows. */
+int32_t wasmos_xfer_buffer_write(int32_t buffer_id, const void* src, int32_t len, int32_t offset) {
+    (void)buffer_id;
+    (void)src;
+    (void)len;
+    (void)offset;
+    return g_test_fs_file ? 0 : -1;
+}
+
+int32_t wasmos_boot_module_name(int32_t index, int32_t out, int32_t out_len) {
+    (void)index;
+    (void)out;
+    (void)out_len;
+    return -1;
+}
+
+int32_t wasmos_sync_user_read(int32_t ptr, int32_t len) {
+    (void)ptr;
+    (void)len;
+    return 0;
 }

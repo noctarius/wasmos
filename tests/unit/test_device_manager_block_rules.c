@@ -1165,8 +1165,35 @@ static void a_pci_rule_waits_for_its_drivers_metadata(void) {
           "and is armed once the metadata is in");
 }
 
+/* Defined in stubs_device_manager_host.c: the file the fake fs-manager serves. */
+extern const char* g_test_fs_file;
+extern int32_t g_test_fs_file_len;
+
+/* Regression: 2026-11-22-devmgr-initfs-rules-cut-silently -- the bootstrap
+ * rules were read with room for one byte past DEVMGR_RULE_TEXT_CAP, so that an
+ * oversized file could be told from one that fits, but the read wrapper keeps a
+ * byte of its buffer for the NUL and never returned that probe byte. A file
+ * past the cap was cut at the cap without a word, and a rule split by the cut
+ * was parsed as whatever half of it survived. */
+static void an_oversized_bootstrap_rule_file_is_reported(void) {
+    static char file[DEVMGR_RULE_TEXT_CAP + 64];
+    int32_t n = 0;
+    while (n + 64 < (int32_t)sizeof(file)) {
+        n += snprintf(file + n, sizeof(file) - (size_t)n, "# %060d\n", (int)n);
+    }
+    harness_reset();
+    g_dm.fs_endpoint = 7;
+    g_test_fs_file = file;
+    g_test_fs_file_len = n;
+    load_rules_if_available();
+    g_test_fs_file = 0;
+    check(g_dm.rules_init_loaded, "the bootstrap rules are loaded");
+    check(out_has("exceeds"), "a bootstrap rule file past the cap is reported as cut");
+}
+
 int main(void) {
     a_pci_rule_waits_for_its_drivers_metadata();
+    an_oversized_bootstrap_rule_file_is_reported();
     a_driver_that_never_comes_up_does_not_starve_the_queue();
     publish_after_rules_reports_the_match();
     rescan_after_late_rules_reports_the_match();

@@ -178,6 +178,7 @@ pub const WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: i32 = -0x00070003; // startup ar
 pub const WASMOS_ERR_DRIVER_DEVICE_INIT: i32 = -0x00070004; // bringing the identified device up failed
 pub const WASMOS_ERR_DRIVER_REGISTER: i32 = -0x00070005; // publishing the driver endpoint to the service registry failed
 pub const WASMOS_ERR_DRIVER_SELECT_SETUP: i32 = -0x00070006; // the driver could not build its IPC select set
+pub const WASMOS_ERR_DRIVER_DEPENDENCY_MISSING: i32 = -0x00070007; // a service the driver depends on is not registered
 pub const WASMOS_ERR_VT_BAD_TTY_ID: i32 = -0x00080001; // requested tty id is out of range
 pub const WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: i32 = -0x00080002; // no tty is associated with the requesting endpoint
 pub const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint is already the reader for this tty
@@ -511,6 +512,7 @@ pub fn strerror(c: i32) []const u8 {
         WASMOS_ERR_DRIVER_DEVICE_INIT => "bringing the identified device up failed",
         WASMOS_ERR_DRIVER_REGISTER => "publishing the driver endpoint to the service registry failed",
         WASMOS_ERR_DRIVER_SELECT_SETUP => "the driver could not build its IPC select set",
+        WASMOS_ERR_DRIVER_DEPENDENCY_MISSING => "a service the driver depends on is not registered",
         WASMOS_ERR_VT_BAD_TTY_ID => "requested tty id is out of range",
         WASMOS_ERR_VT_NO_TTY_FOR_SOURCE => "no tty is associated with the requesting endpoint",
         WASMOS_ERR_VT_READER_BUSY => "another endpoint is already the reader for this tty",

@@ -199,6 +199,7 @@ enum {
     WASMOS_ERR_DRIVER_DEVICE_INIT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 4), /* bringing the identified device up failed */
     WASMOS_ERR_DRIVER_REGISTER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 5), /* publishing the driver endpoint to the service registry failed */
     WASMOS_ERR_DRIVER_SELECT_SETUP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 6), /* the driver could not build its IPC select set */
+    WASMOS_ERR_DRIVER_DEPENDENCY_MISSING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 7), /* a service the driver depends on is not registered */
     WASMOS_ERR_VT_BAD_TTY_ID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 1), /* requested tty id is out of range */
     WASMOS_ERR_VT_NO_TTY_FOR_SOURCE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 2), /* no tty is associated with the requesting endpoint */
     WASMOS_ERR_VT_READER_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 3), /* another endpoint is already the reader for this tty */
@@ -544,6 +545,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_DRIVER_DEVICE_INIT: return "driver.DEVICE_INIT";
     case WASMOS_ERR_DRIVER_REGISTER: return "driver.REGISTER";
     case WASMOS_ERR_DRIVER_SELECT_SETUP: return "driver.SELECT_SETUP";
+    case WASMOS_ERR_DRIVER_DEPENDENCY_MISSING: return "driver.DEPENDENCY_MISSING";
     case WASMOS_ERR_VT_BAD_TTY_ID: return "vt.BAD_TTY_ID";
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "vt.NO_TTY_FOR_SOURCE";
     case WASMOS_ERR_VT_READER_BUSY: return "vt.READER_BUSY";
@@ -822,6 +824,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_DRIVER_DEVICE_INIT: return "bringing the identified device up failed";
     case WASMOS_ERR_DRIVER_REGISTER: return "publishing the driver endpoint to the service registry failed";
     case WASMOS_ERR_DRIVER_SELECT_SETUP: return "the driver could not build its IPC select set";
+    case WASMOS_ERR_DRIVER_DEPENDENCY_MISSING: return "a service the driver depends on is not registered";
     case WASMOS_ERR_VT_BAD_TTY_ID: return "requested tty id is out of range";
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
     case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";

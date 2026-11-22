@@ -84,6 +84,10 @@ class QemuConfig:
     #   macOS Apple NAT+DHCP:  vmnet-shared,id=net0              (needs sudo)
     #   Linux tap:             tap,id=net0,ifname=tap0,script=no,downscript=no
     netdev: str = "user,id=net0"
+    # The entropy device every boot carries for the virtio-rng driver
+    # (transitional 1AF4:1005). A test appends device options here --
+    # `vectors=0` puts the driver on its INTx path.
+    rng_device: str = "virtio-rng-pci"
     # Extra QEMU arguments appended verbatim after the standard device set, for a
     # test that needs a device the whole suite must not carry -- an attached
     # virtio-blk disk, say. A tuple so the default stays immutable.
@@ -525,8 +529,7 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
             "-device",
             f"{cfg.nic_model},netdev=net0,id=nic0",
         ]
-    # Entropy source for the virtio-rng driver (transitional 1AF4:1005).
-    cmd += ["-device", "virtio-rng-pci"]
+    cmd += ["-device", cfg.rng_device]
     cmd += list(cfg.extra_args)
     if cfg.monitor_socket:
         cmd += ["-qmp", f"unix:{cfg.monitor_socket},server,wait=off"]

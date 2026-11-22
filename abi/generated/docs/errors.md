@@ -189,6 +189,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_DRIVER_DEVICE_INIT` | -0x00070004 | bringing the identified device up failed |
 | `WASMOS_ERR_DRIVER_REGISTER` | -0x00070005 | publishing the driver endpoint to the service registry failed |
 | `WASMOS_ERR_DRIVER_SELECT_SETUP` | -0x00070006 | the driver could not build its IPC select set |
+| `WASMOS_ERR_DRIVER_DEPENDENCY_MISSING` | -0x00070007 | a service the driver depends on is not registered |
 
 ### `vt` (domain 8) — virtual-terminal multiplexer failures
 

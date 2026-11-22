@@ -76,6 +76,13 @@ static int32_t g_irq_endpoint = -1;
 static int32_t g_irq_select = -1;
 static uint8_t g_irq_routed;
 static int32_t g_pci_endpoint = -1; /* pci-bus: owns config space, programs MSI-X */
+/* On the INTx path the function may still be quiesced from a previous driver's
+ * end -- bus mastering off, INTx disabled -- until pci-bus answers
+ * PCI_IPC_INTX_ENABLE_REQ. The request goes out from g_endpoint before the
+ * service registers, and its answer is consumed by the request loop. A fill is
+ * refused with WASMOS_ERR_HRNG_NOT_READY until then. */
+#define RNG_INTX_ENABLE_REQ_ID 0x7B20
+static uint8_t g_function_armed = 1u;
 static virtio_rng_device_t g_dev;
 
 static vring_t g_rq; /* the single request virtqueue (device -> driver) */
@@ -416,7 +423,7 @@ static void send_error(int32_t dest, int32_t request_id, int32_t code) {
  * borrowed buffer (arg0). Replies HRNG_IPC_RESP with arg0 = bytes written. */
 static void handle_get_bytes(int32_t source, int32_t request_id, int32_t buffer_id,
                              int32_t req_len) {
-    if (!g_dev.present || !g_dev.ready) {
+    if (!g_dev.present || !g_dev.ready || !g_function_armed) {
         send_error(source, request_id, WASMOS_ERR_HRNG_NOT_READY);
         return;
     }
@@ -436,6 +443,49 @@ static void handle_get_bytes(int32_t source, int32_t request_id, int32_t buffer_
     (void)wasmos_ipc_send(source, g_endpoint, HRNG_IPC_RESP, request_id, n, 0, 0, 0);
 }
 
+/* Ask pci-bus to arm the function for INTx (PCI_IPC_INTX_ENABLE_REQ), without
+ * waiting. The kernel quiesced the function when a previous driver of it ended,
+ * and only an MSI bind or this request undoes that. initialize_device reset the
+ * device first, so it names none of the previous driver's frames once it can
+ * master again. */
+static void rng_request_intx_enable(void) {
+    uint32_t bdf =
+        ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
+    if (g_pci_endpoint < 0) {
+        (void)printf("[virtio-rng] no pci service; intx left as the firmware set it\n");
+        return;
+    }
+    if (wasmos_ipc_send(g_pci_endpoint,
+                        g_endpoint,
+                        PCI_IPC_INTX_ENABLE_REQ,
+                        RNG_INTX_ENABLE_REQ_ID,
+                        (int32_t)bdf,
+                        0,
+                        0,
+                        0) != 0) {
+        (void)printf("[virtio-rng] intx enable request could not be sent\n");
+        return;
+    }
+    g_function_armed = 0u;
+}
+
+/* Consume pci-bus's answer to PCI_IPC_INTX_ENABLE_REQ. Returns 1 when `msg` was
+ * it. A refusal still arms the driver: the function keeps whatever state it
+ * has, which on a first start is the firmware's. */
+static int rng_intx_enable_event(const wasmos_ipc_message_t* msg) {
+    if ((msg->type != PCI_IPC_RESP && msg->type != PCI_IPC_ERROR) ||
+        msg->request_id != RNG_INTX_ENABLE_REQ_ID || msg->source != g_pci_endpoint) {
+        return 0;
+    }
+    if (msg->type == PCI_IPC_RESP) {
+        (void)printf("[virtio-rng] function armed for intx\n");
+    } else {
+        (void)printf("[virtio-rng] pci-bus refused intx enable status=%d\n", (int)msg->arg1);
+    }
+    g_function_armed = 1u;
+    return 1;
+}
+
 /* Driver entry point: bring up the virtio-rng device, register under the "hrng"
  * class, and serve HRNG_IPC_GET_BYTES_REQ forever.
  *
@@ -444,23 +494,22 @@ static void handle_get_bytes(int32_t source, int32_t request_id, int32_t buffer_
  *
  * On success this does not return. The service deliberately keeps running even
  * when its wait primitive fails -- an entropy provider that exits leaves every
- * client blocked, so it degrades to yielding instead of quitting.
- * TODO: the bring-up failure paths return a bare -1 rather than a packed
- * WASMOS_ERR_DRIVER_* code from abi/errors.yaml. */
+ * client blocked, so it degrades to yielding instead of quitting. A bring-up
+ * failure returns a packed WASMOS_ERR_DRIVER_* code. */
 WASMOS_WASM_EXPORT int32_t initialize(void) {
     int32_t proc_endpoint = wasmos_startup_proc_endpoint();
     if (proc_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT;
     }
 
     g_endpoint = wasmos_ipc_create_endpoint();
     if (g_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
     g_select = wasmos_ipc_select_create();
     if (g_select < 0 || wasmos_ipc_select_add(g_select, g_endpoint) != 0) {
         (void)printf("[virtio-rng] select setup failed\n");
-        return -1;
+        return WASMOS_ERR_DRIVER_SELECT_SETUP;
     }
 
     /* Interrupts get their own endpoint, whether they arrive as a routed INTx
@@ -505,6 +554,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * Without it, routing is what keeps the line from re-firing forever: the
      * device asserts on every completed fill and nothing else clears it.
      * Failure is not fatal: the fill falls back to the timed safety net. */
+    if (!g_dev.msix_enabled && g_dev.ready) {
+        rng_request_intx_enable();
+    }
     if (!g_dev.msix_enabled && g_dev.ready && g_dev.irq < 16u && g_irq_endpoint >= 0) {
         if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_irq_endpoint) == 0) {
             g_irq_routed = 1;
@@ -519,7 +571,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * entropy provider uniformly; the concrete service name is "virtio-rng". */
     if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio-rng", "hrng", 0, 1) < 0) {
         (void)printf("[virtio-rng] register failed\n");
-        return -1;
+        return WASMOS_ERR_DRIVER_REGISTER;
     }
     wasmos_sys_notify_ready(proc_endpoint, g_endpoint);
 
@@ -534,6 +586,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             wasmos_ipc_message_read_last(&msg);
             if (msg.source < 0) {
                 continue; /* stray notification / IRQ echo */
+            }
+            if (rng_intx_enable_event(&msg)) {
+                continue;
             }
             if (msg.type == HRNG_IPC_GET_BYTES_REQ) {
                 handle_get_bytes(msg.source, msg.request_id, msg.arg0, msg.arg1);

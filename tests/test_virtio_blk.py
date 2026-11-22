@@ -491,8 +491,13 @@ class VirtioBlkIntxFallbackTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.disk_dir = tempfile.mkdtemp(prefix="wasmos-vblk-intx-")
         # vectors=0 makes the device advertise no MSI-X table, so pci-bus reports
-        # no MSI-X kind and the driver takes its INTx path.
-        cfg = _config_with_disk(_make_disk(cls.disk_dir), device_opts=",vectors=0")
+        # no MSI-X kind and the driver takes its INTx path. The entropy device
+        # is put on its INTx path too: virtio-rng is the other supervised driver
+        # with an INTx fallback.
+        cfg = replace(
+            _config_with_disk(_make_disk(cls.disk_dir), device_opts=",vectors=0"),
+            rng_device="virtio-rng-pci,vectors=0",
+        )
         cls.session = QemuSession(cfg, timeout_s=180)
         cls.session.start()
         cls.session.require_prompt(timeout_s=150)
@@ -531,6 +536,108 @@ class VirtioBlkIntxFallbackTest(unittest.TestCase):
             self.session.expect(DISK_SIGNATURE.hex().upper().encode(), timeout_s=60),
             "sector 0 did not come back on the INTx path — completions are not "
             "reaching the driver through the routed line",
+        )
+
+    def _supervised_unit(self, prefix: str) -> str:
+        assert self.session is not None
+        start = self.session.send_command("svc list", timeout_s=20)
+        self.assertTrue(self.session.expect_from(start, b"wamos> ", timeout_s=30))
+        listing = self.session.buf[start:].decode("utf-8", errors="replace")
+        units = [
+            line.split()[0] for line in listing.splitlines() if line.startswith(prefix)
+        ]
+        self.assertEqual(len(units), 1, f"one supervised {prefix} unit:\n{listing}")
+        return units[0]
+
+    def _entropy(self, tag: str) -> bool:
+        assert self.session is not None
+        start = self.session.send_command(f"sv_probe entropy {tag}", timeout_s=20)
+        self.assertTrue(
+            self.session.expect_from(
+                start, f"[sv-probe] {tag} entropy ".encode(), timeout_s=60
+            ),
+            f"sv_probe did not report.\n--- tail ---\n{self.session.tail()}\n",
+        )
+        return f"[sv-probe] {tag} entropy ok".encode() in bytes(
+            self.session.buf[start:]
+        )
+
+    def test_y_entropy_works_on_the_intx_path_after_a_restart(self) -> None:
+        """virtio-rng's successor on the INTx path asks pci-bus to arm its
+        quiesced function and serves entropy again.
+
+        Not a regression test for the lost interrupt: a fill polls the used
+        ring between its timed waits, so under QEMU it completes without one.
+        It covers the successor holding fills until pci-bus answers and then
+        serving them."""
+        assert self.session is not None
+        self.assertTrue(
+            self.session.syslog_wait_count("[virtio-rng] irq routed line=", 1, 60),
+            "virtio-rng did not take its INTx path",
+        )
+        self.assertTrue(self._entropy("intx-before"), "no entropy before the restart")
+        unit = self._supervised_unit("virtio_rng@")
+        routed = self.session.syslog_tail(1 << 20).count(
+            "[virtio-rng] irq routed line="
+        )
+        start = self.session.send_command(f"svc kill {unit}", timeout_s=20)
+        self.assertTrue(
+            self.session.expect_from(
+                start, f"svc: killing {unit}".encode(), timeout_s=30
+            ),
+            f"the kill was not sent.\n--- tail ---\n{self.session.tail()}\n",
+        )
+        self.assertTrue(
+            self.session.syslog_wait_count(
+                "[virtio-rng] irq routed line=", routed + 1, 60
+            ),
+            "the restarted driver did not route its INTx line\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertTrue(self.session.expect_from(start, b"wamos> ", timeout_s=30))
+        self.assertTrue(
+            self._entropy("intx-after"),
+            "no entropy from the restarted driver on the INTx path\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+
+    def test_z_reads_work_on_the_intx_path_after_a_restart(self) -> None:
+        """Runs last: it restarts the driver.
+
+        Regression: 2026-11-22-restarted-intx-driver-gets-no-interrupts -- the
+        kernel sets INTx Disable when a PCI driver ends, so its function stops
+        driving a shared line nobody deasserts. Nothing cleared it for the
+        successor: a restarted driver on the INTx path routed its line and
+        then never heard a completion, and every transfer ran to its deadline.
+        """
+        assert self.session is not None
+        unit = self._supervised_unit("virtio_blk@")
+        routed = self.session.syslog_tail(1 << 20).count(
+            "[virtio-blk] irq routed line="
+        )
+        start = self.session.send_command(f"svc kill {unit}", timeout_s=20)
+        self.assertTrue(
+            self.session.expect_from(
+                start, f"svc: killing {unit}".encode(), timeout_s=30
+            ),
+            f"the kill was not sent.\n--- tail ---\n{self.session.tail()}\n",
+        )
+        self.assertTrue(
+            self.session.syslog_wait_count(
+                "[virtio-blk] irq routed line=", routed + 1, 60
+            ),
+            "the restarted driver did not route its INTx line\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
+        )
+        self.assertTrue(self.session.expect_from(start, b"wamos> ", timeout_s=30))
+        start = self.session.send_command("blkinfo", timeout_s=20)
+        self.assertTrue(
+            self.session.expect_from(
+                start, DISK_SIGNATURE.hex().upper().encode(), timeout_s=60
+            ),
+            "sector 0 did not come back from the restarted driver — its function "
+            "still has INTx disabled, so no completion reaches the routed line\n"
+            f"--- syslog ---\n{self.session.syslog_tail(4096)}\n",
         )
 
 

@@ -86,10 +86,9 @@ static int pci_quiesce_function_locked(uint16_t bdf) {
         return 0;
     }
     /* INTx off as well: with MSI off the device would fall back to its pin,
-     * and on a line shared with a live driver nobody deasserts it.
-     * TODO: a driver that falls back to INTx after a restart finds INTx
-     * disabled and bus mastering off; pci-bus re-enables both only through an
-     * MSI bind, so such a driver gets no interrupts and no DMA. */
+     * and on a line shared with a live driver nobody deasserts it. A successor
+     * gets both back from pci-bus: an MSI bind, PCI_IPC_INTX_ENABLE_REQ for
+     * INTx, or PCI_IPC_BUS_MASTER_REQ for bus mastering alone. */
     uint32_t cmd_status = pci_cfg_read_locked(bdf, PCI_REG_COMMAND);
     uint32_t command = (cmd_status & 0xFFFFu & ~PCI_CMD_BUS_MASTER) | PCI_CMD_INTX_DISABLE;
     pci_cfg_write_locked(bdf, PCI_REG_COMMAND, command);

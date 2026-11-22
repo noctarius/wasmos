@@ -24,9 +24,10 @@
     "to break independently \u2014 wasm3 interprets in-kernel, WARP JITs to ring 3",
     "\u2014 so a green under one says nothing about the other, and a single-runtime",
     "matrix hides breakage in the other for as long as nobody runs it by hand.",
-    "build_only lists configurations CI builds but does not boot: an architecture",
-    "under bring-up, whose kernel cannot run a battery yet. Each entry of either",
-    "list names a configs/<name>_defconfig.",
+    "bringup lists configurations of an architecture under bring-up, whose kernel",
+    "cannot run a battery yet: CI builds them and boots each to the bring-up",
+    "marker (run-qemu-bringup-test). Each entry of either list names a",
+    "configs/<name>_defconfig.",
     "",
     "hosts lists the machines a developer or CI builds and tests ON. A host with",
     "a runner gets CI's kernel unit tests on that GitHub runner; they compile",
@@ -56,12 +57,12 @@
         "warp_smp",
         "wasm3_smp"
       ],
-      "build_only": []
+      "bringup": []
     },
     {
       "name": "aarch64",
       "runtimes": [],
-      "build_only": [
+      "bringup": [
         "aarch64_wasm3_single"
       ]
     }

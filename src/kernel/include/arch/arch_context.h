@@ -37,7 +37,11 @@
  * Accessors are static inline unless documented otherwise; their contracts are
  * documented at the x86_64 implementation.
  *
- * This header is the single selection point; x86_64 is the only target. */
+ * This header is the single selection point; x86_64 and aarch64 are the targets. */
 #pragma once
 
+#if defined(WASMOS_ARCH_AARCH64)
+#include "arch/aarch64/arch_context.h"
+#else
 #include "arch/x86_64/arch_context.h"
+#endif

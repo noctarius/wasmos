@@ -71,10 +71,11 @@ The architecture is a Kconfig choice like the runtime. It selects the compiler
 triples, `BOOTX64.EFI` vs `BOOTAA64.EFI`, and the QEMU machine every run target
 and the harness boot (`qemu-system-aarch64 -M virt` + edk2 aarch64 firmware).
 All of it comes from `ARCHES` in `scripts/buildgen/toolchains.py`.
-`configs/aarch64_wasm3_single_defconfig` is the arm64 bring-up tree. It builds
-in full, but its kernel is still a stub, so do not run `run-qemu-test` there
-yet. Under HVF (the default for an aarch64 guest on Apple Silicon) the loader
-reaches `[boot] ExitBootServices` and the stub parks. aarch64 has no COM2:
+`configs/aarch64_wasm3_single_defconfig` is the arm64 bring-up tree. Its kernel
+reaches kmain and panics by name at the first unimplemented arch interface, so
+its gate is `run-qemu-bringup-test` (boot to `[kernel] boot_info version=`),
+not `run-qemu-test`. An aarch64 guest runs under HVF on Apple Silicon, KVM on
+an aarch64 Linux host that has it, TCG elsewhere. aarch64 has no COM2:
 the kernel log is the virtio console.
 
 ## Editing a configuration

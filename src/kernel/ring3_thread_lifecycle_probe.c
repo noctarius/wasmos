@@ -6,8 +6,8 @@
  * result is discarded -- the probe reaching thread_exit without faulting is
  * what the orderings are being checked for. */
 #include <stdint.h>
-#include "wasmos/syscall_x86_64.h"
-#include "wasmos/thread_x86_64.h"
+#include "wasmos/syscall_native.h"
+#include "wasmos/thread_native.h"
 
 enum { PROBE_STACK_SIZE = 4096 };
 

@@ -34,13 +34,14 @@ battery:
 
 `tests/batteries.json` is the single source for EVERY axis — the `batteries`
 list and the `arches` list, where each architecture names the `runtimes`
-(defconfigs) its QEMU batteries run under and the `build_only` defconfigs CI
-builds without booting (an architecture under bring-up). Two consumers read it
+(defconfigs) its QEMU batteries run under and the `bringup` defconfigs CI
+builds and boots to the bring-up marker with `run-qemu-bringup-test` (an
+architecture under bring-up). Two consumers read it
 and neither enumerates any axis itself:
 
 - `scripts/run_unittest_suite.py` selects which files to run; its `--matrix`
   mode emits the cross product (one cell per QEMU battery per (arch, runtime),
-  one per host battery), and `--build-matrix` the build-only cells.
+  one per host battery), and `--bringup-matrix` the bring-up cells.
 - `.github/workflows/ci.yml` consumes exactly those outputs.
 
 A third list, `hosts`, names the machines builds and host tests run ON

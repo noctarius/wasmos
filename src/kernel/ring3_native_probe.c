@@ -12,7 +12,7 @@
  * itself asserts nothing; reaching thread_exit without a fault is the result. */
 #include <stdint.h>
 #include "wasmos/mutex.h"
-#include "wasmos/syscall_x86_64.h"
+#include "wasmos/syscall_native.h"
 
 /* Flat-binary entry point: the loader jumps here with no C runtime, no
  * arguments and no return address, so this must not return — it ends in

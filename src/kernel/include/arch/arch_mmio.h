@@ -7,7 +7,11 @@
  * respect to every other memory access of the calling CPU, so a doorbell write
  * cannot overtake the descriptor stores that precede it. The contract of each
  * is documented at the x86_64 implementation. This header is the single
- * selection point; x86_64 is the only target. */
+ * selection point; x86_64 and aarch64 are the targets. */
 #pragma once
 
+#if defined(WASMOS_ARCH_AARCH64)
+#include "arch/aarch64/arch_mmio.h"
+#else
 #include "arch/x86_64/arch_mmio.h"
+#endif

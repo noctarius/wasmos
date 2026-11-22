@@ -110,7 +110,7 @@ and the CPU topology.
 
 | Symbol | Default | Effect |
 |--------|---------|--------|
-| `WASMOS_ARCH_X86_64` / `_AARCH64` | `X86_64` | target architecture: compiler triples, code model, boot file name, QEMU machine and firmware (`ARCHES` in `toolchains.py`). aarch64 is under bring-up: its kernel is a stub, the IRQ-mode choice and WARP are x86_64-only |
+| `WASMOS_ARCH_X86_64` / `_AARCH64` | `X86_64` | target architecture: compiler triples, code model, boot file name, QEMU machine and firmware (`ARCHES` in `toolchains.py`). aarch64 is under bring-up: its kernel reaches kmain and stops at the first unimplemented interface; the IRQ-mode choice and WARP are x86_64-only |
 | `WASMOS_WASM_RUNTIME_WASM3` / `_WARP` | choice | kernel runtime; WARP adds the WARP sources, `warp_aot` and AOT packing |
 | `WASMOS_IRQ_PIC` / `_LAPIC` / `_IOAPIC` | `IOAPIC` | `-DWASMOS_IRQ_MODE=0/1/2` |
 | `WASMOS_SMP` | `n` (depends on `IOAPIC`) | `-DWASMOS_SMP`; QEMU runs with 4 CPUs |
@@ -278,7 +278,9 @@ Every run target passes the tree's own paths to the harness (`WASMOS_ESP`,
 `WASMOS_QEMU_SMP_COUNT`, `WASMOS_ARCH`, `WASMOS_QEMU`), so a suite tests the
 tree that launched it, on that tree's QEMU machine. Without
 `WASMOS_QEMU_ACCEL` the harness picks KVM for a host-native guest with
-`/dev/kvm`, HVF for an aarch64 guest on Apple Silicon, and TCG otherwise. QEMU
+`/dev/kvm`, HVF for an aarch64 guest on Apple Silicon, and TCG otherwise; the
+interactive `run-qemu*` targets make the same choice when the tree is
+generated. QEMU
 targets share the tree's `esp/`; never run two at once.
 
 | Target | What it runs |
@@ -286,6 +288,7 @@ targets share the tree's `esp/`; never run two at once.
 | `run-qemu` / `run-qemu-ui` | interactive boot, serial / display, on the `run/` image copies; COM2 to `syslog.log` |
 | `run-qemu-debug` | as `run-qemu`, paused with a gdb stub on `QEMU_GDB_PORT` |
 | `run-qemu-test` | `scripts/qemu_halt_test.py`: boot to the CLI and halt (the pre-commit gate); `WASMOS_QEMU_TEST_TIMEOUT` sets its budget (default 120 s) |
+| `run-qemu-bringup-test` | `scripts/qemu_bringup_test.py`: boot until `[kernel] boot_info version=` appears, tolerating a later panic; the gate for an architecture that cannot reach the CLI yet (valid on any tree) |
 | `run-qemu-cli-test` | `scripts/run_unittest_suite.py --start-dir tests` with an isolated ESP per session; `WASMOS_TEST_BATTERY` selects one battery of `tests/batteries.json` |
 | `run-qemu-ui-test` | `scripts/qemu_ui_test.py` |
 | `run-qemu-sched-stress-test` | `scripts/qemu_sched_stress_test.py`; needs `WASMOS_SCHED_SMP_STRESS=y` |

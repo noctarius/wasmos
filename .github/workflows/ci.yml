@@ -176,7 +176,7 @@ jobs:
     outputs:
       qemu: ${{ steps.resolve.outputs.qemu }}
       host: ${{ steps.resolve.outputs.host }}
-      build: ${{ steps.resolve.outputs.build }}
+      bringup: ${{ steps.resolve.outputs.bringup }}
       hosts: ${{ steps.resolve.outputs.hosts }}
     steps:
       - uses: actions/checkout@v4
@@ -188,23 +188,25 @@ jobs:
           cells=$(python3 scripts/run_unittest_suite.py --matrix)
           echo "qemu=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c for c in json.load(sys.stdin) if c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
           echo "host=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c['battery'] for c in json.load(sys.stdin) if not c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
-          echo "build=$(python3 scripts/run_unittest_suite.py --build-matrix)" >> "$GITHUB_OUTPUT"
+          echo "bringup=$(python3 scripts/run_unittest_suite.py --bringup-matrix)" >> "$GITHUB_OUTPUT"
           echo "hosts=$(python3 scripts/run_unittest_suite.py --host-matrix)" >> "$GITHUB_OUTPUT"
 
-  # Configurations of an architecture under bring-up: built in full (kernel,
-  # loader, guest and native modules, ESP, images) but not booted, because the
-  # kernel cannot run a battery yet. The list is build_only in
-  # tests/batteries.json. Built on an aarch64-linux host, the host an arm64
-  # tree is most often built on outside a Mac.
-  arch-build:
-    name: ${{ matrix.config }} (build only)
+  # Configurations of an architecture under bring-up (bringup in
+  # tests/batteries.json): built in full (kernel, loader, guest and native
+  # modules, ESP, images) and booted to the bring-up marker, because the
+  # kernel cannot run a battery yet. On an aarch64-linux runner, which boots
+  # the aarch64 guest natively when it has KVM and under TCG otherwise.
+  arch-bringup:
+    name: ${{ matrix.config }} (build + bring-up boot)
     needs: batteries
-    if: needs.batteries.outputs.build != '[]'
+    if: needs.batteries.outputs.bringup != '[]'
     runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.batteries.outputs.build) }}
+        include: ${{ fromJSON(needs.batteries.outputs.bringup) }}
+    env:
+      WASMOS_TEST_TIMEOUT_SCALE: "3"
     steps:
       - uses: actions/checkout@v4
 
@@ -212,7 +214,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build python3-pip curl xz-utils
+            ninja-build python3-pip curl xz-utils \
+            qemu-system-arm qemu-efi-aarch64
           python3 -m pip install --user kconfiglib
 
       - name: Install LLVM 20
@@ -244,6 +247,9 @@ jobs:
 
       - name: Build (${{ matrix.config }}, ${{ matrix.arch }})
         run: ninja -C "out/${{ matrix.config }}"
+
+      - name: Bring-up boot (${{ matrix.config }}, ${{ matrix.arch }})
+        run: ninja -C "out/${{ matrix.config }}" run-qemu-bringup-test
 
   # Batteries that boot nothing: no emulation toolchain, no OVMF, seconds not
   # minutes. Kept off the QEMU runners so they cannot queue behind them.

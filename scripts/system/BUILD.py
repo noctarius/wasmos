@@ -5,6 +5,7 @@ This manifest runs last: it consumes what every component published through
 b.exports (kernel, loader, the packer, esp.files)."""
 
 import json
+import platform
 import re
 from pathlib import Path
 
@@ -36,6 +37,26 @@ SHADOW_TOOLS = [
 ]
 # The SMP topology QEMU emulates for an SMP kernel.
 SMP_CPUS = 4
+# What run-qemu-bringup-test waits for on an architecture whose kernel cannot
+# reach the CLI yet: kmain accepted the loader's boot_info.
+BRINGUP_MARKER = "[kernel] boot_info version="
+
+
+def interactive_cpu_accel(machine, host_os):
+    """CPU model and accelerators for the interactive run targets. An aarch64
+    guest on an aarch64 host runs under the host's hypervisor: HVF on macOS
+    (edk2 does not start with -cpu max there, so the host model), KVM on Linux
+    with TCG as QEMU's fallback when /dev/kvm is absent. Everything else is
+    TCG, which is what x86_64 is validated under. The test harness makes the
+    same choice per session (scripts/qemu_test_framework.py default_accel)."""
+    host = {"arm64": "aarch64", "amd64": "x86_64"}.get(
+        platform.machine().lower(), platform.machine().lower()
+    )
+    if machine.name == "aarch64" and host == "aarch64":
+        if host_os == "Darwin":
+            return ["-accel", "hvf", "-cpu", "host"]
+        return ["-accel", "kvm", "-accel", "tcg", "-cpu", "max"]
+    return ["-cpu", "max"]
 
 
 def initfs(b):
@@ -256,6 +277,25 @@ def run_targets(b, esp_stamp, images):
         env=env,
         description="QEMU halt test",
     )
+    # Boots to BRINGUP_MARKER and stops: the gate for an architecture under
+    # bring-up, whose kernel cannot run run-qemu-test yet. Valid on any tree.
+    b.run_target(
+        "run-qemu-bringup-test",
+        [
+            py,
+            root / "scripts/qemu_bringup_test.py",
+            "--ovmf-code",
+            ovmf_code,
+            *vars_arg,
+            "--esp",
+            out / "esp",
+            "--marker",
+            BRINGUP_MARKER,
+        ],
+        deps=deps,
+        env=env,
+        description="QEMU bring-up marker test",
+    )
     b.run_target(
         "run-qemu-cli-test",
         [py, root / "scripts/run_unittest_suite.py", "--start-dir", "tests"],
@@ -287,8 +327,7 @@ def run_targets(b, esp_stamp, images):
         *machine.qemu_machine,
         "-m",
         "512M",
-        "-cpu",
-        "max",
+        *interactive_cpu_accel(machine, tools.get("host-os", "")),
         *(["-smp", str(smp)] if smp > 1 else []),
         "-nographic",
         "-serial",

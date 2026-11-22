@@ -54,6 +54,14 @@ in-kernel scheduler rather than an optional mode.
 ### Boot and Hardware Setup
 - [Boot and Handoff](architecture/04-boot-and-handoff.md)
 - [x86_64 CPU Architecture](architecture/05-x86-cpu-architecture.md)
+- Architecture boundary: CPU- and platform-specific code lives in
+  `src/kernel/arch/<arch>/` and `src/kernel/include/arch/<arch>/`, reached only
+  through the selection headers `src/kernel/include/arch/*.h`, which key on the
+  kernel's `WASMOS_ARCH_<ARCH>` define; neutral code never includes an arch
+  directory. Per-architecture build and QEMU values live in `ARCHES`
+  (`scripts/buildgen/toolchains.py`). Targets: x86_64; aarch64 (QEMU `virt`)
+  under bring-up, whose missing interfaces fail by name
+  (`arch/aarch64/unimplemented_aarch64.c`).
 - [Memory Management](architecture/06-memory-management.md)
 - [Scheduling and Preemption](architecture/07-scheduling-and-preemption.md)
 - [Threading and Lifecycle](architecture/08-threading-and-lifecycle.md)

@@ -702,6 +702,33 @@ static void uefi_log_status(EFI_SYSTEM_TABLE* system, const char* msg, EFI_STATU
     uefi_log(system, "\n");
 }
 
+/* Make a segment just written through the data cache visible to the kernel
+ * entry. On x86_64 caches are coherent with instruction fetch and with
+ * uncached accesses, so nothing is needed. On aarch64 they are not: the kernel
+ * entry runs with the MMU and caches off and then fetches instructions from
+ * these bytes, so each line is cleaned to the point of coherency (DC CVAC) and
+ * the instruction cache is invalidated (ARM ARM D7.5). */
+static void sync_loaded_segment(const void* addr, UINTN len) {
+#if defined(__aarch64__)
+    uint64_t ctr;
+    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+    UINTN line = (UINTN)4u << ((ctr >> 16) & 0xFu);
+    UINTN start = (UINTN)addr & ~(line - 1u);
+    UINTN end = (UINTN)addr + len;
+    for (UINTN p = start; p < end; p += line) {
+        __asm__ volatile("dc cvac, %0" ::"r"(p) : "memory");
+    }
+    __asm__ volatile("dsb sy\n"
+                     "ic iallu\n"
+                     "dsb sy\n"
+                     "isb" ::
+                         : "memory");
+#else
+    (void)addr;
+    (void)len;
+#endif
+}
+
 static int elf_is_valid(const Elf64_Ehdr* ehdr) {
     return ehdr->e_ident[0] == 0x7f && ehdr->e_ident[1] == 'E' && ehdr->e_ident[2] == 'L' &&
            ehdr->e_ident[3] == 'F';
@@ -1016,6 +1043,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
         if (ph->p_memsz > ph->p_filesz) {
             memset8((UINT8*)segment_dst + ph->p_filesz, 0, (UINTN)(ph->p_memsz - ph->p_filesz));
         }
+        sync_loaded_segment(segment_dst, (UINTN)ph->p_memsz);
     }
 
     UINT32 rsdp_length = 0;

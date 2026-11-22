@@ -17,9 +17,10 @@ config WASMOS_ARCH_X86_64
 config WASMOS_ARCH_AARCH64
     bool "aarch64 (QEMU virt, edk2; bring-up)"
     help
-      arm64 port under bring-up. The kernel is a stub that parks the boot CPU,
-      so an aarch64 tree builds but does not boot yet. The interrupt
-      controller choice and WARP are x86_64-only.
+      arm64 port under bring-up. The kernel reaches kmain and stops at the
+      first unimplemented arch interface (the MMU), so an aarch64 tree runs
+      run-qemu-bringup-test, not run-qemu-test. The interrupt controller
+      choice and WARP are x86_64-only.
 
 endchoice
 

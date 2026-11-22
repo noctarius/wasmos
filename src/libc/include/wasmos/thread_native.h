@@ -1,16 +1,17 @@
-/* thread_x86_64.h - x86_64 native thread spawn/join helpers using int 0x80.
- * Provides the stack layout and entry trampoline for user-space threads
- * created via wasmos_thread_spawn_cont in ring-3 native binaries. */
-#ifndef WASMOS_LIBC_WASMOS_THREAD_X86_64_H
-#define WASMOS_LIBC_WASMOS_THREAD_X86_64_H
+/* thread_native.h - native thread spawn/join helpers on the ring-3 syscall
+ * ABI (wasmos/syscall_native.h). Provides the stack layout and entry trampoline
+ * for user-space threads created via wasmos_thread_spawn_cont in ring-3 native
+ * binaries. */
+#ifndef WASMOS_LIBC_WASMOS_THREAD_NATIVE_H
+#define WASMOS_LIBC_WASMOS_THREAD_NATIVE_H
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "wasmos_cast.h"
-#include "wasmos/syscall_x86_64.h"
+#include "wasmos/syscall_native.h"
 
-#if defined(__x86_64__) && !defined(__wasm__)
+#if (defined(__x86_64__) || defined(__aarch64__)) && !defined(__wasm__)
 
 /* Thread body. Returning from it exits the thread with status 0. */
 typedef void (*wasmos_thread_entry_fn_t)(void* arg);
@@ -21,28 +22,26 @@ typedef void (*wasmos_thread_entry_fn_t)(void* arg);
 typedef void (*wasmos_thread_continue_fn_t)(void* ctx, int32_t status);
 
 /* Hand-off record the spawning thread writes at the top of the new thread's
- * stack; wasmos_thread_bootstrap reads it back from RSP. It lives in the child's
- * stack, so the stack must stay valid for the thread's whole life. */
+ * stack; wasmos_thread_bootstrap reads it back from the stack pointer. It lives
+ * in the child's stack, so the stack must stay valid for the thread's whole
+ * life. */
 typedef struct {
     wasmos_thread_entry_fn_t entry;
     void* arg;
 } wasmos_thread_start_t;
 
-/* Round down to the 16-byte alignment the SysV ABI wants at a call boundary. */
+/* Round down to the 16-byte stack alignment both the SysV x86_64 ABI and AAPCS64
+ * require at a call boundary. */
 static inline uintptr_t wasmos_thread_align_down(uintptr_t v) {
     return v & ~(uintptr_t)0xFULL;
 }
 
-/* Entry trampoline for a spawned thread: reads the wasmos_thread_start_t at RSP,
- * calls the entry function, and exits the thread with status 0 when it returns.
+/* Entry trampoline for a spawned thread: reads the wasmos_thread_start_t at the
+ * stack pointer, calls the entry function, and exits the thread with status 0 when it returns.
  * Never returns, and must only be entered by the kernel with the stack laid out
  * by wasmos_thread_spawn_cont. */
 static inline void wasmos_thread_bootstrap(void) {
-    uintptr_t sp;
-    wasmos_thread_start_t* start;
-
-    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
-    start = (wasmos_thread_start_t*)sp;
+    wasmos_thread_start_t* start = (wasmos_thread_start_t*)wasmos_native_read_sp();
     start->entry(start->arg);
     wasmos_sys_thread_exit(0);
 }
@@ -81,8 +80,8 @@ static inline int32_t wasmos_thread_spawn_cont(void* stack_base, size_t stack_si
     start->entry = entry;
     start->arg = arg;
 
-    /* The new thread starts in wasmos_thread_bootstrap with RSP at `top`, where
-     * the wasmos_thread_start_t it reads back was just written. */
+    /* The new thread starts in wasmos_thread_bootstrap with its stack pointer at
+     * `top`, where the wasmos_thread_start_t it reads back was just written. */
     rc = wasmos_sys_thread_create(addr_cast(uint64_t, wasmos_thread_bootstrap), (uint64_t)top);
     if (rc > 0 && out_tid) {
         *out_tid = (uint32_t)rc;
@@ -128,5 +127,5 @@ static inline int32_t wasmos_thread_detach_cont(uint32_t tid, wasmos_thread_cont
     return rc;
 }
 
-#endif /* __x86_64__ && !__wasm__ */
-#endif /* WASMOS_LIBC_WASMOS_THREAD_X86_64_H */
+#endif /* (__x86_64__ || __aarch64__) && !__wasm__ */
+#endif /* WASMOS_LIBC_WASMOS_THREAD_NATIVE_H */

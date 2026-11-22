@@ -29,14 +29,15 @@ ARCH = {
         "ldscript": "arch/x86_64/linker.ld",
         "core": True,
     },
-    # TODO: the aarch64 kernel is a stub that parks the boot CPU; it links
-    # neither the neutral core, the runtime, the embedded guest blobs nor the
-    # ring-3 probes until the arch headers exist (arm64 port, Phase 1).
     "aarch64": {
-        "head": ["arch/aarch64/entry.S"],
-        "sources": [],
+        "head": ["arch/aarch64/entry.S", "arch/aarch64/vectors.S"],
+        "sources": [
+            "arch/aarch64/cpu_aarch64.c",
+            "arch/aarch64/platform_aarch64.c",
+            "arch/aarch64/unimplemented_aarch64.c",
+        ],
         "ldscript": "arch/aarch64/linker.ld",
-        "core": False,
+        "core": True,
     },
 }
 
@@ -262,6 +263,19 @@ def build(b):
             b.index(
                 src, [tc.cxx if cxx else tc.cc, *(tc.cxxflags if cxx else tc.cflags)]
             )
+
+    # Index the other architectures' C sources with their own kernel flags, so
+    # the same lint pass covers every arch directory.
+    for name, spec in ARCH.items():
+        if name == arch(cfg).name:
+            continue
+        sets = {
+            "WASMOS_ARCH_AARCH64": name == "aarch64",
+            "WASMOS_ARCH_X86_64": name == "x86_64",
+        }
+        tc = b.toolchain("kernel", overrides=sets).tc
+        for src in b.srcs(*spec["sources"]):
+            b.index(src, [tc.cc, *tc.cflags])
 
     # Embedded blobs: guest modules registered by other manifests first, then
     # the native ring-3 probes.

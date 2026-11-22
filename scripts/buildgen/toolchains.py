@@ -361,6 +361,10 @@ def profiles(srcdir: Path, cfg, tools: dict) -> dict[str, Toolchain]:
         "-target",
         target.triple,
         *target.kernel_flags,
+        # Selects include/arch/<arch>/ in the arch selection headers. Keyed on
+        # this rather than on __aarch64__ so a host unit-test build on an arm64
+        # host keeps the headers it tests.
+        f"-DWASMOS_ARCH_{target.name.upper()}=1",
         "-fno-jump-tables",
         f"-I{runtime_inc}",
         f"-I{srcdir / 'src/kernel'}",
@@ -471,6 +475,10 @@ def profiles(srcdir: Path, cfg, tools: dict) -> dict[str, Toolchain]:
                 "-fno-rtti",
                 "-fno-threadsafe-statics",
                 "-Wno-deprecated",
+                # Kernel C++ uses no C++ standard library; without this the
+                # aarch64 bare-metal driver resolves <stddef.h> to libc++'s
+                # wrapper, which needs a hosted configuration.
+                "-nostdinc++",
             ],
             ldflags=["-nostdlib"],
         ),

@@ -756,15 +756,21 @@ linked feature documents for rationale and rollout plans.
   `WASMOS_ARCH_AARCH64`); `ARCHES` in `scripts/buildgen/toolchains.py` holds
   every per-architecture build and QEMU value. The aarch64 tree
   (`aarch64_wasm3_single_defconfig`) builds `BOOTAA64.EFI`, every guest and
-  native module (aarch64 ELF), initfs and the ESP; CI builds it without booting
-  (`build_only`). Its kernel is a stub that parks the boot CPU: under
-  `qemu-system-aarch64 -M virt -accel hvf` the loader loads kernel and initfs,
-  exits boot services and jumps to it. No aarch64 framebuffer fallback without
-  GOP (the x86 0xCF8 scan is x86_64-only).
+  native module (aarch64 ELF), initfs and the ESP. Under
+  `qemu-system-aarch64 -M virt -accel hvf` (TCG on CI) it boots to kmain: the
+  bootstrap drops EL2 to EL1, maps physical [0, 4 GiB) as both identity and
+  TTBR1 direct map, enables FP/SIMD and the MMU, and kmain gets through the
+  PL011 console, `cpu_init` (TPIDR_EL1), the framebuffer probe and frame
+  allocator init before panicking by name at `paging_init`, the first
+  unimplemented interface (`arch/aarch64/unimplemented_aarch64.c` lists them
+  all). `run-qemu-bringup-test` is its gate, in CI too (`bringup`). The native
+  ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap
+  stubs (aarch64: `svc #0`, number in x8). No aarch64 framebuffer fallback
+  without GOP (the x86 0xCF8 scan is x86_64-only).
 - Supported build/test hosts: x86_64-linux, aarch64-linux, aarch64-darwin
   (`hosts` in `tests/batteries.json`). CI runs the kernel unit tests on both
   Linux hosts (aarch64-darwin is tested locally; macOS runners are scarce)
-  and builds the aarch64 tree on aarch64-linux; QEMU batteries run on
+  and builds and bring-up boots the aarch64 tree on aarch64-linux; QEMU batteries run on
   x86_64-linux. The harness accelerates a host-native guest (KVM, or HVF for
   aarch64 on macOS) and runs a foreign one under TCG.
 - Developer checks: `fmt`, `fmt-check`, `lint`, and `quality` are Ninja targets

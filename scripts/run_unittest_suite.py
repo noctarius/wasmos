@@ -11,9 +11,9 @@ Modes:
     --list-batteries       print the battery names, one per line
     --matrix               print the CI matrix as JSON: one cell per QEMU
                            battery PER (ARCH, RUNTIME), one per host battery
-    --build-matrix         print the build-only configurations as JSON: one
-                           cell per (arch, defconfig) CI builds but does not
-                           boot
+    --bringup-matrix       print the bring-up configurations as JSON: one cell
+                           per (arch, defconfig) CI builds and boots to the
+                           bring-up marker, with no battery
     --host-matrix          print the CI build/test hosts as JSON: one cell per
                            host that has a CI runner (hosts without one are
                            tested locally only)
@@ -51,7 +51,8 @@ def load_batteries():
 
 def load_arches():
     """The target architectures, each with the wasm runtimes every QEMU battery
-    runs under on it and the configurations CI only builds.
+    runs under on it and the bring-up configurations CI builds and boots to
+    the bring-up marker.
 
     A manifest that predates the architecture axis lists its runtimes at the
     top level; they are x86_64's. One that predates the runtime axis too means
@@ -60,9 +61,7 @@ def load_arches():
     manifest = load_manifest()
     if "arches" in manifest:
         return manifest["arches"]
-    return [
-        {"name": "x86_64", "runtimes": manifest.get("runtimes", []), "build_only": []}
-    ]
+    return [{"name": "x86_64", "runtimes": manifest.get("runtimes", []), "bringup": []}]
 
 
 def load_hosts():
@@ -119,7 +118,7 @@ def main() -> int:
     parser.add_argument("--battery", default=os.environ.get("WASMOS_TEST_BATTERY", ""))
     parser.add_argument("--list-batteries", action="store_true")
     parser.add_argument("--matrix", action="store_true")
-    parser.add_argument("--build-matrix", action="store_true")
+    parser.add_argument("--bringup-matrix", action="store_true")
     parser.add_argument("--host-matrix", action="store_true")
     parser.add_argument("--verify-batteries", action="store_true")
     args = parser.parse_args()
@@ -145,13 +144,13 @@ def main() -> int:
                 cells.append({"battery": b["name"], "needs_qemu": b["needs_qemu"]})
         print(json.dumps(cells))
         return 0
-    if args.build_matrix:
+    if args.bringup_matrix:
         print(
             json.dumps(
                 [
                     {"arch": a["name"], "config": c}
                     for a in load_arches()
-                    for c in a.get("build_only", [])
+                    for c in a.get("bringup", [])
                 ]
             )
         )

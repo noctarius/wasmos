@@ -1,12 +1,14 @@
 /* vm_layout.h - aarch64 kernel virtual-address layout. Included only through
  * arch/vm_layout.h.
  *
- * TCR_EL1 selects a 39-bit VA with the 4 KiB granule (T1SZ = 25), so the
- * kernel half (TTBR1) spans 0xFFFFFF8000000000..0xFFFFFFFFFFFFFFFF (512 GiB)
- * and its translation starts at level 1, where one entry maps 1 GiB. The
- * TTBR1 tables are shared by every address space; user roots live in TTBR0
- * only, so nothing here is copied into a child root. The values are tied to
- * entry.S (which builds the direct map) and linker.ld (which repeats
+ * TCR_EL1 selects 48-bit VAs with the 4 KiB granule in both halves
+ * (T0SZ = T1SZ = 16), so translation has four levels and the level indices are
+ * the x86_64 PML4/PDPT/PD/PT indices: TTBR0 slot 0 is the low identity slot,
+ * slot 1 the user slot (USER_VA_MIN), and everything below lives in TTBR1
+ * slot 511, whose level-1 table maps 1 GiB per entry. The TTBR1 tables are
+ * shared by every address space; a user root is a TTBR0 table only, so
+ * nothing here is copied into a child root. The values are tied to entry.S
+ * (which builds the direct map) and linker.ld (which repeats
  * KERNEL_HIGHER_HALF_BASE). */
 #pragma once
 
@@ -32,8 +34,8 @@
 #define KERNEL_MMIO_DEVICE_BYTES (512ULL * 1024ULL * 1024ULL)
 
 /* Per-app linear-memory kernel-VA window (base + 128 GiB): 48 slots of 2 GiB.
- * WARP_LINMEM_PDPT_COUNT counts the window in 1 GiB units, the size of one
- * level-1 entry here as of one PDPT entry on x86_64. Supervisor-only. */
+ * WARP_LINMEM_PDPT_COUNT counts the window in 1 GiB units (level-1 entries of
+ * TTBR1 slot 511, as PDPT entries on x86_64). Supervisor-only. */
 #define WARP_LINMEM_PDPT_COUNT 96u
 #define WARP_LINMEM_VA_BASE 0xFFFFFFA000000000ULL
 #define WARP_LINMEM_VA_STRIDE (2ULL * 1024ULL * 1024ULL * 1024ULL)

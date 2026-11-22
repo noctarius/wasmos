@@ -12,7 +12,7 @@ configurable.
 | `wasm3_smp_defconfig`    | wasm3   | SMP    | always (wasm3)    |
 | `warp_single_defconfig`  | WARP    | single | always (WARP)        |
 | `warp_smp_defconfig`     | WARP    | SMP    | always (WARP)        |
-| `aarch64_wasm3_single_defconfig` | wasm3 | single | aarch64 bring-up: boots to kmain (`run-qemu-bringup-test`) |
+| `aarch64_wasm3_single_defconfig` | wasm3 | single | aarch64 bring-up: schedules and runs wasm3 guests (`run-qemu-bringup-test`) |
 
 `wasmos_defconfig` is the shared base (language toolchains, IRQ mode, etc.).
 

@@ -38,8 +38,10 @@ SHADOW_TOOLS = [
 # The SMP topology QEMU emulates for an SMP kernel.
 SMP_CPUS = 4
 # What run-qemu-bringup-test waits for on an architecture whose kernel cannot
-# reach the CLI yet: kmain accepted the loader's boot_info.
-BRINGUP_MARKER = "[kernel] boot_info version="
+# reach the CLI yet: the preemption self-test passed, which takes the MMU and
+# demand paging, context switches, the scheduler, the timer interrupt and
+# preemption of a running thread.
+BRINGUP_MARKER = "[test] preempt ok"
 
 
 def interactive_cpu_accel(machine, host_os):

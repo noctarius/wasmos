@@ -757,13 +757,22 @@ linked feature documents for rationale and rollout plans.
   every per-architecture build and QEMU value. The aarch64 tree
   (`aarch64_wasm3_single_defconfig`) builds `BOOTAA64.EFI`, every guest and
   native module (aarch64 ELF), initfs and the ESP. Under
-  `qemu-system-aarch64 -M virt -accel hvf` (TCG on CI) it boots to kmain: the
-  bootstrap drops EL2 to EL1, maps physical [0, 4 GiB) as both identity and
-  TTBR1 direct map, enables FP/SIMD and the MMU, and kmain gets through the
-  PL011 console, `cpu_init` (TPIDR_EL1), the framebuffer probe and frame
-  allocator init before panicking by name at `paging_init`, the first
-  unimplemented interface (`arch/aarch64/unimplemented_aarch64.c` lists them
-  all). `run-qemu-bringup-test` is its gate, in CI too (`bringup`). The native
+  `qemu-system-aarch64 -M virt,gic-version=3 -accel hvf` (TCG on CI) it boots
+  through the scheduler self-tests, demand paging, threading, IPC and timer
+  preemption, runs wasm3 guests (init, fs-manager, fs-tmpfs, fs-init,
+  device-manager), and stops by name at `arch_pci_cfg_read32` when pci-bus
+  first reads configuration space (ECAM is Phase 3). The kernel side: the
+  bootstrap drops EL2 to EL1 and maps physical [0, 4 GiB) with 48-bit VAs;
+  `arch/aarch64/paging.c` implements `paging.h` with the x86_64 slot geometry
+  (TTBR0 slot 0 identity, slot 1 user; a shared TTBR1 direct map with RAM in
+  4 KiB pages so guard-page unmaps never split a live block; break-before-make;
+  broadcast TLBI; no ASIDs yet); vectors save the FP/SIMD state; aborts decode
+  into the `MM_FAULT_*` memory-service path; GICv3 and the EL1 virtual timer
+  drive the tick; `context_switch.S` resumes every context by ERET.
+  Unimplemented interfaces fail by name (`arch/aarch64/unimplemented_aarch64.c`:
+  device IRQ routing, MSI, ECAM); the EL0/SVC syscall entry is not there yet.
+  `run-qemu-bringup-test` (to `[test] preempt ok`) is its gate, in CI too
+  (`bringup`). The native
   ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap
   stubs (aarch64: `svc #0`, number in x8). No aarch64 framebuffer fallback
   without GOP (the x86 0xCF8 scan is x86_64-only).

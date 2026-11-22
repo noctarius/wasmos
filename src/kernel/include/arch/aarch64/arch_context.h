@@ -7,9 +7,8 @@
  * exception level and stack the context runs on: EL0t (0b0000) is user mode,
  * EL1h (0b0101) is kernel mode on SP_EL1; no other value is legitimate.
  *
- * TODO: the exception vectors, the context switch and the SVC entry that build
- * and consume these frames do not exist yet (arm64 port, Phase 2); the layouts
- * are fixed here so that code can be written against them. */
+ * TODO: the SVC entry that consumes syscall_frame_t does not exist yet (arm64
+ * port, Phase 2). */
 #pragma once
 
 #include <stddef.h>
@@ -57,7 +56,10 @@ static inline __attribute__((always_inline)) uint64_t arch_read_flags(void) {
 
 /* Saved state of a thread. `sp` is the kernel stack pointer (SP_EL1) to resume
  * on; `user_sp` is SP_EL0. `root_table` is the physical address of the
- * thread's TTBR0 table and is the one field neutral code uses directly. */
+ * thread's TTBR0 table and is the one field neutral code uses directly.
+ * `fp_callee` holds d8..d15, which AAPCS64 makes callee-saved (5.1.2), so a
+ * voluntary context_switch must carry them like x19..x29. arch/aarch64/
+ * context_switch.S indexes every field by the offsets asserted below. */
 typedef struct {
     uint64_t x[31];
     uint64_t sp;
@@ -65,11 +67,19 @@ typedef struct {
     uint64_t pstate;
     uint64_t user_sp;
     uint64_t root_table;
+    uint64_t fp_callee[8];
 } process_context_t;
 
 _Static_assert(offsetof(process_context_t, sp) == 248, "process_context_t sp offset mismatch");
+_Static_assert(offsetof(process_context_t, pc) == 256, "process_context_t pc offset mismatch");
+_Static_assert(offsetof(process_context_t, pstate) == 264,
+               "process_context_t pstate offset mismatch");
+_Static_assert(offsetof(process_context_t, user_sp) == 272,
+               "process_context_t user_sp offset mismatch");
 _Static_assert(offsetof(process_context_t, root_table) == 280,
                "process_context_t root_table offset mismatch");
+_Static_assert(offsetof(process_context_t, fp_callee) == 288,
+               "process_context_t fp_callee offset mismatch");
 
 /* Frame an exception entry builds on the kernel stack. `sp` is the interrupted
  * context's stack pointer: SP_EL0 for an EL0 frame, SP_EL1 as it was before

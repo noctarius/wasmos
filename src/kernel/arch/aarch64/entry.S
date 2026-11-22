@@ -15,8 +15,9 @@
  *   4. enables FP/SIMD at EL1 (CPACR_EL1.FPEN): kernel code uses it;
  *   5. builds one level-1 table mapping physical [0, 4 GiB) as 1 GiB blocks,
  *      the first Device-nGnRE (QEMU virt's devices), the rest Normal
- *      write-back, and installs it as both TTBR0 (identity) and TTBR1 (the
- *      direct map at KERNEL_HIGHER_HALF_BASE, include/arch/aarch64/vm_layout.h);
+ *      write-back, and hangs it below two level-0 tables: TTBR0 slot 0 (the
+ *      identity map) and TTBR1 slot 511 (the direct map at
+ *      KERNEL_HIGHER_HALF_BASE, include/arch/aarch64/vm_layout.h);
  *   6. turns the MMU and caches on and jumps to _start_high at its linked
  *      higher-half address.
  * _start_high installs the exception vectors, switches to the kernel stack,
@@ -30,10 +31,11 @@
 /* MAIR_EL1: index 0 Device-nGnRE, 1 Normal write-back (read/write-allocate),
  * 2 Normal non-cacheable. */
 .set MAIR_VALUE, 0x44ff04
-/* TCR_EL1: T0SZ = T1SZ = 25 (39-bit VA), 4 KiB granule in both halves,
- * write-back cacheable inner-shareable walks. IPS is filled in from
- * ID_AA64MMFR0_EL1.PARange. */
-.set TCR_VALUE, 0xb5193519
+/* TCR_EL1: T0SZ = T1SZ = 16 (48-bit VA, four levels from level 0), 4 KiB
+ * granule in both halves, write-back cacheable inner-shareable walks. IPS is
+ * filled in from ID_AA64MMFR0_EL1.PARange. */
+.set TCR_VALUE, 0xb5103510
+.set TABLE_DESC, 0x3
 /* Level-1 block descriptors: valid block, AF, plus attributes. Device: MAIR
  * index 0, PXN|UXN. Normal: MAIR index 1, inner shareable, UXN. */
 .set BLOCK_DEVICE, 0x0060000000000401
@@ -97,16 +99,22 @@ el1_entry:
     msr cpacr_el1, x0
     isb
 
-    /* Fill the level-1 table. The MMU is off, so these stores reach memory
-     * directly; the invalidate below drops any stale cached copy of the lines
-     * before the table walker, which reads through the cache, sees them. */
-    adrp x0, bootstrap_l1
-    mov x1, x0
-    mov x2, #512
+    /* Fill the three tables (level-0 low, level-0 high, level-1; contiguous).
+     * The MMU is off, so these stores reach memory directly; the invalidate
+     * below drops any stale cached copy of the lines before the table walker,
+     * which reads through the cache, sees them. */
+    adrp x5, bootstrap_l0_lo
+    mov x1, x5
+    mov x2, #(3 * 512)
 1:
     str xzr, [x1], #8
     subs x2, x2, #1
     b.ne 1b
+    add x0, x5, #8192 /* bootstrap_l1 */
+    orr x1, x0, #TABLE_DESC
+    str x1, [x5]               /* TTBR0 L0[0] -> L1: identity */
+    add x6, x5, #4096          /* bootstrap_l0_hi */
+    str x1, [x6, #(511 * 8)]   /* TTBR1 L0[511] -> L1: direct map */
     ldr x1, =BLOCK_DEVICE
     str x1, [x0]
     ldr x1, =BLOCK_NORMAL
@@ -122,8 +130,8 @@ el1_entry:
     ubfx x3, x3, #16, #4 /* DminLine: log2(words) of the smallest D-line */
     mov x4, #4
     lsl x3, x4, x3
-    add x2, x0, #4096
-    mov x1, x0
+    add x2, x5, #(3 * 4096)
+    mov x1, x5
 3:
     dc ivac, x1
     add x1, x1, x3
@@ -141,8 +149,8 @@ el1_entry:
     csel x2, x2, x3, ls
     orr x1, x1, x2, lsl #32
     msr tcr_el1, x1
-    msr ttbr0_el1, x0
-    msr ttbr1_el1, x0
+    msr ttbr0_el1, x5
+    msr ttbr1_el1, x6
     isb
     tlbi vmalle1
     dsb nsh
@@ -156,6 +164,10 @@ el1_entry:
 
 .section .start.low.bss, "aw", %nobits
 .balign 4096
+bootstrap_l0_lo:
+    .space 4096
+bootstrap_l0_hi:
+    .space 4096
 bootstrap_l1:
     .space 4096
 

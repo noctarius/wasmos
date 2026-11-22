@@ -149,7 +149,8 @@ ARCHES = {
         qemu_tool="qemu-aarch64",
         firmware_code_tool="aavmf-code",
         firmware_vars_tool="aavmf-vars",
-        qemu_machine=("-M", "virt"),
+        # GICv3 explicitly: QEMU virt defaults to a GICv2.
+        qemu_machine=("-M", "virt,gic-version=3"),
         qemu_ide=False,
         qemu_nic_option_rom=False,
     ),

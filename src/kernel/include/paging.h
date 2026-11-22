@@ -2,10 +2,13 @@
  *
  * The interface is architecture-neutral: mapping flags are MEM_REGION_FLAG_*
  * (memory.h), never raw page-table bits, and a root table is an opaque physical
- * address. The implementation is per architecture (arch/x86_64/paging.c), and
- * the descriptions below name that implementation's structures -- PML4 slots,
- * CR3, INVLPG -- where the contract depends on them. The kernel virtual layout
- * constants come from arch/vm_layout.h. */
+ * address. The implementation is per architecture (arch/x86_64/paging.c,
+ * arch/aarch64/paging.c), and the descriptions below name the x86_64
+ * structures -- PML4 slots, CR3, INVLPG -- where the contract depends on them.
+ * aarch64 uses the same four-level slot geometry: a root is a TTBR0 table
+ * (slot 0 low identity, slot 1 user), and PML4[511] is the TTBR1 table every
+ * address space shares, so nothing of it is copied or verified per root. The
+ * kernel virtual layout constants come from arch/vm_layout.h. */
 #ifndef WASMOS_PAGING_H
 #define WASMOS_PAGING_H
 

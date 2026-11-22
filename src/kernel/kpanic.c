@@ -73,7 +73,10 @@ static void panic_backtrace(uint64_t fp) {
         uint64_t next = frame[0];
         uint64_t ret = frame[1];
         serial_printf_unlocked("    [%d] ret=%016llx", i, (unsigned long long)ret);
-        panic_print_symbol(ret);
+        /* A return address points past its call, which in a function ending
+         * with a call to a noreturn function is the first byte of the next
+         * function; the byte before it is still inside the caller. */
+        panic_print_symbol(ret - 1u);
         serial_printf_unlocked("\n");
         if (next <= fp) {
             break; /* frame chain must climb toward the stack base   */

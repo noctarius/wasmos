@@ -30,9 +30,17 @@ ARCH = {
         "core": True,
     },
     "aarch64": {
-        "head": ["arch/aarch64/entry.S", "arch/aarch64/vectors.S"],
+        "head": [
+            "arch/aarch64/entry.S",
+            "arch/aarch64/vectors.S",
+            "arch/aarch64/context_switch.S",
+        ],
         "sources": [
             "arch/aarch64/cpu_aarch64.c",
+            "arch/aarch64/paging.c",
+            "arch/aarch64/gic_aarch64.c",
+            "arch/aarch64/irq_aarch64.c",
+            "arch/aarch64/timer_aarch64.c",
             "arch/aarch64/platform_aarch64.c",
             "arch/aarch64/unimplemented_aarch64.c",
         ],

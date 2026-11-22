@@ -1584,9 +1584,6 @@ static int32_t g_sv_request_id = FSMGR_SV_LOOKUP_REQUEST_ID + 1;
  * accepted its unit. It spans the supervisor's first restarts of a backend that
  * fails to start; a mount not up by then is refused and its unit retracted. */
 #define FSMGR_MOUNT_TIMEOUT_MS 15000
-/* How long an unmount waits for its quiesced backend to end before retracting
- * the unit anyway, which kills the backend. */
-#define FSMGR_RETIRE_TIMEOUT_MS 5000
 
 /* Copy the value of `key` out of a whitespace-separated `key=value` descriptor.
  *
@@ -1731,9 +1728,9 @@ static void fsmgr_unit_answer_unmount(fsmgr_unit_t* unit) {
 }
 
 /* Withdraw `unit` from the supervisor (SUPERVISOR_IPC_RETRACT_REQ). Its answer
- * completes the unmount waiting on it. A retraction that cannot be sent leaves
- * the unit with the supervisor, which restarts nothing that ended cleanly: the
- * unmount is answered and the slot freed. */
+ * decides the unmount waiting on it (fsmgr_on_supervisor_reply). A retraction
+ * that cannot be sent is tried again shortly: the supervisor still holds the
+ * unit, and with it the name and the path. */
 static void fsmgr_unit_retract(fsmgr_unit_t* unit) {
     static wasmos_supervisor_unit_desc_t desc;
     memset(&desc, 0, sizeof(desc));
@@ -1743,10 +1740,24 @@ static void fsmgr_unit_retract(fsmgr_unit_t* unit) {
     unit->state = FSMGR_UNIT_RETRACTING;
     if (fsmgr_supervisor_send(unit, SUPERVISOR_IPC_RETRACT_REQ, &desc, (int32_t)sizeof(desc)) !=
         0) {
-        printf("[fs-manager] cannot retract %s; the supervisor keeps it\n", unit->name);
-        fsmgr_unit_answer_unmount(unit);
-        fsmgr_unit_release(unit);
+        fsmgr_unit_retract_unsent(unit, fsmgr_now_ms());
     }
+}
+
+/* Take over the answer of an unmount whose quiesce is still unanswered, when
+ * its deadline passes: the record is ended, so a late DONE completes nothing,
+ * and the unit answers the client once it is retracted. */
+static void fsmgr_unit_take_unmount(fsmgr_unit_t* unit) {
+    for (uint32_t i = 0; i < FSMGR_PENDING_CAP; ++i) {
+        fsmgr_pending_t* entry = &g_pending.slots[i];
+        if (entry->in_use && entry->step == FSMGR_STEP_UNMOUNT && entry->backend == unit->backend) {
+            unit->client = entry->client;
+            unit->client_request_id = entry->client_request_id;
+            pending_end(entry);
+            break;
+        }
+    }
+    unit->quiesced = 1;
 }
 
 /* Retract every unmounted unit whose backend has ended, or whose deadline has
@@ -1763,10 +1774,25 @@ static void fsmgr_units_retire(void) {
     uint32_t now = fsmgr_now_ms();
     for (uint32_t i = 0; i < FSMGR_UNIT_CAP; ++i) {
         fsmgr_unit_t* unit = &g_units[i];
-        if (unit->state == FSMGR_UNIT_RETIRING && unit->quiesced &&
-            (wasmos_ipc_endpoint_owner(unit->backend) < 0 ||
-             fsmgr_deadline_passed(now, unit->deadline_ms))) {
+        int32_t alive;
+        if (unit->state != FSMGR_UNIT_RETIRING && unit->state != FSMGR_UNIT_ENDING) {
+            continue;
+        }
+        alive = wasmos_ipc_endpoint_owner(unit->backend) >= 0;
+        switch (fsmgr_unit_due(unit, now, alive)) {
+        case FSMGR_UNIT_DO_RETRACT:
+            if (!unit->quiesced) {
+                printf("[fs-manager] unmount: %s did not quiesce in time\n", unit->name);
+                fsmgr_unit_take_unmount(unit);
+            }
             fsmgr_unit_retract(unit);
+            break;
+        case FSMGR_UNIT_DO_ANSWER:
+            fsmgr_unit_answer_unmount(unit);
+            fsmgr_unit_release(unit);
+            break;
+        default:
+            break;
         }
     }
 }
@@ -1831,7 +1857,7 @@ static int32_t fsmgr_next_deadline_ms(void) {
         best = left > 0 ? left : 0;
     }
     for (uint32_t i = 0; i < FSMGR_UNIT_CAP; ++i) {
-        if (g_units[i].state == FSMGR_UNIT_RETIRING && g_units[i].quiesced) {
+        if (g_units[i].state == FSMGR_UNIT_RETIRING || g_units[i].state == FSMGR_UNIT_ENDING) {
             int32_t left = (int32_t)(g_units[i].deadline_ms - now);
             left = left > 0 ? left : 0;
             if (best < 0 || left < best) {
@@ -1911,10 +1937,13 @@ static void fsmgr_on_supervisor_lookup(int32_t endpoint) {
  *
  * An accepted SUBMIT holds the unit, and the pending mount then waits for the
  * backend to register; a refused one fails the mount with the supervisor's code.
- * A RETRACT's answer completes the unmount waiting on it either way: a refusal
- * leaves a unit whose backend has already ended, which the supervisor does not
- * restart. */
-static void fsmgr_on_supervisor_reply(int32_t type, int32_t request_id, int32_t code) {
+ * A RETRACT's answer decides the unmount waiting on it (fsmgr_unit_retracted):
+ * it is answered at once when no instance was left to kill or the unit was
+ * already gone, after the killed instance has ended otherwise, and with the
+ * supervisor's refusal -- keeping the unit, which the supervisor still holds --
+ * when it was refused. */
+static void fsmgr_on_supervisor_reply(int32_t type, int32_t request_id, int32_t code,
+                                      int32_t pid_killed) {
     fsmgr_unit_t* unit = fsmgr_unit_by_request(g_units, FSMGR_UNIT_CAP, request_id);
     if (!unit) {
         return;
@@ -1941,11 +1970,22 @@ static void fsmgr_on_supervisor_reply(int32_t type, int32_t request_id, int32_t 
         }
         return;
     }
-    if (type != SUPERVISOR_IPC_RESP) {
+    switch (
+        fsmgr_unit_retracted(unit, type == SUPERVISOR_IPC_RESP, code, pid_killed, fsmgr_now_ms())) {
+    case FSMGR_UNIT_DO_ANSWER:
+        fsmgr_unit_answer_unmount(unit);
+        fsmgr_unit_release(unit);
+        break;
+    case FSMGR_UNIT_DO_REFUSE:
         printf("[fs-manager] the supervisor refused to retract %s\n", unit->name);
+        if (unit->client >= 0) {
+            send_fs_error(unit->client, unit->client_request_id, (wasmos_error_code_t)unit->result);
+            unit->client = -1;
+        }
+        break;
+    default:
+        break;
     }
-    fsmgr_unit_answer_unmount(unit);
-    fsmgr_unit_release(unit);
 }
 
 /* FS_IPC_READDIR_REQ: list the client's working directory.
@@ -2200,6 +2240,7 @@ static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t
         unit->state = FSMGR_UNIT_RETIRING;
         unit->backend = victim->endpoint;
         unit->quiesced = 0;
+        unit->deadline_ms = fsmgr_now_ms() + FSMGR_RETIRE_TIMEOUT_MS;
     }
     victim->in_use = 0;
     fsmgr_forget_backend_in_clients(entry->backend);
@@ -2495,7 +2536,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         }
         if ((type == SUPERVISOR_IPC_RESP || type == SUPERVISOR_IPC_ERROR) &&
             g_supervisor_endpoint >= 0 && source == g_supervisor_endpoint) {
-            fsmgr_on_supervisor_reply(type, request_id, arg0);
+            fsmgr_on_supervisor_reply(type, request_id, arg0, arg1f);
             continue;
         }
 

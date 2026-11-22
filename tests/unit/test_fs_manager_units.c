@@ -136,6 +136,103 @@ static void test_deadline_holds_across_the_wrap(void) {
     assert(fsmgr_deadline_passed(0x20u, 0x10u));
 }
 
+/* Regression: #68-review-mount-path-claimed-twice -- the claim checked only the
+ * unit name, so while fs_wfs@/wfs was restarting (its mount out of the table) a
+ * tmpfs could be mounted at /wfs, and both backends served the path once the
+ * first one registered again. */
+static void test_a_mount_path_already_held_is_not_claimed_by_another_type(void) {
+    fsmgr_unit_t table[4];
+    memset(table, 0, sizeof(table));
+    assert(fsmgr_unit_claim(table, 4, "fs_wfs@/wfs", "/wfs") != NULL);
+    assert(fsmgr_unit_claim(table, 4, "fs_tmpfs@/wfs", "/wfs") == NULL);
+}
+
+static fsmgr_unit_t retiring_unit(int32_t quiesced, uint32_t deadline) {
+    fsmgr_unit_t unit;
+    memset(&unit, 0, sizeof(unit));
+    unit.state = FSMGR_UNIT_RETIRING;
+    unit.backend = 9;
+    unit.quiesced = quiesced;
+    unit.deadline_ms = deadline;
+    unit.client = 4;
+    return unit;
+}
+
+static void test_a_quiesced_backend_is_retracted_once_it_has_ended(void) {
+    fsmgr_unit_t unit = retiring_unit(1, 1000u);
+    assert(fsmgr_unit_due(&unit, 10u, 1) == FSMGR_UNIT_WAIT);
+    assert(fsmgr_unit_due(&unit, 10u, 0) == FSMGR_UNIT_DO_RETRACT);
+}
+
+/* Regression: #68-review-unmount-waits-on-a-silent-backend -- the deadline
+ * applied only after the quiesce was answered, so a backend that never answered
+ * SHUTDOWN_REQ held its unmount forever. */
+static void test_a_backend_that_never_quiesces_is_retracted_at_the_deadline(void) {
+    fsmgr_unit_t unit = retiring_unit(0, 1000u);
+    assert(fsmgr_unit_due(&unit, 999u, 1) == FSMGR_UNIT_WAIT);
+    assert(fsmgr_unit_due(&unit, 1000u, 1) == FSMGR_UNIT_DO_RETRACT);
+    /* Without its quiesce answered, an ended backend still waits for the record
+     * that answers it: the end is not the unmount's to report. */
+    assert(fsmgr_unit_due(&unit, 10u, 0) == FSMGR_UNIT_WAIT);
+}
+
+/* Regression: #68-review-forced-retract-answers-early -- a retraction that
+ * killed a live backend was answered at once, while the supervisor kept the
+ * name until the backend ended, so an immediate remount was refused EXISTS. */
+static void test_a_retraction_that_killed_an_instance_waits_for_its_end(void) {
+    fsmgr_unit_t unit = retiring_unit(1, 0u);
+    unit.state = FSMGR_UNIT_RETRACTING;
+    assert(fsmgr_unit_retracted(&unit, 1, 0, 57, 100u) == FSMGR_UNIT_WAIT);
+    assert(unit.state == FSMGR_UNIT_ENDING);
+    assert(fsmgr_unit_due(&unit, 101u, 1) == FSMGR_UNIT_WAIT);
+    assert(fsmgr_unit_due(&unit, 101u, 0) == FSMGR_UNIT_DO_ANSWER);
+    assert(fsmgr_unit_due(&unit, 100u + FSMGR_RETIRE_TIMEOUT_MS, 1) == FSMGR_UNIT_DO_ANSWER);
+}
+
+static void test_a_retraction_of_an_ended_instance_is_answered_at_once(void) {
+    fsmgr_unit_t unit = retiring_unit(1, 0u);
+    unit.state = FSMGR_UNIT_RETRACTING;
+    assert(fsmgr_unit_retracted(&unit, 1, 0, 0, 100u) == FSMGR_UNIT_DO_ANSWER);
+}
+
+/* Regression: #68-review-refused-retract-reported-as-success -- a refused
+ * retraction answered the unmount as a success and forgot the unit, whose name
+ * the supervisor still held. */
+static void test_a_refused_retraction_is_reported_and_the_unit_kept(void) {
+    fsmgr_unit_t unit = retiring_unit(1, 0u);
+    unit.state = FSMGR_UNIT_RETRACTING;
+    assert(fsmgr_unit_retracted(&unit, 0, WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED, 0, 100u) ==
+           FSMGR_UNIT_DO_REFUSE);
+    assert(unit.state == FSMGR_UNIT_HELD);
+    assert(unit.result == WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED);
+}
+
+static void test_a_retraction_of_a_unit_already_gone_is_a_success(void) {
+    fsmgr_unit_t unit = retiring_unit(1, 0u);
+    unit.state = FSMGR_UNIT_RETRACTING;
+    assert(fsmgr_unit_retracted(&unit, 0, WASMOS_ERR_SUPERVISOR_NO_UNIT, 0, 100u) ==
+           FSMGR_UNIT_DO_ANSWER);
+}
+
+/* Regression: #68-review-unsent-retract-forgets-the-unit -- a RETRACT that
+ * could not be sent released the unit and answered the unmount as done. */
+static void test_an_unsent_retraction_is_retried(void) {
+    fsmgr_unit_t unit = retiring_unit(1, 0u);
+    unit.state = FSMGR_UNIT_RETRACTING;
+    fsmgr_unit_retract_unsent(&unit, 100u);
+    assert(unit.state == FSMGR_UNIT_RETIRING);
+    assert(fsmgr_unit_due(&unit, 100u, 1) == FSMGR_UNIT_WAIT);
+    assert(fsmgr_unit_due(&unit, 100u + FSMGR_RETRACT_RETRY_MS, 1) == FSMGR_UNIT_DO_RETRACT);
+}
+
+static void test_held_and_submitting_units_are_never_due(void) {
+    fsmgr_unit_t unit = retiring_unit(1, 0u);
+    unit.state = FSMGR_UNIT_HELD;
+    assert(fsmgr_unit_due(&unit, 5000u, 0) == FSMGR_UNIT_WAIT);
+    unit.state = FSMGR_UNIT_SUBMITTING;
+    assert(fsmgr_unit_due(&unit, 5000u, 0) == FSMGR_UNIT_WAIT);
+}
+
 int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_name_is_the_module_stem_at_the_mount),
@@ -149,6 +246,15 @@ int main(void) {
         WASMOS_TEST_CASE(test_a_full_table_refuses_and_a_release_frees_a_slot),
         WASMOS_TEST_CASE(test_by_request_finds_only_an_outstanding_request),
         WASMOS_TEST_CASE(test_deadline_holds_across_the_wrap),
+        WASMOS_TEST_CASE(test_a_mount_path_already_held_is_not_claimed_by_another_type),
+        WASMOS_TEST_CASE(test_a_quiesced_backend_is_retracted_once_it_has_ended),
+        WASMOS_TEST_CASE(test_a_backend_that_never_quiesces_is_retracted_at_the_deadline),
+        WASMOS_TEST_CASE(test_a_retraction_that_killed_an_instance_waits_for_its_end),
+        WASMOS_TEST_CASE(test_a_retraction_of_an_ended_instance_is_answered_at_once),
+        WASMOS_TEST_CASE(test_a_refused_retraction_is_reported_and_the_unit_kept),
+        WASMOS_TEST_CASE(test_a_retraction_of_a_unit_already_gone_is_a_success),
+        WASMOS_TEST_CASE(test_an_unsent_retraction_is_retried),
+        WASMOS_TEST_CASE(test_held_and_submitting_units_are_never_due),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_fs_manager_units: ok\n");

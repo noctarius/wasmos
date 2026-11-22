@@ -201,7 +201,14 @@ mount at the path: the supervisor keeps a retracted unit's name until its
 instance has ended, and it has always seen that end first, because the kernel
 posts the supervisor's exit notice before it releases the process's endpoints
 and the supervisor reads it and the retraction from one queue. A backend that
-has not ended within 5 s is retracted anyway, which kills it.
+has not answered the quiesce and ended within 5 s of the unmount is retracted
+anyway, which kills it; the unmount is then answered once the supervisor has
+answered and the killed backend has ended (5 s more at most), so an immediate
+remount still finds the name free. A retraction that cannot be sent is tried
+again; one the supervisor refuses answers the unmount with its refusal and
+keeps the unit, which the supervisor still holds -- a mount at the path is
+then refused as busy. While a unit is held, no other unit may claim its path,
+so a second filesystem cannot be placed under a backend that is restarting.
 
 The mount POINT is left in place. It is a directory in the covering filesystem
 and belongs to that filesystem, so what becomes visible again is whatever the

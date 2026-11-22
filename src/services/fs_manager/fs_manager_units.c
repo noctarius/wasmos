@@ -82,7 +82,7 @@ fsmgr_unit_t* fsmgr_unit_claim(fsmgr_unit_t* table, uint32_t cap, const char* na
             if (!free_slot) {
                 free_slot = &table[i];
             }
-        } else if (strcmp(table[i].name, name) == 0) {
+        } else if (strcmp(table[i].name, name) == 0 || strcmp(table[i].mount, mount) == 0) {
             return 0;
         }
     }
@@ -138,4 +138,47 @@ void fsmgr_unit_release(fsmgr_unit_t* unit) {
 
 int32_t fsmgr_deadline_passed(uint32_t now_ms, uint32_t deadline_ms) {
     return (int32_t)(now_ms - deadline_ms) >= 0;
+}
+
+int32_t fsmgr_unit_due(const fsmgr_unit_t* unit, uint32_t now_ms, int32_t backend_alive) {
+    if (!unit) {
+        return FSMGR_UNIT_WAIT;
+    }
+    if (unit->state == FSMGR_UNIT_RETIRING) {
+        if ((unit->quiesced && !backend_alive) ||
+            fsmgr_deadline_passed(now_ms, unit->deadline_ms)) {
+            return FSMGR_UNIT_DO_RETRACT;
+        }
+        return FSMGR_UNIT_WAIT;
+    }
+    if (unit->state == FSMGR_UNIT_ENDING) {
+        if (!backend_alive || fsmgr_deadline_passed(now_ms, unit->deadline_ms)) {
+            return FSMGR_UNIT_DO_ANSWER;
+        }
+    }
+    return FSMGR_UNIT_WAIT;
+}
+
+int32_t fsmgr_unit_retracted(fsmgr_unit_t* unit, int32_t accepted, int32_t code, int32_t pid_killed,
+                             uint32_t now_ms) {
+    if (accepted) {
+        if (pid_killed == 0) {
+            return FSMGR_UNIT_DO_ANSWER;
+        }
+        unit->state = FSMGR_UNIT_ENDING;
+        unit->deadline_ms = now_ms + FSMGR_RETIRE_TIMEOUT_MS;
+        return FSMGR_UNIT_WAIT;
+    }
+    if (code == WASMOS_ERR_SUPERVISOR_NO_UNIT) {
+        return FSMGR_UNIT_DO_ANSWER;
+    }
+    unit->state = FSMGR_UNIT_HELD;
+    unit->result = code;
+    return FSMGR_UNIT_DO_REFUSE;
+}
+
+void fsmgr_unit_retract_unsent(fsmgr_unit_t* unit, uint32_t now_ms) {
+    unit->state = FSMGR_UNIT_RETIRING;
+    unit->quiesced = 1;
+    unit->deadline_ms = now_ms + FSMGR_RETRACT_RETRY_MS;
 }

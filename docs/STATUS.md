@@ -1861,8 +1861,10 @@ linked feature documents for rationale and rollout plans.
   rather than retryable: the driver resets the device and refuses every later
   request with `WASMOS_ERR_VIRTIO_BLK_NOT_READY`, instead of recycling
   descriptors the device could still complete into a client's block buffer. It
-  registers the concrete name `virtio-blk` under the `block` service CLASS; the
-  plain `block` name stays with the ATA driver, which holds the boot disk.
+  registers under the `block` service CLASS with the disk's canonical id
+  (`block:virtio-blk:<unit>`) as its concrete name, so every virtio disk's
+  instance holds a name of its own; the plain `block` name stays with the ATA
+  driver, which holds the boot disk.
   Failures are reported as packed `WASMOS_ERR_VIRTIO_BLK_*` codes.
 - `wasmos_sys_event_loop_t` gained a clock: `poll_timeout_ms` bounds how long a
   poll parks with nothing queued, and `on_timeout` runs when the window elapses.

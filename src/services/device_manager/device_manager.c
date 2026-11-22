@@ -847,17 +847,15 @@ static int hw_spawn_driver_index_caps_v2(int32_t index, const spawn_caps_t* caps
 static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     uint32_t io_packed = 0;
     uint32_t arg3 = 0;
+    char what[24];
     if (!caps) {
         return hw_spawn_driver_index(index);
     }
     if (index < 0) {
         return -1;
     }
-    {
-        char what[24];
-        (void)snprintf(what, sizeof(what), "module=%d", (int)index);
-        log_spawn_grant(what, caps);
-    }
+    (void)snprintf(what, sizeof(what), "module=%d", (int)index);
+    log_spawn_grant(what, caps);
     if (caps->region_count > 0u) {
         return hw_spawn_driver_index_caps_v2(index, caps);
     }

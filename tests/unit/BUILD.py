@@ -275,8 +275,12 @@ def _host_sdk_compiler():
 
 
 def _inputs(b, args):
-    """Files a test command reads: every listed source, plus the headers under
-    every include directory it names (multi-source commands get no depfile)."""
+    """Files a test command reads: every listed source, plus the headers AND
+    sources under every include directory it names (multi-source commands get
+    no depfile). Sources count because a suite may #include a .c to reach its
+    static functions (test_device_manager_block_rules includes
+    device_manager.c); without them an edit to that file leaves the suite
+    running the old code."""
     files, dirs = [], []
     for a in args:
         p = Path(a[2:] if a.startswith("-I") else a)
@@ -288,6 +292,7 @@ def _inputs(b, args):
             dirs.append(p)
     for d in dirs:
         files += b.glob("**/*.h", root=d)
+        files += b.glob("**/*.c", root=d)
     return files
 
 

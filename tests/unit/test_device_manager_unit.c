@@ -90,6 +90,29 @@ static void test_caps_encode_windows_and_irq(void) {
            r[1].length == 0x4000);
 }
 
+/* Regression: 2026-11-22-devmgr-dma-budget-replaced -- every DMA grant the
+ * device manager encoded carried a fixed 4096-byte budget, which the spawn
+ * profile installs in place of the one the driver's manifest declares
+ * (dma.buffer flags, in pages). virtio-rng, which pins an 8 KiB ring, failed
+ * its first allocation with WASMOS_ERR_DMA_RANGE as soon as its real
+ * capability set reached the spawn. */
+static void test_a_dma_grant_carries_the_drivers_budget(void) {
+    uint8_t out[128];
+    wasmos_spawn_caps_v2_t hdr;
+    spawn_caps_t caps;
+    memset(&caps, 0, sizeof(caps));
+    caps.cap_flags = DEVMGR_CAP_DMA;
+    caps.dma_max_bytes = 4u * 4096u;
+    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) > 0);
+    memcpy(&hdr, out, sizeof(hdr));
+    assert(hdr.dma.max_bytes == 4u * 4096u);
+
+    caps.dma_max_bytes = 0; /* no metadata: the single-page default */
+    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) > 0);
+    memcpy(&hdr, out, sizeof(hdr));
+    assert(hdr.dma.max_bytes == 4096u);
+}
+
 /* A PCI driver's descriptor names its function, which the kernel quiesces when
  * the driver ends; nothing else carries the flag. */
 static void test_caps_encode_the_pci_function(void) {
@@ -271,6 +294,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_caps_encode_windows_and_irq),
         WASMOS_TEST_CASE(test_caps_encode_dma_and_bounds),
         WASMOS_TEST_CASE(test_caps_encode_the_pci_function),
+        WASMOS_TEST_CASE(test_a_dma_grant_carries_the_drivers_budget),
         WASMOS_TEST_CASE(test_declared_regions_keep_their_index),
         WASMOS_TEST_CASE(test_an_absent_bar_refuses_the_grant),
         WASMOS_TEST_CASE(test_bars_resolve_to_grants_of_their_kind),

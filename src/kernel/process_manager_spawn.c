@@ -2510,6 +2510,28 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
  * code -- META_LOOKUP for an unknown module index, META_NOT_DRIVER for a module
  * without the driver flag, CALLER_FSBUF for a buffer that cannot hold the
  * descriptor at the requested offset. */
+/* What a driver package declares about itself, as both metadata requests report
+ * it: its DEVMGR capability bits, storage-bootstrap flag, register windows and
+ * DMA budget (the dma.buffer capability's flags, in pages). */
+static void pm_module_meta_fill(const wasmos_app_desc_t* desc, wasmos_module_meta_desc_t* out) {
+    __builtin_memset(out, 0, sizeof(*out));
+    out->version = WASMOS_MODULE_META_DESC_VERSION;
+    out->storage_bootstrap = ((desc->flags & WASMOS_APP_FLAG_STORAGE_BOOTSTRAP) != 0) ? 1u : 0u;
+    out->cap_flags = wasmos_app_driver_cap_flags(desc);
+    out->region_count = desc->region_count;
+    for (uint32_t i = 0; i < desc->region_count && i < WASMOS_MODULE_META_MAX_REGIONS; ++i) {
+        out->regions[i].kind = desc->regions[i].kind;
+        out->regions[i].bar_index = desc->regions[i].bar_index;
+        out->regions[i].first = desc->regions[i].first;
+        out->regions[i].last = desc->regions[i].last;
+    }
+    for (uint32_t i = 0; i < desc->cap_count; ++i) {
+        if (str_eq_bytes(desc->caps[i].name, desc->caps[i].name_len, "dma.buffer")) {
+            out->dma_budget_pages = desc->caps[i].flags;
+        }
+    }
+}
+
 int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;
@@ -2539,17 +2561,7 @@ int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg)
         return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
 
-    __builtin_memset(&out, 0, sizeof(out));
-    out.version = WASMOS_MODULE_META_DESC_VERSION;
-    out.storage_bootstrap = ((desc.flags & WASMOS_APP_FLAG_STORAGE_BOOTSTRAP) != 0) ? 1u : 0u;
-    out.cap_flags = wasmos_app_driver_cap_flags(&desc);
-    out.region_count = desc.region_count;
-    for (uint32_t i = 0; i < desc.region_count && i < WASMOS_MODULE_META_MAX_REGIONS; ++i) {
-        out.regions[i].kind = desc.regions[i].kind;
-        out.regions[i].bar_index = desc.regions[i].bar_index;
-        out.regions[i].first = desc.regions[i].first;
-        out.regions[i].last = desc.regions[i].last;
-    }
+    pm_module_meta_fill(&desc, &out);
     __builtin_memcpy((uint8_t*)(uintptr_t)buf + offset, &out, sizeof(out));
 
     resp.type = PROC_IPC_RESP;
@@ -2632,6 +2644,81 @@ int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg)
     resp.arg0 = module_index;
     resp.arg1 = desc.flags;
     resp.arg2 = cap_flags;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
+}
+
+/* What the package at a filesystem path declares about itself
+ * (PROC_IPC_MODULE_META_FILE): read through fs-manager as a path spawn reads
+ * it, parsed by the same package parser, and reported as the
+ * wasmos_module_meta_desc_t PROC_IPC_MODULE_META_DESC gives for a boot module.
+ * device-manager needs it to resolve the windows a driver on /boot declares,
+ * which it cannot do from the boot image. The descriptor and its path live in
+ * the caller's buffer, which the caller owns and has lent READ|WRITE. */
+int pm_handle_module_meta_file(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t owner_context = 0;
+    uint32_t buffer_size = 0;
+    uint32_t region_off = (uint32_t)msg->arg1;
+    uint32_t region_size = (uint32_t)msg->arg2;
+    uint8_t* region = 0;
+    wasmos_module_meta_file_desc_t req;
+    char path[SPAWN_WATCH_PATH_MAX + 1];
+    xfer_buffer_owner_t pmbuf = {0};
+    wasmos_app_desc_t desc;
+    uint32_t blob_size = 0;
+    ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK ||
+        !process_find_by_context(owner_context)) {
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
+    }
+    region =
+        (uint8_t*)(uintptr_t)pm_foreign_xfer_ptr((uint32_t)msg->arg0, owner_context, &buffer_size);
+    if (!region || (uint64_t)region_off + region_size > (uint64_t)buffer_size) {
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
+    }
+    region += region_off;
+    if (region_size < sizeof(req)) {
+        return WASMOS_ERR_PROC_PM_META_BAD_DESC;
+    }
+    __builtin_memcpy(&req, region, sizeof(req));
+    if (req.version != MODULE_META_FILE_DESC_VERSION || req.path_len == 0u ||
+        req.path_len > SPAWN_WATCH_PATH_MAX || req.path_off < sizeof(req) ||
+        (uint64_t)req.path_off + req.path_len > (uint64_t)region_size) {
+        return WASMOS_ERR_PROC_PM_META_BAD_DESC;
+    }
+    __builtin_memcpy(path, region + req.path_off, req.path_len);
+    path[req.path_len] = '\0';
+    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
+        return WASMOS_ERR_PROC_PM_FS_UNAVAILABLE;
+    }
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
+        WASMOS_ERR_NONE) {
+        return WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
+    }
+    if (pm_fs_read_blob_for_spawn(pm_context_id, &pmbuf, path, req.path_len, &blob_size) != 0 ||
+        wasmos_app_parse((const uint8_t*)pm_xfer_owner_ptr(&pmbuf), blob_size, &desc) != 0) {
+        pm_xfer_release(&pmbuf);
+        return WASMOS_ERR_PROC_PM_META_LOOKUP;
+    }
+    if ((desc.flags & WASMOS_APP_FLAG_DRIVER) == 0) {
+        pm_xfer_release(&pmbuf);
+        return WASMOS_ERR_PROC_PM_META_NOT_DRIVER;
+    }
+    /* desc points into the blob, so fill before the buffer goes. */
+    pm_module_meta_fill(&desc, &req.meta);
+    pm_xfer_release(&pmbuf);
+    __builtin_memcpy(region, &req, sizeof(req));
+
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = (int32_t)sizeof(req.meta);
+    resp.arg1 = 0;
+    resp.arg2 = 0;
     resp.arg3 = 0;
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
                ? 0

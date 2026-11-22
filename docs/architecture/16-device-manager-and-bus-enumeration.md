@@ -176,7 +176,17 @@ driver register windows covering that device's own BARs -- the `[[regions]]`
 the driver declared, each `"bar"` region resolved to an I/O-port or a
 memory-mapped window by the BAR's kind (`dm_resolve_declared_regions`) -- which
 excludes config space. Widening that grant would give every driver read/write access to every
-device on the bus. An MSI binding whose owner has died belongs to no one: the
+device on the bus.
+
+device-manager learns what a rule's driver declares -- capability bits,
+`[[regions]]`, DMA budget -- from the process manager: by boot-module index
+(`PROC_IPC_MODULE_META_DESC`) for a driver in the boot image, and by path
+(`PROC_IPC_MODULE_META_FILE`, read through fs-manager, answered deferred) for a
+driver on a filesystem. A PCI rule is not armed until that answer is in, nor
+while a freshly loaded rule set's metadata is still stale: armed earlier, its
+driver would be spawned without the windows it declared. A driver that cannot
+be described is spawned without declared windows, with the legacy BAR0-derived
+I/O window. An MSI binding whose owner has died belongs to no one: the
 kernel disabled the function's MSI and MSI-X at the owner's reap, and the next
 driver to bind the function takes the binding over.
 

@@ -83,6 +83,10 @@ receives every tty's output and the kernel log, and its registrant owns COM1
 `CAP_SPAWN_GRANT` and `CAP_SVC_CONTROL` gate requests rather than hardware;
 see "Requester Checks" below. `CAP_PCI_CONFIG` gates the
 `pci_config_read` / `pci_config_write` host calls; only pci-bus declares it.
+Without it, a process may still READ the config space of the one function it
+owns -- the one its spawn profile names, until its reap retires it -- which is
+how a virtio-modern driver finds its register blocks; writing stays
+pci-bus-only (`pci_config_guest_read`, `src/kernel/pci_config.c`).
 
 ---
 

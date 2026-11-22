@@ -528,6 +528,7 @@ The process manager (PM) runs as a kernel-native C++ service.
 | `PROC_IPC_SPAWN_WATCHED`        | `0x213` | request      | Spawn by path; spawner watches child  |
 | `PROC_IPC_CHILD_READY`          | `0x214` | notification | Watched child latched READY (kernel)  |
 | `PROC_IPC_CHILD_EXITED`         | `0x215` | notification | Watched child ended (kernel)          |
+| `PROC_IPC_MODULE_META_FILE`     | `0x216` | request      | Describe the driver package at a path |
 | `PROC_IPC_NOTIFY_READY`         | `0x20C` | notification | Child signals it is ready             |
 | `PROC_IPC_DMA_MAP_BORROW_REQ`   | `0x230` | request      | Map a borrow handle for DMA           |
 | `PROC_IPC_DMA_SYNC_BORROW_REQ`  | `0x231` | request      | Sync a mapped borrow handle           |

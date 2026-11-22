@@ -418,6 +418,9 @@ class ProcessManager {
         case PROC_IPC_MODULE_META_DESC:
             rc = pm_handle_module_meta_desc(process->context_id, &msg);
             break;
+        case PROC_IPC_MODULE_META_FILE:
+            rc = pm_handle_module_meta_file(process->context_id, &msg);
+            break;
         case PROC_IPC_MODULE_META_PATH:
             rc = pm_handle_module_meta_path(process->context_id, &msg);
             break;

@@ -401,6 +401,7 @@ pm_wait_state_t* pm_wait_slot_acquire(void);
  * All three refuse a module that is not a driver, and an out-of-range match
  * index, with the corresponding WASMOS_ERR_PROC_PM_META_* code. */
 int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_module_meta_file(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg);
 
 #endif

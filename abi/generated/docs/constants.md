@@ -257,6 +257,19 @@ dependencies.
 | `PROC_STATUS_ZOMBIE` | 2 | Exited; slot held until its status is collected. |
 | `PROC_STATUS_READY` | 3 | Alive and announced ready. |
 
+## module_meta_file_desc
+
+Version of wasmos_module_meta_file_desc_t, the request and reply record
+of PROC_IPC_MODULE_META_FILE, declared in
+src/drivers/include/wasmos_driver_abi.h; the path follows it in the
+caller's buffer at the offset it names.
+
+A reader MUST reject a descriptor whose version it does not know.
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `MODULE_META_FILE_DESC_VERSION` | 1 | Current wasmos_module_meta_file_desc_t layout. |
+
 ## spawn_watch_desc
 
 Version and size ceilings of wasmos_spawn_watch_desc_t, the request and

@@ -3,62 +3,43 @@
  * (the requestq). The driver posts a buffer, kicks the doorbell, and the device
  * fills it with random bytes and returns it on the used ring — no headers, no
  * device-config negotiation. Exposes the backend-neutral "hrng" class service
- * (HRNG_IPC_GET_BYTES_REQ); see wasmos_driver_abi.h. */
+ * (HRNG_IPC_GET_BYTES_REQ); see wasmos_driver_abi.h.
+ *
+ * The device is driven over the virtio 1.x PCI transport (virtio_modern.h): its
+ * registers are device memory in BAR 4, granted as region 0 by the manifest's
+ * [[regions]] entry, and located through the device's own capability list. */
 #include <stdint.h>
 #include <stdio.h>
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
 #include "wasmos/startup.h"
+#include "wasmos/virtio_modern.h"
 #include "wasmos/vring.h"
 #include "wasmos_driver_abi.h"
 
-/* PCI configuration mechanism #1: write a (bus, device, function, offset)
- * address to 0xCF8, then read or write the 32-bit datum at 0xCFC. Fixed by the
- * PCI Local Bus specification, not chosen here. */
-#define PCI_CFG_ADDR_PORT 0xCF8
-#define PCI_CFG_DATA_PORT 0xCFC
-
 /* 0x1AF4 is the Red Hat / virtio vendor id; both device ids below identify an
- * entropy source and are accepted interchangeably. */
+ * entropy source and are accepted interchangeably (a transitional device also
+ * offers the modern interface this driver uses). */
 #define VIRTIO_PCI_VENDOR_ID 0x1AF4u
-#define VIRTIO_RNG_DEV_LEGACY 0x1005u /* transitional/legacy entropy device */
+#define VIRTIO_RNG_DEV_LEGACY 0x1005u /* transitional entropy device */
 #define VIRTIO_RNG_DEV_MODERN 0x1044u /* 0x1040 + virtio device type 4 */
 
-/* Legacy virtqueue registers (no MSI-X: mirrors virtio_net.c). */
-#define VIRTIO_PCI_DEVICE_FEATURES 0x00u
-#define VIRTIO_PCI_DRIVER_FEATURES 0x04u
-#define VIRTIO_PCI_QUEUE_PFN 0x08u    /* u32: ring PFN (phys >> 12) */
-#define VIRTIO_PCI_QUEUE_SIZE 0x0Cu   /* u16: selected queue size (0 = absent) */
-#define VIRTIO_PCI_QUEUE_SELECT 0x0Eu /* u16: select the queue to configure */
-#define VIRTIO_PCI_QUEUE_NOTIFY 0x10u /* u16: doorbell — write the queue index */
-#define VIRTIO_PCI_DEVICE_STATUS 0x12u
-#define VIRTIO_PCI_ISR_STATUS 0x13u
-/* Enabling MSI-X inserts these two vector registers at 0x14/0x16. This device
- * reads no device-specific config, so unlike virtio-net nothing else shifts. */
-#define VIRTIO_PCI_MSIX_CONFIG_VECTOR 0x14u
-#define VIRTIO_PCI_MSIX_QUEUE_VECTOR 0x16u
-#define VIRTIO_MSIX_NO_VECTOR 0xFFFFu
+/* The BAR holding the virtio structures, and the region the manifest grants it
+ * as. QEMU places every modern structure in BAR 4; a device that does not is
+ * refused by virtio_modern_probe rather than driven through a window that was
+ * never granted. */
+#define VIRTIO_RNG_BAR 4u
+#define VIRTIO_RNG_REGION 0
+
 /* One source, one entry: the request queue's completion. */
 #define VIRTIO_RNG_MSIX_ENTRY_QUEUE 0u
 
-/* Legacy vring alignment fixed by the spec's page granularity (the queue address
- * is programmed as a page frame number). virtio-rng defines exactly one queue,
- * index 0, the requestq; VIRTIO_RNG_MAX_QUEUE caps how large a queue this driver
- * will accept from the device, since the descriptor bookkeeping is statically
- * sized. */
-#define VIRTIO_PCI_VRING_ALIGN 4096u
+/* virtio-rng defines exactly one queue, index 0, the requestq;
+ * VIRTIO_RNG_MAX_QUEUE caps how large a queue this driver will accept from the
+ * device, since the descriptor bookkeeping is statically sized. */
 #define VIRTIO_RNG_REQUEST_QUEUE 0u
 #define VIRTIO_RNG_MAX_QUEUE 256u /* max supported queue size */
-
-/* Device-status bits, ORed into VIRTIO_PCI_DEVICE_STATUS in ascending order as
- * bring-up progresses (ACK, then DRIVER, then DRIVER_OK once the queue is live).
- * The bits accumulate; FAILED reports that the driver gave up, and a status of 0
- * resets the device. */
-#define VIRTIO_STATUS_ACK 1u
-#define VIRTIO_STATUS_DRIVER 2u
-#define VIRTIO_STATUS_DRIVER_OK 4u
-#define VIRTIO_STATUS_FAILED 128u
 
 /* One page of DMA-visible scratch the device fills with entropy per request. */
 #define RNG_POOL_SIZE 4096u
@@ -78,12 +59,13 @@ typedef struct {
     uint8_t slot;
     uint8_t function;
     uint8_t irq;
-    uint16_t io_base;
     uint16_t vendor_id;
     uint16_t device_id;
     uint32_t device_features;
     uint8_t msix_enabled; /* MSI-X bound: the device no longer drives INTx */
     uint32_t msix_vector; /* kernel vector behind entry 0 */
+    virtio_modern_t vm;   /* the transport: where the device's structures are */
+    uint32_t notify;      /* the request queue's doorbell offset in region 0 */
 } virtio_rng_device_t;
 
 static int32_t g_endpoint = -1;
@@ -99,39 +81,6 @@ static virtio_rng_device_t g_dev;
 static vring_t g_rq; /* the single request virtqueue (device -> driver) */
 static uint8_t* g_pool;
 static uint64_t g_pool_phys;
-
-static uint32_t pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg) {
-    uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)function << 8) | ((uint32_t)reg & 0xFCu);
-    (void)wasmos_io_out32(PCI_CFG_ADDR_PORT, (int32_t)address);
-    uint32_t value = 0xFFFFFFFFu; /* an absent device reads back all-ones */
-    (void)wasmos_io_in32(PCI_CFG_DATA_PORT, &value);
-    return value;
-}
-
-static uint16_t io_read16(uint16_t port) {
-    uint16_t value = 0xFFFFu; /* an absent device reads back all-ones */
-    (void)wasmos_io_in16((int32_t)port, &value);
-    return value;
-}
-
-static uint32_t io_read32(uint16_t port) {
-    uint32_t value = 0xFFFFFFFFu;
-    (void)wasmos_io_in32((int32_t)port, &value);
-    return value;
-}
-
-static void io_write8(uint16_t port, uint8_t value) {
-    (void)wasmos_io_out8((int32_t)port, (int32_t)value);
-}
-
-static void io_write16(uint16_t port, uint16_t value) {
-    (void)wasmos_io_out16((int32_t)port, (int32_t)value);
-}
-
-static void io_write32(uint16_t port, uint32_t value) {
-    (void)wasmos_io_out32((int32_t)port, (int32_t)value);
-}
 
 static int is_virtio_rng_device(uint16_t vendor_id, uint16_t device_id) {
     if (vendor_id != VIRTIO_PCI_VENDOR_ID) {
@@ -192,19 +141,17 @@ static const char* find_token_value(const char* args, const char* key) {
     }
 }
 
-/* PCI-rule spawns pass the matched BAR/IRQ identity through startup args because
- * the driver's io.port grant is scoped to the device BAR, not the PCI config
- * ports a fresh scan needs (see virtio_net.c). This is the primary probe path;
- * probe_virtio_rng() is only a fallback for manual launches. */
+/* A PCI-rule spawn names the matched function and its IRQ line in the startup
+ * args; the driver is spawned for exactly that device and has no way to look for
+ * another (it may read only its own function's config space). */
 static int probe_virtio_rng_from_startup_args(void) {
     char args[128];
     const char* pci;
     const char* vendor;
     const char* device;
-    const char* io;
     const char* irq;
     uint32_t bus = 0, slot = 0, function = 0;
-    uint32_t vendor_id = 0, device_id = 0, io_base = 0, irq_line = 0;
+    uint32_t vendor_id = 0, device_id = 0, irq_line = 0;
 
     if (wasmos_startup_args(args, sizeof(args)) == 0u) {
         return -1;
@@ -212,85 +159,48 @@ static int probe_virtio_rng_from_startup_args(void) {
     pci = find_token_value(args, "pci=");
     vendor = find_token_value(args, "vendor=");
     device = find_token_value(args, "device=");
-    io = find_token_value(args, "io=");
     irq = find_token_value(args, "irq=");
-    if (!pci || !vendor || !device || !io || !irq) {
+    if (!pci || !vendor || !device || !irq) {
         return -1;
     }
     if (parse_hex_n(pci, 2u, &bus) != 0 || pci[2] != ':' || parse_hex_n(pci + 3, 2u, &slot) != 0 ||
         pci[5] != '.' || parse_hex_n(pci + 6, 2u, &function) != 0 ||
         parse_hex_n(vendor, 4u, &vendor_id) != 0 || parse_hex_n(device, 4u, &device_id) != 0 ||
-        parse_hex_n(io, 4u, &io_base) != 0 || parse_hex_n(irq, 2u, &irq_line) != 0) {
+        parse_hex_n(irq, 2u, &irq_line) != 0) {
         return -1;
     }
-    if (!is_virtio_rng_device((uint16_t)vendor_id, (uint16_t)device_id) || io_base == 0u) {
+    if (!is_virtio_rng_device((uint16_t)vendor_id, (uint16_t)device_id)) {
         return -1;
     }
     g_dev.present = 1u;
     g_dev.bus = (uint8_t)bus;
     g_dev.slot = (uint8_t)slot;
     g_dev.function = (uint8_t)function;
-    g_dev.io_base = (uint16_t)io_base;
     g_dev.irq = (uint8_t)irq_line;
     g_dev.vendor_id = (uint16_t)vendor_id;
     g_dev.device_id = (uint16_t)device_id;
     return 0;
 }
 
-static int probe_virtio_rng(void) {
-    for (uint16_t bus = 0; bus < 256; ++bus) {
-        for (uint8_t slot = 0; slot < 32; ++slot) {
-            for (uint8_t function = 0; function < 8; ++function) {
-                uint32_t id = pci_config_read32((uint8_t)bus, slot, function, 0x00);
-                uint16_t vendor_id = (uint16_t)(id & 0xFFFFu);
-                uint16_t device_id = (uint16_t)((id >> 16) & 0xFFFFu);
-                uint32_t bar0;
-                if (vendor_id == 0xFFFFu) {
-                    if (function == 0u) {
-                        break;
-                    }
-                    continue;
-                }
-                if (!is_virtio_rng_device(vendor_id, device_id)) {
-                    continue;
-                }
-                bar0 = pci_config_read32((uint8_t)bus, slot, function, 0x10);
-                if ((bar0 & 0x1u) == 0u) {
-                    continue; /* not an I/O BAR */
-                }
-                g_dev.present = 1u;
-                g_dev.bus = (uint8_t)bus;
-                g_dev.slot = slot;
-                g_dev.function = function;
-                g_dev.io_base = (uint16_t)(bar0 & 0xFFFCu);
-                g_dev.irq =
-                    (uint8_t)(pci_config_read32((uint8_t)bus, slot, function, 0x3C) & 0xFFu);
-                g_dev.vendor_id = vendor_id;
-                g_dev.device_id = device_id;
-                return 0;
-            }
-        }
-    }
-    return -1;
-}
-
 /* vring doorbell: tell the device the request queue has new available buffers. */
 static void virtio_rng_notify(void* user) {
     (void)user;
-    io_write16(g_dev.io_base + VIRTIO_PCI_QUEUE_NOTIFY, (uint16_t)VIRTIO_RNG_REQUEST_QUEUE);
+    virtio_modern_notify(&g_dev.vm, g_dev.notify, (uint16_t)VIRTIO_RNG_REQUEST_QUEUE);
 }
 
-/* Configure the request virtqueue over a pinned DMA region and program its PFN
- * into the device. Returns the queue size, or -1 on failure. Mirrors
- * virtio_net.c::setup_queue. */
+/* Configure the request virtqueue over a pinned DMA region and hand it to the
+ * device, bound to its MSI-X entry when MSI-X is live. Returns the queue size,
+ * or -1 on failure. */
 static int setup_queue(void) {
-    io_write16(g_dev.io_base + VIRTIO_PCI_QUEUE_SELECT, (uint16_t)VIRTIO_RNG_REQUEST_QUEUE);
-    uint16_t qsize = io_read16(g_dev.io_base + VIRTIO_PCI_QUEUE_SIZE);
-    if (qsize == 0u || qsize > VIRTIO_RNG_MAX_QUEUE) {
+    uint16_t qsize = virtio_modern_queue_size(&g_dev.vm, (uint16_t)VIRTIO_RNG_REQUEST_QUEUE);
+    if (qsize == 0u) {
         return -1;
     }
+    if (qsize > VIRTIO_RNG_MAX_QUEUE) {
+        qsize = VIRTIO_RNG_MAX_QUEUE; /* a modern device accepts a smaller size */
+    }
 
-    uint64_t ring_bytes = vring_size(qsize, VIRTIO_PCI_VRING_ALIGN);
+    uint64_t ring_bytes = vring_size(qsize, VIRTIO_MODERN_VRING_ALIGN);
     int32_t pages = (int32_t)((ring_bytes + 0xFFFu) / 0x1000u);
     uint64_t ring_phys = 0;
     int32_t off = wasmos_region_alloc(pages, WASMOS_REGION_CACHE_WB, &ring_phys);
@@ -299,21 +209,19 @@ static int setup_queue(void) {
     }
     uint8_t* ring = ptr_cast(uint8_t, (uint32_t)off);
     if (vring_layout(
-            &g_rq, ring, ring_phys, (uint64_t)pages * 0x1000u, qsize, VIRTIO_PCI_VRING_ALIGN) !=
+            &g_rq, ring, ring_phys, (uint64_t)pages * 0x1000u, qsize, VIRTIO_MODERN_VRING_ALIGN) !=
         0) {
         return -1;
     }
     vring_set_notify(&g_rq, virtio_rng_notify, 0);
-    io_write32(g_dev.io_base + VIRTIO_PCI_QUEUE_PFN, (uint32_t)(ring_phys >> 12));
-
-    /* Bind the request queue to its MSI-X entry. QUEUE_SELECT above still points
-     * at this queue; virtio reports refusal through the readback. */
-    if (g_dev.msix_enabled) {
-        io_write16(g_dev.io_base + VIRTIO_PCI_MSIX_QUEUE_VECTOR, VIRTIO_RNG_MSIX_ENTRY_QUEUE);
-        if (io_read16(g_dev.io_base + VIRTIO_PCI_MSIX_QUEUE_VECTOR) == VIRTIO_MSIX_NO_VECTOR) {
-            (void)printf("[virtio-rng] msix queue vector refused\n");
-            return -1;
-        }
+    if (virtio_modern_queue_enable(&g_dev.vm,
+                                   (uint16_t)VIRTIO_RNG_REQUEST_QUEUE,
+                                   &g_rq,
+                                   g_dev.msix_enabled ? (uint16_t)VIRTIO_RNG_MSIX_ENTRY_QUEUE
+                                                      : (uint16_t)VIRTIO_MSI_NO_VECTOR,
+                                   &g_dev.notify) != 0) {
+        (void)printf("[virtio-rng] msix queue vector refused\n");
+        return -1;
     }
     return (int)qsize;
 }
@@ -325,7 +233,12 @@ static int setup_queue(void) {
  * Moving this device off INTx matters beyond its own latency: under QEMU it
  * shares IRQ 11 with virtio-net, and a shared wire is what forced the whole
  * sharer/ack/deadline machinery in the kernel. A message-signalled vector is
- * nobody else's. Returns 0 when MSI-X is live. */
+ * nobody else's. Returns 0 when MSI-X is live.
+ *
+ * TODO: both pci-bus requests below are synchronous wasmos_ipc_call round
+ * trips, which AGENTS.md no longer allows for new code; they predate that rule
+ * and move to a future together with the driver's bring-up (docs/TASKS.md,
+ * synchronous call removal). */
 static int rng_setup_msix(void) {
     if (g_pci_endpoint < 0) {
         return -1;
@@ -363,24 +276,29 @@ static int rng_setup_msix(void) {
     return 0;
 }
 
+/* Brings the device up over the modern transport: locate its structures,
+ * negotiate (virtio-rng has no feature of its own, so only VERSION_1), bind
+ * MSI-X, configure the request queue and the entropy pool, then DRIVER_OK. */
 static int initialize_device(void) {
-    uint8_t status = 0u;
-    if (!g_dev.present || g_dev.io_base == 0u) {
+    uint8_t status = VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK;
+    uint64_t accepted = 0;
+    uint32_t bdf =
+        ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
+    if (!g_dev.present) {
         return -1;
     }
+    if (virtio_modern_probe(&g_dev.vm, bdf, VIRTIO_RNG_BAR, VIRTIO_RNG_REGION) != 0) {
+        (void)printf("[virtio-rng] no virtio-modern structures in BAR %u\n",
+                     (unsigned)VIRTIO_RNG_BAR);
+        return -1;
+    }
+    if (virtio_modern_negotiate(&g_dev.vm, 0u, &accepted) != 0) {
+        (void)printf("[virtio-rng] feature negotiation failed\n");
+        return -1;
+    }
+    g_dev.device_features = (uint32_t)(accepted >> 32);
 
-    io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, 0u);
-    status = VIRTIO_STATUS_ACK;
-    io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, status);
-    status |= VIRTIO_STATUS_DRIVER;
-    io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, status);
-
-    /* virtio-rng has no driver-relevant feature bits; accept none. */
-    g_dev.device_features = io_read32(g_dev.io_base + VIRTIO_PCI_DEVICE_FEATURES);
-    io_write32(g_dev.io_base + VIRTIO_PCI_DRIVER_FEATURES, 0u);
-
-    /* Before queue setup: the queue's vector register only exists once MSI-X is
-     * enabled, and setup_queue writes it. */
+    /* Before queue setup, which binds the queue to its MSI-X entry. */
     if (rng_setup_msix() == 0) {
         (void)printf("[virtio-rng] msix enabled vector=%u\n", (unsigned)g_dev.msix_vector);
     } else {
@@ -390,8 +308,7 @@ static int initialize_device(void) {
 
     int qsize = setup_queue();
     if (qsize < 0) {
-        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS,
-                  (uint8_t)(status | VIRTIO_STATUS_FAILED));
+        virtio_modern_set_status(&g_dev.vm, (uint8_t)(status | VIRTIO_STATUS_FAILED));
         return -1;
     }
 
@@ -400,15 +317,13 @@ static int initialize_device(void) {
     uint64_t phys = 0;
     int32_t off = wasmos_region_alloc(pages, WASMOS_REGION_CACHE_WB, &phys);
     if (off < 0) {
-        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS,
-                  (uint8_t)(status | VIRTIO_STATUS_FAILED));
+        virtio_modern_set_status(&g_dev.vm, (uint8_t)(status | VIRTIO_STATUS_FAILED));
         return -1;
     }
     g_pool = ptr_cast(uint8_t, (uint32_t)off);
     g_pool_phys = phys;
 
-    status |= VIRTIO_STATUS_DRIVER_OK;
-    io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, status);
+    virtio_modern_set_status(&g_dev.vm, (uint8_t)(status | VIRTIO_STATUS_DRIVER_OK));
     g_dev.ready = 1u;
     (void)printf("[virtio-rng] vq ready qsize=%d ring_phys=0x%08X pool_phys=0x%08X\n",
                  qsize,
@@ -438,8 +353,7 @@ static void rng_service_irq(void) {
         return;
     }
     /* Reading ISR is itself the ack; the value is not wanted. */
-    uint8_t isr = 0u;
-    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS), &isr);
+    (void)virtio_modern_isr(&g_dev.vm);
     (void)wasmos_irq_ack((int32_t)g_dev.irq);
 }
 
@@ -572,17 +486,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
     g_dev.present = 0u;
     g_dev.ready = 0u;
-    if (probe_virtio_rng_from_startup_args() == 0 || probe_virtio_rng() == 0) {
+    if (probe_virtio_rng_from_startup_args() == 0) {
         if (initialize_device() != 0) {
-            (void)printf("[virtio-rng] init failed io=0x%04X dev=0x%04X\n",
-                         (unsigned)g_dev.io_base,
-                         (unsigned)g_dev.device_id);
+            (void)printf("[virtio-rng] init failed dev=0x%04X\n", (unsigned)g_dev.device_id);
         } else {
-            (void)printf("[virtio-rng] probe ok bus=%u slot=%u dev=0x%04X io=0x%04X\n",
+            (void)printf("[virtio-rng] probe ok bus=%u slot=%u dev=0x%04X modern\n",
                          (unsigned)g_dev.bus,
                          (unsigned)g_dev.slot,
-                         (unsigned)g_dev.device_id,
-                         (unsigned)g_dev.io_base);
+                         (unsigned)g_dev.device_id);
         }
     } else {
         (void)printf("[virtio-rng] no device found\n");

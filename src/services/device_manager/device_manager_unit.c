@@ -69,7 +69,7 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
     memset(&window, 0, sizeof(window));
     if ((caps->cap_flags & DEVMGR_CAP_DMA) != 0) {
         header.dma.direction_flags = WASMOS_DMA_DIR_BIDIR;
-        header.dma.max_bytes = 4096u;
+        header.dma.max_bytes = caps->dma_max_bytes ? caps->dma_max_bytes : 4096u;
         header.dma.window_count = 1u;
         window.base = 0;
         window.length = 0x80000000ull;

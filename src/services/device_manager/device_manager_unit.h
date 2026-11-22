@@ -21,7 +21,8 @@ int32_t dm_unit_spec(const char* rule_path, const char* instance, const char* pa
 
 /* Encodes caps as a wasmos_spawn_caps_v2_t followed by its region grants, and by
  * the default DMA window when caps asks for DMA (the grant the packed spawn
- * opcodes synthesise). A caps without grants carries its single window in
+ * opcodes synthesise), with caps->dma_max_bytes as its budget (one page when
+ * that is 0). A caps without grants carries its single window in
  * io_port_min/max. A caps naming its PCI function carries it as
  * DEVMGR_CAP_PCI_FUNCTION and dma.pci_function. Returns the descriptor's
  * length, or -1 when it would not fit out_cap bytes. */

@@ -159,6 +159,22 @@ enum {
      * Only the kernel sends it; a guest send of this type is refused.
      */
     PROC_IPC_CHILD_EXITED = 0x215,
+    /* What the package at a filesystem path declares about itself, for a
+     * driver that is not a boot module (PROC_IPC_MODULE_META_DESC covers
+     * those). The request is a wasmos_module_meta_file_desc_t in a transfer
+     * buffer the caller owns and has lent READ|WRITE to the process
+     * manager: arg0=buffer_id arg1=offset arg2=size of the region; the path
+     * lies in the same region at the offset the descriptor names. The
+     * process manager reads the package through fs-manager, as it does for
+     * a path spawn, and writes the module's wasmos_module_meta_desc_t into
+     * the descriptor. Answered once the read completes, so a caller must
+     * treat it as a deferred reply.
+     * On success: PROC_IPC_RESP, arg0=sizeof(wasmos_module_meta_desc_t).
+     * On failure: PROC_IPC_ERROR, arg1=WASMOS_ERR_PROC_PM_META_BAD_DESC,
+     * _CALLER_FSBUF, _FS_UNAVAILABLE, _NO_PM_FSBUF, _META_LOOKUP (the file
+     * could not be read or is not a package) or _META_NOT_DRIVER.
+     */
+    PROC_IPC_MODULE_META_FILE = 0x216,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF,
 };
@@ -1397,6 +1413,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x213: return "PROC_IPC_SPAWN_WATCHED";
         case 0x214: return "PROC_IPC_CHILD_READY";
         case 0x215: return "PROC_IPC_CHILD_EXITED";
+        case 0x216: return "PROC_IPC_MODULE_META_FILE";
         case 0x280: return "PROC_IPC_RESP";
         case 0x2FF: return "PROC_IPC_ERROR";
         default: return "UNKNOWN";

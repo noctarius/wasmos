@@ -89,6 +89,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY` | -0x00020023 | the process manager answered a service-watch request with neither its response nor a packed error |
 | `WASMOS_ERR_PROC_PM_KILL_NOT_CHILD` | -0x00020024 | the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself |
 | `WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED` | -0x00020025 | the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created |
+| `WASMOS_ERR_PROC_PM_META_BAD_DESC` | -0x00020026 | a PROC_IPC_MODULE_META_FILE descriptor was short, of an unknown version, or its path is empty, too long or outside the region it names |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 

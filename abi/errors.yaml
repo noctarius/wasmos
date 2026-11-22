@@ -107,6 +107,7 @@ domains:
       - { name: SVC_WATCH_BAD_REPLY, description: "the process manager answered a service-watch request with neither its response nor a packed error" }
       - { name: KILL_NOT_CHILD,      description: "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself" }
       - { name: GRANT_NOT_AUTHORIZED, description: "the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created" }
+      - { name: META_BAD_DESC,       description: "a PROC_IPC_MODULE_META_FILE descriptor was short, of an unknown version, or its path is empty, too long or outside the region it names" }
 
   linmem:
     id: 3

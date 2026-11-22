@@ -96,6 +96,10 @@ typedef struct {
      * the kernel quiesces that function when the driver ends. */
     uint8_t pci_function_valid;
     uint16_t pci_function;
+    /* The DMA pinning budget in bytes a DMA grant carries: the driver's declared
+     * budget (wasmos_module_meta_desc_t.dma_budget_pages) when its metadata is
+     * known, 0 for the single-page default otherwise. */
+    uint32_t dma_max_bytes;
 } spawn_caps_t;
 
 /* One entry in the PCI device registry; populated from pci_bus scan messages. */
@@ -314,13 +318,16 @@ typedef struct {
 /* Rule: spawn a driver when a PCI device matching class/vendor/device is found.
  * spawned_device_mask is a bitmask of registry[] indices already spawned.
  *
- * `meta` caches what the module this rule names declares about itself, fetched
- * once when the PCI inventory is consumed. It is cached rather than queried on
- * demand because the queue walk runs inside event-handler dispatch, where a
- * blocking request would be a nested receive; with the descriptor in hand,
- * resolving a device's windows is pure. `meta_valid` is 0 when the module could
- * not be resolved, in which case the rule still spawns, just without declared
- * windows. */
+ * `meta` caches what the driver this rule names declares about itself, fetched
+ * when the PCI inventory is consumed: synchronously by module index for a boot
+ * module (`meta_from_module`, which also means the driver is spawned from
+ * /init), and with a deferred PROC_IPC_MODULE_META_FILE for a driver on a
+ * filesystem (`meta_pending` until the answer arrives; the rule is not armed
+ * meanwhile, so it cannot spawn without the windows it declared). It is cached
+ * rather than queried on demand because the queue walk runs inside
+ * event-handler dispatch; with the descriptor in hand, resolving a device's
+ * windows is pure. `meta_valid` is 0 when the driver could not be described, in
+ * which case the rule still spawns, just without declared windows. */
 typedef struct {
     uint8_t active;
     uint8_t bus;
@@ -338,6 +345,8 @@ typedef struct {
     uint64_t given_up_device_mask;
     char spawn_path[96];
     uint8_t meta_valid;
+    uint8_t meta_from_module;
+    uint8_t meta_pending;
     wasmos_module_meta_desc_t meta;
     /* ENV{RESTART}, as on acpi_match_rule_t. */
     char restart[12];
@@ -402,6 +411,13 @@ typedef struct {
      * corrupts active_rule_spawn_* state -- so the refresh is deferred to a
      * point where nothing is pending. */
     uint8_t pci_rule_meta_dirty;
+    /* One PROC_IPC_MODULE_META_FILE in flight at a time, sent for rule set
+     * generation meta_req_generation; a reply for an older generation (the rules
+     * were reloaded meanwhile) only releases its buffer. */
+    uint8_t meta_req_pending;
+    int32_t meta_req_bid;
+    uint32_t meta_req_generation;
+    uint32_t meta_generation;
     uint8_t rules_roots_logged;
     uint8_t idle_logged;
     uint8_t rules_init_fail_logged;

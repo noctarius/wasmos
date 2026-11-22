@@ -1116,7 +1116,57 @@ static void a_driver_that_never_comes_up_does_not_starve_the_queue(void) {
     check(!g_dm.rule_spawn_pending, "and with both settled nothing is re-armed");
 }
 
+/* A virtio-rng-like PCI device and the rule that names its driver. */
+static void add_pci_device_and_rule(void) {
+    pci_device_record_t* rec = &g_dm.registry[g_dm.registry_count++];
+    pci_match_rule_t* rule = &g_dm.pci_match_rules[g_dm.pci_match_rule_count++];
+    memset(rec, 0, sizeof(*rec));
+    rec->bus = 0;
+    rec->device = 4;
+    rec->vendor_id = 0x1AF4u;
+    rec->device_id = 0x1005u;
+    rec->io_port_base = 0xC000u;
+    rec->irq_hint = 11u;
+    memset(rule, 0, sizeof(*rule));
+    rule->active = 1;
+    rule->vendor_id = 0x1AF4u;
+    rule->device_id = 0x1005u;
+    rule->class_code = 0xFFu;
+    rule->subclass = 0xFFu;
+    rule->prog_if = 0xFFu;
+    rule->bus = 0xFFu;
+    rule->slot = 0xFFu;
+    rule->function = 0xFFu;
+    (void)snprintf(rule->spawn_path, sizeof(rule->spawn_path), "system/drivers/virtio_rng.wap");
+}
+
+/* Regression: 2026-11-22-pci-rule-armed-with-stale-metadata -- loading a rule set
+ * drops every PCI rule's cached driver metadata and re-drives the spawn queue at
+ * once, before the metadata is fetched again. The queue armed the PCI rule with
+ * none, so the driver was spawned with the legacy BAR0-derived I/O window
+ * instead of the register windows it declared -- for virtio-rng, a port window
+ * where its virtio-modern registers are device memory in BAR 4. */
+static void a_pci_rule_waits_for_its_drivers_metadata(void) {
+    harness_reset();
+    add_pci_device_and_rule();
+    g_dm.pci_rule_meta_dirty = 1; /* a rule set was just loaded */
+    queue_block_fs_rule_spawns();
+    check(!g_dm.rule_spawn_pending, "a PCI rule is not armed while its metadata is stale");
+
+    harness_reset();
+    add_pci_device_and_rule();
+    g_dm.pci_match_rules[0].meta_pending = 1; /* described by a deferred request */
+    queue_block_fs_rule_spawns();
+    check(!g_dm.rule_spawn_pending, "nor while its driver is still being described");
+
+    g_dm.pci_match_rules[0].meta_pending = 0;
+    queue_block_fs_rule_spawns();
+    check(g_dm.rule_spawn_pending && g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH,
+          "and is armed once the metadata is in");
+}
+
 int main(void) {
+    a_pci_rule_waits_for_its_drivers_metadata();
     a_driver_that_never_comes_up_does_not_starve_the_queue();
     publish_after_rules_reports_the_match();
     rescan_after_late_rules_reports_the_match();

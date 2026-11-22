@@ -318,6 +318,18 @@ enum {
     PROC_STATUS_READY = 3,
 };
 
+/* Version of wasmos_module_meta_file_desc_t, the request and reply record
+ * of PROC_IPC_MODULE_META_FILE, declared in
+ * src/drivers/include/wasmos_driver_abi.h; the path follows it in the
+ * caller's buffer at the offset it names.
+ *
+ * A reader MUST reject a descriptor whose version it does not know.
+ */
+enum {
+    /* Current wasmos_module_meta_file_desc_t layout. */
+    MODULE_META_FILE_DESC_VERSION = 1,
+};
+
 /* Version and size ceilings of wasmos_spawn_watch_desc_t, the request and
  * reply record of PROC_IPC_SPAWN_WATCHED. The struct is declared in
  * src/drivers/include/wasmos_driver_abi.h; path and args bytes follow it in

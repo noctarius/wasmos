@@ -259,6 +259,14 @@ linked feature documents for rationale and rollout plans.
   ready within 5 s is given up rather than spawned again (the synchronous form
   answered a timeout with an error while the child kept running, and the retry
   started a second driver for the same device).
+- `virtio-rng` runs on the virtio 1.x PCI transport (`wasmos/virtio_modern.h`):
+  its registers are a memory-mapped BAR 4 window and it uses no I/O port. A
+  driver may read the config space of the function its spawn profile names,
+  which is how it finds those registers. device-manager describes a driver on
+  `/boot` by path (`PROC_IPC_MODULE_META_FILE`), so declared windows work for
+  drivers outside the boot image, and a DMA grant carries the budget the
+  driver's manifest declares instead of a fixed page. virtio-serial, virtio-net
+  and virtio-blk still use the legacy I/O-BAR transport.
 - Guest-visible capability behaviour must not depend on the engine. Where a
   difference is unavoidable, the scenario table carries an explicit `divergent`
   flag that asserts the two still differ, so converging them forces the row to

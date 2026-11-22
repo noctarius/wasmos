@@ -266,9 +266,17 @@ IPC.
 - **Kind:** WASM driver
 - **PCI match:** vendor `0x1AF4`, device `0x1005` (transitional) or `0x1044`
   (modern)
-- **Capabilities:** `io.port`, `dma.buffer`, `svc.class`
+- **Capabilities:** `mmio.map`, `irq.route`, `dma.buffer`, `svc.class`
+- **Regions:** region 0 = BAR 4 (`kind = "bar"`), a memory-mapped window
 - **Registers:** concrete service `virtio-rng`, class `hrng`, instance `0`
 - **Entry bindings:** `proc.endpoint`
+
+The driver speaks the virtio 1.x PCI transport (`wasmos/virtio_modern.h`): it
+finds its common-config, notify and ISR structures in its own function's
+capability list (`virtio_pci_caps.h`, read through `pci_config_read`, which a
+driver may use for the function its spawn profile names) and reaches them
+through its BAR 4 window with the `io_region_*` host calls. A device that
+places them in another BAR is refused. It touches no I/O port.
 
 The driver owns one request virtqueue and a 4096-byte DMA pool. A client grants
 the driver write access to a transfer buffer and sends `HRNG_IPC_GET_BYTES_REQ`.

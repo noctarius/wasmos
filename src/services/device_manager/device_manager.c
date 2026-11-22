@@ -56,6 +56,7 @@ static device_manager_state_t g_dm = {
     .sv_endpoint = -1,
     .supervisor_endpoint = -1,
     .watch_spawn_bid = -1,
+    .meta_req_bid = -1,
     .spawn_endpoint = -1,
     .active_rule_spawn_kind = 0,
     .active_rule_spawn_index = -1,
@@ -159,6 +160,7 @@ static void queue_always_spawn_rules(void);
 static void queue_pci_match_rule_spawns(void);
 static void queue_acpi_match_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
+static void dm_meta_file_next(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char* name);
 static const char* devmgr_subsystem_name(uint8_t subsystem);
@@ -1264,9 +1266,18 @@ static void queue_always_spawn_rules(void) {
  * match, populate active_rule_spawn_* and set rule_spawn_pending=1.
  * Only one spawn is queued at a time; caller re-invokes after completion. */
 static void queue_pci_match_rule_spawns(void) {
+    /* A rule set was loaded and its drivers' metadata is not fetched again yet
+     * (load_pci_rule_metadata runs at the spawn-quiescent point in initialize()
+     * and re-drives this queue): every PCI rule would be armed without the
+     * windows its driver declares. */
+    if (g_dm.pci_rule_meta_dirty) {
+        return;
+    }
     for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
         pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
-        if (!rule->active || rule->spawn_path[0] == '\0') {
+        /* A rule whose driver is still being described waits: armed now, it
+         * would spawn without the windows the driver declares. */
+        if (!rule->active || rule->spawn_path[0] == '\0' || rule->meta_pending) {
             continue;
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
@@ -1300,6 +1311,7 @@ static void queue_pci_match_rule_spawns(void) {
                  * "PM resolves the line", used when the device record carries no
                  * usable hint; a real hint overrides it. */
                 g_dm.active_rule_spawn_caps.cap_flags = rule->meta.cap_flags & 0xFFFFu;
+                g_dm.active_rule_spawn_caps.dma_max_bytes = rule->meta.dma_budget_pages * 4096u;
                 g_dm.active_rule_spawn_caps.irq_mask = (uint16_t)((1u << 14) | (1u << 15));
                 if (rec->irq_hint < 16u) {
                     g_dm.active_rule_spawn_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
@@ -2459,20 +2471,117 @@ static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_devic
            (rule->device_id == MATCH_ANY_U16 || rec->device_id == rule->device_id);
 }
 
-/* Fetch and cache each PCI rule's module descriptor, and identify the boot
+/* The answer to the PROC_IPC_MODULE_META_FILE in flight: the described rule
+ * gets its declared windows (or, on a refusal, spawns without them, as a rule
+ * with no metadata always has), the buffer is released -- which also revokes
+ * the PM's loan -- and the next undescribed rule is asked about. Once none is
+ * left, the queue is re-driven, since the rules held back may now be armed. A
+ * reply for a rule set that has since been reloaded only releases the buffer. */
+static void dm_on_meta_file_reply(void* user, const wasmos_ipc_message_t* msg) {
+    uint32_t ri = (uint32_t)(uintptr_t)user;
+    wasmos_module_meta_file_desc_t desc;
+    int ok = msg->type == PROC_IPC_RESP && g_dm.meta_req_bid >= 0 &&
+             wasmos_xfer_buffer_read(g_dm.meta_req_bid, &desc, (int32_t)sizeof(desc), 0) == 0 &&
+             desc.meta.version == WASMOS_MODULE_META_DESC_VERSION;
+    if (g_dm.meta_req_bid >= 0) {
+        (void)wasmos_xfer_buffer_release(g_dm.meta_req_bid);
+        g_dm.meta_req_bid = -1;
+    }
+    g_dm.meta_req_pending = 0;
+    if (g_dm.meta_req_generation == g_dm.meta_generation && ri < g_dm.pci_match_rule_count) {
+        pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
+        rule->meta_pending = 0;
+        if (ok) {
+            rule->meta = desc.meta;
+            rule->meta_valid = 1;
+        } else {
+            (void)printf("[device-manager] no metadata for %s (code %d); spawning it without "
+                         "declared windows\n",
+                         rule->spawn_path,
+                         (int)msg->arg1);
+        }
+    }
+    dm_meta_file_next();
+    if (!g_dm.meta_req_pending) {
+        queue_block_fs_rule_spawns();
+    }
+}
+
+/* Asks the process manager to describe the first rule's driver that is not a
+ * boot module and still waits for metadata, unless a request is already in
+ * flight. The driver is read from where it would be spawned: /boot once that is
+ * mounted, the initfs before. A request that cannot be sent leaves that rule
+ * without metadata and moves on, so no rule waits forever. */
+static void dm_meta_file_next(void) {
+    static uint8_t req[sizeof(wasmos_module_meta_file_desc_t) + 104];
+    wasmos_module_meta_file_desc_t desc;
+    char path[104];
+    if (g_dm.meta_req_pending) {
+        return;
+    }
+    for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
+        pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
+        int32_t bid;
+        uint32_t path_len;
+        if (!rule->meta_pending) {
+            continue;
+        }
+        path[0] = '\0';
+        str_copy(path, sizeof(path), g_dm.boot_mount_ready ? "/boot/" : "/init/");
+        wasmos_sys_str_append(path, sizeof(path), rule->spawn_path);
+        path_len = (uint32_t)strlen(path);
+        memset(&desc, 0, sizeof(desc));
+        desc.version = MODULE_META_FILE_DESC_VERSION;
+        desc.path_off = (uint32_t)sizeof(desc);
+        desc.path_len = path_len;
+        memcpy(req, &desc, sizeof(desc));
+        memcpy(req + sizeof(desc), path, path_len);
+        bid = wasmos_xfer_stage(req, (int32_t)(sizeof(desc) + path_len));
+        if (bid >= 0 &&
+            wasmos_xfer_buffer_borrow(g_dm.proc_endpoint,
+                                      bid,
+                                      WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE) >= 0 &&
+            wasmos_sys_intent_send(&g_dm_spawn_loop,
+                                   g_dm.proc_endpoint,
+                                   g_dm.spawn_endpoint,
+                                   PROC_IPC_MODULE_META_FILE,
+                                   bid,
+                                   0,
+                                   (int32_t)(sizeof(desc) + path_len),
+                                   0,
+                                   dm_on_meta_file_reply,
+                                   (void*)(uintptr_t)ri,
+                                   0) == 0) {
+            g_dm.meta_req_bid = bid;
+            g_dm.meta_req_generation = g_dm.meta_generation;
+            g_dm.meta_req_pending = 1;
+            return;
+        }
+        if (bid >= 0) {
+            (void)wasmos_xfer_buffer_release(bid);
+        }
+        rule->meta_pending = 0;
+    }
+}
+
+/* Fetch and cache each PCI rule's driver descriptor, and identify the boot
  * storage controller.
  *
- * Runs once when the PCI inventory is consumed, which is the only context where
- * a blocking request to process-manager is safe: the queue walk that consumes
- * this runs inside event-handler dispatch, where the same request would be a
- * nested receive.
+ * A boot module is described here, synchronously: this runs once when the PCI
+ * inventory is consumed, which is the only context where a blocking request to
+ * process-manager is safe -- the queue walk that consumes this runs inside
+ * event-handler dispatch, where the same request would be a nested receive. A
+ * driver on a filesystem is described by a deferred PROC_IPC_MODULE_META_FILE
+ * instead (dm_meta_file_next), since the PM reads it through fs-manager.
  *
  * The storage controller needs identifying separately because the block registry
  * names its units by the controller's PCI address, and only a rule/device pair
  * whose module declares storage_bootstrap supplies it. The first such pair wins,
- * so rule order is the tiebreak. */
+ * so rule order is the tiebreak. Only boot modules take part: the storage
+ * driver brings up the filesystem a non-module driver would be read from. */
 static void load_pci_rule_metadata(void) {
     g_dm.pci_rule_meta_dirty = 0;
+    g_dm.meta_generation++;
     reset_selected_storage();
     for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
         pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
@@ -2481,17 +2590,21 @@ static void load_pci_rule_metadata(void) {
         int32_t module_index = -1;
 
         rule->meta_valid = 0;
+        rule->meta_from_module = 0;
+        rule->meta_pending = 0;
         if (!rule->active || rule->spawn_path[0] == '\0') {
             continue;
         }
         module_index = rule_module_index(rule->spawn_path);
         if (module_index < 0) {
+            rule->meta_pending = g_dm.spawn_endpoint >= 0 ? 1u : 0u;
             continue;
         }
         if (query_driver_module_meta(module_index, &storage_bootstrap, &caps, &rule->meta) != 0) {
             continue;
         }
         rule->meta_valid = 1;
+        rule->meta_from_module = 1;
         if (!storage_bootstrap || g_dm.selected_storage_has_record) {
             continue;
         }
@@ -2505,6 +2618,7 @@ static void load_pci_rule_metadata(void) {
             break;
         }
     }
+    dm_meta_file_next();
 }
 
 static void consume_pci_inventory(void) {
@@ -3426,6 +3540,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
          * neither an event-handler callback nor mid-spawn. */
         if (g_dm.pci_rule_meta_dirty && !g_dm.rule_spawn_pending && g_dm.registry_count > 0u) {
             load_pci_rule_metadata();
+            queue_block_fs_rule_spawns();
         }
         if (g_dm.phase == HW_PHASE_SPAWN) {
             hw_spawn_target_t target = next_spawn_target();
@@ -3545,7 +3660,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                      * naming a boot module must spawn from initfs: /boot is the
                      * FAT volume the storage driver itself brings up, so
                      * spawning that driver from /boot cannot work. For a PCI
-                     * rule, meta_valid already records that its target resolved
+                     * rule, meta_from_module already records that its target resolved
                      * to a boot module.
                      *
                      * For a BLOCK_FS rule the question is whether /boot EXISTS
@@ -3559,7 +3674,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
                         g_dm.active_rule_spawn_index >= 0 &&
                         g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_match_rule_count &&
-                        g_dm.pci_match_rules[g_dm.active_rule_spawn_index].meta_valid) {
+                        g_dm.pci_match_rules[g_dm.active_rule_spawn_index].meta_from_module) {
                         from_initfs = 1;
                     }
                     spawn_path[0] = '\0';

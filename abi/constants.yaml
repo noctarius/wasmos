@@ -310,6 +310,17 @@ groups:
       - { symbol: PROC_STATUS_ZOMBIE, value: 2, doc: "Exited; slot held until its status is collected." }
       - { symbol: PROC_STATUS_READY, value: 3, doc: "Alive and announced ready." }
 
+  - name: module_meta_file_desc
+    doc: |
+      Version of wasmos_module_meta_file_desc_t, the request and reply record
+      of PROC_IPC_MODULE_META_FILE, declared in
+      src/drivers/include/wasmos_driver_abi.h; the path follows it in the
+      caller's buffer at the offset it names.
+
+      A reader MUST reject a descriptor whose version it does not know.
+    constants:
+      - { symbol: MODULE_META_FILE_DESC_VERSION, value: 1, doc: "Current wasmos_module_meta_file_desc_t layout." }
+
   - name: spawn_watch_desc
     doc: |
       Version and size ceilings of wasmos_spawn_watch_desc_t, the request and

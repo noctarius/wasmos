@@ -552,7 +552,7 @@ enum { WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0, WASMOS_IRQ_POLARITY_LOW = 1 << 1 };
  *
  * The consumer supplies the buffer and lends it WRITE; PM fills it and replies
  * with the byte count. Versioned and length-checked, so it grows by appending. */
-#define WASMOS_MODULE_META_DESC_VERSION 2u
+#define WASMOS_MODULE_META_DESC_VERSION 3u
 
 /* Region kinds. Mirrors the app-format enum in src/kernel/include/wasmos_app.h;
  * a service cannot include kernel headers, so the two must move together. */
@@ -593,7 +593,28 @@ typedef struct __attribute__((packed)) {
     uint32_t cap_flags;
     uint32_t region_count;
     wasmos_region_desc_t regions[WASMOS_MODULE_META_MAX_REGIONS];
+    /* The DMA pinning budget the package declares, in pages (the flags of its
+     * dma.buffer capability); 0 when it requests no DMA. A spawn profile that
+     * grants DMA carries this as its max_bytes, so the driver keeps the budget
+     * its manifest asked for. */
+    uint32_t dma_budget_pages;
 } wasmos_module_meta_desc_t;
+
+/* Request and reply record of PROC_IPC_MODULE_META_FILE, at the start of the
+ * region the caller names in a transfer buffer it owns and lends the process
+ * manager READ|WRITE. The caller fills the request fields; the path is a byte
+ * string (not NUL-terminated) in the same region at path_off from the
+ * descriptor, 1..SPAWN_WATCH_PATH_MAX bytes. On success the process manager
+ * fills `meta` from the package at that path; on failure it is untouched. */
+typedef struct __attribute__((packed)) {
+    /* request */
+    uint32_t version; /* = MODULE_META_FILE_DESC_VERSION */
+    uint32_t path_off;
+    uint32_t path_len;
+    uint32_t reserved0;
+    /* reply */
+    wasmos_module_meta_desc_t meta;
+} wasmos_module_meta_file_desc_t;
 
 /* One [deps] record of a spawned package as PROC_IPC_SPAWN_WATCHED reports it:
  * strength and kind are WASMOS_APP_DEP_* (src/kernel/include/wasmos_app.h,

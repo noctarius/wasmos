@@ -265,8 +265,13 @@ linked feature documents for rationale and rollout plans.
   which is how it finds those registers. device-manager describes a driver on
   `/boot` by path (`PROC_IPC_MODULE_META_FILE`), so declared windows work for
   drivers outside the boot image, and a DMA grant carries the budget the
-  driver's manifest declares instead of a fixed page. virtio-serial, virtio-net
-  and virtio-blk still use the legacy I/O-BAR transport.
+  driver's manifest declares instead of a fixed page.
+- virtio-net and virtio-blk use the same transport. virtio-blk (Zig) reaches
+  the C transport through `virtio_modern_shim.c`, as it reaches the virtqueue
+  core through `vring_shim.c`, so the two languages share one implementation.
+  Under VERSION_1 the virtio-net header is 12 bytes. virtio-serial is still
+  the legacy discovery skeleton: no QEMU configuration attaches its device, and
+  it has no data plane to port.
 - Guest-visible capability behaviour must not depend on the engine. Where a
   difference is unavoidable, the scenario table carries an explicit `divergent`
   flag that asserts the two still differ, so converging them forces the row to

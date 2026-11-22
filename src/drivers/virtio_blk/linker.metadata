@@ -28,13 +28,10 @@ max_memory = 4194304
 needs = ["devmgr.inv", "pci"]
 provides = ["class:block"]
 
-# The device's registers are an I/O BAR. This driver declares no [[regions]] on
-# purpose: a driver with declared windows is spawned by module index, which
-# carries no startup arguments, and the arguments are the only place the matched
-# device's I/O base and IRQ line appear. See build_pci_spawn_args in
-# src/services/device_manager/device_manager.c.
+# The virtio-modern registers are device memory (BAR 4, region 0 below); the
+# driver touches no I/O port.
 [[capabilities]]
-name = "io.port"
+name = "mmio.map"
 flags = 0
 
 [[capabilities]]
@@ -53,3 +50,10 @@ flags = 4
 [[capabilities]]
 name = "svc.class"
 flags = 0
+
+# Region 0: BAR 4, where the device places its virtio-modern structures (common
+# config, notify, ISR, device config). device-manager resolves it to a
+# memory-mapped window of the BAR's measured size.
+[[regions]]
+kind = "bar"
+index = 4

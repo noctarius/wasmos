@@ -64,9 +64,12 @@
 //! vector is edge-triggered and nobody else's. INTx routing remains as the
 //! fallback for a device or bus service that cannot provide one.
 //!
-//! Enabling MSI-X inserts two vector registers at 0x14/0x16 and SHIFTS the
-//! device-specific configuration from 0x14 to 0x18, which is why the capacity
-//! read goes through `configBase()` rather than a constant.
+//! Transport
+//! ---------
+//! The device is driven over the virtio 1.x PCI transport (`virtio_modern.zig`,
+//! the C transport in `wasmos/virtio_modern.h`): its registers are device
+//! memory in BAR 4, granted as region 0 by the manifest's [[regions]] entry, and
+//! located through the device's own capability list.
 //!
 //! Service identity
 //! ----------------
@@ -90,6 +93,7 @@
 
 const driver = @import("driver.zig");
 const vring = @import("vring.zig");
+const virtio = @import("virtio_modern.zig");
 const co = @import("coroutine.zig");
 const op = @import("wasmos_opcodes.zig");
 const status = @import("wasmos_status.zig");
@@ -112,60 +116,32 @@ const PCI_VENDOR_VIRTIO: u32 = 0x1AF4;
 const PCI_DEVICE_BLK_LEGACY: u32 = 0x1001;
 const PCI_DEVICE_BLK_MODERN: u32 = 0x1042;
 
-/// Legacy virtqueue registers, as offsets into the device's I/O window.
-const REG_DEVICE_FEATURES: u16 = 0x00;
-const REG_DRIVER_FEATURES: u16 = 0x04;
-/// u32: ring page frame number (physical address >> 12).
-const REG_QUEUE_PFN: u16 = 0x08;
-/// u16: size of the selected queue; 0 means the queue does not exist.
-const REG_QUEUE_SIZE: u16 = 0x0C;
-/// u16: selects which queue the registers above address.
-const REG_QUEUE_SELECT: u16 = 0x0E;
-/// u16 doorbell: write the queue index.
-const REG_QUEUE_NOTIFY: u16 = 0x10;
-const REG_DEVICE_STATUS: u16 = 0x12;
-/// Reading this de-asserts the device's level-triggered INTx line.
-const REG_ISR_STATUS: u16 = 0x13;
-/// Vector-selection registers, which EXIST ONLY once MSI-X is enabled, and the
-/// value the device reads back when it refuses a binding.
-const REG_MSIX_CONFIG_VECTOR: u16 = 0x14;
-const REG_MSIX_QUEUE_VECTOR: u16 = 0x16;
-const MSIX_NO_VECTOR: u16 = 0xFFFF;
+/// The BAR holding the virtio structures, and the region the manifest grants it
+/// as. QEMU places every modern structure in BAR 4; a device that does not is
+/// refused by `virtio.probe`.
+const VIRTIO_BAR: u8 = 4;
+const VIRTIO_REGION: i32 = 0;
+
 /// One interrupt source, one table entry: the request queue's completion.
 const MSIX_ENTRY_QUEUE: u16 = 0;
 
-/// Base of `struct virtio_blk_config`. Enabling MSI-X inserts the two vector
-/// registers above at 0x14 and pushes the configuration to 0x18, so the base is
-/// a function of the interrupt mode, never a constant -- see `configBase`.
-const REG_DEVICE_CONFIG_INTX: u16 = 0x14;
-const REG_DEVICE_CONFIG_MSIX: u16 = 0x18;
-
-/// Fields of `struct virtio_blk_config`, as offsets from `configBase()`.
-/// `capacity` is the device size in 512-byte sectors and is the only field this
-/// driver reads unconditionally -- the rest are gated on feature bits.
-const CFG_CAPACITY_LO: u16 = 0x00;
-const CFG_CAPACITY_HI: u16 = 0x04;
-const CFG_BLK_SIZE: u16 = 0x14;
-
-/// Device-status bits, ORed into REG_DEVICE_STATUS in ascending order as
-/// bring-up progresses. The bits accumulate; FAILED reports that the driver
-/// gave up, and writing 0 resets the device.
-const STATUS_ACK: u8 = 1;
-const STATUS_DRIVER: u8 = 2;
-const STATUS_DRIVER_OK: u8 = 4;
-const STATUS_FAILED: u8 = 128;
+/// Fields of `struct virtio_blk_config` (virtio 1.2 §5.2.4). `capacity` is the
+/// device size in 512-byte sectors and is the only field this driver reads
+/// unconditionally -- the rest are gated on feature bits.
+const CFG_CAPACITY: u32 = 0x00;
+const CFG_BLK_SIZE: u32 = 0x14;
 
 /// Feature bits this driver reads. RO is the only one it must honour -- writing
 /// a read-only device is refused rather than attempted. BLK_SIZE advertises a
 /// logical block size other than 512, which this driver does not implement, so
 /// it is deliberately NOT accepted: leaving the bit unset keeps the device on
 /// the 512-byte sectors the block protocol is defined in.
-const FEATURE_BLK_SIZE: u32 = 1 << 6;
-const FEATURE_RO: u32 = 1 << 5;
+const FEATURE_BLK_SIZE: u64 = 1 << 6;
+const FEATURE_RO: u64 = 1 << 5;
 /// The device supports VIRTIO_BLK_T_FLUSH. Without it the device has no volatile
 /// write cache to commit, so a flush request is unnecessary rather than
 /// unavailable (virtio 1.2, 5.2.4).
-const FEATURE_FLUSH: u32 = 1 << 9;
+const FEATURE_FLUSH: u64 = 1 << 9;
 
 /// Request types, and the status byte the device writes back.
 const REQ_TYPE_IN: u32 = 0; // device -> memory (a disk read)
@@ -357,14 +333,15 @@ const Device = struct {
     function: u32 = 0,
     device_id: u32 = 0,
     irq: u32 = 0,
-    ports: driver.Ports = .{ .base = 0 },
+    /// The request queue's doorbell offset in region 0.
+    notify_off: u32 = 0,
     /// Device size in 512-byte sectors, clamped to what fits an IPC argument.
     capacity_sectors: u32 = 0,
     /// True when the device reports more sectors than an IPC argument can
     /// carry, so IDENTIFY reports a truncated capacity.
     capacity_truncated: bool = false,
     /// True once `pci-bus` has programmed the device's MSI-X table entry. The
-    /// device then no longer drives INTx, and the register layout has shifted.
+    /// device then no longer drives INTx.
     msix_enabled: bool = false,
     /// Kernel vector behind table entry MSIX_ENTRY_QUEUE.
     msix_vector: u32 = 0,
@@ -461,26 +438,30 @@ fn armIdleTimer(on: bool) void {
 /// vring doorbell: tell the device the request queue has new available buffers.
 fn notifyQueue(user: ?*anyopaque) callconv(.c) void {
     _ = user;
-    g_dev.ports.out16(REG_QUEUE_NOTIFY, REQUEST_QUEUE);
+    virtio.notify(g_dev.notify_off, REQUEST_QUEUE);
 }
 
 fn setStatusBit(bits: u8) void {
-    g_dev.ports.out8(REG_DEVICE_STATUS, bits);
+    virtio.setStatus(bits);
 }
 
-/// Offset of `struct virtio_blk_config`, which moves when MSI-X is enabled.
-/// Read it through here rather than caching it: it is only correct after the
-/// MSI-X binding has either succeeded or failed.
-fn configBase() u16 {
-    return if (g_dev.msix_enabled) REG_DEVICE_CONFIG_MSIX else REG_DEVICE_CONFIG_INTX;
+/// Read the device's 64-bit capacity as one consistent snapshot of the device
+/// configuration; null when it cannot be read.
+fn readCapacity() ?u64 {
+    var raw: [8]u8 = undefined;
+    if (!virtio.deviceRead(CFG_CAPACITY, &raw)) return null;
+    return @as(u64, raw[0]) | (@as(u64, raw[1]) << 8) | (@as(u64, raw[2]) << 16) |
+        (@as(u64, raw[3]) << 24) | (@as(u64, raw[4]) << 32) | (@as(u64, raw[5]) << 40) |
+        (@as(u64, raw[6]) << 48) | (@as(u64, raw[7]) << 56);
 }
 
-/// Read the device's 64-bit capacity as two 32-bit halves, which is how a
-/// 32-bit guest must address it: no 64-bit value crosses a host-call boundary.
-fn readCapacity() u64 {
-    const lo: u64 = g_dev.ports.in32(configBase() + CFG_CAPACITY_LO);
-    const hi: u64 = g_dev.ports.in32(configBase() + CFG_CAPACITY_HI);
-    return (hi << 32) | lo;
+/// The logical block size the device advertises (VIRTIO_BLK_F_BLK_SIZE), for
+/// the log only; 0 when it cannot be read.
+fn readBlkSize() u32 {
+    var raw: [4]u8 = undefined;
+    if (!virtio.deviceRead(CFG_BLK_SIZE, &raw)) return 0;
+    return @as(u32, raw[0]) | (@as(u32, raw[1]) << 8) | (@as(u32, raw[2]) << 16) |
+        (@as(u32, raw[3]) << 24);
 }
 
 // --- probe -----------------------------------------------------------------
@@ -491,9 +472,9 @@ fn isVirtioBlk(vendor_id: u32, device_id: u32) bool {
 }
 
 /// Take the device identity from the startup arguments the device manager packs
-/// for a PCI-rule spawn. That is the only probe path: this driver's I/O grant is
-/// scoped to its device's BAR and does not reach the PCI configuration ports a
-/// bus scan would need. Returns false when the arguments name no usable device.
+/// for a PCI-rule spawn. That is the only probe path: the driver is spawned for
+/// exactly that device and may read no other function's config space. Returns
+/// false when the arguments name no usable device.
 fn probeFromStartupArgs() bool {
     const args = driver.startupArgs();
     if (args.len == 0) return false;
@@ -501,7 +482,6 @@ fn probeFromStartupArgs() bool {
     const pci = driver.findArg(args, "pci=") orelse return false;
     const vendor = driver.findArg(args, "vendor=") orelse return false;
     const device = driver.findArg(args, "device=") orelse return false;
-    const io = driver.findArg(args, "io=") orelse return false;
     const irq = driver.findArg(args, "irq=") orelse return false;
 
     // "BB:SS.FF" — the separators are checked so a malformed field cannot be
@@ -512,10 +492,9 @@ fn probeFromStartupArgs() bool {
     const function = driver.parseHex(pci[6..], 2) orelse return false;
     const vendor_id = driver.parseHex(vendor, 4) orelse return false;
     const device_id = driver.parseHex(device, 4) orelse return false;
-    const io_base = driver.parseHex(io, 4) orelse return false;
     const irq_line = driver.parseHex(irq, 2) orelse return false;
 
-    if (!isVirtioBlk(vendor_id, device_id) or io_base == 0) return false;
+    if (!isVirtioBlk(vendor_id, device_id)) return false;
 
     g_dev.present = true;
     g_dev.bus = bus;
@@ -523,7 +502,6 @@ fn probeFromStartupArgs() bool {
     g_dev.function = function;
     g_dev.device_id = device_id;
     g_dev.irq = irq_line;
-    g_dev.ports = .{ .base = @intCast(io_base) };
     return true;
 }
 
@@ -571,50 +549,42 @@ fn setupMsix() bool {
     return true;
 }
 
-/// Configure the request virtqueue over a pinned DMA region and program its
-/// page frame number into the device. Returns the queue size, or null on
-/// failure.
+/// Configure the request virtqueue over a pinned DMA region and hand it to the
+/// device, bound to its MSI-X entry when MSI-X is live. Returns the queue size,
+/// or null on failure.
 fn setupQueue() ?u16 {
-    g_dev.ports.out16(REG_QUEUE_SELECT, REQUEST_QUEUE);
-    const qsize = g_dev.ports.in16(REG_QUEUE_SIZE);
-    if (qsize == 0 or qsize > MAX_QUEUE) return null;
+    var qsize = virtio.queueSize(REQUEST_QUEUE);
+    if (qsize == 0) return null;
+    if (qsize > MAX_QUEUE) qsize = MAX_QUEUE; // a modern device accepts a smaller size
 
     const queue = vring.Queue.create() orelse return null;
-    const ring_bytes = vring.size(qsize, vring.LEGACY_ALIGN);
+    const ring_bytes = vring.size(qsize, virtio.VRING_ALIGN);
     const pages: u32 = @intCast((ring_bytes + 0xFFF) / 0x1000);
     const region = driver.regionAlloc(pages, driver.REGION_CACHE_WB) orelse return null;
-    if (!queue.layout(region.base, region.phys, region.bytes, qsize, vring.LEGACY_ALIGN)) return null;
+    if (!queue.layout(region.base, region.phys, region.bytes, qsize, virtio.VRING_ALIGN)) return null;
     queue.setNotify(notifyQueue, null);
 
+    const entry: u16 = if (g_dev.msix_enabled) MSIX_ENTRY_QUEUE else virtio.MSI_NO_VECTOR;
+    g_dev.notify_off = virtio.queueEnable(REQUEST_QUEUE, queue, entry) orelse {
+        driver.log("[virtio-blk] msix queue vector refused");
+        return null;
+    };
     g_queue = queue;
     g_queue_ready = true;
-    g_dev.ports.out32(REG_QUEUE_PFN, @intCast(region.phys >> 12));
-
-    // Bind the request queue to its MSI-X entry. REG_QUEUE_SELECT still points
-    // at this queue, and virtio reports a refusal through the readback rather
-    // than any status bit, so the write is verified rather than assumed.
-    if (g_dev.msix_enabled) {
-        g_dev.ports.out16(REG_MSIX_QUEUE_VECTOR, MSIX_ENTRY_QUEUE);
-        if (g_dev.ports.in16(REG_MSIX_QUEUE_VECTOR) == MSIX_NO_VECTOR) {
-            driver.log("[virtio-blk] msix queue vector refused");
-            return null;
-        }
-    }
     return qsize;
 }
 
-/// Bring the device up: reset, acknowledge, negotiate features, set the queue
-/// up, read the capacity, and only then declare DRIVER_OK. Returns false with
-/// the device left in the FAILED state when any step fails.
+/// Bring the device up: locate its structures, negotiate features, set the
+/// queue up, read the capacity, and only then declare DRIVER_OK. Returns false
+/// with the device left in the FAILED state when any step fails.
 fn initializeDevice() bool {
-    if (!g_dev.present or g_dev.ports.base == 0) return false;
+    if (!g_dev.present) return false;
 
-    // Writing 0 resets the device; the bits then accumulate.
-    setStatusBit(0);
-    var state: u8 = STATUS_ACK;
-    setStatusBit(state);
-    state |= STATUS_DRIVER;
-    setStatusBit(state);
+    const bdf: u32 = (g_dev.bus << 8) | (g_dev.slot << 3) | g_dev.function;
+    if (!virtio.probe(bdf, VIRTIO_BAR, VIRTIO_REGION)) {
+        driver.log("[virtio-blk] no virtio-modern structures in BAR 4");
+        return false;
+    }
 
     // Accept the read-only bit and FLUSH. Every other feature either changes a
     // layout this driver does not implement (BLK_SIZE) or is an optimisation it
@@ -624,13 +594,15 @@ fn initializeDevice() bool {
     // FLUSH is accepted because a filesystem journal barrier needs it: ordering
     // a request after its reply only guarantees the device SAW the writes in
     // that order, and a volatile write cache can still lose the earlier ones.
-    const device_features = g_dev.ports.in32(REG_DEVICE_FEATURES);
-    g_dev.read_only = (device_features & FEATURE_RO) != 0;
-    g_dev.flush_supported = (device_features & FEATURE_FLUSH) != 0;
-    g_dev.ports.out32(REG_DRIVER_FEATURES, device_features & (FEATURE_RO | FEATURE_FLUSH));
+    const features = virtio.negotiate(FEATURE_RO | FEATURE_FLUSH) orelse {
+        driver.log("[virtio-blk] feature negotiation failed");
+        return false;
+    };
+    g_dev.read_only = (features.accepted & FEATURE_RO) != 0;
+    g_dev.flush_supported = (features.accepted & FEATURE_FLUSH) != 0;
+    const state: u8 = virtio.STATUS_ACKNOWLEDGE | virtio.STATUS_DRIVER | virtio.STATUS_FEATURES_OK;
 
-    // Before queue setup: the queue's vector register only exists once MSI-X is
-    // enabled, and setupQueue is what writes it.
+    // Before queue setup, which binds the queue to its MSI-X entry.
     if (setupMsix()) {
         var line = driver.Line{};
         _ = line.str("[virtio-blk] msix enabled vector=").dec(g_dev.msix_vector);
@@ -640,17 +612,21 @@ fn initializeDevice() bool {
     }
 
     const qsize = setupQueue() orelse {
-        setStatusBit(state | STATUS_FAILED);
+        setStatusBit(state | virtio.STATUS_FAILED);
         return false;
     };
 
     // One page of pinned scratch, carved into MAX_INFLIGHT slots.
     g_scratch = driver.regionAlloc(1, driver.REGION_CACHE_WB) orelse {
-        setStatusBit(state | STATUS_FAILED);
+        setStatusBit(state | virtio.STATUS_FAILED);
         return false;
     };
 
-    const capacity = readCapacity();
+    const capacity = readCapacity() orelse {
+        driver.log("[virtio-blk] device configuration unreadable");
+        setStatusBit(state | virtio.STATUS_FAILED);
+        return false;
+    };
     if (capacity > 0xFFFFFFFF) {
         g_dev.capacity_sectors = 0xFFFFFFFF;
         g_dev.capacity_truncated = true;
@@ -658,8 +634,7 @@ fn initializeDevice() bool {
         g_dev.capacity_sectors = @intCast(capacity);
     }
 
-    state |= STATUS_DRIVER_OK;
-    setStatusBit(state);
+    setStatusBit(state | virtio.STATUS_DRIVER_OK);
     g_dev.ready = true;
 
     var line = driver.Line{};
@@ -667,8 +642,8 @@ fn initializeDevice() bool {
     _ = line.str(" capacity=").dec(g_dev.capacity_sectors).str(" sectors");
     _ = line.str(" inflight=").dec(MAX_INFLIGHT);
     if (g_dev.read_only) _ = line.str(" read-only");
-    if ((device_features & FEATURE_BLK_SIZE) != 0) {
-        _ = line.str(" blk_size=").dec(g_dev.ports.in32(configBase() + CFG_BLK_SIZE));
+    if ((features.offered & FEATURE_BLK_SIZE) != 0) {
+        _ = line.str(" blk_size=").dec(readBlkSize());
     }
     line.end();
     if (g_dev.capacity_truncated) {
@@ -695,7 +670,7 @@ fn initializeDevice() bool {
 fn quiesce(why: []const u8) void {
     g_dev.ready = false;
     g_queue_ready = false;
-    setStatusBit(STATUS_FAILED);
+    setStatusBit(virtio.STATUS_FAILED);
     setStatusBit(0);
     for (&g_slots) |*slot| {
         if (slot.state == .in_flight or slot.state == .pending) {
@@ -962,7 +937,7 @@ fn acceptTransfer(msg: *const co.IpcMessage) void {
 fn serviceCompletions() void {
     if (g_dev.irq_routed) {
         // Reading ISR is itself the de-assertion; the value is not wanted.
-        _ = g_dev.ports.in8(REG_ISR_STATUS);
+        _ = virtio.isr();
         driver.irqAck(g_dev.irq);
     }
     if (!g_queue_ready) return;
@@ -1256,7 +1231,7 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     }
     var probe = driver.Line{};
     _ = probe.str("[virtio-blk] probe ok bus=").dec(g_dev.bus).str(" slot=").dec(g_dev.slot);
-    _ = probe.str(" dev=0x").hex(g_dev.device_id, 4).str(" io=0x").hex(g_dev.ports.base, 4);
+    _ = probe.str(" dev=0x").hex(g_dev.device_id, 4).str(" modern");
     probe.end();
 
     if (!initializeDevice()) {

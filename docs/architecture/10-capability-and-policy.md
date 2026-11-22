@@ -235,8 +235,10 @@ The device's own state is not reset: its queues still name the old frames, so
 a new driver resets the device before it turns bus mastering on again (an MSI
 bind through pci-bus does that). A driver that takes no MSI stops its own DMA
 engine and then asks pci-bus for bus mastering (`PCI_IPC_BUS_MASTER_REQ`; ata
-does). INTx stays disabled: a driver that falls back to INTx gets no
-interrupts on the function's pin, and nothing turns it back on for it yet.
+does). A driver that falls back to INTx resets the device and asks pci-bus to
+arm the function for its pin (`PCI_IPC_INTX_ENABLE_REQ`: bus mastering on,
+INTx Disable cleared), and puts no work on the device until the answer
+(virtio-blk, virtio-rng).
 
 Config space is reached through the kernel only: `pci_config_read` /
 `pci_config_write` (`pci.config`) hold the same lock as the quiesce across the
@@ -245,7 +247,8 @@ Config space is reached through the kernel only: `pci_config_read` /
 A function is *unmanaged* until a spawn profile names it, *owned* by that
 process while it lives, and *retired* once its reap has quiesced it, until a
 new driver names it. pci-bus arms a function -- MSI and MSI-X enable, MSI
-address and data, bus mastering (with an MSI bind or `PCI_IPC_BUS_MASTER_REQ`)
+address and data, bus mastering (with an MSI bind, `PCI_IPC_BUS_MASTER_REQ` or
+`PCI_IPC_INTX_ENABLE_REQ`), INTx enable (`PCI_IPC_INTX_ENABLE_REQ`)
 -- only on behalf of the requesting driver:
 `pci_function_check(endpoint, bdf)` before it touches the binding, and
 `pci_config_write_for(endpoint, bdf, ...)` for each arming write, which the

@@ -1040,7 +1040,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
     /* With MSI-X the vectors were bound during device init and the device's
      * INTx is disabled, so routing the shared line would only subscribe this
-     * driver to other devices' interrupts. Route it only on the fallback path. */
+     * driver to other devices' interrupts. Route it only on the fallback path.
+     * TODO: a restarted instance on this path finds its function quiesced (INTx
+     * disabled, bus mastering off) and must ask pci-bus to arm it
+     * (PCI_IPC_INTX_ENABLE_REQ, as virtio-blk does) before it can be given
+     * ENV{RESTART}; until then it gets no interrupts and no DMA. */
     if (!g_dev.msix_enabled) {
         if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_endpoint) == 0) {
             (void)printf("[virtio-net] irq routed line=%u\n", (unsigned)g_dev.irq);

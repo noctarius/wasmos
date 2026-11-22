@@ -437,6 +437,19 @@ static int32_t bus_master_enable(uint16_t bdf, int32_t requester) {
     return cfg_write_for(requester, bdf, PCI_REG_COMMAND, cmd | PCI_CMD_BUS_MASTER);
 }
 
+/* INTx for a driver that falls back to its pin (PCI_IPC_INTX_ENABLE_REQ): bus
+ * mastering on and INTx Disable cleared, undoing the two command-register bits
+ * the kernel's quiesce set. Written for the requester, so only the function's
+ * driver can arm it. */
+static int32_t intx_enable(uint16_t bdf, int32_t requester) {
+    if (!bdf_present(bdf)) {
+        return WASMOS_ERR_MSI_BAD_DEVICE;
+    }
+    uint32_t cmd = cfg_read(bdf, PCI_REG_COMMAND) & 0xFFFFu;
+    cmd = (cmd | PCI_CMD_BUS_MASTER) & ~PCI_CMD_INTX_DISABLE;
+    return cfg_write_for(requester, bdf, PCI_REG_COMMAND, cmd);
+}
+
 static int32_t msi_unbind(uint16_t bdf, uint32_t entry, int32_t requester) {
     msi_binding_t* b = binding_find(bdf);
     if (!b) {
@@ -694,6 +707,8 @@ static void reply_error(int32_t dest, int32_t src, int32_t request_id, int32_t c
  *                       reply arg0 = entry
  *   PCI_IPC_BUS_MASTER_REQ  arg0 = bdf
  *                       reply arg0 = 0
+ *   PCI_IPC_INTX_ENABLE_REQ arg0 = bdf
+ *                       reply arg0 = 0
  *
  * A failure answers PCI_IPC_ERROR with the packed code in arg1 (arg0 is 0).  A
  * message from a negative source, and any opcode not listed above, is dropped
@@ -751,8 +766,11 @@ static void handle_request(int32_t service_endpoint, const wasmos_ipc_message_t*
             reply_to, service_endpoint, PCI_IPC_RESP, msg->request_id, (int32_t)entry, 0, 0, 0);
         return;
     }
-    case PCI_IPC_BUS_MASTER_REQ: {
-        int32_t rc = bus_master_enable((uint16_t)(arg0 & 0xFFFFu), reply_to);
+    case PCI_IPC_BUS_MASTER_REQ:
+    case PCI_IPC_INTX_ENABLE_REQ: {
+        uint16_t bdf = (uint16_t)(arg0 & 0xFFFFu);
+        int32_t rc = (msg->type == PCI_IPC_BUS_MASTER_REQ) ? bus_master_enable(bdf, reply_to)
+                                                           : intx_enable(bdf, reply_to);
         if (rc != 0) {
             reply_error(reply_to, service_endpoint, msg->request_id, rc);
             return;
@@ -776,24 +794,24 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * nothing and the parameter is overwritten. */
     int32_t proc_endpoint = wasmos_startup_proc_endpoint();
     if (proc_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT;
     }
 
     int32_t source_endpoint = wasmos_ipc_create_endpoint();
     if (source_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
     /* Requests land on their own endpoint: a reply-matching loop on
      * source_endpoint discards messages it did not ask for, which is exactly how
      * a driver's bind request would go missing during a lookup or a ready ack. */
     int32_t service_endpoint = wasmos_ipc_create_endpoint();
     if (service_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
     int32_t devmgr_endpoint =
         wasmos_sys_svc_lookup_retry(proc_endpoint, source_endpoint, "devmgr.inv", 1, 1024);
     if (devmgr_endpoint == -1) {
-        return -1;
+        return WASMOS_ERR_DRIVER_DEPENDENCY_MISSING;
     }
     /* Register before scanning: publishing devices is what makes device-manager
      * spawn drivers, and a driver must never find the bus service missing. */
@@ -806,10 +824,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * writes them back. */
     int32_t desc_bid = wasmos_xfer_buffer_acquire(
         (int32_t)(PCI_MAX_PUBLISHED_DEVICES * sizeof(wasmos_pci_device_desc_t)));
-    if (desc_bid < 0 ||
-        wasmos_xfer_buffer_borrow(devmgr_endpoint, desc_bid, WASMOS_BUFFER_GRANT_READ) < 0) {
+    int32_t borrow =
+        (desc_bid < 0)
+            ? desc_bid
+            : wasmos_xfer_buffer_borrow(devmgr_endpoint, desc_bid, WASMOS_BUFFER_GRANT_READ);
+    if (borrow < 0) {
         (void)printf("[pci-bus] descriptor buffer unavailable\n");
-        return -1;
+        return borrow;
     }
 
     pci_load_console_framebuffer();

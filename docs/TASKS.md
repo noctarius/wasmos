@@ -700,12 +700,15 @@ Source: `architecture/13-runtime-and-packaging.md`,
     `SUPERVISOR_IPC_RETRACT_REQ`).
   - net-stack keeps the netif and its sockets across virtio-net's REMOVE and
     rebinds on ADD; then virtio-net gets `ENV{RESTART}`.
-- [ ] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
-  interrupts back. The quiesce sets INTx Disable, and pci-bus clears it for no
-  one (`src/kernel/pci_config.c` TODO). Bus mastering is restorable without an
-  MSI bind (`PCI_IPC_BUS_MASTER_REQ`, which ata uses); INTx is not. ata takes
-  the legacy IDE lines 14/15, which INTx Disable does not gate, and every other
-  in-tree PCI driver binds MSI-X under QEMU, so none hits it today.
+- [x] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
+  interrupts back. Fixed: `PCI_IPC_INTX_ENABLE_REQ` (pci-bus) turns bus
+  mastering on and clears INTx Disable for the function's driver; virtio-blk
+  and virtio-rng send it on their INTx path without waiting and hold their
+  work until the answer (`VirtioBlkIntxFallbackTest`, `vectors=0`). The
+  virtio-rng case has no failing test: its fill polls the used ring between
+  timed waits, so under QEMU it completed without the interrupt. virtio-net
+  does not send it yet (TODO in `virtio_net.c`), which matters once it gets
+  `ENV{RESTART}`.
 - [ ] [FEATURE][P3] A one-step operator restart for supervised units (`svc
   restart`). Stop and start exist (`SUPERVISOR_IPC_STOP_REQ`/`_START_REQ`); a
   restart is the two in sequence, and a stop takes effect only when the

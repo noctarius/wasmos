@@ -485,7 +485,12 @@ linked feature documents for rationale and rollout plans.
   (`<template>@pci:<bb>:<dd>.<f>`); the supervisor takes a DMA unit that names
   its function. virtio-rng is supervised: `svc kill virtio_rng@pci:00:04.0`
   quiesces it, the new instance rebinds MSI-X and serves entropy
-  (`sv_probe entropy`, `tests/test_supervisor.py`). Host-tested in
+  (`sv_probe entropy`, `tests/test_supervisor.py`). A successor on the INTx
+  fallback (virtio-blk, virtio-rng) asks pci-bus to arm its function
+  (`PCI_IPC_INTX_ENABLE_REQ`: bus mastering on, INTx Disable cleared) without
+  waiting and holds its work until the answer; `VirtioBlkIntxFallbackTest`
+  restarts both on `vectors=0` devices. virtio-net has no such request yet.
+  Host-tested in
   `test_pci_config`, `test_device_manager_unit`, `test_supervisor_unit`.
 - Hardware grants and unit control are capability-gated
   (`architecture/10`, "Requester Checks"). Every spawn whose profile sets a

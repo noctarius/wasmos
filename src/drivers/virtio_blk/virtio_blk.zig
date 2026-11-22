@@ -109,6 +109,10 @@ const PCI_MSI_KIND_MSIX: i32 = 2;
 const IPC_IRQ_EVENT_TYPE: i32 = 0xFF00;
 const IPC_MSI_EVENT_TYPE: i32 = 0xFF01;
 
+/// Request id of PCI_IPC_INTX_ENABLE_REQ, which this driver sends once and whose
+/// answer arrives on the loop's endpoint.
+const INTX_ENABLE_REQ_ID: i32 = 0x7B10;
+
 /// 0x1AF4 is the Red Hat / virtio vendor id. Both device ids below identify a
 /// block device and are accepted interchangeably: 0x1001 is the transitional
 /// (legacy) id, 0x1042 is 0x1040 + virtio device type 2.
@@ -381,6 +385,11 @@ var g_dev: Device = .{};
 var g_pci_endpoint: i32 = -1;
 var g_queue: vring.Queue = undefined;
 var g_queue_ready: bool = false;
+/// False while PCI_IPC_INTX_ENABLE_REQ is unanswered. On the INTx path the
+/// function may still be quiesced from a previous driver's end -- bus mastering
+/// off and INTx disabled -- so no chain is put on the queue until pci-bus has
+/// armed it; requests stay pending, and age toward their deadline, meanwhile.
+var g_function_armed: bool = true;
 /// Pinned region holding each slot's request header and status byte. Everything
 /// else a request touches is the client's memory.
 var g_scratch: driver.Region = undefined;
@@ -547,6 +556,26 @@ fn setupMsix() bool {
     g_dev.msix_vector = desc.vector;
     g_dev.msix_enabled = true;
     return true;
+}
+
+/// Ask pci-bus to arm the function for INTx (PCI_IPC_INTX_ENABLE_REQ), without
+/// waiting: the answer arrives on the loop's endpoint and lets transfers onto
+/// the queue (`g_function_armed`). The kernel quiesced the function when a
+/// previous driver of it ended -- bus mastering off, INTx disabled -- and only
+/// an MSI bind or this request undoes that. The device was reset by
+/// `initializeDevice` before this is sent, so it names none of the previous
+/// driver's frames once it can master again.
+fn requestIntxEnable() void {
+    if (g_pci_endpoint < 0) {
+        driver.log("[virtio-blk] no pci service; intx left as the firmware set it");
+        return;
+    }
+    const bdf: i32 = @intCast((g_dev.bus << 8) | (g_dev.slot << 3) | g_dev.function);
+    if (driver.send(g_pci_endpoint, endpoint(), op.PCI_IPC_INTX_ENABLE_REQ, INTX_ENABLE_REQ_ID, bdf, 0, 0, 0) != 0) {
+        driver.log("[virtio-blk] intx enable request could not be sent");
+        return;
+    }
+    g_function_armed = false;
 }
 
 /// Configure the request virtqueue over a pinned DMA region and hand it to the
@@ -980,6 +1009,20 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
         op.BLOCK_IPC_READ_REQ, op.BLOCK_IPC_WRITE_REQ => acceptTransfer(msg),
         op.BLOCK_IPC_FLUSH_REQ => acceptFlush(msg),
         IPC_IRQ_EVENT_TYPE, IPC_MSI_EVENT_TYPE => serviceCompletions(),
+        op.PCI_IPC_RESP, op.PCI_IPC_ERROR => {
+            if (msg.request_id != INTX_ENABLE_REQ_ID or msg.source != g_pci_endpoint) return;
+            if (msg.type == op.PCI_IPC_RESP) {
+                driver.log("[virtio-blk] function armed for intx");
+            } else {
+                // Refused: the function keeps whatever state it has, which on
+                // a first start is the firmware's, so transfers are tried
+                // rather than held until their deadline.
+                var line = driver.Line{};
+                _ = line.str("[virtio-blk] pci-bus refused intx enable status=0x").hex(@as(u32, @bitCast(msg.arg1)), 8);
+                line.end();
+            }
+            g_function_armed = true;
+        },
         else => {
             // A message with no reply address is a stray notification, not a
             // request to refuse.
@@ -1100,7 +1143,7 @@ fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
             .pending => {
                 if (slot.idle_ticks >= slotDeadline(slot)) {
                     expired = true;
-                } else if (g_queue_ready and submit(i)) {
+                } else if (g_queue_ready and g_function_armed and submit(i)) {
                     published = true;
                     progressed = true;
                 }
@@ -1247,6 +1290,7 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     // device asserts on every completion and nothing else clears it. The line
     // is routed to the loop's endpoint so an interrupt arrives as a message the
     // loop dispatches, like everything else this driver waits on.
+    if (!g_dev.msix_enabled) requestIntxEnable();
     if (!g_dev.msix_enabled and g_dev.irq < 16) {
         if (driver.irqRoute(g_dev.irq, endpoint())) {
             g_dev.irq_routed = true;

@@ -186,6 +186,7 @@ const (
 	WASMOS_ERR_DRIVER_DEVICE_INIT int32 = -0x00070004 // bringing the identified device up failed
 	WASMOS_ERR_DRIVER_REGISTER int32 = -0x00070005 // publishing the driver endpoint to the service registry failed
 	WASMOS_ERR_DRIVER_SELECT_SETUP int32 = -0x00070006 // the driver could not build its IPC select set
+	WASMOS_ERR_DRIVER_DEPENDENCY_MISSING int32 = -0x00070007 // a service the driver depends on is not registered
 	WASMOS_ERR_VT_BAD_TTY_ID int32 = -0x00080001 // requested tty id is out of range
 	WASMOS_ERR_VT_NO_TTY_FOR_SOURCE int32 = -0x00080002 // no tty is associated with the requesting endpoint
 	WASMOS_ERR_VT_READER_BUSY int32 = -0x00080003 // another endpoint is already the reader for this tty
@@ -693,6 +694,8 @@ func WasmosStrerror(c int32) string {
 		return "publishing the driver endpoint to the service registry failed"
 	case WASMOS_ERR_DRIVER_SELECT_SETUP:
 		return "the driver could not build its IPC select set"
+	case WASMOS_ERR_DRIVER_DEPENDENCY_MISSING:
+		return "a service the driver depends on is not registered"
 	case WASMOS_ERR_VT_BAD_TTY_ID:
 		return "requested tty id is out of range"
 	case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE:

@@ -330,7 +330,7 @@ follows its regeneration.
 A compilation-database project has no build targets of its own. `.run/` holds
 shared run configurations against `out/default` (CLion's *wasmos* folder):
 shell configurations for the build, `run-qemu`, `run-qemu-test`,
-`run-kernel-unit-tests`, `quality` and the paused `run-qemu-debug`, plus a GDB
+`run-kernel-unit-tests`, `fmt-check` + `lint` and the paused `run-qemu-debug`, plus a GDB
 remote-debug configuration that attaches to `localhost:1234` with
 `out/default/kernel.elf` symbols once `run-qemu-debug` is waiting.
 

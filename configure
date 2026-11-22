@@ -102,7 +102,9 @@ def update_ide_link(outdir: Path, mode: str):
         pass
     if link.is_symlink() and Path(os.readlink(link)) == target:
         return
-    tmp = link.with_name(link.name + ".tmp")
+    # Staged under a per-process name: concurrent configures of different
+    # build directories each publish a complete link, and the last one wins.
+    tmp = link.with_name(f"{link.name}.{os.getpid()}.tmp")
     tmp.unlink(missing_ok=True)
     tmp.symlink_to(target)
     tmp.replace(link)
@@ -110,20 +112,27 @@ def update_ide_link(outdir: Path, mode: str):
 
 
 def split_positionals(ap, positionals: list[Path]) -> tuple[Path, Path | None]:
-    """[builddir] [defconfig]: a lone argument that names a file or ends in
-    "defconfig" is the defconfig, so `./configure configs/x_defconfig`
-    configures out/default."""
+    """[builddir] [defconfig]: a lone argument that names a file, or ends in
+    "defconfig" and is not an existing directory, is the defconfig, so
+    `./configure configs/x_defconfig` configures out/default. The regeneration
+    command passes the build directory alone, whatever its name."""
     if len(positionals) > 2:
         ap.error("expected at most a build directory and a defconfig")
     lone = positionals[0] if len(positionals) == 1 else None
-    if lone and (lone.is_file() or lone.name.endswith("defconfig")):
+    if (
+        lone
+        and not lone.is_dir()
+        and (lone.is_file() or lone.name.endswith("defconfig"))
+    ):
         return DEFAULT_BUILDDIR, lone
     builddir = positionals[0] if positionals else DEFAULT_BUILDDIR
     defconfig = positionals[1] if len(positionals) == 2 else None
     return builddir, defconfig
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None):
+    """The parser and the parsed command line, with builddir and defconfig
+    resolved from the positionals."""
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -168,8 +177,15 @@ def main() -> int:
         ap.add_argument(
             f"--{t}", dest=t.replace(".", "_").replace("-", "_"), metavar="PATH"
         )
-    args = ap.parse_args()
+    # Intermixed: options may sit between the two positionals
+    # (`./configure <dir> --reseed <defconfig>`).
+    args = ap.parse_intermixed_args(argv)
     args.builddir, args.defconfig = split_positionals(ap, args.positionals)
+    return ap, args
+
+
+def main() -> int:
+    ap, args = parse_args()
 
     outdir = args.builddir.resolve()
     outdir.mkdir(parents=True, exist_ok=True)

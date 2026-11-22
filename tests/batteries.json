@@ -148,6 +148,7 @@
       "files": [
         "test_boot_diagnosis.py",
         "test_cli_echo_match.py",
+        "test_configure_cli.py",
         "test_make_wasmos_app_capabilities.py"
       ]
     }

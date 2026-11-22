@@ -60,7 +60,11 @@ SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7465-4573-742d-7
 # separately rather than one file attached twice: one file carries one identity,
 # and policy could not tell the two mounts apart.
 SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7669-7274-696f-2d766f6c3031", ENV{MOUNT}="/vwfs", ENV{FSTYPE}="wfs"
-SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_net.wap"
+# Supervised as virtio_net@pci:<function>. net-stack keeps eth0 -- its address
+# and its sockets -- across the restart and rebinds it to the successor, which
+# registers the same net.ifc instance; a frame sent while the driver is down is
+# lost like any other.
+SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_net.wap"
 # The virtio console is the kernel-log port (doc 19). Unsupervised: a restart
 # would replay the whole kmsg ring onto it again.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"
@@ -71,8 +75,7 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1043", RUN+="system/d
 # quiesces its function when it ends (bus mastering and MSI off), so no restart
 # finds the device still writing into the dead instance's frames. Its clients
 # hold no session with it -- each entropy request finds the "hrng" provider
-# anew. virtio-net stays device-manager-spawned: net-stack keeps no interface
-# across a NIC's restart yet.
+# anew.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_rng.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_rng.wap"
 

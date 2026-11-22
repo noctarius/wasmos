@@ -54,10 +54,27 @@ Source: `architecture/06-memory-management.md`,
 `architecture/11-ring3-isolation-and-separation.md`, and
 `architecture/28-smp.md`.
 
-- [ ] [ENHANCEMENT][P2] Replace the WARP shared-linear-memory local fault retry with cross-CPU
-  TLB-shootdown IPIs before any live page-table reclaim under concurrent APs
-  (`src/kernel/arch/x86_64/cpu_x86_64.c:554` `TODO(smp-tlb)`,
-  `src/kernel/warp/ring3_trampolines.c:166`).
+- [ ] [ENHANCEMENT][P2] Cross-CPU TLB invalidation. `paging_invalidate` acts on
+  the calling CPU only (`paging.h`, `arch/x86_64/paging.c`), so a mapping
+  removed or changed on one CPU stays live on every other CPU that cached it,
+  and nothing in the kernel can safely unmap or remap a page another CPU may
+  have touched. Needed: an arch-neutral `paging_invalidate_range_all(root, va,
+  len)` (or equivalent) that returns once every CPU that may hold the
+  translation has dropped it -- x86_64 via a shootdown IPI with an
+  acknowledgement (and only to CPUs whose current root shares the mapping, all
+  CPUs for the shared higher half); arm64 via broadcast `TLBI ...IS` + `DSB
+  ISH`, which needs no IPI. Consumers it unblocks:
+  - WARP linear-memory slots: commit/decommit reuse a slot VA with no
+    invalidation elsewhere, so a recycled slot can still resolve to the previous
+    app's frames on another CPU (`src/kernel/linmem_slots.c:185`); the local
+    fault-retry recovery stands in for it (`arch/x86_64/cpu_x86_64.c:692`
+    `TODO(smp-tlb)`, `src/kernel/warp/ring3_trampolines.c:175`).
+  - Device windows (`device_window.c`): mapped once and never unmapped,
+    precisely because unmapping would need this; with it, a window could be
+    released when its last driver is reaped and the VA span recycled.
+  - Any live page-table reclaim under concurrent CPUs (address-space teardown
+    while another CPU still runs on the root, per-process unmap).
+  Pair it with the stress test in Validation (`[TEST][P2]` TLB shootdown).
 - [x] [CLEANUP][P3] Retire the `shmem` subsystem in favour of a single
   `xfer_buffer` sharing mechanism. DONE. The eight `shmem_*` host calls, both
   runtime shims, the native-driver `shmem_*` hooks, the `mm_shared_*` registry,

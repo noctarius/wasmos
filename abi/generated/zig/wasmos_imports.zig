@@ -802,8 +802,11 @@ pub extern "wasmos" fn ipc_endpoint_has_cap(a0: i32, a1: i32) callconv(.c) i32;
 /// because a config read legitimately returns all-ones, for an absent
 /// function among others. The kernel serialises every config access, so the
 /// address/data port pair is never interleaved with another caller's or with
-/// the kernel's own quiesce of a dead driver's function. Requires the
-/// pci.config capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
+/// the kernel's own quiesce of a dead driver's function. A holder of the
+/// pci.config capability may read any function; any other caller only the
+/// function its spawn profile names and it still drives (a driver walking
+/// its own device's capability list, as virtio-modern needs to). Returns 0,
+/// WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
 /// WASMOS_INVAL for a bdf above 0xFFFF or a register that is above 0xFC or
 /// not dword-aligned, or WASMOS_ERR_KERNEL_BAD_POINTER; `out` is left
 /// untouched on failure.

@@ -1920,8 +1920,8 @@ m3ApiRawFunction(wasmos_io_in32) {
     m3ApiReturn(0);
 }
 
-/* hostcalls.yaml `pci_config_read` / `pci_config_write`: config space through the kernel's
- * serialised mechanism-1 access, for a holder of pci.config.  `out` is written through the
+/* hostcalls.yaml `pci_config_write` and pci-bus's other config-space calls: the kernel's
+ * serialised access, for a holder of pci.config.  `out` is written through the
  * interpreter's own pointer; a range outside linear memory TRAPS the module via
  * m3ApiCheckMem.  WASMOS_INVAL for a bdf above 0xFFFF or a register above 0xFC or not
  * dword-aligned. */
@@ -1936,15 +1936,20 @@ static int32_t pci_config_guest_check(int32_t bdf, int32_t reg) {
     return 0;
 }
 
+/* A read is decided by pci_config_guest_read: pci.config reads any function, a
+ * driver without it only the function its spawn profile made it own. */
 m3ApiRawFunction(wasmos_pci_config_read) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, bdf) m3ApiGetArg(int32_t, reg)
         m3ApiGetArgMem(uint32_t*, out) m3ApiCheckMem(out, sizeof(uint32_t));
-    int32_t rc = pci_config_guest_check(bdf, reg);
-    if (rc != 0) {
-        m3ApiReturn(rc);
+    uint32_t context_id = 0;
+    if (bdf < 0 || reg < 0) {
+        m3ApiReturn(WASMOS_INVAL);
     }
-    *out = pci_config_read32((uint16_t)bdf, (uint8_t)reg);
-    m3ApiReturn(0);
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
+    }
+    m3ApiReturn(pci_config_guest_read(
+        context_id, capability_has(context_id, CAP_PCI_CONFIG), (uint32_t)bdf, (uint32_t)reg, out));
 }
 
 /* The context that owns `endpoint`, the driver a pci-bus request is made for;

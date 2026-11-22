@@ -913,8 +913,8 @@ static uint32_t warp_io_in32(uint32_t port, uint32_t out_off, void* ctx_) {
     return 0;
 }
 
-/* hostcalls.yaml `pci_config_read` / `pci_config_write`: config space through the kernel's
- * serialised mechanism-1 access, for a holder of pci.config.  WASMOS_INVAL for a bdf above
+/* hostcalls.yaml `pci_config_write` and pci-bus's other config-space calls: the kernel's
+ * serialised access, for a holder of pci.config.  WASMOS_INVAL for a bdf above
  * 0xFFFF or a register above 0xFC or not dword-aligned. */
 static uint32_t warp_pci_config_check(uint32_t bdf, uint32_t reg) {
     uint32_t context_id = 0;
@@ -925,15 +925,22 @@ static uint32_t warp_pci_config_check(uint32_t bdf, uint32_t reg) {
     return 0;
 }
 
+/* A read is decided by pci_config_guest_read: pci.config reads any function, a
+ * driver without it only the function its spawn profile made it own. */
 static uint32_t warp_pci_config_read(uint32_t bdf, uint32_t reg, uint32_t out_off, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    uint32_t rc = warp_pci_config_check(bdf, reg);
-    if (rc != 0)
-        return rc;
+    uint32_t context_id = 0;
+    uint32_t value = 0;
     uint32_t* out = reinterpret_cast<uint32_t*>(warp_mem(ctx, out_off, sizeof(uint32_t)));
     if (!out)
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    *out = pci_config_read32((uint16_t)bdf, (uint8_t)reg);
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    int32_t rc = pci_config_guest_read(
+        context_id, capability_has(context_id, CAP_PCI_CONFIG), bdf, reg, &value);
+    if (rc != 0)
+        return (uint32_t)rc;
+    *out = value;
     return 0;
 }
 

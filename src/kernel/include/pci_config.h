@@ -61,4 +61,17 @@ int32_t pci_function_check(uint32_t context_id, uint16_t bdf);
  * refusal. */
 int32_t pci_config_write_checked(uint32_t context_id, uint16_t bdf, uint8_t reg, uint32_t value);
 
+/* The pci_config_read host call for context_id, decided and performed here so
+ * both runtimes share one decision. holds_pci_config is whether the context
+ * holds the pci.config capability, which reads any function. Without it the
+ * context may read only a function it OWNS -- one its spawn profile named
+ * (pci_function_attach) and that has not been retired -- which is how a driver
+ * walks its own device's capability list (virtio-modern finds its register
+ * blocks there). Writes stay pci.config-only. Returns 0 with *out set,
+ * WASMOS_INVAL for a bdf above 0xFFFF or a register above 0xFC or not
+ * dword-aligned, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED; *out is untouched on
+ * failure. */
+int32_t pci_config_guest_read(uint32_t context_id, int holds_pci_config, uint32_t bdf, uint32_t reg,
+                              uint32_t* out);
+
 #endif

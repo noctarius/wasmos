@@ -79,6 +79,10 @@ int device_window_map(uint64_t phys, uint64_t length, uint64_t* out_kva) {
     g_window_count++;
     g_window_next_va = va + length;
     ksync_spinlock_unlock(&g_window_lock);
+    klog_printf("[device-window] %016llx+%llx at %016llx\n",
+                (unsigned long long)phys,
+                (unsigned long long)length,
+                (unsigned long long)va);
     *out_kva = va;
     return 0;
 }

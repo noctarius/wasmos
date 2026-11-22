@@ -2857,6 +2857,7 @@ static int dm_submit_rule(const char* instance, const char* restart, const char*
     if (spec_len <= 0 || caps_len <= 0) {
         return -1;
     }
+    log_spawn_grant(path, &g_dm.active_rule_spawn_caps);
     desc.spec_len = (uint32_t)spec_len;
     desc.caps_len = (uint32_t)caps_len;
     bid = wasmos_xfer_stage(&desc, (int32_t)sizeof(desc));

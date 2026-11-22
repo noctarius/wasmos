@@ -224,6 +224,8 @@ TESTS = [
     (RUN, 'test_libc_stdlib', []),
     (CC, 'test_vring', [*C11, "-I" + R('src/libsys/wasm/include'), R('tests/unit/test_vring.c')]),
     (RUN, 'test_vring', []),
+    (CC, 'test_virtio_pci_caps', [*C11, "-I" + R('src/libsys/wasm/include'), '-iquote', R('tests/unit'), R('tests/unit/test_virtio_pci_caps.c')]),
+    (RUN, 'test_virtio_pci_caps', []),
     (CC, 'test_ringbuf', [*C11, '-pthread', "-I" + R('src/libsys/wasm/include'), "-I" + R('src/drivers/include'), R('tests/unit/test_ringbuf.c')]),
     (RUN, 'test_ringbuf', []),
     (CC, 'test_libui_key_decode', [*C11, "-I" + R('src/libui/include'), "-I" + R('src/libc/include'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_libui_key_decode.c')]),

@@ -189,3 +189,23 @@ void pci_quiesce_context(uint32_t context_id, uint32_t pid) {
                     (unsigned)pid);
     }
 }
+
+int32_t pci_config_guest_read(uint32_t context_id, int holds_pci_config, uint32_t bdf, uint32_t reg,
+                              uint32_t* out) {
+    int32_t rc = WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    int allowed = holds_pci_config;
+    if (!out || bdf > 0xFFFFu || reg > 0xFCu || (reg & 3u) != 0u) {
+        return WASMOS_INVAL;
+    }
+    ksync_spinlock_lock(&g_pci_config_lock);
+    if (!allowed) {
+        const pci_function_t* fn = pci_function_by_bdf_locked((uint16_t)bdf);
+        allowed = fn && fn->state == PCI_FUNCTION_OWNED && fn->owner_context == context_id;
+    }
+    if (allowed) {
+        *out = pci_cfg_read_locked((uint16_t)bdf, (uint8_t)reg);
+        rc = 0;
+    }
+    ksync_spinlock_unlock(&g_pci_config_lock);
+    return rc;
+}

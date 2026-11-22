@@ -164,6 +164,7 @@ static int test_a_looping_capability_list_ends(void) {
 #define CTX_DRIVER 7u
 #define CTX_OTHER 8u
 #define CTX_REPLACEMENT 9u
+#define CTX_READER 10u
 
 static int test_the_reap_quiesces_only_a_driving_context(void) {
     reset_devices();
@@ -248,6 +249,60 @@ static int test_an_unmanaged_function_is_not_refused(void) {
     return 0;
 }
 
+/* A driver reads its own function's config space -- a virtio-modern driver
+ * finds its register blocks in the capability list -- without pci.config. */
+static int test_a_driver_reads_its_own_function(void) {
+    uint32_t v = 0;
+    reset_devices();
+    if (pci_function_attach(CTX_READER, BDF_DEV) != 0) {
+        return __LINE__;
+    }
+    if (pci_config_guest_read(CTX_READER, 0, BDF_DEV, 0x34, &v) != 0 || v != 0x40u) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+/* Reading is not owning: without pci.config a context reads no function it
+ * does not own -- not another driver's, not an unmanaged one, and not its own
+ * once the reap has retired it. */
+static int test_a_driver_reads_no_other_function(void) {
+    uint32_t v = 0xA5A5A5A5u;
+    reset_devices();
+    if (pci_function_attach(CTX_READER, BDF_DEV) != 0) {
+        return __LINE__;
+    }
+    if (pci_config_guest_read(CTX_OTHER, 0, BDF_DEV, 0x00, &v) !=
+            WASMOS_ERR_KERNEL_NOT_AUTHORIZED ||
+        pci_config_guest_read(CTX_READER, 0, BDF_BARE, 0x00, &v) !=
+            WASMOS_ERR_KERNEL_NOT_AUTHORIZED ||
+        v != 0xA5A5A5A5u) {
+        return __LINE__;
+    }
+    pci_quiesce_context(CTX_READER, 43);
+    if (pci_config_guest_read(CTX_READER, 0, BDF_DEV, 0x00, &v) !=
+        WASMOS_ERR_KERNEL_NOT_AUTHORIZED) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+/* pci.config reads any function; malformed requests are refused for everyone. */
+static int test_pci_config_reads_any_function_and_bad_requests_fail(void) {
+    uint32_t v = 0;
+    reset_devices();
+    if (pci_config_guest_read(CTX_OTHER, 1, BDF_BARE, 0x00, &v) != 0 || v != 0x29228086u) {
+        return __LINE__;
+    }
+    if (pci_config_guest_read(CTX_OTHER, 1, 0x10000u, 0x00, &v) != WASMOS_INVAL ||
+        pci_config_guest_read(CTX_OTHER, 1, BDF_BARE, 0x02, &v) != WASMOS_INVAL ||
+        pci_config_guest_read(CTX_OTHER, 1, BDF_BARE, 0x100, &v) != WASMOS_INVAL ||
+        pci_config_guest_read(CTX_OTHER, 1, BDF_BARE, 0x00, 0) != WASMOS_INVAL) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     static const wasmos_test_case_t cases[] = {
         WASMOS_TEST_CASE(test_an_access_reaches_its_functions_register),
@@ -260,6 +315,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_another_process_cannot_drive_an_owned_function),
         WASMOS_TEST_CASE(test_the_owner_and_its_replacement_may_drive_it),
         WASMOS_TEST_CASE(test_an_unmanaged_function_is_not_refused),
+        WASMOS_TEST_CASE(test_a_driver_reads_its_own_function),
+        WASMOS_TEST_CASE(test_a_driver_reads_no_other_function),
+        WASMOS_TEST_CASE(test_pci_config_reads_any_function_and_bad_requests_fail),
     };
     if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
         return 1;

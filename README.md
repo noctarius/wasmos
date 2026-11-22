@@ -182,7 +182,10 @@ Notes:
   `asc` / `black` / `ruff` paths to `scripts/quality.sh`. Each language is only
   required if it has in-scope sources.
 - `lint` uses the build directory's `compile_commands.json`, which `configure`
-  writes and every regeneration updates.
+  writes and every regeneration updates. `configure` also links it to the
+  source root for CLion/clangd (`--ide-link` re-points it at another build
+  directory); `.run/` holds shared CLion run configurations against
+  `out/default`.
 - Scope is limited to first-party sources under `src/`, `tests/`, `examples/`,
   and `scripts/` (edit `allowed_roots` in `scripts/quality.sh`); vendored trees
   under `libs/`, dot-folders, and `others/` are never touched.

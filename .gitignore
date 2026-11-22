@@ -21,3 +21,6 @@ HANDOVER-*.md
 # Fetched CA trust bundle (produced by scripts/fetch-ca-certs.sh; not vendored).
 scripts/system/net/certificates/ca-certs.pem
 /out/
+
+# IDE entry point maintained by ./configure (a symlink into one build directory).
+/compile_commands.json

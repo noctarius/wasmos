@@ -407,7 +407,7 @@ def run_targets(b, esp_stamp, images):
             target,
             [
                 configure
-                + [tree, root / "configs/wasmos_defconfig", "--reseed"]
+                + [tree, root / "configs/wasmos_defconfig", "--reseed", "--no-ide-link"]
                 + [x for a in sets for x in ("--set", a)]
                 + inherited,
                 ["ninja", "-C", tree, check],

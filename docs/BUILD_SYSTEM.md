@@ -36,6 +36,10 @@ ninja -C out/wasm3-smp fmt-check lint     # quality gates
 ninja -C out/wasm3-smp menuconfig         # edit out/wasm3-smp/.config
 ```
 
+Without a directory, `configure` uses `out/default` (`./configure
+configs/warp_smp_defconfig`), the directory the shared CLion run configurations
+and `scripts/quality.sh` assume.
+
 `scripts/run_config.sh <config> [target]` configures `out/<config>` from
 `configs/<config>_defconfig` on first use and builds the target.
 
@@ -303,8 +307,32 @@ the `wasm32` flags against the in-tree headers), C sources a Zig/Rust/Go driver
 compiles, each source of a multi-source unit test (with that test's flags), the
 other runtime's kernel glue (with that runtime's flags), libsys entry shims, the
 SDK hello app, `warp_aot` in a wasm3 tree, the WARP host test and the plugin.
-`skills/wasmos-ide-targets` covers auditing and fixing coverage; CLion opens the
-tree as a compilation-database project.
+`skills/wasmos-ide-targets` covers auditing and fixing coverage.
+
+### IDE Entry Point
+
+`configure` maintains `<srcdir>/compile_commands.json` (gitignored), a symlink
+to one build directory's database, so CLion and clangd find it at the source
+root. It is created when missing or dangling and otherwise left alone, so the
+first configured directory keeps it; `--ide-link` re-points it at the directory
+being configured, `--no-ide-link` leaves it untouched (the ring-3 shadow trees
+pass it), and a regular file at that path is never replaced. The index follows
+that directory's `.config`: `#if` branches and the runtime-specific kernel glue
+resolve as that tree builds them.
+
+CLion opens the source root as a compilation-database project; a project last
+opened when the tree used CMake still carries CMake state in `.idea/` and fails
+with `CMakeLists.txt not found`. Closing the project, removing `.idea/` and
+reopening the directory loads the symlinked database instead. Enabling
+auto-reload (Settings → Build, Execution, Deployment → Compilation Database)
+follows its regeneration.
+
+A compilation-database project has no build targets of its own. `.run/` holds
+shared run configurations against `out/default` (CLion's *wasmos* folder):
+shell configurations for the build, `run-qemu`, `run-qemu-test`,
+`run-kernel-unit-tests`, `fmt-check` + `lint` and the paused `run-qemu-debug`, plus a GDB
+remote-debug configuration that attaches to `localhost:1234` with
+`out/default/kernel.elf` symbols once `run-qemu-debug` is waiting.
 
 ---
 

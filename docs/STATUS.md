@@ -654,7 +654,11 @@ linked feature documents for rationale and rollout plans.
   WARP AOT payloads, initfs, the ESP, the WFS/GPT fixtures, the host tools and
   the SDK, with per-object compiles and compiler depfiles; writes
   `compile_commands.json`; and defines every run, test and quality target
-  (`docs/BUILD_SYSTEM.md`). Measured against the previous CMake build on
+  (`docs/BUILD_SYSTEM.md`). The build directory defaults to `out/default`;
+  configure links `<srcdir>/compile_commands.json` to the first configured
+  directory (`--ide-link` re-points, `--no-ide-link` skips; the ring-3 shadow
+  trees skip), and `.run/` carries shared CLion run configurations against
+  `out/default`. Measured against the previous CMake build on
   2026-11-21 (wasm3_smp, warp_smp): stripped kernels, every non-Rust/Go `.wap`
   including all 50 AOT payloads, initfs and the disk images byte-identical;
   ESP trees identical (the Ninja ESP additionally stages

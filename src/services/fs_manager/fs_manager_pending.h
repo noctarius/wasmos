@@ -81,6 +81,7 @@ typedef struct {
     int32_t client_buffer; /* CHDIR: where the resulting cwd is reported */
     int32_t fd;            /* READ_PATH: the backend fd once opened */
     int32_t read_cap;      /* READ_PATH: bytes the read may return */
+    int32_t pid;           /* BACKEND_INFO: the backend's process, or 0 */
     /* READ_PATH: bytes read once the read succeeded, or the packed code the
      * client is answered with after the close. */
     int32_t result;

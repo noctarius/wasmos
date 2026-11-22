@@ -82,6 +82,9 @@ typedef struct {
      * fs-manager to answer its rules read. */
     char source_id[BLOCK_DESCRIPTOR_ID_MAX];
     char mount_path[FSMGR_MOUNT_PATH_MAX];
+    /* The backend's process, from the class event that announced it; 0 for one
+     * found by the startup lookup. A mount's reply reports it. */
+    int32_t pid;
 } fs_backend_t;
 
 /* Longest working directory fs-manager will hold for a client, NUL included.

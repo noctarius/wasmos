@@ -693,14 +693,14 @@ Source: `architecture/13-runtime-and-packaging.md`,
   a partition carries over too. All three hold a transfer across the restart
   and resend it to the successor (`WASMOS_BLOCK_HOLD_MS`). net-stack keeps
   `eth0`, its addresses and its sockets across virtio-net's restart and rebinds
-  it to the successor by class instance. Open:
+  it to the successor by class instance. fs-manager submits the backend of
+  every mount it places as a unit (`<driver>@<mount>`) and retracts it on
+  unmount; a backend's restart brings its mount back. Open:
   - partition-manager's hold of a transfer that was ON THE WIRE when the driver
     ended (`diskGone`) has no deterministic test: the QEMU test reads right after
     `svc kill` and cannot choose whether its read is in flight at the kill or
     begun after it, and the driver has no host harness.
     `test_partition_inflight.zig` covers the table's side of it.
-  - fs-manager submits its backends as supervised units (unmount through
-    `SUPERVISOR_IPC_RETRACT_REQ`).
 - [x] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
   interrupts back. Fixed: `PCI_IPC_INTX_ENABLE_REQ` (pci-bus) turns bus
   mastering on and clears INTx Disable for the function's driver; virtio-blk

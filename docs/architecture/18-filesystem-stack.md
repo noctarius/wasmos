@@ -88,10 +88,25 @@ the second DECLARES what to mount it as, and a rule may match on one and mount a
 the other.
 
 The reason is ownership, not tidiness. The service that holds the mount table,
-answers `mount` and serves every path through the mount is then also the PARENT
-of the process behind it, which is what makes the mount removable: a backend that
-ignores its shutdown request can be killed by its parent, and a driver the device
-manager spawned is not `fs_manager`'s to stop.
+answers `mount` and serves every path through the mount is then also the one
+that owns the backend behind it, which is what makes the mount removable: a
+driver the device manager spawned is not `fs_manager`'s to stop.
+
+**A backend is a supervised unit.** `fs_manager` does not spawn it; it submits
+it to the supervisor (`SUPERVISOR_IPC_SUBMIT_REQ`) as `<driver>@<mount path>`
+-- `fs_wfs@/wfs`, `fs_tmpfs@/home/user` -- with `restart=on-failure` and the
+mount's startup arguments. The name is derived from the mount, so it is unique
+by construction and survives a restart; a unit name is at most
+`SUPERVISOR_UNIT_NAME_MAX` (35) characters, so a mount path that would make a
+longer one is refused with `WASMOS_ERR_FS_PATH_TOO_LONG`. A backend that dies is
+restarted, and its mount returns when the successor registers: the class REMOVE
+drops the mount and the class ADD brings it back, exactly as for any backend.
+What the dead process held is lost with it -- an open file on the mount is a
+`WASMOS_ERR_FS_BAD_FD` afterwards, and a path under the mount resolves in the
+covering filesystem until the successor registers. A backend the supervisor
+gives up on leaves its unit `failed` and its mount gone; `svc start` brings it
+back. `fs_manager` holds `svc.control` for this, and finds the supervisor with
+one lookup at startup, answered in its loop.
 
 A block-backed rule additionally names the volume, by the canonical id of the
 device that matched — the single device token a filesystem driver receives.
@@ -131,18 +146,19 @@ boot rule or from a request. The type-to-driver table is in `fs_manager.c`.
 self-select a volume when given none, but a mount that picks its own device is not
 the mount the caller asked for, and the caller cannot discover which one it got.
 
-**The reply is deferred, and must be.** The process manager READS the driver
-module through `fs_manager` while handling the spawn request. An `fs_manager` that
-blocked awaiting the spawn reply would be the one service unable to answer that
-read, and the spawn would fail with "the filesystem never answered" — a mutual
-wait, not a slow path. So the spawn request is sent with the SERVICE endpoint as
-its reply address and `fs_manager` returns to its loop, where it serves the
-module read like any other request and later handles the spawn's own reply. The
-SYNC spawn opcode is used because its reply is deferred until the child reports
-READY: the backend has registered by then, and a driver that never becomes ready
-is bounded by the process manager's timeout rather than leaving the client
-waiting. One mount request is in flight at a time; a second is refused with
-`WASMOS_ERR_FS_BUSY`.
+**The reply is deferred, and must be.** The supervisor spawns the backend
+through the process manager, which READS the driver module through
+`fs_manager`. An `fs_manager` that blocked on any part of the exchange would be
+the one service unable to answer that read -- a mutual wait, not a slow path. So
+the submission is sent with the SERVICE endpoint as its reply address and
+`fs_manager` returns to its loop, where it serves the module read like any other
+request. The supervisor answers once it has accepted the unit; the mount is
+answered when the backend has registered, with the backend's pid, or refused
+with `WASMOS_ERR_FS_NOT_READY` when it has not registered within 15 s, in which
+case its unit is retracted. One mount request is in flight at a time; a second
+is refused with `WASMOS_ERR_FS_BUSY`, as is a mount at a path whose unit is
+still held -- its backend restarting, or the previous mount there still being
+retracted.
 
 This is the general shape for any request `fs_manager` cannot answer from its own
 state: defer, do not block. `fs_manager` is below everything that needs a file.
@@ -176,6 +192,16 @@ The backend is quiesced before it is dropped — `WASMOS_IPC_SHUTDOWN_REQ` with
 filesystem with dirty state writes it while it still has a block device. A
 backend that fails to answer is dropped anyway: the mount is going regardless,
 and leaving it in the table would make an unresponsive backend permanent.
+
+A backend ends itself after an unmount's quiesce. For a supervised backend
+`fs_manager` waits for that end -- its endpoint ownerless -- and then retracts
+the unit (`SUPERVISOR_IPC_RETRACT_REQ`), and answers the client only when the
+retraction is answered. The order is what frees the unit's name for the next
+mount at the path: the supervisor keeps a retracted unit's name until its
+instance has ended, and it has always seen that end first, because the kernel
+posts the supervisor's exit notice before it releases the process's endpoints
+and the supervisor reads it and the retraction from one queue. A backend that
+has not ended within 5 s is retracted anyway, which kills it.
 
 The mount POINT is left in place. It is a directory in the covering filesystem
 and belongs to that filesystem, so what becomes visible again is whatever the

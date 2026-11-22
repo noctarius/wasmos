@@ -112,6 +112,7 @@
       "needs_qemu": true,
       "files": [
         "test_ata_restart.py",
+        "test_fs_backend_supervision.py",
         "test_fs_open_smoke.py",
         "test_init_sysinit_giveup.py",
         "test_fat_virtio_blk.py",

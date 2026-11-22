@@ -72,6 +72,8 @@ TESTS = [
     (RUN, 'test_fs_manager_clients', []),
     (CC, 'test_fs_manager_pending', [*C11, "-I" + R('src/services/fs_manager'), '-iquote', R('src/drivers/include'), '-iquote', R('abi/generated/c'), '-iquote', R('src/libsys/wasm/include'), R('tests/unit/test_fs_manager_pending.c'), R('src/services/fs_manager/fs_manager_pending.c')]),
     (RUN, 'test_fs_manager_pending', []),
+    (CC, 'test_fs_manager_units', [*C11, "-I" + R('src/services/fs_manager'), '-iquote', R('src/drivers/include'), '-iquote', R('abi/generated/c'), '-iquote', R('src/libsys/wasm/include'), R('tests/unit/test_fs_manager_units.c'), R('src/services/fs_manager/fs_manager_units.c')]),
+    (RUN, 'test_fs_manager_units', []),
     (CC, 'test_cli_ls_order', [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/services/cli'), R('tests/unit/test_cli_ls_order.c'), R('src/services/cli/cli_ls_order.c')]),
     (RUN, 'test_cli_ls_order', []),
     (CC, 'test_vt_outmux', [*C11, "-I" + R('src/services/vt'), R('tests/unit/test_vt_outmux.c'), R('src/services/vt/vt_outmux.c')]),

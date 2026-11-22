@@ -1253,6 +1253,16 @@ linked feature documents for rationale and rollout plans.
   refused with `WASMOS_ERR_FS_BUSY`. The paths fs-manager supplies itself
   travel in a buffer per record, not one shared buffer. Remaining synchronous:
   the startup registration and class subscription and lookup at the PM.
+- The backend of every mount fs-manager places is a supervised unit,
+  `<driver>@<mount>` (`fs_wfs@/wfs`, `fs_tmpfs@/home/user`, restart=on-failure),
+  submitted rather than spawned (`fs_manager_units.c`, host-tested in
+  `test_fs_manager_units`). A killed backend is restarted and its mount returns
+  when the successor registers; its open files are lost. An unmount quiesces the
+  backend, waits for its end, retracts the unit and only then answers, so the
+  path can be mounted again at once. A mount not registered within 15 s is
+  refused `WASMOS_ERR_FS_NOT_READY` and its unit retracted
+  (`tests/test_fs_backend_supervision.py`). `/init` and `/boot` are not
+  fs-manager's mounts and stay as they were.
 - FS backends hold NO working directory. `FS_IPC_READDIR` carries the directory
   to list, `FS_IPC_CHDIR` is client-to-fs-manager only, and fs-manager validates
   a chdir with `FS_IPC_STAT_REQ`. Removed from all four backends (fs-tmpfs,

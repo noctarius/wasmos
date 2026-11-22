@@ -17,6 +17,7 @@
 #include "fs_manager_backends.h"
 #include "fs_manager_clients.h"
 #include "fs_manager_pending.h"
+#include "fs_manager_units.h"
 
 /* Retries a reply gets before this service gives up on a client whose endpoint
  * stays full. Generous on purpose: the failure it guards against is permanent
@@ -896,7 +897,7 @@ static void handle_mount_wait_req(int32_t source, int32_t request_id, int32_t bu
  * instead is refused ALREADY_BORROWED on the second pull, and each backend is
  * pulled more than once -- the class lookup and the ADD event both land here;
  * each pull has a buffer of its own. */
-static void fsmgr_pull_backend(int32_t backend_endpoint) {
+static void fsmgr_pull_backend(int32_t backend_endpoint, int32_t pid) {
     /* Both strings ride one buffer: the mount at offset 0 and the device id
      * immediately after it, lengths in arg2 and arg3. Neither is terminated in
      * the buffer -- the lengths delimit them -- so the capacity is exactly the
@@ -913,6 +914,7 @@ static void fsmgr_pull_backend(int32_t backend_endpoint) {
                (int)backend_endpoint);
         return;
     }
+    entry->pid = pid;
     entry->buffer = wasmos_xfer_buffer_acquire(info_cap);
     if (entry->buffer < 0) {
         entry->buffer = -1;
@@ -935,6 +937,7 @@ static void fsmgr_backend_info_done(fsmgr_pending_t* entry, int32_t type, int32_
     char reported_mount[FSMGR_MOUNT_PATH_MAX];
     char reported_source[BLOCK_DESCRIPTOR_ID_MAX];
     int32_t backend_endpoint = entry->backend;
+    int32_t pid = entry->pid;
 
     if (type != FSMGR_IPC_BACKEND_INFO_RESP) {
         pending_end(entry);
@@ -957,6 +960,11 @@ static void fsmgr_backend_info_done(fsmgr_pending_t* entry, int32_t type, int32_
     }
     pending_end(entry);
     fsmgr_apply_backend_info(backend_endpoint, kind, fs_type, reported_mount, reported_source);
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        if (g_backends[i].in_use && g_backends[i].endpoint == backend_endpoint) {
+            g_backends[i].pid = pid;
+        }
+    }
     /* The table changed, so the mount points may be incomplete: this backend's
      * own point did not exist before now, and an earlier backend's point could
      * not be created until the filesystem covering it registered. */
@@ -1183,7 +1191,7 @@ static void fsmgr_pull_all_backends(void) {
                                 (int32_t)(sizeof(backends) / sizeof(backends[0])),
                                 4);
     for (i = 0; i < n && i < (int32_t)(sizeof(backends) / sizeof(backends[0])); ++i) {
-        fsmgr_pull_backend((int32_t)backends[i].endpoint);
+        fsmgr_pull_backend((int32_t)backends[i].endpoint, 0);
     }
 }
 
@@ -1560,19 +1568,25 @@ static const fsmgr_fstype_t g_fstypes[] = {
     {"wfs", "/boot/system/drivers/fs_wfs.wap", 1},
 };
 
-/* Request ids for the spawn requests a mount makes. They are sent from the
- * service endpoint, so they share no id space with the records in g_pending,
- * whose answers land on the reply endpoint. */
-static int32_t g_mount_request_id = 1;
+/* Request ids of what fs-manager asks the supervisor and the process manager
+ * about mounts: the supervisor's lookup and each unit's SUBMIT and RETRACT. They
+ * are sent from the service endpoint, so they share no id space with the records
+ * in g_pending, whose answers land on the reply endpoint. */
+#define FSMGR_SV_LOOKUP_REQUEST_ID 0x5F00
+static int32_t g_sv_request_id = FSMGR_SV_LOOKUP_REQUEST_ID + 1;
 
 /* Longest mount descriptor accepted. The process manager truncates startup
  * arguments at WASMOS_STARTUP_ARGS_MAX (255), and the descriptor's tokens become
  * those arguments, so a longer one could not be delivered anyway. */
 #define FSMGR_MOUNT_DESC_MAX 256
 
-/* Deadline for a spawned backend to reach readiness, matching device-manager's.
- * A driver that never registers must not hold the FS service loop. */
-#define FSMGR_MOUNT_SPAWN_TIMEOUT_MS 5000
+/* How long a mount waits for its backend to register once the supervisor has
+ * accepted its unit. It spans the supervisor's first restarts of a backend that
+ * fails to start; a mount not up by then is refused and its unit retracted. */
+#define FSMGR_MOUNT_TIMEOUT_MS 15000
+/* How long an unmount waits for its quiesced backend to end before retracting
+ * the unit anyway, which kills the backend. */
+#define FSMGR_RETIRE_TIMEOUT_MS 5000
 
 /* Copy the value of `key` out of a whitespace-separated `key=value` descriptor.
  *
@@ -1627,100 +1641,140 @@ static const fsmgr_fstype_t* fsmgr_fstype_find(const char* type) {
     return 0;
 }
 
-/* A mount request waiting on the driver it asked the process manager to spawn.
+/* A mount request waiting on its backend.
  *
  * ONE at a time. A second request while this is occupied is answered with
  * WASMOS_ERR_FS_BUSY, which is what that code means: a transient shortage of a
  * single-slot resource that clears on its own, unlike MOUNT_EXISTS or
- * MOUNT_FSTYPE. The process manager has a single sync-spawn slot of its own, so
- * a deeper queue here would only move the refusal.
- *
- * The path/args buffer is held for the whole exchange rather than released after
- * the send: the process manager reads it inside its own handler, and fs-manager
- * cannot observe when that finishes. */
+ * MOUNT_FSTYPE. */
 typedef struct {
     int32_t in_use;
     int32_t client;
     int32_t request_id;
-    int32_t buffer_id;
     const char* module;
     char mount[FSMGR_MOUNT_PATH_MAX];
     char args[FSMGR_MOUNT_DESC_MAX];
-    /* The driver is READY; the reply waits for its backend to register. */
+    /* The unit submitted for it; NULL until the supervisor is known. */
+    fsmgr_unit_t* unit;
+    /* The supervisor accepted the unit; the reply waits for its backend to
+     * register, until deadline_ms. */
     int32_t awaiting_backend;
-    int32_t pid;
+    uint32_t deadline_ms;
 } fsmgr_pending_mount_t;
 
 static fsmgr_pending_mount_t g_pending_mount;
+/* The units fs-manager submitted (fs_manager_units.h). */
+static fsmgr_unit_t g_units[FSMGR_UNIT_CAP];
+/* The supervisor's endpoint, from the one lookup sent at startup; -1 until it is
+ * answered, and for good when it fails. */
+static int32_t g_supervisor_endpoint = -1;
+static int32_t g_supervisor_lookup_done = 0;
 
-/* Ask the process manager to spawn `g_pending_mount.module`, WITHOUT waiting for
- * the reply.
- *
- * Not waiting is the whole point. The process manager READS the module blob
- * through fs-manager while handling this request, so an fs-manager that blocked
- * on the reply would be the one service unable to answer, and the spawn would
- * fail with "the filesystem never answered" — a mutual wait, not a slow path. By
- * returning to the main loop, fs-manager serves that read like any other, and the
- * spawn's own reply arrives there too (it is sent from the SERVICE endpoint, so
- * the answer comes back to it).
- *
- * The SYNC spawn opcode is used precisely because its reply is deferred until the
- * child reports READY: the backend has registered by then, so the mount is in the
- * table when the reply is handled, and a driver that never becomes ready is bounded
- * by the timeout rather than leaving the client waiting forever. CAPS_SYNC rather
- * than PATH_SYNC because it is the only path spawn that carries startup ARGUMENTS;
- * the capability set it also carries is empty.
- *
- * Returns 0 when the request was sent, or a negative packed code. */
-static int32_t fsmgr_mount_send_spawn(void) {
-    char path[128];
-    uint32_t path_len;
-    uint32_t args_len;
-    int32_t bid;
+static uint32_t fsmgr_now_ms(void) {
+    return (uint32_t)wasmos_sched_ticks() * (1000u / WASMOS_SCHED_TICK_HZ);
+}
 
-    path[0] = '\0';
-    str_copy(path, sizeof(path), g_pending_mount.module);
-    path_len = (uint32_t)strlen(path);
-    args_len = (uint32_t)strlen(g_pending_mount.args);
-    if (path_len == 0u || path_len > 0xFFFu) {
-        return WASMOS_ERR_FS_BAD_ARGS;
+/* Look the supervisor up WITHOUT waiting; the answer reaches the main loop
+ * (fsmgr_on_supervisor_lookup). Sent once: the supervisor registers its name
+ * before it spawns fs-manager and is never restarted, so the one answer stands. */
+static void fsmgr_lookup_supervisor(void) {
+    int32_t name[4];
+    wasmos_ipc_pack_name16("supervisor", name);
+    if (wasmos_ipc_send(g_proc_endpoint,
+                        g_fs_endpoint,
+                        SVC_IPC_LOOKUP_REQ,
+                        FSMGR_SV_LOOKUP_REQUEST_ID,
+                        name[0],
+                        name[1],
+                        name[2],
+                        name[3]) != 0) {
+        log_msg("[fs-manager] supervisor lookup could not be sent; mounts are refused\n");
+        g_supervisor_lookup_done = 1;
     }
-    bid = wasmos_xfer_buffer_acquire((int32_t)(path_len + args_len + 1u));
+}
+
+/* Send `type` about `unit` to the supervisor from the service endpoint, with
+ * `desc` staged in a buffer fs-manager owns and lends the supervisor READ. The
+ * request id and the buffer are recorded on the unit; the answer reaches the
+ * main loop (fsmgr_on_supervisor_reply), which releases the buffer. Returns 0,
+ * or a negative packed code with nothing outstanding. */
+static int32_t fsmgr_supervisor_send(fsmgr_unit_t* unit, int32_t type, const void* desc,
+                                     int32_t size) {
+    int32_t bid;
+    if (g_supervisor_endpoint < 0) {
+        return WASMOS_ERR_FS_NOT_READY;
+    }
+    bid = wasmos_xfer_stage(desc, size);
     if (bid < 0) {
         return WASMOS_ERR_FS_BUFFER;
     }
-    /* Path at offset 0, NUL-terminated args immediately after it; arg1 packs the
-     * buffer id above the path length. The process manager reads this buffer by
-     * OWNERSHIP, so no grant is lent. */
-    if (wasmos_xfer_buffer_write(bid, (const uint8_t*)path, (int32_t)path_len, 0) != 0 ||
-        wasmos_xfer_buffer_write(bid,
-                                 (const uint8_t*)g_pending_mount.args,
-                                 (int32_t)(args_len + 1u),
-                                 (int32_t)path_len) != 0) {
+    if (wasmos_xfer_buffer_borrow(g_supervisor_endpoint, bid, WASMOS_BUFFER_GRANT_READ) < 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return WASMOS_ERR_FS_BUFFER;
     }
-    if (wasmos_ipc_send(g_proc_endpoint,
-                        g_fs_endpoint,
-                        PROC_IPC_SPAWN_PATH_CAPS_SYNC,
-                        g_mount_request_id++,
-                        0,
-                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                        0,
-                        FSMGR_MOUNT_SPAWN_TIMEOUT_MS) != 0) {
+    unit->request_id = g_sv_request_id++;
+    if (wasmos_ipc_send(
+            g_supervisor_endpoint, g_fs_endpoint, type, unit->request_id, bid, 0, size, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return WASMOS_ERR_FS_BACKEND_IPC;
     }
-    g_pending_mount.buffer_id = bid;
+    unit->buffer_id = bid;
     return 0;
 }
 
-static void fsmgr_mount_pending_clear(void) {
-    if (g_pending_mount.buffer_id > 0) {
-        (void)wasmos_xfer_buffer_release(g_pending_mount.buffer_id);
+/* Answer the unmount waiting on `unit`, if one is. */
+static void fsmgr_unit_answer_unmount(fsmgr_unit_t* unit) {
+    if (unit->client >= 0) {
+        (void)reply_to_client(
+            unit->client, FSMGR_IPC_UNMOUNT_RESP, unit->client_request_id, 0, 0, 0, 0);
     }
+}
+
+/* Withdraw `unit` from the supervisor (SUPERVISOR_IPC_RETRACT_REQ). Its answer
+ * completes the unmount waiting on it. A retraction that cannot be sent leaves
+ * the unit with the supervisor, which restarts nothing that ended cleanly: the
+ * unmount is answered and the slot freed. */
+static void fsmgr_unit_retract(fsmgr_unit_t* unit) {
+    static wasmos_supervisor_unit_desc_t desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.version = SUPERVISOR_UNIT_DESC_VERSION;
+    desc.name_len = (uint32_t)strlen(unit->name);
+    str_copy(desc.name, sizeof(desc.name), unit->name);
+    unit->state = FSMGR_UNIT_RETRACTING;
+    if (fsmgr_supervisor_send(unit, SUPERVISOR_IPC_RETRACT_REQ, &desc, (int32_t)sizeof(desc)) !=
+        0) {
+        printf("[fs-manager] cannot retract %s; the supervisor keeps it\n", unit->name);
+        fsmgr_unit_answer_unmount(unit);
+        fsmgr_unit_release(unit);
+    }
+}
+
+/* Retract every unmounted unit whose backend has ended, or whose deadline has
+ * passed.
+ *
+ * Waiting for the end is what frees the unit's name for the next mount at that
+ * path: the supervisor keeps a retracted unit's name until its instance has
+ * ended. It always has by the time fs-manager sees the endpoint ownerless,
+ * because the kernel posts the supervisor's exit notice before it releases the
+ * process's endpoints, and the supervisor reads that notice and this request
+ * from one queue, in order. The backend ends itself after an unmount's quiesce;
+ * one that does not is killed by the retraction once the deadline passes. */
+static void fsmgr_units_retire(void) {
+    uint32_t now = fsmgr_now_ms();
+    for (uint32_t i = 0; i < FSMGR_UNIT_CAP; ++i) {
+        fsmgr_unit_t* unit = &g_units[i];
+        if (unit->state == FSMGR_UNIT_RETIRING && unit->quiesced &&
+            (wasmos_ipc_endpoint_owner(unit->backend) < 0 ||
+             fsmgr_deadline_passed(now, unit->deadline_ms))) {
+            fsmgr_unit_retract(unit);
+        }
+    }
+}
+
+static void fsmgr_mount_pending_clear(void) {
     g_pending_mount.in_use = 0;
-    g_pending_mount.buffer_id = -1;
+    g_pending_mount.unit = 0;
+    g_pending_mount.awaiting_backend = 0;
 }
 
 static void fsmgr_mount_pending_fail(wasmos_error_code_t code) {
@@ -1730,52 +1784,168 @@ static void fsmgr_mount_pending_fail(wasmos_error_code_t code) {
     send_fs_error(client, request_id, code);
 }
 
-/* Answers the pending mount once its backend is in the table; called on the
- * spawn's reply and after every registration. */
+/* Answers the pending mount once its backend is in the table, with the
+ * backend's pid; called when the supervisor accepts the unit and after every
+ * registration. */
 static void fsmgr_mount_pending_complete(void) {
     int32_t client = g_pending_mount.client;
     int32_t request_id = g_pending_mount.request_id;
-    int32_t pid = g_pending_mount.pid;
+    int32_t pid = 0;
     if (!g_pending_mount.in_use || !g_pending_mount.awaiting_backend ||
         !fsmgr_mount_exists(g_pending_mount.mount)) {
         return;
+    }
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        if (g_backends[i].in_use && strcmp(g_backends[i].mount_path, g_pending_mount.mount) == 0) {
+            pid = g_backends[i].pid;
+        }
     }
     fsmgr_mount_pending_clear();
     (void)reply_to_client(client, FSMGR_IPC_MOUNT_RESP, request_id, 0, pid, 0, 0);
 }
 
-/* The process manager answered the spawn a pending mount is waiting on.
- *
- * A refusal is FINAL. The module root is declared per filesystem type rather
- * than searched, so a failure here is a failure to START the driver -- no process
- * slot, no memory, a module that will not load -- and retrying it under another
- * root would only replace that reason with a misleading one.
- *
- * On success the child has reported READY, so its backend has registered, and
- * the registration reaches this loop as the class event (fsmgr_pull_backend),
- * which completes the reply. The class is NOT pulled from the process manager
- * here: that is a synchronous call to the PM, and the PM may at this moment be
- * waiting for fs-manager to answer one of its module reads -- each would wait
- * on the other until the PM's read timed out.
- *
- * TODO: a driver that reports READY and never registers leaves the request
- * pending; fs-manager has no clock to bound it with. */
-static void fsmgr_mount_handle_spawn_reply(int32_t type, int32_t pid) {
-    if (!g_pending_mount.in_use) {
+/* A pending mount whose backend did not register in time is refused, and its
+ * unit retracted so that nothing keeps restarting a backend nobody waits for. */
+static void fsmgr_mount_pending_expire(void) {
+    fsmgr_unit_t* unit = g_pending_mount.unit;
+    if (!g_pending_mount.in_use || !g_pending_mount.awaiting_backend ||
+        !fsmgr_deadline_passed(fsmgr_now_ms(), g_pending_mount.deadline_ms)) {
         return;
     }
-    if (type != PROC_IPC_RESP) {
-        if (g_pending_mount.buffer_id > 0) {
-            (void)wasmos_xfer_buffer_release(g_pending_mount.buffer_id);
-            g_pending_mount.buffer_id = -1;
+    printf("[fs-manager] mount %s: its backend did not register\n", g_pending_mount.mount);
+    fsmgr_mount_pending_fail(WASMOS_ERR_FS_NOT_READY);
+    if (unit && unit->state == FSMGR_UNIT_HELD) {
+        unit->client = -1;
+        fsmgr_unit_retract(unit);
+    }
+}
+
+/* Milliseconds until the nearest deadline a mount or an unmount waits on, or -1
+ * when none does. The main loop bounds its wait with it, since nothing else
+ * wakes it when a backend simply never arrives or never ends. */
+static int32_t fsmgr_next_deadline_ms(void) {
+    uint32_t now = fsmgr_now_ms();
+    int32_t best = -1;
+    if (g_pending_mount.in_use && g_pending_mount.awaiting_backend) {
+        int32_t left = (int32_t)(g_pending_mount.deadline_ms - now);
+        best = left > 0 ? left : 0;
+    }
+    for (uint32_t i = 0; i < FSMGR_UNIT_CAP; ++i) {
+        if (g_units[i].state == FSMGR_UNIT_RETIRING && g_units[i].quiesced) {
+            int32_t left = (int32_t)(g_units[i].deadline_ms - now);
+            left = left > 0 ? left : 0;
+            if (best < 0 || left < best) {
+                best = left;
+            }
         }
+    }
+    return best;
+}
+
+/* Submit the pending mount's backend to the supervisor as a unit
+ * (SUPERVISOR_IPC_SUBMIT_REQ), named for the mount and restart=on-failure, with
+ * the mount's arguments as its startup arguments. The answer reaches the main
+ * loop (fsmgr_on_supervisor_reply).
+ *
+ * Not waiting is the whole point. The supervisor spawns the backend through the
+ * process manager, which READS the module through fs-manager, so an fs-manager
+ * that blocked on any part of this would be the one service unable to answer.
+ *
+ * A unit already recorded for the path refuses the mount as BUSY: its backend is
+ * restarting, or the previous mount there is still being retracted. */
+static void fsmgr_mount_submit(void) {
+    static wasmos_supervisor_submit_desc_t desc;
+    char name[SUPERVISOR_UNIT_NAME_MAX + 1];
+    fsmgr_unit_t* unit;
+    int32_t rc;
+
+    if (g_supervisor_endpoint < 0) {
         fsmgr_mount_pending_fail(WASMOS_ERR_FS_NOT_READY);
         return;
     }
+    rc = fsmgr_unit_name(g_pending_mount.module, g_pending_mount.mount, name, sizeof(name));
+    if (rc < 0) {
+        fsmgr_mount_pending_fail((wasmos_error_code_t)rc);
+        return;
+    }
+    memset(&desc, 0, sizeof(desc));
+    desc.version = SUPERVISOR_SUBMIT_DESC_VERSION;
+    rc = fsmgr_unit_spec(
+        name, g_pending_mount.module, g_pending_mount.args, desc.spec, sizeof(desc.spec));
+    if (rc < 0) {
+        fsmgr_mount_pending_fail((wasmos_error_code_t)rc);
+        return;
+    }
+    desc.spec_len = (uint32_t)rc;
+    unit = fsmgr_unit_claim(g_units, FSMGR_UNIT_CAP, name, g_pending_mount.mount);
+    if (!unit) {
+        fsmgr_mount_pending_fail(WASMOS_ERR_FS_BUSY);
+        return;
+    }
+    rc = fsmgr_supervisor_send(unit, SUPERVISOR_IPC_SUBMIT_REQ, &desc, (int32_t)sizeof(desc));
+    if (rc != 0) {
+        fsmgr_unit_release(unit);
+        fsmgr_mount_pending_fail((wasmos_error_code_t)rc);
+        return;
+    }
+    g_pending_mount.unit = unit;
+}
 
-    g_pending_mount.awaiting_backend = 1;
-    g_pending_mount.pid = pid;
-    fsmgr_mount_pending_complete();
+/* The process manager answered the supervisor's lookup. A mount that arrived
+ * before it is submitted now. */
+static void fsmgr_on_supervisor_lookup(int32_t endpoint) {
+    g_supervisor_lookup_done = 1;
+    if ((uint32_t)endpoint == 0xFFFFFFFFu || endpoint < 0) {
+        log_msg("[fs-manager] no supervisor registered; mounts are refused\n");
+    } else {
+        g_supervisor_endpoint = endpoint;
+    }
+    if (g_pending_mount.in_use && !g_pending_mount.unit) {
+        fsmgr_mount_submit();
+    }
+}
+
+/* The supervisor answered a unit's SUBMIT or RETRACT; `code` is its packed code
+ * on a refusal. The supervisor has copied the request before it answers, so the
+ * buffer is released here, which also revokes its loan.
+ *
+ * An accepted SUBMIT holds the unit, and the pending mount then waits for the
+ * backend to register; a refused one fails the mount with the supervisor's code.
+ * A RETRACT's answer completes the unmount waiting on it either way: a refusal
+ * leaves a unit whose backend has already ended, which the supervisor does not
+ * restart. */
+static void fsmgr_on_supervisor_reply(int32_t type, int32_t request_id, int32_t code) {
+    fsmgr_unit_t* unit = fsmgr_unit_by_request(g_units, FSMGR_UNIT_CAP, request_id);
+    if (!unit) {
+        return;
+    }
+    if (unit->buffer_id >= 0) {
+        (void)wasmos_xfer_buffer_release(unit->buffer_id);
+        unit->buffer_id = -1;
+    }
+    if (unit->state == FSMGR_UNIT_SUBMITTING) {
+        int32_t pending = g_pending_mount.in_use && g_pending_mount.unit == unit;
+        if (type != SUPERVISOR_IPC_RESP) {
+            printf("[fs-manager] the supervisor refused %s\n", unit->name);
+            fsmgr_unit_release(unit);
+            if (pending) {
+                fsmgr_mount_pending_fail((wasmos_error_code_t)code);
+            }
+            return;
+        }
+        unit->state = FSMGR_UNIT_HELD;
+        if (pending) {
+            g_pending_mount.awaiting_backend = 1;
+            g_pending_mount.deadline_ms = fsmgr_now_ms() + FSMGR_MOUNT_TIMEOUT_MS;
+            fsmgr_mount_pending_complete();
+        }
+        return;
+    }
+    if (type != SUPERVISOR_IPC_RESP) {
+        printf("[fs-manager] the supervisor refused to retract %s\n", unit->name);
+    }
+    fsmgr_unit_answer_unmount(unit);
+    fsmgr_unit_release(unit);
 }
 
 /* FS_IPC_READDIR_REQ: list the client's working directory.
@@ -1840,15 +2010,13 @@ static void handle_readdir_req(fs_client_state_t* state, int32_t source, int32_t
  * it got. Conversely a source given for a memory-backed type is refused rather
  * than ignored, because silently dropping it would answer a different request.
  *
- * The reply is DEFERRED — see fsmgr_mount_send_spawn for why it must be, and
- * fsmgr_mount_handle_spawn_reply for what completes it. The mount POINT needs no
+ * The backend is the supervisor's to run: fs-manager submits it as a unit
+ * (fsmgr_mount_submit), so a backend that dies is restarted and its mount comes
+ * back when the successor registers. The reply is DEFERRED until the backend has
+ * registered (fsmgr_mount_pending_complete), and bounded by
+ * FSMGR_MOUNT_TIMEOUT_MS (fsmgr_mount_pending_expire). The mount POINT needs no
  * work: fsmgr_ensure_mount_points runs on every registration and creates it in
- * whichever filesystem covers it.
- *
- * TODO: a driver that is spawned, reports ready, and then wedges without
- * registering leaves nothing behind here, but the process stays. A driver that
- * never reports ready is bounded only by FSMGR_MOUNT_SPAWN_TIMEOUT_MS in the
- * process manager; fs-manager has no clock of its own to bound anything with. */
+ * whichever filesystem covers it. */
 static void handle_mount_req(fs_client_state_t* state, int32_t source, int32_t request_id,
                              int32_t desc_len, int32_t buffer_id) {
     uint8_t desc[FSMGR_MOUNT_DESC_MAX];
@@ -1859,7 +2027,6 @@ static void handle_mount_req(fs_client_state_t* state, int32_t source, int32_t r
     char source_id[BLOCK_DESCRIPTOR_ID_MAX];
     const fsmgr_fstype_t* fstype;
     int32_t has_source;
-    int32_t rc;
 
     if (g_pending_mount.in_use) {
         send_fs_error(source, request_id, WASMOS_ERR_FS_BUSY);
@@ -1914,9 +2081,8 @@ static void handle_mount_req(fs_client_state_t* state, int32_t source, int32_t r
     g_pending_mount.in_use = 1;
     g_pending_mount.client = source;
     g_pending_mount.request_id = request_id;
-    g_pending_mount.buffer_id = -1;
+    g_pending_mount.unit = 0;
     g_pending_mount.awaiting_backend = 0;
-    g_pending_mount.pid = 0;
     g_pending_mount.module = fstype->module;
     str_copy(g_pending_mount.mount, sizeof(g_pending_mount.mount), mount);
     /* Built in the order the drivers document: `id=` then `mount=`. */
@@ -1929,9 +2095,10 @@ static void handle_mount_req(fs_client_state_t* state, int32_t source, int32_t r
     wasmos_sys_str_append(g_pending_mount.args, sizeof(g_pending_mount.args), "mount=");
     wasmos_sys_str_append(g_pending_mount.args, sizeof(g_pending_mount.args), mount);
 
-    rc = fsmgr_mount_send_spawn();
-    if (rc != 0) {
-        fsmgr_mount_pending_fail((wasmos_error_code_t)rc);
+    /* A mount that arrives before the supervisor's lookup is answered is
+     * submitted by that answer (fsmgr_on_supervisor_lookup). */
+    if (g_supervisor_lookup_done) {
+        fsmgr_mount_submit();
     }
 }
 
@@ -1967,11 +2134,10 @@ static void handle_mount_req(fs_client_state_t* state, int32_t source, int32_t r
  * reappears once the mount is gone is whatever the covering filesystem holds
  * there, which is the other half of shadowing.
  *
- * TODO: the backend PROCESS stays resident after its mount is dropped. It no
- * longer serves anything (fs-manager holds no reference and class discovery only
- * re-adds on an ADD event) but it still occupies a process slot, so repeated
- * mount/unmount cycles leak slots. Exiting needs a process-exit path a driver
- * can call after answering DONE, which no driver has today. */
+ * A mount fs-manager placed has a supervised unit (fsmgr_mount_submit). Its
+ * backend ends itself after the quiesce, and the client is answered only once
+ * that end has been seen and the unit retracted (fsmgr_units_retire), so the
+ * path can be mounted again as soon as the answer arrives. */
 static void fsmgr_unmount_done(fsmgr_pending_t* entry, int32_t type);
 
 static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t request_id,
@@ -1982,6 +2148,7 @@ static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t
     fs_backend_t* victim = 0;
     wasmos_error_code_t busy;
     fsmgr_pending_t* entry;
+    fsmgr_unit_t* unit;
 
     if (buffer_id <= 0 || path_len <= 0 || path_len >= (int32_t)sizeof(requested) ||
         path_len >= wasmos_xfer_buffer_size()) {
@@ -2026,7 +2193,14 @@ static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t
     }
     /* The table entry goes first: no request routed after this one may reach
      * the backend being quiesced. The client is answered once the backend
-     * confirms (fsmgr_unmount_done). */
+     * confirms (fsmgr_unmount_done), and, for a supervised backend, once its
+     * unit is retracted. */
+    unit = fsmgr_unit_by_mount(g_units, FSMGR_UNIT_CAP, victim->mount_path);
+    if (unit && unit->state == FSMGR_UNIT_HELD) {
+        unit->state = FSMGR_UNIT_RETIRING;
+        unit->backend = victim->endpoint;
+        unit->quiesced = 0;
+    }
     victim->in_use = 0;
     fsmgr_forget_backend_in_clients(entry->backend);
     if (pending_send(entry, WASMOS_IPC_SHUTDOWN_REQ, WASMOS_SHUTDOWN_REASON_UNMOUNT, 0, 0, 0) !=
@@ -2043,11 +2217,23 @@ static void handle_unmount_req(fs_client_state_t* state, int32_t source, int32_t
 static void fsmgr_unmount_done(fsmgr_pending_t* entry, int32_t type) {
     int32_t client = entry->client;
     int32_t request_id = entry->client_request_id;
+    int32_t backend = entry->backend;
 
     if (type != (int32_t)WASMOS_IPC_SHUTDOWN_DONE) {
         log_msg("[fs-manager] unmount: backend did not quiesce\n");
     }
     pending_end(entry);
+    for (uint32_t i = 0; i < FSMGR_UNIT_CAP; ++i) {
+        fsmgr_unit_t* unit = &g_units[i];
+        if (unit->state == FSMGR_UNIT_RETIRING && !unit->quiesced && unit->backend == backend) {
+            unit->quiesced = 1;
+            unit->client = client;
+            unit->client_request_id = request_id;
+            unit->deadline_ms = fsmgr_now_ms() + FSMGR_RETIRE_TIMEOUT_MS;
+            fsmgr_units_retire();
+            return;
+        }
+    }
     if (client >= 0) {
         (void)reply_to_client(client, FSMGR_IPC_UNMOUNT_RESP, request_id, 0, 0, 0, 0);
     }
@@ -2260,6 +2446,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     log_msg("[fs-manager] services registered\n");
     wasmos_sys_notify_ready(g_proc_endpoint, g_fs_endpoint);
     fsmgr_discover_backends();
+    fsmgr_lookup_supervisor();
 
     for (;;) {
         /* Answers first: draining them is what completes the records in flight
@@ -2268,12 +2455,21 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         fsmgr_release_drain();
         fsmgr_reply_drain();
         int release_retry = fsmgr_release_pump();
+        /* Every turn, because what they wait for -- a backend's end, a deadline
+         * -- is observed rather than announced to them. */
+        fsmgr_units_retire();
+        fsmgr_mount_pending_expire();
         /* Park until any endpoint has something; a message that arrived since
-         * the drains wakes the wait at once. A close still to be resent bounds
-         * the wait, since its backend's queue draining wakes nobody here. */
+         * the drains wakes the wait at once. A close still to be resent, and a
+         * mount or unmount deadline, bound the wait, since nothing would wake
+         * it for either. */
         if (wasmos_ipc_drain(g_fs_endpoint) <= 0) {
-            if (release_retry) {
-                (void)wasmos_ipc_select_wait_timeout(g_main_select, FSMGR_RELEASE_RETRY_MS);
+            int32_t wait_ms = fsmgr_next_deadline_ms();
+            if (release_retry && (wait_ms < 0 || wait_ms > FSMGR_RELEASE_RETRY_MS)) {
+                wait_ms = FSMGR_RELEASE_RETRY_MS;
+            }
+            if (wait_ms >= 0) {
+                (void)wasmos_ipc_select_wait_timeout(g_main_select, wait_ms > 0 ? wait_ms : 1);
             } else {
                 (void)wasmos_ipc_select_wait(g_main_select);
             }
@@ -2290,10 +2486,16 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         int32_t arg2f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t arg3f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
 
-        /* The process manager's answer to a mount's spawn, which was sent from
-         * this endpoint (fsmgr_mount_send_spawn). */
-        if (type == PROC_IPC_RESP || type == PROC_IPC_ERROR) {
-            fsmgr_mount_handle_spawn_reply(type, arg0);
+        /* Answers to what fs-manager asked from this endpoint: the supervisor's
+         * lookup, and a unit's SUBMIT or RETRACT. */
+        if (type == SVC_IPC_LOOKUP_RESP && source == g_proc_endpoint &&
+            request_id == FSMGR_SV_LOOKUP_REQUEST_ID) {
+            fsmgr_on_supervisor_lookup(arg0);
+            continue;
+        }
+        if ((type == SUPERVISOR_IPC_RESP || type == SUPERVISOR_IPC_ERROR) &&
+            g_supervisor_endpoint >= 0 && source == g_supervisor_endpoint) {
+            fsmgr_on_supervisor_reply(type, request_id, arg0);
             continue;
         }
 
@@ -2315,7 +2517,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             /* Existence event for FSMGR_BACKEND_CLASS: arg0=event, arg1=instance,
              * arg2=provider endpoint, arg3=pid. */
             if (arg0 == (int32_t)SVC_CLASS_EVENT_ADD) {
-                fsmgr_pull_backend(arg2f);
+                fsmgr_pull_backend(arg2f, arg3f);
             } else if (arg0 == (int32_t)SVC_CLASS_EVENT_REMOVE) {
                 fsmgr_backend_remove(arg2f);
             }

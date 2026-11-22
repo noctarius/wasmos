@@ -105,26 +105,26 @@ SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x
 ```
 
 The rule matches by PCI class 0x02 (Network controller), subclass 0x00
-(Ethernet), vendor 0x1AF4 (Red Hat / virtio), covering both legacy device IDs
-(0x1000) and modern transitional IDs (0x1041).
+(Ethernet), vendor 0x1AF4 (Red Hat / virtio), covering both the transitional
+device ID (0x1000) and the modern-only ID (0x1041); both are driven over the
+modern interface.
 
-Capability profile supplied at spawn (using `PROC_IPC_SPAWN_PATH_CAPS` /
-`PROC_IPC_SPAWN_PATH_CAPS_SYNC` / `PROC_IPC_SPAWN_CAPS_V2`):
-- `DEVMGR_CAP_IO_PORT`: the BAR0 I/O register window only
-  (io_port_min=BAR0_base, io_port_max=BAR0_base+0x3F). PCI config access
-  belongs to `pci-bus` (through the kernel) and is not granted to the driver.
-- `DEVMGR_CAP_IRQ`: IRQ line from PCI config 0x3C (typically 11 under QEMU)
-- `DEVMGR_CAP_DMA`: BIDIR, covers low memory window for virtqueue and packet
-  buffers (initial: 0x100000–0x4000000, i.e., 1 MB–64 MB)
-
-The device manager reads BAR0 and the IRQ line from the PCI device record
-(already populated during PCI scan), preserves the driver's declared
-`dma.buffer` capability for the rule spawn, and includes the resulting
-I/O/IRQ/DMA profile in the spawn capability descriptor.
+Capability profile supplied at spawn: the driver is spawned by path with
+`PROC_IPC_SPAWN_WATCHED`, and its capability descriptor carries
+- one memory-mapped register window: region 0 = BAR 4, the `[[regions]]`
+  entry its manifest declares (`mmio.map`). PCI config access belongs to
+  `pci-bus`; the driver may only READ its own function's config space, which is
+  how it finds its virtio structures.
+- `DEVMGR_CAP_IRQ`: IRQ line from PCI config 0x3C (typically 11 under QEMU),
+  used only when MSI-X is unavailable
+- `DEVMGR_CAP_DMA`: BIDIR, with the pinning budget the manifest's
+  `dma.buffer` capability declares
+- the PCI function (`DEVMGR_CAP_PCI_FUNCTION`), quiesced by the kernel when
+  the driver ends
 
 ---
 
-### Device Identity and BAR0 Layout
+### Device Identity and Transport
 
 The device manager resolves the device from its match rule and passes the
 identity to the driver in its startup args:
@@ -133,42 +133,37 @@ identity to the driver in its startup args:
 pci=BB:SS.FF vendor=1AF4 device=1000 io=C020 irq=0B
 ```
 
-That is the driver's sole source of device identity. It performs no PCI
-config-space scan, and a spawn without a valid identity fails with
-`WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY` instead of binding to a device it
-discovered itself.
+That is the driver's sole source of device identity (`io=` is still passed
+and ignored). It performs no PCI bus scan, and a spawn without a valid
+identity fails with `WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY` instead of binding
+to a device it discovered itself.
 
-`io=` is the BAR0 I/O base. The I/O port space at that base maps the following
-virtio legacy registers:
+The device is driven over the virtio 1.x PCI transport
+(`wasmos/virtio_modern.h`, virtio 1.2 §4.1): the common configuration,
+notify, ISR and device-specific structures are located through the
+vendor-specific capabilities in the function's config space and must all lie
+in BAR 4, the granted window. A device that places one elsewhere is refused.
+Every register access is an `io_region_*` host call on region 0.
 
-| Offset | Width | Access | Register             |
-|--------|-------|--------|----------------------|
-| 0x00   | 32    | R      | DEVICE_FEATURES      |
-| 0x04   | 32    | W      | DRIVER_FEATURES      |
-| 0x08   | 32    | R/W    | QUEUE_ADDRESS (PFN)  |
-| 0x0C   | 16    | R      | QUEUE_SIZE           |
-| 0x0E   | 16    | W      | QUEUE_SELECT         |
-| 0x10   | 16    | W      | QUEUE_NOTIFY         |
-| 0x12   | 8     | R/W    | DEVICE_STATUS        |
-| 0x13   | 8     | R/clr  | ISR_STATUS           |
-| 0x14+  | –     | R/W    | device-specific cfg  |
-
-virtio-net device-specific config at offset 0x14:
+virtio-net device-specific config (`struct virtio_net_config`, offsets into
+the device structure):
 
 | Offset | Width | Field          | Condition                    |
 |--------|-------|----------------|------------------------------|
-| 0x14   | 48    | mac[6]         | always                       |
-| 0x1A   | 16    | status         | VIRTIO_NET_F_STATUS set      |
-| 0x1C   | 16    | max_vq_pairs   | VIRTIO_NET_F_MQ set          |
+| 0x00   | 48    | mac[6]         | always                       |
+| 0x06   | 16    | status         | VIRTIO_NET_F_STATUS set      |
+| 0x08   | 16    | max_vq_pairs   | VIRTIO_NET_F_MQ set          |
 
-Read MAC as 6 individual byte-wide I/O reads at offsets 0x14–0x19.
+The MAC is read as one snapshot under `config_generation`
+(`virtio_modern_device_read`), so a configuration change mid-read is retried
+rather than producing a torn address.
 
 ---
 
 ### Feature Negotiation
 
-Feature bits written to DRIVER_FEATURES (0x04) after reading DEVICE_FEATURES
-(0x00). Baseline (phase 1) negotiates only:
+Negotiation runs through `virtio_modern_negotiate`: VIRTIO_F_VERSION_1 (bit
+32) is always accepted, plus:
 
 | Bit | Name                   | Value     | Notes                          |
 |-----|------------------------|-----------|--------------------------------|
@@ -177,50 +172,27 @@ Feature bits written to DRIVER_FEATURES (0x04) after reading DEVICE_FEATURES
 
 Do not negotiate: CSUM (0), GUEST_CSUM (1), MRG_RXBUF (15), or any GSO/offload
 bits. Keeping negotiated features minimal prevents the device from expecting
-extended header fields or ring semantics.
-
-Define these constants in the driver header:
-```c
-#define VIRTIO_NET_F_CSUM        (1u << 0)
-#define VIRTIO_NET_F_GUEST_CSUM  (1u << 1)
-#define VIRTIO_NET_F_MAC         (1u << 5)
-#define VIRTIO_NET_F_MRG_RXBUF   (1u << 15)
-#define VIRTIO_NET_F_STATUS      (1u << 16)
-
-#define VIRTIO_NET_FEATURES_DRIVER (VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS)
-```
+extended ring semantics. Under VERSION_1 the per-buffer `virtio_net_hdr` is
+always 12 bytes (it carries `num_buffers` even without MRG_RXBUF).
 
 ---
 
 ### Device Initialization Sequence
 
 ```
-1.  io_out8(io_base + 0x12, 0)                    /* reset */
-2.  io_out8(io_base + 0x12, VIRTIO_STATUS_ACK)    /* = 1 */
-3.  io_out8(io_base + 0x12, VIRTIO_STATUS_ACK
-                           | VIRTIO_STATUS_DRIVER) /* = 3 */
-4.  dev_features = io_in32(io_base + 0x00)
-5.  drv_features = dev_features & VIRTIO_NET_FEATURES_DRIVER
-6.  io_out32(io_base + 0x04, drv_features)
-7.  init_virtqueue(0)                             /* RX queue */
-8.  init_virtqueue(1)                             /* TX queue */
-9.  read_mac()                                    /* 6 bytes at 0x14–0x19 */
-10. io_out8(io_base + 0x12, VIRTIO_STATUS_ACK
-                           | VIRTIO_STATUS_DRIVER
-                           | VIRTIO_STATUS_DRIVER_OK) /* = 7 */
-11. arm_rx_queue()                               /* populate RX descriptors */
-12. io_out16(io_base + 0x10, 0)                  /* kick RX queue */
+1.  virtio_modern_probe(bdf, BAR 4, region 0)   /* locate the structures */
+2.  virtio_modern_negotiate(MAC | STATUS)       /* reset, ACK, DRIVER,
+                                                   features, FEATURES_OK */
+3.  bind MSI-X (pci-bus) and the config vector  /* or fall back to INTx */
+4.  read MAC and link status                    /* device structure */
+5.  enable queue 0 (RX) and queue 1 (TX)        /* size, ring addresses,
+                                                   MSI-X entry, enable */
+6.  set DRIVER_OK
+7.  arm the RX queue and kick it
 ```
 
-DEVICE_STATUS bit definitions:
-```c
-#define VIRTIO_STATUS_ACK        1u
-#define VIRTIO_STATUS_DRIVER     2u
-#define VIRTIO_STATUS_DRIVER_OK  4u
-#define VIRTIO_STATUS_FAILED   128u
-```
-
-If DRIVER_FEATURES read-back indicates an unsupported bit, set FAILED and abort.
+If the device does not offer VERSION_1, or refuses the negotiated subset by
+clearing FEATURES_OK, the driver sets FAILED and aborts.
 
 ---
 
@@ -258,16 +230,18 @@ persistent ring; and there is no `WASMOS_BUFFER_KIND_NET_QUEUE_*` buffer kind
 struct dma_region r = region_alloc(VQ_ALLOC_PAGES, CACHE_WB, DMA_CAPABLE);
 uint64_t phys_addr = r.phys_addr;   /* stable for the driver's lifetime */
 ```
-Then write `phys_addr >> 12` to QUEUE_ADDRESS after selecting the queue index.
+The ring areas are then handed to the device through the common configuration
+(`virtio_modern_queue_enable`).
 Per-packet buffers handed off from a client may still use the borrow path.
 
 Initialization for queue `q`:
 ```c
-io_out16(io_base + 0x0E, q);                      /* QUEUE_SELECT */
-uint16_t qsz = io_in16(io_base + 0x0C);           /* QUEUE_SIZE */
-if (qsz > 256) qsz = 256;                         /* cap at 256 for baseline */
-/* ... allocate aligned memory, get phys_addr ... */
-io_out32(io_base + 0x08, (uint32_t)(phys_addr >> 12)); /* QUEUE_ADDRESS */
+uint16_t qsz = virtio_modern_queue_size(&dev, q);  /* 0 = no such queue */
+if (qsz > 256) qsz = 256;                          /* a smaller size is accepted */
+/* ... allocate the ring, vring_layout() it ... */
+virtio_modern_queue_enable(&dev, q, &vq, msix_entry, &q_notify);
+/* writes queue_size, queue_desc/driver/device (64-bit), queue_msix_vector,
+ * then queue_enable; q_notify is the queue's doorbell offset */
 ```
 
 Descriptor entry structure:
@@ -418,7 +392,7 @@ static void process_rx_completions(void)
         g_rx_last_used++;
     }
     /* Kick RX queue if descriptors were re-armed */
-    io_out16(g_dev.io_base + VIRTIO_PCI_QUEUE_NOTIFY, VIRTIO_NET_Q_RX);
+    virtio_modern_notify(&g_dev.vm, g_rxq.notify, VIRTIO_NET_Q_RX);
 }
 ```
 
@@ -465,7 +439,7 @@ static void handle_tx_frame(int32_t source, int32_t request_id, int32_t frame_le
     virtio_mb();
     g_vq_avail_tx->idx++;
 
-    io_out16(g_dev.io_base + VIRTIO_PCI_QUEUE_NOTIFY, VIRTIO_NET_Q_TX);
+    virtio_modern_notify(&g_dev.vm, g_txq.notify, VIRTIO_NET_Q_TX);
 
     g_stats.tx_packets++;
     wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP,
@@ -986,7 +960,7 @@ Initial static IP configuration for QEMU user-mode networking:
 
 Phase A/B (phases 1–3):
 - Virtqueue ring memory: one `dma_map_borrow` per queue at driver startup.
-  Physical address written to QUEUE_ADDRESS register.
+  Ring addresses handed over through the common configuration.
 - Packet data: pre-allocated pool of DMA-mapped borrow buffers (one per RX
   slot, one per TX slot). Physical addresses stored in `g_rx_buf_phys[]` and
   `g_tx_buf_phys[]`. Data copied through the xfer buffer on the IPC path.
@@ -1007,10 +981,12 @@ Phase C+ (post-baseline optimization):
 
 #### 1. `virtio-net` Driver Service
 Responsibilities:
-- discover and bind `virtio-net` PCI function via BAR0 I/O scan
+- bind the `virtio-net` PCI function named in its startup args, over the
+  virtio 1.x transport in its BAR 4 window
 - negotiate features (MAC + STATUS baseline only)
 - initialize RX/TX virtqueues and pre-populate RX descriptors
-- handle IRQ (ISR read-and-clear at io_base + 0x13)
+- handle interrupts: an MSI-X vector per source, or on the INTx fallback the
+  ISR read-and-clear in the ISR structure
 - publish link/MAC info and packet ingress/egress IPC endpoints
 - register as `virtio.net` via `wasmos_svc_register`
 
@@ -1057,7 +1033,7 @@ Responsibilities:
 
 ```
 initialize():
-  probe PCI → get io_base, irq
+  identity from startup args → bdf, irq; locate virtio structures
   init device (reset, ack, features, queues, driver_ok)
   read MAC, populate g_dev
   register 'virtio.net' with svc registry

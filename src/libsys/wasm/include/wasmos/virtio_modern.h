@@ -145,10 +145,11 @@ static inline int32_t virtio_modern_reset(const virtio_modern_t* dev) {
 /* Resets the device, acknowledges it, and negotiates features: the driver
  * accepts the bits of `wanted` the device offers, plus VIRTIO_F_VERSION_1, which
  * a modern device must offer. Leaves the device in FEATURES_OK, ready for queue
- * setup. Returns 0 with *out_accepted (optional) set, or -1 -- with FAILED set
- * -- for a device that does not offer VERSION_1 or refuses the subset. */
+ * setup. Returns 0 with *out_offered and *out_accepted (each optional) set, or
+ * -1 -- with FAILED set -- for a device that does not offer VERSION_1 or
+ * refuses the subset. */
 static inline int32_t virtio_modern_negotiate(const virtio_modern_t* dev, uint64_t wanted,
-                                              uint64_t* out_accepted) {
+                                              uint64_t* out_offered, uint64_t* out_accepted) {
     uint8_t status = VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER;
     uint64_t offered;
     uint64_t accepted;
@@ -179,10 +180,58 @@ static inline int32_t virtio_modern_negotiate(const virtio_modern_t* dev, uint64
     /* The device has no MSI-X vector for configuration changes; a driver that
      * wants one writes it after this. */
     virtio_modern_write16(dev, VIRTIO_COMMON_MSIX, VIRTIO_MSI_NO_VECTOR);
+    if (out_offered) {
+        *out_offered = offered;
+    }
     if (out_accepted) {
         *out_accepted = accepted;
     }
     return 0;
+}
+
+/* Routes configuration-change interrupts to MSI-X table entry `entry`. Returns
+ * 0, or -1 when the device refuses the vector (virtio reports that by reading
+ * back VIRTIO_MSI_NO_VECTOR). */
+static inline int32_t virtio_modern_set_config_vector(const virtio_modern_t* dev, uint16_t entry) {
+    virtio_modern_write16(dev, VIRTIO_COMMON_MSIX, entry);
+    return virtio_modern_read16(dev, VIRTIO_COMMON_MSIX) == entry ? 0 : -1;
+}
+
+/* One byte of the device-specific configuration structure. */
+static inline uint8_t virtio_modern_device_read8(const virtio_modern_t* dev, uint32_t off) {
+    uint32_t v = 0;
+    (void)wasmos_io_region_in8(dev->region, (int32_t)(dev->layout.device.offset + off), &v);
+    return (uint8_t)v;
+}
+
+/* One naturally aligned 16-bit field of the device-specific configuration. */
+static inline uint16_t virtio_modern_device_read16(const virtio_modern_t* dev, uint32_t off) {
+    uint32_t v = 0;
+    (void)wasmos_io_region_in16(dev->region, (int32_t)(dev->layout.device.offset + off), &v);
+    return (uint16_t)v;
+}
+
+/* Copies `len` bytes of the device-specific configuration starting at `off` into
+ * out, as one consistent snapshot: the device bumps config_generation whenever
+ * it changes the structure, so a read that straddles a change is retried
+ * (virtio 1.2 §4.1.4.3.1). Returns 0, or -1 when the device has no
+ * device-specific structure, the range runs past it, or it keeps changing. */
+static inline int32_t virtio_modern_device_read(const virtio_modern_t* dev, uint32_t off,
+                                                uint8_t* out, uint32_t len) {
+    if ((dev->layout.found & (1u << VIRTIO_PCI_CAP_DEVICE_CFG)) == 0u ||
+        off > dev->layout.device.length || len > dev->layout.device.length - off) {
+        return -1;
+    }
+    for (uint32_t attempt = 0; attempt < 8u; ++attempt) {
+        uint8_t before = virtio_modern_read8(dev, VIRTIO_COMMON_CFGGENERATION);
+        for (uint32_t i = 0; i < len; ++i) {
+            out[i] = virtio_modern_device_read8(dev, off + i);
+        }
+        if (virtio_modern_read8(dev, VIRTIO_COMMON_CFGGENERATION) == before) {
+            return 0;
+        }
+    }
+    return -1;
 }
 
 /* The size queue `index` offers, or 0 for a queue the device does not have. */

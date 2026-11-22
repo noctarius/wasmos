@@ -292,7 +292,7 @@ static int initialize_device(void) {
                      (unsigned)VIRTIO_RNG_BAR);
         return -1;
     }
-    if (virtio_modern_negotiate(&g_dev.vm, 0u, &accepted) != 0) {
+    if (virtio_modern_negotiate(&g_dev.vm, 0u, 0, &accepted) != 0) {
         (void)printf("[virtio-rng] feature negotiation failed\n");
         return -1;
     }

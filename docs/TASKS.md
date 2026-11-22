@@ -693,14 +693,14 @@ Source: `architecture/13-runtime-and-packaging.md`,
   a partition carries over too. All three hold a transfer across the restart
   and resend it to the successor (`WASMOS_BLOCK_HOLD_MS`). net-stack keeps
   `eth0`, its addresses and its sockets across virtio-net's restart and rebinds
-  it to the successor by class instance. Open:
+  it to the successor by class instance. fs-manager submits the backend of
+  every mount it places as a unit (`<driver>@<mount>`) and retracts it on
+  unmount; a backend's restart brings its mount back. Open:
   - partition-manager's hold of a transfer that was ON THE WIRE when the driver
     ended (`diskGone`) has no deterministic test: the QEMU test reads right after
     `svc kill` and cannot choose whether its read is in flight at the kill or
     begun after it, and the driver has no host harness.
     `test_partition_inflight.zig` covers the table's side of it.
-  - fs-manager submits its backends as supervised units (unmount through
-    `SUPERVISOR_IPC_RETRACT_REQ`).
 - [x] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
   interrupts back. Fixed: `PCI_IPC_INTX_ENABLE_REQ` (pci-bus) turns bus
   mastering on and clears INTx Disable for the function's driver; virtio-blk
@@ -722,14 +722,25 @@ Source: `architecture/13-runtime-and-packaging.md`,
   "was never echoed". No panic was logged, and four further runs of
   `test_supervisor` on wasm3_smp passed. If it recurs, capture the vt's and the
   cli's state (`ps`, the syslog) before the session is torn down.
-- [ ] [TEST][P3] QEMU itself crashed once in CI: SIGSEGV in
+- [ ] [TEST][P3] QEMU itself crashed in CI: SIGSEGV in
   `address_space_translate_for_iotlb` under MTTCG, run 44799393421, battery
   `filesystem` on `warp_smp` (artifact `qemu-crash-filesystem-warp_smp`, with the
-  symbolized core). The rerun passed and it has not recurred. A crash inside
+  symbolized core). It recurred as exit -11 before the prompt in run
+  45066741384, battery `networking` on `warp_smp`
+  (`test_net_stack_udp_echo_e2e` setUpClass). Both reruns passed. A crash inside
   QEMU's softmmu TLB fill is QEMU's, not the guest's, unless the guest left a
   page table pointing at an unbacked MMIO region; if it recurs, check the
   faulting guest address in the core against the guest's last mappings before
   filing it upstream.
+- [ ] [TEST][P2] `test_wfs_clean_unmount.test_a_clean_halt_leaves_the_volume_clean_and_writable`
+  stalled once in CI (run 45066741384, `filesystem` on `wasm3_smp`, the PR
+  that made fs-wfs a supervised unit): the shutdown logged `order 1: fs-wfs`
+  and fs-wfs never logged `unmounted clean` within 30 s; nothing was killed or
+  restarted. The rerun, two local filesystem batteries and two further local
+  runs passed. Not attributed: fs-wfs's shutdown path neither waits on another
+  service nor depends on its spawner. If it recurs, capture where fs-wfs's
+  sync task stands (the block request in flight, `ps`) before the session is
+  torn down.
 - [ ] [FEATURE][P3] Tie a unit's lifetime to its submitter, and device-manager's
   units to their device. The mechanism exists: `SUPERVISOR_IPC_RETRACT_REQ`
   withdraws a unit and its `parent=` subtree without a failure. Nothing calls

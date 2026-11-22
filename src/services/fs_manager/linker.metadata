@@ -29,3 +29,9 @@ provides = ["fs.vfs"]
 [[capabilities]]
 name = "system.control"
 flags = 0
+
+# Submits and retracts the units behind its mounts (SUPERVISOR_IPC_SUBMIT_REQ,
+# SUPERVISOR_IPC_RETRACT_REQ).
+[[capabilities]]
+name = "svc.control"
+flags = 0

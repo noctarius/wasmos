@@ -13,5 +13,6 @@ def build(b):
             b.src("fs_manager_backends.c"),
             b.src("fs_manager_clients.c"),
             b.src("fs_manager_pending.c"),
+            b.src("fs_manager_units.c"),
         ],
     )

@@ -703,7 +703,7 @@ them: `svc submit <spec>`, `svc list`, `svc status <unit>`, `svc kill <unit>`,
 `svc retract <unit>`, `svc stop <unit>`, `svc start <unit>`.
 
 **Access.** Submitting, killing, retracting, stopping, starting and declaring
-the boot set require the sender to hold `svc.control` (sysinit, device-manager, `svc`); listing is open.
+the boot set require the sender to hold `svc.control` (sysinit, device-manager, fs-manager, `svc`); listing is open.
 A submission that carries a capability descriptor also requires `spawn.grant`,
 because the grants reach the process manager as the supervisor's own watched
 spawn: the supervisor relays them only from a submitter the process manager
@@ -749,6 +749,8 @@ What each client of a supervised provider does when it restarts:
 | `virtio_blk@pci:*` | fs-fat on a whole disk | as fs-wfs: follows the `block` instance and holds I/O across the restart (`fat_block.h`); the mount, open files and fs-fat itself carry over |
 | `virtio_blk@pci:*` | partition-manager | follows the disk's `block` instance through hangups and class events, holds the transfers the ended driver had and those asked for meanwhile, and rebinds the disk to the new instance and resends them there; its partitions and the mounts on them carry over |
 | `virtio_blk@pci:*` | volume-manager | probes only at arrival and rescan; forgets the ended instance's buffer grants on REMOVE |
+| `virtio_net@pci:*` | net-stack | keeps `eth0`, its addresses and its sockets, and rebinds it to the successor registering the same `net.ifc` instance; a frame sent meanwhile is lost |
+| `fs_<type>@<mount>` | fs-manager | drops the mount on the backend's REMOVE and restores it when the successor registers; files open on it are lost (`WASMOS_ERR_FS_BAD_FD`) |
 | `logger` | (none) | a restart continues `/var/log/messages` from the position kept in kenv `logger.seq` |
 | boot chain | everyone | `critical`: never restarted, its end halts |
 
@@ -766,8 +768,7 @@ exit with the compositor and are not started again.
 | `SUPERVISOR_IPC_START_REQ` | `0x1006` | Start a stopped, failed or degraded unit and its degraded children |
 
 Not built: a one-step operator restart (stop, then start); retraction of a submitter's units
-when it dies; liveness for the boot services; supervising virtio-net, whose
-clients do not follow a restart yet; a guard against reboot loops under
+when it dies; liveness for the boot services; a guard against reboot loops under
 `on_critical=reboot`. They are tracked in `docs/TASKS.md`.
 
 #### `sysinit` — Late-Boot Service Launcher

@@ -143,3 +143,42 @@ int dm_resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
     caps->region_count = meta->region_count;
     return 0;
 }
+
+int32_t dm_watch_spawn_encode(const char* path, const char* args, const spawn_caps_t* caps,
+                              int32_t notify_endpoint, uint8_t* out, uint32_t out_cap) {
+    wasmos_spawn_watch_desc_t desc;
+    uint32_t path_len;
+    uint32_t args_len;
+    int32_t caps_len = 0;
+
+    if (!path || !out) {
+        return -1;
+    }
+    path_len = (uint32_t)strlen(path);
+    args_len = args ? (uint32_t)strlen(args) : 0u;
+    if (path_len == 0u || path_len > SPAWN_WATCH_PATH_MAX || args_len > SPAWN_WATCH_ARGS_MAX ||
+        out_cap < (uint32_t)sizeof(desc) + path_len + args_len) {
+        return -1;
+    }
+    memset(&desc, 0, sizeof(desc));
+    desc.version = SPAWN_WATCH_DESC_VERSION;
+    desc.notify_endpoint = (uint32_t)notify_endpoint;
+    desc.path_off = (uint32_t)sizeof(desc);
+    desc.path_len = path_len;
+    desc.args_off = desc.path_off + path_len;
+    desc.args_len = args_len;
+    desc.caps_off = desc.args_off + args_len;
+    if (caps) {
+        caps_len = dm_caps_v2_encode(caps, out + desc.caps_off, out_cap - desc.caps_off);
+        if (caps_len < 0) {
+            return -1;
+        }
+    }
+    desc.caps_len = (uint32_t)caps_len;
+    memcpy(out, &desc, sizeof(desc));
+    memcpy(out + desc.path_off, path, path_len);
+    if (args_len > 0u) {
+        memcpy(out + desc.args_off, args, args_len);
+    }
+    return (int32_t)(desc.caps_off + desc.caps_len);
+}

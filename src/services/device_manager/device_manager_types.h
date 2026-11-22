@@ -431,11 +431,20 @@ typedef struct {
     /* One SUPERVISOR_IPC_SUBMIT_REQ in flight for the armed rule, held like
      * mount_req_pending: the rule is retired when the supervisor answers. */
     uint8_t submit_req_pending;
-    int32_t submit_req_bid;          /* owner-push buffer lent READ to the supervisor */
-    int32_t sv_endpoint;             /* receives the submit reply and the name watch's events */
-    int32_t supervisor_endpoint;     /* bound by the "supervisor" name watch; -1 until then */
-    uint8_t active_rule_spawn_kind;  /* which rule kind is driving the spawn */
-    int32_t active_rule_spawn_index; /* index into the corresponding rule array */
+    int32_t submit_req_bid;      /* owner-push buffer lent READ to the supervisor */
+    int32_t sv_endpoint;         /* receives the submit reply and the name watch's events */
+    int32_t supervisor_endpoint; /* bound by the "supervisor" name watch; -1 until then */
+    /* One PROC_IPC_SPAWN_WATCHED in flight for the armed PCI or ACPI rule, held
+     * like submit_req_pending: the rule is retired when its child latches READY
+     * (PROC_IPC_CHILD_READY), retried when the child exits first, and given up
+     * when watch_spawn_deadline passes with neither. */
+    uint8_t watch_spawn_pending;
+    int32_t watch_spawn_bid;                /* owner-push buffer lent READ|WRITE to the PM */
+    uint32_t watch_spawn_pid;               /* the child, once the PM has answered; 0 before */
+    uint32_t watch_spawn_deadline;          /* sched_ticks by which the child must be READY */
+    int32_t spawn_endpoint;                 /* receives the spawn reply and the child's events */
+    uint8_t active_rule_spawn_kind;         /* which rule kind is driving the spawn */
+    int32_t active_rule_spawn_index;        /* index into the corresponding rule array */
     int32_t active_rule_spawn_device_index; /* device registry index for pci/acpi */
     always_spawn_rule_t always_spawn_rules[ALWAYS_SPAWN_RULE_CAP];
     uint32_t always_spawn_rule_count;

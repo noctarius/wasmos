@@ -181,11 +181,14 @@ SUBSYSTEM=="block", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs
 
 Rules are parsed by `src/services/device_manager/device_manager_rules.c`
 (`always_spawn` / `block_fs` / `pci_match` / `acpi_match`) and applied as PCI/ACPI
-inventory arrives (`device_manager.c` `queue_*_rule_spawns`). The device manager
-spawns via the owner-push path (`hw_spawn_driver_path*` →
-`PROC_IPC_SPAWN_PATH_SYNC` / `_CAPS_SYNC`), packing caps + PCI identity (BAR/IRQ)
-from the manifest into startup args, which a PCI driver parses (e.g.
-`virtio_rng.c` `probe_virtio_rng_from_startup_args`).
+inventory arrives (`device_manager.c` `queue_*_rule_spawns`). A PCI or ACPI
+driver is spawned by path with `PROC_IPC_SPAWN_WATCHED` (`dm_watch_spawn_send`):
+its startup args carry the device's identity (BAR/IRQ), which a PCI driver
+parses (e.g. `virtio_rng.c` `probe_virtio_rng_from_startup_args`), and its
+capability descriptor carries every declared region and the PCI function. The
+rule is retired when the driver latches READY, so a driver must reach
+`wasmos_sys_notify_ready` (or its language binding) within 5 s or its
+device is given up. A driver the boot depends on must be in the initfs.
 
 ## Step 6: Verify
 

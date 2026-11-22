@@ -879,6 +879,19 @@ kernel init (once fs-manager answers FSMGR_IPC_MOUNT_WAIT_REQ for /boot)
             └─ SUPERVISOR_IPC_BOOT_SUBMITTED_REQ  -> "[supervisor] boot complete"
 ```
 
+Only the filesystem itself -- fs-manager, fs-tmpfs and fs-init -- has to be
+started from boot modules (`SPAWN_WATCH_FLAG_MODULE`): nothing can be read by
+path before it exists. device-manager may be started either way. Every driver a
+rule names is spawned by PATH through fs-manager, from `/init` before `/boot`
+is mounted and from `/boot` afterwards, so a driver the boot depends on must be
+in the initfs, image and rule both. A PCI or ACPI rule driver is spawned with
+`PROC_IPC_SPAWN_WATCHED` (path, startup args, and a capability descriptor with
+every declared window and the PCI function); device-manager does not wait on
+it, and retires the rule when the child's `PROC_IPC_CHILD_READY` arrives,
+retries it when the child exits first, and gives the device up when neither
+happens within 5 s -- a driver still running is never spawned a second time.
+pci-bus and acpi-bus are still started by boot-module index.
+
 Kernel init waits for exactly one thing: `/boot` mounted, because sysinit's
 image is on it. It subscribes to `fs.vfs`, sends the mount wait to fs-manager,
 and panics with `init_no_boot_mount` if no answer comes within 60 s of the

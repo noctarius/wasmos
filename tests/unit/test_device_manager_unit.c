@@ -206,6 +206,64 @@ static void test_an_absent_bar_refuses_the_grant(void) {
     assert(dm_resolve_declared_regions(&meta, &rec, &caps) != 0);
 }
 
+/* A driver with declared windows that also needs startup args gets both in one
+ * request: the args a PCI driver finds its device by, and every window in
+ * declaration order. The two used to be exclusive -- windows forced a spawn by
+ * module index, which carries no args. */
+static void test_a_watched_spawn_carries_args_and_every_window(void) {
+    static uint8_t out[DM_WATCH_SPAWN_MAX];
+    wasmos_spawn_watch_desc_t desc;
+    wasmos_spawn_caps_v2_t hdr;
+    wasmos_region_grant_t g[2];
+    spawn_caps_t caps;
+    const char* path = "/init/system/drivers/virtio_rng.wap";
+    const char* args = "bus=0 dev=3 fn=0 irq=11";
+    int32_t n;
+    memset(&caps, 0, sizeof(caps));
+    caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ;
+    caps.irq_mask = 1u << 11;
+    caps.region_count = 2;
+    caps.regions[0] = (wasmos_region_grant_t){WASMOS_REGION_GRANT_MMIO, 0x4000, 0xFEB00000u};
+    caps.regions[1] = (wasmos_region_grant_t){WASMOS_REGION_GRANT_IO, 0x20, 0xC000};
+    caps.pci_function_valid = 1;
+    caps.pci_function = 3u << 3;
+
+    n = dm_watch_spawn_encode(path, args, &caps, 42, out, sizeof(out));
+    assert(n > 0);
+    memcpy(&desc, out, sizeof(desc));
+    assert(desc.version == SPAWN_WATCH_DESC_VERSION && desc.notify_endpoint == 42u &&
+           desc.tty == 0u && desc.flags == 0u);
+    assert(desc.path_len == strlen(path) && memcmp(out + desc.path_off, path, desc.path_len) == 0);
+    assert(desc.args_len == strlen(args) && memcmp(out + desc.args_off, args, desc.args_len) == 0);
+    assert(desc.caps_len == WASMOS_SPAWN_CAPS_V2_SIZE(2, 0));
+    assert((uint32_t)n == desc.caps_off + desc.caps_len);
+    memcpy(&hdr, out + desc.caps_off, sizeof(hdr));
+    assert(hdr.region_count == 2 && hdr.irq_mask == (1u << 11) &&
+           (hdr.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0u && hdr.dma.pci_function == 0x18u);
+    memcpy(g, out + desc.caps_off + sizeof(hdr), sizeof(g));
+    assert(g[0].kind == WASMOS_REGION_GRANT_MMIO && g[0].base == 0xFEB00000u);
+    assert(g[1].kind == WASMOS_REGION_GRANT_IO && g[1].base == 0xC000);
+}
+
+/* No args and no caps are both expressible; a missing or over-long path, or a
+ * buffer too small, is refused rather than truncated. */
+static void test_a_watched_spawn_request_is_refused_rather_than_cut(void) {
+    static uint8_t out[DM_WATCH_SPAWN_MAX];
+    static char long_path[SPAWN_WATCH_PATH_MAX + 2];
+    wasmos_spawn_watch_desc_t desc;
+    int32_t n = dm_watch_spawn_encode("/init/a.wap", 0, 0, 7, out, sizeof(out));
+    assert(n == (int32_t)(sizeof(desc) + strlen("/init/a.wap")));
+    memcpy(&desc, out, sizeof(desc));
+    assert(desc.args_len == 0u && desc.caps_len == 0u);
+    assert(dm_watch_spawn_encode("", 0, 0, 7, out, sizeof(out)) == -1);
+    assert(dm_watch_spawn_encode(0, 0, 0, 7, out, sizeof(out)) == -1);
+    memset(long_path, 'a', sizeof(long_path) - 1u);
+    long_path[0] = '/';
+    long_path[sizeof(long_path) - 1u] = '\0';
+    assert(dm_watch_spawn_encode(long_path, 0, 0, 7, out, sizeof(out)) == -1);
+    assert(dm_watch_spawn_encode("/init/a.wap", 0, 0, 7, out, (uint32_t)sizeof(desc)) == -1);
+}
+
 int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_spec_names_the_device_and_its_policy),
@@ -216,6 +274,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_declared_regions_keep_their_index),
         WASMOS_TEST_CASE(test_an_absent_bar_refuses_the_grant),
         WASMOS_TEST_CASE(test_bars_resolve_to_grants_of_their_kind),
+        WASMOS_TEST_CASE(test_a_watched_spawn_carries_args_and_every_window),
+        WASMOS_TEST_CASE(test_a_watched_spawn_request_is_refused_rather_than_cut),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_device_manager_unit: ok\n");

@@ -251,6 +251,14 @@ linked feature documents for rationale and rollout plans.
   instead of shifting every later region down one index. No in-tree driver
   declares a memory BAR yet; the virtio drivers move to virtio-modern (memory
   BARs) next.
+- Device-manager spawns every PCI and ACPI rule driver by path with
+  `PROC_IPC_SPAWN_WATCHED`, which carries its startup args and all of its
+  windows together; a driver with declared windows no longer has to be spawned
+  by boot-module index without args. The spawn is not waited on: the child's
+  `CHILD_READY` retires the rule. A driver that stays alive without becoming
+  ready within 5 s is given up rather than spawned again (the synchronous form
+  answered a timeout with an error while the child kept running, and the retry
+  started a second driver for the same device).
 - Guest-visible capability behaviour must not depend on the engine. Where a
   difference is unavoidable, the scenario table carries an explicit `divergent`
   flag that asserts the two still differ, so converging them forces the row to

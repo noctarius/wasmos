@@ -27,6 +27,24 @@ int32_t dm_unit_spec(const char* rule_path, const char* instance, const char* pa
  * length, or -1 when it would not fit out_cap bytes. */
 int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_cap);
 
+/* Bytes a watched-spawn request may take: the descriptor, the longest path and
+ * argument string, and the largest capability descriptor. */
+#define DM_WATCH_SPAWN_MAX                                                                         \
+    ((uint32_t)sizeof(wasmos_spawn_watch_desc_t) + SPAWN_WATCH_PATH_MAX + SPAWN_WATCH_ARGS_MAX +   \
+     SUPERVISOR_CAPS_MAX)
+
+/* Writes one PROC_IPC_SPAWN_WATCHED request into out: a
+ * wasmos_spawn_watch_desc_t naming notify_endpoint, followed by the path, the
+ * startup args and caps encoded as dm_caps_v2_encode does, at the offsets the
+ * descriptor records. This is the one spawn form that carries a driver's
+ * startup args AND all of its register windows, so a driver needing both is
+ * spawned by path rather than by boot-module index. args may be NULL or empty;
+ * caps may be NULL for a spawn without hardware access. Returns the request's
+ * length, or -1 for a missing or over-long path or args, or a request that does
+ * not fit out_cap bytes. */
+int32_t dm_watch_spawn_encode(const char* path, const char* args, const spawn_caps_t* caps,
+                              int32_t notify_endpoint, uint8_t* out, uint32_t out_cap);
+
 /* Turns the register windows a driver declared (meta->regions) into the grants
  * it actually gets (caps->regions). A static range is taken verbatim; a BAR
  * region is resolved against the device this driver matched, using the base,

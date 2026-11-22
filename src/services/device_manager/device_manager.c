@@ -55,6 +55,8 @@ static device_manager_state_t g_dm = {
     .submit_req_bid = -1,
     .sv_endpoint = -1,
     .supervisor_endpoint = -1,
+    .watch_spawn_bid = -1,
+    .spawn_endpoint = -1,
     .active_rule_spawn_kind = 0,
     .active_rule_spawn_index = -1,
     .active_rule_spawn_device_index = -1,
@@ -108,6 +110,10 @@ static dm_rules_wait_t g_dm_mount_wait = {0};
 /* Pumped from the IDLE phase without blocking: it has no select-set of its own,
  * and its endpoint is in the idle select set instead (see dm_supervisor_init). */
 static wasmos_sys_event_loop_t g_dm_sv_loop;
+/* Owns spawn_endpoint: the watched rule spawns' replies and their children's
+ * CHILD_READY / CHILD_EXITED. Pumped from the IDLE phase like g_dm_sv_loop. */
+static wasmos_sys_event_loop_t g_dm_spawn_loop;
+static uint8_t g_dm_watch_spawn_req[DM_WATCH_SPAWN_MAX];
 static wasmos_sys_svc_watch_set_t g_dm_sv_watches;
 static wasmos_sys_svc_watch_t g_dm_sv_watch;
 
@@ -750,9 +756,9 @@ static int hw_spawn_driver_index(int32_t index) {
  * its device by region index and never learns the ports, and a capability
  * refusal surfaces far from here. One line at the point of decision makes a
  * mis-granted window obvious in a boot log instead of a mystery later. */
-static void log_spawn_grant(int32_t index, const spawn_caps_t* caps) {
-    (void)printf("[device-manager] grant module=%d irq_mask=%04X caps=%X windows=%u\n",
-                 (int)index,
+static void log_spawn_grant(const char* what, const spawn_caps_t* caps) {
+    (void)printf("[device-manager] grant %s irq_mask=%04X caps=%X windows=%u\n",
+                 what,
                  (unsigned)caps->irq_mask,
                  (unsigned)caps->cap_flags,
                  (unsigned)(caps->region_count ? caps->region_count : 1u));
@@ -847,7 +853,11 @@ static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     if (index < 0) {
         return -1;
     }
-    log_spawn_grant(index, caps);
+    {
+        char what[24];
+        (void)snprintf(what, sizeof(what), "module=%d", (int)index);
+        log_spawn_grant(what, caps);
+    }
     if (caps->region_count > 0u) {
         return hw_spawn_driver_index_caps_v2(index, caps);
     }
@@ -2586,6 +2596,26 @@ static void give_up_on_active_spawn(void) {
     console_write(line);
 }
 
+/* Retires the armed rule without spawning it again: its device is marked given
+ * up (give_up_on_active_spawn), the rule's tracking is cleared and the queue is
+ * re-driven, as for a spawn that succeeded. */
+static void rule_spawn_give_up(void) {
+    give_up_on_active_spawn();
+    g_dm.rule_spawn_pending = 0;
+    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
+        if (g_dm.active_rule_spawn_index >= 0 &&
+            g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+            g_dm.block_fs_rules[g_dm.active_rule_spawn_index].queued = 0;
+        }
+    }
+    g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
+    g_dm.active_rule_spawn_index = -1;
+    g_dm.active_rule_spawn_device_index = -1;
+    g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
+    g_dm.active_rule_fstype[0] = '\0';
+    queue_block_fs_rule_spawns();
+}
+
 static void rule_spawn_complete(int32_t ok) {
     if (ok) {
         g_dm.rule_spawn_pending = 0;
@@ -2659,20 +2689,7 @@ static void rule_spawn_complete(int32_t ok) {
         }
         g_dm.rule_spawn_retries++;
         if (g_dm.rule_spawn_retries > 8) {
-            give_up_on_active_spawn();
-            g_dm.rule_spawn_pending = 0;
-            if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
-                if (g_dm.active_rule_spawn_index >= 0 &&
-                    g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
-                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].queued = 0;
-                }
-            }
-            g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
-            g_dm.active_rule_spawn_index = -1;
-            g_dm.active_rule_spawn_device_index = -1;
-            g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
-            g_dm.active_rule_fstype[0] = '\0';
-            queue_block_fs_rule_spawns();
+            rule_spawn_give_up();
         }
     }
 }
@@ -2896,6 +2913,153 @@ static void dm_supervisor_init(void) {
     }
 }
 
+/* Ends the watched spawn of the armed rule: ok retires the rule, otherwise its
+ * retry policy applies (rule_spawn_complete). The child's later events no longer
+ * match anything and are ignored. */
+static void dm_watch_spawn_finish(int32_t ok) {
+    g_dm.watch_spawn_pending = 0;
+    g_dm.watch_spawn_pid = 0;
+    rule_spawn_complete(ok);
+}
+
+/* The PM's answer to PROC_IPC_SPAWN_WATCHED. It has read the request and written
+ * the reply fields before answering, so the buffer is released here, which also
+ * revokes its loan. Success names the child, which is still to latch READY; the
+ * deadline for that starts now. */
+static void dm_on_watch_spawn_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (g_dm.watch_spawn_bid >= 0) {
+        (void)wasmos_xfer_buffer_release(g_dm.watch_spawn_bid);
+        g_dm.watch_spawn_bid = -1;
+    }
+    if (!g_dm.watch_spawn_pending) {
+        return;
+    }
+    if (msg->type != PROC_IPC_RESP || msg->arg0 <= 0) {
+        (void)printf("[device-manager] spawn refused path=%s code=%d\n",
+                     g_dm.rule_spawn_path,
+                     (int)msg->arg1);
+        dm_watch_spawn_finish(0);
+        return;
+    }
+    g_dm.watch_spawn_pid = (uint32_t)msg->arg0;
+    g_dm.watch_spawn_deadline =
+        (uint32_t)wasmos_sched_ticks() + (DM_SPAWN_TIMEOUT_MS * WASMOS_SCHED_TICK_HZ) / 1000u;
+}
+
+static void dm_on_child_ready(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (g_dm.watch_spawn_pending && g_dm.watch_spawn_pid != 0u &&
+        (uint32_t)msg->arg0 == g_dm.watch_spawn_pid) {
+        dm_watch_spawn_finish(1);
+    }
+}
+
+/* A child that exits before READY is a failed spawn and goes through the
+ * rule's retry policy. One that exits later is not this service's to restart:
+ * a driver that must come back is a supervised unit (ENV{RESTART}). */
+static void dm_on_child_exited(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (g_dm.watch_spawn_pending && g_dm.watch_spawn_pid != 0u &&
+        (uint32_t)msg->arg0 == g_dm.watch_spawn_pid) {
+        (void)printf("[device-manager] %s exited before ready status=%d\n",
+                     g_dm.rule_spawn_path,
+                     (int)msg->arg1);
+        dm_watch_spawn_finish(0);
+    }
+}
+
+/* A child that neither latches READY nor exits within DM_SPAWN_TIMEOUT_MS is
+ * still running, so the rule is given up rather than retried: a retry would
+ * start a second driver for the same device. */
+static void dm_watch_spawn_check_deadline(void) {
+    if (!g_dm.watch_spawn_pending || g_dm.watch_spawn_pid == 0u ||
+        (int32_t)((uint32_t)wasmos_sched_ticks() - g_dm.watch_spawn_deadline) < 0) {
+        return;
+    }
+    (void)printf("[device-manager] %s (pid %u) never became ready; giving up on the device\n",
+                 g_dm.rule_spawn_path,
+                 (unsigned)g_dm.watch_spawn_pid);
+    g_dm.watch_spawn_pending = 0;
+    g_dm.watch_spawn_pid = 0;
+    rule_spawn_give_up();
+}
+
+/* Spawns the armed rule's driver from `path` with its startup args and every
+ * grant in active_rule_spawn_caps -- windows, IRQ lines and the PCI function --
+ * WITHOUT waiting: the outcome arrives on spawn_endpoint and retires the rule
+ * (dm_on_watch_spawn_reply, dm_on_child_ready, dm_on_child_exited). The request
+ * lives in a buffer this service owns and lends the PM READ|WRITE, the PM
+ * writing the child's pid back into it. Returns 0 with the spawn in flight, or
+ * -1 with nothing sent. */
+static int dm_watch_spawn_send(const char* path, const char* args) {
+    int32_t len;
+    int32_t bid;
+    if (g_dm.spawn_endpoint < 0) {
+        return -1;
+    }
+    len = dm_watch_spawn_encode(path,
+                                args,
+                                &g_dm.active_rule_spawn_caps,
+                                g_dm.spawn_endpoint,
+                                g_dm_watch_spawn_req,
+                                (uint32_t)sizeof(g_dm_watch_spawn_req));
+    if (len < 0) {
+        return -1;
+    }
+    bid = wasmos_xfer_stage(g_dm_watch_spawn_req, len);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_borrow(
+            g_dm.proc_endpoint, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE) < 0 ||
+        wasmos_sys_intent_send(&g_dm_spawn_loop,
+                               g_dm.proc_endpoint,
+                               g_dm.spawn_endpoint,
+                               PROC_IPC_SPAWN_WATCHED,
+                               bid,
+                               0,
+                               len,
+                               0,
+                               dm_on_watch_spawn_reply,
+                               0,
+                               0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    g_dm.watch_spawn_bid = bid;
+    g_dm.watch_spawn_pid = 0;
+    g_dm.watch_spawn_pending = 1;
+    return 0;
+}
+
+/* Creates spawn_endpoint and its loop. The endpoint joins the IDLE select set
+ * and the loop drops the select-set its init made, as for the supervisor loop.
+ * A failure leaves spawn_endpoint at -1, and rule drivers then fall back to the
+ * synchronous path spawn, which carries at most one I/O window. */
+static void dm_spawn_loop_init(void) {
+    int32_t ep = wasmos_ipc_create_endpoint();
+    if (ep < 0) {
+        console_write("[device-manager] spawn endpoint create failed\n");
+        return;
+    }
+    wasmos_sys_event_loop_init(&g_dm_spawn_loop, ep, 0xE400);
+    if (g_dm_spawn_loop.select_id >= 0) {
+        (void)wasmos_ipc_select_destroy(g_dm_spawn_loop.select_id);
+        g_dm_spawn_loop.select_id = -1;
+    }
+    if ((g_dm_idle_select_id >= 0 && wasmos_ipc_select_add(g_dm_idle_select_id, ep) != 0) ||
+        wasmos_sys_event_set_default(&g_dm_spawn_loop, dm_handle_ipc_default, 0) != 0 ||
+        wasmos_sys_event_register(&g_dm_spawn_loop, PROC_IPC_CHILD_READY, dm_on_child_ready, 0) !=
+            0 ||
+        wasmos_sys_event_register(&g_dm_spawn_loop, PROC_IPC_CHILD_EXITED, dm_on_child_exited, 0) !=
+            0) {
+        console_write("[device-manager] spawn loop init failed\n");
+        return;
+    }
+    g_dm.spawn_endpoint = ep;
+}
+
 static hw_spawn_target_t next_spawn_target(void) {
     if (g_dm.need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
@@ -2906,7 +3070,7 @@ static hw_spawn_target_t next_spawn_target(void) {
     /* A mount request is in flight for the armed rule, which stays armed until
      * fs-manager answers. Re-entering the spawn phase here would send it a
      * second time. */
-    if (g_dm.mount_req_pending || g_dm.submit_req_pending) {
+    if (g_dm.mount_req_pending || g_dm.submit_req_pending || g_dm.watch_spawn_pending) {
         return HW_SPAWN_NONE;
     }
     if (g_dm.rule_spawn_pending &&
@@ -3210,6 +3374,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wasmos_sys_ipc_recv_loop();
     }
     dm_supervisor_init();
+    dm_spawn_loop_init();
     /* READY once every endpoint and handler is set up -- a setup failure above
      * parks before it, so the supervisor's READY deadline still catches it --
      * and before rule loading and enumeration, which take as long as the boot
@@ -3426,20 +3591,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                    sizeof(spawn_args)) > 0) {
                         args = spawn_args;
                     }
-                    /* A driver with declared windows must spawn by module
-                     * index: PROC_IPC_SPAWN_PATH_CAPS_SYNC packs one
-                     * io_port_min/max pair and cannot describe more than a
-                     * single window, while the index form escalates to the
-                     * descriptor variant when region_count > 0. The path form
-                     * carries the startup args, so it stays in use for every
-                     * driver that needs those instead.
-                     * TODO: a descriptor-carrying path spawn would remove this
-                     * either/or; a driver needing both declared windows AND
-                     * startup args cannot be expressed today. Nor can the path
-                     * form name a PCI driver's function, so a DMA driver
-                     * spawned that way is not quiesced when it ends: its
-                     * device may master into recycled frames. A rule with
-                     * ENV{RESTART} (a watched, descriptor spawn) is. */
                     /* A rule naming a restart policy hands its driver to the
                      * supervisor, which spawns it with these args and grants
                      * and restarts it by that policy. The reply is DEFERRED,
@@ -3459,17 +3610,32 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         console_write(g_dm.rule_spawn_path);
                         console_write(" directly\n");
                     }
-                    int32_t spawn_module_index = -1;
-                    if (g_dm.active_rule_spawn_caps.region_count > 0u) {
-                        spawn_module_index = rule_module_index(g_dm.rule_spawn_path);
+                    /* A PCI or ACPI driver is spawned by PATH, from the initfs
+                     * fs-manager already serves, with a watched spawn: the one
+                     * form that carries its startup args AND every declared
+                     * window, plus the PCI function the kernel quiesces when
+                     * the driver ends. The outcome is DEFERRED: the child's
+                     * READY retires the rule (dm_on_child_ready). A BLOCK_FS
+                     * driver has no windows and keeps the synchronous form. */
+                    if (g_dm.active_rule_spawn_kind != RULE_SPAWN_KIND_BLOCK_FS) {
+                        log_spawn_grant(spawn_path, &g_dm.active_rule_spawn_caps);
+                        if (dm_watch_spawn_send(spawn_path, args) == 0) {
+                            g_dm.pending = HW_SPAWN_NONE;
+                            g_dm.phase = HW_PHASE_SPAWN;
+                            continue;
+                        }
+                        /* Only a single I/O window survives the fallback; a
+                         * driver that declared windows cannot be described by
+                         * it and goes through the retry policy instead. */
+                        if (g_dm.active_rule_spawn_caps.region_count > 0u) {
+                            rule_spawn_complete(0);
+                            g_dm.pending = HW_SPAWN_NONE;
+                            g_dm.phase = HW_PHASE_SPAWN;
+                            continue;
+                        }
                     }
-                    if (spawn_module_index >= 0) {
-                        rc = hw_spawn_driver_index_caps(spawn_module_index,
-                                                        &g_dm.active_rule_spawn_caps);
-                    } else {
-                        rc = hw_spawn_driver_path_caps_args(
-                            spawn_path, &g_dm.active_rule_spawn_caps, args);
-                    }
+                    rc = hw_spawn_driver_path_caps_args(
+                        spawn_path, &g_dm.active_rule_spawn_caps, args);
                 } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS &&
                            g_dm.active_rule_spawn_index >= 0 &&
                            g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count &&
@@ -3519,6 +3685,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             load_rules_if_available();
             poll_mount_request_async();
             (void)wasmos_sys_event_loop_poll(&g_dm_sv_loop, 8);
+            (void)wasmos_sys_event_loop_poll(&g_dm_spawn_loop, 8);
+            dm_watch_spawn_check_deadline();
             consume_inventory_events_nonblocking();
             drain_reply_endpoint_nonblocking(4);
             if (next_spawn_target() != HW_SPAWN_NONE) {
@@ -3539,7 +3707,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
              * it. The timed wait polls poll_mount_request_async instead. */
             int32_t settled = g_dm.rules_init_loaded && g_dm.rules_boot_loaded &&
                               g_dm.boot_mount_ready && !g_dm.rules_boot_request_pending &&
-                              !g_dm.mount_req_pending && !g_dm.submit_req_pending;
+                              !g_dm.mount_req_pending && !g_dm.submit_req_pending &&
+                              !g_dm.watch_spawn_pending;
             if (g_dm_idle_select_id >= 0) {
                 if (settled) {
                     (void)wasmos_ipc_select_wait(g_dm_idle_select_id);

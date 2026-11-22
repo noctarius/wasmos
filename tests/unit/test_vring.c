@@ -309,11 +309,26 @@ static int test_chain_round_trip(void) {
     return 0;
 }
 
+/* A queue whose driver binds no interrupt asks the device for none, and the
+ * request survives until the next layout clears the rings. */
+static int test_interrupts_can_be_disabled(void) {
+    vring_t vq;
+    if (vring_layout(&vq, g_region, 0x1000000ULL, sizeof(g_region), QNUM, QALIGN) != 0)
+        return __LINE__;
+    if (*vq.avail_flags != 0)
+        return __LINE__;
+    vring_disable_interrupts(&vq);
+    if ((*vq.avail_flags & VRING_AVAIL_F_NO_INTERRUPT) == 0)
+        return __LINE__;
+    return 0;
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
     static const wasmos_test_case_t cases[] = {
         WASMOS_TEST_CASE(test_size_and_layout),
+        WASMOS_TEST_CASE(test_interrupts_can_be_disabled),
         WASMOS_TEST_CASE(test_reject_bad_params),
         WASMOS_TEST_CASE(test_publish_kick_consume),
         WASMOS_TEST_CASE(test_free_list_exhaustion),

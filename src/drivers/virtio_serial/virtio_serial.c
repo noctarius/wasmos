@@ -20,7 +20,8 @@
  * region 0. Only port 0's transmit queue is used: MULTIPORT is not accepted, so
  * the device has exactly one port and no control queues, and nothing is read
  * from the host. Transmit completions are reclaimed when a buffer is needed
- * rather than signalled, so the driver binds no interrupt. */
+ * rather than signalled, so the driver binds no interrupt and tells the device
+ * to raise none (vring_disable_interrupts). */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -198,6 +199,11 @@ static int initialize_device(void) {
         return -1;
     }
     vring_set_notify(&g_txq, tx_notify, 0);
+    /* No interrupt is bound, so none may be raised: the console's INTx line
+     * can be shared (under QEMU with a virtio-blk disk on its INTx fallback),
+     * and an interrupt this driver never acknowledges would re-fire on that
+     * line for the driver that routes it. */
+    vring_disable_interrupts(&g_txq);
     if (virtio_modern_queue_enable(&g_vm,
                                    (uint16_t)VIRTIO_CONSOLE_TX_QUEUE,
                                    &g_txq,

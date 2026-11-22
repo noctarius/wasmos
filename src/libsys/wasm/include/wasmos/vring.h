@@ -187,6 +187,21 @@ static inline void vring_set_notify(vring_t* vq, void (*notify)(void* user), voi
     vq->notify_user = user;
 }
 
+/* Avail-ring flag asking the device not to interrupt when it uses buffers from
+ * this queue (virtio 1.2 §2.7.7.2, without EVENT_IDX). */
+#define VRING_AVAIL_F_NO_INTERRUPT 1u
+
+/* Asks the device not to interrupt for this queue. A driver that binds no
+ * interrupt must do this: an interrupt nobody acknowledges keeps a
+ * level-triggered INTx line asserted, and on a line shared with a driver that
+ * routes it, re-fires for that driver forever. The flag is a hint a device
+ * may ignore, so it does not make an interrupt impossible. vring_layout()
+ * clears it; call after every layout. */
+static inline void vring_disable_interrupts(vring_t* vq) {
+    *vq->avail_flags = (uint16_t)(*vq->avail_flags | VRING_AVAIL_F_NO_INTERRUPT);
+    vring_mb();
+}
+
 /* Allocate one descriptor for a buffer at device address buf_phys. flags is a
  * combination of VRING_DESC_F_*, with VRING_DESC_F_NEXT masked off. Returns the
  * descriptor index, or -1 if the free list is empty. For a request that spans

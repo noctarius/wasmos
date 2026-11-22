@@ -1153,45 +1153,51 @@ typedef struct __attribute__((packed)) {
     uint32_t pci_function;
 } wasmos_spawn_dma_caps_t;
 
-/* Descriptor-based spawn capabilities. Unlike the packed-arg spawn opcodes,
- * which are out of IPC argument slots, this carries variable-length arrays after
- * the fixed header. Layout is header, then region_count region grants, then
- * dma.window_count DMA windows — order matters, both sides walk it positionally.
+/* Interrupts one spawn profile may grant. */
+#define WASMOS_IRQ_GRANT_LIMIT 4u
+
+/* Descriptor-based spawn capabilities, the only form a spawn grants hardware
+ * access with: a fixed header, then region_count region grants, then
+ * dma.window_count DMA windows, then irq_count interrupt identifiers (uint32_t
+ * each) -- order matters, both sides walk it positionally.
  *
- * io_port_min/max remain for a single contiguous I/O window; region_count > 0
- * supersedes them, which is how a device with disjoint register windows (legacy
- * IDE: task file at 0x1F0/0x3F6, bus-master registers in a BAR) or with
- * memory-mapped registers is described. An I/O grant needs DEVMGR_CAP_IO_PORT
- * and an MMIO grant DEVMGR_CAP_MMIO_MAP; a grant whose capability is missing
- * refuses the whole descriptor rather than being dropped, since dropping one
- * would renumber every grant after it. */
+ * An interrupt identifier is the architecture's own name for an interrupt, the
+ * value the irq_route_ipc / irq_ack / irq_unroute / irq_configure host calls
+ * take as irq_line: an ISA line (0..15) on x86_64, a GIC SPI INTID (32..1019)
+ * on aarch64. A list rather than a bitmask, because the second kind does not
+ * fit one.
+ *
+ * An I/O grant needs DEVMGR_CAP_IO_PORT, an MMIO grant DEVMGR_CAP_MMIO_MAP and
+ * an interrupt DEVMGR_CAP_IRQ; a grant whose capability is missing refuses the
+ * whole descriptor rather than being dropped, since dropping a region would
+ * renumber every grant after it. */
 typedef struct __attribute__((packed)) {
     uint32_t cap_flags;
-    uint16_t io_port_min;
-    uint16_t io_port_max;
-    uint16_t irq_mask;
     uint16_t region_count;
+    uint16_t irq_count;
     wasmos_spawn_dma_caps_t dma;
     /* wasmos_region_grant_t regions[region_count];
-     * wasmos_dma_window_t windows[dma.window_count]; */
+     * wasmos_dma_window_t windows[dma.window_count];
+     * uint32_t irqs[irq_count]; */
 } wasmos_spawn_caps_v2_t;
 
 /* Total bytes a wasmos_spawn_caps_v2_t with the given tail lengths occupies:
- * the fixed header plus both variable arrays, in the order the struct comment
- * gives. Use it to size the buffer before writing and to bounds-check one
- * before reading; the counts must be the same ones stored in the header
- * (region_count and dma.window_count), or the computed size will not describe
- * the actual layout. Both arguments are evaluated more than once only through
- * casts, so passing an expression with side effects is safe here, but the macro
- * is otherwise unparenthesised in the usual way -- pass simple values. The
- * result is a uint32_t, as every length field it is compared with is. */
-#define WASMOS_SPAWN_CAPS_V2_SIZE(region_count, window_count)                                      \
+ * the fixed header plus the three variable arrays, in the order the struct
+ * comment gives. Use it to size the buffer before writing and to bounds-check
+ * one before reading; the counts must be the ones stored in the header
+ * (region_count, dma.window_count, irq_count), or the computed size will not
+ * describe the actual layout. Pass simple values: the macro is
+ * unparenthesised in the usual way. The result is a uint32_t, as every length
+ * field it is compared with is. */
+#define WASMOS_SPAWN_CAPS_V2_SIZE(region_count, window_count, irq_count)                           \
     ((uint32_t)sizeof(wasmos_spawn_caps_v2_t) +                                                    \
      ((uint32_t)(region_count) * (uint32_t)sizeof(wasmos_region_grant_t)) +                        \
-     ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
-_Static_assert(WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_REGION_LIMIT, 1) <= SUPERVISOR_CAPS_MAX,
-               "a submission's caps must fit every region a driver may declare and the "
-               "DMA window device-manager grants");
+     ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)) +                          \
+     ((uint32_t)(irq_count) * (uint32_t)sizeof(uint32_t)))
+_Static_assert(WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_REGION_LIMIT, 1, WASMOS_IRQ_GRANT_LIMIT) <=
+                   SUPERVISOR_CAPS_MAX,
+               "a submission's caps must fit every region a driver may declare, the "
+               "DMA window device-manager grants and every interrupt");
 
 /* Stable indices naming the fields of an IPC message, for code that addresses
  * them positionally rather than by struct member. The order is NOT the struct's

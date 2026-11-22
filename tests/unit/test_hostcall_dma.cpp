@@ -232,8 +232,16 @@ static void reset(void) {
 
     wasmos_dma_window_t wide = {CAPABLE_WINDOW_BASE, CAPABLE_WINDOW_LEN};
     (void)capability_grant_name(CTX_CAPABLE, dma_name, dma_name_len, 1u);
-    (void)capability_set_spawn_profile(
-        CTX_CAPABLE, cap_flags, 0, nullptr, 0, WASMOS_DMA_DIR_BIDIR, CAPABLE_MAX_BYTES, 1, &wide);
+    (void)capability_set_spawn_profile(CTX_CAPABLE,
+                                       cap_flags,
+                                       0,
+                                       nullptr,
+                                       0,
+                                       nullptr,
+                                       WASMOS_DMA_DIR_BIDIR,
+                                       CAPABLE_MAX_BYTES,
+                                       1,
+                                       &wide);
 
     wasmos_dma_window_t narrow = {NARROW_WINDOW_BASE, NARROW_WINDOW_LEN};
     (void)capability_grant_name(CTX_NARROW, dma_name, dma_name_len, 1u);
@@ -242,6 +250,7 @@ static void reset(void) {
                                        0,
                                        nullptr,
                                        0,
+                                       nullptr,
                                        WASMOS_DMA_DIR_TO_DEVICE,
                                        NARROW_MAX_BYTES,
                                        1,
@@ -398,6 +407,7 @@ static int32_t s_map_address_over_i32(const Shims& s) {
                                        0,
                                        nullptr,
                                        0,
+                                       nullptr,
                                        WASMOS_DMA_DIR_BIDIR,
                                        CAPABLE_MAX_BYTES,
                                        1,

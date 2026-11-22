@@ -385,9 +385,6 @@ class ProcessManager {
         case PROC_IPC_SPAWN:
             rc = pm_handle_spawn(process->context_id, &msg);
             break;
-        case PROC_IPC_SPAWN_CAPS:
-            rc = pm_handle_spawn_caps(process->context_id, &msg);
-            break;
         case PROC_IPC_SPAWN_CAPS_V2:
             rc = pm_handle_spawn_caps_v2(process->context_id, &msg);
             break;
@@ -397,20 +394,11 @@ class ProcessManager {
         case PROC_IPC_SPAWN_WATCHED:
             rc = pm_handle_spawn_watched(process->context_id, &msg);
             break;
-        case PROC_IPC_SPAWN_PATH_CAPS:
-            rc = pm_handle_spawn_path_caps(process->context_id, &msg);
-            break;
         case PROC_IPC_SPAWN_SYNC:
             rc = pm_handle_spawn_sync(process->context_id, &msg);
             break;
-        case PROC_IPC_SPAWN_CAPS_SYNC:
-            rc = pm_handle_spawn_caps_sync(process->context_id, &msg);
-            break;
         case PROC_IPC_SPAWN_PATH_SYNC:
             rc = pm_handle_spawn_path_sync(process->context_id, &msg);
-            break;
-        case PROC_IPC_SPAWN_PATH_CAPS_SYNC:
-            rc = pm_handle_spawn_path_caps_sync(process->context_id, &msg);
             break;
         case PROC_IPC_NOTIFY_READY:
             rc = pm_handle_notify_ready(process->context_id, &msg);

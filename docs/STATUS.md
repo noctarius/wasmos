@@ -797,6 +797,17 @@ linked feature documents for rationale and rollout plans.
   ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap
   stubs (aarch64: `svc #0`, number in x8). No aarch64 framebuffer fallback
   without GOP (the x86 0xCF8 scan is x86_64-only).
+- Interrupt grants are lists of interrupt identifiers -- an ISA line on
+  x86_64, a GIC SPI INTID on aarch64 -- carried in the spawn descriptor
+  (`wasmos_spawn_caps_v2_t`: `irq_count` + `uint32_t irqs[]`, at most
+  `WASMOS_IRQ_GRANT_LIMIT`), stored in the capability profile and checked by
+  `capability_irq_line_allowed`; an interrupt needs `DEVMGR_CAP_IRQ`. The
+  packed spawn opcodes that carried a 16-bit IRQ mask and one I/O window in
+  argument words (`SPAWN_CAPS`, `SPAWN_PATH_CAPS`, `SPAWN_CAPS_SYNC`,
+  `SPAWN_PATH_CAPS_SYNC`) are retired: every grant travels in a descriptor
+  (`SPAWN_CAPS_V2`, ready-gated with a timeout, for pci-bus and acpi-bus;
+  `SPAWN_WATCHED` for rule drivers), and a path spawn with arguments and no
+  grant is `SPAWN_PATH_SYNC` with `args_len`.
 - Supported build/test hosts: x86_64-linux, aarch64-linux, aarch64-darwin
   (`hosts` in `tests/batteries.json`). CI runs the kernel unit tests on both
   Linux hosts (aarch64-darwin is tested locally; macOS runners are scarce)

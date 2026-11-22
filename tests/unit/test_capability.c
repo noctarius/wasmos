@@ -77,7 +77,7 @@ static int install_mixed_profile(void) {
     };
     capability_init();
     return capability_set_spawn_profile(
-        DRIVER, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP, 3, regions, 0, 0, 0, 0, 0);
+        DRIVER, DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP, 3, regions, 0, 0, 0, 0, 0, 0);
 }
 
 static int test_regions_resolve_by_position_and_kind(void) {
@@ -137,12 +137,12 @@ static int test_a_region_the_kernel_cannot_honour_refuses_the_profile(void) {
     const capability_region_t mmio[1] = {{WASMOS_REGION_GRANT_MMIO, 0x1000, 0xFEB00000u, MMIO_KVA}};
     const capability_region_t io[1] = {{WASMOS_REGION_GRANT_IO, 0x20, 0xFFF0, 0}};
     capability_init();
-    if (capability_set_spawn_profile(DRIVER, DEVMGR_CAP_MMIO_MAP, 1, unmapped, 0, 0, 0, 0, 0) ==
+    if (capability_set_spawn_profile(DRIVER, DEVMGR_CAP_MMIO_MAP, 1, unmapped, 0, 0, 0, 0, 0, 0) ==
             0 ||
-        capability_set_spawn_profile(DRIVER, DEVMGR_CAP_IO_PORT, 1, mmio, 0, 0, 0, 0, 0) == 0 ||
-        capability_set_spawn_profile(DRIVER, DEVMGR_CAP_IO_PORT, 1, io, 0, 0, 0, 0, 0) == 0 ||
+        capability_set_spawn_profile(DRIVER, DEVMGR_CAP_IO_PORT, 1, mmio, 0, 0, 0, 0, 0, 0) == 0 ||
+        capability_set_spawn_profile(DRIVER, DEVMGR_CAP_IO_PORT, 1, io, 0, 0, 0, 0, 0, 0) == 0 ||
         capability_set_spawn_profile(
-            DRIVER, DEVMGR_CAP_IO_PORT, CAPABILITY_REGION_LIMIT + 1u, io, 0, 0, 0, 0, 0) == 0) {
+            DRIVER, DEVMGR_CAP_IO_PORT, CAPABILITY_REGION_LIMIT + 1u, io, 0, 0, 0, 0, 0, 0) == 0) {
         return __LINE__;
     }
     return 0;

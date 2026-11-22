@@ -19,13 +19,14 @@
 int32_t dm_unit_spec(const char* rule_path, const char* instance, const char* path,
                      const char* restart, const char* args, char* out, uint32_t out_cap);
 
-/* Encodes caps as a wasmos_spawn_caps_v2_t followed by its region grants, and by
- * the default DMA window when caps asks for DMA (the grant the packed spawn
- * opcodes synthesise), with caps->dma_max_bytes as its budget (one page when
- * that is 0). A caps without grants carries its single window in
- * io_port_min/max. A caps naming its PCI function carries it as
+/* Encodes caps as a wasmos_spawn_caps_v2_t followed by its region grants, the
+ * default DMA window when caps asks for DMA, with caps->dma_max_bytes as its
+ * budget (one page when that is 0), and its interrupt identifiers. A caps
+ * without region grants but with DEVMGR_CAP_IO_PORT carries io_port_min..max
+ * as its single I/O region grant. A caps naming its PCI function carries it as
  * DEVMGR_CAP_PCI_FUNCTION and dma.pci_function. Returns the descriptor's
- * length, or -1 when it would not fit out_cap bytes. */
+ * length, or -1 when it would not fit out_cap bytes or a count exceeds its
+ * limit. */
 int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_cap);
 
 /* Bytes a watched-spawn request may take: the descriptor, the longest path and

@@ -16,24 +16,22 @@
 
 typedef struct {
     const char* app_name;
-    uint16_t irq_mask;
+    uint32_t irq_count;
+    uint32_t irqs[2];
 } irq_route_policy_t;
 
-/* Fallback IRQ allowlist, consulted by name only for a context that has no
- * spawn profile; a context with one is decided by its profile's irq_mask.
- * Explicit and default-deny: holding CAP_IRQ_ROUTE is necessary but not
- * sufficient to route a specific line. */
+/* Fallback interrupt allowlist, consulted by name only for a context that has
+ * no spawn profile; a context with one is decided by its profile's interrupt
+ * list. Explicit and default-deny: holding CAP_IRQ_ROUTE is necessary but not
+ * sufficient to route a specific interrupt. */
 static const irq_route_policy_t g_irq_route_policy[] = {
-    {"ata", (uint16_t)((1u << 14) | (1u << 15))},
-    {"irq-route-allow", (uint16_t)(1u << 1)},
+    {"ata", 2u, {14u, 15u}},
+    {"irq-route-allow", 1u, {1u, 0u}},
 };
 
 static int policy_irq_route_allows(uint32_t context_id, uint32_t irq_line) {
     if (context_id == IPC_CONTEXT_KERNEL) {
         return 1;
-    }
-    if (irq_line >= IRQ_COUNT) {
-        return 0;
     }
     if (capability_spawn_profile_configured(context_id)) {
         return capability_irq_line_allowed(context_id, irq_line);
@@ -47,7 +45,12 @@ static int policy_irq_route_allows(uint32_t context_id, uint32_t irq_line) {
         if (strcmp(proc->name, g_irq_route_policy[i].app_name) != 0) {
             continue;
         }
-        return (g_irq_route_policy[i].irq_mask & (uint16_t)(1u << irq_line)) != 0;
+        for (uint32_t k = 0; k < g_irq_route_policy[i].irq_count; ++k) {
+            if (g_irq_route_policy[i].irqs[k] == irq_line) {
+                return 1;
+            }
+        }
+        return 0;
     }
     return 0;
 }

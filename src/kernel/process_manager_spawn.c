@@ -544,7 +544,8 @@ static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
                                      caps->cap_flags,
                                      caps->region_count,
                                      regions,
-                                     caps->irq_mask,
+                                     caps->irq_count,
+                                     caps->irqs,
                                      caps->dma_direction_flags,
                                      caps->dma_max_bytes,
                                      caps->dma_window_count,
@@ -1208,92 +1209,13 @@ int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     return 0;
 }
 
-/* Spawn by boot-module index with capabilities (PROC_IPC_SPAWN_CAPS_SYNC),
- * replying when the child is ready.  arg0 = module index, arg1 = cap_flags,
- * arg2 = (io_port_max << 16) | io_port_min, arg3 = (timeout_ms << 16) | irq_mask
- * — so the timeout here is capped at 65535 ms, unlike the path forms where arg3
- * is the whole word.
- *
- * A caps failure kills the child rather than leaving it parked with the wrong
- * authority.  The DMA bit expands to a fixed permissive default profile (bidir,
- * 4 KiB, one 2 GiB window); the descriptor form is what carries a real policy. */
-int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
-    pm_spawn_caps_t caps = {0};
-    uint32_t owner_context = 0;
-    process_t* caller = 0;
-    uint32_t parent_pid = 0;
-    uint32_t child_pid = 0;
-
-    if (g_pm.spawn.in_use) {
-        return WASMOS_ERR_PROC_PM_BUSY;
-    }
-    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
-    }
-    caller = process_find_by_context(owner_context);
-    if (!caller) {
-        return WASMOS_ERR_PROC_PM_NO_CALLER;
-    }
-    parent_pid = caller->pid;
-
-    caps.valid = 1;
-    caps.cap_flags = (uint32_t)msg->arg1;
-    /* A packed form has no room for the function the flag would name, so
-     * it would name function 00:00.0 (pm_apply_spawn_caps). */
-    if ((caps.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
-    uint32_t timeout_ms = (uint32_t)msg->arg3 >> 16;
-    if (pm_caps_set_io_window(&caps,
-                              (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu),
-                              (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu)) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
-        caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
-        caps.dma_max_bytes = 4096u;
-        caps.dma_window_count = 1;
-        caps.dma_windows[0].base = 0;
-        caps.dma_windows[0].length = 0x80000000ull;
-    }
-    if (!pm_caps_grant_allowed(owner_context, &caps)) {
-        return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
-    }
-
-    if (pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid) != 0) {
-        return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
-    }
-    (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
-    if (pm_apply_spawn_caps(child_pid, &caps) != 0) {
-        (void)process_kill(child_pid, -1);
-        return WASMOS_ERR_PROC_PM_CAPS_APPLY;
-    }
-    /* Index caps-sync spawns come from the device manager (ready-gated, never
-     * exit-waited); auto-reap on exit so one-shot enumerators (pci-bus/acpi-bus,
-     * spawned by rule-index+caps) don't linger as zombies.  Harmless for
-     * persistent drivers.  Same fixed-policy rationale as the path caps-sync. */
-    (void)process_set_auto_reap(child_pid, 1);
-
-    g_pm.spawn.in_use = 1;
-    g_pm.spawn.is_sync = 1;
-    g_pm.spawn.reply_endpoint = msg->source;
-    g_pm.spawn.request_id = msg->request_id;
-    g_pm.spawn.parent_pid = parent_pid;
-    g_pm.spawn.parent_context_id = owner_context;
-    g_pm.spawn.sync_child_pid = child_pid;
-    g_pm.spawn.app_flags = 0;
-    g_pm.spawn.sync_timeout_ticks =
-        (timeout_ms > 0) ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
-    process_unpark_pid(child_pid);
-    return 0;
-}
-
 /* Spawn from a filesystem path (PROC_IPC_SPAWN_PATH_SYNC), replying when the
  * child is ready.  arg0 = PROC_SPAWN_PATH_FLAG_* request flags,
- * arg1 = (caller_buffer_id << 12) | path_len, arg3 = timeout in ms.  The path
- * bytes live at offset 0 of the caller's transfer buffer named by that id; PM
- * reads them directly (it is kernel) and requires path_len < 256.
+ * arg1 = (caller_buffer_id << 12) | path_len, arg2 = args_len, arg3 = timeout
+ * in ms.  The path bytes live at offset 0 of the caller's transfer buffer named
+ * by that id and, when args_len is not 0, args_len bytes of command-line
+ * arguments directly after them; PM reads both directly (it is kernel) and
+ * requires path_len < 256 and args_len < 256.
  *
  * The blob is read into a PM-OWNED per-operation buffer and the child is built
  * from that, so the caller cannot mutate the image after PM has validated it.
@@ -1306,9 +1228,11 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
     uint32_t spawn_req_flags = (uint32_t)msg->arg0;
     uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
     uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
+    uint32_t args_len = (uint32_t)msg->arg2;
     uint32_t timeout_ms = (uint32_t)msg->arg3;
     const uint8_t* caller_fs_buf = 0;
     char path[256];
+    char args[256];
     pm_resolved_spawn_path_t resolved;
     uint32_t child_pid = 0;
     xfer_buffer_owner_t pmbuf = {0};
@@ -1324,23 +1248,34 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
         return WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
-    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
+    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path) ||
+        args_len >= sizeof(args)) {
         return WASMOS_ERR_PROC_PM_BAD_PATH;
     }
     caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
-    if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
+    if (!caller_fs_buf || path_len + args_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
     for (uint32_t i = 0; i < path_len; ++i) {
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
+    for (uint32_t i = 0; i < args_len; ++i) {
+        args[i] = (char)caller_fs_buf[path_len + i];
+    }
+    args[args_len] = '\0';
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
         WASMOS_ERR_NONE) {
         return WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
     }
-    if (pm_resolve_spawn_path(
-            pm_context_id, &pmbuf, path, path_len, 0, 0, spawn_req_flags, &resolved) != 0) {
+    if (pm_resolve_spawn_path(pm_context_id,
+                              &pmbuf,
+                              path,
+                              path_len,
+                              args_len > 0u ? args : 0,
+                              args_len,
+                              spawn_req_flags,
+                              &resolved) != 0) {
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
@@ -1368,158 +1303,6 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
     if ((spawn_req_flags & PROC_SPAWN_PATH_FLAG_AUTOREAP) != 0) {
         (void)process_set_auto_reap(child_pid, 1);
     }
-
-    g_pm.spawn.in_use = 1;
-    g_pm.spawn.is_sync = 1;
-    g_pm.spawn.reply_endpoint = msg->source;
-    g_pm.spawn.request_id = msg->request_id;
-    g_pm.spawn.parent_pid = parent_pid;
-    g_pm.spawn.parent_context_id = owner_context;
-    g_pm.spawn.sync_child_pid = child_pid;
-    g_pm.spawn.app_flags = 0;
-    g_pm.spawn.sync_timeout_ticks =
-        (timeout_ms > 0) ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
-    process_unpark_pid(child_pid);
-    return 0;
-}
-
-/* Spawn from a path with capabilities (PROC_IPC_SPAWN_PATH_CAPS_SYNC), replying
- * when the child is ready.  arg0 = (irq_mask << 16) | cap_flags,
- * arg1 = (caller_buffer_id << 12) | path_len,
- * arg2 = (io_port_max << 16) | io_port_min, arg3 = timeout in ms.
- *
- * The caller's buffer holds the path at offset 0 and, if the byte after it is
- * not NUL, a NUL-terminated CLI argument string immediately following — which is
- * why arg2 is spent on the I/O window and cannot carry an args length. */
-int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
-    uint32_t caps_arg0 = (uint32_t)msg->arg0;
-    uint32_t caps_arg2 = (uint32_t)msg->arg2;
-    uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
-    uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
-    uint32_t timeout_ms = (uint32_t)msg->arg3;
-    pm_spawn_caps_t caps = {0};
-    uint32_t owner_context = 0;
-    process_t* caller = 0;
-    uint32_t parent_pid = 0;
-    const uint8_t* caller_fs_buf = 0;
-    char path[256];
-    char cli_args[256];
-    uint32_t cli_args_len = 0;
-    pm_resolved_spawn_path_t resolved;
-    uint32_t child_pid = 0;
-    xfer_buffer_owner_t pmbuf = {0};
-
-    caps.valid = 1;
-    caps.cap_flags = caps_arg0 & 0xFFFFu;
-    /* A packed form has no room for the function the flag would name, so
-     * it would name function 00:00.0 (pm_apply_spawn_caps). */
-    if ((caps.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    caps.irq_mask = (uint16_t)(caps_arg0 >> 16);
-    caps.dma_direction_flags = 0;
-    caps.dma_max_bytes = 0;
-    caps.dma_window_count = 0;
-
-    if (g_pm.spawn.in_use) {
-        return WASMOS_ERR_PROC_PM_BUSY;
-    }
-    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
-    }
-    caller = process_find_by_context(owner_context);
-    if (!caller) {
-        return WASMOS_ERR_PROC_PM_NO_CALLER;
-    }
-    parent_pid = caller->pid;
-    if (pm_caps_set_io_window(
-            &caps, (uint16_t)(caps_arg2 & 0xFFFFu), (uint16_t)(caps_arg2 >> 16)) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
-        /* Keep the path+caps sync ABI aligned with the compact spawn-caps
-         * handlers: callers that only set the DMA bit still get the default
-         * low-memory BIDIR window expected by existing in-tree drivers. */
-        caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
-        caps.dma_max_bytes = 4096u;
-        caps.dma_window_count = 1;
-        caps.dma_windows[0].base = 0;
-        caps.dma_windows[0].length = 0x80000000ull;
-    }
-    if (!pm_caps_grant_allowed(owner_context, &caps)) {
-        return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
-    }
-    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
-        return WASMOS_ERR_PROC_PM_BAD_PATH;
-    }
-    caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
-    if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
-    }
-    for (uint32_t i = 0; i < path_len; ++i) {
-        path[i] = (char)caller_fs_buf[i];
-    }
-    path[path_len] = '\0';
-    if (path_len < xfer_buffer_size(BUFFER_KIND_TRANSFER) && caller_fs_buf[path_len] != 0u) {
-        for (; path_len + cli_args_len < xfer_buffer_size(BUFFER_KIND_TRANSFER); ++cli_args_len) {
-            uint8_t ch = caller_fs_buf[path_len + cli_args_len];
-            if (ch == 0u) {
-                break;
-            }
-            if (cli_args_len + 1u >= sizeof(cli_args)) {
-                return WASMOS_ERR_PROC_PM_BAD_PATH;
-            }
-            cli_args[cli_args_len] = (char)ch;
-        }
-        if (path_len + cli_args_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-            return WASMOS_ERR_PROC_PM_BAD_PATH;
-        }
-    }
-    cli_args[cli_args_len] = '\0';
-    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
-        WASMOS_ERR_NONE) {
-        return WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
-    }
-    if (pm_resolve_spawn_path(pm_context_id,
-                              &pmbuf,
-                              path,
-                              path_len,
-                              cli_args_len > 0u ? cli_args : 0,
-                              cli_args_len,
-                              0,
-                              &resolved) != 0) {
-        pm_xfer_release(&pmbuf);
-        return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
-    }
-    int spawn_rc =
-        pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             0u, /* caps variants spend arg0 on capability flags: no tty pin */
-                             &child_pid);
-    if (spawn_rc != 0) {
-        /* The internal reason, which the packed code cannot carry: several
-         * distinct failures collapse into SPAWN_FAILED, and discarding which
-         * one happened leaves a caller guessing. */
-        klog_printf("[pm] spawn failed rc=%d\n", spawn_rc);
-        pm_xfer_release(&pmbuf);
-        return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
-    }
-    pm_xfer_release(&pmbuf);
-    (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
-    if (pm_apply_spawn_caps(child_pid, &caps) != 0) {
-        (void)process_kill(child_pid, -1);
-        return WASMOS_ERR_PROC_PM_CAPS_APPLY;
-    }
-    /* This caps-sync path is used only by the device manager, which sync-spawns
-     * drivers waiting for READY (never for exit).  Auto-reap on exit so one-shot
-     * enumerators (pci-bus/acpi-bus) don't linger as zombies; harmless for
-     * persistent drivers (fires only once they become zombies).  All four IPC
-     * args carry caps/path/timeout here, so there is no room for an explicit
-     * per-spawn flag — the policy is fixed to this caller's model. */
-    (void)process_set_auto_reap(child_pid, 1);
 
     g_pm.spawn.in_use = 1;
     g_pm.spawn.is_sync = 1;
@@ -1826,91 +1609,23 @@ int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg) {
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
-/* Spawn by boot-module index with capabilities, replying immediately
- * (PROC_IPC_SPAWN_CAPS).  arg0 = module index, arg1 = cap_flags,
- * arg2 = (io_port_max << 16) | io_port_min, arg3 = irq_mask (whole word, unlike
- * the _SYNC variant which shares arg3 with a timeout).  Caps are applied while
- * the child is still parked, and a caps failure kills it. */
-int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
-    pm_spawn_caps_t caps = {0};
-    uint32_t owner_context = 0;
-    process_t* caller = 0;
-    uint32_t parent_pid = 0;
-    uint32_t pid = 0;
-    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
-    }
-    caller = process_find_by_context(owner_context);
-    if (!caller) {
-        return WASMOS_ERR_PROC_PM_NO_CALLER;
-    }
-    parent_pid = caller->pid;
-    caps.valid = 1;
-    caps.cap_flags = msg->arg1;
-    /* A packed form has no room for the function the flag would name, so
-     * it would name function 00:00.0 (pm_apply_spawn_caps). */
-    if ((caps.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
-    caps.dma_direction_flags = 0;
-    caps.dma_max_bytes = 0;
-    caps.dma_window_count = 0;
-    if (pm_caps_set_io_window(&caps,
-                              (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu),
-                              (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu)) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
-        /* Legacy fallback for in-tree storage DMA rollout: when callers use the
-         * compact spawn-caps request with DMA bit set, apply a conservative
-         * default DMA policy equivalent to the current device-manager profile. */
-        caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
-        caps.dma_max_bytes = 4096u;
-        caps.dma_window_count = 1;
-        caps.dma_windows[0].base = 0;
-        caps.dma_windows[0].length = 0x80000000ull;
-    }
-    if (!pm_caps_grant_allowed(owner_context, &caps)) {
-        return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
-    }
-    if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
-        return WASMOS_ERR_PROC_PM_INVALID_MODULE;
-    }
-    (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
-    if (pm_apply_spawn_caps(pid, &caps) != 0) {
-        (void)process_kill(pid, -1);
-        return WASMOS_ERR_PROC_PM_CAPS_APPLY;
-    }
-    process_unpark_pid(pid);
-    ipc_message_t resp;
-    resp.type = PROC_IPC_RESP;
-    resp.source = g_pm.proc_endpoint;
-    resp.destination = msg->source;
-    resp.request_id = msg->request_id;
-    resp.arg0 = pid;
-    resp.arg1 = 0;
-    resp.arg2 = 0;
-    resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
-               ? 0
-               : WASMOS_ERR_PROC_PM_REPLY_SEND;
-}
-
-/* Spawn by boot-module index with a full capability DESCRIPTOR, replying
- * immediately (PROC_IPC_SPAWN_CAPS_V2).  arg0 = module index, arg1 = the
- * caller's transfer-buffer id holding a wasmos_spawn_caps_v2_t followed by
- * region_count region grants and then dma.window_count DMA windows,
- * arg2 = the payload's byte length.
+/* Spawn by boot-module index with a full capability DESCRIPTOR
+ * (PROC_IPC_SPAWN_CAPS_V2).  arg0 = module index, arg1 = the caller's
+ * transfer-buffer id holding a wasmos_spawn_caps_v2_t followed by its region,
+ * DMA-window and interrupt tails, arg2 = the payload's byte length,
+ * arg3 = timeout in ms.
  *
- * The only spawn form that carries a real DMA policy and multiple or
- * memory-mapped register windows instead of the fixed defaults the packed forms
- * substitute.  Validation is strict on purpose, since this grants device
- * authority: unknown cap_flags bits, a malformed or over-long grant list (see
+ * With arg3 == 0 the reply is sent as soon as the child is unparked. With a
+ * timeout it waits for the child's READY, like the other _SYNC spawns, and the
+ * child is auto-reaped on exit: the device manager spawns its one-shot bus
+ * enumerators (pci-bus, acpi-bus) this way and reads their inventory only once
+ * they are ready.
+ *
+ * Validation is strict on purpose, since this grants device authority:
+ * unknown cap_flags bits, a malformed or over-long grant list (see
  * pm_caps_from_v2), a DMA request with no direction, zero max_bytes or too many
  * windows, and a payload whose length does not match what the counts imply are
- * each refused with WASMOS_ERR_PROC_PM_BAD_CAPS before any process is created.
- * A non-zero region_count supersedes the single io_port_min/max pair. */
+ * each refused with WASMOS_ERR_PROC_PM_BAD_CAPS before any process is created. */
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
@@ -1920,7 +1635,11 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t payload_size = 0;
     const uint8_t* caps_payload = 0;
     uint32_t caps_buffer_size = 0;
+    uint32_t timeout_ms = (uint32_t)msg->arg3;
 
+    if (timeout_ms > 0 && g_pm.spawn.in_use) {
+        return WASMOS_ERR_PROC_PM_BUSY;
+    }
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
@@ -1958,6 +1677,20 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     if (pm_apply_spawn_caps(pid, &caps) != 0) {
         (void)process_kill(pid, -1);
         return WASMOS_ERR_PROC_PM_CAPS_APPLY;
+    }
+    if (timeout_ms > 0) {
+        (void)process_set_auto_reap(pid, 1);
+        g_pm.spawn.in_use = 1;
+        g_pm.spawn.is_sync = 1;
+        g_pm.spawn.reply_endpoint = msg->source;
+        g_pm.spawn.request_id = msg->request_id;
+        g_pm.spawn.parent_pid = parent_pid;
+        g_pm.spawn.parent_context_id = owner_context;
+        g_pm.spawn.sync_child_pid = pid;
+        g_pm.spawn.app_flags = 0;
+        g_pm.spawn.sync_timeout_ticks = timer_ticks() + timer_ms_to_ticks(timeout_ms);
+        process_unpark_pid(pid);
+        return 0;
     }
     process_unpark_pid(pid);
     ipc_message_t resp;
@@ -2189,7 +1922,8 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
     wasmos_spawn_watch_desc_t req;
     char path[SPAWN_WATCH_PATH_MAX + 1];
     char cli_args[SPAWN_WATCH_ARGS_MAX + 1];
-    uint8_t caps_bytes[WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_REGION_LIMIT, PM_DMA_WINDOW_LIMIT)];
+    uint8_t caps_bytes[WASMOS_SPAWN_CAPS_V2_SIZE(
+        WASMOS_REGION_LIMIT, PM_DMA_WINDOW_LIMIT, WASMOS_IRQ_GRANT_LIMIT)];
     pm_spawn_caps_t caps = {0};
     ipc_owed_t* on_ready = 0;
     ipc_owed_t* on_exit = 0;
@@ -2357,145 +2091,6 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
     }
     process_unpark_pid(pid);
     return 0;
-}
-
-/* Spawn from a path with capabilities, replying immediately
- * (PROC_IPC_SPAWN_PATH_CAPS).  arg0 = (irq_mask << 16) | cap_flags,
- * arg1 = (caller_buffer_id << 12) | path_len,
- * arg2 = (io_port_max << 16) | io_port_min.  CLI arguments, if any, follow the
- * path's NUL in the caller's buffer, as in the _SYNC variant.
- *
- * Never ready-gates, whatever the image declares — that distinguishes it from
- * pm_handle_spawn_path — so it never touches the single g_pm.spawn slot. */
-int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
-    uint32_t owner_context = 0;
-    process_t* caller = 0;
-    uint32_t parent_pid = 0;
-    uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
-    uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
-    const uint8_t* caller_fs_buf = 0;
-    char path[256];
-    char cli_args[256];
-    uint32_t cli_args_len = 0;
-    uint32_t pid = 0;
-    pm_spawn_caps_t caps = {0};
-    pm_resolved_spawn_path_t resolved;
-    xfer_buffer_owner_t pmbuf = {0};
-
-    /* Unpack caps from IPC args:
-     * arg0 = (irq_mask<<16) | (cap_flags & 0xFFFF)
-     * arg2 = (io_port_max<<16) | io_port_min */
-    uint32_t caps_arg0 = (uint32_t)msg->arg0;
-    uint32_t caps_arg2 = (uint32_t)msg->arg2;
-    caps.valid = 1;
-    caps.cap_flags = caps_arg0 & 0xFFFFu;
-    /* A packed form has no room for the function the flag would name, so
-     * it would name function 00:00.0 (pm_apply_spawn_caps). */
-    if ((caps.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    caps.irq_mask = (uint16_t)(caps_arg0 >> 16);
-    caps.dma_direction_flags = 0;
-    caps.dma_max_bytes = 0;
-    caps.dma_window_count = 0;
-
-    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
-    }
-    caller = process_find_by_context(owner_context);
-    if (!caller) {
-        return WASMOS_ERR_PROC_PM_NO_CALLER;
-    }
-    parent_pid = caller->pid;
-    if (pm_caps_set_io_window(
-            &caps, (uint16_t)(caps_arg2 & 0xFFFFu), (uint16_t)(caps_arg2 >> 16)) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
-        caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
-        caps.dma_max_bytes = 4096u;
-        caps.dma_window_count = 1;
-        caps.dma_windows[0].base = 0;
-        caps.dma_windows[0].length = 0x80000000ull;
-    }
-    if (!pm_caps_grant_allowed(owner_context, &caps)) {
-        return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
-    }
-    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
-        return WASMOS_ERR_PROC_PM_BAD_PATH;
-    }
-    caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
-    if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
-    }
-    for (uint32_t i = 0; i < path_len; ++i) {
-        path[i] = (char)caller_fs_buf[i];
-    }
-    path[path_len] = '\0';
-    if (path_len < xfer_buffer_size(BUFFER_KIND_TRANSFER) && caller_fs_buf[path_len] != 0u) {
-        for (; path_len + cli_args_len < xfer_buffer_size(BUFFER_KIND_TRANSFER); ++cli_args_len) {
-            uint8_t ch = caller_fs_buf[path_len + cli_args_len];
-            if (ch == 0u) {
-                break;
-            }
-            if (cli_args_len + 1u >= sizeof(cli_args)) {
-                return WASMOS_ERR_PROC_PM_BAD_PATH;
-            }
-            cli_args[cli_args_len] = (char)ch;
-        }
-        if (path_len + cli_args_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-            return WASMOS_ERR_PROC_PM_BAD_PATH;
-        }
-    }
-    cli_args[cli_args_len] = '\0';
-    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) !=
-        WASMOS_ERR_NONE) {
-        return WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
-    }
-    if (pm_resolve_spawn_path(pm_context_id,
-                              &pmbuf,
-                              path,
-                              path_len,
-                              cli_args_len > 0u ? cli_args : 0,
-                              cli_args_len,
-                              0,
-                              &resolved) != 0) {
-        pm_xfer_release(&pmbuf);
-        return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
-    }
-    int spawn_rc =
-        pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             0u, /* caps variants spend arg0 on capability flags: no tty pin */
-                             &pid);
-    if (spawn_rc != 0) {
-        klog_printf("[pm] spawn failed rc=%d\n", spawn_rc);
-        pm_xfer_release(&pmbuf);
-        return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
-    }
-    pm_xfer_release(&pmbuf);
-    (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
-    if (pm_apply_spawn_caps(pid, &caps) != 0) {
-        (void)process_kill(pid, -1);
-        return WASMOS_ERR_PROC_PM_CAPS_APPLY;
-    }
-    process_unpark_pid(pid);
-
-    ipc_message_t resp;
-    resp.type = PROC_IPC_RESP;
-    resp.source = g_pm.proc_endpoint;
-    resp.destination = msg->source;
-    resp.request_id = msg->request_id;
-    resp.arg0 = pid;
-    resp.arg1 = 0;
-    resp.arg2 = 0;
-    resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
-               ? 0
-               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 /* What a boot module declares about itself: its capability flags, its declared

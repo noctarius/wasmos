@@ -251,21 +251,20 @@ typedef struct __attribute__((packed)) {
     uint32_t direction_flags;
     uint32_t max_bytes;
     uint32_t window_count;
-    uint32_t reserved0;
+    uint32_t pci_function;           // bdf, with DEVMGR_CAP_PCI_FUNCTION
 } wasmos_spawn_dma_caps_t;
 
 typedef struct __attribute__((packed)) {
     uint32_t cap_flags;
-    uint16_t io_port_min;
-    uint16_t io_port_max;
-    uint16_t irq_mask;
-    uint16_t reserved0;
+    uint16_t region_count;
+    uint16_t irq_count;
     wasmos_spawn_dma_caps_t dma;
-    wasmos_dma_window_t windows[];   // window_count entries follow inline
+    /* wasmos_region_grant_t regions[region_count];
+     * wasmos_dma_window_t windows[dma.window_count];
+     * uint32_t irqs[irq_count]; */
 } wasmos_spawn_caps_v2_t;
 
-#define WASMOS_SPAWN_CAPS_V2_SIZE(window_count) \
-    (sizeof(wasmos_spawn_caps_v2_t) + (window_count) * sizeof(wasmos_dma_window_t))
+#define WASMOS_SPAWN_CAPS_V2_SIZE(region_count, window_count, irq_count) /* header + tails */
 ```
 
 #### `pm_spawn_caps_t` (`process_manager_internal.h`)
@@ -276,9 +275,10 @@ Kernel's parsed representation of a driver's spawn capability profile:
 typedef struct {
     uint8_t  valid;
     uint32_t cap_flags;
-    uint16_t io_port_min;
-    uint16_t io_port_max;
-    uint16_t irq_mask;
+    uint32_t region_count;
+    wasmos_region_grant_t regions[WASMOS_REGION_LIMIT];
+    uint32_t irq_count;
+    uint32_t irqs[WASMOS_IRQ_GRANT_LIMIT];
     uint32_t dma_direction_flags;
     uint32_t dma_max_bytes;
     uint32_t dma_window_count;

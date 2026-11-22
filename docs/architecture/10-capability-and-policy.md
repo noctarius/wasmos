@@ -24,8 +24,8 @@ There are two levels of capability:
 1. **Presence check** — `capability_has(context_id, kind)`: does the context
    hold the capability at all?
 2. **Spawn profile** — per-context constraints optionally applied after the
-   presence check: I/O port range, IRQ line bitmask, DMA direction, DMA byte
-   limit, and DMA physical windows.
+   presence check: register windows, the interrupts the context may route,
+   DMA direction, DMA byte limit, and DMA physical windows.
 
 The kernel context (id 0) is given all capabilities at `capability_init()`.
 All other contexts start with no capabilities.
@@ -99,7 +99,8 @@ typedef struct {
     uint8_t  spawn_profile_configured; // 1 once capability_set_spawn_profile called
     uint32_t region_count;
     capability_region_t regions[CAPABILITY_REGION_LIMIT]; // register windows, by region index
-    uint16_t irq_mask;                 // 16-bit bitmask, one bit per IRQ line
+    uint32_t irq_count;
+    uint32_t irqs[WASMOS_IRQ_GRANT_LIMIT]; // interrupt identifiers the context may route
     uint32_t dma_direction_flags;      // WASMOS_DMA_DIR_* bitmask
     uint32_t dma_max_bytes;
     uint32_t dma_window_count;
@@ -125,9 +126,16 @@ stable for the lifetime of the process.
 - ORs the bit into `ctx->mask` and sets `ctx->configured = 1`.
 - Fails (returns -1) for unknown capability names.
 
-`capability_set_spawn_profile(context_id, cap_flags, region_count, regions, irq_mask, dma_direction_flags, dma_max_bytes, dma_window_count, dma_windows)`:
+`capability_set_spawn_profile(context_id, cap_flags, region_count, regions, irq_count, irqs, dma_direction_flags, dma_max_bytes, dma_window_count, dma_windows)`:
 - Called during spawn when the requester supplies a capability descriptor
-  (`wasmos_spawn_caps_v2_t`, or one of the packed spawn forms).
+  (`wasmos_spawn_caps_v2_t`, the only form a spawn grants hardware access
+  with).
+- `irqs` lists interrupt identifiers: the architecture's own name for an
+  interrupt, the value the `irq_route_ipc`/`irq_ack`/`irq_unroute`/
+  `irq_configure` host calls take as `irq_line` -- an ISA line (0..15) on
+  x86_64, a GIC SPI INTID (32..1019) on aarch64. At most
+  `WASMOS_IRQ_GRANT_LIMIT` (4), and only with bit 2 (`irq`); a list without
+  the bit refuses the profile, like a region without the bit of its kind.
 - Stores fine-grained constraints for later per-operation enforcement.
 - `cap_flags` is a `DEVMGR_CAP_*` mask.
 - `regions` are the register windows, in region-index order (see Register
@@ -182,9 +190,9 @@ kind, the profile picks the I/O windows, IRQ lines and DMA windows -- including
 DMA windows over arbitrary physical memory. So who may request one is checked:
 
 - **Process manager.** Every spawn that carries a profile
-  (`PROC_IPC_SPAWN_CAPS`, `_CAPS_V2`, `_CAPS_SYNC`, `_PATH_CAPS`,
-  `_PATH_CAPS_SYNC`, and `PROC_IPC_SPAWN_WATCHED` with a capability descriptor)
-  asks `pm_caps_grant_allowed` before the child is created. A profile with any
+  (`PROC_IPC_SPAWN_CAPS_V2`, and `PROC_IPC_SPAWN_WATCHED` with a capability
+  descriptor; the packed forms that carried a grant in argument words are
+  retired) asks `pm_caps_grant_allowed` before the child is created. A profile with any
   `cap_flags` bit set requires the requester to hold `spawn.grant`; otherwise
   the request is refused with `GRANT_NOT_AUTHORIZED` (`proc_pm`, or
   `proc_spawn` for a watched spawn) and nothing is spawned. A profile with no
@@ -276,9 +284,9 @@ configured (permissive in that case, since presence is checked separately).
 `capability_region_resolve(context_id, region, offset, width, out)` — see
 Register Windows above.
 
-`capability_irq_line_allowed(context_id, irq_line)` — returns 1 if spawn
-profile has the bit `(irq_mask >> irq_line) & 1` set. IRQ lines ≥ 16 always
-return 0.
+`capability_irq_line_allowed(context_id, irq_line)` — returns 1 if the spawn
+profile's interrupt list names `irq_line`. Which identifiers exist is the
+architecture's: its `irq_register` refuses one it does not route.
 
 `capability_mmio_allowed(context_id)` — returns 1 if spawn profile is
 configured and `CAP_MMIO_MAP` bit is set.
@@ -331,13 +339,13 @@ presence is sufficient when the app has not declared fine-grained constraints).
 `policy_irq_route_allows()` is two-tier:
 
 1. If the context has a spawn profile, use `capability_irq_line_allowed` (the
-   profile's bitmask is the policy).
+   profile's interrupt list is the policy).
 2. Otherwise, fall back to the static name-based whitelist:
 
 ```c
 static const irq_route_policy_t g_irq_route_policy[] = {
-    { "ata",              (1u << 14) | (1u << 15) },  // ATA primary/secondary
-    { "irq-route-allow",  (1u << 1)               },  // test app for IRQ 1
+    { "ata",             2u, {14u, 15u} },  // ATA primary/secondary
+    { "irq-route-allow", 1u, {1u, 0u}   },  // test app for IRQ 1
 };
 ```
 

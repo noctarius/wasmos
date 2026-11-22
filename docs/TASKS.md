@@ -671,15 +671,6 @@ Source: `architecture/13-runtime-and-packaging.md`,
   images -- signed or allow-listed packages, or privileged capabilities granted
   only to images from the initfs or a read-only system volume -- and, for
   deputies like `svc`, authentication of the invoking process.
-- [ ] [BUG][P1] Quiesce every PCI DMA driver's device at its end, not only a
-  supervised one. The kernel quiesces the function a spawn profile names
-  (`DEVMGR_CAP_PCI_FUNCTION`, `architecture/10` "Device Quiesce"), but only the
-  descriptor spawn forms carry it: a DMA driver device-manager spawns by path
-  (`PROC_IPC_SPAWN_PATH_CAPS_SYNC`; virtio-serial) names none, so when it dies
-  its device may keep mastering into frames the reap recycles. virtio-blk,
-  virtio-net, virtio-rng and ata are supervised units and name theirs.
-  Spawning the rest through a descriptor form -- or as supervised units (H5)
-  -- closes it (`device_manager.c`, the TODO at the direct spawn).
 - [ ] [FEATURE][P1] Supervise the storage and network chains. Decided: clients
   REBIND to a restarted driver where they can, so a restart costs a delay, not
   the open files or sockets above it; `parent=` (the supervisor's restart
@@ -1006,18 +997,6 @@ tail.
   boundary the error model exists to serve. Either give them a transport (an error
   object in a transfer buffer, say) and convert real call sites, or remove the
   generators and keep the packed `(domain, code)` axis alone.
-
-- [ ] [FEATURE][P2] Give the path-based spawn a descriptor form, so a driver can
-  have BOTH declared register windows and startup args. `PROC_IPC_SPAWN_PATH_CAPS_SYNC`
-  packs a single `io_port_min`/`io_port_max` pair and cannot describe more than one
-  window; only the index-based form escalates to `wasmos_spawn_caps_v2_t`. Device
-  manager therefore picks one or the other (`device_manager.c`, the rule-spawn
-  branch): a driver with `[[regions]]` spawns by module index and forgoes the
-  `pci=..:..:.. vendor=... irq=...` args, and everything else spawns by path with
-  args and a single window. Today nothing needs both -- `ata` is the only package
-  declaring regions and takes no args -- so this is a latent limit, not a live bug.
-  It becomes live the moment a driver on `/boot` (not a boot module, so
-  path-spawned only) declares more than one window.
 
 - [ ] [ENHANCEMENT][P3] Let a device-manager rule express alternatives, so one
   driver does not need N near-identical lines. `virtio_rng` has two rules solely
@@ -2222,6 +2201,15 @@ Source: `architecture/25-diagnostics-status.md`,
   `src/libsys/wasm/include/wasmos/{mutex,rtc_ipc}.h`. The SDK sysroot ships
   libc's copy (include-search order; `scripts/sdk_stage.py` TODO), so a libsys
   object and an SDK app can see different declarations under one name.
+- [ ] [BUG][P2] Host unit tests do not rebuild when a header they reach only
+  through `-iquote` or a relative `#include "../.."` changes:
+  `tests/unit/BUILD.py` `_inputs` tracks the listed sources and the headers
+  under `-I<dir>` arguments only (multi-source commands get no depfile). A
+  changed `wasmos_driver_abi.h` left `test_supervisor_unit` running its old
+  binary and reporting ok while its source no longer compiled. Track
+  `-iquote`/`-include` arguments and the quoted includes of every listed
+  source (or give each suite a depfile), with a regression test that a header
+  edit rebuilds the suite.
 - [ ] [TEST][P2] The ring-3 thread-lifecycle probe never runs: its helper-thread
   stacks are `.bss` (`src/kernel/ring3_thread_lifecycle_probe.c`), which the
   flat binary omits, and `kernel_ring3_spawn_thread_lifecycle_probe` maps only

@@ -10,7 +10,10 @@ Modes:
     --battery NAME         run only that battery's files
     --list-batteries       print the battery names, one per line
     --matrix               print the CI matrix as JSON: one cell per QEMU
-                           battery PER RUNTIME, one per host battery
+                           battery PER (ARCH, RUNTIME), one per host battery
+    --build-matrix         print the build-only configurations as JSON: one
+                           cell per (arch, defconfig) CI builds but does not
+                           boot
     --verify-batteries     fail unless every discovered file is in exactly one
                            battery, and every listed file exists
 
@@ -43,13 +46,20 @@ def load_batteries():
     return load_manifest()["batteries"]
 
 
-def load_runtimes():
-    """The wasm runtimes every QEMU battery runs under.
+def load_arches():
+    """The target architectures, each with the wasm runtimes every QEMU battery
+    runs under on it and the configurations CI only builds.
 
-    Absent from an older manifest means "just the default build", which keeps
-    this script usable against a tree that predates the runtime axis.
+    A manifest that predates the architecture axis lists its runtimes at the
+    top level; they are x86_64's. One that predates the runtime axis too means
+    "just the default build".
     """
-    return load_manifest().get("runtimes", [])
+    manifest = load_manifest()
+    if "arches" in manifest:
+        return manifest["arches"]
+    return [
+        {"name": "x86_64", "runtimes": manifest.get("runtimes", []), "build_only": []}
+    ]
 
 
 def discovered_files(start_dir):
@@ -98,6 +108,7 @@ def main() -> int:
     parser.add_argument("--battery", default=os.environ.get("WASMOS_TEST_BATTERY", ""))
     parser.add_argument("--list-batteries", action="store_true")
     parser.add_argument("--matrix", action="store_true")
+    parser.add_argument("--build-matrix", action="store_true")
     parser.add_argument("--verify-batteries", action="store_true")
     args = parser.parse_args()
 
@@ -106,21 +117,32 @@ def main() -> int:
             print(b["name"])
         return 0
     if args.matrix:
-        # A QEMU battery is one cell PER RUNTIME; a host battery boots nothing,
-        # so it has no runtime and appears once. Emitting the cross product here
-        # rather than in the workflow keeps tests/batteries.json the only place
-        # either axis is written down.
-        runtimes = load_runtimes()
+        # A QEMU battery is one cell PER (ARCH, RUNTIME); a host battery boots
+        # nothing, so it has neither and appears once. Emitting the cross
+        # product here rather than in the workflow keeps tests/batteries.json
+        # the only place any axis is written down.
+        pairs = [(a["name"], r) for a in load_arches() for r in a.get("runtimes", [])]
         cells = []
         for b in load_batteries():
-            if b["needs_qemu"] and runtimes:
+            if b["needs_qemu"] and pairs:
                 cells.extend(
-                    {"battery": b["name"], "needs_qemu": True, "runtime": r}
-                    for r in runtimes
+                    {"battery": b["name"], "needs_qemu": True, "arch": a, "runtime": r}
+                    for a, r in pairs
                 )
             else:
                 cells.append({"battery": b["name"], "needs_qemu": b["needs_qemu"]})
         print(json.dumps(cells))
+        return 0
+    if args.build_matrix:
+        print(
+            json.dumps(
+                [
+                    {"arch": a["name"], "config": c}
+                    for a in load_arches()
+                    for c in a.get("build_only", [])
+                ]
+            )
+        )
         return 0
     if args.verify_batteries:
         return verify(args.start_dir)

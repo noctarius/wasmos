@@ -88,13 +88,15 @@ directory keeps the toolchain it was configured with.
 | Python 3 + `kconfiglib` | the generator, Kconfig, staging scripts, test runners | run `configure` with that Python |
 | `ninja` 1.10+ | executes the build | on `PATH` |
 | `zig`, `asc`, `rustc`, `tinygo` + `wasm-opt` | optional guest languages | `--zig=`, `--asc=`, `--rustc=`, `--tinygo=`, `--wasm-opt=` |
-| `qemu-system-x86_64`, OVMF firmware | run and test targets | `--qemu=`, `--ovmf-code=`, `--ovmf-vars=` |
+| `qemu-system-x86_64`, OVMF firmware | x86_64 run and test targets | `--qemu=`, `--ovmf-code=`, `--ovmf-vars=` |
+| `qemu-system-aarch64`, edk2 aarch64 firmware | aarch64 run and test targets | `--qemu-aarch64=`, `--aavmf-code=`, `--aavmf-vars=` |
 | `clang-format`, `clang-tidy`, `llvm-config`, `black`, `ruff`, `gofmt`, `go`, `rustfmt` | quality gates | `CLANG_FORMAT` pins the formatter |
 
 AppleClang is rejected. On macOS: `brew install llvm lld qemu ninja` and
 `python3 -m pip install kconfiglib`. OVMF candidates are searched in the common
 Homebrew and distribution paths; an i386 vars store beside x86_64 firmware is
-dropped because it hangs the boot. `WASMOS_CLANG_TIDY_INCLUDE_DIR` (or
+dropped because it hangs the boot. No aarch64 vars store is discovered, so edk2
+keeps its variables in RAM unless `--aavmf-vars=` names one. `WASMOS_CLANG_TIDY_INCLUDE_DIR` (or
 `--clang-tidy-include=`) supplies `clang-tidy/*.h` when the LLVM install lacks
 them.
 
@@ -103,10 +105,12 @@ them.
 ## 4. Configuration (Kconfig)
 
 Every build option is a Kconfig symbol (`Kconfig` at the repository root). The
-tracked defconfigs in `configs/` pin the WASM runtime and the CPU topology.
+tracked defconfigs in `configs/` pin the target architecture, the WASM runtime
+and the CPU topology.
 
 | Symbol | Default | Effect |
 |--------|---------|--------|
+| `WASMOS_ARCH_X86_64` / `_AARCH64` | `X86_64` | target architecture: compiler triples, code model, boot file name, QEMU machine and firmware (`ARCHES` in `toolchains.py`). aarch64 is under bring-up: its kernel is a stub, the IRQ-mode choice and WARP are x86_64-only |
 | `WASMOS_WASM_RUNTIME_WASM3` / `_WARP` | choice | kernel runtime; WARP adds the WARP sources, `warp_aot` and AOT packing |
 | `WASMOS_IRQ_PIC` / `_LAPIC` / `_IOAPIC` | `IOAPIC` | `-DWASMOS_IRQ_MODE=0/1/2` |
 | `WASMOS_SMP` | `n` (depends on `IOAPIC`) | `-DWASMOS_SMP`; QEMU runs with 4 CPUs |
@@ -118,7 +122,6 @@ tracked defconfigs in `configs/` pin the WASM runtime and the CPU topology.
 | `WASMOS_PM_TEST_HOOKS` | `n` | process-manager test injection hooks |
 | `WASMOS_PM_LIST_LINKED` / `_ARRAY_CHUNK`, `WASMOS_PM_LIST_ARRAY_CHUNK_CAP` | linked, 16 | PM list backend |
 | `AS_ENABLE`, `RUST_ENABLE`, `GO_ENABLE`, `ZIG_ENABLE` | `y` | build that language's modules (also needs the tool) |
-| `KERNEL_TARGET_TRIPLE` | `x86_64-elf` | kernel and native target |
 | `QEMU_GDB_PORT` | 1234 | `run-qemu-debug` |
 
 The mapping from symbols to compile flags lives in one place,
@@ -154,16 +157,21 @@ component-specific flags.
 
 | Profile | Target | Used for |
 |---------|--------|----------|
-| `efi` | `x86_64-unknown-uefi`, lld-link | `BOOTX64.EFI` |
-| `kernel` | `KERNEL_TARGET_TRIPLE`, ld.lld | kernel C/C++/asm |
+| `efi` | `x86_64-unknown-uefi` / `aarch64-unknown-windows`, lld-link | `BOOTX64.EFI` / `BOOTAA64.EFI` |
+| `kernel` | `x86_64-elf` / `aarch64-elf`, ld.lld | kernel C/C++/asm |
 | `kernel-warp` | as `kernel`, C++14 with exceptions and RTTI | WARP glue and vendored WARP |
-| `probe` | `x86_64-unknown-none-elf` | ring-3 native probe blobs |
-| `native` | `KERNEL_TARGET_TRIPLE`, flags per module | native ring-3 drivers and services |
+| `probe` | `<arch>-unknown-none-elf` | ring-3 native probe blobs |
+| `native` | `x86_64-elf` / `aarch64-elf`, flags per module | native ring-3 drivers and services |
 | `wasm32` | `wasm32-unknown-unknown` | sysroot libc/libsys |
 | `host` | host clang | `make_wasmos_app`, `mkfs_wfs`, `warp_aot` |
 
-Every profile is x86_64 today. A new architecture adds its profiles here rather
-than editing manifests. `b.toolchain(name, overrides={...})` evaluates the
+Every per-architecture value outside the sources is one `Arch` entry in
+`ARCHES` (`toolchains.py`): triples, code-model flags, the ELF format of kernel
+blobs, the Zig target, the native coroutine assembly, the boot file name, and
+the QEMU binary, machine and firmware keys. Profiles, manifests
+(`toolchains.arch(b.cfg)`) and the QEMU harness read it, so a new architecture
+is a new entry there rather than an edit to every manifest. clang has no
+aarch64 UEFI triple; the Windows triple emits the same PE/COFF with AAPCS64. `b.toolchain(name, overrides={...})` evaluates the
 profiles as if some Kconfig symbols had other values; the kernel uses it to
 index the other runtime's glue.
 
@@ -225,7 +233,7 @@ the final `kernel.elf`. The source lists are in link order; the image layout
 follows it.
 
 **Bootloader** (`src/boot/BUILD.py`): `boot.c` compiled with the `efi` profile
-and linked by lld-link into `BOOTX64.EFI`.
+and linked by lld-link into `BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64).
 
 **SDK** (`src/libc/BUILD.py`, `src/libsys/BUILD.py`, `scripts/sdk/BUILD.py`):
 `libc.a`, `libsys.a` and `crt1.o` in
@@ -267,7 +275,10 @@ Default targets: `kernel`, `bootloader`, `modules` (every packed module),
 Every run target passes the tree's own paths to the harness (`WASMOS_ESP`,
 `WASMOS_KERNEL`, `WASMOS_USERFS_IMAGE`, `WASMOS_WFS_IMAGE`,
 `WASMOS_WFS_VIRTIO_IMAGE`, `WASMOS_OVMF_CODE`, `WASMOS_OVMF_VARS`,
-`WASMOS_QEMU_SMP_COUNT`), so a suite tests the tree that launched it. QEMU
+`WASMOS_QEMU_SMP_COUNT`, `WASMOS_ARCH`, `WASMOS_QEMU`), so a suite tests the
+tree that launched it, on that tree's QEMU machine. Without
+`WASMOS_QEMU_ACCEL` the harness picks KVM for a host-native guest with
+`/dev/kvm`, HVF for an aarch64 guest on Apple Silicon, and TCG otherwise. QEMU
 targets share the tree's `esp/`; never run two at once.
 
 | Target | What it runs |

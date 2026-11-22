@@ -1,4 +1,4 @@
-"""framebuffer: native ring-3 driver (static x86_64 ELF)."""
+"""framebuffer: native ring-3 driver (static ELF for the target architecture)."""
 
 from wasmos_rules import install, native
 
@@ -8,8 +8,6 @@ CFLAGS = [
     "-fno-stack-protector",
     "-fno-pic",
     "-fno-pie",
-    "-mno-red-zone",
-    "-mcmodel=small",
     "-Oz",
     "-Wall",
     "-Wextra",

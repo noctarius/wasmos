@@ -19,15 +19,31 @@
     "needs_qemu=false marks a battery that runs without the emulation toolchain,",
     "so CI can schedule it on a cheap fast job instead of paying for OVMF/QEMU.",
     "",
-    "runtimes lists the wasm runtimes every QEMU battery runs under. The two are",
-    "different enough to break independently \u2014 wasm3 interprets in-kernel, WARP",
-    "JITs to ring 3 \u2014 so a green under one says nothing about the other, and a",
-    "single-runtime matrix hides breakage in the other for as long as nobody runs",
-    "it by hand. Each entry names a configs/<name>_defconfig."
+    "arches lists the target architectures. Each one's runtimes are the wasm",
+    "runtimes every QEMU battery runs under on it. The two are different enough",
+    "to break independently \u2014 wasm3 interprets in-kernel, WARP JITs to ring 3",
+    "\u2014 so a green under one says nothing about the other, and a single-runtime",
+    "matrix hides breakage in the other for as long as nobody runs it by hand.",
+    "build_only lists configurations CI builds but does not boot: an architecture",
+    "under bring-up, whose kernel cannot run a battery yet. Each entry of either",
+    "list names a configs/<name>_defconfig."
   ],
-  "runtimes": [
-    "warp_smp",
-    "wasm3_smp"
+  "arches": [
+    {
+      "name": "x86_64",
+      "runtimes": [
+        "warp_smp",
+        "wasm3_smp"
+      ],
+      "build_only": []
+    },
+    {
+      "name": "aarch64",
+      "runtimes": [],
+      "build_only": [
+        "aarch64_wasm3_single"
+      ]
+    }
   ],
   "batteries": [
     {

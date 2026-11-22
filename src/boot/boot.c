@@ -263,6 +263,11 @@ typedef struct {
     uint32_t flags;
 } framebuffer_snapshot_t;
 
+/* The PCI-config fallback scan reaches configuration space through the x86
+ * 0xCF8/0xCFC port mechanism, so it exists on x86_64 only.
+ * TODO: an aarch64 boot without GOP gets no framebuffer; a fallback there needs
+ * ECAM or EFI_PCI_IO_PROTOCOL (arm64 port, Phase 1). */
+#if defined(__x86_64__)
 static inline void pci_out32(uint16_t port, uint32_t value) {
     __asm__ volatile("outl %%eax, %%dx" : : "a"(value), "d"(port));
 }
@@ -410,6 +415,7 @@ static int capture_framebuffer_from_pci_config(EFI_SYSTEM_TABLE* system,
     uefi_log(system, "[boot] VGA framebuffer mapped via PCI config scan\n");
     return 0;
 }
+#endif /* __x86_64__ */
 
 static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE* system,
                                         framebuffer_snapshot_t* snapshot) {
@@ -475,14 +481,16 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE* system,
     if (handles && system->BootServices && system->BootServices->FreePool) {
         system->BootServices->FreePool(handles);
     }
-    static int pci_fallback_attempted = 0;
     if (EFI_ERROR(status)) {
+#if defined(__x86_64__)
+        static int pci_fallback_attempted = 0;
         if (!pci_fallback_attempted) {
             pci_fallback_attempted = 1;
             if (capture_framebuffer_from_pci_config(system, snapshot) == 0) {
                 return 0;
             }
         }
+#endif
         if (!gop_locate_failed) {
             uefi_log_status(system, "[boot] LocateProtocol(GOP) failed: ", status);
             gop_locate_failed = 1;
@@ -1183,6 +1191,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
         }
     }
 
+#if defined(__x86_64__)
     /* The kernel _start reads boot_info from RCX (MS x64 ABI arg0). Force the
      * MS ABI on this call explicitly: clang's x86_64-unknown-uefi default
      * calling convention has varied across versions (clang 20 passed arg0 in
@@ -1190,6 +1199,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
      * The default must not be relied on to match the kernel's expectation. */
     void(__attribute__((ms_abi)) * kernel_entry)(boot_info_t*) =
         (void(__attribute__((ms_abi))*)(boot_info_t*))(UINTN)ehdr->e_entry;
+#else
+    /* The aarch64 kernel _start reads boot_info from x0 (AAPCS64 arg0), the
+     * only calling convention the target has. */
+    void (*kernel_entry)(boot_info_t*) = (void (*)(boot_info_t*))(UINTN)ehdr->e_entry;
+#endif
     kernel_entry(boot_info);
 
     return EFI_SUCCESS;

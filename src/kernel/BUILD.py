@@ -1,12 +1,47 @@
 """Kernel: kernel.elf, linked twice so the final image embeds its own symbol
 table (scripts/gen_kernel_kallsyms.py reads the first link's symbols)."""
 
-# Link order. The image layout follows it, so keep entry.o first.
+from toolchains import arch
+
+# Per-architecture sources. `head` links first, so the image starts with the
+# entry point; `sources` link after the neutral core. An architecture whose
+# `core` is False is a bring-up stub: it links its own sources alone.
+ARCH = {
+    "x86_64": {
+        "head": [
+            "arch/x86_64/entry.S",
+            "arch/x86_64/context_switch.S",
+            "arch/x86_64/cpu_isr.S",
+            "arch/x86_64/smp_trampoline.S",
+        ],
+        "sources": [
+            "arch/x86_64/cpu_x86_64.c",
+            "arch/x86_64/paging.c",
+            "arch/x86_64/irq_x86_64.c",
+            "arch/x86_64/msi_x86_64.c",
+            "arch/x86_64/lapic.c",
+            "arch/x86_64/ioapic.c",
+            "arch/x86_64/smp.c",
+            "arch/x86_64/platform_x86_64.c",
+            "arch/x86_64/pci_cfg_x86_64.c",
+            "arch/x86_64/timer_x86_64.c",
+        ],
+        "ldscript": "arch/x86_64/linker.ld",
+        "core": True,
+    },
+    # TODO: the aarch64 kernel is a stub that parks the boot CPU; it links
+    # neither the neutral core, the runtime, the embedded guest blobs nor the
+    # ring-3 probes until the arch headers exist (arm64 port, Phase 1).
+    "aarch64": {
+        "head": ["arch/aarch64/entry.S"],
+        "sources": [],
+        "ldscript": "arch/aarch64/linker.ld",
+        "core": False,
+    },
+}
+
+# Architecture-neutral kernel sources, in link order.
 CORE = [
-    "arch/x86_64/entry.S",
-    "arch/x86_64/context_switch.S",
-    "arch/x86_64/cpu_isr.S",
-    "arch/x86_64/smp_trampoline.S",
     "kernel.c",
     "kpanic.c",
     "kallsyms.c",
@@ -20,7 +55,6 @@ CORE = [
     "kernel_ring3_suite_runtime.c",
     "kernel_threading_selftest_runtime.c",
     "kernel_sched_smp_stress_runtime.c",
-    "arch/x86_64/cpu_x86_64.c",
     "memory.c",
     "capability.c",
     "pci_config.c",
@@ -38,7 +72,6 @@ CORE = [
     "service_class_registry.c",
     "service_name_watch.c",
     "wasmos_exec_format.c",
-    "arch/x86_64/paging.c",
     "linmem_slots.c",
     "physmem.c",
     "runtime_context.c",
@@ -62,19 +95,11 @@ CORE = [
     "user_mutex.c",
     "memory_service.c",
     "irq_sharing.c",
-    "arch/x86_64/irq_x86_64.c",
     "msi_vectors.c",
     "mmio.c",
     "device_window.c",
     "io_region.c",
-    "arch/x86_64/msi_x86_64.c",
-    "arch/x86_64/lapic.c",
-    "arch/x86_64/ioapic.c",
-    "arch/x86_64/smp.c",
     "timer.c",
-    "arch/x86_64/platform_x86_64.c",
-    "arch/x86_64/pci_cfg_x86_64.c",
-    "arch/x86_64/timer_x86_64.c",
     "process_manager.cpp",
     "xfer_buffer/xfer_buffer.c",
     "warp_driver_ring3_call_policy.c",
@@ -106,7 +131,8 @@ WARP_GLUE = [
     "warp/sjlj_unwind.cpp",
 ]
 
-# Vendored WARP sources (libs/warp is a git subtree; never edited here).
+# Vendored WARP sources (libs/warp is a git subtree; never edited here). Kconfig
+# offers WARP on x86_64 only, the one backend listed here.
 WARP_LIB = [
     "src/WasmModule/WasmModule.cpp",
     "src/core/runtime/Runtime.cpp",
@@ -159,9 +185,10 @@ def ring3_probe_blob(b, name):
     object. llvm-objcopy derives the _binary_<file>_start/_end symbols the
     kernel references from the input file NAME, so it runs in the build
     directory on a bare filename."""
+    target = arch(b.cfg)
     probe = b.toolchain("probe")
     (obj,) = probe.compile([b.src(f"{name}.c")])
-    ldscript = b.src("arch/x86_64/ring3_native.ld")
+    ldscript = b.src(f"arch/{target.name}/ring3_native.ld")
     elf = probe.link(
         f"{name}.elf", [obj], flags=["-T", str(ldscript)], implicit=[ldscript]
     )
@@ -177,8 +204,8 @@ def ring3_probe_blob(b, name):
         [
             objcopy,
             "--input-target=binary",
-            "--output-target=elf64-x86-64",
-            "--binary-architecture=i386:x86-64",
+            f"--output-target={target.objcopy_target}",
+            f"--binary-architecture={target.objcopy_binary_arch}",
             f"{name}.bin",
             f"{name}_blob.o",
         ],
@@ -191,16 +218,27 @@ def build(b):
     cfg = b.cfg
     kernel = b.toolchain("kernel")
     warp = cfg.WASMOS_WASM_RUNTIME_WARP
+    target = ARCH[arch(cfg).name]
+    ldscript = b.src(target["ldscript"])
+    ldflags = ["-T", str(ldscript)]
 
+    if not target["core"]:
+        objs = kernel.compile(b.srcs(*target["head"], *target["sources"]))
+        elf = kernel.link("kernel.elf", objs, flags=ldflags, implicit=[ldscript])
+        b.alias("kernel", elf, default=True)
+        b.exports["kernel.elf"] = elf
+        return
+
+    core = [*target["head"], *CORE, *target["sources"]]
     if warp:
-        objs = kernel.compile(b.srcs(*CORE))
+        objs = kernel.compile(b.srcs(*core))
         kwarp = b.toolchain("kernel-warp")
         objs += kwarp.compile(b.srcs(*WARP_GLUE))
         objs += kwarp.compile([b.root / "libs/warp" / s for s in WARP_LIB])
     else:
         wasm3_inc = [f"-I{b.root / 'libs/wasm3/source'}"]
         wasm3_lib = ["-Wno-unused-variable"]
-        objs = kernel.compile(b.srcs(*CORE), flags=wasm3_inc)
+        objs = kernel.compile(b.srcs(*core), flags=wasm3_inc)
         objs += kernel.compile(b.srcs(*WASM3_GLUE_KERNEL), flags=wasm3_inc)
         objs += kernel.compile(b.srcs(*WASM3_GLUE), flags=wasm3_inc + wasm3_lib)
         objs += kernel.compile(b.srcs(*WASM3_SHIM), flags=wasm3_inc)
@@ -230,8 +268,6 @@ def build(b):
     blobs = list(b.exports.get("kernel.blobs", []))
     blobs += [ring3_probe_blob(b, p) for p in RING3_PROBES]
 
-    ldscript = b.src("arch/x86_64/linker.ld")
-    ldflags = ["-T", str(ldscript)]
     base = kernel.link(
         "kernel.base.elf", objs + blobs, flags=ldflags, implicit=[ldscript]
     )

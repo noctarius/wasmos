@@ -32,17 +32,21 @@ battery:
 | `language-runtimes` | One guest per supported source language |
 | `host-tools` | Host tools only — boots nothing, needs no emulation |
 
-`tests/batteries.json` is the single source for BOTH axes — the `batteries`
-list and the `runtimes` list. Two consumers read it and neither enumerates
-either axis itself:
+`tests/batteries.json` is the single source for EVERY axis — the `batteries`
+list and the `arches` list, where each architecture names the `runtimes`
+(defconfigs) its QEMU batteries run under and the `build_only` defconfigs CI
+builds without booting (an architecture under bring-up). Two consumers read it
+and neither enumerates any axis itself:
 
-- `scripts/run_unittest_suite.py` selects which files to run, and its
-  `--matrix` mode emits the cross product (one cell per QEMU battery per
-  runtime, one per host battery).
-- `.github/workflows/ci.yml` consumes exactly that `--matrix` output.
+- `scripts/run_unittest_suite.py` selects which files to run; its `--matrix`
+  mode emits the cross product (one cell per QEMU battery per (arch, runtime),
+  one per host battery), and `--build-matrix` the build-only cells.
+- `.github/workflows/ci.yml` consumes exactly those outputs.
 
-Add a battery or a runtime there and the runners appear; nothing else needs
-editing.
+Add a battery, a runtime or an architecture there and the runners appear;
+nothing else needs editing. The harness boots the architecture the tree was
+configured for (`WASMOS_ARCH`, set by the run targets); `QemuConfig.arch`
+overrides it, and `klog_port="com2"` is x86_64-only (QEMU virt has one UART).
 
 **Why the runtime axis exists.** wasm3 interprets in-kernel at CPL 0; WARP JITs
 to ring 3. They break independently, and the difference is not always visible

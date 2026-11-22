@@ -1,5 +1,6 @@
-"""gfx_compositor: native ring-3 Zig service (static x86_64 ELF)."""
+"""gfx_compositor: native ring-3 Zig service (static ELF for the target architecture)."""
 
+from toolchains import arch
 from wasmos_rules import install, native, zig_object
 
 # Shared flags for the C objects linked beside the Zig object.
@@ -61,7 +62,7 @@ def build(b):
         subdir="obj/gfx_compositor",
     )
     objs += tc.compile(
-        [libsys / "coroutine_native_x86_64.S"], subdir="obj/gfx_compositor"
+        [libsys / arch(b.cfg).coroutine_asm], subdir="obj/gfx_compositor"
     )
     wap = native(b, "gfx_compositor", objs, entry="initialize")
     install(b, "system/services/gfxcomp.wap", wap)

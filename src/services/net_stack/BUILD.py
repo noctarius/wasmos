@@ -1,5 +1,6 @@
 """net_stack: native ring-3 TCP/IP + TLS service (lwIP, mbedTLS; static ELF)."""
 
+from toolchains import arch
 from wasmos_rules import native
 
 # lwIP core in link order.
@@ -116,7 +117,7 @@ def build(b):
     )
     objs += cc(b.srcs(*SERVICE), BASE + VENDOR_WARN + includes)
     objs += cc([libsys / s for s in LIBSYS], BASE + includes)
-    objs += cc([libsys / "coroutine_native_x86_64.S"], [])
+    objs += cc([libsys / arch(b.cfg).coroutine_asm], [])
     objs += cc(
         [libsys / "zig/libsys_native.c"],
         BASE

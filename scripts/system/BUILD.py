@@ -8,6 +8,8 @@ import json
 import re
 from pathlib import Path
 
+from toolchains import arch
+
 WFS_UUID = "5746532d74654573742d766f6c756d65"
 WFS_VIRTIO_UUID = "5746532d76697274696f2d766f6c3031"
 # Tool paths a ring-3 shadow tree inherits from its parent (configure options).
@@ -28,6 +30,9 @@ SHADOW_TOOLS = [
     "qemu",
     "ovmf-code",
     "ovmf-vars",
+    "qemu-aarch64",
+    "aavmf-code",
+    "aavmf-vars",
 ]
 # The SMP topology QEMU emulates for an SMP kernel.
 SMP_CPUS = 4
@@ -124,7 +129,7 @@ def disk_images(b):
 def esp(b, initfs_img):
     root, system = b.root, b.dir
     files = [
-        ("EFI/BOOT/BOOTX64.EFI", b.exports["bootloader"]),
+        (f"EFI/BOOT/{arch(b.cfg).efi_boot_name}", b.exports["bootloader"]),
         ("kernel.elf", b.exports["kernel.elf"]),
         ("kernel.cmdline", system / "kernel.cmdline"),
         ("initfs.img", initfs_img),
@@ -206,11 +211,18 @@ def esp(b, initfs_img):
 
 def run_targets(b, esp_stamp, images):
     tools, out, root = b.tools, b.out, b.root
+    machine = arch(b.cfg)
     smp = SMP_CPUS if b.cfg.WASMOS_SMP else 1
     deps = [esp_stamp, *images]
-    ovmf_code, ovmf_vars = tools["ovmf-code"], tools["ovmf-vars"]
+    ovmf_code = tools.get(machine.firmware_code_tool, "")
+    ovmf_vars = tools.get(machine.firmware_vars_tool, "")
+    qemu_bin = tools.get(machine.qemu_tool) or f"qemu-system-{machine.name}"
     vars_arg = ["--ovmf-vars", ovmf_vars] if ovmf_vars else []
+    # The harness builds its QEMU command line for WASMOS_ARCH
+    # (scripts/qemu_test_framework.py), from the same ARCHES entry.
     env = {
+        "WASMOS_ARCH": machine.name,
+        "WASMOS_QEMU": qemu_bin,
         "WASMOS_OVMF_CODE": ovmf_code,
         "WASMOS_OVMF_VARS": ovmf_vars,
         "WASMOS_ESP": out / "esp",
@@ -271,7 +283,8 @@ def run_targets(b, esp_stamp, images):
 
     run_images = [f"run/{i}" for i in ("user.img", "wfs.img", "wfs_virtio.img")]
     qemu = [
-        tools["qemu"] or "qemu-system-x86_64",
+        qemu_bin,
+        *machine.qemu_machine,
         "-m",
         "512M",
         "-cpu",
@@ -304,8 +317,15 @@ def run_targets(b, esp_stamp, images):
         f"format=raw,file=fat:rw:{out / 'esp'}",
         "-drive",
         f"format=raw,file={out / run_images[0]}",
-        "-drive",
-        f"if=ide,index=2,media=disk,format=raw,file={out / run_images[1]}",
+        # The ata driver's WFS unit; a machine without IDE has no such unit.
+        *(
+            [
+                "-drive",
+                f"if=ide,index=2,media=disk,format=raw,file={out / run_images[1]}",
+            ]
+            if machine.qemu_ide
+            else []
+        ),
         "-drive",
         f"if=none,format=raw,file={out / run_images[2]},id=vwfs0",
         "-device",
@@ -409,6 +429,7 @@ def run_targets(b, esp_stamp, images):
             "WASMOS_WASM_RUNTIME_WASM3=y",
             "WASMOS_RING3_SMOKE=y",
             "WASMOS_PM_TEST_HOOKS=y",
+            f"WASMOS_ARCH_{machine.name.upper()}=y",
             f"WASMOS_TRACE={trace}",
             *extra,
         ]

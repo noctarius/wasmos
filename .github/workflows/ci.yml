@@ -165,16 +165,71 @@ jobs:
     outputs:
       qemu: ${{ steps.resolve.outputs.qemu }}
       host: ${{ steps.resolve.outputs.host }}
+      build: ${{ steps.resolve.outputs.build }}
     steps:
       - uses: actions/checkout@v4
       # --matrix is the script's own view of tests/batteries.json, including the
-      # runtime axis, so neither list is written out again here.
+      # architecture and runtime axes, so no list is written out again here.
       - id: resolve
         run: |
           python3 scripts/run_unittest_suite.py --verify-batteries
           cells=$(python3 scripts/run_unittest_suite.py --matrix)
           echo "qemu=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c for c in json.load(sys.stdin) if c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
           echo "host=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c['battery'] for c in json.load(sys.stdin) if not c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
+          echo "build=$(python3 scripts/run_unittest_suite.py --build-matrix)" >> "$GITHUB_OUTPUT"
+
+  # Configurations of an architecture under bring-up: built in full (kernel,
+  # loader, guest and native modules, ESP, images) but not booted, because the
+  # kernel cannot run a battery yet. The list is build_only in
+  # tests/batteries.json.
+  arch-build:
+    name: ${{ matrix.config }} (build only)
+    needs: batteries
+    if: needs.batteries.outputs.build != '[]'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.batteries.outputs.build) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build python3-pip curl xz-utils
+          python3 -m pip install --user kconfiglib
+
+      - name: Install LLVM 20
+        run: |
+          .github/scripts/install-llvm.sh 20
+          echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
+
+      - name: Install Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+            | tar -xJ
+          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Install Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install TinyGo
+        run: |
+          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
+          sudo dpkg -i "tinygo_${TINYGO_VERSION}_amd64.deb"
+
+      - name: Install AssemblyScript
+        run: |
+          npm install
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Configure (${{ matrix.config }})
+        run: ./configure "out/${{ matrix.config }}" "configs/${{ matrix.config }}_defconfig"
+
+      - name: Build (${{ matrix.config }}, ${{ matrix.arch }})
+        run: ninja -C "out/${{ matrix.config }}"
 
   # Batteries that boot nothing: no emulation toolchain, no OVMF, seconds not
   # minutes. Kept off the QEMU runners so they cannot queue behind them.

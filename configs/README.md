@@ -1,7 +1,8 @@
 # Build configurations
 
-Kconfig defconfigs for the supported (WASM runtime × CPU topology) build
-combinations. Each selects the WASM runtime and CPU topology. WARP builds
+Kconfig defconfigs for the supported (architecture × WASM runtime × CPU
+topology) build combinations. Without an architecture line a defconfig is
+x86_64. WARP builds
 always execute through the ring-3 path; that mode is not separately
 configurable.
 
@@ -11,6 +12,7 @@ configurable.
 | `wasm3_smp_defconfig`    | wasm3   | SMP    | always (wasm3)    |
 | `warp_single_defconfig`  | WARP    | single | always (WARP)        |
 | `warp_smp_defconfig`     | WARP    | SMP    | always (WARP)        |
+| `aarch64_wasm3_single_defconfig` | wasm3 | single | aarch64 bring-up: builds, kernel is a stub |
 
 `wasmos_defconfig` is the shared base (language toolchains, IRQ mode, etc.).
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from toolchains import arch
+
 # SDK drivers by source language. Every one accepts
 # `--emit-wasm --wasmos-manifest=<m> <sources> -o <x>.wasm`.
 DRIVERS = {
@@ -172,7 +174,7 @@ def native(b, name, objs, entry, manifest=None, image_base=None, elf=None):
 
 
 def zig_object(b, out, root, includes, modules, implicit=()):
-    """Compile a native Zig root module to an x86_64 object.
+    """Compile a native Zig root module to an object for the target architecture.
 
     `includes` are the root module's -I directories. `modules` maps each
     dependency module name to (root file, its -I directories); each is passed as
@@ -183,7 +185,7 @@ def zig_object(b, out, root, includes, modules, implicit=()):
         b.tools["zig"],
         "build-obj",
         "-target",
-        "x86_64-freestanding",
+        arch(b.cfg).zig_target,
         "-O",
         "ReleaseSmall",
         "-fstrip",
@@ -250,7 +252,7 @@ def install(b, dest, path):
 
 
 def kernel_blob(b, payload):
-    """Wrap a build-dir file as an x86_64 ELF object for the kernel link.
+    """Wrap a build-dir file as an ELF object for the kernel link.
 
     llvm-objcopy names the _binary_<file>_start/_end symbols after the input
     path as given, so it runs in the build directory on the bare filename."""
@@ -261,8 +263,8 @@ def kernel_blob(b, payload):
         [
             b.tools["llvm-objcopy"],
             "--input-target=binary",
-            "--output-target=elf64-x86-64",
-            "--binary-architecture=i386:x86-64",
+            f"--output-target={arch(b.cfg).objcopy_target}",
+            f"--binary-architecture={arch(b.cfg).objcopy_binary_arch}",
             str(payload),
             blob,
         ],

@@ -62,6 +62,21 @@ The run targets pass `WASMOS_ESP` and `WASMOS_KERNEL` for their own tree to the
 harness, so a suite started through a target tests that tree; the two-`nm`
 check is how you prove it.
 
+## Which architecture is a build dir?
+
+```sh
+grep ARCH <dir>/.config     # CONFIG_WASMOS_ARCH_AARCH64=y → aarch64
+```
+The architecture is a Kconfig choice like the runtime. It selects the compiler
+triples, `BOOTX64.EFI` vs `BOOTAA64.EFI`, and the QEMU machine every run target
+and the harness boot (`qemu-system-aarch64 -M virt` + edk2 aarch64 firmware).
+All of it comes from `ARCHES` in `scripts/buildgen/toolchains.py`.
+`configs/aarch64_wasm3_single_defconfig` is the arm64 bring-up tree. It builds
+in full, but its kernel is still a stub, so do not run `run-qemu-test` there
+yet. Under HVF (the default for an aarch64 guest on Apple Silicon) the loader
+reaches `[boot] ExitBootServices` and the stub parks. aarch64 has no COM2:
+the kernel log is the virtio console.
+
 ## Editing a configuration
 
 - `ninja -C <dir> menuconfig` — interactive editor on `<dir>/.config`.

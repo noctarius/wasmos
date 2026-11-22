@@ -107,6 +107,14 @@ typedef struct {
 static int32_t g_endpoint = -1;
 static int32_t g_pci_endpoint = -1; /* pci-bus: owns config space, programs MSI-X */
 static virtio_net_device_t g_dev;
+/* On the INTx path the function may still be quiesced from a previous driver's
+ * end -- bus mastering off, INTx disabled -- until pci-bus answers
+ * PCI_IPC_INTX_ENABLE_REQ. The request goes out from g_endpoint before the
+ * service registers, and its answer is consumed by the request loop. Until then
+ * a TX_FRAME is refused with WASMOS_ERR_NET_NOT_READY, which net-stack drops
+ * like any frame it cannot send. */
+#define NET_INTX_ENABLE_REQ_ID 0x7B30
+static uint8_t g_function_armed = 1u;
 static netdrv_stats_t g_stats;
 
 /* One configured virtqueue: the vring core state plus the device queue index
@@ -975,7 +983,7 @@ static void handle_rx_poll(int32_t source, int32_t request_id, int32_t buffer_id
  * arg0 carries the frame length. Replies RESP(WASMOS_ERR_NONE) once queued. */
 static void handle_tx_frame(int32_t source, int32_t request_id, int32_t frame_len,
                             int32_t buffer_id) {
-    if (!g_dev.present || !g_dev.ready) {
+    if (!g_dev.present || !g_dev.ready || !g_function_armed) {
         send_error(source, request_id, WASMOS_ERR_NET_NOT_READY);
         return;
     }
@@ -986,6 +994,51 @@ static void handle_tx_frame(int32_t source, int32_t request_id, int32_t frame_le
     }
     (void)wasmos_ipc_send(
         source, g_endpoint, NETDRV_IPC_RESP, request_id, WASMOS_ERR_NONE, 0, 0, 0);
+}
+
+/* Ask pci-bus to arm the function for INTx (PCI_IPC_INTX_ENABLE_REQ), without
+ * waiting. The kernel quiesced the function when a previous driver of it ended,
+ * and only an MSI bind or this request undoes that. initialize_device reset the
+ * device first, so it names none of the previous driver's frames once it can
+ * master again. */
+static void net_request_intx_enable(void) {
+    uint32_t bdf =
+        ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
+    if (g_pci_endpoint < 0) {
+        (void)printf("[virtio-net] no pci service; intx left as the firmware set it\n");
+        return;
+    }
+    if (wasmos_ipc_send(g_pci_endpoint,
+                        g_endpoint,
+                        PCI_IPC_INTX_ENABLE_REQ,
+                        NET_INTX_ENABLE_REQ_ID,
+                        (int32_t)bdf,
+                        0,
+                        0,
+                        0) != 0) {
+        (void)printf("[virtio-net] intx enable request could not be sent\n");
+        return;
+    }
+    g_function_armed = 0u;
+}
+
+/* Consume pci-bus's answer to PCI_IPC_INTX_ENABLE_REQ. Returns 1 when `msg` was
+ * it. A refusal still arms the driver: the function keeps whatever state it
+ * has, which on a first start is the firmware's. The ARP self-probe held back
+ * for the answer is sent now. */
+static int net_intx_enable_event(const wasmos_ipc_message_t* msg) {
+    if ((msg->type != PCI_IPC_RESP && msg->type != PCI_IPC_ERROR) ||
+        msg->request_id != NET_INTX_ENABLE_REQ_ID || msg->source != g_pci_endpoint) {
+        return 0;
+    }
+    if (msg->type == PCI_IPC_RESP) {
+        (void)printf("[virtio-net] function armed for intx\n");
+    } else {
+        (void)printf("[virtio-net] pci-bus refused intx enable status=%d\n", (int)msg->arg1);
+    }
+    g_function_armed = 1u;
+    net_probe_send();
+    return 1;
 }
 
 WASMOS_WASM_EXPORT int32_t initialize(void) {
@@ -1040,24 +1093,30 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
     /* With MSI-X the vectors were bound during device init and the device's
      * INTx is disabled, so routing the shared line would only subscribe this
-     * driver to other devices' interrupts. Route it only on the fallback path.
-     * TODO: a restarted instance on this path finds its function quiesced (INTx
-     * disabled, bus mastering off) and must ask pci-bus to arm it
-     * (PCI_IPC_INTX_ENABLE_REQ, as virtio-blk does) before it can be given
-     * ENV{RESTART}; until then it gets no interrupts and no DMA. */
+     * driver to other devices' interrupts. Route it only on the fallback path,
+     * where the function is first armed for its pin. */
     if (!g_dev.msix_enabled) {
+        net_request_intx_enable();
         if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_endpoint) == 0) {
             (void)printf("[virtio-net] irq routed line=%u\n", (unsigned)g_dev.irq);
         } else {
             (void)printf("[virtio-net] irq route failed line=%u\n", (unsigned)g_dev.irq);
         }
     }
-    net_probe_send();
+    if (g_function_armed) {
+        net_probe_send();
+    }
 
     /* Finish all local setup before publishing the endpoint. Clients may send
      * LINK_GET as soon as registration completes, so no startup operation may
      * run between publication and the handler loop that drains it. */
-    if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio.net", "net.ifc", 0u, 1) < 0) {
+    /* The class instance is the PCI function, so a restarted driver registers
+     * the instance its predecessor held and net-stack rebinds that interface to
+     * it; two NICs never claim the same instance. */
+    uint32_t instance =
+        ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
+    if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio.net", "net.ifc", instance, 1) <
+        0) {
         (void)printf("[virtio-net] register failed\n");
         return WASMOS_ERR_DRIVER_REGISTER;
     }
@@ -1097,6 +1156,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 continue;
             }
             if (msg.source < 0) {
+                continue;
+            }
+            if (net_intx_enable_event(&msg)) {
                 continue;
             }
             /* FIXME(owner-push): net protocol must carry the client buffer_id/grant;

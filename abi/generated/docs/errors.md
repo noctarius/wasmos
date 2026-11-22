@@ -190,6 +190,8 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_DRIVER_REGISTER` | -0x00070005 | publishing the driver endpoint to the service registry failed |
 | `WASMOS_ERR_DRIVER_SELECT_SETUP` | -0x00070006 | the driver could not build its IPC select set |
 | `WASMOS_ERR_DRIVER_DEPENDENCY_MISSING` | -0x00070007 | a service the driver depends on is not registered |
+| `WASMOS_ERR_DRIVER_ABI_MISMATCH` | -0x00070008 | the native driver API does not match the ABI the image was built for |
+| `WASMOS_ERR_DRIVER_EVENT_LOOP` | -0x00070009 | the driver's event loop could not be set up, or failed while serving |
 
 ### `vt` (domain 8) — virtual-terminal multiplexer failures
 

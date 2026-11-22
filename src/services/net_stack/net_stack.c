@@ -127,13 +127,23 @@ typedef enum {
 #define NET_STACK_TX_QUEUE_DEPTH 4u
 typedef struct {
     uint32_t buffer_id;
+    int32_t borrow_id; /* the grant to the bound driver, or -1 */
     uint8_t* buffer;
     uint8_t pending;
 } net_tx_slot_t;
+/* An interface outlives its driver. When the provider of an installed netif
+ * ends (class REMOVE), the slot is DETACHED: the netif keeps its addresses and
+ * every socket on it, its link is down, and its buffers stay this process's --
+ * the kernel revoked the dead driver's borrows of them. The class ADD of the
+ * same instance attaches the slot to the successor, which is lent the buffers
+ * anew and asked for its link (net_stack_try_bind_interface). A frame sent
+ * while detached finds no route and is lost like any other. */
 typedef struct {
     uint8_t in_use;
     uint8_t link_up;
-    uint16_t reserved;
+    uint8_t detached;
+    uint8_t buffers_lent; /* rx and tx buffers are borrowed to `endpoint` */
+    int32_t rx_borrow_id; /* the rx buffer's grant to the bound driver, or -1 */
     uint32_t endpoint;
     uint32_t instance;
     net_ifc_state_t state;
@@ -313,11 +323,20 @@ static net_interface_slot_t* net_stack_interface_slot(uint32_t endpoint, uint32_
                                                       uint8_t create) {
     for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
         if (g_interfaces[i].in_use && !g_interfaces[i].link_get_retire &&
-            g_interfaces[i].endpoint == endpoint)
+            !g_interfaces[i].detached && g_interfaces[i].endpoint == endpoint)
             return &g_interfaces[i];
     }
     if (!create)
         return NULL;
+    for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+        if (g_interfaces[i].in_use && g_interfaces[i].detached &&
+            g_interfaces[i].instance == instance) {
+            g_interfaces[i].detached = 0u;
+            g_interfaces[i].endpoint = endpoint;
+            g_interfaces[i].state = NET_IFC_DISCOVERED;
+            return &g_interfaces[i];
+        }
+    }
     for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
         if (!g_interfaces[i].in_use) {
             __builtin_memset(&g_interfaces[i], 0, sizeof(g_interfaces[i]));
@@ -913,6 +932,10 @@ static void net_stack_finish_bind(net_interface_slot_t* interface, uint8_t link_
     if (interface == NULL) {
         return;
     }
+    if (interface->netif_installed && g_api->console_write != NULL) {
+        static const char msg[] = "[net-stack] eth0 rebound to a new driver instance\n";
+        g_api->console_write(msg, (int)(sizeof(msg) - 1));
+    }
     if (!interface->netif_installed) {
         ip4_addr_t zero;
         IP4_ADDR(&zero, 0, 0, 0, 0);
@@ -1450,12 +1473,40 @@ static void net_stack_reap_interfaces(void) {
     }
 }
 
+/* Detach an installed interface from its ended provider (see
+ * net_interface_slot_t). Its buffers are kept for the successor. */
+static void net_stack_detach_interface(net_interface_slot_t* slot) {
+    netif_set_link_down(&slot->netif);
+    slot->netif_ready = 0u;
+    slot->link_up = 0u;
+    wasmos_sys_native_ipc_future_cancel(&slot->link_get_future, -1);
+    slot->rx_pending = 0u;
+    slot->rx_poll_next_tick = 0u;
+    for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
+        slot->tx_slots[i].pending = 0u;
+    }
+    slot->buffers_lent = 0u;
+    slot->endpoint = 0u;
+    slot->detached = 1u;
+    slot->state = NET_IFC_DISCOVERED;
+    if (slot == g_active_ifc)
+        g_netdrv_endpoint = 0u;
+    if (g_api->console_write != NULL) {
+        static const char msg[] = "[net-stack] eth0 driver ended; interface held\n";
+        g_api->console_write(msg, (int)(sizeof(msg) - 1));
+    }
+}
+
 static void net_stack_unbind_interface(uint32_t endpoint) {
     net_interface_slot_t* slot = net_stack_interface_from_endpoint(endpoint);
     uint8_t was_active;
 
     if (slot == NULL)
         return;
+    if (slot->netif_installed) {
+        net_stack_detach_interface(slot);
+        return;
+    }
     was_active = slot == g_active_ifc;
     if (slot->netif_ready)
         netif_set_down(&slot->netif);
@@ -1623,25 +1674,49 @@ static void net_stack_try_bind_interface(net_interface_slot_t* slot) {
         slot->link_get_coroutine.state != WASMOS_NATIVE_COROUTINE_DEAD) {
         return;
     }
+    /* The buffers are acquired once and kept for the interface's life; each
+     * provider instance is lent them, since the kernel revokes a dead one's
+     * borrows (docs/architecture/12-dma-transfers.md). */
     if (slot->rx_buffer == NULL) {
         slot->rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
             ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES, &slot->rx_buffer_id);
-        if (slot->rx_buffer == NULL ||
-            g_api->xfer_buffer_borrow(slot->endpoint,
-                                      slot->rx_buffer_id,
-                                      ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
+        if (slot->rx_buffer == NULL) {
             return;
         }
-        for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
+    }
+    for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
+        if (slot->tx_slots[i].buffer == NULL) {
             slot->tx_slots[i].buffer = (uint8_t*)g_api->xfer_buffer_acquire(
                 ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES, &slot->tx_slots[i].buffer_id);
-            if (slot->tx_slots[i].buffer == NULL ||
-                g_api->xfer_buffer_borrow(slot->endpoint,
-                                          slot->tx_slots[i].buffer_id,
-                                          ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
+            if (slot->tx_slots[i].buffer == NULL) {
                 return;
             }
         }
+    }
+    /* All or none: a lend that fails part way withdraws the grants it made, so
+     * the next attempt starts from no grant rather than meeting
+     * ALREADY_BORROWED on the buffers lent before the failure. */
+    if (!slot->buffers_lent) {
+        uint32_t lent_tx = 0u;
+        slot->rx_borrow_id = g_api->xfer_buffer_borrow(
+            slot->endpoint, slot->rx_buffer_id, ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE);
+        while (slot->rx_borrow_id >= 0 && lent_tx < NET_STACK_TX_QUEUE_DEPTH) {
+            net_tx_slot_t* tx = &slot->tx_slots[lent_tx];
+            tx->borrow_id = g_api->xfer_buffer_borrow(
+                slot->endpoint, tx->buffer_id, ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE);
+            if (tx->borrow_id < 0)
+                break;
+            lent_tx++;
+        }
+        if (slot->rx_borrow_id < 0 || lent_tx < NET_STACK_TX_QUEUE_DEPTH) {
+            for (uint32_t i = 0u; i < lent_tx; ++i) {
+                (void)g_api->xfer_buffer_unborrow((uint32_t)slot->tx_slots[i].borrow_id);
+            }
+            if (slot->rx_borrow_id >= 0)
+                (void)g_api->xfer_buffer_unborrow((uint32_t)slot->rx_borrow_id);
+            return;
+        }
+        slot->buffers_lent = 1u;
         slot->state = NET_IFC_BUFFERS_GRANTED;
     }
     wasmos_sys_native_ipc_future_init(
@@ -2565,10 +2640,10 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     if (request->type == SVC_IPC_CLASS_EVENT) {
         if (request->arg0 == SVC_CLASS_EVENT_ADD) {
             net_interface_slot_t* slot = net_stack_interface_slot(request->arg2, request->arg1, 1u);
-            if (g_active_ifc == NULL && slot != NULL) {
+            if (g_active_ifc == NULL && slot != NULL)
                 g_active_ifc = slot;
+            if (slot != NULL && g_active_ifc == slot)
                 g_netdrv_endpoint = request->arg2;
-            }
         } else if (request->arg0 == SVC_CLASS_EVENT_REMOVE) {
             net_stack_unbind_interface(request->arg2);
         }
@@ -2804,7 +2879,7 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
     g_api = driver_api;
     if (driver_api == NULL || driver_api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
         driver_api->abi_version != WASMOS_NATIVE_ABI_VERSION) {
-        return -2;
+        return WASMOS_ERR_DRIVER_ABI_MISMATCH;
     }
     /* Bind the native slab allocator to the driver_api page hooks before any
      * malloc/free/calloc/realloc (mbedTLS uses these). */
@@ -2829,20 +2904,20 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
     if (driver_api->spawn_info == NULL || driver_api->spawn_info(&spawn_info, NULL, 0u) != 0 ||
         spawn_info.magic != WASMOS_SPAWN_INFO_MAGIC ||
         spawn_info.version != WASMOS_SPAWN_INFO_VERSION || spawn_info.proc_endpoint == 0u) {
-        return -1;
+        return WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT;
     }
     g_endpoint = driver_api->ipc_create_endpoint();
     if (g_endpoint == 0xFFFFFFFFu) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
 
     g_control_endpoint = driver_api->ipc_create_endpoint();
     if (g_control_endpoint == 0xFFFFFFFFu) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
     g_netdrv_reply_endpoint = driver_api->ipc_create_endpoint();
     if (g_netdrv_reply_endpoint == 0xFFFFFFFFu) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
     g_proc_endpoint = spawn_info.proc_endpoint;
     /* Device-manager starts bootstrap services synchronously. Release that spawn
@@ -2862,7 +2937,7 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
         wasmos_sys_native_event_register(
             &g_netdrv_loop, NETDRV_IPC_LINK_NOTIFY, net_stack_netdrv_event, NULL) != 0 ||
         wasmos_sys_native_event_set_default(&g_netdrv_loop, net_stack_netdrv_event, NULL) != 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_EVENT_LOOP;
     }
     g_control_runtime = runtime;
 
@@ -2890,16 +2965,16 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
                 break;
             }
             if (rc != ND_IPC_OK) {
-                return -1;
+                return WASMOS_ERR_DRIVER_EVENT_LOOP;
             }
             drained = 1;
             net_stack_dispatch(&request);
         }
         if (wasmos_sys_native_event_loop_poll(&g_control_loop, 8u) < 0) {
-            return -1;
+            return WASMOS_ERR_DRIVER_EVENT_LOOP;
         }
         if (wasmos_sys_native_event_loop_poll(&g_netdrv_loop, 8u) < 0) {
-            return -1;
+            return WASMOS_ERR_DRIVER_EVENT_LOOP;
         }
         net_stack_begin_registration();
         net_stack_try_seed_random();

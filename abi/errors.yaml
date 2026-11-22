@@ -215,6 +215,8 @@ domains:
       - { name: REGISTER,           description: "publishing the driver endpoint to the service registry failed" }
       - { name: SELECT_SETUP,       description: "the driver could not build its IPC select set" }
       - { name: DEPENDENCY_MISSING, description: "a service the driver depends on is not registered" }
+      - { name: ABI_MISMATCH,       description: "the native driver API does not match the ABI the image was built for" }
+      - { name: EVENT_LOOP,         description: "the driver's event loop could not be set up, or failed while serving" }
 
   vt:
     id: 8

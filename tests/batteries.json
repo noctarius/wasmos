@@ -28,10 +28,11 @@
     "under bring-up, whose kernel cannot run a battery yet. Each entry of either",
     "list names a configs/<name>_defconfig.",
     "",
-    "hosts lists the machines a developer or CI builds and tests ON, each with",
-    "the GitHub runner that stands for it. The kernel unit tests run on every",
-    "host, because they compile kernel headers natively and an arm64 host",
-    "exercises code paths an x86_64 host never does. The QEMU harness picks the",
+    "hosts lists the machines a developer or CI builds and tests ON. A host with",
+    "a runner gets CI's kernel unit tests on that GitHub runner; they compile",
+    "kernel headers natively, so an arm64 host exercises paths an x86_64 host",
+    "never does. A host without one (aarch64-darwin: macOS runners are scarce",
+    "and slow) is supported and tested locally only. The QEMU harness picks the",
     "accelerator from the host (KVM, HVF, TCG for a foreign guest)."
   ],
   "hosts": [
@@ -45,7 +46,7 @@
     },
     {
       "name": "aarch64-darwin",
-      "runner": "macos-15"
+      "runner": null
     }
   ],
   "arches": [

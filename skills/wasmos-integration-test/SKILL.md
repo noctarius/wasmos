@@ -44,8 +44,10 @@ and neither enumerates any axis itself:
 - `.github/workflows/ci.yml` consumes exactly those outputs.
 
 A third list, `hosts`, names the machines builds and host tests run ON
-(x86_64-linux, aarch64-linux, aarch64-darwin) with the CI runner for each;
-`--host-matrix` feeds CI's kernel unit-test job, which runs on every host.
+(x86_64-linux, aarch64-linux, aarch64-darwin) and the CI runner of each that
+has one; `--host-matrix` feeds CI's kernel unit-test job with the hosts that
+have a runner. aarch64-darwin has none (macOS runners are scarce and slow) and
+is tested locally.
 
 Add a battery, a runtime, an architecture or a host there and the runners appear;
 nothing else needs editing. The harness boots the architecture the tree was

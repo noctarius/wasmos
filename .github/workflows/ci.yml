@@ -19,8 +19,10 @@ env:
   TINYGO_VERSION: "0.41.1"
 
 jobs:
-  # Every host of tests/batteries.json: the unit tests compile kernel headers
-  # natively, so an arm64 host exercises paths an x86_64 host never does.
+  # Every host of tests/batteries.json that has a CI runner: the unit tests
+  # compile kernel headers natively, so an arm64 host exercises paths an
+  # x86_64 host never does. aarch64-darwin has no runner (macOS runners are
+  # scarce and slow) and is tested locally.
   unit-tests:
     name: Kernel unit tests (${{ matrix.name }})
     needs: batteries
@@ -32,51 +34,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install host toolchain (Linux)
-        if: runner.os == 'Linux'
+      - name: Install host toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang lld llvm ninja-build python3-pip curl xz-utils
           python3 -m pip install --user kconfiglib
-          echo "PYTHON=python3" >> "$GITHUB_ENV"
-
-      # Homebrew's Python is externally managed, so kconfiglib goes into a venv
-      # and configure runs with that interpreter. AppleClang cannot build the
-      # UEFI loader; configure is pointed at Homebrew LLVM.
-      - name: Install host toolchain (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install llvm lld ninja
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install kconfiglib
-          echo "PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
-          echo "CONFIGURE_ARGS=--clang=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
 
       - name: Install Zig
         run: |
-          arch=$(uname -m); arch=${arch/arm64/aarch64}
-          os=$([ "$RUNNER_OS" = macOS ] && echo macos || echo linux)
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${arch}-${os}-${ZIG_VERSION}.tar.xz" \
+          arch=$(uname -m)
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${arch}-linux-${ZIG_VERSION}.tar.xz" \
             | tar -xJ
-          echo "$PWD/zig-${arch}-${os}-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          echo "$PWD/zig-${arch}-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       # The Go coroutine test runs on wasm32 through TinyGo, because Go models
       # every record as an opaque blob sized for that target -- a host build
       # would exercise a different ABI. Without TinyGo the unit suite silently
       # loses the one test that catches Go binding drift.
-      - name: Install TinyGo (Linux)
-        if: runner.os == 'Linux'
+      - name: Install TinyGo
         run: |
           deb="tinygo_${TINYGO_VERSION}_$(dpkg --print-architecture).deb"
           curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/${deb}"
           sudo dpkg -i "$deb"
-
-      - name: Install TinyGo (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew tap tinygo-org/tools
-          brew install tinygo
 
       - name: Install AssemblyScript
         # asc is required at configure time (AssemblyScript serial driver);
@@ -86,7 +66,7 @@ jobs:
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Configure
-        run: $PYTHON configure out/unit $CONFIGURE_ARGS
+        run: ./configure out/unit
 
       - name: Run kernel unit tests
         run: ninja -C out/unit run-kernel-unit-tests

@@ -762,8 +762,9 @@ linked feature documents for rationale and rollout plans.
   exits boot services and jumps to it. No aarch64 framebuffer fallback without
   GOP (the x86 0xCF8 scan is x86_64-only).
 - Supported build/test hosts: x86_64-linux, aarch64-linux, aarch64-darwin
-  (`hosts` in `tests/batteries.json`). CI runs the kernel unit tests on all
-  three and builds the aarch64 tree on aarch64-linux; QEMU batteries run on
+  (`hosts` in `tests/batteries.json`). CI runs the kernel unit tests on both
+  Linux hosts (aarch64-darwin is tested locally; macOS runners are scarce)
+  and builds the aarch64 tree on aarch64-linux; QEMU batteries run on
   x86_64-linux. The harness accelerates a host-native guest (KVM, or HVF for
   aarch64 on macOS) and runs a foreign one under TCG.
 - Developer checks: `fmt`, `fmt-check`, `lint`, and `quality` are Ninja targets

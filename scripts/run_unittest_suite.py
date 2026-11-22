@@ -14,8 +14,9 @@ Modes:
     --build-matrix         print the build-only configurations as JSON: one
                            cell per (arch, defconfig) CI builds but does not
                            boot
-    --host-matrix          print the build/test hosts as JSON: one cell per
-                           host with its CI runner
+    --host-matrix          print the CI build/test hosts as JSON: one cell per
+                           host that has a CI runner (hosts without one are
+                           tested locally only)
     --verify-batteries     fail unless every discovered file is in exactly one
                            battery, and every listed file exists
 
@@ -156,7 +157,7 @@ def main() -> int:
         )
         return 0
     if args.host_matrix:
-        print(json.dumps(load_hosts()))
+        print(json.dumps([h for h in load_hosts() if h.get("runner")]))
         return 0
     if args.verify_batteries:
         return verify(args.start_dir)

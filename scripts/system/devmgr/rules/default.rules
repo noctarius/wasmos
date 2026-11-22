@@ -70,7 +70,10 @@ SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", ENV{RESTART}="on
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", ENV{RESTART}="on-failure", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x08", ATTR{subclass}=="0x03", ENV{RESTART}="on-failure", RUN+="system/drivers/rtc.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_net.wap"
-SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_serial.wap"
+# The virtio console is the kernel-log port (doc 19). Unsupervised: a restart
+# would replay the whole kmsg ring onto it again.
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1043", RUN+="system/drivers/virtio_serial.wap"
 # virtio-rng presents PCI class 0x00 / subclass 0xFF; 0xFF reads as the matcher's
 # "any" wildcard, so match on vendor/device IDs (transitional 0x1005, modern 0x1044).
 # It drives DMA, and is supervised as virtio_rng@pci:<function>: the kernel

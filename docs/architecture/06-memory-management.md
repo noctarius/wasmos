@@ -8,7 +8,7 @@ This document covers the WASMOS kernel memory subsystem in full implementation
 detail: the physical frame allocator, the paging layer, memory contexts,
 the user virtual address space layout, shared memory, user-pointer copy,
 and the slab allocator. The authoritative sources are `src/kernel/physmem.c`,
-`src/kernel/paging.c`, `src/kernel/memory.c`, `src/kernel/slab.c`,
+`src/kernel/arch/x86_64/paging.c`, `src/kernel/memory.c`, `src/kernel/slab.c`,
 `src/kernel/kmem.c`, and their headers.
 
 ---
@@ -84,7 +84,14 @@ The caller must check before use; no fallback or retry is performed.
 
 ### Paging Layer
 
-`src/kernel/paging.c` manages x86_64 4-level page tables and CR3 switching.
+`src/kernel/include/paging.h` is the architecture-neutral page-table interface:
+mapping flags are `MEM_REGION_FLAG_*`, never raw page-table bits, and a root
+table is an opaque physical address. `src/kernel/arch/x86_64/paging.c`
+implements it with x86_64 4-level page tables and CR3 switching. The kernel
+virtual layout constants (`KERNEL_HIGHER_HALF_BASE`, the MMIO and WARP linmem
+windows) live in `include/arch/x86_64/vm_layout.h`, selected through
+`include/arch/vm_layout.h`. `paging_sync_instruction_cache()` is the hook code
+loaders call after writing instructions; it is a no-op on x86_64.
 
 #### Address Space Layout
 
@@ -119,8 +126,34 @@ the kernel's shared mapping. Stack and page-table allocations must use
 | `PT_FLAG_PRESENT`    | 0   | Page is mapped              |
 | `PT_FLAG_WRITE`      | 1   | Writable                    |
 | `PT_FLAG_USER`       | 2   | CPL3-accessible             |
+| `PT_FLAG_PWT`        | 3   | Write-through (with PCD: UC)|
+| `PT_FLAG_PCD`        | 4   | Cache-disable               |
 | `PT_FLAG_LARGE_PAGE` | 7   | 2 MB large page (PDE level) |
 | `PT_FLAG_NX`         | 63  | No-execute                  |
+
+Callers pass `MEM_REGION_FLAG_*`, never these bits. `MEM_REGION_FLAG_DEVICE`
+selects device memory: PCD|PWT, which is UC under the power-on PAT (the kernel
+does not reprogram the PAT). The LAPIC, IOAPIC and MMIO scratch windows and the
+driver device windows use it.
+
+#### Kernel MMIO Slot
+
+PDPT slot 509 of the shared higher half (`KERNEL_MMIO_PDPT_INDEX`, 1 GiB at
+`0xFFFFFFFF40000000`) holds supervisor-only device mappings. Because the
+higher-half PDPT is one shared page, a mapping installed there appears under
+every CR3. Its lower half carries the GOP framebuffer (`KERNEL_MMIO_FB_VA`).
+Its upper half (`KERNEL_MMIO_DEVICE_VA`, 512 MiB) carries the memory-mapped
+register windows drivers are granted (doc 10, Register Windows), mapped by
+`device_window_map` (`src/kernel/device_window.c`):
+
+- A window is page-aligned, at most `DEVICE_WINDOW_MAX_BYTES` (2 MiB), outside
+  system RAM (`pfa_range_overlaps_ram`) and mapped uncached.
+- A window is mapped once and stays mapped for the life of the kernel; a range
+  inside a mapped window reuses it. A device's registers do not move once
+  enumerated, so a window VA's translation never changes, and a restarted
+  driver needs no cross-CPU TLB shootdown.
+- At most `DEVICE_WINDOW_LIMIT` (64) distinct windows are mapped; the table and
+  the VA span only grow.
 
 #### Per-Process CR3
 
@@ -223,11 +256,16 @@ typedef struct {
 
 #### Demand Mapping and Page Fault Handling
 
-`mm_handle_page_fault(context_id, addr, error_code, out_mapped_base)`:
+`mm_handle_page_fault(context_id, addr, access, out_mapped_base)`:
 
-1. Rejects `pf_err_present` faults (protection violation, not absence).
+`access` is an `MM_FAULT_*` mask (`memory.h`): present, write, user, exec. The
+architecture's exception handler decodes it from its fault syndrome (x86_64: the
+`#PF` error code, in `x86_pf_access`); nothing above the arch layer sees the raw
+syndrome, and the memory service's `IPC_MEM_FAULT` carries the mask in `arg2`.
+
+1. Rejects `MM_FAULT_PRESENT` faults (protection violation, not absence).
 2. Finds the containing `mem_region_t` for `addr`.
-3. Checks user/write/instr bits against region flags.
+3. Checks the user/write/exec bits against region flags.
 4. Computes `phys_page = region->phys_base + (page_base − region->base)`.
 5. Calls `paging_map_4k_in_root(ctx->root_table, page_base, phys_page, flags)`.
 

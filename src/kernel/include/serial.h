@@ -68,11 +68,11 @@ void serial_printf_unlocked(const char* fmt, ...) __attribute__((format(printf, 
  * it is transmitted directly.  Same lock and context rules as serial_write. */
 void console_write_tty(uint32_t tty, const char* s);
 
-/* Enable the kernel-log port: a second UART at I/O base `port` that receives every
- * kernel-log write (and only those) directly from the kernel, starting with a replay of
- * the kmsg ring.  Returns 0, or WASMOS_NOENT when no UART answers there.
+/* Enable the kernel-log port: the platform's second UART (COM2 on x86_64) that receives
+ * every kernel-log write (and only those) directly from the kernel, starting with a
+ * replay of the kmsg ring.  Returns 0, or WASMOS_NOENT when no UART answers.
  * Called once at boot from the `log.serial` option. */
-int32_t serial_log_port_enable(uint16_t port);
+int32_t serial_log_port_enable(void);
 
 /* COM1 output for the console ring's owner (the vt writing its serial-bound slot): `len`
  * bytes, '\n' expanded to "\r\n", reaching no ring and not the kmsg ring.  Returns 0, or

@@ -220,22 +220,26 @@ pub extern "wasmos" fn io_in16(a0: i32, a1: i32) callconv(.c) i32;
 pub extern "wasmos" fn io_in32(a0: i32, a1: i32) callconv(.c) i32;
 /// Write byte `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on success,
 /// WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not fit in a
-/// byte, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks
-/// the io.port capability for that port.
+/// byte, WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks
+/// the io.port capability for that port, or WASMOS_ERR_IO_NO_PORT_SPACE on an
+/// architecture without I/O ports.
 pub extern "wasmos" fn io_out8(a0: i32, a1: i32) callconv(.c) i32;
 /// Write 16-bit word `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
 /// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not
-/// fit in a word, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context
-/// or lacks the io.port capability for that port.
+/// fit in a word, WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context
+/// or lacks the io.port capability for that port, or
+/// WASMOS_ERR_IO_NO_PORT_SPACE on an architecture without I/O ports.
 pub extern "wasmos" fn io_out16(a0: i32, a1: i32) callconv(.c) i32;
 /// Write 32-bit dword `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
-/// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range, or
+/// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range,
 /// WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks the
-/// io.port capability for that port.
+/// io.port capability for that port, or WASMOS_ERR_IO_NO_PORT_SPACE on an
+/// architecture without I/O ports.
 pub extern "wasmos" fn io_out32(a0: i32, a1: i32) callconv(.c) i32;
 /// Issue a short I/O-port delay (a dummy write to port 0x80). Returns 0 on
-/// success, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or
-/// lacks the io.port capability for port 0x80.
+/// success, WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or
+/// lacks the io.port capability for port 0x80, or WASMOS_ERR_IO_NO_PORT_SPACE
+/// on an architecture without I/O ports.
 pub extern "wasmos" fn io_wait() callconv(.c) i32;
 /// Copy the ACPI RSDP blob into guest memory at out_off (bounded by max_len) and
 /// store its byte length at out_len_off. Returns 0 on success, WASMOS_INVAL if
@@ -677,56 +681,68 @@ pub extern "wasmos" fn msi_free(a0: i32) callconv(.c) i32;
 /// driver has to place MSI-X table entries. Returns 0, or a negative
 /// WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
 pub extern "wasmos" fn mmio_write32(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
-/// Read a byte at `offset` within the caller's granted I/O region `region` -- an
-/// index into the windows its spawn profile granted, in the order they were
-/// declared -- and store it at `out`. The kernel adds the base and
-/// bounds-checks the offset, so a driver never names an absolute port and
-/// cannot reach outside the window it holds.
+/// Read a byte at `offset` within the caller's granted register window `region`
+/// -- an index into the windows its spawn profile granted, in the order they
+/// were declared -- and store it at `out`. A window is either a range of I/O
+/// ports or a range of device memory; the kernel adds the base, bounds-checks
+/// the offset and performs one access of exactly this width, so a driver never
+/// names an absolute port or address and cannot reach outside the window it
+/// holds. An access to a memory-mapped window must be naturally aligned.
 ///
 /// The value is returned through `out` rather than as the result because a
-/// port read is not a signed quantity: a 32-bit register can legitimately read
-/// 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
-/// on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
-/// refused it. Requires the io.port capability.
+/// register read is not a signed quantity: a 32-bit register can legitimately
+/// read 0xFFFFFFFF, which would be indistinguishable from a failure code.
+/// Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming which
+/// check refused it. The window itself is the authority: the spawn profile
+/// grants an I/O window only with io.port and a memory-mapped one only with
+/// mmio.map.
 pub extern "wasmos" fn io_region_in8(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
-/// Read a 16-bit word at `offset` within the caller's granted I/O region `region` -- an
-/// index into the windows its spawn profile granted, in the order they were
-/// declared -- and store it at `out`. The kernel adds the base and
-/// bounds-checks the offset, so a driver never names an absolute port and
-/// cannot reach outside the window it holds.
+/// Read a 16-bit word at `offset` within the caller's granted register window `region`
+/// -- an index into the windows its spawn profile granted, in the order they
+/// were declared -- and store it at `out`. A window is either a range of I/O
+/// ports or a range of device memory; the kernel adds the base, bounds-checks
+/// the offset and performs one access of exactly this width, so a driver never
+/// names an absolute port or address and cannot reach outside the window it
+/// holds. An access to a memory-mapped window must be naturally aligned.
 ///
 /// The value is returned through `out` rather than as the result because a
-/// port read is not a signed quantity: a 32-bit register can legitimately read
-/// 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
-/// on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
-/// refused it. Requires the io.port capability.
+/// register read is not a signed quantity: a 32-bit register can legitimately
+/// read 0xFFFFFFFF, which would be indistinguishable from a failure code.
+/// Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming which
+/// check refused it. The window itself is the authority: the spawn profile
+/// grants an I/O window only with io.port and a memory-mapped one only with
+/// mmio.map.
 pub extern "wasmos" fn io_region_in16(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
-/// Read a 32-bit word at `offset` within the caller's granted I/O region `region` -- an
-/// index into the windows its spawn profile granted, in the order they were
-/// declared -- and store it at `out`. The kernel adds the base and
-/// bounds-checks the offset, so a driver never names an absolute port and
-/// cannot reach outside the window it holds.
+/// Read a 32-bit word at `offset` within the caller's granted register window `region`
+/// -- an index into the windows its spawn profile granted, in the order they
+/// were declared -- and store it at `out`. A window is either a range of I/O
+/// ports or a range of device memory; the kernel adds the base, bounds-checks
+/// the offset and performs one access of exactly this width, so a driver never
+/// names an absolute port or address and cannot reach outside the window it
+/// holds. An access to a memory-mapped window must be naturally aligned.
 ///
 /// The value is returned through `out` rather than as the result because a
-/// port read is not a signed quantity: a 32-bit register can legitimately read
-/// 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
-/// on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
-/// refused it. Requires the io.port capability.
+/// register read is not a signed quantity: a 32-bit register can legitimately
+/// read 0xFFFFFFFF, which would be indistinguishable from a failure code.
+/// Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming which
+/// check refused it. The window itself is the authority: the spawn profile
+/// grants an I/O window only with io.port and a memory-mapped one only with
+/// mmio.map.
 pub extern "wasmos" fn io_region_in32(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
-/// Write a byte to `offset` within the caller's granted I/O region
-/// `region` (see io_region_in8 for how a region is named). Returns 0, or a
-/// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
-/// io.port capability.
+/// Write a byte to `offset` within the caller's granted register window
+/// `region` (see io_region_in8 for how a window is named, and what it may
+/// be). Returns 0, or a negative WASMOS_ERR_IO_* code naming which check
+/// refused it.
 pub extern "wasmos" fn io_region_out8(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
-/// Write a 16-bit word to `offset` within the caller's granted I/O region
-/// `region` (see io_region_in8 for how a region is named). Returns 0, or a
-/// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
-/// io.port capability.
+/// Write a 16-bit word to `offset` within the caller's granted register window
+/// `region` (see io_region_in8 for how a window is named, and what it may
+/// be). Returns 0, or a negative WASMOS_ERR_IO_* code naming which check
+/// refused it.
 pub extern "wasmos" fn io_region_out16(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
-/// Write a 32-bit word to `offset` within the caller's granted I/O region
-/// `region` (see io_region_in8 for how a region is named). Returns 0, or a
-/// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
-/// io.port capability.
+/// Write a 32-bit word to `offset` within the caller's granted register window
+/// `region` (see io_region_in8 for how a window is named, and what it may
+/// be). Returns 0, or a negative WASMOS_ERR_IO_* code naming which check
+/// refused it.
 pub extern "wasmos" fn io_region_out32(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Transmit len bytes from guest memory at buf_offset on COM1, '\n' expanded to
 /// "\r\n", without publishing them to the console ring or the kernel log. Only
@@ -790,8 +806,11 @@ pub extern "wasmos" fn ipc_endpoint_has_cap(a0: i32, a1: i32) callconv(.c) i32;
 /// because a config read legitimately returns all-ones, for an absent
 /// function among others. The kernel serialises every config access, so the
 /// address/data port pair is never interleaved with another caller's or with
-/// the kernel's own quiesce of a dead driver's function. Requires the
-/// pci.config capability. Returns 0, WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
+/// the kernel's own quiesce of a dead driver's function. A holder of the
+/// pci.config capability may read any function; any other caller only the
+/// function its spawn profile names and it still drives (a driver walking
+/// its own device's capability list, as virtio-modern needs to). Returns 0,
+/// WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
 /// WASMOS_INVAL for a bdf above 0xFFFF or a register that is above 0xFC or
 /// not dword-aligned, or WASMOS_ERR_KERNEL_BAD_POINTER; `out` is left
 /// untouched on failure.

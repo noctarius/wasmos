@@ -103,6 +103,7 @@ export const WASMOS_ERR_PROC_PM_SVC_WATCH_NO_BUFFER: i32 = -0x00020022; // a ser
 export const WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: i32 = -0x00020023; // the process manager answered a service-watch request with neither its response nor a packed error
 export const WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: i32 = -0x00020024; // the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself
 export const WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED: i32 = -0x00020025; // the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created
+export const WASMOS_ERR_PROC_PM_META_BAD_DESC: i32 = -0x00020026; // a PROC_IPC_MODULE_META_FILE descriptor was short, of an unknown version, or its path is empty, too long or outside the region it names
 export const WASMOS_ERR_LINMEM_NO_WINDOW: i32 = -0x00030001; // no free page-aligned window fits in linear memory
 export const WASMOS_ERR_LINMEM_MAP: i32 = -0x00030002; // paging/linear-memory mapping step failed
 export const WASMOS_ERR_LINMEM_NO_BASE: i32 = -0x00030003; // the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it
@@ -215,10 +216,12 @@ export const WASMOS_ERR_MSI_BAD_ENTRY: i32 = -0x00110009; // table entry index i
 export const WASMOS_ERR_MSI_MAP_FAILED: i32 = -0x0011000A; // the MSI-X table BAR could not be mapped
 export const WASMOS_ERR_MSI_NOT_DEVICE_OWNER: i32 = -0x0011000B; // another endpoint already programmed interrupts for this device
 export const WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER: i32 = -0x0011000C; // the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it
-export const WASMOS_ERR_IO_NOT_AUTHORIZED: i32 = -0x00120001; // caller has no io.port spawn profile, so it holds no I/O windows
+export const WASMOS_ERR_IO_NOT_AUTHORIZED: i32 = -0x00120001; // caller has no spawn profile granting register windows
 export const WASMOS_ERR_IO_BAD_REGION: i32 = -0x00120002; // region index names no window this context was granted
 export const WASMOS_ERR_IO_OUT_OF_WINDOW: i32 = -0x00120003; // offset falls outside the granted window's bounds
 export const WASMOS_ERR_IO_BAD_PORT: i32 = -0x00120004; // port number outside 0..0xFFFF
+export const WASMOS_ERR_IO_MISALIGNED: i32 = -0x00120005; // a memory-mapped window access whose offset is not a multiple of its width
+export const WASMOS_ERR_IO_NO_PORT_SPACE: i32 = -0x00120006; // the architecture has no I/O port space, so no port access or I/O-port window exists
 export const WASMOS_ERR_FONT_INVALID: i32 = -0x000C0001; // invalid request arguments (font id, size, glyph, or buffer)
 export const WASMOS_ERR_FONT_PERMISSION: i32 = -0x000C0002; // caller is not permitted to use the requested font resource
 export const WASMOS_ERR_FONT_UNSUPPORTED: i32 = -0x000C0003; // unknown or unsupported request type
@@ -424,6 +427,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: return "the process manager answered a service-watch request with neither its response nor a packed error";
     case WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: return "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself";
     case WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED: return "the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created";
+    case WASMOS_ERR_PROC_PM_META_BAD_DESC: return "a PROC_IPC_MODULE_META_FILE descriptor was short, of an unknown version, or its path is empty, too long or outside the region it names";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";
@@ -536,10 +540,12 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_MSI_MAP_FAILED: return "the MSI-X table BAR could not be mapped";
     case WASMOS_ERR_MSI_NOT_DEVICE_OWNER: return "another endpoint already programmed interrupts for this device";
     case WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER: return "the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it";
-    case WASMOS_ERR_IO_NOT_AUTHORIZED: return "caller has no io.port spawn profile, so it holds no I/O windows";
+    case WASMOS_ERR_IO_NOT_AUTHORIZED: return "caller has no spawn profile granting register windows";
     case WASMOS_ERR_IO_BAD_REGION: return "region index names no window this context was granted";
     case WASMOS_ERR_IO_OUT_OF_WINDOW: return "offset falls outside the granted window's bounds";
     case WASMOS_ERR_IO_BAD_PORT: return "port number outside 0..0xFFFF";
+    case WASMOS_ERR_IO_MISALIGNED: return "a memory-mapped window access whose offset is not a multiple of its width";
+    case WASMOS_ERR_IO_NO_PORT_SPACE: return "the architecture has no I/O port space, so no port access or I/O-port window exists";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

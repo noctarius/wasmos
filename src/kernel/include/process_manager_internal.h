@@ -121,10 +121,11 @@ typedef struct {
 typedef struct {
     uint8_t valid;      /* 0 = no caps requested; the profile is not applied */
     uint32_t cap_flags; /* DEVMGR_CAP_* bitmask from the request */
-    /* Disjoint I/O windows; the packed-arg spawn opcodes fill exactly one, the
-     * descriptor-based path may carry several (see wasmos_io_range_t). */
-    uint32_t io_range_count;
-    wasmos_io_range_t io_ranges[WASMOS_IO_RANGE_LIMIT];
+    /* Register windows in region-index order; the packed-arg spawn opcodes fill
+     * exactly one I/O window, the descriptor-based path may carry several of
+     * either kind (see wasmos_region_grant_t). */
+    uint32_t region_count;
+    wasmos_region_grant_t regions[WASMOS_REGION_LIMIT];
     uint16_t irq_mask;            /* bit i = IRQ line i; only lines 0..15 exist */
     uint32_t dma_direction_flags; /* WASMOS_DMA_DIR_* */
     uint32_t dma_max_bytes;       /* per-context pinning budget */
@@ -141,8 +142,11 @@ int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last);
 /* Parses a wasmos_spawn_caps_v2_t and its tail arrays (wasmos_driver_abi.h)
  * from payload_size bytes the caller has already copied out of, or validated
  * inside, the requester's buffer. The size must be exactly what the counts in
- * the header imply. Refuses unknown cap bits, inverted or excess I/O ranges and
- * an incomplete DMA request. Returns 0 with caps valid, or
+ * the header imply. Refuses unknown cap bits, excess region grants, a grant of
+ * an unknown kind or without the capability bit its kind needs (io.port for an
+ * I/O window, mmio.map for a memory-mapped one), an empty or out-of-range I/O
+ * window, an empty, wrapping or not page-aligned memory window, and an
+ * incomplete DMA request. Returns 0 with caps valid, or
  * WASMOS_ERR_PROC_PM_BAD_CAPS. */
 int pm_caps_from_v2(const uint8_t* payload, uint32_t payload_size, pm_spawn_caps_t* caps);
 
@@ -397,6 +401,7 @@ pm_wait_state_t* pm_wait_slot_acquire(void);
  * All three refuse a module that is not a driver, and an out-of-range match
  * index, with the corresponding WASMOS_ERR_PROC_PM_META_* code. */
 int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_module_meta_file(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg);
 
 #endif

@@ -23,13 +23,14 @@
 
 #include "sched.h"
 #include "thread.h"
-#include "arch/x86_64/smp.h"
+#include "arch/arch_cpu.h"
+#include "cpu_local.h"
 
 /* ------------------------------------------------------------------ harness */
 
 /* The CPU table the linked scheduler sees, and the three symbols it resolves it through.
  *
- * cpu_local() is the WASMOS_HOST_TEST_SMP arm in arch/x86_64/smp.h, which reads
+ * cpu_local() is the WASMOS_HOST_TEST_SMP arm in cpu_local.h, which reads
  * g_host_cpu_local -- a _Thread_local pointer into g_cpus[]. A pthread therefore selects
  * which CPU it is by calling be_cpu() once, and every kernel call it makes afterwards
  * runs on that CPU's queue with that CPU's idle thread. A worker that never calls
@@ -306,7 +307,7 @@ static void barrier_init(test_barrier_t* b, int n) {
 static void barrier_wait(test_barrier_t* b) {
     __atomic_fetch_add(&b->count, 1, __ATOMIC_ACQ_REL);
     while (__atomic_load_n(&b->count, __ATOMIC_ACQUIRE) < b->target) {
-        cpu_relax();
+        arch_cpu_relax();
     }
 }
 

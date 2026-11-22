@@ -242,33 +242,42 @@ Services subscriber registration and delivers key events.
 | `RTC_IPC_SET_RESP`  | `0x8A1` | Set response      |
 | `RTC_IPC_ERROR`     | `0x8FF` | Error response    |
 
-#### `virtio-serial` — VirtIO Serial Driver
+#### `virtio-serial` — VirtIO Console Driver (kernel-log port)
 
 - **Kind:** WASM driver
-- **PCI match:** class `0x07`, subclass `0x00`, prog_if `0x00`, vendor `0x1AF4` (VirtIO)
-- **Capabilities:** `io.port`
-- **Registers:** `virtio.serial` service endpoint
+- **PCI match:** vendor `0x1AF4`, device `0x1003` (transitional) or `0x1043`
+  (modern)
+- **Capabilities:** `mmio.map`, `dma.buffer`
+- **Regions:** region 0 = BAR 4 (`kind = "bar"`), a memory-mapped window
+- **Registers:** nothing; it serves no requests
 - **Entry bindings:** `proc.endpoint`
 
-Used for virtual input testing from the host. Exposes register read/write over
-IPC.
-
-| Opcode                              | Value   | Meaning               |
-|-------------------------------------|---------|-----------------------|
-| `VIRTIO_SERIAL_IPC_QUERY_REQ`       | `0x830` | Query device presence |
-| `VIRTIO_SERIAL_IPC_READ_REG32_REQ`  | `0x831` | Read 32-bit register  |
-| `VIRTIO_SERIAL_IPC_WRITE_REG32_REQ` | `0x832` | Write 32-bit register |
-| `VIRTIO_SERIAL_IPC_RESP`            | `0x8B0` | Response              |
-| `VIRTIO_SERIAL_IPC_ERROR`           | `0x8BF` | Error                 |
+The kernel-log port ([Virtual Terminal](19-virtual-terminal.md)). The driver
+brings a virtio console up over the virtio 1.x transport with port 0's
+transmit queue only (no MULTIPORT, no interrupt), subscribes to the kmsg ring
+(`kmsg_subscribe`), replays it from the oldest retained byte and then writes
+every new record, using the logger's ring follower (`logger_stage.c`, tagged
+`[virtio-serial]`) so bytes the ring overwrote first are reported in place.
+It is not supervised: a restart would replay the whole retained ring onto a
+port that already carries it. The `VIRTIO_SERIAL_IPC_*` register-access
+opcodes are unserved (doc 21).
 
 #### `virtio-rng` — VirtIO Hardware Entropy Driver
 
 - **Kind:** WASM driver
 - **PCI match:** vendor `0x1AF4`, device `0x1005` (transitional) or `0x1044`
   (modern)
-- **Capabilities:** `io.port`, `dma.buffer`, `svc.class`
+- **Capabilities:** `mmio.map`, `irq.route`, `dma.buffer`, `svc.class`
+- **Regions:** region 0 = BAR 4 (`kind = "bar"`), a memory-mapped window
 - **Registers:** concrete service `virtio-rng`, class `hrng`, instance `0`
 - **Entry bindings:** `proc.endpoint`
+
+The driver speaks the virtio 1.x PCI transport (`wasmos/virtio_modern.h`): it
+finds its common-config, notify and ISR structures in its own function's
+capability list (`virtio_pci_caps.h`, read through `pci_config_read`, which a
+driver may use for the function its spawn profile names) and reaches them
+through its BAR 4 window with the `io_region_*` host calls. A device that
+places them in another BAR is refused. It touches no I/O port.
 
 The driver owns one request virtqueue and a 4096-byte DMA pool. A client grants
 the driver write access to a transfer buffer and sends `HRNG_IPC_GET_BYTES_REQ`.
@@ -849,7 +858,8 @@ SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", RUN+="system/dri
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x08", ATTR{subclass}=="0x03", RUN+="system/drivers/rtc.wap"
-SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_serial.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1043", RUN+="system/drivers/virtio_serial.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", RUN+="system/drivers/virtio_rng.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", RUN+="system/drivers/virtio_rng.wap"
 ```
@@ -879,6 +889,19 @@ kernel init (once fs-manager answers FSMGR_IPC_MOUNT_WAIT_REQ for /boot)
             └─ SUPERVISOR_IPC_BOOT_SUBMITTED_REQ  -> "[supervisor] boot complete"
 ```
 
+Only the filesystem itself -- fs-manager, fs-tmpfs and fs-init -- has to be
+started from boot modules (`SPAWN_WATCH_FLAG_MODULE`): nothing can be read by
+path before it exists. device-manager may be started either way. Every driver a
+rule names is spawned by PATH through fs-manager, from `/init` before `/boot`
+is mounted and from `/boot` afterwards, so a driver the boot depends on must be
+in the initfs, image and rule both. A PCI or ACPI rule driver is spawned with
+`PROC_IPC_SPAWN_WATCHED` (path, startup args, and a capability descriptor with
+every declared window and the PCI function); device-manager does not wait on
+it, and retires the rule when the child's `PROC_IPC_CHILD_READY` arrives,
+retries it when the child exits first, and gives the device up when neither
+happens within 5 s -- a driver still running is never spawned a second time.
+pci-bus and acpi-bus are still started by boot-module index.
+
 Kernel init waits for exactly one thing: `/boot` mounted, because sysinit's
 image is on it. It subscribes to `fs.vfs`, sends the mount wait to fs-manager,
 and panics with `init_no_boot_mount` if no answer comes within 60 s of the
@@ -896,7 +919,6 @@ every service's; it is not a milestone anyone waits on.
 | `devmgr.query`  | `device-manager` | Mount/block query endpoint for drivers     |
 | `fs.vfs`        | `fs-manager`     | Unified virtual filesystem namespace       |
 | `initfs.rules`  | `fs-init`        | Initfs listing (pre-FAT)                   |
-| `virtio.serial` | `virtio-serial`  | VirtIO serial register access              |
 | `virtio-rng`    | `virtio-rng`     | VirtIO hardware entropy provider           |
 | `font`          | `font-service`   | Font rasterization                         |
 | `gfx`           | `gfx-compositor` | Graphics compositor                        |

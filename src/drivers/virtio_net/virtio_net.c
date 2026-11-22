@@ -1,48 +1,38 @@
 /* virtio_net.c - Minimal VirtIO network WASM driver.
  * Provides adapter-neutral netdrv IPC for link/status queries while keeping
- * transport details private to this backend. */
+ * transport details private to this backend.
+ *
+ * The device is driven over the virtio 1.x PCI transport (virtio_modern.h): its
+ * registers are device memory in BAR 4, granted as region 0 by the manifest's
+ * [[regions]] entry, and located through the device's own capability list. */
 #include <stdint.h>
 #include <stdio.h>
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
 #include "wasmos/startup.h"
+#include "wasmos/virtio_modern.h"
 #include "wasmos/vring.h"
 #include "wasmos_driver_abi.h"
 
 /* PCI identity of a virtio-net function. 0x1AF4 is the Red Hat / virtio vendor
- * id. A legacy device reports 0x1000 (the transitional device id range 0x1000 +
- * subsystem), a modern one 0x1041 (0x1040 + virtio device type 1 = network).
- * Both are accepted; this driver speaks the legacy register interface either
- * way. */
+ * id. A transitional device reports 0x1000, a modern-only one 0x1041 (0x1040 +
+ * virtio device type 1 = network); both offer the modern interface this driver
+ * uses. */
 #define VIRTIO_PCI_VENDOR_ID 0x1AF4u
 #define VIRTIO_NET_DEV_LEGACY 0x1000u
 #define VIRTIO_NET_DEV_TRANSITIONAL 0x1041u
 
-/* Legacy virtio PCI common configuration (virtio 0.9.5, "Virtio Header"), as
- * byte offsets into the device's I/O BAR. Feature negotiation is a 32-bit
- * bitmask each way: the device advertises through DEVICE_FEATURES (read-only)
- * and the driver accepts a subset by writing DRIVER_FEATURES. */
-#define VIRTIO_PCI_DEVICE_FEATURES 0x00u
-#define VIRTIO_PCI_DRIVER_FEATURES 0x04u
-/* Legacy virtqueue registers (no MSI-X: device config starts at 0x14). */
-#define VIRTIO_PCI_QUEUE_PFN 0x08u    /* u32: ring PFN (phys >> 12) */
-#define VIRTIO_PCI_QUEUE_SIZE 0x0Cu   /* u16: selected queue size (0 = absent) */
-#define VIRTIO_PCI_QUEUE_SELECT 0x0Eu /* u16: select the queue to configure */
-#define VIRTIO_PCI_QUEUE_NOTIFY 0x10u /* u16: doorbell — write the queue index */
-#define VIRTIO_PCI_DEVICE_STATUS 0x12u
-#define VIRTIO_PCI_ISR_STATUS 0x13u
-/* Enabling MSI-X inserts two 16-bit vector registers at 0x14/0x16 and pushes the
- * device-specific config region from 0x14 to 0x18 (virtio 0.9.5, "MSI-X vector
- * configuration"). Everything below 0x14 is unaffected, so only the
- * device-config base moves — see cfg_base(). */
-#define VIRTIO_PCI_MSIX_CONFIG_VECTOR 0x14u /* u16: vector for config changes */
-#define VIRTIO_PCI_MSIX_QUEUE_VECTOR 0x16u  /* u16: vector for the selected queue */
-#define VIRTIO_NET_CFG_BASE_INTX 0x14u
-#define VIRTIO_NET_CFG_BASE_MSIX 0x18u
+/* The BAR holding the virtio structures, and the region the manifest grants it
+ * as. QEMU places every modern structure in BAR 4; a device that does not is
+ * refused by virtio_modern_probe. */
+#define VIRTIO_NET_BAR 4u
+#define VIRTIO_NET_REGION 0
+
+/* virtio_net_config (virtio 1.2 §5.1.4): the MAC address, then the 16-bit link
+ * status word (valid with VIRTIO_NET_F_STATUS). */
 #define VIRTIO_NET_CFG_MAC_OFF 0x00u
 #define VIRTIO_NET_CFG_STATUS_OFF 0x06u
-#define VIRTIO_MSIX_NO_VECTOR 0xFFFFu
 
 /* MSI-X table entries this driver uses, one per interrupt source. The entry
  * index names the source, which INTx cannot do: on a shared wire the driver has
@@ -52,20 +42,16 @@
 #define VIRTIO_NET_MSIX_ENTRY_CONFIG 2u
 #define VIRTIO_NET_MSIX_ENTRIES 3u
 
-/* Legacy vring layout alignment (virtio 0.9.5): the used ring must start on a
- * 4096-byte boundary within the queue's contiguous allocation, and the queue's
- * address is programmed as a page frame number, so 4096 is fixed by the spec's
- * page granularity rather than chosen here.
- *
- * Queue indices are fixed by the virtio-net device type: queue 0 is receive,
+/* Queue indices are fixed by the virtio-net device type: queue 0 is receive,
  * queue 1 is transmit, both named from the DRIVER's point of view. */
-#define VIRTIO_PCI_VRING_ALIGN 4096u
 #define VIRTIO_NET_RX_QUEUE 0u
 #define VIRTIO_NET_TX_QUEUE 1u
 
-/* Legacy virtio-net header (no VIRTIO_NET_F_MRG_RXBUF) prepended to every
- * RX/TX buffer. The device writes it on RX and reads it on TX. */
-#define VIRTIO_NET_HDR_LEN 10u
+/* virtio_net_hdr prepended to every RX/TX buffer; the device writes it on RX
+ * and reads it on TX. Under VIRTIO_F_VERSION_1 it always carries num_buffers,
+ * so it is 12 bytes whether or not MRG_RXBUF is negotiated (virtio 1.2
+ * §5.1.6); the legacy layout without MRG_RXBUF was 10. */
+#define VIRTIO_NET_HDR_LEN 12u
 #define VIRTIO_NET_RX_BUF_SIZE 2048u /* hdr + up to 1514-byte Ethernet frame */
 #define VIRTIO_NET_RX_BUF_COUNT 64u  /* pre-posted receive buffers */
 #define VIRTIO_NET_TX_BUF_SIZE 2048u
@@ -82,24 +68,13 @@
  * device's INTX_DISABLE. */
 #define IPC_IRQ_EVENT_TYPE 0xFF00
 
-/* Device-status bits, written to VIRTIO_PCI_DEVICE_STATUS in ascending order as
- * bring-up progresses: ACK ("I see the device"), DRIVER ("I can drive it"),
- * then DRIVER_OK once the queues are live. The bits ACCUMULATE -- each write
- * ORs the next one in, and writing DRIVER_OK alone would retract the earlier
- * acknowledgements. FAILED is the driver telling the device it gave up; a
- * status of 0 is a device reset. */
-#define VIRTIO_STATUS_ACK 1u
-#define VIRTIO_STATUS_DRIVER 2u
-#define VIRTIO_STATUS_DRIVER_OK 4u
-#define VIRTIO_STATUS_FAILED 128u
-
 /* virtio-net feature bits this driver understands. F_MAC means the device
  * supplies a MAC address in its config region (without it the driver would have
  * to invent one); F_STATUS means the config region carries a live link-status
  * word. VIRTIO_NET_FEATURES_DRIVER is the mask offered back to the device, so a
  * bit absent here is declined even when the device advertises it -- notably
- * MRG_RXBUF, whose absence is what fixes the RX header at
- * VIRTIO_NET_HDR_LEN bytes. */
+ * MRG_RXBUF, whose absence means every received frame fits one buffer.
+ * VIRTIO_F_VERSION_1 is accepted by the transport itself. */
 #define VIRTIO_NET_F_MAC (1u << 5)
 #define VIRTIO_NET_F_STATUS (1u << 16)
 #define VIRTIO_NET_FEATURES_DRIVER (VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS)
@@ -118,15 +93,15 @@ typedef struct {
     uint8_t slot;
     uint8_t function;
     uint8_t irq;
-    uint16_t io_base;
     uint16_t vendor_id;
     uint16_t device_id;
-    uint32_t device_features;
-    uint32_t driver_features;
+    uint32_t device_features; /* low 32 feature bits the device offered */
+    uint32_t driver_features; /* low 32 feature bits accepted */
     uint16_t status_word;
     uint8_t mac[6];
-    uint8_t msix_enabled; /* MSI-X bound: config registers shift, INTx is off */
+    uint8_t msix_enabled;                           /* MSI-X bound: INTx is off */
     uint32_t msix_vectors[VIRTIO_NET_MSIX_ENTRIES]; /* kernel vectors, for release */
+    virtio_modern_t vm; /* the transport: where the device's structures are */
 } virtio_net_device_t;
 
 static int32_t g_endpoint = -1;
@@ -140,6 +115,7 @@ typedef struct {
     vring_t vq;
     uint16_t queue_idx;
     uint8_t ready;
+    uint32_t notify; /* the queue's doorbell offset in region 0 */
 } virtio_net_queue_t;
 
 static virtio_net_queue_t g_rxq; /* queue 0: device -> driver */
@@ -191,30 +167,6 @@ typedef struct {
 static net_rx_sub_t g_rx_subs[VIRTIO_NET_RX_SUBS_MAX];
 static uint8_t g_rx_subs_initialised;
 static int32_t g_link_sub_endpoint = -1;
-
-static uint16_t io_read16(uint16_t port) {
-    uint16_t value = 0xFFFFu; /* an absent device reads back all-ones */
-    (void)wasmos_io_in16((int32_t)port, &value);
-    return value;
-}
-
-static uint32_t io_read32(uint16_t port) {
-    uint32_t value = 0xFFFFFFFFu;
-    (void)wasmos_io_in32((int32_t)port, &value);
-    return value;
-}
-
-static void io_write8(uint16_t port, uint8_t value) {
-    (void)wasmos_io_out8((int32_t)port, (int32_t)value);
-}
-
-static void io_write16(uint16_t port, uint16_t value) {
-    (void)wasmos_io_out16((int32_t)port, (int32_t)value);
-}
-
-static void io_write32(uint16_t port, uint32_t value) {
-    (void)wasmos_io_out32((int32_t)port, (int32_t)value);
-}
 
 static int is_virtio_net_device(uint16_t vendor_id, uint16_t device_id) {
     if (vendor_id != VIRTIO_PCI_VENDOR_ID) {
@@ -282,10 +234,9 @@ static int probe_virtio_net_from_startup_args(void) {
     const char* pci = 0;
     const char* vendor = 0;
     const char* device = 0;
-    const char* io = 0;
     const char* irq = 0;
     uint32_t bus = 0, slot = 0, function = 0;
-    uint32_t vendor_id = 0, device_id = 0, io_base = 0, irq_line = 0;
+    uint32_t vendor_id = 0, device_id = 0, irq_line = 0;
 
     if (wasmos_startup_args(args, sizeof(args)) == 0u) {
         return -1;
@@ -293,76 +244,62 @@ static int probe_virtio_net_from_startup_args(void) {
     pci = find_token_value(args, "pci=");
     vendor = find_token_value(args, "vendor=");
     device = find_token_value(args, "device=");
-    io = find_token_value(args, "io=");
     irq = find_token_value(args, "irq=");
-    if (!pci || !vendor || !device || !io || !irq) {
+    if (!pci || !vendor || !device || !irq) {
         return -1;
     }
     if (parse_hex_n(pci, 2u, &bus) != 0 || pci[2] != ':' || parse_hex_n(pci + 3, 2u, &slot) != 0 ||
         pci[5] != '.' || parse_hex_n(pci + 6, 2u, &function) != 0 ||
         parse_hex_n(vendor, 4u, &vendor_id) != 0 || parse_hex_n(device, 4u, &device_id) != 0 ||
-        parse_hex_n(io, 4u, &io_base) != 0 || parse_hex_n(irq, 2u, &irq_line) != 0) {
+        parse_hex_n(irq, 2u, &irq_line) != 0) {
         return -1;
     }
-    if (!is_virtio_net_device((uint16_t)vendor_id, (uint16_t)device_id) || io_base == 0u) {
+    if (!is_virtio_net_device((uint16_t)vendor_id, (uint16_t)device_id)) {
         return -1;
     }
     g_dev.present = 1u;
     g_dev.bus = (uint8_t)bus;
     g_dev.slot = (uint8_t)slot;
     g_dev.function = (uint8_t)function;
-    g_dev.io_base = (uint16_t)io_base;
     g_dev.irq = (uint8_t)irq_line;
     g_dev.vendor_id = (uint16_t)vendor_id;
     g_dev.device_id = (uint16_t)device_id;
     return 0;
 }
 
-/* Base of the device-specific config region. Enabling MSI-X shifts it by 4 to
- * make room for the config/queue vector registers, so every access to MAC or
- * link status has to go through here rather than a fixed offset. */
-static uint16_t cfg_base(void) {
-    return g_dev.msix_enabled ? VIRTIO_NET_CFG_BASE_MSIX : VIRTIO_NET_CFG_BASE_INTX;
-}
-
-/* The one port read whose failure would otherwise become data: storing the
- * 0xFF of a refused read gives the interface a plausible-looking all-ones MAC.
- * The refusal is reported and bring-up stops instead. */
+/* The MAC address, read as one consistent snapshot of the device-specific
+ * config (a refused read must not become a plausible-looking MAC). Returns 0,
+ * or -1 when the device config cannot be read. */
 static int read_mac(void) {
-    uint16_t mac_port = (uint16_t)(g_dev.io_base + cfg_base() + VIRTIO_NET_CFG_MAC_OFF);
-    for (uint32_t i = 0; i < 6u; ++i) {
-        uint8_t byte = 0u;
-        int32_t rc = wasmos_io_in8((int32_t)(mac_port + i), &byte);
-        if (rc != 0) {
-            return rc;
-        }
-        g_dev.mac[i] = byte;
-    }
-    return 0;
+    return virtio_modern_device_read(&g_dev.vm, VIRTIO_NET_CFG_MAC_OFF, g_dev.mac, 6u) == 0 ? 0
+                                                                                            : -1;
 }
 
 static uint16_t read_status_word(void) {
-    return io_read16((uint16_t)(g_dev.io_base + cfg_base() + VIRTIO_NET_CFG_STATUS_OFF));
+    return virtio_modern_device_read16(&g_dev.vm, VIRTIO_NET_CFG_STATUS_OFF);
 }
 
 /* vring doorbell: tell the device which queue has new available buffers. */
 static void virtio_net_notify(void* user) {
     virtio_net_queue_t* q = (virtio_net_queue_t*)user;
-    io_write16(g_dev.io_base + VIRTIO_PCI_QUEUE_NOTIFY, q->queue_idx);
+    virtio_modern_notify(&g_dev.vm, q->notify, q->queue_idx);
 }
 
-/* Configure one virtqueue: select it, read its size, allocate a pinned,
- * contiguous DMA region for the ring, lay the vring out over it, and program
- * the device's QUEUE_PFN with the ring's physical page-frame number. Returns
- * the queue size on success, or -1 if the queue is absent or setup fails. */
+/* Configure one virtqueue: read its size, allocate a pinned, contiguous DMA
+ * region for the ring, lay the vring out over it, and hand it to the device
+ * bound to its own MSI-X entry (so a completion raises a vector that names the
+ * queue) when MSI-X is live. Returns the queue size on success, or -1 if the
+ * queue is absent or setup fails. */
 static int setup_queue(virtio_net_queue_t* q, uint16_t idx) {
-    io_write16(g_dev.io_base + VIRTIO_PCI_QUEUE_SELECT, idx);
-    uint16_t qsize = io_read16(g_dev.io_base + VIRTIO_PCI_QUEUE_SIZE);
-    if (qsize == 0u || qsize > VIRTIO_NET_MAX_QUEUE) {
-        return -1; /* queue absent or larger than we support (desc-map bound) */
+    uint16_t qsize = virtio_modern_queue_size(&g_dev.vm, idx);
+    if (qsize == 0u) {
+        return -1; /* queue absent */
+    }
+    if (qsize > VIRTIO_NET_MAX_QUEUE) {
+        qsize = VIRTIO_NET_MAX_QUEUE; /* a modern device accepts a smaller size */
     }
 
-    uint64_t ring_bytes = vring_size(qsize, VIRTIO_PCI_VRING_ALIGN);
+    uint64_t ring_bytes = vring_size(qsize, VIRTIO_MODERN_VRING_ALIGN);
     int32_t pages = (int32_t)((ring_bytes + 0xFFFu) / 0x1000u);
 
     uint64_t ring_phys = 0;
@@ -373,28 +310,21 @@ static int setup_queue(virtio_net_queue_t* q, uint16_t idx) {
     /* In wasm32 a pointer is the linear-memory byte offset region_alloc returned. */
     uint8_t* ring = ptr_cast(uint8_t, (uint32_t)off);
     if (vring_layout(
-            &q->vq, ring, ring_phys, (uint64_t)pages * 0x1000u, qsize, VIRTIO_PCI_VRING_ALIGN) !=
+            &q->vq, ring, ring_phys, (uint64_t)pages * 0x1000u, qsize, VIRTIO_MODERN_VRING_ALIGN) !=
         0) {
         return -1;
     }
     q->queue_idx = idx;
     vring_set_notify(&q->vq, virtio_net_notify, q);
 
-    /* Legacy transport: hand the device the ring's physical PFN. */
-    io_write32(g_dev.io_base + VIRTIO_PCI_QUEUE_PFN, (uint32_t)(ring_phys >> 12));
-
-    /* Bind this queue to its own MSI-X entry, so a completion on it raises a
-     * vector that names the queue. The register only exists while MSI-X is
-     * enabled, and QUEUE_SELECT above still points at this queue. Virtio signals
-     * refusal through the readback, not a status bit. */
+    uint16_t entry = VIRTIO_MSI_NO_VECTOR;
     if (g_dev.msix_enabled) {
-        uint16_t entry = (idx == (uint16_t)VIRTIO_NET_RX_QUEUE) ? VIRTIO_NET_MSIX_ENTRY_RX
-                                                                : VIRTIO_NET_MSIX_ENTRY_TX;
-        io_write16(g_dev.io_base + VIRTIO_PCI_MSIX_QUEUE_VECTOR, entry);
-        if (io_read16(g_dev.io_base + VIRTIO_PCI_MSIX_QUEUE_VECTOR) == VIRTIO_MSIX_NO_VECTOR) {
-            (void)printf("[virtio-net] msix queue vector refused q=%u\n", (unsigned)idx);
-            return -1;
-        }
+        entry = (idx == (uint16_t)VIRTIO_NET_RX_QUEUE) ? VIRTIO_NET_MSIX_ENTRY_RX
+                                                       : VIRTIO_NET_MSIX_ENTRY_TX;
+    }
+    if (virtio_modern_queue_enable(&g_dev.vm, idx, &q->vq, entry, &q->notify) != 0) {
+        (void)printf("[virtio-net] msix queue vector refused q=%u\n", (unsigned)idx);
+        return -1;
     }
     q->ready = 1u;
     return (int)qsize;
@@ -754,8 +684,7 @@ static void net_service_rx(void) {
 static void net_handle_irq(void) {
     /* Ack the device: reading ISR clears its interrupt-asserted bit. The value
      * itself is not wanted -- performing the read is the ack. */
-    uint8_t isr = 0u;
-    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS), &isr);
+    (void)virtio_modern_isr(&g_dev.vm);
     net_service_rx();
     /* Unmask the line now the device register has been read. */
     (void)wasmos_irq_ack((int32_t)g_dev.irq);
@@ -787,9 +716,13 @@ static void net_handle_msi(int32_t entry) {
  * telling the device which vector serves which queue is a virtio register write
  * in this driver's own I/O window, so that half is back here.
  *
- * Must run after feature negotiation and BEFORE any device-config or queue
- * access: enabling MSI-X moves the config region (cfg_base) and adds the queue
- * vector register the queue setup writes. Returns 0 when MSI-X is live. */
+ * Must run after feature negotiation and before queue setup, which binds each
+ * queue to its entry. Returns 0 when MSI-X is live.
+ *
+ * TODO: the pci-bus requests here are synchronous wasmos_ipc_call round trips,
+ * which AGENTS.md no longer allows for new code; they predate that rule and move
+ * to a future together with the driver's bring-up (docs/TASKS.md, synchronous
+ * call removal). */
 static int net_setup_msix(void) {
     if (g_pci_endpoint < 0) {
         return -1;
@@ -850,37 +783,42 @@ static int net_setup_msix(void) {
     g_dev.msix_enabled = 1u;
     /* Tell the device which entry serves config changes. Virtio requires the
      * readback: the device reports refusal by returning NO_VECTOR. */
-    io_write16(g_dev.io_base + VIRTIO_PCI_MSIX_CONFIG_VECTOR, VIRTIO_NET_MSIX_ENTRY_CONFIG);
-    if (io_read16(g_dev.io_base + VIRTIO_PCI_MSIX_CONFIG_VECTOR) == VIRTIO_MSIX_NO_VECTOR) {
+    if (virtio_modern_set_config_vector(&g_dev.vm, VIRTIO_NET_MSIX_ENTRY_CONFIG) != 0) {
         (void)printf("[virtio-net] msix config vector refused\n");
     }
     return 0;
 }
 
+/* Brings the device up over the modern transport: locate its structures,
+ * negotiate F_MAC/F_STATUS (plus VERSION_1), bind MSI-X, read MAC and link
+ * status, configure both queues, then DRIVER_OK and arm the buffers. */
 static int initialize_device(void) {
-    uint8_t status = 0u;
-    if (!g_dev.present || g_dev.io_base == 0u) {
+    uint8_t status = VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK;
+    uint64_t offered = 0;
+    uint64_t accepted = 0;
+    uint32_t bdf =
+        ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
+    if (!g_dev.present) {
         return -1;
     }
-
-    io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, 0u);
-    status = VIRTIO_STATUS_ACK;
-    io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, status);
-    status |= VIRTIO_STATUS_DRIVER;
-    io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, status);
-
-    g_dev.device_features = io_read32(g_dev.io_base + VIRTIO_PCI_DEVICE_FEATURES);
-    g_dev.driver_features = g_dev.device_features & VIRTIO_NET_FEATURES_DRIVER;
-    io_write32(g_dev.io_base + VIRTIO_PCI_DRIVER_FEATURES, g_dev.driver_features);
+    if (virtio_modern_probe(&g_dev.vm, bdf, VIRTIO_NET_BAR, VIRTIO_NET_REGION) != 0) {
+        (void)printf("[virtio-net] no virtio-modern structures in BAR %u\n",
+                     (unsigned)VIRTIO_NET_BAR);
+        return -1;
+    }
+    if (virtio_modern_negotiate(&g_dev.vm, VIRTIO_NET_FEATURES_DRIVER, &offered, &accepted) != 0) {
+        (void)printf("[virtio-net] feature negotiation failed\n");
+        return -1;
+    }
+    g_dev.device_features = (uint32_t)offered;
+    g_dev.driver_features = (uint32_t)accepted;
 
     if ((g_dev.driver_features & VIRTIO_NET_F_MAC) == 0u) {
-        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS,
-                  (uint8_t)(status | VIRTIO_STATUS_FAILED));
+        virtio_modern_set_status(&g_dev.vm, (uint8_t)(status | VIRTIO_STATUS_FAILED));
         return -1;
     }
 
-    /* Before the first config or queue register access: enabling MSI-X changes
-     * where both of those live. */
+    /* Before queue setup, which binds each queue to its MSI-X entry. */
     if (net_setup_msix() == 0) {
         (void)printf("[virtio-net] msix enabled vectors rx=%u tx=%u cfg=%u\n",
                      (unsigned)g_dev.msix_vectors[VIRTIO_NET_MSIX_ENTRY_RX],
@@ -894,8 +832,7 @@ static int initialize_device(void) {
     int mac_rc = read_mac();
     if (mac_rc != 0) {
         (void)printf("[virtio-net] mac read refused rc=%d\n", mac_rc);
-        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS,
-                  (uint8_t)(status | VIRTIO_STATUS_FAILED));
+        virtio_modern_set_status(&g_dev.vm, (uint8_t)(status | VIRTIO_STATUS_FAILED));
         return mac_rc;
     }
     if ((g_dev.driver_features & VIRTIO_NET_F_STATUS) != 0u) {
@@ -910,13 +847,12 @@ static int initialize_device(void) {
     int rx_size = setup_queue(&g_rxq, (uint16_t)VIRTIO_NET_RX_QUEUE);
     int tx_size = setup_queue(&g_txq, (uint16_t)VIRTIO_NET_TX_QUEUE);
     if (rx_size < 0 || tx_size < 0) {
-        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS,
-                  (uint8_t)(status | VIRTIO_STATUS_FAILED));
+        virtio_modern_set_status(&g_dev.vm, (uint8_t)(status | VIRTIO_STATUS_FAILED));
         return -1;
     }
 
     status |= VIRTIO_STATUS_DRIVER_OK;
-    io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, status);
+    virtio_modern_set_status(&g_dev.vm, status);
     g_dev.ready = 1u;
     (void)printf("[virtio-net] vq ready rx=%d tx=%d rx_phys=0x%08X tx_phys=0x%08X\n",
                  rx_size,
@@ -1080,9 +1016,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         (void)printf("[virtio-net] pci service unavailable; msi-x disabled\n");
     }
     if (initialize_device() != 0) {
-        (void)printf("[virtio-net] init failed io=0x%04X dev=0x%04X\n",
-                     (unsigned)g_dev.io_base,
-                     (unsigned)g_dev.device_id);
+        (void)printf("[virtio-net] init failed dev=0x%04X\n", (unsigned)g_dev.device_id);
         return WASMOS_ERR_DRIVER_DEVICE_INIT;
     }
     (void)printf("[virtio-net] probe ok bus=%u slot=%u dev=0x%04X irq=%u\n",
@@ -1090,14 +1024,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                  (unsigned)g_dev.slot,
                  (unsigned)g_dev.device_id,
                  (unsigned)g_dev.irq);
-    (void)printf("[virtio-net] mac %02X:%02X:%02X:%02X:%02X:%02X io=0x%04X\n",
+    (void)printf("[virtio-net] mac %02X:%02X:%02X:%02X:%02X:%02X modern\n",
                  (unsigned)g_dev.mac[0],
                  (unsigned)g_dev.mac[1],
                  (unsigned)g_dev.mac[2],
                  (unsigned)g_dev.mac[3],
                  (unsigned)g_dev.mac[4],
-                 (unsigned)g_dev.mac[5],
-                 (unsigned)g_dev.io_base);
+                 (unsigned)g_dev.mac[5]);
     (void)printf("[virtio-net] features dev=0x%08X drv=0x%08X\n",
                  (unsigned)g_dev.device_features,
                  (unsigned)g_dev.driver_features);

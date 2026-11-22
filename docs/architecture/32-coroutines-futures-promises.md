@@ -2750,7 +2750,7 @@ distinguish a suspended host call from a slow one. Suspension is therefore a
 context switch performed in **our** glue at that boundary.
 
 - **WARP.** The guest runs as ring-3 native code; a host call traps via
-  `int 0x80` into `x86_syscall_handler`, which already mirrors the full ring-3
+  `int 0x80` into `syscall_dispatch`, which already mirrors the full ring-3
   frame into `thread_t::ctx` for resumption. Suspend/resume is the kernel thread
   context switch at that boundary — already working today (`warp_thread_yield` is
   `process_yield()` in a host call; blocking IPC resumes the guest identically).

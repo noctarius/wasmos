@@ -241,6 +241,44 @@ linked feature documents for rationale and rollout plans.
   outright. `test_hostcall_dma` runs 28 scenarios through both shims and asserts
   each value AND the two against each other, so a future check added to one side
   only fails the parity assertion.
+- A driver's register windows are kind-tagged (`wasmos_region_grant_t`): an
+  I/O-port window or a memory-mapped one, both addressed as `(region, offset)`
+  through the same `io_region_in*/out*` host calls, which resolve and perform
+  the access once in `io_region.c` for both runtimes. A memory-mapped window
+  is mapped uncached into the kernel MMIO slot at spawn (`device_window_map`);
+  the driver holds no mapping. Device-manager resolves a `"bar"` region to the
+  BAR's own kind, and a region it cannot supply refuses that device's spawn
+  instead of shifting every later region down one index. No in-tree driver
+  declares a memory BAR yet; the virtio drivers move to virtio-modern (memory
+  BARs) next.
+- Device-manager spawns every PCI and ACPI rule driver by path with
+  `PROC_IPC_SPAWN_WATCHED`, which carries its startup args and all of its
+  windows together; a driver with declared windows no longer has to be spawned
+  by boot-module index without args. The spawn is not waited on: the child's
+  `CHILD_READY` retires the rule. A driver that stays alive without becoming
+  ready within 5 s is given up rather than spawned again (the synchronous form
+  answered a timeout with an error while the child kept running, and the retry
+  started a second driver for the same device).
+- `virtio-rng` runs on the virtio 1.x PCI transport (`wasmos/virtio_modern.h`):
+  its registers are a memory-mapped BAR 4 window and it uses no I/O port. A
+  driver may read the config space of the function its spawn profile names,
+  which is how it finds those registers. device-manager describes a driver on
+  `/boot` by path (`PROC_IPC_MODULE_META_FILE`), so declared windows work for
+  drivers outside the boot image, and a DMA grant carries the budget the
+  driver's manifest declares instead of a fixed page.
+- virtio-net and virtio-blk use the same transport. virtio-blk (Zig) reaches
+  the C transport through `virtio_modern_shim.c`, as it reaches the virtqueue
+  core through `vring_shim.c`, so the two languages share one implementation.
+  Under VERSION_1 the virtio-net header is 12 bytes.
+- The kernel-log port is a virtio console by default: virtio-serial follows
+  the kmsg ring (the logger's `logger_stage.c`, tagged `[virtio-serial]`),
+  replays it from boot and writes it to port 0, which QEMU connects to a file
+  (`syslog.log` for the run targets, a per-session file in the harness). The
+  shipped `kernel.cmdline` is empty; `log.serial=com2` remains the x86_64
+  alternative, written by the kernel itself, and is what the kernel self-test
+  runners and the tests reading shutdown or panic output select
+  (`QemuConfig.klog_port = "com2"`). The virtio port carries nothing after its
+  driver is gone. The old register-access protocol is unserved.
 - Guest-visible capability behaviour must not depend on the engine. Where a
   difference is unavoidable, the scenario table carries an explicit `divergent`
   flag that asserts the two still differ, so converging them forces the row to

@@ -128,7 +128,7 @@ SUBSYSTEM=="acpi",  ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{io}=="0x3F
 SUBSYSTEM=="acpi",  ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="acpi",  ATTR{class}=="0x09", ATTR{subclass}=="0x02", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi",  ATTR{class}=="0x08", ATTR{subclass}=="0x03", RUN+="system/drivers/rtc.wap"
-SUBSYSTEM=="pci",   ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_serial.wap"
+SUBSYSTEM=="pci",   ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"
 ```
 
 Numeric attributes are parsed as hexadecimal (`parse_u8_hex`, `parse_u16_hex`)
@@ -172,9 +172,21 @@ requests for the rest of the boot.
 It stays resident because it is the only process that may write configuration
 space (the `pci.config` capability; the kernel serialises the 0xCF8/0xCFC port
 pair behind `pci_config_read` / `pci_config_write`): device-manager grants each
-driver an I/O-port range covering that device's own BAR, which excludes config
-space. Widening that grant would give every driver read/write access to every
-device on the bus. An MSI binding whose owner has died belongs to no one: the
+driver register windows covering that device's own BARs -- the `[[regions]]`
+the driver declared, each `"bar"` region resolved to an I/O-port or a
+memory-mapped window by the BAR's kind (`dm_resolve_declared_regions`) -- which
+excludes config space. Widening that grant would give every driver read/write access to every
+device on the bus.
+
+device-manager learns what a rule's driver declares -- capability bits,
+`[[regions]]`, DMA budget -- from the process manager: by boot-module index
+(`PROC_IPC_MODULE_META_DESC`) for a driver in the boot image, and by path
+(`PROC_IPC_MODULE_META_FILE`, read through fs-manager, answered deferred) for a
+driver on a filesystem. A PCI rule is not armed until that answer is in, nor
+while a freshly loaded rule set's metadata is still stale: armed earlier, its
+driver would be spawned without the windows it declared. A driver that cannot
+be described is spawned without declared windows, with the legacy BAR0-derived
+I/O window. An MSI binding whose owner has died belongs to no one: the
 kernel disabled the function's MSI and MSI-X at the owner's reap, and the next
 driver to bind the function takes the binding over.
 

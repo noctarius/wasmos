@@ -11,6 +11,7 @@
  */
 #include "kernel_selftest_runtime.h"
 
+#include "arch/arch_cpu.h"
 #include "ipc.h"
 #include "klog.h"
 #include "memory.h"
@@ -316,7 +317,7 @@ static process_run_result_t preempt_busy_entry(process_t* process, void* arg) {
             process_set_exit_status(process, 0);
             return PROCESS_RUN_EXITED;
         }
-        __asm__ volatile("pause");
+        arch_cpu_relax();
     }
 }
 

@@ -1,12 +1,12 @@
 #include "boot.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "klog.h"
 #include "block_buffer.h"
 #include "hostcall_value.h"
 #include "kenv.h"
 #include "hostcall_buffer.h"
 #include "ipc.h"
-#include "io.h"
+#include "arch/arch_io.h"
 #include "physmem.h"
 #include "process.h"
 #include "process_manager.h"
@@ -25,6 +25,7 @@
 #include "mmio.h"
 #include "policy.h"
 #include "capability.h"
+#include "io_region.h"
 #include "system_control.h"
 #include "thread.h"
 #include "wasm_driver.h"
@@ -1780,83 +1781,86 @@ m3ApiRawFunction(wasmos_env_unset) {
     m3ApiReturn(kenv_unset(local_name));
 }
 
-/* Region-addressed I/O. The driver supplies (region, offset), never an absolute
- * port, so it cannot express an access outside the window its spawn profile
- * granted -- the kernel owns the base. `region` indexes those windows in
- * declaration order. Failures propagate the specific WASMOS_ERR_IO_* reason
- * rather than collapsing to one value: "no such region" and "offset past the
- * end" are different bugs. */
-static int io_region_port(uint32_t region, uint32_t offset, uint32_t width, uint16_t* out_port) {
-    uint32_t context_id = 0;
-    if (current_process_context(&context_id) != 0) {
-        return WASMOS_ERR_IO_NOT_AUTHORIZED;
-    }
-    return capability_io_region_port(context_id, region, offset, width, out_port);
+/* Region-addressed device register access. The driver supplies (region,
+ * offset), never an absolute port or address, so it cannot express an access
+ * outside the window its spawn profile granted -- the kernel owns the base.
+ * `region` indexes those windows in declaration order; io_region_read/write
+ * (io_region.h) resolve it and perform the port or memory-mapped access.
+ * Failures propagate the specific WASMOS_ERR_IO_* reason rather than
+ * collapsing to one value: "no such region" and "offset past the end" are
+ * different bugs. */
+static int io_region_context(uint32_t* out_context_id) {
+    return current_process_context(out_context_id) != 0 ? WASMOS_ERR_IO_NOT_AUTHORIZED : 0;
 }
 
-/* Reads return the datum through linear memory, not as the result: a 32-bit port
- * read can legitimately be 0xFFFFFFFF and must stay distinguishable from a
- * failure code.  `out` is a wasm32 linear-memory offset the kernel writes through the
- * interpreter's own pointer, and a range outside linear memory TRAPS the module via
- * m3ApiCheckMem.  The return is 0 on success, WASMOS_ERR_IO_BAD_REGION for a negative
- * region/offset, otherwise the specific WASMOS_ERR_IO_* code io_region_port produced; `out` is
- * left untouched on every failure. */
-#define WASMOS_IO_REGION_READ(width, width_expr)                                                   \
+/* Reads return the datum through linear memory, not as the result: a 32-bit
+ * register read can legitimately be 0xFFFFFFFF and must stay distinguishable
+ * from a failure code.  `out` is a wasm32 linear-memory offset the kernel writes
+ * through the interpreter's own pointer, and a range outside linear memory TRAPS
+ * the module via m3ApiCheckMem.  The return is 0 on success,
+ * WASMOS_ERR_IO_BAD_REGION for a negative region/offset, otherwise the specific
+ * WASMOS_ERR_IO_* code io_region_read produced; `out` is left untouched on every
+ * failure. */
+#define WASMOS_IO_REGION_READ(width)                                                               \
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
         m3ApiGetArgMem(uint32_t*, out) m3ApiCheckMem(out, sizeof(uint32_t));                       \
-    uint16_t port = 0;                                                                             \
+    uint32_t context_id = 0;                                                                       \
+    uint32_t value = 0;                                                                            \
     int rc = 0;                                                                                    \
     if (region < 0 || offset < 0) {                                                                \
         m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
     }                                                                                              \
-    rc = io_region_port((uint32_t)region, (uint32_t)offset, (width), &port);                       \
+    rc = io_region_context(&context_id);                                                           \
+    if (rc == 0) {                                                                                 \
+        rc = io_region_read(context_id, (uint32_t)region, (uint32_t)offset, (width), &value);      \
+    }                                                                                              \
     if (rc != 0) {                                                                                 \
         m3ApiReturn(rc);                                                                           \
     }                                                                                              \
-    *out = (width_expr);                                                                           \
+    *out = value;                                                                                  \
     m3ApiReturn(0)
 
 m3ApiRawFunction(wasmos_io_region_in8) {
-    WASMOS_IO_REGION_READ(1u, (uint32_t)inb(port));
+    WASMOS_IO_REGION_READ(1u);
 }
 
 m3ApiRawFunction(wasmos_io_region_in16) {
-    WASMOS_IO_REGION_READ(2u, (uint32_t)inw(port));
+    WASMOS_IO_REGION_READ(2u);
 }
 
 m3ApiRawFunction(wasmos_io_region_in32) {
-    WASMOS_IO_REGION_READ(4u, (uint32_t)inl(port));
+    WASMOS_IO_REGION_READ(4u);
 }
 
 /* Writes take the datum as an argument, so they need no out-parameter; the return is purely
  * the outcome: 0 on success, WASMOS_ERR_IO_BAD_REGION for a negative region/offset, otherwise
- * the specific WASMOS_ERR_IO_* code io_region_port produced.  A value wider than the access
+ * the specific WASMOS_ERR_IO_* code io_region_write produced.  A value wider than the access
  * is masked, not refused. */
-#define WASMOS_IO_REGION_WRITE(width, write_stmt)                                                  \
+#define WASMOS_IO_REGION_WRITE(width)                                                              \
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
         m3ApiGetArg(int32_t, value);                                                               \
-    uint16_t port = 0;                                                                             \
+    uint32_t context_id = 0;                                                                       \
     int rc = 0;                                                                                    \
     if (region < 0 || offset < 0) {                                                                \
         m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
     }                                                                                              \
-    rc = io_region_port((uint32_t)region, (uint32_t)offset, (width), &port);                       \
-    if (rc != 0) {                                                                                 \
-        m3ApiReturn(rc);                                                                           \
+    rc = io_region_context(&context_id);                                                           \
+    if (rc == 0) {                                                                                 \
+        rc = io_region_write(                                                                      \
+            context_id, (uint32_t)region, (uint32_t)offset, (width), (uint32_t)value);             \
     }                                                                                              \
-    write_stmt;                                                                                    \
-    m3ApiReturn(0)
+    m3ApiReturn(rc)
 
 m3ApiRawFunction(wasmos_io_region_out8) {
-    WASMOS_IO_REGION_WRITE(1u, outb(port, (uint8_t)((uint32_t)value & 0xFFu)));
+    WASMOS_IO_REGION_WRITE(1u);
 }
 
 m3ApiRawFunction(wasmos_io_region_out16) {
-    WASMOS_IO_REGION_WRITE(2u, outw(port, (uint16_t)((uint32_t)value & 0xFFFFu)));
+    WASMOS_IO_REGION_WRITE(2u);
 }
 
 m3ApiRawFunction(wasmos_io_region_out32) {
-    WASMOS_IO_REGION_WRITE(4u, outl(port, (uint32_t)value));
+    WASMOS_IO_REGION_WRITE(4u);
 }
 
 /* The whole port-read family reports its value through `out` and its outcome
@@ -1869,7 +1873,8 @@ m3ApiRawFunction(wasmos_io_region_out32) {
  * capability for that exact port, which is an allowlist, so a denial is an ordinary
  * probe-and-skip outcome rather than a fault.  `out` is a wasm32 linear-memory offset written
  * through the interpreter's own pointer, and a range outside linear memory TRAPS the module
- * via m3ApiCheckMem.  Returns 0, WASMOS_ERR_IO_BAD_PORT, or WASMOS_ERR_IO_NOT_AUTHORIZED,
+ * via m3ApiCheckMem.  Returns 0, WASMOS_ERR_IO_BAD_PORT, WASMOS_ERR_IO_NOT_AUTHORIZED, or
+ * WASMOS_ERR_IO_NO_PORT_SPACE (an architecture without ports, arch/arch_io.h),
  * leaving `out` untouched on failure. */
 m3ApiRawFunction(wasmos_io_in8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArgMem(uint8_t*, out)
@@ -1882,7 +1887,9 @@ m3ApiRawFunction(wasmos_io_in8) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    *out = inb((uint16_t)port);
+    if (arch_port_in8((uint16_t)port, out) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -1897,7 +1904,9 @@ m3ApiRawFunction(wasmos_io_in16) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    *out = inw((uint16_t)port);
+    if (arch_port_in16((uint16_t)port, out) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -1912,12 +1921,14 @@ m3ApiRawFunction(wasmos_io_in32) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    *out = (uint32_t)inl((uint16_t)port);
+    if (arch_port_in32((uint16_t)port, out) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
-/* hostcalls.yaml `pci_config_read` / `pci_config_write`: config space through the kernel's
- * serialised mechanism-1 access, for a holder of pci.config.  `out` is written through the
+/* hostcalls.yaml `pci_config_write` and pci-bus's other config-space calls: the kernel's
+ * serialised access, for a holder of pci.config.  `out` is written through the
  * interpreter's own pointer; a range outside linear memory TRAPS the module via
  * m3ApiCheckMem.  WASMOS_INVAL for a bdf above 0xFFFF or a register above 0xFC or not
  * dword-aligned. */
@@ -1932,15 +1943,20 @@ static int32_t pci_config_guest_check(int32_t bdf, int32_t reg) {
     return 0;
 }
 
+/* A read is decided by pci_config_guest_read: pci.config reads any function, a
+ * driver without it only the function its spawn profile made it own. */
 m3ApiRawFunction(wasmos_pci_config_read) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, bdf) m3ApiGetArg(int32_t, reg)
         m3ApiGetArgMem(uint32_t*, out) m3ApiCheckMem(out, sizeof(uint32_t));
-    int32_t rc = pci_config_guest_check(bdf, reg);
-    if (rc != 0) {
-        m3ApiReturn(rc);
+    uint32_t context_id = 0;
+    if (bdf < 0 || reg < 0) {
+        m3ApiReturn(WASMOS_INVAL);
     }
-    *out = pci_config_read32((uint16_t)bdf, (uint8_t)reg);
-    m3ApiReturn(0);
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
+    }
+    m3ApiReturn(pci_config_guest_read(
+        context_id, capability_has(context_id, CAP_PCI_CONFIG), (uint32_t)bdf, (uint32_t)reg, out));
 }
 
 /* The context that owns `endpoint`, the driver a pci-bus request is made for;
@@ -1997,8 +2013,8 @@ m3ApiRawFunction(wasmos_pci_config_write) {
 /* Write to an absolute x86 I/O port.  `port` must be 0..0xFFFF and the caller must hold the
  * io.port capability for that exact port (allowlist, so a probe-and-skip denial is normal).
  * out8/out16 also reject a `value` that does not fit the width; out32 does not range-check
- * `value` because all 32 bits are meaningful.  Returns 0, WASMOS_ERR_IO_BAD_PORT, or
- * WASMOS_ERR_IO_NOT_AUTHORIZED. */
+ * `value` because all 32 bits are meaningful.  Returns 0, WASMOS_ERR_IO_BAD_PORT,
+ * WASMOS_ERR_IO_NOT_AUTHORIZED, or WASMOS_ERR_IO_NO_PORT_SPACE. */
 m3ApiRawFunction(wasmos_io_out8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArg(int32_t, value)
         uint32_t context_id = 0;
@@ -2009,7 +2025,9 @@ m3ApiRawFunction(wasmos_io_out8) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    outb((uint16_t)port, (uint8_t)value);
+    if (arch_port_out8((uint16_t)port, (uint8_t)value) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -2023,7 +2041,9 @@ m3ApiRawFunction(wasmos_io_out16) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    outw((uint16_t)port, (uint16_t)value);
+    if (arch_port_out16((uint16_t)port, (uint16_t)value) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -2037,18 +2057,23 @@ m3ApiRawFunction(wasmos_io_out32) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    outl((uint16_t)port, (uint32_t)value);
+    if (arch_port_out32((uint16_t)port, (uint32_t)value) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
 /* Issue the conventional short I/O delay (a dummy write to port 0x80).  Gated on the io.port
- * capability for port 0x80 specifically.  Returns 0 or WASMOS_ERR_IO_NOT_AUTHORIZED. */
+ * capability for port 0x80 specifically.  Returns 0, WASMOS_ERR_IO_NOT_AUTHORIZED, or
+ * WASMOS_ERR_IO_NO_PORT_SPACE. */
 m3ApiRawFunction(wasmos_io_wait) {
     m3ApiReturnType(int32_t) uint32_t context_id = 0;
     if (current_process_context(&context_id) != 0 || require_io_capability(context_id, 0x80) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    io_wait();
+    if (arch_port_out8(0x80u, 0u) != 0) {
+        m3ApiReturn(WASMOS_ERR_IO_NO_PORT_SPACE);
+    }
     m3ApiReturn(0);
 }
 
@@ -2967,8 +2992,8 @@ m3ApiRawFunction(wasmos_debug_mark) {
  * WASMOS_ERR_KERNEL_NO_CALLER when the caller or its root table cannot be resolved.
  *
  * The ring-3 gate means the verification does not run for a wasm3-hosted process, whose
- * context keeps KERNEL_CS.  WARP's counterpart verifies unconditionally instead, because
- * its guests reach CPL=3 without proc->ctx.cs ever being written. */
+ * context stays a kernel-mode context.  WARP's counterpart verifies unconditionally
+ * instead, because its guests reach CPL=3 without proc->ctx ever being set to user mode. */
 m3ApiRawFunction(wasmos_kmap_dump) {
     m3ApiReturnType(int32_t) process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
@@ -2979,7 +3004,7 @@ m3ApiRawFunction(wasmos_kmap_dump) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     paging_dump_user_root_kernel_mappings(root);
-    if ((proc->ctx.cs & 0x3u) == 0x3u) {
+    if (arch_context_is_user(&proc->ctx)) {
         m3ApiReturn(paging_verify_user_root_no_low_slot(root, 1) == 0
                         ? 0
                         : WASMOS_ERR_KERNEL_LOW_SLOT_PRESENT);
@@ -3033,7 +3058,7 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
         dumped++;
 
         paging_dump_user_root_kernel_mappings(root);
-        if ((proc->ctx.cs & 0x3u) == 0x3u) {
+        if (arch_context_is_user(&proc->ctx)) {
             if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
                 failures++;
             }

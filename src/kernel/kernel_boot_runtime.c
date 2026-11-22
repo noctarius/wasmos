@@ -10,6 +10,7 @@
  *     panics only when not even the idle thread is dispatchable. */
 #include "kernel_boot_runtime.h"
 
+#include "arch/arch_cpu.h"
 #include "paging.h"
 #include "physmem.h"
 #include "process.h"
@@ -210,7 +211,7 @@ void kernel_boot_run_low_slot_sweep_diagnostic(void) {
  * broken, and panic. */
 void kernel_boot_run_scheduler_loop(void) {
     for (;;) {
-        __asm__ volatile("cli");
+        arch_irq_disable();
         int rc = process_schedule_once();
         /* SCHED_OK, or a thread that just blocked/exited/zombied/raced
          * (including SCHED_R_STALE, a thread reaped out from under the picker),

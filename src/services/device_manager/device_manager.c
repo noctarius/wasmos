@@ -55,6 +55,9 @@ static device_manager_state_t g_dm = {
     .submit_req_bid = -1,
     .sv_endpoint = -1,
     .supervisor_endpoint = -1,
+    .watch_spawn_bid = -1,
+    .meta_req_bid = -1,
+    .spawn_endpoint = -1,
     .active_rule_spawn_kind = 0,
     .active_rule_spawn_index = -1,
     .active_rule_spawn_device_index = -1,
@@ -108,6 +111,10 @@ static dm_rules_wait_t g_dm_mount_wait = {0};
 /* Pumped from the IDLE phase without blocking: it has no select-set of its own,
  * and its endpoint is in the idle select set instead (see dm_supervisor_init). */
 static wasmos_sys_event_loop_t g_dm_sv_loop;
+/* Owns spawn_endpoint: the watched rule spawns' replies and their children's
+ * CHILD_READY / CHILD_EXITED. Pumped from the IDLE phase like g_dm_sv_loop. */
+static wasmos_sys_event_loop_t g_dm_spawn_loop;
+static uint8_t g_dm_watch_spawn_req[DM_WATCH_SPAWN_MAX];
 static wasmos_sys_svc_watch_set_t g_dm_sv_watches;
 static wasmos_sys_svc_watch_t g_dm_sv_watch;
 
@@ -147,14 +154,13 @@ static int ensure_fs_endpoint(void);
 static int query_module_meta_by_path(const char* path, uint32_t source, int32_t* out_index);
 static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_device_record_t* rec);
 static void load_pci_rule_metadata(void);
-static void resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
-                                     const pci_device_record_t* rec, spawn_caps_t* caps);
 static void kick_boot_rules_read_async(void);
 static void poll_boot_rules_async(void);
 static void queue_always_spawn_rules(void);
 static void queue_pci_match_rule_spawns(void);
 static void queue_acpi_match_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
+static void dm_meta_file_next(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char* name);
 static const char* devmgr_subsystem_name(uint8_t subsystem);
@@ -490,9 +496,14 @@ static void kick_boot_rules_read_async(void) {
     g_dm_rules_wait.done = 0;
 }
 
+/* The rules file's text, for whichever of the two loaders runs; they never
+ * overlap. Static rather than on the stack: the guest's C stack is small, and a
+ * rules buffer on it traps the service at its first rules read. */
+static char g_rule_text[DEVMGR_RULE_TEXT_CAP];
+
 static void poll_boot_rules_async(void) {
     int32_t read_len = 0;
-    char text[DEVMGR_RULE_TEXT_CAP];
+    char* text = g_rule_text;
     char msg[128];
     if (!g_dm.rules_boot_request_pending) {
         return;
@@ -542,8 +553,8 @@ static void poll_boot_rules_async(void) {
         g_dm.rules_boot_retry_delay = 64;
         return;
     }
-    if (read_len >= (int32_t)sizeof(text)) {
-        read_len = (int32_t)sizeof(text) - 1;
+    if (read_len >= (int32_t)DEVMGR_RULE_TEXT_CAP) {
+        read_len = (int32_t)DEVMGR_RULE_TEXT_CAP - 1;
     }
     if (read_len > 0 && wasmos_xfer_buffer_read(bid, text, read_len, 0) != 0) {
         if (bid >= 0) {
@@ -604,13 +615,13 @@ static void poll_boot_rules_async(void) {
 static void load_rules_if_available(void) {
     if (!g_dm.rules_init_loaded) {
         char path[96];
-        char text[DEVMGR_RULE_TEXT_CAP];
+        char* text = g_rule_text;
         int32_t read_len = -1;
         path[0] = '\0';
         str_copy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
         wasmos_sys_str_append(path, sizeof(path), "/");
         wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
-        read_len = read_rules_file(path, text, sizeof(text));
+        read_len = read_rules_file(path, text, DEVMGR_RULE_TEXT_CAP);
         if (read_len >= 0) {
             g_dm.rules_init_loaded = 1;
             g_dm.rules_init_active = dm_rules_count_active(text);
@@ -752,23 +763,32 @@ static int hw_spawn_driver_index(int32_t index) {
  * its device by region index and never learns the ports, and a capability
  * refusal surfaces far from here. One line at the point of decision makes a
  * mis-granted window obvious in a boot log instead of a mystery later. */
-static void log_spawn_grant(int32_t index, const spawn_caps_t* caps) {
-    (void)printf("[device-manager] grant module=%d irq_mask=%04X caps=%X windows=%u\n",
-                 (int)index,
+static void log_spawn_grant(const char* what, const spawn_caps_t* caps) {
+    (void)printf("[device-manager] grant %s irq_mask=%04X caps=%X windows=%u\n",
+                 what,
                  (unsigned)caps->irq_mask,
                  (unsigned)caps->cap_flags,
-                 (unsigned)(caps->io_range_count ? caps->io_range_count : 1u));
-    if (caps->io_range_count == 0u) {
+                 (unsigned)(caps->region_count ? caps->region_count : 1u));
+    if (caps->region_count == 0u) {
         (void)printf("[device-manager]   io[0] %04X-%04X\n",
                      (unsigned)caps->io_port_min,
                      (unsigned)caps->io_port_max);
         return;
     }
-    for (uint32_t i = 0; i < caps->io_range_count; ++i) {
-        (void)printf("[device-manager]   io[%u] %04X-%04X\n",
-                     (unsigned)i,
-                     (unsigned)caps->io_ranges[i].first,
-                     (unsigned)caps->io_ranges[i].last);
+    for (uint32_t i = 0; i < caps->region_count; ++i) {
+        const wasmos_region_grant_t* g = &caps->regions[i];
+        if (g->kind == WASMOS_REGION_GRANT_IO) {
+            (void)printf("[device-manager]   io[%u] %04X-%04X\n",
+                         (unsigned)i,
+                         (unsigned)g->base,
+                         (unsigned)(g->base + g->length - 1u));
+        } else {
+            (void)printf("[device-manager]   mmio[%u] %08X%08X+%X\n",
+                         (unsigned)i,
+                         (unsigned)(g->base >> 32),
+                         (unsigned)(g->base & 0xFFFFFFFFu),
+                         (unsigned)g->length);
+        }
     }
 }
 
@@ -805,11 +825,11 @@ static int32_t dm_pm_buffer(void) {
 /* Descriptor payload for a spawn carrying more than one window. A byte buffer
  * rather than a struct, because the trailing arrays are sized by their USED
  * counts: process-manager locates the DMA windows at
- * header + io_range_count * sizeof(range), so a fixed-size member array would
+ * header + region_count * sizeof(grant), so a fixed-size member array would
  * put them at the wrong offset. Static because PM reads it out of this process's
  * linear memory by pointer, after this function returns. */
 static uint8_t g_dm_caps_payload[sizeof(wasmos_spawn_caps_v2_t) +
-                                 (WASMOS_IO_RANGE_LIMIT * sizeof(wasmos_io_range_t)) +
+                                 (WASMOS_REGION_LIMIT * sizeof(wasmos_region_grant_t)) +
                                  sizeof(wasmos_dma_window_t)];
 
 /* Spawn with the windows the driver declared. The packed-arg opcodes are out of
@@ -834,14 +854,16 @@ static int hw_spawn_driver_index_caps_v2(int32_t index, const spawn_caps_t* caps
 static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     uint32_t io_packed = 0;
     uint32_t arg3 = 0;
+    char what[24];
     if (!caps) {
         return hw_spawn_driver_index(index);
     }
     if (index < 0) {
         return -1;
     }
-    log_spawn_grant(index, caps);
-    if (caps->io_range_count > 0u) {
+    (void)snprintf(what, sizeof(what), "module=%d", (int)index);
+    log_spawn_grant(what, caps);
+    if (caps->region_count > 0u) {
         return hw_spawn_driver_index_caps_v2(index, caps);
     }
     io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
@@ -1249,9 +1271,18 @@ static void queue_always_spawn_rules(void) {
  * match, populate active_rule_spawn_* and set rule_spawn_pending=1.
  * Only one spawn is queued at a time; caller re-invokes after completion. */
 static void queue_pci_match_rule_spawns(void) {
+    /* A rule set was loaded and its drivers' metadata is not fetched again yet
+     * (load_pci_rule_metadata runs at the spawn-quiescent point in initialize()
+     * and re-drives this queue): every PCI rule would be armed without the
+     * windows its driver declares. */
+    if (g_dm.pci_rule_meta_dirty) {
+        return;
+    }
     for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
         pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
-        if (!rule->active || rule->spawn_path[0] == '\0') {
+        /* A rule whose driver is still being described waits: armed now, it
+         * would spawn without the windows the driver declares. */
+        if (!rule->active || rule->spawn_path[0] == '\0' || rule->meta_pending) {
             continue;
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
@@ -1285,11 +1316,23 @@ static void queue_pci_match_rule_spawns(void) {
                  * "PM resolves the line", used when the device record carries no
                  * usable hint; a real hint overrides it. */
                 g_dm.active_rule_spawn_caps.cap_flags = rule->meta.cap_flags & 0xFFFFu;
+                g_dm.active_rule_spawn_caps.dma_max_bytes = rule->meta.dma_budget_pages * 4096u;
                 g_dm.active_rule_spawn_caps.irq_mask = (uint16_t)((1u << 14) | (1u << 15));
                 if (rec->irq_hint < 16u) {
                     g_dm.active_rule_spawn_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
                 }
-                resolve_declared_regions(&rule->meta, rec, &g_dm.active_rule_spawn_caps);
+                if (dm_resolve_declared_regions(&rule->meta, rec, &g_dm.active_rule_spawn_caps) !=
+                    0) {
+                    /* A window the device cannot supply would leave the driver
+                     * addressing different regions than it declared; it is
+                     * not spawned for this device at all. */
+                    console_write("[device-manager] declared regions unresolvable; not spawning ");
+                    console_write(rule->spawn_path);
+                    console_write("\n");
+                    rule->given_up_device_mask |= (uint64_t)1u << di;
+                    g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
+                    continue;
+                }
             } else if (rec->io_port_base != 0u) {
                 g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
                 g_dm.active_rule_spawn_caps.io_port_min = rec->io_port_base;
@@ -2169,47 +2212,6 @@ static void reset_selected_storage(void) {
     g_dm.selected_storage_has_record = 0;
 }
 
-/* Turn a driver's declared windows into the grant it actually gets. A static
- * range is taken verbatim; a BAR region is resolved against the device this
- * driver matched, using the base and length pci-bus measured -- which is the
- * whole point of the exercise, since a firmware-assigned window cannot be
- * written down in a manifest.
- *
- * Declaration order is preserved because it IS the region index the driver
- * addresses at runtime. A BAR the device does not implement is skipped rather
- * than granted as an empty window, so a driver asking for something absent gets
- * a refusal at first use instead of silently reading a neighbouring device. */
-static void resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
-                                     const pci_device_record_t* rec, spawn_caps_t* caps) {
-    if (!meta || !rec || !caps || meta->region_count == 0) {
-        return;
-    }
-    caps->io_range_count = 0;
-    for (uint32_t i = 0; i < meta->region_count && caps->io_range_count < WASMOS_IO_RANGE_LIMIT;
-         ++i) {
-        uint16_t first = 0;
-        uint16_t last = 0;
-        if (meta->regions[i].kind == WASMOS_APP_REGION_IO) {
-            first = meta->regions[i].first;
-            last = meta->regions[i].last;
-        } else {
-            uint8_t bi = meta->regions[i].bar_index;
-            if (bi >= WASMOS_PCI_BAR_COUNT || rec->bars[bi].kind != WASMOS_PCI_BAR_IO ||
-                rec->bars[bi].base == 0u || rec->bars[bi].size == 0u) {
-                continue;
-            }
-            first = (uint16_t)(rec->bars[bi].base & 0xFFFFu);
-            last = (uint16_t)((rec->bars[bi].base + rec->bars[bi].size - 1u) & 0xFFFFu);
-        }
-        if (first > last) {
-            continue;
-        }
-        caps->io_ranges[caps->io_range_count].first = first;
-        caps->io_ranges[caps->io_range_count].last = last;
-        caps->io_range_count++;
-    }
-}
-
 /* Query PROC_IPC_MODULE_META_DESC for one boot module.  The answer lands in a
  * device-manager-owned buffer lent WRITE, because the declared region list is
  * variable-length and cannot be packed into IPC arguments.
@@ -2474,20 +2476,117 @@ static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_devic
            (rule->device_id == MATCH_ANY_U16 || rec->device_id == rule->device_id);
 }
 
-/* Fetch and cache each PCI rule's module descriptor, and identify the boot
+/* The answer to the PROC_IPC_MODULE_META_FILE in flight: the described rule
+ * gets its declared windows (or, on a refusal, spawns without them, as a rule
+ * with no metadata always has), the buffer is released -- which also revokes
+ * the PM's loan -- and the next undescribed rule is asked about. Once none is
+ * left, the queue is re-driven, since the rules held back may now be armed. A
+ * reply for a rule set that has since been reloaded only releases the buffer. */
+static void dm_on_meta_file_reply(void* user, const wasmos_ipc_message_t* msg) {
+    uint32_t ri = (uint32_t)(uintptr_t)user;
+    wasmos_module_meta_file_desc_t desc;
+    int ok = msg->type == PROC_IPC_RESP && g_dm.meta_req_bid >= 0 &&
+             wasmos_xfer_buffer_read(g_dm.meta_req_bid, &desc, (int32_t)sizeof(desc), 0) == 0 &&
+             desc.meta.version == WASMOS_MODULE_META_DESC_VERSION;
+    if (g_dm.meta_req_bid >= 0) {
+        (void)wasmos_xfer_buffer_release(g_dm.meta_req_bid);
+        g_dm.meta_req_bid = -1;
+    }
+    g_dm.meta_req_pending = 0;
+    if (g_dm.meta_req_generation == g_dm.meta_generation && ri < g_dm.pci_match_rule_count) {
+        pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
+        rule->meta_pending = 0;
+        if (ok) {
+            rule->meta = desc.meta;
+            rule->meta_valid = 1;
+        } else {
+            (void)printf("[device-manager] no metadata for %s (code %d); spawning it without "
+                         "declared windows\n",
+                         rule->spawn_path,
+                         (int)msg->arg1);
+        }
+    }
+    dm_meta_file_next();
+    if (!g_dm.meta_req_pending) {
+        queue_block_fs_rule_spawns();
+    }
+}
+
+/* Asks the process manager to describe the first rule's driver that is not a
+ * boot module and still waits for metadata, unless a request is already in
+ * flight. The driver is read from where it would be spawned: /boot once that is
+ * mounted, the initfs before. A request that cannot be sent leaves that rule
+ * without metadata and moves on, so no rule waits forever. */
+static void dm_meta_file_next(void) {
+    static uint8_t req[sizeof(wasmos_module_meta_file_desc_t) + 104];
+    wasmos_module_meta_file_desc_t desc;
+    char path[104];
+    if (g_dm.meta_req_pending) {
+        return;
+    }
+    for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
+        pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
+        int32_t bid;
+        uint32_t path_len;
+        if (!rule->meta_pending) {
+            continue;
+        }
+        path[0] = '\0';
+        str_copy(path, sizeof(path), g_dm.boot_mount_ready ? "/boot/" : "/init/");
+        wasmos_sys_str_append(path, sizeof(path), rule->spawn_path);
+        path_len = (uint32_t)strlen(path);
+        memset(&desc, 0, sizeof(desc));
+        desc.version = MODULE_META_FILE_DESC_VERSION;
+        desc.path_off = (uint32_t)sizeof(desc);
+        desc.path_len = path_len;
+        memcpy(req, &desc, sizeof(desc));
+        memcpy(req + sizeof(desc), path, path_len);
+        bid = wasmos_xfer_stage(req, (int32_t)(sizeof(desc) + path_len));
+        if (bid >= 0 &&
+            wasmos_xfer_buffer_borrow(g_dm.proc_endpoint,
+                                      bid,
+                                      WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE) >= 0 &&
+            wasmos_sys_intent_send(&g_dm_spawn_loop,
+                                   g_dm.proc_endpoint,
+                                   g_dm.spawn_endpoint,
+                                   PROC_IPC_MODULE_META_FILE,
+                                   bid,
+                                   0,
+                                   (int32_t)(sizeof(desc) + path_len),
+                                   0,
+                                   dm_on_meta_file_reply,
+                                   (void*)(uintptr_t)ri,
+                                   0) == 0) {
+            g_dm.meta_req_bid = bid;
+            g_dm.meta_req_generation = g_dm.meta_generation;
+            g_dm.meta_req_pending = 1;
+            return;
+        }
+        if (bid >= 0) {
+            (void)wasmos_xfer_buffer_release(bid);
+        }
+        rule->meta_pending = 0;
+    }
+}
+
+/* Fetch and cache each PCI rule's driver descriptor, and identify the boot
  * storage controller.
  *
- * Runs once when the PCI inventory is consumed, which is the only context where
- * a blocking request to process-manager is safe: the queue walk that consumes
- * this runs inside event-handler dispatch, where the same request would be a
- * nested receive.
+ * A boot module is described here, synchronously: this runs once when the PCI
+ * inventory is consumed, which is the only context where a blocking request to
+ * process-manager is safe -- the queue walk that consumes this runs inside
+ * event-handler dispatch, where the same request would be a nested receive. A
+ * driver on a filesystem is described by a deferred PROC_IPC_MODULE_META_FILE
+ * instead (dm_meta_file_next), since the PM reads it through fs-manager.
  *
  * The storage controller needs identifying separately because the block registry
  * names its units by the controller's PCI address, and only a rule/device pair
  * whose module declares storage_bootstrap supplies it. The first such pair wins,
- * so rule order is the tiebreak. */
+ * so rule order is the tiebreak. Only boot modules take part: the storage
+ * driver brings up the filesystem a non-module driver would be read from. */
 static void load_pci_rule_metadata(void) {
     g_dm.pci_rule_meta_dirty = 0;
+    g_dm.meta_generation++;
     reset_selected_storage();
     for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
         pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
@@ -2496,17 +2595,21 @@ static void load_pci_rule_metadata(void) {
         int32_t module_index = -1;
 
         rule->meta_valid = 0;
+        rule->meta_from_module = 0;
+        rule->meta_pending = 0;
         if (!rule->active || rule->spawn_path[0] == '\0') {
             continue;
         }
         module_index = rule_module_index(rule->spawn_path);
         if (module_index < 0) {
+            rule->meta_pending = g_dm.spawn_endpoint >= 0 ? 1u : 0u;
             continue;
         }
         if (query_driver_module_meta(module_index, &storage_bootstrap, &caps, &rule->meta) != 0) {
             continue;
         }
         rule->meta_valid = 1;
+        rule->meta_from_module = 1;
         if (!storage_bootstrap || g_dm.selected_storage_has_record) {
             continue;
         }
@@ -2520,6 +2623,7 @@ static void load_pci_rule_metadata(void) {
             break;
         }
     }
+    dm_meta_file_next();
 }
 
 static void consume_pci_inventory(void) {
@@ -2609,6 +2713,26 @@ static void give_up_on_active_spawn(void) {
     console_write(line);
 }
 
+/* Retires the armed rule without spawning it again: its device is marked given
+ * up (give_up_on_active_spawn), the rule's tracking is cleared and the queue is
+ * re-driven, as for a spawn that succeeded. */
+static void rule_spawn_give_up(void) {
+    give_up_on_active_spawn();
+    g_dm.rule_spawn_pending = 0;
+    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
+        if (g_dm.active_rule_spawn_index >= 0 &&
+            g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+            g_dm.block_fs_rules[g_dm.active_rule_spawn_index].queued = 0;
+        }
+    }
+    g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
+    g_dm.active_rule_spawn_index = -1;
+    g_dm.active_rule_spawn_device_index = -1;
+    g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
+    g_dm.active_rule_fstype[0] = '\0';
+    queue_block_fs_rule_spawns();
+}
+
 static void rule_spawn_complete(int32_t ok) {
     if (ok) {
         g_dm.rule_spawn_pending = 0;
@@ -2682,20 +2806,7 @@ static void rule_spawn_complete(int32_t ok) {
         }
         g_dm.rule_spawn_retries++;
         if (g_dm.rule_spawn_retries > 8) {
-            give_up_on_active_spawn();
-            g_dm.rule_spawn_pending = 0;
-            if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
-                if (g_dm.active_rule_spawn_index >= 0 &&
-                    g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
-                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].queued = 0;
-                }
-            }
-            g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
-            g_dm.active_rule_spawn_index = -1;
-            g_dm.active_rule_spawn_device_index = -1;
-            g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
-            g_dm.active_rule_fstype[0] = '\0';
-            queue_block_fs_rule_spawns();
+            rule_spawn_give_up();
         }
     }
 }
@@ -2863,6 +2974,7 @@ static int dm_submit_rule(const char* instance, const char* restart, const char*
     if (spec_len <= 0 || caps_len <= 0) {
         return -1;
     }
+    log_spawn_grant(path, &g_dm.active_rule_spawn_caps);
     desc.spec_len = (uint32_t)spec_len;
     desc.caps_len = (uint32_t)caps_len;
     bid = wasmos_xfer_stage(&desc, (int32_t)sizeof(desc));
@@ -2919,6 +3031,153 @@ static void dm_supervisor_init(void) {
     }
 }
 
+/* Ends the watched spawn of the armed rule: ok retires the rule, otherwise its
+ * retry policy applies (rule_spawn_complete). The child's later events no longer
+ * match anything and are ignored. */
+static void dm_watch_spawn_finish(int32_t ok) {
+    g_dm.watch_spawn_pending = 0;
+    g_dm.watch_spawn_pid = 0;
+    rule_spawn_complete(ok);
+}
+
+/* The PM's answer to PROC_IPC_SPAWN_WATCHED. It has read the request and written
+ * the reply fields before answering, so the buffer is released here, which also
+ * revokes its loan. Success names the child, which is still to latch READY; the
+ * deadline for that starts now. */
+static void dm_on_watch_spawn_reply(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (g_dm.watch_spawn_bid >= 0) {
+        (void)wasmos_xfer_buffer_release(g_dm.watch_spawn_bid);
+        g_dm.watch_spawn_bid = -1;
+    }
+    if (!g_dm.watch_spawn_pending) {
+        return;
+    }
+    if (msg->type != PROC_IPC_RESP || msg->arg0 <= 0) {
+        (void)printf("[device-manager] spawn refused path=%s code=%d\n",
+                     g_dm.rule_spawn_path,
+                     (int)msg->arg1);
+        dm_watch_spawn_finish(0);
+        return;
+    }
+    g_dm.watch_spawn_pid = (uint32_t)msg->arg0;
+    g_dm.watch_spawn_deadline =
+        (uint32_t)wasmos_sched_ticks() + (DM_SPAWN_TIMEOUT_MS * WASMOS_SCHED_TICK_HZ) / 1000u;
+}
+
+static void dm_on_child_ready(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (g_dm.watch_spawn_pending && g_dm.watch_spawn_pid != 0u &&
+        (uint32_t)msg->arg0 == g_dm.watch_spawn_pid) {
+        dm_watch_spawn_finish(1);
+    }
+}
+
+/* A child that exits before READY is a failed spawn and goes through the
+ * rule's retry policy. One that exits later is not this service's to restart:
+ * a driver that must come back is a supervised unit (ENV{RESTART}). */
+static void dm_on_child_exited(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    if (g_dm.watch_spawn_pending && g_dm.watch_spawn_pid != 0u &&
+        (uint32_t)msg->arg0 == g_dm.watch_spawn_pid) {
+        (void)printf("[device-manager] %s exited before ready status=%d\n",
+                     g_dm.rule_spawn_path,
+                     (int)msg->arg1);
+        dm_watch_spawn_finish(0);
+    }
+}
+
+/* A child that neither latches READY nor exits within DM_SPAWN_TIMEOUT_MS is
+ * still running, so the rule is given up rather than retried: a retry would
+ * start a second driver for the same device. */
+static void dm_watch_spawn_check_deadline(void) {
+    if (!g_dm.watch_spawn_pending || g_dm.watch_spawn_pid == 0u ||
+        (int32_t)((uint32_t)wasmos_sched_ticks() - g_dm.watch_spawn_deadline) < 0) {
+        return;
+    }
+    (void)printf("[device-manager] %s (pid %u) never became ready; giving up on the device\n",
+                 g_dm.rule_spawn_path,
+                 (unsigned)g_dm.watch_spawn_pid);
+    g_dm.watch_spawn_pending = 0;
+    g_dm.watch_spawn_pid = 0;
+    rule_spawn_give_up();
+}
+
+/* Spawns the armed rule's driver from `path` with its startup args and every
+ * grant in active_rule_spawn_caps -- windows, IRQ lines and the PCI function --
+ * WITHOUT waiting: the outcome arrives on spawn_endpoint and retires the rule
+ * (dm_on_watch_spawn_reply, dm_on_child_ready, dm_on_child_exited). The request
+ * lives in a buffer this service owns and lends the PM READ|WRITE, the PM
+ * writing the child's pid back into it. Returns 0 with the spawn in flight, or
+ * -1 with nothing sent. */
+static int dm_watch_spawn_send(const char* path, const char* args) {
+    int32_t len;
+    int32_t bid;
+    if (g_dm.spawn_endpoint < 0) {
+        return -1;
+    }
+    len = dm_watch_spawn_encode(path,
+                                args,
+                                &g_dm.active_rule_spawn_caps,
+                                g_dm.spawn_endpoint,
+                                g_dm_watch_spawn_req,
+                                (uint32_t)sizeof(g_dm_watch_spawn_req));
+    if (len < 0) {
+        return -1;
+    }
+    bid = wasmos_xfer_stage(g_dm_watch_spawn_req, len);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_borrow(
+            g_dm.proc_endpoint, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE) < 0 ||
+        wasmos_sys_intent_send(&g_dm_spawn_loop,
+                               g_dm.proc_endpoint,
+                               g_dm.spawn_endpoint,
+                               PROC_IPC_SPAWN_WATCHED,
+                               bid,
+                               0,
+                               len,
+                               0,
+                               dm_on_watch_spawn_reply,
+                               0,
+                               0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    g_dm.watch_spawn_bid = bid;
+    g_dm.watch_spawn_pid = 0;
+    g_dm.watch_spawn_pending = 1;
+    return 0;
+}
+
+/* Creates spawn_endpoint and its loop. The endpoint joins the IDLE select set
+ * and the loop drops the select-set its init made, as for the supervisor loop.
+ * A failure leaves spawn_endpoint at -1, and rule drivers then fall back to the
+ * synchronous path spawn, which carries at most one I/O window. */
+static void dm_spawn_loop_init(void) {
+    int32_t ep = wasmos_ipc_create_endpoint();
+    if (ep < 0) {
+        console_write("[device-manager] spawn endpoint create failed\n");
+        return;
+    }
+    wasmos_sys_event_loop_init(&g_dm_spawn_loop, ep, 0xE400);
+    if (g_dm_spawn_loop.select_id >= 0) {
+        (void)wasmos_ipc_select_destroy(g_dm_spawn_loop.select_id);
+        g_dm_spawn_loop.select_id = -1;
+    }
+    if ((g_dm_idle_select_id >= 0 && wasmos_ipc_select_add(g_dm_idle_select_id, ep) != 0) ||
+        wasmos_sys_event_set_default(&g_dm_spawn_loop, dm_handle_ipc_default, 0) != 0 ||
+        wasmos_sys_event_register(&g_dm_spawn_loop, PROC_IPC_CHILD_READY, dm_on_child_ready, 0) !=
+            0 ||
+        wasmos_sys_event_register(&g_dm_spawn_loop, PROC_IPC_CHILD_EXITED, dm_on_child_exited, 0) !=
+            0) {
+        console_write("[device-manager] spawn loop init failed\n");
+        return;
+    }
+    g_dm.spawn_endpoint = ep;
+}
+
 static hw_spawn_target_t next_spawn_target(void) {
     if (g_dm.need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
@@ -2929,7 +3188,7 @@ static hw_spawn_target_t next_spawn_target(void) {
     /* A mount request is in flight for the armed rule, which stays armed until
      * fs-manager answers. Re-entering the spawn phase here would send it a
      * second time. */
-    if (g_dm.mount_req_pending || g_dm.submit_req_pending) {
+    if (g_dm.mount_req_pending || g_dm.submit_req_pending || g_dm.watch_spawn_pending) {
         return HW_SPAWN_NONE;
     }
     if (g_dm.rule_spawn_pending &&
@@ -3233,6 +3492,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         wasmos_sys_ipc_recv_loop();
     }
     dm_supervisor_init();
+    dm_spawn_loop_init();
     /* READY once every endpoint and handler is set up -- a setup failure above
      * parks before it, so the supervisor's READY deadline still catches it --
      * and before rule loading and enumeration, which take as long as the boot
@@ -3285,6 +3545,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
          * neither an event-handler callback nor mid-spawn. */
         if (g_dm.pci_rule_meta_dirty && !g_dm.rule_spawn_pending && g_dm.registry_count > 0u) {
             load_pci_rule_metadata();
+            queue_block_fs_rule_spawns();
         }
         if (g_dm.phase == HW_PHASE_SPAWN) {
             hw_spawn_target_t target = next_spawn_target();
@@ -3404,7 +3665,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                      * naming a boot module must spawn from initfs: /boot is the
                      * FAT volume the storage driver itself brings up, so
                      * spawning that driver from /boot cannot work. For a PCI
-                     * rule, meta_valid already records that its target resolved
+                     * rule, meta_from_module already records that its target resolved
                      * to a boot module.
                      *
                      * For a BLOCK_FS rule the question is whether /boot EXISTS
@@ -3418,7 +3679,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
                         g_dm.active_rule_spawn_index >= 0 &&
                         g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_match_rule_count &&
-                        g_dm.pci_match_rules[g_dm.active_rule_spawn_index].meta_valid) {
+                        g_dm.pci_match_rules[g_dm.active_rule_spawn_index].meta_from_module) {
                         from_initfs = 1;
                     }
                     spawn_path[0] = '\0';
@@ -3449,20 +3710,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                    sizeof(spawn_args)) > 0) {
                         args = spawn_args;
                     }
-                    /* A driver with declared windows must spawn by module
-                     * index: PROC_IPC_SPAWN_PATH_CAPS_SYNC packs one
-                     * io_port_min/max pair and cannot describe more than a
-                     * single window, while the index form escalates to the
-                     * descriptor variant when io_range_count > 0. The path form
-                     * carries the startup args, so it stays in use for every
-                     * driver that needs those instead.
-                     * TODO: a descriptor-carrying path spawn would remove this
-                     * either/or; a driver needing both declared windows AND
-                     * startup args cannot be expressed today. Nor can the path
-                     * form name a PCI driver's function, so a DMA driver
-                     * spawned that way is not quiesced when it ends: its
-                     * device may master into recycled frames. A rule with
-                     * ENV{RESTART} (a watched, descriptor spawn) is. */
                     /* A rule naming a restart policy hands its driver to the
                      * supervisor, which spawns it with these args and grants
                      * and restarts it by that policy. The reply is DEFERRED,
@@ -3482,17 +3729,32 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         console_write(g_dm.rule_spawn_path);
                         console_write(" directly\n");
                     }
-                    int32_t spawn_module_index = -1;
-                    if (g_dm.active_rule_spawn_caps.io_range_count > 0u) {
-                        spawn_module_index = rule_module_index(g_dm.rule_spawn_path);
+                    /* A PCI or ACPI driver is spawned by PATH, from the initfs
+                     * fs-manager already serves, with a watched spawn: the one
+                     * form that carries its startup args AND every declared
+                     * window, plus the PCI function the kernel quiesces when
+                     * the driver ends. The outcome is DEFERRED: the child's
+                     * READY retires the rule (dm_on_child_ready). A BLOCK_FS
+                     * driver has no windows and keeps the synchronous form. */
+                    if (g_dm.active_rule_spawn_kind != RULE_SPAWN_KIND_BLOCK_FS) {
+                        log_spawn_grant(spawn_path, &g_dm.active_rule_spawn_caps);
+                        if (dm_watch_spawn_send(spawn_path, args) == 0) {
+                            g_dm.pending = HW_SPAWN_NONE;
+                            g_dm.phase = HW_PHASE_SPAWN;
+                            continue;
+                        }
+                        /* Only a single I/O window survives the fallback; a
+                         * driver that declared windows cannot be described by
+                         * it and goes through the retry policy instead. */
+                        if (g_dm.active_rule_spawn_caps.region_count > 0u) {
+                            rule_spawn_complete(0);
+                            g_dm.pending = HW_SPAWN_NONE;
+                            g_dm.phase = HW_PHASE_SPAWN;
+                            continue;
+                        }
                     }
-                    if (spawn_module_index >= 0) {
-                        rc = hw_spawn_driver_index_caps(spawn_module_index,
-                                                        &g_dm.active_rule_spawn_caps);
-                    } else {
-                        rc = hw_spawn_driver_path_caps_args(
-                            spawn_path, &g_dm.active_rule_spawn_caps, args);
-                    }
+                    rc = hw_spawn_driver_path_caps_args(
+                        spawn_path, &g_dm.active_rule_spawn_caps, args);
                 } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS &&
                            g_dm.active_rule_spawn_index >= 0 &&
                            g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count &&
@@ -3542,6 +3804,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             load_rules_if_available();
             poll_mount_request_async();
             (void)wasmos_sys_event_loop_poll(&g_dm_sv_loop, 8);
+            (void)wasmos_sys_event_loop_poll(&g_dm_spawn_loop, 8);
+            dm_watch_spawn_check_deadline();
             consume_inventory_events_nonblocking();
             drain_reply_endpoint_nonblocking(4);
             if (next_spawn_target() != HW_SPAWN_NONE) {
@@ -3562,7 +3826,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
              * it. The timed wait polls poll_mount_request_async instead. */
             int32_t settled = g_dm.rules_init_loaded && g_dm.rules_boot_loaded &&
                               g_dm.boot_mount_ready && !g_dm.rules_boot_request_pending &&
-                              !g_dm.mount_req_pending && !g_dm.submit_req_pending;
+                              !g_dm.mount_req_pending && !g_dm.submit_req_pending &&
+                              !g_dm.watch_spawn_pending;
             if (g_dm_idle_select_id >= 0) {
                 if (settled) {
                     (void)wasmos_ipc_select_wait(g_dm_idle_select_id);

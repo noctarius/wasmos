@@ -79,13 +79,13 @@
 #include "process.h"
 #include "thread.h"
 #include "sched.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "stubs_process_platform.h"
 
 /* ------------------------------------------------------------------ harness */
 
 /* The CPU table the linked scheduler and process layer see. cpu_local() is the
- * WASMOS_HOST_TEST_SMP arm in arch/x86_64/smp.h, reading g_host_cpu_local -- a
+ * WASMOS_HOST_TEST_SMP arm in cpu_local.h, reading g_host_cpu_local -- a
  * _Thread_local pointer into g_cpus[]. A pthread picks which CPU it is by
  * calling be_cpu() once; every kernel call it makes afterwards runs on that
  * CPU. A worker that never calls be_cpu() leaves the pointer NULL and the first

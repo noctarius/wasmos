@@ -2,9 +2,9 @@
 .global context_switch
 .global context_switch_to
 # Byte offset of cpu_local_t.in_context_switch, reached through GS (the per-CPU
-# base), so each CPU tracks its own save/restore window. smp.h static-asserts the
+# base), so each CPU tracks its own save/restore window. cpu_local.h static-asserts the
 # value; if that assert fires this .set is what has to change.
-.set CPU_LOCAL_IN_CTX_SW_OFFSET, 17
+.set CPU_LOCAL_IN_CTX_SW_OFFSET, 13
 .extern g_in_scheduler
 .extern cpu_local_sched_ctx
 .extern g_ctxsw_last_out_ctx
@@ -34,8 +34,9 @@
 # set plus RIP/RSP/RFLAGS. It also carries CS/SS/user-RSP metadata so ring3
 # contexts can resume via iretq while ring0 contexts keep the ret fast path.
 #
-# Every displacement below indexes process_context_t (process.h), which pins the
-# layout with _Static_asserts: r15 at 0 through rax at 112, then rsp 120,
+# Every displacement below indexes process_context_t (defined in the x86_64
+# arch_context.h under include/arch), which pins the layout with
+# _Static_asserts: r15 at 0 through rax at 112, then rsp 120,
 # rip 128, rflags 136, cs 144, ss 152, user_rsp 160, root_table 168.
 
 # context_switch(process_context_t *out, process_context_t *in)
@@ -334,3 +335,26 @@ process_preempt_trampoline:
     call cpu_local_sched_ctx
     movq %rax, %rdi
     jmp context_switch_to
+
+.global arch_call_on_stack
+# arch_call_on_stack(stack_top, fn, a0, a1, a2) - see include/arch/arch_context.h.
+#
+# Entry: rdi = stack_top (16-byte aligned), rsi = fn, rdx/rcx/r8 = a0/a1/a2.
+# Calls fn(a0, a1, a2) with rsp = stack_top, then returns fn's rax on the
+# caller's stack. An ordinary SysV call on both sides, so every caller-saved
+# register (GPRs and vector registers alike) is clobbered exactly as the ABI
+# says and no inline-asm clobber list has to enumerate them. rbp anchors the
+# caller's stack across the call and keeps the frame-pointer chain intact for
+# panic backtraces; it is callee-saved, so fn preserves it.
+arch_call_on_stack:
+    pushq %rbp
+    movq %rsp, %rbp
+    movq %rdi, %rsp
+    movq %rsi, %rax
+    movq %rdx, %rdi
+    movq %rcx, %rsi
+    movq %r8, %rdx
+    call *%rax
+    movq %rbp, %rsp
+    popq %rbp
+    ret

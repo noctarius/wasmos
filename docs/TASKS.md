@@ -54,10 +54,27 @@ Source: `architecture/06-memory-management.md`,
 `architecture/11-ring3-isolation-and-separation.md`, and
 `architecture/28-smp.md`.
 
-- [ ] [ENHANCEMENT][P2] Replace the WARP shared-linear-memory local fault retry with cross-CPU
-  TLB-shootdown IPIs before any live page-table reclaim under concurrent APs
-  (`src/kernel/arch/x86_64/cpu_x86_64.c:554` `TODO(smp-tlb)`,
-  `src/kernel/warp/ring3_trampolines.c:166`).
+- [ ] [ENHANCEMENT][P2] Cross-CPU TLB invalidation. `paging_invalidate` acts on
+  the calling CPU only (`paging.h`, `arch/x86_64/paging.c`), so a mapping
+  removed or changed on one CPU stays live on every other CPU that cached it,
+  and nothing in the kernel can safely unmap or remap a page another CPU may
+  have touched. Needed: an arch-neutral `paging_invalidate_range_all(root, va,
+  len)` (or equivalent) that returns once every CPU that may hold the
+  translation has dropped it -- x86_64 via a shootdown IPI with an
+  acknowledgement (and only to CPUs whose current root shares the mapping, all
+  CPUs for the shared higher half); arm64 via broadcast `TLBI ...IS` + `DSB
+  ISH`, which needs no IPI. Consumers it unblocks:
+  - WARP linear-memory slots: commit/decommit reuse a slot VA with no
+    invalidation elsewhere, so a recycled slot can still resolve to the previous
+    app's frames on another CPU (`src/kernel/linmem_slots.c:185`); the local
+    fault-retry recovery stands in for it (`arch/x86_64/cpu_x86_64.c:692`
+    `TODO(smp-tlb)`, `src/kernel/warp/ring3_trampolines.c:175`).
+  - Device windows (`device_window.c`): mapped once and never unmapped,
+    precisely because unmapping would need this; with it, a window could be
+    released when its last driver is reaped and the VA span recycled.
+  - Any live page-table reclaim under concurrent CPUs (address-space teardown
+    while another CPU still runs on the root, per-process unmap).
+  Pair it with the stress test in Validation (`[TEST][P2]` TLB shootdown).
 - [x] [CLEANUP][P3] Retire the `shmem` subsystem in favour of a single
   `xfer_buffer` sharing mechanism. DONE. The eight `shmem_*` host calls, both
   runtime shims, the native-driver `shmem_*` hooks, the `mm_shared_*` registry,
@@ -240,7 +257,7 @@ Source: `architecture/06-memory-management.md`,
   assume a kernel-ish environment (`setjmp`/`longjmp`, allocator assumptions);
   and step 3, which is where the historical linmem aliasing bugs lived.
 - [ ] [ENHANCEMENT][P2] Finish ring-3 hardening TODOs: drop `PML4[0]` from the kernel root once
-  bootstrap no longer needs the low slot (`src/kernel/paging.c:338`
+  bootstrap no longer needs the low slot (`src/kernel/arch/x86_64/paging.c:338`
   `TODO(ring3-phase3)`); add process-local exception handling beyond the
   current `-11` kill (`src/kernel/arch/x86_64/cpu_x86_64.c:484`
   `TODO(ring3-phase5)`); handle stack allocations that can exceed the 512 MB
@@ -250,7 +267,7 @@ Source: `architecture/06-memory-management.md`,
   (`src/kernel/arch/x86_64/cpu_x86_64.c:578`).
 - [ ] [ENHANCEMENT][P2] Introduce allocation intents (`STACK`, `PGTABLE`, `DMA32`, `GENERIC`),
   then remove the low-memory DMA constraint from kernel stacks and page tables
-  (`src/kernel/paging.c:31`; `architecture/06`:455-497).
+  (`src/kernel/arch/x86_64/paging.c:31`; `architecture/06`:455-497).
 - [ ] [FEATURE][P2] Decide and implement kernel reachability beyond the current 512 MB low
   window: full physmap or a bounded `kmap` cache (`architecture/06`).
 - [ ] [ENHANCEMENT][P2] Route pointer-bearing syscall/IPC entry paths through
@@ -356,8 +373,8 @@ Source: `architecture/06-memory-management.md`,
   `paging_destroy_address_space` frees only the slot-0 PDPT frame and never
   walks below it, so every root that went through
   `paging_clone_low_slot_in_root` leaks its lower tables; the clone's own error
-  paths leak earlier iterations' PDs/PTs too (`src/kernel/paging.c`).
-- [ ] [BUG][P1] Serialize `x86_irq_mask`/`x86_irq_unmask`. They read-modify-write
+  paths leak earlier iterations' PDs/PTs too (`src/kernel/arch/x86_64/paging.c`).
+- [ ] [BUG][P1] Serialize `irq_mask`/`irq_unmask`. They read-modify-write
   `g_pic_mask1/2` with no lock, while only the `irq_sharing` ops path holds
   `g_irq_lines_lock` (`src/kernel/arch/x86_64/irq_x86_64.c`).
 - [ ] [ENHANCEMENT][P2] Pack `EFI_ADDRESS_SPACE_DESCRIPTOR`. Without
@@ -849,7 +866,7 @@ tail.
 - [ ] [BUG][P1] Replace the remaining bare `-1`/ad-hoc integers that cross a subsystem
   boundary with packed `abi/errors.yaml` codes: `PROC_IPC_ERROR` arg1 in
   `src/kernel/process_manager_spawn.c`, the PM spawn retry match in
-  `src/kernel/kernel_init_runtime.c`, `x86_irq_configure` (guest-reachable via
+  `src/kernel/kernel_init_runtime.c`, `irq_configure` (guest-reachable via
   the `irq_configure` host call, `src/kernel/arch/x86_64/irq_x86_64.c`),
   `framebuffer_map_high`/`framebuffer_fill`, `native_ipc_future_status`
   (`src/libsys/native/ipc_future_native.c`), the FAT zero-copy submit path

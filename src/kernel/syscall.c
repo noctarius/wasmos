@@ -1,7 +1,8 @@
-/* syscall.c - Ring-3 int 0x80 syscall dispatch.
- * x86_syscall_handler() is called from isr_syscall_128 in cpu_isr.S with RAX
- * selecting the call.  Arguments arrive in the 64-bit registers but the ABI is
- * 32-bit (see syscall.h): syscall_arg_u32/_i32 reject a value that does not fit,
+/* syscall.c - Ring-3 syscall dispatch.
+ * syscall_dispatch() is called from the architecture's syscall entry
+ * (isr_syscall_128 for x86_64 int 0x80) with the frame's number slot selecting
+ * the call.  Arguments arrive as 64-bit slots but the ABI is 32-bit (see
+ * syscall.h): syscall_arg_u32/_i32 reject a value that does not fit,
  * so a caller cannot smuggle bits through the upper half.  Entries that name a
  * kernel object (endpoint, pid, tid) resolve it against the calling process's
  * context and refuse anything it does not own; the WARP hostcall range is
@@ -18,7 +19,7 @@
 #include "user_mutex.h"
 #ifdef WASMOS_WASM_RUNTIME_WARP
 #include "warp_ring3.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 extern uint64_t warp_r3_memory_helper(uint64_t min_linmem_len, uint32_t basedata_len,
                                       uint64_t original_linmem_user_va);
 #endif
@@ -63,8 +64,6 @@ static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_notify_control_deny_endpoint = IPC_ENDPOINT_NONE;
 #define SYSCALL_IPC_PENDING_DEPTH 8u
-#define USER_CS_SELECTOR 0x1Bu
-#define USER_DS_SELECTOR 0x23u
 
 typedef struct {
     uint8_t in_use;
@@ -341,10 +340,10 @@ static void syscall_trace_ring3_once(syscall_frame_t* frame) {
     if (!frame || g_ring3_syscall_logged) {
         return;
     }
-    if ((frame->cs & 0x3u) != 0x3u) {
+    if (!arch_syscall_from_user(frame)) {
         return;
     }
-    if ((uint32_t)frame->rax != WASMOS_SYSCALL_GETPID) {
+    if ((uint32_t)arch_syscall_number(frame) != WASMOS_SYSCALL_GETPID) {
         return;
     }
     process_t* proc = process_get(process_current_pid());
@@ -359,20 +358,21 @@ static void syscall_trace_ring3_stress(syscall_frame_t* frame) {
     if (!frame || g_ring3_stress_ok_logged) {
         return;
     }
-    if ((frame->cs & 0x3u) != 0x3u) {
+    if (!arch_syscall_from_user(frame)) {
         return;
     }
     process_t* proc = process_get(process_current_pid());
     if (!proc || !name_eq(proc->name, "ring3-smoke")) {
         return;
     }
-    if ((uint32_t)frame->rax == WASMOS_SYSCALL_GETPID) {
+    if ((uint32_t)arch_syscall_number(frame) == WASMOS_SYSCALL_GETPID) {
         if (g_ring3_getpid_count < 0xFFFFFFFFu) {
             g_ring3_getpid_count++;
         }
         return;
     }
-    if ((uint32_t)frame->rax == WASMOS_SYSCALL_EXIT && g_ring3_getpid_count >= 4096u) {
+    if ((uint32_t)arch_syscall_number(frame) == WASMOS_SYSCALL_EXIT &&
+        g_ring3_getpid_count >= 4096u) {
         g_ring3_stress_ok_logged = 1;
         klog_write("[test] ring3 preempt stress ok\n");
     }
@@ -384,7 +384,7 @@ static void syscall_trace_ring3_stress(syscall_frame_t* frame) {
  * The returned value is stored over the frame's saved RAX before POP_REGS, so it
  * IS the guest's RAX on return.  Fields written into `frame` are likewise
  * restored into the guest — which is how the secondary return works: THREAD_JOIN
- * delivers the joined status and IPC_CALL the reply's arg0 in frame->rdx, both
+ * delivers the joined status and IPC_CALL the reply's arg0 in the result2 slot, both
  * cleared up front so a failure never leaves a stale value there.
  *
  * `frame` is borrowed and must not be retained.  A NULL frame and an unknown
@@ -402,7 +402,7 @@ static void syscall_trace_ring3_stress(syscall_frame_t* frame) {
  * trampoline, the memory helper, and RAX in [WARP_HC_SYSCALL_BASE,
  * +WARP_HC_MAX), which is forwarded to warp_ring3_dispatch for its own
  * validation. */
-uint64_t x86_syscall_handler(syscall_frame_t* frame) {
+uint64_t syscall_dispatch(syscall_frame_t* frame) {
     thread_t* current_thread = 0;
     if (!frame) {
         return (uint64_t)-1;
@@ -410,25 +410,8 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
     current_thread = thread_get(thread_current_tid());
     /* Keep thread-resume context aligned with the latest syscall trap frame so
      * any blocking/yielding syscall resumes at the correct post-syscall RIP. */
-    if (current_thread && (frame->cs & 0x3u) == 0x3u) {
-        current_thread->ctx.rax = frame->rax;
-        current_thread->ctx.rbx = frame->rbx;
-        current_thread->ctx.rcx = frame->rcx;
-        current_thread->ctx.rdx = frame->rdx;
-        current_thread->ctx.rbp = frame->rbp;
-        current_thread->ctx.rsi = frame->rsi;
-        current_thread->ctx.rdi = frame->rdi;
-        current_thread->ctx.r8 = frame->r8;
-        current_thread->ctx.r9 = frame->r9;
-        current_thread->ctx.r10 = frame->r10;
-        current_thread->ctx.r11 = frame->r11;
-        current_thread->ctx.r12 = frame->r12;
-        current_thread->ctx.r13 = frame->r13;
-        current_thread->ctx.r14 = frame->r14;
-        current_thread->ctx.r15 = frame->r15;
-        current_thread->ctx.cs = frame->cs;
-        current_thread->ctx.rip = frame->rip;
-        current_thread->ctx.rflags = frame->rflags;
+    if (current_thread && arch_syscall_from_user(frame)) {
+        arch_context_save_syscall_frame(&current_thread->ctx, frame);
         current_thread->ctx.root_table = paging_get_current_root_table();
     }
     syscall_trace_ring3_stress(frame);
@@ -438,37 +421,41 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
     /* WARP ring-3 return: the return trampoline fires this after the JIT
      * wrapper executes its final `ret`. RDI contains the raw RAX that the
      * JIT wrapper had on exit (trap code or return value). */
-    if ((uint32_t)frame->rax == WASMOS_SYSCALL_WARP_RETURN) {
+    if ((uint32_t)arch_syscall_number(frame) == WASMOS_SYSCALL_WARP_RETURN) {
         thread_t* r3t = cpu_local()->current_thread;
         if (r3t && r3t->warp_r3_active) {
             r3t->warp_r3_active = 0;
             __builtin_longjmp(r3t->warp_r3_jbuf, 1);
         }
-        frame->rax = (uint64_t)-1;
+        arch_syscall_set_result(frame, (uint64_t)-1);
         return 0;
     }
-    if ((uint32_t)frame->rax == WASMOS_SYSCALL_WARP_MEMORY_HELPER) {
+    if ((uint32_t)arch_syscall_number(frame) == WASMOS_SYSCALL_WARP_MEMORY_HELPER) {
         uint32_t basedata_len = 0;
-        if (syscall_arg_u32(frame->rsi, &basedata_len) != 0) {
-            frame->rax = 0;
+        if (syscall_arg_u32(arch_syscall_arg(frame, 1), &basedata_len) != 0) {
+            arch_syscall_set_result(frame, 0);
             return 0;
         }
-        frame->rax = warp_r3_memory_helper(frame->rdi, basedata_len, frame->rdx);
-        return frame->rax;
+        arch_syscall_set_result(frame,
+                                warp_r3_memory_helper(arch_syscall_arg(frame, 0),
+                                                      basedata_len,
+                                                      arch_syscall_arg(frame, 2)));
+        return arch_syscall_result(frame);
     }
     /* WARP ring-3 hostcall: stubs fire int 0x80 with RAX = 0x100 + hc_id. */
-    if (frame->rax >= WARP_HC_SYSCALL_BASE && frame->rax < WARP_HC_SYSCALL_BASE + WARP_HC_MAX) {
-        uint32_t hc_id = (uint32_t)(frame->rax - WARP_HC_SYSCALL_BASE);
-        frame->rax = (uint64_t)warp_ring3_dispatch(hc_id, (void*)frame);
-        return frame->rax;
+    if (arch_syscall_number(frame) >= WARP_HC_SYSCALL_BASE &&
+        arch_syscall_number(frame) < WARP_HC_SYSCALL_BASE + WARP_HC_MAX) {
+        uint32_t hc_id = (uint32_t)(arch_syscall_number(frame) - WARP_HC_SYSCALL_BASE);
+        arch_syscall_set_result(frame, (uint64_t)warp_ring3_dispatch(hc_id, (void*)frame));
+        return arch_syscall_result(frame);
     }
 #endif
 
-    switch ((uint32_t)frame->rax) {
+    switch ((uint32_t)arch_syscall_number(frame)) {
     case WASMOS_SYSCALL_NOP:
         return 0;
     case WASMOS_SYSCALL_GETPID:
-        if (!g_ring3_native_abi_logged && (frame->cs & 0x3u) == 0x3u) {
+        if (!g_ring3_native_abi_logged && arch_syscall_from_user(frame)) {
             process_t* proc = process_get(process_current_pid());
             if (proc && name_eq(proc->name, "ring3-native")) {
                 g_ring3_native_abi_logged = 1;
@@ -477,7 +464,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         }
         return process_current_pid();
     case WASMOS_SYSCALL_GETTID:
-        if (!g_ring3_native_gettid_logged && (frame->cs & 0x3u) == 0x3u) {
+        if (!g_ring3_native_gettid_logged && arch_syscall_from_user(frame)) {
             process_t* proc = process_get(process_current_pid());
             if (proc && name_eq(proc->name, "ring3-native")) {
                 g_ring3_native_gettid_logged = 1;
@@ -491,7 +478,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (!proc) {
             return (uint64_t)-1;
         }
-        if (syscall_arg_i32(frame->rdi, &exit_status) != 0) {
+        if (syscall_arg_i32(arch_syscall_arg(frame, 0), &exit_status) != 0) {
             return (uint64_t)-1;
         }
         process_set_exit_status(proc, exit_status);
@@ -501,7 +488,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
     case WASMOS_SYSCALL_YIELD:
         if (!g_ring3_yield_logged) {
             process_t* proc = process_get(process_current_pid());
-            if (proc && name_eq(proc->name, "ring3-smoke") && (frame->cs & 0x3u) == 0x3u) {
+            if (proc && name_eq(proc->name, "ring3-smoke") && arch_syscall_from_user(frame)) {
                 g_ring3_yield_logged = 1;
                 klog_write("[test] ring3 yield syscall ok\n");
             }
@@ -511,7 +498,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
     case WASMOS_SYSCALL_THREAD_YIELD:
         if (!g_ring3_thread_yield_logged) {
             process_t* proc = process_get(process_current_pid());
-            if (proc && name_eq(proc->name, "ring3-native") && (frame->cs & 0x3u) == 0x3u) {
+            if (proc && name_eq(proc->name, "ring3-native") && arch_syscall_from_user(frame)) {
                 g_ring3_thread_yield_logged = 1;
                 klog_write("[test] ring3 thread yield syscall ok\n");
             }
@@ -524,10 +511,10 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (!proc) {
             return (uint64_t)-1;
         }
-        if (syscall_arg_i32(frame->rdi, &exit_status) != 0) {
+        if (syscall_arg_i32(arch_syscall_arg(frame, 0), &exit_status) != 0) {
             return (uint64_t)-1;
         }
-        if (!g_ring3_thread_exit_logged && (frame->cs & 0x3u) == 0x3u &&
+        if (!g_ring3_thread_exit_logged && arch_syscall_from_user(frame) &&
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_exit_logged = 1;
             klog_write("[test] ring3 thread exit syscall ok\n");
@@ -539,12 +526,12 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
     case WASMOS_SYSCALL_THREAD_CREATE: {
         process_t* proc = process_get(process_current_pid());
         uint32_t tid = 0;
-        uint64_t entry_rip = frame->rdi;
-        uint64_t user_stack_top = frame->rsi;
+        uint64_t entry_rip = arch_syscall_arg(frame, 0);
+        uint64_t user_stack_top = arch_syscall_arg(frame, 1);
         if (!proc) {
             return (uint64_t)-1;
         }
-        if (!g_ring3_thread_create_logged && (frame->cs & 0x3u) == 0x3u &&
+        if (!g_ring3_thread_create_logged && arch_syscall_from_user(frame) &&
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_create_logged = 1;
             klog_write("[test] ring3 thread create syscall ok\n");
@@ -564,12 +551,12 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (!proc) {
             return (uint64_t)(int64_t)WASMOS_ERR_KERNEL_NO_CALLER;
         }
-        if (!g_ring3_thread_join_logged && (frame->cs & 0x3u) == 0x3u &&
+        if (!g_ring3_thread_join_logged && arch_syscall_from_user(frame) &&
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_join_logged = 1;
             klog_write("[test] ring3 thread join syscall ok\n");
         }
-        if (syscall_arg_u32(frame->rdi, &target_tid) != 0) {
+        if (syscall_arg_u32(arch_syscall_arg(frame, 0), &target_tid) != 0) {
             return (uint64_t)(int64_t)WASMOS_INVAL;
         }
         /* RDX carries the joined thread's exit status, RAX the outcome.  The
@@ -577,25 +564,25 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
          * share RAX with the outcome: a thread exiting -1 would be
          * indistinguishable from a failed join.  Cleared up front so an error
          * return never leaves a stale status in RDX. */
-        frame->rdx = 0;
+        arch_syscall_set_result2(frame, 0);
         for (;;) {
             join_rc = process_thread_join(proc, target_tid, &exit_status);
             if (join_rc == 0) {
-                if (!g_ring3_thread_join_helper_ok_logged && (frame->cs & 0x3u) == 0x3u &&
+                if (!g_ring3_thread_join_helper_ok_logged && arch_syscall_from_user(frame) &&
                     !name_eq(proc->name, "ring3-native") && target_tid != self_tid) {
                     g_ring3_thread_join_helper_ok_logged = 1;
                     klog_write("[test] ring3 thread join helper ok\n");
                 }
-                frame->rdx = (uint64_t)(uint32_t)exit_status;
+                arch_syscall_set_result2(frame, (uint64_t)(uint32_t)exit_status);
                 return 0;
             }
             if (join_rc < 0) {
-                if (!g_ring3_thread_join_self_deny_logged && (frame->cs & 0x3u) == 0x3u &&
+                if (!g_ring3_thread_join_self_deny_logged && arch_syscall_from_user(frame) &&
                     name_eq(proc->name, "ring3-native") && target_tid == self_tid) {
                     g_ring3_thread_join_self_deny_logged = 1;
                     klog_write("[test] ring3 thread join self deny ok\n");
                 }
-                if (!g_ring3_thread_detach_join_deny_logged && (frame->cs & 0x3u) == 0x3u &&
+                if (!g_ring3_thread_detach_join_deny_logged && arch_syscall_from_user(frame) &&
                     name_eq(proc->name, "ring3-threading") && target_tid != self_tid) {
                     g_ring3_thread_detach_join_deny_logged = 1;
                     klog_write("[test] ring3 thread detach join deny ok\n");
@@ -612,29 +599,29 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (!proc) {
             return (uint64_t)-1;
         }
-        if (!g_ring3_thread_detach_logged && (frame->cs & 0x3u) == 0x3u &&
+        if (!g_ring3_thread_detach_logged && arch_syscall_from_user(frame) &&
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_detach_logged = 1;
             klog_write("[test] ring3 thread detach syscall ok\n");
         }
-        if (syscall_arg_u32(frame->rdi, &target_tid) != 0) {
+        if (syscall_arg_u32(arch_syscall_arg(frame, 0), &target_tid) != 0) {
             return (uint64_t)-1;
         }
         detach_rc = process_thread_detach(proc, target_tid);
         if (detach_rc < 0) {
-            if (!g_ring3_thread_detach_invalid_deny_logged && (frame->cs & 0x3u) == 0x3u &&
+            if (!g_ring3_thread_detach_invalid_deny_logged && arch_syscall_from_user(frame) &&
                 name_eq(proc->name, "ring3-native") && target_tid == 0) {
                 g_ring3_thread_detach_invalid_deny_logged = 1;
                 klog_write("[test] ring3 thread detach invalid deny ok\n");
             }
             return (uint64_t)-1;
         }
-        if (!g_ring3_thread_detach_helper_ok_logged && (frame->cs & 0x3u) == 0x3u &&
+        if (!g_ring3_thread_detach_helper_ok_logged && arch_syscall_from_user(frame) &&
             !name_eq(proc->name, "ring3-native") && target_tid != thread_current_tid()) {
             g_ring3_thread_detach_helper_ok_logged = 1;
             klog_write("[test] ring3 thread detach helper ok\n");
         }
-        if (!g_ring3_thread_detach_join_deny_logged && (frame->cs & 0x3u) == 0x3u &&
+        if (!g_ring3_thread_detach_join_deny_logged && arch_syscall_from_user(frame) &&
             name_eq(proc->name, "ring3-native")) {
             if (process_thread_join(proc, target_tid, 0) < 0) {
                 g_ring3_thread_detach_join_deny_logged = 1;
@@ -649,7 +636,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
             return (uint64_t)-1;
         }
         return (uint64_t)(int64_t)user_mutex_user_try_lock(
-            proc->context_id, frame->rdi, thread_current_tid(), 0);
+            proc->context_id, arch_syscall_arg(frame, 0), thread_current_tid(), 0);
     }
     case WASMOS_SYSCALL_MUTEX_UNLOCK: {
         process_t* proc = process_get(process_current_pid());
@@ -657,7 +644,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
             return (uint64_t)-1;
         }
         return (uint64_t)(int64_t)user_mutex_user_unlock(
-            proc->context_id, frame->rdi, thread_current_tid(), 0);
+            proc->context_id, arch_syscall_arg(frame, 0), thread_current_tid(), 0);
     }
     case WASMOS_SYSCALL_WAIT: {
         process_t* proc = process_get(process_current_pid());
@@ -667,7 +654,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (!proc) {
             return (uint64_t)-1;
         }
-        if (syscall_arg_u32(frame->rdi, &target_pid) != 0) {
+        if (syscall_arg_u32(arch_syscall_arg(frame, 0), &target_pid) != 0) {
             return (uint64_t)-1;
         }
         for (;;) {
@@ -695,7 +682,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (!proc) {
             return (uint64_t)-1;
         }
-        if (syscall_arg_u32(frame->rdi, &endpoint) != 0) {
+        if (syscall_arg_u32(arch_syscall_arg(frame, 0), &endpoint) != 0) {
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_arg_width_deny_logged) {
                 g_ring3_ipc_arg_width_deny_logged = 1;
                 klog_write("[test] ring3 ipc syscall arg width deny ok\n");
@@ -753,12 +740,14 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
          * below, not after: that check is the one rejection where RDX still
          * holds caller-supplied input, which a caller reading RDX after a
          * failed call would take for a reply payload. */
-        uint64_t raw_arg0 = frame->rdx;
-        frame->rdx = 0;
-        if (syscall_arg_u32(frame->rdi, &destination) != 0 ||
-            syscall_arg_u32(frame->rsi, &msg_type) != 0 || syscall_arg_u32(raw_arg0, &arg0) != 0 ||
-            syscall_arg_u32(frame->rcx, &arg1) != 0 || syscall_arg_u32(frame->r8, &arg2) != 0 ||
-            syscall_arg_u32(frame->r9, &arg3) != 0) {
+        uint64_t raw_arg0 = arch_syscall_arg(frame, 2);
+        arch_syscall_set_result2(frame, 0);
+        if (syscall_arg_u32(arch_syscall_arg(frame, 0), &destination) != 0 ||
+            syscall_arg_u32(arch_syscall_arg(frame, 1), &msg_type) != 0 ||
+            syscall_arg_u32(raw_arg0, &arg0) != 0 ||
+            syscall_arg_u32(arch_syscall_arg(frame, 3), &arg1) != 0 ||
+            syscall_arg_u32(arch_syscall_arg(frame, 4), &arg2) != 0 ||
+            syscall_arg_u32(arch_syscall_arg(frame, 5), &arg3) != 0) {
             return (uint64_t)(int64_t)IPC_ERR_INVALID;
         }
         if (request_id == 0) {
@@ -778,7 +767,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
                 destination == 0xFFFFFFFFu) {
                 g_ring3_ipc_call_deny_logged = 1;
                 klog_write("[test] ring3 ipc call deny ok\n");
-                if (!g_ring3_ipc_call_err_rdx_zero_logged && frame->rdx == 0) {
+                if (!g_ring3_ipc_call_err_rdx_zero_logged && arch_syscall_result2(frame) == 0) {
                     g_ring3_ipc_call_err_rdx_zero_logged = 1;
                     klog_write("[test] ring3 ipc call err rdx zero ok\n");
                 }
@@ -885,9 +874,9 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (destination == g_ipc_call_echo_endpoint &&
             g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE && msg_type != 0x00009ABCu &&
             msg_type != 0x00009ABDu) {
-            frame->rdx = (uint64_t)req.arg0;
+            arch_syscall_set_result2(frame, (uint64_t)req.arg0);
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
-                (uint32_t)frame->rdx == req.arg0) {
+                (uint32_t)arch_syscall_result2(frame) == req.arg0) {
                 g_ring3_ipc_call_ok_logged = 1;
                 klog_write("[test] ring3 ipc call ok\n");
             }
@@ -907,20 +896,21 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
                 dropped_inauth_replies++;
                 continue;
             }
-            frame->rdx = (uint64_t)resp.arg0;
+            arch_syscall_set_result2(frame, (uint64_t)resp.arg0);
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
-                (uint32_t)frame->rdx == req.arg0) {
+                (uint32_t)arch_syscall_result2(frame) == req.arg0) {
                 g_ring3_ipc_call_ok_logged = 1;
                 klog_write("[test] ring3 ipc call ok\n");
             }
             if (name_eq(proc->name, "ring3-smoke") && msg_type == 0x00009ABCu &&
-                !g_ring3_ipc_call_correlation_logged && (uint32_t)frame->rdx == req.arg0) {
+                !g_ring3_ipc_call_correlation_logged &&
+                (uint32_t)arch_syscall_result2(frame) == req.arg0) {
                 g_ring3_ipc_call_correlation_logged = 1;
                 klog_write("[test] ring3 ipc call correlate ok\n");
                 klog_write("[test] ring3 ipc call stale id deny ok\n");
             }
             if (name_eq(proc->name, "ring3-smoke") && msg_type == 0x00009ABDu &&
-                (uint32_t)frame->rdx == req.arg0) {
+                (uint32_t)arch_syscall_result2(frame) == req.arg0) {
                 klog_write("[test] ring3 ipc call source auth ok\n");
                 if (!g_ring3_ipc_call_spoof_invalid_source_deny_logged &&
                     injected_invalid_source_spoof) {
@@ -957,9 +947,9 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
                 dropped_inauth_replies++;
                 continue;
             }
-            frame->rdx = (uint64_t)resp.arg0;
+            arch_syscall_set_result2(frame, (uint64_t)resp.arg0);
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
-                (uint32_t)frame->rdx == req.arg0) {
+                (uint32_t)arch_syscall_result2(frame) == req.arg0) {
                 g_ring3_ipc_call_ok_logged = 1;
                 klog_write("[test] ring3 ipc call ok\n");
             }

@@ -30,14 +30,16 @@
 #define DEVMGR_RULES_INIT_ROOT "/init/devmgr/rules"
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"
-/* Fixed read/parse buffer for the rules file. Sized for the partition matchers:
- * a rule naming a type GUID and a label runs to roughly twice the length of one
- * naming a driver and a unit.
+/* Fixed read/parse buffer for the rules file. Sized for the partition matchers
+ * -- a rule naming a type GUID and a label runs to roughly twice the length of
+ * one naming a driver and a unit -- and for the shipped boot rules, which are
+ * over 8 KiB; a rule past the cap is lost to the truncation below. The buffer
+ * is static (g_rule_text): the guest's C stack cannot hold it.
  * TODO: a rules file larger than this is silently truncated, dropping its
  * trailing rules with no diagnostic — raising the cap postpones that rather than
  * fixing it. Size the read from FS_IPC_STAT_REQ, or stream it, so the file has
  * no size limit (see docs/TASKS.md). */
-#define DEVMGR_RULE_TEXT_CAP 8192
+#define DEVMGR_RULE_TEXT_CAP 16384
 #define ALWAYS_SPAWN_RULE_CAP 8
 #define BLOCK_FS_RULE_CAP 8
 #define PCI_MATCH_RULE_CAP 8
@@ -87,14 +89,19 @@ typedef struct {
     /* Windows resolved from the driver's declared regions, in declaration order
      * (which is the region index it addresses at runtime). Non-zero count
      * supersedes io_port_min/max and routes the spawn through the descriptor
-     * form, the only one that can describe more than a single window. */
-    uint32_t io_range_count;
-    wasmos_io_range_t io_ranges[WASMOS_IO_RANGE_LIMIT];
+     * form, the only one that can describe more than a single window or a
+     * memory-mapped one. */
+    uint32_t region_count;
+    wasmos_region_grant_t regions[WASMOS_REGION_LIMIT];
     /* The PCI function the device sits at, for a PCI driver. Only the
      * descriptor form carries it (DEVMGR_CAP_PCI_FUNCTION, dm_caps_v2_encode):
      * the kernel quiesces that function when the driver ends. */
     uint8_t pci_function_valid;
     uint16_t pci_function;
+    /* The DMA pinning budget in bytes a DMA grant carries: the driver's declared
+     * budget (wasmos_module_meta_desc_t.dma_budget_pages) when its metadata is
+     * known, 0 for the single-page default otherwise. */
+    uint32_t dma_max_bytes;
 } spawn_caps_t;
 
 /* One entry in the PCI device registry; populated from pci_bus scan messages. */
@@ -313,13 +320,16 @@ typedef struct {
 /* Rule: spawn a driver when a PCI device matching class/vendor/device is found.
  * spawned_device_mask is a bitmask of registry[] indices already spawned.
  *
- * `meta` caches what the module this rule names declares about itself, fetched
- * once when the PCI inventory is consumed. It is cached rather than queried on
- * demand because the queue walk runs inside event-handler dispatch, where a
- * blocking request would be a nested receive; with the descriptor in hand,
- * resolving a device's windows is pure. `meta_valid` is 0 when the module could
- * not be resolved, in which case the rule still spawns, just without declared
- * windows. */
+ * `meta` caches what the driver this rule names declares about itself, fetched
+ * when the PCI inventory is consumed: synchronously by module index for a boot
+ * module (`meta_from_module`, which also means the driver is spawned from
+ * /init), and with a deferred PROC_IPC_MODULE_META_FILE for a driver on a
+ * filesystem (`meta_pending` until the answer arrives; the rule is not armed
+ * meanwhile, so it cannot spawn without the windows it declared). It is cached
+ * rather than queried on demand because the queue walk runs inside
+ * event-handler dispatch; with the descriptor in hand, resolving a device's
+ * windows is pure. `meta_valid` is 0 when the driver could not be described, in
+ * which case the rule still spawns, just without declared windows. */
 typedef struct {
     uint8_t active;
     uint8_t bus;
@@ -337,6 +347,8 @@ typedef struct {
     uint64_t given_up_device_mask;
     char spawn_path[96];
     uint8_t meta_valid;
+    uint8_t meta_from_module;
+    uint8_t meta_pending;
     wasmos_module_meta_desc_t meta;
     /* ENV{RESTART}, as on acpi_match_rule_t. */
     char restart[12];
@@ -401,6 +413,13 @@ typedef struct {
      * corrupts active_rule_spawn_* state -- so the refresh is deferred to a
      * point where nothing is pending. */
     uint8_t pci_rule_meta_dirty;
+    /* One PROC_IPC_MODULE_META_FILE in flight at a time, sent for rule set
+     * generation meta_req_generation; a reply for an older generation (the rules
+     * were reloaded meanwhile) only releases its buffer. */
+    uint8_t meta_req_pending;
+    int32_t meta_req_bid;
+    uint32_t meta_req_generation;
+    uint32_t meta_generation;
     uint8_t rules_roots_logged;
     uint8_t idle_logged;
     uint8_t rules_init_fail_logged;
@@ -430,11 +449,20 @@ typedef struct {
     /* One SUPERVISOR_IPC_SUBMIT_REQ in flight for the armed rule, held like
      * mount_req_pending: the rule is retired when the supervisor answers. */
     uint8_t submit_req_pending;
-    int32_t submit_req_bid;          /* owner-push buffer lent READ to the supervisor */
-    int32_t sv_endpoint;             /* receives the submit reply and the name watch's events */
-    int32_t supervisor_endpoint;     /* bound by the "supervisor" name watch; -1 until then */
-    uint8_t active_rule_spawn_kind;  /* which rule kind is driving the spawn */
-    int32_t active_rule_spawn_index; /* index into the corresponding rule array */
+    int32_t submit_req_bid;      /* owner-push buffer lent READ to the supervisor */
+    int32_t sv_endpoint;         /* receives the submit reply and the name watch's events */
+    int32_t supervisor_endpoint; /* bound by the "supervisor" name watch; -1 until then */
+    /* One PROC_IPC_SPAWN_WATCHED in flight for the armed PCI or ACPI rule, held
+     * like submit_req_pending: the rule is retired when its child latches READY
+     * (PROC_IPC_CHILD_READY), retried when the child exits first, and given up
+     * when watch_spawn_deadline passes with neither. */
+    uint8_t watch_spawn_pending;
+    int32_t watch_spawn_bid;                /* owner-push buffer lent READ|WRITE to the PM */
+    uint32_t watch_spawn_pid;               /* the child, once the PM has answered; 0 before */
+    uint32_t watch_spawn_deadline;          /* sched_ticks by which the child must be READY */
+    int32_t spawn_endpoint;                 /* receives the spawn reply and the child's events */
+    uint8_t active_rule_spawn_kind;         /* which rule kind is driving the spawn */
+    int32_t active_rule_spawn_index;        /* index into the corresponding rule array */
     int32_t active_rule_spawn_device_index; /* device registry index for pci/acpi */
     always_spawn_rule_t always_spawn_rules[ALWAYS_SPAWN_RULE_CAP];
     uint32_t always_spawn_rule_count;

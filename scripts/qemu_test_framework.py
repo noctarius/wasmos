@@ -45,13 +45,24 @@ class QemuConfig:
     userfs_snapshot: bool = True
     nographic: bool = True
     display: str = ""
-    # File the guest's COM2 is captured into. The shipped kernel.cmdline sets
-    # log.serial=com2, so COM2 carries the kernel log and nothing else, written
-    # by the kernel directly: complete and in order whatever the vt is doing,
-    # whichever slot COM1 is bound to. Empty: QemuSession.start creates one per
-    # session in WASMOS_QEMU_SYSLOG_DIR (default: the temp dir), kept only when
-    # a timeout reported it.
+    # File the guest's kernel-log port is captured into: the kernel log and
+    # nothing else, complete and in order whatever the vt is doing, whichever
+    # slot COM1 is bound to. Empty: QemuSession.start creates one per session in
+    # WASMOS_QEMU_SYSLOG_DIR (default: the temp dir), kept only when a timeout
+    # reported it.
     syslog_path: str = ""
+    # Which port carries the kernel log into syslog_path:
+    #   "virtio" (default) -- a virtio console (virtio-serial-pci at a fixed
+    #       slot, virtconsole port 0) that the virtio_serial driver feeds from
+    #       the kmsg ring. It starts when device-manager spawns that driver and
+    #       replays the ring from boot, but carries nothing after the driver is
+    #       gone: no panic, no end of a shutdown.
+    #   "com2" -- the second UART, which the kernel writes itself
+    #       (log.serial=com2 is added to this session's kernel options): from
+    #       the first lines of boot through a panic, with no driver involved.
+    #       For kernel self-test trees and tests that read shutdown or panic
+    #       output. Override the default with WASMOS_QEMU_KLOG_PORT.
+    klog_port: str = ""
     isolate_esp: bool = False
     # Boot options appended to this session's \kernel.cmdline, e.g.
     # ("linmem.slots=36",). Non-empty implies isolate_esp: the options go into a
@@ -86,6 +97,8 @@ class QemuConfig:
             self.wfs_image = os.environ.get(
                 "WASMOS_WFS_IMAGE", os.path.join("out", "default", "wfs.img")
             )
+        if not self.klog_port:
+            self.klog_port = os.environ.get("WASMOS_QEMU_KLOG_PORT", "virtio")
         if not self.wfs_virtio_image:
             self.wfs_virtio_image = os.environ.get(
                 "WASMOS_WFS_VIRTIO_IMAGE",
@@ -439,8 +452,19 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.smp_count > 1:
         cmd += ["-smp", str(cfg.smp_count)]
     cmd += ["-serial", "mon:stdio"]
-    if cfg.syslog_path:
+    if cfg.syslog_path and cfg.klog_port == "com2":
         cmd += ["-serial", f"file:{cfg.syslog_path}"]
+    elif cfg.syslog_path:
+        # Slot 0x1e keeps the other devices where they are: a virtio-blk
+        # disk's identity is derived from its slot (block:virtio-blk:40).
+        cmd += [
+            "-device",
+            "virtio-serial-pci,id=klogbus,addr=0x1e",
+            "-chardev",
+            f"file,id=klog,path={cfg.syslog_path}",
+            "-device",
+            "virtconsole,bus=klogbus.0,chardev=klog",
+        ]
     cmd += [
         "-drive",
         f"if=pflash,format=raw,readonly=on,file={cfg.ovmf_code}",
@@ -998,11 +1022,19 @@ class QemuSession:
             raise FileNotFoundError(f"ESP dir not found: {self.cfg.esp_dir}")
 
         runtime_cfg = self.cfg
-        if self.cfg.isolate_esp or self.cfg.kernel_options:
+        if (
+            self.cfg.klog_port == "com2"
+            and "log.serial=com2" not in self.cfg.kernel_options
+        ):
+            runtime_cfg = replace(
+                runtime_cfg,
+                kernel_options=(*runtime_cfg.kernel_options, "log.serial=com2"),
+            )
+        if runtime_cfg.isolate_esp or runtime_cfg.kernel_options:
             temp_root = tempfile.mkdtemp(prefix="wasmos-esp-")
             runtime_esp = os.path.join(temp_root, "esp")
-            shutil.copytree(self.cfg.esp_dir, runtime_esp)
-            if self.cfg.kernel_options:
+            shutil.copytree(runtime_cfg.esp_dir, runtime_esp)
+            if runtime_cfg.kernel_options:
                 cmdline_path = os.path.join(runtime_esp, "kernel.cmdline")
                 shipped = ""
                 if os.path.exists(cmdline_path):
@@ -1010,12 +1042,12 @@ class QemuSession:
                         shipped = f.read().strip()
                 with open(cmdline_path, "w", encoding="ascii") as f:
                     f.write(
-                        " ".join([shipped, *self.cfg.kernel_options]).strip() + "\n"
+                        " ".join([shipped, *runtime_cfg.kernel_options]).strip() + "\n"
                     )
             # replace() rather than a field-by-field rebuild: this used to list
             # every field, so a field added to QemuConfig was silently dropped
             # from an isolated-ESP run and the test quietly ran without it.
-            runtime_cfg = replace(self.cfg, esp_dir=runtime_esp, isolate_esp=False)
+            runtime_cfg = replace(runtime_cfg, esp_dir=runtime_esp, isolate_esp=False)
             self._esp_runtime_dir = temp_root
             atexit.register(self._cleanup_esp_runtime_dir)
 

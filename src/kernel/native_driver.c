@@ -3,6 +3,7 @@
  * profile and IPC endpoint, mirroring the WASM driver model but without the
  * wasm3 interpreter layer. */
 #include "native_driver.h"
+#include "arch/arch_cpu.h"
 #include "klog.h"
 #include "memory.h"
 #include "paging.h"
@@ -14,7 +15,7 @@
 #include "framebuffer.h"
 #include "idtable.h"
 #include "ipc.h"
-#include "io.h"
+#include "arch/arch_io.h"
 #include "list.h"
 #include "user_mutex.h"
 #include "policy.h"
@@ -44,7 +45,6 @@ _Static_assert(sizeof(nd_ipc_message_t) == sizeof(ipc_message_t), "nd_ipc_messag
 #define ELFCLASS64 2
 #define ET_EXEC 2
 #define ET_DYN 3
-#define EM_X86_64 62
 #define PT_LOAD 1
 #define PF_W 2
 #define PF_X 1
@@ -667,8 +667,7 @@ static int nd_io_in8(uint16_t port, uint8_t* out) {
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
-    *out = inb(port);
-    return 0;
+    return arch_port_in8(port, out) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
 static int nd_io_in16(uint16_t port, uint16_t* out) {
@@ -679,8 +678,7 @@ static int nd_io_in16(uint16_t port, uint16_t* out) {
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
-    *out = inw(port);
-    return 0;
+    return arch_port_in16(port, out) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
 static int nd_io_out8(uint16_t port, uint8_t val) {
@@ -688,8 +686,7 @@ static int nd_io_out8(uint16_t port, uint8_t val) {
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
-    outb(port, val);
-    return 0;
+    return arch_port_out8(port, val) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
 static int nd_io_out16(uint16_t port, uint16_t val) {
@@ -697,8 +694,7 @@ static int nd_io_out16(uint16_t port, uint16_t val) {
     if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
-    outw(port, val);
-    return 0;
+    return arch_port_out16(port, val) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
 static uint32_t nd_ipc_create_endpoint(void) {
@@ -864,7 +860,7 @@ static int elf_validate(const uint8_t* data, uint32_t size) {
     if (hdr->e_ident[4] != ELFCLASS64) {
         return -1;
     }
-    if (hdr->e_machine != EM_X86_64) {
+    if (hdr->e_machine != ARCH_ELF_MACHINE) {
         return -1;
     }
     if (hdr->e_type != ET_EXEC && hdr->e_type != ET_DYN) {

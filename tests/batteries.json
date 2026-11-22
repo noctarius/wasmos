@@ -41,6 +41,7 @@
         "test_device_manager.py",
         "test_init_smoke.py",
         "test_syslog_port.py",
+        "test_mmio_mappings.py",
         "test_dmesg.py",
         "test_logger.py",
         "test_ring3_smoke_target.py",

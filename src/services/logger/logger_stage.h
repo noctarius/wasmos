@@ -19,6 +19,9 @@
 typedef int32_t (*logger_read_fn)(void* user, uint8_t* dst, int32_t len, uint64_t* seq);
 
 typedef struct {
+    /* Prefix of the marker lines, e.g. "[virtio-serial]"; NULL means
+     * "[logger]". The ring has more than one follower, and each names itself. */
+    const char* tag;
     uint64_t seq;    /* sequence number of the next kernel-log byte to read */
     uint8_t resumed; /* seq came from logger_stage_resume and was not read yet */
     char marker[LOGGER_MARKER_MAX];

@@ -13,19 +13,18 @@ if SCRIPTS not in sys.path:
 from qemu_test_framework import QemuSession, default_config
 
 
-class SyslogPortTests(unittest.TestCase):
-    """COM2 carries the kernel log, and only the kernel log.
+class _KernelLogPortChecks:
+    """What any kernel-log port must hold: the boot from its first lines, every
+    service line after it, and no shell output, which belongs to its slot and
+    stays on COM1. Subclasses pick the port."""
 
-    The shipped kernel.cmdline sets log.serial=com2, and the harness captures
-    COM2 into a file per session. The kernel writes that port directly, so it
-    holds the boot from its first lines (the early-log replay) and every service
-    line after it, independent of the vt. A shell's output belongs to its slot
-    and stays on COM1.
-    """
+    klog_port = ""
+    session = None
 
     @classmethod
     def setUpClass(cls):
         cfg = default_config()
+        cfg.klog_port = cls.klog_port
         cls.session = QemuSession(cfg, timeout_s=120, echo=True)
         cls.session.start()
         cls.session.require_prompt()
@@ -44,21 +43,15 @@ class SyslogPortTests(unittest.TestCase):
             time.sleep(0.25)
         return False
 
-    def test_com2_holds_the_kernel_log_and_not_shell_output(self):
+    def _require(self, needle: str, why: str) -> None:
         self.assertTrue(
-            self._syslog_contains("[kernel] kmain"),
-            "COM2 does not start with the boot: the early-log replay is missing.\n"
-            f"--- syslog ---\n{self.session.syslog_tail()}\n",
+            self._syslog_contains(needle),
+            f"{why}\n--- syslog ---\n{self.session.syslog_tail()}\n",
         )
-        self.assertTrue(
-            self._syslog_contains("[kernel] log.serial=com2: kernel log also on COM2"),
-            f"the kernel did not enable COM2.\n--- syslog ---\n{self.session.syslog_tail()}\n",
-        )
-        self.assertTrue(
-            self._syslog_contains("[calculator] ready"),
-            "a service's log line is missing from COM2.\n"
-            f"--- syslog ---\n{self.session.syslog_tail()}\n",
-        )
+
+    def test_the_port_holds_the_kernel_log_and_not_shell_output(self):
+        self._require("[kernel] kmain", "the port does not start with the boot")
+        self._require("[calculator] ready", "a service's log line is missing")
 
         start = self.session.send_command("echo shell_only_marker", timeout_s=20)
         if not self.session.expect_from(start, b"shell_only_marker", timeout_s=20):
@@ -71,6 +64,41 @@ class SyslogPortTests(unittest.TestCase):
             "shell_only_marker",
             self.session.syslog_tail(1 << 20),
             "a shell's output reached the kernel-log port",
+        )
+
+
+class VirtioKernelLogPortTests(_KernelLogPortChecks, unittest.TestCase):
+    """The default port: a virtio console that virtio_serial feeds from the kmsg
+    ring. The driver starts well after boot, so "[kernel] kmain" on it proves
+    the replay from the oldest retained byte, and the driver's own line names
+    the device it found."""
+
+    klog_port = "virtio"
+
+    def test_the_driver_replays_the_ring_onto_the_console(self):
+        self._require(
+            "[virtio-serial] kernel log on virtio console",
+            "virtio_serial did not come up on the console",
+        )
+        self.assertNotIn(
+            "[virtio-serial] ",
+            self.session.syslog_tail(1 << 20).replace(
+                "[virtio-serial] kernel log on virtio console", ""
+            ),
+            "the replay reported kernel log lost or not retained",
+        )
+
+
+class Com2KernelLogPortTests(_KernelLogPortChecks, unittest.TestCase):
+    """The x86_64 alternative: with log.serial=com2 the kernel writes the second
+    UART itself, from an early-log replay onward, with no driver involved."""
+
+    klog_port = "com2"
+
+    def test_the_kernel_enables_com2(self):
+        self._require(
+            "[kernel] log.serial=com2: kernel log also on COM2",
+            "the kernel did not enable COM2",
         )
 
 

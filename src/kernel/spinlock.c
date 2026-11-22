@@ -1,17 +1,18 @@
-#include "arch/x86_64/spinlock.h"
+#include "sync/spinlock.h"
 #include "process.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
+#include "arch/arch_cpu.h"
 
 /*
  * Interrupt-safe spinlock implementation for WASMOS.
  *
- * spinlock_lock() saves RFLAGS and clears IF (cli) on first entry;
- * spinlock_unlock() restores RFLAGS on last exit.  A lock taken through that
- * pair is therefore held with IF=0: no hardware interrupt can fire on the same
- * CPU while it is held, eliminating the classic single-CPU IRQ deadlock where
- * an IRQ handler tries to acquire a lock already held by the interrupted
- * thread.  The _noirq pair and spinlock_try_lock deliberately opt out of that
- * guarantee; see their own notes below.
+ * spinlock_lock() saves the interrupt state and masks interrupts on first
+ * entry; spinlock_unlock() restores that state on last exit.  A lock taken
+ * through that pair is therefore held with interrupts masked: no hardware
+ * interrupt can fire on the same CPU while it is held, eliminating the classic
+ * single-CPU IRQ deadlock where an IRQ handler tries to acquire a lock already
+ * held by the interrupted thread.  The _noirq pair and spinlock_try_lock
+ * deliberately opt out of that guarantee; see their own notes below.
  *
  * The IRQ-disable depth counter lives in cpu_local_t so each CPU tracks its
  * own interrupt state independently under SMP.
@@ -21,24 +22,23 @@
  * would block interrupt delivery for the whole WASM process lifetime.
  *
  * Same-CPU recursive acquisition is not supported and will deadlock.  For a
- * lock taken via spinlock_lock() the holder runs with IF=0, so an IRQ handler
- * cannot interrupt it on the same CPU and accidental same-CPU reentry is
+ * lock taken via spinlock_lock() the holder runs with interrupts masked, so an
+ * IRQ handler cannot interrupt it on the same CPU and accidental same-CPU reentry is
  * structurally impossible for the IRQ-driven send paths.  Any reentry that does
  * occur is a bug and the deadlock is the correct loud failure mode.
  */
 
 /*
- * Save RFLAGS (capturing IF) and disable interrupts.  On the first nesting
- * level (depth 0→1) the saved RFLAGS are stored for later restoration.
- * Subsequent nested calls (depth already ≥1) do cli but discard the flags
- * because IF is already 0 and the saved original value must be preserved.
+ * Save the interrupt state and mask interrupts.  On the first nesting level
+ * (depth 0→1) the saved state is stored for later restoration.  Subsequent
+ * nested calls (depth already ≥1) mask again but discard the state, because
+ * interrupts are already masked and the saved original value must be preserved.
  *
- * The pushfq+cli sequence is performed BEFORE checking/incrementing the depth
- * counter to close the window where IF=1 but depth>0.
+ * arch_irq_save() runs BEFORE checking/incrementing the depth counter to close
+ * the window where interrupts are enabled but depth>0.
  */
 static inline void spinlock_irq_save(void) {
-    uint64_t flags;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags)::"memory");
+    arch_irq_flags_t flags = arch_irq_save();
     cpu_local_t* cpu = cpu_local();
     if (cpu->irq_disable_depth++ == 0) {
         cpu->irq_saved_flags = flags;
@@ -46,9 +46,9 @@ static inline void spinlock_irq_save(void) {
 }
 
 /*
- * Decrement the IRQ-disable depth.  On the final exit (depth 1→0) restore
- * RFLAGS, which re-enables interrupts if they were enabled before the first
- * spinlock_irq_save().
+ * Decrement the IRQ-disable depth.  On the final exit (depth 1→0) restore the
+ * saved interrupt state, which re-enables interrupts if they were enabled
+ * before the first spinlock_irq_save().
  */
 static inline void spinlock_irq_restore(void) {
     cpu_local_t* cpu = cpu_local();
@@ -56,7 +56,7 @@ static inline void spinlock_irq_restore(void) {
         return;
     }
     if (--cpu->irq_disable_depth == 0) {
-        __asm__ volatile("push %0; popfq" ::"r"(cpu->irq_saved_flags) : "memory");
+        arch_irq_restore(cpu->irq_saved_flags);
     }
 }
 
@@ -83,7 +83,7 @@ int spinlock_try_lock(spinlock_t* lock) {
     return __sync_lock_test_and_set(&lock->state, 1u) == 0u;
 }
 
-/* Spins until acquired; returns holding the lock with IF=0 and preemption
+/* Spins until acquired; returns holding the lock with interrupts masked and preemption
  * disabled one level deeper.  Must be paired with spinlock_unlock.
  *
  * The IRQ/preempt state is established and then RELEASED again on every failed
@@ -105,12 +105,12 @@ void spinlock_lock(spinlock_t* lock) {
         }
         preempt_enable();
         spinlock_irq_restore();
-        __asm__ volatile("pause");
+        arch_cpu_relax();
     }
 }
 
 /* Undoes spinlock_lock in the exact reverse order: the lock word is released
- * first, then the preempt depth, then RFLAGS.  Releasing the word last would
+ * first, then the preempt depth, then the interrupt state.  Releasing the word last would
  * leave a window in which this CPU has already re-enabled interrupts (and can
  * take an IRQ, or be preempted) while still holding the lock. */
 void spinlock_unlock(spinlock_t* lock) {
@@ -123,10 +123,10 @@ void spinlock_unlock(spinlock_t* lock) {
 }
 
 /* No-IRQ variants: acquire/release WITHOUT touching the irq_disable_depth counter
- * or calling cli/sti.  Safe only when no interrupt handler on this CPU will ever
- * try to acquire the same lock (which is the case for runtime_lock, held across an
- * entire WASM process timeslice — using the regular spinlock_lock would keep cli
- * active for the whole timeslice and permanently suppress keyboard/mouse IRQs). */
+ * or masking interrupts.  Safe only when no interrupt handler on this CPU will
+ * ever try to acquire the same lock (which is the case for runtime_lock, held
+ * across an entire WASM process timeslice — using the regular spinlock_lock would
+ * keep interrupts masked for the whole timeslice and permanently suppress keyboard/mouse IRQs). */
 void spinlock_lock_noirq(spinlock_t* lock) {
     if (!lock) {
         return;
@@ -135,7 +135,7 @@ void spinlock_lock_noirq(spinlock_t* lock) {
         if (spinlock_try_lock(lock)) {
             return;
         }
-        __asm__ volatile("pause");
+        arch_cpu_relax();
     }
 }
 

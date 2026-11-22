@@ -83,6 +83,10 @@ receives every tty's output and the kernel log, and its registrant owns COM1
 `CAP_SPAWN_GRANT` and `CAP_SVC_CONTROL` gate requests rather than hardware;
 see "Requester Checks" below. `CAP_PCI_CONFIG` gates the
 `pci_config_read` / `pci_config_write` host calls; only pci-bus declares it.
+Without it, a process may still READ the config space of the one function it
+owns -- the one its spawn profile names, until its reap retires it -- which is
+how a virtio-modern driver finds its register blocks; writing stays
+pci-bus-only (`pci_config_guest_read`, `src/kernel/pci_config.c`).
 
 ---
 
@@ -93,9 +97,8 @@ typedef struct {
     uint32_t context_id;
     uint8_t  configured;               // 1 once any capability has been granted
     uint8_t  spawn_profile_configured; // 1 once capability_set_spawn_profile called
-    uint8_t  io_port_range_valid;
-    uint16_t io_port_min;
-    uint16_t io_port_max;
+    uint32_t region_count;
+    capability_region_t regions[CAPABILITY_REGION_LIMIT]; // register windows, by region index
     uint16_t irq_mask;                 // 16-bit bitmask, one bit per IRQ line
     uint32_t dma_direction_flags;      // WASMOS_DMA_DIR_* bitmask
     uint32_t dma_max_bytes;
@@ -122,14 +125,53 @@ stable for the lifetime of the process.
 - ORs the bit into `ctx->mask` and sets `ctx->configured = 1`.
 - Fails (returns -1) for unknown capability names.
 
-`capability_set_spawn_profile(context_id, cap_flags, io_port_min, io_port_max, irq_mask, dma_direction_flags, dma_max_bytes, dma_window_count, dma_windows)`:
-- Called during spawn when the app declares a `wasmos_spawn_caps_v2_t` header.
+`capability_set_spawn_profile(context_id, cap_flags, region_count, regions, irq_mask, dma_direction_flags, dma_max_bytes, dma_window_count, dma_windows)`:
+- Called during spawn when the requester supplies a capability descriptor
+  (`wasmos_spawn_caps_v2_t`, or one of the packed spawn forms).
 - Stores fine-grained constraints for later per-operation enforcement.
-- `cap_flags` bit 0: enable I/O port range restriction.
+- `cap_flags` is a `DEVMGR_CAP_*` mask.
+- `regions` are the register windows, in region-index order (see Register
+  Windows below). Each needs the bit of its kind: bit 0 (`io.port`) for an I/O
+  window, bit 1 (`mmio.map`) for a memory-mapped one.
 - `cap_flags` bit 2: enable IRQ mask restriction.
 - `cap_flags` bit 3: enable DMA direction/range restriction.
 - If DMA is enabled, `dma_window_count` must be `> 0` and `≤
   CAPABILITY_DMA_WINDOW_LIMIT`; the window array is copied in full.
+- Over-declared or malformed input is refused whole, never truncated.
+
+### Register Windows
+
+A driver addresses its device's registers as `(region, offset)` through the
+`io_region_in*/out*` host calls and never names an absolute port or physical
+address. `region` is an index into the profile's windows in the order the
+driver declared them (`[[regions]]`, doc 13), so a window's position IS its
+identity: a profile is never reordered or shortened, and a window the kernel
+cannot honour exactly refuses the whole spawn rather than being dropped, since
+dropping one would renumber every window after it.
+
+A window (`wasmos_region_grant_t`) is one of two kinds:
+
+| Kind                       | `base`            | `length` | Access                         |
+|----------------------------|-------------------|----------|--------------------------------|
+| `WASMOS_REGION_GRANT_IO`   | first I/O port    | ports    | one `in`/`out` of the width    |
+| `WASMOS_REGION_GRANT_MMIO` | physical address  | bytes    | one load/store of the width    |
+
+A memory-mapped window is page-aligned and outside system RAM. The process
+manager maps it into the kernel (`device_window_map`, doc 06) before it
+installs the profile, and the host call reaches the register through that
+mapping, uncached; the driver holds no mapping of its own. An access to a
+memory-mapped window must be naturally aligned (`WASMOS_ERR_IO_MISALIGNED`).
+
+I/O ports are an x86 notion. Neutral kernel code reaches them only through
+`arch/arch_io.h`; on an architecture without a port space every port access --
+an I/O window, and the raw `io_in*` / `io_out*` / `io_wait` host calls -- is
+refused with `WASMOS_ERR_IO_NO_PORT_SPACE`, so a driver there is given
+memory-mapped windows only.
+
+`capability_region_resolve` is the single resolution point: it bounds-checks
+the WHOLE access against the window and answers the port or kernel VA, or a
+packed `WASMOS_ERR_IO_*` code naming the refusal (no windows, no such region,
+out of window, misaligned).
 
 ---
 
@@ -219,10 +261,12 @@ since their vectors went back to the kernel at its reap.
 `capability_has(context_id, kind)` — basic presence check. Returns 1 if the
 mask bit is set, 0 otherwise.
 
-`capability_io_port_allowed(context_id, port)` — returns 1 if the spawn
-profile has `io_port_range_valid` and `port ∈ [io_port_min, io_port_max]`.
-Returns 0 if no profile is configured (permissive in that case, since
-presence is checked separately).
+`capability_io_port_allowed(context_id, port)` — returns 1 if the port lies
+inside one of the spawn profile's I/O windows. Returns 0 if no profile is
+configured (permissive in that case, since presence is checked separately).
+
+`capability_region_resolve(context_id, region, offset, width, out)` — see
+Register Windows above.
 
 `capability_irq_line_allowed(context_id, irq_line)` — returns 1 if spawn
 profile has the bit `(irq_mask >> irq_line) & 1` set. IRQ lines ≥ 16 always

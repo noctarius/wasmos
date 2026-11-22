@@ -29,7 +29,7 @@
 #include "process.h"
 #include "thread.h"
 #include "serial.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 
 #define SMP_STRESS_WORKERS 8u
 #define SMP_STRESS_ITERS 256u

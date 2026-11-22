@@ -5,10 +5,12 @@
 #include "cpu.h"
 #include "arch/x86_64/cpu_x86_64.h"
 #include "arch/x86_64/msr.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "kpanic.h"
 #include "serial.h"
+#include "klog.h"
 #include "process.h"
+#include "memory.h"
 #include "memory_service.h"
 #include "irq.h"
 #include "msi.h"
@@ -97,7 +99,7 @@ extern volatile uint64_t g_ctx_restore_rflags;
 static idt_entry_t g_idt[IDT_ENTRY_COUNT];
 
 /* GDT initial values, copied into every CPU's private gdt[] (BSP in
- * x86_cpu_init(), APs in x86_cpu_prepare_ap()).  Entries are null, kernel
+ * cpu_init(), APs in x86_cpu_prepare_ap()).  Entries are null, kernel
  * code/data (DPL 0), user code/data (DPL 3); slots [5..6] hold the 16-byte
  * 64-bit TSS descriptor and are filled in by gdt_set_tss_base(). */
 static const uint64_t k_gdt_template[GDT_ENTRY_COUNT] = {
@@ -291,8 +293,8 @@ static void panic_render_screen(uint64_t vector, uint64_t err, uint64_t rip, uin
 
 static void gdt_install(cpu_local_t* cpu) {
     descriptor_ptr_t gdtr;
-    gdtr.limit = (uint16_t)(sizeof(cpu->gdt) - 1);
-    gdtr.base = addr_cast(uint64_t, &cpu->gdt[0]);
+    gdtr.limit = (uint16_t)(sizeof(cpu->arch.gdt) - 1);
+    gdtr.base = addr_cast(uint64_t, &cpu->arch.gdt[0]);
 
     /* CS cannot be loaded with a mov, so the new kernel code selector is applied
      * by pushing selector:offset and taking a far return to the next
@@ -356,7 +358,7 @@ static uint64_t x86_kernel_data_addr(uint64_t addr) {
 }
 
 static void gdt_set_tss_base(cpu_local_t* cpu, uint64_t base) {
-    uint32_t limit = (uint32_t)(sizeof(cpu->tss) - 1u);
+    uint32_t limit = (uint32_t)(sizeof(cpu->arch.tss) - 1u);
     uint64_t low = 0;
     low |= (uint64_t)(limit & 0xFFFFu);
     low |= (uint64_t)(base & 0xFFFFFFu) << 16;
@@ -364,17 +366,17 @@ static void gdt_set_tss_base(cpu_local_t* cpu, uint64_t base) {
     low |= (uint64_t)((limit >> 16) & 0xFu) << 48;
     low |= (uint64_t)((base >> 24) & 0xFFu) << 56;
     uint64_t high = (uint64_t)(base >> 32);
-    cpu->gdt[5] = low;
-    cpu->gdt[6] = high;
+    cpu->arch.gdt[5] = low;
+    cpu->arch.gdt[6] = high;
 }
 
 static void gdt_set_tss(cpu_local_t* cpu) {
-    gdt_set_tss_base(cpu, addr_cast(uint64_t, &cpu->tss));
+    gdt_set_tss_base(cpu, addr_cast(uint64_t, &cpu->arch.tss));
 }
 
 static void tss_init(cpu_local_t* cpu) {
-    for (uint32_t i = 0; i < sizeof(cpu->tss); ++i) {
-        ((uint8_t*)&cpu->tss)[i] = 0;
+    for (uint32_t i = 0; i < sizeof(cpu->arch.tss); ++i) {
+        ((uint8_t*)&cpu->arch.tss)[i] = 0;
     }
     for (uint32_t i = 0; i < CPU_IST_STACK_SIZE; ++i) {
         g_irq0_ist_stack[i] = 0xCC;
@@ -382,9 +384,9 @@ static void tss_init(cpu_local_t* cpu) {
     *ptr_cast(uint64_t, g_irq0_ist_stack) = g_irq0_ist_canary;
     uint64_t ist1_top = addr_cast(uint64_t, (g_irq0_ist_stack + CPU_IST_STACK_SIZE));
     uint64_t rsp0_top = addr_cast(uint64_t, (g_bsp_rsp0_stack + CPU_IST_STACK_SIZE));
-    cpu->tss.rsp0 = rsp0_top;
-    cpu->tss.ist1 = ist1_top;
-    cpu->tss.iopb = (uint16_t)sizeof(cpu->tss);
+    cpu->arch.tss.rsp0 = rsp0_top;
+    cpu->arch.tss.ist1 = ist1_top;
+    cpu->arch.tss.iopb = (uint16_t)sizeof(cpu->arch.tss);
     gdt_set_tss(cpu);
 }
 
@@ -642,6 +644,26 @@ int x86_user_exception_handler(uint64_t vector, const uint64_t* frame) {
  * Despite the name, memory_service_handle_fault_ipc() resolves the fault in-line
  * rather than over IPC, so the only path that parks the caller is the ring-3
  * termination one. */
+/* #PF error-code bits (Intel SDM Vol. 3A, "Page-Fault Error Code"): P (bit 0),
+ * W/R (bit 1), U/S (bit 2), I/D (bit 4). The other bits (RSVD, PK, SS, SGX)
+ * carry no information the region checks use. */
+static uint32_t x86_pf_access(uint64_t error_code) {
+    uint32_t access = 0;
+    if (error_code & (1ULL << 0)) {
+        access |= MM_FAULT_PRESENT;
+    }
+    if (error_code & (1ULL << 1)) {
+        access |= MM_FAULT_WRITE;
+    }
+    if (error_code & (1ULL << 2)) {
+        access |= MM_FAULT_USER;
+    }
+    if (error_code & (1ULL << 4)) {
+        access |= MM_FAULT_EXEC;
+    }
+    return access;
+}
+
 int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
     uint64_t cr2 = 0;
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
@@ -673,7 +695,7 @@ int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
         return 0;
     }
 
-    if (memory_service_handle_fault_ipc(proc->context_id, cr2, error_code) != 0) {
+    if (memory_service_handle_fault_ipc(proc->context_id, cr2, x86_pf_access(error_code)) != 0) {
         if (from_user) {
             serial_printf("[fault] user-pf pid=%u reason=%s err=%016llx cr2=%016llx rip=%016llx\n",
                           pid,
@@ -741,9 +763,9 @@ int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
  *
  * Gate handler addresses go through x86_kernel_handler_addr(), so they are
  * higher-half aliases; the GDTR/IDTR bases, TSS stack tops and GS base are
- * installed as-is and x86_cpu_relocate_tables_high() rewrites them if they were
+ * installed as-is and cpu_relocate_tables_high() rewrites them if they were
  * still lower-half. Ends by calling irq_init(). */
-void x86_cpu_init(void) {
+void cpu_init(void) {
     uint64_t efer = x86_read_msr(IA32_EFER_MSR);
     if ((efer & IA32_EFER_NXE) == 0) {
         x86_write_msr(IA32_EFER_MSR, efer | IA32_EFER_NXE);
@@ -756,10 +778,10 @@ void x86_cpu_init(void) {
      * until after the IA32_GS_BASE write at the end of this function. */
     cpu_local_t* bsp = &g_cpus[0];
     bsp->cpu_id = 0;
-    bsp->apic_id = 0; /* replaced by the hardware LAPIC ID in smp_init() */
+    bsp->arch.apic_id = 0; /* replaced by the hardware LAPIC ID in smp_init() */
     bsp->started = 1;
     for (uint32_t i = 0; i < GDT_ENTRY_COUNT; ++i) {
-        bsp->gdt[i] = k_gdt_template[i];
+        bsp->arch.gdt[i] = k_gdt_template[i];
     }
 
     tss_init(bsp);
@@ -819,11 +841,11 @@ void x86_cpu_init(void) {
  * user-mode entry. Takes effect immediately: the CPU reads the TSS on each
  * privilege-changing interrupt, so it must not be called with a value that is
  * about to become invalid. */
-void x86_cpu_set_kernel_stack(uint64_t rsp0) {
+void cpu_set_kernel_stack(uint64_t rsp0) {
     if (rsp0 == 0) {
         return;
     }
-    cpu_local()->tss.rsp0 = rsp0;
+    cpu_local()->arch.tss.rsp0 = rsp0;
 }
 
 /* Re-point GDTR/IDTR, the TSS descriptor, the TSS stack tops and the GS base at
@@ -832,18 +854,18 @@ void x86_cpu_set_kernel_stack(uint64_t rsp0) {
  * from its linked addresses.  BSP only, and only meaningful while the addresses
  * still are lower-half: x86_kernel_data_addr() leaves higher-half input
  * unchanged, so a second call is a no-op. */
-void x86_cpu_relocate_tables_high(void) {
+void cpu_relocate_tables_high(void) {
     cpu_local_t* cpu = cpu_local();
     descriptor_ptr_t gdtr;
     descriptor_ptr_t idtr;
     uint16_t tss_selector = KERNEL_TSS_SELECTOR;
 
-    cpu->tss.rsp0 = x86_kernel_data_addr(cpu->tss.rsp0);
-    cpu->tss.ist1 = x86_kernel_data_addr(cpu->tss.ist1);
-    gdt_set_tss_base(cpu, x86_kernel_data_addr(addr_cast(uint64_t, &cpu->tss)));
+    cpu->arch.tss.rsp0 = x86_kernel_data_addr(cpu->arch.tss.rsp0);
+    cpu->arch.tss.ist1 = x86_kernel_data_addr(cpu->arch.tss.ist1);
+    gdt_set_tss_base(cpu, x86_kernel_data_addr(addr_cast(uint64_t, &cpu->arch.tss)));
 
-    gdtr.limit = (uint16_t)(sizeof(cpu->gdt) - 1);
-    gdtr.base = x86_kernel_data_addr(addr_cast(uint64_t, &cpu->gdt[0]));
+    gdtr.limit = (uint16_t)(sizeof(cpu->arch.gdt) - 1);
+    gdtr.base = x86_kernel_data_addr(addr_cast(uint64_t, &cpu->arch.gdt[0]));
     idtr.limit = (uint16_t)(sizeof(g_idt) - 1);
     idtr.base = x86_kernel_data_addr(addr_cast(uint64_t, &g_idt[0]));
 
@@ -858,16 +880,38 @@ void x86_cpu_relocate_tables_high(void) {
     __asm__ volatile("ltr %0" : : "r"(tss_selector) : "memory");
 }
 
-/* Unconditional sti/cli on the calling CPU. Neither saves nor restores the
- * previous IF state, so they do not nest: a disable/enable pair around a region
- * enables interrupts even if they were already masked on entry. Code that needs
- * nesting uses the spinlock/critical-section helpers instead. */
-void x86_cpu_enable_interrupts(void) {
-    __asm__ volatile("sti");
+/* Register-frame layout as pushed by isr_nmi (PUSH_REGS then the CPU iret
+ * frame). PUSH_REGS pushes rax,rbx,rcx,rdx,rbp,rsi,rdi,r8..r15 in that order,
+ * so from the lowest saved address (rsp on entry to the C handler): */
+enum {
+    NMI_REG_RBP = 10, /* PUSH_REGS pushed rbp 5th => 5th from the top       */
+    NMI_REG_RIP = 15, /* iret frame: rip                                    */
+    NMI_REG_CS = 16,
+    NMI_REG_RFLAGS = 17,
+    NMI_REG_RSP = 18,
+};
+
+/* C side of isr_nmi: decodes the pushed frame for kpanic_nmi. regs is borrowed
+ * for the call. Returns only when kpanic_nmi does (an NMI outside a panic). */
+void x86_nmi_handler(uint64_t* regs) {
+    kpanic_nmi(regs[NMI_REG_RIP],
+               regs[NMI_REG_RSP],
+               regs[NMI_REG_RBP],
+               regs[NMI_REG_RFLAGS],
+               regs[NMI_REG_CS]);
 }
 
-void x86_cpu_disable_interrupts(void) {
-    __asm__ volatile("cli");
+/* The invalid-trap-frame report's register lines; process_preempt_from_irq
+ * prints the report counter after them. */
+void arch_irq_frame_log(const irq_frame_t* frame) {
+    klog_write("[watchdog] trap frame invalid cs=");
+    serial_write_hex64(frame->cs);
+    klog_write("[watchdog] rip=");
+    serial_write_hex64(frame->rip);
+    klog_write("[watchdog] user_ss=");
+    serial_write_hex64(frame->user_ss);
+    klog_write("[watchdog] user_rsp=");
+    serial_write_hex64(frame->user_rsp);
 }
 
 /* ----------------------------------------------------------------- SMP init */
@@ -884,14 +928,14 @@ void x86_cpu_disable_interrupts(void) {
  * stacks. */
 void x86_cpu_prepare_ap(cpu_local_t* cpu, uint64_t ist1_top, uint64_t rsp0_top) {
     for (uint32_t i = 0; i < GDT_ENTRY_COUNT; ++i) {
-        cpu->gdt[i] = k_gdt_template[i];
+        cpu->arch.gdt[i] = k_gdt_template[i];
     }
-    for (uint32_t i = 0; i < sizeof(cpu->tss); ++i) {
-        ((uint8_t*)&cpu->tss)[i] = 0;
+    for (uint32_t i = 0; i < sizeof(cpu->arch.tss); ++i) {
+        ((uint8_t*)&cpu->arch.tss)[i] = 0;
     }
-    cpu->tss.rsp0 = rsp0_top;
-    cpu->tss.ist1 = ist1_top;
-    cpu->tss.iopb = (uint16_t)sizeof(cpu->tss);
+    cpu->arch.tss.rsp0 = rsp0_top;
+    cpu->arch.tss.ist1 = ist1_top;
+    cpu->arch.tss.iopb = (uint16_t)sizeof(cpu->arch.tss);
     gdt_set_tss(cpu);
 }
 

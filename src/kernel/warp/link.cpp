@@ -47,13 +47,14 @@ extern "C" {
 #include "thread.h"
 #include "futex.h"
 #include "klog.h"
-#include "io.h"
+#include "arch/arch_io.h"
 #include "irq.h"
 #include "msi.h"
 #include "pci_config.h"
 #include "mmio.h"
 #include "serial.h"
 #include "capability.h"
+#include "io_region.h"
 #include "timer.h"
 #include "policy.h"
 #include "linmem_slots.h"
@@ -63,7 +64,7 @@ extern "C" {
 #include "wasm_driver.h"
 #include "wasmos_driver_abi.h"
 #include "wasmos_status.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 }
 
 #include "src/WasmModule/WasmModule.hpp"
@@ -781,44 +782,50 @@ static uint32_t warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_
 // I/O port access
 // ---------------------------------------------------------------------------
 
-/* Region-addressed I/O. The driver supplies (region, offset), never an absolute
- * port, so it cannot express an access outside the window its spawn profile
- * granted -- the kernel owns the base. `region` indexes those windows in
- * declaration order. Failures propagate the specific WASMOS_ERR_IO_* reason
- * rather than collapsing to one value: "no such region" and "offset past the
- * end" are different bugs. */
-static int warp_io_region_port(uint32_t region, uint32_t offset, uint32_t width,
-                               uint16_t* out_port) {
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0)
-        return WASMOS_ERR_IO_NOT_AUTHORIZED;
-    return capability_io_region_port(context_id, region, offset, width, out_port);
-}
+/* Region-addressed device register access. The driver supplies (region,
+ * offset), never an absolute port or address, so it cannot express an access
+ * outside the window its spawn profile granted -- the kernel owns the base.
+ * `region` indexes those windows in declaration order; io_region_read/write
+ * (io_region.h) resolve it and perform the port or memory-mapped access.
+ * Failures propagate the specific WASMOS_ERR_IO_* reason rather than
+ * collapsing to one value: "no such region" and "offset past the end" are
+ * different bugs. */
 
 /* Reads return the datum through linear memory, not as the result: a 32-bit
- * port read can legitimately be 0xFFFFFFFF and must stay distinguishable from a
- * failure code. */
+ * register read can legitimately be 0xFFFFFFFF and must stay distinguishable
+ * from a failure code. */
 static uint32_t warp_io_region_read(uint32_t region, uint32_t offset, uint32_t out_off, void* ctx_,
                                     uint32_t width) {
     auto* ctx = warp_call_ctx(ctx_);
     uint8_t* raw = warp_mem(ctx, out_off, sizeof(uint32_t));
-    uint16_t port = 0;
+    uint32_t context_id = 0;
     uint32_t value = 0;
     int rc = 0;
     if (!raw)
         return (uint32_t)WASMOS_ERR_IO_OUT_OF_WINDOW;
-    rc = warp_io_region_port(region, offset, width, &port);
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
+    rc = io_region_read(context_id, region, offset, width, &value);
     if (rc != 0)
         return (uint32_t)rc;
-    value = (width == 1u) ? (uint32_t)inb(port) : (width == 2u) ? (uint32_t)inw(port) : inl(port);
     __builtin_memcpy(raw, &value, sizeof(value));
     return 0;
 }
 
-/* hostcalls.yaml `io_region_in8/16/32`: read from the caller's granted I/O window
- * `region` at `offset`, storing the datum at guest offset `out_off` (1, 2 and 4 bytes
- * respectively, all written through a 4-byte scratch).  Returns 0 on success, otherwise
- * a negative WASMOS_ERR_IO_* code. */
+/* Writes the low `width` bytes of `value`; excess high bits are masked off
+ * rather than refused. */
+static uint32_t warp_io_region_write(uint32_t region, uint32_t offset, uint32_t value,
+                                     uint32_t width) {
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
+    return (uint32_t)io_region_write(context_id, region, offset, width, value);
+}
+
+/* hostcalls.yaml `io_region_in8/16/32`: read from the caller's granted register
+ * window `region` at `offset`, storing the datum at guest offset `out_off` (1, 2
+ * and 4 bytes respectively, all written through a 4-byte scratch).  Returns 0 on
+ * success, otherwise a negative WASMOS_ERR_IO_* code. */
 static uint32_t warp_io_region_in8(uint32_t region, uint32_t offset, uint32_t out_off, void* ctx_) {
     return warp_io_region_read(region, offset, out_off, ctx_, 1u);
 }
@@ -831,35 +838,19 @@ static uint32_t warp_io_region_in32(uint32_t region, uint32_t offset, uint32_t o
     return warp_io_region_read(region, offset, out_off, ctx_, 4u);
 }
 /* hostcalls.yaml `io_region_out8/16/32`: write the low 8, 16 or 32 bits of `value` to
- * the caller's granted I/O window `region` at `offset`.  Returns 0 on success,
- * otherwise a negative WASMOS_ERR_IO_* code.  Excess high bits of `value` are masked
- * off rather than refused. */
+ * the caller's granted register window `region` at `offset`.  Returns 0 on success,
+ * otherwise a negative WASMOS_ERR_IO_* code. */
 static uint32_t warp_io_region_out8(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
-    uint16_t port = 0;
-    int rc = warp_io_region_port(region, offset, 1u, &port);
-    if (rc != 0)
-        return (uint32_t)rc;
-    outb(port, (uint8_t)(value & 0xFFu));
-    return 0;
+    return warp_io_region_write(region, offset, value, 1u);
 }
 static uint32_t warp_io_region_out16(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
-    uint16_t port = 0;
-    int rc = warp_io_region_port(region, offset, 2u, &port);
-    if (rc != 0)
-        return (uint32_t)rc;
-    outw(port, (uint16_t)(value & 0xFFFFu));
-    return 0;
+    return warp_io_region_write(region, offset, value, 2u);
 }
 static uint32_t warp_io_region_out32(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
-    uint16_t port = 0;
-    int rc = warp_io_region_port(region, offset, 4u, &port);
-    if (rc != 0)
-        return (uint32_t)rc;
-    outl(port, value);
-    return 0;
+    return warp_io_region_write(region, offset, value, 4u);
 }
 
 /* See the wasm3 shims: the whole port-read family reports its value through
@@ -880,7 +871,9 @@ static uint32_t warp_io_in8(uint32_t port, uint32_t out_off, void* ctx_) {
     if (!out) {
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     }
-    *out = inb((uint16_t)port);
+    if (arch_port_in8((uint16_t)port, out) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 static uint32_t warp_io_in16(uint32_t port, uint32_t out_off, void* ctx_) {
@@ -899,7 +892,9 @@ static uint32_t warp_io_in16(uint32_t port, uint32_t out_off, void* ctx_) {
     if (!out) {
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     }
-    *out = inw((uint16_t)port);
+    if (arch_port_in16((uint16_t)port, out) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 static uint32_t warp_io_in32(uint32_t port, uint32_t out_off, void* ctx_) {
@@ -918,12 +913,14 @@ static uint32_t warp_io_in32(uint32_t port, uint32_t out_off, void* ctx_) {
     if (!out) {
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     }
-    *out = (uint32_t)inl((uint16_t)port);
+    if (arch_port_in32((uint16_t)port, out) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 
-/* hostcalls.yaml `pci_config_read` / `pci_config_write`: config space through the kernel's
- * serialised mechanism-1 access, for a holder of pci.config.  WASMOS_INVAL for a bdf above
+/* hostcalls.yaml `pci_config_write` and pci-bus's other config-space calls: the kernel's
+ * serialised access, for a holder of pci.config.  WASMOS_INVAL for a bdf above
  * 0xFFFF or a register above 0xFC or not dword-aligned. */
 static uint32_t warp_pci_config_check(uint32_t bdf, uint32_t reg) {
     uint32_t context_id = 0;
@@ -934,15 +931,22 @@ static uint32_t warp_pci_config_check(uint32_t bdf, uint32_t reg) {
     return 0;
 }
 
+/* A read is decided by pci_config_guest_read: pci.config reads any function, a
+ * driver without it only the function its spawn profile made it own. */
 static uint32_t warp_pci_config_read(uint32_t bdf, uint32_t reg, uint32_t out_off, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    uint32_t rc = warp_pci_config_check(bdf, reg);
-    if (rc != 0)
-        return rc;
+    uint32_t context_id = 0;
+    uint32_t value = 0;
     uint32_t* out = reinterpret_cast<uint32_t*>(warp_mem(ctx, out_off, sizeof(uint32_t)));
     if (!out)
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    *out = pci_config_read32((uint16_t)bdf, (uint8_t)reg);
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    int32_t rc = pci_config_guest_read(
+        context_id, capability_has(context_id, CAP_PCI_CONFIG), bdf, reg, &value);
+    if (rc != 0)
+        return (uint32_t)rc;
+    *out = value;
     return 0;
 }
 
@@ -1001,7 +1005,9 @@ static uint32_t warp_io_out8(uint32_t port, uint32_t val, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    outb((uint16_t)port, (uint8_t)val);
+    if (arch_port_out8((uint16_t)port, (uint8_t)val) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 static uint32_t warp_io_out16(uint32_t port, uint32_t val, void* ctx_) {
@@ -1016,7 +1022,9 @@ static uint32_t warp_io_out16(uint32_t port, uint32_t val, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    outw((uint16_t)port, (uint16_t)val);
+    if (arch_port_out16((uint16_t)port, (uint16_t)val) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 static uint32_t warp_io_out32(uint32_t port, uint32_t val, void* ctx_) {
@@ -1031,7 +1039,9 @@ static uint32_t warp_io_out32(uint32_t port, uint32_t val, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    outl((uint16_t)port, (uint32_t)val);
+    if (arch_port_out32((uint16_t)port, (uint32_t)val) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 /* hostcalls.yaml `io_wait`: a short bus delay (a dummy access to port 0x80).  Gated on
@@ -1044,7 +1054,9 @@ static uint32_t warp_io_wait(void* ctx_) {
         warp_require_io_capability(context_id, 0x80u) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    io_wait();
+    if (arch_port_out8(0x80u, 0u) != 0) {
+        return (uint32_t)WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
     return 0;
 }
 
@@ -2980,13 +2992,13 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void) {
 // ---------------------------------------------------------------------------
 // Ring-3 hostcall dispatch
 //
-// Called from x86_syscall_handler when a ring-3 int 0x80 fires with
+// Called from syscall_dispatch when a ring-3 int 0x80 fires with
 // RAX in [WARP_HC_SYSCALL_BASE, WARP_HC_SYSCALL_BASE + WARP_HC_MAX).
 // hc_id = RAX - WARP_HC_SYSCALL_BASE (== HC index in WASMOS_SYMBOLS order).
 //
 // Arguments from ring-3 registers (SysV: RDI, RSI, RDX, RCX, R8, R9) are
 // in the saved syscall_frame_t.  For HC_IPC_SEND (9 args), extra args come
-// from the user stack at frame+sizeof(syscall_frame_t).
+// from the user stack (arch_syscall_user_sp).
 // ctx_ is always the last argument, passed by the JIT from the DYNAMIC_LINK
 // basedata slot (which holds the kernel WarpCallContext* set by warp_bind_module).
 // ---------------------------------------------------------------------------
@@ -2996,13 +3008,18 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void) {
 #include "wasmos_ring3_dispatch.inc"
 
 extern "C" uint32_t warp_ring3_dispatch(uint32_t hc_id, void* frame_ptr) {
-    syscall_frame_t* frame = static_cast<syscall_frame_t*>(frame_ptr);
-    /* user_rsp sits just past syscall_frame_t (pushed by the CPU on the
-     * ring-3 -> ring-0 INT transition); stack args live past [user_rsp+0]. */
-    uint64_t user_rsp =
-        *reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(frame) + sizeof(syscall_frame_t));
-    return warp_ring3_dispatch_table(
-        hc_id, frame->rdi, frame->rsi, frame->rdx, frame->rcx, frame->r8, frame->r9, user_rsp);
+    const syscall_frame_t* frame = static_cast<const syscall_frame_t*>(frame_ptr);
+    /* Arguments past the sixth live on the caller's user stack, past
+     * [user_sp+0]. */
+    uint64_t user_rsp = arch_syscall_user_sp(frame);
+    return warp_ring3_dispatch_table(hc_id,
+                                     arch_syscall_arg(frame, 0),
+                                     arch_syscall_arg(frame, 1),
+                                     arch_syscall_arg(frame, 2),
+                                     arch_syscall_arg(frame, 3),
+                                     arch_syscall_arg(frame, 4),
+                                     arch_syscall_arg(frame, 5),
+                                     user_rsp);
 }
 #endif /* WASMOS_WASM_RUNTIME_WARP */
 

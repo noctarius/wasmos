@@ -35,7 +35,7 @@
 #include "memory.h"
 #include "process.h"
 #include "ipc.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "stubs_process_platform.h"
 
 /* process.c and its neighbours each define this locally; there is no header to
@@ -174,6 +174,11 @@ void klog_printf(const char* fmt, ...) {
 }
 void serial_write_hex64(uint64_t v) {
     (void)v;
+}
+/* The invalid-trap-frame report's register lines (cpu_x86_64.c on target),
+ * discarded with the rest of the log. */
+void arch_irq_frame_log(const irq_frame_t* frame) {
+    (void)frame;
 }
 
 /* Per-context teardown hooks a reap fans out to. */

@@ -1,8 +1,10 @@
-/* smp.h - SMP bring-up: AP trampoline setup, per-CPU state, and startup sequence. */
+/* cpu_local.h - per-CPU state and the cpu_local() accessor. */
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
-#include "arch/x86_64/cpu_x86_64.h"
+#include "arch/arch_cpu.h"
+#include "arch/cpu_local_arch.h"
 #include "sync/spinlock.h"
 #include "process.h"
 #include "thread.h"
@@ -13,8 +15,9 @@
  *
  * g_cpus[0] is the BSP; g_cpus[1..g_cpu_count-1] are APs (when WASMOS_SMP).
  * cpu_local() returns a pointer to the calling CPU's slot. On a non-SMP build
- * it always returns &g_cpus[0]; on an SMP build it reads GS:0 (the self-
- * pointer written during per-CPU init).
+ * it always returns &g_cpus[0]; on an SMP build it reads the architecture's
+ * per-CPU register (arch_cpu_local_self()), which resolves to the self-pointer
+ * written during per-CPU init.
  *
  * sched_ctx is stored here; process_preempt_trampoline uses the C helper
  * cpu_local_sched_ctx() to obtain its address without needing an asm offset.
@@ -23,29 +26,24 @@
 #define WASMOS_MAX_CPUS 16
 
 typedef struct cpu_local {
-    /* Self-pointer at offset 0 — read via GS:0 for lock-free per-CPU access. */
+    /* Self-pointer at offset 0 — what the per-CPU register resolves to. */
     struct cpu_local* self;
 
-    /* CPU identity */
-    uint32_t cpu_id;  /* logical index 0..N-1 */
-    uint32_t apic_id; /* hardware LAPIC ID from MADT */
+    /* Logical CPU index 0..N-1. The hardware identity lives in `arch`. */
+    uint32_t cpu_id;
 
     /* Startup synchronisation: AP sets to 1 after full per-CPU init. */
     volatile uint8_t started;
 
     /* Set to 1 while context_switch / context_switch_to are executing on this
      * CPU.  Used by process_preempt_from_irq to suppress timer preemption
-     * while register state is mid-save/restore.  Sits in the natural padding
-     * byte after started so cpu_local_t layout is unchanged from GDT onward. */
+     * while register state is mid-save/restore.  Its offset is encoded in the
+     * architecture's context-switch assembly; see the assert below. */
     volatile uint8_t in_context_switch;
 
-    /* Per-CPU x86 descriptor tables.
-     * Interrupt stacks (IST1 / RSP0) are separate per-CPU allocations whose
-     * base addresses are stored in cpu->tss.ist1 / cpu->tss.rsp0.  For the
-     * BSP these are static arrays in cpu_x86_64.c; for APs they are allocated
-     * at SMP bring-up time. */
-    uint64_t gdt[GDT_ENTRY_COUNT];
-    tss_t tss;
+    /* Architecture-private per-CPU state (descriptor tables, hardware CPU ID).
+     * Only code under arch/ reads or writes it. */
+    arch_cpu_t arch;
 
     /* Scheduler state, per CPU. */
     process_t* current_process;
@@ -56,7 +54,7 @@ typedef struct cpu_local {
 
     /* Per-CPU IRQ-disable nesting (moved from spinlock.c globals for SMP safety). */
     volatile uint32_t irq_disable_depth;
-    uint64_t irq_saved_flags;
+    arch_irq_flags_t irq_saved_flags;
 
     /* Per-CPU ready queues (one FIFO per priority level).
      * Threads are enqueued on the waking CPU's sched, giving IPC callers and
@@ -105,9 +103,9 @@ typedef struct cpu_local {
     thread_t* idle_thread;
 } cpu_local_t;
 
-/* context_switch.S encodes this offset as CPU_LOCAL_IN_CTX_SW_OFFSET.
- * If the assert fires, update the .set in context_switch.S to match. */
-_Static_assert(offsetof(cpu_local_t, in_context_switch) == 17,
+/* arch/x86_64/context_switch.S encodes this offset as
+ * CPU_LOCAL_IN_CTX_SW_OFFSET. If the assert fires, update the .set there. */
+_Static_assert(offsetof(cpu_local_t, in_context_switch) == 13,
                "cpu_local_t in_context_switch offset changed; update context_switch.S");
 
 extern cpu_local_t g_cpus[WASMOS_MAX_CPUS];
@@ -116,8 +114,8 @@ extern uint32_t g_cpu_count; /* CPUs discovered in MADT; always >= 1 */
 /*
  * Return a pointer to the calling CPU's cpu_local_t.
  *
- * SMP build: reads GS:0 (the self-pointer written at per-CPU init time).
- * Non-SMP build: always &g_cpus[0], no GS dependency.
+ * SMP build: the architecture's per-CPU register (arch_cpu_local_self()).
+ * Non-SMP build: always &g_cpus[0], no per-CPU register dependency.
  */
 #if defined(WASMOS_HOST_TEST_SMP)
 /* Host harness: pthreads stand in for vCPUs, so cpu_local() must be per-thread.
@@ -133,9 +131,7 @@ static inline cpu_local_t* cpu_local(void) {
 }
 #elif WASMOS_SMP
 static inline cpu_local_t* cpu_local(void) {
-    cpu_local_t* p;
-    __asm__ volatile("mov %%gs:0, %0" : "=r"(p));
-    return p;
+    return arch_cpu_local_self();
 }
 #else
 static inline cpu_local_t* cpu_local(void) {
@@ -147,21 +143,3 @@ static inline cpu_local_t* cpu_local(void) {
 static inline cpu_sched_t* cpu_sched(void) {
     return &cpu_local()->sched;
 }
-
-/*
- * SMP init API.  Both functions are no-ops in a non-SMP build.
- *
- * smp_init()     — called early in kmain, after LAPIC + I/O APIC are live.
- *                  Records BSP APIC ID; APs were discovered by ioapic_init().
- * smp_cpus_up()  — called late in kmain, after the scheduler is ready.
- *                  Sends INIT-SIPI-SIPI to each AP and waits for started flag.
- * smp_ap_c_entry — C entry point called by the AP trampoline (WASMOS_SMP only).
- */
-#if WASMOS_SMP
-void smp_init(void);
-void smp_cpus_up(void);
-void smp_ap_c_entry(uint32_t cpu_id);
-#else
-static inline void smp_init(void) {}
-static inline void smp_cpus_up(void) {}
-#endif

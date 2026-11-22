@@ -472,9 +472,16 @@ class VirtioBlkIntxFallbackTest(unittest.TestCase):
     """With no MSI-X vectors on offer, the driver falls back to a routed INTx line.
 
     Worth its own boot: the fallback is the only INTx consumer left in the
-    system, and enabling MSI-X shifts the device-configuration registers from
-    0x14 to 0x18. A driver that hardcoded either offset passes one of these two
-    classes and fails the other, which is the point of running both.
+    system, so it is the one boot where a line shared with another virtio device
+    is routed at all.
+
+    Regression: 2026-11-22-virtio-serial-unacked-intx -- the virtio console
+    (the kernel-log port) shares IRQ 10 with this disk under QEMU. Its driver
+    binds no interrupt but did not tell the device to raise none, so every
+    transmitted kernel-log chunk asserted the line, nobody acknowledged it, and
+    the re-firing line starved the boot until the vt missed its registration
+    deadline. It showed on wasm3, whose slower boot logs more while the line is
+    routed.
     """
 
     session: QemuSession | None = None

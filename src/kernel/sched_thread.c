@@ -4,12 +4,13 @@
 #include "sync/spinlock.h"
 #include "serial.h"
 #include "string.h"
-#include "arch/x86_64/smp.h"
+#include "arch/arch_cpu.h"
+#include "cpu_local.h"
 
 /*
  * sched_thread.c — per-CPU O(1) priority scheduler.
  *
- * One cpu_sched_t per CPU, embedded in g_cpus[] (smp.h) and reached through
+ * One cpu_sched_t per CPU, embedded in g_cpus[] (cpu_local.h) and reached through
  * cpu_sched(); each is guarded by its own cs->lock.  Within a queue, ready
  * threads are held in SCHED_PRIO_MAX FIFO lists, one per priority, and
  * ready_bitmap tracks which lists are non-empty so the highest-ready lookup is
@@ -561,7 +562,7 @@ void cpu_sched_remove_thread(thread_t* t) {
         }
         cpu_sched_t* cs = (cpu_sched_t*)__atomic_load_n(&t->rq, __ATOMIC_ACQUIRE);
         if (!cs) {
-            cpu_relax(); /* enqueue in flight; let it publish rq */
+            arch_cpu_relax(); /* enqueue in flight; let it publish rq */
             continue;
         }
         ksync_spinlock_lock(&cs->lock);

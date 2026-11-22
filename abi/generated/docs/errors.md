@@ -89,6 +89,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY` | -0x00020023 | the process manager answered a service-watch request with neither its response nor a packed error |
 | `WASMOS_ERR_PROC_PM_KILL_NOT_CHILD` | -0x00020024 | the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself |
 | `WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED` | -0x00020025 | the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created |
+| `WASMOS_ERR_PROC_PM_META_BAD_DESC` | -0x00020026 | a PROC_IPC_MODULE_META_FILE descriptor was short, of an unknown version, or its path is empty, too long or outside the region it names |
 
 ### `linmem` (domain 3) — linear-memory overlay placement failures
 
@@ -257,14 +258,16 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_MSI_NOT_DEVICE_OWNER` | -0x0011000B | another endpoint already programmed interrupts for this device |
 | `WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER` | -0x0011000C | the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it |
 
-### `io` (domain 18) — region-addressed I/O port access failures
+### `io` (domain 18) — region-addressed device register access failures (I/O-port and memory-mapped windows)
 
 | Code | Value | Description |
 |---|---|---|
-| `WASMOS_ERR_IO_NOT_AUTHORIZED` | -0x00120001 | caller has no io.port spawn profile, so it holds no I/O windows |
+| `WASMOS_ERR_IO_NOT_AUTHORIZED` | -0x00120001 | caller has no spawn profile granting register windows |
 | `WASMOS_ERR_IO_BAD_REGION` | -0x00120002 | region index names no window this context was granted |
 | `WASMOS_ERR_IO_OUT_OF_WINDOW` | -0x00120003 | offset falls outside the granted window's bounds |
 | `WASMOS_ERR_IO_BAD_PORT` | -0x00120004 | port number outside 0..0xFFFF |
+| `WASMOS_ERR_IO_MISALIGNED` | -0x00120005 | a memory-mapped window access whose offset is not a multiple of its width |
+| `WASMOS_ERR_IO_NO_PORT_SPACE` | -0x00120006 | the architecture has no I/O port space, so no port access or I/O-port window exists |
 
 ### `font` (domain 12) — font-rasterizer service failures (was FONT_STATUS_*)
 

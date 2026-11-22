@@ -62,7 +62,7 @@ TESTS = [
     (RUN, 'test_block_descriptor', []),
     (CC, 'test_svc_name_from_mount', [*C11, "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_svc_name_from_mount.c')]),
     (RUN, 'test_svc_name_from_mount', []),
-    (CC, 'test_device_manager_block_rules', [*C11, '-Wno-unused-function', '-ffunction-sections', '-fdata-sections', DEAD_STRIP, '-iquote', R('src/services/device_manager'), '-iquote', R('src/libsys/wasm/include'), "-I" + R('src/libc/include'), '-iquote', R('src/drivers/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_device_manager_block_rules.c'), R('tests/unit/stubs_device_manager_host.c'), R('src/services/device_manager/device_manager_rules.c')]),
+    (CC, 'test_device_manager_block_rules', [*C11, '-Wno-unused-function', '-ffunction-sections', '-fdata-sections', DEAD_STRIP, '-iquote', R('src/services/device_manager'), '-iquote', R('src/libsys/wasm/include'), "-I" + R('src/libc/include'), '-iquote', R('src/drivers/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_device_manager_block_rules.c'), R('tests/unit/stubs_device_manager_host.c'), R('src/services/device_manager/device_manager_rules.c'), R('src/services/device_manager/device_manager_unit.c')]),
     (RUN, 'test_device_manager_block_rules', []),
     (CC, 'test_fs_manager_path', [*C11, "-I" + R('src/services/fs_manager'), R('tests/unit/test_fs_manager_path.c'), R('src/services/fs_manager/fs_manager_path.c')]),
     (RUN, 'test_fs_manager_path', []),
@@ -184,7 +184,9 @@ TESTS = [
     (RUN, 'test_pm_caps', []),
     (CC, 'test_capability', [*C11, '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_capability.c'), R('src/kernel/capability.c'), R('src/kernel/list.c'), R('src/kernel/list_linked.c'), R('src/kernel/list_array_chunk.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_kpanic.c'), R('tests/unit/stubs_slab.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_capability', []),
-    (CC, 'test_pci_config', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('tests/unit/shadow_io'), '-iquote', R('tests/unit/include'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_pci_config.c'), R('src/kernel/pci_config.c'), R('tests/unit/stubs_spinlock.c')]),
+    (CC, 'test_device_window', [*C11, '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_device_window.c'), R('src/kernel/device_window.c'), R('tests/unit/stubs_spinlock.c')]),
+    (RUN, 'test_device_window', []),
+    (CC, 'test_pci_config', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('tests/unit/shadow_io'), '-iquote', R('tests/unit/include'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_pci_config.c'), R('src/kernel/pci_config.c'), R('src/kernel/arch/x86_64/pci_cfg_x86_64.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_pci_config', []),
     (CC, 'test_hostcall_buffer', [*C11, '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_hostcall_buffer.c'), R('src/kernel/hostcall_buffer.c')]),
     (RUN, 'test_hostcall_buffer', []),
@@ -222,6 +224,8 @@ TESTS = [
     (RUN, 'test_libc_stdlib', []),
     (CC, 'test_vring', [*C11, "-I" + R('src/libsys/wasm/include'), R('tests/unit/test_vring.c')]),
     (RUN, 'test_vring', []),
+    (CC, 'test_virtio_pci_caps', [*C11, "-I" + R('src/libsys/wasm/include'), '-iquote', R('tests/unit'), R('tests/unit/test_virtio_pci_caps.c')]),
+    (RUN, 'test_virtio_pci_caps', []),
     (CC, 'test_ringbuf', [*C11, '-pthread', "-I" + R('src/libsys/wasm/include'), "-I" + R('src/drivers/include'), R('tests/unit/test_ringbuf.c')]),
     (RUN, 'test_ringbuf', []),
     (CC, 'test_libui_key_decode', [*C11, "-I" + R('src/libui/include'), "-I" + R('src/libc/include'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_libui_key_decode.c')]),
@@ -271,8 +275,12 @@ def _host_sdk_compiler():
 
 
 def _inputs(b, args):
-    """Files a test command reads: every listed source, plus the headers under
-    every include directory it names (multi-source commands get no depfile)."""
+    """Files a test command reads: every listed source, plus the headers AND
+    sources under every include directory it names (multi-source commands get
+    no depfile). Sources count because a suite may #include a .c to reach its
+    static functions (test_device_manager_block_rules includes
+    device_manager.c); without them an edit to that file leaves the suite
+    running the old code."""
     files, dirs = [], []
     for a in args:
         p = Path(a[2:] if a.startswith("-I") else a)
@@ -284,6 +292,7 @@ def _inputs(b, args):
             dirs.append(p)
     for d in dirs:
         files += b.glob("**/*.h", root=d)
+        files += b.glob("**/*.c", root=d)
     return files
 
 

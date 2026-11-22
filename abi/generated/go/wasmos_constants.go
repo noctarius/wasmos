@@ -282,6 +282,16 @@ const PROC_STATUS_ZOMBIE int32 = 2
 // Alive and announced ready.
 const PROC_STATUS_READY int32 = 3
 
+// module_meta_file_desc
+// Version of wasmos_module_meta_file_desc_t, the request and reply record
+// of PROC_IPC_MODULE_META_FILE, declared in
+// src/drivers/include/wasmos_driver_abi.h; the path follows it in the
+// caller's buffer at the offset it names.
+//
+// A reader MUST reject a descriptor whose version it does not know.
+// Current wasmos_module_meta_file_desc_t layout.
+const MODULE_META_FILE_DESC_VERSION int32 = 1
+
 // spawn_watch_desc
 // Version and size ceilings of wasmos_spawn_watch_desc_t, the request and
 // reply record of PROC_IPC_SPAWN_WATCHED. The struct is declared in
@@ -429,12 +439,12 @@ const FSMGR_MOUNT_WAIT_PATH_MAX int32 = 63
 // src/drivers/include/wasmos_driver_abi.h.
 //
 // A reader MUST reject a descriptor whose version it does not know.
-// Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps).
-const SUPERVISOR_SUBMIT_DESC_VERSION int32 = 2
+// Current wasmos_supervisor_submit_desc_t layout (2: caps_len/caps; 3: kind-tagged region grants, caps grows to 128 bytes).
+const SUPERVISOR_SUBMIT_DESC_VERSION int32 = 3
 // Bytes a submission's capability descriptor (wasmos_spawn_caps_v2_t,
-// its I/O ranges and DMA window) may take: a header,
-// WASMOS_IO_RANGE_LIMIT ranges and one DMA window fit.
-const SUPERVISOR_CAPS_MAX int32 = 64
+// its region grants and DMA window) may take: a header,
+// WASMOS_REGION_LIMIT region grants and one DMA window fit.
+const SUPERVISOR_CAPS_MAX int32 = 128
 // Longest unit spec a submission carries, NUL excluded.
 const SUPERVISOR_SPEC_MAX int32 = 255
 // Longest unit name (template@instance), NUL excluded: a service name's ceiling.

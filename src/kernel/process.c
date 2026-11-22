@@ -23,7 +23,9 @@
 #include "sched.h"
 #include "sched_event.h"
 #include "futex.h"
-#include "arch/x86_64/smp.h"
+#include "arch/arch_context.h"
+#include "arch/arch_cpu.h"
+#include "cpu_local.h"
 
 #ifdef WASMOS_WASM_RUNTIME_WARP
 extern int warp_sync_linmem_for_pid(uint32_t pid, uint64_t user_root);
@@ -46,7 +48,7 @@ static process_t g_processes[PROCESS_MAX_COUNT];
  * boot-safe list allocator path for early scheduler init/spawn. */
 static uint32_t g_next_pid;
 static ksync_spinlock_t g_process_table_lock;
-/* Scheduler state lives in cpu_local_t (per-CPU) — see smp.h. */
+/* Scheduler state lives in cpu_local_t (per-CPU) — see cpu_local.h. */
 static process_t* g_idle_process;
 /* in_context_switch is per-CPU (cpu_local_t), not global: a global flag would
  * let one CPU's context switch suppress preemption on every other CPU. */
@@ -140,10 +142,6 @@ extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
 #define PAGE_SIZE 0x1000u
-#define KERNEL_CS_SELECTOR 0x08u
-#define KERNEL_DS_SELECTOR 0x10u
-#define USER_CS_SELECTOR 0x1Bu
-#define USER_DS_SELECTOR 0x23u
 #define STACK_GUARD_PAGES 1u
 #define STACK_REDZONE_BYTES 4096u
 #define STACK_CANARY_VALUE 0xC0DEC0DEF00DFACEULL
@@ -320,17 +318,11 @@ static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_
     (void)stack_top;
     rc = entry(proc, thread->tid, thread->worker_arg);
 #else
-    __asm__ volatile("mov %%rsp, %%r15\n"
-                     "mov %[stack_top], %%rsp\n"
-                     "call *%[entry]\n"
-                     "mov %%r15, %%rsp\n"
-                     : "=a"(rc)
-                     : [stack_top] "r"(stack_top),
-                       [entry] "r"(entry),
-                       "D"(proc),
-                       "S"(thread->tid),
-                       "d"(thread->worker_arg)
-                     : "r15", "rcx", "r8", "r9", "r10", "r11", "memory", "cc");
+    rc = (process_run_result_t)(int32_t)arch_call_on_stack(stack_top,
+                                                           (arch_stack_fn_t)entry,
+                                                           addr_cast(uint64_t, proc),
+                                                           thread->tid,
+                                                           addr_cast(uint64_t, thread->worker_arg));
 #endif
     return rc;
 }
@@ -376,7 +368,7 @@ static void context_switch_high(process_context_t* out, process_context_t* in) {
      * A USER context is skipped, as that validator skips one: its rip is a
      * user address by construction, and bounding it against the kernel image
      * would panic on every ring-3 resume. */
-    if (in && (in->cs & 0x3u) != 0x3u) {
+    if (in && !arch_context_is_user(in)) {
         /* Identified by the CPU's CURRENT thread and process, not by anything
          * in the context: a context that was never initialised is all zeroes,
          * so its own fields name nobody. The first capture reported
@@ -384,11 +376,11 @@ static void context_switch_high(process_context_t* out, process_context_t* in) {
          * which said "a zeroed context" without saying whose. */
         thread_t* cur = cpu_local()->current_thread;
         process_t* cur_proc = cpu_local()->current_process;
-        process_validate_transfer_target((uintptr_t)in->rip,
+        process_validate_transfer_target((uintptr_t)arch_context_pc(in),
                                          "context restore",
                                          (uint64_t)(cur ? cur->tid : 0u),
                                          cur_proc ? cur_proc->name : "(no process)",
-                                         (uintptr_t)in->cs);
+                                         (uintptr_t)arch_context_mode(in));
     }
     uint64_t higher_half_base = paging_get_higher_half_base();
     uintptr_t fn = (uintptr_t)&context_switch;
@@ -414,13 +406,7 @@ static int process_run_on_sched_stack(int (*fn)(void)) {
     (void)stack_top;
     rc = fn();
 #else
-    __asm__ volatile("mov %%rsp, %%r15\n"
-                     "mov %[stack_top], %%rsp\n"
-                     "call *%[fn]\n"
-                     "mov %%r15, %%rsp\n"
-                     : "=a"(rc)
-                     : [stack_top] "r"(stack_top), [fn] "r"(fn)
-                     : "r15", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory", "cc");
+    rc = (int32_t)arch_call_on_stack(stack_top, (arch_stack_fn_t)fn, 0, 0, 0);
 #endif
     return rc;
 }
@@ -598,8 +584,8 @@ static void process_validate_thread_context(process_t* proc, thread_t* thread,
     (void)where;
     return;
 #else
-    uint64_t rip = ctx->rip;
-    uint8_t is_user_ctx = (uint8_t)((ctx->cs & 0x3u) == 0x3u);
+    uint64_t rip = arch_context_pc(ctx);
+    uint8_t is_user_ctx = (uint8_t)arch_context_is_user(ctx);
     uint64_t start = addr_cast(uint64_t, &__kernel_start);
     uint64_t end = addr_cast(uint64_t, &__kernel_end);
     uint64_t low_start = start;
@@ -613,7 +599,7 @@ static void process_validate_thread_context(process_t* proc, thread_t* thread,
     }
     if (is_user_ctx || (rip >= start && rip < end) || (rip >= low_start && rip < low_end)) {
         if (!is_user_ctx) {
-            uint64_t rsp = ctx->rsp;
+            uint64_t rsp = arch_context_kernel_sp(ctx);
             if (rsp < higher_half) {
                 klog_printf("[sched] invalid thread rsp in %s pid=%016llx tid=%016llx\n"
                             "[sched] name=%s\n"
@@ -641,10 +627,10 @@ static void process_validate_thread_context(process_t* proc, thread_t* thread,
                 (unsigned long long)thread->tid,
                 proc->name ? proc->name : "(null)",
                 (unsigned long long)rip,
-                (unsigned long long)ctx->rsp);
+                (unsigned long long)arch_context_kernel_sp(ctx));
     process_log_ctxsw_state();
     process_log_ctx_watch("invalid-rip");
-    kpanic("invalid_rip", (uintptr_t)rip, (uintptr_t)ctx->rsp);
+    kpanic("invalid_rip", (uintptr_t)rip, (uintptr_t)arch_context_kernel_sp(ctx));
 #endif
 }
 
@@ -742,7 +728,7 @@ static void process_trampoline(void) {
          * restore normal interrupt delivery before calling their entry point so
          * timer ticks keep advancing while ring-0 process code runs. */
 #ifndef WASMOS_PROCESS_TEST_SEAMS
-        __asm__ volatile("sti" ::: "memory");
+        arch_irq_enable();
 #endif
         if (!cpu_local()->current_process || !cpu_local()->current_process->entry) {
             cpu_local()->last_run_result = PROCESS_RUN_IDLE;
@@ -1574,12 +1560,10 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     if (process_alloc_stack(slot, stack_pages) != 0) {
         return -1;
     }
-    slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
-    slot->ctx.user_rsp = slot->ctx.rsp;
-    slot->ctx.rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
-    slot->ctx.rflags = 0x200;
-    slot->ctx.cs = KERNEL_CS_SELECTOR;
-    slot->ctx.ss = KERNEL_DS_SELECTOR;
+    arch_context_init_kernel_entry(
+        &slot->ctx,
+        (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline),
+        slot->stack_top - (STACK_REDZONE_BYTES + 8u));
     slot->ctx.root_table = ctx->root_table;
 
     main_thread = process_main_thread(slot);
@@ -1609,9 +1593,9 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     }
     if (name && strcmp(name, "preempt-busy") == 0) {
         trace_write("[sched] spawn preempt-busy rip=");
-        trace_do(serial_write_hex64(slot->ctx.rip));
+        trace_do(serial_write_hex64(arch_context_pc(&slot->ctx)));
         trace_write("[sched] spawn preempt-busy rsp=");
-        trace_do(serial_write_hex64(slot->ctx.rsp));
+        trace_do(serial_write_hex64(arch_context_kernel_sp(&slot->ctx)));
         trace_write("[sched] spawn preempt-busy stack base=");
         trace_do(serial_write_hex64(slot->stack_base));
         trace_write("[sched] spawn preempt-busy stack top=");
@@ -1787,12 +1771,10 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     if (process_alloc_stack(slot, stack_pages) != 0) {
         return -1;
     }
-    slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
-    slot->ctx.user_rsp = slot->ctx.rsp;
-    slot->ctx.rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
-    slot->ctx.rflags = 0x200;
-    slot->ctx.cs = KERNEL_CS_SELECTOR;
-    slot->ctx.ss = KERNEL_DS_SELECTOR;
+    arch_context_init_kernel_entry(
+        &slot->ctx,
+        (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline),
+        slot->stack_top - (STACK_REDZONE_BYTES + 8u));
     slot->ctx.root_table = paging_get_root_table();
 
     main_thread = process_main_thread(slot);
@@ -1835,12 +1817,10 @@ int process_spawn_idle_ap(uint32_t cpu_id) {
         thread_reap(tid);
         return -1;
     }
-    thread->ctx.rsp = thread->kstack_top - (STACK_REDZONE_BYTES + 8u);
-    thread->ctx.user_rsp = thread->ctx.rsp;
-    thread->ctx.rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
-    thread->ctx.rflags = 0x200u;
-    thread->ctx.cs = KERNEL_CS_SELECTOR;
-    thread->ctx.ss = KERNEL_DS_SELECTOR;
+    arch_context_init_kernel_entry(
+        &thread->ctx,
+        (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline),
+        thread->kstack_top - (STACK_REDZONE_BYTES + 8u));
     thread->ctx.root_table = paging_get_root_table();
     thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     thread->ticks_remaining = thread->time_slice_ticks;
@@ -2003,12 +1983,8 @@ int process_thread_spawn_user_internal(uint32_t owner_pid, const char* name, uin
         thread_reap(tid);
         return -1;
     }
-    thread->ctx.rip = entry_rip;
-    thread->ctx.cs = USER_CS_SELECTOR;
-    thread->ctx.ss = USER_DS_SELECTOR;
-    thread->ctx.user_rsp = user_stack_top;
-    thread->ctx.rsp = thread->kstack_top - (STACK_REDZONE_BYTES + 8u);
-    thread->ctx.rflags = 0x200;
+    arch_context_set_user_entry(&thread->ctx, entry_rip, user_stack_top);
+    arch_context_set_kernel_sp(&thread->ctx, thread->kstack_top - (STACK_REDZONE_BYTES + 8u));
     thread->ctx.root_table = user_root;
     thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     thread->ticks_remaining = thread->time_slice_ticks;
@@ -2056,11 +2032,7 @@ int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp) {
     if (paging_verify_user_root_no_low_slot(user_root, 1) != 0) {
         return -1;
     }
-    proc->ctx.rip = rip;
-    proc->ctx.cs = USER_CS_SELECTOR;
-    proc->ctx.ss = USER_DS_SELECTOR;
-    proc->ctx.user_rsp = user_rsp;
-    proc->ctx.rflags = 0x200;
+    arch_context_set_user_entry(&proc->ctx, rip, user_rsp);
 
     thread_t* main_thread = process_main_thread(proc);
     if (main_thread) {
@@ -2478,8 +2450,8 @@ int process_schedule_once(void) {
     here = (uintptr_t)higher_half_base;
     rsp_cur = (uintptr_t)higher_half_base;
 #else
-    __asm__ volatile("leaq 0f(%%rip), %0\n0:" : "=r"(here));
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp_cur));
+    here = arch_read_pc();
+    rsp_cur = arch_read_sp();
 #endif
     if ((uint64_t)here < higher_half_base) {
         uintptr_t high_fn = (uintptr_t)&process_schedule_once;
@@ -2789,7 +2761,7 @@ static int process_schedule_once_impl(void) {
             (unsigned)proc->pid,
             proc->name ? proc->name : "?",
             (unsigned long long)run_ctx->root_table,
-            (unsigned long long)run_ctx->rip);
+            (unsigned long long)arch_context_pc(run_ctx));
         run_ctx->root_table = paging_get_root_table();
     }
     if (run_ctx->root_table == 0) {
@@ -2813,36 +2785,15 @@ static int process_schedule_once_impl(void) {
          * (set by the last context_switch_high(&cpu_local()->sched_ctx,...) call). */
 
         process_context_t* _sctx = &cpu_local()->sched_ctx;
-        uintptr_t _rsp;
 #ifdef WASMOS_PROCESS_TEST_SEAMS
         /* Nothing resumes this scheduler context on the host -- the seam above
          * calls the worker entry directly instead of switching stacks -- so the
          * snapshot has no consumer and the host's own registers must not be
          * written into a kernel context. */
-        _rsp = 0;
+        arch_context_set_return(_sctx, (uint64_t)PROCESS_RUN_BLOCKED);
 #else
-        __asm__ volatile("mov %%rsp, %[rsp]\n"
-                         "mov %%r15, %[r15]\n"
-                         "mov %%r14, %[r14]\n"
-                         "mov %%r13, %[r13]\n"
-                         "mov %%r12, %[r12]\n"
-                         "mov %%rbp, %[rbp]\n"
-                         "mov %%rbx, %[rbx]\n"
-                         "pushfq; pop %[rf]"
-                         : [rsp] "=r"(_rsp),
-                           [r15] "=m"(_sctx->r15),
-                           [r14] "=m"(_sctx->r14),
-                           [r13] "=m"(_sctx->r13),
-                           [r12] "=m"(_sctx->r12),
-                           [rbp] "=m"(_sctx->rbp),
-                           [rbx] "=m"(_sctx->rbx),
-                           [rf] "=m"(_sctx->rflags)
-                         :
-                         : "memory");
-#endif
-        _sctx->rax = (uint64_t)PROCESS_RUN_BLOCKED;
-        _sctx->rsp = _rsp - 8u;
-#ifndef WASMOS_PROCESS_TEST_SEAMS
+        arch_context_snapshot_callee_saved(_sctx);
+        arch_context_set_return(_sctx, (uint64_t)PROCESS_RUN_BLOCKED);
         /* The resume point, which this snapshot used to leave alone.
          *
          * `context_switch` writes out->rip when it SAVES a context, and the
@@ -2860,10 +2811,11 @@ static int process_schedule_once_impl(void) {
          * CPU happens to take a worker as its first dispatch. Written
          * unconditionally rather than only when zero, so this context says the
          * same thing a saved one would. */
-        _sctx->rip = (uint64_t)process_kernel_alias_addr((uintptr_t)&context_switch_resume);
+        arch_context_set_pc(_sctx,
+                            (uint64_t)process_kernel_alias_addr((uintptr_t)&context_switch_resume));
 #endif
 
-        thread->ctx.rsp = 0;
+        arch_context_set_kernel_sp(&thread->ctx, 0);
         cpu_local()->last_run_result = process_run_worker_on_stack(proc, thread);
     } else {
 #ifdef WASMOS_WASM_RUNTIME_WARP
@@ -3312,37 +3264,17 @@ int process_preempt_from_irq(irq_frame_t* frame) {
         return 0;
     }
 
-    uint64_t cs = frame->cs;
-    uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
-    uint8_t from_kernel = (uint8_t)((cs & 0x3u) == 0x0u);
-    uint8_t valid = 1;
-
-    if ((!from_user && !from_kernel) || frame->rip == 0) {
-        valid = 0;
-    } else if (from_kernel && cs != KERNEL_CS_SELECTOR) {
-        valid = 0;
-    } else if (from_user) {
-        if ((frame->user_ss & 0x3u) != 0x3u || frame->user_rsp == 0) {
-            valid = 0;
-        }
-    }
-    if (!valid) {
+    arch_irq_frame_origin_t origin = arch_irq_frame_origin(frame);
+    if (origin == ARCH_IRQ_FRAME_INVALID) {
         g_trap_frame_invalid_reports++;
-        klog_write("[watchdog] trap frame invalid cs=");
-        serial_write_hex64(frame->cs);
-        klog_write("[watchdog] rip=");
-        serial_write_hex64(frame->rip);
-        klog_write("[watchdog] user_ss=");
-        serial_write_hex64(frame->user_ss);
-        klog_write("[watchdog] user_rsp=");
-        serial_write_hex64(frame->user_rsp);
+        arch_irq_frame_log(frame);
         klog_write("[watchdog] reports=");
         serial_write_hex64(g_trap_frame_invalid_reports);
         klog_write("\n");
         process_clear_resched();
         return 0;
     }
-    if (from_kernel) {
+    if (origin == ARCH_IRQ_FRAME_KERNEL) {
         return 0;
     }
 
@@ -3352,35 +3284,16 @@ int process_preempt_from_irq(irq_frame_t* frame) {
         process_clear_resched();
         return 0;
     }
-    ctx->rax = frame->rax;
-    ctx->rbx = frame->rbx;
-    ctx->rcx = frame->rcx;
-    ctx->rdx = frame->rdx;
-    ctx->rbp = frame->rbp;
-    ctx->rsi = frame->rsi;
-    ctx->rdi = frame->rdi;
-    ctx->r8 = frame->r8;
-    ctx->r9 = frame->r9;
-    ctx->r10 = frame->r10;
-    ctx->r11 = frame->r11;
-    ctx->r12 = frame->r12;
-    ctx->r13 = frame->r13;
-    ctx->r14 = frame->r14;
-    ctx->r15 = frame->r15;
-    ctx->cs = frame->cs;
-    ctx->user_rsp = frame->user_rsp;
-    ctx->ss = frame->user_ss;
-    ctx->rip = frame->rip;
-    ctx->rflags = frame->rflags;
+    arch_context_save_irq_frame(ctx, frame);
     ctx->root_table = paging_get_current_root_table();
     process_validate_thread_context(
         cpu_local()->current_process, cpu_local()->current_thread, ctx, "preempt");
     cpu_local()->current_process->ctx = *ctx;
     if (g_ctx_watch_ctx == addr_cast(uint64_t, ctx)) {
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
-        g_ctx_watch_last_rip = ctx->rip;
-        g_ctx_watch_last_rsp = ctx->rsp;
-        g_ctx_watch_last_rflags = ctx->rflags;
+        g_ctx_watch_last_rip = arch_context_pc(ctx);
+        g_ctx_watch_last_rsp = arch_context_kernel_sp(ctx);
+        g_ctx_watch_last_rflags = arch_context_flags(ctx);
         g_ctx_watch_reason = 2;
         g_ctx_watch_hits++;
         trace_write("[sched] ctxwatch preempt pid=");
@@ -3406,14 +3319,13 @@ int process_preempt_from_irq(irq_frame_t* frame) {
      * current thread until control has actually switched back into the
      * scheduler context. Doing it here races against the "current_thread"
      * ownership checks and can strand or duplicate the running thread. */
-    /* IRQ0 entered from ring 3 with a 5-slot IRET frame (RIP, CS, RFLAGS,
-     * RSP, SS). Redirecting the return into a ring-0 scheduler trampoline must
-     * rewrite the full privilege-return frame, not just RIP/CS, otherwise iretq
-     * still tries to restore the stale user SS:RSP pair and faults. */
-    frame->cs = KERNEL_CS_SELECTOR;
-    frame->rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_preempt_trampoline);
-    frame->user_ss = KERNEL_DS_SELECTOR;
-    frame->user_rsp = (uint64_t)(cpu_local()->current_process->stack_top - 16u);
+    /* The interrupt entered from user mode; send its return into the kernel
+     * scheduler trampoline instead (arch_irq_frame_redirect_kernel rewrites the
+     * whole privilege-return frame). */
+    arch_irq_frame_redirect_kernel(
+        frame,
+        (uint64_t)process_kernel_alias_addr((uintptr_t)process_preempt_trampoline),
+        (uint64_t)(cpu_local()->current_process->stack_top - 16u));
     return 1;
 }
 

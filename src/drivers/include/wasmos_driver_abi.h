@@ -552,14 +552,15 @@ enum { WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0, WASMOS_IRQ_POLARITY_LOW = 1 << 1 };
  *
  * The consumer supplies the buffer and lends it WRITE; PM fills it and replies
  * with the byte count. Versioned and length-checked, so it grows by appending. */
-#define WASMOS_MODULE_META_DESC_VERSION 2u
+#define WASMOS_MODULE_META_DESC_VERSION 3u
 
 /* Region kinds. Mirrors the app-format enum in src/kernel/include/wasmos_app.h;
  * a service cannot include kernel headers, so the two must move together. */
 enum { WASMOS_APP_REGION_IO = 0, WASMOS_APP_REGION_BAR = 1 };
 
 /* One declared register window: a fixed I/O range, or a BAR of the matched
- * device resolved by whoever holds the device record. */
+ * device resolved by whoever holds the device record. A BAR resolves to an
+ * I/O-port or a memory-mapped grant according to the BAR's own kind. */
 typedef struct __attribute__((packed)) {
     uint8_t kind;
     uint8_t bar_index;
@@ -568,7 +569,7 @@ typedef struct __attribute__((packed)) {
 } wasmos_region_desc_t;
 
 /* Region declarations one module descriptor can carry. Matches
- * WASMOS_IO_RANGE_LIMIT for the same reason: a driver needing more disjoint
+ * WASMOS_REGION_LIMIT for the same reason: a driver needing more disjoint
  * windows than this is describing a device the model does not fit. */
 #define WASMOS_MODULE_META_MAX_REGIONS 4u
 
@@ -592,7 +593,28 @@ typedef struct __attribute__((packed)) {
     uint32_t cap_flags;
     uint32_t region_count;
     wasmos_region_desc_t regions[WASMOS_MODULE_META_MAX_REGIONS];
+    /* The DMA pinning budget the package declares, in pages (the flags of its
+     * dma.buffer capability); 0 when it requests no DMA. A spawn profile that
+     * grants DMA carries this as its max_bytes, so the driver keeps the budget
+     * its manifest asked for. */
+    uint32_t dma_budget_pages;
 } wasmos_module_meta_desc_t;
+
+/* Request and reply record of PROC_IPC_MODULE_META_FILE, at the start of the
+ * region the caller names in a transfer buffer it owns and lends the process
+ * manager READ|WRITE. The caller fills the request fields; the path is a byte
+ * string (not NUL-terminated) in the same region at path_off from the
+ * descriptor, 1..SPAWN_WATCH_PATH_MAX bytes. On success the process manager
+ * fills `meta` from the package at that path; on failure it is untouched. */
+typedef struct __attribute__((packed)) {
+    /* request */
+    uint32_t version; /* = MODULE_META_FILE_DESC_VERSION */
+    uint32_t path_off;
+    uint32_t path_len;
+    uint32_t reserved0;
+    /* reply */
+    wasmos_module_meta_desc_t meta;
+} wasmos_module_meta_file_desc_t;
 
 /* One [deps] record of a spawned package as PROC_IPC_SPAWN_WATCHED reports it:
  * strength and kind are WASMOS_APP_DEP_* (src/kernel/include/wasmos_app.h,
@@ -668,7 +690,7 @@ _Static_assert(sizeof(wasmos_fsmgr_mount_wait_desc_t) == 8u + FSMGR_MOUNT_WAIT_P
  * its bytes without the NUL.
  *
  * caps_len 0 means the unit runs without hardware access. Otherwise `caps`
- * holds caps_len bytes of wasmos_spawn_caps_v2_t and its I/O ranges, which every
+ * holds caps_len bytes of wasmos_spawn_caps_v2_t and its region grants, which every
  * spawn of the unit carries (wasmos_spawn_watch_desc_t). A request for DMA is
  * refused with WASMOS_ERR_SUPERVISOR_DMA_CAPS. */
 typedef struct {
@@ -1089,21 +1111,31 @@ typedef struct __attribute__((packed)) {
     uint64_t length;
 } wasmos_dma_window_t;
 
-/* One inclusive I/O-port window [first, last]. A driver needs more than one
- * whenever its device's registers are not contiguous: legacy IDE is the case
- * that forced this — the task-file sits at the fixed ISA ports (0x1F0/0x3F6)
- * while its bus-master registers live in a firmware-assigned BAR (0xC040 on
- * QEMU's PIIX). Covering both with a single range would span every port in
- * between, which is where other devices live. */
+/* Kinds of a granted register window (wasmos_region_grant_t). */
+enum { WASMOS_REGION_GRANT_IO = 0, WASMOS_REGION_GRANT_MMIO = 1 };
+
+/* One register window a spawn profile grants: `length` I/O ports starting at
+ * port `base` (WASMOS_REGION_GRANT_IO; base + length - 1 <= 0xFFFF), or
+ * `length` bytes of device memory starting at physical address `base`
+ * (WASMOS_REGION_GRANT_MMIO; base and length page-aligned). length is never 0.
+ *
+ * A driver needs more than one whenever its device's registers are not
+ * contiguous: legacy IDE is the case that forced this -- the task file sits at
+ * the fixed ISA ports (0x1F0/0x3F6) while its bus-master registers live in a
+ * firmware-assigned BAR (0xC040 on QEMU's PIIX). Covering both with a single
+ * range would span every port in between, which is where other devices live.
+ * A grant's position in the profile IS the region index the driver addresses
+ * (io_region_* host calls), so a profile is never reordered or shortened. */
 typedef struct __attribute__((packed)) {
-    uint16_t first;
-    uint16_t last;
-} wasmos_io_range_t;
+    uint32_t kind;   /* WASMOS_REGION_GRANT_* */
+    uint32_t length; /* ports (IO) or bytes (MMIO) */
+    uint64_t base;   /* first port (IO) or physical address (MMIO) */
+} wasmos_region_grant_t;
 
 /* Windows one spawn profile may carry. Small on purpose: a driver that needs
- * more than a handful of disjoint port windows is describing a device this
+ * more than a handful of disjoint register windows is describing a device this
  * model does not fit. */
-#define WASMOS_IO_RANGE_LIMIT 4u
+#define WASMOS_REGION_LIMIT 4u
 
 /* The DMA half of a spawn profile. `direction_flags` is a mask of
  * WASMOS_DMA_DIR_*; `max_bytes` bounds a single mapping; `window_count` is how
@@ -1121,20 +1153,24 @@ typedef struct __attribute__((packed)) {
 
 /* Descriptor-based spawn capabilities. Unlike the packed-arg spawn opcodes,
  * which are out of IPC argument slots, this carries variable-length arrays after
- * the fixed header. Layout is header, then io_range_count I/O windows, then
+ * the fixed header. Layout is header, then region_count region grants, then
  * dma.window_count DMA windows — order matters, both sides walk it positionally.
  *
- * io_port_min/max remain for a single contiguous window; io_range_count > 0
+ * io_port_min/max remain for a single contiguous I/O window; region_count > 0
  * supersedes them, which is how a device with disjoint register windows (legacy
- * IDE: task file at 0x1F0/0x3F6, bus-master registers in a BAR) is described. */
+ * IDE: task file at 0x1F0/0x3F6, bus-master registers in a BAR) or with
+ * memory-mapped registers is described. An I/O grant needs DEVMGR_CAP_IO_PORT
+ * and an MMIO grant DEVMGR_CAP_MMIO_MAP; a grant whose capability is missing
+ * refuses the whole descriptor rather than being dropped, since dropping one
+ * would renumber every grant after it. */
 typedef struct __attribute__((packed)) {
     uint32_t cap_flags;
     uint16_t io_port_min;
     uint16_t io_port_max;
     uint16_t irq_mask;
-    uint16_t io_range_count;
+    uint16_t region_count;
     wasmos_spawn_dma_caps_t dma;
-    /* wasmos_io_range_t io_ranges[io_range_count];
+    /* wasmos_region_grant_t regions[region_count];
      * wasmos_dma_window_t windows[dma.window_count]; */
 } wasmos_spawn_caps_v2_t;
 
@@ -1142,17 +1178,17 @@ typedef struct __attribute__((packed)) {
  * the fixed header plus both variable arrays, in the order the struct comment
  * gives. Use it to size the buffer before writing and to bounds-check one
  * before reading; the counts must be the same ones stored in the header
- * (io_range_count and dma.window_count), or the computed size will not describe
+ * (region_count and dma.window_count), or the computed size will not describe
  * the actual layout. Both arguments are evaluated more than once only through
  * casts, so passing an expression with side effects is safe here, but the macro
  * is otherwise unparenthesised in the usual way -- pass simple values. The
  * result is a uint32_t, as every length field it is compared with is. */
-#define WASMOS_SPAWN_CAPS_V2_SIZE(io_range_count, window_count)                                    \
+#define WASMOS_SPAWN_CAPS_V2_SIZE(region_count, window_count)                                      \
     ((uint32_t)sizeof(wasmos_spawn_caps_v2_t) +                                                    \
-     ((uint32_t)(io_range_count) * (uint32_t)sizeof(wasmos_io_range_t)) +                          \
+     ((uint32_t)(region_count) * (uint32_t)sizeof(wasmos_region_grant_t)) +                        \
      ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
-_Static_assert(WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_IO_RANGE_LIMIT, 1) <= SUPERVISOR_CAPS_MAX,
-               "a submission's caps must fit every I/O range a driver may declare and the "
+_Static_assert(WASMOS_SPAWN_CAPS_V2_SIZE(WASMOS_REGION_LIMIT, 1) <= SUPERVISOR_CAPS_MAX,
+               "a submission's caps must fit every region a driver may declare and the "
                "DMA window device-manager grants");
 
 /* Stable indices naming the fields of an IPC message, for code that addresses

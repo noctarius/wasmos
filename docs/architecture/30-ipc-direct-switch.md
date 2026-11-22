@@ -194,7 +194,7 @@ typedef enum {
 ```
 
 A chain-depth counter is added to `cpu_sched_t` (in
-`src/kernel/include/arch/x86_64/smp.h`):
+`src/kernel/include/cpu_local.h`):
 
 ```c
 typedef struct {
@@ -459,7 +459,7 @@ already does.
 ```c
 /* After guard evaluation, before removing receiver from wait_list: */
 while (__atomic_load_n(&receiver->blocking_transition, __ATOMIC_ACQUIRE))
-    cpu_relax();
+    arch_cpu_relax();
 /* Safe: context save is complete on the remote CPU. */
 ```
 

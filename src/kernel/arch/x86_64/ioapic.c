@@ -5,10 +5,11 @@
 #include "arch/x86_64/ioapic.h"
 #include "irq.h"
 #include "paging.h"
+#include "memory.h"
 #include "serial.h"
 #include "sync/spinlock.h"
 #if WASMOS_SMP
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "arch/x86_64/lapic.h"
 #endif
 
@@ -71,12 +72,6 @@
 #define IOAPIC_RTE_ACTHI (0u << 13)
 #define IOAPIC_RTE_ACTLO (1u << 13)
 #define IOAPIC_RTE_FIXED (0u << 8)
-
-/* Page table flags for MMIO mapping (mirrors lapic.c). */
-#define PT_FLAG_PRESENT (1ULL << 0)
-#define PT_FLAG_WRITE (1ULL << 1)
-#define PT_FLAG_PCD (1ULL << 4)
-#define PT_FLAG_NX (1ULL << 63)
 
 static uintptr_t g_ioapic_base;
 static uint8_t g_gsi_map[16]; /* g_gsi_map[isa_irq] = gsi; default identity */
@@ -211,7 +206,7 @@ static void madt_parse(uint64_t xsdt_phys, uint64_t* out_ioapic_phys) {
                 const acpi_madt_processor_t* proc = (const acpi_madt_processor_t*)p;
                 if ((proc->flags & MADT_PROC_FLAG_ENABLED) &&
                     proc->apic_id != (uint8_t)bsp_apic_id && g_cpu_count < WASMOS_MAX_CPUS) {
-                    g_cpus[g_cpu_count].apic_id = proc->apic_id;
+                    g_cpus[g_cpu_count].arch.apic_id = proc->apic_id;
                     g_cpus[g_cpu_count].cpu_id = g_cpu_count;
                     g_cpu_count++;
                 }
@@ -234,7 +229,7 @@ static void madt_parse(uint64_t xsdt_phys, uint64_t* out_ioapic_phys) {
 /* -------------------------------------------------------------- MMIO mapping */
 
 static void ioapic_map(uint64_t phys) {
-    uint64_t flags = PT_FLAG_PRESENT | PT_FLAG_WRITE | PT_FLAG_PCD | PT_FLAG_NX;
+    uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_DEVICE;
     int rc = paging_map_4k(IOAPIC_VIRT_BASE, phys, flags);
     if (rc != 0) {
         serial_write("[ioapic] mmio map failed\n");

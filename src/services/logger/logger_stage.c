@@ -3,10 +3,15 @@
 #include <stdio.h>
 #include <string.h>
 
+static const char* logger_stage_tag(const logger_stage_t* st) {
+    return st->tag ? st->tag : "[logger]";
+}
+
 void logger_stage_truncated(logger_stage_t* st, const char* path, uint32_t limit) {
     st->marker_len = (uint32_t)snprintf(st->marker,
                                         sizeof(st->marker),
-                                        "[logger] %s reached %u bytes and was truncated\n",
+                                        "%s %s reached %u bytes and was truncated\n",
+                                        logger_stage_tag(st),
                                         path,
                                         (unsigned)limit);
 }
@@ -38,10 +43,11 @@ int32_t logger_stage_next(logger_stage_t* st, logger_read_fn read, void* user) {
     if (st->seq != want) {
         st->marker_len = (uint32_t)snprintf(st->marker,
                                             sizeof(st->marker),
-                                            want == 0 ? "[logger] %llu bytes of earlier "
+                                            want == 0 ? "%s %llu bytes of earlier "
                                                         "kernel log were not retained\n"
-                                                      : "[logger] %llu bytes of kernel log "
+                                                      : "%s %llu bytes of kernel log "
                                                         "lost before they were read\n",
+                                            logger_stage_tag(st),
                                             (unsigned long long)(st->seq - want));
     }
     st->out_len = 0;

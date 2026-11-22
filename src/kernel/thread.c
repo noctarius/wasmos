@@ -2,7 +2,7 @@
  * Each thread_t has its own kernel stack and saved process_context_t but shares
  * its owner process's address space.  THREAD_MAX_COUNT limits total live threads. */
 #include "thread.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 #include "sched.h"
 #include "sync/spinlock.h"
 
@@ -14,28 +14,7 @@ static void thread_clear_ctx(process_context_t* ctx) {
     if (!ctx) {
         return;
     }
-    ctx->r15 = 0;
-    ctx->r14 = 0;
-    ctx->r13 = 0;
-    ctx->r12 = 0;
-    ctx->r11 = 0;
-    ctx->r10 = 0;
-    ctx->r9 = 0;
-    ctx->r8 = 0;
-    ctx->rdi = 0;
-    ctx->rsi = 0;
-    ctx->rbp = 0;
-    ctx->rdx = 0;
-    ctx->rcx = 0;
-    ctx->rbx = 0;
-    ctx->rax = 0;
-    ctx->rsp = 0;
-    ctx->rip = 0;
-    ctx->rflags = 0;
-    ctx->cs = 0;
-    ctx->ss = 0;
-    ctx->user_rsp = 0;
-    ctx->root_table = 0;
+    arch_context_clear(ctx);
 }
 
 /* thread.c-internal terminal scrub and the SOLE sanctioned sink to UNUSED(DEAD):

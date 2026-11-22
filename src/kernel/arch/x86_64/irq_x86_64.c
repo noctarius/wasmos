@@ -1,4 +1,5 @@
 #include "irq.h"
+#include "msi.h"
 #include "arch/x86_64/irq_x86_64.h"
 #include "ipc.h"
 #include "serial.h"
@@ -187,13 +188,15 @@ static void irq_send_eoi(uint32_t irq_line) {
 #endif
 }
 
-/* Early interrupt-controller setup, called from x86_cpu_init() on the BSP with
+/* Early interrupt-controller setup, called from cpu_init() on the BSP with
  * interrupts still masked. Initialises the sharing table and, in modes 0 and 1,
  * remaps the 8259 pair to vectors IRQ_VECTOR_BASE..+15 while preserving the
  * firmware's mask state, so no line becomes live here. The IOAPIC half of mode 2
  * is not done now: it needs the ACPI tables and happens later in
- * x86_irq_late_init(). */
-void x86_irq_init(void) {
+ * irq_late_init(). Ends by bringing up the MSI vector table, whose IDT gates
+ * cpu_init installs alongside the IRQ ones (LAPIC modes only: without a LAPIC
+ * nothing receives a device's message write, so msi_alloc refuses). */
+void irq_init(void) {
     ksync_spinlock_init(&g_irq_lines_lock);
     irq_sharing_init(irq_lines_ptr(), IRQ_COUNT);
 
@@ -235,6 +238,7 @@ void x86_irq_init(void) {
     pic_write_masks();
     serial_write("[irq] pic remapped\n");
 #endif
+    msi_init();
 }
 
 /* Mask/unmask one ISA IRQ line at whichever controller the build selected: the
@@ -247,7 +251,7 @@ void x86_irq_init(void) {
  * path takes none and read-modify-writes the cached mask bytes, so callers that
  * can run concurrently must serialise themselves; the irq_sharing ops path does,
  * by holding g_irq_lines_lock. */
-int x86_irq_mask(uint32_t irq_line) {
+int irq_mask(uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
@@ -266,7 +270,7 @@ int x86_irq_mask(uint32_t irq_line) {
     return 0;
 }
 
-int x86_irq_unmask(uint32_t irq_line) {
+int irq_unmask(uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
@@ -297,7 +301,7 @@ int x86_irq_unmask(uint32_t irq_line) {
  * guest through the irq_configure host call, so the caller cannot tell it apart
  * from any other failure. It must return the packed WASMOS_ERR_IRQ_BAD_LINE the
  * neighbouring entry points use. */
-int x86_irq_configure(uint32_t irq_line, uint32_t flags) {
+int irq_configure(uint32_t irq_line, uint32_t flags) {
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
@@ -313,7 +317,7 @@ int x86_irq_configure(uint32_t irq_line, uint32_t flags) {
  * boot_info are reachable. In IOAPIC mode this parses the MADT and programs the
  * redirection entries (all initially masked); in every other mode it is a no-op
  * and boot_info is unused. boot_info is borrowed and must carry a valid rsdp. */
-void x86_irq_late_init(const boot_info_t* boot_info) {
+void irq_late_init(const boot_info_t* boot_info) {
 #if WASMOS_IRQ_MODE == 2
     ioapic_init(boot_info);
 #else
@@ -323,11 +327,11 @@ void x86_irq_late_init(const boot_info_t* boot_info) {
 
 /* Hardware effects and delivery for irq_sharing.c. */
 static void irq_ops_mask(uint32_t line) {
-    (void)x86_irq_mask(line);
+    (void)irq_mask(line);
 }
 
 static void irq_ops_unmask(uint32_t line) {
-    (void)x86_irq_unmask(line);
+    (void)irq_unmask(line);
 }
 
 static int irq_ops_deliver(uint32_t endpoint, uint32_t line) {
@@ -368,7 +372,7 @@ static const irq_sharing_ops_t g_irq_ops = {
  * Lines are shareable, and re-registering a context that already holds the line
  * updates its endpoint rather than adding a second entry.
  * Takes g_irq_lines_lock, which masks interrupts for the duration. */
-int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
+int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
     if (irq_line >= IRQ_COUNT) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
@@ -396,7 +400,7 @@ int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) 
  * for, since drivers may ack defensively — WASMOS_ERR_IRQ_BAD_LINE for a line
  * >= IRQ_COUNT, or WASMOS_ERR_IRQ_NOT_A_SHARER when the context does not hold
  * the line. Takes g_irq_lines_lock. */
-int x86_irq_ack(uint32_t context_id, uint32_t irq_line) {
+int irq_ack(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
@@ -411,7 +415,7 @@ int x86_irq_ack(uint32_t context_id, uint32_t irq_line) {
  * line. Returns 0 on success, WASMOS_ERR_IRQ_BAD_LINE for a line >= IRQ_COUNT, or
  * WASMOS_ERR_IRQ_NOT_A_SHARER when there was nothing to remove.
  * Takes g_irq_lines_lock. */
-int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
+int irq_unregister(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
@@ -427,7 +431,7 @@ int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
  * the acks it owed, so a line whose only remaining sharers have acked is unmasked
  * rather than left dead. Idempotent, and silent when the context held no line.
  * Takes g_irq_lines_lock. */
-void x86_irq_release_context(uint32_t context_id) {
+void irq_release_context(uint32_t context_id) {
     ksync_spinlock_lock(&g_irq_lines_lock);
     irq_sharing_release_context(irq_lines_ptr(), IRQ_COUNT, context_id, &g_irq_ops);
     ksync_spinlock_unlock(&g_irq_lines_lock);

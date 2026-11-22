@@ -9,9 +9,10 @@
  *   4. the panicking CPU dumps the reason plus every CPU's context + backtrace,
  *   5. halts forever.
  *
- * x86_nmi_handler() is the C side of the NMI ISR (isr_nmi in cpu_isr.S). During
- * a panic it performs the per-CPU capture; outside a panic an NMI is unexpected
- * and it just logs and returns.
+ * kpanic_nmi() is what the arch NMI entry calls with the interrupted register
+ * state (x86_64: isr_nmi -> x86_nmi_handler). During a panic it performs the
+ * per-CPU capture; outside a panic an NMI is unexpected and it just logs and
+ * returns.
  */
 #pragma once
 
@@ -30,14 +31,16 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
 
 /* Record the register context a fault came from, so a later kpanic reports the faulting
  * instruction instead of the panic call site.  Called by exception entry paths with the
- * values out of the IRET frame; the calling CPU's slot is filled in, and once captured it
- * is not overwritten by kpanic's own self-capture.  A CPU id past WASMOS_MAX_CPUS is
- * silently ignored. */
-void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rflags, uint64_t cs);
+ * faulting program counter, stack pointer, frame pointer, flags word and mode word
+ * (x86_64: rip, rsp, rbp, rflags, cs from the IRET frame); the calling CPU's slot is
+ * filled in, and once captured it is not overwritten by kpanic's own self-capture.  A
+ * CPU id past WASMOS_MAX_CPUS is silently ignored. */
+void kpanic_capture_origin(uint64_t pc, uint64_t sp, uint64_t fp, uint64_t flags, uint64_t mode);
 
-/* Called from isr_nmi with a pointer to the pushed register frame (PUSH_REGS
- * order followed by the CPU-pushed iret frame). */
-void x86_nmi_handler(uint64_t* regs);
+/* NMI handler body, called by the arch NMI entry with the interrupted state (same five
+ * values as kpanic_capture_origin).  During a panic it captures this CPU and halts
+ * forever; otherwise it logs the unexpected NMI, dumps the thread table and returns. */
+void kpanic_nmi(uint64_t pc, uint64_t sp, uint64_t fp, uint64_t flags, uint64_t mode);
 
 /* One line per live thread -- state, block reason, run-queue membership and the
  * wake handshake flags -- written with the UNLOCKED serial writer and taking no

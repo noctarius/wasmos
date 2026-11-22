@@ -21,11 +21,11 @@ static const boot_module_t* app_meta_module_at(const boot_info_t* boot_info, uin
 }
 
 /* Folds a package's declared capability names into the DEVMGR_CAP_* bitmask the
- * device manager understands.  Only "io.port", "irq.route" and "dma.buffer" have
- * a DEVMGR bit; every other capability the package declares — including
- * "mmio.map" and "system.control" — is silently absent from the result, so this
- * mask is not a faithful summary of the package's capabilities.  A NULL desc, or
- * one declaring none of the three, yields 0. */
+ * device manager understands.  Only "io.port", "mmio.map", "irq.route" and
+ * "dma.buffer" have a DEVMGR bit; every other capability the package declares —
+ * "system.control", for one — is silently absent from the result, so this mask
+ * is not a faithful summary of the package's capabilities.  A NULL desc, or one
+ * declaring none of the four, yields 0. */
 uint32_t wasmos_app_driver_cap_flags(const wasmos_app_desc_t* desc) {
     uint32_t cap_flags = 0;
     if (!desc) {
@@ -34,6 +34,8 @@ uint32_t wasmos_app_driver_cap_flags(const wasmos_app_desc_t* desc) {
     for (uint32_t i = 0; i < desc->cap_count; ++i) {
         if (str_eq_bytes(desc->caps[i].name, desc->caps[i].name_len, "io.port")) {
             cap_flags |= DEVMGR_CAP_IO_PORT;
+        } else if (str_eq_bytes(desc->caps[i].name, desc->caps[i].name_len, "mmio.map")) {
+            cap_flags |= DEVMGR_CAP_MMIO_MAP;
         } else if (str_eq_bytes(desc->caps[i].name, desc->caps[i].name_len, "irq.route")) {
             cap_flags |= DEVMGR_CAP_IRQ;
         } else if (str_eq_bytes(desc->caps[i].name, desc->caps[i].name_len, "dma.buffer")) {

@@ -10,26 +10,20 @@
 #include "process_manager_internal.h"
 #include "thread.h"
 #include "sched.h"
-#include "arch/x86_64/smp.h"
-#include "arch/x86_64/lapic.h"
+#include "arch/arch_cpu.h"
+#include "cpu_local.h"
+#include "arch/arch_context.h"
 
 extern char __kernel_start[];
 extern char __kernel_end[];
 
-/* Register-frame layout as pushed by isr_nmi (PUSH_REGS then the CPU iret
- * frame). PUSH_REGS pushes rax,rbx,rcx,rdx,rbp,rsi,rdi,r8..r15 in that order,
- * so from the lowest saved address (rsp on entry to the C handler): */
-enum {
-    NMI_REG_RBP = 10, /* PUSH_REGS pushed rbp 5th => 5th from the top       */
-    NMI_REG_RIP = 15, /* iret frame: rip                                    */
-    NMI_REG_CS = 16,
-    NMI_REG_RFLAGS = 17,
-    NMI_REG_RSP = 18,
-};
-
+/* One CPU's captured state: program counter, stack pointer, frame pointer,
+ * flags word and mode word (the arch's privilege/segment word; 0 for kpanic's
+ * own call site). The dump prints them under the x86_64 register names
+ * (rip/rsp/rbp/rflags), which scripts/qemu_test_framework.py parses. */
 typedef struct {
     volatile uint32_t captured;
-    uint64_t rip, rsp, rbp, rflags, cs;
+    uint64_t pc, sp, fp, flags, mode;
     uint32_t pid, tid;
 } panic_cpu_ctx_t;
 
@@ -70,21 +64,21 @@ static int panic_ptr_ok(uint64_t p) {
 
 /* Best-effort frame-pointer backtrace. Bounded depth; stops at the first
  * suspicious frame rather than risk a fault. */
-static void panic_backtrace(uint64_t rbp) {
+static void panic_backtrace(uint64_t fp) {
     for (int i = 0; i < 16; ++i) {
-        if (!panic_ptr_ok(rbp)) {
+        if (!panic_ptr_ok(fp)) {
             break;
         }
-        const uint64_t* frame = ptr_cast(uint64_t, rbp);
+        const uint64_t* frame = ptr_cast(uint64_t, fp);
         uint64_t next = frame[0];
         uint64_t ret = frame[1];
         serial_printf_unlocked("    [%d] ret=%016llx", i, (unsigned long long)ret);
         panic_print_symbol(ret);
         serial_printf_unlocked("\n");
-        if (next <= rbp) {
+        if (next <= fp) {
             break; /* frame chain must climb toward the stack base   */
         }
-        rbp = next;
+        fp = next;
     }
 }
 
@@ -96,18 +90,18 @@ static void panic_backtrace(uint64_t rbp) {
  * last write and a reader that sees `captured` sees the whole frame.  It
  * overwrites any earlier capture for this CPU, so the most recent one wins.  A
  * CPU id at or above WASMOS_MAX_CPUS is ignored. */
-void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rflags, uint64_t cs) {
+void kpanic_capture_origin(uint64_t pc, uint64_t sp, uint64_t fp, uint64_t flags, uint64_t mode) {
     uint32_t self = cpu_local()->cpu_id;
     if (self >= WASMOS_MAX_CPUS) {
         return;
     }
 
     panic_cpu_ctx_t* c = &g_panic_ctx[self];
-    c->rip = rip;
-    c->rsp = rsp;
-    c->rbp = rbp;
-    c->rflags = rflags;
-    c->cs = cs;
+    c->pc = pc;
+    c->sp = sp;
+    c->fp = fp;
+    c->flags = flags;
+    c->mode = mode;
     c->pid = cpu_local()->current_process ? cpu_local()->current_process->pid : 0u;
     c->tid = cpu_local()->current_thread ? cpu_local()->current_thread->tid : 0u;
     __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
@@ -152,20 +146,20 @@ static const char* diag_block_reason_name(thread_block_reason_t reason) {
 /* Up to `frames` return addresses from a saved frame pointer, on one line.
  * Shares panic_ptr_ok's conservative screen: a wedged machine is exactly where a
  * bad frame pointer would turn a diagnostic into a second fault. */
-static void diag_print_backtrace(uint64_t rbp, int frames) {
+static void diag_print_backtrace(uint64_t fp, int frames) {
     for (int i = 0; i < frames; ++i) {
-        if (!panic_ptr_ok(rbp)) {
+        if (!panic_ptr_ok(fp)) {
             return;
         }
-        const uint64_t* frame = ptr_cast(uint64_t, rbp);
+        const uint64_t* frame = ptr_cast(uint64_t, fp);
         uint64_t next = frame[0];
         uint64_t ret = frame[1];
         serial_printf_unlocked(" [%d] %016llx", i, (unsigned long long)ret);
         panic_print_symbol(ret);
-        if (next <= rbp) {
+        if (next <= fp) {
             return;
         }
-        rbp = next;
+        fp = next;
     }
 }
 
@@ -298,8 +292,9 @@ void diag_dump_threads(const char* reason) {
          * threads are waiting" and "fs-manager is waiting inside a query it
          * made to device-manager". It is stale for a RUNNING thread, which is
          * executing past it on some CPU; the state field says which. */
-        serial_printf_unlocked("[diag]   rip=%016llx", (unsigned long long)t->ctx.rip);
-        panic_print_symbol(t->ctx.rip);
+        serial_printf_unlocked("[diag]   rip=%016llx",
+                               (unsigned long long)arch_context_pc(&t->ctx));
+        panic_print_symbol(arch_context_pc(&t->ctx));
         if (t->state == THREAD_STATE_BLOCKED) {
             /* Deep enough to reach the caller, not just the mechanism. Four
              * frames stop at the host-call wrapper, which is the same
@@ -309,7 +304,7 @@ void diag_dump_threads(const char* reason) {
              * the kernel address space -- which is exactly where the useful
              * name is. A WASM guest's walk ends on its own when the frame
              * pointer leaves the higher half. */
-            diag_print_backtrace(t->ctx.rbp, 10);
+            diag_print_backtrace(arch_context_fp(&t->ctx), 10);
         }
         serial_printf_unlocked("\n");
         /* For a strand, WHO made it runnable.  A READY thread on no run queue was
@@ -464,9 +459,9 @@ void diag_dump_sched_counters(void) {
  * its register frame into its per-CPU panic slot so the dump can include it, and
  * then HALTS FOREVER with interrupts masked — this path does not return.
  *
- * regs points at the interrupt frame saved by the NMI stub, indexed by the
- * NMI_REG_* constants, and is borrowed for the call. */
-void x86_nmi_handler(uint64_t* regs) {
+ * The arch NMI entry (x86_nmi_handler on x86_64) decodes the interrupted
+ * register state and passes it here. */
+void kpanic_nmi(uint64_t pc, uint64_t sp, uint64_t fp, uint64_t flags, uint64_t mode) {
     if (!__atomic_load_n(&g_panicking, __ATOMIC_ACQUIRE)) {
         /* Not a panic stop — an NMI the kernel did not initiate, which is how a
          * diagnosis is requested from outside: the test framework injects one
@@ -478,7 +473,7 @@ void x86_nmi_handler(uint64_t* regs) {
          * vCPU, and four interleaved copies of one table are worse than one. */
         serial_printf_unlocked("[nmi] unexpected NMI cpu=%u rip=%016llx\n",
                                (unsigned)cpu_local()->cpu_id,
-                               (unsigned long long)regs[NMI_REG_RIP]);
+                               (unsigned long long)pc);
         static volatile uint32_t nmi_diag_busy;
         if (__atomic_exchange_n(&nmi_diag_busy, 1u, __ATOMIC_ACQ_REL) == 0u) {
             diag_dump_threads("unexpected NMI");
@@ -490,18 +485,16 @@ void x86_nmi_handler(uint64_t* regs) {
     uint32_t id = cpu_local()->cpu_id;
     if (id < WASMOS_MAX_CPUS) {
         panic_cpu_ctx_t* c = &g_panic_ctx[id];
-        c->rip = regs[NMI_REG_RIP];
-        c->cs = regs[NMI_REG_CS];
-        c->rflags = regs[NMI_REG_RFLAGS];
-        c->rsp = regs[NMI_REG_RSP];
-        c->rbp = regs[NMI_REG_RBP];
+        c->pc = pc;
+        c->mode = mode;
+        c->flags = flags;
+        c->sp = sp;
+        c->fp = fp;
         c->pid = cpu_local()->current_process ? cpu_local()->current_process->pid : 0u;
         c->tid = cpu_local()->current_thread ? cpu_local()->current_thread->tid : 0u;
         __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
     }
-    for (;;) {
-        __asm__ volatile("cli; hlt");
-    }
+    arch_halt_forever();
 }
 
 /* Stops the machine and dumps every CPU's state.  Does not return under any
@@ -523,14 +516,12 @@ void x86_nmi_handler(uint64_t* regs) {
  * answers the NMI is reported as uncaptured rather than waited for
  * indefinitely. */
 __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b) {
-    __asm__ volatile("cli");
+    arch_irq_disable();
 
     /* First CPU to panic wins; any later panicker (including an NMI'd CPU that
      * then also called kpanic) just halts so the dump isn't interleaved. */
     if (__atomic_exchange_n(&g_panicking, 1u, __ATOMIC_ACQ_REL) != 0u) {
-        for (;;) {
-            __asm__ volatile("cli; hlt");
-        }
+        arch_halt_forever();
     }
 
     uint32_t self = cpu_local()->cpu_id;
@@ -539,15 +530,11 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
     if (self < WASMOS_MAX_CPUS) {
         panic_cpu_ctx_t* c = &g_panic_ctx[self];
         if (!__atomic_load_n(&c->captured, __ATOMIC_ACQUIRE)) {
-            uint64_t rbp = 0, rsp = 0, rflags = 0;
-            __asm__ volatile("mov %%rbp, %0" : "=r"(rbp));
-            __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-            __asm__ volatile("pushfq; pop %0" : "=r"(rflags));
-            c->rip = addr_cast(uint64_t, __builtin_return_address(0));
-            c->rbp = rbp;
-            c->rsp = rsp;
-            c->rflags = rflags;
-            c->cs = 0;
+            c->pc = addr_cast(uint64_t, __builtin_return_address(0));
+            c->fp = arch_read_fp();
+            c->sp = arch_read_sp();
+            c->flags = arch_read_flags();
+            c->mode = 0;
             c->pid = cpu_local()->current_process ? cpu_local()->current_process->pid : 0u;
             c->tid = cpu_local()->current_thread ? cpu_local()->current_thread->tid : 0u;
             __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
@@ -555,9 +542,8 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
     }
 
 #if WASMOS_SMP
-    /* Stop every other CPU. NMI ignores IF, so a CPU spinning under cli is still
-     * caught. */
-    lapic_send_nmi_allbutself();
+    /* Stop every other CPU, including one spinning with interrupts masked. */
+    arch_stop_other_cpus();
 #endif
 
     /* Wait (bounded) for the others to snapshot themselves. */
@@ -575,7 +561,7 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
         if (all) {
             break;
         }
-        __asm__ volatile("pause");
+        arch_cpu_relax();
     }
 
     serial_printf_unlocked("\n================= KERNEL PANIC =================\n");
@@ -595,16 +581,14 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
             continue;
         }
         serial_printf_unlocked("    rip=%016llx rsp=%016llx rbp=%016llx rflags=%016llx\n",
-                               (unsigned long long)c->rip,
-                               (unsigned long long)c->rsp,
-                               (unsigned long long)c->rbp,
-                               (unsigned long long)c->rflags);
+                               (unsigned long long)c->pc,
+                               (unsigned long long)c->sp,
+                               (unsigned long long)c->fp,
+                               (unsigned long long)c->flags);
         serial_printf_unlocked("    backtrace:\n");
-        panic_backtrace(c->rbp);
+        panic_backtrace(c->fp);
     }
     serial_printf_unlocked("=============== END KERNEL PANIC ===============\n");
 
-    for (;;) {
-        __asm__ volatile("cli; hlt");
-    }
+    arch_halt_forever();
 }

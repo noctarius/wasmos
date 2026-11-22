@@ -22,7 +22,7 @@
 #include "process.h"
 #include "string.h"
 #include "stdlib.h"
-#include "arch/x86_64/smp.h"
+#include "cpu_local.h"
 
 /* -------------------------------------------------------------------------
  * Helpers

@@ -4,8 +4,9 @@
 # that may resume the faulting context; IRQ stubs save the register set and
 # delegate to C.
 #
-# Register-frame contract shared with the C side (irq_frame_t in process.h,
-# x86_exception_panic_common in cpu_x86_64.c). PUSH_REGS leaves 15 quadwords
+# Register-frame contract shared with the C side (irq_frame_t in the x86_64
+# arch_context.h under include/arch, x86_exception_panic_common in
+# cpu_x86_64.c). PUSH_REGS leaves 15 quadwords
 # directly below the CPU-pushed frame: r15 at +0 rising to rax at +112. The CPU
 # frame therefore starts at +120 and is, in long mode, always five slots wide —
 # rip, cs, rflags, rsp, ss — preceded by an error code for the vectors that push
@@ -20,7 +21,7 @@
 .extern x86_exception_panic_frame
 .extern x86_page_fault_handler
 .extern x86_user_exception_handler
-.extern x86_syscall_handler
+.extern syscall_dispatch
 .extern x86_irq_handler
 .extern x86_timer_irq_handler
 .extern x86_irq_iret_corrupt
@@ -514,7 +515,7 @@ isr_syscall_128:
     # saved register frame and returns the syscall result in RAX.
     PUSH_REGS
     mov %rsp, %rdi
-    CALL_C_ALIGNED x86_syscall_handler
+    CALL_C_ALIGNED syscall_dispatch
     movq %rax, 112(%rsp)
     POP_REGS
     iretq

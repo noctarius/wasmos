@@ -43,7 +43,7 @@ enum {
     WASMOS_ERR_DOMAIN_DMA = 15, /* DMA map/sync capability and range failures (was WASMOS_DMA_STATUS_*) */
     WASMOS_ERR_DOMAIN_IRQ = 16, /* hardware IRQ routing failures */
     WASMOS_ERR_DOMAIN_MSI = 17, /* message-signalled interrupt failures (kernel vector allocation + pci-bus device programming) */
-    WASMOS_ERR_DOMAIN_IO = 18, /* region-addressed I/O port access failures */
+    WASMOS_ERR_DOMAIN_IO = 18, /* region-addressed device register access failures (I/O-port and memory-mapped windows) */
     WASMOS_ERR_DOMAIN_FONT = 12, /* font-rasterizer service failures (was FONT_STATUS_*) */
     WASMOS_ERR_DOMAIN_RTC = 13, /* real-time-clock service failures (was RTC_STATUS_*) */
     WASMOS_ERR_DOMAIN_XFER_BUFFER = 11, /* transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*) */
@@ -124,6 +124,7 @@ enum {
     WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 35), /* the process manager answered a service-watch request with neither its response nor a packed error */
     WASMOS_ERR_PROC_PM_KILL_NOT_CHILD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 36), /* the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself */
     WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 37), /* the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created */
+    WASMOS_ERR_PROC_PM_META_BAD_DESC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 38), /* a PROC_IPC_MODULE_META_FILE descriptor was short, of an unknown version, or its path is empty, too long or outside the region it names */
     WASMOS_ERR_LINMEM_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 1), /* no free page-aligned window fits in linear memory */
     WASMOS_ERR_LINMEM_MAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 2), /* paging/linear-memory mapping step failed */
     WASMOS_ERR_LINMEM_NO_BASE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_LINMEM, 3), /* the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it */
@@ -236,10 +237,12 @@ enum {
     WASMOS_ERR_MSI_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 10), /* the MSI-X table BAR could not be mapped */
     WASMOS_ERR_MSI_NOT_DEVICE_OWNER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 11), /* another endpoint already programmed interrupts for this device */
     WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 12), /* the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it */
-    WASMOS_ERR_IO_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 1), /* caller has no io.port spawn profile, so it holds no I/O windows */
+    WASMOS_ERR_IO_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 1), /* caller has no spawn profile granting register windows */
     WASMOS_ERR_IO_BAD_REGION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 2), /* region index names no window this context was granted */
     WASMOS_ERR_IO_OUT_OF_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 3), /* offset falls outside the granted window's bounds */
     WASMOS_ERR_IO_BAD_PORT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 4), /* port number outside 0..0xFFFF */
+    WASMOS_ERR_IO_MISALIGNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 5), /* a memory-mapped window access whose offset is not a multiple of its width */
+    WASMOS_ERR_IO_NO_PORT_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 6), /* the architecture has no I/O port space, so no port access or I/O-port window exists */
     WASMOS_ERR_FONT_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 1), /* invalid request arguments (font id, size, glyph, or buffer) */
     WASMOS_ERR_FONT_PERMISSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 2), /* caller is not permitted to use the requested font resource */
     WASMOS_ERR_FONT_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 3), /* unknown or unsupported request type */
@@ -461,6 +464,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: return "proc_pm.SVC_WATCH_BAD_REPLY";
     case WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: return "proc_pm.KILL_NOT_CHILD";
     case WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED: return "proc_pm.GRANT_NOT_AUTHORIZED";
+    case WASMOS_ERR_PROC_PM_META_BAD_DESC: return "proc_pm.META_BAD_DESC";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "linmem.NO_WINDOW";
     case WASMOS_ERR_LINMEM_MAP: return "linmem.MAP";
     case WASMOS_ERR_LINMEM_NO_BASE: return "linmem.NO_BASE";
@@ -577,6 +581,8 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_IO_BAD_REGION: return "io.BAD_REGION";
     case WASMOS_ERR_IO_OUT_OF_WINDOW: return "io.OUT_OF_WINDOW";
     case WASMOS_ERR_IO_BAD_PORT: return "io.BAD_PORT";
+    case WASMOS_ERR_IO_MISALIGNED: return "io.MISALIGNED";
+    case WASMOS_ERR_IO_NO_PORT_SPACE: return "io.NO_PORT_SPACE";
     case WASMOS_ERR_FONT_INVALID: return "font.INVALID";
     case WASMOS_ERR_FONT_PERMISSION: return "font.PERMISSION";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "font.UNSUPPORTED";
@@ -731,6 +737,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_SVC_WATCH_BAD_REPLY: return "the process manager answered a service-watch request with neither its response nor a packed error";
     case WASMOS_ERR_PROC_PM_KILL_NOT_CHILD: return "the pid named in PROC_IPC_KILL is not a live child of the caller, or is the caller itself";
     case WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED: return "the spawn carries hardware grants (any cap_flags bit set) and the caller lacks the spawn.grant capability; no child was created";
+    case WASMOS_ERR_PROC_PM_META_BAD_DESC: return "a PROC_IPC_MODULE_META_FILE descriptor was short, of an unknown version, or its path is empty, too long or outside the region it names";
     case WASMOS_ERR_LINMEM_NO_WINDOW: return "no free page-aligned window fits in linear memory";
     case WASMOS_ERR_LINMEM_MAP: return "paging/linear-memory mapping step failed";
     case WASMOS_ERR_LINMEM_NO_BASE: return "the module's linear-memory base could not be obtained, so there is nothing to place a window inside. Distinct from NO_WINDOW, which is a linear memory that exists and has no room: this is a linear memory the runtime could not hand over at all, re-fetched after a commit that may have moved it";
@@ -843,10 +850,12 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_MSI_MAP_FAILED: return "the MSI-X table BAR could not be mapped";
     case WASMOS_ERR_MSI_NOT_DEVICE_OWNER: return "another endpoint already programmed interrupts for this device";
     case WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER: return "the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it";
-    case WASMOS_ERR_IO_NOT_AUTHORIZED: return "caller has no io.port spawn profile, so it holds no I/O windows";
+    case WASMOS_ERR_IO_NOT_AUTHORIZED: return "caller has no spawn profile granting register windows";
     case WASMOS_ERR_IO_BAD_REGION: return "region index names no window this context was granted";
     case WASMOS_ERR_IO_OUT_OF_WINDOW: return "offset falls outside the granted window's bounds";
     case WASMOS_ERR_IO_BAD_PORT: return "port number outside 0..0xFFFF";
+    case WASMOS_ERR_IO_MISALIGNED: return "a memory-mapped window access whose offset is not a multiple of its width";
+    case WASMOS_ERR_IO_NO_PORT_SPACE: return "the architecture has no I/O port space, so no port access or I/O-port window exists";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

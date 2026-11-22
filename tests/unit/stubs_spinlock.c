@@ -1,6 +1,6 @@
 /* Spinlocks for the host tests: definitions for the declarations in
- * arch/x86_64/spinlock.h, which the real kernel implements in
- * arch/x86_64/spinlock.c.
+ * sync/spinlock.h, which the real kernel implements in
+ * src/kernel/spinlock.c.
  *
  * A plain compare-and-swap spin. The kernel's version also saves RFLAGS and
  * clears IF for the duration, which a host process has neither the ability nor
@@ -25,7 +25,7 @@
  * notices, whereas on target only spinlock_unlock lowers the per-CPU preempt
  * depth that spinlock_lock raised. A mispaired acquire/release passes on the
  * host. */
-#include "arch/x86_64/spinlock.h"
+#include "sync/spinlock.h"
 
 void spinlock_init(spinlock_t* lock) {
     if (lock) {

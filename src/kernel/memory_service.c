@@ -58,10 +58,10 @@ static int memory_service_handle_request(const ipc_message_t* req, ipc_message_t
     }
 
     uint64_t addr = ((uint64_t)req->arg1 << 32) | req->arg0;
-    uint64_t error_code = req->arg2;
+    uint32_t access = req->arg2;
     uint32_t context_id = req->arg3;
     uint64_t mapped_base = 0;
-    int status = mm_handle_page_fault(context_id, addr, error_code, &mapped_base);
+    int status = mm_handle_page_fault(context_id, addr, access, &mapped_base);
 
     reply->type = IPC_MEM_FAULT_REPLY;
     reply->source = g_mem_service_endpoint;
@@ -121,7 +121,7 @@ int memory_service_serve_one(void) {
  * not one the region table can satisfy.  Despite the name it sends no IPC and
  * does not block; the mapped base is discarded. */
 int memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr,
-                                    uint64_t error_code) {
+                                    uint32_t access) {
     /* Resolves the fault in-line instead of round-tripping through the
      * mem-service endpoint, which the worker thread also drains: under SMP the
      * worker can consume the just-sent IPC_MEM_FAULT first, leaving an inline
@@ -129,7 +129,7 @@ int memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_ad
      * unhandled.  mm_handle_page_fault() is an in-kernel routine and is all the
      * request handler would have called anyway, so no IPC is involved. */
     uint64_t mapped_base = 0;
-    return mm_handle_page_fault(fault_context_id, fault_addr, error_code, &mapped_base);
+    return mm_handle_page_fault(fault_context_id, fault_addr, access, &mapped_base);
 }
 
 /* Scheduler entry point for the service process: serves at most one request per

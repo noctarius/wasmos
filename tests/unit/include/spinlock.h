@@ -1,4 +1,4 @@
-/* Host shadow of src/kernel/include/arch/x86_64/spinlock.h for a test that
+/* Host shadow of src/kernel/include/sync/spinlock.h for a test that
  * includes "spinlock.h" directly.
  *
  * The lock is a plain compare-and-swap spin: a host process has no RFLAGS/IF
@@ -15,7 +15,7 @@
 #define WASMOS_TEST_SPINLOCK_H
 
 #ifdef WASMOS_TEST_USE_REAL_SPINLOCK_DECLS
-#include "arch/x86_64/spinlock.h"
+#include "sync/spinlock.h"
 #else
 
 #include <stdint.h>

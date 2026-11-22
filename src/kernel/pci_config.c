@@ -1,12 +1,9 @@
 #include "pci_config.h"
 
-#include "io.h"
+#include "arch/arch_pci.h"
 #include "klog.h"
 #include "sync/spinlock.h"
 #include "wasmos_driver_abi.h"
-
-#define PCI_CFG_ADDR_PORT 0xCF8u
-#define PCI_CFG_DATA_PORT 0xCFCu
 
 /* PCI Local Bus 3.0 §6.2 (command/status), §6.7 (capability list), §6.8 (MSI,
  * MSI-X). */
@@ -55,18 +52,12 @@ static pci_function_t* pci_function_by_bdf_locked(uint16_t bdf) {
     return 0;
 }
 
-static uint32_t pci_cfg_address(uint16_t bdf, uint8_t reg) {
-    return 0x80000000u | ((uint32_t)bdf << 8) | ((uint32_t)reg & 0xFCu);
-}
-
 static uint32_t pci_cfg_read_locked(uint16_t bdf, uint8_t reg) {
-    outl((uint16_t)PCI_CFG_ADDR_PORT, pci_cfg_address(bdf, reg));
-    return inl((uint16_t)PCI_CFG_DATA_PORT);
+    return arch_pci_cfg_read32(bdf, reg);
 }
 
 static void pci_cfg_write_locked(uint16_t bdf, uint8_t reg, uint32_t value) {
-    outl((uint16_t)PCI_CFG_ADDR_PORT, pci_cfg_address(bdf, reg));
-    outl((uint16_t)PCI_CFG_DATA_PORT, value);
+    arch_pci_cfg_write32(bdf, reg, value);
 }
 
 uint32_t pci_config_read32(uint16_t bdf, uint8_t reg) {
@@ -197,4 +188,24 @@ void pci_quiesce_context(uint32_t context_id, uint32_t pid) {
                     (unsigned)(bdf & 0x7u),
                     (unsigned)pid);
     }
+}
+
+int32_t pci_config_guest_read(uint32_t context_id, int holds_pci_config, uint32_t bdf, uint32_t reg,
+                              uint32_t* out) {
+    int32_t rc = WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    int allowed = holds_pci_config;
+    if (!out || bdf > 0xFFFFu || reg > 0xFCu || (reg & 3u) != 0u) {
+        return WASMOS_INVAL;
+    }
+    ksync_spinlock_lock(&g_pci_config_lock);
+    if (!allowed) {
+        const pci_function_t* fn = pci_function_by_bdf_locked((uint16_t)bdf);
+        allowed = fn && fn->state == PCI_FUNCTION_OWNED && fn->owner_context == context_id;
+    }
+    if (allowed) {
+        *out = pci_cfg_read_locked((uint16_t)bdf, (uint8_t)reg);
+        rc = 0;
+    }
+    ksync_spinlock_unlock(&g_pci_config_lock);
+    return rc;
 }

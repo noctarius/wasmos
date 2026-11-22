@@ -93,7 +93,7 @@ typedef struct thread {
      * answerable -- the question a wedged machine turns on. */
     uint64_t dispatch_count;
     /* The context the scheduler actually saves and restores for this thread.
-     * ctx.cs decides ring-0 (ret) versus ring-3 (iretq) resume. */
+     * arch_context_is_user(&ctx) decides kernel- versus user-mode resume. */
     process_context_t ctx;
     uint32_t wait_target_pid; /* child pid, while blocked in process_wait */
     uint32_t join_waiter_tid; /* tid joining this thread; 0 = none, so a second joiner

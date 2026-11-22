@@ -16,8 +16,8 @@
  * dropping the tail would leave the driver's region indices disagreeing with
  * the kernel's, so every window past the limit would fail far from the spawn
  * that over-declared it. PM_DMA_WINDOW_LIMIT must not exceed the DMA one. */
-#define CAPABILITY_DMA_WINDOW_LIMIT 16u                 /* max DMA windows per driver context */
-#define CAPABILITY_IO_RANGE_LIMIT WASMOS_IO_RANGE_LIMIT /* max disjoint I/O windows */
+#define CAPABILITY_DMA_WINDOW_LIMIT 16u             /* max DMA windows per driver context */
+#define CAPABILITY_REGION_LIMIT WASMOS_REGION_LIMIT /* max register windows */
 
 /* Hardware access kinds, each gated by a separate flag in the spawn profile. */
 typedef enum {
@@ -84,20 +84,34 @@ void capability_release_context(uint32_t context_id);
 /* Return non-zero if a capability record exists for context_id. */
 int capability_context_configured(uint32_t context_id);
 
+/* One register window of a spawn profile: a wasmos_region_grant_t plus, for a
+ * memory-mapped window, the kernel VA it is mapped at (device_window_map). The
+ * process manager maps the window before installing the profile, so a profile
+ * never holds an MMIO region without a mapping. kva is 0 for an I/O window. */
+typedef struct {
+    uint32_t kind;   /* WASMOS_REGION_GRANT_* */
+    uint32_t length; /* ports (IO) or bytes (MMIO), never 0 */
+    uint64_t base;   /* first port (IO) or physical address (MMIO) */
+    uint64_t kva;    /* MMIO: kernel VA of `base`; IO: 0 */
+} capability_region_t;
+
 /* Set the full hardware access profile for a newly spawned driver process.
- * cap_flags is a bitmask of (1 << capability_kind_t) values.
- * io_ranges lists the allowed I/O port windows (a device's registers are not
- * always contiguous); irq_mask selects IRQ lines.
- * dma_windows defines physical address ranges the driver may use for DMA.
+ * cap_flags is a DEVMGR_CAP_* bitmask. regions lists the register windows in
+ * region-index order (a device's registers are not always contiguous, nor all
+ * of one kind); irq_mask selects IRQ lines. dma_windows defines physical
+ * address ranges the driver may use for DMA.
  *
- * Each group is applied only if its cap_flags bit is set, so clearing a bit
- * means "declare nothing", NOT "revoke": the DMA fields in particular keep
- * whatever a dma.buffer manifest grant left there. Returns 0, or -1 for a
- * context whose record cannot be created, more windows than the limits above,
- * an inverted I/O window (first > last), or a DMA bit set with no windows.
- * Called once per driver at spawn, before the child first runs. */
-int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t io_range_count,
-                                 const wasmos_io_range_t* io_ranges, uint16_t irq_mask,
+ * The IRQ and DMA groups are applied only if their cap_flags bit is set, so
+ * clearing a bit means "declare nothing", NOT "revoke": the DMA fields in
+ * particular keep whatever a dma.buffer manifest grant left there. Every region
+ * needs the bit of its kind (DEVMGR_CAP_IO_PORT, DEVMGR_CAP_MMIO_MAP) and is
+ * refused, not dropped, without it. Returns 0, or -1 for a context whose
+ * record cannot be created, more windows than the limits above, a region of
+ * unknown kind, without its bit, of zero length, past port 0xFFFF or (MMIO)
+ * without a mapping, or a DMA bit set with no windows. Called once per driver
+ * at spawn, before the child first runs. */
+int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t region_count,
+                                 const capability_region_t* regions, uint16_t irq_mask,
                                  uint32_t dma_direction_flags, uint32_t dma_max_bytes,
                                  uint32_t dma_window_count, const wasmos_dma_window_t* dma_windows);
 
@@ -109,24 +123,31 @@ int capability_spawn_profile_configured(uint32_t context_id);
  * All of these return NON-ZERO FOR ALLOWED and 0 for denied -- the opposite
  * polarity to the 0-on-success functions above, so do not mix them up. All deny
  * by default: an unknown context, or one without a spawn profile, is refused,
- * and so is a zero-length or zero-direction request. capability_io_region_port
+ * and so is a zero-length or zero-direction request. capability_region_resolve
  * is the exception and returns a packed error code; it is documented
  * separately. */
 int capability_io_port_allowed(uint32_t context_id, uint16_t port);
 
-/* Resolve (region, offset) to an absolute port for a context, where `region` is
- * an index into the I/O windows the spawn profile granted, in the order they
- * were declared, and all `access_width` bytes (1, 2 or 4) must lie inside that
- * window. Returns 0 and writes *out_port on success, else a negative
- * WASMOS_ERR_IO_* code naming which check refused it -- "no such region" and
- * "offset past the end" are different bugs and a caller should be able to tell
- * them apart.
+/* Where one region access lands: an absolute I/O port, or the kernel VA of a
+ * memory-mapped register. */
+typedef struct {
+    uint32_t kind;  /* WASMOS_REGION_GRANT_* */
+    uint64_t where; /* IO: port (<= 0xFFFF); MMIO: kernel VA */
+} capability_region_access_t;
+
+/* Resolve (region, offset) for a context, where `region` is an index into the
+ * windows the spawn profile granted, in the order they were declared, and all
+ * `access_width` bytes (1, 2 or 4) must lie inside that window. An access to a
+ * memory-mapped window must also be naturally aligned. Returns 0 and fills *out
+ * on success, else a negative WASMOS_ERR_IO_* code naming which check refused
+ * it -- "no such region", "offset past the end" and "misaligned" are different
+ * bugs and a caller should be able to tell them apart.
  *
  * This is what lets a driver address its device without ever naming an absolute
- * port: it cannot express an access outside the window it was granted, because
- * it does not supply the base. */
-int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t offset,
-                              uint32_t access_width, uint16_t* out_port);
+ * port or address: it cannot express an access outside the window it was
+ * granted, because it does not supply the base. */
+int capability_region_resolve(uint32_t context_id, uint32_t region, uint32_t offset,
+                              uint32_t access_width, capability_region_access_t* out);
 /* Only legacy PIC lines 0..15 can be granted; anything higher is denied. */
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line);
 /* Whether the context may map MMIO at all. There is no per-range MMIO

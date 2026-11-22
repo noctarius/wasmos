@@ -10,8 +10,8 @@
  *
  * The two bases must stay in step with entry.S: it maps the low 4 GiB identity
  * plus a 64 MiB window at KERNEL_HIGHER_HALF_BASE, so the whole kernel image has
- * to fit inside that window, and KERNEL_HIGHER_HALF_BASE in paging.h must be the
- * same constant.
+ * to fit inside that window, and KERNEL_HIGHER_HALF_BASE in
+ * include/arch/x86_64/vm_layout.h must be the same constant.
  *
  * Symbols exported to code: __bootstrap_start/__bootstrap_end bound the
  * identity-mapped bootstrap; __kernel_start/__kernel_end bound the higher-half

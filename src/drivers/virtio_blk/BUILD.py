@@ -12,6 +12,8 @@ def build(b):
             b.root / "src/libc/zig/driver.zig",
             b.root / "src/libc/zig/vring.zig",
             b.root / "src/libc/zig/vring_shim.c",
+            b.root / "src/libc/zig/virtio_modern.zig",
+            b.root / "src/libc/zig/virtio_modern_shim.c",
             b.root / "src/libsys/wasm/coroutine_wasm.c",
             b.root / "src/libsys/wasm/ipc_future_wasm.c",
             b.root / "src/libsys/wasm/service_runtime_wasm.c",

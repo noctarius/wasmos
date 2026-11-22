@@ -11,7 +11,8 @@
 #include "list.h"
 #include "sync/spinlock.h"
 #include "string.h"
-#include "arch/x86_64/smp.h"
+#include "arch/arch_context.h"
+#include "cpu_local.h"
 
 #define PAGE_SIZE 0x1000ULL
 #define MM_USER_LINEAR_BASE 0x0000008000000000ULL
@@ -20,10 +21,6 @@
 #define MM_USER_IPC_BASE 0x0000008300000000ULL
 #define MM_USER_DEVICE_BASE 0x0000008400000000ULL
 #define MM_COPY_STACK_BYTES 8192u
-static const uint64_t pf_err_present = 1ULL << 0;
-static const uint64_t pf_err_write = 1ULL << 1;
-static const uint64_t pf_err_user = 1ULL << 2;
-static const uint64_t pf_err_instr = 1ULL << 4;
 static const boot_info_t* g_boot_info;
 static list_t g_contexts;
 static ksync_spinlock_t g_contexts_lock;
@@ -405,14 +402,14 @@ int mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t si
  * *out_mapped_base when it is non-NULL, and -1 when the fault is not one this
  * function may resolve.  Runs in the fault handler and takes no lock beyond
  * mm_context_get's. */
-int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code,
+int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint32_t access,
                          uint64_t* out_mapped_base) {
     mm_context_t* ctx = mm_context_get(context_id);
     if (!ctx) {
         return -1;
     }
 
-    if (error_code & pf_err_present) {
+    if (access & MM_FAULT_PRESENT) {
         return -1;
     }
 
@@ -420,14 +417,14 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code
     if (!region) {
         return -1;
     }
-    if ((error_code & pf_err_user) && !(region->flags & MEM_REGION_FLAG_USER)) {
+    if ((access & MM_FAULT_USER) && !(region->flags & MEM_REGION_FLAG_USER)) {
         return -1;
     }
 
-    if ((error_code & pf_err_write) && !(region->flags & MEM_REGION_FLAG_WRITE)) {
+    if ((access & MM_FAULT_WRITE) && !(region->flags & MEM_REGION_FLAG_WRITE)) {
         return -1;
     }
-    if ((error_code & pf_err_instr) && !(region->flags & MEM_REGION_FLAG_EXEC)) {
+    if ((access & MM_FAULT_EXEC) && !(region->flags & MEM_REGION_FLAG_EXEC)) {
         return -1;
     }
 
@@ -857,26 +854,16 @@ static int mm_run_on_copy_stack(mm_copy_work_fn fn, void* arg) {
         return -1;
     }
 
-    uint64_t rsp = 0;
     uint64_t higher_half_base = paging_get_higher_half_base();
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-    if (rsp >= higher_half_base) {
+    if (arch_read_sp() >= higher_half_base) {
         return fn(arg);
     }
 
     uintptr_t stack_top = mm_kernel_alias_addr(
         (uintptr_t)&g_mm_copy_stacks[cpu_local()->cpu_id][MM_COPY_STACK_BYTES]);
     stack_top &= ~(uintptr_t)0xFULL;
-    int rc = -1;
-    __asm__ volatile("mov %%rsp, %%r15\n"
-                     "mov %[stack_top], %%rsp\n"
-                     "mov %[arg], %%rdi\n"
-                     "call *%[fn]\n"
-                     "mov %%r15, %%rsp\n"
-                     : "=a"(rc)
-                     : [stack_top] "r"(stack_top), [fn] "r"(fn), [arg] "r"(arg)
-                     : "r15", "rdi", "rcx", "rdx", "rsi", "r8", "r9", "r10", "memory", "cc");
-    return rc;
+    return (int32_t)arch_call_on_stack(
+        stack_top, (arch_stack_fn_t)fn, addr_cast(uint64_t, arg), 0, 0);
 }
 
 static int mm_copy_from_user_impl(void* opaque) {
@@ -987,18 +974,17 @@ int mm_copy_from_user(uint32_t context_id, void* dst, uint64_t user_src, uint64_
         return -1;
     }
 
-    /* Read the ACTUAL current CPU's CR3 rather than the global
-     * g_current_pml4_phys, which is last-writer-wins under SMP and can
-     * contain another CPU's page table.  Restoring the wrong root after the
-     * user-space copy would leave this CPU with a stripped identity map. */
-    uint64_t cur_cr3 = 0;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cur_cr3));
+    /* Read the ACTUAL current CPU's root rather than the global mirror kept by
+     * paging_switch_root, which is last-writer-wins under SMP and can contain
+     * another CPU's page table.  Restoring the wrong root after the user-space
+     * copy would leave this CPU with a stripped identity map. */
+    uint64_t cur_root = paging_get_current_root_table();
     mm_copy_from_user_args_t args = {
         .context_id = context_id,
         .user_addr = user_src,
         .size = size,
         .root_table = ctx->root_table,
-        .prev_root = cur_cr3,
+        .prev_root = cur_root,
         .kernel_ptr = (uint8_t*)dst,
     };
     return mm_run_on_copy_stack(mm_copy_from_user_impl, &args);
@@ -1104,15 +1090,14 @@ int mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void* src, uin
         return -1;
     }
 
-    /* Read the ACTUAL current CPU's CR3 — see mm_copy_from_user for rationale. */
-    uint64_t cur_cr3 = 0;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cur_cr3));
+    /* Read the ACTUAL current CPU's root — see mm_copy_from_user for rationale. */
+    uint64_t cur_root = paging_get_current_root_table();
     mm_copy_to_user_args_t args = {
         .context_id = context_id,
         .user_addr = user_dst,
         .size = size,
         .root_table = ctx->root_table,
-        .prev_root = cur_cr3,
+        .prev_root = cur_root,
         .kernel_ptr = (const uint8_t*)src,
     };
     return mm_run_on_copy_stack(mm_copy_to_user_impl, &args);

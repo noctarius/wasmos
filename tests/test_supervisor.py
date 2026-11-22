@@ -17,7 +17,7 @@ PROBE = "/boot/apps/sv_probe.wap"
 
 
 def _syslog_wait(session, needle: str, timeout_s: float) -> str:
-    """The COM2 kernel log once it contains `needle`, or '' at the deadline."""
+    """The captured kernel log once it contains `needle`, or '' at the deadline."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         log = session.syslog_tail(1 << 20)
@@ -539,7 +539,11 @@ class SupervisorCriticalTests(unittest.TestCase):
     the unit table."""
 
     def test_a_critical_death_halts(self):
-        session = QemuSession(default_config(), timeout_s=120, echo=True)
+        cfg = default_config()
+        # Read through the shutdown, which the virtio kernel-log port cannot
+        # carry (its driver is shut down first): the kernel writes COM2 itself.
+        cfg.klog_port = "com2"
+        session = QemuSession(cfg, timeout_s=120, echo=True)
         session.start()
         try:
             session.require_prompt()
@@ -593,7 +597,11 @@ class SupervisorBootChainDeathTests(unittest.TestCase):
     critical unit's, instead of leaving it running without the service."""
 
     def test_device_managers_death_halts_naming_it(self):
-        session = QemuSession(default_config(), timeout_s=120, echo=True)
+        cfg = default_config()
+        # Read through the shutdown, which the virtio kernel-log port cannot
+        # carry (its driver is shut down first): the kernel writes COM2 itself.
+        cfg.klog_port = "com2"
+        session = QemuSession(cfg, timeout_s=120, echo=True)
         session.start()
         try:
             session.require_prompt()
@@ -629,6 +637,9 @@ class SupervisorCriticalRebootTests(unittest.TestCase):
     def test_a_critical_death_reboots(self):
         cfg = default_config()
         cfg.kernel_options = ("supervisor.on_critical=reboot",)
+        # Read through the shutdown, which the virtio kernel-log port cannot
+        # carry (its driver is shut down first): the kernel writes COM2 itself.
+        cfg.klog_port = "com2"
         session = QemuSession(cfg, timeout_s=120, echo=True)
         session.start()
         try:
@@ -666,6 +677,9 @@ class SupervisorDeathPanicTests(unittest.TestCase):
     def test_the_supervisors_death_panics(self):
         cfg = default_config()
         cfg.kernel_options = ("supervisor.fault=trap",)
+        # The panic is read from the kernel log, which only COM2 carries: the
+        # virtio kernel-log port needs a running driver.
+        cfg.klog_port = "com2"
         # The only test in this file that MEANS to panic the guest.
         session = QemuSession(cfg, timeout_s=180, echo=False, panic_is_fatal=False)
         session.start()

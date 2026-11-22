@@ -88,7 +88,7 @@ further process lifecycle operations.  It:
 ### `int 0x80` Syscall ABI
 
 Ring3 user processes communicate with the kernel through `int 0x80` (DPL3 gate).
-The dispatcher is `x86_syscall_handler(syscall_frame_t *frame)`.
+The dispatcher is `syscall_dispatch(syscall_frame_t *frame)`.
 
 **Register convention:**
 
@@ -528,6 +528,7 @@ The process manager (PM) runs as a kernel-native C++ service.
 | `PROC_IPC_SPAWN_WATCHED`        | `0x213` | request      | Spawn by path; spawner watches child  |
 | `PROC_IPC_CHILD_READY`          | `0x214` | notification | Watched child latched READY (kernel)  |
 | `PROC_IPC_CHILD_EXITED`         | `0x215` | notification | Watched child ended (kernel)          |
+| `PROC_IPC_MODULE_META_FILE`     | `0x216` | request      | Describe the driver package at a path |
 | `PROC_IPC_NOTIFY_READY`         | `0x20C` | notification | Child signals it is ready             |
 | `PROC_IPC_DMA_MAP_BORROW_REQ`   | `0x230` | request      | Map a borrow handle for DMA           |
 | `PROC_IPC_DMA_SYNC_BORROW_REQ`  | `0x231` | request      | Sync a mapped borrow handle           |
@@ -595,7 +596,8 @@ is a boot module's app name and the child is built from the module's in-memory
 image, with no filesystem read, no arguments and no tty pin; that is how the
 supervisor starts the filesystem itself (`WASMOS_ERR_PROC_SPAWN_NO_MODULE` for a
 name the image does not carry). The descriptor may also carry a
-`wasmos_spawn_caps_v2_t` (I/O windows, IRQ lines, DMA), applied while the child
+`wasmos_spawn_caps_v2_t` (register windows, IRQ lines, DMA, the PCI
+function), applied while the child
 is parked, so a driver holds its hardware access from its first instruction; a
 descriptor that does not parse spawns nothing, and one that grants anything
 requires the spawner to hold `spawn.grant` (`GRANT_NOT_AUTHORIZED` otherwise;

@@ -390,6 +390,11 @@ var g_queue_ready: bool = false;
 /// off and INTx disabled -- so no chain is put on the queue until pci-bus has
 /// armed it; requests stay pending, and age toward their deadline, meanwhile.
 var g_function_armed: bool = true;
+/// Non-zero once the driver must end, with this status: pci-bus refused to arm
+/// the function, or the request could not be sent. The function cannot be
+/// armed, and the supervisor's restart is the retry. The root task answers
+/// every outstanding slot and then returns it.
+var g_end_status: i32 = 0;
 /// Pinned region holding each slot's request header and status byte. Everything
 /// else a request touches is the client's memory.
 var g_scratch: driver.Region = undefined;
@@ -564,18 +569,22 @@ fn setupMsix() bool {
 /// previous driver of it ended -- bus mastering off, INTx disabled -- and only
 /// an MSI bind or this request undoes that. The device was reset by
 /// `initializeDevice` before this is sent, so it names none of the previous
-/// driver's frames once it can master again.
-fn requestIntxEnable() void {
+/// driver's frames once it can master again. Without a pci service nothing can
+/// be asked, and the function keeps the firmware's state; a request that cannot
+/// be sent ends the driver (`g_end_status`) and returns false.
+fn requestIntxEnable() bool {
     if (g_pci_endpoint < 0) {
         driver.log("[virtio-blk] no pci service; intx left as the firmware set it");
-        return;
+        return true;
     }
     const bdf: i32 = @intCast((g_dev.bus << 8) | (g_dev.slot << 3) | g_dev.function);
     if (driver.send(g_pci_endpoint, endpoint(), op.PCI_IPC_INTX_ENABLE_REQ, INTX_ENABLE_REQ_ID, bdf, 0, 0, 0) != 0) {
-        driver.log("[virtio-blk] intx enable request could not be sent");
-        return;
+        quiesce("intx enable request could not be sent");
+        g_end_status = status.WASMOS_ERR_DRIVER_DEVICE_INIT;
+        return false;
     }
     g_function_armed = false;
+    return true;
 }
 
 /// Configure the request virtqueue over a pinned DMA region and hand it to the
@@ -1013,15 +1022,14 @@ fn onMessage(user: ?*anyopaque, msg: *const co.IpcMessage) callconv(.c) void {
             if (msg.request_id != INTX_ENABLE_REQ_ID or msg.source != g_pci_endpoint) return;
             if (msg.type == op.PCI_IPC_RESP) {
                 driver.log("[virtio-blk] function armed for intx");
+                g_function_armed = true;
             } else {
-                // Refused: the function keeps whatever state it has, which on
-                // a first start is the firmware's, so transfers are tried
-                // rather than held until their deadline.
                 var line = driver.Line{};
                 _ = line.str("[virtio-blk] pci-bus refused intx enable status=0x").hex(@as(u32, @bitCast(msg.arg1)), 8);
                 line.end();
+                quiesce("pci-bus refused intx enable");
+                g_end_status = status.WASMOS_ERR_DRIVER_DEVICE_INIT;
             }
-            g_function_armed = true;
         },
         else => {
             // A message with no reply address is a stray notification, not a
@@ -1133,6 +1141,13 @@ fn rootTask(user: ?*anyopaque, out_value: *usize) callconv(.c) i32 {
     var progressed = false;
     var published = false;
     var expired = false;
+
+    if (g_end_status != 0) {
+        for (&g_slots, 0..) |*slot, i| {
+            if (slot.state == .complete) complete(i);
+        }
+        return g_end_status;
+    }
 
     for (&g_slots, 0..) |*slot, i| {
         switch (slot.state) {
@@ -1290,7 +1305,7 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     // device asserts on every completion and nothing else clears it. The line
     // is routed to the loop's endpoint so an interrupt arrives as a message the
     // loop dispatches, like everything else this driver waits on.
-    if (!g_dev.msix_enabled) requestIntxEnable();
+    if (!g_dev.msix_enabled and !requestIntxEnable()) return;
     if (!g_dev.msix_enabled and g_dev.irq < 16) {
         if (driver.irqRoute(g_dev.irq, endpoint())) {
             g_dev.irq_routed = true;

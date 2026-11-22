@@ -238,7 +238,9 @@ engine and then asks pci-bus for bus mastering (`PCI_IPC_BUS_MASTER_REQ`; ata
 does). A driver that falls back to INTx resets the device and asks pci-bus to
 arm the function for its pin (`PCI_IPC_INTX_ENABLE_REQ`: bus mastering on,
 INTx Disable cleared), and puts no work on the device until the answer
-(virtio-blk, virtio-rng).
+(virtio-blk, virtio-rng, virtio-net). A refusal, or a request that cannot be
+sent, ends the driver after it resets the device: the function cannot be
+armed, and the supervisor's restart is the retry.
 
 Config space is reached through the kernel only: `pci_config_read` /
 `pci_config_write` (`pci.config`) hold the same lock as the quiesce across the

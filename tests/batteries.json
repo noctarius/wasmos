@@ -75,6 +75,7 @@
         "test_net_stack_dhcp_e2e.py",
         "test_net_stack_dns_e2e.py",
         "test_net_stack_dns_resolve_e2e.py",
+        "test_net_stack_driver_restart_e2e.py",
         "test_net_stack_https_e2e.py",
         "test_net_stack_https_verify_e2e.py",
         "test_net_stack_ifaddr_e2e.py",

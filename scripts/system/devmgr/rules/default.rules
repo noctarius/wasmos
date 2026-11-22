@@ -69,7 +69,11 @@ SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{io}=="0x3F8
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", ENV{RESTART}="on-failure", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", ENV{RESTART}="on-failure", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x08", ATTR{subclass}=="0x03", ENV{RESTART}="on-failure", RUN+="system/drivers/rtc.wap"
-SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_net.wap"
+# Supervised as virtio_net@pci:<function>. net-stack keeps eth0 -- its address
+# and its sockets -- across the restart and rebinds it to the successor, which
+# registers the same net.ifc instance; a frame sent while the driver is down is
+# lost like any other.
+SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_net.wap"
 # The virtio console is the kernel-log port (doc 19). Unsupervised: a restart
 # would replay the whole kmsg ring onto it again.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"
@@ -80,9 +84,7 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1043", RUN+="system/d
 # quiesces its function when it ends (bus mastering and MSI off), so no restart
 # finds the device still writing into the dead instance's frames. Its clients
 # hold no session with it -- each entropy request finds the "hrng" provider
-# anew. ata and virtio-net stay device-manager-spawned until their clients
-# rebind: ata carries /boot, whose filesystem goes through partition-manager,
-# and net-stack keeps no interface across a NIC's restart yet.
+# anew.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_rng.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_rng.wap"
 # virtio-blk presents PCI class 0x01 / subclass 0x00, which the ATA rule's
@@ -93,7 +95,7 @@ SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", ENV{RESTART}="
 # Supervised as virtio_blk@pci:<function>. Its clients follow the restarted
 # driver -- fs-wfs and fs-fat on a whole disk, and partition-manager for a
 # filesystem on a partition -- so mounts and open files survive the restart;
-# I/O that lands while the driver is down fails WASMOS_ERR_BLOCK_DEV_GONE.
+# I/O that lands while the driver is down is held and resent to the successor.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1001", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_blk.wap"
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1042", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_blk.wap"
 

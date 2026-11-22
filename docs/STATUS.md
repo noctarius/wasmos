@@ -25,9 +25,17 @@ linked feature documents for rationale and rollout plans.
   no PCI config-space scan; a spawn without a valid identity fails immediately
   with `WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY` rather than binding to a device
   it found itself.
+- virtio-net is supervised (`virtio_net@pci:<function>`, `restart=on-failure`)
+  and registers its `net.ifc` instance as its PCI function's bdf. net-stack
+  keeps `eth0` across the restart -- addresses and sockets carry over -- and
+  rebinds it to the successor: a guest listener opened before `svc kill`
+  accepts and echoes a connection made after it
+  (`tests/test_net_stack_driver_restart_e2e.py`, MSI-X and `vectors=0` INTx).
+  On INTx the successor asks pci-bus to arm its function before transmitting.
 - `virtio-net` now publishes `net.ifc` and reports link changes with
-  `NETDRV_IPC_LINK_NOTIFY`. `net-stack` consumes class enumeration/events,
-  retaining name lookup only as compatibility fallback.
+  `NETDRV_IPC_LINK_NOTIFY`. `net-stack` discovers NICs only through class
+  enumeration and events, which carry the class instance a restarted driver
+  is matched by; the `virtio.net` name lookup is gone.
 - A `NETDRV_IPC_LINK_NOTIFY` updates the existing lwIP `netif` in place
   (`netif_set_link_up`/`_down`) and emits an observable `[net-stack] link
   up|down` line; it never re-registers or rebinds the interface. The test

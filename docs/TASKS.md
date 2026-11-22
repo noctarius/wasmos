@@ -675,22 +675,25 @@ Source: `architecture/13-runtime-and-packaging.md`,
   supervised one. The kernel quiesces the function a spawn profile names
   (`DEVMGR_CAP_PCI_FUNCTION`, `architecture/10` "Device Quiesce"), but only the
   descriptor spawn forms carry it: a DMA driver device-manager spawns by path
-  (`PROC_IPC_SPAWN_PATH_CAPS_SYNC`; virtio-blk, virtio-net, ata) names none, so
-  when it dies its device may keep mastering into frames the reap recycles.
-  Spawning those drivers through a descriptor form -- or as supervised units
-  (H5) -- closes it (`device_manager.c`, the TODO at the direct spawn).
+  (`PROC_IPC_SPAWN_PATH_CAPS_SYNC`; virtio-serial) names none, so when it dies
+  its device may keep mastering into frames the reap recycles. virtio-blk,
+  virtio-net, virtio-rng and ata are supervised units and name theirs.
+  Spawning the rest through a descriptor form -- or as supervised units (H5)
+  -- closes it (`device_manager.c`, the TODO at the direct spawn).
 - [ ] [FEATURE][P1] Supervise the storage and network chains. Decided: clients
   REBIND to a restarted driver where they can, so a restart costs a delay, not
   the open files or sockets above it; `parent=` (the supervisor's restart
   cascade) is only for a client that cannot. A block driver's restart leaves the
   disk's content unchanged and a lost request is idempotent per LBA, and a NIC's
   leaves its MAC unchanged and a lost frame is packet loss, so both can be
-  rebound. Done: virtio-blk and ata are supervised (ata respawns from the
+  rebound. Done: virtio-blk, ata and virtio-net are supervised (ata respawns from the
   initfs, which it does not serve), fs-wfs on a whole disk follows its
   restart (`wfs_block.h`), as does fs-fat (`fat_block.h`), and
   partition-manager rebinds a disk to its restarted driver, so a filesystem on
   a partition carries over too. All three hold a transfer across the restart
-  and resend it to the successor (`WASMOS_BLOCK_HOLD_MS`). Open:
+  and resend it to the successor (`WASMOS_BLOCK_HOLD_MS`). net-stack keeps
+  `eth0`, its addresses and its sockets across virtio-net's restart and rebinds
+  it to the successor by class instance. Open:
   - partition-manager's hold of a transfer that was ON THE WIRE when the driver
     ended (`diskGone`) has no deterministic test: the QEMU test reads right after
     `svc kill` and cannot choose whether its read is in flight at the kill or
@@ -698,8 +701,6 @@ Source: `architecture/13-runtime-and-packaging.md`,
     `test_partition_inflight.zig` covers the table's side of it.
   - fs-manager submits its backends as supervised units (unmount through
     `SUPERVISOR_IPC_RETRACT_REQ`).
-  - net-stack keeps the netif and its sockets across virtio-net's REMOVE and
-    rebinds on ADD; then virtio-net gets `ENV{RESTART}`.
 - [x] [BUG][P3] Let a restarted PCI driver that falls back to INTx get its
   interrupts back. Fixed: `PCI_IPC_INTX_ENABLE_REQ` (pci-bus) turns bus
   mastering on and clears INTx Disable for the function's driver; virtio-blk
@@ -707,8 +708,8 @@ Source: `architecture/13-runtime-and-packaging.md`,
   work until the answer (`VirtioBlkIntxFallbackTest`, `vectors=0`). The
   virtio-rng case has no failing test: its fill polls the used ring between
   timed waits, so under QEMU it completed without the interrupt. virtio-net
-  does not send it yet (TODO in `virtio_net.c`), which matters once it gets
-  `ENV{RESTART}`.
+  sends it too since it is supervised (`NetStackDriverRestartIntxE2ETest`,
+  likewise passing without it: its INTx path drains RX on a timer).
 - [ ] [FEATURE][P3] A one-step operator restart for supervised units (`svc
   restart`). Stop and start exist (`SUPERVISOR_IPC_STOP_REQ`/`_START_REQ`); a
   restart is the two in sequence, and a stop takes effect only when the

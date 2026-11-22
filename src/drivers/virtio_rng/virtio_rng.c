@@ -80,7 +80,9 @@ static int32_t g_pci_endpoint = -1; /* pci-bus: owns config space, programs MSI-
  * end -- bus mastering off, INTx disabled -- until pci-bus answers
  * PCI_IPC_INTX_ENABLE_REQ. The request goes out from g_endpoint before the
  * service registers, and its answer is consumed by the request loop. A fill is
- * refused with WASMOS_ERR_HRNG_NOT_READY until then. */
+ * refused with WASMOS_ERR_HRNG_NOT_READY until then. A request that cannot be
+ * sent, or that pci-bus refuses, ends the driver: the function cannot be armed,
+ * and the supervisor's restart is the retry. */
 #define RNG_INTX_ENABLE_REQ_ID 0x7B20
 static uint8_t g_function_armed = 1u;
 static virtio_rng_device_t g_dev;
@@ -447,13 +449,15 @@ static void handle_get_bytes(int32_t source, int32_t request_id, int32_t buffer_
  * waiting. The kernel quiesced the function when a previous driver of it ended,
  * and only an MSI bind or this request undoes that. initialize_device reset the
  * device first, so it names none of the previous driver's frames once it can
- * master again. */
-static void rng_request_intx_enable(void) {
+ * master again. Returns 0, or -1 when the request could not be sent. Without a
+ * pci service nothing can be asked, and the function keeps the firmware's
+ * state. */
+static int rng_request_intx_enable(void) {
     uint32_t bdf =
         ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
     if (g_pci_endpoint < 0) {
         (void)printf("[virtio-rng] no pci service; intx left as the firmware set it\n");
-        return;
+        return 0;
     }
     if (wasmos_ipc_send(g_pci_endpoint,
                         g_endpoint,
@@ -464,24 +468,28 @@ static void rng_request_intx_enable(void) {
                         0,
                         0) != 0) {
         (void)printf("[virtio-rng] intx enable request could not be sent\n");
-        return;
+        return -1;
     }
     g_function_armed = 0u;
+    return 0;
 }
 
-/* Consume pci-bus's answer to PCI_IPC_INTX_ENABLE_REQ. Returns 1 when `msg` was
- * it. A refusal still arms the driver: the function keeps whatever state it
- * has, which on a first start is the firmware's. */
+/* Consume pci-bus's answer to PCI_IPC_INTX_ENABLE_REQ. Returns 0 when `msg` is
+ * not it, 1 when the function is armed, and -1 when pci-bus refused, after
+ * resetting the device so it holds none of this driver's frames when the
+ * driver ends. */
 static int rng_intx_enable_event(const wasmos_ipc_message_t* msg) {
     if ((msg->type != PCI_IPC_RESP && msg->type != PCI_IPC_ERROR) ||
         msg->request_id != RNG_INTX_ENABLE_REQ_ID || msg->source != g_pci_endpoint) {
         return 0;
     }
-    if (msg->type == PCI_IPC_RESP) {
-        (void)printf("[virtio-rng] function armed for intx\n");
-    } else {
-        (void)printf("[virtio-rng] pci-bus refused intx enable status=%d\n", (int)msg->arg1);
+    if (msg->type != PCI_IPC_RESP) {
+        (void)printf("[virtio-rng] pci-bus refused intx enable status=%d; ending\n",
+                     (int)msg->arg1);
+        (void)virtio_modern_reset(&g_dev.vm);
+        return -1;
     }
+    (void)printf("[virtio-rng] function armed for intx\n");
     g_function_armed = 1u;
     return 1;
 }
@@ -554,8 +562,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * Without it, routing is what keeps the line from re-firing forever: the
      * device asserts on every completed fill and nothing else clears it.
      * Failure is not fatal: the fill falls back to the timed safety net. */
-    if (!g_dev.msix_enabled && g_dev.ready) {
-        rng_request_intx_enable();
+    if (!g_dev.msix_enabled && g_dev.ready && rng_request_intx_enable() != 0) {
+        (void)virtio_modern_reset(&g_dev.vm);
+        return WASMOS_ERR_DRIVER_DEVICE_INIT;
     }
     if (!g_dev.msix_enabled && g_dev.ready && g_dev.irq < 16u && g_irq_endpoint >= 0) {
         if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_irq_endpoint) == 0) {
@@ -587,7 +596,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             if (msg.source < 0) {
                 continue; /* stray notification / IRQ echo */
             }
-            if (rng_intx_enable_event(&msg)) {
+            int armed = rng_intx_enable_event(&msg);
+            if (armed < 0) {
+                return WASMOS_ERR_DRIVER_DEVICE_INIT;
+            }
+            if (armed > 0) {
                 continue;
             }
             if (msg.type == HRNG_IPC_GET_BYTES_REQ) {

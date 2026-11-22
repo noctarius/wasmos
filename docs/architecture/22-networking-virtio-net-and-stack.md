@@ -57,7 +57,8 @@ Out of scope for initial rollout:
   smoke exchange through QEMU SLIRP, and offers pull plus notification-hinted
   RX delivery.
 - `net-stack` is a native lwIP baseline. It enumerates and subscribes to the
-  `net.ifc` class (retaining `virtio.net` lookup as a compatibility fallback), reads its
+  `net.ifc` class -- its only discovery path, since both carry the provider's
+  class instance -- reads its
   MAC/link state, and installs `eth0` with static SLIRP addressing
   `10.0.2.15/24` (gateway `10.0.2.2`). Its linkoutput flattens pbuf chains into
   a driver-granted transfer buffer; RX polling/notifications feed
@@ -101,8 +102,12 @@ Policy:
 
 Add to `scripts/system/devmgr/rules/default.rules`:
 ```
-SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_net.wap"
+SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_net.wap"
 ```
+
+`ENV{RESTART}` makes the driver a supervised unit (`virtio_net@pci:<function>`):
+the kernel quiesces its function when it ends, and the supervisor spawns it
+again. See "Driver Restart" under the net-stack broker for what carries over.
 
 The rule matches by PCI class 0x02 (Network controller), subclass 0x00
 (Ethernet), vendor 0x1AF4 (Red Hat / virtio), covering both the transitional
@@ -485,6 +490,21 @@ apps ──NET_IPC_* sockets──▶ net-stack ──netdrv IPC──▶ virtio
   subscription. *Domain* events (link up/down, media change) come from each
   bound driver over its own protocol (`NETDRV_IPC_LINK_NOTIFY`, alongside
   `NETDRV_IPC_LINK_GET`) — the registry stays networking-ignorant.
+- **The class instance is the NIC's identity.** A driver registers the
+  instance its device determines -- virtio-net the PCI function's bdf -- not
+  one it allocates, so a restarted driver registers the instance its
+  predecessor held, and two NICs never claim the same one.
+- **Driver Restart: an interface outlives its driver.** When the provider of
+  an installed interface ends (class REMOVE), net-stack DETACHES the interface:
+  the lwIP `netif` keeps its addresses and every socket on it, its link goes
+  down, and the buffers net-stack lends the driver stay net-stack's (the
+  kernel revoked the dead driver's borrows of them). The class ADD of the same
+  instance attaches the interface to the successor: net-stack lends it the
+  buffers, asks for its link with `NETDRV_IPC_LINK_GET`, and brings the link up
+  (`[net-stack] eth0 rebound to a new driver instance`). A frame sent while
+  the interface is detached finds no route and is lost, which TCP retransmits
+  and UDP tolerates; nothing is configured again
+  (`tests/test_net_stack_driver_restart_e2e.py`).
 - **The net-stack owns all policy:** human-facing interface naming (`eth0`),
   address assignment (`NET_IPC_IFADDR_*`), routing, and which interface a flow
   egresses. Drivers expose only a frame in/out path plus link state.
@@ -986,9 +1006,12 @@ Responsibilities:
 - negotiate features (MAC + STATUS baseline only)
 - initialize RX/TX virtqueues and pre-populate RX descriptors
 - handle interrupts: an MSI-X vector per source, or on the INTx fallback the
-  ISR read-and-clear in the ISR structure
+  ISR read-and-clear in the ISR structure, after asking pci-bus to arm the
+  function for its pin (`PCI_IPC_INTX_ENABLE_REQ`; transmits wait for the
+  answer)
 - publish link/MAC info and packet ingress/egress IPC endpoints
-- register as `virtio.net` via `wasmos_svc_register`
+- register as `virtio.net` in the `net.ifc` class, with the PCI function as
+  the class instance
 
 Non-responsibilities:
 - no TCP retransmission logic

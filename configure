@@ -4,17 +4,26 @@
     ./configure out/wasm3-smp configs/wasm3_smp_defconfig
     ninja -C out/wasm3-smp kernel bootloader
 
-The build directory owns its .config: it is seeded once from the given
-defconfig (default configs/wasmos_defconfig) and never re-read from the source
-tree. Re-running configure on an existing directory keeps its .config unless
---reseed is given. After the first configure, build.ninja regenerates itself;
-running configure again is only needed to change tool paths.
+The build directory defaults to out/default, so `./configure
+configs/warp_smp_defconfig` configures that. It owns its .config: seeded once
+from the given defconfig (default configs/wasmos_defconfig) and never re-read
+from the source tree. Re-running configure on an existing directory keeps its
+.config unless --reseed is given. After the first configure, build.ninja
+regenerates itself; running configure again is only needed to change tool paths.
+
+configure also maintains <srcdir>/compile_commands.json, a symlink to one build
+directory's compile database, so an IDE opening the source tree (CLion, clangd)
+finds it at the root. The link is created when it is missing or dangling and is
+otherwise left alone; --ide-link re-points it at this build directory,
+--no-ide-link leaves it untouched. A regular file at that path is never
+replaced.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -69,16 +78,62 @@ def apply_overrides(dotconfig: Path, assignments: list[str]):
     dotconfig.write_text("\n".join(lines) + "\n")
 
 
+DEFAULT_BUILDDIR = Path("out/default")
+
+
+def update_ide_link(outdir: Path, mode: str):
+    """Point <srcdir>/compile_commands.json at outdir's compile database.
+
+    mode "auto" creates the link only when it is missing or dangling, so the
+    shadow trees and other implicit configures never steal it; "force"
+    re-points an existing link; "off" does nothing."""
+    if mode == "off":
+        return
+    link = SRCDIR / "compile_commands.json"
+    if link.exists() and not link.is_symlink():
+        print(f"configure: {link} is a regular file; not replacing it")
+        return
+    if link.is_symlink() and link.exists() and mode == "auto":
+        return
+    target = outdir / "compile_commands.json"
+    try:
+        target = target.relative_to(SRCDIR)
+    except ValueError:
+        pass
+    if link.is_symlink() and Path(os.readlink(link)) == target:
+        return
+    tmp = link.with_name(link.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    tmp.symlink_to(target)
+    tmp.replace(link)
+    print(f"configure: {link.name} -> {target}")
+
+
+def split_positionals(ap, positionals: list[Path]) -> tuple[Path, Path | None]:
+    """[builddir] [defconfig]: a lone argument that names a file or ends in
+    "defconfig" is the defconfig, so `./configure configs/x_defconfig`
+    configures out/default."""
+    if len(positionals) > 2:
+        ap.error("expected at most a build directory and a defconfig")
+    lone = positionals[0] if len(positionals) == 1 else None
+    if lone and (lone.is_file() or lone.name.endswith("defconfig")):
+        return DEFAULT_BUILDDIR, lone
+    builddir = positionals[0] if positionals else DEFAULT_BUILDDIR
+    defconfig = positionals[1] if len(positionals) == 2 else None
+    return builddir, defconfig
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("builddir", type=Path)
     ap.add_argument(
-        "defconfig",
+        "positionals",
         type=Path,
-        nargs="?",
-        help="seed for <builddir>/.config (default: configs/wasmos_defconfig)",
+        nargs="*",
+        metavar="[builddir] [defconfig]",
+        help=f"build directory (default: {DEFAULT_BUILDDIR}) and the seed for its "
+        ".config (default: configs/wasmos_defconfig)",
     )
     ap.add_argument(
         "--reseed",
@@ -92,12 +147,29 @@ def main() -> int:
         metavar="SYMBOL=VALUE",
         help="override a Kconfig symbol in <builddir>/.config (repeatable; y/n for bools)",
     )
+    link = ap.add_mutually_exclusive_group()
+    link.add_argument(
+        "--ide-link",
+        dest="ide_link",
+        action="store_const",
+        const="force",
+        default="auto",
+        help="point <srcdir>/compile_commands.json at this build directory",
+    )
+    link.add_argument(
+        "--no-ide-link",
+        dest="ide_link",
+        action="store_const",
+        const="off",
+        help="leave <srcdir>/compile_commands.json untouched",
+    )
     ap.add_argument("--regen", action="store_true", help=argparse.SUPPRESS)
     for t in TOOL_OPTIONS:
         ap.add_argument(
             f"--{t}", dest=t.replace(".", "_").replace("-", "_"), metavar="PATH"
         )
     args = ap.parse_args()
+    args.builddir, args.defconfig = split_positionals(ap, args.positionals)
 
     outdir = args.builddir.resolve()
     outdir.mkdir(parents=True, exist_ok=True)
@@ -140,6 +212,7 @@ def main() -> int:
     regen_argv = [tools["python"], str(SRCDIR / "configure"), "--regen", str(outdir)]
     buildgen.generate(SRCDIR, outdir, tools, regen_argv)
     if not args.regen:
+        update_ide_link(outdir, args.ide_link)
         print(
             f"configure: wrote {outdir / 'build.ninja'}; build with: ninja -C {args.builddir}"
         )

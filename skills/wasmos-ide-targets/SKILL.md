@@ -109,8 +109,10 @@ mix both libcs.
 
 `ninja -C out/default` regenerates `build.ninja` and `compile_commands.json`
 after a `BUILD.py` edit. Re-run the Step 1 audit; the file's realpath should now
-be covered. CLion opens the tree as a compilation-database project
-(`out/default/compile_commands.json`); reload it after regenerating. An
+be covered. CLion opens the source root as a compilation-database project
+through the `compile_commands.json` symlink `configure` maintains there
+(`./configure <dir> --ide-link` re-points it; `docs/BUILD_SYSTEM.md` §10
+*IDE Entry Point*); reload it after regenerating unless auto-reload is on. An
 index-only entry never affects the real build or the boot, so no
 `run-qemu-test` is required for an IDE-only change.
 

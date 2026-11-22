@@ -1,0 +1,6 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="kernel (attach gdb :1234)" type="CLion_Remote" folderName="wasmos" version="1" remoteCommand="localhost:1234" symbolFile="$PROJECT_DIR$/out/default/kernel.elf" sysroot="">
+    <debugger kind="GDB" isBundled="true" />
+    <method v="2" />
+  </configuration>
+</component>

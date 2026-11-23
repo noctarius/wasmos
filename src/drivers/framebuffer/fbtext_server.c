@@ -32,7 +32,8 @@ static fbtext_state_t g_state;
 static uint8_t g_early_log_buf[EARLY_LOG_BUF];
 static uint8_t g_text_plane_enabled = 1;
 static uint8_t g_gfx_overlay_lock = 0;
-/* Bytes of the boot framebuffer mapping; every runtime mode must fit in it. */
+/* Bytes of the firmware framebuffer this driver maps; every runtime mode must
+ * fit in it. */
 static uint32_t g_fb_bytes_limit = 0;
 
 /* Bulk grid blit: the VT grants READ access to a cell-grid xfer-buffer, and
@@ -84,8 +85,8 @@ static void write_hex32(wasmos_driver_api_t* api, const char* label, uint32_t v)
     api->console_write(buf, i);
 }
 
-/* A mode is offered only when its framebuffer (stride = width) fits the boot
- * mapping. */
+/* A mode is offered only when its framebuffer (stride = width) fits the
+ * firmware framebuffer this driver maps. */
 static int mode_fits_boot_map(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0 || g_fb_bytes_limit == 0) {
         return 0;
@@ -220,10 +221,16 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
     write_hex32(api, " stride=", fb_stride);
     write_str(api, "\n");
 
-    /* Map size from the boot geometry (32bpp = 4 bytes/pixel). */
-    uint32_t size = fb_stride * fb_height * 4u;
-    g_fb_bytes_limit = size;
-    size = (size + 0xFFFu) & ~0xFFFu;
+    /* Map the whole framebuffer the firmware reported, which may hold more than
+     * the boot mode needs (edk2's ramfb sizes it for its largest mode); every
+     * runtime mode must fit in it. Never less than the boot geometry. */
+    uint64_t boot_bytes = (uint64_t)fb_stride * fb_height * 4u;
+    uint64_t fb_bytes = info.framebuffer_size > boot_bytes ? info.framebuffer_size : boot_bytes;
+    if (fb_bytes > 0xFFFFF000u) {
+        fb_bytes = 0xFFFFF000u;
+    }
+    g_fb_bytes_limit = (uint32_t)fb_bytes;
+    uint32_t size = (g_fb_bytes_limit + 0xFFFu) & ~0xFFFu;
 
     write_str(api, "[framebuffer] mapping\n");
     /* The framebuffer is an owned xfer_buffer of kind=framebuffer (backed by the

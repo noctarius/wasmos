@@ -417,6 +417,58 @@ static int capture_framebuffer_from_pci_config(EFI_SYSTEM_TABLE* system,
 }
 #endif /* __x86_64__ */
 
+/* The desktop's preferred size, and the bound on every other choice. */
+#define GOP_PREFERRED_WIDTH 1280u
+#define GOP_PREFERRED_HEIGHT 800u
+
+/* Switches the GOP to the preferred mode before its geometry is captured:
+ * exactly GOP_PREFERRED_WIDTH x GOP_PREFERRED_HEIGHT when offered, otherwise the
+ * largest mode (by area) within it. Only direct 32-bit modes count (RGB or BGR
+ * with a reserved byte); a BitMask or Blt-only mode cannot be drawn by the
+ * kernel or the framebuffer drivers. The firmware's default differs by machine
+ * (OVMF on x86_64 starts at 1280x800, edk2's ramfb on aarch64 at 800x600 although
+ * it offers 1024x768), so choosing here gives both the same desktop where they
+ * can. Leaves the mode alone when nothing qualifies, it is already current, or
+ * SetMode fails; a failed SetMode leaves the previous mode in place (UEFI spec,
+ * EFI_GRAPHICS_OUTPUT_PROTOCOL.SetMode). */
+static void gop_select_preferred_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop) {
+    EFI_GOP_SET_MODE set_mode = (EFI_GOP_SET_MODE)gop->SetMode;
+    EFI_GOP_QUERY_MODE query_mode = (EFI_GOP_QUERY_MODE)gop->QueryMode;
+    if (!gop->Mode || !set_mode || !query_mode) {
+        return;
+    }
+    UINT32 best = gop->Mode->MaxMode;
+    uint64_t best_area = 0;
+    for (UINT32 m = 0; m < gop->Mode->MaxMode; ++m) {
+        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* info = 0;
+        UINTN info_size = 0;
+        if (EFI_ERROR(query_mode(gop, m, &info_size, &info)) || !info) {
+            continue;
+        }
+        if (info->PixelFormat != PixelRedGreenBlueReserved8BitPerColor &&
+            info->PixelFormat != PixelBlueGreenRedReserved8BitPerColor) {
+            continue;
+        }
+        uint32_t w = info->HorizontalResolution;
+        uint32_t h = info->VerticalResolution;
+        if (w > GOP_PREFERRED_WIDTH || h > GOP_PREFERRED_HEIGHT) {
+            continue;
+        }
+        if (w == GOP_PREFERRED_WIDTH && h == GOP_PREFERRED_HEIGHT) {
+            best = m;
+            break;
+        }
+        if ((uint64_t)w * h > best_area) {
+            best_area = (uint64_t)w * h;
+            best = m;
+        }
+    }
+    if (best == gop->Mode->MaxMode || best == gop->Mode->Mode) {
+        return;
+    }
+    (void)set_mode(gop, best);
+}
+
 static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE* system,
                                         framebuffer_snapshot_t* snapshot) {
     if (!system || !system->BootServices || !snapshot) {
@@ -525,6 +577,8 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE* system,
             return -1;
         }
     }
+
+    gop_select_preferred_mode(gop);
 
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* mode_info = gop->Mode->Info;
     UINTN mode_size = 0;

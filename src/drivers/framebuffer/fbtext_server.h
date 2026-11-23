@@ -13,9 +13,10 @@
  * is how it reprograms its adapter, if it can at all.
  *
  * Runtime modes are the server's fixed mode list filtered to those whose
- * framebuffer (stride x height x 4 bytes, stride = width) fits the boot mapping:
- * the kernel maps the physical range captured at boot, and no variant can
- * enlarge it, so every mode reuses the boot framebuffer's memory.
+ * framebuffer (stride x height x 4 bytes, stride = width) fits the framebuffer
+ * the firmware reported: the kernel maps the physical range captured at boot,
+ * and no variant can enlarge it, so every mode reuses that memory. The range
+ * may exceed what the boot mode uses (edk2's ramfb sizes it for 1024x768).
  */
 
 typedef struct {

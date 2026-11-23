@@ -111,10 +111,15 @@ FBTEXT_CAP_QUERY_MODES    = 1u << 1
 
 #### Runtime Mode Setting
 
-A runtime mode reuses the boot framebuffer's memory: the kernel maps the
+A runtime mode reuses the firmware framebuffer's memory: the kernel maps the
 physical range the bootloader captured and nothing enlarges it, so the modes a
 driver offers are the server's fixed list filtered to those whose framebuffer
-(width x height x 4 bytes, stride = width) fits it. A SET_RESOLUTION the adapter
+(width x height x 4 bytes, stride = width) fits it. The range is the GOP's
+`FrameBufferSize`, which may exceed the boot mode (edk2's ramfb allocates for
+1024x768). The bootloader picks the boot mode itself: 1280x800 when the GOP
+offers it, otherwise the largest direct 32-bit mode within 1280x800 --
+x86_64's OVMF already boots at 1280x800, edk2's ramfb at 800x600 although it
+offers 1024x768. A SET_RESOLUTION the adapter
 accepts is reported to the kernel with the native API's
 `framebuffer_set_geometry`, which only the registered framebuffer driver may
 call and which refuses a geometry that does not fit

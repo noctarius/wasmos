@@ -99,7 +99,14 @@ class PhysMapTests(unittest.TestCase):
         resolve to the first window rather than map again, and reaping the
         process must leave the firmware frames alone: under WARP the window
         sits in the linear-memory slot, whose decommit frees every frame still
-        mapped there. Three rounds show the system survives each reap."""
+        mapped there. Three rounds show the system survives each reap.
+
+        Regression: 2026-11-23-phys-map-unaligned -- WARP copied whole frames
+        from the frame start for a phys that was not page-aligned, so a caller
+        got the bytes before the address it named. The fixture reads the DSDT
+        from a non-page-aligned address across a page boundary and checks the
+        ACPI checksum (every byte of a table sums to 0 mod 256), a reference
+        an offset rounded to the page would break."""
         for _ in range(3):
             start = self._spawn("phys_map_acpi", "phys-map-acpi")
             self.assertTrue(
@@ -112,6 +119,12 @@ class PhysMapTests(unittest.TestCase):
                 "phys_map did not map the firmware's root description table, "
                 "or mapped a range inside it a second time.\n"
                 f"--- tail ---\n{self.session.tail()}\n",
+            )
+            self._expect(
+                start,
+                "phys-map-acpi: dsdt unaligned cross-page checksum=ok",
+                "the DSDT read through phys_map from a non-page-aligned address "
+                "did not checksum: the window returned the wrong bytes.",
             )
             self._expect_prompt(start, "phys_map_acpi")
         self.assertIn(

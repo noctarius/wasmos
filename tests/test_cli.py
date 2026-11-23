@@ -10,7 +10,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch, guest_arch
 
 
 class CliIntegrationTests(unittest.TestCase):
@@ -43,6 +43,10 @@ class CliIntegrationTests(unittest.TestCase):
     def test_help_lists_commands(self):
         self._cmd_expect("help", b"commands:")
 
+    @requires_arch(
+        "x86_64",
+        reason='no RTC on aarch64 yet: the CMOS rtc is x86_64 hardware and PL031 is in docs/TASKS.md "arm64 Port"',
+    )
     def test_date_reads_the_rtc(self):
         """End-to-end over the RTC driver: `date` looks the service up, sends
         RTC_IPC_READ_REQ and formats the reply. This is the only client of that
@@ -149,7 +153,11 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("cd init", b"/init wamos>")
         self._cmd_expect("cd devmgr", b"/init/devmgr wamos>")
         self._cmd_expect("cd rules", b"/init/devmgr/rules wamos>")
-        self._cmd_expect("cat default.rules", b'RUN+="system/drivers/ata.wap"')
+        # The boot disk's driver: ATA on x86_64, virtio-blk on aarch64.
+        disk_driver = b"ata.wap" if guest_arch() == "x86_64" else b"virtio_blk.wap"
+        self._cmd_expect(
+            "cat default.rules", b'RUN+="system/drivers/' + disk_driver + b'"'
+        )
         self._cmd_expect("cd /", b"/ wamos>")
 
     def test_cd_dot_and_dotdot(self):

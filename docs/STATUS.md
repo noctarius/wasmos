@@ -745,6 +745,13 @@ linked feature documents for rationale and rollout plans.
   `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
   parallel because they share `<build-dir>/esp`.
+- `phys_map` under wasm3 reads only physical pages the kernel's alias maps
+  (inside `KERNEL_HIGHER_HALF_WINDOW_BYTES`); anything else is refused with
+  `kernel.PHYS_UNMAPPED` instead of faulting the kernel. WARP reads through a
+  remapped scratch page and reaches any physical address.
+- A PCI driver is granted the device's interrupt hint, ISA lines 14 and 15
+  only for an IDE controller in compatibility mode (`dm_pci_irqs`), and no
+  interrupt otherwise; arm64 virtio drivers are granted none.
 - WARP ring 3: a host call whose guest pointer lies past the module's live
   linear memory grows it through `warp_mem`, which then re-publishes the
   ring-3 view, so the guest reads the bytes the call wrote instead of faulting
@@ -813,8 +820,8 @@ linked feature documents for rationale and rollout plans.
   (the `irq_line` of `irq.h` is the INTID), routed through the arch-neutral
   sharing layer by a slot table in `arch/aarch64/irq_aarch64.c`; no arm64
   driver routes one yet, because every virtio device takes MSI-X.
-  `run-qemu-bringup-test` (to `[test] preempt ok`) is its gate, in CI too
-  (`bringup`). The native
+  It boots to the CLI and runs every QEMU battery, in CI too, on an
+  aarch64-linux runner. The native
   ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap
   stubs (aarch64: `svc #0`, number in x8). No aarch64 framebuffer fallback
   without GOP (the x86 0xCF8 scan is x86_64-only).

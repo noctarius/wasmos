@@ -9,9 +9,10 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 
+@requires_arch("x86_64", reason="x86_64 hardware: ISA interrupt lines")
 class IrqRouteCapabilityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

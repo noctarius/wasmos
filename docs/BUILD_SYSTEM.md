@@ -27,7 +27,7 @@ run and test targets, and how to add a component.
 ## 1. Quick Reference
 
 ```sh
-./configure out/wasm3-smp configs/wasm3_smp_defconfig   # once per build directory
+./configure out/wasm3-smp configs/x86_64_wasm3_smp_defconfig   # once per build directory
 ninja -C out/wasm3-smp                    # everything: kernel, loader, modules, ESP, images
 ninja -C out/wasm3-smp kernel             # one piece (bootloader, modules, esp, wasmos-sdk, ...)
 ninja -C out/wasm3-smp run-qemu-test      # boot + halt gate
@@ -37,7 +37,7 @@ ninja -C out/wasm3-smp menuconfig         # edit out/wasm3-smp/.config
 ```
 
 Without a directory, `configure` uses `out/default` (`./configure
-configs/warp_smp_defconfig`), the directory the shared CLion run configurations
+configs/x86_64_warp_smp_defconfig`), the directory the shared CLion run configurations
 and `scripts/quality.sh` assume.
 
 `scripts/run_config.sh <config> [target]` configures `out/<config>` from

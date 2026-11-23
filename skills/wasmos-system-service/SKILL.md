@@ -175,7 +175,7 @@ path-spawns only `sysinit` (`src/kernel/kernel_init_runtime.c:393`).
 ## Step 7: Verify
 
 ```sh
-./configure out/wasm3-smp configs/wasm3_smp_defconfig
+./configure out/wasm3-smp configs/x86_64_wasm3_smp_defconfig
 ninja -C out/wasm3-smp run-qemu-test
 ```
 Confirm the service's ready log and endpoint registration; exercise its IPC from a

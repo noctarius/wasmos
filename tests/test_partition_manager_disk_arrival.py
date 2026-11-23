@@ -34,7 +34,7 @@ from dataclasses import replace
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.make_gpt_image import build_image
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, requires_arch
 
 # The volume label. Deliberately not "user": that label has a rule in
 # `scripts/system/devmgr/rules/default.x86_64.rules` that mounts it on /user, and a test
@@ -100,6 +100,10 @@ def _config_with_gpt_disk(disk_path: str):
     )
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class PartitionManagerDiskArrivalTest(unittest.TestCase):
     """The partition manager probes disks that appear after its own bring-up."""
 

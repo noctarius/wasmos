@@ -51,7 +51,7 @@ class DmesgTests(unittest.TestCase):
             f"dmesg does not start with the boot.\n--- output ---\n{out[-4000:]!r}\n",
         )
         self.assertIn(
-            b"[fs-wfs] ready",
+            b"[fs-tmpfs] ready",
             out,
             f"a service's log line is missing.\n--- output ---\n{out[-4000:]!r}\n",
         )

@@ -169,6 +169,28 @@ void dm_acpi_caps(const pci_device_record_t* rec, spawn_caps_t* caps) {
     }
 }
 
+void dm_pci_irqs(const pci_device_record_t* rec, spawn_caps_t* caps) {
+    caps->irq_count = 0;
+    if ((caps->cap_flags & DEVMGR_CAP_IRQ) == 0u) {
+        return;
+    }
+    if (rec->irq_hint != DM_IRQ_HINT_NONE) {
+        caps->irqs[caps->irq_count++] = rec->irq_hint;
+    }
+    if (rec->class_code != 0x01u || rec->subclass != 0x01u) {
+        return;
+    }
+    /* prog_if bit 0 selects native mode for the primary channel and bit 2 for
+     * the secondary, each on its own; a channel left in compatibility mode is
+     * at its ISA ports and line (14 primary, 15 secondary). */
+    if ((rec->prog_if & 0x01u) == 0u && rec->irq_hint != 14u) {
+        caps->irqs[caps->irq_count++] = 14u;
+    }
+    if ((rec->prog_if & 0x04u) == 0u && rec->irq_hint != 15u) {
+        caps->irqs[caps->irq_count++] = 15u;
+    }
+}
+
 static int dm_grant_from_bar(const wasmos_pci_bar_t* bar, wasmos_region_grant_t* out) {
     if (bar->base == 0u || bar->size == 0u || bar->size > 0xFFFFFFFFull) {
         return -1;

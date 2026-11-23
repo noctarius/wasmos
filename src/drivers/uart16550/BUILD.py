@@ -9,7 +9,12 @@ def build(b):
     wap = guest(
         b,
         "uart16550",
-        [b.src("uart16550.ts"), core / "serial_core.ts", core / "serial_name.ts"],
+        [
+            b.src("uart16550.ts"),
+            core / "serial_core.ts",
+            core / "serial_name.ts",
+            core / "uart.ts",
+        ],
         lang="as",
     )
     install(b, "system/drivers/uart16550.wap", wap)

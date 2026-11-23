@@ -15,13 +15,12 @@ config WASMOS_ARCH_X86_64
     bool "x86_64 (QEMU pc, OVMF)"
 
 config WASMOS_ARCH_AARCH64
-    bool "aarch64 (QEMU virt, edk2; bring-up)"
+    bool "aarch64 (QEMU virt, edk2)"
     help
-      arm64 port under bring-up. The kernel schedules, preempts and runs wasm3
-      guests, and stops at the first unimplemented arch interface (PCI
-      configuration access), so an aarch64 tree runs run-qemu-bringup-test,
-      not run-qemu-test. The interrupt controller
-      choice and WARP are x86_64-only.
+      arm64 port: one core under wasm3, booting to the CLI and gated by
+      run-qemu-test and the QEMU batteries. SMP and WARP are not implemented
+      on aarch64 yet; the interrupt controller choice (PIC/LAPIC/IOAPIC) is
+      x86_64's.
 
 endchoice
 

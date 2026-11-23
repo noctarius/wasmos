@@ -28,8 +28,8 @@ there.
 RUN IT UNDER BOTH RUNTIMES. A WARP-only pass proves nothing about wasm3, which
 is the runtime the question is actually about:
 
-    ./configure out/wasm3-smp configs/wasm3_smp_defconfig
-    ./configure out/warp-smp  configs/warp_smp_defconfig
+    ./configure out/wasm3-smp configs/x86_64_wasm3_smp_defconfig
+    ./configure out/warp-smp  configs/x86_64_warp_smp_defconfig
 """
 
 import os

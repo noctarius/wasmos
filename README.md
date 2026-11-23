@@ -89,7 +89,7 @@ a WASM runtime and a CPU topology; `./configure` seeds the directory's `.config`
 from it once, and that copy is authoritative afterwards:
 
 ```sh
-./configure out/warp-smp configs/warp_smp_defconfig
+./configure out/warp-smp configs/x86_64_warp_smp_defconfig
 ```
 
 Without a defconfig the shared base `configs/wasmos_defconfig` applies, and the
@@ -97,35 +97,35 @@ runtime takes the Kconfig default (WARP).
 
 #### Choosing a WASM runtime
 
-| defconfig                | runtime | CPUs   |
-|--------------------------|---------|--------|
-| `wasm3_single_defconfig` | wasm3   | single |
-| `wasm3_smp_defconfig`    | wasm3   | SMP    |
-| `warp_single_defconfig`  | WARP    | single |
-| `warp_smp_defconfig`     | WARP    | SMP    |
+| defconfig                       | runtime | CPUs   |
+|---------------------------------|---------|--------|
+| `x86_64_wasm3_single_defconfig` | wasm3   | single |
+| `x86_64_wasm3_smp_defconfig`    | wasm3   | SMP    |
+| `x86_64_warp_single_defconfig`  | WARP    | single |
+| `x86_64_warp_smp_defconfig`     | WARP    | SMP    |
 
 Give each configuration its own directory, so switching never means
 reconfiguring:
 
 ```sh
-./configure out/warp-smp  configs/warp_smp_defconfig
-./configure out/wasm3-smp configs/wasm3_smp_defconfig
+./configure out/warp-smp  configs/x86_64_warp_smp_defconfig
+./configure out/wasm3-smp configs/x86_64_wasm3_smp_defconfig
 ninja -C out/warp-smp run-qemu-test
 ```
 
 or via the helper, which derives the build directory from the config name:
 
 ```sh
-scripts/run_config.sh warp_smp run-qemu        # boot WARP + SMP to the CLI
-scripts/run_config.sh wasm3_smp                # boot + halt test, wasm3 + SMP
-scripts/run_config.sh wasm3_single kernel      # just build the kernel
+scripts/run_config.sh x86_64_warp_smp run-qemu      # boot WARP + SMP to the CLI
+scripts/run_config.sh x86_64_wasm3_smp              # boot + halt test, wasm3 + SMP
+scripts/run_config.sh x86_64_wasm3_single kernel    # just build the kernel
 ```
 
 Editing the configuration:
 ```sh
 ninja -C out/warp-smp menuconfig                              # interactive editor
 ./configure out/warp-smp --set WASMOS_TRACE=y                 # one symbol
-./configure out/warp-smp configs/warp_smp_defconfig --reseed  # back to the defconfig
+./configure out/warp-smp configs/x86_64_warp_smp_defconfig --reseed  # back to the defconfig
 ```
 
 Every option is a Kconfig symbol (`Kconfig`); `docs/BUILD_SYSTEM.md` lists
@@ -262,14 +262,14 @@ Key policy/runtime notes:
 
 Two backends are available, selected per build directory:
 
-| Backend        | Pin with                          | Character                                          |
-|----------------|-----------------------------------|----------------------------------------------------|
-| WARP (default) | `configs/warp_smp_defconfig`      | Single-pass x86_64 JIT, ring-3 guests, preemptible |
-| wasm3          | `configs/wasm3_smp_defconfig`     | Tree-walking interpreter, in-kernel, not preempted |
+| Backend        | Pin with                             | Character                                          |
+|----------------|--------------------------------------|----------------------------------------------------|
+| WARP (default) | `configs/x86_64_warp_smp_defconfig`  | Single-pass x86_64 JIT, ring-3 guests, preemptible |
+| wasm3          | `configs/x86_64_wasm3_smp_defconfig` | Tree-walking interpreter, in-kernel, not preempted |
 
 To build and run with WARP:
 ```sh
-./configure out/warp-smp configs/warp_smp_defconfig
+./configure out/warp-smp configs/x86_64_warp_smp_defconfig
 ninja -C out/warp-smp run-qemu-test
 ```
 

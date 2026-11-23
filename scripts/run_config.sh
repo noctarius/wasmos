@@ -3,7 +3,8 @@
 #
 # Usage: scripts/run_config.sh <config> [target]
 #   <config>  one of the defconfigs in configs/ (without the _defconfig suffix):
-#             wasm3_single | wasm3_smp | warp_single | warp_smp
+#             x86_64_wasm3_single | x86_64_wasm3_smp | x86_64_warp_single |
+#             x86_64_warp_smp | aarch64_wasm3_single
 #   [target]  ninja target to build (default: run-qemu-test). Useful targets:
 #             run-qemu-test, run-qemu-sched-stress-test (needs
 #             WASMOS_SCHED_SMP_STRESS), kernel, run-qemu, run-qemu-debug.
@@ -12,12 +13,12 @@
 # defconfig, so switching configs never reconfigures another config's tree.
 #
 # Examples:
-#   scripts/run_config.sh warp_smp                 # boot + halt test, WARP+SMP
-#   scripts/run_config.sh wasm3_smp run-qemu       # boot wasm3+SMP to the CLI
-#   scripts/run_config.sh wasm3_single kernel      # just build the kernel
+#   scripts/run_config.sh x86_64_warp_smp               # boot + halt test, WARP+SMP
+#   scripts/run_config.sh x86_64_wasm3_smp run-qemu     # boot wasm3+SMP to the CLI
+#   scripts/run_config.sh x86_64_wasm3_single kernel    # just build the kernel
 set -eu
 
-cfg="${1:?usage: run_config.sh <wasm3_single|wasm3_smp|warp_single|warp_smp> [target]}"
+cfg="${1:?usage: run_config.sh <arch>_<runtime>_<single|smp> [target]}"
 target="${2:-run-qemu-test}"
 
 defconfig="configs/${cfg}_defconfig"

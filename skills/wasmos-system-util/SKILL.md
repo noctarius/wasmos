@@ -116,7 +116,7 @@ The CLI resolves a bare command name through its `PATH`
 `src/services/cli/cli.c:237`) and path-spawns the `.wap` with the typed argument
 string. So:
 ```sh
-./configure out/wasm3-smp configs/wasm3_smp_defconfig
+./configure out/wasm3-smp configs/x86_64_wasm3_smp_defconfig
 ninja -C out/wasm3-smp run-qemu-test   # boot gate
 ninja -C out/wasm3-smp run-qemu        # interactive session
 # then in the guest CLI:

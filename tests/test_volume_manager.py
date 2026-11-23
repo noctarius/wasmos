@@ -19,7 +19,7 @@ is outside what that can name. See architecture/37-volume-manager.md.
 
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, requires_arch
 
 # Written by QEMU's vvfat into the ESP's FAT boot sector, padded to 11 bytes on
 # disk. `tests/unit/fixtures_disk_images.zig` carries the same bytes. It is NOT
@@ -33,6 +33,10 @@ ESP_LABEL = "QEMU VVFAT"
 USER_LABEL = "USER"
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class VolumeManagerTest(unittest.TestCase):
     """Volumes are published for what holds a filesystem, and only for that."""
 

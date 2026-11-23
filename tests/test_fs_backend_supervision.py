@@ -20,7 +20,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 HELLO_TEXT = b"hello from the WFS volume"
 WFS_UNIT = "fs_wfs@/wfs"
@@ -28,6 +28,10 @@ TMPFS_UNIT = "fs_tmpfs@/home/user"
 PROBE_MOUNT = "/svmnt"
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class FsBackendSupervisionTest(unittest.TestCase):
     session: QemuSession | None = None
 

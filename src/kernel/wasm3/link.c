@@ -12,6 +12,7 @@
 #include "process_manager.h"
 #include "memory.h"
 #include "paging.h"
+#include "phys_alias.h"
 #include "serial.h"
 #include "timer.h"
 #include "link.h"
@@ -2326,10 +2327,12 @@ m3ApiRawFunction(wasmos_region_alloc) {
  * `wasm_offset` (right for snapshotting ACPI tables, useless for programming a device -- see
  * wasmos_mmio_write32).  phys_lo/phys_hi form the 64-bit source address; `size` and
  * `wasm_offset` must be multiples of 4096, and [wasm_offset, wasm_offset+size) must lie inside
- * linear memory.  The source range is not otherwise restricted, so the mmio.map capability
- * this requires also buys reading any physical address reachable through the alias.  Returns 0
- * on success, WASMOS_INVAL, WASMOS_ERR_KERNEL_UNALIGNED, WASMOS_ERR_KERNEL_NO_WINDOW,
- * WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED. */
+ * linear memory.  The source range must lie inside the alias window
+ * (KERNEL_HIGHER_HALF_WINDOW_BYTES) with every page mapped there -- RAM and the firmware tables
+ * in it, not a hole -- so the mmio.map capability this requires buys reading any physical
+ * address the alias reaches and nothing else.  Returns 0 on success, WASMOS_INVAL,
+ * WASMOS_ERR_KERNEL_UNALIGNED, WASMOS_ERR_KERNEL_NO_WINDOW, WASMOS_ERR_KERNEL_NO_CALLER,
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED, or WASMOS_ERR_KERNEL_PHYS_UNMAPPED. */
 m3ApiRawFunction(wasmos_phys_map) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, phys_lo) m3ApiGetArg(int32_t, phys_hi)
         m3ApiGetArg(int32_t, size) m3ApiGetArg(int32_t, wasm_offset)
@@ -2370,6 +2373,16 @@ m3ApiRawFunction(wasmos_phys_map) {
     }
     if (require_mmio_capability(proc->context_id) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
+    }
+
+    /* The alias is phys | KERNEL_HIGHER_HALF_BASE, which names the physical page only
+     * inside the window; a page the window does not map would fault the memcpy below. */
+    if (!phys_alias_range_mapped(phys,
+                                 size32,
+                                 KERNEL_HIGHER_HALF_BASE,
+                                 KERNEL_HIGHER_HALF_WINDOW_BYTES,
+                                 paging_virt_to_phys)) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_PHYS_UNMAPPED);
     }
 
     /* Copy, not remap.  The source is read through the kernel higher-half alias

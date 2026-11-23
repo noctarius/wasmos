@@ -54,6 +54,7 @@ import {
 } from "./eventloop";
 import {AWAIT_PENDING, Box} from "./coroutine";
 import {serialNameWord} from "./serial_name";
+import {RxSink, serviceRx, Uart} from "./uart";
 import {
     WASMOS_ERR_DRIVER_DEVICE_INIT,
     WASMOS_ERR_DRIVER_ENDPOINT_CREATE,
@@ -67,39 +68,6 @@ import {
     irq_route_ipc,
     serial_register,
 } from "./wasmos_imports";
-
-/* Every register is addressed in the UART's granted window, region 0, so a
- * backend never names an absolute port or address (io_region_* host calls). */
-export const REGION: i32 = 0;
-
-/**
- * One UART chip. A backend sets `base` and `irq` to its default device, and the
- * spawn args override them. Status reads that the kernel refuses report neither
- * ready: the register cannot answer, so claiming either bit would be inventing
- * hardware state.
- */
-export abstract class Uart {
-    /* The register window's base: an I/O port or a physical address. It names
-     * the instance; registers are reached through REGION. */
-    base: i64 = 0;
-    irq: i32 = -1;
-    /** How the boot log labels the window's base ("io", "pl011 mmio"). */
-    abstract windowLabel(): string;
-    /** Whether this UART is the console when the firmware names none. */
-    abstract defaultConsole(): bool;
-    /** Program the line and enable the receive interrupt. */
-    abstract init(): void;
-    /** Mask every device interrupt; the core then polls. */
-    abstract disableInterrupts(): void;
-    abstract txReady(): bool;
-    abstract rxReady(): bool;
-    /** Send one byte; called only when txReady(). */
-    abstract write(value: i32): void;
-    /** The next received byte, or -1 when the read is refused. */
-    abstract read(): i32;
-    /** Clear a receive interrupt draining the FIFO does not clear. */
-    abstract clearRxInterrupt(): void;
-}
 
 let g_uart: Uart = changetype<Uart>(0);
 /* The `console=` spawn arg: 1 or 0 when the firmware named a console (this
@@ -235,24 +203,18 @@ function writePort(value: i32): void {
     }
 }
 
-/* Returns the byte, or -1 for "nothing to read" -- which also covers a refused
- * read, since a driver that cannot reach its own UART has no byte. */
-function readPort(): i32 {
-    if (!g_uart.rxReady()) {
-        return -1;
+/* serviceRx's sink: the software RX ring. */
+class RingSink extends RxSink {
+    push(byte: i32): void {
+        rxbufPush(byte);
     }
-    return g_uart.read();
 }
+
+const g_ringSink: RingSink = new RingSink();
 
 /** Empty the UART RX FIFO into the software ring, before it can overrun. */
 function drainUartToRing(): void {
-    for (;;) {
-        const c = readPort();
-        if (c < 0) {
-            return;
-        }
-        rxbufPush(c);
-    }
+    serviceRx(g_uart, g_ringSink);
 }
 
 /**
@@ -323,7 +285,6 @@ function sendResponse(destination: i32, requestId: i32, value: i32, status: i32)
 function serveRequest(msg: IpcMessage): void {
     if (msg.type == SERIAL_IPC_IRQ_EVENT) {
         drainUartToRing();
-        g_uart.clearRxInterrupt();
         /* Ack after emptying the FIFO so the line deasserts before unmask. */
         irq_ack(g_uart.irq);
     } else if (msg.type == SERIAL_DRIVER_WRITE_REQ) {
@@ -453,6 +414,8 @@ function serialTask(): i32 {
  * args override the backend's default device, then the coroutine runs on the
  * process pump until the driver ends.
  */
+export {REGION, Uart} from "./uart";
+
 export function runSerial(uart: Uart): i32 {
     g_uart = uart;
     return coroutineMain(serialTask());

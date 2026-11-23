@@ -21,6 +21,7 @@ SIMPLE = [
     "net_smoke",
     "net_tcp_server",
     "net_udp_echo",
+    "phys_map_unmapped",
     "surface_attach",
     "sv_probe",
     "wfs_write_smoke",

@@ -10,7 +10,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 # kernel/include/process.h. Every per-process kernel table is sized by it, so
 # running more apps than this in one session is what proves a table frees its
@@ -62,6 +62,10 @@ class AppChurnTests(unittest.TestCase):
             )
         return match.group(0)
 
+    @requires_arch(
+        "x86_64",
+        reason='no RTC on aarch64 yet: the CMOS rtc is x86_64 hardware and PL031 is in docs/TASKS.md "arm64 Port"',
+    )
     def test_more_apps_than_process_slots_all_reach_their_services(self):
         """Regression: 2026-11-15-wasm3-ipc-slot-leak -- under wasm3 the per-pid
         "last received message" slot a process takes on its first IPC receive was

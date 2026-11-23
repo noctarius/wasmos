@@ -22,7 +22,7 @@ exactly as dangerous as one that ignored the owner it found.
 
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, requires_arch
 
 # The disk /wfs is mounted from in a default boot: a raw WFS volume with no
 # partition table, so the volume manager publishes a volume for the disk itself.
@@ -33,6 +33,10 @@ WFS_DEVICE = "block:ata:2"
 TABLED_DEVICE = "block:ata:0"
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class FsckWfsClaimTest(unittest.TestCase):
     """A mounted volume is refused; --force is the documented way past it."""
 

@@ -14,7 +14,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, requires_arch
 
 RESTARTS = 2
 BOOT_FILE = "/boot/system/devmgr/rules/default.rules"
@@ -23,6 +23,10 @@ WFS_FILE = "/wfs/hello.txt"
 WFS_TEXT = b"hello from the WFS volume"
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class AtaRestartTest(unittest.TestCase):
     session: QemuSession | None = None
 

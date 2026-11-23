@@ -37,14 +37,14 @@ class ConfigurePositionalsTest(unittest.TestCase):
         os.chdir(self._cwd)
 
     def test_two_positionals_are_builddir_and_defconfig(self):
-        _, args = configure.parse_args(["out/x", "configs/warp_smp_defconfig"])
+        _, args = configure.parse_args(["out/x", "configs/x86_64_warp_smp_defconfig"])
         self.assertEqual(args.builddir, Path("out/x"))
-        self.assertEqual(args.defconfig, Path("configs/warp_smp_defconfig"))
+        self.assertEqual(args.defconfig, Path("configs/x86_64_warp_smp_defconfig"))
 
     def test_lone_defconfig_configures_default_builddir(self):
-        _, args = configure.parse_args(["configs/warp_smp_defconfig"])
+        _, args = configure.parse_args(["configs/x86_64_warp_smp_defconfig"])
         self.assertEqual(args.builddir, configure.DEFAULT_BUILDDIR)
-        self.assertEqual(args.defconfig, Path("configs/warp_smp_defconfig"))
+        self.assertEqual(args.defconfig, Path("configs/x86_64_warp_smp_defconfig"))
 
     def test_lone_directory_is_builddir(self):
         _, args = configure.parse_args(["out/x"])
@@ -63,10 +63,10 @@ class ConfigurePositionalsTest(unittest.TestCase):
         # was rejected as an unrecognized argument, so documented reseed
         # invocations stopped working.
         _, args = configure.parse_args(
-            ["out/x", "--reseed", "configs/warp_smp_defconfig"]
+            ["out/x", "--reseed", "configs/x86_64_warp_smp_defconfig"]
         )
         self.assertEqual(args.builddir, Path("out/x"))
-        self.assertEqual(args.defconfig, Path("configs/warp_smp_defconfig"))
+        self.assertEqual(args.defconfig, Path("configs/x86_64_warp_smp_defconfig"))
         self.assertTrue(args.reseed)
 
     def test_existing_builddir_named_like_a_defconfig(self):

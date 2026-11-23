@@ -77,7 +77,7 @@ the same manifest, so a new `.c` needs no other edit.
 
 ## Runtimes and packaging
 - Two WASM runtimes: wasm3 (default interpreter) and WARP
-  (Kconfig `WASMOS_WASM_RUNTIME_WARP=y`, e.g. `configs/warp_smp_defconfig`;
+  (Kconfig `WASMOS_WASM_RUNTIME_WARP=y`, e.g. `configs/x86_64_warp_smp_defconfig`;
   single-pass JIT). Both run guests under
   **ring-3 isolation** (the standard execution model — selecting WARP implies
   ring-3; non-ring3 is unsupported). `libs/wasm3`/`libs/warp` are git subtrees —

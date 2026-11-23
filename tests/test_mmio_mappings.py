@@ -11,7 +11,7 @@ write); strong uncacheable (UC) under the default PAT is PCD and PWT together.
 
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, requires_arch
 
 # Kernel VAs of the device-register windows (lapic.c LAPIC_VIRT_BASE,
 # ioapic.c IOAPIC_VIRT_BASE).
@@ -39,6 +39,7 @@ def tlb_attributes(tlb: str) -> dict[int, str]:
     return attrs
 
 
+@requires_arch("x86_64", reason="x86_64 hardware: the LAPIC and IOAPIC register pages")
 class MmioMappingTest(unittest.TestCase):
     session: QemuSession | None = None
 

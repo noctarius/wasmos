@@ -34,7 +34,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 # Content of scripts/wfs/hello.txt as mkfs_wfs placed it in the volume. Stored
 # INLINE in the object record at this size, so reading it over virtio exercises
@@ -82,6 +82,10 @@ def _config_with_wfs_over_virtio(wfs_image: str):
     )
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class WfsOverVirtioBlkTest(unittest.TestCase):
     """A WFS volume mounts and reads over virtio-blk, matching the ATA mount."""
 

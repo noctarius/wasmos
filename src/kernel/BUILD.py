@@ -92,6 +92,7 @@ CORE = [
     "block_buffer.c",
     "hostcall_dma.c",
     "hostcall_value.c",
+    "phys_alias.c",
     "kenv.c",
     "kmsg.c",
     "hostcall_buffer.c",

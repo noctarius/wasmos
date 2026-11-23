@@ -26,7 +26,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 # Top-level directories the boot creates in the tmpfs root itself, as opposed to
 # the ancestors fs-manager creates for mount points: scripts/system/sysinit.rc
@@ -259,6 +259,10 @@ class VfsRootMountTest(VfsSession, unittest.TestCase):
         self.assertNotIn(b"boot/", listing)
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class VfsDeepAndNestedMountTest(VfsSession, unittest.TestCase):
     """Mounts at depth, mounts inside mounts, and shadowing.
 
@@ -389,6 +393,10 @@ class VfsChdirAcrossBackendsTest(VfsSession, unittest.TestCase):
             self.assertIn(marker, out, f"cd {path} was refused\n{out!r}")
         self._run("cd /")
 
+    @requires_arch(
+        "x86_64",
+        reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+    )
     def test_a_file_is_not_enterable_on_every_backend(self):
         """The mutation guard: a backend reporting S_IFDIR unconditionally, or
         fs-manager skipping the type check, passes the case above and fails here.
@@ -556,6 +564,10 @@ class VfsMountRequestTest(VfsSession, unittest.TestCase):
         self.assertIn(b"roundtrip/", listing, f"the mount point went too\n{listing!r}")
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class VfsUnmountTest(VfsSession, unittest.TestCase):
     """Removing a mount, and refusing to remove one that is still in use.
 

@@ -83,7 +83,7 @@ queues and work stealing.
 
 `WASMOS_SMP` is a Kconfig bool (`Kconfig`) that `depends on WASMOS_IRQ_IOAPIC`;
 kconfiglib enforces the dependency when it resolves a build directory's
-`.config`. `configs/wasm3_smp_defconfig` and `configs/warp_smp_defconfig`
+`.config`. `configs/x86_64_wasm3_smp_defconfig` and `configs/x86_64_warp_smp_defconfig`
 select it.
 
 The `kernel` toolchain profile (`scripts/buildgen/toolchains.py`) passes it to

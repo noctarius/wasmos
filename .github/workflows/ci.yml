@@ -77,7 +77,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config: [warp_single, warp_smp, wasm3_single, wasm3_smp]
+        config: [x86_64_warp_single, x86_64_warp_smp, x86_64_wasm3_single, x86_64_wasm3_smp]
     env:
       # Force TCG (software emulation). wasmos is only validated under TCG (the
       # dev environment is macOS QEMU); under KVM the bootloader->kernel handoff
@@ -176,7 +176,6 @@ jobs:
     outputs:
       qemu: ${{ steps.resolve.outputs.qemu }}
       host: ${{ steps.resolve.outputs.host }}
-      bringup: ${{ steps.resolve.outputs.bringup }}
       hosts: ${{ steps.resolve.outputs.hosts }}
     steps:
       - uses: actions/checkout@v4
@@ -188,68 +187,7 @@ jobs:
           cells=$(python3 scripts/run_unittest_suite.py --matrix)
           echo "qemu=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c for c in json.load(sys.stdin) if c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
           echo "host=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c['battery'] for c in json.load(sys.stdin) if not c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
-          echo "bringup=$(python3 scripts/run_unittest_suite.py --bringup-matrix)" >> "$GITHUB_OUTPUT"
           echo "hosts=$(python3 scripts/run_unittest_suite.py --host-matrix)" >> "$GITHUB_OUTPUT"
-
-  # Configurations of an architecture under bring-up (bringup in
-  # tests/batteries.json): built in full (kernel, loader, guest and native
-  # modules, ESP, images) and booted to the bring-up marker, because the
-  # kernel cannot run a battery yet. On an aarch64-linux runner, which boots
-  # the aarch64 guest natively when it has KVM and under TCG otherwise.
-  arch-bringup:
-    name: ${{ matrix.config }} (build + bring-up boot)
-    needs: batteries
-    if: needs.batteries.outputs.bringup != '[]'
-    runs-on: ubuntu-24.04-arm
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.batteries.outputs.bringup) }}
-    env:
-      WASMOS_TEST_TIMEOUT_SCALE: "3"
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install build toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build python3-pip curl xz-utils \
-            qemu-system-arm qemu-efi-aarch64
-          python3 -m pip install --user kconfiglib
-
-      - name: Install LLVM 20
-        run: |
-          .github/scripts/install-llvm.sh 20
-          echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
-
-      - name: Install Zig
-        run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-linux-${ZIG_VERSION}.tar.xz" \
-            | tar -xJ
-          echo "$PWD/zig-aarch64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-
-      - name: Install Rust wasm target
-        run: rustup target add wasm32-unknown-unknown
-
-      - name: Install TinyGo
-        run: |
-          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_arm64.deb"
-          sudo dpkg -i "tinygo_${TINYGO_VERSION}_arm64.deb"
-
-      - name: Install AssemblyScript
-        run: |
-          npm install
-          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
-
-      - name: Configure (${{ matrix.config }})
-        run: ./configure "out/${{ matrix.config }}" "configs/${{ matrix.config }}_defconfig"
-
-      - name: Build (${{ matrix.config }}, ${{ matrix.arch }})
-        run: ninja -C "out/${{ matrix.config }}"
-
-      - name: Bring-up boot (${{ matrix.config }}, ${{ matrix.arch }})
-        run: ninja -C "out/${{ matrix.config }}" run-qemu-bringup-test
 
   # Batteries that boot nothing: no emulation toolchain, no OVMF, seconds not
   # minutes. Kept off the QEMU runners so they cannot queue behind them.
@@ -283,10 +221,13 @@ jobs:
   # ring 3 -- so a green on one says nothing about the other. Running only WARP
   # is what let a wasm3-only breakage sit unnoticed: a guest mapping that
   # aliases under WARP but not under wasm3 looks identical in a WARP-only run.
+  # An aarch64 cell runs on an arm64 runner, so the guest is native to the
+  # host's ISA (TCG still, see below); its toolchain is the arm64 build of each
+  # tool, and its firmware is QEMU's own AAVMF, which configure finds itself.
   integration-tests:
     name: ${{ matrix.battery }} (QEMU, ${{ matrix.runtime }})
     needs: batteries
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     strategy:
       # One cell's failure must not cancel the others: the whole point is to
       # learn which subsystems are red, and under which runtime, in a single run.
@@ -303,15 +244,21 @@ jobs:
       # Scale the framework's deadlines rather than editing 33 tests' literals,
       # which would slow local runs for a problem they do not have.
       WASMOS_TEST_TIMEOUT_SCALE: "3"
+      # The emulator the battery boots, for the crash-core steps below.
+      QEMU_BIN: ${{ matrix.arch == 'aarch64' && 'qemu-system-aarch64' || 'qemu-system-x86_64' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install build + emulation toolchain
         run: |
+          if [ "${{ matrix.arch }}" = aarch64 ]; then
+            emu="qemu-system-arm qemu-efi-aarch64"
+          else
+            emu="qemu-system-x86 ovmf"
+          fi
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build python3-pip \
-            qemu-system-x86 ovmf curl xz-utils
+            ninja-build python3-pip curl xz-utils $emu
           python3 -m pip install --user kconfiglib
 
       - name: Install LLVM 20
@@ -321,17 +268,18 @@ jobs:
 
       - name: Install Zig
         run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
-            | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          zig="zig-$(uname -m)-linux-${ZIG_VERSION}"
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${zig}.tar.xz" | tar -xJ
+          echo "$PWD/${zig}" >> "$GITHUB_PATH"
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
 
       - name: Install TinyGo
         run: |
-          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
-          sudo dpkg -i "tinygo_${TINYGO_VERSION}_amd64.deb"
+          deb="tinygo_${TINYGO_VERSION}_$(dpkg --print-architecture).deb"
+          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/${deb}"
+          sudo dpkg -i "${deb}"
 
       - name: Install AssemblyScript
         run: |
@@ -339,6 +287,7 @@ jobs:
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Stage OVMF (writable vars copy)
+        if: matrix.arch != 'aarch64'
         run: |
           mkdir -p "$RUNNER_TEMP/ovmf"
           code=$(ls /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd 2>/dev/null | head -1)
@@ -351,9 +300,13 @@ jobs:
       # from (skills/wasmos-build-and-run).
       - name: Configure (${{ matrix.runtime }})
         run: |
-          ./configure out/build "configs/${{ matrix.runtime }}_defconfig" \
-            --ovmf-code="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
-            --ovmf-vars="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
+          if [ "${{ matrix.arch }}" = aarch64 ]; then
+            ./configure out/build "configs/${{ matrix.runtime }}_defconfig"
+          else
+            ./configure out/build "configs/${{ matrix.runtime }}_defconfig" \
+              --ovmf-code="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
+              --ovmf-vars="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
+          fi
 
       # QEMU itself has crashed with SIGSEGV mid-battery (docs/TASKS.md, the P0
       # "no CLI prompt" item, second face). Its core is the only evidence of
@@ -402,11 +355,11 @@ jobs:
           shopt -s nullglob
           for other in "$RUNNER_TEMP"/cores/core.*; do
             case "$other" in
-              *qemu-system-x86_64.*) ;;
+              *"$QEMU_BIN".*) ;;
               *) echo "::warning::a process other than QEMU dumped core: $other" ;;
             esac
           done
-          cores=("$RUNNER_TEMP"/cores/core.*qemu-system-x86_64.*)
+          cores=("$RUNNER_TEMP"/cores/core.*"$QEMU_BIN".*)
           if [ ${#cores[@]} -eq 0 ]; then
             echo "no QEMU core dumps"
             exit 0
@@ -417,7 +370,7 @@ jobs:
             echo "::error::QEMU crashed: $core"
             gdb -batch -iex "set debuginfod enabled on" \
               -ex "info sharedlibrary" -ex "bt full" -ex "thread apply all bt" \
-              "$(command -v qemu-system-x86_64)" "$core" 2>&1 | tee "$core.bt.txt"
+              "$(command -v "$QEMU_BIN")" "$core" 2>&1 | tee "$core.bt.txt"
             zstd -q -T0 --rm "$core"
           done
 
@@ -438,8 +391,8 @@ jobs:
       - name: Confirm the runtime under test
         run: |
           case "${{ matrix.runtime }}" in
-            warp_*)  want=WARP ;;
-            wasm3_*) want=WASM3 ;;
+            *warp_*)  want=WARP ;;
+            *wasm3_*) want=WASM3 ;;
           esac
           if ! grep -qE "register request=WASM runtime=$want\b" "$RUNNER_TEMP/battery.log"; then
             echo "::error::expected runtime=$want, but the boot log says:"

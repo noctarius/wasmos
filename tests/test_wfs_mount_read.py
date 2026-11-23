@@ -20,7 +20,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 # Content of scripts/wfs/hello.txt, which mkfs_wfs placed in the volume. Small
 # enough that WFS stores it INLINE in the object record, so reading it exercises
@@ -28,6 +28,10 @@ from qemu_test_framework import QemuSession, default_config
 HELLO_TEXT = b"hello from the WFS volume"
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class WfsMountReadTest(unittest.TestCase):
     """A WFS volume mounts off a real disk and its files can be listed and read."""
 

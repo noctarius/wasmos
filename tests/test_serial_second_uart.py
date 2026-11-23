@@ -25,7 +25,7 @@ from dataclasses import replace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, requires_arch
 
 RULES = os.path.join("system", "devmgr", "rules", "default.rules")
 COM1_ONLY = 'ATTR{io}=="0x3F8", RUN+="system/drivers/uart16550.wap"'
@@ -48,6 +48,7 @@ def _esp_binding_every_uart(esp_dir: str, into: str) -> str:
     return copy
 
 
+@requires_arch("x86_64", reason="x86_64 hardware: a second 16550 COM port")
 class SerialSecondUartTest(unittest.TestCase):
     session: QemuSession | None = None
     work_dir: str | None = None

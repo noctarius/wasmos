@@ -65,10 +65,10 @@ SUBSYSTEM=="volume", ATTR{fstype}=="wfs", ATTR{uuid}=="5746532d-7669-7274-696f-2
 # registers the same net.ifc instance; a frame sent while the driver is down is
 # lost like any other.
 SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_net.wap"
-# The PL011 UART (acpi-bus publishes _HID ARMH0011 as a serial controller). The
-# firmware's SPCR table names it the console, so its driver instance registers
-# as "sin" and the vt takes console input from it.
-SUBSYSTEM=="acpi", ATTR{class}=="0x07", ATTR{subclass}=="0x00", RUN+="system/drivers/serial.wap"
+# The PL011 UART, matched by its ACPI identity. The firmware's SPCR table names
+# it the console, so its driver instance registers as "sin" and the vt takes
+# console input from it.
+SUBSYSTEM=="acpi", ATTR{hid}=="ARMH0011", RUN+="system/drivers/pl011.wap"
 # The virtio console is the kernel-log port (doc 19). Unsupervised: a restart
 # would replay the whole kmsg ring onto it again.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"

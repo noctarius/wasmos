@@ -151,6 +151,32 @@ static void test_acpi_rule_without_io_matches_any_instance(void) {
     assert(!dm_acpi_rule_matches(&state.acpi_match_rules[0], &uart));
 }
 
+/* ATTR{hid} selects a device by its ACPI identity, so a PL011 rule spawns its
+ * driver for the PL011 and not for a 16550 of the same class. A _HID that does
+ * not fit rejects the line rather than leaving a rule that matches anything. */
+static void test_acpi_rule_hid_attr_selects_the_chip(void) {
+    device_manager_state_t state;
+    pci_device_record_t pl011;
+    pci_device_record_t uart;
+    const char* rules = "SUBSYSTEM==\"acpi\", ATTR{hid}==\"ARMH0011\", "
+                        "RUN+=\"system/drivers/pl011.wap\"\n"
+                        "SUBSYSTEM==\"acpi\", ATTR{hid}==\"ARMH00110\", "
+                        "RUN+=\"system/drivers/any.wap\"\n";
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_acpi_match(&state, rules);
+    assert(state.acpi_match_rule_count == 1u);
+    assert(strcmp(state.acpi_match_rules[0].hid, "ARMH0011") == 0);
+
+    memset(&pl011, 0, sizeof(pl011));
+    pl011.bus = 0xFFu;
+    pl011.class_code = 0x07u;
+    (void)snprintf(pl011.hid, sizeof(pl011.hid), "%s", "ARMH0011");
+    uart = pl011;
+    (void)snprintf(uart.hid, sizeof(uart.hid), "%s", "PNP0501");
+    assert(dm_acpi_rule_matches(&state.acpi_match_rules[0], &pl011));
+    assert(!dm_acpi_rule_matches(&state.acpi_match_rules[0], &uart));
+}
+
 /* ENV{RESTART} hands the driver to the supervisor under that restart policy;
  * without it the device manager spawns the driver itself. An unknown policy
  * rejects the line rather than spawning the driver unsupervised. */
@@ -307,6 +333,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_a_rule_file_that_fits_is_kept_whole),
         WASMOS_TEST_CASE(test_acpi_rule_io_attr_selects_one_uart),
         WASMOS_TEST_CASE(test_acpi_rule_without_io_matches_any_instance),
+        WASMOS_TEST_CASE(test_acpi_rule_hid_attr_selects_the_chip),
         WASMOS_TEST_CASE(test_acpi_rule_env_restart_names_a_policy),
         WASMOS_TEST_CASE(test_acpi_rule_env_restart_unextractable_rejects_the_line),
     };

@@ -778,7 +778,7 @@ linked feature documents for rationale and rollout plans.
   (`supervisor] boot complete`), with virtio-net (DHCP lease), virtio-rng, the
   font service and the calculator up, and takes console input through the
   PL011: acpi-bus publishes `ARMH0011` (window 0x09000000, GSIV 33, flagged the
-  console by the SPCR), the serial driver serves it through its MMIO region
+  console by the SPCR), `pl011.wap` serves it through its MMIO region
   grant with its interrupt routed as a GIC SPI, and `run-qemu-test` passes
   (`halt` powers off through PSCI). The menu bar exits for want of a
   framebuffer (QEMU virt has no display device by default). MSIs go through
@@ -1798,10 +1798,14 @@ linked feature documents for rationale and rollout plans.
   and nothing between them. A matched
   device whose driver never becomes ready within its retries is given up on and
   logged, so the one-at-a-time spawn queue moves on to the next rule.
-- `serial` serves the UART it was spawned for -- a 16550 or, by `hid=ARMH0011`,
-  a PL011 -- through its region grant (`io_region_*`); the console instance
-  ("sin") is the one spawned with `console=1`, or COM1 when the firmware names
-  none, and the shipped x86_64 rule binds COM1 only.
+- The UART drivers are one chip-independent core (`src/drivers/serial/
+  serial_core.ts`: "sin" registration, the vt subscription, the RX ring, IRQ
+  and polling) linked with one chip backend per image: `uart16550.wap`
+  (`io.port`) and `pl011.wap` (`mmio.map`), so neither holds the other's
+  capability. A driver reaches its UART only through its region grant
+  (`io_region_*`); the console instance ("sin") is the one spawned with
+  `console=1`, or COM1 when the firmware names none. The shipped x86_64 rule
+  binds COM1 only; the aarch64 rule matches `ATTR{hid}=="ARMH0011"`.
 - `chardev` is a normal initfs WASM driver started by a boot rule and registered
   through the service registry; it is no longer kernel-embedded.
 - `sysinit` drives `.rc` workflows, environment scopes, `script`/`source`, and

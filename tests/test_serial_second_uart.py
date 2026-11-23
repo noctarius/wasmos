@@ -28,8 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts.qemu_test_framework import QemuSession, default_config
 
 RULES = os.path.join("system", "devmgr", "rules", "default.rules")
-COM1_ONLY = 'ATTR{io}=="0x3F8", RUN+="system/drivers/serial.wap"'
-EVERY_UART = 'RUN+="system/drivers/serial.wap"'
+COM1_ONLY = 'ATTR{io}=="0x3F8", RUN+="system/drivers/uart16550.wap"'
+EVERY_UART = 'RUN+="system/drivers/uart16550.wap"'
 
 
 def _esp_binding_every_uart(esp_dir: str, into: str) -> str:
@@ -96,7 +96,7 @@ class SerialSecondUartTest(unittest.TestCase):
     def test_no_instance_is_given_up_on(self) -> None:
         assert self.session is not None
         self.assertFalse(
-            b"gave up on system/drivers/serial.wap" in self.session.buf,
+            b"gave up on system/drivers/uart16550.wap" in self.session.buf,
             "the device manager gave up on a serial instance, so one UART went "
             "undriven",
         )

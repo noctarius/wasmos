@@ -754,6 +754,19 @@ run_assemblyscript_lint() {
             fi
         done
 
+        # Source directories several modules share: a module's BUILD.py lists
+        # them beside its own files (the UART backends link
+        # src/drivers/serial/serial_core.ts), and the build stages them the same
+        # way, so the lint must too.
+        local shared_dir shared
+        for shared_dir in src/drivers/serial; do
+            for shared in "$shared_dir"/*.ts; do
+                if [[ "$shared" != "$file" ]]; then
+                    copy_if_needed "$shared" "$stage_dir/$(basename "$shared")"
+                fi
+            done
+        done
+
         if grep -q '"\./libui"' "$file"; then
             copy_if_needed "src/libui/assemblyscript/libui.ts" "$stage_dir/libui.ts"
         fi

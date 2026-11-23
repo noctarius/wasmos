@@ -80,7 +80,7 @@ settling in `HW_PHASE_IDLE`.
 | `RULE_SPAWN_KIND_ALWAYS`     | 1     | `SUBSYSTEM=="boot"` — always spawn    |
 | `RULE_SPAWN_KIND_BLOCK_FS`   | 2     | `SUBSYSTEM=="block"` + unit + mount   |
 | `RULE_SPAWN_KIND_PCI_MATCH`  | 3     | `SUBSYSTEM=="pci"` + class attributes |
-| `RULE_SPAWN_KIND_ACPI_MATCH` | 4     | `SUBSYSTEM=="acpi"` + class/subclass, optional `ATTR{io}` (I/O base) |
+| `RULE_SPAWN_KIND_ACPI_MATCH` | 4     | `SUBSYSTEM=="acpi"` + class/subclass, optional `ATTR{io}` (I/O base) and `ATTR{hid}` (ACPI `_HID`) |
 
 Capacity per rule type:
 
@@ -124,7 +124,7 @@ Example from `scripts/system/devmgr/rules/default.<arch>.rules` (excerpt):
 ```
 SUBSYSTEM=="block", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
 SUBSYSTEM=="pci",   ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
-SUBSYSTEM=="acpi",  ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{io}=="0x3F8", RUN+="system/drivers/serial.wap"
+SUBSYSTEM=="acpi",  ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{io}=="0x3F8", RUN+="system/drivers/uart16550.wap"
 SUBSYSTEM=="acpi",  ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="acpi",  ATTR{class}=="0x09", ATTR{subclass}=="0x02", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi",  ATTR{class}=="0x08", ATTR{subclass}=="0x03", RUN+="system/drivers/rtc.wap"

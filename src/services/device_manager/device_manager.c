@@ -782,9 +782,8 @@ static int hw_spawn_driver_index(int32_t index) {
     return dm_spawn_sync_call(PROC_IPC_SPAWN_SYNC, index, DM_SPAWN_TIMEOUT_MS, 0, 0);
 }
 
-/* Interrupt grants. A record's hint of DM_IRQ_HINT_NONE names no interrupt. The
- * two-interrupt default (lines 14 and 15) stands for "the line is resolved
- * later" when a record carries no usable hint. An interrupt is granted only
+/* Interrupt grants. A record's hint of DM_IRQ_HINT_NONE names no interrupt; a
+ * PCI driver's grant is dm_pci_irqs (device_manager_unit.c). An interrupt is granted only
  * with DEVMGR_CAP_IRQ in the caps' cap_flags, which every caller sets first:
  * the kernel refuses an interrupt grant without it, and a driver that declares
  * no interrupt (virtio_serial raises none) must not be handed one. */
@@ -798,15 +797,6 @@ static void caps_irqs_one(spawn_caps_t* caps, uint32_t irq) {
     if ((caps->cap_flags & DEVMGR_CAP_IRQ) != 0u) {
         caps->irqs[0] = irq;
         caps->irq_count = 1;
-    }
-}
-
-static void caps_irqs_default(spawn_caps_t* caps) {
-    caps_irqs_none(caps);
-    if ((caps->cap_flags & DEVMGR_CAP_IRQ) != 0u) {
-        caps->irqs[0] = 14u;
-        caps->irqs[1] = 15u;
-        caps->irq_count = 2;
     }
 }
 
@@ -1359,17 +1349,10 @@ static void queue_pci_match_rule_spawns(void) {
                  * capability set it declared -- not the single
                  * io_port_base-derived guess, which cannot describe a device
                  * whose registers are split across a fixed legacy range and a
-                 * firmware-assigned BAR.
-                 *
-                 * The interrupt default (caps_irqs_default) stands when the
-                 * device record carries no usable hint; a real hint overrides
-                 * it. */
+                 * firmware-assigned BAR. */
                 g_dm.active_rule_spawn_caps.cap_flags = rule->meta.cap_flags & 0xFFFFu;
                 g_dm.active_rule_spawn_caps.dma_max_bytes = rule->meta.dma_budget_pages * 4096u;
-                caps_irqs_default(&g_dm.active_rule_spawn_caps);
-                if (rec->irq_hint != DM_IRQ_HINT_NONE) {
-                    caps_irqs_one(&g_dm.active_rule_spawn_caps, rec->irq_hint);
-                }
+                dm_pci_irqs(rec, &g_dm.active_rule_spawn_caps);
                 if (dm_resolve_declared_regions(&rule->meta, rec, &g_dm.active_rule_spawn_caps) !=
                     0) {
                     /* A window the device cannot supply would leave the driver
@@ -2296,7 +2279,7 @@ static int query_driver_module_meta(int32_t module_index, uint8_t* out_storage_b
         out_caps->cap_flags = desc.cap_flags & 0xFFFFu;
         out_caps->io_port_min = 0u;
         out_caps->io_port_max = 0u;
-        caps_irqs_default(out_caps);
+        out_caps->irq_count = 0u;
         if (out_desc) {
             *out_desc = desc;
         }

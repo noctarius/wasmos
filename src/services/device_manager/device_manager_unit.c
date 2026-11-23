@@ -169,6 +169,25 @@ void dm_acpi_caps(const pci_device_record_t* rec, spawn_caps_t* caps) {
     }
 }
 
+void dm_pci_irqs(const pci_device_record_t* rec, spawn_caps_t* caps) {
+    caps->irq_count = 0;
+    if ((caps->cap_flags & DEVMGR_CAP_IRQ) == 0u) {
+        return;
+    }
+    if (rec->irq_hint != DM_IRQ_HINT_NONE) {
+        caps->irqs[0] = rec->irq_hint;
+        caps->irq_count = 1;
+        return;
+    }
+    /* prog_if bits 0 and 2 select native mode for the primary and secondary
+     * channel; clear, the channel is at its ISA ports and line. */
+    if (rec->class_code == 0x01u && rec->subclass == 0x01u && (rec->prog_if & 0x05u) == 0u) {
+        caps->irqs[0] = 14u;
+        caps->irqs[1] = 15u;
+        caps->irq_count = 2;
+    }
+}
+
 static int dm_grant_from_bar(const wasmos_pci_bar_t* bar, wasmos_region_grant_t* out) {
     if (bar->base == 0u || bar->size == 0u || bar->size > 0xFFFFFFFFull) {
         return -1;

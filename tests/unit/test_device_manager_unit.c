@@ -421,6 +421,58 @@ static void test_without_a_firmware_console_no_console_arg_is_given(void) {
     assert(strcmp(out, "hid=PNP0501 io=3F8 irq=4") == 0);
 }
 
+/* A PCI device record with an interrupt hint, or DM_IRQ_HINT_NONE. */
+static pci_device_record_t pci_record(uint8_t class_code, uint8_t subclass, uint8_t prog_if,
+                                      uint32_t irq) {
+    pci_device_record_t rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.class_code = class_code;
+    rec.subclass = subclass;
+    rec.prog_if = prog_if;
+    rec.irq_hint = irq;
+    return rec;
+}
+
+/* Regression: 2026-11-23-pci-irq-default -- a PCI driver whose device record
+ * carried no interrupt hint was granted ISA lines 14 and 15 on every
+ * architecture. Those are legacy IDE's fixed lines, meaningful only for an IDE
+ * controller whose channels run in compatibility mode; on aarch64 they are
+ * not even routable interrupts (INTIDs below 32 are SGIs and PPIs), so every
+ * virtio driver there was granted two identifiers that name nothing. */
+static void test_a_pci_device_without_a_hint_is_granted_no_interrupt(void) {
+    pci_device_record_t virtio = pci_record(0x01u, 0x00u, 0x00u, DM_IRQ_HINT_NONE);
+    spawn_caps_t caps;
+    memset(&caps, 0, sizeof(caps));
+    caps.cap_flags = DEVMGR_CAP_IRQ;
+    dm_pci_irqs(&virtio, &caps);
+    assert(caps.irq_count == 0u);
+}
+
+/* PCI IDE in compatibility mode (prog_if bits 0 and 2 clear) decodes the ISA
+ * channels and raises lines 14 and 15 whatever its interrupt line register
+ * says (PCI IDE Controller Specification 1.0, 2.1). */
+static void test_compatibility_mode_ide_is_granted_lines_14_and_15(void) {
+    pci_device_record_t ide = pci_record(0x01u, 0x01u, 0x80u, DM_IRQ_HINT_NONE);
+    spawn_caps_t caps;
+    memset(&caps, 0, sizeof(caps));
+    caps.cap_flags = DEVMGR_CAP_IRQ;
+    dm_pci_irqs(&ide, &caps);
+    assert(caps.irq_count == 2u && caps.irqs[0] == 14u && caps.irqs[1] == 15u);
+}
+
+/* A hint is the device's interrupt; native-mode IDE is an ordinary PCI device. */
+static void test_a_hint_is_the_grant(void) {
+    pci_device_record_t native_ide = pci_record(0x01u, 0x01u, 0x8Fu, 11u);
+    spawn_caps_t caps;
+    memset(&caps, 0, sizeof(caps));
+    caps.cap_flags = DEVMGR_CAP_IRQ;
+    dm_pci_irqs(&native_ide, &caps);
+    assert(caps.irq_count == 1u && caps.irqs[0] == 11u);
+    caps.cap_flags = 0u; /* no interrupt without the capability */
+    dm_pci_irqs(&native_ide, &caps);
+    assert(caps.irq_count == 0u);
+}
+
 int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_spec_names_the_device_and_its_policy),
@@ -440,6 +492,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_an_acpi_device_without_an_interrupt_gets_none),
         WASMOS_TEST_CASE(test_a_uart_the_firmware_passed_over_is_told_it_is_not_the_console),
         WASMOS_TEST_CASE(test_without_a_firmware_console_no_console_arg_is_given),
+        WASMOS_TEST_CASE(test_a_pci_device_without_a_hint_is_granted_no_interrupt),
+        WASMOS_TEST_CASE(test_compatibility_mode_ide_is_granted_lines_14_and_15),
+        WASMOS_TEST_CASE(test_a_hint_is_the_grant),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_device_manager_unit: ok\n");

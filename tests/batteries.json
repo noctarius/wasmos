@@ -95,6 +95,7 @@
         "test_app_churn.py",
         "test_linmem_slots.py",
         "test_linmem_host_write.py",
+        "test_phys_map_unmapped.py",
         "test_chardev_preempt.py",
         "test_ipc_wakeup.py",
         "test_preempt_smoke.py",

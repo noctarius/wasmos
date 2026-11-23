@@ -68,14 +68,6 @@ Source: `architecture/06-memory-management.md`,
   of record (for example by checking the descriptor buffer's owner context
   against the spawned bus service's), and block/volume records from the
   managers entitled to them. Raised on PR #69.
-- [ ] [BUG][P2] `wasmos_phys_map` (`src/kernel/wasm3/link.c`) copies from
-  `phys | KERNEL_HIGHER_HALF_BASE` without checking that the range is inside the
-  higher-half alias, so a caller holding `mmio.map` that passes an address
-  beyond it panics the kernel (`#PF` in `memcpy`) instead of getting an error.
-  Seen when acpi-bus read a stale XSDT entry (`cr2=0xffffffffafafa000`, phys
-  `0x2fafa000` on a 512 MiB x86_64 guest). It must refuse a range outside the
-  alias with a packed `WASMOS_ERR_KERNEL_*` code; the WARP counterpart needs
-  the same check.
 - [ ] [ENHANCEMENT][P2] Cross-CPU TLB invalidation. `paging_invalidate` acts on
   the calling CPU only (`paging.h`, `arch/x86_64/paging.c`), so a mapping
   removed or changed on one CPU stays live on every other CPU that cached it,
@@ -2218,11 +2210,6 @@ to the CLI on one core under wasm3, with console input through the PL011
 driver, and passes `run-qemu-test`. Read `docs/architecture/04-boot-and-handoff.md`,
 `06-memory-management.md` and `10-capability-and-policy.md` first.
 
-- [ ] [BUG][P2] device-manager grants the x86 legacy interrupt default
-  (`caps_irqs_default`, lines 14 and 15) to a PCI driver whose device record
-  has no interrupt hint, on arm64 too, where those numbers are SGIs and name
-  nothing a driver may route. `irq_register` refuses them, so nothing is
-  reachable, but the grant is wrong: the default belongs to x86_64 only.
 - [ ] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
   x86_64-only), PL031 RTC driver (the CMOS rtc stays x86_64-only), and a
   framebuffer (ramfb or virtio-gpu; `src/boot/boot.c` TODO: no GOP on `virt`).

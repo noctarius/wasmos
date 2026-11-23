@@ -254,6 +254,47 @@ static void s_a_window_too_small_for_the_boot_tables_panics(void) {
           "pfa_init panics when the window cannot hold its tables");
 }
 
+/* Firmware ACPI extents decide what wasmos_phys_map may map into a guest: RAM
+ * and device MMIO must never pass, and a range only partly inside an ACPI
+ * extent must not either. */
+static void s_only_ranges_inside_firmware_acpi_memory_are_firmware_tables(void) {
+    static efi_desc_t map[4];
+    const uint64_t acpi = MAP_BASE + MAP_PAGES * 0x1000ull;
+    memset(&g_boot, 0, sizeof(g_boot));
+    memset(map, 0, sizeof(map));
+    map[0].Type = 7; /* EfiConventionalMemory */
+    map[0].PhysicalStart = MAP_BASE;
+    map[0].NumberOfPages = MAP_PAGES;
+    map[1].Type = 9; /* EfiACPIReclaimMemory */
+    map[1].PhysicalStart = acpi;
+    map[1].NumberOfPages = 2;
+    map[2].Type = 10; /* EfiACPIMemoryNVS, adjacent */
+    map[2].PhysicalStart = acpi + 0x2000;
+    map[2].NumberOfPages = 1;
+    map[3].Type = 11; /* EfiMemoryMappedIO */
+    map[3].PhysicalStart = 0xFEC00000ull;
+    map[3].NumberOfPages = 1;
+    g_boot.memory_map = map;
+    g_boot.memory_map_size = sizeof(map);
+    g_boot.memory_desc_size = sizeof(map[0]);
+    pfa_init(&g_boot);
+
+    CHECK(pfa_range_is_firmware_table(acpi + 0x24, 0x100) == 1,
+          "an unaligned range inside a reclaim extent is a firmware table");
+    CHECK(pfa_range_is_firmware_table(acpi + 0x1F00, 0x1000) == 1,
+          "a range crossing from reclaim into adjacent NVS is a firmware table");
+    CHECK(pfa_range_is_firmware_table(MAP_BASE, 0x1000) == 0, "RAM is not a firmware table");
+    CHECK(pfa_range_is_firmware_table(acpi - 0x10, 0x20) == 0,
+          "a range reaching back into RAM is not a firmware table");
+    CHECK(pfa_range_is_firmware_table(acpi + 0x2F00, 0x200) == 0,
+          "a range running past the last ACPI page is not a firmware table");
+    CHECK(pfa_range_is_firmware_table(0xFEC00000ull, 0x1000) == 0,
+          "device MMIO is not a firmware table");
+    CHECK(pfa_range_is_firmware_table(acpi, 0) == 0, "an empty range is refused");
+    CHECK(pfa_range_is_firmware_table(~0ull - 0x10, 0x100) == 0, "a wrapping range is refused");
+    reset();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     {"a_checkerboard_of_frees_is_all_free", s_a_checkerboard_of_frees_is_all_free},
     {"fragmented_memory_freed_is_contiguous_again", s_fragmented_memory_freed_is_contiguous_again},
@@ -265,6 +306,8 @@ static const wasmos_test_void_case_t k_cases[] = {
      s_boot_tables_land_inside_the_bootstrap_window},
     {"a_window_too_small_for_the_boot_tables_panics",
      s_a_window_too_small_for_the_boot_tables_panics},
+    {"only_ranges_inside_firmware_acpi_memory_are_firmware_tables",
+     s_only_ranges_inside_firmware_acpi_memory_are_firmware_tables},
 };
 
 int main(void) {

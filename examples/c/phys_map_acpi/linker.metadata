@@ -1,0 +1,27 @@
+version = 1
+
+[package]
+name = "phys-map-acpi"
+entry = "wasmos_main"
+kind = "app"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+# Room for the phys_map window, which the kernel places in the pinned arena above
+# the module's data: under WARP no lower than 2 MiB and only inside the module's
+# current wasm size, so initial_memory must reach past that.
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0
+
+# phys_map requires it.
+[[capabilities]]
+name = "mmio.map"
+flags = 0

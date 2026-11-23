@@ -42,28 +42,28 @@ typedef struct __attribute__((packed)) {
     uint8_t reserved[3];
 } acpi_rsdp_t;
 
-/* Window in WASM linear memory used for physical page mapping. */
-#define PHYS_MAP_WINDOW_PAGES 16
-#define PHYS_MAP_WINDOW_SIZE (PHYS_MAP_WINDOW_PAGES * 4096)
-
-/* Destination of every wasmos_phys_map call below. The 4096 alignment is
- * mandatory: phys_map requires a page-aligned wasm_offset (abi/hostcalls.yaml). */
-static uint8_t g_map_window[PHYS_MAP_WINDOW_SIZE] __attribute__((aligned(4096)));
-
-/* Map one 4 KB-aligned physical region into g_map_window.
- * phys must be 4096-aligned; size <= PHYS_MAP_WINDOW_SIZE. */
-static int map_phys(uint64_t phys, uint32_t size) {
-    if ((phys & 0xFFF) != 0 || size == 0 || size > PHYS_MAP_WINDOW_SIZE) {
-        return -1;
+/* Map the firmware table bytes [phys, phys+size) and return a pointer to the byte at phys,
+ * or NULL when the kernel refuses. The mapping stays for the life of the process, and a
+ * range inside one already mapped resolves to it, so the same table may be mapped twice
+ * (header first, then its full length) at no extra cost (abi/hostcalls.yaml `phys_map`). */
+static const uint8_t* map_phys(uint64_t phys, uint32_t size) {
+    int32_t off = wasmos_phys_map(
+        (int32_t)(uint32_t)(phys & 0xFFFFFFFFu), (int32_t)(uint32_t)(phys >> 32), (int32_t)size);
+    if (off < 0) {
+        return 0;
     }
-    uint32_t aligned_size = (size + 0xFFFu) & ~0xFFFu;
-    if (aligned_size > PHYS_MAP_WINDOW_SIZE) {
-        return -1;
+    return (const uint8_t*)(uintptr_t)(uint32_t)off;
+}
+
+/* Map a whole ACPI table: its header, then its full declared length. NULL when either map
+ * is refused or the length is shorter than the header. */
+static const acpi_sdt_hdr_t* map_table(uint64_t phys) {
+    const acpi_sdt_hdr_t* hdr =
+        (const acpi_sdt_hdr_t*)map_phys(phys, (uint32_t)sizeof(acpi_sdt_hdr_t));
+    if (!hdr || hdr->length < sizeof(acpi_sdt_hdr_t)) {
+        return 0;
     }
-    int32_t lo = (int32_t)(uint32_t)(phys & 0xFFFFFFFFu);
-    int32_t hi = (int32_t)(uint32_t)(phys >> 32);
-    int32_t off = addr_cast(int32_t, g_map_window);
-    return wasmos_phys_map(lo, hi, (int32_t)aligned_size, off);
+    return (const acpi_sdt_hdr_t*)map_phys(phys, hdr->length);
 }
 
 /* ---- Recognised device table -------------------------------------------- */
@@ -104,7 +104,8 @@ static const acpi_id_entry_t acpi_id_table[] = {
  * published. */
 #define ACPI_MAX_PUBLISHED_DEVICES 32u
 
-/* RSDT/XSDT entries walked; firmware tables list a few dozen at most. */
+/* RSDT/XSDT entries walked; firmware tables list a few dozen at most. Each one
+ * mapped holds a kernel phys_map window for the life of this service. */
 #define ACPI_MAX_SDT_ENTRIES 64u
 
 static const acpi_id_entry_t* acpi_lookup(const char* hid) {
@@ -430,8 +431,8 @@ static uint32_t scan_devices(const uint8_t* aml, uint32_t aml_len, const acpi_co
 /* ---- Main entry point ---------------------------------------------------- */
 
 /* Service entry point called by PM.
- * Walks RSDP -> RSDT/XSDT -> FACP -> DSDT, maps each physical table into
- * g_map_window via wasmos_phys_map, notes the SPCR console on the way, then
+ * Walks RSDP -> RSDT/XSDT -> FACP -> DSDT, mapping each table with wasmos_phys_map,
+ * notes the SPCR console on the way, then
  * publishes the devices scan_devices finds in the AML. Sends
  * DEVMGR_ACPI_SCAN_DONE to device-manager when finished (success or failure) so
  * it never stalls waiting for the scan, signals readiness to PM, and then stays
@@ -482,64 +483,38 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     int use_xsdt = (rsdp.revision >= 2 && rsdp.xsdt_address != 0);
     uint64_t sdt_phys = use_xsdt ? rsdp.xsdt_address : (uint64_t)rsdp.rsdt_address;
 
-    /* Map first page of RSDT/XSDT to read its header. */
-    if (map_phys(sdt_phys & ~(uint64_t)0xFFF, 4096) != 0) {
+    const acpi_sdt_hdr_t* sdt_hdr = map_table(sdt_phys);
+    if (!sdt_hdr) {
         (void)printf("[acpi-bus] RSDT/XSDT map failed\n");
         goto done;
     }
-    uint32_t page_off = (uint32_t)(sdt_phys & 0xFFF);
-    const acpi_sdt_hdr_t* sdt_hdr = (const acpi_sdt_hdr_t*)(g_map_window + page_off);
-    uint32_t sdt_len = sdt_hdr->length;
-    if (sdt_len < 36u || sdt_len > PHYS_MAP_WINDOW_SIZE - page_off) {
-        (void)printf("[acpi-bus] RSDT/XSDT length invalid\n");
-        goto done;
-    }
 
-    /* Map full RSDT/XSDT if it spans beyond the first page. */
-    if (sdt_len + page_off > 4096u) {
-        uint32_t full_size = (sdt_len + page_off + 0xFFFu) & ~0xFFFu;
-        if (map_phys(sdt_phys & ~(uint64_t)0xFFF, full_size) != 0) {
-            (void)printf("[acpi-bus] RSDT/XSDT full map failed\n");
-            goto done;
-        }
-        sdt_hdr = (const acpi_sdt_hdr_t*)(g_map_window + page_off);
-    }
-
-    /* Walk RSDT/XSDT entries for FACP and SPCR. The entry list is copied out
-     * first: peeking at each table remaps g_map_window, which holds the list. */
+    /* Walk RSDT/XSDT entries for FACP and SPCR. */
     uint32_t entry_size = use_xsdt ? 8u : 4u;
-    uint32_t n_entries = (sdt_len - 36u) / entry_size;
+    uint32_t n_entries = (sdt_hdr->length - 36u) / entry_size;
     const uint8_t* entries = (const uint8_t*)sdt_hdr + 36u;
-    uint64_t table_phys[ACPI_MAX_SDT_ENTRIES];
     if (n_entries > ACPI_MAX_SDT_ENTRIES) {
         n_entries = ACPI_MAX_SDT_ENTRIES;
     }
+    uint64_t facp_phys = 0;
     for (uint32_t i = 0; i < n_entries; i++) {
-        table_phys[i] = 0;
+        uint64_t ep = 0;
         if (use_xsdt) {
-            __builtin_memcpy(&table_phys[i], entries + i * 8u, 8u);
+            __builtin_memcpy(&ep, entries + i * 8u, 8u);
         } else {
             uint32_t ep32 = 0;
             __builtin_memcpy(&ep32, entries + i * 4u, 4u);
-            table_phys[i] = (uint64_t)ep32;
+            ep = (uint64_t)ep32;
         }
-    }
-    uint64_t facp_phys = 0;
-    for (uint32_t i = 0; i < n_entries; i++) {
-        uint64_t ep = table_phys[i];
-        /* Peek at the table signature: map one page to check. */
-        uint64_t ep_page = ep & ~(uint64_t)0xFFF;
-        uint32_t ep_off = (uint32_t)(ep & 0xFFF);
-        if (map_phys(ep_page, 4096) != 0) {
+        const acpi_sdt_hdr_t* hdr = map_table(ep);
+        if (!hdr) {
             continue;
         }
-        const acpi_sdt_hdr_t* hdr = (const acpi_sdt_hdr_t*)(g_map_window + ep_off);
         if (hdr->signature[0] == 'F' && hdr->signature[1] == 'A' && hdr->signature[2] == 'C' &&
             hdr->signature[3] == 'P') {
             facp_phys = ep;
         } else if (hdr->signature[0] == 'S' && hdr->signature[1] == 'P' &&
-                   hdr->signature[2] == 'C' && hdr->signature[3] == 'R' && hdr->length >= 52u &&
-                   ep_off + 52u <= 4096u) {
+                   hdr->signature[2] == 'C' && hdr->signature[3] == 'R' && hdr->length >= 52u) {
             /* SPCR: the console's Generic Address Structure at offset 40 --
              * address space at +0, 64-bit address at +4. */
             const uint8_t* gas = (const uint8_t*)hdr + 40u;
@@ -553,15 +528,13 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         goto done;
     }
 
-    /* Map FACP to extract DSDT pointer. */
-    uint64_t facp_page = facp_phys & ~(uint64_t)0xFFF;
-    uint32_t facp_off = (uint32_t)(facp_phys & 0xFFF);
-    if (map_phys(facp_page, 4096) != 0) {
+    /* FACP holds the DSDT pointer: X_DSDT at 140 when present, else DSDT at 40. */
+    const acpi_sdt_hdr_t* facp_hdr = map_table(facp_phys);
+    if (!facp_hdr) {
         (void)printf("[acpi-bus] FACP map failed\n");
         goto done;
     }
-    const uint8_t* facp = g_map_window + facp_off;
-    const acpi_sdt_hdr_t* facp_hdr = (const acpi_sdt_hdr_t*)facp;
+    const uint8_t* facp = (const uint8_t*)facp_hdr;
     uint64_t dsdt_phys = 0;
     if (facp_hdr->length >= 148u) {
         __builtin_memcpy(&dsdt_phys, facp + 140u, 8u);
@@ -576,39 +549,21 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         goto done;
     }
 
-    /* Map DSDT header (first page) to get length. */
-    uint64_t dsdt_page = dsdt_phys & ~(uint64_t)0xFFF;
-    uint32_t dsdt_off = (uint32_t)(dsdt_phys & 0xFFF);
-    if (map_phys(dsdt_page, 4096) != 0) {
+    const acpi_sdt_hdr_t* dsdt_hdr = map_table(dsdt_phys);
+    if (!dsdt_hdr) {
         (void)printf("[acpi-bus] DSDT map failed\n");
         goto done;
     }
-    const acpi_sdt_hdr_t* dsdt_hdr = (const acpi_sdt_hdr_t*)(g_map_window + dsdt_off);
     if (dsdt_hdr->signature[0] != 'D' || dsdt_hdr->signature[1] != 'S' ||
         dsdt_hdr->signature[2] != 'D' || dsdt_hdr->signature[3] != 'T') {
         (void)printf("[acpi-bus] DSDT signature mismatch\n");
         goto done;
     }
     uint32_t dsdt_len = dsdt_hdr->length;
-    if (dsdt_len < 36u || dsdt_len > PHYS_MAP_WINDOW_SIZE) {
-        (void)printf("[acpi-bus] DSDT length out of range\n");
-        goto done;
-    }
     (void)printf("[acpi-bus] DSDT %u bytes\n", (unsigned)dsdt_len);
 
-    /* Map the full DSDT. */
-    uint32_t dsdt_map_size = (dsdt_len + dsdt_off + 0xFFFu) & ~0xFFFu;
-    if (dsdt_map_size > PHYS_MAP_WINDOW_SIZE) {
-        (void)printf("[acpi-bus] DSDT too large for window\n");
-        goto done;
-    }
-    if (map_phys(dsdt_page, dsdt_map_size) != 0) {
-        (void)printf("[acpi-bus] DSDT full map failed\n");
-        goto done;
-    }
-
     /* AML starts after the 36-byte ACPI header. */
-    const uint8_t* aml = g_map_window + dsdt_off + 36u;
+    const uint8_t* aml = (const uint8_t*)dsdt_hdr + 36u;
     uint32_t aml_len = dsdt_len - 36u;
     (void)scan_devices(aml, aml_len, &console, devmgr_ep, src_ep, desc_bid, &req_id);
 

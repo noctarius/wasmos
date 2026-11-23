@@ -72,7 +72,7 @@
     LINK("wasmos", "dma_map_borrow", stub_i4) , \
     LINK("wasmos", "dma_sync_borrow", stub_i4) , \
     LINK("wasmos", "dma_unmap_borrow", stub_i1) , \
-    LINK("wasmos", "phys_map", stub_i4) , \
+    LINK("wasmos", "phys_map", stub_i3) , \
     LINK("wasmos", "proc_info", stub_i3) , \
     LINK("wasmos", "proc_info_ex", stub_i4) , \
     LINK("wasmos", "proc_info_stats", stub_i5) , \

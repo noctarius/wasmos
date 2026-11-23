@@ -59,6 +59,7 @@ extern "C" {
 #include "policy.h"
 #include "linmem_slots.h"
 #include "paging.h"
+#include "phys_map.h"
 #include "framebuffer.h"
 #include "system_control.h"
 #include "wasm_driver.h"
@@ -115,13 +116,6 @@ static WarpCallContext* ctx_find(uint32_t pid) {
     }
     return static_cast<WarpCallContext*>(hashmap_get(&g_ctx_map, pid));
 }
-
-/* Page-aligned scratch page used by warp_phys_map for ACPI/physical memory
- * reads.  ACPI physical pages are not necessarily in the kernel direct map
- * (they are EfiACPIReclaimMemory regions), so phys|HIGHER_HALF is not usable
- * directly.  This kernel BSS page (which IS in the page tables) is remapped to
- * the target physical page, the data copied, then the mapping restored. */
-static uint8_t g_phys_scratch[4096] __attribute__((aligned(4096)));
 
 /* Kernel-side pointer for the guest linear-memory range [offset, offset+size).
  * `offset` is a wasm32 offset, never a host address; the returned pointer is a KERNEL
@@ -1337,60 +1331,6 @@ static uint32_t warp_initfs_entry_copy(uint32_t index, uint32_t out_off, uint32_
 }
 
 // ---------------------------------------------------------------------------
-// Physical memory mapping into WASM linear memory
-// ---------------------------------------------------------------------------
-
-static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size,
-                              uint32_t wasm_offset, void* ctx_) {
-    auto* ctx = warp_call_ctx(ctx_);
-    if (!size)
-        return (uint32_t)WASMOS_INVAL;
-    if ((size & 0xFFF) || (wasm_offset & 0xFFF))
-        return (uint32_t)WASMOS_ERR_KERNEL_UNALIGNED;
-    uint64_t phys = ((uint64_t)phys_hi << 32) | (uint64_t)phys_lo;
-    if (!phys)
-        return (uint32_t)WASMOS_INVAL;
-    uint8_t* lmem = warp_linear_mem_window(ctx, wasm_offset, size);
-    if (!lmem)
-        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    /* Copy, not remap.  WARP's host linear-memory base sits at a sub-page offset
-     * inside its allocation (AllocHeader + basedata precede it), so base +
-     * wasm_offset is not page-aligned even for a 4 KiB-aligned wasm_offset, and
-     * paging_map_4k needs aligned VAs — a misaligned remap would read from the
-     * wrong physical offset and clobber WARP's basedata metadata.
-     *
-     * The source is not read through the direct map either: the only caller
-     * (acpi_bus) reads EfiACPIReclaimMemory pages, which need not be inside the
-     * kernel's 512 MiB higher-half window.  Each source page is therefore mapped
-     * onto the page-aligned kernel scratch page, copied out, and the scratch page
-     * restored to its own frame.  g_phys_scratch is shared, and this sequence is
-     * unsynchronised: it is safe only under the WARP single-CPU invariant
-     * (warp/shim.cpp).
-     *
-     * The destination range is committed FIRST.  probe() calls
-     * ActiveMemoryManager::ensureLinearSize(), which zero-fills everything
-     * between the old and the new usable size; a probe that fired after the copy
-     * would erase the data.  Probing the last byte commits the whole range, and
-     * later probes inside it short-circuit (offset < usableLinMemBytes_). */
-    ctx->module->getLinearMemoryRegion(wasm_offset + size - 1, 1);
-    /* Re-fetch lmem after the probe (ensureCapacityForLinearSize inside
-     * ensureLinearSize may have called syncBasedataStart, changing the base). */
-    lmem = ctx->module->getLinearMemoryRegion(0, 0);
-    if (!lmem)
-        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    lmem += wasm_offset;
-
-    uint64_t scratch_va = addr_cast(uint64_t, g_phys_scratch);
-    uint64_t scratch_phys = scratch_va - KERNEL_HIGHER_HALF_BASE;
-    for (uint32_t off = 0; off < size; off += 4096) {
-        paging_map_4k(scratch_va, phys + off, 3ULL);
-        __builtin_memcpy(lmem + off, g_phys_scratch, 4096);
-        paging_map_4k(scratch_va, scratch_phys, 3ULL);
-    }
-    return 0;
-}
-
-// ---------------------------------------------------------------------------
 // Environment variables. The store itself is shared with the other runtime
 // (src/kernel/kenv.c); what stays here is the guest-memory plumbing.
 // ---------------------------------------------------------------------------
@@ -1979,7 +1919,10 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
      * extended. That avoids the Could_not_extend_linear_memory fault seen when
      * gfx_smoke/menu_bar perform their first libui buffer map.
      * TODO(warp-overlay-place): reserve windows against actual heap growth
-     * instead of relying on a fixed post-active guard band. */
+     * instead of relying on a fixed post-active guard band.
+     * FIXME(warp-overlay-place): the scan is not bounded by the module's
+     * current wasm size, so a window past it makes the commit probe below throw,
+     * and an uncaught C++ exception panics the kernel (docs/TASKS.md). */
     /* Use the WARP-configured heap limit rather than the WASM binary's
      * declared page count.  Zig freestanding binaries declare only the
      * minimum memory they need statically (often 1 page = 64 KB) regardless
@@ -2314,6 +2257,94 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
 }
 
 // ---------------------------------------------------------------------------
+// Firmware table mapping (phys_map)
+// ---------------------------------------------------------------------------
+
+/* Unmap a phys_map window from the linear-memory slot.  warp_linmem_place_phys freed the
+ * slot's own frames when it installed the firmware's, so a page left mapped would be freed
+ * into the allocator by the slot decommit at teardown.  Runs from warp_release_pid before
+ * warp_heap_release decommits; the slot VA lies in the kernel half, so the current root
+ * reaches it. */
+static void warp_phys_map_unmap_slot(const phys_map_window_t* window) {
+    if (!window->slot_va)
+        return;
+    for (uint32_t i = 0; i < window->pages; ++i)
+        (void)paging_unmap_4k(window->slot_va + (uint64_t)i * 0x1000ULL);
+}
+
+/* Undo a placement the window table could not record: unmap the slot pages, commit a fresh
+ * frame under each (linear memory still counts them as committed), republish the ring-3
+ * view, and drop the overlap reservation. */
+static void warp_phys_map_unplace(WarpCallContext* ctx, const phys_map_window_t* window) {
+    warp_phys_map_unmap_slot(window);
+    for (uint32_t i = 0; i < window->pages; ++i) {
+        uint64_t va = window->slot_va + (uint64_t)i * 0x1000ULL;
+        if (linmem_slot_commit(va, 0, 1) != 0)
+            klog_write("[warp] phys_map unplace: slot page re-commit failed\n");
+    }
+#ifdef WASMOS_WASM_RUNTIME_WARP
+    uint8_t* linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
+    if (linmem_base)
+        (void)warp_ring3_sync_linmem_user_window(linmem_base);
+#endif
+    warp_overlay_map_untrack(ctx->pid, WARP_REGION_TRACK_ID(window->offset));
+}
+
+/* hostcalls.yaml `phys_map`: map the firmware ACPI table memory holding [phys, phys+size)
+ * into the caller's linear memory and return the wasm32 offset of the byte at `phys`.  The
+ * window covers the whole pages the range touches and is placed by warp_linmem_place_phys
+ * in the pinned arena; it is a page remap, not a copy.  A range inside a window this
+ * process already holds resolves to it (phys_map.h).  Linear memory must be slot-backed:
+ * a remap of direct-mapped linear memory would repoint the kernel's direct map of a RAM
+ * frame with nothing to restore it.  Requires mmio.map.  Returns the offset, else
+ * WASMOS_INVAL, WASMOS_ERR_KERNEL_NO_CALLER, WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
+ * WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE, WASMOS_ERR_KERNEL_NO_WINDOW, or
+ * WASMOS_ERR_KERNEL_TOO_LARGE when the offset does not fit the signed result. */
+static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    uint64_t phys = ((uint64_t)phys_hi << 32) | (uint64_t)phys_lo;
+    uint64_t page = 0;
+    uint32_t pages = 0;
+    if ((int32_t)size <= 0 || phys_map_span(phys, size, &page, &pages) != 0)
+        return (uint32_t)WASMOS_INVAL;
+    uint32_t context_id = 0;
+    if (!ctx || warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    if (warp_require_mmio_capability(context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    uint64_t region_bytes = (uint64_t)pages * 0x1000ULL;
+    if (!pfa_range_is_firmware_table(page, region_bytes))
+        return (uint32_t)WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE;
+
+    uint32_t held = 0;
+    if (!phys_map_window_find(ctx->pid, phys, size, &held)) {
+        uint8_t* linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
+        if (!linmem_base || !linmem_slot_contains(addr_cast(uint64_t, linmem_base)))
+            return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
+        int64_t placed = warp_linmem_place_phys(ctx, page, pages, (uint32_t)region_bytes);
+        if (placed < 0)
+            return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
+        uint32_t off = (uint32_t)placed;
+        warp_overlay_map_track(ctx->pid, WARP_REGION_TRACK_ID(off), off, (uint32_t)region_bytes);
+        /* Re-fetch: the placement's commit probe may have moved basedata. */
+        linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
+        phys_map_window_t window = {.pid = ctx->pid,
+                                    .offset = off,
+                                    .phys = page,
+                                    .pages = pages,
+                                    .slot_va = addr_cast(uint64_t, linmem_base) + off};
+        if (phys_map_window_record(&window) != 0) {
+            warp_phys_map_unplace(ctx, &window);
+            return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
+        }
+        held = off + (uint32_t)(phys - page);
+    }
+    if (held > 0x7FFFFFFFu)
+        return (uint32_t)WASMOS_ERR_KERNEL_TOO_LARGE;
+    return held;
+}
+
+// ---------------------------------------------------------------------------
 // IRQ routing
 // ---------------------------------------------------------------------------
 
@@ -2502,7 +2533,10 @@ static uint32_t warp_framebuffer_info(uint32_t out_off, uint32_t len, void* ctx_
  * address must land on a page boundary — the caller picks `wasm_off`, so a misfit is
  * WASMOS_ERR_KERNEL_UNALIGNED rather than a relocation.  Requires the MMIO-map
  * capability.  Returns 0 on success, otherwise a negative code.  The remap replaces the
- * previous backing of that window; nothing restores it. */
+ * previous backing of that window; nothing restores it.
+ * FIXME(framebuffer-map-reap): the framebuffer's frames stay mapped in the linear-memory
+ * slot and are not recorded, so the slot decommit at reap frees them into the allocator,
+ * and the slot frames replaced here leak (docs/TASKS.md). */
 static uint32_t warp_framebuffer_map(uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)size <= 0)
@@ -2967,6 +3001,10 @@ extern "C" void warp_release_pid(uint32_t pid) {
         }
     }
     (void)hashmap_remove(&g_block_map, pid);
+    /* phys_map windows map firmware frames into the linear-memory slot; unmap them
+     * before warp_heap_release decommits the slot, which frees every frame still
+     * mapped there. */
+    phys_map_window_release_pid(pid, warp_phys_map_unmap_slot);
     /* Per-pid WARP heap config (warp/shim.cpp). */
     warp_heap_release(pid);
 }

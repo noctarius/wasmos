@@ -12,11 +12,15 @@ stack_pages = 64
 heap_pages = 128
 
 # Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
-# Room for a parsed ACPI table while it is walked.
+# The memory covers the phys_map windows the tables are mapped into: the kernel
+# places them in the pinned arena above the module's data
+# (docs/architecture/06-memory-management.md), under WARP no lower than 2 MiB and
+# only inside the module's current wasm size, so initial_memory must reach past
+# that and not only max_memory.
 [link]
 stack_size = 16384
-initial_memory = 131072
-max_memory = 131072
+initial_memory = 4194304
+max_memory = 4194304
 
 [deps]
 needs = ["devmgr.inv"]

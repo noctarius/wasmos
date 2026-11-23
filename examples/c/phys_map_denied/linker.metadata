@@ -1,0 +1,16 @@
+version = 1
+
+[package]
+name = "phys-map-denied"
+entry = "wasmos_main"
+kind = "app"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+# No mmio.map: the fixture exists to call phys_map without it.
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

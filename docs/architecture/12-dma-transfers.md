@@ -518,9 +518,11 @@ hostcall:
   `device_addr` contract hold).
 - `pfa_pin_pages(base, pages)` (`src/kernel/memory.c`) — pins the run so it is
   never reused or relocated.
-- `wasmos_phys_map(phys, size, wasm_offset)` (`src/kernel/wasm3/link.c`,
-  `src/kernel/warp/link.cpp`) — maps the region into the driver's linear memory
-  so it can read/write descriptors.
+- `wasmos_phys_map(phys_lo, phys_hi, size)` (`src/kernel/wasm3/link.c`,
+  `src/kernel/warp/link.cpp`) — maps firmware ACPI table memory into the
+  caller's linear memory at an offset the kernel picks in the pinned arena;
+  gated by `mmio.map`, and refuses RAM and device memory. It is not a DMA
+  primitive.
 
 The surface is a thin allocator that composes these under the `CAP_DMA_BUFFER`
 gate plus the driver's approved DMA window, returning both a linmem pointer and
@@ -544,8 +546,8 @@ Design notes:
 - **Region object, not just a buffer.** The handle should carry
   `{ backing: alloc | mmio, phys, pages, pinned, cache_policy, dma_capable,
   shareable }` so the same abstraction covers allocated DMA regions,
-  fixed-MMIO ranges (framebuffer, mapped via `phys_map` on a firmware-given
-  address rather than `pfa_alloc`), and shared regions.
+  fixed-MMIO ranges (framebuffer, mapped via `framebuffer_map` on a
+  firmware-given address rather than `pfa_alloc`), and shared regions.
 - **Cache policy is a first-class attribute.** DMA rings on x86 are cached and
   hardware-coherent (write-back, only compiler/memory barriers needed);
   framebuffers want write-combining. A single allocator must set the correct

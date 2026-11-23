@@ -12,7 +12,7 @@
 #include "process_manager.h"
 #include "memory.h"
 #include "paging.h"
-#include "phys_alias.h"
+#include "phys_map.h"
 #include "serial.h"
 #include "timer.h"
 #include "link.h"
@@ -343,8 +343,9 @@ static uint8_t wasm_linear_window_overlaps(uint32_t pid, uint32_t offset, uint32
            wasm_dma_region_map_overlaps(pid, offset, size);
 }
 
-/* Reclaim every per-pid side-table resource of a reaped process: the driver DMA regions
- * (whose pages are returned to the PFA), the xfer-buffer overlay tracking entries, the
+/* Reclaim every per-pid side-table resource of a reaped process: the phys_map window
+ * records, the driver DMA regions (whose pages are returned to the PFA), the xfer-buffer
+ * overlay tracking entries, the
  * IPC last-message and FS-peer slots, and the per-process block buffer (also returned to
  * the PFA).  The page-table mappings themselves are torn down with the address space, so
  * nothing is unmapped here.  A pid of 0 is ignored.  Safe to call for a pid that owns none
@@ -357,6 +358,9 @@ void wasm3_release_pid(uint32_t pid) {
     if (pid == 0) {
         return;
     }
+    /* phys_map windows live only in the process's own address space, which is
+     * torn down with it; the records are all that is left to drop. */
+    phys_map_window_release_pid(pid, 0);
     for (uint32_t i = 0; i < WASM_DMA_REGION_MAP_SLOTS; ++i) {
         wasm_dma_region_map_t* slot = &g_wasm_dma_region_maps[i];
         if (!slot->valid || slot->pid != pid) {
@@ -2230,8 +2234,8 @@ m3ApiRawFunction(wasmos_framebuffer_map) {
  * `pages` is 1..1024 4 KiB pages and `cache_policy` must be WASMOS_REGION_CACHE_WB.
  * out_phys_off is a wasm32 linear-memory offset at which the kernel stores the u64 physical
  * base; it is bounds-checked before the placement that may grow linear memory, which only
- * raises the bound.  Unlike wasmos_phys_map this is a real page remap, so guest writes reach
- * the exact pages the device DMAs.  Requires POLICY_ACTION_DMA_BUFFER, an approved DMA window
+ * raises the bound.  It is a page remap, so guest writes reach the exact pages the device
+ * DMAs.  Requires POLICY_ACTION_DMA_BUFFER, an approved DMA window
  * covering the allocation, and room in the caller's declared page budget, which the successful
  * path charges.  Returns the wasm32 offset of the mapped region (>= 0), else a negative
  * WASMOS_ERR_DMA_* code (INVALID, DENY, UNAVAILABLE, RANGE); every failure after the
@@ -2322,49 +2326,28 @@ m3ApiRawFunction(wasmos_region_alloc) {
     m3ApiReturn(off32);
 }
 
-/* Despite the name this COPIES, it does not map: `size` bytes are read from the physical
- * range through the kernel higher-half alias and memcpy'd into the caller's linear memory at
- * `wasm_offset` (right for snapshotting ACPI tables, useless for programming a device -- see
- * wasmos_mmio_write32).  phys_lo/phys_hi form the 64-bit source address; `size` and
- * `wasm_offset` must be multiples of 4096, and [wasm_offset, wasm_offset+size) must lie inside
- * linear memory.  The source range must lie inside the alias window
- * (KERNEL_HIGHER_HALF_WINDOW_BYTES) with every page mapped there -- RAM and the firmware tables
- * in it, not a hole -- so the mmio.map capability this requires buys reading any physical
- * address the alias reaches and nothing else.  Returns 0 on success, WASMOS_INVAL,
- * WASMOS_ERR_KERNEL_UNALIGNED, WASMOS_ERR_KERNEL_NO_WINDOW, WASMOS_ERR_KERNEL_NO_CALLER,
- * WASMOS_ERR_KERNEL_NOT_AUTHORIZED, or WASMOS_ERR_KERNEL_PHYS_UNMAPPED. */
+/* Map the firmware ACPI table memory holding [phys, phys+size) into the caller's linear
+ * memory and return the wasm32 offset of the byte at `phys` (abi/hostcalls.yaml `phys_map`).
+ * phys_lo/phys_hi form the 64-bit address; neither it nor `size` need be page-aligned.  The
+ * window covers the whole pages the range touches, is placed in the pinned arena above the
+ * module's data (wasm_linmem_place_overlay), and is a remap in the process's own address
+ * space: the kernel's linear-memory slot alias keeps its own frames, so teardown frees only
+ * those and never the firmware's.  The window is reserved in the DMA-region table with no
+ * physical backing, so reap releases nothing for it, and recorded in phys_map.h's table so a
+ * range inside it resolves to it instead of mapping again.  Requires POLICY_ACTION_MMIO_MAP.
+ * Returns the offset (>= 0), else WASMOS_INVAL, WASMOS_ERR_KERNEL_NO_CALLER,
+ * WASMOS_ERR_KERNEL_NOT_AUTHORIZED, WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE,
+ * WASMOS_ERR_KERNEL_NO_WINDOW, WASMOS_ERR_KERNEL_MAP_FAILED, or WASMOS_ERR_KERNEL_TOO_LARGE
+ * when the offset does not fit the signed result. */
 m3ApiRawFunction(wasmos_phys_map) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, phys_lo) m3ApiGetArg(int32_t, phys_hi)
-        m3ApiGetArg(int32_t, size) m3ApiGetArg(int32_t, wasm_offset)
+        m3ApiGetArg(int32_t, size)
 
-            if (size <= 0) {
+            uint64_t phys = ((uint64_t)(uint32_t)phys_hi << 32) | (uint64_t)(uint32_t)phys_lo;
+    uint64_t page = 0;
+    uint32_t pages = 0;
+    if (size <= 0 || phys_map_span(phys, (uint64_t)(uint32_t)size, &page, &pages) != 0) {
         m3ApiReturn(WASMOS_INVAL);
-    }
-    if ((size & 0xFFF) != 0) {
-        m3ApiReturn(WASMOS_ERR_KERNEL_UNALIGNED);
-    }
-    if (wasm_offset < 0) {
-        m3ApiReturn(WASMOS_INVAL);
-    }
-    if ((wasm_offset & 0xFFF) != 0) {
-        m3ApiReturn(WASMOS_ERR_KERNEL_UNALIGNED);
-    }
-
-    uint64_t phys = ((uint64_t)(uint32_t)phys_hi << 32) | (uint64_t)(uint32_t)phys_lo;
-    if (phys == 0) {
-        m3ApiReturn(WASMOS_INVAL);
-    }
-
-    uint32_t off32 = (uint32_t)wasm_offset;
-    uint32_t size32 = (uint32_t)size;
-
-    uint32_t mem_size = 0;
-    uint8_t* mem_base = m3_GetMemory(runtime, &mem_size, 0);
-    if (!mem_base || mem_size == 0) {
-        m3ApiReturn(WASMOS_ERR_KERNEL_NO_WINDOW);
-    }
-    if ((uint64_t)off32 + (uint64_t)size32 > (uint64_t)mem_size) {
-        m3ApiReturn(WASMOS_ERR_KERNEL_NO_WINDOW);
     }
 
     process_t* proc = process_get(process_current_pid());
@@ -2374,24 +2357,43 @@ m3ApiRawFunction(wasmos_phys_map) {
     if (require_mmio_capability(proc->context_id) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
     }
-
-    /* The alias is phys | KERNEL_HIGHER_HALF_BASE, which names the physical page only
-     * inside the window; a page the window does not map would fault the memcpy below. */
-    if (!phys_alias_range_mapped(phys,
-                                 size32,
-                                 KERNEL_HIGHER_HALF_BASE,
-                                 KERNEL_HIGHER_HALF_WINDOW_BYTES,
-                                 paging_virt_to_phys)) {
-        m3ApiReturn(WASMOS_ERR_KERNEL_PHYS_UNMAPPED);
+    const uint64_t region_bytes = (uint64_t)pages * 0x1000ULL;
+    if (!pfa_range_is_firmware_table(page, region_bytes)) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE);
     }
 
-    /* Copy, not remap.  The source is read through the kernel higher-half alias
-     * of the physical range; the destination is the interpreter's own linear-
-     * memory pointer, which is a VA in the owner's user window (wasm3/shim.c)
-     * and so is only valid while the owner address space is active — which it is,
-     * because the guest making this call is running. */
-    memcpy(mem_base + off32, ptr_cast(void, (phys | KERNEL_HIGHER_HALF_BASE)), (size_t)size32);
-    m3ApiReturn(0);
+    uint32_t held = 0;
+    if (!phys_map_window_find(proc->pid, phys, (uint64_t)(uint32_t)size, &held)) {
+        uint32_t placed_off = 0;
+        if (wasm_linmem_place_overlay(runtime, proc, region_bytes, &placed_off) != WASMOS_OK) {
+            m3ApiReturn(WASMOS_ERR_KERNEL_NO_WINDOW);
+        }
+        uint64_t virt = 0;
+        if (wasm_user_va_from_offset(proc->context_id, placed_off, (uint32_t)region_bytes, &virt) !=
+                0 ||
+            (virt & 0xFFFULL) != 0) {
+            m3ApiReturn(WASMOS_ERR_KERNEL_NO_WINDOW);
+        }
+        if (mm_context_map_physical(proc->context_id,
+                                    virt,
+                                    page,
+                                    region_bytes,
+                                    MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
+                                        MEM_REGION_FLAG_USER) != 0) {
+            m3ApiReturn(WASMOS_ERR_KERNEL_MAP_FAILED);
+        }
+        wasm_dma_region_map_track(proc->pid, placed_off, (uint32_t)region_bytes, 0, 0);
+        phys_map_window_t window = {
+            .pid = proc->pid, .offset = placed_off, .phys = page, .pages = pages, .slot_va = 0};
+        if (phys_map_window_record(&window) != 0) {
+            m3ApiReturn(WASMOS_ERR_KERNEL_NO_WINDOW);
+        }
+        held = placed_off + (uint32_t)(phys - page);
+    }
+    if (held > 0x7FFFFFFFu) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_TOO_LARGE);
+    }
+    m3ApiReturn((int32_t)held);
 }
 
 /* Register the caller's BUFFER_KIND_TRANSFER xfer-buffer (id) as the kernel klog ring.  The

@@ -54,6 +54,14 @@ Source: `architecture/06-memory-management.md`,
 `architecture/11-ring3-isolation-and-separation.md`, and
 `architecture/28-smp.md`.
 
+- [ ] [BUG][P2] `wasmos_phys_map` (`src/kernel/wasm3/link.c`) copies from
+  `phys | KERNEL_HIGHER_HALF_BASE` without checking that the range is inside the
+  higher-half alias, so a caller holding `mmio.map` that passes an address
+  beyond it panics the kernel (`#PF` in `memcpy`) instead of getting an error.
+  Seen when acpi-bus read a stale XSDT entry (`cr2=0xffffffffafafa000`, phys
+  `0x2fafa000` on a 512 MiB x86_64 guest). It must refuse a range outside the
+  alias with a packed `WASMOS_ERR_KERNEL_*` code; the WARP counterpart needs
+  the same check.
 - [ ] [ENHANCEMENT][P2] Cross-CPU TLB invalidation. `paging_invalidate` acts on
   the calling CPU only (`paging.h`, `arch/x86_64/paging.c`), so a mapping
   removed or changed on one CPU stays live on every other CPU that cached it,
@@ -2192,20 +2200,10 @@ Other graphics/VT/UI:
 
 The aarch64 port targets QEMU `virt` (GICv3 + ITS, PCIe ECAM, virtio) under
 HVF on Apple Silicon or TCG; bare-metal Apple Silicon is out of scope. It boots
-to the CLI on one core under wasm3; `run-qemu-test` stops at `halt` because no
-user-space console input exists yet. Read `docs/architecture/04-boot-and-handoff.md`,
+to the CLI on one core under wasm3, with console input through the PL011
+driver, and passes `run-qemu-test`. Read `docs/architecture/04-boot-and-handoff.md`,
 `06-memory-management.md` and `10-capability-and-policy.md` first.
 
-- [ ] [FEATURE][P1] PL011 console driver in user space, so the arm64 console
-  takes input and `run-qemu-test` passes (`halt` via PSCI). acpi-bus parses the
-  string `_HID` `ARMH0011` with its `_CRS` Memory32Fixed window and Extended
-  Interrupt (GSIV), published as a descriptor (the packed
-  `DEVMGR_PUBLISH_DEVICE` cannot carry an MMIO window or a GSIV above 255;
-  acpi-bus is its last user, so it retires); device-manager widens `irq_hint`
-  past 8 bits and grants the window as a region; the serial driver moves to
-  `io_region_in8`/`io_region_out8` with a 16550 or PL011 register layout chosen
-  by a spawn argument. It is also the first driver to route a GIC SPI, so it is
-  what exercises `irq_aarch64.c`'s SPI routing.
 - [ ] [BUG][P2] device-manager grants the x86 legacy interrupt default
   (`caps_irqs_default`, lines 14 and 15) to a PCI driver whose device record
   has no interrupt hint, on arm64 too, where those numbers are SGIs and name

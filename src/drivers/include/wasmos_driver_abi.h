@@ -1139,6 +1139,44 @@ typedef struct __attribute__((packed)) {
  * model does not fit. */
 #define WASMOS_REGION_LIMIT 4u
 
+/* One device acpi-bus found in the firmware's ACPI namespace, published with
+ * DEVMGR_PUBLISH_ACPI_DEVICE_DESC. A descriptor rather than argument words
+ * because a device is named by a string _HID and its resources are several
+ * register windows and an interrupt identifier (a GIC GSIV reaches 1019), which
+ * four words cannot carry.
+ *
+ * class_code/subclass/prog_if are the PCI class the device presents to rules
+ * (acpi-bus maps each recognised _HID onto one), so a rule matches a 16550 and
+ * a PL011 alike as a serial controller and the driver tells them apart by hid.
+ * windows[] are the device's _CRS register windows in the order the firmware
+ * lists them, as region grants, so device-manager grants them in that order and
+ * a driver addresses them by that index (io_region_* host calls); an MMIO
+ * window is as the firmware gives it and is page-rounded when granted.
+ * Extensible the way the PCI descriptor is: bump the version and append
+ * fields. */
+#define WASMOS_ACPI_DEVICE_DESC_VERSION 1u
+/* An 8-character _HID ("ARMH0011", "PNP0501") plus its NUL. */
+#define WASMOS_ACPI_HID_MAX 9u
+/* irq value for a device whose resources name no interrupt. */
+#define WASMOS_ACPI_NO_IRQ 0xFFFFFFFFu
+/* flags: the firmware names this device as the console (the ACPI SPCR
+ * table's base address is one of its register windows). */
+#define WASMOS_ACPI_DEVICE_CONSOLE 0x1u
+
+typedef struct __attribute__((packed)) {
+    uint32_t version; /* = WASMOS_ACPI_DEVICE_DESC_VERSION */
+    uint32_t flags;   /* WASMOS_ACPI_DEVICE_* */
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint8_t reserved0;
+    char hid[WASMOS_ACPI_HID_MAX]; /* NUL-terminated */
+    uint8_t reserved1[3];
+    uint32_t irq; /* interrupt identifier (ISA line or GSIV), or WASMOS_ACPI_NO_IRQ */
+    uint32_t window_count;
+    wasmos_region_grant_t windows[WASMOS_REGION_LIMIT];
+} wasmos_acpi_device_desc_t;
+
 /* The DMA half of a spawn profile. `direction_flags` is a mask of
  * WASMOS_DMA_DIR_*; `max_bytes` bounds a single mapping; `window_count` is how
  * many wasmos_dma_window_t entries follow the variable-length tail described

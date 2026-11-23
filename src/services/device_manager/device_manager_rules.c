@@ -1062,7 +1062,7 @@ int dm_acpi_rule_matches(const acpi_match_rule_t* rule, const pci_device_record_
     if (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) {
         return 0;
     }
-    if (rule->io_base != 0 && rec->device_id != rule->io_base) {
+    if (rule->io_base != 0 && rec->io_port_base != rule->io_base) {
         return 0;
     }
     return 1;

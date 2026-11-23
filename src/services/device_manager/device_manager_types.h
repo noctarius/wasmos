@@ -105,7 +105,13 @@ typedef struct {
     uint32_t dma_max_bytes;
 } spawn_caps_t;
 
-/* One entry in the PCI device registry; populated from pci_bus scan messages. */
+/* irq_hint of a device record that names no interrupt. */
+#define DM_IRQ_HINT_NONE 0xFFFFFFFFu
+
+/* One entry in the device registry, populated from pci-bus and acpi-bus
+ * descriptors. bus 0xFF marks an ACPI device: its register windows are in
+ * bars[] in the order the firmware lists them, io_port_base is its first I/O
+ * window, and hid/acpi_console carry what acpi-bus reported. */
 typedef struct {
     uint8_t bus;
     uint8_t device;
@@ -117,8 +123,12 @@ typedef struct {
     uint16_t device_id;
     uint16_t io_port_base;
     uint8_t mmio_hint;
-    uint8_t irq_hint;
     uint8_t irq_pin;
+    /* The device's interrupt identifier (an ISA line, or a GIC SPI INTID on
+     * aarch64), DM_IRQ_HINT_NONE when it names none. */
+    uint32_t irq_hint;
+    char hid[WASMOS_ACPI_HID_MAX];
+    uint8_t acpi_console;
     /* Every region the function decodes, as pci-bus resolved them. Kept whole
      * rather than flattened to a single "io_port_base", because which BAR holds
      * what is device-specific: legacy IDE leaves BAR0 empty and puts its

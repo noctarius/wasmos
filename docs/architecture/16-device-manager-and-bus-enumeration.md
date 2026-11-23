@@ -147,15 +147,10 @@ The PCI bus service performs a full BDF (Bus:Device:Function) scan:
   PCI config space.
 - Skips entries with `vendor == 0xFFFF` (no device).
 
-Each discovered device is published to the device manager's inventory endpoint
-with `DEVMGR_PUBLISH_DEVICE (0x900)`:
-
-```
-arg0 = (class << 8) | subclass
-arg1 = (vendor_id << 16) | device_id
-arg2 = (bus << 24) | (slot << 16) | (fn << 8) | irq_line
-arg3 = bar0 (first BAR, typically I/O base or MMIO address)
-```
+Each discovered function is published to the device manager's inventory
+endpoint as a `wasmos_pci_device_desc_t` (`DEVMGR_PUBLISH_DEVICE_DESC`,
+`arg0 = buffer_id, arg1 = offset, arg2 = size`), one slot per function in a
+transfer buffer pci-bus owns and lends to device-manager for reading.
 
 After the full scan, sends `DEVMGR_PCI_SCAN_DONE (0x901)` to signal completion.
 
@@ -255,62 +250,69 @@ Physical memory is mapped through a fixed 16-page window:
 static uint8_t g_map_window[PHYS_MAP_WINDOW_SIZE] __attribute__((aligned(4096)));
 ```
 
-#### AML Scanner and ISA PNP ID Table
+Navigation also notes the SPCR (Serial Port Console Redirection) table when the
+firmware provides one: its Generic Address Structure names the console UART's
+address space and base, which the scanner compares against each device's
+register windows.
 
-The scanner walks the DSDT bytecode looking for `_HID` objects with EISAID
-encoding (`DWordPrefix (0x0C)` followed by vendor bytes `0x41, 0xD0`).
+#### AML Scanner and Device Table
 
-Recognized PNP IDs (10 entries):
+The scanner walks the DSDT bytecode for `Name (_HID, ...)` objects in either
+encoding: an EISAID (`DWordPrefix`), converted to its string form ("PNP0501"),
+or a string (`StringPrefix`, "ARMH0011"). A recognised `_HID` maps onto the PCI
+class a rule matches:
 
-| PNP ID  | Device                    | Class | Subclass |
-|---------|---------------------------|-------|----------|
-| PNP0501 | Serial port (16550A)      | 0x07  | 0x00     |
-| PNP0303 | AT keyboard controller    | 0x09  | 0x00     |
-| PNP0F03 | PS/2 mouse (Microsoft)    | 0x09  | 0x02     |
-| PNP0F13 | PS/2 mouse (Logitech)     | 0x09  | 0x02     |
-| PNP0700 | Floppy controller         | 0x01  | 0x02     |
-| PNP0400 | AT-compatible parallel    | 0x07  | 0x01     |
-| PNP0401 | ECP parallel port         | 0x07  | 0x01     |
-| PNP0B00 | CMOS RTC                  | 0x08  | 0x03     |
-| PNP0C04 | Math coprocessor (FPU)    | 0x0B  | 0x80     |
-| PNP0C02 | Motherboard resources     | 0x08  | 0x80     |
+| `_HID`   | Device                    | Class | Subclass | prog_if |
+|----------|---------------------------|-------|----------|---------|
+| PNP0501  | 16550A serial             | 0x07  | 0x00     | 0x02    |
+| ARMH0011 | Arm PL011 UART            | 0x07  | 0x00     | 0x80    |
+| PNP0303  | AT keyboard (i8042)       | 0x09  | 0x00     | 0x00    |
+| PNP0F03  | MS serial mouse           | 0x09  | 0x02     | 0x00    |
+| PNP0F13  | PS/2 mouse (i8042)        | 0x09  | 0x02     | 0x00    |
+| PNP0700  | Floppy controller         | 0x01  | 0x02     | 0x00    |
+| PNP0400  | Parallel port ECP         | 0x07  | 0x01     | 0x00    |
+| PNP0401  | Parallel port EPP         | 0x07  | 0x01     | 0x01    |
+| PNP0B00  | CMOS RTC                  | 0x08  | 0x03     | 0x00    |
+| PNP0C04  | FPU/coprocessor           | 0x0B  | 0x80     | 0x00    |
+| PNP0C02  | Motherboard resources     | 0x08  | 0x80     | 0x00    |
 
-After the `_HID` match the scanner parses the `_CRS` (Current Resource
-Settings) buffer for:
-- **I/O port descriptors** (tag `0x47`): extracts `io_base`.
-- **IRQ descriptors** (tag `0x22` / `0x23`): extracts `irq_line`.
-
-#### Deduplication
-
-A seen-array of 16 entries keyed on `(io_base << 16) | (b2 << 8) | b3`
-prevents publishing the same physical device twice when both a `_HID` node
-and a `_CID` alias match.
+The `_CRS` resource template after the `_HID` is walked by each descriptor's
+encoded length (ACPI 6.5 §6.4): every I/O Port and Fixed I/O Port descriptor
+and every 32-bit Fixed Memory Range becomes a register window, in template
+order, and the first IRQ or Extended Interrupt descriptor is the device's
+interrupt (an ISA line, or a GIC GSIV on aarch64). A device that lists no
+window of its own (the PS/2 mouse behind the i8042) takes the table's default
+I/O window.
 
 #### Publication
 
-Each recognized ISA device is published as:
+Each recognised device is published as a `wasmos_acpi_device_desc_t`
+(`DEVMGR_PUBLISH_ACPI_DEVICE_DESC`, `arg0 = buffer_id, arg1 = offset, arg2 =
+size`): the `_HID`, the class triple, up to four register windows as region
+grants, the interrupt identifier, and `WASMOS_ACPI_DEVICE_CONSOLE` when one of
+its windows is the SPCR console's. acpi-bus owns the descriptor buffer and lends
+it to device-manager for reading, one slot per device; it therefore stays
+resident after `DEVMGR_ACPI_SCAN_DONE (0x905)`, because its exit would destroy
+the buffer while device-manager may still be reading descriptors from it.
 
-```
-DEVMGR_PUBLISH_DEVICE (0x900)
-  arg0 = (class << 8) | subclass
-  arg1 = 0x0000FFFF   (vendor=ACPI/ISA sentinel, device=0xFFFF)
-  arg2 = (0xFF << 24) | (0 << 16) | (0 << 8) | irq_line
-         (bus=0xFF marks ISA bus)
-  arg3 = io_base
-```
-
-Followed by `DEVMGR_ACPI_SCAN_DONE (0x905)` when the DSDT walk is complete.
-
----
+Device-manager records an ACPI device with `bus = 0xFF`, its windows in
+`bars[]` and its first I/O window's base in `io_port_base` (what `ATTR{io}`
+matches). An ACPI-matched driver is granted those windows as region grants in
+the same order (an MMIO window rounded out to whole pages) and the interrupt,
+and is spawned with `hid=`, `io=` or `mmio=`, `irq=` and, for the console,
+`console=1`.
 
 ### IPC Opcode Summary
 
 | Opcode                        | Value | Direction            | Meaning                      |
 |-------------------------------|-------|----------------------|------------------------------|
-| `DEVMGR_PUBLISH_DEVICE`       | 0x900 | bus scanner → devmgr | Report one discovered device |
 | `DEVMGR_PCI_SCAN_DONE`        | 0x901 | pci_bus → devmgr     | PCI scan complete            |
 | `DEVMGR_PUBLISH_BLOCK_DEVICE` | 0x903 | driver → devmgr      | Register a block device      |
 | `DEVMGR_ACPI_SCAN_DONE`       | 0x905 | acpi_bus → devmgr    | ACPI/AML scan complete       |
+| `DEVMGR_PUBLISH_DEVICE_DESC`  | 0x906 | pci_bus → devmgr     | One PCI function (descriptor) |
+| `DEVMGR_PUBLISH_ACPI_DEVICE_DESC` | 0x90A | acpi_bus → devmgr | One ACPI device (descriptor) |
+
+`0x900` (`DEVMGR_PUBLISH_DEVICE`, the packed four-word form) is retired.
 
 ---
 

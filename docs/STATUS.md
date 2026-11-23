@@ -776,7 +776,11 @@ linked feature documents for rationale and rollout plans.
   the native net-stack at EL0, spawns virtio-blk from the initfs for the boot
   disk, mounts `/boot` from it, runs sysinit and reaches the WAMOS CLI prompt
   (`supervisor] boot complete`), with virtio-net (DHCP lease), virtio-rng, the
-  font service and the calculator up; the menu bar exits for want of a
+  font service and the calculator up, and takes console input through the
+  PL011: acpi-bus publishes `ARMH0011` (window 0x09000000, GSIV 33, flagged the
+  console by the SPCR), the serial driver serves it through its MMIO region
+  grant with its interrupt routed as a GIC SPI, and `run-qemu-test` passes
+  (`halt` powers off through PSCI). The menu bar exits for want of a
   framebuffer (QEMU virt has no display device by default). MSIs go through
   the GICv3 ITS (`arch/aarch64/its_aarch64.c`, `msi_aarch64.c`): slot `i` is
   EventID `i` and LPI 8192+`i`, and the DeviceID is the requester id of the PCI
@@ -1785,11 +1789,19 @@ linked feature documents for rationale and rollout plans.
   mounted before anything mounts onto it.
 - `device-manager` consumes PCI/ACPI inventory and bootstrap/runtime rules,
   spawning drivers with matched capabilities and optional startup identity: a
-  PCI match gets `pci=`/`io=`/`irq=` args, an ACPI match `io=`/`irq=`. A matched
+  PCI match gets `pci=`/`io=`/`irq=` args, an ACPI match `hid=`, `io=` or
+  `mmio=`, `irq=` and `console=1` for the firmware's console. Bus services
+  publish descriptors (`DEVMGR_PUBLISH_DEVICE_DESC`,
+  `DEVMGR_PUBLISH_ACPI_DEVICE_DESC`); the packed `DEVMGR_PUBLISH_DEVICE` is
+  retired. An ACPI device carries its `_CRS` register windows, each granted as
+  a region in firmware order, so the i8042 keyboard gets ports 0x60 and 0x64
+  and nothing between them. A matched
   device whose driver never becomes ready within its retries is given up on and
   logged, so the one-at-a-time spawn queue moves on to the next rule.
-- `serial` serves the UART it was spawned for; only the COM1 instance is the
-  console ("sin"), and the shipped rule binds COM1 only.
+- `serial` serves the UART it was spawned for -- a 16550 or, by `hid=ARMH0011`,
+  a PL011 -- through its region grant (`io_region_*`); the console instance
+  ("sin") is the one spawned with `console=1`, or COM1 when the firmware names
+  none, and the shipped x86_64 rule binds COM1 only.
 - `chardev` is a normal initfs WASM driver started by a boot rule and registered
   through the service registry; it is no longer kernel-embedded.
 - `sysinit` drives `.rc` workflows, environment scopes, `script`/`source`, and

@@ -18,6 +18,11 @@ provides = ["sin"]
 name = "io.port"
 flags = 0
 
+# The memory-mapped PL011's window (aarch64) is granted only with mmio.map.
+[[capabilities]]
+name = "mmio.map"
+flags = 0
+
 [[capabilities]]
 name = "irq.route"
 flags = 0

@@ -546,6 +546,14 @@ export namespace std {
 
 @external("wasmos", "io_in16") declare function io_in16_raw(port: i32, out: i32): i32;
 
+
+@external("wasmos", "io_region_in8")
+declare function io_region_in8_raw(region: i32, offset: i32, out: i32): i32;
+
+
+@external("wasmos", "io_region_in32")
+declare function io_region_in32_raw(region: i32, offset: i32, out: i32): i32;
+
 /* The port-read host calls report the value through an out-parameter and the
  * outcome through the return, so a refused read is distinguishable from the
  * all-ones an absent device reads back. One scratch cell and one status check
@@ -555,7 +563,7 @@ export namespace std {
  * was not: a byte and a word cannot reach the negative range, so a negative
  * result here is unambiguously the WASMOS_ERR_IO_* code. Callers must test
  * `< 0` -- masking the result throws the distinction away again. */
-const g_ioScratch = new Uint8Array(2);
+const g_ioScratch = new Uint8Array(4);
 
 export namespace io {
     /** Reads a byte: 0..255, or a negative WASMOS_ERR_IO_* code. */
@@ -570,6 +578,24 @@ export namespace io {
         const ptr = g_ioScratch.dataStart;
         const rc = io_in16_raw(port, ptr as i32);
         return rc != 0 ? rc : <i32>load<u16>(ptr);
+    }
+
+    /** Reads a byte at `offset` in granted register window `region`
+     *  (io_region_in8): 0..255, or a negative WASMOS_ERR_IO_* code. */
+    export function regionIn8(region: i32, offset: i32): i32 {
+        const ptr = g_ioScratch.dataStart;
+        const rc = io_region_in8_raw(region, offset, ptr as i32);
+        return rc != 0 ? rc : <i32>load<u8>(ptr);
+    }
+
+    /** Reads a 32-bit register at `offset` in granted register window `region`
+     *  (io_region_in32): 0..0xFFFFFFFF, or a negative WASMOS_ERR_IO_* code. An
+     *  i64 because a register can read all ones, which as an i32 would be a
+     *  failure code. */
+    export function regionIn32(region: i32, offset: i32): i64 {
+        const ptr = g_ioScratch.dataStart;
+        const rc = io_region_in32_raw(region, offset, ptr as i32);
+        return rc != 0 ? <i64>rc : <i64>load<u32>(ptr);
     }
 }
 

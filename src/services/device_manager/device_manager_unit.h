@@ -29,6 +29,13 @@ int32_t dm_unit_spec(const char* rule_path, const char* instance, const char* pa
  * limit. */
 int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_cap);
 
+/* Fills caps (expected zeroed) with the grant for an ACPI device record: its
+ * register windows as region grants in the order acpi-bus listed them (the
+ * region index its driver addresses), with DEVMGR_CAP_IO_PORT and/or
+ * DEVMGR_CAP_MMIO_MAP as they require and an MMIO window rounded out to whole
+ * pages, and its interrupt with DEVMGR_CAP_IRQ when the record names one. */
+void dm_acpi_caps(const pci_device_record_t* rec, spawn_caps_t* caps);
+
 /* Bytes a watched-spawn request may take: the descriptor, the longest path and
  * argument string, and the largest capability descriptor. */
 #define DM_WATCH_SPAWN_MAX                                                                         \

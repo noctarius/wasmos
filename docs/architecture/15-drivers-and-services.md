@@ -404,18 +404,20 @@ Device-manager IPC opcodes:
 
 | Opcode                         | Value   | Meaning                                 |
 |--------------------------------|---------|-----------------------------------------|
-| `DEVMGR_PUBLISH_DEVICE`        | `0x900` | PCI/ACPI device record from bus service |
+| `0x900`                        | retired | was DEVMGR_PUBLISH_DEVICE               |
 | `DEVMGR_PCI_SCAN_DONE`         | `0x901` | pci-bus signals scan complete           |
 | `DEVMGR_QUERY_MOUNT_REQ`       | `0x902` | Query mount path for block device       |
 | `DEVMGR_PUBLISH_BLOCK_DEVICE`  | `0x903` | Block device registered by ata driver   |
 | `DEVMGR_QUERY_BLOCK_MOUNT_REQ` | `0x904` | Query block device mount by unit        |
 | `DEVMGR_ACPI_SCAN_DONE`        | `0x905` | acpi-bus signals scan complete          |
+| `DEVMGR_PUBLISH_DEVICE_DESC`   | `0x906` | PCI function descriptor from pci-bus    |
+| `DEVMGR_PUBLISH_ACPI_DEVICE_DESC` | `0x90A` | ACPI device descriptor from acpi-bus |
 | `DEVMGR_MOUNT_INFO`            | `0x980` | Mount info response                     |
 | `DEVMGR_QUERY_DONE`            | `0x981` | Query done response                     |
 | `DEVMGR_BLOCK_MOUNT_INFO`      | `0x982` | Block mount info response               |
 
-`DEVMGR_PUBLISH_DEVICE` with `bus=0xFF` in `arg0[31:24]` marks a non-PCI ISA
-device published by `acpi-bus`; `arg2` carries the I/O base address.
+Both bus services publish descriptors from transfer buffers they own, one slot
+per device (see [Device Manager and Bus Enumeration](16-device-manager-and-bus-enumeration.md)).
 
 #### `pci-bus` — PCI Config-Space Enumerator
 
@@ -430,50 +432,26 @@ with another, nor with the kernel's quiesce of a dead driver's function.
 
 Scan scope: 256 buses × 32 devices × 8 functions. For each valid device
 (vendor_id ≠ 0xFFFF), reads class/subclass/prog_if, vendor/device ID, BAR0
-(MMIO/I/O hint), and IRQ line. Publishes each record via
-`DEVMGR_PUBLISH_DEVICE` to the `devmgr.inv` endpoint with fields packed
-into four `uint32_t` args:
-
-```
-arg0 = (bus<<24) | (device<<16) | (function<<8) | class_code
-arg1 = (subclass<<24) | (prog_if<<16) | vendor_id
-arg2 = (io_port_base<<16) | device_id
-arg3 = (io_port_base<<16) | (irq_hint<<8) | mmio_hint
-```
+(MMIO/I/O hint), and IRQ line. Publishes each function as a
+`wasmos_pci_device_desc_t` (`DEVMGR_PUBLISH_DEVICE_DESC`) to the `devmgr.inv`
+endpoint.
 
 Sends `DEVMGR_PCI_SCAN_DONE` after the last record, then calls
 `PROC_IPC_NOTIFY_READY`.
 
-#### `acpi-bus` — ACPI Table Parser and ISA Device Publisher
+#### `acpi-bus` — ACPI Namespace Device Publisher
 
 - **Kind:** WASM service
 - **Capabilities:** `mmio.map`
 - **Entry bindings:** (receives `proc_endpoint` as first arg)
 
-Obtains the RSDP via `wasmos_acpi_rsdp_info()`. If RSDP revision ≥ 2 and
-`xsdt_address ≠ 0`, follows the XSDT path; otherwise RSDT. Locates the DSDT
-through the FACP (Fixed ACPI Description Table) entry in the SDT.
-
-Scans the DSDT AML byte stream for 16-byte-aligned `0x41D0` PNP vendor bytes
-(all ISA/PNP devices use vendor `0x41D0`). For each PNP EISAID found, looks up
-the known ISA device table to map bytes to PCI-class equivalents:
-
-| EISAID  | Bytes | class / subclass / prog_if | Description           |
-|---------|-------|----------------------------|-----------------------|
-| PNP0501 | 05/01 | 0x07/0x00/0x02             | 16550A serial         |
-| PNP0303 | 03/03 | 0x09/0x00/0x00             | AT keyboard (i8042)   |
-| PNP0F03 | 0F/03 | 0x09/0x02/0x00             | MS serial mouse       |
-| PNP0F13 | 0F/13 | 0x09/0x02/0x00             | PS/2 mouse (i8042)    |
-| PNP0700 | 07/00 | 0x01/0x02/0x00             | Floppy controller     |
-| PNP0400 | 04/00 | 0x07/0x01/0x00             | Parallel port ECP     |
-| PNP0401 | 04/01 | 0x07/0x01/0x01             | Parallel port EPP     |
-| PNP0B00 | 0B/00 | 0x08/0x03/0x00             | CMOS RTC              |
-| PNP0C04 | 0C/04 | 0x0B/0x80/0x00             | FPU/coprocessor       |
-| PNP0C02 | 0C/02 | 0x08/0x80/0x00             | Motherboard resources |
-
-Extracts I/O base from the `_CRS` resource descriptor within 512 bytes of the
-EISAID. Publishes each device via `DEVMGR_PUBLISH_DEVICE` with `bus=0xFF`
-marker. Sends `DEVMGR_ACPI_SCAN_DONE` after the full scan.
+Walks `RSDP → RSDT/XSDT → FACP → DSDT` (noting the SPCR console), finds the
+`_HID` objects it recognises -- ISA/PNP devices on x86_64, the PL011 UART
+(`ARMH0011`) on aarch64 -- and publishes each with its `_CRS` register windows
+and interrupt as a `wasmos_acpi_device_desc_t`
+(`DEVMGR_PUBLISH_ACPI_DEVICE_DESC`), then `DEVMGR_ACPI_SCAN_DONE`. It stays
+resident afterwards, because it owns the descriptor buffer device-manager
+reads. Details: [Device Manager and Bus Enumeration](16-device-manager-and-bus-enumeration.md).
 
 Physical table pages are mapped through a 16-page (64 KB) aligned WASM memory
 window (`g_map_window`).

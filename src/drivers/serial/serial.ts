@@ -1,11 +1,14 @@
-/* 16550 UART driver.
+/* UART driver: a 16550 (x86_64 COM ports) or an Arm PL011 (aarch64).
  *
- * One instance serves one UART: the one whose I/O base and IRQ the device
- * manager passes as `io=` and `irq=` spawn args, which are also the port window
- * and IRQ line it was granted. Without args it serves COM1. Only the instance on
- * COM1, the console UART the vt owns, registers as "sin" and installs the kernel
- * console hook; any other registers a name derived from its base ("s2f8"), so a
- * second UART is served without taking the console's place.
+ * One instance serves one UART: the one whose registers are its first granted
+ * window (region 0) and whose interrupt the device manager names in its spawn
+ * args -- `hid=` (the ACPI model: ARMH0011 is a PL011, anything else a 16550),
+ * `io=` or `mmio=` (the window's base), `irq=` and `console=1`. Without args it
+ * serves COM1. Only the console instance -- the one the firmware names with
+ * `console=1`, or COM1 when nothing does -- registers as "sin", the name the vt
+ * looks up, and installs the kernel console hook; any other registers a name
+ * derived from its base ("s2f8"), so a second UART is served without taking the
+ * console's place.
  *
  * The driver is one coroutine, and it IS the entry point: registration,
  * hardware bring-up, the ready notification and the request loop read top to
@@ -41,7 +44,8 @@ import {
     WASMOS_ERR_DRIVER_REGISTER,
 } from "./wasmos_status";
 import {
-    io_out8,
+    io_region_out32,
+    io_region_out8,
     io_wait,
     ipc_create_endpoint,
     ipc_send,
@@ -50,25 +54,53 @@ import {
     serial_register,
 } from "./wasmos_imports";
 
-/* 16550 registers are offsets from the UART's base: +0 is the receive/transmit
- * holding register (and, with DLAB set, the low divisor byte), +1 the Interrupt
- * Enable Register (high divisor byte under DLAB), +2 the FIFO control register,
- * +3 the line control register holding DLAB, +4 modem control, +5 the Line
- * Status Register.
+/* Every register is addressed in the UART's granted window, region 0, so the
+ * driver never names an absolute port or address (io_region_* host calls). */
+const REGION: i32 = 0;
+
+/* 16550 registers are byte offsets in its I/O window: +0 is the
+ * receive/transmit holding register (and, with DLAB set, the low divisor byte),
+ * +1 the Interrupt Enable Register (high divisor byte under DLAB), +2 the FIFO
+ * control register, +3 the line control register holding DLAB, +4 modem
+ * control, +5 the Line Status Register.
  *
- * Only the three used repeatedly are named; the rest appear as g_port + n in
- * serialInitHw, where the write order matters more than the names. In the line
+ * Only the three used repeatedly are named; the rest appear as bare offsets in
+ * initUart16550, where the write order matters more than the names. In the line
  * status register bit 0 (0x01) is "receive data available" and bit 5 (0x20) is
  * "transmit holding register empty". */
 const REG_IER: i32 = 1;
 const REG_STATUS: i32 = 5;
 
+/* PL011 registers are 32-bit, at byte offsets in its memory window (Arm PL011
+ * TRM, DDI 0183, 3.2). */
+const PL011_DR: i32 = 0x00; /* data: bits 7:0 the byte */
+const PL011_FR: i32 = 0x18; /* flags */
+const PL011_LCR_H: i32 = 0x2c; /* line control */
+const PL011_CR: i32 = 0x30; /* control */
+const PL011_IMSC: i32 = 0x38; /* interrupt mask set/clear */
+const PL011_ICR: i32 = 0x44; /* interrupt clear */
+const PL011_FR_RXFE: i64 = 1 << 4; /* receive FIFO empty */
+const PL011_FR_TXFF: i64 = 1 << 5; /* transmit FIFO full */
+const PL011_LCR_H_8N1_FIFO: i32 = 0x70; /* WLEN 8 bits, FEN */
+const PL011_CR_ENABLE: i32 = 0x301; /* UARTEN, TXE, RXE */
+/* Receive and receive-timeout interrupts: the FIFO reached its level, or holds
+ * bytes nobody has read for a while. */
+const PL011_INT_RX: i32 = (1 << 4) | (1 << 6);
+const PL011_INT_ALL: i32 = 0x7ff;
+
+/* The ACPI _HID of a PL011. */
+const HID_PL011: string = "ARMH0011";
+
 /* The console UART's IRQ; its base is CONSOLE_PORT (serial_name.ts). */
 const CONSOLE_IRQ: i32 = 4;
 
-/* The UART this instance serves, from its spawn args (see the header). */
-let g_port: i32 = CONSOLE_PORT;
+/* The UART this instance serves, from its spawn args (see the header). g_base
+ * is its window's base, which names the instance; registers are reached
+ * through REGION. */
+let g_base: i64 = CONSOLE_PORT;
 let g_irq: i32 = CONSOLE_IRQ;
+let g_pl011: bool = false;
+let g_consoleArg: bool = false;
 
 const SERIAL_DRIVER_WRITE_REQ: i32 = 0x500;
 const SERIAL_DRIVER_READ_REQ: i32 = 0x501;
@@ -152,53 +184,99 @@ function rxbufPeek(offset: i32): i32 {
 // ------------------------------------------------------------------- device
 
 /**
- * Take the UART to serve from the spawn args: `io=` and `irq=`, both hex, as the
- * device manager writes them. A missing or unparseable value keeps the console
- * default, so a spawn without args (a rule set that predates them) still serves
- * COM1.
+ * Take the UART to serve from the spawn args, as the device manager writes
+ * them: `hid=`, `io=` or `mmio=`, `irq=` (hex) and `console=1`. A missing or
+ * unparseable value keeps the console default, so a spawn without args still
+ * serves COM1.
  */
 function readDeviceArgs(): void {
     const args = startup.args();
     for (let i = 0; i < args.length; ++i) {
         const arg = unchecked(args[i]);
-        if (arg.startsWith("io=")) {
-            const v = <i32>I32.parseInt(arg.substring(3), 16);
+        if (arg.startsWith("hid=")) {
+            g_pl011 = arg.substring(4) == HID_PL011;
+        } else if (arg.startsWith("io=")) {
+            const v = <i64>I64.parseInt(arg.substring(3), 16);
             if (v > 0 && v <= 0xfff8) {
-                g_port = v;
+                g_base = v;
+            }
+        } else if (arg.startsWith("mmio=")) {
+            const v = <i64>I64.parseInt(arg.substring(5), 16);
+            if (v > 0) {
+                g_base = v;
             }
         } else if (arg.startsWith("irq=")) {
             const v = <i32>I32.parseInt(arg.substring(4), 16);
-            if (v >= 0 && v < 16) {
+            if (v >= 0 && v < 1020) {
                 g_irq = v;
             }
+        } else if (arg == "console=1") {
+            g_consoleArg = true;
         }
     }
 }
 
 function isConsole(): bool {
-    return g_port == CONSOLE_PORT;
+    return g_consoleArg || (!g_pl011 && g_base == CONSOLE_PORT);
+}
+
+function initUart16550(): void {
+    io_region_out8(REGION, REG_IER, 0x00); /* disable interrupts during setup */
+    io_region_out8(REGION, 3, 0x80); /* DLAB on */
+    io_region_out8(REGION, 0, 0x01); /* divisor low (115200) */
+    io_region_out8(REGION, 1, 0x00); /* divisor high */
+    io_region_out8(REGION, 3, 0x03); /* 8N1, DLAB off */
+    io_region_out8(REGION, 2, 0xc7); /* FIFO enable, clear, 14-byte threshold */
+    io_region_out8(REGION, 4, 0x0b); /* DTR|RTS|OUT2 (OUT2 gates IRQ to the PIC) */
+    io_region_out8(REGION, REG_IER, 0x01); /* enable "received data available" interrupt */
+}
+
+/* The baud rate stays as the firmware programmed it: on the console the kernel
+ * already writes through it. The line control may only change with the UART
+ * disabled (PL011 TRM 3.3.8), so CR is cleared around it. */
+function initPl011(): void {
+    io_region_out32(REGION, PL011_IMSC, 0);
+    io_region_out32(REGION, PL011_CR, 0);
+    io_region_out32(REGION, PL011_LCR_H, PL011_LCR_H_8N1_FIFO);
+    io_region_out32(REGION, PL011_ICR, PL011_INT_ALL);
+    io_region_out32(REGION, PL011_CR, PL011_CR_ENABLE);
+    io_region_out32(REGION, PL011_IMSC, PL011_INT_RX);
 }
 
 function serialInitHw(): void {
-    io_out8(g_port + REG_IER, 0x00); /* disable interrupts during setup */
-    io_out8(g_port + 3, 0x80); /* DLAB on */
-    io_out8(g_port + 0, 0x01); /* divisor low (115200) */
-    io_out8(g_port + 1, 0x00); /* divisor high */
-    io_out8(g_port + 3, 0x03); /* 8N1, DLAB off */
-    io_out8(g_port + 2, 0xc7); /* FIFO enable, clear, 14-byte threshold */
-    io_out8(g_port + 4, 0x0b); /* DTR|RTS|OUT2 (OUT2 gates IRQ to the PIC) */
-    io_out8(g_port + REG_IER, 0x01); /* enable "received data available" interrupt */
+    if (g_pl011) {
+        initPl011();
+    } else {
+        initUart16550();
+    }
 }
 
-/* A refused status read reports neither ready: the line-status register cannot
+/* No device interrupts; the idle hook polls. */
+function disableUartInterrupts(): void {
+    if (g_pl011) {
+        io_region_out32(REGION, PL011_IMSC, 0);
+    } else {
+        io_region_out8(REGION, REG_IER, 0x00);
+    }
+}
+
+/* A refused status read reports neither ready: the status register cannot
  * answer, so claiming either bit would be inventing hardware state. */
 function txReady(): bool {
-    const status = io.in8(g_port + REG_STATUS);
+    if (g_pl011) {
+        const flags = io.regionIn32(REGION, PL011_FR);
+        return flags >= 0 && (flags & PL011_FR_TXFF) == 0;
+    }
+    const status = io.regionIn8(REGION, REG_STATUS);
     return status >= 0 && (status & 0x20) != 0;
 }
 
 function rxReady(): bool {
-    const status = io.in8(g_port + REG_STATUS);
+    if (g_pl011) {
+        const flags = io.regionIn32(REGION, PL011_FR);
+        return flags >= 0 && (flags & PL011_FR_RXFE) == 0;
+    }
+    const status = io.regionIn8(REGION, REG_STATUS);
     return status >= 0 && (status & 0x01) != 0;
 }
 
@@ -207,7 +285,11 @@ function rxReady(): bool {
 function writePort(value: i32): void {
     for (let i = 0; i < TX_WAIT_LIMIT; ++i) {
         if (txReady()) {
-            io_out8(g_port, value & 0xff);
+            if (g_pl011) {
+                io_region_out32(REGION, PL011_DR, value & 0xff);
+            } else {
+                io_region_out8(REGION, 0, value & 0xff);
+            }
             return;
         }
         io_wait();
@@ -220,8 +302,20 @@ function readPort(): i32 {
     if (!rxReady()) {
         return -1;
     }
-    const byte = io.in8(g_port);
+    if (g_pl011) {
+        const data = io.regionIn32(REGION, PL011_DR);
+        return data < 0 ? -1 : <i32>(data & 0xff);
+    }
+    const byte = io.regionIn8(REGION, 0);
     return byte < 0 ? -1 : byte;
+}
+
+/* A PL011's receive-timeout interrupt stays raised until cleared, even with the
+ * FIFO drained; a 16550's clears by reading. */
+function clearRxInterrupt(): void {
+    if (g_pl011) {
+        io_region_out32(REGION, PL011_ICR, PL011_INT_RX);
+    }
 }
 
 /** Empty the UART RX FIFO into the software ring, before it can overrun. */
@@ -303,6 +397,7 @@ function sendResponse(destination: i32, requestId: i32, value: i32, status: i32)
 function serveRequest(msg: IpcMessage): void {
     if (msg.type == SERIAL_IPC_IRQ_EVENT) {
         drainUartToRing();
+        clearRxInterrupt();
         /* Ack after emptying the FIFO so the line deasserts before unmask. */
         irq_ack(g_irq);
     } else if (msg.type == SERIAL_DRIVER_WRITE_REQ) {
@@ -365,9 +460,9 @@ export function initialize(): i32 {
             procEndpoint,
             g_endpoint,
             SVC_IPC_REGISTER_REQ,
-            serialNameWord(g_port, 0),
-            serialNameWord(g_port, 1),
-            0,
+            serialNameWord(g_base, isConsole(), 0),
+            serialNameWord(g_base, isConsole(), 1),
+            serialNameWord(g_base, isConsole(), 2),
             0,
         ) === null
     ) {
@@ -385,17 +480,20 @@ export function initialize(): i32 {
     g_irqRouted = irqRouted == 0;
     if (g_irqRouted) {
         std.printf(
-            "[serial] driver ready io=0x" +
-                g_port.toString(16) +
+            "[serial] driver ready " +
+                (g_pl011 ? "pl011 mmio=0x" : "io=0x") +
+                g_base.toString(16) +
                 " irq=" +
                 g_irq.toString() +
                 " (IRQ-driven)\n",
         );
     } else {
         std.printf(
-            "[serial] io=0x" + g_port.toString(16) + " IRQ route failed, falling back to polling\n",
+            "[serial] base=0x" +
+                g_base.toString(16) +
+                " IRQ route failed, falling back to polling\n",
         );
-        io_out8(g_port + REG_IER, 0x00); /* no interrupts; the idle hook polls */
+        disableUartInterrupts();
     }
     /* RX forwarding runs from the pump, not from this loop: draining the FIFO
      * has a deadline, delivering to the vt does not. */

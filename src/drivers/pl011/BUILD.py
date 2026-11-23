@@ -14,6 +14,7 @@ def build(b):
             core / "serial_core.ts",
             core / "serial_name.ts",
             core / "uart_window.ts",
+            core / "uart.ts",
         ],
         lang="as",
     )

@@ -1,0 +1,26 @@
+version = 1
+
+[package]
+name = "fbramfb"
+entry = "initialize"
+kind = "driver"
+native = true
+
+[resources]
+stack_pages = 0
+heap_pages = 0
+
+[deps]
+provides = ["fb"]
+
+# Region 0 is the fw_cfg register window, granted by device-manager from the
+# QEMU0002 device's _CRS; it is device memory, granted only with mmio.map.
+[[capabilities]]
+name = "mmio.map"
+flags = 0
+
+# flags = DMA budget in pages: one page holds the fw_cfg DMA descriptor and the
+# data it transfers (a file-directory entry or the ramfb configuration).
+[[capabilities]]
+name = "dma.buffer"
+flags = 1

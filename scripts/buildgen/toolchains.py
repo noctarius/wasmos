@@ -105,6 +105,10 @@ class Arch:
     # (efi-virtio.rom) is an x86 iPXE image: aarch64 firmware cannot run it,
     # and a distribution QEMU without it refuses to start the device.
     qemu_nic_option_rom: bool
+    # The display device, when the machine has none by default. x86 QEMU
+    # brings a VGA adapter; QEMU virt has no display, and ramfb gives it a
+    # firmware framebuffer (bound by framebuffer_ramfb through fw_cfg).
+    qemu_display: tuple
 
 
 ARCHES = {
@@ -127,6 +131,7 @@ ARCHES = {
         qemu_machine=(),
         qemu_ide=True,
         qemu_nic_option_rom=True,
+        qemu_display=(),
     ),
     "aarch64": Arch(
         name="aarch64",
@@ -153,6 +158,7 @@ ARCHES = {
         qemu_machine=("-M", "virt,gic-version=3"),
         qemu_ide=False,
         qemu_nic_option_rom=False,
+        qemu_display=("-device", "ramfb"),
     ),
 }
 

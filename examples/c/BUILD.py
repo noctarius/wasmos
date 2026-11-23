@@ -9,6 +9,7 @@ SIMPLE = [
     "fs_leave_open",
     "fs_open_smoke",
     "fs_write_smoke",
+    "gfx_mode",
     "gfx_smoke",
     "init_smoke",
     "irq_route_allow",

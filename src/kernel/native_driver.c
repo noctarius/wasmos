@@ -699,6 +699,22 @@ static int nd_io_out16(uint16_t port, uint16_t val) {
     return arch_port_out16(port, val) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
+/* The registered framebuffer driver is the process owning the framebuffer
+ * control endpoint process-manager recorded; only it may change the geometry. */
+static int nd_framebuffer_set_geometry(uint32_t width, uint32_t height, uint32_t stride) {
+    process_t* proc = process_get(process_current_pid());
+    uint32_t owner = 0;
+    if (!proc) {
+        return WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    uint32_t ep = process_manager_framebuffer_endpoint();
+    if (ep == IPC_ENDPOINT_NONE || ipc_endpoint_owner(ep, &owner) != IPC_OK ||
+        owner != proc->context_id) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
+    return framebuffer_set_geometry(width, height, stride);
+}
+
 /* Register windows (wasmos_native_driver.h): the access itself is io_region's,
  * shared with the io_region_* host calls of both wasm runtimes. */
 static int nd_io_region_read(uint32_t region, uint32_t offset, uint32_t width, uint32_t* out) {
@@ -1226,6 +1242,7 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
     api.io_region_read = nd_io_region_read;
     api.io_region_write = nd_io_region_write;
     api.dma_region_alloc = nd_dma_region_alloc;
+    api.framebuffer_set_geometry = nd_framebuffer_set_geometry;
 
     klog_write("[native-driver] calling initialize\n");
     /* The ELF is mapped only in the driver's address space (low VA, e.g.

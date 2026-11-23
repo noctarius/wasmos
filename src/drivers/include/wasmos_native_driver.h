@@ -294,6 +294,17 @@ typedef struct wasmos_driver_api {
      * a negative WASMOS_ERR_DMA_* code (INVALID, DENY, UNAVAILABLE, RANGE) and
      * touches neither. */
     int (*dma_region_alloc)(uint32_t pages, void** out_ptr, uint64_t* out_phys);
+    /* Reports the geometry a framebuffer driver has just programmed its
+     * adapter to (width x height pixels, `stride` PIXELS per scanline, same
+     * physical range), so framebuffer_info and every consumer that reads it --
+     * the compositor remaps from it -- follow a runtime mode change. Only the
+     * registered framebuffer driver (console_register_fb) may call it. Returns 0,
+     * WASMOS_ERR_KERNEL_NO_CALLER, WASMOS_ERR_KERNEL_NOT_AUTHORIZED for any other
+     * caller, WASMOS_INVAL for a zero dimension or a stride below the width,
+     * WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT, or
+     * WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE when it does not fit the
+     * framebuffer the bootloader recorded. */
+    int (*framebuffer_set_geometry)(uint32_t width, uint32_t height, uint32_t stride);
 } wasmos_driver_api_t;
 
 /* `kind` argument to the xfer_buffer_* calls, naming what backs the object.

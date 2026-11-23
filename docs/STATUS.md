@@ -797,8 +797,11 @@ linked feature documents for rationale and rollout plans.
   PL011: acpi-bus publishes `ARMH0011` (window 0x09000000, GSIV 33, flagged the
   console by the SPCR), `pl011.wap` serves it through its MMIO region
   grant with its interrupt routed as a GIC SPI, and `run-qemu-test` passes
-  (`halt` powers off through PSCI). The menu bar exits for want of a
-  framebuffer (QEMU virt has no display device by default). MSIs go through
+  (`halt` powers off through PSCI). The display is QEMU's ramfb (`-device
+  ramfb` from `ARCHES`): the firmware reports it as the GOP framebuffer,
+  acpi-bus publishes the fw_cfg device `QEMU0002`, and `framebuffer_ramfb`
+  serves the text plane on it and sets modes by rewriting `etc/ramfb` through
+  fw_cfg DMA; the compositor, menu bar and apps draw on it. MSIs go through
   the GICv3 ITS (`arch/aarch64/its_aarch64.c`, `msi_aarch64.c`): slot `i` is
   EventID `i` and LPI 8192+`i`, and the DeviceID is the requester id of the PCI
   function the calling driver's spawn profile names
@@ -830,7 +833,16 @@ linked feature documents for rationale and rollout plans.
   aarch64-linux runner. The native
   ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap
   stubs (aarch64: `svc #0`, number in x8). No aarch64 framebuffer fallback
-  without GOP (the x86 0xCF8 scan is x86_64-only).
+  for a firmware without GOP (the x86 0xCF8 scan is x86_64-only).
+- Native driver ABI 16: native drivers reach memory-mapped register windows
+  (`io_region_read`/`io_region_write`, through `io_region.c`), allocate
+  driver-owned DMA regions (`dma_region_alloc`; all three region allocators
+  share `dma_region_reserve` in `hostcall_dma.c`), and a framebuffer driver
+  reports a runtime mode change with `framebuffer_set_geometry`, so the
+  kernel's framebuffer info -- what the compositor remaps from -- follows it.
+  The framebuffer drivers share one FBTEXT server
+  (`src/drivers/framebuffer/fbtext_server.c`). An ACPI rule's driver gets the
+  DMA its manifest declares (`dm_acpi_caps`).
 - Interrupt grants are lists of interrupt identifiers -- an ISA line on
   x86_64, a GIC SPI INTID on aarch64 -- carried in the spawn descriptor
   (`wasmos_spawn_caps_v2_t`: `irq_count` + `uint32_t irqs[]`, at most

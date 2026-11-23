@@ -33,8 +33,12 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
  * register windows as region grants in the order acpi-bus listed them (the
  * region index its driver addresses), with DEVMGR_CAP_IO_PORT and/or
  * DEVMGR_CAP_MMIO_MAP as they require and an MMIO window rounded out to whole
- * pages, and its interrupt with DEVMGR_CAP_IRQ when the record names one. */
-void dm_acpi_caps(const pci_device_record_t* rec, spawn_caps_t* caps);
+ * pages, and its interrupt with DEVMGR_CAP_IRQ when the record names one.
+ * `meta` is the driver's module descriptor, or NULL when it is not known: when
+ * it declares dma.buffer with a nonzero page budget, the grant also carries
+ * DEVMGR_CAP_DMA and that budget in bytes. Nothing else is taken from it. */
+void dm_acpi_caps(const pci_device_record_t* rec, const wasmos_module_meta_desc_t* meta,
+                  spawn_caps_t* caps);
 
 /* Writes the startup args of an ACPI-matched driver into out: `hid=` (which
  * device model it is), the base of its first register window as `io=` or

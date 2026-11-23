@@ -19,8 +19,9 @@ wasmos/
 │   ├── drivers/            Device driver WASM modules
 │   │   ├── ata/            ATA/PIO storage driver
 │   │   ├── chardev/        Character device server/client
-│   │   ├── framebuffer/    VESA framebuffer text driver
+│   │   ├── framebuffer/    FBTEXT server shared by every framebuffer driver, UEFI GOP variant
 │   │   ├── framebuffer_pci/ PCI-enumerated framebuffer driver
+│   │   ├── framebuffer_ramfb/ QEMU ramfb framebuffer driver (aarch64)
 │   │   ├── fs_fat/         FAT filesystem driver
 │   │   ├── fs_init/        Initfs (read-only boot image) driver
 │   │   ├── keyboard/       PS/2 keyboard driver

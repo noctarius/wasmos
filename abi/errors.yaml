@@ -418,6 +418,7 @@ domains:
     codes:
       - { name: NOT_PRESENT, description: "no framebuffer is available on this system" }
       - { name: TOO_SMALL,   description: "the caller's requested mapping is smaller than the framebuffer" }
+      - { name: GEOMETRY_TOO_LARGE, description: "a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded" }
 
   devmgr:
     id: 10

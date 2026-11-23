@@ -15,7 +15,7 @@ app (WASM) ──GFX IPC (0x200–0x2FF)──► gfx-compositor (native Zig)
                                  FBTEXT IPC (0x600–0x6FF)
                                             │
                                     framebuffer driver
-                                  (framebuffer_pci or framebuffer)
+                         (framebuffer_pci, framebuffer_ramfb or framebuffer)
                                             │
                                     kernel native driver ABI
                                     (wasmos_driver_api_t)
@@ -68,8 +68,13 @@ Validation helper (`gfx_ipc.h`):
 ### FBTEXT IPC (0x600–0x6FF)
 
 These opcodes are used by the VT service and the compositor to control the
-framebuffer text/graphics plane. Both `framebuffer` (UEFI-backed) and
-`framebuffer_pci` (PCI-enumerated) drivers handle this namespace.
+framebuffer text/graphics plane. Every framebuffer driver variant runs the same
+server (`src/drivers/framebuffer/fbtext_server.c`) and differs only in how it
+reprograms its adapter, if it can: `framebuffer` (UEFI GOP, x86_64 and any
+firmware framebuffer) cannot, `framebuffer_pci` (x86_64 Bochs/QEMU VBE, bound to
+the PCI VGA function) writes the BGA ports, and `framebuffer_ramfb` (aarch64,
+QEMU ramfb, bound to the fw_cfg device QEMU0002) rewrites the fw_cfg file
+`etc/ramfb` through fw_cfg DMA.
 
 #### Opcodes
 
@@ -98,11 +103,24 @@ FBTEXT_CAP_QUERY_MODES    = 1u << 1
 
 #### Driver Variant Differences
 
-| Opcode         | `framebuffer_pci`                                     | `framebuffer` (UEFI) |
+| Opcode         | `framebuffer_pci`, `framebuffer_ramfb`                | `framebuffer` (UEFI) |
 |----------------|-------------------------------------------------------|----------------------|
 | QUERY_CAPS     | `FBTEXT_CAP_SET_RESOLUTION \| FBTEXT_CAP_QUERY_MODES` | 0 (no caps)          |
 | QUERY_MODES    | returns mode list                                     | `FBTEXT_IPC_ERROR`   |
 | SET_RESOLUTION | applies mode switch, reborrow                         | `FBTEXT_IPC_ERROR`   |
+
+#### Runtime Mode Setting
+
+A runtime mode reuses the boot framebuffer's memory: the kernel maps the
+physical range the bootloader captured and nothing enlarges it, so the modes a
+driver offers are the server's fixed list filtered to those whose framebuffer
+(width x height x 4 bytes, stride = width) fits it. A SET_RESOLUTION the adapter
+accepts is reported to the kernel with the native API's
+`framebuffer_set_geometry`, which only the registered framebuffer driver may
+call and which refuses a geometry that does not fit
+(`framebuffer.GEOMETRY_TOO_LARGE`). The compositor's `GFX_IPC_SET_DISPLAY_MODE`
+then remaps from the kernel's framebuffer info, so the compositor, the panic
+writer and the scanout agree on the geometry.
 
 #### GFX Overlay Lock
 

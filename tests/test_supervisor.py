@@ -98,10 +98,6 @@ class SupervisorTests(unittest.TestCase):
             cls.session.send("halt")
             cls.session.close()
 
-    @requires_arch(
-        "x86_64",
-        reason='no framebuffer on aarch64 yet: QEMU virt has no display device and ramfb/virtio-gpu is in docs/TASKS.md "arm64 Port"',
-    )
     def test_1_boot_services_came_up_without_a_failure(self):
         log = self.session.syslog_tail(1 << 20)
         # require_prompt already waited for the milestone; it is said once,
@@ -760,10 +756,6 @@ class SupervisorClientTests(unittest.TestCase):
             out.count(line), 1, "the restarted logger wrote the backlog again"
         )
 
-    @requires_arch(
-        "x86_64",
-        reason='no framebuffer on aarch64 yet: QEMU virt has no display device and ramfb/virtio-gpu is in docs/TASKS.md "arm64 Port"',
-    )
     def test_2_the_menu_bar_follows_a_restarted_compositor(self):
         # The menu bar's window goes with the compositor. It ends with
         # WASMOS_PEER_GONE on the compositor's hangup and, restart=always,
@@ -777,10 +769,6 @@ class SupervisorClientTests(unittest.TestCase):
         out = _svc(self, self.session, "status menu_bar")
         self.assertIn("last end: exited (status -8)", out)
 
-    @requires_arch(
-        "x86_64",
-        reason='no framebuffer on aarch64 yet: QEMU virt has no display device and ramfb/virtio-gpu is in docs/TASKS.md "arm64 Port"',
-    )
     def test_3_the_menu_bar_follows_a_restarted_font_service(self):
         # Text is rastered by the font service through an open font handle
         # that ends with it. The menu bar's next raster fails with

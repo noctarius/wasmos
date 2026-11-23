@@ -287,6 +287,7 @@ pub const WASMOS_ERR_ENV_TOO_LONG: i32 = -0x00160002; // the key or value exceed
 pub const WASMOS_ERR_ENV_TABLE_FULL: i32 = -0x00160003; // no free entry remains
 pub const WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: i32 = -0x00170001; // no framebuffer is available on this system
 pub const WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: i32 = -0x00170002; // the caller's requested mapping is smaller than the framebuffer
+pub const WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE: i32 = -0x00170003; // a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded
 pub const WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: i32 = -0x000A0001; // no block/filesystem mount rule matches the requested unit
 pub const WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: i32 = -0x000A0002; // unknown or unsupported device-manager query type
 pub const WASMOS_ERR_DEVMGR_NO_SUCH_RECORD: i32 = -0x000A0003; // the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something
@@ -628,6 +629,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_ENV_TABLE_FULL => "no free entry remains",
         WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT => "no framebuffer is available on this system",
         WASMOS_ERR_FRAMEBUFFER_TOO_SMALL => "the caller's requested mapping is smaller than the framebuffer",
+        WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE => "a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded",
         WASMOS_ERR_DEVMGR_NO_MOUNT_RULE => "no block/filesystem mount rule matches the requested unit",
         WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY => "unknown or unsupported device-manager query type",
         WASMOS_ERR_DEVMGR_NO_SUCH_RECORD => "the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something",

@@ -139,7 +139,8 @@ int dm_acpi_spawn_args(const pci_device_record_t* rec, char* out, uint32_t out_c
     return n;
 }
 
-void dm_acpi_caps(const pci_device_record_t* rec, spawn_caps_t* caps) {
+void dm_acpi_caps(const pci_device_record_t* rec, const wasmos_module_meta_desc_t* meta,
+                  spawn_caps_t* caps) {
     for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT && caps->region_count < WASMOS_REGION_LIMIT;
          ++i) {
         const wasmos_pci_bar_t* bar = &rec->bars[i];
@@ -166,6 +167,10 @@ void dm_acpi_caps(const pci_device_record_t* rec, spawn_caps_t* caps) {
         caps->cap_flags |= DEVMGR_CAP_IRQ;
         caps->irqs[0] = rec->irq_hint;
         caps->irq_count = 1;
+    }
+    if (meta && (meta->cap_flags & DEVMGR_CAP_DMA) != 0u && meta->dma_budget_pages != 0u) {
+        caps->cap_flags |= DEVMGR_CAP_DMA;
+        caps->dma_max_bytes = meta->dma_budget_pages * 4096u;
     }
 }
 

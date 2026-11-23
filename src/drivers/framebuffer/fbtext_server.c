@@ -133,11 +133,9 @@ static uint32_t count_supported_modes(void) {
 }
 
 /* Programs width x height through the backend and rebuilds the grid on success.
- * Returns 0 or the packed code to answer SET_RESOLUTION with.
- *
- * TODO: the kernel's framebuffer info keeps the boot geometry after a mode
- * change, so a consumer that reads it instead of asking this driver sees the old
- * mode; an update-framebuffer-info path is needed (docs/TASKS.md). */
+ * The kernel's framebuffer info is updated to match, so a consumer that reads it
+ * -- the compositor remaps from it -- follows the change. Returns 0 or the packed
+ * code to answer SET_RESOLUTION with. */
 static int32_t set_resolution(wasmos_driver_api_t* api, const fbtext_backend_t* backend,
                               uint32_t width, uint32_t height) {
     if (!mode_listed(width, height)) {
@@ -147,6 +145,10 @@ static int32_t set_resolution(wasmos_driver_api_t* api, const fbtext_backend_t* 
         return WASMOS_ERR_GFX_MODE_TOO_LARGE;
     }
     int32_t rc = backend->set_mode(api, width, height, width);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = api->framebuffer_set_geometry(width, height, width);
     if (rc != 0) {
         return rc;
     }
@@ -195,7 +197,7 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
      * expects. */
     if (!api || !backend || api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
         api->abi_version != WASMOS_NATIVE_ABI_VERSION || !api->console_write ||
-        !api->xfer_buffer_acquire) {
+        !api->xfer_buffer_acquire || !api->framebuffer_set_geometry) {
         return -2;
     }
 

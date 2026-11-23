@@ -338,7 +338,7 @@ static void test_an_acpi_mmio_window_is_granted_in_whole_pages(void) {
     rec.bars[0].kind = WASMOS_PCI_BAR_MEM64;
     rec.bars[0].base = 0x09000010u;
     rec.bars[0].size = 0x20u;
-    dm_acpi_caps(&rec, &caps);
+    dm_acpi_caps(&rec, NULL, &caps);
     assert(caps.cap_flags == (DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ));
     assert(caps.region_count == 1u);
     assert(caps.regions[0].kind == WASMOS_REGION_GRANT_MMIO);
@@ -359,7 +359,7 @@ static void test_acpi_io_windows_are_granted_in_order(void) {
     rec.bars[1].kind = WASMOS_PCI_BAR_IO;
     rec.bars[1].base = 0x64u;
     rec.bars[1].size = 1u;
-    dm_acpi_caps(&rec, &caps);
+    dm_acpi_caps(&rec, NULL, &caps);
     assert(caps.cap_flags == (DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ));
     assert(caps.region_count == 2u);
     assert(caps.regions[0].kind == WASMOS_REGION_GRANT_IO && caps.regions[0].base == 0x60u &&
@@ -377,11 +377,64 @@ static void test_an_acpi_device_without_an_interrupt_gets_none(void) {
     rec.bars[0].kind = WASMOS_PCI_BAR_IO;
     rec.bars[0].base = 0x70u;
     rec.bars[0].size = 8u;
-    dm_acpi_caps(&rec, &caps);
+    dm_acpi_caps(&rec, NULL, &caps);
     assert(caps.cap_flags == DEVMGR_CAP_IO_PORT);
     assert(caps.irq_count == 0u);
     assert(dm_caps_v2_encode(&caps, out, (uint32_t)sizeof(out)) ==
            (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(1, 0, 0));
+}
+
+/* QEMU's fw_cfg is one register window and no interrupt; the ramfb driver bound
+ * to it declares dma.buffer, because etc/ramfb is written through fw_cfg DMA.
+ * The firmware names the window, the driver's descriptor the DMA budget, and
+ * the encoded grant carries the DMA window the kernel checks its frames
+ * against. */
+static void test_an_acpi_driver_declaring_dma_is_granted_its_budget(void) {
+    pci_device_record_t rec = acpi_record(DM_IRQ_HINT_NONE);
+    wasmos_module_meta_desc_t meta;
+    spawn_caps_t caps;
+    uint8_t out[SUPERVISOR_CAPS_MAX];
+    memset(&meta, 0, sizeof(meta));
+    meta.cap_flags = DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_DMA;
+    meta.dma_budget_pages = 1u;
+    memset(&caps, 0, sizeof(caps));
+    rec.bars[0].kind = WASMOS_PCI_BAR_MEM64;
+    rec.bars[0].base = 0x09020000u;
+    rec.bars[0].size = 0x18u;
+    dm_acpi_caps(&rec, &meta, &caps);
+    assert(caps.cap_flags == (DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_DMA));
+    assert(caps.dma_max_bytes == 4096u);
+    assert(caps.region_count == 1u && caps.regions[0].base == 0x09020000u);
+    assert(dm_caps_v2_encode(&caps, out, (uint32_t)sizeof(out)) ==
+           (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(1, 1, 0));
+}
+
+/* DMA comes only from a descriptor that declares it with a budget: none, one
+ * without the capability, and one with a zero budget all grant no DMA. */
+static void test_an_acpi_driver_without_a_dma_declaration_gets_none(void) {
+    pci_device_record_t rec = acpi_record(DM_IRQ_HINT_NONE);
+    wasmos_module_meta_desc_t meta;
+    spawn_caps_t caps;
+    rec.bars[0].kind = WASMOS_PCI_BAR_MEM64;
+    rec.bars[0].base = 0x09020000u;
+    rec.bars[0].size = 0x18u;
+
+    memset(&caps, 0, sizeof(caps));
+    dm_acpi_caps(&rec, NULL, &caps);
+    assert((caps.cap_flags & DEVMGR_CAP_DMA) == 0u && caps.dma_max_bytes == 0u);
+
+    memset(&meta, 0, sizeof(meta));
+    meta.cap_flags = DEVMGR_CAP_MMIO_MAP;
+    meta.dma_budget_pages = 4u;
+    memset(&caps, 0, sizeof(caps));
+    dm_acpi_caps(&rec, &meta, &caps);
+    assert((caps.cap_flags & DEVMGR_CAP_DMA) == 0u && caps.dma_max_bytes == 0u);
+
+    meta.cap_flags = DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_DMA;
+    meta.dma_budget_pages = 0u;
+    memset(&caps, 0, sizeof(caps));
+    dm_acpi_caps(&rec, &meta, &caps);
+    assert((caps.cap_flags & DEVMGR_CAP_DMA) == 0u && caps.dma_max_bytes == 0u);
 }
 
 /* A 16550 at `io` as registry_add_from_acpi_desc leaves it. */
@@ -512,6 +565,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_an_acpi_mmio_window_is_granted_in_whole_pages),
         WASMOS_TEST_CASE(test_acpi_io_windows_are_granted_in_order),
         WASMOS_TEST_CASE(test_an_acpi_device_without_an_interrupt_gets_none),
+        WASMOS_TEST_CASE(test_an_acpi_driver_declaring_dma_is_granted_its_budget),
+        WASMOS_TEST_CASE(test_an_acpi_driver_without_a_dma_declaration_gets_none),
         WASMOS_TEST_CASE(test_a_uart_the_firmware_passed_over_is_told_it_is_not_the_console),
         WASMOS_TEST_CASE(test_without_a_firmware_console_no_console_arg_is_given),
         WASMOS_TEST_CASE(test_a_pci_device_without_a_hint_is_granted_no_interrupt),

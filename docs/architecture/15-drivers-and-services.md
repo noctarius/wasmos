@@ -204,6 +204,22 @@ Capability flags: `FBTEXT_CAP_SET_RESOLUTION = 1<<0`, `FBTEXT_CAP_QUERY_MODES = 
 PCI VGA variant of the framebuffer driver. Spawned by the boot-FAT rule when a
 matching PCI graphics device is discovered.
 
+#### `framebuffer_ramfb` — QEMU ramfb Framebuffer Driver (Native, aarch64)
+
+- **Kind:** native ELF driver; `FLAG_DRIVER|FLAG_NATIVE`
+- **ACPI match:** `_HID` `QEMU0002` (the fw_cfg device; `default.aarch64.rules`)
+- **Capabilities:** `mmio.map` (region 0: the fw_cfg register window), `dma.buffer`
+  (one page)
+
+ramfb variant of the framebuffer driver. QEMU's ramfb scans out of guest RAM the
+firmware allocated and reported as the GOP framebuffer; the driver serves it
+with the shared FBTEXT server and changes the mode by rewriting the fw_cfg file
+`etc/ramfb` (address, XRGB8888, width, height, stride) with the same buffer.
+QEMU accepts fw_cfg file writes only through the DMA interface, so the driver
+locates `etc/ramfb` in the fw_cfg file directory and writes it through a DMA
+descriptor in its one DMA page. The harness and `run-qemu*` targets attach
+`-device ramfb` on aarch64 (`ARCHES` in `scripts/buildgen/toolchains.py`).
+
 #### `keyboard` — PS/2 Keyboard Driver
 
 - **Kind:** WASM driver

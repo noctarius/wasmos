@@ -374,6 +374,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 |---|---|---|
 | `WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT` | -0x00170001 | no framebuffer is available on this system |
 | `WASMOS_ERR_FRAMEBUFFER_TOO_SMALL` | -0x00170002 | the caller's requested mapping is smaller than the framebuffer |
+| `WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE` | -0x00170003 | a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded |
 
 ### `devmgr` (domain 10) — device-manager query failures
 

@@ -2192,10 +2192,12 @@ Other graphics/VT/UI:
 - [ ] [ENHANCEMENT][P2] Make `libui`, font-service, and compositor allocation/index arithmetic
   overflow-safe: validate dimensions before multiplication, compute buffer
   indexes in `usize`, and cap growth before capacity doubling.
-- [ ] [FEATURE][P2] Add an explicit mode-set / update-framebuffer-info path for runtime
-  mode changes: after one, the kernel's framebuffer info still reports the boot
-  geometry, so a consumer that reads it rather than asking the driver sees the
-  old mode (`src/drivers/framebuffer/fbtext_server.c`, `set_resolution` `TODO`).
+- [x] [FEATURE][P2] Add an explicit mode-set / update-framebuffer-info path for runtime
+  mode changes. Done: after its adapter accepts a mode the framebuffer driver
+  reports it through the native API's `framebuffer_set_geometry`
+  (`framebuffer_set_geometry`, `src/kernel/framebuffer.c`; only the registered
+  framebuffer driver may), so the compositor, which remaps from the kernel's
+  framebuffer info, follows the change (`tests/test_ramfb_mode.py`).
 - [ ] [ENHANCEMENT][P2] Make VT cell/reply/replay writes robust under framebuffer backpressure;
   they are best-effort today and drop on persistent queue-full
   (`src/services/vt/vt_main.c:244,287,892`).
@@ -2264,12 +2266,20 @@ and the reason it prints names what is missing. Read `docs/architecture/04-boot-
 `06-memory-management.md` and `10-capability-and-policy.md` first.
 
 - [ ] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
-  x86_64-only), PL031 RTC driver (the CMOS rtc stays x86_64-only), and a
-  framebuffer (ramfb or virtio-gpu; `src/boot/boot.c` TODO: no GOP on `virt`).
-  Until then aarch64 skips the tests that need them: `date`
-  (`test_cli`, `test_app_churn`, the rtc unit in `test_supervisor`), the menu
-  bar and VT screen ownership (`test_menu_bar_title`,
-  `test_vt_framebuffer_ownership`, `test_supervisor`'s menu-bar cases).
+  x86_64-only) and PL031 RTC driver (the CMOS rtc stays x86_64-only). Until
+  then aarch64 skips the `date` tests (`test_cli`, `test_app_churn`, the rtc
+  unit in `test_supervisor`), and its display takes no input.
+- [x] [FEATURE][P2] A framebuffer on aarch64. Done with QEMU ramfb: the harness
+  attaches `-device ramfb`, the firmware reports it as the GOP framebuffer, and
+  `framebuffer_ramfb` (bound to the fw_cfg device QEMU0002) serves it and sets
+  modes through fw_cfg DMA (`tests/test_ramfb_mode.py`). The menu-bar and VT
+  screen-ownership tests run on aarch64.
+- [ ] [FEATURE][P2] virtio-gpu driver, the final display step on both x86_64
+  and aarch64: a scanout the driver owns rather than the firmware framebuffer,
+  so a mode is no longer bounded by the boot framebuffer's size, and the seam
+  for forwarding the compositor's draw lists to the device (see the
+  compositor entry above). Its UEFI GOP stops being refreshed once boot
+  services exit, so it is useful only with a native driver.
 - [ ] [TEST][P2] Make the storage tests topology-aware, so they run on aarch64.
   They are written against x86_64's layout -- ATA drives, `/wfs` on the IDE
   secondary channel, an ATA boot disk beside one virtio disk -- and aarch64

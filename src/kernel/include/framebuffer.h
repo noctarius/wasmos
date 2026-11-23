@@ -40,6 +40,19 @@ int framebuffer_map_high(void);
  * or WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT when no usable framebuffer is recorded. */
 wasmos_error_code_t framebuffer_get_info(framebuffer_info_t* out);
 
+/* Records a new geometry for the recorded framebuffer after its driver has
+ * reprogrammed the adapter: width x height pixels, `stride` PIXELS per scanline,
+ * scanning out of the same physical range. Base, size and pixel format are
+ * unchanged, so the new geometry must fit the range the bootloader recorded.
+ * Every later framebuffer_get_info -- the compositor's, the native driver API's,
+ * the panic writer's -- reports it.
+ *
+ * Returns WASMOS_OK, WASMOS_INVAL for a zero width or height or a stride below
+ * the width, WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT when none was recorded, or
+ * WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE when stride x height x 4 bytes
+ * exceeds the recorded size. Authorising the caller is the caller's business. */
+wasmos_error_code_t framebuffer_set_geometry(uint32_t width, uint32_t height, uint32_t stride);
+
 /* WASMOS_OK, WASMOS_INVAL when (x, y) is off-screen -- a caller mistake it can
  * correct, distinct from there being no framebuffer -- or
  * WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT when none is mapped. */

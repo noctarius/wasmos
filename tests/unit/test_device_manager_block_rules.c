@@ -1053,14 +1053,17 @@ static void an_overlong_rule_line_is_refused(void) {
 }
 
 /* An ACPI device as the acpi-bus inventory leaves it in the registry: bus 0xFF
- * marks it as not PCI, and its I/O base is kept in device_id. */
-static void add_acpi_device(uint8_t class_code, uint8_t subclass, uint16_t io, uint8_t irq) {
+ * marks it as not PCI, its I/O window is bars[0], and io_port_base is its base. */
+static void add_acpi_device(uint8_t class_code, uint8_t subclass, uint16_t io, uint32_t irq) {
     pci_device_record_t* rec = &g_dm.registry[g_dm.registry_count++];
     memset(rec, 0, sizeof(*rec));
     rec->bus = 0xFFu;
     rec->class_code = class_code;
     rec->subclass = subclass;
-    rec->device_id = io;
+    rec->io_port_base = io;
+    rec->bars[0].kind = WASMOS_PCI_BAR_IO;
+    rec->bars[0].base = io;
+    rec->bars[0].size = 8u;
     rec->irq_hint = irq;
 }
 

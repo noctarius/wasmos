@@ -11,10 +11,10 @@ import {CONSOLE_PORT, serialNameWord} from "./serial_name";
 import {runShuffled, TestCase} from "./shuffle";
 
 /* The name the four packed words spell, as the process manager unpacks it. */
-function unpack(port: i32): string {
+function unpack(base: i64, console: bool = false): string {
     let out = "";
     for (let w = 0; w < 4; ++w) {
-        const word = serialNameWord(port, w);
+        const word = serialNameWord(base, console, w);
         for (let b = 0; b < 4; ++b) {
             const c = (word >>> (b * 8)) & 0xff;
             if (c == 0) {
@@ -27,7 +27,23 @@ function unpack(port: i32): string {
 }
 
 function testTheConsoleIsSin(): i32 {
-    if (unpack(CONSOLE_PORT) != "sin") return 101;
+    if (unpack(CONSOLE_PORT, true) != "sin") return 101;
+    /* Whatever its base: a PL011 the firmware names as the console. */
+    if (unpack(0x9000000, true) != "sin") return 102;
+    return 0;
+}
+
+function testCom1IsNamedByItsBaseWhenItIsNotTheConsole(): i32 {
+    if (unpack(CONSOLE_PORT) != "s3f8") return 401;
+    return 0;
+}
+
+/* A memory-mapped UART is named by its physical address, all of it: a 32-bit
+ * address spills into the third packed word. */
+function testAMemoryMappedUartIsNamedByItsAddress(): i32 {
+    if (unpack(0x9000000) != "s9000000") return 501;
+    if (unpack(0xfe215040) != "sfe215040") return 502;
+    if (unpack(0xfe215040) == unpack(0x215040)) return 503;
     return 0;
 }
 
@@ -50,6 +66,8 @@ export function runTests(): i32 {
         testTheConsoleIsSin,
         testAnotherUartIsNamedByItsBase,
         testBasesDifferingAboveTwelveBitsGetDifferentNames,
+        testCom1IsNamedByItsBaseWhenItIsNotTheConsole,
+        testAMemoryMappedUartIsNamedByItsAddress,
     ];
     return runShuffled(cases);
 }

@@ -782,13 +782,12 @@ static int hw_spawn_driver_index(int32_t index) {
     return dm_spawn_sync_call(PROC_IPC_SPAWN_SYNC, index, DM_SPAWN_TIMEOUT_MS, 0, 0);
 }
 
-/* Interrupt grants. A record's hint of 0xFF names no interrupt. The
+/* Interrupt grants. A record's hint of DM_IRQ_HINT_NONE names no interrupt. The
  * two-interrupt default (lines 14 and 15) stands for "the line is resolved
  * later" when a record carries no usable hint. An interrupt is granted only
  * with DEVMGR_CAP_IRQ in the caps' cap_flags, which every caller sets first:
  * the kernel refuses an interrupt grant without it, and a driver that declares
  * no interrupt (virtio_serial raises none) must not be handed one. */
-#define DM_IRQ_HINT_NONE 0xFFu
 
 static void caps_irqs_none(spawn_caps_t* caps) {
     caps->irq_count = 0;
@@ -811,7 +810,7 @@ static void caps_irqs_default(spawn_caps_t* caps) {
     }
 }
 
-static void caps_irqs_from_hint(spawn_caps_t* caps, uint8_t hint) {
+static void caps_irqs_from_hint(spawn_caps_t* caps, uint32_t hint) {
     if (hint == DM_IRQ_HINT_NONE) {
         caps_irqs_none(caps);
     } else {
@@ -1064,24 +1063,37 @@ static int build_pci_spawn_args(const pci_device_record_t* rec, char* out, uint3
                  (unsigned)rec->vendor_id,
                  (unsigned)rec->device_id,
                  (unsigned)rec->io_port_base,
-                 (unsigned)rec->irq_hint);
+                 (unsigned)(rec->irq_hint == DM_IRQ_HINT_NONE ? 0xFFu : rec->irq_hint));
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
     }
     return n;
 }
 
-/* The startup args of an ACPI-matched driver: the device's I/O base and IRQ
- * line, the same two values its capability grant is built from. A driver that
- * can serve more than one instance of its device (a second UART) learns from
- * these which one it was spawned for. */
+/* The startup args of an ACPI-matched driver: `hid=` (which device model it
+ * is), the base of its first register window as `io=` or `mmio=`, `irq=` when
+ * it has an interrupt, all hex, and `console=1` when the firmware names it the
+ * console. A driver that can serve more than one model or instance of its
+ * device (a 16550 or a PL011, a second UART) learns from these which one it was
+ * spawned for; the windows themselves reach it as its region grants. */
 static int build_acpi_spawn_args(const pci_device_record_t* rec, char* out, uint32_t out_cap) {
     int n = 0;
     if (!rec || !out || out_cap == 0u) {
         return -1;
     }
-    n = snprintf(
-        out, out_cap, "io=%04X irq=%02X", (unsigned)rec->device_id, (unsigned)rec->irq_hint);
+    n = snprintf(out, out_cap, "hid=%s", rec->hid);
+    if (n > 0 && (uint32_t)n < out_cap && rec->bars[0].kind != WASMOS_PCI_BAR_NONE) {
+        n += snprintf(out + n,
+                      out_cap - (uint32_t)n,
+                      rec->bars[0].kind == WASMOS_PCI_BAR_IO ? " io=%llX" : " mmio=%llX",
+                      (unsigned long long)rec->bars[0].base);
+    }
+    if (n > 0 && (uint32_t)n < out_cap && rec->irq_hint != DM_IRQ_HINT_NONE) {
+        n += snprintf(out + n, out_cap - (uint32_t)n, " irq=%X", (unsigned)rec->irq_hint);
+    }
+    if (n > 0 && (uint32_t)n < out_cap && rec->acpi_console) {
+        n += snprintf(out + n, out_cap - (uint32_t)n, " console=1");
+    }
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
     }
@@ -1262,7 +1274,7 @@ static void registry_add_from_desc(int32_t buffer_id, int32_t offset, int32_t si
     rec->prog_if = desc.prog_if;
     rec->vendor_id = desc.vendor_id;
     rec->device_id = desc.device_id;
-    rec->irq_hint = desc.irq_line;
+    rec->irq_hint = desc.irq_line == 0xFFu ? DM_IRQ_HINT_NONE : desc.irq_line;
     rec->irq_pin = desc.irq_pin;
     rec->msi_cap_offset = desc.msi_cap_offset;
     rec->msix_cap_offset = desc.msix_cap_offset;
@@ -1277,36 +1289,50 @@ static void registry_add_from_desc(int32_t buffer_id, int32_t offset, int32_t si
     queue_block_fs_rule_spawns();
 }
 
-/* Unpack an arg-packed device announcement (DEVMGR_PUBLISH_DEVICE) into a
- * registry record.  Bit layout, shared with the pci-bus/acpi-bus senders:
- *   arg0 [31:24]=bus  [23:16]=device  [15:8]=function  [7:0]=class_code
- *   arg1 [31:24]=subclass  [23:16]=prog_if  [15:0]=vendor_id
- *   arg2 [31:16]=io_port_base  [15:0]=device_id
- *   arg3 [15:8]=irq_hint  [7:0]=mmio_hint
- * bus == 0xFF marks a non-PCI (ACPI/ISA) device; the bars[] table stays empty
- * for those, which is why they keep using this form.  An ACPI/ISA sender has no
- * vendor/device id to report and instead puts the device's I/O port base in
- * arg2's LOW half, so such a record carries its I/O base in device_id and leaves
- * io_port_base zero; the acpi_match spawn path reads device_id accordingly. */
-static void registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
+/* Add one ACPI device from a wasmos_acpi_device_desc_t that acpi-bus wrote at
+ * `offset` in a buffer it owns and lent to this service. The record is marked
+ * bus 0xFF (not PCI); its windows become bars[] in the order acpi-bus listed
+ * them, and io_port_base is the first I/O window, the base an ATTR{io} rule
+ * names. A descriptor of another version is dropped rather than half read. */
+static void registry_add_from_acpi_desc(int32_t buffer_id, int32_t offset, int32_t size) {
+    wasmos_acpi_device_desc_t desc;
+    pci_device_record_t* rec;
     if (g_dm.registry_count >= DEVICE_REGISTRY_CAP) {
         return;
     }
-    pci_device_record_t* rec = &g_dm.registry[g_dm.registry_count++];
-    uint32_t v0 = (uint32_t)arg0;
-    uint32_t v1 = (uint32_t)arg1;
-    uint32_t v2 = (uint32_t)arg2;
-    rec->bus = (uint8_t)((v0 >> 24) & 0xFFu);
-    rec->device = (uint8_t)((v0 >> 16) & 0xFFu);
-    rec->function = (uint8_t)((v0 >> 8) & 0xFFu);
-    rec->class_code = (uint8_t)(v0 & 0xFFu);
-    rec->subclass = (uint8_t)((v1 >> 24) & 0xFFu);
-    rec->prog_if = (uint8_t)((v1 >> 16) & 0xFFu);
-    rec->vendor_id = (uint16_t)(v1 & 0xFFFFu);
-    rec->device_id = (uint16_t)(v2 & 0xFFFFu);
-    rec->io_port_base = (uint16_t)((v2 >> 16) & 0xFFFFu);
-    rec->mmio_hint = (uint8_t)((uint32_t)arg3 & 0xFFu);
-    rec->irq_hint = (uint8_t)(((uint32_t)arg3 >> 8) & 0xFFu);
+    if (size < (int32_t)sizeof(desc) ||
+        wasmos_xfer_buffer_read(buffer_id, &desc, (int32_t)sizeof(desc), offset) != 0) {
+        console_write("[device-manager] acpi descriptor read failed\n");
+        return;
+    }
+    if (desc.version != WASMOS_ACPI_DEVICE_DESC_VERSION) {
+        console_write("[device-manager] acpi descriptor version mismatch\n");
+        return;
+    }
+    rec = &g_dm.registry[g_dm.registry_count++];
+    memset(rec, 0, sizeof(*rec));
+    rec->bus = 0xFFu;
+    rec->class_code = desc.class_code;
+    rec->subclass = desc.subclass;
+    rec->prog_if = desc.prog_if;
+    rec->irq_hint = desc.irq == WASMOS_ACPI_NO_IRQ ? DM_IRQ_HINT_NONE : desc.irq;
+    rec->acpi_console = (desc.flags & WASMOS_ACPI_DEVICE_CONSOLE) ? 1u : 0u;
+    (void)str_copy_bytes(rec->hid,
+                         sizeof(rec->hid),
+                         (const uint8_t*)desc.hid,
+                         strnlen(desc.hid, sizeof(desc.hid) - 1u));
+    for (uint32_t i = 0; i < desc.window_count && i < WASMOS_REGION_LIMIT; ++i) {
+        const wasmos_region_grant_t* w = &desc.windows[i];
+        wasmos_pci_bar_t* bar = &rec->bars[i];
+        bar->kind = w->kind == WASMOS_REGION_GRANT_IO ? WASMOS_PCI_BAR_IO : WASMOS_PCI_BAR_MEM64;
+        bar->base = w->base;
+        bar->size = w->length;
+        if (bar->kind == WASMOS_PCI_BAR_IO && rec->io_port_base == 0u) {
+            rec->io_port_base = (uint16_t)(w->base & 0xFFFFu);
+        } else if (bar->kind != WASMOS_PCI_BAR_IO) {
+            rec->mmio_hint = 1u;
+        }
+    }
     queue_block_fs_rule_spawns();
 }
 
@@ -1428,14 +1454,10 @@ static void queue_acpi_match_rule_spawns(void) {
             if (!dm_acpi_rule_matches(rule, rec)) {
                 continue;
             }
-            /* Build caps from the device record: device_id = I/O base,
-             * irq_hint = IRQ line. From zero: the previous rule's ranges and
-             * PCI function are not this device's. */
+            /* From zero: the previous rule's ranges and PCI function are not
+             * this device's. */
             g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
-            g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
-            g_dm.active_rule_spawn_caps.io_port_min = rec->device_id;
-            g_dm.active_rule_spawn_caps.io_port_max = (uint16_t)(rec->device_id + 7u);
-            caps_irqs_from_hint(&g_dm.active_rule_spawn_caps, rec->irq_hint);
+            dm_acpi_caps(rec, &g_dm.active_rule_spawn_caps);
             str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
             g_dm.active_rule_fstype[0] = '\0';
             g_dm.rule_spawn_pending = 1;
@@ -2395,12 +2417,12 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
         dm_handle_unpublish(msg, 1);
         return;
     }
-    /* The packed form still carries ACPI/ISA devices (bus 0xFF), which have no
-     * BARs and fit in four words; PCI functions come as descriptors. */
-    if (msg->type == DEVMGR_PUBLISH_DEVICE) {
-        registry_add_from_ipc(msg->arg0, msg->arg1, msg->arg2, msg->arg3);
-    } else if (msg->type == DEVMGR_PUBLISH_DEVICE_DESC) {
+    if (msg->type == DEVMGR_PUBLISH_DEVICE_DESC) {
         registry_add_from_desc(msg->arg0, msg->arg1, msg->arg2);
+        return;
+    }
+    if (msg->type == DEVMGR_PUBLISH_ACPI_DEVICE_DESC) {
+        registry_add_from_acpi_desc(msg->arg0, msg->arg1, msg->arg2);
         return;
     }
     if (msg->type == DEVMGR_PCI_SCAN_DONE) {
@@ -2441,8 +2463,10 @@ static int dm_register_inventory_handlers(void) {
         0) {
         return -1;
     }
-    if (wasmos_sys_event_register(
-            &g_dm_inventory_loop, DEVMGR_PUBLISH_DEVICE, dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(&g_dm_inventory_loop,
+                                  DEVMGR_PUBLISH_ACPI_DEVICE_DESC,
+                                  dm_handle_inventory_message,
+                                  0) != 0) {
         return -1;
     }
     if (wasmos_sys_event_register(
@@ -2968,7 +2992,7 @@ static void dm_on_submit_reply(void* user, const wasmos_ipc_message_t* msg) {
 }
 
 /* The armed rule's ENV{RESTART} policy and the instance key of its device
- * ("acpi:<io base>", "pci:<bus>:<device>.<function>"), or NULL when the rule
+ * ("acpi:<base of its first window>", "pci:<bus>:<device>.<function>"), or NULL when the rule
  * names no policy and the device manager spawns the driver itself. */
 static const char* dm_armed_rule_restart(char* instance, uint32_t cap) {
     const pci_device_record_t* rec;
@@ -2981,7 +3005,10 @@ static const char* dm_armed_rule_restart(char* instance, uint32_t cap) {
     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
         g_dm.active_rule_spawn_index < (int32_t)g_dm.acpi_match_rule_count) {
         restart = g_dm.acpi_match_rules[g_dm.active_rule_spawn_index].restart;
-        (void)snprintf(instance, cap, "acpi:%04x", (unsigned)(rec->device_id & 0xFFFFu));
+        (void)snprintf(instance,
+                       cap,
+                       rec->bars[0].kind == WASMOS_PCI_BAR_IO ? "acpi:%04llx" : "acpi:%llx",
+                       (unsigned long long)rec->bars[0].base);
     } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
                g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_match_rule_count) {
         restart = g_dm.pci_match_rules[g_dm.active_rule_spawn_index].restart;

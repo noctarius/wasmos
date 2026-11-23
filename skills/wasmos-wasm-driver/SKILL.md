@@ -34,7 +34,8 @@ Legacy patterns that are GONE — do not use them:
 
 All drivers live under `src/drivers/<name>/`. Representative examples:
 `src/drivers/virtio_rng/` (WASM/C, DMA + PCI-matched), `src/drivers/chardev/`
-(WASM/C, trivial), `src/drivers/serial/` (AssemblyScript), and
+(WASM/C, trivial), `src/drivers/uart16550/` and `src/drivers/pl011/`
+(AssemblyScript: two chip backends sharing `src/drivers/serial/serial_core.ts`), and
 `src/drivers/framebuffer_pci/` (native/C).
 
 - WASM includes: `wasmos/api.h`, `wasmos/ipc.h`, `wasmos/libsys.h`,
@@ -141,8 +142,8 @@ helpers in `scripts/buildgen/wasmos_rules.py` (API reference:
   `[link]` section (`stack_size`, `initial_memory`, `max_memory`). Under WARP, a
   manifest with `aot = true` is AOT-compiled by `warp_aot` and bundled. C sources
   link in the listed order. `cxx=True` selects C++. Examples:
-  `src/drivers/virtio_rng/BUILD.py` (C), `src/drivers/serial/BUILD.py`
-  (`lang="as"`).
+  `src/drivers/virtio_rng/BUILD.py` (C), `src/drivers/pl011/BUILD.py`
+  (`lang="as"`, with sources from a shared directory).
 - Native C/Zig: compile with `b.toolchain("native").compile(...)` (and
   `zig_object(...)` for a Zig root module), then `native(b, name, objs,
   entry="initialize", image_base=...)` links a static ELF and packs it without

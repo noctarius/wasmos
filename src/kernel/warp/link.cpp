@@ -93,6 +93,7 @@ struct WarpCallContext {
 static int warp_require_system_control_capability(uint32_t context_id);
 #ifdef WASMOS_WASM_RUNTIME_WARP
 static int warp_ring3_sync_user_range(WarpCallContext* ctx, uint32_t wasm_off, uint32_t size);
+static int warp_ring3_sync_linmem_user_window(uint8_t* linmem_base);
 #endif
 
 // Per-process WARP call contexts, keyed by pid.  Backed by a growable hashmap
@@ -122,6 +123,12 @@ static WarpCallContext* ctx_find(uint32_t pid) {
  * the target physical page, the data copied, then the mapping restored. */
 static uint8_t g_phys_scratch[4096] __attribute__((aligned(4096)));
 
+/* Bytes of linear memory WARP treats as live behind the linear-memory base
+ * `linmem_base` (the basedata field that precedes it). */
+static inline uint32_t warp_linmem_live_bytes(uint8_t const* linmem_base) {
+    return *(uint32_t const*)(void const*)(linmem_base - Basedata::FromEnd::actualLinMemByteSize);
+}
+
 /* Kernel-side pointer for the guest linear-memory range [offset, offset+size).
  * `offset` is a wasm32 offset, never a host address; the returned pointer is a KERNEL
  * alias of those bytes, while a ring-3 guest reaches the same bytes at
@@ -129,7 +136,13 @@ static uint8_t g_phys_scratch[4096] __attribute__((aligned(4096)));
  * so this pointer is never what the guest sees.  It is borrowed and only valid until
  * something can move or extend linear memory (a later probe past the current end, or
  * warp_r3_memory_helper); re-fetch the base after any such call rather than caching it.
- * Returns nullptr when the context has no module or the range leaves linear memory. */
+ * Returns nullptr when the context has no module or the range leaves linear memory.
+ *
+ * A range past WARP's live linear memory grows it here, which commits the new pages
+ * on the kernel side. The ring-3 view of linear memory is re-published whenever that
+ * happens, before the pointer is returned: the guest's bounds check reads the grown
+ * live size and would otherwise reach a page that is committed but not mapped for
+ * ring 3, faulting on bytes the host call just wrote. */
 static inline uint8_t* warp_mem(WarpCallContext* ctx, uint32_t offset, uint32_t size) {
     /* Use the full getLinearMemoryRegion(offset, size) path with non-zero size.
      * With LINEAR_MEMORY_BOUNDS_CHECKS=1, this triggers probe() →
@@ -140,7 +153,19 @@ static inline uint8_t* warp_mem(WarpCallContext* ctx, uint32_t offset, uint32_t 
      * committed) without zeroing it again. */
     if (!ctx || !ctx->module)
         return nullptr;
+#ifdef WASMOS_WASM_RUNTIME_WARP
+    uint8_t* base = ctx->module->getLinearMemoryRegion(0, 0);
+    uint32_t live = base ? warp_linmem_live_bytes(base) : 0;
+    uint8_t* ptr = ctx->module->getLinearMemoryRegion(offset, size);
+    uint8_t* grown_base = ptr ? ctx->module->getLinearMemoryRegion(0, 0) : nullptr;
+    if (grown_base && (grown_base != base || warp_linmem_live_bytes(grown_base) != live) &&
+        warp_ring3_sync_linmem_user_window(grown_base) != 0) {
+        return nullptr;
+    }
+    return ptr;
+#else
     return ctx->module->getLinearMemoryRegion(offset, size);
+#endif
 }
 
 /* Kernel-side pointer for a range that is already committed, bounded by the module's

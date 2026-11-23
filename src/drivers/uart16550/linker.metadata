@@ -2,7 +2,7 @@ version = 1
 aot = true
 
 [package]
-name = "serial"
+name = "uart16550"
 entry = "initialize"
 kind = "driver"
 native = false

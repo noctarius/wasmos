@@ -151,7 +151,8 @@ transfer-buffer borrow/release provides bulk data transfer across processes.
 `device-manager` is the central service for hardware discovery and driver
 lifecycle. It:
 - starts `pci-bus` and waits for PCI scan completion before storage bootstrap
-- starts `acpi-bus` for ISA/ACPI device records (serial, keyboard, mouse, RTC)
+- starts `acpi-bus` for ACPI namespace device records (x86_64: serial, keyboard,
+  mouse, RTC; aarch64: the PL011 console UART)
 - drives storage bootstrap, then post-FAT driver loading, via udev-style rules
 
 `pci-bus` enumerates PCI config space in user space and publishes normalized

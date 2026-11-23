@@ -737,9 +737,8 @@ enum {
     VIRTIO_SERIAL_IPC_ERROR = 0x8BF,
 };
 
-/* device_manager (0x900..0x982) */
+/* device_manager (0x901..0x982) */
 enum {
-    DEVMGR_PUBLISH_DEVICE = 0x900,
     DEVMGR_PCI_SCAN_DONE = 0x901,
     DEVMGR_QUERY_MOUNT_REQ = 0x902,
     /* Announce one block device to the device-manager inventory as a
@@ -762,8 +761,8 @@ enum {
      * rather than partially read; see WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION.
      */
     DEVMGR_PUBLISH_BLOCK_DEVICE = 0x903,
-    /* ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
-     * device_id field carries the I/O base address for serial (class 0x07).
+    /* acpi-bus has published every device it found
+     * (DEVMGR_PUBLISH_ACPI_DEVICE_DESC); sent once, after the last one.
      */
     DEVMGR_ACPI_SCAN_DONE = 0x905,
     /* Publish one enumerated PCI function as a wasmos_pci_device_desc_t held
@@ -771,8 +770,8 @@ enum {
      * arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
      * Each device occupies its own offset, so the publisher never overwrites
      * a descriptor the receiver has not read yet and no acknowledgement is
-     * needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words
-     * cannot describe six BARs and the capability offsets.
+     * needed. Supersedes DEVMGR_PUBLISH_DEVICE (retired), whose four
+     * argument words could not describe six BARs and the capability offsets.
      */
     DEVMGR_PUBLISH_DEVICE_DESC = 0x906,
     /* Announce one VOLUME to the device-manager inventory as a
@@ -841,6 +840,16 @@ enum {
      * whole-disk volume, because the partitions are the volumes from then on.
      */
     DEVMGR_UNPUBLISH_VOLUME = 0x909,
+    /* Publish one ACPI namespace device as a wasmos_acpi_device_desc_t held
+     * in a transfer buffer the publisher (acpi-bus) owns and has borrowed to
+     * this endpoint for reading.
+     * arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
+     * Each device occupies its own offset, so the publisher never overwrites
+     * a descriptor the receiver has not read yet and no acknowledgement is
+     * needed. The publisher keeps the buffer, and so stays resident, for as
+     * long as the receiver may still read it.
+     */
+    DEVMGR_PUBLISH_ACPI_DEVICE_DESC = 0x90A,
     /* arg0 = 0, or a packed error code: the id is malformed, or is not in the inventory. */
     DEVMGR_UNPUBLISH_RESP = 0x982,
     DEVMGR_MOUNT_INFO = 0x980,
@@ -1649,7 +1658,6 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         }
     case WASMOS_OPCODE_SUBSYS_DEVICE_MANAGER:
         switch (type) {
-        case 0x900: return "DEVMGR_PUBLISH_DEVICE";
         case 0x901: return "DEVMGR_PCI_SCAN_DONE";
         case 0x902: return "DEVMGR_QUERY_MOUNT_REQ";
         case 0x903: return "DEVMGR_PUBLISH_BLOCK_DEVICE";
@@ -1658,6 +1666,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x907: return "DEVMGR_PUBLISH_VOLUME";
         case 0x908: return "DEVMGR_UNPUBLISH_BLOCK_DEVICE";
         case 0x909: return "DEVMGR_UNPUBLISH_VOLUME";
+        case 0x90A: return "DEVMGR_PUBLISH_ACPI_DEVICE_DESC";
         case 0x982: return "DEVMGR_UNPUBLISH_RESP";
         case 0x980: return "DEVMGR_MOUNT_INFO";
         case 0x981: return "DEVMGR_QUERY_DONE";

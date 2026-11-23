@@ -655,8 +655,7 @@ export const VIRTIO_SERIAL_IPC_WRITE_REG32_REQ: i32 = 0x832;
 export const VIRTIO_SERIAL_IPC_RESP: i32 = 0x8B0;
 export const VIRTIO_SERIAL_IPC_ERROR: i32 = 0x8BF;
 
-// device_manager (0x900..0x982)
-export const DEVMGR_PUBLISH_DEVICE: i32 = 0x900;
+// device_manager (0x901..0x982)
 export const DEVMGR_PCI_SCAN_DONE: i32 = 0x901;
 export const DEVMGR_QUERY_MOUNT_REQ: i32 = 0x902;
 // Announce one block device to the device-manager inventory as a
@@ -678,16 +677,16 @@ export const DEVMGR_QUERY_MOUNT_REQ: i32 = 0x902;
 // A descriptor whose version is not BLOCK_DESCRIPTOR_VERSION is dropped
 // rather than partially read; see WASMOS_ERR_BLOCK_DEV_DESCRIPTOR_VERSION.
 export const DEVMGR_PUBLISH_BLOCK_DEVICE: i32 = 0x903;
-// ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
-// device_id field carries the I/O base address for serial (class 0x07).
+// acpi-bus has published every device it found
+// (DEVMGR_PUBLISH_ACPI_DEVICE_DESC); sent once, after the last one.
 export const DEVMGR_ACPI_SCAN_DONE: i32 = 0x905;
 // Publish one enumerated PCI function as a wasmos_pci_device_desc_t held
 // in a transfer buffer the publisher has borrowed to this endpoint.
 // arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
 // Each device occupies its own offset, so the publisher never overwrites
 // a descriptor the receiver has not read yet and no acknowledgement is
-// needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words
-// cannot describe six BARs and the capability offsets.
+// needed. Supersedes DEVMGR_PUBLISH_DEVICE (retired), whose four
+// argument words could not describe six BARs and the capability offsets.
 export const DEVMGR_PUBLISH_DEVICE_DESC: i32 = 0x906;
 // Announce one VOLUME to the device-manager inventory as a
 // wasmos_volume_descriptor_t held in a transfer buffer the publisher has
@@ -752,6 +751,15 @@ export const DEVMGR_UNPUBLISH_BLOCK_DEVICE: i32 = 0x908;
 // writing a partition table over an unpartitioned disk ends the
 // whole-disk volume, because the partitions are the volumes from then on.
 export const DEVMGR_UNPUBLISH_VOLUME: i32 = 0x909;
+// Publish one ACPI namespace device as a wasmos_acpi_device_desc_t held
+// in a transfer buffer the publisher (acpi-bus) owns and has borrowed to
+// this endpoint for reading.
+// arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
+// Each device occupies its own offset, so the publisher never overwrites
+// a descriptor the receiver has not read yet and no acknowledgement is
+// needed. The publisher keeps the buffer, and so stays resident, for as
+// long as the receiver may still read it.
+export const DEVMGR_PUBLISH_ACPI_DEVICE_DESC: i32 = 0x90A;
 // arg0 = 0, or a packed error code: the id is malformed, or is not in the inventory.
 export const DEVMGR_UNPUBLISH_RESP: i32 = 0x982;
 export const DEVMGR_MOUNT_INFO: i32 = 0x980;

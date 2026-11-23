@@ -14,6 +14,7 @@ SIMPLE = [
     "irq_route_allow",
     "irq_route_deny",
     "linmem_hold",
+    "linmem_host_write",
     "menu_bar",
     "native_call_min",
     "native_call_smoke",

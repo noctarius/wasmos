@@ -15,8 +15,8 @@ serial input routing, multi-slot switching, escape-sequence parsing, and the
 line discipline. Implementation lives in `src/services/vt/vt_main.c`,
 `src/services/vt/vt_types.h`, the framebuffer drivers
 (`src/drivers/framebuffer_pci/framebuffer_pci_native.c`,
-`src/drivers/framebuffer/framebuffer_native.c`), the serial driver
-(`src/drivers/serial/serial.ts`), the CLI (`src/services/cli/cli.c`), and the
+`src/drivers/framebuffer/framebuffer_native.c`), the UART drivers
+(`src/drivers/serial/serial_core.ts` with the `uart16550` and `pl011` backends), the CLI (`src/services/cli/cli.c`), and the
 compositor (`src/services/gfx_compositor/gfx_compositor.zig`). See also
 `17-console-io-and-character-device.md` (console hostcalls),
 `20-graphics-framebuffer-and-compositor.md` (compositor),

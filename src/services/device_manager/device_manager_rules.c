@@ -959,6 +959,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     uint8_t class_code = MATCH_ANY_U8;
     uint8_t subclass = MATCH_ANY_U8;
     uint16_t io_base = 0;
+    char hid[WASMOS_ACPI_HID_MAX];
     if (!line || !out_rule) {
         return -1;
     }
@@ -971,6 +972,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     path[0] = '\0';
     sub[0] = '\0';
     restart[0] = '\0';
+    hid[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
         tok = (char*)wasmos_sys_trim_left(tok);
@@ -998,6 +1000,17 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
             }
             continue;
         }
+        /* A _HID that does not fit its 8 characters names no device. The line
+         * is rejected: skipping the token would leave a rule that matches every
+         * ACPI device. */
+        if (strncmp(tok, "ATTR{hid}", 9) == 0) {
+            if (extract_op_value(tok, "ATTR{hid}", "==", tmp, sizeof(tmp)) != 0 || tmp[0] == '\0' ||
+                strlen(tmp) >= sizeof(hid)) {
+                return -1;
+            }
+            str_copy(hid, sizeof(hid), tmp);
+            continue;
+        }
         if (strncmp(tok, "ENV{RESTART}", 12) == 0) {
             if (parse_restart(tok, restart, sizeof(restart)) != 0) {
                 return -1;
@@ -1012,6 +1025,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     out_rule->class_code = class_code;
     out_rule->subclass = subclass;
     out_rule->io_base = io_base;
+    str_copy(out_rule->hid, sizeof(out_rule->hid), hid);
     out_rule->spawned_device_mask = 0;
     out_rule->given_up_device_mask = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
@@ -1062,7 +1076,10 @@ int dm_acpi_rule_matches(const acpi_match_rule_t* rule, const pci_device_record_
     if (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) {
         return 0;
     }
-    if (rule->io_base != 0 && rec->device_id != rule->io_base) {
+    if (rule->io_base != 0 && rec->io_port_base != rule->io_base) {
+        return 0;
+    }
+    if (rule->hid[0] != '\0' && strcmp(rec->hid, rule->hid) != 0) {
         return 0;
     }
     return 1;

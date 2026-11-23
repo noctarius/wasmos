@@ -1,21 +1,31 @@
-/* 16550 UART driver.
+/* serial_core.ts - the chip-independent half of a UART driver.
  *
- * One instance serves one UART: the one whose I/O base and IRQ the device
- * manager passes as `io=` and `irq=` spawn args, which are also the port window
- * and IRQ line it was granted. Without args it serves COM1. Only the instance on
- * COM1, the console UART the vt owns, registers as "sin" and installs the kernel
- * console hook; any other registers a name derived from its base ("s2f8"), so a
- * second UART is served without taking the console's place.
+ * A UART driver is this core linked with one backend: uart16550.ts (x86_64 COM
+ * ports) or pl011.ts (Arm PL011). The backend knows the chip's registers and
+ * nothing else; the core owns everything the rest of the system sees, so every
+ * backend speaks the same protocol (SERIAL_DRIVER_WRITE_REQ,
+ * SERIAL_IPC_SUBSCRIBE_REQ, VT_IPC_SERIAL_INPUT_REQ) and registers the same way.
+ * One image per chip rather than one image with every backend, because an
+ * image's manifest declares its capabilities: a 16550 needs io.port, a PL011
+ * mmio.map, and neither should hold the other's.
  *
- * The driver is one coroutine, and it IS the entry point: registration,
- * hardware bring-up, the ready notification and the request loop read top to
- * bottom, and every point where it waits is a call that suspends. Because
- * initialize() is exported, tools/as_coroutine_transform.mjs keeps its signature
- * and hands the lowered task to libc's pump, which owns the coroutine runtime.
+ * One instance serves one UART: its registers are its first granted window
+ * (region 0, which the backend addresses through io_region_*), and the device
+ * manager's spawn args name the rest -- `io=` or `mmio=` (the window's base),
+ * `irq=` and `console=1`, all but the last hex. Only the console instance --
+ * the one spawned with `console=1`, or the backend's default console when
+ * nothing names one -- registers as "sin", the name the vt looks up, and
+ * installs the kernel console hook; any other registers a name derived from its
+ * base ("s2f8"), so a second UART is served without taking the console's place.
+ *
+ * The driver is one coroutine (serialTask), started by the backend's exported
+ * initialize() through runSerial: registration, hardware bring-up, the ready
+ * notification and the request loop read top to bottom, and every point where
+ * it waits is a call that suspends.
  *
  * RX has one hard deadline and one soft one. The hard deadline is emptying the
- * 16-byte UART FIFO before it overruns, so the IRQ handler always drains it into
- * the software ring immediately. Forwarding to the vt has no deadline, so it
+ * UART FIFO before it overruns, so the IRQ handler always drains it into the
+ * software ring immediately. Forwarding to the vt has no deadline, so it
  * happens from the ring in the pump's idle hook. When the vt's queue is full the
  * bytes stay in the ring and are retried rather than dropped; dropping them
  * corrupts long command lines under load.
@@ -31,17 +41,24 @@
  * entry-point boundary, never a bare -1.
  */
 
-import {io, std, startup} from "./wasmos";
-import {defaultLoop, EventLoop, IpcFuture, IpcMessage, OnIdle, ReplyStatus} from "./eventloop";
+import {std, startup} from "./wasmos";
+import {
+    coroutineMain,
+    defaultLoop,
+    EventLoop,
+    IpcFuture,
+    IpcMessage,
+    OnIdle,
+    ReplyStatus,
+} from "./eventloop";
 import {AWAIT_PENDING, Box} from "./coroutine";
-import {CONSOLE_PORT, serialNameWord} from "./serial_name";
+import {serialNameWord} from "./serial_name";
 import {
     WASMOS_ERR_DRIVER_DEVICE_INIT,
     WASMOS_ERR_DRIVER_ENDPOINT_CREATE,
     WASMOS_ERR_DRIVER_REGISTER,
 } from "./wasmos_status";
 import {
-    io_out8,
     io_wait,
     ipc_create_endpoint,
     ipc_send,
@@ -50,25 +67,41 @@ import {
     serial_register,
 } from "./wasmos_imports";
 
-/* 16550 registers are offsets from the UART's base: +0 is the receive/transmit
- * holding register (and, with DLAB set, the low divisor byte), +1 the Interrupt
- * Enable Register (high divisor byte under DLAB), +2 the FIFO control register,
- * +3 the line control register holding DLAB, +4 modem control, +5 the Line
- * Status Register.
- *
- * Only the three used repeatedly are named; the rest appear as g_port + n in
- * serialInitHw, where the write order matters more than the names. In the line
- * status register bit 0 (0x01) is "receive data available" and bit 5 (0x20) is
- * "transmit holding register empty". */
-const REG_IER: i32 = 1;
-const REG_STATUS: i32 = 5;
+/* Every register is addressed in the UART's granted window, region 0, so a
+ * backend never names an absolute port or address (io_region_* host calls). */
+export const REGION: i32 = 0;
 
-/* The console UART's IRQ; its base is CONSOLE_PORT (serial_name.ts). */
-const CONSOLE_IRQ: i32 = 4;
+/**
+ * One UART chip. A backend sets `base` and `irq` to its default device, and the
+ * spawn args override them. Status reads that the kernel refuses report neither
+ * ready: the register cannot answer, so claiming either bit would be inventing
+ * hardware state.
+ */
+export abstract class Uart {
+    /* The register window's base: an I/O port or a physical address. It names
+     * the instance; registers are reached through REGION. */
+    base: i64 = 0;
+    irq: i32 = -1;
+    /** How the boot log labels the window's base ("io", "pl011 mmio"). */
+    abstract windowLabel(): string;
+    /** Whether this UART is the console when the firmware names none. */
+    abstract defaultConsole(): bool;
+    /** Program the line and enable the receive interrupt. */
+    abstract init(): void;
+    /** Mask every device interrupt; the core then polls. */
+    abstract disableInterrupts(): void;
+    abstract txReady(): bool;
+    abstract rxReady(): bool;
+    /** Send one byte; called only when txReady(). */
+    abstract write(value: i32): void;
+    /** The next received byte, or -1 when the read is refused. */
+    abstract read(): i32;
+    /** Clear a receive interrupt draining the FIFO does not clear. */
+    abstract clearRxInterrupt(): void;
+}
 
-/* The UART this instance serves, from its spawn args (see the header). */
-let g_port: i32 = CONSOLE_PORT;
-let g_irq: i32 = CONSOLE_IRQ;
+let g_uart: Uart = changetype<Uart>(0);
+let g_consoleArg: bool = false;
 
 const SERIAL_DRIVER_WRITE_REQ: i32 = 0x500;
 const SERIAL_DRIVER_READ_REQ: i32 = 0x501;
@@ -152,62 +185,45 @@ function rxbufPeek(offset: i32): i32 {
 // ------------------------------------------------------------------- device
 
 /**
- * Take the UART to serve from the spawn args: `io=` and `irq=`, both hex, as the
- * device manager writes them. A missing or unparseable value keeps the console
- * default, so a spawn without args (a rule set that predates them) still serves
- * COM1.
+ * Take the UART to serve from the spawn args, as the device manager writes
+ * them: `io=` or `mmio=`, `irq=` (hex) and `console=1`. A missing or
+ * unparseable value keeps the backend's default device.
  */
 function readDeviceArgs(): void {
     const args = startup.args();
     for (let i = 0; i < args.length; ++i) {
         const arg = unchecked(args[i]);
         if (arg.startsWith("io=")) {
-            const v = <i32>I32.parseInt(arg.substring(3), 16);
+            const v = <i64>I64.parseInt(arg.substring(3), 16);
             if (v > 0 && v <= 0xfff8) {
-                g_port = v;
+                g_uart.base = v;
+            }
+        } else if (arg.startsWith("mmio=")) {
+            const v = <i64>I64.parseInt(arg.substring(5), 16);
+            if (v > 0) {
+                g_uart.base = v;
             }
         } else if (arg.startsWith("irq=")) {
             const v = <i32>I32.parseInt(arg.substring(4), 16);
-            if (v >= 0 && v < 16) {
-                g_irq = v;
+            if (v >= 0 && v < 1020) {
+                g_uart.irq = v;
             }
+        } else if (arg == "console=1") {
+            g_consoleArg = true;
         }
     }
 }
 
 function isConsole(): bool {
-    return g_port == CONSOLE_PORT;
-}
-
-function serialInitHw(): void {
-    io_out8(g_port + REG_IER, 0x00); /* disable interrupts during setup */
-    io_out8(g_port + 3, 0x80); /* DLAB on */
-    io_out8(g_port + 0, 0x01); /* divisor low (115200) */
-    io_out8(g_port + 1, 0x00); /* divisor high */
-    io_out8(g_port + 3, 0x03); /* 8N1, DLAB off */
-    io_out8(g_port + 2, 0xc7); /* FIFO enable, clear, 14-byte threshold */
-    io_out8(g_port + 4, 0x0b); /* DTR|RTS|OUT2 (OUT2 gates IRQ to the PIC) */
-    io_out8(g_port + REG_IER, 0x01); /* enable "received data available" interrupt */
-}
-
-/* A refused status read reports neither ready: the line-status register cannot
- * answer, so claiming either bit would be inventing hardware state. */
-function txReady(): bool {
-    const status = io.in8(g_port + REG_STATUS);
-    return status >= 0 && (status & 0x20) != 0;
-}
-
-function rxReady(): bool {
-    const status = io.in8(g_port + REG_STATUS);
-    return status >= 0 && (status & 0x01) != 0;
+    return g_consoleArg || g_uart.defaultConsole();
 }
 
 /* Bounded hardware wait: there is nothing to park on, and the bound stops a
  * wedged transmitter from hanging the driver. */
 function writePort(value: i32): void {
     for (let i = 0; i < TX_WAIT_LIMIT; ++i) {
-        if (txReady()) {
-            io_out8(g_port, value & 0xff);
+        if (g_uart.txReady()) {
+            g_uart.write(value & 0xff);
             return;
         }
         io_wait();
@@ -217,11 +233,10 @@ function writePort(value: i32): void {
 /* Returns the byte, or -1 for "nothing to read" -- which also covers a refused
  * read, since a driver that cannot reach its own UART has no byte. */
 function readPort(): i32 {
-    if (!rxReady()) {
+    if (!g_uart.rxReady()) {
         return -1;
     }
-    const byte = io.in8(g_port);
-    return byte < 0 ? -1 : byte;
+    return g_uart.read();
 }
 
 /** Empty the UART RX FIFO into the software ring, before it can overrun. */
@@ -303,8 +318,9 @@ function sendResponse(destination: i32, requestId: i32, value: i32, status: i32)
 function serveRequest(msg: IpcMessage): void {
     if (msg.type == SERIAL_IPC_IRQ_EVENT) {
         drainUartToRing();
+        g_uart.clearRxInterrupt();
         /* Ack after emptying the FIFO so the line deasserts before unmask. */
-        irq_ack(g_irq);
+        irq_ack(g_uart.irq);
     } else if (msg.type == SERIAL_DRIVER_WRITE_REQ) {
         writePort(msg.arg0);
         sendResponse(msg.source, msg.requestId, 0, 0);
@@ -339,7 +355,7 @@ class RegisterReply extends ReplyStatus {
  * parks; between them this is ordinary code.
  */
 @coroutine
-export function initialize(): i32 {
+function serialTask(): i32 {
     // proc.endpoint comes from the spawn-info contract, not an entry arg.
     let procEndpoint: i32 = startup.procEndpoint();
     readDeviceArgs();
@@ -365,9 +381,9 @@ export function initialize(): i32 {
             procEndpoint,
             g_endpoint,
             SVC_IPC_REGISTER_REQ,
-            serialNameWord(g_port, 0),
-            serialNameWord(g_port, 1),
-            0,
+            serialNameWord(g_uart.base, isConsole(), 0),
+            serialNameWord(g_uart.base, isConsole(), 1),
+            serialNameWord(g_uart.base, isConsole(), 2),
             0,
         ) === null
     ) {
@@ -379,23 +395,29 @@ export function initialize(): i32 {
      * fails the coroutine rather than returning. */
     let registered: i32 = awaitReply(registration);
 
-    serialInitHw();
+    g_uart.init();
 
-    let irqRouted: i32 = irq_route_ipc(g_irq, g_endpoint);
+    let irqRouted: i32 = irq_route_ipc(g_uart.irq, g_endpoint);
     g_irqRouted = irqRouted == 0;
     if (g_irqRouted) {
         std.printf(
-            "[serial] driver ready io=0x" +
-                g_port.toString(16) +
+            "[serial] driver ready " +
+                g_uart.windowLabel() +
+                "=0x" +
+                g_uart.base.toString(16) +
                 " irq=" +
-                g_irq.toString() +
+                g_uart.irq.toString() +
                 " (IRQ-driven)\n",
         );
     } else {
         std.printf(
-            "[serial] io=0x" + g_port.toString(16) + " IRQ route failed, falling back to polling\n",
+            "[serial] " +
+                g_uart.windowLabel() +
+                "=0x" +
+                g_uart.base.toString(16) +
+                " IRQ route failed, falling back to polling\n",
         );
-        io_out8(g_port + REG_IER, 0x00); /* no interrupts; the idle hook polls */
+        g_uart.disableInterrupts();
     }
     /* RX forwarding runs from the pump, not from this loop: draining the FIFO
      * has a deadline, delivering to the vt does not. */
@@ -419,4 +441,14 @@ export function initialize(): i32 {
          * pump would park indefinitely holding them. */
         flushAndSchedule();
     }
+}
+
+/**
+ * Run the driver on `uart`, from a backend's exported initialize(): the spawn
+ * args override the backend's default device, then the coroutine runs on the
+ * process pump until the driver ends.
+ */
+export function runSerial(uart: Uart): i32 {
+    g_uart = uart;
+    return coroutineMain(serialTask());
 }

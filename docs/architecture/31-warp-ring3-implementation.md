@@ -572,6 +572,18 @@ lowers its limit (how `tests/test_linmem_slots.py` runs it out). Driver-owned pi
 pools run on, and Phase-1b RX/TX is proven on the wire. The relocation bug class
 described below is therefore closed on WARP.
 
+**The ring-3 view follows every grow.** A ring-3 guest reaches linear memory
+through its own user mapping at `WARP_R3_LINMEM_BASE`, which covers the pages
+committed when it was last published (`warp_mem_ring3_map_linmem`). Linear
+memory grows in two places and both re-publish it: the guest's own grow
+request (`warp_r3_memory_helper`, after its bounds check fails) and a host
+call that reaches a range past the live size (`warp_mem` in
+`src/kernel/warp/link.cpp`, which grows through `ensureLinearSize`). The second
+matters because the guest's bounds check then reads the grown live size and
+asks for nothing: without the re-publish it would reach a page that is
+committed but unmapped for ring 3, on the bytes the host call just wrote
+(`tests/test_linmem_host_write.py`).
+
 ### 15.1  The problem it removes
 
 Today WARP grows linear memory by **reallocating and copying** the backing

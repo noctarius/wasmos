@@ -111,6 +111,36 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
  * that does not start and end on a page boundary would expose whatever shares
  * its first or last page; it is refused instead. Returns 0, or -1 when the BAR
  * is absent, unsized, or cannot be expressed as a grant. */
+void dm_acpi_caps(const pci_device_record_t* rec, spawn_caps_t* caps) {
+    for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT && caps->region_count < WASMOS_REGION_LIMIT;
+         ++i) {
+        const wasmos_pci_bar_t* bar = &rec->bars[i];
+        wasmos_region_grant_t* grant = &caps->regions[caps->region_count];
+        if (bar->kind == WASMOS_PCI_BAR_NONE || bar->size == 0u) {
+            continue;
+        }
+        if (bar->kind == WASMOS_PCI_BAR_IO) {
+            caps->cap_flags |= DEVMGR_CAP_IO_PORT;
+            grant->kind = WASMOS_REGION_GRANT_IO;
+            grant->base = bar->base;
+            grant->length = (uint32_t)bar->size;
+        } else {
+            uint64_t base = bar->base & ~(uint64_t)0xFFFu;
+            uint64_t end = (bar->base + bar->size + 0xFFFu) & ~(uint64_t)0xFFFu;
+            caps->cap_flags |= DEVMGR_CAP_MMIO_MAP;
+            grant->kind = WASMOS_REGION_GRANT_MMIO;
+            grant->base = base;
+            grant->length = (uint32_t)(end - base);
+        }
+        caps->region_count++;
+    }
+    if (rec->irq_hint != DM_IRQ_HINT_NONE) {
+        caps->cap_flags |= DEVMGR_CAP_IRQ;
+        caps->irqs[0] = rec->irq_hint;
+        caps->irq_count = 1;
+    }
+}
+
 static int dm_grant_from_bar(const wasmos_pci_bar_t* bar, wasmos_region_grant_t* out) {
     if (bar->base == 0u || bar->size == 0u || bar->size > 0xFFFFFFFFull) {
         return -1;

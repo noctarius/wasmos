@@ -909,7 +909,11 @@ subsystems:
     id: 14
     range: [0x900, 0x982]
     opcodes:
-      - { symbol: DEVMGR_PUBLISH_DEVICE, value: 0x900, kind: req }
+      # 0x900 reserved: DEVMGR_PUBLISH_DEVICE, retired. Its four argument words
+      # packed bus/device/function/class into one and could not carry an MMIO
+      # window or an interrupt above 255; PCI functions moved to
+      # DEVMGR_PUBLISH_DEVICE_DESC and ACPI devices to
+      # DEVMGR_PUBLISH_ACPI_DEVICE_DESC.
       - { symbol: DEVMGR_PCI_SCAN_DONE, value: 0x901, kind: resp }
       - { symbol: DEVMGR_QUERY_MOUNT_REQ, value: 0x902, kind: req }
       - symbol: DEVMGR_PUBLISH_BLOCK_DEVICE
@@ -944,8 +948,8 @@ subsystems:
         value: 0x905
         kind: resp
         doc: |
-          ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
-          device_id field carries the I/O base address for serial (class 0x07).
+          acpi-bus has published every device it found
+          (DEVMGR_PUBLISH_ACPI_DEVICE_DESC); sent once, after the last one.
       - symbol: DEVMGR_PUBLISH_DEVICE_DESC
         value: 0x906
         kind: req
@@ -955,8 +959,8 @@ subsystems:
           arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
           Each device occupies its own offset, so the publisher never overwrites
           a descriptor the receiver has not read yet and no acknowledgement is
-          needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words
-          cannot describe six BARs and the capability offsets.
+          needed. Supersedes DEVMGR_PUBLISH_DEVICE (retired), whose four
+          argument words could not describe six BARs and the capability offsets.
       - symbol: DEVMGR_PUBLISH_VOLUME
         value: 0x907
         kind: req
@@ -1029,6 +1033,18 @@ subsystems:
           necessary is that a volume can cease to exist while its disk does not:
           writing a partition table over an unpartitioned disk ends the
           whole-disk volume, because the partitions are the volumes from then on.
+      - symbol: DEVMGR_PUBLISH_ACPI_DEVICE_DESC
+        value: 0x90a
+        kind: req
+        doc: |
+          Publish one ACPI namespace device as a wasmos_acpi_device_desc_t held
+          in a transfer buffer the publisher (acpi-bus) owns and has borrowed to
+          this endpoint for reading.
+          arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
+          Each device occupies its own offset, so the publisher never overwrites
+          a descriptor the receiver has not read yet and no acknowledgement is
+          needed. The publisher keeps the buffer, and so stays resident, for as
+          long as the receiver may still read it.
       - { symbol: DEVMGR_UNPUBLISH_RESP, value: 0x982, kind: resp, doc: "arg0 = 0, or a packed error code: the id is malformed, or is not in the inventory." }
       - { symbol: DEVMGR_MOUNT_INFO, value: 0x980, kind: resp }
       # 0x982 reserved: DEVMGR_BLOCK_MOUNT_INFO, retired with its request above.

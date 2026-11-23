@@ -320,6 +320,70 @@ static void test_a_watched_spawn_request_is_refused_rather_than_cut(void) {
     assert(dm_watch_spawn_encode("/init/a.wap", 0, 0, 7, out, (uint32_t)sizeof(desc)) == -1);
 }
 
+/* An ACPI device record as registry_add_from_acpi_desc leaves it. */
+static pci_device_record_t acpi_record(uint32_t irq) {
+    pci_device_record_t rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.bus = 0xFFu;
+    rec.irq_hint = irq;
+    return rec;
+}
+
+/* A PL011 is one memory window and a GIC SPI: an MMIO grant rounded out to
+ * whole pages, and the interrupt identifier above the ISA range. */
+static void test_an_acpi_mmio_window_is_granted_in_whole_pages(void) {
+    pci_device_record_t rec = acpi_record(33u);
+    spawn_caps_t caps;
+    memset(&caps, 0, sizeof(caps));
+    rec.bars[0].kind = WASMOS_PCI_BAR_MEM64;
+    rec.bars[0].base = 0x09000010u;
+    rec.bars[0].size = 0x20u;
+    dm_acpi_caps(&rec, &caps);
+    assert(caps.cap_flags == (DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ));
+    assert(caps.region_count == 1u);
+    assert(caps.regions[0].kind == WASMOS_REGION_GRANT_MMIO);
+    assert(caps.regions[0].base == 0x09000000u);
+    assert(caps.regions[0].length == 0x1000u);
+    assert(caps.irq_count == 1u && caps.irqs[0] == 33u);
+}
+
+/* The i8042 lists its data and command ports as two windows; both are granted,
+ * in the firmware's order, and nothing between them. */
+static void test_acpi_io_windows_are_granted_in_order(void) {
+    pci_device_record_t rec = acpi_record(1u);
+    spawn_caps_t caps;
+    memset(&caps, 0, sizeof(caps));
+    rec.bars[0].kind = WASMOS_PCI_BAR_IO;
+    rec.bars[0].base = 0x60u;
+    rec.bars[0].size = 1u;
+    rec.bars[1].kind = WASMOS_PCI_BAR_IO;
+    rec.bars[1].base = 0x64u;
+    rec.bars[1].size = 1u;
+    dm_acpi_caps(&rec, &caps);
+    assert(caps.cap_flags == (DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ));
+    assert(caps.region_count == 2u);
+    assert(caps.regions[0].kind == WASMOS_REGION_GRANT_IO && caps.regions[0].base == 0x60u &&
+           caps.regions[0].length == 1u);
+    assert(caps.regions[1].kind == WASMOS_REGION_GRANT_IO && caps.regions[1].base == 0x64u &&
+           caps.regions[1].length == 1u);
+}
+
+/* A device that names no interrupt is granted none, and no IRQ capability. */
+static void test_an_acpi_device_without_an_interrupt_gets_none(void) {
+    pci_device_record_t rec = acpi_record(DM_IRQ_HINT_NONE);
+    spawn_caps_t caps;
+    uint8_t out[SUPERVISOR_CAPS_MAX];
+    memset(&caps, 0, sizeof(caps));
+    rec.bars[0].kind = WASMOS_PCI_BAR_IO;
+    rec.bars[0].base = 0x70u;
+    rec.bars[0].size = 8u;
+    dm_acpi_caps(&rec, &caps);
+    assert(caps.cap_flags == DEVMGR_CAP_IO_PORT);
+    assert(caps.irq_count == 0u);
+    assert(dm_caps_v2_encode(&caps, out, (uint32_t)sizeof(out)) ==
+           (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(1, 0, 0));
+}
+
 int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_spec_names_the_device_and_its_policy),
@@ -334,6 +398,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_bars_resolve_to_grants_of_their_kind),
         WASMOS_TEST_CASE(test_a_watched_spawn_carries_args_and_every_window),
         WASMOS_TEST_CASE(test_a_watched_spawn_request_is_refused_rather_than_cut),
+        WASMOS_TEST_CASE(test_an_acpi_mmio_window_is_granted_in_whole_pages),
+        WASMOS_TEST_CASE(test_acpi_io_windows_are_granted_in_order),
+        WASMOS_TEST_CASE(test_an_acpi_device_without_an_interrupt_gets_none),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_device_manager_unit: ok\n");

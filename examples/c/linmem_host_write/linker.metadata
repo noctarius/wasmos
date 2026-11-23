@@ -15,6 +15,5 @@ name = "ipc.basic"
 flags = 0
 
 [link]
-stack_size = 4096
 initial_memory = 131072
 max_memory = 131072

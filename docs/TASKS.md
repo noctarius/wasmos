@@ -783,9 +783,12 @@ Source: `architecture/13-runtime-and-packaging.md`,
   and fs-wfs never logged `unmounted clean` within 30 s; nothing was killed or
   restarted. The rerun, two local filesystem batteries and two further local
   runs passed. Not attributed: fs-wfs's shutdown path neither waits on another
-  service nor depends on its spawner. If it recurs, capture where fs-wfs's
-  sync task stands (the block request in flight, `ps`) before the session is
-  torn down.
+  service nor depends on its spawner. It recurred in run 45270304762
+  (`filesystem` on `x86_64_warp_smp`, PR #73, which does not touch fs-wfs,
+  WFS or the shutdown order): again `order 1: fs-wfs`, and this time
+  `[fs-wfs] unmounted clean` did arrive, after the test had stopped waiting;
+  the rerun passed. If it recurs, capture where fs-wfs's sync task stands (the
+  block request in flight, `ps`) before the session is torn down.
 - [ ] [FEATURE][P3] Tie a unit's lifetime to its submitter, and device-manager's
   units to their device. The mechanism exists: `SUPERVISOR_IPC_RETRACT_REQ`
   withdraws a unit and its `parent=` subtree without a failure. Nothing calls

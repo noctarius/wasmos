@@ -33,6 +33,7 @@
 
 extern "C" {
 #include "capability.h"
+#include "hostcall_dma.h"
 #include "process.h"
 #include "wasmos_driver_abi.h"
 #include "xfer_buffer.h"
@@ -621,6 +622,88 @@ static const Scenario k_scenarios[] = {
     {"unmap(granted)", WASMOS_ERR_NONE, WASMOS_ERR_NONE, false, s_unmap_granted, nullptr},
 };
 
+/* ------------------------------------------------------ dma_region_reserve */
+
+/* The frame allocator behind dma_region_reserve. Strong definitions override
+ * stubs_slab.c's weak ones: the next run handed out, and what came back. */
+static uint64_t g_pfa_next = CAPABLE_WINDOW_BASE;
+static uint64_t g_pfa_last_ceiling;
+static int g_pfa_alloc_calls;
+static int g_pfa_free_calls;
+static uint64_t g_pfa_freed_base;
+
+extern "C" uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
+    (void)pages;
+    g_pfa_alloc_calls++;
+    g_pfa_last_ceiling = max_addr;
+    return g_pfa_next;
+}
+extern "C" void pfa_free_pages(uint64_t base, uint64_t pages) {
+    (void)pages;
+    g_pfa_free_calls++;
+    g_pfa_freed_base = base;
+}
+
+static void reserve_reset(uint64_t next) {
+    reset();
+    g_pfa_next = next;
+    g_pfa_last_ceiling = 0;
+    g_pfa_alloc_calls = 0;
+    g_pfa_free_calls = 0;
+    g_pfa_freed_base = 0;
+}
+
+static void reserve_check(bool ok, const char* what) {
+    g_checks++;
+    if (!ok) {
+        g_failures++;
+        printf("  [FAIL] dma_region_reserve: %s\n", what);
+    }
+}
+
+/* Every runtime's region allocator (wasm3 and WARP region_alloc, the native
+ * driver API's dma_region_alloc) takes its frames from dma_region_reserve, so
+ * the gate is asserted once here: a refusal returns the frames it took, or never
+ * takes any. */
+static void run_reserve_cases(void) {
+    uint64_t phys = 0;
+
+    reserve_reset(CAPABLE_WINDOW_BASE);
+    reserve_check(dma_region_reserve(CTX_CAPABLE, 1, &phys) == WASMOS_ERR_NONE &&
+                      phys == CAPABLE_WINDOW_BASE && g_pfa_free_calls == 0,
+                  "a page inside the window and the budget is granted and kept");
+    reserve_check(g_pfa_last_ceiling == 0x80000000ull, "the frames are asked for below 2 GiB");
+
+    reserve_reset(NARROW_WINDOW_BASE);
+    phys = 0;
+    reserve_check(dma_region_reserve(CTX_CAPABLE, 1, &phys) == WASMOS_ERR_DMA_RANGE &&
+                      g_pfa_free_calls == 1 && g_pfa_freed_base == NARROW_WINDOW_BASE && phys == 0,
+                  "frames outside every approved window are refused and returned");
+
+    reserve_reset(CAPABLE_WINDOW_BASE);
+    reserve_check(dma_region_reserve(CTX_CAPABLE, 2, &phys) == WASMOS_ERR_DMA_RANGE &&
+                      g_pfa_free_calls == 1,
+                  "two pages against a one-page budget are refused and returned");
+
+    reserve_reset(CAPABLE_WINDOW_BASE);
+    g_proc.context_id = CTX_BARE;
+    reserve_check(dma_region_reserve(CTX_BARE, 1, &phys) == WASMOS_ERR_DMA_DENY &&
+                      g_pfa_alloc_calls == 0,
+                  "a context without dma.buffer is denied before any allocation");
+
+    reserve_reset(CAPABLE_WINDOW_BASE);
+    reserve_check(dma_region_reserve(CTX_CAPABLE, 0, &phys) == WASMOS_ERR_DMA_INVALID &&
+                      dma_region_reserve(CTX_CAPABLE, DMA_REGION_MAX_PAGES + 1, &phys) ==
+                          WASMOS_ERR_DMA_INVALID &&
+                      g_pfa_alloc_calls == 0,
+                  "zero pages and more than the cap are invalid");
+
+    reserve_reset(0);
+    reserve_check(dma_region_reserve(CTX_CAPABLE, 1, &phys) == WASMOS_ERR_DMA_UNAVAILABLE &&
+                      g_pfa_free_calls == 0,
+                  "an exhausted allocator is reported as unavailable");
+}
+
 /* -------------------------------------------------------------------- main */
 
 /* Runs every scenario twice -- once per runtime, each after its own reset() --
@@ -670,6 +753,8 @@ int main(void) {
         }
     }
     printf("  ... %d of %d scenarios differ between the runtimes\n", divergences, scenario_count);
+
+    run_reserve_cases();
 
     printf("test_hostcall_dma: %d checks, %d failures\n", g_checks, g_failures);
     if (g_failures != 0) {

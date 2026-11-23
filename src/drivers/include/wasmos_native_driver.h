@@ -269,6 +269,31 @@ typedef struct wasmos_driver_api {
      * before it first answers still ends the wait. IPC_ERR_NOENT when `awaited`
      * has no live owner. */
     int (*ipc_peer_await)(uint32_t caller_context_id, uint32_t waiter, uint32_t awaited);
+    /* Register windows (docs/architecture/10-capability-and-policy.md "Register
+     * Windows"), the native counterpart of the io_region_in8..32 and
+     * io_region_out8..32 host calls:
+     * `region` indexes the windows of the driver's spawn profile and `offset` is
+     * relative to the window, never an absolute port or physical address.
+     * `width` is 1, 2 or 4 bytes and a memory-mapped access must be naturally
+     * aligned; the access is one load or store of that width, uncached, in the
+     * CPU's byte order (a big-endian device register is the driver's to swap).
+     * io_region_read zero-extends into *out and leaves it untouched on failure.
+     * Both return 0 or a negative WASMOS_ERR_IO_* code (no window, no such
+     * region, out of window, misaligned, no port space), or
+     * WASMOS_ERR_KERNEL_NO_CALLER / WASMOS_ERR_KERNEL_BAD_POINTER. */
+    int (*io_region_read)(uint32_t region, uint32_t offset, uint32_t width, uint32_t* out);
+    int (*io_region_write)(uint32_t region, uint32_t offset, uint32_t width, uint32_t value);
+    /* Driver-owned DMA region (docs/architecture/12-dma-transfers.md
+     * "Driver-Owned DMA Regions"): `pages` contiguous, zeroed, write-back pages
+     * below 2 GiB that a device may DMA to and from, held until the driver
+     * exits. Requires the dma.buffer capability, a range inside the spawn
+     * profile's DMA windows and room in its page budget, which the call
+     * charges. On success stores the driver's pointer to the region in *out_ptr
+     * (kernel higher-half, like vm_map; never hand it across IPC) and the
+     * device-visible physical base in *out_phys, and returns 0; else returns
+     * a negative WASMOS_ERR_DMA_* code (INVALID, DENY, UNAVAILABLE, RANGE) and
+     * touches neither. */
+    int (*dma_region_alloc)(uint32_t pages, void** out_ptr, uint64_t* out_phys);
 } wasmos_driver_api_t;
 
 /* `kind` argument to the xfer_buffer_* calls, naming what backs the object.
@@ -287,7 +312,7 @@ typedef struct wasmos_driver_api {
  * checks both before using any function pointer; see those fields for what a
  * version bump obliges. */
 #define WASMOS_NATIVE_ABI_MAGIC 0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 15u
+#define WASMOS_NATIVE_ABI_VERSION 16u
 
 /* Entry point that every native driver must provide via ELF e_entry.
  *

@@ -82,4 +82,30 @@ int32_t hostcall_dma_sync_borrow(int32_t borrow_id, int32_t offset, int32_t leng
  */
 int32_t hostcall_dma_unmap_borrow(int32_t borrow_id);
 
+/* The largest driver-owned DMA region one call reserves, in pages (4 MiB). */
+#define DMA_REGION_MAX_PAGES 1024u
+
+/*
+ * Reserve the physical backing of a driver-owned DMA region for context_id
+ * (docs/architecture/12-dma-transfers.md "Driver-Owned DMA Regions"): `pages`
+ * contiguous frames below 2 GiB, so the legacy virtqueue PFN register and the
+ * signed 32-bit device-address contract hold. Requires POLICY_ACTION_DMA_BUFFER,
+ * a range inside one of the context's approved DMA windows, and room in its
+ * declared page budget.
+ *
+ * Every runtime's region allocator -- wasm3 and WARP `region_alloc`, the native
+ * driver API's dma_region_alloc -- calls this and then maps the frames its own
+ * way. The caller then owes exactly one of: capability_dma_commit(context_id,
+ * pages * 4096) once the frames are mapped, or pfa_free_pages(*out_phys, pages)
+ * when the mapping fails.
+ *
+ * Returns WASMOS_ERR_NONE and *out_phys, else, with nothing allocated:
+ *   WASMOS_ERR_DMA_INVALID      `pages` is 0 or above DMA_REGION_MAX_PAGES
+ *   WASMOS_ERR_DMA_DENY         no dma.buffer capability
+ *   WASMOS_ERR_DMA_UNAVAILABLE  no contiguous run below 2 GiB
+ *   WASMOS_ERR_DMA_RANGE        the run falls outside every approved window, or
+ *                               would exceed the declared page budget
+ */
+int32_t dma_region_reserve(uint32_t context_id, uint32_t pages, uint64_t* out_phys);
+
 #endif /* WASMOS_KERNEL_HOSTCALL_DMA_H */

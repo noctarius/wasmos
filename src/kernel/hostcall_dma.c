@@ -4,6 +4,7 @@
 
 #include "capability.h"
 #include "hostcall_value.h"
+#include "physmem.h"
 #include "policy.h"
 #include "process.h"
 #include "wasmos_driver_abi.h"
@@ -126,5 +127,26 @@ int32_t hostcall_dma_unmap_borrow(int32_t borrow_id) {
     if (xfer_buffer_dma_unmap(&mapping) != WASMOS_ERR_NONE) {
         return WASMOS_ERR_DMA_DENY;
     }
+    return WASMOS_ERR_NONE;
+}
+
+int32_t dma_region_reserve(uint32_t context_id, uint32_t pages, uint64_t* out_phys) {
+    if (pages == 0 || pages > DMA_REGION_MAX_PAGES || !out_phys) {
+        return WASMOS_ERR_DMA_INVALID;
+    }
+    if (!dma_capability_allows(context_id)) {
+        return WASMOS_ERR_DMA_DENY;
+    }
+    uint64_t bytes = (uint64_t)pages * 0x1000ULL;
+    uint64_t phys = pfa_alloc_pages_below(pages, 0x80000000ULL);
+    if (!phys) {
+        return WASMOS_ERR_DMA_UNAVAILABLE;
+    }
+    if (!capability_dma_range_allowed(context_id, phys, bytes) ||
+        !capability_dma_within_budget(context_id, bytes)) {
+        pfa_free_pages(phys, pages);
+        return WASMOS_ERR_DMA_RANGE;
+    }
+    *out_phys = phys;
     return WASMOS_ERR_NONE;
 }

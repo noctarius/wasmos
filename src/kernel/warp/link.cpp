@@ -59,6 +59,7 @@ extern "C" {
 #include "policy.h"
 #include "linmem_slots.h"
 #include "paging.h"
+#include "hostcall_dma.h"
 #include "phys_map.h"
 #include "framebuffer.h"
 #include "system_control.h"
@@ -2036,10 +2037,6 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
     return (int64_t)found_off;
 }
 
-/* Sanity cap on a single region reservation (4 MiB). The real fit is enforced
- * by warp_linmem_place_phys returning NO_WINDOW when the driver's linmem window
- * is too small. */
-#define WARP_REGION_MAX_PAGES 1024u
 /* Synthetic tracking id for region windows: high bit set keeps it out of the
  * low id space so region windows participate in overlap checks without
  * colliding with buffer overlays. */
@@ -2056,7 +2053,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
 static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_t out_phys_off,
                                   void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    if (pages == 0 || pages > WARP_REGION_MAX_PAGES) {
+    if (pages == 0 || pages > DMA_REGION_MAX_PAGES) {
         return (uint32_t)WASMOS_ERR_DMA_INVALID;
     }
     /* TODO(region-alloc): write-combining PAT attributes for framebuffer/scanout
@@ -2074,23 +2071,10 @@ static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_
     if (!out_ptr) {
         return (uint32_t)WASMOS_ERR_DMA_INVALID;
     }
-    /* Below 2 GiB so the legacy virtqueue PFN register and the signed-32-bit
-     * device_addr contract hold (same clamp as the borrow DMA path). */
-    uint64_t phys_base = pfa_alloc_pages_below(pages, 0x80000000ULL);
-    if (!phys_base) {
-        return (uint32_t)WASMOS_ERR_DMA_UNAVAILABLE;
-    }
-    /* Enforce the driver's approved DMA window on allocated regions exactly as on
-     * borrow mappings — a general "give me physical memory" primitive without
-     * this check would be a DMA-anywhere hole. */
-    if (capability_dma_range_allowed(context_id, phys_base, region_bytes) == 0) {
-        pfa_free_pages(phys_base, pages);
-        return (uint32_t)WASMOS_ERR_DMA_RANGE;
-    }
-    /* Enforce the driver's declared DMA page budget (dma.buffer manifest flags). */
-    if (capability_dma_within_budget(context_id, region_bytes) == 0) {
-        pfa_free_pages(phys_base, pages);
-        return (uint32_t)WASMOS_ERR_DMA_RANGE;
+    uint64_t phys_base = 0;
+    int32_t reserve_rc = dma_region_reserve(context_id, pages, &phys_base);
+    if (reserve_rc != WASMOS_ERR_NONE) {
+        return (uint32_t)reserve_rc;
     }
     int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, (uint32_t)region_bytes);
     if (placed < 0) {

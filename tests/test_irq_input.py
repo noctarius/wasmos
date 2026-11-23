@@ -9,9 +9,12 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 
+@requires_arch(
+    "x86_64", reason="x86_64 hardware: the PS/2 keyboard and mouse controller"
+)
 class IrqInputTest(unittest.TestCase):
     """Verify that keyboard and mouse drivers start in IRQ-driven mode.
 

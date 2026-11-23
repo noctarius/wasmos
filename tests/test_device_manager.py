@@ -9,7 +9,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, guest_arch
 
 
 class DeviceManagerIntegrationTests(unittest.TestCase):
@@ -99,11 +99,13 @@ class DeviceManagerIntegrationTests(unittest.TestCase):
         hardcoded string would report FAT volumes as WFS and still pass a
         one-sided check. /wfs is the WFS volume on ATA, /boot and /user are the
         FAT volumes. The virtio-blk /vwfs mount is asserted in
-        test_wfs_virtio_blk, which is the suite that attaches that disk.
+        test_wfs_virtio_blk, which is the suite that attaches that disk. aarch64
+        has no ATA, so no /wfs.
         """
         self._cmd_expect("mount", b"/boot -> fs-fat")
         self._cmd_expect("mount", b"/user -> fs-fat")
-        self._cmd_expect("mount", b"/wfs -> fs-wfs")
+        if guest_arch() == "x86_64":
+            self._cmd_expect("mount", b"/wfs -> fs-wfs")
 
     def test_initfs_mount_name_follows_from_its_filesystem_type(self):
         """/init is named from FS_TYPE_INITFS, not from a per-backend branch.

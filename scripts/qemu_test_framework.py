@@ -8,6 +8,7 @@ import selectors
 import socket
 import struct
 import subprocess
+import unittest
 import zlib
 import sys
 import tempfile
@@ -337,7 +338,7 @@ def _parse_diag_threads(block):
 
 
 def _parse_rips(regs_text):
-    """{cpu_id: rip} from `info registers -a`."""
+    """{cpu_id: pc} from `info registers -a`: RIP on x86_64, PC on aarch64."""
     out = {}
     cpu_id = None
     for line in regs_text.splitlines():
@@ -346,15 +347,19 @@ def _parse_rips(regs_text):
         if m:
             cpu_id = m.group(1)
             continue
-        m = re.match(r"RIP=([0-9a-fA-F]+)", stripped)
+        m = re.match(r"(?:RIP|PC)=([0-9a-fA-F]+)", stripped)
         if m and cpu_id is not None:
             out[cpu_id] = int(m.group(1), 16)
     return out
 
 
 # Everything the kernel executes lives in the higher half; anything below it is
-# guest or firmware code, which the kernel image cannot name.
-_KERNEL_VA_BASE = 0xFFFFFFFF80000000
+# guest or firmware code, which the kernel image cannot name. The half starts
+# lower on aarch64 (TTBR1, 48-bit VA).
+_KERNEL_VA_BASES = {"x86_64": 0xFFFFFFFF80000000, "aarch64": 0xFFFFFF8000000000}
+_KERNEL_VA_BASE = _KERNEL_VA_BASES.get(
+    os.environ.get("WASMOS_ARCH", "x86_64"), 0xFFFFFFFF80000000
+)
 
 
 def _resolve_kernel_addrs(kernel, addrs):
@@ -467,6 +472,26 @@ def default_config(build_dir: str = "out/default") -> QemuConfig:
         nic_model=nic_model,
         netdev=netdev,
     )
+
+
+def guest_arch() -> str:
+    """The architecture the suite boots: WASMOS_ARCH, which every run target
+    sets, else x86_64."""
+    return os.environ.get("WASMOS_ARCH", "x86_64")
+
+
+def requires_arch(*arches: str, reason: str):
+    """Skip a test or test class unless the guest is one of `arches`.
+
+    For a test whose subject an architecture does not have -- x86_64's ATA
+    disks, PS/2 controller or second COM port, or something aarch64 does not
+    have yet -- rather than one that fails there. `reason` names what is
+    missing and, for a gap that is planned work, where it is tracked
+    (docs/TASKS.md "arm64 Port"); it is printed with the skip, so a battery's
+    output says what it did not cover on that architecture.
+    """
+    arch = guest_arch()
+    return unittest.skipUnless(arch in arches, f"not on {arch}: {reason}")
 
 
 def _host_arch() -> str:

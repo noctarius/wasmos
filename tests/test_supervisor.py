@@ -11,7 +11,12 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import GuestRestarted, QemuSession, default_config
+from qemu_test_framework import (
+    GuestRestarted,
+    QemuSession,
+    default_config,
+    requires_arch,
+)
 
 PROBE = "/boot/apps/sv_probe.wap"
 
@@ -93,6 +98,10 @@ class SupervisorTests(unittest.TestCase):
             cls.session.send("halt")
             cls.session.close()
 
+    @requires_arch(
+        "x86_64",
+        reason='no framebuffer on aarch64 yet: QEMU virt has no display device and ramfb/virtio-gpu is in docs/TASKS.md "arm64 Port"',
+    )
     def test_1_boot_services_came_up_without_a_failure(self):
         log = self.session.syslog_tail(1 << 20)
         # require_prompt already waited for the milestone; it is said once,
@@ -484,6 +493,10 @@ class SupervisorTests(unittest.TestCase):
             "the start did not give the unit a fresh window of five ends",
         )
 
+    @requires_arch(
+        "x86_64",
+        reason='no RTC on aarch64 yet: the CMOS rtc is x86_64 hardware and PL031 is in docs/TASKS.md "arm64 Port"',
+    )
     def test_9_a_killed_driver_is_restarted_and_serves_again(self):
         # device-manager hands rtc to the supervisor (default.rules,
         # ENV{RESTART}="on-failure"), so a kill on request is a failure the
@@ -747,6 +760,10 @@ class SupervisorClientTests(unittest.TestCase):
             out.count(line), 1, "the restarted logger wrote the backlog again"
         )
 
+    @requires_arch(
+        "x86_64",
+        reason='no framebuffer on aarch64 yet: QEMU virt has no display device and ramfb/virtio-gpu is in docs/TASKS.md "arm64 Port"',
+    )
     def test_2_the_menu_bar_follows_a_restarted_compositor(self):
         # The menu bar's window goes with the compositor. It ends with
         # WASMOS_PEER_GONE on the compositor's hangup and, restart=always,
@@ -760,6 +777,10 @@ class SupervisorClientTests(unittest.TestCase):
         out = _svc(self, self.session, "status menu_bar")
         self.assertIn("last end: exited (status -8)", out)
 
+    @requires_arch(
+        "x86_64",
+        reason='no framebuffer on aarch64 yet: QEMU virt has no display device and ramfb/virtio-gpu is in docs/TASKS.md "arm64 Port"',
+    )
     def test_3_the_menu_bar_follows_a_restarted_font_service(self):
         # Text is rastered by the font service through an open font handle
         # that ends with it. The menu bar's next raster fails with
@@ -772,6 +793,9 @@ class SupervisorClientTests(unittest.TestCase):
         _await_new_instance(self, self.session, "menu_bar", bar[1])
 
 
+@requires_arch(
+    "x86_64", reason="x86_64 hardware: the kernel log on a second 16550 (COM2)"
+)
 class SupervisorCriticalTests(unittest.TestCase):
     """A critical unit is never restarted: its death halts the system, through
     the orderly shutdown sequence, with a line naming the unit and a dump of
@@ -831,6 +855,9 @@ class SupervisorCriticalTests(unittest.TestCase):
             session.close()
 
 
+@requires_arch(
+    "x86_64", reason="x86_64 hardware: the kernel log on a second 16550 (COM2)"
+)
 class SupervisorBootChainDeathTests(unittest.TestCase):
     """A boot-chain unit's death is named and ends the system, like any
     critical unit's, instead of leaving it running without the service."""
@@ -869,6 +896,9 @@ class SupervisorBootChainDeathTests(unittest.TestCase):
             session.close()
 
 
+@requires_arch(
+    "x86_64", reason="x86_64 hardware: the kernel log on a second 16550 (COM2)"
+)
 class SupervisorCriticalRebootTests(unittest.TestCase):
     """supervisor.on_critical=reboot: the same named line and dump, the orderly
     shutdown sequence, and then the machine reboots instead of powering off."""
@@ -908,6 +938,9 @@ class SupervisorCriticalRebootTests(unittest.TestCase):
             session.close()
 
 
+@requires_arch(
+    "x86_64", reason="x86_64 hardware: the kernel log on a second 16550 (COM2)"
+)
 class SupervisorDeathPanicTests(unittest.TestCase):
     """The supervisor is a critical process: its own death is a kernel panic
     naming it. supervisor.fault=trap makes it trap on the first unit sysinit

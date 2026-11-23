@@ -22,7 +22,7 @@ from dataclasses import replace
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.make_gpt_image import build_fat16
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, requires_arch
 
 VOLUME_LABEL = "spare"
 DISK_SECTORS = 32768  # 16 MiB
@@ -63,6 +63,10 @@ def _config_with_fat_disk(disk_path: str):
     )
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class FatOverVirtioBlkRestartTest(unittest.TestCase):
     session: QemuSession | None = None
     disk_dir: str | None = None

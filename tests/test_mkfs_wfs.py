@@ -31,7 +31,7 @@ import shutil
 import tempfile
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, requires_arch
 
 # The scratch disk takes the place of build/wfs.img, so it arrives as ata unit 2.
 DEVICE = "block:ata:2"
@@ -40,6 +40,10 @@ DEVICE = "block:ata:2"
 IMAGE_BYTES = 16 * 1024 * 1024
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class MkfsWfsTest(unittest.TestCase):
     """Formatting a blank disk, then proving the result is a WFS volume."""
 

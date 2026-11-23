@@ -10,7 +10,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 
 class _KernelLogPortChecks:
@@ -89,6 +89,9 @@ class VirtioKernelLogPortTests(_KernelLogPortChecks, unittest.TestCase):
         )
 
 
+@requires_arch(
+    "x86_64", reason="x86_64 hardware: the kernel log on a second 16550 (COM2)"
+)
 class Com2KernelLogPortTests(_KernelLogPortChecks, unittest.TestCase):
     """The x86_64 alternative: with log.serial=com2 the kernel writes the second
     UART itself, from an early-log replay onward, with no driver involved."""

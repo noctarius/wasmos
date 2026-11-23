@@ -20,7 +20,7 @@ from dataclasses import replace
 
 import re
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, requires_arch
 
 # Written at the start of LBA 0 of the test disk. Sixteen bytes, because that is
 # what blkinfo previews, and recognisable in a serial log that interleaves other
@@ -145,6 +145,10 @@ def _config_with_disk(disk_path: str, device_opts: str = ""):
     )
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class VirtioBlkTest(unittest.TestCase):
     """A virtio-blk disk is discovered, identified, read and written end to end."""
 
@@ -556,6 +560,10 @@ class TwoVirtioBlkDisksTest(unittest.TestCase):
         )
 
 
+@requires_arch(
+    "x86_64",
+    reason='no PCI INTx on aarch64 yet: legacy interrupts are not routed to GIC SPIs (docs/TASKS.md "arm64 Port")',
+)
 class VirtioBlkIntxFallbackTest(unittest.TestCase):
     """With no MSI-X vectors on offer, the driver falls back to a routed INTx line.
 

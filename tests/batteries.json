@@ -61,10 +61,10 @@
     },
     {
       "name": "aarch64",
-      "runtimes": [],
-      "bringup": [
+      "runtimes": [
         "aarch64_wasm3_single"
-      ]
+      ],
+      "bringup": []
     }
   ],
   "batteries": [

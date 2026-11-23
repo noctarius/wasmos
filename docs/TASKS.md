@@ -1802,6 +1802,16 @@ Source: `architecture/19-virtual-terminal.md`,
 `architecture/23-cli-and-user-space.md`, and
 `architecture/24-environment-scopes-and-inheritance.md`.
 
+- [ ] [BUG][P2] Typed-ahead console input past about 256 bytes is lost. Lines
+  typed in one write faster than the shell runs them stop arriving after
+  roughly 250 bytes -- three 77-byte `echo` lines and part of a fourth -- and
+  the rest never reaches the shell, on x86_64 (16550) and aarch64 (PL011)
+  alike, so the limit is in the shared path (serial driver ring -> vt slot
+  input -> cli), not a UART. Reproduce by sending twenty `echo burstNN <60 x>`
+  lines in one QemuSession.send() and expecting every output line; it was a
+  candidate regression test for the PL011 receive race and failed for this
+  reason instead. Find which buffer drops instead of holding, and give it
+  backpressure rather than a larger size.
 - [ ] [BUG][P2] The CLI can lose the ability to resolve ANY command mid-session:
   after two successful `blkinfo` execs it answered `no such command found:
   blkinfo` to every later attempt, permanently and within 20 ms — too fast to be
@@ -2207,12 +2217,34 @@ Other graphics/VT/UI:
 The aarch64 port targets QEMU `virt` (GICv3 + ITS, PCIe ECAM, virtio) under
 HVF on Apple Silicon or TCG; bare-metal Apple Silicon is out of scope. It boots
 to the CLI on one core under wasm3, with console input through the PL011
-driver, and passes `run-qemu-test`. Read `docs/architecture/04-boot-and-handoff.md`,
+driver, and passes `run-qemu-test`. Every QEMU battery runs on it in CI
+(`aarch64_wasm3_single` in `tests/batteries.json`); a test whose subject aarch64
+lacks is skipped there with `requires_arch` (`scripts/qemu_test_framework.py`),
+and the reason it prints names what is missing. Read `docs/architecture/04-boot-and-handoff.md`,
 `06-memory-management.md` and `10-capability-and-policy.md` first.
 
 - [ ] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
   x86_64-only), PL031 RTC driver (the CMOS rtc stays x86_64-only), and a
   framebuffer (ramfb or virtio-gpu; `src/boot/boot.c` TODO: no GOP on `virt`).
+  Until then aarch64 skips the tests that need them: `date`
+  (`test_cli`, `test_app_churn`, the rtc unit in `test_supervisor`), the menu
+  bar and VT screen ownership (`test_menu_bar_title`,
+  `test_vt_framebuffer_ownership`, `test_supervisor`'s menu-bar cases).
+- [ ] [TEST][P2] Make the storage tests topology-aware, so they run on aarch64.
+  They are written against x86_64's layout -- ATA drives, `/wfs` on the IDE
+  secondary channel, an ATA boot disk beside one virtio disk -- and aarch64
+  boots from virtio-blk with no ATA at all, so `test_virtio_blk`,
+  `test_volume_manager`, `test_wfs_*`, `test_mkfs_wfs`, `test_fsck_wfs_claim`,
+  `test_partition_manager_disk_arrival`, `test_fat_virtio_blk`,
+  `test_fs_backend_supervision` and the `/wfs` cases of `test_vfs_root_mount`
+  are skipped there. Most of what they check (partitions, volumes, WFS, driver
+  restart under a mount) is not ATA-specific; a WFS volume over virtio-blk
+  would carry it on aarch64.
+- [ ] [FEATURE][P2] PCI INTx on aarch64: route a function's legacy interrupt
+  pin to its GIC SPI (the `_PRT` of the host bridge, or `virt`'s fixed
+  swizzle onto SPIs 3-6). pci-bus reports `irq FF` today, so a driver without
+  MSI-X has no interrupt; `test_virtio_blk`'s INTx-fallback cases are skipped
+  on aarch64 until then.
 - [ ] [FEATURE][P2] Discover the platform from firmware tables instead of the
   QEMU `virt` fixed addresses: GIC distributor/redistributor and ITS from the
   MADT (`gic_aarch64.c`, `its_aarch64.c`, `irq_aarch64.c` TODOs), the console

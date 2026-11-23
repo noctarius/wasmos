@@ -57,7 +57,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 
 def _scratch_image(prefix: str) -> tuple[str, str]:
@@ -159,6 +159,10 @@ class WfsShutdownTestBase(unittest.TestCase):
         return ""
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class WfsCleanUnmountTest(WfsShutdownTestBase):
     """Write, halt in order, and mount the same volume again."""
 
@@ -215,6 +219,10 @@ class WfsCleanUnmountTest(WfsShutdownTestBase):
             second.close()
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 storage: ATA disks and the IDE WFS volume (aarch64 boots from virtio-blk; topology-aware storage tests are in docs/TASKS.md "arm64 Port")',
+)
 class WfsUncleanShutdownTest(WfsShutdownTestBase):
     """The control: the same volume, killed instead of halted.
 

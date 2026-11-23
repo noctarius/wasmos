@@ -11,7 +11,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, requires_arch
 
 # The compositor paints its menu bar in this colour (libui.h mbroot->bg_color),
 # across the full width of the desktop's top rows. Nothing the text console draws
@@ -76,6 +76,10 @@ def fraction_matching(band, reference):
     return sum(1 for px in band if close_to(px, reference)) / len(band)
 
 
+@requires_arch(
+    "x86_64",
+    reason='no framebuffer on aarch64 yet: QEMU virt has no display device and ramfb/virtio-gpu is in docs/TASKS.md "arm64 Port"',
+)
 class VtFramebufferOwnershipTests(unittest.TestCase):
     """The framebuffer has exactly one owner, and it follows the visible slot.
 

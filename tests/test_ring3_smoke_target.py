@@ -5,9 +5,13 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.qemu_test_framework import default_build_dir
+from scripts.qemu_test_framework import default_build_dir, requires_arch
 
 
+@requires_arch(
+    "x86_64",
+    reason='x86_64 code: the inline ring-3 smoke and fault probes (aarch64 counterparts are in docs/TASKS.md "arm64 Port")',
+)
 class Ring3SmokeTargetTests(unittest.TestCase):
     def test_run_qemu_ring3_target(self) -> None:
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

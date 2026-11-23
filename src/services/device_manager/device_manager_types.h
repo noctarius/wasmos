@@ -111,7 +111,8 @@ typedef struct {
 /* One entry in the device registry, populated from pci-bus and acpi-bus
  * descriptors. bus 0xFF marks an ACPI device: its register windows are in
  * bars[] in the order the firmware lists them, io_port_base is its first I/O
- * window, and hid/acpi_console carry what acpi-bus reported. */
+ * window, and hid/acpi_flags (WASMOS_ACPI_DEVICE_*) carry what acpi-bus
+ * reported. */
 typedef struct {
     uint8_t bus;
     uint8_t device;
@@ -128,7 +129,7 @@ typedef struct {
      * aarch64), DM_IRQ_HINT_NONE when it names none. */
     uint32_t irq_hint;
     char hid[WASMOS_ACPI_HID_MAX];
-    uint8_t acpi_console;
+    uint32_t acpi_flags;
     /* Every region the function decodes, as pci-bus resolved them. Kept whole
      * rather than flattened to a single "io_port_base", because which BAR holds
      * what is device-specific: legacy IDE leaves BAR0 empty and puts its
@@ -372,6 +373,9 @@ typedef struct {
     uint8_t subclass;              /* 0xFF = match any */
     uint16_t io_base;              /* ATTR{io}: the device's I/O base; 0 = match any */
     char hid[WASMOS_ACPI_HID_MAX]; /* ATTR{hid}: the device's ACPI _HID; "" = match any */
+    /* ATTR{console}: 1 = the device the firmware names as console, 0 = any
+     * other, MATCH_ANY_U8 = either. */
+    uint8_t console;
     uint64_t spawned_device_mask;  /* registry entry index bits already spawned */
     uint64_t given_up_device_mask; /* as on pci_match_rule_t */
     char spawn_path[96];

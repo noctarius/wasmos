@@ -1073,6 +1073,7 @@ static void add_acpi_rule(uint8_t class_code, uint8_t subclass, const char* path
     rule->active = 1;
     rule->class_code = class_code;
     rule->subclass = subclass;
+    rule->console = MATCH_ANY_U8;
     (void)snprintf(rule->spawn_path, sizeof(rule->spawn_path), "%s", path);
 }
 

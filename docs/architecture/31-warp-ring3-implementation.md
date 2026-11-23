@@ -582,7 +582,10 @@ call that reaches a range past the live size (`warp_mem` in
 matters because the guest's bounds check then reads the grown live size and
 asks for nothing: without the re-publish it would reach a page that is
 committed but unmapped for ring 3, on the bytes the host call just wrote
-(`tests/test_linmem_host_write.py`).
+(`tests/test_linmem_host_write.py`). `warp_mem` brings the view up to the
+committed size on every successful lookup, not only on one that grew, so a
+publish that failed part-way is completed by the next lookup rather than
+leaving a grown live size over unmapped pages; the publish is incremental.
 
 ### 15.1  The problem it removes
 

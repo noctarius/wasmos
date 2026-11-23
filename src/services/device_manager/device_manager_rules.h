@@ -74,16 +74,24 @@ void dm_rules_load_block_fs(device_manager_state_t* state, const char* text);
  * device be spawned again, and a given-up one be tried again. */
 void dm_rules_load_pci_match(device_manager_state_t* state, const char* text);
 /* Parse acpi_match rules (ACPI/ISA class driver binding) from text.  Accepts
- * SUBSYSTEM=="acpi" lines with ATTR{class}, ATTR{subclass} and ATTR{io} (the
- * device's I/O base, hex); like the PCI loader it clears each rule's
- * spawned_device_mask and given_up_device_mask. */
+ * SUBSYSTEM=="acpi" lines with ATTR{class}, ATTR{subclass}, ATTR{io} (the
+ * device's I/O base, hex), ATTR{hid} (its ACPI _HID) and ATTR{console} ("1"
+ * for the device the firmware names as console, "0" for any other); like the
+ * PCI loader it clears each rule's spawned_device_mask and
+ * given_up_device_mask. */
 void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text);
 
 /* Whether an acpi_match rule selects registry entry `rec`: an ACPI/ISA device
- * (bus 0xFF) whose class, subclass and -- when the rule names one -- I/O base
- * match.  ACPI records carry the I/O base in device_id.  Does not consult the
+ * (bus 0xFF) whose class, subclass and -- when the rule names them -- I/O base
+ * (io_port_base), _HID and console selection match.  Does not consult the
  * rule's spawned_device_mask. */
 int dm_acpi_rule_matches(const acpi_match_rule_t* rule, const pci_device_record_t* rec);
+
+/* Whether any acpi_match rule has already spawned a driver for registry entry
+ * `device_index`. A device gets one driver however many rules select it: the
+ * firmware's console UART can match both a rule for its port and a rule for
+ * the console. */
+int dm_acpi_device_driven(const device_manager_state_t* state, uint32_t device_index);
 
 /* What of a rule file read into `text` can be parsed. The caller gave the read
  * cap + 1 bytes of room, so `read_len` > cap says the file holds more than cap

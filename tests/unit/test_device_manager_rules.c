@@ -177,6 +177,43 @@ static void test_acpi_rule_hid_attr_selects_the_chip(void) {
     assert(!dm_acpi_rule_matches(&state.acpi_match_rules[0], &uart));
 }
 
+/* Regression: 2026-11-23-console-uart-binding -- once the firmware's console
+ * choice reached every UART (console=0 for the rest), an SPCR naming COM2 left
+ * the console with no driver: the shipped x86_64 rule binds COM1 only, and
+ * COM1 was told it is not the console. ATTR{console}=="1" selects the UART
+ * the firmware named, so a rule can bind it wherever it is. */
+static void test_acpi_rule_console_attr_selects_the_firmware_console(void) {
+    device_manager_state_t state;
+    pci_device_record_t com1;
+    pci_device_record_t com2;
+    const char* rules = "SUBSYSTEM==\"acpi\", ATTR{class}==\"0x07\", ATTR{subclass}==\"0x00\", "
+                        "ATTR{console}==\"1\", RUN+=\"system/drivers/uart16550.wap\"\n";
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_acpi_match(&state, rules);
+    assert(state.acpi_match_rule_count == 1u);
+    memset(&com1, 0, sizeof(com1));
+    com1.bus = 0xFFu;
+    com1.class_code = 0x07u;
+    com1.io_port_base = 0x3F8u;
+    com1.acpi_flags = WASMOS_ACPI_DEVICE_CONSOLE_KNOWN;
+    com2 = com1;
+    com2.io_port_base = 0x2F8u;
+    com2.acpi_flags = WASMOS_ACPI_DEVICE_CONSOLE_KNOWN | WASMOS_ACPI_DEVICE_CONSOLE;
+    assert(dm_acpi_rule_matches(&state.acpi_match_rules[0], &com2));
+    assert(!dm_acpi_rule_matches(&state.acpi_match_rules[0], &com1));
+}
+
+/* A device one rule has spawned a driver for is driven; a second rule that
+ * also selects it must not spawn another. */
+static void test_a_device_spawned_by_one_acpi_rule_is_driven(void) {
+    device_manager_state_t state;
+    memset(&state, 0, sizeof(state));
+    state.acpi_match_rule_count = 2u;
+    state.acpi_match_rules[0].spawned_device_mask = 1ull << 3;
+    assert(dm_acpi_device_driven(&state, 3u));
+    assert(!dm_acpi_device_driven(&state, 2u));
+}
+
 /* ENV{RESTART} hands the driver to the supervisor under that restart policy;
  * without it the device manager spawns the driver itself. An unknown policy
  * rejects the line rather than spawning the driver unsupervised. */
@@ -334,6 +371,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_acpi_rule_io_attr_selects_one_uart),
         WASMOS_TEST_CASE(test_acpi_rule_without_io_matches_any_instance),
         WASMOS_TEST_CASE(test_acpi_rule_hid_attr_selects_the_chip),
+        WASMOS_TEST_CASE(test_acpi_rule_console_attr_selects_the_firmware_console),
+        WASMOS_TEST_CASE(test_a_device_spawned_by_one_acpi_rule_is_driven),
         WASMOS_TEST_CASE(test_acpi_rule_env_restart_names_a_policy),
         WASMOS_TEST_CASE(test_acpi_rule_env_restart_unextractable_rejects_the_line),
     };

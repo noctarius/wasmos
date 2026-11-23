@@ -9,7 +9,12 @@ def build(b):
     wap = guest(
         b,
         "pl011",
-        [b.src("pl011.ts"), core / "serial_core.ts", core / "serial_name.ts"],
+        [
+            b.src("pl011.ts"),
+            core / "serial_core.ts",
+            core / "serial_name.ts",
+            core / "uart_window.ts",
+        ],
         lang="as",
     )
     install(b, "system/drivers/pl011.wap", wap)

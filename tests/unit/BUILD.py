@@ -470,6 +470,15 @@ def build(b):
                 unit / "test_as_serial_name.ts",
             ],
         )
+        steps += as_test(
+            b,
+            "test_as_uart_window",
+            [
+                drivers / "serial/uart_window.ts",
+                shuffle,
+                unit / "test_as_uart_window.ts",
+            ],
+        )
 
     # The Go binding runs on wasm32: Go models every record as an opaque blob
     # sized for wasm32, so a host build would exercise a different ABI.

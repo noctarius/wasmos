@@ -384,6 +384,43 @@ static void test_an_acpi_device_without_an_interrupt_gets_none(void) {
            (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(1, 0, 0));
 }
 
+/* A 16550 at `io` as registry_add_from_acpi_desc leaves it. */
+static pci_device_record_t acpi_uart(uint16_t io, uint32_t irq, uint32_t flags) {
+    pci_device_record_t rec = acpi_record(irq);
+    (void)snprintf(rec.hid, sizeof(rec.hid), "%s", "PNP0501");
+    rec.bars[0].kind = WASMOS_PCI_BAR_IO;
+    rec.bars[0].base = io;
+    rec.bars[0].size = 8u;
+    rec.io_port_base = io;
+    rec.acpi_flags = flags;
+    return rec;
+}
+
+/* Regression: 2026-11-23-console-selection -- when the firmware named a
+ * console (SPCR), only that UART was told so; every other UART was spawned
+ * with no word on it and fell back to its own default, so COM1 still claimed
+ * the console's name beside the UART the firmware chose, and one of the two
+ * registrations failed. A UART the firmware passed over must be told it is
+ * not the console. */
+static void test_a_uart_the_firmware_passed_over_is_told_it_is_not_the_console(void) {
+    char out[96];
+    pci_device_record_t com1 = acpi_uart(0x3F8u, 4u, WASMOS_ACPI_DEVICE_CONSOLE_KNOWN);
+    pci_device_record_t com2 =
+        acpi_uart(0x2F8u, 3u, WASMOS_ACPI_DEVICE_CONSOLE | WASMOS_ACPI_DEVICE_CONSOLE_KNOWN);
+    assert(dm_acpi_spawn_args(&com1, out, sizeof(out)) > 0);
+    assert(strcmp(out, "hid=PNP0501 io=3F8 irq=4 console=0") == 0);
+    assert(dm_acpi_spawn_args(&com2, out, sizeof(out)) > 0);
+    assert(strcmp(out, "hid=PNP0501 io=2F8 irq=3 console=1") == 0);
+}
+
+/* With no SPCR the firmware said nothing, and the driver keeps its default. */
+static void test_without_a_firmware_console_no_console_arg_is_given(void) {
+    char out[96];
+    pci_device_record_t com1 = acpi_uart(0x3F8u, 4u, 0u);
+    assert(dm_acpi_spawn_args(&com1, out, sizeof(out)) > 0);
+    assert(strcmp(out, "hid=PNP0501 io=3F8 irq=4") == 0);
+}
+
 int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_spec_names_the_device_and_its_policy),
@@ -401,6 +438,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_an_acpi_mmio_window_is_granted_in_whole_pages),
         WASMOS_TEST_CASE(test_acpi_io_windows_are_granted_in_order),
         WASMOS_TEST_CASE(test_an_acpi_device_without_an_interrupt_gets_none),
+        WASMOS_TEST_CASE(test_a_uart_the_firmware_passed_over_is_told_it_is_not_the_console),
+        WASMOS_TEST_CASE(test_without_a_firmware_console_no_console_arg_is_given),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_device_manager_unit: ok\n");

@@ -54,6 +54,20 @@ Source: `architecture/06-memory-management.md`,
 `architecture/11-ring3-isolation-and-separation.md`, and
 `architecture/28-smp.md`.
 
+- [ ] [BUG][P1] Authenticate device-inventory publishers. `devmgr.inv` is a
+  discoverable service endpoint, and device-manager adds every
+  `DEVMGR_PUBLISH_DEVICE_DESC`, `DEVMGR_PUBLISH_ACPI_DEVICE_DESC`,
+  `DEVMGR_PUBLISH_BLOCK_DEVICE` and `DEVMGR_PUBLISH_VOLUME` it receives to its
+  inventory without checking who sent it. Any process can therefore publish a
+  forged PCI function or ACPI device and have device-manager spawn a driver
+  granted the register windows, interrupt and DMA it names (a PL011 instance
+  over an attacker-chosen MMIO window, or a second instance over the console's
+  window without its interrupt that masks the real console's receive
+  interrupts). Device-manager spawned pci-bus and acpi-bus and knows their
+  identities; a descriptor must come from the bus service that owns that kind
+  of record (for example by checking the descriptor buffer's owner context
+  against the spawned bus service's), and block/volume records from the
+  managers entitled to them. Raised on PR #69.
 - [ ] [BUG][P2] `wasmos_phys_map` (`src/kernel/wasm3/link.c`) copies from
   `phys | KERNEL_HIGHER_HALF_BASE` without checking that the range is inside the
   higher-half alias, so a caller holding `mmio.map` that passes an address

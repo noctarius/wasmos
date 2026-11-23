@@ -442,11 +442,23 @@ export declare function dma_sync_borrow(a0: i32, a1: i32, a2: i32, a3: i32): i32
 // borrow/mapping cannot be resolved or the unmap fails).
 @external("wasmos", "dma_unmap_borrow")
 export declare function dma_unmap_borrow(a0: i32): i32;
-// Map a physical address range into WASM linear memory at wasm_offset.
-// phys_lo/phys_hi form a 64-bit physical address; size and wasm_offset must
-// be page-aligned (multiples of 4096). Requires the mmio.map capability.
+// Map the firmware ACPI table memory holding [phys, phys+size) into the
+// caller's linear memory and return the linear-memory offset of the byte at
+// `phys` (>= 0). phys_lo/phys_hi form the 64-bit physical address; neither it
+// nor `size` need be page-aligned. The kernel places the window, covering the
+// whole pages the range touches, in the pinned arena above the module's data
+// (docs/architecture/06-memory-management.md); it is a page remap, not a copy,
+// and stays mapped until the process exits. A range inside a window this
+// process already holds returns that window's offset instead of mapping again.
+// Requires the mmio.map capability. Returns WASMOS_INVAL for size <= 0, phys
+// 0, or a range spanning more than 1024 pages,
+// WASMOS_ERR_KERNEL_NO_CALLER, WASMOS_ERR_KERNEL_NOT_AUTHORIZED,
+// WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE when any byte lies outside the
+// firmware's ACPI memory (system RAM, device memory, or nothing), or
+// WASMOS_ERR_KERNEL_NO_WINDOW / WASMOS_ERR_KERNEL_MAP_FAILED when no window
+// can be placed or mapped.
 @external("wasmos", "phys_map")
-export declare function phys_map(a0: i32, a1: i32, a2: i32, a3: i32): i32;
+export declare function phys_map(a0: i32, a1: i32, a2: i32): i32;
 // Look up the process at enumeration `index`; write its NUL-terminated name into
 // the guest buffer at `buf_off` (capacity `buf_len`, truncated to fit). Returns
 // the process PID, or -1 if `index` is out of range or the buffer is invalid.
@@ -780,9 +792,8 @@ export declare function msi_alloc(a0: i32, a1: i32): i32;
 export declare function msi_free(a0: i32): i32;
 // Write `value` to the 32-bit memory-mapped device register at physical
 // address phys_lo/phys_hi, which must be 4-byte aligned and outside system
-// RAM. Exists because wasmos_phys_map COPIES physical bytes into linear memory
-// (right for reading ACPI tables, useless for programming hardware), and a bus
-// driver has to place MSI-X table entries. Returns 0, or a negative
+// RAM. Exists because wasmos_phys_map maps only firmware ACPI table memory,
+// never a device register, and a bus driver has to place MSI-X table entries. Returns 0, or a negative
 // WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
 @external("wasmos", "mmio_write32")
 export declare function mmio_write32(a0: i32, a1: i32, a2: i32): i32;

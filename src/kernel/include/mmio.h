@@ -1,10 +1,10 @@
 /* mmio.h - Kernel-mediated 32-bit MMIO register writes.
  *
  * An unprivileged bus driver reaches a device's I/O-port window directly, but
- * has no way to touch a memory-mapped register: wasmos_phys_map COPIES physical
- * bytes into linear memory, which serves reading ACPI tables and does nothing
- * for programming hardware. pci-bus needs exactly one memory-mapped write, to
- * place an MSI-X table entry; this is that, and nothing more.
+ * has no way to touch a memory-mapped register: wasmos_phys_map maps only
+ * firmware ACPI table memory, never a device register. pci-bus needs exactly
+ * one memory-mapped write, to place an MSI-X table entry; this is that, and
+ * nothing more.
  *
  * The access is deliberately narrow: it refuses any address overlapping usable
  * RAM (pfa_range_overlaps_ram), so it is an MMIO poke, not a "write anywhere in

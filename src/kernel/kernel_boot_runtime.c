@@ -81,7 +81,11 @@ static int boot_shadow_copy_blob(void** dst_ptr, const void* src_ptr, uint64_t s
  * Returns 0 on success and -1 for a NULL argument or when any blob's frames
  * cannot be allocated.  A partial failure leaves *dst half-rewritten and the
  * frames already taken are not released, so a -1 is not recoverable and the
- * caller panics. */
+ * caller panics.
+ *
+ * FIXME(boot-ram-above-window): on x86_64 a guest with more than about 512 MiB of RAM
+ * faults in the memcpy here, reading boot data the firmware placed outside the 512 MiB
+ * higher-half window (seen with -m 2G at 0x7db23000; docs/TASKS.md). */
 int kernel_boot_build_bootinfo_shadow(const boot_info_t* src, boot_info_t* dst) {
     if (!src || !dst) {
         return -1;

@@ -71,7 +71,7 @@
     X("wasmos", "dma_map_borrow", "i(iiii)", wasmos_dma_map_borrow) \
     X("wasmos", "dma_sync_borrow", "i(iiii)", wasmos_dma_sync_borrow) \
     X("wasmos", "dma_unmap_borrow", "i(i)", wasmos_dma_unmap_borrow) \
-    X("wasmos", "phys_map", "i(iiii)", wasmos_phys_map) \
+    X("wasmos", "phys_map", "i(iii)", wasmos_phys_map) \
     X("wasmos", "proc_info", "i(i*i)", wasmos_proc_info) \
     X("wasmos", "proc_info_ex", "i(i*i*)", wasmos_proc_info_ex) \
     X("wasmos", "proc_info_stats", "i(i*i**)", wasmos_proc_info_stats) \

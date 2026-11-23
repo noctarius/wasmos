@@ -375,7 +375,7 @@ domains:
       - { name: LOW_SLOT_PRESENT, description: "the process's user root table still maps the identity low slot, so the ring-3 address-space split is not in force" }
       - { name: NO_CONTEXT_DUMPED, description: "an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution" }
       - { name: NO_SUBSCRIBER_SLOT, description: "every kernel-log subscriber slot is held by another process" }
-      - { name: PHYS_UNMAPPED, description: "a physical range is not mapped in the kernel's alias of physical memory (no RAM or firmware table backs it), so the kernel will not read it" }
+      - { name: PHYS_NOT_FIRMWARE, description: "a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it" }
 
   block:
     id: 20

@@ -180,7 +180,7 @@ linked feature documents for rationale and rollout plans.
   it to the coroutine runtime is a follow-up needed once it must originate
   requests while serving (hot-plug).
 - `mmio_write32` is the one primitive that lets a bus driver write a device
-  register (`wasmos_phys_map` copies rather than maps). It requires `mmio.map`
+  register (`wasmos_phys_map` maps only firmware ACPI memory). It requires `mmio.map`
   and refuses any address overlapping usable RAM, so it cannot reach system
   memory.
 - `virtio-net` uses three vectors (RX, TX, config) and its idle wait is a plain
@@ -745,11 +745,16 @@ linked feature documents for rationale and rollout plans.
   `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
   parallel because they share `<build-dir>/esp`.
-- `phys_map` requires `mmio.map` on both runtimes (`kernel.NOT_AUTHORIZED`
-  otherwise) and reads only physical pages the kernel's alias maps (inside
-  `KERNEL_HIGHER_HALF_WINDOW_BYTES`); anything else is refused with
-  `kernel.PHYS_UNMAPPED` instead of faulting the kernel. Both runtimes read
-  through the alias (`tests/test_phys_map.py`).
+- `phys_map` maps firmware ACPI table memory into the caller's linear memory on
+  both runtimes: a page remap into the pinned arena, never a copy, at an offset
+  the kernel picks; a range inside a window the process holds resolves to it.
+  It requires `mmio.map` (`kernel.NOT_AUTHORIZED`) and refuses any byte outside
+  the firmware's EfiACPIReclaimMemory/EfiACPIMemoryNVS extents
+  (`kernel.PHYS_NOT_FIRMWARE`), so system RAM and device memory never reach a
+  guest. Windows live until reap; under WARP reap unmaps them from the
+  linear-memory slot before its decommit (`tests/test_phys_map.py`). An
+  arena user's `initial_memory` must reach past 2 MiB under WARP (acpi-bus:
+  4 MiB).
 - A PCI driver is granted the device's interrupt hint, ISA lines 14 and 15
   only for an IDE controller in compatibility mode (`dm_pci_irqs`), and no
   interrupt otherwise; arm64 virtio drivers are granted none.

@@ -242,13 +242,11 @@ typedef struct __attribute__((packed)) {
 
 Navigation path: `RSDP → RSDT/XSDT → FACP (FADT) → DSDT`.
 
-Physical memory is mapped through a fixed 16-page window:
-
-```c
-#define PHYS_MAP_WINDOW_PAGES 16
-#define PHYS_MAP_WINDOW_SIZE  (16 * 4096)
-static uint8_t g_map_window[PHYS_MAP_WINDOW_SIZE] __attribute__((aligned(4096)));
-```
+Each table is mapped with `wasmos_phys_map(phys_lo, phys_hi, size)`, which
+maps the firmware ACPI memory holding it into acpi-bus's linear memory and
+returns a pointer to the table: first its header, then its declared length,
+which resolves to the same window when the header's page already covers it.
+The windows stay mapped for the life of the service, one or two per table.
 
 Navigation also notes the SPCR (Serial Port Console Redirection) table when the
 firmware provides one: its Generic Address Structure names the console UART's

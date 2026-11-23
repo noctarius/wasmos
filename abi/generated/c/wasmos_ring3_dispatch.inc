@@ -141,7 +141,7 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
     case HC_DMA_UNMAP_BORROW:
         return warp_dma_unmap_borrow((uint32_t)a0, reinterpret_cast<void*>(a1));
     case HC_PHYS_MAP:
-        return warp_phys_map((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, reinterpret_cast<void*>(a4));
+        return warp_phys_map((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
     case HC_PROC_INFO:
         return warp_proc_info((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
     case HC_PROC_INFO_EX:

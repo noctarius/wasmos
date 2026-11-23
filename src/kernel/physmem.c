@@ -39,6 +39,8 @@ static uint64_t g_tracked_pages = PFA_STATIC_TRACKED_PAGES;
 #define EFI_MEMORY_TYPE_BOOT_SERVICES_CODE 3
 #define EFI_MEMORY_TYPE_BOOT_SERVICES_DATA 4
 #define EFI_MEMORY_TYPE_CONVENTIONAL 7
+#define EFI_MEMORY_TYPE_ACPI_RECLAIM 9
+#define EFI_MEMORY_TYPE_ACPI_NVS 10
 
 typedef struct {
     uint64_t base;
@@ -76,6 +78,12 @@ static pfa_range_t g_ram_ranges[128];
 /* Set if any usable-RAM extent could not be recorded; see add_ram_range. */
 static uint8_t g_ram_ranges_truncated;
 static uint32_t g_ram_range_count;
+
+/* The firmware's ACPI table extents (EfiACPIReclaimMemory, EfiACPIMemoryNVS) as
+ * the memory map reported them, adjacent extents merged. Never part of the free
+ * list; pfa_range_is_firmware_table answers from it. */
+static pfa_range_t g_acpi_ranges[32];
+static uint32_t g_acpi_range_count;
 
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
@@ -150,6 +158,28 @@ static void add_ram_range(uint64_t base, uint64_t pages) {
     g_ram_ranges[g_ram_range_count].base = base;
     g_ram_ranges[g_ram_range_count].pages = pages;
     g_ram_range_count++;
+}
+
+/* Record a firmware ACPI extent. An extent that does not fit is dropped, which
+ * only makes pfa_range_is_firmware_table refuse more: the list answers "is this
+ * certainly a firmware table?", so a subset is safe. */
+static void add_acpi_range(uint64_t base, uint64_t pages) {
+    if (pages == 0) {
+        return;
+    }
+    if (g_acpi_range_count > 0) {
+        pfa_range_t* prev = &g_acpi_ranges[g_acpi_range_count - 1];
+        if (prev->base + prev->pages * PAGE_SIZE == base) {
+            prev->pages += pages;
+            return;
+        }
+    }
+    if (g_acpi_range_count >= (sizeof(g_acpi_ranges) / sizeof(g_acpi_ranges[0]))) {
+        return;
+    }
+    g_acpi_ranges[g_acpi_range_count].base = base;
+    g_acpi_ranges[g_acpi_range_count].pages = pages;
+    g_acpi_range_count++;
 }
 
 static void reserve_range(uint64_t base, uint64_t size) {
@@ -385,6 +415,7 @@ void pfa_init(const boot_info_t* boot_info) {
     g_initial_total_pages = 0;
     g_ram_range_count = 0;
     g_ram_ranges_truncated = 0;
+    g_acpi_range_count = 0;
     if (!boot_info || !boot_info->memory_map || boot_info->memory_desc_size == 0) {
         klog_write("[pfa] no memory map\n");
         return;
@@ -405,6 +436,9 @@ void pfa_init(const boot_info_t* boot_info) {
         if (is_usable(desc->Type)) {
             add_range(desc->PhysicalStart, desc->NumberOfPages);
             add_ram_range(desc->PhysicalStart, desc->NumberOfPages);
+        } else if (desc->Type == EFI_MEMORY_TYPE_ACPI_RECLAIM ||
+                   desc->Type == EFI_MEMORY_TYPE_ACPI_NVS) {
+            add_acpi_range(desc->PhysicalStart, desc->NumberOfPages);
         }
         cursor += desc_size;
     }
@@ -710,4 +744,24 @@ uint64_t pfa_free_bytes(void) {
     }
     ksync_spinlock_unlock(&g_pfa_lock);
     return free_pages * PAGE_SIZE;
+}
+
+/* Whether every byte of [base, base+length) lies inside one firmware ACPI extent.
+ * Fails closed: a zero length and a wrapped range both answer 0. */
+int pfa_range_is_firmware_table(uint64_t base, uint64_t length) {
+    if (length == 0) {
+        return 0;
+    }
+    uint64_t end = base + length;
+    if (end < base) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < g_acpi_range_count; ++i) {
+        uint64_t r_base = g_acpi_ranges[i].base;
+        uint64_t r_end = r_base + g_acpi_ranges[i].pages * PAGE_SIZE;
+        if (base >= r_base && end <= r_end) {
+            return 1;
+        }
+    }
+    return 0;
 }

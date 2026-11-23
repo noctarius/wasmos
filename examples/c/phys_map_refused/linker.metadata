@@ -1,7 +1,7 @@
 version = 1
 
 [package]
-name = "phys-map-unmapped"
+name = "phys-map-refused"
 entry = "wasmos_main"
 kind = "app"
 native = false
@@ -14,7 +14,7 @@ heap_pages = 16
 name = "ipc.basic"
 flags = 0
 
-# phys_map requires it; the fixture exists to call phys_map.
+# Holds mmio.map, so only the source-range rule can refuse it.
 [[capabilities]]
 name = "mmio.map"
 flags = 0

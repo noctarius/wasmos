@@ -51,4 +51,11 @@ uint64_t pfa_free_bytes(void);
  * an overlap, because in none of those cases is "no overlap found" knowable. */
 int pfa_range_overlaps_ram(uint64_t base, uint64_t length);
 
+/* Non-zero if every byte of [base, base+length) lies inside one extent the UEFI
+ * memory map reported as firmware ACPI memory (EfiACPIReclaimMemory or
+ * EfiACPIMemoryNVS; adjacent extents count as one). Such memory is never RAM the
+ * allocator owns and never device MMIO, which is what lets wasmos_phys_map map it
+ * into a guest. Fails closed: a zero length or a wrapped range reports 0. */
+int pfa_range_is_firmware_table(uint64_t base, uint64_t length);
+
 #endif

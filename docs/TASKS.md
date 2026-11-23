@@ -57,12 +57,43 @@ Source: `architecture/06-memory-management.md`,
 - [x] [BUG][P1] WARP's `wasmos_phys_map` (`warp_phys_map`,
   `src/kernel/warp/link.cpp`) never checked the `mmio.map` capability, so any
   WARP guest importing `wasmos.phys_map` could copy arbitrary physical memory
-  into its linear memory. Fixed: it refuses a caller without `mmio.map` with
-  `WASMOS_ERR_KERNEL_NOT_AUTHORIZED` and applies wasm3's source range check
-  (`phys_alias_range_mapped`, `kernel.PHYS_UNMAPPED`), reading through the
-  higher-half alias instead of a scratch page remapped onto any frame (which
-  also copied whole frames for an unaligned `phys`). `tests/test_phys_map.py`
-  covers both refusals on both runtimes.
+  into its linear memory; with `mmio.map`, both runtimes handed out system RAM.
+  Fixed by making `phys_map` a mapping instead of a copy on both runtimes:
+  `phys_map(phys_lo, phys_hi, size)` maps firmware ACPI table memory into the
+  pinned arena and returns the offset of the byte at `phys`; it refuses a
+  caller without `mmio.map` (`kernel.NOT_AUTHORIZED`) and any byte outside the
+  firmware's ACPI extents (`kernel.PHYS_NOT_FIRMWARE`,
+  `pfa_range_is_firmware_table`). The windows are recorded per process
+  (`src/kernel/phys_map.c`) and, under WARP, unmapped from the linear-memory
+  slot at reap before its decommit would free the firmware frames.
+  `tests/test_phys_map.py`, `test_phys_map`, `test_physmem`.
+- [ ] [BUG][P2] `warp_linmem_place_phys` panics the kernel when the window it
+  picks lies past the module's current wasm size: its commit probe
+  (`getLinearMemoryRegion`) throws, and an uncaught C++ exception in the kernel
+  is a panic. The scan is bounded by the slot's reserved capacity and the heap
+  configuration, not by what the module may address, and it starts no lower
+  than 2 MiB when the reservation allows. Any guest with `initial_memory` under
+  about 2 MiB that calls `xfer_buffer_map`, `region_alloc`, `block_buffer_map`
+  or `phys_map` under WARP takes the kernel down; acpi-bus did, with 128 KiB,
+  until it was given 4 MiB. The placement must stay inside the module's wasm
+  size and answer `WASMOS_ERR_LINMEM_NO_WINDOW` otherwise.
+- [ ] [BUG][P2] WARP's `framebuffer_map` remaps the framebuffer's frames into
+  the linear-memory slot (`paging_map_4k` on the slot alias) and records
+  nothing, so the slot decommit at reap passes the framebuffer's frames to
+  `pfa_free_pages`, which inserts frames above the tracked range straight into
+  the free pool; the slot frames it replaced leak. Found by reading the code
+  while making `phys_map` a mapping (which unmaps its windows before the
+  decommit); not reproduced, since the compositor never exits in the suite.
+- [ ] [GAP][P3] `phys_map` windows are writable. wasm3 could map them
+  read-only, but WARP's ring-3 republish (`warp_mem_ring3_map_linmem`) maps
+  every committed linear-memory page read-write, so a read-only overlay needs
+  per-window attributes there first. Until then an `mmio.map` holder can write
+  firmware ACPI memory, NVS included.
+- [ ] [BUG][P2] An x86_64 guest with more than about 512 MiB of RAM panics at
+  boot: with `-m 2G` the kernel takes a #PF at `0x7db23000` in `memcpy` from
+  `kernel_boot_build_bootinfo_shadow`, reading boot data the firmware placed
+  outside the 512 MiB higher-half window (`KERNEL_HIGHER_HALF_WINDOW_BYTES`).
+  The harness boots 512 MiB, so no suite sees it.
 - [ ] [BUG][P1] Authenticate device-inventory publishers. `devmgr.inv` is a
   discoverable service endpoint, and device-manager adds every
   `DEVMGR_PUBLISH_DEVICE_DESC`, `DEVMGR_PUBLISH_ACPI_DEVICE_DESC`,

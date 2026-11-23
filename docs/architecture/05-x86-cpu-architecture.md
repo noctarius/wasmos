@@ -378,9 +378,8 @@ while unallocated is dropped rather than delivered to a recycled endpoint id;
 #### MMIO Access for Bus Drivers
 
 An MSI-X table lives in a device BAR, so binding an entry is a memory write.
-`wasmos_phys_map` **copies** physical bytes into linear memory — correct for
-reading ACPI tables, useless for programming hardware — so `mmio_write32`
-(`mmio.c`) exists for that one job. It is gated by the `mmio.map` capability
+`wasmos_phys_map` maps only firmware ACPI table memory, never a device
+register, so `mmio_write32` (`mmio.c`) exists for that one job. It is gated by the `mmio.map` capability
 **and** refuses any address overlapping usable RAM
 (`pfa_range_overlaps_ram()`, backed by a copy of the firmware memory map kept
 separately from the allocator's free list). The page is mapped uncached at a

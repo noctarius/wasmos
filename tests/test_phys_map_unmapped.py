@@ -21,8 +21,11 @@ class PhysMapUnmappedTests(unittest.TestCase):
     beyond RAM panicked the kernel with a #PF in memcpy (wasm3). acpi-bus did
     exactly that when it read a stale XSDT entry.
 
-    phys_map_unmapped asks for a page beyond the guest's RAM. Under wasm3, which
-    reads through the alias, it must be told WASMOS_ERR_KERNEL_PHYS_UNMAPPED.
+    phys_map_unmapped asks for the page at 4 GiB, outside the alias window on
+    both architectures (512 MiB on x86_64, where the unchecked OR into the
+    higher half also aliased it onto physical page 0; 4 GiB on aarch64). Under
+    wasm3, which reads through the alias, it must be told
+    WASMOS_ERR_KERNEL_PHYS_UNMAPPED.
     WARP reads through a remapped scratch page, which reaches any physical
     address without a fault, so there a copy is within the contract. Either
     way the system must still be up afterwards.

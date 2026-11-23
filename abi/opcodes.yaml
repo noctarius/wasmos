@@ -50,7 +50,10 @@ subsystems:
           arg1=PROC_STATUS_*; for PROC_STATUS_ZOMBIE also arg2=exit status
           arg3=PROC_EXIT_REASON_*. Never reaps.
       - { symbol: PROC_IPC_SPAWN_NAME, value: 0x204, kind: req }
-      - { symbol: PROC_IPC_SPAWN_CAPS, value: 0x205, kind: req }
+      # 0x205 reserved: PROC_IPC_SPAWN_CAPS, retired. It packed one I/O window
+      # and a 16-bit IRQ mask into argument words, which can name neither a
+      # second window nor an interrupt above line 15 (a GIC SPI). Every grant
+      # now travels in a wasmos_spawn_caps_v2_t (SPAWN_CAPS_V2, SPAWN_WATCHED).
       - symbol: PROC_IPC_MODULE_META_DESC
         value: 0x212
         kind: req
@@ -68,9 +71,15 @@ subsystems:
         value: 0x208
         kind: req
         doc: |
-          Spawn with extended capability descriptor payload:
-          arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[])
-          arg2=payload_size_bytes arg3=reserved(0).
+          Spawn a boot module with a capability descriptor payload, the
+          wasmos_spawn_caps_v2_t with its region, DMA-window and interrupt
+          tails: arg0=module_index arg1=buffer_id arg2=payload_size_bytes
+          arg3=timeout_ms. With timeout_ms 0 the reply follows the spawn; with
+          a timeout it waits for the child's NOTIFY_READY like the _SYNC
+          spawns, and the child is auto-reaped on exit. Any cap_flags bit set
+          requires the caller to hold spawn.grant: PROC_IPC_ERROR,
+          WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED otherwise, before a child
+          exists.
       - symbol: PROC_IPC_SPAWN_PATH
         value: 0x209
         kind: req
@@ -83,18 +92,8 @@ subsystems:
           On success (app kind): PROC_IPC_RESP, arg0=child_pid, arg1=app_flags.
           For service/driver kinds the PM delays the PROC_IPC_RESP until the child
           calls PROC_IPC_NOTIFY_READY (behaves like SPAWN_PATH_SYNC internally).
-      - symbol: PROC_IPC_SPAWN_PATH_CAPS
-        value: 0x20a
-        kind: req
-        doc: |
-          Spawn from explicit app path with I/O-port + IRQ capabilities:
-          caller must place path bytes at xfer buffer offset 0.
-          Like every caps-carrying spawn (SPAWN_CAPS, SPAWN_CAPS_V2 and the
-          _SYNC forms), any cap_flags bit set requires the caller to hold
-          spawn.grant: PROC_IPC_ERROR, WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED
-          otherwise, before a child exists.
-          arg0=((irq_mask<<16)|(cap_flags&0xFFFF)) arg1=path_len
-          arg2=((io_port_max<<16)|io_port_min)     arg3=reserved.
+      # 0x20a reserved: PROC_IPC_SPAWN_PATH_CAPS, retired with SPAWN_CAPS
+      # (0x205) for the same reason: a grant in argument words.
       - symbol: PROC_IPC_SPAWN_SYNC
         value: 0x20b
         kind: req
@@ -117,24 +116,23 @@ subsystems:
           arg0 is the endpoint of the sender's event loop, which answers
           WASMOS_IPC_HEALTH_REQ; a supervising spawner probes it. Without the flag
           arg0 is ignored. arg2..arg3 = reserved(0).
-      - symbol: PROC_IPC_SPAWN_CAPS_SYNC
-        value: 0x20d
+      # 0x20d reserved: PROC_IPC_SPAWN_CAPS_SYNC, retired with SPAWN_CAPS
+      # (0x205): a grant in argument words.
+      - symbol: PROC_IPC_SPAWN_PATH_SYNC
+        value: 0x20e
         kind: req
         doc: |
-          Sync variants of SPAWN_CAPS / SPAWN_PATH / SPAWN_PATH_CAPS.
-          Same cap/path encoding as their async counterparts, with one arg
-          repurposed for timeout_ms:
-          SPAWN_CAPS_SYNC:      arg0=module_index arg1=cap_flags arg2=io_packed
-          arg3=(irq_mask&0xFFFF)|((timeout_ms&0xFFFF)<<16)
-          SPAWN_PATH_SYNC:      path at FS buf[0], arg0=0 arg1=path_len
-          arg2=0 arg3=timeout_ms
-          SPAWN_PATH_CAPS_SYNC: path at FS buf[0],
-          arg0=(irq<<16)|cap_flags arg1=path_len
-          arg2=io_packed           arg3=timeout_ms
+          Spawn from a path and reply when the child calls NOTIFY_READY (or
+          first blocks on IPC), or when the timeout expires. The caller's
+          transfer buffer holds the path at offset 0 and, when args_len is
+          not 0, args_len bytes of command-line arguments directly after it.
+          arg0=PROC_SPAWN_PATH_FLAG_* arg1=((buffer_id<<12)|path_len)
+          arg2=args_len arg3=timeout_ms (0 = wait forever).
           On success: PROC_IPC_RESP, arg0=child_pid.
           On timeout or child death before ready: PROC_IPC_ERROR.
-      - { symbol: PROC_IPC_SPAWN_PATH_SYNC, value: 0x20e, kind: req }
-      - { symbol: PROC_IPC_SPAWN_PATH_CAPS_SYNC, value: 0x20f, kind: req }
+      # 0x20f reserved: PROC_IPC_SPAWN_PATH_CAPS_SYNC, retired with SPAWN_CAPS
+      # (0x205): a grant in argument words. A path spawn with arguments and
+      # no grant is SPAWN_PATH_SYNC with args_len.
       - symbol: PROC_IPC_SUBSYSTEM_REGISTER_BROKER
         value: 0x210
         kind: req

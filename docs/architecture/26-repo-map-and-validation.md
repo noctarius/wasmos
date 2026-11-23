@@ -85,7 +85,7 @@ wasmos/
 ├── scripts/                Build tooling and test scripts
 │   ├── make_wasmos_app.c   WASMOS-APP packer tool source
 │   ├── make_initfs.py      Initfs image builder
-│   ├── initfs.toml         Initfs manifest (bootstrap modules)
+│   ├── initfs.<arch>.toml  Initfs manifest per architecture (bootstrap modules)
 │   ├── initfs/             Initfs data files (device-manager rules)
 │   ├── system/             Runtime ESP data (rules, fonts, sysinit.rc)
 │   ├── startup.nsh         UEFI shell startup script
@@ -245,7 +245,7 @@ unmodified.
 ### Initfs Contents
 
 `out/<dir>/initfs.img` is a flat binary embedded in kernel ELF as a data section.
-Its manifest is `scripts/initfs.toml`:
+Its manifest is `scripts/initfs.<arch>.toml`:
 
 | Path in initfs                       | Bootstrap? | Module name       |
 |--------------------------------------|------------|-------------------|

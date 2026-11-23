@@ -98,22 +98,25 @@ typedef struct {
 /* Set the full hardware access profile for a newly spawned driver process.
  * cap_flags is a DEVMGR_CAP_* bitmask. regions lists the register windows in
  * region-index order (a device's registers are not always contiguous, nor all
- * of one kind); irq_mask selects IRQ lines. dma_windows defines physical
+ * of one kind); irqs lists the interrupt identifiers the driver may route
+ * (wasmos_spawn_caps_v2_t). dma_windows defines physical
  * address ranges the driver may use for DMA.
  *
- * The IRQ and DMA groups are applied only if their cap_flags bit is set, so
- * clearing a bit means "declare nothing", NOT "revoke": the DMA fields in
+ * The DMA group is applied only if its cap_flags bit is set, so clearing the
+ * bit means "declare nothing", NOT "revoke": the DMA fields in
  * particular keep whatever a dma.buffer manifest grant left there. Every region
  * needs the bit of its kind (DEVMGR_CAP_IO_PORT, DEVMGR_CAP_MMIO_MAP) and is
  * refused, not dropped, without it. Returns 0, or -1 for a context whose
  * record cannot be created, more windows than the limits above, a region of
  * unknown kind, without its bit, of zero length, past port 0xFFFF or (MMIO)
- * without a mapping, or a DMA bit set with no windows. Called once per driver
+ * without a mapping, interrupts without DEVMGR_CAP_IRQ or past
+ * WASMOS_IRQ_GRANT_LIMIT, or a DMA bit set with no windows. Called once per driver
  * at spawn, before the child first runs. */
 int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t region_count,
-                                 const capability_region_t* regions, uint16_t irq_mask,
-                                 uint32_t dma_direction_flags, uint32_t dma_max_bytes,
-                                 uint32_t dma_window_count, const wasmos_dma_window_t* dma_windows);
+                                 const capability_region_t* regions, uint32_t irq_count,
+                                 const uint32_t* irqs, uint32_t dma_direction_flags,
+                                 uint32_t dma_max_bytes, uint32_t dma_window_count,
+                                 const wasmos_dma_window_t* dma_windows);
 
 /* Return non-zero if a spawn profile (hardware limits) has been set for context_id. */
 int capability_spawn_profile_configured(uint32_t context_id);
@@ -148,7 +151,8 @@ typedef struct {
  * granted, because it does not supply the base. */
 int capability_region_resolve(uint32_t context_id, uint32_t region, uint32_t offset,
                               uint32_t access_width, capability_region_access_t* out);
-/* Only legacy PIC lines 0..15 can be granted; anything higher is denied. */
+/* Whether context_id's spawn profile lists interrupt identifier irq_line. The
+ * architecture's irq_register still checks the identifier is one it routes. */
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line);
 /* Whether the context may map MMIO at all. There is no per-range MMIO
  * allowlist, so this is the only gate on which physical ranges it can reach. */

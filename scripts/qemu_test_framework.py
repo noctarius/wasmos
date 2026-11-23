@@ -13,8 +13,14 @@ import sys
 import tempfile
 import time
 import shutil
+import platform
 from dataclasses import dataclass, replace
 from typing import Optional, Pattern, Union
+
+# The per-architecture QEMU machine description is buildgen's ARCHES table, so
+# the harness and the run-qemu targets boot the same machine.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "buildgen"))
+from toolchains import ARCHES  # noqa: E402
 
 
 @dataclass
@@ -61,8 +67,15 @@ class QemuConfig:
     #       (log.serial=com2 is added to this session's kernel options): from
     #       the first lines of boot through a panic, with no driver involved.
     #       For kernel self-test trees and tests that read shutdown or panic
-    #       output. Override the default with WASMOS_QEMU_KLOG_PORT.
+    #       output. x86_64 only: QEMU virt has a single UART. Override the
+    #       default with WASMOS_QEMU_KLOG_PORT.
     klog_port: str = ""
+    # Guest architecture, a key of toolchains.ARCHES; it selects the QEMU
+    # binary, machine and firmware layout. Empty: WASMOS_ARCH, else x86_64.
+    arch: str = ""
+    # The qemu-system binary. Empty: WASMOS_QEMU, else qemu-system-<arch> from
+    # PATH.
+    qemu_binary: str = ""
     isolate_esp: bool = False
     # Boot options appended to this session's \kernel.cmdline, e.g.
     # ("linmem.slots=36",). Non-empty implies isolate_esp: the options go into a
@@ -103,6 +116,18 @@ class QemuConfig:
             )
         if not self.klog_port:
             self.klog_port = os.environ.get("WASMOS_QEMU_KLOG_PORT", "virtio")
+        if not self.arch:
+            self.arch = os.environ.get("WASMOS_ARCH", "x86_64")
+        if self.arch not in ARCHES:
+            raise ValueError(
+                f"unknown guest architecture {self.arch!r} (have: {', '.join(ARCHES)})"
+            )
+        if self.klog_port == "com2" and self.arch != "x86_64":
+            raise ValueError(
+                f"klog_port 'com2' needs a second UART; {self.arch} has none"
+            )
+        if not self.qemu_binary:
+            self.qemu_binary = os.environ.get("WASMOS_QEMU", f"qemu-system-{self.arch}")
         if not self.wfs_virtio_image:
             self.wfs_virtio_image = os.environ.get(
                 "WASMOS_WFS_VIRTIO_IMAGE",
@@ -401,8 +426,13 @@ def default_host_tool_path(name: str, build_dir: str = "out/default") -> str:
 
 def default_config(build_dir: str = "out/default") -> QemuConfig:
     tools = _read_build_tools(build_dir)
-    ovmf_code = os.environ.get("WASMOS_OVMF_CODE", tools.get("ovmf-code", ""))
-    ovmf_vars = os.environ.get("WASMOS_OVMF_VARS", tools.get("ovmf-vars", ""))
+    arch = ARCHES[os.environ.get("WASMOS_ARCH", "x86_64")]
+    ovmf_code = os.environ.get(
+        "WASMOS_OVMF_CODE", tools.get(arch.firmware_code_tool, "")
+    )
+    ovmf_vars = os.environ.get(
+        "WASMOS_OVMF_VARS", tools.get(arch.firmware_vars_tool, "")
+    )
     esp_dir = os.environ.get("WASMOS_ESP", os.path.join(build_dir, "esp"))
     userfs_image = default_userfs_image(esp_dir)
     wfs_image = os.environ.get("WASMOS_WFS_IMAGE", os.path.join(build_dir, "wfs.img"))
@@ -424,6 +454,8 @@ def default_config(build_dir: str = "out/default") -> QemuConfig:
     return QemuConfig(
         ovmf_code=ovmf_code,
         ovmf_vars=ovmf_vars,
+        arch=arch.name,
+        qemu_binary=os.environ.get("WASMOS_QEMU", tools.get(arch.qemu_tool, "")),
         esp_dir=esp_dir,
         userfs_image=userfs_image,
         wfs_image=wfs_image,
@@ -437,20 +469,41 @@ def default_config(build_dir: str = "out/default") -> QemuConfig:
     )
 
 
+def _host_arch() -> str:
+    machine = platform.machine().lower()
+    return {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+
+
+def default_accel(guest_arch: str) -> str:
+    """The accelerator a session uses when WASMOS_QEMU_ACCEL does not name one:
+    KVM when the host exposes a usable /dev/kvm (Linux CI runners), HVF for an
+    aarch64 guest on an Apple Silicon host, TCG otherwise -- and TCG whenever
+    the guest is not the host's own architecture, which no hardware accelerator
+    can run. An x86_64 guest is not given HVF: wasmos is validated on x86_64
+    under TCG only."""
+    if guest_arch != _host_arch():
+        return "tcg"
+    if os.access("/dev/kvm", os.R_OK | os.W_OK):
+        return "kvm"
+    if platform.system() == "Darwin" and guest_arch == "aarch64":
+        return "hvf"
+    return "tcg"
+
+
 def build_qemu_cmd(cfg: QemuConfig) -> list:
+    arch = ARCHES[cfg.arch]
+    accel = os.environ.get("WASMOS_QEMU_ACCEL", "").strip() or default_accel(cfg.arch)
+    # A hardware accelerator runs the host CPU model; "max" under TCG enables
+    # every feature the emulator implements.
+    cpu = "host" if accel in ("kvm", "hvf") and arch.name == "aarch64" else "max"
     cmd = [
-        "qemu-system-x86_64",
+        cfg.qemu_binary or f"qemu-system-{arch.name}",
+        *arch.qemu_machine,
         "-m",
         "512M",
         "-cpu",
-        "max",
+        cpu,
     ]
-    # Acceleration: prefer KVM when the host exposes a usable /dev/kvm (e.g. Linux
-    # CI runners) so TCG emulation does not dominate boot time; otherwise fall back
-    # to plain TCG. Override explicitly with WASMOS_QEMU_ACCEL (e.g. "hvf", "tcg").
-    accel = os.environ.get("WASMOS_QEMU_ACCEL", "").strip()
-    if not accel:
-        accel = "kvm" if os.access("/dev/kvm", os.R_OK | os.W_OK) else "tcg"
     if accel and accel != "tcg":
         cmd += ["-accel", accel]
     if cfg.smp_count > 1:
@@ -492,7 +545,7 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         # survive clears cfg.userfs_snapshot and supplies its own copy.
         snapshot = "snapshot=on," if cfg.userfs_snapshot else ""
         cmd += ["-drive", f"format=raw,{snapshot}file={cfg.userfs_image}"]
-    if cfg.wfs_image and os.path.exists(cfg.wfs_image):
+    if cfg.wfs_image and os.path.exists(cfg.wfs_image) and arch.qemu_ide:
         # if=ide,index=2 explicitly: index 2 is the secondary channel's master,
         # which is the unit the device-manager rule for WFS matches. Relying on
         # the implicit assignment leaves which channel it lands on up to QEMU.
@@ -523,11 +576,12 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.
         # The netdev backend defaults to user-mode SLIRP but can be overridden
         # (e.g. vmnet-bridged) via WASMOS_QEMU_NETDEV; it must keep id=net0.
+        rom = "" if arch.qemu_nic_option_rom else ",romfile="
         cmd += [
             "-netdev",
             cfg.netdev,
             "-device",
-            f"{cfg.nic_model},netdev=net0,id=nic0",
+            f"{cfg.nic_model},netdev=net0,id=nic0{rom}",
         ]
     cmd += ["-device", cfg.rng_device]
     cmd += list(cfg.extra_args)

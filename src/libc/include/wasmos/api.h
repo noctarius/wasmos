@@ -137,7 +137,7 @@ typedef struct {
  * Declared here rather than in abi/hostcalls.yaml, and exempted from the
  * --verify-source client guard by C_CLIENT_ALLOWLIST in
  * scripts/gen_abi_hostcalls.py. Only wasmos/mutex.h calls them, and only under
- * __wasm__; the x86_64 native path uses the int-0x80 syscalls
+ * __wasm__; the native path uses the syscalls
  * (wasmos_sys_mutex_try_lock/unlock) and native drivers use the
  * mutex_try_lock/mutex_unlock entries of the wasmos_driver_api_t vtable.
  * FIXME(user-mutex-import): no kernel link table exports "wasmos"."mutex_try_lock"

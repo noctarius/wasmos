@@ -82,14 +82,16 @@ typedef enum {
 /* I/O capabilities granted to a spawned driver process. */
 typedef struct {
     uint32_t cap_flags; /* reserved capability flags */
+    /* A single I/O window, for a device described by its base port alone;
+     * dm_caps_v2_encode turns it into the descriptor's one region grant. */
     uint16_t io_port_min;
     uint16_t io_port_max;
-    uint16_t irq_mask; /* bitmask of IRQ lines the driver may use */
+    /* Interrupt identifiers the driver may route (wasmos_spawn_caps_v2_t). */
+    uint32_t irq_count;
+    uint32_t irqs[WASMOS_IRQ_GRANT_LIMIT];
     /* Windows resolved from the driver's declared regions, in declaration order
      * (which is the region index it addresses at runtime). Non-zero count
-     * supersedes io_port_min/max and routes the spawn through the descriptor
-     * form, the only one that can describe more than a single window or a
-     * memory-mapped one. */
+     * supersedes io_port_min/max. */
     uint32_t region_count;
     wasmos_region_grant_t regions[WASMOS_REGION_LIMIT];
     /* The PCI function the device sits at, for a PCI driver. Only the

@@ -9,7 +9,11 @@
  *                              out of line)
  *   arch_cpu_relax()           spin-wait hint
  * The contract of each is documented at the x86_64 implementation. This header
- * is the single selection point; x86_64 is the only target. */
+ * is the single selection point; x86_64 and aarch64 are the targets. */
 #pragma once
 
+#if defined(WASMOS_ARCH_AARCH64)
+#include "arch/aarch64/arch_cpu.h"
+#else
 #include "arch/x86_64/arch_cpu.h"
+#endif

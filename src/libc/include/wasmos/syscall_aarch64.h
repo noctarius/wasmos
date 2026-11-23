@@ -1,0 +1,57 @@
+/* syscall_aarch64.h - aarch64 trap stubs of the native ring-3 syscall ABI
+ * (svc #0). Included only through wasmos/syscall_native.h, which defines the
+ * syscall numbers, the result records and the wrappers built on these.
+ *
+ * The syscall number goes in x8, arguments in x0..x5, and the results come
+ * back in x0 and x1 (the Linux arm64 assignment; the kernel side decodes it in
+ * arch/aarch64/arch_context.h). Every variant clobbers memory, so surrounding
+ * loads and stores are not reordered across the trap. */
+#ifndef WASMOS_LIBC_WASMOS_SYSCALL_AARCH64_H
+#ifndef WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H
+/* Included directly: syscall_native.h defines the records these stubs return
+ * and includes this header again at the point they are needed. */
+#include "wasmos/syscall_native.h"
+#else
+#define WASMOS_LIBC_WASMOS_SYSCALL_AARCH64_H
+
+#include <stdint.h>
+
+#if defined(__aarch64__) && !defined(__wasm__)
+
+static inline int64_t wasmos_syscall0(uint64_t id) {
+    register uint64_t x8 __asm__("x8") = id;
+    register uint64_t x0 __asm__("x0");
+    __asm__ volatile("svc #0" : "=r"(x0) : "r"(x8) : "x1", "memory");
+    return (int64_t)x0;
+}
+
+static inline int64_t wasmos_syscall1(uint64_t id, uint64_t arg0) {
+    register uint64_t x8 __asm__("x8") = id;
+    register uint64_t x0 __asm__("x0") = arg0;
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8) : "x1", "memory");
+    return (int64_t)x0;
+}
+
+static inline wasmos_sysret2_t wasmos_syscall6_ret2(uint64_t id, uint64_t arg0, uint64_t arg1,
+                                                    uint64_t arg2, uint64_t arg3, uint64_t arg4,
+                                                    uint64_t arg5) {
+    wasmos_sysret2_t out;
+    register uint64_t x8 __asm__("x8") = id;
+    register uint64_t x0 __asm__("x0") = arg0;
+    register uint64_t x1 __asm__("x1") = arg1;
+    register uint64_t x2 __asm__("x2") = arg2;
+    register uint64_t x3 __asm__("x3") = arg3;
+    register uint64_t x4 __asm__("x4") = arg4;
+    register uint64_t x5 __asm__("x5") = arg5;
+    __asm__ volatile("svc #0"
+                     : "+r"(x0), "+r"(x1)
+                     : "r"(x8), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+                     : "memory");
+    out.r0 = (int64_t)x0;
+    out.r1 = (int64_t)x1;
+    return out;
+}
+
+#endif /* __aarch64__ && !__wasm__ */
+#endif /* WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H */
+#endif /* WASMOS_LIBC_WASMOS_SYSCALL_AARCH64_H */

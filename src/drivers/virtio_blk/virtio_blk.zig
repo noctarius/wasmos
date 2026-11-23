@@ -73,10 +73,12 @@
 //!
 //! Service identity
 //! ----------------
-//! Registered as the concrete name "virtio-blk" under the virtual class
-//! "block", so a client discovers it by class without naming this driver, and
-//! without competing for the plain "block" name the ATA driver holds for the
-//! boot disk.
+//! Registered under the virtual class "block", so a client discovers it by
+//! class without naming this driver. The concrete service name is the disk's
+//! canonical id (below), because a name has one owner and every virtio disk is
+//! served by its own instance of this driver: a fixed name would refuse every
+//! instance after the first. The plain "block" name is not claimed; the ATA
+//! driver holds it for the boot disk.
 //!
 //! A class instance is a DISK, and its number is an opaque FNV-1a fingerprint
 //! of the disk's canonical id (`block:virtio-blk:<unit>`). One virtio-blk device
@@ -1323,10 +1325,9 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     // The service is registered ON the loop's endpoint, so client requests,
     // interrupts and replies all arrive at the one place the loop drains.
     //
-    // The concrete name is "virtio-blk"; the class is what a client looks up, so
-    // it finds whichever block backend is present without naming this driver.
-    // The plain "block" NAME is deliberately not claimed: the ATA driver holds
-    // it for the boot disk.
+    // The concrete name is the canonical id, unique per device (see the file
+    // header); the class is what a client looks up, so it finds whichever block
+    // backend is present without naming this driver.
     // Stage the descriptor first: the class instance is a fingerprint of the
     // canonical id it holds, so registering before it exists would claim the
     // instance of the empty string.
@@ -1345,7 +1346,7 @@ fn prepare(user: ?*anyopaque, arg0: i32, arg1: i32, arg2: i32, arg3: i32) callco
     // TODO: the pci, devmgr.inv and registration calls are still synchronous;
     // an async prepare would make them loop intents.
     const devmgr = driver.lookupService(proc_endpoint, "devmgr.inv", 32, 256) orelse -1;
-    if (driver.registerService(proc_endpoint, endpoint(), "virtio-blk", "block", blockClassInstance(), 1) == null) {
+    if (driver.registerService(proc_endpoint, endpoint(), canonicalIdSlice(), "block", blockClassInstance(), 1) == null) {
         driver.log("[virtio-blk] service registration failed");
         return;
     }

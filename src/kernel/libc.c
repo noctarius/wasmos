@@ -77,6 +77,7 @@ void* memcpy(void* dst, const void* src, size_t n) {
 }
 
 void* memset(void* dst, int c, size_t n) {
+#if defined(__x86_64__)
     /* rep stosb: correct on every x86 CPU and microcode-accelerated (ERMS) on
      * anything since ~2012, so no CPUID gate is needed.  `cld` forces forward
      * direction independent of the caller's DF, since kernel memset runs in
@@ -88,6 +89,18 @@ void* memset(void* dst, int c, size_t n) {
                          : "a"((uint8_t)c)
                          : "memory");
     return ret;
+#else
+    /* Byte stores: correct for any alignment, including the Device memory a
+     * memset must never be pointed at but an unaligned wide store would fault
+     * on. -fno-builtin keeps the compiler from turning the loop back into a
+     * memset call.
+     * TODO: a word-at-a-time or DC ZVA path for large clears (arm64 port). */
+    uint8_t* d = (uint8_t*)dst;
+    for (size_t i = 0; i < n; ++i) {
+        d[i] = (uint8_t)c;
+    }
+    return dst;
+#endif
 }
 
 /* Overlap-safe copy: it copies backward only when dst falls strictly inside

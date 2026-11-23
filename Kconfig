@@ -2,6 +2,29 @@ mainmenu "WASMOS Configuration"
 
 menu "Build Options"
 
+choice
+    prompt "Target architecture"
+    default WASMOS_ARCH_X86_64
+    help
+      The CPU architecture the kernel, the boot loader and the native ring-3
+      modules are built for, and the QEMU machine the run targets boot.
+      Everything that differs per architecture outside the sources lives in
+      ARCHES in scripts/buildgen/toolchains.py.
+
+config WASMOS_ARCH_X86_64
+    bool "x86_64 (QEMU pc, OVMF)"
+
+config WASMOS_ARCH_AARCH64
+    bool "aarch64 (QEMU virt, edk2; bring-up)"
+    help
+      arm64 port under bring-up. The kernel schedules, preempts and runs wasm3
+      guests, and stops at the first unimplemented arch interface (PCI
+      configuration access), so an aarch64 tree runs run-qemu-bringup-test,
+      not run-qemu-test. The interrupt controller
+      choice and WARP are x86_64-only.
+
+endchoice
+
 menu "Examples"
 
 config AS_ENABLE
@@ -53,6 +76,7 @@ endchoice
 choice
     prompt "IRQ controller mode"
     default WASMOS_IRQ_IOAPIC
+    depends on WASMOS_ARCH_X86_64
 
 config WASMOS_IRQ_PIC
     bool "PIC (legacy 8259 + PIT)"
@@ -96,6 +120,7 @@ config WASMOS_WASM_RUNTIME_WASM3
 
 config WASMOS_WASM_RUNTIME_WARP
     bool "WARP (JIT compiler)"
+    depends on WASMOS_ARCH_X86_64
     help
       Use the WARP single-pass JIT compiler. C++14, near-native execution speed.
       Requires the freestanding C++ ABI shim in the kernel (warp_shim.cpp).
@@ -116,10 +141,6 @@ config WASMOS_SCHED_SMP_STRESS
     help
       Spawn a cross-CPU token-ring stress and invariant test before the
       scheduler loop starts (kernel_sched_smp_stress_runtime.c).
-
-config KERNEL_TARGET_TRIPLE
-    string "Kernel target triple"
-    default "x86_64-elf"
 
 config QEMU_GDB_PORT
     int "QEMU gdb port for run-qemu-debug"

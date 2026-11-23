@@ -10,7 +10,7 @@ device inventory.
 `src/services/device_manager/device_manager_rules.c`,
 `src/services/pci_bus/pci_bus.c`,
 `src/services/acpi_bus/acpi_bus.c`,
-`scripts/system/devmgr/rules/default.rules`
+`scripts/system/devmgr/rules/default.<arch>.rules`
 
 ---
 
@@ -119,7 +119,7 @@ Text buffer capacity for the combined rule file:
 Each line is a comma-separated list of `key==value` tokens, optionally
 quoted. `#` begins a line comment.
 
-Example from `scripts/system/devmgr/rules/default.rules` (excerpt):
+Example from `scripts/system/devmgr/rules/default.<arch>.rules` (excerpt):
 
 ```
 SUBSYSTEM=="block", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"

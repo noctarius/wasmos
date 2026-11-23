@@ -782,14 +782,58 @@ static int hw_spawn_driver_index(int32_t index) {
     return dm_spawn_sync_call(PROC_IPC_SPAWN_SYNC, index, DM_SPAWN_TIMEOUT_MS, 0, 0);
 }
 
+/* Interrupt grants. A record's hint of 0xFF names no interrupt. The
+ * two-interrupt default (lines 14 and 15) stands for "the line is resolved
+ * later" when a record carries no usable hint. An interrupt is granted only
+ * with DEVMGR_CAP_IRQ in the caps' cap_flags, which every caller sets first:
+ * the kernel refuses an interrupt grant without it, and a driver that declares
+ * no interrupt (virtio_serial raises none) must not be handed one. */
+#define DM_IRQ_HINT_NONE 0xFFu
+
+static void caps_irqs_none(spawn_caps_t* caps) {
+    caps->irq_count = 0;
+}
+
+static void caps_irqs_one(spawn_caps_t* caps, uint32_t irq) {
+    caps_irqs_none(caps);
+    if ((caps->cap_flags & DEVMGR_CAP_IRQ) != 0u) {
+        caps->irqs[0] = irq;
+        caps->irq_count = 1;
+    }
+}
+
+static void caps_irqs_default(spawn_caps_t* caps) {
+    caps_irqs_none(caps);
+    if ((caps->cap_flags & DEVMGR_CAP_IRQ) != 0u) {
+        caps->irqs[0] = 14u;
+        caps->irqs[1] = 15u;
+        caps->irq_count = 2;
+    }
+}
+
+static void caps_irqs_from_hint(spawn_caps_t* caps, uint8_t hint) {
+    if (hint == DM_IRQ_HINT_NONE) {
+        caps_irqs_none(caps);
+    } else {
+        caps_irqs_one(caps, hint);
+    }
+}
+
 /* What a driver is actually granted is otherwise invisible: the driver addresses
  * its device by region index and never learns the ports, and a capability
  * refusal surfaces far from here. One line at the point of decision makes a
  * mis-granted window obvious in a boot log instead of a mystery later. */
 static void log_spawn_grant(const char* what, const spawn_caps_t* caps) {
-    (void)printf("[device-manager] grant %s irq_mask=%04X caps=%X windows=%u\n",
+    char irqs[48];
+    int n = 0;
+    irqs[0] = '\0';
+    for (uint32_t i = 0; i < caps->irq_count && n >= 0 && (uint32_t)n < sizeof(irqs); ++i) {
+        n += snprintf(
+            irqs + n, sizeof(irqs) - (uint32_t)n, "%s%u", i ? "," : "", (unsigned)caps->irqs[i]);
+    }
+    (void)printf("[device-manager] grant %s irqs=[%s] caps=%X windows=%u\n",
                  what,
-                 (unsigned)caps->irq_mask,
+                 irqs,
                  (unsigned)caps->cap_flags,
                  (unsigned)(caps->region_count ? caps->region_count : 1u));
     if (caps->region_count == 0u) {
@@ -874,9 +918,14 @@ static int hw_spawn_driver_index_caps_v2(int32_t index, const spawn_caps_t* caps
                               (int32_t)DM_SPAWN_TIMEOUT_MS);
 }
 
+/* Spawn a boot module with a capability grant. Every grant travels in the
+ * descriptor form (PROC_IPC_SPAWN_CAPS_V2): the packed opcodes that carried a
+ * single window and an interrupt mask in argument words are retired.
+ * TODO: pci-bus and acpi-bus are spawned by module index here; spawning them
+ * by path (PROC_IPC_SPAWN_WATCHED) would retire the index-based form too, but
+ * needs device-manager's synchronous spawn calls turned into deferred ones
+ * (docs/TASKS.md, synchronous request/reply removal). */
 static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
-    uint32_t io_packed = 0;
-    uint32_t arg3 = 0;
     char what[24];
     if (!caps) {
         return hw_spawn_driver_index(index);
@@ -886,16 +935,7 @@ static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     }
     (void)snprintf(what, sizeof(what), "module=%d", (int)index);
     log_spawn_grant(what, caps);
-    if (caps->region_count > 0u) {
-        return hw_spawn_driver_index_caps_v2(index, caps);
-    }
-    io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
-    arg3 = (caps->irq_mask & 0xFFFFu) | ((DM_SPAWN_TIMEOUT_MS & 0xFFFFu) << 16);
-    return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_SYNC,
-                              index,
-                              (int32_t)caps->cap_flags,
-                              (int32_t)io_packed,
-                              (int32_t)arg3);
+    return hw_spawn_driver_index_caps_v2(index, caps);
 }
 
 static int hw_spawn_driver_path(const char* path) {
@@ -928,13 +968,13 @@ static int hw_spawn_driver_path(const char* path) {
     return rc;
 }
 
-static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* caps,
-                                          const char* args) {
+/* Spawn a driver from a path with a command-line argument string and no
+ * capability grant (PROC_IPC_SPAWN_PATH_SYNC with args_len), auto-reaped on
+ * exit as one-shot enumerators must be. */
+static int hw_spawn_driver_path_args(const char* path, const char* args) {
     uint32_t path_len = 0;
     uint32_t args_len = 0;
-    uint32_t caps_arg0 = 0;
-    uint32_t caps_arg2 = 0;
-    if (!path || path[0] == '\0' || !caps) {
+    if (!path || path[0] == '\0') {
         return -1;
     }
     while (path[path_len]) {
@@ -956,25 +996,16 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0 ||
+        (args_len > 0u &&
+         wasmos_xfer_buffer_write(bid, args, (int32_t)args_len, (int32_t)path_len) != 0)) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (args_len > 0u &&
-        wasmos_xfer_buffer_write(bid, args, (int32_t)(args_len + 1u), (int32_t)path_len) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    if (args_len == 0u && wasmos_xfer_buffer_write(bid, "", 1, (int32_t)path_len) != 0) {
-        (void)wasmos_xfer_buffer_release(bid);
-        return -1;
-    }
-    caps_arg0 = ((uint32_t)caps->irq_mask << 16) | ((uint32_t)caps->cap_flags & 0xFFFFu);
-    caps_arg2 = ((uint32_t)caps->io_port_max << 16) | (uint32_t)caps->io_port_min;
-    int rc = dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_CAPS_SYNC,
-                                (int32_t)caps_arg0,
+    int rc = dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_SYNC,
+                                PROC_SPAWN_PATH_FLAG_AUTOREAP,
                                 (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                                (int32_t)caps_arg2,
+                                (int32_t)args_len,
                                 DM_SPAWN_TIMEOUT_MS);
     (void)wasmos_xfer_buffer_release(bid);
     return rc;
@@ -1136,7 +1167,6 @@ static int hw_spawn_rule_target(const char* rule_path) {
  * to grant -- what it can carry is a mount, which is placement rather than
  * permission. */
 static int hw_spawn_rule_target_args(const char* rule_path, const char* args) {
-    spawn_caps_t none = {0};
     char candidate[104];
 
     if (!rule_path || rule_path[0] == '\0') {
@@ -1146,18 +1176,18 @@ static int hw_spawn_rule_target_args(const char* rule_path, const char* args) {
         return hw_spawn_rule_target(rule_path);
     }
     if (rule_path[0] == '/') {
-        return hw_spawn_driver_path_caps_args(rule_path, &none, args);
+        return hw_spawn_driver_path_args(rule_path, args);
     }
     candidate[0] = '\0';
     str_copy(candidate, sizeof(candidate), "/init/");
     wasmos_sys_str_append(candidate, sizeof(candidate), rule_path);
-    if (hw_spawn_driver_path_caps_args(candidate, &none, args) == 0) {
+    if (hw_spawn_driver_path_args(candidate, args) == 0) {
         return 0;
     }
     candidate[0] = '\0';
     str_copy(candidate, sizeof(candidate), "/boot/");
     wasmos_sys_str_append(candidate, sizeof(candidate), rule_path);
-    return hw_spawn_driver_path_caps_args(candidate, &none, args);
+    return hw_spawn_driver_path_args(candidate, args);
 }
 
 static int query_module_meta_by_path(const char* path, uint32_t source, int32_t* out_index) {
@@ -1335,14 +1365,14 @@ static void queue_pci_match_rule_spawns(void) {
                  * whose registers are split across a fixed legacy range and a
                  * firmware-assigned BAR.
                  *
-                 * The irq_mask default is the (1<<14)|(1<<15) sentinel meaning
-                 * "PM resolves the line", used when the device record carries no
-                 * usable hint; a real hint overrides it. */
+                 * The interrupt default (caps_irqs_default) stands when the
+                 * device record carries no usable hint; a real hint overrides
+                 * it. */
                 g_dm.active_rule_spawn_caps.cap_flags = rule->meta.cap_flags & 0xFFFFu;
                 g_dm.active_rule_spawn_caps.dma_max_bytes = rule->meta.dma_budget_pages * 4096u;
-                g_dm.active_rule_spawn_caps.irq_mask = (uint16_t)((1u << 14) | (1u << 15));
-                if (rec->irq_hint < 16u) {
-                    g_dm.active_rule_spawn_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
+                caps_irqs_default(&g_dm.active_rule_spawn_caps);
+                if (rec->irq_hint != DM_IRQ_HINT_NONE) {
+                    caps_irqs_one(&g_dm.active_rule_spawn_caps, rec->irq_hint);
                 }
                 if (dm_resolve_declared_regions(&rule->meta, rec, &g_dm.active_rule_spawn_caps) !=
                     0) {
@@ -1360,8 +1390,7 @@ static void queue_pci_match_rule_spawns(void) {
                 g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
                 g_dm.active_rule_spawn_caps.io_port_min = rec->io_port_base;
                 g_dm.active_rule_spawn_caps.io_port_max = (uint16_t)(rec->io_port_base + 0x3Fu);
-                g_dm.active_rule_spawn_caps.irq_mask =
-                    (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
+                caps_irqs_from_hint(&g_dm.active_rule_spawn_caps, rec->irq_hint);
             }
             /* Carried only by the descriptor form; the kernel quiesces this
              * function when the driver ends (DEVMGR_CAP_PCI_FUNCTION). */
@@ -1406,8 +1435,7 @@ static void queue_acpi_match_rule_spawns(void) {
             g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
             g_dm.active_rule_spawn_caps.io_port_min = rec->device_id;
             g_dm.active_rule_spawn_caps.io_port_max = (uint16_t)(rec->device_id + 7u);
-            g_dm.active_rule_spawn_caps.irq_mask =
-                (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
+            caps_irqs_from_hint(&g_dm.active_rule_spawn_caps, rec->irq_hint);
             str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
             g_dm.active_rule_fstype[0] = '\0';
             g_dm.rule_spawn_pending = 1;
@@ -2276,7 +2304,7 @@ static int query_driver_module_meta(int32_t module_index, uint8_t* out_storage_b
         out_caps->cap_flags = desc.cap_flags & 0xFFFFu;
         out_caps->io_port_min = 0u;
         out_caps->io_port_max = 0u;
-        out_caps->irq_mask = (uint16_t)((1u << 14) | (1u << 15));
+        caps_irqs_default(out_caps);
         if (out_desc) {
             *out_desc = desc;
         }
@@ -3601,7 +3629,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                  * wasmos_mmio_write32 refuses any address overlapping system
                  * RAM, so this grants device access only. */
                 pci_caps.cap_flags = DEVMGR_CAP_MMIO_MAP;
-                pci_caps.irq_mask = 0;
                 if (hw_spawn_driver_index_caps(g_dm.pci_bus_index, &pci_caps) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn pci-bus failed\n");
@@ -3623,9 +3650,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             if (target == HW_SPAWN_ACPI_BUS) {
                 spawn_caps_t acpi_caps = {0};
                 acpi_caps.cap_flags = DEVMGR_CAP_MMIO_MAP;
-                acpi_caps.io_port_min = 0;
-                acpi_caps.io_port_max = 0;
-                acpi_caps.irq_mask = 0;
                 if (hw_spawn_driver_index_caps(g_dm.acpi_bus_index, &acpi_caps) != 0) {
                     console_write("[device-manager] acpi-bus spawn failed; continuing\n");
                 }
@@ -3781,18 +3805,16 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                             g_dm.phase = HW_PHASE_SPAWN;
                             continue;
                         }
-                        /* Only a single I/O window survives the fallback; a
-                         * driver that declared windows cannot be described by
-                         * it and goes through the retry policy instead. */
-                        if (g_dm.active_rule_spawn_caps.region_count > 0u) {
-                            rule_spawn_complete(0);
-                            g_dm.pending = HW_SPAWN_NONE;
-                            g_dm.phase = HW_PHASE_SPAWN;
-                            continue;
-                        }
+                        /* No other form carries a grant: the request goes
+                         * through the retry policy. */
+                        rule_spawn_complete(0);
+                        g_dm.pending = HW_SPAWN_NONE;
+                        g_dm.phase = HW_PHASE_SPAWN;
+                        continue;
                     }
-                    rc = hw_spawn_driver_path_caps_args(
-                        spawn_path, &g_dm.active_rule_spawn_caps, args);
+                    /* A BLOCK_FS driver holds no grant (its caps are zeroed
+                     * where the rule is armed). */
+                    rc = hw_spawn_driver_path_args(spawn_path, args);
                 } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS &&
                            g_dm.active_rule_spawn_index >= 0 &&
                            g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count &&

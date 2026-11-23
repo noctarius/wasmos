@@ -100,7 +100,7 @@ Policy:
 
 ### Device-Manager Match Rule
 
-Add to `scripts/system/devmgr/rules/default.rules`:
+Add to `scripts/system/devmgr/rules/default.<arch>.rules`:
 ```
 SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x1AF4", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_net.wap"
 ```

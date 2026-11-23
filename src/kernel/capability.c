@@ -16,7 +16,8 @@ typedef struct {
     uint8_t spawn_profile_configured;
     uint32_t region_count;
     capability_region_t regions[CAPABILITY_REGION_LIMIT];
-    uint16_t irq_mask;
+    uint32_t irq_count;
+    uint32_t irqs[WASMOS_IRQ_GRANT_LIMIT];
     uint32_t dma_direction_flags;
     uint32_t dma_max_bytes;
     uint64_t dma_pinned_bytes; /* cumulative region_alloc bytes charged against dma_max_bytes */
@@ -245,9 +246,9 @@ static int capability_region_valid(const capability_region_t* r, uint32_t cap_fl
  *
  * Also returns -1 when no record can be created.  Returns 0 on success. */
 int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t region_count,
-                                 const capability_region_t* regions, uint16_t irq_mask,
-                                 uint32_t dma_direction_flags, uint32_t dma_max_bytes,
-                                 uint32_t dma_window_count,
+                                 const capability_region_t* regions, uint32_t irq_count,
+                                 const uint32_t* irqs, uint32_t dma_direction_flags,
+                                 uint32_t dma_max_bytes, uint32_t dma_window_count,
                                  const wasmos_dma_window_t* dma_windows) {
     capability_context_state_t* ctx = capability_state_for_context(context_id, 1);
     if (!ctx) {
@@ -264,7 +265,16 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32
         }
         ctx->regions[ctx->region_count++] = regions[i];
     }
-    ctx->irq_mask = (cap_flags & (1u << 2)) ? irq_mask : 0;
+    ctx->irq_count = 0;
+    if (irq_count > WASMOS_IRQ_GRANT_LIMIT || (irq_count > 0 && !irqs)) {
+        return -1;
+    }
+    if (irq_count > 0 && (cap_flags & (1u << 2)) == 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < irq_count; ++i) {
+        ctx->irqs[ctx->irq_count++] = irqs[i];
+    }
     if ((cap_flags & (1u << 3)) != 0) {
         if (dma_window_count == 0 || dma_window_count > CAPABILITY_DMA_WINDOW_LIMIT ||
             !dma_windows) {
@@ -375,14 +385,10 @@ int capability_region_resolve(uint32_t context_id, uint32_t region, uint32_t off
     return 0;
 }
 
-/* 1 when the profile's 16-bit IRQ mask has the line's bit set.  Lines 16 and
- * above are always 0, since the mask cannot express them.  A context without a
- * spawn profile is denied outright — unlike port I/O and MMIO, an IRQ line
+/* 1 when the profile's interrupt list names irq_line.  A context without a
+ * spawn profile is denied outright — unlike port I/O and MMIO, an interrupt
  * always needs an explicit profile. */
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line) {
-    if (irq_line >= 16) {
-        return 0;
-    }
     const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     if (!ctx) {
         return 0;
@@ -390,7 +396,12 @@ int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line) {
     if (!ctx->spawn_profile_configured) {
         return 0;
     }
-    return ((ctx->irq_mask & (uint16_t)(1u << irq_line)) != 0) ? 1 : 0;
+    for (uint32_t i = 0; i < ctx->irq_count; ++i) {
+        if (ctx->irqs[i] == irq_line) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* 1 when the context has a spawn profile AND holds CAP_MMIO_MAP.  There is no

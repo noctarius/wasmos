@@ -609,7 +609,7 @@ static uint32_t caps_v2(uint8_t* buf, uint32_t flags, uint16_t ranges) {
     hdr.region_count = ranges;
     memset(buf, 0, SUPERVISOR_CAPS_MAX);
     memcpy(buf, &hdr, sizeof(hdr));
-    return WASMOS_SPAWN_CAPS_V2_SIZE(ranges, 0);
+    return WASMOS_SPAWN_CAPS_V2_SIZE(ranges, 0, 0);
 }
 
 static void test_a_unit_keeps_the_caps_it_was_submitted_with(void) {

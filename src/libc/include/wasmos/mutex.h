@@ -1,5 +1,6 @@
 /* mutex.h - dual-target recursive mutex: hostcall path for WASM,
- * native syscall path for x86_64 native builds */
+ * native syscall path (wasmos/syscall_native.h) for x86_64 and aarch64 native
+ * builds */
 #ifndef WASMOS_LIBC_WASMOS_MUTEX_H
 #define WASMOS_LIBC_WASMOS_MUTEX_H
 
@@ -8,7 +9,7 @@
 
 #include "wasmos_cast.h"
 #include "wasmos/api.h"
-#include "wasmos/syscall_x86_64.h"
+#include "wasmos/syscall_native.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,7 +43,7 @@ static inline void wasmos_mutex_init(wasmos_mutex_t* mutex) {
 
 /* Returns 0 when the mutex is held by this thread (recursion depth raised), 1
  * when another thread owns it, and a negative code on error or on a build that
- * is neither WASM nor x86_64.
+ * is neither WASM nor a native x86_64/aarch64 one.
  * Never blocks: a contended lock reports 1 immediately and the caller decides
  * whether to retry. Recursive acquisition by the owning thread always succeeds
  * until the depth counter would overflow, which is reported as an error. */
@@ -52,7 +53,7 @@ static inline int32_t wasmos_mutex_try_lock(wasmos_mutex_t* mutex) {
     }
 #if defined(__wasm__)
     return wasmos_mutex_try_lock_host(addr_cast(int32_t, mutex));
-#elif defined(__x86_64__) && !defined(__wasm__)
+#elif (defined(__x86_64__) || defined(__aarch64__)) && !defined(__wasm__)
     return (int32_t)wasmos_sys_mutex_try_lock(addr_cast(uint64_t, mutex));
 #else
     return -1;
@@ -77,7 +78,7 @@ static inline int32_t wasmos_mutex_lock(wasmos_mutex_t* mutex) {
         }
 #if defined(__wasm__)
         (void)wasmos_thread_yield();
-#elif defined(__x86_64__) && !defined(__wasm__)
+#elif (defined(__x86_64__) || defined(__aarch64__)) && !defined(__wasm__)
         (void)wasmos_sys_thread_yield();
 #else
         return -1;
@@ -88,14 +89,14 @@ static inline int32_t wasmos_mutex_lock(wasmos_mutex_t* mutex) {
 /* Drop one acquisition, freeing the mutex when the recursion depth reaches
  * zero. Returns 0 on success and a negative code when the caller is not the
  * owner, the mutex is already free, the pointer is NULL or misaligned, or the
- * build is neither WASM nor x86_64. */
+ * build is neither WASM nor a native x86_64/aarch64 one. */
 static inline int32_t wasmos_mutex_unlock(wasmos_mutex_t* mutex) {
     if (!mutex) {
         return -1;
     }
 #if defined(__wasm__)
     return wasmos_mutex_unlock_host(addr_cast(int32_t, mutex));
-#elif defined(__x86_64__) && !defined(__wasm__)
+#elif (defined(__x86_64__) || defined(__aarch64__)) && !defined(__wasm__)
     return (int32_t)wasmos_sys_mutex_unlock(addr_cast(uint64_t, mutex));
 #else
     return -1;

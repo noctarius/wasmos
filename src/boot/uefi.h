@@ -1,7 +1,8 @@
 /* uefi.h - Minimal UEFI type and protocol definitions for the WASMOS bootloader.
  * Only the subset needed to load kernel.elf and initfs.img from the ESP is declared.
- * All function pointers use __attribute__((ms_abi)) because UEFI firmware on x86_64
- * uses the Windows calling convention regardless of host toolchain. */
+ * Every firmware function pointer is EFIAPI: the Microsoft x64 convention on x86_64
+ * (UEFI spec 2.3.4), forced with ms_abi whatever the toolchain's default; AAPCS64,
+ * the platform default, on aarch64 (UEFI spec 2.3.6). */
 #ifndef WASMOS_UEFI_H
 #define WASMOS_UEFI_H
 
@@ -25,8 +26,9 @@ typedef void* EFI_HANDLE;
  * EFI_FILE_PROTOCOL.Open must be an L"..." wide string. */
 typedef uint16_t CHAR16;
 /* Spec scalar names.  UINTN/INTN are the spec's native-width integers and are
- * fixed at 64 bits here because the loader only targets x86_64; a 32-bit UEFI
- * target would change their width and every struct that embeds them. */
+ * fixed at 64 bits here because the loader only targets 64-bit UEFI (x86_64,
+ * aarch64); a 32-bit target would change their width and every struct that
+ * embeds them. */
 typedef uint64_t UINTN;
 typedef uint64_t UINT64;
 typedef uint32_t UINT32;
@@ -37,7 +39,13 @@ typedef uint8_t BOOLEAN;
 #define TRUE 1
 #define FALSE 0
 
+#if defined(__x86_64__)
 #define EFIAPI __attribute__((ms_abi))
+#elif defined(__aarch64__)
+#define EFIAPI
+#else
+#error "unsupported UEFI target architecture"
+#endif
 
 /* EFI_GUID.  Data1..Data3 are stored little-endian (so a GUID literal is written
  * in the spec's textual field order and needs no byte swapping), Data4 is a byte

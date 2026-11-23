@@ -671,15 +671,6 @@ Source: `architecture/13-runtime-and-packaging.md`,
   images -- signed or allow-listed packages, or privileged capabilities granted
   only to images from the initfs or a read-only system volume -- and, for
   deputies like `svc`, authentication of the invoking process.
-- [ ] [BUG][P1] Quiesce every PCI DMA driver's device at its end, not only a
-  supervised one. The kernel quiesces the function a spawn profile names
-  (`DEVMGR_CAP_PCI_FUNCTION`, `architecture/10` "Device Quiesce"), but only the
-  descriptor spawn forms carry it: a DMA driver device-manager spawns by path
-  (`PROC_IPC_SPAWN_PATH_CAPS_SYNC`; virtio-serial) names none, so when it dies
-  its device may keep mastering into frames the reap recycles. virtio-blk,
-  virtio-net, virtio-rng and ata are supervised units and name theirs.
-  Spawning the rest through a descriptor form -- or as supervised units (H5)
-  -- closes it (`device_manager.c`, the TODO at the direct spawn).
 - [ ] [FEATURE][P1] Supervise the storage and network chains. Decided: clients
   REBIND to a restarted driver where they can, so a restart costs a delay, not
   the open files or sockets above it; `parent=` (the supervisor's restart
@@ -1007,18 +998,6 @@ tail.
   object in a transfer buffer, say) and convert real call sites, or remove the
   generators and keep the packed `(domain, code)` axis alone.
 
-- [ ] [FEATURE][P2] Give the path-based spawn a descriptor form, so a driver can
-  have BOTH declared register windows and startup args. `PROC_IPC_SPAWN_PATH_CAPS_SYNC`
-  packs a single `io_port_min`/`io_port_max` pair and cannot describe more than one
-  window; only the index-based form escalates to `wasmos_spawn_caps_v2_t`. Device
-  manager therefore picks one or the other (`device_manager.c`, the rule-spawn
-  branch): a driver with `[[regions]]` spawns by module index and forgoes the
-  `pci=..:..:.. vendor=... irq=...` args, and everything else spawns by path with
-  args and a single window. Today nothing needs both -- `ata` is the only package
-  declaring regions and takes no args -- so this is a latent limit, not a live bug.
-  It becomes live the moment a driver on `/boot` (not a boot module, so
-  path-spawned only) declares more than one window.
-
 - [ ] [ENHANCEMENT][P3] Let a device-manager rule express alternatives, so one
   driver does not need N near-identical lines. `virtio_rng` has two rules solely
   because virtio exposes a transitional (0x1005) and a modern (0x1044) device ID
@@ -1197,7 +1176,7 @@ tail.
 
   Carrying the backend is NOT sufficient on its own. A partition reports the same
   backend AND the same unit as the disk beneath it (see the `SUBSYSTEM=="partition"`
-  note in `scripts/system/devmgr/rules/default.rules`), so a whole-disk backend and
+  note in `scripts/system/devmgr/rules/default.<arch>.rules`), so a whole-disk backend and
   a partition backend on that disk still derive one instance under the widened
   encoding. The instance has to be derived from the block device's CANONICAL ID --
   which already distinguishes `block:ata:1` from `block:ata:1p1` and is what
@@ -2209,6 +2188,50 @@ Other graphics/VT/UI:
   incompatible non-negative domains a caller cannot tell apart
   (`src/libui/include/wasmos/libui.h`).
 
+## arm64 Port
+
+The aarch64 port targets QEMU `virt` (GICv3 + ITS, PCIe ECAM, virtio) under
+HVF on Apple Silicon or TCG; bare-metal Apple Silicon is out of scope. It boots
+to the CLI on one core under wasm3; `run-qemu-test` stops at `halt` because no
+user-space console input exists yet. Read `docs/architecture/04-boot-and-handoff.md`,
+`06-memory-management.md` and `10-capability-and-policy.md` first.
+
+- [ ] [FEATURE][P1] PL011 console driver in user space, so the arm64 console
+  takes input and `run-qemu-test` passes (`halt` via PSCI). acpi-bus parses the
+  string `_HID` `ARMH0011` with its `_CRS` Memory32Fixed window and Extended
+  Interrupt (GSIV), published as a descriptor (the packed
+  `DEVMGR_PUBLISH_DEVICE` cannot carry an MMIO window or a GSIV above 255;
+  acpi-bus is its last user, so it retires); device-manager widens `irq_hint`
+  past 8 bits and grants the window as a region; the serial driver moves to
+  `io_region_in8`/`io_region_out8` with a 16550 or PL011 register layout chosen
+  by a spawn argument. It is also the first driver to route a GIC SPI, so it is
+  what exercises `irq_aarch64.c`'s SPI routing.
+- [ ] [BUG][P2] device-manager grants the x86 legacy interrupt default
+  (`caps_irqs_default`, lines 14 and 15) to a PCI driver whose device record
+  has no interrupt hint, on arm64 too, where those numbers are SGIs and name
+  nothing a driver may route. `irq_register` refuses them, so nothing is
+  reachable, but the grant is wrong: the default belongs to x86_64 only.
+- [ ] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
+  x86_64-only), PL031 RTC driver (the CMOS rtc stays x86_64-only), and a
+  framebuffer (ramfb or virtio-gpu; `src/boot/boot.c` TODO: no GOP on `virt`).
+- [ ] [FEATURE][P2] Discover the platform from firmware tables instead of the
+  QEMU `virt` fixed addresses: GIC distributor/redistributor and ITS from the
+  MADT (`gic_aarch64.c`, `its_aarch64.c`, `irq_aarch64.c` TODOs), the console
+  UART from the SPCR (`platform_aarch64.c`), the PSCI conduit from the FADT
+  (`cpu_aarch64.c`).
+- [ ] [FEATURE][P2] SMP: PSCI `CPU_ON` bring-up behind `smp.h` and
+  `arch_stop_other_cpus` through an SGI; then the weak-memory audit under
+  `-accel hvf -smp N` of the plain loads and stores used as synchronisation
+  (IPC, xfer-buffer rings, `ringbuf.h`, futex, run queues).
+- [ ] [ENHANCEMENT][P2] Per-root ASIDs, so a root switch keeps the other roots'
+  TLB entries (`arch/aarch64/paging.c` TODO); today every switch flushes.
+- [ ] [FEATURE][P2] WARP aarch64 backend in the kernel (code loading, ring-3
+  trampolines) and per-arch AOT artifacts in packaging.
+- [ ] [TEST][P2] aarch64 counterparts of the inline x86_64 ring-3 probes (the
+  smoke process and the fault probes with their policy verdict;
+  `kernel_ring3_suite_runtime.c` TODO), and an arm64 battery axis with a CI
+  runner beyond the bring-up test.
+
 ## Validation and Documentation
 
 Source: `architecture/25-diagnostics-status.md`,
@@ -2222,13 +2245,15 @@ Source: `architecture/25-diagnostics-status.md`,
   `src/libsys/wasm/include/wasmos/{mutex,rtc_ipc}.h`. The SDK sysroot ships
   libc's copy (include-search order; `scripts/sdk_stage.py` TODO), so a libsys
   object and an SDK app can see different declarations under one name.
-- [ ] [FEATURE][P2] Add an `ARCH` Kconfig choice for the arm64 port: per-arch
-  toolchain profiles in `scripts/buildgen/toolchains.py` (UEFI and kernel
-  triples, code model, red-zone flags), `src/kernel/arch/<arch>/BUILD.py` for the
-  arch sources and linker scripts now named directly in `src/kernel/BUILD.py`,
-  the blob output format in `wasmos_rules.kernel_blob` (`elf64-x86-64` today),
-  and the loader name (`BOOTX64.EFI` / `BOOTAA64.EFI`) in `src/boot/BUILD.py`
-  and the ESP plan.
+- [ ] [BUG][P2] Host unit tests do not rebuild when a header they reach only
+  through `-iquote` or a relative `#include "../.."` changes:
+  `tests/unit/BUILD.py` `_inputs` tracks the listed sources and the headers
+  under `-I<dir>` arguments only (multi-source commands get no depfile). A
+  changed `wasmos_driver_abi.h` left `test_supervisor_unit` running its old
+  binary and reporting ok while its source no longer compiled. Track
+  `-iquote`/`-include` arguments and the quoted includes of every listed
+  source (or give each suite a depfile), with a regression test that a header
+  edit rebuilds the suite.
 - [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
   (`test_app_churn`: "run N: date produced no result"). Not a supervisor
   regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7
@@ -3341,20 +3366,6 @@ Source: `architecture/25-diagnostics-status.md`,
   a send (the wedge's signature) and cli was RUNNING rather than stranded, with
   the marker missing at the early-boot stage. Whatever it was, it is its own
   fault and still uncaptured.
-- [ ] [BUG][P2] Make `run-qemu-ring3-threading-test` assert the probe it names.
-  The ring-3 thread lifecycle probe never issues a join syscall: instrumenting
-  every join for the `ring3-threading` process name gave zero hits, so all three
-  `wasmos_thread_spawn_cont(...) > 0` guards in
-  `src/kernel/ring3_thread_lifecycle_probe.c` are false and every join is skipped.
-  The test cannot notice, because every marker it requires (`thread create`,
-  `join`, `join self deny`, `detach syscall ok`) is gated on the `ring3-native`
-  process name and comes from the OTHER probe -- so the "lifecycle marker test"
-  asserts a different process's markers and the lifecycle probe contributes
-  nothing observable.
-
-  When fixing: the probe blob is mapped exec+non-writable over `code_size` bytes
-  only, so growing its `.bss` (for example adding a fourth 4 KiB stack) is not
-  obviously safe.
 
 - [ ] [DOCS][P3] Correct the eight commit messages in `fdd4472ef6..1c6bc236ec`
   whose "verified on both runtimes" gate lines actually name WARP twice. The work

@@ -53,15 +53,30 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
     uint32_t size;
     uint32_t offset;
 
-    if (!caps || !out || caps->region_count > WASMOS_REGION_LIMIT) {
+    wasmos_region_grant_t io_window;
+    const wasmos_region_grant_t* regions = caps ? caps->regions : 0;
+    uint32_t region_count = caps ? caps->region_count : 0;
+
+    if (!caps || !out || caps->region_count > WASMOS_REGION_LIMIT ||
+        caps->irq_count > WASMOS_IRQ_GRANT_LIMIT) {
         return -1;
+    }
+    /* A device described by its base port alone has one I/O window: the
+     * descriptor carries it as its single region grant. */
+    if (region_count == 0u && (caps->cap_flags & DEVMGR_CAP_IO_PORT) != 0u) {
+        if (caps->io_port_min > caps->io_port_max) {
+            return -1;
+        }
+        io_window.kind = WASMOS_REGION_GRANT_IO;
+        io_window.base = caps->io_port_min;
+        io_window.length = (uint32_t)caps->io_port_max - (uint32_t)caps->io_port_min + 1u;
+        regions = &io_window;
+        region_count = 1u;
     }
     memset(&header, 0, sizeof(header));
     header.cap_flags = caps->cap_flags;
-    header.irq_mask = caps->irq_mask;
-    header.io_port_min = caps->io_port_min;
-    header.io_port_max = caps->io_port_max;
-    header.region_count = (uint16_t)caps->region_count;
+    header.region_count = (uint16_t)region_count;
+    header.irq_count = (uint16_t)caps->irq_count;
     if (caps->pci_function_valid) {
         header.cap_flags |= DEVMGR_CAP_PCI_FUNCTION;
         header.dma.pci_function = caps->pci_function;
@@ -75,17 +90,19 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
         window.length = 0x80000000ull;
         window_count = 1u;
     }
-    size = WASMOS_SPAWN_CAPS_V2_SIZE(caps->region_count, window_count);
+    size = WASMOS_SPAWN_CAPS_V2_SIZE(region_count, window_count, caps->irq_count);
     if (size > out_cap) {
         return -1;
     }
     memcpy(out, &header, sizeof(header));
     offset = (uint32_t)sizeof(header);
-    memcpy(out + offset, caps->regions, caps->region_count * sizeof(wasmos_region_grant_t));
-    offset += caps->region_count * (uint32_t)sizeof(wasmos_region_grant_t);
+    memcpy(out + offset, regions, region_count * sizeof(wasmos_region_grant_t));
+    offset += region_count * (uint32_t)sizeof(wasmos_region_grant_t);
     if (window_count > 0u) {
         memcpy(out + offset, &window, sizeof(window));
+        offset += (uint32_t)sizeof(window);
     }
+    memcpy(out + offset, caps->irqs, caps->irq_count * sizeof(uint32_t));
     return (int32_t)size;
 }
 

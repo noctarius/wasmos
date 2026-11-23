@@ -468,6 +468,94 @@ class VirtioBlkTest(unittest.TestCase):
         )
 
 
+class TwoVirtioBlkDisksTest(unittest.TestCase):
+    """Two virtio-blk disks each register, publish and come up supervised.
+
+    One driver process serves one device, so two disks mean two instances of
+    the same module registering with the process manager side by side. Each
+    must hold its own service name: a name is single-owner, so an instance
+    that asks for one a sibling already holds is refused.
+
+    Regression: 2026-11-22-virtio-blk-shared-service-name -- every instance
+    registered the concrete name "virtio-blk". The second disk's registration
+    was refused (SVC_NAME_TAKEN), so the driver never sent READY, the
+    supervisor killed it at the readiness deadline and every restart was
+    refused the same way: the disk never reached the `block` class. No x86
+    boot attached more than one virtio disk; the arm64 boot, where virtio-blk
+    stands in for ATA, attaches three.
+    """
+
+    session: QemuSession | None = None
+    disk_dir: str | None = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.disk_dir = tempfile.mkdtemp(prefix="wasmos-vblk-two-")
+        first = _make_disk(cls.disk_dir)
+        second = os.path.join(cls.disk_dir, "vblk2.img")
+        shutil.copyfile(first, second)
+        # Slots 5 and 7: units 40 and 56. Slot 6 is left alone for the reason
+        # _config_with_disk gives.
+        cfg = replace(
+            default_config(),
+            extra_args=(
+                "-drive",
+                f"file={first},format=raw,if=none,id=vblk0",
+                "-device",
+                "virtio-blk-pci,drive=vblk0,id=vblk,addr=0x5.0",
+                "-drive",
+                f"file={second},format=raw,if=none,id=vblk1",
+                "-device",
+                "virtio-blk-pci,drive=vblk1,id=vblk1dev,addr=0x7.0",
+            ),
+        )
+        cls.session = QemuSession(cfg, timeout_s=180)
+        cls.session.start()
+        cls.session.require_prompt(timeout_s=150)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if cls.session:
+            cls.session.force_stop()
+            cls.session.close()
+            cls.session = None
+        if cls.disk_dir:
+            shutil.rmtree(cls.disk_dir, ignore_errors=True)
+            cls.disk_dir = None
+
+    def test_both_disks_publish(self) -> None:
+        assert self.session is not None
+        for disk_id in (b"block:virtio-blk:40", b"block:virtio-blk:56"):
+            self.assertTrue(
+                self.session.expect(
+                    b"[virtio-blk] published id=" + disk_id, timeout_s=60
+                ),
+                f"{disk_id!r} never published -- its driver instance did not get "
+                "past service registration\n"
+                f"--- tail ---\n{self.session.tail()}\n",
+            )
+        self.assertNotIn(
+            b"[virtio-blk] service registration failed",
+            self.session.buf,
+            "a virtio-blk instance was refused its service registration -- two "
+            "instances asked for the same service name",
+        )
+
+    def test_both_disks_are_ready_and_not_restarted(self) -> None:
+        assert self.session is not None
+        self.session.send("blkinfo")
+        for disk_id in (b"block:virtio-blk:40", b"block:virtio-blk:56"):
+            self.assertTrue(
+                self.session.expect(b"[blkinfo] id=" + disk_id, timeout_s=60),
+                f"{disk_id!r} is not in the block class",
+            )
+        self.assertNotIn(
+            b"not ready after",
+            self.session.buf,
+            "the supervisor killed a virtio-blk instance that never sent READY",
+        )
+
+
 class VirtioBlkIntxFallbackTest(unittest.TestCase):
     """With no MSI-X vectors on offer, the driver falls back to a routed INTx line.
 

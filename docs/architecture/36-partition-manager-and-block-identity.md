@@ -9,7 +9,7 @@
 `src/services/device_manager/device_manager_rules.c`, `src/drivers/ata/ata.c`,
 `src/drivers/virtio_blk/virtio_blk.zig`, `src/drivers/fs_fat/`,
 `src/utils/blkinfo/blkinfo.c`, `abi/opcodes.yaml`, `abi/constants.yaml`,
-`abi/errors.yaml`, `scripts/initfs.toml`, the devmgr rule files.
+`abi/errors.yaml`, `scripts/initfs.<arch>.toml`, the devmgr rule files.
 
 **Related**: `architecture/16-device-manager-and-bus-enumeration.md` (rule
 engine, block registry, spawn state machine),
@@ -649,7 +649,7 @@ its driver publishes it. The subscription was already required for a driver that
 had not probed yet; it now carries the whole load.
 
 This puts Zig on the critical build path: `scripts/system/BUILD.py` derives the
-initfs payload list from every `source =` line in `scripts/initfs.toml` and
+initfs payload list from every `source =` line in `scripts/initfs.<arch>.toml` and
 makes each payload an input of `initfs.img`, so a Zig artifact there
 makes the boot image unbuildable without a Zig toolchain. That costs nothing in
 practice — the native gfx-compositor and font-service are Zig, so no

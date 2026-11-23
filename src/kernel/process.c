@@ -148,10 +148,6 @@ extern uint8_t __kernel_end;
 #define SCHED_TRAMPOLINE_STACK_BYTES 8192u
 #define SCHED_PROGRESS_MARKER_SWITCHES 256ull
 #define SCHED_RESCHED_STALL_TICKS 512ull
-/* Kernel stacks must land inside the shared higher-half window so they stay
- * mapped under every process root table.  Must match paging.c's
- * HIGHER_HALF_PDE_COUNT (256 * 2 MiB PDEs = 512 MiB). */
-#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (512u * 1024u * 1024u)
 static uint8_t g_sched_trampoline_stacks[WASMOS_MAX_CPUS][SCHED_TRAMPOLINE_STACK_BYTES]
     __attribute__((aligned(16)));
 
@@ -176,10 +172,12 @@ static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     /*
      * Stacks are allocated as [guard][usable][guard]. The guard pages are
      * unmapped immediately so any overrun turns into a deterministic page fault
-     * instead of silent memory corruption.
+     * instead of silent memory corruption. They come from inside the kernel
+     * direct map (KERNEL_HIGHER_HALF_WINDOW_BYTES), which is mapped under every
+     * root, so a stack stays reachable whatever root is live.
      */
     uint64_t total_pages = (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u);
-    uint64_t base = pfa_alloc_pages_below(total_pages, KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES);
+    uint64_t base = pfa_alloc_pages_below(total_pages, KERNEL_HIGHER_HALF_WINDOW_BYTES);
     uint8_t using_higher_half_stack = 1;
     if (!base) {
         /* TODO(ring3-phase2): If stack pressure exceeds the shared higher-half
@@ -238,7 +236,7 @@ static int process_alloc_thread_stack(thread_t* thread, uint32_t stack_pages) {
         return -1;
     }
     uint64_t total_pages = (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u);
-    uint64_t base = pfa_alloc_pages_below(total_pages, KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES);
+    uint64_t base = pfa_alloc_pages_below(total_pages, KERNEL_HIGHER_HALF_WINDOW_BYTES);
     if (!base) {
         klog_write("[sched] worker stack alloc failed\n");
         return -1;
@@ -2726,10 +2724,15 @@ static int process_schedule_once_impl(void) {
     }
     thread_set_current(thread ? thread->tid : 0);
     critical_section_leave();
-    /* Ring3 transitions use TSS.rsp0 as the kernel entry stack. Keep it aligned
-     * to the scheduled process stack so user-mode interrupts/syscalls have a
-     * deterministic kernel stack landing point. */
-    cpu_set_kernel_stack((uint64_t)(proc->stack_top - 16u));
+    /* A trap from user mode lands on the kernel entry stack (x86_64 TSS.rsp0,
+     * aarch64 aarch64_kernel_entry_sp), which must be the dispatched THREAD's
+     * own kernel stack: a thread blocked inside a syscall keeps its frame there,
+     * and a sibling entering the kernel on the same stack would overwrite it,
+     * so the blocked thread would return to user mode through the sibling's
+     * frame. A main thread has no kstack of its own and runs on the process
+     * stack. */
+    uintptr_t entry_stack_top = thread->kstack_top ? thread->kstack_top : proc->stack_top;
+    cpu_set_kernel_stack((uint64_t)(entry_stack_top - 16u));
     /* Restore the wasm3 heap binding saved when this thread last yielded. */
     cpu_local()->wasm3_heap_bound_pid = thread->wasm3_heap_bound_pid;
     cpu_local()->sched_ctx.root_table = paging_get_root_table();

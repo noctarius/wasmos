@@ -51,6 +51,9 @@ TOOL_OPTIONS = [
     "qemu",
     "ovmf-code",
     "ovmf-vars",
+    "qemu-aarch64",
+    "aavmf-code",
+    "aavmf-vars",
     "clang-tidy-include",
 ]
 

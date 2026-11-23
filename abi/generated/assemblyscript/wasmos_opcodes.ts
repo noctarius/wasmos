@@ -26,7 +26,6 @@ export const PROC_IPC_KILL: i32 = 0x202;
 // arg3=PROC_EXIT_REASON_*. Never reaps.
 export const PROC_IPC_STATUS: i32 = 0x203;
 export const PROC_IPC_SPAWN_NAME: i32 = 0x204;
-export const PROC_IPC_SPAWN_CAPS: i32 = 0x205;
 // What a boot module declares about itself, as a wasmos_module_meta_desc_t
 // written into a transfer buffer the caller owns and has lent WRITE to
 // process-manager: capability flags, declared register windows, and the
@@ -37,9 +36,15 @@ export const PROC_IPC_SPAWN_CAPS: i32 = 0x205;
 // device-manager rules.
 export const PROC_IPC_MODULE_META_DESC: i32 = 0x212;
 export const PROC_IPC_MODULE_META_PATH: i32 = 0x207;
-// Spawn with extended capability descriptor payload:
-// arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[])
-// arg2=payload_size_bytes arg3=reserved(0).
+// Spawn a boot module with a capability descriptor payload, the
+// wasmos_spawn_caps_v2_t with its region, DMA-window and interrupt
+// tails: arg0=module_index arg1=buffer_id arg2=payload_size_bytes
+// arg3=timeout_ms. With timeout_ms 0 the reply follows the spawn; with
+// a timeout it waits for the child's NOTIFY_READY like the _SYNC
+// spawns, and the child is auto-reaped on exit. Any cap_flags bit set
+// requires the caller to hold spawn.grant: PROC_IPC_ERROR,
+// WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED otherwise, before a child
+// exists.
 export const PROC_IPC_SPAWN_CAPS_V2: i32 = 0x208;
 // Spawn from explicit app path:
 // caller must place path bytes at xfer buffer offset 0.
@@ -50,15 +55,6 @@ export const PROC_IPC_SPAWN_CAPS_V2: i32 = 0x208;
 // For service/driver kinds the PM delays the PROC_IPC_RESP until the child
 // calls PROC_IPC_NOTIFY_READY (behaves like SPAWN_PATH_SYNC internally).
 export const PROC_IPC_SPAWN_PATH: i32 = 0x209;
-// Spawn from explicit app path with I/O-port + IRQ capabilities:
-// caller must place path bytes at xfer buffer offset 0.
-// Like every caps-carrying spawn (SPAWN_CAPS, SPAWN_CAPS_V2 and the
-// _SYNC forms), any cap_flags bit set requires the caller to hold
-// spawn.grant: PROC_IPC_ERROR, WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED
-// otherwise, before a child exists.
-// arg0=((irq_mask<<16)|(cap_flags&0xFFFF)) arg1=path_len
-// arg2=((io_port_max<<16)|io_port_min)     arg3=reserved.
-export const PROC_IPC_SPAWN_PATH_CAPS: i32 = 0x20A;
 // Spawn by module index and block until the child calls NOTIFY_READY (or
 // first blocks on IPC as an implicit signal), or until the timeout expires.
 // arg0=module_index  arg1=timeout_ms (0 = wait forever)
@@ -75,21 +71,15 @@ export const PROC_IPC_SPAWN_SYNC: i32 = 0x20B;
 // WASMOS_IPC_HEALTH_REQ; a supervising spawner probes it. Without the flag
 // arg0 is ignored. arg2..arg3 = reserved(0).
 export const PROC_IPC_NOTIFY_READY: i32 = 0x20C;
-// Sync variants of SPAWN_CAPS / SPAWN_PATH / SPAWN_PATH_CAPS.
-// Same cap/path encoding as their async counterparts, with one arg
-// repurposed for timeout_ms:
-// SPAWN_CAPS_SYNC:      arg0=module_index arg1=cap_flags arg2=io_packed
-// arg3=(irq_mask&0xFFFF)|((timeout_ms&0xFFFF)<<16)
-// SPAWN_PATH_SYNC:      path at FS buf[0], arg0=0 arg1=path_len
-// arg2=0 arg3=timeout_ms
-// SPAWN_PATH_CAPS_SYNC: path at FS buf[0],
-// arg0=(irq<<16)|cap_flags arg1=path_len
-// arg2=io_packed           arg3=timeout_ms
+// Spawn from a path and reply when the child calls NOTIFY_READY (or
+// first blocks on IPC), or when the timeout expires. The caller's
+// transfer buffer holds the path at offset 0 and, when args_len is
+// not 0, args_len bytes of command-line arguments directly after it.
+// arg0=PROC_SPAWN_PATH_FLAG_* arg1=((buffer_id<<12)|path_len)
+// arg2=args_len arg3=timeout_ms (0 = wait forever).
 // On success: PROC_IPC_RESP, arg0=child_pid.
 // On timeout or child death before ready: PROC_IPC_ERROR.
-export const PROC_IPC_SPAWN_CAPS_SYNC: i32 = 0x20D;
 export const PROC_IPC_SPAWN_PATH_SYNC: i32 = 0x20E;
-export const PROC_IPC_SPAWN_PATH_CAPS_SYNC: i32 = 0x20F;
 // Descriptor-based broker subsystem registration.
 // arg0=offset(0) arg1=byte_len(sizeof(wasmos_subsystem_broker_register_desc_t))
 // arg2=reserved(0) arg3=reserved(0).

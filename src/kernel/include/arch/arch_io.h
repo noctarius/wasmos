@@ -6,7 +6,11 @@
  * at all -- in which case nothing was accessed and the caller reports
  * WASMOS_ERR_IO_NO_PORT_SPACE. Port numbers are not validated here: the
  * callers check the caller's capability and the port's range first. This
- * header is the single selection point; x86_64 is the only target. */
+ * header is the single selection point; x86_64 and aarch64 are the targets. */
 #pragma once
 
+#if defined(WASMOS_ARCH_AARCH64)
+#include "arch/aarch64/arch_io.h"
+#else
 #include "arch/x86_64/arch_io.h"
+#endif

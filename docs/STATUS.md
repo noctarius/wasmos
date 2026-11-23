@@ -745,13 +745,88 @@ linked feature documents for rationale and rollout plans.
   `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
   parallel because they share `<build-dir>/esp`.
-- Every QEMU battery runs under both wasm runtimes (`runtimes` in
-  `tests/batteries.json`), and each cell asserts the runtime it linked from the
+- Multi-threaded ring-3 processes: a trap from user mode lands on the
+  dispatched thread's own kernel stack (`kstack_top`; the process stack for a
+  main thread), so a thread blocked in a syscall keeps its frame while a sibling
+  enters the kernel. The native thread trampoline (`wasmos_thread_bootstrap`,
+  `wasmos/thread_native.h`) is naked and takes the start record from the
+  incoming stack pointer. The ring-3 probe blobs are position-independent
+  (`-fPIE`), `_start` is their first byte (`.text.start`), and their `.bss`
+  starts on the page after the code, which the loader maps zeroed and
+  read+write. `run-qemu-ring3-threading-test` requires
+  `[test] ring3 thread start record ok`, which only the lifecycle probe emits,
+  and it passes on x86_64 and aarch64.
+- Every x86_64 QEMU battery runs under both wasm runtimes (`arches[].runtimes`
+  in `tests/batteries.json`), and each cell asserts the runtime it linked from the
   boot marker. The `filesystem` battery is green under `wasm3_smp` and
   `warp_smp` (55 tests each, TCG). The first battery run under wasm3 was red for
   a defect WARP cannot show: a driver whose entry export declares parameters
   starts under WARP and dies under wasm3, which validates entry arity — see the
   entry-arity rule in `architecture/13` *Language ABI*.
+- Target architecture is a Kconfig choice (`WASMOS_ARCH_X86_64` /
+  `WASMOS_ARCH_AARCH64`); `ARCHES` in `scripts/buildgen/toolchains.py` holds
+  every per-architecture build and QEMU value. The aarch64 tree
+  (`aarch64_wasm3_single_defconfig`) builds `BOOTAA64.EFI`, every guest and
+  native module (aarch64 ELF), initfs and the ESP. Under
+  `qemu-system-aarch64 -M virt,gic-version=3 -accel hvf` (TCG on CI) it boots
+  through the scheduler self-tests, demand paging, threading, IPC and timer
+  preemption, runs wasm3 guests (init, fs-manager, fs-tmpfs, fs-init,
+  device-manager), enumerates PCI through ECAM (`arch/aarch64/pci_cfg_aarch64.c`,
+  base from the ACPI MCFG, each bus mapped on first use), parses the DSDT, runs
+  the native net-stack at EL0, spawns virtio-blk from the initfs for the boot
+  disk, mounts `/boot` from it, runs sysinit and reaches the WAMOS CLI prompt
+  (`supervisor] boot complete`), with virtio-net (DHCP lease), virtio-rng, the
+  font service and the calculator up; the menu bar exits for want of a
+  framebuffer (QEMU virt has no display device by default). MSIs go through
+  the GICv3 ITS (`arch/aarch64/its_aarch64.c`, `msi_aarch64.c`): slot `i` is
+  EventID `i` and LPI 8192+`i`, and the DeviceID is the requester id of the PCI
+  function the calling driver's spawn profile names
+  (`pci_function_of_context`), so `msi_alloc` keeps its ABI; a caller that
+  drives no function gets `msi.NO_FUNCTION`. initfs and the device-manager rules are per architecture
+  (`scripts/initfs.<arch>.toml`, `scripts/initfs/devmgr/rules/default.<arch>.rules`,
+  `scripts/system/devmgr/rules/default.<arch>.rules`): on aarch64 virtio-blk
+  carries `/boot`, so it is a bootstrap rule there, and the PS/2, CMOS, 16550 and
+  bochs rules are x86_64-only. pci-bus enables a function's I/O or memory decode
+  for the BARs it implements at an assigned address, which edk2 on aarch64 leaves
+  off. The kernel side: the
+  bootstrap drops EL2 to EL1 and maps physical [0, 4 GiB) with 48-bit VAs;
+  `arch/aarch64/paging.c` implements `paging.h` with the x86_64 slot geometry
+  (TTBR0 slot 0 identity, slot 1 user; a shared TTBR1 direct map with RAM in
+  4 KiB pages so guard-page unmaps never split a live block; break-before-make;
+  broadcast TLBI; no ASIDs yet); vectors save the FP/SIMD state; aborts decode
+  into the `MM_FAULT_*` memory-service path; GICv3 and the EL1 virtual timer
+  drive the tick; `context_switch.S` resumes every context by ERET.
+  EL0 runs: an SVC from EL0 enters `syscall_dispatch` (number in x8, result in
+  x0), EL0 exceptions land on the per-CPU kernel entry stack
+  (`cpu_set_kernel_stack`, the TSS.rsp0 counterpart), and native-code loaders
+  sync the instruction cache; the C ring-3 probe passes its syscall checks
+  (`[test] ring3 native abi ok`) on a `WASMOS_RING3_SMOKE` tree, whose x86-only
+  inline smoke and fault probes are skipped. Device interrupts are GIC SPIs
+  (the `irq_line` of `irq.h` is the INTID), routed through the arch-neutral
+  sharing layer by a slot table in `arch/aarch64/irq_aarch64.c`; no arm64
+  driver routes one yet, because every virtio device takes MSI-X.
+  `run-qemu-bringup-test` (to `[test] preempt ok`) is its gate, in CI too
+  (`bringup`). The native
+  ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap
+  stubs (aarch64: `svc #0`, number in x8). No aarch64 framebuffer fallback
+  without GOP (the x86 0xCF8 scan is x86_64-only).
+- Interrupt grants are lists of interrupt identifiers -- an ISA line on
+  x86_64, a GIC SPI INTID on aarch64 -- carried in the spawn descriptor
+  (`wasmos_spawn_caps_v2_t`: `irq_count` + `uint32_t irqs[]`, at most
+  `WASMOS_IRQ_GRANT_LIMIT`), stored in the capability profile and checked by
+  `capability_irq_line_allowed`; an interrupt needs `DEVMGR_CAP_IRQ`. The
+  packed spawn opcodes that carried a 16-bit IRQ mask and one I/O window in
+  argument words (`SPAWN_CAPS`, `SPAWN_PATH_CAPS`, `SPAWN_CAPS_SYNC`,
+  `SPAWN_PATH_CAPS_SYNC`) are retired: every grant travels in a descriptor
+  (`SPAWN_CAPS_V2`, ready-gated with a timeout, for pci-bus and acpi-bus;
+  `SPAWN_WATCHED` for rule drivers), and a path spawn with arguments and no
+  grant is `SPAWN_PATH_SYNC` with `args_len`.
+- Supported build/test hosts: x86_64-linux, aarch64-linux, aarch64-darwin
+  (`hosts` in `tests/batteries.json`). CI runs the kernel unit tests on both
+  Linux hosts (aarch64-darwin is tested locally; macOS runners are scarce)
+  and builds and bring-up boots the aarch64 tree on aarch64-linux; QEMU batteries run on
+  x86_64-linux. The harness accelerates a host-native guest (KVM, or HVF for
+  aarch64 on macOS) and runs a foreign one under TCG.
 - Developer checks: `fmt`, `fmt-check`, `lint`, and `quality` are Ninja targets
   (root `BUILD.py`) backed by `scripts/quality.sh`; only first-party source roots
   are in scope.
@@ -1799,8 +1874,10 @@ linked feature documents for rationale and rollout plans.
   rather than retryable: the driver resets the device and refuses every later
   request with `WASMOS_ERR_VIRTIO_BLK_NOT_READY`, instead of recycling
   descriptors the device could still complete into a client's block buffer. It
-  registers the concrete name `virtio-blk` under the `block` service CLASS; the
-  plain `block` name stays with the ATA driver, which holds the boot disk.
+  registers under the `block` service CLASS with the disk's canonical id
+  (`block:virtio-blk:<unit>`) as its concrete name, so every virtio disk's
+  instance holds a name of its own; the plain `block` name stays with the ATA
+  driver, which holds the boot disk.
   Failures are reported as packed `WASMOS_ERR_VIRTIO_BLK_*` codes.
 - `wasmos_sys_event_loop_t` gained a clock: `poll_timeout_ms` bounds how long a
   poll parks with nothing queued, and `on_timeout` runs when the window elapses.

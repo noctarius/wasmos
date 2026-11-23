@@ -1,4 +1,4 @@
-"""font_service: native ring-3 Zig TTF service (static x86_64 ELF)."""
+"""font_service: native ring-3 Zig TTF service (static ELF for the target architecture)."""
 
 from wasmos_rules import install, native, zig_object
 

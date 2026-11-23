@@ -16,6 +16,7 @@
 #include "memory.h"
 #include "paging.h"
 #include "process.h"
+#include "string.h"
 
 extern const uint8_t _binary_ring3_native_probe_bin_start[];
 extern const uint8_t _binary_ring3_native_probe_bin_end[];
@@ -35,6 +36,65 @@ static int map_linear_pages(uint64_t root_table, uint64_t virt_base, uint64_t ph
         if (paging_map_4k_in_root(root_table, v, p, map_flags) != 0) {
             return -1;
         }
+    }
+    return 0;
+}
+
+/* Load a flat probe image into the linear region. The code goes at the region's
+ * base and is mapped read+exec; the rest of the region is zeroed and mapped
+ * read+write, never exec, as the probe's static storage -- ring3_native.ld
+ * starts .bss on the page after the code, so a probe's statics land there.
+ * The region's recorded flags are the union of the two mappings. Returns 0, or
+ * -1 when the image does not fit or a mapping fails. */
+static int load_probe_image(process_t* proc, mm_context_t* ctx, const mem_region_t* linear,
+                            const uint8_t* src, uint32_t code_size) {
+    uint32_t code_span = (code_size + 0xFFFu) & ~0xFFFu;
+    if (linear->phys_base == 0 || linear->size < code_span) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear->base,
+                         linear->phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) !=
+        0) {
+        return -1;
+    }
+    if (mm_copy_to_user(proc->context_id, linear->base, src, code_size) != 0) {
+        return -1;
+    }
+    /* Make the copied code visible to instruction fetch (a no-op on x86_64). */
+    paging_sync_instruction_cache(ptr_cast(void, (linear->phys_base | KERNEL_HIGHER_HALF_BASE)),
+                                  code_size);
+    if (map_linear_pages(ctx->root_table,
+                         linear->base,
+                         linear->phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    if (linear->size > code_span) {
+        uint32_t data_size = (uint32_t)(linear->size - code_span);
+        memset(ptr_cast(void, ((linear->phys_base + code_span) | KERNEL_HIGHER_HALF_BASE)),
+               0,
+               data_size);
+        if (map_linear_pages(ctx->root_table,
+                             linear->base + code_span,
+                             linear->phys_base + code_span,
+                             data_size,
+                             MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) !=
+            0) {
+            return -1;
+        }
+    }
+    list_iter_t it;
+    mem_region_t* region = (mem_region_t*)list_first(&ctx->regions, &it);
+    while (region) {
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            region->flags |= MEM_REGION_FLAG_EXEC;
+            break;
+        }
+        region = (mem_region_t*)list_next(&it);
     }
     return 0;
 }
@@ -93,33 +153,8 @@ int kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t* out_pid) {
     if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
         return -1;
     }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) !=
-        0) {
+    if (load_probe_image(proc, ctx, &linear, src, code_size) != 0) {
         return -1;
-    }
-    if (mm_copy_to_user(proc->context_id, linear.base, src, code_size) != 0) {
-        return -1;
-    }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
-        return -1;
-    }
-    list_iter_t it;
-    mem_region_t* region = (mem_region_t*)list_first(&ctx->regions, &it);
-    while (region) {
-        if (region->type == MEM_REGION_WASM_LINEAR) {
-            region->flags |= MEM_REGION_FLAG_EXEC;
-            region->flags &= ~MEM_REGION_FLAG_WRITE;
-            break;
-        }
-        region = (mem_region_t*)list_next(&it);
     }
     /* Map the top stack page user-writable explicitly: the mapping
      * mm_context_alloc_region installed is not guaranteed to survive the
@@ -186,33 +221,8 @@ int kernel_ring3_spawn_thread_lifecycle_probe(uint32_t parent_pid, uint32_t* out
     if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
         return -1;
     }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) !=
-        0) {
+    if (load_probe_image(proc, ctx, &linear, src, code_size) != 0) {
         return -1;
-    }
-    if (mm_copy_to_user(proc->context_id, linear.base, src, code_size) != 0) {
-        return -1;
-    }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
-        return -1;
-    }
-    list_iter_t it;
-    mem_region_t* region = (mem_region_t*)list_first(&ctx->regions, &it);
-    while (region) {
-        if (region->type == MEM_REGION_WASM_LINEAR) {
-            region->flags |= MEM_REGION_FLAG_EXEC;
-            region->flags &= ~MEM_REGION_FLAG_WRITE;
-            break;
-        }
-        region = (mem_region_t*)list_next(&it);
     }
 
     uint64_t stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
@@ -278,6 +288,9 @@ static int spawn_ring3_fault_probe_named(uint32_t parent_pid, const char* name, 
     if (mm_copy_to_user(proc->context_id, linear.base, code, code_size) != 0) {
         return -1;
     }
+    /* Make the copied code visible to instruction fetch (a no-op on x86_64). */
+    paging_sync_instruction_cache(ptr_cast(void, (linear.phys_base | KERNEL_HIGHER_HALF_BASE)),
+                                  code_size);
     if (map_linear_pages(ctx->root_table,
                          linear.base,
                          linear.phys_base,

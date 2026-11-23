@@ -19,9 +19,18 @@ env:
   TINYGO_VERSION: "0.41.1"
 
 jobs:
+  # Every host of tests/batteries.json that has a CI runner: the unit tests
+  # compile kernel headers natively, so an arm64 host exercises paths an
+  # x86_64 host never does. aarch64-darwin has no runner (macOS runners are
+  # scarce and slow) and is tested locally.
   unit-tests:
-    name: Kernel unit tests
-    runs-on: ubuntu-24.04
+    name: Kernel unit tests (${{ matrix.name }})
+    needs: batteries
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.batteries.outputs.hosts) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,9 +43,10 @@ jobs:
 
       - name: Install Zig
         run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+          arch=$(uname -m)
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${arch}-linux-${ZIG_VERSION}.tar.xz" \
             | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          echo "$PWD/zig-${arch}-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       # The Go coroutine test runs on wasm32 through TinyGo, because Go models
       # every record as an opaque blob sized for that target -- a host build
@@ -44,8 +54,9 @@ jobs:
       # loses the one test that catches Go binding drift.
       - name: Install TinyGo
         run: |
-          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
-          sudo dpkg -i "tinygo_${TINYGO_VERSION}_amd64.deb"
+          deb="tinygo_${TINYGO_VERSION}_$(dpkg --print-architecture).deb"
+          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/${deb}"
+          sudo dpkg -i "$deb"
 
       - name: Install AssemblyScript
         # asc is required at configure time (AssemblyScript serial driver);
@@ -165,16 +176,80 @@ jobs:
     outputs:
       qemu: ${{ steps.resolve.outputs.qemu }}
       host: ${{ steps.resolve.outputs.host }}
+      bringup: ${{ steps.resolve.outputs.bringup }}
+      hosts: ${{ steps.resolve.outputs.hosts }}
     steps:
       - uses: actions/checkout@v4
       # --matrix is the script's own view of tests/batteries.json, including the
-      # runtime axis, so neither list is written out again here.
+      # architecture and runtime axes, so no list is written out again here.
       - id: resolve
         run: |
           python3 scripts/run_unittest_suite.py --verify-batteries
           cells=$(python3 scripts/run_unittest_suite.py --matrix)
           echo "qemu=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c for c in json.load(sys.stdin) if c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
           echo "host=$(printf '%s' "$cells" | python3 -c "import json,sys;print(json.dumps([c['battery'] for c in json.load(sys.stdin) if not c['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
+          echo "bringup=$(python3 scripts/run_unittest_suite.py --bringup-matrix)" >> "$GITHUB_OUTPUT"
+          echo "hosts=$(python3 scripts/run_unittest_suite.py --host-matrix)" >> "$GITHUB_OUTPUT"
+
+  # Configurations of an architecture under bring-up (bringup in
+  # tests/batteries.json): built in full (kernel, loader, guest and native
+  # modules, ESP, images) and booted to the bring-up marker, because the
+  # kernel cannot run a battery yet. On an aarch64-linux runner, which boots
+  # the aarch64 guest natively when it has KVM and under TCG otherwise.
+  arch-bringup:
+    name: ${{ matrix.config }} (build + bring-up boot)
+    needs: batteries
+    if: needs.batteries.outputs.bringup != '[]'
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.batteries.outputs.bringup) }}
+    env:
+      WASMOS_TEST_TIMEOUT_SCALE: "3"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build python3-pip curl xz-utils \
+            qemu-system-arm qemu-efi-aarch64
+          python3 -m pip install --user kconfiglib
+
+      - name: Install LLVM 20
+        run: |
+          .github/scripts/install-llvm.sh 20
+          echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
+
+      - name: Install Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-linux-${ZIG_VERSION}.tar.xz" \
+            | tar -xJ
+          echo "$PWD/zig-aarch64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Install Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install TinyGo
+        run: |
+          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_arm64.deb"
+          sudo dpkg -i "tinygo_${TINYGO_VERSION}_arm64.deb"
+
+      - name: Install AssemblyScript
+        run: |
+          npm install
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Configure (${{ matrix.config }})
+        run: ./configure "out/${{ matrix.config }}" "configs/${{ matrix.config }}_defconfig"
+
+      - name: Build (${{ matrix.config }}, ${{ matrix.arch }})
+        run: ninja -C "out/${{ matrix.config }}"
+
+      - name: Bring-up boot (${{ matrix.config }}, ${{ matrix.arch }})
+        run: ninja -C "out/${{ matrix.config }}" run-qemu-bringup-test
 
   # Batteries that boot nothing: no emulation toolchain, no OVMF, seconds not
   # minutes. Kept off the QEMU runners so they cannot queue behind them.

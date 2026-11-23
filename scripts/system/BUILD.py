@@ -5,8 +5,11 @@ This manifest runs last: it consumes what every component published through
 b.exports (kernel, loader, the packer, esp.files)."""
 
 import json
+import platform
 import re
 from pathlib import Path
+
+from toolchains import arch
 
 WFS_UUID = "5746532d74654573742d766f6c756d65"
 WFS_VIRTIO_UUID = "5746532d76697274696f2d766f6c3031"
@@ -28,21 +31,50 @@ SHADOW_TOOLS = [
     "qemu",
     "ovmf-code",
     "ovmf-vars",
+    "qemu-aarch64",
+    "aavmf-code",
+    "aavmf-vars",
 ]
 # The SMP topology QEMU emulates for an SMP kernel.
 SMP_CPUS = 4
+# What run-qemu-bringup-test waits for on an architecture whose kernel cannot
+# reach the CLI yet: the preemption self-test passed, which takes the MMU and
+# demand paging, context switches, the scheduler, the timer interrupt and
+# preemption of a running thread.
+BRINGUP_MARKER = "[test] preempt ok"
+
+
+def interactive_cpu_accel(machine, host_os):
+    """CPU model and accelerators for the interactive run targets. An aarch64
+    guest on an aarch64 host runs under the host's hypervisor: HVF on macOS
+    (edk2 does not start with -cpu max there, so the host model), KVM on Linux
+    with TCG as QEMU's fallback when /dev/kvm is absent. Everything else is
+    TCG, which is what x86_64 is validated under. The test harness makes the
+    same choice per session (scripts/qemu_test_framework.py default_accel)."""
+    host = {"arm64": "aarch64", "amd64": "x86_64"}.get(
+        platform.machine().lower(), platform.machine().lower()
+    )
+    if machine.name == "aarch64" and host == "aarch64":
+        if host_os == "Darwin":
+            return ["-accel", "hvf", "-cpu", "host"]
+        return ["-accel", "kvm", "-accel", "tcg", "-cpu", "max"]
+    return ["-cpu", "max"]
 
 
 def initfs(b):
-    """initfs.img + initfs_config.bin from scripts/initfs.toml. Payloads are
-    resolved by file name from the build directory, so each one named in the
-    manifest is an input."""
+    """initfs.img + initfs_config.bin from the architecture's manifest
+    (scripts/initfs.<arch>.toml) and bootstrap rules
+    (scripts/initfs/devmgr/rules/default.<arch>.rules). Each architecture keeps
+    its own complete set: the boot disk's driver and the platform drivers
+    differ. Payloads are resolved by file name from the build directory, so
+    each one named in the manifest is an input."""
     root = b.root
-    toml = root / "scripts/initfs.toml"
+    name = arch(b.cfg).name
+    toml = root / f"scripts/initfs.{name}.toml"
     b.regen_on(toml)
     payloads = re.findall(r'^\s*source\s*=\s*"([^"]+)"', toml.read_text(), re.M)
     rules = "devmgr_rules_init_default.rules"
-    default_rules = root / "scripts/initfs/devmgr/rules/default.rules"
+    default_rules = root / f"scripts/initfs/devmgr/rules/default.{name}.rules"
     b.command(
         [rules],
         ["cp", default_rules, rules],
@@ -124,11 +156,17 @@ def disk_images(b):
 def esp(b, initfs_img):
     root, system = b.root, b.dir
     files = [
-        ("EFI/BOOT/BOOTX64.EFI", b.exports["bootloader"]),
+        (f"EFI/BOOT/{arch(b.cfg).efi_boot_name}", b.exports["bootloader"]),
         ("kernel.elf", b.exports["kernel.elf"]),
         ("kernel.cmdline", system / "kernel.cmdline"),
         ("initfs.img", initfs_img),
         ("system/sysinit.rc", system / "sysinit.rc"),
+        # The boot rules, per architecture like the initfs set; installed under
+        # the one name the device manager reads.
+        (
+            "system/devmgr/rules/default.rules",
+            system / f"devmgr/rules/default.{arch(b.cfg).name}.rules",
+        ),
         ("system/net/interfaces", system / "net/interfaces"),
         ("system/fonts/roboto.ttf", system / "fonts/Roboto-Regular.ttf"),
         ("system/fonts/roboto_mono.ttf", system / "fonts/RobotoMono-Regular.ttf"),
@@ -139,7 +177,6 @@ def esp(b, initfs_img):
         *b.exports.get("esp.files", []),
     ]
     trees = [
-        ("system/devmgr/rules", system / "devmgr/rules"),
         ("system/keymaps", system / "keymaps"),
     ]
     # The TLS trust store is fetched on demand (scripts/fetch-ca-certs.sh); an
@@ -206,11 +243,18 @@ def esp(b, initfs_img):
 
 def run_targets(b, esp_stamp, images):
     tools, out, root = b.tools, b.out, b.root
+    machine = arch(b.cfg)
     smp = SMP_CPUS if b.cfg.WASMOS_SMP else 1
     deps = [esp_stamp, *images]
-    ovmf_code, ovmf_vars = tools["ovmf-code"], tools["ovmf-vars"]
+    ovmf_code = tools.get(machine.firmware_code_tool, "")
+    ovmf_vars = tools.get(machine.firmware_vars_tool, "")
+    qemu_bin = tools.get(machine.qemu_tool) or f"qemu-system-{machine.name}"
     vars_arg = ["--ovmf-vars", ovmf_vars] if ovmf_vars else []
+    # The harness builds its QEMU command line for WASMOS_ARCH
+    # (scripts/qemu_test_framework.py), from the same ARCHES entry.
     env = {
+        "WASMOS_ARCH": machine.name,
+        "WASMOS_QEMU": qemu_bin,
         "WASMOS_OVMF_CODE": ovmf_code,
         "WASMOS_OVMF_VARS": ovmf_vars,
         "WASMOS_ESP": out / "esp",
@@ -244,6 +288,25 @@ def run_targets(b, esp_stamp, images):
         env=env,
         description="QEMU halt test",
     )
+    # Boots to BRINGUP_MARKER and stops: the gate for an architecture under
+    # bring-up, whose kernel cannot run run-qemu-test yet. Valid on any tree.
+    b.run_target(
+        "run-qemu-bringup-test",
+        [
+            py,
+            root / "scripts/qemu_bringup_test.py",
+            "--ovmf-code",
+            ovmf_code,
+            *vars_arg,
+            "--esp",
+            out / "esp",
+            "--marker",
+            BRINGUP_MARKER,
+        ],
+        deps=deps,
+        env=env,
+        description="QEMU bring-up marker test",
+    )
     b.run_target(
         "run-qemu-cli-test",
         [py, root / "scripts/run_unittest_suite.py", "--start-dir", "tests"],
@@ -271,11 +334,11 @@ def run_targets(b, esp_stamp, images):
 
     run_images = [f"run/{i}" for i in ("user.img", "wfs.img", "wfs_virtio.img")]
     qemu = [
-        tools["qemu"] or "qemu-system-x86_64",
+        qemu_bin,
+        *machine.qemu_machine,
         "-m",
         "512M",
-        "-cpu",
-        "max",
+        *interactive_cpu_accel(machine, tools.get("host-os", "")),
         *(["-smp", str(smp)] if smp > 1 else []),
         "-nographic",
         "-serial",
@@ -294,7 +357,8 @@ def run_targets(b, esp_stamp, images):
         "-netdev",
         "user,id=net0",
         "-device",
-        "virtio-net-pci,netdev=net0",
+        "virtio-net-pci,netdev=net0"
+        + ("" if machine.qemu_nic_option_rom else ",romfile="),
         "-device",
         "virtio-rng-pci",
         "-drive",
@@ -304,8 +368,15 @@ def run_targets(b, esp_stamp, images):
         f"format=raw,file=fat:rw:{out / 'esp'}",
         "-drive",
         f"format=raw,file={out / run_images[0]}",
-        "-drive",
-        f"if=ide,index=2,media=disk,format=raw,file={out / run_images[1]}",
+        # The ata driver's WFS unit; a machine without IDE has no such unit.
+        *(
+            [
+                "-drive",
+                f"if=ide,index=2,media=disk,format=raw,file={out / run_images[1]}",
+            ]
+            if machine.qemu_ide
+            else []
+        ),
         "-drive",
         f"if=none,format=raw,file={out / run_images[2]},id=vwfs0",
         "-device",
@@ -409,6 +480,7 @@ def run_targets(b, esp_stamp, images):
             "WASMOS_WASM_RUNTIME_WASM3=y",
             "WASMOS_RING3_SMOKE=y",
             "WASMOS_PM_TEST_HOOKS=y",
+            f"WASMOS_ARCH_{machine.name.upper()}=y",
             f"WASMOS_TRACE={trace}",
             *extra,
         ]

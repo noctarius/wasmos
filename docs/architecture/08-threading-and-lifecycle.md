@@ -423,9 +423,13 @@ Markers emitted to the serial log:
    overwrites the context struct will be detected before the corrupted context
    is dispatched.  Mismatch → `hlt` loop (no silent bad dispatch).
 
-6. **TSS.rsp0 is updated on every dispatch.** `cpu_set_kernel_stack(stack_top - 16u)`
-   is called in `process_schedule_once_impl` before `context_switch_high`.
-   Ring3 interrupts and syscalls always land on the current thread's kernel stack.
+6. **The kernel entry stack is updated on every dispatch.**
+   `cpu_set_kernel_stack(top - 16u)` is called in `process_schedule_once_impl`
+   before `context_switch_high`, with `top` the thread's own `kstack_top`, or
+   the process `stack_top` for a main thread (which has no kstack of its own).
+   Ring3 interrupts and syscalls always land on the current thread's kernel
+   stack, so a thread blocked in a syscall keeps its frame while a sibling
+   enters the kernel.
 
 7. **`blocking_transition` guards against lost wakes.** When a thread sets
    `blocking_transition = 1` and begins saving its context, a concurrent

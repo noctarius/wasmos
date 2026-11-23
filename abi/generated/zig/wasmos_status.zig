@@ -219,6 +219,7 @@ pub const WASMOS_ERR_MSI_BAD_ENTRY: i32 = -0x00110009; // table entry index is b
 pub const WASMOS_ERR_MSI_MAP_FAILED: i32 = -0x0011000A; // the MSI-X table BAR could not be mapped
 pub const WASMOS_ERR_MSI_NOT_DEVICE_OWNER: i32 = -0x0011000B; // another endpoint already programmed interrupts for this device
 pub const WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER: i32 = -0x0011000C; // the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it
+pub const WASMOS_ERR_MSI_NO_FUNCTION: i32 = -0x0011000D; // the caller drives no PCI function, so the interrupt controller has no device identity to deliver a message for (an aarch64 GICv3 ITS keys every message by the device's requester id)
 pub const WASMOS_ERR_IO_NOT_AUTHORIZED: i32 = -0x00120001; // caller has no spawn profile granting register windows
 pub const WASMOS_ERR_IO_BAD_REGION: i32 = -0x00120002; // region index names no window this context was granted
 pub const WASMOS_ERR_IO_OUT_OF_WINDOW: i32 = -0x00120003; // offset falls outside the granted window's bounds
@@ -555,6 +556,7 @@ pub fn strerror(c: i32) []const u8 {
         WASMOS_ERR_MSI_MAP_FAILED => "the MSI-X table BAR could not be mapped",
         WASMOS_ERR_MSI_NOT_DEVICE_OWNER => "another endpoint already programmed interrupts for this device",
         WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER => "the requesting endpoint's process does not drive this PCI function: another process's spawn profile names it, or its driver ended and the kernel retired it at the reap until a new driver names it",
+        WASMOS_ERR_MSI_NO_FUNCTION => "the caller drives no PCI function, so the interrupt controller has no device identity to deliver a message for (an aarch64 GICv3 ITS keys every message by the device's requester id)",
         WASMOS_ERR_IO_NOT_AUTHORIZED => "caller has no spawn profile granting register windows",
         WASMOS_ERR_IO_BAD_REGION => "region index names no window this context was granted",
         WASMOS_ERR_IO_OUT_OF_WINDOW => "offset falls outside the granted window's bounds",

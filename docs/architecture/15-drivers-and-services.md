@@ -323,17 +323,17 @@ Process-manager IPC opcodes (selected):
 | `PROC_IPC_KILL`                 | `0x202` | Kill process                             |
 | `PROC_IPC_STATUS`               | `0x203` | Query process status                     |
 | `PROC_IPC_SPAWN_NAME`           | `0x204` | Spawn by name                            |
-| `PROC_IPC_SPAWN_CAPS`           | `0x205` | Spawn with capability descriptor         |
+| `0x205`                         | retired | was SPAWN_CAPS (grant in argument words) |
 | `PROC_IPC_MODULE_META`          | `0x206` | Query module metadata by index           |
 | `PROC_IPC_MODULE_META_PATH`     | `0x207` | Query module metadata by path            |
 | `PROC_IPC_SPAWN_CAPS_V2`        | `0x208` | Spawn with extended caps (DMA windows)   |
 | `PROC_IPC_SPAWN_PATH`           | `0x209` | Spawn from explicit file path            |
-| `PROC_IPC_SPAWN_PATH_CAPS`      | `0x20A` | Spawn from path with I/O+IRQ caps        |
+| `0x20A`                         | retired | was SPAWN_PATH_CAPS                      |
 | `PROC_IPC_SPAWN_SYNC`           | `0x20B` | Spawn by index, block until NOTIFY_READY |
 | `PROC_IPC_NOTIFY_READY`         | `0x20C` | Service signals initialization complete  |
-| `PROC_IPC_SPAWN_CAPS_SYNC`      | `0x20D` | Spawn caps, block until ready            |
+| `0x20D`                         | retired | was SPAWN_CAPS_SYNC                      |
 | `PROC_IPC_SPAWN_PATH_SYNC`      | `0x20E` | Spawn path, block until ready            |
-| `PROC_IPC_SPAWN_PATH_CAPS_SYNC` | `0x20F` | Spawn path+caps, block until ready       |
+| `0x20F`                         | retired | was SPAWN_PATH_CAPS_SYNC                 |
 | `PROC_IPC_RESP`                 | `0x280` | Generic success response                 |
 | `PROC_IPC_ERROR`                | `0x2FF` | Generic error response                   |
 | `SVC_IPC_REGISTER_REQ`          | `0x220` | Register named service endpoint          |

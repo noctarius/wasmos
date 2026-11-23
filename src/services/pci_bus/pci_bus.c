@@ -588,6 +588,31 @@ static uint32_t pci_decode_bar(uint16_t bdf, uint32_t index, wasmos_pci_bar_t* o
     return consumed;
 }
 
+/* Turn on the address decode for every kind of BAR the function implements at
+ * an assigned address. Firmware need not leave it on -- edk2 on aarch64 leaves
+ * memory decode off on functions it no longer drives -- and a driver granted a
+ * window onto a BAR that does not decode reads all-ones. A BAR at address 0 is
+ * unassigned and enables nothing: I/O decode at port 0 would claim legacy
+ * ports. Decode the firmware already enabled is left as it is. */
+static void pci_enable_decode(uint16_t bdf, const wasmos_pci_device_desc_t* desc) {
+    uint32_t want = 0;
+    for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT; ++i) {
+        const wasmos_pci_bar_t* bar = &desc->bars[i];
+        if (bar->base == 0u) {
+            continue;
+        }
+        if (bar->kind == WASMOS_PCI_BAR_IO) {
+            want |= PCI_CMD_IO_SPACE;
+        } else if (bar->kind == WASMOS_PCI_BAR_MEM32 || bar->kind == WASMOS_PCI_BAR_MEM64) {
+            want |= PCI_CMD_MEM_SPACE;
+        }
+    }
+    uint32_t cmd = cfg_read(bdf, PCI_REG_COMMAND) & 0xFFFFu;
+    if ((cmd & want) != want) {
+        cfg_write(bdf, PCI_REG_COMMAND, cmd | want);
+    }
+}
+
 /* Fill the descriptor for one function: identity, class triplet, interrupt
  * routing, every BAR, and where the interrupt capabilities live. Only pci-bus
  * can walk the capability list, so it reports the offsets rather than making
@@ -615,6 +640,7 @@ static void pci_fill_desc(uint16_t bdf, wasmos_pci_device_desc_t* desc) {
     for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT;) {
         i += pci_decode_bar(bdf, i, &desc->bars[i]);
     }
+    pci_enable_decode(bdf, desc);
 }
 
 /* Publish one function. Each device gets its own slot in the shared buffer, so

@@ -64,30 +64,61 @@ static void test_a_spec_that_does_not_fit_is_refused(void) {
     assert(dm_unit_spec(rtc, "acpi:0070", "relative.wap", "never", 0, out, sizeof(out)) == -1);
 }
 
-/* A single window travels in io_port_min/max, ranges after the header. */
+/* A single port window becomes the descriptor's one I/O region grant; declared
+ * ranges replace it. The interrupts follow the regions (and DMA windows). */
 static void test_caps_encode_windows_and_irq(void) {
     uint8_t out[SUPERVISOR_CAPS_MAX];
     wasmos_spawn_caps_v2_t hdr;
     wasmos_region_grant_t r[2];
+    uint32_t irq = 0;
     spawn_caps_t caps;
     memset(&caps, 0, sizeof(caps));
     caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
     caps.io_port_min = 0x70;
     caps.io_port_max = 0x71;
-    caps.irq_mask = 1u << 8;
-    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) == (int32_t)sizeof(hdr));
+    caps.irq_count = 1;
+    caps.irqs[0] = 8;
+    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) ==
+           (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(1, 0, 1));
     memcpy(&hdr, out, sizeof(hdr));
-    assert(hdr.io_port_min == 0x70 && hdr.io_port_max == 0x71 && hdr.irq_mask == (1u << 8) &&
-           hdr.region_count == 0 && hdr.dma.window_count == 0);
+    assert(hdr.region_count == 1 && hdr.irq_count == 1 && hdr.dma.window_count == 0);
+    memcpy(r, out + sizeof(hdr), sizeof(r[0]));
+    assert(r[0].kind == WASMOS_REGION_GRANT_IO && r[0].base == 0x70 && r[0].length == 2);
+    memcpy(&irq, out + sizeof(hdr) + sizeof(r[0]), sizeof(irq));
+    assert(irq == 8u);
 
     caps.region_count = 2;
     caps.regions[0] = (wasmos_region_grant_t){WASMOS_REGION_GRANT_IO, 1, 0x60};
     caps.regions[1] = (wasmos_region_grant_t){WASMOS_REGION_GRANT_MMIO, 0x4000, 0xFEB00000u};
-    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) == (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(2, 0));
+    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) ==
+           (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(2, 0, 1));
     memcpy(r, out + sizeof(hdr), sizeof(r));
     assert(r[0].kind == WASMOS_REGION_GRANT_IO && r[0].base == 0x60 && r[0].length == 1);
     assert(r[1].kind == WASMOS_REGION_GRANT_MMIO && r[1].base == 0xFEB00000u &&
            r[1].length == 0x4000);
+    memcpy(&irq, out + sizeof(hdr) + sizeof(r), sizeof(irq));
+    assert(irq == 8u);
+}
+
+/* An interrupt identifier is carried whole, not as a mask bit: a GIC SPI
+ * (aarch64 INTID 33, the PL011 on QEMU virt) is as expressible as an ISA line,
+ * and a list beyond WASMOS_IRQ_GRANT_LIMIT is refused rather than cut. */
+static void test_caps_encode_carries_an_interrupt_above_line_15(void) {
+    uint8_t out[SUPERVISOR_CAPS_MAX];
+    wasmos_spawn_caps_v2_t hdr;
+    uint32_t irq = 0;
+    spawn_caps_t caps;
+    memset(&caps, 0, sizeof(caps));
+    caps.cap_flags = DEVMGR_CAP_IRQ;
+    caps.irq_count = 1;
+    caps.irqs[0] = 33;
+    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) ==
+           (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(0, 0, 1));
+    memcpy(&hdr, out, sizeof(hdr));
+    memcpy(&irq, out + sizeof(hdr), sizeof(irq));
+    assert(hdr.irq_count == 1 && irq == 33u);
+    caps.irq_count = WASMOS_IRQ_GRANT_LIMIT + 1u;
+    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) == -1);
 }
 
 /* Regression: 2026-11-22-devmgr-dma-budget-replaced -- every DMA grant the
@@ -140,7 +171,8 @@ static void test_caps_encode_dma_and_bounds(void) {
     spawn_caps_t caps;
     memset(&caps, 0, sizeof(caps));
     caps.cap_flags = DEVMGR_CAP_DMA;
-    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) == (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(0, 1));
+    assert(dm_caps_v2_encode(&caps, out, sizeof(out)) ==
+           (int32_t)WASMOS_SPAWN_CAPS_V2_SIZE(0, 1, 0));
     memcpy(&hdr, out, sizeof(hdr));
     assert(hdr.dma.window_count == 1u && hdr.dma.direction_flags == WASMOS_DMA_DIR_BIDIR);
     assert(dm_caps_v2_encode(&caps, out, (uint32_t)sizeof(hdr)) == -1);
@@ -244,7 +276,8 @@ static void test_a_watched_spawn_carries_args_and_every_window(void) {
     int32_t n;
     memset(&caps, 0, sizeof(caps));
     caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ;
-    caps.irq_mask = 1u << 11;
+    caps.irq_count = 1;
+    caps.irqs[0] = 11;
     caps.region_count = 2;
     caps.regions[0] = (wasmos_region_grant_t){WASMOS_REGION_GRANT_MMIO, 0x4000, 0xFEB00000u};
     caps.regions[1] = (wasmos_region_grant_t){WASMOS_REGION_GRANT_IO, 0x20, 0xC000};
@@ -258,10 +291,10 @@ static void test_a_watched_spawn_carries_args_and_every_window(void) {
            desc.tty == 0u && desc.flags == 0u);
     assert(desc.path_len == strlen(path) && memcmp(out + desc.path_off, path, desc.path_len) == 0);
     assert(desc.args_len == strlen(args) && memcmp(out + desc.args_off, args, desc.args_len) == 0);
-    assert(desc.caps_len == WASMOS_SPAWN_CAPS_V2_SIZE(2, 0));
+    assert(desc.caps_len == WASMOS_SPAWN_CAPS_V2_SIZE(2, 0, 1));
     assert((uint32_t)n == desc.caps_off + desc.caps_len);
     memcpy(&hdr, out + desc.caps_off, sizeof(hdr));
-    assert(hdr.region_count == 2 && hdr.irq_mask == (1u << 11) &&
+    assert(hdr.region_count == 2 && hdr.irq_count == 1 &&
            (hdr.cap_flags & DEVMGR_CAP_PCI_FUNCTION) != 0u && hdr.dma.pci_function == 0x18u);
     memcpy(g, out + desc.caps_off + sizeof(hdr), sizeof(g));
     assert(g[0].kind == WASMOS_REGION_GRANT_MMIO && g[0].base == 0xFEB00000u);
@@ -292,6 +325,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_a_spec_names_the_device_and_its_policy),
         WASMOS_TEST_CASE(test_a_spec_that_does_not_fit_is_refused),
         WASMOS_TEST_CASE(test_caps_encode_windows_and_irq),
+        WASMOS_TEST_CASE(test_caps_encode_carries_an_interrupt_above_line_15),
         WASMOS_TEST_CASE(test_caps_encode_dma_and_bounds),
         WASMOS_TEST_CASE(test_caps_encode_the_pci_function),
         WASMOS_TEST_CASE(test_a_dma_grant_carries_the_drivers_budget),

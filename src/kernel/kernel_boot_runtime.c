@@ -22,14 +22,16 @@
 #include "timer.h"
 #include "sched.h"
 
-/* Allocate zeroed frames below 64 MiB and return the LOW (identity) pointer,
- * with the physical base in *out_phys.  The caller fills the buffer through
- * this low pointer, so this only works while the active root still has the low
- * slot — the kernel root keeps it (paging_init's bootstrap slot), process roots
- * do not.  Callers publish the higher-half alias, never this pointer. */
+/* Allocate zeroed frames inside the bootstrap window (KERNEL_BOOTSTRAP_WINDOW_BYTES,
+ * arch/vm_layout.h: 64 MiB on x86_64, the whole direct map on aarch64, whose RAM
+ * starts at 1 GiB) and return the LOW (identity) pointer, with the physical base
+ * in *out_phys.  The caller fills the buffer through this low pointer, so this
+ * only works while the active root still has the low slot — the kernel root
+ * keeps it (paging_init's bootstrap slot), process roots do not.  Callers
+ * publish the higher-half alias, never this pointer. */
 static void* boot_shadow_alloc_low(uint64_t size_bytes, uint64_t* out_phys) {
     const uint64_t page_size = 0x1000ULL;
-    const uint64_t max_low = 64ULL * 1024ULL * 1024ULL;
+    const uint64_t max_low = KERNEL_BOOTSTRAP_WINDOW_BYTES;
     if (size_bytes == 0) {
         return 0;
     }

@@ -2254,16 +2254,6 @@ Source: `architecture/25-diagnostics-status.md`,
   `-iquote`/`-include` arguments and the quoted includes of every listed
   source (or give each suite a depfile), with a regression test that a header
   edit rebuilds the suite.
-- [ ] [TEST][P2] The ring-3 thread-lifecycle probe never runs: its helper-thread
-  stacks are `.bss` (`src/kernel/ring3_thread_lifecycle_probe.c`), which the
-  flat binary omits, and `kernel_ring3_spawn_thread_lifecycle_probe` maps only
-  the code pages and marks the linear region R+X, so the first stack write
-  faults and the process is terminated (`user-pf ... reason=unmapped
-  cr2=...1170` on x86_64, the same at `...11b0` on aarch64).
-  `run-qemu-ring3-threading-test` passes anyway, on the `[test] ring3 thread
-  ...` markers the native probe emits; the lifecycle probe's own checks are
-  never observed. Fix with a regression test that requires a marker only the
-  lifecycle probe can produce.
 - [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
   (`test_app_churn`: "run N: date produced no result"). Not a supervisor
   regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7
@@ -3376,20 +3366,6 @@ Source: `architecture/25-diagnostics-status.md`,
   a send (the wedge's signature) and cli was RUNNING rather than stranded, with
   the marker missing at the early-boot stage. Whatever it was, it is its own
   fault and still uncaptured.
-- [ ] [BUG][P2] Make `run-qemu-ring3-threading-test` assert the probe it names.
-  The ring-3 thread lifecycle probe never issues a join syscall: instrumenting
-  every join for the `ring3-threading` process name gave zero hits, so all three
-  `wasmos_thread_spawn_cont(...) > 0` guards in
-  `src/kernel/ring3_thread_lifecycle_probe.c` are false and every join is skipped.
-  The test cannot notice, because every marker it requires (`thread create`,
-  `join`, `join self deny`, `detach syscall ok`) is gated on the `ring3-native`
-  process name and comes from the OTHER probe -- so the "lifecycle marker test"
-  asserts a different process's markers and the lifecycle probe contributes
-  nothing observable.
-
-  When fixing: the probe blob is mapped exec+non-writable over `code_size` bytes
-  only, so growing its `.bss` (for example adding a fourth 4 KiB stack) is not
-  obviously safe.
 
 - [ ] [DOCS][P3] Correct the eight commit messages in `fdd4472ef6..1c6bc236ec`
   whose "verified on both runtimes" gate lines actually name WARP twice. The work

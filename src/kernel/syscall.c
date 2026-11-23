@@ -43,7 +43,11 @@ static uint8_t g_ring3_ipc_call_spoof_invalid_source_deny_logged;
 static uint8_t g_ring3_ipc_call_owner_sender_stress_logged;
 static uint8_t g_ring3_yield_logged;
 static uint8_t g_ring3_thread_yield_logged;
+/* Main-thread exit status of the thread-lifecycle probe when its start-record
+ * check passed (PROBE_START_RECORD_OK in ring3_thread_lifecycle_probe.c). */
+#define RING3_THREAD_START_RECORD_OK 0x5354
 static uint8_t g_ring3_thread_exit_logged;
+static uint8_t g_ring3_thread_start_record_logged;
 static uint8_t g_ring3_native_abi_logged;
 static uint8_t g_ring3_native_gettid_logged;
 static uint8_t g_ring3_thread_create_logged;
@@ -518,6 +522,14 @@ uint64_t syscall_dispatch(syscall_frame_t* frame) {
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_exit_logged = 1;
             klog_write("[test] ring3 thread exit syscall ok\n");
+        }
+        /* The thread-lifecycle probe's main thread exits with this status only
+         * when a thread it spawned was entered with the entry function and
+         * argument it passed (ring3_thread_lifecycle_probe.c). */
+        if (!g_ring3_thread_start_record_logged && arch_syscall_from_user(frame) &&
+            name_eq(proc->name, "ring3-threading") && exit_status == RING3_THREAD_START_RECORD_OK) {
+            g_ring3_thread_start_record_logged = 1;
+            klog_write("[test] ring3 thread start record ok\n");
         }
         process_set_exit_status(proc, exit_status);
         process_yield(PROCESS_RUN_THREAD_EXITED);

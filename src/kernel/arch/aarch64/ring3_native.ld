@@ -5,9 +5,12 @@
  * that the kernel loads at whatever user virtual address it picks. That is why
  * the origin is 0 and why code and rodata share one section - the blob has to be
  * position independent and a single contiguous run of bytes with no gaps to
- * relocate, and _start has to end up as its first byte. No output section is
- * declared for .data or .bss, so a probe that wants writable static storage gets
- * whatever orphan placement the linker chooses rather than a guarantee. */
+ * relocate, and _start has to end up as its first byte, which is why each probe
+ * puts it in .text.start and that section comes first. Zero-initialised statics
+ * (.bss) start on the page after the code: the loader maps the code read+exec
+ * and the rest of the linear region zeroed and read+write
+ * (kernel_ring3_probe_runtime.c), and .bss is NOLOAD, so the flat image stays
+ * code only. Initialised writable data (.data) has no place in the image. */
 ENTRY(_start)
 
 SECTIONS
@@ -16,8 +19,16 @@ SECTIONS
 
   .text :
   {
+    *(.text.start)
     *(.text*)
     *(.rodata*)
+  }
+
+  . = ALIGN(4096);
+  .bss (NOLOAD) :
+  {
+    *(.bss*)
+    *(COMMON)
   }
 
   /* Nothing here survives into the flattened image, and any of it that did would

@@ -36,14 +36,33 @@ static inline uintptr_t wasmos_thread_align_down(uintptr_t v) {
     return v & ~(uintptr_t)0xFULL;
 }
 
-/* Entry trampoline for a spawned thread: reads the wasmos_thread_start_t at the
- * stack pointer, calls the entry function, and exits the thread with status 0 when it returns.
- * Never returns, and must only be entered by the kernel with the stack laid out
- * by wasmos_thread_spawn_cont. */
-static inline void wasmos_thread_bootstrap(void) {
-    wasmos_thread_start_t* start = (wasmos_thread_start_t*)wasmos_native_read_sp();
+/* Runs a spawned thread's body from its hand-off record and exits the thread
+ * with status 0 when the body returns. Reached only from
+ * wasmos_thread_bootstrap. */
+__attribute__((used, noreturn)) static void wasmos_thread_run(wasmos_thread_start_t* start) {
     start->entry(start->arg);
-    wasmos_sys_thread_exit(0);
+    for (;;) {
+        wasmos_sys_thread_exit(0);
+    }
+}
+
+/* Entry trampoline for a spawned thread, entered by the kernel with the stack
+ * pointer at the wasmos_thread_start_t that wasmos_thread_spawn_cont wrote.
+ * Naked, because the record is found through the INCOMING stack pointer: an
+ * ordinary function's prologue moves it first (a push on x86_64, the X30 save on
+ * aarch64), and the record read back would be the saved register instead. The
+ * pointer is handed to wasmos_thread_run as its argument; the call keeps the
+ * ABI's stack alignment, because the record sits at a 16-byte boundary. */
+__attribute__((naked, used)) static void wasmos_thread_bootstrap(void) {
+#if defined(__x86_64__)
+    __asm__ volatile("mov %rsp, %rdi\n"
+                     "call wasmos_thread_run\n"
+                     "ud2\n");
+#else
+    __asm__ volatile("mov x0, sp\n"
+                     "bl wasmos_thread_run\n"
+                     "brk #0\n");
+#endif
 }
 
 /* Continuation-style spawn: caller provides stack storage and an optional

@@ -2,8 +2,8 @@
  * records and the per-call wrappers. For non-WASM userland code paths; it stays
  * separate from the WASM host imports in wasmos/api.h. The wrappers are built
  * on three trap stubs each architecture provides (wasmos_syscall0,
- * wasmos_syscall1, wasmos_syscall6_ret2) and on wasmos_native_read_sp():
- * wasmos/syscall_x86_64.h (int 0x80) and wasmos/syscall_aarch64.h (svc #0). */
+ * wasmos_syscall1, wasmos_syscall6_ret2): wasmos/syscall_x86_64.h (int 0x80)
+ * and wasmos/syscall_aarch64.h (svc #0). */
 #ifndef WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H
 #define WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H
 

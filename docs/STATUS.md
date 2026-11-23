@@ -745,6 +745,17 @@ linked feature documents for rationale and rollout plans.
   `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
   parallel because they share `<build-dir>/esp`.
+- Multi-threaded ring-3 processes: a trap from user mode lands on the
+  dispatched thread's own kernel stack (`kstack_top`; the process stack for a
+  main thread), so a thread blocked in a syscall keeps its frame while a sibling
+  enters the kernel. The native thread trampoline (`wasmos_thread_bootstrap`,
+  `wasmos/thread_native.h`) is naked and takes the start record from the
+  incoming stack pointer. The ring-3 probe blobs are position-independent
+  (`-fPIE`), `_start` is their first byte (`.text.start`), and their `.bss`
+  starts on the page after the code, which the loader maps zeroed and
+  read+write. `run-qemu-ring3-threading-test` requires
+  `[test] ring3 thread start record ok`, which only the lifecycle probe emits,
+  and it passes on x86_64 and aarch64.
 - Every x86_64 QEMU battery runs under both wasm runtimes (`arches[].runtimes`
   in `tests/batteries.json`), and each cell asserts the runtime it linked from the
   boot marker. The `filesystem` battery is green under `wasm3_smp` and

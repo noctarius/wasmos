@@ -346,7 +346,8 @@ The main scheduling loop calls `process_schedule_once` after each dispatch.
 4. Validate thread context canaries; halt on mismatch.
 5. `process_set_running(proc, thread)`.
 6. Refresh `ticks_remaining` if zero.
-7. `cpu_set_kernel_stack(stack_top - 16)` → update TSS.rsp0.
+7. `cpu_set_kernel_stack(top - 16)` with the thread's `kstack_top` (the
+   process `stack_top` for a main thread) → update TSS.rsp0.
 8. Set `g_current_pid`, `g_current_process`, `g_current_thread`.
 9. Load `root_table` from the process MM context.
 10. **Kernel workers** (`is_kernel_worker`):

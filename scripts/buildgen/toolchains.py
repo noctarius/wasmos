@@ -430,7 +430,7 @@ def profiles(srcdir: Path, cfg, tools: dict) -> dict[str, Toolchain]:
         "-DENABLE_ADVANCED_APIS=1",
     ]
 
-    # Ring-3 native probes: position-dependent flat binaries the kernel embeds.
+    # Ring-3 native probes: position-independent flat binaries the kernel embeds.
     probe = [
         f"--target={target.name}-unknown-none-elf",
         "-Os",
@@ -440,6 +440,9 @@ def profiles(srcdir: Path, cfg, tools: dict) -> dict[str, Toolchain]:
         "-fno-asynchronous-unwind-tables",
         "-fno-unwind-tables",
         "-fomit-frame-pointer",
+        # The flat image runs wherever the kernel maps it, so code must reach
+        # its own functions and statics PC-relative, never by absolute address.
+        "-fPIE",
         *(["-mno-red-zone"] if target.name == "x86_64" else []),
         "-nostdlib",
         f"-I{libc_inc}",

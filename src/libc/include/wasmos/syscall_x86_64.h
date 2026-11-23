@@ -50,13 +50,6 @@ static inline wasmos_sysret2_t wasmos_syscall6_ret2(uint64_t id, uint64_t arg0, 
     return out;
 }
 
-/* The caller's stack pointer. */
-static inline __attribute__((always_inline)) uintptr_t wasmos_native_read_sp(void) {
-    uintptr_t sp;
-    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
-    return sp;
-}
-
 #endif /* __x86_64__ && !__wasm__ */
 #endif /* WASMOS_LIBC_WASMOS_SYSCALL_NATIVE_H */
 #endif /* WASMOS_LIBC_WASMOS_SYSCALL_X86_64_H */

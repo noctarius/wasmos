@@ -1,8 +1,11 @@
 import os
+import re
 import shutil
 import unittest
 
 from scripts.qemu_test_framework import QemuSession, default_config, default_kernel_path
+
+NOTIFY_RX_RE = re.compile(rb"\[net-smoke\] notify rx=\d+ ethertype=(0x[0-9A-Fa-f]{4})")
 
 
 class VirtioNetNotifyE2ETest(unittest.TestCase):
@@ -58,14 +61,19 @@ class VirtioNetNotifyE2ETest(unittest.TestCase):
         # interrupt #2 (the driver's boot ARP was #1), so it proves the device
         # re-delivers: an MSI-X vector when virtio-net bound one, otherwise the
         # shared PCI INTx line. ARP=0x0806.
+        # The expect waits for the whole ethertype field: serial output arrives
+        # in chunks, and a match on the line's prefix alone can land before the
+        # rest of the line does.
         self.assertTrue(
-            self.session.expect(b"[net-smoke] notify rx=", timeout_s=30),
+            self.session.expect(NOTIFY_RX_RE, timeout_s=30),
             "no frame pushed to the packet socket (IRQ re-delivery, the driver's "
             "per-consumer queues, or net-stack's fan-out is broken)",
         )
-        self.assertIn(
-            b"ethertype=0x0806",
-            self.session.buf,
+        match = NOTIFY_RX_RE.search(self.session.buf)
+        assert match is not None
+        self.assertEqual(
+            match.group(1),
+            b"0x0806",
             "delivered frame was not the expected ARP reply",
         )
 

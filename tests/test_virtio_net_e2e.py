@@ -5,6 +5,8 @@ import unittest
 
 from scripts.qemu_test_framework import QemuSession, default_config, default_kernel_path
 
+IRQ_RX_RE = re.compile(rb"\[virtio-net\] irq rx=\d+ ethertype=(0x[0-9A-Fa-f]{4})")
+
 
 class VirtioNetE2ETest(unittest.TestCase):
     """End-to-end virtio-net data-path test.
@@ -58,15 +60,20 @@ class VirtioNetE2ETest(unittest.TestCase):
             self.session.expect(b"[virtio-net] arp request sent", timeout_s=30),
             "virtio-net did not send the ARP request",
         )
-        # RX: SLIRP's ARP reply was delivered via the device interrupt.
+        # RX: SLIRP's ARP reply was delivered via the device interrupt. The
+        # expect waits for the whole ethertype field: serial output arrives in
+        # chunks, and a match on the line's prefix alone can land before the
+        # rest of the line does.
         self.assertTrue(
-            self.session.expect(b"[virtio-net] irq rx=", timeout_s=30),
+            self.session.expect(IRQ_RX_RE, timeout_s=30),
             "no frame delivered via the device IRQ",
         )
         # The received frame must be the ARP reply (ethertype 0x0806).
-        self.assertIn(
-            b"ethertype=0x0806",
-            self.session.buf,
+        match = IRQ_RX_RE.search(self.session.buf)
+        assert match is not None
+        self.assertEqual(
+            match.group(1),
+            b"0x0806",
             "IRQ-delivered frame was not the expected ARP reply",
         )
 

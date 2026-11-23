@@ -745,6 +745,10 @@ linked feature documents for rationale and rollout plans.
   `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
   parallel because they share `<build-dir>/esp`.
+- WARP ring 3: a host call whose guest pointer lies past the module's live
+  linear memory grows it through `warp_mem`, which then re-publishes the
+  ring-3 view, so the guest reads the bytes the call wrote instead of faulting
+  on a committed but unmapped page (`tests/test_linmem_host_write.py`).
 - Multi-threaded ring-3 processes: a trap from user mode lands on the
   dispatched thread's own kernel stack (`kstack_top`; the process stack for a
   main thread), so a thread blocked in a syscall keeps its frame while a sibling

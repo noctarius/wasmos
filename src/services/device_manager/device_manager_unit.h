@@ -49,10 +49,12 @@ int dm_acpi_spawn_args(const pci_device_record_t* rec, char* out, uint32_t out_c
 
 /* Sets caps' interrupt grant for a PCI device record, and nothing unless
  * caps->cap_flags already holds DEVMGR_CAP_IRQ: the record's interrupt hint
- * when it has one; lines 14 and 15 for an IDE controller whose channels run in
- * compatibility mode, which raises the legacy ISA lines whatever its interrupt
- * line register says (PCI IDE Controller Specification 1.0, 2.1); and none
- * otherwise. */
+ * when it has one, and for an IDE controller the fixed ISA line of each channel
+ * running in compatibility mode -- 14 for the primary, 15 for the secondary --
+ * which that channel raises whatever the interrupt line register says (PCI IDE
+ * Controller Specification 1.0, 2.1). Each channel's mode is its own, so a
+ * mixed-mode controller is granted its hint and one fixed line. No line is
+ * granted twice. */
 void dm_pci_irqs(const pci_device_record_t* rec, spawn_caps_t* caps);
 
 /* Bytes a watched-spawn request may take: the descriptor, the longest path and

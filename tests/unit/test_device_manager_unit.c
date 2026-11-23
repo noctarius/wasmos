@@ -460,6 +460,28 @@ static void test_compatibility_mode_ide_is_granted_lines_14_and_15(void) {
     assert(caps.irq_count == 2u && caps.irqs[0] == 14u && caps.irqs[1] == 15u);
 }
 
+/* Regression: 2026-11-23-ide-mixed-mode -- compatibility mode was treated as
+ * all-or-nothing for the controller, so an IDE controller with one channel in
+ * native mode and the other in compatibility mode, and no interrupt hint, was
+ * granted no interrupt: the compatibility channel's fixed line was lost and its
+ * driver could never take an interrupt. Each channel's mode is its own prog_if
+ * bit (0 primary, 2 secondary). Raised on PR #71. */
+static void test_each_compatibility_channel_is_granted_its_own_line(void) {
+    pci_device_record_t primary_native = pci_record(0x01u, 0x01u, 0x81u, DM_IRQ_HINT_NONE);
+    pci_device_record_t secondary_native = pci_record(0x01u, 0x01u, 0x84u, DM_IRQ_HINT_NONE);
+    spawn_caps_t caps;
+    memset(&caps, 0, sizeof(caps));
+    caps.cap_flags = DEVMGR_CAP_IRQ;
+    dm_pci_irqs(&primary_native, &caps);
+    assert(caps.irq_count == 1u && caps.irqs[0] == 15u);
+    dm_pci_irqs(&secondary_native, &caps);
+    assert(caps.irq_count == 1u && caps.irqs[0] == 14u);
+    /* The hint is the native channel's interrupt; the other still needs its line. */
+    primary_native.irq_hint = 11u;
+    dm_pci_irqs(&primary_native, &caps);
+    assert(caps.irq_count == 2u && caps.irqs[0] == 11u && caps.irqs[1] == 15u);
+}
+
 /* A hint is the device's interrupt; native-mode IDE is an ordinary PCI device. */
 static void test_a_hint_is_the_grant(void) {
     pci_device_record_t native_ide = pci_record(0x01u, 0x01u, 0x8Fu, 11u);
@@ -494,6 +516,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_without_a_firmware_console_no_console_arg_is_given),
         WASMOS_TEST_CASE(test_a_pci_device_without_a_hint_is_granted_no_interrupt),
         WASMOS_TEST_CASE(test_compatibility_mode_ide_is_granted_lines_14_and_15),
+        WASMOS_TEST_CASE(test_each_compatibility_channel_is_granted_its_own_line),
         WASMOS_TEST_CASE(test_a_hint_is_the_grant),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));

@@ -178,6 +178,8 @@ TESTS = [
     (RUN, 'test_block_buffer', []),
     (CC, 'test_hostcall_value', [*C11, '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_hostcall_value.c'), R('src/kernel/hostcall_value.c')]),
     (RUN, 'test_hostcall_value', []),
+    (CC, 'test_phys_alias', [*C11, '-iquote', R('src/kernel/include'), R('tests/unit/test_phys_alias.c'), R('src/kernel/phys_alias.c')]),
+    (RUN, 'test_phys_alias', []),
     (CC, 'test_kenv', [*C11, '-pthread', '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_kenv.c'), R('src/kernel/kenv.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_kenv', []),
     (CC, 'test_kmsg', [*C11, '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_kmsg.c'), R('src/kernel/kmsg.c')]),

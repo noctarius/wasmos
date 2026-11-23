@@ -175,16 +175,19 @@ void dm_pci_irqs(const pci_device_record_t* rec, spawn_caps_t* caps) {
         return;
     }
     if (rec->irq_hint != DM_IRQ_HINT_NONE) {
-        caps->irqs[0] = rec->irq_hint;
-        caps->irq_count = 1;
+        caps->irqs[caps->irq_count++] = rec->irq_hint;
+    }
+    if (rec->class_code != 0x01u || rec->subclass != 0x01u) {
         return;
     }
-    /* prog_if bits 0 and 2 select native mode for the primary and secondary
-     * channel; clear, the channel is at its ISA ports and line. */
-    if (rec->class_code == 0x01u && rec->subclass == 0x01u && (rec->prog_if & 0x05u) == 0u) {
-        caps->irqs[0] = 14u;
-        caps->irqs[1] = 15u;
-        caps->irq_count = 2;
+    /* prog_if bit 0 selects native mode for the primary channel and bit 2 for
+     * the secondary, each on its own; a channel left in compatibility mode is
+     * at its ISA ports and line (14 primary, 15 secondary). */
+    if ((rec->prog_if & 0x01u) == 0u && rec->irq_hint != 14u) {
+        caps->irqs[caps->irq_count++] = 14u;
+    }
+    if ((rec->prog_if & 0x04u) == 0u && rec->irq_hint != 15u) {
+        caps->irqs[caps->irq_count++] = 15u;
     }
 }
 

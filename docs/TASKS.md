@@ -54,6 +54,18 @@ Source: `architecture/06-memory-management.md`,
 `architecture/11-ring3-isolation-and-separation.md`, and
 `architecture/28-smp.md`.
 
+- [ ] [BUG][P1] WARP's `wasmos_phys_map` (`warp_phys_map`,
+  `src/kernel/warp/link.cpp`) never checks the `mmio.map` capability, and
+  nothing gates the import at link or dispatch time
+  (`wasmos_ring3_dispatch.inc` calls it directly). Any WARP guest that imports
+  `wasmos.phys_map` can therefore copy arbitrary physical memory -- kernel
+  frames, other processes' pages -- into its linear memory. The wasm3 binding
+  (`require_mmio_capability`) and WARP's own `mmio_write32`
+  (`warp_require_mmio_capability`) both refuse a caller without it with
+  `WASMOS_ERR_KERNEL_NOT_AUTHORIZED`; `warp_phys_map` must too, and its source
+  range check must match wasm3's (`phys_alias_range_mapped`, or a WARP
+  equivalent for its scratch-page remap, which also copies whole frames for an
+  unaligned `phys`). Found while fixing the PR #71 review.
 - [ ] [BUG][P1] Authenticate device-inventory publishers. `devmgr.inv` is a
   discoverable service endpoint, and device-manager adds every
   `DEVMGR_PUBLISH_DEVICE_DESC`, `DEVMGR_PUBLISH_ACPI_DEVICE_DESC`,

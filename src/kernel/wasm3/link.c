@@ -12,6 +12,7 @@
 #include "process_manager.h"
 #include "memory.h"
 #include "paging.h"
+#include "phys_alias.h"
 #include "serial.h"
 #include "timer.h"
 #include "link.h"
@@ -2376,13 +2377,12 @@ m3ApiRawFunction(wasmos_phys_map) {
 
     /* The alias is phys | KERNEL_HIGHER_HALF_BASE, which names the physical page only
      * inside the window; a page the window does not map would fault the memcpy below. */
-    if (phys + size32 > KERNEL_HIGHER_HALF_WINDOW_BYTES) {
+    if (!phys_alias_range_mapped(phys,
+                                 size32,
+                                 KERNEL_HIGHER_HALF_BASE,
+                                 KERNEL_HIGHER_HALF_WINDOW_BYTES,
+                                 paging_virt_to_phys)) {
         m3ApiReturn(WASMOS_ERR_KERNEL_PHYS_UNMAPPED);
-    }
-    for (uint64_t page = phys & ~0xFFFULL; page < phys + size32; page += 0x1000ULL) {
-        if (paging_virt_to_phys(page | KERNEL_HIGHER_HALF_BASE) == 0) {
-            m3ApiReturn(WASMOS_ERR_KERNEL_PHYS_UNMAPPED);
-        }
     }
 
     /* Copy, not remap.  The source is read through the kernel higher-half alias

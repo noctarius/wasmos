@@ -387,6 +387,9 @@ static uint32_t scan_devices(const uint8_t* aml, uint32_t aml_len, const acpi_co
         if (desc.window_count == 0) {
             continue;
         }
+        if (console->present) {
+            desc.flags |= WASMOS_ACPI_DEVICE_CONSOLE_KNOWN;
+        }
         for (uint32_t w = 0; console->present && w < desc.window_count; w++) {
             uint32_t want = console->space == 0 ? WASMOS_REGION_GRANT_MMIO : WASMOS_REGION_GRANT_IO;
             if (desc.windows[w].kind == want && desc.windows[w].base == console->address) {

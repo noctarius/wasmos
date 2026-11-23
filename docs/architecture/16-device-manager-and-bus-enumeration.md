@@ -299,8 +299,11 @@ Device-manager records an ACPI device with `bus = 0xFF`, its windows in
 `bars[]` and its first I/O window's base in `io_port_base` (what `ATTR{io}`
 matches). An ACPI-matched driver is granted those windows as region grants in
 the same order (an MMIO window rounded out to whole pages) and the interrupt,
-and is spawned with `hid=`, `io=` or `mmio=`, `irq=` and, for the console,
-`console=1`.
+and is spawned with `hid=`, `io=` or `mmio=` and `irq=`. When the firmware
+names a console (an SPCR exists, `WASMOS_ACPI_DEVICE_CONSOLE_KNOWN`), every
+ACPI device is also told whether it is that console (`console=1` or
+`console=0`); without an SPCR no `console=` is passed and a driver keeps its
+own default (COM1 for the 16550 backend).
 
 ### IPC Opcode Summary
 

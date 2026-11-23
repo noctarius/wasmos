@@ -1,13 +1,16 @@
 /* pl011.ts - the Arm PL011 UART backend (aarch64), reached through a memory
  * window. The driver around it is serial_core.ts; this file is the chip.
  *
- * Registers are 32-bit, at byte offsets in the window (Arm PL011 TRM, DDI 0183,
- * 3.2). It has no default device: the device manager names its window and
- * interrupt in the spawn args. */
+ * Registers are 32-bit, at byte offsets from the window's base (Arm PL011 TRM,
+ * DDI 0183, 3.2), and every access goes through reg(): the window is granted
+ * in whole pages, so a base that is not page-aligned sits inside region 0. It
+ * has no default device: the device manager names its window and interrupt in
+ * the spawn args. */
 
 import {io} from "./wasmos";
 import {io_region_out32} from "./wasmos_imports";
 import {REGION, runSerial, Uart} from "./serial_core";
+import {windowRegister} from "./uart_window";
 
 const DR: i32 = 0x00; /* data: bits 7:0 the byte */
 const FR: i32 = 0x18; /* flags */
@@ -25,6 +28,11 @@ const INT_RX: i32 = (1 << 4) | (1 << 6);
 const INT_ALL: i32 = 0x7ff;
 
 class Pl011 extends Uart {
+    /* Offset in region 0 of the register at `offset` from the window's base. */
+    reg(offset: i32): i32 {
+        return windowRegister(this.base, offset);
+    }
+
     windowLabel(): string {
         return "pl011 mmio";
     }
@@ -38,41 +46,41 @@ class Pl011 extends Uart {
      * kernel already writes through it. The line control may only change with
      * the UART disabled (PL011 TRM 3.3.8), so CR is cleared around it. */
     init(): void {
-        io_region_out32(REGION, IMSC, 0);
-        io_region_out32(REGION, CR, 0);
-        io_region_out32(REGION, LCR_H, LCR_H_8N1_FIFO);
-        io_region_out32(REGION, ICR, INT_ALL);
-        io_region_out32(REGION, CR, CR_ENABLE);
-        io_region_out32(REGION, IMSC, INT_RX);
+        io_region_out32(REGION, this.reg(IMSC), 0);
+        io_region_out32(REGION, this.reg(CR), 0);
+        io_region_out32(REGION, this.reg(LCR_H), LCR_H_8N1_FIFO);
+        io_region_out32(REGION, this.reg(ICR), INT_ALL);
+        io_region_out32(REGION, this.reg(CR), CR_ENABLE);
+        io_region_out32(REGION, this.reg(IMSC), INT_RX);
     }
 
     disableInterrupts(): void {
-        io_region_out32(REGION, IMSC, 0);
+        io_region_out32(REGION, this.reg(IMSC), 0);
     }
 
     txReady(): bool {
-        const flags = io.regionIn32(REGION, FR);
+        const flags = io.regionIn32(REGION, this.reg(FR));
         return flags >= 0 && (flags & FR_TXFF) == 0;
     }
 
     rxReady(): bool {
-        const flags = io.regionIn32(REGION, FR);
+        const flags = io.regionIn32(REGION, this.reg(FR));
         return flags >= 0 && (flags & FR_RXFE) == 0;
     }
 
     write(value: i32): void {
-        io_region_out32(REGION, DR, value);
+        io_region_out32(REGION, this.reg(DR), value);
     }
 
     read(): i32 {
-        const data = io.regionIn32(REGION, DR);
+        const data = io.regionIn32(REGION, this.reg(DR));
         return data < 0 ? -1 : <i32>(data & 0xff);
     }
 
     /* The receive-timeout interrupt stays raised until cleared, even with the
      * FIFO drained. */
     clearRxInterrupt(): void {
-        io_region_out32(REGION, ICR, INT_RX);
+        io_region_out32(REGION, this.reg(ICR), INT_RX);
     }
 }
 

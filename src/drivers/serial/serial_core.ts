@@ -12,9 +12,10 @@
  * One instance serves one UART: its registers are its first granted window
  * (region 0, which the backend addresses through io_region_*), and the device
  * manager's spawn args name the rest -- `io=` or `mmio=` (the window's base),
- * `irq=` and `console=1`, all but the last hex. Only the console instance --
- * the one spawned with `console=1`, or the backend's default console when
- * nothing names one -- registers as "sin", the name the vt looks up, and
+ * `irq=` and `console=1` or `console=0`, all but the last hex. Only the
+ * console instance -- the one spawned with `console=1`, or the backend's
+ * default console when the firmware names none (no `console=` at all) --
+ * registers as "sin", the name the vt looks up, and
  * installs the kernel console hook; any other registers a name derived from its
  * base ("s2f8"), so a second UART is served without taking the console's place.
  *
@@ -101,7 +102,9 @@ export abstract class Uart {
 }
 
 let g_uart: Uart = changetype<Uart>(0);
-let g_consoleArg: bool = false;
+/* The `console=` spawn arg: 1 or 0 when the firmware named a console (this
+ * UART or another), -1 when it named none and the backend's default decides. */
+let g_consoleArg: i32 = -1;
 
 const SERIAL_DRIVER_WRITE_REQ: i32 = 0x500;
 const SERIAL_DRIVER_READ_REQ: i32 = 0x501;
@@ -186,7 +189,7 @@ function rxbufPeek(offset: i32): i32 {
 
 /**
  * Take the UART to serve from the spawn args, as the device manager writes
- * them: `io=` or `mmio=`, `irq=` (hex) and `console=1`. A missing or
+ * them: `io=` or `mmio=`, `irq=` (hex) and `console=1` or `console=0`. A missing or
  * unparseable value keeps the backend's default device.
  */
 function readDeviceArgs(): void {
@@ -209,13 +212,15 @@ function readDeviceArgs(): void {
                 g_uart.irq = v;
             }
         } else if (arg == "console=1") {
-            g_consoleArg = true;
+            g_consoleArg = 1;
+        } else if (arg == "console=0") {
+            g_consoleArg = 0;
         }
     }
 }
 
 function isConsole(): bool {
-    return g_consoleArg || g_uart.defaultConsole();
+    return g_consoleArg >= 0 ? g_consoleArg == 1 : g_uart.defaultConsole();
 }
 
 /* Bounded hardware wait: there is nothing to park on, and the bound stops a

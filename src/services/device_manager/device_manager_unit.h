@@ -36,6 +36,17 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
  * pages, and its interrupt with DEVMGR_CAP_IRQ when the record names one. */
 void dm_acpi_caps(const pci_device_record_t* rec, spawn_caps_t* caps);
 
+/* Writes the startup args of an ACPI-matched driver into out: `hid=` (which
+ * device model it is), the base of its first register window as `io=` or
+ * `mmio=`, `irq=` when it has an interrupt, all hex, and -- when the firmware
+ * names a console at all -- `console=1` for that device and `console=0` for
+ * every other, so no driver falls back to its own default beside the
+ * firmware's choice. A driver that can serve more than one model
+ * or instance of its device (a 16550 or a PL011, a second UART) learns from
+ * these which one it was spawned for; the windows themselves reach it as its
+ * region grants. Returns the length written, or -1 when out_cap is too small. */
+int dm_acpi_spawn_args(const pci_device_record_t* rec, char* out, uint32_t out_cap);
+
 /* Bytes a watched-spawn request may take: the descriptor, the longest path and
  * argument string, and the largest capability descriptor. */
 #define DM_WATCH_SPAWN_MAX                                                                         \

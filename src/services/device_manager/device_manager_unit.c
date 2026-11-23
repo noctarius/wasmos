@@ -111,6 +111,34 @@ int32_t dm_caps_v2_encode(const spawn_caps_t* caps, uint8_t* out, uint32_t out_c
  * that does not start and end on a page boundary would expose whatever shares
  * its first or last page; it is refused instead. Returns 0, or -1 when the BAR
  * is absent, unsized, or cannot be expressed as a grant. */
+int dm_acpi_spawn_args(const pci_device_record_t* rec, char* out, uint32_t out_cap) {
+    int n = 0;
+    if (!rec || !out || out_cap == 0u) {
+        return -1;
+    }
+    n = snprintf(out, out_cap, "hid=%s", rec->hid);
+    if (n > 0 && (uint32_t)n < out_cap && rec->bars[0].kind != WASMOS_PCI_BAR_NONE) {
+        n += snprintf(out + n,
+                      out_cap - (uint32_t)n,
+                      rec->bars[0].kind == WASMOS_PCI_BAR_IO ? " io=%llX" : " mmio=%llX",
+                      (unsigned long long)rec->bars[0].base);
+    }
+    if (n > 0 && (uint32_t)n < out_cap && rec->irq_hint != DM_IRQ_HINT_NONE) {
+        n += snprintf(out + n, out_cap - (uint32_t)n, " irq=%X", (unsigned)rec->irq_hint);
+    }
+    if (n > 0 && (uint32_t)n < out_cap &&
+        (rec->acpi_flags & WASMOS_ACPI_DEVICE_CONSOLE_KNOWN) != 0u) {
+        n += snprintf(out + n,
+                      out_cap - (uint32_t)n,
+                      (rec->acpi_flags & WASMOS_ACPI_DEVICE_CONSOLE) != 0u ? " console=1"
+                                                                           : " console=0");
+    }
+    if (n <= 0 || (uint32_t)n >= out_cap) {
+        return -1;
+    }
+    return n;
+}
+
 void dm_acpi_caps(const pci_device_record_t* rec, spawn_caps_t* caps) {
     for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT && caps->region_count < WASMOS_REGION_LIMIT;
          ++i) {

@@ -1162,6 +1162,10 @@ typedef struct __attribute__((packed)) {
 /* flags: the firmware names this device as the console (the ACPI SPCR
  * table's base address is one of its register windows). */
 #define WASMOS_ACPI_DEVICE_CONSOLE 0x1u
+/* flags: the firmware names a console at all (an SPCR table exists), so a
+ * device without WASMOS_ACPI_DEVICE_CONSOLE is known NOT to be it. Without this
+ * bit the firmware said nothing and a driver keeps its own default. */
+#define WASMOS_ACPI_DEVICE_CONSOLE_KNOWN 0x2u
 
 typedef struct __attribute__((packed)) {
     uint32_t version; /* = WASMOS_ACPI_DEVICE_DESC_VERSION */

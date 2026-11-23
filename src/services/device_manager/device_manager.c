@@ -1070,36 +1070,6 @@ static int build_pci_spawn_args(const pci_device_record_t* rec, char* out, uint3
     return n;
 }
 
-/* The startup args of an ACPI-matched driver: `hid=` (which device model it
- * is), the base of its first register window as `io=` or `mmio=`, `irq=` when
- * it has an interrupt, all hex, and `console=1` when the firmware names it the
- * console. A driver that can serve more than one model or instance of its
- * device (a 16550 or a PL011, a second UART) learns from these which one it was
- * spawned for; the windows themselves reach it as its region grants. */
-static int build_acpi_spawn_args(const pci_device_record_t* rec, char* out, uint32_t out_cap) {
-    int n = 0;
-    if (!rec || !out || out_cap == 0u) {
-        return -1;
-    }
-    n = snprintf(out, out_cap, "hid=%s", rec->hid);
-    if (n > 0 && (uint32_t)n < out_cap && rec->bars[0].kind != WASMOS_PCI_BAR_NONE) {
-        n += snprintf(out + n,
-                      out_cap - (uint32_t)n,
-                      rec->bars[0].kind == WASMOS_PCI_BAR_IO ? " io=%llX" : " mmio=%llX",
-                      (unsigned long long)rec->bars[0].base);
-    }
-    if (n > 0 && (uint32_t)n < out_cap && rec->irq_hint != DM_IRQ_HINT_NONE) {
-        n += snprintf(out + n, out_cap - (uint32_t)n, " irq=%X", (unsigned)rec->irq_hint);
-    }
-    if (n > 0 && (uint32_t)n < out_cap && rec->acpi_console) {
-        n += snprintf(out + n, out_cap - (uint32_t)n, " console=1");
-    }
-    if (n <= 0 || (uint32_t)n >= out_cap) {
-        return -1;
-    }
-    return n;
-}
-
 /* Resolve a rule's RUN+= target to a boot-module index, without spawning
  * anything.  Tries the path as an initfs module, then the basename with the
  * extension stripped, then that basename with underscores turned into dashes
@@ -1316,7 +1286,7 @@ static void registry_add_from_acpi_desc(int32_t buffer_id, int32_t offset, int32
     rec->subclass = desc.subclass;
     rec->prog_if = desc.prog_if;
     rec->irq_hint = desc.irq == WASMOS_ACPI_NO_IRQ ? DM_IRQ_HINT_NONE : desc.irq;
-    rec->acpi_console = (desc.flags & WASMOS_ACPI_DEVICE_CONSOLE) ? 1u : 0u;
+    rec->acpi_flags = desc.flags;
     (void)str_copy_bytes(rec->hid,
                          sizeof(rec->hid),
                          (const uint8_t*)desc.hid,
@@ -3783,7 +3753,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                     } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
                                g_dm.active_rule_spawn_device_index >= 0 &&
                                g_dm.active_rule_spawn_device_index < (int32_t)g_dm.registry_count &&
-                               build_acpi_spawn_args(
+                               dm_acpi_spawn_args(
                                    &g_dm.registry[g_dm.active_rule_spawn_device_index],
                                    spawn_args,
                                    sizeof(spawn_args)) > 0) {

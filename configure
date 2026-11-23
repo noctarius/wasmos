@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Configure a WASMOS build directory for Ninja.
 
-    ./configure out/wasm3-smp configs/wasm3_smp_defconfig
+    ./configure out/wasm3-smp configs/x86_64_wasm3_smp_defconfig
     ninja -C out/wasm3-smp kernel bootloader
 
 The build directory defaults to out/default, so `./configure
-configs/warp_smp_defconfig` configures that. It owns its .config: seeded once
+configs/x86_64_warp_smp_defconfig` configures that. It owns its .config: seeded once
 from the given defconfig (default configs/wasmos_defconfig) and never re-read
 from the source tree. Re-running configure on an existing directory keeps its
 .config unless --reseed is given. After the first configure, build.ninja

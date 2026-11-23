@@ -194,9 +194,9 @@ device is given up. A driver the boot depends on must be in the initfs.
 ## Step 6: Verify
 
 ```sh
-./configure out/wasm3-smp configs/wasm3_smp_defconfig && \
+./configure out/wasm3-smp configs/x86_64_wasm3_smp_defconfig && \
   ninja -C out/wasm3-smp run-qemu-test                  # wasm3
-./configure out/warp-smp configs/warp_smp_defconfig && \
+./configure out/warp-smp configs/x86_64_warp_smp_defconfig && \
   ninja -C out/warp-smp run-qemu-test                   # WARP
 ```
 

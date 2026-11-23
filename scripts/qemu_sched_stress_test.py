@@ -73,7 +73,7 @@ def main():
             "SKIP: this kernel has no SMP scheduler stress test compiled in, so "
             "the gate cannot run.\n"
             "It is OFF by default. Configure a tree that enables it:\n"
-            "  ./configure out/sched-stress configs/warp_smp_defconfig "
+            "  ./configure out/sched-stress configs/x86_64_warp_smp_defconfig "
             "--set WASMOS_SCHED_SMP_STRESS=y\n"
             "  ninja -C out/sched-stress run-qemu-sched-stress-test\n"
         )

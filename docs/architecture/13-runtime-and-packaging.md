@@ -12,7 +12,7 @@ kernel-facing entry point.
 
 Two WASM runtime backends are available, selected by the Kconfig choice in a
 build directory's `.config` (seeded from a defconfig, e.g.
-`configs/warp_smp_defconfig`):
+`configs/x86_64_warp_smp_defconfig`):
 
 | Backend             | Kconfig symbol                    | Character                                           |
 |---------------------|-----------------------------------|-----------------------------------------------------|

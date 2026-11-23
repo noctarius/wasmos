@@ -373,6 +373,9 @@ typedef struct {
     uint8_t subclass;              /* 0xFF = match any */
     uint16_t io_base;              /* ATTR{io}: the device's I/O base; 0 = match any */
     char hid[WASMOS_ACPI_HID_MAX]; /* ATTR{hid}: the device's ACPI _HID; "" = match any */
+    /* ATTR{console}: 1 = the device the firmware names as console, 0 = any
+     * other, MATCH_ANY_U8 = either. */
+    uint8_t console;
     uint64_t spawned_device_mask;  /* registry entry index bits already spawned */
     uint64_t given_up_device_mask; /* as on pci_match_rule_t */
     char spawn_path[96];

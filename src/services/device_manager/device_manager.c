@@ -1421,7 +1421,7 @@ static void queue_acpi_match_rule_spawns(void) {
                 (((rule->spawned_device_mask | rule->given_up_device_mask) >> di) & 1u) != 0u) {
                 continue;
             }
-            if (!dm_acpi_rule_matches(rule, rec)) {
+            if (!dm_acpi_rule_matches(rule, rec) || dm_acpi_device_driven(&g_dm, di)) {
                 continue;
             }
             /* From zero: the previous rule's ranges and PCI function are not

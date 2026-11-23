@@ -959,6 +959,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     uint8_t class_code = MATCH_ANY_U8;
     uint8_t subclass = MATCH_ANY_U8;
     uint16_t io_base = 0;
+    uint8_t console = MATCH_ANY_U8;
     char hid[WASMOS_ACPI_HID_MAX];
     if (!line || !out_rule) {
         return -1;
@@ -1011,6 +1012,15 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
             str_copy(hid, sizeof(hid), tmp);
             continue;
         }
+        /* "1" is the device the firmware names as console, "0" any other. */
+        if (strncmp(tok, "ATTR{console}", 13) == 0) {
+            if (extract_op_value(tok, "ATTR{console}", "==", tmp, sizeof(tmp)) != 0 ||
+                (strcmp(tmp, "0") != 0 && strcmp(tmp, "1") != 0)) {
+                return -1;
+            }
+            console = tmp[0] == '1' ? 1u : 0u;
+            continue;
+        }
         if (strncmp(tok, "ENV{RESTART}", 12) == 0) {
             if (parse_restart(tok, restart, sizeof(restart)) != 0) {
                 return -1;
@@ -1026,6 +1036,7 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     out_rule->subclass = subclass;
     out_rule->io_base = io_base;
     str_copy(out_rule->hid, sizeof(out_rule->hid), hid);
+    out_rule->console = console;
     out_rule->spawned_device_mask = 0;
     out_rule->given_up_device_mask = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
@@ -1041,6 +1052,7 @@ void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text) {
     for (uint32_t i = 0; i < ACPI_MATCH_RULE_CAP; ++i) {
         state->acpi_match_rules[i].active = 0;
         state->acpi_match_rules[i].subclass = MATCH_ANY_U8;
+        state->acpi_match_rules[i].console = MATCH_ANY_U8;
         state->acpi_match_rules[i].io_base = 0;
         state->acpi_match_rules[i].spawned_device_mask = 0;
         state->acpi_match_rules[i].given_up_device_mask = 0;
@@ -1082,7 +1094,23 @@ int dm_acpi_rule_matches(const acpi_match_rule_t* rule, const pci_device_record_
     if (rule->hid[0] != '\0' && strcmp(rec->hid, rule->hid) != 0) {
         return 0;
     }
+    if (rule->console != MATCH_ANY_U8 &&
+        ((rec->acpi_flags & WASMOS_ACPI_DEVICE_CONSOLE) != 0u ? 1u : 0u) != rule->console) {
+        return 0;
+    }
     return 1;
+}
+
+int dm_acpi_device_driven(const device_manager_state_t* state, uint32_t device_index) {
+    if (!state || device_index >= 64u) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < state->acpi_match_rule_count; ++i) {
+        if (((state->acpi_match_rules[i].spawned_device_mask >> device_index) & 1u) != 0u) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 uint32_t dm_rules_text_usable(char* text, int32_t read_len, uint32_t cap, int* truncated) {

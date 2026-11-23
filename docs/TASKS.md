@@ -1764,10 +1764,10 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
 - [ ] [BUG][P1] Correct 12-hour RTC decoding. The noon and midnight hours are off by 12 in
   both the BCD and binary branches; unreached while register B reports 24-hour
   mode (`src/drivers/rtc/rtc.ts:218` `FIXME`).
-- [ ] [BUG][P1] Add the producer-lapped snap-forward to the PCI framebuffer's console-ring
-  drain. The UEFI driver performs `rp = wp - cap`; this copy does not, so an
-  overrun leaves it reading overwritten bytes
-  (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:237` `FIXME`).
+- [x] [BUG][P1] Add the producer-lapped snap-forward to the PCI framebuffer's console-ring
+  drain. Obsolete: neither framebuffer driver drains the console ring any more
+  (everything they paint arrives as FBTEXT IPC from the vt), and both now run
+  the one shared server, `src/drivers/framebuffer/fbtext_server.c`.
 
 ## Networking
 
@@ -2192,10 +2192,10 @@ Other graphics/VT/UI:
 - [ ] [ENHANCEMENT][P2] Make `libui`, font-service, and compositor allocation/index arithmetic
   overflow-safe: validate dimensions before multiplication, compute buffer
   indexes in `usize`, and cap growth before capacity doubling.
-- [ ] [FEATURE][P2] Add an explicit mode-set / update-framebuffer-info path before the VBE
-  reprogram after ExitBootServices
-  (`src/drivers/framebuffer/framebuffer_native.c:159`,
-  `src/drivers/framebuffer_pci/framebuffer_pci_native.c:275`).
+- [ ] [FEATURE][P2] Add an explicit mode-set / update-framebuffer-info path for runtime
+  mode changes: after one, the kernel's framebuffer info still reports the boot
+  geometry, so a consumer that reads it rather than asking the driver sees the
+  old mode (`src/drivers/framebuffer/fbtext_server.c`, `set_resolution` `TODO`).
 - [ ] [ENHANCEMENT][P2] Make VT cell/reply/replay writes robust under framebuffer backpressure;
   they are best-effort today and drop on persistent queue-full
   (`src/services/vt/vt_main.c:244,287,892`).

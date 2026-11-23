@@ -23,7 +23,7 @@ def build(b):
         str(b.root / "src/libc/include/wasmos_cast.h"),
     ]
     objs = b.toolchain("native").compile(
-        [b.src("framebuffer_native.c"), b.src("render.c")],
+        [b.src("framebuffer_native.c"), b.src("fbtext_server.c"), b.src("render.c")],
         flags=flags,
         subdir="obj/framebuffer",
     )

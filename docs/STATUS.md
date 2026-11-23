@@ -745,10 +745,11 @@ linked feature documents for rationale and rollout plans.
   `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
   parallel because they share `<build-dir>/esp`.
-- `phys_map` under wasm3 reads only physical pages the kernel's alias maps
-  (inside `KERNEL_HIGHER_HALF_WINDOW_BYTES`); anything else is refused with
-  `kernel.PHYS_UNMAPPED` instead of faulting the kernel. WARP reads through a
-  remapped scratch page and reaches any physical address.
+- `phys_map` requires `mmio.map` on both runtimes (`kernel.NOT_AUTHORIZED`
+  otherwise) and reads only physical pages the kernel's alias maps (inside
+  `KERNEL_HIGHER_HALF_WINDOW_BYTES`); anything else is refused with
+  `kernel.PHYS_UNMAPPED` instead of faulting the kernel. Both runtimes read
+  through the alias (`tests/test_phys_map.py`).
 - A PCI driver is granted the device's interrupt hint, ISA lines 14 and 15
   only for an IDE controller in compatibility mode (`dm_pci_irqs`), and no
   interrupt otherwise; arm64 virtio drivers are granted none.

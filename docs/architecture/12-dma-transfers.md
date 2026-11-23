@@ -519,8 +519,9 @@ hostcall:
 - `pfa_pin_pages(base, pages)` (`src/kernel/memory.c`) — pins the run so it is
   never reused or relocated.
 - `wasmos_phys_map(phys, size, wasm_offset)` (`src/kernel/wasm3/link.c`,
-  `src/kernel/warp/link.cpp`) — maps the region into the driver's linear memory
-  so it can read/write descriptors.
+  `src/kernel/warp/link.cpp`) — copies the region into the driver's linear
+  memory through the kernel's higher-half alias; gated by `mmio.map`, and
+  refuses a source the alias does not map.
 
 The surface is a thin allocator that composes these under the `CAP_DMA_BUFFER`
 gate plus the driver's approved DMA window, returning both a linmem pointer and

@@ -1492,6 +1492,78 @@ d_m3Store_i (i64, i16)
 d_m3Store_i (i64, i32)
 d_m3Store_i (i64, i64)
 
+// WASMOS: threads-proposal atomic loads and stores (0xFE prefix). Sequentially
+// consistent, as the wasm memory model defines every atomic access; a natively
+// aligned access is required, and a misaligned one traps before memory is
+// touched. Linear memory is mapped at a page-aligned base, so a wasm address
+// aligned to the access size is aligned on the host as well.
+#define d_m3AtomicCheck(TYPE)                                           \
+    if (M3_UNLIKELY(operand & (sizeof (TYPE) - 1)))                     \
+        newTrap (m3Err_trapUnalignedAtomic);                            \
+    if (!m3MemCheck(operand + sizeof (TYPE) <= _mem->length))           \
+        d_outOfBounds;
+
+#define d_m3AtomicLoad(DEST_TYPE, SRC_TYPE)                             \
+d_m3Op(DEST_TYPE##_AtomicLoad_##SRC_TYPE##_r)                           \
+{                                                                       \
+    u64 operand = (u32) _r0;                                            \
+    operand += immediate (u32);                                         \
+    d_m3AtomicCheck(SRC_TYPE)                                           \
+    _r0 = (DEST_TYPE) __atomic_load_n ((SRC_TYPE *) (m3MemData(_mem) + operand), __ATOMIC_SEQ_CST); \
+    nextOp ();                                                          \
+}                                                                       \
+d_m3Op(DEST_TYPE##_AtomicLoad_##SRC_TYPE##_s)                           \
+{                                                                       \
+    u64 operand = slot (u32);                                           \
+    operand += immediate (u32);                                         \
+    d_m3AtomicCheck(SRC_TYPE)                                           \
+    _r0 = (DEST_TYPE) __atomic_load_n ((SRC_TYPE *) (m3MemData(_mem) + operand), __ATOMIC_SEQ_CST); \
+    nextOp ();                                                          \
+}
+
+#define d_m3AtomicStore(SRC_TYPE, DEST_TYPE)                            \
+d_m3Op(SRC_TYPE##_AtomicStore_##DEST_TYPE##_rs)                         \
+{                                                                       \
+    u64 operand = slot (u32);                                           \
+    operand += immediate (u32);                                         \
+    d_m3AtomicCheck(DEST_TYPE)                                          \
+    __atomic_store_n ((DEST_TYPE *) (m3MemData(_mem) + operand), (DEST_TYPE) _r0, __ATOMIC_SEQ_CST); \
+    nextOp ();                                                          \
+}                                                                       \
+d_m3Op(SRC_TYPE##_AtomicStore_##DEST_TYPE##_sr)                         \
+{                                                                       \
+    const SRC_TYPE value = slot (SRC_TYPE);                             \
+    u64 operand = (u32) _r0;                                            \
+    operand += immediate (u32);                                         \
+    d_m3AtomicCheck(DEST_TYPE)                                          \
+    __atomic_store_n ((DEST_TYPE *) (m3MemData(_mem) + operand), (DEST_TYPE) value, __ATOMIC_SEQ_CST); \
+    nextOp ();                                                          \
+}                                                                       \
+d_m3Op(SRC_TYPE##_AtomicStore_##DEST_TYPE##_ss)                         \
+{                                                                       \
+    const SRC_TYPE value = slot (SRC_TYPE);                             \
+    u64 operand = slot (u32);                                           \
+    operand += immediate (u32);                                         \
+    d_m3AtomicCheck(DEST_TYPE)                                          \
+    __atomic_store_n ((DEST_TYPE *) (m3MemData(_mem) + operand), (DEST_TYPE) value, __ATOMIC_SEQ_CST); \
+    nextOp ();                                                          \
+}
+
+d_m3AtomicLoad (i32, u8)
+d_m3AtomicLoad (i32, u16)
+d_m3AtomicLoad (i32, u32)
+
+d_m3AtomicStore (i32, u8)
+d_m3AtomicStore (i32, u16)
+d_m3AtomicStore (i32, u32)
+
+// WASMOS: atomic.fence, a full sequentially consistent barrier.
+d_m3Op  (AtomicFence)
+{
+    __atomic_thread_fence (__ATOMIC_SEQ_CST);
+    nextOp ();
+}
+
 #undef m3MemCheck
 
 

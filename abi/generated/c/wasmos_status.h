@@ -256,6 +256,9 @@ enum {
     WASMOS_ERR_RTC_IO = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 2), /* reading the CMOS/RTC registers failed */
     WASMOS_ERR_RTC_TIMEOUT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 3), /* the RTC did not settle within the read window */
     WASMOS_ERR_RTC_DENIED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 4), /* caller lacks the capability for this operation */
+    WASMOS_ERR_RTC_OUT_OF_RANGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 5), /* the clock holds a time outside the years the rtc protocol carries (1970-2099) */
+    WASMOS_ERR_RTC_UNAVAILABLE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 6), /* the firmware clock is not available: no UEFI runtime services were handed over */
+    WASMOS_ERR_RTC_FIRMWARE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 7), /* the UEFI GetTime/SetTime call returned an error */
     WASMOS_ERR_XFER_BUFFER_NULL_ARG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 1), /* a required pointer argument was NULL */
     WASMOS_ERR_XFER_BUFFER_INVALID_KIND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 2), /* unknown or unsupported buffer kind */
     WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 3), /* a context id argument was zero */
@@ -607,6 +610,9 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_RTC_IO: return "rtc.IO";
     case WASMOS_ERR_RTC_TIMEOUT: return "rtc.TIMEOUT";
     case WASMOS_ERR_RTC_DENIED: return "rtc.DENIED";
+    case WASMOS_ERR_RTC_OUT_OF_RANGE: return "rtc.OUT_OF_RANGE";
+    case WASMOS_ERR_RTC_UNAVAILABLE: return "rtc.UNAVAILABLE";
+    case WASMOS_ERR_RTC_FIRMWARE: return "rtc.FIRMWARE";
     case WASMOS_ERR_XFER_BUFFER_NULL_ARG: return "xfer_buffer.NULL_ARG";
     case WASMOS_ERR_XFER_BUFFER_INVALID_KIND: return "xfer_buffer.INVALID_KIND";
     case WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: return "xfer_buffer.INVALID_CONTEXT";
@@ -891,6 +897,9 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_RTC_IO: return "reading the CMOS/RTC registers failed";
     case WASMOS_ERR_RTC_TIMEOUT: return "the RTC did not settle within the read window";
     case WASMOS_ERR_RTC_DENIED: return "caller lacks the capability for this operation";
+    case WASMOS_ERR_RTC_OUT_OF_RANGE: return "the clock holds a time outside the years the rtc protocol carries (1970-2099)";
+    case WASMOS_ERR_RTC_UNAVAILABLE: return "the firmware clock is not available: no UEFI runtime services were handed over";
+    case WASMOS_ERR_RTC_FIRMWARE: return "the UEFI GetTime/SetTime call returned an error";
     case WASMOS_ERR_XFER_BUFFER_NULL_ARG: return "a required pointer argument was NULL";
     case WASMOS_ERR_XFER_BUFFER_INVALID_KIND: return "unknown or unsupported buffer kind";
     case WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: return "a context id argument was zero";

@@ -10,7 +10,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config, requires_arch, guest_arch
+from qemu_test_framework import QemuSession, default_config, guest_arch
 
 
 class CliIntegrationTests(unittest.TestCase):
@@ -43,10 +43,6 @@ class CliIntegrationTests(unittest.TestCase):
     def test_help_lists_commands(self):
         self._cmd_expect("help", b"commands:")
 
-    @requires_arch(
-        "x86_64",
-        reason='no RTC on aarch64 yet: the CMOS rtc is x86_64 hardware and PL031 is in docs/TASKS.md "arm64 Port"',
-    )
     def test_date_reads_the_rtc(self):
         """End-to-end over the RTC driver: `date` looks the service up, sends
         RTC_IPC_READ_REQ and formats the reply. This is the only client of that
@@ -54,6 +50,35 @@ class CliIntegrationTests(unittest.TestCase):
         Asserted on the shape (a 4-digit year and a HH:MM:SS), since the value
         is whatever the host clock says."""
         self._cmd_expect("date", re.compile(rb"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"))
+
+    def test_date_set_reaches_the_clock(self):
+        """`date set` goes through RTC_IPC_SET_REQ to the clock and the read
+        after it comes back from the clock, not from the request: on x86_64 the
+        CMOS registers, on aarch64 the PL031's load register (or the firmware
+        clock, with WASMOS_RTC_EFI). The clock keeps running, so the seconds
+        are only bounded. The host time read first is set back afterwards."""
+        before = self.session.send_command("date", timeout_s=20)
+        stamp = re.compile(rb"(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})")
+        self.assertTrue(self.session.expect_from(before, stamp, timeout_s=20))
+        host = stamp.search(bytes(self.session.buf[before:]))
+        self._cmd_expect(
+            "date set 2031-05-17 08:09:10", re.compile(rb"2031-05-17 08:09:1\d")
+        )
+        self._cmd_expect("date", re.compile(rb"2031-05-17 08:09:[1-5]\d"))
+        restore = f"date set {host.group(1).decode()} {host.group(2).decode()}"
+        self._cmd_expect(restore, host.group(1))
+
+    def test_date_set_refuses_a_day_its_month_lacks(self):
+        """February 29th of a common year passes `date`'s own field checks
+        (days 1-31) and is refused by the driver, which checks the day against
+        its month: the clock keeps the time it had."""
+        self._cmd_expect("date set 2023-02-29 12:00:00", b"date: set failed")
+        start = self.session.send_command("date", timeout_s=20)
+        stamp = re.compile(rb"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+        self.assertTrue(self.session.expect_from(start, stamp, timeout_s=20))
+        self.assertNotIn(
+            b"2023-02-", stamp.search(bytes(self.session.buf[start:])).group(0)
+        )
 
     def test_kmaps_dumps_page_tables(self):
         """Regression: 2026-08-31-warp-kmaps-stub. The WARP backend implemented

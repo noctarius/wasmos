@@ -24,6 +24,24 @@ config WASMOS_ARCH_AARCH64
 
 endchoice
 
+choice
+    prompt "Real-time clock (aarch64)"
+    default WASMOS_RTC_PL031
+    depends on WASMOS_ARCH_AARCH64
+    help
+      Where the "rtc" service on aarch64 reads and sets the time. x86_64
+      always uses the CMOS clock. Both choices serve the same protocol, so
+      `date` and every other client work with either.
+
+config WASMOS_RTC_PL031
+    bool "PL031 driver (QEMU virt)"
+    help
+      The pl031 driver programs the Arm PL031 directly. QEMU virt's ACPI
+      tables do not describe it, so acpi-bus publishes it from a board
+      table keyed on the tables' OEM ID: it works on QEMU virt only.
+
+endchoice
+
 menu "Examples"
 
 config AS_ENABLE

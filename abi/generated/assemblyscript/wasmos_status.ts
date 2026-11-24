@@ -235,6 +235,9 @@ export const WASMOS_ERR_RTC_INVALID: i32 = -0x000D0001; // invalid request argum
 export const WASMOS_ERR_RTC_IO: i32 = -0x000D0002; // reading the CMOS/RTC registers failed
 export const WASMOS_ERR_RTC_TIMEOUT: i32 = -0x000D0003; // the RTC did not settle within the read window
 export const WASMOS_ERR_RTC_DENIED: i32 = -0x000D0004; // caller lacks the capability for this operation
+export const WASMOS_ERR_RTC_OUT_OF_RANGE: i32 = -0x000D0005; // the clock holds a time outside the years the rtc protocol carries (1970-2099)
+export const WASMOS_ERR_RTC_UNAVAILABLE: i32 = -0x000D0006; // the firmware clock is not available: no UEFI runtime services were handed over
+export const WASMOS_ERR_RTC_FIRMWARE: i32 = -0x000D0007; // the UEFI GetTime/SetTime call returned an error
 export const WASMOS_ERR_XFER_BUFFER_NULL_ARG: i32 = -0x000B0001; // a required pointer argument was NULL
 export const WASMOS_ERR_XFER_BUFFER_INVALID_KIND: i32 = -0x000B0002; // unknown or unsupported buffer kind
 export const WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: i32 = -0x000B0003; // a context id argument was zero
@@ -570,6 +573,9 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_RTC_IO: return "reading the CMOS/RTC registers failed";
     case WASMOS_ERR_RTC_TIMEOUT: return "the RTC did not settle within the read window";
     case WASMOS_ERR_RTC_DENIED: return "caller lacks the capability for this operation";
+    case WASMOS_ERR_RTC_OUT_OF_RANGE: return "the clock holds a time outside the years the rtc protocol carries (1970-2099)";
+    case WASMOS_ERR_RTC_UNAVAILABLE: return "the firmware clock is not available: no UEFI runtime services were handed over";
+    case WASMOS_ERR_RTC_FIRMWARE: return "the UEFI GetTime/SetTime call returned an error";
     case WASMOS_ERR_XFER_BUFFER_NULL_ARG: return "a required pointer argument was NULL";
     case WASMOS_ERR_XFER_BUFFER_INVALID_KIND: return "unknown or unsupported buffer kind";
     case WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: return "a context id argument was zero";

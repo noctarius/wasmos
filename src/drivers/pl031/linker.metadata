@@ -1,0 +1,21 @@
+version = 1
+aot = true
+
+[package]
+name = "pl031"
+entry = "initialize"
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[deps]
+provides = ["rtc"]
+
+# Its register window is device memory, granted only with mmio.map. The match
+# interrupt is not used, so the driver holds no irq.route.
+[[capabilities]]
+name = "mmio.map"
+flags = 0

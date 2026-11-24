@@ -490,6 +490,11 @@ def build(b):
             "test_as_uart",
             [drivers / "serial/uart.ts", shuffle, unit / "test_as_uart.ts"],
         )
+        steps += as_test(
+            b,
+            "test_as_rtc_time",
+            [drivers / "rtc/rtc_time.ts", shuffle, unit / "test_as_rtc_time.ts"],
+        )
 
     # The Go binding runs on wasm32: Go models every record as an opaque blob
     # sized for wasm32, so a host build would exercise a different ABI.

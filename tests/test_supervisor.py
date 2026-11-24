@@ -15,10 +15,14 @@ from qemu_test_framework import (
     GuestRestarted,
     QemuSession,
     default_config,
+    guest_arch,
     requires_arch,
 )
 
 PROBE = "/boot/apps/sv_probe.wap"
+# The supervised clock driver's unit: device-manager names it after the package
+# and the device's window (the CMOS ports on x86_64, the PL031's MMIO on aarch64).
+RTC_UNIT = {"x86_64": "rtc@acpi:0070", "aarch64": "pl031@acpi:9010000"}
 
 
 def _syslog_wait(session, needle: str, timeout_s: float) -> str:
@@ -489,15 +493,13 @@ class SupervisorTests(unittest.TestCase):
             "the start did not give the unit a fresh window of five ends",
         )
 
-    @requires_arch(
-        "x86_64",
-        reason='no RTC on aarch64 yet: the CMOS rtc is x86_64 hardware and PL031 is in docs/TASKS.md "arm64 Port"',
-    )
     def test_9_a_killed_driver_is_restarted_and_serves_again(self):
-        # device-manager hands rtc to the supervisor (default.rules,
+        # device-manager hands the clock driver to the supervisor (default.rules,
         # ENV{RESTART}="on-failure"), so a kill on request is a failure the
-        # supervisor restarts it from, and date reaches the new instance.
-        unit = "rtc@acpi:0070"
+        # supervisor restarts it from, and date reaches the new instance. The
+        # unit is the CMOS rtc on x86_64 and the PL031 on aarch64 (the default
+        # WASMOS_RTC_PL031; the firmware clock is a boot rule, not supervised).
+        unit = RTC_UNIT[guest_arch()]
         before = _list_rows(self, self.session)
         self.assertIn(unit, before, f"rtc is not a supervised unit: {sorted(before)}")
         self.assertIn(before[unit][0], ("running", "stable"))

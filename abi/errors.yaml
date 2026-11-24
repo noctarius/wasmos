@@ -321,6 +321,9 @@ domains:
       - { name: IO,      description: "reading the CMOS/RTC registers failed" }
       - { name: TIMEOUT, description: "the RTC did not settle within the read window" }
       - { name: DENIED,  description: "caller lacks the capability for this operation" }
+      - { name: OUT_OF_RANGE, description: "the clock holds a time outside the years the rtc protocol carries (1970-2099)" }
+      - { name: UNAVAILABLE,  description: "the firmware clock is not available: no UEFI runtime services were handed over" }
+      - { name: FIRMWARE,     description: "the UEFI GetTime/SetTime call returned an error" }
 
   xfer_buffer:
     id: 11

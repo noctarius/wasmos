@@ -109,6 +109,36 @@ static const acpi_id_entry_t acpi_id_table[] = {
  * mapped holds a kernel phys_map window for the life of this service. */
 #define ACPI_MAX_SDT_ENTRIES 64u
 
+/* ---- Board devices the tables omit -------------------------------------- */
+
+/* A device a known board has at a fixed address that its ACPI tables do not
+ * describe. One is published, like a namespace device, when every table's OEM
+ * ID is `oem_id` and the XSDT lists a table with signature `table` -- the pair
+ * that tells the board apart from others by the same vendor. `hid` is not an
+ * ACPI _HID: no _HID exists for the device, and the name is this table's, for
+ * device-manager rules to match. */
+typedef struct {
+    const char* oem_id; /* 6 bytes, space-padded as in the SDT header */
+    const char* table;  /* 4-byte signature that must also be present */
+    const char* hid;
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint64_t mmio;
+    uint32_t length;
+    uint32_t irq; /* GIC INTID */
+} acpi_board_device_t;
+
+static const acpi_board_device_t acpi_board_devices[] = {
+    /* QEMU virt (aarch64): the PL031 at VIRT_RTC, 0x09010000, SPI 2 (INTID 34),
+     * per the board's device tree (`arm,pl031`). Its DSDT lists no RTC, since
+     * an ACPI guest is expected to use the UEFI GetTime runtime service, which
+     * the firmware implements on this PL031. QEMU's x86 machines share the OEM
+     * ID; the GTDT (Arm Generic Timer table) is what only the Arm board has. */
+    {"BOCHS ", "GTDT", "PL031", 0x08, 0x03, 0x00, 0x09010000u, 0x1000u, 34u},
+};
+#define ACPI_BOARD_DEVICES_LEN (sizeof(acpi_board_devices) / sizeof(acpi_board_devices[0]))
+
 static const acpi_id_entry_t* acpi_lookup(const char* hid) {
     for (uint32_t k = 0; k < ACPI_ID_TABLE_LEN; k++) {
         if (strcmp(acpi_id_table[k].hid, hid) == 0) {
@@ -346,6 +376,39 @@ typedef struct {
     uint64_t address;
 } acpi_console_t;
 
+/* Write `desc` into descriptor slot `slot` of `buffer_id` and announce it to
+ * device-manager. Returns 0, or -1 when the slots are full or the write fails
+ * (the device is then not published). */
+static int publish_desc(const wasmos_acpi_device_desc_t* desc, uint32_t slot, int32_t devmgr_ep,
+                        int32_t src_ep, int32_t buffer_id, int32_t* req_id) {
+    if (slot >= ACPI_MAX_PUBLISHED_DEVICES) {
+        (void)printf("[acpi-bus] %s not published: descriptor slots full\n", desc->hid);
+        return -1;
+    }
+    (void)printf("[acpi-bus] %s %s=0x%X irq=%d windows=%u class=0x%02X%s\n",
+                 desc->hid,
+                 desc->windows[0].kind == WASMOS_REGION_GRANT_IO ? "io" : "mmio",
+                 (unsigned)desc->windows[0].base,
+                 desc->irq == WASMOS_ACPI_NO_IRQ ? -1 : (int)desc->irq,
+                 (unsigned)desc->window_count,
+                 (unsigned)desc->class_code,
+                 (desc->flags & WASMOS_ACPI_DEVICE_CONSOLE) ? " console" : "");
+    uint32_t offset = slot * (uint32_t)sizeof(*desc);
+    if (wasmos_xfer_buffer_write(buffer_id, desc, (int32_t)sizeof(*desc), (int32_t)offset) != 0) {
+        (void)printf("[acpi-bus] descriptor write failed\n");
+        return -1;
+    }
+    (void)wasmos_ipc_send(devmgr_ep,
+                          src_ep,
+                          DEVMGR_PUBLISH_ACPI_DEVICE_DESC,
+                          (*req_id)++,
+                          buffer_id,
+                          (int32_t)offset,
+                          (int32_t)sizeof(*desc),
+                          0);
+    return 0;
+}
+
 /* Scan the AML for `Name (_HID, ...)` objects with a resource template and
  * publish each recognised device as a descriptor in slot order of `buffer_id`,
  * which acpi-bus owns and has lent to device-manager. A device whose register
@@ -398,35 +461,52 @@ static uint32_t scan_devices(const uint8_t* aml, uint32_t aml_len, const acpi_co
                 desc.flags |= WASMOS_ACPI_DEVICE_CONSOLE;
             }
         }
-        if (published >= ACPI_MAX_PUBLISHED_DEVICES) {
-            (void)printf("[acpi-bus] %s not published: descriptor slots full\n", hid);
-            continue;
+        if (publish_desc(&desc, published, devmgr_ep, src_ep, buffer_id, req_id) == 0) {
+            published++;
         }
-        (void)printf("[acpi-bus] %s %s=0x%X irq=%d windows=%u class=0x%02X%s\n",
-                     hid,
-                     desc.windows[0].kind == WASMOS_REGION_GRANT_IO ? "io" : "mmio",
-                     (unsigned)desc.windows[0].base,
-                     desc.irq == WASMOS_ACPI_NO_IRQ ? -1 : (int)desc.irq,
-                     (unsigned)desc.window_count,
-                     (unsigned)desc.class_code,
-                     (desc.flags & WASMOS_ACPI_DEVICE_CONSOLE) ? " console" : "");
-        uint32_t offset = published * (uint32_t)sizeof(desc);
-        if (wasmos_xfer_buffer_write(buffer_id, &desc, (int32_t)sizeof(desc), (int32_t)offset) !=
-            0) {
-            (void)printf("[acpi-bus] descriptor write failed\n");
-            continue;
-        }
-        (void)wasmos_ipc_send(devmgr_ep,
-                              src_ep,
-                              DEVMGR_PUBLISH_ACPI_DEVICE_DESC,
-                              (*req_id)++,
-                              buffer_id,
-                              (int32_t)offset,
-                              (int32_t)sizeof(desc),
-                              0);
-        published++;
     }
     return published;
+}
+
+/* Signatures of the tables the RSDT/XSDT lists, recorded by the walk in
+ * initialize(). */
+static char g_table_sigs[ACPI_MAX_SDT_ENTRIES][4];
+static uint32_t g_table_count;
+
+static int acpi_table_listed(const char* signature) {
+    for (uint32_t i = 0; i < g_table_count; i++) {
+        if (memcmp(g_table_sigs[i], signature, 4u) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Publish every board device whose board the tables identify, in the
+ * descriptor slots after the first `published`. `oem_id` is the DSDT's.
+ * Returns the number published. */
+static uint32_t publish_board_devices(const uint8_t* oem_id, uint32_t published, int32_t devmgr_ep,
+                                      int32_t src_ep, int32_t buffer_id, int32_t* req_id) {
+    uint32_t added = 0;
+    for (uint32_t i = 0; i < ACPI_BOARD_DEVICES_LEN; i++) {
+        const acpi_board_device_t* board = &acpi_board_devices[i];
+        if (memcmp(oem_id, board->oem_id, 6u) != 0 || !acpi_table_listed(board->table)) {
+            continue;
+        }
+        wasmos_acpi_device_desc_t desc;
+        memset(&desc, 0, sizeof(desc));
+        desc.version = WASMOS_ACPI_DEVICE_DESC_VERSION;
+        desc.class_code = board->class_code;
+        desc.subclass = board->subclass;
+        desc.prog_if = board->prog_if;
+        desc.irq = board->irq;
+        str_copy(desc.hid, sizeof(desc.hid), board->hid);
+        add_window(&desc, WASMOS_REGION_GRANT_MMIO, board->mmio, board->length);
+        if (publish_desc(&desc, published + added, devmgr_ep, src_ep, buffer_id, req_id) == 0) {
+            added++;
+        }
+    }
+    return added;
 }
 
 /* ---- Main entry point ---------------------------------------------------- */
@@ -511,6 +591,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         if (!hdr) {
             continue;
         }
+        __builtin_memcpy(g_table_sigs[g_table_count++], hdr->signature, 4u);
         if (hdr->signature[0] == 'F' && hdr->signature[1] == 'A' && hdr->signature[2] == 'C' &&
             hdr->signature[3] == 'P') {
             facp_phys = ep;
@@ -566,7 +647,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* AML starts after the 36-byte ACPI header. */
     const uint8_t* aml = (const uint8_t*)dsdt_hdr + 36u;
     uint32_t aml_len = dsdt_len - 36u;
-    (void)scan_devices(aml, aml_len, &console, devmgr_ep, src_ep, desc_bid, &req_id);
+    uint32_t published = scan_devices(aml, aml_len, &console, devmgr_ep, src_ep, desc_bid, &req_id);
+    (void)publish_board_devices(dsdt_hdr->oem_id, published, devmgr_ep, src_ep, desc_bid, &req_id);
 
 done:
     (void)wasmos_ipc_send(devmgr_ep, src_ep, DEVMGR_ACPI_SCAN_DONE, req_id, 0, 0, 0, 0);

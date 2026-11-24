@@ -291,6 +291,9 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_RTC_IO` | -0x000D0002 | reading the CMOS/RTC registers failed |
 | `WASMOS_ERR_RTC_TIMEOUT` | -0x000D0003 | the RTC did not settle within the read window |
 | `WASMOS_ERR_RTC_DENIED` | -0x000D0004 | caller lacks the capability for this operation |
+| `WASMOS_ERR_RTC_OUT_OF_RANGE` | -0x000D0005 | the clock holds a time outside the years the rtc protocol carries (1970-2099) |
+| `WASMOS_ERR_RTC_UNAVAILABLE` | -0x000D0006 | the firmware clock is not available: no UEFI runtime services were handed over |
+| `WASMOS_ERR_RTC_FIRMWARE` | -0x000D0007 | the UEFI GetTime/SetTime call returned an error |
 
 ### `xfer_buffer` (domain 11) — transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*)
 

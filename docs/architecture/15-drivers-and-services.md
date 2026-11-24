@@ -258,12 +258,25 @@ Services subscriber registration and delivers key events.
 - **Capabilities:** `io.port`
 - **Entry bindings:** `proc.endpoint`
 
-#### `rtc` — Real-Time Clock Driver
+#### `rtc` and `pl031` — Real-Time Clock Drivers
 
-- **Kind:** WASM driver
-- **ACPI match:** class `0x08`, subclass `0x03` (PNP0B00 — CMOS RTC)
-- **Capabilities:** `io.port`, `irq.route`
+- **Kind:** WASM drivers (AssemblyScript), one per clock, all registering the
+  service name `rtc`
+- **`rtc` (x86_64):** the CMOS MC146818. ACPI match class `0x08`, subclass
+  `0x03` (PNP0B00); capabilities `io.port`, `irq.route`
+- **`pl031` (aarch64, `WASMOS_RTC_PL031`):** the Arm PL031. ACPI match
+  `ATTR{hid}=="PL031"`, a device acpi-bus publishes from its board table: QEMU
+  virt's DSDT does not describe its PL031 (0x09010000), so acpi-bus adds it
+  when the tables' OEM ID is QEMU's and a GTDT is present. Capability
+  `mmio.map`
 - **Entry bindings:** `proc.endpoint`
+
+The drivers share `src/drivers/rtc/rtc_core.ts` (registration and the request
+loop) and `rtc_time.ts` (the six-field UTC time, its wire packing, validation
+-- the day is checked against its month -- and epoch-seconds conversion); a
+backend supplies `init`, `read` and `set`. The PL031 holds seconds since
+1970-01-01 UTC. The protocol carries years 1970-2099; a PL031 count outside
+them reads as `rtc.OUT_OF_RANGE`.
 
 | Opcode              | Value   | Meaning           |
 |---------------------|---------|-------------------|

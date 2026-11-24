@@ -789,6 +789,16 @@ Source: `architecture/13-runtime-and-packaging.md`,
   `[fs-wfs] unmounted clean` did arrive, after the test had stopped waiting;
   the rerun passed. If it recurs, capture where fs-wfs's sync task stands (the
   block request in flight, `ps`) before the session is torn down.
+- [ ] [TEST][P2] `test_supervisor.test_9b_a_killed_vt_brings_the_shell_back`
+  failed once in a local `boot-and-init` battery on `x86_64_wasm3_smp` (PR #73):
+  after `svc kill vt` the supervisor restarted vt and cli@tty1, the new shell
+  printed its banner and prompt, and the `echo vt-came-back` typed on serial was
+  never echoed. Serial input did not reach the new shell, so the likely window is
+  the restarted vt's serial binding against the new shell's first read. The test
+  alone passed 4/4 and the battery rerun passed. Not attributed: the PR changes
+  only how vt follows a framebuffer mode change, which this test does not make.
+  If it recurs, capture vt's serial-bound slot and cli@tty1's reader
+  registration (`VT_IPC_REGISTER_WRITER`/`READ_REQ`) before teardown.
 - [ ] [FEATURE][P3] Tie a unit's lifetime to its submitter, and device-manager's
   units to their device. The mechanism exists: `SUPERVISOR_IPC_RETRACT_REQ`
   withdraws a unit and its `parent=` subtree without a failure. Nothing calls

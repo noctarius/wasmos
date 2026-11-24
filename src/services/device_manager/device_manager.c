@@ -2757,7 +2757,8 @@ static void consume_acpi_inventory(void) {
  * A mount completion is DEFERRED: the request is sent from the spawn phase and
  * this runs later, from poll_mount_request_async, so nothing between the two may
  * assume the armed slot has already been retired. */
-/* Record that the armed spawn will not be retried, and say so.
+/* Record that the armed spawn will not be retried, and say so. `declined` says
+ * the driver ended cleanly before READY (dm_on_child_exited) rather than failing.
  *
  * A PCI- or ACPI-matched device is marked given up on its rule, which both queue
  * walks skip. Without that mark the next walk re-armed the same device with a
@@ -2765,7 +2766,7 @@ static void consume_acpi_inventory(void) {
  * that could never start held the slot for every rule behind it -- the boot never
  * reached the drivers or the CLI. The other kinds need no mark: a block rule is
  * unqueued below, and an always-spawn rule was unqueued on its first failure. */
-static void give_up_on_active_spawn(void) {
+static void give_up_on_active_spawn(int declined) {
     int32_t di = g_dm.active_rule_spawn_device_index;
     int32_t ri = g_dm.active_rule_spawn_index;
     if (di >= 0 && di < 64 && ri >= 0) {
@@ -2780,7 +2781,9 @@ static void give_up_on_active_spawn(void) {
     char line[160];
     (void)snprintf(line,
                    sizeof(line),
-                   "[device-manager] gave up on %s: it never became ready\n",
+                   declined ? "[device-manager] %s declined the device: it found nothing to "
+                              "drive\n"
+                            : "[device-manager] gave up on %s: it never became ready\n",
                    g_dm.rule_spawn_path);
     console_write(line);
 }
@@ -2788,8 +2791,8 @@ static void give_up_on_active_spawn(void) {
 /* Retires the armed rule without spawning it again: its device is marked given
  * up (give_up_on_active_spawn), the rule's tracking is cleared and the queue is
  * re-driven, as for a spawn that succeeded. */
-static void rule_spawn_give_up(void) {
-    give_up_on_active_spawn();
+static void rule_spawn_give_up(int declined) {
+    give_up_on_active_spawn(declined);
     g_dm.rule_spawn_pending = 0;
     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
         if (g_dm.active_rule_spawn_index >= 0 &&
@@ -2878,7 +2881,7 @@ static void rule_spawn_complete(int32_t ok) {
         }
         g_dm.rule_spawn_retries++;
         if (g_dm.rule_spawn_retries > 8) {
-            rule_spawn_give_up();
+            rule_spawn_give_up(0);
         }
     }
 }
@@ -3149,13 +3152,23 @@ static void dm_on_child_ready(void* user, const wasmos_ipc_message_t* msg) {
     }
 }
 
-/* A child that exits before READY is a failed spawn and goes through the
- * rule's retry policy. One that exits later is not this service's to restart:
+/* A child that exits before READY with a failure status is a failed spawn and
+ * goes through the rule's retry policy. One that exits with status 0 has
+ * DECLINED the device -- it looked and found nothing to drive, as the ramfb
+ * driver does on a machine with fw_cfg but no ramfb -- so the device is retired
+ * on its rule like one given up on, without a retry: a retry would find the same
+ * nothing. One that exits later is not this service's to restart:
  * a driver that must come back is a supervised unit (ENV{RESTART}). */
 static void dm_on_child_exited(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
     if (g_dm.watch_spawn_pending && g_dm.watch_spawn_pid != 0u &&
         (uint32_t)msg->arg0 == g_dm.watch_spawn_pid) {
+        if (msg->arg1 == 0) {
+            g_dm.watch_spawn_pending = 0;
+            g_dm.watch_spawn_pid = 0;
+            rule_spawn_give_up(1);
+            return;
+        }
         (void)printf("[device-manager] %s exited before ready status=%d\n",
                      g_dm.rule_spawn_path,
                      (int)msg->arg1);
@@ -3176,7 +3189,7 @@ static void dm_watch_spawn_check_deadline(void) {
                  (unsigned)g_dm.watch_spawn_pid);
     g_dm.watch_spawn_pending = 0;
     g_dm.watch_spawn_pid = 0;
-    rule_spawn_give_up();
+    rule_spawn_give_up(0);
 }
 
 /* Spawns the armed rule's driver from `path` with its startup args and every

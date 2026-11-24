@@ -11,7 +11,7 @@ if ROOT not in sys.path:
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from qemu_test_framework import QemuSession, default_config
+from qemu_test_framework import QemuSession, default_config, guest_arch
 
 # The text renderer's cell (src/drivers/framebuffer/fbtext_internal.h).
 CELL_W = 8
@@ -64,6 +64,10 @@ class VtModeRegridTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tmpdir = tempfile.mkdtemp(prefix="wasmos-vtregrid-")
         cfg = default_config()
+        if guest_arch() == "aarch64":
+            # ramfb rather than aarch64's default display (virtio-gpu), which
+            # does not change modes at runtime.
+            cfg.display_devices = ("-device", "ramfb")
         # screendump needs the display device, which -nographic removes;
         # display "none" keeps the run headless.
         cfg.nographic = False

@@ -50,6 +50,7 @@ const (
 	WASMOS_ERR_DOMAIN_VIRTIO_BLK uint16 = 24
 	WASMOS_ERR_DOMAIN_BLOCK_DEV uint16 = 25
 	WASMOS_ERR_DOMAIN_SUPERVISOR uint16 = 26
+	WASMOS_ERR_DOMAIN_DISPLAY uint16 = 27
 )
 
 const WASMOS_ERR_NONE int32 = 0
@@ -337,6 +338,10 @@ const (
 	WASMOS_ERR_SUPERVISOR_CRITICAL int32 = -0x001A000B // the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system
 	WASMOS_ERR_SUPERVISOR_RUNNING int32 = -0x001A000C // the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart
 	WASMOS_ERR_SUPERVISOR_PARENT_DOWN int32 = -0x001A000D // the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too
+	WASMOS_ERR_DISPLAY_BAD_DESC int32 = -0x001B0001 // the flush descriptor cannot be read from the caller's buffer, has the wrong version, or claims more rects than it carries or than a flush takes
+	WASMOS_ERR_DISPLAY_NOT_READY int32 = -0x001B0002 // the display has no scanout yet: the device is still being brought up
+	WASMOS_ERR_DISPLAY_DEVICE int32 = -0x001B0003 // the device refused a transfer or flush command (a virtio-gpu error response)
+	WASMOS_ERR_DISPLAY_BUSY int32 = -0x001B0004 // the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -435,6 +440,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "block_dev"
 	case WASMOS_ERR_DOMAIN_SUPERVISOR:
 		return "supervisor"
+	case WASMOS_ERR_DOMAIN_DISPLAY:
+		return "display"
 	default:
 		return "unknown"
 	}
@@ -1006,6 +1013,14 @@ func WasmosStrerror(c int32) string {
 		return "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart"
 	case WASMOS_ERR_SUPERVISOR_PARENT_DOWN:
 		return "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too"
+	case WASMOS_ERR_DISPLAY_BAD_DESC:
+		return "the flush descriptor cannot be read from the caller's buffer, has the wrong version, or claims more rects than it carries or than a flush takes"
+	case WASMOS_ERR_DISPLAY_NOT_READY:
+		return "the display has no scanout yet: the device is still being brought up"
+	case WASMOS_ERR_DISPLAY_DEVICE:
+		return "the device refused a transfer or flush command (a virtio-gpu error response)"
+	case WASMOS_ERR_DISPLAY_BUSY:
+		return "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds"
 	default:
 		return "unknown error"
 	}

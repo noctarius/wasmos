@@ -844,6 +844,23 @@ linked feature documents for rationale and rollout plans.
   table over in `boot_info` (version 7), and the kernel calls it for the
   `rtc_efi_get`/`rtc_efi_set` host calls under the `rtc.efi` capability. CI
   builds the PL031 choice only.
+- The display on aarch64 is a virtio GPU (`qemu_display` in `ARCHES`;
+  `QemuConfig.display_devices` replaces it per session, ramfb for the
+  mode-setting tests), and x86_64 drives one in place of bochs
+  (`-vga none -device virtio-gpu-pci`). edk2's GOP for it is blit-only, so the
+  loader allocates a zeroed BGRX scanout for the boot mode as
+  `EFI_LOADER_DATA` and hands it over as the framebuffer. Two drivers bind the
+  function (`1AF4:1050`): the generic native `framebuffer` driver serves the
+  text console on it, and `virtio_gpu` (WASM) creates a 2D resource backed by
+  the scanout's pages, sets scanout 0, and presents damage that the compositor
+  and the FBTEXT server report through `DISPLAY_IPC_FLUSH_REQ` (client-owned
+  rect descriptors), plus a full present on every idle 250 ms loop tick for
+  the kernel's own writes. The FBTEXT server learns its presenter from
+  `FBTEXT_IPC_PRESENTER_REQ`. A framebuffer backend may decline a framebuffer
+  that is not its adapter's (`FBTEXT_BACKEND_DECLINED`; ramfb without
+  `etc/ramfb`), and device-manager retires a device whose driver exits 0
+  before READY instead of retrying it. The PCI and ACPI rule tables hold 32
+  rules each and report rules that do not fit.
 - Keyboard and mouse on aarch64 are virtio-input (`src/drivers/virtio_input/`):
   QEMU virt carries `virtio-keyboard-pci` and `virtio-mouse-pci` at slots 0x1c
   and 0x1d (`qemu_input` in `ARCHES`), and device-manager spawns one instance

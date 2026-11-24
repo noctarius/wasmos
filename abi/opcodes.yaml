@@ -769,6 +769,16 @@ subsystems:
           GEOMETRY_REQ would now answer.  Fire-and-forget (request_id 0); the
           driver renders BLIT_GRID at the new column count from then on, so the
           receiver re-lays its grids out before its next blit.
+      - symbol: FBTEXT_IPC_PRESENTER_REQ
+        value: 0x60d
+        kind: req
+        doc: |
+          display presenter -> driver: the sender presents the scanout and must
+          be told what is drawn (DISPLAY_IPC_FLUSH_REQ, subsystem `display`).
+          The driver owns its own flush descriptor buffer and lends it READ to
+          the sender; a later PRESENTER_REQ (a restarted presenter) replaces the
+          previous one. No arguments; RESP when the loan is made, ERROR
+          (arg0 = packed WASMOS_ERR_*) when it is not.
       - { symbol: FBTEXT_IPC_RESP, value: 0x680, kind: resp }
       - { symbol: FBTEXT_IPC_ERROR, value: 0x6ff, kind: error }
 
@@ -1714,3 +1724,23 @@ subsystems:
           the spawn is due, before the instance runs.
       - { symbol: SUPERVISOR_IPC_RESP, value: 0x1080, kind: resp, doc: "arg0 = 0: the unit was accepted, the list was written, the boot set was recorded, the kill, retraction or stop was sent (arg1 = the pid, 0 for a unit without an instance), or the start is due." }
       - { symbol: SUPERVISOR_IPC_ERROR, value: 0x10ff, kind: error, doc: "arg0 = packed WASMOS_ERR_SUPERVISOR_* code." }
+
+  - name: display
+    id: 26
+    range: [0x1100, 0x11ff]
+    opcodes:
+      - symbol: DISPLAY_IPC_FLUSH_REQ
+        value: 0x1100
+        kind: req
+        doc: |
+          Present what was drawn into the scanout inside the given rectangles.
+          The request is a wasmos_display_flush_desc_t (version, count, rects in
+          framebuffer pixels) in a transfer buffer the caller owns and has lent
+          READ to the display: arg0=buffer_id arg1=offset arg2=size. The caller
+          may rewrite the buffer once the answer arrives, so damage drawn
+          meanwhile is accumulated, not sent. Rects are clipped to the scanout;
+          an empty list presents nothing. Served by the endpoint registered as
+          "display", which exists only on a machine whose scanout needs a
+          presenter (virtio-gpu); elsewhere what is drawn is already shown.
+      - { symbol: DISPLAY_IPC_RESP, value: 0x1180, kind: resp, doc: "arg0 = 0: the rects were presented; the descriptor buffer is the caller's again." }
+      - { symbol: DISPLAY_IPC_ERROR, value: 0x11ff, kind: error, doc: "arg0 = packed WASMOS_ERR_DISPLAY_* code; the descriptor buffer is the caller's again." }

@@ -705,6 +705,34 @@ _Static_assert(sizeof(wasmos_supervisor_submit_desc_t) ==
                    8u + SUPERVISOR_SPEC_MAX + 1u + 8u + SUPERVISOR_CAPS_MAX,
                "wasmos_supervisor_submit_desc_t is part of the SUPERVISOR_IPC_SUBMIT_REQ ABI");
 
+/* DISPLAY_IPC_FLUSH_REQ (abi/opcodes.yaml): the rectangles to present, in
+ * framebuffer pixels, in a transfer buffer the caller owns and lends READ to the
+ * display. A descriptor carries at most DISPLAY_FLUSH_RECTS_MAX rects, and its
+ * size on the wire covers the header and `count` rects, no more:
+ * DISPLAY_FLUSH_DESC_SIZE(count). A rect with zero width or height presents
+ * nothing; a rect that crosses the scanout's edge is clipped to it. */
+#define DISPLAY_FLUSH_DESC_VERSION 1u
+#define DISPLAY_FLUSH_RECTS_MAX 16u
+
+typedef struct {
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+} wasmos_display_rect_t;
+
+typedef struct {
+    uint32_t version; /* DISPLAY_FLUSH_DESC_VERSION */
+    uint32_t count;   /* rects that follow, <= DISPLAY_FLUSH_RECTS_MAX */
+    wasmos_display_rect_t rects[DISPLAY_FLUSH_RECTS_MAX];
+} wasmos_display_flush_desc_t;
+_Static_assert(sizeof(wasmos_display_rect_t) == 16u,
+               "wasmos_display_rect_t is part of the DISPLAY_IPC_FLUSH_REQ ABI");
+_Static_assert(sizeof(wasmos_display_flush_desc_t) == 8u + 16u * DISPLAY_FLUSH_RECTS_MAX,
+               "wasmos_display_flush_desc_t is part of the DISPLAY_IPC_FLUSH_REQ ABI");
+
+#define DISPLAY_FLUSH_DESC_SIZE(count) (8u + 16u * (uint32_t)(count))
+
 /* Names one unit in a request about it (SUPERVISOR_IPC_KILL_REQ,
  * SUPERVISOR_IPC_RETRACT_REQ, abi/opcodes.yaml), in a transfer buffer the caller owns and lends
  * READ to the supervisor. `name` is NUL-terminated; name_len counts its bytes without the NUL. */

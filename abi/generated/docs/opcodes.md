@@ -143,6 +143,7 @@ endpoint-scoped and may repeat across subsystems.
 | `FBTEXT_IPC_BLIT_ATTACH_REQ` | 0x60A | req | Bulk grid blit: instead of one CELL_WRITE per cell (a per-cell IPC loop that storms the driver's queue and wedges tty switching under SMP), the VT shares a cell-grid xfer-buffer and repaints the whole visible grid with a single IPC. ATTACH (once) hands the driver a borrowed grid buffer to map; BLIT_GRID (per repaint) tells it to render cols*rows fbtext_blit_cell_t entries from that buffer.  |
 | `FBTEXT_IPC_BLIT_GRID_REQ` | 0x60B | req | arg0=cols arg1=rows (from the attached buffer)  |
 | `FBTEXT_IPC_GEOMETRY_CHANGED` | 0x60C | notify | driver -> the endpoint that attached the blit grid (the vt): a SET_RESOLUTION changed the text geometry.  arg0=cols arg1=rows, as a GEOMETRY_REQ would now answer.  Fire-and-forget (request_id 0); the driver renders BLIT_GRID at the new column count from then on, so the receiver re-lays its grids out before its next blit.  |
+| `FBTEXT_IPC_PRESENTER_REQ` | 0x60D | req | display presenter -> driver: the sender presents the scanout and must be told what is drawn (DISPLAY_IPC_FLUSH_REQ, subsystem `display`). The driver owns its own flush descriptor buffer and lends it READ to the sender; a later PRESENTER_REQ (a restarted presenter) replaces the previous one. No arguments; RESP when the loan is made, ERROR (arg0 = packed WASMOS_ERR_*) when it is not.  |
 | `FBTEXT_IPC_RESP` | 0x680 | resp |  |
 | `FBTEXT_IPC_ERROR` | 0x6FF | error |  |
 
@@ -382,3 +383,11 @@ endpoint-scoped and may repeat across subsystems.
 | `SUPERVISOR_IPC_START_REQ` | 0x1006 | req | Start a stopped, failed or degraded unit: it is spawned as if newly submitted, with its backoff and its intensity window cleared, so a unit that gave up can be brought back. Its restart count is kept. Units bound to it through parent= and held degraded start with it. The sender must hold svc.control (WASMOS_ERR_SUPERVISOR_NOT_AUTHORIZED). The request is a wasmos_supervisor_unit_desc_t naming the unit, in a transfer buffer the caller owns and has lent READ to the supervisor: arg0=buffer_id arg1=offset arg2=size. Refused with WASMOS_ERR_SUPERVISOR_NO_UNIT when no unit has that name, WASMOS_ERR_SUPERVISOR_RUNNING when it is not stopped, failed or degraded, and WASMOS_ERR_SUPERVISOR_PARENT_DOWN when its parent is. Answered once the spawn is due, before the instance runs.  |
 | `SUPERVISOR_IPC_RESP` | 0x1080 | resp | arg0 = 0: the unit was accepted, the list was written, the boot set was recorded, the kill, retraction or stop was sent (arg1 = the pid, 0 for a unit without an instance), or the start is due. |
 | `SUPERVISOR_IPC_ERROR` | 0x10FF | error | arg0 = packed WASMOS_ERR_SUPERVISOR_* code. |
+
+## display (0x1100–0x11FF)
+
+| Opcode | Value | Kind | Description |
+|---|---|---|---|
+| `DISPLAY_IPC_FLUSH_REQ` | 0x1100 | req | Present what was drawn into the scanout inside the given rectangles. The request is a wasmos_display_flush_desc_t (version, count, rects in framebuffer pixels) in a transfer buffer the caller owns and has lent READ to the display: arg0=buffer_id arg1=offset arg2=size. The caller may rewrite the buffer once the answer arrives, so damage drawn meanwhile is accumulated, not sent. Rects are clipped to the scanout; an empty list presents nothing. Served by the endpoint registered as "display", which exists only on a machine whose scanout needs a presenter (virtio-gpu); elsewhere what is drawn is already shown.  |
+| `DISPLAY_IPC_RESP` | 0x1180 | resp | arg0 = 0: the rects were presented; the descriptor buffer is the caller's again. |
+| `DISPLAY_IPC_ERROR` | 0x11FF | error | arg0 = packed WASMOS_ERR_DISPLAY_* code; the descriptor buffer is the caller's again. |

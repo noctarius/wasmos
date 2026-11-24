@@ -251,6 +251,23 @@ Services subscriber registration and delivers key events.
 | `MOUSE_IPC_SUBSCRIBE_RESP` | `0x890` | Subscription confirmed                             |
 | `MOUSE_IPC_MOVE_NOTIFY`    | `0x811` | Move/button event (arg0=dx, arg1=dy, arg2=buttons) |
 
+#### `virtio_gpu` — virtio-gpu Display Presenter
+
+- **Kind:** WASM driver
+- **PCI match:** vendor `0x1AF4`, device `0x1050` (modern virtio-gpu),
+  supervised; the same function also spawns the generic native `framebuffer`
+  driver, which serves the text console on the scanout
+- **Capabilities:** `mmio.map`, `dma.buffer`, `irq.route`; region 0 is BAR 4
+- **Entry bindings:** `proc.endpoint`
+- **Registers:** `display`
+
+Presents the kernel's framebuffer -- the scanout the boot loader allocated for
+a blit-only GOP -- on scanout 0 of the device, and serves
+`DISPLAY_IPC_FLUSH_REQ` from the compositor and the FBTEXT server
+([20-graphics-framebuffer-and-compositor.md](20-graphics-framebuffer-and-compositor.md),
+"Display Presenter"). Only the control queue is driven (MSI-X, else INTx, else
+polled on the loop tick); 3D and runtime mode setting are not.
+
 #### `virtio_input` — virtio-input Keyboard and Mouse Driver (aarch64)
 
 - **Kind:** WASM driver

@@ -45,6 +45,7 @@ pub const WASMOS_ERR_DOMAIN_DEVMGR: u16 = 10;
 pub const WASMOS_ERR_DOMAIN_VIRTIO_BLK: u16 = 24;
 pub const WASMOS_ERR_DOMAIN_BLOCK_DEV: u16 = 25;
 pub const WASMOS_ERR_DOMAIN_SUPERVISOR: u16 = 26;
+pub const WASMOS_ERR_DOMAIN_DISPLAY: u16 = 27;
 
 pub const WASMOS_ERR_NONE: i32 = 0;
 // A domain error is the negative of (domain << 16) | local_code.
@@ -329,6 +330,10 @@ pub const WASMOS_ERR_SUPERVISOR_NO_PARENT: i32 = -0x001A000A; // the submission 
 pub const WASMOS_ERR_SUPERVISOR_CRITICAL: i32 = -0x001A000B; // the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system
 pub const WASMOS_ERR_SUPERVISOR_RUNNING: i32 = -0x001A000C; // the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart
 pub const WASMOS_ERR_SUPERVISOR_PARENT_DOWN: i32 = -0x001A000D; // the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too
+pub const WASMOS_ERR_DISPLAY_BAD_DESC: i32 = -0x001B0001; // the flush descriptor cannot be read from the caller's buffer, has the wrong version, or claims more rects than it carries or than a flush takes
+pub const WASMOS_ERR_DISPLAY_NOT_READY: i32 = -0x001B0002; // the display has no scanout yet: the device is still being brought up
+pub const WASMOS_ERR_DISPLAY_DEVICE: i32 = -0x001B0003; // the device refused a transfer or flush command (a virtio-gpu error response)
+pub const WASMOS_ERR_DISPLAY_BUSY: i32 = -0x001B0004; // the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds
 
 #[inline]
 pub const fn wasmos_err_make(dom: u16, code: u16) -> i32 {
@@ -388,6 +393,7 @@ pub fn wasmos_error_domain_name(d: u16) -> &'static str {
         WASMOS_ERR_DOMAIN_VIRTIO_BLK => "virtio_blk",
         WASMOS_ERR_DOMAIN_BLOCK_DEV => "block_dev",
         WASMOS_ERR_DOMAIN_SUPERVISOR => "supervisor",
+        WASMOS_ERR_DOMAIN_DISPLAY => "display",
         _ => "unknown",
     }
 }
@@ -676,6 +682,10 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_SUPERVISOR_CRITICAL => "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system",
         WASMOS_ERR_SUPERVISOR_RUNNING => "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart",
         WASMOS_ERR_SUPERVISOR_PARENT_DOWN => "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too",
+        WASMOS_ERR_DISPLAY_BAD_DESC => "the flush descriptor cannot be read from the caller's buffer, has the wrong version, or claims more rects than it carries or than a flush takes",
+        WASMOS_ERR_DISPLAY_NOT_READY => "the display has no scanout yet: the device is still being brought up",
+        WASMOS_ERR_DISPLAY_DEVICE => "the device refused a transfer or flush command (a virtio-gpu error response)",
+        WASMOS_ERR_DISPLAY_BUSY => "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds",
         _ => "unknown error",
     }
 }

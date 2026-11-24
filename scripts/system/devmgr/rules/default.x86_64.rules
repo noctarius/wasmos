@@ -124,3 +124,11 @@ SUBSYSTEM=="boot", ENV{MOUNT}="/home/user", ENV{FSTYPE}="tmpfs"
 # stands. That is the Linux rule, and it is why a mount cannot fail because
 # someone left a file behind.
 SUBSYSTEM=="boot", ENV{MOUNT}="/wfs/nested", ENV{FSTYPE}="tmpfs"
+# The virtio GPU (modern id 0x1050). Its firmware GOP is blit-only, so the boot
+# loader allocates the scanout and hands it over as the framebuffer; two drivers
+# serve it. virtio_gpu presents it -- it attaches the scanout's pages to the
+# device and flushes what is drawn ("display") -- and is supervised: the scanout
+# is the kernel's, so a restarted instance attaches the same pages again. The
+# generic framebuffer driver serves the text console (FBTEXT, "fb") on it.
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1050", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_gpu.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1050", RUN+="system/drivers/framebuf.wap"

@@ -2310,12 +2310,24 @@ and the reason it prints names what is missing. Read `docs/architecture/04-boot-
   `framebuffer_ramfb` (bound to the fw_cfg device QEMU0002) serves it and sets
   modes through fw_cfg DMA (`tests/test_ramfb_mode.py`). The menu-bar and VT
   screen-ownership tests run on aarch64.
-- [ ] [FEATURE][P2] virtio-gpu driver, the final display step on both x86_64
-  and aarch64: a scanout the driver owns rather than the firmware framebuffer,
-  so a mode is no longer bounded by the boot framebuffer's size, and the seam
-  for forwarding the compositor's draw lists to the device (see the
-  compositor entry above). Its UEFI GOP stops being refreshed once boot
-  services exit, so it is useful only with a native driver.
+- [x] [FEATURE][P2] virtio-gpu driver (2D), on both x86_64 and aarch64, and
+  aarch64's default display. edk2's virtio-gpu GOP is blit-only, so the boot
+  loader allocates the scanout (kernel-owned, `EFI_LOADER_DATA`); `virtio_gpu`
+  attaches it as a resource's backing and presents what the compositor and the
+  text console report (`DISPLAY_IPC_FLUSH_REQ`), plus a full present on idle
+  loop ticks. `tests/test_virtio_gpu.py` reads the scanout back by screendump.
+- [ ] [FEATURE][P2] Runtime mode setting through virtio-gpu: the FBTEXT server
+  on a virtio-gpu scanout offers no modes (the generic backend), and the
+  loader sizes the scanout for the boot mode
+  (`TODO` at `gop_allocate_scanout`). A mode set needs the GPU driver to
+  recreate its resource and the scanout to be large enough -- a two-step
+  exchange between the FBTEXT server and the `display` presenter. Until then
+  the ramfb tests (`test_ramfb_mode`, `test_vt_mode_regrid`) pin ramfb on
+  aarch64.
+- [ ] [FEATURE][P2] virtio-gpu 3D (VIRGL / venus contexts): the `display`
+  service grows into the GPU service the compositor submits command streams to
+  -- the seam for forwarding the compositor's draw lists (see the compositor
+  entry above).
 - [ ] [TEST][P2] Make the storage tests topology-aware, so they run on aarch64.
   They are written against x86_64's layout -- ATA drives, `/wfs` on the IDE
   secondary channel, an ATA boot disk beside one virtio disk -- and aarch64

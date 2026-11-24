@@ -493,3 +493,12 @@ domains:
       - { name: CRITICAL,  description: "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system" }
       - { name: RUNNING,     description: "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart" }
       - { name: PARENT_DOWN, description: "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too" }
+
+  display:
+    id: 27
+    description: "display presenter (DISPLAY_IPC_*) failures: the virtio-gpu scanout and its flush protocol"
+    codes:
+      - { name: BAD_DESC,  description: "the flush descriptor cannot be read from the caller's buffer, has the wrong version, or claims more rects than it carries or than a flush takes" }
+      - { name: NOT_READY, description: "the display has no scanout yet: the device is still being brought up" }
+      - { name: DEVICE,    description: "the device refused a transfer or flush command (a virtio-gpu error response)" }
+      - { name: BUSY,      description: "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds" }

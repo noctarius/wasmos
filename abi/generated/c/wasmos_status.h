@@ -57,6 +57,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
     WASMOS_ERR_DOMAIN_VIRTIO_BLK = 24, /* virtio-blk block-device server failures. Distinct from `block`, which describes the staging buffer a transfer moves through: these describe the device and the request, and are what a BLOCK_IPC_ERROR reply carries in arg0. */
     WASMOS_ERR_DOMAIN_BLOCK_DEV = 25, /* Block-device SERVER failures, as a BLOCK_IPC_ERROR reply's arg0. Distinct from `block`, which describes the staging buffer a transfer moves through, and shared by every backend rather than per-driver: a client that reaches a disk through the `block` class should read one vocabulary whichever driver answers it. */
     WASMOS_ERR_DOMAIN_SUPERVISOR = 26, /* Supervisor refusals of a request, as a SUPERVISOR_IPC_ERROR reply's arg0. A refused submission recorded no unit and spawned nothing; a refused kill killed nothing. */
+    WASMOS_ERR_DOMAIN_DISPLAY = 27, /* display presenter (DISPLAY_IPC_*) failures: the virtio-gpu scanout and its flush protocol */
 };
 
 /* A domain error is the negative of (domain << 16) | local_code. */
@@ -350,6 +351,10 @@ enum {
     WASMOS_ERR_SUPERVISOR_CRITICAL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 11), /* the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system */
     WASMOS_ERR_SUPERVISOR_RUNNING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 12), /* the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart */
     WASMOS_ERR_SUPERVISOR_PARENT_DOWN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SUPERVISOR, 13), /* the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too */
+    WASMOS_ERR_DISPLAY_BAD_DESC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 1), /* the flush descriptor cannot be read from the caller's buffer, has the wrong version, or claims more rects than it carries or than a flush takes */
+    WASMOS_ERR_DISPLAY_NOT_READY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 2), /* the display has no scanout yet: the device is still being brought up */
+    WASMOS_ERR_DISPLAY_DEVICE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 3), /* the device refused a transfer or flush command (a virtio-gpu error response) */
+    WASMOS_ERR_DISPLAY_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 4), /* the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -417,6 +422,7 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_VIRTIO_BLK: return "virtio_blk";
     case WASMOS_ERR_DOMAIN_BLOCK_DEV: return "block_dev";
     case WASMOS_ERR_DOMAIN_SUPERVISOR: return "supervisor";
+    case WASMOS_ERR_DOMAIN_DISPLAY: return "display";
     default: return "unknown";
     }
 }
@@ -706,6 +712,10 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_CRITICAL: return "supervisor.CRITICAL";
     case WASMOS_ERR_SUPERVISOR_RUNNING: return "supervisor.RUNNING";
     case WASMOS_ERR_SUPERVISOR_PARENT_DOWN: return "supervisor.PARENT_DOWN";
+    case WASMOS_ERR_DISPLAY_BAD_DESC: return "display.BAD_DESC";
+    case WASMOS_ERR_DISPLAY_NOT_READY: return "display.NOT_READY";
+    case WASMOS_ERR_DISPLAY_DEVICE: return "display.DEVICE";
+    case WASMOS_ERR_DISPLAY_BUSY: return "display.BUSY";
     default: return "unknown";
     }
 }
@@ -995,6 +1005,10 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_SUPERVISOR_CRITICAL: return "the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system";
     case WASMOS_ERR_SUPERVISOR_RUNNING: return "the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart";
     case WASMOS_ERR_SUPERVISOR_PARENT_DOWN: return "the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too";
+    case WASMOS_ERR_DISPLAY_BAD_DESC: return "the flush descriptor cannot be read from the caller's buffer, has the wrong version, or claims more rects than it carries or than a flush takes";
+    case WASMOS_ERR_DISPLAY_NOT_READY: return "the display has no scanout yet: the device is still being brought up";
+    case WASMOS_ERR_DISPLAY_DEVICE: return "the device refused a transfer or flush command (a virtio-gpu error response)";
+    case WASMOS_ERR_DISPLAY_BUSY: return "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds";
     default: return "unknown error";
     }
 }

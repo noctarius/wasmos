@@ -643,6 +643,14 @@ enum {
      * receiver re-lays its grids out before its next blit.
      */
     FBTEXT_IPC_GEOMETRY_CHANGED = 0x60C,
+    /* display presenter -> driver: the sender presents the scanout and must
+     * be told what is drawn (DISPLAY_IPC_FLUSH_REQ, subsystem `display`).
+     * The driver owns its own flush descriptor buffer and lends it READ to
+     * the sender; a later PRESENTER_REQ (a restarted presenter) replaces the
+     * previous one. No arguments; RESP when the loan is made, ERROR
+     * (arg0 = packed WASMOS_ERR_*) when it is not.
+     */
+    FBTEXT_IPC_PRESENTER_REQ = 0x60D,
     FBTEXT_IPC_RESP = 0x680,
     FBTEXT_IPC_ERROR = 0x6FF,
 };
@@ -1434,6 +1442,25 @@ enum {
     SUPERVISOR_IPC_ERROR = 0x10FF,
 };
 
+/* display (0x1100..0x11FF) */
+enum {
+    /* Present what was drawn into the scanout inside the given rectangles.
+     * The request is a wasmos_display_flush_desc_t (version, count, rects in
+     * framebuffer pixels) in a transfer buffer the caller owns and has lent
+     * READ to the display: arg0=buffer_id arg1=offset arg2=size. The caller
+     * may rewrite the buffer once the answer arrives, so damage drawn
+     * meanwhile is accumulated, not sent. Rects are clipped to the scanout;
+     * an empty list presents nothing. Served by the endpoint registered as
+     * "display", which exists only on a machine whose scanout needs a
+     * presenter (virtio-gpu); elsewhere what is drawn is already shown.
+     */
+    DISPLAY_IPC_FLUSH_REQ = 0x1100,
+    /* arg0 = 0: the rects were presented; the descriptor buffer is the caller's again. */
+    DISPLAY_IPC_RESP = 0x1180,
+    /* arg0 = packed WASMOS_ERR_DISPLAY_* code; the descriptor buffer is the caller's again. */
+    DISPLAY_IPC_ERROR = 0x11FF,
+};
+
 /* Subsystem ids for wasmos_opcode_name(). */
 enum {
     WASMOS_OPCODE_SUBSYS_CHARDEV = 0,
@@ -1462,6 +1489,7 @@ enum {
     WASMOS_OPCODE_SUBSYS_VOLUME = 23,
     WASMOS_OPCODE_SUBSYS_PARTITION = 24,
     WASMOS_OPCODE_SUBSYS_SUPERVISOR = 25,
+    WASMOS_OPCODE_SUBSYS_DISPLAY = 26,
 };
 
 /* Opcode -> symbol name within a subsystem (diagnostics/logging). Pass the
@@ -1599,6 +1627,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x60A: return "FBTEXT_IPC_BLIT_ATTACH_REQ";
         case 0x60B: return "FBTEXT_IPC_BLIT_GRID_REQ";
         case 0x60C: return "FBTEXT_IPC_GEOMETRY_CHANGED";
+        case 0x60D: return "FBTEXT_IPC_PRESENTER_REQ";
         case 0x680: return "FBTEXT_IPC_RESP";
         case 0x6FF: return "FBTEXT_IPC_ERROR";
         default: return "UNKNOWN";
@@ -1820,6 +1849,13 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x1006: return "SUPERVISOR_IPC_START_REQ";
         case 0x1080: return "SUPERVISOR_IPC_RESP";
         case 0x10FF: return "SUPERVISOR_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_DISPLAY:
+        switch (type) {
+        case 0x1100: return "DISPLAY_IPC_FLUSH_REQ";
+        case 0x1180: return "DISPLAY_IPC_RESP";
+        case 0x11FF: return "DISPLAY_IPC_ERROR";
         default: return "UNKNOWN";
         }
     default: return "UNKNOWN";

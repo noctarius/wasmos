@@ -60,6 +60,8 @@ TESTS = [
     (RUN, 'test_device_manager_unit', []),
     (CC, 'test_virtio_input_events', [*C11, "-I" + R('tests/unit'), "-I" + R('src/drivers/virtio_input'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_virtio_input_events.c'), R('src/drivers/virtio_input/virtio_input_events.c')]),
     (RUN, 'test_virtio_input_events', []),
+    (CC, 'test_virtio_gpu_damage', [*C11, "-I" + R('tests/unit'), "-I" + R('src/drivers/virtio_gpu'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_virtio_gpu_damage.c'), R('src/drivers/virtio_gpu/virtio_gpu_damage.c')]),
+    (RUN, 'test_virtio_gpu_damage', []),
     (CC, 'test_block_descriptor', [*C11, "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_block_descriptor.c')]),
     (RUN, 'test_block_descriptor', []),
     (CC, 'test_svc_name_from_mount', [*C11, "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_svc_name_from_mount.c')]),

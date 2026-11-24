@@ -419,6 +419,19 @@ def default_build_dir(build_dir: str = "out/default") -> str:
     return build_dir
 
 
+def build_config_enabled(symbol: str, build_dir: str = "out/default") -> bool:
+    """Whether the tree under test was configured with Kconfig `symbol` set
+    (`CONFIG_<symbol>=y` in its .config). For a test whose subject a choice
+    replaces -- the supervised clock unit under WASMOS_RTC_EFI -- rather than
+    one that a configuration breaks. False when the tree has no .config."""
+    path = os.path.join(default_build_dir(build_dir), ".config")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return any(line.strip() == f"CONFIG_{symbol}=y" for line in fh)
+    except OSError:
+        return False
+
+
 def default_host_tool_path(name: str, build_dir: str = "out/default") -> str:
     """Path to a host tool built by the tree under test.
 

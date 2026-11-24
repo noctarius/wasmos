@@ -31,12 +31,13 @@ typedef enum {
     CAP_CONSOLE_OWNER = 7,      /* register the console ring: all tty output and COM1 */
     CAP_SPAWN_GRANT = 8,        /* put hardware grants (a spawn profile) on a spawned child */
     CAP_SVC_CONTROL = 9,        /* submit, kill and declare the boot set at the supervisor */
-    CAP_PCI_CONFIG = 10         /* read and write PCI configuration space */
+    CAP_PCI_CONFIG = 10,        /* read and write PCI configuration space */
+    CAP_RTC_EFI = 11            /* read and set the clock through UEFI runtime services */
 } capability_kind_t;
 
 /* Kinds are numbered 0..CAPABILITY_KIND_COUNT-1. Their values are ABI: a guest
  * names one to ipc_endpoint_has_cap as WASMOS_CAP_* (abi/constants.yaml). */
-#define CAPABILITY_KIND_COUNT 11u
+#define CAPABILITY_KIND_COUNT 12u
 _Static_assert(CAP_IO_PORT == WASMOS_CAP_IO_PORT && CAP_IRQ_ROUTE == WASMOS_CAP_IRQ_ROUTE &&
                    CAP_MMIO_MAP == WASMOS_CAP_MMIO_MAP && CAP_DMA_BUFFER == WASMOS_CAP_DMA_BUFFER &&
                    CAP_SYSTEM_CONTROL == WASMOS_CAP_SYSTEM_CONTROL &&
@@ -45,7 +46,7 @@ _Static_assert(CAP_IO_PORT == WASMOS_CAP_IO_PORT && CAP_IRQ_ROUTE == WASMOS_CAP_
                    CAP_CONSOLE_OWNER == WASMOS_CAP_CONSOLE_OWNER &&
                    CAP_SPAWN_GRANT == WASMOS_CAP_SPAWN_GRANT &&
                    CAP_SVC_CONTROL == WASMOS_CAP_SVC_CONTROL &&
-                   CAP_PCI_CONFIG == WASMOS_CAP_PCI_CONFIG,
+                   CAP_PCI_CONFIG == WASMOS_CAP_PCI_CONFIG && CAP_RTC_EFI == WASMOS_CAP_RTC_EFI,
                "capability_kind_t is the WASMOS_CAP_* ABI");
 
 /* Initialize the capability table; called once during kernel startup.
@@ -55,8 +56,8 @@ void capability_init(void);
 /* Maps a manifest capability name (an unterminated byte string) to its kind:
  * "io.port", "irq.route", "mmio.map", "dma.buffer", "system.control",
  * "subsystem.register", "svc.class", "console.owner", "spawn.grant",
- * "svc.control", "pci.config". The match is exact. Returns 0 with *out_kind set, or -1 for a
- * NULL or empty name or an unrecognised one. */
+ * "svc.control", "pci.config", "rtc.efi". The match is exact. Returns 0 with *out_kind set, or -1
+ * for a NULL or empty name or an unrecognised one. */
 int capability_kind_from_name(const uint8_t* name, uint32_t name_len, capability_kind_t* out_kind);
 
 /* Grant the named-endpoint capability to context_id (used for IPC access control).

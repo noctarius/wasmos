@@ -126,6 +126,7 @@ CORE = [
     "native_driver.c",
     "serial.c",
     "framebuffer.c",
+    "efi_rtc.c",
 ]
 
 WARP_GLUE = [
@@ -134,6 +135,7 @@ WARP_GLUE = [
     "warp/link.cpp",
     "warp/link_dma.cpp",
     "warp/link_ipc.cpp",
+    "warp/link_rtc.cpp",
     "warp/cxx_abi.cpp",
     "warp/posix_kernel.c",
     "warp/mem_utils_kernel.cpp",

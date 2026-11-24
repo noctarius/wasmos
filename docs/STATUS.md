@@ -834,6 +834,16 @@ linked feature documents for rationale and rollout plans.
   ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap
   stubs (aarch64: `svc #0`, number in x8). No aarch64 framebuffer fallback
   for a firmware without GOP (the x86 0xCF8 scan is x86_64-only).
+- The aarch64 clock is a Kconfig choice (`WASMOS_RTC_*`, "Real-time clock
+  (aarch64)"); both serve the `rtc` protocol through the shared core
+  (`src/drivers/rtc/rtc_core.ts`), as the x86_64 CMOS driver now does. The
+  default `pl031` drives QEMU virt's PL031, which acpi-bus publishes from a
+  board table (the DSDT omits it; keyed on QEMU's OEM ID plus a GTDT).
+  `rtc_efi` uses UEFI GetTime/SetTime: the loader calls SetVirtualAddressMap
+  with every runtime region at its kernel direct-map address and hands the
+  table over in `boot_info` (version 7), and the kernel calls it for the
+  `rtc_efi_get`/`rtc_efi_set` host calls under the `rtc.efi` capability. CI
+  builds the PL031 choice only.
 - Native driver ABI 16: native drivers reach memory-mapped register windows
   (`io_region_read`/`io_region_write`, through `io_region.c`), allocate
   driver-owned DMA regions (`dma_region_alloc`; all three region allocators

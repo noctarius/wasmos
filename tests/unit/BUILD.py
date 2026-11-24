@@ -165,6 +165,8 @@ TESTS = [
     (CC, 'test_wasm3_link_ipc.o', [*C11, '-Wno-unused-parameter', '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-c', R('src/kernel/wasm3/link_ipc.c')]),
     (CXX, 'test_hostcall_ipc', ['-Wall', '-Wno-unused-parameter', '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-x', 'c++', R('tests/unit/test_hostcall_ipc.cpp'), '-x', 'none', 'test_warp_link_ipc.o', 'test_wasm3_link_ipc.o', '-x', 'c', R('src/kernel/ipc.c'), R('src/kernel/idtable.c'), R('tests/unit/stubs_kpanic.c'), R('src/kernel/poll.c'), R('src/kernel/sched_event.c'), R('src/kernel/capability.c'), R('src/kernel/list.c'), R('src/kernel/list_linked.c'), R('src/kernel/list_array_chunk.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c'), R('tests/unit/stubs_spinlock.c'), '-x', 'none']),
     (RUN, 'test_hostcall_ipc', []),
+    (CXX, 'test_warp_link_rtc', ['-std=c++17', '-Wall', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_warp_link_rtc.cpp'), R('src/kernel/warp/link_rtc.cpp')]),
+    (RUN, 'test_warp_link_rtc', []),
     (CXX, 'test_hostcall_dma', ['-Wall', '-Wno-unused-parameter', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), '-x', 'c++', R('tests/unit/test_hostcall_dma.cpp'), R('src/kernel/warp/link_dma.cpp'), '-x', 'c', R('src/kernel/wasm3/link_dma.c'), R('src/kernel/capability.c'), R('src/kernel/policy.c'), R('src/kernel/hostcall_dma.c'), R('src/kernel/hostcall_value.c'), R('src/kernel/list.c'), R('src/kernel/list_linked.c'), R('src/kernel/list_array_chunk.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_kpanic.c'), R('tests/unit/stubs_slab.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_hostcall_dma', []),
     (CC, 'test_process_lifecycle_smp2', [*C11, '-pthread', '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_PROCESS_TEST_SEAMS=1', '-DWASMOS_TEST_NCPU=2', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_process_lifecycle.c'), R('tests/unit/stubs_process_platform.c'), R('src/kernel/process.c'), R('src/kernel/thread.c'), R('src/kernel/sched_thread.c'), R('src/kernel/list.c'), R('src/kernel/list_linked.c'), R('src/kernel/list_array_chunk.c'), R('src/kernel/kmem.c'), R('src/kernel/idtable.c'), R('src/kernel/sched_event.c'), R('src/kernel/futex.c'), R('tests/unit/stubs_spinlock.c'), R('tests/unit/stubs_slab.c'), R('tests/unit/stubs_kpanic.c')]),
@@ -196,6 +198,8 @@ TESTS = [
     (RUN, 'test_io_region', []),
     (CC, 'test_framebuffer_geometry', [*C11, '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_framebuffer_geometry.c'), R('src/kernel/framebuffer.c')]),
     (RUN, 'test_framebuffer_geometry', []),
+    (CC, 'test_efi_runtime_map', [*C11, '-iquote', R('src/boot'), '-iquote', R('src/kernel/include'), '-iquote', R('tests/unit'), R('tests/unit/test_efi_runtime_map.c')]),
+    (RUN, 'test_efi_runtime_map', []),
     (CC, 'test_device_window', [*C11, '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_device_window.c'), R('src/kernel/device_window.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_device_window', []),
     (CC, 'test_pci_config', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('tests/unit/shadow_io'), '-iquote', R('tests/unit/include'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_pci_config.c'), R('src/kernel/pci_config.c'), R('src/kernel/arch/x86_64/pci_cfg_x86_64.c'), R('tests/unit/stubs_spinlock.c')]),
@@ -489,6 +493,11 @@ def build(b):
             b,
             "test_as_uart",
             [drivers / "serial/uart.ts", shuffle, unit / "test_as_uart.ts"],
+        )
+        steps += as_test(
+            b,
+            "test_as_rtc_time",
+            [drivers / "rtc/rtc_time.ts", shuffle, unit / "test_as_rtc_time.ts"],
         )
 
     # The Go binding runs on wasm32: Go models every record as an opaque blob

@@ -29,6 +29,7 @@
 #include "../include/xfer_buffer.h"
 #include "link_dma.h"
 #include "link_ipc.h"
+#include "link_rtc.h"
 
 extern "C" {
 #include "boot.h"
@@ -54,6 +55,7 @@ extern "C" {
 #include "mmio.h"
 #include "serial.h"
 #include "capability.h"
+#include "efi_rtc.h"
 #include "io_region.h"
 #include "timer.h"
 #include "policy.h"
@@ -962,6 +964,31 @@ static uint32_t warp_pci_config_read(uint32_t bdf, uint32_t reg, uint32_t out_of
         return (uint32_t)rc;
     *out = value;
     return 0;
+}
+
+/* hostcalls.yaml `rtc_efi_get` / `rtc_efi_set`: the firmware clock (efi_rtc.h)
+ * for a holder of rtc.efi. `buf` holds EFI_RTC_FIELDS int32 fields. */
+static int32_t* warp_rtc_efi_buf(void* ctx_, uint32_t buf, uint32_t len, uint32_t* out_rc) {
+    *out_rc = warp_rtc_efi_admit(len);
+    if (*out_rc != 0) {
+        return nullptr;
+    }
+    auto* p = reinterpret_cast<int32_t*>(
+        warp_mem(warp_call_ctx(ctx_), buf, EFI_RTC_FIELDS * sizeof(int32_t)));
+    *out_rc = p ? 0u : (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    return p;
+}
+
+static uint32_t warp_rtc_efi_get(uint32_t buf, uint32_t len, void* ctx_) {
+    uint32_t rc = 0;
+    int32_t* p = warp_rtc_efi_buf(ctx_, buf, len, &rc);
+    return p ? (uint32_t)efi_rtc_get(p) : rc;
+}
+
+static uint32_t warp_rtc_efi_set(uint32_t buf, uint32_t len, void* ctx_) {
+    uint32_t rc = 0;
+    int32_t* p = warp_rtc_efi_buf(ctx_, buf, len, &rc);
+    return p ? (uint32_t)efi_rtc_set(p) : rc;
 }
 
 /* The context that owns `endpoint`, the driver a pci-bus request is made for;

@@ -1776,7 +1776,7 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
 
 - [ ] [BUG][P1] Correct 12-hour RTC decoding. The noon and midnight hours are off by 12 in
   both the BCD and binary branches; unreached while register B reports 24-hour
-  mode (`src/drivers/rtc/rtc.ts:218` `FIXME`).
+  mode (`src/drivers/rtc/cmos.ts:133` `FIXME`).
 - [x] [BUG][P1] Add the producer-lapped snap-forward to the PCI framebuffer's console-ring
   drain. Obsolete: neither framebuffer driver drains the console ring any more
   (everything they paint arrives as FBTEXT IPC from the vt), and both now run
@@ -2279,9 +2279,19 @@ and the reason it prints names what is missing. Read `docs/architecture/04-boot-
 `06-memory-management.md` and `10-capability-and-policy.md` first.
 
 - [ ] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
-  x86_64-only) and PL031 RTC driver (the CMOS rtc stays x86_64-only). Until
-  then aarch64 skips the `date` tests (`test_cli`, `test_app_churn`, the rtc
-  unit in `test_supervisor`), and its display takes no input.
+  x86_64-only). Until then aarch64's display takes no input.
+- [x] [FEATURE][P2] A clock on aarch64, chosen in Kconfig (`WASMOS_RTC_*`): the
+  `pl031` driver (default; acpi-bus publishes QEMU virt's PL031 from its board
+  table) or `rtc_efi` (UEFI GetTime/SetTime, after the loader's
+  SetVirtualAddressMap). The `date` tests run on aarch64.
+- [ ] [TEST][P3] CI builds only the default clock (PL031); `WASMOS_RTC_EFI` is
+  verified locally (`run-qemu-test`, boot-and-init). A battery cannot be scoped
+  to one configuration, so covering it means a second aarch64 config in
+  `tests/batteries.json` or a dedicated job.
+- [ ] [FEATURE][P3] The firmware clock reports the firmware's wall time
+  unconverted: a firmware configured with a time zone yields local time
+  (`TODO(efi-rtc-timezone)`, `src/kernel/efi_rtc.c`). edk2 on QEMU virt leaves
+  the zone unspecified, so the time is the PL031's UTC.
 - [x] [FEATURE][P2] A framebuffer on aarch64. Done with QEMU ramfb: the harness
   attaches `-device ramfb`, the firmware reports it as the GOP framebuffer, and
   `framebuffer_ramfb` (bound to the fw_cfg device QEMU0002) serves it and sets

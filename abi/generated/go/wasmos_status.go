@@ -243,6 +243,9 @@ const (
 	WASMOS_ERR_RTC_IO int32 = -0x000D0002 // reading the CMOS/RTC registers failed
 	WASMOS_ERR_RTC_TIMEOUT int32 = -0x000D0003 // the RTC did not settle within the read window
 	WASMOS_ERR_RTC_DENIED int32 = -0x000D0004 // caller lacks the capability for this operation
+	WASMOS_ERR_RTC_OUT_OF_RANGE int32 = -0x000D0005 // the clock holds a time outside the years the rtc protocol carries (1970-2099)
+	WASMOS_ERR_RTC_UNAVAILABLE int32 = -0x000D0006 // the firmware clock is not available: no UEFI runtime services were handed over
+	WASMOS_ERR_RTC_FIRMWARE int32 = -0x000D0007 // the UEFI GetTime/SetTime call returned an error
 	WASMOS_ERR_XFER_BUFFER_NULL_ARG int32 = -0x000B0001 // a required pointer argument was NULL
 	WASMOS_ERR_XFER_BUFFER_INVALID_KIND int32 = -0x000B0002 // unknown or unsupported buffer kind
 	WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT int32 = -0x000B0003 // a context id argument was zero
@@ -813,6 +816,12 @@ func WasmosStrerror(c int32) string {
 		return "the RTC did not settle within the read window"
 	case WASMOS_ERR_RTC_DENIED:
 		return "caller lacks the capability for this operation"
+	case WASMOS_ERR_RTC_OUT_OF_RANGE:
+		return "the clock holds a time outside the years the rtc protocol carries (1970-2099)"
+	case WASMOS_ERR_RTC_UNAVAILABLE:
+		return "the firmware clock is not available: no UEFI runtime services were handed over"
+	case WASMOS_ERR_RTC_FIRMWARE:
+		return "the UEFI GetTime/SetTime call returned an error"
 	case WASMOS_ERR_XFER_BUFFER_NULL_ARG:
 		return "a required pointer argument was NULL"
 	case WASMOS_ERR_XFER_BUFFER_INVALID_KIND:

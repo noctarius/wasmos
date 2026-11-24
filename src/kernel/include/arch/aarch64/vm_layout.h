@@ -22,6 +22,10 @@
  * Device-nGnRE, the other three Normal write-back. RAM above 4 GiB (a machine
  * started with more than 3 GiB) has no alias. */
 #define KERNEL_HIGHER_HALF_WINDOW_BYTES (4ULL * 1024ULL * 1024ULL * 1024ULL)
+/* The Device-nGnRE head of the direct map, physical [0, 1 GiB): never
+ * executable and faulting an unaligned access (paging_init, entry.S). Only
+ * device registers are reached through it. */
+#define KERNEL_DIRECT_MAP_DEVICE_BYTES (1ULL * 1024ULL * 1024ULL * 1024ULL)
 /* entry.S builds the whole direct map before kmain, so the window that is
  * valid before paging_init is the full one. */
 #define KERNEL_BOOTSTRAP_WINDOW_BYTES KERNEL_HIGHER_HALF_WINDOW_BYTES

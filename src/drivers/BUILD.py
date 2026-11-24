@@ -14,6 +14,8 @@ def build(b):
         "keyboard",
         "mouse",
         "rtc",
+        "pl031",
+        "rtc_efi",
         "virtio_net",
         "virtio_serial",
         "virtio_rng",

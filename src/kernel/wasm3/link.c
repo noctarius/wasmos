@@ -27,6 +27,7 @@
 #include "mmio.h"
 #include "policy.h"
 #include "capability.h"
+#include "efi_rtc.h"
 #include "io_region.h"
 #include "system_control.h"
 #include "thread.h"
@@ -1963,6 +1964,40 @@ m3ApiRawFunction(wasmos_pci_config_read) {
     }
     m3ApiReturn(pci_config_guest_read(
         context_id, capability_has(context_id, CAP_PCI_CONFIG), (uint32_t)bdf, (uint32_t)reg, out));
+}
+
+/* hostcalls.yaml `rtc_efi_get` / `rtc_efi_set`: the firmware clock (efi_rtc.h)
+ * for a holder of rtc.efi. `buf` holds EFI_RTC_FIELDS int32 fields; a range
+ * outside linear memory TRAPS the module via m3ApiCheckMem. */
+static int32_t rtc_efi_guest_check(int32_t len) {
+    uint32_t context_id = 0;
+    if (len < (int32_t)(EFI_RTC_FIELDS * sizeof(int32_t))) {
+        return WASMOS_INVAL;
+    }
+    if (current_process_context(&context_id) != 0 || !capability_has(context_id, CAP_RTC_EFI)) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
+    return 0;
+}
+
+m3ApiRawFunction(wasmos_rtc_efi_get) {
+    m3ApiReturnType(int32_t) m3ApiGetArgMem(int32_t*, buf) m3ApiGetArg(int32_t, len);
+    int32_t rc = rtc_efi_guest_check(len);
+    if (rc != 0) {
+        m3ApiReturn(rc);
+    }
+    m3ApiCheckMem(buf, EFI_RTC_FIELDS * sizeof(int32_t));
+    m3ApiReturn(efi_rtc_get(buf));
+}
+
+m3ApiRawFunction(wasmos_rtc_efi_set) {
+    m3ApiReturnType(int32_t) m3ApiGetArgMem(const int32_t*, buf) m3ApiGetArg(int32_t, len);
+    int32_t rc = rtc_efi_guest_check(len);
+    if (rc != 0) {
+        m3ApiReturn(rc);
+    }
+    m3ApiCheckMem(buf, EFI_RTC_FIELDS * sizeof(int32_t));
+    m3ApiReturn(efi_rtc_set(buf));
 }
 
 /* The context that owns `endpoint`, the driver a pci-bus request is made for;

@@ -126,7 +126,8 @@ struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
 /* EFI_SYSTEM_TABLE, the root object handed to efi_main.  Only ConOut,
  * ConsoleOutHandle/StandardErrorHandle (used to force controller connects),
  * BootServices and the configuration table (searched for the ACPI RSDP) are
- * consumed; RuntimeServices, ConIn and StdErr are void* placeholders holding
+ * consumed, and RuntimeServices when the loader hands the runtime services
+ * over (EFI_RUNTIME_SERVICES); ConIn and StdErr are void* placeholders holding
  * spec offsets.  NumberOfTableEntries counts EFI_CONFIGURATION_TABLE elements at
  * ConfigurationTable.  Every pointer in the table is firmware-owned and becomes
  * invalid for boot-services members once ExitBootServices succeeds. */
@@ -140,7 +141,7 @@ typedef struct {
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL* ConOut;
     EFI_HANDLE StandardErrorHandle;
     void* StdErr;
-    void* RuntimeServices;
+    struct _EFI_RUNTIME_SERVICES* RuntimeServices;
     struct _EFI_BOOT_SERVICES* BootServices;
     UINTN NumberOfTableEntries;
     void* ConfigurationTable;
@@ -223,8 +224,9 @@ typedef struct _EFI_BOOT_SERVICES {
  * EFI_MEMORY_TYPE (EFI_LOADER_DATA = 2 is what this loader allocates with),
  * NumberOfPages counts 4 KiB pages from PhysicalStart, and Attribute carries the
  * EFI_MEMORY_* cacheability/protection bits.  VirtualStart stays 0 unless the
- * OS calls SetVirtualAddressMap, which this loader does not.  Array elements are
- * spaced by the DescriptorSize GetMemoryMap reports, not by this sizeof. */
+ * OS calls SetVirtualAddressMap, which this loader does only for the firmware
+ * clock (WASMOS_EFI_RUNTIME).  Array elements are spaced by the DescriptorSize
+ * GetMemoryMap reports, not by this sizeof. */
 typedef struct {
     UINT32 Type;
     UINT64 PhysicalStart;
@@ -232,6 +234,32 @@ typedef struct {
     UINT64 NumberOfPages;
     UINT64 Attribute;
 } EFI_MEMORY_DESCRIPTOR;
+
+/* EFI_MEMORY_TYPE values a runtime region can carry (UEFI 2.10, 7.2.1):
+ * firmware code and data in RAM, and device registers the runtime services
+ * reach (EDK2 on QEMU virt marks the PL031 and the variable-store flash). */
+#define EFI_RUNTIME_SERVICES_CODE 5u
+#define EFI_RUNTIME_SERVICES_DATA 6u
+#define EFI_MEMORY_MAPPED_IO 11u
+#define EFI_MEMORY_MAPPED_IO_PORT_SPACE 12u
+
+/* Attribute bit of a region the runtime services use after ExitBootServices
+ * (UEFI 2.10, 7.2.3): SetVirtualAddressMap must be given its virtual address. */
+#define EFI_MEMORY_RUNTIME 0x8000000000000000ULL
+
+/* EFI_RUNTIME_SERVICES (UEFI 2.10, 4.5).  Only SetVirtualAddressMap is called
+ * by the loader; the kernel calls GetTime and SetTime through its own
+ * declaration (src/kernel/efi_rtc.c), at the virtual address this map names. */
+typedef struct _EFI_RUNTIME_SERVICES {
+    EFI_TABLE_HEADER Hdr;
+    void* GetTime;
+    void* SetTime;
+    void* GetWakeupTime;
+    void* SetWakeupTime;
+    EFI_STATUS(EFIAPI* SetVirtualAddressMap)(UINTN MemoryMapSize, UINTN DescriptorSize,
+                                             UINT32 DescriptorVersion,
+                                             EFI_MEMORY_DESCRIPTOR* VirtualMap);
+} EFI_RUNTIME_SERVICES;
 
 /* EFI_CONFIGURATION_TABLE entry.  The array at EFI_SYSTEM_TABLE.ConfigurationTable
  * maps a vendor GUID to an unstructured table pointer; the loader scans it for

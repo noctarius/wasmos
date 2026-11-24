@@ -557,3 +557,5 @@ pub const WASMOS_CAP_SPAWN_GRANT: i32 = 8;
 pub const WASMOS_CAP_SVC_CONTROL: i32 = 9;
 /// pci.config: read and write PCI configuration space (pci_config_read/pci_config_write).
 pub const WASMOS_CAP_PCI_CONFIG: i32 = 10;
+/// rtc.efi: read and set the clock through UEFI runtime services (rtc_efi_get/rtc_efi_set).
+pub const WASMOS_CAP_RTC_EFI: i32 = 11;

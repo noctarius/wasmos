@@ -153,6 +153,38 @@ def disk_images(b):
     return ["wfs.img", "wfs_virtio.img", "user.img"]
 
 
+# The aarch64 "rtc" service, by Kconfig choice (WASMOS_RTC_*): the PL031 that
+# acpi-bus publishes from its board table, or the firmware clock, which has no
+# device to match and starts at boot (a boot rule takes no ENV{RESTART}).
+# x86_64's CMOS rule is in its rules file.
+RTC_RULES = {
+    "WASMOS_RTC_PL031": 'SUBSYSTEM=="acpi", ATTR{hid}=="PL031", '
+    'ENV{RESTART}="on-failure", RUN+="system/drivers/pl031.wap"',
+    "WASMOS_RTC_EFI": 'SUBSYSTEM=="boot", RUN+="system/drivers/rtc_efi.wap"',
+}
+
+
+def boot_rules(b):
+    """The architecture's boot-FAT rules file with the configured RTC rule
+    appended, staged as default.rules."""
+    base = b.dir / f"devmgr/rules/default.{arch(b.cfg).name}.rules"
+    lines = [rule for symbol, rule in RTC_RULES.items() if b.cfg.get(symbol, False)]
+    extra = b.write_file(
+        "devmgr-rules-config.rules",
+        "".join(
+            ["# Selected by Kconfig (scripts/system/BUILD.py RTC_RULES).\n"]
+            + [line + "\n" for line in lines]
+        ),
+    )
+    b.command(
+        ["devmgr-default.rules"],
+        ["sh", "-c", 'cat "$0" "$1" > devmgr-default.rules', base, extra],
+        inputs=[base, extra],
+        description="RULES devmgr-default.rules",
+    )
+    return "devmgr-default.rules"
+
+
 def esp(b, initfs_img):
     root, system = b.root, b.dir
     files = [
@@ -161,12 +193,10 @@ def esp(b, initfs_img):
         ("kernel.cmdline", system / "kernel.cmdline"),
         ("initfs.img", initfs_img),
         ("system/sysinit.rc", system / "sysinit.rc"),
-        # The boot rules, per architecture like the initfs set; installed under
-        # the one name the device manager reads.
-        (
-            "system/devmgr/rules/default.rules",
-            system / f"devmgr/rules/default.{arch(b.cfg).name}.rules",
-        ),
+        # The boot rules, per architecture like the initfs set plus the
+        # configured RTC rule; installed under the one name the device manager
+        # reads.
+        ("system/devmgr/rules/default.rules", boot_rules(b)),
         ("system/net/interfaces", system / "net/interfaces"),
         ("system/fonts/roboto.ttf", system / "fonts/Roboto-Regular.ttf"),
         ("system/fonts/roboto_mono.ttf", system / "fonts/RobotoMono-Regular.ttf"),

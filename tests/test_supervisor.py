@@ -14,11 +14,16 @@ if SCRIPTS not in sys.path:
 from qemu_test_framework import (
     GuestRestarted,
     QemuSession,
+    build_config_enabled,
     default_config,
+    guest_arch,
     requires_arch,
 )
 
 PROBE = "/boot/apps/sv_probe.wap"
+# The supervised clock driver's unit: device-manager names it after the package
+# and the device's window (the CMOS ports on x86_64, the PL031's MMIO on aarch64).
+RTC_UNIT = {"x86_64": "rtc@acpi:0070", "aarch64": "pl031@acpi:9010000"}
 
 
 def _syslog_wait(session, needle: str, timeout_s: float) -> str:
@@ -52,17 +57,26 @@ def _svc(test, session, args: str) -> str:
     return out[: out.rfind("wamos> ")]
 
 
+# One `svc list` row: UNIT, STATE, PID and RESTARTS (both always numbers), then
+# LAST. The console is shared, so another process's output can land between
+# rows; a line is a row only when it has this shape, not because it has five
+# words.
+_LIST_ROW = re.compile(r"^\S+ +[a-z]+ +[0-9]+ +[0-9]+ +\S")
+
+
+def _table_rows(out: str) -> tuple:
+    """The header and the row lines of a `svc list` table in `out`."""
+    table = out[out.index("UNIT") :].splitlines()
+    return table[0], [line for line in table[1:] if _LIST_ROW.match(line)]
+
+
 def _list_rows(test, session) -> dict:
     """`svc list` as {unit: [state, pid, restarts, last...]}."""
     out = _svc(test, session, "list")
     if "UNIT" not in out:
         test.fail(f"svc list printed no table.\n--- output ---\n{out}\n")
-    rows = {}
-    for line in out[out.index("UNIT") :].splitlines()[1:]:
-        cols = line.split()
-        if len(cols) >= 5:
-            rows[cols[0]] = cols[1:]
-    return rows
+    _, lines = _table_rows(out)
+    return {cols[0]: cols[1:] for cols in (line.split() for line in lines)}
 
 
 def _submit(test, session, spec: str) -> None:
@@ -188,10 +202,8 @@ class SupervisorTests(unittest.TestCase):
         # (virtio_rng@pci:00:04.0, 22) pushed its row's STATE, PID, RESTARTS
         # and LAST out from under their headings.
         out = _svc(self, self.session, "list")
-        table = out[out.index("UNIT") :].splitlines()
-        header = table[0]
+        header, rows = _table_rows(out)
         starts = [header.index(h) for h in ("STATE", "PID", "RESTARTS", "LAST")]
-        rows = [line for line in table[1:] if len(line.split()) >= 5]
         self.assertTrue(
             any(len(line.split()[0]) > 19 for line in rows),
             f"no unit name long enough to test the layout:\n{out}",
@@ -489,15 +501,18 @@ class SupervisorTests(unittest.TestCase):
             "the start did not give the unit a fresh window of five ends",
         )
 
-    @requires_arch(
-        "x86_64",
-        reason='no RTC on aarch64 yet: the CMOS rtc is x86_64 hardware and PL031 is in docs/TASKS.md "arm64 Port"',
+    @unittest.skipIf(
+        build_config_enabled("WASMOS_RTC_EFI"),
+        "the firmware clock (WASMOS_RTC_EFI) starts from a boot rule, which is not "
+        "a supervised unit",
     )
     def test_9_a_killed_driver_is_restarted_and_serves_again(self):
-        # device-manager hands rtc to the supervisor (default.rules,
+        # device-manager hands the clock driver to the supervisor (default.rules,
         # ENV{RESTART}="on-failure"), so a kill on request is a failure the
-        # supervisor restarts it from, and date reaches the new instance.
-        unit = "rtc@acpi:0070"
+        # supervisor restarts it from, and date reaches the new instance. The
+        # unit is the CMOS rtc on x86_64 and the PL031 on aarch64 (the default
+        # WASMOS_RTC_PL031; the firmware clock is a boot rule, not supervised).
+        unit = RTC_UNIT[guest_arch()]
         before = _list_rows(self, self.session)
         self.assertIn(unit, before, f"rtc is not a supervised unit: {sorted(before)}")
         self.assertIn(before[unit][0], ("running", "stable"))

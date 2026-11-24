@@ -264,6 +264,10 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
         return warp_pci_config_write_for((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, reinterpret_cast<void*>(a4));
     case HC_IPC_PEER_AWAIT:
         return warp_ipc_peer_await((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
+    case HC_RTC_EFI_GET:
+        return warp_rtc_efi_get((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
+    case HC_RTC_EFI_SET:
+        return warp_rtc_efi_set((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     default:
         return (uint32_t)-1;
     }

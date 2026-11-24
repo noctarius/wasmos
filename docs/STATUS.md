@@ -216,7 +216,7 @@ linked feature documents for rationale and rollout plans.
   into client buffer") because only one of them is actually copy-free. Writes
   have no zero-copy path: `BLOCK_IPC_WRITE_REQ` names the driver's own buffer, so
   there is no client borrow to map (`TODO(zero-copy writes)` in
-  `src/drivers/ata/ata.c`).
+  `src/drivers/block/ata/ata.c`).
 - Validated on `wasmos_defconfig` (WARP+SMP, 9/11 runs), `wasm3_smp_defconfig`,
   and `wasm3_single_defconfig` (3/3). The two failures were a
   `scheduler: no runnable thread` panic during early kernel self-tests, before
@@ -836,7 +836,7 @@ linked feature documents for rationale and rollout plans.
   for a firmware without GOP (the x86 0xCF8 scan is x86_64-only).
 - The aarch64 clock is a Kconfig choice (`WASMOS_RTC_*`, "Real-time clock
   (aarch64)"); both serve the `rtc` protocol through the shared core
-  (`src/drivers/rtc/rtc_core.ts`), as the x86_64 CMOS driver now does. The
+  (`src/drivers/rtc/core/rtc_core.ts`), as the x86_64 CMOS driver now does. The
   default `pl031` drives QEMU virt's PL031, which acpi-bus publishes from a
   board table (the DSDT omits it; keyed on QEMU's OEM ID plus a GTDT).
   `rtc_efi` uses UEFI GetTime/SetTime: the loader calls SetVirtualAddressMap
@@ -861,7 +861,7 @@ linked feature documents for rationale and rollout plans.
   `etc/ramfb`), and device-manager retires a device whose driver exits 0
   before READY instead of retrying it. The PCI and ACPI rule tables hold 32
   rules each and report rules that do not fit.
-- Keyboard and mouse on aarch64 are virtio-input (`src/drivers/virtio_input/`):
+- Keyboard and mouse on aarch64 are virtio-input (`src/drivers/input/virtio_input/`):
   QEMU virt carries `virtio-keyboard-pci` and `virtio-mouse-pci` at slots 0x1c
   and 0x1d (`qemu_input` in `ARCHES`), and device-manager spawns one instance
   per function (modern id 0x1052), supervised. An instance registers `kbd` when
@@ -880,7 +880,7 @@ linked feature documents for rationale and rollout plans.
   reports a runtime mode change with `framebuffer_set_geometry`, so the
   kernel's framebuffer info -- what the compositor remaps from -- follows it.
   The framebuffer drivers share one FBTEXT server
-  (`src/drivers/framebuffer/fbtext_server.c`). An ACPI rule's driver gets the
+  (`src/drivers/gpu/framebuffer/fbtext_server.c`). An ACPI rule's driver gets the
   DMA its manifest declares (`dm_acpi_caps`).
 - Interrupt grants are lists of interrupt identifiers -- an ISA line on
   x86_64, a GIC SPI INTID on aarch64 -- carried in the spawn descriptor
@@ -1248,7 +1248,7 @@ linked feature documents for rationale and rollout plans.
 - A filesystem driver receives `id=` in its startup arguments and fingerprints it
   to find its disk, so the id has exactly one producer. `blkinfo` names disks by
   canonical id, including for `--write`.
-- The partition manager (`src/drivers/partition_manager/`, Zig) is a `block`
+- The partition manager (`src/drivers/block/partition/`, Zig) is a `block`
   class client of every disk and a `block` class provider of every partition on
   them: a consumer cannot tell a partition from a whole disk. It probes GPT then
   MBR then nothing, publishes a descriptor per partition with the window in
@@ -1487,7 +1487,7 @@ linked feature documents for rationale and rollout plans.
   `mount` was extracted from the CLI so the table always comes from the service
   that owns it. `mount -t <type> <path> [source]` places one; bare `mount`
   reports the table.
-- `fs-tmpfs` (`src/drivers/fs_tmpfs/`, Zig) is a read-write filesystem held in
+- `fs-tmpfs` (`src/drivers/fs/tmpfs/`, Zig) is a read-write filesystem held in
   its own linear memory, reporting `FSMGR_BACKEND_PSEUDO` + `FS_TYPE_TMPFS`. It
   is a general in-memory filesystem, not a root-specific one: the mount comes
   from the `mount=` startup argument and defaults to `/`, the class instance is a
@@ -1689,7 +1689,7 @@ linked feature documents for rationale and rollout plans.
   IMPLEMENTED: superblock and byte-offset mount, block-group descriptors, the object
   table, directories, extents and the extent tree, seeded checksums,
   feature-flag validation, and a read-only mount. Inline data works too, ahead
-  of the order that defers it to phase 4. `src/drivers/fs_wfs` runs every
+  of the order that defers it to phase 4. `src/drivers/fs/wfs` runs every
   operation as a task on the SYSTEM coroutine runtime; `mkfs_wfs` is the host
   formatter and `--populate` places a host tree into an image. A volume is
   mounted in the guest at `/wfs` from ATA unit 2 by a device-manager rule, and
@@ -1866,7 +1866,7 @@ linked feature documents for rationale and rollout plans.
   and nothing between them. A matched
   device whose driver never becomes ready within its retries is given up on and
   logged, so the one-at-a-time spawn queue moves on to the next rule.
-- The UART drivers are one chip-independent core (`src/drivers/serial/
+- The UART drivers are one chip-independent core (`src/drivers/tty/serial/
   serial_core.ts`: "sin" registration, the vt subscription, the RX ring, IRQ
   and polling) linked with one chip backend per image: `uart16550.wap`
   (`io.port`) and `pl011.wap` (`mmio.map`), so neither holds the other's

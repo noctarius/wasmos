@@ -756,11 +756,11 @@ run_assemblyscript_lint() {
 
         # Source directories several modules share: a module's BUILD.py lists
         # them beside its own files (the UART backends link
-        # src/drivers/serial/serial_core.ts, the clock backends
-        # src/drivers/rtc/rtc_core.ts), and the build stages them the same way,
+        # src/drivers/tty/serial/serial_core.ts, the clock backends
+        # src/drivers/rtc/core/rtc_core.ts), and the build stages them the same way,
         # so the lint must too.
         local shared_dir shared
-        for shared_dir in src/drivers/serial src/drivers/rtc; do
+        for shared_dir in src/drivers/tty/serial src/drivers/rtc/core; do
             for shared in "$shared_dir"/*.ts; do
                 if [[ "$shared" != "$file" ]]; then
                     copy_if_needed "$shared" "$stage_dir/$(basename "$shared")"

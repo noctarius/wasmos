@@ -250,10 +250,10 @@ supervised driver restart, capability manifests) is tracked in
   console (device IDs 0x1003/0x1043, vendor 0x1AF4) over the virtio 1.x
   transport and writes the kmsg ring to port 0, replayed from boot.
 - **`virtio-net`** driver (native C): PCI-matched virtio network driver
-  (`src/drivers/virtio_net/`) with queue setup, IRQ-driven RX/TX, and an ARP
+  (`src/drivers/net/virtio_net/`) with queue setup, IRQ-driven RX/TX, and an ARP
   smoke path.
 - **`virtio-rng`** driver (native C): PCI-matched virtio entropy driver
-  (`src/drivers/virtio_rng/`); registers the `hrng` class.
+  (`src/drivers/char/virtio_rng/`); registers the `hrng` class.
 
 ---
 

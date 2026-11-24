@@ -62,7 +62,7 @@ esac
 
 # 128 MiB at 16 KiB clusters yields ~8190 clusters, comfortably inside the FAT16
 # window [4085, 65525). FAT16 is required: fs_fat detects FAT32 but serves no
-# FAT-table access on it (src/drivers/fs_fat/fat_geom.c).
+# FAT-table access on it (src/drivers/fs/fat/fat_geom.c).
 #
 # 16 KiB clusters also keep every directory inside a single cluster. fs_fat does
 # not find entries past a subdirectory's first cluster, so small enough clusters

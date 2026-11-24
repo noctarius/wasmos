@@ -1,5 +1,5 @@
 /* Host unit test for the WFS on-disk format layer: CRC32C, the seeded metadata
- * checksum, and superblock validation (src/drivers/fs_wfs/).
+ * checksum, and superblock validation (src/drivers/fs/wfs/).
  *
  * Authority for every constant asserted here is
  * docs/WFS_WASMOS_FILE_SYSTEM.md. The point of the suite is that the format is

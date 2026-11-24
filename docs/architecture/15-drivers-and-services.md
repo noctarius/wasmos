@@ -313,7 +313,7 @@ driven. Only the eventq is configured; the statusq (LEDs) is left off.
   not register
 - **Entry bindings:** `proc.endpoint`
 
-The drivers share `src/drivers/rtc/rtc_core.ts` (registration and the request
+The drivers share `src/drivers/rtc/core/rtc_core.ts` (registration and the request
 loop) and `rtc_time.ts` (the six-field UTC time, its wire packing, validation
 -- the day is checked against its month -- and epoch-seconds conversion); a
 backend supplies `init`, `read` and `set`. The PL031 holds seconds since

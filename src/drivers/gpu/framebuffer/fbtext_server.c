@@ -1,5 +1,5 @@
 #include "fbtext_server.h"
-#include "../include/wasmos_driver_abi.h"
+#include "../../include/wasmos_driver_abi.h"
 #include "fbtext_internal.h"
 
 /*

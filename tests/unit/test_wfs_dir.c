@@ -1,4 +1,4 @@
-/* Host unit test for the WFS directory scan (src/drivers/fs_wfs/wfs_dir.c).
+/* Host unit test for the WFS directory scan (src/drivers/fs/wfs/wfs_dir.c).
  *
  * Directory blocks are laid out by this suite rather than by mkfs_wfs, which
  * builds only an empty root: what has to be exercised is a directory with

@@ -1,5 +1,5 @@
 //! Unit tests for the rescan diff
-//! (src/drivers/partition_manager/reconcile.zig).
+//! (src/drivers/block/partition/reconcile.zig).
 //!
 //! Every case here is a partition table being rewritten under live devices,
 //! which is the situation `fdisk` creates and the one that is impractical to

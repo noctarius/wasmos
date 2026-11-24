@@ -1,5 +1,5 @@
 //! Unit tests for the table of backends a block client has lent its buffers to
-//! (src/drivers/partition_manager/backends.zig).
+//! (src/drivers/block/partition/backends.zig).
 const std = @import("std");
 const be = @import("backends");
 

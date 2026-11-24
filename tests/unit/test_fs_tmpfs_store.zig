@@ -1,5 +1,5 @@
 //! Host unit tests for the tmpfs namespace and storage core
-//! (src/drivers/fs_tmpfs/fs_tmpfs_store.zig).
+//! (src/drivers/fs/tmpfs/fs_tmpfs_store.zig).
 //!
 //! The core depends on nothing in the guest environment except a source of pool
 //! memory, which on the guest comes from `memory.grow`. These tests supply that

@@ -1,11 +1,11 @@
 """rtc_efi: the firmware clock driver (UEFI GetTime/SetTime), the efi backend
-linked with the shared RTC core (src/drivers/rtc)."""
+linked with the shared RTC core (src/drivers/rtc/core)."""
 
 from wasmos_rules import guest, install
 
 
 def build(b):
-    core = b.root / "src/drivers/rtc"
+    core = b.root / "src/drivers/rtc/core"
     wap = guest(
         b,
         "rtc_efi",

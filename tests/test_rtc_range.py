@@ -2,7 +2,7 @@
 """A clock outside the years the rtc protocol carries is refused, not reported.
 
 The rtc service answers in the range validateTime() accepts (1970-2099,
-src/drivers/rtc/rtc_time.ts). The guest boots with its hardware clock in 2100,
+src/drivers/rtc/core/rtc_time.ts). The guest boots with its hardware clock in 2100,
 so `date` must fail rather than print a year the protocol does not carry.
 
 Regression: 2026-11-24-efi-rtc-unvalidated-read -- the firmware-clock backend

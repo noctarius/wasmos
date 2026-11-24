@@ -1,4 +1,4 @@
-/* Host unit test for fs-fat's block layer (src/drivers/fs_fat/fat_block.c):
+/* Host unit test for fs-fat's block layer (src/drivers/fs/fat/fat_block.c):
  * what it sends a block server, and what it does when that server ends.
  *
  * The IPC hostcalls the layer reaches the server through are defined here --

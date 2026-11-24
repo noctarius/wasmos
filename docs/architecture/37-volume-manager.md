@@ -7,8 +7,8 @@
 > uuid, naming no disk, unit, backend, partition or transport, and `fs_wfs`
 > claims the volume it mounts while `fsck.wfs` refuses a claimed one.
 
-**Sources this proposal changes**: `src/drivers/partition_manager/`,
-`src/services/device_manager/device_manager_rules.c`, `src/drivers/fs_fat/`,
+**Sources this proposal changes**: `src/drivers/block/partition/`,
+`src/services/device_manager/device_manager_rules.c`, `src/drivers/fs/fat/`,
 `abi/constants.yaml`, `abi/opcodes.yaml`, the devmgr rule files.
 
 (Planned new components: a WFS filesystem driver and fsck/mkfs utilities; their exact paths are part of the implementation work.)
@@ -366,7 +366,7 @@ have it without changing that figure deliberately.
 
 ### Where the library lives
 
-`src/drivers/partition_manager/partition_table.zig` is the precedent and the
+`src/drivers/block/partition/partition_table.zig` is the precedent and the
 shape to copy: a pure module with no `std`, no host calls and no globals, taking
 bytes and returning a verdict, with `test` blocks run under `zig test` in the
 unit-test target. Purity is what makes exhaustive host testing possible — the

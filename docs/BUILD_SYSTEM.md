@@ -411,9 +411,9 @@ def build(b):
   first (see `src/services/logger/BUILD.py`).
 - **Zig, AssemblyScript, Rust, Go:** `guest(..., lang="zig")` etc., listing the
   module's own sources and the `.c` shims it links
-  (`src/drivers/virtio_blk/BUILD.py`).
+  (`src/drivers/block/virtio_blk/BUILD.py`).
 - **Native ring-3 module:** compile with `b.toolchain("native")` and link with
-  `native()` (`src/drivers/framebuffer/BUILD.py`,
+  `native()` (`src/drivers/gpu/framebuffer/BUILD.py`,
   `src/services/gfx_compositor/BUILD.py`).
 - **Boot-phase module:** name its `.wap` in `scripts/initfs.<arch>.toml` instead of
   installing it; initfs finds it by name in the build directory.

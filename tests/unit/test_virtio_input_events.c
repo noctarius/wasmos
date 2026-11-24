@@ -1,5 +1,5 @@
 /* test_virtio_input_events.c -- the device-independent half of the virtio-input
- * driver (src/drivers/virtio_input/virtio_input_events.c): subscriber slots,
+ * driver (src/drivers/input/virtio_input/virtio_input_events.c): subscriber slots,
  * evdev-to-PS/2 Set 1 translation and mouse report publishing. Notifications
  * are recorded by a fake notify callback, so every case asserts what the
  * subscribers would have received.

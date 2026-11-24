@@ -2,7 +2,7 @@
 
 > **Documentation status: format specification.** This document defines the
 > on-disk format and the procedures over it. It is not an implementation
-> snapshot: what the driver in `src/drivers/fs_wfs` implements today, and which
+> snapshot: what the driver in `src/drivers/fs/wfs` implements today, and which
 > of the phases in [§23](#23-minimal-implementation-order) are complete, is
 > recorded in [Current Status](STATUS.md). WFS is a third backend beside
 > `fs_fat` and `fs_init` under the `fs_manager` router

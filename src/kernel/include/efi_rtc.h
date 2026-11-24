@@ -8,7 +8,7 @@
  * capability.
  *
  * A time is six int32 fields in the rtc protocol's order: seconds, minutes,
- * hours, day of month, month, full year (src/drivers/rtc/rtc_time.ts). */
+ * hours, day of month, month, full year (src/drivers/rtc/core/rtc_time.ts). */
 #ifndef WASMOS_EFI_RTC_H
 #define WASMOS_EFI_RTC_H
 

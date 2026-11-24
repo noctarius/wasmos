@@ -14,6 +14,6 @@
 #ifndef FS_WFS_WFS_STATUS_H
 #define FS_WFS_WFS_STATUS_H
 
-#include "../../../abi/generated/c/wasmos_status.h"
+#include "../../../../abi/generated/c/wasmos_status.h"
 
 #endif /* FS_WFS_WFS_STATUS_H */

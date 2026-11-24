@@ -7,7 +7,7 @@ description: Create, wire, and validate a new WASMOS device driver (WASM or nati
 
 ## Overview
 
-A driver is a `.wap` package under `src/drivers/<name>/` that the **device
+A driver is a `.wap` package under `src/drivers/<class>/<name>/` that the **device
 manager** spawns from disk at boot. It exports a single `initialize` entry that
 creates an endpoint, registers a service, and runs its own event loop. WASM
 drivers (C/C++/Rust/Zig/AssemblyScript, `native = false`) run ring-3 through
@@ -23,20 +23,30 @@ Legacy patterns that are GONE — do not use them:
 
 ## Workflow
 
-1. Choose runtime (WASM vs native) and create the source under `src/drivers/<name>/`.
+1. Choose runtime (WASM vs native) and create the source under `src/drivers/<class>/<name>/`.
 2. Export `initialize`; register a service; run a blocking/event-loop.
 3. Declare `linker.metadata` (package + capabilities + optional PCI match).
-4. Add a `BUILD.py` (`guest(...)`/`native(...)` + `install(...)`); list the dir in `src/drivers/BUILD.py`.
+4. Add a `BUILD.py` (`guest(...)`/`native(...)` + `install(...)`); list `<class>/<name>` in `src/drivers/BUILD.py`.
 5. Add a device-manager rule that spawns the `.wap`.
 6. Build and boot in QEMU.
 
 ## Step 1: Source + runtime
 
-All drivers live under `src/drivers/<name>/`. Representative examples:
-`src/drivers/virtio_rng/` (WASM/C, DMA + PCI-matched), `src/drivers/chardev/`
-(WASM/C, trivial), `src/drivers/uart16550/` and `src/drivers/pl011/`
-(AssemblyScript: two chip backends sharing `src/drivers/serial/serial_core.ts`), and
-`src/drivers/framebuffer_pci/` (native/C).
+All drivers live under `src/drivers/<class>/<name>/`, grouped by the device
+class they PROVIDE, as Linux groups `drivers/`: `block`, `char`, `fs`, `gpu`,
+`input`, `net`, `rtc`, `tty`. A virtio driver goes with its class
+(`block/virtio_blk`, `input/virtio_input`), never under a virtio directory --
+virtio is a transport, and its shared code is libsys (`virtio_modern.h`,
+`vring.h`). A core several drivers of one class share sits beside them
+(`tty/serial`, `rtc/core`, `gpu/framebuffer`'s FBTEXT server). The directory
+name drops what the class already says (`fs/fat`, not `fs/fs_fat`); the
+installed package path (`system/drivers/<name>.wap`) is independent of the
+tree and keeps the driver's own name. A class that does not exist yet gets a
+new directory. Representative examples:
+`src/drivers/char/virtio_rng/` (WASM/C, DMA + PCI-matched), `src/drivers/char/chardev/`
+(WASM/C, trivial), `src/drivers/tty/uart16550/` and `src/drivers/tty/pl011/`
+(AssemblyScript: two chip backends sharing `src/drivers/tty/serial/serial_core.ts`), and
+`src/drivers/gpu/bochs/` (native/C).
 
 - WASM includes: `wasmos/api.h`, `wasmos/ipc.h`, `wasmos/libsys.h`,
   `wasmos/startup.h`, plus `wasmos_driver_abi.h` for opcodes (DMA adds
@@ -51,14 +61,14 @@ Export exactly one entry with `WASMOS_WASM_EXPORT`
 not return.
 
 - WASM entry: `WASMOS_WASM_EXPORT int32_t initialize(void)`
-  (`src/drivers/virtio_rng/virtio_rng.c:536`). It takes NO parameters: the
+  (`src/drivers/char/virtio_rng/virtio_rng.c:536`). It takes NO parameters: the
   process manager calls every entry with an argument count of zero, and wasm3
   refuses a call whose argument count does not match the declared signature
   ("argument count mismatch"), so a parameterised entry kills the driver at
   spawn under wasm3 while running fine under WARP. Fetch the process-manager
   endpoint via `wasmos_startup_proc_endpoint()` (spawn-info contract).
 - Native entry: `int initialize(wasmos_driver_api_t* api, int module_count, int, int)`
-  (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:252`).
+  (`src/drivers/gpu/bochs/framebuffer_pci_native.c:252`).
 
 Inside `initialize`:
 1. `ep = wasmos_ipc_create_endpoint()`.
@@ -83,7 +93,7 @@ device memory with `wasmos_region_alloc(pages, WASMOS_REGION_CACHE_WB, &phys)` +
 ## Step 3: `linker.metadata`
 
 A TOML sidecar is the source of truth for identity + capabilities (not the code).
-Real example (`src/drivers/virtio_rng/linker.metadata`):
+Real example (`src/drivers/char/virtio_rng/linker.metadata`):
 
 ```toml
 version = 1
@@ -142,21 +152,21 @@ helpers in `scripts/buildgen/wasmos_rules.py` (API reference:
   `[link]` section (`stack_size`, `initial_memory`, `max_memory`). Under WARP, a
   manifest with `aot = true` is AOT-compiled by `warp_aot` and bundled. C sources
   link in the listed order. `cxx=True` selects C++. Examples:
-  `src/drivers/virtio_rng/BUILD.py` (C), `src/drivers/pl011/BUILD.py`
+  `src/drivers/char/virtio_rng/BUILD.py` (C), `src/drivers/tty/pl011/BUILD.py`
   (`lang="as"`, with sources from a shared directory).
 - Native C/Zig: compile with `b.toolchain("native").compile(...)` (and
   `zig_object(...)` for a Zig root module), then `native(b, name, objs,
   entry="initialize", image_base=...)` links a static ELF and packs it without
-  AOT (`src/drivers/framebuffer_pci/BUILD.py`).
+  AOT (`src/drivers/gpu/bochs/BUILD.py`).
 - `install(b, "system/drivers/<name>.wap", wap)` stages the package on the ESP
   (`out/<dir>/esp/system/drivers/<name>.wap`). An initfs payload is not
   installed; `scripts/initfs.<arch>.toml` names it and the initfs step finds it by name
   in the build directory.
-- Add the directory name to `b.subdir(...)` in `src/drivers/BUILD.py`.
+- Add `<class>/<name>` to `b.subdir(...)` in `src/drivers/BUILD.py`.
   `build.ninja` regenerates on the next `ninja` invocation; no re-configure is
   needed.
 
-Minimal manifest (`src/drivers/ata/BUILD.py`):
+Minimal manifest (`src/drivers/block/ata/BUILD.py`):
 
 ```python
 from wasmos_rules import guest, install

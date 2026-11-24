@@ -1,5 +1,5 @@
 /* test_virtio_gpu_damage.c -- the device-independent flush path of the
- * virtio-gpu driver (src/drivers/virtio_gpu/virtio_gpu_damage.c): validating a
+ * virtio-gpu driver (src/drivers/gpu/virtio_gpu/virtio_gpu_damage.c): validating a
  * DISPLAY_IPC_FLUSH_REQ descriptor and reducing its rects to the region the
  * device presents.
  *

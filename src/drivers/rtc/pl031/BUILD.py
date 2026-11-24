@@ -1,11 +1,11 @@
 """pl031: the Arm PL031 clock driver (aarch64), the pl031 backend linked with
-the shared RTC core (src/drivers/rtc)."""
+the shared RTC core (src/drivers/rtc/core)."""
 
 from wasmos_rules import guest, install
 
 
 def build(b):
-    core = b.root / "src/drivers/rtc"
+    core = b.root / "src/drivers/rtc/core"
     wap = guest(
         b,
         "pl031",

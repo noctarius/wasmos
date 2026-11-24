@@ -964,7 +964,7 @@ tail.
   the `irq_configure` host call, `src/kernel/arch/x86_64/irq_x86_64.c`),
   `framebuffer_map_high`/`framebuffer_fill`, `native_ipc_future_status`
   (`src/libsys/native/ipc_future_native.c`), the FAT zero-copy submit path
-  (`src/drivers/fs_fat/fat_block.c:108` `FIXME`), `virtio_serial` (-2/-22/-38),
+  (`src/drivers/fs/fat/fat_block.c:108` `FIXME`), `virtio_serial` (-2/-22/-38),
   the AssemblyScript serial/keyboard/mouse reply statuses, `ata.c`'s 1..5 status
   ints, and `chardev_server.c`.
 - [ ] [DOCS][P2] Correct `BLOCK_ABOVE_4G`'s documented threshold. `abi/errors.yaml:335`
@@ -1239,7 +1239,7 @@ tail.
   second registration is refused and its mount never appears. This is the defect
   the retired `block` NAME had, one layer up: a disk is (backend, unit), so the
   instance has to carry the backend. Fixing it widens the encoding, which
-  fs-manager and `fs_fat` decode too (`src/drivers/fs_wfs/fs_wfs.c`).
+  fs-manager and `fs_fat` decode too (`src/drivers/fs/wfs/fs_wfs.c`).
 
   Carrying the backend is NOT sufficient on its own. A partition reports the same
   backend AND the same unit as the disk beneath it (see the `SUBSYSTEM=="partition"`
@@ -1264,7 +1264,7 @@ tail.
   driver passes nothing: `atime`/`mtime`/`ctime`/`btime` are written from a
   `now_ns` that is zero outside the host tools, so every object on a
   guest-written volume carries the epoch. The RTC service is the source
-  (`src/drivers/fs_wfs/wfs_types.h`); it needs a driver-side clock read that
+  (`src/drivers/fs/wfs/wfs_types.h`); it needs a driver-side clock read that
   does not cost an IPC round trip per metadata write.
 - [ ] [ENHANCEMENT][P3] Record `WFS_STATE_ERROR` when an ORDINARY operation
   finds a bad checksum -- an object record, a directory tail, an extent node.
@@ -1273,11 +1273,11 @@ tail.
   so the next mount sees nothing wrong. Needs a write from paths that are
   otherwise read-only, and a policy decision this has not made: whether one bad
   record should cost the whole volume its writability, as ext4's
-  `errors=remount-ro` does (`src/drivers/fs_wfs/wfs_sync.h`).
+  `errors=remount-ro` does (`src/drivers/fs/wfs/wfs_sync.h`).
 - [ ] [ENHANCEMENT][P4] A full-block overwrite still reads the block first. The
   read is pure cost when every byte is about to be replaced, exactly as it is
   for a freshly allocated block, which already skips it
-  (`src/drivers/fs_wfs/wfs_write.c`).
+  (`src/drivers/fs/wfs/wfs_write.c`).
 - [x] [ENHANCEMENT][P3] WFS mount rules named a disk and a unit
   (`DRIVER=="ata", ATTR{unit}=="2"`, `DRIVER=="virtio-blk", ATTR{unit}=="48"`),
   which is what Phase 3 set out to retire. Both now match
@@ -1320,11 +1320,11 @@ tail.
   maps the borrow and points the disk at it -- but both refuse the same
   destination on a write:
 
-  - `src/drivers/ata/ata.c` serves only `BLOCK_DST_BLOCK_BUFFER` for a write and
+  - `src/drivers/block/ata/ata.c` serves only `BLOCK_DST_BLOCK_BUFFER` for a write and
     says why in a TODO: `WASMOS_DMA_DIR_TO_DEVICE` is what `ata_dma_prepare`
     still denies. The transfer itself is `ata_write_lba28`, i.e. PIO; only
     `READ_DMA` has a bus-master counterpart here.
-  - `src/drivers/virtio_blk/virtio_blk.zig` refuses `BLOCK_DST_XFER_BUFFER`
+  - `src/drivers/block/virtio_blk/virtio_blk.zig` refuses `BLOCK_DST_XFER_BUFFER`
     outright when `is_write`, because it has no staging path and maps the borrow
     only `DMA_DIR_FROM_DEVICE`.
 
@@ -1708,7 +1708,7 @@ tail.
   harness's own `[diag]` stall dumps.
 - [ ] [ENHANCEMENT][P3] Widen the block layer's 32-bit LBA. `fat_block_t` carries
   `uint32_t wait_lba` / `loaded_lba` with a `0xFFFFFFFF` sentinel
-  (`src/drivers/fs_fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends
+  (`src/drivers/fs/fat/fat_block.h`) and `BLOCK_IPC_READ_ZC_REQ` already spends
   all four IPC arguments, so a 64-bit LBA needs a new opcode shape. At 512-byte
   sectors the current ceiling is 2 TiB.
 
@@ -1745,7 +1745,7 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
 
 - [ ] [FEATURE][P2] Implement virtio-serial queue setup plus data/control-plane byte-stream
   IPC; discovery/register access alone cannot transport host data
-  (`src/drivers/virtio_serial/virtio_serial.c:160` `TODO(virtio-serial-transport)`).
+  (`src/drivers/char/virtio_serial/virtio_serial.c:160` `TODO(virtio-serial-transport)`).
 - [ ] [FEATURE][P2] Build the `virt-input` service and host bridge after virtio-serial data
   transport exists; inject keyboard/mouse events through the normal compositor
   IPC path and add sequential QEMU UI automation tests (no source exists yet;
@@ -1776,11 +1776,11 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
 
 - [ ] [BUG][P1] Correct 12-hour RTC decoding. The noon and midnight hours are off by 12 in
   both the BCD and binary branches; unreached while register B reports 24-hour
-  mode (`src/drivers/rtc/cmos.ts:133` `FIXME`).
+  mode (`src/drivers/rtc/cmos/cmos.ts:133` `FIXME`).
 - [x] [BUG][P1] Add the producer-lapped snap-forward to the PCI framebuffer's console-ring
   drain. Obsolete: neither framebuffer driver drains the console ring any more
   (everything they paint arrives as FBTEXT IPC from the vt), and both now run
-  the one shared server, `src/drivers/framebuffer/fbtext_server.c`.
+  the one shared server, `src/drivers/gpu/framebuffer/fbtext_server.c`.
 
 ## Networking
 
@@ -1830,7 +1830,7 @@ Remaining:
   hand-mirrored into each driver source instead of generated.
 - [ ] [FEATURE][P2] Define the net owner-push wire protocol so TX/RX carry an explicit
   client `buffer_id`/grant instead of overloading `msg.arg0`/`arg1`
-  (`src/drivers/virtio_net/virtio_net.c:479,718,752,775,900` `FIXME(owner-push)`).
+  (`src/drivers/net/virtio_net/virtio_net.c:479,718,752,775,900` `FIXME(owner-push)`).
 - [ ] [FEATURE][P2] Add a multi-interface ifcfg selector so boot config can target non-default
   interfaces (`src/services/net_stack/net_stack.c:977` `FIXME(multinet-ifcfg)`).
 - [ ] [ENHANCEMENT][P2] Evaluate a packet DMA fast path that removes the RX copy (only after the
@@ -2767,7 +2767,7 @@ Source: `architecture/25-diagnostics-status.md`,
      `/boot/system/devmgr/rules`, serial/keyboard/mouse/rtc spawn from
      `/boot/system/drivers`) until the line `[fat] fs.backend registered
      mount=/user`, and fails from then on. Fixed by giving each in-flight entry a
-     fixed descriptor slot (`src/drivers/partition_manager/inflight.zig`), pinned
+     fixed descriptor slot (`src/drivers/block/partition/inflight.zig`), pinned
      by `tests/unit/test_partition_inflight.zig`. The same crossing could send a
      WRITE to the other disk.
 

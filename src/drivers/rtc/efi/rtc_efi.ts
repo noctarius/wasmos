@@ -1,7 +1,7 @@
 /* rtc_efi.ts - the firmware clock backend: UEFI GetTime/SetTime through the
  * kernel (src/kernel/efi_rtc.c), reached with the rtc_efi_get/rtc_efi_set host
  * calls the rtc.efi capability gates. The driver around it is
- * src/drivers/rtc/rtc_core.ts; this file only moves the six fields.
+ * src/drivers/rtc/core/rtc_core.ts; this file only moves the six fields.
  *
  * Selected in Kconfig (WASMOS_RTC_EFI): only then does the boot loader hand
  * the runtime services over, and only then does a boot rule start this

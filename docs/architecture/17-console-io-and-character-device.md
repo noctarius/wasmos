@@ -7,7 +7,7 @@ output: the `wasmos_console_write` hostcall, its routing through the vt, the
 chardev IPC protocol, and the read path.
 
 **Sources**: `src/kernel/wasm3/link.c`,
-`src/drivers/chardev/chardev_server.c`,
+`src/drivers/char/chardev/chardev_server.c`,
 `src/kernel/include/wasmos_ipc.h`
 
 ---
@@ -71,7 +71,7 @@ environments.
 
 ### Chardev IPC Protocol
 
-**Source**: `src/drivers/chardev/chardev_server.c`
+**Source**: `src/drivers/char/chardev/chardev_server.c`
 
 The chardev service is a lightweight single-byte test utility that provides
 an IPC-based read/write interface. It is not the primary I/O path for

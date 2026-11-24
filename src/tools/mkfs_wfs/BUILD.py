@@ -3,7 +3,7 @@ wasm driver reads through (wfs_format.h, wfs_crc32c.c, wfs_super.c)."""
 
 
 def build(b):
-    fs_wfs = b.root / "src/drivers/fs_wfs"
+    fs_wfs = b.root / "src/drivers/fs/wfs"
     host = b.toolchain("host")
     objs = host.compile(
         [

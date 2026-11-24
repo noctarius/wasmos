@@ -576,12 +576,12 @@ Design notes:
 
 > **Currently deferred/aspirational.** The borrow-based DMA fast-path below is
 > disabled pending the owner-push migration: `ata_dma_prepare()` returns
-> `WASMOS_ERR_DMA_DENY` unconditionally (`src/drivers/ata/ata.c`), so every
+> `WASMOS_ERR_DMA_DENY` unconditionally (`src/drivers/block/ata/ata.c`), so every
 > ATA read and write is presently PIO (matching invariant 5, "PIO fallback is
 > unconditional"). The lifecycle described here is the intended shape once the
 > block IPC protocol carries the buffer grant.
 
-The ATA driver (`src/drivers/ata/ata.c`) is written around the full DMA
+The ATA driver (`src/drivers/block/ata/ata.c`) is written around the full DMA
 lifecycle on every read and write request.
 
 #### Helper Functions

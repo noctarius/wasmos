@@ -1,11 +1,11 @@
 """uart16550: UART driver guest module, the uart16550 backend linked with the shared
-serial core (src/drivers/serial)."""
+serial core (src/drivers/tty/serial)."""
 
 from wasmos_rules import guest, install
 
 
 def build(b):
-    core = b.root / "src/drivers/serial"
+    core = b.root / "src/drivers/tty/serial"
     wap = guest(
         b,
         "uart16550",

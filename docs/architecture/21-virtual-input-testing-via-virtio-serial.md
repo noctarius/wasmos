@@ -15,11 +15,11 @@ on top of those contracts.
 
 | Component                                        | State           | Source                                           |
 |--------------------------------------------------|-----------------|--------------------------------------------------|
-| Virtio-serial kernel-log port (port 0 transmit)  | Implemented     | `src/drivers/virtio_serial/virtio_serial.c`      |
+| Virtio-serial kernel-log port (port 0 transmit)  | Implemented     | `src/drivers/char/virtio_serial/virtio_serial.c`      |
 | Device manager match rule for virtio-serial      | Implemented     | `scripts/system/devmgr/rules/default.<arch>.rules`      |
-| PS/2 keyboard driver (IRQ-driven + polling)      | Implemented     | `src/drivers/keyboard/keyboard.ts`               |
-| PS/2 mouse driver (IRQ-driven + polling)         | Implemented     | `src/drivers/mouse/mouse.ts`                     |
-| virtio-input keyboard + mouse driver (aarch64)   | Implemented     | `src/drivers/virtio_input/virtio_input.c`        |
+| PS/2 keyboard driver (IRQ-driven + polling)      | Implemented     | `src/drivers/input/keyboard/keyboard.ts`               |
+| PS/2 mouse driver (IRQ-driven + polling)         | Implemented     | `src/drivers/input/mouse/mouse.ts`                     |
+| virtio-input keyboard + mouse driver (aarch64)   | Implemented     | `src/drivers/input/virtio_input/virtio_input.c`        |
 | Compositor keyboard + mouse subscription         | Implemented     | `src/services/gfx_compositor/gfx_compositor.zig` |
 | Python QEMU test framework                       | Implemented     | `scripts/qemu_test_framework.py`                 |
 | Virtio-serial MULTIPORT, receive path, protocol  | **Not started** | —                                                |
@@ -29,7 +29,7 @@ on top of those contracts.
 
 ### Virtio-Serial Driver
 
-**Source**: `src/drivers/virtio_serial/virtio_serial.c`
+**Source**: `src/drivers/char/virtio_serial/virtio_serial.c`
 
 The driver is the system's kernel-log port, not an input channel. It drives a
 virtio console (`1AF4:1003` transitional, `1AF4:1043` modern) over the virtio
@@ -50,7 +50,7 @@ port 0.
 
 ### Keyboard Driver
 
-**Source**: `src/drivers/keyboard/keyboard.ts` (AssemblyScript/WASM)
+**Source**: `src/drivers/input/keyboard/keyboard.ts` (AssemblyScript/WASM)
 
 Registered service name: `"kbd"` (encoded as the literal bytes `0x64 0x62 0x6B 0x00`).
 
@@ -105,7 +105,7 @@ is reset to 0 after each complete scancode dispatch.
 
 ### Mouse Driver
 
-**Source**: `src/drivers/mouse/mouse.ts` (AssemblyScript/WASM)
+**Source**: `src/drivers/input/mouse/mouse.ts` (AssemblyScript/WASM)
 
 Registered service name: `"mouse"` (split across two IPC args:
 `arg0 = 0x73756F6D` = `"mous"`, `arg1 = 0x65` = `'e'`).

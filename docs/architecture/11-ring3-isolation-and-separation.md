@@ -9,10 +9,14 @@ IPC authentication, and the ring3 validation gates. "Ring 3" names the
 unprivileged level on both architectures: on aarch64 it is EL0, entered and left
 through `ERET` and the exception vectors, with the user root in TTBR0 and the
 kernel half in the shared TTBR1; syscalls are `svc #0` (number in `x8`), and
-native ring-3 images link with `arch/aarch64/ring3_native.ld`. The isolation
-rules -- user-root verification, user-pointer copies, fault containment,
-capabilities -- are arch-neutral; `run-qemu-ring3-threading-test` passes on
-both architectures ([38-aarch64-platform.md](38-aarch64-platform.md)).
+native ring-3 images link with `arch/aarch64/ring3_native.ld`. User-root
+verification, user-pointer copies and capabilities are arch-neutral, and
+`run-qemu-ring3-threading-test` passes on both architectures
+([38-aarch64-platform.md](38-aarch64-platform.md)). Fault containment is not
+yet complete on aarch64: an unresolved instruction or data abort from EL0
+terminates only the process, but any other EL0 exception (undefined
+instruction, `BRK`, alignment) still panics the kernel, where x86_64 contains
+every CPL3 exception type listed below.
 
 ---
 

@@ -144,7 +144,10 @@ static int handle_abort(uint64_t esr, uint64_t far, const irq_frame_t* frame) {
 /* Called from vectors.S for every exception. `kind` is the vector index. IRQs
  * go to the GIC dispatch, instruction and data aborts to the memory service,
  * and an SVC from EL0 to syscall_dispatch, whose result returns in x0 (ELR
- * already points past the SVC). Every other exception is fatal. */
+ * already points past the SVC). Every other exception is fatal.
+ * TODO: an EL0 sync exception other than an abort -- an undefined instruction,
+ * BRK, an alignment fault -- panics the kernel instead of terminating the
+ * process, so a user program can take the system down (docs/TASKS.md). */
 void aarch64_exception(irq_frame_t* frame, uint64_t kind) {
     if (kind == VECTOR_EL1_IRQ || kind == VECTOR_EL0_IRQ) {
         aarch64_irq(frame);

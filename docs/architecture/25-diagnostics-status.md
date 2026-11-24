@@ -220,8 +220,11 @@ before falling back to polling the console UART directly.
 
 The functions below are x86_64's. On aarch64 `src/kernel/arch/aarch64/cpu_aarch64.c`
 logs a fatal exception with its kind, `esr` and `far`, and panics with `esr` and
-`elr` (`aarch64_unhandled_exception`); a user-mode fault terminates the process
-with `esr`, `far` and `elr` in its log line.
+`elr` (`aarch64_unhandled_exception`). Only an instruction or data abort from
+EL0 that the memory service cannot resolve is contained: it terminates the
+process with `esr`, `far` and `elr` in its log line. Every other EL0 exception
+-- an undefined instruction, `BRK`, an alignment fault -- takes the fatal path
+and panics the kernel (`docs/TASKS.md`, "arm64 Port").
 
 Two functions in `src/kernel/arch/x86_64/cpu_x86_64.c` handle fatal exceptions:
 

@@ -2288,6 +2288,14 @@ and the reason it prints names what is missing. Read
 `docs/architecture/38-aarch64-platform.md` first, then `04-boot-and-handoff.md`,
 `06-memory-management.md` and `10-capability-and-policy.md`.
 
+- [ ] [BUG][P1] An EL0 exception other than an instruction or data abort panics
+  the kernel on aarch64: `aarch64_exception` (`src/kernel/arch/aarch64/cpu_aarch64.c`)
+  contains only aborts the memory service cannot resolve, and sends an
+  undefined instruction, `BRK`, an alignment fault or any other EL0 sync
+  exception to `kpanic`. A user process can therefore bring the system down.
+  x86_64 terminates the process for every CPL3 exception type; aarch64 should
+  do the same for every exception taken from EL0 (`VECTOR_EL0_SYNC`), with a
+  ring-3 fault test that raises each class from EL0.
 - [ ] [FEATURE][P3] virtio-tablet (absolute pointer): `virtio_input` refuses a
   device with only absolute axes, because `MOUSE_IPC_MOVE_NOTIFY` carries
   relative 8-bit deltas only. A tablet needs an absolute pointer event.

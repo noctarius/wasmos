@@ -99,8 +99,11 @@ MSI and MSI-X go through the GICv3 ITS (`its_aarch64.c`, `msi_aarch64.c`):
 vector slot `i` is EventID `i` and LPI 8192 + `i`, and the DeviceID is the
 requester id of the PCI function the calling driver's spawn profile names
 (`pci_function_of_context`). `msi_alloc` therefore keeps its ABI across
-architectures; a caller that drives no function gets `msi.NO_FUNCTION`. Every
-virtio driver binds MSI-X.
+architectures; a caller that drives no function gets `msi.NO_FUNCTION`. The
+virtio drivers that take interrupts -- block, net, rng, input, gpu -- bind
+MSI-X. The kernel-log console (`char/virtio_serial`) takes none: it disables its
+queue's interrupts, selects `VIRTIO_MSI_NO_VECTOR` and reclaims transmit
+buffers by polling the used ring.
 
 ### PCI
 
@@ -189,6 +192,10 @@ whose reason names what is missing.
   an SGI, followed by a weak-memory audit under `-accel hvf -smp N`.
 - WARP: the aarch64 backend in the kernel (code loading, ring-3 trampolines)
   and per-arch AOT artifacts.
+- Containment of every EL0 exception: only an unresolved instruction or data
+  abort terminates just the process; an undefined instruction, `BRK` or an
+  alignment fault from EL0 panics the kernel (`aarch64_exception`,
+  `cpu_aarch64.c`).
 - ASIDs, so an address-space switch need not flush the TLB.
 - Runtime mode setting through virtio-gpu, and virtio-gpu 3D.
 - A framebuffer for firmware without a GOP (x86_64's 0xCF8 scan has no

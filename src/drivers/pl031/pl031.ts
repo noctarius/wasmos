@@ -17,14 +17,9 @@
 
 import {io, startup} from "./wasmos";
 import {io_region_out32} from "./wasmos_imports";
-import {
-    WASMOS_ERR_DRIVER_DEVICE_INIT,
-    WASMOS_ERR_NONE,
-    WASMOS_ERR_RTC_IO,
-    WASMOS_ERR_RTC_OUT_OF_RANGE,
-} from "./wasmos_status";
+import {WASMOS_ERR_DRIVER_DEVICE_INIT, WASMOS_ERR_NONE, WASMOS_ERR_RTC_IO} from "./wasmos_status";
 import {runRtc, RtcClock} from "./rtc_core";
-import {civilToSeconds, secondsToCivil, validateTime} from "./rtc_time";
+import {civilToSeconds, secondsToCivil} from "./rtc_time";
 
 const REGION: i32 = 0;
 
@@ -103,7 +98,7 @@ class Pl031 extends RtcClock {
             return WASMOS_ERR_RTC_IO;
         }
         secondsToCivil(count, out);
-        return validateTime(out) ? WASMOS_ERR_NONE : WASMOS_ERR_RTC_OUT_OF_RANGE;
+        return WASMOS_ERR_NONE;
     }
 
     /* Every year the protocol accepts fits the 32-bit counter (2099 is below

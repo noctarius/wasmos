@@ -29,6 +29,7 @@
 #include "../include/xfer_buffer.h"
 #include "link_dma.h"
 #include "link_ipc.h"
+#include "link_rtc.h"
 
 extern "C" {
 #include "boot.h"
@@ -968,13 +969,8 @@ static uint32_t warp_pci_config_read(uint32_t bdf, uint32_t reg, uint32_t out_of
 /* hostcalls.yaml `rtc_efi_get` / `rtc_efi_set`: the firmware clock (efi_rtc.h)
  * for a holder of rtc.efi. `buf` holds EFI_RTC_FIELDS int32 fields. */
 static int32_t* warp_rtc_efi_buf(void* ctx_, uint32_t buf, uint32_t len, uint32_t* out_rc) {
-    uint32_t context_id = 0;
-    if (len < EFI_RTC_FIELDS * sizeof(int32_t)) {
-        *out_rc = (uint32_t)WASMOS_INVAL;
-        return nullptr;
-    }
-    if (warp_current_context_id(&context_id) != 0 || !capability_has(context_id, CAP_RTC_EFI)) {
-        *out_rc = (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    *out_rc = warp_rtc_efi_admit(len);
+    if (*out_rc != 0) {
         return nullptr;
     }
     auto* p = reinterpret_cast<int32_t*>(

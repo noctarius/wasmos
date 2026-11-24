@@ -36,6 +36,7 @@ import {
     WASMOS_ERR_DRIVER_REGISTER,
     WASMOS_ERR_NONE,
     WASMOS_ERR_RTC_INVALID,
+    WASMOS_ERR_RTC_OUT_OF_RANGE,
 } from "./wasmos_status";
 import {ipc_create_endpoint, ipc_send} from "./wasmos_imports";
 import {packDate, packTime, RTC_FIELDS, RtcClock, unpackTime, validateTime} from "./rtc_time";
@@ -91,7 +92,12 @@ function serveRequest(msg: IpcMessage): void {
     const clock = changetype<RtcClock>(g_clock);
 
     if (msg.type == RTC_IPC_READ_REQ) {
-        const rc = clock.read(g_values);
+        let rc = clock.read(g_values);
+        /* A clock past the protocol's years (a PL031 count beyond 2099, an
+         * EFI_TIME up to 9999) is refused here, once for every backend. */
+        if (rc == WASMOS_ERR_NONE && !validateTime(g_values)) {
+            rc = WASMOS_ERR_RTC_OUT_OF_RANGE;
+        }
         if (rc != WASMOS_ERR_NONE) {
             ipc_send(msg.source, g_rtc_ep, RTC_IPC_ERROR, msg.requestId, rc, 0, 0, 0);
             return;

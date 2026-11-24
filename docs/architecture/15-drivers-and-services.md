@@ -282,8 +282,9 @@ The drivers share `src/drivers/rtc/rtc_core.ts` (registration and the request
 loop) and `rtc_time.ts` (the six-field UTC time, its wire packing, validation
 -- the day is checked against its month -- and epoch-seconds conversion); a
 backend supplies `init`, `read` and `set`. The PL031 holds seconds since
-1970-01-01 UTC. The protocol carries years 1970-2099; a PL031 count outside
-them reads as `rtc.OUT_OF_RANGE`. The Kconfig choice "Real-time clock
+1970-01-01 UTC. The protocol carries years 1970-2099; the core answers a read
+outside them, from any backend, with `rtc.OUT_OF_RANGE`, and a `set` still
+repairs such a clock. The Kconfig choice "Real-time clock
 (aarch64)" decides which aarch64 driver a build ships a rule for
 (`RTC_RULES`, `scripts/system/BUILD.py`).
 

@@ -24,8 +24,9 @@ export const RTC_YEAR_MAX: i32 = 2099;
 
 /**
  * One clock chip. Both calls return WASMOS_ERR_NONE or a negative packed
- * error code; read() fills all six fields only on success, and set() is called
- * only with a time validateTime() accepted.
+ * error code; read() fills all six fields only on success, with whatever the
+ * chip holds (rtc_core.ts refuses a time validateTime() does not accept), and
+ * set() is called only with a time validateTime() accepted.
  */
 export abstract class RtcClock {
     /** How the boot log names the clock ("cmos", "pl031"). */

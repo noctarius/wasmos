@@ -235,6 +235,14 @@ typedef struct {
     UINT64 Attribute;
 } EFI_MEMORY_DESCRIPTOR;
 
+/* EFI_MEMORY_TYPE values a runtime region can carry (UEFI 2.10, 7.2.1):
+ * firmware code and data in RAM, and device registers the runtime services
+ * reach (EDK2 on QEMU virt marks the PL031 and the variable-store flash). */
+#define EFI_RUNTIME_SERVICES_CODE 5u
+#define EFI_RUNTIME_SERVICES_DATA 6u
+#define EFI_MEMORY_MAPPED_IO 11u
+#define EFI_MEMORY_MAPPED_IO_PORT_SPACE 12u
+
 /* Attribute bit of a region the runtime services use after ExitBootServices
  * (UEFI 2.10, 7.2.3): SetVirtualAddressMap must be given its virtual address. */
 #define EFI_MEMORY_RUNTIME 0x8000000000000000ULL

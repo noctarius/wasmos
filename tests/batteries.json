@@ -70,6 +70,7 @@
       "files": [
         "test_boot_smoke.py",
         "test_cli.py",
+        "test_rtc_range.py",
         "test_decode_kernel_panic.py",
         "test_device_manager.py",
         "test_init_smoke.py",

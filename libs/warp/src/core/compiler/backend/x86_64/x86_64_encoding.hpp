@@ -741,6 +741,10 @@ constexpr OPCodeTemplate TEST_rm64_r64_t{0U, REX::W, B8F::NONE, OPCodeExt::R, 0x
 
 /// @brief TEST r/m32, r32: AND r32 with r/m32; set SF, ZF, PF according to result.
 constexpr OPCodeTemplate TEST_rm32_imm32_t{0U, REX::NONE, B8F::NONE, OPCodeExt::R, 0xF7U};
+/// @brief TEST r/m32, imm32: AND imm32 with r/m32; set SF, ZF, PF according to result.
+constexpr AbstrInstr TEST_rm32_imm32{{0U, REX::NONE, B8F::NONE, OPCodeExt::i0, 0xF7U}, ArgType::rm32, ArgType::imm32, false, false};
+/// @brief MFENCE: Serializes all load and store operations issued before it (0F AE F0; emitted with RM = REG::A).
+constexpr OPCodeTemplate MFENCE_t{0U, REX::NONE, B8F::NONE, OPCodeExt::i6, 0x0FAEU};
 /// @brief XCHG r/m32, r32: Exchange r32 with doubleword from r/m32.
 // coverity[autosar_cpp14_m3_4_1_violation]
 constexpr OPCodeTemplate XCHG_rm32_r32_t{0U, REX::NONE, B8F::NONE, OPCodeExt::R, 0x87U};

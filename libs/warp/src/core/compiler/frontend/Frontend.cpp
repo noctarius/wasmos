@@ -851,6 +851,13 @@ static OPCode parseOpCode(BytecodeReader &br) {
     if (firstByte == static_cast<uint8_t>(OPCode::VECTOR_EXTEND_OP_CODE)) {
       throw FeatureNotSupportedException(ErrorCode::Simd_feature_not_implemented);
     }
+  } else if (firstByte == static_cast<uint8_t>(OPCode::ATOMIC_EXTEND_OP_CODE)) {
+    uint32_t const extendOpCode{br.readLEB128<uint32_t>()};
+    if (extendOpCode > static_cast<uint32_t>(std::numeric_limits<uint8_t>::max())) {
+      throw ValidationException(ErrorCode::Unknown_instruction);
+    }
+    // coverity[autosar_cpp14_a7_2_1_violation]
+    ret = static_cast<OPCode>(static_cast<uint16_t>(OPCode::ATOMIC_EXTEND_OP_CODE_PREFIX) | static_cast<uint16_t>(extendOpCode));
   } else {
     // coverity[autosar_cpp14_a7_2_1_violation]
     ret = static_cast<OPCode>(static_cast<uint16_t>(firstByte));
@@ -2201,6 +2208,86 @@ void Frontend::parseCodeSection() {
         if (!currentFrameIsUnreachable()) {
           common_.condenseSideEffectInstructionBlewValentBlock(2U);
           compiler_.backend_.executeLinearMemoryStore(instruction, offset);
+        }
+        break;
+      }
+
+      // Threads proposal atomics on a non-shared memory. Every form is sequentially consistent and must name
+      // exactly its natural alignment; an effective address that is not naturally aligned traps
+      // (TrapCode::UNALIGNED_ATOMIC). Each is lowered to the plain access of the same width plus ordering:
+      // - a load is emitted at its program position instead of being deferred, after every pending side-effect
+      //   instruction below it, so no load of the program is moved across it;
+      // - a store is followed by a full barrier, which orders it before every later access (the store-load order a
+      //   plain store does not give even on x86_64);
+      // - atomic.fence is the full barrier alone.
+      // Plain stores are never deferred, so stores before an atomic access stay before it.
+      case OPCode::ATOMIC_FENCE: {
+        uint8_t const reservedByte{br_.readByte<uint8_t>()};
+        if (reservedByte != 0U) {
+          throw ValidationException(ErrorCode::Unknown_instruction);
+        }
+        if (!currentFrameIsUnreachable()) {
+          common_.condenseSideEffectInstructionToFrameBase();
+          compiler_.backend_.executeAtomicFence();
+        }
+        break;
+      }
+
+      case OPCode::I32_ATOMIC_LOAD:
+      case OPCode::I32_ATOMIC_LOAD8_U:
+      case OPCode::I32_ATOMIC_LOAD16_U: {
+        if (!moduleInfo_.hasMemory) {
+          throw ValidationException(ErrorCode::Undefined_memory_referenced);
+        }
+        validationStack_.validateLastNumberType(MachineType::I32, true);
+        validationStack_.pushNumberVariable(MachineType::I32);
+
+        OPCode const plainOpcode{(instruction == OPCode::I32_ATOMIC_LOAD)      ? OPCode::I32_LOAD
+                                 : (instruction == OPCode::I32_ATOMIC_LOAD8_U) ? OPCode::I32_LOAD8_U
+                                                                               : OPCode::I32_LOAD16_U};
+        uint32_t const sizeLog2{(instruction == OPCode::I32_ATOMIC_LOAD) ? 2U : ((instruction == OPCode::I32_ATOMIC_LOAD8_U) ? 0U : 1U)};
+        uint32_t const alignment{br_.readLEB128<uint32_t>()};
+        if (alignment != sizeLog2) {
+          throw ValidationException(ErrorCode::Alignment_out_of_range);
+        }
+        uint32_t const offset{br_.readLEB128<uint32_t>()};
+
+        if (!currentFrameIsUnreachable()) {
+          common_.condenseSideEffectInstructionBlewValentBlock(1U);
+          Stack::iterator const addrElem{common_.condenseValentBlockBelow(stack_.end())};
+          compiler_.backend_.emitAtomicAlignmentCheck(addrElem, offset, sizeLog2);
+          static_cast<void>(common_.pushDeferredAction(StackElement::action(plainOpcode, 1U, offset)));
+          static_cast<void>(common_.condenseValentBlockBelow(stack_.end()));
+        }
+        break;
+      }
+
+      case OPCode::I32_ATOMIC_STORE:
+      case OPCode::I32_ATOMIC_STORE8:
+      case OPCode::I32_ATOMIC_STORE16: {
+        if (!moduleInfo_.hasMemory) {
+          throw ValidationException(ErrorCode::Undefined_memory_referenced);
+        }
+        validationStack_.validateLastNumberType(MachineType::I32, true);
+        validationStack_.validateLastNumberType(MachineType::I32, true);
+
+        OPCode const plainOpcode{(instruction == OPCode::I32_ATOMIC_STORE)    ? OPCode::I32_STORE
+                                 : (instruction == OPCode::I32_ATOMIC_STORE8) ? OPCode::I32_STORE8
+                                                                              : OPCode::I32_STORE16};
+        uint32_t const sizeLog2{(instruction == OPCode::I32_ATOMIC_STORE) ? 2U : ((instruction == OPCode::I32_ATOMIC_STORE8) ? 0U : 1U)};
+        uint32_t const alignment{br_.readLEB128<uint32_t>()};
+        if (alignment != sizeLog2) {
+          throw ValidationException(ErrorCode::Alignment_out_of_range);
+        }
+        uint32_t const offset{br_.readLEB128<uint32_t>()};
+
+        if (!currentFrameIsUnreachable()) {
+          common_.condenseSideEffectInstructionBlewValentBlock(2U);
+          Stack::iterator const valueElem{common_.condenseValentBlockBelow(stack_.end())};
+          Stack::iterator const addrElem{common_.condenseValentBlockBelow(valueElem)};
+          compiler_.backend_.emitAtomicAlignmentCheck(addrElem, offset, sizeLog2);
+          compiler_.backend_.executeLinearMemoryStore(plainOpcode, offset);
+          compiler_.backend_.executeAtomicFence();
         }
         break;
       }

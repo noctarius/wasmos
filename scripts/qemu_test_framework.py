@@ -538,6 +538,7 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         cfg.qemu_binary or f"qemu-system-{arch.name}",
         *arch.qemu_machine,
         *arch.qemu_display,
+        *arch.qemu_input,
         "-m",
         "512M",
         "-cpu",

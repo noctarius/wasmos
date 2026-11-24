@@ -35,6 +35,7 @@ extern fn virtio_modern_zig_queue_enable(index: u16, vq: *const anyopaque, msix_
 extern fn virtio_modern_zig_notify(notify: u32, index: u16) callconv(.c) void;
 extern fn virtio_modern_zig_isr() callconv(.c) u8;
 extern fn virtio_modern_zig_device_read(off: u32, out: [*]u8, len: u32) callconv(.c) i32;
+extern fn virtio_modern_zig_device_write8(off: u32, v: u8) callconv(.c) i32;
 
 /// Locate the device's structures from function `bdf`'s config space; each must
 /// sit in BAR `bar`, which the manifest declared as region `region`. False for
@@ -96,4 +97,11 @@ pub fn isr() u8 {
 /// consistent snapshot. False when there is no such structure or range.
 pub fn deviceRead(off: u32, out: []u8) bool {
     return virtio_modern_zig_device_read(off, out.ptr, @intCast(out.len)) == 0;
+}
+
+/// Write one byte of the device-specific configuration (a driver-writable
+/// field such as virtio-input's select). False when there is no such structure
+/// or `off` lies outside it.
+pub fn deviceWrite8(off: u32, v: u8) bool {
+    return virtio_modern_zig_device_write8(off, v) == 0;
 }

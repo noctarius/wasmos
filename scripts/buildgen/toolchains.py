@@ -109,6 +109,11 @@ class Arch:
     # brings a VGA adapter; QEMU virt has no display, and ramfb gives it a
     # firmware framebuffer (bound by framebuffer_ramfb through fw_cfg).
     qemu_display: tuple
+    # Keyboard and mouse devices, when the machine has none by default. x86
+    # QEMU brings a PS/2 controller; QEMU virt has none, and virtio-input
+    # gives it both. The fixed slots keep every other device where it is: a
+    # virtio-blk disk's identity is derived from its slot.
+    qemu_input: tuple
 
 
 ARCHES = {
@@ -132,6 +137,7 @@ ARCHES = {
         qemu_ide=True,
         qemu_nic_option_rom=True,
         qemu_display=(),
+        qemu_input=(),
     ),
     "aarch64": Arch(
         name="aarch64",
@@ -159,6 +165,12 @@ ARCHES = {
         qemu_ide=False,
         qemu_nic_option_rom=False,
         qemu_display=("-device", "ramfb"),
+        qemu_input=(
+            "-device",
+            "virtio-keyboard-pci,id=vkbd,addr=0x1c",
+            "-device",
+            "virtio-mouse-pci,id=vmouse,addr=0x1d",
+        ),
     ),
 }
 

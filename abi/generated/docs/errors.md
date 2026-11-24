@@ -192,6 +192,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_DRIVER_DEPENDENCY_MISSING` | -0x00070007 | a service the driver depends on is not registered |
 | `WASMOS_ERR_DRIVER_ABI_MISMATCH` | -0x00070008 | the native driver API does not match the ABI the image was built for |
 | `WASMOS_ERR_DRIVER_EVENT_LOOP` | -0x00070009 | the driver's event loop could not be set up, or failed while serving |
+| `WASMOS_ERR_DRIVER_DEVICE_UNSUPPORTED` | -0x0007000A | the identified device is of a kind this driver does not drive |
 
 ### `vt` (domain 8) — virtual-terminal multiplexer failures
 

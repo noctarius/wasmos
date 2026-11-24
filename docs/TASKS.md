@@ -2278,8 +2278,16 @@ lacks is skipped there with `requires_arch` (`scripts/qemu_test_framework.py`),
 and the reason it prints names what is missing. Read `docs/architecture/04-boot-and-handoff.md`,
 `06-memory-management.md` and `10-capability-and-policy.md` first.
 
-- [ ] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
-  x86_64-only). Until then aarch64's display takes no input.
+- [x] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
+  x86_64-only): `virtio_input` registers `kbd` or `mouse` per function and
+  speaks the PS/2 protocols (`tests/test_virtio_input.py`).
+- [ ] [FEATURE][P3] virtio-tablet (absolute pointer): `virtio_input` refuses a
+  device with only absolute axes, because `MOUSE_IPC_MOVE_NOTIFY` carries
+  relative 8-bit deltas only. A tablet needs an absolute pointer event.
+- [ ] [TEST][P3] `tests/test_virtio_input.py` checks the keyboard end to end
+  but not mouse motion: QMP relative motion injected into a `-nographic`
+  session never reached the virtio mouse locally (verified interactively on a
+  display instead).
 - [x] [FEATURE][P2] A clock on aarch64, chosen in Kconfig (`WASMOS_RTC_*`): the
   `pl031` driver (default; acpi-bus publishes QEMU virt's PL031 from its board
   table) or `rtc_efi` (UEFI GetTime/SetTime, after the loader's

@@ -19,6 +19,7 @@ def build(b):
         "virtio_net",
         "virtio_serial",
         "virtio_rng",
+        "virtio_input",
         "virtio_blk",
         "partition_manager",
         "framebuffer",

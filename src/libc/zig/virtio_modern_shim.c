@@ -59,3 +59,7 @@ uint8_t virtio_modern_zig_isr(void) {
 int32_t virtio_modern_zig_device_read(uint32_t off, uint8_t* out, uint32_t len) {
     return virtio_modern_device_read(&g_virtio_dev, off, out, len);
 }
+
+int32_t virtio_modern_zig_device_write8(uint32_t off, uint8_t v) {
+    return virtio_modern_device_write8(&g_virtio_dev, off, v);
+}

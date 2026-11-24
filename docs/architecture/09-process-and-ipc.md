@@ -85,22 +85,24 @@ further process lifecycle operations.  It:
 
 ---
 
-### `int 0x80` Syscall ABI
+### Syscall ABI
 
-Ring3 user processes communicate with the kernel through `int 0x80` (DPL3 gate).
-The dispatcher is `syscall_dispatch(syscall_frame_t *frame)`.
+Ring3 user processes communicate with the kernel through `int 0x80` (a DPL3
+gate) on x86_64 and `svc #0` from EL0 on aarch64. Both reach
+`syscall_dispatch(syscall_frame_t *frame)`; the per-arch trap stubs are in
+`wasmos/syscall_native.h`.
 
 **Register convention:**
 
-| Register | Role                                                                        |
-|----------|-----------------------------------------------------------------------------|
-| `RAX`    | Syscall ID (see `wasmos_syscall_id_t`); primary return value on completion  |
-| `RDI`    | arg0                                                                        |
-| `RSI`    | arg1                                                                        |
-| `RDX`    | arg2 / secondary return (`IPC_CALL` reply `arg0` on success)                |
-| `RCX`    | arg3                                                                        |
-| `R8`     | arg4                                                                        |
-| `R9`     | arg5                                                                        |
+| x86_64 | aarch64 | Role                                                                        |
+|--------|---------|-----------------------------------------------------------------------------|
+| `RAX`  | `x8` in, `x0` out | Syscall ID (see `wasmos_syscall_id_t`); primary return value on completion |
+| `RDI`  | `x0`    | arg0                                                                        |
+| `RSI`  | `x1`    | arg1                                                                        |
+| `RDX`  | `x2`; `x1` out | arg2 / secondary return (`IPC_CALL` reply `arg0` on success)         |
+| `RCX`  | `x3`    | arg3                                                                        |
+| `R8`   | `x4`    | arg4                                                                        |
+| `R9`   | `x5`    | arg5                                                                        |
 
 All 32-bit-field syscall arguments are validated as 32-bit-clean.
 

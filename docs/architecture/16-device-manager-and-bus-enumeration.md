@@ -165,8 +165,9 @@ drivers, and a driver must never find the bus service missing — and then serve
 requests for the rest of the boot.
 
 It stays resident because it is the only process that may write configuration
-space (the `pci.config` capability; the kernel serialises the 0xCF8/0xCFC port
-pair behind `pci_config_read` / `pci_config_write`): device-manager grants each
+space (the `pci.config` capability; the kernel serialises access behind
+`pci_config_read` / `pci_config_write` -- the 0xCF8/0xCFC port pair on x86_64,
+ECAM located through the ACPI MCFG on aarch64, `pci_cfg_aarch64.c`): device-manager grants each
 driver register windows covering that device's own BARs -- the `[[regions]]`
 the driver declared, each `"bar"` region resolved to an I/O-port or a
 memory-mapped window by the BAR's kind (`dm_resolve_declared_regions`) -- which
@@ -181,7 +182,10 @@ driver on a filesystem. A PCI rule is not armed until that answer is in, nor
 while a freshly loaded rule set's metadata is still stale: armed earlier, its
 driver would be spawned without the windows it declared. A driver that cannot
 be described is spawned without declared windows, with the legacy BAR0-derived
-I/O window. An MSI binding whose owner has died belongs to no one: the
+I/O window. The address/data pair a driver carries is the architecture's: a
+LAPIC message on x86_64, the GICv3 ITS doorbell with the slot as EventID on
+aarch64 ([38-aarch64-platform.md](38-aarch64-platform.md)); pci-bus programs it
+the same way. An MSI binding whose owner has died belongs to no one: the
 kernel disabled the function's MSI and MSI-X at the owner's reap, and the next
 driver to bind the function takes the binding over.
 

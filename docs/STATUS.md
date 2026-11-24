@@ -782,58 +782,18 @@ linked feature documents for rationale and rollout plans.
   entry-arity rule in `architecture/13` *Language ABI*.
 - Target architecture is a Kconfig choice (`WASMOS_ARCH_X86_64` /
   `WASMOS_ARCH_AARCH64`); `ARCHES` in `scripts/buildgen/toolchains.py` holds
-  every per-architecture build and QEMU value. The aarch64 tree
-  (`aarch64_wasm3_single_defconfig`) builds `BOOTAA64.EFI`, every guest and
-  native module (aarch64 ELF), initfs and the ESP. Under
-  `qemu-system-aarch64 -M virt,gic-version=3 -accel hvf` (TCG on CI) it boots
-  through the scheduler self-tests, demand paging, threading, IPC and timer
-  preemption, runs wasm3 guests (init, fs-manager, fs-tmpfs, fs-init,
-  device-manager), enumerates PCI through ECAM (`arch/aarch64/pci_cfg_aarch64.c`,
-  base from the ACPI MCFG, each bus mapped on first use), parses the DSDT, runs
-  the native net-stack at EL0, spawns virtio-blk from the initfs for the boot
-  disk, mounts `/boot` from it, runs sysinit and reaches the WAMOS CLI prompt
-  (`supervisor] boot complete`), with virtio-net (DHCP lease), virtio-rng, the
-  font service and the calculator up, and takes console input through the
-  PL011: acpi-bus publishes `ARMH0011` (window 0x09000000, GSIV 33, flagged the
-  console by the SPCR), `pl011.wap` serves it through its MMIO region
-  grant with its interrupt routed as a GIC SPI, and `run-qemu-test` passes
-  (`halt` powers off through PSCI). The display is QEMU's ramfb (`-device
-  ramfb` from `ARCHES`): the firmware reports it as the GOP framebuffer,
-  acpi-bus publishes the fw_cfg device `QEMU0002`, and `framebuffer_ramfb`
-  serves the text plane on it and sets modes by rewriting `etc/ramfb` through
-  fw_cfg DMA; the compositor, menu bar and apps draw on it. MSIs go through
-  the GICv3 ITS (`arch/aarch64/its_aarch64.c`, `msi_aarch64.c`): slot `i` is
-  EventID `i` and LPI 8192+`i`, and the DeviceID is the requester id of the PCI
-  function the calling driver's spawn profile names
-  (`pci_function_of_context`), so `msi_alloc` keeps its ABI; a caller that
-  drives no function gets `msi.NO_FUNCTION`. initfs and the device-manager rules are per architecture
-  (`scripts/initfs.<arch>.toml`, `scripts/initfs/devmgr/rules/default.<arch>.rules`,
-  `scripts/system/devmgr/rules/default.<arch>.rules`): on aarch64 virtio-blk
-  carries `/boot`, so it is a bootstrap rule there, and the PS/2, CMOS, 16550 and
-  bochs rules are x86_64-only. pci-bus enables a function's I/O or memory decode
-  for the BARs it implements at an assigned address, which edk2 on aarch64 leaves
-  off. The kernel side: the
-  bootstrap drops EL2 to EL1 and maps physical [0, 4 GiB) with 48-bit VAs;
-  `arch/aarch64/paging.c` implements `paging.h` with the x86_64 slot geometry
-  (TTBR0 slot 0 identity, slot 1 user; a shared TTBR1 direct map with RAM in
-  4 KiB pages so guard-page unmaps never split a live block; break-before-make;
-  broadcast TLBI; no ASIDs yet); vectors save the FP/SIMD state; aborts decode
-  into the `MM_FAULT_*` memory-service path; GICv3 and the EL1 virtual timer
-  drive the tick; `context_switch.S` resumes every context by ERET.
-  EL0 runs: an SVC from EL0 enters `syscall_dispatch` (number in x8, result in
-  x0), EL0 exceptions land on the per-CPU kernel entry stack
-  (`cpu_set_kernel_stack`, the TSS.rsp0 counterpart), and native-code loaders
-  sync the instruction cache; the C ring-3 probe passes its syscall checks
-  (`[test] ring3 native abi ok`) on a `WASMOS_RING3_SMOKE` tree, whose x86-only
-  inline smoke and fault probes are skipped. Device interrupts are GIC SPIs
-  (the `irq_line` of `irq.h` is the INTID), routed through the arch-neutral
-  sharing layer by a slot table in `arch/aarch64/irq_aarch64.c`; no arm64
-  driver routes one yet, because every virtio device takes MSI-X.
-  It boots to the CLI and runs every QEMU battery, in CI too, on an
-  aarch64-linux runner. The native
-  ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap
-  stubs (aarch64: `svc #0`, number in x8). No aarch64 framebuffer fallback
-  for a firmware without GOP (the x86 0xCF8 scan is x86_64-only).
+  every per-architecture build and QEMU value. aarch64
+  (`aarch64_wasm3_single_defconfig`, QEMU `virt` with GICv3, HVF locally and TCG
+  in CI) boots to the CLI on one core under wasm3 and runs every QEMU battery,
+  in CI on an aarch64-linux runner; `run-qemu-test` and
+  `run-qemu-ring3-threading-test` pass. It drives: EL0/EL1 with `svc` syscalls,
+  TTBR0/TTBR1 paging with the x86_64 slot geometry, GICv3 SPIs, MSI/MSI-X
+  through the ITS, PCIe through ECAM, ACPI devices plus a board table, the
+  PL011 console, virtio-blk as the boot disk, virtio-net, -rng, -console, the
+  clock (below), the display and input (below), and PSCI power-off. The design
+  is [architecture/38-aarch64-platform.md](architecture/38-aarch64-platform.md);
+  SMP, WARP, ASIDs and a framebuffer for firmware without a GOP are open
+  (`TASKS.md`, "arm64 Port").
 - The aarch64 clock is a Kconfig choice (`WASMOS_RTC_*`, "Real-time clock
   (aarch64)"); both serve the `rtc` protocol through the shared core
   (`src/drivers/rtc/core/rtc_core.ts`), as the x86_64 CMOS driver now does. The

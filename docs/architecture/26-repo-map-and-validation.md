@@ -15,6 +15,7 @@ wasmos/
 │   ├── boot/               UEFI bootloader (single .c file + BUILD.py)
 │   ├── kernel/             Kernel: scheduler, IPC, memory, wasm3 hosting
 │   │   ├── arch/x86_64/    CPU init, ISR stubs, context-switch, IRQ, syscall
+│   │   ├── arch/aarch64/   EL1 entry, vectors, paging, GICv3/ITS, timer, ECAM, PSCI
 │   │   └── include/        All kernel headers (IPC, process, paging, wasm3, etc.)
 │   ├── drivers/            Device drivers, grouped by the class they provide
 │   │   │                   (a virtio driver sits with its class; installed
@@ -169,7 +170,7 @@ including the ESP tree and the disk images, lands in the build directory:
 ```
 ./configure out/<dir> configs/<name>_defconfig   Configure (seeds out/<dir>/.config)
 ninja -C out/<dir>                               Kernel, loader, modules, initfs, ESP, images
-ninja -C out/<dir> bootloader                    Build BOOTX64.EFI
+ninja -C out/<dir> bootloader                    Build BOOTX64.EFI (BOOTAA64.EFI on aarch64)
 ninja -C out/<dir> kernel                        Build kernel.elf
 ninja -C out/<dir> make_wasmos_app               Build .wap packer tool
 ninja -C out/<dir> initfs.img                    Build initfs.img + initfs_config.bin
@@ -194,7 +195,7 @@ writes):
 
 ```
 out/<dir>/esp/
-├── EFI/BOOT/BOOTX64.EFI
+├── EFI/BOOT/BOOTX64.EFI   (BOOTAA64.EFI on aarch64)
 ├── kernel.elf
 ├── startup.nsh
 ├── initfs.img             (embedded by bootloader; not read by EFI shell)

@@ -23,6 +23,10 @@ compositor (`src/services/gfx_compositor/gfx_compositor.zig`). See also
 `21-virtual-input-testing-via-virtio-serial.md` (input drivers), and
 `09-process-and-ipc.md` (select-set / blocking primitives).
 
+"COM1" in this document means the console UART: COM1 (16550) on x86_64, the
+PL011 on aarch64. Both are served by backends of the same UART core, and the
+kernel reaches either through `arch_console_uart_*` for its own output.
+
 ---
 
 ### Role: the VT is the sole I/O multiplexer
@@ -360,10 +364,13 @@ the `cli_is_foreground` read gate.
 
 #### Serial → VT → serial-bound slot *(phase 1/2)*
 
-The serial driver (`serial.ts`) enables the COM1 RX interrupt, routes IRQ4 to its
-endpoint via `irq_register(ctx, 4, ep)` (the model `keyboard.ts` uses for IRQ1),
-blocks on `ipc_recv`, and on each `IPC_IRQ_EVENT_TYPE (0xFF00)` reads the ready RX
-bytes, forwards them to `vt` as `VT_IPC_SERIAL_INPUT_REQ`, and calls `irq_ack(4)`.
+The UART driver (`src/drivers/tty/serial/serial_core.ts` with its `uart16550`
+or `pl011` backend) enables the RX interrupt, routes its line to its endpoint
+(IRQ4 for COM1; the PL011's GIC SPI, INTID 33, on aarch64) with
+`irq_route_ipc` (the model `keyboard.ts` uses for IRQ1),
+waits in its event loop, and on each `IPC_IRQ_EVENT_TYPE (0xFF00)` reads the ready RX
+bytes, forwards them to `vt` as `VT_IPC_SERIAL_INPUT_REQ`, and acks its line
+(`irq_ack`).
 The kernel keeps COM1 **TX** for klog/panic but stops consuming COM1 RX for CLI
 input.
 

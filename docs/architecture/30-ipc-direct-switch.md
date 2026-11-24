@@ -423,7 +423,7 @@ from persisting beyond the broken chain.
 
 ### Preemption Safety
 
-Direct-switch does **not** disable preemption.  The PIT timer fires normally.
+Direct-switch does **not** disable preemption.  The timer tick fires normally.
 If the timer preempts the currently running service thread mid-chain:
 
 1. The preemption handler saves the service thread's context as usual.

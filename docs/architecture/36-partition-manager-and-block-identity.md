@@ -47,7 +47,7 @@ offset 0x1FE:  55 aa
 ```
 
 `/boot` is that shape, and stays that shape: UEFI does not force GPT here — OVMF
-boots the removable-media path `\EFI\BOOT\BOOTX64.EFI` off an MBR FAT partition
+boots the removable-media path `\EFI\BOOT\BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64) off an MBR FAT partition
 — and vvfat has no GPT mode, so a directory-backed drive cannot carry a GPT.
 
 `/user` is not directory-backed. It is a raw image built by

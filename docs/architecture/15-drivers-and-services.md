@@ -1134,7 +1134,7 @@ powering it off itself if the sequence stops making progress -- halt always
 halts.
 
 **The console is written out before the power goes.** Once a vt owns the
-console, kernel output reaches COM1 only when the vt drains its console ring,
+console, kernel output reaches the console UART only when the vt drains its console ring,
 and the sequence's last lines (a participant's result, `[pm] shutdown: complete`)
 are written just before the power-off. After the last participant the PM keeps
 stepping until `console_ring_drained()` reports the ring empty, bounded by

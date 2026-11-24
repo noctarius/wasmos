@@ -12,8 +12,10 @@ Implementation status snapshots belong in `docs/STATUS.md`, not here.
 
 ### Serial Output Pipeline
 
-All kernel diagnostic output routes through `src/kernel/serial.c`. The default
-driver targets COM1.
+All kernel diagnostic output routes through `src/kernel/serial.c`, which writes
+the console UART through `arch_console_uart_*` (`include/arch/arch_platform.h`):
+COM1 (a 16550 at port `0x3F8`) on x86_64, the PL011 at `0x09000000` on aarch64
+(`arch/aarch64/platform_aarch64.c`). The register setup below is x86_64's.
 
 #### COM1 Initialization
 
@@ -210,11 +212,16 @@ int  serial_input_read(uint8_t *out); /* polled by kernel console API */
 ```
 
 `serial_input_read` is polled by the `wasmos_console_read` WASM host import
-before falling back to direct COM1 polling.
+before falling back to polling the console UART directly.
 
 ---
 
 ### Exception Reporting
+
+The functions below are x86_64's. On aarch64 `src/kernel/arch/aarch64/cpu_aarch64.c`
+logs a fatal exception with its kind, `esr` and `far`, and panics with `esr` and
+`elr` (`aarch64_unhandled_exception`); a user-mode fault terminates the process
+with `esr`, `far` and `elr` in its log line.
 
 Two functions in `src/kernel/arch/x86_64/cpu_x86_64.c` handle fatal exceptions:
 

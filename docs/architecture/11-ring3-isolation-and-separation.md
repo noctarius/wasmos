@@ -5,7 +5,14 @@
 
 This document describes the x86_64 privilege separation model, memory isolation
 enforcement, syscall interface, user-origin fault containment, capability system,
-IPC authentication, and the ring3 validation gates.
+IPC authentication, and the ring3 validation gates. "Ring 3" names the
+unprivileged level on both architectures: on aarch64 it is EL0, entered and left
+through `ERET` and the exception vectors, with the user root in TTBR0 and the
+kernel half in the shared TTBR1; syscalls are `svc #0` (number in `x8`), and
+native ring-3 images link with `arch/aarch64/ring3_native.ld`. The isolation
+rules -- user-root verification, user-pointer copies, fault containment,
+capabilities -- are arch-neutral; `run-qemu-ring3-threading-test` passes on
+both architectures ([38-aarch64-platform.md](38-aarch64-platform.md)).
 
 ---
 
@@ -190,9 +197,11 @@ Source: `src/kernel/include/memory.h`
 
 Source: `src/kernel/include/syscall.h`, `src/kernel/syscall.c`
 
-Syscalls use `INT 0x80` (vector `X86_VECTOR_SYSCALL = 0x80`). RAX holds the
-syscall number; arguments are in RDI, RSI, RDX (following the x86-64 SysV
-ABI convention for the first three arguments). Return value in RAX.
+On x86_64 syscalls use `INT 0x80` (vector `X86_VECTOR_SYSCALL = 0x80`). RAX
+holds the syscall number; arguments are in RDI, RSI, RDX (following the x86-64
+SysV ABI convention for the first three arguments). Return value in RAX. On
+aarch64 they use `svc #0` with the number in `x8`, arguments in `x0..x5` and
+results in `x0`/`x1` ([09-process-and-ipc.md](09-process-and-ipc.md)).
 
 | Number | Name                           | Arguments                                        |
 |--------|--------------------------------|--------------------------------------------------|

@@ -338,11 +338,15 @@ Source: `context_switch.S`, `src/kernel/process.c`
 `context_switch_high(from_ctx, to_ctx)`:
 1. Save all GPRs + rsp/rip/rflags/cs/ss into `from_ctx`.
 2. Load GPRs + rsp/rip from `to_ctx`.
-3. Switch CR3 if `to_ctx.root_table` differs from current.
+3. Switch the address-space root if `to_ctx.root_table` differs from current
+   (CR3 on x86_64, TTBR0 on aarch64).
 4. Return to `to_ctx.rip`.
 
-The syscall handler copies the full trap frame into `current_thread->ctx` before
-any blocking path so resumed threads continue at the correct post-syscall RIP.
+The steps are x86_64's (`arch/x86_64/context_switch.S`); aarch64's
+`context_switch.S` saves and restores the general registers and the
+callee-saved FP registers (`d8`-`d15`) and resumes every context through `ERET`. The syscall handler copies the full trap
+frame into `current_thread->ctx` before any blocking path so resumed threads
+continue at the correct post-syscall instruction.
 
 ---
 

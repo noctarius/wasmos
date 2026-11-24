@@ -2284,12 +2284,10 @@ to the CLI on one core under wasm3, with console input through the PL011
 driver, and passes `run-qemu-test`. Every QEMU battery runs on it in CI
 (`aarch64_wasm3_single` in `tests/batteries.json`); a test whose subject aarch64
 lacks is skipped there with `requires_arch` (`scripts/qemu_test_framework.py`),
-and the reason it prints names what is missing. Read `docs/architecture/04-boot-and-handoff.md`,
-`06-memory-management.md` and `10-capability-and-policy.md` first.
+and the reason it prints names what is missing. Read
+`docs/architecture/38-aarch64-platform.md` first, then `04-boot-and-handoff.md`,
+`06-memory-management.md` and `10-capability-and-policy.md`.
 
-- [x] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
-  x86_64-only): `virtio_input` registers `kbd` or `mouse` per function and
-  speaks the PS/2 protocols (`tests/test_virtio_input.py`).
 - [ ] [FEATURE][P3] virtio-tablet (absolute pointer): `virtio_input` refuses a
   device with only absolute axes, because `MOUSE_IPC_MOVE_NOTIFY` carries
   relative 8-bit deltas only. A tablet needs an absolute pointer event.
@@ -2302,10 +2300,6 @@ and the reason it prints names what is missing. Read `docs/architecture/04-boot-
   but not mouse motion: QMP relative motion injected into a `-nographic`
   session never reached the virtio mouse locally (verified interactively on a
   display instead).
-- [x] [FEATURE][P2] A clock on aarch64, chosen in Kconfig (`WASMOS_RTC_*`): the
-  `pl031` driver (default; acpi-bus publishes QEMU virt's PL031 from its board
-  table) or `rtc_efi` (UEFI GetTime/SetTime, after the loader's
-  SetVirtualAddressMap). The `date` tests run on aarch64.
 - [ ] [TEST][P3] CI builds only the default clock (PL031); `WASMOS_RTC_EFI` is
   verified locally (`run-qemu-test`, boot-and-init). A battery cannot be scoped
   to one configuration, so covering it means a second aarch64 config in
@@ -2314,17 +2308,6 @@ and the reason it prints names what is missing. Read `docs/architecture/04-boot-
   unconverted: a firmware configured with a time zone yields local time
   (`TODO(efi-rtc-timezone)`, `src/kernel/efi_rtc.c`). edk2 on QEMU virt leaves
   the zone unspecified, so the time is the PL031's UTC.
-- [x] [FEATURE][P2] A framebuffer on aarch64. Done with QEMU ramfb: the harness
-  attaches `-device ramfb`, the firmware reports it as the GOP framebuffer, and
-  `framebuffer_ramfb` (bound to the fw_cfg device QEMU0002) serves it and sets
-  modes through fw_cfg DMA (`tests/test_ramfb_mode.py`). The menu-bar and VT
-  screen-ownership tests run on aarch64.
-- [x] [FEATURE][P2] virtio-gpu driver (2D), on both x86_64 and aarch64, and
-  aarch64's default display. edk2's virtio-gpu GOP is blit-only, so the boot
-  loader allocates the scanout (kernel-owned, `EFI_LOADER_DATA`); `virtio_gpu`
-  attaches it as a resource's backing and presents what the compositor and the
-  text console report (`DISPLAY_IPC_FLUSH_REQ`), plus a full present on idle
-  loop ticks. `tests/test_virtio_gpu.py` reads the scanout back by screendump.
 - [ ] [FEATURE][P2] Runtime mode setting through virtio-gpu: the FBTEXT server
   on a virtio-gpu scanout offers no modes (the generic backend), and the
   loader sizes the scanout for the boot mode

@@ -19,7 +19,7 @@ architectural contract that all other design decisions extend from.
 
 **What the kernel will always own:**
 - Physical frame allocation and virtual memory mapping primitives.
-- Per-process page tables and CR3 management.
+- Per-process page tables and address-space switching (CR3 on x86_64, TTBR0 on aarch64).
 - IPC endpoint table and message routing.
 - Interrupt and exception dispatch; IRQ routing to registered endpoints.
 - Capability grant table and enforcement at every hostcall/syscall boundary.
@@ -338,7 +338,7 @@ the user's perspective; it is how PM realises the child that already exists.
 These properties are architectural anchors. Changes may break any interface
 freely, but they must preserve these:
 
-1. **The boot chain embeds no driver logic.** `BOOTX64.EFI` loads files and
+1. **The boot chain embeds no driver logic.** The UEFI loader (`BOOTX64.EFI` / `BOOTAA64.EFI`) loads files and
    fills `boot_info_t`. It does not start services or make policy decisions.
    `sysinit` turns boot config into submissions to the supervisor — it is not
    a second bootstrap coordinator, and it does not supervise.

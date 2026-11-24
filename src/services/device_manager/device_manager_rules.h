@@ -71,15 +71,17 @@ void dm_rules_load_block_fs(device_manager_state_t* state, const char* text);
  * Accepts SUBSYSTEM=="pci" lines with any of ATTR{bus,slot,function,class,
  * subclass,prog_if,vendor,device}.  Each rule's spawned_device_mask and
  * given_up_device_mask are cleared, so reloading rules lets an already-matched
- * device be spawned again, and a given-up one be tried again. */
-void dm_rules_load_pci_match(device_manager_state_t* state, const char* text);
+ * device be spawned again, and a given-up one be tried again. Returns how many
+ * valid pci rules did not fit PCI_MATCH_RULE_CAP and were not loaded. */
+uint32_t dm_rules_load_pci_match(device_manager_state_t* state, const char* text);
 /* Parse acpi_match rules (ACPI/ISA class driver binding) from text.  Accepts
  * SUBSYSTEM=="acpi" lines with ATTR{class}, ATTR{subclass}, ATTR{io} (the
  * device's I/O base, hex), ATTR{hid} (its ACPI _HID) and ATTR{console} ("1"
  * for the device the firmware names as console, "0" for any other); like the
  * PCI loader it clears each rule's spawned_device_mask and
- * given_up_device_mask. */
-void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text);
+ * given_up_device_mask. Returns how many valid acpi rules did not fit
+ * ACPI_MATCH_RULE_CAP and were not loaded. */
+uint32_t dm_rules_load_acpi_match(device_manager_state_t* state, const char* text);
 
 /* Whether an acpi_match rule selects registry entry `rec`: an ACPI/ISA device
  * (bus 0xFF) whose class, subclass and -- when the rule names them -- I/O base

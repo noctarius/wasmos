@@ -75,6 +75,14 @@ SUBSYSTEM=="acpi", ATTR{hid}=="QEMU0002", RUN+="system/drivers/fbramfb.wap"
 # 0x1052), which registers "kbd" or "mouse" by what the device reports. A
 # restart re-registers the name, and the vt and compositor watches rebind.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1052", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_input.wap"
+# The virtio GPU (modern id 0x1050). Its firmware GOP is blit-only, so the boot
+# loader allocates the scanout and hands it over as the framebuffer; two drivers
+# serve it. virtio_gpu presents it -- it attaches the scanout's pages to the
+# device and flushes what is drawn ("display") -- and is supervised: the scanout
+# is the kernel's, so a restarted instance attaches the same pages again. The
+# generic framebuffer driver serves the text console (FBTEXT, "fb") on it.
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1050", ENV{RESTART}="on-failure", RUN+="system/drivers/virtio_gpu.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1050", RUN+="system/drivers/framebuf.wap"
 # The virtio console is the kernel-log port (doc 19). Unsupervised: a restart
 # would replay the whole kmsg ring onto it again.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"

@@ -582,6 +582,17 @@ const FBTEXT_IPC_BLIT_GRID_REQ int32 = 0x60B
 // driver renders BLIT_GRID at the new column count from then on, so the
 // receiver re-lays its grids out before its next blit.
 const FBTEXT_IPC_GEOMETRY_CHANGED int32 = 0x60C
+// display presenter -> driver: the sender presents the scanout and must
+// be told what is drawn (DISPLAY_IPC_FLUSH_REQ, subsystem `display`).
+// The driver accepts it only from the endpoint the service registry has
+// bound to "display", which it asks before answering; the answer is
+// therefore deferred. It then owns its own flush descriptor buffer and
+// lends it READ to the sender; a later accepted PRESENTER_REQ (a
+// restarted presenter) replaces the previous one. No arguments; RESP
+// when the loan is made, ERROR (arg0 = packed WASMOS_ERR_*) when it is
+// not -- WASMOS_ERR_DISPLAY_NOT_PRESENTER for a sender that is not
+// "display".
+const FBTEXT_IPC_PRESENTER_REQ int32 = 0x60D
 const FBTEXT_IPC_RESP int32 = 0x680
 const FBTEXT_IPC_ERROR int32 = 0x6FF
 
@@ -1288,3 +1299,19 @@ const SUPERVISOR_IPC_START_REQ int32 = 0x1006
 const SUPERVISOR_IPC_RESP int32 = 0x1080
 // arg0 = packed WASMOS_ERR_SUPERVISOR_* code.
 const SUPERVISOR_IPC_ERROR int32 = 0x10FF
+
+// display (0x1100..0x11FF)
+// Present what was drawn into the scanout inside the given rectangles.
+// The request is a wasmos_display_flush_desc_t (version, count, rects in
+// framebuffer pixels) in a transfer buffer the caller owns and has lent
+// READ to the display: arg0=buffer_id arg1=offset arg2=size. The caller
+// may rewrite the buffer once the answer arrives, so damage drawn
+// meanwhile is accumulated, not sent. Rects are clipped to the scanout;
+// an empty list presents nothing. Served by the endpoint registered as
+// "display", which exists only on a machine whose scanout needs a
+// presenter (virtio-gpu); elsewhere what is drawn is already shown.
+const DISPLAY_IPC_FLUSH_REQ int32 = 0x1100
+// arg0 = 0: the rects were presented; the descriptor buffer is the caller's again.
+const DISPLAY_IPC_RESP int32 = 0x1180
+// arg0 = packed WASMOS_ERR_DISPLAY_* code; the descriptor buffer is the caller's again.
+const DISPLAY_IPC_ERROR int32 = 0x11FF

@@ -73,6 +73,7 @@
         "test_rtc_range.py",
         "test_decode_kernel_panic.py",
         "test_device_manager.py",
+        "test_devmgr_declined_spawn.py",
         "test_init_smoke.py",
         "test_syslog_port.py",
         "test_mmio_mappings.py",
@@ -130,6 +131,7 @@
       "files": [
         "test_console_claim.py",
         "test_ramfb_mode.py",
+        "test_virtio_gpu.py",
         "test_gfx_keyboard.py",
         "test_gfx_surface_recycle.py",
         "test_irq_input.py",

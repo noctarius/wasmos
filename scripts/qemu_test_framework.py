@@ -102,6 +102,11 @@ class QemuConfig:
     # (transitional 1AF4:1005). A test appends device options here --
     # `vectors=0` puts the driver on its INTx path.
     rng_device: str = "virtio-rng-pci"
+    # The display device arguments, replacing the architecture's own
+    # (toolchains.ARCHES[...].qemu_display) when not None: () boots with no
+    # display device, ("-device", "virtio-gpu-pci") with a virtio GPU. None keeps
+    # the architecture's default.
+    display_devices: Optional[tuple] = None
     # Extra QEMU arguments appended verbatim after the standard device set, for a
     # test that needs a device the whole suite must not carry -- an attached
     # virtio-blk disk, say. A tuple so the default stays immutable.
@@ -537,7 +542,7 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     cmd = [
         cfg.qemu_binary or f"qemu-system-{arch.name}",
         *arch.qemu_machine,
-        *arch.qemu_display,
+        *(arch.qemu_display if cfg.display_devices is None else cfg.display_devices),
         *arch.qemu_input,
         "-m",
         "512M",

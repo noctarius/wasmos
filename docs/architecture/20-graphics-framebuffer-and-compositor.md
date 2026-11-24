@@ -20,6 +20,10 @@ app (WASM) ──GFX IPC (0x200–0x2FF)──► gfx-compositor (native Zig)
                                     kernel native driver ABI
                                     (wasmos_driver_api_t)
 
+gfx-compositor ──DISPLAY IPC (0x1100–0x11FF)──► display presenter ("display")
+framebuffer    ──DISPLAY IPC──────────────────► (virtio_gpu; only where the
+                                                 scanout must be flushed)
+
 gfx-compositor ──FONT IPC (0xA00–0xAFF)───► font-service (native Zig)
 gfx-compositor ◄─VT_IPC_KEY_FORWARD (0x782)── vt service (vt-0 key sink)
 gfx-compositor ──MOUSE IPC────────────────► mouse driver (subscription)
@@ -101,6 +105,57 @@ Capability flags (`FBTEXT_CAP_*`, `wasmos_driver_abi.h`):
 FBTEXT_CAP_SET_RESOLUTION = 1u << 0
 FBTEXT_CAP_QUERY_MODES    = 1u << 1
 ```
+
+#### Display Presenter
+
+On most machines the framebuffer IS the scanout: a pixel stored is a pixel
+shown (bochs VBE, ramfb, a GOP framebuffer). A virtio GPU is different. Its
+firmware GOP is blit-only, so the boot loader allocates the framebuffer itself
+([04-boot-and-handoff.md](04-boot-and-handoff.md)), and the device shows it only
+after it has been copied to a host resource and flushed. That is the
+presenter's job, and the presenter announces itself rather than being assumed:
+
+- `virtio_gpu` creates one 2D resource the size of the framebuffer
+  (`B8G8R8X8`, the little-endian `0x00RRGGBB` every writer stores), attaches
+  the framebuffer's physical pages as its backing, binds it to scanout 0, and
+  registers `display`. The scanout belongs to the kernel, so a restarted driver
+  attaches the same pages again.
+- A writer reports what it drew with `DISPLAY_IPC_FLUSH_REQ`: a
+  `wasmos_display_flush_desc_t` of up to 16 rects in a transfer buffer the
+  WRITER owns and has lent `display` READ. The writer keeps one flush in flight
+  and accumulates damage until its answer arrives, so it never rewrites a buffer
+  the presenter may still read. The presenter clips the rects to the scanout and
+  presents their bounding box with one `TRANSFER_TO_HOST_2D` and one
+  `RESOURCE_FLUSH`; the control queue runs in order, so the flush shows what the
+  transfer copied.
+- The compositor watches `display` and reports every composed region. The
+  FBTEXT server has no service watch; the presenter tells it instead
+  (`FBTEXT_IPC_PRESENTER_REQ`, sent on every bind of `fb`), and it reports each
+  cell, scroll, clear, grid blit and mode set from then on. IPC authenticates
+  an endpoint, not its authority, so the server accepts a presenter only after
+  the service registry confirms that the sender is the endpoint bound to
+  `display` (`SVC_IPC_LOOKUP_REQ`, answered asynchronously in its loop).
+- A writer takes an answer only from the presenter it sent to and only for the
+  request in flight, so neither another sender nor a late answer to an earlier
+  flush frees a descriptor the presenter may still read. The presenter keeps an
+  answer the writer's queue refused and retries it after every loop poll.
+- Whatever no writer reports -- the kernel's console before user space, the
+  early-log replay before the presenter attached -- is caught by a full present
+  on every loop tick (250 ms) that finds the control queue idle.
+
+Where there is no presenter, nothing registers `display`, no writer sends a
+flush, and nothing changes.
+
+#### Backend Selection
+
+Several framebuffer drivers can be spawned on one machine -- the ramfb driver is
+matched on fw_cfg, which every QEMU virt machine has, whatever its display.
+A backend's `init` runs before the server maps or draws on the framebuffer, and
+returns `FBTEXT_BACKEND_DECLINED` when the framebuffer is not its adapter's
+(ramfb: fw_cfg lists no `etc/ramfb`). The driver then exits with status 0, which
+the device manager reads as a declined device and does not retry
+([16-device-manager-and-bus-enumeration.md](16-device-manager-and-bus-enumeration.md)),
+so a declining driver never touches the pixels of the driver that owns them.
 
 #### Driver Variant Differences
 

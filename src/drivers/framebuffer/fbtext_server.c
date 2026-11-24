@@ -44,6 +44,37 @@ static const fbtext_blit_cell_t* g_blit_grid = 0;
  * driver's geometry and is told (FBTEXT_IPC_GEOMETRY_CHANGED) when that changes. */
 static uint32_t g_blit_client = (uint32_t)~0u;
 
+/* The display presenter (FBTEXT_IPC_PRESENTER_REQ), on a machine whose scanout
+ * is shown only when flushed (virtio-gpu); ~0 when none. Every draw is reported
+ * to it as DISPLAY_IPC_FLUSH_REQ through a descriptor buffer this driver owns
+ * and lends it READ. One flush is in flight at a time -- the buffer is rewritten
+ * only after the answer -- and damage drawn meanwhile accumulates in g_damage. */
+static uint32_t g_presenter = (uint32_t)~0u;
+static uint32_t g_flush_buffer_id = 0;
+static wasmos_display_flush_desc_t* g_flush_desc = 0;
+static uint8_t g_flush_in_flight = 0;
+/* The request id of the flush in flight; an answer counts only when it carries
+ * it and comes from g_presenter, so a late answer to an earlier flush cannot
+ * free the descriptor while the presenter may still read it. */
+static uint32_t g_flush_in_flight_id = 0;
+static wasmos_display_rect_t g_damage = {0, 0, 0, 0};
+/* Request ids of flushes this driver sends; never 0, which marks a message that
+ * expects no answer. */
+static uint32_t g_flush_request_id = 1;
+
+/* A PRESENTER_REQ is accepted only from the endpoint the service registry has
+ * bound to "display": IPC authenticates an endpoint, not its authority, so the
+ * registry is asked (SVC_IPC_LOOKUP_REQ) and the request answered when it has
+ * answered. One candidate is checked at a time; a newer request replaces an
+ * older one still being checked, which is refused. */
+static uint32_t g_proc_ep = (uint32_t)~0u;
+static uint32_t g_presenter_candidate = (uint32_t)~0u;
+static uint32_t g_presenter_candidate_req = 0;
+static uint32_t g_presenter_lookup_id = 0;
+/* Request ids of this driver's registry lookups: a range of their own, so a
+ * registry answer is never taken for a flush answer or the other way round. */
+#define PRESENTER_LOOKUP_ID_BASE 0x7E000000u
+
 typedef struct {
     uint16_t width;
     uint16_t height;
@@ -136,6 +167,123 @@ static uint32_t count_supported_modes(void) {
     return count;
 }
 
+static void damage_add(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    if (g_presenter == (uint32_t)~0u || w == 0u || h == 0u) {
+        return;
+    }
+    if (g_damage.width == 0u || g_damage.height == 0u) {
+        g_damage = (wasmos_display_rect_t){x, y, w, h};
+        return;
+    }
+    uint32_t x1 = g_damage.x + g_damage.width > x + w ? g_damage.x + g_damage.width : x + w;
+    uint32_t y1 = g_damage.y + g_damage.height > y + h ? g_damage.y + g_damage.height : y + h;
+    g_damage.x = g_damage.x < x ? g_damage.x : x;
+    g_damage.y = g_damage.y < y ? g_damage.y : y;
+    g_damage.width = x1 - g_damage.x;
+    g_damage.height = y1 - g_damage.y;
+}
+
+static void damage_screen(void) {
+    damage_add(0, 0, (uint32_t)g_state.cols * CELL_W, (uint32_t)g_state.rows * CELL_H);
+}
+
+static void damage_cell(uint32_t col, uint32_t row) {
+    damage_add(col * CELL_W, row * CELL_H, CELL_W, CELL_H);
+}
+
+/* Sends the accumulated damage when no flush is in flight. A send the
+ * presenter's queue refuses keeps the damage for the next attempt. */
+static void send_reply(wasmos_driver_api_t* api, uint32_t ctx, uint32_t ep, uint32_t dest,
+                       uint32_t type, uint32_t request_id, uint32_t arg0) {
+    nd_ipc_message_t m;
+    m.type = type;
+    m.source = ep;
+    m.destination = dest;
+    m.request_id = request_id;
+    m.arg0 = arg0;
+    m.arg1 = 0;
+    m.arg2 = 0;
+    m.arg3 = 0;
+    (void)api->ipc_send(ctx, dest, &m);
+}
+
+static void flush_damage(wasmos_driver_api_t* api, uint32_t ctx, uint32_t ep) {
+    if (g_presenter == (uint32_t)~0u || g_flush_in_flight || !g_flush_desc ||
+        g_damage.width == 0u || g_damage.height == 0u) {
+        return;
+    }
+    g_flush_desc->version = DISPLAY_FLUSH_DESC_VERSION;
+    g_flush_desc->count = 1u;
+    g_flush_desc->rects[0] = g_damage;
+    nd_ipc_message_t m;
+    m.type = DISPLAY_IPC_FLUSH_REQ;
+    m.source = ep;
+    m.destination = g_presenter;
+    m.request_id = g_flush_request_id;
+    m.arg0 = g_flush_buffer_id;
+    m.arg1 = 0;
+    m.arg2 = DISPLAY_FLUSH_DESC_SIZE(1);
+    m.arg3 = 0;
+    if (api->ipc_send(ctx, g_presenter, &m) != 0) {
+        return;
+    }
+    g_flush_in_flight_id = g_flush_request_id;
+    g_flush_request_id = g_flush_request_id == 0x7DFFFFFFu ? 1u : g_flush_request_id + 1u;
+    g_flush_in_flight = 1u;
+    g_damage = (wasmos_display_rect_t){0, 0, 0, 0};
+}
+
+/* Asks the registry which endpoint "display" is bound to, for the candidate
+ * presenter recorded in g_presenter_candidate. Returns 0, or a packed
+ * WASMOS_ERR_* code when the question cannot be asked. */
+static int32_t verify_presenter(wasmos_driver_api_t* api, uint32_t ctx, uint32_t ep) {
+    if (g_proc_ep == (uint32_t)~0u) {
+        return WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT;
+    }
+    nd_ipc_message_t m;
+    m.type = SVC_IPC_LOOKUP_REQ;
+    m.source = ep;
+    m.destination = g_proc_ep;
+    g_presenter_lookup_id = PRESENTER_LOOKUP_ID_BASE + ((g_presenter_lookup_id + 1u) & 0xFFFFu);
+    m.request_id = g_presenter_lookup_id;
+    /* "display", packed as the registry's 16-byte name: four little-endian
+     * words, zero-filled. */
+    m.arg0 = 0x70736964u; /* "disp" */
+    m.arg1 = 0x0079616Cu; /* "lay\0" */
+    m.arg2 = 0;
+    m.arg3 = 0;
+    return api->ipc_send(ctx, g_proc_ep, &m) == 0 ? 0 : WASMOS_ERR_DRIVER_REGISTER;
+}
+
+/* FBTEXT_IPC_PRESENTER_REQ, once verified: `presenter` becomes the endpoint damage is reported
+ * to. A fresh descriptor buffer is lent to it; releasing the previous one
+ * cascade-revokes its loan to an earlier presenter. The whole screen is then
+ * reported once. Returns 0, or a packed WASMOS_ERR_* code. */
+static int32_t attach_presenter(wasmos_driver_api_t* api, uint32_t presenter) {
+    if (g_flush_buffer_id != 0u) {
+        (void)api->xfer_buffer_release(g_flush_buffer_id);
+        g_flush_buffer_id = 0;
+        g_flush_desc = 0;
+    }
+    g_presenter = (uint32_t)~0u;
+    g_flush_in_flight = 0u;
+    g_flush_in_flight_id = 0u;
+    uint32_t id = 0;
+    void* raw = api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, 4096u, &id);
+    if (!raw || id == 0u) {
+        return WASMOS_ERR_DRIVER_DEVICE_INIT;
+    }
+    if (api->xfer_buffer_borrow(presenter, id, ND_BUFFER_BORROW_READ) <= 0) {
+        (void)api->xfer_buffer_release(id);
+        return WASMOS_ERR_DRIVER_DEVICE_INIT;
+    }
+    g_flush_buffer_id = id;
+    g_flush_desc = (wasmos_display_flush_desc_t*)raw;
+    g_presenter = presenter;
+    damage_screen();
+    return 0;
+}
+
 /* Programs width x height through the backend and rebuilds the grid on success.
  * The kernel's framebuffer info is updated to match, so a consumer that reads it
  * -- the compositor remaps from it -- follows the change. Returns 0 or the packed
@@ -224,6 +372,20 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
     write_hex32(api, " stride=", fb_stride);
     write_str(api, "\n");
 
+    /* Before the framebuffer is mapped or cleared: a backend that declines
+     * leaves the pixels to whichever driver the framebuffer does belong to. */
+    if (backend->init) {
+        int32_t init_rc = backend->init(api, &info);
+        if (init_rc == FBTEXT_BACKEND_DECLINED) {
+            write_str(api, backend->tag);
+            write_str(api, " the framebuffer is not this backend's; declining\n");
+            return 0;
+        }
+        if (init_rc != 0) {
+            return init_rc;
+        }
+    }
+
     /* Map the whole framebuffer the firmware reported, which may hold more than
      * the boot mode needs (edk2's ramfb sizes it for its largest mode); every
      * runtime mode must fit in it. Never less than the boot geometry. */
@@ -249,17 +411,17 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
     fbtext_render_init(&g_state, (uint32_t*)fb, fb_stride, fb_width, fb_height);
     fbtext_clear(&g_state);
 
-    if (backend->init) {
-        int32_t init_rc = backend->init(api, &info);
-        if (init_rc != 0) {
-            return init_rc;
-        }
-    }
-
     replay_early_log(api);
 
     write_str(api, "[framebuffer] ready\n");
 
+    if (api->spawn_info) {
+        wasmos_spawn_info_t info_sp;
+        char args_unused[4];
+        if (api->spawn_info(&info_sp, args_unused, sizeof(args_unused)) == 0) {
+            g_proc_ep = info_sp.proc_endpoint;
+        }
+    }
     uint32_t ep = api->ipc_create_endpoint();
     if (ep == (uint32_t)~0u) {
         write_str(api, "[framebuffer] ipc endpoint failed\n");
@@ -319,6 +481,7 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
                 cell->fg = fg;
                 cell->bg = bg;
                 fbtext_render_cell(&g_state, col, row);
+                damage_cell(col, row);
             }
             break;
         }
@@ -336,12 +499,14 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
                 break;
             }
             fbtext_scroll_up(&g_state, (uint16_t)msg.arg0);
+            damage_screen();
             break;
         case FBTEXT_IPC_CLEAR_REQ:
             if (!g_text_plane_enabled || g_gfx_overlay_lock) {
                 break;
             }
             fbtext_clear(&g_state);
+            damage_screen();
             break;
         case FBTEXT_IPC_GEOMETRY_REQ:
             resp.arg0 = g_state.cols;
@@ -386,6 +551,7 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
                     fbtext_render_cell(&g_state, (uint16_t)col, (uint16_t)row);
                 }
             }
+            damage_add(0, 0, stride * CELL_W, rows * CELL_H);
             break;
         }
         case FBTEXT_IPC_QUERY_CAPS_REQ:
@@ -426,6 +592,7 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
             }
             resp.arg0 = msg.arg0;
             resp.arg1 = msg.arg1;
+            damage_screen();
             /* TODO(fbtext-geometry-notify): the notify is sent once; when the
              * vt's queue is full it is lost and the vt keeps its old grid until
              * the next framebuffer bind. */
@@ -440,11 +607,68 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
             }
             break;
         }
+        case FBTEXT_IPC_PRESENTER_REQ: {
+            /* Answered once the registry has (SVC_IPC_LOOKUP_RESP below). A
+             * candidate still being checked is refused in favour of this one. */
+            if (g_presenter_candidate != (uint32_t)~0u) {
+                send_reply(api,
+                           ctx,
+                           ep,
+                           g_presenter_candidate,
+                           FBTEXT_IPC_ERROR,
+                           g_presenter_candidate_req,
+                           (uint32_t)WASMOS_ERR_DISPLAY_NOT_PRESENTER);
+            }
+            g_presenter_candidate = msg.source;
+            g_presenter_candidate_req = msg.request_id;
+            int32_t verify_rc = verify_presenter(api, ctx, ep);
+            if (verify_rc != 0) {
+                g_presenter_candidate = (uint32_t)~0u;
+                resp.type = FBTEXT_IPC_ERROR;
+                resp.arg0 = (uint32_t)verify_rc;
+                break;
+            }
+            continue;
+        }
+        case SVC_IPC_LOOKUP_RESP: {
+            if (msg.source != g_proc_ep || msg.request_id != g_presenter_lookup_id ||
+                g_presenter_candidate == (uint32_t)~0u) {
+                continue;
+            }
+            uint32_t candidate = g_presenter_candidate;
+            uint32_t candidate_req = g_presenter_candidate_req;
+            g_presenter_candidate = (uint32_t)~0u;
+            int32_t attach_rc = msg.arg0 == candidate ? attach_presenter(api, candidate)
+                                                      : WASMOS_ERR_DISPLAY_NOT_PRESENTER;
+            send_reply(api,
+                       ctx,
+                       ep,
+                       candidate,
+                       attach_rc == 0 ? FBTEXT_IPC_RESP : FBTEXT_IPC_ERROR,
+                       candidate_req,
+                       (uint32_t)attach_rc);
+            flush_damage(api, ctx, ep);
+            continue;
+        }
+        case DISPLAY_IPC_RESP:
+        case DISPLAY_IPC_ERROR:
+            /* The presenter answered the flush in flight: the descriptor buffer
+             * is this driver's again. Any other answer -- another sender, an
+             * earlier flush -- leaves the flag alone. A refused flush is not
+             * retried; the presenter's own periodic present covers it. Not a
+             * request, so no reply. */
+            if (g_flush_in_flight && msg.source == g_presenter &&
+                msg.request_id == g_flush_in_flight_id) {
+                g_flush_in_flight = 0u;
+            }
+            flush_damage(api, ctx, ep);
+            continue;
         default:
             resp.type = FBTEXT_IPC_ERROR;
             resp.arg0 = (uint32_t)WASMOS_ERR_GFX_UNSUPPORTED_REQUEST;
             break;
         }
+        flush_damage(api, ctx, ep);
 
         if (msg.source != (uint32_t)~0u && msg.request_id != 0) {
             api->ipc_send(ctx, msg.source, &resp);

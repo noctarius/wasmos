@@ -102,6 +102,18 @@ The pixel format is packed as `(pixel_format & 0xF) << BOOT_INFO_FLAG_GOP_PIXEL_
 (shift = 8). The PCI fallback path always writes `BOOT_INFO_FLAG_GOP_PRESENT`
 with format bits zero (treated as RGB by convention).
 
+**Blit-only GOP: the loader allocates the scanout.** A GOP whose mode is
+`PixelBltOnly` (edk2's virtio-gpu driver) reports no linear framebuffer
+(`FrameBufferBase` 0). Mode selection then considers the blit-only modes, and
+the loader allocates `width x height` zeroed BGRX pixels as `EFI_LOADER_DATA`
+(`gop_allocate_scanout`) and hands them over as the framebuffer, with format 1
+(BGR). The kernel never reclaims loader data, so the scanout is kernel-owned:
+it outlives the display driver that presents it and stays valid for the panic
+writer. Nothing scans it out by itself; a display driver attaches its pages to
+the device and flushes what is drawn
+([20-graphics-framebuffer-and-compositor.md](20-graphics-framebuffer-and-compositor.md)).
+The scanout is sized for the boot mode.
+
 ---
 
 ### ACPI RSDP Discovery

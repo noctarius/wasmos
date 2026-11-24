@@ -106,8 +106,10 @@ class Arch:
     # and a distribution QEMU without it refuses to start the device.
     qemu_nic_option_rom: bool
     # The display device, when the machine has none by default. x86 QEMU
-    # brings a VGA adapter; QEMU virt has no display, and ramfb gives it a
-    # firmware framebuffer (bound by framebuffer_ramfb through fw_cfg).
+    # brings a VGA adapter; QEMU virt has no display and gets a virtio GPU,
+    # whose blit-only GOP makes the boot loader allocate the scanout and the
+    # virtio_gpu driver present it. A session may replace it
+    # (QemuConfig.display_devices): ramfb for runtime mode setting.
     qemu_display: tuple
     # Keyboard and mouse devices, when the machine has none by default. x86
     # QEMU brings a PS/2 controller; QEMU virt has none, and virtio-input
@@ -164,7 +166,7 @@ ARCHES = {
         qemu_machine=("-M", "virt,gic-version=3"),
         qemu_ide=False,
         qemu_nic_option_rom=False,
-        qemu_display=("-device", "ramfb"),
+        qemu_display=("-device", "virtio-gpu-pci"),
         qemu_input=(
             "-device",
             "virtio-keyboard-pci,id=vkbd,addr=0x1c",

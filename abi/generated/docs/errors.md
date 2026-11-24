@@ -436,3 +436,13 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_SUPERVISOR_CRITICAL` | -0x001A000B | the unit to retract or stop, or a unit bound to it through parent=, is critical: removing or stopping it would end the system |
 | `WASMOS_ERR_SUPERVISOR_RUNNING` | -0x001A000C | the unit to start is not stopped, failed or degraded: it runs, is being spawned or killed, or waits for its spawn or restart |
 | `WASMOS_ERR_SUPERVISOR_PARENT_DOWN` | -0x001A000D | the unit to start is bound through parent= to a unit that is stopped, failed or degraded; starting the parent starts it too |
+
+### `display` (domain 27) — display presenter (DISPLAY_IPC_*) failures: the virtio-gpu scanout and its flush protocol
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_DISPLAY_BAD_DESC` | -0x001B0001 | the flush descriptor cannot be read from the caller's buffer, has the wrong version, or claims more rects than it carries or than a flush takes |
+| `WASMOS_ERR_DISPLAY_NOT_READY` | -0x001B0002 | the display has no scanout yet: the device is still being brought up |
+| `WASMOS_ERR_DISPLAY_DEVICE` | -0x001B0003 | the device refused a transfer or flush command (a virtio-gpu error response) |
+| `WASMOS_ERR_DISPLAY_BUSY` | -0x001B0004 | the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds |
+| `WASMOS_ERR_DISPLAY_NOT_PRESENTER` | -0x001B0005 | FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to "display"; the presenter is unchanged |

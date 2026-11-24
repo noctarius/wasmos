@@ -50,6 +50,9 @@ class RamfbModeTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tmpdir = tempfile.mkdtemp(prefix="wasmos-ramfb-")
         cfg = default_config()
+        # ramfb rather than the architecture's default display (virtio-gpu),
+        # which does not change modes at runtime.
+        cfg.display_devices = ("-device", "ramfb")
         # screendump needs the display device, which -nographic removes;
         # display "none" keeps the run headless.
         cfg.nographic = False

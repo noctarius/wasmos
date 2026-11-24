@@ -365,3 +365,19 @@ without blocking either path.
 5. **The inventory endpoint is separate from the command endpoint.** Bus
    scanners use `"devmgr.inv"` (not `"devmgr"`), so high-volume inventory
    floods cannot starve other service command traffic.
+
+6. **Rule tables are bounded and say so.** The PCI and ACPI rule tables hold
+   32 rules each (always-spawn and block rules, 8). A rule set larger than its
+   table loads up to the table, and the device manager logs how many rules were
+   left out ("<n> pci rule(s) did not fit the rule table") rather than dropping
+   them unseen. Several rules may match one device; each spawns its driver.
+
+7. **A spawned driver's first outcome decides the rule for that device.**
+   READY retires the rule for the device. An exit with a failure status before
+   READY is a failed spawn and is retried, up to a limit, after which the device
+   is given up on ("gave up on <path>"). An exit with status 0 before READY
+   means the driver looked and found nothing to drive -- the ramfb driver on a
+   machine with fw_cfg but no ramfb -- so the device is retired at once
+   ("<path> declined the device") instead of retried. A driver that ends after
+   READY is not the device manager's to restart; a supervised unit
+   (`ENV{RESTART}`) is.

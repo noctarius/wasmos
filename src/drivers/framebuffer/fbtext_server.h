@@ -19,13 +19,18 @@
  * may exceed what the boot mode uses (edk2's ramfb sizes it for 1024x768).
  */
 
+/* fbtext_backend_t.init: the framebuffer belongs to some other adapter. */
+#define FBTEXT_BACKEND_DECLINED 1
+
 typedef struct {
     /* Log prefix of the variant's probe line, e.g. "[framebuffer-pci]". */
     const char* tag;
-    /* Called once with the boot geometry, after the framebuffer is mapped and
-     * before the endpoint is registered. Returns 0 to serve, or a packed
-     * WASMOS_ERR_* code that fbtext_serve returns as the driver's failure.
-     * NULL for a variant with nothing to set up. */
+    /* Called once with the boot geometry, before the framebuffer is mapped or
+     * drawn on. Returns 0 to serve, FBTEXT_BACKEND_DECLINED when the framebuffer
+     * is not one this backend drives (fbtext_serve then returns 0, which the
+     * device manager reads as a declined device), or a packed WASMOS_ERR_* code
+     * that fbtext_serve returns as the driver's failure. NULL for a variant
+     * with nothing to set up. */
     int32_t (*init)(wasmos_driver_api_t* api, const nd_framebuffer_info_t* boot);
     /* Programs the adapter to width x height at 32 bpp with `stride` pixels per
      * scanline, scanning out of the boot framebuffer. Returns 0, or a packed
@@ -37,8 +42,8 @@ typedef struct {
 
 /* Runs the server for `backend`; `api` is the driver's entry argument. Returns
  * -2 on a native ABI mismatch, 0 when the machine has no usable framebuffer (a
- * headless boot, not an error), or a negative code when bring-up fails. On
- * success it does not return. */
+ * headless boot, not an error) or the backend declined it, or a negative code
+ * when bring-up fails. On success it does not return. */
 int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend);
 
 #endif

@@ -142,6 +142,7 @@ endpoint-scoped and may repeat across subsystems.
 | `FBTEXT_IPC_SET_RESOLUTION_REQ` | 0x609 | req | req: arg0=w arg1=h  |
 | `FBTEXT_IPC_BLIT_ATTACH_REQ` | 0x60A | req | Bulk grid blit: instead of one CELL_WRITE per cell (a per-cell IPC loop that storms the driver's queue and wedges tty switching under SMP), the VT shares a cell-grid xfer-buffer and repaints the whole visible grid with a single IPC. ATTACH (once) hands the driver a borrowed grid buffer to map; BLIT_GRID (per repaint) tells it to render cols*rows fbtext_blit_cell_t entries from that buffer.  |
 | `FBTEXT_IPC_BLIT_GRID_REQ` | 0x60B | req | arg0=cols arg1=rows (from the attached buffer)  |
+| `FBTEXT_IPC_GEOMETRY_CHANGED` | 0x60C | notify | driver -> the endpoint that attached the blit grid (the vt): a SET_RESOLUTION changed the text geometry.  arg0=cols arg1=rows, as a GEOMETRY_REQ would now answer.  Fire-and-forget (request_id 0); the driver renders BLIT_GRID at the new column count from then on, so the receiver re-lays its grids out before its next blit.  |
 | `FBTEXT_IPC_RESP` | 0x680 | resp |  |
 | `FBTEXT_IPC_ERROR` | 0x6FF | error |  |
 

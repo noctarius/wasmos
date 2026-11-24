@@ -295,6 +295,7 @@ const (
 	WASMOS_ERR_ENV_TABLE_FULL int32 = -0x00160003 // no free entry remains
 	WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT int32 = -0x00170001 // no framebuffer is available on this system
 	WASMOS_ERR_FRAMEBUFFER_TOO_SMALL int32 = -0x00170002 // the caller's requested mapping is smaller than the framebuffer
+	WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE int32 = -0x00170003 // a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded
 	WASMOS_ERR_DEVMGR_NO_MOUNT_RULE int32 = -0x000A0001 // no block/filesystem mount rule matches the requested unit
 	WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY int32 = -0x000A0002 // unknown or unsupported device-manager query type
 	WASMOS_ERR_DEVMGR_NO_SUCH_RECORD int32 = -0x000A0003 // the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something
@@ -916,6 +917,8 @@ func WasmosStrerror(c int32) string {
 		return "no framebuffer is available on this system"
 	case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL:
 		return "the caller's requested mapping is smaller than the framebuffer"
+	case WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE:
+		return "a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded"
 	case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE:
 		return "no block/filesystem mount rule matches the requested unit"
 	case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY:

@@ -21,4 +21,5 @@ def build(b):
         "partition_manager",
         "framebuffer",
         "framebuffer_pci",
+        "framebuffer_ramfb",
     )

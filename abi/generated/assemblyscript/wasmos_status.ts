@@ -287,6 +287,7 @@ export const WASMOS_ERR_ENV_TOO_LONG: i32 = -0x00160002; // the key or value exc
 export const WASMOS_ERR_ENV_TABLE_FULL: i32 = -0x00160003; // no free entry remains
 export const WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: i32 = -0x00170001; // no framebuffer is available on this system
 export const WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: i32 = -0x00170002; // the caller's requested mapping is smaller than the framebuffer
+export const WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE: i32 = -0x00170003; // a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded
 export const WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: i32 = -0x000A0001; // no block/filesystem mount rule matches the requested unit
 export const WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: i32 = -0x000A0002; // unknown or unsupported device-manager query type
 export const WASMOS_ERR_DEVMGR_NO_SUCH_RECORD: i32 = -0x000A0003; // the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something
@@ -621,6 +622,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_ENV_TABLE_FULL: return "no free entry remains";
     case WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: return "no framebuffer is available on this system";
     case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "the caller's requested mapping is smaller than the framebuffer";
+    case WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE: return "a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "no block/filesystem mount rule matches the requested unit";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
     case WASMOS_ERR_DEVMGR_NO_SUCH_RECORD: return "the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something";

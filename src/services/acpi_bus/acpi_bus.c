@@ -93,6 +93,7 @@ static const acpi_id_entry_t acpi_id_table[] = {
     {"PNP0B00", 0x08, 0x03, 0x00, 0x0000},  /* CMOS RTC                      */
     {"PNP0C04", 0x0B, 0x80, 0x00, 0x0000},  /* FPU/coprocessor               */
     {"PNP0C02", 0x08, 0x80, 0x00, 0x0000},  /* motherboard resources         */
+    {"QEMU0002", 0x08, 0x80, 0x01, 0x0000}, /* QEMU fw_cfg (ramfb lives here) */
 };
 #define ACPI_ID_TABLE_LEN (sizeof(acpi_id_table) / sizeof(acpi_id_table[0]))
 

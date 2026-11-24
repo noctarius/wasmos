@@ -190,6 +190,7 @@ Framebuffer text IPC opcodes:
 | `FBTEXT_IPC_QUERY_CAPS_REQ`     | `0x607` | Query capability bitmask          |
 | `FBTEXT_IPC_QUERY_MODES_REQ`    | `0x608` | Query available video modes       |
 | `FBTEXT_IPC_SET_RESOLUTION_REQ` | `0x609` | Request resolution change         |
+| `FBTEXT_IPC_GEOMETRY_CHANGED`   | `0x60C` | Notify: text grid changed (to vt) |
 | `FBTEXT_IPC_RESP`               | `0x680` | Success response                  |
 | `FBTEXT_IPC_ERROR`              | `0x6FF` | Error response                    |
 
@@ -199,10 +200,28 @@ Capability flags: `FBTEXT_CAP_SET_RESOLUTION = 1<<0`, `FBTEXT_CAP_QUERY_MODES = 
 
 - **Kind:** native ELF driver; `FLAG_DRIVER|FLAG_NATIVE`
 - **PCI match:** class `0x03`, subclass `0x00`, prog_if `0x00`
-- **Capabilities:** `dma.buffer`
+- **Capabilities:** `io.port` (region 0: the Bochs VBE index/data ports
+  `0x01CE`-`0x01CF`)
 
 PCI VGA variant of the framebuffer driver. Spawned by the boot-FAT rule when a
-matching PCI graphics device is discovered.
+matching PCI graphics device is discovered. Changes the mode through the Bochs
+VBE (DISPI) registers; a refused register write fails the `SET_RESOLUTION`.
+
+#### `framebuffer_ramfb` — QEMU ramfb Framebuffer Driver (Native, aarch64)
+
+- **Kind:** native ELF driver; `FLAG_DRIVER|FLAG_NATIVE`
+- **ACPI match:** `_HID` `QEMU0002` (the fw_cfg device; `default.aarch64.rules`)
+- **Capabilities:** `mmio.map` (region 0: the fw_cfg register window), `dma.buffer`
+  (one page)
+
+ramfb variant of the framebuffer driver. QEMU's ramfb scans out of guest RAM the
+firmware allocated and reported as the GOP framebuffer; the driver serves it
+with the shared FBTEXT server and changes the mode by rewriting the fw_cfg file
+`etc/ramfb` (address, XRGB8888, width, height, stride) with the same buffer.
+QEMU accepts fw_cfg file writes only through the DMA interface, so the driver
+locates `etc/ramfb` in the fw_cfg file directory and writes it through a DMA
+descriptor in its one DMA page. The harness and `run-qemu*` targets attach
+`-device ramfb` on aarch64 (`ARCHES` in `scripts/buildgen/toolchains.py`).
 
 #### `keyboard` — PS/2 Keyboard Driver
 

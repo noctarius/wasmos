@@ -121,6 +121,28 @@ wasmos_error_code_t framebuffer_get_info(framebuffer_info_t* out) {
     return WASMOS_OK;
 }
 
+wasmos_error_code_t framebuffer_set_geometry(uint32_t width, uint32_t height, uint32_t stride) {
+    framebuffer_info_t* fb = framebuffer_info_slot();
+    if (width == 0 || height == 0 || stride < width) {
+        return WASMOS_INVAL;
+    }
+    if (fb->framebuffer_base == 0 || fb->framebuffer_size == 0) {
+        return WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT;
+    }
+    /* Compared in pixels: stride x height fits 64 bits, the byte count can wrap. */
+    if ((uint64_t)stride * (uint64_t)height > fb->framebuffer_size / 4u) {
+        return WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE;
+    }
+    fb->framebuffer_width = width;
+    fb->framebuffer_height = height;
+    fb->framebuffer_stride = stride;
+    klog_printf("[framebuffer] geometry %ux%u stride=%u\n",
+                (unsigned)width,
+                (unsigned)height,
+                (unsigned)stride);
+    return WASMOS_OK;
+}
+
 /* Map the GOP aperture at KERNEL_MMIO_FB_VA, page-aligned down from the GOP
  * base and up past its end. Runs after paging is active; until it succeeds
  * _fb_mmio_va() is 0, which is how the draw paths below detect "not mapped

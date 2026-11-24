@@ -379,6 +379,14 @@ typedef struct {
     uint64_t spawned_device_mask;  /* registry entry index bits already spawned */
     uint64_t given_up_device_mask; /* as on pci_match_rule_t */
     char spawn_path[96];
+    /* The driver's module descriptor, fetched as on pci_match_rule_t but only
+     * through the deferred PROC_IPC_MODULE_META_FILE request. Only its DMA
+     * capability and budget are used: the firmware, not the driver, describes
+     * an ACPI device's windows. A rule waits while `meta_pending`; with
+     * `meta_valid` 0 it spawns without DMA. */
+    uint8_t meta_valid;
+    uint8_t meta_pending;
+    wasmos_module_meta_desc_t meta;
     /* ENV{RESTART}: the supervisor's restart policy (never, on-failure or
      * always) for a driver the rule hands to it; empty when the device manager
      * spawns the driver itself. */

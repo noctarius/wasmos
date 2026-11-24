@@ -297,7 +297,12 @@ Device-manager records an ACPI device with `bus = 0xFF`, its windows in
 `bars[]` and its first I/O window's base in `io_port_base` (what `ATTR{io}`
 matches). An ACPI-matched driver is granted those windows as region grants in
 the same order (an MMIO window rounded out to whole pages) and the interrupt,
-and is spawned with `hid=`, `io=` or `mmio=` and `irq=`. When the firmware
+and is spawned with `hid=`, `io=` or `mmio=` and `irq=`. The firmware describes
+the windows; the driver's own module descriptor contributes only DMA: a driver
+whose manifest declares `dma.buffer` with a page budget is also granted
+`DEVMGR_CAP_DMA` and that budget (`dm_acpi_caps`). An ACPI rule's descriptor is
+always fetched with the deferred `PROC_IPC_MODULE_META_FILE` request, and the
+rule waits for the answer before it is armed, as a PCI rule does. When the firmware
 names a console (an SPCR exists, `WASMOS_ACPI_DEVICE_CONSOLE_KNOWN`), every
 ACPI device is also told whether it is that console (`console=1` or
 `console=0`); without an SPCR no `console=` is passed and a driver keeps its

@@ -783,9 +783,22 @@ Source: `architecture/13-runtime-and-packaging.md`,
   and fs-wfs never logged `unmounted clean` within 30 s; nothing was killed or
   restarted. The rerun, two local filesystem batteries and two further local
   runs passed. Not attributed: fs-wfs's shutdown path neither waits on another
-  service nor depends on its spawner. If it recurs, capture where fs-wfs's
-  sync task stands (the block request in flight, `ps`) before the session is
-  torn down.
+  service nor depends on its spawner. It recurred in run 45270304762
+  (`filesystem` on `x86_64_warp_smp`, PR #73, which does not touch fs-wfs,
+  WFS or the shutdown order): again `order 1: fs-wfs`, and this time
+  `[fs-wfs] unmounted clean` did arrive, after the test had stopped waiting;
+  the rerun passed. If it recurs, capture where fs-wfs's sync task stands (the
+  block request in flight, `ps`) before the session is torn down.
+- [ ] [TEST][P2] `test_supervisor.test_9b_a_killed_vt_brings_the_shell_back`
+  failed once in a local `boot-and-init` battery on `x86_64_wasm3_smp` (PR #73):
+  after `svc kill vt` the supervisor restarted vt and cli@tty1, the new shell
+  printed its banner and prompt, and the `echo vt-came-back` typed on serial was
+  never echoed. Serial input did not reach the new shell, so the likely window is
+  the restarted vt's serial binding against the new shell's first read. The test
+  alone passed 4/4 and the battery rerun passed. Not attributed: the PR changes
+  only how vt follows a framebuffer mode change, which this test does not make.
+  If it recurs, capture vt's serial-bound slot and cli@tty1's reader
+  registration (`VT_IPC_REGISTER_WRITER`/`READ_REQ`) before teardown.
 - [ ] [FEATURE][P3] Tie a unit's lifetime to its submitter, and device-manager's
   units to their device. The mechanism exists: `SUPERVISOR_IPC_RETRACT_REQ`
   withdraws a unit and its `parent=` subtree without a failure. Nothing calls
@@ -1764,10 +1777,10 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
 - [ ] [BUG][P1] Correct 12-hour RTC decoding. The noon and midnight hours are off by 12 in
   both the BCD and binary branches; unreached while register B reports 24-hour
   mode (`src/drivers/rtc/rtc.ts:218` `FIXME`).
-- [ ] [BUG][P1] Add the producer-lapped snap-forward to the PCI framebuffer's console-ring
-  drain. The UEFI driver performs `rp = wp - cap`; this copy does not, so an
-  overrun leaves it reading overwritten bytes
-  (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:237` `FIXME`).
+- [x] [BUG][P1] Add the producer-lapped snap-forward to the PCI framebuffer's console-ring
+  drain. Obsolete: neither framebuffer driver drains the console ring any more
+  (everything they paint arrives as FBTEXT IPC from the vt), and both now run
+  the one shared server, `src/drivers/framebuffer/fbtext_server.c`.
 
 ## Networking
 
@@ -2192,10 +2205,12 @@ Other graphics/VT/UI:
 - [ ] [ENHANCEMENT][P2] Make `libui`, font-service, and compositor allocation/index arithmetic
   overflow-safe: validate dimensions before multiplication, compute buffer
   indexes in `usize`, and cap growth before capacity doubling.
-- [ ] [FEATURE][P2] Add an explicit mode-set / update-framebuffer-info path before the VBE
-  reprogram after ExitBootServices
-  (`src/drivers/framebuffer/framebuffer_native.c:159`,
-  `src/drivers/framebuffer_pci/framebuffer_pci_native.c:275`).
+- [x] [FEATURE][P2] Add an explicit mode-set / update-framebuffer-info path for runtime
+  mode changes. Done: after its adapter accepts a mode the framebuffer driver
+  reports it through the native API's `framebuffer_set_geometry`
+  (`framebuffer_set_geometry`, `src/kernel/framebuffer.c`; only the registered
+  framebuffer driver may), so the compositor, which remaps from the kernel's
+  framebuffer info, follows the change (`tests/test_ramfb_mode.py`).
 - [ ] [ENHANCEMENT][P2] Make VT cell/reply/replay writes robust under framebuffer backpressure;
   they are best-effort today and drop on persistent queue-full
   (`src/services/vt/vt_main.c:244,287,892`).
@@ -2264,12 +2279,20 @@ and the reason it prints names what is missing. Read `docs/architecture/04-boot-
 `06-memory-management.md` and `10-capability-and-policy.md` first.
 
 - [ ] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
-  x86_64-only), PL031 RTC driver (the CMOS rtc stays x86_64-only), and a
-  framebuffer (ramfb or virtio-gpu; `src/boot/boot.c` TODO: no GOP on `virt`).
-  Until then aarch64 skips the tests that need them: `date`
-  (`test_cli`, `test_app_churn`, the rtc unit in `test_supervisor`), the menu
-  bar and VT screen ownership (`test_menu_bar_title`,
-  `test_vt_framebuffer_ownership`, `test_supervisor`'s menu-bar cases).
+  x86_64-only) and PL031 RTC driver (the CMOS rtc stays x86_64-only). Until
+  then aarch64 skips the `date` tests (`test_cli`, `test_app_churn`, the rtc
+  unit in `test_supervisor`), and its display takes no input.
+- [x] [FEATURE][P2] A framebuffer on aarch64. Done with QEMU ramfb: the harness
+  attaches `-device ramfb`, the firmware reports it as the GOP framebuffer, and
+  `framebuffer_ramfb` (bound to the fw_cfg device QEMU0002) serves it and sets
+  modes through fw_cfg DMA (`tests/test_ramfb_mode.py`). The menu-bar and VT
+  screen-ownership tests run on aarch64.
+- [ ] [FEATURE][P2] virtio-gpu driver, the final display step on both x86_64
+  and aarch64: a scanout the driver owns rather than the firmware framebuffer,
+  so a mode is no longer bounded by the boot framebuffer's size, and the seam
+  for forwarding the compositor's draw lists to the device (see the
+  compositor entry above). Its UEFI GOP stops being refreshed once boot
+  services exit, so it is useful only with a native driver.
 - [ ] [TEST][P2] Make the storage tests topology-aware, so they run on aarch64.
   They are written against x86_64's layout -- ATA drives, `/wfs` on the IDE
   secondary channel, an ATA boot disk beside one virtio disk -- and aarch64

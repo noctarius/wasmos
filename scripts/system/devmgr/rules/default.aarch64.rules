@@ -2,8 +2,7 @@
 # virtio-blk is not here: it carries /boot and is a bootstrap rule (initfs).
 # The PS/2 input, CMOS rtc, 16550 serial and bochs framebuffer rules of the
 # x86_64 set have no device on this machine.
-# TODO: virtio-input, PL031 and PL011 rules once those drivers exist (arm64
-# port, Phase 3).
+# TODO: virtio-input and PL031 rules once those drivers exist (arm64 port).
 # Loaded from /boot/system/devmgr/rules after storage is online.
 # Entries here are intended to override or extend initfs bootstrap rules.
 # /user is one specific FAT volume, wherever it is. The rule names no disk, no
@@ -69,6 +68,10 @@ SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00", ATTR{vendor}=="0x
 # it the console, so its driver instance registers as "sin" and the vt takes
 # console input from it.
 SUBSYSTEM=="acpi", ATTR{hid}=="ARMH0011", RUN+="system/drivers/pl011.wap"
+# The display: QEMU's ramfb, configured through fw_cfg (ACPI QEMU0002). The
+# driver serves the firmware framebuffer and changes its mode by rewriting
+# etc/ramfb; on a machine started without ramfb it finds no framebuffer.
+SUBSYSTEM=="acpi", ATTR{hid}=="QEMU0002", RUN+="system/drivers/fbramfb.wap"
 # The virtio console is the kernel-log port (doc 19). Unsupervised: a restart
 # would replay the whole kmsg ring onto it again.
 SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1003", RUN+="system/drivers/virtio_serial.wap"

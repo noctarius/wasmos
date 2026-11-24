@@ -1390,12 +1390,14 @@ static void queue_pci_match_rule_spawns(void) {
 }
 
 static void queue_acpi_match_rule_spawns(void) {
-    if (g_dm.rule_spawn_pending) {
+    /* As for PCI rules: until the loaded rules' driver descriptors are asked
+     * for, a rule would be armed without the DMA its driver declares. */
+    if (g_dm.rule_spawn_pending || g_dm.pci_rule_meta_dirty) {
         return;
     }
     for (uint32_t ri = 0; ri < g_dm.acpi_match_rule_count; ++ri) {
         acpi_match_rule_t* rule = &g_dm.acpi_match_rules[ri];
-        if (!rule->active || rule->spawn_path[0] == '\0') {
+        if (!rule->active || rule->spawn_path[0] == '\0' || rule->meta_pending) {
             continue;
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
@@ -1410,7 +1412,7 @@ static void queue_acpi_match_rule_spawns(void) {
             /* From zero: the previous rule's ranges and PCI function are not
              * this device's. */
             g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
-            dm_acpi_caps(rec, &g_dm.active_rule_spawn_caps);
+            dm_acpi_caps(rec, rule->meta_valid ? &rule->meta : 0, &g_dm.active_rule_spawn_caps);
             str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
             g_dm.active_rule_fstype[0] = '\0';
             g_dm.rule_spawn_pending = 1;
@@ -2504,6 +2506,10 @@ static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_devic
            (rule->device_id == MATCH_ANY_U16 || rec->device_id == rule->device_id);
 }
 
+/* Marks a PROC_IPC_MODULE_META_FILE request as describing an ACPI rule; the
+ * rest of the tag is the rule's index in its list. */
+#define DM_META_TAG_ACPI 0x80000000u
+
 /* The answer to the PROC_IPC_MODULE_META_FILE in flight: the described rule
  * gets its declared windows (or, on a refusal, spawns without them, as a rule
  * with no metadata always has), the buffer is released -- which also revokes
@@ -2511,7 +2517,8 @@ static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_devic
  * left, the queue is re-driven, since the rules held back may now be armed. A
  * reply for a rule set that has since been reloaded only releases the buffer. */
 static void dm_on_meta_file_reply(void* user, const wasmos_ipc_message_t* msg) {
-    uint32_t ri = (uint32_t)(uintptr_t)user;
+    uint32_t tag = (uint32_t)(uintptr_t)user;
+    uint32_t ri = tag & ~DM_META_TAG_ACPI;
     wasmos_module_meta_file_desc_t desc;
     int ok = msg->type == PROC_IPC_RESP && g_dm.meta_req_bid >= 0 &&
              wasmos_xfer_buffer_read(g_dm.meta_req_bid, &desc, (int32_t)sizeof(desc), 0) == 0 &&
@@ -2521,7 +2528,21 @@ static void dm_on_meta_file_reply(void* user, const wasmos_ipc_message_t* msg) {
         g_dm.meta_req_bid = -1;
     }
     g_dm.meta_req_pending = 0;
-    if (g_dm.meta_req_generation == g_dm.meta_generation && ri < g_dm.pci_match_rule_count) {
+    if (g_dm.meta_req_generation == g_dm.meta_generation && (tag & DM_META_TAG_ACPI) != 0u &&
+        ri < g_dm.acpi_match_rule_count) {
+        acpi_match_rule_t* rule = &g_dm.acpi_match_rules[ri];
+        rule->meta_pending = 0;
+        if (ok) {
+            rule->meta = desc.meta;
+            rule->meta_valid = 1;
+        } else {
+            (void)printf("[device-manager] no metadata for %s (code %d); spawning it without "
+                         "DMA\n",
+                         rule->spawn_path,
+                         (int)msg->arg1);
+        }
+    } else if (g_dm.meta_req_generation == g_dm.meta_generation && (tag & DM_META_TAG_ACPI) == 0u &&
+               ri < g_dm.pci_match_rule_count) {
         pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
         rule->meta_pending = 0;
         if (ok) {
@@ -2552,16 +2573,30 @@ static void dm_meta_file_next(void) {
     if (g_dm.meta_req_pending) {
         return;
     }
-    for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
-        pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
+    uint32_t rule_total = g_dm.pci_match_rule_count + g_dm.acpi_match_rule_count;
+    for (uint32_t i = 0; i < rule_total; ++i) {
+        /* PCI rules first, then ACPI rules; the reply finds its rule by tag. */
+        uint32_t tag;
+        uint8_t* meta_pending;
+        const char* spawn_path;
+        if (i < g_dm.pci_match_rule_count) {
+            tag = i;
+            meta_pending = &g_dm.pci_match_rules[i].meta_pending;
+            spawn_path = g_dm.pci_match_rules[i].spawn_path;
+        } else {
+            uint32_t ri = i - g_dm.pci_match_rule_count;
+            tag = ri | DM_META_TAG_ACPI;
+            meta_pending = &g_dm.acpi_match_rules[ri].meta_pending;
+            spawn_path = g_dm.acpi_match_rules[ri].spawn_path;
+        }
         int32_t bid;
         uint32_t path_len;
-        if (!rule->meta_pending) {
+        if (!*meta_pending) {
             continue;
         }
         path[0] = '\0';
         str_copy(path, sizeof(path), g_dm.boot_mount_ready ? "/boot/" : "/init/");
-        wasmos_sys_str_append(path, sizeof(path), rule->spawn_path);
+        wasmos_sys_str_append(path, sizeof(path), spawn_path);
         path_len = (uint32_t)strlen(path);
         memset(&desc, 0, sizeof(desc));
         desc.version = MODULE_META_FILE_DESC_VERSION;
@@ -2583,7 +2618,7 @@ static void dm_meta_file_next(void) {
                                    (int32_t)(sizeof(desc) + path_len),
                                    0,
                                    dm_on_meta_file_reply,
-                                   (void*)(uintptr_t)ri,
+                                   (void*)(uintptr_t)tag,
                                    0) == 0) {
             g_dm.meta_req_bid = bid;
             g_dm.meta_req_generation = g_dm.meta_generation;
@@ -2593,12 +2628,13 @@ static void dm_meta_file_next(void) {
         if (bid >= 0) {
             (void)wasmos_xfer_buffer_release(bid);
         }
-        rule->meta_pending = 0;
+        *meta_pending = 0;
     }
 }
 
-/* Fetch and cache each PCI rule's driver descriptor, and identify the boot
- * storage controller.
+/* Fetch and cache each match rule's driver descriptor -- PCI rules here or
+ * deferred, ACPI rules always deferred -- and identify the boot storage
+ * controller.
  *
  * A boot module is described here, synchronously: this runs once when the PCI
  * inventory is consumed, which is the only context where a blocking request to
@@ -2650,6 +2686,14 @@ static void load_pci_rule_metadata(void) {
             g_dm.selected_storage_has_record = 1;
             break;
         }
+    }
+    /* ACPI rules are described only through the deferred request: none of
+     * them drives boot storage, so none needs a blocking query. */
+    for (uint32_t ri = 0; ri < g_dm.acpi_match_rule_count; ++ri) {
+        acpi_match_rule_t* rule = &g_dm.acpi_match_rules[ri];
+        rule->meta_valid = 0;
+        rule->meta_pending =
+            (rule->active && rule->spawn_path[0] != '\0' && g_dm.spawn_endpoint >= 0) ? 1u : 0u;
     }
     dm_meta_file_next();
 }

@@ -308,6 +308,7 @@ enum {
     WASMOS_ERR_ENV_TABLE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_ENV, 3), /* no free entry remains */
     WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 1), /* no framebuffer is available on this system */
     WASMOS_ERR_FRAMEBUFFER_TOO_SMALL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 2), /* the caller's requested mapping is smaller than the framebuffer */
+    WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 3), /* a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded */
     WASMOS_ERR_DEVMGR_NO_MOUNT_RULE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 1), /* no block/filesystem mount rule matches the requested unit */
     WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 2), /* unknown or unsupported device-manager query type */
     WASMOS_ERR_DEVMGR_NO_SUCH_RECORD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 3), /* the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something */
@@ -658,6 +659,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_ENV_TABLE_FULL: return "env.TABLE_FULL";
     case WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: return "framebuffer.NOT_PRESENT";
     case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "framebuffer.TOO_SMALL";
+    case WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE: return "framebuffer.GEOMETRY_TOO_LARGE";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "devmgr.NO_MOUNT_RULE";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "devmgr.UNSUPPORTED_QUERY";
     case WASMOS_ERR_DEVMGR_NO_SUCH_RECORD: return "devmgr.NO_SUCH_RECORD";
@@ -941,6 +943,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_ENV_TABLE_FULL: return "no free entry remains";
     case WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: return "no framebuffer is available on this system";
     case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "the caller's requested mapping is smaller than the framebuffer";
+    case WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE: return "a new geometry (stride x height at 4 bytes per pixel) does not fit the framebuffer the bootloader recorded";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "no block/filesystem mount rule matches the requested unit";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
     case WASMOS_ERR_DEVMGR_NO_SUCH_RECORD: return "the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something";

@@ -25,6 +25,7 @@ def build(b):
     objs = b.toolchain("native").compile(
         [
             b.src("framebuffer_pci_native.c"),
+            b.root / "src/drivers/framebuffer/fbtext_server.c",
             b.root / "src/drivers/framebuffer/render.c",
         ],
         flags=flags,

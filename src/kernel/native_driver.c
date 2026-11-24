@@ -24,6 +24,8 @@
 #include "sync/spinlock.h"
 #include "timer.h"
 #include "xfer_buffer.h"
+#include "hostcall_dma.h"
+#include "io_region.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -697,6 +699,75 @@ static int nd_io_out16(uint16_t port, uint16_t val) {
     return arch_port_out16(port, val) == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
 }
 
+/* The registered framebuffer driver is the process owning the framebuffer
+ * control endpoint process-manager recorded; only it may change the geometry. */
+static int nd_framebuffer_set_geometry(uint32_t width, uint32_t height, uint32_t stride) {
+    process_t* proc = process_get(process_current_pid());
+    uint32_t owner = 0;
+    if (!proc) {
+        return WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    uint32_t ep = process_manager_framebuffer_endpoint();
+    if (ep == IPC_ENDPOINT_NONE || ipc_endpoint_owner(ep, &owner) != IPC_OK ||
+        owner != proc->context_id) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
+    return framebuffer_set_geometry(width, height, stride);
+}
+
+/* Register windows (wasmos_native_driver.h): the access itself is io_region's,
+ * shared with the io_region_* host calls of both wasm runtimes. */
+static int nd_io_region_read(uint32_t region, uint32_t offset, uint32_t width, uint32_t* out) {
+    process_t* proc = process_get(process_current_pid());
+    if (!proc) {
+        return WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    if (!out) {
+        return WASMOS_ERR_KERNEL_BAD_POINTER;
+    }
+    return io_region_read(proc->context_id, region, offset, width, out);
+}
+
+static int nd_io_region_write(uint32_t region, uint32_t offset, uint32_t width, uint32_t value) {
+    process_t* proc = process_get(process_current_pid());
+    if (!proc) {
+        return WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    return io_region_write(proc->context_id, region, offset, width, value);
+}
+
+/* Driver-owned DMA region (wasmos_native_driver.h). The frames come from
+ * dma_region_reserve, the gate every runtime's region allocator shares, and are
+ * handed out as higher-half pointers like vm_map's.
+ * TODO(nd-vm): reclaim the region when the driver exits; native drivers are
+ * long-lived today, and vm_map has the same gap. */
+static int nd_dma_region_alloc(uint32_t pages, void** out_ptr, uint64_t* out_phys) {
+    process_t* proc = process_get(process_current_pid());
+    if (!proc) {
+        return WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    if (!out_ptr || !out_phys) {
+        return WASMOS_ERR_DMA_INVALID;
+    }
+    uint64_t phys = 0;
+    int32_t rc = dma_region_reserve(proc->context_id, pages, &phys);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    /* The pointer is the direct-map alias, which names a frame only inside the
+     * higher-half window; the reserve's 2 GiB ceiling can reach past it. */
+    if (phys + (uint64_t)pages * PAGE_SIZE > KERNEL_HIGHER_HALF_WINDOW_BYTES) {
+        pfa_free_pages(phys, pages);
+        return WASMOS_ERR_DMA_UNAVAILABLE;
+    }
+    void* ptr = ptr_cast(void, (phys | KERNEL_HIGHER_HALF_BASE));
+    memset(ptr, 0, (size_t)pages * PAGE_SIZE);
+    capability_dma_commit(proc->context_id, (uint64_t)pages * PAGE_SIZE);
+    *out_ptr = ptr;
+    *out_phys = phys;
+    return 0;
+}
+
 static uint32_t nd_ipc_create_endpoint(void) {
     process_t* proc = process_get(process_current_pid());
     if (!proc) {
@@ -1168,6 +1239,10 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
     api.vm_map = nd_vm_map;
     api.vm_unmap = nd_vm_unmap;
     api.ipc_peer_await = ipc_peer_await;
+    api.io_region_read = nd_io_region_read;
+    api.io_region_write = nd_io_region_write;
+    api.dma_region_alloc = nd_dma_region_alloc;
+    api.framebuffer_set_geometry = nd_framebuffer_set_geometry;
 
     klog_write("[native-driver] calling initialize\n");
     /* The ELF is mapped only in the driver's address space (low VA, e.g.

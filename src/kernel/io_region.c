@@ -23,19 +23,26 @@ int io_region_read(uint32_t context_id, uint32_t region, uint32_t offset, uint32
                                      : arch_mmio_read32(va);
         return 0;
     }
+    /* The accessors write their output even when they fail; it reaches
+     * *out_value only on success. */
     uint16_t port = (uint16_t)access.where;
+    uint32_t value = 0;
     if (width == 1u) {
         uint8_t v = 0;
         rc = arch_port_in8(port, &v);
-        *out_value = v;
+        value = v;
     } else if (width == 2u) {
         uint16_t v = 0;
         rc = arch_port_in16(port, &v);
-        *out_value = v;
+        value = v;
     } else {
-        rc = arch_port_in32(port, out_value);
+        rc = arch_port_in32(port, &value);
     }
-    return rc == 0 ? 0 : WASMOS_ERR_IO_NO_PORT_SPACE;
+    if (rc != 0) {
+        return WASMOS_ERR_IO_NO_PORT_SPACE;
+    }
+    *out_value = value;
+    return 0;
 }
 
 int io_region_write(uint32_t context_id, uint32_t region, uint32_t offset, uint32_t width,

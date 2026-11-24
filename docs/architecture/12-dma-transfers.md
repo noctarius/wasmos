@@ -499,7 +499,11 @@ primitive generalizes to block-DMA staging and framebuffer/scanout regions.
 
 This is implemented as the `region_alloc` hostcall in both runtimes
 (`warp_region_alloc` in `src/kernel/warp/link.cpp`,
-`wasmos_region_alloc` in `src/kernel/wasm3/link.c`). WARP performs a real
+`wasmos_region_alloc` in `src/kernel/wasm3/link.c`) and as `dma_region_alloc`
+in the native driver API (`src/kernel/native_driver.c`). All three take their
+frames from `dma_region_reserve` (`src/kernel/hostcall_dma.c`), which owns the
+gate -- frames below 2 GiB, `CAP_DMA_BUFFER`, an approved window, the page
+budget -- and differ only in how they map the frames. WARP performs a real
 linear-memory page remap onto the allocated physical run; wasm3 allocates the
 same low-physical run, maps it into the process's linear-memory VA window, and
 reclaims those driver-owned regions on process reap. In both cases the

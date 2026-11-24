@@ -128,6 +128,7 @@
       "needs_qemu": true,
       "files": [
         "test_console_claim.py",
+        "test_ramfb_mode.py",
         "test_gfx_keyboard.py",
         "test_gfx_surface_recycle.py",
         "test_irq_input.py",
@@ -137,6 +138,7 @@
         "test_surface_attach.py",
         "test_vt_cli_lockup.py",
         "test_vt_framebuffer_ownership.py",
+        "test_vt_mode_regrid.py",
         "test_vt_serial_bind.py",
         "test_vt_tty_switch.py"
       ]

@@ -336,6 +336,7 @@ def run_targets(b, esp_stamp, images):
     qemu = [
         qemu_bin,
         *machine.qemu_machine,
+        *machine.qemu_display,
         "-m",
         "512M",
         *interactive_cpu_accel(machine, tools.get("host-os", "")),

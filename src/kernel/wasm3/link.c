@@ -8,6 +8,7 @@
 #include "ipc.h"
 #include "arch/arch_io.h"
 #include "physmem.h"
+#include "hostcall_dma.h"
 #include "process.h"
 #include "process_manager.h"
 #include "memory.h"
@@ -2244,7 +2245,7 @@ m3ApiRawFunction(wasmos_region_alloc) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, pages) m3ApiGetArg(int32_t, cache_policy)
         m3ApiGetArg(int32_t, out_phys_off)
 
-            if (pages <= 0 || pages > 1024 || out_phys_off < 0) {
+            if (pages <= 0 || (uint32_t)pages > DMA_REGION_MAX_PAGES || out_phys_off < 0) {
         m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
     if (cache_policy != WASMOS_REGION_CACHE_WB) {
@@ -2264,18 +2265,10 @@ m3ApiRawFunction(wasmos_region_alloc) {
     }
 
     uint64_t region_bytes = (uint64_t)(uint32_t)pages * 0x1000ULL;
-    uint64_t phys_base = pfa_alloc_pages_below((uint64_t)(uint32_t)pages, 0x80000000ULL);
-    if (!phys_base) {
-        m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
-    }
-    if (!capability_dma_range_allowed(proc->context_id, phys_base, region_bytes)) {
-        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-        m3ApiReturn(WASMOS_ERR_DMA_RANGE);
-    }
-    /* Enforce the driver's declared DMA page budget (dma.buffer manifest flags). */
-    if (!capability_dma_within_budget(proc->context_id, region_bytes)) {
-        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-        m3ApiReturn(WASMOS_ERR_DMA_RANGE);
+    uint64_t phys_base = 0;
+    int32_t reserve_rc = dma_region_reserve(proc->context_id, (uint32_t)pages, &phys_base);
+    if (reserve_rc != WASMOS_ERR_NONE) {
+        m3ApiReturn(reserve_rc);
     }
 
     uint64_t off64 = 0;

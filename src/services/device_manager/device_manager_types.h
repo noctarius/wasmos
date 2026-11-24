@@ -41,8 +41,11 @@
 #define DEVMGR_RULE_TEXT_CAP 16384
 #define ALWAYS_SPAWN_RULE_CAP 8
 #define BLOCK_FS_RULE_CAP 8
-#define PCI_MATCH_RULE_CAP 8
-#define ACPI_MATCH_RULE_CAP 8
+/* PCI and ACPI rules bind one driver each to the devices they match, and a
+ * device may carry several (virtio-gpu has two drivers). A rule set larger than
+ * a table is loaded up to the table and the rest reported, never silently cut. */
+#define PCI_MATCH_RULE_CAP 32
+#define ACPI_MATCH_RULE_CAP 32
 
 /* ACPI RSDP v2 in-memory layout (packed; not endian-converted). */
 typedef struct __attribute__((packed)) {

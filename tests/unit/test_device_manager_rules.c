@@ -87,6 +87,61 @@ static void test_block_fs_rule(void) {
     assert(strcmp(state.block_fs_rules[1].mount, "/user") == 0);
 }
 
+/* Regression: 2026-11-24-devmgr-rule-table-truncation. The PCI and ACPI rule
+ * tables held eight rules each and the loaders stopped at the eighth without a
+ * word: x86_64's persistent rule set grew a ninth and tenth PCI rule (the
+ * virtio GPU's two drivers) and neither ever matched, leaving the display
+ * dark with nothing in the log to say why. */
+static void test_rule_sets_past_eight_rules_load_whole(void) {
+    static device_manager_state_t state;
+    static char pci[4096];
+    static char acpi[4096];
+    size_t pn = 0, an = 0;
+    for (int i = 0; i < 10; ++i) {
+        pn += (size_t)snprintf(pci + pn,
+                               sizeof(pci) - pn,
+                               "SUBSYSTEM==\"pci\", ATTR{vendor}==\"0x1AF4\", "
+                               "ATTR{device}==\"0x%04X\", RUN+=\"system/drivers/d%d.wap\"\n",
+                               0x1040 + i,
+                               i);
+        an += (size_t)snprintf(acpi + an,
+                               sizeof(acpi) - an,
+                               "SUBSYSTEM==\"acpi\", ATTR{hid}==\"TEST%04d\", "
+                               "RUN+=\"system/drivers/a%d.wap\"\n",
+                               i,
+                               i);
+    }
+    memset(&state, 0, sizeof(state));
+    dm_rules_load_pci_match(&state, pci);
+    dm_rules_load_acpi_match(&state, acpi);
+    uint32_t last_pci = state.pci_match_rule_count - 1u;
+    uint32_t last_acpi = state.acpi_match_rule_count - 1u;
+    assert(state.pci_match_rule_count == 10u);
+    assert(strcmp(state.pci_match_rules[last_pci].spawn_path, "system/drivers/d9.wap") == 0);
+    assert(state.acpi_match_rule_count == 10u);
+    assert(strcmp(state.acpi_match_rules[last_acpi].spawn_path, "system/drivers/a9.wap") == 0);
+}
+
+static void test_rules_past_the_table_are_reported(void) {
+    static device_manager_state_t state;
+    static char pci[8192];
+    size_t pn = 0;
+    for (int i = 0; i < PCI_MATCH_RULE_CAP + 2; ++i) {
+        pn += (size_t)snprintf(pci + pn,
+                               sizeof(pci) - pn,
+                               "SUBSYSTEM==\"pci\", ATTR{vendor}==\"0x1AF4\", "
+                               "ATTR{device}==\"0x%04X\", RUN+=\"system/drivers/d%d.wap\"\n",
+                               i,
+                               i);
+    }
+    /* Lines of other kinds are not counted against the PCI table. */
+    pn += (size_t)snprintf(
+        pci + pn, sizeof(pci) - pn, "SUBSYSTEM==\"acpi\", ATTR{hid}==\"PL031\", RUN+=\"x.wap\"\n");
+    memset(&state, 0, sizeof(state));
+    assert(dm_rules_load_pci_match(&state, pci) == 2u);
+    assert(state.pci_match_rule_count == PCI_MATCH_RULE_CAP);
+}
+
 static void test_pci_match_rule(void) {
     device_manager_state_t state;
     const char* rules =
@@ -365,6 +420,8 @@ int main(void) {
         WASMOS_TEST_CASE(test_fstype_rule_requires_a_mount),
         WASMOS_TEST_CASE(test_block_fs_rule),
         WASMOS_TEST_CASE(test_pci_match_rule),
+        WASMOS_TEST_CASE(test_rule_sets_past_eight_rules_load_whole),
+        WASMOS_TEST_CASE(test_rules_past_the_table_are_reported),
         WASMOS_TEST_CASE(test_legacy_rule_is_rejected),
         WASMOS_TEST_CASE(test_a_rule_file_past_the_buffer_keeps_only_whole_lines),
         WASMOS_TEST_CASE(test_a_rule_file_that_fits_is_kept_whole),

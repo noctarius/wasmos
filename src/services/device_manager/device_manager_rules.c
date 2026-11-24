@@ -910,10 +910,11 @@ static int parse_pci_match_rule_line(const char* line, pci_match_rule_t* out_rul
     return 0;
 }
 
-void dm_rules_load_pci_match(device_manager_state_t* state, const char* text) {
+uint32_t dm_rules_load_pci_match(device_manager_state_t* state, const char* text) {
     uint32_t out_count = 0;
+    uint32_t dropped = 0;
     if (!state || !text) {
-        return;
+        return 0;
     }
     for (uint32_t i = 0; i < PCI_MATCH_RULE_CAP; ++i) {
         state->pci_match_rules[i].active = 0;
@@ -935,9 +936,14 @@ void dm_rules_load_pci_match(device_manager_state_t* state, const char* text) {
             line_end++;
         }
         line = wasmos_sys_trim_left(&text[line_start]);
-        if (line[0] && line[0] != '#' && out_count < PCI_MATCH_RULE_CAP) {
-            if (parse_pci_match_rule_line(line, &state->pci_match_rules[out_count]) == 0) {
-                out_count++;
+        if (line[0] && line[0] != '#') {
+            if (out_count < PCI_MATCH_RULE_CAP) {
+                if (parse_pci_match_rule_line(line, &state->pci_match_rules[out_count]) == 0) {
+                    out_count++;
+                }
+            } else {
+                static pci_match_rule_t overflow;
+                dropped += parse_pci_match_rule_line(line, &overflow) == 0 ? 1u : 0u;
             }
         }
         if (text[line_end] == '\0') {
@@ -946,6 +952,7 @@ void dm_rules_load_pci_match(device_manager_state_t* state, const char* text) {
         i = line_end + 1;
     }
     state->pci_match_rule_count = out_count;
+    return dropped;
 }
 
 static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_rule) {
@@ -1044,10 +1051,11 @@ static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_r
     return 0;
 }
 
-void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text) {
+uint32_t dm_rules_load_acpi_match(device_manager_state_t* state, const char* text) {
     uint32_t out_count = 0;
+    uint32_t dropped = 0;
     if (!state || !text) {
-        return;
+        return 0;
     }
     for (uint32_t i = 0; i < ACPI_MATCH_RULE_CAP; ++i) {
         state->acpi_match_rules[i].active = 0;
@@ -1065,9 +1073,14 @@ void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text) {
             line_end++;
         }
         line = wasmos_sys_trim_left(&text[line_start]);
-        if (line[0] && line[0] != '#' && out_count < ACPI_MATCH_RULE_CAP) {
-            if (parse_acpi_match_rule_line(line, &state->acpi_match_rules[out_count]) == 0) {
-                out_count++;
+        if (line[0] && line[0] != '#') {
+            if (out_count < ACPI_MATCH_RULE_CAP) {
+                if (parse_acpi_match_rule_line(line, &state->acpi_match_rules[out_count]) == 0) {
+                    out_count++;
+                }
+            } else {
+                static acpi_match_rule_t overflow;
+                dropped += parse_acpi_match_rule_line(line, &overflow) == 0 ? 1u : 0u;
             }
         }
         if (text[line_end] == '\0') {
@@ -1076,6 +1089,7 @@ void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text) {
         i = line_end + 1;
     }
     state->acpi_match_rule_count = out_count;
+    return dropped;
 }
 
 int dm_acpi_rule_matches(const acpi_match_rule_t* rule, const pci_device_record_t* rec) {

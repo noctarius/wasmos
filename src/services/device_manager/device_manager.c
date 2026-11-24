@@ -520,6 +520,17 @@ static void kick_boot_rules_read_async(void) {
     g_dm_rules_wait.done = 0;
 }
 
+/* A rule set larger than its table: the rules past the table never match, so
+ * the boot log says how many were left out. */
+static void dm_report_dropped_rules(const char* kind, uint32_t dropped) {
+    if (dropped == 0u) {
+        return;
+    }
+    (void)printf("[device-manager] %u %s rule(s) did not fit the rule table and were ignored\n",
+                 (unsigned)dropped,
+                 kind);
+}
+
 static void poll_boot_rules_async(void) {
     int32_t read_len = 0;
     char* text = g_rule_text;
@@ -598,14 +609,14 @@ static void poll_boot_rules_async(void) {
     (void)rules_text_take(DEVMGR_RULES_BOOT_ROOT "/" DEVMGR_RULE_FILE, read_len);
     dm_rules_load_always_spawn(&g_dm, text);
     dm_rules_load_block_fs(&g_dm, text);
-    dm_rules_load_pci_match(&g_dm, text);
+    dm_report_dropped_rules("pci", dm_rules_load_pci_match(&g_dm, text));
     /* Loading rules dropped every cached module descriptor. Refetching them
      * takes blocking requests, which must not run here: a rule spawn may be in
      * flight, and draining the reply endpoint under it corrupts
      * active_rule_spawn_* state. Mark it and let the spawn-quiescent point in
      * initialize() do the work. */
     g_dm.pci_rule_meta_dirty = 1;
-    dm_rules_load_acpi_match(&g_dm, text);
+    dm_report_dropped_rules("acpi", dm_rules_load_acpi_match(&g_dm, text));
     g_dm.rules_boot_active = count_loaded_active_rules();
     if (g_dm.always_spawn_rule_count > 0) {
         console_write("[device-manager] boot rules loaded always_spawn\n");
@@ -650,14 +661,14 @@ static void load_rules_if_available(void) {
             g_dm.rules_init_active = dm_rules_count_active(text);
             dm_rules_load_always_spawn(&g_dm, text);
             dm_rules_load_block_fs(&g_dm, text);
-            dm_rules_load_pci_match(&g_dm, text);
+            dm_report_dropped_rules("pci", dm_rules_load_pci_match(&g_dm, text));
             /* Loading rules dropped every cached module descriptor. Refetching them
              * takes blocking requests, which must not run here: a rule spawn may be in
              * flight, and draining the reply endpoint under it corrupts
              * active_rule_spawn_* state. Mark it and let the spawn-quiescent point in
              * initialize() do the work. */
             g_dm.pci_rule_meta_dirty = 1;
-            dm_rules_load_acpi_match(&g_dm, text);
+            dm_report_dropped_rules("acpi", dm_rules_load_acpi_match(&g_dm, text));
             if (g_dm.always_spawn_rule_count > 0) {
                 console_write("[device-manager] init rules loaded always_spawn\n");
                 queue_always_spawn_rules();

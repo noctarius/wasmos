@@ -129,7 +129,8 @@ wasmos_error_code_t framebuffer_set_geometry(uint32_t width, uint32_t height, ui
     if (fb->framebuffer_base == 0 || fb->framebuffer_size == 0) {
         return WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT;
     }
-    if ((uint64_t)stride * (uint64_t)height * 4u > fb->framebuffer_size) {
+    /* Compared in pixels: stride x height fits 64 bits, the byte count can wrap. */
+    if ((uint64_t)stride * (uint64_t)height > fb->framebuffer_size / 4u) {
         return WASMOS_ERR_FRAMEBUFFER_GEOMETRY_TOO_LARGE;
     }
     fb->framebuffer_width = width;
